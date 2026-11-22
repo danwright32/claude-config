@@ -125,6 +125,13 @@ printf '%s\n' '(version 1)' '(allow default)' '(deny network*)' > "$P/strict.sb"
 printf '%s\n' 'op run -- node --test test/notify.test.js' > "$P/behind.sh"
 printf '%s\n' 'op run -- node --test test/plain.test.js' > "$P/behind-plain.sh"
 printf '%s\n' '{ "scripts": { "test:one": "node --test" } }' > "$P/package.json"
+# A script on disk whose helper runs the words it is handed, and one whose helper only prints them
+# (claude-config#3304).
+printf '%s\n' 'run() { "$@"; }' 'run node --test test/notify.test.js' > "$P/helper-runs.sh"
+printf '%s\n' 'label() { echo "case: $1"; }' 'label node --test test/notify.test.js' > "$P/helper-labels.sh"
+# A script on disk that hands a benchmark runner a command as one quoted word (claude-config#3304).
+printf '%s\n' "hyperfine 'node --test test/notify.test.js'" > "$P/quoted.sh"
+printf '%s\n' "hyperfine 'node --test test/plain.test.js'" > "$P/quoted-plain.sh"
 # A function handed a program's name as a plain word, in a script whose other lines name the
 # endpoint, as this repository's own gate suite has (`run_slow python`), and code that posts for a
 # pipe to feed.
@@ -155,6 +162,9 @@ for line in sys.stdin:
     if not shown:
         continue
     judge = gate.Judge(gate.load_reader())
+    # VERDICT_BEHIND stands the command inside that many of the rule's readings already, so the
+    # nesting limit's own refusal is what comes back, with no reading around it to word it.
+    judge.behind = int(os.environ.get("VERDICT_BEHIND", "0"))
     try:
         judge.watch()
         try:
@@ -197,7 +207,11 @@ gate_says() { # gate_says <refused|allowed> <label> [text the reason must hold],
   if [ "$i" -eq 0 ]; then check "$label" "no command was handed over"; fi
 }
 
-KNOWS="knows to be unable to run the words after it"
+# The words every refusal of this rule says of the program (NOT_KNOWN in lib/unknown-program.py).
+# A refusal is this rule's where it holds them and another rule's where it does not, and nothing
+# else is asked of its wording: until claude-config#3304 the limits' refusals were worded without
+# them, and the nesting limit's matched neither wording the helper below looked for.
+KNOWS="is not a program the gate knows to be unable to run the words after it"
 
 not_by_this_rule() { # not_by_this_rule <label>, the commands on descriptor 3: allowed, or refused by another rule
   local label="$1" runs got i=0
@@ -214,8 +228,8 @@ not_by_this_rule() { # not_by_this_rule <label>, the commands on descriptor 3: a
     IFS= read -r got <&4 || true
     case "$got" in
       "allowed"$'\t'"$runs"$'\t'*) check "$label: $runs" ok ;;
-      "refused"$'\t'"$runs"$'\t'*"$KNOWS"*|"refused"$'\t'"$runs"$'\t'*"could each start a command"*)
-        check "$label: $runs" "this rule refused it: ${got: -700}" ;;
+      "refused"$'\t'"$runs"$'\t'*"$KNOWS"*)
+        check "$label: $runs" "this rule refused it: ${got:0:700}" ;;
       "refused"$'\t'"$runs"$'\t'*) check "$label: $runs" ok ;;
       *) check "$label: $runs" "the gate said: ${got:0:300}" ;;
     esac
@@ -248,14 +262,44 @@ op run -- node --test test/notify.test.js>out.txt
 op run -- node --test test/notify.test.js>out.txt 2>&1
 EOF
 
-# A function the text itself defines is that text's own code, whose body the gate reads where it
-# stands, so the words it is handed are left as they were: this repository's gate suite hands its
-# own functions a program's name as a plain label (`run_slow python`, `f2854 curl "<a write>"`),
-# and read as commands those refused the suite. A body that runs its arguments ("\$@") is the
-# program named by a variable that claude-config#2683 left as it was, and stays open here.
-gate_says allowed "#3277 a function the text defines, handed the refused command's words, is left as it was" 3<<EOF
+# A function the text itself defines is asked what a script on disk is asked: whether its body
+# runs what it is handed, or hands it to something not seen to be unable to (claude-config#3304).
+# Until then every such function was left as it was, because this repository's gate suite hands
+# its own functions a program's name as a plain label (`run_slow python`, `f2854 curl "<a
+# write>"`), so `run() { "\$@"; }; run <the refused command>` was allowed (measured on main's
+# gate through this suite, 2026-11-21). A helper that only takes a label is still left alone.
+gate_says refused "#3304 a function whose body runs the words it is handed, in front of the refused command" "$KNOWS" 3<<EOF
 run() { "\$@"; }; run node --test test/notify.test.js
+run() { "\$@"; }; run $POST
+run() { eval "\$1"; }; run node --test test/notify.test.js
+run() { command "\$@"; }; run node --test test/notify.test.js
+run() { exec "\$@"; }; run node --test test/notify.test.js
+run() { echo "\$1"; "\$@"; }; run node --test test/notify.test.js
+run() { local tool="\$1"; shift; "\$tool" "\$@"; }; run node --test test/notify.test.js
+function run { "\$@"; }; run node --test test/notify.test.js
+run() { op run -- "\$@"; }; run node --test test/notify.test.js
+run() { inner "\$@"; }; inner() { "\$@"; }; run node --test test/notify.test.js
+run() { $T/runner.sh "\$@"; }; run node --test test/notify.test.js
+run() ( "\$@" ); run node --test test/notify.test.js
+bash helper-runs.sh
+EOF
+gate_says refused "#3304 and the refusal says what the function's body does with the words" "run is a function that runs a command named by its arguments" 3<<EOF
+run() { "\$@"; }; run node --test test/notify.test.js
+EOF
+gate_says allowed "#3304 a function that only takes a label, handed the refused command's words, is left as it was" 3<<EOF
 label() { echo "\$1"; }; label curl "$POST"
+label() { echo "\$1"; }; label node --test test/notify.test.js
+pick() { MODE="\$1"; }; pick node --test test/notify.test.js
+note() { printf '%s\n' "\$*" >> notes.txt; }; note node --test test/notify.test.js
+save() { { echo "\$2"; } > "out-\$1.txt"; }; save node --test test/notify.test.js
+count() { $T/quiet.sh "\$@"; }; count node --test test/notify.test.js
+outer() { label "\$@"; }; label() { echo "\$1"; }; outer node --test test/notify.test.js
+again() { again "\$@"; }; again node --test test/notify.test.js
+bash helper-labels.sh
+EOF
+gate_says allowed "#3304 a function whose body runs its words, in front of a command that is not refused" 3<<EOF
+run() { "\$@"; }; run node --test test/plain.test.js
+run() { "\$@"; }; run echo hello
 EOF
 
 gate_says refused "#3277 any other program the gate does not know, and a program named by a variable" "$KNOWS" 3<<EOF
@@ -436,9 +480,108 @@ if [ "${named_count:-0}" -ge 5 ]; then check "#3277 the scripts that name a post
 else check "#3277 the scripts that name a posting endpoint were found" "only ${named_count:-0} were found beside $DIR, and the gate's own five suites name one"; fi
 not_by_this_rule "#3277 a script of this repository that names a posting endpoint, run by bash, is not refused by this rule" 3< "$T/named.in"
 
-gate_says allowed "#3277 the refused command as one quoted word, which no rule reads as words" 3<<EOF
-echo 'node --test test/notify.test.js'
+echo "slack drafts only: a command handed to such a program as one quoted word (claude-config#3304)"
+
+# A program that takes its command as one word (a benchmark runner, a terminal multiplexer) was
+# handed the refused command in quotes and allowed: the rule read a word as the start of a command
+# only where the whole word named a program (measured on main's gate through this suite,
+# 2026-11-21). A word holding white space is now read as a command line of its own where one of
+# its commands starts with a program the gate reads by its name. git commit is not a program the
+# gate knows to be unable to run its words, so a message that is exactly a refused command is
+# refused with the rest; a message that only mentions one starts with another word and is not.
+gate_says refused "#3304 the refused command as one quoted word, behind a program the gate does not know" "command line of its own" 3<<EOF
+hyperfine 'node --test test/notify.test.js'
+hyperfine "node --test test/notify.test.js"
+hyperfine '$POST'
+hyperfine 'cd . && node --test test/notify.test.js'
+hyperfine --warmup 3 'NODE_ENV=test node --test test/notify.test.js'
+hyperfine --prepare='node --test test/notify.test.js' 'sleep 1'
+hyperfine 'node --test test/plain.test.js' 'node --test test/notify.test.js'
+hyperfine 'bash post.sh'
+bench() { hyperfine "\$@"; }; bench 'node --test test/notify.test.js'
+bench() { local n="\$1"; shift; hyperfine --runs "\$n" "\$@"; }; bench 3 'node --test test/notify.test.js'
+tmux send-keys 'node --test test/notify.test.js' Enter
+time hyperfine 'node --test test/notify.test.js'
 git commit -m 'node --test test/notify.test.js'
+run() { "\$@"; }; run hyperfine 'node --test test/notify.test.js'
+bash quoted.sh
+EOF
+gate_says refused "#3304 a function that evaluates the word it is handed, or runs it in a shell, is refused as it was" 3<<EOF
+run() { eval "\$1"; }; run 'node --test test/notify.test.js'
+run() { bash -c "\$1"; }; run 'node --test test/notify.test.js'
+EOF
+# A body that pipes one word it is handed into a command NAMED by another runs that other word: the
+# pipe hands text to read, and the command's own name is still a word of a command. The first build
+# passed such a command over with the ones a pipe only feeds, looking at the words after the name
+# alone (the lessons review of this branch, 2026-11-21).
+gate_says refused "#3304 a function that pipes one word into a command named by another word it is handed runs that word" "command line of its own" 3<<EOF
+ask() { printf '%s' "\$2" | \$1; }; ask 'node --test test/notify.test.js' hello
+EOF
+gate_says refused "#3304 and the refusal is this rule's, by the words every refusal of it carries" "$KNOWS" 3<<EOF
+hyperfine 'node --test test/notify.test.js'
+EOF
+gate_says allowed "#3304 a quoted word that is no refused command, or is handed to a program known to be unable to run it" 3<<EOF
+hyperfine 'node --test test/plain.test.js'
+hyperfine 'sleep 1'
+hyperfine --warmup 3 'echo hello'
+echo 'node --test test/notify.test.js'
+printf '%s\n' 'node --test test/notify.test.js'
+grep -n 'node --test' test/notify.test.js
+git commit -m 'refuse node --test test/notify.test.js behind a helper'
+git commit -m 'fix: curl to chat.postMessage is refused'
+claude -p 'run node --test test/notify.test.js and say what it prints'
+jq '.scripts | keys' package.json
+sed -n '1,5p' test/notify.test.js
+label() { echo "\$1"; }; label 'node --test test/notify.test.js'
+bash quoted-plain.sh
+EOF
+# Two limits, held so a change to either is seen. A quoted word whose own command starts with a
+# program the gate does not know is not read: read, every sentence that mentions a program after
+# its first word (a commit message) would be a command line. And a function whose body only pipes
+# what it is handed into a program's input is handed text, not a command: this repository's gate
+# suites hand each command they ask the gate about to such a helper (run_bash "<a refused
+# command>"), and read as a run of it every one of those suites would be refused.
+gate_says allowed "#3304 left open: a quoted word whose command starts with a program the gate does not know" 3<<EOF
+hyperfine 'op run -- node --test test/notify.test.js'
+EOF
+# A quoted word is a command line only where it BEGINS like one: its first command starts with a
+# program the gate knows (one it reads by name, a runner, or one it knows to be unable to run its
+# words, such as cd or export). Text in another language does not: a sed script begins with an
+# address or a letter, an awk program with a brace or a pattern, a filter with a dot. The count of
+# this Mac's past commands (2026-11-21, 62,307 of them) found four that the first build newly
+# refused, every one a sed script or an awk program whose text, cut at its | marks as a shell would
+# cut a pipeline, held a piece starting with python3 or bash: `sed -i '27s|^python3 a|python3 b|'`
+# is an edit of a file, and nothing in it is run.
+gate_says allowed "#3304 a quoted word that does not begin like a command line (a sed script, a filter) is left as it was" 3<<EOF
+sed -i.bak '27s|^node --test test/plain.test.js|node --test test/notify.test.js|' run.sh
+sed -i.bak 's|node --test test/plain.test.js|node --test test/notify.test.js|g' run.sh
+mytool --filter '.[] | node --test test/notify.test.js'
+mytool '{print \$3 | "sort"}; node --test test/notify.test.js'
+EOF
+# What that leaves open, held so a change is seen: a command line in quotes whose FIRST command
+# starts with a program the gate does not know, with the refused command after it.
+gate_says allowed "#3304 left open: a quoted command line that begins with a program the gate does not know" 3<<EOF
+hyperfine 'mytool && node --test test/notify.test.js'
+EOF
+gate_says refused "#3304 a quoted command line that begins with an assignment or a program known to run nothing is read" "command line of its own" 3<<EOF
+hyperfine 'export NODE_ENV=test; node --test test/notify.test.js'
+hyperfine 'A=1; node --test test/notify.test.js'
+hyperfine 'echo start; node --test test/notify.test.js'
+EOF
+# Only a word written as one quoted string is read. A quoted string glued to more is what a line
+# of JSON read as a command holds ("command": "<a command>"}}), and read as a command line it
+# refused a transcript that a script sources as posting, for a command the transcript only quotes
+# (the gate suite's own 3 MB transcript case, which must run out of time and say so).
+gate_says allowed "#3304 a quoted string glued to more is not one quoted word, and is left as it was" 3<<EOF
+{type: user, message: {content: "node --test test/notify.test.js"}}
+jot "node --test test/notify.test.js",
+EOF
+gate_says allowed "#3304 a function that only pipes what it is handed into a program, handed the refused command as one word" 3<<EOF
+ask() { printf '%s' "\$1" | $T/quiet.sh; }; ask 'node --test test/notify.test.js'
+ask() { OUT="\$(printf '%s' "\$1" | bash "\$HOOK" 2>/dev/null)"; }; ask 'node --test test/notify.test.js'
+EOF
+gate_says refused "#3304 more quoted command lines than the rule reads are refused as unread" "could each start a command" 3<<EOF
+hyperfine 'node a.js' 'node b.js' 'node c.js' 'node d.js' 'node e.js' 'node f.js' 'node --test test/notify.test.js'
 EOF
 
 gate_says allowed "#3277 a runner the reader reads past, in front of a command that is not refused" 3<<EOF
@@ -468,6 +611,9 @@ echo "slack drafts only: more words that could each start a command than the rul
 gate_says refused "#3277 a typed command with more such words than the rule reads is refused as unread" "could each start a command" 3<<EOF
 op run -- node node node node node node node node node --test test/notify.test.js
 EOF
+gate_says refused "#3304 and that refusal carries the words every refusal of this rule does" "$KNOWS" 3<<EOF
+op run -- node node node node node node node node node --test test/notify.test.js
+EOF
 gate_says allowed "#3277 and the same number of them behind a program known to be unable to run them is allowed" 3<<EOF
 echo node node node node node node node node node --test test/notify.test.js
 EOF
@@ -478,6 +624,9 @@ echo "slack drafts only: more of these readings inside one another than the rule
 # a word of no reading but the innermost. Past three readings inside one another the rule read
 # nothing and said nothing, which allowed the fourth (the lessons review of this branch, 2026-11-19).
 gate_says refused "#3277 a typed command four such programs deep, each in a string a shell runs, is refused as unread" "inside one another" 3<<EOF
+op run -- bash -c 'op run -- bash -c "op run -- bash -c \"op run -- node --test test/notify.test.js\""'
+EOF
+gate_says refused "#3304 and that refusal carries the words every refusal of this rule does" "$KNOWS" 3<<EOF
 op run -- bash -c 'op run -- bash -c "op run -- bash -c \"op run -- node --test test/notify.test.js\""'
 EOF
 gate_says refused "#3277 and three deep the test file is still read and refused for what it imports" "$KNOWS" 3<<EOF
@@ -495,11 +644,51 @@ gate_says allowed "#3277 and the same in front of a test file that imports nothi
 op run -- env A=1 op run -- env A=1 op run -- env A=1 op run -- node --test test/plain.test.js
 EOF
 
+echo "slack drafts only: the helper that tells this rule's refusals from another rule's (claude-config#3304)"
+
+# not_by_this_rule passes a command another rule refuses and fails one this rule refuses. It knew
+# this rule's refusals by two wordings, and the nesting limit's was a third, so a script refused
+# by that limit counted as refused by some other rule (the lessons review of pull request 3305).
+# Each of the rule's refusals is handed to it here, and it must count each as a failure.
+helper_counts() { # helper_counts <label> <the failures it must count>, the commands on descriptor 3
+  local label="$1" want="$2" got
+  got="$( (pass=0; fail=0; not_by_this_rule "probe" > /dev/null; printf '%s' "$fail") )"
+  if [ "$got" = "$want" ]; then check "$label" ok; else check "$label" "it counted $got failures, not $want"; fi
+}
+helper_counts "#3304 the helper counts a refusal by the nesting limit as this rule's" 1 3<<EOF
+op run -- bash -c 'op run -- bash -c "op run -- bash -c \"op run -- node --test test/notify.test.js\""'
+EOF
+# Typed four deep, the three readings around the limit's refusal each word theirs in front of it,
+# so the refusal as a whole carried the rule's words whatever the limit's own said. Asked with the
+# command already standing inside the readings, the limit's refusal comes back alone, and it is
+# that text the helper must know: it is what a reading that words nothing around it would hand on.
+VERDICT_BEHIND=99 gate_says refused "#3304 the nesting limit's own refusal, with no reading around it, carries the rule's words" "$KNOWS" 3<<EOF
+op run -- node --test test/notify.test.js
+EOF
+VERDICT_BEHIND=99 gate_says refused "#3304 and it is the nesting limit's refusal" "inside one another" 3<<EOF
+op run -- node --test test/notify.test.js
+EOF
+VERDICT_BEHIND=99 helper_counts "#3304 the helper counts the nesting limit's own refusal as this rule's" 1 3<<EOF
+op run -- node --test test/notify.test.js
+EOF
+helper_counts "#3304 the helper counts a refusal by the limit on words as this rule's" 1 3<<EOF
+op run -- node node node node node node node node node --test test/notify.test.js
+EOF
+helper_counts "#3304 the helper counts each of the rule's other refusals as this rule's" 3 3<<EOF
+op run -- node --test test/notify.test.js
+run() { "\$@"; }; run node --test test/notify.test.js
+hyperfine 'node --test test/notify.test.js'
+EOF
+helper_counts "#3304 and counts no failure for a command another rule refuses, or one that is allowed" 0 3<<EOF
+node --test test/notify.test.js
+op run -- node --test test/plain.test.js
+EOF
+
 echo "slack drafts only: the refusal, as a session's call gets it through the hook (claude-config#3277)"
 
 run_here "op run -- node --test test/notify.test.js"
 read_refused "#3277 op run -- in front of the refused test file is refused through the hook"
-says "#3277 and the refusal names the program" "op is not a program the gate $KNOWS"
+says "#3277 and the refusal names the program" "op $KNOWS"
 says "#3277 and says which import reaches the code that posts" "which imports ../lib/notify.js"
 says "#3277 and names the installed no network wrapper by its path" "$W"
 says "#3277 and says where the wrapper goes, in the gate's own words for it" "as the first word of the command"
@@ -519,6 +708,15 @@ run_here "op run -- node --test test/plain.test.js"
 read_allowed "#3277 op run -- in front of a test file that imports nothing is allowed through the hook"
 run_here "$W op run -- node --test test/notify.test.js"
 read_allowed "#3277 the installed wrapper in front of op run -- passes through the hook"
+run_here "run() { \"\$@\"; }; run node --test test/notify.test.js"
+read_refused "#3304 a function that runs its words, in front of the refused test file, is refused through the hook"
+says "#3304 and the refusal says what the function does" "run is a function that runs a command named by its arguments"
+says "#3304 and names the installed no network wrapper by its path" "$W"
+run_here "hyperfine 'node --test test/notify.test.js'"
+read_refused "#3304 the refused test file as one quoted word, behind a program the gate does not know, is refused through the hook"
+says "#3304 and the refusal names the program" "hyperfine $KNOWS"
+run_here "hyperfine 'node --test test/plain.test.js'"
+read_allowed "#3304 a test file that imports nothing, as one quoted word, is allowed through the hook"
 run_here "grep -n node test/notify.test.js"
 read_allowed "#3277 grep for the word node in the refused test file is allowed through the hook"
 
