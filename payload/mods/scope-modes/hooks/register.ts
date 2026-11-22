@@ -1,6 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { ModKitGh, ModKitWrites } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import { ghApiOf, judgeAdminMerge } from './adminmerge.ts'
+import { gateOf, judgeRequiredLabel, openedFrom } from './requiredlabel.ts'
 import { callKey, readsOnly, refusalNote, whatOf } from './refusals.ts'
 import { toolArgs } from './mod-kit/toolargs.ts'
 import { unreadMorningPicker } from './unread.ts'
@@ -1481,8 +1482,13 @@ const overnightWhy = async ($: EngineInterface, tool: string, input: Record<stri
     const reading = await sleepNow($)
     return judgeAdminMerge(reading.state === 'asleep' ? reading.record.repos : undefined, g, repo, ghApiOf(argv => run($, argv)), link => $.modkit.linkRepo({ link }))
   }
+  // A label set on a PR (#3439) is judged by the repository's own merge gate, asked through its
+  // library in the hooks installed on this Mac, and by this session's record of the PRs it opened,
+  // all in requiredlabel.ts. A gate or a record that cannot be read refuses.
+  const requiredLabel = (g: ModKitGh, repo: string) =>
+    judgeRequiredLabel(g, repo, gateOf(argv => run($, argv), home), openedFrom(async () => (await $.state.get(openedRef)).value), link => $.modkit.linkRepo({ link }))
   return overnightRefusal(
-    { tool, input, raw, commands: raw ? await readCommands($, raw) : [], writes: raw ? await readWrites($, raw) : NO_WRITES, cwd, home, ...(ghRepo !== undefined ? { ghRepo } : {}), read: text => readCommands($, text), adminMerge },
+    { tool, input, raw, commands: raw ? await readCommands($, raw) : [], writes: raw ? await readWrites($, raw) : NO_WRITES, cwd, home, ...(ghRepo !== undefined ? { ghRepo } : {}), read: text => readCommands($, text), adminMerge, requiredLabel },
     lookOf($),
   )
 }
