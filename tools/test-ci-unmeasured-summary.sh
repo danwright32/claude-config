@@ -156,7 +156,7 @@ NOTICE_BYTES=4000
 # decode <title>: the message of the notice with exactly that title, with its escapes undone, into
 # $TMPROOT/decoded (no trailing newline), as GitHub stores it.
 decode(){
-  grep -F "::notice title=$1::" <<< "$notices" | head -1 | sed "s/^::notice title=$1:://" \
+  grep -m 1 -F "::notice title=$1::" <<< "$notices" | sed "s/^::notice title=$1:://" \
     | perl -pe 'chomp; s/%(25|0A|0D)/$1 eq "25" ? "%" : $1 eq "0A" ? "\n" : "\r"/ge' > "$TMPROOT/decoded"
 }
 # fits <case> <title> <what>: the decoded message is within the bytes the tool holds itself to.
@@ -197,11 +197,11 @@ total="$(grep -c . "$TMPROOT/long/parts/part-unmeasured-1/unmeasured.tsv")"
 sed -n '2,$p' "$TMPROOT/decoded" | sed '/^Part 2 handed back/,$d' > "$TMPROOT/listed"
 shown="$(grep -c . "$TMPROOT/listed" || true)"
 LC_ALL=C sort -t "$(printf '\t')" -k1,1 -k2,2 "$TMPROOT/long/parts/part-unmeasured-1/unmeasured.tsv" \
-  | awk -F'\t' '{ print $1 ": " substr($0, length($1) + 2) }' | head -n "$shown" > "$TMPROOT/expected"
+  | awk -F'\t' -v n="$shown" 'NR <= n { print $1 ": " substr($0, length($1) + 2) }' > "$TMPROOT/expected"
 last="$(tail -n 1 "$TMPROOT/decoded")"
 [ "$shown" -gt 0 ] && [ "$shown" -lt "$total" ] && cmp -s "$TMPROOT/listed" "$TMPROOT/expected" \
   && check "#3312 a long list shows only whole parts, the first ones in the record's order" ok \
-  || check "#3312 a long list shows only whole parts, the first ones in the record's order" "shown=$shown of $total; diff: $(diff "$TMPROOT/listed" "$TMPROOT/expected" | head -4)"
+  || check "#3312 a long list shows only whole parts, the first ones in the record's order" "shown=$shown of $total; diff: $(diff "$TMPROOT/listed" "$TMPROOT/expected" > "$TMPROOT/diff"; head -4 "$TMPROOT/diff")"
 [ "$last" = "...and $((total - shown)) more parts, listed in the run's summary." ] \
   && grep -qx 'Part 2 handed back no record of what it did not test.' "$TMPROOT/decoded" \
   && check "#3312 and its last line says how many more parts there are and where they are" ok \
