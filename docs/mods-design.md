@@ -1746,6 +1746,15 @@ is still asked once at bedtime and closed if unanswered.
   claude-sync's `notify`, and fails on one that neither reads the sleep predicate nor sits on its
   exempt list with a reason (L129). A text match proves only that the predicate is named, so every
   shell route is also run asleep and awake in the same fixture (L159).
+- A route that consulted the predicate cannot vanish unnoticed (#3411): the suite also keeps a
+  recorded list of the routes that consult it, `CONSULTING`, held both ways against the derivation.
+  A route found consulting but not listed fails, and so does a listed one no longer found or no
+  longer consulting, so a refactor that renames a checked route or folds it into a helper (as #3407
+  first did with five) fails by name until the list changes in the same pull request.
+  `bash tests/test-sleep-silence.sh --list-consulting` prints the list the tree gives. It was chosen
+  over comparing against main at run time, which needs a fetched main that CI's checkout and a
+  worktree do not reliably have, and a check that cannot find its baseline would have to pass or
+  skip. The recorded list is not the exempt list, which this change left as it was.
 - While asleep: a question (AskUserQuestion, `switch_to_build`) is refused in every session and noted
   for the morning; the goal tracker sends no notification; ask before saving notes a save rather than
   asking; the turn end sound (`hooks/turn-end-sound.sh`, in the per prompt hook cost suite), the
@@ -4493,6 +4502,65 @@ main` each ran unjudged beside a session at work in `/other`.
   command itself (git reads an exported one, which no reader follows). Nothing is put to the
   judge and no session is told, since there is no checkout to name to either. Until now each of
   these ran unjudged. A folder git names no checkout for has nobody in it to ask, as before.
+- A `-C` folder named with a variable the same call sets is followed, and the command judged by
+  the folder the variable holds (Dan, 2026-11-22, asked to sign the stop above off: "Follow the
+  variable first"). Counted that day over each Mac's recorded commands, the watched commands the
+  guard could not tell were nearly all one form, `W=<folder>; git -C "$W" checkout ...`: 12 of 13
+  on the personal MacBook and 11 of 12 on the work MacBook. Each ran unjudged before #3398 and was
+  stopped by the bullet above. Followed, a folder where another session is at work is held as any
+  command there is, and one where none is runs. The guard asks `$.modkit.pipeline` with
+  `follow: true`, and `followedFolders` in `collide.ts` writes the value mod-kit gives into the
+  word after each `-C` of git's own (one standing before the subcommand; a subcommand's `-C`, as
+  in `git switch -C`, names a branch). The command is then read by `$.modkit.git` and `whereGit`
+  as if the folder had been typed, and git is always asked about it, since the question the guard
+  always put was put with the variable as typed and finds nothing.
+- Following may only ever put the true folder where the guard had "cannot tell". It never guesses,
+  and whether a variable can be followed is decided in mod-kit's reader alone (`fixedWords` in
+  `commands.ts`, built from the tests the loop reading of #3272 is built from). A variable is
+  followed only where all of this holds:
+  - it is set in the run of plain settings the call opens with: statements that are only
+    `NAME=value`, each ended by a `;` or a new line and nothing else, so it is set before anything
+    runs, in the call's own shell;
+  - the value is plain characters as typed (letters, digits, `_`, `.`, `/`, `-`), bare or in one
+    pair of quotes: no space, no `~`, no `$`, no pattern;
+  - it is set once, and its name is one letter, or mixes capitals and small letters;
+  - no other word of the call names it, the call holds no heredoc and no `(( ))`, no sum, no
+    `${...}` beyond `${NAME}`, no `eval`, `source`, `.`, `trap`, `alias`, `builtin`, `emulate`,
+    `let`, `declare`, `typeset`, `local`, function definition or command named by a value, and
+    nothing names `IFS`;
+  - every word the shell fills in or matches against files, with a value the reading does not
+    know, stands in a git command or is the value of a setting standing alone, since any other
+    command may be a builtin handed a name only the running shell knows (`read $x`);
+  - the use is the variable alone, `$W` or `${W}`, bare or in one pair of double quotes.
+- So these are not followed and stay stopped: a variable set twice, after its use, in a subshell,
+  a function, a loop, a branch or a group, as a setting in front of the command (which reaches git
+  and not the word), from a command's output or another variable, or in an earlier call. Kept
+  strict although the value could be worked out, each Dan's to widen: a name that is all capitals
+  or all small letters of two or more characters (`REPO`, `wt`), `W=/a && git ...`,
+  `export W=/a`, a value with a space or a `~`, `"$W/sub"`, a call holding a heredoc, a call where
+  a command that is not git is handed a pattern or a value not known, and a repository or working
+  folder named by a variable (`--git-dir "$G"`). The name rule keeps no list: a shell keeps names
+  for itself that change with no word naming them (`cd` writes `PWD`, `RANDOM` is worked out when
+  read), and each of the 166 names a fresh zsh 5.9 and bash 3.2.57 define on the personal MacBook
+  is all capitals or all small letters of two or more characters, or `_` (measured 2026-11-22),
+  so the form refuses them all and no list can be missing one.
+- `followed` is given only to a reader that asks, the words are never changed, and only the
+  call's own text is read so (never a substitution, a shell's script or a trap's text). Every
+  other mod is handed byte for byte what it was handed: over the personal MacBook's recorded
+  commands, none of the 11,659 calls with git in their text is read another way by `commands`,
+  `pipeline`, `pipelineIn` or `commandWrites` asked as they were (measured 2026-11-22 against the
+  reader before this change). A copy of mod-kit loaded before this takes no such option and
+  follows nothing, so the guard stops the command as above.
+- Recounted on the personal MacBook on 2026-11-22, over the same records and against the same
+  base: of 242 calls holding a watched git command, 204 are asked the base's one question, 25 one
+  more, 12 are followed and judged where they were stopped, and 1 still cannot be told. No
+  command the guard could already tell is told another way, and every question the base put to
+  git is still put first.
+- What the reading cannot see, as the loop reading cannot: a function or alias the shell already
+  had under a name the call uses, a builtin outside the lists above that runs text it builds a
+  name in, and a sum a builtin works out from another variable's value. The one past command of
+  the 13 that is not this form stands behind a `cd` into a folder a command made
+  (`d=$(mktemp -d) && cd "$d" && git checkout ...`) and stays stopped.
 - A question nobody answers stops the command too, while any other session is open (the lessons
   review of this change, 2026-11-22). Each question above was read as no checkout there when it
   failed, so the command ran with nothing asked. git exits 128 for every failure (measured,

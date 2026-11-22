@@ -84,11 +84,18 @@ const ENTRIES: Entry[] = [
 ]
 
 const ask = (e: Entry): unknown => {{
-  const i = e.input as {{ command: string; cwd: string; home: string; words: string[]; env?: string[] }}
+  const i = e.input as {{ command: string; cwd: string; home: string; words: string[]; env?: string[]; follow?: boolean }}
   // git with the settings written in front of the command, where the guard hands them on, and
-  // pipeline with the folder each command runs in, as the guard asks for it (#3398).
+  // pipeline with the folder each command runs in and what a variable the call itself sets holds,
+  // as the guard asks for it (#3398): handed on exactly as mod-kit's own `pipeline` hands it on.
   const got =
-    e.method === 'commands' ? commands(i.command) : e.method === 'writes' ? commandWrites(i.command, i.cwd, i.home) : e.method === 'pipeline' ? pipelineIn(i.command, i.cwd, i.home) : git(i.words, i.env)
+    e.method === 'commands'
+      ? commands(i.command)
+      : e.method === 'writes'
+        ? commandWrites(i.command, i.cwd, i.home)
+        : e.method === 'pipeline'
+          ? pipelineIn(i.command, i.cwd, i.home, i.follow === true ? {{ follow: true }} : {{}})
+          : git(i.words, i.env)
   // As the collision guard receives it: through JSON, nothing standing for no answer.
   return got === undefined ? null : JSON.parse(JSON.stringify(got))
 }}

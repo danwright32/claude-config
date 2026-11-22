@@ -207,8 +207,12 @@ export type ModKit = {
    * asks for it. A copy of mod-kit loaded before #3093 takes no such option and leaves them out
    * without saying so, as it gives no `env` and no `behind`, so a guard relying on any of the three
    * first asks about a line it knows the answer for (`A=1; B=2 env true`).
+   *
+   * Given `follow: true`, each command carries `followed` (#3398): what a word that is one variable
+   * alone holds, where the call's own text makes that certain. A copy of mod-kit loaded before
+   * #3398 takes no such option and gives none, which reads as nothing followed.
    */
-  pipeline: (input: { command: string; cwd?: string; home?: string; assignments?: boolean }) => Promise<ModKitCommand[]>
+  pipeline: (input: { command: string; cwd?: string; home?: string; assignments?: boolean; follow?: boolean }) => Promise<ModKitCommand[]>
   /**
    * Where a python program holds text rather than code (#1171): each comment after its `#`, and
    * each string literal between its quotes, `formatted` for an f-string or a t-string, whose braces
@@ -467,6 +471,21 @@ export type ModKitCommand = {
    * a redirect, and is not marked.
    */
   compares?: boolean[]
+  /**
+   * Given only when `pipeline` was asked with `follow` (#3398; Dan, 2026-11-22: "Follow the variable
+   * first"): for each word that is one variable alone (`$W`, `"$W"`, `${W}`) which the call itself
+   * sets, the value it holds; null for every other word; absent where no word is one. The word in
+   * `words` stays as written. A value is given only where the call's own text makes it certain:
+   * the variable is set once, in the plain settings the call opens with (`W=/path;` or on a line of
+   * its own, the value plain characters, bare or in one pair of quotes), its name is a single
+   * letter or mixes capitals and small letters (so no name a shell keeps for itself), and nothing
+   * else in the call can give it another value. Never a guess: a variable set twice, after the
+   * use, in a subshell, a function, a loop or a branch, after an `&&` or `||`, as a setting in
+   * front of a command, from a command's output or another variable, or in a call that hands a
+   * builtin a name the reader cannot read, is left with no value here, as one set in an earlier
+   * call is.
+   */
+  followed?: (string | null)[]
   /** The folder it runs in, given only when `pipeline` was given `cwd`; null where a cd before it cannot be followed. */
   folder?: string | null
 }

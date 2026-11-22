@@ -1,6 +1,6 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
-import { editedUnder, insideRoot, isScratch, judgedWrites, latestRequest, namedFolder, othersEditing, othersInRepo, parseVerdict, quoteNames, wantedFiles, watchedGit, whereGit } from '../hooks/collide.ts'
+import { editedUnder, followedFolders, insideRoot, isScratch, judgedWrites, latestRequest, namedFolder, othersEditing, othersInRepo, parseVerdict, quoteNames, wantedFiles, watchedGit, whereGit } from '../hooks/collide.ts'
 
 const rec = (id: string, over: Partial<{ repoRoot: string | null; edits: string[] }> = {}) => ({
   v: 1 as const,
@@ -308,5 +308,31 @@ describe('where a watched git command is put to git (#3398)', () => {
     expect(why(whereGit(plain, '/repo', '/repo', '', 'GIT_WORK_TREE=/w; git checkout main'))).toBe('the call names GIT_WORK_TREE somewhere other than as a setting on the git command itself')
     // Named on the command itself, it is read and nothing is unknown.
     expect(why(whereGit({ dir: undefined, gitDir: '/other/.git' }, '/repo', '/repo', '', 'GIT_DIR=/other/.git git checkout main'))).toBe('known')
+  })
+})
+
+// #3398 (Dan, 2026-11-22: "Follow the variable first"): the folder a -C names with a variable the
+// call itself set is read as the value mod-kit's reader gives for that word, so the command is
+// judged by the folder it really names. Only a -C of git's own is read so.
+describe('a git command read with the folder its -C variable holds (#3398)', () => {
+  const g = (sub: string | undefined, ...args: string[]) => ({ sub, args })
+  test('the value mod-kit gives for the word after a -C stands in its place', () => {
+    expect(followedFolders(['git', '-C', '$W', 'checkout', 'main'], [null, null, '/other', null, null], g('checkout', 'main'))).toEqual(['git', '-C', '/other', 'checkout', 'main'])
+    // Each -C of a chain, and one after another of git's own options.
+    expect(followedFolders(['git', '-C', '$A', '-C', '$B', 'reset', '--hard'], [null, null, '/a', null, 'b', null, null], g('reset', '--hard'))).toEqual(['git', '-C', '/a', '-C', 'b', 'reset', '--hard'])
+    expect(followedFolders(['git', '-c', 'core.x=y', '-C', '$W', 'stash', 'pop'], [null, null, null, null, '/other', null, null], g('stash', 'pop'))).toEqual(['git', '-c', 'core.x=y', '-C', '/other', 'stash', 'pop'])
+  })
+  test('nothing mod-kit followed, or no value for the folder word, changes no word', () => {
+    expect(followedFolders(['git', '-C', '$W', 'checkout', 'main'], undefined, g('checkout', 'main'))).toBeUndefined()
+    expect(followedFolders(['git', '-C', '$W', 'checkout', 'main'], [null, null, null, null, null], g('checkout', 'main'))).toBeUndefined()
+    expect(followedFolders(['git', '-C', '/other', 'checkout', 'main'], [null, null, null, null, null], g('checkout', 'main'))).toBeUndefined()
+  })
+  test("a value for any other word is not read: a subcommand's own -C names a branch, and a word no -C comes before names no folder", () => {
+    // git switch -C makes or resets the branch named after it.
+    expect(followedFolders(['git', 'switch', '-C', '$B'], [null, null, null, 'main'], g('switch', '-C', '$B'))).toBeUndefined()
+    expect(followedFolders(['git', '-C', '/repo', 'checkout', '$B'], [null, null, null, null, 'main'], g('checkout', '$B'))).toBeUndefined()
+    // Where -C is the value another option takes, the word after it is the subcommand.
+    expect(followedFolders(['git', '-c', '-C', '$W', 'main'], [null, null, null, 'checkout', null], g('$W', 'main'))).toBeUndefined()
+    expect(followedFolders(['git', '--git-dir', '$G', 'checkout', 'main'], [null, null, '/other/.git', null, null], g('checkout', 'main'))).toBeUndefined()
   })
 })

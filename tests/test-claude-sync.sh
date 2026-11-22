@@ -26126,6 +26126,99 @@ check "#2765 (fixture) the shared clock answered every read with a number, so no
   "[ ! -s '$SWT/empty-reads' ] && ! grep -q 'SYNC_TEST_SUITE_CLOCK .* not a whole number' <<< \"\$out_sw0\$out_sw1\$out_sw2w\$out_sw5\$out_sw6\$out_sw7\$out_sw2\$out_sw3\$out_sw4\""
 SYNC_NO_HOOK_TESTS=1
 
+section "== the watcher's timer wake stops an ask the shared repo never answers, and its bound falls back to 60 seconds (#3396) =="
+# A watcher that has seen no change here for a whole poll asks the shared repo one question, `git
+# ls-remote` of main, and it asks inside the watcher's only loop: a connection that stalls would stop
+# every later send behind it, with nothing logged. So the ask is bounded by SYNC_WATCH_ASK_TIMEOUT,
+# 60 seconds by default, and a stopped ask records the repo as unreachable for that wake. DESIGN.md's
+# measured numbers table cites this section for that bound. The rest of #3396's cases are in
+# tests/test-watch-timer.sh; the case of an ask that never answers moved here from there.
+#
+# The shared repo is an ssh remote whose transport records its pid and then sleeps 30 seconds
+# without a word. An ask that waited it out would end after the transport did, so a transport still
+# running once the watcher has ended is what shows the ask was stopped. The watcher's timer is one
+# second, and the stand in fswatch ends the watcher as soon as the wake's record is written, so
+# nothing here waits on a duration (L290, L524). Every number in this paragraph is one the code or
+# this fixture sets, not measured.
+WAB="$WORK/ask-bound"; mkdir -p "$WAB/home" "$WAB/bin"
+echo '{"hooks":{}}' > "$WAB/home/settings.json"
+WAB_R="$WAB/repo"; git init -q -b main "$WAB_R"
+git -C "$WAB_R" -c user.name=fixture -c user.email=fixture@example.invalid commit -q --allow-empty -m base
+git -C "$WAB_R" remote add origin "ssh://fixture.invalid/never-answers.git"
+cat > "$WAB/never-answers" <<WABSSH
+#!/usr/bin/env bash
+printf '%s\n' "\$\$" >> "$WAB/asks"
+exec sleep 30
+WABSSH
+# Ends once the wake's record exists, or after 600 looks (a guard against a run that never gets
+# there, not a wait: every run below writes its record on its first wake).
+cat > "$WAB/fswatch" <<WABFS
+#!/usr/bin/env bash
+n=0
+while [ "\$n" -lt 600 ]; do
+  [ -s "$WAB_R/.watch-idle" ] && exit 0
+  sleep 0.1; n=\$((n + 1))
+done
+WABFS
+chmod +x "$WAB/never-answers" "$WAB/fswatch"
+wab_watch(){   # $1 = output file  [env assignments...]
+  local out="$1"; shift
+  rm -f "$WAB_R/.watch-idle"
+  env -u SYNC_NO_GIT -u SYNC_WATCH_NOW SYNC_FSWATCH="$WAB/fswatch" SYNC_WATCH_POLL=1 \
+    CLAUDE_HOME="$WAB/home" SYNC_REPO="$WAB_R" SYNC_LOCK="$WAB_R/.sync-lock" \
+    SYNC_HOLD_FILE="$WAB/no-hold" SYNC_WATCH_PID_FILE="$WAB/watch.pid" SYNC_NO_NOTIFY=1 \
+    GIT_SSH_COMMAND="$WAB/never-answers" "$@" bash "$SCRIPT" watch > "$out" 2>&1 || true
+}
+wab_field(){ awk -F '\t' -v f="$1" 'NR == 1 { print $f }' "$WAB_R/.watch-idle" 2>/dev/null; }   # 2 verdict  5 why
+
+wab_watch "$WAB/bound.out" SYNC_WATCH_ASK_TIMEOUT=1
+wab_asker="$(awk 'NR == 1' "$WAB/asks" 2>/dev/null)"
+dbg "#3396 the bounded ask: $(cat "$WAB/bound.out" "$WAB_R/.watch-idle" 2>/dev/null)"
+check "#3396 (fixture) the wake asked the shared repo over the transport that never answers" "[ -n '$wab_asker' ]"
+check "#3396 an ask the shared repo never answers is stopped at SYNC_WATCH_ASK_TIMEOUT, and the wake records the repo as unreachable" \
+  "[ \"\$(wab_field 2)\" = unreachable ] && [[ \"\$(wab_field 5)\" == *'did not answer within 1s (SYNC_WATCH_ASK_TIMEOUT) and was stopped'* ]]"
+check "#3396 and the watcher ended while the transport was still running, so the ask was stopped rather than waited out" \
+  "kill -0 '$wab_asker' 2>/dev/null"
+check "#3396 and the stopped ask failed nothing in the watcher" "! grep -q 'FAILED' '$WAB/bound.out'"
+[ -s "$WAB/asks" ] && { xargs kill < "$WAB/asks" 2>/dev/null || true; }
+
+# The bound's fallback. A perl on the path stands in for run_bounded's for the ask alone: it writes
+# the bound it was handed and answers as a stopped ask does, so the 60 second fallback is read
+# without waiting 60 seconds (the code's setting, not measured). Every other perl call goes to the
+# real one.
+wab_perl="$(command -v perl)"
+cat > "$WAB/bin/perl" <<WABPERL
+#!/usr/bin/env bash
+case " \$* " in
+  *" ls-remote "*) printf '%s\n' "\$3" >> "$WAB/limits"; exit 124 ;;
+esac
+exec "$wab_perl" "\$@"
+WABPERL
+chmod +x "$WAB/bin/perl"
+: > "$WAB/limits"
+wab_watch "$WAB/empty.out" SYNC_WATCH_ASK_TIMEOUT= PATH="$WAB/bin:$PATH"
+dbg "#3396 an empty bound: $(cat "$WAB/limits" "$WAB_R/.watch-idle" 2>/dev/null)"
+check "#3396 an empty SYNC_WATCH_ASK_TIMEOUT bounds the ask at 60 seconds" \
+  "[ \"\$(awk 'NR == 1' '$WAB/limits')\" = 60 ] && [[ \"\$(wab_field 5)\" == *'within 60s (SYNC_WATCH_ASK_TIMEOUT)'* ]]"
+# This run also stays up for a second wake, which is what makes a stopped ask cost only its own
+# wake: the watcher goes on and asks again. Its stand in fswatch ends once two asks are written.
+cat > "$WAB/fswatch-twice" <<WABFS2
+#!/usr/bin/env bash
+n=0
+while [ "\$n" -lt 600 ]; do
+  [ "\$(grep -c . "$WAB/limits" 2>/dev/null)" -ge 2 ] 2>/dev/null && exit 0
+  sleep 0.1; n=\$((n + 1))
+done
+WABFS2
+chmod +x "$WAB/fswatch-twice"
+: > "$WAB/limits"
+wab_watch "$WAB/word.out" SYNC_WATCH_ASK_TIMEOUT=soon PATH="$WAB/bin:$PATH" SYNC_FSWATCH="$WAB/fswatch-twice"
+dbg "#3396 a bound that is not a number: $(cat "$WAB/limits" "$WAB_R/.watch-idle" 2>/dev/null)"
+check "#3396 and so does one that is not a whole number" \
+  "[ \"\$(awk 'NR == 1' '$WAB/limits')\" = 60 ] && [[ \"\$(wab_field 5)\" == *'within 60s (SYNC_WATCH_ASK_TIMEOUT)'* ]]"
+check "#3396 and the wake after a stopped ask asks the shared repo again, so a stopped ask costs one wake" \
+  "[ \"\$(grep -c . '$WAB/limits')\" -ge 2 ]"
+
 suite_profile
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"

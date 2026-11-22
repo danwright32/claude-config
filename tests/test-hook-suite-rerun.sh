@@ -142,6 +142,18 @@ check "an unverified pull still exits 0" "[ \"\$(cat '$RRT/rc')\" = 0 ]"
 st1="$(rr_status)"
 check "status says an unverified pull is waiting to be run again" \
   "line_has \"\$st1\" 'hook suite: could NOT be completed' 'owed a second run' 'load average'" "$st1"
+# claude-config#3396: the per prompt session notice reads `claude-sync stuck`, and until this a pull
+# whose suite was stopped at its limit was said only in the pull's own output and in status.
+rr_stuck(){ env -u SYNC_NO_HOOK_TESTS -u SYNC_NO_SEND_TESTS CLAUDE_HOME="$RRH" SYNC_REPO="$RRR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" stuck 2>&1; }
+sk1="$(rr_stuck)"
+check "#3396 stuck reports what landed as unverified, so the session notice can say it" \
+  "printf '%s\n' \"\$sk1\" | awk -F '\t' '\$1 == \"unverified\" { f = 1 } END { exit !f }'" "$sk1"
+check "#3396 keyed on when it became owed, so the notice says it once for the whole stretch" \
+  "printf '%s\n' \"\$sk1\" | awk -F '\t' -v o=\"\$(rr_field owed_since)\" '\$1 == \"unverified\" && \$3 == o { f = 1 } END { exit !f }'" "$sk1"
+check "#3396 and its sentence says plainly that what landed here is unverified, and why" \
+  "line_has \"\$sk1\" 'UNVERIFIED' 'stopped at its 1800 second limit'" "$sk1"
+check "#3396 status says it once, on its hook suite line, not a second time from the stuck records" \
+  "[ \"\$(printf '%s\n' \"\$st1\" | grep -c 'UNVERIFIED')\" = 0 ] && line_has \"\$st1\" 'Nothing that landed has been verified'" "$st1"
 
 # ---- 2. a busy Mac: the next receive runs nothing, says why, and keeps the record ----
 out2="$(rr_pull 50)"
@@ -198,6 +210,9 @@ out6="$(rr_pull 1)"
 check "a rerun that passes replaces the owed record with a pass" \
   "[ \"\$(rr_runs)\" = 3 ] && grep -q '^outcome=passed' '$RRR/.hook-tests' && [ -z \"\$(rr_field owed_since)\" ]" "$out6"
 check "and says so on its closing line" "line_has \"\$out6\" 'was run again' 'hook suite passed here'" "$out6"
+sk6="$(rr_stuck)"
+check "#3396 once a later run completes, stuck no longer reports anything unverified" \
+  "! printf '%s\n' \"\$sk6\" | awk -F '\t' '\$1 == \"unverified\" { f = 1 } END { exit !f }'" "$sk6"
 check "and notifies nobody" "[ \"\$(rr_told)\" = 1 ]"
 out7="$(rr_pull 1)"
 check "(control) once passed, a receive landing no hook runs nothing" "[ \"\$(rr_runs)\" = 3 ]" "$out7"
@@ -234,6 +249,14 @@ check "a hook landing after a give up is checked, and its stopped run starts a n
   "$(head -1 "$RRR/.hook-tests" 2>/dev/null)"
 check "and it is owed a rerun again, with nobody notified" \
   "line_has \"\$out12\" 'could NOT be completed here' 'runs it again' && [ \"\$(rr_told)\" = 3 ]" "$out12"
+
+# ---- #3396: a suite that never got the full suite slot is unverified too, in its own words ----
+printf 'outcome=slotwait\tat=%s\texit=0\tran=?\tnotrun=?\tseconds=900\tnotrun_names=?\towed_since=%s\tstopped=0\n' \
+  "$(date +%s)" "$(( $(date +%s) - 120 ))" > "$RRR/.hook-tests"
+sk13="$(rr_stuck)"
+check "#3396 a run that waited out its bound for the suite slot is reported as unverified, saying it never ran" \
+  "line_has \"\$sk13\" 'UNVERIFIED' 'never started' && ! line_has \"\$sk13\" 'stopped at its'" "$sk13"
+printf 'outcome=passed\tat=%s\texit=0\tran=3\tnotrun=0\tseconds=40\tnotrun_names=\n' "$(date +%s)" > "$RRR/.hook-tests"
 
 # ---- where the writes landed (L322): the fixture, and nothing of this Mac's ----
 check "every record and claim this suite caused is inside the fixture clone" \
