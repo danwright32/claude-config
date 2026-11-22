@@ -488,14 +488,71 @@ if git -C "$R" init -q 2>/dev/null && cp "$G/lib/posts.sh" "$G/lib/calm.sh" "$R/
   unread "git with -C before --no-pager" "$by_git"
   run "git -c core.quotepath=off show $SHA:calm.sh > old.sh; bash old.sh" "$R"
   unread "git with an option of its own other than --no-pager and -C" "$by_git"
-  run "env git show $SHA:posts.sh > old.sh; bash old.sh" "$R"
-  posts "git show behind env, which the gate reads as the command it runs,"
   run "'(git' show $SHA:calm.sh > old.sh; bash old.sh" "$R"
   unread "a program named (git, which is not git,"
   run "git '>x' show $SHA:calm.sh > old.sh; bash old.sh" "$R"
   unread "git with a quoted word that looks like a redirection before the subcommand" "$by_git"
   run "git 'show>x' $SHA:calm.sh > old.sh; bash old.sh" "$R"
   unread "git with a subcommand named show>x" "$by_git"
+
+  echo "slack drafts only: a program of the same name that is not the system's is not believed (claude-config#3395)"
+  # What is read is what the system's git or sed prints, so the reading is made only where the
+  # program the shell would run is certain to be that one. Every command below marked NEW was
+  # ALLOWED at af3a86bcf5 (2026-11-22): the scripts named git and sed here print a line that posts,
+  # and the gate read the commit's file, or the real sed's output, as what was written and run.
+  N="$T/same3395"
+  mkdir -p "$N/bin"
+  printf '%s\n' '#!/bin/sh' "echo '$POST'" > "$N/git"
+  cp "$N/git" "$N/sed"
+  cp "$N/git" "$N/bin/git"
+  chmod +x "$N/git" "$N/sed" "$N/bin/git"
+  printf '%s\n' 'echo ok' > "$N/calm.sh"
+  printf '%s\n' "sed 's/ok/fine/' calm.sh > made.sh" 'bash made.sh' > "$N/filter.sh"
+  printf '%s\n' "PATH=$N:\$PATH" "sed 's/ok/fine/' calm.sh > made.sh" 'bash made.sh' > "$N/path-filter.sh"
+  GS="git -C $R show $SHA:calm.sh > old.sh; bash old.sh"
+  GP="git -C $R show $SHA:posts.sh > old.sh; bash old.sh"
+  SF="sed 's/ok/fine/' calm.sh > made.sh; bash made.sh"
+  # run_path <PATH for the gate> <command> <folder>: the session's own PATH as the gate sees it.
+  run_path() { local keep="$PATH"; export PATH="$1"; run "$2" "$3"; export PATH="$keep"; }
+  # The plain forms, still read.
+  run "$GS" "$N";                                passes "git by its bare name, of a file that does not post,"
+  run "$SF" "$N";                                passes "sed by its bare name, of a file that does not post,"
+  run "/usr/bin/sed 's/ok/fine/' lib/posts.sh > made.sh; bash made.sh"
+  posts "sed named by its path in a system folder"
+  run "time $GP" "$N";                           posts "git behind the shell's own time, which runs the program of that name,"
+  run "bash -c \"$SF\"" "$N";                    passes "sed in a string given to bash -c, with PATH left alone,"
+  # NEW: a path that is not one of the system's folders.
+  run "./$GS" "$N";                              unread "a script named git, run by its path in the folder,"
+  run "$N/$GS" "$N";                             unread "a script named git, run by a whole path outside the system's folders,"
+  run "bin/$GS" "$N";                            unread "a script named git, run by a path under the folder,"
+  run "./$SF" "$N";                              unread "a script named sed, run by its path in the folder,"
+  # NEW: PATH named in the command, or in a text that runs it.
+  run "PATH=$N:\$PATH; $GS" "$N";                unread "git after PATH is set"
+  run "export PATH=$N:\$PATH; $SF" "$N";         unread "sed after PATH is exported"
+  run "export KEEP=1 PATH=$N:\$PATH; $SF" "$N";  unread "sed after PATH is exported beside another name"
+  run "$SF; PATH=$N:\$PATH" "$N";                unread "sed in a command that sets PATH anywhere"
+  run "bash path-filter.sh" "$N";                refused "#3395 a script that sets PATH and then runs what its sed wrote is refused"
+  run "export PATH=$N:\$PATH; bash filter.sh" "$N"
+  refused "#3395 a script whose caller exported PATH, running what its sed wrote, is refused"
+  run "bash filter.sh" "$N";                     passes "the same script with PATH left alone"
+  run "PATH=$N:\$PATH $GS" "$N";                 unread "git with PATH set in front of it"
+  # NEW: a word in front that changes which program runs, or how it is found.
+  run "env $GS" "$N";                            unread "git behind env"
+  run "env PATH=$N:\$PATH $GS" "$N";             unread "git behind env with PATH set"
+  run "env -i $GS" "$N";                         unread "git behind env -i"
+  run "exec $GS" "$N";                           unread "git behind exec"
+  run "sudo $GS" "$N";                           unread "git behind sudo"
+  run "nice $GS" "$N";                           unread "git behind nice"
+  run "command $GS" "$N";                        unread "git behind command"
+  run "PATH=$N:\$PATH bash -c \"$SF\"" "$N"
+  refused "#3395 sed in a string given to bash -c with PATH set in front of bash is refused"
+  run "echo $SHA:calm.sh | xargs git -C $R show > old.sh; bash old.sh" "$N"
+  unread "git behind xargs"
+  # NEW: the session's own PATH, where an entry is the folder the command runs in.
+  run_path ":$PATH" "$GS" "$N";                  unread "git where the session's PATH starts with an empty entry"
+  run_path "$PATH:" "$SF" "$N";                  unread "sed where the session's PATH ends with an empty entry"
+  run_path "bin:$PATH" "$GS" "$N";               unread "git where the session's PATH holds a relative entry"
+  run_path ".:$PATH" "$SF" "$N";                 unread "sed where the session's PATH holds the folder itself"
 else
   # git could not make and commit to a repository here, a state this suite cannot set: said on the
   # runner's one line for that, never a failure (L411, run-all-tests.sh #1444).
