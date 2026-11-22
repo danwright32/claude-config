@@ -80,7 +80,9 @@ const commandReads = (c: Cmd): boolean => {
 
 /**
  * Whether a call only reads: a tool that reads by its name, or a Bash call whose every command is a
- * known read and that writes nothing mod-kit's writes reader can see. Anything else is not a read.
+ * known read and in which mod-kit's writes reader finds no write, change or run. One kind of run
+ * decides nothing: a program the reader does not know, under its plain label, when this file's own
+ * list holds it. Every other run, write or change makes the call no read, and so does anything else.
  */
 export const readsOnly = (tool: string, commands: readonly Cmd[], writes: ModKitWrites): boolean => {
   if (READ_TOOLS.has(tool)) return true
