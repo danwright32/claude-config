@@ -8,6 +8,8 @@
 # predicate (lib/sleep.sh's sleep_active for the shell, readSleep through scope modes' sleepNow, isAsleep or
 # hold for a mod) or sit on the exempt list below with its reason (L129). A route found by neither
 # fails, and so does an exempt entry with no reason or one naming a route that no longer exists.
+# A route that consulted the predicate cannot vanish unnoticed either: the ones that consult are
+# also kept on a recorded list, CONSULTING below, held both ways against the derivation (#3411).
 #
 # What "consults" means is a text match, which proves the predicate is named where it should be,
 # never that it is obeyed (L135, L400). So every shell route is also RUN here against an asleep
@@ -72,9 +74,35 @@ mod:job-watcher/hooks/register.ts:classic.PermissionRequest	Answers a subagent's
 mod:keystroke-guard/hooks/register.ts:headsUp:ask	Asked only after holdWhileAway, which holds the action through scope modes' hold while asleep, so the question is never reached then.
 EOF
 
+# ---- the recorded list: every route that consults the predicate (#3411) ----
+# Held both ways against the enumeration below: a route found consulting that is not listed fails,
+# and so does a listed route no longer found, or found but no longer consulting. So a refactor that
+# renames, removes or folds a checked route into a helper fails by name until this list changes in
+# the same pull request, where a reviewer sees where the check went. This is not the exempt list.
+# To rewrite it from the tree after such a change, paste in what this prints:
+#   bash tests/test-sleep-silence.sh --list-consulting
+CONSULTING="$WORK/consulting.txt"
+cat > "$CONSULTING" <<'EOF'
+settings:Stop:turn-end-sound.sh
+settings:Stop:check-later-nudge.sh
+settings:Stop:feature-issue-review.sh
+settings:Stop:session-reflection.sh
+settings:Stop:pr-merge-quiz.sh
+mod:goal-tracker/hooks/register.tsx:notify:notifier
+mod:scope-modes/hooks/register.ts:leavePrOpen:ask
+mod:scope-modes/hooks/register.ts:leaveBranch:ask
+mod:scope-modes/hooks/register.ts:openCleanupBranch:ask
+mod:scope-modes/hooks/register.ts:tool.call:ask
+mod:scope-modes/hooks/register.ts:classic.PermissionRequest
+mod:scope-modes/hooks/register.ts:classic.PermissionDenied
+mod:scope-modes/hooks/register.ts:classic.StopFailure
+sync:notify
+EOF
+
 # ---- 1. the routes, derived ----
 ROUTES="$WORK/routes.tsv"   # route <TAB> consults (yes/no) <TAB> where <TAB> arguments (settings routes)
-python3 - "$SETTINGS" "$HOOKS" "$MODS" "$SYNC" > "$ROUTES" <<'PY'
+enumerate_routes() {   # enumerate_routes <settings json> <hooks dir> <mods dir> <claude-sync> -> one route per line
+python3 - "$@" <<'PY'
 import json, os, re, sys
 
 settings, hooks, mods, sync = sys.argv[1:5]
@@ -142,7 +170,15 @@ if os.path.isfile(sync):
     body = m.group(1) if m else ""
     print("sync:notify\t%s\t%s" % ("yes" if "sleep_active" in body else "no", sync if m else "notify() not found"))
 PY
+}
+enumerate_routes "$SETTINGS" "$HOOKS" "$MODS" "$SYNC" > "$ROUTES"
 rc=$?
+# `bash tests/test-sleep-silence.sh --list-consulting` prints the routes this tree finds consulting
+# the predicate, in the order CONSULTING keeps them, and runs no check.
+if [ "${1:-}" = --list-consulting ]; then
+  awk -F'\t' '$2 == "yes" { print $1 }' "$ROUTES"
+  exit "$rc"
+fi
 [ "$rc" -eq 0 ] && check "the routes were enumerated" ok || check "the routes were enumerated" "the enumeration failed, exit $rc"
 
 count() { grep -c "^$1" "$ROUTES" 2>/dev/null || true; }
@@ -158,26 +194,140 @@ grep -q $'^mod:manual-steps/hooks/register.tsx:tellDan:noun\t' "$ROUTES" \
   && check "manual steps asking the goal tracker to notify is found as a route (#1245)" ok \
   || check "manual steps asking the goal tracker to notify is found as a route (#1245)" "not found; routes: $(cut -f1 "$ROUTES" | tr '\n' ' ')"
 
-while IFS=$'\t' read -r route consults where _args; do
-  [ -n "$route" ] || continue
-  reason="$(awk -F'\t' -v r="$route" '$1 == r { print $2 }' "$EXEMPT")"
-  if [ "$consults" = yes ]; then
-    check "$route consults the sleep predicate" ok
-  elif [ -n "$reason" ]; then
-    check "$route is exempt with a reason" ok
-  else
-    check "$route consults the sleep predicate or is exempt with a reason" "it does neither ($where)"
-  fi
-done < "$ROUTES"
+judge_routes() {   # judge_routes <routes> <exempt> <consulting> -> per check, "ok<TAB>check" or "FAIL<TAB>check<TAB>why"
+  local routes="$1" exempt="$2" consulting="$3" route consults where reason found
+  while IFS=$'\t' read -r route consults where _; do
+    [ -n "$route" ] || continue
+    reason="$(awk -F'\t' -v r="$route" '$1 == r { print $2 }' "$exempt")"
+    if [ "$consults" = yes ]; then
+      printf 'ok\t%s consults the sleep predicate\n' "$route"
+      if grep -qxF "$route" "$consulting"; then printf 'ok\t%s is on the recorded list of routes that consult\n' "$route"
+      else printf 'FAIL\t%s is on the recorded list of routes that consult\tit consults the predicate but is not listed: add it to CONSULTING in the same change\n' "$route"; fi
+    elif [ -n "$reason" ]; then
+      printf 'ok\t%s is exempt with a reason\n' "$route"
+    else
+      printf 'FAIL\t%s consults the sleep predicate or is exempt with a reason\tit does neither (%s)\n' "$route" "$where"
+    fi
+  done < "$routes"
 
-# Every exempt entry names a route that exists, and gives a reason with words in it.
-cut -f1 "$ROUTES" > "$WORK/route-names"
-while IFS=$'\t' read -r route reason; do
-  [ -n "$route" ] || continue
-  grep -qxF "$route" "$WORK/route-names" && check "exempt $route is still a route" ok \
-    || check "exempt $route is still a route" "no such route now: remove it from the list"
-  case "$reason" in *[A-Za-z]*[A-Za-z]*) check "exempt $route gives a reason" ok ;; *) check "exempt $route gives a reason" "none" ;; esac
-done < "$EXEMPT"
+  # Every recorded route is still found, and still consults: one that vanished, was renamed, was
+  # folded into a helper or stopped consulting fails by name until the list says where it went.
+  while IFS= read -r route; do
+    [ -n "$route" ] || continue
+    found="$(awk -F'\t' -v r="$route" '$1 == r { print $2; exit }' "$routes")"
+    case "$found" in
+      yes) printf 'ok\trecorded %s is still found consulting the predicate\n' "$route" ;;
+      no) printf 'FAIL\trecorded %s is still found consulting the predicate\tit is found but no longer consults the sleep predicate\n' "$route" ;;
+      *) printf 'FAIL\trecorded %s is still found consulting the predicate\tno such route now: a route that consulted the sleep predicate is gone, so find where its check went and update CONSULTING in the same change\n' "$route" ;;
+    esac
+  done < "$consulting"
+
+  # Every exempt entry names a route that exists, and gives a reason with words in it.
+  while IFS=$'\t' read -r route reason; do
+    [ -n "$route" ] || continue
+    if cut -f1 "$routes" | grep -qxF "$route"; then printf 'ok\texempt %s is still a route\n' "$route"
+    else printf 'FAIL\texempt %s is still a route\tno such route now: remove it from the list\n' "$route"; fi
+    case "$reason" in
+      *[A-Za-z]*[A-Za-z]*) printf 'ok\texempt %s gives a reason\n' "$route" ;;
+      *) printf 'FAIL\texempt %s gives a reason\tnone\n' "$route" ;;
+    esac
+  done < "$exempt"
+}
+judge_routes "$ROUTES" "$EXEMPT" "$CONSULTING" > "$WORK/judged"
+while IFS=$'\t' read -r verdict name why; do
+  if [ "$verdict" = ok ]; then check "$name" ok; else check "$name" "${why:-no reason given}"; fi
+done < "$WORK/judged"
+
+# ---- 1b. a route that consulted the predicate cannot vanish unnoticed (#3411) ----
+# The judge above is held to fixture trees of one mod, so each case is its own small tree and the
+# real one is never edited. A route that consulted the predicate and is no longer found must fail by
+# name, whether it was deleted, renamed or folded into a helper (#3407 folded five into one), unless
+# the same change updates the recorded list, where a reviewer sees it.
+fixture_routes() {   # fixture_routes <name> -> enumerates the tree at $WORK/fixture-<name>, whose mod source is on stdin
+  local t="$WORK/fixture-$1"
+  mkdir -p "$t/hooks" "$t/mods/fixmod/hooks"
+  printf '{"hooks":{}}\n' > "$t/settings.json"
+  cat > "$t/mods/fixmod/hooks/register.ts"
+  enumerate_routes "$t/settings.json" "$t/hooks" "$t/mods" "$t/no-claude-sync" > "$t/routes.tsv"
+}
+judge_fixture() {   # judge_fixture <name> <exempt lines> <consulting lines> -> the judge's FAIL lines for that tree
+  local t="$WORK/fixture-$1"
+  printf '%s\n' "$2" > "$t/exempt.tsv"
+  printf '%s\n' "$3" > "$t/consulting.txt"
+  judge_routes "$t/routes.tsv" "$t/exempt.tsv" "$t/consulting.txt" | grep '^FAIL' || true
+}
+FX="mod:fixmod/hooks/register.ts"
+FX_LIST="$FX:pageDan:notifier
+$FX:askDan:ask
+"
+
+fixture_routes both <<'TS'
+export function pageDan() {
+  if (isAsleep()) return
+  run('terminal-notifier', [])
+}
+export function askDan(ui) {
+  if (isAsleep()) return
+  ui.ask('Merge it?')
+}
+TS
+[ "$(grep -c $'\tyes\t' "$WORK/fixture-both/routes.tsv")" = 2 ] \
+  && check "the fixture tree's two routes are found consulting the predicate (the control)" ok \
+  || check "the fixture tree's two routes are found consulting the predicate (the control)" "found: $(cat "$WORK/fixture-both/routes.tsv")"
+out="$(judge_fixture both "" "$FX_LIST")"
+[ -z "$out" ] && check "a tree matching its recorded list passes (the control)" ok \
+  || check "a tree matching its recorded list passes (the control)" "$out"
+
+fixture_routes gone <<'TS'
+export function pageDan() {
+  if (isAsleep()) return
+  run('terminal-notifier', [])
+}
+TS
+out="$(judge_fixture gone "" "$FX_LIST")"
+case "$out" in
+  *"$FX:askDan:ask"*) check "a route that consulted the predicate and is gone fails by name" ok ;;
+  *) check "a route that consulted the predicate and is gone fails by name" "the judge said: ${out:-nothing}" ;;
+esac
+
+fixture_routes renamed <<'TS'
+export function pageDan() {
+  if (isAsleep()) return
+  run('terminal-notifier', [])
+}
+export function askDanNow(ui) {
+  if (isAsleep()) return
+  ui.ask('Merge it?')
+}
+TS
+out="$(judge_fixture renamed "" "$FX:pageDan:notifier
+$FX:askDanNow:ask
+")"
+[ -z "$out" ] && check "a renamed route passes when the same change updates the recorded list" ok \
+  || check "a renamed route passes when the same change updates the recorded list" "$out"
+out="$(judge_fixture renamed "" "$FX_LIST")"
+case "$out" in
+  *"$FX:askDan:ask"*"$FX:askDanNow:ask"*|*"$FX:askDanNow:ask"*"$FX:askDan:ask"*)
+    check "a renamed route with the list left alone fails, naming the old route and the new" ok ;;
+  *) check "a renamed route with the list left alone fails, naming the old route and the new" "the judge said: ${out:-nothing}" ;;
+esac
+
+# The near miss #3407 showed: a recorded route still found but no longer consulting, and moved
+# under an exemption, which the exempt list alone would accept.
+fixture_routes unchecked <<'TS'
+export function pageDan() {
+  if (isAsleep()) return
+  run('terminal-notifier', [])
+}
+export function askDan(ui) {
+  ui.ask('Merge it?')
+}
+TS
+out="$(judge_fixture unchecked "$FX:askDan:ask"$'\t'"Asked only before bed." "$FX_LIST")"
+case "$out" in
+  *"$FX:askDan:ask"*) check "a recorded route that stops consulting fails by name, even when exempt" ok ;;
+  *) check "a recorded route that stops consulting fails by name, even when exempt" "the judge said: ${out:-nothing}" ;;
+esac
 
 # ---- 2. the shell routes, run asleep and awake ----
 # This boot by sleep.sh's sleep_boot_of, the one shell rule, held to the mod's BOOT_FIXTURES and to
