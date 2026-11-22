@@ -226,6 +226,13 @@ w5c="$(cat "$WORK/w5c.out")"
 check "a wake that cannot reach the shared repo installs nothing and stays up" \
   "[ ! -e '$WHB/skills/sixth/SKILL.md' ] && [ \"\$(w_field 2)\" = unreachable ]" "$w5c"
 check "and does not log every failed look, which status and the record carry" "[ \"\$(w_wakes '$WORK/w5c.out')\" = 0 ] && ! grep -q 'FAILED' '$WORK/w5c.out'" "$w5c"
+# A shared repo that never answers: the ask runs in the watcher's only loop, so it is bounded, or
+# every later change would wait behind it. An ssh remote whose transport just sleeps stands in.
+git -C "$WR" remote set-url origin "ssh://fixture.invalid/never-answers.git"
+printf '#!/usr/bin/env bash\nsleep 5\n' > "$WBIN/silent-ssh"; chmod +x "$WBIN/silent-ssh"
+w_watch unreachable "$WORK/w5d.out" GIT_SSH_COMMAND="$WBIN/silent-ssh" SYNC_WATCH_ASK_TIMEOUT=1
+check "an ask the shared repo never answers is stopped at its bound and recorded, and the watcher goes on" \
+  "grep -q 'did not answer within 1s' '$WR/.watch-idle'" "$(cat "$WORK/w5d.out" "$WR/.watch-idle")"
 git -C "$WR" remote set-url origin "$WB"
 
 # ---- 6. assume it runs twice: two watchers wake at once ----
@@ -258,6 +265,13 @@ s2="$(w_status)"
 check "(fixture) the next wake took in everything that passed" "w_has eighth 'C8, passed' && [ ! -e '$WHB/skills/ninth/SKILL.md' ]" "$(cat "$WORK/w7.out")"
 check "status says nothing when the clone is behind only commits still being tested" \
   "! printf '%s\n' \"\$s2\" | grep -q 'newest tested commit'" "$s2"
+# A commit that passed, under a head that FAILED: the gate takes nothing in below a red head, so
+# status must not promise the watcher will take it in (the receiving stuck line says why).
+c10="$(w_publish tenth 'C10, passed')"; w_ci "$c10" success
+c11="$(w_publish eleventh 'C11, failed')"; w_ci "$c11" failure
+s3="$(w_status)"
+check "status does not offer a passed commit under a failed head as one the watcher will take in" \
+  "! printf '%s\n' \"\$s3\" | grep -q 'newest tested commit'" "$s3"
 
 # ---- where the writes landed (L322): the fixture, and nothing of this Mac's ----
 check "the record the wakes write is inside the fixture clone, never this checkout" \

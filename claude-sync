@@ -13980,9 +13980,6 @@ STUCKEOF
   return 0
 }
 
-# The same fact, on the surface built to answer it (claude-config#340). Only once the verdict is
-# actually in: a record still waiting for one says nothing, because "no answer yet" and "your commit
-# broke it" are different things and one sentence covering both hides the second (L11).
 # BEHIND MAIN'S NEWEST TESTED COMMIT (claude-config#3396). On 2026-11-21 the personal MacBook sat two
 # merges behind for half an hour with green checks on both, and nothing on any surface said so. Read
 # after status's own fetch, through the CI gate's own predicates (remote_ci_state, and
@@ -14008,7 +14005,10 @@ report_behind_tested(){
   state="$(remote_ci_state "$up")"
   case "$state" in
     green) tested="$up" ;;
-    pending|none|red|cancelled) tested="$(newest_tested_ancestor "$up" 2>/dev/null || true)" ;;
+    pending|none) tested="$(newest_tested_ancestor "$up" 2>/dev/null || true)" ;;
+    # The gate takes nothing in below a head that failed or was cancelled, so no commit here is
+    # one the watcher will take in, and the receiving stuck line says why.
+    red|cancelled) return 0 ;;
     *)
       n="$(git -C "$SYNC_REPO" rev-list --count "HEAD..$up" 2>/dev/null || true)"
       echo "this clone is $(commits_in_words "${n:-?}") behind main, and whether any of them passed its tests could not be read ($state), so whether it is behind main's newest tested commit is unknown. Check that gh is installed and logged in.$look"
@@ -14024,6 +14024,9 @@ report_behind_tested(){
   return 0
 }
 
+# The same fact, on the surface built to answer it (claude-config#340). Only once the verdict is
+# actually in: a record still waiting for one says nothing, because "no answer yet" and "your commit
+# broke it" are different things and one sentence covering both hides the second (L11).
 report_my_push(){
   local sha told
   [ -f "$MY_PUSH_FILE" ] || return 0
@@ -16263,7 +16266,16 @@ watch_idle_check(){
     watch_idle_record "$now" unreadable - "$handed" "this clone has no branch checked out, so there is no branch of main to ask about"
     return 1
   fi
-  out="$(git -C "$SYNC_REPO" ls-remote origin "refs/heads/$branch" 2>/dev/null || true)"
+  # Bounded, because this runs inside the watcher's only loop: a stalled connection would otherwise
+  # stop every later change being sent, with nothing logged. SYNC_WATCH_ASK_TIMEOUT, 60 seconds by
+  # default, is a setting, not a measurement (one ask measured 0.22 to 0.33 seconds on 2026-11-22).
+  local ask_limit="${SYNC_WATCH_ASK_TIMEOUT:-60}" asked=0
+  case "$ask_limit" in ''|*[!0-9]*) ask_limit=60 ;; esac
+  out="$(run_bounded "$ask_limit" git -C "$SYNC_REPO" ls-remote origin "refs/heads/$branch" 2>/dev/null)" || asked=$?
+  if [ "$asked" -eq 124 ]; then
+    watch_idle_record "$now" unreachable - "$handed" "git ls-remote origin did not answer within ${ask_limit}s (SYNC_WATCH_ASK_TIMEOUT) and was stopped"
+    return 1
+  fi
   remote="${out%%[[:space:]]*}"
   if ! is_object_id "$remote"; then
     watch_idle_record "$now" unreachable - "$handed" "git ls-remote origin refs/heads/$branch failed or named no commit"

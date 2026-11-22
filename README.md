@@ -724,7 +724,8 @@ pull was typed at about 8:22 AM ET.
 
 Now a watcher that has seen no change for `SYNC_WATCH_POLL` seconds (600, ten minutes; 0 switches
 it off) asks the shared repo one question, `git ls-remote` of its branch, which reads refs and writes
-nothing. What it does with the answer:
+nothing, and is stopped after `SYNC_WATCH_ASK_TIMEOUT` seconds (60, a setting) so a stalled
+connection cannot hold up the watcher's later sends. What it does with the answer:
 
 - main's head is already in this clone: nothing more, and no request to GitHub at all;
 - a head no tick has been handed yet: the ordinary tick an edit runs, under the sync lock and the CI
@@ -755,7 +756,8 @@ still being tested, at most `SYNC_CI_TESTED_SEARCH` (ten) more for the commits b
 `claude-sync status` says when the clone is behind main's newest tested commit: by how many commits,
 since when (the moment the first of them landed on main), and what the watcher last found when it
 asked. It reads "tested" through the gate's own verdict and walk, and says nothing when the clone is
-level, or behind only commits still being tested. When the verdicts cannot be read it says so rather
+level, behind only commits still being tested, or under a head that failed or was cancelled (the gate
+takes nothing in then, and the receiving stuck line says why). When the verdicts cannot be read it says so rather
 than nothing.
 
 It takes effect on each Mac with the pull that carries it: a pull that changes `claude-sync`

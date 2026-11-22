@@ -2697,7 +2697,10 @@ output. These choices were made by the session that built it, not by Dan, and ar
   a timeout and at end of input (measured 2026-11-22), so the loop tells them apart by how long the
   read took; a misread costs one look at the shared repo.
 - **One question when nothing is new.** `git ls-remote` of the branch reads refs and writes nothing
-  in the clone, so it takes no lock and two watchers asking at once cannot collide. Only when main
+  in the clone, so it takes no lock and two watchers asking at once cannot collide. It runs inside
+  the watcher's only loop, so it goes through `run_bounded` with `SYNC_WATCH_ASK_TIMEOUT` (60
+  seconds, a setting): a stalled connection would otherwise stop every later send with nothing
+  logged. Only when main
   holds a commit the clone lacks does a GitHub verdict get read, and only for a head a tick has
   already been handed: a new head goes straight to the tick, which fetches it and asks the gate, and
   a head the tick left is asked about until it, or a commit below it, passes. Those are the gate's
