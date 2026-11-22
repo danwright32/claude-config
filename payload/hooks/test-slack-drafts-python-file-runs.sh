@@ -341,6 +341,24 @@ run_at "bash wrapq.sh" "$IP"
 allowed "#3397 and one whose inline Python runs the quiet twin passes"
 run_at "bash wrapu.sh" "$IP"
 allowed "#3397 and one whose inline Python runs a path that cannot be worked out is left as it was"
+# There, a file is read as one the code may run only where the code hands it to something that runs
+# a file. A file it names any other way is left as it was: tests/test-readme-mods-table.sh loads a
+# module by its path and then reads README.md, which names the endpoints where it describes this
+# gate, and the gate's own suite holds that a session can run that suite (claude-config#2678).
+printf '%s\n' "python3 -c \"import subprocess, json; print(json.load(open('./named.json')))\"" > "$IP/wrapd.sh"
+run_at "bash wrapd.sh" "$IP"
+allowed "#3397 a script on disk whose inline Python can run code and only reads a data file naming an endpoint is left as it was"
+printf '%s\n' "python3 - \"\$1\" <<'PY'" 'import importlib.util, os, sys' \
+  'spec = importlib.util.spec_from_file_location("m", sys.argv[1])' \
+  'lines = open(os.path.join(os.path.dirname(sys.argv[1]), "named.json")).read()' 'PY' > "$IP/wraph.sh"
+run_at "bash wraph.sh $IP/quiet.py" "$IP"
+allowed "#3397 and so is one that loads a module by a path it is handed and reads such a file beside it"
+printf '%s\n' "python3 -c \"import json; exec(open('./posts.py').read())\"" > "$IP/wrape.sh"
+run_at "bash wrape.sh" "$IP"
+read_refused "#3397 while one whose inline Python execs a file that posts is refused there too"
+printf '%s\n' "python3 -c \"import subprocess; subprocess.run(['python3', 'posts.py'])\"" > "$IP/wraps.sh"
+run_at "bash wraps.sh" "$IP"
+read_refused "#3397 and one whose inline Python starts python3 on a file that posts"
 
 echo "slack drafts only: the ways that were read before this rule still are (claude-config#3397)"
 

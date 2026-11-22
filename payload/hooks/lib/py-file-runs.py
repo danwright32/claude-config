@@ -59,6 +59,14 @@ be worked out is refused whether or not the text it reads is what it runs. Code 
 that holds the word exec only in a string, or a number the shell fills in outside a string, is
 refused as code that runs something unread. All fall toward refusing.
 
+ON DISK. In a script on disk a file is read as one the code may run only where the code hands it
+to something that runs a file: a path sink, anything that opens a file in code naming exec, eval
+or compile, or a command its strings spell. A file it names any other way is left as it was there.
+tests/test-readme-mods-table.sh loads a module by its path and then reads README.md, which names
+the endpoints where it describes this gate, and the gate's own suite holds that a session can run
+that suite (claude-config#2678): with every string read there, it was refused (measured
+2026-11-22). A typed command's every string is read.
+
 WHAT IS LEFT ALONE ON PURPOSE. A file that open() is handed with a mode written out that only
 writes (w, a or x, with neither r nor +) is not one the code reads, so it is not read as one it
 may run (py_opens_to_write). The same path named anywhere else in the code still is.
@@ -460,7 +468,9 @@ def make(py_nodes, unknown_dir):
                 # are still read for a file; where the shell fills part of it in and it names a way
                 # to run one, what it runs cannot be read at all.
                 texts = [m.group(1) if m.group(1) is not None else m.group(2) for m in CRUDE_STRING.finditer(code)]
-                folders, rows, mods, unworked, ran = [], [], [], [], []
+                folders, rows, mods, unworked = [], [], [], []
+                # Where it names a way to run a file, any of its strings may be the file it runs.
+                ran = [("the code", text) for text in texts] if SINK_WORDS.search(code) else []
                 # Its strings are all that is read of it, so a path it builds is never seen: where
                 # the shell fills part of it in, what the code is cannot be read at all, and where
                 # it names a way to run a file, the file it runs cannot. The gate's python3 can be
@@ -475,8 +485,11 @@ def make(py_nodes, unknown_dir):
             # Each file a string names, once, as the code would find it: from the folder it runs in,
             # and from each folder it moves to. A folder holding __main__.py is that file, which
             # runpy.run_path and python3 run when handed the folder.
+            # In a script on disk only a file the code hands to something that runs a file is read
+            # this way (ON DISK above); a typed command's every string is.
+            in_script = self.sh_in_script()
             named, seen = [], set()
-            for text in texts + ([fed] if fed else []):
+            for text in ([got for _, got in ran] if in_script else texts) + ([fed] if fed else []):
                 if not text or len(text) > MAX_PATH or "\0" in text or "\n" in text:
                     continue
                 for k, base in enumerate([d] + folders):
@@ -522,7 +535,6 @@ def make(py_nodes, unknown_dir):
             runs = self.acts_inline(code, here, "py", runs_only=True)
             if not runs:
                 return None  # code that only reads what it names
-            in_script = self.sh_in_script()
             noted = len(self.unfollowed)
 
             def stands(reason):
