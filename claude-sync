@@ -14015,8 +14015,9 @@ report_behind_tested(){
       return 0 ;;
   esac
   is_object_id "$tested" || return 0
-  n="$(git -C "$SYNC_REPO" rev-list --count "HEAD..$tested" 2>/dev/null || true)"
-  case "$n" in ''|0|*[!0-9]*) return 0 ;; esac
+  local counted
+  counted="$(git -C "$SYNC_REPO" rev-list --count "HEAD..$tested" 2>/dev/null || true)"
+  n="$(whole_above_zero "$counted")" || return 0
   since="$(git -C "$SYNC_REPO" log --first-parent --reverse --format=%ct "HEAD..$tested" 2>/dev/null | awk 'NR == 1')"
   case "$since" in ''|*[!0-9]*) since="since a time git could not read" ;; *) since="since the first of them landed on main, $(age_in_words "$(( now - since ))")" ;; esac
   echo "this clone is $(commits_in_words "$n") behind main's newest tested commit, ${tested:0:8}, and has been $since. The change watcher takes it in on its next timer wake or change; '$(receive_command)' takes it in now.$look"

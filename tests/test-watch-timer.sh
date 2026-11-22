@@ -195,7 +195,8 @@ check "and is handed to one tick only" "[ \"\$(w_wakes '$WORK/w4.out')\" = 1 ]" 
 c5="$(w_publish fifth 'C5, the fix')"; w_ci "$c5" success
 # The send holds off a catch up for SYNC_RECONCILE_RETRY after one is refused, and the wake honours
 # that rather than counting one more skipped send on every wake. The rest of this suite sets it to
-# 0, because its one second timer is far inside the 300 second default; the real timer is not.
+# 0, because its one second timer is far inside the 300 second default (set in the code, not
+# measured); the real timer is not.
 w_watch waiting "$WORK/w4h.out" SYNC_RECONCILE_RETRY=3600
 check "a wake inside the hold off after a refused catch up runs no tick, and says why" \
   "[ \"\$(w_wakes '$WORK/w4h.out')\" = 0 ] && [ ! -e '$WHB/skills/fifth/SKILL.md' ] && grep -q 'SYNC_RECONCILE_RETRY' '$WR/.watch-idle'" \

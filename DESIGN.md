@@ -2706,7 +2706,8 @@ output. These choices were made by the session that built it, not by Dan, and ar
   take nothing in. Measured 2026-11-22: 0.22 to 0.33 seconds per `ls-remote` (five samples), 0.43 for
   a verdict read, 0.01 for the hash of claude-sync it compares first.
 - **A held lock or a hold skips the wake.** A run holding the sync lock or a pull waiting its turn
-  (`.sync-lock.next`) is left alone, so a wake never waits ninety seconds behind a merge or a long
+  (`.sync-lock.next`) is left alone (the waits below are settings in the code, not measurements),
+  so a wake never waits ninety seconds behind a merge or a long
   send and logs a failure for it. The next wake asks again. So is a wake inside the hold off a
   refused catch up gets (`SYNC_RECONCILE_RETRY`, 300 seconds): the send would refuse it again and
   count one more skipped send. At the ten minute default the hold off has always ended by the next
@@ -2731,8 +2732,8 @@ output. These choices were made by the session that built it, not by Dan, and ar
   reported at all, so a new chain is a new notice rather than a false all clear. Status skips that
   record and keeps its hook suite line, so the fact is said once there.
 
-The levers not pulled, both Dan's to decide: the 1800 second `SYNC_HOOK_TESTS_TIMEOUT`, and the size
-of the suite a pull runs.
+The levers not pulled, both Dan's to decide: the 1800 second `SYNC_HOOK_TESTS_TIMEOUT` (a setting
+in the code, not measured), and the size of the suite a pull runs.
 
 `tests/test-watch-timer.sh` holds the watcher and status halves against a bare repo on disk and a gh
 stand in answering per commit, with a one second timer and every run ending on the record it waits
