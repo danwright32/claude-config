@@ -84,6 +84,8 @@ Try in order, and record which one works in the project's memory so future sessi
 
 Before any data-modifying statement (INSERT, UPDATE, DELETE, ALTER, migration) against a real database, show the exact SQL, the target project and tables, and the expected effect, then confirm via AskUserQuestion (Apply / Cancel). Exception: a step Dan already approved in a plan this session does not need a second confirmation.
 
+Write both pickers below (Apply and Trust) in plain words. The hooks hold each to the same check of text Dan approves in a picker that every guard uses (claude-config#3321): a picker holding a character he cannot see, markup such as a tag or a link, more than 1,500 characters or more than 20 rows is not taken as his approval, and the write is asked about again, saying what was at fault.
+
 For a migration on path 1, or a change file on path 3, the picker is one question whose options are labelled exactly `Apply` and `Cancel`, and it carries this metadata, filled in from the files themselves just before asking (never typed from memory):
 
 ```json

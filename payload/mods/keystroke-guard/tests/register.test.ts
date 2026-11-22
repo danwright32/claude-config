@@ -3,6 +3,8 @@ import { test } from './mod-kit/tests/hang-ceiling.ts'
 import type { On, Register } from 'claude-code'
 import { reasonOf, standInCore } from './mod-kit/tests/core.ts'
 import { publishInstead } from '../hooks/mod-kit/deliver.ts'
+import { dialogOf, isOwnDialog } from '../hooks/mod-kit/asked.ts'
+import type {} from '../types/index.d.ts'
 
 const OVERTURE = '/Applications/Overture.app/Contents/MacOS/Overture'
 const DEBUG = `${'/Users'}/x/Build/Debug/Overture.app/Contents/MacOS/Overture`
@@ -107,6 +109,8 @@ const world = (engine: Engine, on: On, w: World) => {
   const cards: Card[] = []
   // #2132: each hold on keystroke-guard's reload, its letting go, and each question, in order.
   const held: string[] = []
+  // #3321: for each question asked, whether the mod had kept that very dialog as its own.
+  const own: boolean[] = []
   const debug: string[] = []
   on('process.run', ($, e) => {
     const [cmd, ...args] = e.argv
@@ -156,13 +160,21 @@ const world = (engine: Engine, on: On, w: World) => {
     return { value: undefined }
   })
   const holds: { label: string; prompt: string }[] = []
+  // Every other line the mod writes to the transcript.
+  const logs: string[] = []
   on('ui.log', ($, e) => {
     if (e.text.startsWith('CARD ')) cards.push(JSON.parse(e.text.slice(5)))
     if (e.text.startsWith('HOLD ')) holds.push(JSON.parse(e.text.slice(5)))
+    // #3321: what the reader stand in saw as the question was asked: the mod's state and the call.
+    if (e.text.startsWith('OWN ')) {
+      const seen = JSON.parse(e.text.slice(4)) as { value: unknown; call: Record<string, unknown> }
+      own.push(isOwnDialog(seen.value, seen.call))
+    }
     if (e.to === 'debug') debug.push(e.text)
+    else if (!e.text.startsWith('CARD ') && !e.text.startsWith('HOLD ') && !e.text.startsWith('OWN ')) logs.push(e.text)
     return { value: undefined }
   })
-  return { reached, asked, toasts, cards, holds, held, debug }
+  return { reached, asked, toasts, cards, holds, held, own, debug, logs }
 }
 
 const KEY = `TARGET_APP=${OVERTURE} osascript -e 'tell application "System Events" to ${KEYWORD} "n" using command down'`
@@ -184,6 +196,93 @@ test('the right app, frontmost and alone, gets the agreed question once and then
   await $.tool.call(bash(KEY))
   expect(w.asked).toEqual([{ question: "I'm about to type into Overture. Ready?", header: 'Taking over', options: ['Go ahead', 'Not now'] }])
   expect(w.reached).toContain('Bash')
+})
+
+// #3321 (Dan, 2026-11-21: "Record, then decide"): the Ready question reaches the same dialog a
+// session's picker does, and no session record holds it, so its size is recorded as it is asked,
+// through mod-kit's one recorder (hooks/mod-kit/asked.ts): which question, how long, how many
+// answers, and whether the shared check would refuse it. Never a word of it. Recording only: the
+// question is asked whatever the record says and whether or not it could be kept.
+test("the Ready question's size is recorded as it is asked, and never a word of it (#3321)", withKit, async ($, on) => {
+  mock.clock(on, { now: 1_800_000_000_000 })
+  const written: Record<string, string> = {}
+  on('env.get', ($, e) => ({ value: (e as unknown as { name: string }).name === 'HOME' ? '/fake-home/x' : undefined }) as never)
+  on('fs.write', ($, e) => {
+    written[e.path] = e.text
+    return { value: undefined }
+  })
+  on('fs.list', () => ({ value: Object.keys(written).map(p => ({ name: p.split('/').pop() ?? '', kind: 'file', size: 1, mtimeMs: 0, isLink: false })) }) as never)
+  const w = world($, on, { front: 10, running: { 10: OVERTURE }, answer: 'Go ahead' })
+  await $.tool.call(bash(KEY))
+  const question = "I'm about to type into Overture. Ready?"
+  expect(w.asked).toEqual([{ question, header: 'Taking over', options: ['Go ahead', 'Not now'] }])
+  expect(w.reached).toContain('Bash')
+  const paths = Object.keys(written)
+  expect(paths.length).toBe(1)
+  expect(/^\/fake-home\/x\/\.claude\/state\/asked-questions\/\d{13}-[a-z0-9]+\.json$/.test(paths[0] ?? '')).toBe(true)
+  const text = written[paths[0] ?? ''] ?? ''
+  expect(JSON.parse(text)).toMatchObject({ mod: 'keystroke-guard', which: 'ready', units: question.length, rows: 1, options: 2, longest: 8, header: 11, refused: false })
+  for (const word of ['Overture', 'Ready', 'Go ahead', 'Taking over']) expect(text).not.toContain(word)
+  expect(w.logs).toEqual([])
+})
+
+// The record failing is said once, in the transcript, and the question is asked all the same.
+test('a record that cannot be kept is said once, and the Ready question is still asked (#3321)', withKit, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  on('env.get', () => ({ value: '/fake-home/x' }) as never)
+  on('fs.write', () => {
+    throw new Error('EACCES: permission denied')
+  })
+  const w = world($, on, { front: 10, running: { 10: OVERTURE }, answer: 'Go ahead' })
+  await $.tool.call(bash(KEY))
+  expect(w.asked.length).toBe(1)
+  expect(w.reached).toContain('Bash')
+  expect(w.logs.length).toBe(1)
+  expect(w.logs[0]).toContain('keystroke-guard could not record the size of a question it asked')
+  expect(w.logs[0]).not.toContain('Overture')
+})
+
+// #3321: the Ready question reaches picker manners like a session's picker, with nothing on it
+// saying a mod raised it. So the mod keeps the dialog in its own $.state, which only it can
+// write, for as long as the dialog is open, and takes it back on every way out. The world reads
+// that state as a hook would while the question is asked: the very dialog, as the engine hands it on.
+// The reader stands where picker manners does: another mod's hook on the question, which reads the
+// guard's state and the call it was handed, and says both for the world to judge.
+const ownReader: { name: string; register: Register } = {
+  name: 'own-reader',
+  register: on => {
+    on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
+      const value = (await $.state.get({ plugin: 'keystroke-guard', key: 'asking' })).value
+      $.ui.log(`OWN ${JSON.stringify({ value: value ?? null, call: e })}`)
+      return next(e)
+    })
+    // The state as it stands now, asked for by the test through a tool no case here uses, answered as a refusal.
+    on('tool.call', { tool: 'Read' }, async $ => ({ deny: JSON.stringify((await $.state.get({ plugin: 'keystroke-guard', key: 'asking' })).value ?? null) }))
+  },
+}
+const ownNow = async ($: { tool: { call: (e: never) => Promise<unknown> } }): Promise<unknown> => JSON.parse(String(((await $.tool.call({ tool: 'Read', tool_use_id: 'own' } as never)) as { deny?: string }).deny))
+const withReader = { plugins: [secDefault, kit, ownReader] }
+test('the Ready question is kept as the mod own dialog for as long as it is open (#3321)', withReader, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world($, on, { front: 10, running: { 10: OVERTURE }, answer: 'Go ahead' })
+  await $.tool.call(bash(KEY))
+  expect(w.asked.length).toBe(1)
+  expect(w.own).toEqual([true])
+  expect(w.reached).toContain('Bash')
+  // Answered, it is taken back, and the same words are no longer the mod's own.
+  const after = await ownNow($)
+  expect(after).toEqual([])
+  expect(isOwnDialog(after, { tool: 'AskUserQuestion', tool_use_id: 'x', questions: [{ question: "I'm about to type into Overture. Ready?", header: 'Taking over', options: [{ label: 'Go ahead', description: '' }, { label: 'Not now', description: '' }], multiSelect: false }] })).toBe(false)
+  expect(isOwnDialog([dialogOf("I'm about to type into Overture. Ready?", { options: ['Go ahead', 'Not now'], header: 'Taking over' })], { tool: 'AskUserQuestion', tool_use_id: 'x', questions: [{ question: "I'm about to type into Overture. Ready?", header: 'Taking over', options: [{ label: 'Go ahead', description: '' }, { label: 'Not now', description: '' }], multiSelect: false }] })).toBe(true)
+})
+
+test('a dismissed Ready question is taken back all the same (#3321)', withReader, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world($, on, { front: 10, running: { 10: OVERTURE }, answer: 'dismiss' })
+  await $.tool.call(bash(KEY))
+  expect(w.own).toEqual([true])
+  expect(w.reached).not.toContain('Bash')
+  expect(await ownNow($)).toEqual([])
 })
 
 test('a wrong frontmost app is refused, with the card and a toast', withKit, async ($, on) => {
