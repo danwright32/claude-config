@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Tests for lib/keep_rules.py, the two keep rules Dan set on 2026-11-18 for what Claude Code leaves
 # on disk (claude-config#3235): an ended session's bulky leftovers go and its written notes stay,
-# and agent and test run transcripts are kept 7 days.
+# and agent and test run transcripts are kept 14 days (7 until Dan's decision of 2026-11-21 on
+# claude-config#3413, "Keep 14 days").
 #
 # Every case runs against a planted home in a throwaway folder, with the time handed in through
 # --now and every age set with os.utime, so nothing here waits and nothing reaches the real
@@ -87,8 +88,10 @@ plant(){
   note "$PROJ/-Users-x-proj--claude-worktrees-w1/memory/MEMORY.md"
   note "$PROJ/-private-tmp-abc/$RUN.jsonl"
   note "$PROJ/-private-tmp-new/$RUN.jsonl"
-  age "$PROJ" 8
-  note "$PROJ/-Users-x-proj/$SUB/subagents/agent-new.jsonl"; age "$PROJ/-Users-x-proj/$SUB/subagents/agent-new.jsonl" 6
+  age "$PROJ" 15
+  # Ten days old: past the 7 days kept until #3413, inside the 14 kept since.
+  note "$PROJ/-Users-x-proj/$SUB/subagents/agent-new.jsonl"; age "$PROJ/-Users-x-proj/$SUB/subagents/agent-new.jsonl" 10
+  note "$PROJ/-Users-x-proj--claude-worktrees-w2/$RUN.jsonl"; age "$PROJ/-Users-x-proj--claude-worktrees-w2" 10
   age "$PROJ/-private-tmp-new" 2
   age "$OUTSIDE" 30
 }
@@ -109,6 +112,7 @@ ok "would-remove: lists the bulky folder with its size" 'has "notes: folder in a
 ok "would-remove: lists the tar file" 'has "$E/t1/base.tar" "$out"'
 ok "would-remove: says why the live session is kept" 'has "live session: the session registry shows it open" "$out"'
 ok "would-remove: names the largest ten" 'has "THE LARGEST TEN" "$out"'
+ok "would-remove: says agent and test run transcripts are kept 14 days" 'has "written within the last 14 days: " "$out"'
 CLAUDE_HOME="$H" python3 -B "$JOB" would-remove --now "$NOW" --report "$WORK/report.txt" >/dev/null 2>&1
 ok "would-remove --report: writes the report there" 'has "WOULD REMOVE:" "$(cat "$WORK/report.txt")"'
 rm -f "$WORK/report.txt"
@@ -156,11 +160,12 @@ ok "ended: links stay, unfollowed" "[ -L '$E/t1/escape-task' ] && [ -L '$E/escap
 ok "links: nothing outside was touched" "[ -f '$OUTSIDE/precious.bin' ] && [ -f '$OUTSIDE/precious.md' ]"
 ok "transcripts: an old subagent transcript is gone" "[ ! -e '$PROJ/-Users-x-proj/$SUB/subagents/agent-old.jsonl' ] && [ ! -e '$PROJ/-Users-x-proj/$SUB/subagents/agent-old.meta.json' ]"
 ok "transcripts: a workflow's old subagent transcript is gone" "[ ! -e '$PROJ/-Users-x-proj/$SUB/subagents/workflows/r1/agent-wf.jsonl' ]"
-ok "transcripts: a subagent transcript under 7 days stays" "[ -f '$PROJ/-Users-x-proj/$SUB/subagents/agent-new.jsonl' ]"
+ok "transcripts: a subagent transcript 10 days old stays, since they are kept 14 days" "[ -f '$PROJ/-Users-x-proj/$SUB/subagents/agent-new.jsonl' ]"
 ok "transcripts: Dan's own old session stays" "[ -f '$PROJ/-Users-x-proj/$SUB.jsonl' ] && [ -f '$PROJ/-Users-x-proj/$SUB/tool-results/r.txt' ]"
 ok "transcripts: memory stays everywhere" "[ -f '$PROJ/-Users-x-proj/memory/MEMORY.md' ] && [ -f '$PROJ/-Users-x-proj--claude-worktrees-w1/memory/MEMORY.md' ]"
 ok "transcripts: an old worktree run is gone, folder and all" "[ ! -e '$PROJ/-Users-x-proj--claude-worktrees-w1/$RUN.jsonl' ] && [ ! -e '$PROJ/-Users-x-proj--claude-worktrees-w1/$RUN' ]"
 ok "transcripts: an old /private/tmp run is gone, and its emptied folder" "[ ! -e '$PROJ/-private-tmp-abc' ]"
+ok "transcripts: a worktree run 10 days old stays, since they are kept 14 days" "[ -f '$PROJ/-Users-x-proj--claude-worktrees-w2/$RUN.jsonl' ]"
 ok "transcripts: a recent /private/tmp run stays" "[ -f '$PROJ/-private-tmp-new/$RUN.jsonl' ]"
 LOG="$H/state/keep-rules/removed.log"
 ok "log: one line per removed item, with its size" "grep -q '	removed	notes: tar file	[0-9][0-9]*	$E/t1/base.tar\$' '$LOG'"

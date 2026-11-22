@@ -866,6 +866,21 @@ say_untested(){
 # another's all the way up (DESIGN.md beside payload/DESIGN.md), which no suite can name alone: each
 # such file is said, never passed over.
 #
+# A FILE THE PULL REQUEST DELETES is a changed file too (claude-config#3403): deleting a file a
+# suite names changes what that suite tests. It is not in the head's tree, so named against that
+# tree it is either said to have no name, or takes the name of another file that ends the same way
+# (with mods/two/register.ts deleted, register.ts is held once, by mods/one/register.ts, and the
+# suites naming that file would be run for the deleted one). #3312 left deleted files out of what
+# changed, and so never chose a suite for one. It is named against the tree the head left the
+# base at, where it still is, and a suite naming it is chosen and run, saying the file is deleted.
+# Such a suite will often fail until it is brought up to date, and that failure refuses the merge
+# as any other does: the red is true, and the suite is mended in the same pull request. A renamed
+# file is what git lists with no rename detection, which is a guess at likeness: the old path
+# deleted and the new path added. So a suite still naming the old path is chosen, and so is one
+# that names the new. The figures above were measured before deleted files counted, so they are a
+# floor: of the 106 commits on main from 2026-11-17 to 11-20, 2 deleted any file (2 files in #3193,
+# 34 in #3169).
+#
 # NEVER A PASS BY DEFAULT (L98): a notice that cannot be read, a record that cannot be fetched or does
 # not add up to it, a tree that holds the summary tool while no check carries its notice and none
 # names an earlier green run of the same tree it reused (ut_follow_reuse follows one that does), a
@@ -892,6 +907,20 @@ ut_published(){
   git -C "$1" remote add origin "$origin_url" \
     && git -C "$1" update-ref "refs/remotes/origin/$base" refs/mwr/base \
     && git -C "$1" symbolic-ref refs/remotes/origin/HEAD "refs/remotes/origin/$base"
+}
+# ut_keys <a tree's paths> <files of that tree> [<mark>]: each file with its key, the shortest end
+# of its path no other path in that tree has, as <file><TAB><key><TAB><mark>. The key is empty when
+# the file's whole path ends another's (see WHICH SUITES THE CHANGE TOUCHES).
+ut_keys(){
+  awk -F/ -v mark="${3:-}" '
+    FILENAME == ARGV[1] { tree[++nt] = $0; next }
+    { ch = $0; n = split(ch, c, "/"); key = ""
+      for (k = 1; k <= n && key == ""; k++) {
+        suf = c[n - k + 1]; for (j = n - k + 2; j <= n; j++) suf = suf "/" c[j]
+        hits = 0; for (i = 1; i <= nt; i++) if (tree[i] == suf || substr(tree[i], length(tree[i]) - length(suf)) == "/" suf) hits++
+        if (hits == 1) key = suf
+      }
+      print ch "\t" key "\t" mark }' "$1" "$2"
 }
 ut_tool_read(){
   local out rc
@@ -989,7 +1018,7 @@ ut_follow_reuse(){
 # reads); every refusal stops here. Sets ut_ran when suites ran, so the caller asks every gate again.
 untested_step(){
   local h7="${head:0:7}" mains n_mains name run msg first count rrc out tip mb runner k rc s n_fail
-  local paths missing chosen_list said_list cannot started said t finished still rec slugdir lines
+  local paths missing chosen_list said_list cannot gone started said t finished still rec slugdir lines
   ut_ran=""
   [ "$ut_done_for" = "$head" ] && return 0
   if [ -n "${MWR_UNTESTED_SKIP:-}" ]; then
@@ -1093,6 +1122,12 @@ untested_step(){
   mb="$(git -C "$ut_dir/wt" merge-base refs/mwr/base refs/mwr/head 2>/dev/null)" || ut_refuse "the point where #$pr's head left $base could not be found, so what it changed is not known."
   git -C "$ut_dir/wt" ls-files > "$ut_dir/tree" 2>/dev/null || ut_refuse "the tree at $h7 could not be listed."
   git -C "$ut_dir/wt" diff --name-only --no-renames --diff-filter=d "$mb" refs/mwr/head > "$ut_dir/changed" 2>/dev/null || ut_refuse "what #$pr changed could not be listed."
+  # The files it deleted, and the tree they were deleted from, where each still has a name (see
+  # WHICH SUITES THE CHANGE TOUCHES). That tree is listed only when something was deleted.
+  git -C "$ut_dir/wt" diff --name-only --no-renames --diff-filter=D "$mb" refs/mwr/head > "$ut_dir/deleted" 2>/dev/null || ut_refuse "what #$pr deleted could not be listed."
+  if [ -s "$ut_dir/deleted" ]; then
+    git -C "$ut_dir/wt" ls-tree -r --name-only "$mb" > "$ut_dir/tree.base" 2>/dev/null || ut_refuse "the tree #$pr's head left $base at (${mb:0:7}) could not be listed, so the files it deleted cannot be named."
+  fi
 
   # Each suite's path in the head's tree: exactly one each.
   paths="$(awk -F/ 'FILENAME == ARGV[1] { want[$0] = 1; next } ($NF in want) { n[$NF]++; p[$NF] = $0 }
@@ -1102,17 +1137,12 @@ untested_step(){
   printf '%s\n' "$paths" | cut -f2 > "$ut_dir/paths"
 
   # Which of them the change touches (see above): <suite path><TAB><why>, and the files no suite can
-  # name alone.
-  awk -F/ '
-    FILENAME == ARGV[1] { tree[++nt] = $0; next }
-    { ch = $0; n = split(ch, c, "/"); key = ""
-      for (k = 1; k <= n && key == ""; k++) {
-        suf = c[n - k + 1]; for (j = n - k + 2; j <= n; j++) suf = suf "/" c[j]
-        hits = 0; for (i = 1; i <= nt; i++) if (tree[i] == suf || substr(tree[i], length(tree[i]) - length(suf)) == "/" suf) hits++
-        if (hits == 1) key = suf
-      }
-      print ch "\t" key }' "$ut_dir/tree" "$ut_dir/changed" > "$ut_dir/keys"
-  cannot="$(awk -F'\t' '$2 == "" { print $1 }' "$ut_dir/keys")"
+  # name alone. A file changed at the head is named against the head's tree, and one deleted
+  # against the tree it was deleted from.
+  ut_keys "$ut_dir/tree" "$ut_dir/changed" > "$ut_dir/keys" || ut_refuse "the files #$pr changed could not be named against the tree at $h7, so which suites name them is not known."
+  [ ! -s "$ut_dir/deleted" ] || ut_keys "$ut_dir/tree.base" "$ut_dir/deleted" deleted >> "$ut_dir/keys" \
+    || ut_refuse "the files #$pr deleted could not be named against the tree it left $base at (${mb:0:7}), so which suites name them is not known."
+  cannot="$(awk -F'\t' '$2 == "" { print $1 "\t" $3 }' "$ut_dir/keys")"
   awk 'FILENAME == ARGV[1] { own[$0] = 1; next } ($0 in own) { print $0 "\tchanged by this pull request" }' "$ut_dir/changed" "$ut_dir/paths" > "$ut_dir/chosen"
   : > "$ut_dir/scan"
   while IFS= read -r s; do
@@ -1122,7 +1152,7 @@ untested_step(){
     # One awk over every suite still to judge: its first line naming a key, as /<key> followed by no
     # name character, chooses it, naming the file.
     tr '\n' '\0' < "$ut_dir/scan" | xargs -0 awk -F'\t' -v root="$ut_dir/wt/" '
-      FILENAME == ARGV[1] { if ($2 != "") { key[++nk] = "/" $2; file[nk] = $1 }; next }
+      FILENAME == ARGV[1] { if ($2 != "") { key[++nk] = "/" $2; file[nk] = $1 ($3 == "deleted" ? ", which this pull request deletes" : "") }; next }
       FNR == 1 { done = 0 }
       done { next }
       { for (i = 1; i <= nk && !done; i++) {
@@ -1134,8 +1164,10 @@ untested_step(){
           }
         } }' "$ut_dir/keys" >> "$ut_dir/chosen"
   fi
-  while IFS= read -r s; do
-    [ -n "$s" ] && say "Could not tell which suites test $s: another file in the tree has a path ending the same way, so no suite can name it alone."
+  while IFS=$'\t' read -r s gone; do
+    [ -n "$s" ] || continue
+    if [ -n "$gone" ]; then say "Could not tell which suites test $s, which this pull request deletes: another file in the tree it was deleted from has a path ending the same way, so no suite can name it alone."
+    else say "Could not tell which suites test $s: another file in the tree has a path ending the same way, so no suite can name it alone."; fi
   done <<< "$cannot"
   k="$(grep -c . "$ut_dir/chosen" || true)"; k="${k:-0}"
   if [ "$k" -eq 0 ]; then
