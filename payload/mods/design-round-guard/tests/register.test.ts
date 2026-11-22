@@ -4475,6 +4475,38 @@ test('#3280: a restore held only for what runs before it says how to put the fil
   expect(restored(w, MOD_REL)).toEqual([])
 })
 
+// #3323 with #3280: a program run after an exact restore and handed the same file is a write of its
+// own, judged as it is anywhere else. The restore passing unasked lets through only what the restore
+// puts back, never what a program the write reader does not know (prettier typed bare) or one it
+// reads as a run (npx prettier, the baseline main already held) does to the file afterwards.
+test('#3323: a program the write reader does not know, handed a file an exact restore just put back, is still judged', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...BUILT_FILES, [`${SCRATCH}/.keep`]: '' }, blobs: MAIN_COPIES(['origin/main']) })
+  knows(w, 'origin/main', TIP)
+  mainHolds(w, [MOD_REL, PAGE_REL, 'app/globals.css'])
+  for (const command of [
+    `git checkout origin/main -- ${PAGE_REL} && prettier --write ${PAGE_REL}`,
+    `git checkout origin/main -- ${PAGE_REL} && npx prettier --write ${PAGE_REL}`,
+    'git restore --source origin/main app/globals.css && prettier --write app/globals.css',
+    'git restore --source origin/main app/globals.css && npx prettier --write app/globals.css',
+  ])
+    expect({ command, held: refusalOf(await call($, { tool: 'Bash', command })).includes(SKIP_QUESTION) }).toEqual({ command, held: true })
+  expect(w.ran).toEqual([])
+  // The restore alone still runs unasked: only the program's write is judged.
+  expect(refusalOf(await call($, { tool: 'Bash', command: `git checkout origin/main -- ${PAGE_REL}` }))).toBe('')
+  expect(w.ran.length).toBe(1)
+  // A mod's hook file is judged by what the whole call leaves against what it held before: one that
+  // ends drawing something new has the change undone, bare or through npx, and one that ends as it
+  // began stands.
+  const OTHER = MOD_TEXT.replace("kind: 'left-rule'", "kind: 'card'")
+  for (const command of [`git checkout origin/main -- ${MOD_REL} && prettier --write ${MOD_REL}`, `git checkout origin/main -- ${MOD_REL} && npx prettier --write ${MOD_REL}`]) {
+    w.files[MOD_HOOK] = BUILT
+    w.ctl.shell = { [MOD_HOOK]: OTHER }
+    expect({ command, undone: refusalOf(await call($, { tool: 'Bash', command })).includes('was undone') }).toEqual({ command, undone: true })
+    expect(w.files[MOD_HOOK]).toBe(BUILT)
+  }
+  w.ctl.shell = {}
+})
+
 // #3280: the way back is not loosened. Once main's copy has served its purpose, putting the changed
 // file back over it is a write like any other: one that changes what the file draws is judged as it
 // was before, whichever way it is put back, and only a change that draws nothing new goes back unasked.
