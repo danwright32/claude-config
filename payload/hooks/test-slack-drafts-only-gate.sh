@@ -4064,7 +4064,7 @@ PY
   check "claude-sync is read once in a run, and sh_binds answers as it did (#2784)" "$work"
 
   cat > "$T/cost.py" <<'PY'
-import json, os, re, resource, subprocess, sys, tempfile, time
+import json, os, re, resource, statistics, subprocess, sys, tempfile, time
 hook, cs, ceiling = sys.argv[1], sys.argv[2], float(sys.argv[3])
 # --line <command line> judges that line instead of claude-sync lessons (#2918).
 line = sys.argv[5] if sys.argv[4] == "--line" else " ; ".join("%s lesson %s" % (cs, l) for l in sys.argv[4:])
@@ -4138,7 +4138,10 @@ def judge(env):
     return p, (now.ru_utime - was.ru_utime) + (now.ru_stime - was.ru_stime), said
 warm = bool(cache) and os.path.isdir(cache) and not cold
 ratios, ran_out, unfit = [], [], []
-need = int(os.environ.get("SLACK_GATE_COST_SAMPLES", "1"))
+# How many yardstick samples had been taken when each reading's unit was read, printed beside the
+# readings (#3170) and used for nothing else.
+taken = []
+need =int(os.environ.get("SLACK_GATE_COST_SAMPLES", "1"))
 for attempt in range(max(need, int(os.environ.get("SLACK_GATE_COST_ATTEMPTS", "3")))):
     env = dict(os.environ)
     if cold and attempt:
@@ -4164,6 +4167,7 @@ for attempt in range(max(need, int(os.environ.get("SLACK_GATE_COST_ATTEMPTS", "3
     if p.returncode != 0:
         print("the line was refused (exit %d) after %.1f s of processor time: %s" % (p.returncode, spent, p.stderr[:200])); sys.exit()
     ratios.append((spent / unit, spent, unit))
+    taken.append(len(samples))
     # A trace that says neither is no evidence the sample was cold, so it fails too (L98). A
     # measurement handed a cache that already holds something is one of the cache answering (the
     # warm cases), and there every sample must be a "hit": the same reading of the trace, required
@@ -4177,14 +4181,30 @@ for attempt in range(max(need, int(os.environ.get("SLACK_GATE_COST_ATTEMPTS", "3
 ratio, spent, unit = min(ratios)
 # Every measurement is recorded where the suite prints it, passing or not, so the ceiling's premise
 # can be measured again from any run's log, a CI runner's included (L316).
+# PRINTED ONLY, never judged (#3170, Dan's decision of 2026-11-21, "Measure more first"): after the
+# readings, each one's processor seconds ("seconds per reading"), the unit it was divided by and how
+# many yardstick samples that unit was the least of ("yardstick per reading", 5 before the first
+# judgement and 2 after each, 2 more where the seconds ran out), every yardstick sample in the order
+# taken ("yardstick N samples"), and their least, median and greatest. Some CI runners read a case
+# over its limit with the gate unchanged, and the logs held the seconds and the unit for one case
+# only and the least sample alone, so whether a busy spell moved the gate and not the yardstick
+# could not be read. These are the figures the case already took; no extra sample is timed for
+# them, and the verdict below reads none of them. The suite holds that with
+# tools/gate-cost-rows.py check, which fails unless each reading is its seconds over the least
+# sample taken by then and the judged reading is the least of them.
 log = os.environ.get("SLACK_GATE_COST_LOG")
 if log:
     with open(log, "a") as f:
-        f.write("%s %s: %.1f (%.2f s of processor time, unit %.3f s, ceiling %s, samples %s%s)\n"
+        f.write("%s %s: %.1f (%.2f s of processor time, unit %.3f s, ceiling %s, samples %s%s; %s)\n"
                 % (os.environ.get("SLACK_GATE_COST_LABEL", "?"), line[-40:], ratio, spent, unit, ceiling,
                    ", ".join("%.1f" % r[0] for r in ratios),
                    "; the gate's 11 s ran out on this machine, after %s, so those were read on the step clock"
-                   % " and ".join(ran_out) if ran_out else ""))
+                   % " and ".join(ran_out) if ran_out else "",
+                   "seconds per reading %s; yardstick per reading %s; yardstick %d samples %s; yardstick least %.4f, median %.4f, greatest %.4f"
+                   % (", ".join("%.3f" % r[1] for r in ratios),
+                      ", ".join("%.4f from %d" % (r[2], n) for r, n in zip(ratios, taken)),
+                      len(samples), ", ".join("%.4f" % y for y in samples),
+                      min(samples), statistics.median(samples), max(samples))))
 if unfit:
     print("%d of the %d samples of this measurement from %s, so the least of them (%s) is not the cost this limit is for: %s"
           % (len(unfit), len(ratios),
@@ -4282,7 +4302,8 @@ if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; t
     *) cold_note="$(sed -n 's/^suite-cold .*: \([0-9][0-9.]* (.*)\)$/at \1/p' "$T/cost.log" | sed -n 1p)" ;;
   esac
   if [ -n "$cold_note" ]; then
-    suite_note "$(printf 'drafts gate on %s, bash tests/test-claude-sync.sh from an empty cache: %s (#3167)' "$(uname -s)" "$cold_note")"
+    cold_note_text="$(printf 'drafts gate on %s, bash tests/test-claude-sync.sh from an empty cache: %s (#3167)' "$(uname -s)" "$cold_note")"
+    suite_note "$cold_note_text"
     cold_note=ok
   else
     cold_note="no suite-cold line in the cost log to print: $(cat "$T/cost.log" 2>&1)"
@@ -4428,20 +4449,62 @@ if [ -f "$T/cost.log" ]; then
   # every sample, and the line's entries are counted against the log's, so a change to the log's
   # shape that matches nothing fails here rather than printing a shorter note (L100). The 42.6 that
   # failed on 2026-11-20 was the first Linux reading of this kind anybody saw.
-  cost_read="$(grep -v '^suite-cold ' "$T/cost.log" | sed -E -n \
-    -e 's/^([a-z-]+) .*: ([0-9][0-9.]*) \(.*, samples ([0-9][0-9., ]*); the gate.*\)$/\1 \2 (\3, on the step clock)/p' -e t \
-    -e 's/^([a-z-]+) .*: ([0-9][0-9.]*) \(.*, samples ([0-9][0-9., ]*)\)$/\1 \2 (\3)/p')"
+  # Since 2026-11-21 each entry is the case, its least reading and the whole record in brackets, the
+  # printed only figures with it (each reading's seconds, the unit it was divided by, every yardstick
+  # sample and their spread, #3170), so a passing CI run's log holds them for every case, not only
+  # suite-cold. Entries are separated by " | ", since the record itself holds "; ".
+  cost_read="$(grep -v '^suite-cold ' "$T/cost.log" | sed -E -n 's/^([a-z-]+) .*: ([0-9][0-9.]*) \((.*; seconds per reading .*)\)$/\1 \2 (\3)/p')"
   cost_want="$(grep -v -c '^suite-cold ' "$T/cost.log" || true)"
   cost_got="$(printf '%s\n' "$cost_read" | grep -c . || true)"
   notes_before="$notes_n"
   if [ -n "$cost_read" ] && [ "$cost_got" = "$cost_want" ]; then
-    suite_note "$(printf 'drafts gate costs on %s from an empty cache, in units of the yardstick, the least and then every reading: %s (#3170)' \
-      "$(uname -s)" "$(printf '%s\n' "$cost_read" | paste -s -d ';' - | sed 's/;/; /g')")"
+    cost_note="$(printf 'drafts gate costs on %s, every case but suite-cold, in units of the yardstick and how each was read: %s (#3170)' \
+      "$(uname -s)" "$(printf '%s\n' "$cost_read" | paste -s -d '|' - | sed 's/|/ | /g')")"
+    suite_note "$cost_note"
     cost_read=ok
   else
     cost_read="${cost_got:-0} of the cost log's ${cost_want:-0} lines matched, so they were not printed: $(cat "$T/cost.log")"
   fi
   check "every cost reading is printed in one note for a passing run too (#3170)" "$cost_read"
+  # The reader the next pass uses must find every case in the notes a passing run shows, the
+  # suite-cold note included, each with its seconds and its yardstick (#3170).
+  if [ -n "$REPO" ] && [ -f "$REPO/tools/gate-cost-rows.py" ]; then
+    printf '          note: %s\n' "${cold_note_text:-}" "${cost_note:-}" > "$T/notes.txt"
+    rows="$(python3 -B "$REPO/tools/gate-cost-rows.py" rows "$T/notes.txt" 2>&1)"
+    rows_want="$(grep -c . "$T/cost.log" || true)"
+    rows_got="$(printf '%s\n' "$rows" | awk -F'\t' 'NR > 1 && NF == 13 && $6 != "-" && $8 != "-" && $9 != "-"' | grep -c . || true)"
+    [ "$rows_got" = "$rows_want" ] && rows=ok || rows="the reader found ${rows_got:-0} cases with seconds and yardstick in the notes, of the cost log's ${rows_want:-0}: $rows"
+    check "tools/gate-cost-rows.py reads every case's seconds and yardstick from the notes a passing run shows (#3170)" "$rows"
+    # The verdict never reads a printed only figure (#3170): every reading must be its seconds over
+    # the least yardstick sample taken by then, and the judged reading the least of them, so a
+    # verdict taken from a median, a greatest or any other figure printed beside it fails here.
+    held="$(python3 -B "$REPO/tools/gate-cost-rows.py" check "$T/cost.log" 2>&1)"
+    check "every cost case is judged by its least reading, each its seconds over the least yardstick sample taken by then, never a figure printed beside it (#3170)" "$held"
+    # And that check is seen to fail on this run's own one lesson record, its last reading divided
+    # by the greatest yardstick sample instead (L1).
+    python3 -B - "$T/cost.log" > "$T/cost-doctored.log" 2>&1 <<'PY'
+import re, sys
+line = next(l for l in open(sys.argv[1]) if l.startswith("one-lesson "))
+greatest = re.search(r"greatest ([0-9.]+)\)", line).group(1)
+per = re.search(r"yardstick per reading (.*?); yardstick [0-9]+ samples", line).group(1).split(", ")
+if per[-1].split(" ")[0] == greatest:
+    sys.exit("every yardstick sample was the same, so the greatest cannot stand in for the least")
+per[-1] = re.sub(r"^[0-9.]+", greatest, per[-1])
+print(re.sub(r"yardstick per reading .*?; yardstick ([0-9]+) samples", lambda m: "yardstick per reading %s; yardstick %s samples" % (", ".join(per), m.group(1)), line).rstrip("\n"))
+PY
+    doctored="$(python3 -B "$REPO/tools/gate-cost-rows.py" check "$T/cost-doctored.log" 2>&1)"
+    if ! grep -q '^one-lesson ' "$T/cost-doctored.log"; then
+      echo "SUITE-PART-UNMEASURED #3170: the one lesson record could not be doctored ($(head -c 200 "$T/cost-doctored.log")), so the check of printed only figures was not seen to fail"
+    else
+      case "$doctored" in
+        *"was divided by"*"but the least of the first"*) doctored=ok ;;
+        *) doctored="a reading divided by the greatest yardstick sample passed: $doctored" ;;
+      esac
+      check "a reading divided by a printed only figure, the greatest yardstick sample, fails that check (#3170)" "$doctored"
+    fi
+  else
+    echo "SUITE-PART-UNMEASURED #3170: no tools/gate-cost-rows.py in a checkout beside this suite, so the printed only cost figures were not checked against the verdicts"
+  fi
   note_max="$(sed -n 's/^SUITE_NOTE_MAX="\${SUITE_NOTE_MAX:-\([0-9][0-9]*\)}"$/\1/p' "$DIR/run-all-tests.sh" 2>/dev/null | sed -n 1p)"
   if [ -z "$note_max" ]; then
     notes_before="run-all-tests.sh beside this suite has no line SUITE_NOTE_MAX=\"\${SUITE_NOTE_MAX:-<n>}\" to read the cap from, so whether the readings are shown is unknown"
@@ -5841,6 +5904,38 @@ printf '%s\n' 'URL = "https://slack.com/api/chat.postMessage"' 'print(URL)' >> "
 jc_run "python3 $JC/prose.py"
 refused "once that script names the endpoint in a string it can send, the same command is refused"
 traced "the kept judgement is not used once the script has changed (#3255)" "miss: read" "answers differently now"
+# A file larger than the cache reads whole (lib/judgement-cache.py's MAX_READ) made its judgement one
+# the cache could not keep, though the gate reads only the start of any file. A quoted command line
+# handed to a function that runs it is read as a command (lib/unknown-program.py, #3304), and the
+# claude-sync suite holds `check_expr_shape "... bash /bin/echo hi"`: on CI's Linux runner /bin/echo
+# is one program of over 8 MB, so `bash tests/test-claude-sync.sh` was judged whole every time it was
+# asked, about 61 units against the 6 a kept judgement costs (pull request #3394, 2026-11-21). The
+# start the gate read is now what the record holds, so the judgement is kept, and is used only while
+# that start is the same.
+head -c 8392704 /dev/zero > "$JC/program.bin"
+printf '%s\n' 'probe() { bash -n -c "$1"; }' "probe \"A=1 bash $JC/program.bin hi\"" > "$JC/quoted.sh"
+jc_run "bash $JC/quoted.sh"
+allowed "a script handing a function a quoted command line that runs a file of over 8 MB is allowed"
+traced "its judgement is kept, the large file recorded as far as the gate read it (#3394)" "stored"
+jc_run "bash $JC/quoted.sh"
+allowed "judged again with nothing changed, it is allowed"
+traced "and that second judgement is answered from the cache (#3394)" "hit"
+jc_run "bash $JC/program.bin hi"
+allowed "the same large file run by bash, typed plainly, is allowed"
+traced "and its judgement is kept too (#3394)" "stored"
+jc_run "bash $JC/program.bin hi"
+traced "judged again, it is answered from the cache (#3394)" "hit"
+# A byte added past what the gate reads changes nothing a judgement saw, and the kept one is used.
+printf 'x' >> "$JC/program.bin"
+jc_run "bash $JC/quoted.sh"
+traced "a change past what the gate reads of the large file leaves the kept judgement in use (#3394)" "hit"
+# Kept, it is still only as good as the start it read: once that start names an endpoint, it is refused.
+{ printf '\0\n'; printf "$POSTS\n"; head -c 8392704 /dev/zero; } > "$JC/program.bin"
+jc_run "bash $JC/quoted.sh"
+refused "once the start of the large file names an endpoint, the same command is refused"
+traced "the kept judgement is not used once the start the gate read has changed (#3394)" "miss: head" "answers differently now"
+jc_run "bash $JC/program.bin hi"
+refused "and so is the large file run by bash, typed plainly"
 unset SLACK_GATE_CACHE_TRACE
 # Outside this suite the cache is in ~/.claude/state, which the sync does not carry; under a test run
 # with no cache named it is off, so no suite reads or writes this Mac's.

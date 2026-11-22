@@ -4221,6 +4221,287 @@ test('#2830: a restore chained, piped, backgrounded or paired is judged by its l
   expect(w.ran.length).toBe(measured.length)
 })
 
+// #3280 (Dan, 2026-11-21, "Allow exact restore (Recommended)"): on 2026-11-19 a builder could not put
+// a mod's .tsx hook file back to what main holds to see a new test fail on the unchanged file, and ran
+// the test on an archive of main instead. A file put back exactly as the default branch holds it
+// changes no look that has not already shipped, so a git checkout or restore of a named file is not
+// asked about where the guard itself finds, from git, that the commit the command names is the one
+// the checkout's record of its remote's default branch stands at, and that commit holds the file.
+// Here each file on disk differs from the default branch's copy in what it draws, so by its lines
+// every one of these restores is a look change, and was held.
+const BUILT = MOD_TEXT.replace("kind: 'left-rule'", "kind: 'box'")
+const PAGE_REL = 'src/app/my-offers/result/page.tsx'
+const BUILT_FILES = { [MOD_HOOK]: BUILT, ...MOD_PLUGIN, [RESULT]: RESULT_TEXT.replace('className="p-4"', 'className="p-8"'), '/w/slate/app/globals.css': 'a{color:red}\n' }
+// What git holds of each file at every source these tests name: the default branch's copy.
+const MAIN_COPIES = (sources: readonly string[]) =>
+  Object.fromEntries(sources.flatMap(s => [[`/w/slate ${s}:${MOD_REL}`, MOD_TEXT], [`/w/slate ${s}:${PAGE_REL}`, RESULT_TEXT], [`/w/slate ${s}:app/globals.css`, 'a{}\n']]))
+// The default branch as this checkout last fetched it, at TIP, holding each file named.
+const mainHolds = (w: ReturnType<typeof world>, rels: readonly string[], tree = '/w/slate') => {
+  knows(w, MAIN_REF, TIP, tree)
+  for (const rel of rels) w.gitSays[`${tree} ls-tree -z ${TIP} -- ${rel}`] = `100644 blob ${'a'.repeat(40)}\t${rel}\0`
+}
+// The guard's log lines saying a restore of `file` was not asked about, each naming the commit of the default branch it was read against.
+const restored = (w: ReturnType<typeof world>, file: string) => w.logged.filter(l => l.text.includes('byte for byte') && l.text.includes(file) && l.text.includes(`(${MAIN_REF} at ${TIP.slice(0, 12)})`))
+
+test('#3280: a look changing file put back exactly as the default branch holds it runs unasked', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...BUILT_FILES }, blobs: MAIN_COPIES(['origin/main', 'main', TIP]), agents: ['agent-a1'] })
+  // origin/main, a local main level with it and the commit's own name are all the default branch's tip.
+  for (const name of ['origin/main', 'main', TIP]) knows(w, name, TIP)
+  mainHolds(w, [MOD_REL, PAGE_REL, 'app/globals.css'])
+  const exact = [
+    `git checkout origin/main -- ${MOD_REL}`,
+    `git checkout origin/main ${MOD_REL}`,
+    `git restore --source origin/main -- ${MOD_REL}`,
+    `git restore --source=origin/main ${MOD_REL}`,
+    `git restore -s origin/main ${MOD_REL}`,
+    `git -C /w/slate checkout origin/main -- ${MOD_REL}`,
+    'cd payload/mods/demo && git checkout origin/main -- hooks/register.tsx',
+    `git checkout ${TIP} -- ${MOD_REL}`,
+    `git checkout main -- ${MOD_REL}`,
+    // An app's screen file and a stylesheet, which is judged whole however it is put back.
+    `git checkout origin/main -- ${PAGE_REL}`,
+    'git checkout origin/main -- app/globals.css',
+    `git restore --source origin/main -- ${MOD_REL} ${PAGE_REL} app/globals.css`,
+    // Beside commands that cannot change what it puts back, and before anything at all.
+    `git status --short && git checkout origin/main -- ${MOD_REL}`,
+    `git checkout origin/main -- ${MOD_REL} && git status --short; git diff --stat`,
+    // A builder's ordinary line: the restore, then the test run piped to its last lines. The pipe
+    // joins commands that run once the restore has finished.
+    `git checkout origin/main -- ${MOD_REL} && claude plugin test payload/mods/demo 2>&1 | tail -5`,
+    `git checkout origin/main -- ${MOD_REL}; git status --short | head -3`,
+    // A folder, by each look changing file under it.
+    'git checkout origin/main -- payload/mods/demo/hooks',
+  ]
+  for (const command of exact) expect({ command, refusal: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, refusal: '' })
+  expect(w.ran.length).toBe(exact.length)
+  // A subagent's runs the same.
+  expect(refusalOf(await call($, { tool: 'Bash', command: exact[0] as string, agentId: 'agent-a1' }))).toBe('')
+  // Nothing of Dan's is asked or recorded for it, and each is in the guard's log, naming the file and
+  // the commit of the default branch it was read against.
+  expect(w.cards).toEqual([])
+  expect(Object.keys(w.store).filter(k => k.startsWith('auto:') || k.includes('issue:'))).toEqual([])
+  expect(restored(w, MOD_REL).length).toBe(exact.length - 2 + 1)
+  expect(restored(w, PAGE_REL).length).toBe(2)
+  expect(restored(w, 'app/globals.css').length).toBe(2)
+  // git was asked only questions that change nothing, none reaching the network, and never for the
+  // file's lines: what the restore changes on screen is not what lets it through.
+  const READS = ['rev-parse', 'ls-tree', 'ls-files', 'branch', 'worktree', 'symbolic-ref']
+  expect([...new Set(w.gitRuns.map(g => String(g.split(' ')[3])))].filter(sub => !READS.includes(sub))).toEqual([])
+  expect(w.gitRuns).toContain(`git -C /w/slate rev-parse --verify --quiet ${MAIN_REF}^{commit}`)
+  expect(w.gitRuns).toContain(`git -C /w/slate ls-tree -z ${TIP} -- ${MOD_REL}`)
+})
+
+test('#3280: a restore from anywhere but the default branch as last fetched is judged as before', withKit, async ($, on) => {
+  const sources = ['origin/main', 'HEAD', 'other', 'v1.0', 'main', C1, '']
+  const w = world($, on, { files: { ...BUILT_FILES }, blobs: MAIN_COPIES(sources), agents: ['agent-a1'] })
+  knows(w, 'origin/main', TIP)
+  mainHolds(w, [MOD_REL, PAGE_REL, 'app/globals.css'])
+  const judged = async (command: string, said?: string) => {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    return { command, held: why.includes(SKIP_QUESTION), said: said === undefined || why.includes(said) }
+  }
+  const held = async (command: string, said?: string) => expect(await judged(command, said)).toEqual({ command, held: true, said: true })
+  // Another commit, whatever names it: HEAD, a branch, a tag, a commit's own name, and a local main
+  // that is ahead of what was fetched.
+  for (const name of ['HEAD', 'other', 'v1.0', 'main', C1]) knows(w, name, C1)
+  for (const command of [`git checkout HEAD -- ${MOD_REL}`, `git checkout other -- ${MOD_REL}`, `git restore --source v1.0 -- ${MOD_REL}`, `git checkout main -- ${MOD_REL}`, `git restore --source=${C1} ${MOD_REL}`, 'git checkout main -- app/globals.css'])
+    await held(command)
+  // A local branch somebody named origin/main, which git reads before the remote's.
+  knows(w, 'origin/main', C1)
+  await held(`git checkout origin/main -- ${MOD_REL}`)
+  knows(w, 'origin/main', TIP)
+  // The index, which is no commit.
+  await held(`git checkout -- ${MOD_REL}`)
+  await held(`git restore ${MOD_REL}`)
+  // A subagent is stopped as before.
+  expect(refusalOf(await call($, { tool: 'Bash', command: `git checkout HEAD -- ${MOD_REL}`, agentId: 'agent-a1' }))).toContain('Stop')
+  // The same text reached another way is no restore: a Write of the default branch's copy is an edit.
+  expect(refusalOf(await call($, { tool: 'Write', file_path: MOD_HOOK, content: MOD_TEXT }))).toContain(SKIP_QUESTION)
+  expect(restored(w, MOD_REL)).toEqual([])
+  // A restore read by its lines is read as it was: a pipe anywhere on its line still leaves it
+  // judged whole, though here the lines it puts back change only logic.
+  w.files[MOD_HOOK] = EDITED
+  expect(await judged(`git checkout HEAD -- ${MOD_REL} && claude plugin test payload/mods/demo 2>&1 | tail -5`, 'runs beside the git checkout or restore and may change what it puts back')).toMatchObject({ held: true, said: true })
+  expect(refusalOf(await call($, { tool: 'Bash', command: `git checkout HEAD -- ${MOD_REL} && git status --short` }))).toBe('')
+  // Nor is a move (#3279), which is asked as before for what it brings in, even where the same
+  // call also puts a file back from the very commit the move takes the working tree to: that one
+  // file is read as put back whole, and the stylesheet the move brings in still holds the call.
+  knows(w, TIP, TIP)
+  w.gitSays[`/w/slate ${DIFF} -R ${TIP}`] = CSS
+  w.files[MOD_HOOK] = MOD_TEXT
+  for (const command of ['git reset --hard origin/main', `git checkout ${TIP} -- ${MOD_REL} && git reset --hard origin/main`]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect({ command, held: why.includes('app/globals.css changes how the screen looks'), moved: why.includes('names no file') }).toEqual({ command, held: true, moved: true })
+  }
+  expect(w.ran.length).toBe(1)
+  expect(restored(w, MOD_REL).length).toBe(1)
+  expect(restored(w, 'app/globals.css')).toEqual([])
+})
+
+test('#3280: where the guard cannot tell from git that the file ends up as the default branch holds it, the restore is judged as before', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...BUILT_FILES }, blobs: MAIN_COPIES(['origin/main']) })
+  knows(w, 'origin/main', TIP)
+  mainHolds(w, [MOD_REL, PAGE_REL, 'app/globals.css'])
+  const exact = `git checkout origin/main -- ${MOD_REL}`
+  const held = async (command: string, said?: string) => {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect({ command, held: why.includes(SKIP_QUESTION), said: said === undefined || why.includes(said) }).toEqual({ command, held: true, said: true })
+  }
+  const MAIN_ASKED = `/w/slate rev-parse --verify --quiet ${MAIN_REF}^{commit}`
+  const NAME_ASKED = '/w/slate rev-parse --verify --quiet origin/main^{commit}'
+  const HOLDS_ASKED = `/w/slate ls-tree -z ${TIP} -- ${MOD_REL}`
+  const HOLDS = w.gitSays[HOLDS_ASKED] as string
+  // The checkout records no default branch for its remote, or never fetched it.
+  w.ctl.noDefault = true
+  await held(exact)
+  w.ctl.noDefault = false
+  delete w.gitSays[MAIN_ASKED]
+  await held(exact)
+  // git fails, cannot be run, or prints more than can be read, for each of the three questions.
+  for (const asked of [MAIN_ASKED, NAME_ASKED, HOLDS_ASKED]) {
+    const answer = asked === MAIN_ASKED ? `${TIP}\n` : (w.gitSays[asked] as string)
+    for (const fails of [{ fails: 'fatal: bad object' }, 'throws', 'truncated'] as const) {
+      w.gitSays[asked] = fails
+      await held(exact)
+    }
+    w.gitSays[asked] = answer
+  }
+  // The default branch does not hold the file (git restore would take it away), holds a folder of
+  // that name, or git lists anything but that one file.
+  for (const listed of ['', `040000 tree ${'a'.repeat(40)}\t${MOD_REL}\0`, `100644 blob ${'a'.repeat(40)}\t${MOD_REL}.bak\0`, `${HOLDS}100644 blob ${'b'.repeat(40)}\t${MOD_REL}/x.tsx\0`, `160000 commit ${'a'.repeat(40)}\t${MOD_REL}\0`]) {
+    w.gitSays[HOLDS_ASKED] = listed
+    await held(exact)
+  }
+  w.gitSays[HOLDS_ASKED] = HOLDS
+  // Any option but the one naming the source: patch mode puts back part of a file (measured with git
+  // 2.51.1, answers piped in), so the guard reads no option here as leaving the file whole.
+  for (const command of [
+    `git checkout -p origin/main -- ${MOD_REL}`,
+    `git checkout --patch origin/main -- ${MOD_REL}`,
+    `printf 'y\\nn\\n' | git checkout -p origin/main -- ${MOD_REL}`,
+    `git checkout -f origin/main -- ${MOD_REL}`,
+    `git restore -p --source origin/main -- ${MOD_REL}`,
+    `git restore --source origin/main --staged --worktree ${MOD_REL}`,
+    `git restore -s origin/main -W ${MOD_REL}`,
+    `git restore --source origin/main --source origin/main ${MOD_REL}`,
+    // One restore so written holds every file the call puts back, a second one's from the same source too.
+    `git checkout origin/main -- ${PAGE_REL} && git checkout -p origin/main -- ${MOD_REL}`,
+  ])
+    await held(command)
+  // A command that may change what the name means, or what git writes, before or beside it. The
+  // first is the shape the builder ran on 2026-11-19: a copy of the file set aside in the same call.
+  w.gitSays['/w/slate --git-dir=/other rev-parse --show-toplevel'] = '/w/slate\n'
+  const beside: [string, string][] = [
+    [`cp ${MOD_REL} /tmp/aside/register.tsx && git checkout origin/main -- ${MOD_REL}`, `\`cp ${MOD_REL} /tmp/aside/register.tsx\` runs before`],
+    [`git fetch origin && git checkout origin/main -- ${MOD_REL}`, '`git fetch origin` runs before'],
+    [`./sync.sh; git checkout origin/main -- ${MOD_REL}`, '`./sync.sh` runs before'],
+    [`git checkout origin/main -- ${MOD_REL} & git fetch`, '`git fetch` runs beside'],
+    [`echo x > .git/refs/remotes/origin/main && git checkout origin/main -- ${MOD_REL}`, 'inside .git'],
+    [`git -c core.autocrlf=true checkout origin/main -- ${MOD_REL}`, 'the command sets how git reads its repository'],
+    [`GIT_DIR=/other git checkout origin/main -- ${MOD_REL}`, 'the command sets how git reads its repository'],
+    [`git checkout origin/main -- ${MOD_REL} && git restore ${PAGE_REL}`, 'from the index'],
+    // Piped from the restore, straight, through another command or out of a group, runs beside it.
+    [`git checkout origin/main -- ${MOD_REL} | git fetch`, '`git fetch` runs beside'],
+    [`git checkout origin/main -- ${MOD_REL} | cat | git fetch`, '`git fetch` runs beside'],
+    [`{ git checkout origin/main -- ${MOD_REL}; } | git fetch`, 'the git checkout or restore and may change what it puts back'],
+    [`{ git checkout origin/main -- ${MOD_REL}; echo put back; } | git fetch`, 'the git checkout or restore and may change what it puts back'],
+    [`(git checkout origin/main -- ${MOD_REL}) | git fetch`, 'the git checkout or restore and may change what it puts back'],
+    // A line that puts anything in the background is read as before, whatever runs after the restore.
+    [`git checkout origin/main -- ${MOD_REL} && claude plugin test payload/mods/demo & wait`, '`claude plugin test payload/mods/demo` runs beside'],
+    // A command the shell runs to fill in a word runs before the command it is a word of.
+    [`X=$(git fetch origin) git checkout origin/main -- ${MOD_REL}`, 'git fetch origin'],
+    [`echo "$(git update-ref refs/remotes/origin/main HEAD)" && git checkout origin/main -- ${MOD_REL}`, 'git update-ref'],
+    [`git checkout origin/main -- ${MOD_REL} > >(git fetch)`, 'git fetch'],
+  ]
+  for (const [command, said] of beside) await held(command, said)
+  // A set of paths the guard cannot list: a pattern, and a folder git cannot list the files of.
+  expect(refusalOf(await call($, { tool: 'Bash', command: "git checkout origin/main -- 'payload/mods/demo/hooks/*.tsx'" }))).toContain('its name is a pattern that may name a look changing file')
+  w.ctl.lsFilesFails = true
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'git checkout origin/main -- payload/mods/demo/hooks' }))).toContain('cannot be listed')
+  w.ctl.lsFilesFails = false
+  // A folder holding a look changing file the default branch does not hold is held, for that file.
+  w.files['/w/slate/payload/mods/demo/hooks/panel.tsx'] = BUILT
+  const folder = refusalOf(await call($, { tool: 'Bash', command: 'git checkout origin/main -- payload/mods/demo/hooks' }))
+  expect(folder).toContain(SKIP_QUESTION)
+  expect(folder).toContain('payload/mods/demo/hooks/panel.tsx')
+  expect(folder).not.toContain(`${MOD_REL} `)
+  delete w.files['/w/slate/payload/mods/demo/hooks/panel.tsx']
+  expect(w.ran).toEqual([])
+  // With every answer back as it was, the same restore runs.
+  expect(refusalOf(await call($, { tool: 'Bash', command: exact }))).toBe('')
+  expect(w.ran.length).toBe(1)
+})
+
+// #3280 (Dan, 2026-11-21, "Keep it held, say how (Recommended)"): a copy of the file set aside before
+// an exact restore in the same call stays held, and the refusal says how to get the same result. Only
+// where the restore would have gone through but for what runs before it: no other refusal changes.
+test('#3280: a restore held only for what runs before it says how to put the file back in its own call', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...BUILT_FILES }, blobs: MAIN_COPIES(['origin/main', 'HEAD']) })
+  knows(w, 'origin/main', TIP)
+  knows(w, 'HEAD', C1)
+  mainHolds(w, [MOD_REL, PAGE_REL, 'app/globals.css'])
+  const WAY = 'in an earlier call (a copy of the file set aside in a folder outside the repository, such as the scratchpad, included), then run the git checkout or restore by itself or followed by a test run'
+  const judged = async (command: string) => {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    return { command, held: why.includes(SKIP_QUESTION), way: why.includes(WAY), names: why.includes(`To put ${command.includes('globals') ? 'app/globals.css' : MOD_REL} back as the default branch holds it`) }
+  }
+  // The builder's shapes of 2026-11-19: a copy set aside, then the restore, alone or followed by the
+  // test; a stylesheet the same; and any other command before it.
+  for (const command of [
+    `cp ${MOD_REL} /tmp/aside/register.tsx && git checkout origin/main -- ${MOD_REL}`,
+    `cp ${MOD_REL} /tmp/aside/register.tsx && git checkout origin/main -- ${MOD_REL} && claude plugin test payload/mods/demo 2>&1 | tail -5`,
+    'cp app/globals.css /tmp/aside/globals.css && git restore --source origin/main app/globals.css',
+    `git fetch origin && git checkout origin/main -- ${MOD_REL}`,
+  ])
+    expect(await judged(command)).toEqual({ command, held: true, way: true, names: true })
+  // Held for anything else, it says nothing of the kind: another source, a command beside or after it
+  // in a pipe, how git reads its repository, an option, the index.
+  for (const command of [
+    `cp ${MOD_REL} /tmp/aside/register.tsx && git checkout HEAD -- ${MOD_REL}`,
+    `git checkout origin/main -- ${MOD_REL} | git fetch`,
+    `git checkout origin/main -- ${MOD_REL} & git fetch`,
+    `{ git checkout origin/main -- ${MOD_REL}; } | git fetch`,
+    `git -c core.autocrlf=true checkout origin/main -- ${MOD_REL}`,
+    `cp ${MOD_REL} /tmp/aside/register.tsx && git checkout -p origin/main -- ${MOD_REL}`,
+    `cp ${MOD_REL} /tmp/aside/register.tsx && git checkout -- ${MOD_REL}`,
+  ])
+    expect(await judged(command)).toEqual({ command, held: true, way: false, names: false })
+  // Nor where the restore on its own would not go through either: here the default branch does not
+  // hold the file.
+  w.gitSays[`/w/slate ls-tree -z ${TIP} -- ${MOD_REL}`] = ''
+  const command = `cp ${MOD_REL} /tmp/aside/register.tsx && git checkout origin/main -- ${MOD_REL}`
+  expect(await judged(command)).toEqual({ command, held: true, way: false, names: false })
+  expect(w.ran).toEqual([])
+  expect(restored(w, MOD_REL)).toEqual([])
+})
+
+// #3280: the way back is not loosened. Once main's copy has served its purpose, putting the changed
+// file back over it is a write like any other: one that changes what the file draws is judged as it
+// was before, whichever way it is put back, and only a change that draws nothing new goes back unasked.
+test('#3280: putting the changed file back over the default branch\'s copy is judged as any write of it', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...BUILT_FILES, [MOD_HOOK]: MOD_TEXT, [RESULT]: RESULT_TEXT, [`${SCRATCH}/.keep`]: '' }, blobs: { [`/w/slate HEAD:${MOD_REL}`]: BUILT, [`/w/slate HEAD:${PAGE_REL}`]: BUILT_FILES[RESULT] } })
+  knows(w, 'origin/main', TIP)
+  knows(w, 'HEAD', C1)
+  mainHolds(w, [MOD_REL, PAGE_REL])
+  // From the branch's own commit, by the lines it changes: held.
+  expect(refusalOf(await call($, { tool: 'Bash', command: `git checkout HEAD -- ${MOD_REL}` }))).toContain(SKIP_QUESTION)
+  expect(refusalOf(await call($, { tool: 'Bash', command: `git checkout HEAD -- ${PAGE_REL}` }))).toContain(SKIP_QUESTION)
+  // Written whole, or edited: held.
+  expect(refusalOf(await call($, { tool: 'Write', file_path: MOD_HOOK, content: BUILT }))).toContain(SKIP_QUESTION)
+  expect(w.ran).toEqual([])
+  // Copied back from where it was set aside: an app's screen file is held before the copy runs, and
+  // a mod's hook file is judged by what the copy leaves, and put back as it was.
+  expect(refusalOf(await call($, { tool: 'Bash', command: `cp /tmp/aside/page.tsx ${PAGE_REL}` }))).toContain(SKIP_QUESTION)
+  w.ctl.shell = { [MOD_HOOK]: BUILT }
+  expect(refusalOf(await call($, { tool: 'Bash', command: `cp /tmp/aside/register.tsx ${MOD_REL}` }))).toContain('was undone')
+  expect(w.files[MOD_HOOK]).toBe(MOD_TEXT)
+  w.ctl.shell = {}
+  expect(restored(w, MOD_REL)).toEqual([])
+  // A change that draws nothing new goes back unasked, as it always did.
+  w.blobs[`/w/slate HEAD:${MOD_REL}`] = EDITED
+  expect(refusalOf(await call($, { tool: 'Bash', command: `git checkout HEAD -- ${MOD_REL}` }))).toBe('')
+})
+
 test('#1158: a refusal holds the change it refused, never the file, so undoing an earlier edit stays open', withKit, async ($, on) => {
   world($, on, { agents: ['agent-a1'] })
   for (const extra of [{}, { agentId: 'agent-a1' }]) {

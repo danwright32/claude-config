@@ -4160,6 +4160,11 @@ gate reads; every file the judgement read and every disk test it answered is rec
 before a kept allow is used, through stand ins for `os`, `glob`, `importlib`, `ast` and `open` that
 `lib/judgement-cache.py` puts in the gate and each library. A refusal is never kept, and any doubt
 (a corrupt entry, a changed answer, a disk read the stand ins did not see) is a fresh judgement.
+A file of over 8 MB is recorded by the start the gate read of it (it reads the first 2 MB of any
+file), and the kept allow is used only while that start is the same; read any other way, such a file
+means nothing is kept. Before pull request #3394 it always meant that: once a quoted command line
+is read as a command (#3304), `bash tests/test-claude-sync.sh` reaches `bash /bin/echo hi`, and on
+CI's Linux runner, where /bin/echo is one program of over 8 MB, it was judged whole every time.
 Each entry is signed with a key only this Mac's user can read, `~/.claude/state/slack-gate-cache.key`
 (made on first use, mode 600), so a process that can write entries cannot forge one; a key that is
 missing, unreadable or readable by others means no cache, never an unsigned one (#2965). The wrapper
@@ -4742,6 +4747,17 @@ this command", and "line 3 as it is on disk" for a line of the script's own that
 it is made from. Nothing is refused or allowed that was not before. Editing the two files in
 separate calls, or the hook alone, passes. Suite: `test-slack-drafts-made-lines.sh`.
 
+Since claude-config#3356 one refusal says what to run instead. `bun test` with test files named,
+typed in a mod's folder, is refused where the gate cannot find a module one of those files imports
+(on 2026-11-20: `bun test tests/rules.test.ts tests/register.test.ts` in
+`payload/mods/design-round-guard`). A mod's tests are run with `claude plugin test <mod folder>`,
+which the gate lets through, and the refusal now ends by naming that command with the mod's folder
+written out (`mod_tests_seen`, `mod_tests_note`). A folder is a mod's where it, or a folder above
+it, holds `.claude-plugin/plugin.json`. The sentence is added only for a `bun test` the call itself
+types, in a folder the gate is certain of, and only to a refusal that is no finding of a post: a
+test file that posts is refused as a post and is told to save a draft, as before. Nothing is refused
+or allowed that was not before. Suite: `test-slack-drafts-mod-tests.sh`.
+
 Since claude-config#3277 the words written after a program the gate does not know are read as the
 command they spell (`lib/unknown-program.py`, `judge_behind_unknown`), one more reading after the
 ones there were, so it can refuse a command those let through and never the reverse. Before it a
@@ -4763,22 +4779,59 @@ missing from it would pass (L96). The question asked of the program is the one a
 own commands are already asked (`sh_command_acts`): `echo`, `grep`, `cat` and the rest of
 `SH_INERT`, a `git` subcommand that only reads, `find` with no `-exec`, `awk` whose program runs
 nothing, and a script the gate reads and sees unable to act on what it is handed are known, so
-`grep -n node test/notify.test.js` passes as before. A function the text itself defines is left
-as it was, because the gate reads its body where it stands and this repository's own gate suite
-hands its functions a program's name as a plain label (`run_slow python`); a body that runs its
-arguments (`"$@"`) is the program named by a variable that #2683 left open, and stays open. A
+`grep -n node test/notify.test.js` passes as before. A function the text itself defines is asked
+that same question of its body since claude-config#3304 (`function_acts`): one whose body runs
+what it is handed (`"$@"`, `eval`, a shell's `-c`), or hands it to a program, a script or another
+function of the text not seen to be unable to act on it, is not known, so `run() { "$@"; }; run
+node --test test/notify.test.js` is refused, and the refusal says what the body does. One that
+only prints, tests or stores what it is handed is known, which is what this repository's own gate
+suite needs: it hands its functions a program's name as a plain label (`run_slow python`). Until
+#3304 every such function was left as it was, and that one line helper was a way round any
+refusal. A
 redirection glued to one of the words (`... notify.test.js>out.txt`) no longer hides the file
 there, behind a script that runs its words as well; the same glued word after a program the gate
 reads by name is the shared reader's to read, which since #3322 hands a gh or git command's words
 with every redirection taken out, and any other program's with it among them, as before. What it
 costs: a program that does
 not run its words and is not known to be unable to (`git add`, `sed`, `docker ps`) is refused
-when the words after it happen to spell a command the gate refuses. Left open: a word that names
-a script file by its path (`op run -- ./post.sh`), since read that way `git add scripts/post.sh`
-and `sed -n 1,5p scripts/post.sh` would each be a run of the script; a command handed as one
-quoted word (`hyperfine 'node x.js'`). Two caps end the reading, and past either a typed command
+when the words after it happen to spell a command the gate refuses. Since #3304 a word that holds
+white space is read too, as a command line of its own, where one of its commands starts with a
+program the gate reads by name: `hyperfine 'node --test test/notify.test.js'` and `tmux send-keys
+'bash post.sh' Enter` are refused, and so is `git commit -m '<exactly a refused command>'`, git
+commit being a program the gate does not know to be unable to run its words. A sentence that
+only mentions such a program starts with another word and is not read, so an ordinary commit
+message passes. The word must also begin like a command line: its first command starts with a
+program the gate knows, which is one it reads by name, a runner, or one it knows to be unable to
+run its words (`cd`, `export`, `echo`). Text in another language does not begin so, and cut at
+its `|` marks it can hold a piece that starts with a program's name: `sed -i '27s|^python3
+a|python3 b|' file` is an edit of a file, and the first build of #3304 refused it.
+Behind a function the text defines, a quoted word is read only where the body
+does something with what it is handed as the words of a command; a body that only pipes it into
+a program's input is left as it was, which is what the gate's own suites do with every command
+they ask it about (`run_bash "<a refused command>"`). Left open, each for a stated reason:
+- a word that names a script file by its path (`op run -- ./post.sh`), since read that way `git
+  add scripts/post.sh` and `sed -n 1,5p scripts/post.sh` would each be a run of the script;
+- a posting address handed to a program the gate does not know as a plain argument, since no
+  command stands behind it to judge and the same shape stores a webhook as a secret;
+- a quoted word whose own command starts with a second program the gate does not know
+  (`hyperfine 'op run -- node x.js'`), or whose first command does (`hyperfine 'mytool && node
+  x.js'`), since read that way every sentence that mentions a program, and every sed script
+  whose replacement starts with one, would be a command line;
+- a function that only pipes what it is handed into a program (`f() { echo "$1" | bash; }`), and
+  one whose body builds the command from a part of its words (`f() { $1 --test x.js; }; f node`).
+
+Counted before it shipped (#3304), on the personal MacBook on 2026-11-21: each of the 62,780
+distinct Bash commands in its session records was judged by main's gate and by this one, in the
+folder it ran in. None was newly refused and none newly allowed (62,318 allowed by both, 462
+refused by both). That count is why a quoted word must begin like a command line: without it,
+four of 62,307 were newly refused, three sed scripts and one awk program. No commit message was
+among them. The work MacBook's records were not counted.
+
+Every refusal of the rule opens with the same words about the program (`NOT_KNOWN`), which is how
+its suite tells this rule's refusals from another rule's.
+Two caps end the reading, and past either a typed command
 is refused as unread and a script on disk is left alone: more than six words that could each
-start a command, and more than three of these readings inside one another, which only strings a
+start a command or be a command line, and more than three of these readings inside one another, which only strings a
 shell runs can reach (`op run -- bash -c 'op run -- bash -c "..."'`, each string holding the next
 such program), since the words of one command are read once however many programs stand among
 them. Until the lessons review of 2026-11-19 the second cap returned nothing, and a fourth such
@@ -4876,6 +4929,24 @@ the first already got an empty cache folder of its own; now the check reads the 
 two checks of a second asking are held the other way by the same reading: the trace must say the
 cache answered. That the first kind fails was not seen: the installed gate refused both commands
 that would have run it with the samples left in one folder.
+
+Some CI runners still read a few cost cases over their limits with the gate unchanged (#3170: 4 of
+127 runs from 2026-11-20 to 2026-11-21), and the logs could not say why: they held each case's
+reading in units, but the yardstick and the seconds only for one case, and only the least yardstick
+sample. Dan's decision on 2026-11-21, from a picker, was "Measure more first": no limit, sample count
+or yardstick changes until a few days of runs can be read. So since then every cost case records,
+on every run, the gate's processor seconds for each reading, the yardstick each reading was divided
+by (the least of the samples taken by then, and how many), every yardstick sample the case took, and
+their least, median and greatest. They are on each `cost measured (#2918)` line, and a passing run
+shows them in the suite's two notes. Nothing is judged by them: a case is still judged by its least
+reading against its limit, and the suite checks, with `tools/gate-cost-rows.py check`, that each
+reading is its seconds over the least sample taken by then, so a verdict taken from any figure
+printed beside it fails. No extra yardstick is timed for this; the figures are the ones each case
+already took. `python3 tools/gate-cost-rows.py rows <saved logs>` prints one row per case per run
+from any of the three shapes. And a suite that fails and then passes its recheck now has its first
+output uploaded from the CI job as the download `flaky-first-output-<part>-attempt-<n>`, kept 14
+days; until then it was kept in the runner's cache and thrown away with the runner. The flake rule
+is unchanged: such a suite still ends the run red (#245).
 
 What the gate costs in refused commands (#2642), measured on 2026-11-11 by replaying 30 days of Bash
 commands from the personal MacBook (83,323 distinct, 55,729 judged by the Python rule): #2640 newly
@@ -5331,7 +5402,12 @@ changed, or that name a file it changed as a path: a slash, then the shortest en
 no other file in the head's tree has. It runs those in a throwaway clone of the head through the
 head's own `run-all-tests.sh` (dealt into a part of their own, and run as that part), saying when
 they started, every two minutes that they are still running with how many have finished, and how
-they ended. A suite that fails, could not run, or is still running after `MWR_UNTESTED_MAX_SECONDS`
+they ended. The clone is told what is published, as a builder's worktree knows it: where origin is,
+the base as origin's branch, and that branch as origin's default. A suite that asks git there what
+a push would add is then answered with the pull request's commits; in a clone that knew no remote
+the answer was the whole history, and the step's first real merge stopped on it (#3392, on
+2026-11-21). A clone that cannot be told refuses the merge. A suite that fails,
+could not run, or is still running after `MWR_UNTESTED_MAX_SECONDS`
 (2700, a setting, not a measurement) refuses the merge, and so does anything that stops the list
 being read: a notice or record that cannot be fetched or does not add up (the records are kept a
 day; `gh run rerun <run>` makes them again), or a tree holding `tools/ci-unmeasured-summary.sh`
@@ -8537,7 +8613,19 @@ is measured the same way, since nothing after it can change what it puts back, a
 chained, piped, backgrounded or paired with another is too, wherever every command before or beside
 it only reads (cat, grep, git status, git log) or is another restore of named paths; one git cannot
 read, one beside a command that may move its source (a switch, an add, a fetch, a script), two where
-one reads the index, or a line writing inside .git, is judged whole with the refusal saying why),
+one reads the index, or a line writing inside .git, is judged whole with the refusal saying why;
+since #3280 (Dan, 2026-11-21, "Allow exact restore (Recommended)") a look changing file of any kind
+that a checkout or restore puts back byte for byte as the default branch holds it is not asked
+about, since it changes no look that has not shipped: the guard decides that from git, never from
+the command's words, with `git rev-parse --verify --quiet` for the commit the checkout's record of
+its remote's default branch stands at and for the commit the command names, which must be the same
+commit, and `git ls-tree` for whether that commit holds the file; the command must be written as
+its source and its paths alone (`git checkout origin/main -- <file>`, `git restore --source
+origin/main <file>`), with nothing before or beside it that may change what the name means, though
+on a line that groups nothing what runs once the restore has finished no longer counts, a test run
+piped to its last lines included; any other commit, a local branch that differs from what was
+fetched, the index, any option, a pattern, a file the default branch does not hold and every case
+git cannot answer for is judged as before, and so is putting the changed file back afterwards),
 since #3279 what a git command that moves committed work brings into the working tree (Dan,
 2026-11-19, "Ask only if a look file arrives": `git merge`, `rebase`, `cherry-pick`, `revert`,
 `switch`, a checkout of a branch or of one name, `reset --hard`, `--merge` or `--keep`, `stash pop`
