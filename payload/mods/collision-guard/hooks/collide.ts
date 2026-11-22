@@ -85,6 +85,32 @@ export const namedFolder = (value: string, home: string): string | undefined => 
   return v.startsWith('~') ? undefined : v
 }
 
+// #3398 (Dan, 2026-11-22: "Follow the variable first"): a git command's words with each folder a -C
+// names by a variable the call itself sets written out, so the command is judged by the folder it
+// really names. `followed` is what mod-kit's reader gives for each word (pipeline asked with
+// `follow`): the value where the word is one variable alone and the call's own text makes its value
+// certain, else null, and nothing at all from a reader that followed nothing. Whether a variable
+// can be followed is decided there and nowhere here. Undefined where no word changes, so a caller
+// reads the command as typed and a folder the shell fills in stays one the guard cannot tell.
+// Only the word after a -C of git's own is read so: one standing before the subcommand, as `g`
+// (mod-kit's reading of the same words) places it. A followed word never starts with a dash, so
+// before the subcommand it can only be the value of the option in front of it, and that option is
+// git's own -C exactly when it is written -C. A value for any other word is left alone: a
+// subcommand's -C names a branch (git switch -C), and a repository or working folder named by a
+// variable is not followed (the pull request's "For Dan" list).
+export const followedFolders = (words: readonly string[], followed: readonly (string | null)[] | undefined, g: { sub: string | undefined; args: readonly string[] }): string[] | undefined => {
+  if (!followed) return undefined
+  const sub = g.sub === undefined ? words.length : words.length - g.args.length - 1
+  let read: string[] | undefined
+  for (let i = 2; i < sub; i++) {
+    const value = followed[i]
+    if (words[i - 1] !== '-C' || value === null || value === undefined) continue
+    read ??= [...words]
+    read[i] = value
+  }
+  return read
+}
+
 // #3398: where a watched git command is put to git, to find the checkouts it acts on. git acts on
 // the repository the command names, never on the folder the call was typed in: the folder a cd
 // before it leaves the shell in (`folder`, as mod-kit's pipeline gives it, null where it cannot be
