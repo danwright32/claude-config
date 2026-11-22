@@ -15,8 +15,9 @@
 # Writes into <out dir>:
 #   summary.md   the step summary. Its FIRST line says so when this run left more untested than
 #                main's last run, naming each suite that grew; otherwise it is the heading.
-#   notices.txt  workflow commands for the job to print: one notice listing every part (capped, the
-#                rest in the summary), and one more when it is more than main. Notices show on the
+#   notices.txt  workflow commands for the job to print: one notice listing every part (as many
+#                whole parts as fit NOTICE_BYTES, then how many more the summary holds), and one
+#                more, held the same way, when it is more than main. Notices show on the
 #                run's page and the pull request's checks, and merge-when-ready.sh reads them back by
 #                their title before it merges.
 #   record.tsv   every part as `<suite><TAB><why>`, sorted, for main's next comparison. Written only
@@ -31,8 +32,14 @@ set -uo pipefail
 # tools/test-ci-unmeasured-summary.sh holds the two equal.
 UNTESTED_TITLE="Not tested by the checks"
 MORE_TITLE="$UNTESTED_TITLE and more than on main"
-# How many parts one notice lists before saying how many more the summary holds.
-NOTICE_MAX=40
+# The most one notice's message may hold, in bytes of the text GitHub stores. GitHub cuts a message
+# at 4,096 characters, counted on the DECODED text: on run 44826519963 the annotation came back exactly
+# 4,096 characters with real newlines, cut mid reason, where the escaped line sent (each newline
+# written as %0A) was longer. Held in bytes, which are never fewer than characters, so a reason of
+# characters of more than one byte cannot push it over; the 96 left over are a margin. Length is the
+# one rule: a list that fits is listed whole, and a count cap (40 parts until 2026-11-22) only ever
+# met the length limit second.
+NOTICE_BYTES=4000
 
 usage(){ echo "usage: $0 <parts dir> <part count> <main's record, or \"\"> <out dir>" >&2; exit 2; }
 [ $# -eq 4 ] || usage
@@ -72,31 +79,59 @@ counted(){ # counted <record> -> "<parts> parts in <suites> suites", or "nothing
 parts_n="$(grep -c . "$work/record" || true)"; parts_n="${parts_n:-0}"
 
 # The comparison with main: per suite, so a part added in one suite and dropped in another still shows.
+# Each suite that grew is one line of $work/grown, and $more is them all joined, for the summary.
 compare=""; more=""
+: > "$work/grown"
 if [ -n "$missing" ]; then
   compare=incomplete
 elif [ -z "$main_rec" ] || [ ! -f "$main_rec" ]; then
   compare=nomain
 else
   compare=done
-  more="$(awk -F'\t' '
+  awk -F'\t' '
       FILENAME == ARGV[1] { if (NF) m[$1]++; next }
       NF { if (!($1 in p)) order[++k] = $1; p[$1]++ }
       END {
-        out = ""
         for (i = 1; i <= k; i++) {
           s = order[i]
-          if (p[s] > m[s] + 0) {
-            item = s " " p[s] (p[s] == 1 ? " part" : " parts") ", " (m[s] + 0 == 0 ? "none" : m[s]) " on main"
-            out = out (out == "" ? "" : "; ") item
-          }
+          if (p[s] > m[s] + 0)
+            print s " " p[s] (p[s] == 1 ? " part" : " parts") ", " (m[s] + 0 == 0 ? "none" : m[s]) " on main"
         }
-        print out
-      }' "$main_rec" "$work/record")"
+      }' "$main_rec" "$work/record" > "$work/grown"
+  more="$(awk '{ printf "%s%s", (NR > 1 ? "; " : ""), $0 }' "$work/grown")"
 fi
 
 md(){ sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/|/\\|/g'; }
-cmd_data(){ awk '{ gsub(/%/, "%25"); gsub(/\r/, "%0D"); printf "%s", $0 }'; }
+
+# fit <head> <lead> <sep> <end> <noun> <items> <tail>: one notice's message, escaped as a workflow
+# command's data, from <head>, then the items of the file <items> (one per line) joined by <sep> with
+# <lead> before the first and <end> after the last, then each line of the file <tail> on its own
+# line. When the whole does not fit NOTICE_BYTES, it keeps the first items that fit with the tail
+# and a last line saying how many more <noun>s the run's summary lists: never part of an item. The
+# lengths are counted in bytes (LC_ALL=C) on the text before escaping, which is what GitHub stores.
+fit(){
+  LC_ALL=C awk -v head="$1" -v lead="$2" -v sep="$3" -v fin="$4" -v noun="$5" -v max="$NOTICE_BYTES" '
+    FILENAME == ARGV[1] { if ($0 != "") it[++n] = $0; next }
+    { tail = tail "\n" $0 }
+    END {
+      body = ""
+      for (i = 1; i <= n; i++) body = body (i == 1 ? lead : sep) it[i]
+      msg = head body (n ? fin : "") tail
+      if (length(msg) > max) {
+        # Room is kept for the longest the last line can be, with every item left out.
+        room = max - length(head) - length(fin) - length(tail) - length(more(n))
+        body = ""; k = 0
+        while (k < n && length(body) + length(k ? sep : lead) + length(it[k + 1]) <= room) {
+          body = body (k ? sep : lead) it[k + 1]; k++
+        }
+        msg = head body (k ? fin : "") tail more(n - k)
+      }
+      gsub(/%/, "%25", msg); gsub(/\r/, "%0D", msg); gsub(/\n/, "%0A", msg)
+      printf "%s", msg
+    }
+    function more(m) { return "\n...and " m " more " noun (m == 1 ? "" : "s") ", listed in the run'"'"'s summary." }
+  ' "$6" "$7"
+}
 
 {
   [ -z "$more" ] || { printf "**More left untested than main's last run:** %s.\n\n" "$more"; }
@@ -125,25 +160,22 @@ cmd_data(){ awk '{ gsub(/%/, "%25"); gsub(/\r/, "%0D"); printf "%s", $0 }'; }
   fi
 } > "$out/summary.md"
 
+# The notices' lines: each part as `<suite>: <why>`, and each part that handed back no record.
+awk -F'\t' '{ print $1 ": " substr($0, length($1) + 2) }' "$work/record" > "$work/listed"
+: > "$work/gaps"
+for n in $missing; do echo "Part $n handed back no record of what it did not test." >> "$work/gaps"; done
 {
   if [ "$parts_n" -gt 0 ]; then
     verb=were; [ "$parts_n" -eq 1 ] && verb=was
-    msg="$(counted "$work/record") $verb not tested on the runner, so these checks do not cover them:"
-    i=0
-    while IFS="$TAB" read -r s w; do
-      i=$((i + 1))
-      [ "$i" -le "$NOTICE_MAX" ] || continue
-      msg="$msg%0A$(printf '%s: %s' "$s" "$w" | cmd_data)"
-    done < "$work/record"
-    [ "$parts_n" -le "$NOTICE_MAX" ] || msg="$msg%0A...and $((parts_n - NOTICE_MAX)) more, listed in the run's summary."
+    head="$(counted "$work/record") $verb not tested on the runner, so these checks do not cover them:"
   elif [ -n "$missing" ]; then
-    msg="No part that handed back a record left anything untested."
+    head="No part that handed back a record left anything untested."
   else
-    msg="Every suite measured every part on the runner."
+    head="Every suite measured every part on the runner."
   fi
-  for n in $missing; do msg="$msg%0APart $n handed back no record of what it did not test."; done
-  printf '::notice title=%s::%s\n' "$UNTESTED_TITLE" "$msg"
-  [ -z "$more" ] || printf "::notice title=%s::This run left more untested than main's last run: %s.\n" "$MORE_TITLE" "$(printf '%s' "$more" | cmd_data)"
+  printf '::notice title=%s::%s\n' "$UNTESTED_TITLE" "$(fit "$head" '\n' '\n' "" part "$work/listed" "$work/gaps")"
+  [ -z "$more" ] || printf '::notice title=%s::%s\n' "$MORE_TITLE" \
+    "$(fit "This run left more untested than main's last run: " "" "; " "." suite "$work/grown" /dev/null)"
 } > "$out/notices.txt"
 
 if [ -z "$missing" ]; then cp "$work/record" "$out/record.tsv"; else rm -f "$out/record.tsv"; fi
