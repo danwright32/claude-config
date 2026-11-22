@@ -381,19 +381,29 @@ WORKTREE_KIND = "transcripts: worktree run"
 TMP_KIND = "transcripts: /private/tmp run"
 
 
-def transcript_files(root):
+def transcript_files(root, unread=None):
     """(path, lstat, kind) for every session record file under root (~/.claude/projects) the
     transcripts rule sorts, never following a link: in a worktree or /private/tmp run's project
     folder, the session transcript and every file in the session's folder (WORKTREE_KIND, TMP_KIND);
     in any other project folder, the session transcript (OWN_SESSION) and each subagent transcript
-    and its meta file (SUBAGENT_KIND). A memory folder, and anything else, is never yielded."""
-    for project in entries(root):
+    and its meta file (SUBAGENT_KIND). A memory folder, and anything else, is never yielded.
+    A folder that cannot be listed is added to `unread`, so a caller COUNTING records can refuse
+    rather than read it as empty; the removing rule passes none, since what it cannot list it
+    cannot remove."""
+    def listing(path):
+        try:
+            return sorted(os.listdir(path))
+        except OSError:
+            if unread is not None:
+                unread.append(path)
+            return []
+    for project in listing(root):
         pp = os.path.join(root, project)
         if not is_dir(lst(pp)):
             continue
         runs = run_folder(project)
         kind = WORKTREE_KIND if "-claude-worktrees-" in project else TMP_KIND
-        for name in entries(pp):
+        for name in listing(pp):
             p = os.path.join(pp, name)
             st = lst(p)
             if name == "memory" or st is None:
@@ -401,7 +411,7 @@ def transcript_files(root):
             if is_file(st) and SESSION_FILE.match(name):
                 yield p, st, (kind if runs else OWN_SESSION)
             elif is_dir(st) and SESSION_DIR.match(name):
-                for q, qst in walk(p):
+                for q, qst in walk(p, unread):
                     if not is_file(qst):
                         continue
                     if runs:

@@ -147,6 +147,21 @@ ok "unreadable record: exits 1" "[ $rc -eq 1 ]"
 ok "unreadable record: names the record and says the copy is not whole" 'has "$OWN2.jsonl" "$out" && has "is not whole" "$out"'
 ok "unreadable record: claims no finished copy, and the unfinished one is marked" '! has "Copied " "$out" && [ ! -e "$COPIES/unreadable-20261121-120000" ] && [ -d "$COPIES/unreadable-20261121-120000.incomplete" ]'
 
+# ---- a folder of records that cannot be read: never counted as empty ----
+plant
+chmod 000 "$P/-Users-x-proj--claude-worktrees-w1"
+out="$(run report --days 7)"; rc=$?
+ok "unreadable project folder, report: exits 1 and names the folder" "[ $rc -eq 1 ] && has 'could not be read' \"\$out\" && has '-Users-x-proj--claude-worktrees-w1' \"\$out\""
+ok "unreadable project folder, report: claims no counts" '! has "files in the window" "$out"'
+out="$(run copy --days 7 --label unreadfolder)"; rc=$?
+chmod 755 "$P/-Users-x-proj--claude-worktrees-w1"
+ok "unreadable project folder, copy: exits 1 and copies nothing" "[ $rc -eq 1 ] && [ ! -e '$COPIES' ] && ! has 'Copied ' \"\$out\""
+plant
+chmod 000 "$P/-Users-x-proj/$OWN1/subagents"
+out="$(run report --days 7)"; rc=$?
+chmod 755 "$P/-Users-x-proj/$OWN1/subagents"
+ok "unreadable folder inside a session: exits 1 and names it" "[ $rc -eq 1 ] && has '$OWN1/subagents' \"\$out\""
+
 # ---- too little free space for the copy: refused before anything is written ----
 plant
 out="$(run copy --days 7 --label roomy --keep-free-gb 1000000000)"; rc=$?

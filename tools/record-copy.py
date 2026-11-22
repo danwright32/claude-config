@@ -112,7 +112,8 @@ def measure(home, now, days, wanted):
         for rule_kind in next(r for key, _, r in KINDS if key == k.key):
             of[rule_kind] = k
     start = now - days * DAY
-    for p, pst, rule_kind in keep_rules.transcript_files(root):
+    unread = []
+    for p, pst, rule_kind in keep_rules.transcript_files(root, unread):
         k = of.get(rule_kind)
         if k is None:
             continue
@@ -120,6 +121,11 @@ def measure(home, now, days, wanted):
             k.oldest = pst.st_mtime
         if pst.st_mtime >= start:
             k.files.append((p, pst))
+    if unread:
+        # Read as empty, a folder that cannot be listed would make every count beneath it short and
+        # say nothing, so it stops the count instead (L11).
+        return None, ("%d folder(s) of records could not be read, so any count would leave out what they hold: %s"
+                      % (len(unread), "; ".join(unread[:5]) + ("; and %d more" % (len(unread) - 5) if len(unread) > 5 else "")))
     return kinds, None
 
 
