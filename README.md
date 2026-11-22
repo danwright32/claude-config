@@ -7869,13 +7869,26 @@ included, is judged before he is asked: a character he cannot see, more than 1,5
 units, more than 20 rows as a window 76 columns wide wraps, a run of blank lines, a tag, a link, a
 link definition, a character reference or a link to a file. There is one set of limits for every
 picker, and a picker too long for one is asked in parts. The lesson and memory save pickers, the
-design round guard's two questions, the area check's restructure question and sleep mode's
-recorded morning pickers (`hooks/unread.ts` in scope modes) refuse a picker that fails; picker
-manners asks it and writes it onto no issue. The scan fails a mod whose hooks name
-`AskUserQuestion` and read the dialog's `answers` without calling `askFault`. Not covered yet,
-open on #3321: a question a mod asks itself through `$.ui.ask` (scope modes' before bed round and
-its leave open questions, the keystroke guard's), and the database apply and test project
-approvals, which are hooks and cannot call a mod's function. `node tools/picker-check-count.ts`
+design round guard's two questions, the area check's restructure question, sleep mode's recorded
+morning pickers (`hooks/unread.ts` in scope modes) and picker manners, for a picker whose answer it
+would write onto an issue, refuse a picker that fails (picker manners since #3321, Dan, 2026-11-21:
+"Refuse outright"; before that it asked and wrote the answer onto no issue). The database apply
+and test project approvals, which are hooks and cannot call a mod's function, run the same check
+through `hooks/lib/picker-check.mjs` (Dan, 2026-11-21: "One check, called"): a picker that fails is
+not taken as approval, and when node cannot run the check the write is asked about again, with the
+reason. The scan fails a mod whose hooks name `AskUserQuestion` and read the dialog's `answers`
+without calling `askFault`. A question a mod asks Dan itself through `$.ui.ask` (scope modes'
+before bed round and leave open questions, the keystroke guard's) is not held to the check yet
+(Dan, 2026-11-21: "Record, then decide"). `recordedAsk` in `hooks/asked.ts`, kept at
+`hooks/mod-kit/asked.ts` by each mod that asks, records its sizes and never its text, one file a
+question under `~/.claude/state/asked-questions` on this Mac, at most 2,000 kept, and keeps the
+dialog in the asking mod's own `$.state` (key `asking`) while it is open. Picker manners reads that
+state, so a mod's own dialog it would refuse is asked and written onto no issue (the coordinating
+session's rule of 2026-11-21, until Dan settles how the two meet): only the mod writes its state,
+and a session writes none. The scan fails a mod calling `$.ui.ask` other than through
+`recordedAsk`, and an asker missing from `OWN_ASKERS` or from picker manners' reads.
+`node tools/asked-questions-count.ts` reads the records, for the reading due two weeks from
+2026-11-21 on #3321. `node tools/picker-check-count.ts`
 counts, per guard, how many pickers in this Mac's session records the check would have refused.
 `hooks/quoted.ts` holds `pythonText` too
 (moved from `hooks/code.ts` in #2710, which re-exports it), so a reader of python's strings needs

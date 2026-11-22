@@ -790,6 +790,9 @@ import datetime, json, os, sys
 path, sid, mig, sha, ref, answer = sys.argv[1:7]
 prefilled = len(sys.argv) > 7
 q = "Apply migration 002_note.sql to project " + ref + "?"
+if os.environ.get("UNREAD") == "1":
+    # A zero width space, made from its code point and never written here (#3321).
+    q = q.replace("migration", "migration" + chr(0x200b))
 ask = {"questions": [{"question": q, "header": "Migration", "multiSelect": False,
                       "options": [{"label": "Apply", "description": "Run it"}, {"label": "Cancel", "description": "Do not"}]}],
        "metadata": {"source": "db-apply", "migration": mig, "sha256": sha, "project_ref": ref}}
@@ -881,6 +884,25 @@ FILLED_T="$APPLY/prefilled.jsonl"
 transcript "$FILLED_T" s1 "$MIG" "$(sha_of "$MIG")" exampleprojectref000 Apply prefilled
 both "a picker whose answer was filled in by the caller records nothing" none ask "$(apply_payload "$PUSH" "$PROJ" s1 "$FILLED_T")"
 both "a transcript that cannot be read is asked about" none ask "$(apply_payload "$PUSH" "$PROJ" s1 "$APPLY/missing.jsonl")"
+# #3321: his Apply covers the picker's words because he read them, so an Apply in a picker he could
+# not read as written (judged by the one shared check, lib/picker-check.mjs) is asked about, saying
+# what was at fault. The push that the same Apply in a readable picker lets through is GOOD_T's above.
+UNREAD_T="$APPLY/unread.jsonl"
+UNREAD=1 transcript "$UNREAD_T" s1 "$MIG" "$(sha_of "$MIG")" exampleprojectref000 Apply
+both "a push after an Apply in a picker Dan could not read as written is asked about" none ask "$(apply_payload "$PUSH" "$PROJ" s1 "$UNREAD_T")"
+reason="$(field "$(run "$HOOK" "$EMPTY_HOME" "$(apply_payload "$PUSH" "$PROJ" s1 "$UNREAD_T")")" reason)"
+case "$reason" in *"would not have reached him as written"*"U+200B"*"ask it again"*) check "the question says what in the picker he could not have read" ok ;; *) check "the question says what in the picker he could not have read" "reason: ${reason:0:500}" ;; esac
+# With no node to run the check, the same readable Apply is not taken: the push is asked about,
+# never refused and never let through unjudged, and the question says the check could not run.
+NONODE="$APPLY/no-node"; mkdir -p "$NONODE"
+for tool in python3 jq git; do [ -n "$(command -v "$tool")" ] && ln -s "$(command -v "$tool")" "$NONODE/$tool"; done
+if PATH="$NONODE:/usr/bin:/bin" command -v node >/dev/null 2>&1; then
+  echo "NOT MEASURED: a node is in /usr/bin or /bin, so the hook cannot be run here without one"
+else
+  out="$(PATH="$NONODE:/usr/bin:/bin" run "$HOOK" "$EMPTY_HOME" "$(apply_payload "$PUSH" "$PROJ" s1 "$GOOD_T")")"
+  [ "$(decision "$out")" = "ask rc=0" ] && check "with no node, a push after a readable Apply is asked about, not refused" ok || check "with no node, a push after a readable Apply is asked about, not refused" "got: $(decision "$out")"
+  case "$(field "$out" reason)" in *"could not be checked"*"node is not on PATH"*) check "and the question says the check could not run for want of node" ok ;; *) check "and the question says the check could not run for want of node" "reason: $(field "$out" reason | cut -c1-500)" ;; esac
+fi
 both "a push with --include-seed is asked about" none ask "$(apply_payload "supabase db push --linked --yes --include-seed" "$PROJ" s1 "$GOOD_T")"
 both "a push with --db-url is asked about" none ask "$(apply_payload 'supabase db push --yes --db-url postgresql://x' "$PROJ" s1 "$GOOD_T")"
 both "a push chained to another command is asked about" none ask "$(apply_payload "$PUSH && rm -f note.txt" "$PROJ" s1 "$GOOD_T")"

@@ -1825,6 +1825,41 @@ for m in answers-in-hook answers-any-call answers-imported-not-called; do
     || check "#3321: and names $m, pointing it at the copy of hooks/shown.ts" "$out"
 done
 case "$out" in *clean-judges-picker*|*clean-reads-no-answer*|*clean-comment-only*) check "#3321: a mod that judges the call first, reads no answer, or names the dialog only in a comment passes" "$out" ;; *) check "#3321: a mod that judges the call first, reads no answer, or names the dialog only in a comment passes" ok ;; esac
+# #3321: a question a mod asks Dan itself, through its own dialog, is recorded by its size and kept
+# as the mod's own while it is open, and both happen in one place: recordedAsk in the copy of
+# mod-kit's hooks/asked.ts, which is handed the dialog as its `ask:` member. A mod calling the dialog
+# any other way fails the run, pointed at that copy, and so does one that calls the recorder but
+# is not among the recorder's OWN_ASKERS, keeps no state of its own for it, or is not read by picker
+# manners. Picker manners reading a mod the recorder does not name fails too. A mod asking through
+# the recorder and named everywhere, one that names the dialog only in a comment, and one with no
+# dialog pass.
+M9A="$TMPROOT/m9-own-dialog"
+ASKS_RIGHT="import { type AskedIo, recordedAsk } from './mod-kit/asked.ts'; const ref = { plugin: 'NAME', key: 'asking' } as const; const io: AskedIo = { ask: (question, options) => \$.ui.ask(question, options), own: { read: () => \$.state.get(ref), write: (v, ifVersion) => \$.state.set(ref, v, { ifVersion }) } }; const a = await recordedAsk(io, 'NAME', 'which', q, ['Yes', 'No'])"
+mkmodsrc "$M9A" mod-kit "export const register = on => {}"
+printf '%s\n' "export const OWN_ASKERS = ['clean-asks-recorded', 'asks-unread-by-manners'] as const" > "$M9A/mod-kit/hooks/asked.ts"
+mkmodsrc "$M9A" clean-asks-recorded "${ASKS_RIGHT//NAME/clean-asks-recorded}"
+mkmodsrc "$M9A" clean-comment-ask "// \$.ui.ask(question) is how a mod asks, and this one asks nothing.
+export const register = on => {}"
+mkmodsrc "$M9A" clean-no-dialog "export const register = on => { on('tool.call', async (\$, e, next) => next(e)) }"
+mkmodsrc "$M9A" asks-direct "const a = await \$.ui.ask('Ready?', ['Yes', 'No'])"
+mkmodsrc "$M9A" asks-built "const a = await built.ui.ask('Ready?', ['Yes', 'No'])"
+mkmodsrc "$M9A" asks-member-no-recorder "const io = { ask: (question, options) => \$.ui.ask(question, options) }; const a = await io.ask('Ready?')"
+mkmodsrc "$M9A" asks-unnamed "${ASKS_RIGHT//NAME/asks-unnamed}"
+mkmodsrc "$M9A" asks-unread-by-manners "${ASKS_RIGHT//NAME/asks-unread-by-manners}"
+mkmodsrc "$M9A" asks-no-state "import { type AskedIo, recordedAsk } from './mod-kit/asked.ts'; const io: AskedIo = { ask: (question, options) => \$.ui.ask(question, options) }; const a = await recordedAsk(io, 'asks-no-state', 'which', q)"
+mkmodsrc "$M9A" picker-manners "const reads = [() => \$.state.get({ plugin: 'clean-asks-recorded', key: 'asking' } as never), () => \$.state.get({ plugin: 'gone-mod', key: 'asking' } as never)]"
+for m in clean-asks-recorded asks-unnamed asks-unread-by-manners asks-no-state; do mkdir -p "$M9A/$m/hooks/mod-kit"; cp "$M9A/mod-kit/hooks/asked.ts" "$M9A/$m/hooks/mod-kit/asked.ts"; done
+out="$(bash "$SHARED" "$M9A" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "#3321: a mod asking through its own dialog past the recorder fails the run" ok || check "#3321: a mod asking through its own dialog past the recorder fails the run" "exit=$code out=$out"
+for m in asks-direct asks-built asks-member-no-recorder; do
+  printf '%s\n' "$out" | grep "$m asks Dan through its own dialog" | grep -q 'hooks/mod-kit/asked.ts' && check "#3321: and names $m, pointing it at the copy of hooks/asked.ts" ok \
+    || check "#3321: and names $m, pointing it at the copy of hooks/asked.ts" "$out"
+done
+printf '%s\n' "$out" | grep -q "asks-unnamed asks through the recorder and is not among OWN_ASKERS" && check "#3321: a mod asking through the recorder that the recorder does not name is said" ok || check "#3321: a mod asking through the recorder that the recorder does not name is said" "$out"
+printf '%s\n' "$out" | grep -q "asks-unread-by-manners asks through the recorder and picker manners never reads its state" && check "#3321: a mod picker manners does not read is said" ok || check "#3321: a mod picker manners does not read is said" "$out"
+printf '%s\n' "$out" | grep -q "asks-no-state asks through the recorder and keeps no state of its own" && check "#3321: a mod with no state of its own for its dialogs is said" ok || check "#3321: a mod with no state of its own for its dialogs is said" "$out"
+printf '%s\n' "$out" | grep -q "picker-manners reads gone-mod's state for its own dialogs, and the recorder names no such mod" && check "#3321: picker manners reading a mod the recorder does not name is said" ok || check "#3321: picker manners reading a mod the recorder does not name is said" "$out"
+case "$out" in *clean-asks-recorded*|*clean-comment-ask*|*clean-no-dialog*) check "#3321: a mod asking through the recorder and named everywhere, or with no dialog, passes" "$out" ;; *) check "#3321: a mod asking through the recorder and named everywhere, or with no dialog, passes" ok ;; esac
 # #1765: three guards read each file a command reads by hand, looping over the write reader's inputs,
 # and one meeting /dev/stdin or a fifo waited for ever, so the call never ran. Each hand rolled loop
 # fails the run, pointed at inputTexts in the copy of mod-kit's hooks/inputs.ts; a mod handing the
