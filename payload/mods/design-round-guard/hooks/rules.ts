@@ -2699,6 +2699,11 @@ export const withoutOwnCalls = async (given: OwnCallIo, text: string, commands: 
     return { cmds, starts }
   }
   const fedBy = (i: number): string[] => [`${OWN_FEED}${i + 1}`]
+  // A place typed after a `#` that may start a comment on its line is not probed by any reading
+  // here, and so is never at the top: a probe written into a comment ends the comment, the rest of
+  // the line is read as commands, and a `}` there closes a group the text never closed, after
+  // which what stands in a function reads as standing at the top.
+  const maybeComment = (t: string, at: number): boolean => /(?:^|[\s;&|()<>])#/.test(t.slice(t.lastIndexOf('\n', at - 1) + 1, at))
   // The one reading of a text that places what it types: every definition, and in the script every
   // `source` or `.` command too (readAtTop), which asked in a reading of its own cost the whole
   // script once more. `defs` is each definition's place among the probes, in the order typed, and
@@ -2708,12 +2713,7 @@ export const withoutOwnCalls = async (given: OwnCallIo, text: string, commands: 
       const typed = u.typed.map((t, def) => ({ at: t.at, def }))
       const taken = new Set(typed.map(t => t.at))
       const read = u !== script || marked ? [] : [...text.matchAll(/(?<![^\n;&|(){}])[ \t]*(?:\.|source)[ \t]/g)].map(m => ({ at: m.index as number, def: -1 })).filter(r => !taken.has(r.at))
-      // A place typed after a `#` that may start a comment on its line is not probed, and so is
-      // never at the top: a probe written into a comment ends the comment, the rest of the line is
-      // read as commands, and a `}` there closes a group the text never closed, after which what
-      // stands in a function reads as standing at the top.
-      const maybeComment = (at: number): boolean => /(?:^|[\s;&|()<>])#/.test(u.text.slice(u.text.lastIndexOf('\n', at - 1) + 1, at))
-      const all = [...typed, ...read].filter(p => !maybeComment(p.at)).sort((a, b) => a.at - b.at)
+      const all = [...typed, ...read].filter(p => !maybeComment(u.text, p.at)).sort((a, b) => a.at - b.at)
       const { cmds, starts } = await probe(
         u.text,
         all.map(p => p.at),
@@ -2774,7 +2774,7 @@ export const withoutOwnCalls = async (given: OwnCallIo, text: string, commands: 
         )
         const a = setters.length === 1 ? cmds[setters[0] as number] : undefined
         if (!a || a.words.length !== 1 || a.env?.length || !liveWord(a, 0) || a.pipedFrom !== undefined || withoutOwnFolder(a.words[0] as string) !== `${v}=/own-folder`) return undefined
-        const places = [...text.matchAll(new RegExp(`(?<![^\\n;&|(){}])[ \\t]*${v}=`, 'g'))].map(m => m.index as number)
+        const places = [...text.matchAll(new RegExp(`(?<![^\\n;&|(){}])[ \\t]*${v}=`, 'g'))].map(m => m.index as number).filter(at => !maybeComment(text, at))
         if (!places.length || places.length > OWN_TRIES) return undefined
         const { cmds: read, starts } = await probe(text, places, true)
         let tops = 0

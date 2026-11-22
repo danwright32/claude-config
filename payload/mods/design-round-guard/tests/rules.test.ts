@@ -3875,6 +3875,21 @@ test('#3416: a comment that spells a definition or a read in command is never pr
   await want(`run() { true; } # the helper\n${CALL}`, [])
   await want('. lib.sh # the library\nlib_fn app/page.tsx\n', [])
   expect(wrong).toEqual([])
+
+  // The same for the places the folder variable is set (ownFolder): a comment made an assignment
+  // inside a function read as standing at the top, so a file under `$DIR` was read from the
+  // suite's folder though the shell, with DIR not yet set, reads another.
+  const under = { '/s/lib/x.sh': 'helper() { echo x; }\n' }
+  const folder: { text: string; left: string[] }[] = []
+  const wantUnder = async (text: string, expected: string[]): Promise<void> => {
+    const left = await readLeft(text, under)
+    if (left.join('\n') !== expected.join('\n')) folder.push({ text, left })
+  }
+  await wantUnder(`# note; DIR=x; }\nsetdir () {\n  true\n  ${OWN_DIR}}\n${RUN}. "$DIR/lib/x.sh"\n${CALL}`, ['run /s/app/page.tsx'])
+  await wantUnder(`# why; DIR=elsewhere (#12), and so\n${OWN_DIR}${RUN}. "$DIR/lib/x.sh"\n${CALL}`, [])
+  // The control: no comment, and the assignment in the function is not at the top.
+  await wantUnder(`setdir () {\n  true\n  ${OWN_DIR}}\n${RUN}. "$DIR/lib/x.sh"\n${CALL}`, ['run /s/app/page.tsx'])
+  expect(folder).toEqual([])
 })
 
 test('#3416: the files a suite reads in are counted against the limit, and past it no more are read from the disk', async () => {
