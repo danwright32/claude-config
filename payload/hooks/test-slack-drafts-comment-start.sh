@@ -151,12 +151,40 @@ for quiet in "echo \$#; echo quiet" "echo a#b" "echo \${#x}; echo quiet" "echo '
   run_bash "$quiet"
   allowed "the control: a quiet command after a # that starts no word passes: $quiet"
 done
-# One the reader took for a comment where the shell does not is refused whatever follows it: the
-# gate does not read the rest of that line, so it cannot say that nothing there posts.
-for doubt in "echo see$BS # 3; echo quiet" "echo \$(echo b)# c; echo quiet" "echo a$BS${NL}# c; echo quiet" \
-  "x=(a b)# c" "(echo a$BS # c )${NL}echo quiet" "echo a$BS # 'x${NL}echo quiet${NL}'"; do
-  run_bash "$doubt"
-  refused "a # the gate cannot tell from a comment is refused with nothing posting after it: $(shown "$doubt")"
+# The wrapper looks at the whole payload before it starts the reader, and starts it only where the
+# payload names something that could reach a post: an endpoint, a script file, a shell, an
+# interpreter, eval, a dot command, a path that is run. That look takes no # for a comment, here or
+# anywhere, so a # can hide nothing from it, and it gives a command the same answer with the # as
+# without. Held here by measurement, not by reading the patterns: SLACK_GATE_CACHE_TRACE names a file
+# the reader writes a line to as its first step, so a file that is not there after a run is a
+# command the wrapper answered by that look alone.
+TRACE="$T/reader-started"
+run_seen() { rm -f "$TRACE"; SLACK_GATE_CACHE_TRACE="$TRACE" run_bash "$1" "${2:-$T}"; }
+# unread <label>: allowed by the wrapper's own look, the reader never started.
+unread() {
+  if [ "$RC" -eq 0 ] && [ ! -e "$TRACE" ] && [ -z "$(printf '%s%s' "$OUT" "$ERR" | tr -d '[:space:]')" ]; then check "$1" ok
+  else check "$1" "exit $RC, the reader $([ -e "$TRACE" ] && echo started || echo 'did not start'), stderr: ${ERR:0:300}"; fi
+}
+# read_through <label>: the reader started, whatever it then answered.
+read_through() { if [ -e "$TRACE" ]; then check "$1" ok; else check "$1" "the reader did not start (exit $RC)"; fi; }
+run_seen "echo see 3; $POST${NL}echo done"
+read_through "the control of that measure: for a command that posts, the reader starts and leaves its line in the file"
+
+# A # the reader would take for a comment where the shell does not, in a command that names nothing
+# able to reach a post: the wrapper's look answers it, as it answers the same command without the #.
+# Nothing in such a command can post, so there is nothing a refusal would stop.
+for calm in "echo see$BS # 3; echo quiet" "echo \$(echo b)# c; echo quiet" "echo a$BS${NL}# c; echo quiet" \
+  "x=(a b)# c" "(echo a$BS # c )${NL}echo quiet" "echo see$BS # 3; ls${NL}true"; do
+  run_seen "$calm"
+  unread "a # the gate cannot tell from a comment, in a command naming nothing that could post, is answered unread: $(shown "$calm")"
+  run_seen "${calm//\#/}"
+  unread "and the same command with no # is answered the same way: $(shown "${calm//\#/}")"
+done
+# Where the command names anything that look sends to the reader, the reader refuses the #, quiet
+# or not: it does not read the rest of that line, so it cannot say that nothing there posts.
+for doubt in "echo see$BS # 3; bash quiet.sh" "echo a$BS # 'x${NL}echo quiet${NL}'" "echo \$(echo b)# c; ./quiet"; do
+  run_seen "$doubt"
+  refused "a # the gate cannot tell from a comment is refused wherever the reader is started: $(shown "$doubt")"
   says "and as a check it could not make: $(shown "$doubt")" "REFUSED: the gate could not check whether this command posts to Slack"
 done
 # The same in a script the command runs: the file is read as the command is.
@@ -166,6 +194,30 @@ run_bash "bash hash-posts.sh"
 refused "a script whose post follows a # the shell reads inside a word is refused"
 run_bash "bash hash-quiet.sh"
 allowed "the control: a script whose post is written in a real comment passes"
+
+echo "slack drafts only: a post reached with no posting word in the command is not hidden by such a # either (claude-config#3464)"
+
+# The command names no endpoint: the file it runs holds the post. Each way of running that file,
+# after each # the reader would take for a comment where the shell does not, on two lines. The
+# wrapper's look must start the reader for every one, and the reader must refuse it.
+Q="$T/q3464"
+mkdir -p "$Q/hot/lib"
+printf '%s\n' "$POST" > "$Q/hot/lib/x.sh"
+printf '%s\n' "$POST" > "$Q/hot/lib/x"
+printf '%s\n' 'import urllib.request' "urllib.request.urlopen('https://slack.com/api/chat.postMessage', b'text=hi')" > "$Q/hot/lib/p.py"
+for reach in "bash hot/lib/x.sh" ". hot/lib/x.sh" "source hot/lib/x.sh" "bash hot/lib/x" ". hot/lib/x" \
+  "hot/lib/x.sh" "./hot/lib/x" "eval \"\$(cat hot/lib/x)\"" "cat hot/lib/x | sh" "python3 hot/lib/p.py"; do
+  run_seen "echo see 3; $reach${NL}echo done" "$Q"
+  refused "the control: with no #, the post is reached and refused: $reach"
+  run_seen "echo see # 3; $reach${NL}echo done" "$Q"
+  read_through "the control: after a real comment the reader is still started, since the wrapper's look takes no # for a comment: $reach"
+  allowed "the control: and the reader, which reads the comment as the shell does, passes it: $reach"
+  for front in "echo see$BS # 3" "echo \$(echo b)# c" "echo a$BS${NL}# c" "x=(a b)# c" "echo \`echo a # c\`"; do
+    run_seen "$front; $reach${NL}echo done" "$Q"
+    refused "a post reached with no posting word is refused after a # the shell reads inside a word: $(shown "$front; $reach")"
+    says "and as a check it could not make: $(shown "$front; $reach")" "REFUSED: the gate could not check whether this command posts to Slack"
+  done
+done
 
 echo "slack drafts only: a quoted # in a file a shell's string reads in hides no shift after it (claude-config#3464)"
 
