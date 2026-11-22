@@ -44,11 +44,10 @@ refuse a command those let through and never the reverse:
     and nor is a relative one where the folder is not certain.
   * A file run that way which is not text (an archive holding __main__.py, compiled code) is one
     the gate cannot read, and is refused as unread where it is typed.
-  * Code this python3 cannot parse is read for its quoted strings alone. Where the shell fills
-    part of it in and the gate cannot work that out (`python3 -c "$(cat x.py)"`, `"$CODE"`, a
-    `$N` outside a string), or where it names a way to run a file (SINK_WORDS), what it runs was
-    never read, and it is refused as unread where it is typed. The gate's python3 can be older
-    than the one the command starts, so code it cannot parse may still run.
+  * Code this python3 cannot parse is read for its quoted strings alone. Where it names a way to
+    run a file (SINK_WORDS), the shell filling part of it in or not, what it runs was never read,
+    and it is refused as unread where it is typed. The gate's python3 can be older than the one
+    the command starts, so code it cannot parse may still run.
 
 WHERE IT CANNOT TELL, AND WHICH WAY IT FALLS. Code that can run code and also names a file it only
 reads (`import subprocess, json; json.load(open('named.json'))`) is not told from code that runs
@@ -56,8 +55,8 @@ that file: the file is read as one the code may run, and a data file naming an e
 the command. "Can run code" is the gate's own answer, so it holds every module the gate does not
 know to be unable to (`import shutil`). Code that names exec and opens a file by a path that cannot
 be worked out is refused whether or not the text it reads is what it runs. Code it cannot parse
-that holds the word exec only in a string, or a number the shell fills in outside a string, is
-refused as code that runs something unread. All fall toward refusing.
+that holds the word exec only in a string is refused as code that runs something unread. All fall
+toward refusing.
 
 ON DISK. In a script on disk a file is read as one the code may run only where the code hands it
 to something that runs a file: a path sink, anything that opens a file in code naming exec, eval
@@ -71,7 +70,10 @@ WHAT IS LEFT ALONE ON PURPOSE. A file that open() is handed with a mode written 
 writes (w, a or x, with neither r nor +) is not one the code reads, so it is not read as one it
 may run (py_opens_to_write). The same path named anywhere else in the code still is.
 
-WHAT IT DOES NOT COVER. A module run by a name built at run time is not followed, as an import
+WHAT IT DOES NOT COVER. Code the shell fills in whole, or in part outside a string, that names no
+way to run a file as it is written (`python3 -c "$(cat x.py)"`, `python3 -c "$CODE"`) is not read:
+measured 2026-11-22, each passes where x.py posts. Refusing all such code refused the timing line
+#3278 holds must pass. A module run by a name built at run time is not followed, as an import
 built at run time is not. A program started with a command built at run time (`subprocess.run(cmd)`)
 is not read, as `$cmd` typed in a shell is not (#2683). Text the code reads from a pipe and runs
 (`cat x.py | python3 -c 'exec(sys.stdin.read())'`) is not read. A way to open a file that
@@ -472,14 +474,15 @@ def make(py_nodes, unknown_dir):
                 # Where it names a way to run a file, any of its strings may be the file it runs.
                 ran = [("the code", text) for text in texts] if SINK_WORDS.search(code) else []
                 # Its strings are all that is read of it, so a path it builds is never seen: where
-                # the shell fills part of it in, what the code is cannot be read at all, and where
-                # it names a way to run a file, the file it runs cannot. The gate's python3 can be
-                # older than the one the command starts, so code it cannot parse may still run.
-                if filled:
+                # it names a way to run a file, the file it runs cannot be read. The gate's python3
+                # can be older than the one the command starts, so code it cannot parse may still
+                # run. Code naming no such way is left as it was, the shell filling it in or not:
+                # test-slack-drafts-python-imports.sh holds that a timing line whose one value the
+                # shell fills in passes (claude-config#3278).
+                if SINK_WORDS.search(code):
                     unparsed = ("which the shell fills in before Python reads it, and which this python3 cannot "
-                                "parse as it is written")
-                elif SINK_WORDS.search(code):
-                    unparsed = "which this python3 cannot parse, and which names a way to run a file"
+                                "parse as it is written" if filled else
+                                "which this python3 cannot parse, and which names a way to run a file")
             else:
                 texts, folders, rows, mods, unworked, ran = self.py_names(nodes, here, filled, cwd_known)
             # Each file a string names, once, as the code would find it: from the folder it runs in,

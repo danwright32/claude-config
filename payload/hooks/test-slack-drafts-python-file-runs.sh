@@ -26,8 +26,8 @@
 #     code can run code the two cannot be told apart, and the file is read as one it may run;
 #   * a folder holding __main__.py named in the code is read as that file, code written out and fed
 #     on the input (a here string, echo into a pipe) is read as code given by -c is, and a file run
-#     that is not text, code the shell fills in that cannot be worked out, and code this python3
-#     cannot parse that names a way to run a file are each refused as unread where typed;
+#     that is not text, and code this python3 cannot parse that names a way to run a file (the
+#     shell filling part of it in or not), are each refused as unread where typed;
 #   * an error inside the reading refuses the call (seen to fail against a copy of the library that
 #     swallowed the error, on 2026-11-22);
 #   * a judgement kept in the cache does not outlive the file it read.
@@ -478,23 +478,21 @@ else
   check "#3397 the archives for these cases could be made" "python3 -m zipfile made no archive, so the cases were not run"
 fi
 
-echo "slack drafts only: code the shell fills in that the gate cannot work out is code it never read (claude-config#3397)"
+echo "slack drafts only: code the shell fills in outside a string, naming a way to run a file, is refused as unread (claude-config#3397)"
 
-run_at "python3 -c \"\$(cat posts.py)\"" "$IP"
-read_refused "#3397 code that is a file's text, put there by the shell, is refused"
+run_at "python3 -c \"exec(open(\$F).read())\"" "$IP"
+read_refused "#3397 code that execs a file by a value the shell fills in outside a string is refused"
 says "#3397 and the refusal says the shell fills it in" "the shell fills in"
-run_at "python3 -c \"\$CODE\"" "$IP"
-read_refused "#3397 code that is a variable the gate cannot work out is refused"
-# It cannot tell a number from code there, and falls toward refusing.
-run_at "python3 -c \"print(\$N + 1)\"" "$IP"
-read_refused "#3397 code holding a value outside a string that the gate cannot work out is refused: the two cannot be told apart"
+run_at "python3 -c \"import time, sys; sys.stdout.write(str(time.time() - \$N))\"" "$IP"
+allowed "#3397 code holding a value outside a string that names no way to run a file passes, as #3278 holds"
 run_at "N=3; python3 -c \"print(\$N + 1)\"" "$IP"
 allowed "#3397 code holding a value the gate can work out passes"
 run_at "python3 -c \"print('\$N')\"" "$IP"
 allowed "#3397 code holding a value it cannot work out inside a string, running nothing, passes"
-printf '%s\n' 'python3 -c "$CODE"' > "$IP/wrapc.sh"
-run_at "bash wrapc.sh" "$IP"
-allowed "#3397 and a script on disk whose code is a variable is left as it was"
+# Not covered here: code the shell fills in whole (python3 -c "$(cat posts.py)", python3 -c "$CODE"),
+# which names no way to run a file as it is written. Measured 2026-11-22: each passes where the
+# file posts. Refusing every piece of code the shell fills in outside a string refused eight cases
+# of test-slack-drafts-python-imports.sh (#3278), so that stays as it was and is recorded.
 
 echo
 
