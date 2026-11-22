@@ -338,6 +338,9 @@ the `claudesync` shell alias:
 - **`com.claudesync.watch`** — an fswatch process that runs a two-way `sync` on
   every change to a synced folder, however deep, so edits push within seconds.
   Requires fswatch: `brew install fswatch` (then re-run `install-autosync`).
+  With no change here it also asks the shared repo every `SYNC_WATCH_POLL` seconds
+  (600, ten minutes) whether main holds a commit this clone does not, and takes in what
+  passed its tests (#3396, "The watcher receives on a timer" below).
 - **`com.claudesync.timer`** (a periodic two-way `sync`, `SYNC_INTERVAL=86400`
   seconds by default, which is daily) so the other Mac's changes arrive even when
   this Mac makes no local edits. That number is a product choice about how often to
@@ -352,8 +355,10 @@ the `claudesync` shell alias:
 
 Dan's three decisions, each from a picker on 2026-11-18: session notes "Drop bulky leftovers, keep
 notes"; transcripts "Shorten only agent and test runs", kept "7 days" (his own sessions stay at
-Claude Code's 30); and it runs "By itself, with a log". The rules are `hooks/lib/keep_rules.py`, whose
-header is the checkable statement of both. In short:
+Claude Code's 30); and it runs "By itself, with a log". On 2026-11-21, from a picker recorded on
+#3413, he raised the transcripts' 7 days to 14 ("Keep 14 days"), about 2 GB more on each Mac at
+about 280 MB a day, so a count of agent activity can reach back two weeks. The rules are
+`hooks/lib/keep_rules.py`, whose header is the checkable statement of both. In short:
 
 - **Session notes** (`~/.claude/state/session-notes/<project>/<session>/`). A session has ended
   when the session registry does not show it open AND no file in its notes folder was written for 3
@@ -361,7 +366,7 @@ header is the checkable statement of both. In short:
   or mostly images or documents, and so do tar files. Every other file (handoff.md, evidence.md,
   tests.txt, pr-body.md, logs) stays, every folder under 1 MB stays, and a link is never followed or
   removed. A folder not named like a session id is never touched.
-- **Transcripts** (`~/.claude/projects/`). Removed once last written more than 7 days ago: subagent
+- **Transcripts** (`~/.claude/projects/`). Removed once last written more than 14 days ago: subagent
   transcripts (`subagents/**/agent-*.jsonl` and their `.meta.json`) in every project, and, in a
   project folder keyed to a worktree (`-claude-worktrees-`) or to a headless run under
   `/private/tmp` (`-private-tmp`), the session transcript `<session>.jsonl` and every file in the
@@ -401,6 +406,24 @@ removes and `/disk-clean` offers with a tick (Dan, 2026-11-19, both recorded on 
 - Install it on a Mac: `claude-sync install-autosync`, run once on each Mac, since a launch agent
   is a copy. Until it is installed, `claude-sync stuck` says so in every session on that Mac.
 
+#### Copy the records before a count (#3413)
+
+Because this job removes agent and run transcripts at 14 days, and Claude Code removes Dan's own at
+30, a count that reads `~/.claude/projects` over "the last N days" can read fewer days than it says,
+and a recount hours later reads a different set. So a count first runs `tools/record-copy.py`:
+
+- `python3 tools/record-copy.py report --days 14` says, for Dan's own sessions, agent records, and
+  worktree and temporary folder runs (sorted by `transcript_files` in keep_rules.py, never a copy of
+  it), how many files fall in the window and how far back the oldest one is. It writes nothing.
+- `python3 tools/record-copy.py copy --days 14 --label 3230` copies the records in the window to
+  `~/.claude/state/record-copies/<label>-<date and time>/projects/`, each with its own time, readable
+  only by this user, and prints how many files it holds for each date. The count reads that copy.
+- Both refuse a window longer than the oldest record of a kind asked for (`--kinds own,agent,run`),
+  unless `--accept-shorter`, when they state the window each kind really has.
+- The copy lives in `~/.claude/state`, which the sync never carries, the keep rules never walk, and
+  `/disk-clean` never offers. Nothing removes a copy: delete it with the `rm -rf` line it prints
+  once the count is finished.
+
 It also adds this to `~/.zshrc`, so the shortcut arrives with the rest of the setup
 instead of being added by hand on each Mac (`~/.zshrc` is deliberately not synced):
 
@@ -418,8 +441,9 @@ refuse unless `SYNC_LAUNCHAGENTS` names where to write, skip the alias unless `S
 and never call launchctl, saying so; a pull that changes `claude-sync` leaves the watch daemon
 alone the same way (#1470).
 
-Sending is automatic on change; receiving is automatic on the timer. A no-op sync
-writes nothing (idempotent), so the watcher never re-triggers itself. On a merge
+Sending is automatic on change; receiving is automatic on the watcher's ten minute timer, on
+any change, and on the daily receive timer. A no-op sync writes nothing (idempotent), so the
+watcher never re-triggers itself. On a merge
 conflict the background job stops and fires a desktop notification.
 
 ### Retiring a Mac
@@ -690,6 +714,56 @@ on main's own line whose tests passed (at most `SYNC_CI_TESTED_SEARCH` commits b
 default), and nothing newer. The log says `applied the newest shared commit whose tests passed`.
 This Mac's own changes still go up on top of the newest commit, as above. A newest commit that
 FAILED still takes nothing in, so a red main stays visible on every Mac.
+
+### The watcher receives on a timer (#3396)
+
+Until #3396 the watcher woke only when fswatch reported a change on this Mac, and the receive timer
+runs once a day. On 2026-11-21 two merges with green checks (#3381 at 7:54 AM ET, #3382 at 8:11 AM
+ET) sat uninstalled on the personal MacBook, whose watcher had last ticked at 7:29 AM ET, until a
+pull was typed at about 8:22 AM ET.
+
+Now a watcher that has seen no change for `SYNC_WATCH_POLL` seconds (600, ten minutes; 0 switches
+it off) asks the shared repo one question, `git ls-remote` of its branch, which reads refs and writes
+nothing, and is stopped after `SYNC_WATCH_ASK_TIMEOUT` seconds (60, a setting) so a stalled
+connection cannot hold up the watcher's later sends. What it does with the answer:
+
+- main's head is already in this clone: nothing more, and no request to GitHub at all;
+- a head no tick has been handed yet: the ordinary tick an edit runs, under the sync lock and the CI
+  gate, which takes in the newest commit whose tests passed and never one that has not;
+- the head a tick already left: one CI verdict read for it. Passed, or a commit below it passed
+  since: the tick. Still being tested, failed or cancelled: nothing, since the gate would take
+  nothing in either;
+- a hold in force, or another run holding the sync lock or waiting its turn for it: nothing, so a
+  wake never queues behind a merge, a pull or a suite run;
+- a catch up refused less than `SYNC_RECONCILE_RETRY` seconds ago (300): nothing, since the send
+  holds it off for that long and would only count another skipped send;
+- a claude-sync on disk that is not the copy the watcher runs: the tick, which restarts onto it as
+  it does on a change (#1569).
+
+Each wake rewrites one line in the clone's `.watch-idle` (when, what it found, main's head, the head
+last handed to a tick, and why). A wake that finds nothing logs nothing; one that ticks logs
+`woke on its timer:` and the reason, then the tick's own line. Two watchers waking at once each run
+the tick, and the sync lock puts them one after the other.
+
+The worst case, while the Mac is awake: a commit on main that has passed its tests is installed
+within ten minutes plus the time the tick itself takes, or twenty minutes when the wake found another
+run holding the sync lock. From the merge, add the CI run on main (15 to 50 minutes in the incidents
+recorded above). The cost on a level day is one `git ls-remote` per wake, 144 a day, measured at
+0.22 to 0.33 seconds each on 2026-11-22 (five samples), and nothing against GitHub's API limit. While
+a head is under test it adds one verdict read per wake (0.43 seconds measured) and, when that head is
+still being tested, at most `SYNC_CI_TESTED_SEARCH` (ten) more for the commits below it.
+
+`claude-sync status` says when the clone is behind main's newest tested commit: by how many commits,
+since when (the moment the first of them landed on main), and what the watcher last found when it
+asked. It reads "tested" through the gate's own verdict and walk, and says nothing when the clone is
+level, behind only commits still being tested, or under a head that failed or was cancelled (the gate
+takes nothing in then, and the receiving stuck line says why). When the verdicts cannot be read it says so rather
+than nothing.
+
+It takes effect on each Mac with the pull that carries it: a pull that changes `claude-sync`
+restarts the watch agent (`launchctl kickstart`), and the watcher started then runs the new code. No
+`install-autosync` is needed, since no launch agent changed. A Mac whose watcher does not restart
+that way (it was not running) starts it with `claude-sync install-autosync`.
 
 ### A send that catches up says what it sent
 
@@ -1036,6 +1110,13 @@ been stopped, never by the runner, and it is a file in the clone, so it survives
 - **What status says.** `claude-sync status` says the run is owed and why it has not run (the load
   the last try found), that it is being run again now by a named pid, or that it was given up on and
   what to run.
+- **What the session hears** (#3396). `claude-sync stuck` reports an `unverified` record from the
+  same `.hook-tests` while it is `incomplete` or `slotwait`, keyed on `owed_since`, so the per prompt
+  sync notice says at once, once per session, that config which landed here is UNVERIFIED and why,
+  and says its end once a run of the suite completes. A later hook whose own run is stopped too
+  starts a new chain, which is a new notice and never the end of the old one. Status says it only on
+  its hook suite line, not a second time. Desktop notifications are unchanged: none for the first
+  stopped run.
 
 A pull whose suite could not be verified still exits 0. A nonzero exit would make the scheduled
 job report a condition that a quiet hour clears by itself, which is the alert this record replaces.
@@ -5421,10 +5502,15 @@ the helper fetches each part's `part-unmeasured-<part>` record from the run the 
 notice itself is cut by GitHub at 4096 characters, so it is not the list), believes them only when
 their lines number what the notice's first line counts, and chooses the suites the pull request
 changed, or that name a file it changed as a path: a slash, then the shortest end of the file's path
-no other file in the head's tree has. It runs those in a throwaway clone of the head through the
-head's own `run-all-tests.sh` (dealt into a part of their own, and run as that part), saying when
-they started, every two minutes that they are still running with how many have finished, and how
-they ended. The clone is told what is published, as a builder's worktree knows it: where origin is,
+no other file in the head's tree has. A file the pull request deletes is a changed file too
+(#3403): it is named the same way against the tree the head left the base at, where it still is,
+and a suite naming it is run, saying the file is deleted. Such a suite often fails until it is
+brought up to date, and that refuses the merge like any other failure, so the suite is mended in
+the same pull request. A renamed file counts as its old path deleted and its new path added, so a
+suite still naming the old path runs, and so does one naming the new. It runs those in a
+throwaway clone of the head through the head's own `run-all-tests.sh` (dealt into a part of their
+own, and run as that part), saying when they started, every two minutes that they are still
+running with how many have finished, and how they ended. The clone is told what is published, as a builder's worktree knows it: where origin is,
 the base as origin's branch, and that branch as origin's default. A suite that asks git there what
 a push would add is then answered with the pull request's commits; in a clone that knew no remote
 the answer was the whole history, and the step's first real merge stopped on it (#3392, on
@@ -5862,9 +5948,15 @@ set BY the runner
 </td><td>
 
 Each suite's share of the budget, which is the budget divided by how many suites are running at
-once. A suite that splits itself, which today is `test-claude-sync.sh`, reads it as how many of its
-own processes it may start. Point the runner at one directory holding one suite and that suite is
-handed the whole budget, so running the long suite on its own is as fast as it ever was.
+once. A suite that splits itself or runs its work several at a time reads it as how many of its own
+processes it may start: `test-claude-sync.sh` its shards, `test-gates-fail-closed.sh` the gates it
+judges and `test-hang-wait-suites-gate.sh` the scripts it judges (#3170). Started by hand, with
+nothing granted, each keeps the width it had before (4 shards, 6 gates, 4 scripts), and a value that
+is not a whole number above zero is refused. Each of the last two counts, at every start, how many
+of the runs it started are still going, and fails when that passes its share, which is what a launch
+loop that ignores the share looks like (at a share of 2 before #3170: 6 and 4). Point the runner at one
+directory holding one suite and that suite is handed the whole budget, so running the long suite on
+its own is as fast as it ever was.
 
 </td></tr>
 </tbody>
