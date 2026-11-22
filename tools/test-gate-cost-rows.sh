@@ -122,9 +122,9 @@ printf 'one-lesson LINE: 30.1 (2.50 s of processor time, unit 0.083 s, ceiling 3
 out="$(python3 -B "$TOOL" check "$WORK/bare.log" 2>&1)"; rc=$?
 check "check refuses a record without the per reading figures" "$([ "$rc" = 1 ] && echo ok || echo "exit $rc: $out")"
 has "and names what is missing" "one-lesson: no seconds per reading" "$out"
-# Two readings printed alike, 30.7 each, with different seconds and yardsticks: the judged figures
-# are those of either one, so the second one's must be accepted. 2.541 / 0.0829 and 2.551 / 0.0832
-# both print 30.7, and the record's 2.54 s is the second's, never the first's.
+# Two readings printed alike with different seconds and yardsticks, invented figures and not
+# measured: the judged figures are those of either one, so the second one's must be accepted. The
+# first and second readings below print the same, and the record's seconds are the second's.
 printf '%s\n' "$GOOD" | sed 's/seconds per reading 2\.560, 2\.541, 2\.600; yardstick per reading 0\.0832 from 7, 0\.0829 from 9/seconds per reading 2.551, 2.541, 2.600; yardstick per reading 0.0832 from 7, 0.0829 from 9/; s/samples 30\.8, 30\.7, 31\.4/samples 30.7, 30.7, 31.4/' > "$WORK/tie.log"
 out="$(python3 -B "$TOOL" check "$WORK/tie.log" 2>&1)"
 check "check accepts the judged figures of either of two readings that print alike" "$([ "$out" = ok ] && echo ok || echo "$out")"
