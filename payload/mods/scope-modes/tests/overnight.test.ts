@@ -662,6 +662,17 @@ describe('LESSONS.md, written by any route in command position (L673)', () => {
     for (const c of ['python3 x.py payload/notes.md', 'bash tools/fix.sh --in=README.md', './tidy.sh', 'cd payload && node add.mjs index.md'])
       expect({ c, r: await bash(c) }).toEqual({ c, r: undefined })
   })
+  // #3323 (Dan, 2026-11-21, "Turn it round, with the list (Recommended)"): a program mod-kit's write
+  // reader does not know was read as writing nothing, so one handed LESSONS.md wrote it past this
+  // check. The reader now gives it as a run, so it is held as a script handed the file is; so is a
+  // listed program in a form of it that runs a program, and an unpack naming the file as a member.
+  // One of the programs Dan listed as only reading is not this check's, as before.
+  test('a program the write reader does not know handed LESSONS.md is held as a write of it; one that only reads is not (#3323)', async () => {
+    for (const c of ['mystery payload/LESSONS.md', 'prettier --write ~/.claude/LESSONS.md', '[[ -f payload/LESSONS.md ]]', 'rg --pre ./x rule payload/LESSONS.md', 'cd payload && tar -xf /tmp/a.tar LESSONS.md'])
+      expect({ c, r: await bash(c) }).toEqual({ c, r: 'write to LESSONS.md' })
+    for (const c of ['cat payload/LESSONS.md', 'grep -n L174 payload/LESSONS.md', 'rg rule payload/LESSONS.md', 'wc -l ~/.claude/LESSONS.md', '[ -f payload/LESSONS.md ]', 'mystery payload/notes.md', 'sleep 2'])
+      expect({ c, r: await bash(c) }).toEqual({ c, r: undefined })
+  })
   // #1682: a tool run through npx and a module run with python -m are runs too, so a formatter given
   // LESSONS.md is held as a script handed it is.
   test('a tool run through npx or a python module handed LESSONS.md (#1682)', async () => {

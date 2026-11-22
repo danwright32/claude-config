@@ -1,7 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
 import { errorText } from './mod-kit/skew.ts'
 import { neverThrows } from './mod-kit/hold.ts'
-import { editedUnder, insideRoot, isScratch, judgedWrites, latestRequest, othersEditing, othersInRepo, parseVerdict, quoteNames, wantedFiles, watchedGit, type Rec, type ShellWrite, type Verdict } from './collide.ts'
+import { editedUnder, foldWrite, insideRoot, isScratch, judgedWrites, latestRequest, othersEditing, othersInRepo, parseVerdict, quoteNames, wantedFiles, watchedGit, type Rec, type ShellWrite, type Verdict } from './collide.ts'
 
 // Collision guard (claude-config#605): two sessions in one checkout must not edit the same file or
 // move the tree under each other. Who is open comes from the shared session registry; the verdict
@@ -156,7 +156,7 @@ const writtenFiles = async ($: EngineInterface, read: Reading): Promise<ShellWri
     for (const f of found) {
       const had = out.find(o => o.path === f.path)
       if (!had) out.push(f)
-      else Object.assign(had, f.removes ? { removes: true } : {}, f.tree ? { tree: true } : {})
+      else foldWrite(had, f)
     }
   }
   return out
@@ -285,7 +285,15 @@ const check = async ($: EngineInterface, input: Record<string, unknown>): Promis
     if (!others.length) continue
     const root = others[0]?.repoRoot ?? null
     const one = files.length === 1 ? (files[0] as string) : undefined
-    const what = !w.removes ? `write ${w.path}` : one === w.path ? `remove ${w.path}` : `remove ${w.path} and everything in it, including ${files.join(', ')},`
+    // A file handed to a program the write reader does not know (#3323) is said as that, naming
+    // the program: the judge is told what was measured, never that the command writes it (L11).
+    const what = w.unknown
+      ? `hand ${w.path} to ${w.unknown.program} (${w.unknown.what}), which may write it,`
+      : !w.removes
+      ? `write ${w.path}`
+      : one === w.path
+      ? `remove ${w.path}`
+      : `remove ${w.path} and everything in it, including ${files.join(', ')},`
     const blocked = await decide($, toolUseId, {
       action: `${what} with the shell command: ${command}`,
       shortName: one ? base(one) : `${files.length} files in ${base(w.path)}`,
@@ -296,7 +304,9 @@ const check = async ($: EngineInterface, input: Record<string, unknown>): Promis
     })
     if (blocked) return blocked
   }
-  return { list, paths: written.map(w => w.path), strict: false }
+  // What a program the reader does not know was handed is judged above and never noted as this
+  // session's edit (#3323, collide.ts ShellWrite says why).
+  return { list, paths: written.filter(w => !w.unknown).map(w => w.path), strict: false }
 }
 
 // Handed from the tool.check hook that let a call through to the tool.call hook around it,
