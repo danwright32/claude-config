@@ -150,13 +150,15 @@ def refusal(short, now, days):
                             days_text(days), reach_text(k.reach(now))))
     reaches = [k.reach(now) for k in short if k.oldest is not None]
     empty = [k for k in short if k.oldest is None]
-    ways = []
+    # One way that would pass on its own: a shorter window AND leaving out every kind with none.
+    narrower = []
     if reaches:
-        ways.append("ask for %d days or fewer" % int(min(reaches)))
+        r = min(reaches)
+        narrower.append(("ask for %d days or fewer" % int(r)) if r >= 1 else ("ask for %.1f days or fewer" % r))
     if empty:
-        ways.append("leave out %s with --kinds" % " and ".join(k.key for k in empty))
-    ways.append("run again with --accept-shorter to go on, and the window each kind really has is stated")
-    lines.append("To count anyway, %s. Nothing was copied." % ", or ".join(ways))
+        narrower.append("leave out %s with --kinds" % " and ".join(k.key for k in empty))
+    lines.append("To count anyway, %s, or run again with --accept-shorter to go on, and the window each kind "
+                 "really has is stated. Nothing was copied." % " and ".join(narrower))
     return "\n".join(lines)
 
 
@@ -296,12 +298,13 @@ def main(argv):
             v = argv[i + 1]
             if a == "--now":
                 now = float(v)
-                if not math.isfinite(now):
+                # Bounded so every date printed from it is one the clock can show (year 1970 to 3000).
+                if not math.isfinite(now) or not 0 <= now < 32503680000:
                     return usage("--now takes seconds since the epoch, not %r" % v)
             elif a == "--days":
                 days = float(v)
-                if not math.isfinite(days) or days <= 0:
-                    return usage("--days takes a number of days above 0, not %r" % v)
+                if not math.isfinite(days) or not 0 < days <= 36500:
+                    return usage("--days takes a number of days above 0 and at most 36500, not %r" % v)
                 days = int(days) if days == int(days) else days
             elif a == "--label" and mode == "copy":
                 if not LABEL.match(v):

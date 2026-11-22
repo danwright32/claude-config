@@ -179,12 +179,23 @@ rm -f "$H/projects"
 plant
 rm -rf "$P/-private-tmp-abc" "$P/-Users-x-proj--claude-worktrees-w1"
 out="$(run report --days 3)"; rc=$?
-ok "no records of a kind: refused, names the kind, and never advises 0 days" "[ $rc -eq 3 ] && has 'there are no worktree and temporary folder runs at all' \"\$out\" && ! has 'Ask for 0 days' \"\$out\" && has '--kinds' \"\$out\""
+ok "no records of a kind: refused, names the kind, and never advises 0 days" "[ $rc -eq 3 ] && has 'there are no worktree and temporary folder runs at all' \"\$out\" && ! has 'ask for 0 days' \"\$out\" && has 'leave out run with --kinds' \"\$out\""
+out="$(run report --days 10)"; rc=$?
+ok "a short kind and an empty one: the advice is both together, which would pass" "[ $rc -eq 3 ] && has 'ask for 8 days or fewer and leave out run with --kinds' \"\$out\""
+# Records reaching back half a day: the advice is a window --days accepts, never 0 days.
+plant
+rm -rf "$P/-Users-x-proj--claude-worktrees-w1"
+out="$(CLAUDE_HOME="$H" python3 -B "$TOOL" report --days 3 --kinds run --now "$(( NOW - DAY / 2 ))" 2>&1)"; rc=$?
+ok "a kind reaching under a day: advises a window above 0" "[ $rc -eq 3 ] && has 'ask for 0.5 days or fewer' \"\$out\""
 plant
 out="$(run report)"; rc=$?
 ok "no --days: exits 2" "[ $rc -eq 2 ]"
 out="$(run report --days inf)"; rc=$?
 ok "--days inf: exits 2 with no traceback" "[ $rc -eq 2 ] && ! has 'Traceback' \"\$out\""
+out="$(run report --days 1e300)"; rc=$?
+ok "--days 1e300: exits 2 with no traceback" "[ $rc -eq 2 ] && ! has 'Traceback' \"\$out\""
+out="$(CLAUDE_HOME="$H" python3 -B "$TOOL" report --days 7 --now 1e300 2>&1)"; rc=$?
+ok "--now 1e300: exits 2 with no traceback" "[ $rc -eq 2 ] && ! has 'Traceback' \"\$out\""
 out="$(run report --days nan)"; rc=$?
 ok "--days nan: exits 2 with no traceback" "[ $rc -eq 2 ] && ! has 'Traceback' \"\$out\""
 out="$(run report --days 7 --kinds own,everything)"; rc=$?
