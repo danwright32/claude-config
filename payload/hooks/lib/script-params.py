@@ -38,21 +38,27 @@ Each value is given only where it is certain, and anything else is left as it wa
     a function's can be the function, so there the walk is told nothing. A file sourced from the
     command line has the session's shell's $0, which is not known either.
   * $1... only for a file that is run, by `script words`, or by a shell handed the script with no
-    option but -e, -u, -x, -v and -n, after nothing but NAME=value words, env, command, exec, nohup
-    and time: xargs, find -exec and the like add or replace words. A word that cannot be worked
-    out leaves it and every one after it unknown. A sourced file is given none: it shares the
-    caller's, which the caller may have changed.
+    option but -e, -u, -x, -v and -n, after nothing but NAME=value words, env (its -i and -u NAME
+    too), command, exec, nohup and time: xargs, find -exec and the like add or replace words. A
+    word that cannot be worked out leaves it and every one after it unknown. A sourced file is
+    given none: it shares the caller's, which the caller may have changed.
   * $1... only where the command that runs the script is one of its text's own commands
     (shell["outer"]): the gate keeps one place for a command and for everything a string it hands
     another program runs, so a script run from inside such a string would be read with the words
     of the command around it.
   * $1... only before the first place in the script's text that could change them or stand for
-    another value: shift, set with an operand, eval, a sourced file (which shares them and may do
-    either), a function (whose $1 is its own argument) or a loop (whose later turns follow a shift
-    written after it). Comments are left out; a word in a string still counts, which only refuses
-    more.
-  * $1... in the script's own commands only for the word of a source or . command, and only for
-    one of the text's own commands. Every other command keeps the rule for a script handed a file.
+    another value: shift, set with an operand or --, eval, a sourced file (which shares them and
+    may do either; the source command's own word is still read with them, being read before the
+    file can change anything), a function (whose $1 is its own argument) or a loop (whose later
+    turns follow a shift written after it). Comments are left out, and which # starts one is
+    taken from the reader's own reading of the text, which follows its quoting (uncommented,
+    claude-config#3451); a word in a string still counts, which only refuses more.
+  * $1... in two places only. One is the word of a source or . command that is one of the text's
+    own commands (source_word_params). The other is the walk of the script's variables
+    (script_param), for the value a variable is set to and for the word of a source command the
+    walk follows, so a variable set from one (`L="$1"`) is known to the source command after it.
+    No other command is given them in its own words: each keeps the rule for a script handed a
+    file.
 
 What such a script reads depends on its parameters, so one read once and found clean is found so
 again only for the same ones (script_reads_by, in script()'s key): `bash p.sh calm.sh; bash p.sh
@@ -65,6 +71,7 @@ the methods use the Judge's own state (shell, unfollowed) and readers (parsed, s
 sh_strip_openers, sh_word, sh_source_var, sh_source_choices, sh_source_target, unworked_path,
 sh_ctx_known, sw).
 """
+import bisect
 import os
 import re
 
@@ -76,7 +83,10 @@ PARAMS_END = re.compile(
     r"[ \t]+(?:--|[^-+\s;&|#)])"
     r"|(\(\s*\))"
     r"|(?:^|[;&|({!]|\bthen|\belse|\bdo)[ \t]*(\.)[ \t]+\S", re.M)
-COMMENT = re.compile(r"(?m)(^|\s)#.*$")
+# Where a comment may start: a # that starts the text or follows white space. Not one whose white
+# space a backslash comes before, since an escaped space or a line joined by a backslash can put
+# the # inside a word (`echo a\ #b` prints "a #b"). uncommented() decides which of them start one.
+COMMENT_START = re.compile(r"(?:\A|(?<=\s))(?<!\\\s)#")
 # The shells whose $0 is the script's everywhere in a text they read (module docstring).
 ZERO_SHELLS = ("bash", "dash")
 SHELL_OPTIONS = re.compile(r"-[euxvn]+")
@@ -86,11 +96,65 @@ ASSIGNMENT = re.compile(r"[A-Za-z_]\w*=")
 BUILT = re.compile(r"[$`]")
 
 
-def params_end(text):
+def uncommented(text, parts):
+    """text with its comments blanked to spaces, each offset kept. parts is the reader's reading of
+    text (lib/shell-words.py's commands(), which follows the quoting; Judge.parsed), or None where
+    it cannot read the text, and then nothing is blanked.
+
+    A # that may start a comment (COMMENT_START) is blanked, to the end of its line, only where the
+    reader read no command's own words anywhere from it to that end. A comment is nobody's text to
+    the reader, so one is still left out. A # inside a quoted string is in the words of the command
+    that holds it, as the commands after it on its line are in their own, and is left as it is:
+    taken for a comment, as every # after white space was, it hid a shift written after it on its
+    line, and the script's $1 stayed the command line's where the script had moved on
+    (claude-config#3451). So nothing the reader reads as a command is ever blanked, and what is
+    left in that bash does not run (a comment inside an array's brackets, which is inside its
+    command's words) only refuses more.
+
+    A command's own words are its text less the substitutions written in it, whose commands are
+    parts of their own, so a comment inside a substitution that spans lines is still left out."""
+    if parts is None:
+        return text
+    own = []
+    for p in parts:
+        at = p["start"]
+        for a, b, _ in sorted(p["inner"]):
+            if a > at:
+                own.append((at, a))
+            at = max(at, b)
+        if p["end"] > at:
+            own.append((at, p["end"]))
+    own.sort()
+    ends, reach = [], 0
+    for _, b in own:
+        reach = max(reach, b)
+        ends.append(reach)  # the furthest any command's words starting at or before this one reach
+    out, done, at = [], 0, 0
+    while True:
+        m = COMMENT_START.search(text, at)
+        if not m:
+            break
+        start = m.start()
+        end = text.find("\n", start)
+        end = len(text) if end < 0 else end
+        # The words that start before the line ends: one of them reaching past the # is a command
+        # read there.
+        k = bisect.bisect_left(own, (end,))
+        if k and ends[k - 1] > start:
+            at = start + 1
+            continue
+        out += [text[done:start], " " * (end - start)]
+        done = at = end
+    out.append(text[done:])
+    return "".join(out)
+
+
+def params_end(text, parts):
     """(the offset in text of the first word that ends what is certain about its parameters, or
     len(text) where there is none; whether that word is a source or . command, whose own words are
-    read before the file it names can change anything). Comments are blanked, each offset kept."""
-    plain = COMMENT.sub(lambda m: m.group(1) + " " * (len(m.group(0)) - len(m.group(1))), text)
+    read before the file it names can change anything). Comments are left out (uncommented, which
+    parts is for)."""
+    plain = uncommented(text, parts)
     first, sources = len(text), False
     for m in PARAMS_END.finditer(plain):
         k = next(k for k in range(1, 5) if m.group(k) is not None)
@@ -181,8 +245,7 @@ def make(shells, sh_redirect, unknown_dir):
             params = ctx.get("params") if ctx.get("full") and s == ctx["text"] else None
             return self.script_zero(s), tuple(params) if params else None
 
-        @staticmethod
-        def params_at(ctx, at):
+        def params_at(self, ctx, at):
             """[$0, $1, ...] of the text ctx holds, where they are certainly still what the command
             line gave for a command at offset at: before the first word that could change them, or
             at it where that word is the source command itself."""
@@ -190,7 +253,11 @@ def make(shells, sh_redirect, unknown_dir):
             if not params or at is None:
                 return None
             if "params_end" not in ctx:
-                ctx["params_end"] = params_end(ctx["text"])
+                try:
+                    parts = self.parsed(ctx["text"], ctx["cwd"])[1]
+                except self.sw.Unreadable:
+                    parts = None  # no comment is left out, which only ends them sooner
+                ctx["params_end"] = params_end(ctx["text"], parts)
             end, sources = ctx["params_end"]
             return params if at < end or (at == end and sources) else None
 
