@@ -495,20 +495,30 @@ spec = importlib.util.spec_from_file_location("gate", os.environ["REAL_GATE_3395
 gate = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(gate)
 real_output, real_params = gate.Judge.exact_output, gate.Judge.script_params
+def made_to_fail(which):
+    # Leaves a mark, so the suite can tell the refusal came from this failure and not another route.
+    open(os.environ["MARK_3395"] + "." + which, "w").close()
+    raise RuntimeError("made to fail by the suite")
 def failing_output(self, name, vals, *a, **k):
     if any(v and "FAILS-3395" in v for v in vals):
-        raise RuntimeError("made to fail by the suite")
+        made_to_fail("output")
     return real_output(self, name, vals, *a, **k)
-def failing_params(self, word, *a, **k):
-    if "FAILS-3395" in word:
-        raise RuntimeError("made to fail by the suite")
-    return real_params(self, word, *a, **k)
+def failing_params(self, ctx, word, *a, **k):
+    # script_params(self, ctx, word): the shell scope comes first, the script's word second.
+    if isinstance(word, str) and "FAILS-3395" in word:
+        made_to_fail("params")
+    return real_params(self, ctx, word, *a, **k)
 gate.Judge.exact_output, gate.Judge.script_params = failing_output, failing_params
 gate.main()
 PY
+MARK="$T/failing/raised"
+reached() { # reached <case> <output|params>: the copy's made failure was the one that ran
+  if [ -e "$MARK.$2" ]; then check "$1" ok; else check "$1" "the made failure in $2 was never reached"; fi
+}
 run_failing() { # run_failing <command>: judged by the copy whose readings fail on FAILS-3395
   local errf; errf="$(mktemp "${TMPDIR:-/tmp}/slack-gate-err.XXXXXXXX")"
-  OUT="$(payload Bash "$(bash_input "$1")" "$G" | REAL_GATE_3395="$DIR/slack_drafts_only_gate.py" bash "$T/failing/slack-drafts-only-gate.sh" 2>"$errf")"; RC=$?
+  rm -f "$MARK.output" "$MARK.params"
+  OUT="$(payload Bash "$(bash_input "$1")" "$G" | MARK_3395="$MARK" REAL_GATE_3395="$DIR/slack_drafts_only_gate.py" bash "$T/failing/slack-drafts-only-gate.sh" 2>"$errf")"; RC=$?
   ERR="$(cat "$errf")"; rm -f "$errf"
 }
 cp "$G/one.sh" "$G/FAILS-3395.sh"
@@ -519,11 +529,13 @@ refused "#3395 and refuses a file that posts as the gate does"
 run_failing "sed 's/ok/FAILS-3395/' lib/calm.sh > made.txt"
 refused "#3395 a reading of what sed prints that fails part way is refused, not taken as nothing to read"
 says "#3395 and that refusal says the call could not be judged" "could not judge"
+reached "#3395 and it is the made failure in the reading of what sed prints that refused it" output
 run_failing "bash one.sh lib/calm.sh"
 allowed "#3395 the copy reads a script's words as the gate does where nothing fails"
 run_failing "bash FAILS-3395.sh lib/calm.sh"
 refused "#3395 a reading of a script's words that fails is refused"
 says "#3395 and that refusal says the call could not be judged" "could not judge"
+reached "#3395 and it is the made failure in the reading of a script's words that refused it" params
 
 echo
 
