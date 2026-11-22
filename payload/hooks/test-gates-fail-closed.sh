@@ -70,6 +70,29 @@ pass=0; fail=0
 ok(){ pass=$((pass + 1)); }
 bad(){ fail=$((fail + 1)); echo "FAIL: $1" | sed '2,$s/^/  /'; }
 
+# How many gates this suite runs at once is its share of the runner, HOOK_TESTS_SLOTS, which
+# run-all-tests.sh hands every suite (claude-config#3170). A fixed 6 ran here on CI's runners of 4,
+# where the share is 2, beside the Slack drafts gate's cost cases. Read as tests/test-claude-sync.sh
+# reads it: empty is absent, anything not a whole number above zero is refused (L50), and 6 when
+# nothing granted a share, which is a run started by hand.
+. "$DIR/lib/whole-number.sh" && declare -F whole_above_zero >/dev/null || {
+  echo "FAIL: $(basename "$0"): lib/whole-number.sh is missing, so this suite's share of the runner cannot be read. Refusing to guess how many gates to run at once."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+GFC_WIDTH=6
+if [ -n "${HOOK_TESTS_SLOTS:-}" ]; then
+  if _wn_got="$(whole_above_zero "$HOOK_TESTS_SLOTS")"; then GFC_WIDTH="$_wn_got"; else
+    echo "FAIL: $(basename "$0"): HOOK_TESTS_SLOTS='$HOOK_TESTS_SLOTS' is not a positive whole number of gates this suite may run at once. Refusing rather than guessing: it arrives from run-all-tests.sh, so a value nobody can read means that is wrong."
+    printf 'SUITE-RESULT passed=0 failed=1\n'
+    exit 1
+  fi
+fi
+# The most of its runs this suite had going at once, counted at every start, so the share is
+# measured in what ran rather than read off the number above.
+GFC_MOST=0
+live_now(){ local n=0 p; for p in "$@"; do kill -0 "$p" 2>/dev/null && n=$((n + 1)); done; printf '%s' "$n"; }
+
 if [ -z "$SETTINGS" ] || [ ! -f "$SETTINGS" ]; then
   echo "test-gates-fail-closed: no settings file beside $DIR names which hooks are registered, so no gate could be enumerated." >&2
   printf 'SUITE-NOT-RUN %s\n' "needs settings.hooks.json or settings.json one level above the hooks"
@@ -839,7 +862,8 @@ decided_as(){
   esac
   return 1
 }
-# Each gate's runs go in the background, a few at a time, since each waits on its own git and python.
+# Each gate's runs go in the background, GFC_WIDTH at a time (the suite's share, read at the top),
+# since each waits on its own git and python.
 # Waited on by pid, never with a bare wait, which would wait on the watcher above too.
 k=0
 pids=()
@@ -857,7 +881,8 @@ while IFS=$'\t' read -r g tool inp extra unread; do
   mkdir -p "$R/olist"; judged_payload Bash '{"command": "ls -la"}' '{}' '' "$R/olist/repo" listfield > "$R/olist.json"
   ( for c in esc plain cut other listfield tistring toplist empty olist; do run_judged "$R/$c" "$g" "$R/$c.json"; done ) &
   pids+=("$!")
-  if [ "${#pids[@]}" -ge 6 ]; then wait "${pids[@]}"; pids=(); fi
+  live="$(live_now "${pids[@]}")"; [ "$live" -le "$GFC_MOST" ] || GFC_MOST="$live"
+  if [ "${#pids[@]}" -ge "$GFC_WIDTH" ]; then wait "${pids[@]}"; pids=(); fi
 done < "$WORK/judged"
 [ "${#pids[@]}" -eq 0 ] || wait "${pids[@]}"
 k=0
@@ -1013,13 +1038,17 @@ pids=()
 while IFS=$'\t' read -r i g lib tool inp extra unread; do
   ( standin_runs "$WORK/st$i" "$g" "$tool" "$inp" "$extra" "$WORK/hooks/whole" "$WORK/hooks/without-$lib" ) &
   pids+=("$!")
-  if [ "${#pids[@]}" -ge 6 ]; then wait "${pids[@]}"; pids=(); fi
+  live="$(live_now "${pids[@]}")"; [ "$live" -le "$GFC_MOST" ] || GFC_MOST="$live"
+  if [ "${#pids[@]}" -ge "$GFC_WIDTH" ]; then wait "${pids[@]}"; pids=(); fi
 done < "$WORK/standin-pairs"
 ( standin_runs "$WORK/st-said" canary-said.sh Bash "$PUSH_CALL" '{}' "$WORK/hooks/whole" "$WORK/hooks/without-hook-notice.sh"
   standin_runs "$WORK/st-quiet" canary-quiet.sh Bash "$PUSH_CALL" '{}' "$WORK/hooks/whole" "$WORK/hooks/without-hook-notice.sh"
   standin_runs "$WORK/st-open" canary-open.sh Bash "$PUSH_CALL" '{}' "$WORK/hooks/whole" "$WORK/hooks/without-this-mac.sh" ) &
 pids+=("$!")
+live="$(live_now "${pids[@]}")"; [ "$live" -le "$GFC_MOST" ] || GFC_MOST="$live"
 wait "${pids[@]}"
+[ "$GFC_MOST" -le "$GFC_WIDTH" ] && ok \
+  || bad "#3170 this suite had $GFC_MOST of its gate runs going at once, more than its share of $GFC_WIDTH (HOOK_TESTS_SLOTS='${HOOK_TESTS_SLOTS:-}', 6 when unset), so it took processors run-all-tests.sh gave to the suites beside it"
 
 why="$(standin_verdict "$WORK/st-said" "notice canary")"
 [ -z "$why" ] && ok || bad "#2634 canary: a gate whose stand in says the notice as the library's header gives fails the check: $why"
