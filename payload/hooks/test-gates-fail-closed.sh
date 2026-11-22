@@ -78,24 +78,34 @@ if [ -z "$SETTINGS" ] || [ ! -f "$SETTINGS" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-echo "every gate refuses when a library it sources cannot be loaded (claude-config#1900)"
+[ "${1:-}" = --list-found ] || echo "every gate refuses when a library it sources cannot be loaded (claude-config#1900)"
 
-# The PreToolUse hooks that can refuse: registered there, and holding an exit 2 somewhere.
-python3 - "$SETTINGS" > "$WORK/pre" <<'PY'
+# The hooks registered under PreToolUse, or with block only those registered with onFailure block.
+# A function, so the cases below hold the scans to fixture settings as well as the real ones (#3414).
+registered_pre(){ # registered_pre <settings> [block] -> each hook file named once, in the order registered
+python3 - "$@" <<'PY'
 import json, re, sys
 d = json.load(open(sys.argv[1]))
+only_block = len(sys.argv) > 2 and sys.argv[2] == "block"
 seen = set()
 for g in d.get("hooks", {}).get("PreToolUse", []):
     for h in g.get("hooks", []):
         m = re.search(r"hooks/([A-Za-z0-9_.-]+\.sh)", h.get("command", ""))
-        if m and m.group(1) not in seen:
+        if m and (not only_block or h.get("onFailure") == "block") and m.group(1) not in seen:
             seen.add(m.group(1))
             print(m.group(1))
 PY
+}
+# The PreToolUse hooks that can refuse: registered there, and holding an exit 2 somewhere.
+refusing_gates(){ # refusing_gates <settings> <hooks dir>
+  local g
+  registered_pre "$1" | while IFS= read -r g; do
+    if [ -f "$2/$g" ] && grep -q 'exit 2' "$2/$g"; then printf '%s\n' "$g"; fi
+  done
+}
+registered_pre "$SETTINGS" > "$WORK/pre"
 GATES=()
-while IFS= read -r g; do
-  [ -f "$DIR/$g" ] && grep -q 'exit 2' "$DIR/$g" && GATES+=("$g")
-done < "$WORK/pre"
+while IFS= read -r g; do GATES+=("$g"); done < <(refusing_gates "$SETTINGS" "$DIR")
 [ "${#GATES[@]}" -ge 20 ] && ok || bad "only ${#GATES[@]} refusing PreToolUse gates were found in $SETTINGS, so the enumeration is reading the wrong thing"
 
 # A source line whose failure branch is a bare exit 0 or return 0, on the line itself or on the
@@ -332,6 +342,49 @@ printf '%s\n' \
 [ -z "$(libs_of "$WORK/probe-gate4")" ] && ok \
   || bad "#2634 libs_of counts an advisory hook's stand ins as needed, which the advisory section does not ask of them: it listed [$(libs_of "$WORK/probe-gate4" | tr '\n' ' ')]"
 
+# The gates the run below takes each library away from: the refusing ones that need a library.
+library_gates(){ # library_gates <settings> <hooks dir>
+  local g
+  refusing_gates "$1" "$2" | while IFS= read -r g; do
+    if [ -n "$(libs_of "$2/$g" gate)" ]; then printf '%s\n' "$g"; fi
+  done
+}
+library_gates "$SETTINGS" "$DIR" > "$WORK/needing"
+
+# The tables of this suite are the recorded list of what it judges, held both ways against its scans
+# (#3414, the mechanism #3411 gave test-sleep-silence.sh). A gate the scan finds and the table lacks
+# fails, and so does a gate the table names that the scan no longer finds: its registration removed
+# from the settings, or its refusal or its library moved where the scan cannot see it. Either way the
+# gate fails by name until the same change takes its row out of the table, where a reviewer sees it.
+# vanished_from_scan <found> <table> <scan> -> per gate the table names, "ok<TAB>check" or
+# "FAIL<TAB>check<TAB>why"
+vanished_from_scan(){
+  awk -F '\t' -v scan="$3" '
+    FILENAME == ARGV[1] { found[$1] = 1; next }
+    $1 == "" || seen[$1]++ { next }
+    ($1 in found) { printf "ok\t%s is still found by the scan %s\n", $1, scan; next }
+    { printf "FAIL\t%s is still found by the scan %s\tthe table of this suite names it and the scan no longer finds it: its registration was removed, or its refusal or its library moved where the scan cannot see it. Find where its refusal went, and take its row out of the table in the same change\n", $1, scan }
+  ' "$1" "$2"
+}
+tally_verdicts(){ # tally_verdicts <file of verdict lines>
+  local verdict name why
+  while IFS=$'\t' read -r verdict name why; do
+    [ -n "$verdict" ] || continue
+    if [ "$verdict" = ok ]; then ok; else bad "$name: ${why:-no reason given}"; fi
+  done < "$1"
+}
+LIBRARY_SCAN="for refusing PreToolUse gates that need a library"
+BLOCKING_SCAN="for PreToolUse gates registered with onFailure block"
+# `bash payload/hooks/test-gates-fail-closed.sh --list-found` prints what each scan finds in this
+# tree, the gates each table must name, and runs no check.
+if [ "${1:-}" = --list-found ]; then
+  sed 's/^/library\t/' "$WORK/needing"
+  registered_pre "$SETTINGS" block | sed 's/^/blocking\t/'
+  exit 0
+fi
+vanished_from_scan "$WORK/needing" "$WORK/table" "$LIBRARY_SCAN" > "$WORK/vanished-library"
+tally_verdicts "$WORK/vanished-library"
+
 # Each run is fed from a file rather than a pipe from python3, which a gate leaving early would
 # kill, and in a folder named by a number: a folder named after the gate or the library would put
 # push, merge or payload into the payload's cwd and so into every command's raw text.
@@ -353,11 +406,10 @@ run_gate(){ # run_gate <gate copy> <command> <cwd> -> OUT and RC
   OUT="$( cd "$3" && env -u WRAPPED_REFUSAL_LEDGER_DIR HOME="$home" FRESH_WORKTREE_STATE_DIR="$home/fresh-worktree-state" bash "$1" < "$WORK/in.json" 2>&1 )"; RC=$?
 }
 n=0
-for g in "${GATES[@]}"; do
+for g in $(cat "$WORK/needing"); do
   # Only a library the gate needs: one it sources as optional is not taken away here. One it loads
   # with an examined stand in is taken away in the last section instead (#2634).
   libs="$(libs_of "$DIR/$g" gate)"
-  [ -n "$libs" ] || continue
   row="$(awk -F '\t' -v g="$g" '$1 == g' "$WORK/table")"
   if [ -z "$row" ]; then
     bad "$g sources a library and can refuse, and is not in this suite's table, so nothing runs it with that library gone"
@@ -574,17 +626,7 @@ else:
 print(json.dumps(d))' "$1" "$2" "$3"
 }
 # The refusing gates, PreToolUse hooks registered with onFailure block, are the section below's.
-python3 - "$SETTINGS" > "$WORK/blocking" <<'PY'
-import json, re, sys
-d = json.load(open(sys.argv[1]))
-seen = set()
-for g in d.get("hooks", {}).get("PreToolUse", []):
-    for h in g.get("hooks", []):
-        m = re.search(r"hooks/([A-Za-z0-9_.-]+\.sh)", h.get("command", ""))
-        if m and h.get("onFailure") == "block" and m.group(1) not in seen:
-            seen.add(m.group(1))
-            print(m.group(1))
-PY
+registered_pre "$SETTINGS" block > "$WORK/blocking"
 for h in "${ALL_HOOKS[@]}"; do
   grep -q -x -F "$h" "$WORK/blocking" && continue
   libs="$(libs_of "$DIR/$h" | grep -v -x 'hook-notice.sh')"
@@ -711,6 +753,10 @@ while IFS= read -r g; do
   awk -F '\t' -v g="$g" '$1 == g { f = 1 } END { exit !f }' "$WORK/judged" && ok \
     || bad "$g is registered to block and is not in this suite's table of judged calls, so nothing runs it on a payload it cannot parse or one holding a lone surrogate escape"
 done < "$WORK/blocking"
+# And every gate in the table is still registered to block, so one whose registration went is not
+# judged here as if it still guarded anything (#3414).
+vanished_from_scan "$WORK/blocking" "$WORK/judged" "$BLOCKING_SCAN" > "$WORK/vanished-blocking"
+tally_verdicts "$WORK/vanished-blocking"
 
 # judged_payload <tool> <input> <extra> <mark> <cwd> <whole|cut>: the call as JSON TEXT, with @@ as
 # <mark>, which is written into the text after encoding so that \ud800 stays the escape it is in a
@@ -1027,6 +1073,67 @@ while IFS= read -r g; do
     case "$(cat "$R/decision")" in "exit 0, decision none"*) ok ;; *) bad "#2057 advisory $g refused or failed on an unreadable payload ($c): $(cat "$R/decision")" ;; esac
   done
 done < "$WORK/pre"
+
+# ---------------------------------------------------------------------------
+echo "a gate this suite judged cannot drop out of its scan unnoticed (claude-config#3414)"
+
+# The scans and the tables held to fixture trees of two gates, so each case is its own small tree,
+# the real settings are never edited, and no gate is run: only the scans read the files.
+# fx_tree <name> <how gate-b.sh is registered: block, plain or none> <where its refusal is: here or lib>
+fx_tree(){
+  local t="$WORK/fx-$1" reg=""
+  mkdir -p "$t/hooks"
+  case "$2" in
+    block) reg=', {"type": "command", "command": "__CLAUDE_HOME__/hooks/gate-b.sh", "onFailure": "block"}' ;;
+    plain) reg=', {"type": "command", "command": "__CLAUDE_HOME__/hooks/gate-b.sh"}' ;;
+  esac
+  printf '{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "__CLAUDE_HOME__/hooks/gate-a.sh", "onFailure": "block"}%s]}]}}\n' "$reg" > "$t/settings.json"
+  printf '%s\n' '. "$HOOK_DIR/lib/fx-lib.sh" 2>/dev/null || { echo "missing fx-lib.sh" >&2; exit 2; }' 'fx_judge && exit 2' > "$t/hooks/gate-a.sh"
+  if [ "$3" = here ]; then cp "$t/hooks/gate-a.sh" "$t/hooks/gate-b.sh"
+  else printf '%s\n' '. "$HOOK_DIR/lib/fx-lib.sh" 2>/dev/null || fx_refuse_unloaded fx-lib.sh' 'fx_judge_and_refuse' > "$t/hooks/gate-b.sh"; fi
+}
+# fx_judge <name> <gates in the tables, one per line> -> the FAIL lines of both checks for that tree
+fx_judge(){
+  local t="$WORK/fx-$1"
+  printf '%s\n' "$2" | sed '/^$/d; s/$/\tcall\t-/' > "$t/table"
+  library_gates "$t/settings.json" "$t/hooks" > "$t/needing"
+  registered_pre "$t/settings.json" block > "$t/blocking"
+  { vanished_from_scan "$t/needing" "$t/table" "$LIBRARY_SCAN"
+    vanished_from_scan "$t/blocking" "$t/table" "$BLOCKING_SCAN"; } | awk -F '\t' '$1 == "FAIL"'
+}
+FX_BOTH="gate-a.sh
+gate-b.sh"
+
+fx_tree both block here
+[ "$(library_gates "$WORK/fx-both/settings.json" "$WORK/fx-both/hooks" | tr '\n' ' ')" = "gate-a.sh gate-b.sh " ] \
+  && ok || bad "#3414 the library scan should find both gates of the fixture tree (the control), found: $(library_gates "$WORK/fx-both/settings.json" "$WORK/fx-both/hooks" | tr '\n' ' ')"
+out="$(fx_judge both "$FX_BOTH")"
+[ -z "$out" ] && ok || bad "#3414 a tree whose tables name the gates its scans find should pass (the control): $out"
+[ "$(vanished_from_scan "$WORK/fx-both/needing" "$WORK/fx-both/table" "$LIBRARY_SCAN" | awk -F '\t' '$1 == "ok"' | wc -l | tr -d ' ')" = 2 ] \
+  && ok || bad "#3414 the reverse check should report each of the two gates it found as still found (the control): $(vanished_from_scan "$WORK/fx-both/needing" "$WORK/fx-both/table" "$LIBRARY_SCAN")"
+
+fx_tree unregistered none here
+out="$(fx_judge unregistered "$FX_BOTH")"
+case "$out" in
+  *"gate-b.sh is still found by the scan $LIBRARY_SCAN"*"gate-b.sh is still found by the scan $BLOCKING_SCAN"*) ok ;;
+  *) bad "#3414 a gate whose registration was removed, with the tables left alone, should fail by name in both checks; they said: ${out:-nothing}" ;;
+esac
+out="$(fx_judge unregistered "gate-a.sh")"
+[ -z "$out" ] && ok || bad "#3414 a gate removed with its rows taken out of the tables in the same change should pass: $out"
+
+fx_tree movedrefusal block lib
+out="$(fx_judge movedrefusal "$FX_BOTH")"
+case "$out" in
+  *"gate-b.sh is still found by the scan $LIBRARY_SCAN"*) ok ;;
+  *) bad "#3414 a gate whose refusal moved into a library, so the scan no longer sees it as a gate, should fail by name; it said: ${out:-nothing}" ;;
+esac
+
+fx_tree advisory plain here
+out="$(fx_judge advisory "$FX_BOTH")"
+case "$out" in
+  *"gate-b.sh is still found by the scan $BLOCKING_SCAN"*) ok ;;
+  *) bad "#3414 a gate no longer registered with onFailure block should fail by name; it said: ${out:-nothing}" ;;
+esac
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
