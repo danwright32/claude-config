@@ -3846,6 +3846,37 @@ test('#3416: text that may run after the definition and that the guard cannot re
   expect(wrong).toEqual([])
 })
 
+test('#3416: a comment that spells a definition or a read in command is never probed, so it cannot move what stands at the top', async () => {
+  const RUN = 'run() { true; }\n'
+  const CALL = 'run app/page.tsx\n'
+  const lib = { '/s/lib.sh': 'lib_fn() { echo "$1"; }\n' }
+  const wrong: { text: string; left: string[] }[] = []
+  const want = async (text: string, expected: string[]): Promise<void> => {
+    const left = await readLeft(text, lib)
+    if (left.join('\n') !== expected.join('\n')) wrong.push({ text, left })
+  }
+  // A probe written into a comment ends the comment, and the rest of the line is read as commands.
+  // A `}` there closed a group the script never closed, so what stood in a function looked as if it
+  // stood at the top: a definition the shell makes only when `wrap` is called, and a file read in
+  // only when `load` is.
+  await want(`# usage: a; b() { c; }; }\nwrap () {\n  true\n  run() { true; }\n}\nwrap\n${CALL}`, ['run /s/app/page.tsx'])
+  await want('# see (x). y; }\nload () {\n  true\n  . lib.sh\n}\nload\nlib_fn app/page.tsx\n', ['lib_fn /s/app/page.tsx'])
+  // The other way, the shape of a real suite's comment: a sentence ending in a bracket and a full
+  // stop, with an issue number in brackets, left the helper below it looking as if it stood in a group.
+  const said = '# by $cmd (its argument or LOAD_AVERAGE_CMD). One more is a command nobody has looked at (#3134), and one\n'
+  await want(`${said}${RUN}${CALL}`, [])
+  await want(`${said}. lib.sh\nlib_fn app/page.tsx\n`, [])
+  // A definition or a read in command typed after a `#` on its own line may be inside a comment:
+  // it is not probed, and so is never at the top.
+  await want(`x=1 # then; run() { true; }\n${CALL}`, ['run /s/app/page.tsx'])
+  await want('x=1 # then; . lib.sh\nlib_fn app/page.tsx\n', ['lib_fn /s/app/page.tsx'])
+  // The controls: a `#` that starts no comment on the line before, and one inside the helper's body.
+  await want(`n=\${#list[@]}\n${RUN}${CALL}`, [])
+  await want(`run() { true; } # the helper\n${CALL}`, [])
+  await want('. lib.sh # the library\nlib_fn app/page.tsx\n', [])
+  expect(wrong).toEqual([])
+})
+
 test('#3416: the files a suite reads in are counted against the limit, and past it no more are read from the disk', async () => {
   // Counted in characters read from the disk, never timed. Without the count every file is read:
   // sixty files of this size are 6.4 million characters, in a hook that runs before the command.

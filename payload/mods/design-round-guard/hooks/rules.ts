@@ -2708,7 +2708,12 @@ export const withoutOwnCalls = async (given: OwnCallIo, text: string, commands: 
       const typed = u.typed.map((t, def) => ({ at: t.at, def }))
       const taken = new Set(typed.map(t => t.at))
       const read = u !== script || marked ? [] : [...text.matchAll(/(?<![^\n;&|(){}])[ \t]*(?:\.|source)[ \t]/g)].map(m => ({ at: m.index as number, def: -1 })).filter(r => !taken.has(r.at))
-      const all = [...typed, ...read].sort((a, b) => a.at - b.at)
+      // A place typed after a `#` that may start a comment on its line is not probed, and so is
+      // never at the top: a probe written into a comment ends the comment, the rest of the line is
+      // read as commands, and a `}` there closes a group the text never closed, after which what
+      // stands in a function reads as standing at the top.
+      const maybeComment = (at: number): boolean => /(?:^|[\s;&|()<>])#/.test(u.text.slice(u.text.lastIndexOf('\n', at - 1) + 1, at))
+      const all = [...typed, ...read].filter(p => !maybeComment(p.at)).sort((a, b) => a.at - b.at)
       const { cmds, starts } = await probe(
         u.text,
         all.map(p => p.at),
