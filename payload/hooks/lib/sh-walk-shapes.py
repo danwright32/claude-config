@@ -485,7 +485,10 @@ def make(sh_special, sh_param, unknown_dir=None):
                     name = os.path.basename(vals[0]) if vals[0] is not None else None
                 out = None
                 if not odd and name and not any(re.fullmatch(r"(?:1|&)?(?:>>|>\||>&|>)", op) for op, _ in redirs):
-                    out = self.sh_prints(name, args, vals, d, self.stdin_of(d, text, whole, redirs, own=False))
+                    # Believed only of the system's own printf, echo or cat (believed, in
+                    # lib/exact-output.py, claude-config#3440): `./cat calm.sh | bash`.
+                    out = self.believed(self.sh_prints(name, args, vals, d, self.stdin_of(d, text, whole, redirs, own=False)),
+                                        vals[0], name, text)
             finally:
                 self.shell["at"] = saved
             return self.held_unknown(name or "a command") if out is None else out
