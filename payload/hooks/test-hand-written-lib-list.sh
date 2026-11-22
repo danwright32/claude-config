@@ -145,10 +145,11 @@ printf "const m = require('../elsewhere.js');\n" > "$TMPROOT/jsbad/outside.js"
 said="$(python3 "$INSTALL" "$TMPROOT/jsbad" "$TMPROOT/jsbaddest3" outside.js 2>&1)"; rc=$?
 check_eq "#2298 the install refuses a require reaching outside the helper's folder, naming it" \
   "1 yes" "$rc $(says "outside.js line 1 requires ../elsewhere.js, which could not be resolved to a file beside it" "$said")"
-# The real helpers: changelog-entry.test.js requires changelog-entry.js through path.join(__dirname).
+# The real helpers: changelog-entry.test.js requires changelog-entry.js through path.join(__dirname),
+# and changelog-entry.js requires dev-update-registry.js for its command line (claude-config#3439).
 said="$(python3 "$INSTALL" "$DIR/lib" "$TMPROOT/ce" changelog-entry.test.js 2>&1)"; rc=$?
-check_eq "#2298 installing changelog-entry.test.js brings the changelog-entry.js it requires" \
-  "0 changelog-entry.js changelog-entry.test.js " \
+check_eq "#2298 installing changelog-entry.test.js brings the changelog-entry.js it requires, and the dev-update-registry.js that one requires" \
+  "0 changelog-entry.js changelog-entry.test.js dev-update-registry.js " \
   "$rc $(ls "$TMPROOT/ce" | tr '\n' ' ')${said:+ said: $said}"
 # Every JavaScript helper in lib/ installs on its own: each require in every one resolves.
 every_js="$(cd "$DIR/lib" && ls -- *.js)"

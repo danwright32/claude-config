@@ -9467,7 +9467,8 @@ hook's request beneath it to run the call again (whether the session itself may 
 is "One unchanged resend after no verdict" in `payload/CLAUDE.md`, that rule's one home, #3224, and
 a call the check gave no verdict on that is sent again and runs is noted `redone`); and in every
 session the ban
-list in `hooks/overnight.ts` is refused by effect (issue, label and milestone writes, every gh write
+list in `hooks/overnight.ts` is refused by effect (issue, label and milestone writes, with one label
+on a PR excepted since #3439, below; every gh write
 but a comment, opening, readying, retitling or merging a PR on the checkout's own repository, any
 write whose repository cannot be resolved, whatever `rtk proxy` runs judged as the same command
 written plainly (mod-kit's reader reads it so for every mod since #2983, and a single word the shell
@@ -9556,7 +9557,30 @@ no status pending or failed. Anything GitHub does not answer, a base branch requ
 all, and a merge the night would not let run anyway (the repository waits, or a merge there deploys)
 refuse; any other `adminMerge` value makes the whole file unreadable. Dan's list, confirmed on
 2026-10-07, is in that file and summarised under "Sleep mode" below, without naming the
-repositories (#2112). At
+repositories (#2112). One label may be set on a PR overnight (#3439, judged in
+`hooks/requiredlabel.ts`): the label the repository's own merge gate requires. On 2026-11-21 the ban
+on PR labels refused `gh pr create ... --label changelog/technical` in a project where
+`require-changelog-tag.sh` refuses a merge without one changelog label, so the PR was opened without
+it, went green and waited ten and a half hours for the morning. Allowed now, on the checkout's own
+repository only: `gh pr create` with `--label` or `-l`, and `gh pr edit <number or the PR's own
+link> --add-label` on a PR the session's own record says it opened (the `opened` list winding down
+keeps, written from the link each `gh pr create` printed; GitHub's author is the same account for
+every session, so it cannot tell them apart), each naming exactly one label. Which labels is the
+gate's answer, never a list in the mod: the mod runs `node ~/.claude/hooks/lib/changelog-entry.js
+required-labels <owner/name>`, which answers `required` with every label the gate takes and whether
+each needs a sentence in the description, `not-required` for a repository nobody gated, or `unknown`
+with why (a registry missing or unreadable, a repository listed with no start date or a bad one). A
+label the gate says needs a sentence a manager reads (`changelog/visible`) may be set like the
+others (Dan, 2026-11-22, by picker: "Also allow changelog/visible"), so a session can merge
+overnight a PR whose changelog sentence he has not read. The gate still refuses that merge while
+the description has no such sentence, and the result of the call that sets the label says so, to
+the session or the agent that made it. Still refused, in the words it always was (`set labels
+or a milestone on a PR`), with the reason in brackets wherever the judge was reached: any other
+label, a second label beside it, `--remove-label`, a milestone, a PR the session did not open or
+does not name by number, a repository whose gate requires no label, a gate or a record that cannot
+be read, and every label write through `gh issue edit`, `gh label` or `gh api`. Both sides are
+held to one committed set of cases, `tests/gate-label-fixtures.ts`, read by the gate's suite and
+the mod's. At
 `/sleep` each repository a worker with a goal is in that the file does not decide is asked about
 (each question waits ten minutes, a chosen limit, not a measurement; the answer written into this
 Mac's own file, so it is asked once on each Mac; "Go to sleep, no more questions" asks nothing
@@ -10538,7 +10562,11 @@ reaches 95 percent; if it is already there when sleep starts, each session stops
 end and the report says why.
 
 **What it will not do overnight.** Ask you anything; file or edit issues, labels or milestones
-(a comment is allowed); add lessons; merge or deploy anywhere the list below says wait, or anywhere it has no
+(a comment is allowed, and so is the one label a project's own merge gate requires on a pull
+request the session opened, such as `changelog/technical` or `changelog/visible` where a merge is
+refused without a changelog label; a pull request labelled `changelog/visible` can then merge
+overnight with a changelog sentence you have not read, as you chose on 2026-11-22); add lessons;
+merge or deploy anywhere the list below says wait, or anywhere it has no
 answer for; push straight to a default branch; force push or delete branches; switch branches in
 your main checkout; write to a database (Supabase, psql); use claude.ai, Chrome or PostHog tools that
 write; run `claude-sync` pull or install; retry anything Claude Code's own safety check refused; or
