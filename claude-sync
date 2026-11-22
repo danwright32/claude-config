@@ -5763,8 +5763,8 @@ LOOP_INPUT
   tokenize_payload
   # The record of the last refusal as it stood BEFORE either scan, read by record_send_refused to
   # count refusals in a row (claude-config#2530). The secret scan clears the record when it passes,
-  # before the work names scan runs, so without this a run of work names refusals would count one
-  # each time. Local, so it lives for these two scans only.
+  # before the work names scan and the home path check run, so without this a run of their refusals
+  # would count one each time. Local, so it lives for these scans only.
   local SEND_REFUSED_PRIOR=""
   [ -z "${SEND_REFUSED_FILE:-}" ] || SEND_REFUSED_PRIOR="$(head -n 1 "$SEND_REFUSED_FILE" 2>/dev/null || true)"
   scan_secrets   # never let a credential reach the shared remote  # LAST, once everything this send would carry is in the payload, so it sees the finished state
@@ -5774,6 +5774,8 @@ LOOP_INPUT
   if [ -n "$SEND_REFUSED" ]; then return 0; fi
   scan_work_names  # nor a work organisation's name (claude-config#1568), on the same finished state
   if [ -n "$SEND_REFUSED" ]; then return 0; fi
+  scan_home_paths  # nor a file main's own home path check would fail (claude-config#3465)
+  if [ -n "$SEND_REFUSED" ]; then return 0; fi
   refuse_resurrected_deletions
 }
 
@@ -5781,15 +5783,17 @@ LOOP_INPUT
 #   when \t found \t why \t count \t first [\t atleast]
 # when    the epoch of the latest refusal
 # found   what the scan found, "path:line ..." or the secret scan's file list, empty when it found
-#         nothing because it could not look
-# why     empty for a possible secret, else unlisted, work-names or work-names-unjudged
+#         nothing because it could not look; for the home path check, how many files and the first
+#         few as "path:line" (claude-config#3465)
+# why     empty for a possible secret, else unlisted, work-names, work-names-unjudged, home-paths
+#         or home-paths-unjudged
 # count   refused sends in a row since a send last got past both scans
 # first   the epoch of the first of them
 # atleast present when the run began under a record from before the count existed, so count is a
 #         floor rather than a measurement (L11)
 # One writer, so the count cannot be kept by one scan and lost by the other. Removed by the secret
-# scan whenever it passes or is skipped, and the work names scan runs after it and writes only on a
-# refusal, so the record stands exactly while sends are being refused. Read by sync_stuck_records,
+# scan whenever it passes or is skipped, and the work names scan and the home path check run after
+# it and write only on a refusal, so the record stands exactly while sends are being refused. Read by sync_stuck_records,
 # which is what status and the per prompt notice report it from, and by pending_edits_cause.
 record_send_refused(){   # $1 = what was found  $2 = why
   [ -n "${SEND_REFUSED_FILE:-}" ] || return 0
@@ -5919,6 +5923,164 @@ scan_work_names(){
     record_send_refused "" work-names-unjudged
   fi
   if [ "${SCAN_REFUSAL_DEFERRED:-0}" = "1" ]; then SEND_REFUSED="$refusal"; SEND_REFUSED_BY="the work names scan"; return 0; fi
+  die "$refusal"
+}
+
+# Refuse to publish a file that fails the home path check (claude-config#3465). On 2026-11-22 a send
+# pushed 126 scratch files to main, written by a measuring session into folders named run under one
+# Mac's config. 100 of them named that Mac's home, so hooks/check-home-paths.sh failed in main's own
+# run and in every pull request brought up to date with it, and nothing had stopped the push: the
+# check ran only afterwards, on GitHub. This asks the same check, the one implementation of the rule (L370),
+# before anything is committed, on the finished payload, where a path under this Mac's own config
+# has already become the placeholder and what is left is what main's run would read.
+#
+# ONLY THE FILES THIS SEND CARRIES are read: every path under payload that differs from the last
+# commit, untracked ones included, which is what commit_if_changed is about to add, and the files
+# changed by commits the shared repo does not hold yet. Without git the payload folder is all there
+# is, and all of it is read. A file the shared repo already holds unchanged is not this send's to
+# answer for, so a send that fixes something else, or removes the file, is never held by it. The
+# check is handed the list (--files0-from) rather than walking the tree, which is what keeps the
+# cost per send to the files that changed.
+#
+# THE WHOLE SEND IS HELD, never the failing files alone. A send is one commit of everything that
+# changed, and the other Mac mirrors what the payload holds: carrying a hook without the file it
+# reads, or a change without the half that named a home, leaves that Mac with part of a change, and
+# nothing on it would say which part. So this refuses at the same place, and with the same record,
+# as the two scans above: nothing is committed, nothing is pushed, and nothing in this Mac's own
+# config is touched. Taking the files out of the config, or writing the path from the home folder,
+# is what clears it, and the next send carries everything that was held.
+#
+# There is no override. The check's own exception is a marker on the line it excuses, which is
+# visible in the file and is the check's to honour, never a variable set around a send.
+#
+# A check that could not run, or is not beside this copy of claude-sync, judged nothing, so that is
+# a refusal too, said as itself (L98, L11). Run with the default home roots whatever the caller's
+# environment says, since CLAUDE_HOME_PATH_ROOTS is the check's seam for its own suite.
+#
+# NOT A HOT LOOP. The change watcher sends on every burst of edits, and a session writing scratch
+# makes one every few seconds, so the same refusal would be written to the log, and posted as a
+# desktop notice, for as long as that session ran. In the watcher a standing hold is said in full
+# once, then in one short line pointing at status, until its files change, it clears, or a day
+# passes (the store send_hook_tests keeps for its own holds, claude-config#3179). Every refusal is
+# still counted in the record, so status says how many sends in a row were held and since when.
+# What the check printed is kept in one file, each line cut to its first 500 characters, replaced
+# by the next refusal and removed when a send gets through, because a refusal naming a hundred files
+# line by line is not a sentence.
+HOME_PATH_HOLD_KEY="home-path-check"   # this check's name in the told record and the kept output
+HOME_PATH_SHOWN=5                      # how many files a refusal names before it counts the rest
+home_path_check_lib(){ printf '%s' "$SYNC_SELF_PAYLOAD/hooks/check-home-paths.sh"; }
+home_path_check_kept(){ printf '%s' "$SEND_OUTPUT_DIR/$HOME_PATH_HOLD_KEY.log"; }
+# A send got past the check, or had nothing for it to read: the hold it was saying is over.
+home_path_hold_over(){
+  rm -f "$(home_path_check_kept)" 2>/dev/null || true
+  if [ -s "$SEND_HOLDS_TOLD_FILE" ] && awk -F'\t' -v s="$HOME_PATH_HOLD_KEY" '$2 == s { f = 1 } END { exit !f }' "$SEND_HOLDS_TOLD_FILE" 2>/dev/null; then
+    send_hold_told_write "$HOME_PATH_HOLD_KEY" "$(send_hold_now)"
+  fi
+  return 0
+}
+scan_home_paths(){
+  [ -d "$PAYLOAD" ] || return 0
+  local lib list="" rels="" listing="" own="" up="" rel n=0 outf="" rc=0 unjudged=""
+  lib="$(home_path_check_lib)"
+  if [ ! -f "$lib" ]; then
+    unjudged="the check is not beside this copy of claude-sync ($lib), which is how a copy run outside its own checkout looks. Run claude-sync from its checkout, where the check ships."
+  elif [ "${SYNC_NO_GIT:-0}" != "1" ] && [ -e "$SYNC_REPO/.git" ]; then
+    if git -C "$SYNC_REPO" rev-parse -q --verify HEAD >/dev/null 2>&1; then
+      listing="$(uncommitted_paths payload)" || unjudged="git could not list what differs from the last commit under payload, so the files this send would publish are not known."
+      if [ -z "$unjudged" ] && up="$(git -C "$SYNC_REPO" rev-parse --verify -q '@{upstream}' 2>/dev/null)"; then
+        own="$(git -C "$SYNC_REPO" -c core.quotePath=false diff --name-only --diff-filter=d "$up...HEAD" -- payload 2>&1)" \
+          || unjudged="git could not list the files this clone's unsent commits changed: $(printf '%s' "${own:0:300}" | tr '\n' ' ')"
+      fi
+    else
+      # A clone with no commit yet: everything under payload is about to become its first.
+      listing="$(git -C "$SYNC_REPO" -c core.quotePath=false ls-files --cached --others --exclude-standard -- payload 2>&1)" \
+        || unjudged="git could not list the files under payload: $(printf '%s' "${listing:0:300}" | tr '\n' ' ')"
+    fi
+    [ -n "$unjudged" ] || rels="$(printf '%s\n%s\n' "$listing" "$own" | sed -n 's|^payload/||p' | sort -u)" || true
+  else
+    rels="$(cd "$PAYLOAD" && find . -type f | sed 's|^\./||' | sort)" \
+      || unjudged="the files in $PAYLOAD could not be listed, so the files this send would publish are not known."
+  fi
+  if [ -z "$unjudged" ]; then
+    list="$(scratch_file)" || die "could not make a scratch file for the home path check, so nothing is sent."
+    # Only the files that exist: a deletion is not content, and it is how a failing file leaves.
+    while IFS= read -r rel; do
+      [ -n "$rel" ] || continue
+      if [ -f "$PAYLOAD/$rel" ]; then printf '%s\0' "$rel"; n=$(( n + 1 )); fi
+    done > "$list" <<LOOP_INPUT
+$rels
+LOOP_INPUT
+    if [ "$n" -eq 0 ]; then
+      rm -f "$list"
+      home_path_hold_over
+      return 0
+    fi
+    # Into a file, never a variable: the check prints each line it found whole, and the scratch
+    # files of 2026-11-22 held lines of 1.6 MB each, 11.5 MB in all, which the shell copies on
+    # every use where awk reads a file once.
+    outf="$(scratch_file)" || { rm -f "$list"; die "could not make a scratch file for the home path check, so nothing is sent."; }
+    env -u CLAUDE_HOME_PATH_ROOTS bash "$lib" --files0-from "$list" "$PAYLOAD" > "$outf" 2>&1 && rc=0 || rc=$?
+    rm -f "$list"
+    if [ "$rc" -eq 0 ]; then
+      rm -f "$outf"
+      home_path_hold_over
+      return 0
+    fi
+  fi
+  # One "path:line" per file the check reported, read off the lines it prints under the root this
+  # run handed it, never off its prose. Exit 1 naming no file is a check that broke, not a finding.
+  local hits="" nfiles=0 shown more found said kept="" keptfile digest now told=0 refusal
+  if [ -z "$unjudged" ] && [ "$rc" -eq 1 ]; then
+    hits="$(awk -v p="  $PAYLOAD/" '
+      index($0, p) == 1 { s = substr($0, length(p) + 1, 4096); n = split(s, a, ":")
+        if (n >= 2 && !(a[1] in seen)) { seen[a[1]] = 1; print a[1] ":" a[2] } }' "$outf" | sort | tr '\t' ' ')" || hits=""
+    nfiles="$(printf '%s\n' "$hits" | awk 'NF' | wc -l | tr -d ' ')"
+    case "$nfiles" in ''|*[!0-9]*) nfiles=0 ;; esac
+  fi
+  if [ -z "$unjudged" ] && [ "$nfiles" -eq 0 ]; then
+    unjudged="the check ended with exit $rc without naming a file it found at fault, and said: $(head -c 400 "$outf" 2>/dev/null | tr '\n\t' '  ')"
+  fi
+  if [ -n "$unjudged" ]; then
+    [ -z "$outf" ] || rm -f "$outf"
+    refusal="the home path check could not judge what this send would publish, so nothing is sent: $unjudged"
+    record_send_refused "" home-paths-unjudged
+    if [ "${SCAN_REFUSAL_DEFERRED:-0}" = "1" ]; then SEND_REFUSED="$refusal"; SEND_REFUSED_BY="the home path check"; return 0; fi
+    die "$refusal"
+  fi
+  shown="$(printf '%s\n' "$hits" | awk -v m="$HOME_PATH_SHOWN" 'NF && n < m { printf "%s%s", (n++ ? " " : ""), $0 }')"
+  more=$(( nfiles - HOME_PATH_SHOWN ))
+  local files_words="$nfiles files" fails="fail" where="at $shown"
+  [ "$nfiles" -eq 1 ] && { files_words="1 file"; fails="fails"; }
+  [ "$more" -gt 0 ] && where="the first $HOME_PATH_SHOWN at $shown and $more more"
+  found="$files_words, $where"
+  record_send_refused "$found" home-paths
+  # What the check printed, kept for whoever acts on the refusal: every line it reported, each cut
+  # to its first 500 characters, which holds the file, the line number and the start of the line.
+  # The reason in the check's own words is read off the same file, from the line it heads each
+  # rule's findings with.
+  said="$(awk '/^check-home-paths: these lines / { sub(/^check-home-paths: /, ""); sub(/:$/, ""); printf "%s%s", (n++ ? "; " : ""), $0 }' "$outf")" || said=""
+  if keptfile="$(scratch_file)" && LC_ALL=C cut -c1-500 "$outf" > "$keptfile"; then
+    send_output_keep "$HOME_PATH_HOLD_KEY" "$keptfile" fail
+    if [ -f "$(home_path_check_kept)" ]; then kept=" Every line the check reported is in $(home_path_check_kept)."; fi
+  fi
+  rm -f "$outf"
+  if [ "${SYNC_IN_WATCH:-0}" = "1" ]; then
+    digest="$(printf '%s\n' "$hits" | shasum -a 256 | cut -d' ' -f1)"
+    now="$(send_hold_now)"
+    if send_hold_told_recently "$HOME_PATH_HOLD_KEY" "$digest" "$now"; then told=1
+    else send_hold_told_write "$HOME_PATH_HOLD_KEY" "$now" "$nfiles" "$digest"; fi
+  fi
+  if [ "$told" -eq 1 ]; then
+    # The standing hold again, on a later tick of the watcher. One line, no list, no desktop notice:
+    # the full refusal is in the log above it and in status, and nothing about it has changed.
+    refusal="this send is still held by the home path check, over the same $files_words as when the hold was last said in full, so nothing is sent. 'claude-sync status' names what is held and says how to clear it."
+    if [ "${SCAN_REFUSAL_DEFERRED:-0}" = "1" ]; then SEND_REFUSED="$refusal"; SEND_REFUSED_BY="the home path check"; return 0; fi
+    echo "claude-sync: $refusal" >&2
+    exit 1
+  fi
+  [ -n "$said" ] && said=" The check's reason: $said."
+  refusal="$files_words this send would publish $fails the home path check, $where, so the whole send is held: sending the rest would leave the other Mac with part of a change.$said Take those files out of this Mac's config if they do not belong in it, or write each path from the home folder (a tilde or \$HOME), and the next send goes out.$kept"
+  if [ "${SCAN_REFUSAL_DEFERRED:-0}" = "1" ]; then SEND_REFUSED="$refusal"; SEND_REFUSED_BY="the home path check"; return 0; fi
   die "$refusal"
 }
 
@@ -9965,6 +10127,15 @@ pending_edits_cause(){
       printf 'the work names scan last refused a send from this clone%s (it could not run, so nothing was judged), which leaves the edits it staged uncommitted, and %s holds uncommitted edits' "$when" "$SYNC_REPO"
       return 0
     fi
+    # And the home path check's (claude-config#3465), the same way.
+    if [ "$why" = home-paths ]; then
+      printf 'the home path check last refused a send from this clone%s (%s), which leaves the edits it staged uncommitted, and %s holds uncommitted edits' "$when" "${found:-files the record does not name}" "$SYNC_REPO"
+      return 0
+    fi
+    if [ "$why" = home-paths-unjudged ]; then
+      printf 'the home path check last refused a send from this clone%s (it could not run, so nothing was judged), which leaves the edits it staged uncommitted, and %s holds uncommitted edits' "$when" "$SYNC_REPO"
+      return 0
+    fi
     printf 'the secret scan last refused a send from this clone%s (possible secret in: %s), which leaves the edits it staged uncommitted, and %s holds uncommitted edits' "$when" "${found:-?}" "$SYNC_REPO"
     return 0
   fi
@@ -13790,8 +13961,9 @@ report_ci_unreadable(){
 #                disk, because that one fails its self test (claude-config#1569)
 #   watcher-looping  the change watcher kept ending as soon as it started, so it stopped restarting
 #                and sends nothing until a different claude-sync is on disk (claude-config#1594)
-#   send-refused the secret scan or the work names scan refused the latest send, and every send
-#                since a send last got through (claude-config#2530); see send_refused_record
+#   send-refused the secret scan, the work names scan or the home path check refused the latest
+#                send, and every send since a send last got through (claude-config#2530, #3465); see
+#                send_refused_record
 #   sending-unreadable, receiving-unreadable, watcher-stale-unreadable, send-refused-unreadable
 #                the record is THERE and its count will not parse, so whether anything is stuck
 #                cannot be answered from it. Said rather than read as zero: a record nobody can
@@ -13908,11 +14080,12 @@ hook_suite_unverified_record(){   # $1 = now
   return 0
 }
 
-# A send refused by the secret scan or the work names scan (claude-config#2530). The refusal is
-# said by the run that refused, which for the change watcher reaches ~/.claude-sync.log and nothing
-# else: on one Mac 71 refusals sat there while stuck said nothing and status said only when this Mac
-# last sent. Read from the record the scans keep (record_send_refused), which stands exactly while
-# sends are being refused, so it is reported until a send gets past both scans.
+# A send refused by the secret scan, the work names scan or the home path check (claude-config#2530,
+# #3465). The refusal is said by the run that refused, which for the change watcher reaches
+# ~/.claude-sync.log and nothing else: on one Mac 71 refusals sat there while stuck said nothing and
+# status said only when this Mac last sent. Read from the record the scans keep
+# (record_send_refused), which stands exactly while sends are being refused, so it is reported until
+# a send gets past all three.
 #   send-refused             count (or - for a record from before the count), first (or -), sentence
 #   send-refused-unreadable  the record is there and cannot be read or will not parse
 send_refused_record(){   # $1 = now
@@ -13941,6 +14114,15 @@ send_refused_record(){   # $1 = now
     work-names-unjudged)
       scan="the work names scan"
       reason="the scan could not run, so nothing was judged"
+      remedy="Run 'claude-sync push' from $SYNC_REPO to see why it could not run." ;;
+    home-paths)
+      # The whole send is held over these files, so everything edited since is waiting with them.
+      scan="the home path check"
+      reason="what it would publish did not pass that check, which refuses a file naming one Mac's home folder: ${found:-files the record does not name}"
+      remedy="Take those files out of this Mac's config if they do not belong in it, or write each path from the home folder (a tilde or \$HOME), and the next send goes out with everything held behind them. Every line the check reported is in $(home_path_check_kept)." ;;
+    home-paths-unjudged)
+      scan="the home path check"
+      reason="the check could not run, so nothing was judged"
       remedy="Run 'claude-sync push' from $SYNC_REPO to see why it could not run." ;;
     unlisted)
       scan="the secret scan"

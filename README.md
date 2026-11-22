@@ -800,9 +800,9 @@ it is said once in the session, in status's own words and naming the clone, and 
 ends that session is told it is moving again. A count going up is the same stretch and is not said
 twice. A change watcher stuck on an older `claude-sync` because the newer one on disk is broken
 (#1569) is said at once rather than after the threshold, since no wait clears it, and its end is
-said too. So is a send refused by the secret scan or the work names scan (`send-refused`, #2530):
-every later send meets the same content, so it never clears by itself, and the session hears again
-when a send gets through. A record that is there and cannot be read, a stretch whose start cannot be read, and a clone
+said too. So is a send refused by the secret scan, the work names scan or the home path check
+(`send-refused`, #2530, #3465): every later send meets the same content, so it never clears by
+itself, and the session hears again when a send gets through. A record that is there and cannot be read, a stretch whose start cannot be read, and a clone
 too old to have the command are each said once in their own words, never read as a healthy sync.
 It asks nothing of the network and takes no lock: measured 2026-09-17, about 70ms per prompt with
 one clone to ask, and 16ms on a Mac with no automatic sync installed, where there is nothing that
@@ -11152,8 +11152,8 @@ catch up and after it is read, so it can only describe the run that wrote it
 
 </td><td>
 
-the secret scan or the work names scan, whenever either refuses a send (#947, #1568), through one
-writer, `record_send_refused`
+the secret scan, the work names scan or the home path check, whenever one of them refuses a send
+(#947, #1568, #3465), through one writer, `record_send_refused`
 
 </td><td>
 
@@ -11165,12 +11165,13 @@ and `claude-sync status`, `claude-sync stuck` and so the per prompt notice, whic
 </td><td>
 
 absent means no send is being refused by the scan, which is the normal state. One line, tab
-separated: when the latest refusal was, what it found, why (empty for a possible secret, else
-`unlisted`, `work-names` or `work-names-unjudged`), how many sends in a row have been refused, and
-when the first of them was, plus `atleast` when that run began under a record from before the
-count, which makes the count a floor. The secret scan removes it whenever it passes or is skipped,
-and the work names scan after it writes only on a refusal, so it stands exactly while sends are
-refused. A record from before the count is reported without one; one that cannot be read, or whose
+separated: when the latest refusal was, what it found (for the home path check, how many files and
+the first five with their lines), why (empty for a possible secret, else `unlisted`, `work-names`,
+`work-names-unjudged`, `home-paths` or `home-paths-unjudged`), how many sends in a row have been
+refused, and when the first of them was, plus `atleast` when that run began under a record from
+before the count, which makes the count a floor. The secret scan removes it whenever it passes or
+is skipped, and the work names scan and the home path check after it write only on a refusal, so it
+stands exactly while sends are refused. A record from before the count is reported without one; one that cannot be read, or whose
 time will not parse, is reported as `send-refused-unreadable`, never as nothing refused
 
 </td></tr>
@@ -11254,16 +11255,18 @@ because what it saves is re-running a red suite on every keystroke while the syn
 
 </td><td>
 
-a send whose suite failed or was stopped at its deadline, one `<suite>.log` per suite
+a send whose suite failed or was stopped at its deadline, one `<suite>.log` per suite; and a send
+the home path check held, as `home-path-check.log` (#3465)
 
 </td><td>
 
-a person, from the path the NOT publishing line names
+a person, from the path the NOT publishing line or the refusal names
 
 </td><td>
 
-absent means no suite the send ran is red. Each file is replaced by that suite's next run and
-removed once it passes, so it holds one file per red suite at most (#3176)
+absent means no suite the send ran is red and the home path check is holding nothing. Each file is
+replaced by that suite's next run, or the check's next refusal, and removed once it passes, so it
+holds one file per red suite at most, and one for the check (#3176)
 
 </td></tr>
 <tr><td>
@@ -11272,7 +11275,9 @@ removed once it passes, so it holds one file per red suite at most (#3176)
 
 </td><td>
 
-the change watcher's send, when it says a hold: when, the suite, the held files, and the hold as said
+the change watcher's send, when it says a hold: when, the suite, the held files, and the hold as
+said. The home path check's hold is a line here too, under the name `home-path-check`, with how many
+files it held and a digest of which (#3465)
 
 </td><td>
 
@@ -11281,8 +11286,8 @@ the next watcher send, to decide whether a hold is news, and to say once that it
 </td><td>
 
 absent means every hold is said on the next watcher pass, which is the pre-#3179 behaviour. One line
-per suite; a line older than a day is dropped on the next write, since a hold still standing has
-been said again by then (#3179)
+per suite, and one for the home path check; a line older than a day is dropped on the next write,
+since a hold still standing has been said again by then (#3179)
 
 </td></tr>
 <tr><td>
