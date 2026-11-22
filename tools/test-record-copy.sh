@@ -166,6 +166,10 @@ ok "unreadable folder inside a session: exits 1 and names it" "[ $rc -eq 1 ] && 
 plant
 out="$(run copy --days 7 --label roomy --keep-free-gb 1000000000)"; rc=$?
 ok "free space: refused, exit 3, nothing written" "[ $rc -eq 3 ] && has 'free' \"\$out\" && [ ! -e '$COPIES' ]"
+out="$(run copy --days 7 --label roomy --keep-free-gb nan)"; rc=$?
+ok "free space: a reserve that is not a number is refused, exit 2, nothing written" "[ $rc -eq 2 ] && [ ! -e '$COPIES' ]"
+out="$(run copy --days 7 --label roomy --keep-free-gb -1)"; rc=$?
+ok "free space: a negative reserve is refused, exit 2, nothing written" "[ $rc -eq 2 ] && [ ! -e '$COPIES' ]"
 
 # ---- no records folder, and options that are not options ----
 rm -rf "$H"; mkdir -p "$H"
@@ -187,6 +191,10 @@ plant
 rm -rf "$P/-Users-x-proj--claude-worktrees-w1"
 out="$(CLAUDE_HOME="$H" python3 -B "$TOOL" report --days 3 --kinds run --now "$(( NOW - DAY / 2 ))" 2>&1)"; rc=$?
 ok "a kind reaching under a day: advises a window above 0" "[ $rc -eq 3 ] && has 'ask for 0.5 days or fewer' \"\$out\""
+out="$(CLAUDE_HOME="$H" python3 -B "$TOOL" report --days 3 --kinds run --now "$(( NOW - DAY + DAY * 96 / 100 ))" 2>&1)"; rc=$?
+ok "a kind reaching 0.96 days: the advice rounds down, to a window that passes" "[ $rc -eq 3 ] && has 'ask for 0.9 days or fewer' \"\$out\""
+out="$(CLAUDE_HOME="$H" python3 -B "$TOOL" report --days 0.9 --kinds run --now "$(( NOW - DAY + DAY * 96 / 100 ))" 2>&1)"; rc=$?
+ok "and that window is not refused" "[ $rc -eq 0 ]"
 plant
 out="$(run report)"; rc=$?
 ok "no --days: exits 2" "[ $rc -eq 2 ]"

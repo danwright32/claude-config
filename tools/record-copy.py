@@ -25,7 +25,8 @@ Modes, so the one that writes cannot be mistaken for the one that looks (L206):
       under projects/ at the paths they had, each with its own time, the folders readable only by
       this user (0700) and the files too (0600). Then prints how many files and which dates the
       copy holds, and writes the same to COPY.txt beside them. Point the count's reader at
-      <copy>/projects, or run this script's report with CLAUDE_HOME=<copy> to recount.
+      <copy>/projects, or run this script's report with CLAUDE_HOME=<copy> and --accept-shorter to
+      recount (the copy holds only the window, so its oldest record is never further back than it).
 Both refuse (exit 3, nothing copied) when the window asked for reaches further back than the oldest
 record of a kind asked for, unless --accept-shorter, when they go on and state the window each kind
 really has. copy also refuses when the copy would leave under G GB free on the disk (default 5).
@@ -154,11 +155,17 @@ def refusal(short, now, days):
     narrower = []
     if reaches:
         r = min(reaches)
-        narrower.append(("ask for %d days or fewer" % int(r)) if r >= 1 else ("ask for %.1f days or fewer" % r))
+        # Rounded DOWN, so the window advised is one the records really reach; under a tenth of a day
+        # there is no window --days accepts that they reach, so none is advised.
+        tenths = math.floor(r * 10) / 10
+        if r >= 1:
+            narrower.append("ask for %d days or fewer" % int(r))
+        elif tenths > 0:
+            narrower.append("ask for %.1f days or fewer" % tenths)
     if empty:
         narrower.append("leave out %s with --kinds" % " and ".join(k.key for k in empty))
-    lines.append("To count anyway, %s, or run again with --accept-shorter to go on, and the window each kind "
-                 "really has is stated. Nothing was copied." % " and ".join(narrower))
+    accept = "run again with --accept-shorter to go on, and the window each kind really has is stated"
+    lines.append("To count anyway, %s. Nothing was copied." % (("%s, or %s" % (" and ".join(narrower), accept)) if narrower else accept))
     return "\n".join(lines)
 
 
@@ -317,6 +324,8 @@ def main(argv):
                     return usage("%r is not a kind of record; the kinds there are: own, agent, run" % ",".join(bad or [v]))
             elif a == "--keep-free-gb" and mode == "copy":
                 keep_free = float(v)
+                if not math.isfinite(keep_free) or keep_free < 0:
+                    return usage("--keep-free-gb takes a number of GB of 0 or more, not %r" % v)
             else:
                 return usage("%r is not an option of %s" % (a, mode))
             i += 2
