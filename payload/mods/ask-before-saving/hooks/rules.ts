@@ -18,7 +18,8 @@ export const MOD = 'ask-before-saving'
 // since #3323 each program the reader does not know with the files it is handed: `unknown` marks
 // one, `script` is the program as written, `why` and `remedy` the reader's words for it.
 // `changes` is each change that puts no content in a file (#3402 reads the ones that remove: rm,
-// unlink, rmdir, a mv's source, find -delete, shred -u, a packer's source), `folder` the folder a
+// unlink, rmdir, a mv's source, find -delete, shred -u, a packer's source, and the ones that empty
+// a file in place: truncate, shred without -u), `folder` the folder a
 // pattern lands in, `names` what a find -delete is limited to; a file's `sources` are what a copy
 // or a move brings to it, absolute.
 export type Writes = {

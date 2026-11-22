@@ -1,4 +1,4 @@
-/** A save to lasting memory refused until Claude asks Dan in Claude Code's dialog and he answers (#777). */
+/** A save to lasting memory, or a removal of it (#3402), refused until Claude asks Dan in Claude Code's dialog and he answers (#777). */
 export type AskBeforeSavingQuestion = {
   /** The refused call's tool_use_id, which the dialog's `metadata.source` names. */
   id: string
@@ -58,7 +58,11 @@ export type AskBeforeSavingRemoval = {
   why?: string
 }
 
-/** A save Dan answered For good, waiting for Claude to send the call again (#738). */
+/**
+ * An answer of Dan's waiting for Claude to send the call again: a save he answered For good (#738),
+ * or a removal he answered Delete, Move or Empty (#3402), which sets `removes`. For a removal,
+ * `files` holds only the lasting memory a move lands on.
+ */
 export type AskBeforeSavingApproval = {
   /** The question's id. */
   id: string
