@@ -1657,12 +1657,26 @@ def remember_readings(mod):
     Only this run's own copy of the reader is changed. Each caller gets lists of its own. A call
     asking for heredoc bodies, their spans or the runners passed is read afresh, and a text the
     reader cannot read raises as it did, every time it is asked for. So is one asking where the
-    comments are (claude-config#3464)."""
+    comments are (claude-config#3464).
+
+    Every reading asks the reader which # it took for a comment without being sure the shell does
+    (its `unsure`), and one that names any is not used: UnsureComment, which main() refuses as a
+    check it could not make. It is never kept, in this run or between runs."""
     plain, memo = mod.commands, {}
+
+    def sure(s, cwd, **asked):
+        marks = []
+        try:
+            return plain(s, cwd, unsure=marks, **asked)
+        finally:
+            # Whether the reading ended or gave up (Unreadable, which a # read as a comment can
+            # cause by itself: it hides the ) or the quote that closes something).
+            if marks:
+                raise UnsureComment(s, marks[0][0])
 
     def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None):
         if heredocs is not None or spans is not None or comments is not None:
-            return plain(s, cwd, heredocs=heredocs, parts=parts, spans=spans, comments=comments)
+            return sure(s, cwd, heredocs=heredocs, parts=parts, spans=spans, comments=comments)
         key = (s, cwd)
         if key not in memo:
             # A large text's parse is kept between runs too, keyed on its contents, wherever the
@@ -1676,7 +1690,7 @@ def remember_readings(mod):
                     os.path.expanduser("~" + name)
             else:
                 where = []
-                got = (plain(s, cwd, parts=where), where)
+                got = (sure(s, cwd, parts=where), where)
                 if kept is not None:
                     kept.put(s, cwd, got)
             memo[key] = got
@@ -1838,6 +1852,30 @@ class NulPath(BaseException):
 
 NUL_WHY = ("it names a path holding a NUL byte, which bash drops, zsh keeps inside the word and every program "
            "reads as the end of the name, so which file it is cannot be worked out (claude-config#2892)")
+
+
+class UnsureComment(BaseException):
+    """Raised by this run's reader (remember_readings) for a text holding a # that the reader took for
+    a comment where the shell reads it inside a word, or where which it does cannot be told
+    (lib/shell-words.py word_starts): after an escaped space or separator, right after a closing
+    parenthesis that is still inside its word or whose kind is not known, on a line a backslash
+    joined to a word, and inside backquotes. The shell may run the rest of that line, which the
+    reading left out, so a post written there was allowed (claude-config#3464). A BaseException, as
+    NulPath is, so nothing in the walk reads it as a text that merely could not be read; main()
+    refuses the call as one it could not check."""
+
+    def __init__(self, text, at):
+        super().__init__(at)
+        start = text.rfind("\n", 0, at) + 1
+        end = text.find("\n", at)
+        self.line = text[start:len(text) if end < 0 else end].strip()[:120]
+
+
+def comment_why(line):
+    return ("it holds a # the gate cannot tell from a comment, in the line `%s`: the shell reads a # inside "
+            "a word where a backslash, a closing parenthesis or a joined line stands right before it, and "
+            "then runs the rest of that line, which the gate would not have read. Write that # in quotes, "
+            "or put the comment on a line of its own (claude-config#3464)" % line)
 
 
 def budget_clock():
@@ -8040,6 +8078,8 @@ def main():
             reason = judge.line(cmd, cwd, 0, cmd)
         except NulPath:
             reason = judge.unfollow(NUL_WHY)  # never kept: only an allowed judgement is
+        except UnsureComment as e:
+            reason = judge.unfollow(comment_why(e.line))
         finally:
             judge.unwatch()
         if judge.overran:

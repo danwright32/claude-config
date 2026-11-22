@@ -93,7 +93,8 @@ refused "the control: with no # the post after the ; is refused"
 says "the control: as the post it is" "REFUSED: this command posts to Slack"
 run_bash "echo see$BS # 3; $POST${NL}echo done"
 refused "the measured shape: a post after an escaped space and a # is refused"
-says "the measured shape: as the post it is" "REFUSED: this command posts to Slack"
+says "the measured shape: as a check it could not make" "REFUSED: the gate could not check whether this command posts to Slack"
+says "the measured shape: naming the # and the line it is on" "it holds a # the gate cannot tell from a comment, in the line \`echo see$BS # 3; $POST\`"
 for hides in "echo see$BS #3; $POST" \
   "echo see$BS$BS$BS # 3; $POST" \
   "echo a$BS;# c; $POST" \
@@ -145,12 +146,26 @@ for kept in "echo a # c; $POST" "echo a $BS$BS # c; $POST" "(echo a)# c; $POST";
   run_bash "$kept"
   refused "as before, on one line a post after a comment and a ; is refused: $kept"
 done
-# And a # inside a word, with nothing that posts after it, is no reason to refuse.
-for quiet in "echo see$BS # 3; echo quiet" "echo \$(echo b)# c; echo quiet" "echo a$BS${NL}# c; echo quiet" \
-  "echo \$#; echo quiet" "echo a#b"; do
+# A # the reader always read as text, with nothing that posts after it, is no reason to refuse.
+for quiet in "echo \$#; echo quiet" "echo a#b" "echo \${#x}; echo quiet" "echo 'a # c'; echo quiet" "echo $BS# c; echo quiet"; do
   run_bash "$quiet"
-  allowed "the control: a quiet command after a # inside a word passes: $(shown "$quiet")"
+  allowed "the control: a quiet command after a # that starts no word passes: $quiet"
 done
+# One the reader took for a comment where the shell does not is refused whatever follows it: the
+# gate does not read the rest of that line, so it cannot say that nothing there posts.
+for doubt in "echo see$BS # 3; echo quiet" "echo \$(echo b)# c; echo quiet" "echo a$BS${NL}# c; echo quiet" \
+  "x=(a b)# c" "(echo a$BS # c )${NL}echo quiet" "echo a$BS # 'x${NL}echo quiet${NL}'"; do
+  run_bash "$doubt"
+  refused "a # the gate cannot tell from a comment is refused with nothing posting after it: $(shown "$doubt")"
+  says "and as a check it could not make: $(shown "$doubt")" "REFUSED: the gate could not check whether this command posts to Slack"
+done
+# The same in a script the command runs: the file is read as the command is.
+printf '%s\n' '#!/bin/bash' "echo see$BS # 3; $POST" 'echo done' > "$T/hash-posts.sh"
+printf '%s\n' '#!/bin/bash' "echo see # 3; $POST" 'echo done' > "$T/hash-quiet.sh"
+run_bash "bash hash-posts.sh"
+refused "a script whose post follows a # the shell reads inside a word is refused"
+run_bash "bash hash-quiet.sh"
+allowed "the control: a script whose post is written in a real comment passes"
 
 echo "slack drafts only: a quoted # in a file a shell's string reads in hides no shift after it (claude-config#3464)"
 

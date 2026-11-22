@@ -476,7 +476,9 @@ def moved(cwd, old, target):
 #
 # The other mistake hides a command as well: a real comment read as text can open a quote at an
 # apostrophe in it, and the string then holds the commands of the lines after. So a reader that
-# cannot tell says so (None here, Unreadable from commands()), and never guesses either way.
+# cannot tell says so and never guesses either way: None from word_starts, and from commands() the
+# line named in `unsure`, for a caller that asks. commands() does not change what it reads: other
+# gates read through it, and each must decide for itself what a line it is not sure of means.
 WORD_BREAKS = " \t\n;&|()"
 
 
@@ -537,7 +539,7 @@ def uncommented(s, spaced=False):
     return "".join(out)
 
 
-def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None):
+def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, unsure=None):
     """Every simple command in s, in the order the shell finishes reading them, as (dir, text).
 
     heredocs, when a list, is given one (quoted, before, body) for each heredoc body the reading
@@ -552,9 +554,13 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None):
     is the body, from the line break that ends the opener's line to the start of its closing line
     (claude-config#2722), so a caller can tell which command a body is given to.
 
-    comments, when a list, is given one (start, end) for each comment the reading left out, s[start]
-    its # and end the line break that ends it (claude-config#3464). A # starts one only where a word
-    starts (word_starts); where that cannot be told, the reading raises Unreadable.
+    comments and unsure, when lists, are given between them one (start, end) for each # the reading
+    took for a comment, s[start] the # and end the line break the reading went on from
+    (claude-config#3464): comments where the shell starts a comment there too (word_starts), unsure
+    where the shell reads the # inside a word and so RUNS the rest of that line, or where which it
+    does cannot be told. The reading itself is what it always was, with every such line left out, so
+    a caller that does not ask for unsure is given the commands it was always given, and one that
+    must not miss a command asks, and does not trust a reading that names any such line.
 
     The text is the command as written, quotes and all, and a command substitution's text stays
     inside the command that holds it as well as being read as commands of its own, which come first.
@@ -601,64 +607,27 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None):
     # Where the last ) the reading went by ended, and what a # right after it is (word_starts): True
     # where the ) ended a command, False where it is still inside a word, None where that is not known.
     closed = [-1, None]
-    # The rest of a line being read past a # that was taken for a comment until #3464 (comment_end).
-    watch = [None]
-
-    def state():
-        """What decides how the text after a line is read, beyond which frames are open: each
-        frame's directory and open case commands, and the heredocs waiting for their bodies."""
-        return ([(g.get("cwd"), g.get("old"), tuple(g.get("cases", ())), g.get("pat")) for g in frames],
-                len(pending), len(bodies))
-
-    def line_read(at):
-        """Called where the reading reaches the end of a watched line, or first goes past it. The
-        text after that line must be read just as it was while the # hid the rest of the line, so
-        that reading the rest only ever ADDS the commands written on it: a quote, a group, a
-        heredoc or a case left open by it, one it closed, a cd in it, or a backslash joining the
-        next line to it, would each change what the lines after it are, and a command read on them
-        until now could stop being one. Then the text is not read at all (Unreadable), and each
-        caller falls to what it does with a text it cannot trust."""
-        w, watch[0] = watch[0], None
-        if w["end"] >= n:
-            return  # the last line: nothing comes after it
-        same = len(frames) == len(w["frames"]) and all(a is b for a, b in zip(frames, w["frames"]))
-        if same and frames[-1]["k"] in COMMAND_FRAMES:
-            # The last command of the line is cut after this, at the line break: what its cut will
-            # do is asked here, a case head noted and a cd refused.
-            note_case(frames[-1], w["end"])
-            same = cd_target(s[frames[-1]["start"]:w["end"]]) is None
-        same = same and state() == w["state"]
-        if not same or (at > w["end"] and frames[-1]["k"] in COMMAND_FRAMES):
-            raise Unreadable()
 
     def comment_end(at, breaks):
-        """Where the comment starting at the # at `at` ends, or None where that # starts none
-        (word_starts, claude-config#3464). Raises Unreadable where it cannot be told: what the ) before
-        it closed is not known or is read differently by bash and zsh, or the text is inside
-        backquotes and either a backslash stands before the # (the backquotes read backslashes
-        first) or a backquote stands after it on its line (bash ends the backquotes there, comment or
-        not)."""
-        ticked = any(g["k"] == "tick" for g in frames)
-        starts = word_starts(s, at, breaks, closed, ticked)
-        if starts is False:
-            if s[at - 1] in breaks and watch[0] is None:
-                # Taken for a comment until #3464, so the rest of its line was nobody's text. Read
-                # now, it may only add the commands written on it: see line_read. The first such #
-                # on a line is where the rest of it starts.
-                j = s.find(line_break, at)
-                held = next(g for g in reversed(frames) if g["k"] in COMMAND_FRAMES)
-                if j >= 0 and cd_target(s[held["start"]:at]) is not None:
-                    raise Unreadable()  # a cd whose directory was the words before the #, until now
-                watch[0] = {"end": n if j < 0 else j, "frames": list(frames), "state": state()}
+        """Where the text this reading leaves out from the # at `at` ends, or None where that # is
+        text: the character before it is none of breaks. The reading is the one it always was, the #
+        a comment and the rest of its line nobody's text. What it knows now (claude-config#3464) is
+        whether the shell agrees. Where it does (word_starts) the span is given to comments. Where
+        the shell reads the # inside a word, or it cannot be told (what the ) before it closed is not
+        known or is read differently by bash and zsh; or the text is inside backquotes and either a
+        backslash stands before the # there, which the backquotes read first, or a backquote stands
+        after it on its line, where bash ends the backquotes, comment or not), it is given to
+        unsure."""
+        if at and s[at - 1] not in breaks:
             return None
-        if starts is None:
-            raise Unreadable()
         j = s.find(line_break, at)
         end = n if j < 0 else j
-        if ticked and "`" in s[at:end]:
-            raise Unreadable()
-        if comments is not None:
-            comments.append((at, end))
+        if comments is not None or unsure is not None:
+            ticked = any(g["k"] == "tick" for g in frames)
+            sure = word_starts(s, at, breaks, closed, ticked) is True and not (ticked and "`" in s[at:end])
+            given = comments if sure else unsure
+            if given is not None:
+                given.append((at, end))
         return end
 
     def note_case(f, end):
@@ -753,8 +722,6 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None):
 
     i = 0
     while i < n:
-        if watch[0] is not None and i >= watch[0]["end"]:
-            line_read(i)
         if bodies and i >= bodies[-1]["end"]:
             # A body ends at its closing line whatever is open in it, as the shell finds the line
             # before it expands anything; a substitution or quote still open there runs nothing in
@@ -830,9 +797,8 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None):
                 # A comment inside an array's ( ), as the shell reads one there too: an apostrophe in
                 # it opened a quote that ran on past the array (tools/check-mod-shared-parts.sh's
                 # PARTS, so no compound after it paired; claude-config#2683). It ends at the line
-                # break, "; " in the flattened form, as a comment between commands does. Only where
-                # a word starts: after an escaped space the # is text, and a substitution written
-                # after it on the line is run (claude-config#3464).
+                # break, "; " in the flattened form, as a comment between commands does. Whether
+                # the shell reads one there too is comment_end's to say (claude-config#3464).
                 end = comment_end(i, " \t\n(")
                 if end is not None:
                     i = end
@@ -891,9 +857,9 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None):
             continue
         # Where commands begin and end: only here, in a frame that holds commands.
         if c == "#":
-            # A comment, only where a word starts (word_starts): one read after an escaped space,
-            # or right after the ) of a substitution, left out the commands the shell ran after it
-            # on its line (claude-config#3464).
+            # A comment, as this reading always took one. Where the shell reads the # inside a word
+            # (after an escaped space, right after the ) of a substitution) it runs the rest of the
+            # line, which comment_end tells a caller that asks (claude-config#3464).
             end = comment_end(i, WORD_BREAKS)
             if end is not None:
                 cut(f, i, "#")

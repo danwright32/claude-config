@@ -15,10 +15,10 @@
 # a comment holding an apostrophe, and runs only where the # does start one. This machine's bash,
 # and its zsh where there is one, run each text in an empty throwaway directory (nothing but echo,
 # true, cat and that touch is ever run), and the reader is asked whether it lists the marker as a
-# command of its own. THE PROPERTY: wherever a shell runs the marker, the reader lists it, or says
-# it cannot read the text (which every caller answers with the crude cut, that sees it too). The
-# controls hold the other side: a real comment is still left out, so nothing was fixed by reading
-# every # as text.
+# command of its own. THE PROPERTY: wherever a shell runs the marker, the reader lists it, says it
+# cannot read the text, or names the # line as one it is not sure of (its `unsure`, which the Slack
+# drafts gate refuses as a check it could not make). The controls hold the other side: a real
+# comment is still left out and never named, so nothing was fixed by doubting every #.
 set -uo pipefail
 
 # Its own wall clock, and whatever it starts stopped with it however it ends (claude-config#465).
@@ -126,8 +126,7 @@ WHOLE = [
     ("in single quotes", "same", "echo 'a # c'; touch ran\n"),
     ("in a $'...' string", "same", "echo $'a # c'; touch ran\n"),
     ("in a ${#x}", "same", "echo ${#x}; touch ran\n"),
-    # The rest of a line that was taken for a comment may only add its own commands: where it
-    # would change how the lines after it are read, the text is not read.
+    # Whatever the rest of the line holds, the line is named.
     ("an escaped space before it, the rest of the line a whole string", "same", "echo a\\ # 'x'; touch ran\necho done\n"),
     ("an escaped space before it, the rest of the line opening a string", "open", "echo a\\ # 'x\ntouch ran\n'\n"),
     ("an escaped space before it, the line joined to the next", "open", "echo a\\ # c \\\ntouch ran\n"),
@@ -157,8 +156,9 @@ REAL = {"a space before it", "an escaped backslash, then a space", "a ; before i
         "in a $( ) in double quotes, after a space", "in backquotes, after a space",
         "in backquotes closed on a later line, after a space",
         "right after an arithmetic command"}
-# A # the shell reads inside a word, which the reader must read as text of the command (`same`: the
-# marker after the ; is listed).
+# A # the shell reads inside a word (`same`: the shell runs the marker after the ;). Where the
+# reader always read it as text, the marker is listed (PLAIN). Where it took the # for a comment,
+# it still does, and names the line as one it is not sure of.
 WORD = {"mid word (a#b)", "an escaped space before it", "three backslashes, then a space",
         "an escaped tab before it", "an escaped ; before it", "an escaped & before it",
         "an escaped | before it", "an escaped ( before it", "an escaped ) before it",
@@ -169,7 +169,10 @@ WORD = {"mid word (a#b)", "an escaped space before it", "three backslashes, then
         "in double quotes", "in single quotes",
         "in a $'...' string", "in a ${#x}",
         "an escaped space before it, the rest of the line a whole string"}
-# Where the reader must say it cannot read the text, as (description, kind): bash reads a # right
+PLAIN = {"mid word (a#b)", "escaped itself", "right after a backquote", "after double quotes",
+         "after single quotes", "after a ${ }", "after a $ ($#)", "in double quotes", "in single quotes",
+         "in a $'...' string", "in a ${#x}"}
+# Where the reader must name the line as one it is not sure of, as (description, kind): bash reads a # right
 # after an array's ) inside the word and zsh as a comment; and bash ends backquotes at the next
 # backquote whether or not a comment stands before it, so a comment with one after it on its line
 # does not run to the line's end.
@@ -202,16 +205,32 @@ def runs(shell, text):
 
 
 def reading(text):
+    marks = []
     try:
-        cut = sw.commands(text)
+        cut = sw.commands(text, unsure=marks)
     except sw.Unreadable:
-        return "unreadable"
+        # A # read as a comment can hide the ) or the quote that closes something, so the line is
+        # named before the reading gives up, and a caller looks at the names either way.
+        return "unsure" if marks else "unreadable"
+    if marks:
+        return "unsure"
     return "listed" if any(t.strip() == "touch ran" for _, t in cut) else "not listed"
 
 
 def say(ok, what, why=""):
     print("ok\t" + what if ok else "FAIL\t" + what + "\t" + why)
 
+
+# A caller that does not ask is given the commands it was always given: other gates read through
+# the reader, and what a line the reader is not sure of means to each is that gate's to decide.
+asked, unasked = [], sw.commands("echo a\\ # c; touch ran\necho done\n")
+sw.commands("echo a\\ # c; touch ran\necho done\n", unsure=asked)
+say([t.strip() for _, t in unasked] == ["echo a\\", "echo done"] and asked == [(8, 22)],
+    "#3464 the reading itself is unchanged, and the line is named only to a caller that asks",
+    "commands gave %r and named %r" % (unasked, asked))
+real = []
+sw.commands("echo a # c; touch ran\necho done\n", comments=real)
+say(real == [(7, 21)], "#3464 a comment the shell starts too is given to comments", "named %r" % (real,))
 
 rows = [(name, kind, text) for name, prefix, close in PREFIXES for kind, text in texts(prefix, close)]
 rows += WHOLE
@@ -228,11 +247,12 @@ for name, kind, text in rows:
         say(got == want, "#3464 the control: a real comment is still one: a # %s (%s)" % (name, kind),
             "the reader said %s, wanted %s: [%s]" % (got, want, shown))
     if name in WORD and kind == "same":
-        say(got == "listed", "#3464 a # inside a word is text: a # %s" % name,
-            "the reader said %s, wanted listed: [%s]" % (got, shown))
+        want = "listed" if name in PLAIN else "unsure"
+        say(got == want, "#3464 a # the shell reads inside a word hides nothing: a # %s" % name,
+            "the reader said %s, wanted %s: [%s]" % (got, want, shown))
     if (name, kind) in UNSURE or kind == "open":
-        say(got == "unreadable", "#3464 where it cannot be told the text is not read: a # %s (%s)" % (name, kind),
-            "the reader said %s, wanted unreadable: [%s]" % (got, shown))
+        say(got == "unsure", "#3464 where it cannot be told the line is named: a # %s (%s)" % (name, kind),
+            "the reader said %s, wanted unsure: [%s]" % (got, shown))
 PY
 rc=$?
 [ "$rc" -eq 0 ] || check "the comparison ran to its end" "python3 exited $rc"
