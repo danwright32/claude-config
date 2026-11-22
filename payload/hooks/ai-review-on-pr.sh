@@ -102,6 +102,14 @@ if [ "$mode" = commit ]; then
     branch="$(git -C "$top" symbolic-ref --quiet --short HEAD 2>/dev/null)"
     args=(start --gate push --dir "$top" --sha "$head")
     [ -n "$branch" ] && args+=(--branch "$branch")
+    # A stacked branch is read from its base's head, the range the push gate will ask about
+    # (lib/stacked-base.sh, the one answer both read; claude-config#3444). Read from the default
+    # branch here, the review would cover the push gate's question and be reused with the base
+    # branch's findings in it, which is the refusal that issue records.
+    # shellcheck source=lib/stacked-base.sh
+    if . "$HOOK_DIR/lib/stacked-base.sh" 2>/dev/null && declare -F sb_stacked_base >/dev/null; then
+      stacked_ref="$(sb_field "$(sb_stacked_base "$top")" ref)" && args+=(--base-ref "$stacked_ref")
+    fi
     said+="${said:+ }$(bash "$HOOK_DIR/lib/pr-review.sh" "${args[@]}" 2>&1 </dev/null)"
   done <<< "$repo_dirs"
   [ -n "$said" ] && say "$said"

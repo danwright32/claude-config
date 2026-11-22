@@ -129,14 +129,38 @@ POLL="$(whole_above_zero "$POLL")" || POLL=3
 SLEEP="${PR_REVIEW_PUSH_SLEEP:-sleep}"
 now_s() { if [ -n "${PR_REVIEW_PUSH_CLOCK:-}" ]; then "$PR_REVIEW_PUSH_CLOCK"; else date +%s; fi; }
 
+# WHERE THE REVIEW READS FROM (claude-config#3444). A branch cut from another open branch was read
+# all the way back to the default branch, so a stopping finding in a file its base branch owns
+# refused the stacked push (twice on 2026-11-22). Whether the branch is stacked, and on what, is the
+# one answer in lib/stacked-base.sh, which the test gate asks too: a branch on origin whose head is
+# in this branch's history and is, on GitHub, the head of an open pull request. Then the review reads
+# from that head, and the base's own changes are read on its own pull request, which the merge gate
+# holds until its review is read. Anything short of that reads from the default branch as before.
+#
+# The base is always NAMED to the checker, the default branch included, because a finished review is
+# reused only when it covers the base it is asked about (lib/pr-review.sh, do_check): a review that
+# read from a base which has since stopped being an open pull request is then read again from the
+# default branch, never reused for commits nobody read.
+STACK_NOTE=""; review_base=""
+# shellcheck source=lib/stacked-base.sh
+if . "$HOOK_DIR/lib/stacked-base.sh" 2>/dev/null && declare -F sb_stacked_base >/dev/null; then
+  stacked="$(sb_stacked_base "$top")"
+  if review_base="$(sb_field "$stacked" ref)"; then
+    stacked_tip="$(sb_field "$stacked" tip)"
+    STACK_NOTE=" This branch is stacked on $review_base (pull request #$(sb_field "$stacked" pr), open), so the review read only what the branch adds to that branch's head ${stacked_tip:0:7}; that branch's own changes are read on its own pull request."
+  fi
+fi
+[ -n "$review_base" ] || review_base="$(cd "$top" 2>/dev/null && ps__default_ref)" || review_base=""
+
 args=(check --gate push --dir "$top" --sha "$head")
 [ -n "$branch" ] && args+=(--branch "$branch")
+[ -n "$review_base" ] && args+=(--base-ref "$review_base")
 t0="$(now_s)"
 while :; do
   out="$(PR_REVIEW_READ="$read_key" bash "$HOOK_DIR/lib/pr-review.sh" "${args[@]}" 2>&1)"; rc=$?
   case "$rc" in
     # An allow with minor findings hands them over as advisory (claude-config#1356).
-    0) mt_review_allowed pr-review-push-gate "$out" ;;
+    0) mt_review_allowed pr-review-push-gate "$out$STACK_NOTE" ;;
     3)
       now="$(now_s)"
       waited=$((now - t0))
@@ -145,6 +169,6 @@ while :; do
       fi
       "$SLEEP" "$POLL"
       ;;
-    *) refuse "$out" ;;
+    *) refuse "$out$STACK_NOTE" ;;
   esac
 done

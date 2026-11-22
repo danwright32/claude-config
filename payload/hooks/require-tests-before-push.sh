@@ -222,7 +222,10 @@ cd "$repo_dir" 2>/dev/null || exit 0
 # The pending files are folded in before that decision: a no-upstream
 # `add && commit && push` chain still has visible staged work, so the gate is
 # not blind there and must judge it rather than cry blindness.
-pc_resolve "$cmd"
+# "stacked": a branch cut from another open branch is judged from that branch's head, when that is
+# established and this gate judged the base's own push (lib/push-changes.sh, pc__stacked_start;
+# claude-config#3444). Otherwise the range starts where it always did.
+pc_resolve "$cmd" stacked
 resolved=$?
 # An override is recorded with the tree it lets through, read after the resolve because a command
 # that commits first delivers a tree no commit holds yet, so it can be matched to a refusal of it.
@@ -251,6 +254,15 @@ merge_note() {
   echo "Note: this push merges commits in, and the gate could not set apart what the"
   echo "merge brought from what this branch changed, so it judged both:"
   echo "$PC_MERGE_UNSPLIT."
+  echo ""
+}
+
+# When the branch is stacked on another open branch and was judged from that branch's head
+# (claude-config#3444), a refusal says so, since the base's own changes are not in what it judged.
+stacked_note() {
+  [ -n "${PC_STACKED:-}" ] || return 0
+  echo "Note: this branch is stacked on $PC_STACKED, so the gate judged only what it"
+  echo "adds to that branch's head; that branch's own changes were judged at its own push."
   echo ""
 }
 
@@ -489,6 +501,12 @@ EOF
 EARLIER_TESTS=(); earlier_list=""; EARLIER_DIFF=""; BRANCH_BASE=""; BRANCH_NOTE=""; BRANCH_DEF=""
 branch_tests() {
   local names f
+  # A stacked branch judged from its base (claude-config#3444) left that base, not the default
+  # branch: the range the push carries already starts there, so nothing earlier is this branch's,
+  # and the base's own test files are never counted as tests this branch pushed.
+  if [ -n "${PC_STACKED:-}" ]; then
+    BRANCH_DEF="$PC_BASE"; BRANCH_BASE="$PC_MB"; return 0
+  fi
   BRANCH_DEF="$(ps__default_ref)" || BRANCH_DEF=""
   if [ -z "$BRANCH_DEF" ]; then
     BRANCH_NOTE="this checkout knows no default branch for origin (no origin/HEAD, origin/main or origin/master)"; return 0
@@ -575,7 +593,7 @@ PUSH BLOCKED: this push changes source code but adds or modifies no tests.
 Source files in this push:
 ${source_list}$( [ -n "$BRANCH_BASE" ] && printf '%s\n' "No earlier push of this branch changed a test either, since it left $BRANCH_DEF.")
 Add a test for each distinct change, then push again.
-$(widened_note; merge_note; branch_note; modkit_note; docs_note)
+$(widened_note; merge_note; stacked_note; branch_note; modkit_note; docs_note)
 OVERRIDE: if a test genuinely does not apply (docs / config / copy only,
 or a refactor already covered by existing tests), or the gate missed a
 test that IS in this push (false positive), re-run with:
@@ -1060,7 +1078,7 @@ not approve it. Nothing in the push needs to change for this: how long the gate 
 depends on how busy the Mac is, so send the same push again, when fewer test suites are
 running if you can.
 $(range_note)
-$(widened_note; merge_note; branch_note; modkit_note)
+$(widened_note; merge_note; stacked_note; branch_note; modkit_note)
 OVERRIDE: if you have checked that every change in this push IS tested, re-run with:
     SKIP_TEST_CHECK=1 <your original git push command>
 BEFORE overriding you MUST explain to the user, in plain non-technical
@@ -1187,7 +1205,7 @@ A test in one of them reads to the reviewer exactly like no test, so this is not
 finding that tests are missing.
 $rt_advice
 $(range_note)
-${earlier_fit}$(widened_note; merge_note; branch_note; modkit_note)
+${earlier_fit}$(widened_note; merge_note; stacked_note; branch_note; modkit_note)
 OVERRIDE: if you have checked that each change named above IS tested, re-run with:
     SKIP_TEST_CHECK=1 <your original git push command>
 BEFORE overriding you MUST explain to the user, in plain non-technical
@@ -1204,7 +1222,7 @@ Distinct changes still needing a test:
 $missing_shown
 
 ${parts_note}Add a test for each, then push again.
-$(widened_note; merge_note; branch_note; modkit_note)
+$(widened_note; merge_note; stacked_note; branch_note; modkit_note)
 OVERRIDE: if the gate is wrong (the change is genuinely test-exempt,
 or an existing test already covers it), re-run with:
     SKIP_TEST_CHECK=1 <your original git push command>
