@@ -3755,6 +3755,97 @@ test('#3416: a helper from a file a suite reads in is read as its body with the 
   expect(await readLeft(`. lib.sh\n${CALL}`, libs, { written: ['/s/lib.sh'] })).toEqual(held)
 })
 
+test('#3416: a name some function would define again when called is held, in the suite or a file it reads in, called or not', async () => {
+  const RUN = 'run() { true; }\n'
+  const CALL = 'run app/page.tsx\n'
+  const held = ['run /s/app/page.tsx']
+  // What a function holds that makes the name run another body once the function is called.
+  const AGAIN = ['run() { someunknownprogram "$@"; }', 'function run { someunknownprogram "$@"; }', 'run () { someunknownprogram "$@"; }']
+  for (const again of AGAIN) {
+    const setup = `setup() { ${again}; }\n`
+    const lib = { '/s/lib.sh': setup }
+    for (const text of [
+      // A file read in before the suite defines the name: the shell runs the body `setup` installed.
+      `. lib.sh\n${RUN}setup\n${CALL}`,
+      // The same in a file read in after the suite's definition.
+      `${RUN}. lib.sh\nsetup\n${CALL}`,
+      // Never called by a command of that name: still held, since a call can come by a route this
+      // reading does not follow (a command whose name is a variable, a trap, a file it did not read).
+      `. lib.sh\n${RUN}${CALL}`,
+      `${RUN}. lib.sh\n${CALL}`,
+    ])
+      expect({ text, left: await readLeft(text, lib) }).toEqual({ text, left: held })
+    // Another helper of the suite's own holds it, before the definition or after, called or not.
+    for (const text of [`${RUN}${setup}setup\n${CALL}`, `${setup}${RUN}setup\n${CALL}`, `${RUN}${setup}${CALL}`, `${setup}${RUN}${CALL}`]) expect({ text, left: await ownLeft(text) }).toEqual({ text, left: held })
+    // The helper comes from a file read in, and the suite's own function would define it again.
+    for (const text of [`. lib2.sh\n${setup}setup\n${CALL}`, `${setup}. lib2.sh\n${CALL}`]) expect({ text, left: await readLeft(text, { '/s/lib2.sh': RUN }) }).toEqual({ text, left: held })
+  }
+  // The controls: the same suites where the function defines another name are left out.
+  const other = 'setup() { walk() { someunknownprogram "$@"; }; }\n'
+  for (const text of [`. lib.sh\n${RUN}setup\n${CALL}`, `${RUN}. lib.sh\nsetup\n${CALL}`]) expect({ text, left: await readLeft(text, { '/s/lib.sh': other }) }).toEqual({ text, left: [] })
+  for (const text of [`${RUN}${other}setup\n${CALL}`, `${other}${RUN}setup\n${CALL}`]) expect({ text, left: await ownLeft(text) }).toEqual({ text, left: [] })
+  expect(await readLeft(`. lib2.sh\n${other}setup\n${CALL}`, { '/s/lib2.sh': RUN })).toEqual([])
+})
+
+test('#3416: text that may run after the definition and that the guard cannot read holds the call, wherever it is typed', async () => {
+  const RUN = 'run() { true; }\n'
+  const CALL = 'run app/page.tsx\n'
+  const held = ['run /s/app/page.tsx']
+  // Every case is read, and each one read wrongly is named, so one wrong case does not hide the rest.
+  const wrong: { text: string; files: Record<string, string>; left: string[] }[] = []
+  const want = async (text: string, files: Record<string, string>, expected: string[]): Promise<void> => {
+    const left = await readLeft(text, files)
+    if (left.join('\n') !== expected.join('\n')) wrong.push({ text, files, left })
+  }
+  // What a function typed BEFORE the definition may hold that defines the name again, or takes it
+  // away, once the function is called after the definition: text run as commands, a file the guard
+  // did not read, and in a file read in, an unset or an alias (the suite's own are held already).
+  const UNSEEN = ['eval "$X"', 'builtin eval "$X"', '. "$X"', 'source /s/missing.sh']
+  for (const unseen of UNSEEN) {
+    const setup = `setup() { ${unseen}; }\n`
+    for (const text of [
+      // A helper of the suite's own, called after the definition.
+      `${setup}${RUN}setup\n${CALL}`,
+      // Never called by a command of that name: still held, as a call can come by a route this
+      // reading does not follow.
+      `${setup}${RUN}${CALL}`,
+    ])
+      await want(text, {}, held)
+  }
+  for (const inFile of [...UNSEEN, 'unset -f run', 'alias run=mystery']) {
+    const lib = { '/s/lib.sh': `setup() { ${inFile}; }\n`, '/s/lib2.sh': RUN }
+    for (const text of [
+      // The function comes from a file read in before the suite's definition.
+      `. lib.sh\n${RUN}setup\n${CALL}`,
+      `. lib.sh\n${RUN}${CALL}`,
+      // The helper comes from one file read in, the function from another read in before it.
+      `. lib.sh\n. lib2.sh\nsetup\n${CALL}`,
+    ])
+      await want(text, lib, held)
+  }
+  // Text run as commands anywhere in the suite, and a file the guard did not read that is read in
+  // before the definition anywhere but the top of the suite (in a function, a branch, a loop, after
+  // `&&`), are held too: this reading does not tell a function's body from a branch.
+  for (const text of [`eval "$X"\n${RUN}${CALL}`, `if [ -f lib/missing.sh ]; then\n  . lib/missing.sh\nfi\n${RUN}${CALL}`, `[ -f lib/missing.sh ] && . lib/missing.sh\n${RUN}${CALL}`, `eval "$X"\n. lib2.sh\n${CALL}`])
+    await want(text, { '/s/lib2.sh': RUN }, held)
+  // The same where the file's name holds a substitution, whose commands the reader gives first.
+  const IDIOM = '. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/x.sh"'
+  for (const text of [`setup() { ${IDIOM}; }\n${RUN}setup\n${CALL}`, `if [ -n "$X" ]; then\n  ${IDIOM}\nfi\n${RUN}${CALL}`, `[ -n "$X" ] &&\n${IDIOM}\n${RUN}${CALL}`, `setup() {\n  true\n  ${IDIOM}\n}\n${RUN}${CALL}`]) await want(text, {}, held)
+  // A file read in before the definition that runs text as commands at its own top, or reads in a file.
+  for (const file of ['eval "$X"\n', '. /s/more.sh\n']) await want(`. lib.sh\n${RUN}${CALL}`, { '/s/lib.sh': file, '/s/more.sh': 'more() { echo x; }\n' }, held)
+
+  // The controls. A function that does none of that, in the suite or in a file read in before.
+  await want(`setup() { echo x; }\n${RUN}setup\n${CALL}`, {}, [])
+  await want(`. lib.sh\n${RUN}setup\n${CALL}`, { '/s/lib.sh': 'setup() { echo x; }\n' }, [])
+  await want(`. lib.sh\n. lib2.sh\nsetup\n${CALL}`, { '/s/lib.sh': 'setup() { echo x; }\n', '/s/lib2.sh': RUN }, [])
+  // Left as it was, and not closed here: a file the guard did not read that is read in at the top
+  // of the suite, as a command of its own, before the definition. It has ended by the definition,
+  // which then replaces whatever it defined under the name; a function it defined under another
+  // name, called after the definition, is what the guard cannot see.
+  for (const text of [`. /elsewhere/lib.sh\n${RUN}${CALL}`, `. lib/missing.sh || {\n  exit 1\n}\n${RUN}${CALL}`, `${IDIOM}\n${RUN}${CALL}`, `${IDIOM} || {\n  exit 1\n}\n${RUN}${CALL}`]) await want(text, {}, [])
+  expect(wrong).toEqual([])
+})
+
 test('#3416: the files a suite reads in are counted against the limit, and past it no more are read from the disk', async () => {
   // Counted in characters read from the disk, never timed. Without the count every file is read:
   // sixty files of this size are 6.4 million characters, in a hook that runs before the command.

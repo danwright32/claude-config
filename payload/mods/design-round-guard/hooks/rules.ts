@@ -2567,9 +2567,15 @@ const wholeGroup = async (io: OwnCallIo, inner: string): Promise<readonly RunCom
  *   that holds it (in no branch, loop, group, case, subshell, substitution or function), as a
  *   command of its own (after no `&&`, `||` or `|`, which define it only sometimes or in a
  *   subshell), before every call; one the script unsets, or a script holding an alias; a name the
- *   script and a file it reads in both define, or two such files; an eval after the definition, or
- *   a file read in after it that the guard did not read, that defines the name, or that holds an
- *   eval, an alias, an unset or a file it reads in itself;
+ *   script and a file it reads in both define, or two such files, in a function's body as much as
+ *   at the top (a function that would define the name again once it is called);
+ * - text that may run after the definition and that this reading cannot follow, wherever it is
+ *   typed, since a function typed above the definition can be called below it: an eval anywhere in
+ *   the script; a file the guard read, before the definition or after, that holds an eval, an
+ *   alias, an unset or a file it reads in itself; a file the guard did not read, unless it is read
+ *   in above the definition at the top of the script as a command of its own, where it has ended
+ *   before the definition. NOT told: a function such a file defined under another name, called
+ *   below the definition, could define the name again (the README says what closing that costs);
  * - a helper from a file read in only sometimes (in a branch, a loop, a function, a subshell, after
  *   `&&`, in a pipe), read in twice, read in with words of its own, or from a file that may leave
  *   (`return`, `exit`) before the definition, or that holds an eval, an alias, an unset or a file
@@ -2823,9 +2829,15 @@ export const withoutOwnCalls = async (given: OwnCallIo, text: string, commands: 
       const places = marked ? [] : [...text.matchAll(/(?<![^\n;&|(){}])[ \t]*(?:\.|source)[ \t]/g)].map(m => m.index as number)
       const { cmds, starts } = await probe(text, places)
       const out: string[] = []
+      const reads = (c: RunCommand | undefined): boolean => c?.words[0] === '.' || c?.words[0] === 'source'
       for (const [i, k] of starts) {
-        const read = cmds[k]
-        if (read && (read.words[0] === '.' || read.words[0] === 'source') && sameWords(read.pipedFrom, fedBy(i)) && endsCommand(text, places[i] as number)) out.push(read.words.join('\n'))
+        // The commands of a substitution in the file's own name (`. "$(cd "$(dirname "$0")" && pwd)/lib.sh"`)
+        // are given before the command, fed by nothing: the first command the place's pipe feeds
+        // is the one typed there.
+        let j = k
+        while (cmds[j] && !reads(cmds[j]) && !sameWords(cmds[j]?.pipedFrom, fedBy(i))) j++
+        const read = cmds[j]
+        if (read && reads(read) && sameWords(read.pipedFrom, fedBy(i)) && endsCommand(text, places[i] as number)) out.push(read.words.join('\n'))
       }
       return out
     })()
@@ -2881,10 +2893,15 @@ export const withoutOwnCalls = async (given: OwnCallIo, text: string, commands: 
       if (i === after) continue
       if (first === 'source' || first === '.') {
         const read = await readIn(c)
-        // Before the definition a file need not be one the guard read, but one it did read that
-        // defines the name too leaves two definitions, and that is judged whichever comes last.
-        if (i < after ? read && definedAgain(read.commands, name) : !read || definedAgain(read.commands, name) || rereads(read.commands)) return undefined
-      } else if (i > after && first === 'eval') return undefined
+        // A file the guard read is held to the same checks wherever it is read in: a function it
+        // defines before the definition can be called after it, and what that function holds then
+        // runs after it. A file the guard did not read is let be only where it has surely ended
+        // before the definition: read in above it, at the top of the script, as a command of its
+        // own. In a function, a branch or a loop above it, it may be read in after it.
+        if (read ? definedAgain(read.commands, name) || rereads(read.commands) : i > after || !(await readAtTop(c))) return undefined
+        // Text run as commands holds the call wherever it is typed: in a function typed above the
+        // definition it runs when that function is called, which can be after it.
+      } else if (first === 'eval') return undefined
     }
     const got = await bodyOf(from.unit, name, from.d)
     return got && { body: got.body, end: from.unit === script ? got.end : after }
