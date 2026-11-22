@@ -767,13 +767,24 @@ scanning_sections(){   # $1 = a suite that supports SECTION_ONLY -> its scanning
     | awk -v pat="(ls-files|repo-files[.]sh[^']*) '[*]" '/^section "/ { sec = $0 } $0 ~ pat { if (sec != "") print sec }' 2>/dev/null \
     | sed 's|^section "||; s|"$||' | sort -u
 }
+# Whether a suite runs by section at all, from its code lines too (claude-config#3409), and asked
+# here once for the list and for the run. Read from the whole text, a scanner whose COMMENT named
+# the variable was taken for one that runs by section, and with no section making a globbed listing
+# it was neither listed nor run, while the floor below went on counting it as selected: a fixture
+# of exactly that passed the gate with "0 whole tree scan(s) passed" (seen 2026-11-22). A comment
+# now leaves it a whole suite, which is run. Of the suites the mark selects in this repository,
+# the two that name the variable name it in code (measured 2026-11-22), so nothing moved.
+_sc_by_section(){   # $1 = a suite -> 0 when its code reads SECTION_ONLY
+  grep -q 'SECTION_ONLY' "$1" 2>/dev/null || return 1
+  grep -q 'SECTION_ONLY' <<< "$(_sc_code_lines "$1")"
+}
 
 # What it WOULD run, without running any of it. This used to be answered after every scanner had
 # already run, so asking what the gate covers cost what the gate costs (L102).
 if [ "${SCANNERS_LIST:-}" = "1" ]; then
   while IFS= read -r s; do
     [ -n "$s" ] || continue
-    if grep -q 'SECTION_ONLY' "$s" 2>/dev/null; then
+    if _sc_by_section "$s"; then
       scanning_sections "$s" | sed "s|^|SECTION $s |"
     else
       printf 'SUITE %s\n' "$s"
@@ -1400,7 +1411,7 @@ _sc_wait_bounded(){    # waits for this round's runs until the budget runs out, 
 
 while IFS= read -r s; do
   [ -n "$s" ] || continue
-  if grep -q 'SECTION_ONLY' "$s" 2>/dev/null; then
+  if _sc_by_section "$s"; then
     sections="$(scanning_sections "$s")"
     [ -n "$sections" ] || continue
     while IFS= read -r sec; do

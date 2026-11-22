@@ -848,7 +848,11 @@ printf '#!/usr/bin/env bash\n# git ls-files would miss the drafts\nROOT="$(bash 
 # Inside a suite that runs by section, a section is picked by the same code lines: the first holds
 # the globbed listing only in a comment, the second really makes it. The variable is written in two
 # pieces so this suite's own text does not hold it.
-printf '#!/usr/bin/env bash\n# runs one section when SECTION_%s names it\nsection "talks about a scan"\n# it used to run: git ls-files '"'"'*.sh'"'"'\nsection "really scans"\ngit ls-files '"'"'*.sh'"'"' >/dev/null\nexit 0\n' ONLY > "$RMC/payload/hooks/test-parts.sh"
+printf '#!/usr/bin/env bash\nonly="${SECTION_%s:-}"\nsection "talks about a scan"\n# it used to run: git ls-files '"'"'*.sh'"'"'\nsection "really scans"\ngit ls-files '"'"'*.sh'"'"' >/dev/null\nexit 0\n' ONLY > "$RMC/payload/hooks/test-parts.sh"
+# Whether a suite runs by section is read from its code lines too. A scanner whose comment names
+# that variable was taken for one that runs by section, and with no section making a globbed
+# listing it was neither listed nor run, while the floor went on counting it as selected.
+printf '#!/usr/bin/env bash\n# not run by section: SECTION_%s is only named here\ngit ls-files >/dev/null\nexit 0\n' ONLY > "$RMC/payload/hooks/test-secnote.sh"
 commit_all "$RMC"
 _ml="$(printf '{"tool_name":"Bash","tool_input":{"command":"git push"},"cwd":"%s"}' "$RMC" | SCANNERS_LIST=1 bash "$H" 2>&1)"
 grep -q 'test-quoted[.]sh' <<< "$_ml" \
@@ -874,6 +878,17 @@ grep -q -x 'SECTION payload/hooks/test-parts.sh really scans' <<< "$_ml" \
 grep -q 'talks about a scan' <<< "$_ml" \
   && check "#3409 and a section that holds the listing only in a comment is not" "got=$_ml" \
   || check "#3409 and a section that holds the listing only in a comment is not" ok
+grep -q -x 'SUITE payload/hooks/test-secnote.sh' <<< "$_ml" \
+  && check "#3409 a scanner whose comment names the section variable is listed as a whole suite" ok \
+  || check "#3409 a scanner whose comment names the section variable is listed as a whole suite" "got=$_ml"
+# And on a real push, since the listing and the run decide it in two places: it fails when run.
+RSN="$(mkrepo secnote)"
+printf '#!/usr/bin/env bash\n# not run by section: SECTION_%s is only named here\ngit ls-files >/dev/null\necho "secnote ran"\nexit 1\n' ONLY > "$RSN/payload/hooks/test-secnote.sh"
+commit_all "$RSN"
+osn="$(fire "$RSN" "git push")"; csn=$?
+[ "$csn" -eq 2 ] && grep -q 'secnote' <<< "$osn" \
+  && check "#3409 and it is run whole before a push, so its failure blocks" ok \
+  || check "#3409 and it is run whole before a push, so its failure blocks" "exit=$csn out=$osn"
 
 # --- listing the selection runs NONE of it. It used to be read after every scanner had already
 #     run, so asking what the gate covers cost exactly what the gate costs (L102).
