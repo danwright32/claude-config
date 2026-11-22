@@ -610,6 +610,10 @@ one with each such library taken away. A library a gate loads with a stand in fu
 `this_mac_name` for `lib/this-mac.sh`, which only names the Mac in a record. Each gate is run with
 each examined one gone as well, and must decide its judged call as it does with the library in
 place. Until #2634 every stand in was optional by its shape, so no gate was ever run without one.
+The suite's tables of the gates it runs are held both ways against its scans of the settings: a
+gate the scans find and a table lacks fails, and so does a gate a table names that the scans no
+longer find, its registration removed or its refusal moved where they cannot see it, until the
+same change takes its row out (#3414). `--list-found` prints what the scans find in the tree.
 
 Before a Bash call the write gate also notes what an at risk `payload/` holds, in
 `~/.claude-payload-write-gate`, so that after the call it can name anything written there that the
