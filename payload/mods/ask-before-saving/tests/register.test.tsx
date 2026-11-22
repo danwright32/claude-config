@@ -4212,6 +4212,23 @@ test('a find that hands a lasting memory file it names to rm is asked about as a
   expect(w.asked).toEqual([])
 })
 
+// A shell command that ran and failed may have taken some of its files before it failed, so Dan is
+// never told that nothing went (L11): only a command refused before it ran can say that.
+test('an approved removal that ran and failed is said as one that may have gone in part, never as not deleted (#3402)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: KEPT })
+  const command = 'rm CLAUDE.md AGENTS.md'
+  await askRemoval($, w, refusalOf(await call($, { tool: 'Bash', command })), 'Delete', 'Delete ~/Apps/slate/CLAUDE.md and ~/Apps/slate/AGENTS.md: the project is retired?')
+  w.ctl.failWrites = true
+  const again = await call($, { tool: 'Bash', command })
+  expect(again.deny).toBeUndefined()
+  const said = w.toasts.join('\n')
+  expect(said).toContain('The command to delete ~/Apps/slate/CLAUDE.md, ~/Apps/slate/AGENTS.md ran and failed, so some of it may have gone: String to replace not found in file.')
+  expect(said).not.toContain('was not deleted')
+  // The approval was for that one run: it is spent, and the same call is asked about again.
+  w.ctl.failWrites = false
+  expect(refusalOf(await call($, { tool: 'Bash', command }))).toContain(NOT_DELETED)
+})
+
 // Before #3402 each of these was refused as a shell command that writes the lessons file (#3343),
 // with no question waiting and so nothing Dan could approve. A removal's question must not open a
 // way round that: the move's end is a write of the lessons file like any other.

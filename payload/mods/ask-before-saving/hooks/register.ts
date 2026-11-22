@@ -898,7 +898,9 @@ const saveCall: MatchedHook<'tool.call', { tool: typeof TOOL_NAMES }> = async ($
     const where = removedNames(used.removes)
     if (r.deny === undefined && !r.isError) return { ...r, context: [...(r.context ?? []), `${words.done} ${where}, as Dan answered ${pressed(used)}.`] }
     const why = String(r.deny ?? r.text ?? 'the tool reported an error')
-    $.ui.toast(`${where} ${words.was}: ${why}`, { timeoutMs: 10_000 })
+    // Refused before it ran, nothing went. One that ran and failed may have taken some of its files
+    // before it failed, so that is what Dan is told, never that nothing went (L11).
+    $.ui.toast(r.deny !== undefined ? `${where} ${words.was}: ${why}` : `The command to ${words.verb} ${where} ran and failed, so some of it may have gone: ${why}`, { timeoutMs: 10_000 })
     if (r.deny === undefined) return r
     const back: AskBeforeSavingApproval = { ...used, refused: why }
     if (!stands(back.until, await $.clock.now())) {

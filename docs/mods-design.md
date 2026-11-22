@@ -3304,7 +3304,10 @@ lasting memory file, or moved one away, ran with no question. Measured in the mo
   `find . -name CLAUDE.md -exec rm {} +` ran unasked before this (measured 2026-11-22).
 - **The disk decides the rest.** A file that is not there is no removal, so `rm -f CLAUDE.md` in a
   folder with none is not asked about. A folder above the memory under home counts only for what is
-  found under it. A disk that cannot say fails the hook, which fails closed.
+  found under it. A disk that cannot say whether a file is there fails the hook, which fails
+  closed. One that says a path is there and cannot say what is at it does not: the removal is
+  still asked about, without the sentence that it is a whole folder, and a move onto such a path
+  is said as replacing what is there.
 - **The question is the removal's own** (the issue's first open question, settled by the building
   session, not by Dan). It is tied to the call by the same `metadata.source` a save's question
   carries. Claude's sentence names what goes and says why; the mod adds, as Dan is asked, what it
