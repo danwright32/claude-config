@@ -14,14 +14,14 @@ export type AskBeforeSavingQuestion = {
    */
   key?: string
   /**
-   * Set when the call removes lasting memory or moves it away (#3402): the question is then the
+   * Set when the call removes lasting memory, moves it away or empties it (#3402): the question is then the
    * removal's own, with its own answers, and `files` holds only the lasting memory a move lands on.
    */
   removes?: AskBeforeSavingRemoval[]
 }
 
 /**
- * One lasting memory file a shell command would delete or move away (#3402), as the removal's
+ * One lasting memory file a shell command would delete, move away or empty (#3402), as the removal's
  * question says it. Read from mod-kit's write reader (a change that removes), the disk and git when
  * the call is refused, and again when Dan is asked, so the question says what is true then (L180).
  */
@@ -102,7 +102,7 @@ export type AskBeforeSavingApproval = {
    */
   short?: string
   /**
-   * Set on an approval of a removal (#3402), Dan's Delete or Move on the removal's own question:
+   * Set on an approval of a removal (#3402), Dan's Delete, Move or Empty on the removal's own question:
    * what he was told would go, and whether it could be got back. It lets through only a call that
    * removes exactly this, with the same consequence, and never a save; an approval without it never
    * lets a removal through (rules.ts coversRemoval).

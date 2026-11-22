@@ -586,13 +586,13 @@ export const lessonsFile = (home: string): string => `${home.replace(/\/$/, '')}
 
 /**
  * The answer Dan gave that made an approval, as he pressed it: For good, the lesson picker's add, or
- * for a removal (#3402) Delete or Move.
+ * for a removal (#3402) Delete, Move or Empty.
  */
 export const pressed = (x: AskBeforeSavingApproval): string => (x.removes?.length ? removalWords(x.removes).label : x.lesson !== undefined ? LESSON_ADD : FOR_GOOD)
 
 /**
  * What an approval was given for, as the words after "for" or "on" (#3402): saving to its files, or
- * deleting or moving what it removes, so a removal's lapse is never said as a save's.
+ * deleting, moving or emptying what it removes, so a removal's lapse is never said as a save's.
  */
 export const approvedFor = (x: AskBeforeSavingApproval): string => (x.removes?.length ? `${removalWords(x.removes).doing} ${removedNames(x.removes)}` : `saving to ${x.files.join(', ')}`)
 

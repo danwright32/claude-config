@@ -411,7 +411,7 @@ const kindAt = async ($: EngineInterface, path: string) => {
   }
 }
 
-// The lasting memory a Bash call would remove or move away (#3402), each as the removal's question
+// The lasting memory a Bash call would remove, move away or empty (#3402), each as the removal's question
 // says it, or none. From the changes mod-kit's reader reported for the command (lastingTargets'
 // read), judged by the rule module, then asked of the disk: a file that is not there is no removal,
 // a folder taken whole counts only for the lasting memory found under it, a move says whether a
@@ -578,8 +578,8 @@ const takeApproval = async ($: EngineInterface, key: string, facts: LessonFacts)
   return { live: live as AskBeforeSavingApproval | undefined, lapsed: lapsed[0] as AskBeforeSavingApproval | undefined, short: lacks === undefined ? undefined : unnamed(facts, lacks.asked) }
 }
 
-// The approval for this removal (#3402), taken as the call that uses it arrives: Dan's Delete or
-// Move for this call, covering exactly what it removes now with the consequence he was told
+// The approval for this removal (#3402), taken as the call that uses it arrives: Dan's Delete, Move
+// or Empty for this call, covering exactly what it removes now with the consequence he was told
 // (coversRemoval). An approval of a save never fits, and one whose file has changed since (git
 // holds it differently, another file is at the move's end) is left to lapse, so he is asked again
 // with what is true now. A lapsed one is taken out and said, as a save's is.
@@ -832,7 +832,7 @@ const saveCall: MatchedHook<'tool.call', { tool: typeof TOOL_NAMES }> = async ($
         )
       return { deny: agentRefusal(targets) }
     }
-    // Nor does a subagent remove lasting memory or move it away (#3402): refused, never asked about.
+    // Nor does a subagent remove lasting memory, move it away or empty it (#3402): refused, never asked about.
     const gone = await removalsOf($, tool, input, at, targets.writes)
     if (gone.length) return { deny: agentRemovalRefusal(gone) }
     const key = saveKey(tool, input, at.cwd, at.home)
@@ -865,7 +865,7 @@ const saveCall: MatchedHook<'tool.call', { tool: typeof TOOL_NAMES }> = async ($
     // Nor a shell command that writes or may write the lessons file (#3343): left for the
     // tool.check hook to refuse the same way, with the Edit route named.
     files = targets === undefined || shellLessons(tool, targets, at.home) ? [] : targets.files
-    // Nor a command that removes lasting memory or moves it away (#3402): his words made a rule
+    // Nor a command that removes lasting memory, moves it away or empties it (#3402): his words made a rule
     // permanent, and said nothing of a file going, so it is left for the tool.check hook to ask about.
     if (files.length && (await removalsOf($, tool, input, at, targets?.writes)).length) files = []
     if (files.length) approved.add((key = saveKey(tool, input, at.cwd, at.home)))
@@ -890,7 +890,7 @@ const saveCall: MatchedHook<'tool.call', { tool: typeof TOOL_NAMES }> = async ($
   // and records why, so its lapse never calls it unused; Dan, who answered believing it saved, is
   // told it was not. A shell command that ran and failed may have written part of what it does, so
   // its approval is spent: running it again would write that part twice.
-  // A removal Dan answered Delete or Move, sent again (#3402): said in its own words. The command
+  // A removal Dan answered Delete, Move or Empty, sent again (#3402): said in its own words. The command
   // that ran is spent, landed or not, as a shell save's is; one refused beneath before it ran gives
   // the approval back for the rest of its time, and Dan, who answered, is told it did not go.
   if (used?.removes?.length) {
@@ -1006,11 +1006,11 @@ const saveCheck: Hook<'tool.check'> = async ($, e, next) => {
   if (approved.delete(key) || fromAgent.has(key)) return next(e)
   const targets = await lastingTargets($, tool, input, at)
   const { files } = targets
-  // A command that removes lasting memory or moves it away (#3402) is judged by itself, under the
+  // A command that removes lasting memory, moves it away or empties it (#3402) is judged by itself, under the
   // removal's own question and approval: nothing below, which is all about a save, is reached.
   // The one exception is a command that also writes the lessons file by shell (a move that lands on
   // it among them): that was refused outright before #3402, with no question waiting (#3343), and it
-  // still is, below, so no Move or Delete can approve what no For good could.
+  // still is, below, so no Delete, Move or Empty can approve what no For good could.
   const removes = await removalsOf($, tool, input, at, targets.writes)
   if (removes.length && !shellLessons(tool, targets, at.home)) {
     const id = String(raw.tool_use_id ?? '')

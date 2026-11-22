@@ -3935,8 +3935,8 @@ test('a command that removes lasting memory and also writes other lasting memory
   expect(w.asked).toEqual([])
 })
 
-// The two approvals never stand in for each other: a For good is for a save and a Delete or a Move
-// for a removal, each held to the call it was given for and to its own kind of record.
+// The two approvals never stand in for each other: a For good is for a save and a Delete, a Move
+// or an Empty for a removal, each held to the call it was given for and to its own kind of record.
 test('an approval of a save never approves a removal of the same file, and an approval of a removal never approves a save (#3402)', withKit, async ($, on) => {
   // The approvals as they are stored, and, once `forge` is set, stored as the other kind's record:
   // a removal's approval with its removal taken off, which is the shape of a save's, and a save's
