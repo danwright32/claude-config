@@ -5870,7 +5870,8 @@ processes it may start: `test-claude-sync.sh` its shards, `test-gates-fail-close
 judges and `test-hang-wait-suites-gate.sh` the scripts it judges (#3170). Started by hand, with
 nothing granted, each keeps the width it had before (4 shards, 6 gates, 4 scripts), and a value that
 is not a whole number above zero is refused. Each of the last two counts, at every start, how many
-of its runs are going at once and fails when that passes its share. Point the runner at one
+of the runs it started are still going, and fails when that passes its share, which is what a launch
+loop that ignores the share looks like (at a share of 2 before #3170: 6 and 4). Point the runner at one
 directory holding one suite and that suite is handed the whole budget, so running the long suite on
 its own is as fast as it ever was.
 

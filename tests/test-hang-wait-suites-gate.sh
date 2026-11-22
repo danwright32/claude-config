@@ -31,7 +31,11 @@ check(){ if [ "$2" = ok ]; then pass=$((pass + 1)); else fail=$((fail + 1)); ech
 # run-all-tests.sh hands every suite (claude-config#3170): a fixed 4 ran here on CI's runners of 4,
 # where the share is 2. Read as tests/test-claude-sync.sh reads it: empty is absent, anything not a
 # whole number above zero is refused (L50), and 4 when nothing granted a share, a run started by hand.
-. "$DIR/../payload/hooks/lib/whole-number.sh"
+. "$DIR/../payload/hooks/lib/whole-number.sh" && declare -F whole_above_zero >/dev/null || {
+  echo "FAIL: $(basename "$0"): lib/whole-number.sh is missing, so this suite's share of the runner cannot be read. Refusing to guess how many scripts to judge at once."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
 HW_WIDTH=4
 if [ -n "${HOOK_TESTS_SLOTS:-}" ]; then
   if _wn_got="$(whole_above_zero "$HOOK_TESTS_SLOTS")"; then HW_WIDTH="$_wn_got"; else

@@ -75,7 +75,11 @@ bad(){ fail=$((fail + 1)); echo "FAIL: $1" | sed '2,$s/^/  /'; }
 # where the share is 2, beside the Slack drafts gate's cost cases. Read as tests/test-claude-sync.sh
 # reads it: empty is absent, anything not a whole number above zero is refused (L50), and 6 when
 # nothing granted a share, which is a run started by hand.
-. "$DIR/lib/whole-number.sh"
+. "$DIR/lib/whole-number.sh" && declare -F whole_above_zero >/dev/null || {
+  echo "FAIL: $(basename "$0"): lib/whole-number.sh is missing, so this suite's share of the runner cannot be read. Refusing to guess how many gates to run at once."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
 GFC_WIDTH=6
 if [ -n "${HOOK_TESTS_SLOTS:-}" ]; then
   if _wn_got="$(whole_above_zero "$HOOK_TESTS_SLOTS")"; then GFC_WIDTH="$_wn_got"; else
