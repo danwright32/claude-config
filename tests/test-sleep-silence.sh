@@ -225,7 +225,7 @@ judge_routes() {   # judge_routes <routes> <exempt> <consulting> -> per check, "
   # Every exempt entry names a route that exists, and gives a reason with words in it.
   while IFS=$'\t' read -r route reason; do
     [ -n "$route" ] || continue
-    if cut -f1 "$routes" | grep -qxF "$route"; then printf 'ok\texempt %s is still a route\n' "$route"
+    if awk -F'\t' -v r="$route" '$1 == r { f = 1 } END { exit !f }' "$routes"; then printf 'ok\texempt %s is still a route\n' "$route"
     else printf 'FAIL\texempt %s is still a route\tno such route now: remove it from the list\n' "$route"; fi
     case "$reason" in
       *[A-Za-z]*[A-Za-z]*) printf 'ok\texempt %s gives a reason\n' "$route" ;;
@@ -327,6 +327,14 @@ out="$(judge_fixture unchecked "$FX:askDan:ask"$'\t'"Asked only before bed." "$F
 case "$out" in
   *"$FX:askDan:ask"*) check "a recorded route that stops consulting fails by name, even when exempt" ok ;;
   *) check "a recorded route that stops consulting fails by name, even when exempt" "the judge said: ${out:-nothing}" ;;
+esac
+
+# The exempt list keeps its own check through the move into judge_routes: an entry naming a route
+# that is not found fails by name.
+out="$(judge_fixture both "$FX:askDanLater:ask"$'\t'"Asked only before bed." "$FX_LIST")"
+case "$out" in
+  *"exempt $FX:askDanLater:ask is still a route"*) check "an exempt entry naming a route that is not found fails by name" ok ;;
+  *) check "an exempt entry naming a route that is not found fails by name" "the judge said: ${out:-nothing}" ;;
 esac
 
 # ---- 2. the shell routes, run asleep and awake ----
