@@ -352,8 +352,10 @@ the `claudesync` shell alias:
 
 Dan's three decisions, each from a picker on 2026-11-18: session notes "Drop bulky leftovers, keep
 notes"; transcripts "Shorten only agent and test runs", kept "7 days" (his own sessions stay at
-Claude Code's 30); and it runs "By itself, with a log". The rules are `hooks/lib/keep_rules.py`, whose
-header is the checkable statement of both. In short:
+Claude Code's 30); and it runs "By itself, with a log". On 2026-11-21, from a picker recorded on
+#3413, he raised the transcripts' 7 days to 14 ("Keep 14 days"), about 2 GB more on each Mac at
+about 280 MB a day, so a count of agent activity can reach back two weeks. The rules are
+`hooks/lib/keep_rules.py`, whose header is the checkable statement of both. In short:
 
 - **Session notes** (`~/.claude/state/session-notes/<project>/<session>/`). A session has ended
   when the session registry does not show it open AND no file in its notes folder was written for 3
@@ -361,7 +363,7 @@ header is the checkable statement of both. In short:
   or mostly images or documents, and so do tar files. Every other file (handoff.md, evidence.md,
   tests.txt, pr-body.md, logs) stays, every folder under 1 MB stays, and a link is never followed or
   removed. A folder not named like a session id is never touched.
-- **Transcripts** (`~/.claude/projects/`). Removed once last written more than 7 days ago: subagent
+- **Transcripts** (`~/.claude/projects/`). Removed once last written more than 14 days ago: subagent
   transcripts (`subagents/**/agent-*.jsonl` and their `.meta.json`) in every project, and, in a
   project folder keyed to a worktree (`-claude-worktrees-`) or to a headless run under
   `/private/tmp` (`-private-tmp`), the session transcript `<session>.jsonl` and every file in the
@@ -400,6 +402,24 @@ removes and `/disk-clean` offers with a tick (Dan, 2026-11-19, both recorded on 
   state and is never synced, so the other Mac is unaffected.
 - Install it on a Mac: `claude-sync install-autosync`, run once on each Mac, since a launch agent
   is a copy. Until it is installed, `claude-sync stuck` says so in every session on that Mac.
+
+#### Copy the records before a count (#3413)
+
+Because this job removes agent and run transcripts at 14 days, and Claude Code removes Dan's own at
+30, a count that reads `~/.claude/projects` over "the last N days" can read fewer days than it says,
+and a recount hours later reads a different set. So a count first runs `tools/record-copy.py`:
+
+- `python3 tools/record-copy.py report --days 14` says, for Dan's own sessions, agent records, and
+  worktree and temporary folder runs (sorted by `transcript_files` in keep_rules.py, never a copy of
+  it), how many files fall in the window and how far back the oldest one is. It writes nothing.
+- `python3 tools/record-copy.py copy --days 14 --label 3230` copies the records in the window to
+  `~/.claude/state/record-copies/<label>-<date and time>/projects/`, each with its own time, readable
+  only by this user, and prints how many files it holds for each date. The count reads that copy.
+- Both refuse a window longer than the oldest record of a kind asked for (`--kinds own,agent,run`),
+  unless `--accept-shorter`, when they state the window each kind really has.
+- The copy lives in `~/.claude/state`, which the sync never carries, the keep rules never walk, and
+  `/disk-clean` never offers. Nothing removes a copy: delete it with the `rm -rf` line it prints
+  once the count is finished.
 
 It also adds this to `~/.zshrc`, so the shortcut arrives with the rest of the setup
 instead of being added by hand on each Mac (`~/.zshrc` is deliberately not synced):

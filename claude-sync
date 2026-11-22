@@ -15495,8 +15495,8 @@ reap_scratch_if_due(){
 
 # ---------- the daily removal of leftovers (claude-config#3235) ----------
 # Dan, 2026-11-18, each from a picker recorded on #3235: once a session has ended its bulky
-# leftovers go and its written notes stay; agent and test run transcripts are kept 7 days and his
-# own sessions Claude Code's 30; and it runs "By itself, with a log", so he hears about it only when
+# leftovers go and its written notes stay; agent and test run transcripts are kept 14 days (7 until
+# his decision of 2026-11-21 on #3413) and his own sessions Claude Code's 30; and it runs "By itself, with a log", so he hears about it only when
 # a run fails or is missed. The rules themselves, and what each one removes, are
 # hooks/lib/keep_rules.py, which this runs from the payload beside this script.
 #
@@ -15580,7 +15580,7 @@ leftovers_stuck_records(){   # $1 = now
   plist="$agentdir/$LEFTOVERS_LABEL.plist"
   if [ ! -f "$plist" ]; then
     if [ -f "$agentdir/com.claudesync.timer.plist" ] || [ -f "$agentdir/com.claudesync.watch.plist" ]; then
-      printf 'leftovers-not-installed\t-\t-\t%s\n' "the daily removal of old leftovers (#3235) is not installed on this Mac, so the bulky leftovers of its ended sessions and its agent and test run transcripts older than 7 days are not being removed. Install it with: claude-sync install-autosync"
+      printf 'leftovers-not-installed\t-\t-\t%s\n' "the daily removal of old leftovers (#3235) is not installed on this Mac, so the bulky leftovers of its ended sessions and its agent and test run transcripts older than 14 days are not being removed. Install it with: claude-sync install-autosync"
     fi
     return 0
   fi
@@ -15616,7 +15616,7 @@ report_leftovers_job(){   # $1 = the agents folder
     return 0
   fi
   if [ ! -f "$plist" ]; then
-    echo "removal of leftovers: not installed, so nothing removes the bulky leftovers of ended sessions or agent and test run transcripts older than 7 days on this Mac. Install it with: claude-sync install-autosync"
+    echo "removal of leftovers: not installed, so nothing removes the bulky leftovers of ended sessions or agent and test run transcripts older than 14 days on this Mac. Install it with: claude-sync install-autosync"
     return 0
   fi
   if [ ! -f "$rec" ]; then
@@ -16503,7 +16503,7 @@ do_install_autosync(){
   fi
   # The daily removal of leftovers (claude-config#3235), on every Mac this installs on.
   writeplist "$LEFTOVERS_LABEL" "$(agent_arg "$LEFTOVERS_LABEL")" "$(agent_extra "$LEFTOVERS_LABEL")"
-  echo "Installed the daily removal of leftovers: once a day it removes ended sessions' bulky leftovers and agent and test run transcripts older than 7 days, logging each item to $(leftovers_log)."
+  echo "Installed the daily removal of leftovers: once a day it removes ended sessions' bulky leftovers and agent and test run transcripts older than 14 days, logging each item to $(leftovers_log)."
   say_not_loaded
   ensure_zsh_alias
   echo "Log: $HOME/.claude-sync.log   (change interval: SYNC_INTERVAL=<seconds> claude-sync install-autosync)"
