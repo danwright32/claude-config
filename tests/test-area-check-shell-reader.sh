@@ -19,7 +19,7 @@
 #     file names, or a script run with no arguments, is not marked unread, so it passes unjudged.
 #   - A program the reader does not know, which it marks as a run since #3323, is left out: the area
 #     check judges each such command as it did before the reader marked them (Dan, 2026-11-21,
-#     "Leave the area check out for now (Recommended)"), until gh has a reading of its own.
+#     "Leave the area check out for now (Recommended)"), until gh has a reading of its own (#3412).
 #   - Every answer register.test.ts gives in place of the reader (its WRITES) is what the real reader
 #     answers for that command in /w/app.
 set -u
@@ -86,7 +86,7 @@ is('known blind spot: a script run with no arguments that builds its own file na
 is('known blind spot: a script run with no arguments that builds its own file names passes unjudged (python3)', 'python3 gen.py', [])
 // #3323: mod-kit's reader gives a program it does not know, handed a word that spells a path, as a
 // run marked unknown. The area check leaves those out (Dan, 2026-11-21: "Leave the area check out
-// for now (Recommended)"), so each command below is judged exactly as it was before the reader
+// for now (Recommended)"; gh's own reading comes first, #3412), so each command below is judged exactly as it was before the reader
 // marked them: `want` is what shellTargets gave for it over the reader as it stood on main before
 // #3323 (commit 3cf551888f), measured there on 2026-11-21. Each check first sees the real reader mark
 // a run unknown, so an empty answer is the area check leaving it out, never a reader that stopped

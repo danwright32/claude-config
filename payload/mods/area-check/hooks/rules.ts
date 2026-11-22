@@ -158,7 +158,7 @@ export type ShellRun = { what: string; path?: string; tool?: true }
  * folder, gh 633 times (the value of an option that happens to name a folder where it ran, `state`
  * in `--json state`) and `claude plugin test <folder>` 80 times, and a folder holding more files the
  * area check could hold than it judges one by one is held whole. gh needs its own reading before
- * the area check joins. Until then a writer nobody has listed, typed as a command and handed a held
+ * the area check joins (#3412). Until then a writer nobody has listed, typed as a command and handed a held
  * file (`prettier --write src/big.ts`), passes here unjudged, as it did before #3323; the design
  * round guard, ask before saving, the collision guard and scope modes do judge it.
  * tests/test-area-check-shell-reader.sh holds this to the real reader.

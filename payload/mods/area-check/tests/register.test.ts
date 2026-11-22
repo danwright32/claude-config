@@ -679,7 +679,7 @@ test('a shell command writing no file, a new file or only files that are no sour
 // file or a folder in a checkout in 726 calls, 713 of them a folder, gh 633 times (the value of an
 // option that happens to name a folder where it ran, `state` in `--json state`) and `claude plugin
 // test <folder>` 80 times, and a folder holding more than 25 files the area check could hold is held
-// as a write that cannot be named. So gh gets its own reading first. Until then each such command
+// as a write that cannot be named. So gh gets its own reading first (#3412). Until then each such command
 // gets the verdict it got with the reader as it stood on main before #3323, which MAIN_WRITES
 // records for the commands below (measured from the reader at commit 3cf551888f on 2026-11-21).
 const MAIN_NOTHING = { files: [], changes: [], unnamed: [] }

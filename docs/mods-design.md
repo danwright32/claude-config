@@ -2412,6 +2412,157 @@ reads the origin for this itself (naming the `composer` kind as a string). Each 
 through a byte for byte copy of the reader under its `tests/mod-kit`, with a typed prompt, a phone
 prompt, a handoff's opening prompt and a task notification.
 
+### The programs that only read (#3323), built 2026-11-21
+
+mod-kit's write reader (`hooks/writes.ts`, `$.modkit.writes`) knew the programs that write, and
+read every other program as writing nothing. So the next writer nobody had listed was exempt from
+every guard that asks the reader (L96): `prettier --write app/page.tsx`, typed without `npx`, changed
+a file the design round guard holds and was never judged. #3323 turns the rule round. A program the
+reader does not know, handed a word that spells a path, is read as writing that file. The reader
+gives it as a run marked `unknown`, with why it was read as a writer and what to do, written once in
+the reader so every guard says the same (L111, L118): "prettier is a program the mods do not know,
+so what it does with a file it is handed cannot be read before it runs", then to use a program on
+the list below to only read a file, and to ask Dan when the program only reads too.
+
+Dan's decisions, each a picker answer on #3323:
+
+- 2026-11-21, 4:56 PM ET: "Turn it round, with the list (Recommended)". The rule above, with
+  thirteen programs listed as only reading, and `rg --pre` read as a writer.
+- 2026-11-21, 4:56 PM ET: "Add them now". Nineteen more on the same list, and `file -C` read as a
+  writer.
+- 2026-11-21, 4:56 PM ET: "Yes, in the same change (Recommended)". Unpacking an archive is read as
+  a write (below).
+- 2026-11-21, 7:44 PM ET: "Leave the area check out for now (Recommended)". The area check does not
+  pick the rule up until gh has a reading of its own (#3412, below).
+
+**The list is an exemption list. Dan signed off these 32 programs by name and no others.** Nothing
+is added without his sign off: no name, no wildcard, no path pattern, no rule that reads some other
+program as harmless. `[[` is not on it, so `[[ -f app/page.tsx ]]` is read as a writer while
+`[ -f app/page.tsx ]` and `test -f app/page.tsx` are not. The reason in each row was checked against
+this Mac's own manual page or help text on 2026-11-21: whatever the program sends anywhere goes to
+standard output, and a redirect is read as the write it is.
+
+| Program | Why it only reads | A form of it that is read as a writer | Signed off |
+| --- | --- | --- | --- |
+| `grep` | prints the lines that match; no option of it writes a file | none | Dan, 2026-11-21, #3323, "Turn it round, with the list (Recommended)" |
+| `cat` | prints the files it is given | none | Dan, 2026-11-21, #3323, "Turn it round, with the list (Recommended)" |
+| `wc` | prints counts of lines, words and bytes | none | Dan, 2026-11-21, #3323, "Turn it round, with the list (Recommended)" |
+| `cmp` | compares two files and prints where they differ | none | Dan, 2026-11-21, #3323, "Turn it round, with the list (Recommended)" |
+| `rg` | prints matches; its replace option changes only what is printed | `--pre` (runs a program on each file), `--hostname-bin` (runs a program) | Dan, 2026-11-21, #3323, "Turn it round, with the list (Recommended)" |
+| `diff` | prints the difference between files; it has no output file option | none | Dan, 2026-11-21, #3323, "Turn it round, with the list (Recommended)" |
+| `tail` | prints the end of a file | none | Dan, 2026-11-21, #3323, "Turn it round, with the list (Recommended)" |
+| `ls` | lists names and details | none | Dan, 2026-11-21, #3323, "Turn it round, with the list (Recommended)" |
+| `head` | prints the start of a file | none | Dan, 2026-11-21, #3323, "Turn it round, with the list (Recommended)" |
+| `cksum` | prints a checksum | none | Dan, 2026-11-21, #3323, "Turn it round, with the list (Recommended)" |
+| `[` | the shell's test: answers a question about a file with its exit code | none | Dan, 2026-11-21, #3323, "Turn it round, with the list (Recommended)" |
+| `stat` | prints a file's details | none | Dan, 2026-11-21, #3323, "Turn it round, with the list (Recommended)" |
+| `echo` | prints its words and opens no file at all | none | Dan, 2026-11-21, #3323, "Turn it round, with the list (Recommended)" |
+| `cut` | prints chosen columns or characters | none | Dan, 2026-11-21, #3323, "Add them now" |
+| `df` | prints free disk space | none | Dan, 2026-11-21, #3323, "Add them now" |
+| `du` | prints sizes | none | Dan, 2026-11-21, #3323, "Add them now" |
+| `shasum` | prints a checksum; its check mode also only reads | none | Dan, 2026-11-21, #3323, "Add them now" |
+| `jq` | prints what it selects from JSON; it has no in place option and runs no program | none | Dan, 2026-11-21, #3323, "Add them now" |
+| `pgrep` | lists processes; its pid file option reads that file | none | Dan, 2026-11-21, #3323, "Add them now" |
+| `file` | prints what kind of file something is | `-C` (compiles a magic file) | Dan, 2026-11-21, #3323, "Add them now" |
+| `strings` | prints the text inside a file | none | Dan, 2026-11-21, #3323, "Add them now" |
+| `tr` | translates standard input to standard output | none | Dan, 2026-11-21, #3323, "Add them now" |
+| `comm` | prints the lines two files share or do not | none | Dan, 2026-11-21, #3323, "Add them now" |
+| `paste` | prints the lines of the files it is given side by side | none | Dan, 2026-11-21, #3323, "Add them now" |
+| `test` | the same program as [: answers with its exit code | none | Dan, 2026-11-21, #3323, "Add them now" |
+| `lsof` | prints which files are open | `-D` (builds or updates its device cache file) | Dan, 2026-11-21, #3323, "Add them now" |
+| `mdls` | prints a file's Spotlight attributes | `-plist` (writes the file it names) | Dan, 2026-11-21, #3323, "Add them now" |
+| `which` | prints where a command is | none | Dan, 2026-11-21, #3323, "Add them now" |
+| `readlink` | prints what a link points to | none | Dan, 2026-11-21, #3323, "Add them now" |
+| `mdfind` | prints the files Spotlight finds | none | Dan, 2026-11-21, #3323, "Add them now" |
+| `pdfinfo` | prints a PDF's details; it has no output file option | none | Dan, 2026-11-21, #3323, "Add them now" |
+| `ps` | lists processes | none | Dan, 2026-11-21, #3323, "Add them now" |
+
+The list lives in one place, `READ_ONLY` in mod-kit's `hooks/writes.ts`, and
+`tests/test-read-only-programs.sh` holds it to this table both ways: the same 32 names, the same
+reason, the same forms, and a sign off in every row. It also fails when a name the reader compares a
+command against (a table key, a member of one of its sets, a name in one of its branches) is read
+as a program it does not know.
+
+**The forms that write.** Five forms of a listed program write a file or run a program, and each is
+read as any program not on the list is, the refusal saying which form and that the program without
+it only reads. Dan was told of two when he decided, `rg --pre` and `file -C` (or `--compile`). The
+other three were found in the manual page check and built the stricter way, which narrows what he
+approved and never widens it: `rg --hostname-bin` (runs a program), `mdls -plist` or `-p` (writes
+the file it names) and `lsof -D` (builds or updates its device cache file).
+
+**What "known" means.** A program is known when any of the reader's tables or branches reads it: a
+writer it already read, git, a script file run by an interpreter, a module or a tool run through
+npx, a command it marks unread, a listed program above, and the few names it reads by a rule of
+their own (`READ_BY_RULE`: `printf`, whose `-v` sets a variable, `npx`, and the words that run text,
+`eval`, `source`, `.`, `trap` and `alias`). `printf` and `npx` are known because the reader has a
+branch for each, not because Dan listed them. No shell word is exempt: `[[`, `set`, `exit` and
+`sleep` are programs on no list.
+
+**Which words are handed on.** Only a word that spells a path. Not a word through a variable the
+command never sets, a pattern, a command's output, a file on standard input, or the files xargs
+hands a program: the count Dan decided on did not measure those, and the design round guard would
+hold nearly every command. So `mystery "$OUT/page.tsx"` is not read as a writer of that file.
+
+**Unpacking.** `tar -x` (bsdtar and gtar too), `unzip` and `cpio -i` are read as a write into the
+folder they unpack into (`-C`, `-d`, or where the command runs), given as a write whose files the
+words do not name, and an unpack that names a member is also read as writing that file where it
+lands. Every other form of the three (`tar -t` or `-c`, `unzip -l`, `cpio -o` or `-p`) is no unpack
+and is read as a program the reader does not know, so `tar -tzf a.tgz` is told that tar is not
+known. A member renamed on the way out is not read.
+
+**What each guard does with it.**
+
+- The design round guard holds a look changing file handed to such a program, naming the program,
+  why and what to do. An unpack into a folder with no member named is judged only by the look
+  changing files the command's own words name, as a download a server names is, so
+  `tar -xf a.tgz -C app` is not held by it; one naming a held member is.
+- Ask before saving asks before a lasting memory file is handed to such a program.
+- The collision guard judges what such a program is handed against other sessions' edits, the
+  question naming the program. It does not note the file as this session's edit: most words such a
+  program is handed name no file (`gh pr view 5` hands pr, view and 5), a session's edits are capped
+  at twenty, and each one noted is a file another session would then be asked about.
+- Scope modes: overnight refuses such a program handed LESSONS.md, and winding down counts a file
+  handed to one as this session's while it is uncommitted, as it has counted a file handed to a
+  script since #1664. The words that name no file, or a folder, make nothing this session's (a test
+  pins it): in 35 days of records the rule added 13,430 paths to those lists, 12,208 naming nothing
+  on disk and 48 a folder, and 76 a file inside a checkout. No build does not read runs, by its own
+  rule that running programs is allowed, so such a program handed a file still runs there; it does
+  refuse an unpack that lands outside the notes. The morning report's judgement of whether a refused
+  call only read keeps its own longer list of programs (`READ_PROGRAMS` in `refusals.ts`).
+- **The area check is left out for now (#3412).** It judges a command exactly as it did before the
+  reader marked these runs (`judgedRuns` in its `rules.ts`). Why: in the 35 days of records such a program
+  was handed a source file or a folder in a checkout in 726 past calls, 713 of them a folder, `gh`
+  633 times and `claude` 80. gh's are the value of an option that happens to name a folder where the
+  command ran (`state` in `--json state`, 598 times), and claude's are `claude plugin test <a mod's
+  folder>`. The area check holds a folder for the files under it, and whole when more of them could
+  be held than it judges one by one, so those commands would be held for nothing they write. gh
+  needs a reading of its own first (#3412), and then the area check joins. Until then a
+  writer nobody has listed, typed as a command and handed a file the area check holds, passes it
+  unjudged, as before #3323. It does judge an unpack, with the rules it already had: as a write whose
+  files cannot be named, as a download a server names already was, in the checkout of the folder
+  unpacked into. `tests/test-area-check-shell-reader.sh` holds the leaving out to the real reader,
+  and over the 51,765 recorded calls the area check's reading is the same as main's in all but 76,
+  each an unpack.
+
+**A script's own text is read as before.** The rule covers a command as typed. Where a guard reads
+the text of a script a command runs (the design round guard's `argumentUnreached`, the area check's
+`scriptReach`), a run marked unknown counts for nothing: nearly every script holds one (`exit 1`,
+`sleep 2`), so counting them would have every script handed a folder reach the whole of it, which
+#2924, #2407 and #2565 ended. So a script that hands its folder to a program nobody has listed is
+not caught.
+
+**The count behind it** (the personal MacBook's records, 35 days to 2026-11-21, 51,590 shell calls
+when it was taken): with the built rule 16 past calls are newly held by the two guards it was
+decided on, the design round guard 13 and ask before saving 3 (swiftc 8, gh 3, chk 2, swift 1, set
+1, one not a plain name), against 36 predicted and a gate of about 60. `[[` was handed a word that
+spells a path in 9 calls, none a path either guard holds. 75 calls were unpacks. The same count over
+the work MacBook's records is still owed.
+
+**What the list cannot catch**, said so it is never claimed (L460): a false reason, a sign off typed
+in without Dan giving it, a new version of a listed program gaining an option that writes, another
+program installed under a listed name, and an option set in a config file rather than on the
+command (`RIPGREP_CONFIG_PATH`).
+
 ### Which guard decides first (#707), built 2026-10-04
 
 Not put to Dan; each is the plainest reading of the issue, and each is open to his changing it.

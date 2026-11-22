@@ -818,7 +818,7 @@ test("a program the write reader does not know, in a script's own text, is no sc
 
 // #3323: in a command as typed the area check leaves such a run out too (Dan, 2026-11-21, "Leave the
 // area check out for now (Recommended)": gh is handed an option's value that names a folder too
-// often, so it gets its own reading first). Each command below gives the targets it gave over the
+// often, so it gets its own reading first, #3412). Each command below gives the targets it gave over the
 // reader as it stood on main before #3323 (measured at commit 3cf551888f), which marked no such run.
 test('a path handed to a program the write reader does not know is no target, and what else the command writes is judged as before (#3323)', () => {
   const read = (c: string) => commandWrites(c, '/w/app', '/h')
