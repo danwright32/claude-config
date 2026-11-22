@@ -610,6 +610,10 @@ one with each such library taken away. A library a gate loads with a stand in fu
 `this_mac_name` for `lib/this-mac.sh`, which only names the Mac in a record. Each gate is run with
 each examined one gone as well, and must decide its judged call as it does with the library in
 place. Until #2634 every stand in was optional by its shape, so no gate was ever run without one.
+The suite's tables of the gates it runs are held both ways against its scans of the settings: a
+gate the scans find and a table lacks fails, and so does a gate a table names that the scans no
+longer find, its registration removed or its refusal moved where they cannot see it, until the
+same change takes its row out (#3414). `--list-found` prints what the scans find in the tree.
 
 Before a Bash call the write gate also notes what an at risk `payload/` holds, in
 `~/.claude-payload-write-gate`, so that after the call it can name anything written there that the
@@ -4918,6 +4922,41 @@ such program), since the words of one command are read once however many program
 them. Until the lessons review of 2026-11-19 the second cap returned nothing, and a fourth such
 program's words were allowed unread. Suite: `test-slack-drafts-unknown-program.sh`.
 
+Code a command carries for python3 (`-c`, a heredoc, a here string, or written out and piped in)
+is also read for a file it names in its own text (`lib/py-file-runs.py`, `Judge.py_file_runs`,
+claude-config#3397). Before, it was read for the endpoint it names, the modules it imports and
+the files in the words after it: measured on 2026-11-20 and again on 2026-11-22,
+`python3 posts.py` was refused while `python3 -c "import runpy; runpy.run_path('./posts.py')"`
+and `python3 -c "exec(open('./posts.py').read())"` passed, with the path written out or through
+the outer shell's variable. The reading is one more after the ones there were, so it only
+refuses more. It is asked only of code that can run code or send a request, by the gate's own
+answer for a script handed a file, never by a list of the calls that run a file. For such code,
+typed: every string naming a file is judged as `python3 <file>` is, a folder holding
+`__main__.py` as that file; a string or list that spells a command is read as that command; a
+module run by a name written out is read as an import of it; and a file run by a path the gate
+cannot work out, a file run that is not text (an archive, compiled code), and code this python3
+cannot parse that names a way to run a file are each refused as unread.
+It cannot tell a file such code only reads from one it runs, so a data file naming an endpoint
+refuses the command (`import subprocess, json; json.load(open('named.json'))`), and "can run
+code" holds every module the gate does not know to be unable to. Code that can run nothing
+(`json`, `re`, `pathlib`, `hashlib`, `csv`) reads any file as before. A file `open()` is handed
+only to write is not read. In a script on disk only a file the code hands to something that
+runs one is read this way, and a path or code that cannot be worked out is left as it was:
+`tests/test-readme-mods-table.sh` loads a module by its path and then reads this file, and with
+every string read there it was refused (measured 2026-11-22).
+Not covered, each measured on 2026-11-22 as allowed where the file posts: `python3` handed a
+folder holding `__main__.py` or an archive; a Python file on disk that runs a file it names
+(`python3 runner.py`, `import runner`); code the shell fills in whole
+(`python3 -c "$(cat posts.py)"`), which claude-config#3278's timing line keeps as it was; and
+code handed to a module run with `-m` (`python3 -m timeit`).
+Cost on the one lesson case, three readings a run, three runs each way taken in turn on
+2026-11-22 at load averages of 7 to 69: 2.22 to 2.41 s of processor time before (nine
+readings, mean 2.32) and 2.25 to 2.47 s after (nine readings, mean 2.36), ranges that overlap,
+and 24.5 units of the yardstick both before and after.
+As of 2026-11-22 the count of past commands it newly refuses had been made on neither MacBook:
+the area check held the command that runs it on the personal MacBook.
+Suite: `test-slack-drafts-python-file-runs.sh`.
+
 Running `python3 payload/skills/nudge/test_nudge.py` directly is refused, because its fake server
 names `chat.postMessage`, and since claude-config#2844 so is `python3 -m unittest` over the same
 file, which before then passed only because the gate did not read what unittest runs. The suite
@@ -5010,6 +5049,28 @@ the first already got an empty cache folder of its own; now the check reads the 
 two checks of a second asking are held the other way by the same reading: the trace must say the
 cache answered. That the first kind fails was not seen: the installed gate refused both commands
 that would have run it with the samples left in one folder.
+
+The two checks of a second asking need a cache an earlier check filled, and on a slow runner it may
+never be filled (#3170). The gate keeps only a judgement it finished, so where the cold judgement
+made in that folder runs out of the gate's 11 seconds, the folder holds no judgement. In CI run
+44965167694 on 2026-11-21 it ran out after 10.4 s at 0.151 s a unit; the second asking then did the
+whole work (52.0 units, the cache tracing `miss: no entry | stored`), was answered from the cache at
+1.7 units the time after, and failed all the same, on a change that did not touch the gate. Dan's
+decision that day, from a picker, was "Build it": the check reports that state as unmeasured, and no
+limit moved. The cold measurement writes down that its judgement in the folder ran out, and the
+check of a second asking is unmeasured only when that record is there and the cache's own trace for
+its first sample says nothing was kept (`miss: no entry`, or `miss: no signing key` where the
+judgement ran out early and left the folder empty). Everything else still fails: a miss with no
+such record, a miss with any other trace (an entry that was there and not used, a stale one), a
+sample after the first that the cache did not answer, and an answer from the cache past 6 units. A
+cold judgement that runs out is still held to its own limit on the step clock, as above. The part is
+printed in every run it happens in (`SUITE-PART-UNMEASURED #3170: ...`, with the figures), so
+run-all-tests counts it on the suite's line and CI lists it in the run's "Not tested by the checks"
+summary and notice, and the case's cost record says the cache was never filled, which
+`tools/gate-cost-rows.py rows` shows in its last column, so how often a runner could not measure
+the case can be counted from saved logs. The suite sees each of those verdicts on doctored records
+replayed through the check's own code (`SLACK_GATE_COST_REPLAY`, which runs no gate), and once per
+run on a real folder, where a copy of the gate with a budget of 0.2 s ran out.
 
 Some CI runners still read a few cost cases over their limits with the gate unchanged (#3170: 4 of
 127 runs from 2026-11-20 to 2026-11-21), and the logs could not say why: they held each case's
@@ -5464,11 +5525,15 @@ The pull request checks say the same where a reviewer looks, not only in a part'
 hands its file on as the artifact `part-unmeasured-<part>`, a failing part included, and the `suite`
 job runs `tools/ci-unmeasured-summary.sh` over them: the run's summary page lists every suite that
 left a part untested, with the part that ran it and the reason the suite gave, and a notice titled
-`Not tested by the checks` on the pull request's checks carries the same list (capped at 40 lines,
-a limit the tool sets, not a measurement; the rest is on the summary). The run is compared, suite by suite, with the record of main's last green
+`Not tested by the checks` on the pull request's checks carries the same list. GitHub cuts a
+notice's message at 4,096 characters of the text it stores (measured on run 44826519963, where a
+list capped only by count was cut mid reason with nothing saying so), so the tool holds each notice
+to 4,000 bytes, never fewer than characters: it lists the whole parts that fit, in order, and when
+any are left out its last line says how many more there are and that the run's summary lists them
+all. The run is compared, suite by suite, with the record of main's last green
 full run, kept in the Actions cache under `claude-config-untested-main-`: a run that left more
 untested says so on the summary's first line and in a second notice,
-`Not tested by the checks and more than on main`. A part that handed back no record is named, and
+`Not tested by the checks and more than on main`, held to the same length the same way. A part that handed back no record is named, and
 such a run is neither compared nor kept as main's baseline. None of it can turn a run red: the tool
 exits 0 and every step it adds continues on an error. `merge-when-ready.sh` reads those notices back
 from each check's annotations before it merges and prints them, so a merge's log says what its green
@@ -9323,11 +9388,13 @@ reflection and issue review, the PR quiz, the lesson fan out notice and claude-s
 (written to its log instead) all stand down. `tests/test-sleep-silence.sh` derives every route that
 can reach Dan (settings hooks on turn end and waiting events, every mod's notifier, sound, question
 and classic Stop, Notification or PermissionRequest hook, claude-sync's `notify`) and fails on one
-that neither reads the sleep record nor sits on its exempt list with a reason, then runs each shell
-route asleep and awake, and runs the same way the one exempt settings route whose reason is that it
-prints nothing, the write gate on `PermissionDenied` (#3253). The night's report (#835),
-`~/Downloads/Sleep report <night>.md`, is written
-from the first minute of `/sleep` (start time ET, power, workers), rebuilt after every note, and
+that neither reads the sleep record nor sits on its exempt list with a reason. It also keeps a
+recorded list of the routes that read it, held both ways, so one that is no longer found, or no
+longer reads it, fails by name until the list changes in the same pull request (#3411). It then
+runs each shell route asleep and awake, and runs the same way the one exempt settings route
+whose reason is that it prints nothing, the write gate on `PermissionDenied` (#3253). The night's
+report (#835), `~/Downloads/Sleep report <night>.md`, is written from the first minute of `/sleep`
+(start time ET, power, workers), rebuilt after every note, and
 once more at wake or the limit with done read from GitHub and checked against the notes, sessions
 and claims that went quiet flagged, each rate limit wait and paid usage; every note, the noun's and
 the shell's `sleep_note` in `hooks/lib/sleep.sh` alike, goes through `hooks/lib/sleep-report.py`,
