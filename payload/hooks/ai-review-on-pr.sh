@@ -15,7 +15,9 @@
 # Runs on EVERY computer, unlike the push review, which AI_REVIEW_HOSTS confines to the work Mac.
 # Never blocks: the pull request already exists, and every path exits 0 with one line saying what
 # happened. The base is the pull request's --base/-B when the command names one, else origin's
-# default branch.
+# default branch. A review started at a commit reads from the head of the branch this one is
+# stacked on, when that is established (lib/stacked-base.sh, claude-config#3444), and a review
+# started at a push from the open pull request's own base.
 
 set -uo pipefail
 # Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).

@@ -145,7 +145,10 @@ now_s() { if [ -n "${PR_REVIEW_PUSH_CLOCK:-}" ]; then "$PR_REVIEW_PUSH_CLOCK"; e
 STACK_NOTE=""; review_base=""
 # shellcheck source=lib/stacked-base.sh
 if . "$HOOK_DIR/lib/stacked-base.sh" 2>/dev/null && declare -F sb_stacked_base >/dev/null; then
-  stacked="$(sb_stacked_base "$top")"
+  stacked="$(sb_stacked_base "$top")"; stacked_rc=$?
+  # 2: a branch does lie under this one and was not established as its base, so its changes are in
+  # what the review read; a refusal says why (L11). 1 is an ordinary branch, with nothing to say.
+  [ "$stacked_rc" -eq 2 ] && STACK_NOTE=" Another branch on origin lies under this one and the review still read from the default branch, that branch's changes included, because: ${stacked#none }."
   if review_base="$(sb_field "$stacked" ref)"; then
     stacked_tip="$(sb_field "$stacked" tip)"
     STACK_NOTE=" This branch is stacked on $review_base (pull request #$(sb_field "$stacked" pr), open), so the review read only what the branch adds to that branch's head ${stacked_tip:0:7}; that branch's own changes are read on its own pull request."
@@ -161,7 +164,9 @@ while :; do
   out="$(PR_REVIEW_READ="$read_key" bash "$HOOK_DIR/lib/pr-review.sh" "${args[@]}" 2>&1)"; rc=$?
   case "$rc" in
     # An allow with minor findings hands them over as advisory (claude-config#1356).
-    0) mt_review_allowed pr-review-push-gate "$out$STACK_NOTE" ;;
+    # The note rides an allow only when the base was used: a base not taken matters to a refusal.
+    0) [ -n "$review_base" ] && [ "${stacked_rc:-1}" -eq 0 ] || STACK_NOTE=""
+       mt_review_allowed pr-review-push-gate "$out$STACK_NOTE" ;;
     3)
       now="$(now_s)"
       waited=$((now - t0))

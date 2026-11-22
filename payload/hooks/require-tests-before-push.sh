@@ -260,6 +260,15 @@ merge_note() {
 # When the branch is stacked on another open branch and was judged from that branch's head
 # (claude-config#3444), a refusal says so, since the base's own changes are not in what it judged.
 stacked_note() {
+  # Another branch lies under this one and was not taken as its base: its changes are in what was
+  # judged, and the reason is what the person refused can act on (L11).
+  if [ -z "${PC_STACKED:-}" ] && [ -n "${PC_STACKED_WHY:-}" ]; then
+    echo "Note: another branch on origin lies under this one, and the gate still judged this"
+    echo "branch from ${PC_BASE:-its base}, that branch's changes included, because:"
+    echo "$PC_STACKED_WHY."
+    echo ""
+    return 0
+  fi
   [ -n "${PC_STACKED:-}" ] || return 0
   echo "Note: this branch is stacked on $PC_STACKED, so the gate judged only what it"
   echo "adds to that branch's head; that branch's own changes were judged at its own push."

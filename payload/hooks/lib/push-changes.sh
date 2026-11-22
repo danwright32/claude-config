@@ -15,7 +15,10 @@
 #     through unjudged, exactly like a push it had approved.
 # One copy now, which every gate calls:
 #
-#   pc_resolve <cmd>      which files the push carries, and from where (sets PC_* below)
+#   pc_resolve <cmd> [stacked]
+#                         which files the push carries, and from where (sets PC_* below); with
+#                         "stacked", a branch cut from another open branch starts at that branch's
+#                         head when that is established (pc__stacked_start, claude-config#3444)
 #   pc_diff <pathspec>..  the diff of what the push carries, limited to the pathspecs; nonzero, named
 #                         by pc_diff_failure, when git failed reading it
 #   pc_messages           the subjects of the commits it carries
@@ -58,7 +61,8 @@ pc_files_since() {   # $1 = commit or tree
 #                      refusal must say so, since part of what it judged came in from elsewhere
 #   PC_STACKED         the base branch and pull request a stacked branch was judged from, empty when
 #                      the range starts where it always did (pc__stacked_start, claude-config#3444)
-#   PC_STACKED_WHY     why a branch that asked was not judged from a base, for the gate's record
+#   PC_STACKED_WHY     when another branch lies under this one and was NOT taken as its base, why;
+#                      a refusal must say so, since that branch's changes are in what it judged
 #   PC_COMMIT_IN_CHAIN 1 when the command commits before it pushes
 #   PC_WIDENED         1 when the command's git add could not be read and the whole working tree
 #                      was counted instead; a refusal must say so (lib/push-scope.sh, #457)
@@ -152,17 +156,22 @@ LOOP_INPUT
 # The base being an open pull request says its changes will be read before they merge. It does not
 # say THIS gate judged them, and nothing judges tests at a merge, so the range moves only when the
 # push gate ledger on this Mac shows it did (pc_base_judged). Without that record the range starts
-# where it always did, and PC_STACKED_WHY says why.
+# where it always did, and PC_STACKED_WHY says why, which the test gate's refusal carries
+# (stacked_note in require-tests-before-push.sh).
 pc__stacked_start() {
   local ans ref tip pr
   declare -F sb_stacked_base >/dev/null || . "$_PC_LIB/stacked-base.sh" 2>/dev/null
   if ! declare -F sb_stacked_base >/dev/null; then
     PC_STACKED_WHY="lib/stacked-base.sh is missing"; return 0
   fi
-  ans="$(sb_stacked_base . "$PC_MB")"
+  local rc
+  ans="$(sb_stacked_base . "$PC_MB")"; rc=$?
   case "$ans" in
     "base "*) ;;
-    *) PC_STACKED_WHY="${ans#none }"; return 0 ;;
+    # 2: a branch does lie under this one and was not established as its base, which a refusal
+    # says. 1 is an ordinary branch, with nothing under it and nothing to say.
+    *) [ "$rc" -eq 2 ] && PC_STACKED_WHY="${ans#none }"
+       return 0 ;;
   esac
   ref="$(sb_field "$ans" ref)"; tip="$(sb_field "$ans" tip)"; pr="$(sb_field "$ans" pr)"
   if ! pc_base_judged "$tip" "$PC_MB"; then
@@ -183,6 +192,7 @@ pc__stacked_start() {
 #        push of a head an override delivered reads as empty.
 # The ledger is this Mac's own, so a base pushed from the other Mac has no record here, and the
 # branch on top of it is judged from the default branch.
+PC_BASE_JUDGED_MAX=500   # the most commits a base's own range may hold and still be looked up
 pc_base_judged() {   # $1 = the base's head  $2 = where the base's own range starts
   local file commits tiptree
   file="$(pc_ledger_path)"
@@ -191,9 +201,12 @@ pc_base_judged() {   # $1 = the base's head  $2 = where the base's own range sta
   [ -n "$tiptree" ] || return 1
   # The base's own commits and their trees, on one line ("commit tree commit tree ..."), handed to
   # awk as a variable: one input file, so nothing has to tell two files apart.
-  commits="$(git log --format='%H %T' "$2..$1" 2>/dev/null)" || return 1
-  commits="$(printf '%s' "$commits" | tr '\n' ' ')"
+  # At most PC_BASE_JUDGED_MAX commits, so the variable stays far inside what a command line may
+  # carry (about 83 bytes a commit); a longer base is "not judged", the side that reads more.
+  commits="$(git log --format='%H %T' -n "$((PC_BASE_JUDGED_MAX + 1))" "$2..$1" 2>/dev/null)" || return 1
   [ -n "$commits" ] || return 1
+  [ "$(printf '%s\n' "$commits" | awk 'END { print NR }')" -le "$PC_BASE_JUDGED_MAX" ] || return 1
+  commits="$(printf '%s' "$commits" | tr '\n' ' ')"
   awk -F '\t' -v gate="${PC_GATE:-}" -v tiptree="$tiptree" -v commits="$commits" '
     BEGIN { n = split(commits, p, " "); for (i = 1; i + 1 <= n; i += 2) { sha[p[i]] = 1; tree[p[i + 1]] = 1 } }
     $3 != gate { next }

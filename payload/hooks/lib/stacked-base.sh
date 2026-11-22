@@ -15,8 +15,11 @@
 #   sb_stacked_base <directory> [<floor commit>]
 #     prints one line and returns 0 when a base is established:
 #       base <remote ref> <commit> <pull request number>      e.g.  base origin/fix/a 1f3c... 3421
-#     and otherwise prints why not and returns 1:
+#     and otherwise prints why not:
 #       none <the reason, in words>
+#     returning 1 when no other branch lies under this one at all (an ordinary branch, nothing to
+#     say), and 2 when one does and it could not be established as the base, which a gate's
+#     refusal says, since the branch under it is then part of what was judged.
 #     It runs in a subshell, so it changes no directory and sets nothing in the caller.
 #
 # A base is ESTABLISHED only when every one of these holds:
@@ -131,14 +134,14 @@ SB_REFS
     done
     if [ "$holds" -eq 1 ]; then near="${tips[$i]}"; break; fi
   done
-  [ -n "$near" ] || { sb__none "more than one branch on origin lies under this one and none of them holds the others"; return 1; }
+  [ -n "$near" ] || { sb__none "more than one branch on origin lies under this one and none of them holds the others"; return 2; }
 
-  local t name why="" left deadline line num state hname hoid cross
+  local t name why="" left deadline line num state hname hoid cross rerr
   for t in gh jq perl; do
-    command -v "$t" >/dev/null 2>&1 || { sb__none "$t is not on PATH, so GitHub could not be asked whether the branch under this one is an open pull request"; return 1; }
+    command -v "$t" >/dev/null 2>&1 || { sb__none "$t is not on PATH, so GitHub could not be asked whether the branch under this one is an open pull request"; return 2; }
   done
-  declare -F bounded_run >/dev/null || { sb__none "lib/bounded-run.sh is missing, so GitHub could not be asked inside a time limit"; return 1; }
-  [ -n "${SB__LIB_ABS:-}" ] && [ -f "$SB__LIB_ABS/merge-target.sh" ] || { sb__none "lib/merge-target.sh is missing, so GitHub could not be asked"; return 1; }
+  declare -F bounded_run >/dev/null || { sb__none "lib/bounded-run.sh is missing, so GitHub could not be asked inside a time limit"; return 2; }
+  [ -n "${SB__LIB_ABS:-}" ] && [ -f "$SB__LIB_ABS/merge-target.sh" ] || { sb__none "lib/merge-target.sh is missing, so GitHub could not be asked"; return 2; }
   deadline=$((SECONDS + SB_READ_SECONDS))
   for ((i = 0; i < n; i++)); do
     [ "${tips[$i]}" = "$near" ] || continue
@@ -149,7 +152,18 @@ SB_REFS
     bounded_run "$left" bash -c '. "$1/merge-target.sh" 2>/dev/null && mt_pr_view "$2" "number,url,state,headRefName,headRefOid,isCrossRepository" "$(mt_remote_slug)" "" 2>/dev/null' _ "$SB__LIB_ABS" "$name"
     if [ "$BOUNDED_RC" -eq 124 ]; then why="GitHub did not answer about origin/$name within ${SB_READ_SECONDS}s"; break; fi
     line="$(printf '%s' "$BOUNDED_OUT" | jq -r 'select(.found == true) | .view | [(.number | tostring), (.state // ""), (.headRefName // ""), (.headRefOid // ""), (.isCrossRepository | tostring)] | @tsv' 2>/dev/null)"
-    if [ -z "$line" ]; then why="GitHub named no pull request for origin/$name"; continue; fi
+    if [ -z "$line" ]; then
+      # No pull request, and a read that failed, are different faults with different remedies
+      # (L11): the reader's envelope says which, and a process that printed none says its exit.
+      rerr="the read ended with exit $BOUNDED_RC and no answer"
+      if [ -n "$BOUNDED_OUT" ]; then
+        rerr="$(printf '%s' "$BOUNDED_OUT" | jq -r 'if (.notFound // false) then "" elif ((.error // "") != "") then .error elif ((.wrongRepo // "") != "") then ("it answered about " + .wrongRepo) else "no answer" end' 2>/dev/null)" \
+          || rerr="the read ended with exit $BOUNDED_RC and an answer that could not be read"
+      fi
+      if [ -n "$rerr" ]; then why="GitHub could not be read about origin/$name ($rerr)"
+      else why="GitHub named no pull request for origin/$name"; fi
+      continue
+    fi
     IFS=$'\t' read -r num state hname hoid cross <<< "$line"
     if [ "$hname" != "$name" ]; then why="GitHub answered about another branch than origin/$name"; continue; fi
     if [ "$state" != OPEN ]; then why="pull request #$num of origin/$name is not open (GitHub says $state)"; continue; fi
@@ -161,5 +175,5 @@ SB_REFS
     return 0
   done
   sb__none "${why:-GitHub could not be asked about the branch under this one}"
-  return 1
+  return 2
 }

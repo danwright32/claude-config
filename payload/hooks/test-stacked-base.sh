@@ -46,6 +46,7 @@ printf '%s\n' "$*" >> "$FAKE_GH_DIR/calls"
 case "$1 $2" in
   "auth status") exit 0 ;;
   "pr view")
+    if [ -f "$FAKE_GH_DIR/fail" ]; then cat "$FAKE_GH_DIR/fail" >&2; exit 1; fi
     f="$FAKE_GH_DIR/$(printf '%s' "$3" | tr '/' '_').json"
     if [ -f "$f" ]; then cat "$f"; exit 0; fi
     echo "no pull requests found for branch \"$3\"" >&2; exit 1 ;;
@@ -202,9 +203,18 @@ check_eq "S1b and the lessons review reads from it: allowed" "0" "$RG_RC"
 check_not "S1b without the base's change" "BASE_ONLY_MARKER" "$(cat "$REVIEW_LOG")"
 
 mk_stack s2
-out="$(sb)"
-check "S2 the base has no pull request: not established" "none " "$out"
+out="$(sb)"; rc=$?
+check "S2 the base has no pull request: not established, in those words" "none GitHub named no pull request for origin/base/one" "$out"
 check_not "S2 and no base is named" "base origin" "$out"
+check_eq "S2 a branch under this one that is not its base answers 2, for a refusal to say why" "2" "$rc"
+
+# A read of GitHub that fails is not "no pull request": the reason says the read failed (L11).
+mk_stack s2b
+pr_json base/one OPEN "$BASE_TIP"
+printf 'HTTP 401: Bad credentials (https://api.github.com/graphql)\n' > "$FAKE_GH_DIR/fail"
+out="$(sb)"
+check "S2b GitHub could not be read: not established" "none GitHub could not be read about origin/base/one" "$out"
+check "S2b and the reason carries what gh said" "Bad credentials" "$out"
 
 mk_stack s3
 pr_json base/one CLOSED "$BASE_TIP"
@@ -262,7 +272,9 @@ check "S9 the nearest base has no pull request: not established, never the one u
 mk_stack s10
 G checkout -q main; G checkout -q -b plain/four
 printf 'four\n' >> "$REPO/README.md"; G commit -q -am "a plain change"
-check "S10 a branch cut from main: not established" "none " "$(sb)"
+out="$(sb)"; rc=$?
+check "S10 a branch cut from main: not established" "none " "$out"
+check_eq "S10 and it answers 1, an ordinary branch with nothing for a refusal to say" "1" "$rc"
 check_eq "S10 and GitHub was not asked" "0" "$(gh_calls)"
 
 # ===========================================================================================
@@ -293,6 +305,7 @@ mk_stack t3
 run_tests_gate "git push -u origin child/two"
 check_eq "T3 the base has no open pull request: judged from main, refused" "2" "$TG_RC"
 check "T3 for the base's change" "the base change in lib/base.js" "$TG_ERR"
+check "T3 and the refusal says why the branch under it was not taken as the base" "GitHub named no pull request for origin/base/one" "$TG_ERR"
 
 mk_stack t4
 pr_json base/one MERGED "$BASE_TIP"
@@ -384,6 +397,7 @@ mk_stack l3
 run_review_gate "git push -u origin child/two"
 check_eq "L3 the base has no open pull request: reviewed from main, refused" "2" "$RG_RC"
 check "L3 with the finding in the base's file" "lib/base.js:1" "$RG_OUT"
+check "L3 and the refusal says why the branch under it was not taken as the base" "GitHub named no pull request for origin/base/one" "$RG_OUT"
 
 mk_stack l4 local
 pr_json base/one OPEN "$BASE_TIP"
