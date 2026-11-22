@@ -4472,7 +4472,7 @@ if [ -f "$T/cost.log" ]; then
     printf '          note: %s\n' "${cold_note_text:-}" "${cost_note:-}" > "$T/notes.txt"
     rows="$(python3 -B "$REPO/tools/gate-cost-rows.py" rows "$T/notes.txt" 2>&1)"
     rows_want="$(grep -c . "$T/cost.log" || true)"
-    rows_got="$(printf '%s\n' "$rows" | awk -F'\t' 'NR > 1 && $6 != "-" && $8 != "-" && $9 != "-"' | grep -c . || true)"
+    rows_got="$(printf '%s\n' "$rows" | awk -F'\t' 'NR > 1 && NF == 13 && $6 != "-" && $8 != "-" && $9 != "-"' | grep -c . || true)"
     [ "$rows_got" = "$rows_want" ] && rows=ok || rows="the reader found ${rows_got:-0} cases with seconds and yardstick in the notes, of the cost log's ${rows_want:-0}: $rows"
     check "tools/gate-cost-rows.py reads every case's seconds and yardstick from the notes a passing run shows (#3170)" "$rows"
     # The verdict never reads a printed only figure (#3170): every reading must be its seconds over
