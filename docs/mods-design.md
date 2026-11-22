@@ -2510,6 +2510,19 @@ other three were found in the manual page check and built the stricter way, whic
 approved and never widens it: `rg --hostname-bin` (runs a program), `mdls -plist` or `-p` (writes
 the file it names) and `lsof -D` (builds or updates its device cache file).
 
+Each form is read in every spelling its program takes, measured on the personal MacBook on
+2026-11-22, and a spelling the program refuses is read as the form too, since that only holds more:
+
+| Program | Read as the form | What the program does with it |
+| --- | --- | --- |
+| `file` 5.41 | `-C` alone or in a cluster of short options; any start of `--compile` from `--c` | `--co` and every longer start compile; `--c` is refused as ambiguous; `--compile=x` is refused and is not read as the form |
+| `mdls`, macOS 26.6.2 | any start of `plist` after one dash or two, alone or joined to the file with `=` | `-pl`, `--p` and `-plist=out` each wrote the file |
+| `lsof` 4.91 | `-D` alone or in a cluster of short options | `-nD b` and `-nDb` are answered as `-D b` is ("unsupported option: -D", since this build has no device cache); `-cDock`, the command Dock, is read as the form too |
+| `rg` 14.1.1 | `--pre` and `--hostname-bin`, whole, alone or joined to the value with `=` | a shortened long option is refused ("unrecognized flag --pr") and runs nothing |
+
+Scope modes' own judge of `file` (`READ_PROGRAMS` in `refusals.ts`) uses the same words for
+`--compile`, and each mod's suite holds the same starts.
+
 **What "known" means.** A program is known when any of the reader's tables or branches reads it: a
 writer it already read, git, a script file run by an interpreter, a module or a tool run through
 npx, a command it marks unread, a listed program above, and the few names it reads by a rule of
@@ -2548,10 +2561,13 @@ known. A member renamed on the way out is not read.
   on disk and 48 a folder, and 76 a file inside a checkout. No build does not read runs, by its own
   rule that running programs is allowed, so such a program handed a file still runs there; it does
   refuse an unpack that lands outside the notes. The morning report's judgement of whether a refused
-  call only read keeps its own longer list of programs (`READ_PROGRAMS` in `refusals.ts`), so a
-  program on that list which the reader does not know still only reads there; a form of a listed
-  program that the reader says writes a file or runs a program (`file -C`, `rg --hostname-bin`) is
-  no read.
+  call only read keeps its own list of programs (`READ_PROGRAMS` in `refusals.ts`). Neither list
+  holds all of the other: that one has `basename`, `dirname`, `pwd`, `nl`, `md5` and others the
+  reader does not list, and the reader's has `cksum`, `ps`, `lsof`, `mdls` and others that one
+  lacks. So a program on that list which the reader does not know still only reads there, and a
+  program only the reader lists is no read there, because the judgement checks every command
+  against its own list alone. A form of a listed program that the reader says writes a file or runs
+  a program (`file -C`, `rg --hostname-bin`) is no read.
 - **The area check is left out for now (#3412).** It judges a command exactly as it did before the
   reader marked these runs (`judgedRuns` in its `rules.ts`). Why: in the 35 days of records such a program
   was handed a source file or a folder in a checkout in 726 past calls, 713 of them a folder, `gh`
@@ -4405,9 +4421,10 @@ whatever the number said.
   a run of short options) hold the command, with how to write it. A commit with no such parent is
   one git cannot answer for, and is held.
 - Known limits. A session's own environment may already carry `GIT_DIR` or `GIT_WORK_TREE` before
-  any command is typed, which no reader sees. The collision guard and scope modes place a git
-  command by `-C` alone and are unchanged here. The shared reader keeps only the last `-C`, while
-  git reads each from the one before it.
+  any command is typed, which no reader sees. Scope modes places a git command by `-C` alone and
+  is unchanged here. The collision guard did too until #3398 (below), which has it ask about every
+  checkout the command acts on. The shared reader kept only the last `-C`, while git reads each
+  from the one before it, and #3398 added the folder a chain of them leads to.
 
 ### What #3398 changed: the folder more than one -C leads to, 2026-11-22
 
@@ -4476,6 +4493,22 @@ main` each ran unjudged beside a session at work in `/other`.
   command itself (git reads an exported one, which no reader follows). Nothing is put to the
   judge and no session is told, since there is no checkout to name to either. Until now each of
   these ran unjudged. A folder git names no checkout for has nobody in it to ask, as before.
+- A question nobody answers stops the command too, while any other session is open (the lessons
+  review of this change, 2026-11-22). Each question above was read as no checkout there when it
+  failed, so the command ran with nothing asked. git exits 128 for every failure (measured,
+  2.51.1), so its words decide. `not a git repository`, `cannot change to '<folder>': No such file
+  or directory` and `this operation must be run in a work tree` are answers: nobody to ask there,
+  as before. Anything else (a folder git may not enter, a repository it will not read, a timeout,
+  the engine failing to run it) stops the command, and so does a throw from mod-kit's walk for
+  the checkout around a named repository, which had been taken for no checkout. The refusal is
+  the sentence above naming the question, with "Try again, or ask Dan." The walk answering null
+  is still no checkout there.
+- Not closed by that. The folder the guard always asked about, the folder of a command that
+  cannot be read and the judge's own reads still take a failed git for nothing there, as they
+  did before #3398. A folder that is not there when the guard asks has nobody to ask, though the
+  command line may make it first (a clone, then a `cd` into it). `-C` into a repository's own
+  `.git` folder has no working folder, so a command that moves a branch from there (`branch -D`
+  works there, measured) is asked nothing. git's words are matched in English.
 - Not covered: the files such a command writes are still placed by the write reader, by `dir`.
   A session's own environment carrying either variable before any command is typed is seen by
   no reader.

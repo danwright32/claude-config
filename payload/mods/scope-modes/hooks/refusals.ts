@@ -90,8 +90,12 @@ export const readsOnly = (tool: string, commands: readonly Cmd[], writes: ModKit
   const w = writes
   // The write reader marks two kinds of run `unknown` (#3323), each handed a word that spells a
   // path. A program on none of its lists, under its plain label, decides nothing here when this
-  // file's own list of programs that only read (READ_PROGRAMS) holds it: that list is longer than
-  // the reader's and judges the command below. Every other one stays and makes the call no read: a
+  // file's own list of programs that only read (READ_PROGRAMS) holds it. Neither list holds all of
+  // the other: this one has basename, dirname, pwd, nl, md5 and others the reader does not list,
+  // and the reader's has cksum, ps, lsof, mdls and others this one lacks. So the filter drops only
+  // a run of a program this list holds, which the list then judges below; a program only the
+  // reader lists is no read here either, because every command is judged against this list alone
+  // (commandReads). Every other one stays and makes the call no read: a
   // program on neither list, and a form of a program the reader lists that writes a file or runs a
   // program (`file -C`, `rg --hostname-bin`), whose `what` names the form. So a form the reader
   // learns later is no read here with no change to this file.
