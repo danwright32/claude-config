@@ -8440,7 +8440,8 @@ or whether git can bring a deleted or emptied one back (held unchanged, held wit
 not held, or not readable). The answers are Keep as is, first, and Delete, Move or Empty; a save's
 For good approves no removal and a removal's answer approves no save, a removal whose consequence
 changes after he answers (what git holds of the file, where a move lands, what a folder holds) is
-asked about again, his "from now on" words cover no removal, and a subagent's removal is refused. A command that removes lasting memory and also writes other lasting memory is refused
+asked about again, his "from now on" words cover no removal, and a subagent's removal is refused.
+A command that removes lasting memory and also writes other lasting memory is refused
 whole, each part to be sent by itself, and one that also writes the lessons file by shell is
 refused as it was before (#3343). Not covered: what git itself removes or puts back (Dan's
 decision on #1136 stands), `git clean`, `git stash` and `git reset --hard`, what a `find -exec`
