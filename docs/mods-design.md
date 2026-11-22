@@ -2601,7 +2601,38 @@ calling a shell function, its own or one from a file it reads in, with a word th
 changing file (`says "..." "... tools/post.swift"`, `fires ... app/page.tsx`). None is a program
 such as prettier. The reader marks a function the text itself defines as a program it does not
 know, on a command line as in a script, and leaving such a function out would be an exemption, so
-it was not built. The same count over the work MacBook's records is still owed.
+it was not built with the rule: Dan chose it the next day, below. The same count over the work
+MacBook's records is still owed.
+
+**A function the script itself defines (#3416), built 2026-11-22 for the design round guard.** Dan
+chose it by picker that day: "Build the exemption (Recommended)". A call of a function the script's
+own text defines is read as that function's own commands with the call's words written in place of
+`$1`, `$2`, `$@` and `$*` (rules.ts `withoutOwnCalls`), and mod-kit's readers read that text as
+they read any other. A file of the call is left out only where nothing in that reading names it.
+The function's name is never what is trusted, so a wrapper cannot hide a program:
+`run() { prettier --write "$@"; }; run app/page.tsx` is still a write of app/page.tsx, as that line
+typed whole is. Everything the reading cannot tell stays judged as it was: a function from a file
+the script reads in; a name not defined exactly once, at the top of the script, as a command of its
+own (after `&&`, `||` or a pipe it is defined only sometimes, or in a subshell); a name the text
+unsets, an alias, or text run as commands after the definition; a call before the definition, or
+behind `timeout`, `env`, `command`, `xargs`, `find` or a new shell, which run the program of that
+name and never the function; a body followed on its line by a redirect, `&` or `|`; a body that
+keeps what it was handed in a variable, shifts it, loops over it or names it as `${1:-x}`; and a
+word joining what was handed to another value where the joined name has a held file's shape. A
+command whose name is itself a variable is not followed, so one whose value is `unset` or `eval`
+could change a function unseen. The built in list of the shell's own words was not widened (a
+helper handing a file to `[[` is judged as that line typed whole is), and neither was following a
+variable: each is a wider exemption, Dan's to decide.
+
+What the reading costs is bounded, since it runs in a hook before the command. Placing each
+definition by rereading the script before it, once a function, took 6.4 to 7.4 seconds on a made up
+6,370 line suite defining 40 helpers (five readings, load average 39 to 48, 2026-11-22). One
+reading now places them all: the script is read as a group fed by a pipe inside a group fed by
+another, a numbered probe written in where each definition is typed, and a probe fed by the outer
+pipe stands in no group. The same suite takes 0.67 to 0.80 seconds (five readings, load average 45,
+2026-11-22), beside about 0.7 seconds for the one reading of the script the guard already made.
+`ownBudget` caps the text one script's calls may hand the readers (eight times the script and
+200,000 characters more); past it the runs not yet read stay judged. No real suite was timed alone.
 
 **The count behind #3323, the rule for a command as typed** (the personal MacBook's records, 35 days
 to 2026-11-21, 51,590 shell calls when it was taken): with the built rule 16 past calls are newly held by the two guards it was

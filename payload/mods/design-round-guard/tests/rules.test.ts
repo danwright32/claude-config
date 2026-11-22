@@ -3655,7 +3655,7 @@ const ownCost = async (text: string): Promise<{ held: number; runs: number; hand
 test('#3416: reading a long suite\'s own calls hands the reader a few times its text, however many helpers it defines', async () => {
   // 2026-11-22: finding each helper reread the whole script before it, once a helper, so this
   // suite's 308,214 characters cost 6,711,692 handed to the reader (21.8 times the text, 6.4 to 7.4
-  // seconds in five readings) and a real 6,388 line suite took minutes, before every command.
+  // seconds in five readings), in a hook that runs before the command does.
   const text = longSuite(40, 25)
   expect(text.split('\n').length).toBeGreaterThan(6000)
   const cost = await ownCost(text)

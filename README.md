@@ -8716,6 +8716,10 @@ command in it that mod-kit marks unread, or that runs through `setsid`, `flock`,
 write reader does not know (`bash fmt.sh`, fmt.sh holding `prettier --write app/page.tsx`) is judged
 as a write of it, as that line typed whole is since #3323, in the script the command runs and each
 script that one runs, the list of programs that only read applying there as on a command line,
+and a call of a shell function the script's own text defines read as that function's commands with
+the call's words in place, so a helper that only compares and prints is no such program and a
+wrapper around one still is (Dan, 2026-11-22; a function from a file the script reads in, or one
+that keeps what it was handed in a variable, stays judged),
 while what the script itself was handed, passed on to such a program (`mystery "$1"`), is still not
 caught), a patch git apply, git am or patch reads from a file judged
 since #3022 by the files it changes (mod-kit's patch reader, placed as the command places them), and

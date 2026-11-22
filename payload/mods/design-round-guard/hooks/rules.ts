@@ -2545,12 +2545,34 @@ export const withoutOwnCalls = async (given: OwnCallIo, text: string, commands: 
     if (at) at.push(k)
     else startsWith.set(first, [k])
   })
-  // The commands, by their place, that call `r`'s program with every file `r` hands it.
-  const callsOf = (r: HandedRun): number[] => (startsWith.get(r.script) ?? []).filter(k => r.args.every(a => (commands[k] as RunCommand).words.slice(1).includes(a.word)))
+  // The commands, by their place, that call `r`'s program with every file `r` hands it. Looked up
+  // by the word of the run's fewest commands hold, so a helper called three thousand times is not
+  // read through three thousand times for each of its runs.
+  const holding = new Map<string, Map<string, number[]>>()
+  const callsOf = (r: HandedRun): number[] => {
+    const all = startsWith.get(r.script) ?? []
+    let byWord = holding.get(r.script)
+    if (!byWord) {
+      byWord = new Map()
+      for (const k of all)
+        for (const w of new Set((commands[k] as RunCommand).words.slice(1))) {
+          const at = byWord.get(w)
+          if (at) at.push(k)
+          else byWord.set(w, [k])
+        }
+      holding.set(r.script, byWord)
+    }
+    let least = all
+    for (const a of r.args) {
+      const at = byWord.get(a.word) ?? []
+      if (at.length < least.length) least = at
+    }
+    return least.filter(k => r.args.every(a => (commands[k] as RunCommand).words.slice(1).includes(a.word)))
+  }
   // Every definition the text types, and which of them stand at the top of the script (in no
   // branch, loop, group, subshell, case, function, substitution, quote or heredoc), asked of mod-kit's
-  // pipeline once for them all (#3416: asked once a function over the text before it, a 6,388 line
-  // suite took minutes). The script is read as a group fed by a pipe inside a group fed by another,
+  // pipeline once for them all (#3416: asked once a function over the text before it, a 6,370 line
+  // suite took 6.4 to 7.4 seconds). The script is read as a group fed by a pipe inside a group fed by another,
   // and where each definition is typed that inner group is closed, a numbered probe written, and a
   // new one opened. Each insert closes one group and opens one, so how deep every later command
   // stands is unchanged, and a probe is fed by the outer pipe only where its definition stood in no
@@ -2680,6 +2702,7 @@ export const withoutOwnCalls = async (given: OwnCallIo, text: string, commands: 
     }
     return out
   }
+  const keptWords = new Map<string, Promise<string[]>>()
   // What is left of one run: itself where its program is no function of the script, or where one
   // of the commands it may be stands before the definition or is a program of that name.
   const leftOf = async (r: HandedRun): Promise<HandedRun | undefined> => {
@@ -2687,19 +2710,30 @@ export const withoutOwnCalls = async (given: OwnCallIo, text: string, commands: 
     const calls = fn ? callsOf(r) : []
     if (!fn || !calls.length || !calls.every(k => k > fn.end && plainCall(commands[k] as RunCommand))) return r
     const keep = new Set<string>()
+    const said = r.args.map(a => `${a.word}\t${a.path ?? ''}`).join('\n')
     for (const k of calls) {
-      const c = commands[k] as RunCommand
-      const marks: string[] = []
-      const of = new Map<string, string>()
-      const values = c.words.slice(1).map((w, i) => {
-        const path = r.args.find(a => a.word === w)?.path
-        if (path === undefined) return liveWord(c, i + 1) ? OWN_NONE : safeWord(w)
-        const mark = `/${OWN_MARK}/a${i + 1}${safeWord(path.startsWith('/') ? path : `/${path}`)}`
-        marks.push(mark)
-        of.set(mark, w)
-        return mark
-      })
-      for (const t of await kept(fn, values, marks, k, 0)) keep.add(of.get(t) as string)
+      // Read once for each command and each way of naming its files: runs with the same words
+      // each match every such command, and would be read once for each pair.
+      const key = `${k}\n${said}`
+      let words = keptWords.get(key)
+      if (!words) {
+        words = (async () => {
+          const c = commands[k] as RunCommand
+          const marks: string[] = []
+          const of = new Map<string, string>()
+          const values = c.words.slice(1).map((w, i) => {
+            const path = r.args.find(a => a.word === w)?.path
+            if (path === undefined) return liveWord(c, i + 1) ? OWN_NONE : safeWord(w)
+            const mark = `/${OWN_MARK}/a${i + 1}${safeWord(path.startsWith('/') ? path : `/${path}`)}`
+            marks.push(mark)
+            of.set(mark, w)
+            return mark
+          })
+          return [...(await kept(fn, values, marks, k, 0))].map(t => of.get(t) as string)
+        })()
+        keptWords.set(key, words)
+      }
+      for (const w of await words) keep.add(w)
     }
     const args = r.args.filter(a => a.path === undefined || keep.has(a.word))
     return args.some(a => a.path !== undefined) ? { ...r, args } : undefined
