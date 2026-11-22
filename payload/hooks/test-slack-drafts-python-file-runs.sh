@@ -47,7 +47,7 @@ unset SLACK_GATE_UNWORKED_PATHS
 
 pass=0
 fail=0
-check() { if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 ($2)"; fi; }
+check() { if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 ($2)" | sed '2,$s/^/  /'; fi; }
 
 if [ ! -f "$HOOK" ]; then
   echo "FAIL: there is no slack-drafts-only-gate.sh beside this suite at $DIR, so no Slack send is refused."
@@ -265,6 +265,20 @@ for f in sys.argv[1:]:
 allowed "#3397 exec of each file in sys.argv, handed quiet files, passes as before"
 run_at "python3 -c 'import sys; p = sys.argv[1]; exec(open(p).read())' quiet.py" "$IP"
 allowed "#3397 exec of a file whose path a name took from sys.argv, handed a quiet file, passes as before"
+run_at "python3 -c 'import argparse, runpy; a = argparse.ArgumentParser(); a.add_argument(\"f\"); runpy.run_path(a.parse_args().f)' quiet.py" "$IP"
+allowed "#3397 runpy.run_path of a path argparse read from the words, handed a quiet file, passes"
+run_at "python3 -c 'import os, runpy, sys; runpy.run_path(os.path.abspath(sys.argv[1]))' quiet.py" "$IP"
+allowed "#3397 runpy.run_path of a word tidied as a path, handed a quiet file, passes"
+# A path made from what a word's file HOLDS is not a word the gate read (the lessons review of
+# this change, 2026-11-22), and nor is the file open() is handed by keyword alone.
+run_at "python3 -c 'import sys; exec(open(open(sys.argv[1]).read().strip()).read())' quiet.py" "$IP"
+read_refused "#3397 exec of a file whose path is the text of a handed file is refused"
+says "#3397 and that refusal says the path cannot be worked out" "cannot work out"
+run_at "python3 -c 'import runpy, sys; p = open(sys.argv[1]).readline().strip(); runpy.run_path(p)' quiet.py" "$IP"
+read_refused "#3397 and so is runpy.run_path of a name set from a handed file's text"
+ip_code "exec(open(file=input()).read())"
+read_refused "#3397 exec of a file open() is handed by keyword, by a path that cannot be worked out, is refused"
+says "#3397 and that refusal says the path cannot be worked out" "cannot work out"
 
 echo "slack drafts only: code that only reads a file as data is not read as running it (claude-config#3397)"
 

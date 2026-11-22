@@ -112,6 +112,12 @@ OPENERS = frozenset({"open", "Path", "PurePath", "PosixPath", "WindowsPath", "Fi
 PATH_CLASSES = frozenset({"Path", "PurePath", "PosixPath", "WindowsPath"})
 # What reads the command's own words into a value: argparse's parsers.
 ARG_PARSERS = frozenset({"parse_args", "parse_known_args", "parse_intermixed_args"})
+# The calls that hand one of the command's words on as the path it is: an argument parser, a join
+# or a tidying of the path, a reordering of the words. Through any other call the value is no
+# longer a word the gate read.
+WORD_CALLS = ARG_PARSERS | frozenset({"join", "abspath", "realpath", "normpath", "expanduser", "resolve",
+                                      "Path", "PurePath", "PosixPath", "str", "fspath", "sorted", "list",
+                                      "tuple", "reversed"})
 MODULE_NAME = re.compile(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*")
 SHELL_FILLS = re.compile(r"[$`]")
 # The words that name a way to run a file, for code this python3 cannot parse.
@@ -349,14 +355,21 @@ def make(py_nodes, unknown_dir):
                      for a in n.names if a.name == "argv"}
 
             def mentions(node):
+                found = False
                 for sub in ast.walk(node):
-                    if isinstance(sub, ast.Attribute) and sub.attr == "argv":
-                        return True
-                    if isinstance(sub, ast.Name) and sub.id in names:
-                        return True
-                    if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute) and sub.func.attr in ARG_PARSERS:
-                        return True
-                return False
+                    if isinstance(sub, ast.Call):
+                        f = sub.func
+                        called = f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else ""
+                        if called not in WORD_CALLS:
+                            # What a call makes of a word is not that word: the text of a file
+                            # the word names (open(sys.argv[1]).read()) is a path nobody read.
+                            return False
+                        found = found or called in ARG_PARSERS
+                    elif isinstance(sub, ast.Attribute) and sub.attr == "argv":
+                        found = True
+                    elif isinstance(sub, ast.Name) and sub.id in names:
+                        found = True
+                return found
 
             for _ in range(MAX_PASSES):
                 grew = False
@@ -412,7 +425,7 @@ def make(py_nodes, unknown_dir):
                         unworked.append(f"{name} given its arguments unpacked")
                     elif arg is not None:
                         sinks.append((name, arg))
-                elif runs_text and name in OPENERS and (node.args or name != "open"):
+                elif runs_text and name in OPENERS:
                     arg = next((k.value for k in node.keywords if k.arg == "file"), node.args[0] if node.args else None)
                     if unpacked:
                         unworked.append(f"{name} given its arguments unpacked")
