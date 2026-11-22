@@ -4406,6 +4406,41 @@ whatever the number said.
   command by `-C` alone and are unchanged here. The shared reader keeps only the last `-C`, while
   git reads each from the one before it.
 
+### What #3398 changed: the folder more than one -C leads to, 2026-11-22
+
+git reads each `-C` from the one before it. mod-kit's git reader kept only the last, so every mod
+placed `git -C /a -C b merge y`, which runs in `/a/b`, in `<the folder it runs in>/b`.
+
+- Measured with git 2.51.1 on macOS, in throwaway repositories `m/a`, `m/a/b`, `m/b` and `m/c`, run
+  from `m` and asked `git rev-parse --show-toplevel`. `-C <m>/a -C b` and `-C a -C b` answer
+  `m/a/b`. `-C a -C <m>/c` answers `m/c`: an absolute one starts again from itself. `-C a -C ""`
+  answers `m/a`, `-C "" -C b` answers `m/b` and `-C a -C "" -C b` answers `m/a/b`: an empty one
+  changes nothing. `-C a -C ../c` answers `m/c`. `-C nothere -C <m>/c` and `-C a -C nothere` both
+  exit 128 (`cannot change to 'nothere'`) and run nothing, so a folder that is not there stops git
+  wherever it stands in the chain. git's other global options between two (`-c core.x=y`,
+  `--no-pager`) change nothing. `-Ca` and `-C=a` are no option (exit 129). A relative `--git-dir`
+  or `--work-tree` is read from the folder every `-C` leads to (`-C a --git-dir=b/.git -C b` is
+  refused: there is no `a/b/b/.git`).
+- `$.modkit.git` hands that folder on as `chained`, as written and read as `dir` is, and only where
+  it is not what `dir` says: never for one `-C` or none, nor for a chain whose last `-C` is
+  absolute. A value starting `~/` or `$HOME/` is the home folder, as every path reader here
+  takes it.
+- `dir` is unchanged: the last `-C` as written. A mod that places a git command by `dir` judges
+  exactly the calls it judged before, so nothing held under the old reading passes because the
+  reader moved. A mod moves to `chained` in its own change, and decides there whether it goes on
+  judging `dir` too. The collision guard, the design round guard, the write reader's placing of
+  what git itself writes, and scope modes still place a chained command by `dir`.
+- Where the chain cannot be worked out, `chained` is null, the mark `pipeline` gives the folder of
+  a command behind a `cd` it cannot follow, and never a guess. That is a value the shell fills in
+  after another `-C` (`-C /a -C "$B"`: absolute or relative, which only the shell knows), a folder
+  read from such a value (`-C "$A" -C b`: empty, `$A` changes nothing and git runs in `b`), a
+  pattern, a brace list and another user's home. Only a later absolute `-C` makes it known again.
+  One `-C` the shell fills in is still handed on in `dir` as written, as it always was.
+- The answer to #3398's first open question, whether the shared reader should mark a path it can
+  only guess: yes for the one place this reader would otherwise have had to guess, and that mark
+  is the null above. The write reader's guessed path (a working folder named by a value it cannot
+  follow) is not marked here. It is the write reader's to mark, in its own change.
+
 ### What #3280 changed: a file put back exactly as the default branch holds it, 2026-11-21
 
 On 2026-11-19 a builder set its edit to a mod's `.tsx` hook file aside and ran

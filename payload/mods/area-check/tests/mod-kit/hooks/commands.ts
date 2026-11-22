@@ -1909,12 +1909,51 @@ export const commands = (cmd: string, opts: ReadOptions = {}): string[][] => pip
 // as a submodule's does), which only git can say; with only `workTree`, the repository is the one
 // found from that folder. Until #3337 both values were skipped and only -C's folder handed on, so a reader placed
 // `git --git-dir=/other/.git --work-tree=/w/x merge y` in the folder it ran in.
+// #3398: git reads each -C from the one before it (measured with git 2.51.1 on macOS, in throwaway
+// repositories): `git -C /a -C b merge y` runs in /a/b, an absolute one starts again from itself
+// (`-C a -C /c` runs in /c), an empty one changes nothing (`-C a -C ""` runs in a), and one that
+// names no folder stops git before it runs anything, wherever it stands. `dir` is the last -C as
+// written, which is all this reader kept until then, so every mod placed that merge in <the folder
+// it runs in>/b. It is still that, so a mod that has not been moved judges exactly what it judged.
+// `chained` is the folder git runs in, as written and read from the folder the command runs in
+// unless it is absolute, exactly as `dir` is. It is given only where it is not what `dir` says: so
+// never for one -C or none, nor for a chain ending in an absolute one. It is null where it cannot
+// be worked out, the mark `pipeline` gives the folder of a command behind a cd it cannot follow:
+// a value the shell fills in ($, a backtick, a pattern, a brace list, ~user) after another -C may
+// be absolute or relative, and a folder read from such a value may be read from nothing (empty,
+// git leaves the folder as it is) or from more words than one. Never a guess: a reader that finds
+// null holds or asks, and one that finds a folder there judges it beside `dir`, since what was held
+// under the old reading is not let through by the new one alone. A `~` or `$HOME` at the start of
+// a value is the home folder, as every reader of a path here takes it.
+type Chain = { at: string; known: boolean } | null | undefined
+const chainedDir = (values: readonly string[]): Chain => {
+  // undefined: the folder the command runs in. null: no one folder.
+  let chain: Chain
+  for (const v of values) {
+    if (v === '') continue
+    const plain = v.replace(/^\$(?:HOME|\{HOME\})(?=\/|$)/, '~')
+    const known = !/[$`*?[\]{}]/.test(plain) && (!plain.startsWith('~') || plain === '~' || plain.startsWith('~/'))
+    if (known && (plain.startsWith('/') || plain.startsWith('~'))) chain = { at: v, known: true }
+    else if (chain === undefined) chain = { at: v, known }
+    else if (chain === null || !chain.known || !known) chain = null
+    else chain = { at: `${chain.at.replace(/\/+$/, '')}/${v}`, known: true }
+  }
+  return chain
+}
 const GIT_GLOBAL_WITH_VALUE = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace'])
 const GIT_NAMES_APART: Readonly<Record<string, 'gitDir' | 'workTree'>> = { '--git-dir': 'gitDir', '--work-tree': 'workTree', GIT_DIR: 'gitDir', GIT_WORK_TREE: 'workTree' }
-export type GitCommand = { sub: string | undefined; args: string[]; dir: string | undefined; gitDir?: string; workTree?: string }
+export type GitCommand = { sub: string | undefined; args: string[]; dir: string | undefined; chained?: string | null; gitDir?: string; workTree?: string }
 export const git = (words: string[], env: readonly string[] = []): GitCommand | undefined => {
   if ((words[0] ?? '').split('/').pop() !== 'git') return undefined
   let dir: string | undefined
+  // Every -C in the order written (#3398).
+  const folders: string[] = []
+  // `chained`, where the folder every -C leads to is not what `dir` says.
+  const led = (): { chained?: string | null } => {
+    const chain = chainedDir(folders)
+    if (chain === undefined || (chain !== null && chain.at === dir)) return {}
+    return { chained: chain !== null && chain.known ? chain.at : null }
+  }
   const apart: { gitDir?: string; workTree?: string } = {}
   // Its own keys only: a name every object inherits (`constructor`) is no option and no variable here.
   const names = (name: string) => (Object.prototype.hasOwnProperty.call(GIT_NAMES_APART, name) ? GIT_NAMES_APART[name] : undefined)
@@ -1929,11 +1968,13 @@ export const git = (words: string[], env: readonly string[] = []): GitCommand | 
     const joined = w.startsWith('--') && eq > 0 ? names(w.slice(0, eq)) : undefined
     if (GIT_GLOBAL_WITH_VALUE.has(w)) {
       const field = w.startsWith('--') ? names(w) : undefined
-      if (w === '-C') dir = words[i + 1]
-      else if (field && words[i + 1] !== undefined) apart[field] = words[i + 1] as string
+      if (w === '-C') {
+        dir = words[i + 1]
+        if (dir !== undefined) folders.push(dir)
+      } else if (field && words[i + 1] !== undefined) apart[field] = words[i + 1] as string
       i++
     } else if (joined) apart[joined] = w.slice(eq + 1)
-    else if (!w.startsWith('-')) return { sub: w, args: words.slice(i + 1), dir, ...apart }
+    else if (!w.startsWith('-')) return { sub: w, args: words.slice(i + 1), dir, ...led(), ...apart }
   }
-  return { sub: undefined, args: [], dir, ...apart }
+  return { sub: undefined, args: [], dir, ...led(), ...apart }
 }

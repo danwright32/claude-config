@@ -7721,7 +7721,9 @@ question again, used by the design round guard and ask before saving), of git co
 (`$.modkit.git({ words, env })`: the subcommand, its arguments, the folder `-C` names and, since
 #3337, the repository and the working folder the command names apart from that folder, by
 `--git-dir`, `--work-tree`, `GIT_DIR` or `GIT_WORK_TREE`, each as written, the two variables read
-from the `env` that `pipeline` gives the command), of gh commands
+from the `env` that `pipeline` gives the command, and, since #3398, the folder more than one `-C`
+leads to, each read from the one before it as git reads them, as `chained`, null where it cannot
+be worked out, beside `dir`, which stays the last `-C` as written), of gh commands
 (`$.modkit.gh({ words })`: the subcommand and action past gh's
 global flags, each flag as pflag reads it, the positionals, the repository the command names itself,
 from `-R`, a github.com link or a `gh repo` owner/name, and for `gh api` its method, endpoint,

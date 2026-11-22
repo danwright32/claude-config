@@ -107,7 +107,8 @@ export type ModKit = {
    * Undefined when not git. Since #3337 also the repository and the working folder the command
    * names apart from that folder (`gitDir`, `workTree`), from its options and, where `env` is given
    * (the `env` `pipeline` gives the command), from GIT_DIR and GIT_WORK_TREE. A reader that places a
-   * git command by `dir` alone reads one naming either as being about the wrong repository.
+   * git command by `dir` alone reads one naming either as being about the wrong repository. Since
+   * #3398 also the folder more than one -C leads to (`chained`), where that is not what `dir` says.
    */
   git: (input: { words: string[]; env?: readonly string[] }) => Promise<ModKitGit | undefined>
   /**
@@ -491,8 +492,15 @@ export type ModKitCodeVerdict = { does: 'run a process' | 'write files' | 'unrea
  * (core.worktree, as a submodule's does), and named by `gitDir` alone its files land there
  * instead: only git can say so (`git rev-parse --show-toplevel` with the command's own naming), and
  * the write reader, which asks git nothing, places a path in the folder the command runs in.
+ * `dir` is the last -C as written. git reads each -C from the one before it (#3398: `-C /a -C b`
+ * runs in /a/b), and `chained` is the folder that leads to, as written and read as `dir` is, given
+ * only where it is not what `dir` says (never for one -C or none, nor where the last is absolute);
+ * null where it cannot be worked out (a value the shell fills in after another -C, or a folder read
+ * from one), which is no folder and never the one the command runs in. Where `chained` is given,
+ * `dir` is the old reading of the command and not where git runs: a reader judges the folder
+ * `chained` names, holds or asks on null, and decides for itself whether to go on judging `dir` too.
  */
-export type ModKitGit = { sub: string | undefined; args: string[]; dir: string | undefined; gitDir?: string; workTree?: string }
+export type ModKitGit = { sub: string | undefined; args: string[]; dir: string | undefined; chained?: string | null; gitDir?: string; workTree?: string }
 
 /** The goal a session's transcript says is set now, as `goal` reads it. */
 export type ModKitGoal = { state: 'set'; condition: string } | { state: 'none'; met?: ModKitGoalMet } | { state: 'unreadable'; why: string }
