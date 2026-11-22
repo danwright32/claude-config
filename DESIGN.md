@@ -361,6 +361,15 @@ worktree and /private/tmp folders plus 5.1 GB of subagent transcripts):
   short), and lesson-citations (60 days), which loses days 8 to 60 of worktree and headless sessions
   in other repositories. disk-clean's transcripts kind offers only past 90 days, unreachable since
   Claude Code's own 30, and still unreachable (L174).
+- **Raised to 14 days on 2026-11-21 (#3413, Dan: "Keep 14 days").** The 7 days above were found
+  cutting counts short: #3230 read one 14 day window twice, hours apart, and got 4,545 record files
+  and then 4,275, because a run of this job fell between the reads, and the counts posted on #3230,
+  #3323 and #3218 had only 7 to 8 days of agent and worktree records. At about 280 MB a day the 7
+  more days cost about 2 GB on each Mac. Of the readers above, audit-sessions now loses nothing of
+  its 14 days, and agent-cap-report and wrapped-refusal-followups come back short only past 14 days.
+  What the job removes is otherwise unchanged. Counts now run `tools/record-copy.py` first, which
+  reads the kinds from `transcript_files` here, refuses a window longer than the records reach, and
+  copies the window to `~/.claude/state/record-copies`, so a recount reads the same set.
 
 ### Keeping the test runner's boundary at one directory
 

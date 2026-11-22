@@ -6,6 +6,8 @@ Dan, 2026-11-18, each from a picker recorded on #3235:
     go and its written notes stay.
   - Transcripts: "Shorten only agent and test runs", kept "7 days". His own sessions stay at Claude
     Code's own 30 days.
+  Dan, 2026-11-21, from a picker recorded on #3413: "Keep 14 days". Agent and test run transcripts
+    are kept 14 days, up from the 7 above, so a count of agent activity can reach back two weeks.
   - How it runs: "By itself, with a log". `claude-sync remove-leftovers` runs `remove` once a day from
     the launch agent com.claudesync.leftovers, and says so only when a run fails or is missed.
 
@@ -43,7 +45,7 @@ readable-folders.tsv below, because a disk-clean script may not run python:
     says it is safe to go is /disk-clean's to ask.
 
 THE TRANSCRIPTS RULE, under ~/.claude/projects/<project>/:
-  Removed once last written more than TRANSCRIPT_DAYS (7) days ago:
+  Removed once last written more than TRANSCRIPT_DAYS (14) days ago:
     - a subagent transcript, <project>/<session>/subagents/**/agent-*.jsonl, and its agent-*.meta.json,
       in every project;
     - in a project folder Claude Code keyed to a worktree (its name holds -claude-worktrees-) or to a
@@ -95,7 +97,7 @@ sys.path.insert(0, HERE)
 import session_registry  # noqa: E402
 
 QUIET_DAYS = 3
-TRANSCRIPT_DAYS = 7
+TRANSCRIPT_DAYS = 14
 BULKY_BYTES = 1024 * 1024
 # Why a folder of mostly images or documents is kept. `readable-folders` lists exactly the folders kept
 # for this reason, for /disk-clean to show (Dan, 2026-11-18: "2.4 Keep, and show in disk cleanup").
@@ -365,27 +367,47 @@ def plan_transcripts(home, now, plan):
         plan.failures.append("the transcripts folder %s is not a folder (a link is never followed), so the transcripts rule did not run" % root)
         return
     cutoff = now - TRANSCRIPT_DAYS * DAY
+    for p, st, kind in transcript_files(root):
+        if kind != OWN_SESSION:
+            old_file(p, st, cutoff, kind, plan)
+
+
+# The kind of each session record, as the transcripts rule tells them apart. The last three are the
+# kinds it removes; OWN_SESSION is Dan's own session transcript, which it never touches. Named here so
+# tools/record-copy.py, which copies records before a count, sorts them by this rule and no copy of it.
+OWN_SESSION = "transcripts: own session"
+SUBAGENT_KIND = "transcripts: subagent"
+WORKTREE_KIND = "transcripts: worktree run"
+TMP_KIND = "transcripts: /private/tmp run"
+
+
+def transcript_files(root):
+    """(path, lstat, kind) for every session record file under root (~/.claude/projects) the
+    transcripts rule sorts, never following a link: in a worktree or /private/tmp run's project
+    folder, the session transcript and every file in the session's folder (WORKTREE_KIND, TMP_KIND);
+    in any other project folder, the session transcript (OWN_SESSION) and each subagent transcript
+    and its meta file (SUBAGENT_KIND). A memory folder, and anything else, is never yielded."""
     for project in entries(root):
         pp = os.path.join(root, project)
         if not is_dir(lst(pp)):
             continue
         runs = run_folder(project)
-        kind = "transcripts: worktree run" if "-claude-worktrees-" in project else "transcripts: /private/tmp run"
+        kind = WORKTREE_KIND if "-claude-worktrees-" in project else TMP_KIND
         for name in entries(pp):
             p = os.path.join(pp, name)
             st = lst(p)
             if name == "memory" or st is None:
                 continue
-            if is_file(st) and runs and SESSION_FILE.match(name):
-                old_file(p, st, cutoff, kind, plan)
+            if is_file(st) and SESSION_FILE.match(name):
+                yield p, st, (kind if runs else OWN_SESSION)
             elif is_dir(st) and SESSION_DIR.match(name):
                 for q, qst in walk(p):
                     if not is_file(qst):
                         continue
                     if runs:
-                        old_file(q, qst, cutoff, kind, plan)
+                        yield q, qst, kind
                     elif os.sep + "subagents" + os.sep in q[len(p):] and SUBAGENT_FILE.match(os.path.basename(q)):
-                        old_file(q, qst, cutoff, "transcripts: subagent", plan)
+                        yield q, qst, SUBAGENT_KIND
 
 
 def old_file(p, st, cutoff, kind, plan):
