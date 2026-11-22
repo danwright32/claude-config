@@ -2022,6 +2022,15 @@ test("a removal's approval covers exactly what Dan was told: the same file, the 
   expect(coversRemoval(delete_, [...told, gone('~/Apps/slate/AGENTS.md')], [])).toBe(false)
   expect(coversRemoval(delete_, [{ file: '~/Apps/slate/CLAUDE.md', how: 'move', to: '/tmp/x' }], [])).toBe(false)
   expect(coversRemoval(delete_, told, ['~/Apps/slate/AGENTS.md'])).toBe(false)
+  // A folder he approved for the memory it was said to hold covers no more than that: memory that
+  // appears under it afterwards, or a find no longer limited to the names he read, is asked about again.
+  const folder: AskBeforeSavingApproval = { id: 'q6', key: 'k', files: [], until: 1, removes: [gone('~/.claude', { holds: ['~/.claude/CLAUDE.md'] })] }
+  expect(coversRemoval(folder, [gone('~/.claude', { holds: ['~/.claude/CLAUDE.md'] })], [])).toBe(true)
+  expect(coversRemoval(folder, [gone('~/.claude', { holds: ['~/.claude/CLAUDE.md', '~/.claude/LESSONS.md'] })], [])).toBe(false)
+  const limited: AskBeforeSavingApproval = { id: 'q7', key: 'k', files: [], until: 1, removes: [gone('~/Apps/slate', { names: ['CLAUDE.md'], folder: true })] }
+  expect(coversRemoval(limited, [gone('~/Apps/slate', { names: ['CLAUDE.md'], folder: true })], [])).toBe(true)
+  expect(coversRemoval(limited, [gone('~/Apps/slate', { names: ['CLAUDE.md', 'AGENTS.md'], folder: true })], [])).toBe(false)
+  expect(coversRemoval(limited, [gone('~/Apps/slate', { folder: true })], [])).toBe(false)
   // An approval of a save, with no removal in it or an empty one, covers no removal.
   expect(coversRemoval({ id: 'q2', key: 'k', files: ['~/Apps/slate/CLAUDE.md'], until: 1 }, told, [])).toBe(false)
   expect(coversRemoval({ id: 'q3', key: 'k', files: ['~/Apps/slate/CLAUDE.md'], until: 1, removes: [] }, told, [])).toBe(false)

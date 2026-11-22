@@ -1866,17 +1866,32 @@ export const removalSaid = (removes: readonly Removal[]): string => {
     .join(' ')
 }
 
+const sameList = (a: readonly string[] | undefined, b: readonly string[] | undefined): boolean => (a ?? []).join('\n') === (b ?? []).join('\n')
+// One removal as Dan was told it against one the call makes now: every word the question said.
+const sameRemoval = (y: Removal, r: Removal): boolean =>
+  y.file === r.file &&
+  y.how === r.how &&
+  y.to === r.to &&
+  y.back === r.back &&
+  y.replaces === r.replaces &&
+  y.folder === r.folder &&
+  y.pattern === r.pattern &&
+  y.guessed === r.guessed &&
+  y.more === r.more &&
+  sameList(y.holds, r.holds) &&
+  sameList(y.names, r.names)
+
 /**
- * Whether an approval is Dan's Delete or Move for exactly this removal (#3402): what the call
- * removes now, each file with the same consequence he was told (how it goes, where to, whether git
- * can bring it back), and any lasting memory a move lands on. An approval of a save carries no
+ * Whether an approval is Dan's Delete, Move or Empty for exactly this removal (#3402): what the
+ * call removes now, each file with the same consequence he was told (how it goes, where to, whether
+ * git can bring it back) and for the same thing he read it to be (a whole folder, the memory a
+ * folder holds, the names a find is limited to, a pattern, a guess), and any lasting memory a move
+ * lands on. What is in a file is not compared, so a file git does not hold can change after he
+ * answers and still go: nothing was said of what it held. An approval of a save carries no
  * `removes`, so it never lets a removal through; savesThis matches the call itself.
  */
-export const coversRemoval = (x: AskBeforeSavingApproval, removes: readonly Removal[], files: readonly string[]): boolean =>
-  x.removes !== undefined &&
-  x.removes.length > 0 &&
-  removes.every(r => (x.removes ?? []).some(y => y.file === r.file && y.how === r.how && y.to === r.to && y.back === r.back && y.replaces === r.replaces)) &&
-  files.every(f => x.files.includes(f))
+export const coversRemoval =(x: AskBeforeSavingApproval, removes: readonly Removal[], files: readonly string[]): boolean =>
+  x.removes !== undefined && x.removes.length > 0 && removes.every(r => (x.removes ?? []).some(y => sameRemoval(y, r))) && files.every(f => x.files.includes(f))
 
 /**
  * What a command is refused with when one question cannot cover it (#3402): it removes lasting

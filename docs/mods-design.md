@@ -3315,8 +3315,10 @@ lasting memory file, or moved one away, ran with no question. Measured in the mo
   or "Empty". None of a save's words or answers appear in it (L9, L180).
 - **The two approvals never stand in for each other.** A removal's approval is a record with
   `removes` (what goes, how, where to, what git held), and lets through only the same call removing
-  exactly that with the same consequence (`coversRemoval`), so a file that changes after Dan
-  answers is asked about again. A save's approval carries no `removes` and lets no removal through;
+  exactly that with the same consequence (`coversRemoval`), so a removal whose consequence changes
+  after Dan answers is asked about again: what git holds of the file, where a move lands and
+  whether a file is there, what a folder holds, the names a find is limited to. What is in a file
+  is not compared, so a file git does not hold can change after he answers and still go. A save's approval carries no `removes` and lets no removal through;
   an approval with `removes` lets no save through, and `$.askBeforeSaving.isApproved` answers false
   for it. Dan's own permanent words ("from now on") cover no removal. A subagent's removal is
   refused and never asked about, as its save is.

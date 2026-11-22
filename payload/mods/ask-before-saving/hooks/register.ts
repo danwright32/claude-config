@@ -400,8 +400,10 @@ const gitHolds = async ($: EngineInterface, abs: string): Promise<Pick<AskBefore
   }
 }
 
-// What is at a path: a file, a folder, something else, or nothing that can be looked at.
-const kindAt = async ($: EngineInterface, path: string): Promise<string | undefined> => {
+// What is at a path, in the engine's own words ('file', 'dir' for a folder, 'other'), or undefined
+// for nothing that can be looked at. The answer keeps the engine's type, so a word it never gives
+// fails the type check (the first build compared with a word of its own and never saw a folder).
+const kindAt = async ($: EngineInterface, path: string) => {
   try {
     return (await $.fs.stat(path)).kind
   } catch {
@@ -434,7 +436,7 @@ const removalsOf = async ($: EngineInterface, tool: string, input: Record<string
         }
       if (!found.length) continue
     } else if (c.path !== undefined && !(await $.fs.exists(c.path))) continue
-    const folder = !c.holds && !c.pattern && c.tree && c.path !== undefined && (await kindAt($, c.path)) === 'directory'
+    const folder = !c.holds && !c.pattern && c.tree && c.path !== undefined && (await kindAt($, c.path)) === 'dir'
     const shape = {
       file: c.file,
       ...(folder ? { folder: true as const } : {}),
@@ -444,7 +446,10 @@ const removalsOf = async ($: EngineInterface, tool: string, input: Record<string
       ...(c.guessed ? { guessed: true as const } : {}),
     }
     if (c.how === 'move') {
-      const replaces = c.toPath !== undefined && (await $.fs.exists(c.toPath)) && (await kindAt($, c.toPath)) === 'file'
+      // Something is where the move lands, and it is not known to be a folder: said as replaced.
+      // One that cannot be looked at is taken as a file, since "can be moved back" would be the
+      // claim nothing measured.
+      const replaces = c.toPath !== undefined && (await $.fs.exists(c.toPath)) && (await kindAt($, c.toPath)) !== 'dir'
       out.push({ ...shape, how: 'move', ...(c.to !== undefined ? { to: c.to } : {}), ...(replaces ? { replaces: true as const } : {}) })
     } else out.push({ ...shape, how: c.how, ...(c.path !== undefined ? await gitHolds($, c.path) : { back: 'unknown' as const, why: 'its path could not be read from the command' }) })
   }

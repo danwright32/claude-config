@@ -271,12 +271,13 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string>; g
   on('fs.list', ($, e) => {
     const at = e.path.replace(/\/$/, '')
     const names = [...new Set(under(at).map(f => f.slice(at.length + 1).split('/')[0] as string))]
-    return { value: names.map(name => ({ name, kind: files[`${at}/${name}`] !== undefined ? 'file' : 'directory' })) } as never
+    // 'dir' is the engine's own word for a folder ($.fs.stat and $.fs.list: 'file' | 'dir' | 'other').
+    return { value: names.map(name => ({ name, kind: files[`${at}/${name}`] !== undefined ? 'file' : 'dir' })) } as never
   })
   on('fs.stat', ($, e) => {
     if ((init.stdinLinks ?? []).includes(e.path) && e.resolve) throw new Error(`EBADF: bad file descriptor, stat '${e.path}'`)
     if (isOther(e.path)) return { value: { kind: 'other', size: 0, mtimeMs: 0, isLink: false } } as never
-    if (files[e.path] === undefined && under(e.path).length) return { value: { kind: 'directory', size: 0, mtimeMs: 0, isLink: false } } as never
+    if (files[e.path] === undefined && under(e.path).length) return { value: { kind: 'dir', size: 0, mtimeMs: 0, isLink: false } } as never
     if (files[e.path] === undefined) throw new Error(`ENOENT: ${e.path}`)
     return { value: { kind: 'file', size: 1, mtimeMs: 0, isLink: false } } as never
   })
