@@ -175,7 +175,7 @@ pc__stacked_start() {
   esac
   ref="$(sb_field "$ans" ref)"; tip="$(sb_field "$ans" tip)"; pr="$(sb_field "$ans" pr)"
   if ! pc_base_judged "$tip" "$PC_MB"; then
-    PC_STACKED_WHY="$ref is an open pull request (#$pr), and this Mac has no record that this gate judged the push that put it at ${tip:0:7}, or it has one of a push of that branch let through unjudged"
+    PC_STACKED_WHY="$ref is an open pull request (#$pr), but $PC_BASE_JUDGED_WHY"
     return 0
   fi
   PC_MB="$tip"; PC_BASE="$ref"; PC_STACKED="$ref (pull request #$pr)"
@@ -190,23 +190,40 @@ pc__stacked_start() {
 #        commit from $2 to the base's head. A line with no tree is matched on its HEAD.
 #   no:  anything else, an unreadable or missing ledger included. `empty` proves nothing: a second
 #        push of a head an override delivered reads as empty.
+# On a no, PC_BASE_JUDGED_WHY says which of those it was, for the refusal to carry.
 # The ledger is this Mac's own, so a base pushed from the other Mac has no record here, and the
 # branch on top of it is judged from the default branch.
 PC_BASE_JUDGED_MAX=500   # the most commits a base's own range may hold and still be looked up
 pc_base_judged() {   # $1 = the base's head  $2 = where the base's own range starts
-  local file commits tiptree
+  local file commits tiptree rc
+  PC_BASE_JUDGED_WHY=""
   file="$(pc_ledger_path)"
-  [ -r "$file" ] || return 1
+  # No ledger yet is no record of any push; one that exists and cannot be read is a failed read.
+  if [ ! -e "$file" ]; then
+    PC_BASE_JUDGED_WHY="this Mac has no record that this gate judged the push that put it at ${1:0:7} (it has no push gate ledger yet)"; return 1
+  fi
+  if [ ! -r "$file" ]; then
+    PC_BASE_JUDGED_WHY="this Mac's push gate ledger could not be read"; return 1
+  fi
   tiptree="$(git rev-parse --verify --quiet "$1^{tree}" 2>/dev/null)"
-  [ -n "$tiptree" ] || return 1
+  if [ -z "$tiptree" ]; then
+    PC_BASE_JUDGED_WHY="git could not read the base's head, ${1:0:7}"; return 1
+  fi
   # The base's own commits and their trees, on one line ("commit tree commit tree ..."), handed to
   # awk as a variable: one input file, so nothing has to tell two files apart.
   # At most PC_BASE_JUDGED_MAX commits, so the variable stays far inside what a command line may
   # carry (about 83 bytes a commit); a longer base is "not judged", the side that reads more.
-  commits="$(git log --format='%H %T' -n "$((PC_BASE_JUDGED_MAX + 1))" "$2..$1" 2>/dev/null)" || return 1
-  [ -n "$commits" ] || return 1
-  [ "$(printf '%s\n' "$commits" | awk 'END { print NR }')" -le "$PC_BASE_JUDGED_MAX" ] || return 1
+  if ! commits="$(git log --format='%H %T' -n "$((PC_BASE_JUDGED_MAX + 1))" "$2..$1" 2>/dev/null)"; then
+    PC_BASE_JUDGED_WHY="git could not read the base's own commits"; return 1
+  fi
+  if [ -z "$commits" ]; then
+    PC_BASE_JUDGED_WHY="it holds no commits of its own over the default branch"; return 1
+  fi
+  if [ "$(printf '%s\n' "$commits" | awk 'END { print NR }')" -gt "$PC_BASE_JUDGED_MAX" ]; then
+    PC_BASE_JUDGED_WHY="it holds more than $PC_BASE_JUDGED_MAX commits of its own, more than this gate looks up in the ledger"; return 1
+  fi
   commits="$(printf '%s' "$commits" | tr '\n' ' ')"
+  # Exit 0 judged, 3 a push of the base's own commits let through unjudged, 1 no judged push found.
   awk -F '\t' -v gate="${PC_GATE:-}" -v tiptree="$tiptree" -v commits="$commits" '
     BEGIN { n = split(commits, p, " "); for (i = 1; i + 1 <= n; i += 2) { sha[p[i]] = 1; tree[p[i + 1]] = 1 } }
     $3 != gate { next }
@@ -215,7 +232,15 @@ pc_base_judged() {   # $1 = the base's head  $2 = where the base's own range sta
       if (hit && ($4 == "override" || $4 == "failopen")) bad = 1
       if ($15 == tiptree && ($4 == "pass" || $4 == "nosource" || $4 == "docsonly")) good = 1
     }
-    END { exit (good && !bad) ? 0 : 1 }' "$file"
+    END { if (bad) exit 3; exit good ? 0 : 1 }' "$file"
+  rc=$?
+  case "$rc" in
+    0) return 0 ;;
+    3) PC_BASE_JUDGED_WHY="a push of that branch's own commits was let through unjudged, by an override or a gate that failed open" ;;
+    1) PC_BASE_JUDGED_WHY="this Mac has no record that this gate judged the push that put it at ${1:0:7}" ;;
+    *) PC_BASE_JUDGED_WHY="this Mac's push gate ledger could not be read" ;;
+  esac
+  return 1
 }
 
 # ---- leaving out what a merge of the default branch brought in (claude-config#2028) ----

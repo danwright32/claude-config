@@ -326,6 +326,16 @@ mk_stack t6 pushed
 pr_json base/one OPEN "$BASE_TIP"
 run_tests_gate "git push -u origin child/two"
 check_eq "T6 no record that the test gate judged the base's push: judged from main, refused" "2" "$TG_RC"
+check "T6 and the refusal names that cause" "has no record that this gate judged the push that put it at" "$TG_ERR"
+check_not "T6 and no cause it did not find" "let through unjudged" "$TG_ERR"
+check "T6 the first push found no ledger at all, and says so" "it has no push gate ledger yet" "$TG_ERR"
+# Pushed again, the ledger now holds the refusal above and still no judged push of the base.
+check "T6 fixture: the ledger now exists, with no line for the base" $'\ttests\t' "$(cat "$PUSH_GATE_LEDGER_DIR/push-gates.tsv" 2>/dev/null)"
+run_tests_gate "git push -u origin child/two"
+check_eq "T6 a ledger with no judged push of the base: judged from main, refused" "2" "$TG_RC"
+check "T6 and the refusal names that cause" "has no record that this gate judged the push that put it at" "$TG_ERR"
+check_not "T6 and not the missing ledger" "no push gate ledger yet" "$TG_ERR"
+check_not "T6 and not a failed read" "could not be read" "$TG_ERR"
 
 mk_stack t7 pushed
 pr_json base/one OPEN "$BASE_TIP"
@@ -335,6 +345,8 @@ G checkout -q child/two
 check "T7 fixture: the base's push was let through by an override" $'\ttests\toverride\t' "$(cat "$PUSH_GATE_LEDGER_DIR/push-gates.tsv" 2>/dev/null)"
 run_tests_gate "git push -u origin child/two"
 check_eq "T7 the base's push was an override, never judged: judged from main, refused" "2" "$TG_RC"
+check "T7 and the refusal names that cause" "was let through unjudged" "$TG_ERR"
+check_not "T7 and no cause it did not find" "has no record that this gate judged" "$TG_ERR"
 
 # Named by what the pusher alone controls: a setting on the push, the setting gh pr create records,
 # the branch's own pull request naming the base, and a remote ref moved by hand.

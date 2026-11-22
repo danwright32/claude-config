@@ -17,7 +17,9 @@
 #   3. Source changed but ZERO tests in the push and none pushed
 #      earlier on the branch since it left the default branch .. BLOCK (no model)
 #   4. Source + some tests -> model grades per-change coverage . allow / BLOCK
-#      The tests the branch pushed earlier count beside the push's own (#2153, step 4b below).
+#      The tests the branch pushed earlier count beside the push's own (#2153, step 4b below),
+#      except on a stacked branch judged from its base (#3444), which counts no earlier tests, in
+#      step 3 or here.
 #      Test changes too large for one call are read in further calls, PARTS_AT_ONCE at a time and
 #      at most 1 + TEST_PARTS_MAX (41) in all, so no refusal rests on a test the model was not
 #      shown (#1998, #2153, step 6 below).
@@ -506,7 +508,9 @@ EOF
 # too, and their diffs follow the push's own in what the judge is shown. The source judged is still
 # only the push's. Where that base cannot be worked out (no default branch known, no merge base, a
 # git call that fails), no earlier test is counted and the push is judged as before on its own
-# tests, the conservative side, with BRANCH_NOTE saying why for a refusal to carry.
+# tests, the conservative side, with BRANCH_NOTE saying why for a refusal to carry. A stacked
+# branch judged from its base (claude-config#3444) counts no earlier tests at all: its range
+# already starts at the base's head, and the base's test files are the base's, not this branch's.
 EARLIER_TESTS=(); earlier_list=""; EARLIER_DIFF=""; BRANCH_BASE=""; BRANCH_NOTE=""; BRANCH_DEF=""
 branch_tests() {
   local names f
