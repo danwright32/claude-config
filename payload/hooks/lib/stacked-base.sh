@@ -50,14 +50,22 @@
 # candidate, so a branch cut from the default branch costs one listing of origin's refs and no
 # request at all.
 
+# Its own folder, set once and plainly, so a reader of this file can follow what it sources (the
+# Slack drafts gate reads every script a command runs, and could not follow a second assignment).
 _SB_LIB="${BASH_SOURCE[0]%/*}"; [ "$_SB_LIB" != "${BASH_SOURCE[0]}" ] || _SB_LIB=.
-_SB_LIB="$(cd "${_SB_LIB:-/}" && pwd)"
 
 # Seconds every GitHub read of one question may take together. A gate's own deadline counts them.
 SB_READ_SECONDS=10
 
 sb_stacked_base() {   # $1 = a directory inside the repository  $2 = floor commit, or empty
-  ( sb__answer "${1:-.}" "${2:-}" )
+  (
+    # Loaded before the subshell changes directory, since this file may be sourced by a relative
+    # path; SB__LIB_ABS is the same folder for the process the GitHub read runs in.
+    declare -F ps__default_ref >/dev/null || . "$_SB_LIB/push-scope.sh" 2>/dev/null
+    declare -F bounded_run >/dev/null || . "$_SB_LIB/bounded-run.sh" 2>/dev/null
+    SB__LIB_ABS="$(cd "$_SB_LIB" 2>/dev/null && pwd)"
+    sb__answer "${1:-.}" "${2:-}"
+  )
 }
 
 # One field of an established answer, so no caller cuts the line up for itself: ref, tip or pr.
@@ -84,7 +92,6 @@ sb__answer() {
   [ -n "$head" ] || { sb__none "the repository has no commit yet"; return 1; }
   branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null)"
   [ -n "$branch" ] || { sb__none "HEAD is detached, so this branch's own copy on origin cannot be told from a base"; return 1; }
-  declare -F ps__default_ref >/dev/null || . "$_SB_LIB/push-scope.sh" 2>/dev/null
   declare -F ps__default_ref >/dev/null || { sb__none "lib/push-scope.sh is missing, so origin's default branch could not be read"; return 1; }
   def="$(ps__default_ref)"
   [ -n "$def" ] || { sb__none "this checkout knows no default branch for origin"; return 1; }
@@ -122,9 +129,8 @@ sb__answer() {
   for t in gh jq perl; do
     command -v "$t" >/dev/null 2>&1 || { sb__none "$t is not on PATH, so GitHub could not be asked whether the branch under this one is an open pull request"; return 1; }
   done
-  . "$_SB_LIB/bounded-run.sh" 2>/dev/null
   declare -F bounded_run >/dev/null || { sb__none "lib/bounded-run.sh is missing, so GitHub could not be asked inside a time limit"; return 1; }
-  [ -f "$_SB_LIB/merge-target.sh" ] || { sb__none "lib/merge-target.sh is missing, so GitHub could not be asked"; return 1; }
+  [ -n "${SB__LIB_ABS:-}" ] && [ -f "$SB__LIB_ABS/merge-target.sh" ] || { sb__none "lib/merge-target.sh is missing, so GitHub could not be asked"; return 1; }
   deadline=$((SECONDS + SB_READ_SECONDS))
   for ((i = 0; i < n; i++)); do
     [ "${tips[$i]}" = "$near" ] || continue
@@ -132,7 +138,7 @@ sb__answer() {
     left=$((deadline - SECONDS))
     if [ "$left" -lt 1 ]; then why="GitHub did not answer about origin/$name within ${SB_READ_SECONDS}s"; break; fi
     # A process of its own, so the bound can end it: the library's reader walks every logged in account.
-    bounded_run "$left" bash -c '. "$1/merge-target.sh" 2>/dev/null && mt_pr_view "$2" "number,url,state,headRefName,headRefOid,isCrossRepository" "$(mt_remote_slug)" "" 2>/dev/null' _ "$_SB_LIB" "$name"
+    bounded_run "$left" bash -c '. "$1/merge-target.sh" 2>/dev/null && mt_pr_view "$2" "number,url,state,headRefName,headRefOid,isCrossRepository" "$(mt_remote_slug)" "" 2>/dev/null' _ "$SB__LIB_ABS" "$name"
     if [ "$BOUNDED_RC" -eq 124 ]; then why="GitHub did not answer about origin/$name within ${SB_READ_SECONDS}s"; break; fi
     line="$(printf '%s' "$BOUNDED_OUT" | jq -r 'select(.found == true) | .view | [(.number | tostring), (.state // ""), (.headRefName // ""), (.headRefOid // ""), (.isCrossRepository | tostring)] | @tsv' 2>/dev/null)"
     if [ -z "$line" ]; then why="GitHub named no pull request for origin/$name"; continue; fi

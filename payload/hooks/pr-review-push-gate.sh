@@ -12,7 +12,8 @@
 # Run on the local head before pushing, the same review took 12 to 17 s a round.
 #
 # THE REVIEW IS THE MERGE GATE'S OWN (lib/pr-review.sh check, --gate push): the whole branch, merge
-# base with origin's default branch to the local HEAD, every file type, on both Macs. Reviews are
+# base with origin's default branch to the local HEAD (for a branch stacked on another open branch,
+# from that branch's head: WHERE THE REVIEW READS FROM, below), every file type, on both Macs. Reviews are
 # keyed by repository (a hash of the origin URL, never the checkout's folder name, which only
 # labels messages) and commit, so the merge gate later finds THIS review for the same head and does
 # not start a second one. The merge gate is exactly as strict as before: a key presented to a push
