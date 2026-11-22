@@ -246,6 +246,38 @@ clear_state
 out="$(prompt sr1)"
 says "and its end is said to the session that heard it" "$out" "no longer refused"
 
+echo "sync stuck notice: config a receive left unverified is said at once, and so is its end (#3396)"
+
+# The record a pull writes when its hook suite was stopped at its limit, owed since ten minutes ago.
+# Far under the threshold: the hooks that landed are live now, unchecked, and a session about to rely
+# on them is the one that has to hear it.
+printf 'outcome=incomplete\tat=%s\texit=0\tran=?\tnotrun=?\tseconds=1800\tnotrun_names=?\towed_since=%s\tstopped=1\n' \
+  "$(( NOW - 600 ))" "$(( NOW - 600 ))" > "$CLONE/.hook-tests"
+out="$(prompt hv1)"
+says "a receive whose hook suite was stopped at its limit is reported without waiting" "$out" "UNVERIFIED"
+says "saying why" "$out" "stopped at its 1800 second limit"
+says "and until when" "$out" "until a later run of the suite completes"
+out="$(prompt hv1)"
+silent "the next prompt is quiet" "$out"
+# The rerun that is still owed rewrites the record with a later at, the same chain: not a new notice.
+printf 'outcome=incomplete\tat=%s\texit=0\tran=?\tnotrun=?\tseconds=1800\tnotrun_names=?\towed_since=%s\tstopped=1\tdeferred_at=%s\tdeferred_load=40\n' \
+  "$(( NOW - 60 ))" "$(( NOW - 600 ))" "$(( NOW - 60 ))" > "$CLONE/.hook-tests"
+out="$(prompt hv1)"
+silent "a deferred rerun of the same stretch is not said again" "$out"
+# A later hook landed and ITS run was stopped too: a new chain, owed from a later time. Nothing has
+# completed in between, so this is a new notice and never the end of the old one.
+printf 'outcome=incomplete\tat=%s\texit=0\tran=?\tnotrun=?\tseconds=1800\tnotrun_names=?\towed_since=%s\tstopped=1\n' \
+  "$(( NOW - 30 ))" "$(( NOW - 30 ))" > "$CLONE/.hook-tests"
+out="$(prompt hv1)"
+says "a new chain of unverified config is a new notice" "$out" "UNVERIFIED"
+never_says "and is not reported as the old one having been verified" "$out" "no longer unverified"
+printf 'outcome=passed\tat=%s\texit=0\tran=3\tnotrun=0\tseconds=40\tnotrun_names=\n' "$NOW" > "$CLONE/.hook-tests"
+out="$(prompt hv1)"
+says "once a run completes, the session that heard it is told" "$out" "no longer unverified"
+out="$(prompt hv1)"
+silent "and the prompt after is quiet" "$out"
+rm -f "$CLONE/.hook-tests"
+
 echo "sync stuck notice: a record nobody can read is not a healthy sync"
 
 printf 'garbage\n' > "$CLONE/.behind-skips"

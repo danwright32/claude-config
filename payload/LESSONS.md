@@ -8130,6 +8130,13 @@ for reference; L6 was reviewed and deliberately not adopted.
   inside Next 16.3.8's own ErrorBoundary and pressing Try again failed until both passed `retry`,
   which asks the server for the page again first)
 
+- **L866. A value of unbounded size (a commit message, a diff, an API body) is never exported or
+  passed as an argument: past the platform limit (128 KB for one value on Linux) every later
+  command fails to start, far from the cause. Pipe it or use a file.**
+  (slate#5261, 2026-11-22)
+  NO CHECK: unbounded sources have no fixed spelling a scan could list
+  SHORT: Never export or pass as an argument a value of unbounded size (commit message, diff, API body): pipe it or use a file, or every later exec fails.
+
 ## Building with AI
 - **L860. When an AI review of a piece of work returns safe with nothing blocking, merge it and file the optional suggestions as issues, because sending them back as a build round brings another review, and a fresh reviewer always finds more: across five pieces 21 of 36 reviews said safe, every one was followed by another round, and the optional items per review never fell.**
   (slate#3007, 2026-11-17)
