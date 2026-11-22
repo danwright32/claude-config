@@ -2575,7 +2575,8 @@ const wholeGroup = async (io: OwnCallIo, inner: string): Promise<readonly RunCom
  *   alias, an unset or a file it reads in itself; a file the guard did not read, unless it is read
  *   in above the definition at the top of the script as a command of its own, where it has ended
  *   before the definition. NOT told: a function such a file defined under another name, called
- *   below the definition, could define the name again (the README says what closing that costs);
+ *   below the definition, could define the name again (docs/mods-design.md, "What may run after
+ *   the definition", says what closing that was measured to cost);
  * - a helper from a file read in only sometimes (in a branch, a loop, a function, a subshell, after
  *   `&&`, in a pipe), read in twice, read in with words of its own, or from a file that may leave
  *   (`return`, `exit`) before the definition, or that holds an eval, an alias, an unset or a file

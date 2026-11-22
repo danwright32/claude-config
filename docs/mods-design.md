@@ -2614,7 +2614,7 @@ The function's name is never what is trusted, so a wrapper cannot hide a program
 typed whole is. Everything the reading cannot tell stays judged as it was: a function from a file
 the script reads in that the reader cannot place (see the next paragraph); a name not defined exactly once, at the top of the script, as a command of its
 own (after `&&`, `||` or a pipe it is defined only sometimes, or in a subshell); a name the text
-unsets, an alias, or text run as commands after the definition; a call before the definition, or
+unsets, an alias, or text run as commands anywhere in the script; a call before the definition, or
 behind `timeout`, `env`, `command`, `xargs`, `find` or a new shell, which run the program of that
 name and never the function; a body followed on its line by a redirect, `&` or `|`; a body that
 keeps what it was handed in a variable, shifts it, loops over it or names it as `${1:-x}`; and a
@@ -2645,6 +2645,32 @@ the run. A design file written that way is not judged directly either, so this a
 was not already open. The stricter form, judging any script that holds such a write, was measured
 on the Slack gate's suite: it holds 465 file writes the reader cannot place and does not call
 temporary, so the stricter form would clear none of the earlier count's 24 calls.
+
+**What may run after the definition (#3416), fixed 2026-11-22.** The reading asked what follows a
+helper's definition by where a command is typed, and a function typed above the definition is
+called below it: `setup() { eval "$X"; }`, then `run() { true; }`, `setup` and `run app/page.tsx`
+was read as the harmless body of `run`, while the shell runs whatever the eval installed. So text
+that may run after the definition and that the reading cannot follow now holds the call wherever it
+is typed: an eval anywhere in the script; a file the guard read, above the definition or below,
+that holds an eval, an alias, an unset or a file it reads in itself; and a file the guard did not
+read, unless it is read in above the definition at the top of the script as a command of its own,
+where it has ended before the definition. That last test (`readAtTop`) cannot tell a function's
+body from a branch or a loop, so a file the guard did not read that is read in above the definition
+inside an `if` is held too. A definition of the name inside another function's body, in the script
+or in a file the guard read, was held already, since every definition the reader lists is counted,
+a function's body included. A function that is never called by a command of its name is held like
+one that is: a call can come by a route the reading does not follow (a command whose name is a
+variable, a trap, a file it did not read). Replayed on the recount's 47 distinct newly judged calls
+the same day, the fix judges none of the 25 cleared calls again; 21 stay judged, 3 of their helpers
+for one of the new reasons where another reason held them before (G, silent, fires), and 1 call's
+script is gone from the disk with the worktree it ran in. Left open, as it was: a file the guard
+did not read, read in at the top of the script above the definition, could define a function under
+another name that, called below the definition, defines the helper's name again. Judging whenever
+such a file is read in closes it and was measured on the same 47 calls, not built: it clears 0 of
+them, all 25 judged again (23 `says`, 2 `call_has`), since each of those suites reads in a file of
+that kind at its top (in the push test gate's suite, read for this, the suite deadline library, by
+a path typed with the own folder idiom inside the word, which the reader does not place). Reading
+such a file would close it for a suite of that shape and is a wider reading, Dan's to decide.
 
 The recount (2026-11-22, the personal MacBook's records for the 45 days to that day: 56,698 shell
 calls, 51,250 distinct, 5,339 running a shell script the guard reads, as the scripts are on disk that
