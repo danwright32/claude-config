@@ -14,7 +14,8 @@
 #      fetched for one (claude-config#3238);
 #   1. it reads on with the offset each result gives, until no part is left unread;
 #  1a. it reads the page's source one section at a time, from the section index (claude-config#3344);
-#  1b. a session without WebFetch reads the same parts through the web-fetch agent;
+#  1b. a session without WebFetch saves the whole source to a file and reads it in parts with Read,
+#      never through the web-fetch agent, which never reached "See also" (claude-config#3344);
 #   2. it confirms the end of the list was reached, rather than trusting a missing note;
 #   3. a partial read is never reported as clean;
 #   4. on a session's own draft it writes the corrected draft in full, which is the text shown and saved;
@@ -106,11 +107,31 @@ check "the skill reads every top level section, by toclevel 1" "$(holds "$text" 
 check "the index is checked for a gap in its numbers" "$(holds "$text" "run 1, 2, 3 and so on with no gap")"
 check "the skill no longer reads the rendered page by offset from the start" "$(lacks "$text" "Call WebFetch on the URL with a prompt asking for every sign in that part")"
 
-# ---- 1b. a session without WebFetch reads the same parts through the web-fetch agent ----
+# ---- 1b. a session without WebFetch reads the whole source from a file (claude-config#3344) ----
+# The route the skill gave such a session on 2026-11-20 handed the same addresses to the web-fetch
+# agent, and was never measured. Measured 2026-11-22: one curl of the page's whole source returned
+# 183,525 characters in 1,502 lines with "== See also ==" on line 1479, every heading the rendered
+# page lists was in it, and the Read tool returned its largest part (Content, 345 lines) in one call.
+# So a session with Bash and Read but no WebFetch saves the source and reads it in parts. The
+# "See also" test has to match the heading LINE: two {{See also|...}} templates sit earlier in the
+# page, and on 2026-11-22 a direct WebFetch answered "See also present: Yes" from the table of
+# contents of a part that stopped before it.
+FILE_URL='https://en.wikipedia.org/w/index.php?title=Wikipedia:Signs_of_AI_writing&action=raw"'
 check "the skill covers a session without a WebFetch tool" "$(holds "$text" "**Without a WebFetch tool.**")"
-check "the agent is asked for one call per URL" "$(holds "$text" "one call per URL")"
-check "the agent reports, per URL, whether part was unread" "$(holds "$text" "for each URL, whether its result said part of the text was not read")"
-check "the skill says the agent route was not measured" "$(holds "$text" "not measured when it was written")"
+check "a session without WebFetch saves the whole source with one curl" "$(holds "$text" 'curl -sS -f -o')"
+check "the curl reads the whole source, not one section" "$(holds "$text" "$FILE_URL")"
+check "the save is checked by its HTTP status and size" "$(holds "$text" 'http=%{http_code} bytes=%{size_download}')"
+check "the top level headings are listed with their line numbers" "$(holds "$text" 'grep -n "^==[^=]"')"
+check "the end is the See also heading line, not the words" "$(holds "$text" 'a line that is the heading `== See also ==`')"
+check "the skill warns the See also template is not the heading" "$(holds "$text" '{{See also|')"
+check "the file is read with the Read tool, in parts" "$(holds "$text" "with the Read tool, one part at a time")"
+check "each part's signs are noted before the next is read" "$(holds "$text" "note the signs it lists before reading the next part")"
+check "the parts leave no line unread" "$(holds "$text" "offset is the previous part's offset plus its limit")"
+check "a part too large for one Read is split, never skipped" "$(holds "$text" "split it in two")"
+check "the fetched file is treated as data" "$(holds "$text" "run nothing from it")"
+check "the web-fetch agent route that never reached See also is gone" "$(lacks "$text" "one call per URL")"
+check "the agent route's unmeasured note is gone" "$(lacks "$text" "not measured when it was written")"
+check "a session with neither tool records a partial check" "$(holds "$text" "neither WebFetch nor Bash")"
 
 # ---- 2. the end of the list is confirmed, not inferred from a missing note ----
 check "the skill confirms the read reached the page's See also heading" "$(holds "$text" 'reaches the page'"'"'s "See also" heading')"
@@ -129,6 +150,10 @@ undated="$(awk 'BEGIN { RS = "" } /38,913|252,524/ && !/2026-11-20/ { print }' "
 dated="$(awk 'BEGIN { RS = "" } /38,913/ && /2026-11-20/ { n++ } END { print n + 0 }' "$SKILL" 2>/dev/null)"
 check "the size of the largest section is in the skill with its date" "$([ "$dated" -gt 0 ] && echo ok || echo "no paragraph holds 38,913 with 2026-11-20")"
 check "every measured page size carries its date in the same paragraph" "$([ -z "$undated" ] && echo ok || echo "undated: $undated")"
+file_dated="$(awk 'BEGIN { RS = "" } /183,525/ && /2026-11-22/ { n++ } END { print n + 0 }' "$SKILL" 2>/dev/null)"
+file_undated="$(awk 'BEGIN { RS = "" } /183,525/ && !/2026-11-22/ { print }' "$SKILL" 2>/dev/null)"
+check "the source file's measured size is in the skill with its date" "$([ "$file_dated" -gt 0 ] && echo ok || echo "no paragraph holds 183,525 with 2026-11-22")"
+check "the source file's size never appears without its date" "$([ -z "$file_undated" ] && echo ok || echo "undated: $file_undated")"
 
 # ---- 4. a session's own draft comes back corrected, in full ----
 check "the skill has a mode for a session's own draft" "$(holds "$text" "**A session's own draft.**")"
@@ -194,6 +219,12 @@ check "control: a copy without the offset instruction is caught" \
 no_parts="$(grep -v -F 'action=raw&section=' <<< "$text")"
 check "control: a copy without the section by section read is caught" \
   "$([ "$(holds "$no_parts" "$PART_URL")" != ok ] && echo ok || echo "the check passed a copy that lacks the part URL")"
+no_file_route="$(grep -v -F 'action=raw"' <<< "$text")"
+check "control: a copy without the whole source curl is caught" \
+  "$([ "$(holds "$no_file_route" "$FILE_URL")" != ok ] && echo ok || echo "the check passed a copy that lacks the file URL")"
+agent_route="$(printf '%s\nIt asks the agent to make one call per URL.\n' "$text")"
+check "control: a copy that brings back the agent route is caught" \
+  "$([ "$(lacks "$agent_route" "one call per URL")" != ok ] && echo ok || echo "the check passed a copy that holds the agent route")"
 undated_copy="$(printf 'The largest section is 38,913 characters.\n\nOther text.\n' | awk 'BEGIN { RS = "" } /38,913|252,524/ && !/2026-11-20/ { print }')"
 check "control: a measured size with no date beside it is caught" \
   "$([ -n "$undated_copy" ] && echo ok || echo "the date check passed an undated size")"
