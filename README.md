@@ -9504,12 +9504,13 @@ required-labels <owner/name>`, which answers `required` with every label the gat
 each needs a sentence in the description, `not-required` for a repository nobody gated, or `unknown`
 with why (a registry missing or unreadable, a repository listed with no start date or a bad one). A
 label the gate says needs a sentence a manager reads (`changelog/visible`) stays refused overnight,
-since Dan has not said it may merge unseen. Still refused, in the words it always was (`set labels or
-a milestone on a PR`), with the reason in brackets wherever the judge was reached: any other label,
-a second label beside it, `--remove-label`, a milestone, a PR the session did not open or does not
-name by number, a repository whose gate requires no label, a gate or a record that cannot be read,
-and every label write through `gh issue edit`, `gh label` or `gh api`. Both sides are held to one
-committed set of cases, `tests/gate-label-fixtures.ts`, read by the gate's suite and the mod's. At
+since Dan has not said it may merge unseen. Still refused, in the words it always was (`set labels
+or a milestone on a PR`), with the reason in brackets wherever the judge was reached: any other
+label, a second label beside it, `--remove-label`, a milestone, a PR the session did not open or
+does not name by number, a repository whose gate requires no label, a gate or a record that cannot
+be read, and every label write through `gh issue edit`, `gh label` or `gh api`. Both sides are
+held to one committed set of cases, `tests/gate-label-fixtures.ts`, read by the gate's suite and
+the mod's. At
 `/sleep` each repository a worker with a goal is in that the file does not decide is asked about
 (each question waits ten minutes, a chosen limit, not a measurement; the answer written into this
 Mac's own file, so it is asked once on each Mac; "Go to sleep, no more questions" asks nothing
