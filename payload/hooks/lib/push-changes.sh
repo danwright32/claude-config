@@ -492,8 +492,11 @@ pc_record() {   # $1 = outcome  $2 = detail  $3 = judged (when a judge was calle
   head="$(git rev-parse --verify --quiet HEAD 2>/dev/null)"
   now="$(date +%s)"
   # A range that started at a stacked branch's base says so on its line (claude-config#3444), first,
-  # so the cut below never drops it: the record of a gate that read less must say what it read.
-  [ -n "${PC_STACKED:-}" ] && detail="judged from $PC_STACKED${detail:+; $detail}"
+  # so the cut below never drops it: the record of a gate that read less must say what it read. It
+  # says where the range STARTED, never that it was judged, since an override, a fail open or an
+  # empty push records the same prefix and judged nothing. pc_base_judged reads the outcome and the
+  # tree columns, never this text.
+  [ -n "${PC_STACKED:-}" ] && detail="range started at the head of $PC_STACKED${detail:+; $detail}"
   detail="$(printf '%s' "$detail" | tr '\t\n\r' '   ' | cut -c 1-400)"
   local model="" wall="" ms="" cost="" bytes="" start="$now"
   if [ "$judged" = judged ]; then

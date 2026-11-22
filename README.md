@@ -3530,7 +3530,8 @@ How each gate knows the base's own changes are judged:
 
 A stopping finding the narrowed review raises still refuses the push wherever it points, a file the
 base owns included; nothing is waived for where a finding points. A refusal by either gate, and the
-test gate's ledger line (`judged from <base> (pull request #N)`), says when the base was used. When
+test gate's ledger line (`range started at the head of <base> (pull request #N)`), says when the
+base was used. When
 another branch lies under the pushed one and was not taken as its base, a refusal by either gate
 says why (no pull request, a pull request that is not open, a read of GitHub that failed, no record
 that the test gate judged the base's push), since that branch's changes are then in what was judged.

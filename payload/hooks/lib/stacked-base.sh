@@ -17,9 +17,12 @@
 #       base <remote ref> <commit> <pull request number>      e.g.  base origin/fix/a 1f3c... 3421
 #     and otherwise prints why not:
 #       none <the reason, in words>
-#     returning 1 when no other branch lies under this one at all (an ordinary branch, nothing to
-#     say), and 2 when one does and it could not be established as the base, which a gate's
-#     refusal says, since the branch under it is then part of what was judged.
+#     returning 1 when it found no other branch under this one, or could not look for one (a
+#     directory it cannot enter, a repository with no commit, a detached HEAD, a missing
+#     lib/push-scope.sh, no known default branch, no merge base with it): a gate's refusal says
+#     nothing for a 1. It returns 2 when a branch does lie under this one and could not be
+#     established as the base, which a gate's refusal says, since that branch is then part of what
+#     was judged.
 #     It runs in a subshell, so it changes no directory and sets nothing in the caller.
 #
 # A base is ESTABLISHED only when every one of these holds:

@@ -288,6 +288,9 @@ check_eq "T1 a branch stacked on an open, judged base is judged from that base: 
 check_not "T1 the judge was not shown the base's change" "BASE_ONLY_MARKER" "$(cat "$JUDGE_LOG")"
 check "T1 the judge was shown the child's own change" "lib/child.js" "$(cat "$JUDGE_LOG")"
 check "T1 the ledger records a judged pass" $'\ttests\tpass\t' "$(tail -n 1 "$PUSH_GATE_LEDGER_DIR/push-gates.tsv")"
+# Where the range started, in words true of every outcome, an override or a failed open one included.
+check "T1 the ledger line says where the range started" "range started at the head of origin/base/one" "$(tail -n 1 "$PUSH_GATE_LEDGER_DIR/push-gates.tsv")"
+check_not "T1 and does not claim it was judged" "judged from" "$(tail -n 1 "$PUSH_GATE_LEDGER_DIR/push-gates.tsv")"
 
 # A branch based on main is judged exactly as before.
 mk_stack t2
