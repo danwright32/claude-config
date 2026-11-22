@@ -2678,6 +2678,67 @@ owed and not notified, a busy Mac deferring, the watcher leaving it, a held clai
 dead one taken over, a second stopped run notifying once and then never running again, a rerun
 passing and one failing, and a record past the bound given up on.
 
+## The watcher receives on a timer, and unverified config reaches the session (#3396)
+
+On 2026-11-21 on the personal MacBook two merges with green checks (#3381 at 7:54 AM ET, #3382 at
+8:11 AM ET) sat uninstalled: the watcher wakes only on a change fswatch reports here, its last tick
+was 7:29 AM ET, and the receive timer runs once a day. A pull typed at about 8:22 AM ET installed
+both, and its hook suite was then stopped at 1800 seconds, which was said only in that pull's own
+output. These choices were made by the session that built it, not by Dan, and are his to change.
+
+- **The watcher wakes on a timer, rather than the receive timer running more often.** Two facts in
+  the code decided it. The receive timer runs `claude-sync sync` without `SYNC_IN_WATCH`, and
+  `ci_gate_blocks_pull` lets every such run through, so the timer is NOT CI gated: run every ten
+  minutes it would install commits nobody has tested. And its interval is a launch agent, a copy
+  each Mac rewrites only by running `install-autosync` (L423), while a change to the watcher reaches
+  each Mac through the `launchctl kickstart` the pull carrying it already does. The watcher's tick is
+  already the one locked, gated receive, so the timer wake adds a question in front of it and no new
+  process: the loop's `read` takes a timeout. macOS's /bin/bash 3.2 returns 1 from `read -t` both on
+  a timeout and at end of input (measured 2026-11-22), so the loop tells them apart by how long the
+  read took; a misread costs one look at the shared repo.
+- **One question when nothing is new.** `git ls-remote` of the branch reads refs and writes nothing
+  in the clone, so it takes no lock and two watchers asking at once cannot collide. Only when main
+  holds a commit the clone lacks does a GitHub verdict get read, and only for a head a tick has
+  already been handed: a new head goes straight to the tick, which fetches it and asks the gate, and
+  a head the tick left is asked about until it, or a commit below it, passes. Those are the gate's
+  own `remote_ci_state` and `newest_tested_ancestor`, so the wake and the gate cannot disagree about
+  what counts as tested (L370). A failed or cancelled head is not ticked again, as the gate would
+  take nothing in. Measured 2026-11-22: 0.22 to 0.33 seconds per `ls-remote` (five samples), 0.43 for
+  a verdict read, 0.01 for the hash of claude-sync it compares first.
+- **A held lock or a hold skips the wake.** A run holding the sync lock or a pull waiting its turn
+  (`.sync-lock.next`) is left alone, so a wake never waits ninety seconds behind a merge or a long
+  send and logs a failure for it. The next wake asks again. So is a wake inside the hold off a
+  refused catch up gets (`SYNC_RECONCILE_RETRY`, 300 seconds): the send would refuse it again and
+  count one more skipped send. At the ten minute default the hold off has always ended by the next
+  wake; a shorter `SYNC_WATCH_POLL` meets it, which is how the suite found it.
+- **Ten minutes.** A product choice, not a measurement, and the same order as the CI run a merge
+  waits on anyway; it is `SYNC_WATCH_POLL`, and 0 switches the timer off. Worst case, while the Mac
+  is awake, from a commit passing its tests to its install: ten minutes plus the tick, or twenty when
+  the first wake found the lock held. 144 `ls-remote` calls a day on a level day.
+- **Silence on a wake that finds nothing, and a record.** `.watch-idle` holds what the last wake
+  found, which status reads; a line in the log every ten minutes saying nothing happened would bury
+  the lines that matter. A wake that ticks logs why.
+- **Status reads "tested" through the gate.** After its own fetch, status asks the verdict of main's
+  head and, unless it passed, walks below it as the gate does, and says how far behind the newest
+  tested commit the clone is and since the first of those commits landed on main. It says nothing
+  when the clone is level or behind only commits still being tested, and says the verdicts could not
+  be read rather than nothing when gh cannot answer.
+- **Unverified config is a stuck record, from the record that exists.** `.hook-tests` already said
+  `incomplete` and `slotwait` (#3195, #2758), and status already said nothing that landed was
+  verified. What was missing was the session: the per prompt notice reads `claude-sync stuck`, so
+  stuck reports an `unverified` record keyed on `owed_since`. It is said at once, because the session
+  is already running on the hooks that landed, and its end is said only when nothing unverified is
+  reported at all, so a new chain is a new notice rather than a false all clear. Status skips that
+  record and keeps its hook suite line, so the fact is said once there.
+
+The levers not pulled, both Dan's to decide: the 1800 second `SYNC_HOOK_TESTS_TIMEOUT`, and the size
+of the suite a pull runs.
+
+`tests/test-watch-timer.sh` holds the watcher and status halves against a bare repo on disk and a gh
+stand in answering per commit, with a one second timer and every run ending on the record it waits
+for; `tests/test-hook-suite-rerun.sh` and `hooks/test-sync-stuck-notice.sh` hold the unverified
+record and its notice.
+
 ## Things known to be wrong and left that way
 
 Markers are keyed on hostname, which is a mutable string. Renaming or reinstalling a Mac abandons

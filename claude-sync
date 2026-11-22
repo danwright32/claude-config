@@ -42,6 +42,8 @@
 #
 # Env overrides (mainly for tests): CLAUDE_HOME, SYNC_REPO, SYNC_NO_GIT=1,
 #   SYNC_INTERVAL, SYNC_FSWATCH, SYNC_SKIP_SECRET_SCAN, SYNC_NO_NOTIFY,
+#   SYNC_WATCH_POLL (seconds a watcher with no local change waits before asking the shared repo
+#   whether main holds a commit this clone does not, default 600, 0 for never; #3396),
 #   SYNC_SKIP_LESSON_CHECK=1 (publish a rule file despite a duplicate number),
 #   SYNC_SKIP_WORK_NAMES_SCAN=1 (one send run by hand goes unscanned for work organisation
 #   names, said on stderr and in the sync log; the change watcher ignores it),
@@ -214,6 +216,10 @@ WATCH_RESTARTED_FILE="$SYNC_REPO/.watch-restarted"
 # copy launchd keeps starting and that keeps ending can be told from one that started once
 # (claude-config#1594).
 WATCH_STARTS_FILE="$SYNC_REPO/.watch-starts"
+# What the change watcher found the last time it asked the shared repo on its timer, one line,
+# "<when> <verdict> <main's head or -> <the head last handed to a tick or -> <why>", tab separated
+# (claude-config#3396). Rewritten whole on every timer wake.
+WATCH_IDLE_FILE="$SYNC_REPO/.watch-idle"
 MY_PUSH_FILE="$SYNC_REPO/.my-push"   # the head this Mac last sent, and what became of it (#340)
 RESURRECTED_REPORTED_FILE="$SYNC_REPO/.resurrected-reported"   # leftovers already reported once (#331)
 UNLOADABLE_NOTIFIED_FILE="$SYNC_REPO/.unloadable-notified"   # skills entries the cannot load notice already named (#968)
@@ -13977,6 +13983,46 @@ STUCKEOF
 # The same fact, on the surface built to answer it (claude-config#340). Only once the verdict is
 # actually in: a record still waiting for one says nothing, because "no answer yet" and "your commit
 # broke it" are different things and one sentence covering both hides the second (L11).
+# BEHIND MAIN'S NEWEST TESTED COMMIT (claude-config#3396). On 2026-11-21 the personal MacBook sat two
+# merges behind for half an hour with green checks on both, and nothing on any surface said so. Read
+# after status's own fetch, through the CI gate's own predicates (remote_ci_state, and
+# newest_tested_ancestor for a head still being tested or failed), so "tested" here is what the gate
+# would take in, never a second definition of it (L370). Says nothing when the clone holds main's
+# head or is behind only commits still being tested: that is the gate working, not the sync stuck.
+# "Since" is when the oldest commit it lacks, up to the tested one, landed on main.
+report_behind_tested(){
+  local branch up state tested n since now look_when look_what look=""
+  have_git || return 0
+  branch="$(sync_branch)" || return 0
+  up="$(git -C "$SYNC_REPO" rev-parse --verify -q "origin/$branch" 2>/dev/null || true)"
+  is_object_id "$up" || return 0
+  git -C "$SYNC_REPO" merge-base --is-ancestor "$up" HEAD 2>/dev/null && return 0
+  now="$(date +%s)"
+  # What this clone's watcher last found when it asked on its timer, when it has asked, so a clone
+  # that is behind says whether anything is still looking.
+  if [ -f "$WATCH_IDLE_FILE" ]; then
+    look_when="$(awk -F '\t' 'NR == 1 { print $1 }' "$WATCH_IDLE_FILE" 2>/dev/null || true)"
+    look_what="$(awk -F '\t' 'NR == 1 { print $5 }' "$WATCH_IDLE_FILE" 2>/dev/null || true)"
+    case "$look_when" in ''|*[!0-9]*) ;; *) look=" The change watcher last asked the shared repo on its timer $(age_in_words "$(( now - look_when ))"): ${look_what:-it recorded nothing more}." ;; esac
+  fi
+  state="$(remote_ci_state "$up")"
+  case "$state" in
+    green) tested="$up" ;;
+    pending|none|red|cancelled) tested="$(newest_tested_ancestor "$up" 2>/dev/null || true)" ;;
+    *)
+      n="$(git -C "$SYNC_REPO" rev-list --count "HEAD..$up" 2>/dev/null || true)"
+      echo "this clone is $(commits_in_words "${n:-?}") behind main, and whether any of them passed its tests could not be read ($state), so whether it is behind main's newest tested commit is unknown. Check that gh is installed and logged in.$look"
+      return 0 ;;
+  esac
+  is_object_id "$tested" || return 0
+  n="$(git -C "$SYNC_REPO" rev-list --count "HEAD..$tested" 2>/dev/null || true)"
+  case "$n" in ''|0|*[!0-9]*) return 0 ;; esac
+  since="$(git -C "$SYNC_REPO" log --first-parent --reverse --format=%ct "HEAD..$tested" 2>/dev/null | awk 'NR == 1')"
+  case "$since" in ''|*[!0-9]*) since="since a time git could not read" ;; *) since="since the first of them landed on main, $(age_in_words "$(( now - since ))")" ;; esac
+  echo "this clone is $(commits_in_words "$n") behind main's newest tested commit, ${tested:0:8}, and has been $since. The change watcher takes it in on its next timer wake or change; '$(receive_command)' takes it in now.$look"
+  return 0
+}
+
 report_my_push(){
   local sha told
   [ -f "$MY_PUSH_FILE" ] || return 0
@@ -14927,6 +14973,7 @@ payload/$rel
     report_blocked_clone
     report_ci_unreadable
     report_sync_stuck
+    report_behind_tested
     report_my_push
     report_watcher_hold
     report_mods_behind_main
@@ -15948,6 +15995,13 @@ do_watch(){
   else
     echo "Watching ${#paths[@]} path(s) for changes (fswatch)…"
   fi
+  # Said on every start, so the log shows whether this copy also receives with nothing changed here
+  # (claude-config#3396, L715).
+  if [ "$WATCH_POLL" -gt 0 ]; then
+    echo "It also asks the shared repo every $(watch_poll_words) whether main holds a commit this clone does not (SYNC_WATCH_POLL), so a merge arrives without a change on this Mac."
+  else
+    echo "It does not ask the shared repo on a timer (SYNC_WATCH_POLL=0), so a merge arrives only with a change on this Mac, a pull, or the receive timer."
+  fi
   # -o coalesces a burst into one event; `$(...)` runs do_send in its own
   # subshell so a conflict's or scan_secrets' die() can't kill the watch loop.
   # A failure already triggers die()'s own desktop notification, but that is
@@ -15967,9 +16021,19 @@ do_watch(){
   # first the loop reads; the restart tick, when there is one, is the second.
   sh -c 'printf "%s\n" "$1 $$"; [ -z "$2" ] || printf "%s\n" "$2"; shift 2; exec "$@"' \
     sh "$WATCH_FS_PID_TAG" "$restart_tick" "$fs" -o -l "${SYNC_WATCH_LATENCY:-2}" "${paths[@]}" \
-    | while IFS= read -r _ev; do
+    | while watch_next_event; do
     case "$_ev" in "$WATCH_FS_PID_TAG "*) watch_fs_pid="${_ev#"$WATCH_FS_PID_TAG "}"; continue ;; esac
     watch_should_stop && break
+    # NOTHING CHANGED HERE FOR A WHOLE POLL (claude-config#3396). The watcher used to wake only on a
+    # local change, so on 2026-11-21 two merges with green checks sat uninstalled on the personal
+    # MacBook until a pull was typed. On a timer wake it asks the shared repo one question first,
+    # and runs the ordinary tick below, under the sync lock and the CI gate, only when that answer
+    # gives it something to take in. A wake that finds nothing writes its record and logs nothing,
+    # since a line every ten minutes saying so would bury the lines that matter.
+    if [ "$WATCH_WAKE" = timer ]; then
+      if ! idle_why="$(watch_idle_check)"; then continue; fi
+      echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: woke on its timer: ${idle_why:-it did not say why}"
+    fi
     again=1
     while [ "$again" -eq 1 ]; do
       again=0
@@ -16094,6 +16158,158 @@ WATCH_RESTART_RC=75
 # The first line of the watcher's event stream, carrying fswatch's pid. Not something fswatch -o can
 # print, which writes only a count per batch of changes.
 WATCH_FS_PID_TAG="claude-sync-fswatch-pid"
+
+# ---------- the watcher's timer: receiving with nothing changed here (claude-config#3396) ----------
+# How often, in seconds, a watcher that has seen no local change asks the shared repo whether main
+# holds a commit this clone does not. 0 switches it off. A product choice about how stale a Mac may
+# be, not a measurement: ten minutes is the same order as the CI run a merge waits on anyway, and the
+# question costs one request (measured in DESIGN.md's "The watcher receives on a timer").
+#
+# Chosen over running the receive timer more often, for two reasons found in the code. The receive
+# timer runs `claude-sync sync` without SYNC_IN_WATCH, and ci_gate_blocks_pull lets every such run
+# through, so it is NOT CI gated: run every ten minutes it would install commits nobody has tested.
+# And its interval lives in a launch agent, a copy each Mac rewrites only with install-autosync
+# (L423), while a change here reaches each Mac's watcher through the restart the pull that carries
+# it already does (restart_watch_daemon_if_installed).
+WATCH_POLL="${SYNC_WATCH_POLL:-600}"
+case "$WATCH_POLL" in ''|*[!0-9]*) WATCH_POLL=600 ;; esac
+watch_poll_words(){
+  if [ "$WATCH_POLL" -lt 60 ]; then
+    if [ "$WATCH_POLL" -eq 1 ]; then printf '1 second'; else printf '%s seconds' "$WATCH_POLL"; fi
+  else
+    duration_in_words "$WATCH_POLL" exact
+  fi
+}
+# The watch loop's read. Sets _ev to the line fswatch wrote and WATCH_WAKE to `change`, or, once a
+# whole poll passes with nothing, _ev empty and WATCH_WAKE `timer`. Fails at the end of fswatch's
+# output. macOS's /bin/bash 3.2, which the launch agent runs, returns 1 from `read -t` both when it
+# times out and at end of input (measured 2026-11-22), so the two are told apart by how long the read
+# took: an end of input arrives at once, a timeout never before the poll has passed. A read that ends
+# at the very moment fswatch exits after a quiet poll is taken for a timer wake once, which costs one
+# look at the shared repo and nothing else; the next read then ends the loop.
+watch_next_event(){
+  local t0
+  WATCH_WAKE=change
+  _ev=""
+  if [ "$WATCH_POLL" -eq 0 ]; then
+    IFS= read -r _ev
+    return $?
+  fi
+  t0="$SECONDS"
+  if IFS= read -r -t "$WATCH_POLL" _ev; then return 0; fi
+  [ "$(( SECONDS - t0 ))" -ge "$WATCH_POLL" ] || return 1
+  _ev=""
+  WATCH_WAKE=timer
+  return 0
+}
+# One line, rewritten whole by a rename so a reader never sees half of it. Two watchers writing at
+# once each write a whole line, and the last one stands.
+watch_idle_record(){   # $1 = now  $2 = verdict  $3 = main's head or -  $4 = the head handed to a tick or -  $5 = why
+  local tmp="$WATCH_IDLE_FILE.$$.$RANDOM"
+  if printf '%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "${3:--}" "${4:--}" "$5" > "$tmp" 2>/dev/null; then
+    mv -f "$tmp" "$WATCH_IDLE_FILE" 2>/dev/null || rm -f "$tmp" 2>/dev/null || true
+  fi
+  return 0
+}
+# The pid of a live run holding the sync lock, or of a pull waiting its turn for it, and success; or
+# failure when neither. A lock left by this watcher's own earlier tick records this process's pid (a
+# tick is a subshell, and $$ is the watcher's), and the next tick takes that as its own, so it is not
+# a reason to wait.
+watch_idle_lock_holder(){
+  local pid
+  if [ -d "$SYNC_LOCK" ]; then
+    pid="$(cat "$SYNC_LOCK/pid" 2>/dev/null || true)"
+    if [ -n "$pid" ] && [ "$pid" != "$$" ] && lock_owner_alive "$pid"; then printf '%s' "$pid"; return 0; fi
+  fi
+  lock_place_ahead && return 0
+  return 1
+}
+# WHAT A TIMER WAKE DOES. Prints why and succeeds when the ordinary tick should run now; records why
+# not and fails otherwise. In order:
+#   - the claude-sync on disk differs from the copy this watcher runs: tick, which restarts onto it
+#     when that copy runs (#1569), so a pulled claude-sync is taken up without a change here either;
+#   - a hold is in force, or another run holds the sync lock or waits its turn for it: nothing, so a
+#     timer wake never queues behind a merge or a suite run that holds the lock (held, busy);
+#   - one question to the shared repo, `git ls-remote` of the branch, which reads refs only and
+#     writes nothing here, so two watchers asking at once cannot collide: unreachable, or level when
+#     main's head is already in this clone (no tick, no request to GitHub at all);
+#   - a head no tick has been handed yet: tick (newer). The tick fetches it and the CI gate decides,
+#     taking in the newest commit whose tests passed and never one that has not;
+#   - the head a tick was already handed and left: ask GitHub its verdict, the gate's own
+#     remote_ci_state. Passed, or a commit below it that passed since (newest_tested_ancestor, the
+#     gate's own walk): tick. Still being tested, failed or cancelled: nothing (waiting), since the
+#     gate would take nothing in either. No run, or a verdict that cannot be read: tick, and the gate
+#     applies its own rules for those, which need its clocks to be asked.
+watch_idle_check(){
+  local now handed digest holder branch out remote state tested
+  now="$(watch_now)"
+  handed="$(awk -F '\t' 'NR == 1 { print $4 }' "$WATCH_IDLE_FILE" 2>/dev/null || true)"
+  is_object_id "$handed" || handed=""
+  if [ -n "${WATCH_LOADED_DIGEST:-}" ] && digest="$(script_digest)" && [ "$digest" != "$WATCH_LOADED_DIGEST" ]; then
+    printf 'the claude-sync on disk is no longer the copy this watcher runs (%s, not %s), so the tick restarts onto it if that copy runs' "${digest:0:12}" "${WATCH_LOADED_DIGEST:0:12}"
+    return 0
+  fi
+  if hold_remaining >/dev/null 2>&1; then
+    watch_idle_record "$now" held - "$handed" "a hold is in force, and a held watcher takes nothing in"
+    return 1
+  fi
+  if holder="$(watch_idle_lock_holder)"; then
+    watch_idle_record "$now" busy - "$handed" "process $holder holds the sync lock or waits its turn for it, so this wake left it alone"
+    return 1
+  fi
+  have_git || return 1
+  if ! branch="$(sync_branch)"; then
+    watch_idle_record "$now" unreadable - "$handed" "this clone has no branch checked out, so there is no branch of main to ask about"
+    return 1
+  fi
+  out="$(git -C "$SYNC_REPO" ls-remote origin "refs/heads/$branch" 2>/dev/null || true)"
+  remote="${out%%[[:space:]]*}"
+  if ! is_object_id "$remote"; then
+    watch_idle_record "$now" unreachable - "$handed" "git ls-remote origin refs/heads/$branch failed or named no commit"
+    return 1
+  fi
+  if git -C "$SYNC_REPO" merge-base --is-ancestor "$remote" HEAD 2>/dev/null; then
+    watch_idle_record "$now" level "$remote" - "this clone already holds main's newest commit"
+    return 1
+  fi
+  # A catch up refused moments ago is held off for SYNC_RECONCILE_RETRY (300 seconds) by the send
+  # itself, so a tick now would only count one more skipped send. Waits as a change's tick would, and
+  # leaves the head unhanded, so it is still news to the wake after the hold off ends.
+  local bh_last bh_window="${SYNC_RECONCILE_RETRY:-300}" bh_age
+  if bh_last="$(behind_last_reconcile)"; then
+    bh_age=$(( $(date +%s) - bh_last ))
+    if [ "$bh_age" -lt "$bh_window" ] 2>/dev/null; then
+      watch_idle_record "$now" waiting "$remote" "$handed" "the catch up a tick tried $(age_in_words "$bh_age") was refused, and is held off for $(duration_in_words "$bh_window") (SYNC_RECONCILE_RETRY) as it would be for a change"
+      return 1
+    fi
+  fi
+  if [ "$remote" != "$handed" ]; then
+    watch_idle_record "$now" newer "$remote" "$remote" "main holds a commit this clone does not, handed to a tick"
+    printf "main's newest commit is %s, which this clone does not hold, so it runs the tick an edit runs, under the sync lock and the CI gate" "${remote:0:8}"
+    return 0
+  fi
+  state="$(remote_ci_state "$remote")"
+  case "$state" in
+    green)
+      watch_idle_record "$now" newer "$remote" "$remote" "main's newest commit has passed its tests since a tick last looked"
+      printf "main's newest commit, %s, has passed its tests since a tick last looked" "${remote:0:8}"
+      return 0 ;;
+    pending)
+      if tested="$(newest_tested_ancestor "$remote" 2>/dev/null)"; then
+        watch_idle_record "$now" newer "$remote" "$remote" "a commit below main's newest has passed its tests since a tick last looked"
+        printf "%s, below main's newest commit %s, has passed its tests since a tick last looked, so it is taken in while %s is still being tested" "${tested:0:8}" "${remote:0:8}" "${remote:0:8}"
+        return 0
+      fi
+      watch_idle_record "$now" waiting "$remote" "$remote" "main's newest commit is still being tested, and nothing below it has passed since a tick last looked"
+      return 1 ;;
+    red|cancelled)
+      watch_idle_record "$now" waiting "$remote" "$remote" "main's newest commit $( [ "$state" = red ] && printf 'failed its tests' || printf 'had its tests cancelled'), so the CI gate takes nothing in until a newer one lands"
+      return 1 ;;
+  esac
+  watch_idle_record "$now" newer "$remote" "$remote" "the verdict on main's newest commit was $state, which the CI gate decides on"
+  printf "the verdict on main's newest commit, %s, was %s, so the tick runs and the CI gate applies its own rule for that" "${remote:0:8}" "$state"
+  return 0
+}
 
 # Ends the fswatch a restarting watcher started, by the pid it traced, and only after confirming that
 # pid is still a child of this watcher: an fswatch that already exited has had its number freed, and
