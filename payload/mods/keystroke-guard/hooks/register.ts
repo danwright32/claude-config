@@ -4,6 +4,11 @@ import { publishInstead } from './mod-kit/deliver.ts'
 import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
 import { HOLD_MAX_MS, whileHeld } from './mod-kit/held.ts'
 import { neverThrows } from './mod-kit/hold.ts'
+import { type AskedIo, recordedAsk } from './mod-kit/asked.ts'
+import type {} from '../types/index.d.ts'
+
+// #3321: the dialogs this mod has open that it raised itself, in its own $.state.
+const askingRef = { plugin: 'keystroke-guard', key: 'asking' } as const
 
 // Keystroke guard (claude-config#608). A Go ahead holds for its app until ten minutes pass with
 // nothing sent to it (Dan, 2026-10-03). Kept in memory: a reload asks again, which errs toward
@@ -82,7 +87,21 @@ const headsUp = async ($: EngineInterface, app: string, typing: boolean, named: 
       release: (input: { mod: string; id: string }) => $.modkit.release(input),
       log: (line: string) => $.ui.log(line, { to: 'debug' }),
     }
-    answer = await whileHeld(held, () => $.ui.ask(`I'm about to ${doing}. Ready?`, { options: ['Go ahead', 'Not now'], header: 'Taking over' }))
+    // #3321: asked through mod-kit's one recorder, which notes the question's size first (never a
+    // word of it) and asks it whatever the record says (Dan, 2026-11-21: "Record, then decide").
+    // The recorder also keeps the dialog in this mod's own state for as long as it is open, which
+    // only this mod can write, so picker manners never takes it for a session's picker.
+    const io: AskedIo = {
+      now: () => $.clock.now(),
+      home: () => $.env.get('HOME'),
+      write: (path, text) => $.fs.write(path, text),
+      list: async dir => (await $.fs.list(dir)).map(entry => entry.name),
+      run: argv => $.process.run(argv, { timeoutMs: 5_000 }),
+      ask: (question, options) => $.ui.ask(question, options),
+      own: { read: () => $.state.get(askingRef), write: (value, ifVersion) => $.state.set(askingRef, value, { ifVersion }) },
+      said: line => $.ui.log(line),
+    }
+    answer = await whileHeld(held, () => recordedAsk(io, 'keystroke-guard', 'ready', `I'm about to ${doing}. Ready?`, { options: ['Go ahead', 'Not now'], header: 'Taking over' }))
   } catch {
     return { reason: `The question about ${app} was dismissed.` }
   }

@@ -79,6 +79,42 @@ has "--where names the record and the line of each refused picker, and what was 
 has "--where says when a refused picker was not answered" "$out" "  s1.jsonl line 7: The question, a character he cannot see (not answered)"
 case "$out" in *page*|*'plain words'*) check "--where prints no word of a picker's text either" "$out" ;; *) check "--where prints no word of a picker's text either" ok ;; esac
 
+# A record is read a piece at a time (a megabyte), never whole: some are hundreds of megabytes and
+# the count runs on a Mac short of memory. A line longer than a piece, a picker that starts in one
+# piece and ends in the next, a character of several bytes across the join, and a last line with
+# no newline are each read as written.
+mkdir -p "$W/big/p"
+python3 - "$W/big/p/s3.jsonl" "$ZW" <<'PY'
+import json, sys
+path, zw = sys.argv[1], json.loads('"' + sys.argv[2] + '"')
+def picker(uid, question, source):
+    ask = {"questions": [{"question": question, "header": "H", "multiSelect": False, "options": [{"label": "Yes", "description": "d"}]}], "metadata": {"source": source}}
+    return [json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "AskUserQuestion", "id": uid, "input": ask}]}}),
+            json.dumps({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": uid}]}, "toolUseResult": {"questions": ask["questions"], "answers": {question: "Yes"}}})]
+piece = 1 << 20
+lines = [json.dumps({"type": "user", "message": {"content": "x" * (piece + 500)}})]
+lines += picker("b1", "Add this lesson? A rule in plain words.", "durable-lesson")
+# Filler sized so the next picker's first line straddles the end of a piece, the join falling
+# inside a run of two byte characters written as themselves.
+used = sum(len(l.encode()) + 1 for l in lines)
+pad = piece - (used % piece) - 400
+lines.append(json.dumps({"type": "user", "message": {"content": "y" * max(pad - 60, 1)}}))
+wide = json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "AskUserQuestion", "id": "b2", "input": {
+    "questions": [{"question": "Add this lesson? " + chr(0xe9) * 600 + zw, "header": "H", "multiSelect": False, "options": [{"label": "Yes", "description": "d"}]}],
+    "metadata": {"source": "durable-lesson"}}}]}}, ensure_ascii=False)
+lines.append(wide)
+lines.append(json.dumps({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "b2"}]}, "toolUseResult": {"questions": [], "answers": {"q": "Yes"}}}))
+with open(path, "w", encoding="utf-8") as f:
+    f.write("\n".join(lines))
+start = sum(len(l.encode()) + 1 for l in lines[:4])
+assert start // piece != (start + len(wide.encode())) // piece, "the fixture's picker does not cross a piece"
+PY
+[ $? -eq 0 ] && check "the fixture holds a picker that crosses the join of two pieces" ok || check "the fixture holds a picker that crosses the join of two pieces" "it could not be built so"
+out="$(node "$TOOL" --projects "$W/big" --where 2>&1)"; code=$?
+[ "$code" -eq 0 ] && check "a record larger than one piece is counted, exit 0" ok || check "a record larger than one piece is counted, exit 0" "exit=$code out=${out:0:300}"
+has "pickers after a line longer than a piece, and across the join of two pieces, are both read" "$out" "lesson picker (ask before saving): 2 reached the dialog, 2 answered; refused 1, of the answered 1 (by rule, of all refused: 1 a character he cannot see)."
+has "and the refused one is named by its own line" "$out" "  s3.jsonl line 5: The question, a character he cannot see"
+
 # The two database sources are the ones the hook reads, which a python file holds and this cannot import.
 for pair in "DB_APPLY_SOURCE:SOURCE" "DB_TRUST_SOURCE:TRUST_SOURCE"; do
   mine="$(sed -n "s/^export const ${pair%%:*} = '\\(.*\\)'\$/\\1/p" "$TOOL")"

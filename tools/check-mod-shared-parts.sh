@@ -402,7 +402,10 @@ for d in "$dir"/*/; do
   # Told by the state reached, the read of `answers`, never by one layout of the hook (L247), and
   # with comments taken out, so only code counts. What this does NOT cover, said here so a pass is
   # not read as more than it is (L400): a question a mod asks itself through $.ui.ask, whose answer
-  # comes back as the call's own value, and a hook that is no mod; both are open on #3321.
+  # comes back as the call's own value and which the next rule holds to the recorder instead (its
+  # size is recorded, and no limit is put on it until the numbers are read, #3321), and a hook
+  # that is no mod (the database approvals, which call the same check through
+  # payload/hooks/lib/picker-check.mjs and are held by their own suites).
   if grep -rqE --include='*.ts' --include='*.tsx' --exclude-dir=mod-kit 'AskUserQuestion' "$sd/hooks" 2>/dev/null \
     && grep -rqE --include='*.ts' --include='*.tsx' --exclude-dir=mod-kit '\.answers\b|\banswers\?\.' "$sd/hooks" 2>/dev/null; then
     if ! grep -rqE --include='*.ts' --include='*.tsx' --exclude-dir=mod-kit "import \{[^}]*\baskFault\b[^}]*\} from [\"'\`]\./mod-kit/shown(\.ts)?[\"'\`]" "$sd/hooks" 2>/dev/null \
@@ -410,6 +413,52 @@ for d in "$dir"/*/; do
       failed=1
       echo "check-mod-shared-parts: $name reads the answers of an AskUserQuestion picker and never judges the call with askFault, so Dan's answer can be acted on over text he could not read (cut by the dialog, or holding what is drawn as nothing): import askFault from the copy of hooks/shown.ts kept at hooks/mod-kit/shown.ts (cp \"$dir/mod-kit/hooks/shown.ts\" \"${d%/}/hooks/mod-kit/shown.ts\"), hand it the call as the dialog will get it, and refuse or leave unrecorded a picker it faults, before his answer is read."
     fi
+  fi
+  # own dialog (#3321; Dan, 2026-11-21: "Record, then decide"): a question a mod asks Dan itself,
+  # through its own dialog ($.ui.ask), is in no session record, so its size is recorded as it is
+  # asked, and it reaches picker manners like a session's picker, so the mod keeps the dialog in
+  # its own $.state while it is open. Both happen in one place, recordedAsk in the copy of mod-kit's
+  # hooks/asked.ts, which is handed the dialog as its `ask:` member. So every line that calls the
+  # dialog is that member, in a mod that imports and calls the recorder. Told from the stripped
+  # copy, so a comment naming the dialog asks nothing.
+  asklines="$(grep -rnE --include='*.ts' --include='*.tsx' --exclude-dir=mod-kit '\.ui\.ask\(' "$sd/hooks" 2>/dev/null)"
+  if [ -n "$asklines" ]; then
+    if printf '%s\n' "$asklines" | command grep -qvE '\bask: \([^()]*\) => \$\.ui\.ask\(' \
+      || ! grep -rqE --include='*.ts' --include='*.tsx' --exclude-dir=mod-kit "import \{[^}]*\brecordedAsk\b[^}]*\} from [\"'\`]\./mod-kit/asked(\.ts)?[\"'\`]" "$sd/hooks" 2>/dev/null \
+      || ! grep -rqE --include='*.ts' --include='*.tsx' --exclude-dir=mod-kit '\brecordedAsk\(' "$sd/hooks" 2>/dev/null; then
+      failed=1
+      echo "check-mod-shared-parts: $name asks Dan through its own dialog (\$.ui.ask) past mod-kit's recorder, so the question's size is recorded nowhere and picker manners takes it for a session's picker: ask through recordedAsk from the copy of hooks/asked.ts kept at hooks/mod-kit/asked.ts (cp \"$dir/mod-kit/hooks/asked.ts\" \"${d%/}/hooks/mod-kit/asked.ts\"; it imports the copy of hooks/shown.ts beside it), handing it the dialog as the one line \`ask: (question, options) => \$.ui.ask(question, options)\`, and call the dialog nowhere else."
+    fi
+  fi
+  # A mod that asks through the recorder is one of the three places that must name it: the
+  # recorder's OWN_ASKERS, the mod's own state (the key `asking` under its own name, which only it
+  # can write), and picker manners' read of that state, spelled as a literal there because the
+  # engine wants it so. One missing and the mod's question is refused as a session's picker would
+  # be, or never told apart, with nothing saying so (a hand kept list, L96).
+  if grep -rqE --include='*.ts' --include='*.tsx' --exclude-dir=mod-kit '\brecordedAsk\(' "$sd/hooks" 2>/dev/null; then
+    askers="$(sed -n "s/^export const OWN_ASKERS = \[\(.*\)\] as const.*/\1/p" "$dir/mod-kit/hooks/asked.ts" 2>/dev/null | tr -d "' " | tr ',' '\n')"
+    if ! printf '%s\n' "$askers" | grep -qxF -- "$name"; then
+      failed=1
+      echo "check-mod-shared-parts: $name asks through the recorder and is not among OWN_ASKERS in mod-kit's hooks/asked.ts, so nothing says a reader must look at its state: add '$name' there, refresh each mod's copy of that file, and give picker manners its read."
+    fi
+    if ! grep -rqF --include='*.ts' --include='*.tsx' --exclude-dir=mod-kit -- "plugin: '$name', key: 'asking'" "$sd/hooks" 2>/dev/null; then
+      failed=1
+      echo "check-mod-shared-parts: $name asks through the recorder and keeps no state of its own for its open dialogs, so nothing tells its question from a session's picker: hand the recorder \`own\` as a read and a write of { plugin: '$name', key: 'asking' }, declared in the mod's own contract."
+    fi
+    if [ -d "$dir/picker-manners/hooks" ] && ! grep -rqF --include='*.ts' --include='*.tsx' --exclude-dir=mod-kit -- "plugin: '$name', key: 'asking'" "$stripped/picker-manners/hooks" 2>/dev/null; then
+      failed=1
+      echo "check-mod-shared-parts: $name asks through the recorder and picker manners never reads its state, so its question that names an issue and fails the reading limits is refused as a session's picker would be: add a read of { plugin: '$name', key: 'asking' } to ownDialog in picker manners' hooks/register.ts."
+    fi
+  fi
+  if [ "$name" = picker-manners ]; then
+    askers="$(sed -n "s/^export const OWN_ASKERS = \[\(.*\)\] as const.*/\1/p" "$dir/mod-kit/hooks/asked.ts" 2>/dev/null | tr -d "' " | tr ',' '\n')"
+    while IFS= read -r read_of; do
+      [ -n "$read_of" ] || continue
+      if ! printf '%s\n' "$askers" | grep -qxF -- "$read_of"; then
+        failed=1
+        echo "check-mod-shared-parts: picker-manners reads $read_of's state for its own dialogs, and the recorder names no such mod (OWN_ASKERS in mod-kit's hooks/asked.ts), so the read tells nothing apart: name the mod there once it asks through the recorder, or delete the read."
+      fi
+    done <<< "$(grep -rhoE --include='*.ts' --include='*.tsx' --exclude-dir=mod-kit "plugin: '[a-z0-9-]+', key: 'asking'" "$sd/hooks" 2>/dev/null | sed -E "s/^plugin: '([a-z0-9-]+)'.*/\1/" | sort -u)"
   fi
   # catch (#2039): a hook's registration catch, `.catch(($, e, next) => ...)`, is the guard's last
   # word on a call, and one that throws leaves the call unheld. Each answers straight through

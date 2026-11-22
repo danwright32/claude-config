@@ -114,12 +114,16 @@ in_head() {
 # <ref>, appended to the transcript as Claude Code writes one: the picker's input on the assistant
 # entry holding its tool_use, his choice in toolUseResult.answers on the user entry carrying its
 # tool_result (the shape lib/db-apply-approval.py reads an Apply from). The shapes are the ways a
-# picker is NOT his answer: timeout, prefilled, two (questions), error, othersource.
+# picker is NOT his answer: timeout, prefilled, two (questions), error, othersource, and unread (a
+# question holding a character he cannot see).
 trust() {
   python3 - "${TRANSCRIPT:-$TALK}" "$1/.claude/supabase-test-projects" "$2" "${3:-Trust}" "${4:-s1}" "${5:-}" <<'PY'
 import json, sys, time
 path, listed, ref, answer, sid, shape = sys.argv[1:7]
 q = "Trust " + ref + " as a test project?"
+if shape == "unread":
+    # A zero width space, made from its code point and never written here (#3321).
+    q = q.replace(" as a", chr(0x200b) + " as a")
 ask = {"questions": [{"question": q, "header": "Test project", "multiSelect": False,
                       "options": [{"label": "Trust", "description": "d"}, {"label": "Cancel", "description": "d"}]}],
        "metadata": {"source": "db-test-project", "list": listed, "project_ref": ref}}
@@ -225,6 +229,11 @@ not_by "a picker of two questions approves nothing" twoquestions twoqref00000000
 not_by "a picker that failed approves nothing" errored erroredref00000001 Trust s1 error
 not_by "a picker answered in another session approves nothing" othersession sessionref00000001 Trust s2 ""
 not_by "a picker carrying another source, the Apply's, approves nothing" othersource sourceref000000001 Trust s1 othersource
+# #3321: his Trust covers the picker's words because he read them, so one given in a picker he
+# could not read as written (the one shared check, lib/picker-check.mjs) approves nothing.
+not_by "a picker Dan could not read as written approves nothing" unreadable unreadref000000001 Trust s1 unread
+r="$(write "$WORK/unreadable")"
+case "$r" in "ask rc=0|"*"would not have reached him as written"*"U+200B"*) check "and the question says what in that picker he could not have read" ok ;; *) check "and the question says what in that picker he could not have read" "${r:0:500}" ;; esac
 R="$WORK/otherref"; new_repo "$R" wantedref000000001
 stage_line "$R" wantedref000000001; G "$R" commit -q -m list
 trust "$R" unrelatedref000001
@@ -456,6 +465,9 @@ else
   # still said, in the hook's own plain JSON.
   NONOTE="$WORK/nonote"; mkdir -p "$NONOTE/hooks"
   cp "$HOOK" "$NONOTE/hooks/"; cp -R "$DIR/lib" "$NONOTE/hooks/lib"; rm -f "$NONOTE/hooks/lib/hook-notice.sh"
+  # The shared check of a picker's text sits where an install puts it, beside the hooks folder
+  # (#3321): lib/picker-check.mjs reads it from mods/mod-kit, and without it no picker is taken.
+  mkdir -p "$NONOTE/mods/mod-kit/hooks"; cp "$DIR/../mods/mod-kit/hooks/shown.ts" "$NONOTE/mods/mod-kit/hooks/"
   body="$(cd "$WORK" && bash_payload PreToolUse "$CARRY" "$R" | env -u CLAUDE_HOME HOME="$HOME_B" bash "$NONOTE/hooks/db-write-ask.sh" 2>/dev/null)"; r="$(said "$body" $?)"
   case "$r" in
     "allow rc=0||"*nowriteref00000001*"could not be written"*PermissionError*"lib/hook-notice.sh is missing"*) check "with lib/hook-notice.sh missing, that write is still let through and the failed save still said" ok ;;

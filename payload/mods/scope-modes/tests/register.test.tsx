@@ -19,6 +19,7 @@ import { branchAt } from './mod-kit/hooks/branch.ts'
 import { isDans } from './mod-kit/hooks/origin.ts'
 import { acknowledge, ackOff, ackOn, ackOnSaid, MODE_DEF } from '../hooks/modes.ts'
 import { PAGE_TOOL, publishInstead } from '../hooks/mod-kit/deliver.ts'
+import { isOwnDialog } from '../hooks/mod-kit/asked.ts'
 
 // The three mods this one depends on, standing in (a mod cannot import another mod's files):
 // mod-kit's band, card and send retry, the status bar's setModes, and the session registry's list.
@@ -49,6 +50,18 @@ const deps: { name: string; register: Register } = {
         }
       }
       return { isDelivered: false, reason: why.trim().replace(/\.$/, '') || 'no reason given' }
+    })
+    // #3321: standing where picker manners does, another mod's hook on every question: it reads
+    // scope modes' own state and hands that and the call it got to the world, which judges whether
+    // the mod had kept that very dialog as its own. A world that answers no such run changes nothing.
+    on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
+      try {
+        const value = (await $.state.get({ plugin: 'scope-modes', key: 'asking' })).value
+        await $.process.run(['__own', JSON.stringify({ value: value ?? null, call: e })])
+      } catch {
+        // No world beneath, or one that refuses the run: the question goes on as it would.
+      }
+      return next(e)
     })
     on('engine.create', async ($, e, next) => {
       const built = await next(e)
@@ -537,6 +550,9 @@ const world = (on: On, o: Opts = {}) => {
     holding: new Set<string>(),
     /** #2132: each prompt or question the mod made with no hold standing, which a reload would drop. */
     unheld: [] as string[],
+    /** #3321: how many questions the mod asked itself, and each one asked while its own state did not hold that very dialog. */
+    ownAsks: 0,
+    unowned: [] as string[],
     /** Reading this session's id throws from now on (#834: a permission decision that throws). */
     idThrows: false,
     released: [] as string[][],
@@ -774,6 +790,17 @@ const world = (on: On, o: Opts = {}) => {
     }
     // mod-kit's readers, read here with its copy; a command naming __reader_fails stands for a
     // reader that throws. Not one of the runs a test watches, which reach the Mac.
+    // #3321: what the reader in the mod-kit stand in saw as a question was asked. A question the
+    // mod asks through $.ui.ask carries a generated toolu_ id; it must be a dialog the mod had kept
+    // as its own, word for word as a hook gets it.
+    if (cmd === '__own') {
+      const seen = JSON.parse(a[0] as string) as { value: unknown; call: Record<string, unknown> & { questions?: { question?: unknown }[] } }
+      if (/^toolu_/.test(String(seen.call.tool_use_id))) {
+        w.ownAsks++
+        if (!isOwnDialog(seen.value, seen.call)) w.unowned.push(`ask ${String(seen.call.questions?.[0]?.question).slice(0, 60)}`)
+      }
+      return ok('')
+    }
     if (cmd === '__modkit' && (a[0] === 'hold' || a[0] === 'release')) {
       if (a[0] === 'hold' && o.holdFails) return fail(1, o.holdFails)
       const { id } = JSON.parse(a[1] as string) as { id: string }
@@ -1137,7 +1164,7 @@ const world = (on: On, o: Opts = {}) => {
   return { w, clock, readAttempted }
 }
 // #2132: every world made in this file, so the last test can read every wait the mod made in all of them.
-const everyWorld: { o: Opts; held: string[]; unheld: string[] }[] = []
+const everyWorld: { o: Opts; held: string[]; unheld: string[]; ownAsks: number; unowned: string[] }[] = []
 
 type $T = {
   session: { start: (e: never) => Promise<unknown>; end: (e: never) => Promise<unknown>; receive: (e: never) => Promise<unknown> }
@@ -1539,6 +1566,26 @@ test('"Switch to build?" is asked of Dan, naming the change; only his yes lifts 
   expect(yes).toContain(ackOff('NO BUILD'))
   expect(no).not.toContain('acknowledgement')
   expect(lastModes(w)).toEqual([])
+})
+
+// #3321 (Dan, 2026-11-21: "Record, then decide"): a question this mod asks Dan itself reaches the
+// same dialog a session's picker does, and no session record holds it, so its size is recorded as
+// it is asked, through mod-kit's one recorder (hooks/mod-kit/asked.ts): which question, how long,
+// how many answers, and whether the shared check would refuse it. Never a word of it. Recording
+// only: the question is asked whatever the record says.
+test('a question scope modes asks itself is recorded by its size as it is asked, never a word of it (#3321)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ask: 'No' })
+  await start($ as never, clock)
+  await command($ as never, 'nobuild')
+  const no = await call($ as never, { tool: 'mcp__scope-modes__switch_to_build', change: 'edit app.ts to fix the date parse', tool_use_id: 't1' } as never)
+  const question = 'Claude wants to edit app.ts to fix the date parse. Switch to build?'
+  expect(w.asked).toEqual([question])
+  expect(no).toMatch(/Dan said no: no build stays on/)
+  const kept = Object.entries(w.files).filter(([p]) => p.includes('/.claude/state/asked-questions/'))
+  expect(kept.map(([p]) => /^\/Users\/x\/\.claude\/state\/asked-questions\/\d{13}-[a-z0-9]+\.json$/.test(p))).toEqual([true])
+  const text = kept[0]?.[1] ?? ''
+  expect(JSON.parse(text)).toMatchObject({ mod: 'scope-modes', which: 'no build', units: question.length, rows: 1, options: 2, longest: 3, header: 0, refused: false })
+  for (const word of ['app.ts', 'date parse', 'Switch']) expect(text).not.toContain(word)
 })
 
 // #707: this mod answers switch_to_build itself, so the secret guard beneath it never sees the call;
@@ -8701,6 +8748,17 @@ test('every prompt the mod sends and every question it asks Dan holds back a rel
   expect(worlds.flatMap(x => x.unheld)).toEqual([])
   const ids = new Set(worlds.flatMap(x => x.held.filter(h => h.startsWith('hold ')).map(h => (JSON.parse(h.slice(5)) as { id: string }).id.replace(/ \d+$/, ''))))
   expect([...ids].sort()).toEqual(['bedtime', 'cleanup branch', 'earlier night', 'held pick', 'left branch', 'left open', 'morning', 'night start', 'no build', 'resume'])
+})
+
+// #3321: a question the mod asks through its own dialog reaches picker manners with nothing on it
+// saying a mod raised it, so the mod keeps the dialog in its own state, which only it can write,
+// for as long as it is open, through mod-kit's recorder, and picker manners reads that. Last in
+// the file like the case above: of every question the mod asked in every test, each was a dialog
+// its state held, word for word as another mod's hook gets it (the engine's own chip over a
+// question that gives none included), and the count shows the questions were reached at all.
+test('every question the mod asks Dan itself is kept as its own dialog while it is open (#3321)', async () => {
+  expect(everyWorld.flatMap(x => x.unowned)).toEqual([])
+  expect(everyWorld.reduce((n, x) => n + x.ownAsks, 0)).toBeGreaterThan(50)
 })
 
 // #3330: the watchdog times every claim the session holds from its own start, and leaves alone a
