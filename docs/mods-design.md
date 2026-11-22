@@ -3274,6 +3274,55 @@ and the band question is removed rather than kept beside it (L29). Three defects
   are refused, never asked, and the main session is told what it would have saved (above).
 - The band look (mod-kit's `$.modkit.question`) had no other caller, so it was removed too (#796).
 
+### A removal is asked about in a question of its own (#3402)
+
+The mod judged only the files a command puts content into, so a shell command that deleted a
+lasting memory file, or moved one away, ran with no question. Measured in the mod's suite on
+2026-11-22 before any change: `rm`, `unlink`, `shred -u`, `gzip`, `rm -r` of the memory folder,
+`find -delete` and `mv` away each ran unasked, for every kind of lasting memory file.
+
+- **What counts.** A change mod-kit's write reader reports as a removal (`changes` with
+  `does: 'remove'`: rm, unlink, rmdir, a mv's source, find -delete, shred -u, a packer's source)
+  whose words name a lasting memory file or match one: a path, a path through a variable the reader
+  follows, a pattern (`rm *.md` is judged by the lasting memory names it may match in the folder it
+  lands in, `rm <memory folder>/*.md` by the folder), a find -delete limited to a lasting memory
+  name. A folder taken whole counts when it is itself lasting memory (the memory folder), or holds
+  the memory under home: a project's records under `~/.claude/projects`, that folder, or
+  `~/.claude` and anything above it. A target the words cannot name is judged by the lasting memory
+  the command mentions, exactly as a write is (`lastingFiles`), and said as a guess.
+- **The disk decides the rest.** A file that is not there is no removal, so `rm -f CLAUDE.md` in a
+  folder with none is not asked about. A folder above the memory under home counts only for what is
+  found under it. A disk that cannot say fails the hook, which fails closed.
+- **The question is the removal's own** (the issue's first open question, settled by the building
+  session, not by Dan). It is tied to the call by the same `metadata.source` a save's question
+  carries. Claude's sentence names what goes and says why; the mod adds, as Dan is asked, what it
+  measured: where a move puts the file and whether one is there already, or whether git can bring a
+  deleted file back (`git ls-files` and `git status` on the file: held unchanged, held with changes
+  since its last commit, not held, or not readable, which is said as not readable and never as
+  held). The header is "Memory file" and the answers are "Keep as is", first, and "Delete" or
+  "Move". None of a save's words or answers appear in it (L9, L180).
+- **The two approvals never stand in for each other.** A removal's approval is a record with
+  `removes` (what goes, how, where to, what git held), and lets through only the same call removing
+  exactly that with the same consequence (`coversRemoval`), so a file that changes after Dan
+  answers is asked about again. A save's approval carries no `removes` and lets no removal through;
+  an approval with `removes` lets no save through, and `$.askBeforeSaving.isApproved` answers false
+  for it. Dan's own permanent words ("from now on") cover no removal. A subagent's removal is
+  refused and never asked about, as its save is.
+- **One question per command.** A command that removes lasting memory and also writes lasting
+  memory other than where its move lands, or that deletes one file and moves another, is refused
+  whole with no question waiting, and each part is asked about when sent by itself. A lasting
+  memory file moved onto another is one move question, which says the file there is replaced.
+- **Asleep**, the removal is noted for the morning report as a finding (the report's kind for
+  anything else noticed; a kind of its own would be a change to the report) and refused.
+- **Not covered.** What git itself removes or puts back (`git rm`, `git mv`, a checkout or restore
+  of a path) is reported by the reader as `byGit` and left unjudged by Dan's decision on #1136
+  (2026-10-13: "the design round guard and the collision guard judge git made changes (byGit). Ask
+  before saving does not."); `git clean`, `git stash` and `git reset --hard` are not reported by
+  the reader at all. Nor is a file emptied in place (`truncate`), one a `find -exec` or `xargs`
+  hands to rm (the second is asked about as a possible save, as before), or any other folder taken
+  whole that holds a lasting memory file below it (`rm -rf <a project folder>`), which would need
+  the folder looked into, as a tree written over one is not looked into either.
+
 ## Design round guard (#978), built 2026-10-08
 
 Dan, 2026-10-08: "can we add a standing rule across all sessions that if claude is building

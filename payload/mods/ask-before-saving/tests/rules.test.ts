@@ -1950,3 +1950,112 @@ test('a heading Dan could not read as written cannot be named, so its save is re
   expect(said).toContain('Not saved, and Dan is not asked For good about it: the question would have to name the section heading')
   expect(said).toContain('A heading already in ~/.claude/LESSONS.md that cannot be shown to him cannot be asked about here. Tell Dan in one line')
 })
+
+// ---- #3402: the lasting memory a command's words would remove, and how a removal is said ----
+import { coversRemoval, patternMayMatch, removalCandidates, removalInstruction, removalOptions, removalSaid, removalWords, removesWhat, splitRefusal, approvedFor, pressed } from '../hooks/rules.ts'
+import type { AskBeforeSavingRemoval } from '../types/index.d.ts'
+
+const SLATE = `${HOME}/Apps/slate`
+// What a command's words would remove, read by mod-kit's own reader as the mod reads it.
+// No variable is set in the environment, as in a fresh shell whose profile sets none.
+const candidatesOf = async (command: string, inCheckout = checkouts().inCheckout) =>
+  (await removalCandidates(commandWrites(command, SLATE, HOME), HOME, inCheckout, command, async () => false)).map(c => [c.file, c.how, c.to ?? '', [c.tree ? 'tree' : '', c.pattern ? 'pattern' : '', c.guessed ? 'guessed' : '', c.holds ? 'holds' : '', ...(c.names ?? [])].filter(Boolean).join(' ')])
+
+test('a removal is a candidate when its words name lasting memory or match it: a path, a pattern, a find limited to its name (#3402)', async () => {
+  expect(await candidatesOf('rm CLAUDE.md')).toEqual([['~/Apps/slate/CLAUDE.md', 'delete', '', '']])
+  expect(await candidatesOf('rm -rf ~/.claude/projects/p/memory')).toEqual([['~/.claude/projects/p/memory', 'delete', '', 'tree']])
+  expect(await candidatesOf('rm ~/.claude/projects/p/memory/*.md')).toEqual([['~/.claude/projects/p/memory/*.md', 'delete', '', 'pattern']])
+  // A pattern anywhere else: only the lasting memory names it may match, each where it would be.
+  expect((await candidatesOf('rm *.md')).map(c => c[0])).toEqual(['~/Apps/slate/MEMORY.md', '~/Apps/slate/CLAUDE.md', '~/Apps/slate/AGENTS.md', '~/Apps/slate/LESSONS.md'])
+  expect((await candidatesOf('rm CLAUDE.*')).map(c => c[0])).toEqual(['~/Apps/slate/CLAUDE.md'])
+  expect(await candidatesOf('rm *.txt')).toEqual([])
+  expect(await candidatesOf('find . -name CLAUDE.md -delete')).toEqual([['~/Apps/slate', 'delete', '', 'tree CLAUDE.md']])
+  expect((await candidatesOf("find . -iname 'agents.*' -delete")).map(c => c[0])).toEqual(['~/Apps/slate/AGENTS.md'])
+  expect(await candidatesOf("find . -name '*.log' -delete")).toEqual([])
+  expect(await candidatesOf('mv CLAUDE.md docs/OLD.md')).toEqual([['~/Apps/slate/CLAUDE.md', 'move', '~/Apps/slate/docs/OLD.md', 'tree']])
+  // A copy the same command then removes is a move too: the file is where the copy put it.
+  expect(await candidatesOf('cp AGENTS.md /tmp/A.md && rm AGENTS.md')).toEqual([['~/Apps/slate/AGENTS.md', 'move', '/tmp/A.md', '']])
+})
+
+test('a folder taken whole is a candidate only when it is lasting memory or holds the memory under home (#3402)', async () => {
+  expect(await candidatesOf('rm -rf ~/.claude/projects/p')).toEqual([['~/.claude/projects/p', 'delete', '', 'tree holds']])
+  expect(await candidatesOf('rm -rf ~/.claude/projects')).toEqual([['~/.claude/projects', 'delete', '', 'tree holds']])
+  expect(await candidatesOf('rm -rf ~/.claude')).toEqual([['~/.claude', 'delete', '', 'tree holds']])
+  expect(await candidatesOf('rm -rf ~')).toEqual([['~', 'delete', '', 'tree holds']])
+  expect(await candidatesOf('mv ~/.claude ~/.claude-old')).toEqual([['~/.claude', 'move', '~/.claude-old', 'tree holds']])
+  // Any other folder is not looked into, a project folder holding a CLAUDE.md among them (not covered).
+  expect(await candidatesOf('rm -rf ../slate')).toEqual([])
+  expect(await candidatesOf('rm -rf node_modules ~/.claude/projects/p/sessions ~/.claude/skills')).toEqual([])
+  expect(await candidatesOf('find /tmp/work -delete')).toEqual([])
+})
+
+test('a removal in a temporary folder counts only inside a checkout there, and one that reads or only stamps a file is none (#3402)', async () => {
+  expect(await candidatesOf('rm /tmp/backup/CLAUDE.md')).toEqual([])
+  expect(await candidatesOf('rm -rf /tmp/work /private/var/folders/kd/T/x')).toEqual([])
+  expect(await candidatesOf('rm /tmp/repo/CLAUDE.md')).toEqual([['/tmp/repo/CLAUDE.md', 'delete', '', '']])
+  expect(await candidatesOf('find /tmp/scratch -name CLAUDE.md -delete')).toEqual([])
+  for (const command of ['cat CLAUDE.md', 'grep -n x ~/.claude/LESSONS.md', 'touch CLAUDE.md', 'chmod 644 AGENTS.md', 'ls ~/.claude/projects/p/memory', 'rm README.md', 'mv notes.md old.md'])
+    expect([command, await candidatesOf(command)]).toEqual([command, []])
+})
+
+test('a removal whose target the words cannot name is guessed at from the lasting memory the command mentions, as a write is (#3402)', async () => {
+  expect(await candidatesOf('rm "$(ls -t CLAUDE.md | head -1)"')).toEqual([['CLAUDE.md', 'delete', '', 'guessed']])
+  // A variable the command fixed for certain is followed to its file, and is no guess.
+  expect(await candidatesOf('F=CLAUDE.md; rm "$F"')).toEqual([['~/Apps/slate/CLAUDE.md', 'delete', '', '']])
+  expect(await candidatesOf('T=$(mktemp); rm "$T"; cat CLAUDE.md')).toEqual([])
+})
+
+test('a pattern is matched as the shell would, ignoring case, and one that cannot be read may match anything (#3402)', () => {
+  expect([patternMayMatch('*.md', 'CLAUDE.md'), patternMayMatch('claude.*', 'CLAUDE.md'), patternMayMatch('C?AUDE.md', 'CLAUDE.md'), patternMayMatch('[A-C]*.md', 'AGENTS.md')]).toEqual([true, true, true, true])
+  expect([patternMayMatch('*.txt', 'CLAUDE.md'), patternMayMatch('[!A-C]*.md', 'AGENTS.md'), patternMayMatch('CLAUDE', 'CLAUDE.md'), patternMayMatch('*.m', 'CLAUDE.md')]).toEqual([false, false, false, false])
+  expect([patternMayMatch('{CLAUDE,x}.md', 'AGENTS.md'), patternMayMatch('[', 'AGENTS.md')]).toEqual([true, true])
+})
+
+const gone = (file: string, more: Partial<AskBeforeSavingRemoval> = {}): AskBeforeSavingRemoval => ({ file, how: 'delete', back: 'none', ...more })
+test("a removal's approval covers exactly what Dan was told: the same file, the same way, the same consequence, and never a save (#3402)", () => {
+  const told = [gone('~/Apps/slate/CLAUDE.md', { back: 'git' })]
+  const delete_: AskBeforeSavingApproval = { id: 'q1', key: 'k', files: [], until: 1, removes: told }
+  expect(coversRemoval(delete_, [gone('~/Apps/slate/CLAUDE.md', { back: 'git' })], [])).toBe(true)
+  // Git holds it differently now, another file, a move where he approved a deletion, a save beside it.
+  expect(coversRemoval(delete_, [gone('~/Apps/slate/CLAUDE.md', { back: 'changed' })], [])).toBe(false)
+  expect(coversRemoval(delete_, [gone('~/Apps/slate/AGENTS.md', { back: 'git' })], [])).toBe(false)
+  expect(coversRemoval(delete_, [...told, gone('~/Apps/slate/AGENTS.md')], [])).toBe(false)
+  expect(coversRemoval(delete_, [{ file: '~/Apps/slate/CLAUDE.md', how: 'move', to: '/tmp/x' }], [])).toBe(false)
+  expect(coversRemoval(delete_, told, ['~/Apps/slate/AGENTS.md'])).toBe(false)
+  // An approval of a save, with no removal in it or an empty one, covers no removal.
+  expect(coversRemoval({ id: 'q2', key: 'k', files: ['~/Apps/slate/CLAUDE.md'], until: 1 }, told, [])).toBe(false)
+  expect(coversRemoval({ id: 'q3', key: 'k', files: ['~/Apps/slate/CLAUDE.md'], until: 1, removes: [] }, told, [])).toBe(false)
+  // Each approval says the answer Dan pressed and what for, in its own words.
+  expect([pressed(delete_), approvedFor(delete_)]).toEqual(['Delete', 'deleting ~/Apps/slate/CLAUDE.md'])
+  const move: AskBeforeSavingApproval = { id: 'q4', key: 'k', files: [], until: 1, removes: [{ file: '~/Apps/slate/CLAUDE.md', how: 'move', to: '/tmp/x' }] }
+  expect([pressed(move), approvedFor(move)]).toEqual(['Move', 'moving ~/Apps/slate/CLAUDE.md'])
+  expect([pressed({ id: 'q5', key: 'k', files: ['a'], until: 1 }), approvedFor({ id: 'q5', key: 'k', files: ['a'], until: 1 })]).toEqual(['For good', 'saving to a'])
+})
+
+test("the removal's words: what the refusal says, the answers, and what the mod adds for each kind of removal (#3402)", () => {
+  const one = [gone('~/Apps/slate/CLAUDE.md')]
+  expect(removesWhat(one)).toBe('this deletes lasting memory (~/Apps/slate/CLAUDE.md)')
+  expect(removesWhat([gone('CLAUDE.md', { guessed: true, back: 'unknown', why: 'its path could not be read from the command' })])).toBe('this may delete lasting memory (CLAUDE.md): its words do not name the file it removes, and they mention CLAUDE.md')
+  expect(removesWhat([...one, gone('AGENTS.md', { guessed: true })])).toBe('this deletes lasting memory (~/Apps/slate/CLAUDE.md) and may remove AGENTS.md: its words do not name every file it removes, and they mention AGENTS.md')
+  const moved: AskBeforeSavingRemoval[] = [{ file: '~/a/CLAUDE.md', how: 'move', to: '/tmp/x' }, { file: '~/a/AGENTS.md', how: 'move' }]
+  expect(removesWhat(moved)).toBe('this moves lasting memory away (~/a/CLAUDE.md, to /tmp/x; ~/a/AGENTS.md)')
+  expect(removalWords(moved).label).toBe('Move')
+  expect(removalWords([...one, ...moved]).label).toBe('Delete')
+  expect(removalOptions(moved)).toEqual([{ label: 'Keep as is', description: 'Nothing is moved' }, { label: 'Move', description: 'Moves ~/a/CLAUDE.md to /tmp/x, ~/a/AGENTS.md' }])
+  expect(removalSaid(moved)).toBe('~/a/CLAUDE.md goes to /tmp/x, and can be moved back. Where ~/a/AGENTS.md goes could not be read from the command.')
+  expect(removalSaid([gone('CLAUDE.md', { guessed: true, back: 'unknown', why: 'its path could not be read from the command' })])).toBe(
+    "The command's words do not name the file it removes; they mention this one. Whether git holds it could not be read (its path could not be read from the command), so take it that it cannot be got back.",
+  )
+  expect(removalSaid([gone('~/.claude/projects/p/memory/*.md', { pattern: true })])).toBe('That is every file the pattern matches in a folder of lasting memory. Git does not hold it, so once deleted it cannot be got back from git.')
+  expect(removalSaid([gone('~/Apps/slate', { names: ['CLAUDE.md'], folder: true, back: 'git' })])).toBe('Only what is named CLAUDE.md under it goes. Git holds it unchanged, so it can be restored from git.')
+  expect(removalSaid([gone('~/.claude', { holds: ['~/.claude/CLAUDE.md', '~/.claude/LESSONS.md', '~/.claude/projects/p/memory'], more: true })])).toBe(
+    'It is a folder that holds lasting memory (~/.claude/CLAUDE.md, ~/.claude/LESSONS.md, ~/.claude/projects/p/memory and others), which goes with it. Git does not hold it, so once deleted it cannot be got back from git.',
+  )
+  const ask = removalInstruction('t1', one)
+  expect(ask).toContain('{"source": "ask-before-saving:t1"}')
+  expect(ask).toContain('with the options Keep as is and Delete')
+  expect([ask.includes('For good'), ask.includes('Save to'), ask.includes('Just this session'), ask.includes('Not at all')]).toEqual([false, false, false, false])
+  expect(splitRefusal(one, ['~/Apps/slate/AGENTS.md'])).toBe(
+    'Not run: this command deletes lasting memory (~/Apps/slate/CLAUDE.md) and also writes lasting memory (~/Apps/slate/AGENTS.md). Dan is asked about each by itself, since one answer cannot cover both. Send each as a command of its own.',
+  )
+})

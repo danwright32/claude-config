@@ -13,6 +13,46 @@ export type AskBeforeSavingQuestion = {
    * #738's review, which For good keys where it is answered.
    */
   key?: string
+  /**
+   * Set when the call removes lasting memory or moves it away (#3402): the question is then the
+   * removal's own, with its own answers, and `files` holds only the lasting memory a move lands on.
+   */
+  removes?: AskBeforeSavingRemoval[]
+}
+
+/**
+ * One lasting memory file a shell command would delete or move away (#3402), as the removal's
+ * question says it. Read from mod-kit's write reader (a change that removes), the disk and git when
+ * the call is refused, and again when Dan is asked, so the question says what is true then (L180).
+ */
+export type AskBeforeSavingRemoval = {
+  /** What goes, as Dan reads it (home as ~): a file, a folder taken whole, or a pattern in a memory folder. */
+  file: string
+  /** Deleted, or moved to another place (mv's source, or a copy the same command then removes). */
+  how: 'delete' | 'move'
+  /** Where a move puts it, as Dan reads it; absent where the command's words do not say. */
+  to?: string
+  /** A file is at `to` now, which the move replaces. */
+  replaces?: true
+  /** It is a folder, taken with everything in it. */
+  folder?: true
+  /** A pattern in a folder of lasting memory: every file it matches goes. */
+  pattern?: true
+  /** The names a find -delete is limited to under the folder. */
+  names?: string[]
+  /** The lasting memory under a folder that is not itself lasting memory, as Dan reads it: the first three found. */
+  holds?: string[]
+  /** More lasting memory is under it than `holds` lists. */
+  more?: true
+  /** Taken from what the command mentions, since its words do not name the file it removes. */
+  guessed?: true
+  /**
+   * Whether git can bring a deleted file back: 'git' when git holds it with no changes since its
+   * last commit, 'changed' when it holds an older version, 'none' when it does not hold it, and
+   * 'unknown' when that could not be read, with `why`. Absent on a move.
+   */
+  back?: 'git' | 'changed' | 'none' | 'unknown'
+  why?: string
 }
 
 /** A save Dan answered For good, waiting for Claude to send the call again (#738). */
@@ -58,6 +98,13 @@ export type AskBeforeSavingApproval = {
    * last line. An approval without it covers no SHORT line at all, so its entry carries none.
    */
   short?: string
+  /**
+   * Set on an approval of a removal (#3402), Dan's Delete or Move on the removal's own question:
+   * what he was told would go, and whether it could be got back. It lets through only a call that
+   * removes exactly this, with the same consequence, and never a save; an approval without it never
+   * lets a removal through (rules.ts coversRemoval).
+   */
+  removes?: AskBeforeSavingRemoval[]
 }
 
 /**
@@ -93,6 +140,7 @@ export type AskBeforeSaving = {
    * A Bash call is answered by its For good alone, without reading what the command writes: one
    * that writes ~/.claude/LESSONS.md is refused at this mod's check whatever is answered here
    * (#3343), so never take a true for a Bash call as leave to run it past that check.
+   * An approval of a removal (#3402) is never answered true here: it is no approval of a save.
    */
   isApproved: (call: { tool: string; input: Record<string, unknown> }) => Promise<{ isApproved: boolean }>
 }
@@ -104,7 +152,7 @@ declare module 'claude-code' {
   interface PluginState {
     /**
      * In $.state so a reload of the mod keeps them, and dropped at session end: the refused saves
-     * waiting for Claude to ask Dan in the dialog, the rules he gave for this session only, his
+     * (and since #3402 the refused removals) waiting for Claude to ask Dan in the dialog, the rules he gave for this session only, his
      * latest message, read for the words that already make a rule permanent, and the saves he
      * answered For good that Claude has yet to send again, beside the lessons he answered Add to
      * LESSONS.md in the durable lesson picker (#867, `lesson` set) that Claude has yet to add, and

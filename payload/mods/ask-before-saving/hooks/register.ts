@@ -7,7 +7,7 @@ import { toolArgs } from './mod-kit/toolargs.ts'
 // The one check of text Dan approves in a picker (#3321), read from mod-kit's copy by name, which
 // is how tools/check-mod-shared-parts.sh tells that a mod reading a picker's answers judges it.
 import { askFault } from './mod-kit/shown.ts'
-import type { AskBeforeSaving, AskBeforeSavingApproval, AskBeforeSavingIndexCover, AskBeforeSavingQuestion } from '../types/index.d.ts'
+import type { AskBeforeSaving, AskBeforeSavingApproval, AskBeforeSavingIndexCover, AskBeforeSavingQuestion, AskBeforeSavingRemoval } from '../types/index.d.ts'
 import {
   APPROVAL_MS,
   FOR_GOOD,
@@ -90,6 +90,21 @@ import {
   writesWhat,
   unknownRemedy,
   type HandedUnknown,
+  type Writes,
+  KEEP_IT,
+  REMOVAL_HEADER,
+  agentRemovalRefusal,
+  approvedFor,
+  coversRemoval,
+  removalAsleep,
+  removalCandidates,
+  removalInstruction,
+  removalNote,
+  removalOptions,
+  removalSaid,
+  removalWords,
+  removedNames,
+  splitRefusal,
 } from './rules.ts'
 
 // Ask before saving (claude-config#618). Before a standing rule reaches lasting memory, by Write,
@@ -227,7 +242,9 @@ const isSetIn = async ($: EngineInterface, home: string): Promise<IsSet> => {
 // The files a call would save lasting memory to, and among them those taken only from what a Bash
 // command mentions, since its words do not name the file it writes (#940), and those found only as a
 // file handed to a script as its argument (#1592), each of which the refusal says.
-type Targets = { files: string[]; guessed: string[]; handed: string[]; unknown: HandedUnknown[] }
+// `writes`, on a Bash call, is what mod-kit's reader said the command changes, kept so the removals
+// among its changes are judged from the same read (#3402).
+type Targets = { files: string[]; guessed: string[]; handed: string[]; unknown: HandedUnknown[]; writes?: Writes }
 
 // A Bash command as its mentions are read (#940): each python program in it that only writes files,
 // found in the command as written, with the lasting memory its comments and sentences name taken out
@@ -358,7 +375,79 @@ const lastingTargets = async ($: EngineInterface, tool: string, input: Record<st
         out.push(m)
         guessed.push(m)
       }
-  return { files: out, guessed, handed, unknown }
+  return { files: out, guessed, handed, unknown, writes: w }
+}
+
+// Whether git can bring a file back once it is deleted (#3402), asked of git itself in the file's
+// folder: held with no changes since its last commit ('git'), held with changes since ('changed'),
+// or not held, in a repository or in none ('none'). Anything else git says, or a git that cannot
+// run, is 'unknown' with its words, never read as held: the question then says it could not be read.
+const gitHolds = async ($: EngineInterface, abs: string): Promise<Pick<AskBeforeSavingRemoval, 'back' | 'why'>> => {
+  const at = abs.replace(/\/+$/, '').lastIndexOf('/')
+  const dir = abs.slice(0, at) || '/'
+  const name = abs.replace(/\/+$/, '').slice(at + 1)
+  const said = (r: { exitCode: number; stderr: string }) => r.stderr.trim().split('\n')[0] || `git exited ${r.exitCode}`
+  try {
+    const held = await $.process.run(['git', '-C', dir, '--literal-pathspecs', 'ls-files', '-z', '--', name], { timeoutMs: 5000 })
+    if (held.exitCode !== 0) return /not a git repository/i.test(held.stderr) ? { back: 'none' } : { back: 'unknown', why: said(held) }
+    if (!held.stdout) return { back: 'none' }
+    const changed = await $.process.run(['git', '-C', dir, '--literal-pathspecs', 'status', '--porcelain', '-z', '--', name], { timeoutMs: 5000 })
+    if (changed.exitCode !== 0) return { back: 'unknown', why: said(changed) }
+    return { back: changed.stdout ? 'changed' : 'git' }
+  } catch (err) {
+    return { back: 'unknown', why: message(err) }
+  }
+}
+
+// What is at a path: a file, a folder, something else, or nothing that can be looked at.
+const kindAt = async ($: EngineInterface, path: string): Promise<string | undefined> => {
+  try {
+    return (await $.fs.stat(path)).kind
+  } catch {
+    return undefined
+  }
+}
+
+// The lasting memory a Bash call would remove or move away (#3402), each as the removal's question
+// says it, or none. From the changes mod-kit's reader reported for the command (lastingTargets'
+// read), judged by the rule module, then asked of the disk: a file that is not there is no removal,
+// a folder taken whole counts only for the lasting memory found under it, a move says whether a
+// file is where it lands, and a deletion says what git holds. A disk that cannot say fails the
+// hook, which fails closed.
+const NO_REMOVALS: AskBeforeSavingRemoval[] = []
+const removalsOf = async ($: EngineInterface, tool: string, input: Record<string, unknown>, { home }: Where, w: Writes | undefined): Promise<AskBeforeSavingRemoval[]> => {
+  if (tool !== 'Bash' || w === undefined || !(w.changes ?? []).some(c => c.does === 'remove')) return NO_REMOVALS
+  const command = String(input.command ?? '')
+  const inCheckout: InCheckout = async abs => (await $.modkit.workingTree({ path: abs })) !== null
+  const text = mentionsAny(command) ? await mentionText($, command) : command
+  const out: AskBeforeSavingRemoval[] = []
+  for (const c of await removalCandidates(w, home, inCheckout, command, await isSetIn($, home), { text })) {
+    const found: string[] = []
+    if (c.holds) {
+      for (const p of c.holds.paths) if (await $.fs.exists(p)) found.push(display(p, home))
+      if (c.holds.projects !== undefined && (await $.fs.exists(c.holds.projects)))
+        for (const e of await $.fs.list(c.holds.projects)) {
+          if (found.length > 3) break
+          const memory = `${c.holds.projects}/${e.name}/memory`
+          if (await $.fs.exists(memory)) found.push(display(memory, home))
+        }
+      if (!found.length) continue
+    } else if (c.path !== undefined && !(await $.fs.exists(c.path))) continue
+    const folder = !c.holds && !c.pattern && c.tree && c.path !== undefined && (await kindAt($, c.path)) === 'directory'
+    const shape = {
+      file: c.file,
+      ...(folder ? { folder: true as const } : {}),
+      ...(c.pattern ? { pattern: true as const } : {}),
+      ...(c.names ? { names: c.names } : {}),
+      ...(found.length ? { holds: found.slice(0, 3), ...(found.length > 3 ? { more: true as const } : {}) } : {}),
+      ...(c.guessed ? { guessed: true as const } : {}),
+    }
+    if (c.how === 'move') {
+      const replaces = c.toPath !== undefined && (await $.fs.exists(c.toPath)) && (await kindAt($, c.toPath)) === 'file'
+      out.push({ ...shape, how: 'move', ...(c.to !== undefined ? { to: c.to } : {}), ...(replaces ? { replaces: true as const } : {}) })
+    } else out.push({ ...shape, how: 'delete', ...(c.path !== undefined ? await gitHolds($, c.path) : { back: 'unknown' as const, why: 'its path could not be read from the command' }) })
+  }
+  return out
 }
 
 // What would be saved, as the rule's text: a new file's whole text, the lines a rewrite adds, an
@@ -398,6 +487,11 @@ const tell = async ($: EngineInterface, text: string) => {
 // What Dan reads when an approval lapses: unused, or sent and refused by another guard before it
 // was saved, which is never called unused (#764, L11).
 const lapsedFor = (x: AskBeforeSavingApproval) => {
+  // A removal's approval (#3402) lapses in its own words: no save was approved, and none was lost.
+  if (x.removes?.length)
+    return x.refused !== undefined
+      ? `The ${pressed(x)} you gave for ${approvedFor(x)} lapsed after ${MINUTES} minutes: Claude sent the command, but it was refused before it ran (${x.refused}), and it did not run within that time.`
+      : `The ${pressed(x)} you gave for ${approvedFor(x)} lapsed after ${MINUTES} minutes unused, so it no longer lets that command through.`
   const where = x.files.join(', ')
   return x.refused !== undefined
     ? `The ${pressed(x)} you gave for saving to ${where} lapsed after ${MINUTES} minutes: Claude sent the save, but it was refused before it was saved (${x.refused}), and it was not saved within that time.`
@@ -416,6 +510,15 @@ const lapse = async ($: EngineInterface) => {
   for (const x of gone) {
     const where = x.files.join(', ')
     $.ui.toast(lapsedFor(x), { timeoutMs: 10_000 })
+    if (x.removes?.length) {
+      await tell(
+        $,
+        x.refused !== undefined
+          ? `Dan's ${pressed(x)} on ${approvedFor(x)} lapsed after ${MINUTES} minutes: the command you sent was refused before it ran (${x.refused}), so ${removalWords(x.removes).nothing}, and sending it again asks him again.`
+          : `Dan's ${pressed(x)} on ${approvedFor(x)} lapsed after ${MINUTES} minutes unused: it no longer lets that command through, and sending it again asks him again.`,
+      )
+      continue
+    }
     await tell(
       $,
       x.refused !== undefined
@@ -453,7 +556,8 @@ const takeApproval = async ($: EngineInterface, key: string, facts: LessonFacts)
     lapsed = []
     const keep: AskBeforeSavingApproval[] = []
     for (const x of a ?? []) {
-      const fits = savesThis(x, key)
+      // An approval of a removal (#3402) is no approval of a save, whatever call it was given for.
+      const fits = savesThis(x, key) && !x.removes?.length
       if (fits && !stands(x.until, now)) lapsed.push(x)
       else if (fits && !coversFacts(facts, x.asked)) {
         short ??= x
@@ -466,6 +570,49 @@ const takeApproval = async ($: EngineInterface, key: string, facts: LessonFacts)
   for (const x of lapsed) $.ui.toast(lapsedFor(x), { timeoutMs: 10_000 })
   const lacks = short as AskBeforeSavingApproval | undefined
   return { live: live as AskBeforeSavingApproval | undefined, lapsed: lapsed[0] as AskBeforeSavingApproval | undefined, short: lacks === undefined ? undefined : unnamed(facts, lacks.asked) }
+}
+
+// The approval for this removal (#3402), taken as the call that uses it arrives: Dan's Delete or
+// Move for this call, covering exactly what it removes now with the consequence he was told
+// (coversRemoval). An approval of a save never fits, and one whose file has changed since (git
+// holds it differently, another file is at the move's end) is left to lapse, so he is asked again
+// with what is true now. A lapsed one is taken out and said, as a save's is.
+const takeRemoval = async ($: EngineInterface, key: string, removes: readonly AskBeforeSavingRemoval[], files: readonly string[]) => {
+  const now = await $.clock.now()
+  let live: AskBeforeSavingApproval | undefined
+  let lapsed: AskBeforeSavingApproval[] = []
+  await update($, approvalsRef, a => {
+    live = undefined
+    lapsed = []
+    const keep: AskBeforeSavingApproval[] = []
+    for (const x of a ?? []) {
+      const fits = savesThis(x, key) && coversRemoval(x, removes, files)
+      if (fits && !stands(x.until, now)) lapsed.push(x)
+      else if (fits && !live) live = x
+      else keep.push(x)
+    }
+    return keep
+  })
+  for (const x of lapsed) $.ui.toast(lapsedFor(x), { timeoutMs: 10_000 })
+  return { live: live as AskBeforeSavingApproval | undefined, lapsed: lapsed[0] as AskBeforeSavingApproval | undefined }
+}
+
+// A removal held while the Mac is asleep (#841, #3402): noted for Dan's morning report as a finding,
+// the kind his report has for anything else noticed, and refused without asking him. Null while
+// awake, or when scope modes is not loaded or cannot say, as for a save.
+const removalWhileAsleep = async ($: EngineInterface, removes: readonly AskBeforeSavingRemoval[], command: string): Promise<string | null> => {
+  try {
+    if (!(await ($ as unknown as { scopeModes: ScopeModes }).scopeModes.isAsleep())) return null
+  } catch {
+    return null
+  }
+  try {
+    const r = await ($ as unknown as { scopeModes: ScopeModes }).scopeModes.sleepNote({ kind: 'finding', text: removalNote(removes, command) })
+    if (!r.isNoted) return null
+    return removalAsleep(removes)
+  } catch (err) {
+    return removalAsleep(removes, message(err))
+  }
 }
 
 // The text a call adds to the lessons file, when it is an Edit or Write to that file and all it does
@@ -619,7 +766,11 @@ const takeCover = async ($: EngineInterface, tool: string, input: Record<string,
 // What Claude reads when the approval for the call it sent has lapsed (#764: never "unused" for one
 // it sent that another guard refused).
 const lapsedNote = (x: AskBeforeSavingApproval) =>
-  x.refused !== undefined
+  x.removes?.length
+    ? x.refused !== undefined
+      ? `Dan's earlier ${pressed(x)} on this removal lapsed after ${MINUTES} minutes; the command you sent before was refused (${x.refused}), so he has to be asked again.`
+      : `Dan's earlier ${pressed(x)} on this removal lapsed after ${MINUTES} minutes unused, so he has to be asked again.`
+    : x.refused !== undefined
     ? `Dan's earlier ${pressed(x)} on this save lapsed after ${MINUTES} minutes; the save you sent before was refused (${x.refused}), so he has to be asked again.`
     : `Dan's earlier ${pressed(x)} on this save lapsed after ${MINUTES} minutes unused, so he has to be asked again.`
 
@@ -675,6 +826,9 @@ const saveCall: MatchedHook<'tool.call', { tool: typeof TOOL_NAMES }> = async ($
         )
       return { deny: agentRefusal(targets) }
     }
+    // Nor does a subagent remove lasting memory or move it away (#3402): refused, never asked about.
+    const gone = await removalsOf($, tool, input, at, targets.writes)
+    if (gone.length) return { deny: agentRemovalRefusal(gone) }
     const key = saveKey(tool, input, at.cwd, at.home)
     fromAgent.set(key, (fromAgent.get(key) ?? 0) + 1)
     try {
@@ -705,6 +859,9 @@ const saveCall: MatchedHook<'tool.call', { tool: typeof TOOL_NAMES }> = async ($
     // Nor a shell command that writes or may write the lessons file (#3343): left for the
     // tool.check hook to refuse the same way, with the Edit route named.
     files = targets === undefined || shellLessons(tool, targets, at.home) ? [] : targets.files
+    // Nor a command that removes lasting memory or moves it away (#3402): his words made a rule
+    // permanent, and said nothing of a file going, so it is left for the tool.check hook to ask about.
+    if (files.length && (await removalsOf($, tool, input, at, targets?.writes)).length) files = []
     if (files.length) approved.add((key = saveKey(tool, input, at.cwd, at.home)))
   }
   let r: Awaited<ReturnType<typeof next>>
@@ -727,6 +884,24 @@ const saveCall: MatchedHook<'tool.call', { tool: typeof TOOL_NAMES }> = async ($
   // and records why, so its lapse never calls it unused; Dan, who answered believing it saved, is
   // told it was not. A shell command that ran and failed may have written part of what it does, so
   // its approval is spent: running it again would write that part twice.
+  // A removal Dan answered Delete or Move, sent again (#3402): said in its own words. The command
+  // that ran is spent, landed or not, as a shell save's is; one refused beneath before it ran gives
+  // the approval back for the rest of its time, and Dan, who answered, is told it did not go.
+  if (used?.removes?.length) {
+    const words = removalWords(used.removes)
+    const where = removedNames(used.removes)
+    if (r.deny === undefined && !r.isError) return { ...r, context: [...(r.context ?? []), `${words.done} ${where}, as Dan answered ${pressed(used)}.`] }
+    const why = String(r.deny ?? r.text ?? 'the tool reported an error')
+    $.ui.toast(`${where} ${words.was}: ${why}`, { timeoutMs: 10_000 })
+    if (r.deny === undefined) return r
+    const back: AskBeforeSavingApproval = { ...used, refused: why }
+    if (!stands(back.until, await $.clock.now())) {
+      $.ui.toast(lapsedFor(back), { timeoutMs: 10_000 })
+      return r
+    }
+    await update($, approvalsRef, a => [...(a ?? []), back])
+    return r
+  }
   if (used !== undefined) {
     const where = used.files.join(', ')
     const lesson = used.lesson !== undefined
@@ -782,7 +957,9 @@ const saveCall: MatchedHook<'tool.call', { tool: typeof TOOL_NAMES }> = async ($
       return (a ?? []).map(x => (savesThis(x, k) ? (hit = { ...x, refused: refusedWhy }) : x))
     })
     if (hit) {
-      $.ui.toast(`Not saved to ${hit.files.join(', ')}: ${refusedWhy}`, { timeoutMs: 10_000 })
+      // Typed again: the assignment above is inside a callback, which narrowing cannot see.
+      const stood = hit as AskBeforeSavingApproval
+      $.ui.toast(stood.removes?.length ? `${removedNames(stood.removes)} ${removalWords(stood.removes).was}: ${refusedWhy}` : `Not saved to ${stood.files.join(', ')}: ${refusedWhy}`, { timeoutMs: 10_000 })
       return r
     }
     // And a lesson Dan approved in the durable lesson picker, added by a call another guard refused
@@ -821,6 +998,31 @@ const saveCheck: Hook<'tool.check'> = async ($, e, next) => {
   if (approved.delete(key) || fromAgent.has(key)) return next(e)
   const targets = await lastingTargets($, tool, input, at)
   const { files } = targets
+  // A command that removes lasting memory or moves it away (#3402) is judged by itself, under the
+  // removal's own question and approval: nothing below, which is all about a save, is reached.
+  const removes = await removalsOf($, tool, input, at, targets.writes)
+  if (removes.length) {
+    const id = String(raw.tool_use_id ?? '')
+    const mine = await takeRemoval($, key, removes, files)
+    if (mine.live) {
+      taken.set(id, mine.live)
+      return next(e)
+    }
+    // The settings hooks beneath decide first, as for a save (#707).
+    const beneath = await next(e)
+    if (beneath.decision === 'deny') return beneath
+    // One question cannot cover a removal and a save that is not where its move lands, nor a
+    // deletion beside a move: refused whole, and no question waits.
+    const lands = removes.flatMap(r => (r.how === 'move' && r.to !== undefined ? [r.to] : []))
+    const others = files.filter(f => !lands.includes(f))
+    if (others.length || (removes.some(r => r.how === 'move') && removes.some(r => r.how !== 'move'))) return { decision: 'deny', reason: splitRefusal(removes, others) }
+    const night = await removalWhileAsleep($, removes, String(input.command ?? ''))
+    if (night !== null) return { decision: 'deny', reason: night }
+    const q: AskBeforeSavingQuestion = { id: id || `save-${++saves}`, tool: tool as AskBeforeSavingQuestion['tool'], input, files, key, removes }
+    await update($, pendingRef, p => [...(p ?? []).filter(x => x.key !== key), q])
+    const ask = removalInstruction(q.id, removes)
+    return { decision: 'deny', reason: mine.lapsed ? `${lapsedNote(mine.lapsed)} ${ask}` : ask }
+  }
   if (!files.length) return next(e)
   // What the call does to the entries of the lessons file. One that adds or changes an entry is
   // covered by Dan's answer in the lesson picker or by nothing (independent review of #3320): a For
@@ -931,7 +1133,8 @@ export const register: Register = on => {
         // one Edit of the lessons file), and the types say so for whoever does.
         // Nor one that takes an entry out, moves one or changes a heading under a question that did
         // not name it (#3343 route 2).
-        return { isApproved: approvals.some(x => stands(x.until, now) && ((edit.touched.length === 0 && savesThis(x, key) && coversFacts(edit.facts, x.asked)) || addsThis(x, edit.added))) }
+        // Nor is an approval of a removal (#3402) an approval of a save: it answers false here.
+        return { isApproved: approvals.some(x => stands(x.until, now) && !x.removes?.length && ((edit.touched.length === 0 && savesThis(x, key) && coversFacts(edit.facts, x.asked)) || addsThis(x, edit.added))) }
       },
     }
     return { ...built, askBeforeSaving }
@@ -1111,10 +1314,60 @@ export const register: Register = on => {
     // before the save it is about (#3293) is refused before Dan reads it: his answer could approve
     // nothing, and he would be asked it again. Judged by the question alone, so it needs no read.
     if (id === undefined) return e.agentId === undefined && asksBeforeTheSave(ask) ? { deny: askedBeforeSave } : next(e)
+    // The removal's question (#3402): Claude's sentence names what goes and says why, and the mod
+    // adds what it measures as Dan is asked, where a move puts the file or whether git can bring a
+    // deleted one back, with its own header and answers. What goes is read again here, so the
+    // question says what is true now, and the approval holds exactly that. Keep as is and a typed
+    // answer approve nothing, and neither does any answer of a save's question.
+    const removalAnswered = async (q: AskBeforeSavingQuestion) => {
+      const at = await whereOf($)
+      const w = await $.modkit.writes({ command: String(q.input.command ?? ''), cwd: at.cwd, home: at.home })
+      const removes = await removalsOf($, q.tool, q.input, at, w)
+      if (!removes.length) {
+        await update($, pendingRef, p => (p ?? []).filter(x => x.id !== id))
+        return { deny: `Nothing waits under ${id} any more: ${removedNames(q.removes ?? [])} is no longer there to remove. Do not ask Dan about it.` }
+      }
+      const words = removalWords(removes)
+      const where = removedNames(removes)
+      const questions = Array.isArray(ask.questions) ? ask.questions : []
+      const example = `"${words.lead} ${removes[0]?.file}: <why>?"`
+      if (questions.length !== 1 || typeof questions[0]?.question !== 'string') return { deny: `Ask one question about this removal, naming ${where} and saying why in one plain sentence, such as ${example}.` }
+      const question = (questions[0].question as string).trim()
+      const missing = removes.map(r => r.file).filter(f => !question.includes(f))
+      if (missing.length) return { deny: `The question must name what would go (${missing.join(', ')}) and say why in one plain sentence, such as ${example}.` }
+      const full = `${question} ${removalSaid(removes)}`
+      const shown = { ...e, questions: [{ ...questions[0], question: full, header: REMOVAL_HEADER, options: removalOptions(removes), multiSelect: false }] } as typeof e
+      const unread = askFault(shown as unknown as Record<string, unknown>, removes.flatMap(r => [r.file, ...(r.to !== undefined ? [r.to] : []), ...(r.holds ?? [])]))
+      if (unread !== undefined) return { deny: `${unread.what} would not reach Dan as written: ${unread.fault}. He decides on the words he can read whole, so reword it and ask again, with the same metadata. If it is too long, remove fewer files in one command.` }
+      if (ask.answers !== undefined && (typeof ask.answers !== 'object' || ask.answers === null || Object.keys(ask.answers).length > 0))
+        return { deny: 'Ask Dan without answers already filled in: only his choice in the dialog decides this removal.' }
+
+      const r = await next(shown)
+      if (r.deny !== undefined || r.isError) return r
+      const out = (r.result ?? {}) as AskResult
+      const asked = typeof out.questions?.[0]?.question === 'string' ? (out.questions[0].question as string) : full
+      const chosen = out.answers?.[asked] ?? out.answers?.[full]
+      const say = (text: string) => ({ ...r, context: [...(r.context ?? []), text] })
+      if (out.afkTimeoutMs !== undefined) return say(`Dan did not answer: the dialog closed by itself while he was away, so ${words.nothing}. Ask him again about ${words.doing} ${where} when he is back.`)
+      if (typeof chosen !== 'string' || !chosen.trim()) return say(`Dan gave no answer about ${words.doing} ${where}, so ${words.nothing}. Ask him again, or leave it.`)
+      if (chosen !== KEEP_IT && chosen !== words.label) return say(await typedSaid($, chosen, { still: `${where} ${words.was}`, again: 'ask him the same question again, with the same metadata' }))
+      await update($, pendingRef, p => (p ?? []).filter(x => x.id !== id))
+      if (chosen === KEEP_IT) return say(`Dan answered ${KEEP_IT} to ${words.doing} ${where}: ${words.nothing}. Do not ${words.verb} it.`)
+      const key: string = q.key ?? saveKey(q.tool, q.input, at.cwd, at.home)
+      const made: AskBeforeSavingApproval = { id: q.id, key, files: q.files, until: (await $.clock.now()) + APPROVAL_MS, asked: full, removes }
+      await update($, approvalsRef, a => [...(a ?? []).filter(x => x.key !== key), made])
+      lapseAfter($, APPROVAL_MS, made)
+      return say(
+        `Dan answered ${words.label} to ${words.doing} ${where}. Send the same ${q.tool} call again now, unchanged, and it runs without asking him again: ` +
+          `${callShown(q.tool, q.input)}. If it is not sent within ${MINUTES} minutes, or what he was told of the file changes first, this lapses and he is asked again.`,
+      )
+    }
     const answered = async () => {
       if (e.agentId !== undefined) return { deny: 'Only the main session asks Dan about saving to lasting memory. Put the rule and the file in your final report instead.' }
       const q = ((await $.state.get(pendingRef)).value ?? []).find(x => x.id === id)
       if (!q) return { deny: `No save is waiting under ${id}: it was answered already, or the session ended. Send the save again, and you will be told how to ask.` }
+      // A removal's question (#3402) is its own, in every word Dan reads and every answer he can give.
+      if (q.removes?.length) return removalAnswered(q)
       const where = q.files.join(', ')
       const questions = Array.isArray(ask.questions) ? ask.questions : []
       if (questions.length !== 1 || typeof questions[0]?.question !== 'string')
@@ -1232,7 +1485,11 @@ export const register: Register = on => {
     // One Claude sent that another guard refused was used, and says why it was not saved (#764, L11).
     for (const x of unused)
       $.ui.toast(
-        x.refused !== undefined
+        x.removes?.length
+          ? x.refused !== undefined
+            ? `The ${pressed(x)} you gave for ${approvedFor(x)} ended with the session: Claude sent the command, but it was refused before it ran (${x.refused}), so ${removalWords(x.removes).nothing}.`
+            : `The ${pressed(x)} you gave for ${approvedFor(x)} was never used before the session ended, so it no longer lets that command through.`
+          : x.refused !== undefined
           ? `The ${pressed(x)} you gave for saving to ${x.files.join(', ')} ended with the session: Claude sent the save, but it was refused before it was saved (${x.refused}), so nothing was saved.`
           : `The ${pressed(x)} you gave for saving to ${x.files.join(', ')} was never used before the session ended, so it no longer lets that save through.`,
         { timeoutMs: 10_000 },
