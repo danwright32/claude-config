@@ -1,11 +1,13 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
-import { NEVER_ASKED, overnightRefusal, primaryFrom, readableWay, repoFromRemotes, type Look } from '../hooks/overnight.ts'
+import { NEVER_ASKED, overnightRefusal, primaryFrom, readableWay, repoFromRemotes, type Look, type OvernightCall } from '../hooks/overnight.ts'
+import { gateAnswerOf, judgeRequiredLabel, type Gate, type Opened } from '../hooks/requiredlabel.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
-import { ghRepo, githubRepo } from './mod-kit/hooks/repo.ts'
+import { ghRepo, githubRepo, linkRepo } from './mod-kit/hooks/repo.ts'
 import { readCommands } from './read.ts'
 import { GH_REPO_FIXTURES } from './mod-kit/tests/gh-fixtures.ts'
 import { REPO_FIXTURES } from './mod-kit/tests/repo-fixtures.ts'
+import { GATE_LABEL_FIXTURES } from './gate-label-fixtures.ts'
 
 // mod-kit's reader of a remote, as $.modkit.repo answers it: its byte for byte copy (#951).
 const github = async (remote: string) => githubRepo(remote)
@@ -31,9 +33,9 @@ const look: Look = { repoOf: async dir => under(REPOS, dir), isPrimary: async di
 const read = async (text: string) => readCommands(text)
 // GH_REPO as the mod hands it over: read by mod-kit's ghRepo (its byte for byte copy), absent when
 // it is not set (#961).
-const bash = (command: string, o: { cwd?: string; ghRepo?: string; look?: Look } = {}) =>
+const bash = (command: string, o: { cwd?: string; ghRepo?: string; look?: Look; requiredLabel?: OvernightCall['requiredLabel'] } = {}) =>
   overnightRefusal(
-    { tool: 'Bash', input: { command }, raw: command, commands: readCommands(command), writes: commandWrites(command, o.cwd ?? CWD, HOME), cwd: o.cwd ?? CWD, home: HOME, ...(o.ghRepo ? { ghRepo: ghRepo(o.ghRepo) } : {}), read },
+    { tool: 'Bash', input: { command }, raw: command, commands: readCommands(command), writes: commandWrites(command, o.cwd ?? CWD, HOME), cwd: o.cwd ?? CWD, home: HOME, ...(o.ghRepo ? { ghRepo: ghRepo(o.ghRepo) } : {}), read, ...(o.requiredLabel ? { requiredLabel: o.requiredLabel } : {}) },
     o.look ?? look,
   )
 const NONE = { files: [], changes: [], unnamed: [] }
@@ -102,6 +104,153 @@ describe('issue, label and milestone writes', () => {
     expect(await bash('gh api -X PATCH repos/o/r/issues/5 -f state=closed')).toBe('change issues, labels or milestones through the GitHub API')
     expect(await bash(`gh api graphql -f query='mutation { createIssue(input: {}) { issue { id } } }'`)).toBe('call the GitHub API to run createIssue')
     expect(await bash('gh api graphql --input q.json')).toBe('call the GitHub API with a GraphQL document that could not be read')
+  })
+})
+
+// #3439: on 2026-11-21 a session working overnight opened a pull request with
+// `--label changelog/technical` in a project whose merge gate refuses a merge without one changelog
+// label, was refused, and the pull request sat green for ten and a half hours. The one label a
+// project's own merge gate requires may now go on a pull request the session opened; everything else
+// the ban covers stays banned. The gate's answer here is the committed one the gate's own suite
+// holds its answer to (gate-label-fixtures.ts), read by the mod's reader of it.
+describe('the label a merge gate requires, on a PR this session opened (#3439)', () => {
+  const LABELS = 'set labels or a milestone on a PR'
+  const gated = GATE_LABEL_FIXTURES[0]
+  if (!gated || gated.answer.state !== 'required') throw new Error('the first shared fixture is no longer the gated repository')
+  const said = (answer: unknown) => gateAnswerOf({ exitCode: 0, stdout: JSON.stringify(answer), stderr: '', isStdoutTruncated: false })
+  // This checkout's repository is gated; nothing else is.
+  const gate: Gate = async repo => (repo === 'o/r' ? said({ ...gated.answer, why: '' }) : said({ state: 'not-required', why: `${repo} is not listed`, labels: [] }))
+  const opened: Opened = async () => [{ repo: 'O/R', number: 12 }]
+  // What the judge said beside allowing a call, as register.ts collects it for the call's result.
+  const notes: string[] = []
+  const judgeWith = (g: Gate, o: Opened): NonNullable<OvernightCall['requiredLabel']> => (gh, repo) => judgeRequiredLabel(gh, repo, g, o, async link => linkRepo(link), text => notes.push(text))
+  const judge = judgeWith(gate, opened)
+  const night = (command: string, o: { cwd?: string; ghRepo?: string } = {}) => bash(command, { ...o, requiredLabel: judge })
+
+  test('the refusal of 2026-11-21: gh pr create with the changelog label, where a judge would allow it', async () => {
+    expect(await bash('gh pr create --title x --body-file /tmp/b.md --label changelog/technical', { requiredLabel: async () => undefined })).toBeUndefined()
+  })
+  test('gh pr create --label changelog/technical passes where the merge gate requires a changelog label, and not with any other label beside it', async () => {
+    expect(await night('gh pr create --title x --body-file /tmp/b.md --label changelog/technical')).toBeUndefined()
+    expect(await night('gh pr create --title x --body-file /tmp/b.md --label=changelog/none')).toBeUndefined()
+    expect(await night('gh pr create -t x -F /tmp/b.md -l changelog/none --draft --base main')).toBeUndefined()
+    const many = `${LABELS} (more than one label is named, and only the one label the merge gate of o/r requires may be set overnight)`
+    expect(await night('gh pr create --title x --label changelog/technical --label bug')).toBe(many)
+    expect(await night('gh pr create --title x --label changelog/technical,bug')).toBe(many)
+    expect(await night('gh pr create --title x -l priority-p1 -l changelog/none')).toBe(many)
+    expect(await night('gh pr create --title x --label changelog/technical --label changelog/none')).toBe(many)
+    expect(await night('gh pr create --title x --label changelog/technical --milestone Ungrouped')).toBe(LABELS)
+    expect(await night('gh pr create --title x --label changelog/technical -m Ungrouped')).toBe(LABELS)
+    expect(await night('gh pr create --title x --label changelog/technical --assignee someone')).toBe('run gh pr create with --assignee')
+    expect(await night('gh pr create --title x --label changelog/technical --reviewer someone')).toBe('run gh pr create with --reviewer')
+  })
+  test('gh pr edit <n> --add-label changelog/none passes for a PR this session opened and is refused for one it did not', async () => {
+    expect(await night('gh pr edit 12 --add-label changelog/none')).toBeUndefined()
+    expect(await night('gh pr edit 12 --add-label changelog/technical --body-file /tmp/b.md')).toBeUndefined()
+    expect(await night('gh pr edit https://github.com/o/r/pull/12 --add-label changelog/none')).toBeUndefined()
+    expect(await night('gh pr edit 13 --add-label changelog/none')).toBe(`${LABELS} (PR #13 in o/r is not one this session opened)`)
+    expect(await night('gh pr edit 120 --add-label changelog/none')).toBe(`${LABELS} (PR #120 in o/r is not one this session opened)`)
+    // The same number in another repository is another pull request: the write rule refuses it first.
+    expect(await night('gh pr edit 12 -R other/x --add-label changelog/none')).toBe('write to other/x from a checkout of o/r')
+    expect(await night('gh pr edit https://github.com/other/x/pull/12 --add-label changelog/none')).toBe('write to other/x from a checkout of o/r')
+    // A PR it does not name by number is whichever the branch has, which nothing here can say it opened.
+    const unnamed = `${LABELS} (the command names no one PR by its number, so whether this session opened it could not be told)`
+    expect(await night('gh pr edit --add-label changelog/none')).toBe(unnamed)
+    expect(await night('gh pr edit sleep-834 --add-label changelog/none')).toBe(unnamed)
+    expect(await night('gh pr edit 12 13 --add-label changelog/none')).toBe(unnamed)
+    expect(await night('gh pr edit https://github.com/o/r/pull/12/files --add-label changelog/none')).toBe(unnamed)
+    // The session's record of what it opened, when it cannot be read or holds nothing.
+    const unread = judgeWith(gate, async () => ({ why: 'the state could not be read' }))
+    expect(await bash('gh pr edit 12 --add-label changelog/none', { requiredLabel: unread })).toBe(`${LABELS} (whether this session opened PR #12 could not be told: the state could not be read)`)
+    expect(await bash('gh pr edit 12 --add-label changelog/none', { requiredLabel: judgeWith(gate, async () => []) })).toBe(`${LABELS} (PR #12 in o/r is not one this session opened)`)
+  })
+  test('--remove-label, --milestone and a label outside the required set are refused as today', async () => {
+    for (const c of [
+      'gh pr edit 12 --remove-label changelog/none',
+      'gh pr edit 12 --add-label changelog/none --remove-label changelog/technical',
+      'gh pr edit 12 --milestone "Sleep mode"',
+      'gh pr edit 12 -m Ungrouped',
+      'gh pr edit 12 --remove-milestone',
+      'gh pr edit 12 --add-label changelog/none --milestone Ungrouped',
+      'gh pr create --title x --milestone Ungrouped',
+    ])
+      expect({ c, r: await night(c) }).toEqual({ c, r: LABELS })
+    const outside = (label: string) => `${LABELS} (${label} is not a label the merge gate of o/r requires)`
+    expect(await night('gh pr edit 12 --add-label bug')).toBe(outside('bug'))
+    expect(await night('gh pr create --title x --label=bug')).toBe(outside('bug'))
+    expect(await night('gh pr create --title x --label changelog/urgent')).toBe(outside('changelog/urgent'))
+    expect(await night('gh pr create --title x --label Changelog/Technical')).toBe(outside('Changelog/Technical'))
+    expect(await night('gh pr create --title x --label "changelog/technical "')).toBe(outside('changelog/technical '))
+    expect(await night('gh pr create --title x --label "$LABEL"')).toBe(outside('$LABEL'))
+    expect(await night('gh pr create --title x --label changelog/technical,')).toBe(`${LABELS} (more than one label is named, and only the one label the merge gate of o/r requires may be set overnight)`)
+    expect(await night('gh pr create --title x --label')).toBe(`${LABELS} (the label it sets could not be read from the command)`)
+    // With no judge handed in, every label on a PR is refused in the words it always was.
+    expect(await bash('gh pr create --title x --label changelog/technical')).toBe(LABELS)
+    expect(await bash('gh pr edit 12 --add-label changelog/none')).toBe(LABELS)
+  })
+  // Dan's decision of 2026-11-22 (picker answer "Also allow changelog/visible"): the label that needs
+  // a sentence a manager reads is one of the gate's labels like the others. The merge gate still
+  // refuses the merge of a PR carrying it whose description has no such sentence, so the session is
+  // told that as the label goes on. Nothing else about the judging changes.
+  test('a label that needs a sentence a manager reads may be set too, and the session is told the merge waits on that sentence', async () => {
+    const NOTE = 'The merge gate of o/r refuses the merge of a PR labelled changelog/visible until its description carries the Changelog sentence a manager reads, so see that the description has it before merging.'
+    const noted = async (command: string, o: Parameters<typeof bash>[1] = {}) => {
+      notes.length = 0
+      const refused = await bash(command, { requiredLabel: judge, ...o })
+      return { refused, notes: [...notes] }
+    }
+    const allowed = { refused: undefined, notes: [NOTE] }
+    expect(await noted('gh pr create --title x --body-file /tmp/b.md --label changelog/visible')).toEqual(allowed)
+    expect(await noted('gh pr create -t x -F /tmp/b.md -l changelog/visible --draft')).toEqual(allowed)
+    expect(await noted('gh pr edit 12 --add-label changelog/visible')).toEqual(allowed)
+    expect(await noted('gh pr edit https://github.com/o/r/pull/12 --add-label=changelog/visible --body-file /tmp/b.md')).toEqual(allowed)
+    // A label that needs no sentence is set with nothing said.
+    expect(await noted('gh pr create --title x --label changelog/technical')).toEqual({ refused: undefined, notes: [] })
+    expect(await noted('gh pr edit 12 --add-label changelog/none')).toEqual({ refused: undefined, notes: [] })
+    // Everything else is refused for it as for any required label, and a refusal carries no note.
+    const no = (why?: string) => ({ refused: why ? `${LABELS} (${why})` : LABELS, notes: [] })
+    const many = 'more than one label is named, and only the one label the merge gate of o/r requires may be set overnight'
+    expect(await noted('gh pr edit 13 --add-label changelog/visible')).toEqual(no('PR #13 in o/r is not one this session opened'))
+    expect(await noted('gh pr edit --add-label changelog/visible')).toEqual(no('the command names no one PR by its number, so whether this session opened it could not be told'))
+    expect(await noted('gh pr create --title x --label changelog/visible --label changelog/technical')).toEqual(no(many))
+    expect(await noted('gh pr create --title x --label changelog/visible,bug')).toEqual(no(many))
+    expect(await noted('gh pr create --title x --label Changelog/Visible')).toEqual(no('Changelog/Visible is not a label the merge gate of o/r requires'))
+    expect(await noted('gh pr edit 12 --add-label changelog/visible --remove-label changelog/technical')).toEqual(no())
+    expect(await noted('gh pr create --title x --label changelog/visible --milestone Ungrouped')).toEqual(no())
+    expect(await noted('gh pr create --title x --label changelog/visible', { cwd: `${'/Users'}/x/theirs` })).toEqual(no('the merge gate of other/x requires no label'))
+    const unread = judgeWith(gate, async () => ({ why: 'the state could not be read' }))
+    expect(await noted('gh pr edit 12 --add-label changelog/visible', { requiredLabel: unread })).toEqual(no('whether this session opened PR #12 could not be told: the state could not be read'))
+    // A gate whose answer does not say whether the label needs a sentence is one that could not be read.
+    const silent = judgeWith(async () => said({ state: 'required', why: '', labels: [{ label: 'changelog/visible' }] }), opened)
+    expect(await noted('gh pr create --title x --label changelog/visible', { requiredLabel: silent })).toEqual(no('whether the merge gate of o/r requires a label could not be told: its answer was not one this reader knows'))
+    // With no judge handed in, it is refused in the words every label on a PR always was.
+    notes.length = 0
+    expect(await bash('gh pr create --title x --label changelog/visible')).toBe(LABELS)
+    expect(notes).toEqual([])
+  })
+  test('a project whose merge gate requires no label, and a gate that cannot be asked, stay refused, each saying why', async () => {
+    const theirs = `${'/Users'}/x/theirs`
+    expect(await night('gh pr create --title x --label changelog/technical', { cwd: theirs })).toBe(`${LABELS} (the merge gate of other/x requires no label)`)
+    expect(await night('gh pr create --title x --label bug', { cwd: theirs })).toBe(`${LABELS} (the merge gate of other/x requires no label)`)
+    const cannot = judgeWith(async () => said({ state: 'unknown', why: 'The dev update registry is not at /x/repos.local.json.', labels: [] }), opened)
+    expect(await bash('gh pr create --title x --label changelog/technical', { requiredLabel: cannot })).toBe(`${LABELS} (whether the merge gate of o/r requires a label could not be told: The dev update registry is not at /x/repos.local.json.)`)
+    const down = judgeWith(async () => gateAnswerOf({ exitCode: 127, stdout: '', stderr: 'env: node: No such file or directory\n', isStdoutTruncated: false }), opened)
+    expect(await bash('gh pr edit 12 --add-label changelog/none', { requiredLabel: down })).toBe(`${LABELS} (whether the merge gate of o/r requires a label could not be told: env: node: No such file or directory)`)
+    const throws = judgeWith(async () => {
+      throw new Error('spawn failed')
+    }, opened)
+    expect(await bash('gh pr create --title x --label changelog/technical', { requiredLabel: throws })).toBe(`${LABELS} (whether the merge gate of o/r requires a label could not be told: spawn failed)`)
+  })
+  test('the repository rule still comes first, and every other route to a label is refused as before', async () => {
+    expect(await night('gh pr create -R other/x --title x --label changelog/technical')).toBe('write to other/x from a checkout of o/r')
+    expect(await night('GH_REPO=other/x gh pr create --title x --label changelog/technical')).toBe('write to GitHub where the repository it reaches could not be resolved')
+    expect(await night('gh pr create --title x --label changelog/technical', { cwd: '/nowhere' })).toBe('write to GitHub where the repository it reaches could not be resolved')
+    expect(await night('gh issue edit 12 --add-label changelog/none')).toBe('run gh issue edit')
+    expect(await night('gh api -X POST repos/o/r/issues/12/labels -f "labels[]=changelog/none"')).toBe('change issues, labels or milestones through the GitHub API')
+    expect(await night(`gh api graphql -f query='mutation { addLabelsToLabelable(input: {}) { clientMutationId } }'`)).toBe('call the GitHub API to run addLabelsToLabelable')
+    expect(await night('gh label create changelog/technical')).toBe('run gh label create')
+    // A second gh in the line is judged on its own, so a label set beside a banned write is still refused.
+    expect(await night('gh pr create --title x --label changelog/technical && gh pr edit 12 --remove-label changelog/none')).toBe(LABELS)
   })
 })
 
@@ -511,6 +660,17 @@ describe('LESSONS.md, written by any route in command position (L673)', () => {
       expect({ c, r: await bash(c) }).toEqual({ c, r: 'write to LESSONS.md' })
     // The same scripts handed an ordinary file, or nothing, are not this check's.
     for (const c of ['python3 x.py payload/notes.md', 'bash tools/fix.sh --in=README.md', './tidy.sh', 'cd payload && node add.mjs index.md'])
+      expect({ c, r: await bash(c) }).toEqual({ c, r: undefined })
+  })
+  // #3323 (Dan, 2026-11-21, "Turn it round, with the list (Recommended)"): a program mod-kit's write
+  // reader does not know was read as writing nothing, so one handed LESSONS.md wrote it past this
+  // check. The reader now gives it as a run, so it is held as a script handed the file is; so is a
+  // listed program in a form of it that runs a program, and an unpack naming the file as a member.
+  // One of the programs Dan listed as only reading is not this check's, as before.
+  test('a program the write reader does not know handed LESSONS.md is held as a write of it; one that only reads is not (#3323)', async () => {
+    for (const c of ['mystery payload/LESSONS.md', 'prettier --write ~/.claude/LESSONS.md', '[[ -f payload/LESSONS.md ]]', 'rg --pre ./x rule payload/LESSONS.md', 'cd payload && tar -xf /tmp/a.tar LESSONS.md'])
+      expect({ c, r: await bash(c) }).toEqual({ c, r: 'write to LESSONS.md' })
+    for (const c of ['cat payload/LESSONS.md', 'grep -n L174 payload/LESSONS.md', 'rg rule payload/LESSONS.md', 'wc -l ~/.claude/LESSONS.md', '[ -f payload/LESSONS.md ]', 'mystery payload/notes.md', 'sleep 2'])
       expect({ c, r: await bash(c) }).toEqual({ c, r: undefined })
   })
   // #1682: a tool run through npx and a module run with python -m are runs too, so a formatter given

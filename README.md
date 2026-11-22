@@ -62,7 +62,10 @@ so an absolute path inside one is correct on both machines. The top-level rules 
 exception: they are merged entry by entry, so their bytes are left exactly as written, and a path
 in one of them should be a `~` path. `hooks/check-home-paths.sh` enforces that split. Its suite
 lists the checkout's synced files, so the gate before a push (`scanners-before-push.sh`) runs it as
-well as CI, over the checkout with no allowance for this Mac's own home (#1734).
+well as CI, over the checkout with no allowance for this Mac's own home (#1734). The gate runs
+before every push each suite with a line of code that lists the repository's files, through
+`hooks/lib/repo-files.sh` or git itself. A string or a heredoc holding either name counts as code,
+and a comment naming one selects nothing (#3409).
 
 A file stored that way never equals its payload copy byte for byte, so every comparison between the
 two sides goes through one view of the payload as it should look on THIS Mac. `claude-sync status`
@@ -610,6 +613,10 @@ one with each such library taken away. A library a gate loads with a stand in fu
 `this_mac_name` for `lib/this-mac.sh`, which only names the Mac in a record. Each gate is run with
 each examined one gone as well, and must decide its judged call as it does with the library in
 place. Until #2634 every stand in was optional by its shape, so no gate was ever run without one.
+The suite's tables of the gates it runs are held both ways against its scans of the settings: a
+gate the scans find and a table lacks fails, and so does a gate a table names that the scans no
+longer find, its registration removed or its refusal moved where they cannot see it, until the
+same change takes its row out (#3414). `--list-found` prints what the scans find in the tree.
 
 Before a Bash call the write gate also notes what an at risk `payload/` holds, in
 `~/.claude-payload-write-gate`, so that after the call it can name anything written there that the
@@ -5586,11 +5593,15 @@ The pull request checks say the same where a reviewer looks, not only in a part'
 hands its file on as the artifact `part-unmeasured-<part>`, a failing part included, and the `suite`
 job runs `tools/ci-unmeasured-summary.sh` over them: the run's summary page lists every suite that
 left a part untested, with the part that ran it and the reason the suite gave, and a notice titled
-`Not tested by the checks` on the pull request's checks carries the same list (capped at 40 lines,
-a limit the tool sets, not a measurement; the rest is on the summary). The run is compared, suite by suite, with the record of main's last green
+`Not tested by the checks` on the pull request's checks carries the same list. GitHub cuts a
+notice's message at 4,096 characters of the text it stores (measured on run 44826519963, where a
+list capped only by count was cut mid reason with nothing saying so), so the tool holds each notice
+to 4,000 bytes, never fewer than characters: it lists the whole parts that fit, in order, and when
+any are left out its last line says how many more there are and that the run's summary lists them
+all. The run is compared, suite by suite, with the record of main's last green
 full run, kept in the Actions cache under `claude-config-untested-main-`: a run that left more
 untested says so on the summary's first line and in a second notice,
-`Not tested by the checks and more than on main`. A part that handed back no record is named, and
+`Not tested by the checks and more than on main`, held to the same length the same way. A part that handed back no record is named, and
 such a run is neither compared nor kept as main's baseline. None of it can turn a run red: the tool
 exits 0 and every step it adds continues on an error. `merge-when-ready.sh` reads those notices back
 from each check's annotations before it merges and prints them, so a merge's log says what its green
@@ -7903,7 +7914,16 @@ a bash or zsh, and for a script a shell is given, that shell, so on a Mac whose 
 zsh only a `bash -c` or `sh -c` script is split), which the design round guard, ask before saving,
 the collision guard and scope modes' overnight LESSONS.md check judge as a write of each file
 (#1592), as winding down counts each among this session's uncommitted work (#1664), and which no
-build reads; and, apart in `byGit`, what git mv, git rm, a checkout of a path and git restore change
+build reads; since #3323 also, in `runs` and marked `unknown`, a program on none of the reader's
+lists that is handed a word that spells a path, read as a writer of that file and carrying `why` it
+was and the `remedy`, unless it is one of the 32 programs Dan signed off by name as only reading
+(`READ_ONLY`, an exemption list nothing joins without his sign off; the five forms of them that
+write a file or run a program, `rg --pre` and `file -C` among them, are read as writers), which the
+same guards judge as they do a script's arguments, while the area check leaves those runs out until
+gh has a reading of its own (#3412), and unpacking an archive (`tar -x`, `unzip`, `cpio -i`) as a
+write the words do not name into the folder it unpacks into, with each member it names as a file
+(the list, Dan's decisions and the limits are in docs/mods-design.md, "The programs that only
+read"); and, apart in `byGit`, what git mv, git rm, a checkout of a path and git restore change
 (a checkout or restore carrying `from`, where git puts the file back from, #1158; since #3337 each
 relative path placed in the working folder the command names by `--work-tree` or `GIT_WORK_TREE`
 when it runs outside that folder, and left in the folder the command runs in, where it was placed
@@ -9445,11 +9465,13 @@ reflection and issue review, the PR quiz, the lesson fan out notice and claude-s
 (written to its log instead) all stand down. `tests/test-sleep-silence.sh` derives every route that
 can reach Dan (settings hooks on turn end and waiting events, every mod's notifier, sound, question
 and classic Stop, Notification or PermissionRequest hook, claude-sync's `notify`) and fails on one
-that neither reads the sleep record nor sits on its exempt list with a reason, then runs each shell
-route asleep and awake, and runs the same way the one exempt settings route whose reason is that it
-prints nothing, the write gate on `PermissionDenied` (#3253). The night's report (#835),
-`~/Downloads/Sleep report <night>.md`, is written
-from the first minute of `/sleep` (start time ET, power, workers), rebuilt after every note, and
+that neither reads the sleep record nor sits on its exempt list with a reason. It also keeps a
+recorded list of the routes that read it, held both ways, so one that is no longer found, or no
+longer reads it, fails by name until the list changes in the same pull request (#3411). It then
+runs each shell route asleep and awake, and runs the same way the one exempt settings route
+whose reason is that it prints nothing, the write gate on `PermissionDenied` (#3253). The night's
+report (#835), `~/Downloads/Sleep report <night>.md`, is written from the first minute of `/sleep`
+(start time ET, power, workers), rebuilt after every note, and
 once more at wake or the limit with done read from GitHub and checked against the notes, sessions
 and claims that went quiet flagged, each rate limit wait and paid usage; every note, the noun's and
 the shell's `sleep_note` in `hooks/lib/sleep.sh` alike, goes through `hooks/lib/sleep-report.py`,
@@ -9522,7 +9544,8 @@ hook's request beneath it to run the call again (whether the session itself may 
 is "One unchanged resend after no verdict" in `payload/CLAUDE.md`, that rule's one home, #3224, and
 a call the check gave no verdict on that is sent again and runs is noted `redone`); and in every
 session the ban
-list in `hooks/overnight.ts` is refused by effect (issue, label and milestone writes, every gh write
+list in `hooks/overnight.ts` is refused by effect (issue, label and milestone writes, with one label
+on a PR excepted since #3439, below; every gh write
 but a comment, opening, readying, retitling or merging a PR on the checkout's own repository, any
 write whose repository cannot be resolved, whatever `rtk proxy` runs judged as the same command
 written plainly (mod-kit's reader reads it so for every mod since #2983, and a single word the shell
@@ -9611,7 +9634,30 @@ no status pending or failed. Anything GitHub does not answer, a base branch requ
 all, and a merge the night would not let run anyway (the repository waits, or a merge there deploys)
 refuse; any other `adminMerge` value makes the whole file unreadable. Dan's list, confirmed on
 2026-10-07, is in that file and summarised under "Sleep mode" below, without naming the
-repositories (#2112). At
+repositories (#2112). One label may be set on a PR overnight (#3439, judged in
+`hooks/requiredlabel.ts`): the label the repository's own merge gate requires. On 2026-11-21 the ban
+on PR labels refused `gh pr create ... --label changelog/technical` in a project where
+`require-changelog-tag.sh` refuses a merge without one changelog label, so the PR was opened without
+it, went green and waited ten and a half hours for the morning. Allowed now, on the checkout's own
+repository only: `gh pr create` with `--label` or `-l`, and `gh pr edit <number or the PR's own
+link> --add-label` on a PR the session's own record says it opened (the `opened` list winding down
+keeps, written from the link each `gh pr create` printed; GitHub's author is the same account for
+every session, so it cannot tell them apart), each naming exactly one label. Which labels is the
+gate's answer, never a list in the mod: the mod runs `node ~/.claude/hooks/lib/changelog-entry.js
+required-labels <owner/name>`, which answers `required` with every label the gate takes and whether
+each needs a sentence in the description, `not-required` for a repository nobody gated, or `unknown`
+with why (a registry missing or unreadable, a repository listed with no start date or a bad one). A
+label the gate says needs a sentence a manager reads (`changelog/visible`) may be set like the
+others (Dan, 2026-11-22, by picker: "Also allow changelog/visible"), so a session can merge
+overnight a PR whose changelog sentence he has not read. The gate still refuses that merge while
+the description has no such sentence, and the result of the call that sets the label says so, to
+the session or the agent that made it. Still refused, in the words it always was (`set labels
+or a milestone on a PR`), with the reason in brackets wherever the judge was reached: any other
+label, a second label beside it, `--remove-label`, a milestone, a PR the session did not open or
+does not name by number, a repository whose gate requires no label, a gate or a record that cannot
+be read, and every label write through `gh issue edit`, `gh label` or `gh api`. Both sides are
+held to one committed set of cases, `tests/gate-label-fixtures.ts`, read by the gate's suite and
+the mod's. At
 `/sleep` each repository a worker with a goal is in that the file does not decide is asked about
 (each question waits ten minutes, a chosen limit, not a measurement; the answer written into this
 Mac's own file, so it is asked once on each Mac; "Go to sleep, no more questions" asks nothing
@@ -10030,6 +10076,12 @@ repository's open structural issues naming a file, which the hold lists, the ses
 where it is in no checkout, or where the repository has no fast growing file and no structural issue
 naming a file. Removals, `touch`, `mkdir` and mode changes are not judged, and a
 program that builds its own file names (`node gen.js`) reads as writing nothing, so it is not held.
+Nor is what a program the write reader does not know is handed (`prettier --write src/big.ts` typed
+without `npx`), which the reader marks as a run since #3323: the area check leaves those runs out
+until gh has a reading of its own (#3412; Dan, 2026-11-21, after a count found gh handed an option's
+value that names a folder in 633 past calls in 35 days), so it judges such a command as it did
+before, while an archive unpacked (`tar -x`, `unzip`, `cpio -i`) is judged as a write whose files
+cannot be named, in the checkout of the folder it unpacks into, and a member it names as that file.
 A command reaching a whole folder (a `find -exec` over it, a folder handed to a script) is held once
 for the folder (#2920): every held file under it is named in one refusal, and one decision covers
 them all, each file claimed and decided on record, where it was held once per file, each needing its
@@ -10593,7 +10645,11 @@ reaches 95 percent; if it is already there when sleep starts, each session stops
 end and the report says why.
 
 **What it will not do overnight.** Ask you anything; file or edit issues, labels or milestones
-(a comment is allowed); add lessons; merge or deploy anywhere the list below says wait, or anywhere it has no
+(a comment is allowed, and so is the one label a project's own merge gate requires on a pull
+request the session opened, such as `changelog/technical` or `changelog/visible` where a merge is
+refused without a changelog label; a pull request labelled `changelog/visible` can then merge
+overnight with a changelog sentence you have not read, as you chose on 2026-11-22); add lessons;
+merge or deploy anywhere the list below says wait, or anywhere it has no
 answer for; push straight to a default branch; force push or delete branches; switch branches in
 your main checkout; write to a database (Supabase, psql); use claude.ai, Chrome or PostHog tools that
 write; run `claude-sync` pull or install; retry anything Claude Code's own safety check refused; or

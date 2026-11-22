@@ -88,6 +88,8 @@ import {
   stands,
   withoutPythonText,
   writesWhat,
+  unknownRemedy,
+  type HandedUnknown,
 } from './rules.ts'
 
 // Ask before saving (claude-config#618). Before a standing rule reaches lasting memory, by Write,
@@ -168,7 +170,7 @@ type ScopeModes = {
 // modes, which reads the one sleep record, and refused without asking him. Answers the refusal, or
 // null while awake. Scope modes not loaded, or a check that fails, is awake: the save is asked about
 // as usual, and a question while asleep is refused by scope modes itself.
-const whileAsleep = async ($: EngineInterface, { files, guessed, handed }: Targets, rule: string): Promise<string | null> => {
+const whileAsleep = async ($: EngineInterface, { files, guessed, handed, unknown }: Targets, rule: string): Promise<string | null> => {
   // The noun is spelled out at each call, as the engine requires.
   try {
     if (!(await ($ as unknown as { scopeModes: ScopeModes }).scopeModes.isAsleep())) return null
@@ -176,7 +178,9 @@ const whileAsleep = async ($: EngineInterface, { files, guessed, handed }: Targe
     return null
   }
   const where = files.join(', ')
-  const head = `Not saved: ${writesWhat(files, guessed, handed)}, and Dan is asleep (sleep mode), so he is not asked tonight.`
+  // What to do about a program the write reader does not know (#3323), where the save hands it one.
+  const remedy = unknownRemedy(handed, unknown).trimEnd()
+  const head = `Not saved: ${writesWhat(files, guessed, handed, unknown)}, and Dan is asleep (sleep mode), so he is not asked tonight.${remedy ? ` ${remedy}` : ''}`
   const tail = 'Do not write it any other way; carry on with the rest of the work.'
   try {
     const r = await ($ as unknown as { scopeModes: ScopeModes }).scopeModes.sleepNote({ kind: 'save', files, rule })
@@ -223,7 +227,7 @@ const isSetIn = async ($: EngineInterface, home: string): Promise<IsSet> => {
 // The files a call would save lasting memory to, and among them those taken only from what a Bash
 // command mentions, since its words do not name the file it writes (#940), and those found only as a
 // file handed to a script as its argument (#1592), each of which the refusal says.
-type Targets = { files: string[]; guessed: string[]; handed: string[] }
+type Targets = { files: string[]; guessed: string[]; handed: string[]; unknown: HandedUnknown[] }
 
 // A Bash command as its mentions are read (#940): each python program in it that only writes files,
 // found in the command as written, with the lasting memory its comments and sentences name taken out
@@ -297,7 +301,7 @@ const lastingTargets = async ($: EngineInterface, tool: string, input: Record<st
   const inCheckout: InCheckout = async abs => (await $.modkit.workingTree({ path: abs })) !== null
   if (tool !== 'Bash') {
     const abs = resolvePath(String(input.file_path ?? ''), cwd, home)
-    return { files: (await lastingMemory(abs, home, inCheckout)) ? [display(abs, home)] : [], guessed: [], handed: [] }
+    return { files: (await lastingMemory(abs, home, inCheckout)) ? [display(abs, home)] : [], guessed: [], handed: [], unknown: [] }
   }
   const command = String(input.command ?? '')
   const isSet = await isSetIn($, home)
@@ -306,7 +310,8 @@ const lastingTargets = async ($: EngineInterface, tool: string, input: Record<st
   const text = mentionsAny(command) ? await mentionText($, command) : command
   const guessed: string[] = []
   const handed: string[] = []
-  const out = await lastingFiles(w, home, inCheckout, command, isSet, { text, guessed, handed })
+  const unknown: HandedUnknown[] = []
+  const out = await lastingFiles(w, home, inCheckout, command, isSet, { text, guessed, handed, unknown })
   for (const u of w.unnamed) {
     // A program whose text names every file it writes is judged by those files, never by every path
     // its text quotes (#830: a heredoc editing a test file quoted a memory path as test data).
@@ -353,7 +358,7 @@ const lastingTargets = async ($: EngineInterface, tool: string, input: Record<st
         out.push(m)
         guessed.push(m)
       }
-  return { files: out, guessed, handed }
+  return { files: out, guessed, handed, unknown }
 }
 
 // What would be saved, as the rule's text: a new file's whole text, the lines a rewrite adds, an
@@ -619,9 +624,9 @@ const lapsedNote = (x: AskBeforeSavingApproval) =>
     : `Dan's earlier ${pressed(x)} on this save lapsed after ${MINUTES} minutes unused, so he has to be asked again.`
 
 // What a subagent is told when its write would save lasting memory: refused, never asked (#777).
-const agentRefusal = ({ files, guessed, handed }: Targets) =>
+const agentRefusal = ({ files, guessed, handed, unknown }: Targets) =>
   (guessed.length || handed.length
-    ? `Not saved: ${writesWhat(files, guessed, handed)}. Only the main session may write it, after asking Dan; a subagent never asks him. `
+    ? `Not saved: ${writesWhat(files, guessed, handed, unknown)}. ${unknownRemedy(handed, unknown)}Only the main session may write it, after asking Dan; a subagent never asks him. `
     : `Not saved: this would write lasting memory (${files.join(', ')}), which only the main session may do, after asking Dan; a subagent never asks him. `) +
   `If this is not a save to memory (a test fixture, or a file whose text only mentions one), make the change with Edit or Write on the file itself. ` +
   `If it is a standing rule, put the rule and the file in your final report, and the main session will ask him.`
@@ -872,7 +877,7 @@ const saveCheck: Hook<'tool.check'> = async ($, e, next) => {
   // the Edit route named, where the write is read. No question waits, so no For good can be given.
   if (byShell) {
     const file = display(lessonsFile(at.home), at.home)
-    const how = { guessed: targets.guessed.includes(file), handed: targets.handed.includes(file) }
+    const how = { guessed: targets.guessed.includes(file), handed: targets.handed.includes(file), unknown: targets.unknown }
     return { decision: 'deny', reason: byShellOnly(file, how, files.filter(f => f !== file)) }
   }
   // A write to a lessons file that could not be read (#3343 route 2): what it takes out cannot be
@@ -889,7 +894,7 @@ const saveCheck: Hook<'tool.check'> = async ($, e, next) => {
   await update($, pendingRef, p => [...(p ?? []).filter(x => x.key !== key), q])
   // What the write takes out of the lessons file, moves or renames (#3343 route 2): the question
   // must name each, and is refused where it is asked until it does, so the instruction says which.
-  const asked = askInstruction(id, files, targets.guessed, targets.handed, factsAsk(tool, edit.facts))
+  const asked = askInstruction(id, files, targets.guessed, targets.handed, factsAsk(tool, edit.facts), targets.unknown)
   // A shell command to an index a cover stands for, not read as a plain append (#2181): said first.
   const unread = byCover && 'unread' in byCover ? byCover.unread : []
   const ask = unread.length ? `${notAnAppendNote(unread.map(c => ({ name: c.name, files: c.files })), files[0] ?? '')} ${asked}` : asked

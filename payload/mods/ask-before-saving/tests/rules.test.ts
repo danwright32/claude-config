@@ -3,6 +3,7 @@ import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { pipeline } from './mod-kit/hooks/commands.ts'
 import { byShellOnly, lessonsByShell, pickerOnly } from '../hooks/rules.ts'
+import { unknownRemedy, type HandedUnknown } from '../hooks/rules.ts'
 import { NO_FACTS, cannotHold, cannotName, coversFacts, entriesTouched, factNames, factsAsk, factsSaid, heldToFacts, lessonFacts, notCovered, unnamed, unshownName } from '../hooks/rules.ts'
 import { SHAPED, entryOf, without } from './lessons-shaped.ts'
 import { LESSON_SHORT_KEY, MAX_CHECK, MAX_QUESTION, MAX_QUESTION_ROWS, MAX_SHORT, MAX_SHORT_TEXT, QUESTION_COLUMNS, addsThis, askFault, checkLine, editedFile, indexLineAdded, linksOnlyTo, memoryFileOf, readCheckLine, readShortLine, rowsAt, ruleText, shellAppended, shortLine, shownFault, unseenIn } from '../hooks/rules.ts'
@@ -425,6 +426,38 @@ test('a lasting memory file handed to a script counts, marked as handed, and is 
   expect(writesWhat(['~/b/AGENTS.md', '~/a/CLAUDE.md'], [], ['~/a/CLAUDE.md'])).toBe(
     'this writes lasting memory (~/b/AGENTS.md), and it hands lasting memory (~/a/CLAUDE.md) to a script, which may write it',
   )
+})
+
+// #3323 (Dan, 2026-11-21, "Turn it round, with the list (Recommended)"): mod-kit's reader gives a
+// program it does not know as a run marked unknown, with why it was read as a writer and what to do.
+// A lasting memory file handed to one counts as one handed to a script does, and is said as handed
+// to that program by name, never "to a script", with the reader's why; its remedy is a sentence of
+// its own in every refusal.
+test('a lasting memory file handed to a program the write reader does not know counts, and is said as handed to that program, with why and what to do (#3323)', async () => {
+  const { inCheckout } = checkouts()
+  const why = 'prettier is a program the mods do not know, so what it does with a file it is handed cannot be read before it runs'
+  const remedy = 'To only read a file, use a program the mods know only reads. If prettier only reads too, ask Dan to add it to that list: only he may.'
+  const runs = [{ script: 'prettier', unknown: true as const, why, remedy, args: [{ word: 'CLAUDE.md', path: `${'/Users'}/dan/Apps/slate/CLAUDE.md` }, { word: 'notes.md', path: `${'/Users'}/dan/Apps/slate/notes.md` }] }]
+  const read = { handed: [] as string[], guessed: [] as string[], unknown: [] as HandedUnknown[] }
+  expect(await lastingFiles({ files: [], unnamed: [], runs }, HOME, inCheckout, 'prettier CLAUDE.md notes.md', undefined, read)).toEqual(['~/Apps/slate/CLAUDE.md'])
+  const by = [{ file: '~/Apps/slate/CLAUDE.md', program: 'prettier', why, remedy }]
+  expect(read).toEqual({ handed: ['~/Apps/slate/CLAUDE.md'], guessed: [], unknown: by })
+  const file = '~/Apps/slate/CLAUDE.md'
+  expect(writesWhat([file], [], [file], by)).toBe(`this hands lasting memory (${file}) to prettier, which may write it (${why})`)
+  // One handed to a script and one to such a program, each said as what it is.
+  expect(writesWhat(['~/a/AGENTS.md', file], [], ['~/a/AGENTS.md', file], by)).toBe(
+    `this hands lasting memory (~/a/AGENTS.md) to a script, which may write it, and lasting memory (${file}) to prettier, which may write it (${why})`,
+  )
+  // With none handed to such a program, every sentence is as it was.
+  expect(writesWhat([file], [], [file], [])).toBe(`this hands lasting memory (${file}) to a script, which may write it`)
+  expect(unknownRemedy([file], by)).toBe(`${remedy} `)
+  expect(unknownRemedy([file], [])).toBe('')
+  expect(unknownRemedy([], by)).toBe('')
+  const asked = askInstruction('toolu_9', [file], [], [file], '', by)
+  expect(asked).toContain(`Not saved yet: this hands lasting memory (${file}) to prettier, which may write it (${why}), so Dan decides first. ${remedy} Ask him now with AskUserQuestion`)
+  // The installed lessons file, which a shell command is never asked For good about.
+  const lessons = byShellOnly('~/.claude/LESSONS.md', { handed: true, unknown: [{ ...by[0]!, file: '~/.claude/LESSONS.md' }] }, [])
+  expect(lessons).toContain(`this hands lasting memory (~/.claude/LESSONS.md) to prettier, which may write it (${why}). ${remedy} What a shell command does to a lesson entry`)
 })
 
 // #3343: whether the installed lessons file is among a shell command's lasting memory. That file by
