@@ -221,6 +221,86 @@ run "bash eval-shift.sh lib/calm.sh lib/posts.sh"; refused "#3395 an eval that s
 printf '%s\n' 'case "$MODE" in' '  a) shift; L="$1" ;;' '  *) L="$1" ;;' 'esac' '. "$L"' > "$G/case-shift.sh"
 run "bash case-shift.sh lib/calm.sh lib/posts.sh"; refused "#3395 a case whose branch shifts before it reads \$1 is still refused"
 
+echo "slack drafts only: a # inside a word hides nothing from the reading of a script's \$1 (claude-config#3451)"
+# Where a script's $1 stops being the command line's is read from its text with the comments left
+# out (lib/script-params.py, params_end). That reading took every # after white space for a
+# comment, so one inside a quoted string hid the rest of its line, and a shift, a set --, an eval
+# or a sourced file written there was not seen: the script's $1 was still taken to be the command
+# line's. Each script below sources "$1/lib/x.sh", and only hot/lib/x.sh posts.
+# Seen to fail on 2026-11-22 against the reading as it was: every `hashed` case but the two evals
+# and the one whose # is inside a word was ALLOWED (exit 0, nothing said), the gate having read
+# calm/lib/x.sh where the script sources hot/lib/x.sh. The hardest form is `bash <script> calm`,
+# the script being `echo 'see # 3'; set -- hot` and then `. "$1/lib/x.sh"`: no word of the command
+# names the file that posts.
+mkdir -p "$G/calm/lib" "$G/hot/lib"
+printf '%s\n' 'echo ok' > "$G/calm/lib/x.sh"
+printf '%s\n' "$POST" > "$G/hot/lib/x.sh"
+READS='. "$1/lib/x.sh"'
+Q=0; PLAIN_RC=0; PLAIN_ERR=""; PLAIN_NAME=""; PLAIN_LINE=""; PLAIN_WORDS=""
+# plain <what> <first line> <words>: the control, a script with no # in it, run with those words.
+plain() {
+  Q=$((Q + 1)); PLAIN_NAME="q3451-$Q"; PLAIN_LINE="$2"; PLAIN_WORDS="$3"
+  printf '%s\n' "$2" "$READS" > "$G/$PLAIN_NAME.sh"
+  run "bash $PLAIN_NAME.sh $3"; PLAIN_RC="$RC"; PLAIN_ERR="$ERR"
+  refused "#3451 the control, $1 with no # before it, is refused"
+}
+# hashed <what> <first line>: the same script with a # that starts no comment written before the
+# word, run with the control's words, is judged exactly as the control is: the same exit and the
+# same refusal, once the script's name and the line a refusal quotes are put back to the control's.
+hashed() {
+  local said
+  Q=$((Q + 1))
+  printf '%s\n' "$2" "$READS" > "$G/q3451-$Q.sh"
+  run "bash q3451-$Q.sh $PLAIN_WORDS"
+  refused "#3451 $1 is refused"
+  said="${ERR//q3451-$Q/$PLAIN_NAME}"; said="${said//"$2"/$PLAIN_LINE}"
+  if [ "$RC" -eq "$PLAIN_RC" ] && [ "$said" = "$PLAIN_ERR" ]; then check "#3451 $1 is judged as the same script with no # in it is" ok
+  else check "#3451 $1 is judged as the same script with no # in it is" "exit $RC against $PLAIN_RC: ${ERR:0:300}"; fi
+}
+plain "a shift" "echo 'see 3'; shift" "calm hot"
+says "#3451 the control for a shift is refused because \$1 is no longer certain" "\$1 is not certain there"
+hashed "a shift after a # in single quotes" "echo 'see # 3'; shift"
+hashed "a shift after a # in double quotes" 'echo "see # 3"; shift'
+hashed "a shift after a # in a \$'...' string" "echo \$'see # 3'; shift"
+hashed "a shift after a # that an escaped space joins to its word" 'echo see\ # 3; shift'
+# A # inside a word never started a comment, and still does not: the shift after these is seen
+# (green before this reading was changed, and after).
+hashed "a shift after a#b, \$# and \${#X}" 'echo a#b $# ${#X}; shift'
+plain "a shift after a string of two lines" "X='see"$'\n'" 3'; shift" "calm hot"
+hashed "a shift after a # in a string that began on the line before" "X='see"$'\n'" # 3'; shift"
+plain "a shift after a line joined by a backslash" 'echo see\'$'\n''3; shift' "calm hot"
+hashed "a shift after a # that a line joined by a backslash puts inside a word" 'echo see\'$'\n''#3; shift'
+plain "a set --" "echo 'see 3'; set -- hot" "calm"
+hashed "a set -- after a # in single quotes, the file that posts named by no word of the command," "echo 'see # 3'; set -- hot"
+hashed "a set -- after a # in double quotes" 'echo "see # 3"; set -- hot'
+# The two evals were refused before too, at the eval, but with the script's $1 taken as known.
+plain "an eval" "echo 'see 3'; eval \"\$PREPARE\"" "calm"
+hashed "an eval after a # in single quotes" "echo 'see # 3'; eval \"\$PREPARE\""
+hashed "an eval after a # in double quotes" 'echo "see # 3"; eval "$PREPARE"'
+plain "a sourced file" "echo 'see 3'; . lib/shifter.sh" "calm hot"
+hashed "a sourced file after a # in single quotes" "echo 'see # 3'; . lib/shifter.sh"
+hashed "a sourced file after a # in double quotes" 'echo "see # 3"; . lib/shifter.sh'
+plain "a shift in a case branch" 'case "$MODE" in "a b") shift ;; esac' "calm hot"
+hashed "a shift after a # in a quoted case pattern" 'case "$MODE" in "a # b") shift ;; esac'
+
+# A real comment is still left out, so the words in it end nothing (the control that must not
+# change: each of these passed and was refused the same way before this reading was changed).
+# reads <what> <first lines...>: $1 is still the command line's, so the file under it is read:
+# allowed where that file does not post, and refused, naming the post, where it does.
+reads() {
+  local what="$1"; shift
+  Q=$((Q + 1))
+  printf '%s\n' "$@" "$READS" > "$G/q3451-$Q.sh"
+  run "bash q3451-$Q.sh calm"; allowed "#3451 $what: the script is read with its \$1, and passes where the file under it does not post"
+  run "bash q3451-$Q.sh hot";  refused "#3451 $what: and is refused where it does"
+  says "#3451 $what: by the post found in the file under \$1" "$FOUND"
+}
+reads "a comment after a command that names shift and set --" 'echo see # shift 3; set -- hot'
+reads "a line that is only a comment naming shift, eval and a loop" '# shift the words along, eval them, for each' '  # and set -- none'
+reads "a comment inside a substitution that spans lines" 'X="$(' '  # shift nothing here' '  echo ok' ')"'
+reads "a # inside a word, with no comment and no shift after it," 'echo a#b $# ${#X}'
+reads "a comment after a quoted string that holds a #" "echo 'see # 3' # shift 3"
+
 echo "slack drafts only: a script's \$0 and \$1 are taken up only where a sourced path needs them (claude-config#3395)"
 # Seen to fail on 2026-11-22 against the first form of this change, which gave every command of a
 # script its $1 and every variable its $0: each of the three scripts below passes on the base
@@ -445,7 +525,7 @@ elif [ ! -f "$DIR/lib/exact-output.py" ]; then
 else
   # No sed here answers as sed does: a state this suite cannot set, so it is said UNMEASURED on the
   # runner's one line for that, never a pass and never a failure (L411, run-all-tests.sh #1444).
-  echo "SUITE-PART-UNMEASURED #3395 the emulation against sed: printf a | sed s/a/b/ did not print b here, so there is no sed to hold the emulation to"
+  echo "SUITE-PART-UNMEASURED #3395: the emulation against sed: printf a | sed s/a/b/ did not print b here, so there is no sed to hold the emulation to"
 fi
 
 echo "slack drafts only: a file as a commit holds it, written by git show and then run (claude-config#3395)"
@@ -560,7 +640,7 @@ if git -C "$R" init -q 2>/dev/null && cp "$G/lib/posts.sh" "$G/lib/calm.sh" "$R/
 else
   # git could not make and commit to a repository here, a state this suite cannot set: said on the
   # runner's one line for that, never a failure (L411, run-all-tests.sh #1444).
-  echo "SUITE-PART-UNMEASURED #3395 git show of a commit's file: git could not make a repository with one commit under $T"
+  echo "SUITE-PART-UNMEASURED #3395: git show of a commit's file: git could not make a repository with one commit under $T"
 fi
 
 echo "slack drafts only: what cat, cp, tee and the rest write is believed only of the system's own program (claude-config#3440)"
