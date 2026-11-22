@@ -2670,8 +2670,9 @@ of 1,355,198 for the Slack gate's suite. And a place typed after a `#` that may 
 its line is not probed, so it is never at the top: a probe written into a comment ends the comment,
 the rest of the line is read as commands, and a `}` there closed a group the script never closed,
 after which a definition or a read in command inside a function read as standing at the top (so on
-the branch before this fix too). A `#` inside a quoted string is taken for a comment as well, which
-only judges. Left open, as it was: a file the guard
+the branch before this fix too). The same holds for the places the folder variable is assigned
+(`ownFolder`), and one check (`maybeComment`) serves all three readings. A `#` inside a quoted
+string is taken for a comment as well, which only judges. Left open, as it was: a file the guard
 did not read, read in at the top of the script above the definition, could define a function under
 another name that, called below the definition, defines the helper's name again. Judging whenever
 such a file is read in closes it and was measured on the same 47 calls, not built: it clears 0 of
