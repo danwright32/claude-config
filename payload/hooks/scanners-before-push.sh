@@ -20,10 +20,12 @@
 # failure this repo keeps removing (L96, L41).
 #
 # The rule is deliberately different at the two levels, and the reason is the cost of being wrong.
-# A whole suite that mentions git ls-files anywhere is run, because a false positive there costs a
-# few seconds. Inside a suite that supports SECTION_ONLY, only the sections that enumerate by
-# GLOBBED PATHSPEC are run, because a bare listing inside such a suite is nearly always a fixture
-# repository it built itself, and each false positive there costs a section run plus the prelude.
+# A whole suite that names git ls-files on any line of its code is run, a string or a heredoc
+# included, because a false positive there costs a few seconds; a comment naming it does not count
+# (claude-config#3409, at the mark below). Inside a suite that supports SECTION_ONLY, only the
+# sections that enumerate by GLOBBED PATHSPEC are run, because a bare listing inside such a suite is
+# nearly always a fixture repository it built itself, and each false positive there costs a section
+# run plus the prelude.
 # `--list` prints the selection without running any of it, so what this gate covers can be read
 # without paying for it (L102).
 #
@@ -632,9 +634,38 @@ fi
 #
 # A scanner is recognised by how it lists the repository: through lib/repo-files.sh, the one way
 # the scanners here do it, or by asking git directly, which a scanner elsewhere may still do.
+#
+# THE MARK IS READ FROM A SUITE'S CODE LINES, never from a comment (claude-config#3409). It was read
+# from the whole text, so one comment quoting another suite's command put a suite that lists nothing
+# on every push, where it took 91 seconds of the budget on the one push measured (2026-11-19,
+# claude-config#3270), while the walker rule and the exclusion below already read code lines only.
+# Counted before the change, on 2026-11-22: of the 38 suites the mark selected, all 38 carry it on a
+# code line and none only in a comment, so the selection did not move.
+#
+# A CODE LINE is one that does not begin, after any blanks, with a hash, and _sc_code_lines is the
+# one reading of that for every recogniser here. So whatever is not plainly a comment line counts,
+# and for the mark that leans toward running the suite: a comment after code on the same line, the
+# body of a heredoc and a quoted string all select it. A scanner that is missed says nothing, and a
+# suite run needlessly costs seconds. The one reading that leans the other way is a line beginning
+# with a hash inside a heredoc or a string that runs over several lines, read as a comment, as it
+# is in the shell, Python and awk the heredocs here hold.
+#
+# Read as text in the C locale. Without that a suite holding a NUL (or, under GNU grep, a byte that
+# is not UTF-8) comes back as one line saying the file matched, in place of its lines (L329,
+# measured 2026-11-22 with this Mac's grep), and a scanner with a real call would be missed.
 _sc_phase "listing the repository's test suites and choosing the scanners among them"
 REPO_FILES="$HOOK_DIR/lib/repo-files.sh"
 SCANS='ls-files|repo-files[.]sh'
+_sc_code_lines(){   # $1 = a file -> its code lines
+  LC_ALL=C grep -a -v '^[[:space:]]*#' "$1" 2>/dev/null
+}
+# The whole text first, which costs one grep for the suites that name no listing at all, and is all
+# most of them need. Then the code lines, from a here string, never a pipe into grep -q, which
+# leaves on its first hit and under pipefail reports the match as a failure (L183).
+_sc_lists_repo(){   # $1 = a suite -> 0 when a code line of it lists the repository's files
+  grep -qE "$SCANS" "$1" 2>/dev/null || return 1
+  grep -qE "$SCANS" <<< "$(_sc_code_lines "$1")"
+}
 suites="$(bash "$REPO_FILES" . '*test-*.sh' 2>/dev/null)"
 # The uncommitted files, counted for the line saying what the scanners read; the key is built from
 # the wider listing just below (#1910). A listing that fails leaves their number UNKNOWN, said in
@@ -677,7 +708,7 @@ _sc_walks_tree(){   # $1 = code lines -> 0 when they walk a tree
 _sc_walks_checkout(){   # $1 = a suite -> 0 when it finds its checkout and walks a tree
   local code d p b c progs
   grep -q 'checkout-root[.]sh' "$1" 2>/dev/null || return 1
-  code="$(grep -v '^[[:space:]]*#' "$1" 2>/dev/null)"
+  code="$(_sc_code_lines "$1")"
   case "$code" in *checkout-root.sh*) ;; *) return 1 ;; esac
   _sc_walks_tree "$code" && return 0
   case "$1" in */*) d="${1%/*}" ;; *) d=. ;; esac
@@ -687,7 +718,7 @@ _sc_walks_checkout(){   # $1 = a suite -> 0 when it finds its checkout and walks
     b="${p##*/}"
     for c in "$d/$b" "$d/lib/$b"; do
       [ -f "$c" ] || continue
-      _sc_walks_tree "$(grep -v '^[[:space:]]*#' "$c" 2>/dev/null)" && return 0
+      _sc_walks_tree "$(_sc_code_lines "$c")" && return 0
     done
   done <<PROGS
 $progs
@@ -700,7 +731,7 @@ walkers=""
 while IFS= read -r s; do
   [ -n "$s" ] || continue
   [ -f "$s" ] || continue
-  if grep -qE "$SCANS" "$s" 2>/dev/null; then _sc_kind=scan
+  if _sc_lists_repo "$s"; then _sc_kind=scan
   elif _sc_walks_checkout "$s"; then _sc_kind=walk
   else continue
   fi
@@ -713,7 +744,7 @@ while IFS= read -r s; do
   # Only a line of CODE naming it counts. A comment that merely mentions this gate used to drop
   # its suite from the gate's selection, silently, which is how the pipefail ratchet fell out of it
   # the day a comment about this file was added there (claude-config#522).
-  _code="$(grep -v '^[[:space:]]*#' "$s" 2>/dev/null)"
+  _code="$(_sc_code_lines "$s")"
   case "$_code" in *"$(basename "${BASH_SOURCE[0]}")"*) continue ;; esac
   if [ "$_sc_kind" = scan ]; then scanners="$scanners$s"$'\n'; else walkers="$walkers$s"$'\n'; fi
 done <<EOF
@@ -728,9 +759,11 @@ fi
 
 # The sections of a suite that scan: those holding a listing asked for by GLOBBED pathspec. The
 # heading a scan sits under is read from the file, so a section added later is covered the day it
-# lands. Written once, for the run and for the list of what would run.
+# lands. Written once, for the run and for the list of what would run. From the suite's code lines,
+# like the mark above (claude-config#3409): a comment quoting a listing picks no section.
 scanning_sections(){   # $1 = a suite that supports SECTION_ONLY -> its scanning section titles
-  awk -v pat="(ls-files|repo-files[.]sh[^']*) '[*]" '/^section "/ { sec = $0 } $0 ~ pat { if (sec != "") print sec }' "$1" 2>/dev/null \
+  _sc_code_lines "$1" \
+    | awk -v pat="(ls-files|repo-files[.]sh[^']*) '[*]" '/^section "/ { sec = $0 } $0 ~ pat { if (sec != "") print sec }' 2>/dev/null \
     | sed 's|^section "||; s|"$||' | sort -u
 }
 

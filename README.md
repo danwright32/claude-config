@@ -62,7 +62,10 @@ so an absolute path inside one is correct on both machines. The top-level rules 
 exception: they are merged entry by entry, so their bytes are left exactly as written, and a path
 in one of them should be a `~` path. `hooks/check-home-paths.sh` enforces that split. Its suite
 lists the checkout's synced files, so the gate before a push (`scanners-before-push.sh`) runs it as
-well as CI, over the checkout with no allowance for this Mac's own home (#1734).
+well as CI, over the checkout with no allowance for this Mac's own home (#1734). The gate runs
+before every push each suite with a line of code that lists the repository's files, through
+`hooks/lib/repo-files.sh` or git itself. A string or a heredoc holding either name counts as code,
+and a comment naming one selects nothing (#3409).
 
 A file stored that way never equals its payload copy byte for byte, so every comparison between the
 two sides goes through one view of the payload as it should look on THIS Mac. `claude-sync status`

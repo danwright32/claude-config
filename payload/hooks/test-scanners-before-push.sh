@@ -813,6 +813,68 @@ o12="$(fire "$R11" "git push")"; c12=$?
   && check "a scanner that only mentions this gate in a comment is still run" ok \
   || check "a scanner that only mentions this gate in a comment is still run" "exit=$c12 out=$o12"
 
+# --- THE MARK IS READ FROM A SUITE'S CODE LINES, never from a comment (claude-config#3409). The gate
+#     read the lister's name anywhere in a suite's text, so one comment quoting another suite's
+#     command put a suite that lists nothing on every push (claude-config#3270), while the walker
+#     rule and the exclusion above already read code lines only. A code line is what those two call
+#     one: a line that does not begin, after any blanks, with a hash.
+#
+#     On a real push first. The quoted suite fails if it is run, and names the lister only in
+#     comments, one of them indented; the called suite passes and really lists.
+RMC="$(mkrepo markcode)"
+printf '#!/usr/bin/env bash\n# the scan beside this one lists with lib/repo-files.sh\n  # and it used to ask: git ls-files\necho "quoted ran"\nexit 1\n' > "$RMC/payload/hooks/test-quoted.sh"
+printf '#!/usr/bin/env bash\n# lists through lib/repo-files.sh\nbash "$LIB/repo-files.sh" . >/dev/null\necho "called ran"\nexit 0\n' > "$RMC/payload/hooks/test-called.sh"
+commit_all "$RMC"
+omc="$(fire "$RMC" "git push")"; cmc=$?
+[ "$cmc" -eq 0 ] \
+  && check "#3409 a suite that names the lister only in comments is not run before a push" ok \
+  || check "#3409 a suite that names the lister only in comments is not run before a push" "exit=$cmc out=$omc"
+# Every boundary, read from the listing, which runs none of them. Whatever is not plainly a comment
+# line SELECTS the suite, because a scanner that is missed says nothing and one run needlessly costs
+# seconds: a comment after code on the same line, the body of a heredoc, a quoted string, and a file
+# holding a byte grep takes for binary (a NUL makes this Mac's grep print one line saying the file
+# matched in place of its lines, L329, measured 2026-11-22, so the code lines are read as text).
+printf '#!/usr/bin/env bash\ncount=0   # as git ls-files would count them\nexit 0\n' > "$RMC/payload/hooks/test-trailing.sh"
+printf '#!/usr/bin/env bash\ncat > "$T/fake-git" <<FAKE\ncase "\\$1" in ls-files) exit 128 ;; esac\nFAKE\nexit 0\n' > "$RMC/payload/hooks/test-heredoc.sh"
+printf '#!/usr/bin/env bash\necho "lib/repo-files.sh gave nothing, so nothing was read"\nexit 0\n' > "$RMC/payload/hooks/test-instring.sh"
+printf '#!/usr/bin/env bash\nsep="\000"\ngit ls-files >/dev/null\nexit 0\n' > "$RMC/payload/hooks/test-nulbyte.sh"
+# The one reading that leans the other way, said here so it is a decision somebody can see: a line
+# beginning with a hash INSIDE a heredoc is read as a comment, exactly as the two other recognisers
+# read it. In the shell, Python and awk the heredocs here hold, such a line is a comment too.
+printf '#!/usr/bin/env bash\ncat > "$T/notes" <<NOTES\n# git ls-files\nNOTES\nexit 0\n' > "$RMC/payload/hooks/test-hashdoc.sh"
+# A suite whose comment names the lister and whose code walks its checkout is a walker, run when a
+# push changes a suite, and no longer a scanner every push runs.
+printf '#!/usr/bin/env bash\n# git ls-files would miss the drafts\nROOT="$(bash "$DIR/lib/checkout-root.sh" "$DIR/..")"\npython3 -c "import os, sys; list(os.walk(sys.argv[1]))" "$ROOT"\nexit 0\n' > "$RMC/payload/hooks/test-walknote.sh"
+# Inside a suite that runs by section, a section is picked by the same code lines: the first holds
+# the globbed listing only in a comment, the second really makes it. The variable is written in two
+# pieces so this suite's own text does not hold it.
+printf '#!/usr/bin/env bash\n# runs one section when SECTION_%s names it\nsection "talks about a scan"\n# it used to run: git ls-files '"'"'*.sh'"'"'\nsection "really scans"\ngit ls-files '"'"'*.sh'"'"' >/dev/null\nexit 0\n' ONLY > "$RMC/payload/hooks/test-parts.sh"
+commit_all "$RMC"
+_ml="$(printf '{"tool_name":"Bash","tool_input":{"command":"git push"},"cwd":"%s"}' "$RMC" | SCANNERS_LIST=1 bash "$H" 2>&1)"
+grep -q 'test-quoted[.]sh' <<< "$_ml" \
+  && check "#3409 and the listing does not name it, as a scanner or as anything else" "got=$_ml" \
+  || check "#3409 and the listing does not name it, as a scanner or as anything else" ok
+grep -q -x 'SUITE payload/hooks/test-called.sh' <<< "$_ml" \
+  && check "#3409 a suite whose code calls the lister is still selected, a comment beside the call or not" ok \
+  || check "#3409 a suite whose code calls the lister is still selected, a comment beside the call or not" "got=$_ml"
+for _mb in "trailing:a comment after code on the same line" "heredoc:the body of a heredoc" "instring:a quoted string" "nulbyte:a real call in a file holding a NUL byte"; do
+  grep -q -x "SUITE payload/hooks/test-${_mb%%:*}.sh" <<< "$_ml" \
+    && check "#3409 the lister named in ${_mb#*:} selects the suite" ok \
+    || check "#3409 the lister named in ${_mb#*:} selects the suite" "got=$_ml"
+done
+grep -q 'test-hashdoc[.]sh' <<< "$_ml" \
+  && check "#3409 a line beginning with a hash inside a heredoc is read as a comment, as the other recognisers read it" "got=$_ml" \
+  || check "#3409 a line beginning with a hash inside a heredoc is read as a comment, as the other recognisers read it" ok
+[ "$(grep 'test-walknote[.]sh' <<< "$_ml")" = 'WHEN-A-SUITE-CHANGES payload/hooks/test-walknote.sh' ] \
+  && check "#3409 a suite naming the lister in a comment and walking its checkout in code is a walker, not a scanner" ok \
+  || check "#3409 a suite naming the lister in a comment and walking its checkout in code is a walker, not a scanner" "got=$_ml"
+grep -q -x 'SECTION payload/hooks/test-parts.sh really scans' <<< "$_ml" \
+  && check "#3409 a section whose code makes the globbed listing is selected" ok \
+  || check "#3409 a section whose code makes the globbed listing is selected" "got=$_ml"
+grep -q 'talks about a scan' <<< "$_ml" \
+  && check "#3409 and a section that holds the listing only in a comment is not" "got=$_ml" \
+  || check "#3409 and a section that holds the listing only in a comment is not" ok
+
 # --- listing the selection runs NONE of it. It used to be read after every scanner had already
 #     run, so asking what the gate covers cost exactly what the gate costs (L102).
 R10="$(mkrepo listonly)"
