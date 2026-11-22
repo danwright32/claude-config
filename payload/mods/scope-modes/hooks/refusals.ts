@@ -75,7 +75,12 @@ export const readsOnly = (tool: string, commands: readonly Cmd[], writes: ModKit
   if (READ_TOOLS.has(tool)) return true
   if (tool !== 'Bash' || !commands.length) return false
   const w = writes
-  if (w.files.length || w.changes.length || w.unnamed.length || w.byGit?.length || w.runs?.length || w.stdout?.length || w.unread?.length) return false
+  // A run the write reader marks `unknown` (#3323: a program on none of its lists, handed a word
+  // that spells a path) decides nothing here. This file judges every command by its own list of
+  // programs that only read (READ_PROGRAMS), which is longer than the reader's, so a program on
+  // neither is no read by that list, as it was before the reader gave such a run.
+  const runs = (w.runs ?? []).filter(r => !r.unknown)
+  if (w.files.length || w.changes.length || w.unnamed.length || w.byGit?.length || runs.length || w.stdout?.length || w.unread?.length) return false
   return commands.every(commandReads)
 }
 

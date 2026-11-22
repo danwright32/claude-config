@@ -29,6 +29,19 @@ describe('which refused calls only read', () => {
     ])
       expect([c, bashReads(c)]).toEqual([c, false])
   })
+  // #3323: mod-kit's write reader now gives a program it does not know as a run marked unknown
+  // wherever it is handed a word that spells a path. Whether a refused call only read is judged here
+  // by this file's own list of programs that only read (READ_PROGRAMS), which is longer than the
+  // list the reader keeps, so such a run decides nothing here: a program on this list handed a file
+  // still only reads, and one on neither list is still no read, by this list as before.
+  test('a program this list knows only reads still only reads when the write reader does not know it (#3323)', () => {
+    const marked = (c: string) => commandWrites(c, CWD, HOME).runs?.some(r => r.unknown) ?? false
+    for (const c of ['basename src/a.txt', 'dirname src/a.txt', 'realpath a.txt', 'nl a.txt', 'egrep -n x a.txt', 'fgrep x a.txt', 'md5 a.txt', 'column -t a.txt'])
+      expect([c, marked(c), bashReads(c)]).toEqual([c, true, true])
+    for (const c of ['mystery a.txt', 'prettier --check a.txt', 'gh issue view 3', 'npm test']) expect([c, marked(c), bashReads(c)]).toEqual([c, true, false])
+    // A run that is not one of those (a script, a tool) is no read, as before.
+    for (const c of ['python3 x.py a.txt', 'npx prettier a.txt']) expect([c, marked(c), bashReads(c)]).toEqual([c, false, false])
+  })
   test('a tool that only reads by its name is a read; a writer or an unknown tool is not', () => {
     expect(readsOnly('Read', [], { files: [], changes: [], unnamed: [] })).toBe(true)
     expect(readsOnly('Grep', [], { files: [], changes: [], unnamed: [] })).toBe(true)

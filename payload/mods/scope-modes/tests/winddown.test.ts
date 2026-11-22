@@ -568,6 +568,18 @@ describe('whose uncommitted files they are (#1108)', () => {
     expect(stashTaken(['list'])).toBeUndefined()
     expect(stashTaken([])).toBeUndefined()
   })
+  // #3323: a file handed to a program mod-kit's write reader does not know counts as written too,
+  // since the reader now gives such a program as a run: what it did with the file cannot be read,
+  // so leaving it out would let work it did write go uncommitted unmentioned. One of the programs
+  // Dan listed as only reading writes nothing, as before, and a member an unpack names is a write.
+  test("a file handed to a program the write reader does not know is this session's; one a listed program reads is not (#3323)", () => {
+    const home = `${'/Users'}/x`
+    const unknown = commandWrites('prettier --write src/a.ts', '/repo', home)
+    expect(unknown.runs?.map(r => r.unknown)).toEqual([true])
+    expect(filesWritten({ tool: 'Bash', input: {}, writes: unknown })).toEqual(['/repo/src/a.ts'])
+    for (const c of ['cat src/a.ts', 'grep -n x src/a.ts', 'wc -l src/a.ts', 'diff src/a.ts src/b.ts']) expect([c, filesWritten({ tool: 'Bash', input: {}, writes: commandWrites(c, '/repo', home) })]).toEqual([c, []])
+    expect(filesWritten({ tool: 'Bash', input: {}, writes: commandWrites('tar -xzf /tmp/a.tgz src/a.ts', '/repo', home) })).toEqual(['/repo/src/a.ts'])
+  })
   // #1664: a file handed to a script as its argument counts as written, as every other gate has
   // counted it since #1592, so winding down never lets it go uncommitted unmentioned. A pattern the
   // reader can only place in a folder names no file, since that folder may hold another session's.
