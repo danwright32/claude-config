@@ -452,6 +452,20 @@ export type ModKitCommand = {
    * the one text, never handed on as typed.
    */
   worked?: (string | null)[]
+  /**
+   * On a command standing inside `(( ))` in a shell that works it out as arithmetic (#3415: bash, zsh
+   * and ksh, never sh or dash, where `((` opens two subshells): its words are a sum's, so it runs no
+   * program, a `<` or `>` in it compares two numbers, and nothing in it names a file. The four
+   * parentheses are marked too, since they open and close no subshell: a name the sum gives a value
+   * keeps it after them. A substitution inside one still runs, and is given as every substitution is.
+   */
+  arithmetic?: true
+  /**
+   * For each word, whether it is a `<` or a `>` comparing two strings inside a `[[ ]]` test of such a
+   * shell (#3415), never a redirect; absent where no word is one. A redirect after the test's `]]` is
+   * a redirect, and is not marked.
+   */
+  compares?: boolean[]
   /** The folder it runs in, given only when `pipeline` was given `cwd`; null where a cd before it cannot be followed. */
   folder?: string | null
 }

@@ -2318,3 +2318,115 @@ describe('writes: unpacking an archive is a write into the folder it unpacks int
     expect((read('find app | cpio -pdm out').runs ?? []).map(r => [r.script, r.unknown, r.args.map(a => a.path)])).toEqual([['cpio', true, [`${CWD}/out`]]])
   })
 })
+
+// claude-config#3415: the `>` of an arithmetic test was read as a redirect, so `(( n > 3 ))` was a
+// write of a file named 3, every guard built on this reader judged a write that never happens, and
+// winding down could list `3` as the session's work. What stands inside `(( ))` was read as a
+// command too, so since #3323 `(( n >= 3 ))` ran a program named n that was handed the file 3. The
+// `>` of a `[[ ]]` test, which compares two strings, was read the same way. Measured 2026-11-21 on
+// this Mac's bash 3.2, zsh 5.9 and ksh, each case run in an empty folder and the folder listed:
+// none writes a file for any form below, and each writes the one a redirect after the test names.
+// dash does write the file (there `((` opens two subshells and `[[` is a program's name), and sh
+// is dash on other machines, so what a `sh -c` or a `dash -c` runs is read as it was before.
+describe('writes: an arithmetic test and a [[ ]] comparison redirect nothing (#3415)', () => {
+  // What a command is read as doing, kept small so a failure names the command and the misreading.
+  const done = (command: string) => {
+    const out = read(command)
+    return [
+      command,
+      out.files.map(f => f.path ?? `(as written) ${f.word}`),
+      out.unnamed.map(u => u.what),
+      (out.runs ?? []).map(r => `${r.script} ${r.args.map(a => a.word).join(' ')}`),
+      (out.unread ?? []).map(u => u.why),
+    ]
+  }
+  const nothing = (command: string) => [command, [], [], [], []]
+  // Each command that is read as doing anything at all.
+  const misread = (commands: string[]) => commands.map(done).filter(d => JSON.stringify(d) !== JSON.stringify(nothing(d[0] as string)))
+  test('an arithmetic test writes no file', () => {
+    expect(misread(['(( n > 3 ))', '((n>3))', '(( n >> 3 ))', 'if (( n > 3 )); then echo big; fi', 'bash -c "(( n > 3 ))"', 'zsh -c "(( n > 3 ))"', 'ksh -c "(( n > 3 ))"'])).toEqual([])
+  })
+  test('what stands inside it runs no program and reads no file', () => {
+    // `sh` is a variable's name here, as any word inside `(( ))` is.
+    expect(misread(['(( a < b ))', '(( sh < b ))', '(( n >= 3 ))', '(( a <= b ))', '(( x = n > 3 ))', '(( n > 3 ? a : b ))', 'while (( i < 3 )); do (( i++ )); done'])).toEqual([])
+  })
+  test('the three parts of an arithmetic for are no commands', () => {
+    expect(misread(['for (( i = 0; i < 3; i++ )); do echo $i; done', 'for ((i=0; i<3; i++)); do echo $i; done'])).toEqual([])
+  })
+  test('arithmetic holding parentheses of its own is arithmetic, where its two ) close it together', () => {
+    expect(misread(['(( (n + 1) > 3 ))', '(( n > (3) ))', '(( (a > b) && c ))', 'if (( (n + 1) * 2 > 3 )); then echo big; fi'])).toEqual([])
+  })
+  test('an arithmetic expansion in a word writes nothing', () => {
+    expect(misread(['echo $(( x > 1 ))', 'n=$(( x > 1 ))', 'echo "$(( x > 1 ? 2 : 3 ))"'])).toEqual([])
+  })
+  test('a real redirect beside an arithmetic test is still a write, and a substitution inside one still runs', () => {
+    expect(paths('(( n > 3 )) > out.txt')).toEqual([`${CWD}/out.txt`])
+    expect(paths('(( n > 3 )) && echo x > y.txt')).toEqual([`${CWD}/y.txt`])
+    expect(paths('(( a > b )) 2> err.txt')).toEqual([`${CWD}/err.txt`])
+    expect(paths('if (( n > 3 )); then echo x > big.txt; fi')).toEqual([`${CWD}/big.txt`])
+    expect(paths('for (( i = 0; i < 3; i++ )); do echo x >> log.txt; done')).toEqual([`${CWD}/log.txt`])
+    expect(paths('(( n > $(echo 3 > side.txt; echo 3) ))')).toEqual([`${CWD}/side.txt`])
+  })
+  test('two subshells are no arithmetic, and neither is anything sh or dash runs', () => {
+    // Each measured as writing the file, in every shell for the first four.
+    expect(paths('((echo a) > f.txt)')).toEqual([`${CWD}/f.txt`])
+    expect(paths('( (echo a) > f.txt )')).toEqual([`${CWD}/f.txt`])
+    expect(paths('((echo a); (echo b) > g.txt)')).toEqual([`${CWD}/g.txt`])
+    expect(paths('let n>3')).toEqual([`${CWD}/3`])
+    expect(paths('dash -c "(( n > 3 ))"')).toEqual([`${CWD}/3`])
+    expect(paths('sh -c "(( n > 3 ))"')).toEqual([`${CWD}/3`])
+    expect(paths('dash -c "((echo a > f.txt))"')).toEqual([`${CWD}/f.txt`])
+  })
+  test('a name arithmetic gives a value is no longer read as its old one', () => {
+    // Measured: out3, then out2, out2 and out5 where the reader gave out1 for the last three. The
+    // two ( and the two ) open and close no subshell, so the value stands after them.
+    expect(paths('((F=3)); echo x > out$F')).toEqual([`${CWD}/out3`])
+    expect(paths('F=1; ((F=F+1)); echo x > out$F')).toEqual(['(as written) out$F'])
+    expect(paths('for ((i=0; i<3; i++)); do echo x > f$i; done')).toEqual(['(as written) f$i'])
+    expect(paths('F=1; (( F = 2 )); echo x > out$F')).toEqual(['(as written) out$F'])
+    expect(paths('F=1; (( F++ )); echo x > out$F')).toEqual(['(as written) out$F'])
+    expect(paths('F=1; (( F += 4 )); echo x > out$F')).toEqual(['(as written) out$F'])
+    expect(paths('F=1; (( ++F )); echo x > out$F')).toEqual(['(as written) out$F'])
+    // One it only reads keeps its value.
+    expect(paths('F=1; (( F >= 0 )) && echo x > out$F')).toEqual([`${CWD}/out1`])
+    expect(paths('F=1; (( n == F )) && echo x > out$F')).toEqual([`${CWD}/out1`])
+  })
+  // The issue's first open question: `[[ a > b ]]` had the same misreading, as a write of b.
+  test('a < or > inside [[ ]] compares two strings and names no file', () => {
+    for (const command of ['[[ a > b ]]', '[[ a>b ]]', '[[ $x > 3 ]] && echo y', '! [[ a > b ]]', 'if [[ a > b ]]; then echo x; fi', '[[ a > b && c > d ]]', '[[ ( a > b ) ]]', '[[ a < b ]]', 'bash -c "[[ a > b ]]"']) {
+      expect([command, paths(command)]).toEqual([command, []])
+    }
+  })
+  test('a real redirect after the test is still a write, and a substitution inside one still runs', () => {
+    expect(paths('[[ a > b ]] > out.txt')).toEqual([`${CWD}/out.txt`])
+    expect(paths('[[ a > b ]]>out2')).toContain(`${CWD}/out2`)
+    expect(paths('[[ a > b ]] 2> err.txt')).toEqual([`${CWD}/err.txt`])
+    expect(paths('[[ a > "]]" ]] > c')).toEqual([`${CWD}/c`])
+    expect(paths('if [[ a > b ]]; then echo x > out.txt; fi')).toEqual([`${CWD}/out.txt`])
+    expect(paths('[[ a > $(echo z > side.txt; echo z) ]]')).toEqual([`${CWD}/side.txt`])
+  })
+  test('where [[ is no test of the shell, its > is the redirect it always was', () => {
+    // Each measured as writing b in bash: a quoted `[[`, one after a setting, a test never closed
+    // (read as before, #3021), `[` and `test`, which are programs, and what sh or dash runs.
+    for (const command of ["'[[' a > b ]]", '\\[[ a > b ]]', 'X=1 [[ a > b ]]', '[[ a > b', '[ a > b ]', 'test a > b', 'dash -c "[[ a > b ]]"', 'sh -c "[[ a > b ]]"']) {
+      expect([command, paths(command)]).toEqual([command, [`${CWD}/b`]])
+    }
+  })
+  test('[[ is still a program the reader does not know, handed each word of its test (#3323)', () => {
+    const handed = (command: string) => (read(command).runs ?? []).filter(r => r.unknown).map(r => [r.script, r.args.map(a => a.word)])
+    expect(handed('[[ a == b ]]')).toEqual([['[[', ['a', '==', 'b']]])
+    expect(handed('[[ a > b ]]')).toEqual([['[[', ['a', '>', 'b']]])
+    expect(handed('[[ a < b ]]')).toEqual([['[[', ['a', '<', 'b']]])
+    expect(handed('[[ a<b ]]')).toEqual([['[[', ['a', '<', 'b']]])
+    expect(handed('[[ app/globals.css > CLAUDE.md ]]')).toEqual([['[[', ['app/globals.css', '>', 'CLAUDE.md']]])
+  })
+  test('the reader marks what it took for arithmetic and for a comparison', () => {
+    // The four parentheses too, which open and close no subshell.
+    expect(pipeline('(( n > 3 )) && echo x').map(c => [c.words.join(' '), c.arithmetic])).toEqual([['(', true], ['(', true], ['n > 3', true], [')', true], [')', true], ['echo x', undefined]])
+    expect(pipeline('((echo a) > f.txt)').map(c => c.arithmetic)).toEqual([undefined, undefined, undefined, undefined, undefined, undefined])
+    expect(pipeline('dash -c "(( n > 3 ))"').map(c => c.arithmetic)).toEqual([undefined, undefined, undefined, undefined, undefined])
+    expect(pipeline('[[ a > b ]] > out.txt').map(c => c.compares)).toEqual([[false, false, true, false, false, false, false]])
+    expect(pipeline('[[ a == b ]] > out.txt').map(c => c.compares)).toEqual([undefined])
+    expect(pipeline('dash -c "[[ a > b ]]"').map(c => c.compares)).toEqual([undefined])
+  })
+})
