@@ -31,9 +31,10 @@ describe('which refused calls only read', () => {
   })
   // #3323: mod-kit's write reader now gives a program it does not know as a run marked unknown
   // wherever it is handed a word that spells a path. Whether a refused call only read is judged here
-  // by this file's own list of programs that only read (READ_PROGRAMS), which is longer than the
-  // list the reader keeps, so such a run decides nothing here: a program on this list handed a file
-  // still only reads, and one on neither list is still no read, by this list as before.
+  // by this file's own list of programs that only read (READ_PROGRAMS), which holds programs the
+  // reader's list lacks (and lacks some the reader's holds), so such a run decides nothing here: a
+  // program on this list handed a file still only reads, and one on neither list is still no read,
+  // by this list as before.
   test('a program this list knows only reads still only reads when the write reader does not know it (#3323)', () => {
     const marked = (c: string) => commandWrites(c, CWD, HOME).runs?.some(r => r.unknown) ?? false
     for (const c of ['basename src/a.txt', 'dirname src/a.txt', 'realpath a.txt', 'nl a.txt', 'egrep -n x a.txt', 'fgrep x a.txt', 'md5 a.txt', 'column -t a.txt'])
