@@ -321,6 +321,15 @@ run "sed -f prog.sed lib/calm.sh > made.sh; bash made.sh";           unread "a p
 run "sed \"\$PROGRAM_3395\" lib/calm.sh > made.sh; bash made.sh";    unread "a program the gate cannot work out" "by sed"
 run "sed '1,2p;1d;1,2p' lib/calm.sh > made.sh; bash made.sh";        unread "a range ending at a line number after a d" "$by_sed"
 run "LC_ALL=C sed 's/ok/fine/' lib/calm.sh > made.sh; bash made.sh"; unread "a sed with a variable set in front of it" "$by_sed"
+# sed takes the backslash off an escaped delimiter BEFORE it reads the expression (measured on this
+# Mac's sed, 2026-11-22: `printf '# go\nx\n' | sed -E 's|^# \|x||'` prints "go" and an empty line).
+# So under -E an escaped bar, with the bar as the delimiter, is alternation, and this sed uncomments
+# the line that runs the script that posts. The emulation read a literal bar there, left the
+# comment in place, and the made script passed.
+run "sed -E 's|^# \\|x||' commented-posts.sh > made.sh; bash made.sh"
+unread "under -E an escaped bar as the delimiter, which sed reads as alternation and so uncomments the line," "$by_sed"
+run "sed 's|^# \\|x||' commented-posts.sh > made.sh; bash made.sh"
+unread "the same without -E" "$by_sed"
 run "sed() { cat lib/posts.sh; }; sed 's/ok/fine/' lib/calm.sh > made.sh; bash made.sh"
 refused "#3395 a function named sed, which is not the program, is still refused"
 # Whether a text holds a function or an alias of that name is worked out once for each text and
@@ -355,9 +364,28 @@ printf '%s\n' 'echo start' '# bash lib/x.sh' '. "$(cd "$(dirname "$0")" && pwd)/
   'range(60000)' 'tail' > "$G/input.txt"
 cat > "$T/emulate.py" <<'PY'
 import importlib.util, sys
+sys.dont_write_bytecode = True  # the library is loaded by its path: leave no __pycache__ beside it
 spec = importlib.util.spec_from_file_location("exact_output", sys.argv[1])
 lib = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(lib)
+if sys.argv[2] == "--escaped-delims":
+    # regex() itself, asked about every delimiter: sed takes the backslash off an escaped delimiter
+    # first, so one that means something in an expression is never the literal character.
+    wrong = []
+    for ere in (False, True):
+        for d in ".*[]^$(){}+?|":
+            try:
+                lib.regex("a\\" + d + "b", ere, d)
+                wrong.append("read%s:%s" % (" -E" if ere else "", d))
+            except lib.Outside:
+                pass
+        for d in "/#,:@%!~=":
+            try:
+                lib.regex("a\\" + d + "b", ere, d)
+            except lib.Outside:
+                wrong.append("not read%s:%s" % (" -E" if ere else "", d))
+    sys.stdout.write(" ".join(wrong) or "none")
+    sys.exit(0)
 plan = lib.sed_plan(sys.argv[3:])
 out = None if plan is None else lib.sed_apply(plan[0], plan[1], open(sys.argv[2]).read())
 sys.stdout.write("NOT-READ\n" if out is None else out)
@@ -365,7 +393,7 @@ PY
 same=0; differ=0; outside=0
 same_as_sed() { # same_as_sed <sed's words...>: where the emulation reads the program, it prints what sed does
   local got want
-  got="$(python3 "$T/emulate.py" "$DIR/lib/exact-output.py" "$G/input.txt" "$@" 2>&1)"
+  got="$(python3 -B "$T/emulate.py" "$DIR/lib/exact-output.py" "$G/input.txt" "$@" 2>&1)"
   if [ "$got" = "NOT-READ" ]; then outside=$((outside + 1)); return; fi
   want="$(sed "$@" "$G/input.txt" 2>&1)"
   if [ "$got" = "$want" ]; then same=$((same + 1)); else differ=$((differ + 1)); echo "  differs from sed: $*"; fi
@@ -394,6 +422,17 @@ if [ -f "$DIR/lib/exact-output.py" ] && [ "$(printf 'a\n' | sed 's/a/b/' 2>/dev/
     same_as_sed "$p"
     [ "$outside" -gt "$before" ] || { differ=$((differ + 1)); echo "  read, though the two seds differ on it or it is not emulated: $p"; }
   done
+  # An escaped delimiter that means something in an expression: sed reads the bare character.
+  for p in 's|^# \|x||' 's|a\|b|X|g' 's|(foo\|aaa) |Y|'; do
+    for e in -E -e; do
+      before=$outside
+      same_as_sed "$e" "$p"
+      [ "$outside" -gt "$before" ] || { differ=$((differ + 1)); echo "  read, though its escaped delimiter is special to sed: $e $p"; }
+    done
+  done
+  got="$(python3 -B "$T/emulate.py" "$DIR/lib/exact-output.py" --escaped-delims 2>&1)"
+  if [ "$got" = "none" ]; then check "#3395 an escaped delimiter that means something in an expression is never read, with -E or without, and the plain ones still are" ok
+  else check "#3395 an escaped delimiter that means something in an expression is never read" "$got"; fi
   if [ "$differ" -eq 0 ] && [ "$same" -ge 60 ]; then check "#3395 the emulation prints what sed prints for each of $same programs, and reads none of $outside it must not" ok
   else check "#3395 the emulation prints what sed prints" "$same the same, $differ wrong, $outside not read"; fi
 else

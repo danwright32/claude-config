@@ -22,7 +22,9 @@ and that BSD and GNU sed read alike:
   * a regular expression of literal characters, `.`, a bracket expression of characters and of
     ranges inside the digits or one case of the letters, `*`, groups and intervals, `^` first and
     `$` last, and with -E also + ? and |. A backslash is taken only before a character that is
-    special there. Everything the two seds read differently is outside this and is not read: a
+    special there, and never before the delimiter where the delimiter is one of those: sed takes
+    that backslash off first and reads the bare character, so `\\|` between bars is alternation
+    under -E. Everything the two seds read differently is outside this and is not read: a
     backslash before a letter or a digit (\\n, \\t, \\w, \\1, \\+, \\|), a class name, a backslash
     inside brackets, `^` or `$` anywhere else, a quantifier on a group that holds one;
   * a replacement of literal text, `&`, and a backslash before &, a backslash or the delimiter;
@@ -56,6 +58,9 @@ S_DELIMS = frozenset("/#,:@%!~=|")
 ESCAPED_DELIMS = S_DELIMS - {"|"}
 BRE_LITERAL = frozenset(".*[]^$\\/")
 ERE_LITERAL = BRE_LITERAL | frozenset("(){}+?|")
+# Every character that means something in an expression of either kind, bare or behind a backslash.
+# One of these as the delimiter, escaped, is never read: see regex().
+REGEX_SPECIAL = frozenset(".*[]^$(){}+?|")
 INTERVAL = re.compile(r"(\d{1,3})(?:(,)(\d{1,3})?)?")
 AMP = object()  # the whole match, in a replacement
 GIT_SPEC = re.compile(r"([0-9a-f]{7,40}):([^:\0\n]+)")
@@ -144,6 +149,11 @@ def regex(raw, ere, delim):
             e = raw[i + 1:i + 2]
             if not e:
                 raise Outside("a backslash at the end")
+            if e == delim and e in REGEX_SPECIAL:
+                # sed takes the backslash off an escaped delimiter BEFORE it reads the expression,
+                # so what it reads is the bare character: under -E `\|` with | as the delimiter is
+                # alternation, where the literal bar read here left a commented line a comment.
+                raise Outside("an escaped delimiter that means something in an expression")
             if not ere and e in "()":
                 if e == "(":
                     out.append("(")
