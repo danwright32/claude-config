@@ -1,6 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { ModKitGh, ModKitWrites } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import { ghApiOf, judgeAdminMerge } from './adminmerge.ts'
+import { gateOf, judgeRequiredLabel, openedFrom } from './requiredlabel.ts'
 import { callKey, readsOnly, refusalNote, whatOf } from './refusals.ts'
 import { toolArgs } from './mod-kit/toolargs.ts'
 import { unreadMorningPicker } from './unread.ts'
@@ -1464,8 +1465,9 @@ const browserOf = async ($: EngineInterface, self?: string): Promise<Browser> =>
 }
 
 // Why a call is on Dan's overnight list (#834), from the call as a tool call or a permission
-// request carries it, or undefined when it is not.
-const overnightWhy = async ($: EngineInterface, tool: string, input: Record<string, unknown>): Promise<string | undefined> => {
+// request carries it, or undefined when it is not. `note` takes what a judge says beside allowing
+// the call (#3439), for the caller that will see the call run.
+const overnightWhy = async ($: EngineInterface, tool: string, input: Record<string, unknown>, note?: (text: string) => void): Promise<string | undefined> => {
   if (tool.startsWith(CHROME)) {
     const self = typeof input.tool_use_id === 'string' && input.tool_use_id ? input.tool_use_id : undefined
     return overnightRefusal({ tool, input, raw: '', commands: [], writes: NO_WRITES, cwd: '', home: '', read: text => readCommands($, text), browser: await browserOf($, self) }, lookOf($))
@@ -1483,8 +1485,14 @@ const overnightWhy = async ($: EngineInterface, tool: string, input: Record<stri
     const reading = await sleepNow($)
     return judgeAdminMerge(reading.state === 'asleep' ? reading.record.repos : undefined, g, repo, ghApiOf(argv => run($, argv)), link => $.modkit.linkRepo({ link }))
   }
+  // A label set on a PR (#3439) is judged by the repository's own merge gate, asked through its
+  // library in the hooks installed on this Mac, and by this session's record of the PRs it opened,
+  // all in requiredlabel.ts. A gate or a record that cannot be read refuses. What the judge says
+  // beside allowing a label goes to `note`, for the result of the call.
+  const requiredLabel = (g: ModKitGh, repo: string) =>
+    judgeRequiredLabel(g, repo, gateOf(argv => run($, argv), home), openedFrom(async () => (await $.state.get(openedRef)).value), link => $.modkit.linkRepo({ link }), note)
   return overnightRefusal(
-    { tool, input, raw, commands: raw ? await readCommands($, raw) : [], writes: raw ? await readWrites($, raw) : NO_WRITES, cwd, home, ...(ghRepo !== undefined ? { ghRepo } : {}), read: text => readCommands($, text), adminMerge },
+    { tool, input, raw, commands: raw ? await readCommands($, raw) : [], writes: raw ? await readWrites($, raw) : NO_WRITES, cwd, home, ...(ghRepo !== undefined ? { ghRepo } : {}), read: text => readCommands($, text), adminMerge, requiredLabel },
     lookOf($),
   )
 }
@@ -5235,7 +5243,8 @@ const lessonApproval = async ($: EngineInterface, tool: string, input: Record<st
 // What the modes on make of one tool call: the refusal to answer it with, or undefined to let it run,
 // or the cleanup answers (#1051) it runs on, which are used up once it has run (useCleanups).
 type Judged = { tool: string; input: Record<string, unknown>; toolUseId: string; scope: ScopeModesScope | null; away: boolean; asleep: boolean }
-type Verdict = { deny: string } | { cleanups: ScopeModesCleanup[] } | undefined
+// `notes`: what a judge said beside allowing the call (#3439), which goes on the call's result.
+type Verdict = { deny: string } | { cleanups: ScopeModesCleanup[]; notes: string[] } | undefined
 const judge = async ($: EngineInterface, j: Judged): Promise<Verdict> => {
   const { tool, input, toolUseId, scope, away, asleep } = j
   let cleanupsLet: ScopeModesCleanup[] = []
@@ -5311,8 +5320,12 @@ const judge = async ($: EngineInterface, j: Judged): Promise<Verdict> => {
   }
   // Asleep (#834): what Dan bans while he sleeps is refused in every session, whatever the
   // permission step beneath would say, since a session's own prompts are approved overnight.
+  const notes: string[] = []
   if (asleep) {
-    const what = await overnightWhy($, tool, input)
+    // One line naming a label twice is told once.
+    const what = await overnightWhy($, tool, input, text => {
+      if (!notes.includes(text)) notes.push(text)
+    })
     if (what) {
       // A refused Chrome call never runs, so it moves no tab (#2064).
       chromeCalls.delete(toolUseId)
@@ -5323,7 +5336,7 @@ const judge = async ($: EngineInterface, j: Judged): Promise<Verdict> => {
       return { deny: overnightDeny(what, kept) }
     }
   }
-  return cleanupsLet.length ? { cleanups: cleanupsLet } : undefined
+  return cleanupsLet.length || notes.length ? { cleanups: cleanupsLet, notes } : undefined
 }
 
 // Dan's cleanup answer (#1051) is used up, and that said, only once the checkout is on its branch
@@ -5945,7 +5958,7 @@ export const register: Register = on => {
     // An overnight proposal being filed (#1389), claimed for this session first: where it is
     // recorded filed once gh made it. The words are a cheap first look; the reader decides.
     let filing: { dir: string } | null = null
-    const go = async (cleanups: readonly ScopeModesCleanup[] = []) => {
+    const go = async (cleanups: readonly ScopeModesCleanup[] = [], said: readonly string[] = []) => {
       // A picker whose answer is recorded below is asked only in words Dan can read (#3321, unread.ts);
       // a refused one never reached him and counts neither way, as any other refusal.
       const unreadPicker = tool === 'AskUserQuestion' ? unreadMorningPicker(input, new Set(askedByNumber.keys()), new Set(offeredByNumber.keys())) : undefined
@@ -5984,8 +5997,12 @@ export const register: Register = on => {
       if (cleanups.length && !r.deny) await useCleanups($, cleanups)
       // Notes a scope mode command left mid turn (#3136) reach the model with the main conversation's
       // next tool result; a subagent's result is not the main conversation's, and a refusal carries none.
-      if (input.agentId !== undefined || r.deny || !mid.notes.length) return r
-      return { ...r, context: [...(r.context ?? []), ...takeNotes(mid)] } as typeof r
+      // What a judge said beside allowing this call (#3439) goes with its own result, to whichever of
+      // the session or its agents made it; a refusal here or beneath carries none, as the call never ran.
+      const own = r.deny ? [] : said
+      const held = input.agentId !== undefined || r.deny || !mid.notes.length ? [] : takeNotes(mid)
+      if (!own.length && !held.length) return r
+      return { ...r, context: [...(r.context ?? []), ...own, ...held] } as typeof r
     }
 
     const scope = await scopeOf($)
@@ -6090,7 +6107,7 @@ export const register: Register = on => {
       } else verdict = { deny: `Blocked: ${modes} is on and its check of this call failed (${msg(err)}), so the call did not run. Try it again; if it fails the same way, tell Dan.` }
     }
     if (verdict && 'deny' in verdict) return verdict
-    return go(verdict?.cleanups ?? [])
+    return go(verdict?.cleanups ?? [], verdict?.notes ?? [])
   })
 
   // A held row's button: asks Claude to do that one thing, now that Dan is here and chose it. Pressed

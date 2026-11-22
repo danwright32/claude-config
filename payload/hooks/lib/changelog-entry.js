@@ -259,11 +259,54 @@ function repoScope(registry, slug, today) {
   return { inScope: true, from: from, name: found.name || slug };
 }
 
+// Which label does this gate require on a pull request of this repository?
+//
+// Asked by sleep mode (mods/scope-modes/hooks/requiredlabel.ts, claude-config#3439). Overnight a
+// session may set no label on a pull request, with one exception: the label this gate will refuse
+// the merge without, on a pull request that session opened. On 2026-11-21 that ban had no exception,
+// so a pull request opened overnight in a gated repository could not carry its label, and it sat
+// green and unmerged for ten and a half hours. Which labels those are is answered HERE, from KINDS
+// and parseEntry, so the mod holds no second list of them to drift from this one.
+//
+// `read` is what dev-update-registry.js's readRegistry returned. Three answers, kept apart as the
+// gate keeps them apart (L11, L98):
+//   required      the repository is gated today. `labels` is every label the gate takes, each with
+//                 `needsSentence`: whether the gate refuses it on a pull request whose description
+//                 carries no Changelog block. That is asked of parseEntry itself, never restated.
+//   not-required  somebody chose not to gate it: not listed, or its start date has not arrived.
+//   unknown       it cannot be told: the registry is missing or unreadable, the repository is listed
+//                 with no start date or one that is not a date, or no repository was named. The
+//                 merge gate refuses or cannot judge a merge there, so nothing is promised about it.
+function requiredLabels(read, slug, today) {
+  if (!read || read.state !== 'ok') {
+    return { state: 'unknown', why: (read && read.why) || 'the dev update registry could not be read', labels: [] };
+  }
+  if (!String(slug || '').trim()) {
+    return { state: 'unknown', why: 'no repository was named, so whether it is gated cannot be told', labels: [] };
+  }
+  const scope = repoScope(read.registry, slug, today);
+  if (scope.inScope) {
+    return {
+      state: 'required',
+      why: '',
+      labels: KINDS.map(function (kind) {
+        const label = LABEL_PREFIX + kind;
+        return { label: label, needsSentence: !parseEntry({ labels: [label], body: '' }).ok };
+      }),
+    };
+  }
+  if (scope.unreadable || scope.missingFrom || scope.badDate) {
+    return { state: 'unknown', why: scope.why, labels: [] };
+  }
+  return { state: 'not-required', why: scope.why, labels: [] };
+}
+
 module.exports = {
   parseEntry: parseEntry,
   extractBlock: extractBlock,
   changelogLabels: changelogLabels,
   repoScope: repoScope,
+  requiredLabels: requiredLabels,
   // The /pennie-dev-update gatherer asks which local day a merge fell on with this same helper, so
   // its "on or after changelogFrom" agrees with what this gate decided at merge time.
   localDay: localDay,
@@ -273,3 +316,22 @@ module.exports = {
   TECHNICAL: TECHNICAL,
   NONE: NONE,
 };
+
+// The command line, for sleep mode, which is a mod and cannot load this file (claude-config#3439).
+//   required-labels <owner/name> [file]  prints requiredLabels' answer for that repository as JSON,
+//                                        read from this Mac's registry, or from `file` for the tests
+// Every answer it can give exits 0, "unknown" included, so the reader tells a gate that cannot tell
+// from a command that failed. A call naming no repository, or any other command, prints its usage
+// and exits 2.
+if (require.main === module) {
+  const cmd = process.argv[2];
+  const slug = process.argv[3];
+  if (cmd === 'required-labels' && typeof slug === 'string' && slug.trim()) {
+    const registry = require('./dev-update-registry.js');
+    const read = registry.readRegistry(process.argv[4] || registry.registryPath());
+    process.stdout.write(JSON.stringify(requiredLabels(read, slug)) + '\n');
+  } else {
+    process.stderr.write('Usage: changelog-entry.js required-labels <owner/name> [registry file]\n');
+    process.exit(2);
+  }
+}

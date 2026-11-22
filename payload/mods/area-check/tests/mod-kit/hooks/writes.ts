@@ -683,9 +683,6 @@ const splitInputs = (words: string[]): { rest: string[]; files: string[] } => {
   return { rest, files }
 }
 
-// The commands that change files by their operands, so one xargs gives its operands to changes
-// files no word names (#730). An editor that edits in place only with its flag is told apart where
-// it is read.
 // #3323: a program on none of the reader's lists, handed a word that spells a path, is read as
 // writing that file (Dan, 2026-11-21, picker answer "Turn it round, with the list (Recommended)").
 // Before, such a program was read as writing nothing, so the next writer nobody had listed was
@@ -710,6 +707,8 @@ export const READ_ONLY: Readonly<Record<string, ReadOnly>> = {
   cmp: { why: 'compares two files and prints where they differ' },
   rg: {
     why: 'prints matches; its replace option changes only what is printed',
+    // The whole name, alone or joined to its value with =, is every spelling: ripgrep 14.1.1 refuses
+    // a shortened long option ("unrecognized flag --pr", measured 2026-11-22) and runs nothing.
     writes: [
       { form: '--pre', does: 'runs a program on each file', when: hasOption('--pre') },
       { form: '--hostname-bin', does: 'runs a program', when: hasOption('--hostname-bin') },
@@ -732,8 +731,11 @@ export const READ_ONLY: Readonly<Record<string, ReadOnly>> = {
   file: {
     why: 'prints what kind of file something is',
     // -C in any cluster of short options: one written after a letter that takes a value (-mC) is
-    // read as the flag too, the side that holds.
-    writes: [{ form: '-C', does: 'compiles a magic file', when: args => args.some(a => a === '--compile' || /^-[A-Za-z0-9]*C/.test(a)) }],
+    // read as the flag too, the side that holds. And --compile in any start of it: file takes each
+    // start that names no other option (file 5.41, measured 2026-11-22: --co and every longer one
+    // compile). --c, which it refuses as ambiguous, is read as the form too. These are the words
+    // scope modes' own judge of file uses (refusals.ts), and each suite holds the same starts.
+    writes: [{ form: '-C', does: 'compiles a magic file', when: args => args.some(a => /^-[A-Za-z0-9]*C/.test(a) || (a.length >= 3 && '--compile'.startsWith(a))) }],
   },
   strings: { why: 'prints the text inside a file' },
   tr: { why: 'translates standard input to standard output' },
@@ -743,14 +745,18 @@ export const READ_ONLY: Readonly<Record<string, ReadOnly>> = {
   lsof: {
     why: 'prints which files are open',
     // This Mac's lsof 4.91 is built without the device cache, and its manual still documents -D,
-    // which builds or updates a cache file wherever it is built in.
-    writes: [{ form: '-D', does: 'builds or updates its device cache file', when: args => args.some(a => a.startsWith('-D')) }],
+    // which builds or updates a cache file wherever it is built in. -D in any cluster of short
+    // options: lsof answers `-nD b` and `-nDb` as it answers `-D b` ("unsupported option: -D",
+    // measured 2026-11-22). A D inside a value written against its option's letter (-cDock) is read
+    // as the form too, the side that holds. +D, which only searches a folder, is not.
+    writes: [{ form: '-D', does: 'builds or updates its device cache file', when: args => args.some(a => /^-[A-Za-z0-9]*D/.test(a)) }],
   },
   mdls: {
     why: "prints a file's Spotlight attributes",
     // Not in its manual page; its own usage text lists it: "-plist -p : output attributes in XML
-    // format to file".
-    writes: [{ form: '-plist', does: 'writes the file it names', when: args => args.some(a => a === '-plist' || a === '-p') }],
+    // format to file". mdls takes any start of plist, after one dash or two, and the file joined to
+    // it with = (macOS 26.6.2, measured 2026-11-22: -pl, --p and -plist=out each wrote the file).
+    writes: [{ form: '-plist', does: 'writes the file it names', when: args => args.some(a => /^--?(p|pl|pli|plis|plist)(=.*)?$/.test(a)) }],
   },
   which: { why: 'prints where a command is' },
   readlink: { why: 'prints what a link points to' },
@@ -895,6 +901,9 @@ const cpioUnpack = (args: readonly string[]): Unpack | undefined => {
 const unpackOf = (name: string, args: readonly string[]): Unpack | undefined =>
   name === 'tar' || name === 'bsdtar' || name === 'gtar' ? tarUnpack('tar', args) : name === 'unzip' ? unzipUnpack(args) : name === 'cpio' ? cpioUnpack(args) : undefined
 
+// The commands that change files by their operands, so one xargs gives its operands to changes
+// files no word names (#730). An editor that edits in place only with its flag is told apart where
+// it is read.
 const OPERAND_WRITERS = new Set(['tee', 'cp', 'mv', 'ln', 'install', 'ditto', 'rsync', 'rm', 'unlink', 'rmdir', 'touch', 'mkdir', 'truncate', 'shred', 'chmod', 'chown', 'chgrp', 'patch'])
 // Each changer's options that take the next word as a value, so a value is never taken for a file.
 const CHANGERS: Record<string, { does: ModKitChange['does']; valued: ReadonlySet<string> }> = {

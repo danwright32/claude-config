@@ -25,6 +25,11 @@ Each file is one run, named by its file name. A file holding cost lines gives it
 alone, so a run printed in two shapes is not counted twice. A figure a line does not carry (an older
 line) is "-". A file with no cost line is an error, never an empty table.
 
+The last column, "cache never filled", is yes for a cached case (suite-warm, own-suite-warm) whose
+record says the judgement that fills its cache ran out of the gate's seconds: the suite reports
+that case as unmeasured there, never as a pass or a failure (Dan's decision of 2026-11-21, "Build
+it"), and this column is how often that happened, counted from saved logs.
+
 check reads a cost log the suite wrote (the lines without the "cost measured" prefix, or with it)
 and fails unless every record's verdict figures follow from its printed ones: each reading is its
 seconds over the yardstick it names, that yardstick is the least of the samples taken by then (5
@@ -49,7 +54,7 @@ MARK = "cost measured (#2918): "
 
 COLUMNS = ("run", "case", "limit", "least", "readings in units", "readings in seconds", "yardstick used",
            "yardstick per reading", "yardstick samples", "yardstick least", "yardstick median",
-           "yardstick greatest", "step clock")
+           "yardstick greatest", "step clock", "cache never filled")
 
 
 def nums(text):
@@ -70,6 +75,9 @@ def body_fields(case, least, body):
         readings = body.split(", on the step clock")[0]  # the older note's entry: its readings alone
     rec["readings"] = nums(readings) if readings else None
     rec["step"] = "step clock" in body
+    # A cached case whose cache the earlier judgement never filled, which the suite reports as
+    # unmeasured (#3170): the words cost.py writes into such a record.
+    rec["unfilled"] = "the cache was never filled" in body
     secs = one(r"; seconds per reading (" + LIST + r"|" + NUM + r")")
     rec["seconds"] = nums(secs) if secs else None
     per = one(r"; yardstick per reading ((?:" + NUM + r" from [0-9]+(?:, )?)+)")
@@ -121,7 +129,7 @@ def row(run, r):
         ", ".join(u for u, _ in per) if per else "-",
         str(samples[0]) if samples else "-",
         spread[0] if spread else "-", spread[1] if spread else "-", spread[2] if spread else "-",
-        "yes" if r["step"] else "no"))
+        "yes" if r["step"] else "no", "yes" if r["unfilled"] else "no"))
 
 
 def rows(paths):
