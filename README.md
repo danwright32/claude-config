@@ -7979,7 +7979,8 @@ session works in (since #3398 every checkout the command acts on as git reads it
 before it and each `-C` lead, and the repository and working folder it names by `--git-dir`,
 `--work-tree`, `GIT_DIR` or `GIT_WORK_TREE`, beside the folder the guard always asked about; one
 whose repository cannot be told, a folder the shell fills in or a `cd` that cannot be followed,
-is stopped while another session is open, with how to write it), or since #3021 a command there whose effect cannot be read (mod-kit's `unread`:
+is stopped while another session is open, with how to write it), or since #3021 a command there
+whose effect cannot be read (mod-kit's `unread`:
 `eval`, a command a value names, an alias being set, `ssh`), judged once per checkout against the
 folder it runs in, asks Sonnet for Proceed, Worktree or Stop with the other session's latest request
 (read from its transcript). Proceed is a toast; Worktree and Stop are the grey card plus a message
