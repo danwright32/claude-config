@@ -2625,7 +2625,8 @@ export const withoutOwnCalls = async (given: OwnCallIo, text: string, commands: 
   }
   // A text this reading looks for definitions in: the script's own, or a file it reads in. `typed`
   // is every definition the text types; a text holding OWN_MARK is not read at all.
-  type Unit = { text: string; commands: readonly RunCommand[]; marked: boolean; typed: { name: string; at: number; brace: number }[]; tops?: Promise<Set<number>> }
+  type Placed = { cmds: readonly RunCommand[]; starts: Map<number, number>; defs: number[]; reads: { i: number; at: number }[] }
+  type Unit = { text: string; commands: readonly RunCommand[]; marked: boolean; typed: { name: string; at: number; brace: number }[]; placed?: Promise<Placed>; tops?: Promise<Set<number>> }
   const unitOf = (t: string, cmds: readonly RunCommand[]): Unit => {
     const marked = t.includes(OWN_MARK)
     return { text: t, commands: cmds, marked, typed: marked ? [] : [...t.matchAll(OWN_TYPED)].map(m => ({ name: (m[1] ?? m[2]) as string, at: m.index as number, brace: (m.index as number) + m[0].length - 1 })) }
@@ -2698,17 +2699,39 @@ export const withoutOwnCalls = async (given: OwnCallIo, text: string, commands: 
     return { cmds, starts }
   }
   const fedBy = (i: number): string[] => [`${OWN_FEED}${i + 1}`]
-  const atTop = (u: Unit): Promise<Set<number>> => {
-    u.tops ??= (async () => {
+  // The one reading of a text that places what it types: every definition, and in the script every
+  // `source` or `.` command too (readAtTop), which asked in a reading of its own cost the whole
+  // script once more. `defs` is each definition's place among the probes, in the order typed, and
+  // `reads` each such command's, with where in the text it is typed.
+  const placed = (u: Unit): Promise<Placed> => {
+    u.placed ??= (async () => {
+      const typed = u.typed.map((t, def) => ({ at: t.at, def }))
+      const taken = new Set(typed.map(t => t.at))
+      const read = u !== script || marked ? [] : [...text.matchAll(/(?<![^\n;&|(){}])[ \t]*(?:\.|source)[ \t]/g)].map(m => ({ at: m.index as number, def: -1 })).filter(r => !taken.has(r.at))
+      const all = [...typed, ...read].sort((a, b) => a.at - b.at)
       const { cmds, starts } = await probe(
         u.text,
-        u.typed.map(t => t.at),
+        all.map(p => p.at),
       )
+      const defs: number[] = []
+      const reads: { i: number; at: number }[] = []
+      all.forEach((p, i) => {
+        if (p.def < 0) reads.push({ i, at: p.at })
+        else defs[p.def] = i
+      })
+      return { cmds, starts, defs, reads }
+    })()
+    return u.placed
+  }
+  const atTop = (u: Unit): Promise<Set<number>> => {
+    u.tops ??= (async () => {
+      const { cmds, starts, defs } = await placed(u)
       const top = new Set<number>()
-      for (const [i, k] of starts) {
-        const def = cmds[k]
-        if (def && ownDefinitions([def], (u.typed[i] as { name: string }).name).braces.length === 1 && sameWords(def.pipedFrom, fedBy(i))) top.add(i)
-      }
+      defs.forEach((i, d) => {
+        const k = starts.get(i)
+        const def = k === undefined ? undefined : cmds[k]
+        if (def && ownDefinitions([def], (u.typed[d] as { name: string }).name).braces.length === 1 && sameWords(def.pipedFrom, fedBy(i))) top.add(d)
+      })
       return top
     })()
     return u.tops
@@ -2827,18 +2850,19 @@ export const withoutOwnCalls = async (given: OwnCallIo, text: string, commands: 
   let topReads: Promise<string[]> | undefined
   const readAtTop = async (c: RunCommand): Promise<boolean> => {
     topReads ??= (async () => {
-      const places = marked ? [] : [...text.matchAll(/(?<![^\n;&|(){}])[ \t]*(?:\.|source)[ \t]/g)].map(m => m.index as number)
-      const { cmds, starts } = await probe(text, places)
+      const { cmds, starts, reads } = await placed(script)
       const out: string[] = []
-      const reads = (c: RunCommand | undefined): boolean => c?.words[0] === '.' || c?.words[0] === 'source'
-      for (const [i, k] of starts) {
+      const readsIn = (c: RunCommand | undefined): boolean => c?.words[0] === '.' || c?.words[0] === 'source'
+      for (const { i, at } of reads) {
+        const k = starts.get(i)
+        if (k === undefined) continue
         // The commands of a substitution in the file's own name (`. "$(cd "$(dirname "$0")" && pwd)/lib.sh"`)
         // are given before the command, fed by nothing: the first command the place's pipe feeds
         // is the one typed there.
         let j = k
-        while (cmds[j] && !reads(cmds[j]) && !sameWords(cmds[j]?.pipedFrom, fedBy(i))) j++
+        while (cmds[j] && !readsIn(cmds[j]) && !sameWords(cmds[j]?.pipedFrom, fedBy(i))) j++
         const read = cmds[j]
-        if (read && reads(read) && sameWords(read.pipedFrom, fedBy(i)) && endsCommand(text, places[i] as number)) out.push(read.words.join('\n'))
+        if (read && readsIn(read) && sameWords(read.pipedFrom, fedBy(i)) && endsCommand(text, at)) out.push(read.words.join('\n'))
       }
       return out
     })()

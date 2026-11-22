@@ -3993,6 +3993,17 @@ test('#3416: reading a long suite\'s own calls hands the reader a few times its 
   // Every call was read and left out: the cost below is the work done, not the work skipped.
   expect({ runs: cost.runs, held: cost.held }).toEqual({ runs: 1000, held: 0 })
   expect(cost.handed / text.length).toBeLessThan(4)
+  // The same suite reading in a file the guard cannot read at its top, as the repository's long
+  // suites do. Whether that command stands at the top is asked in the reading that places the
+  // definitions, not in one of its own: asked apart it handed the reader the whole text once more
+  // (the Slack gate's suite, 449,087 characters: 1,355,198 handed before, 1,806,612 with it).
+  const reading = text.replace('set -u\n', 'set -u\n. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/suite-deadline.sh" || {\n  exit 1\n}\n')
+  expect(reading.length).toBeGreaterThan(text.length)
+  const withRead = await ownCost(reading)
+  // One run more, and the one left: the command that reads the file in, which is no call of a helper.
+  expect({ runs: withRead.runs, held: withRead.held }).toEqual({ runs: 1001, held: 1 })
+  expect(withRead.handed / reading.length).toBeLessThan(4)
+  expect(withRead.handed - cost.handed).toBeLessThan(reading.length / 2)
 })
 
 test('#3416: a script whose own calls would cost more to read than the limit keeps the rest held', async () => {
