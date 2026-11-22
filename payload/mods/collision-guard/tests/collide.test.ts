@@ -252,14 +252,14 @@ describe('the files a message to another session names', () => {
 describe('where a watched git command is put to git (#3398)', () => {
   const plain = { dir: undefined }
   test('a folder is handed to git as the shell leaves it, or not at all', () => {
-    expect(namedFolder('/other', '/home/d')).toBe('/other')
-    expect(namedFolder('sub/x', '/home/d')).toBe('sub/x')
-    expect(namedFolder('~', '/home/d')).toBe('/home/d')
-    expect(namedFolder('~/other', '/home/d/')).toBe('/home/d/other')
-    expect(namedFolder('$HOME/other', '/home/d')).toBe('/home/d/other')
-    expect(namedFolder('${HOME}/other', '/home/d')).toBe('/home/d/other')
+    expect(namedFolder('/other', '/h/d')).toBe('/other')
+    expect(namedFolder('sub/x', '/h/d')).toBe('sub/x')
+    expect(namedFolder('~', '/h/d')).toBe('/h/d')
+    expect(namedFolder('~/other', '/h/d/')).toBe('/h/d/other')
+    expect(namedFolder('$HOME/other', '/h/d')).toBe('/h/d/other')
+    expect(namedFolder('${HOME}/other', '/h/d')).toBe('/h/d/other')
     // The shell fills these in, so git asked about the characters would answer for another folder.
-    for (const v of ['$X', '${X}/a', '$(pwd)', '`pwd`', 'a*', 'a?', '[ab]', '{a,b}', '~dan/x', '$HOMEX/a', '']) expect(namedFolder(v, '/home/d')).toBeUndefined()
+    for (const v of ['$X', '${X}/a', '$(pwd)', '`pwd`', 'a*', 'a?', '[ab]', '{a,b}', '~dan/x', '$HOMEX/a', '']) expect(namedFolder(v, '/h/d')).toBeUndefined()
     // Home is needed and not known.
     expect(namedFolder('~/other', '')).toBeUndefined()
   })
@@ -282,7 +282,7 @@ describe('where a watched git command is put to git (#3398)', () => {
     expect(whereGit({ dir: 'b', chained: 'a/b' }, '/repo', '/repo', '', 'git -C a -C b checkout main')).toEqual({ at: ['-C', '/repo', '-C', 'a/b'], apart: [], asToday: false })
   })
   test('a home folder is written out, which git does not do for itself', () => {
-    expect(whereGit({ dir: '~/other' }, '/repo', '/repo', '/home/d', 'git -C ~/other checkout main')).toEqual({ at: ['-C', '/home/d/other'], apart: [], asToday: false })
+    expect(whereGit({ dir: '~/other' }, '/repo', '/repo', '/h/d', 'git -C ~/other checkout main')).toEqual({ at: ['-C', '/h/d/other'], apart: [], asToday: false })
   })
   test('the repository and the working folder it names apart are handed to git as written', () => {
     expect(whereGit({ dir: undefined, gitDir: '/other/.git', workTree: '/other' }, '/repo', '/repo', '', 'git --git-dir=/other/.git --work-tree=/other checkout main')).toEqual({
@@ -292,7 +292,7 @@ describe('where a watched git command is put to git (#3398)', () => {
     })
     // A relative one is git's to read, from the folder every -C leads to.
     expect(whereGit({ dir: '/w/a', gitDir: '../other/.git' }, '/repo', '/repo', '', 'git -C /w/a --git-dir=../other/.git checkout main')).toEqual({ at: ['-C', '/w/a'], apart: ['--git-dir=../other/.git'], asToday: true })
-    expect(whereGit({ dir: undefined, workTree: '~/w' }, '/repo', '/repo', '/home/d', 'GIT_WORK_TREE=~/w git checkout main')).toEqual({ at: ['-C', '/repo'], apart: ['--work-tree=/home/d/w'], asToday: true })
+    expect(whereGit({ dir: undefined, workTree: '~/w' }, '/repo', '/repo', '/h/d', 'GIT_WORK_TREE=~/w git checkout main')).toEqual({ at: ['-C', '/repo'], apart: ['--work-tree=/h/d/w'], asToday: true })
   })
   test('what the guard cannot tell is said, never guessed', () => {
     const why = (w: ReturnType<typeof whereGit>) => ('unknown' in w ? w.unknown : 'known')
