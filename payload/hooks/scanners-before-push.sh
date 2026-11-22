@@ -650,9 +650,10 @@ fi
 # with a hash inside a heredoc or a string that runs over several lines, read as a comment, as it
 # is in the shell, Python and awk the heredocs here hold.
 #
-# Read as text in the C locale. Without that a suite holding a NUL (or, under GNU grep, a byte that
-# is not UTF-8) comes back as one line saying the file matched, in place of its lines (L329,
-# measured 2026-11-22 with this Mac's grep), and a scanner with a real call would be missed.
+# Read as text in the C locale. Without that a suite holding a NUL comes back as one line saying
+# the file matched, in place of its lines (L329, measured 2026-11-22 with this Mac's grep), and a
+# scanner with a real call would be missed. GNU grep's manual says it treats a byte that is not
+# valid in the locale the same way; that was not measured here, and the C locale has no such byte.
 _sc_phase "listing the repository's test suites and choosing the scanners among them"
 REPO_FILES="$HOOK_DIR/lib/repo-files.sh"
 SCANS='ls-files|repo-files[.]sh'
