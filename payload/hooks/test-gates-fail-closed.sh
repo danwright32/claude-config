@@ -104,8 +104,9 @@ refusing_gates(){ # refusing_gates <settings> <hooks dir>
   done
 }
 registered_pre "$SETTINGS" > "$WORK/pre"
+refusing_gates "$SETTINGS" "$DIR" > "$WORK/gates"
 GATES=()
-while IFS= read -r g; do GATES+=("$g"); done < <(refusing_gates "$SETTINGS" "$DIR")
+while IFS= read -r g; do GATES+=("$g"); done < "$WORK/gates"
 [ "${#GATES[@]}" -ge 20 ] && ok || bad "only ${#GATES[@]} refusing PreToolUse gates were found in $SETTINGS, so the enumeration is reading the wrong thing"
 
 # A source line whose failure branch is a bare exit 0 or return 0, on the line itself or on the
