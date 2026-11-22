@@ -28,8 +28,11 @@ export type AskBeforeSavingQuestion = {
 export type AskBeforeSavingRemoval = {
   /** What goes, as Dan reads it (home as ~): a file, a folder taken whole, or a pattern in a memory folder. */
   file: string
-  /** Deleted, or moved to another place (mv's source, or a copy the same command then removes). */
-  how: 'delete' | 'move'
+  /**
+   * Deleted, moved to another place (mv's source, or a copy the same command then removes), or
+   * emptied in place (truncate, shred): the file stays and what it held goes.
+   */
+  how: 'delete' | 'move' | 'empty'
   /** Where a move puts it, as Dan reads it; absent where the command's words do not say. */
   to?: string
   /** A file is at `to` now, which the move replaces. */

@@ -105,6 +105,7 @@ import {
   removalWords,
   removedNames,
   splitRefusal,
+  takesAway,
 } from './rules.ts'
 
 // Ask before saving (claude-config#618). Before a standing rule reaches lasting memory, by Write,
@@ -416,7 +417,7 @@ const kindAt = async ($: EngineInterface, path: string): Promise<string | undefi
 // hook, which fails closed.
 const NO_REMOVALS: AskBeforeSavingRemoval[] = []
 const removalsOf = async ($: EngineInterface, tool: string, input: Record<string, unknown>, { home }: Where, w: Writes | undefined): Promise<AskBeforeSavingRemoval[]> => {
-  if (tool !== 'Bash' || w === undefined || !(w.changes ?? []).some(c => c.does === 'remove')) return NO_REMOVALS
+  if (tool !== 'Bash' || w === undefined || !(w.changes ?? []).some(c => takesAway(c.does))) return NO_REMOVALS
   const command = String(input.command ?? '')
   const inCheckout: InCheckout = async abs => (await $.modkit.workingTree({ path: abs })) !== null
   const text = mentionsAny(command) ? await mentionText($, command) : command
@@ -445,7 +446,7 @@ const removalsOf = async ($: EngineInterface, tool: string, input: Record<string
     if (c.how === 'move') {
       const replaces = c.toPath !== undefined && (await $.fs.exists(c.toPath)) && (await kindAt($, c.toPath)) === 'file'
       out.push({ ...shape, how: 'move', ...(c.to !== undefined ? { to: c.to } : {}), ...(replaces ? { replaces: true as const } : {}) })
-    } else out.push({ ...shape, how: 'delete', ...(c.path !== undefined ? await gitHolds($, c.path) : { back: 'unknown' as const, why: 'its path could not be read from the command' }) })
+    } else out.push({ ...shape, how: c.how, ...(c.path !== undefined ? await gitHolds($, c.path) : { back: 'unknown' as const, why: 'its path could not be read from the command' }) })
   }
   return out
 }
@@ -1000,8 +1001,11 @@ const saveCheck: Hook<'tool.check'> = async ($, e, next) => {
   const { files } = targets
   // A command that removes lasting memory or moves it away (#3402) is judged by itself, under the
   // removal's own question and approval: nothing below, which is all about a save, is reached.
+  // The one exception is a command that also writes the lessons file by shell (a move that lands on
+  // it among them): that was refused outright before #3402, with no question waiting (#3343), and it
+  // still is, below, so no Move or Delete can approve what no For good could.
   const removes = await removalsOf($, tool, input, at, targets.writes)
-  if (removes.length) {
+  if (removes.length && !shellLessons(tool, targets, at.home)) {
     const id = String(raw.tool_use_id ?? '')
     const mine = await takeRemoval($, key, removes, files)
     if (mine.live) {
@@ -1011,11 +1015,11 @@ const saveCheck: Hook<'tool.check'> = async ($, e, next) => {
     // The settings hooks beneath decide first, as for a save (#707).
     const beneath = await next(e)
     if (beneath.decision === 'deny') return beneath
-    // One question cannot cover a removal and a save that is not where its move lands, nor a
-    // deletion beside a move: refused whole, and no question waits.
+    // One question cannot cover a removal and a save that is not where its move lands, nor files
+    // taken away in more than one way (deleted, moved, emptied): refused whole, and no question waits.
     const lands = removes.flatMap(r => (r.how === 'move' && r.to !== undefined ? [r.to] : []))
     const others = files.filter(f => !lands.includes(f))
-    if (others.length || (removes.some(r => r.how === 'move') && removes.some(r => r.how !== 'move'))) return { decision: 'deny', reason: splitRefusal(removes, others) }
+    if (others.length || new Set(removes.map(r => r.how)).size > 1) return { decision: 'deny', reason: splitRefusal(removes, others) }
     const night = await removalWhileAsleep($, removes, String(input.command ?? ''))
     if (night !== null) return { decision: 'deny', reason: night }
     const q: AskBeforeSavingQuestion = { id: id || `save-${++saves}`, tool: tool as AskBeforeSavingQuestion['tool'], input, files, key, removes }

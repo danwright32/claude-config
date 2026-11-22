@@ -2059,3 +2059,58 @@ test("the removal's words: what the refusal says, the answers, and what the mod 
     'Not run: this command deletes lasting memory (~/Apps/slate/CLAUDE.md) and also writes lasting memory (~/Apps/slate/AGENTS.md). Dan is asked about each by itself, since one answer cannot cover both. Send each as a command of its own.',
   )
 })
+
+// A file emptied in place (truncate, shred) loses what it held as surely as one deleted, and the
+// reader reports it among a command's changes as 'truncate'. Measured before this was built:
+// `truncate -s 0 CLAUDE.md` gave no candidate and ran unasked.
+test('a lasting memory file emptied in place is a candidate, said as emptied, and one the same command also removes is said as removed (#3402)', async () => {
+  expect(await candidatesOf('truncate -s 0 CLAUDE.md')).toEqual([['~/Apps/slate/CLAUDE.md', 'empty', '', '']])
+  expect(await candidatesOf('shred ~/.claude/projects/p/memory/note.md')).toEqual([['~/.claude/projects/p/memory/note.md', 'empty', '', '']])
+  expect(await candidatesOf('truncate -s 0 ~/.claude/LESSONS.md')).toEqual([['~/.claude/LESSONS.md', 'empty', '', '']])
+  // shred -u wipes the file and then removes it: one candidate, a deletion.
+  expect(await candidatesOf('shred -u CLAUDE.md')).toEqual([['~/Apps/slate/CLAUDE.md', 'delete', '', '']])
+  expect((await candidatesOf('truncate -s 0 CLAUDE.*')).map(c => [c[0], c[1]])).toEqual([['~/Apps/slate/CLAUDE.md', 'empty']])
+  for (const command of ['truncate -s 0 notes.md build.log', 'shred /tmp/backup/CLAUDE.md', 'touch CLAUDE.md', 'chmod 600 CLAUDE.md']) expect([command, await candidatesOf(command)]).toEqual([command, []])
+})
+
+// What a find -exec hands to rm is reported by the reader as a removal under each folder the find
+// starts from, with no names (those are carried for -delete alone). So the lasting memory the
+// command names is taken as what may go: a bare name where it would sit at the top of the folder,
+// a path spelled out where it is under the folder. Measured before this was built:
+// `find . -name CLAUDE.md -exec rm {} +` gave no candidate and ran unasked.
+test('a folder taken whole that the reader cannot limit is a candidate for the lasting memory the command names under it, as a guess (#3402)', async () => {
+  expect(await candidatesOf('find . -name CLAUDE.md -exec rm {} +')).toEqual([['~/Apps/slate/CLAUDE.md', 'delete', '', 'guessed']])
+  expect(await candidatesOf('find docs -name AGENTS.md -exec rm -f {} \\;')).toEqual([['~/Apps/slate/docs/AGENTS.md', 'delete', '', 'guessed']])
+  expect(await candidatesOf('cp ~/Apps/slate/AGENTS.md ~/keep.md && rm -rf ~/Apps/slate')).toEqual([['~/Apps/slate/AGENTS.md', 'delete', '', 'guessed']])
+  // A path spelled out that is not under the folder, and a command naming no lasting memory, give none.
+  expect(await candidatesOf('rm -rf ~/Apps/other && cat ~/Apps/slate/CLAUDE.md')).toEqual([])
+  expect(await candidatesOf("find . -name '*.md' -exec rm {} +")).toEqual([])
+  expect(await candidatesOf('rm -rf ../slate')).toEqual([])
+  // The memory under home, and a find -delete limited to names, are judged as they were.
+  expect(await candidatesOf('find ~/.claude/projects/p/memory -type f -exec rm {} +')).toEqual([['~/.claude/projects/p/memory', 'delete', '', 'tree']])
+  expect(await candidatesOf('find . -name CLAUDE.md -delete')).toEqual([['~/Apps/slate', 'delete', '', 'tree CLAUDE.md']])
+})
+
+test('an emptying is said in its own words: the file stays, and git is asked as for a deletion (#3402)', () => {
+  const emptied: AskBeforeSavingRemoval[] = [{ file: '~/Apps/slate/CLAUDE.md', how: 'empty', back: 'none' }]
+  expect(removesWhat(emptied)).toBe('this empties lasting memory (~/Apps/slate/CLAUDE.md)')
+  expect(removalWords(emptied).label).toBe('Empty')
+  expect(removalOptions(emptied)).toEqual([{ label: 'Keep as is', description: 'Nothing is emptied' }, { label: 'Empty', description: 'Empties ~/Apps/slate/CLAUDE.md' }])
+  expect(removalSaid(emptied)).toBe('The file stays, and what is in it is cut short or wiped. Git does not hold it, so once emptied it cannot be got back from git.')
+  expect(removalSaid([{ file: '~/a/CLAUDE.md', how: 'empty', back: 'git' }, { file: '~/a/AGENTS.md', how: 'empty', back: 'changed' }])).toBe(
+    '~/a/CLAUDE.md stays, and what is in it is cut short or wiped. Git holds ~/a/CLAUDE.md unchanged, so it can be restored from git. ~/a/AGENTS.md stays, and what is in it is cut short or wiped. Git holds an older version of ~/a/AGENTS.md, so the changes since its last commit cannot be got back.',
+  )
+  const ask = removalInstruction('t2', emptied)
+  expect(ask.startsWith('Not emptied yet: this empties lasting memory (~/Apps/slate/CLAUDE.md), so Dan decides first.')).toBe(true)
+  expect(ask).toContain('"Empty ~/Apps/slate/CLAUDE.md: <why>?", with the options Keep as is and Empty')
+  expect([ask.includes('Delete'), ask.includes('For good'), ask.includes('Save to')]).toEqual([false, false, false])
+  // An approval to empty a file is none to delete it, and the reverse.
+  const approval = { id: 'a', key: 'k', files: [], until: 1, asked: 'q', removes: emptied }
+  expect(coversRemoval(approval, emptied, [])).toBe(true)
+  expect(coversRemoval(approval, [{ file: '~/Apps/slate/CLAUDE.md', how: 'delete', back: 'none' }], [])).toBe(false)
+  expect(coversRemoval({ ...approval, removes: [{ file: '~/Apps/slate/CLAUDE.md', how: 'delete', back: 'none' }] }, emptied, [])).toBe(false)
+  // One question cannot cover a deletion and an emptying: each is named in the refusal.
+  expect(splitRefusal([{ file: '~/a/AGENTS.md', how: 'delete', back: 'none' }, ...emptied], [])).toBe(
+    'Not run: this command deletes lasting memory (~/a/AGENTS.md) and also empties lasting memory (~/Apps/slate/CLAUDE.md). Dan is asked about each by itself, since one answer cannot cover both. Send each as a command of its own.',
+  )
+})
