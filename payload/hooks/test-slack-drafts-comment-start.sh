@@ -93,8 +93,15 @@ refused "the control: with no # the post after the ; is refused"
 says "the control: as the post it is" "REFUSED: this command posts to Slack"
 run_bash "echo see$BS # 3; $POST${NL}echo done"
 refused "the measured shape: a post after an escaped space and a # is refused"
-says "the measured shape: as a check it could not make" "REFUSED: the gate could not check whether this command posts to Slack"
-says "the measured shape: naming the # and the line it is on" "it holds a # the gate cannot tell from a comment, in the line \`echo see$BS # 3; $POST\`"
+# Every shell keeps that # inside the word (measured 2026-11-23 in bash, sh, dash, zsh and ksh, run
+# as a -c text, a file and an eval), so the reader reads the rest of the line as the shell does and
+# the post is found as the control's is (claude-config#3481).
+says "the measured shape: as the post it is, the same answer as the control's" "REFUSED: this command posts to Slack"
+# Where the shells differ the reader is not sure, and the gate says which line it could not check.
+run_bash "x=(a b)# c; $POST${NL}echo done"
+refused "a post after a # right after an array, which bash and zsh read differently, is refused"
+says "an array's #: as a check it could not make" "REFUSED: the gate could not check whether this command posts to Slack"
+says "an array's #: naming the # and the line it is on" "it holds a # the gate cannot tell from a comment, in the line \`x=(a b)# c; $POST\`"
 for hides in "echo see$BS #3; $POST" \
   "echo see$BS$BS$BS # 3; $POST" \
   "echo a$BS;# c; $POST" \
@@ -180,13 +187,37 @@ for calm in "echo see$BS # 3; echo quiet" "echo \$(echo b)# c; echo quiet" "echo
   run_seen "${calm//\#/}"
   unread "and the same command with no # is answered the same way: $(shown "${calm//\#/}")"
 done
-# Where the command names anything that look sends to the reader, the reader refuses the #, quiet
-# or not: it does not read the rest of that line, so it cannot say that nothing there posts.
-for doubt in "echo see$BS # 3; bash quiet.sh" "echo a$BS # 'x${NL}echo quiet${NL}'" "echo \$(echo b)# c; ./quiet"; do
-  run_seen "$doubt"
+# Where the command names anything that look sends to the reader, the reader reads the rest of the
+# line wherever every shell keeps the # inside the word, so it can say that nothing there posts: a
+# quiet command passes, as the same command with no # does (claude-config#3481).
+printf '%s\n' 'echo quiet' > "$T/quiet.sh"
+for sure in "echo see$BS # 3; bash quiet.sh" "echo a$BS${NL}# c; bash quiet.sh" "echo \$(echo b)# c; bash quiet.sh" \
+  "echo a$BS|# c; bash quiet.sh"; do
+  run_seen "$sure${NL}echo done"
+  read_through "a quiet script after a # every shell keeps inside a word is read by the reader: $(shown "$sure")"
+  allowed "and passes, its line read as the shell reads it: $(shown "$sure")"
+  run_seen "${sure//\#/}${NL}echo done"
+  allowed "as the same command with no # passes: $(shown "${sure//\#/}")"
+done
+# Where the reader is not sure (the shells differ, or the text is inside backquotes) it refuses the
+# #, quiet or not: it has not read the rest of that line, so it cannot say that nothing there posts.
+for doubt in "x=(a b)# c; bash quiet.sh" "echo \`echo a # c\`; bash quiet.sh"; do
+  run_seen "$doubt${NL}echo done"
   refused "a # the gate cannot tell from a comment is refused wherever the reader is started: $(shown "$doubt")"
   says "and as a check it could not make: $(shown "$doubt")" "REFUSED: the gate could not check whether this command posts to Slack"
 done
+# A reading that goes on past such a # and then cannot be read to its end is one the reader cannot
+# vouch for: the apostrophe after this # opens a string that never closes, and a text the gate
+# cannot read is judged by a cruder look, which does not find the script run inside the
+# substitution on the first line, while bash runs that line before it reaches the second. So the #
+# is named and the gate refuses.
+# Seen to fail on 2026-11-23 with the reader reading on and not naming the #: exit 0.
+mkdir -p "$T/u3481/hot/lib"
+printf '%s\n' "$POST" > "$T/u3481/hot/lib/x.sh"
+printf '%s\n' 'x=$(bash hot/lib/x.sh)' "echo see$BS # it's" > "$T/u3481/unclosed.sh"
+run_bash "bash unclosed.sh" "$T/u3481"
+refused "a script that runs a file that posts, then opens a string after such a # that never closes, is refused"
+says "and as a check it could not make" "REFUSED: the gate could not check whether this command posts to Slack"
 # The same in a script the command runs: the file is read as the command is.
 printf '%s\n' '#!/bin/bash' "echo see$BS # 3; $POST" 'echo done' > "$T/hash-posts.sh"
 printf '%s\n' '#!/bin/bash' "echo see # 3; $POST" 'echo done' > "$T/hash-quiet.sh"
@@ -209,12 +240,23 @@ for reach in "bash hot/lib/x.sh" ". hot/lib/x.sh" "source hot/lib/x.sh" "bash ho
   "hot/lib/x.sh" "./hot/lib/x" "eval \"\$(cat hot/lib/x)\"" "cat hot/lib/x | sh" "python3 hot/lib/p.py"; do
   run_seen "echo see 3; $reach${NL}echo done" "$Q"
   refused "the control: with no #, the post is reached and refused: $reach"
+  CONTROL_ERR="$ERR"
   run_seen "echo see # 3; $reach${NL}echo done" "$Q"
   read_through "the control: after a real comment the reader is still started, since the wrapper's look takes no # for a comment: $reach"
   allowed "the control: and the reader, which reads the comment as the shell does, passes it: $reach"
-  for front in "echo see$BS # 3" "echo \$(echo b)# c" "echo a$BS${NL}# c" "x=(a b)# c" "echo \`echo a # c\`"; do
+  # Where every shell keeps the # inside the word the reader reads the line, and the answer is the
+  # control's own, word for word, once the front is put back to the control's (claude-config#3481).
+  for front in "echo see$BS # 3" "echo \$(echo b)# c" "echo a$BS${NL}# c"; do
     run_seen "$front; $reach${NL}echo done" "$Q"
     refused "a post reached with no posting word is refused after a # the shell reads inside a word: $(shown "$front; $reach")"
+    said="${ERR//"$front"/echo see 3}"
+    if [ "$said" = "$CONTROL_ERR" ]; then check "and by the same answer the command is given with no #: $(shown "$front; $reach")" ok
+    else check "and by the same answer the command is given with no #: $(shown "$front; $reach")" "said: ${ERR:0:300}"; fi
+  done
+  # Where the reader is not sure, as a check it could not make.
+  for front in "x=(a b)# c" "echo \`echo a # c\`"; do
+    run_seen "$front; $reach${NL}echo done" "$Q"
+    refused "a post reached with no posting word is refused after a # the gate cannot tell from a comment: $(shown "$front; $reach")"
     says "and as a check it could not make: $(shown "$front; $reach")" "REFUSED: the gate could not check whether this command posts to Slack"
   done
 done

@@ -126,7 +126,8 @@ WHOLE = [
     ("in single quotes", "same", "echo 'a # c'; touch ran\n"),
     ("in a $'...' string", "same", "echo $'a # c'; touch ran\n"),
     ("in a ${#x}", "same", "echo ${#x}; touch ran\n"),
-    # Whatever the rest of the line holds, the line is named.
+    # Whatever the rest of the line holds, it is read as the shell reads it (`open`: a string, a
+    # joined line, a heredoc, a cd, the ) of a subshell), since every shell keeps this # in its word.
     ("an escaped space before it, the rest of the line a whole string", "same", "echo a\\ # 'x'; touch ran\necho done\n"),
     ("an escaped space before it, the rest of the line opening a string", "open", "echo a\\ # 'x\ntouch ran\n'\n"),
     ("an escaped space before it, the line joined to the next", "open", "echo a\\ # c \\\ntouch ran\n"),
@@ -156,9 +157,10 @@ REAL = {"a space before it", "an escaped backslash, then a space", "a ; before i
         "in a $( ) in double quotes, after a space", "in backquotes, after a space",
         "in backquotes closed on a later line, after a space",
         "right after an arithmetic command"}
-# A # the shell reads inside a word (`same`: the shell runs the marker after the ;). Where the
-# reader always read it as text, the marker is listed (PLAIN). Where it took the # for a comment,
-# it still does, and names the line as one it is not sure of.
+# A # the shell reads inside a word (`same`: the shell runs the marker after the ;). The marker is
+# listed: where the reader always read the # as text (PLAIN), and where it took it for a comment
+# and now, for a caller that asks which lines it is unsure of, reads on as every shell does
+# (claude-config#3481; bash, sh, dash, zsh and ksh measured 2026-11-23).
 WORD = {"mid word (a#b)", "an escaped space before it", "three backslashes, then a space",
         "an escaped tab before it", "an escaped ; before it", "an escaped & before it",
         "an escaped | before it", "an escaped ( before it", "an escaped ) before it",
@@ -224,10 +226,26 @@ def say(ok, what, why=""):
 # A caller that does not ask is given the commands it was always given: other gates read through
 # the reader, and what a line the reader is not sure of means to each is that gate's to decide.
 asked, unasked = [], sw.commands("echo a\\ # c; touch ran\necho done\n")
-sw.commands("echo a\\ # c; touch ran\necho done\n", unsure=asked)
-say([t.strip() for _, t in unasked] == ["echo a\\", "echo done"] and asked == [(8, 22)],
-    "#3464 the reading itself is unchanged, and the line is named only to a caller that asks",
-    "commands gave %r and named %r" % (unasked, asked))
+told = sw.commands("echo a\\ # c; touch ran\necho done\n", unsure=asked)
+say([t.strip() for _, t in unasked] == ["echo a\\", "echo done"],
+    "#3464 a caller that does not ask is given the reading it was always given",
+    "commands gave %r" % (unasked,))
+# A caller that asks is given the shell's own reading where every shell keeps the # inside the word
+# (claude-config#3481): the rest of the line is read, and no line is named.
+say([t.strip() for _, t in told] == ["echo a\\ # c", "touch ran", "echo done"] and asked == [],
+    "#3481 a caller that asks is given the rest of a line whose # every shell keeps inside a word",
+    "commands gave %r and named %r" % (told, asked))
+# A reading that went on past such a # and cannot be read to its end is not one to vouch for: the #
+# is named, so a caller that judges an unreadable text by other means still knows of it.
+asked = []
+try:
+    sw.commands("echo a\\ # it's\n", unsure=asked)
+    gave = "read"
+except sw.Unreadable:
+    gave = "unreadable"
+say(gave == "unreadable" and asked == [(8, 14)],
+    "#3481 a reading that went on past such a # and cannot be read to its end names the #",
+    "the reading was %s and named %r" % (gave, asked))
 real = []
 sw.commands("echo a # c; touch ran\necho done\n", comments=real)
 say(real == [(7, 21)], "#3464 a comment the shell starts too is given to comments", "named %r" % (real,))
@@ -286,10 +304,13 @@ for name, kind, text in rows:
         say(got == want, "#3464 the control: a real comment is still one: a # %s (%s)" % (name, kind),
             "the reader said %s, wanted %s: [%s]" % (got, want, shown))
     if name in WORD and kind == "same":
-        want = "listed" if name in PLAIN else "unsure"
-        say(got == want, "#3464 a # the shell reads inside a word hides nothing: a # %s" % name,
+        say(got == "listed", "#3464 a # the shell reads inside a word hides nothing: a # %s" % name,
+            "the reader said %s, wanted listed: [%s]" % (got, shown))
+    if kind == "open":
+        want = "listed" if ran else "not listed"
+        say(got == want, "#3481 past a # every shell keeps inside a word the reader reads what the shell does: a # %s" % name,
             "the reader said %s, wanted %s: [%s]" % (got, want, shown))
-    if (name, kind) in UNSURE or kind == "open":
+    if (name, kind) in UNSURE:
         say(got == "unsure", "#3464 where it cannot be told the line is named: a # %s (%s)" % (name, kind),
             "the reader said %s, wanted unsure: [%s]" % (got, shown))
 PY

@@ -1860,13 +1860,16 @@ NUL_WHY = ("it names a path holding a NUL byte, which bash drops, zsh keeps insi
 
 class UnsureComment(BaseException):
     """Raised by this run's reader (remember_readings) for a text holding a # that the reader took for
-    a comment where the shell reads it inside a word, or where which it does cannot be told
-    (lib/shell-words.py word_starts): after an escaped space or separator, right after a closing
-    parenthesis that is still inside its word or whose kind is not known, on a line a backslash
-    joined to a word, and inside backquotes. The shell may run the rest of that line, which the
-    reading left out, so a post written there was allowed (claude-config#3464). A BaseException, as
-    NulPath is, so nothing in the walk reads it as a text that merely could not be read; main()
-    refuses the call as one it could not check."""
+    a comment where it cannot be told whether the shell does (lib/shell-words.py word_starts):
+    right after a closing parenthesis whose kind is not known or that bash and zsh read
+    differently, and inside backquotes. The shell may run the rest of that line, which the reading
+    left out, so a post written there was allowed (claude-config#3464). Where every shell keeps the
+    # inside its word (after an escaped space or separator, right after the ) of a substitution, on
+    a line a backslash joined to a word) the reader reads the rest of the line as the shell does
+    and names nothing, unless that reading then cannot be read to its end, when the # is named and
+    this is raised all the same (claude-config#3481). A BaseException, as NulPath is, so nothing in
+    the walk reads it as a text that merely could not be read; main() refuses the call as one it
+    could not check."""
 
     def __init__(self, text, at):
         super().__init__(at)
@@ -1876,10 +1879,10 @@ class UnsureComment(BaseException):
 
 
 def comment_why(line):
-    return ("it holds a # the gate cannot tell from a comment, in the line `%s`: the shell reads a # inside "
-            "a word where a backslash, a closing parenthesis or a joined line stands right before it, and "
-            "then runs the rest of that line, which the gate would not have read. Write that # in quotes, "
-            "or put the comment on a line of its own (claude-config#3464)" % line)
+    return ("it holds a # the gate cannot tell from a comment, in the line `%s`: a shell can read a # "
+            "inside a word where a closing parenthesis or a backslash stands right before it, or inside "
+            "backquotes, and then runs the rest of that line, which the gate could not read for certain. "
+            "Write that # in quotes, or put the comment on a line of its own (claude-config#3464)" % line)
 
 
 def budget_clock():

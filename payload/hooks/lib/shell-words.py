@@ -477,8 +477,14 @@ def moved(cwd, old, target):
 # The other mistake hides a command as well: a real comment read as text can open a quote at an
 # apostrophe in it, and the string then holds the commands of the lines after. So a reader that
 # cannot tell says so and never guesses either way: None from word_starts, and from commands() the
-# line named in `unsure`, for a caller that asks. commands() does not change what it reads: other
-# gates read through it, and each must decide for itself what a line it is not sure of means.
+# line named in `unsure`, for a caller that asks. commands() does not change what it reads for a
+# caller that does not ask: other gates read through it, and each must decide for itself what such
+# a line means. A caller that asks for `unsure` is given the shell's own reading wherever
+# word_starts answers False outside backquotes, the # as text and the rest of its line as the
+# commands they are (claude-config#3481): there bash, bash --posix, sh, dash, zsh, zsh emulating sh
+# and ksh all keep the # in its word, run as a -c text, a file and an eval, measured 2026-11-23
+# with the lines the same shells do take for comments beside them. One rule, asked by every reader
+# of comments here and by lib/script-params.py.
 WORD_BREAKS = " \t\n;&|()"
 
 
@@ -557,10 +563,12 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, un
     comments and unsure, when lists, are given between them one (start, end) for each # the reading
     took for a comment, s[start] the # and end the line break the reading went on from
     (claude-config#3464): comments where the shell starts a comment there too (word_starts), unsure
-    where the shell reads the # inside a word and so RUNS the rest of that line, or where which it
-    does cannot be told. The reading itself is what it always was, with every such line left out, so
-    a caller that does not ask for unsure is given the commands it was always given, and one that
-    must not miss a command asks, and does not trust a reading that names any such line.
+    where which the shell does cannot be told. Where every shell reads the # inside a word and so
+    RUNS the rest of that line, a caller that asks for unsure is given that line read as the shell
+    reads it, the # as text (claude-config#3481), and should that reading not reach its end the #
+    is named in unsure as it raises Unreadable. A caller that does not ask for unsure is given the
+    commands it was always given, with every such line left out, and one that must not miss a
+    command asks, and does not trust a reading that names any line.
 
     The text is the command as written, quotes and all, and a command substitution's text stays
     inside the command that holds it as well as being read as commands of its own, which come first.
@@ -607,24 +615,47 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, un
     # Where the last ) the reading went by ended, and what a # right after it is (word_starts): True
     # where the ) ended a command, False where it is still inside a word, None where that is not known.
     closed = [-1, None]
+    # Each (start, end) the reading went on from where it used to leave the line out, for a caller
+    # that asks for unsure (comment_end). A reading that then cannot be read to its end gives them
+    # to unsure before it raises (unreadable).
+    read_on = []
+
+    def unreadable(at=None):
+        """The Unreadable to raise. A reading that went on past a # it used to take for a comment and
+        then cannot be read to its end is not one to vouch for, so those # are named in unsure: a
+        caller that judges an unreadable text by other means still refuses it (claude-config#3481)."""
+        if unsure is not None:
+            unsure.extend(read_on)
+        return Unreadable(at)
 
     def comment_end(at, breaks):
         """Where the text this reading leaves out from the # at `at` ends, or None where that # is
-        text: the character before it is none of breaks. The reading is the one it always was, the #
-        a comment and the rest of its line nobody's text. What it knows now (claude-config#3464) is
-        whether the shell agrees. Where it does (word_starts) the span is given to comments. Where
-        the shell reads the # inside a word, or it cannot be told (what the ) before it closed is not
-        known or is read differently by bash and zsh; or the text is inside backquotes and either a
-        backslash stands before the # there, which the backquotes read first, or a backquote stands
-        after it on its line, where bash ends the backquotes, comment or not), it is given to
-        unsure."""
+        text: the character before it is none of breaks, or the caller asked for unsure and every
+        shell reads the # inside a word (word_starts answers False, outside backquotes), where the
+        reading goes on as the shell does (claude-config#3481). Otherwise the reading is the one it
+        always was, the # a comment and the rest of its line nobody's text, and what it knows
+        (claude-config#3464) is whether the shell agrees. Where it does (word_starts) the span is
+        given to comments. Where it cannot be told (what the ) before it closed is not known or is
+        read differently by bash and zsh; or the text is inside backquotes and either a backslash
+        stands before the # there, which the backquotes read first, or a backquote stands after it on
+        its line, where bash ends the backquotes, comment or not), it is given to unsure. A caller
+        that asked for comments alone keeps the old reading everywhere, and a # the shell reads
+        inside a word is then given to neither list."""
         if at and s[at - 1] not in breaks:
             return None
         j = s.find(line_break, at)
         end = n if j < 0 else j
         if comments is not None or unsure is not None:
             ticked = any(g["k"] == "tick" for g in frames)
-            sure = word_starts(s, at, breaks, closed, ticked) is True and not (ticked and "`" in s[at:end])
+            starts = word_starts(s, at, breaks, closed, ticked)
+            if starts is False and unsure is not None and not ticked:
+                # Every shell keeps this # inside its word and runs the rest of the line (bash, sh,
+                # dash, zsh and ksh, measured 2026-11-23), so a caller that asks which lines the
+                # reading is unsure of is given the shell's reading here: the # is text
+                # (claude-config#3481).
+                read_on.append((at, end))
+                return None
+            sure = starts is True and not (ticked and "`" in s[at:end])
             given = comments if sure else unsure
             if given is not None:
                 given.append((at, end))
@@ -727,7 +758,7 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, un
             # before it expands anything; a substitution or quote still open there runs nothing in
             # the shell, and is a reading this cannot trust.
             if frames[-1] is not bodies[-1]:
-                raise Unreadable()
+                raise unreadable()
             frames.pop()
             i = bodies.pop()["next"]
             continue
@@ -859,7 +890,7 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, un
         if c == "#":
             # A comment, as this reading always took one. Where the shell reads the # inside a word
             # (after an escaped space, right after the ) of a substitution) it runs the rest of the
-            # line, which comment_end tells a caller that asks (claude-config#3464).
+            # line, which comment_end has a caller that asks read too (claude-config#3464, #3481).
             end = comment_end(i, WORD_BREAKS)
             if end is not None:
                 cut(f, i, "#")
@@ -980,7 +1011,7 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, un
                 closed[:] = i + 1, None  # one that closes nothing the reading opened
         i += 1
     if len(frames) > 1:
-        raise Unreadable(next((f["at"] for f in frames if "at" in f), None))
+        raise unreadable(next((f["at"] for f in frames if "at" in f), None))
     cut(frames[0], n, "end")
     return out
 

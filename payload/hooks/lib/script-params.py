@@ -83,10 +83,13 @@ PARAMS_END = re.compile(
     r"[ \t]+(?:--|[^-+\s;&|#)])"
     r"|(\(\s*\))"
     r"|(?:^|[;&|({!]|\bthen|\belse|\bdo)[ \t]*(\.)[ \t]+\S", re.M)
-# Where a comment may start: a # that starts the text or follows white space. Not one whose white
-# space a backslash comes before, since an escaped space or a line joined by a backslash can put
-# the # inside a word (`echo a\ #b` prints "a #b"). uncommented() decides which of them start one.
-COMMENT_START = re.compile(r"(?:\A|(?<=\s))(?<!\\\s)#")
+# Where a comment may start: a # that starts the text or follows white space. Whether a word starts
+# there, so that the shell starts a comment, is the reader's one rule to say (lib/shell-words.py
+# word_starts, which counts the backslashes before the white space and walks back over a line a
+# backslash joined: `echo a\ #b` prints "a #b"), and uncommented() asks it of each. This file had a
+# pattern of its own for that, which took any backslash before the white space for an escape
+# (claude-config#3481).
+COMMENT_START = re.compile(r"(?:\A|(?<=\s))#")
 # The shells whose $0 is the script's everywhere in a text they read (module docstring).
 ZERO_SHELLS = ("bash", "dash")
 SHELL_OPTIONS = re.compile(r"-[euxvn]+")
@@ -96,12 +99,14 @@ ASSIGNMENT = re.compile(r"[A-Za-z_]\w*=")
 BUILT = re.compile(r"[$`]")
 
 
-def uncommented(text, parts):
+def uncommented(text, parts, word_starts):
     """text with its comments blanked to spaces, each offset kept. parts is the reader's reading of
     text (lib/shell-words.py's commands(), which follows the quoting; Judge.parsed), or None where
-    it cannot read the text, and then nothing is blanked.
+    it cannot read the text, and then nothing is blanked. word_starts is the reader's rule for
+    where a word, and so a comment, starts.
 
-    A # that may start a comment (COMMENT_START) is blanked, to the end of its line, only where the
+    A # that may start a comment (COMMENT_START, and word_starts answering True: not False, inside a
+    word, and not None, where it cannot tell) is blanked, to the end of its line, only where the
     reader read no command's own words anywhere from it to that end. A comment is nobody's text to
     the reader, so one is still left out. A # inside a quoted string is in the words of the command
     that holds it, as the commands after it on its line are in their own, and is left as it is:
@@ -140,7 +145,7 @@ def uncommented(text, parts):
         # The words that start before the line ends: one of them reaching past the # is a command
         # read there.
         k = bisect.bisect_left(own, (end,))
-        if k and ends[k - 1] > start:
+        if (k and ends[k - 1] > start) or word_starts(text, start) is not True:
             at = start + 1
             continue
         out += [text[done:start], " " * (end - start)]
@@ -149,12 +154,12 @@ def uncommented(text, parts):
     return "".join(out)
 
 
-def params_end(text, parts):
+def params_end(text, parts, word_starts):
     """(the offset in text of the first word that ends what is certain about its parameters, or
     len(text) where there is none; whether that word is a source or . command, whose own words are
     read before the file it names can change anything). Comments are left out (uncommented, which
-    parts is for)."""
-    plain = uncommented(text, parts)
+    parts and word_starts are for)."""
+    plain = uncommented(text, parts, word_starts)
     first, sources = len(text), False
     for m in PARAMS_END.finditer(plain):
         k = next(k for k in range(1, 5) if m.group(k) is not None)
@@ -257,7 +262,7 @@ def make(shells, sh_redirect, unknown_dir):
                     parts = self.parsed(ctx["text"], ctx["cwd"])[1]
                 except self.sw.Unreadable:
                     parts = None  # no comment is left out, which only ends them sooner
-                ctx["params_end"] = params_end(ctx["text"], parts)
+                ctx["params_end"] = params_end(ctx["text"], parts, self.sw.word_starts)
             end, sources = ctx["params_end"]
             return params if at < end or (at == end and sources) else None
 
