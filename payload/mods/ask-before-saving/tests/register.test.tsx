@@ -4145,6 +4145,16 @@ for (const [what, command, names, said] of KEEPS)
     expect(w.ran).toEqual([])
   })
 
+// Found by the lessons review of the fix round's push: onto one name no path names (a variable),
+// nothing can be looked at, and the question still ended "and can be moved back".
+test('a move onto a name the words cannot place claims nothing about what is there (#3478)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: ARCHIVED })
+  const asked = `Move ${BRACE_NAMES}: tidying the folder?`
+  await askRemoval($, w, refusalOf(await call($, { tool: 'Bash', command: `mv ${BRACE_NAMES} "$D"` })), 'Keep as is', asked)
+  expect(w.asked[0]?.questions[0]?.question).toBe(`${asked} ${PATTERN_SAID} It goes to $D. Whether a file is already there could not be read.`)
+  expect(w.ran).toEqual([])
+})
+
 test('a command that removes lasting memory and also writes other lasting memory, or deletes one file and moves another, is refused whole: each is asked about by itself (#3402)', withKit, async ($, on) => {
   const w = world($, on, { files: KEPT })
   const both = refusalOf(await call($, { tool: 'Bash', command: "rm CLAUDE.md && echo '- Use pnpm.' >> AGENTS.md" }))

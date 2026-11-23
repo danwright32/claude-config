@@ -432,6 +432,9 @@ const kindAt = async ($: EngineInterface, path: string) => {
 // at the file, a place that is there and is no folder), it says so, and claims neither.
 const movedOnto = async ($: EngineInterface, c: RemovalCandidate): Promise<{ into?: true; replaces?: true; unseen?: true }> => {
   const there = c.toPath !== undefined && (await $.fs.exists(c.toPath)) ? ((await kindAt($, c.toPath)) ?? 'unread') : undefined
+  // Onto one name a mv gives that no path names (a variable): nothing there can be looked at, so
+  // nothing is claimed of it, where it used to be said as one that "can be moved back".
+  if (!c.into && c.onto && c.toPath === undefined && c.to !== undefined) return { unseen: true }
   if (!c.into && !(c.onto && there === 'dir')) return there !== undefined && there !== 'dir' ? { replaces: true } : {}
   const into = { into: true as const }
   if (c.toPath === undefined || c.guessed || (there !== undefined && there !== 'dir')) return { ...into, unseen: true }

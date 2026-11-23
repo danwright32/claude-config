@@ -3569,8 +3569,9 @@ lasting memory file, or moved one away, ran with no question. Measured in the mo
   and a note moved onto a folder with no trailing slash was said to be one that "can be moved
   back" whatever the folder held. The reader now marks the removal a `mv` makes with where that
   `mv` puts it (`to`: the folder it lands inside, or the one name it is moved onto), and only
-  while nothing else in the command removes the same thing, so `rm <pattern>; mv <pattern> dir/`
-  and `cp other/*.md backup/ && rm <pattern>` stay deletions. Linking the two in this mod by
+  where the command, read whole, leaves the file there (the next entry), so `rm <pattern>; mv
+  <pattern> dir/` and `cp other/*.md backup/ && rm <pattern>` stay deletions. Linking the two in
+  this mod by
   matching words would have called that last command a move. A file named outright is said by
   the path it will have, with a trailing slash on the folder or none ("It goes to
   <folder>/<name>"); a pattern or a guess has no one path and is said by the folder ("Each goes

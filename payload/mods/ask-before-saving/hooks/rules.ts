@@ -1740,8 +1740,9 @@ const homeMemoryUnder = (abs: string, home: string): { paths: string[]; projects
  * command mentions, and said as a guess). A removal is a move when the same command brings the file
  * to another place (mv, or a copy it then removes): `to` is that place. Where no path names what a
  * mv takes (a pattern, a variable), no write carries it as a source, so where it goes is read from
- * the removal itself, which the reader marks only for a mv and only while nothing else in the
- * command removes the same thing (#3478): until then such a move read as a deletion.
+ * the removal itself (#3478): until then such a move read as a deletion. The reader marks it only
+ * for a mv, and only where the command, read whole, leaves the file where that mv put it
+ * (mod-kit's settleMoves): with the mark off, a pattern is the deletion it was before.
  */
 export const removalCandidates = async (w: Writes, home: string, inCheckout: InCheckout, command: string, isSet: IsSet = ALWAYS_SET, read: MentionRead = {}): Promise<RemovalCandidate[]> => {
   const out: RemovalCandidate[] = []
