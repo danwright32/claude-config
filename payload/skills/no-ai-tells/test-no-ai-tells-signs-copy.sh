@@ -66,7 +66,7 @@ run() {
   local d="$1" n="$2"; shift 2
   HOME="$FAKEHOME" CLAUDE_HOME="$FAKEHOME/.claude" NO_AI_TELLS_COPY_DIR="$d" NO_AI_TELLS_NOW="$n" bash "$SCRIPT" "$@" 2>&1
 }
-first_line() { printf '%s\n' "$1" | head -n 1; }
+first_line() { printf '%s\n' "${1%%$'\n'*}"; }
 
 READ=1795000000          # 2026-11-18 6:06 AM ET
 READ_ET="2026-11-18 6:06 AM ET"
