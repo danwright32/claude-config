@@ -73,6 +73,8 @@ PIPE_LEAD = re.compile(r"(?:(?<![\w$.-])(?:if|while|until|time)|[!({])\Z")
 # The most texts inside one another held_feed reads, a subshell or a substitution each being read
 # as a text of its own: past it the input is not worked out, and refused.
 MAX_HELD = 8
+# An assignment written in front of a command's name, as one of its words (held_first_word).
+HELD_ASSIGN = re.compile(r"[A-Za-z_]\w*\+?=.*", re.S)
 
 # The shapes judge_unread_shapes reads (claude-config#3251). A command holding none of these is
 # none of them.
@@ -521,6 +523,40 @@ def make(sh_special, sh_param, unknown_dir=None):
             fd, ft, fp = feeder
             return self.sh_printed(fd, ft, None if base is None else base + fp["start"], whole)
 
+        # What the two readings below hold, one Judge a process. Each depends on its key alone, and
+        # none of held_input, held_feed, held_calls and sh_pipe_into changes what it is given.
+        first_words = {}  # {a command's text: held_first_word's answer}
+        held_texts = {}  # {(a text, the directory it is read from): held_parsed's answer}
+
+        def held_first_word(self, text):
+            """The first word of one command's text as written (written_redirs), past the
+            assignments in front of it, or None where it has none: what held_calls asks of every
+            command of a text to find a function's calls. Worked out once for each text, which is
+            all it depends on: held_calls asked it afresh for each function whose body holds a
+            program that runs its input, 152,000 readings of 8,500 commands judging the
+            claude-sync suite (claude-config#3406). A text that cannot be read raises as it did,
+            every time it is asked for."""
+            got = self.first_words.get(text, self.first_words)
+            if got is self.first_words:
+                words = self.written_redirs(text)[0]
+                while words and HELD_ASSIGN.fullmatch(words[0]):
+                    words = words[1:]
+                got = self.first_words[text] = words[0] if words else None
+            return got
+
+        def held_parsed(self, s, cwd):
+            """(the commands of s read from cwd, where each is in s, the two paired), as parsed
+            gives the first two, asked for once for each text by the readings of what is around a
+            program: parsed hands each caller lists of its own, a copy of every command's place,
+            and held_feed asked for one each time it was called, 49 copies judging the claude-sync
+            suite (claude-config#3406). A text the reader cannot read raises as it did."""
+            key = (s, cwd)
+            got = self.held_texts.get(key)
+            if got is None:
+                cmds, parts = self.parsed(s, cwd)
+                got = self.held_texts[key] = (cmds, parts, list(zip(cmds, parts)))
+            return got
+
         def held_calls(self, s, cwd, items, b, base, whole, hops, seen):
             """What the body of the function b (a block of the Judge's sh_struct) is handed as its
             input, as pieces that always end with one unreadable piece. A function's body reads
@@ -550,13 +586,14 @@ def make(sh_special, sh_param, unknown_dir=None):
             (cd, ct), cp = items[b["close"]]
             pieces = readable(self.sh_given(cd, ct, placed(cp["start"]), whole))
             name = b.get("name")
-            for j, ((jd, jt), jp) in enumerate(items) if name and hops < MAX_HELD else ():
-                if b["open"] <= j <= b["close"]:
+            firsts, lo, hi = self.first_words, b["open"], b["close"]
+            for j in range(len(items)) if name and hops < MAX_HELD else ():
+                if lo <= j <= hi:
                     continue
-                words = self.written_redirs(jt)[0]
-                while words and re.fullmatch(r"[A-Za-z_]\w*\+?=.*", words[0], re.S):
-                    words = words[1:]
-                if not words or words[0] != name:
+                (jd, jt), jp = items[j]
+                # Held answers are read here, without a call for each command of the text.
+                first = firsts.get(jt, firsts)
+                if (self.held_first_word(jt) if first is firsts else first) != name:
                     continue
                 got = self.sh_given(jd, jt, placed(jp["start"]), whole)
                 if got is None:
@@ -578,8 +615,7 @@ def make(sh_special, sh_param, unknown_dir=None):
             are given where that can be read, and always one unreadable piece (held_calls). A
             structure that cannot be read is one unreadable piece. base is where s starts in the
             text line() is reading, None for a wrapper's string."""
-            cmds, parts = self.parsed(s, cwd)
-            items = list(zip(cmds, parts))
+            cmds, parts, items = self.held_parsed(s, cwd)
             p = parts[k]
             lo_i = hi_i = k
             seen = set() if seen is None else seen
@@ -601,7 +637,7 @@ def make(sh_special, sh_param, unknown_dir=None):
                 if o < 0 or s[o] not in "(`" or hops >= MAX_HELD:
                     return self.held_unknown()
                 inner = s[o + 1:hi]
-                ik = next((j for j, q in enumerate(self.parsed(inner, cmds[k][0])[1])
+                ik = next((j for j, q in enumerate(self.held_parsed(inner, cmds[k][0])[1])
                            if q["start"] == p["start"] - o - 1 and q["end"] == p["end"] - o - 1), None)
                 if ik is None:
                     return self.held_unknown()
@@ -676,14 +712,14 @@ def make(sh_special, sh_param, unknown_dir=None):
                     string = found[1] if found else None
                     if string is None:
                         return self.held_unknown()
-                    cmds, parts = self.parsed(string, wd)
+                    cmds, parts, items = self.held_parsed(string, wd)
                     if not 0 <= n < len(parts):
                         return self.held_unknown()
                     if i < len(wraps) - 1:
                         got = self.sh_given(wraps[i + 1][2], wraps[i + 1][1], None, string)
                         if got is not None:
                             return got
-                    got = self.sh_pipe_into(string, list(zip(cmds, parts)), parts[n]["start"], None, string)
+                    got = self.sh_pipe_into(string, items, parts[n]["start"], None, string)
                     if got is None:
                         got = self.held_feed(string, wd, n, None, string)
                     if got is not None:
@@ -694,8 +730,8 @@ def make(sh_special, sh_param, unknown_dir=None):
                         return got
                     if k is None:
                         return self.held_unknown()
-                    cmds, parts = self.parsed(s, cwd)
-                    got = self.sh_pipe_into(s, list(zip(cmds, parts)), parts[k]["start"], 0, whole)
+                    cmds, parts, items = self.held_parsed(s, cwd)
+                    got = self.sh_pipe_into(s, items, parts[k]["start"], 0, whole)
                     if got is not None:
                         return got
                 return None if k is None else self.held_feed(s, cwd, k, 0, whole)

@@ -5106,6 +5106,19 @@ unchanged, and running out of it still refuses the call. The gate's phase line
 suite holds each by that count, which no load can move, and sees each fail on a copy of the gate
 that holds nothing (`ONCE = False`).
 
+More repeated work was taken out on 2026-11-22 (#3406), again with every verdict as it was. Judging
+`bash tests/test-claude-sync.sh` from an empty cache had crept from 40.9 units of the yardstick on
+2026-11-17 to about 55, against a limit of 57 that single readings crossed. Four readings are now
+made once for each text: a command's first word, where the gate looks through a text for a
+function's calls (`held_first_word`; it cut about 8,500 commands into words 152,393 times in that
+judgement), the commands of a text for the readings of what is around a program (`held_parsed`,
+49 copies before), the functions a text defines (`sh_funcs_of`, six searches of the suite's 1.8
+million characters before) and whether it runs shopt (`sh_runs_shopt`). Measured that day on the
+personal MacBook, ten readings each taken in turn at a load of 37 to 103: 5.61 s and 56.4 units
+before, 5.33 s and 53.7 after (the middle readings, a unit 0.100 s). No limit was changed with it.
+Suite: `test-slack-drafts-held-once.sh`, which holds each reading by a count and saw each count
+fail on the gate as it was.
+
 Three things that pull request left were settled on 2026-11-21 (#3255), all measured that day on the
 personal MacBook with a unit at 0.097 s:
 
