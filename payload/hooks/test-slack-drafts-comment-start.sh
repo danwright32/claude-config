@@ -333,6 +333,21 @@ done
 run_bash "cat <<E${NL}a$BS${NL}E${NL}E${NL}$RUNS${NL}echo end" "$T/open"
 refused "a joined marker, then the marker, then only quoted words: refused, where it passed before"
 says "and as a check it could not make" "$COULD_NOT"
+# A heredoc on ONE line: no shell gives it a body, so every command after the << on the line runs
+# (bash 3.2 and zsh, measured 2026-11-23 with `cat <<E; echo RAN; E`). The reader took the "; " for
+# a flattened line break and the command for the body, so a file that posts, run between the <<
+# and a later word that is the marker, was read by nobody.
+for one in "cat <<E; bash posts.sh; E" "cat <<'E'; bash posts.sh; E" "cat <<E; bash posts.sh; E; echo end"; do
+  run_bash "$one" "$T/open"
+  refused "a file that posts, run on the line of a heredoc and before its marker, is refused: $one"
+  says "and as a check it could not make: $one" "$COULD_NOT"
+done
+# The controls: with no marker after it the reading goes on to the command, as the shells run it,
+# and finds the post; a quiet one passes.
+run_bash "cat <<E; bash posts.sh" "$T/open"
+refused "the control: a heredoc on one line with no marker after it, then a file that posts, is refused"
+run_bash "cat <<E; bash quiet.sh" "$T/open"
+allowed "the control: and the same with a quiet file passes"
 
 echo "slack drafts only: a post reached with no posting word in the command is not hidden by such a # either (claude-config#3464)"
 

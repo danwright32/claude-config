@@ -597,8 +597,10 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, un
     anywhere else, or in different places from one shell to another, or never while a $ or a
     backquote stands in the rest of the text: every shell runs the substitutions in that rest as
     part of the body, where this reading takes the rest for commands and so reads a $( ) in single
-    quotes there as a word that runs nothing. A caller that asks is given the shells' closing line
-    where they agree on one; a caller that does not is given the reading it always was.
+    quotes there as a word that runs nothing. Named too, quoted or not, is one this reading closes
+    in a text with no line break at all, the "; " read as one: as typed no shell gives it a body and
+    every shell runs what this reading took for its body. A caller that asks is given the shells'
+    closing line where they agree on one; a caller that does not is given the reading it always was.
 
     The text is the command as written, quotes and all, and a command substitution's text stays
     inside the command that holds it as well as being read as commands of its own, which come first.
@@ -739,12 +741,18 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, un
             and the commands plain reads there are only more than the shell runs.
         A caller that does not ask is given plain, the reading it always was (as for a # since
         claude-config#3481): other gates read through this, and one that must not miss a command
-        asks. With no line break in the text at all no shell gives a heredoc a body, and the "; "
-        read as one there is a guess either way, so that form is read as it was.
+        asks. With no line break in the text at all the "; " is read as one, for the flattened form
+        the push hooks make, and that reading is kept. But as typed no shell gives a heredoc on one
+        line a body: it runs every command after the << on the line (bash 3.2 and zsh, measured
+        2026-11-23: `cat <<E; echo RAN; E` printed RAN and then ran E), which this reading took for
+        the body. So a heredoc it closes there, quoted or not, is not sure; one it never closes is
+        read on as commands, as the shells run them.
         """
         tabs = "\t*" if strip_tabs else ""
         first = re.compile(closing_line % (tabs, re.escape(word))).search(s, j)
-        if quoted or line_break != "\n":
+        if line_break != "\n":
+            return first, first, first is None
+        if quoted:
             return first, first, True
 
         def never():

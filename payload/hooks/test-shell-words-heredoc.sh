@@ -511,13 +511,24 @@ ROWS = [
     ("<<- a line that is only a backslash, then the marker", "cat <<-E\n" + B + "\n\tE\n" + T, "unsure"),
     ("<<- a tab and a backslash, then the marker", "cat <<-E\n\t" + B + "\n\tE\n" + T, "unsure"),
     ("<<- the start of the marker and a backslash, then the marker", "cat <<-EOF\n\tEO" + B + "\n\tEOF\n" + T, "unsure"),
+    # A heredoc on ONE line, no line break anywhere in the text. No shell gives it a body: the line
+    # ends with the text, so it reads an empty body to the end and runs every command after the <<
+    # on that line (bash 3.2 and zsh, measured 2026-11-23: `cat <<E; echo RAN; E` printed RAN, then
+    # "command not found" for E). The reader takes such a text for the flattened form the push hooks
+    # make, a "; " standing for each line break, and so took the command for the body.
+    ("one line: a command, then the marker", "cat <<E; touch ran; E", "unsure"),
+    ("one line: a quoted marker, a command, then the marker", "cat <<'E'; touch ran; E", "unsure"),
+    ("one line: a command, then the marker, then more", "cat <<E; touch ran; E; echo end", "unsure"),
+    ("one line, the control: a command and no marker after it", "cat <<E; touch ran", "listed"),
 ]
 # Rows every one of the seven kept the heredoc open in, so one shell here must run the marker, or the
 # row measures nothing.
 OPEN = {"one backslash before the marker line", "three backslashes before the marker line",
         "a space and a backslash before the marker line", "<<- one backslash before the marker line",
         "a marker line that ends in a backslash", "a marker that never comes",
-        "two heredocs, the second left open", "the tail with no line break after it"}
+        "two heredocs, the second left open", "the tail with no line break after it",
+        "one line: a command, then the marker", "one line: a quoted marker, a command, then the marker",
+        "one line: a command, then the marker, then more", "one line, the control: a command and no marker after it"}
 SHELLS = {"bash": ["bash", "--noprofile", "--norc", "-c"], "bash --posix": ["bash", "--posix", "--noprofile", "--norc", "-c"],
           "sh": ["sh", "-c"], "dash": ["dash", "-c"], "zsh": ["zsh", "-f", "-c"], "ksh": ["ksh", "-c"]}
 HAVE = [name for name in SHELLS if shutil.which(SHELLS[name][0])]
@@ -626,14 +637,21 @@ say(cut == ["cat <<'E'", "body", RAN, "echo end"] and not marks and not gave_up,
     "#3492 the control: a quoted heredoc that never closes names nothing and is read as it was",
     "commands gave %r, named %r" % (cut, marks))
 # A text with no line break at all is read as it was, the "; " taken for the line break the push
-# hooks made it from, and nothing is named there: which "; " was a line break cannot be told.
-cut, marks, gave_up = asked("cat <<E; a" + B + "; E; " + RAN)
-say(cut == ["cat <<E", RAN] and not marks and not gave_up,
-    "#3492 a text with no line break is read as it was, and nothing is named",
-    "commands gave %r, named %r" % (cut, marks))
-cut, marks, gave_up = asked("cat <<E; a; E; echo x")
-say(cut == ["cat <<E", "echo x"] and not marks and not gave_up,
-    "#3492 the control: the flattened form with no backslash is read as it was",
+# hooks made it from. Which "; " was a line break cannot be told, and as typed no shell gives the
+# heredoc a body there and every shell runs what the reading took for one, so a heredoc the reading
+# closed in such a text is named for a caller that asks, by its << and the "; " after it. A caller
+# that does not ask is given the reading it always was.
+for text, want in (("cat <<E; a" + B + "; E; " + RAN, ["cat <<E", RAN]),
+                   ("cat <<E; a; E; echo x", ["cat <<E", "echo x"])):
+    cut, marks, gave_up = asked(text)
+    say(cut == want and marks == [(4, 7)] and not gave_up and unasked(text) == want,
+        "#3492 a text with no line break is read as it was, and the heredoc it closes is named: %s" % text,
+        "commands gave %r, named %r, unasked %r" % (cut, marks, unasked(text)))
+# The control: one the reading never closes is read on as commands, as the shells run them, and
+# nothing is named.
+cut, marks, gave_up = asked("cat <<E; a; echo x")
+say(cut == ["cat <<E", "a", "echo x"] and not marks and not gave_up,
+    "#3492 the control: a heredoc with no line break that never closes names nothing and is read on",
     "commands gave %r, named %r" % (cut, marks))
 PY
 rc=$?
