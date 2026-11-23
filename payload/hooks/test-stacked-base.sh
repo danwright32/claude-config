@@ -341,7 +341,7 @@ check "E15 six fields: not established, and never read as five" "$E_WHY could no
 # reasons are enumerated from lib/stacked-base.sh and lib/push-changes.sh themselves, so one added
 # there fails here until it is placed below and the README names it (L96). "unsaid" is a reason
 # whose line answers 1, which no refusal prints; "-" is a wrapper or pass through of another reason.
-REASONS_TABLE="$(cat <<'EOS'
+IFS= read -r -d '' REASONS_TABLE <<'EOS' || true
 $dir is not a directory that can be entered|||unsaid
 the repository has no commit yet|||unsaid
 HEAD is detached, so this branch's own copy on origin cannot be told from a base|||unsaid
@@ -375,7 +375,7 @@ it holds more than $PC_BASE_JUDGED_MAX commits of its own, more than this gate l
 a push of that branch's own commits was let through unjudged, by an override or a gate that failed open|||let through unjudged, by an override or a gate that failed open
 this Mac has no record that this gate judged the push that put it at ${1:0:7}|||no record on this Mac that the test gate judged the push
 EOS
-)"
+REASONS_TABLE="${REASONS_TABLE%$'\n'}"
 CHECKOUT="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
 if [ -z "$CHECKOUT" ] || [ ! -f "$CHECKOUT/README.md" ]; then
   echo "NOTE: UNMEASURED: $DIR is not in a checkout of this repository, so the README's list of reasons could not be compared."
@@ -393,13 +393,19 @@ else
     case "$phrase" in
       "") bad "R1 a reason the code can give is in neither the README's list nor this suite's table: $r" ;;
       -) ok ;;
-      unsaid) if grep -F -- "\"$r\"" "$DIR/lib/stacked-base.sh" | grep -q 'return 1'; then ok
-              else bad "R2 a reason marked as never said is on a line that does not answer 1: $r"; fi ;;
+      unsaid) rline="$(grep -F -- "\"$r\"" "$DIR/lib/stacked-base.sh")"
+              case "$rline" in
+                *"return 1"*) ok ;;
+                *) bad "R2 a reason marked as never said is on a line that does not answer 1: $r" ;;
+              esac ;;
       *) check "R3 the README's list names: $r" "${phrase//\{MAX\}/$max}" "$sec" ;;
     esac
   done <<< "$reasons"
   while IFS= read -r t; do
-    printf '%s\n' "$reasons" | grep -F -x -q -- "${t%%|||*}" && ok || bad "R4 this suite lists a reason the code no longer gives: ${t%%|||*}"
+    case $'\n'"$reasons"$'\n' in
+      *$'\n'"${t%%|||*}"$'\n'*) ok ;;
+      *) bad "R4 this suite lists a reason the code no longer gives: ${t%%|||*}" ;;
+    esac
   done <<< "$REASONS_TABLE"
 fi
 
