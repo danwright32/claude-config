@@ -160,7 +160,10 @@ const movesReader: { name: string; register: Register } = {
   name: 'moves-reader',
   register: on => {
     on('tool.call', { tool: 'Bash' }, async ($, e) => {
-      const w = await $.modkit.writes({ command: String((e as { command?: string }).command), cwd: '/w', home: '/h' })
+      const command = String((e as { command?: string }).command)
+      // The positive control: a call the kit answers by asking the disk, through the same recorders.
+      if (command.startsWith('tree ')) return { deny: JSON.stringify(await $.modkit.workingTree({ path: command.slice(5) })) }
+      const w = await $.modkit.writes({ command, cwd: '/w', home: '/h' })
       return { deny: JSON.stringify(w.changes.filter(c => c.to !== undefined).map(c => c.word)) }
     })
   },
@@ -196,6 +199,13 @@ test('$.modkit.writes reads a move from the words alone, asking the disk nothing
 })
 test('$.modkit.writes asks the disk nothing for a command that moves nothing (#3478)', { plugins: [movesReader] }, async ($, on) => {
   expect((await movedOn($, on, {}, 'rm -rf ~/Desktop/archive && echo x > ~/notes/a.md')).asked).toEqual([])
+})
+// The control for the two above (lessons review of a38570eb00): in the same setup a look the kit does
+// make is recorded, so their empty lists are a measurement and not recorders that are never reached.
+test('a look the kit does make is recorded by the same setup, so an empty list above means none was made (#3478)', { plugins: [movesReader] }, async ($, on) => {
+  const r = await movedOn($, on, {}, 'tree /h/notes/a.md')
+  expect(r.moved).toBe(null)
+  expect(r.asked).toContain('exists /h/notes/.git')
 })
 
 // #698: a reader that judges what a heredoc feeds asks for its body through the kit, as plain data.
