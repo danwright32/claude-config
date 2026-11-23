@@ -30,7 +30,7 @@ const WRITES: Record<string, unknown> = {
   "sed -i '' 's/a/b/' src/lib/slack.ts": { files: [{ word: 'src/lib/slack.ts', path: '/w/app/src/lib/slack.ts', edits: true }], changes: [], unnamed: [] },
   'echo hi > "$OUT/big.ts"': { files: [{ word: '$OUT/big.ts' }], changes: [], unnamed: [], stdout: [{ word: '$OUT/big.ts' }] },
   'echo hi > "$OUT/other.ts"': { files: [{ word: '$OUT/other.ts' }], changes: [], unnamed: [], stdout: [{ word: '$OUT/other.ts' }] },
-  'npm test': { files: [], changes: [], unnamed: [] },
+  'npm test': {"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a program the write reader does not know","script":"npm","tool":true,"unknown":true,"why":"npm is a program the mods do not know, so what it does with a file it is handed cannot be read before it runs","remedy":"To only read a file, use a program the mods know only reads (cat, grep, head, tail, wc, diff and the others listed under \"The programs that only read\" in claude-config's docs/mods-design.md). If npm only reads too, ask Dan to add it to that list: only he may.","args":[{"word":"test","path":"/w/app/test"}]}]},
   'grep -n x src/big.ts > /tmp/out.txt': { files: [{ word: '/tmp/out.txt', path: '/tmp/out.txt' }], changes: [], unnamed: [], stdout: [{ word: '/tmp/out.txt', path: '/tmp/out.txt' }] },
   'echo x > src/new.ts': { files: [{ word: 'src/new.ts', path: '/w/app/src/new.ts' }], changes: [], unnamed: [], stdout: [{ word: 'src/new.ts', path: '/w/app/src/new.ts' }] },
   'echo x > "$OUT/log.txt"': { files: [{ word: '$OUT/log.txt' }], changes: [], unnamed: [], stdout: [{ word: '$OUT/log.txt' }] },
@@ -107,6 +107,30 @@ const WRITES: Record<string, unknown> = {
   "npx vitest run src/ && cp /tmp/big.ts src/big.ts": {"files":[{"word":"src/big.ts","path":"/w/app/src/big.ts","sources":["/tmp/big.ts"],"mayBeFolder":true}],"changes":[],"unnamed":[]},
   "npx vitest run src/ && sed -i '' 's/a/b/' src/big.ts": {"files":[{"word":"src/big.ts","path":"/w/app/src/big.ts","edits":true}],"changes":[],"unnamed":[]},
   "npx vitest run src/ && python3 - <<'EOF'\nopen('src/big.ts', 'w').write('x')\nEOF": {"files":[],"changes":[],"unnamed":[{"what":"a python3 script on standard input","words":["python3","-","<<EOF"],"inputs":[],"targets":["/w/app/src/big.ts"],"program":"open('src/big.ts', 'w').write('x')","folder":"/w/app"}]},
+  // #3323: a program the reader does not know handed a held file, a folder or words that are no file; a form of a
+  // listed one that runs a program; the listed ones reading the same file; an unpack into a folder, one naming a
+  // member, and a listing. Measured from the reader on 2026-11-21.
+  "prettier --write src/big.ts": {"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a program the write reader does not know","script":"prettier","tool":true,"unknown":true,"why":"prettier is a program the mods do not know, so what it does with a file it is handed cannot be read before it runs","remedy":"To only read a file, use a program the mods know only reads (cat, grep, head, tail, wc, diff and the others listed under \"The programs that only read\" in claude-config's docs/mods-design.md). If prettier only reads too, ask Dan to add it to that list: only he may.","args":[{"word":"src/big.ts","path":"/w/app/src/big.ts"}]}]},
+  "mystery src/": {"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a program the write reader does not know","script":"mystery","tool":true,"unknown":true,"why":"mystery is a program the mods do not know, so what it does with a file it is handed cannot be read before it runs","remedy":"To only read a file, use a program the mods know only reads (cat, grep, head, tail, wc, diff and the others listed under \"The programs that only read\" in claude-config's docs/mods-design.md). If mystery only reads too, ask Dan to add it to that list: only he may.","args":[{"word":"src/","path":"/w/app/src"}]}]},
+  "[[ -f src/big.ts ]]": {"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a program the write reader does not know","script":"[[","tool":true,"unknown":true,"why":"[[ is a program the mods do not know, so what it does with a file it is handed cannot be read before it runs","remedy":"To only read a file, use a program the mods know only reads (cat, grep, head, tail, wc, diff and the others listed under \"The programs that only read\" in claude-config's docs/mods-design.md). If [[ only reads too, ask Dan to add it to that list: only he may.","args":[{"word":"src/big.ts","path":"/w/app/src/big.ts"}]}]},
+  "rg --pre ./tool x src/big.ts": {"files":[],"changes":[],"unnamed":[],"runs":[{"what":"rg with --pre, which runs a program on each file","script":"rg","tool":true,"unknown":true,"why":"rg with --pre runs a program on each file","remedy":"Without --pre, rg only reads.","args":[{"word":"./tool","path":"/w/app/tool"},{"word":"x","path":"/w/app/x"},{"word":"src/big.ts","path":"/w/app/src/big.ts"}]}]},
+  "cat src/big.ts": {"files":[],"changes":[],"unnamed":[]},
+  "grep -n x src/big.ts": {"files":[],"changes":[],"unnamed":[]},
+  "wc -l src/big.ts": {"files":[],"changes":[],"unnamed":[]},
+  "[ -f src/big.ts ]": {"files":[],"changes":[],"unnamed":[]},
+  "gh pr view 5": {"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a program the write reader does not know","script":"gh","tool":true,"unknown":true,"why":"gh is a program the mods do not know, so what it does with a file it is handed cannot be read before it runs","remedy":"To only read a file, use a program the mods know only reads (cat, grep, head, tail, wc, diff and the others listed under \"The programs that only read\" in claude-config's docs/mods-design.md). If gh only reads too, ask Dan to add it to that list: only he may.","args":[{"word":"pr","path":"/w/app/pr"},{"word":"view","path":"/w/app/view"},{"word":"5","path":"/w/app/5"}]}]},
+  "sleep 2": {"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a program the write reader does not know","script":"sleep","tool":true,"unknown":true,"why":"sleep is a program the mods do not know, so what it does with a file it is handed cannot be read before it runs","remedy":"To only read a file, use a program the mods know only reads (cat, grep, head, tail, wc, diff and the others listed under \"The programs that only read\" in claude-config's docs/mods-design.md). If sleep only reads too, ask Dan to add it to that list: only he may.","args":[{"word":"2","path":"/w/app/2"}]}]},
+  "mystery notes.md": {"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a program the write reader does not know","script":"mystery","tool":true,"unknown":true,"why":"mystery is a program the mods do not know, so what it does with a file it is handed cannot be read before it runs","remedy":"To only read a file, use a program the mods know only reads (cat, grep, head, tail, wc, diff and the others listed under \"The programs that only read\" in claude-config's docs/mods-design.md). If mystery only reads too, ask Dan to add it to that list: only he may.","args":[{"word":"notes.md","path":"/w/app/notes.md"}]}]},
+  "tar -xzf /tmp/a.tgz -C src": {"files":[],"changes":[],"unnamed":[{"what":"an archive tar unpacks","words":["tar","-xzf","/tmp/a.tgz","-C","src"],"inputs":[],"into":"/w/app/src","folder":"/w/app/src"}]},
+  "tar -xzf /tmp/a.tgz src/big.ts": {"files":[{"word":"src/big.ts","path":"/w/app/src/big.ts"}],"changes":[],"unnamed":[{"what":"an archive tar unpacks","words":["tar","-xzf","/tmp/a.tgz","src/big.ts"],"inputs":[],"into":"/w/app","folder":"/w/app"}]},
+  "tar -tzf /tmp/a.tgz": {"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a program the write reader does not know","script":"tar","tool":true,"unknown":true,"why":"tar is a program the mods do not know, so what it does with a file it is handed cannot be read before it runs","remedy":"To only read a file, use a program the mods know only reads (cat, grep, head, tail, wc, diff and the others listed under \"The programs that only read\" in claude-config's docs/mods-design.md). If tar only reads too, ask Dan to add it to that list: only he may.","args":[{"word":"/tmp/a.tgz","path":"/tmp/a.tgz"}]}]},
+  // #3323, the area check left out: commands whose program the reader marks unknown, in a checkout where what they are
+  // handed could be held, and a write beside one. Measured from the reader on 2026-11-21.
+  "gh pr view 5 --json state": {"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a program the write reader does not know","script":"gh","tool":true,"unknown":true,"why":"gh is a program the mods do not know, so what it does with a file it is handed cannot be read before it runs","remedy":"To only read a file, use a program the mods know only reads (cat, grep, head, tail, wc, diff and the others listed under \"The programs that only read\" in claude-config's docs/mods-design.md). If gh only reads too, ask Dan to add it to that list: only he may.","args":[{"word":"pr","path":"/w/app/pr"},{"word":"view","path":"/w/app/view"},{"word":"5","path":"/w/app/5"},{"word":"state","path":"/w/app/state"}]}]},
+  "claude plugin test src": {"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a program the write reader does not know","script":"claude","tool":true,"unknown":true,"why":"claude is a program the mods do not know, so what it does with a file it is handed cannot be read before it runs","remedy":"To only read a file, use a program the mods know only reads (cat, grep, head, tail, wc, diff and the others listed under \"The programs that only read\" in claude-config's docs/mods-design.md). If claude only reads too, ask Dan to add it to that list: only he may.","args":[{"word":"plugin","path":"/w/app/plugin"},{"word":"test","path":"/w/app/test"},{"word":"src","path":"/w/app/src"}]}]},
+  "swiftc -o out App/Main.swift": {"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a program the write reader does not know","script":"swiftc","tool":true,"unknown":true,"why":"swiftc is a program the mods do not know, so what it does with a file it is handed cannot be read before it runs","remedy":"To only read a file, use a program the mods know only reads (cat, grep, head, tail, wc, diff and the others listed under \"The programs that only read\" in claude-config's docs/mods-design.md). If swiftc only reads too, ask Dan to add it to that list: only he may.","args":[{"word":"out","path":"/w/app/out"},{"word":"App/Main.swift","path":"/w/app/App/Main.swift"}]}]},
+  "prettier --write src/big.ts && sed -i '' 's/a/b/' src/lib/slack.ts": {"files":[{"word":"src/lib/slack.ts","path":"/w/app/src/lib/slack.ts","edits":true}],"changes":[],"unnamed":[],"runs":[{"what":"a program the write reader does not know","script":"prettier","tool":true,"unknown":true,"why":"prettier is a program the mods do not know, so what it does with a file it is handed cannot be read before it runs","remedy":"To only read a file, use a program the mods know only reads (cat, grep, head, tail, wc, diff and the others listed under \"The programs that only read\" in claude-config's docs/mods-design.md). If prettier only reads too, ask Dan to add it to that list: only he may.","args":[{"word":"src/big.ts","path":"/w/app/src/big.ts"}]}]},
+  "truncate -s 0 src/big.ts": {"files":[],"changes":[{"word":"src/big.ts","path":"/w/app/src/big.ts","does":"truncate"}],"unnamed":[]},
 }
 
 // The area check in a session (#1506): the first edit a session makes to each existing source or
@@ -647,6 +671,98 @@ test('a shell command writing no file, a new file or only files that are no sour
     expect((await bash($ as never, w, c, {}, `b${i}`)).result).toBe('done')
   expect(ghLists(w)).toBe(0)
   expect(w.judged().length).toBe(0)
+})
+
+// #3323: mod-kit's write reader gives a program it does not know, handed a word that spells a path,
+// as a run marked unknown. The area check leaves those out (Dan, 2026-11-21, "Leave the area check
+// out for now (Recommended)"): in 35 days of this Mac's records such a program was handed a source
+// file or a folder in a checkout in 726 calls, 713 of them a folder, gh 633 times (the value of an
+// option that happens to name a folder where it ran, `state` in `--json state`) and `claude plugin
+// test <folder>` 80 times, and a folder holding more than 25 files the area check could hold is held
+// as a write that cannot be named. So gh gets its own reading first (#3412). Until then each such command
+// gets the verdict it got with the reader as it stood on main before #3323, which MAIN_WRITES
+// records for the commands below (measured from the reader at commit 3cf551888f on 2026-11-21).
+const MAIN_NOTHING = { files: [], changes: [], unnamed: [] }
+const MAIN_SLACK = { files: [{ word: 'src/lib/slack.ts', path: '/w/app/src/lib/slack.ts', edits: true }], changes: [], unnamed: [] }
+const MAIN_WRITES: Record<string, unknown> = {
+  'gh pr view 5 --json state': MAIN_NOTHING,
+  'claude plugin test src': MAIN_NOTHING,
+  'swiftc -o out App/Main.swift': MAIN_NOTHING,
+  'prettier --write src/big.ts': MAIN_NOTHING,
+  'mystery src/': MAIN_NOTHING,
+  '[[ -f src/big.ts ]]': MAIN_NOTHING,
+  'rg --pre ./tool x src/big.ts': MAIN_NOTHING,
+  "sed -i '' 's/a/b/' src/lib/slack.ts": MAIN_SLACK,
+  "prettier --write src/big.ts && sed -i '' 's/a/b/' src/lib/slack.ts": MAIN_SLACK,
+}
+test('a command with a program the write reader does not know gets the verdict it got with the reader as it stood on main (#3323)', KIT, async ($, on) => {
+  // A checkout in which everything these commands are handed could be held: a `state` folder holding
+  // a file an open structural issue names, a Swift file that grew fast, and src, which holds both
+  // kinds.
+  const w = world($, on, { issues: [...ISSUES, { number: 43, title: 'Split the store', body: 'state/store.ts:1-90 does two jobs', labels: [{ name: 'tech-debt' }, { name: 'priority-p2' }] }] })
+  w.ctl.folders.push(`${APP}/state`, `${APP}/App`)
+  w.files[`${APP}/state/store.ts`] = 'x'
+  w.files[`${APP}/App/Main.swift`] = 'x'
+  w.ctl.tracked = `${TRACKED}\nstate/store.ts\nApp/Main.swift`
+  w.ctl.numstat = ['\x1efix: stop the crash (#3)', '900\t100\tsrc/big.ts', '900\t100\tApp/Main.swift', '\x1eSmall change', '10\t2\tsrc/lib/slack.ts'].join('\n')
+  w.ctl.lines = 'origin/main:src/big.ts:2400\norigin/main:App/Main.swift:2400\n'
+  const verdict = async (command: string, id: string) => {
+    const from = { judged: w.judged().length, cards: w.cards.length, errors: w.records(ERRORS).length }
+    const r = await bash($ as never, w, command, {}, id)
+    return {
+      ran: r.result === 'done',
+      // What it was held for: the hold's first sentence, which names the file.
+      held: r.result === 'done' ? '' : (refusal(r).split('. ')[0] ?? ''),
+      judged: w.judged().slice(from.judged).map(j => `${String(j.path)} ${String(j.decision)}`),
+      cards: w.cards.length - from.cards,
+      errors: w.records(ERRORS).length - from.errors,
+    }
+  }
+  const unknown = ['gh pr view 5 --json state', 'claude plugin test src', 'swiftc -o out App/Main.swift', 'prettier --write src/big.ts', 'mystery src/', '[[ -f src/big.ts ]]', 'rg --pre ./tool x src/big.ts']
+  // Controls, so the comparison is seen to carry a hold: a write the reader named before #3323 is
+  // held with either reader, alone and beside a program the reader does not know.
+  const writes = ["sed -i '' 's/a/b/' src/lib/slack.ts", "prettier --write src/big.ts && sed -i '' 's/a/b/' src/lib/slack.ts"]
+  for (const [i, command] of [...unknown, ...writes].entries()) {
+    w.ctl.writesAs = MAIN_WRITES
+    const main = await verdict(command, `m${i}`)
+    w.ctl.writesAs = undefined
+    // The reader this mod ships with marks a run in every one of them but the plain write (the first
+    // test in this file holds the copy to WRITES, which records the mark), so the same verdict is the
+    // area check leaving the run out, never a reader that marked nothing.
+    expect({ command, marked: commandWrites(command, APP, HOME).runs?.some(r => r.unknown) === true }).toEqual({ command, marked: command !== writes[0] })
+    expect({ command, now: await verdict(command, `n${i}`) }).toEqual({ command, now: main })
+    if (unknown.includes(command)) expect({ command, main }).toEqual({ command, main: { ran: true, held: '', judged: [], cards: 0, errors: 0 } })
+    else expect({ command, main }).toMatchObject({ command, main: { ran: false, held: 'The area check held this Bash command, which writes src/lib/slack.ts', judged: ['src/lib/slack.ts held'] } })
+  }
+})
+
+// So such a command costs no look at git either, whatever it is handed: a look that failed would be
+// said, so none said is none made. A program that only reads never did.
+test('a program the write reader does not know, or one that only reads, costs no look at git whatever it is handed (#3323)', KIT, async ($, on) => {
+  const w = world($, on)
+  w.ctl.branchThrows = true
+  const commands = ['cat src/big.ts', 'grep -n x src/big.ts', 'wc -l src/big.ts', '[ -f src/big.ts ]', 'gh pr view 5', 'sleep 2', 'npm test', 'mystery notes.md', 'prettier --write src/big.ts', 'mystery src/']
+  for (const [i, c] of commands.entries()) expect({ c, result: (await bash($ as never, w, c, {}, `w${i}`)).result }).toEqual({ c, result: 'done' })
+  expect(w.judged().length).toBe(0)
+  expect(w.records(ERRORS)).toEqual([])
+  // Control: a write of the same file is still looked up, so the failed look is said.
+  expect((await bash($ as never, w, 'truncate -s 0 src/big.ts', {}, 'w99')).result).toBe('done')
+  expect(w.records(ERRORS).length).toBe(1)
+})
+
+// #3323 (Dan, 2026-11-21, "Yes, in the same change (Recommended)"): unpacking an archive was read as
+// writing nothing. The reader now gives it as a write, not as a run marked unknown, so the area
+// check judges it with the rules it already had: a member named on the command line as a write of
+// that file, and an unpack into a folder as a write whose files cannot be named, as a download a
+// server names already was (`curl -OJ`), landing in the checkout of the folder unpacked into.
+test('an unpack naming a held file as a member, or into a checkout that could hold a file, is held; a listing runs (#3323)', KIT, async ($, on) => {
+  const w = world($, on)
+  expect((await bash($ as never, w, 'tar -tzf /tmp/a.tgz')).result).toBe('done')
+  expect(w.judged().length).toBe(0)
+  const member = refusal(await bash($ as never, w, 'tar -xzf /tmp/a.tgz src/big.ts', {}, 'b2'))
+  expect(member).toContain('The area check held this Bash command, which writes src/big.ts.')
+  const into = refusal(await bash($ as never, w, 'tar -xzf /tmp/a.tgz -C src', {}, 'b3'))
+  expect(into).toContain('an archive tar unpacks writes files its words do not name')
 })
 
 test('a shell command whose file cannot be read is held saying so, may not restructure, and the unchanged command runs once it proceeds', KIT, async ($, on) => {

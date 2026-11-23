@@ -150,7 +150,15 @@ export const latestRequest = (tail: string): string | undefined => {
 // argument (mod-kit's `runs`, #1586) is judged and noted as an edit of it, as an Edit of that file is:
 // what the script does with it cannot be read before it runs. What a script writes that no argument
 // names is still not seen.
-export type ShellWrite = { path: string; sources?: string[]; removes?: true; tree?: true }
+// Since #3323 (Dan, 2026-11-21: "Turn it round, with the list (Recommended)") a file handed to a
+// program mod-kit's reader does not know (a run marked `unknown`) is judged the same way, and is
+// marked `unknown` with the program and what the reader calls it, so the question names it and the
+// path is NOT noted as this session's edit. Most words such a program is handed spell a path without
+// being a file it writes (`gh pr view 5` hands pr, view and 5 in the checkout), a session's edits
+// are capped at twenty, and each one noted is a file another session would then be asked about. So
+// a real write by such a program is not recorded as an edit, as it was not before. A path a write
+// the words name, or a script, also reaches is an edit, and carries no mark.
+export type ShellWrite = { path: string; sources?: string[]; removes?: true; tree?: true; unknown?: { program: string; what: string } }
 
 // What git itself changes is judged the same way (#1136, Dan, 2026-10-13): a checkout of a path and a
 // restore of the working tree put back what they name, an edit; git rm and a git mv's source take it
@@ -160,7 +168,16 @@ type Written = {
   files: { path?: string; sources?: string[]; mayBeFolder?: true; tree?: true }[]
   changes: { path?: string; does: string; tree?: true }[]
   byGit?: { path?: string; does: 'write' | 'remove'; tree?: true }[]
-  runs?: { args: { path?: string }[] }[]
+  runs?: { script?: string; what?: string; unknown?: true; args: { path?: string }[] }[]
+}
+/**
+ * One more reading of a path already kept, folded in: a removal keeps its flags whichever came
+ * first, and the mark of a program the reader does not know (#3323) stands only while every
+ * reading of the path carries it, so a path anything else writes is an edit.
+ */
+export const foldWrite = (had: ShellWrite, extra: Omit<ShellWrite, 'path'>): void => {
+  Object.assign(had, extra.removes ? { removes: true } : {}, extra.tree ? { tree: true } : {})
+  if (!extra.unknown) delete had.unknown
 }
 export const judgedWrites = (w: Written): ShellWrite[] => {
   const out: ShellWrite[] = []
@@ -169,7 +186,7 @@ export const judgedWrites = (w: Written): ShellWrite[] => {
   const add = (path: string, extra: Omit<ShellWrite, 'path'>) => {
     const had = out.find(x => x.path === path)
     if (!had) out.push({ path, ...extra })
-    else Object.assign(had, extra.removes ? { removes: true } : {}, extra.tree ? { tree: true } : {})
+    else foldWrite(had, extra)
   }
   for (const f of w.files) if (f.path) add(f.path, { ...(f.mayBeFolder && f.sources?.length ? { sources: f.sources } : {}), ...(f.tree ? { tree: true as const } : {}) })
   for (const c of w.changes) {
@@ -182,6 +199,9 @@ export const judgedWrites = (w: Written): ShellWrite[] => {
     const tree = g.tree ? { tree: true as const } : {}
     add(g.path, g.does === 'remove' ? { removes: true, ...tree } : tree)
   }
-  for (const r of w.runs ?? []) for (const a of r.args) if (a.path) add(a.path, {})
+  for (const r of w.runs ?? []) {
+    const unknown = r.unknown ? { unknown: { program: r.script ?? 'a program', what: r.what ?? 'a program the write reader does not know' } } : {}
+    for (const a of r.args) if (a.path) add(a.path, unknown)
+  }
   return out
 }

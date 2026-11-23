@@ -572,6 +572,23 @@ describe('on the shared readers (#712)', () => {
       expect({ command, r: run(command) }).toEqual({ command, r: undefined })
     }
   })
+  // #3323: the write reader gives a program it does not know, handed a word that spells a path, as a
+  // run too. No build does not read runs, by the rule above, so such a program handed any file still
+  // runs here: no build does not pick the turned rule up. It does read an unpack, which the reader
+  // now gives as a write: one into a folder is refused unless it lands in the notes, and a member it
+  // names is a write of that file.
+  test('a program the write reader does not know handed a file still runs in no build; an unpack is refused unless it lands in the notes (#3323)', () => {
+    for (const command of ['mystery src/app.ts', 'mystery payload/LESSONS.md']) {
+      expect(commandWrites(command, CWD, HOME).runs?.map(r => r.unknown)).toEqual([true])
+      expect({ command, r: run(command) }).toEqual({ command, r: undefined })
+    }
+    expect(what(run('tar -xzf a.tgz -C src'))).toBe('change files its words do not name (an archive tar unpacks)')
+    expect(what(run('unzip a.zip'))).toBe('change files its words do not name (an archive unzip unpacks)')
+    expect(what(run('cpio -i < a.cpio'))).toBe('change files its words do not name (an archive cpio unpacks)')
+    expect(what(run('tar -xzf a.tgz src/app.ts'))).toBe('write to app.ts')
+    expect(run(`tar -xzf a.tgz -C ${SCRATCH}`)).toBeUndefined()
+    expect(run(`unzip a.zip -d ${SCRATCH}`)).toBeUndefined()
+  })
   test('a download whose files no word names is allowed only into the notes', () => {
     expect(what(run('wget -r https://x.dev/docs/'))).toBe('change files its words do not name (a wget download of many files)')
     expect(run(`wget -r -P ${SCRATCH} https://x.dev/docs/`)).toBeUndefined()

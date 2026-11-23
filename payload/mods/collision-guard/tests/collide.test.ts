@@ -168,6 +168,19 @@ describe('the files a shell command writes, as this guard judges them', () => {
     ]
     expect(judgedWrites({ files: [], changes: [{ path: '/repo/b.txt', does: 'remove' }], runs })).toEqual([{ path: '/repo/b.txt', removes: true }, { path: '/repo/notes.txt' }])
   })
+  // #3323: a program mod-kit's reader does not know, handed a word that spells a path, is given as
+  // a run marked unknown. Each such path is judged, and marked with the program so the guard can
+  // say which and leave it out of this session's edits. A path a script, or a write the words name,
+  // also reaches is an edit as before, whichever came first.
+  test('a file handed to a program the write reader does not know is judged and marked with the program; one a script or a write also names is an edit', () => {
+    const what = 'a program the write reader does not know'
+    const by = { program: 'prettier', what }
+    const prettier = { unknown: true as const, script: 'prettier', what, args: [{ path: '/repo/notes.txt' }, { path: '/repo/pr' }, { path: '/repo/b.txt' }] }
+    const script = { args: [{ path: '/repo/b.txt' }] }
+    expect(judgedWrites({ files: [], changes: [], runs: [prettier, script] })).toEqual([{ path: '/repo/notes.txt', unknown: by }, { path: '/repo/pr', unknown: by }, { path: '/repo/b.txt' }])
+    expect(judgedWrites({ files: [], changes: [], runs: [script, prettier] })).toEqual([{ path: '/repo/b.txt' }, { path: '/repo/notes.txt', unknown: by }, { path: '/repo/pr', unknown: by }])
+    expect(judgedWrites({ files: [{ path: '/repo/notes.txt' }], changes: [{ path: '/repo/pr', does: 'remove' }], runs: [prettier] })).toEqual([{ path: '/repo/notes.txt' }, { path: '/repo/pr', removes: true }, { path: '/repo/b.txt', unknown: by }])
+  })
 })
 
 describe('what a removed folder holds of the other sessions', () => {
