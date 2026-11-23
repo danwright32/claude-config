@@ -409,9 +409,10 @@ check "#399 an rtk diff after cd && is refused" \
   "$(refused_to_rewrite 'cd /repo && rtk git show origin/main:f > f.md; rtk diff <(sed "s#a#b#g" f.md) g | cat; rtk git log --oneline -3')"
 # The shape above holds a redirect and a pipe on rtk invocations, which the #1419 rule refuses on
 # its own, so it no longer proves the DIFF refusal reaches past `cd &&`. The same command with
-# both taken out can be refused by nothing but the diff refusal (L159).
+# both taken out, and its closing git log swapped for a git branch since #3469 refuses git log on
+# its own, can be refused by nothing but the diff refusal (L159).
 check "#399 and the same command with no pipe or redirect is still refused for its rtk diff" \
-  "$(refused_to_rewrite 'cd /repo && rtk git show origin/main:f; rtk diff <(sed "s#a#b#g" f.md) g; rtk git log --oneline -3')"
+  "$(refused_to_rewrite 'cd /repo && rtk git show origin/main:f; rtk diff <(sed "s#a#b#g" f.md) g; rtk git branch -a')"
 check "#399 an rtk diff after a semicolon is refused" "$(refused_to_rewrite 'rtk ls; rtk diff a b')"
 check "#399 an rtk diff behind an environment assignment is refused" "$(refused_to_rewrite 'LC_ALL=C rtk diff a b')"
 check "#399 an rtk diff inside a subshell is refused" "$(refused_to_rewrite '(cd /repo && rtk diff a b)')"
