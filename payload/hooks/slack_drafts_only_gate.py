@@ -1575,6 +1575,25 @@ def sh_strip_openers_of(t):
         t = t[m.end():].lstrip()
 
 
+@functools.lru_cache(maxsize=None)
+def sh_funcs_of(s):
+    """What Judge.sh_funcs finds in s, searched afresh: (the names written `name()`, the names
+    written `function name`), each in the order found, as tuples every caller can share. The walk
+    of a text's variables, the reading of a sed or git command's output (once for each such name)
+    and the reading of the words after an unknown program each searched the whole text for them,
+    six searches of the claude-sync suite's 1.8 MB where one serves (claude-config#3406)."""
+    return (tuple(re.findall(r"(?m)^\s*(?:function\s+)?([A-Za-z_][\w:.-]*)\s*\(\s*\)", s)),
+            tuple(re.findall(r"\bfunction\s+([A-Za-z_][\w:.-]*)", s)))
+
+
+@functools.lru_cache(maxsize=None)
+def sh_runs_shopt(s):
+    """Whether s holds the word shopt, which can change how a case's patterns match (Judge.sh_case),
+    searched for once for each text: the walk of a text's variables asks, and the reading of its
+    locals asked again, a second search of the whole text (claude-config#3406)."""
+    return bool(re.search(r"\bshopt\b", s))
+
+
 # The builtins after which a NAME=value in front of them outlives the command (POSIX special builtins,
 # and those that bind names), so it is an assignment like any other.
 SH_SPECIAL = frozenset({":", ".", "source", "break", "continue", "eval", "exec", "exit", "export", "readonly",
@@ -3993,7 +4012,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         rows, blocks = struct if struct else (None, None)
         allnames = set(re.findall(r"(?<![\w$])([A-Za-z_]\w*)(?:\[[^\]\n]*\])?\+?=", s))
         funcs = self.sh_funcs(s)
-        shopt = bool(re.search(r"\bshopt\b", s))
+        shopt = sh_runs_shopt(s)
         env, since, regions, spans, tainted, handled = {}, {}, {}, {}, set(), set()
         lost = [] if cwd_known else [(0, len(s))]
         bodies, fbody = [], {}
@@ -4431,9 +4450,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
 
     @staticmethod
     def sh_funcs(s):
-        """The names of the functions s defines."""
-        return set(re.findall(r"(?m)^\s*(?:function\s+)?([A-Za-z_][\w:.-]*)\s*\(\s*\)", s)) | \
-            set(re.findall(r"\bfunction\s+([A-Za-z_][\w:.-]*)", s))
+        """The names of the functions s defines, as a set of the caller's own, searched for once
+        for each text (sh_funcs_of) and built as it always was, so it lists them in the same order."""
+        plain, keyword = sh_funcs_of(s)
+        return set(plain) | set(keyword)
 
     @staticmethod
     def sh_binds(name, text, allowed=0):
@@ -4925,7 +4945,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 last, spans = idx, [(p["start"], p["end"])]
                 if v is not None:
                     if not shopt:
-                        shopt.append(bool(re.search(r"\bshopt\b", s)))
+                        shopt.append(sh_runs_shopt(s))
                     v, last, spans = self.sh_local_settles(s, items, rows, blocks, stack, idx, end, n, v, known,
                                                            script, here, shopt[0])
                 if v is None or sum(1 for x in words if re.match(re.escape(n) + r"(?:=|$)", x)) > 1:
