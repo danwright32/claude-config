@@ -1946,6 +1946,8 @@ refuse the push with their read key, and `PR_REVIEW_READ=<key> <the push command
 findings and an empty diff pass; a review that could not run refuses in its own words with the
 restart command and `SKIP_PR_REVIEW=1 <the push command>`, explained to Dan first. A commit and a
 push in one command is refused, because the head it pushes does not exist yet for anything to read.
+A branch stacked on another open branch is read from that branch's head, when that is established
+("A stacked branch is judged from its base, when the base is established", claude-config#3444).
 
 The merge gate is exactly as strict as before. Reviews are keyed by repository (a hash of the origin
 URL, so every worktree and clone of one repository shares them) and commit, so the merge finds the
@@ -3487,6 +3489,68 @@ long a Linux run takes is not measured on this Mac, whose docker daemon was not 
 The readings are of the INSTALLED hooks, which is what a push waits on. A gate edited in this
 checkout costs nothing until it is installed (L423).
 
+### A stacked branch is judged from its base, when the base is established
+
+A branch cut from another open branch used to be judged all the way back to the default branch when
+it was pushed, so its push answered for the base branch's changes too (claude-config#3444). On
+2026-11-21 the test gate refused a branch stacked on pull request 3421 for changes that belong to
+3421, and on 2026-11-22 the lessons review twice refused a branch stacked two deep for stopping
+findings in files its base branches own.
+
+Two gates now judge such a branch from its base: the pre push test gate
+(`require-tests-before-push.sh`) and the lessons review before a push (`pr-review-push-gate.sh`,
+with the review `ai-review-on-pr.sh` starts at a commit). Whether a branch is stacked, and on what,
+is one function both ask, `sb_stacked_base` in `hooks/lib/stacked-base.sh`. Every other push gate
+(the simplify gate, style, deferrals, scanners and the rest) still judges from where it always did.
+
+A base is established only when all of this holds, and anything short of it is judged from the
+default branch exactly as before:
+
+- HEAD is on a named branch.
+- A branch on origin, other than the default branch and this branch's own copy, has
+  its head in this branch's history, short of HEAD and not already on the default branch. A branch
+  that only names a base (an upstream, the setting `gh pr create` records, its own pull request's
+  base) and does not descend from it establishes nothing.
+- It is the nearest such branch. When it fails the next check, the branch under it is never tried,
+  because the nearest one's own changes would then be judged by nobody.
+- GitHub says an open pull request of this repository, never a fork's, has that branch as its head
+  at exactly that commit. A remote ref in a checkout can be moved by hand, so this checkout's copy
+  alone is not believed. A base that was never pushed, was deleted, or whose pull request is closed
+  or merged fails here, and so does a read of GitHub that fails or runs past its own time limit
+  (`SB_READ_SECONDS` in that file).
+
+How each gate knows the base's own changes are judged:
+
+- The lessons review: the base is an open pull request, and no pull request merges until the merge
+  gate's review of its whole range has been read. The push gate now names the base it reads from to
+  the checker on every push, the default branch included, so a review that read from a base which
+  has since stopped being an open pull request is run again from the default branch, never reused.
+  At the merge of the stacked branch's own pull request the existing rule still applies: a review is
+  reused only when it covers the pull request's base.
+- The test gate: nothing judges tests at a merge, so an open pull request is not enough. The range
+  moves to the base's head only when this Mac's push gate ledger shows the test gate judged the push
+  that delivered that head (an outcome of pass, nosource or docsonly for that tree) and holds no
+  override or could not judge line for any commit of the base's own range. The ledger is per Mac, so
+  a base pushed from the other Mac leaves the branch on top of it judged from the default branch.
+  Judged from its base, a stacked branch answers for its own tests: the base's test files are not
+  counted as tests it pushed earlier.
+
+A stopping finding the narrowed review raises still refuses the push wherever it points, a file the
+base owns included; nothing is waived for where a finding points. A refusal by either gate, and the
+test gate's ledger line (`range started at the head of <base> (pull request #N)`), says when the
+base was used. When
+another branch lies under the pushed one and was not taken as its base, a refusal by either gate
+says why (no pull request, a pull request that is not open, a read of GitHub that failed, no record
+that the test gate judged the base's push), since that branch's changes are then in what was judged.
+`test-stacked-base.sh` holds both refusals as cases, and one case for every push that must stay
+judged from the default branch.
+
+Not covered: a branch not rebased onto its base's current head is judged from the default branch
+(the base's head is then not in its history), and so is a review of the same head that a commit
+started before the base's pull request was open, which read the whole range and is reused; restart
+it with `bash ~/.claude/hooks/lib/pr-review.sh restart --dir <repo> --sha <head> --base-ref
+origin/<base>`, which the push gate still checks against the base it establishes itself.
+
 ### The two model judged push gates, and their record
 
 `require-tests-before-push.sh` (a sonnet judge of whether each change carries a test) and
@@ -3496,7 +3560,8 @@ what a push carries, and call their judge, through one library, `hooks/lib/push-
 written in the same `git add ... && git commit ... && git push` reached the test judge as a file
 name with none of its text, and a push run from a subdirectory showed both judges nothing outside
 that subdirectory, so it went through unjudged. `test-push-changes.sh` fails if either gate grows
-its own copy again.
+its own copy again. Only the test gate asks the library to start a stacked branch's range at its
+base (`pc_resolve "$cmd" stacked`, the section above, #3444); the simplify gate does not.
 
 The simplify judge is shown the diff's hunks, never whole files, so it cannot see a use on an
 unchanged line away from them. On 2026-10-25 it blocked a work project's push calling an import unused
@@ -4959,6 +5024,37 @@ and 24.5 units of the yardstick both before and after.
 As of 2026-11-22 the count of past commands it newly refuses had been made on neither MacBook:
 the area check held the command that runs it on the personal MacBook.
 Suite: `test-slack-drafts-python-file-runs.sh`.
+
+Two refusals of a file left unread now read the file where what it holds is certain
+(claude-config#3395). Counted for #3218 over one Mac's records of 2026-11-08 to 11-21, a sourced
+path the gate could not work out refused 59 commands and a script written earlier in the same
+command 49, and none of the 108 posted. Put through the gate as it stood on 2026-11-22 most of
+those shapes already passed; the ones below did not.
+A sourced path built from the script's own `$0` through a variable
+(`D="$(cd "$(dirname "$0")" && pwd)"` then `. "$D/lib/x.sh"`), or from a word the command line
+hands the script (`. "$1"` in `bash probe.sh lib/x.sh`), is worked out and the file read
+(`lib/script-params.py`). The `$0` is taken for a text bash or dash reads; `$1` from a script run
+by its path or by a shell with no option but `-e`, `-u`, `-x`, `-v` and `-n`, and only before
+anything in the script that could change it (shift, set with an operand, eval, a sourced file, a
+function, a loop). They are taken up only where a source command of the script names a path the
+gate cannot work out without them, which is where it refused the script unread: a script with
+no such command is read exactly as before, and from that command on the script's variables are
+known with them to every command after it. A first form gave them to every script, and a script
+that only hands its `$1` on to a program was then refused where it had passed (three cases of
+the gate's own suite, 2026-11-22).
+A script made earlier in the command by a sed filter sent to a file
+(`sed 's/a/b/' x.sh > y.sh; bash y.sh`) is read as sed leaves it, by an emulation of the part of
+sed POSIX fixes (`p`, `d`, `s` with `g` and `p`; line, `$` and regex addresses, ranges, `!`;
+`-n`, `-E`, `-e`) on input known exactly, held to this Mac's sed on every program its suite
+gives it; and one made by `git show HEX:PATH > y.sh` (or `cat-file -p`, `cat-file blob`) is read
+as the commit holds it, for a hex object name only, since an earlier command can move a ref
+(`lib/exact-output.py`).
+Still refused unread, each by choice: awk, a group's output sent to a file, a file Python
+writes, `sed -i` with a program that is not written out, a symbolic ref (`HEAD`, `origin/main`),
+a function's `$1`, a sourced file's `$1`, a script handed its words by xargs or `find -exec`, and
+a variable set from `mktemp` or the environment. A module the gate cannot find, and a script
+handed a file that names the send call, are refused as before (#3218).
+Suite: `test-slack-drafts-reads-more.sh`.
 
 Running `python3 payload/skills/nudge/test_nudge.py` directly is refused, because its fake server
 names `chat.postMessage`, and since claude-config#2844 so is `python3 -m unittest` over the same
@@ -7808,7 +7904,14 @@ what its -exec runs, since each can change the folder or the environment with no
 and the options that do it are not given, and with `assignments: true` each command that only sets
 a value (`T=x;`, which runs nothing and is otherwise left out) as its assignments (a guard relying
 on any of the three first asks about a line it knows the answer for, since a copy of mod-kit
-loaded before #3093 answers with none of them and says nothing), of which files a command
+loaded before #3093 answers with none of them and says nothing), and with `follow: true` (#3398)
+each command's `followed`: for a word that is one variable alone (`$W`, `"$W"`, `${W}`), the value
+the call itself gives it, only where the call's own text makes that certain (set once, in the plain
+settings the call opens with, `W=/path;` or on a line of its own; a name of one letter or one
+mixing capitals and small letters; nothing else in the call able to change it; no heredoc), null
+for every other word, the words themselves never changed and nothing given to a reader that does
+not ask, so every other mod reads exactly what it read (docs/mods-design.md has every condition;
+a copy of mod-kit loaded before it follows nothing), of which files a command
 changes (`$.modkit.writes({ command, cwd, home })`: redirects, `tee`, the destination of `cp`, `mv`,
 `ln`, `install`, `rsync` and `ditto` (into a folder, under each source's name), every file of `sed`,
 `perl`, `ruby` or `gawk` editing in place, `dd of=`, since #3279 every file an editor is opened on
@@ -7881,7 +7984,9 @@ question again, used by the design round guard and ask before saving), of git co
 (`$.modkit.git({ words, env })`: the subcommand, its arguments, the folder `-C` names and, since
 #3337, the repository and the working folder the command names apart from that folder, by
 `--git-dir`, `--work-tree`, `GIT_DIR` or `GIT_WORK_TREE`, each as written, the two variables read
-from the `env` that `pipeline` gives the command), of gh commands
+from the `env` that `pipeline` gives the command, and, since #3398, the folder more than one `-C`
+leads to, each read from the one before it as git reads them, as `chained`, null where it cannot
+be worked out, beside `dir`, which stays the last `-C` as written), of gh commands
 (`$.modkit.gh({ words })`: the subcommand and action past gh's
 global flags, each flag as pflag reads it, the positionals, the repository the command names itself,
 from `-R`, a github.com link or a `gh repo` owner/name, and for `gh api` its method, endpoint,
@@ -8133,7 +8238,17 @@ changes (a checkout of a path, `git restore`, `git rm`, `git mv`); a script's wr
 docs/mods-design.md, but since #1592 a file handed to a script file as its argument, `python3
 tool.py notes.txt`, is judged and noted as an edit of it), or a checkout wide git command (checkout,
 switch, `branch -D`, `reset --hard`, `stash pop`, `add -A` or `.`) in a checkout another open
-session works in, or since #3021 a command there whose effect cannot be read (mod-kit's `unread`:
+session works in (since #3398 every checkout the command acts on as git reads it: where a `cd`
+before it and each `-C` lead, and the repository and working folder it names by `--git-dir`,
+`--work-tree`, `GIT_DIR` or `GIT_WORK_TREE`, beside the folder the guard always asked about; a
+`-C` folder named with a variable the same call sets, `W=/path; git -C "$W" checkout x`, is
+judged by the folder the variable holds, exactly where mod-kit's `followed` gives it, so set once
+at the start of the call under a name of one letter or of mixed capitals and small letters, and
+used alone; one whose repository cannot be told, any other folder the shell fills in or a `cd`
+that cannot be followed, is stopped while another session is open, with how to write it, and so
+is one where git or mod-kit's walk for a checkout did not answer, to try again), or since #3021
+a command there
+whose effect cannot be read (mod-kit's `unread`:
 `eval`, a command a value names, an alias being set, `ssh`), judged once per checkout against the
 folder it runs in, asks Sonnet for Proceed, Worktree or Stop with the other session's latest request
 (read from its transcript). Proceed is a toast; Worktree and Stop are the grey card plus a message
@@ -8587,6 +8702,29 @@ asks. Since #3343 a shell command that writes that file is refused too, with Edi
 its place, and the For good question about a write that takes an entry out, moves one to another
 section or changes a section heading is refused until it names each of them (both told in full
 below).
+Since #3402 a shell command that deletes a lasting memory file or moves one away is asked about
+too, in a question of its own: every removal mod-kit's reader reports (rm, unlink, rmdir, a mv's
+source, find -delete, shred -u, a packer's source) whose words name lasting memory or match it, the
+memory folder taken whole, and a folder that holds the memory under home (`~/.claude/projects/<a
+project>`, `~/.claude`). A file emptied in place (`truncate`, `shred`) is asked about the same way,
+said as emptied. Where the reader cannot limit what goes under a folder (`rm -r`, what a
+`find -exec` hands to rm), the lasting memory the command names under it is asked about as a
+guess. A file that is not there is not asked about. Claude's question names what
+goes and says why, and the mod adds what it measured as Dan is asked: where a move puts the file,
+or whether git can bring a deleted or emptied one back (held unchanged, held with changes since,
+not held, or not readable). The answers are Keep as is, first, and Delete, Move or Empty; a save's
+For good approves no removal and a removal's answer approves no save, a removal whose consequence
+changes after he answers (what git holds of the file, where a move lands, what a folder holds) is
+asked about again, his "from now on" words cover no removal, and a subagent's removal is refused.
+A command that removes lasting memory and also writes other lasting memory is refused
+whole, each part to be sent by itself, and one that also writes the lessons file by shell is
+refused as it was before (#3343). What the command does is read again when its question arrives,
+and one that has become either by then, or takes files away in more than one way, is refused
+before Dan reads the question. Not covered: what git itself removes or puts back (Dan's
+decision on #1136 stands), `git clean`, `git stash` and `git reset --hard`, what a `find -exec`
+hands to rm by a pattern, what `xargs` hands to rm, and any other folder taken whole that holds a
+lasting memory file the command does not name (docs/mods-design.md, "A removal is asked about in a
+question of its own").
 Since #3295 the picker is refused, before he is asked and saying which character and
 where, when its rule or its question holds a character he cannot see: a control other than the
 newline (a tab, a carriage return, the escape of a terminal sequence), a format character (zero
@@ -8792,7 +8930,10 @@ commit, and `git ls-tree` for whether that commit holds the file; the command mu
 its source and its paths alone (`git checkout origin/main -- <file>`, `git restore --source
 origin/main <file>`), with nothing before or beside it that may change what the name means, though
 on a line that groups nothing what runs once the restore has finished no longer counts, a test run
-piped to its last lines included; any other commit, a local branch that differs from what was
+piped to its last lines included, and since #3401 a brace or parenthesis that mod-kit's own reading
+of the line shows to be quoted text groups nothing (a search for `"(fail|pass)"`), while a
+subshell, a group, a substitution, text handed to a shell and anything that reading does not
+account for still do; any other commit, a local branch that differs from what was
 fetched, the index, any option, a pattern, a file the default branch does not hold and every case
 git cannot answer for is judged as before, and so is putting the changed file back afterwards),
 since #3279 what a git command that moves committed work brings into the working tree (Dan,
@@ -8872,7 +9013,22 @@ decides, and source only files read the same, is not judged as writing the argum
 so `milestone-candidates.sh --like "<title naming page.html>"` runs; since #3021 the script's text
 is read through mod-kit alone, which keeps a `[[ ]]` test whole and reads a trap's text, and a
 command in it that mod-kit marks unread, or that runs through `setsid`, `flock`, `ionice`, `arch` or
-`ssh`, keeps its arguments judged), a patch git apply, git am or patch reads from a file judged
+`ssh`, keeps its arguments judged; since #3416 a file a shell script's own text hands a program the
+write reader does not know (`bash fmt.sh`, fmt.sh holding `prettier --write app/page.tsx`) is judged
+as a write of it, as that line typed whole is since #3323, in the script the command runs and each
+script that one runs, the list of programs that only read applying there as on a command line,
+and a call of a shell function the script's own text defines read as that function's commands with
+the call's words in place, so a helper that only compares and prints is no such program and a
+wrapper around one still is (Dan, 2026-11-22), a function from a file the script reads in checked
+the same way where the reader can say which file it is, a file in the script's own folder or below
+read in by name or under the folder the script sets as its own, one file deep (a function from a
+file outside that folder, from a path held in any other variable, from a file read in only inside
+an `if`, or one that keeps what it was handed in a variable, stays judged, as does a helper of a
+script that holds an eval anywhere, or that reads in a file the reader could not read anywhere but
+at its own top above the helper; of the 51 past calls in 45 days the rule newly judges, this
+reading clears 27),
+while what the script itself was handed, passed on to such a program (`mystery "$1"`), is still not
+caught), a patch git apply, git am or patch reads from a file judged
 since #3022 by the files it changes (mod-kit's patch reader, placed as the command places them), and
 a look changing file an inline script, or a patch that cannot be read whole or comes on standard
 input, only mentions, and since #3021 one named in the words of a command typed whole that mod-kit
@@ -9219,7 +9375,7 @@ Dan as a change to a message's words.
 
 #978, #1138, #1158, #1191, #1194, #1248, #1275, #1296, #1306, #1322, #1341, #1524, #1576, #1586,
 #1593, #1682, #1773, #1765, #1814, #1815, #1823, #1832, #1841, #1864, #1904, #1911, #1951, #1953,
-#1954, #2261, #2830, #2845, #2847, #2855, #2924, #2991, #3144, #3214
+#1954, #2261, #2830, #2845, #2847, #2855, #2924, #2991, #3144, #3214, #3416
 
 </td></tr>
 <tr><td>
@@ -10103,6 +10259,15 @@ checkout, a changed copy, a second argument, a file or a pattern in place of the
 shell, the file its output is redirected into, and the script chained with any other command, in a
 loop or in a function, which is judged with that command as before. Each such run is one
 `named-reader` line in the log, `passed` or `judged` with why.
+A hold on what a run that was not let through reaches says that reason (#3162). Where the reason
+is what else the command runs (the script run more than once, another command before or after it,
+a value set on its own), the hold also says the one shape let through: the script once, with
+nothing before it but a `cd` and nothing after it but readers its output is piped into (#3417).
+So several mods are checked with one command each, and an exit code is read from the command's own
+result, never from an `echo` after it. On 2026-11-21 a line running the check three times, an
+`echo` after each, was held with the reason alone and taken for a hold on every run of the check.
+What is held did not change: letting such a line through would widen the exemption, which is
+Dan's to sign off.
 `tests/test-area-check-check-mods-read-only.sh` is the proof: it runs the real script from a
 throwaway checkout and is red when a run changes a file git tracks there or adds one git does not
 ignore (the pinned compiler's links under the ignored `tools/typescript/node_modules` are all it

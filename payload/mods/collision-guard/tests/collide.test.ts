@@ -1,6 +1,6 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
-import { editedUnder, insideRoot, isScratch, judgedWrites, latestRequest, othersEditing, othersInRepo, parseVerdict, quoteNames, wantedFiles, watchedGit } from '../hooks/collide.ts'
+import { editedUnder, followedFolders, insideRoot, isScratch, judgedWrites, latestRequest, namedFolder, othersEditing, othersInRepo, parseVerdict, quoteNames, wantedFiles, watchedGit, whereGit } from '../hooks/collide.ts'
 
 const rec = (id: string, over: Partial<{ repoRoot: string | null; edits: string[] }> = {}) => ({
   v: 1 as const,
@@ -245,5 +245,94 @@ describe('the files a message to another session names', () => {
   })
   test('a message naming no file is none', () => {
     expect(wantedFiles('Another session wanted to run git checkout main in this checkout while you are working in it, so it was stopped.')).toBeUndefined()
+  })
+})
+
+// #3398: git acts on the repository a command names, never on the folder the call was typed in.
+describe('where a watched git command is put to git (#3398)', () => {
+  const plain = { dir: undefined }
+  test('a folder is handed to git as the shell leaves it, or not at all', () => {
+    expect(namedFolder('/other', '/h/d')).toBe('/other')
+    expect(namedFolder('sub/x', '/h/d')).toBe('sub/x')
+    expect(namedFolder('~', '/h/d')).toBe('/h/d')
+    expect(namedFolder('~/other', '/h/d/')).toBe('/h/d/other')
+    expect(namedFolder('$HOME/other', '/h/d')).toBe('/h/d/other')
+    expect(namedFolder('${HOME}/other', '/h/d')).toBe('/h/d/other')
+    // The shell fills these in, so git asked about the characters would answer for another folder.
+    for (const v of ['$X', '${X}/a', '$(pwd)', '`pwd`', 'a*', 'a?', '[ab]', '{a,b}', '~dan/x', '$HOMEX/a', '']) expect(namedFolder(v, '/h/d')).toBeUndefined()
+    // Home is needed and not known.
+    expect(namedFolder('~/other', '')).toBeUndefined()
+  })
+  test('the folder it runs in, exactly as the guard always asked (the controls)', () => {
+    expect(whereGit(plain, '/repo', '/repo', '', 'git checkout main')).toEqual({ at: ['-C', '/repo'], apart: [], asToday: true })
+    expect(whereGit({ dir: '/other' }, '/repo', '/repo', '', 'git -C /other checkout main')).toEqual({ at: ['-C', '/other'], apart: [], asToday: true })
+    expect(whereGit({ dir: 'sub' }, '/repo', '/repo', '', 'git -C sub checkout main')).toEqual({ at: ['-C', '/repo', '-C', 'sub'], apart: [], asToday: true })
+    // An absolute -C is where git runs whatever cd came before it.
+    expect(whereGit({ dir: '/other' }, '/far', '/repo', '', 'cd /far && git -C /other checkout main')).toEqual({ at: ['-C', '/other'], apart: [], asToday: true })
+    expect(whereGit({ dir: '/other' }, null, '/repo', '', 'cd "$X" && git -C /other checkout main')).toEqual({ at: ['-C', '/other'], apart: [], asToday: true })
+    // An empty -C changes nothing, as git reads it.
+    expect(whereGit({ dir: '' }, '/repo', '/repo', '', 'git -C "" checkout main')).toEqual({ at: ['-C', '/repo'], apart: [], asToday: true })
+  })
+  test('a cd before it, and a relative -C after one, are read from where the cd leaves the shell', () => {
+    expect(whereGit(plain, '/other', '/repo', '', 'cd /other && git checkout main')).toEqual({ at: ['-C', '/other'], apart: [], asToday: false })
+    expect(whereGit({ dir: 'sub' }, '/other', '/repo', '', 'cd /other && git -C sub checkout main')).toEqual({ at: ['-C', '/other', '-C', 'sub'], apart: [], asToday: false })
+  })
+  test('more than one -C is put as mod-kit chains them, never as the last one alone', () => {
+    expect(whereGit({ dir: 'sub', chained: '/other/sub' }, '/repo', '/repo', '', 'git -C /other -C sub checkout main')).toEqual({ at: ['-C', '/other/sub'], apart: [], asToday: false })
+    expect(whereGit({ dir: 'b', chained: 'a/b' }, '/repo', '/repo', '', 'git -C a -C b checkout main')).toEqual({ at: ['-C', '/repo', '-C', 'a/b'], apart: [], asToday: false })
+  })
+  test('a home folder is written out, which git does not do for itself', () => {
+    expect(whereGit({ dir: '~/other' }, '/repo', '/repo', '/h/d', 'git -C ~/other checkout main')).toEqual({ at: ['-C', '/h/d/other'], apart: [], asToday: false })
+  })
+  test('the repository and the working folder it names apart are handed to git as written', () => {
+    expect(whereGit({ dir: undefined, gitDir: '/other/.git', workTree: '/other' }, '/repo', '/repo', '', 'git --git-dir=/other/.git --work-tree=/other checkout main')).toEqual({
+      at: ['-C', '/repo'],
+      apart: ['--git-dir=/other/.git', '--work-tree=/other'],
+      asToday: true,
+    })
+    // A relative one is git's to read, from the folder every -C leads to.
+    expect(whereGit({ dir: '/w/a', gitDir: '../other/.git' }, '/repo', '/repo', '', 'git -C /w/a --git-dir=../other/.git checkout main')).toEqual({ at: ['-C', '/w/a'], apart: ['--git-dir=../other/.git'], asToday: true })
+    expect(whereGit({ dir: undefined, workTree: '~/w' }, '/repo', '/repo', '/h/d', 'GIT_WORK_TREE=~/w git checkout main')).toEqual({ at: ['-C', '/repo'], apart: ['--work-tree=/h/d/w'], asToday: true })
+  })
+  test('what the guard cannot tell is said, never guessed', () => {
+    const why = (w: ReturnType<typeof whereGit>) => ('unknown' in w ? w.unknown : 'known')
+    expect(why(whereGit({ dir: '$X' }, '/repo', '/repo', '', 'git -C "$X" checkout main'))).toBe('the shell fills in the folder -C names ($X)')
+    expect(why(whereGit({ dir: '$B', chained: null }, '/repo', '/repo', '', 'git -C /a -C "$B" checkout main'))).toBe('its -C options lead to a folder the shell fills in')
+    expect(why(whereGit(plain, null, '/repo', '', 'cd "$X" && git checkout main'))).toBe('the cd before it cannot be followed')
+    expect(why(whereGit({ dir: 'sub' }, null, '/repo', '', 'cd "$X" && git -C sub checkout main'))).toBe('the cd before it cannot be followed')
+    expect(why(whereGit({ dir: undefined, gitDir: '$G' }, '/repo', '/repo', '', 'git --git-dir="$G" checkout main'))).toBe('it names its repository as $G, which the guard cannot follow to a folder')
+    expect(why(whereGit({ dir: undefined, workTree: '' }, '/repo', '/repo', '', 'git --work-tree= checkout main'))).toBe('it names its working folder as nothing, which the guard cannot follow to a folder')
+    expect(why(whereGit({ dir: '~/other' }, '/repo', '/repo', '', 'git -C ~/other checkout main'))).toBe('the shell fills in the folder -C names (~/other)')
+    // Either variable named anywhere but on the git command itself: git reads it only if exported.
+    expect(why(whereGit(plain, '/repo', '/repo', '', 'export GIT_DIR=/other/.git; git checkout main'))).toBe('the call names GIT_DIR somewhere other than as a setting on the git command itself')
+    expect(why(whereGit(plain, '/repo', '/repo', '', 'GIT_WORK_TREE=/w; git checkout main'))).toBe('the call names GIT_WORK_TREE somewhere other than as a setting on the git command itself')
+    // Named on the command itself, it is read and nothing is unknown.
+    expect(why(whereGit({ dir: undefined, gitDir: '/other/.git' }, '/repo', '/repo', '', 'GIT_DIR=/other/.git git checkout main'))).toBe('known')
+  })
+})
+
+// #3398 (Dan, 2026-11-22: "Follow the variable first"): the folder a -C names with a variable the
+// call itself set is read as the value mod-kit's reader gives for that word, so the command is
+// judged by the folder it really names. Only a -C of git's own is read so.
+describe('a git command read with the folder its -C variable holds (#3398)', () => {
+  const g = (sub: string | undefined, ...args: string[]) => ({ sub, args })
+  test('the value mod-kit gives for the word after a -C stands in its place', () => {
+    expect(followedFolders(['git', '-C', '$W', 'checkout', 'main'], [null, null, '/other', null, null], g('checkout', 'main'))).toEqual(['git', '-C', '/other', 'checkout', 'main'])
+    // Each -C of a chain, and one after another of git's own options.
+    expect(followedFolders(['git', '-C', '$A', '-C', '$B', 'reset', '--hard'], [null, null, '/a', null, 'b', null, null], g('reset', '--hard'))).toEqual(['git', '-C', '/a', '-C', 'b', 'reset', '--hard'])
+    expect(followedFolders(['git', '-c', 'core.x=y', '-C', '$W', 'stash', 'pop'], [null, null, null, null, '/other', null, null], g('stash', 'pop'))).toEqual(['git', '-c', 'core.x=y', '-C', '/other', 'stash', 'pop'])
+  })
+  test('nothing mod-kit followed, or no value for the folder word, changes no word', () => {
+    expect(followedFolders(['git', '-C', '$W', 'checkout', 'main'], undefined, g('checkout', 'main'))).toBeUndefined()
+    expect(followedFolders(['git', '-C', '$W', 'checkout', 'main'], [null, null, null, null, null], g('checkout', 'main'))).toBeUndefined()
+    expect(followedFolders(['git', '-C', '/other', 'checkout', 'main'], [null, null, null, null, null], g('checkout', 'main'))).toBeUndefined()
+  })
+  test("a value for any other word is not read: a subcommand's own -C names a branch, and a word no -C comes before names no folder", () => {
+    // git switch -C makes or resets the branch named after it.
+    expect(followedFolders(['git', 'switch', '-C', '$B'], [null, null, null, 'main'], g('switch', '-C', '$B'))).toBeUndefined()
+    expect(followedFolders(['git', '-C', '/repo', 'checkout', '$B'], [null, null, null, null, 'main'], g('checkout', '$B'))).toBeUndefined()
+    // Where -C is the value another option takes, the word after it is the subcommand.
+    expect(followedFolders(['git', '-c', '-C', '$W', 'main'], [null, null, null, 'checkout', null], g('$W', 'main'))).toBeUndefined()
+    expect(followedFolders(['git', '--git-dir', '$G', 'checkout', 'main'], [null, null, '/other/.git', null, null], g('checkout', 'main'))).toBeUndefined()
   })
 })

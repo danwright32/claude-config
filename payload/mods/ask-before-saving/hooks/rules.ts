@@ -1,7 +1,7 @@
 // Ask before saving (claude-config#618): what counts as lasting memory, when Dan's own words already
 // made a rule permanent, and what Claude is told to ask in Claude Code's own dialog (#777). Pure, so
 // each rule is tested on its own.
-import type { AskBeforeSavingApproval } from '../types/index.d.ts'
+import type { AskBeforeSavingApproval, AskBeforeSavingRemoval } from '../types/index.d.ts'
 import { withinGrace } from './mod-kit/hold.ts'
 import { shownFault, unindented, unseenIn } from './mod-kit/shown.ts'
 
@@ -17,8 +17,14 @@ export const MOD = 'ask-before-saving'
 // `runs` is each script file a command runs with the files it is handed as arguments (#1586), and
 // since #3323 each program the reader does not know with the files it is handed: `unknown` marks
 // one, `script` is the program as written, `why` and `remedy` the reader's words for it.
+// `changes` is each change that puts no content in a file (#3402 reads the ones that remove: rm,
+// unlink, rmdir, a mv's source, find -delete, shred -u, a packer's source, and the ones that empty
+// a file in place: truncate, shred without -u), `folder` the folder a
+// pattern lands in, `names` what a find -delete is limited to; a file's `sources` are what a copy
+// or a move brings to it, absolute.
 export type Writes = {
-  files: { word: string; path?: string }[]
+  files: { word: string; path?: string; sources?: string[] }[]
+  changes?: { word: string; path?: string; folder?: string; does: string; tree?: true; names?: string[] }[]
   unnamed: { what: string; words: string[]; inputs: string[]; targets?: string[] }[]
   runs?: { script?: string; unknown?: true; why?: string; remedy?: string; args: { word: string; path?: string }[] }[]
 }
@@ -579,15 +585,24 @@ export const LESSON_HEADER = 'Lesson'
 /** The lessons file the picker approves a write to, as a tool reaches it. */
 export const lessonsFile = (home: string): string => `${home.replace(/\/$/, '')}/.claude/LESSONS.md`
 
-/** The answer Dan gave that made an approval, as he pressed it: For good, or the lesson picker's add. */
-export const pressed = (x: AskBeforeSavingApproval): string => (x.lesson !== undefined ? LESSON_ADD : FOR_GOOD)
+/**
+ * The answer Dan gave that made an approval, as he pressed it: For good, the lesson picker's add, or
+ * for a removal (#3402) Delete, Move or Empty.
+ */
+export const pressed = (x: AskBeforeSavingApproval): string => (x.removes?.length ? removalWords(x.removes).label : x.lesson !== undefined ? LESSON_ADD : FOR_GOOD)
+
+/**
+ * What an approval was given for, as the words after "for" or "on" (#3402): saving to its files, or
+ * deleting, moving or emptying what it removes, so a removal's lapse is never said as a save's.
+ */
+export const approvedFor = (x: AskBeforeSavingApproval): string => (x.removes?.length ? `${removalWords(x.removes).doing} ${removedNames(x.removes)}` : `saving to ${x.files.join(', ')}`)
 
 /**
  * What Dan reads when an approval's lapse cannot be timed, naming the answer he pressed (lessons
  * review of #869: it said For good for a lesson approval too).
  */
 export const untimed = (x: AskBeforeSavingApproval, why: string): string =>
-  `The ${APPROVAL_MS / 60_000} minute limit on ${pressed(x)} for saving to ${x.files.join(', ')} could not be timed (${why}), so nothing will say when it lapses; it still lapses then.`
+  `The ${APPROVAL_MS / 60_000} minute limit on ${pressed(x)} for ${approvedFor(x)} could not be timed (${why}), so nothing will say when it lapses; it still lapses then.`
 
 export const lessonOptions = (file: string) => [
   { label: LESSON_ADD, description: `Added to ${file}, with no second question` },
@@ -1602,4 +1617,370 @@ export const ruleOf = (question: string, files: string[]): string => {
     if (rest && rest !== q.slice(at + f.length).trim()) return rest
   }
   return q
+}
+
+// ---- #3402: a shell command that removes a lasting memory file, or moves one away ----
+//
+// The mod judged only the files a command puts content into, so `rm ~/.claude/LESSONS.md` ran with
+// no question (measured 2026-11-20, and again on 2026-11-22 for every form in the suite), while
+// mod-kit's write reader reports a removal among a command's other changes. A removal is asked
+// about in a question of its own, never a save's: it names what goes, and says whether git can
+// bring it back, read from git and the disk when Dan is asked (L9, L180).
+//
+// What counts: a removal whose words name a lasting memory file or match one (a path, a pattern, a
+// find -delete limited to its name), a folder that is itself lasting memory (the memory folder),
+// and a folder taken whole that holds the memory under home (a project's records under
+// ~/.claude/projects, or ~/.claude itself). A target the words cannot name is judged by the lasting
+// memory the command mentions, as a write is (lastingFiles). What git itself removes or puts back
+// is left unjudged, by Dan's decision on #1136 (2026-10-13: "Ask before saving does not"), and any
+// other folder taken whole is not looked into, as a tree written over one is not.
+//
+// A file emptied in place (truncate, shred) is asked about the same way, said as emptied: the file
+// stays and what it held goes, which the reader reports as a change that truncates. And where the
+// reader cannot limit what goes under a folder (rm -r, a mv, what a find -exec hands to rm, whose
+// -name it does not carry), the lasting memory the command names under that folder is taken as what
+// may go, and said as a guess.
+
+/** The removal's own answers and header chip (at most 12 characters), set by the mod on Claude's call. */
+export const DELETE_IT = 'Delete'
+export const MOVE_IT = 'Move'
+export const EMPTY_IT = 'Empty'
+export const KEEP_IT = 'Keep as is'
+export const REMOVAL_HEADER = 'Memory file'
+
+/** Whether a change the write reader reports takes lasting memory away: a removal, or a file emptied in place. */
+export const takesAway = (does: string): boolean => does === 'remove' || does === 'truncate'
+
+/**
+ * A removal the words of a command would make, before the disk is asked whether the file is there:
+ * `path` is where to look for it and what to ask git about (the folder, for a pattern), `toPath`
+ * where a move puts it, and `holds`, on a folder taken whole that is not itself lasting memory, the
+ * lasting memory that may be under it: each path in `paths`, and each project's memory folder under
+ * `projects`. `tree` says it may be a folder, which only the disk can say.
+ */
+export type RemovalCandidate = {
+  file: string
+  path?: string
+  how: 'delete' | 'move' | 'empty'
+  to?: string
+  toPath?: string
+  tree?: true
+  names?: string[]
+  pattern?: true
+  holds?: { paths: string[]; projects?: string }
+  guessed?: true
+}
+
+const lastPart = (p: string): string => p.replace(/\/+$/, '').split('/').pop() ?? ''
+
+/**
+ * Whether a shell pattern may match a name, ignoring case (find's -iname does, and asking is the
+ * harmless side). A pattern this does not read (a brace, a backslash, anything a RegExp refuses) may
+ * match anything.
+ */
+export const patternMayMatch = (pattern: string, name: string): boolean => {
+  if (/[{}\\]/.test(pattern)) return true
+  try {
+    const re = pattern.replace(/[.+^$()|]/g, '\\$&').replace(/\[!/g, '[^').replace(/\*/g, '.*').replace(/\?/g, '.')
+    return new RegExp(`^${re}$`, 'i').test(name)
+  } catch {
+    return true
+  }
+}
+
+/**
+ * The memory under home a folder taken whole would take with it, when the folder is not itself
+ * lasting memory: one project's records (its memory folder), the projects folder (every project's),
+ * or ~/.claude and anything above it (its CLAUDE.md and LESSONS.md too). Undefined for any other folder.
+ */
+const homeMemoryUnder = (abs: string, home: string): { paths: string[]; projects?: string } | undefined => {
+  const claude = `${home.replace(/\/$/, '')}/.claude`
+  const projects = `${claude}/projects`
+  if (abs === claude || claude.startsWith(abs === '/' ? '/' : `${abs}/`)) return { paths: [`${claude}/CLAUDE.md`, `${claude}/LESSONS.md`], projects }
+  if (abs === projects) return { paths: [], projects }
+  if (abs.startsWith(`${projects}/`) && !abs.slice(projects.length + 1).includes('/')) return { paths: [`${abs}/memory`] }
+  return undefined
+}
+
+/**
+ * The lasting memory a command's words would remove (#3402), from the changes mod-kit's write
+ * reader reports as removing. Pure: whether each is on the disk, and what git holds of it, is asked
+ * where the call is judged. A file named by its path, or through a variable, is judged exactly as a
+ * write of it is (lastingFiles, so a target the words cannot name is guessed at from what the
+ * command mentions, and said as a guess). A removal is a move when the same command brings the file
+ * to another place (mv, or a copy it then removes): `to` is that place.
+ */
+export const removalCandidates = async (w: Writes, home: string, inCheckout: InCheckout, command: string, isSet: IsSet = ALWAYS_SET, read: MentionRead = {}): Promise<RemovalCandidate[]> => {
+  const out: RemovalCandidate[] = []
+  const add = (c: RemovalCandidate) => {
+    if (!out.some(x => x.file === c.file)) out.push(c)
+  }
+  // Removals first, so a file the command empties and then removes (shred -u) is said as removed.
+  const changes = w.changes ?? []
+  for (const c of [...changes.filter(x => x.does === 'remove'), ...changes.filter(x => x.does === 'truncate')]) {
+    const emptied = c.does === 'truncate'
+    const dest = emptied ? undefined : w.files.find(f => f.sources?.some(s => (c.path ? s === c.path : lastPart(s) === lastPart(c.word))))
+    const to = dest === undefined ? undefined : dest.path ? display(dest.path, home) : dest.word
+    const base = { how: emptied ? ('empty' as const) : dest === undefined ? ('delete' as const) : ('move' as const), ...(to !== undefined ? { to } : {}), ...(dest?.path ? { toPath: dest.path } : {}) }
+    // A pattern, in the folder it lands in: every file it matches in a folder of lasting memory, or
+    // the lasting memory files by name that it may match anywhere else.
+    if (!c.path && c.folder) {
+      const name = lastPart(c.word)
+      if (await lastingMemory(`${c.folder}/${name}`, home, inCheckout)) add({ file: `${display(c.folder, home)}/${name}`, path: c.folder, pattern: true, ...base })
+      else for (const n of NAMES) if (patternMayMatch(name, n) && (await lastingMemory(`${c.folder}/${n}`, home, inCheckout))) add({ file: display(`${c.folder}/${n}`, home), path: `${c.folder}/${n}`, ...base })
+      continue
+    }
+    const guessed: string[] = []
+    const hits = await lastingFiles({ files: [{ word: c.word, ...(c.path ? { path: c.path } : {}) }], unnamed: [] }, home, inCheckout, command, isSet, { ...(read.text !== undefined ? { text: read.text } : {}), guessed })
+    for (const m of hits) {
+      const guess = guessed.includes(m)
+      const path = c.path && m === display(c.path, home) ? c.path : /^(?:~\/|\/)/.test(m) ? resolvePath(m, '/', home) : undefined
+      add({ file: m, ...(path ? { path } : {}), ...(guess ? { guessed: true as const } : { ...(c.tree ? { tree: true as const } : {}), ...(c.names ? { names: c.names } : {}) }), ...base })
+    }
+    if (!c.path || !c.tree || hits.includes(display(c.path, home))) continue
+    // A folder taken whole that is not itself lasting memory: the memory under home it holds, or,
+    // for a find -delete limited to names, the lasting memory files those names match.
+    const held = homeMemoryUnder(c.path, home)
+    if (held) {
+      add({ file: display(c.path, home), path: c.path, tree: true, holds: held, ...(c.names ? { names: c.names } : {}), ...base })
+      continue
+    }
+    if (!c.names) {
+      // The reader could not limit what goes under the folder (rm -r, a mv, what a find -exec hands
+      // to rm): the lasting memory the command names under it may go. A path spelled out counts
+      // where it is under the folder, and a bare name where it would sit at the folder's top, which
+      // is where the disk is then asked. Said as a guess, since the words do not say it goes.
+      for (const m of await mentioned(read.text ?? command, home, inCheckout, isSet, undefined, command)) {
+        const spelled = /^(?:~\/|\/)/.test(m)
+        if (!spelled && (m.includes('/') || m.includes('$'))) continue
+        const path = spelled ? resolvePath(m, '/', home) : `${c.path}/${m}`
+        if (path.startsWith(`${c.path}/`) && (await lastingMemory(path, home, inCheckout))) add({ file: display(path, home), path, guessed: true, ...base })
+      }
+      continue
+    }
+    const exact: string[] = []
+    for (const n of NAMES) {
+      if (!c.names.every(p => patternMayMatch(p, n)) || !(await lastingMemory(`${c.path}/${n}`, home, inCheckout))) continue
+      // Named outright, the find takes every such file under the folder, however deep; matched by a
+      // pattern, the one at the top of the folder is what can be looked for.
+      if (c.names.some(p => p.toLowerCase() === n.toLowerCase())) exact.push(n)
+      else add({ file: display(`${c.path}/${n}`, home), path: `${c.path}/${n}`, ...base })
+    }
+    if (exact.length) add({ file: display(c.path, home), path: c.path, tree: true, names: exact, ...base })
+  }
+  return out
+}
+
+type Removal = AskBeforeSavingRemoval
+const allMoves = (removes: readonly Removal[]): boolean => removes.length > 0 && removes.every(r => r.how === 'move')
+const allEmptied = (removes: readonly Removal[]): boolean => removes.length > 0 && removes.every(r => r.how === 'empty')
+// `does` and `may` are what the command does to lasting memory, as a fact and as a guess; `takes` what
+// it does to a file its words do not name; `kept` and `press` the two answers' descriptions.
+const DELETE_WORDS = { label: DELETE_IT, lead: 'Delete', verb: 'delete', doing: 'deleting', done: 'Deleted', not: 'Not deleted', was: 'was not deleted', nothing: 'nothing was deleted', other: 'remove', does: 'deletes lasting memory', may: 'delete lasting memory', takes: 'removes', kept: 'Nothing is deleted', press: 'Deletes', once: 'deleted', why: 'should go' } as const
+const MOVE_WORDS = { label: MOVE_IT, lead: 'Move', verb: 'move', doing: 'moving', done: 'Moved', not: 'Not moved', was: 'was not moved', nothing: 'nothing was moved', other: 'move', does: 'moves lasting memory away', may: 'move lasting memory away', takes: 'removes', kept: 'Nothing is moved', press: 'Moves', once: 'moved', why: 'should go' } as const
+const EMPTY_WORDS = { label: EMPTY_IT, lead: 'Empty', verb: 'empty', doing: 'emptying', done: 'Emptied', not: 'Not emptied', was: 'was not emptied', nothing: 'nothing was emptied', other: 'empty', does: 'empties lasting memory', may: 'empty lasting memory', takes: 'empties', kept: 'Nothing is emptied', press: 'Empties', once: 'emptied', why: 'should be emptied' } as const
+
+/**
+ * The words a removal is said in: a move's when every file is moved away, an emptying's when every
+ * file is emptied in place, a deletion's otherwise.
+ */
+export const removalWords = (removes: readonly Removal[]): typeof DELETE_WORDS | typeof MOVE_WORDS | typeof EMPTY_WORDS => (allMoves(removes) ? MOVE_WORDS : allEmptied(removes) ? EMPTY_WORDS : DELETE_WORDS)
+
+/** What a removal takes, as Dan reads it. */
+export const removedNames = (removes: readonly Removal[]): string => removes.map(r => r.file).join(', ')
+
+const heldSaid = (r: Removal): string => `${(r.holds ?? []).join(', ')}${r.more ? ' and others' : ''}`
+const withWhere = (r: Removal): string => (r.how === 'move' && r.to !== undefined ? `${r.file}, to ${r.to}` : r.holds?.length ? `${r.file}, which holds ${heldSaid(r)}` : r.file)
+
+/**
+ * What a refused removal does, as every refusal says it: the files, where a move puts each, and for
+ * one taken from what the command mentions, that this is so. It claims only what was measured (L11).
+ */
+export const removesWhat = (removes: readonly Removal[]): string => {
+  const w = removalWords(removes)
+  const guessed = removes.filter(r => r.guessed)
+  const named = removes.filter(r => !r.guessed)
+  // Parted by a semicolon only where an entry holds a comma of its own (where a move goes, what a folder holds).
+  const list = (rs: readonly Removal[]) => rs.map(withWhere).join(rs.some(r => withWhere(r) !== r.file) ? '; ' : ', ')
+  if (!guessed.length) return `this ${w.does} (${list(removes)})`
+  const maybe = guessed.map(r => r.file).join(', ')
+  if (named.length) return `this ${w.does} (${list(named)}) and may ${w.other} ${maybe}: its words do not name every file it ${w.takes}, and they mention ${maybe}`
+  return `this may ${w.may} (${maybe}): its words do not name the file it ${w.takes}, and they mention ${maybe}`
+}
+
+/**
+ * What Claude is told when a removal of lasting memory is refused (#3402): ask Dan in Claude Code's
+ * own dialog, tied to the call by the same `metadata.source` a save's question carries, naming what
+ * goes and why. The mod adds what was measured (removalSaid), so Claude is told to leave that out.
+ */
+export const removalInstruction = (id: string, removes: readonly Removal[]): string => {
+  const w = removalWords(removes)
+  const names = removes.map(r => r.file)
+  const guessed = removes.filter(r => r.guessed).map(r => r.file)
+  return (
+    `${w.not} yet: ${removesWhat(removes)}, so Dan decides first. ` +
+    (guessed.length ? `If it only quotes ${guessed.join(', ')} as text and removes another file, spell that file's path out in the command, with no variable in it. ` : '') +
+    `Ask him now with AskUserQuestion: one question, with metadata {"source": "${sourceOf(id)}"}, that names ${names.join(', ')} and says in one plain sentence why ${names.length > 1 ? 'they' : 'it'} ${w.why}, never the command, ` +
+    `such as "${w.lead} ${names[0]}: <why>?", with the options ${KEEP_IT} and ${w.label}. ` +
+    `${allMoves(removes) ? 'Where it goes' : 'Whether git can bring it back'} is added to your question as it is read then, so leave that out. ` +
+    `If he answers ${w.label}, send this same call again unchanged and it runs. Until he answers, do not ${w.other} it any other way.`
+  )
+}
+
+/** The removal's answers, the one that changes nothing first (L609), each with what it does. */
+export const removalOptions = (removes: readonly Removal[]) => {
+  const w = removalWords(removes)
+  const what = allMoves(removes) ? removes.map(r => (r.to !== undefined ? `${r.file} to ${r.to}` : r.file)).join(', ') : removedNames(removes)
+  return [
+    { label: KEEP_IT, description: w.kept },
+    { label: w.label, description: `${w.press} ${what}` },
+  ]
+}
+
+/**
+ * What the mod adds to Claude's question (#3402): for each file what it is where that is not plain
+ * from its name (a whole folder, a folder holding lasting memory, a pattern, a guess), and its
+ * consequence as measured: where a move puts it, or whether git can bring a deleted or emptied
+ * file back. One file is "it"; several are each named.
+ */
+export const removalSaid = (removes: readonly Removal[]): string => {
+  const one = removes.length === 1
+  return removes
+    .map(r => {
+      const it = one ? 'it' : r.file
+      const It = one ? 'It' : r.file
+      const parts: string[] = []
+      if (r.guessed) parts.push(`The command's words do not name the file it removes; they mention ${one ? 'this one' : r.file}.`)
+      if (r.holds?.length) parts.push(`${It} is a folder that holds lasting memory (${heldSaid(r)}), which goes with it.`)
+      else if (r.pattern) parts.push(`That is every file the pattern matches in a folder of lasting memory.`)
+      else if (r.folder && !r.names?.length) parts.push(`${It} is a whole folder of lasting memory.`)
+      if (r.names?.length) parts.push(`Only what is named ${r.names.join(' and ')} under ${it} goes.`)
+      // Emptied in place: the file is still there afterwards, which a deletion's words would not say.
+      if (r.how === 'empty') parts.push(`${one ? 'The file' : r.file} stays, and what is in it is cut short or wiped.`)
+      if (r.how === 'move') parts.push(r.to === undefined ? `Where ${it} goes could not be read from the command.` : r.replaces ? `${It} goes to ${r.to}, replacing the file that is there now.` : `${It} goes to ${r.to}, and can be moved back.`)
+      else if (r.back === 'git') parts.push(`Git holds ${it} unchanged, so it can be restored from git.`)
+      else if (r.back === 'changed') parts.push(`Git holds an older version of ${it}, so the changes since its last commit cannot be got back.`)
+      else if (r.back === 'none') parts.push(`Git does not hold ${it}, so once ${r.how === 'empty' ? 'emptied' : 'deleted'} it cannot be got back from git.`)
+      else parts.push(`Whether git holds ${it} could not be read (${r.why ?? 'no reason was given'}), so take it that it cannot be got back.`)
+      return parts.join(' ')
+    })
+    .join(' ')
+}
+
+const sameList = (a: readonly string[] | undefined, b: readonly string[] | undefined): boolean => (a ?? []).join('\n') === (b ?? []).join('\n')
+// One removal as Dan was told it against one the call makes now: every word the question said.
+const sameRemoval = (y: Removal, r: Removal): boolean =>
+  y.file === r.file &&
+  y.how === r.how &&
+  y.to === r.to &&
+  y.back === r.back &&
+  y.replaces === r.replaces &&
+  y.folder === r.folder &&
+  y.pattern === r.pattern &&
+  y.guessed === r.guessed &&
+  y.more === r.more &&
+  sameList(y.holds, r.holds) &&
+  sameList(y.names, r.names)
+
+/**
+ * Whether an approval is Dan's Delete, Move or Empty for exactly this removal (#3402): what the
+ * call removes now, each file with the same consequence he was told (how it goes, where to, whether
+ * git can bring it back) and for the same thing he read it to be (a whole folder, the memory a
+ * folder holds, the names a find is limited to, a pattern, a guess), and any lasting memory a move
+ * lands on. What is in a file is not compared, so a file git does not hold can change after he
+ * answers and still go: nothing was said of what it held. An approval of a save carries no
+ * `removes`, so it never lets a removal through; savesThis matches the call itself.
+ */
+export const coversRemoval =(x: AskBeforeSavingApproval, removes: readonly Removal[], files: readonly string[]): boolean =>
+  x.removes !== undefined && x.removes.length > 0 && removes.every(r => (x.removes ?? []).some(y => sameRemoval(y, r))) && files.every(f => x.files.includes(f))
+
+// Each thing a command one question cannot cover does, in the words of its own kind: what it
+// deletes, what it moves away, what it empties, then the lasting memory it writes.
+const splitSaid = (removes: readonly Removal[], saves: readonly string[]): string => {
+  const deletes = removes.filter(r => r.how === 'delete')
+  const moves = removes.filter(r => r.how === 'move')
+  const empties = removes.filter(r => r.how === 'empty')
+  const parts = [
+    ...(deletes.length ? [removesWhat(deletes).replace(/^this /, '')] : []),
+    ...(moves.length ? [removesWhat(moves).replace(/^this /, '')] : []),
+    ...(empties.length ? [removesWhat(empties).replace(/^this /, '')] : []),
+    ...(saves.length ? [`writes lasting memory (${saves.join(', ')})`] : []),
+  ]
+  return `${parts[0]} and also ${parts.slice(1).join(', and ')}`
+}
+
+const severalWays = (removes: readonly Removal[]): boolean => new Set(removes.map(r => r.how)).size > 1
+
+/**
+ * What a command is refused with when one question cannot cover it (#3402): it removes lasting
+ * memory and also writes lasting memory that is not where a move lands, or it takes files away in
+ * more than one way (one deleted, another moved or emptied). No question waits: each part is asked
+ * about when it is sent by itself.
+ */
+export const splitRefusal = (removes: readonly Removal[], saves: readonly string[]): string =>
+  `Not run: this command ${splitSaid(removes, saves)}. Dan is asked about each by itself, since one answer cannot cover both. Send each as a command of its own.`
+
+/**
+ * Whether one question can cover a command that removes lasting memory (#3402): undefined when it
+ * can, and otherwise the lasting memory the command writes that is not where a move of its own
+ * lands (none of it, when the command only takes files away in more than one way). One rule, asked
+ * where the call is first sent and again as Dan would be asked, since what a command does is read
+ * from the disk both times and can differ (lessons review of #3430).
+ */
+export const splitBy = (removes: readonly Removal[], files: readonly string[]): string[] | undefined => {
+  const lands = removes.flatMap(r => (r.how === 'move' && r.to !== undefined ? [r.to] : []))
+  const others = files.filter(f => !lands.includes(f))
+  return others.length || severalWays(removes) ? others : undefined
+}
+
+/**
+ * What Claude is told when a removal's question arrives and the command has become one no single
+ * question covers (lessons review of #3430): a file its other half takes away has arrived, or what
+ * it applies has come to name lasting memory. Dan is not asked, and the waiting question is gone.
+ */
+export const splitAtAnswer = (id: string, removes: readonly Removal[], saves: readonly string[]): string =>
+  `Dan is not asked: read again now, this command ${splitSaid(removes, saves)}, which it did not when it was first sent. ` +
+  `One answer cannot cover both, so nothing waits under ${id} any more. Send each as a command of its own, and he is asked about each by itself.`
+
+/**
+ * The same, where the command has come to write the lessons file by shell, which no question
+ * covers (#3343): `refusal` is what the call itself is refused with, the Edit route named.
+ */
+export const lessonsAtAnswer = (id: string, refusal: string): string =>
+  `Dan is not asked about this removal, and nothing waits under ${id} any more, because what the command would write has changed since it was first sent. ${refusal}`
+
+/**
+ * What a subagent is told when its command would remove lasting memory: refused, never asked
+ * (#777). One that takes files away in more than one way is said way by way, as the main session's
+ * refusal of it is, never all of it as a deletion.
+ */
+export const agentRemovalRefusal = (removes: readonly Removal[]): string => {
+  const head = severalWays(removes)
+    ? `Not run: this command ${splitSaid(removes, [])}, which only the main session may do, after asking Dan about each by itself; a subagent never asks him. If they have to go, put each file and why in your final report`
+    : `${removalWords(removes).not}: ${removesWhat(removes)}, which only the main session may do, after asking Dan; a subagent never asks him. If it has to go, put the file and why in your final report`
+  return `${head}, and the main session will ask him. A test fixture kept in a temporary folder outside any checkout is no lasting memory, and removing it is never asked about.`
+}
+
+/**
+ * What Claude is told when the answer to a removal's question could not be read (#3402): the same
+ * refusal a save's question gets, in the removal's words, since nothing was to be saved. `removes`
+ * is the removal as the waiting question holds it, read when the call was first sent.
+ */
+export const removalUnread = (removes: readonly Removal[], why: string): string => {
+  const w = removalWords(removes)
+  return `${w.not}: Ask before saving could not read Dan's answer about ${w.doing} ${removedNames(removes)} (${why}), so ${w.nothing}. Ask him again.`
+}
+
+/** The night's note of a removal held while Dan is asleep (#841), for his morning report. */
+export const removalNote = (removes: readonly Removal[], command: string): string =>
+  `A removal of lasting memory waits for your answer: a Bash command would ${removalWords(removes).verb} ${removes.map(withWhere).join('; ')}. ${removalSaid(removes)} The command: ${command}`
+
+/** What Claude is told when a removal is held while Dan is asleep: noted, or why it could not be. */
+export const removalAsleep = (removes: readonly Removal[], noteFailed?: string): string => {
+  const w = removalWords(removes)
+  const head = `${w.not}: ${removesWhat(removes)}, and Dan is asleep (sleep mode), so he is not asked tonight.`
+  const tail = `Do not ${w.other} it any other way; carry on with the rest of the work.`
+  return noteFailed === undefined
+    ? `${head} The removal is noted for his morning report, where he decides. ${tail}`
+    : `${head} It could not be noted for his morning report (${noteFailed}), so put ${removedNames(removes)} and why it ${w.why} in your final message. ${tail}`
 }
