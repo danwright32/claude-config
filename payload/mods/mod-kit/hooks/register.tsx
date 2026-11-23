@@ -342,9 +342,10 @@ export const register: Register = (on, options) => {
       // measured: a grep of one file).
       goal: async ({ transcript }) => goalAt(transcript, argv => built.process.run(argv, { timeoutMs: 5_000 })),
       // Each command with the folder it runs in where the caller says where the call starts (#2000),
-      // and the commands that only set a value where the caller asks for them (#3093).
-      pipeline: async ({ command, cwd, home, assignments }) => {
-        const opts = assignments === true ? { assignments: true } : {}
+      // and the commands that only set a value where the caller asks for them (#3093), and what a
+      // variable the call itself sets holds where the caller asks to follow one (#3398).
+      pipeline: async ({ command, cwd, home, assignments, follow }) => {
+        const opts = { ...(assignments === true ? { assignments: true } : {}), ...(follow === true ? { follow: true } : {}) }
         return cwd === undefined ? pipeline(command, opts) : pipelineIn(command, cwd, home ?? '', opts)
       },
       pythonText: async ({ code }) => pythonText(code),

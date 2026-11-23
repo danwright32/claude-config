@@ -1,7 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
 import { errorText } from './mod-kit/skew.ts'
 import { neverThrows } from './mod-kit/hold.ts'
-import { editedUnder, foldWrite, insideRoot, isScratch, judgedWrites, latestRequest, othersEditing, othersInRepo, parseVerdict, quoteNames, wantedFiles, watchedGit, type Rec, type ShellWrite, type Verdict } from './collide.ts'
+import { editedUnder, foldWrite, followedFolders, insideRoot, isScratch, judgedWrites, latestRequest, othersEditing, othersInRepo, parseVerdict, quoteNames, wantedFiles, watchedGit, whereGit, type Rec, type ShellWrite, type Verdict } from './collide.ts'
 
 // Collision guard (claude-config#605): two sessions in one checkout must not edit the same file or
 // move the tree under each other. Who is open comes from the shared session registry; the verdict
@@ -28,6 +28,28 @@ const run = async ($: EngineInterface, argv: string[]): Promise<string | undefin
   } catch {
     return undefined
   }
+}
+
+// What git answers one question about where a command acts (lessons review of #3398): its answer,
+// undefined where git itself says there is nothing there, and a throw of Unanswered where nobody
+// answered. git exits 128 for every one of these (measured, 2.51.1), so only its words tell them
+// apart: no repository, no such folder and no working folder (a bare repository) are answers, and
+// anything else (a timeout, a folder it may not enter, a repository it will not read) is a question
+// still open, which `run` above reads as nothing there.
+const NOTHING_THERE = /not a git repository|cannot change to .*No such file or directory|must be run in a work tree/
+class Unanswered extends Error {}
+const asked = async ($: EngineInterface, what: string, argv: string[]): Promise<string | undefined> => {
+  let said: string
+  try {
+    const r = await $.process.run(argv, { timeoutMs: 10_000 })
+    if (r.exitCode === 0) return r.stdout
+    if (NOTHING_THERE.test(r.stderr)) return undefined
+    const lines = r.stderr.split('\n').map(l => l.trim()).filter(Boolean)
+    said = lines.find(l => l.startsWith('fatal:')) ?? lines[0] ?? `git exited ${r.exitCode} with no words`
+  } catch (err) {
+    said = errorText(err, 'collision-guard')
+  }
+  throw new Unanswered(`git did not say ${what}: ${said}`)
 }
 
 type Clash = {
@@ -223,18 +245,91 @@ const check = async ($: EngineInterface, input: Record<string, unknown>): Promis
 
   const command = String(input.command ?? '')
   const cmds = await $.modkit.commands({ command })
-  for (const words of cmds) {
+  // Each command with the settings written in front of it, the folder a cd before it leaves the
+  // shell in and what a variable the call itself sets holds (#3398), asked of mod-kit once and only
+  // for a call holding a watched git command.
+  let placed: { words: string[]; env?: string[]; followed?: (string | null)[]; folder: string | null }[] | undefined
+  for (const [i, words] of cmds.entries()) {
     const g = await $.modkit.git({ words })
     const action = g ? watchedGit(g) : undefined
     if (!g || !action) continue
-    const dir = g.dir ?? (await $.session.cwd())
-    const root = (await run($, ['git', '-C', dir, 'rev-parse', '--show-toplevel']))?.trim() || null
+    const cwd = await $.session.cwd()
+    // The folder the guard always asked about: the last -C read from the session's folder, else
+    // that folder. It is still asked first, so every command judged before #3398 is judged as it was.
+    const root = (await run($, ['git', '-C', g.dir ?? cwd, 'rev-parse', '--show-toplevel']))?.trim() || null
     const list = await $.sessions.list()
     if (list.unreadable.length) return unreadableRefusal($, toolUseId, list.unreadable)
-    const others = othersInRepo(list.open, list.selfId, root)
-    if (!others.length) continue
-    const blocked = await decide($, toolUseId, { action, shortName: action, messageWhat: action, doing: 'run', root, others })
-    if (blocked) return blocked
+    const roots: string[] = root ? [root] : []
+    let untold: { why: string; way: string } | undefined
+    // #3398: and the checkouts the command really acts on, since git acts on the repository a
+    // command names: where a cd before it and every -C lead, and the repository and working folder
+    // it names apart, by its options or by GIT_DIR and GIT_WORK_TREE in front of it (collide.ts
+    // whereGit). git itself is asked for each, with the command's own naming. Nobody else open,
+    // nothing more is asked: there is no one for the command to collide with.
+    if (list.open.some(r => r.sessionId !== list.selfId)) {
+      const home = (await $.env.get('HOME').catch(() => undefined)) ?? ''
+      placed ??= (await $.modkit.pipeline({ command, cwd, home, follow: true })) as NonNullable<typeof placed>
+      // The same command by its place in the line, or none: its folder is then one that cannot be followed.
+      const at = placed[i]
+      const c = at && at.words.length === words.length && at.words.every((w, k) => w === words[k]) ? at : undefined
+      // Its words with the folder a -C names by a variable the call itself sets written out (Dan,
+      // 2026-11-22: "Follow the variable first"), or none where mod-kit's reader followed nothing:
+      // the command is then read as typed, and a folder the shell fills in is one the guard cannot tell.
+      const read = c ? followedFolders(words, c.followed, g) : undefined
+      const named = read || c?.env?.length ? ((await $.modkit.git({ words: read ?? words, ...(c?.env?.length ? { env: [...c.env] } : {}) })) ?? g) : g
+      const where = whereGit(named, c ? c.folder : null, cwd, home, command)
+      const add = (found: string | undefined) => {
+        const top = found?.trim()
+        if (top && !roots.includes(top)) roots.push(top)
+      }
+      if ('unknown' in where) untold = { why: where.unknown, way: 'Run it with every folder it names written out in full (git -C /path/to/checkout ...), or ask Dan.' }
+      else {
+        // Each question is put through `asked`: nothing there is an answer, and a question nobody
+        // answered (git failing in any other words, a timeout, mod-kit's walk refusing) stops the
+        // command below. It was read as no checkout there, so the command ran with nothing asked
+        // (lessons review of #3398).
+        try {
+          // A followed folder is always asked about: the question above was put with the variable as typed.
+          if (!where.asToday || read) add(await asked($, 'which checkout it runs in', ['git', ...where.at, 'rev-parse', '--show-toplevel']))
+          if (where.apart.length) {
+            // Where the files land, which only git can say (a repository may keep its own working
+            // folder in its settings), and the checkout that folder is in, or the folder itself
+            // where git says it is in none.
+            const tree = (await asked($, 'where its files land', ['git', ...where.at, ...where.apart, 'rev-parse', '--show-toplevel']))?.trim()
+            if (tree) add((await asked($, `which checkout ${tree} is in`, ['git', '-C', tree, 'rev-parse', '--show-toplevel'])) ?? tree)
+            // The repository whose branch, index and stash the command moves: the checkout around
+            // it, by mod-kit's one walk for a checkout (a session whose own repository could not be
+            // read is matched by its folder there), and every other session's checkout that git
+            // says is that same repository. The walk answers null for no checkout and throws where
+            // it could not look.
+            const repository = (await asked($, 'which repository it names', ['git', ...where.at, ...where.apart, 'rev-parse', '--absolute-git-dir']))?.trim()
+            if (repository) {
+              const around = await $.modkit.workingTree({ path: repository }).catch(err => {
+                throw new Unanswered(`the checkout around ${repository} could not be looked for: ${errorText(err, 'collision-guard')}`)
+              })
+              add(around ?? undefined)
+              for (const r of new Set(list.open.flatMap(o => (o.sessionId !== list.selfId && o.repoRoot && !roots.includes(o.repoRoot) ? [o.repoRoot] : []))))
+                if ((await asked($, `whether ${r} is a checkout of the repository it names`, ['git', '-C', r, 'rev-parse', '--absolute-git-dir']))?.trim() === repository) add(r)
+            }
+          }
+        } catch (err) {
+          if (!(err instanceof Unanswered)) throw err
+          untold = { why: err.message, way: 'Try again, or ask Dan.' }
+        }
+      }
+    }
+    // A repository the guard cannot tell may be any open session's, and there is no checkout to
+    // name to the judge or to a session, so the command is stopped, before anything is put to the
+    // judge (Dan, 2026-10-03: anything that cannot be judged or read is Stop): with how to write it
+    // where its words cannot be followed, and to try again where a lookup did not answer.
+    if (untold !== undefined)
+      return refuse($, toolUseId, `Couldn't tell which checkout ${action} acts on (${untold.why}), and another session is open, so this was stopped.`, untold.way)
+    for (const r of roots) {
+      const others = othersInRepo(list.open, list.selfId, r)
+      if (!others.length) continue
+      const blocked = await decide($, toolUseId, { action, shortName: action, messageWhat: action, doing: 'run', root: r, others })
+      if (blocked) return blocked
+    }
   }
 
   // The files the command writes (#654), judged against the other sessions' edits the same way an

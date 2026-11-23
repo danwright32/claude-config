@@ -71,6 +71,101 @@ export const othersInRepo = <R extends Rec>(open: R[], selfId: string | null, ro
     ? []
     : open.filter(r => r.sessionId !== selfId && (r.repoRoot === root || (r.repoRoot === null && (r.cwd === root || r.cwd.startsWith(root + '/')))))
 
+// #3398: a folder a git command names (-C, --git-dir, --work-tree, GIT_DIR, GIT_WORK_TREE) as git is
+// handed it once the shell has read the word: the home folder written out for a leading ~ or $HOME,
+// anything else as written. Undefined where the shell fills it in (a $, a backtick, a pattern, a
+// brace list, another user's home), where it is empty, and where home is needed and not known: git
+// asked about the characters as typed would answer for a folder named "$X". Read as mod-kit's git
+// reader reads a -C to chain it, so the two never part on what can be followed.
+export const namedFolder = (value: string, home: string): string | undefined => {
+  if (value === '') return undefined
+  const v = value.replace(/^\$(?:HOME|\{HOME\})(?=\/|$)/, '~')
+  if (/[$`*?[\]{}]/.test(v)) return undefined
+  if (v === '~' || v.startsWith('~/')) return home ? home.replace(/\/+$/, '') + v.slice(1) : undefined
+  return v.startsWith('~') ? undefined : v
+}
+
+// #3398 (Dan, 2026-11-22: "Follow the variable first"): a git command's words with each folder a -C
+// names by a variable the call itself sets written out, so the command is judged by the folder it
+// really names. `followed` is what mod-kit's reader gives for each word (pipeline asked with
+// `follow`): the value where the word is one variable alone and the call's own text makes its value
+// certain, else null, and nothing at all from a reader that followed nothing. Whether a variable
+// can be followed is decided there and nowhere here. Undefined where no word changes, so a caller
+// reads the command as typed and a folder the shell fills in stays one the guard cannot tell.
+// Only the word after a -C of git's own is read so: one standing before the subcommand, as `g`
+// (mod-kit's reading of the same words) places it. A followed word never starts with a dash, so
+// before the subcommand it can only be the value of the option in front of it, and that option is
+// git's own -C exactly when it is written -C. A value for any other word is left alone: a
+// subcommand's -C names a branch (git switch -C), and a repository or working folder named by a
+// variable is not followed (the pull request's "For Dan" list).
+export const followedFolders = (words: readonly string[], followed: readonly (string | null)[] | undefined, g: { sub: string | undefined; args: readonly string[] }): string[] | undefined => {
+  if (!followed) return undefined
+  const sub = g.sub === undefined ? words.length : words.length - g.args.length - 1
+  let read: string[] | undefined
+  for (let i = 2; i < sub; i++) {
+    const value = followed[i]
+    if (words[i - 1] !== '-C' || value === null || value === undefined) continue
+    read ??= [...words]
+    read[i] = value
+  }
+  return read
+}
+
+// #3398: where a watched git command is put to git, to find the checkouts it acts on. git acts on
+// the repository the command names, never on the folder the call was typed in: the folder a cd
+// before it leaves the shell in (`folder`, as mod-kit's pipeline gives it, null where it cannot be
+// followed), then every -C, each read from the one before it (mod-kit's `chained`, else `dir`),
+// then the repository and the working folder it names apart (`gitDir`, `workTree`, from its
+// options or from GIT_DIR and GIT_WORK_TREE written in front of it). `at` is git's own options for
+// the folder it runs in, so git reads a relative -C itself and nothing is worked out here; `apart`
+// the two namings, each written out. `asToday` says `at` is the folder the guard always asked
+// about (`dir`, else the session's folder), so that question is not put twice.
+// `unknown` is why the guard cannot tell, in words: a folder the shell fills in, a cd it cannot
+// follow under a relative folder, and either variable named anywhere else in the call (an export, a
+// plain assignment, a setting on another command), which git reads only if it was exported and no
+// reader here follows.
+export type GitWhere = { at: string[]; apart: string[]; asToday: boolean } | { unknown: string }
+export const whereGit = (
+  g: { dir: string | undefined; chained?: string | null; gitDir?: string; workTree?: string },
+  folder: string | null,
+  cwd: string,
+  home: string,
+  command: string,
+): GitWhere => {
+  for (const [name, named] of [['GIT_DIR', g.gitDir], ['GIT_WORK_TREE', g.workTree]] as const)
+    if (named === undefined && new RegExp(`\\b${name}\\b`).test(command)) return { unknown: `the call names ${name} somewhere other than as a setting on the git command itself` }
+  if (g.chained === null) return { unknown: 'its -C options lead to a folder the shell fills in' }
+  const word = g.chained ?? g.dir
+  const uncd = { unknown: 'the cd before it cannot be followed' }
+  let at: string[]
+  let asToday: boolean
+  if (word === undefined || word === '') {
+    if (folder === null) return uncd
+    at = ['-C', folder]
+    asToday = folder === cwd
+  } else {
+    const named = namedFolder(word, home)
+    if (named === undefined) return { unknown: `the shell fills in the folder -C names (${word})` }
+    if (!named.startsWith('/') && folder === null) return uncd
+    at = named.startsWith('/') ? ['-C', named] : ['-C', folder as string, '-C', named]
+    asToday = g.chained === undefined && named === word && (named.startsWith('/') || folder === cwd)
+  }
+  // Each naming mod-kit's reader handed on, written out for git as the option it stands for.
+  const apart: string[] = []
+  const unfollowed = (what: string, value: string) => ({ unknown: `it names its ${what} as ${value === '' ? 'nothing' : value}, which the guard cannot follow to a folder` })
+  if (g.gitDir !== undefined) {
+    const repository = namedFolder(g.gitDir, home)
+    if (repository === undefined) return unfollowed('repository', g.gitDir)
+    apart.push(`--git-dir=${repository}`)
+  }
+  if (g.workTree !== undefined) {
+    const folder = namedFolder(g.workTree, home)
+    if (folder === undefined) return unfollowed('working folder', g.workTree)
+    apart.push(`--work-tree=${folder}`)
+  }
+  return { at, apart, asToday }
+}
+
 // The files a message to another session names (#700). A message carries text only, so each name is
 // written as a quoted string (JSON's own quoting), which no comma, space, quote or curly apostrophe
 // inside a name can break, and read back the same way. A message from a guard before #700 named them

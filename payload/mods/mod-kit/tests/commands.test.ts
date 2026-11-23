@@ -419,6 +419,92 @@ describe('git', () => {
     expect(read('env GIT_WORK_TREE=/w/x git restore app.css')).toEqual([{ sub: 'restore', args: ['app.css'], dir: undefined, workTree: '/w/x' }])
     expect(read('GIT_DIR=/other/.git GIT_WORK_TREE=/w/x git cherry-pick abc')).toEqual([{ sub: 'cherry-pick', args: ['abc'], dir: undefined, gitDir: '/other/.git', workTree: '/w/x' }])
   })
+  // #3398: git reads each -C from the one before it. Measured with git 2.51.1 on macOS on
+  // 2026-11-22, in throwaway repositories m/a, m/a/b, m/b and m/c, run from m, asking `rev-parse
+  // --show-toplevel`: `-C <m>/a -C b` and `-C a -C b` answer m/a/b; `-C a -C <m>/c` answers m/c;
+  // `-C a -C ""` answers m/a and `-C "" -C b` m/b; `-C a -C "" -C b` answers m/a/b; `-C a -C ../c`
+  // answers m/c; `-C a -C b/`, `-C a/ -C b` and `-C a -C ./b` answer m/a/b; `-C a -c core.x=y -C b`
+  // and `-C a --no-pager -C b` answer m/a/b; `-C nothere -C <m>/c` and `-C a -C nothere` exit 128
+  // (cannot change to 'nothere') and run nothing. Until #3398 the reader kept only the last -C, so
+  // every mod placed `git -C /a -C b merge y` in <the folder it runs in>/b.
+  // `chained` is the folder git runs in, given only where it is not what `dir` says; `dir` stays the
+  // last -C as written, the reading every mod placed a git command by until then.
+  const chain = (...opts: string[]) => {
+    const g = git(['git', ...opts, 'merge', 'y'])
+    return g && 'chained' in g ? g.chained : 'none'
+  }
+  test('more than one -C is chained as git chains them, each read from the one before it (#3398)', () => {
+    expect(git(['git', '-C', '/a', '-C', 'b', 'merge', 'y'])).toEqual({ sub: 'merge', args: ['y'], dir: 'b', chained: '/a/b' })
+    expect(chain('-C', 'a', '-C', 'b')).toBe('a/b')
+    expect(chain('-C', 'a', '-C', 'b', '-C', 'c')).toBe('a/b/c')
+    // Past git's other global options, with a value and without.
+    expect(chain('-C', 'a', '-c', 'core.x=y', '-C', 'b')).toBe('a/b')
+    expect(chain('-C', 'a', '--no-pager', '-C', 'b')).toBe('a/b')
+    expect(chain('-C', '/a', '--git-dir=.git', '-C', 'b')).toBe('/a/b')
+    // An empty one leaves the folder as it is.
+    expect(chain('-C', 'a', '-C', '')).toBe('a')
+    expect(chain('-C', 'a', '-C', '', '-C', 'b')).toBe('a/b')
+    expect(chain('-C', '', '-C', 'a', '-C', 'b')).toBe('a/b')
+    // Dots and a closing slash are kept as written, for the reader's caller to resolve as it does `dir`.
+    expect(chain('-C', 'a', '-C', '../c')).toBe('a/../c')
+    expect(chain('-C', 'a/', '-C', 'b/')).toBe('a/b/')
+    expect(chain('-C', 'a', '-C', './b')).toBe('a/./b')
+    expect(chain('-C', '~/a', '-C', 'b')).toBe('~/a/b')
+    expect(chain('-C', '$HOME/a', '-C', 'b')).toBe('$HOME/a/b')
+    // The repository and the working folder a command names are handed on beside it.
+    expect(git(['git', '-C', '/a', '-C', 'b', '--work-tree=..', 'checkout', 'main'], ['GIT_DIR=.git'])).toEqual({ sub: 'checkout', args: ['main'], dir: 'b', chained: '/a/b', gitDir: '.git', workTree: '..' })
+  })
+  test('an absolute -C starts again from itself, so a chain ending in one is what the last -C says (#3398)', () => {
+    // Nothing is added: `dir` is already the folder git runs in.
+    expect(git(['git', '-C', 'a', '-C', '/c', 'merge', 'y'])).toEqual({ sub: 'merge', args: ['y'], dir: '/c' })
+    expect(chain('-C', '/a', '-C', '/c')).toBe('none')
+    expect(chain('-C', 'a', '-C', '~/c')).toBe('none')
+    expect(chain('-C', 'a', '-C', '$HOME/c')).toBe('none')
+    expect(chain('-C', '$X', '-C', '/c')).toBe('none')
+    // An absolute one in the middle: what comes after it is read from it.
+    expect(chain('-C', 'a', '-C', '/c', '-C', 'd')).toBe('/c/d')
+    expect(chain('-C', '$X', '-C', '/c', '-C', 'd')).toBe('/c/d')
+  })
+  test('a chain the reader cannot work out is null, never a guess (#3398)', () => {
+    // A value the shell fills in after another -C may be absolute or relative: no one folder.
+    expect(git(['git', '-C', '/a', '-C', '$B', 'merge', 'y'])).toEqual({ sub: 'merge', args: ['y'], dir: '$B', chained: null })
+    expect(chain('-C', 'a', '-C', '${B}')).toBeNull()
+    expect(chain('-C', 'a', '-C', '$(pwd)')).toBeNull()
+    expect(chain('-C', 'a', '-C', '`pwd`')).toBeNull()
+    // A folder read from one the shell fills in: empty, that one changes nothing, and split it is more words.
+    expect(chain('-C', '$A', '-C', 'b')).toBeNull()
+    expect(chain('-C', '$(pwd)', '-C', 'b')).toBeNull()
+    expect(chain('-C', '$A', '-C', '')).toBeNull()
+    // A pattern, a brace list and another user's home are the shell's to fill in too.
+    expect(chain('-C', 'a', '-C', 'b*')).toBeNull()
+    expect(chain('-C', 'a', '-C', '{b,c}')).toBeNull()
+    expect(chain('-C', 'a', '-C', '~dan/c')).toBeNull()
+    // Once it cannot be worked out, only an absolute -C makes it known again.
+    expect(chain('-C', '/a', '-C', '$B', '-C', 'c')).toBeNull()
+    expect(chain('-C', '/a', '-C', '$B', '-C', '')).toBeNull()
+  })
+  test('one -C, or none, is read exactly as before (#3398)', () => {
+    expect(git(['git', 'status'])).toEqual({ sub: 'status', args: [], dir: undefined })
+    expect(git(['git', '-C', '/repo', 'log'])).toEqual({ sub: 'log', args: [], dir: '/repo' })
+    expect(git(['git', '-C', 'sub', 'log'])).toEqual({ sub: 'log', args: [], dir: 'sub' })
+    // One the shell fills in, and an empty one, are handed on as written, as they always were.
+    expect(git(['git', '-C', '$X', 'log'])).toEqual({ sub: 'log', args: [], dir: '$X' })
+    expect(git(['git', '-C', '', 'log'])).toEqual({ sub: 'log', args: [], dir: '' })
+    expect(git(['git', '-C', '', '-C', '', 'log'])).toEqual({ sub: 'log', args: [], dir: '' })
+    expect(git(['git', '-C', '', '-C', '$X', 'log'])).toEqual({ sub: 'log', args: [], dir: '$X' })
+    // A -C of the subcommand's own is the subcommand's, and chains nothing.
+    expect(git(['git', '-C', '/repo', 'apply', '-C', '2', 'x.patch'])).toEqual({ sub: 'apply', args: ['-C', '2', 'x.patch'], dir: '/repo' })
+    // -C as git's last word names no folder and no subcommand.
+    expect(git(['git', '-C'])).toEqual({ sub: undefined, args: [], dir: undefined })
+  })
+  test('the command reader carries each -C of a line to it (#3398)', () => {
+    const read = (command: string) => pipeline(command).map(c => git(c.words, c.env))
+    expect(read('git -C /a -C b merge y')).toEqual([{ sub: 'merge', args: ['y'], dir: 'b', chained: '/a/b' }])
+    expect(read('git -C /a -C "$B" checkout main && git -C /repo log')).toEqual([
+      { sub: 'checkout', args: ['main'], dir: '$B', chained: null },
+      { sub: 'log', args: [], dir: '/repo' },
+    ])
+  })
 })
 
 describe('heredocs name the descriptor they feed (#760)', () => {
@@ -1275,5 +1361,231 @@ describe('commands: a loop over programs written out names each one (#3272)', ()
     expect(commands('for sh in /bin/bash /bin/zsh; do echo hi; done')).toEqual([['for', 'sh', 'in', '/bin/bash', '/bin/zsh'], ['echo', 'hi'], ['done']])
     // A variable that names an operand, never a program, is left as written.
     expect(commands('for f in a.txt b.txt; do cat $f; done')).toEqual([['for', 'f', 'in', 'a.txt', 'b.txt'], ['cat', '$f'], ['done']])
+  })
+})
+
+// #3398 (Dan, 2026-11-22: "Follow the variable first"): a folder the call names with a variable it
+// sets itself just before. Counted on both Macs, a watched git command whose folder the collision
+// guard could not tell was nearly always this one form (12 of 13 past commands on one, 11 of 12 on
+// the other), and each was stopped while another session was open. The reader says what such a
+// word holds only where the call's own text makes it certain, and only when asked (`follow`).
+describe('pipeline: a variable the call itself sets, read as its value (#3398)', () => {
+  // What the folder word of the last git command in the call is read as.
+  const NOT = 'not followed'
+  const folder = (cmd: string): string => {
+    const c = pipeline(cmd, { follow: true }).filter(x => x.words.includes('-C')).pop()
+    const n = c ? c.words.indexOf('-C') + 1 : 0
+    return (n > 0 ? c?.followed?.[n] : undefined) ?? NOT
+  }
+  // Every negative below is the same line as this one with one thing changed.
+  const PLAIN = 'W=/other; git -C "$W" checkout main'
+  const followedAsWritten = () => expect(folder(PLAIN)).toBe('/other')
+
+  test('the form of the count: set once at the start of the call, used as the whole -C word', () => {
+    followedAsWritten()
+    expect(pipeline(PLAIN, { follow: true })).toEqual([{ words: ['git', '-C', '$W', 'checkout', 'main'], followed: [null, null, '/other', null, null] }])
+    // Bare, in braces, on a line of its own, the value in quotes, and a folder under the one it runs in.
+    expect(folder('W=/other; git -C $W checkout main')).toBe('/other')
+    expect(folder('W=/other; git -C ${W} checkout main')).toBe('/other')
+    expect(folder('W=/other; git -C "${W}" checkout main')).toBe('/other')
+    expect(folder('W=/other\ngit -C "$W" checkout main')).toBe('/other')
+    expect(folder('W="/other"; git -C "$W" checkout main')).toBe('/other')
+    expect(folder("W='/other/wt-1.2'; git -C \"$W\" checkout main")).toBe('/other/wt-1.2')
+    expect(folder('W=sub; git -C "$W" checkout main')).toBe('sub')
+    // A name mixing capitals and small letters is no name a shell keeps.
+    expect(folder('wtDir=/other; git -C "$wtDir" checkout main')).toBe('/other')
+  })
+
+  test('it is given only when asked for, and no word of the command is changed', () => {
+    followedAsWritten()
+    expect(pipeline(PLAIN)).toEqual([{ words: ['git', '-C', '$W', 'checkout', 'main'] }])
+    expect(pipeline(PLAIN, { assignments: true })).toEqual([{ words: ['W=/other'] }, { words: ['git', '-C', '$W', 'checkout', 'main'] }])
+    expect(pipeline(PLAIN, { follow: true }).map(c => c.words)).toEqual(pipeline(PLAIN).map(c => c.words))
+    // A command with no such word carries none.
+    expect(pipeline('W=/other; git status; git -C "$W" checkout main', { follow: true }).map(c => 'followed' in c)).toEqual([false, true])
+  })
+
+  test('the shapes of the past commands: other variables, a loop, a group, pipes, a substitution, xargs', () => {
+    followedAsWritten()
+    const past = [
+      // Two set at the start, a substitution handed to git, and a pipe.
+      'N=/tmp/notes\nR=/other\ngit -C $R branch -D $(cat $N/merged.txt) 2>&1 | grep -c "^Deleted"',
+      // A loop over words written out between the setting and the use.
+      'R=/other; for w in a b; do git -C $R worktree remove $R/wt/$w 2>/dev/null; git -C $R worktree prune && echo "removed $w"; done; git -C $R branch -D a b',
+      // A second variable built from the first, which is not itself followed.
+      'R=/other; W=$R/wt/x; git -C $W status --porcelain | wc -l; git -C $R worktree remove $W && echo gone; git -C $R branch -D x',
+      'R=/other; git -C $R fetch -q origin main 2>/dev/null; git -C $R merge-base --is-ancestor a b && echo yes; git -C $R branch -D a',
+      // A group, a script in single quotes, redirects, and the command behind xargs.
+      "S=/tmp/s; R=/other; { cat $S/a.txt; awk '$2 {print $1}' $S/b.txt; } | grep -v '^$' > $S/all.txt; wc -l < $S/all.txt; xargs git -C $R branch -D < $S/all.txt | grep -c \"^Deleted branch\"",
+      'R=/other; cd $R; for w in a b; do git -C $R worktree remove $R/wt-$w 2>&1 | head -2; done; git -C $R branch -D a b 2>&1 | grep -c Deleted',
+    ]
+    expect(past.filter(cmd => folder(cmd) !== '/other')).toEqual([])
+    // The variable built from another is left as written: its value is not typed out.
+    expect(folder('R=/other; W=$R/wt/x; git -C $W checkout main')).toBe(NOT)
+  })
+
+  test('set twice, or anywhere but the start of the call, it is not followed', () => {
+    followedAsWritten()
+    const not = [
+      'W=/a; W=/other; git -C "$W" checkout main',
+      'W=/a W=/other; git -C "$W" checkout main',
+      'W=/other; git status; W=/b; git -C "$W" checkout main',
+      'W=/other; git -C "$W" checkout main; W=/b',
+      // After the use, and after another command.
+      'git -C "$W" checkout main; W=/other',
+      'git status; W=/other; git -C "$W" checkout main',
+      // In a subshell, a function, a loop, a branch, a group.
+      '(W=/other); git -C "$W" checkout main',
+      '(W=/other; git -C "$W" checkout main)',
+      'f() { W=/other; }; f; git -C "$W" checkout main',
+      'W=/other; f() { W=/b; }; f; git -C "$W" checkout main',
+      'for x in 1; do W=/other; done; git -C "$W" checkout main',
+      'if true; then W=/other; fi; git -C "$W" checkout main',
+      '{ W=/other; }; git -C "$W" checkout main',
+      // Where what stands before or after it may skip it, or runs it in a shell of its own.
+      'true && W=/other; git -C "$W" checkout main',
+      'false || W=/other; git -C "$W" checkout main',
+      'W=/other && git -C "$W" checkout main',
+      'W=/other || true; git -C "$W" checkout main',
+      'W=/other & git -C "$W" checkout main',
+      'W=/other | cat; git -C "$W" checkout main',
+      'W=/other # the folder\ngit -C "$W" checkout main',
+      // A setting written in front of the command reaches the program, never the word.
+      'W=/other git -C "$W" checkout main',
+      // Set in an earlier call, or nowhere.
+      'git -C "$W" checkout main',
+      'V=/other; git -C "$W" checkout main',
+    ]
+    expect(not.filter(cmd => folder(cmd) !== NOT)).toEqual([])
+  })
+
+  test('a value that is not typed out in plain characters is not followed', () => {
+    followedAsWritten()
+    const not = [
+      'W=$(pwd); git -C "$W" checkout main',
+      'W=`pwd`; git -C "$W" checkout main',
+      'W=$HOME/x; git -C "$W" checkout main',
+      'W=$V; git -C "$W" checkout main',
+      'W=~/x; git -C "$W" checkout main',
+      'W="~/x"; git -C "$W" checkout main',
+      'W="/a b"; git -C "$W" checkout main',
+      'W=/a\\ b; git -C "$W" checkout main',
+      'W=/a*; git -C "$W" checkout main',
+      'W=/a{b,c}; git -C "$W" checkout main',
+      'W=; git -C "$W" checkout main',
+      'W=""; git -C "$W" checkout main',
+      "W=$'/other'; git -C \"$W\" checkout main",
+      'W=/oth"er"; git -C "$W" checkout main',
+      'W+=/other; git -C "$W" checkout main',
+      'W=(/other); git -C "$W" checkout main',
+    ]
+    expect(not.filter(cmd => folder(cmd) !== NOT)).toEqual([])
+  })
+
+  test('a use that is not the variable alone is not followed', () => {
+    followedAsWritten()
+    const not = [
+      'W=/other; git -C "$W/sub" checkout main',
+      'W=/other; git -C "$W"x checkout main',
+      'W=/other; git -C x"$W" checkout main',
+      // The shell hands these on as typed: a folder named $W.
+      "W=/other; git -C '$W' checkout main",
+      'W=/other; git -C \\$W checkout main',
+      "W=/other; git -C $'W' checkout main",
+      'W=/other; git -C "${W:-/x}" checkout main',
+      'W=/other; git -C "${W%/*}" checkout main',
+      'W=/other; git -C $W[1] checkout main',
+      'W=/other; git -C "$W$W" checkout main',
+    ]
+    expect(not.filter(cmd => folder(cmd) !== NOT)).toEqual([])
+  })
+
+  test('anything else in the call that may give it another value leaves it as written', () => {
+    followedAsWritten()
+    const not = [
+      // A builtin handed the name.
+      'W=/other; read W; git -C "$W" checkout main',
+      'W=/other; read -r W < list; git -C "$W" checkout main',
+      'W=/other; unset W; git -C "$W" checkout main',
+      'W=/other; export -n W; git -C "$W" checkout main',
+      'W=/other; export W; git -C "$W" checkout main',
+      'W=/other; local W; git -C "$W" checkout main',
+      'W=/other; declare W; git -C "$W" checkout main',
+      'W=/other; typeset -i W; git -C "$W" checkout main',
+      'W=/other; printf -v W %s /x; git -C "$W" checkout main',
+      'W=/other; printf -vW %s /x; git -C "$W" checkout main',
+      'W=/other; for W in a b; do :; done; git -C "$W" checkout main',
+      'W=/other; getopts ab W; git -C "$W" checkout main',
+      'W=/other; exec {W}>out.txt; git -C "$W" checkout main',
+      'W=/other; W=/b true; git -C "$W" checkout main',
+      // The name inside text another command may run.
+      `W=/other; sh -c 'read W'; git -C "$W" checkout main`,
+      `W=/other; emulate sh -c 'W=/b'; git -C "$W" checkout main`,
+      // Text run as commands of this shell, which may set anything.
+      'W=/other; eval "$x"; git -C "$W" checkout main',
+      'W=/other; source ./env.sh; git -C "$W" checkout main',
+      'W=/other; . ./env.sh; git -C "$W" checkout main',
+      `W=/other; trap 'true' EXIT; git -C "$W" checkout main`,
+      `W=/other; alias g=git; git -C "$W" checkout main`,
+      'W=/other; f() { true; }; git -C "$W" checkout main',
+      'W=/other; function f { true; }; git -C "$W" checkout main',
+      // A sum, which sets what it names, or an expansion that may assign.
+      'W=/other; let W=1; git -C "$W" checkout main',
+      'W=/other; ((W=1)); git -C "$W" checkout main',
+      'W=/other; echo $((W=1)); git -C "$W" checkout main',
+      'W=/other; git log -n $((n+1)); git -C "$W" checkout main',
+      'W=/other; git log -n $[n+1]; git -C "$W" checkout main',
+      'W=/other; : ${W:=/x}; git -C "$W" checkout main',
+      'W=/other; git log ${x:-main}; git -C "$W" checkout main',
+      'W=/other; git log $x[2]; git -C "$W" checkout main',
+      'W=/other; [[ $n -gt 3 ]] && true; git -C "$W" checkout main',
+      // A name another program is handed that only the shell running it knows.
+      'W=/other; read $x; git -C "$W" checkout main',
+      'W=/other; unset "$x"; git -C "$W" checkout main',
+      'W=/other; export $(cat env.txt); git -C "$W" checkout main',
+      'W=/other; read W*; git -C "$W" checkout main',
+      'W=/other; read {W,x}; git -C "$W" checkout main',
+      'W=/other; ls *.md; git -C "$W" checkout main',
+      'W=/other; x=W; read $x; git -C "$W" checkout main',
+      'W=/other; $x W; git -C "$W" checkout main',
+      'W=/other; "$@"; git -C "$W" checkout main',
+      // IFS decides where a bare value is cut into words, and a heredoc holds text nobody reads here.
+      'IFS=/; W=/other; git -C $W checkout main',
+      'W=/other; cat <<EOF\nx\nEOF\ngit -C "$W" checkout main',
+    ]
+    expect(not.filter(cmd => folder(cmd) !== NOT)).toEqual([])
+    // The controls: the same lines where nothing can reach the variable.
+    const still = [
+      'W=/other; read line < list; git -C "$W" checkout main',
+      'W=/other; unset V; git -C "$W" checkout main',
+      'W=/other; x=$(date +%s); git -C "$W" checkout main',
+      'W=/other; git log -n 3 "$x" $(cat list) *.md; git -C "$W" checkout main',
+      'W=/other; echo "in $W"; git -C "$W" checkout main',
+      'W=/other; [ -d /other ] && echo yes; git -C "$W" checkout main',
+      'W=/other; git -C "$W" fetch -q && git -C "$W" checkout main',
+      'W=/other; git -C "$W" checkout main | cat',
+      'W=/other; (git -C "$W" checkout main)',
+      'W=/other; if true; then git -C "$W" checkout main; fi',
+    ]
+    expect(still.filter(cmd => folder(cmd) !== '/other')).toEqual([])
+  })
+
+  test('a name a shell may keep for itself is not followed: all capitals or all small letters, two or more', () => {
+    followedAsWritten()
+    // The shell sets these itself, or reads them its own way: cd writes PWD, RANDOM is a new number.
+    const not = ['PWD=/other; cd /tmp; git -C "$PWD" checkout main', 'RANDOM=/other; git -C "$RANDOM" checkout main', 'status=/other; git -C "$status" checkout main', 'REPO=/other; git -C "$REPO" checkout main', 'wt=/other; git -C "$wt" checkout main', 'W2=/other; git -C "$W2" checkout main', '_=/other; git -C "$_" checkout main']
+    expect(not.filter(cmd => folder(cmd) !== NOT)).toEqual([])
+  })
+
+  test("a shell of its own, or a substitution, is not the call's own text", () => {
+    followedAsWritten()
+    const not = [`W=/other; bash -c 'git -C "$W" checkout main'`, `bash -c 'W=/other; git -C "$W" checkout main'`, 'echo "$(W=/other; git -C "$W" checkout main)"']
+    expect(not.filter(cmd => folder(cmd) !== NOT)).toEqual([])
+  })
+
+  test('the past command behind a cd that cannot be followed carries nothing to follow', () => {
+    followedAsWritten()
+    const cmd = 'd=$(mktemp -d) && cd "$d" && git init -q && git checkout -q main; git -C "$d" rev-parse --verify --quiet HEAD'
+    expect(pipeline(cmd, { follow: true }).filter(c => 'followed' in c)).toEqual([])
   })
 })

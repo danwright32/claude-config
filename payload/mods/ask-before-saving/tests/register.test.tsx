@@ -189,8 +189,13 @@ type Asked = { questions: { question: string; header: string; options: { label: 
 // any device, never answers, as the real one does (#1765), and resolves `readAttempted`.
 // `stdinLinks`: links to /dev/stdin, read as `fifos` are, whose stat with links followed THROWS
 // EBADF, as Claude Code 2.1.312's does (#1814, measured headless).
-const world = (engine: Engine, on: On, init: { files?: Record<string, string>; fifos?: string[]; stdinLinks?: string[]; failWrites?: boolean; throwsRun?: boolean; cwdFails?: boolean; auto?: boolean; ownClock?: true; agents?: string[]; env?: Record<string, string>; gate?: { reached: () => void; opened: Promise<void> } } = {}) => {
+// `git`: what git says of a file, by its path (#3402): held unchanged ('clean'), held with changes
+// since ('changed'), in a repository that does not hold it ('untracked'), or git failing ('breaks');
+// a path not listed is in no repository. A folder is there when a file of the world is under it.
+type GitState = 'clean' | 'changed' | 'untracked' | 'breaks'
+const world = (engine: Engine, on: On, init: { files?: Record<string, string>; git?: Record<string, GitState>; fifos?: string[]; stdinLinks?: string[]; failWrites?: boolean; throwsRun?: boolean; cwdFails?: boolean; auto?: boolean; ownClock?: true; agents?: string[]; env?: Record<string, string>; gate?: { reached: () => void; opened: Promise<void> } } = {}) => {
   let gateReads = 0
+  const gitAsked: string[] = []
   const files: Record<string, string> = { ...(init.files ?? {}) }
   const ran: { tool: string; input: Record<string, unknown> }[] = []
   const asked: Asked[] = []
@@ -228,6 +233,19 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string>; f
       const input = JSON.parse(String(e.argv[2])) as { command: string }
       return { value: { exitCode: 0, stdout: JSON.stringify(pipeline(input.command)), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
     }
+    // git, asked whether it holds a file about to be removed (#3402): `git -C <folder> ls-files -z --
+    // <name>` then `status --porcelain -z -- <name>`, answered from `init.git` by the file's path. A
+    // path it does not list is in no repository, as git itself says it (exit 128).
+    if (e.argv[0] === 'git' && e.argv[1] === '-C' && e.argv[3] === '--literal-pathspecs') {
+      const path = `${String(e.argv[2])}/${String(e.argv[e.argv.length - 1])}`
+      const state = (init.git ?? {})[path]
+      gitAsked.push(`${String(e.argv[4])} ${path}`)
+      const out = (exitCode: number, stdout: string, stderr = '') => ({ value: { exitCode, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false } }) as never
+      if (state === undefined) return out(128, '', 'fatal: not a git repository (or any of the parent directories): .git')
+      if (state === 'breaks') return out(128, '', 'fatal: index file corrupt')
+      if (e.argv[4] === 'ls-files') return out(0, state === 'untracked' ? '' : `${String(e.argv[e.argv.length - 1])}\0`)
+      return out(0, state === 'changed' ? ` M ${String(e.argv[e.argv.length - 1])}\0` : '')
+    }
     if (e.argv[0] !== '/usr/bin/printenv') throw new Error(`unexpected command: ${e.argv.join(' ')}`)
     printenv.push(String(e.argv[1]))
     const value = env[String(e.argv[1])]
@@ -247,10 +265,19 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string>; f
   const readAttempted = new Promise<'read attempted'>(resolve => {
     attempted = () => resolve('read attempted')
   })
-  on('fs.exists', ($, e) => ({ value: files[e.path] !== undefined || isOther(e.path) }) as never)
+  const under = (path: string) => Object.keys(files).filter(f => f.startsWith(`${path.replace(/\/$/, '')}/`))
+  on('fs.exists', ($, e) => ({ value: files[e.path] !== undefined || isOther(e.path) || under(e.path).length > 0 }) as never)
+  // A folder's own entries (#3402): each file or folder directly in it, once.
+  on('fs.list', ($, e) => {
+    const at = e.path.replace(/\/$/, '')
+    const names = [...new Set(under(at).map(f => f.slice(at.length + 1).split('/')[0] as string))]
+    // 'dir' is the engine's own word for a folder ($.fs.stat and $.fs.list: 'file' | 'dir' | 'other').
+    return { value: names.map(name => ({ name, kind: files[`${at}/${name}`] !== undefined ? 'file' : 'dir' })) } as never
+  })
   on('fs.stat', ($, e) => {
     if ((init.stdinLinks ?? []).includes(e.path) && e.resolve) throw new Error(`EBADF: bad file descriptor, stat '${e.path}'`)
     if (isOther(e.path)) return { value: { kind: 'other', size: 0, mtimeMs: 0, isLink: false } } as never
+    if (files[e.path] === undefined && under(e.path).length) return { value: { kind: 'dir', size: 0, mtimeMs: 0, isLink: false } } as never
     if (files[e.path] === undefined) throw new Error(`ENOENT: ${e.path}`)
     return { value: { kind: 'file', size: 1, mtimeMs: 0, isLink: false } } as never
   })
@@ -323,7 +350,7 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string>; f
     notes.push(content.map(c => c.text ?? '').join(''))
     return appended
   })
-  return { files, ran, asked, dialog, toasts, prompts, clock, at, printenv, ctl, notes, logs, opened, readAttempted }
+  return { files, ran, asked, dialog, toasts, prompts, clock, at, printenv, ctl, notes, logs, opened, readAttempted, gitAsked }
 }
 type W = ReturnType<typeof world>
 
@@ -3675,4 +3702,680 @@ test('a write to a lessons file that cannot be read is refused, never asked For 
   expect(idIn(refusalOf(r))).toBeUndefined()
   expect(w.ran).toEqual([])
   expect(w.opened).toEqual([])
+})
+
+// ---- #3402: a shell command that removes a lasting memory file, or moves one away ----
+// Measured on 2026-11-22 before any change: `rm ~/.claude/LESSONS.md` and every other form below ran
+// with no question, since the mod judged only the files a command puts content into, while mod-kit's
+// write reader reports a removal among a command's other changes. Each is asked about now, in a
+// question of its own that says whether git can bring the file back (L9, L180).
+const REMOVAL_MEMDIR = `${HOME}/.claude/projects/p/memory`
+const REMOVAL_MEM_SHOWN = '~/.claude/projects/p/memory'
+const KEPT: Record<string, string> = {
+  [`${CWD}/CLAUDE.md`]: '# Slate\n',
+  [`${CWD}/AGENTS.md`]: '# Agents\n',
+  [`${CWD}/README.md`]: 'readme\n',
+  [`${CWD}/notes.md`]: 'notes\n',
+  [`${REMOVAL_MEMDIR}/MEMORY.md`]: '- [note](note.md)\n',
+  [`${REMOVAL_MEMDIR}/note.md`]: 'a note\n',
+  [`${HOME}/.claude/LESSONS.md`]: '# Lessons\n',
+  [`${HOME}/.claude/CLAUDE.md`]: '# Global\n',
+}
+const NOT_DELETED = 'Not deleted yet'
+const NOT_MOVED = 'Not moved yet'
+const NOT_SAVED = 'Not saved yet'
+// Claude asking Dan as a removal's refusal told it to, in its own words for why.
+const askRemoval = async ($: Caller, w: W, refusal: string, answer: string | undefined, question: string, extra: Record<string, unknown> = {}) => {
+  const id = idIn(refusal)
+  if (!id) throw new Error(`no removal id in: ${refusal}`)
+  w.dialog.answer = answer
+  return call($, {
+    tool: 'AskUserQuestion',
+    questions: [{ question, header: 'File', options: [{ label: 'Yes', description: 'y' }, { label: 'No', description: 'n' }], multiSelect: false }],
+    metadata: { source: `ask-before-saving:${id}` },
+    ...extra,
+  })
+}
+
+test('a removal of each kind of lasting memory file by rm is asked about in words of its own, and nothing runs (#3402)', withKit, async ($, on) => {
+  const w = world($, on, { files: KEPT })
+  const got: string[][] = []
+  for (const [command, file] of [
+    ['rm CLAUDE.md', '~/Apps/slate/CLAUDE.md'],
+    ['rm -f AGENTS.md', '~/Apps/slate/AGENTS.md'],
+    ['rm ~/.claude/projects/p/memory/MEMORY.md', `${REMOVAL_MEM_SHOWN}/MEMORY.md`],
+    ['rm "$HOME/.claude/projects/p/memory/note.md"', `${REMOVAL_MEM_SHOWN}/note.md`],
+    ['rm ~/.claude/LESSONS.md', '~/.claude/LESSONS.md'],
+    ['rm ~/.claude/CLAUDE.md', '~/.claude/CLAUDE.md'],
+  ] as const) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    // Its own words, and never the wording of a save, nor its answers.
+    const own = why.startsWith(`${NOT_DELETED}: this deletes lasting memory (${file})`) && why.includes(ASKS) && why.includes(`"Delete ${file}: <why>?"`)
+    got.push([command, own && !why.includes('Save to') && !why.includes('For good') && !why.includes('Just this session') ? 'asked as a removal' : why.slice(0, 40)])
+  }
+  expect(got).toEqual(got.map(([command]) => [command, 'asked as a removal']))
+  expect(got.length).toBe(6)
+  expect(w.ran).toEqual([])
+  expect(w.asked).toEqual([])
+  quietOnMain(w)
+})
+
+test('a move of each kind of lasting memory file away by mv is asked about, saying where it goes, and nothing runs (#3402)', withKit, async ($, on) => {
+  const w = world($, on, { files: KEPT })
+  const got: string[][] = []
+  for (const [command, file, to] of [
+    ['mv CLAUDE.md CLAUDE.md.bak', '~/Apps/slate/CLAUDE.md', '~/Apps/slate/CLAUDE.md.bak'],
+    ['mv AGENTS.md /tmp/old/', '~/Apps/slate/AGENTS.md', '/tmp/old/AGENTS.md'],
+    ['mv ~/.claude/projects/p/memory/MEMORY.md /tmp/M.md', `${REMOVAL_MEM_SHOWN}/MEMORY.md`, '/tmp/M.md'],
+    ['mv ~/.claude/projects/p/memory/note.md ~/Desktop/note.md', `${REMOVAL_MEM_SHOWN}/note.md`, '~/Desktop/note.md'],
+    ['mv ~/.claude/LESSONS.md ~/.claude/LESSONS.old', '~/.claude/LESSONS.md', '~/.claude/LESSONS.old'],
+    ['mv ~/.claude/CLAUDE.md ~/claude-old.md', '~/.claude/CLAUDE.md', '~/claude-old.md'],
+  ] as const) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    const own = why.startsWith(`${NOT_MOVED}: this moves lasting memory away (${file}, to ${to})`) && why.includes(ASKS) && why.includes(`"Move ${file}: <why>?"`)
+    got.push([command, own && !why.includes('Save to') && !why.includes('For good') ? 'asked as a move' : why.slice(0, 40)])
+  }
+  expect(got).toEqual(got.map(([command]) => [command, 'asked as a move']))
+  expect(got.length).toBe(6)
+  expect(w.ran).toEqual([])
+})
+
+test('every other form the write reader reports as a removal is asked about: unlink, rmdir, rm -r, find -delete, shred -u, a packer, a pattern, a variable, a cd (#3402)', withKit, async ($, on) => {
+  const w = world($, on, { files: KEPT })
+  const got: string[][] = []
+  for (const [command, names] of [
+    ['unlink CLAUDE.md', '~/Apps/slate/CLAUDE.md'],
+    ['shred -u CLAUDE.md', '~/Apps/slate/CLAUDE.md'],
+    ['gzip AGENTS.md', '~/Apps/slate/AGENTS.md'],
+    ['rm -rf ~/.claude/projects/p/memory', REMOVAL_MEM_SHOWN],
+    ['rmdir ~/.claude/projects/p/memory', REMOVAL_MEM_SHOWN],
+    ["find ~/.claude/projects/p/memory -name '*.md' -delete", REMOVAL_MEM_SHOWN],
+    ['find . -name CLAUDE.md -delete', '~/Apps/slate'],
+    ["find . -name '*.md' -delete", '~/Apps/slate/CLAUDE.md, ~/Apps/slate/AGENTS.md'],
+    ['rm *.md', '~/Apps/slate/CLAUDE.md, ~/Apps/slate/AGENTS.md'],
+    ['rm ~/.claude/projects/p/memory/*.md', `${REMOVAL_MEM_SHOWN}/*.md`],
+    ['F=CLAUDE.md; rm "$F"', '~/Apps/slate/CLAUDE.md'],
+    ['cd ~/.claude && rm LESSONS.md', '~/.claude/LESSONS.md'],
+    // A loop's variable the reader follows to each name it takes.
+    ['for f in CLAUDE.md AGENTS.md; do rm "$f"; done', '~/Apps/slate/CLAUDE.md, ~/Apps/slate/AGENTS.md'],
+    // A folder taken whole that holds the memory under home: the project's records, and ~/.claude itself.
+    ['rm -rf ~/.claude/projects/p', '~/.claude/projects/p'],
+    ['rm -rf ~/.claude', '~/.claude'],
+  ] as const) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    got.push([command, why.startsWith(NOT_DELETED) && why.includes(names) && why.includes(ASKS) ? 'asked as a removal' : why.slice(0, 160)])
+  }
+  expect(got).toEqual(got.map(([command]) => [command, 'asked as a removal']))
+  expect(got.length).toBe(15)
+  expect(w.ran).toEqual([])
+})
+
+test('a removal whose file the words do not name is asked about by the lasting memory the command mentions, said as a guess (#3402)', withKit, async ($, on) => {
+  const w = world($, on, { files: KEPT })
+  const why = refusalOf(await call($, { tool: 'Bash', command: 'rm "$(ls -t CLAUDE.md AGENTS.md | head -1)"' }))
+  expect(why).toContain(`${NOT_DELETED}: this may delete lasting memory`)
+  expect(why).toContain('its words do not name the file it removes')
+  expect(why).toContain(ASKS)
+  expect(w.ran).toEqual([])
+})
+
+test('the removal question is its own: the file, why, and whether git can bring it back; Delete runs the identical call once (#3402)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: KEPT, git: { [`${CWD}/CLAUDE.md`]: 'clean' } })
+  const command = 'rm CLAUDE.md'
+  const refused = refusalOf(await call($, { tool: 'Bash', command, description: 'Remove the old rules file' }))
+  const answered = await askRemoval($, w, refused, 'Delete', 'Delete ~/Apps/slate/CLAUDE.md: its rules moved to AGENTS.md?')
+  expect(w.asked.length).toBe(1)
+  const q = w.asked[0]?.questions[0]
+  if (!q) throw new Error('Dan was asked no question')
+  // Claude's sentence, then what git and the disk said when the mod read them.
+  expect(q.question).toBe('Delete ~/Apps/slate/CLAUDE.md: its rules moved to AGENTS.md? Git holds it unchanged, so it can be restored from git.')
+  expect(q.header).toBe('Memory file')
+  expect(q.header.length).toBeLessThanOrEqual(12)
+  expect(q.multiSelect).toBe(false)
+  // The answer that changes nothing comes first.
+  expect(q.options.map(o => [o.label, o.description])).toEqual([
+    ['Keep as is', 'Nothing is deleted'],
+    ['Delete', 'Deletes ~/Apps/slate/CLAUDE.md'],
+  ])
+  expect(contextOf(answered)).toContain('Dan answered Delete to deleting ~/Apps/slate/CLAUDE.md')
+  expect(contextOf(answered)).toContain(JSON.stringify(command))
+  quietOnMain(w)
+  expect(w.ran).toEqual([])
+  const again = await call($, { tool: 'Bash', command, description: 'Delete the file Dan approved' })
+  expect(again.deny).toBeUndefined()
+  expect(w.ran.map(r => r.input.command)).toEqual([command])
+  expect(contextOf(again)).toContain('Deleted ~/Apps/slate/CLAUDE.md, as Dan answered Delete.')
+  // The answer was for that one run: the same call once more is asked about again.
+  expect(refusalOf(await call($, { tool: 'Bash', command }))).toContain(NOT_DELETED)
+  expect(w.ran.length).toBe(1)
+})
+
+test('the question says what git said of the file: held unchanged, held with changes since, not held, or git not answering (#3402)', withKit, async ($, on) => {
+  const w = world($, on, { files: KEPT, git: { [`${CWD}/CLAUDE.md`]: 'clean', [`${CWD}/AGENTS.md`]: 'changed', [`${CWD}/notes.md`]: 'clean', [`${HOME}/.claude/CLAUDE.md`]: 'untracked', [`${HOME}/.claude/LESSONS.md`]: 'breaks' } })
+  const shown: string[] = []
+  for (const [command, file] of [
+    ['rm CLAUDE.md', '~/Apps/slate/CLAUDE.md'],
+    ['rm AGENTS.md', '~/Apps/slate/AGENTS.md'],
+    ['rm ~/.claude/CLAUDE.md', '~/.claude/CLAUDE.md'],
+    ['rm ~/.claude/projects/p/memory/note.md', `${REMOVAL_MEM_SHOWN}/note.md`],
+    ['rm ~/.claude/LESSONS.md', '~/.claude/LESSONS.md'],
+  ] as const) {
+    const said = contextOf(await askRemoval($, w, refusalOf(await call($, { tool: 'Bash', command })), 'Keep as is', `Delete ${file}: it is out of date?`))
+    expect(said).toContain(`Dan answered Keep as is to deleting ${file}: nothing was deleted. Do not delete it.`)
+    shown.push((w.asked[w.asked.length - 1]?.questions[0]?.question ?? '').replace(`Delete ${file}: it is out of date? `, ''))
+  }
+  expect(shown).toEqual([
+    'Git holds it unchanged, so it can be restored from git.',
+    'Git holds an older version of it, so the changes since its last commit cannot be got back.',
+    'Git does not hold it, so once deleted it cannot be got back from git.',
+    'Git does not hold it, so once deleted it cannot be got back from git.',
+    'Whether git holds it could not be read (fatal: index file corrupt), so take it that it cannot be got back.',
+  ])
+  // Keep as is approves nothing: the same removal is asked about again.
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'rm CLAUDE.md' }))).toContain(NOT_DELETED)
+  expect(w.ran).toEqual([])
+})
+
+test('several files and a whole folder are each said for what they are (#3402)', withKit, async ($, on) => {
+  const w = world($, on, { files: KEPT, git: { [`${CWD}/CLAUDE.md`]: 'clean', [`${CWD}/AGENTS.md`]: 'changed' } })
+  await askRemoval($, w, refusalOf(await call($, { tool: 'Bash', command: 'rm CLAUDE.md AGENTS.md' })), 'Keep as is', 'Delete ~/Apps/slate/CLAUDE.md and ~/Apps/slate/AGENTS.md: the project is retired?')
+  expect(w.asked[0]?.questions[0]?.question).toBe(
+    'Delete ~/Apps/slate/CLAUDE.md and ~/Apps/slate/AGENTS.md: the project is retired? Git holds ~/Apps/slate/CLAUDE.md unchanged, so it can be restored from git. Git holds an older version of ~/Apps/slate/AGENTS.md, so the changes since its last commit cannot be got back.',
+  )
+  expect(w.asked[0]?.questions[0]?.options.map(o => o.description)).toEqual(['Nothing is deleted', 'Deletes ~/Apps/slate/CLAUDE.md, ~/Apps/slate/AGENTS.md'])
+  await askRemoval($, w, refusalOf(await call($, { tool: 'Bash', command: 'rm -rf ~/.claude/projects/p/memory' })), 'Keep as is', `Delete ${REMOVAL_MEM_SHOWN}: the project is retired?`)
+  expect(w.asked[1]?.questions[0]?.question).toBe(`Delete ${REMOVAL_MEM_SHOWN}: the project is retired? It is a whole folder of lasting memory. Git does not hold it, so once deleted it cannot be got back from git.`)
+  await askRemoval($, w, refusalOf(await call($, { tool: 'Bash', command: 'rm -rf ~/.claude/projects/p' })), 'Keep as is', 'Delete ~/.claude/projects/p: the project is retired?')
+  expect(w.asked[2]?.questions[0]?.question).toBe(`Delete ~/.claude/projects/p: the project is retired? It is a folder that holds lasting memory (${REMOVAL_MEM_SHOWN}), which goes with it. Git does not hold it, so once deleted it cannot be got back from git.`)
+  expect(w.ran).toEqual([])
+})
+
+test('a move away is asked in its own words, where it goes included, and Move runs the identical call once (#3402)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: KEPT })
+  const command = 'mv CLAUDE.md docs/OLD.md'
+  const refused = refusalOf(await call($, { tool: 'Bash', command }))
+  const answered = await askRemoval($, w, refused, 'Move', 'Move ~/Apps/slate/CLAUDE.md: the notes live in docs now?')
+  const q = w.asked[0]?.questions[0]
+  expect(q?.question).toBe('Move ~/Apps/slate/CLAUDE.md: the notes live in docs now? It goes to ~/Apps/slate/docs/OLD.md, and can be moved back.')
+  expect(q?.header).toBe('Memory file')
+  expect(q?.options.map(o => [o.label, o.description])).toEqual([
+    ['Keep as is', 'Nothing is moved'],
+    ['Move', 'Moves ~/Apps/slate/CLAUDE.md to ~/Apps/slate/docs/OLD.md'],
+  ])
+  expect(contextOf(answered)).toContain('Dan answered Move to moving ~/Apps/slate/CLAUDE.md')
+  const again = await call($, { tool: 'Bash', command })
+  expect(again.deny).toBeUndefined()
+  expect(contextOf(again)).toContain('Moved ~/Apps/slate/CLAUDE.md, as Dan answered Move.')
+  expect(w.ran.map(r => r.input.command)).toEqual([command])
+  expect(refusalOf(await call($, { tool: 'Bash', command }))).toContain(NOT_MOVED)
+})
+
+test('a lasting memory file moved onto another is one move question, saying the file there is replaced (#3402)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: KEPT })
+  const command = 'mv CLAUDE.md AGENTS.md'
+  const refused = refusalOf(await call($, { tool: 'Bash', command }))
+  expect(refused).toContain(`${NOT_MOVED}: this moves lasting memory away (~/Apps/slate/CLAUDE.md, to ~/Apps/slate/AGENTS.md)`)
+  await askRemoval($, w, refused, 'Move', 'Move ~/Apps/slate/CLAUDE.md: the project reads AGENTS.md now?')
+  expect(w.asked[0]?.questions[0]?.question).toBe('Move ~/Apps/slate/CLAUDE.md: the project reads AGENTS.md now? It goes to ~/Apps/slate/AGENTS.md, replacing the file that is there now.')
+  expect((await call($, { tool: 'Bash', command })).deny).toBeUndefined()
+  expect(w.ran.length).toBe(1)
+})
+
+test('a command that removes lasting memory and also writes other lasting memory, or deletes one file and moves another, is refused whole: each is asked about by itself (#3402)', withKit, async ($, on) => {
+  const w = world($, on, { files: KEPT })
+  const both = refusalOf(await call($, { tool: 'Bash', command: "rm CLAUDE.md && echo '- Use pnpm.' >> AGENTS.md" }))
+  expect(both).toContain('Not run: this command deletes lasting memory (~/Apps/slate/CLAUDE.md) and also writes lasting memory (~/Apps/slate/AGENTS.md)')
+  expect(both).toContain('Send each as a command of its own')
+  expect(both).not.toContain(ASKS)
+  expect(idIn(both)).toBeUndefined()
+  const mixed = refusalOf(await call($, { tool: 'Bash', command: 'rm CLAUDE.md && mv AGENTS.md /tmp/A.md' }))
+  expect(mixed).toContain('Not run: this command deletes lasting memory (~/Apps/slate/CLAUDE.md) and also moves lasting memory away (~/Apps/slate/AGENTS.md, to /tmp/A.md)')
+  expect(mixed).not.toContain(ASKS)
+  expect(w.ran).toEqual([])
+  expect(w.asked).toEqual([])
+})
+
+// What a command does is read again as Dan is asked, and by then it can be one that a single
+// question cannot cover (lessons review of #3430): a file its second half takes away has arrived, or
+// the patch it applies has come to name lasting memory. Measured 2026-11-22 at e369a51a35, before the answer
+// applied the two refusals again: the first was put to Dan under Delete, with "Deletes" said of the
+// file it moves, and his Delete ran both halves; the second was put to him as a plain deletion, and
+// the call was refused whole only once he had answered. Each is refused whole before he is asked.
+const KEPT_BAR_AGENTS = Object.fromEntries(Object.entries(KEPT).filter(([p]) => p !== `${CWD}/AGENTS.md`))
+test('a removal that takes files away in a second way by the time Dan would be asked is refused whole before he reads it, and nothing is approved (#3402)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: KEPT_BAR_AGENTS })
+  const command = 'rm CLAUDE.md && mv AGENTS.md /tmp/A.md'
+  // AGENTS.md is not there yet, so the command is one deletion and is asked about as one.
+  const refused = refusalOf(await call($, { tool: 'Bash', command }))
+  expect(refused).toContain(`${NOT_DELETED}: this deletes lasting memory (~/Apps/slate/CLAUDE.md), so Dan decides first.`)
+  w.files[`${CWD}/AGENTS.md`] = '# Agents\n'
+  const question = 'Delete ~/Apps/slate/CLAUDE.md and ~/Apps/slate/AGENTS.md: both are out of date?'
+  const asked = await askRemoval($, w, refused, 'Delete', question)
+  expect(asked.deny).toBe(
+    `Dan is not asked: read again now, this command deletes lasting memory (~/Apps/slate/CLAUDE.md) and also moves lasting memory away (~/Apps/slate/AGENTS.md, to /tmp/A.md), which it did not when it was first sent. ` +
+      `One answer cannot cover both, so nothing waits under ${idIn(refused)} any more. Send each as a command of its own, and he is asked about each by itself.`,
+  )
+  expect(w.asked).toEqual([])
+  // Nothing was approved: the same call is refused whole, as one first sent now is.
+  expect(refusalOf(await call($, { tool: 'Bash', command }))).toContain('Not run: this command deletes lasting memory (~/Apps/slate/CLAUDE.md) and also moves lasting memory away (~/Apps/slate/AGENTS.md, to /tmp/A.md)')
+  // And nothing waits: the question sent once more has no call to answer for.
+  expect((await askRemoval($, w, refused, 'Delete', question)).deny).toContain(`waiting under ${idIn(refused)}`)
+  expect(w.asked).toEqual([])
+  expect(w.ran).toEqual([])
+})
+
+const SWEEP = 'rm *.md && git apply fix.patch'
+const SWEPT = '~/Apps/slate/CLAUDE.md, ~/Apps/slate/AGENTS.md'
+test('a removal that also writes other lasting memory by the time Dan would be asked is refused whole before he reads it, and nothing is approved (#3402)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: { ...KEPT, [`${CWD}/fix.patch`]: PATCH_FILE('a/notes.md') } })
+  const question = `Delete ${SWEPT}: both are out of date?`
+  // The patch names no lasting memory yet, so the command only deletes and is asked about as that.
+  const refused = refusalOf(await call($, { tool: 'Bash', command: SWEEP }))
+  expect(refused).toContain(`${NOT_DELETED}: this deletes lasting memory (${SWEPT}), so Dan decides first.`)
+  w.files[`${CWD}/fix.patch`] = PATCH_FILE(`${REMOVAL_MEMDIR}/note.md`)
+  expect((await askRemoval($, w, refused, 'Delete', question)).deny).toBe(
+    `Dan is not asked: read again now, this command deletes lasting memory (${SWEPT}) and also writes lasting memory (${REMOVAL_MEM_SHOWN}/note.md), which it did not when it was first sent. ` +
+      `One answer cannot cover both, so nothing waits under ${idIn(refused)} any more. Send each as a command of its own, and he is asked about each by itself.`,
+  )
+  expect(w.asked).toEqual([])
+  expect(refusalOf(await call($, { tool: 'Bash', command: SWEEP }))).toContain(`Not run: this command deletes lasting memory (${SWEPT}) and also writes lasting memory (${REMOVAL_MEM_SHOWN}/note.md)`)
+  expect((await askRemoval($, w, refused, 'Delete', question)).deny).toContain(`waiting under ${idIn(refused)}`)
+  // The patch names no lasting memory again: the removal is asked about afresh, and Delete runs it.
+  w.files[`${CWD}/fix.patch`] = PATCH_FILE('a/notes.md')
+  const afresh = refusalOf(await call($, { tool: 'Bash', command: SWEEP }))
+  expect(contextOf(await askRemoval($, w, afresh, 'Delete', question))).toContain(`Dan answered Delete to deleting ${SWEPT}.`)
+  expect(w.asked.length).toBe(1)
+  expect((await call($, { tool: 'Bash', command: SWEEP })).deny).toBeUndefined()
+  expect(w.ran.map(r => r.input.command)).toEqual([SWEEP])
+})
+
+test('a removal that writes the lessons file by shell by the time Dan would be asked is refused before he reads it, with the Edit route named (#3402, #3343)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: { ...KEPT, [`${CWD}/fix.patch`]: PATCH_FILE('a/notes.md') } })
+  const refused = refusalOf(await call($, { tool: 'Bash', command: SWEEP }))
+  expect(refused).toContain(NOT_DELETED)
+  w.files[`${CWD}/fix.patch`] = PATCH_FILE(LESSONS)
+  const said = (await askRemoval($, w, refused, 'Delete', `Delete ${SWEPT}: both are out of date?`)).deny ?? ''
+  expect(said).toContain(`Dan is not asked about this removal, and nothing waits under ${idIn(refused)} any more, because what the command would write has changed since it was first sent. Not run, and Dan is not asked For good about it:`)
+  expect(said).toContain('with Edit or Write instead')
+  expect(w.asked).toEqual([])
+  expect(outcomeOf(refusalOf(await call($, { tool: 'Bash', command: SWEEP })))).toBe('refused, Edit named')
+  expect(w.ran).toEqual([])
+})
+
+// Controls for the two above (#3402): what Dan's answer lets through is the call he was asked about
+// and what he was shown, and nothing else. Green before the answer applied the refusals again, and
+// kept so that change is seen to loosen nothing.
+test("Dan's Delete carries no other command through, nor a file that arrives after he answered (#3402)", withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: KEPT_BAR_AGENTS })
+  const command = 'rm CLAUDE.md AGENTS.md'
+  const refused = refusalOf(await call($, { tool: 'Bash', command }))
+  const answered = await askRemoval($, w, refused, 'Delete', 'Delete ~/Apps/slate/CLAUDE.md: it is out of date?')
+  expect(contextOf(answered)).toContain('Dan answered Delete to deleting ~/Apps/slate/CLAUDE.md.')
+  // Another command that deletes the same file is asked about by itself.
+  for (const other of ['rm -f CLAUDE.md AGENTS.md', 'rm CLAUDE.md', 'rm CLAUDE.md AGENTS.md README.md']) expect(`${other}: ${refusalOf(await call($, { tool: 'Bash', command: other })).slice(0, NOT_DELETED.length)}`).toBe(`${other}: ${NOT_DELETED}`)
+  // The file he was not shown arrives: the call he approved would now take it too, so he is asked again.
+  w.files[`${CWD}/AGENTS.md`] = '# Agents\n'
+  expect(refusalOf(await call($, { tool: 'Bash', command }))).toContain(`${NOT_DELETED}: this deletes lasting memory (~/Apps/slate/CLAUDE.md, ~/Apps/slate/AGENTS.md)`)
+  expect(w.ran).toEqual([])
+  // His answer stood all the while, so each refusal above was of something it does not cover: with
+  // that file gone again the call is the one he was asked about, and it runs.
+  delete w.files[`${CWD}/AGENTS.md`]
+  expect((await call($, { tool: 'Bash', command })).deny).toBeUndefined()
+  expect(w.ran.map(r => r.input.command)).toEqual([command])
+})
+
+// The two approvals never stand in for each other: a For good is for a save and a Delete, a Move
+// or an Empty for a removal, each held to the call it was given for and to its own kind of record.
+test('an approval of a save never approves a removal of the same file, and an approval of a removal never approves a save (#3402)', withKit, async ($, on) => {
+  // The approvals as they are stored, and, once `forge` is set, stored as the other kind's record:
+  // a removal's approval with its removal taken off, which is the shape of a save's, and a save's
+  // approval given a removal.
+  const save = "echo '- Use pnpm.' >> CLAUDE.md"
+  const remove = 'rm CLAUDE.md'
+  const savesIt = (a: Record<string, unknown>) => a.key === JSON.stringify(['Bash', CWD, save])
+  let stored: Record<string, unknown>[] = []
+  let forge = false
+  on('state.set', async ($$, e, next) => {
+    const x = e as unknown as { ref?: { key?: string }; key?: string; value?: unknown }
+    if ((x.ref?.key ?? x.key) !== 'approvals' || !Array.isArray(x.value)) return next(e)
+    const value = (x.value as Record<string, unknown>[]).map(a =>
+      !forge ? a : savesIt(a) ? { ...a, removes: [{ file: '~/Apps/slate/CLAUDE.md', how: 'delete', back: 'none' }] } : { ...a, removes: undefined, files: ['~/Apps/slate/CLAUDE.md'] },
+    )
+    stored = value
+    return next({ ...x, value } as never)
+  })
+  const w = world($, on, { auto: true, files: KEPT })
+  // For good on a save of the file: the removal of that file is still asked about.
+  await askDan($, w, refusalOf(await call($, { tool: 'Bash', command: save })), 'For good', '~/Apps/slate/CLAUDE.md')
+  expect(refusalOf(await call($, { tool: 'Bash', command: remove }))).toContain(NOT_DELETED)
+  // Delete on the removal: another save of that file is still asked about.
+  await askRemoval($, w, refusalOf(await call($, { tool: 'Bash', command: remove })), 'Delete', 'Delete ~/Apps/slate/CLAUDE.md: it is out of date?')
+  expect(refusalOf(await call($, { tool: 'Bash', command: "echo '- Use npm.' >> CLAUDE.md" }))).toContain(NOT_SAVED)
+  expect(w.ran).toEqual([])
+  // Each record is its own kind: the save's holds the file it saves to and no removal, the removal's
+  // what goes and no file saved.
+  expect(stored.map(x => [x.files, (x.removes as { file: string; how: string }[] | undefined)?.map(r => [r.file, r.how])])).toEqual([
+    [['~/Apps/slate/CLAUDE.md'], undefined],
+    [[], [['~/Apps/slate/CLAUDE.md', 'delete']]],
+  ])
+  // Both run once on their own approval, so the records above are the ones the check reads.
+  expect((await call($, { tool: 'Bash', command: save })).deny).toBeUndefined()
+  expect((await call($, { tool: 'Bash', command: remove })).deny).toBeUndefined()
+  expect(w.ran.length).toBe(2)
+  // The same two answers, stored as the other kind's record: neither call goes through.
+  forge = true
+  await askDan($, w, refusalOf(await call($, { tool: 'Bash', command: save })), 'For good', '~/Apps/slate/CLAUDE.md')
+  await askRemoval($, w, refusalOf(await call($, { tool: 'Bash', command: remove })), 'Delete', 'Delete ~/Apps/slate/CLAUDE.md: it is out of date?')
+  expect(stored.map(x => [savesIt(x), x.removes !== undefined])).toEqual([[true, true], [false, false]])
+  expect(refusalOf(await call($, { tool: 'Bash', command: save }))).toContain(NOT_SAVED)
+  expect(refusalOf(await call($, { tool: 'Bash', command: remove }))).toContain(NOT_DELETED)
+  expect(w.ran.length).toBe(2)
+})
+
+test("an answer of the other kind approves nothing: For good on a removal's question, Delete on a save's (#3402)", withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: KEPT })
+  const remove = 'rm CLAUDE.md'
+  const typed = contextOf(await askRemoval($, w, refusalOf(await call($, { tool: 'Bash', command: remove })), 'For good', 'Delete ~/Apps/slate/CLAUDE.md: it is out of date?'))
+  expect(typed).toContain('Dan typed "For good" instead of choosing an answer, so it was not recorded, and ~/Apps/slate/CLAUDE.md was not deleted')
+  expect(refusalOf(await call($, { tool: 'Bash', command: remove }))).toContain(NOT_DELETED)
+  const save = { tool: 'Write', file_path: 'AGENTS.md', content: '- Use pnpm.\n' }
+  const other = contextOf(await askDan($, w, refusalOf(await call($, save)), 'Delete', '~/Apps/slate/AGENTS.md'))
+  expect(other).toContain('Dan typed "Delete" instead of choosing an answer')
+  expect(refusalOf(await call($, save))).toContain(NOT_SAVED)
+  expect(w.ran).toEqual([])
+})
+
+test("a removal's question is refused before Dan reads it when it names no file, carries answers, or comes from a subagent; one that closed while he was away approves nothing (#3402)", withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: KEPT })
+  const command = 'rm CLAUDE.md'
+  const refused = refusalOf(await call($, { tool: 'Bash', command }))
+  expect((await askRemoval($, w, refused, 'Delete', 'Delete the old rules file?')).deny).toContain('The question must name what would go (~/Apps/slate/CLAUDE.md)')
+  expect((await askRemoval($, w, refused, 'Delete', 'Delete ~/Apps/slate/CLAUDE.md: it is out of date?', { answers: { x: 'Delete' } })).deny).toContain('without answers already filled in')
+  expect((await askRemoval($, w, refused, 'Delete', 'Delete ~/Apps/slate/CLAUDE.md: it is out of date?', { agentId: 'agent-a1' })).deny).toContain('Only the main session asks Dan')
+  expect(w.asked).toEqual([])
+  w.dialog.afk = true
+  expect(contextOf(await askRemoval($, w, refused, 'Delete', 'Delete ~/Apps/slate/CLAUDE.md: it is out of date?'))).toContain('Dan did not answer: the dialog closed by itself while he was away, so nothing was deleted.')
+  w.dialog.afk = false
+  expect(refusalOf(await call($, { tool: 'Bash', command }))).toContain(NOT_DELETED)
+  expect(w.ran).toEqual([])
+})
+
+// Measured 2026-11-22, before a removal had words of its own here: a removal's question whose
+// dialog broke was refused as "Not saved: Ask before saving could not read Dan's answer (<the
+// reason>). Ask him again.", the words of a save. Only the words differ now: it was refused before,
+// and it is refused still, with nothing approved and the question still waiting.
+test("a removal's question whose answer cannot be read is refused in the removal's own words, never as a save, and nothing is approved (#3402)", withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: KEPT })
+  w.dialog.fails = true
+  const got: string[][] = []
+  for (const [command, question, said] of [
+    ['rm CLAUDE.md', 'Delete ~/Apps/slate/CLAUDE.md: it is out of date?', "Not deleted: Ask before saving could not read Dan's answer about deleting ~/Apps/slate/CLAUDE.md (<why>), so nothing was deleted. Ask him again."],
+    ['mv AGENTS.md /tmp/A.md', 'Move ~/Apps/slate/AGENTS.md: it is kept elsewhere now?', "Not moved: Ask before saving could not read Dan's answer about moving ~/Apps/slate/AGENTS.md (<why>), so nothing was moved. Ask him again."],
+    ['truncate -s 0 ~/.claude/CLAUDE.md', 'Empty ~/.claude/CLAUDE.md: its rules are all stale?', "Not emptied: Ask before saving could not read Dan's answer about emptying ~/.claude/CLAUDE.md (<why>), so nothing was emptied. Ask him again."],
+  ] as const) {
+    const refused = refusalOf(await call($, { tool: 'Bash', command }))
+    // The reason is the harness's own word for a dialog that threw, so it is left out of what is compared.
+    got.push([command, ((await askRemoval($, w, refused, 'Delete', question)).deny ?? 'not refused').replace(/ \([^)]*\), so /, ' (<why>), so '), said])
+    // Nothing was approved, and the question still waits: the same call is asked about under the same words.
+    expect(idIn(refusalOf(await call($, { tool: 'Bash', command })))).toBeDefined()
+  }
+  expect(got.map(([command, deny]) => [command, deny])).toEqual(got.map(([command, , said]) => [command, said]))
+  expect(got.length).toBe(3)
+  expect(w.ran).toEqual([])
+  // A save's question that fails the same way keeps the words of a save.
+  const save = refusalOf(await call($, { tool: 'Write', file_path: 'AGENTS.md', content: '- Use pnpm.\n' }))
+  const saved = (await askDan($, w, save, 'For good', '~/Apps/slate/AGENTS.md')).deny ?? ''
+  expect(saved.startsWith("Not saved: Ask before saving could not read Dan's answer (")).toBe(true)
+  expect(saved.endsWith('). Ask him again.')).toBe(true)
+})
+
+test("a subagent's removal of lasting memory is refused and never asked about, and Dan's permanent words never skip a removal (#3402)", withKit, async ($, on) => {
+  const w = world($, on, { files: KEPT, agents: ['agent-a1'] })
+  const why = refusalOf(await call($, { tool: 'Bash', command: 'rm CLAUDE.md', agentId: 'agent-a1' }))
+  expect(why).toContain('Not deleted: this deletes lasting memory (~/Apps/slate/CLAUDE.md), which only the main session may do, after asking Dan; a subagent never asks him.')
+  expect(why).not.toContain('AskUserQuestion')
+  const moved = refusalOf(await call($, { tool: 'Bash', command: 'mv AGENTS.md /tmp/A.md', agentId: 'agent-a1' }))
+  expect(moved).toContain('Not moved: this moves lasting memory away (~/Apps/slate/AGENTS.md, to /tmp/A.md), which only the main session may do')
+  // A subagent's removal of anything else runs.
+  expect((await call($, { tool: 'Bash', command: 'rm notes.md', agentId: 'agent-a1' })).deny).toBeUndefined()
+  await dan($, 'From now on, always delete stale rules files.')
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'rm CLAUDE.md' }))).toContain(NOT_DELETED)
+  // Nor a move that lands on lasting memory, which his words would cover as a save.
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'mv CLAUDE.md AGENTS.md' }))).toContain(NOT_MOVED)
+  expect(w.ran.map(r => r.input.command)).toEqual(['rm notes.md'])
+  quietOnMain(w)
+})
+
+// Measured 2026-11-22 at e369a51a35 (lessons review of #3430): a subagent's command that deletes one file and
+// moves or empties another was refused as "Not deleted: this deletes lasting memory (...)", with the
+// moved or emptied file listed among the deleted. The refusal says each way the command takes a file.
+test("a subagent's command that takes lasting memory away in more than one way is refused in words that say each way (#3402)", withKit, async ($, on) => {
+  const w = world($, on, { files: KEPT, agents: ['agent-a1'] })
+  const moved = refusalOf(await call($, { tool: 'Bash', command: 'rm CLAUDE.md && mv AGENTS.md /tmp/A.md', agentId: 'agent-a1' }))
+  expect(moved).toBe(
+    'Not run: this command deletes lasting memory (~/Apps/slate/CLAUDE.md) and also moves lasting memory away (~/Apps/slate/AGENTS.md, to /tmp/A.md), which only the main session may do, after asking Dan about each by itself; a subagent never asks him. ' +
+      'If they have to go, put each file and why in your final report, and the main session will ask him. A test fixture kept in a temporary folder outside any checkout is no lasting memory, and removing it is never asked about.',
+  )
+  const emptied = refusalOf(await call($, { tool: 'Bash', command: 'truncate -s 0 CLAUDE.md && rm AGENTS.md', agentId: 'agent-a1' }))
+  expect(emptied).toContain('Not run: this command deletes lasting memory (~/Apps/slate/AGENTS.md) and also empties lasting memory (~/Apps/slate/CLAUDE.md), which only the main session may do')
+  expect(`${moved}${emptied}`).not.toContain('AskUserQuestion')
+  expect(w.ran).toEqual([])
+  quietOnMain(w)
+})
+
+test('controls: removing or moving a file that is no lasting memory, a lasting memory file that is not there, and reading one, are not asked about (#3402)', withKit, async ($, on) => {
+  const w = world($, on, { files: KEPT })
+  const commands = [
+    'rm README.md',
+    'rm -rf node_modules dist',
+    'mv notes.md old-notes.md',
+    'rm /tmp/backup/CLAUDE.md',
+    'rm -rf /tmp/work',
+    'rm docs/CLAUDE.md',
+    'rm ~/.claude/projects/q/memory/gone.md',
+    "find . -name '*.log' -delete",
+    'find /tmp/work -delete',
+    'rm *.txt',
+    'cat CLAUDE.md',
+    'grep -n pnpm CLAUDE.md ~/.claude/LESSONS.md',
+    'ls ~/.claude/projects/p/memory',
+    'head -5 ~/.claude/projects/p/memory/MEMORY.md',
+    'cp CLAUDE.md /tmp/backup/CLAUDE.md',
+    'wc -l AGENTS.md',
+  ]
+  for (const command of commands) expect([command, refusalOf(await call($, { tool: 'Bash', command }))]).toEqual([command, ''])
+  expect(w.ran.length).toBe(commands.length)
+  expect(w.asked).toEqual([])
+})
+
+test('a mv or cp that overwrites a lasting memory file is a save, asked about as one, as before (#3402)', withKit, async ($, on) => {
+  const w = world($, on, { files: KEPT })
+  for (const command of ['mv notes.md CLAUDE.md', 'cp /tmp/new.md AGENTS.md', 'cp notes.md ~/.claude/projects/p/memory/note.md', 'mv /tmp/M.md ~/.claude/projects/p/memory/MEMORY.md']) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect([command, why.startsWith(NOT_SAVED), why.includes('For good')]).toEqual([command, true, true])
+  }
+  expect(w.ran).toEqual([])
+})
+
+// Not covered, measured (#3402). What git itself removes or puts back is left unjudged by Dan's
+// decision on #1136 (2026-10-13), which the test above for it holds; git clean, stash and reset are
+// not reported by the write reader at all. The rest are removals the reader does not report in a
+// form the mod can judge: what a find -exec hands to rm by a pattern (the reader carries a find's
+// -name for -delete alone), what xargs hands to rm, and a folder taken whole that holds a lasting
+// memory file, is not itself lasting memory, and is taken by a command that names no lasting memory
+// under it. Each runs unasked, before and after #3402.
+test('measured, not covered: what git removes or reverts, and the removals the write reader does not report, run unasked (#3402)', withKit, async ($, on) => {
+  const w = world($, on, { files: KEPT })
+  const commands = [
+    'git rm -f CLAUDE.md',
+    'git mv CLAUDE.md docs/OLD.md',
+    'git checkout -- CLAUDE.md',
+    'git checkout .',
+    'git restore AGENTS.md',
+    'git restore .',
+    'git clean -fd',
+    'git clean -fdx',
+    'git stash',
+    'git stash -u',
+    'git reset --hard',
+    'git reset --hard HEAD~1',
+    "find . -name '*.md' -exec rm {} +",
+    'ls CLAUDE.md | xargs rm',
+    'rm -rf ../slate',
+    'mv ../slate ../slate-old',
+  ]
+  const got: string[][] = []
+  for (const command of commands) got.push([command, refusalOf(await call($, { tool: 'Bash', command })).slice(0, 60) || 'runs unasked'])
+  // The one exception was asked about before #3402 too, as a possible save: xargs is a program the
+  // reader cannot follow, so the lasting memory the command mentions is taken as what it may write.
+  expect(got).toEqual(commands.map(command => [command, command === 'ls CLAUDE.md | xargs rm' ? 'Not saved yet: this may write lasting memory (CLAUDE.md): it' : 'runs unasked']))
+  expect(w.asked).toEqual([])
+})
+
+test('while asleep a removal of lasting memory is not asked about: it is noted for the morning report, and asked again once awake (#3402)', withSleeper, async ($, on) => {
+  const w = world($, on, { files: { ...KEPT, '/night/asleep': '' } })
+  const r = await call($, { tool: 'Bash', command: 'rm CLAUDE.md' })
+  expect(w.ran).toEqual([])
+  expect(refusalOf(r)).toBe(
+    'Not deleted: this deletes lasting memory (~/Apps/slate/CLAUDE.md), and Dan is asleep (sleep mode), so he is not asked tonight. The removal is noted for his morning report, where he decides. Do not remove it any other way; carry on with the rest of the work.',
+  )
+  expect(nightNotes(w)).toEqual([{ kind: 'finding', text: 'A removal of lasting memory waits for your answer: a Bash command would delete ~/Apps/slate/CLAUDE.md. Git does not hold it, so once deleted it cannot be got back from git. The command: rm CLAUDE.md' }])
+  w.files['/night/note-fails'] = 'sh: notes: Permission denied'
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'rm CLAUDE.md' }))).toBe(
+    'Not deleted: this deletes lasting memory (~/Apps/slate/CLAUDE.md), and Dan is asleep (sleep mode), so he is not asked tonight. It could not be noted for his morning report (sh: notes: Permission denied), so put ~/Apps/slate/CLAUDE.md and why it should go in your final message. Do not remove it any other way; carry on with the rest of the work.',
+  )
+  delete w.files['/night/asleep']
+  delete w.files['/night/note-fails']
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'rm CLAUDE.md' }))).toContain(ASKS)
+  expect(w.ran).toEqual([])
+})
+
+test('an approved removal another guard refuses, or that lapses unused, is said in its own words, never as a save (#3402)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: KEPT })
+  const command = 'rm CLAUDE.md'
+  await askRemoval($, w, refusalOf(await call($, { tool: 'Bash', command })), 'Delete', 'Delete ~/Apps/slate/CLAUDE.md: it is out of date?')
+  w.files['/gate/refuses'] = '1'
+  expect(refusalOf(await call($, { tool: 'Bash', command }))).toBe('Blocked: another session is editing this file.')
+  expect(w.toasts.join('\n')).toContain('~/Apps/slate/CLAUDE.md was not deleted: Blocked: another session is editing this file.')
+  delete w.files['/gate/refuses']
+  await w.clock.advance(APPROVAL_MS)
+  expect(w.toasts.join('\n')).toContain('The Delete you gave for deleting ~/Apps/slate/CLAUDE.md lapsed after 10 minutes: Claude sent the command, but it was refused before it ran (Blocked: another session is editing this file.)')
+  expect(notesOf(w)).toContain("Dan's Delete on deleting ~/Apps/slate/CLAUDE.md lapsed after 10 minutes: the command you sent was refused before it ran (Blocked: another session is editing this file.)")
+  expect([w.toasts.join('\n'), notesOf(w)].join('\n')).not.toContain('saving to')
+  expect(refusalOf(await call($, { tool: 'Bash', command }))).toContain(NOT_DELETED)
+  expect(w.ran).toEqual([])
+  // One never sent again lapses as unused.
+  await askRemoval($, w, refusalOf(await call($, { tool: 'Bash', command })), 'Delete', 'Delete ~/Apps/slate/CLAUDE.md: it is out of date?')
+  await w.clock.advance(APPROVAL_MS)
+  expect(w.toasts.join('\n')).toContain('The Delete you gave for deleting ~/Apps/slate/CLAUDE.md lapsed after 10 minutes unused, so it no longer lets that command through.')
+})
+
+// ---- #3402, the plain shell forms left after the first pass ----
+// Measured on 2026-11-22 with the first pass built: `truncate -s 0 CLAUDE.md` and
+// `find . -name CLAUDE.md -exec rm {} +` still ran with no question, and `mv CLAUDE.md
+// ~/.claude/LESSONS.md`, which was refused outright before #3402 as a shell write of the lessons
+// file (#3343), had become a Move question Dan could approve.
+const NOT_EMPTIED = 'Not emptied yet'
+
+test('a lasting memory file emptied in place by truncate or shred is asked about in words of its own, and nothing runs (#3402)', withKit, async ($, on) => {
+  const w = world($, on, { files: KEPT })
+  const got: string[][] = []
+  for (const [command, file] of [
+    ['truncate -s 0 CLAUDE.md', '~/Apps/slate/CLAUDE.md'],
+    ['shred AGENTS.md', '~/Apps/slate/AGENTS.md'],
+    ['truncate -s 0 ~/.claude/projects/p/memory/note.md', `${REMOVAL_MEM_SHOWN}/note.md`],
+    ['truncate -s 0 ~/.claude/LESSONS.md', '~/.claude/LESSONS.md'],
+    ['F=CLAUDE.md; truncate -s 0 "$F"', '~/Apps/slate/CLAUDE.md'],
+  ] as const) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    const own = why.startsWith(`${NOT_EMPTIED}: this empties lasting memory (${file})`) && why.includes(ASKS) && why.includes(`"Empty ${file}: <why>?"`)
+    got.push([command, own && !why.includes('Save to') && !why.includes('For good') && !why.includes('Delete') ? 'asked as an emptying' : why.slice(0, 60) || 'runs unasked'])
+  }
+  expect(got).toEqual(got.map(([command]) => [command, 'asked as an emptying']))
+  expect(got.length).toBe(5)
+  expect(w.ran).toEqual([])
+  // Controls: a file that is no lasting memory, and a lasting memory name with no file there.
+  const plain = ['truncate -s 0 notes.md', 'truncate -s 0 docs/CLAUDE.md', 'shred /tmp/backup/CLAUDE.md']
+  for (const command of plain) expect([command, refusalOf(await call($, { tool: 'Bash', command }))]).toEqual([command, ''])
+  expect(w.ran.length).toBe(plain.length)
+  expect(w.asked).toEqual([])
+})
+
+test('the emptying question says the file stays and what git holds of it; Empty runs the identical call once, and approves no deletion (#3402)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: KEPT, git: { [`${CWD}/CLAUDE.md`]: 'clean' }, agents: ['agent-a1'] })
+  const command = 'truncate -s 0 CLAUDE.md'
+  const answered = await askRemoval($, w, refusalOf(await call($, { tool: 'Bash', command })), 'Empty', 'Empty ~/Apps/slate/CLAUDE.md: the project starts over?')
+  const q = w.asked[0]?.questions[0]
+  if (!q) throw new Error('Dan was asked no question')
+  expect(q.question).toBe('Empty ~/Apps/slate/CLAUDE.md: the project starts over? The file stays, and what is in it is cut short or wiped. Git holds it unchanged, so it can be restored from git.')
+  expect(q.header).toBe('Memory file')
+  expect(q.options.map(o => [o.label, o.description])).toEqual([
+    ['Keep as is', 'Nothing is emptied'],
+    ['Empty', 'Empties ~/Apps/slate/CLAUDE.md'],
+  ])
+  expect(contextOf(answered)).toContain('Dan answered Empty to emptying ~/Apps/slate/CLAUDE.md')
+  expect(w.ran).toEqual([])
+  // His Empty is for that call: a deletion of the same file is still asked about.
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'rm CLAUDE.md' }))).toContain(NOT_DELETED)
+  const again = await call($, { tool: 'Bash', command })
+  expect(again.deny).toBeUndefined()
+  expect(contextOf(again)).toContain('Emptied ~/Apps/slate/CLAUDE.md, as Dan answered Empty.')
+  expect(w.ran.map(r => r.input.command)).toEqual([command])
+  expect(refusalOf(await call($, { tool: 'Bash', command }))).toContain(NOT_EMPTIED)
+  // One question cannot cover an emptying and a deletion, and a subagent's emptying is refused.
+  const mixed = refusalOf(await call($, { tool: 'Bash', command: 'truncate -s 0 CLAUDE.md && rm AGENTS.md' }))
+  expect(mixed).toContain('Not run: this command deletes lasting memory (~/Apps/slate/AGENTS.md) and also empties lasting memory (~/Apps/slate/CLAUDE.md)')
+  expect(idIn(mixed)).toBeUndefined()
+  const agent = refusalOf(await call($, { tool: 'Bash', command, agentId: 'agent-a1' }))
+  expect(agent).toContain('Not emptied: this empties lasting memory (~/Apps/slate/CLAUDE.md), which only the main session may do')
+  expect(w.ran.length).toBe(1)
+})
+
+test('a find that hands a lasting memory file it names to rm is asked about as a guess, and so is a folder taken whole by a command naming one under it (#3402)', withKit, async ($, on) => {
+  const w = world($, on, { files: KEPT })
+  const found = refusalOf(await call($, { tool: 'Bash', command: 'find . -name CLAUDE.md -exec rm {} +' }))
+  expect(found).toContain(`${NOT_DELETED}: this may delete lasting memory (~/Apps/slate/CLAUDE.md): its words do not name the file it removes, and they mention ~/Apps/slate/CLAUDE.md`)
+  expect(found).toContain(ASKS)
+  const whole = refusalOf(await call($, { tool: 'Bash', command: 'cp ~/Apps/slate/AGENTS.md ~/keep.md && rm -rf ~/Apps/slate' }))
+  expect(whole).toContain(`${NOT_DELETED}: this may delete lasting memory (~/Apps/slate/AGENTS.md)`)
+  expect(w.ran).toEqual([])
+  // Controls: a find naming no lasting memory, one naming a file that is not where the name lands,
+  // and a folder with no lasting memory named under it.
+  const plain = ["find . -name '*.log' -exec rm {} +", 'find docs -name CLAUDE.md -exec rm {} +', 'rm -rf node_modules && cat CLAUDE.md', 'find . -name CLAUDE.md -exec grep -l pnpm {} +']
+  for (const command of plain) expect([command, refusalOf(await call($, { tool: 'Bash', command }))]).toEqual([command, ''])
+  expect(w.ran.length).toBe(plain.length)
+  expect(w.asked).toEqual([])
+})
+
+// A shell command that ran and failed may have taken some of its files before it failed, so Dan is
+// never told that nothing went (L11): only a command refused before it ran can say that.
+test('an approved removal that ran and failed is said as one that may have gone in part, never as not deleted (#3402)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: KEPT })
+  const command = 'rm CLAUDE.md AGENTS.md'
+  await askRemoval($, w, refusalOf(await call($, { tool: 'Bash', command })), 'Delete', 'Delete ~/Apps/slate/CLAUDE.md and ~/Apps/slate/AGENTS.md: the project is retired?')
+  w.ctl.failWrites = true
+  const again = await call($, { tool: 'Bash', command })
+  expect(again.deny).toBeUndefined()
+  const said = w.toasts.join('\n')
+  expect(said).toContain('The command to delete ~/Apps/slate/CLAUDE.md, ~/Apps/slate/AGENTS.md ran and failed, so some of it may have gone: String to replace not found in file.')
+  expect(said).not.toContain('was not deleted')
+  // The approval was for that one run: it is spent, and the same call is asked about again.
+  w.ctl.failWrites = false
+  expect(refusalOf(await call($, { tool: 'Bash', command }))).toContain(NOT_DELETED)
+})
+
+// Before #3402 each of these was refused as a shell command that writes the lessons file (#3343),
+// with no question waiting and so nothing Dan could approve. A removal's question must not open a
+// way round that: the move's end is a write of the lessons file like any other.
+test('a command that removes lasting memory and writes the lessons file by shell stays refused as before, and no Move can approve it (#3343, #3402)', withKit, async ($, on) => {
+  const w = world($, on, { files: KEPT })
+  const got: unknown[][] = []
+  const commands = ['mv CLAUDE.md ~/.claude/LESSONS.md', 'mv ~/.claude/projects/p/memory/note.md ~/.claude/LESSONS.md', "rm CLAUDE.md && echo '- L1. x' >> ~/.claude/LESSONS.md"]
+  for (const command of commands) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    got.push([command, why.slice(0, 51), idIn(why)])
+  }
+  expect(got).toEqual(commands.map(command => [command, 'Not run, and Dan is not asked For good about it: th', undefined]))
+  expect(w.ran).toEqual([])
+  expect(w.asked).toEqual([])
 })
