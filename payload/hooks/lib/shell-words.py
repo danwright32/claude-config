@@ -589,6 +589,17 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, un
     commands it was always given, with every such line left out, and one that must not miss a
     command asks, and does not trust a reading that names any line.
 
+    unsure is also given one (start, end) for each heredoc whose end the reading cannot vouch for
+    (claude-config#3492, heredoc_close): s[start] the first < of its <<, end the line break that ends
+    the line it opens on. The shell reads an unquoted heredoc's body with a line ending in a
+    backslash joined to the next, so a marker on that next line closes nothing, where this reading
+    closed it at the first line that is the marker. Named are the unquoted ones the shells close
+    anywhere else, or in different places from one shell to another, or never while a $ or a
+    backquote stands in the rest of the text: every shell runs the substitutions in that rest as
+    part of the body, where this reading takes the rest for commands and so reads a $( ) in single
+    quotes there as a word that runs nothing. A caller that asks is given the shells' closing line
+    where they agree on one; a caller that does not is given the reading it always was.
+
     The text is the command as written, quotes and all, and a command substitution's text stays
     inside the command that holds it as well as being read as commands of its own, which come first.
     A process substitution's is read the same way (claude-config#3213).
@@ -623,7 +634,8 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, un
     """
     n = len(s)
     line_break = "\n" if "\n" in s else "; "
-    closing_line = re.escape(line_break) + "%s%s" + (r"(?=\n|$)" if line_break == "\n" else r"(?=;|$)")
+    line_end = r"(?=\n|$)" if line_break == "\n" else r"(?=;|$)"
+    closing_line = re.escape(line_break) + "%s%s" + line_end
     out, pending = [], []
     frames = [{"k": "top", "start": 0, "cwd": cwd, "old": None, "id": 0, "inner": [], "openers": []}]
     ids = [0]
@@ -689,6 +701,88 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, un
             # the next line is joined cannot be told.
             ended[end] = True if sure else None
         return end
+
+    def heredoc_close(j, word, strip_tabs, quoted):
+        """Where the heredoc whose body starts at the line break at j closes, as (plain, shells,
+        sure), each of the first two the match of a closing line, from the line break before it to
+        its end, or None for a heredoc that never closes (claude-config#3492).
+
+        plain is the reading this always gave: the first line that is the marker (after its tabs,
+        for <<-), whatever stands before it. That is how every shell reads a QUOTED marker's body,
+        which is text as written. An UNQUOTED marker's body the shell reads a line at a time with a
+        line that ends in an odd count of backslashes joined to the next, so a marker on that next
+        line is the tail of a longer line and closes nothing. Measured 2026-11-23 in bash 3.2, bash
+        --posix, sh, dash, zsh, zsh emulating sh and ksh, as a -c text, a file and an eval
+        (test-shell-words-heredoc.sh runs the table against the shells of the machine it is on):
+        after one or three backslashes all seven keep the heredoc open, after two or four all seven
+        close it, and with the marker on a line of its own later all seven close it there. Closed at
+        the joined marker, the rest was read as commands, where a $( ) in single quotes is a word
+        that runs nothing, while every shell ran it as part of the body.
+
+        shells is where the shells close it, for a caller that asks which lines the reading is
+        unsure of, and sure is whether plain is a reading to vouch for. It is not, and the caller
+        that asks is told so and never left with a reading that lost a command silently, where:
+          * the shells close it at a later line than plain (a joined marker, then the marker on a
+            line of its own): shells is that line. All seven agree, but the lines between were
+            commands to this reading until now, so the heredoc is named all the same;
+          * the shells differ, and shells is plain: a joined line that IS the marker once joined,
+            with tabs let go wherever a <<- strips them in any shell (a line that is only a
+            backslash and then the marker, a marker split over two lines, a marker line ending in a
+            backslash before an empty line), which bash and zsh compare whole and close at where
+            dash and ksh do not, each in its own cases; and a marker right after a line that starts
+            as the marker does and ends in backslashes, where ksh keeps the first of those
+            backslashes as text and so joins where the others do not and the reverse;
+          * it never closes in the shells and a $ or a backquote stands in the rest of the text:
+            shells is None. Every shell reads that rest as the body and runs the substitutions in
+            it, where this reading takes the rest for commands, so that nothing after an unclosed
+            heredoc is hidden. With neither character in the rest no shell runs anything from it,
+            and the commands plain reads there are only more than the shell runs.
+        A caller that does not ask is given plain, the reading it always was (as for a # since
+        claude-config#3481): other gates read through this, and one that must not miss a command
+        asks. With no line break in the text at all no shell gives a heredoc a body, and the "; "
+        read as one there is a guess either way, so that form is read as it was.
+        """
+        tabs = "\t*" if strip_tabs else ""
+        first = re.compile(closing_line % (tabs, re.escape(word))).search(s, j)
+        if quoted or line_break != "\n":
+            return first, first, True
+
+        def never():
+            if s.find("$", j) < 0 and s.find("`", j) < 0:
+                return first, first, True
+            return first, None, False
+
+        if s.find("\\" + line_break, j, first.end() if first else n) < 0:
+            # No line of the body is joined to the next, which is nearly every heredoc there is.
+            return (first, first, True) if first else never()
+        # Every place a shell might close it: the marker, with any count of backslash line breaks
+        # (and the tabs a <<- strips) before it, between its characters and after it.
+        lb = re.escape(line_break)
+        joins = r"(?:\\" + lb + tabs + ")*"
+        chain = re.compile(lb + tabs + joins + "".join(re.escape(c) + joins for c in word) + line_end)
+        width, pos = len(line_break), j
+        while True:
+            m = chain.search(s, pos)
+            if not m:
+                return never()
+            k = m.start() - 1
+            while k >= j + width and s[k] == "\\":
+                k -= 1
+            slashes = m.start() - 1 - k
+            joined = m.start() > j and slashes % 2 == 1
+            if "\\" in s[m.start():m.end()]:
+                if not joined:
+                    return first, first, False  # the joined line is the marker: some shells close here
+            else:
+                if slashes:
+                    before = s[s.rfind(line_break, j, m.start()) + width:m.start()]
+                    core = (before.lstrip("\t") if strip_tabs else before).rstrip("\\")
+                    if core and word.startswith(core):
+                        return first, first, False  # ksh reads that line's first backslash as text
+                if not joined:
+                    same = first is not None and first.start() == m.start()
+                    return (first, first, True) if same else (first, m, False)
+            pos = m.end()
 
     def note_case(f, end):
         """Read the command so far, from f's start to end, for a case head or an esac (#2074).
@@ -942,10 +1036,16 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, un
             continue
         if pending and s.startswith(line_break, i):
             # The bodies start on the next line: find the closing line of each in turn. One that never
-            # closes is not skipped, so nothing after it is hidden.
+            # closes is not skipped, so nothing after it is hidden. Where the shells do not close an
+            # unquoted one at the first line that is its marker, a caller that asks is given the
+            # shells' closing line and the heredoc's name; one that does not is given the reading it
+            # always was (heredoc_close, claude-config#3492).
             j, unquoted, skipped, where, closes = i, [], [], [], []
             for word, strip_tabs, quoted, before, at in pending:
-                m = re.compile(closing_line % ("\t*" if strip_tabs else "", re.escape(word))).search(s, j)
+                plain, shells, sure = heredoc_close(j, word, strip_tabs, quoted)
+                m = plain if unsure is None else shells
+                if not sure and unsure is not None:
+                    unsure.append((at, i))
                 if not m:
                     j = None
                     break

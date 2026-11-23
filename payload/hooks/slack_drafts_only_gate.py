@@ -1659,9 +1659,10 @@ def remember_readings(mod):
     reader cannot read raises as it did, every time it is asked for. So is one asking where the
     comments are (claude-config#3464).
 
-    Every reading asks the reader which # it took for a comment without being sure the shell does
-    (its `unsure`), and one that names any is not used: UnsureComment, which main() refuses as a
-    check it could not make. It is never kept, in this run or between runs."""
+    Every reading asks the reader which # it took for a comment without being sure the shell does,
+    and which heredoc it cannot find the end of (its `unsure`, claude-config#3492), and one that
+    names any is not used: UnsureComment, which main() refuses as a check it could not make. It is
+    never kept, in this run or between runs."""
     plain, memo = mod.commands, {}
 
     def sure(s, cwd, **asked):
@@ -1869,13 +1870,21 @@ class UnsureComment(BaseException):
     and names nothing, unless that reading then cannot be read to its end, when the # is named and
     this is raised all the same (claude-config#3481). A BaseException, as NulPath is, so nothing in
     the walk reads it as a text that merely could not be read; main() refuses the call as one it
-    could not check."""
+    could not check.
+
+    Raised too for a heredoc the reader names there, by its <<, as one whose end it cannot vouch
+    for (claude-config#3492): an unquoted one the shells do not close at the first line that is
+    its marker, because a backslash joins that line to the one before, or close in different
+    places, or never close, where every shell runs the substitutions in the rest of the text as
+    its body and the reading took that rest for commands. heredoc says which of the two, a # or a
+    heredoc, was named."""
 
     def __init__(self, text, at):
         super().__init__(at)
         start = text.rfind("\n", 0, at) + 1
         end = text.find("\n", at)
         self.line = text[start:len(text) if end < 0 else end].strip()[:120]
+        self.heredoc = text.startswith("<<", at)
 
 
 def comment_why(line):
@@ -1883,6 +1892,16 @@ def comment_why(line):
             "inside a word where a closing parenthesis or a backslash stands right before it, or inside "
             "backquotes, and then runs the rest of that line, which the gate could not read for certain. "
             "Write that # in quotes, or put the comment on a line of its own (claude-config#3464)" % line)
+
+
+def heredoc_why(line):
+    return ("it opens a heredoc the gate cannot find the end of, in the line `%s`: the end marker is not "
+            "quoted, and it either never stands on a line of its own or stands right after a line that "
+            "ends in a backslash, which a shell joins to the marker's line, so that the heredoc does not "
+            "end there or ends there in some shells only. A shell that keeps the heredoc open runs every "
+            "$( ) in the rest of the text, in single quotes or not, which the gate could not read for "
+            "certain. End the heredoc with its marker alone on a line that follows no backslash, or quote "
+            "the marker (<<'EOF') where nothing in the body is to be expanded (claude-config#3492)" % line)
 
 
 def budget_clock():
@@ -8104,7 +8123,7 @@ def main():
         except NulPath:
             reason = judge.unfollow(NUL_WHY)  # never kept: only an allowed judgement is
         except UnsureComment as e:
-            reason = judge.unfollow(comment_why(e.line))
+            reason = judge.unfollow((heredoc_why if e.heredoc else comment_why)(e.line))
         finally:
             judge.unwatch()
         if judge.overran:
