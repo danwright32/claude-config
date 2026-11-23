@@ -8714,7 +8714,11 @@ goes and says why, and the mod adds what it measured as Dan is asked: where a mo
 or whether git can bring a deleted or emptied one back (held unchanged, held with changes since,
 not held, or not readable). A move into another folder is asked about as a move however the files
 are named (#3478): a file named outright by the path it will have, a pattern by the folder ("Each
-goes into the folder ..."), with whether a file of the same name there is replaced. The answers
+goes into the folder ..."), with whether a file of the same name there is replaced. It is asked
+about as a move only while the command, read whole, leaves each file where it was moved to: one
+that also removes, empties or writes over that place, or removes the same files under another
+spelling of their path, or holds anything the reader cannot follow, is asked about as a deletion,
+as it was before. The answers
 are Keep as is, first, and Delete, Move or Empty; a save's
 For good approves no removal and a removal's answer approves no save, a removal whose consequence
 changes after he answers (what git holds of the file, where a move lands, what a folder holds) is

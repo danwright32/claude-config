@@ -264,8 +264,14 @@ save. A file edited in place is marked `edits`, a copy of one source onto one na
 lands inside the name when that is a folder, which only the disk can say). Since #3478 the removal
 a `mv` makes carries `to`, where that `mv` puts it (the folder it lands inside, marked `into`, or
 the one name it is moved onto), because a write's `sources` hold paths alone and so never name a
-pattern or a variable; it is left off wherever the command also removes the same thing another
-way or moves it to a second place. Where the copies
+pattern or a variable. It says the file is there once the whole command has run, so it is settled
+when every line and substitution is read, and left off wherever the command may not leave the file
+there: it removes or empties the source another way (under any spelling of its path, compared as
+paths) or moves it to a second place; another command removes, empties or writes over where it
+lands, what holds that or what is under it; the mv is onto a device or of two sources that may land
+on one name; or the command holds anything whose changes the reader cannot name (an unread command,
+a write its words do not name, a run, git). `keeps` on it says the mv was told to replace nothing
+(`-n`). Where the copies
 disagreed, each case was decided and tested: `>& file` writes the file (the collision guard's
 reading), `wget --spider` saves nothing (no build's), `find -fprint` writes its file and `find
 -delete` removes what it finds (no build's), and a download whose files no word names says the
@@ -3570,10 +3576,31 @@ lasting memory file, or moved one away, ran with no question. Measured in the mo
   <folder>/<name>"); a pattern or a guess has no one path and is said by the folder ("Each goes
   into the folder <folder>"). What is replaced is read from the disk: the file of that name in
   the folder, or for a pattern each name it can match that both folders hold; where the folder
-  cannot be looked at the question says so and claims neither. One consequence: a command that
-  deletes one memory file and moves others by a pattern was one Delete question on main, and is
-  now refused whole with each part asked by itself, by the rule for files taken away in more than
-  one way, as the same command with the files named always was.
+  cannot be looked at the question says so and claims neither.
+- **"Can be moved back" is said only of a command that, read whole, leaves each moved file where
+  the question says it goes (#3478, the review of its first pull request).** As first built, the
+  mark was dropped only when the same spelling of the same thing was removed again. Measured
+  through the whole mod on 2026-11-22: `mv <memory>/{a,b}.md <folder>/ && rm -rf <folder>` was
+  asked about as "Move ... can be moved back" where main asked "Delete", and so were a later `rm`
+  of the files there, `shred -u`, `find -delete`, `truncate`, a redirect over a moved file, a
+  second `mv` of the folder followed by `rm`, and `mv <memory>/*.md <a folder that is not there>/ ;
+  rm $HOME/<the same folder>/*.md`, where the mv fails and the rm deletes every note. A guard that
+  words a deletion as something that can be undone has failed in the costly direction. So the
+  reader settles the mark once the whole command is read (mod-kit's `settleMoves`, and the list
+  under `to` above), comparing places as paths and counting a pattern as its whole folder, since
+  no name in a folder can be shown not to match one. Whatever it cannot be sure of takes the mark
+  off: a variable or a substitution in another command, a loop's value, text handed to eval, a
+  program it does not know handed a file, a script, an inline program, git. With the mark off the
+  mod says what main said: a pattern is a deletion, and a file named outright is the move its
+  write's `sources` make it. `onto`, which has the disk asked whether the one name a file is moved
+  onto is a folder, is set only with the mark, so `mv <note> <folder> && echo x >
+  <folder>/<note>` is refused whole as it was on main (the echo's write is a save of its own).
+  A command that deletes one memory file and moves others by a pattern in the same folder is one
+  Delete question, as on main: the pattern cannot be shown not to match the file deleted. A `mv
+  -n` is never said to replace a file: where one of the name is there, the question says the file
+  stays where it is. Left as on main, and recorded: a note named outright that is moved and whose
+  folder the same command then removes is still said to be one that "can be moved back", and so
+  is a pattern moved into a folder that is not there, where the mv fails and nothing happens.
 - **Asleep**, the removal is noted for the morning report as a finding (the report's kind for
   anything else noticed; a kind of its own would be a change to the report) and refused.
 - **Not covered.** What git itself removes or puts back (`git rm`, `git mv`, a checkout or restore

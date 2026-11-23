@@ -4025,6 +4025,126 @@ test('the archive command the count found is refused whole in the words of a mov
   expect(w.ran).toEqual([])
 })
 
+// The fix round of #3478. "Move ... can be moved back" is said only where the command, read whole,
+// leaves every moved file where the question says it goes. Measured at 3c7b756211 through the whole
+// mod, before this: each command in the three cases below that main asked about as "Delete" was
+// asked about as "Move", ending "Each goes into the folder ~/Desktop/archive, and can be moved back.",
+// though the same command then deleted the notes; and the two in the fourth case, refused on main,
+// were one Move question.
+const AS_A_DELETION = 'asked as a deletion'
+const howAsked = async ($: Parameters<typeof call>[0], command: string, names: string): Promise<string> => {
+  const why = refusalOf(await call($, { tool: 'Bash', command }))
+  const deletion = why.startsWith(`${NOT_DELETED}: this deletes lasting memory (${names}), so Dan decides first.`) && why.includes(`"Delete ${names}: <why>?", with the options Keep as is and Delete.`) && idIn(why) !== undefined
+  return deletion && !why.includes('moves lasting memory') && !why.includes('moved back') ? AS_A_DELETION : why.slice(0, 200)
+}
+const BRACE_MOVED = `mv ${REMOVAL_MEM_SHOWN}/{a,b}.md ~/Desktop/archive/`
+const BRACE_NAMES = `${REMOVAL_MEM_SHOWN}/{a,b}.md`
+const STAR_NAMES = `${REMOVAL_MEM_SHOWN}/*.md`
+
+test('notes moved out and then removed, emptied or written over where they went are asked about as a deletion, in a deletion\'s words (#3478)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: ARCHIVED })
+  const got: string[][] = []
+  for (const then of [
+    '&& rm -rf ~/Desktop/archive',
+    '&& rm -rf $HOME/Desktop/x/../archive/',
+    '; rm ~/Desktop/archive/*.md',
+    '&& shred -u ~/Desktop/archive/*',
+    '&& find ~/Desktop/archive -delete',
+    '&& truncate -s0 ~/Desktop/archive/a.md',
+    '&& echo x > ~/Desktop/archive/a.md',
+    '&& mv ~/Desktop/archive /tmp/x && rm -rf /tmp/x',
+  ])
+    got.push([then, await howAsked($, `${BRACE_MOVED} ${then}`, BRACE_NAMES)])
+  got.push(['under /tmp', await howAsked($, `mv ${REMOVAL_MEM_SHOWN}/{a,b}.md /tmp/zz/ && rm -rf /tmp/zz`, BRACE_NAMES)])
+  expect(got).toEqual(got.map(([then]) => [then, AS_A_DELETION]))
+  expect(got.length).toBe(9)
+  // The question itself, word for word as main asks it, and what Delete says it does.
+  const command = `${BRACE_MOVED} && rm -rf ~/Desktop/archive`
+  const asked = `Delete ${BRACE_NAMES}: they are finished work?`
+  await askRemoval($, w, refusalOf(await call($, { tool: 'Bash', command })), 'Keep as is', asked)
+  const q = w.asked[0]?.questions[0]
+  expect(q?.question).toBe(`${asked} ${PATTERN_SAID} Git does not hold it, so once deleted it cannot be got back from git.`)
+  expect(q?.options.map(o => [o.label, o.description])).toEqual([
+    ['Keep as is', 'Nothing is deleted'],
+    ['Delete', `Deletes ${BRACE_NAMES}`],
+  ])
+  expect(w.ran).toEqual([])
+})
+
+test('notes a command moves and also removes or empties under another spelling of their path are asked about as a deletion (#3478)', withKit, async ($, on) => {
+  const w = world($, on, { files: ARCHIVED })
+  const got: string[][] = []
+  for (const command of [
+    // The folder the mv names is not there, so the mv fails and the rm deletes every note.
+    `mv ${STAR_NAMES} ~/Desktop/nowhere/ ; rm $HOME/.claude/projects/p/memory/*.md`,
+    `mv ${STAR_NAMES} ~/Desktop/nowhere/ ; rm ${REMOVAL_MEMDIR}/*.md`,
+    `mv ${STAR_NAMES} ~/Desktop/nowhere/ ; rm ${REMOVAL_MEM_SHOWN}/./*.md`,
+    `mv ${STAR_NAMES} ~/Desktop/nowhere/ ; rm ${STAR_NAMES}`,
+    `mv ${STAR_NAMES} ~/Desktop/archive/ ; rm ${REMOVAL_MEM_SHOWN}/[ab].md`,
+  ])
+    got.push([command, await howAsked($, command, STAR_NAMES)])
+  const after = `cd ${REMOVAL_MEM_SHOWN} && mv *.md ~/Desktop/archive/ && rm ${REMOVAL_MEMDIR}/*.md`
+  got.push([after, await howAsked($, after, STAR_NAMES)])
+  expect(got).toEqual(got.map(([command]) => [command, AS_A_DELETION]))
+  expect(got.length).toBe(6)
+  expect(w.ran).toEqual([])
+})
+
+test('notes moved in a command whose other half cannot be read for sure are asked about as main asked, as a deletion (#3478)', withKit, async ($, on) => {
+  const w = world($, on, { files: ARCHIVED })
+  const got: string[][] = []
+  for (const command of [
+    `${BRACE_MOVED} && rm -rf "$X"`,
+    `${BRACE_MOVED} && rm -rf $(cat list.txt)`,
+    `${BRACE_MOVED} && for f in ~/Desktop/archive/*.md; do rm "$f"; done`,
+    `f() { rm -rf ~/Desktop/archive; }; ${BRACE_MOVED} && f`,
+    `${BRACE_MOVED} && sh -c 'rm -rf "$1"' _ ~/Desktop/archive`,
+    `${BRACE_MOVED} && eval "rm -rf ~/Desktop/archive"`,
+    `${BRACE_MOVED} && mytool ~/Desktop/archive`,
+    `${BRACE_MOVED} && ./tidy.sh`,
+    `${BRACE_MOVED} && git clean -fdx`,
+    `${BRACE_MOVED} && python3 -c 'import shutil; shutil.rmtree("x")'`,
+  ])
+    got.push([command, await howAsked($, command, BRACE_NAMES)])
+  // A device is no place a file can be moved to.
+  got.push(['a note onto /dev/null', await howAsked($, `mv ${REMOVAL_MEM_SHOWN}/a.md /dev/null`, `${REMOVAL_MEM_SHOWN}/a.md`)])
+  got.push(['a pattern onto /dev/null', await howAsked($, `mv ${STAR_NAMES} /dev/null`, STAR_NAMES)])
+  expect(got).toEqual(got.map(([command]) => [command, AS_A_DELETION]))
+  expect(got.length).toBe(12)
+  // Still a move beside commands that are read and leave what was moved where it is.
+  const kept = refusalOf(await call($, { tool: 'Bash', command: `mkdir -p ~/Desktop/archive && ${BRACE_MOVED} && ls ~/Desktop/archive && echo done` }))
+  expect(kept.startsWith(`${NOT_MOVED}: this moves lasting memory away (${BRACE_NAMES}, into ~/Desktop/archive), so Dan decides first.`)).toBe(true)
+  expect(w.ran).toEqual([])
+})
+
+test('a note moved onto a folder and then written over where it lands is refused whole, as it was before the move was read off the disk (#3478)', withKit, async ($, on) => {
+  const w = world($, on, { files: ARCHIVED })
+  const note = `${REMOVAL_MEM_SHOWN}/note.md`
+  const refusal = `Not run: this command moves lasting memory away (${note}, to ${ARCHIVE_SHOWN}) and also writes lasting memory (${ARCHIVE_SHOWN}/note.md). Dan is asked about each by itself, since one answer cannot cover both. Send each as a command of its own.`
+  // No trailing slash: the disk says the note lands inside the folder, where the echo then writes.
+  expect(refusalOf(await call($, { tool: 'Bash', command: `mv ${note} ${ARCHIVE_SHOWN} && echo x > ${ARCHIVE_SHOWN}/note.md` }))).toBe(refusal)
+  // The same by a copy the command then removes, which no mv vouches for.
+  expect(refusalOf(await call($, { tool: 'Bash', command: `cp ${note} ${ARCHIVE_SHOWN} && rm ${note} && echo x > ${ARCHIVE_SHOWN}/note.md` }))).toBe(refusal)
+  expect(w.ran).toEqual([])
+  expect(w.asked).toEqual([])
+})
+
+// mv -n replaces nothing. Measured at 3c7b756211: each of these said the file in the folder was
+// replaced ("replacing the file that is there now"), which -n never does.
+const KEEPS: [string, string, string, string][] = [
+  ['a note the folder holds one of', `mv -n ${REMOVAL_MEM_SHOWN}/old.md ${ARCHIVE_SHOWN}`, `${REMOVAL_MEM_SHOWN}/old.md`, `It stays where it is: a file is at ${ARCHIVE_SHOWN}/old.md already, and mv -n replaces nothing.`],
+  ['a pattern naming a file the folder holds', `mv -n ${REMOVAL_MEM_SHOWN}/{old,a}.md ${ARCHIVE_SHOWN}/`, `${REMOVAL_MEM_SHOWN}/{old,a}.md`, `${PATTERN_SAID} Each goes into the folder ${ARCHIVE_SHOWN} and can be moved back, but for one whose name a file there already has: that one stays where it is, since mv -n replaces nothing.`],
+  ['a pattern naming none the folder holds', `mv -n ${REMOVAL_MEM_SHOWN}/{a,b}.md ${ARCHIVE_SHOWN}/`, `${REMOVAL_MEM_SHOWN}/{a,b}.md`, `${PATTERN_SAID} Each goes into the folder ${ARCHIVE_SHOWN}, and can be moved back.`],
+]
+for (const [what, command, names, said] of KEEPS)
+  test(`a mv that replaces nothing is never said to replace a file: ${what} (#3478)`, withKit, async ($, on) => {
+    const w = world($, on, { auto: true, files: ARCHIVED })
+    const asked = `Move ${names}: tidying the folder?`
+    await askRemoval($, w, refusalOf(await call($, { tool: 'Bash', command })), 'Keep as is', asked)
+    expect(w.asked[0]?.questions[0]?.question).toBe(`${asked} ${said}`)
+    expect(w.ran).toEqual([])
+  })
+
 test('a command that removes lasting memory and also writes other lasting memory, or deletes one file and moves another, is refused whole: each is asked about by itself (#3402)', withKit, async ($, on) => {
   const w = world($, on, { files: KEPT })
   const both = refusalOf(await call($, { tool: 'Bash', command: "rm CLAUDE.md && echo '- Use pnpm.' >> AGENTS.md" }))

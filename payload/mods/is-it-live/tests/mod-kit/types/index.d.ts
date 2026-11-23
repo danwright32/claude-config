@@ -588,10 +588,17 @@ export type ModKitWrite = { word: string; path?: string; folder?: string; source
  * inside under its own name (a trailing slash, several sources, -t), `word` as written without the
  * slash; without `into`, the one name a single source is moved onto, which is inside it when that
  * name is an existing folder, as only the disk can say. `path` as in a write. It is the only word
- * of where a pattern or a variable goes, since a write's `sources` hold paths alone. Absent on any
- * other removal, and on one the command also removes another way or moves to a second place.
+ * of where a pattern or a variable goes, since a write's `sources` hold paths alone. It says the
+ * file is there once the whole command has run, so it is absent on any other removal, on a mv onto
+ * a device or of two sources that may land on one name, and wherever the command, read whole, may
+ * not leave the file there: it removes or empties the source another way (under any spelling of
+ * its path) or moves it to a second place, another command removes, empties or writes over where
+ * it lands, what holds that or what is under it, or the command holds anything whose changes the
+ * reader cannot name (an unread command, a write its words do not name, a run, git). A reader for
+ * whom it is absent says what it would say of a removal with nowhere to go. `keeps` says the mv was
+ * told to replace nothing (-n, --no-clobber): a source whose name is taken there stays where it was.
  */
-export type ModKitChange = { word: string; path?: string; folder?: string; does: 'remove' | 'touch' | 'truncate' | 'folder' | 'mode'; tree?: true; names?: string[]; to?: { word: string; path?: string; into?: true } }
+export type ModKitChange = { word: string; path?: string; folder?: string; does: 'remove' | 'touch' | 'truncate' | 'folder' | 'mode'; tree?: true; names?: string[]; to?: { word: string; path?: string; into?: true; keeps?: true } }
 
 /**
  * What a command changes: the files its words name content goes into, the other changes it makes

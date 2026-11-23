@@ -1184,6 +1184,124 @@ describe('writes: changes that put no content in, carried over from the collisio
     // A substitution's removal of the same thing is a removal too.
     expect(to('mv {a,b}.md archive/; echo "$(rm {a,b}.md)"')).toEqual([['{a,b}.md', null]])
   })
+  // The fix round of #3478: `to` is a claim that the file is at that place once the command has run,
+  // so it holds only where the command, read whole, leaves it there. Measured at 3c7b756211, before
+  // this: every form below but the controls still said where the mv put it, and ask before saving
+  // then told Dan the notes "can be moved back" while the same command deleted them.
+  const kept = (command: string) => read(command).changes.filter(c => c.does === 'remove' && c.to !== undefined).map(c => c.word)
+  const MOVED = 'mv notes/{a,b}.md ~/archive/'
+  test('a removal says where its mv puts it while nothing else in the command can take it from there (#3478)', () => {
+    // The controls: the move alone, and beside commands that leave what it moved where it is.
+    for (const command of [
+      MOVED,
+      `mkdir -p ~/archive && ${MOVED}`,
+      `${MOVED} && ls ~/archive && echo done`,
+      `cp notes/MEMORY.md notes/MEMORY.md.bak && ${MOVED}`,
+      `${MOVED} && touch ~/archive/a.md && chmod 600 ~/archive/a.md`,
+      `${MOVED} && rm ~/other/x.md && echo x > ~/other/y.md`,
+      `D=~/archive; mv notes/{a,b}.md "$D"/ && rm -rf ~/elsewhere`,
+    ])
+      expect([command, kept(command)]).toEqual([command, ['notes/{a,b}.md']])
+  })
+  test('a removal does not say where its mv puts it once the command takes away, empties or writes over that place (#3478)', () => {
+    for (const command of [
+      // The folder itself, however it is spelled, a folder above it, and what is in it.
+      `${MOVED} && rm -rf ~/archive`,
+      `${MOVED} && rm -rf ~/./archive`,
+      `${MOVED} && rm -rf ~//archive/`,
+      `${MOVED} && rm -rf $HOME/archive`,
+      `${MOVED} && rm -rf \${HOME}/x/../archive`,
+      `${MOVED} && rm -rf ${HOME}/archive`,
+      `${MOVED} && rm -rf ~`,
+      `${MOVED} & rm -rf ~/archive`,
+      `rm -rf ~/archive; ${MOVED}`,
+      `${MOVED}; rm ~/archive/*.md`,
+      `${MOVED} && rm -rf ~/arch*`,
+      `${MOVED} && cd ~/archive && rm *.md`,
+      `${MOVED} && shred -u ~/archive/*`,
+      `${MOVED} && find ~/archive -delete`,
+      `${MOVED} && find ~/archive -name '*.md' -exec rm {} +`,
+      `${MOVED} && truncate -s0 ~/archive/a.md`,
+      `${MOVED} && echo x > ~/archive/a.md`,
+      `${MOVED} && : > ~/archive/a.md`,
+      `${MOVED} && cp /dev/null ~/archive/a.md`,
+      `${MOVED} && sed -i '' 's/a/b/' ~/archive/a.md`,
+      `${MOVED} && rsync -a --delete empty/ ~/archive/`,
+      // The folder moved on, and removed from where it went.
+      `${MOVED} && mv ~/archive /tmp/x && rm -rf /tmp/x`,
+      'D=~/archive; mv notes/{a,b}.md "$D"/ && rm -rf "$D"',
+    ])
+      expect([command, kept(command)]).toEqual([command, []])
+    // A moved file moved again is no longer where the first mv put it; the second mv's own word holds.
+    expect(kept(`${MOVED} && mv ~/archive/a.md ~/archive/c.md`)).toEqual(['~/archive/a.md'])
+  })
+  test('a removal does not say where its mv puts it when the same files are removed or emptied under another spelling (#3478)', () => {
+    for (const command of [
+      'mv ~/notes/*.md ~/nowhere/ ; rm $HOME/notes/*.md',
+      `mv ~/notes/*.md ~/nowhere/ ; rm ${HOME}/notes/*.md`,
+      'mv ~/notes/*.md ~/nowhere/ ; rm ~/notes/./*.md',
+      'mv ~/notes/*.md ~/nowhere/ ; rm ~/notes/[ab].md',
+      'mv ~/notes/*.md ~/nowhere/ ; rm ~/notes/a.md',
+      'mv ~/notes/*.md ~/nowhere/ ; rm -rf ~/notes',
+      'mv ~/notes/*.md ~/nowhere/ ; truncate -s0 ~/notes/a.md',
+      `cd ~/notes && mv *.md ~/archive/ && rm ${HOME}/notes/*.md`,
+      'mv notes/a.md ~/archive/ && truncate -s0 ./notes/a.md',
+      'mv notes/a.md ~/archive/; rm notes/*.md',
+    ])
+      expect([command, kept(command)]).toEqual([command, []])
+    // Shown to differ: another folder, or another file named outright beside one named outright.
+    expect(kept('mv notes/a.md ~/archive/ && rm notes/b.md')).toEqual(['notes/a.md'])
+    expect(kept('mv ~/notes/*.md ~/archive/ ; rm ~/other/*.md')).toEqual(['~/notes/*.md'])
+  })
+  test('a removal does not say where its mv puts it wherever the rest of the command cannot be read for sure (#3478)', () => {
+    for (const command of [
+      // A variable or a substitution names what a later command removes or writes.
+      `${MOVED} && rm -rf "$X"`,
+      `${MOVED} && rm -rf $(cat list.txt)`,
+      `${MOVED} && echo x > "$OUT"`,
+      // A loop, a function, text handed to a shell or to eval.
+      `${MOVED} && for f in ~/archive/*.md; do rm "$f"; done`,
+      `f() { rm -rf ~/archive; }; ${MOVED} && f`,
+      `${MOVED} && sh -c 'rm -rf "$1"' _ ~/archive`,
+      `${MOVED} && eval "rm -rf ~/archive"`,
+      // A program the reader does not know handed anything, a script, a program run inline, git.
+      `${MOVED} && mytool ~/archive`,
+      `${MOVED} && ./tidy.sh`,
+      `${MOVED} && bash tidy.sh`,
+      `${MOVED} && python3 -c 'import shutil; shutil.rmtree("x")'`,
+      `${MOVED} && xargs rm < list`,
+      `${MOVED} && ls | xargs mytool`,
+      `${MOVED} && git clean -fdx`,
+      `${MOVED} && tar xf old.tar`,
+      // A folder the words cannot name is no place to compare a later removal against.
+      `mv notes/{a,b}.md "$D"/ && rm -rf ~/archive`,
+    ])
+      expect([command, kept(command)]).toEqual([command, []])
+    // A folder the words cannot name is still said as written when nothing else changes a file.
+    expect(kept('mv notes/{a,b}.md "$D"/')).toEqual(['notes/{a,b}.md'])
+  })
+  test('a mv says where it puts its sources only where no two of them can land on one name, and never for a device (#3478)', () => {
+    // One folder holds no two files of a name; two folders may.
+    expect(kept('mv notes/a.md notes/b.md ~/archive/')).toEqual(['notes/a.md', 'notes/b.md'])
+    expect(kept('mv notes/*.md notes/x.txt ~/archive/')).toEqual(['notes/*.md', 'notes/x.txt'])
+    expect(kept('mv one/a.md two/b.md ~/archive/')).toEqual(['one/a.md', 'two/b.md'])
+    expect(kept('mv one/x.md two/x.md ~/archive/')).toEqual([])
+    expect(kept('mv one/*.md two/*.md ~/archive/')).toEqual([])
+    expect(kept('mv one/*.md two/x.md ~/archive/')).toEqual([])
+    expect(kept('mv "$A" notes/b.md ~/archive/')).toEqual([])
+    // mv cannot put a file on a device (measured on macOS: "Operation not permitted", the file kept).
+    expect(kept('mv notes/a.md /dev/null')).toEqual([])
+    expect(kept('mv notes/*.md /dev/null')).toEqual([])
+  })
+  // mv -n replaces nothing: a source whose name is taken where it goes is left where it was. At
+  // 3c7b756211 the reader gave no word of it, and ask before saving said the file there was replaced.
+  test('a mv told to replace nothing says so of where it puts each source (#3478)', () => {
+    const keeps = (command: string) => read(command).changes.filter(c => c.does === 'remove').map(c => c.to?.keeps ?? false)
+    for (const flag of ['-n', '-vn', '-nv', '--no-clobber']) expect([flag, keeps(`mv ${flag} notes/*.md ~/archive/`)]).toEqual([flag, [true]])
+    for (const flag of ['', '-v', '-f', '--no-target-directory']) expect([flag, keeps(`mv ${flag} notes/*.md ~/archive`)]).toEqual([flag, [false]])
+    // With it and without it are two ways of moving one thing, so neither is said.
+    expect(kept('mv -n notes/*.md ~/archive/; mv notes/*.md ~/archive/')).toEqual([])
+  })
   test('a path written and then removed is reported both ways, so a reader can keep the removal', () => {
     expect(paths('echo x > d; rm -r d')).toEqual([`${CWD}/d`])
     expect(changes('echo x > d; rm -r d')).toEqual([`remove ${CWD}/d tree`])

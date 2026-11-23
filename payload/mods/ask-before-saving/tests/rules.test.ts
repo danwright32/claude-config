@@ -2014,8 +2014,26 @@ test('a file a mv names goes where it went before, and onto one name says the di
   ])
   expect(await movesOf(`mv ${MEM}/note.md ${MEM}/archive`)).toEqual([[`${MEM}/note.md`, 'move', `${MEM}/archive`, 'onto']])
   expect(await movesOf(`mv ${MEM}/note.md ${MEM}/note-old.md`)).toEqual([[`${MEM}/note.md`, 'move', `${MEM}/note-old.md`, 'onto']])
-  // A copy the same command then removes lands on a name of its own, as before.
-  expect(await movesOf('cp AGENTS.md /tmp/A.md && rm AGENTS.md')).toEqual([['~/Apps/slate/AGENTS.md', 'move', '/tmp/A.md', 'onto']])
+  // A copy the same command then removes is said as it was before: by the name the words give. No
+  // mv vouches that the file is left there, so the disk is not asked what is inside that name.
+  expect(await movesOf('cp AGENTS.md /tmp/A.md && rm AGENTS.md')).toEqual([['~/Apps/slate/AGENTS.md', 'move', '/tmp/A.md', '']])
+})
+
+// The fix round: the reader's word that the file is left where its mv put it is what a move's
+// "can be moved back" stands on. Measured at 3c7b756211, before this: each pattern below was a move
+// into the folder, and each named note carried `onto`, which let a write inside the folder pass as
+// the move's own landing place.
+test('a move the rest of the command may undo is said as it was before the mv said where it goes (#3478)', async () => {
+  for (const then of ['&& rm -rf ~/Desktop/archive', '; rm ~/Desktop/archive/*.md', '&& echo x > ~/Desktop/archive/a.md', '&& rm -rf "$X"', '&& eval "rm -rf ~/Desktop/archive"', '&& mytool ~/Desktop/archive', '&& git clean -fdx'])
+    // The pattern's own candidate: a removal by name in the other folder adds the names it may match there.
+    expect([then, (await movesOf(`mv ${MEM}/{a,b}.md ~/Desktop/archive/ ${then}`))[0]]).toEqual([then, [`${MEM}/{a,b}.md`, 'delete', '', 'pattern']])
+  // The same files removed under another spelling of their path.
+  expect(await movesOf(`mv ${MEM}/*.md ~/Desktop/nowhere/ ; rm $HOME/.claude/projects/p/memory/*.md`)).toEqual([[`${MEM}/*.md`, 'delete', '', 'pattern']])
+  // A note named outright is still the move its write says it is, with no word of what the folder holds.
+  expect(await movesOf(`mv ${MEM}/note.md ${MEM}/archive && echo x > ${MEM}/archive/note.md`)).toEqual([[`${MEM}/note.md`, 'move', `${MEM}/archive`, '']])
+  expect(splitBy([{ file: `${MEM}/note.md`, how: 'move', to: `${MEM}/archive` }], [`${MEM}/archive/note.md`])).toEqual([`${MEM}/archive/note.md`])
+  // Onto a device nothing is moved.
+  expect(await movesOf(`mv ${MEM}/note.md /dev/null`)).toEqual([[`${MEM}/note.md`, 'delete', '', '']])
 })
 
 test('a pattern is a deletion still wherever no mv moves it, or the command removes it another way as well (#3478)', async () => {

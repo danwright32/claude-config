@@ -1117,7 +1117,7 @@ const testRunner = (name: string, args: readonly string[], script: string | unde
  * patch, a program that writes or runs a process or cannot be read, a script on standard input, a
  * command xargs gives its files), each with the files to read to find out, such as the patch.
  */
-export const writes = (cmds: readonly Command[], cwd: string | undefined, home: string): ModKitWrites => readWrites(cmds, cwd, home).writes
+export const writes = (cmds: readonly Command[], cwd: string | undefined, home: string): ModKitWrites => settleMoves(readWrites(cmds, cwd, home).writes)
 
 // The writes, and the folder each command runs in, by its place in `cmds` (#2000): where a cd before
 // it leaves the shell, followed as a relative path is, undefined where that cannot be followed.
@@ -1142,6 +1142,10 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     byGit.push({ word: asWritten.get(word) ?? word, ...(path ? { path } : {}), does, ...(tree && path ? { tree: true as const } : {}), ...(from === undefined ? {} : { from }) })
   }
   const seen = new Set<string>()
+  // #3478: the command being read, kept against each write and change it makes (madeBy), and whether
+  // any command here changes files in a way this reader gives no write or change for (settleMoves).
+  let now: object = {}
+  let unsure = false
   let dir: string | undefined = cwd
   let vars: Vars = new Map()
   // #2171: every value each variable is given anywhere in the command, null once anything else may
@@ -1185,6 +1189,10 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     // A path written twice is kept once, a tree on either keeping the tree, as a change does.
     if (seen.has(key)) {
       const had = files.find(f => (path ? f.path === path : !f.path && f.word === (shown ?? asWritten.get(word) ?? word)))
+      // Who wrote it a second time is kept (#3478); a write that cannot be found again is one no
+      // move can be checked against.
+      if (had) madeBy(had, now)
+      else unsure = true
       if (had && tree) had.tree = true
       if (had && alone.has(had) && aloneIn(had.word) === null) alone.set(had, null)
       return
@@ -1202,6 +1210,7 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
       ...(tree ? { tree: true as const } : {}),
     }
     files.push(entry)
+    madeBy(entry, now)
     const set = path ? undefined : aloneIn(entry.word)
     if (set !== undefined) alone.set(entry, set)
   }
@@ -1228,13 +1237,16 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     // where both were moves to the same place.
     const had = changes.find(x => x.does === does && (path ? x.path === path : !x.path && x.word === written))
     if (had) {
+      madeBy(had, now)
       if (tree) had.tree = true
       if (had.names && (!names || names.join('\n') !== had.names.join('\n'))) delete had.names
       if (!sameTo(had.to, to)) delete had.to
       return
     }
     const folder = path ? undefined : patternFolder(word, dir, home)
-    changes.push({ word: written, ...(path ? { path } : {}), ...(folder ? { folder } : {}), does, ...(tree ? { tree: true as const } : {}), ...(tree && names ? { names } : {}), ...(to ? { to } : {}) })
+    const entry: ModKitChange = { word: written, ...(path ? { path } : {}), ...(folder ? { folder } : {}), does, ...(tree ? { tree: true as const } : {}), ...(tree && names ? { names } : {}), ...(to ? { to } : {}) }
+    changes.push(entry)
+    madeBy(entry, now)
   }
   const abs = (p: string) => pathOf(p, dir)
   const absAll = (ps: string[]) => ps.map(abs).filter((p): p is string => !!p)
@@ -1329,6 +1341,7 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
   const eachOutside: Map<string, string[]>[] = []
   for (const c of cmds) {
     folders.push(dir)
+    now = c
     const written = c.words
     for (const w of written) for (const m of w.matchAll(SETS_IF_UNSET)) setBy.set(m[1] as string, null)
     // What stands inside `(( ))` is a sum the shell works out (#3415, Command.arithmetic): it runs
@@ -1605,13 +1618,31 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
       // (#3478): the write above carries only the sources a path names, so a pattern or a variable
       // moved into a folder read as taken away with nowhere to go, which is a deletion. The folder
       // is given as the writes above spell it, and one name as its own write does.
+      // It is said only for a mv that can leave each source there: never onto a device, which holds
+      // no file (macOS mv refuses, "Operation not permitted", and keeps the source; measured
+      // 2026-11-22), and never where two sources may land on one name, the second replacing the
+      // first. Two cannot where one folder holds both, or both are named outright by different
+      // names. What the rest of the command does to the place is judged once it is all read
+      // (settleMoves).
       if (name === 'mv' && copied) {
         const dest = (into ?? ops[ops.length - 1]) as string
         const destPath = abs(dest)
-        const to: NonNullable<ModKitChange['to']> =
-          into !== undefined
-            ? { word: (asWritten.get(dest) ?? dest).replace(/\/+$/, '') || '/', ...(destPath ? { path: destPath } : {}), into: true }
-            : { word: asWritten.get(dest) ?? dest, ...(destPath ? { path: destPath } : {}) }
+        const placeOf = (s: string): { folder: string; name?: string } | undefined => {
+          const p = abs(s)
+          if (p) return { folder: p.slice(0, p.lastIndexOf('/')) || '/', name: baseOf(p) }
+          const folder = patternFolder(s, dir, home)
+          return folder ? { folder } : undefined
+        }
+        const places = sources.map(placeOf)
+        const apart = places.every((a, i) => places.every((b, j) => j <= i || (a !== undefined && b !== undefined && (a.folder === b.folder || (a.name !== undefined && b.name !== undefined && a.name !== b.name)))))
+        // mv -n (--no-clobber) replaces nothing: a source whose name is taken there stays where it was.
+        const keeps = [...opts.keys()].some(k => k === '--no-clobber' || /^-[A-Za-z]*n/.test(k)) ? { keeps: true as const } : {}
+        const to: ModKitChange['to'] =
+          isDevice(destPath ?? dest) || !apart
+            ? undefined
+            : into !== undefined
+              ? { word: (asWritten.get(dest) ?? dest).replace(/\/+$/, '') || '/', ...(destPath ? { path: destPath } : {}), into: true, ...keeps }
+              : { word: asWritten.get(dest) ?? dest, ...(destPath ? { path: destPath } : {}), ...keeps }
         for (const s of sources) changed(s, 'remove', true, undefined, to)
       }
     } else if (changer) {
@@ -1679,6 +1710,9 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     } else {
       const g = git(args, c.env)
       onNoList = g === undefined
+      // git changes files this reader names only for four of its subcommands (byGit): clean, reset,
+      // stash and the rest take files away with no write or change given for them (#3478).
+      if (g !== undefined) unsure = true
       // #3337: the folder git reads a relative path from. Told where its working folder is
       // (--work-tree, GIT_WORK_TREE), git reads one from the folder the command runs in when that is
       // inside the working folder, and from the top of the working folder when it is not (measured
@@ -1769,6 +1803,9 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
       const what = runner ? `the test runner ${tool.name}` : kind === 'python' ? `a ${name} module run with -m` : 'a tool run through npx'
       if (handed.length) runs.push({ what, script: tool.name, tool: true, args: handed, ...ranWith })
     }
+    // #3478: a script file, a module, a tool, a test runner and a command xargs hands its words to
+    // change files this reader gives no write or change for, whatever each is handed.
+    if (scriptFile || tool || c.xargs) unsure = true
     // #3323: a program on none of the lists above, read by no rule of its own, is read as writing
     // each file it is handed, as a tool is: what it does with one cannot be read before it runs. It
     // is a run marked `unknown`, so each guard that judges a run's arguments judges these, and says
@@ -1836,7 +1873,9 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     const given = name === null || textSets ? null : setBy.get(name)
     if (given?.length) f.values = given
   }
-  return { writes: { files, changes, unnamed: readable, ...(byGit.length ? { byGit } : {}), ...(runs.length ? { runs } : {}), ...(stdout.length ? { stdout } : {}) }, folders }
+  const read: ModKitWrites = { files, changes, unnamed: readable, ...(byGit.length ? { byGit } : {}), ...(runs.length ? { runs } : {}), ...(stdout.length ? { stdout } : {}) }
+  if (unsure) UNSURE.add(read)
+  return { writes: read, folders }
 }
 
 // The options of git mv, rm, checkout and restore that take the next word as their value.
@@ -1905,7 +1944,77 @@ const MOVES = new Set(['cd', 'pushd', 'popd'])
 // Whether two removals of one thing go to the same place (#3478): both moved by a mv to one
 // destination, read the same way. One with nowhere to go (rm, find -delete, a packer) beside a move
 // is no match, so a thing a command also removes outright is never said to have gone somewhere.
-const sameTo = (a: ModKitChange['to'], b: ModKitChange['to']): boolean => (a === undefined || b === undefined ? a === b : a.word === b.word && a.path === b.path && a.into === b.into)
+const sameTo = (a: ModKitChange['to'], b: ModKitChange['to']): boolean => (a === undefined || b === undefined ? a === b : a.word === b.word && a.path === b.path && a.into === b.into && a.keeps === b.keeps)
+
+// #3478, the fix round. Where a mv puts a file is a claim about the disk once the whole command has
+// run, and ask before saving words it as "can be moved back". At first the mark was dropped only
+// when the same spelling of the same thing was removed again, so `mv notes/*.md archive/ && rm -rf
+// archive` and `mv ~/notes/*.md gone/; rm $HOME/notes/*.md` both said the notes had been moved, and
+// each deletes them. So the mark is settled once every line and substitution is read (settleMoves):
+// it stays only where nothing else in the command can take the file from where the mv put it.
+//
+// Which commands made each write and change, kept beside them and never handed on: what a mv does
+// to its own sources and its own destination is the move, and anything a second command does there
+// is not.
+const MADE_BY = new WeakMap<object, Set<object>>()
+const madeBy = (entry: object, command: object) => {
+  const by = MADE_BY.get(entry)
+  if (by) by.add(command)
+  else MADE_BY.set(entry, new Set([command]))
+}
+// What was read holding a command that changes files in a way no write or change is given for: git
+// (but for the four subcommands in byGit), a script file, a module, a tool, a command fed by xargs.
+const UNSURE = new WeakSet<ModKitWrites>()
+// Whether one of two places is the other, is under it or holds it. A pattern stands for the folder
+// it is matched in, since no name in that folder can be shown not to match it.
+const isUnder = (a: string, b: string): boolean => a !== b && a.startsWith(b.endsWith('/') ? b : `${b}/`)
+const onOneBranch = (a: string, b: string): boolean => a === b || isUnder(a, b) || isUnder(b, a)
+const placeOfChange = (x: { path?: string; folder?: string }): string | undefined => x.path ?? x.folder
+
+/**
+ * Takes `to` off every removal whose file the command, read whole, may not leave where its mv put
+ * it (#3478). It stays only where all of this holds, and anything the reader cannot be sure of
+ * takes it off, since a reader of `to` then says what was said before there was one:
+ * - every command is one whose changes are all given as writes and changes: none is unread (eval, a
+ *   command a value names, an alias, a trap), none writes what its words do not name (an inline
+ *   program, a patch, an archive, what xargs feeds it), none is a run (a script, a tool, a program
+ *   the reader does not know handed a file), and none is git;
+ * - no other command removes or empties what may be the source under another spelling, or anything
+ *   that may be where it lands, what holds that or what is under it. Places are compared as paths,
+ *   so home spelled any way, a dot, a doubled slash and a cd are one place; a change with no place
+ *   (a variable, a command's output, a loop's value) may be anywhere;
+ * - no other command writes where it lands, since a write there replaces what was moved.
+ * Where it lands is the one path a source named outright has there, and the whole folder for a
+ * pattern or a variable, whose names cannot be told; a folder no path names is no place to compare
+ * with, so any removal or write by another command takes the mark off. The order of the commands is
+ * not read: one that runs before the mv counts as one after it does, the side that claims less.
+ * A program the reader does not know that is handed no file is read as changing none, as it is
+ * everywhere in this reader (#3323).
+ */
+const settleMoves = (w: ModKitWrites): ModKitWrites => {
+  const moved = w.changes.filter(c => c.to !== undefined)
+  if (!moved.length) return w
+  const blind = UNSURE.has(w) || w.unnamed.length > 0 || !!w.unread?.length || !!w.runs?.length || !!w.byGit?.length
+  for (const m of moved) {
+    const to = m.to as NonNullable<ModKitChange['to']>
+    const own = MADE_BY.get(m) ?? new Set<object>()
+    const byAnother = (x: object): boolean => {
+      const by = MADE_BY.get(x)
+      return !by || [...by].some(c => !own.has(c))
+    }
+    const source = placeOfChange(m)
+    const name = m.path === undefined ? undefined : baseOf(m.path)
+    const lands: (string | undefined)[] = to.path === undefined ? [undefined] : name === undefined ? [to.path] : to.into ? [`${to.path}/${name}`] : [to.path, `${to.path}/${name}`]
+    const reaches = (x: { path?: string; folder?: string }, places: readonly (string | undefined)[]): boolean => {
+      const at = placeOfChange(x)
+      return at === undefined || places.some(p => p === undefined || onOneBranch(at, p))
+    }
+    const taken = w.changes.some(x => x !== m && (x.does === 'remove' || x.does === 'truncate') && byAnother(x) && reaches(x, [source, ...lands]))
+    const writtenOver = w.files.some(f => byAnother(f) && reaches(f, lands))
+    if (blind || taken || writtenOver) delete m.to
+  }
+  return w
+}
 
 // Each change in `from` that `into` lacks is added to it: a path once, keeping what either says of it
 // (a tree, an in place edit, a copy's sources and that it may land in a folder), so a substitution
@@ -1913,12 +2022,19 @@ const sameTo = (a: ModKitChange['to'], b: ModKitChange['to']): boolean => (a ===
 // review of #972). A write its words do not name is kept once, since a heredoc never ended is read
 // both as a body and as commands.
 const merge = (into: ModKitWrites, from: ModKitWrites) => {
+  // #3478: what one of the two cannot be sure of, the whole cannot; and a write or change both make
+  // was made by the commands of both.
+  if (UNSURE.has(from)) UNSURE.add(into)
+  const alsoMadeBy = (had: object, other: object) => {
+    for (const c of MADE_BY.get(other) ?? []) madeBy(had, c)
+  }
   for (const f of from.files) {
     const had = into.files.find(x => (f.path ? x.path === f.path : !x.path && x.word === f.word))
     if (!had) {
       into.files.push(f)
       continue
     }
+    alsoMadeBy(had, f)
     if (f.tree) had.tree = true
     if (f.edits) had.edits = true
     if (f.mayBeFolder) had.mayBeFolder = true
@@ -1934,6 +2050,7 @@ const merge = (into: ModKitWrites, from: ModKitWrites) => {
       into.changes.push(c)
       continue
     }
+    alsoMadeBy(had, c)
     if (c.tree) had.tree = true
     // Where a mv puts it holds only where both say the same place (#3478), as within one line.
     if (!sameTo(had.to, c.to)) delete had.to
@@ -2046,4 +2163,4 @@ export const callShell = (env: { CLAUDE_CODE_SHELL?: string | null; SHELL?: stri
  * words (#1834: bash splits it, zsh does not).
  */
 export const commandWrites = (command: string, cwd: string, home: string, shell?: string): ModKitWrites =>
-  lineWrites(readLine(command, { assignments: true }, splitsWords(shell) ? { splits: true } : {}), cwd, home)
+  settleMoves(lineWrites(readLine(command, { assignments: true }, splitsWords(shell) ? { splits: true } : {}), cwd, home))

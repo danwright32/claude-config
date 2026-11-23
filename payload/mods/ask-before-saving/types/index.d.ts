@@ -42,6 +42,8 @@ export type AskBeforeSavingRemoval = {
   into?: true
   /** A file is where the move lands now, which the move replaces: at `to`, or under the same name inside it. */
   replaces?: true
+  /** A file is where the move lands now and the mv was told to replace nothing (-n), so the file moved stays where it was (#3478). Never beside `replaces`. */
+  stays?: true
   /** What is where the move lands could not be looked at (#3478), so neither `replaces` nor its absence is claimed. */
   unseen?: true
   /** It is a folder, taken with everything in it. */

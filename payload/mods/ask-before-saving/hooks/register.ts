@@ -484,7 +484,10 @@ const removalsOf = async ($: EngineInterface, tool: string, input: Record<string
     }
     if (c.how === 'move') {
       const landed = await movedOnto($, c)
-      out.push({ ...shape, how: 'move', ...(c.to !== undefined ? { to: c.to } : {}), ...landed })
+      // A mv told to replace nothing (-n) leaves both files as they are where it would have replaced one.
+      const { replaces, ...rest } = landed
+      const said = replaces && c.keeps ? { ...rest, stays: true as const } : landed
+      out.push({ ...shape, how: 'move', ...(c.to !== undefined ? { to: c.to } : {}), ...said })
     } else out.push({ ...shape, how: c.how, ...(c.path !== undefined ? await gitHolds($, c.path) : { back: 'unknown' as const, why: 'its path could not be read from the command' }) })
   }
   return out

@@ -26,7 +26,7 @@ export const MOD = 'ask-before-saving'
 // where that mv puts it: the folder it lands inside (`into`) or the one name it is moved onto.
 export type Writes = {
   files: { word: string; path?: string; sources?: string[]; mayBeFolder?: true }[]
-  changes?: { word: string; path?: string; folder?: string; does: string; tree?: true; names?: string[]; to?: { word: string; path?: string; into?: true } }[]
+  changes?: { word: string; path?: string; folder?: string; does: string; tree?: true; names?: string[]; to?: { word: string; path?: string; into?: true; keeps?: true } }[]
   unnamed: { what: string; words: string[]; inputs: string[]; targets?: string[] }[]
   runs?: { script?: string; unknown?: true; why?: string; remedy?: string; args: { word: string; path?: string }[] }[]
 }
@@ -1670,6 +1670,8 @@ export type RemovalCandidate = {
   toPath?: string
   into?: true
   onto?: true
+  /** The mv was told to replace nothing (-n), so a file already where this one goes is kept. */
+  keeps?: true
   tree?: true
   names?: string[]
   pattern?: true
@@ -1760,7 +1762,15 @@ export const removalCandidates = async (w: Writes, home: string, inCheckout: InC
       ...(to !== undefined ? { to } : {}),
       ...(at?.path ? { toPath: at.path } : {}),
       ...(moved?.into ? { into: true as const } : {}),
-      ...(dest?.mayBeFolder || (moved !== undefined && !moved.into) ? { onto: true as const } : {}),
+      // Onto one name, the disk is asked whether that name is a folder the file lands inside, and
+      // the path it has in there is then taken as the move's own. That is done only on the reader's
+      // word that the command leaves the file where its mv put it (`c.to`, #3478's fix round):
+      // without it (a copy the command then removes, or a mv the rest of the command may undo) the
+      // move is said as it was before, by the name the words give, so a write inside that folder is
+      // still a save of its own that one question cannot cover.
+      ...(!emptied && c.to !== undefined && !c.to.into ? { onto: true as const } : {}),
+      // A mv told to replace nothing (-n): a file already where this one goes is kept, never replaced.
+      ...(!emptied && at !== undefined && c.to?.keeps ? { keeps: true as const } : {}),
     }
     // A pattern, in the folder it lands in: every file it matches in a folder of lasting memory, or
     // the lasting memory files by name that it may match anywhere else.
@@ -1910,11 +1920,13 @@ const movedWhere = (r: Removal, one: boolean): string => {
   const at = landsAt(r)
   if (at !== undefined) {
     if (r.unseen) return `${It} goes to ${at}. Whether a file is already there could not be read.`
+    if (r.stays) return `${It} stays where it is: a file is at ${at} already, and mv -n replaces nothing.`
     return r.replaces ? `${It} goes to ${at}, replacing the file that is there now.` : `${It} goes to ${at}, and can be moved back.`
   }
   const each = r.pattern ? (one ? 'Each' : `Each file ${r.file} matches`) : It
   const goes = `${each} goes into the folder ${r.to}`
   if (r.unseen) return `${goes}. Whether a file of the same name is already there could not be read.`
+  if (r.stays) return `${goes} and can be moved back, but for one whose name a file there already has: that one stays where it is, since mv -n replaces nothing.`
   return r.replaces ? `${goes}, replacing a file of the same name that is there now.` : `${goes}, and can be moved back.`
 }
 
@@ -1957,6 +1969,7 @@ const sameRemoval = (y: Removal, r: Removal): boolean =>
   y.into === r.into &&
   y.back === r.back &&
   y.replaces === r.replaces &&
+  y.stays === r.stays &&
   y.unseen === r.unseen &&
   y.folder === r.folder &&
   y.pattern === r.pattern &&
