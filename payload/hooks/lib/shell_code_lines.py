@@ -17,6 +17,17 @@ inside a quoted string. A line inside a multi line `$( ... )` is code and is yie
 body is yielded too, since a stand in a suite writes through one is shell, but its quotes are not
 followed, so an apostrophe in a heredoc's prose cannot carry a quote past the heredoc's end.
 
+A line is read with the line a backslash joined it to (claude-config#3475). The shell takes a
+backslash newline out before it reads words, so `echo a\\` then `#b; echo RAN` is the one line
+`echo a#b; echo RAN`: the # is text and the rest of its line runs. Read a line at a time, every #
+that starts a line was a comment, the line was dropped, and a quote or a heredoc opened after the #
+was never followed. A backslash joins only where it is live: one that ends a comment, or a
+heredoc's closing line, joins nothing (#3481). An unquoted heredoc's body is joined the same way
+before a line is compared with the marker (#3492); _closes and _read say what is done where a
+marker joined to the line before leaves the heredoc open in every shell. Where the reader cannot
+tell code from text it reads code: a scan that looks at a line no shell runs costs a second look,
+and one that skips a line a shell runs has missed what it was written to find.
+
 code_lines(text, with_heredocs=True) adds a third item: the heredoc operators the line opens as
 code, each (strip_tabs, word, inside_substitution), so heredoc-in-substitution.py reads the same
 quoting as the rest. heredoc_body_lines(text) names the lines that are a heredoc's body, from the
@@ -65,7 +76,11 @@ class ReaderMissing(RuntimeError):
 BRACKET = re.compile(r"\[[^\]\s]+\]")
 
 
-def scan(line, frames, keep=None, parens=None):
+# What a # must follow, outside every quote, to start a comment (claude-config#3464).
+COMMENT_AFTER = ' \t;('
+
+
+def scan(line, frames, keep=None, parens=None, before="", told=None):
     """Follows the quoting of one line. `frames` is the stack of quoting contexts the line starts in
     (the outermost first; each a quote state: None, "'", "$'" or '"'), and is updated in place.
     Returns the heredoc operators the line opens as code: (strip_tabs, word, inside_substitution).
@@ -76,13 +91,22 @@ def scan(line, frames, keep=None, parens=None):
     an arithmetic group, so its `)` closes it rather than the `$(` around it. Without it the `)` of
     a `(set -f; ...)` inside a multi line `$( { ... } )` closed the substitution, and everything
     after was read as inside the double quotes around it (claude-config#2063). Kept across lines by
-    the caller that passes it; without one it is counted within the line alone."""
+    the caller that passes it; without one it is counted within the line alone.
+
+    `before` is the text a live backslash at the end of the line before joined this line onto, or
+    "" where nothing did. The shell takes a backslash newline out before it reads words, so a #
+    that starts this line starts a comment only where a word starts at the end of `before`
+    (claude-config#3475). Given a dict as `told`, sets in it "joins", whether this line ends in a
+    live backslash itself, "worded", whether a # at its start was read as text for that reason, and
+    "quoted", for each heredoc operator returned, whether any of its marker was quoted."""
     if READER_ERROR is not None:
         raise ReaderMissing("lib/shell-words.py could not be loaded (%s), so no heredoc's end marker "
                             "can be read" % READER_ERROR)
     if parens is None:
         parens = [0] * len(frames)
     ops = []
+    quoted = []
+    joins = worded = False
     i, n = 0, len(line)
     while i < n:
         c = line[i]
@@ -91,17 +115,28 @@ def scan(line, frames, keep=None, parens=None):
             # A comment, only where a word starts: after an escaped space, ; or ( the # is inside a
             # word, and a quote opening after it on the line is open on the lines that follow. The
             # rule is lib/shell-words.py's, the one the command reader asks (claude-config#3464).
-            if c == '#' and _sw.word_starts(line, i, ' \t;('):
-                break
+            # At the start of a joined line the word is asked of the line it was joined onto.
+            if c == '#':
+                if i == 0 and before:
+                    worded = not _sw.word_starts(before + line, len(before), COMMENT_AFTER)
+                    if not worded:
+                        break
+                elif _sw.word_starts(line, i, COMMENT_AFTER):
+                    break
             if c == '\\':
+                # Live only here and inside double quotes. The walk never reaches a backslash that
+                # ends a comment, having stopped at its #, and that one joins nothing in any shell
+                # (claude-config#3481).
+                joins = i == n - 1
                 i += 2
                 continue
             if c == '<' and line.startswith('<<', i) and not line.startswith('<<<', i) and (i == 0 or line[i - 1] != '<'):
                 # marker_start, since this walk follows no arithmetic: `$((1<<2))` opens nothing.
                 op = heredoc_opener(line, i, marker_start=True)
                 if op:
-                    marker, strip, _, end = op
+                    marker, strip, was_quoted, end = op
                     ops.append((strip, marker, len(frames) > 1))
+                    quoted.append(was_quoted)
                     i = end
                     continue
             if c == '$' and line.startswith('$(', i) and not line.startswith('$((', i):
@@ -127,6 +162,7 @@ def scan(line, frames, keep=None, parens=None):
                 frames[-1] = None
         else:
             if c == '\\':
+                joins = st == '"' and i == n - 1
                 i += 2
                 continue
             if st == '"' and line.startswith('$(', i) and not line.startswith('$((', i):
@@ -137,7 +173,84 @@ def scan(line, frames, keep=None, parens=None):
             if (st == "$'" and c == "'") or (st == '"' and c == '"'):
                 frames[-1] = None
         i += 1
+    if told is not None:
+        told.update(joins=joins, worded=worded, quoted=quoted)
     return ops
+
+
+def _closes(joined, line, strip, word, quoted):
+    """One line of a heredoc's body, read as bash and zsh read it: (whether it closes the heredoc,
+    the text it carries on to the next line). `joined` is what the lines before carried on.
+
+    An unquoted heredoc's body line that ends in an odd count of backslashes is joined to the next
+    BEFORE anything is compared with the marker (claude-config#3492; bash 3.2, zsh, sh and dash,
+    measured 2026-11-23 with texts that only echo and cat). So `a\\` then the marker is the one
+    line aMARKER and closes nothing, a line that is only a backslash then the marker closes, and so
+    does a marker split over two joined lines. A quoted marker's body is text as written and joins
+    nothing. With <<- the tabs come off the front of the joined line: bash closes at a tab and a
+    backslash followed by a tab and the marker where zsh does not, and this reads it as bash does,
+    since the lines after are then read as code."""
+    whole = joined + line
+    if (whole.lstrip('\t') if strip else whole) == word:
+        return True, ""
+    if not quoted and (len(line) - len(line.rstrip('\\'))) % 2:
+        return False, whole[:-1]
+    return False, ""
+
+
+def _ends_later(lines, start, strip, word):
+    """Whether an unquoted heredoc still open at lines[start] is closed by any line from there on."""
+    joined = ""
+    for k in range(start, len(lines)):
+        closes, joined = _closes(joined, lines[k], strip, word, False)
+        if closes:
+            return True
+    return False
+
+
+def _read(text):
+    """read_lines, with two more items a line: whether a # that starts it is text, joined onto a
+    word by the line before, and whether it stands after a heredoc no shell closes."""
+    frames = [None]
+    parens = [0]
+    pending = []  # heredocs opened and not yet read: (strip_tabs, word, quoted)
+    joined = ""   # what a heredoc's body lines have carried on to this one
+    before = ""   # the text a live backslash joined this line of code onto
+    rest = False
+    lines = text.split('\n')
+    for i, line in enumerate(lines):
+        if pending:
+            strip, word, quoted = pending[0]
+            closes, carried = _closes(joined, line, strip, word, quoted)
+            if (not closes and joined and (line.lstrip('\t') if strip else line) == word
+                    and not _ends_later(lines, i + 1, strip, word)):
+                # The marker, joined to the body line before it, and no line after that closes the
+                # heredoc. Every shell reads the rest of the file as its body, where a substitution
+                # runs wherever it stands, in a comment or a quoted string too. But whoever wrote
+                # the marker there meant it to close, and bash 3.2 does end a heredoc inside a
+                # `$( )` at the closing parenthesis and runs what follows as code. The reader cannot
+                # tell which the rest is, so it takes both safe sides (claude-config#3492): it
+                # closes here, so the rest is read as code, its functions and heredocs found; and
+                # code_lines drops none of the rest, since any of it may hold a substitution that
+                # runs. Read as body instead, the rest would stop being code for every scan that
+                # asks for code, on the strength of one stray backslash.
+                closes, carried, rest = True, "", True
+            joined = carried
+            before = ""
+            if closes:
+                pending.pop(0)
+            yield (i + 1, line, "end" if closes else "heredoc", "", [], False, rest)
+            continue
+        starts_quoted = frames[-1] is not None
+        keep, told = [], {}
+        ops = scan(line, frames, keep, parens, before, told)
+        # What the next line is joined onto. Only the last character and the backslashes before it
+        # are ever asked about, and a line gives up its joining backslash from an odd run, so the
+        # nearest line that left any text is enough.
+        before = (line[:-1] or before) if told["joins"] else ""
+        pending.extend((s, w, q) for (s, w, _), q in zip(ops, told["quoted"]))
+        yield (i + 1, line, "quoted" if starts_quoted else "code", "".join(keep), ops,
+               told["worded"], rest)
 
 
 def read_lines(text):
@@ -148,23 +261,8 @@ def read_lines(text):
     heredoc's body or end. So a brace in bare is the shell's own, never one in a string the file
     carries as data (claude-config#2063, where one inside a python3 -c string ended a function at the
     end of the file)."""
-    frames = [None]
-    parens = [0]
-    pending = []  # heredocs opened and not yet read: (strip_tabs, word)
-    for i, line in enumerate(text.split('\n')):
-        if pending:
-            strip, word = pending[0]
-            if (line.lstrip('\t') if strip else line) == word:
-                pending.pop(0)
-                yield (i + 1, line, "end", "", [])
-            else:
-                yield (i + 1, line, "heredoc", "", [])
-            continue
-        starts_quoted = frames[-1] is not None
-        keep = []
-        ops = scan(line, frames, keep, parens)
-        pending.extend((s, w) for s, w, _ in ops)
-        yield (i + 1, line, "quoted" if starts_quoted else "code", "".join(keep), ops)
+    for row in _read(text):
+        yield row[:5]
 
 
 def brace_depth(bare):
@@ -179,9 +277,15 @@ def brace_depth(bare):
 
 def _walk(text):
     """Every code line as (line_number, line, heredoc operators it opens, whether it is a heredoc's
-    body): the one walk code_lines and heredoc_body_lines both read."""
-    for n, line, kind, _, ops in read_lines(text):
-        if kind in ("end", "quoted") or line.lstrip().startswith('#'):
+    body): the one walk code_lines and heredoc_body_lines both read.
+
+    A line that starts with # is a comment unless the line before joined that # onto a word
+    (claude-config#3475). After a heredoc no shell closes nothing is left out but a closing word:
+    see _read."""
+    for n, line, kind, _, ops, worded, rest in _read(text):
+        if kind == "end":
+            continue
+        if not rest and (kind == "quoted" or (line.lstrip().startswith('#') and not worded)):
             continue
         yield (n, line, ops, kind == "heredoc")
 
