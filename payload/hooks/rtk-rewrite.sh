@@ -309,20 +309,19 @@ done <<< "$rtk_invocations"
 # a head check on a branch whose newest commit is a merge named an older commit with no error, and
 # a range left out every merge and stopped at 50. That changes the answer, not only its length.
 # `git show -s --format=%H` and `git rev-parse HEAD` were measured to name the true head. The
-# reader is started only when an rtk git invocation sits beside the word log, so an `rtk git
-# status` costs nothing more.
+# reader is started only when the words git and log both appear, with the same boundaries as the
+# gh word, so an `rtk git status` costs nothing more, and an rtk flag in front of git
+# (`rtk -v git log`) is still read, as `rtk -v gh` is.
 RTK_GH_WORD='(^|[^A-Za-z0-9_])gh([^A-Za-z0-9_]|$)'
+RTK_GIT_WORD='(^|[^A-Za-z0-9_])git([^A-Za-z0-9_]|$)'
 RTK_LOG_WORD='(^|[^A-Za-z0-9_])log([^A-Za-z0-9_]|$)'
 rtk_names_gh() { local LC_ALL=C; [[ "$1" =~ $RTK_GH_WORD ]]; }
-rtk_may_run_git_log() {
-  local LC_ALL=C
-  [[ $'\n'"$rtk_invocations" == *$'\n'"git "* ]] && [[ "$1" =~ $RTK_LOG_WORD ]]
-}
+rtk_may_run_git_log() { local LC_ALL=C; [[ "$1" =~ $RTK_GIT_WORD ]] && [[ "$1" =~ $RTK_LOG_WORD ]]; }
 if rtk_names_gh "$REWRITTEN" || rtk_may_run_git_log "$REWRITTEN"; then
   rtk_hook_dir="${BASH_SOURCE[0]%/*}"; [ "$rtk_hook_dir" != "${BASH_SOURCE[0]}" ] || rtk_hook_dir=.
   # shellcheck source=lib/push-scope.sh
-  # Without it gh api cannot be told from the rest, so the rewrite is not made, and that is said
-  # rather than passed in silence (claude-config#1922).
+  # Without it neither gh api nor git log can be told from the rest, so the rewrite is not made,
+  # and that is said rather than passed in silence (claude-config#1922).
   . "$rtk_hook_dir/lib/push-scope.sh" 2>/dev/null \
     || hook_allow_notice "[rtk] DID NOT RUN: rtk-rewrite.sh could not load lib/push-scope.sh (reinstall the hooks with claude-sync pull), so whether this rewrite would drop a field from a GitHub API call, or drop merge commits from a git log, could not be read, and the command runs unrewritten."
   ps__read "$REWRITTEN"; [ "$?" -ne 1 ] || exit 0

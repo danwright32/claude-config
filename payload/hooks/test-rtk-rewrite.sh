@@ -431,10 +431,11 @@ check "#399 a refused destination after a newline is refused" "$(refused_to_rewr
 # or every refusal above is satisfied by a hook that stopped rewriting compound commands (L159).
 # The pipe here belongs to a command rtk did NOT rewrite: until #1419 it hung off the `rtk git log`,
 # and an rtk invocation whose output feeds a pipe is now refused (see #1419 below), which is a
-# different rule from the one this control exists for.
-printf 'cd /repo && rtk git status; rtk git log --oneline -3; echo done | cat\n' > "$TMPROOT/rewrite"
-out_399="$(hook 'cd /repo && git status; git log --oneline -3; echo done | cat')"
-[ "$(printf '%s' "$out_399" | rewritten_to)" = "cd /repo && rtk git status; rtk git log --oneline -3; echo done | cat" ] \
+# different rule from the one this control exists for. And it is `rtk git branch` where it was
+# `rtk git log`, which is refused for itself since #3469.
+printf 'cd /repo && rtk git status; rtk git branch -a; echo done | cat\n' > "$TMPROOT/rewrite"
+out_399="$(hook 'cd /repo && git status; git branch -a; echo done | cat')"
+[ "$(printf '%s' "$out_399" | rewritten_to)" = "cd /repo && rtk git status; rtk git branch -a; echo done | cat" ] \
   && check "#399 a compound command with no refused destination is still rewritten" ok \
   || check "#399 a compound command with no refused destination is still rewritten" "out=$out_399"
 # And a word merely CONTAINING rtk, or the text rtk diff inside a quoted argument that is not a
@@ -494,7 +495,7 @@ check "#1419 nor one in a case statement, whose patterns the scan does not parse
 check "#1419 nor one captured inside an unquoted here document, which the shell expands" \
   "$(refused_to_rewrite "$(printf '%s\n' 'cat <<EOF' 'count: $(rtk grep -c x f)' 'EOF')")"
 # The class: the same predicate over every other destination, each measured to change piped output.
-check "#1419 the class: git log piped into wc" "$(refused_to_rewrite 'rtk git log | wc -l')"
+check "#1419 the class: git status piped into wc" "$(refused_to_rewrite 'rtk git status | wc -l')"
 check "#1419 the class: git diff saved as a patch" "$(refused_to_rewrite 'rtk git diff > out.patch')"
 check "#1419 the class: ls piped" "$(refused_to_rewrite 'rtk ls -la | cat')"
 check "#1419 the class: git status piped" "$(refused_to_rewrite 'rtk git status | cat')"
@@ -531,7 +532,7 @@ check "#1419 nested subshells opening with (( are not mistaken for arithmetic" \
 check "#1419 arithmetic with no rtk in it keeps the rewrite beside it" "$(kept_as 'echo $((1<<2)); rtk grep x f')"
 check "#1419 a loop whose output is not piped keeps it" "$(kept_as 'for f in a b; do rtk ls "$f"; done')"
 check "#1419 a word like done as an argument is not read as closing anything" "$(kept_as 'rtk git commit -m done')"
-check "#1419 a pipe character inside a format string keeps it" "$(kept_as 'rtk git log --format="%h|%s" -3')"
+check "#1419 a pipe character inside a format string keeps it" "$(kept_as 'rtk git show -s --format="%h|%s"')"
 check "#1419 a comment holding a pipe keeps it" "$(kept_as 'rtk ls ~/x # a | b')"
 check "#1419 a here document inside \$(...) inside quotes is not scanned as commands" \
   "$(kept_as "$(printf '%s\n' 'rtk git commit -m "$(cat <<'"'"'EOF'"'"'' "it's a | b > c" 'EOF' ')"')")"
@@ -714,6 +715,7 @@ check "#3469 nor one behind --no-pager after cd &&" "$(refused_to_rewrite 'cd /r
 check "#3469 nor one behind -c" "$(refused_to_rewrite 'rtk git -c core.pager=cat log -n 1')"
 check "#3469 nor a range" "$(refused_to_rewrite 'rtk git log --format=%h main..HEAD')"
 check "#3469 nor one after another git command" "$(refused_to_rewrite 'rtk git status; rtk git log -1')"
+check "#3469 nor one with rtk's own flag in front of git" "$(refused_to_rewrite 'rtk -v git log -1 --format=%H')"
 # The controls: other git subcommands keep their rewrite, the word log elsewhere changes nothing,
 # and `git show -s`, which was measured to name the true head, is kept (L159).
 check "#3469 rtk git status still keeps its rewrite" "$(kept_as 'rtk git status')"
