@@ -124,8 +124,19 @@ declare module 'claude-code' {
       /**
        * The files this session or one of its agents wrote (#1108), absolute; a path ending in `/`
        * stands for everything under that folder. Winding down counts only these as its uncommitted work.
+       * Kept whole until #3418, and since then only read, beside `writtenPart`, for a session whose
+       * mod was reloaded onto #3418 with its list already kept here.
        */
       written: string[]
+      /**
+       * The files this session or one of its agents wrote since #3418, as `written` holds them, kept
+       * in parts of a few hundred paths by id "0", "1" and on, so a call adds to the last part and
+       * never rewrites the whole list, which a long session grew past 10,000 paths. Read together
+       * with `written`, in order.
+       */
+      writtenPart: StateFamily<string[]>
+      /** How many parts of `writtenPart` there are; a part not yet written holds nothing. */
+      writtenParts: number
       /** Set on coming home, cleared once Claude has been told on the next prompt. */
       justHome: boolean
       /**

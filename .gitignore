@@ -52,6 +52,7 @@ state/
 .watch-stale
 .watch-restarted
 .watch-starts
+.watch-idle
 .my-push
 .mods-seen
 .trees-seen

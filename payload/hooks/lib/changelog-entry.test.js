@@ -191,6 +191,104 @@ s = entry.repoScope(null, 'Acme-Corp/enrollment-board');
 check(s.inScope === false && s.unreadable === true,
   'an unreadable registry read as a deliberate opt out: ' + JSON.stringify(s));
 
+// ------------------------------------- which label this gate requires, for sleep mode
+//
+// Sleep mode lets a session working overnight set the one label this gate requires on a pull
+// request it opened, and asks THIS file which labels those are, so there is no second list of them
+// in the mod to drift from this one (claude-config#3439). The cases are the committed set the mod's
+// reader of this answer is held to as well (L58): mods/scope-modes/tests/gate-label-fixtures.ts.
+
+const fs = require('fs');
+const os = require('os');
+const childProcess = require('child_process');
+
+const FIXTURES_FILE = path.join(__dirname, '..', '..', 'mods', 'scope-modes', 'tests', 'gate-label-fixtures.ts');
+let gateCases = [];
+try {
+  const text = fs.readFileSync(FIXTURES_FILE, 'utf8');
+  const from = text.indexOf('export const GATE_LABEL_FIXTURES = ');
+  const to = text.indexOf('\n]', from);
+  gateCases = JSON.parse(text.slice(from + 'export const GATE_LABEL_FIXTURES = '.length, to + 2));
+} catch (e) {
+  fail('the shared required label fixtures could not be read from ' + FIXTURES_FILE + ': ' + e.message);
+}
+// A set that read as empty would pass every case below by running none of them (L98).
+check(gateCases.length >= 10, 'the shared required label fixtures hold ' + gateCases.length + ' cases, fewer than the 10 committed');
+
+check(typeof entry.requiredLabels === 'function', 'changelog-entry.js exports no requiredLabels');
+const requiredLabels = typeof entry.requiredLabels === 'function'
+  ? entry.requiredLabels
+  : function () { return { state: 'absent', labels: null }; };
+
+gateCases.forEach(function (c) {
+  const read = c.registry === null
+    ? { state: 'unreadable', why: 'the registry could not be read' }
+    : { state: 'ok', registry: c.registry };
+  const got = requiredLabels(read, c.repo, c.today);
+  check(got.state === c.answer.state && JSON.stringify(got.labels) === JSON.stringify(c.answer.labels),
+    'required labels, ' + c.name + ': wanted ' + JSON.stringify(c.answer) + ', got ' + JSON.stringify(got));
+  // Whatever is not a plain "required" says why, since sleep mode puts that sentence in its refusal.
+  if (c.answer.state !== 'required') {
+    check(typeof got.why === 'string' && got.why.length > 0, 'required labels, ' + c.name + ': no reason given: ' + JSON.stringify(got));
+  }
+});
+
+// A registry file that is not there is "cannot tell", in the registry reader's own words.
+let g = requiredLabels({ state: 'missing', why: 'The dev update registry is not at /x.' }, 'acme/board', '2026-11-21');
+check(g.state === 'unknown' && /not at \/x/.test(g.why || ''), 'a missing registry did not read as unknown with its reason: ' + JSON.stringify(g));
+
+// Which labels need a sentence comes from parseEntry itself, never from a second statement of the
+// rule: each label the answer marks is one parseEntry refuses on a description with no block, and
+// each it does not mark is one parseEntry accepts there.
+g = requiredLabels({ state: 'ok', registry: REGISTRY }, 'Acme-Corp/enrollment-board', TODAY);
+check(g.state === 'required' && g.labels.length === entry.KINDS.length, 'a gated repo did not list every changelog label: ' + JSON.stringify(g));
+(g.labels || []).forEach(function (l) {
+  const bare = parse([l.label], 'A description with no block.');
+  check(bare.ok === !l.needsSentence, l.label + ' is marked needsSentence=' + l.needsSentence + ' while parseEntry says ok=' + bare.ok + ' with no block');
+});
+
+// The command line sleep mode runs: `node changelog-entry.js required-labels <owner/name> [file]`.
+// Run for real against a registry file on disk, with dates far either side of any clock.
+const cliDir = fs.mkdtempSync(path.join(os.tmpdir(), 'changelog-required-'));
+const cliRegistry = path.join(cliDir, 'repos.local.json');
+fs.writeFileSync(cliRegistry, JSON.stringify({ repos: [
+  { name: 'Board', repo: 'acme/board', changelogFrom: '2026-01-01' },
+  { name: 'Later', repo: 'acme/later', changelogFrom: '2999-01-01' },
+  { name: 'NoDate', repo: 'acme/nodate' },
+] }));
+function cli(args) {
+  const r = childProcess.spawnSync(process.execPath, [path.join(__dirname, 'changelog-entry.js')].concat(args), { encoding: 'utf8' });
+  let json = null;
+  try { json = JSON.parse(r.stdout); } catch (e) { json = null; }
+  return { status: r.status, json: json, stdout: r.stdout, stderr: r.stderr };
+}
+let c = cli(['required-labels', 'acme/board', cliRegistry]);
+check(c.status === 0 && c.json && c.json.state === 'required'
+  && JSON.stringify(c.json.labels.map(function (l) { return l.label; })) === JSON.stringify(['changelog/visible', 'changelog/technical', 'changelog/none']),
+  'the command line did not answer required with the three labels for a gated repo: ' + JSON.stringify(c));
+c = cli(['required-labels', 'acme/elsewhere', cliRegistry]);
+check(c.status === 0 && c.json && c.json.state === 'not-required' && c.json.labels.length === 0,
+  'the command line did not answer not-required for an unlisted repo: ' + JSON.stringify(c));
+c = cli(['required-labels', 'acme/later', cliRegistry]);
+check(c.status === 0 && c.json && c.json.state === 'not-required',
+  'the command line gated a repo whose start date has not arrived: ' + JSON.stringify(c));
+c = cli(['required-labels', 'acme/nodate', cliRegistry]);
+check(c.status === 0 && c.json && c.json.state === 'unknown' && /changelogFrom/.test(c.json.why || ''),
+  'the command line did not answer unknown, with why, for a repo listed with no start date: ' + JSON.stringify(c));
+c = cli(['required-labels', 'acme/board', path.join(cliDir, 'not-there.json')]);
+check(c.status === 0 && c.json && c.json.state === 'unknown' && /not at/.test(c.json.why || ''),
+  'the command line did not answer unknown for a registry file that is not there: ' + JSON.stringify(c));
+fs.writeFileSync(path.join(cliDir, 'broken.json'), '{ "repos": [');
+c = cli(['required-labels', 'acme/board', path.join(cliDir, 'broken.json')]);
+check(c.status === 0 && c.json && c.json.state === 'unknown' && /not valid JSON/.test(c.json.why || ''),
+  'the command line did not answer unknown for a registry that does not parse: ' + JSON.stringify(c));
+// No repository named is a usage error, never an answer about some repository.
+c = cli(['required-labels']);
+check(c.status === 2 && c.json === null, 'the command line answered with no repository named: ' + JSON.stringify(c));
+c = cli(['something-else']);
+check(c.status === 2, 'an unknown command did not exit 2: ' + JSON.stringify(c));
+fs.rmSync(cliDir, { recursive: true, force: true });
+
 console.log('  ' + passed + ' passed, ' + failed + ' failed');
 console.log('SUITE-RESULT passed=' + passed + ' failed=' + failed);
 process.exit(failed === 0 ? 0 : 1);

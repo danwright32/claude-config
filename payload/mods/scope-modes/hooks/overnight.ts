@@ -11,7 +11,9 @@ import { browserRefusal, type Browser } from './browser.ts'
 // not name is approved. So the list here is the plan's, item for item:
 //
 // - issue, label and milestone writes by gh or gh api, except filing an issue with its milestone
-//   and labels on this checkout's repository (Dan, 2026-11-09, #2581); any other GitHub write (a comment, which
+//   and labels on this checkout's repository (Dan, 2026-11-09, #2581), and except the one label that
+//   repository's own merge gate requires, set by gh pr create or gh pr edit --add-label on a PR this
+//   session opened (requiredlabel.ts, #3439); any other GitHub write (a comment, which
 //   decision 3 needs on the issue being worked, a review, a close) only on the repository the
 //   checkout is, everything gh does but a short list of known reads counting as a write, and one
 //   whose repository cannot be resolved is refused (L75); whatever `rtk proxy` runs is judged as
@@ -68,6 +70,12 @@ export type OvernightCall = {
    * it is refused, or undefined to allow it. Absent, every admin merge is refused.
    */
   adminMerge?: (gh: ModKitGh, repo: string) => Promise<string | undefined>
+  /**
+   * The judge of a `gh pr create` or `gh pr edit` that sets a label and passed the repository rule
+   * (requiredlabel.ts, #3439): why it is refused, or undefined to allow it. Absent, every label set
+   * on a PR is refused.
+   */
+  requiredLabel?: (gh: ModKitGh, repo: string) => Promise<string | undefined>
 }
 
 /** Never approved overnight, whatever else: a question for Dan and the plan approval (H8). */
@@ -692,6 +700,15 @@ const LABELS_ON_PR: Record<string, string[]> = {
   edit: ['--add-label', '--remove-label', '--milestone', '-m', '--remove-milestone'],
   create: ['--label', '-l', '--milestone', '-m'],
 }
+/** What every label or milestone on a PR is refused as; the judge of a required label adds why in brackets. */
+export const LABEL_REFUSAL = 'set labels or a milestone on a PR'
+/**
+ * Of those flags, the ones that set a label, by `gh pr` action (#3439). A PR carrying one of these
+ * and none of the others (no milestone, no label removed) is a write to judge further: the judge
+ * handed in (`requiredLabel`, requiredlabel.ts) allows only the one label the repository's own merge
+ * gate requires, on a PR this session opened. Everything else in LABELS_ON_PR is refused here.
+ */
+export const SETS_LABEL: Readonly<Record<string, readonly string[]>> = { create: ['--label', '-l'], edit: ['--add-label'] }
 const COMMENT_ENDPOINT = /^repos\/[^/]+\/[^/]+\/(?:issues|pulls)\/\d+\/comments$/
 const REPO_FLAGS = ['-R', '--repo', '--help', '-h']
 
@@ -699,7 +716,7 @@ const REPO_FLAGS = ['-R', '--repo', '--help', '-h']
 // read (undefined). REST and GraphQL reach the same decision through the same outcomes. `a` is
 // mod-kit's reading of the command (#961), asked once per command; with none, nothing it does or
 // where it goes can be said.
-type GhVerdict = { refuse: string } | { write: string | null | undefined; admin?: ModKitGh } | undefined
+type GhVerdict = { refuse: string } | { write: string | null | undefined; admin?: ModKitGh; label?: ModKitGh } | undefined
 const ghVerdict = (a: ModKitGh | undefined): GhVerdict => {
   if (!a) return { write: null }
   const { sub, act } = a
@@ -711,9 +728,15 @@ const ghVerdict = (a: ModKitGh | undefined): GhVerdict => {
   if (GH_READ_SUBS.has(sub) || GH_READ_ACTS.has(act) || !sub) return undefined
   // Changing or removing a comment is not posting one (decision 3 needs only that).
   if (act === 'comment' && hasFlag(a, '--delete-last', '--edit-last')) return { refuse: 'edit or delete a comment' }
+  // The flags of a PR that set a label and nothing else on the label list (#3439), when it has any.
+  let sets: readonly string[] = []
   if (sub === 'pr') {
     const labels = LABELS_ON_PR[act]
-    if (labels && hasFlag(a, ...labels)) return { refuse: 'set labels or a milestone on a PR' }
+    if (labels && hasFlag(a, ...labels)) {
+      // A milestone, or a label removed, beside it or alone: refused as every one was before #3439.
+      sets = SETS_LABEL[act] ?? []
+      if (hasFlag(a, ...labels.filter(f => !sets.includes(f)))) return { refuse: LABEL_REFUSAL }
+    }
     // A merge deletes the branch it merged (Dan, 2026-11-09, #2580); closing a PR unmerged does not.
     if (act === 'close' && hasFlag(a, '-d', '--delete-branch')) return { refuse: 'delete a branch' }
   }
@@ -722,9 +745,10 @@ const ghVerdict = (a: ModKitGh | undefined): GhVerdict => {
   const allowed = GH_WRITES[key] as string[]
   // An admin merge is a write to judge further: its shape and GitHub's answers are the judge's (#2125).
   if (key === 'pr merge' && hasFlag(a, '--admin')) return { write: a.named, admin: a }
-  const other = a.flags.find(f => !allowed.includes(f.name) && !REPO_FLAGS.includes(f.name))
+  const other = a.flags.find(f => !allowed.includes(f.name) && !REPO_FLAGS.includes(f.name) && !sets.includes(f.name))
   if (other) return { refuse: `run gh ${key} with ${other.name}` }
-  return { write: a.named }
+  // A label set on a PR is a write to judge further too: which label, and on whose PR, are the judge's (#3439).
+  return sets.length ? { write: a.named, label: a } : { write: a.named }
 }
 
 const apiVerdict = (a: ModKitGh): GhVerdict => {
@@ -1023,6 +1047,13 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
         if (v.admin) {
           if (!call.adminMerge) return 'run gh pr merge with --admin'
           const why = await call.adminMerge(v.admin, to.repo)
+          if (why) return why
+        }
+        // A label set on a PR passes the repository rule first too, then goes to its judge; with
+        // none, it is refused as every label on a PR was (#3439).
+        if (v.label) {
+          if (!call.requiredLabel) return LABEL_REFUSAL
+          const why = await call.requiredLabel(v.label, to.repo)
           if (why) return why
         }
       }

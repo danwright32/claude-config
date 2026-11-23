@@ -4315,15 +4315,17 @@ case "$mode" in
   # A failing suite whose own output runs long, so the verdict is far down the runner's lines.
   longfail) for i in $(seq 1 250); do echo "    noise line $i"; done; mode=fail ;;
 esac
+# The suite that fails in mode fail: test-a.sh, or the one runner-fails names.
+bad="$(cat "$ST/runner-fails" 2>/dev/null)"; bad="${bad:-test-a.sh}"
 for s in $mine; do
   name="${s##*/}"
-  if [ "$mode" = fail ] && [ "$name" = test-a.sh ]; then printf '  FAIL  %-38s %-26s %s\n' "$name" "1 failed" "1s"
+  if [ "$mode" = fail ] && [ "$name" = "$bad" ]; then printf '  FAIL  %-38s %-26s %s\n' "$name" "1 failed" "1s"
   elif [ "$mode" = notrun ] && [ "$name" = test-a.sh ]; then printf '  NOT RUN %-37s %s\n' "$name" "could not measure: no Chrome"
   else printf '  ok    %-38s %-26s %s\n' "$name" "passed" "1s"; fi
 done
 [ "$mode" = unmeasured ] && printf 'test-a.sh\tno Chrome on this Mac either\n' >> "$HOOK_TESTS_UNMEASURED_FILE"
 case "$mode" in
-  fail) echo "    expected 1, got 2"; echo "1 of $n SUITES FAILED: test-a.sh"; exit 1 ;;
+  fail) echo "    expected 1, got 2"; echo "1 of $n SUITES FAILED: $bad"; exit 1 ;;
   notrun) echo "1 SUITE(S) COULD NOT RUN HERE: test-a.sh"; echo "ALL $((n - 1)) SUITES THAT COULD RUN PASSED, and 1 could not run here"; exit 0 ;;
 esac
 echo "ALL $n SUITES PASSED"
@@ -4455,15 +4457,41 @@ check_eq "#3312 a change no untested suite is touched by merges" "0" "$rc"
 check "#3312 saying none of them runs here" "None of the 3 suites the checks left a part of untested is changed by this pull request or names a file it changed, so none was run here" "$out"
 check_eq "#3312 and runs no suite" "0" "$(count runner-calls 'part ')"
 
-# A pull request that only deletes a file changes nothing at the head a suite could name: the list
-# of changed files leaves deletions out, so the deleted file is neither a key nor a file said to have
-# none, and an empty list never reads as every suite changed (test-two-file-awk.sh).
-ut_fixture deleted 'git rm -q hooks/lib/b-code.sh.orig'
+# A pull request that only deletes a file no suite names chooses nothing. A deleted file is named as
+# it was in the tree the head left the base at (claude-config#3403), where two/register.ts is the
+# shortest end of its path nobody else has. Named against the head's tree, which no longer holds it,
+# register.ts would be its name, held there once by mods/one/register.ts, and test-c.sh would be run
+# for a file it never named. And an empty list of the files changed at the head never reads as every
+# suite changed (test-two-file-awk.sh).
+ut_fixture deleted 'git rm -q mods/two/register.ts'
 out="$(ut_run 7 --squash)"; rc=$?
 check_eq "#3312 a change that only deletes a file merges" "0" "$rc"
 check "#3312 with no suite chosen for it" "None of the 3 suites the checks left a part of untested is changed by this pull request" "$out"
 check_not "#3312 and the deleted file is not said to be one no suite can name" "Could not tell which suites test" "$out"
 check_eq "#3312 and none run" "0" "$(count runner-calls 'part ')"
+
+# A suite that names a file the pull request deletes is chosen and run (claude-config#3403): deleting
+# a file a suite names changes what the suite tests. Until then the files deleted were left out of
+# what the change touches, so such a suite never ran here. One pull request, three deletions:
+# b-code.sh.orig, which test-c.sh names; b-code.sh, moved to b-core.sh, which git lists as the old
+# path deleted and the new one added, and test-b.sh still names the old path; and notes.txt, whose
+# path ended the same way as hooks/lib/notes.txt all the way up in the tree it was deleted from.
+ut_fixture gone 'git rm -q hooks/lib/b-code.sh.orig notes.txt; git mv hooks/lib/b-code.sh hooks/lib/b-core.sh'
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3403 a change deleting files that suites name merges once those suites pass" "0" "$rc"
+check "#3403 the suite naming a deleted file is run, and the deletion is said" "test-c.sh (names hooks/lib/b-code.sh.orig, which this pull request deletes)" "$out"
+check "#3403 a moved file's old path is a deleted one, and the suite still naming it is run" "test-b.sh (names hooks/lib/b-code.sh, which this pull request deletes)" "$out"
+check_eq "#3403 the two run as part 1, the rest as part 2" "$(printf '2\thooks/test-a.sh\n1\ttests/test-b.sh\n1\ttests/test-c.sh')" "$(cut -f1,2 "$ST/runner-deal" 2>/dev/null | sort -k2)"
+check "#3403 a deleted file no suite could name alone is said, as a deleted one" "Could not tell which suites test notes.txt, which this pull request deletes: another file in the tree it was deleted from has a path ending the same way, so no suite can name it alone" "$out"
+check_eq "#3403 merged once" "1" "$(count gh-calls 'pr merge')"
+# Such a suite failing refuses the merge as any other does: the red says the suite must be brought
+# up to date in the same pull request.
+ut_state; printf fail > "$ST/runner-mode"; printf test-c.sh > "$ST/runner-fails"
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3403 a suite naming a deleted file that fails here refuses the merge" "1" "$rc"
+check "#3403 saying a suite failed, at which head" "Stopped: 1 of the suites the checks left a part of untested failed on this Mac at ${UT_HEAD:0:7}" "$out"
+check "#3403 with the runner's line for it" "FAIL  test-c.sh" "$out"
+check_eq "#3403 nothing merged on that failure" "0" "$(count gh-calls 'pr merge')"
 
 # A file whose name another file shares all the way up cannot be named, so which suites test it is
 # not known, and that is said, never passed over.
