@@ -1584,7 +1584,8 @@ const BACKGROUND = /(^|[^&>|<])&(?![&>])/
 const restoreAlone = async ($: EngineInterface, command: string, named = false, sources: readonly string[] = [], sequenced = false, found: { before?: boolean } = {}): Promise<string | undefined> => {
   const notAlone = 'the command runs more than this one git checkout or restore, and what runs first may change what it puts back'
   try {
-    const all = (await $.modkit.pipeline({ command })).filter(c => c.words[0] !== 'cd')
+    const read = await $.modkit.pipeline({ command })
+    const all = read.filter(c => c.words[0] !== 'cd')
     if (all.length !== 1 && !named) return notAlone
     const gits: (Awaited<ReturnType<typeof $.modkit.git>>)[] = []
     for (const c of all) gits.push(await $.modkit.git({ words: c.words }))
@@ -1601,7 +1602,9 @@ const restoreAlone = async ($: EngineInterface, command: string, named = false, 
     if (/(^|[\s/'"=])\.git(\/|\s|$)/.test(command)) return 'the command writes inside .git, which may change what the git checkout or restore puts back'
     const beside = all.some(c => c.pipedFrom !== undefined) || BACKGROUND.test(command)
     const last = restoring.lastIndexOf(true)
-    const later = sequenced && plainLine(command) && !BACKGROUND.test(command) ? runsAfter(all, last) : undefined
+    // #3401: the reader's own account of the line (`read`, a cd included) is what shows a quoted
+    // parenthesis or brace to be text; without it, any such character reads as grouping.
+    const later = sequenced && plainLine(command, read) && !BACKGROUND.test(command) ? runsAfter(all, last) : undefined
     for (const [i, c] of all.entries()) {
       if (restoring[i] || (later ? later.has(i) : !beside && i > last) || leavesGitAlone(c.words, gits[i])) continue
       found.before = i < last

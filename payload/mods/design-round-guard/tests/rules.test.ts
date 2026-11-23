@@ -128,6 +128,7 @@ import {
   MODULES_MAX,
 } from '../hooks/rules.ts'
 import { commandWrites, pipelineIn } from './mod-kit/hooks/writes.ts'
+import { pipeline } from './mod-kit/hooks/commands.ts'
 import { tempWord } from '../hooks/mod-kit/scriptvars.ts'
 import * as allRules from '../hooks/rules.ts'
 import { HELD_2141_AFTER, HELD_2141_BEFORE } from './held-2141-fixture.ts'
@@ -3309,10 +3310,150 @@ test('#3280: plainLine is a line that groups nothing, whatever it quotes', () =>
     'case x in x) git checkout origin/main -- f.tsx;; esac | git fetch',
     'time git checkout origin/main -- f.tsx | git fetch',
     'coproc git fetch; git checkout origin/main -- f.tsx',
-    // A parenthesis in quotes is not told from one that groups, so it is none either.
+    // Without the reader's account of the line (#3401), a parenthesis in quotes is not told from
+    // one that groups, so it is none either.
     'git checkout origin/main -- f.tsx && bun test | grep -E "(fail|pass)"',
   ])
     expect({ line, plain: plainLine(line) }).toEqual({ line, plain: false })
+})
+
+// #3401: #3280 read any brace, parenthesis or backtick anywhere in a call's text as grouping, so a
+// restore followed by a test piped through a search for "(fail|pass)" stayed held, though the
+// parentheses sit inside a quoted pattern and group nothing. Given mod-kit's own reading of the
+// line, plainLine reads such a character as text where that reading shows it so: every command is
+// one of the line's own, standing where it is typed, and every word holding such a character is
+// marked as handed on as its characters (literal: each pattern character quoted or after a
+// backslash, and no $ or backtick anywhere in the word). Each line here is read by the real reader.
+const R_3401 = 'git checkout origin/main -- f.tsx'
+const plain3401 = (line: string) => plainLine(line, pipeline(line))
+
+test('#3401: plainLine reads a quoted or escaped grouping character as text, by the reader\'s own account of the line', () => {
+  for (const line of [
+    // The issue's own line, and the same in single quotes.
+    `${R_3401} && bun test | grep -E "(fail|pass)"`,
+    `${R_3401} && bun test | grep -E '(fail|pass)'`,
+    `${R_3401} && claude plugin test payload/mods/demo 2>&1 | grep -E "(fail|pass)" | tail -3`,
+    // In a word of the test command itself.
+    `${R_3401} && bun test -t "renders (dark)" | tail -3`,
+    // A quoted brace, and one in a program for awk or sed, which no shell reads.
+    `${R_3401} && bun test | grep -E "a{2}"`,
+    `${R_3401} && bun test | awk '{print}'`,
+    `${R_3401} && bun test | sed -E 's/(pass|fail)/x/'`,
+    // After a backslash, outside quotes and inside double quotes.
+    `${R_3401} && bun test | grep fail\\(`,
+    `${R_3401} && bun test | grep "\\(a\\)"`,
+    // Joined by each of the ways a plain line joins commands, a cd and a setting beside them.
+    `${R_3401}; bun test | grep "(x)"`,
+    `${R_3401}\nbun test | grep "(x)"`,
+    `${R_3401} || bun test | grep "(x)"`,
+    `cd app && ${R_3401} && CI=1 bun test $FILES | grep "(x)"`,
+    // A quote that never ends: bash and zsh refuse the command it is in and run nothing of it
+    // (measured 2026-11-22, bash 3.2 and zsh 5.9, as -c text and through eval).
+    `${R_3401} && bun test | grep '(x`,
+  ])
+    expect({ line, plain: plain3401(line) }).toEqual({ line, plain: true })
+  // What already was plain still is, with the reading or without.
+  for (const line of [`${R_3401} && claude plugin test x 2>&1 | tail -5`, `git status; ${R_3401} || echo no`])
+    expect({ line, plain: plain3401(line), unread: plainLine(line) }).toEqual({ line, plain: true, unread: true })
+})
+
+test('#3401: plainLine still reads as grouping every character the shell, or a shell handed the text, may read as one', () => {
+  for (const line of [
+    // A subshell, a group, and a pipe out of either.
+    `${R_3401} && (bun test | tail)`,
+    `(${R_3401}) | git fetch`,
+    `${R_3401} && { bun test; } | tail`,
+    `{ ${R_3401}; } | git fetch`,
+    `${R_3401} && bun test | grep "(x)" | (cat)`,
+    `${R_3401} && { bun test | grep "(x)"`,
+    // A command the shell runs to fill in a word: double quotes do not stop one.
+    `${R_3401} && echo $(git fetch) | tail`,
+    `${R_3401} && echo "$(git fetch)" | tail`,
+    `${R_3401} && echo \`git fetch\` | tail`,
+    `${R_3401} && echo "\`git fetch\`" | tail`,
+    `X=$(git fetch) ${R_3401} | tail`,
+    // A backtick in single quotes runs nothing, but no mark of the reader says so of a word.
+    `${R_3401} && echo '\`git fetch\`' | tail`,
+    // A process substitution, bash's and zsh's.
+    `${R_3401} && diff <(git fetch) f.tsx | tail`,
+    `${R_3401} > >(git fetch)`,
+    `${R_3401} && diff =(git fetch) f.tsx | tail`,
+    // Arithmetic, as a word and as a command.
+    `${R_3401} && echo $((1+2)) | tail`,
+    `${R_3401} && (( x = 1 )) | tail`,
+    // A function, and what it is defined with.
+    `f() { bun test; }; ${R_3401} && f | tail`,
+    `function f { bun test; }; ${R_3401} && f | grep "(x)"`,
+    // Every word a compound command is written with, a quoted parenthesis beside it.
+    `if ${R_3401}; then bun test | grep "(x)"; fi`,
+    `for f in a; do ${R_3401}; done | grep "(x)"`,
+    `while ${R_3401}; do break; done | grep "(x)"`,
+    `until ${R_3401}; do break; done | grep "(x)"`,
+    `case x in x) ${R_3401};; esac | grep "(x)"`,
+    `select f in a; do ${R_3401}; done | grep "(x)"`,
+    `coproc git fetch; ${R_3401} | grep "(x)"`,
+    `time ${R_3401} | grep "(x)"`,
+    // A heredoc's body, read by the shell or not.
+    `${R_3401} && cat <<EOF | tail\n(a)\nEOF`,
+    `${R_3401} && cat <<'EOF' | tail\n(a)\nEOF`,
+    // Text another shell reads is code: eval, a shell's -c, xargs, find's -exec, ssh, a trap, an alias.
+    `${R_3401} && eval "(bun test)" | tail`,
+    `${R_3401} && bash -c '(bun test) | tail'`,
+    `${R_3401} && bash -c 'echo "(x)"' | tail`,
+    `${R_3401} && sh -c 'echo "(x)"' | tail`,
+    `${R_3401} && zsh -c 'echo "(x)"' | tail`,
+    `${R_3401} && bash -c "$X" | grep "(x)"`,
+    `${R_3401} && ls | xargs -I'{}' echo '{}'`,
+    `${R_3401} && find . -exec echo '{}' \\; | tail`,
+    `${R_3401} && ssh host '(x)' | tail`,
+    `${R_3401} && trap '(x)' EXIT | tail`,
+    `${R_3401} && alias x='(a)' | tail`,
+    // A command run behind another (the reader says which, never whether that one is a shell).
+    `${R_3401} && timeout 5 bun test | grep "(x)"`,
+    `${R_3401} && sudo bun test | grep "(x)"`,
+    `${R_3401} && rtk proxy bun test | grep "(x)"`,
+    // A parenthesis in an unquoted pattern, and braces that make more words.
+    `${R_3401} && ls @(a|b) | tail`,
+    `${R_3401} && ls !(x) | tail`,
+    `${R_3401} && ls *(.) | tail`,
+    `${R_3401} && ls {a,b} | tail`,
+    `${R_3401} && ls a{1,2}.tsx | grep "(x)"`,
+    // Inside a test, a parenthesis groups what is tested.
+    `${R_3401} && [[ ( -n a ) ]] | tail`,
+    // A word holding a $ is never read as text: in double quotes the shell expands it, and for one
+    // in single quotes no mark of the reader says its braces are quoted too (awk's own program).
+    `${R_3401} && echo "$HOME (x)" | tail`,
+    `${R_3401} && bun test | grep "\${X}(a)"`,
+    `${R_3401} && bun test | awk '{print $1}'`,
+    // The reader does not read a $'...' string, whose \\' does not end it: here the shell runs the
+    // group, and the reader gives one quoted word. Any line holding such a string is not plain.
+    `${R_3401} && echo $'\\' x' | (git fetch; cat) #'`,
+    `${R_3401} && echo $'(a)' | tail`,
+    `${R_3401} && bun test | grep 'x$' | grep "(a)"`,
+    // What the reader leaves out of a command's words: a comment, and a setting's value.
+    `${R_3401} && bun test | tail # (x)`,
+    `${R_3401} && bun test | grep "(x)" # \`git fetch\``,
+    `${R_3401} && X="(a)" bun test | tail`,
+  ])
+    expect({ line, plain: plain3401(line) }).toEqual({ line, plain: false })
+  // No reading given, as when the reader could not read the line.
+  expect(plainLine(`${R_3401} && bun test | grep "(x)"`)).toBe(false)
+  // A reading that does not account for the text: a mark this rule does not know, a word with the
+  // character and no mark, a character no word holds, and a word holding one more than the text.
+  const line = `${R_3401} && bun test | grep "(x)"`
+  const read = [{ words: ['git', 'checkout', 'origin/main', '--', 'f.tsx'] }, { words: ['bun', 'test'] }, { words: ['grep', '(x)'], pipedFrom: ['bun', 'test'], literal: [false, true] }]
+  expect(plainLine(line, read)).toBe(true)
+  expect(plainLine(line, read.map((c, i) => (i === 1 ? { ...c, groupedSomeNewWay: true } : c)))).toBe(false)
+  for (const mark of ['substitution', 'arithmetic', 'xargs', 'proxied'])
+    expect({ mark, plain: plainLine(line, read.map((c, i) => (i === 2 ? { ...c, [mark]: true } : c))) }).toEqual({ mark, plain: false })
+  for (const mark of ['behind', 'found', 'heredocs', 'derived', 'worked', 'compares'])
+    expect({ mark, plain: plainLine(line, read.map((c, i) => (i === 2 ? { ...c, [mark]: [] } : c))) }).toEqual({ mark, plain: false })
+  expect(plainLine(line, read.map((c, i) => (i === 2 ? { ...c, unread: 'run as text by eval' } : c)))).toBe(false)
+  expect(plainLine(line, read.map(c => ({ words: c.words, pipedFrom: c.pipedFrom })))).toBe(false)
+  expect(plainLine(line, read.map((c, i) => (i === 2 ? { ...c, literal: [false, false] } : c)))).toBe(false)
+  expect(plainLine(line, read.slice(0, 2))).toBe(false)
+  expect(plainLine(line, [...read, { words: ['echo', '(y)'], literal: [false, true] }])).toBe(false)
+  expect(plainLine(`${line} | grep ")("`, [...read, { words: ['grep', '(('], literal: [false, true] }])).toBe(false)
 })
 
 test('#3280: holdsAsFile reads git ls-tree as holding exactly the one file asked for', () => {

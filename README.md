@@ -5025,6 +5025,37 @@ As of 2026-11-22 the count of past commands it newly refuses had been made on ne
 the area check held the command that runs it on the personal MacBook.
 Suite: `test-slack-drafts-python-file-runs.sh`.
 
+Two refusals of a file left unread now read the file where what it holds is certain
+(claude-config#3395). Counted for #3218 over one Mac's records of 2026-11-08 to 11-21, a sourced
+path the gate could not work out refused 59 commands and a script written earlier in the same
+command 49, and none of the 108 posted. Put through the gate as it stood on 2026-11-22 most of
+those shapes already passed; the ones below did not.
+A sourced path built from the script's own `$0` through a variable
+(`D="$(cd "$(dirname "$0")" && pwd)"` then `. "$D/lib/x.sh"`), or from a word the command line
+hands the script (`. "$1"` in `bash probe.sh lib/x.sh`), is worked out and the file read
+(`lib/script-params.py`). The `$0` is taken for a text bash or dash reads; `$1` from a script run
+by its path or by a shell with no option but `-e`, `-u`, `-x`, `-v` and `-n`, and only before
+anything in the script that could change it (shift, set with an operand, eval, a sourced file, a
+function, a loop). They are taken up only where a source command of the script names a path the
+gate cannot work out without them, which is where it refused the script unread: a script with
+no such command is read exactly as before, and from that command on the script's variables are
+known with them to every command after it. A first form gave them to every script, and a script
+that only hands its `$1` on to a program was then refused where it had passed (three cases of
+the gate's own suite, 2026-11-22).
+A script made earlier in the command by a sed filter sent to a file
+(`sed 's/a/b/' x.sh > y.sh; bash y.sh`) is read as sed leaves it, by an emulation of the part of
+sed POSIX fixes (`p`, `d`, `s` with `g` and `p`; line, `$` and regex addresses, ranges, `!`;
+`-n`, `-E`, `-e`) on input known exactly, held to this Mac's sed on every program its suite
+gives it; and one made by `git show HEX:PATH > y.sh` (or `cat-file -p`, `cat-file blob`) is read
+as the commit holds it, for a hex object name only, since an earlier command can move a ref
+(`lib/exact-output.py`).
+Still refused unread, each by choice: awk, a group's output sent to a file, a file Python
+writes, `sed -i` with a program that is not written out, a symbolic ref (`HEAD`, `origin/main`),
+a function's `$1`, a sourced file's `$1`, a script handed its words by xargs or `find -exec`, and
+a variable set from `mktemp` or the environment. A module the gate cannot find, and a script
+handed a file that names the send call, are refused as before (#3218).
+Suite: `test-slack-drafts-reads-more.sh`.
+
 Running `python3 payload/skills/nudge/test_nudge.py` directly is refused, because its fake server
 names `chat.postMessage`, and since claude-config#2844 so is `python3 -m unittest` over the same
 file, which before then passed only because the gate did not read what unittest runs. The suite
@@ -7873,7 +7904,14 @@ what its -exec runs, since each can change the folder or the environment with no
 and the options that do it are not given, and with `assignments: true` each command that only sets
 a value (`T=x;`, which runs nothing and is otherwise left out) as its assignments (a guard relying
 on any of the three first asks about a line it knows the answer for, since a copy of mod-kit
-loaded before #3093 answers with none of them and says nothing), of which files a command
+loaded before #3093 answers with none of them and says nothing), and with `follow: true` (#3398)
+each command's `followed`: for a word that is one variable alone (`$W`, `"$W"`, `${W}`), the value
+the call itself gives it, only where the call's own text makes that certain (set once, in the plain
+settings the call opens with, `W=/path;` or on a line of its own; a name of one letter or one
+mixing capitals and small letters; nothing else in the call able to change it; no heredoc), null
+for every other word, the words themselves never changed and nothing given to a reader that does
+not ask, so every other mod reads exactly what it read (docs/mods-design.md has every condition;
+a copy of mod-kit loaded before it follows nothing), of which files a command
 changes (`$.modkit.writes({ command, cwd, home })`: redirects, `tee`, the destination of `cp`, `mv`,
 `ln`, `install`, `rsync` and `ditto` (into a folder, under each source's name), every file of `sed`,
 `perl`, `ruby` or `gawk` editing in place, `dd of=`, since #3279 every file an editor is opened on
@@ -7946,7 +7984,9 @@ question again, used by the design round guard and ask before saving), of git co
 (`$.modkit.git({ words, env })`: the subcommand, its arguments, the folder `-C` names and, since
 #3337, the repository and the working folder the command names apart from that folder, by
 `--git-dir`, `--work-tree`, `GIT_DIR` or `GIT_WORK_TREE`, each as written, the two variables read
-from the `env` that `pipeline` gives the command), of gh commands
+from the `env` that `pipeline` gives the command, and, since #3398, the folder more than one `-C`
+leads to, each read from the one before it as git reads them, as `chained`, null where it cannot
+be worked out, beside `dir`, which stays the last `-C` as written), of gh commands
 (`$.modkit.gh({ words })`: the subcommand and action past gh's
 global flags, each flag as pflag reads it, the positionals, the repository the command names itself,
 from `-R`, a github.com link or a `gh repo` owner/name, and for `gh api` its method, endpoint,
@@ -8198,7 +8238,17 @@ changes (a checkout of a path, `git restore`, `git rm`, `git mv`); a script's wr
 docs/mods-design.md, but since #1592 a file handed to a script file as its argument, `python3
 tool.py notes.txt`, is judged and noted as an edit of it), or a checkout wide git command (checkout,
 switch, `branch -D`, `reset --hard`, `stash pop`, `add -A` or `.`) in a checkout another open
-session works in, or since #3021 a command there whose effect cannot be read (mod-kit's `unread`:
+session works in (since #3398 every checkout the command acts on as git reads it: where a `cd`
+before it and each `-C` lead, and the repository and working folder it names by `--git-dir`,
+`--work-tree`, `GIT_DIR` or `GIT_WORK_TREE`, beside the folder the guard always asked about; a
+`-C` folder named with a variable the same call sets, `W=/path; git -C "$W" checkout x`, is
+judged by the folder the variable holds, exactly where mod-kit's `followed` gives it, so set once
+at the start of the call under a name of one letter or of mixed capitals and small letters, and
+used alone; one whose repository cannot be told, any other folder the shell fills in or a `cd`
+that cannot be followed, is stopped while another session is open, with how to write it, and so
+is one where git or mod-kit's walk for a checkout did not answer, to try again), or since #3021
+a command there
+whose effect cannot be read (mod-kit's `unread`:
 `eval`, a command a value names, an alias being set, `ssh`), judged once per checkout against the
 folder it runs in, asks Sonnet for Proceed, Worktree or Stop with the other session's latest request
 (read from its transcript). Proceed is a toast; Worktree and Stop are the grey card plus a message
@@ -8652,6 +8702,29 @@ asks. Since #3343 a shell command that writes that file is refused too, with Edi
 its place, and the For good question about a write that takes an entry out, moves one to another
 section or changes a section heading is refused until it names each of them (both told in full
 below).
+Since #3402 a shell command that deletes a lasting memory file or moves one away is asked about
+too, in a question of its own: every removal mod-kit's reader reports (rm, unlink, rmdir, a mv's
+source, find -delete, shred -u, a packer's source) whose words name lasting memory or match it, the
+memory folder taken whole, and a folder that holds the memory under home (`~/.claude/projects/<a
+project>`, `~/.claude`). A file emptied in place (`truncate`, `shred`) is asked about the same way,
+said as emptied. Where the reader cannot limit what goes under a folder (`rm -r`, what a
+`find -exec` hands to rm), the lasting memory the command names under it is asked about as a
+guess. A file that is not there is not asked about. Claude's question names what
+goes and says why, and the mod adds what it measured as Dan is asked: where a move puts the file,
+or whether git can bring a deleted or emptied one back (held unchanged, held with changes since,
+not held, or not readable). The answers are Keep as is, first, and Delete, Move or Empty; a save's
+For good approves no removal and a removal's answer approves no save, a removal whose consequence
+changes after he answers (what git holds of the file, where a move lands, what a folder holds) is
+asked about again, his "from now on" words cover no removal, and a subagent's removal is refused.
+A command that removes lasting memory and also writes other lasting memory is refused
+whole, each part to be sent by itself, and one that also writes the lessons file by shell is
+refused as it was before (#3343). What the command does is read again when its question arrives,
+and one that has become either by then, or takes files away in more than one way, is refused
+before Dan reads the question. Not covered: what git itself removes or puts back (Dan's
+decision on #1136 stands), `git clean`, `git stash` and `git reset --hard`, what a `find -exec`
+hands to rm by a pattern, what `xargs` hands to rm, and any other folder taken whole that holds a
+lasting memory file the command does not name (docs/mods-design.md, "A removal is asked about in a
+question of its own").
 Since #3295 the picker is refused, before he is asked and saying which character and
 where, when its rule or its question holds a character he cannot see: a control other than the
 newline (a tab, a carriage return, the escape of a terminal sequence), a format character (zero
@@ -8857,7 +8930,10 @@ commit, and `git ls-tree` for whether that commit holds the file; the command mu
 its source and its paths alone (`git checkout origin/main -- <file>`, `git restore --source
 origin/main <file>`), with nothing before or beside it that may change what the name means, though
 on a line that groups nothing what runs once the restore has finished no longer counts, a test run
-piped to its last lines included; any other commit, a local branch that differs from what was
+piped to its last lines included, and since #3401 a brace or parenthesis that mod-kit's own reading
+of the line shows to be quoted text groups nothing (a search for `"(fail|pass)"`), while a
+subshell, a group, a substitution, text handed to a shell and anything that reading does not
+account for still do; any other commit, a local branch that differs from what was
 fetched, the index, any option, a pattern, a file the default branch does not hold and every case
 git cannot answer for is judged as before, and so is putting the changed file back afterwards),
 since #3279 what a git command that moves committed work brings into the working tree (Dan,

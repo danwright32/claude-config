@@ -3473,6 +3473,97 @@ and the band question is removed rather than kept beside it (L29). Three defects
   are refused, never asked, and the main session is told what it would have saved (above).
 - The band look (mod-kit's `$.modkit.question`) had no other caller, so it was removed too (#796).
 
+### A removal is asked about in a question of its own (#3402)
+
+The mod judged only the files a command puts content into, so a shell command that deleted a
+lasting memory file, or moved one away, ran with no question. Measured in the mod's suite on
+2026-11-22 before any change: `rm`, `unlink`, `shred -u`, `gzip`, `rm -r` of the memory folder,
+`find -delete` and `mv` away each ran unasked, for every kind of lasting memory file.
+
+- **What counts.** A change mod-kit's write reader reports as a removal (`changes` with
+  `does: 'remove'`: rm, unlink, rmdir, a mv's source, find -delete, shred -u, a packer's source)
+  whose words name a lasting memory file or match one: a path, a path through a variable the reader
+  follows, a pattern (`rm *.md` is judged by the lasting memory names it may match in the folder it
+  lands in, `rm <memory folder>/*.md` by the folder), a find -delete limited to a lasting memory
+  name. A folder taken whole counts when it is itself lasting memory (the memory folder), or holds
+  the memory under home: a project's records under `~/.claude/projects`, that folder, or
+  `~/.claude` and anything above it. A target the words cannot name is judged by the lasting memory
+  the command mentions, exactly as a write is (`lastingFiles`), and said as a guess.
+- **A file emptied in place counts too.** `truncate` and `shred` leave the file and take what it
+  held, which the reader reports as a change that truncates (`does: 'truncate'`). It ran unasked
+  with the first pass built (measured 2026-11-22). It is asked about as a removal is, said as
+  emptied: "Empty <file>: <why>?", then "The file stays, and what is in it is cut short or wiped."
+  and what git holds, with the answers "Keep as is" and "Empty". A file the same command empties
+  and then removes (`shred -u`) is one deletion.
+- **A folder the reader cannot limit.** For `rm -r <folder>`, a `mv` of a folder and what a
+  `find -exec` hands to rm, the reader reports a removal under the folder with no names (it carries
+  a find's `-name` for `-delete` alone). The lasting memory the command names under that folder is
+  then taken as what may go: a path spelled out where it is under the folder, a bare name where it
+  would sit at the folder's top, which is where the disk is asked. It is said as a guess.
+  `find . -name CLAUDE.md -exec rm {} +` ran unasked before this (measured 2026-11-22).
+- **The disk decides the rest.** A file that is not there is no removal, so `rm -f CLAUDE.md` in a
+  folder with none is not asked about. A folder above the memory under home counts only for what is
+  found under it. A disk that cannot say whether a file is there fails the hook, which fails
+  closed. One that says a path is there and cannot say what is at it does not: the removal is
+  still asked about, without the sentence that it is a whole folder, and a move onto such a path
+  is said as replacing what is there.
+- **The question is the removal's own** (the issue's first open question, settled by the building
+  session, not by Dan). It is tied to the call by the same `metadata.source` a save's question
+  carries. Claude's sentence names what goes and says why; the mod adds, as Dan is asked, what it
+  measured: where a move puts the file and whether one is there already, or whether git can bring a
+  deleted or emptied file back (`git ls-files` and `git status` on the file: held unchanged, held with changes
+  since its last commit, not held, or not readable, which is said as not readable and never as
+  held). The header is "Memory file" and the answers are "Keep as is", first, and "Delete", "Move"
+  or "Empty". None of a save's words or answers appear in it (L9, L180), nor in its refusal when
+  the answer cannot be read, which said "Not saved" until 2026-11-22 and says "Not deleted", "Not
+  moved" or "Not emptied" and that nothing was.
+- **The two approvals never stand in for each other.** A removal's approval is a record with
+  `removes` (what goes, how, where to, what git held), and lets through only the same call removing
+  exactly that with the same consequence (`coversRemoval`), so a removal whose consequence changes
+  after Dan answers is asked about again: what git holds of the file, where a move lands and
+  whether a file is there, what a folder holds, the names a find is limited to. What is in a file
+  is not compared, so a file git does not hold can change after he answers and still go. A save's approval carries no `removes` and lets no removal through;
+  an approval with `removes` lets no save through, and `$.askBeforeSaving.isApproved` answers false
+  for it. Dan's own permanent words ("from now on") cover no removal. A subagent's removal is
+  refused and never asked about, as its save is, and one that takes files away in more than one
+  way is refused in words that say each way, never all of it as a deletion.
+- **One question per command.** A command that removes lasting memory and also writes lasting
+  memory other than where its move lands, or that takes files away in more than one way (one
+  deleted, another moved or emptied), is refused whole with no question waiting, and each part is
+  asked about when sent by itself. A lasting memory file moved onto another is one move question,
+  which says the file there is replaced.
+- **The same rule again as Dan would be asked** (lessons review of #3430). What a command does is
+  read from the disk when the call is sent and again when its question arrives, and the two can
+  differ though the command's words are the same: a file its other half takes away has arrived, or
+  the patch it applies has come to name lasting memory. Measured 2026-11-22 at e369a51a35, where the answer
+  applied neither refusal: `rm CLAUDE.md && mv AGENTS.md /tmp/A.md`, first sent while AGENTS.md was
+  absent, was put to Dan under Delete with "Deletes" said of both files once it had arrived, and
+  his Delete ran both halves; `rm *.md && git apply fix.patch` was put to him as a plain deletion
+  after the patch came to name a memory file, and the call was refused whole only once he had
+  answered. So the answer asks the one rule the first check asks (`splitBy`), and the lessons file
+  by shell with it, and such a command is refused before Dan reads the question, saying what it
+  does now, with nothing left waiting. The approval's `files` are those of the first check that
+  are still written as he is asked, never more.
+- **The lessons file by shell stays refused.** A command that removes lasting memory and also
+  writes the lessons file by shell (`mv CLAUDE.md ~/.claude/LESSONS.md` among them) was refused
+  outright before #3402, with no question waiting (#3343). With the first pass built it had become
+  a Move question Dan could approve (measured 2026-11-22), so such a command is left to the save
+  side, which refuses it as before: no Move or Delete approves what no For good could.
+- **Asleep**, the removal is noted for the morning report as a finding (the report's kind for
+  anything else noticed; a kind of its own would be a change to the report) and refused.
+- **Not covered.** What git itself removes or puts back (`git rm`, `git mv`, a checkout or restore
+  of a path) is reported by the reader as `byGit` and left unjudged by Dan's decision on #1136
+  (2026-10-13: "the design round guard and the collision guard judge git made changes (byGit). Ask
+  before saving does not."); `git clean`, `git stash` and `git reset --hard` are not reported by
+  the reader at all. Nor is what a `find -exec` hands to rm by a pattern (`-name '*.md'`): covering
+  it needs the reader to carry a find's `-name` patterns onto the changes its `-exec` command
+  makes, as it does for `-delete` (`findNames` in mod-kit's `writes.ts`). Nor what `xargs` hands to
+  rm, which is asked about as a possible save, as before. Nor any other folder taken whole that
+  holds a lasting memory file the command does not name (`rm -rf <a project folder>`): the reader
+  reports it, and the mod could look at the folder's top, but it would then ask each time a
+  worktree or a copy of a repository is removed with rm, and refuse a subagent's, so it is left for
+  Dan to decide, as a tree written over such a folder is not looked into either.
+
 ## Design round guard (#978), built 2026-10-08
 
 Dan, 2026-10-08: "can we add a standing rule across all sessions that if claude is building
@@ -4581,9 +4672,156 @@ whatever the number said.
   a run of short options) hold the command, with how to write it. A commit with no such parent is
   one git cannot answer for, and is held.
 - Known limits. A session's own environment may already carry `GIT_DIR` or `GIT_WORK_TREE` before
-  any command is typed, which no reader sees. The collision guard and scope modes place a git
-  command by `-C` alone and are unchanged here. The shared reader keeps only the last `-C`, while
-  git reads each from the one before it.
+  any command is typed, which no reader sees. Scope modes places a git command by `-C` alone and
+  is unchanged here. The collision guard did too until #3398 (below), which has it ask about every
+  checkout the command acts on. The shared reader kept only the last `-C`, while git reads each
+  from the one before it, and #3398 added the folder a chain of them leads to.
+
+### What #3398 changed: the folder more than one -C leads to, 2026-11-22
+
+git reads each `-C` from the one before it. mod-kit's git reader kept only the last, so every mod
+placed `git -C /a -C b merge y`, which runs in `/a/b`, in `<the folder it runs in>/b`.
+
+- Measured with git 2.51.1 on macOS, in throwaway repositories `m/a`, `m/a/b`, `m/b` and `m/c`, run
+  from `m` and asked `git rev-parse --show-toplevel`. `-C <m>/a -C b` and `-C a -C b` answer
+  `m/a/b`. `-C a -C <m>/c` answers `m/c`: an absolute one starts again from itself. `-C a -C ""`
+  answers `m/a`, `-C "" -C b` answers `m/b` and `-C a -C "" -C b` answers `m/a/b`: an empty one
+  changes nothing. `-C a -C ../c` answers `m/c`. `-C nothere -C <m>/c` and `-C a -C nothere` both
+  exit 128 (`cannot change to 'nothere'`) and run nothing, so a folder that is not there stops git
+  wherever it stands in the chain. git's other global options between two (`-c core.x=y`,
+  `--no-pager`) change nothing. `-Ca` and `-C=a` are no option (exit 129). A relative `--git-dir`
+  or `--work-tree` is read from the folder every `-C` leads to (`-C a --git-dir=b/.git -C b` is
+  refused: there is no `a/b/b/.git`).
+- `$.modkit.git` hands that folder on as `chained`, as written and read as `dir` is, and only where
+  it is not what `dir` says: never for one `-C` or none, nor for a chain whose last `-C` is
+  absolute. A value starting `~/` or `$HOME/` is the home folder, as every path reader here
+  takes it.
+- `dir` is unchanged: the last `-C` as written. A mod that places a git command by `dir` judges
+  exactly the calls it judged before, so nothing held under the old reading passes because the
+  reader moved. A mod moves to `chained` in its own change, and decides there whether it goes on
+  judging `dir` too. The collision guard is the first (below). The design round guard, the write
+  reader's placing of what git itself writes, and scope modes still place a chained command by
+  `dir`.
+- Where the chain cannot be worked out, `chained` is null, the mark `pipeline` gives the folder of
+  a command behind a `cd` it cannot follow, and never a guess. That is a value the shell fills in
+  after another `-C` (`-C /a -C "$B"`: absolute or relative, which only the shell knows), a folder
+  read from such a value (`-C "$A" -C b`: empty, `$A` changes nothing and git runs in `b`), a
+  pattern, a brace list and another user's home. Only a later absolute `-C` makes it known again.
+  One `-C` the shell fills in is still handed on in `dir` as written, as it always was.
+- The answer to #3398's first open question, whether the shared reader should mark a path it can
+  only guess: yes for the one place this reader would otherwise have had to guess, and that mark
+  is the null above. The write reader's guessed path (a working folder named by a value it cannot
+  follow) is not marked here. It is the write reader's to mark, in its own change.
+
+The collision guard judged a checkout wide git command (a branch switch, `reset --hard`, `stash
+pop`, `add -A`, `branch -D`) against the sessions in one folder: the last `-C` read from the
+session's folder, else that folder. It handed mod-kit's git reader no settings and followed no
+`cd`, so `git --git-dir=/other/.git --work-tree=/other checkout main`, the same through `GIT_DIR`
+and `GIT_WORK_TREE`, `cd /other && git -C sub checkout main` and `git -C /other -C sub checkout
+main` each ran unjudged beside a session at work in `/other`.
+
+- It now asks about every checkout the command acts on. The folder it runs in comes from
+  `$.modkit.pipeline` (where a `cd` leaves the shell) and the reader's `chained` or `dir`, put to
+  git as `git -C <folder> -C <as written> rev-parse --show-toplevel`, so git reads a relative
+  `-C` itself. For a command naming its repository or working folder apart, git is asked with the
+  command's own naming where the files land, and which repository it is
+  (`rev-parse --absolute-git-dir`): the checkout around that repository is judged, and so is every
+  other session's checkout that git says is that same repository. With only the repository named,
+  the files land in the folder the command runs in and the branch that moves is the named
+  repository's (measured), so both are judged. The rule is `whereGit` in `collide.ts`.
+- The folder the guard always asked about is still asked first, in the same words. A command
+  judged before is judged as it was, and a plain command, one with one `-C` and one in the folder
+  it runs in put exactly the one question to git they always put. Nothing more is asked while no
+  other session is open.
+- That old question is Dan's to drop. For `git -C /other -C sub checkout main` and for
+  `cd /other && git checkout main` it names the session's own checkout, which git does not touch.
+  Read as git reads them, both would run unjudged with nobody in `/other`. That is the correct
+  reading and a loosening, so both questions are put until he decides (the test is marked his).
+- Where the guard cannot tell the repository, it stops the command while any other session is
+  open, and says to write every folder out in full. That is a `-C`, `--git-dir` or `--work-tree`
+  value the shell fills in, a chain mod-kit marks null, a `cd` that cannot be followed before a
+  relative folder, and `GIT_DIR` or `GIT_WORK_TREE` named anywhere in the call but on the git
+  command itself (git reads an exported one, which no reader follows). Nothing is put to the
+  judge and no session is told, since there is no checkout to name to either. Until now each of
+  these ran unjudged. A folder git names no checkout for has nobody in it to ask, as before.
+- A `-C` folder named with a variable the same call sets is followed, and the command judged by
+  the folder the variable holds (Dan, 2026-11-22, asked to sign the stop above off: "Follow the
+  variable first"). Counted that day over each Mac's recorded commands, the watched commands the
+  guard could not tell were nearly all one form, `W=<folder>; git -C "$W" checkout ...`: 12 of 13
+  on the personal MacBook and 11 of 12 on the work MacBook. Each ran unjudged before #3398 and was
+  stopped by the bullet above. Followed, a folder where another session is at work is held as any
+  command there is, and one where none is runs. The guard asks `$.modkit.pipeline` with
+  `follow: true`, and `followedFolders` in `collide.ts` writes the value mod-kit gives into the
+  word after each `-C` of git's own (one standing before the subcommand; a subcommand's `-C`, as
+  in `git switch -C`, names a branch). The command is then read by `$.modkit.git` and `whereGit`
+  as if the folder had been typed, and git is always asked about it, since the question the guard
+  always put was put with the variable as typed and finds nothing.
+- Following may only ever put the true folder where the guard had "cannot tell". It never guesses,
+  and whether a variable can be followed is decided in mod-kit's reader alone (`fixedWords` in
+  `commands.ts`, built from the tests the loop reading of #3272 is built from). A variable is
+  followed only where all of this holds:
+  - it is set in the run of plain settings the call opens with: statements that are only
+    `NAME=value`, each ended by a `;` or a new line and nothing else, so it is set before anything
+    runs, in the call's own shell;
+  - the value is plain characters as typed (letters, digits, `_`, `.`, `/`, `-`), bare or in one
+    pair of quotes: no space, no `~`, no `$`, no pattern;
+  - it is set once, and its name is one letter, or mixes capitals and small letters;
+  - no other word of the call names it, the call holds no heredoc and no `(( ))`, no sum, no
+    `${...}` beyond `${NAME}`, no `eval`, `source`, `.`, `trap`, `alias`, `builtin`, `emulate`,
+    `let`, `declare`, `typeset`, `local`, function definition or command named by a value, and
+    nothing names `IFS`;
+  - every word the shell fills in or matches against files, with a value the reading does not
+    know, stands in a git command or is the value of a setting standing alone, since any other
+    command may be a builtin handed a name only the running shell knows (`read $x`);
+  - the use is the variable alone, `$W` or `${W}`, bare or in one pair of double quotes.
+- So these are not followed and stay stopped: a variable set twice, after its use, in a subshell,
+  a function, a loop, a branch or a group, as a setting in front of the command (which reaches git
+  and not the word), from a command's output or another variable, or in an earlier call. Kept
+  strict although the value could be worked out, each Dan's to widen: a name that is all capitals
+  or all small letters of two or more characters (`REPO`, `wt`), `W=/a && git ...`,
+  `export W=/a`, a value with a space or a `~`, `"$W/sub"`, a call holding a heredoc, a call where
+  a command that is not git is handed a pattern or a value not known, and a repository or working
+  folder named by a variable (`--git-dir "$G"`). The name rule keeps no list: a shell keeps names
+  for itself that change with no word naming them (`cd` writes `PWD`, `RANDOM` is worked out when
+  read), and each of the 166 names a fresh zsh 5.9 and bash 3.2.57 define on the personal MacBook
+  is all capitals or all small letters of two or more characters, or `_` (measured 2026-11-22),
+  so the form refuses them all and no list can be missing one.
+- `followed` is given only to a reader that asks, the words are never changed, and only the
+  call's own text is read so (never a substitution, a shell's script or a trap's text). Every
+  other mod is handed byte for byte what it was handed: over the personal MacBook's recorded
+  commands, none of the 11,659 calls with git in their text is read another way by `commands`,
+  `pipeline`, `pipelineIn` or `commandWrites` asked as they were (measured 2026-11-22 against the
+  reader before this change). A copy of mod-kit loaded before this takes no such option and
+  follows nothing, so the guard stops the command as above.
+- Recounted on the personal MacBook on 2026-11-22, over the same records and against the same
+  base: of 242 calls holding a watched git command, 204 are asked the base's one question, 25 one
+  more, 12 are followed and judged where they were stopped, and 1 still cannot be told. No
+  command the guard could already tell is told another way, and every question the base put to
+  git is still put first.
+- What the reading cannot see, as the loop reading cannot: a function or alias the shell already
+  had under a name the call uses, a builtin outside the lists above that runs text it builds a
+  name in, and a sum a builtin works out from another variable's value. The one past command of
+  the 13 that is not this form stands behind a `cd` into a folder a command made
+  (`d=$(mktemp -d) && cd "$d" && git checkout ...`) and stays stopped.
+- A question nobody answers stops the command too, while any other session is open (the lessons
+  review of this change, 2026-11-22). Each question above was read as no checkout there when it
+  failed, so the command ran with nothing asked. git exits 128 for every failure (measured,
+  2.51.1), so its words decide. `not a git repository`, `cannot change to '<folder>': No such file
+  or directory` and `this operation must be run in a work tree` are answers: nobody to ask there,
+  as before. Anything else (a folder git may not enter, a repository it will not read, a timeout,
+  the engine failing to run it) stops the command, and so does a throw from mod-kit's walk for
+  the checkout around a named repository, which had been taken for no checkout. The refusal is
+  the sentence above naming the question, with "Try again, or ask Dan." The walk answering null
+  is still no checkout there.
+- Not closed by that. The folder the guard always asked about, the folder of a command that
+  cannot be read and the judge's own reads still take a failed git for nothing there, as they
+  did before #3398. A folder that is not there when the guard asks has nobody to ask, though the
+  command line may make it first (a clone, then a `cd` into it). `-C` into a repository's own
+  `.git` folder has no working folder, so a command that moves a branch from there (`branch -D`
+  works there, measured) is asked nothing. git's words are matched in English.
+- Not covered: the files such a command writes are still placed by the write reader, by `dir`.
+  A session's own environment carrying either variable before any command is typed is seen by
+  no reader.
 
 ### What #3280 changed: a file put back exactly as the default branch holds it, 2026-11-21
 
@@ -4653,9 +4891,55 @@ for byte what origin/main holds, which changes no look that has not already ship
   written this way from origin/main; none of the three would pass as built, two because a `cp` of
   the file ran before the restore in the same call (the builder's own shape) and one because its
   line, a test run piped through three commands after the restore, is not a plain one. The two
-  with a copy stay held by Dan's answer above, and their refusal now says how. Reading the third
-  needs mod-kit's reader saying which commands a line groups, so a parenthesis in a quoted pattern
-  need not count.
+  with a copy stay held by Dan's answer above, and their refusal now says how. The third is covered
+  by #3401, with no change to mod-kit's reader: a parenthesis in a quoted pattern no longer counts
+  as grouping (What #3401 changed, below).
+
+### What #3401 changed: a quoted parenthesis after an exact restore, 2026-11-22
+
+`plainLine` read any brace, parenthesis or backtick anywhere in the call's text as grouping, so
+`git checkout origin/main -- <file> && <test> | grep -E "(fail|pass)"` stayed held, though the
+parentheses sit in a quoted search pattern. The rule the issue sets: a change may only pass a line
+whose commands after the restore provably run once it has finished.
+
+- **Nothing was added to mod-kit's reader.** It already says what this needs. It marks a word
+  `literal` only where every pattern character in it (its list holds `(`, `)`, `{` and `}`) is in
+  quotes or after a backslash and the word holds no `$` or backtick, so a subshell's parenthesis, a
+  group's closing brace, a function's `()`, an unquoted pattern and a brace expansion are words it
+  does not mark. And it marks where a command stands: inside a substitution, inside arithmetic,
+  behind a shell, a runner, xargs or find, fed a heredoc, or unread (eval, ssh, an alias).
+- **The rule** (rules.ts `groupsNothing`, asked by `plainLine` only where the text holds such a
+  character): every command of the reading carries only marks that say nothing of where it runs;
+  every word holding a grouping character is marked `literal`; and those words hold as many of each
+  of the four characters as the text does, so one the reader left out of every word (a group's
+  opening brace, which it looks past, a comment, a setting's value, a heredoc's body) is not taken
+  as accounted for. A mark the rule does not know, one added to the reader later included, shows
+  nothing, and the line is read as grouping, as before.
+- **Two things read from the text, each only ever holding more.** A backtick anywhere, since no
+  mark says one is text. And `$'`: the reader does not read such a string, whose `\'` does not end
+  it, so it gave `echo $'\' x' | (cat; echo ran) #'` as one echo with a quoted word while bash and
+  zsh ran the group (measured 2026-11-22). The reader's own gap is recorded for an issue of its own.
+- **A compound command's word is read as before**, from the text, quoted or not: a search for
+  `"then"` still makes a line no plain one. Not widened here, since the issue is the characters.
+- **What newly passes** is a line the text test called grouped where the reading shows only quoted
+  or escaped braces and parentheses in the words of the line's own commands: a search pattern, a
+  test's name, a program for sed or for awk that holds no `$`. A quote that never ends passes too:
+  bash and zsh refuse the command it is in and run nothing of it (measured the same day).
+- **What stays held**, each pinned by a test seen held before and after: a subshell, a group and a
+  pipe out of either; a substitution in double quotes or backticks; a process substitution;
+  arithmetic; a function; every compound word; a heredoc; text handed to eval, a shell's `-c`,
+  xargs, find's `-exec`, ssh, a trap or an alias; a command behind a runner (timeout, sudo, rtk),
+  since the reader names what a command is behind and never whether that is a shell; an unquoted
+  pattern or brace expansion; a word holding a `$`, so `awk '{print $1}'` and `"$X (y)"`; a comment
+  or a setting's value holding one; a line that backgrounds anything.
+- **Everything that passed still passes.** The reading is asked only where the old test said no.
+- **Counted** over this Mac's session records (54,956 Bash calls, 2026-10-19 to 2026-11-22), with
+  the rule modules of the branch and of its base: 26 calls put a file back from a source spelled
+  as a default branch, written as #3280 reads it. The base passes 18 and holds 8, three for a
+  command before the restore and five for one beside it. One of the eight is held by the plain
+  line test alone, and the branch passes that one and no other: a restore, then a test run sent to
+  a file, then that file searched for `"(fail)"` and cut. None is newly held. The count is an
+  upper bound, since it cannot ask git what a past checkout held.
 
 ## Picker manners (#615), built 2026-10-04
 
