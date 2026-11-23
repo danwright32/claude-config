@@ -520,6 +520,48 @@ ROWS = [
     ("one line: a quoted marker, a command, then the marker", "cat <<'E'; touch ran; E", "unsure"),
     ("one line: a command, then the marker, then more", "cat <<E; touch ran; E; echo end", "unsure"),
     ("one line, the control: a command and no marker after it", "cat <<E; touch ran", "listed"),
+    # The OPENER's own line ends in a backslash (review of #3495). Every shell reads a backslash
+    # and a line break before or inside the marker word as joining the two lines, so the marker is
+    # the word that results, unquoted: `cat <<E\` and then `x` waits for a line that is Ex, the
+    # line that is E closes nothing, and the rest is a body whose $( ) runs. Inside double quotes
+    # the two lines are joined the same way. The reader took the backslash for one quoting the
+    # line break, so the marker was quoted, never came, and the rest was read as commands, with
+    # nothing named. Measured 2026-11-23 in bash 3.2.57, bash --posix, sh, dash, zsh 5.9 and ksh
+    # 93u+, which agree on every row here but two: with `<<` and then a backslash and -E on the
+    # next line, bash, sh and dash strip tabs and zsh and ksh do not, and a heredoc in a $( ) so
+    # opened is a syntax error in dash, zsh and ksh. The reader names every opener that holds
+    # such a join, whether or not it can follow it, so nothing it read as a command before is
+    # dropped on the strength of the join.
+    ("the opener line ends in a backslash, a line, then the marker", "cat <<E" + B + "\nx\nE\n" + T, "unsure"),
+    ("the opener line ends in a backslash, then the marker", "cat <<E" + B + "\nE\n" + T, "unsure"),
+    ("the opener line ends in a backslash, a word, a body, then the marker", "cat <<E" + B + "\nF\nbody\nE\n" + T, "unsure"),
+    ("<< and a backslash, the marker on the next line, a joined marker later", "cat <<" + B + "\nE\nbody" + B + "\nE\n" + T, "unsure"),
+    ("<<-E and a backslash, a line, then the marker after a tab", "cat <<-E" + B + "\nx\n\tE\n" + T, "unsure"),
+    ("the opener line ends in a backslash, a $( ) in the body, then the joined marker", "cat <<E" + B + "\nx\n" + RAN + "\nEx\necho end\n", "unsure"),
+    ("the opener line ends in a backslash, then an empty line", "cat <<E" + B + "\n\n" + RAN + "\nE\necho end\n", "unsure"),
+    ("<< and a backslash, the marker on the next line", "cat <<" + B + "\nE\n" + RAN + "\nE\necho end\n", "unsure"),
+    ("<<, a blank and a backslash, the marker on the next line", "cat << " + B + "\nE\n" + RAN + "\nE\necho end\n", "unsure"),
+    ("<<- and a backslash, the marker on the next line", "cat <<-" + B + "\nE\n\t" + RAN + "\n\tE\necho end\n", "unsure"),
+    ("<< and a backslash, -E on the next line", "cat <<" + B + "\n-E\n\t" + RAN + "\n\tE\necho end\n", "unsure"),
+    ("the opener line ends in a backslash, and the joined marker closes it", "cat <<E" + B + "\nx\nbody\nEx\n" + T, "unsure"),
+    ("a double quoted marker joined over two lines", "cat <<\"E" + B + "\nx\"\n" + RAN + "\nEx\necho end\n", "unsure"),
+    ("a marker quoted by a backslash, then joined to the next line", "cat <<" + B + "E" + B + "\nx\n" + RAN + "\nEx\necho end\n", "unsure"),
+    ("the opener line ends in three backslashes", "cat <<E" + B * 3 + "\nx\n" + RAN + "\nE" + B + "x\necho end\n", "unsure"),
+    ("the opener line ends in a backslash, then a ; and a command", "cat <<E" + B + "\n; " + RAN + "\necho end\n", "unsure"),
+    ("two heredocs, the second's opener line ends in a backslash", "cat <<A <<E" + B + "\nx\na\nA\nE\n" + T, "unsure"),
+    ("two heredocs, the first's opener joined to the second's", "cat <<A" + B + "\n<<E\na\nA\nb\nE\n" + T, "unsure"),
+    ("in a $( ), the opener line ends in a backslash", "y=$(cat <<E" + B + "\nx\nE\n" + RAN + "\n)\necho end\n", "unsure"),
+    # A quoted marker that holds a line break itself (single quotes keep the backslash and the
+    # line break; double quotes keep a bare line break): no line is that marker, so bash, sh and
+    # zsh never close the heredoc, while dash and ksh close it at those two lines, where the
+    # reader did. Named where the reader closes it.
+    ("a single quoted marker that holds a backslash and a line break, those two lines later", "cat <<'E" + B + "\nx'\nbody\nE" + B + "\nx\n" + T, "unsure"),
+    ("a double quoted marker that holds a line break, those two lines later", "cat <<\"E\nx\"\nbody\nE\nx\n" + T, "unsure"),
+    # The controls. Two backslashes are one quoted backslash and join nothing. A backslash after
+    # a blank joins the next line to the COMMAND, not to the marker, which the reader always read
+    # as the shells do.
+    ("the control: the opener line ends in two backslashes", "cat <<E" + B * 2 + "\nx\nE\n" + T, "not listed"),
+    ("the control: a backslash after a blank on the opener line", "cat <<E " + B + "\nx\n" + RAN + "\nE\necho end\n", "listed"),
 ]
 # Rows every one of the seven kept the heredoc open in, so one shell here must run the marker, or the
 # row measures nothing.
@@ -528,7 +570,14 @@ OPEN = {"one backslash before the marker line", "three backslashes before the ma
         "a marker line that ends in a backslash", "a marker that never comes",
         "two heredocs, the second left open", "the tail with no line break after it",
         "one line: a command, then the marker", "one line: a quoted marker, a command, then the marker",
-        "one line: a command, then the marker, then more", "one line, the control: a command and no marker after it"}
+        "one line: a command, then the marker, then more", "one line, the control: a command and no marker after it",
+        "the opener line ends in a backslash, a line, then the marker", "the opener line ends in a backslash, then the marker",
+        "the opener line ends in a backslash, a word, a body, then the marker",
+        "<< and a backslash, the marker on the next line, a joined marker later",
+        "<<-E and a backslash, a line, then the marker after a tab",
+        "the opener line ends in a backslash, a $( ) in the body, then the joined marker",
+        "the opener line ends in a backslash, then an empty line", "<< and a backslash, the marker on the next line",
+        "the control: a backslash after a blank on the opener line"}
 SHELLS = {"bash": ["bash", "--noprofile", "--norc", "-c"], "bash --posix": ["bash", "--posix", "--noprofile", "--norc", "-c"],
           "sh": ["sh", "-c"], "dash": ["dash", "-c"], "zsh": ["zsh", "-f", "-c"], "ksh": ["ksh", "-c"]}
 HAVE = [name for name in SHELLS if shutil.which(SHELLS[name][0])]
@@ -621,15 +670,101 @@ say(got == (["cat <<E", RAN, "echo end"], ["cat <<E", "E", RAN, "echo end"], ["c
     and bodies == [(False, "cat ", "a" + B)],
     "#3492 a caller that does not ask is given the reading it always was",
     "commands gave %r and the bodies %r" % (got, bodies))
-# With no $ and no backquote after it, a heredoc the shells keep open runs nothing in any of them,
-# so the reading it always had only reads more than they run, and nothing is named.
-for name, text, want in (
-        ("a joined marker", "cat <<E\na" + B + "\nE\necho end\n", ["cat <<E", "echo end"]),
-        ("a marker that never comes", "cat <<E\nbody\necho end\n", ["cat <<E", "body", "echo end"])):
+# A marker that never comes at all, with no $ and no backquote after it: no shell runs anything
+# from the rest as a substitution, the reading goes on to the rest as commands as it always did,
+# and nothing is named. (What the heredoc's command is fed is then the whole rest, in the reader
+# and the shells alike.)
+text, want = "cat <<E\nbody\necho end\n", ["cat <<E", "body", "echo end"]
+cut, marks, gave_up = asked(text)
+say(cut == want and not marks and not gave_up and unasked(text) == want,
+    "#3492 with no $ or backquote after it, nothing is named and the reading is as it was: a marker that never comes",
+    "commands gave %r, named %r" % (cut, marks))
+# A JOINED marker with no $ and no backquote after it was read the same way until the review of
+# #3495: closed at the marker, nothing named, on the ground that no shell runs a substitution from
+# the rest. But the rest is still the heredoc's body, and the shells feed it to the heredoc's
+# command, while the reading took it for commands of its own. Where the reading closes a heredoc
+# that no shell closes, it is named whatever follows, and the caller that asks is given the rest
+# as commands, as for a heredoc that never closes.
+text = "cat <<E\na" + B + "\nE\necho end\n"
+cut, marks, gave_up = asked(text)
+say(cut == ["cat <<E", "a" + B + "\nE", "echo end"] and marks == [(4, 7)] and not gave_up
+    and unasked(text) == ["cat <<E", "echo end"],
+    "#3492 a joined marker with no $ or backquote after it is named too, and a caller that does not ask reads as before",
+    "commands gave %r, named %r, unasked %r" % (cut, marks, unasked(text)))
+# What that hid, measured 2026-11-23 in bash 3.2.57, bash --posix, sh, dash, zsh 5.9 and ksh 93u+
+# with an interpreter and a module that only creates a file: fed by a heredoc whose marker is
+# joined to a comment line, it was given the next line too, an import, and ran it, in all six,
+# while the reader gave that line as a shell command and the body as the comment alone
+# (test-slack-drafts-comment-start.sh holds that case, through the gate). Here the heredoc's
+# command is a grep that looks for the line after the marker, and `touch ran` follows only where
+# it finds it: where a shell fed that line to grep as part of the body. A quoted marker that holds
+# a line break is never closed by bash, sh and zsh (dash and ksh close it at those two lines, as
+# the reader did), with the same result. (description, text, whether the reader must name the
+# heredoc, whether a shell here must feed the line after the marker to grep)
+FED = [
+    ("the control: a heredoc every shell closes", "grep -q fed <<E && touch ran\nnote\nE\nfed\n", False, False),
+    ("a marker joined to the line before", "grep -q fed <<E && touch ran\nnote" + B + "\nE\nfed\n", True, True),
+    ("in a pipeline", "cat <<E | grep -q fed && touch ran\nnote" + B + "\nE\nfed\n", True, True),
+    ("<<- and tabs", "grep -q fed <<-E && touch ran\n\tnote" + B + "\n\tE\nfed\n", True, True),
+    ("three backslashes", "grep -q fed <<E && touch ran\nnote" + B * 3 + "\nE\nfed\n", True, True),
+    ("the control: two backslashes", "grep -q fed <<E && touch ran\nnote" + B * 2 + "\nE\nfed\n", False, False),
+    ("the control: a quoted marker", "grep -q fed <<'E' && touch ran\nnote" + B + "\nE\nfed\n", False, False),
+    # Not held to be a real row on every machine: the shells differ, and only those named above
+    # were measured.
+    ("a single quoted marker that holds a backslash and a line break, those two lines later",
+     "grep -q fed <<'E" + B + "\nx' && touch ran\nnote\nE" + B + "\nx\nfed\n", True, False),
+    ("a double quoted marker joined over two lines, those two lines later",
+     "grep -q fed <<\"E" + B + "\nx\" && touch ran\nnote\nE" + B + "\nx\nfed\n", True, True),
+]
+for name, text, named, real in FED:
+    fed = [shell for shell in HAVE if runs(shell, text)]
     cut, marks, gave_up = asked(text)
-    say(cut == want and not marks and not gave_up and unasked(text) == want,
-        "#3492 with no $ or backquote after it, nothing is named and the reading is as it was: %s" % name,
-        "commands gave %r, named %r" % (cut, marks))
+    shown = text.replace("\\", "\\\\").replace("\n", "\\n").replace("\t", "\\t")
+    say(not fed or bool(marks),
+        "#3492 a heredoc a shell keeps open and feeds to its command is never read as closed with nothing named: %s" % name,
+        "%s fed the line after the marker to the heredoc's command and the reader named nothing: [%s]" % (" and ".join(fed), shown))
+    say(bool(marks) == named, "#3492 the reader %s the heredoc that feeds its command: %s" % ("names" if named else "does not name", name),
+        "named %r, commands %r: [%s]" % (marks, cut, shown))
+    if real:
+        say(bool(fed), "#3492 the row is a real one, a shell here feeds the line after the marker to the heredoc's command: %s" % name,
+            "none of %s did: [%s]" % (", ".join(HAVE), shown))
+# An opener whose line ends in a backslash is named by its << to the end of its marker word, past
+# the line break the shells join, and the caller that asks is given the shells' reading of it: the
+# marker is the joined word, unquoted, so a body it closes is read for its substitutions and one
+# it never closes is read on as commands. A caller that does not ask is given the reading it
+# always was, the backslash quoting the line break.
+JOIN_TEXT = "cat <<E" + B + "\nx\nE\n" + T
+cut, marks, gave_up = asked(JOIN_TEXT)
+say(cut == ["cat <<E" + B + "\nx", "E", RAN, "echo end"] and marks == [(4, 10)] and not gave_up,
+    "#3492 an opener joined to the next line is named once, by its << to the end of its marker word",
+    "commands gave %r, named %r, gave up: %s" % (cut, marks, gave_up))
+JOIN_CLOSED = "cat <<E" + B + "\nx\n" + RAN + "\nEx\necho end\n"
+marks, bodies = [], []
+try:
+    cut = [t.strip() for _, t in sw.commands(JOIN_CLOSED, heredocs=bodies, unsure=marks)]
+except sw.Unreadable:
+    cut = ["unreadable"]
+say(cut == ["cat <<E" + B + "\nx", "touch ran", "echo end"] and bodies == [(False, "cat ", RAN)] and marks == [(4, 10)],
+    "#3492 a caller that asks is given the joined marker, unquoted, and the substitutions of the body it closes",
+    "commands gave %r, the bodies %r, named %r" % (cut, bodies, marks))
+bodies = []
+got = (unasked(JOIN_TEXT), unasked(JOIN_CLOSED, bodies))
+say(got == (["cat <<E" + B + "\nx", "E", RAN, "echo end"], ["cat <<E" + B + "\nx", RAN, "Ex", "echo end"]) and bodies == [],
+    "#3492 a caller that does not ask is given the reading it always was of an opener joined to the next line",
+    "commands gave %r and the bodies %r" % (got, bodies))
+# The opener helper itself: asked for joins, it reads the marker as the shells do and says where
+# each join is; not asked, it reads as it always did, for every other caller of it.
+joins = []
+got = (sw.heredoc_opener(JOIN_TEXT, 4, joins=joins), joins, sw.heredoc_opener(JOIN_TEXT, 4))
+say(got == (("Ex", False, False, 10), [7], ("E\nx", False, True, 10)),
+    "#3492 heredoc_opener reads a join in the marker as the shells do only where it is asked to",
+    "gave %r" % (got,))
+joins = []
+got = (sw.heredoc_opener('cat <<"E' + B + '\nx" y', 4, joins=joins), joins,
+       sw.heredoc_opener("cat <<- " + B + "\n E", 4, joins=[]), sw.heredoc_opener("cat <<" + B + "\n", 4, joins=[]))
+say(got == (("Ex", False, True, 12), [8], ("E", True, False, 12), None),
+    "#3492 heredoc_opener reads a join in double quotes and before the marker word, and no marker where none follows",
+    "gave %r" % (got,))
 # A quoted marker's body is read as written, so a marker that never comes names nothing: no shell
 # runs anything in it, and the rest is read as commands, as it was.
 cut, marks, gave_up = asked("cat <<'E'\nbody\n" + T)

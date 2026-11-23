@@ -1673,7 +1673,11 @@ def remember_readings(mod):
             # Whether the reading ended or gave up (Unreadable, which a # read as a comment can
             # cause by itself: it hides the ) or the quote that closes something).
             if marks:
-                raise UnsureComment(s, marks[0][0])
+                # Which kind of heredoc was named, for the reason alone: one whose opener line
+                # ends in a backslash ("joined"), or one whose marker holds a line break ("split").
+                at, joins = marks[0][0], []
+                opener = mod.heredoc_opener(s, at, joins=joins) if s.startswith("<<", at) else None
+                raise UnsureComment(s, at, "joined" if joins else "split" if opener and "\n" in opener[0] else "")
 
     def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None):
         if heredocs is not None or spans is not None or comments is not None:
@@ -1877,14 +1881,18 @@ class UnsureComment(BaseException):
     its marker, because a backslash joins that line to the one before, or close in different
     places, or never close, where every shell runs the substitutions in the rest of the text as
     its body and the reading took that rest for commands. heredoc says which of the two, a # or a
-    heredoc, was named."""
+    heredoc, was named. opener says what about the heredoc's opener had it named, for the reason
+    given: "joined" where its line ends in a backslash, which every shell joins to the next line,
+    so that the end marker is not the word that line shows, "split" where its quoted marker holds
+    a line break, which no line of a body can be, and "" otherwise (review of #3495)."""
 
-    def __init__(self, text, at):
+    def __init__(self, text, at, opener=""):
         super().__init__(at)
         start = text.rfind("\n", 0, at) + 1
         end = text.find("\n", at)
         self.line = text[start:len(text) if end < 0 else end].strip()[:120]
         self.heredoc = text.startswith("<<", at)
+        self.opener = opener
         # A text with no line break: the reader names a heredoc there for the one line, quoted or
         # not, since no shell gives it a body (claude-config#3492), so the reason says that.
         self.one_line = "\n" not in text
@@ -1897,19 +1905,35 @@ def comment_why(line):
             "Write that # in quotes, or put the comment on a line of its own (claude-config#3464)" % line)
 
 
-def heredoc_why(line, one_line=False):
+def heredoc_why(line, one_line=False, opener=""):
     if one_line:
         return ("it opens a heredoc on the one line `%s`, and the gate cannot tell whether the commands "
                 "after it on that line are its body or commands: typed on one line, no shell gives the "
                 "heredoc a body and every one of them runs. Put the heredoc's body and its end marker on "
                 "lines of their own after the line that opens it (claude-config#3492)" % line)
+    # What a shell that keeps an unquoted heredoc open does with the rest of the text.
+    keeps = ("A shell that keeps the heredoc open takes the rest of the text for its body: it runs every "
+             "$( ) there, in single quotes or not, and feeds the rest to the heredoc's command, which the "
+             "gate could not read for certain.")
+    if opener == "joined":
+        return ("it opens a heredoc the gate cannot find the end of, in the line `%s`: that line ends in a "
+                "backslash before the heredoc's end marker is whole, and a shell joins it to the next "
+                "line, so the end marker is the word the two lines make, which that backslash does not "
+                "quote. %s Write the << and its whole end marker on one line (claude-config#3492)"
+                % (line, keeps))
+    if opener == "split":
+        return ("it opens a heredoc the gate cannot find the end of, in the line `%s`: its end marker is "
+                "quoted and holds a line break, and no line of the text can be that marker, so some shells "
+                "never end the heredoc where others end it at the lines that spell the marker. A shell "
+                "that keeps the heredoc open feeds the rest of the text to the heredoc's command, which "
+                "the gate could not read for certain. Write the end marker as one word on the line that "
+                "opens the heredoc (claude-config#3492)" % line)
     return ("it opens a heredoc the gate cannot find the end of, in the line `%s`: the end marker is not "
             "quoted, and it either never stands on a line of its own or stands right after a line that "
             "ends in a backslash, which a shell joins to the marker's line, so that the heredoc does not "
-            "end there or ends there in some shells only. A shell that keeps the heredoc open runs every "
-            "$( ) in the rest of the text, in single quotes or not, which the gate could not read for "
-            "certain. End the heredoc with its marker alone on a line that follows no backslash, or quote "
-            "the marker (<<'EOF') where nothing in the body is to be expanded (claude-config#3492)" % line)
+            "end there or ends there in some shells only. %s End the heredoc with its marker alone on a "
+            "line that follows no backslash, or quote the marker (<<'EOF') where nothing in the body is "
+            "to be expanded (claude-config#3492)" % (line, keeps))
 
 
 def budget_clock():
@@ -8131,7 +8155,7 @@ def main():
         except NulPath:
             reason = judge.unfollow(NUL_WHY)  # never kept: only an allowed judgement is
         except UnsureComment as e:
-            reason = judge.unfollow(heredoc_why(e.line, e.one_line) if e.heredoc else comment_why(e.line))
+            reason = judge.unfollow(heredoc_why(e.line, e.one_line, e.opener) if e.heredoc else comment_why(e.line))
         finally:
             judge.unwatch()
         if judge.overran:

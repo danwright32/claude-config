@@ -338,7 +338,7 @@ class Unreadable(Exception):
         self.at = at
 
 
-def heredoc_opener(s, i, marker_start=False):
+def heredoc_opener(s, i, marker_start=False, joins=None):
     """The heredoc opened at s[i] ("<<"), as (marker, strip_tabs, quoted, end), or None.
 
     The marker is the word after the opener with its quotes removed, as the shell compares it with
@@ -350,6 +350,17 @@ def heredoc_opener(s, i, marker_start=False):
 
     With marker_start, also None when the word does not start as a marker is written (MARKER_START),
     for a reader that follows neither arithmetic nor, in some, quotes (claude-config#2080).
+
+    joins, a list, is given where each backslash that ends a line stands between the << and the
+    end of the word, and the opener is then read as every shell reads it (claude-config#3492,
+    review of #3495): such a backslash and its line break join the two lines, before the word, in
+    it or inside its double quotes, so they are no part of the marker and quote nothing. After
+    `<<E`, a backslash, a line break and `x` the marker is Ex, unquoted, where the reading
+    without joins takes the backslash for one quoting the line break and the marker for a quoted
+    one that holds it. Measured 2026-11-23 in bash 3.2, bash --posix, sh, dash, zsh and ksh, which
+    agree but for a `-` on the line after `<<` and a backslash: bash, sh and dash read <<-
+    there, zsh and ksh a marker that starts with the dash, as this does. Without joins the
+    reading is the one it always was, for every caller that did not ask.
     """
     m = HEREDOC_START.match(s, i)
     if not m or s.startswith("<<<", i):
@@ -357,10 +368,22 @@ def heredoc_opener(s, i, marker_start=False):
     if marker_start and not MARKER_START.match(s, m.end()):
         return None
     j, n = m.end(), len(s)
+    found = []
+    if joins is not None:
+        # The joins and blanks between the << and its word.
+        while j < n and (s.startswith("\\\n", j) or s[j] in " \t"):
+            if s[j] == "\\":
+                found.append(j)
+                j += 1
+            j += 1
+    start = j
     word, quoted = [], False
     while j < n and s[j] not in HEREDOC_WORD_END:
         c = s[j]
-        if c == "\\" and j + 1 < n:
+        if c == "\\" and joins is not None and s.startswith("\n", j + 1):
+            found.append(j)
+            j += 2
+        elif c == "\\" and j + 1 < n:
             word.append(s[j + 1])
             quoted = True
             j += 2
@@ -379,14 +402,24 @@ def heredoc_opener(s, i, marker_start=False):
                 k += 2 if s[k] == "\\" else 1
             if k >= n:
                 return None
-            word.append(re.sub(r'\\([\\"$`])', r"\1", s[j:k]))
+            if joins is None:
+                word.append(re.sub(r'\\([\\"$`])', r"\1", s[j:k]))
+            else:
+                # Read a pair at a time, so a backslash that another one quotes joins nothing.
+                for q in re.finditer(r'\\([\\"$`\n])|[^\\]+|\\', s[j:k]):
+                    if q.group(1) == "\n":
+                        found.append(j + q.start())
+                    else:
+                        word.append(q.group(1) or q.group())
             quoted = True
             j = k + 1
         else:
             word.append(c)
             j += 1
-    if j == m.end():
+    if j == start:
         return None
+    if joins is not None:
+        joins.extend(found)
     return "".join(word), m.group(1) == "-", quoted, j
 
 
@@ -594,13 +627,17 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, un
     the line it opens on. The shell reads an unquoted heredoc's body with a line ending in a
     backslash joined to the next, so a marker on that next line closes nothing, where this reading
     closed it at the first line that is the marker. Named are the unquoted ones the shells close
-    anywhere else, or in different places from one shell to another, or never while a $ or a
-    backquote stands in the rest of the text: every shell runs the substitutions in that rest as
-    part of the body, where this reading takes the rest for commands and so reads a $( ) in single
-    quotes there as a word that runs nothing. Named too, quoted or not, is one this reading closes
-    in a text with no line break at all, the "; " read as one: as typed no shell gives it a body and
-    every shell runs what this reading took for its body. A caller that asks is given the shells'
-    closing line where they agree on one; a caller that does not is given the reading it always was.
+    anywhere else, or in different places from one shell to another, or never where this reading
+    closes them (every shell feeds the rest to the heredoc's command, where this reading gave it
+    as commands), or never while a $ or a backquote stands in the rest of the text: every shell
+    runs the substitutions in that rest as part of the body, where this reading takes the rest for
+    commands and so reads a $( ) in single quotes there as a word that runs nothing. Named too,
+    quoted or not, is one this reading closes in a text with no line break at all, the "; " read as
+    one: as typed no shell gives it a body and every shell runs what this reading took for its
+    body; one whose marker holds a line break, where this reading closes it; and one whose opener
+    a backslash joins to the next line, which is named by its << to the end of its marker word
+    (heredoc_opener). A caller that asks is given the shells' closing line where they agree on
+    one; a caller that does not is given the reading it always was.
 
     The text is the command as written, quotes and all, and a command substitution's text stays
     inside the command that holds it as well as being read as commands of its own, which come first.
@@ -734,11 +771,22 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, un
             dash and ksh do not, each in its own cases; and a marker right after a line that starts
             as the marker does and ends in backslashes, where ksh keeps the first of those
             backslashes as text and so joins where the others do not and the reverse;
-          * it never closes in the shells and a $ or a backquote stands in the rest of the text:
-            shells is None. Every shell reads that rest as the body and runs the substitutions in
-            it, where this reading takes the rest for commands, so that nothing after an unclosed
-            heredoc is hidden. With neither character in the rest no shell runs anything from it,
-            and the commands plain reads there are only more than the shell runs.
+          * it never closes in the shells and plain closes it, at a joined marker: shells is
+            None, whatever follows. Every shell reads the rest as the body and feeds it to the
+            heredoc's command, where plain gave that rest as commands of its own and the body as
+            the lines before the marker: python3 fed `# note`, a backslash, the marker and then
+            an import was given the import, and ran it, in bash 3.2, bash --posix, sh, dash, zsh
+            and ksh (measured 2026-11-23, review of #3495);
+          * it never closes in the shells or in plain, and a $ or a backquote stands in the rest
+            of the text: shells is None. Every shell reads that rest as the body and runs the
+            substitutions in it, where this reading takes the rest for commands, so that nothing
+            after an unclosed heredoc is hidden. With neither character in the rest no shell
+            runs anything from it, the commands plain reads there are only more than the shell
+            runs, and a caller that reads what the command is fed takes the whole rest for it;
+          * the marker holds a line break (a quoted one, `<<'E` and a backslash, then `x'` on
+            the next line) and plain closes it at the lines that spell it: shells is plain. No
+            line is that marker, so bash, sh and zsh never close the heredoc, while dash and ksh
+            close it where plain does (measured the same day).
         A caller that does not ask is given plain, the reading it always was (as for a # since
         claude-config#3481): other gates read through this, and one that must not miss a command
         asks. With no line break in the text at all the "; " is read as one, for the flattened form
@@ -752,11 +800,13 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, un
         first = re.compile(closing_line % (tabs, re.escape(word))).search(s, j)
         if line_break != "\n":
             return first, first, first is None
+        if line_break in word:
+            return first, first, first is None
         if quoted:
             return first, first, True
 
         def never():
-            if s.find("$", j) < 0 and s.find("`", j) < 0:
+            if first is None and s.find("$", j) < 0 and s.find("`", j) < 0:
                 return first, first, True
             return first, None, False
 
@@ -1032,13 +1082,22 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, un
             i += 3
             continue
         if s.startswith("<<", i):
-            opener = heredoc_opener(s, i)
+            # A caller that asks which lines the reading is unsure of is given the opener as the
+            # shells read it where its line ends in a backslash, the two lines joined and the
+            # marker the word they make, and the heredoc's name at once, by its << to the end of
+            # that word: what follows was read as commands until now, and nothing read so is
+            # dropped on the strength of the join (heredoc_opener, claude-config#3492). A caller
+            # that does not ask is given the reading it always was.
+            joins = None if unsure is None else []
+            opener = heredoc_opener(s, i, joins=joins)
             if opener:
                 before = s[f["start"]:i]
                 f["openers"].append((i, opener[3]))
                 at = i
                 word, strip_tabs, quoted, i = opener
-                pending.append((word, strip_tabs, quoted, before, at))
+                if joins:
+                    unsure.append((at, i))
+                pending.append((word, strip_tabs, quoted, before, at, bool(joins)))
             else:
                 i += 2
             continue
@@ -1049,10 +1108,11 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, un
             # shells' closing line and the heredoc's name; one that does not is given the reading it
             # always was (heredoc_close, claude-config#3492).
             j, unquoted, skipped, where, closes = i, [], [], [], []
-            for word, strip_tabs, quoted, before, at in pending:
+            for word, strip_tabs, quoted, before, at, named in pending:
                 plain, shells, sure = heredoc_close(j, word, strip_tabs, quoted)
                 m = plain if unsure is None else shells
-                if not sure and unsure is not None:
+                # One whose opener a backslash joined to the next line is named already.
+                if not sure and unsure is not None and not named:
                     unsure.append((at, i))
                 if not m:
                     j = None
