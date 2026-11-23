@@ -1621,9 +1621,11 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
       // It is said only for a mv that can leave each source there: never onto a device, which holds
       // no file (macOS mv refuses, "Operation not permitted", and keeps the source; measured
       // 2026-11-22), and never where two sources may land on one name, the second replacing the
-      // first. Two cannot where one folder holds both, or both are named outright by different
-      // names. What the rest of the command does to the place is judged once it is all read
-      // (settleMoves).
+      // first. Two cannot where one folder holds both, or both are named outright by names that
+      // differ by more than letter case and the Unicode form of an accent: a disk that ignores
+      // case, macOS's own, keeps a.md and A.md as one file, so names alike but for those are taken
+      // as one name on every disk, the side that claims less (lessons review of 9dd4eb16c0). What
+      // the rest of the command does to the place is judged once it is all read (settleMoves).
       if (name === 'mv' && copied) {
         const dest = (into ?? ops[ops.length - 1]) as string
         const destPath = abs(dest)
@@ -1634,7 +1636,8 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
           return folder ? { folder } : undefined
         }
         const places = sources.map(placeOf)
-        const apart = places.every((a, i) => places.every((b, j) => j <= i || (a !== undefined && b !== undefined && (a.folder === b.folder || (a.name !== undefined && b.name !== undefined && a.name !== b.name)))))
+        const folded = (n: string): string => n.normalize('NFD').toLowerCase()
+        const apart = places.every((a, i) => places.every((b, j) => j <= i || (a !== undefined && b !== undefined && (a.folder === b.folder || (a.name !== undefined && b.name !== undefined && folded(a.name) !== folded(b.name))))))
         // mv -n (--no-clobber) replaces nothing: a source whose name is taken there stays where it was.
         // Of -n, -f and -i the last one given wins (`mv -n -f` replaces), so it is said only where
         // neither of the other two is given at all, the side that never calls a replaced file kept.
@@ -1971,7 +1974,8 @@ const madeBy = (entry: object, command: object) => {
 }
 // What was read holding a command that changes files in a way no write or change is given for: git
 // (every git command, the four subcommands in byGit included), a script file, a module, a tool, a
-// command fed by xargs.
+// command fed by xargs, a command that makes a link (ln, link), an rsync told to remove what it
+// sent (--remove-source-files, --remove-sent-files), and a second write that cannot be found again.
 const UNSURE = new WeakSet<ModKitWrites>()
 // Whether one of two places is the other, is under it or holds it. A pattern stands for the folder
 // it is matched in, since no name in that folder can be shown not to match it.
@@ -1998,7 +2002,9 @@ const knownPlace = (path: string): string => path.replace(/^\/(tmp|var|etc)(?=\/
  * - every command is one whose changes are all given as writes and changes: none is unread (eval, a
  *   command a value names, an alias, a trap), none writes what its words do not name (an inline
  *   program, a patch, an archive, what xargs feeds it), none is a run (a script, a tool, a program
- *   the reader does not know handed a file), and none is git;
+ *   the reader does not know handed a file), none is git, none makes a link (ln, link), which gives
+ *   a place a second name no path shows, and none is an rsync told to remove what it sent, which
+ *   takes its sources away with no removal given for them;
  * - no other command removes or empties what may be the source under another spelling, or anything
  *   that may be where it lands, what holds that or what is under it. Places are compared as paths,
  *   so home spelled any way, a dot, a doubled slash and a cd are one place; a change with no place

@@ -1333,6 +1333,11 @@ describe('writes: changes that put no content in, carried over from the collisio
     expect(kept('mv notes/*.md notes/x.txt ~/archive/')).toEqual(['notes/*.md', 'notes/x.txt'])
     expect(kept('mv one/a.md two/b.md ~/archive/')).toEqual(['one/a.md', 'two/b.md'])
     expect(kept('mv one/x.md two/x.md ~/archive/')).toEqual([])
+    // A disk that ignores case, macOS's own, keeps a.md and A.md as one file, and one that ignores the
+    // Unicode form of an accent keeps its two forms as one; so names that differ only so may land on
+    // one name (lessons review of 9dd4eb16c0), on every disk, the side that claims less.
+    expect(kept('mv one/a.md two/A.md ~/archive/')).toEqual([])
+    expect(kept(`mv one/${'é'.normalize('NFC')}.md two/${'é'.normalize('NFD')}.md ~/archive/`)).toEqual([])
     expect(kept('mv one/*.md two/*.md ~/archive/')).toEqual([])
     expect(kept('mv one/*.md two/x.md ~/archive/')).toEqual([])
     expect(kept('mv "$A" notes/b.md ~/archive/')).toEqual([])
