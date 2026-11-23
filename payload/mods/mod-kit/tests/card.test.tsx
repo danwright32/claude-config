@@ -151,9 +151,11 @@ test('$.modkit.writes follows CLAUDE_CODE_SHELL over SHELL', { plugins: [writesR
   expect(await handedUnder($, on, { CLAUDE_CODE_SHELL: '/bin/bash', SHELL: '/bin/zsh', HOME: '/h' })).toEqual([['/w/a.ts', '/w/b.ts']])
 })
 
-// #3478, the second fix round: where a mv puts a file is settled against the disk before any mod
-// reads it, so a folder reached through a link is the folder it leads to. Measured at 22e20b47fe:
-// the notes below were said to be at ~/Desktop/link while the command deleted them.
+// #3478: where a mv puts a file is read from the words alone. The second fix round settled it
+// against the disk, with no deadline on the look; the third took that out, and a reader that words
+// a move as one (ask before saving) now does so only when nothing else in the command can remove,
+// move, empty or write over anything, so a folder reached through a link cannot be emptied behind
+// the move it was told of.
 const movesReader: { name: string; register: Register } = {
   name: 'moves-reader',
   register: on => {
@@ -178,13 +180,10 @@ const movedOn = async ($: unknown, on: On, links: Record<string, string>, comman
   const r = await ($ as { tool: { call: (e: never) => Promise<{ deny?: string; text?: string }> } }).tool.call({ tool: 'Bash', command } as never)
   return { moved: JSON.parse(r.deny ?? r.text ?? '[]') as unknown, asked }
 }
-test('$.modkit.writes takes a folder reached through a link for the folder it leads to (#3478)', { plugins: [movesReader] }, async ($, on) => {
+test('$.modkit.writes reads a move from the words alone, asking the disk nothing, so a link is left for the reader (#3478)', { plugins: [movesReader] }, async ($, on) => {
   const r = await movedOn($, on, { '/h/Desktop/link': '/h/Desktop/archive' }, 'mv ~/notes/*.md ~/Desktop/link/ && rm -rf ~/Desktop/archive')
-  expect(r.moved).toEqual([])
-  expect(r.asked).toContain('/h/Desktop/link')
-})
-test('$.modkit.writes says where a mv puts a file when the disk shows the places differ (#3478)', { plugins: [movesReader] }, async ($, on) => {
-  expect((await movedOn($, on, {}, 'mv ~/notes/*.md ~/Desktop/link/ && rm -rf ~/Desktop/archive')).moved).toEqual(['~/notes/*.md'])
+  expect(r.moved).toEqual(['~/notes/*.md'])
+  expect(r.asked).toEqual([])
 })
 test('$.modkit.writes asks the disk nothing for a command that moves nothing (#3478)', { plugins: [movesReader] }, async ($, on) => {
   expect((await movedOn($, on, {}, 'rm -rf ~/Desktop/archive && echo x > ~/notes/a.md')).asked).toEqual([])

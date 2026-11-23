@@ -271,8 +271,9 @@ paths) or moves it to a second place; another command removes, empties or writes
 lands, what holds that or what is under it; the mv is onto a device or of two sources that may land
 on one name; or the command holds anything whose changes the reader cannot name (an unread command,
 a write its words do not name, a run, git, a command that makes a link, an rsync told to remove
-what it sent). `$.modkit.writes` settles it once more against the disk, where a folder reached
-through a link is the folder it leads to. `keeps` on it says the mv was told to replace nothing
+what it sent). It is a reading of the words alone, asked of no disk, so it is never enough on its
+own: a reader that words anything by it must show the command can change no file another way, as
+ask before saving's `moveAlone` does (below). `keeps` on it says the mv was told to replace nothing
 (`-n`) and given neither `-f` nor `-i`. Where the copies
 disagreed, each case was decided and tested: `>& file` writes the file (the collision guard's
 reading), `wget --spider` saves nothing (no build's), `find -fprint` writes its file and `find
@@ -3604,31 +3605,44 @@ lasting memory file, or moved one away, ran with no question. Measured in the mo
   the question says the file stays where it is. Given `-f` or `-i` as well, in any order, it is
   said to replace one, since mv obeys whichever of the three comes last. Left as on main, and
   recorded: a note named outright that is moved and whose folder the same command then removes
-  is still said to be one that "can be moved back", and so is a pattern moved into a folder that
-  is not there, where the mv fails and nothing happens.
+  is asked about as main asks, as the move its write's `sources` make it. A pattern moved into a
+  folder that is not there, where the mv fails and nothing happens, was said to be one that "can
+  be moved back" until the third review; it is now the deletion main asked about, unless the command
+  makes that folder first (the entry for the third review, below).
 - **Two names for one folder are one place (#3478, the second review).** Comparing places as
   paths misses a folder that has two. Measured through the whole mod on 2026-11-23, 8 commands
   of 8: `mv <memory>/{a,b}.md /tmp/zz/ && rm -rf /private/tmp/zz` was asked about as a move that
   "can be moved back", since macOS keeps `/tmp`, `/var` and `/etc` as links into `/private`, and
   so was any linked folder (`mv ... ~/Desktop/link/ && rm -rf ~/Desktop/archive`), a link the
-  command makes itself, and `rsync --remove-source-files` run on where the notes went. So
-  `$.modkit.writes` settles the mark a second time against the disk (`settleOnDisk` in mod-kit's
-  `writes.ts`): each place the command names is taken to its real path, the longest part of it
-  that exists and then the rest of its name, and the places are compared again. `/tmp`, `/var`
-  and `/etc` are folded onto their `/private` names in the reading by words too, so they hold
-  where nothing is on the disk yet. A place the disk cannot follow (a link that leads nowhere, a
-  question that fails, a command naming more than 40 places) is compared with nothing, so any
-  other removal or write in the command takes the mark off. A command with no move left to
-  settle asks the disk nothing, so no other mod's call costs more. What the engine's stat
-  answers was read from Claude Code's own program text, not from a live session: asked with
-  links followed it gives the real path of any path that is no link, and of a link whose target
-  exists. A command that makes a link (`ln`, `link`) is unsure by its words, since the link is
-  not on the disk yet when the disk is asked, and a hard link gives a moved file a second name.
-  So is an rsync told to remove what it sent: the reader gives no removal for it, which also
-  means `rsync --remove-source-files <memory>/ <elsewhere>/` alone is not asked about, on main
-  either (recorded). Not seen, and recorded: a second hard link to a moved file that is already
-  on the disk, and a path that climbs out of a linked folder with `..`, which the words fold
-  away before the disk is asked.
+  command makes itself, and `rsync --remove-source-files` run on where the notes went. The
+  second round settled the mark a second time against the disk, taking each place to its real
+  path; the third took that out (next entry), since it had no deadline on its look and still
+  missed a path climbing out of a linked folder with `..` and another case of a name. What stays
+  in mod-kit: `/tmp`, `/var` and `/etc` are folded onto their `/private` names in the reading by
+  words, and a command that makes a link (`ln`, `link`) or an rsync told to remove what it sent
+  is unsure by its words, so the mark comes off. The reader gives no removal for such an rsync,
+  which also means `rsync --remove-source-files <memory>/ <elsewhere>/` alone is not asked about,
+  on main either (recorded).
+- **A move is worded as one only when nothing beside it could change a file (#3478, the third
+  review).** Each of three reviews found a deletion still said to be a move, each by a new
+  spelling of one place: the folder removed, `/tmp` against `/private/tmp`, a link, `..` out of a
+  linked folder, another case of a name. Comparing where two paths lead cannot be finished, so
+  ask before saving no longer rests on it. Its `moveAlone` (in `rules.ts`) turns the rule round:
+  a move of lasting memory is worded as "Move ... can be moved back" only when the command's text
+  is plain commands one after another (no substitution, redirect, pipe, background job, backslash
+  or `$` but before a plain name), there is exactly one `mv`, typed as such with only the options
+  it reads, no word climbs with `..`, and every other command is on `CHANGES_NO_FILE`: `mkdir`,
+  `ls`, `echo`, `cd`, `pwd`, `test`, `[` and `true`, the one list, kept short on purpose. Before
+  the mv only, a `cp` of one file to one place where nothing is yet is allowed too, which is the
+  issue's own backup of `MEMORY.md`. Anything else gets the question main asks, so the list only
+  ever chooses between two wordings of a question asked either way. The place a moved file lands
+  must be there now, or be made by a plain `mkdir` earlier in the command (a relative one only
+  where no `cd` stands before the mv). Every look at the disk this rests on shares one bound,
+  `MOVE_LOOK_MS` (2 seconds): a look that fails or runs late drops the move wording, and the
+  question is read again as main reads it. mod-kit's own disk settling (`settleOnDisk`) went with
+  this change, so `$.modkit.writes` asks the disk nothing. Measured over 109 commands against main
+  and the second round's head: the same commands stop on all three, and none worded as a move here
+  loses a file. A repeat archive whose backup name is already taken gets main's wording.
 - **A brace pattern is multiplied out only up to 256 names (#3478, the second review).** To say
   which files a pattern moved into a folder would replace there, its brace lists are multiplied
   out and each name tried against every name the two folders share. With no limit, six lists of

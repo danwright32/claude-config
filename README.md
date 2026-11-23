@@ -8714,13 +8714,13 @@ goes and says why, and the mod adds what it measured as Dan is asked: where a mo
 or whether git can bring a deleted or emptied one back (held unchanged, held with changes since,
 not held, or not readable). A move into another folder is asked about as a move however the files
 are named (#3478): a file named outright by the path it will have, a pattern by the folder ("Each
-goes into the folder ..."), with whether a file of the same name there is replaced. It is asked
-about as a move only while the command, read whole, leaves each file where it was moved to: one
-that also removes, empties or writes over that place, or removes the same files under another
-spelling of their path, or holds anything the reader cannot follow, is asked about as a deletion,
-as it was before. Places are compared as the disk has them, so a folder reached through a link is
-the folder it leads to and `/tmp` is `/private/tmp`, and a brace pattern of more than 256 names is
-asked about as a deletion without being multiplied out. The answers
+goes into the folder ..."), with whether a file of the same name there is replaced. It is worded
+as a move only when nothing else in the command could remove, move, empty or write over a file:
+one mv, and beside it only plain commands on the mod's short list (`mkdir`, `ls`, `echo`, `cd`,
+`pwd`, `test`, `[`, `true`), or before it a `cp` of one file to a place where nothing is yet, the
+folder it goes into there already or made by a `mkdir` first. Any other command is asked about
+as it was before #3478, a pattern moved away as a deletion; so is a command whose look at the disk
+fails or takes more than 2 seconds, and a brace pattern of more than 256 names. The answers
 are Keep as is, first, and Delete, Move or Empty; a save's
 For good approves no removal and a removal's answer approves no save, a removal whose consequence
 changes after he answers (what git holds of the file, where a move lands, what a folder holds) is

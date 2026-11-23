@@ -1810,7 +1810,7 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     // change files this reader gives no write or change for, whatever each is handed.
     if (scriptFile || tool || c.xargs) unsure = true
     // The second fix round of #3478. A link made here gives a place, or a file, a second name that
-    // no comparing of paths shows and that is not on the disk yet when the disk is asked. And an
+    // no comparing of paths shows. And an
     // rsync told to remove what it sent takes its sources away with no removal given for them.
     if (name === 'ln' || name === 'link' || (name === 'rsync' && rest.some(a => a === '--remove-source-files' || a === '--remove-sent-files'))) unsure = true
     // #3323: a program on none of the lists above, read by no rule of its own, is read as writing
@@ -2010,12 +2010,20 @@ const knownPlace = (path: string): string => path.replace(/^\/(tmp|var|etc)(?=\/
  * not read: one that runs before the mv counts as one after it does, the side that claims less.
  * A program the reader does not know that is handed no file is read as changing none, as it is
  * everywhere in this reader (#3323).
+ *
+ * This is a reading of the words, and it cannot be finished: one place has more names than paths
+ * can show (a link, a path that climbs out of a linked folder with `..`, another case of a name
+ * on a disk that ignores case). Until the third fix round the mark was settled a second time
+ * against the disk (settleOnDisk), which followed links and still missed the other two. That is
+ * gone: a reader that words anything by `to` must itself show the command holds nothing that could
+ * take a file away, as ask before saving does (its rules.ts `moveAlone`), and may take this
+ * settling only as the first of its reasons to say less.
  */
-const settleMoves = (w: ModKitWrites, real: (path: string) => string | undefined = knownPlace): ModKitWrites => {
+const settleMoves = (w: ModKitWrites): ModKitWrites => {
   const moved = w.changes.filter(c => c.to !== undefined)
   if (!moved.length) return w
   const blind = UNSURE.has(w) || w.unnamed.length > 0 || !!w.unread?.length || !!w.runs?.length || !!w.byGit?.length
-  const where = (p: string | undefined): string | undefined => (p === undefined ? undefined : real(p))
+  const where = (p: string | undefined): string | undefined => (p === undefined ? undefined : knownPlace(p))
   for (const m of moved) {
     const own = MADE_BY.get(m) ?? new Set<object>()
     const byAnother = (x: object): boolean => {
@@ -2033,97 +2041,6 @@ const settleMoves = (w: ModKitWrites, real: (path: string) => string | undefined
     if (blind || taken || writtenOver) delete m.to
   }
   return w
-}
-
-/** The two questions `settleOnDisk` asks of the disk, as the engine's `$.fs` answers them. */
-export type LinkFs = { exists: (path: string) => Promise<boolean>; stat: (path: string, options?: { resolve: boolean }) => Promise<{ isLink?: boolean; realPath?: string }> }
-
-/**
- * The most places `settleOnDisk` will ask the disk about for one command. A command naming more is
- * not asked about at all, and every place in it is then one the disk could not follow: a move
- * keeps its mark only if no other command in it removes, empties or writes anything (one mv of
- * many files, say). Chosen, not measured: each place costs
- * two questions where it exists and two more for each folder of its path that does not, every
- * question asked once however many places share it, so 40 places is a few hundred questions at
- * most, where a hook has 10 seconds.
- */
-export const SETTLE_PLACES = 40
-
-/**
- * `to`, settled against the disk (#3478, the second fix round). The words alone compare places as
- * paths, and a link gives one place two paths: `mv notes/*.md ~/Desktop/link/ && rm -rf
- * ~/Desktop/archive`, where link leads to archive, deletes the notes it was said to have moved. So
- * each place the command names is taken to where the disk says it leads (the real path of the
- * longest part of it that exists, then the rest of its name), and the moves are settled again over
- * those. A place the disk cannot follow (a link that leads nowhere, a question that fails) is no
- * place to compare with, so any other change in the command takes the mark off, as a place no path
- * names does. Asked only while a move is still marked, so a command with none costs no question.
- * Never throws. What it cannot see: a link the command itself makes (so a command that makes one
- * is unsure, in the reading by words), a second hard link to a moved file that is already on the
- * disk, and a path that climbs out of a linked folder with `..`, which the words fold away.
- */
-export const settleOnDisk = async (w: ModKitWrites, fs: LinkFs): Promise<ModKitWrites> => {
-  if (!w.changes.some(c => c.to !== undefined)) return w
-  const places = new Set<string>()
-  const note = (p: string | undefined) => {
-    if (p !== undefined) places.add(p)
-  }
-  for (const c of w.changes) {
-    note(placeOfChange(c))
-    for (const p of landsOf(c)) note(p)
-  }
-  for (const f of w.files) note(placeOfChange(f))
-  const real = new Map<string, string>()
-  if (places.size <= SETTLE_PLACES) {
-    // What is at one path: where it really is, null for nothing there, undefined where the disk
-    // cannot say (a link that leads nowhere answers stat with no real path; a failed question).
-    const asked = new Map<string, Promise<string | null | undefined>>()
-    const at = (path: string) => {
-      const had = asked.get(path)
-      if (had) return had
-      const answer = (async () => {
-        try {
-          if (await fs.exists(path)) return (await fs.stat(path, { resolve: true })).realPath
-        } catch {
-          return undefined
-        }
-        // Not there when followed. A link is still there when looked at itself, and leads nowhere.
-        // A look that fails is nothing there, unless the failure names another system error (no
-        // permission, a loop of links, a failed read): then the disk has not said what is there.
-        // Told by the code where the failure carries one; a failure in words this does not know
-        // counts as nothing there, or a folder not made yet would never be a place to compare.
-        try {
-          await fs.stat(path)
-          return undefined
-        } catch (err) {
-          const said = `${String((err as { code?: unknown } | null)?.code ?? '')} ${String(err)}`
-          return /\b(EACCES|EPERM|ELOOP|EIO|EBADF|EBUSY|ENAMETOOLONG|ETIMEDOUT)\b/.test(said) ? undefined : null
-        }
-      })()
-      asked.set(path, answer)
-      return answer
-    }
-    for (const place of places) {
-      let head = place
-      let rest = ''
-      while (head.startsWith('/')) {
-        const found = await at(head)
-        if (found === undefined) break
-        if (found !== null) {
-          real.set(place, `${found.replace(/\/+$/, '')}${rest}` || '/')
-          break
-        }
-        if (head === '/') break
-        const cut = head.lastIndexOf('/')
-        rest = `${head.slice(cut)}${rest}`
-        head = head.slice(0, cut) || '/'
-      }
-    }
-  }
-  return settleMoves(w, p => {
-    const r = real.get(p)
-    return r === undefined ? undefined : knownPlace(r)
-  })
 }
 
 // Each change in `from` that `into` lacks is added to it: a path once, keeping what either says of it

@@ -4,7 +4,7 @@ import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
 import { APPROVAL_MS, MAX_CHECK, MAX_QUESTION, MAX_QUESTION_ROWS, MAX_SHORT_TEXT, MOVE_LOOK_MS, QUESTION_COLUMNS, askInstruction, pickerOnly, rowsAt, sendFirstNote, shownFault } from '../hooks/rules.ts'
 import { SHAPED, entryOf, without } from './lessons-shaped.ts'
-import { commandWrites, settleOnDisk, type LinkFs } from './mod-kit/hooks/writes.ts'
+import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { pipeline } from './mod-kit/hooks/commands.ts'
 import { isDans } from './mod-kit/hooks/origin.ts'
 import { pythonText } from './mod-kit/hooks/code.ts'
@@ -210,13 +210,11 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string>; l
   // Claude Code's environment as printenv reads it: HOME and whatever the test sets.
   const env: Record<string, string> = { HOME, ...(init.env ?? {}) }
   const printenv: string[] = []
-  const onDisk: LinkFs = { exists: async () => false, stat: async () => ({}) }
   on('process.run', async ($, e) => {
-    // mod-kit's write reader, read here with its copy (the stand-in above asks for it), and its
-    // moves settled against this world's disk as mod-kit settles them against the real one (#3478).
+    // mod-kit's write reader, read here with its copy (the stand-in above asks for it).
     if (e.argv[0] === '__modkit' && e.argv[1] === 'writes') {
       const input = JSON.parse(String(e.argv[2])) as { command: string; cwd: string; home: string }
-      const out = JSON.stringify(await settleOnDisk(commandWrites(input.command, input.cwd, input.home), onDisk))
+      const out = JSON.stringify(commandWrites(input.command, input.cwd, input.home))
       return { value: { exitCode: 0, stdout: out, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
     }
     if (e.argv[0] === '__modkit' && e.argv[1] === 'isDans') {
@@ -292,10 +290,6 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string>; l
     if (files[at] === undefined) throw new Error(`ENOENT: ${path}`)
     return { kind: 'file', ...said, size: 1 }
   }
-  // The same disk, as mod-kit asks it when it settles a move (#3478): a stand-in for one noun cannot
-  // ask another through $ (measured: every such question failed, and every move went unsaid).
-  onDisk.exists = async path => existsAt(path)
-  onDisk.stat = async (path, options) => statAt(path, options?.resolve)
   // `unanswered` (#3478): paths the disk never answers about, as a hung mount does, held until the
   // test ends; `unansweredAsked` comes once the first of them is asked. `failing`: paths a look at
   // fails for.

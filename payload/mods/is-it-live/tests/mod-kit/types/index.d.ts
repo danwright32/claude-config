@@ -595,13 +595,14 @@ export type ModKitWrite = { word: string; path?: string; folder?: string; source
  * its path) or moves it to a second place, another command removes, empties or writes over where
  * it lands, what holds that or what is under it, or the command holds anything whose changes the
  * reader cannot name (an unread command, a write its words do not name, a run, git, a command that
- * makes a link, an rsync told to remove what it sent). Places are compared as the disk has them:
- * `$.modkit.writes` takes each to its real path first (the longest part of it that exists, then
- * the rest of its name), so a folder reached through a link is the folder it leads to, and /tmp,
- * /var and /etc are /private/tmp, /private/var and /private/etc whatever is on the disk. A place
- * the disk cannot follow is compared with nothing, so any other removal or write in the command
- * takes `to` off. A reader for whom it is absent says what it would say of a removal with nowhere
- * to go. `keeps` says the mv was told to replace nothing (-n, --no-clobber) and given neither -f
+ * makes a link, an rsync told to remove what it sent). Places are compared as paths, read from the
+ * words alone with nothing asked of the disk: home spelled any way, a dot, a doubled slash and a cd
+ * are one place, and /tmp, /var and /etc are /private/tmp, /private/var and /private/etc. One place
+ * can have names paths cannot show (a link, a `..` out of a linked folder, another case of a name on
+ * a disk that ignores case), so `to` is never enough on its own: a reader that words anything by it
+ * must itself show the command holds nothing else that could remove, move, empty or write over a
+ * file, as ask before saving does. A reader for whom it is absent says what it would say of a
+ * removal with nowhere to go. `keeps` says the mv was told to replace nothing (-n, --no-clobber) and given neither -f
  * nor -i: a source whose name is taken there stays where it was. Beside either of those, in any
  * order, it is absent: mv obeys the last of the three, and the order is not read, so `mv -f -n`,
  * which replaces nothing, is read as one that may replace.
