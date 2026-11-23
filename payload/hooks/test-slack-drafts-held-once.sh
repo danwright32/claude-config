@@ -7,7 +7,7 @@
 # copied once for each look. Judging `bash tests/test-claude-sync.sh` that was 152,000 readings of
 # 8,500 commands, a twentieth of the judgement, part of what took the cold cost case past its limit.
 #
-# A count, never a time: a time measures the Mac's load. The gate's own code runs, with the two
+# A count, never a time: a time measures the Mac's load. The gate's own code runs, with four of its
 # readings counted by a copy that wraps them, as test-slack-drafts-code-loaders.sh wraps one to make
 # it fail. Kept apart from that suite so it does not grow past its wall clock; the helpers are copied
 # from test-slack-drafts-made-lines.sh as they are. Nothing a case names is ever run.
@@ -64,9 +64,10 @@ mkdir -p "$S"
 printf '%s\n' '#!/bin/bash' 'echo ok' > "$S/ok.sh"
 printf '%s\n' '#!/bin/bash' 'curl -s -X POST -d text=hi https://slack.com/api/chat.postMessage' > "$S/posts.sh"
 
-# The gate's own code with two of its readings counted: how often each command's text is cut into
-# its words as written (written_redirs), and how often the commands of a text holding PLAIN are
-# asked for (parsed). The counts are written where COUNTS_3406 says once the verdict is printed. A
+# The gate's own code with four of its readings counted: how often each command's text is cut into
+# its words as written (written_redirs), how often the commands of a text holding PLAIN are asked
+# for (parsed), and how often a whole text is searched for the functions it defines (names) and for
+# the word shopt (shopt). The counts are written where COUNTS_3406 says once the verdict is printed. A
 # text holding UNREADABLE-3406 fails as the shared reader fails on a text it cannot read.
 mkdir -p "$T/counting"
 cp "$HOOK" "$T/counting/slack-drafts-only-gate.sh"
@@ -237,7 +238,7 @@ if [ "$asked_names" != none ] && [ "$asked_names" = "$walked_names" ]; then chec
 else check "#3406 a script's text is searched for its functions as often with a git, a sed and an unknown program's command as with none" "searched $asked_names times with them, $walked_names with none"; fi
 # Whether a text runs shopt is searched for once for each text too. The walk of its variables asks,
 # and the reading of a function's locals asked again where a local is given a value: a second
-# search of the whole text, 10 ms of claude-sync's. A case's patterns are read by that answer, so
+# search of the whole text, 10 ms of claude-sync's (measured 2026-11-22 on the personal MacBook). A case's patterns are read by that answer, so
 # the answers below are pinned with and without the word.
 case "$walked_shopt" in ''|none|0) check "#3406 the counting copy counted a search of a script's text for shopt" "it counted '$walked_shopt', so the case below would hold the gate to nothing" ;;
   *) check "#3406 the counting copy counted a search of a script's text for shopt" ok ;; esac
