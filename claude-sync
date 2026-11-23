@@ -5940,7 +5940,13 @@ scan_work_names(){
 # is, and all of it is read. A file the shared repo already holds unchanged is not this send's to
 # answer for, so a send that fixes something else, or removes the file, is never held by it. The
 # check is handed the list (--files0-from) rather than walking the tree, which is what keeps the
-# cost per send to the files that changed.
+# cost per send to the files that changed. With no upstream set (a commit made by hand, or before
+# this check), the unsent commits are the ones no remote branch holds yet.
+#
+# THE NAMES STAY NUL SEPARATED from git (or find) to the check. Without -z git prints a name holding
+# a double quote, a backslash, a newline, a tab or another control character inside double quotes
+# with C escapes, core.quotePath or not, and a list read by lines for "payload/" dropped exactly
+# those, so the check never read them and the send pushed them (#3483 review).
 #
 # THE WHOLE SEND IS HELD, never the failing files alone. A send is one commit of everything that
 # changed, and the other Mac mirrors what the payload holds: carrying a hook without the file it
@@ -5969,6 +5975,20 @@ scan_work_names(){
 HOME_PATH_HOLD_KEY="home-path-check"   # this check's name in the told record and the kept output
 HOME_PATH_SHOWN=5                      # how many files a refusal names before it counts the rest
 home_path_check_lib(){ printf '%s' "$SYNC_SELF_PAYLOAD/hooks/check-home-paths.sh"; }
+# Why the check is not there, in the cause that is true (L11). Where the tool runs from the clone it
+# sends from, as on every Mac, the check is the copy staged from this Mac's config, so its absence
+# means the config no longer holds it and this send would remove it. Anywhere else the tool is a copy
+# run outside its own checkout.
+home_path_check_missing_words(){   # $1 = the check's path
+  local self here
+  self="$(cd "$SYNC_SELF_PAYLOAD" 2>/dev/null && pwd -P)" || self=""
+  here="$(cd "$PAYLOAD" 2>/dev/null && pwd -P)" || here=""
+  if [ -n "$self" ] && [ "$self" = "$here" ]; then
+    printf '%s' "this send would remove the check itself: this Mac's config no longer holds $CLAUDE_HOME/hooks/check-home-paths.sh, so the payload staged from it has no check to judge with. Put that file back in the config and the next send is checked and goes out."
+  else
+    printf '%s' "the check is not beside this copy of claude-sync ($1), which is how a copy run outside its own checkout looks. Run claude-sync from its checkout, where the check ships."
+  fi
+}
 home_path_check_kept(){ printf '%s' "$SEND_OUTPUT_DIR/$HOME_PATH_HOLD_KEY.log"; }
 # A send got past the check, or had nothing for it to read: the hold it was saying is over.
 home_path_hold_over(){
@@ -5980,36 +6000,53 @@ home_path_hold_over(){
 }
 scan_home_paths(){
   [ -d "$PAYLOAD" ] || return 0
-  local lib list="" rels="" listing="" own="" up="" rel n=0 outf="" rc=0 unjudged=""
+  local lib list="" raw="" errf="" strip="payload/" up="" rel n=0 outf="" rc=0 unjudged=""
+  local g=(git -C "$SYNC_REPO" -c core.quotePath=false)
   lib="$(home_path_check_lib)"
   if [ ! -f "$lib" ]; then
-    unjudged="the check is not beside this copy of claude-sync ($lib), which is how a copy run outside its own checkout looks. Run claude-sync from its checkout, where the check ships."
-  elif [ "${SYNC_NO_GIT:-0}" != "1" ] && [ -e "$SYNC_REPO/.git" ]; then
-    if git -C "$SYNC_REPO" rev-parse -q --verify HEAD >/dev/null 2>&1; then
-      listing="$(uncommitted_paths payload)" || unjudged="git could not list what differs from the last commit under payload, so the files this send would publish are not known."
-      if [ -z "$unjudged" ] && up="$(git -C "$SYNC_REPO" rev-parse --verify -q '@{upstream}' 2>/dev/null)"; then
-        own="$(git -C "$SYNC_REPO" -c core.quotePath=false diff --name-only --diff-filter=d "$up...HEAD" -- payload 2>&1)" \
-          || unjudged="git could not list the files this clone's unsent commits changed: $(printf '%s' "${own:0:300}" | tr '\n' ' ')"
+    unjudged="$(home_path_check_missing_words "$lib")"
+  else
+    raw="$(scratch_file)" && errf="$(scratch_file)" \
+      || { rm -f "$raw"; die "could not make a scratch file for the home path check, so nothing is sent."; }
+    if [ "${SYNC_NO_GIT:-0}" != "1" ] && [ -e "$SYNC_REPO/.git" ]; then
+      if git -C "$SYNC_REPO" rev-parse -q --verify HEAD >/dev/null 2>&1; then
+        { "${g[@]}" diff -z --name-only --no-renames HEAD -- payload \
+          && "${g[@]}" ls-files -z --others --exclude-standard -- payload; } > "$raw" 2> "$errf" \
+          || unjudged="git could not list what differs from the last commit under payload, so the files this send would publish are not known: $(head -c 300 "$errf" | tr '\n' ' ')"
+        if [ -z "$unjudged" ] && up="$(git -C "$SYNC_REPO" rev-parse --verify -q '@{upstream}' 2>/dev/null)"; then
+          "${g[@]}" diff -z --name-only --diff-filter=d "$up...HEAD" -- payload >> "$raw" 2> "$errf" \
+            || unjudged="git could not list the files this clone's unsent commits changed: $(head -c 300 "$errf" | tr '\n' ' ')"
+        elif [ -z "$unjudged" ]; then
+          # No upstream: what the push will carry is every commit no remote branch holds yet.
+          "${g[@]}" log -z --name-only --format= --diff-filter=d HEAD --not --remotes -- payload >> "$raw" 2> "$errf" \
+            || unjudged="git could not list the files this clone's unsent commits changed: $(head -c 300 "$errf" | tr '\n' ' ')"
+        fi
+      else
+        # A clone with no commit yet: everything under payload is about to become its first.
+        "${g[@]}" ls-files -z --cached --others --exclude-standard -- payload > "$raw" 2> "$errf" \
+          || unjudged="git could not list the files under payload: $(head -c 300 "$errf" | tr '\n' ' ')"
       fi
     else
-      # A clone with no commit yet: everything under payload is about to become its first.
-      listing="$(git -C "$SYNC_REPO" -c core.quotePath=false ls-files --cached --others --exclude-standard -- payload 2>&1)" \
-        || unjudged="git could not list the files under payload: $(printf '%s' "${listing:0:300}" | tr '\n' ' ')"
+      strip="./"
+      ( cd "$PAYLOAD" && find . -type f -print0 ) > "$raw" 2> "$errf" \
+        || unjudged="the files in $PAYLOAD could not be listed, so the files this send would publish are not known."
     fi
-    [ -n "$unjudged" ] || rels="$(printf '%s\n%s\n' "$listing" "$own" | sed -n 's|^payload/||p' | sort -u)" || true
-  else
-    rels="$(cd "$PAYLOAD" && find . -type f | sed 's|^\./||' | sort)" \
-      || unjudged="the files in $PAYLOAD could not be listed, so the files this send would publish are not known."
+    rm -f "$errf"
   fi
   if [ -z "$unjudged" ]; then
-    list="$(scratch_file)" || die "could not make a scratch file for the home path check, so nothing is sent."
+    list="$(scratch_file)" || { rm -f "$raw"; die "could not make a scratch file for the home path check, so nothing is sent."; }
+    LC_ALL=C sort -z -u -o "$raw" "$raw" 2>/dev/null \
+      || unjudged="the files this send would publish could not be put in order to be read, so they are not known."
+  fi
+  if [ -z "$unjudged" ]; then
     # Only the files that exist: a deletion is not content, and it is how a failing file leaves.
-    while IFS= read -r rel; do
-      [ -n "$rel" ] || continue
+    while IFS= read -r -d '' rel; do
+      case "$rel" in "$strip"?*) rel="${rel#"$strip"}" ;; *) continue ;; esac
       if [ -f "$PAYLOAD/$rel" ]; then printf '%s\0' "$rel"; n=$(( n + 1 )); fi
-    done > "$list" <<LOOP_INPUT
-$rels
-LOOP_INPUT
+    done < "$raw" > "$list"
+  fi
+  [ -z "$raw" ] || rm -f "$raw"
+  if [ -z "$unjudged" ]; then
     if [ "$n" -eq 0 ]; then
       rm -f "$list"
       home_path_hold_over
@@ -6042,8 +6079,22 @@ LOOP_INPUT
   fi
   if [ -n "$unjudged" ]; then
     [ -z "$outf" ] || rm -f "$outf"
+    [ -z "$list" ] || rm -f "$list"
     refusal="the home path check could not judge what this send would publish, so nothing is sent: $unjudged"
     record_send_refused "" home-paths-unjudged
+    # In the watcher a standing hold of this kind is said in full once too, then in one short line,
+    # until what it says changes, it clears or a day passes, as a hold over files is (below).
+    if [ "${SYNC_IN_WATCH:-0}" = "1" ]; then
+      digest="$(printf 'unjudged\n%s\n' "$unjudged" | shasum -a 256 | cut -d' ' -f1)"
+      now="$(send_hold_now)"
+      if send_hold_told_recently "$HOME_PATH_HOLD_KEY" "$digest" "$now"; then
+        refusal="this send is still held because the home path check could not judge it, for the same reason as when the hold was last said in full, so nothing is sent. 'claude-sync status' says why and how to clear it."
+        if [ "${SCAN_REFUSAL_DEFERRED:-0}" = "1" ]; then SEND_REFUSED="$refusal"; SEND_REFUSED_BY="the home path check"; return 0; fi
+        echo "claude-sync: $refusal" >&2
+        exit 1
+      fi
+      send_hold_told_write "$HOME_PATH_HOLD_KEY" "$now" 0 "$digest"
+    fi
     if [ "${SCAN_REFUSAL_DEFERRED:-0}" = "1" ]; then SEND_REFUSED="$refusal"; SEND_REFUSED_BY="the home path check"; return 0; fi
     die "$refusal"
   fi

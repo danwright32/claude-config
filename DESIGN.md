@@ -2782,9 +2782,13 @@ These choices were made by the session that built the fix, not by Dan, and are h
   `CLAUDE_HOME_PATH_ROOTS`, the check's seam for its own suite, so it judges by the default roots
   as main's run does.
 - **Only the files the send carries.** Payload paths that differ from the clone's last commit, new
-  ones included, plus payload paths changed by commits the upstream lacks; without git, the whole
-  payload. A failing file main already holds is not this send's to answer for, so it never holds an
-  unrelated send, and a send that removes it goes through.
+  ones included, plus payload paths changed by commits the upstream lacks (with no upstream set,
+  commits no remote branch holds); without git, the whole payload. A failing file main already
+  holds is not this send's to answer for, so it never holds an unrelated send, and a send that
+  removes it goes through. The names travel NUL separated (`-z`, `find -print0`) into the list,
+  because without `-z` git C quotes a name holding a double quote, a backslash or a control
+  character whatever `core.quotePath` says, and a reader by lines dropped exactly those files (found
+  in review of #3483, reproduced by the suite before the fix).
 - **The whole send is held.** A send is one commit, and the other Mac mirrors what the payload
   holds: a hook without the file it reads, or half a change, would arrive with nothing to say which
   half. Ruled out: holding only the failing files and sending the rest. It is the alternative most
@@ -2795,7 +2799,13 @@ These choices were made by the session that built the fix, not by Dan, and are h
 - **Not a hot loop.** The watcher sends on every burst of edits, and a session writing scratch
   makes one every few seconds. A standing hold is said in full once, then in one short line with
   no desktop notice, until its files change, it clears or a day passes, through the
-  `.send-holds-told` store the send gate already keeps (#3179). Every refusal is still counted.
+  `.send-holds-told` store the send gate already keeps (#3179). A hold because the check could not
+  judge is said the same way, keyed on its reason. Every refusal is still counted. What it does not
+  quiet: a session that keeps adding NEW files changes the held set on each tick, so each tick is a
+  new hold said in full, with a notice. That is the hold changing, and is left to be said.
+- **A missing check names its true cause.** On every Mac the tool runs from the clone it sends from,
+  so the check is the copy staged from this Mac's config, and its absence means this send would
+  remove it. Only a copy of the tool run elsewhere is told it is outside its checkout (L11).
 - **Output to a file.** The incident's lines were 1.6 MB each, 11.5 MB in all (measured
   2026-11-22), so the check's output never passes through a shell variable, and the kept copy in
   `.send-suite-output/home-path-check.log` cuts each line to 500 characters.

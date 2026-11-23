@@ -159,11 +159,15 @@ the end of staging and after the work names scan, over the finished payload, so 
 Mac's own config has already become the placeholder and the check reads what main's run would
 read. It is handed only the files this send carries (`--files0-from`): every payload file that
 differs from the clone's last commit, new ones included, and the files changed by commits the
-shared repo lacks; without git, the whole payload. A failing file already on main therefore never
+shared repo lacks (with no upstream set, the commits no remote branch holds); without git, the whole
+payload. The names are passed NUL separated from git to the check, so a name git would quote (one
+holding a double quote, a backslash or a newline) is read like any other. A failing file already on main therefore never
 holds an unrelated send, and a send that removes it goes through. One failing file holds
 everything, because a send is one commit and the other Mac mirrors what the payload holds, so half
-a change would arrive with nothing to say which half. Nothing is committed or pushed, and nothing
-in this Mac's config is touched. The refusal names how many files fail, the first five with their
+a change would arrive with nothing to say which half. Nothing is committed or pushed, and no file in
+this Mac's config is changed or removed: a send leaves the config alone, and a sync, which sets the
+held copies in the clone aside so it can still receive (#947), adds a `<file>.conflict-<host>` copy
+beside a live file only when the clone's copy held something that file lacks. The refusal names how many files fail, the first five with their
 line, and the check's reason; every line the check reported is kept, each cut to 500 characters, in
 `.send-suite-output/home-path-check.log` in the clone. `claude-sync status`, `claude-sync stuck` and
 the per prompt notice say it as "sending is refused: the home path check has refused every send",

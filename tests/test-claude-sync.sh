@@ -13774,6 +13774,56 @@ if out_hp9="$(_hp bash "$SCRIPT" send)"; then rc_hp9=0; else rc_hp9=$?; fi
 dbg "send removing the failing file: rc=$rc_hp9 $out_hp9"
 check "#3465 a send that removes the failing file goes through" \
   "[ '$rc_hp9' -eq 0 ] && ! git -C '$HPB' cat-file -e main:payload/agents/legacy.md 2>/dev/null"
+# A name git quotes is still a file being sent. Without -z git prints a name holding a double quote,
+# a backslash or a newline inside double quotes with C escapes, even with core.quotePath off, and a
+# list read line by line for "payload/" dropped it, so the check never read it and the send pushed it
+# (#3483 review). Each name alone, so no other file in the send can be what holds it.
+hp_head_q="$(git -C "$HPB" rev-parse main)"
+mkdir -p "$HPH/hooks/runq"
+printf '{"cwd":"%s/projects/site"}\n' "$HP_BAD" > "$HPH/hooks/runq/key\"1.json"
+if out_hpq1="$(_hp bash "$SCRIPT" send)"; then rc_hpq1=0; else rc_hpq1=$?; fi
+dbg "send carrying a file whose name holds a double quote: rc=$rc_hpq1 $out_hpq1"
+check "#3465 a file whose name holds a double quote is read by the check, and the send is held" \
+  "[ '$rc_hpq1' -ne 0 ] && line_has \"\$out_hpq1\" 'home path check' 'runq/key\"1\.json:1'"
+rm -f "$HPH/hooks/runq/key\"1.json"
+printf '{"cwd":"%s/projects/site"}\n' "$HP_BAD" > "$HPH/hooks/runq/back\\slash.json"
+if out_hpq2="$(_hp bash "$SCRIPT" send)"; then rc_hpq2=0; else rc_hpq2=$?; fi
+dbg "send carrying a file whose name holds a backslash: rc=$rc_hpq2 $out_hpq2"
+check "#3465 a file whose name holds a backslash is read by the check, and the send is held" \
+  "[ '$rc_hpq2' -ne 0 ] && line_has \"\$out_hpq2\" 'home path check' 'slash\.json:1'"
+rm -f "$HPH/hooks/runq/back\\slash.json"
+printf '{"cwd":"%s/projects/site"}\n' "$HP_BAD" > "$HPH/hooks/runq/new
+line.json"
+if out_hpq3="$(_hp bash "$SCRIPT" send)"; then rc_hpq3=0; else rc_hpq3=$?; fi
+dbg "send carrying a file whose name holds a newline: rc=$rc_hpq3 $out_hpq3"
+# The check names the file across two lines, so the refusal cannot quote it back; it is held all the
+# same, as a check that could not name what it found.
+check "#3465 a file whose name holds a newline is read by the check, and the send is held" \
+  "[ '$rc_hpq3' -ne 0 ] && line_has \"\$out_hpq3\" 'home path check' 'nothing is sent'"
+check "#3465 and none of the three reached the shared repo" "[ \"\$(git -C '$HPB' rev-parse main)\" = '$hp_head_q' ]"
+rm -rf "$HPH/hooks/runq"
+if out_hpq4="$(_hp bash "$SCRIPT" send)"; then rc_hpq4=0; else rc_hpq4=$?; fi
+check "#3465 control: with those files gone the send goes through" "[ '$rc_hpq4' -eq 0 ]"
+# A commit the shared repo lacks is read even when the clone has no upstream set, as a commit made by
+# hand, or before the check, can be: the push sets one, so those commits used to go up unread (#3483
+# review). Here the failing file is in this Mac's config and committed in the clone, so nothing is
+# uncommitted and only the commit carries it.
+hp_up="$(git -C "$HPC" rev-parse --abbrev-ref '@{upstream}' 2>/dev/null || true)"
+check "#3465 control: the clone has an upstream to take away" "[ -n '$hp_up' ]"
+hp_head_u="$(git -C "$HPB" rev-parse main)"
+printf 'made by hand in %s/notes\n' "$HP_BAD" > "$HPH/agents/handmade.md"
+cp "$HPH/agents/handmade.md" "$HPC/payload/agents/handmade.md"
+git -C "$HPC" add payload/agents/handmade.md
+git -C "$HPC" -c user.email=t@example.com -c user.name=t commit -q -m 'a commit made by hand'
+git -C "$HPC" branch -q --unset-upstream
+if out_hpu1="$(_hp bash "$SCRIPT" send)"; then rc_hpu1=0; else rc_hpu1=$?; fi
+dbg "send over an unsent commit with no upstream set: rc=$rc_hpu1 $out_hpu1"
+check "#3465 a commit the shared repo lacks is read with no upstream set, and the send is held" \
+  "[ '$rc_hpu1' -ne 0 ] && line_has \"\$out_hpu1\" 'home path check' 'agents/handmade\.md:1'"
+check "#3465 and it did not reach the shared repo" "[ \"\$(git -C '$HPB' rev-parse main)\" = '$hp_head_u' ]"
+rm -f "$HPH/agents/handmade.md"
+git -C "$HPC" reset -q --hard "$hp_up"
+git -C "$HPC" branch -q -u "$hp_up"
 # A sync hands the refusal back and still receives (#947). Its notice names this check, nothing is
 # sent, and the copies it sets aside in the clone are never this Mac's own files.
 mkdir -p "$HPH/hooks/run"; printf '{"cwd":"%s/projects/site"}\n' "$HP_BAD" > "$HPH/hooks/run/k.json"
@@ -13812,6 +13862,40 @@ printf '# rules\nnotes are kept in %s/notes\n' "$HP_BAD" > "$HPN/CLAUDE.md"
 if out_hp13="$(_hpn push)"; then rc_hp13=0; else rc_hp13=$?; fi
 check "#3465 without git, a rule file naming a home folder is refused by name and line" \
   "[ '$rc_hp13' -ne 0 ] && line_has \"\$out_hp13\" 'home path check' 'CLAUDE\.md:2'"
+# Where the tool runs from the clone it sends from, as every Mac's does, the check that judges is the
+# copy staged from this Mac's config. Deleted there, the send would remove it, and that is the cause
+# to say, never a copy run outside its checkout (#3483 review, L11). The same hold on later watcher
+# ticks is said once, like a hold over files, rather than in full with a notice every tick.
+HPS="$WORK/homepath-selfrepo"; mkdir -p "$HPS"; cp "$SCRIPT" "$HPS/claude-sync"; seed_work_names_scanner "$HPS"
+HPSH="$WORK/homepath-selfhome"; mkdir -p "$HPSH"; echo '{"hooks":{}}' > "$HPSH/settings.json"; printf '# rules\n' > "$HPSH/CLAUDE.md"
+cp -R "$HPS/payload/hooks" "$HPSH/hooks"
+_hps(){ env HOME="$HPE" HOOK_TESTS_RUNNING=1 SYNC_LOG_FILE="$WORK/homepath-sync.log" CLAUDE_HOME="$HPSH" SYNC_REPO="$HPS" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_SEND_TESTS=1 "$@" bash "$HPS/claude-sync" push 2>&1; }
+if out_hps1="$(_hps)"; then rc_hps1=0; else rc_hps1=$?; fi
+dbg "push from the clone's own copy, the check in the config: rc=$rc_hps1 $out_hps1"
+check "#3465 control: the clone's own copy sends while the config holds the check" "[ '$rc_hps1' -eq 0 ]"
+rm -f "$HPSH/hooks/check-home-paths.sh"
+if out_hps2="$(_hps)"; then rc_hps2=0; else rc_hps2=$?; fi
+dbg "push once the config no longer holds the check: rc=$rc_hps2 $out_hps2"
+check "#3465 a send that would remove the check itself is held" "[ '$rc_hps2' -ne 0 ] && [ ! -e '$HPS/payload/hooks/check-home-paths.sh' ]"
+check "#3465 and says that is the cause, never a copy run outside its checkout" \
+  "line_has \"\$out_hps2\" 'home path check' 'would remove the check itself' && out_lacks \"\$out_hps2\" 'outside its own checkout'"
+: > "$HPREC"
+if out_hps3="$(_hps SYNC_IN_WATCH=1 SYNC_NO_NOTIFY=0 SYNC_NOTIFIER="$HPNOTIFIER")"; then rc_hps3=0; else rc_hps3=$?; fi
+# Only this check's notices are counted: the fixture's config lacks the hook registration reader, so
+# every send here also posts a notice that the hooks block was not published.
+hp_notices_s3="$(grep -c 'home path check' "$HPREC" 2>/dev/null || true)"
+if out_hps4="$(_hps SYNC_IN_WATCH=1 SYNC_NO_NOTIFY=0 SYNC_NOTIFIER="$HPNOTIFIER")"; then rc_hps4=0; else rc_hps4=$?; fi
+hp_notices_s4="$(grep -c 'home path check' "$HPREC" 2>/dev/null || true)"
+check "#3465 control: the notices this counts carry the check's name" "grep -q 'would remove the check itself' '$HPREC'"
+dbg "watcher, a check that could not judge, first: rc=$rc_hps3 $out_hps3"
+dbg "watcher, the same, next tick: rc=$rc_hps4 $out_hps4"
+check "#3465 the watcher says a check that could not judge in full once, with one notice" \
+  "[ '$rc_hps3' -ne 0 ] && line_has \"\$out_hps3\" 'home path check' 'would remove the check itself' && [ '$hp_notices_s3' -eq 1 ]"
+check "#3465 and on the next tick in one short line, with no second notice" \
+  "[ '$rc_hps4' -ne 0 ] && line_has \"\$out_hps4\" 'still held' 'home path check' 'claude-sync status' && out_lacks \"\$out_hps4\" 'would remove' && [ '$hp_notices_s4' -eq 1 ]"
+cp "$(dirname "$SCRIPT")/payload/hooks/check-home-paths.sh" "$HPSH/hooks/check-home-paths.sh"
+if out_hps5="$(_hps)"; then rc_hps5=0; else rc_hps5=$?; fi
+check "#3465 with the check back in the config the send goes through" "[ '$rc_hps5' -eq 0 ]"
 # The watcher itself, given two changes in one burst, which it makes two sends of (#262): its log
 # gets the hold in full once and one short line after it, so a session that keeps writing scratch
 # adds a line a tick, as a healthy watcher does, and never the list again.
