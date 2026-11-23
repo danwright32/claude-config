@@ -1,7 +1,7 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './hang-ceiling.ts'
 import { pipeline } from '../hooks/commands.ts'
-import { callShell, commandWrites, pipelineIn, READ_ONLY } from '../hooks/writes.ts'
+import { callShell, commandWrites, pipelineIn, READ_ONLY, SETTLE_PLACES, settleOnDisk, type LinkFs } from '../hooks/writes.ts'
 
 // The one reader of which files a Bash call writes (#705, L613): ask before saving kept its own and
 // missed inline scripts, rsync, install, ln, dd, a patch, every file but the last of a sed -i, and a
@@ -1279,6 +1279,134 @@ describe('writes: changes that put no content in, carried over from the collisio
       expect([command, kept(command)]).toEqual([command, []])
     // A folder the words cannot name is still said as written when nothing else changes a file.
     expect(kept('mv notes/{a,b}.md "$D"/')).toEqual(['notes/{a,b}.md'])
+  })
+  // The second fix round of #3478. Measured at 22e20b47fe: every form in the next three tests but
+  // the controls still said where the mv put the notes, and each deletes them.
+  test('/tmp, /var and /etc are /private/tmp, /private/var and /private/etc: one place under two names (#3478)', () => {
+    for (const command of [
+      'mv notes/{a,b}.md /tmp/zz/ && rm -rf /private/tmp/zz',
+      'mv notes/{a,b}.md /private/tmp/zz/ && rm -rf /tmp/zz',
+      'mv notes/{a,b}.md /tmp/zz/ && rm /private/tmp/zz/*.md',
+      'mv notes/{a,b}.md /tmp/zz/ && echo x > /private/tmp/zz/a.md',
+      'mv notes/{a,b}.md /var/tmp/zz/ && rm -rf /private/var/tmp/zz',
+      'mv notes/{a,b}.md /private/var/folders/zz/ && rm -rf /var/folders',
+      'mv notes/{a,b}.md /etc/zz/ && rm -rf /private/etc/zz',
+      'mv notes/{a,b}.md /tmp/ && rm -rf /private/tmp',
+      // The source under its other name.
+      'mv /tmp/n/*.md ~/archive/ && rm /private/tmp/n/*.md',
+    ])
+      expect([command, kept(command)]).toEqual([command, []])
+    // Shown to differ: another folder under either name, and a name that only starts the same.
+    expect(kept('mv notes/{a,b}.md /tmp/zz/ && rm -rf /private/tmp/other')).toEqual(['notes/{a,b}.md'])
+    expect(kept('mv notes/{a,b}.md /tmp/zz/ && rm -rf /tmpx /private/tmpzz /private/tmp/zzz')).toEqual(['notes/{a,b}.md'])
+  })
+  test('a removal does not say where its mv puts it beside a command that makes a link, or one that takes its own sources away unread (#3478)', () => {
+    for (const command of [
+      // A link the command makes is a second name for a place, or for a file, that no path shows.
+      `ln -s ~/archive /tmp/x && ${MOVED} && rm -rf /tmp/x/`,
+      `${MOVED} && ln ~/archive/a.md /tmp/h && : > /tmp/h`,
+      `${MOVED} && ln -sf ~/archive ~/latest`,
+      // rsync told to remove what it sent takes the notes out of where the mv put them.
+      `${MOVED} && rsync -a --remove-source-files ~/archive/ /tmp/qq/ && rm -rf /tmp/qq`,
+      `${MOVED} && rsync -a --remove-sent-files ~/archive/ /tmp/qq/`,
+    ])
+      expect([command, kept(command)]).toEqual([command, []])
+    // An rsync that only copies leaves them there.
+    expect(kept(`${MOVED} && rsync -a ~/archive/ /tmp/qq/`)).toEqual(['notes/{a,b}.md'])
+  })
+  // A disk standing in for $.fs: `links` are symbolic links by their own path, and `there` every file
+  // and folder that exists, by where it really is. As the engine answers (read from Claude Code
+  // 2.1.x's own stat): exists follows links, stat of a link that leads nowhere answers with no
+  // realPath, and stat of nothing throws. Every question is counted.
+  const disk = (links: Record<string, string>, there: string[], fail: { exists?: string } = {}) => {
+    const asked: string[] = []
+    const follow = (path: string): string => {
+      let p = path
+      for (let i = 0; i < 40; i++) {
+        const hit = Object.keys(links).find(l => p === l || p.startsWith(`${l}/`))
+        if (hit === undefined) return p
+        p = `${links[hit]}${p.slice(hit.length)}`
+      }
+      throw new Error(`ELOOP: ${path}`)
+    }
+    const is = (p: string) => there.some(t => t === p || t.startsWith(`${p}/`))
+    const fs: LinkFs = {
+      exists: async path => {
+        asked.push(`exists ${path}`)
+        if (fail.exists === path) throw new Error(`EPERM: ${path}, exists`)
+        return is(follow(path))
+      },
+      stat: async (path, options) => {
+        asked.push(`stat ${path}`)
+        const real = follow(path)
+        if (!is(real)) {
+          if (links[path] !== undefined) return { isLink: true }
+          throw new Error(`ENOENT: ${path}`)
+        }
+        return { isLink: links[path] !== undefined, ...(options?.resolve ? { realPath: real } : {}) }
+      },
+    }
+    return { fs, asked }
+  }
+  const keptOn = async (d: { fs: LinkFs }, command: string) => (await settleOnDisk(read(command), d.fs)).changes.filter(c => c.does === 'remove' && c.to !== undefined).map(c => c.word)
+  const DESK = `${HOME}/Desktop`
+  const LINKED = { [`${DESK}/link`]: `${DESK}/archive`, [`${HOME}/n2`]: `${HOME}/notes` }
+  const THERE = [`${HOME}/notes/a.md`, `${DESK}/archive/old.md`, `${HOME}/elsewhere/x`, `${CWD}/notes/a.md`]
+  test('a folder reached through a link is the folder it leads to, as the disk says (#3478)', async () => {
+    for (const command of [
+      // Moved through the link, removed by the folder's own name, and the other way round.
+      'mv ~/notes/*.md ~/Desktop/link/ && rm -rf ~/Desktop/archive',
+      'mv ~/notes/*.md ~/Desktop/archive/ && rm ~/Desktop/link/*.md',
+      'mv ~/notes/*.md ~/Desktop/archive/ && rm -rf ~/Desktop/link/',
+      'mv ~/notes/a.md ~/Desktop/link/ && rm ~/Desktop/archive/a.md',
+      'mv ~/notes/a.md ~/Desktop/link && echo x > ~/Desktop/archive/a.md',
+      // A folder not made yet, under the link: the part that exists is followed, the rest is the name.
+      'mkdir -p ~/Desktop/link/new && mv ~/notes/*.md ~/Desktop/link/new/ && rm -rf ~/Desktop/archive/new',
+      // The source under its other name.
+      'mv ~/n2/*.md ~/elsewhere/ && rm ~/notes/*.md',
+      'mv ~/notes/a.md ~/elsewhere/ && truncate -s0 ~/n2/a.md',
+    ])
+      expect([command, await keptOn(disk(LINKED, THERE), command)]).toEqual([command, []])
+    // The controls, on the same disk: places the disk shows to differ, through a link or not.
+    expect(await keptOn(disk(LINKED, THERE), 'mv ~/notes/*.md ~/Desktop/link/ && rm -rf ~/elsewhere')).toEqual(['~/notes/*.md'])
+    expect(await keptOn(disk(LINKED, THERE), 'mv ~/n2/*.md ~/Desktop/archive/ && rm -rf ~/Desktop/other')).toEqual(['~/n2/*.md'])
+    expect(await keptOn(disk(LINKED, THERE), `mkdir -p ~/Desktop/new && ${MOVED} && ls ~/archive`)).toEqual(['notes/{a,b}.md'])
+    // On a disk with no link at all, every control of the reading by words alone still holds.
+    expect(await keptOn(disk({}, THERE), `${MOVED} && rm ~/other/x.md && echo x > ~/other/y.md`)).toEqual(['notes/{a,b}.md'])
+    // Home itself behind a link: both spellings lead to one place, and the rest still differs.
+    const moved = { [HOME]: '/Volumes/x/dan' }
+    const onVolume = ['/Volumes/x/dan/notes/a.md', '/Volumes/x/dan/archive/old.md']
+    expect(await keptOn(disk(moved, onVolume), 'mv ~/notes/*.md ~/archive/ && rm -rf ~/elsewhere')).toEqual(['~/notes/*.md'])
+    expect(await keptOn(disk(moved, onVolume), 'mv ~/notes/*.md ~/archive/ && rm -rf /Volumes/x/dan/archive')).toEqual([])
+    // The two names macOS always has hold on a disk that has neither folder yet.
+    expect(await keptOn(disk({}, THERE), 'mv ~/notes/*.md /tmp/zz/ && rm -rf /private/tmp/zz')).toEqual([])
+  })
+  test('where the disk cannot say where a place leads, nothing is said of the move beside another change (#3478)', async () => {
+    // A link that leads nowhere yet: the command may make what it points at.
+    const dangling = { [`${DESK}/link`]: `${DESK}/later` }
+    expect(await keptOn(disk(dangling, THERE), 'mkdir ~/Desktop/later && mv ~/notes/*.md ~/Desktop/link/ && rm -rf ~/Desktop/later')).toEqual([])
+    // A disk that fails the question, which is never thrown on to the caller.
+    expect(await keptOn(disk({}, THERE, { exists: `${HOME}/notes` }), 'mv ~/notes/*.md ~/archive/ && rm -rf ~/elsewhere')).toEqual([])
+    // With nothing else changing a file there is nothing to compare, and the move stands as read.
+    expect(await keptOn(disk(dangling, THERE), 'mv ~/notes/*.md ~/Desktop/link/')).toEqual(['~/notes/*.md'])
+  })
+  test('the disk is asked only for a command with a move left to settle, each place once, and never past the bound (#3478)', async () => {
+    // No move, or a move already unsaid by its words: no question at all.
+    for (const command of ['rm -rf ~/Desktop/archive', 'echo x > ~/notes/a.md', `${MOVED} && rm -rf ~/archive`]) {
+      const d = disk(LINKED, THERE)
+      await keptOn(d, command)
+      expect([command, d.asked]).toEqual([command, []])
+    }
+    // Places that share their folders ask about each folder once.
+    const d = disk(LINKED, THERE)
+    expect(await keptOn(d, 'mv ~/notes/*.md ~/Desktop/link/new/ && rm ~/elsewhere/a ~/elsewhere/b ~/elsewhere/c')).toEqual(['~/notes/*.md'])
+    expect(d.asked.length).toBe(new Set(d.asked).size)
+    expect(d.asked.length).toBeLessThan(20)
+    // Past the bound on places nothing is asked, and nothing is said of the move.
+    const many = Array.from({ length: SETTLE_PLACES + 1 }, (_, i) => `~/elsewhere/f${i}`).join(' ')
+    const big = disk(LINKED, THERE)
+    expect(await keptOn(big, `mv ~/notes/*.md ~/Desktop/archive/ && rm ${many}`)).toEqual([])
+    expect(big.asked).toEqual([])
   })
   test('a mv says where it puts its sources only where no two of them can land on one name, and never for a device (#3478)', () => {
     // One folder holds no two files of a name; two folders may.

@@ -151,6 +151,45 @@ test('$.modkit.writes follows CLAUDE_CODE_SHELL over SHELL', { plugins: [writesR
   expect(await handedUnder($, on, { CLAUDE_CODE_SHELL: '/bin/bash', SHELL: '/bin/zsh', HOME: '/h' })).toEqual([['/w/a.ts', '/w/b.ts']])
 })
 
+// #3478, the second fix round: where a mv puts a file is settled against the disk before any mod
+// reads it, so a folder reached through a link is the folder it leads to. Measured at 22e20b47fe:
+// the notes below were said to be at ~/Desktop/link while the command deleted them.
+const movesReader: { name: string; register: Register } = {
+  name: 'moves-reader',
+  register: on => {
+    on('tool.call', { tool: 'Bash' }, async ($, e) => {
+      const w = await $.modkit.writes({ command: String((e as { command?: string }).command), cwd: '/w', home: '/h' })
+      return { deny: JSON.stringify(w.changes.filter(c => c.to !== undefined).map(c => c.word)) }
+    })
+  },
+}
+const movedOn = async ($: unknown, on: On, links: Record<string, string>, command: string) => {
+  mock.env(on, { SHELL: '/bin/zsh', HOME: '/h' })
+  const folders = ['/', '/h', '/h/Desktop', '/h/Desktop/archive', '/h/notes']
+  const asked: string[] = []
+  on('fs.exists', ($, e) => ({ value: folders.includes(e.path) || links[e.path] !== undefined }) as never)
+  on('fs.stat', ($, e) => {
+    asked.push(e.path)
+    const leads = links[e.path]
+    if (leads === undefined && !folders.includes(e.path)) throw new Error(`ENOENT: ${e.path}`)
+    return { value: { kind: 'dir', size: 0, mtimeMs: 0, isLink: leads !== undefined, ...(e.resolve ? { realPath: leads ?? e.path } : {}) } } as never
+  })
+  on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
+  const r = await ($ as { tool: { call: (e: never) => Promise<{ deny?: string; text?: string }> } }).tool.call({ tool: 'Bash', command } as never)
+  return { moved: JSON.parse(r.deny ?? r.text ?? '[]') as unknown, asked }
+}
+test('$.modkit.writes takes a folder reached through a link for the folder it leads to (#3478)', { plugins: [movesReader] }, async ($, on) => {
+  const r = await movedOn($, on, { '/h/Desktop/link': '/h/Desktop/archive' }, 'mv ~/notes/*.md ~/Desktop/link/ && rm -rf ~/Desktop/archive')
+  expect(r.moved).toEqual([])
+  expect(r.asked).toContain('/h/Desktop/link')
+})
+test('$.modkit.writes says where a mv puts a file when the disk shows the places differ (#3478)', { plugins: [movesReader] }, async ($, on) => {
+  expect((await movedOn($, on, {}, 'mv ~/notes/*.md ~/Desktop/link/ && rm -rf ~/Desktop/archive')).moved).toEqual(['~/notes/*.md'])
+})
+test('$.modkit.writes asks the disk nothing for a command that moves nothing (#3478)', { plugins: [movesReader] }, async ($, on) => {
+  expect((await movedOn($, on, {}, 'rm -rf ~/Desktop/archive && echo x > ~/notes/a.md')).asked).toEqual([])
+})
+
 // #698: a reader that judges what a heredoc feeds asks for its body through the kit, as plain data.
 const heredocReader: { name: string; register: Register } = {
   name: 'heredoc-reader',

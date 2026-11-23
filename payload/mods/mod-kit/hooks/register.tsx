@@ -12,7 +12,7 @@ import { sendTwice } from './send.ts'
 import { ghRepo, githubRepo, linkRepo, repoName } from './repo.ts'
 import { branchAt } from './branch.ts'
 import { workingTree } from './tree.ts'
-import { callShell, commandWrites, pipelineIn } from './writes.ts'
+import { callShell, commandWrites, pipelineIn, settleOnDisk } from './writes.ts'
 import { pythonText } from './code.ts'
 import { isDans } from './origin.ts'
 import { followAccount, loginStarted, readAccount, registerLogin } from './login.ts'
@@ -333,8 +333,13 @@ export const register: Register = (on, options) => {
       },
       commands: async ({ command }) => commands(command),
       // Read as the shell the call runs in reads it (#1834), found from the session's environment.
+      // Where a mv puts a file is then settled against the disk (#3478), which alone can say that
+      // two paths are one place; a command with no move left to settle asks the disk nothing.
       writes: async ({ command, cwd, home }) =>
-        commandWrites(command, cwd, home, callShell({ CLAUDE_CODE_SHELL: await built.env.get('CLAUDE_CODE_SHELL'), SHELL: await built.env.get('SHELL') })),
+        settleOnDisk(commandWrites(command, cwd, home, callShell({ CLAUDE_CODE_SHELL: await built.env.get('CLAUDE_CODE_SHELL'), SHELL: await built.env.get('SHELL') })), {
+          exists: path => built.fs.exists(path),
+          stat: (path, options) => (options ? built.fs.stat(path, options) : built.fs.stat(path)),
+        }),
       git: async ({ words, env }) => git(words, env),
       gh: async ({ words }) => ghArgs(words),
       mergeHelper: async command => mergeHelperArgs(command),

@@ -4,7 +4,7 @@ import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
 import { APPROVAL_MS, MAX_CHECK, MAX_QUESTION, MAX_QUESTION_ROWS, MAX_SHORT_TEXT, QUESTION_COLUMNS, askInstruction, pickerOnly, rowsAt, sendFirstNote, shownFault } from '../hooks/rules.ts'
 import { SHAPED, entryOf, without } from './lessons-shaped.ts'
-import { commandWrites } from './mod-kit/hooks/writes.ts'
+import { commandWrites, settleOnDisk, type LinkFs } from './mod-kit/hooks/writes.ts'
 import { pipeline } from './mod-kit/hooks/commands.ts'
 import { isDans } from './mod-kit/hooks/origin.ts'
 import { pythonText } from './mod-kit/hooks/code.ts'
@@ -193,7 +193,7 @@ type Asked = { questions: { question: string; header: string; options: { label: 
 // since ('changed'), in a repository that does not hold it ('untracked'), or git failing ('breaks');
 // a path not listed is in no repository. A folder is there when a file of the world is under it.
 type GitState = 'clean' | 'changed' | 'untracked' | 'breaks'
-const world = (engine: Engine, on: On, init: { files?: Record<string, string>; git?: Record<string, GitState>; fifos?: string[]; stdinLinks?: string[]; failWrites?: boolean; throwsRun?: boolean; cwdFails?: boolean; auto?: boolean; ownClock?: true; agents?: string[]; env?: Record<string, string>; gate?: { reached: () => void; opened: Promise<void> } } = {}) => {
+const world = (engine: Engine, on: On, init: { files?: Record<string, string>; links?: Record<string, string>; git?: Record<string, GitState>; fifos?: string[]; stdinLinks?: string[]; failWrites?: boolean; throwsRun?: boolean; cwdFails?: boolean; auto?: boolean; ownClock?: true; agents?: string[]; env?: Record<string, string>; gate?: { reached: () => void; opened: Promise<void> } } = {}) => {
   let gateReads = 0
   const gitAsked: string[] = []
   const files: Record<string, string> = { ...(init.files ?? {}) }
@@ -210,11 +210,13 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string>; g
   // Claude Code's environment as printenv reads it: HOME and whatever the test sets.
   const env: Record<string, string> = { HOME, ...(init.env ?? {}) }
   const printenv: string[] = []
-  on('process.run', ($, e) => {
-    // mod-kit's write reader, read here with its copy (the stand-in above asks for it).
+  const onDisk: LinkFs = { exists: async () => false, stat: async () => ({}) }
+  on('process.run', async ($, e) => {
+    // mod-kit's write reader, read here with its copy (the stand-in above asks for it), and its
+    // moves settled against this world's disk as mod-kit settles them against the real one (#3478).
     if (e.argv[0] === '__modkit' && e.argv[1] === 'writes') {
       const input = JSON.parse(String(e.argv[2])) as { command: string; cwd: string; home: string }
-      const out = JSON.stringify(commandWrites(input.command, input.cwd, input.home))
+      const out = JSON.stringify(await settleOnDisk(commandWrites(input.command, input.cwd, input.home), onDisk))
       return { value: { exitCode: 0, stdout: out, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
     }
     if (e.argv[0] === '__modkit' && e.argv[1] === 'isDans') {
@@ -266,21 +268,43 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string>; g
     attempted = () => resolve('read attempted')
   })
   const under = (path: string) => Object.keys(files).filter(f => f.startsWith(`${path.replace(/\/$/, '')}/`))
-  on('fs.exists', ($, e) => ({ value: files[e.path] !== undefined || isOther(e.path) || under(e.path).length > 0 }) as never)
+  // `links` (#3478): symbolic links by their own path, each leading to the path it is given. A path
+  // is looked at where it really leads, every link along it followed, as the disk does.
+  const links = init.links ?? {}
+  const follow = (path: string): string => {
+    let p = path
+    for (let i = 0; i < 40; i++) {
+      const hit = Object.keys(links).find(l => p === l || p.startsWith(`${l}/`))
+      if (hit === undefined) return p
+      p = `${links[hit]}${p.slice(hit.length)}`
+    }
+    return p
+  }
+  const existsAt = (path: string) => files[follow(path)] !== undefined || isOther(path) || under(follow(path)).length > 0
+  const statAt = (path: string, resolve?: boolean) => {
+    if ((init.stdinLinks ?? []).includes(path) && resolve) throw new Error(`EBADF: bad file descriptor, stat '${path}'`)
+    if (isOther(path)) return { kind: 'other', size: 0, mtimeMs: 0, isLink: false }
+    // Asked with links followed, the engine says where the path really is (realPath), for a path
+    // through no link too (read from Claude Code's own stat, 2026-11-23).
+    const at = follow(path)
+    const said = { size: 0, mtimeMs: 0, isLink: links[path] !== undefined, ...(resolve ? { realPath: at } : {}) }
+    if (files[at] === undefined && under(at).length) return { kind: 'dir', ...said }
+    if (files[at] === undefined) throw new Error(`ENOENT: ${path}`)
+    return { kind: 'file', ...said, size: 1 }
+  }
+  // The same disk, as mod-kit asks it when it settles a move (#3478): a stand-in for one noun cannot
+  // ask another through $ (measured: every such question failed, and every move went unsaid).
+  onDisk.exists = async path => existsAt(path)
+  onDisk.stat = async (path, options) => statAt(path, options?.resolve)
+  on('fs.exists', ($, e) => ({ value: existsAt(e.path) }) as never)
   // A folder's own entries (#3402): each file or folder directly in it, once.
   on('fs.list', ($, e) => {
-    const at = e.path.replace(/\/$/, '')
+    const at = follow(e.path.replace(/\/$/, ''))
     const names = [...new Set(under(at).map(f => f.slice(at.length + 1).split('/')[0] as string))]
     // 'dir' is the engine's own word for a folder ($.fs.stat and $.fs.list: 'file' | 'dir' | 'other').
     return { value: names.map(name => ({ name, kind: files[`${at}/${name}`] !== undefined ? 'file' : 'dir' })) } as never
   })
-  on('fs.stat', ($, e) => {
-    if ((init.stdinLinks ?? []).includes(e.path) && e.resolve) throw new Error(`EBADF: bad file descriptor, stat '${e.path}'`)
-    if (isOther(e.path)) return { value: { kind: 'other', size: 0, mtimeMs: 0, isLink: false } } as never
-    if (files[e.path] === undefined && under(e.path).length) return { value: { kind: 'dir', size: 0, mtimeMs: 0, isLink: false } } as never
-    if (files[e.path] === undefined) throw new Error(`ENOENT: ${e.path}`)
-    return { value: { kind: 'file', size: 1, mtimeMs: 0, isLink: false } } as never
-  })
+  on('fs.stat', ($, e) => ({ value: statAt(e.path, e.resolve) }) as never)
   on('fs.read', async ($, e) => {
     if (isOther(e.path)) {
       opened.push(e.path)
@@ -4088,6 +4112,40 @@ test('notes a command moves and also removes or empties under another spelling o
   expect(got).toEqual(got.map(([command]) => [command, AS_A_DELETION]))
   expect(got.length).toBe(6)
   expect(w.ran).toEqual([])
+})
+
+// The second fix round of #3478. Measured at 22e20b47fe through the whole mod: every command here
+// was refused as "Not moved yet", its question ending "can be moved back", and each deletes the notes.
+const DESK_LINK = { [`${HOME}/Desktop/link`]: `${HOME}/Desktop/archive` }
+test('notes moved to a place the same command removes under its other name are asked about as a deletion (#3478)', withKit, async ($, on) => {
+  const w = world($, on, { files: ARCHIVED, links: DESK_LINK })
+  const got: string[][] = []
+  for (const command of [
+    // macOS: /tmp is /private/tmp and /var is /private/var, with nothing on the disk there yet.
+    `mv ${BRACE_NAMES} /tmp/zz/ && rm -rf /private/tmp/zz`,
+    `mv ${BRACE_NAMES} /private/tmp/zz/ && rm -rf /tmp/zz`,
+    `mv ${BRACE_NAMES} /tmp/zz/ && rm /private/tmp/zz/*.md`,
+    `mv ${BRACE_NAMES} /var/tmp/zz/ && rm -rf /private/var/tmp/zz`,
+    // A folder reached through a link, which only the disk shows.
+    `mv ${BRACE_NAMES} ~/Desktop/link/ && rm -rf ~/Desktop/archive`,
+    `mv ${BRACE_NAMES} ~/Desktop/archive/ && rm ~/Desktop/link/*.md`,
+    // A link the command itself makes, and an rsync that removes what it sent.
+    `ln -s ~/Desktop/archive /tmp/x && ${BRACE_MOVED} && rm -rf /tmp/x/`,
+    `${BRACE_MOVED} && rsync -a --remove-source-files ~/Desktop/archive/ /tmp/qq/ && rm -rf /tmp/qq`,
+  ])
+    got.push([command, await howAsked($, command, BRACE_NAMES)])
+  expect(got).toEqual(got.map(([command]) => [command, AS_A_DELETION]))
+  expect(got.length).toBe(8)
+  expect(w.ran).toEqual([])
+})
+
+test('notes moved through a link are still asked about as a move while the disk shows nothing else in the command reaches them (#3478)', withKit, async ($, on) => {
+  world($, on, { files: ARCHIVED, links: DESK_LINK })
+  for (const command of [`mv ${BRACE_NAMES} ~/Desktop/link/`, `mkdir -p ~/Desktop/other && mv ${BRACE_NAMES} ~/Desktop/link/ && rm -rf ~/Desktop/other`, `mv ${BRACE_NAMES} /tmp/zz/ && rm -rf /private/tmp/other`]) {
+    const refused = refusalOf(await call($, { tool: 'Bash', command }))
+    expect([command, refused.slice(0, 60)]).toEqual([command, `${NOT_MOVED}: this moves lasting memory away (${BRACE_NAMES}, into`.slice(0, 60)])
+    expect(refused).not.toContain('elete')
+  }
 })
 
 test('notes moved in a command whose other half cannot be read for sure are asked about as main asked, as a deletion (#3478)', withKit, async ($, on) => {

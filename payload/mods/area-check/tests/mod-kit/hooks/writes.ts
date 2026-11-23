@@ -1809,6 +1809,10 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     // #3478: a script file, a module, a tool, a test runner and a command xargs hands its words to
     // change files this reader gives no write or change for, whatever each is handed.
     if (scriptFile || tool || c.xargs) unsure = true
+    // The second fix round of #3478. A link made here gives a place, or a file, a second name that
+    // no comparing of paths shows and that is not on the disk yet when the disk is asked. And an
+    // rsync told to remove what it sent takes its sources away with no removal given for them.
+    if (name === 'ln' || name === 'link' || (name === 'rsync' && rest.some(a => a === '--remove-source-files' || a === '--remove-sent-files'))) unsure = true
     // #3323: a program on none of the lists above, read by no rule of its own, is read as writing
     // each file it is handed, as a tool is: what it does with one cannot be read before it runs. It
     // is a run marked `unknown`, so each guard that judges a run's arguments judges these, and says
@@ -1974,6 +1978,18 @@ const UNSURE = new WeakSet<ModKitWrites>()
 const isUnder = (a: string, b: string): boolean => a !== b && a.startsWith(b.endsWith('/') ? b : `${b}/`)
 const onOneBranch = (a: string, b: string): boolean => a === b || isUnder(a, b) || isUnder(b, a)
 const placeOfChange = (x: { path?: string; folder?: string }): string | undefined => x.path ?? x.folder
+// Where a removal's mv may put it: the one path a source named outright has there, the whole folder
+// for a pattern or a variable, and undefined for a folder no path names. None for a removal with no
+// mark.
+const landsOf = (m: ModKitChange): (string | undefined)[] => {
+  if (m.to === undefined) return []
+  const name = m.path === undefined ? undefined : baseOf(m.path)
+  return m.to.path === undefined ? [undefined] : name === undefined ? [m.to.path] : m.to.into ? [`${m.to.path}/${name}`] : [m.to.path, `${m.to.path}/${name}`]
+}
+// macOS keeps /tmp, /var and /etc as links into /private, so each is one place under two names
+// whatever is on the disk. Said the /private way. On a system where they are folders of their own
+// this takes two places for one, which only ever takes a mark off.
+const knownPlace = (path: string): string => path.replace(/^\/(tmp|var|etc)(?=\/|$)/, '/private/$1')
 
 /**
  * Takes `to` off every removal whose file the command, read whole, may not leave where its mv put
@@ -1995,22 +2011,21 @@ const placeOfChange = (x: { path?: string; folder?: string }): string | undefine
  * A program the reader does not know that is handed no file is read as changing none, as it is
  * everywhere in this reader (#3323).
  */
-const settleMoves = (w: ModKitWrites): ModKitWrites => {
+const settleMoves = (w: ModKitWrites, real: (path: string) => string | undefined = knownPlace): ModKitWrites => {
   const moved = w.changes.filter(c => c.to !== undefined)
   if (!moved.length) return w
   const blind = UNSURE.has(w) || w.unnamed.length > 0 || !!w.unread?.length || !!w.runs?.length || !!w.byGit?.length
+  const where = (p: string | undefined): string | undefined => (p === undefined ? undefined : real(p))
   for (const m of moved) {
-    const to = m.to as NonNullable<ModKitChange['to']>
     const own = MADE_BY.get(m) ?? new Set<object>()
     const byAnother = (x: object): boolean => {
       const by = MADE_BY.get(x)
       return !by || [...by].some(c => !own.has(c))
     }
-    const source = placeOfChange(m)
-    const name = m.path === undefined ? undefined : baseOf(m.path)
-    const lands: (string | undefined)[] = to.path === undefined ? [undefined] : name === undefined ? [to.path] : to.into ? [`${to.path}/${name}`] : [to.path, `${to.path}/${name}`]
+    const source = where(placeOfChange(m))
+    const lands = landsOf(m).map(where)
     const reaches = (x: { path?: string; folder?: string }, places: readonly (string | undefined)[]): boolean => {
-      const at = placeOfChange(x)
+      const at = where(placeOfChange(x))
       return at === undefined || places.some(p => p === undefined || onOneBranch(at, p))
     }
     const taken = w.changes.some(x => x !== m && (x.does === 'remove' || x.does === 'truncate') && byAnother(x) && reaches(x, [source, ...lands]))
@@ -2018,6 +2033,90 @@ const settleMoves = (w: ModKitWrites): ModKitWrites => {
     if (blind || taken || writtenOver) delete m.to
   }
   return w
+}
+
+/** The two questions `settleOnDisk` asks of the disk, as the engine's `$.fs` answers them. */
+export type LinkFs = { exists: (path: string) => Promise<boolean>; stat: (path: string, options?: { resolve: boolean }) => Promise<{ isLink?: boolean; realPath?: string }> }
+
+/**
+ * The most places `settleOnDisk` will ask the disk about for one command. A command naming more is
+ * not asked about at all, and nothing is said of its moves. Chosen, not measured: each place costs
+ * two questions where it exists and two more for each folder of its path that does not, every
+ * question asked once however many places share it, so 40 places is a few hundred questions at
+ * most, where a hook has 10 seconds.
+ */
+export const SETTLE_PLACES = 40
+
+/**
+ * `to`, settled against the disk (#3478, the second fix round). The words alone compare places as
+ * paths, and a link gives one place two paths: `mv notes/*.md ~/Desktop/link/ && rm -rf
+ * ~/Desktop/archive`, where link leads to archive, deletes the notes it was said to have moved. So
+ * each place the command names is taken to where the disk says it leads (the real path of the
+ * longest part of it that exists, then the rest of its name), and the moves are settled again over
+ * those. A place the disk cannot follow (a link that leads nowhere, a question that fails) is no
+ * place to compare with, so any other change in the command takes the mark off, as a place no path
+ * names does. Asked only while a move is still marked, so a command with none costs no question.
+ * Never throws. What it cannot see: a link the command itself makes (so a command that makes one
+ * is unsure, in the reading by words), a second hard link to a moved file that is already on the
+ * disk, and a path that climbs out of a linked folder with `..`, which the words fold away.
+ */
+export const settleOnDisk = async (w: ModKitWrites, fs: LinkFs): Promise<ModKitWrites> => {
+  if (!w.changes.some(c => c.to !== undefined)) return w
+  const places = new Set<string>()
+  const note = (p: string | undefined) => {
+    if (p !== undefined) places.add(p)
+  }
+  for (const c of w.changes) {
+    note(placeOfChange(c))
+    for (const p of landsOf(c)) note(p)
+  }
+  for (const f of w.files) note(placeOfChange(f))
+  const real = new Map<string, string>()
+  if (places.size <= SETTLE_PLACES) {
+    // What is at one path: where it really is, null for nothing there, undefined where the disk
+    // cannot say (a link that leads nowhere answers stat with no real path; a failed question).
+    const asked = new Map<string, Promise<string | null | undefined>>()
+    const at = (path: string) => {
+      const had = asked.get(path)
+      if (had) return had
+      const answer = (async () => {
+        try {
+          if (await fs.exists(path)) return (await fs.stat(path, { resolve: true })).realPath
+        } catch {
+          return undefined
+        }
+        // Not there when followed. A link is still there when looked at itself, and leads nowhere.
+        try {
+          await fs.stat(path)
+          return undefined
+        } catch {
+          return null
+        }
+      })()
+      asked.set(path, answer)
+      return answer
+    }
+    for (const place of places) {
+      let head = place
+      let rest = ''
+      while (head.startsWith('/')) {
+        const found = await at(head)
+        if (found === undefined) break
+        if (found !== null) {
+          real.set(place, `${found.replace(/\/+$/, '')}${rest}` || '/')
+          break
+        }
+        if (head === '/') break
+        const cut = head.lastIndexOf('/')
+        rest = `${head.slice(cut)}${rest}`
+        head = head.slice(0, cut) || '/'
+      }
+    }
+  }
+  return settleMoves(w, p => {
+    const r = real.get(p)
+    return r === undefined ? undefined : knownPlace(r)
+  })
 }
 
 // Each change in `from` that `into` lacks is added to it: a path once, keeping what either says of it
