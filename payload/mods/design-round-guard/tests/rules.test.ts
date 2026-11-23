@@ -3987,6 +3987,79 @@ test('#3416: text that may run after the definition and that the guard cannot re
   expect(wrong).toEqual([])
 })
 
+// #3460: a trap whose text the shell fills in is text that may run after the definition and that
+// the guard cannot read. Dan's question on the issue, answered here with the safer reading: any
+// such trap holds every helper call of the script, whatever its signal and wherever it is typed,
+// since which signals fire, and when, is not something this reading follows (ERR fires on any
+// failing command, RETURN when a file read in ends, a signal when the script sends itself one, and
+// a trap typed in a function is set when that function is called).
+test('#3460: a trap whose text the shell fills in holds the call, on any signal and wherever it is typed; a typed trap is read as it was', async () => {
+  const RUN = 'run() { true; }\n'
+  const CALL = 'run app/page.tsx\n'
+  const wrong: { form: string; text: string; left: string[] }[] = []
+  const want = async (verdict: 'held' | 'cleared', form: string, text: string, files: Record<string, string> = {}): Promise<void> => {
+    const left = await readLeft(text, files)
+    if (left.join('\n') !== (verdict === 'held' ? 'run /s/app/page.tsx' : '')) wrong.push({ form, text, left })
+  }
+  // The four signals the issue names, set before the definition and after it.
+  for (const sig of ['DEBUG', 'ERR', 'RETURN', 'EXIT']) {
+    await want('held', `a variable, ${sig}, before the definition`, `trap "$LATER" ${sig}\n${RUN}${CALL}`)
+    await want('held', `a variable, ${sig}, after the definition`, `${RUN}trap "$LATER" ${sig}\n${CALL}`)
+  }
+  // Every way the shell fills the text in.
+  await want('held', 'a bare variable', `trap $LATER DEBUG\n${RUN}${CALL}`)
+  await want('held', 'a variable in braces', `trap "\${LATER}" DEBUG\n${RUN}${CALL}`)
+  await want('held', 'a substitution', `trap "$(cat later.txt)" DEBUG\n${RUN}${CALL}`)
+  await want('held', 'a backtick substitution', `trap "\`cat later.txt\`" DEBUG\n${RUN}${CALL}`)
+  await want('held', 'a here string read into a variable', `read -r LATER <<< "$X"\ntrap "$LATER" DEBUG\n${RUN}${CALL}`)
+  await want('held', 'a here string inside a substitution', `trap "$(cat <<< "$X")" DEBUG\n${RUN}${CALL}`)
+  await want('held', 'typed text joined to a variable', `trap 'echo x; '"$LATER" DEBUG\n${RUN}${CALL}`)
+  await want('held', 'a variable inside typed double quotes', `trap "rm -rf $T" EXIT\n${RUN}${CALL}`)
+  await want('held', 'after --', `trap -- "$LATER" DEBUG\n${RUN}${CALL}`)
+  await want('held', 'behind builtin', `builtin trap "$LATER" DEBUG\n${RUN}${CALL}`)
+  await want('held', 'behind command', `command trap "$LATER" DEBUG\n${RUN}${CALL}`)
+  await want('held', 'every word from "$@"', `set -- "$LATER" DEBUG\ntrap "$@"\n${RUN}${CALL}`)
+  await want('held', 'every word from one bare variable', `trap $SPEC\n${RUN}${CALL}`)
+  await want('held', 'the text and the signal both variables', `trap "$LATER" "$SIG"\n${RUN}${CALL}`)
+  await want('held', 'a value before typed text', `trap $OPT 'echo x' EXIT\n${RUN}${CALL}`)
+  await want('held', 'a value after a typed --, before typed text', `trap -- $OPT 'echo x' EXIT\n${RUN}${CALL}`)
+  // Wherever it is typed.
+  await want('held', 'in a function called after the definition', `setup() { trap "$LATER" DEBUG; }\n${RUN}setup\n${CALL}`)
+  await want('held', 'in a function never called by name', `setup() { trap "$LATER" DEBUG; }\n${RUN}${CALL}`)
+  await want('held', 'in a subshell', `( trap "$LATER" DEBUG; true )\n${RUN}${CALL}`)
+  await want('held', 'in a branch', `if [ -n "$X" ]; then\n  trap "$LATER" DEBUG\nfi\n${RUN}${CALL}`)
+  await want('held', 'after the call', `${RUN}${CALL}trap "$LATER" DEBUG\n`)
+  await want('held', 'a signal the script never sends', `trap "$LATER" USR1\n${RUN}${CALL}`)
+  // In a file read in, at its top or in a function it defines, read in before the definition or after.
+  for (const lib of ['trap "$LATER" DEBUG\n', 'setup() { trap "$LATER" EXIT; }\n']) {
+    await want('held', `in a file read in before the definition (${lib.trim()})`, `. lib.sh\n${RUN}${CALL}`, { '/s/lib.sh': lib })
+    await want('held', `in a file read in after the definition (${lib.trim()})`, `${RUN}. lib.sh\n${CALL}`, { '/s/lib.sh': lib })
+  }
+  await want('held', 'in the suite, the helper from a file read in', `. lib2.sh\ntrap "$LATER" DEBUG\n${CALL}`, { '/s/lib2.sh': RUN })
+  await want('held', 'in the file the helper comes from', `. lib2.sh\n${CALL}`, { '/s/lib2.sh': `${RUN}trap "$LATER" DEBUG\n` })
+
+  // A typed trap is read as the commands it runs, as it was. Held where they define the name
+  // again, take it away, or run text the guard cannot read.
+  await want('held', 'typed, defines the name again', `trap 'run() { mystery "$@"; }' DEBUG\n${RUN}${CALL}`)
+  await want('held', 'typed, runs an eval', `trap 'eval "$X"' DEBUG\n${RUN}${CALL}`)
+  await want('held', 'typed, unsets the name', `trap 'unset -f run' DEBUG\n${RUN}${CALL}`)
+  await want('held', 'typed, reads in a file the guard cannot read', `${RUN}trap '. /elsewhere/lib.sh' DEBUG\n${CALL}`)
+  await want('held', 'typed, sets an alias', `trap 'alias run=mystery' DEBUG\n${RUN}${CALL}`)
+  // The controls: let be where the typed text does none of that, and where a trap runs no text.
+  await want('cleared', 'typed, removes a temporary folder', `T=$(mktemp -d)\ntrap 'rm -rf "$T"' EXIT\n${RUN}${CALL}`)
+  await want('cleared', 'typed in double quotes, no variable', `trap "echo done" EXIT\n${RUN}${CALL}`)
+  await want('cleared', 'typed, calls a function of the suite', `cleanup() { rm -rf "$T"; }\ntrap cleanup EXIT\n${RUN}${CALL}`)
+  await want('cleared', 'typed, the signal a variable', `for sig in INT TERM; do\n  trap 'echo stopped' "$sig"\ndone\n${RUN}${CALL}`)
+  await want('cleared', 'typed, in a file read in', `. lib.sh\n${RUN}${CALL}`, { '/s/lib.sh': 'trap \'rm -rf "$T"\' EXIT\n' })
+  await want('cleared', 'trap - SIG', `trap - DEBUG\n${RUN}${CALL}`)
+  await want('cleared', "trap '' SIG", `trap '' DEBUG\n${RUN}${CALL}`)
+  await want('cleared', 'trap - and a signal from a variable', `trap - "$SIG"\n${RUN}${CALL}`)
+  await want('cleared', "trap '' and a signal from a variable", `trap '' "$SIG"\n${RUN}${CALL}`)
+  await want('cleared', 'trap alone, and trap -p', `trap\ntrap -p\n${RUN}${CALL}`)
+  await want('cleared', 'a signal reset by name or number', `trap INT\ntrap 2\n${RUN}${CALL}`)
+  expect(wrong).toEqual([])
+})
+
 test('#3416: a comment that spells a definition or a read in command is never probed, so it cannot move what stands at the top', async () => {
   const RUN = 'run() { true; }\n'
   const CALL = 'run app/page.tsx\n'

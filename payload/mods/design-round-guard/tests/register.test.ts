@@ -5515,6 +5515,40 @@ test('#3416: a function of the script that hands on what it was handed, or that 
   expect(w.files[KEYS]).toBe(KEYS_TEXT)
 })
 
+// #3460: a trap whose text the shell fills in (`trap "$LATER" DEBUG`) runs text nobody can read
+// before then, and that text can define the helper's name again before the call. Measured in bash
+// and zsh on 2026-11-23: with LATER holding a second definition of run, the call below ran that
+// definition on DEBUG and on ERR, set before the helper's definition or after it. Until this, the
+// call was read as the helper's typed body and ran unasked. A trap whose text is typed is read as
+// the commands it runs, as it was: held where they define the name again, let be where they do not.
+test('#3460: a trap whose text the shell fills in holds a call of a helper the script defines, on any signal, set before the definition or after', withKit, async ($, on) => {
+  const RUN = 'run() { true; }\n'
+  const CALL = 'run /w/slate/app/page.tsx\n'
+  const SIGNALS = ['DEBUG', 'ERR', 'RETURN', 'EXIT']
+  const scripts: Record<string, string> = {
+    ...Object.fromEntries(SIGNALS.flatMap(sig => [[`before-${sig}.sh`, `trap "$LATER" ${sig}\n${RUN}${CALL}`], [`after-${sig}.sh`, `${RUN}trap "$LATER" ${sig}\n${CALL}`]])),
+    // Typed: its text is read. One that defines the name again was held already and still is.
+    'typed-defines.sh': `trap 'run() { mystery "$@"; }' DEBUG\n${RUN}${CALL}`,
+    // Typed, and harmless: runs as before.
+    'typed.sh': `T=$(mktemp -d)\ntrap 'rm -rf "$T"' EXIT\n${RUN}${CALL}`,
+    'reset.sh': `trap - DEBUG\ntrap '' INT\n${RUN}${CALL}`,
+  }
+  const w = world($, on, { files: { ...WITH_SCRATCH, ...Object.fromEntries(Object.entries(scripts).map(([name, text]) => [`${NOTES}/${name}`, text])) } })
+  const sh = (command: string) => call($, { tool: 'Bash', command })
+  const cleared = [`bash ${NOTES}/typed.sh`, `bash ${NOTES}/reset.sh`]
+  for (const command of cleared) expect({ command, why: refusalOf(await sh(command)) }).toEqual({ command, why: '' })
+  expect(w.ran.length).toBe(cleared.length)
+  // Every case is run, and each one that ran unasked is named, so one wrong case does not hide the rest.
+  const unasked: string[] = []
+  for (const name of [...SIGNALS.flatMap(sig => [`before-${sig}`, `after-${sig}`]), 'typed-defines']) {
+    if (!refusalOf(await sh(`bash ${NOTES}/${name}.sh`)).includes(SKIP_QUESTION)) unasked.push(name)
+  }
+  expect(unasked).toEqual([])
+  expect(w.ran.length).toBe(cleared.length)
+  // Said as any other call of a program the reader does not know is.
+  expect(refusalOf(await sh(`bash ${NOTES}/before-DEBUG.sh`))).toContain(`The design round guard judged app/page.tsx, which ${NOTES}/before-DEBUG.sh hands run, as a write of that file: run is a program the mods do not know`)
+})
+
 test('#2855: a script named through a variable the command sets is read; one a loop names is not', withKit, async ($, on) => {
   const w = world($, on, { files: { ...WITH_SCRATCH, [`${NOTES}/gen.py`]: WRITE_PAGE_PY, [`${NOTES}/keys.py`]: REWRITE_KEYS, [`${NOTES}/data.py`]: WRITE_DATA_PY } })
   for (const command of [`N=${NOTES}; python3 "$N/gen.py"`, `N=${NOTES} && python3 "\${N}/gen.py" --dry`, `export N=${NOTES}\npython3 "$N/gen.py"`]) {

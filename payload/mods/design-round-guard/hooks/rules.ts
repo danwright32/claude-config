@@ -2426,7 +2426,8 @@ const endsCommand = (text: string, at: number): boolean => {
   }
 }
 // The command a command's words run, past the shell's own words for running a builtin.
-const ranBy = (c: RunCommand): string => c.words.find(w => w !== 'builtin' && w !== 'command') ?? ''
+const ranAt = (c: RunCommand): number => c.words.findIndex(w => w !== 'builtin' && w !== 'command')
+const ranBy = (c: RunCommand): string => c.words[ranAt(c)] ?? ''
 // A command the shell itself runs: one behind `timeout`, `env`, `command`, a new shell, `xargs` or
 // `find` is a program of that name, which knows nothing of the script's functions.
 const plainCall = (c: RunCommand): boolean => !c.behind?.length && !c.xargs && !c.found?.length
@@ -2444,6 +2445,18 @@ const OWN_SETS = new Set(['export', 'declare', 'typeset', 'local', 'readonly', '
 const sameWords = (a: readonly string[] | undefined, b: readonly string[]): boolean => a !== undefined && a.length === b.length && a.every((w, i) => w === b[i])
 const liveWord = (c: RunCommand, i: number): boolean => /[$`]/.test(c.words[i] ?? '') && !c.unexpanded?.[i]
 const safeWord = (word: string): string => word.replace(/[^A-Za-z0-9_@%+=:,./-]/g, '_')
+// A trap whose text the shell fills in (#3460): `trap "$LATER" DEBUG`, a substitution, typed text
+// joined to a value, or every word from one value (`trap "$@"`, `trap $SPEC`). What it runs later
+// is text nobody can read before then, as an eval's is. So it is one with a value in the word
+// where its text would stand, the first after `trap` and a typed `--`, which takes in every trap
+// mod-kit's pipeline marks unread (unreadOf asks the same word, and only of a trap with a signal
+// after it). A trap whose word there is typed is not one: its text is read as the commands it
+// runs (mod-kit's trapText), and `-`, '' or a signal's name there runs no text, whatever value
+// names the signal after it.
+const trapUnseen = (c: RunCommand): boolean => {
+  const o = ranAt(c)
+  return c.words[o] === 'trap' && liveWord(c, o + (c.words[o + 1] === '--' ? 2 : 1))
+}
 
 /**
  * Where a shell text defines the function `name`, as mod-kit's pipeline gives its commands: `braces`,
@@ -2571,7 +2584,10 @@ const wholeGroup = async (io: OwnCallIo, inner: string): Promise<readonly RunCom
  *   at the top (a function that would define the name again once it is called);
  * - text that may run after the definition and that this reading cannot follow, wherever it is
  *   typed, since a function typed above the definition can be called below it: an eval anywhere in
- *   the script; a file the guard read, before the definition or after, that holds an eval, an
+ *   the script; a trap whose text the shell fills in (trapUnseen, #3460), anywhere in the script or
+ *   in a file the guard read, on any signal, since which signals fire and when is not followed (a
+ *   typed trap's text is read as the commands it runs, so it holds only where they do); a file the
+ *   guard read, before the definition or after, that holds an eval, an
  *   alias, an unset or a file it reads in itself; a file the guard did not read, unless it is read
  *   in above the definition at the top of the script as a command of its own, where it has ended
  *   before the definition. NOT told: a function such a file defined under another name, called
@@ -2880,7 +2896,7 @@ export const withoutOwnCalls = async (given: OwnCallIo, text: string, commands: 
   }
   // What a file read in may not hold: text run as commands, a file it reads in itself (a file read
   // in is followed one file deep, and no deeper), or a change to which function a name runs.
-  const rereads = (cmds: readonly RunCommand[]): boolean => cmds.some(r => ['eval', 'source', '.', 'alias', 'unset'].includes(ranBy(r)))
+  const rereads = (cmds: readonly RunCommand[]): boolean => cmds.some(r => ['eval', 'source', '.', 'alias', 'unset'].includes(ranBy(r)) || trapUnseen(r))
   const found = new Map<string, Promise<Own | undefined>>()
   const find = async (name: string): Promise<Own | undefined> => {
     if (!OWN_NAME.test(name) || marked) return undefined
@@ -2888,6 +2904,9 @@ export const withoutOwnCalls = async (given: OwnCallIo, text: string, commands: 
       const first = ranBy(c)
       if (first === 'alias') return undefined
       if (first === 'unset' && c.words.slice(1).some(w => w === name || /[$`*?[\]{}]/.test(w))) return undefined
+      // A trap whose text the shell fills in holds every helper's calls, whatever its signal and
+      // wherever it is typed (#3460): which signals fire, and when, this reading does not follow.
+      if (trapUnseen(c)) return undefined
     }
     // Where the name is defined, and after which of the script's commands it is: by the script's
     // own text, or, where that defines it nowhere, by the one file read in that does (Dan,
