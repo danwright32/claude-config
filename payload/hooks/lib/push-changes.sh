@@ -52,6 +52,8 @@ pc_files_since() {   # $1 = commit or tree
 
 # pc_resolve: run in the directory the push runs in (ps_repo_dir's answer). Sets:
 #   PC_UPSTREAM        the branch's upstream, empty when it has none
+#   PC_UPSTREAM_ASIDE  why that upstream is not what the push is judged against, empty when it is
+#                      or there is none (ps_upstream_set_aside, claude-config#3454)
 #   PC_BASE            the ref the push is judged against (ps_base_ref)
 #   PC_MB              where the committed range starts, empty when no range is read
 #   PC_FROM            what the committed changes are diffed against: PC_MB, or when the range merges
@@ -78,7 +80,11 @@ pc_files_since() {   # $1 = commit or tree
 # the caller refuses or says it could not read, never passes quietly as it does on 1.
 pc_resolve() {   # $1 = command  $2 = stacked, for a gate that judges a stacked branch from its base
   local pending_list top f
-  PC_UPSTREAM="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)"
+  # The upstream as git names it, read through the library and never here (claude-config#3454). It
+  # is the base only when the remote holds it; set aside, the base is the remote's default branch
+  # and PC_UPSTREAM_ASIDE says why, for a refusal to carry.
+  PC_UPSTREAM="$(ps_upstream_ref)" || PC_UPSTREAM=""
+  PC_UPSTREAM_ASIDE="$(ps_upstream_set_aside)" || PC_UPSTREAM_ASIDE=""
   PC_BASE="$(ps_base_ref)"
   PC_COMMIT_IN_CHAIN=0
   ps_commit_in_chain "$1" && PC_COMMIT_IN_CHAIN=1

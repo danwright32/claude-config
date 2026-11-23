@@ -2304,6 +2304,21 @@ base's commits. Every doubt falls to the default branch, the range both gates re
 are not waived by where they point: matching a finding against the base's own review would be an
 exemption list keyed on a model's wording, and was left for a decision rather than built.
 
+That left the older route by which an upstream already was a base: `ps_base_ref` took any upstream
+as where every push gate's range starts, and an upstream can be a local branch nobody pushed
+(claude-config#3454, reproduced on 2026-11-22: the test gate allowed a push whose judge was never
+shown the local base's change). The decision was how little to trust it, with the rule that the
+change may only add to what is judged. An upstream counts as the base only when it is a branch on a
+remote and is either the branch's own copy or has its tip in the branch's history; anything else is
+set aside for the remote's default branch, and only when that branch shares history with the pushed
+one, since with nothing on the remote to judge from the upstream is still better than the last
+commit alone. It was not folded into `sb_stacked_base`, because the two answer different questions
+(L342): that one asks GitHub and the ledger whether a base's own changes are judged, once, for two
+gates that may then read less; this one is asked by every push gate on every push, offline, and
+only ever widens a range. A base on the remote in the branch's history is still taken on the
+upstream's word alone, with no pull request and no ledger behind it, which is the route as it
+stood; whether it should be held to the stacked rule is a decision left open in the pull request.
+
 ### What the thresholds measured
 
 Each is in its hook header with the date; the two that decided a design are here because they cut

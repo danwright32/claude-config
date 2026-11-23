@@ -152,7 +152,8 @@ Text that is never a file is held to the same rule (#1995), because this reposit
 with the commit messages as the body: a name in a message lands in main. The scanner reads labelled
 text too (`--texts0-from`), and two gates ask it. `scanners-before-push.sh` reads the messages of
 the commits a push adds, never one already on the upstream or the remote's default branch (a branch
-with no upstream is judged against the default branch, a repository with no remote branch at all in
+with no upstream, or one whose upstream is a local branch, which says nothing of what the remote
+holds, is judged against the default branch, a repository with no remote branch at all in
 full), before any scanner suite runs, and refuses naming the commit and line with how to reword a
 commit nobody has pushed. A push chained after its own commit is refused too, since that message is
 not written yet, and so are messages it could not judge. `check-work-names-merge.sh` reads the title,
@@ -3550,6 +3551,43 @@ Not covered: a branch not rebased onto its base's current head is judged from th
 started before the base's pull request was open, which read the whole range and is reused; restart
 it with `bash ~/.claude/hooks/lib/pr-review.sh restart --dir <repo> --sha <head> --base-ref
 origin/<base>`, which the push gate still checks against the base it establishes itself.
+
+### A branch's upstream is its base only when the remote holds it
+
+Every push gate that reads a range starts it from one answer, `ps_base_ref` in
+`hooks/lib/push-scope.sh`, which took the branch's upstream whenever it had one. An upstream can be
+set to any branch, a local one nobody pushed included (`git branch --set-upstream-to`, or
+`branch.autoSetupMerge=always`), and then whatever that branch held was left out of what the push
+was judged for, though the same push sends it (claude-config#3454). Measured on 2026-11-22 in a
+throwaway repository: the test gate allowed a branch whose upstream was a local base holding a
+source change, and its judge was never shown that change.
+
+The upstream is now the base only when it is a branch on a remote and either:
+
+- this branch's own copy there, which is judged exactly as before (the last pushed tip, with a
+  rebased or diverged branch read as #456 reads it), or
+- another branch whose tip is in this branch's history.
+
+Any other upstream is set aside and the push is judged from the remote's default branch: a local
+branch, whether or not it was ever pushed, and a branch on the remote that this branch only names or
+that has moved on since this branch was cut from it. It is set aside only when the remote has a
+default branch this branch shares history with; with none, the upstream is compared with as before,
+because the alternative is the last commit alone. So the change only ever adds to what is judged:
+every commit it takes out of a range is one the remote's default branch already holds.
+
+The readers that follow it, all through that one function: the test gate, the simplify gate and the
+scanner gate (`pc_resolve`), the style, deferral, duplication, doc issue reference, grep quiet
+invert, public assets and lessons advisory gates, and the Linux sections gate. Two more read the
+upstream another way and follow the same rule: `ps_pushed_base`, which starts the review a push
+begins and read a local upstream's reflog as if the push had moved it, and
+`lib/work-names-messages.sh`, which leaves out of the commit messages it scans only the commits on
+an upstream the remote holds (`ps_upstream_remote`). No hook reads the upstream for itself;
+`test-push-scope.sh` fails on the next one that does.
+
+A refusal by the test gate says when the upstream was set aside and why, since the push then
+answers for what that branch holds. To be judged only for what a branch adds to its base, push the
+base first, so its own push is judged, and track the remote's copy of it; a base that is an open
+pull request is covered by the section above whatever the upstream says.
 
 ### The two model judged push gates, and their record
 

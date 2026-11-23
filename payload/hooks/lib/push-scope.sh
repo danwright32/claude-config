@@ -22,6 +22,9 @@
 #                      the index, as a scope word or as the files themselves
 #   ps_add_takes_all: does a git add in the command take more than it names
 #   ps_base_ref: the ref a push is judged against
+#   ps_upstream_ref / ps_upstream_remote / ps_upstream_set_aside: the branch's upstream, whether
+#                      the remote holds it, and why it is not the base when it is not
+#                      (claude-config#3454; the contract is above ps_base_ref)
 #   ps_merge_base / ps_pending_base / ps_pushed_base: where the range starts, one
 #                      per situation a push hook meets (the contract is above them)
 #   ps_merged_apart: what that range is diffed from once a merge of the default branch is set
@@ -1649,6 +1652,8 @@ LOOP_INPUT
 #                   takes the upstream's previous tip from its reflog when that is an ancestor of
 #                   HEAD (exactly what this push added), then the fork point from the remote's
 #                   default branch (a first push of a branch), and only then the plain push answer.
+#                   An upstream that is not a base (claude-config#3454) has no say in the first
+#                   step while the second can answer.
 #
 # ps_merge_base and ps_pending_base both read the merge base through ps__base_merge_base, so a branch
 # rebased onto a newer main and force pushed is judged from where it now leaves main, never from its
@@ -1740,18 +1745,25 @@ ps_pending_base() {   # $1 = the base ref, usually from ps_base_ref
 }
 
 ps_pushed_base() {
-  local head prev def cand
+  local head prev def cand="" rc=0
   head="$(git rev-parse --verify --quiet HEAD 2>/dev/null)" || return 1
   [ -n "$head" ] || return 1
-  prev="$(git rev-parse --verify --quiet '@{u}@{1}' 2>/dev/null)"
-  if [ -n "$prev" ] && [ "$prev" != "$head" ] && git merge-base --is-ancestor "$prev" HEAD 2>/dev/null; then
-    printf '%s' "$prev"; return 0
-  fi
   def="$(ps__default_ref)"
-  if [ -n "$def" ]; then
-    cand="$(git merge-base "$def" HEAD 2>/dev/null)"
-    if [ -n "$cand" ] && [ "$cand" != "$head" ]; then printf '%s' "$cand"; return 0; fi
+  [ -n "$def" ] && cand="$(git merge-base "$def" HEAD 2>/dev/null)"
+  [ "$cand" = "$head" ] && cand=""
+  # The upstream's previous tip says what this push added only when the upstream is a base (the
+  # contract is beside ps_base_ref, claude-config#3454). A local upstream's reflog names where THAT
+  # branch stood before its own last commit, which the push never moved: read as the start, it
+  # left the rest of that branch out of the review. So a set aside upstream is not read when the
+  # default branch can answer; with nothing there to answer, it is read as before.
+  ps__upstream_read || rc=$?
+  if [ "$rc" -ne 2 ] || [ -z "$cand" ]; then
+    prev="$(git rev-parse --verify --quiet '@{u}@{1}' 2>/dev/null)"
+    if [ -n "$prev" ] && [ "$prev" != "$head" ] && git merge-base --is-ancestor "$prev" HEAD 2>/dev/null; then
+      printf '%s' "$prev"; return 0
+    fi
   fi
+  if [ -n "$cand" ]; then printf '%s' "$cand"; return 0; fi
   ps_merge_base "$(ps_base_ref)"
 }
 
@@ -2821,19 +2833,118 @@ ps__push_dests() {   # $1 = the repository directory
   return 1
 }
 
-# The ref a push should be judged AGAINST (claude-config#339). The upstream if there is one, then
-# the remote's own default branch, then the usual names, then nothing. Written once here because
-# three push hooks each need the same answer and three copies of it would drift, and this is the
-# half whose drift is invisible: a wrong base scopes a gate to the wrong diff while still reporting
-# a clean run (L70, L613).
+# ---- the branch's upstream, and when a push is judged from it (claude-config#3454) ----
+# An upstream can be set to ANY branch, a local one nobody pushed included (git branch
+# --set-upstream-to, branch.autoSetupMerge=always). Every push gate took whatever it named as where
+# the range starts, so a branch whose upstream was a local base was judged only for what it adds to
+# that base, and the base's own commits, which the same push sends, were judged by nothing. Measured
+# on 2026-11-22 in a throwaway repository: the test gate allowed such a push, its judge never shown
+# the base's change.
+#
+# So the upstream is the BASE only when it is a branch on a remote (a remote tracking ref) and
+# either
+#   - this branch's OWN copy there (refs/remotes/<its remote>/<its name>): what it holds was pushed
+#     from this branch, and a rewritten or diverged one is read as ps__base_merge_base reads it; or
+#   - its tip is in HEAD's history: this branch stands on what the remote holds of it.
+# Any other upstream is SET ASIDE and the push is judged against the remote's default branch: a
+# local branch, pushed or not (nothing says the remote holds what is on it), and a branch on the
+# remote whose tip is not in this branch's history (one it only names, or one that moved on).
+# Reading more is the safe side for a gate (L93). What it costs is a push answering for commits
+# another branch owns, which ps_upstream_set_aside words for a refusal to carry; a base that is an
+# open pull request is spared that by lib/stacked-base.sh, whatever the upstream says.
+#
+# It is set aside only when the remote has something to judge from instead: a default branch this
+# branch shares history with (ps__aside_default). With none, the upstream stays what the push is
+# compared with, exactly as before, because the alternative every caller falls to is the last
+# commit alone, which is less. So this only ever adds to what a gate reads: a commit it takes out of
+# a range is one the remote's default branch already holds.
+#
+#   ps_upstream_ref        the upstream as git names it, base or not; nothing and 1 with none
+#   ps_upstream_remote     the upstream when it is a branch on a remote, base or not: for a caller
+#                          asking which commits the remote already holds, never where a range starts
+#   ps_upstream_set_aside  when the upstream is not what the push is judged from, why, in words a
+#                          refusal can carry, and 0; nothing and 1 otherwise
+# ps_base_ref and ps_pushed_base take the same reading (ps__upstream_read), and no hook reads the
+# upstream for itself (test-push-scope.sh fails on one that does), so no two can disagree (L613).
+
+# Sets PS__UP (the upstream as git names it, empty with none), PS__UP_FULL (its full ref name) and
+# PS__UP_WHY (why it is not a base, empty when it is one). Returns 0 when the upstream is a base, 1
+# when the branch has none, 2 when it has one that is not a base.
+ps__upstream_read() {
+  local branch remote
+  PS__UP=""; PS__UP_FULL=""; PS__UP_WHY=""
+  PS__UP="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)" || PS__UP=""
+  [ -n "$PS__UP" ] || return 1
+  PS__UP_FULL="$(git rev-parse --symbolic-full-name '@{u}' 2>/dev/null)" || PS__UP_FULL=""
+  case "$PS__UP_FULL" in
+    refs/remotes/*) ;;
+    *) PS__UP_WHY="is a branch of this checkout, not one on the remote, so nothing says the remote holds what is on it (to be judged only for what this branch adds to it, push it first, so its own push is judged, and track the remote's copy of it)"
+       return 2 ;;
+  esac
+  branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null)" || branch=""
+  if [ -n "$branch" ]; then
+    remote="$(git config --get "branch.$branch.remote" 2>/dev/null)" || remote=""
+    if [ -n "$remote" ] && [ "$PS__UP_FULL" = "refs/remotes/$remote/$branch" ]; then return 0; fi
+  fi
+  git merge-base --is-ancestor "$PS__UP_FULL" HEAD 2>/dev/null && return 0
+  PS__UP_WHY="is not in this branch's history: it moved on since this branch was cut from it, or this branch only names it (to be judged only for what this branch adds to it, rebase onto it)"
+  return 2
+}
+
+# What a push is judged against when its upstream is set aside: the remote's default branch, when
+# this branch shares history with it. Prints nothing and returns 1 otherwise.
+ps__aside_default() {
+  local def
+  def="$(ps__default_ref)" || def=""
+  [ -n "$def" ] || return 1
+  [ -n "$(git merge-base "$def" HEAD 2>/dev/null)" ] || return 1
+  printf '%s' "$def"
+}
+
+# Each caller takes the reading's status through "|| rc=$?", never bare: a hook running under
+# errexit would end at a bare call that answers 1 or 2.
+ps_upstream_ref() {
+  local rc=0
+  ps__upstream_read || rc=$?
+  [ -n "$PS__UP" ] || return 1
+  printf '%s' "$PS__UP"
+}
+
+ps_upstream_remote() {
+  local rc=0
+  ps__upstream_read || rc=$?
+  case "$PS__UP_FULL" in
+    refs/remotes/*) printf '%s' "$PS__UP"; return 0 ;;
+  esac
+  return 1
+}
+
+ps_upstream_set_aside() {
+  local rc=0
+  ps__upstream_read || rc=$?
+  [ "$rc" -eq 2 ] || return 1
+  ps__aside_default >/dev/null || return 1
+  printf "the branch's upstream, %s, %s" "$PS__UP" "$PS__UP_WHY"
+}
+
+# The ref a push should be judged AGAINST (claude-config#339). The upstream when it is a base (the
+# contract is above), then the remote's own default branch, then the usual names, then nothing.
+# Written once here because three push hooks each need the same answer and three copies of it would
+# drift, and this is the half whose drift is invisible: a wrong base scopes a gate to the wrong
+# diff while still reporting a clean run (L70, L613).
 #
 # Prints the ref and returns 0, or prints nothing and returns 1. A caller that gets nothing must
 # decide for itself what to do; there is no fallback here, because "judge against HEAD~1" and
 # "judge nothing" are different decisions and the gates do not make them the same way.
 ps_base_ref() {
-  local up base c
-  up="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)"
-  if [ -n "$up" ]; then printf '%s' "$up"; return 0; fi
+  local base c rc=0
+  ps__upstream_read || rc=$?
+  case "$rc" in
+    0) printf '%s' "$PS__UP"; return 0 ;;
+    2) if base="$(ps__aside_default)"; then printf '%s' "$base"; return 0; fi
+       # Nothing on the remote to judge from instead: compared with as before.
+       printf '%s' "$PS__UP"; return 0 ;;
+  esac
   base="$(git symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null | sed 's#^refs/remotes/##')"
   if [ -n "$base" ]; then printf '%s' "$base"; return 0; fi
   for c in origin/main origin/master main master; do

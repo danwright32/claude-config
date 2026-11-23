@@ -262,6 +262,14 @@ merge_note() {
 # When the branch is stacked on another open branch and was judged from that branch's head
 # (claude-config#3444), a refusal says so, since the base's own changes are not in what it judged.
 stacked_note() {
+  # The branch's upstream was not taken as where the range starts (claude-config#3454): a local
+  # branch, or one on the remote that is not in this branch's history. What it holds is then in
+  # what was judged, and the push answers for it, so the refusal says so and how to change that.
+  if [ -z "${PC_STACKED:-}" ] && [ -n "${PC_UPSTREAM_ASIDE:-}" ]; then
+    echo "Note: $PC_UPSTREAM_ASIDE."
+    echo "So the gate judged this branch from ${PC_BASE:-the default branch}, what that upstream holds included."
+    echo ""
+  fi
   # Another branch lies under this one and was not taken as its base: its changes are in what was
   # judged, and the reason is what the person refused can act on (L11).
   if [ -z "${PC_STACKED:-}" ] && [ -n "${PC_STACKED_WHY:-}" ]; then

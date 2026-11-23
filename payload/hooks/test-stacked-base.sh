@@ -324,6 +324,53 @@ pr_json base/one OPEN "$BASE_TIP"
 run_tests_gate "git push -u origin child/two"
 check_eq "T5 the base was never pushed: judged from main, refused" "2" "$TG_RC"
 
+# The same base named as the branch's UPSTREAM (claude-config#3454). The gate took any upstream as
+# where the range starts, so a local branch nobody pushed hid its own change from the judge: measured
+# on 2026-11-22, this push was allowed, the judge never shown lib/base.js.
+mk_stack t5b local
+G branch -q --set-upstream-to=base/one
+check_eq "T5b fixture: the upstream is the local base, which origin does not hold" "refs/heads/base/one" "$(G rev-parse --symbolic-full-name '@{u}' 2>&1)"
+check_eq "T5b fixture: origin has no such branch" "" "$(G rev-parse --verify --quiet refs/remotes/origin/base/one 2>/dev/null)"
+run_tests_gate "git push origin child/two"
+check_eq "T5b a never pushed base named as the upstream: judged from main, refused" "2" "$TG_RC"
+check "T5b the judge was shown the base's change" "BASE_ONLY_MARKER" "$(cat "$JUDGE_LOG")"
+check "T5b for the base's change" "the base change in lib/base.js" "$TG_ERR"
+check "T5b and the refusal says the upstream was not taken as the base" "upstream, base/one, is a branch of this checkout" "$TG_ERR"
+check "T5b and what the branch was judged from instead" "judged this branch from origin/main" "$TG_ERR"
+# A command that commits first is read the same way.
+printf 'export function more() { return 3; }\n' > "$REPO/lib/more.js"
+run_tests_gate "git add lib/more.js && git commit -m more && git push origin child/two"
+check_eq "T5b a commit then push over the same upstream: refused" "2" "$TG_RC"
+check "T5b and the judge was shown the base's change there too" "BASE_ONLY_MARKER" "$(cat "$JUDGE_LOG")"
+rm -f "$REPO/lib/more.js"
+# The local DEFAULT branch as the upstream, holding a commit nobody pushed.
+mk_stack t5c local
+G checkout -q main
+printf 'export function onmain() { return 5; } // BASE_ONLY_MARKER\n' > "$REPO/lib/onmain.js"
+G add lib/onmain.js; G commit -q -m "a change on the local main nobody pushed"
+G checkout -q -b from/main
+mkdir -p "$REPO/tests"
+printf 'export function mine() { return 6; }\n' > "$REPO/lib/mine.js"
+printf 'test("mine", () => { expect(mine()).toBe(6); });\n' > "$REPO/tests/mine.test.js"
+G add lib/mine.js tests/mine.test.js; G commit -q -m "my change"
+G branch -q --set-upstream-to=main
+run_tests_gate "git push origin from/main"
+check_eq "T5c the local main as upstream, ahead of origin's: judged from origin's main, refused" "2" "$TG_RC"
+check "T5c the judge was shown the commit nobody pushed" "lib/onmain.js" "$(cat "$JUDGE_LOG")"
+# A branch whose upstream is its OWN copy on origin is judged as before: only what the push adds.
+mk_stack t5d
+pr_json base/one OPEN "$BASE_TIP"
+G checkout -q base/one
+G branch -q --set-upstream-to=origin/base/one
+printf 'export function next() { return 7; }\n' > "$REPO/lib/next.js"
+printf 'test("next", () => { expect(next()).toBe(7); });\n' > "$REPO/tests/next.test.js"
+G add lib/next.js tests/next.test.js; G commit -q -m "the next change on the base"
+run_tests_gate "git push origin base/one"
+check_eq "T5d a branch whose upstream is its own copy on origin: judged from that copy, allowed" "0" "$TG_RC"
+check_not "T5d the judge was not shown what was pushed before" "BASE_ONLY_MARKER" "$(cat "$JUDGE_LOG")"
+check "T5d the judge was shown what the push adds" "lib/next.js" "$(cat "$JUDGE_LOG")"
+check_not "T5d and nothing is said about its upstream" "upstream," "$TG_ERR"
+
 # An open pull request does not say the test gate judged the base: only this Mac's ledger does.
 mk_stack t6 pushed
 pr_json base/one OPEN "$BASE_TIP"

@@ -1194,6 +1194,201 @@ got="$( cd "$MB/dv" && ps_merge_base "$(ps_base_ref)" )"
   && check "#456 control: a diverged but unrebased branch keeps the upstream merge base" ok \
   || check "#456 control: a diverged but unrebased branch keeps the upstream merge base" "got=$got want=$shared"
 
+# ---------------------------------------------------------------------------
+# An upstream that is NOT a base (claude-config#3454). A branch's upstream can be any branch, a
+# local one that was never pushed included (git branch --set-upstream-to, autoSetupMerge=always).
+# Every gate took it as where the range starts, so whatever that branch held was left out of what
+# the push was judged for, and nothing else judged it: measured on 2026-11-22, the test gate let
+# through a push carrying an unpushed base's change it was never shown. The upstream is the base
+# only when it is a branch on the remote that is this branch's own copy or has its tip in this
+# branch's history; otherwise the push is judged from the remote's default branch.
+# ---------------------------------------------------------------------------
+up_ref() { ( cd "$1" && ps_base_ref || true ); }
+up_plain() { ( cd "$1" && ps_merge_base "$(ps_base_ref)" ); }
+up_pending() { ( cd "$1" && ps_pending_base "$(ps_base_ref)" ); }
+up_aside() { ( cd "$1" && declare -F ps_upstream_set_aside >/dev/null && ps_upstream_set_aside ); }
+
+# 1. The upstream is a LOCAL branch that was never pushed, two commits ahead of main.
+git init -q --bare "$MB/up.git" 2>/dev/null
+git init -q -b main "$MB/up" 2>/dev/null
+mb_commit "$MB/up" seed
+( cd "$MB/up" && git config branch.autoSetupMerge false && git remote add origin "$MB/up.git" \
+    && git push -q origin main && git checkout -q -b base ) >/dev/null 2>&1
+mb_commit "$MB/up" base1; mb_commit "$MB/up" base2
+( cd "$MB/up" && git checkout -q -b child ) >/dev/null 2>&1
+mb_commit "$MB/up" child1
+( cd "$MB/up" && git branch -q --set-upstream-to=base ) >/dev/null 2>&1
+up_main="$(sha_of "$MB/up" origin/main)"
+# The fixture is what it claims (L48): the upstream is the local branch, and origin has no such branch.
+[ "$(git -C "$MB/up" rev-parse --symbolic-full-name '@{u}' 2>/dev/null)" = "refs/heads/base" ] \
+  && ! git -C "$MB/up" rev-parse --verify --quiet refs/remotes/origin/base >/dev/null 2>&1 \
+  && [ "$(git -C "$MB/up" rev-list --count HEAD --not --remotes=origin 2>/dev/null)" = 3 ] \
+  && check "#3454 fixture: the upstream is a local branch origin does not hold, three commits unpushed" ok \
+  || check "#3454 fixture: the upstream is a local branch origin does not hold, three commits unpushed" "upstream=$(git -C "$MB/up" rev-parse --symbolic-full-name '@{u}' 2>&1)"
+got="$(up_ref "$MB/up")"
+[ "$got" = "origin/main" ] \
+  && check "#3454 a local upstream is not the base: the push is judged against origin's default branch" ok \
+  || check "#3454 a local upstream is not the base: the push is judged against origin's default branch" "got=$got"
+got="$(up_plain "$MB/up")"
+[ -n "$up_main" ] && [ "$got" = "$up_main" ] \
+  && check "#3454 a plain push over a local upstream is measured from where the branch left origin's main" ok \
+  || check "#3454 a plain push over a local upstream is measured from where the branch left origin's main" "got=$got want=$up_main"
+got="$(up_pending "$MB/up")"
+[ -n "$up_main" ] && [ "$got" = "$up_main" ] \
+  && check "#3454 a commit then push over a local upstream is measured from there too" ok \
+  || check "#3454 a commit then push over a local upstream is measured from there too" "got=$got want=$up_main"
+got="$(up_aside "$MB/up")"; rc=$?
+[ "$rc" -eq 0 ] && [[ "$got" == *"upstream, base, is a branch of this checkout"* ]] \
+  && check "#3454 and why the upstream was set aside is said, naming it" ok \
+  || check "#3454 and why the upstream was set aside is said, naming it" "rc=$rc got=[$got]"
+# The two readings a caller needs apart: what the upstream is, and whether the remote holds it. A
+# reading that is missing answers nothing, which the "not held" case below would take for its answer.
+up_missing=""
+for fn in ps_upstream_ref ps_upstream_remote ps_upstream_set_aside; do
+  declare -F "$fn" >/dev/null || up_missing="$up_missing $fn"
+done
+[ -z "$up_missing" ] \
+  && check "#3454 the library defines the three readings of the upstream" ok \
+  || check "#3454 the library defines the three readings of the upstream" "missing:$up_missing"
+got="$( cd "$MB/up" && declare -F ps_upstream_ref >/dev/null && ps_upstream_ref )"
+[ "$got" = "base" ] \
+  && check "#3454 the upstream is still named as git names it" ok \
+  || check "#3454 the upstream is still named as git names it" "got=[$got]"
+got="$( cd "$MB/up" && declare -F ps_upstream_remote >/dev/null && ps_upstream_remote )"; rc=$?
+[ "$rc" -ne 0 ] && [ -z "$got" ] \
+  && check "#3454 and a local upstream is not a branch the remote holds" ok \
+  || check "#3454 and a local upstream is not a branch the remote holds" "rc=$rc got=[$got]"
+# AFTER the push (the review a push starts): the upstream is still the local branch, and its reflog
+# says where THAT branch was before its last commit, never what this push added.
+( cd "$MB/up" && git push -q origin child ) >/dev/null 2>&1
+[ "$(sha_of "$MB/up" 'base@{1}')" = "$(sha_of "$MB/up" base~1)" ] \
+  && check "#3454 fixture: the local upstream's reflog names its own previous commit" ok \
+  || check "#3454 fixture: the local upstream's reflog names its own previous commit" "base@{1}=$(sha_of "$MB/up" 'base@{1}')"
+got="$( cd "$MB/up" && ps_pushed_base )"
+[ -n "$up_main" ] && [ "$got" = "$up_main" ] \
+  && check "#3454 after the push the range starts where the branch left origin's main, not in the local upstream's reflog" ok \
+  || check "#3454 after the push the range starts where the branch left origin's main, not in the local upstream's reflog" "got=$got want=$up_main"
+
+# 2. The upstream is the LOCAL default branch, which holds a commit nobody pushed.
+git init -q --bare "$MB/lm.git" 2>/dev/null
+git init -q -b main "$MB/lm" 2>/dev/null
+mb_commit "$MB/lm" seed
+( cd "$MB/lm" && git config branch.autoSetupMerge false && git remote add origin "$MB/lm.git" \
+    && git push -q origin main ) >/dev/null 2>&1
+mb_commit "$MB/lm" unpushed
+( cd "$MB/lm" && git checkout -q -b feat ) >/dev/null 2>&1
+mb_commit "$MB/lm" feat1
+( cd "$MB/lm" && git branch -q --set-upstream-to=main ) >/dev/null 2>&1
+lm_main="$(sha_of "$MB/lm" origin/main)"
+[ "$(git -C "$MB/lm" rev-parse --symbolic-full-name '@{u}' 2>/dev/null)" = "refs/heads/main" ] && [ "$lm_main" != "$(sha_of "$MB/lm" main)" ] \
+  && check "#3454 fixture: the upstream is the local main, ahead of origin's" ok \
+  || check "#3454 fixture: the upstream is the local main, ahead of origin's" "upstream=$(git -C "$MB/lm" rev-parse --symbolic-full-name '@{u}' 2>&1)"
+got="$(up_plain "$MB/lm")"
+[ -n "$lm_main" ] && [ "$got" = "$lm_main" ] \
+  && check "#3454 a local main as upstream: the commit nobody pushed is part of what the push is judged for" ok \
+  || check "#3454 a local main as upstream: the commit nobody pushed is part of what the push is judged for" "got=$got want=$lm_main"
+
+# 3. The upstream is ANOTHER branch on origin whose tip is in this branch's history: the base, as before.
+git init -q --bare "$MB/rin.git" 2>/dev/null
+git init -q -b main "$MB/rin" 2>/dev/null
+mb_commit "$MB/rin" seed
+( cd "$MB/rin" && git config branch.autoSetupMerge false && git remote add origin "$MB/rin.git" \
+    && git push -q origin main && git checkout -q -b base ) >/dev/null 2>&1
+mb_commit "$MB/rin" base1
+( cd "$MB/rin" && git push -q origin base && git checkout -q -b child ) >/dev/null 2>&1
+mb_commit "$MB/rin" child1
+( cd "$MB/rin" && git branch -q --set-upstream-to=origin/base ) >/dev/null 2>&1
+rin_base="$(sha_of "$MB/rin" origin/base)"; rin_main="$(sha_of "$MB/rin" origin/main)"
+got="$(up_ref "$MB/rin")"; got_mb="$(up_plain "$MB/rin")"
+[ "$got" = "origin/base" ] && [ -n "$rin_base" ] && [ "$got_mb" = "$rin_base" ] \
+  && check "#3454 control: an upstream on origin whose tip is in this branch's history is still the base" ok \
+  || check "#3454 control: an upstream on origin whose tip is in this branch's history is still the base" "ref=$got start=$got_mb want=$rin_base"
+got="$(up_aside "$MB/rin")"; rc=$?
+[ "$rc" -ne 0 ] && [ -z "$got" ] \
+  && check "#3454 control: and nothing is said of an upstream that is the base" ok \
+  || check "#3454 control: and nothing is said of an upstream that is the base" "rc=$rc got=[$got]"
+# The same upstream once it has MOVED ON: its tip is no longer in this branch's history, so it is
+# not a base this branch stands on, and the push is judged from origin's default branch.
+( cd "$MB/rin" && git checkout -q base ) >/dev/null 2>&1
+mb_commit "$MB/rin" base2
+( cd "$MB/rin" && git push -q origin base && git checkout -q child ) >/dev/null 2>&1
+if git -C "$MB/rin" merge-base --is-ancestor origin/base HEAD 2>/dev/null; then
+  check "#3454 fixture: the upstream on origin moved past where this branch was cut" "it is still in the history"
+else
+  check "#3454 fixture: the upstream on origin moved past where this branch was cut" ok
+fi
+got="$(up_ref "$MB/rin")"; got_mb="$(up_plain "$MB/rin")"
+[ "$got" = "origin/main" ] && [ -n "$rin_main" ] && [ "$got_mb" = "$rin_main" ] \
+  && check "#3454 an upstream on origin that is not in this branch's history is not the base" ok \
+  || check "#3454 an upstream on origin that is not in this branch's history is not the base" "ref=$got start=$got_mb want=$rin_main"
+got="$(up_aside "$MB/rin")"; rc=$?
+[ "$rc" -eq 0 ] && [[ "$got" == *"upstream, origin/base, is not in this branch's history"* ]] && [[ "$got" != *"branch of this checkout"* ]] \
+  && check "#3454 and the reason is its own: not in this branch's history, never 'a branch of this checkout'" ok \
+  || check "#3454 and the reason is its own: not in this branch's history, never 'a branch of this checkout'" "rc=$rc got=[$got]"
+got="$( cd "$MB/rin" && declare -F ps_upstream_remote >/dev/null && ps_upstream_remote )"
+[ "$got" = "origin/base" ] \
+  && check "#3454 a set aside upstream on origin is still a branch the remote holds" ok \
+  || check "#3454 a set aside upstream on origin is still a branch the remote holds" "got=[$got]"
+
+# 4. The branch's OWN copy on origin is the base whether or not its tip is in the history: the
+#    diverged branch of #456 above is judged exactly as it was.
+got="$(up_ref "$MB/dv")"
+[ "$got" = "origin/feat" ] \
+  && check "#3454 control: a branch's own copy on origin stays its base when the two have diverged" ok \
+  || check "#3454 control: a branch's own copy on origin stays its base when the two have diverged" "got=$got"
+
+# 5. Nothing on origin to judge from instead: the upstream stays what the push is compared with, as
+#    before, because the alternative is the last commit alone, which is less (L93).
+git init -q -b trunk "$MB/nd" 2>/dev/null
+mb_commit "$MB/nd" seed
+( cd "$MB/nd" && git checkout -q -b base ) >/dev/null 2>&1
+mb_commit "$MB/nd" base1
+( cd "$MB/nd" && git checkout -q -b child ) >/dev/null 2>&1
+mb_commit "$MB/nd" child1; mb_commit "$MB/nd" child2
+( cd "$MB/nd" && git branch -q --set-upstream-to=base ) >/dev/null 2>&1
+got="$(up_ref "$MB/nd")"; got_mb="$(up_plain "$MB/nd")"
+[ "$got" = "base" ] && [ "$got_mb" = "$(sha_of "$MB/nd" base)" ] \
+  && check "#3454 with no default branch known on any remote, a local upstream is compared with as before" ok \
+  || check "#3454 with no default branch known on any remote, a local upstream is compared with as before" "ref=$got start=$got_mb"
+got="$(up_aside "$MB/nd")"; rc=$?
+[ "$rc" -ne 0 ] && [ -z "$got" ] \
+  && check "#3454 and it is not reported as set aside, since it was not" ok \
+  || check "#3454 and it is not reported as set aside, since it was not" "rc=$rc got=[$got]"
+# A branch that shares NO history with origin's default branch has no point where it left it.
+git init -q --bare "$MB/orph.git" 2>/dev/null
+git init -q -b main "$MB/orph" 2>/dev/null
+mb_commit "$MB/orph" seed
+( cd "$MB/orph" && git config branch.autoSetupMerge false && git remote add origin "$MB/orph.git" \
+    && git push -q origin main && git checkout -q --orphan base ) >/dev/null 2>&1
+mb_commit "$MB/orph" lone1
+( cd "$MB/orph" && git checkout -q -b child ) >/dev/null 2>&1
+mb_commit "$MB/orph" lone2; mb_commit "$MB/orph" lone3
+( cd "$MB/orph" && git branch -q --set-upstream-to=base ) >/dev/null 2>&1
+[ -z "$(git -C "$MB/orph" merge-base origin/main HEAD 2>/dev/null)" ] \
+  && check "#3454 fixture: the branch shares no history with origin's main" ok \
+  || check "#3454 fixture: the branch shares no history with origin's main" "it has a merge base"
+got="$(up_ref "$MB/orph")"; got_mb="$(up_plain "$MB/orph")"
+[ "$got" = "base" ] && [ "$got_mb" = "$(sha_of "$MB/orph" base)" ] \
+  && check "#3454 a branch sharing no history with origin's default branch keeps its upstream, as before" ok \
+  || check "#3454 a branch sharing no history with origin's default branch keeps its upstream, as before" "ref=$got start=$got_mb"
+
+# And no hook reads the upstream for itself (L613): lib/work-names-messages.sh did, and so left the
+# commits of a local upstream out of the messages it read. The library is the one home; a suite and
+# a suite's fixture builder are test code, which sets and checks an upstream of its own making. Both
+# spellings of the selector are assembled here so these lines do not match themselves (L245).
+up_sel='@{'; up_long="${up_sel}upstream}"; up_sel="${up_sel}u}"
+own_up="$(grep -lF -e "$up_sel" -e "$up_long" "$DIR"/*.sh "$DIR"/lib/*.sh 2>/dev/null | grep -v -e '/test-' -e '-fixture\.sh$' -e '/lib/push-scope\.sh$' | tr '\n' ' ')"
+case "$own_up" in
+  *[![:space:]]*) check "#3454 no hook reads the branch's upstream for itself" "still in: $own_up" ;;
+  *) check "#3454 no hook reads the branch's upstream for itself" ok ;;
+esac
+# The scan can see a hand rolled read: a file holding one is named (L1).
+mkdir -p "$MB/scan/lib"
+printf 'up="$(git rev-parse --abbrev-ref %s)"\n' "'$up_sel'" > "$MB/scan/lib/reader.sh"
+[ -n "$(grep -lF -e "$up_sel" -e "$up_long" "$MB/scan"/lib/*.sh 2>/dev/null | grep -v -e '/test-' -e '-fixture\.sh$' -e '/lib/push-scope\.sh$')" ] \
+  && check "#3454 control: the scan names a file that reads the upstream for itself" ok \
+  || check "#3454 control: the scan names a file that reads the upstream for itself" "it found nothing"
+
 # A repository with no commits has no range at all: every entry point answers nothing and says so
 # with its status, rather than printing something a caller would diff against.
 git init -q "$MB/none" 2>/dev/null
