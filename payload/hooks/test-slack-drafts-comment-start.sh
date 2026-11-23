@@ -290,11 +290,17 @@ refused "as before, a set in a comment right after a ; still reads as moving the
 # it could not tell from a comment, so running that hook's suite by name was refused as a check it
 # could not make. Its comments name things in plain words now; a backquote put back in one fails
 # here, and in test-shell-words-comment-start.sh, which asks the reader itself.
-ROOT="$(cd "$DIR/../.." && pwd)"
-for routine in "bash payload/hooks/test-payload-write-gate.sh" "bash payload/hooks/payload-write-gate.sh"; do
-  run_bash "$routine" "$ROOT"
-  allowed "a routine command of this repository is allowed: $routine"
-done
+# The checkout, as lib/checkout-root.sh finds it (claude-config#1663); installed in ~/.claude there
+# is none, and the commands name the checkout's paths.
+ROOT="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
+if [ -n "$ROOT" ]; then
+  for routine in "bash payload/hooks/test-payload-write-gate.sh" "bash payload/hooks/payload-write-gate.sh"; do
+    run_bash "$routine" "$ROOT"
+    allowed "a routine command of this repository is allowed: $routine"
+  done
+else
+  echo "SUITE-PART-UNMEASURED whether running the payload write gate's suite by name is allowed, because this copy is not in a claude-config checkout"
+fi
 
 echo
 
