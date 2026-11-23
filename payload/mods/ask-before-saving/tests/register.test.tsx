@@ -4226,6 +4226,18 @@ for (const [what, command, names, said] of KEEPS)
     expect(w.ran).toEqual([])
   })
 
+// Found by the second review: the question said the note stays where it is, and the Move answer
+// under it still read "Moves <note> to <folder>/<note>".
+test('the Move answer for a mv -n that will move nothing says so, as the question above it does (#3478)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: ARCHIVED })
+  const asked = `Move ${REMOVAL_MEM_SHOWN}/old.md: tidying the folder?`
+  await askRemoval($, w, refusalOf(await call($, { tool: 'Bash', command: `mv -n ${REMOVAL_MEM_SHOWN}/old.md ${ARCHIVE_SHOWN}` })), 'Keep as is', asked)
+  expect(w.asked[0]?.questions[0]?.options.map(o => [o.label, o.description])).toEqual([
+    ['Keep as is', 'Nothing is moved'],
+    ['Move', `Moves ${REMOVAL_MEM_SHOWN}/old.md nowhere, since a file is at ${ARCHIVE_SHOWN}/old.md already`],
+  ])
+})
+
 // Found by the lessons review of the fix round's push: onto one name no path names (a variable),
 // nothing can be looked at, and the question still ended "and can be moved back".
 test('a move onto a name the words cannot place claims nothing about what is there (#3478)', withKit, async ($, on) => {

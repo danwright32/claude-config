@@ -8718,7 +8718,9 @@ goes into the folder ..."), with whether a file of the same name there is replac
 about as a move only while the command, read whole, leaves each file where it was moved to: one
 that also removes, empties or writes over that place, or removes the same files under another
 spelling of their path, or holds anything the reader cannot follow, is asked about as a deletion,
-as it was before. The answers
+as it was before. Places are compared as the disk has them, so a folder reached through a link is
+the folder it leads to and `/tmp` is `/private/tmp`, and a brace pattern of more than 256 names is
+asked about as a deletion without being multiplied out. The answers
 are Keep as is, first, and Delete, Move or Empty; a save's
 For good approves no removal and a removal's answer approves no save, a removal whose consequence
 changes after he answers (what git holds of the file, where a move lands, what a folder holds) is

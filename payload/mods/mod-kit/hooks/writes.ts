@@ -2040,7 +2040,9 @@ export type LinkFs = { exists: (path: string) => Promise<boolean>; stat: (path: 
 
 /**
  * The most places `settleOnDisk` will ask the disk about for one command. A command naming more is
- * not asked about at all, and nothing is said of its moves. Chosen, not measured: each place costs
+ * not asked about at all, and every place in it is then one the disk could not follow: a move
+ * keeps its mark only if no other command in it removes, empties or writes anything (one mv of
+ * many files, say). Chosen, not measured: each place costs
  * two questions where it exists and two more for each folder of its path that does not, every
  * question asked once however many places share it, so 40 places is a few hundred questions at
  * most, where a hook has 10 seconds.

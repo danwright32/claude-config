@@ -3600,9 +3600,44 @@ lasting memory file, or moved one away, ran with no question. Measured in the mo
   Delete question, as on main: the pattern cannot be shown not to match the file deleted. A `mv
   -n` with neither `-f` nor `-i` is never said to replace a file: where one of the name is there,
   the question says the file stays where it is. Given `-f` or `-i` as well, in any order, it is
-  said to replace one, since mv obeys whichever of the three comes last. Left as on main, and recorded: a note named outright that is moved and whose
-  folder the same command then removes is still said to be one that "can be moved back", and so
-  is a pattern moved into a folder that is not there, where the mv fails and nothing happens.
+  said to replace one, since mv obeys whichever of the three comes last. Left as on main, and
+  recorded: a note named outright that is moved and whose folder the same command then removes
+  is still said to be one that "can be moved back", and so is a pattern moved into a folder that
+  is not there, where the mv fails and nothing happens.
+- **Two names for one folder are one place (#3478, the second review).** Comparing places as
+  paths misses a folder that has two. Measured through the whole mod on 2026-11-23, 8 commands
+  of 8: `mv <memory>/{a,b}.md /tmp/zz/ && rm -rf /private/tmp/zz` was asked about as a move that
+  "can be moved back", since macOS keeps `/tmp`, `/var` and `/etc` as links into `/private`, and
+  so was any linked folder (`mv ... ~/Desktop/link/ && rm -rf ~/Desktop/archive`), a link the
+  command makes itself, and `rsync --remove-source-files` run on where the notes went. So
+  `$.modkit.writes` settles the mark a second time against the disk (`settleOnDisk` in mod-kit's
+  `writes.ts`): each place the command names is taken to its real path, the longest part of it
+  that exists and then the rest of its name, and the places are compared again. `/tmp`, `/var`
+  and `/etc` are folded onto their `/private` names in the reading by words too, so they hold
+  where nothing is on the disk yet. A place the disk cannot follow (a link that leads nowhere, a
+  question that fails, a command naming more than 40 places) is compared with nothing, so any
+  other removal or write in the command takes the mark off. A command with no move left to
+  settle asks the disk nothing, so no other mod's call costs more. What the engine's stat
+  answers was read from Claude Code's own program text, not from a live session: asked with
+  links followed it gives the real path of any path that is no link, and of a link whose target
+  exists. A command that makes a link (`ln`, `link`) is unsure by its words, since the link is
+  not on the disk yet when the disk is asked, and a hard link gives a moved file a second name.
+  So is an rsync told to remove what it sent: the reader gives no removal for it, which also
+  means `rsync --remove-source-files <memory>/ <elsewhere>/` alone is not asked about, on main
+  either (recorded). Not seen, and recorded: a second hard link to a moved file that is already
+  on the disk, and a path that climbs out of a linked folder with `..`, which the words fold
+  away before the disk is asked.
+- **A brace pattern is multiplied out only up to 256 names (#3478, the second review).** To say
+  which files a pattern moved into a folder would replace there, its brace lists are multiplied
+  out and each name tried against every name the two folders share. With no limit, six lists of
+  ten are a million names: 2.3 seconds for one shared name on an idle Mac and ten times that for
+  each further list (measured with bun, 2026-11-23), where a hook has 10 seconds and one cut at
+  its budget lets the command run unasked. The names are counted in one pass before any is made
+  (`braceNames` in `rules.ts`). Past 256 none is made, and a move by such a pattern is asked
+  about as the deletion main asked about. 256 names against 200 shared names cost about a tenth
+  of a second, and a list naming every note in a folder still fits. Main multiplies out no brace,
+  and `rm` of a brace pattern never reached this code. A pattern of more than four stars is
+  taken to match anything, since a search for one grows with each star.
 - **Asleep**, the removal is noted for the morning report as a finding (the report's kind for
   anything else noticed; a kind of its own would be a change to the report) and refused.
 - **Not covered.** What git itself removes or puts back (`git rm`, `git mv`, a checkout or restore

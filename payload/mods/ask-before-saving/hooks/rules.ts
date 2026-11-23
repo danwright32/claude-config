@@ -1939,7 +1939,13 @@ export const removalInstruction = (id: string, removes: readonly Removal[]): str
 /** The removal's answers, the one that changes nothing first (L609), each with what it does. */
 export const removalOptions = (removes: readonly Removal[]) => {
   const w = removalWords(removes)
-  const what = allMoves(removes) ? removes.map(r => movedSaid(r, ' ')).join(', ') : removedNames(removes)
+  // A file that stays where it is (a mv -n onto a name already taken) is not said to move there:
+  // the question above the answers says it stays, and the two must agree.
+  const moves = (r: Removal): string => {
+    const at = landsAt(r)
+    return r.stays && at !== undefined ? `${r.file} nowhere, since a file is at ${at} already` : movedSaid(r, ' ')
+  }
+  const what = allMoves(removes) ? removes.map(moves).join(', ') : removedNames(removes)
   return [
     { label: KEEP_IT, description: w.kept },
     { label: w.label, description: `${w.press} ${what}` },

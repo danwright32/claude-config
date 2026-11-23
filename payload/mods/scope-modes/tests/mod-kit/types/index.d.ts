@@ -594,9 +594,17 @@ export type ModKitWrite = { word: string; path?: string; folder?: string; source
  * not leave the file there: it removes or empties the source another way (under any spelling of
  * its path) or moves it to a second place, another command removes, empties or writes over where
  * it lands, what holds that or what is under it, or the command holds anything whose changes the
- * reader cannot name (an unread command, a write its words do not name, a run, git). A reader for
- * whom it is absent says what it would say of a removal with nowhere to go. `keeps` says the mv was
- * told to replace nothing (-n, --no-clobber): a source whose name is taken there stays where it was.
+ * reader cannot name (an unread command, a write its words do not name, a run, git, a command that
+ * makes a link, an rsync told to remove what it sent). Places are compared as the disk has them:
+ * `$.modkit.writes` takes each to its real path first (the longest part of it that exists, then
+ * the rest of its name), so a folder reached through a link is the folder it leads to, and /tmp,
+ * /var and /etc are /private/tmp, /private/var and /private/etc whatever is on the disk. A place
+ * the disk cannot follow is compared with nothing, so any other removal or write in the command
+ * takes `to` off. A reader for whom it is absent says what it would say of a removal with nowhere
+ * to go. `keeps` says the mv was told to replace nothing (-n, --no-clobber) and given neither -f
+ * nor -i: a source whose name is taken there stays where it was. Beside either of those, in any
+ * order, it is absent: mv obeys the last of the three, and the order is not read, so `mv -f -n`,
+ * which replaces nothing, is read as one that may replace.
  */
 export type ModKitChange = { word: string; path?: string; folder?: string; does: 'remove' | 'touch' | 'truncate' | 'folder' | 'mode'; tree?: true; names?: string[]; to?: { word: string; path?: string; into?: true; keeps?: true } }
 
