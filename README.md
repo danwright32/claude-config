@@ -7915,7 +7915,14 @@ what its -exec runs, since each can change the folder or the environment with no
 and the options that do it are not given, and with `assignments: true` each command that only sets
 a value (`T=x;`, which runs nothing and is otherwise left out) as its assignments (a guard relying
 on any of the three first asks about a line it knows the answer for, since a copy of mod-kit
-loaded before #3093 answers with none of them and says nothing), of which files a command
+loaded before #3093 answers with none of them and says nothing), and with `follow: true` (#3398)
+each command's `followed`: for a word that is one variable alone (`$W`, `"$W"`, `${W}`), the value
+the call itself gives it, only where the call's own text makes that certain (set once, in the plain
+settings the call opens with, `W=/path;` or on a line of its own; a name of one letter or one
+mixing capitals and small letters; nothing else in the call able to change it; no heredoc), null
+for every other word, the words themselves never changed and nothing given to a reader that does
+not ask, so every other mod reads exactly what it read (docs/mods-design.md has every condition;
+a copy of mod-kit loaded before it follows nothing), of which files a command
 changes (`$.modkit.writes({ command, cwd, home })`: redirects, `tee`, the destination of `cp`, `mv`,
 `ln`, `install`, `rsync` and `ditto` (into a folder, under each source's name), every file of `sed`,
 `perl`, `ruby` or `gawk` editing in place, `dd of=`, since #3279 every file an editor is opened on
@@ -7988,7 +7995,9 @@ question again, used by the design round guard and ask before saving), of git co
 (`$.modkit.git({ words, env })`: the subcommand, its arguments, the folder `-C` names and, since
 #3337, the repository and the working folder the command names apart from that folder, by
 `--git-dir`, `--work-tree`, `GIT_DIR` or `GIT_WORK_TREE`, each as written, the two variables read
-from the `env` that `pipeline` gives the command), of gh commands
+from the `env` that `pipeline` gives the command, and, since #3398, the folder more than one `-C`
+leads to, each read from the one before it as git reads them, as `chained`, null where it cannot
+be worked out, beside `dir`, which stays the last `-C` as written), of gh commands
 (`$.modkit.gh({ words })`: the subcommand and action past gh's
 global flags, each flag as pflag reads it, the positionals, the repository the command names itself,
 from `-R`, a github.com link or a `gh repo` owner/name, and for `gh api` its method, endpoint,
@@ -8240,7 +8249,17 @@ changes (a checkout of a path, `git restore`, `git rm`, `git mv`); a script's wr
 docs/mods-design.md, but since #1592 a file handed to a script file as its argument, `python3
 tool.py notes.txt`, is judged and noted as an edit of it), or a checkout wide git command (checkout,
 switch, `branch -D`, `reset --hard`, `stash pop`, `add -A` or `.`) in a checkout another open
-session works in, or since #3021 a command there whose effect cannot be read (mod-kit's `unread`:
+session works in (since #3398 every checkout the command acts on as git reads it: where a `cd`
+before it and each `-C` lead, and the repository and working folder it names by `--git-dir`,
+`--work-tree`, `GIT_DIR` or `GIT_WORK_TREE`, beside the folder the guard always asked about; a
+`-C` folder named with a variable the same call sets, `W=/path; git -C "$W" checkout x`, is
+judged by the folder the variable holds, exactly where mod-kit's `followed` gives it, so set once
+at the start of the call under a name of one letter or of mixed capitals and small letters, and
+used alone; one whose repository cannot be told, any other folder the shell fills in or a `cd`
+that cannot be followed, is stopped while another session is open, with how to write it, and so
+is one where git or mod-kit's walk for a checkout did not answer, to try again), or since #3021
+a command there
+whose effect cannot be read (mod-kit's `unread`:
 `eval`, a command a value names, an alias being set, `ssh`), judged once per checkout against the
 folder it runs in, asks Sonnet for Proceed, Worktree or Stop with the other session's latest request
 (read from its transcript). Proceed is a toast; Worktree and Stop are the grey card plus a message
@@ -8694,6 +8713,29 @@ asks. Since #3343 a shell command that writes that file is refused too, with Edi
 its place, and the For good question about a write that takes an entry out, moves one to another
 section or changes a section heading is refused until it names each of them (both told in full
 below).
+Since #3402 a shell command that deletes a lasting memory file or moves one away is asked about
+too, in a question of its own: every removal mod-kit's reader reports (rm, unlink, rmdir, a mv's
+source, find -delete, shred -u, a packer's source) whose words name lasting memory or match it, the
+memory folder taken whole, and a folder that holds the memory under home (`~/.claude/projects/<a
+project>`, `~/.claude`). A file emptied in place (`truncate`, `shred`) is asked about the same way,
+said as emptied. Where the reader cannot limit what goes under a folder (`rm -r`, what a
+`find -exec` hands to rm), the lasting memory the command names under it is asked about as a
+guess. A file that is not there is not asked about. Claude's question names what
+goes and says why, and the mod adds what it measured as Dan is asked: where a move puts the file,
+or whether git can bring a deleted or emptied one back (held unchanged, held with changes since,
+not held, or not readable). The answers are Keep as is, first, and Delete, Move or Empty; a save's
+For good approves no removal and a removal's answer approves no save, a removal whose consequence
+changes after he answers (what git holds of the file, where a move lands, what a folder holds) is
+asked about again, his "from now on" words cover no removal, and a subagent's removal is refused.
+A command that removes lasting memory and also writes other lasting memory is refused
+whole, each part to be sent by itself, and one that also writes the lessons file by shell is
+refused as it was before (#3343). What the command does is read again when its question arrives,
+and one that has become either by then, or takes files away in more than one way, is refused
+before Dan reads the question. Not covered: what git itself removes or puts back (Dan's
+decision on #1136 stands), `git clean`, `git stash` and `git reset --hard`, what a `find -exec`
+hands to rm by a pattern, what `xargs` hands to rm, and any other folder taken whole that holds a
+lasting memory file the command does not name (docs/mods-design.md, "A removal is asked about in a
+question of its own").
 Since #3295 the picker is refused, before he is asked and saying which character and
 where, when its rule or its question holds a character he cannot see: a control other than the
 newline (a tab, a carriage return, the escape of a terminal sequence), a format character (zero
@@ -8899,7 +8941,10 @@ commit, and `git ls-tree` for whether that commit holds the file; the command mu
 its source and its paths alone (`git checkout origin/main -- <file>`, `git restore --source
 origin/main <file>`), with nothing before or beside it that may change what the name means, though
 on a line that groups nothing what runs once the restore has finished no longer counts, a test run
-piped to its last lines included; any other commit, a local branch that differs from what was
+piped to its last lines included, and since #3401 a brace or parenthesis that mod-kit's own reading
+of the line shows to be quoted text groups nothing (a search for `"(fail|pass)"`), while a
+subshell, a group, a substitution, text handed to a shell and anything that reading does not
+account for still do; any other commit, a local branch that differs from what was
 fetched, the index, any option, a pattern, a file the default branch does not hold and every case
 git cannot answer for is judged as before, and so is putting the changed file back afterwards),
 since #3279 what a git command that moves committed work brings into the working tree (Dan,
@@ -8979,7 +9024,22 @@ decides, and source only files read the same, is not judged as writing the argum
 so `milestone-candidates.sh --like "<title naming page.html>"` runs; since #3021 the script's text
 is read through mod-kit alone, which keeps a `[[ ]]` test whole and reads a trap's text, and a
 command in it that mod-kit marks unread, or that runs through `setsid`, `flock`, `ionice`, `arch` or
-`ssh`, keeps its arguments judged), a patch git apply, git am or patch reads from a file judged
+`ssh`, keeps its arguments judged; since #3416 a file a shell script's own text hands a program the
+write reader does not know (`bash fmt.sh`, fmt.sh holding `prettier --write app/page.tsx`) is judged
+as a write of it, as that line typed whole is since #3323, in the script the command runs and each
+script that one runs, the list of programs that only read applying there as on a command line,
+and a call of a shell function the script's own text defines read as that function's commands with
+the call's words in place, so a helper that only compares and prints is no such program and a
+wrapper around one still is (Dan, 2026-11-22), a function from a file the script reads in checked
+the same way where the reader can say which file it is, a file in the script's own folder or below
+read in by name or under the folder the script sets as its own, one file deep (a function from a
+file outside that folder, from a path held in any other variable, from a file read in only inside
+an `if`, or one that keeps what it was handed in a variable, stays judged, as does a helper of a
+script that holds an eval anywhere, or that reads in a file the reader could not read anywhere but
+at its own top above the helper; of the 51 past calls in 45 days the rule newly judges, this
+reading clears 27),
+while what the script itself was handed, passed on to such a program (`mystery "$1"`), is still not
+caught), a patch git apply, git am or patch reads from a file judged
 since #3022 by the files it changes (mod-kit's patch reader, placed as the command places them), and
 a look changing file an inline script, or a patch that cannot be read whole or comes on standard
 input, only mentions, and since #3021 one named in the words of a command typed whole that mod-kit
@@ -9326,7 +9386,7 @@ Dan as a change to a message's words.
 
 #978, #1138, #1158, #1191, #1194, #1248, #1275, #1296, #1306, #1322, #1341, #1524, #1576, #1586,
 #1593, #1682, #1773, #1765, #1814, #1815, #1823, #1832, #1841, #1864, #1904, #1911, #1951, #1953,
-#1954, #2261, #2830, #2845, #2847, #2855, #2924, #2991, #3144, #3214
+#1954, #2261, #2830, #2845, #2847, #2855, #2924, #2991, #3144, #3214, #3416
 
 </td></tr>
 <tr><td>

@@ -107,7 +107,8 @@ export type ModKit = {
    * Undefined when not git. Since #3337 also the repository and the working folder the command
    * names apart from that folder (`gitDir`, `workTree`), from its options and, where `env` is given
    * (the `env` `pipeline` gives the command), from GIT_DIR and GIT_WORK_TREE. A reader that places a
-   * git command by `dir` alone reads one naming either as being about the wrong repository.
+   * git command by `dir` alone reads one naming either as being about the wrong repository. Since
+   * #3398 also the folder more than one -C leads to (`chained`), where that is not what `dir` says.
    */
   git: (input: { words: string[]; env?: readonly string[] }) => Promise<ModKitGit | undefined>
   /**
@@ -206,8 +207,12 @@ export type ModKit = {
    * asks for it. A copy of mod-kit loaded before #3093 takes no such option and leaves them out
    * without saying so, as it gives no `env` and no `behind`, so a guard relying on any of the three
    * first asks about a line it knows the answer for (`A=1; B=2 env true`).
+   *
+   * Given `follow: true`, each command carries `followed` (#3398): what a word that is one variable
+   * alone holds, where the call's own text makes that certain. A copy of mod-kit loaded before
+   * #3398 takes no such option and gives none, which reads as nothing followed.
    */
-  pipeline: (input: { command: string; cwd?: string; home?: string; assignments?: boolean }) => Promise<ModKitCommand[]>
+  pipeline: (input: { command: string; cwd?: string; home?: string; assignments?: boolean; follow?: boolean }) => Promise<ModKitCommand[]>
   /**
    * Where a python program holds text rather than code (#1171): each comment after its `#`, and
    * each string literal between its quotes, `formatted` for an f-string or a t-string, whose braces
@@ -466,6 +471,21 @@ export type ModKitCommand = {
    * a redirect, and is not marked.
    */
   compares?: boolean[]
+  /**
+   * Given only when `pipeline` was asked with `follow` (#3398; Dan, 2026-11-22: "Follow the variable
+   * first"): for each word that is one variable alone (`$W`, `"$W"`, `${W}`) which the call itself
+   * sets, the value it holds; null for every other word; absent where no word is one. The word in
+   * `words` stays as written. A value is given only where the call's own text makes it certain:
+   * the variable is set once, in the plain settings the call opens with (`W=/path;` or on a line of
+   * its own, the value plain characters, bare or in one pair of quotes), its name is a single
+   * letter or mixes capitals and small letters (so no name a shell keeps for itself), and nothing
+   * else in the call can give it another value. Never a guess: a variable set twice, after the
+   * use, in a subshell, a function, a loop or a branch, after an `&&` or `||`, as a setting in
+   * front of a command, from a command's output or another variable, or in a call that hands a
+   * builtin a name the reader cannot read, is left with no value here, as one set in an earlier
+   * call is.
+   */
+  followed?: (string | null)[]
   /** The folder it runs in, given only when `pipeline` was given `cwd`; null where a cd before it cannot be followed. */
   folder?: string | null
 }
@@ -491,8 +511,15 @@ export type ModKitCodeVerdict = { does: 'run a process' | 'write files' | 'unrea
  * (core.worktree, as a submodule's does), and named by `gitDir` alone its files land there
  * instead: only git can say so (`git rev-parse --show-toplevel` with the command's own naming), and
  * the write reader, which asks git nothing, places a path in the folder the command runs in.
+ * `dir` is the last -C as written. git reads each -C from the one before it (#3398: `-C /a -C b`
+ * runs in /a/b), and `chained` is the folder that leads to, as written and read as `dir` is, given
+ * only where it is not what `dir` says (never for one -C or none, nor where the last is absolute);
+ * null where it cannot be worked out (a value the shell fills in after another -C, or a folder read
+ * from one), which is no folder and never the one the command runs in. Where `chained` is given,
+ * `dir` is the old reading of the command and not where git runs: a reader judges the folder
+ * `chained` names, holds or asks on null, and decides for itself whether to go on judging `dir` too.
  */
-export type ModKitGit = { sub: string | undefined; args: string[]; dir: string | undefined; gitDir?: string; workTree?: string }
+export type ModKitGit = { sub: string | undefined; args: string[]; dir: string | undefined; chained?: string | null; gitDir?: string; workTree?: string }
 
 /** The goal a session's transcript says is set now, as `goal` reads it. */
 export type ModKitGoal = { state: 'set'; condition: string } | { state: 'none'; met?: ModKitGoalMet } | { state: 'unreadable'; why: string }
