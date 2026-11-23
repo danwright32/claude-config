@@ -194,6 +194,26 @@ exception any more. Since #743 it reads a variable the command set before a writ
 (`pipeline(cmd, { assignments: true })`, through `commandWrites`, off for every other caller); what
 it cannot be sure of stays as written (Ask before saving, below).
 
+Since #3415 the `>` of an arithmetic test and of a `[[ ]]` comparison is no redirect. Before,
+`(( n > 3 ))` was read as a write of a file named 3 and `[[ a > b ]]` as a write of b, so every
+guard on the reader could judge, hold or record a write that never happens. The command reader now
+marks what stands inside `(( ))`, the four parentheses included (`arithmetic`), and each `<` or `>`
+that compares two strings inside a `[[ ]]` test (`compares`), and the write reader reads a marked
+command as no write, no input and no run, and a marked word as a word of the test like `==`. What
+is kept: a redirect after the test (`(( n > 3 )) > out.txt`, `[[ a > b ]] > out.txt`) is a write; a
+substitution inside either still runs; `((echo a) > f.txt)`, whose two closing parentheses are not
+written together, is two subshells and a write; `[[` stays a program the reader does not know,
+handed each word of its test (#3323); and a name a sum gives a value (`(( F = 2 ))`, `(( F++ ))`) is
+one whose value the reader no longer knows, so a later `> out$F` is given as written. Only for bash,
+zsh and ksh, measured on this Mac on 2026-11-21 with each case run in an empty folder: dash does
+write the file (to it `((` opens two subshells and `[[` is a program's name), and sh is dash on
+other machines, so what a `sh -c` or a `dash -c` runs is read as before. Three forms are knowingly
+left as they were, each read as a write that does not happen, never the reverse: a test behind
+`time`, a `]]` with a redirect written against it (`]]>out`), and a comparison written with anything
+a redirect can carry (`[[ a >> b ]]`, which every shell refuses). The count over the personal
+MacBook's records when it was built (66,268 shell calls: main sessions from 2026-10-19, agents' and
+worktree sessions' from 2026-11-14) is none: no call ran an arithmetic test or such a comparison.
+
 Since #965 it reports what a command substitution changes. The shell runs the commands inside a
 `$(...)` or backticks before the command they sit in, and in a heredoc whose delimiter is not quoted
 (`<<EOF`, `<<-EOF`) before the program fed that body starts; the reader dropped a heredoc's body as

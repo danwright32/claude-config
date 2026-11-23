@@ -15,7 +15,9 @@
 # Runs on EVERY computer, unlike the push review, which AI_REVIEW_HOSTS confines to the work Mac.
 # Never blocks: the pull request already exists, and every path exits 0 with one line saying what
 # happened. The base is the pull request's --base/-B when the command names one, else origin's
-# default branch.
+# default branch. A review started at a commit reads from the head of the branch this one is
+# stacked on, when that is established (lib/stacked-base.sh, claude-config#3444), and a review
+# started at a push from the open pull request's own base.
 
 set -uo pipefail
 # Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
@@ -102,6 +104,14 @@ if [ "$mode" = commit ]; then
     branch="$(git -C "$top" symbolic-ref --quiet --short HEAD 2>/dev/null)"
     args=(start --gate push --dir "$top" --sha "$head")
     [ -n "$branch" ] && args+=(--branch "$branch")
+    # A stacked branch is read from its base's head, the range the push gate will ask about
+    # (lib/stacked-base.sh, the one answer both read; claude-config#3444). Read from the default
+    # branch here, the review would cover the push gate's question and be reused with the base
+    # branch's findings in it, which is the refusal that issue records.
+    # shellcheck source=lib/stacked-base.sh
+    if . "$HOOK_DIR/lib/stacked-base.sh" 2>/dev/null && declare -F sb_stacked_base >/dev/null; then
+      stacked_ref="$(sb_field "$(sb_stacked_base "$top")" ref)" && args+=(--base-ref "$stacked_ref")
+    fi
     said+="${said:+ }$(bash "$HOOK_DIR/lib/pr-review.sh" "${args[@]}" 2>&1 </dev/null)"
   done <<< "$repo_dirs"
   [ -n "$said" ] && say "$said"
