@@ -697,6 +697,81 @@ check "#1468 nor one after cd &&" "$(refused_to_rewrite 'cd /repo && rtk init')"
 check "#1468 the control: rtk git init, git's own init, keeps its rewrite" "$(kept_as 'rtk git init')"
 
 # ---------------------------------------------------------------------------
+# Never a rewrite into `rtk git log` (claude-config#3469). rtk 0.31.0 runs every git log it filters
+# with `--no-merges` added in front of the command's own arguments (unless they name `--merges`),
+# and with `-10` or `-50` added when they set no count. Measured through a stub git that recorded
+# its argv: `rtk git log -1 --format=%H` ran `git log --no-merges -1 --format=%H`. So a head check
+# on a branch whose newest commit is a merge named an older commit with no error, and a range
+# (`main..HEAD`) left out every merge and stopped at 50. That changes the ANSWER, not its length.
+#
+# Which git subcommand runs is read by the shared reader, as git reads it, never by word position:
+# git takes options in front of its subcommand (`git -C <dir> log`, `git --no-pager log`).
+# ---------------------------------------------------------------------------
+check "#3469 a git log is not rewritten into rtk git log" "$(refused_to_rewrite 'rtk git log -1 --format=%H')"
+check "#3469 nor one behind git -C, the head check's own shape" "$(refused_to_rewrite 'rtk git -C /repo/wt log -1 --format=%H')"
+check "#3469 nor one behind a -C path holding a space" "$(refused_to_rewrite "rtk git -C '/repo/my wt' log --oneline -3")"
+check "#3469 nor one behind --no-pager after cd &&" "$(refused_to_rewrite 'cd /repo && rtk git --no-pager log --oneline')"
+check "#3469 nor one behind -c" "$(refused_to_rewrite 'rtk git -c core.pager=cat log -n 1')"
+check "#3469 nor a range" "$(refused_to_rewrite 'rtk git log --format=%h main..HEAD')"
+check "#3469 nor one after another git command" "$(refused_to_rewrite 'rtk git status; rtk git log -1')"
+# The controls: other git subcommands keep their rewrite, the word log elsewhere changes nothing,
+# and `git show -s`, which was measured to name the true head, is kept (L159).
+check "#3469 rtk git status still keeps its rewrite" "$(kept_as 'rtk git status')"
+check "#3469 and a git status in a folder named log" "$(kept_as 'rtk git -C /var/log/repo status')"
+check "#3469 and git show -s --format=%H" "$(kept_as 'rtk git show -s --format=%H')"
+check "#3469 and an rtk ls of a folder named log" "$(kept_as 'rtk ls log')"
+
+# End to end against the REAL rtk: the issue's reproduction, a head check in a repository whose
+# head is a merge commit, RUN through the real hook and compared with git rev-parse HEAD. HOME is
+# emptied so no rtk config.toml takes part. The control first shows the real rtk's own rewrite of
+# that command names a different commit, so a green means the hook kept git log away from rtk.
+if ! command -v rtk >/dev/null 2>&1; then
+  echo "note: rtk is not installed on this Mac, so the #3469 end to end check did not run. Everything above used stubs."
+else
+  FX3469="$TMPROOT/fx3469"; mkdir -p "$FX3469/home" "$FX3469/repo"
+  g3469() { env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "$FX3469/repo" \
+    -c user.email=t@example.invalid -c user.name=t -c commit.gpgsign=false "$@" >/dev/null 2>&1; }
+  g3469 init -q -b main && g3469 commit -q --allow-empty -m base && g3469 checkout -q -b side \
+    && g3469 commit -q --allow-empty -m side && g3469 checkout -q main \
+    && g3469 commit -q --allow-empty -m main2 && g3469 merge -q --no-ff side -m merge
+  head3469="$(env -u GIT_DIR -u GIT_WORK_TREE git -C "$FX3469/repo" rev-parse HEAD 2>/dev/null)"
+  parents3469="$(env -u GIT_DIR -u GIT_WORK_TREE git -C "$FX3469/repo" rev-list --parents -n 1 HEAD 2>/dev/null | wc -w | tr -d ' ')"
+  if [ -z "$head3469" ] || [ "$parents3469" != 3 ]; then
+    check "#3469 the fixture's head is a merge commit" "head [$head3469] has $parents3469 words of parents"
+  else
+    for cmd3469 in "git -C '$FX3469/repo' log -1 --format=%H" "git -C '$FX3469/repo' log -n 1 --pretty=%H" \
+      "git -C '$FX3469/repo' log --max-count=1 --pretty=format:%H"; do
+      ctl3469="$(HOME="$FX3469/home" rtk rewrite "$cmd3469" 2>/dev/null)"
+      ctl3469_out="$(HOME="$FX3469/home" env -u GIT_DIR -u GIT_WORK_TREE bash -c "$ctl3469" 2>&1)"
+      if [ -z "$ctl3469" ] || [ "$ctl3469_out" = "$head3469" ]; then
+        echo "note: this rtk ($(rtk --version 2>/dev/null)) no longer misreads the #3469 head (rewrite was [$ctl3469], it printed [$ctl3469_out]), so the check below proves less than it did."
+      fi
+      payload "$cmd3469"
+      sub3469="$(HOME="$FX3469/home" bash "$H" < "$TMPROOT/payload.json" 2>/dev/null | rewritten_to)"
+      ran3469="${sub3469:-$cmd3469}"
+      out3469="$(HOME="$FX3469/home" env -u GIT_DIR -u GIT_WORK_TREE bash -c "$ran3469" 2>&1)"
+      [ "$out3469" = "$head3469" ] \
+        && check "#3469 [$cmd3469] that actually runs names the merge commit git rev-parse HEAD names" ok \
+        || check "#3469 [$cmd3469] that actually runs names the merge commit git rev-parse HEAD names" "ran [$ran3469], printed [$out3469], head is $head3469"
+    done
+    # A range: the merge is one of the two commits on main past its first parent.
+    cmd3469="git -C '$FX3469/repo' log --format=%H HEAD^1..HEAD"
+    payload "$cmd3469"
+    sub3469="$(HOME="$FX3469/home" bash "$H" < "$TMPROOT/payload.json" 2>/dev/null | rewritten_to)"
+    out3469="$(HOME="$FX3469/home" env -u GIT_DIR -u GIT_WORK_TREE bash -c "${sub3469:-$cmd3469}" 2>&1 | awk 'NF' | wc -l | tr -d ' ')"
+    [ "$out3469" = 2 ] \
+      && check "#3469 a range that actually runs lists the merge commit too" ok \
+      || check "#3469 a range that actually runs lists the merge commit too" "ran [${sub3469:-$cmd3469}], listed $out3469 commits, want 2"
+    # The hook side control: git status in the same repository is still rewritten by the real rtk.
+    payload "git -C '$FX3469/repo' status"
+    sub3469="$(HOME="$FX3469/home" bash "$H" < "$TMPROOT/payload.json" 2>/dev/null | rewritten_to)"
+    [ "$sub3469" = "rtk git -C '$FX3469/repo' status" ] \
+      && check "#3469 and git status there is still rewritten by the real rtk" ok \
+      || check "#3469 and git status there is still rewritten by the real rtk" "got [$sub3469]"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 # End to end against the REAL rtk (claude-config#399). Everything above uses a stub, which proves
 # the hook's logic and nothing about what actually runs. So this drives the exact shape that fooled
 # a session through the real hook and the real rtk, RUNS whatever the hook lets through, and asserts
