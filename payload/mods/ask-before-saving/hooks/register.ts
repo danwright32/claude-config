@@ -518,7 +518,9 @@ const unmarked = (w: Writes): Writes => ({ ...w, changes: (w.changes ?? []).map(
 // read), judged by the rule module, then asked of the disk: a file that is not there is no removal,
 // a folder taken whole counts only for the lasting memory found under it, a move says whether a
 // file is where it lands, and a deletion says what git holds. A disk that cannot say fails the
-// hook, which fails closed.
+// hook, which fails closed, but for the looks a marked move's wording rests on: those share
+// MOVE_LOOK_MS, and one that fails or runs out of it leaves the question main asks, read with
+// main's own looks (below).
 const NO_REMOVALS: AskBeforeSavingRemoval[] = []
 const removalsOf = async ($: EngineInterface, tool: string, input: Record<string, unknown>, { home }: Where, w: Writes | undefined): Promise<AskBeforeSavingRemoval[]> => {
   if (tool !== 'Bash' || w === undefined || !(w.changes ?? []).some(c => takesAway(c.does))) return NO_REMOVALS

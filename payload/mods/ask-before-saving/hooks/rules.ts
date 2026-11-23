@@ -1892,10 +1892,13 @@ export const braceAlternatives = (pattern: string): string[] | null => {
  * the fold can only say "replacing" of a file that stays, the harmless side.
  */
 export const replacedBy = (pattern: string, from: readonly string[], there: readonly string[]): string[] => {
-  const alternatives = (braceAlternatives(pattern) ?? [pattern]).flatMap(p => [p, p.normalize('NFC'), p.normalize('NFD')])
+  const alternatives = [...new Set((braceAlternatives(pattern) ?? [pattern]).flatMap(bothForms))]
   const held = new Set(there.flatMap(foldedName))
-  return from.filter(n => foldedName(n).some(f => held.has(f)) && [n, n.normalize('NFC'), n.normalize('NFD')].some(form => alternatives.some(p => patternMayMatch(p, form))))
+  return from.filter(n => foldedName(n).some(f => held.has(f)) && bothForms(n).some(form => alternatives.some(p => patternMayMatch(p, form))))
 }
+// A name or a pattern as written and in each Unicode form, once each: a name with no accent is
+// one text, so it costs what it did before the forms were tried.
+const bothForms = (text: string): string[] => [...new Set([text, text.normalize('NFC'), text.normalize('NFD')])]
 // A file name as a disk that ignores letter case and the Unicode form of an accent compares it:
 // decomposed, then in small letters and in capitals, either of which may be what two names share.
 const foldedName = (name: string): string[] => {
