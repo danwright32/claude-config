@@ -41,7 +41,8 @@ fi
 INPUT=$(cat)
 # Cleaned by the shared reader before jq reads it: a lone surrogate escape anywhere in the payload
 # made jq read nothing, so the command was never rewritten (claude-config#1944). Without the library
-# the payload is read as it came, as before; the gh reading below says what its absence costs.
+# the payload is read as it came, as before; the gh and git log reading below says what its absence
+# costs.
 # shellcheck source=lib/push-scope.sh
 . "$RTK_HOOK_DIR/lib/push-scope.sh" 2>/dev/null && INPUT="$(ps_clean_payload "$INPUT")"
 CMD=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
