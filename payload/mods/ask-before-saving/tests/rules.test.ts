@@ -2326,7 +2326,8 @@ test('a mv stands alone with nothing beside it but commands on the list, and a p
     [`mkdir -p ${MEM}/archive && cp ${MEM}/MEMORY.md ${MEM}/MEMORY.md.bak && mv ${MEM}/{a,b}.md ${MEM}/archive/`, [`${MEM}/archive`], [`${MEM}/MEMORY.md.bak`]],
     [`cp -p ${MEM}/MEMORY.md ~/backup.md && mv -n ${MEM}/{a,b}.md ~/Desktop/archive/ && ls ~/Desktop/archive`, [], ['~/backup.md']],
     [`mv -t ~/Desktop/archive -v ${MEM}/{a,b}.md`, [], []],
-    [`mv "${MEM}/{a,b}.md" '$HOME/Desktop/archive/'`, [], []],
+    // Quoted words stand, but for a quoted ~ (the fourth review's test below).
+    [`mv "$HOME/notes/{a,b}.md" '$HOME/Desktop/archive/'`, [], []],
   ] as const)
     expect([command, aloneOf(command)]).toEqual([command, { made: [...made], copies: [...copies] }])
 })
@@ -2429,4 +2430,119 @@ test('a folder the mv goes into counts as made first only under the same text, a
   expect(alone).toEqual({ made: ['~/Desktop/new'], copies: [] })
   if (alone === undefined) return
   expect(['~/Desktop/new', '~/Desktop/new/', '~/Desktop/NEW', '$HOME/Desktop/new', `${HOME}/Desktop/new`, '~/Desktop/new/sub', '~/Desktop'].map(to => madeFirst(alone, to))).toEqual([true, true, false, false, false, false, false])
+})
+
+// ---- #3478, the fourth review: a word that is not from the root is trusted only where the folder it is read in is certain ----
+// Measured at 72816e97aa: every command in the first test below stood alone, so its mv was worded
+// "can be moved back" though the notes can land in another folder than the one the reader placed
+// them in, on files of the same name there. Measured in bash 3.2.57 and zsh 5.9 on this Mac, in a
+// scratch folder: `cd <folder> x` fails in zsh ("string not in pwd") and the mv after a `;` then runs
+// in the session folder, while bash goes to the folder; `cd -s <a link>` fails in both; `! cd <no
+// such folder> && mv` runs the mv in both; with CDPATH set, `cd sub` goes to another folder's sub in
+// both; a quoted ~ is left as text by both, and zsh alone makes `=ls` the path of ls.
+test('a mv with a word that is not from the root does not stand alone after a cd that can fail without stopping the command, or go elsewhere (#3478)', () => {
+  const got: [string, unknown][] = []
+  for (const command of [
+    // The fourth review's three, and the same class in each other join.
+    `cd ~/Desktop x; mv ${MEM}/{a,b}.md archive/`,
+    `cd ~/Desktop x || mv ${MEM}/{a,b}.md archive/`,
+    `cd -s ~/Desktop/link; mv ${MEM}/{a,b}.md ./`,
+    `cd ~/Desktop/link x; mv ${MEM}/{a,b}.md .`,
+    `cd ~/Desktop; mv ${MEM}/{a,b}.md archive/`,
+    `cd ~/Desktop\nmv ${MEM}/{a,b}.md archive/`,
+    `cd ~/Desktop || mv ${MEM}/{a,b}.md archive/`,
+    `cd ~/Desktop || true; mv ${MEM}/{a,b}.md archive/`,
+    `! cd ~/Desktop && mv ${MEM}/{a,b}.md archive/`,
+    `true && ! cd ~/Desktop && mv ${MEM}/{a,b}.md archive/`,
+    // Joined so that a failure stops the command, but the join is not the only one in the text.
+    `cd ~/Desktop && mv ${MEM}/{a,b}.md archive/; ls`,
+    `ls; cd ~/Desktop && mv ${MEM}/{a,b}.md archive/`,
+    `cd ~/Desktop && mv ${MEM}/{a,b}.md archive/ || true`,
+    // A cd that is more than one word from the root: the two shells read two words differently,
+    // an option can refuse a link, no word is home, a lone `-` is the folder before, and a name that
+    // is not from the root can be found along CDPATH first.
+    `cd ~/Desktop x && mv ${MEM}/{a,b}.md archive/`,
+    `cd -s ~/Desktop/link && mv ${MEM}/{a,b}.md ./`,
+    `cd -P ~/Desktop && mv ${MEM}/{a,b}.md archive/`,
+    `cd -- ~/Desktop && mv ${MEM}/{a,b}.md archive/`,
+    `cd && mv ${MEM}/{a,b}.md archive/`,
+    `cd - && mv ${MEM}/{a,b}.md archive/`,
+    `cd sub && mv ${MEM}/{a,b}.md archive/`,
+    `cd ./sub && mv ${MEM}/{a,b}.md archive/`,
+    `cd ~/Desktop && cd archive && mv ${MEM}/{a,b}.md ./`,
+    `cd '$HOME/Desktop' && mv ${MEM}/{a,b}.md archive/`,
+    // The word that is not from the root can be the notes, the folder given with -t, or a copy's.
+    `cd ${MEM} x; mv {a,b}.md ~/Desktop/archive/`,
+    `cd ~/Desktop x; mv -t archive ${MEM}/{a,b}.md`,
+    `cd ~/Desktop x; mv --target-directory=archive ${MEM}/{a,b}.md`,
+    `cd ~/Desktop x; mv ${MEM}/{a,b}.md '$HOME/archive/'`,
+    `cd ~/Desktop x; cp ${MEM}/MEMORY.md MEMORY.bak && mv ${MEM}/{a,b}.md ~/Desktop/archive/`,
+    `cd ~/Desktop x; cp MEMORY.md ~/MEMORY.bak && mv ${MEM}/{a,b}.md ~/Desktop/archive/`,
+    // A ~ the shell leaves as text, which the reader places at home: the word is not from the root.
+    `mv ${MEM}/{a,b}.md "~/Desktop/archive/"`,
+    `mv ${MEM}/{a,b}.md '~/Desktop/archive/'`,
+    `mv ${MEM}/{a,b}.md ~"/Desktop/archive/"`,
+    `mv "${MEM}/{a,b}.md" ~/Desktop/archive/`,
+    `mkdir -p '~/Desktop/new' && mv ${MEM}/{a,b}.md ~/Desktop/new/`,
+    `mv --target-directory=~/Desktop/archive ${MEM}/{a,b}.md`,
+    // A word zsh makes the path of a program.
+    `mv ${MEM}/{a,b}.md =archive`,
+    `mkdir -p =new && mv ${MEM}/{a,b}.md =new`,
+    `cp ${MEM}/MEMORY.md =bak && ${MV}`,
+  ])
+    got.push([command, aloneOf(command)])
+  expect(got).toEqual(got.map(([command]) => [command, undefined]))
+  expect(got.length).toBe(38)
+})
+
+test('a mv still stands alone after a cd of one word from the root joined by && alone, with no cd before it, and where its every word is from the root (#3478)', () => {
+  for (const [command, made, copies] of [
+    // One word from the root, and nothing joins the commands but &&: a cd that fails stops the mv.
+    [`cd ${MEM} && mv {a,b}.md archive/`, [], []],
+    [`cd ~/Desktop && mv ${MEM}/{a,b}.md archive/`, [], []],
+    [`cd ~ && mv ${MEM}/{a,b}.md Desktop/archive/ && ls Desktop/archive`, [], []],
+    [`cd $HOME/Desktop && cd /tmp/x && mv -t archive ${MEM}/{a,b}.md`, [], []],
+    [`cd "$HOME/Desktop" && mv --target-directory=archive ${MEM}/{a,b}.md`, [], []],
+    [`cd ~/Desktop && cp ${MEM}/MEMORY.md MEMORY.bak && mv ${MEM}/{a,b}.md archive/`, [], ['MEMORY.bak']],
+    // A folder made after a cd under a name that is not from the root is still not counted on.
+    [`cd ~/Desktop && mkdir -p archive /abs/made && mv ${MEM}/{a,b}.md archive/`, ['/abs/made'], []],
+    // Every word of the mv from the root: no cd before it, whatever its shape, moves where they lead.
+    [`cd ~/Desktop x; ${MV}`, [], []],
+    [`cd -s ~/Desktop/link; ${MV}; ls`, [], []],
+    [`cd sub || true; mv -t ~/Desktop/archive ${MEM}/{a,b}.md`, [], []],
+    [`! cd ~/Desktop && mv --target-directory=/tmp/x ${MEM}/{a,b}.md`, [], []],
+    [`cd ~/Desktop x; cp ${MEM}/MEMORY.md ~/MEMORY.bak && ${MV}`, [], ['~/MEMORY.bak']],
+    // No cd before the mv: words that are not from the root are read in the session folder, whatever
+    // joins the commands and whatever cd comes after.
+    [`mkdir -p archive; mv ${MEM}/{a,b}.md archive/; ls archive`, ['archive'], []],
+    [`mv *.md docs/ || true; cd docs x; ls`, [], []],
+    [`mv ${MEM}/{a,b}.md '$HOME/archive/'`, [], []],
+    [`cp MEMORY.md MEMORY.bak; mv ${MEM}/{a,b}.md archive/`, [], ['MEMORY.bak']],
+    // A = or a quote that opens no word of the mv, a copy or a mkdir.
+    [`${MV} && echo a=b "done" && ls ~/Desktop/archive`, [], []],
+  ] as const)
+    expect([command, aloneOf(command)]).toEqual([command, { made: [...made], copies: [...copies] }])
+})
+
+// ---- #3478, the fourth review: a name the folder holds in another case, or another Unicode form ----
+// Measured on this Mac's disk (APFS, which ignores case) in a scratch folder: `mv src/*.md arch2/`
+// with src/Notes.md and arch2/notes.md leaves arch2 holding one file, the note, and the older file
+// gone. At 72816e97aa names were compared exactly, so replacedBy gave [] for each of the first six.
+test('a pattern moved into a folder replaces a name there that differs only by letter case or by the Unicode form of an accent (#3478)', () => {
+  const composed = `caf${String.fromCharCode(233)}.md`
+  const decomposed = `cafe${String.fromCharCode(0x301)}.md`
+  const capitals = `CAF${String.fromCharCode(201)}.md`
+  expect([composed.length, decomposed.length, composed === decomposed, composed.normalize('NFD') === decomposed]).toEqual([7, 8, false, true])
+  expect(replacedBy('*.md', ['Notes.md', 'a.md'], ['notes.md'])).toEqual(['Notes.md'])
+  expect(replacedBy('{notes,a}.md', ['Notes.md', 'a.md'], ['NOTES.MD'])).toEqual(['Notes.md'])
+  expect(replacedBy('*.md', [composed], [decomposed])).toEqual([composed])
+  expect(replacedBy('*.md', [decomposed], [composed])).toEqual([decomposed])
+  expect(replacedBy('*.md', [capitals], [decomposed])).toEqual([capitals])
+  // The name typed in one form in a brace list, the folder holding it in the other.
+  expect(replacedBy(`{${composed.slice(0, -3)},a}.md`, [decomposed], [composed])).toEqual([decomposed])
+  // Controls: a name that is another name is not replaced, and a pattern that cannot match it moves none.
+  expect(replacedBy('*.md', ['Notes.md', 'a.md'], ['note.md', 'b.md'])).toEqual([])
+  expect(replacedBy('*.md', ['cafe.md'], [composed, decomposed])).toEqual([])
+  expect(replacedBy('{a,b}.md', ['Notes.md', 'a.md'], ['notes.md'])).toEqual([])
+  expect(replacedBy('*.md', ['notes.md'], ['notes.md'])).toEqual(['notes.md'])
 })

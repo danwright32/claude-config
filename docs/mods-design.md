@@ -3643,6 +3643,23 @@ lasting memory file, or moved one away, ran with no question. Measured in the mo
   this change, so `$.modkit.writes` asks the disk nothing. Measured over 109 commands against main
   and the second round's head: the same commands stop on all three, and none worded as a move here
   loses a file. A repeat archive whose backup name is already taken gets main's wording.
+- **A word of the mv is trusted only where the reader places it as the shell does (#3478, the
+  fourth review).** Two faults were left, both where the mv's own words land somewhere other than
+  read. One: names were compared exactly, and this Mac's disk holds `Notes.md` and `notes.md` as
+  one file, so a pattern moved into a folder holding the other spelling replaced it unsaid.
+  `replacedBy` now compares names folded for letter case and for the Unicode form of an accent,
+  on every disk, which can only add a "replacing". Two: a word not from the root (`/`, `~`,
+  `$HOME`) is read in the folder a `cd` leaves, and a cd can fail with the mv still run (zsh
+  refuses `cd <folder> x`, both shells refuse `cd -s <a link>`, and `! cd <no such folder> && mv`
+  runs the mv) or go elsewhere (`cd sub` with CDPATH set). So `moveAlone` trusts such a word of
+  the mv or of a copy only where no cd stands before the mv, or where every cd before it is `cd`
+  and one word from the root and nothing joins the commands but `&&`, with no `!`: then a cd that
+  fails stops the mv (measured in bash 3.2.57 and zsh 5.9). Three more words the shell places
+  elsewhere than mod-kit's reader lose the wording too: a quoted `~` and one after an option's
+  `=`, which both shells leave as text and the reader places at home, and a word opening with
+  `=`, which zsh makes the path of a program. This is deliberately coarse: `cd <folder> && mv
+  <notes> archive/; ls archive` gets main's wording, since the `;` could as well stand before the
+  mv. The list of commands is unchanged.
 - **A brace pattern is multiplied out only up to 256 names (#3478, the second review).** To say
   which files a pattern moved into a folder would replace there, its brace lists are multiplied
   out and each name tried against every name the two folders share. With no limit, six lists of

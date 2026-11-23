@@ -4389,6 +4389,94 @@ test('a move onto a name the words cannot place claims nothing about what is the
   expect(w.ran).toEqual([])
 })
 
+// The fourth review of #3478, its first fault. Measured at 72816e97aa through the whole mod: the
+// first two below ended "and can be moved back", though on a disk that ignores case and the form of
+// an accent (measured on this Mac's, in a scratch folder: src/Notes.md moved by `mv src/*.md arch2/`
+// onto arch2/notes.md left one file, the note) the file the archive held is gone. Main asks about
+// every pattern moved as a deletion.
+const ACCENT_COMPOSED = `caf${String.fromCharCode(233)}.md`
+const ACCENT_DECOMPOSED = `cafe${String.fromCharCode(0x301)}.md`
+const OTHER_CASE_FILES: Record<string, string> = {
+  ...KEPT,
+  [`${REMOVAL_MEMDIR}/Notes.md`]: 'the note\n',
+  [`${REMOVAL_MEMDIR}/a.md`]: 'a\n',
+  [`${REMOVAL_MEMDIR}/${ACCENT_COMPOSED}`]: 'the cafe\n',
+  [`${REMOVAL_MEMDIR}/archive/notes.md`]: 'an older note\n',
+  [`${REMOVAL_MEMDIR}/archive/${ACCENT_DECOMPOSED}`]: 'an older cafe\n',
+}
+const REPLACES_ONE = 'replacing a file of the same name that is there now.'
+const OTHER_CASE: [string, string, string][] = [
+  ['a name the folder holds in another letter case', 'N*.md', REPLACES_ONE],
+  ['a name the folder holds with its accent in the other Unicode form', 'c*.md', REPLACES_ONE],
+  ['a brace list naming it in small letters', '{notes,a}.md', REPLACES_ONE],
+  ['control, a name the folder holds under no spelling', 'a*.md', 'and can be moved back.'],
+]
+for (const [what, pattern, said] of OTHER_CASE)
+  test(`a pattern moved into a folder is said to replace a file there whose name differs only by case or Unicode form: ${what} (#3478)`, withKit, async ($, on) => {
+    expect(ACCENT_COMPOSED === ACCENT_DECOMPOSED).toBe(false)
+    const w = world($, on, { auto: true, files: OTHER_CASE_FILES })
+    const names = `${REMOVAL_MEM_SHOWN}/${pattern}`
+    const asked = `Move ${names}: tidying the folder?`
+    await askRemoval($, w, refusalOf(await call($, { tool: 'Bash', command: `mv ${names} ${ARCHIVE_SHOWN}/` })), 'Keep as is', asked)
+    expect(w.asked[0]?.questions[0]?.question).toBe(`${asked} ${PATTERN_SAID} Each goes into the folder ${ARCHIVE_SHOWN}, ${said}`)
+    expect(w.ran).toEqual([])
+  })
+
+// The fourth review of #3478, its second fault. Measured at 72816e97aa through the whole mod: each
+// command in the first test below was refused as "Not moved yet", its question ending "Each goes
+// into the folder ~/Desktop/archive" (or ~/Desktop/link) "and can be moved back". Measured in zsh
+// 5.9 and bash 3.2.57 in a scratch folder: `cd <folder> x` fails in zsh, so after a `;` or a `||`
+// the mv runs in the session folder, on files of the same name there; `cd -s <a link>` fails in
+// both; `! cd <no such folder> && mv` runs the mv in both; and a quoted ~ is text to both, a folder
+// named ~ in the session folder, where the reader placed it at home. Main asks about each as a
+// deletion.
+test('notes moved to a place read from the folder a cd leaves, where that cd can fail and the mv still run, are asked about as a deletion (#3478)', withKit, async ($, on) => {
+  const w = world($, on, { files: FAR_FILES, links: FAR_LINK })
+  const got: string[][] = []
+  for (const command of [
+    `cd ~/Desktop x; mv ${BRACE_NAMES} archive/`,
+    `cd ~/Desktop x || mv ${BRACE_NAMES} archive/`,
+    `cd -s ~/Desktop/link; mv ${BRACE_NAMES} ./`,
+    `cd ~/Desktop/link x; mv ${BRACE_NAMES} .`,
+    `cd ~/Desktop\nmv ${BRACE_NAMES} archive/`,
+    `! cd ~/Desktop && mv ${BRACE_NAMES} archive/`,
+    `cd ~/Desktop x; mv -t archive ${BRACE_NAMES}`,
+    `cd ~/Desktop x; cp ~/Desktop/other/y.md fresh.md && ${BRACE_MOVED}`,
+    `mv ${BRACE_NAMES} "~/Desktop/archive/"`,
+    `mv ${BRACE_NAMES} '~/Desktop/archive/'`,
+  ])
+    got.push([command, await howAsked($, command, BRACE_NAMES)])
+  expect(got).toEqual(got.map(([command]) => [command, AS_A_DELETION]))
+  expect(got.length).toBe(10)
+  expect(w.ran).toEqual([])
+  expect(w.asked).toEqual([])
+})
+
+test('notes moved after a cd of one word from the root joined by && alone, or by a mv whose every word is from the root, are still asked about as a move (#3478)', withKit, async ($, on) => {
+  const w = world($, on, { files: FAR_FILES, links: FAR_LINK })
+  const got: string[][] = []
+  for (const command of [
+    `cd ~/Desktop && mv ${BRACE_NAMES} archive/`,
+    `cd ~/Desktop && mv ${BRACE_NAMES} archive/ && ls archive`,
+    `cd ${REMOVAL_MEM_SHOWN} && mv {a,b}.md ~/Desktop/archive/`,
+    `cd ~/Desktop/link && mv ${BRACE_NAMES} ./`,
+    // Every word of the mv from the root: a cd before it of any shape moves nothing it names.
+    `cd ~/Desktop x; ${BRACE_MOVED}`,
+    `cd -s ~/Desktop/link; ${BRACE_MOVED}; ls ~/Desktop/archive`,
+  ]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    got.push([command, why.startsWith(`${NOT_MOVED}: this moves lasting memory away (${BRACE_NAMES}, into ~/Desktop/`) && !why.includes('elete') ? 'asked as a move' : why.slice(0, 200)])
+  }
+  expect(got).toEqual(got.map(([command]) => [command, 'asked as a move']))
+  expect(got.length).toBe(6)
+  // The archive command as the issue gives it, the folder made and the index moved into it: a move,
+  // as on main and at 72816e97aa (a control that held before this round, not one seen to fail).
+  const issue = refusalOf(await call($, { tool: 'Bash', command: `mkdir -p ${ARCHIVE_SHOWN} && mv ${REMOVAL_MEM_SHOWN}/MEMORY.md ${ARCHIVE_SHOWN}/` }))
+  expect(issue.startsWith(`${NOT_MOVED}: this moves lasting memory away (${REMOVAL_MEM_SHOWN}/MEMORY.md, to ${ARCHIVE_SHOWN}/MEMORY.md), so Dan decides first.`)).toBe(true)
+  expect(issue).not.toContain('elete')
+  expect(w.ran).toEqual([])
+})
+
 test('a command that removes lasting memory and also writes other lasting memory, or deletes one file and moves another, is refused whole: each is asked about by itself (#3402)', withKit, async ($, on) => {
   const w = world($, on, { files: KEPT })
   const both = refusalOf(await call($, { tool: 'Bash', command: "rm CLAUDE.md && echo '- Use pnpm.' >> AGENTS.md" }))

@@ -1680,9 +1680,25 @@ const MV_OPTION = /^(?:-[finv]+|-t|--target-directory(?:=.*)?|--force|--interact
 // A path that climbs: the reader folds `..` away in the words, and the disk does not where a folder
 // on the way is a link, so the two can name different places.
 const CLIMBS = /(?:^|\/)\.\.(?:\/|$)/
-// A word that says where it is whatever folder the command stands in.
-const FROM_ROOT = /^(?:\/|~\/|\$HOME\/|\$\{HOME\}\/)/
+// A word that opens with home as the shell writes it: ~, $HOME or ${HOME}, alone or before a slash.
+const FROM_HOME = /^(?:~|\$HOME|\$\{HOME\})(?:\/|$)/
+// A ~ the shell may leave as text, one right after a quote or right before one (measured in bash
+// 3.2.57 and zsh 5.9: "~/x" and '~/x' are text to both, ~"/x" to bash), which mod-kit's reader
+// places at home all the same. Read from the whole text, so any word it could be loses the wording.
+const QUOTED_TILDE = /["']~|~["']/
+// Text in which a command that fails stops every command after it: nothing joins its commands but
+// `&&` (no `;`, no new line, no `||`), and no `!` turns a failure into a success. Measured in both
+// shells: `cd <no such folder> && mv` runs no mv, and `! cd <no such folder> && mv` runs it.
+const stopsAtAFailure = (command: string): boolean => !/[;\n!]|\|\|/.test(command)
 const noSlash = (word: string): string => word.replace(/\/+$/, '') || '/'
+type Said = { words: readonly string[]; unexpanded?: readonly boolean[] }
+// Whether a command's word says where it is whatever folder the command stands in: it opens at the
+// root, or at home with a ~ or a $ the shell expands (in single quotes a $ is text, and the word is
+// a name in the folder the command stands in).
+const fromRoot = (c: Said, at: number): boolean => {
+  const word = c.words[at] ?? ''
+  return word.startsWith('/') || (FROM_HOME.test(word) && c.unexpanded?.[at] !== true)
+}
 
 /**
  * Whether a Bash call's text is commands one after another and nothing more: no backtick, no
@@ -1713,30 +1729,59 @@ export type MoveAlone = { made: string[]; copies: string[] }
  *   place where nothing is, so the copy makes a new file and replaces none.
  * So a loop, a condition, a group, a function, a trap, an alias, a setting and a program nobody
  * knows each make it not plain, by the word that opens, closes or names it. Undefined when it is
- * not; otherwise what is left to ask the disk. A relative folder a mkdir makes counts only where no
- * cd stands before the mv, since a cd that fails leaves the folder made somewhere else.
+ * not; otherwise what is left to ask the disk.
+ *
+ * And each word of the mv, of a copy and of a mkdir must be one the reader places where the shell
+ * does (the fourth review). A word from the root (`fromRoot`) is. A word that is not is read in the
+ * folder the command stands in, which is certain only where no cd stands before the mv, or where
+ * every cd before it is `cd` and one word from the root (no option, no second word, no `-`, no name
+ * CDPATH could find elsewhere) in a text where a command that fails stops the rest
+ * (`stopsAtAFailure`). Otherwise a cd that failed, or went elsewhere, leaves the mv running in
+ * another folder, on the files of the same name there. Three more words the shell places elsewhere
+ * than the reader: a ~ it leaves as text (`QUOTED_TILDE`, and one after an option's `=`), and a
+ * word opening with `=`, which zsh makes the path of a program. A folder a mkdir makes under a word
+ * not from the root counts only where no cd at all stands before the mv, as before.
  */
-export const moveAlone = (command: string, cmds: readonly { words: readonly string[] }[]): MoveAlone | undefined => {
-  if (!plainText(command)) return undefined
-  const made: string[] = []
+export const moveAlone = (command: string, cmds: readonly Said[]): MoveAlone | undefined => {
+  if (!plainText(command) || QUOTED_TILDE.test(command)) return undefined
+  const made: { word: string; rooted: boolean }[] = []
   const copies: string[] = []
   let moves = 0
+  // The cds before the mv, whether each is one word from the root, and whether a word of the mv
+  // or of a copy is not from the root.
   let cds = 0
+  let cdsPlain = true
+  let loose = false
   for (const c of cmds) {
     const [name, ...rest] = c.words
     if (name === undefined || Object.keys(c).some(k => !PLAIN_SAID.has(k)) || c.words.some(w => CLIMBS.test(w))) return undefined
     const options = rest.filter(w => w.startsWith('-'))
-    const operands = rest.filter(w => !w.startsWith('-'))
+    const operands = c.words.flatMap((word, at) => (at === 0 || word.startsWith('-') ? [] : [{ word, rooted: fromRoot(c, at) }]))
+    const places = name === 'mv' || name === 'cp' || name === 'mkdir'
+    if (places && operands.some(o => o.word.startsWith('='))) return undefined
     if (name === 'mv') {
       if (++moves > 1 || options.some(o => !MV_OPTION.test(o))) return undefined
+      // The folder given as --target-directory=<folder>: a word of the mv too, and a ~ there is text.
+      for (const [at, word] of c.words.entries()) {
+        const given = /^--target-directory=(.*)$/.exec(word)?.[1]
+        if (given === undefined) continue
+        if (/^[~=]/.test(given)) return undefined
+        if (!fromRoot({ words: [given], unexpanded: [c.unexpanded?.[at] === true] }, 0)) loose = true
+      }
+      if (operands.some(o => !o.rooted)) loose = true
     } else if (name === 'cp') {
-      if (moves || operands.length !== 2 || options.some(o => !/^-[pnv]+$/.test(o)) || operands.some(w => /[*?[\]{}]/.test(w))) return undefined
-      copies.push(operands[1] as string)
+      if (moves || operands.length !== 2 || options.some(o => !/^-[pnv]+$/.test(o)) || operands.some(o => /[*?[\]{}]/.test(o.word))) return undefined
+      if (operands.some(o => !o.rooted)) loose = true
+      copies.push((operands[1] as { word: string }).word)
     } else if (!CHANGES_NO_FILE.has(name)) return undefined
-    else if (!moves && name === 'cd') cds++
-    else if (!moves && name === 'mkdir' && options.every(o => /^-[pv]+$/.test(o))) made.push(...operands.map(noSlash))
+    else if (!moves && name === 'cd') {
+      cds++
+      if (rest.length !== 1 || !fromRoot(c, 1)) cdsPlain = false
+    } else if (!moves && name === 'mkdir' && options.every(o => /^-[pv]+$/.test(o))) made.push(...operands.map(o => ({ word: noSlash(o.word), rooted: o.rooted })))
   }
-  return moves === 1 ? { made: cds ? made.filter(m => FROM_ROOT.test(m)) : made, copies } : undefined
+  if (moves !== 1) return undefined
+  if (loose && cds && !(cdsPlain && stopsAtAFailure(command))) return undefined
+  return { made: made.filter(m => !cds || m.rooted).map(m => m.word), copies }
 }
 
 /** Whether a folder a move goes into, as the reader wrote it, is one a plain mkdir earlier in the command makes: the same text, a trailing slash aside. */
@@ -1840,10 +1885,22 @@ export const braceAlternatives = (pattern: string): string[] | null => {
  * also holds. A brace list is split first, since patternMayMatch takes a brace as matching anything
  * and every name the two folders share would then count as replaced. A pattern neither reads is
  * left matching anything, which errs toward saying a file is replaced (L648).
+ *
+ * Two names are one where they differ only by letter case or by the Unicode form of an accent (the
+ * fourth review), on every disk: this Mac's holds `Notes.md` and `notes.md` as one file (measured:
+ * `mv src/*.md arch2/` put src/Notes.md over arch2/notes.md), and on a disk that tells them apart
+ * the fold can only say "replacing" of a file that stays, the harmless side.
  */
 export const replacedBy = (pattern: string, from: readonly string[], there: readonly string[]): string[] => {
-  const alternatives = braceAlternatives(pattern) ?? [pattern]
-  return from.filter(n => there.includes(n) && alternatives.some(p => patternMayMatch(p, n)))
+  const alternatives = (braceAlternatives(pattern) ?? [pattern]).flatMap(p => [p, p.normalize('NFC'), p.normalize('NFD')])
+  const held = new Set(there.flatMap(foldedName))
+  return from.filter(n => foldedName(n).some(f => held.has(f)) && [n, n.normalize('NFC'), n.normalize('NFD')].some(form => alternatives.some(p => patternMayMatch(p, form))))
+}
+// A file name as a disk that ignores letter case and the Unicode form of an accent compares it:
+// decomposed, then in small letters and in capitals, either of which may be what two names share.
+const foldedName = (name: string): string[] => {
+  const form = name.normalize('NFD')
+  return [form.toLowerCase().normalize('NFD'), form.toUpperCase().normalize('NFD')]
 }
 
 /**
