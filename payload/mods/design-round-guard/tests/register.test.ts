@@ -5318,7 +5318,8 @@ test('#3416: a shell script handing a screen file only to programs on the list o
   for (const command of commands) expect({ command, why: refusalOf(await sh(command)) }).toEqual({ command, why: '' })
   expect(w.ran.length).toBe(commands.length)
   // The same third script one level nearer is read, and held.
-  expect(refusalOf(await sh(`bash ${NOTES}/second.sh`))).toContain(SKIP_QUESTION)  // An answer for the issue lets the unknown one through, as it does the line typed whole.
+  expect(refusalOf(await sh(`bash ${NOTES}/second.sh`))).toContain(SKIP_QUESTION)
+  // An answer for the issue lets the unknown one through, as it does the line typed whole.
   w.store['record:/w/slate|issue:978'] = { kind: 'settled', at: 1, label: 'issue #978 in slate', reading: ISSUE_READING }
   expect(refusalOf(await sh(`bash ${NOTES}/first.sh`))).toBe('')
 })
