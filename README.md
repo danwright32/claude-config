@@ -8712,7 +8712,10 @@ said as emptied. Where the reader cannot limit what goes under a folder (`rm -r`
 guess. A file that is not there is not asked about. Claude's question names what
 goes and says why, and the mod adds what it measured as Dan is asked: where a move puts the file,
 or whether git can bring a deleted or emptied one back (held unchanged, held with changes since,
-not held, or not readable). The answers are Keep as is, first, and Delete, Move or Empty; a save's
+not held, or not readable). A move into another folder is asked about as a move however the files
+are named (#3478): a file named outright by the path it will have, a pattern by the folder ("Each
+goes into the folder ..."), with whether a file of the same name there is replaced. The answers
+are Keep as is, first, and Delete, Move or Empty; a save's
 For good approves no removal and a removal's answer approves no save, a removal whose consequence
 changes after he answers (what git holds of the file, where a move lands, what a folder holds) is
 asked about again, his "from now on" words cover no removal, and a subagent's removal is refused.

@@ -1217,21 +1217,24 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     stdout.push({ word, ...(path ? { path } : {}), ...(folder ? { folder } : {}) })
   }
   // `names`: the -name patterns a find -delete is limited to (findNames), kept only on a tree.
-  const changed = (word: string, does: ModKitChange['does'], tree?: boolean, names?: string[]) => {
+  // `to`: where a mv puts the source it takes away (#3478), given by mv alone.
+  const changed = (word: string, does: ModKitChange['does'], tree?: boolean, names?: string[], to?: ModKitChange['to']) => {
     tree = tree || foundRoots.includes(word)
     const path = pathOf(word, dir)
     if (!word || isPipe(word) || isDevice(path ?? word)) return
     const written = asWritten.get(word) ?? word
     // A path changed the same way twice is kept once, a tree on either keeping the tree. It stays
-    // limited to names only where both were limited to the same ones.
+    // limited to names only where both were limited to the same ones, and says where it goes only
+    // where both were moves to the same place.
     const had = changes.find(x => x.does === does && (path ? x.path === path : !x.path && x.word === written))
     if (had) {
       if (tree) had.tree = true
       if (had.names && (!names || names.join('\n') !== had.names.join('\n'))) delete had.names
+      if (!sameTo(had.to, to)) delete had.to
       return
     }
     const folder = path ? undefined : patternFolder(word, dir, home)
-    changes.push({ word: written, ...(path ? { path } : {}), ...(folder ? { folder } : {}), does, ...(tree ? { tree: true as const } : {}), ...(tree && names ? { names } : {}) })
+    changes.push({ word: written, ...(path ? { path } : {}), ...(folder ? { folder } : {}), does, ...(tree ? { tree: true as const } : {}), ...(tree && names ? { names } : {}), ...(to ? { to } : {}) })
   }
   const abs = (p: string) => pathOf(p, dir)
   const absAll = (ps: string[]) => ps.map(abs).filter((p): p is string => !!p)
@@ -1598,8 +1601,19 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
         if (contents.length) add(word, abs(dest), { sources: absAll(contents), tree: true }, (asWritten.get(dest) ?? dest).replace(/\/+$/, '') || '/')
       }
       // mv takes each source away whole: a folder with everything under it, as rm -r does (the
-      // collision guard's reading, lessons review of #691).
-      if (name === 'mv' && copied) for (const s of sources) changed(s, 'remove', true)
+      // collision guard's reading, lessons review of #691). Each removal says where this mv puts it
+      // (#3478): the write above carries only the sources a path names, so a pattern or a variable
+      // moved into a folder read as taken away with nowhere to go, which is a deletion. The folder
+      // is given as the writes above spell it, and one name as its own write does.
+      if (name === 'mv' && copied) {
+        const dest = (into ?? ops[ops.length - 1]) as string
+        const destPath = abs(dest)
+        const to: NonNullable<ModKitChange['to']> =
+          into !== undefined
+            ? { word: (asWritten.get(dest) ?? dest).replace(/\/+$/, '') || '/', ...(destPath ? { path: destPath } : {}), into: true }
+            : { word: asWritten.get(dest) ?? dest, ...(destPath ? { path: destPath } : {}) }
+        for (const s of sources) changed(s, 'remove', true, undefined, to)
+      }
     } else if (changer) {
       const ch = changer
       const { ops, opts } = operands(rest, ch.valued)
@@ -1888,6 +1902,11 @@ const sameGitChange = (a: { word: string; path?: string; does: string; from?: st
 // The words that change the folder a relative path is read against.
 const MOVES = new Set(['cd', 'pushd', 'popd'])
 
+// Whether two removals of one thing go to the same place (#3478): both moved by a mv to one
+// destination, read the same way. One with nowhere to go (rm, find -delete, a packer) beside a move
+// is no match, so a thing a command also removes outright is never said to have gone somewhere.
+const sameTo = (a: ModKitChange['to'], b: ModKitChange['to']): boolean => (a === undefined || b === undefined ? a === b : a.word === b.word && a.path === b.path && a.into === b.into)
+
 // Each change in `from` that `into` lacks is added to it: a path once, keeping what either says of it
 // (a tree, an in place edit, a copy's sources and that it may land in a folder), so a substitution
 // that edits or copies onto a file the line also writes is not reported as a plain write (lessons
@@ -1911,8 +1930,13 @@ const merge = (into: ModKitWrites, from: ModKitWrites) => {
   }
   for (const c of from.changes) {
     const had = into.changes.find(x => x.does === c.does && (c.path ? x.path === c.path : !x.path && x.word === c.word))
-    if (!had) into.changes.push(c)
-    else if (c.tree) had.tree = true
+    if (!had) {
+      into.changes.push(c)
+      continue
+    }
+    if (c.tree) had.tree = true
+    // Where a mv puts it holds only where both say the same place (#3478), as within one line.
+    if (!sameTo(had.to, c.to)) delete had.to
   }
   for (const u of from.unnamed) if (!into.unnamed.some(x => JSON.stringify(x) === JSON.stringify(u))) into.unnamed.push(u)
   for (const b of from.byGit ?? []) {

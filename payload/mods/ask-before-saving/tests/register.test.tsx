@@ -3921,6 +3921,110 @@ test('a lasting memory file moved onto another is one move question, saying the 
   expect(w.ran.length).toBe(1)
 })
 
+// ---- #3478: notes moved into another folder are asked about as a move, saying where they go ----
+// Measured on main at bf2c7370a4 before any change, each form through the whole mod: a brace pattern
+// moved into a folder outside the memory folder was asked about as "Delete", with "once deleted it
+// cannot be got back from git", though every file stays on the disk; moved into a folder inside the
+// memory folder it was refused whole as a deletion beside a save, with no question at all; and a
+// note moved onto a folder holding one of the same name was said to be one that "can be moved back".
+const ARCHIVED: Record<string, string> = {
+  ...KEPT,
+  [`${REMOVAL_MEMDIR}/a.md`]: 'a\n',
+  [`${REMOVAL_MEMDIR}/b.md`]: 'b\n',
+  [`${REMOVAL_MEMDIR}/old.md`]: 'old\n',
+  [`${REMOVAL_MEMDIR}/archive/old.md`]: 'an older old\n',
+  [`${HOME}/Desktop/archive/x.md`]: 'x\n',
+}
+const ARCHIVE_SHOWN = `${REMOVAL_MEM_SHOWN}/archive`
+const PATTERN_SAID = 'That is every file the pattern matches in a folder of lasting memory.'
+
+test('notes moved out of a memory folder by a brace pattern are asked about as a move into the folder, and Move runs the identical call once (#3478)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: ARCHIVED })
+  const command = `mv ${REMOVAL_MEM_SHOWN}/{a,b}.md ~/Desktop/archive/`
+  const refused = refusalOf(await call($, { tool: 'Bash', command }))
+  expect(refused.startsWith(`${NOT_MOVED}: this moves lasting memory away (${REMOVAL_MEM_SHOWN}/{a,b}.md, into ~/Desktop/archive), so Dan decides first.`)).toBe(true)
+  expect(refused).toContain(`"Move ${REMOVAL_MEM_SHOWN}/{a,b}.md: <why>?", with the options Keep as is and Move.`)
+  expect(refused).not.toContain('elete')
+  const answered = await askRemoval($, w, refused, 'Move', `Move ${REMOVAL_MEM_SHOWN}/{a,b}.md: they are finished work?`)
+  const q = w.asked[0]?.questions[0]
+  expect(q?.question).toBe(`Move ${REMOVAL_MEM_SHOWN}/{a,b}.md: they are finished work? ${PATTERN_SAID} Each goes into the folder ~/Desktop/archive, and can be moved back.`)
+  expect(q?.options.map(o => [o.label, o.description])).toEqual([
+    ['Keep as is', 'Nothing is moved'],
+    ['Move', `Moves ${REMOVAL_MEM_SHOWN}/{a,b}.md into ~/Desktop/archive`],
+  ])
+  expect(contextOf(answered)).toContain(`Dan answered Move to moving ${REMOVAL_MEM_SHOWN}/{a,b}.md`)
+  const again = await call($, { tool: 'Bash', command })
+  expect(again.deny).toBeUndefined()
+  expect(contextOf(again)).toContain(`Moved ${REMOVAL_MEM_SHOWN}/{a,b}.md, as Dan answered Move.`)
+  expect(w.ran.map(r => r.input.command)).toEqual([command])
+  // His Move was for that one run: the same command sent again is asked about again.
+  expect(refusalOf(await call($, { tool: 'Bash', command }))).toContain(NOT_MOVED)
+})
+
+test('notes moved into an archive folder inside the memory folder are one move question, in every spelling of the move (#3478)', withKit, async ($, on) => {
+  const w = world($, on, { files: ARCHIVED })
+  const got: string[][] = []
+  for (const command of [
+    `mv ${REMOVAL_MEM_SHOWN}/{a,b}.md ${ARCHIVE_SHOWN}/`,
+    `mv ${REMOVAL_MEM_SHOWN}/{a,b}.md ${ARCHIVE_SHOWN}`,
+    `mv -t ${ARCHIVE_SHOWN} ${REMOVAL_MEM_SHOWN}/{a,b}.md`,
+    `cd ${REMOVAL_MEM_SHOWN} && mv {a,b}.md archive/`,
+    `mkdir -p ${ARCHIVE_SHOWN} && mv ${REMOVAL_MEM_SHOWN}/{a,b}.md ${ARCHIVE_SHOWN}/`,
+  ]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    const own = why.startsWith(`${NOT_MOVED}: this moves lasting memory away (${REMOVAL_MEM_SHOWN}/{a,b}.md, into ${ARCHIVE_SHOWN}), so Dan decides first.`) && why.includes(ASKS) && idIn(why) !== undefined
+    got.push([command, own && !why.includes('elete') && !why.includes('Save to') ? 'asked as a move' : why.slice(0, 160)])
+  }
+  expect(got).toEqual(got.map(([command]) => [command, 'asked as a move']))
+  expect(got.length).toBe(5)
+  expect(w.ran).toEqual([])
+})
+
+// What the question says of a move into a folder, each in a world of its own: a note by the path it
+// will have, with the trailing slash and without it, since the same thing happens; a pattern by the
+// folder, where only a name it can match that both folders hold is one it replaces.
+const INTO_A_FOLDER: [string, string, string, string][] = [
+  ['a note, trailing slash', `mv ${REMOVAL_MEM_SHOWN}/note.md ${ARCHIVE_SHOWN}/`, `${REMOVAL_MEM_SHOWN}/note.md`, `It goes to ${ARCHIVE_SHOWN}/note.md, and can be moved back.`],
+  ['a note, no trailing slash', `mv ${REMOVAL_MEM_SHOWN}/note.md ${ARCHIVE_SHOWN}`, `${REMOVAL_MEM_SHOWN}/note.md`, `It goes to ${ARCHIVE_SHOWN}/note.md, and can be moved back.`],
+  ['a note the folder holds one of, trailing slash', `mv ${REMOVAL_MEM_SHOWN}/old.md ${ARCHIVE_SHOWN}/`, `${REMOVAL_MEM_SHOWN}/old.md`, `It goes to ${ARCHIVE_SHOWN}/old.md, replacing the file that is there now.`],
+  ['a note the folder holds one of, no trailing slash', `mv ${REMOVAL_MEM_SHOWN}/old.md ${ARCHIVE_SHOWN}`, `${REMOVAL_MEM_SHOWN}/old.md`, `It goes to ${ARCHIVE_SHOWN}/old.md, replacing the file that is there now.`],
+  ['a brace pattern', `mv ${REMOVAL_MEM_SHOWN}/{a,b}.md ${ARCHIVE_SHOWN}/`, `${REMOVAL_MEM_SHOWN}/{a,b}.md`, `${PATTERN_SAID} Each goes into the folder ${ARCHIVE_SHOWN}, and can be moved back.`],
+  ['a brace pattern, no trailing slash', `mv ${REMOVAL_MEM_SHOWN}/{a,b}.md ${ARCHIVE_SHOWN}`, `${REMOVAL_MEM_SHOWN}/{a,b}.md`, `${PATTERN_SAID} Each goes into the folder ${ARCHIVE_SHOWN}, and can be moved back.`],
+  ['a brace pattern naming a file the folder holds', `mv ${REMOVAL_MEM_SHOWN}/{old,a}.md ${ARCHIVE_SHOWN}/`, `${REMOVAL_MEM_SHOWN}/{old,a}.md`, `${PATTERN_SAID} Each goes into the folder ${ARCHIVE_SHOWN}, replacing a file of the same name that is there now.`],
+  ['a star pattern matching a file the folder holds', `mv ${REMOVAL_MEM_SHOWN}/o*.md ${ARCHIVE_SHOWN}/`, `${REMOVAL_MEM_SHOWN}/o*.md`, `${PATTERN_SAID} Each goes into the folder ${ARCHIVE_SHOWN}, replacing a file of the same name that is there now.`],
+  ['a one letter pattern matching none the folder holds', `mv ${REMOVAL_MEM_SHOWN}/?.md ${ARCHIVE_SHOWN}/`, `${REMOVAL_MEM_SHOWN}/?.md`, `${PATTERN_SAID} Each goes into the folder ${ARCHIVE_SHOWN}, and can be moved back.`],
+  // A folder that is not there yet holds nothing to replace.
+  ['a brace pattern into a folder not there yet', `mv ${REMOVAL_MEM_SHOWN}/{a,b}.md ~/Desktop/done/`, `${REMOVAL_MEM_SHOWN}/{a,b}.md`, `${PATTERN_SAID} Each goes into the folder ~/Desktop/done, and can be moved back.`],
+  // What is there and is no folder cannot hold them: nothing is claimed of it.
+  ['a brace pattern into what is a file', `mv ${REMOVAL_MEM_SHOWN}/{a,b}.md ${REMOVAL_MEM_SHOWN}/note.md/`, `${REMOVAL_MEM_SHOWN}/{a,b}.md`, `${PATTERN_SAID} Each goes into the folder ${REMOVAL_MEM_SHOWN}/note.md. Whether a file of the same name is already there could not be read.`],
+  // A rename is said as it was.
+  ['a rename', `mv ${REMOVAL_MEM_SHOWN}/note.md ${REMOVAL_MEM_SHOWN}/note-old.md`, `${REMOVAL_MEM_SHOWN}/note.md`, `It goes to ${REMOVAL_MEM_SHOWN}/note-old.md, and can be moved back.`],
+]
+for (const [what, command, names, said] of INTO_A_FOLDER)
+  test(`a move into a folder says where the files go and what it replaces there: ${what} (#3478)`, withKit, async ($, on) => {
+    const w = world($, on, { auto: true, files: ARCHIVED })
+    const asked = `Move ${names}: tidying the folder?`
+    await askRemoval($, w, refusalOf(await call($, { tool: 'Bash', command })), 'Keep as is', asked)
+    expect(w.asked[0]?.questions[0]?.question).toBe(`${asked} ${said}`)
+    expect(w.ran).toEqual([])
+  })
+
+test('the archive command the count found is refused whole in the words of a move, never a deletion, and a subagent the same (#3478)', withKit, async ($, on) => {
+  const w = world($, on, { files: ARCHIVED, agents: ['agent-a1'] })
+  // mkdir, a backup copy of the index (a save of its own), then the notes moved by one brace pattern.
+  const command = `mkdir -p ${ARCHIVE_SHOWN} && cp ${REMOVAL_MEM_SHOWN}/MEMORY.md ${REMOVAL_MEM_SHOWN}/MEMORY.md.bak && mv ${REMOVAL_MEM_SHOWN}/{a,b}.md ${ARCHIVE_SHOWN}/`
+  const whole = refusalOf(await call($, { tool: 'Bash', command }))
+  expect(whole).toBe(
+    `Not run: this command moves lasting memory away (${REMOVAL_MEM_SHOWN}/{a,b}.md, into ${ARCHIVE_SHOWN}) and also writes lasting memory (${REMOVAL_MEM_SHOWN}/MEMORY.md.bak). Dan is asked about each by itself, since one answer cannot cover both. Send each as a command of its own.`,
+  )
+  const agent = refusalOf(await call($, { tool: 'Bash', command: `mv ${REMOVAL_MEM_SHOWN}/{a,b}.md ~/Desktop/archive/`, agentId: 'agent-a1' }))
+  expect(agent.startsWith(`Not moved: this moves lasting memory away (${REMOVAL_MEM_SHOWN}/{a,b}.md, into ~/Desktop/archive), which only the main session may do`)).toBe(true)
+  // A pattern removed outright is a deletion still, in a deletion's words.
+  expect(refusalOf(await call($, { tool: 'Bash', command: `rm ${REMOVAL_MEM_SHOWN}/{a,b}.md` }))).toContain(`${NOT_DELETED}: this deletes lasting memory (${REMOVAL_MEM_SHOWN}/{a,b}.md)`)
+  expect(refusalOf(await call($, { tool: 'Bash', command: `cp ~/Desktop/archive/*.md ~/Desktop/backup/ && rm ${REMOVAL_MEM_SHOWN}/*.md` }))).toContain(`${NOT_DELETED}: this deletes lasting memory (${REMOVAL_MEM_SHOWN}/*.md)`)
+  expect(w.ran).toEqual([])
+})
+
 test('a command that removes lasting memory and also writes other lasting memory, or deletes one file and moves another, is refused whole: each is asked about by itself (#3402)', withKit, async ($, on) => {
   const w = world($, on, { files: KEPT })
   const both = refusalOf(await call($, { tool: 'Bash', command: "rm CLAUDE.md && echo '- Use pnpm.' >> AGENTS.md" }))

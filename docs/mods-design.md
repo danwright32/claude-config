@@ -261,7 +261,11 @@ into, it reports `changes`: a file removed (`rm`, `unlink`, `rmdir`, a `mv`'s so
 in mode (`chmod`, `chown`, `chgrp`), with `tree` where the whole folder is reached (`rm -r`, `-R`, a
 `mv`'s source, `find -delete`); ask before saving reads only `files`, so a removal is not taken for a
 save. A file edited in place is marked `edits`, a copy of one source onto one name `mayBeFolder` (it
-lands inside the name when that is a folder, which only the disk can say). Where the copies
+lands inside the name when that is a folder, which only the disk can say). Since #3478 the removal
+a `mv` makes carries `to`, where that `mv` puts it (the folder it lands inside, marked `into`, or
+the one name it is moved onto), because a write's `sources` hold paths alone and so never name a
+pattern or a variable; it is left off wherever the command also removes the same thing another
+way or moves it to a second place. Where the copies
 disagreed, each case was decided and tested: `>& file` writes the file (the collision guard's
 reading), `wget --spider` saves nothing (no build's), `find -fprint` writes its file and `find
 -delete` removes what it finds (no build's), and a download whose files no word names says the
@@ -3549,6 +3553,27 @@ lasting memory file, or moved one away, ran with no question. Measured in the mo
   outright before #3402, with no question waiting (#3343). With the first pass built it had become
   a Move question Dan could approve (measured 2026-11-22), so such a command is left to the save
   side, which refuses it as before: no Move or Delete approves what no For good could.
+- **A move into a folder is a move, whatever names the files (#3478).** The count for #3430 found
+  a past command that moved 28 notes out of a memory folder into an archive folder with one `mv`
+  and a brace pattern. mod-kit's reader names a write's `sources` only where a path names them,
+  and a pattern has no path, so such a removal had nowhere to go and read as a deletion. Measured
+  on main through the whole mod on 2026-11-22: into a folder outside the memory folder it was
+  asked about as "Delete", with "once deleted it cannot be got back from git"; into a folder
+  inside the memory folder it was refused whole as a deletion beside a save, with no question;
+  and a note moved onto a folder with no trailing slash was said to be one that "can be moved
+  back" whatever the folder held. The reader now marks the removal a `mv` makes with where that
+  `mv` puts it (`to`: the folder it lands inside, or the one name it is moved onto), and only
+  while nothing else in the command removes the same thing, so `rm <pattern>; mv <pattern> dir/`
+  and `cp other/*.md backup/ && rm <pattern>` stay deletions. Linking the two in this mod by
+  matching words would have called that last command a move. A file named outright is said by
+  the path it will have, with a trailing slash on the folder or none ("It goes to
+  <folder>/<name>"); a pattern or a guess has no one path and is said by the folder ("Each goes
+  into the folder <folder>"). What is replaced is read from the disk: the file of that name in
+  the folder, or for a pattern each name it can match that both folders hold; where the folder
+  cannot be looked at the question says so and claims neither. One consequence: a command that
+  deletes one memory file and moves others by a pattern was one Delete question on main, and is
+  now refused whole with each part asked by itself, by the rule for files taken away in more than
+  one way, as the same command with the files named always was.
 - **Asleep**, the removal is noted for the morning report as a finding (the report's kind for
   anything else noticed; a kind of its own would be a change to the report) and refused.
 - **Not covered.** What git itself removes or puts back (`git rm`, `git mv`, a checkout or restore

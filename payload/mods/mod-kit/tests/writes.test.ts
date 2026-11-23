@@ -1146,9 +1146,43 @@ describe('writes: changes that put no content in, carried over from the collisio
   test('mv takes its sources away whole, beside the destination it writes', () => {
     expect(read('mv src /elsewhere/')).toEqual({
       files: [{ word: '/elsewhere/src', path: '/elsewhere/src', sources: [`${CWD}/src`] }],
-      changes: [{ word: 'src', path: `${CWD}/src`, does: 'remove', tree: true }],
+      changes: [{ word: 'src', path: `${CWD}/src`, does: 'remove', tree: true, to: { word: '/elsewhere', path: '/elsewhere', into: true } }],
       unnamed: [],
     })
+  })
+  // #3478: a source no path names (a pattern, a variable) is left out of the write's `sources`, so a
+  // reader could not tell `mv notes/{a,b}.md archive/` from a deletion, and asked about it as one.
+  // The removal itself says where its own mv puts it.
+  test('a removal a mv makes says where that mv puts it, a pattern and a variable included (#3478)', () => {
+    const to = (command: string) => read(command).changes.filter(c => c.does === 'remove').map(c => [c.word, c.to?.word ?? null, c.to?.path ?? null, c.to?.into ?? false])
+    // Into a folder: a trailing slash, several sources, or -t.
+    expect(to('mv a.md archive/')).toEqual([['a.md', 'archive', `${CWD}/archive`, true]])
+    expect(to('mv {a,b}.md archive/')).toEqual([['{a,b}.md', 'archive', `${CWD}/archive`, true]])
+    expect(to('mv *.md x.md archive')).toEqual([['*.md', 'archive', `${CWD}/archive`, true], ['x.md', 'archive', `${CWD}/archive`, true]])
+    expect(to('mv -t archive {a,b}.md')).toEqual([['{a,b}.md', 'archive', `${CWD}/archive`, true]])
+    expect(to('cd notes && mv *.md ../archive/')).toEqual([['*.md', '../archive', `${CWD}/archive`, true]])
+    expect(to('mv "$F" ~/old/')).toEqual([['$F', '~/old', `${HOME}/old`, true]])
+    // One source onto one name: inside it when it is an existing folder, as only the disk can say.
+    expect(to('mv a.md archive')).toEqual([['a.md', 'archive', `${CWD}/archive`, false]])
+    expect(to('mv {a,b}.md archive')).toEqual([['{a,b}.md', 'archive', `${CWD}/archive`, false]])
+    // A folder the words cannot name is given as written.
+    expect(to('mv *.md "$D/"')).toEqual([['*.md', '$D', null, true]])
+  })
+  test('a removal says where it goes only while every removal of it in the command is a move to that one place (#3478)', () => {
+    const to = (command: string) => read(command).changes.filter(c => c.does === 'remove').map(c => [c.word, c.to?.word ?? null])
+    for (const command of ['rm {a,b}.md', 'rm -r old', 'find . -name "*.md" -delete', 'gzip a.md']) expect([command, to(command).map(c => c[1])]).toEqual([command, [null]])
+    // A copy another command then removes is no mv: the write's own `sources` say it where a path names it.
+    expect(to('cp {a,b}.md archive/ && rm {a,b}.md')).toEqual([['{a,b}.md', null]])
+    expect(to('cp other/*.md backup/ && rm *.md')).toEqual([['*.md', null]])
+    // Removed outright as well, before the move or after it: what is left to move cannot be told.
+    expect(to('rm {a,b}.md; mv {a,b}.md archive/')).toEqual([['{a,b}.md', null]])
+    expect(to('mv {a,b}.md archive/; rm {a,b}.md')).toEqual([['{a,b}.md', null]])
+    // Moved to two places is no one place; the same place twice is.
+    expect(to('mv {a,b}.md one/; mv {a,b}.md two/')).toEqual([['{a,b}.md', null]])
+    expect(to('mv {a,b}.md one/; mv {a,b}.md one')).toEqual([['{a,b}.md', null]])
+    expect(to('mv {a,b}.md one/; mv {a,b}.md one/')).toEqual([['{a,b}.md', 'one']])
+    // A substitution's removal of the same thing is a removal too.
+    expect(to('mv {a,b}.md archive/; echo "$(rm {a,b}.md)"')).toEqual([['{a,b}.md', null]])
   })
   test('a path written and then removed is reported both ways, so a reader can keep the removal', () => {
     expect(paths('echo x > d; rm -r d')).toEqual([`${CWD}/d`])

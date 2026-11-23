@@ -99,6 +99,7 @@ import {
   lessonsAtAnswer,
   removalAsleep,
   removalCandidates,
+  type RemovalCandidate,
   removalInstruction,
   removalNote,
   removalOptions,
@@ -106,6 +107,7 @@ import {
   removalUnread,
   removalWords,
   removedNames,
+  replacedBy,
   splitAtAnswer,
   splitBy,
   splitRefusal,
@@ -415,6 +417,37 @@ const kindAt = async ($: EngineInterface, path: string) => {
   }
 }
 
+// What the disk says of where a move lands (#3402, #3478): whether it goes inside a folder, and
+// whether a file is there for it to replace.
+//
+// Onto one name: something is there, and it is not known to be a folder, so it is said as replaced.
+// One that cannot be looked at is taken as a file, since "can be moved back" would be the claim
+// nothing measured.
+//
+// Into a folder (the words say so, or the one name it is moved onto is a folder on the disk): the
+// file lands inside under its own name, so that is where to look. Until #3478 a note moved onto a
+// folder with no trailing slash was said to be one that "can be moved back" whatever the folder
+// held. A file named outright replaces the one of its name there. A pattern replaces each name it
+// can match that both folders hold. Where that cannot be looked at (a folder no path names, a guess
+// at the file, a place that is there and is no folder), it says so, and claims neither.
+const movedOnto = async ($: EngineInterface, c: RemovalCandidate): Promise<{ into?: true; replaces?: true; unseen?: true }> => {
+  const there = c.toPath !== undefined && (await $.fs.exists(c.toPath)) ? ((await kindAt($, c.toPath)) ?? 'unread') : undefined
+  if (!c.into && !(c.onto && there === 'dir')) return there !== undefined && there !== 'dir' ? { replaces: true } : {}
+  const into = { into: true as const }
+  if (c.toPath === undefined || c.guessed || (there !== undefined && there !== 'dir')) return { ...into, unseen: true }
+  // No folder there yet (one the same command makes first): nothing in it to replace.
+  if (there === undefined) return into
+  if (!c.pattern) {
+    if (c.path === undefined) return { ...into, unseen: true }
+    const at = `${c.toPath}/${c.path.replace(/\/+$/, '').split('/').pop() ?? ''}`
+    return (await $.fs.exists(at)) && (await kindAt($, at)) !== 'dir' ? { ...into, replaces: true } : into
+  }
+  // A pattern: `path` is the folder it is matched in, and its own last part is the pattern.
+  if (c.path === undefined || !(await $.fs.exists(c.path))) return { ...into, unseen: true }
+  const names = async (folder: string) => (await $.fs.list(folder)).map(e => e.name)
+  return replacedBy(c.file.split('/').pop() ?? '', await names(c.path), await names(c.toPath)).length ? { ...into, replaces: true } : into
+}
+
 // The lasting memory a Bash call would remove, move away or empty (#3402), each as the removal's question
 // says it, or none. From the changes mod-kit's reader reported for the command (lastingTargets'
 // read), judged by the rule module, then asked of the disk: a file that is not there is no removal,
@@ -450,11 +483,8 @@ const removalsOf = async ($: EngineInterface, tool: string, input: Record<string
       ...(c.guessed ? { guessed: true as const } : {}),
     }
     if (c.how === 'move') {
-      // Something is where the move lands, and it is not known to be a folder: said as replaced.
-      // One that cannot be looked at is taken as a file, since "can be moved back" would be the
-      // claim nothing measured.
-      const replaces = c.toPath !== undefined && (await $.fs.exists(c.toPath)) && (await kindAt($, c.toPath)) !== 'dir'
-      out.push({ ...shape, how: 'move', ...(c.to !== undefined ? { to: c.to } : {}), ...(replaces ? { replaces: true as const } : {}) })
+      const landed = await movedOnto($, c)
+      out.push({ ...shape, how: 'move', ...(c.to !== undefined ? { to: c.to } : {}), ...landed })
     } else out.push({ ...shape, how: c.how, ...(c.path !== undefined ? await gitHolds($, c.path) : { back: 'unknown' as const, why: 'its path could not be read from the command' }) })
   }
   return out

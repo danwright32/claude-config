@@ -584,8 +584,14 @@ export type ModKitWrite = { word: string; path?: string; folder?: string; source
  * reaches everything under a folder. `word`, `path` and `folder` as in a write. `names`, on a tree a
  * find -delete takes away, the -name and -iname patterns it is limited to: it takes away only an entry
  * whose name matches every one (-iname's ignoring case); absent wherever anything may widen it.
+ * `to`, on a source a mv takes away, where that mv puts it (#3478): with `into`, the folder it lands
+ * inside under its own name (a trailing slash, several sources, -t), `word` as written without the
+ * slash; without `into`, the one name a single source is moved onto, which is inside it when that
+ * name is an existing folder, as only the disk can say. `path` as in a write. It is the only word
+ * of where a pattern or a variable goes, since a write's `sources` hold paths alone. Absent on any
+ * other removal, and on one the command also removes another way or moves to a second place.
  */
-export type ModKitChange = { word: string; path?: string; folder?: string; does: 'remove' | 'touch' | 'truncate' | 'folder' | 'mode'; tree?: true; names?: string[] }
+export type ModKitChange = { word: string; path?: string; folder?: string; does: 'remove' | 'touch' | 'truncate' | 'folder' | 'mode'; tree?: true; names?: string[]; to?: { word: string; path?: string; into?: true } }
 
 /**
  * What a command changes: the files its words name content goes into, the other changes it makes

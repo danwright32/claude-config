@@ -21,10 +21,12 @@ export const MOD = 'ask-before-saving'
 // unlink, rmdir, a mv's source, find -delete, shred -u, a packer's source, and the ones that empty
 // a file in place: truncate, shred without -u), `folder` the folder a
 // pattern lands in, `names` what a find -delete is limited to; a file's `sources` are what a copy
-// or a move brings to it, absolute.
+// or a move brings to it, absolute, and `mayBeFolder` says one source was put onto one name, which
+// is inside it when that name is an existing folder. `to`, on a removal a mv makes (#3478), is
+// where that mv puts it: the folder it lands inside (`into`) or the one name it is moved onto.
 export type Writes = {
-  files: { word: string; path?: string; sources?: string[] }[]
-  changes?: { word: string; path?: string; folder?: string; does: string; tree?: true; names?: string[] }[]
+  files: { word: string; path?: string; sources?: string[]; mayBeFolder?: true }[]
+  changes?: { word: string; path?: string; folder?: string; does: string; tree?: true; names?: string[]; to?: { word: string; path?: string; into?: true } }[]
   unnamed: { what: string; words: string[]; inputs: string[]; targets?: string[] }[]
   runs?: { script?: string; unknown?: true; why?: string; remedy?: string; args: { word: string; path?: string }[] }[]
 }
@@ -1656,7 +1658,9 @@ export const takesAway = (does: string): boolean => does === 'remove' || does ==
  * `path` is where to look for it and what to ask git about (the folder, for a pattern), `toPath`
  * where a move puts it, and `holds`, on a folder taken whole that is not itself lasting memory, the
  * lasting memory that may be under it: each path in `paths`, and each project's memory folder under
- * `projects`. `tree` says it may be a folder, which only the disk can say.
+ * `projects`. `tree` says it may be a folder, which only the disk can say. On a move (#3478), `into`
+ * says `to` is a folder it lands inside under its own name, and `onto` that it is one name the
+ * words move it onto, which is such a folder only if the disk says so.
  */
 export type RemovalCandidate = {
   file: string
@@ -1664,6 +1668,8 @@ export type RemovalCandidate = {
   how: 'delete' | 'move' | 'empty'
   to?: string
   toPath?: string
+  into?: true
+  onto?: true
   tree?: true
   names?: string[]
   pattern?: true
@@ -1688,6 +1694,28 @@ export const patternMayMatch = (pattern: string, name: string): boolean => {
   }
 }
 
+// A brace list as the shell reads it: each alternative a pattern of its own, lists side by side
+// multiplied out. One this does not split (nested, a range, a single alternative, a backslash) is
+// handed on whole.
+const braceAlternatives = (pattern: string): string[] => {
+  const m = /^([^{}\\]*)\{([^{}\\]*)\}(.*)$/.exec(pattern)
+  const list = m?.[2] ?? ''
+  if (!m || !list.includes(',') || list.includes('..')) return [pattern]
+  return list.split(',').flatMap(alt => braceAlternatives(`${m[1] ?? ''}${alt}${m[3] ?? ''}`))
+}
+
+/**
+ * The names a move of `pattern` into a folder would replace there (#3478): each name in `from`, the
+ * folder the pattern is matched in, that it can match and that `there`, the folder it goes into,
+ * also holds. A brace list is split first, since patternMayMatch takes a brace as matching anything
+ * and every name the two folders share would then count as replaced. A pattern neither reads is
+ * left matching anything, which errs toward saying a file is replaced (L648).
+ */
+export const replacedBy = (pattern: string, from: readonly string[], there: readonly string[]): string[] => {
+  const alternatives = braceAlternatives(pattern)
+  return from.filter(n => there.includes(n) && alternatives.some(p => patternMayMatch(p, n)))
+}
+
 /**
  * The memory under home a folder taken whole would take with it, when the folder is not itself
  * lasting memory: one project's records (its memory folder), the projects folder (every project's),
@@ -1708,7 +1736,10 @@ const homeMemoryUnder = (abs: string, home: string): { paths: string[]; projects
  * where the call is judged. A file named by its path, or through a variable, is judged exactly as a
  * write of it is (lastingFiles, so a target the words cannot name is guessed at from what the
  * command mentions, and said as a guess). A removal is a move when the same command brings the file
- * to another place (mv, or a copy it then removes): `to` is that place.
+ * to another place (mv, or a copy it then removes): `to` is that place. Where no path names what a
+ * mv takes (a pattern, a variable), no write carries it as a source, so where it goes is read from
+ * the removal itself, which the reader marks only for a mv and only while nothing else in the
+ * command removes the same thing (#3478): until then such a move read as a deletion.
  */
 export const removalCandidates = async (w: Writes, home: string, inCheckout: InCheckout, command: string, isSet: IsSet = ALWAYS_SET, read: MentionRead = {}): Promise<RemovalCandidate[]> => {
   const out: RemovalCandidate[] = []
@@ -1720,8 +1751,17 @@ export const removalCandidates = async (w: Writes, home: string, inCheckout: InC
   for (const c of [...changes.filter(x => x.does === 'remove'), ...changes.filter(x => x.does === 'truncate')]) {
     const emptied = c.does === 'truncate'
     const dest = emptied ? undefined : w.files.find(f => f.sources?.some(s => (c.path ? s === c.path : lastPart(s) === lastPart(c.word))))
-    const to = dest === undefined ? undefined : dest.path ? display(dest.path, home) : dest.word
-    const base = { how: emptied ? ('empty' as const) : dest === undefined ? ('delete' as const) : ('move' as const), ...(to !== undefined ? { to } : {}), ...(dest?.path ? { toPath: dest.path } : {}) }
+    // A write that names it as a source says where it lands; failing that, its own mv does.
+    const moved = emptied || dest !== undefined ? undefined : c.to
+    const at = dest ?? moved
+    const to = at === undefined ? undefined : at.path ? display(at.path, home) : at.word
+    const base = {
+      how: emptied ? ('empty' as const) : at === undefined ? ('delete' as const) : ('move' as const),
+      ...(to !== undefined ? { to } : {}),
+      ...(at?.path ? { toPath: at.path } : {}),
+      ...(moved?.into ? { into: true as const } : {}),
+      ...(dest?.mayBeFolder || (moved !== undefined && !moved.into) ? { onto: true as const } : {}),
+    }
     // A pattern, in the folder it lands in: every file it matches in a folder of lasting memory, or
     // the lasting memory files by name that it may match anywhere else.
     if (!c.path && c.folder) {
@@ -1790,7 +1830,26 @@ export const removalWords = (removes: readonly Removal[]): typeof DELETE_WORDS |
 export const removedNames = (removes: readonly Removal[]): string => removes.map(r => r.file).join(', ')
 
 const heldSaid = (r: Removal): string => `${(r.holds ?? []).join(', ')}${r.more ? ' and others' : ''}`
-const withWhere = (r: Removal): string => (r.how === 'move' && r.to !== undefined ? `${r.file}, to ${r.to}` : r.holds?.length ? `${r.file}, which holds ${heldSaid(r)}` : r.file)
+
+/**
+ * The path a file has once a move has put it inside the folder `to` under its own name (#3478).
+ * The one place this is worked out, for what Dan reads and for which save is the move's own.
+ */
+const insideTo = (r: Removal): string => `${(r.to ?? '').replace(/\/+$/, '')}/${lastPart(r.file)}`
+
+/**
+ * The one path a moved file ends up at, as Dan reads it (#3478): `to` itself, or its new path
+ * inside the folder `to`. Undefined where no one path can be said: the words do not say where it
+ * goes, or what goes into the folder is a pattern or a guess, which is said by the folder instead.
+ */
+const landsAt = (r: Removal): string | undefined => (r.to === undefined ? undefined : !r.into ? r.to : r.pattern || r.guessed ? undefined : insideTo(r))
+
+// A move as a list says it, `link` between the file and where it goes: "to" a path, "into" a folder.
+const movedSaid = (r: Removal, link: string): string => {
+  const at = landsAt(r)
+  return at !== undefined ? `${r.file}${link}to ${at}` : r.to !== undefined ? `${r.file}${link}into ${r.to}` : r.file
+}
+const withWhere = (r: Removal): string => (r.how === 'move' && r.to !== undefined ? movedSaid(r, ', ') : r.holds?.length ? `${r.file}, which holds ${heldSaid(r)}` : r.file)
 
 /**
  * What a refused removal does, as every refusal says it: the files, where a move puts each, and for
@@ -1830,11 +1889,33 @@ export const removalInstruction = (id: string, removes: readonly Removal[]): str
 /** The removal's answers, the one that changes nothing first (L609), each with what it does. */
 export const removalOptions = (removes: readonly Removal[]) => {
   const w = removalWords(removes)
-  const what = allMoves(removes) ? removes.map(r => (r.to !== undefined ? `${r.file} to ${r.to}` : r.file)).join(', ') : removedNames(removes)
+  const what = allMoves(removes) ? removes.map(r => movedSaid(r, ' ')).join(', ') : removedNames(removes)
   return [
     { label: KEEP_IT, description: w.kept },
     { label: w.label, description: `${w.press} ${what}` },
   ]
+}
+
+/**
+ * Where a move puts one removal, as the question says it, and what happens to a file already
+ * there: said only as measured (L11), so a place that could not be looked at says so (`unseen`)
+ * and never "can be moved back". A file with one path to land at is said by that path, a trailing
+ * slash on the folder or none (#3478). A pattern or a guess has no one path, so it is said by the
+ * folder, and "each" stands for every file the pattern matches.
+ */
+const movedWhere = (r: Removal, one: boolean): string => {
+  const it = one ? 'it' : r.file
+  const It = one ? 'It' : r.file
+  if (r.to === undefined) return `Where ${it} goes could not be read from the command.`
+  const at = landsAt(r)
+  if (at !== undefined) {
+    if (r.unseen) return `${It} goes to ${at}. Whether a file is already there could not be read.`
+    return r.replaces ? `${It} goes to ${at}, replacing the file that is there now.` : `${It} goes to ${at}, and can be moved back.`
+  }
+  const each = r.pattern ? (one ? 'Each' : `Each file ${r.file} matches`) : It
+  const goes = `${each} goes into the folder ${r.to}`
+  if (r.unseen) return `${goes}. Whether a file of the same name is already there could not be read.`
+  return r.replaces ? `${goes}, replacing a file of the same name that is there now.` : `${goes}, and can be moved back.`
 }
 
 /**
@@ -1857,7 +1938,7 @@ export const removalSaid = (removes: readonly Removal[]): string => {
       if (r.names?.length) parts.push(`Only what is named ${r.names.join(' and ')} under ${it} goes.`)
       // Emptied in place: the file is still there afterwards, which a deletion's words would not say.
       if (r.how === 'empty') parts.push(`${one ? 'The file' : r.file} stays, and what is in it is cut short or wiped.`)
-      if (r.how === 'move') parts.push(r.to === undefined ? `Where ${it} goes could not be read from the command.` : r.replaces ? `${It} goes to ${r.to}, replacing the file that is there now.` : `${It} goes to ${r.to}, and can be moved back.`)
+      if (r.how === 'move') parts.push(movedWhere(r, one))
       else if (r.back === 'git') parts.push(`Git holds ${it} unchanged, so it can be restored from git.`)
       else if (r.back === 'changed') parts.push(`Git holds an older version of ${it}, so the changes since its last commit cannot be got back.`)
       else if (r.back === 'none') parts.push(`Git does not hold ${it}, so once ${r.how === 'empty' ? 'emptied' : 'deleted'} it cannot be got back from git.`)
@@ -1873,8 +1954,10 @@ const sameRemoval = (y: Removal, r: Removal): boolean =>
   y.file === r.file &&
   y.how === r.how &&
   y.to === r.to &&
+  y.into === r.into &&
   y.back === r.back &&
   y.replaces === r.replaces &&
+  y.unseen === r.unseen &&
   y.folder === r.folder &&
   y.pattern === r.pattern &&
   y.guessed === r.guessed &&
@@ -1928,7 +2011,10 @@ export const splitRefusal = (removes: readonly Removal[], saves: readonly string
  * from the disk both times and can differ (lessons review of #3430).
  */
 export const splitBy = (removes: readonly Removal[], files: readonly string[]): string[] | undefined => {
-  const lands = removes.flatMap(r => (r.how === 'move' && r.to !== undefined ? [r.to] : []))
+  // Where a move lands: `to` as the reader names it, and for one into a folder also its own name
+  // inside that folder, which is how the reader names the write of a pattern (#3478). A guess names
+  // no file for certain, so nothing inside the folder is taken as its landing place.
+  const lands = removes.flatMap(r => (r.how === 'move' && r.to !== undefined ? [r.to, ...(r.into && !r.guessed ? [insideTo(r)] : [])] : []))
   const others = files.filter(f => !lands.includes(f))
   return others.length || severalWays(removes) ? others : undefined
 }
