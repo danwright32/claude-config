@@ -1684,12 +1684,16 @@ const lastPart = (p: string): string => p.replace(/\/+$/, '').split('/').pop() ?
 /**
  * Whether a shell pattern may match a name, ignoring case (find's -iname does, and asking is the
  * harmless side). A pattern this does not read (a brace, a backslash, anything a RegExp refuses) may
- * match anything.
+ * match anything. So may one of more than four stars (#3478, the second fix round): a search for
+ * such a pattern can try every way of sharing a name out between its stars, work that grows with
+ * each star and with the length of a name read off the disk. Chosen, not measured.
  */
 export const patternMayMatch = (pattern: string, name: string): boolean => {
   if (/[{}\\]/.test(pattern)) return true
+  const stars = pattern.replace(/\*+/g, '*')
+  if (stars.split('*').length - 1 > 4) return true
   try {
-    const re = pattern.replace(/[.+^$()|]/g, '\\$&').replace(/\[!/g, '[^').replace(/\*/g, '.*').replace(/\?/g, '.')
+    const re = stars.replace(/[.+^$()|]/g, '\\$&').replace(/\[!/g, '[^').replace(/\*/g, '.*').replace(/\?/g, '.')
     return new RegExp(`^${re}$`, 'i').test(name)
   } catch {
     return true
@@ -1699,11 +1703,43 @@ export const patternMayMatch = (pattern: string, name: string): boolean => {
 // A brace list as the shell reads it: each alternative a pattern of its own, lists side by side
 // multiplied out. One this does not split (nested, a range, a single alternative, a backslash) is
 // handed on whole.
-const braceAlternatives = (pattern: string): string[] => {
-  const m = /^([^{}\\]*)\{([^{}\\]*)\}(.*)$/.exec(pattern)
-  const list = m?.[2] ?? ''
-  if (!m || !list.includes(',') || list.includes('..')) return [pattern]
-  return list.split(',').flatMap(alt => braceAlternatives(`${m[1] ?? ''}${alt}${m[3] ?? ''}`))
+//
+// The names are counted before any is made, and past MAX_BRACE_NAMES none is (#3478, the second fix
+// round). Multiplied out with no limit, six lists of ten are a million names, each then tried
+// against every name the two folders share: 2.3 seconds for one shared name and ten times that for
+// each further list (measured with bun on 2026-11-23, an idle Mac), where a hook has 10 seconds and
+// one cut at its budget lets the command run unasked. At 256 names, 200 shared names cost about a
+// tenth of a second, so the bound stays far inside the budget on a loaded Mac, and a list of every
+// note in a folder by name still fits.
+export const MAX_BRACE_NAMES = 256
+
+/**
+ * How many names a brace pattern may be multiplied out into: the product of every list the shell
+ * would split, read in one pass, and no further once it passes MAX_BRACE_NAMES (so what it returns
+ * past the bound is only that it is past it). It can count a list `braceAlternatives` would hand on
+ * whole, which only ever errs toward not multiplying out.
+ */
+export const braceNames = (pattern: string): number => {
+  let names = 1
+  for (const m of pattern.matchAll(/\{([^{}\\]*)\}/g)) {
+    const list = m[1] ?? ''
+    if (!list.includes(',') || list.includes('..')) continue
+    names *= list.split(',').length
+    if (names > MAX_BRACE_NAMES) break
+  }
+  return names
+}
+
+/** A brace pattern multiplied out, or null where that would be more than MAX_BRACE_NAMES names. */
+export const braceAlternatives = (pattern: string): string[] | null => {
+  if (braceNames(pattern) > MAX_BRACE_NAMES) return null
+  const out = (p: string): string[] => {
+    const m = /^([^{}\\]*)\{([^{}\\]*)\}(.*)$/.exec(p)
+    const list = m?.[2] ?? ''
+    if (!m || !list.includes(',') || list.includes('..')) return [p]
+    return list.split(',').flatMap(alt => out(`${m[1] ?? ''}${alt}${m[3] ?? ''}`))
+  }
+  return out(pattern)
 }
 
 /**
@@ -1714,7 +1750,7 @@ const braceAlternatives = (pattern: string): string[] => {
  * left matching anything, which errs toward saying a file is replaced (L648).
  */
 export const replacedBy = (pattern: string, from: readonly string[], there: readonly string[]): string[] => {
-  const alternatives = braceAlternatives(pattern)
+  const alternatives = braceAlternatives(pattern) ?? [pattern]
   return from.filter(n => there.includes(n) && alternatives.some(p => patternMayMatch(p, n)))
 }
 
@@ -1754,8 +1790,11 @@ export const removalCandidates = async (w: Writes, home: string, inCheckout: InC
   for (const c of [...changes.filter(x => x.does === 'remove'), ...changes.filter(x => x.does === 'truncate')]) {
     const emptied = c.does === 'truncate'
     const dest = emptied ? undefined : w.files.find(f => f.sources?.some(s => (c.path ? s === c.path : lastPart(s) === lastPart(c.word))))
-    // A write that names it as a source says where it lands; failing that, its own mv does.
-    const moved = emptied || dest !== undefined ? undefined : c.to
+    // A write that names it as a source says where it lands; failing that, its own mv does. Never
+    // for a brace pattern of more names than are multiplied out (MAX_BRACE_NAMES): what it would
+    // replace where it lands cannot be worked out inside a hook's time, so it is the deletion it
+    // was before the reader said where a pattern goes.
+    const moved = emptied || dest !== undefined || (!c.path && braceNames(lastPart(c.word)) > MAX_BRACE_NAMES) ? undefined : c.to
     const at = dest ?? moved
     const to = at === undefined ? undefined : at.path ? display(at.path, home) : at.word
     const base = {

@@ -1952,7 +1952,7 @@ test('a heading Dan could not read as written cannot be named, so its save is re
 })
 
 // ---- #3402: the lasting memory a command's words would remove, and how a removal is said ----
-import { coversRemoval, patternMayMatch, removalCandidates, removalInstruction, removalNote, removalOptions, removalSaid, removalWords, removesWhat, replacedBy, splitBy, splitRefusal, approvedFor, pressed } from '../hooks/rules.ts'
+import { MAX_BRACE_NAMES, braceAlternatives, braceNames, coversRemoval, patternMayMatch, removalCandidates, removalInstruction, removalNote, removalOptions, removalSaid, removalWords, removesWhat, replacedBy, splitBy, splitRefusal, approvedFor, pressed } from '../hooks/rules.ts'
 import type { AskBeforeSavingRemoval } from '../types/index.d.ts'
 
 const SLATE = `${HOME}/Apps/slate`
@@ -2093,6 +2093,40 @@ test('what a pattern moved into a folder replaces there is each name it can matc
   // which errs toward saying a file is replaced.
   expect(replacedBy('{a,{b,c}}.md', from, ['old.md'])).toEqual(['old.md'])
   expect(replacedBy('note{1..3}.md', from, ['old.md'])).toEqual(['old.md'])
+})
+
+// The second fix round of #3478. Brace lists side by side were multiplied out with no limit: six
+// lists of ten are a million names and took 12 seconds (measured 2026-11-23), past the 10 seconds a
+// hook has, and a hook cut at its budget lets the command run unasked. So the names are counted
+// before any is made, and a pattern over the bound is never multiplied out.
+const LISTS = (lists: number, each: number) => `${`{${Array.from({ length: each }, (_, i) => String.fromCharCode(97 + i)).join(',')}}`.repeat(lists)}.md`
+test('a brace pattern is multiplied out only up to a bound on its names, counted before any is made (#3478)', async () => {
+  // At the bound it is multiplied out, and matches only the names it spells.
+  expect(MAX_BRACE_NAMES).toBe(256)
+  expect(braceNames(LISTS(8, 2))).toBe(256)
+  expect(braceAlternatives(LISTS(8, 2))?.length).toBe(256)
+  expect(replacedBy(LISTS(8, 2), ['aaaaaaaa.md', 'old.md'], ['aaaaaaaa.md', 'old.md'])).toEqual(['aaaaaaaa.md'])
+  // One name over, none is made: the count stops as soon as it passes the bound, however many
+  // lists follow, and the pattern may then match anything, which errs toward saying a file is replaced.
+  expect(braceNames(LISTS(9, 2))).toBe(512)
+  expect(braceAlternatives(LISTS(9, 2))).toBe(null)
+  expect(braceNames(LISTS(6, 10))).toBe(1000)
+  expect(braceNames(LISTS(4000, 10))).toBe(1000)
+  expect(braceAlternatives(LISTS(6, 10))).toBe(null)
+  expect(braceAlternatives(LISTS(4000, 10))).toBe(null)
+  expect(replacedBy(LISTS(6, 10), ['a.md', 'old.md'], ['old.md'])).toEqual(['old.md'])
+  // A list the shell would not split (a range, one alternative) counts as one name.
+  expect(braceNames('note{1..300}{a}.md')).toBe(1)
+  // And a move of such a pattern is the deletion main asked about, never a move.
+  expect(await movesOf(`mv ${MEM}/${LISTS(8, 2)} ~/Desktop/archive/`)).toEqual([[`${MEM}/${LISTS(8, 2)}`, 'move', '~/Desktop/archive', 'into pattern']])
+  expect(await movesOf(`mv ${MEM}/${LISTS(9, 2)} ~/Desktop/archive/`)).toEqual([[`${MEM}/${LISTS(9, 2)}`, 'delete', '', 'pattern']])
+  expect(await movesOf(`mv ${MEM}/${LISTS(6, 10)} ~/Desktop/archive/`)).toEqual([[`${MEM}/${LISTS(6, 10)}`, 'delete', '', 'pattern']])
+})
+test('a pattern of many stars is not handed to a search whose work grows with each star (#3478)', () => {
+  // Up to four stars it is matched; runs of stars are one star.
+  expect([patternMayMatch('*a*b*c*.md', 'xaxbxc.md'), patternMayMatch('*a*b*c*.md', 'xaxbx.md'), patternMayMatch('**a***b**.md', 'x.md')]).toEqual([true, false, false])
+  // Over four it may match anything, the side that asks.
+  expect(patternMayMatch('*a*a*a*a*a*b', 'x.md')).toBe(true)
 })
 
 test('one question covers a move into a folder and the write the reader names for it, and nothing else the command saves (#3478)', () => {

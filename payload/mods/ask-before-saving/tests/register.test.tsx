@@ -4139,6 +4139,27 @@ test('notes moved to a place the same command removes under its other name are a
   expect(w.ran).toEqual([])
 })
 
+// A brace pattern of more names than the mod will multiply out. Measured at 22e20b47fe: six lists
+// of ten held the hook for 12 seconds, past its 10 second budget, and the question it reached after
+// that said "can be moved back". The names are counted first now (rules.ts braceNames), so this is
+// asked at once, as the deletion main asked about. One list fewer than the bound is still a move.
+test('a move by a brace pattern of more names than the bound is asked about as a deletion, and one at the bound as a move (#3478)', withKit, async ($, on) => {
+  const w = world($, on, { files: ARCHIVED })
+  const lists = (n: number, each: string) => `${REMOVAL_MEM_SHOWN}/${each.repeat(n)}.md`
+  const ten = '{a,b,c,d,e,f,g,h,i,j}'
+  for (const names of [lists(6, ten), lists(9, '{a,b}'), lists(40, ten)]) {
+    expect([names, await howAsked($, `mv ${names} ~/Desktop/archive/`, names)]).toEqual([names, AS_A_DELETION])
+    // Removed outright it never was multiplied out (on main either: a brace there matches anything).
+    expect([names, await howAsked($, `rm ${names}`, names)]).toEqual([names, AS_A_DELETION])
+    // The form the review gave, a second command beside the move: stopped, and in no word a move.
+    const beside = refusalOf(await call($, { tool: 'Bash', command: `mv ${names} ~/Desktop/archive/ ; rm ~/.claude/CLAUDE.md` }))
+    expect([names, beside.includes('deletes lasting memory'), beside.includes('moves lasting memory') || beside.includes('moved back')]).toEqual([names, true, false])
+  }
+  const atBound = lists(8, '{a,b}')
+  expect(refusalOf(await call($, { tool: 'Bash', command: `mv ${atBound} ~/Desktop/archive/` })).startsWith(`${NOT_MOVED}: this moves lasting memory away (${atBound}, into ~/Desktop/archive)`)).toBe(true)
+  expect(w.ran).toEqual([])
+})
+
 test('notes moved through a link are still asked about as a move while the disk shows nothing else in the command reaches them (#3478)', withKit, async ($, on) => {
   world($, on, { files: ARCHIVED, links: DESK_LINK })
   for (const command of [`mv ${BRACE_NAMES} ~/Desktop/link/`, `mkdir -p ~/Desktop/other && mv ${BRACE_NAMES} ~/Desktop/link/ && rm -rf ~/Desktop/other`, `mv ${BRACE_NAMES} /tmp/zz/ && rm -rf /private/tmp/other`]) {
