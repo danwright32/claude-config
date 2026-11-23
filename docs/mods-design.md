@@ -3598,8 +3598,9 @@ lasting memory file, or moved one away, ran with no question. Measured in the mo
   <folder>/<note>` is refused whole as it was on main (the echo's write is a save of its own).
   A command that deletes one memory file and moves others by a pattern in the same folder is one
   Delete question, as on main: the pattern cannot be shown not to match the file deleted. A `mv
-  -n` is never said to replace a file: where one of the name is there, the question says the file
-  stays where it is. Left as on main, and recorded: a note named outright that is moved and whose
+  -n` with neither `-f` nor `-i` is never said to replace a file: where one of the name is there,
+  the question says the file stays where it is. Given `-f` or `-i` as well, in any order, it is
+  said to replace one, since mv obeys whichever of the three comes last. Left as on main, and recorded: a note named outright that is moved and whose
   folder the same command then removes is still said to be one that "can be moved back", and so
   is a pattern moved into a folder that is not there, where the mv fails and nothing happens.
 - **Asleep**, the removal is noted for the morning report as a finding (the report's kind for
