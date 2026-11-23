@@ -23,6 +23,9 @@ import {
   MAX_CHECK,
   MAX_SHORT,
   MAX_SHORT_TEXT,
+  MOVE_LOOK_MS,
+  madeFirst,
+  moveAlone,
   MIN_RULE,
   addsThis,
   readCheckLine,
@@ -430,11 +433,11 @@ const kindAt = async ($: EngineInterface, path: string) => {
 // held. A file named outright replaces the one of its name there. A pattern replaces each name it
 // can match that both folders hold. Where that cannot be looked at (a folder no path names, a guess
 // at the file, a place that is there and is no folder), it says so, and claims neither.
-const movedOnto = async ($: EngineInterface, c: RemovalCandidate): Promise<{ into?: true; replaces?: true; unseen?: true }> => {
-  const there = c.toPath !== undefined && (await $.fs.exists(c.toPath)) ? ((await kindAt($, c.toPath)) ?? 'unread') : undefined
-  // Onto one name a mv gives that no path names (a variable): nothing there can be looked at, so
-  // nothing is claimed of it, where it used to be said as one that "can be moved back".
-  if (!c.into && c.onto && c.toPath === undefined && c.to !== undefined) return { unseen: true }
+const movedOnto = async (look: Look, c: RemovalCandidate): Promise<{ into?: true; replaces?: true; unseen?: true }> => {
+  const there = c.toPath !== undefined && (await look.exists(c.toPath)) ? ((await look.kind(c.toPath)) ?? 'unread') : undefined
+  // Onto one name no path names (a variable): nothing there can be looked at, so nothing is
+  // claimed of it, where it used to be said as one that "can be moved back".
+  if (!c.into && c.toPath === undefined && c.to !== undefined) return { unseen: true }
   if (!c.into && !(c.onto && there === 'dir')) return there !== undefined && there !== 'dir' ? { replaces: true } : {}
   const into = { into: true as const }
   if (c.toPath === undefined || c.guessed || (there !== undefined && there !== 'dir')) return { ...into, unseen: true }
@@ -443,13 +446,72 @@ const movedOnto = async ($: EngineInterface, c: RemovalCandidate): Promise<{ int
   if (!c.pattern) {
     if (c.path === undefined) return { ...into, unseen: true }
     const at = `${c.toPath}/${c.path.replace(/\/+$/, '').split('/').pop() ?? ''}`
-    return (await $.fs.exists(at)) && (await kindAt($, at)) !== 'dir' ? { ...into, replaces: true } : into
+    return (await look.exists(at)) && (await look.kind(at)) !== 'dir' ? { ...into, replaces: true } : into
   }
   // A pattern: `path` is the folder it is matched in, and its own last part is the pattern.
-  if (c.path === undefined || !(await $.fs.exists(c.path))) return { ...into, unseen: true }
-  const names = async (folder: string) => (await $.fs.list(folder)).map(e => e.name)
-  return replacedBy(c.file.split('/').pop() ?? '', await names(c.path), await names(c.toPath)).length ? { ...into, replaces: true } : into
+  if (c.path === undefined || !(await look.exists(c.path))) return { ...into, unseen: true }
+  return replacedBy(c.file.split('/').pop() ?? '', await look.names(c.path), await look.names(c.toPath)).length ? { ...into, replaces: true } : into
 }
+
+// The looks at the disk a removal's wording rests on: whether something is at a path, what it is,
+// and the names a folder holds.
+type Look = { exists: (path: string) => Promise<boolean>; kind: (path: string) => ReturnType<typeof kindAt>; names: (folder: string) => Promise<string[]> }
+// As main looks: with no bound, a failure failing the hook, which fails closed.
+const plainLook = ($: EngineInterface): Look => ({ exists: path => $.fs.exists(path), kind: path => kindAt($, path), names: async folder => (await $.fs.list(folder)).map(e => e.name) })
+
+// A look that failed, or that did not answer inside MOVE_LOOK_MS (#3478, the third fix round).
+class LookFailed extends Error {}
+// The same looks for a move the reader marked, each bounded: MOVE_LOOK_MS for all of them together,
+// on the engine's clock, and a look that fails or is still out when the time is up throws
+// LookFailed, as does a clock that cannot be set. Until this, a disk that never answered (a hung
+// mount where the archive is) held the hook to its 10 second budget, and a hook cut there lets the
+// command run with no question.
+const boundedLook = ($: EngineInterface): Look => {
+  const late = new Promise<never>((_, reject) => {
+    try {
+      $.clock.after(MOVE_LOOK_MS, () => reject(new LookFailed('the disk did not answer in time')))
+    } catch (err) {
+      reject(new LookFailed(message(err)))
+    }
+  })
+  late.catch(() => undefined)
+  const within = <T>(read: () => Promise<T>): Promise<T> =>
+    Promise.race([
+      (async () => {
+        try {
+          return await read()
+        } catch (err) {
+          throw new LookFailed(message(err))
+        }
+      })(),
+      late,
+    ])
+  return { exists: path => within(() => $.fs.exists(path)), kind: path => within(async () => (await $.fs.stat(path)).kind), names: folder => within(async () => (await $.fs.list(folder)).map(e => e.name)) }
+}
+
+// Whether the moves mod-kit's reader marked in a command may be worded as moves (#3478, the third
+// fix round): the command is the mv and nothing that could take a file away (rules.ts moveAlone),
+// every marked move goes to a place a path names that is there now, or that a plain mkdir earlier
+// in the command makes under the same text, and each copy before the mv lands where nothing is.
+// A destination that is not there is otherwise one the mv cannot be shown to reach: under a name
+// that differs only by case it is another command's folder on a disk that ignores case.
+const movesStand = async ($: EngineInterface, command: string, w: Writes, look: Look): Promise<boolean> => {
+  const alone = moveAlone(command, await $.modkit.pipeline({ command, assignments: true }))
+  if (alone === undefined) return false
+  for (const c of w.changes ?? []) {
+    if (c.to === undefined) continue
+    if (c.to.path === undefined) return false
+    if (!(await look.exists(c.to.path)) && !madeFirst(alone, c.to.word)) return false
+  }
+  for (const word of alone.copies) {
+    const copy = w.files.find(f => f.word === word)
+    if (copy?.path === undefined || (await look.exists(copy.path))) return false
+  }
+  return true
+}
+// The same writes with no move marked, which is what main's reader gives: a pattern a mv takes
+// away is then a deletion, and a note named outright is said as main says it.
+const unmarked = (w: Writes): Writes => ({ ...w, changes: (w.changes ?? []).map(({ to: _to, ...c }) => c) })
 
 // The lasting memory a Bash call would remove, move away or empty (#3402), each as the removal's question
 // says it, or none. From the changes mod-kit's reader reported for the command (lastingTargets'
@@ -461,6 +523,19 @@ const NO_REMOVALS: AskBeforeSavingRemoval[] = []
 const removalsOf = async ($: EngineInterface, tool: string, input: Record<string, unknown>, { home }: Where, w: Writes | undefined): Promise<AskBeforeSavingRemoval[]> => {
   if (tool !== 'Bash' || w === undefined || !(w.changes ?? []).some(c => takesAway(c.does))) return NO_REMOVALS
   const command = String(input.command ?? '')
+  // A move the reader marked is worded as one only while the whole command and the disk bear it
+  // out, every look bounded; otherwise, and when a look fails or runs out of time, the removals are
+  // read again as main reads them, from writes with no move marked and with main's own looks.
+  if (!(w.changes ?? []).some(c => c.to !== undefined)) return removalsRead($, command, home, w, plainLook($))
+  const look = boundedLook($)
+  try {
+    if (await movesStand($, command, w, look)) return await removalsRead($, command, home, w, look)
+  } catch (err) {
+    if (!(err instanceof LookFailed)) throw err
+  }
+  return removalsRead($, command, home, unmarked(w), plainLook($))
+}
+const removalsRead = async ($: EngineInterface, command: string, home: string, w: Writes, look: Look): Promise<AskBeforeSavingRemoval[]> => {
   const inCheckout: InCheckout = async abs => (await $.modkit.workingTree({ path: abs })) !== null
   const text = mentionsAny(command) ? await mentionText($, command) : command
   const out: AskBeforeSavingRemoval[] = []
@@ -486,7 +561,7 @@ const removalsOf = async ($: EngineInterface, tool: string, input: Record<string
       ...(c.guessed ? { guessed: true as const } : {}),
     }
     if (c.how === 'move') {
-      const landed = await movedOnto($, c)
+      const landed = await movedOnto(look, c)
       // A mv told to replace nothing (-n) leaves both files as they are where it would have replaced one.
       const { replaces, ...rest } = landed
       const said = replaces && c.keeps ? { ...rest, stays: true as const } : landed

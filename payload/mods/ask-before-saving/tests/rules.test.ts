@@ -2298,3 +2298,135 @@ test('an emptying is said in its own words: the file stays, and git is asked as 
     'Not run: this command deletes lasting memory (~/a/AGENTS.md) and also empties lasting memory (~/Apps/slate/CLAUDE.md). Dan is asked about each by itself, since one answer cannot cover both. Send each as a command of its own.',
   )
 })
+
+// ---- #3478, the third fix round: when a mv may be worded as a move at all ----
+import { CHANGES_NO_FILE, madeFirst, moveAlone } from '../hooks/rules.ts'
+
+const aloneOf = (command: string) => moveAlone(command, pipeline(command, { assignments: true }))
+const MV = `mv ${MEM}/{a,b}.md ~/Desktop/archive/`
+
+test('the list of commands that can change no file is the short one written down, and holds nothing that can remove, move or write (#3478)', () => {
+  expect([...CHANGES_NO_FILE].sort()).toEqual(['[', 'cd', 'echo', 'ls', 'mkdir', 'pwd', 'test', 'true'])
+  for (const name of ['mv', 'cp', 'rm', 'rmdir', 'unlink', 'touch', 'tee', 'ln', 'printf', '[[', 'cat', 'find', 'sed', 'rsync', 'truncate', 'shred', 'git', 'sh', 'bash', 'zsh', 'eval', 'exec', 'command', 'env', 'sudo', 'xargs', 'trap', 'alias', 'source', '.', 'export', 'set']) expect([name, CHANGES_NO_FILE.has(name)]).toEqual([name, false])
+})
+
+test('a mv stands alone with nothing beside it but commands on the list, and a plain mkdir or copy before it (#3478)', () => {
+  for (const [command, made, copies] of [
+    [MV, [], []],
+    [`${MV} && ls ~/Desktop/archive`, [], []],
+    [`${MV}; ls -la ~/Desktop/archive; echo done; pwd; test -d ~/Desktop/archive || true`, [], []],
+    [`${MV}\nls`, [], []],
+    [`${MV} && [ -d ~/Desktop/archive ] && cd ~/Desktop/archive && mkdir -p later`, [], []],
+    [`mkdir -p ~/Desktop/archive && ${MV}`, ['~/Desktop/archive'], []],
+    [`mkdir -pv ~/Desktop/archive/ $HOME/x rel && ${MV}`, ['~/Desktop/archive', '$HOME/x', 'rel'], []],
+    // A mkdir with any other option still changes no file, and makes nothing that is counted on.
+    [`mkdir -m 700 ~/Desktop/archive && ${MV}`, [], []],
+    // After a cd, a relative folder a mkdir makes is not counted on: a cd that fails leaves it elsewhere.
+    [`cd ${MEM} && mkdir -p archive /abs/made && mv {a,b}.md archive/`, ['/abs/made'], []],
+    [`mkdir -p ${MEM}/archive && cp ${MEM}/MEMORY.md ${MEM}/MEMORY.md.bak && mv ${MEM}/{a,b}.md ${MEM}/archive/`, [`${MEM}/archive`], [`${MEM}/MEMORY.md.bak`]],
+    [`cp -p ${MEM}/MEMORY.md ~/backup.md && mv -n ${MEM}/{a,b}.md ~/Desktop/archive/ && ls ~/Desktop/archive`, [], ['~/backup.md']],
+    [`mv -t ~/Desktop/archive -v ${MEM}/{a,b}.md`, [], []],
+    [`mv "${MEM}/{a,b}.md" '$HOME/Desktop/archive/'`, [], []],
+  ] as const)
+    expect([command, aloneOf(command)]).toEqual([command, { made: [...made], copies: [...copies] }])
+})
+
+test('a mv does not stand alone beside anything that could take a file away, in any shape a command can give it (#3478)', () => {
+  const got: [string, unknown][] = []
+  for (const command of [
+    // No mv, or more than one: a second can replace what the first moved.
+    'ls ~/Desktop/archive',
+    `${MV} && mv ${MEM}/sub/a.md ~/Desktop/archive/`,
+    `mv ~/x/a.md ~/Desktop/archive/ && ${MV}`,
+    // A command off the list, after the mv and before it.
+    `${MV} && rm -rf ~/Desktop/archive`,
+    `${MV} && mytool`,
+    `${MV} && touch ~/Desktop/archive/a.md`,
+    `${MV} && cat ~/Desktop/archive/a.md`,
+    `${MV} && printf x`,
+    `${MV} && [[ -d ~/Desktop/archive ]]`,
+    `${MV} && ln -s ~/Desktop/archive ~/l`,
+    `${MV} && git status`,
+    `${MV} && exit 0`,
+    `mytool && ${MV}`,
+    `rm -f ~/Desktop/archive/a.md; ${MV}`,
+    `set -e; ${MV}`,
+    // A copy after the mv, or one that is more than one file to one place.
+    `${MV} && cp ~/a ~/b`,
+    `cp -R ~/a ~/b && ${MV}`,
+    `cp -f ~/a ~/b && ${MV}`,
+    `cp ~/a ~/b ~/c/ && ${MV}`,
+    `cp ~/a/*.md ~/c && ${MV}`,
+    `cp ~/a && ${MV}`,
+    // A listed name typed any other way, or run behind something.
+    `${MV} && /bin/ls ~/Desktop/archive`,
+    `${MV} && ./ls`,
+    `${MV} && command ls`,
+    `${MV} && sudo ls`,
+    `${MV} && env ls`,
+    `${MV} && time ls`,
+    `${MV} && builtin echo hi`,
+    `/bin/mv ${MEM}/{a,b}.md ~/Desktop/archive/`,
+    `sudo ${MV}`,
+    // A listed name given another meaning, and text run later.
+    `ls() { mytool; }; ${MV} && ls`,
+    `function ls { mytool; }; ${MV} && ls`,
+    `alias ls=mytool; ${MV} && ls`,
+    `trap 'mytool' EXIT; ${MV}`,
+    // A setting, before the mv or on a command.
+    `PATH=/x; ${MV}`,
+    `export PATH=/x; ${MV}`,
+    `D=~/Desktop/archive; mv ${MEM}/{a,b}.md "$D/"`,
+    `X=1 ${MV}`,
+    `${MV} && LC_ALL=C ls`,
+    // A loop, a condition, a group, a subshell, a case.
+    `for n in 1 2; do ${MV}; done`,
+    `while true; do ${MV}; done`,
+    `until false; do ${MV}; done`,
+    `if true; then ${MV}; fi`,
+    `{ ${MV}; }`,
+    `(${MV})`,
+    `case x in x) ${MV};; esac`,
+    // A job left running, a pipe, a redirect, a heredoc, a substitution of any kind.
+    `${MV} &`,
+    `${MV} & ls`,
+    `ls & ${MV}`,
+    `${MV} | cat`,
+    `${MV} && ls | ls`,
+    `${MV} && echo x > ~/Desktop/archive/a.md`,
+    `${MV} && echo x >> ~/log`,
+    `${MV} 2>/dev/null`,
+    `${MV} && ls 2>&1`,
+    `${MV} && ls < ~/x`,
+    `${MV} && ls <<EOF\nx\nEOF`,
+    `${MV} && echo $(mytool)`,
+    `${MV} && echo \`mytool\``,
+    `${MV} && ls <(mytool)`,
+    `${MV} && echo $((n=1))`,
+    `${MV} && echo \${X:=y}`,
+    `${MV} && echo $1`,
+    `${MV} && ls ~/Desktop/*(e:mytool:)`,
+    `${MV} && echo \\$x`,
+    // A path that climbs, anywhere.
+    `mv ${MEM}/{a,b}.md ~/Desktop/far/../x/`,
+    `mv ${MEM}/../memory/{a,b}.md ~/Desktop/archive/`,
+    `${MV} && ls ..`,
+    `cd .. && ${MV}`,
+    `${MV} && ls ~/Desktop/far/..`,
+    // An option of mv this does not read.
+    `mv -h ${MEM}/{a,b}.md ~/Desktop/archive/`,
+    `mv --backup ${MEM}/{a,b}.md ~/Desktop/archive/`,
+    `mv -T ${MEM}/{a,b}.md ~/Desktop/archive/`,
+    `mv -S .old ${MEM}/{a,b}.md ~/Desktop/archive/`,
+  ])
+    got.push([command, aloneOf(command)])
+  expect(got).toEqual(got.map(([command]) => [command, undefined]))
+  expect(got.length).toBe(74)
+})
+
+test('a folder the mv goes into counts as made first only under the same text, a trailing slash aside (#3478)', () => {
+  const alone = aloneOf(`mkdir -p ~/Desktop/new && mv ${MEM}/{a,b}.md ~/Desktop/new/`)
+  expect(alone).toEqual({ made: ['~/Desktop/new'], copies: [] })
+  if (alone === undefined) return
+  expect(['~/Desktop/new', '~/Desktop/new/', '~/Desktop/NEW', '$HOME/Desktop/new', `${HOME}/Desktop/new`, '~/Desktop/new/sub', '~/Desktop'].map(to => madeFirst(alone, to))).toEqual([true, true, false, false, false, false, false])
+})

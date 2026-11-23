@@ -2,7 +2,7 @@ import { expect, mock, type Engine } from 'claude-code/testing'
 import { awaitAtEnd, never, test } from './mod-kit/tests/hang-ceiling.ts'
 import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
-import { APPROVAL_MS, MAX_CHECK, MAX_QUESTION, MAX_QUESTION_ROWS, MAX_SHORT_TEXT, QUESTION_COLUMNS, askInstruction, pickerOnly, rowsAt, sendFirstNote, shownFault } from '../hooks/rules.ts'
+import { APPROVAL_MS, MAX_CHECK, MAX_QUESTION, MAX_QUESTION_ROWS, MAX_SHORT_TEXT, MOVE_LOOK_MS, QUESTION_COLUMNS, askInstruction, pickerOnly, rowsAt, sendFirstNote, shownFault } from '../hooks/rules.ts'
 import { SHAPED, entryOf, without } from './lessons-shaped.ts'
 import { commandWrites, settleOnDisk, type LinkFs } from './mod-kit/hooks/writes.ts'
 import { pipeline } from './mod-kit/hooks/commands.ts'
@@ -193,7 +193,7 @@ type Asked = { questions: { question: string; header: string; options: { label: 
 // since ('changed'), in a repository that does not hold it ('untracked'), or git failing ('breaks');
 // a path not listed is in no repository. A folder is there when a file of the world is under it.
 type GitState = 'clean' | 'changed' | 'untracked' | 'breaks'
-const world = (engine: Engine, on: On, init: { files?: Record<string, string>; links?: Record<string, string>; git?: Record<string, GitState>; fifos?: string[]; stdinLinks?: string[]; failWrites?: boolean; throwsRun?: boolean; cwdFails?: boolean; auto?: boolean; ownClock?: true; agents?: string[]; env?: Record<string, string>; gate?: { reached: () => void; opened: Promise<void> } } = {}) => {
+const world = (engine: Engine, on: On, init: { files?: Record<string, string>; links?: Record<string, string>; git?: Record<string, GitState>; fifos?: string[]; stdinLinks?: string[]; failWrites?: boolean; throwsRun?: boolean; cwdFails?: boolean; auto?: boolean; ownClock?: true; unanswered?: string[]; failing?: string[]; agents?: string[]; env?: Record<string, string>; gate?: { reached: () => void; opened: Promise<void> } } = {}) => {
   let gateReads = 0
   const gitAsked: string[] = []
   const files: Record<string, string> = { ...(init.files ?? {}) }
@@ -232,8 +232,8 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string>; l
       return { value: { exitCode: 0, stdout: JSON.stringify(pythonText(input.code)), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
     }
     if (e.argv[0] === '__modkit' && e.argv[1] === 'pipeline') {
-      const input = JSON.parse(String(e.argv[2])) as { command: string }
-      return { value: { exitCode: 0, stdout: JSON.stringify(pipeline(input.command)), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
+      const input = JSON.parse(String(e.argv[2])) as { command: string; assignments?: boolean }
+      return { value: { exitCode: 0, stdout: JSON.stringify(pipeline(input.command, input.assignments ? { assignments: true } : {})), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
     }
     // git, asked whether it holds a file about to be removed (#3402): `git -C <folder> ls-files -z --
     // <name>` then `status --porcelain -z -- <name>`, answered from `init.git` by the file's path. A
@@ -296,7 +296,17 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string>; l
   // ask another through $ (measured: every such question failed, and every move went unsaid).
   onDisk.exists = async path => existsAt(path)
   onDisk.stat = async (path, options) => statAt(path, options?.resolve)
-  on('fs.exists', ($, e) => ({ value: existsAt(e.path) }) as never)
+  // `unanswered` (#3478): paths the disk never answers about, as a hung mount does, held until the
+  // test ends; `unansweredAsked` comes once the first of them is asked. `failing`: paths a look at
+  // fails for.
+  let askedUnanswered = () => {}
+  const unansweredAsked = new Promise<void>(r => (askedUnanswered = r))
+  on('fs.exists', ($, e) => {
+    if ((init.failing ?? []).includes(e.path)) throw new Error(`EIO: i/o error, stat '${e.path}'`)
+    if (!(init.unanswered ?? []).includes(e.path)) return { value: existsAt(e.path) } as never
+    askedUnanswered()
+    return never(() => ({ value: false })) as never
+  })
   // A folder's own entries (#3402): each file or folder directly in it, once.
   on('fs.list', ($, e) => {
     const at = follow(e.path.replace(/\/$/, ''))
@@ -374,7 +384,7 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string>; l
     notes.push(content.map(c => c.text ?? '').join(''))
     return appended
   })
-  return { files, ran, asked, dialog, toasts, prompts, clock, at, printenv, ctl, notes, logs, opened, readAttempted, gitAsked }
+  return { files, ran, asked, dialog, toasts, prompts, clock, at, printenv, ctl, notes, logs, opened, readAttempted, gitAsked, unansweredAsked }
 }
 type W = ReturnType<typeof world>
 
@@ -4017,8 +4027,9 @@ const INTO_A_FOLDER: [string, string, string, string][] = [
   ['a brace pattern naming a file the folder holds', `mv ${REMOVAL_MEM_SHOWN}/{old,a}.md ${ARCHIVE_SHOWN}/`, `${REMOVAL_MEM_SHOWN}/{old,a}.md`, `${PATTERN_SAID} Each goes into the folder ${ARCHIVE_SHOWN}, replacing a file of the same name that is there now.`],
   ['a star pattern matching a file the folder holds', `mv ${REMOVAL_MEM_SHOWN}/o*.md ${ARCHIVE_SHOWN}/`, `${REMOVAL_MEM_SHOWN}/o*.md`, `${PATTERN_SAID} Each goes into the folder ${ARCHIVE_SHOWN}, replacing a file of the same name that is there now.`],
   ['a one letter pattern matching none the folder holds', `mv ${REMOVAL_MEM_SHOWN}/?.md ${ARCHIVE_SHOWN}/`, `${REMOVAL_MEM_SHOWN}/?.md`, `${PATTERN_SAID} Each goes into the folder ${ARCHIVE_SHOWN}, and can be moved back.`],
-  // A folder that is not there yet holds nothing to replace.
-  ['a brace pattern into a folder not there yet', `mv ${REMOVAL_MEM_SHOWN}/{a,b}.md ~/Desktop/done/`, `${REMOVAL_MEM_SHOWN}/{a,b}.md`, `${PATTERN_SAID} Each goes into the folder ~/Desktop/done, and can be moved back.`],
+  // A folder the command makes first holds nothing to replace. (One that is not there and that
+  // nothing makes is no move any more: the third fix round's first test below.)
+  ['a brace pattern into a folder the command makes first', `mkdir -p ~/Desktop/done && mv ${REMOVAL_MEM_SHOWN}/{a,b}.md ~/Desktop/done/`, `${REMOVAL_MEM_SHOWN}/{a,b}.md`, `${PATTERN_SAID} Each goes into the folder ~/Desktop/done, and can be moved back.`],
   // What is there and is no folder cannot hold them: nothing is claimed of it.
   ['a brace pattern into what is a file', `mv ${REMOVAL_MEM_SHOWN}/{a,b}.md ${REMOVAL_MEM_SHOWN}/note.md/`, `${REMOVAL_MEM_SHOWN}/{a,b}.md`, `${PATTERN_SAID} Each goes into the folder ${REMOVAL_MEM_SHOWN}/note.md. Whether a file of the same name is already there could not be read.`],
   // A rename is said as it was.
@@ -4160,13 +4171,144 @@ test('a move by a brace pattern of more names than the bound is asked about as a
   expect(w.ran).toEqual([])
 })
 
-test('notes moved through a link are still asked about as a move while the disk shows nothing else in the command reaches them (#3478)', withKit, async ($, on) => {
+// Until the third fix round the last two here were moves too, since the disk showed the rm reached
+// another folder. Nothing is compared now: an rm after the mv is the question main asks.
+test('notes moved through a link are asked about as a move with nothing else in the command, and as a deletion with an rm after, wherever it points (#3478)', withKit, async ($, on) => {
   world($, on, { files: ARCHIVED, links: DESK_LINK })
-  for (const command of [`mv ${BRACE_NAMES} ~/Desktop/link/`, `mkdir -p ~/Desktop/other && mv ${BRACE_NAMES} ~/Desktop/link/ && rm -rf ~/Desktop/other`, `mv ${BRACE_NAMES} /tmp/zz/ && rm -rf /private/tmp/other`]) {
-    const refused = refusalOf(await call($, { tool: 'Bash', command }))
-    expect([command, refused.slice(0, 60)]).toEqual([command, `${NOT_MOVED}: this moves lasting memory away (${BRACE_NAMES}, into`.slice(0, 60)])
-    expect(refused).not.toContain('elete')
+  const refused = refusalOf(await call($, { tool: 'Bash', command: `mv ${BRACE_NAMES} ~/Desktop/link/` }))
+  expect(refused.slice(0, 60)).toBe(`${NOT_MOVED}: this moves lasting memory away (${BRACE_NAMES}, into`.slice(0, 60))
+  expect(refused).not.toContain('elete')
+  for (const command of [`mkdir -p ~/Desktop/other && mv ${BRACE_NAMES} ~/Desktop/link/ && rm -rf ~/Desktop/other`, `mv ${BRACE_NAMES} /tmp/zz/ && rm -rf /private/tmp/other`]) expect([command, await howAsked($, command, BRACE_NAMES)]).toEqual([command, AS_A_DELETION])
+})
+
+// The third fix round of #3478. Three reviews each found a deletion still asked about as a move
+// that "can be moved back", each by a new way for a later command to reach the place the notes
+// landed that no comparing of paths could see. The rule is turned round (rules.ts moveAlone): a move
+// is worded as one only when the whole command is the one mv, commands that can change no file
+// wherever they point, and before the mv a plain copy to a place where nothing is. Measured at
+// b6b5fb9349 through the whole mod, before this: every command in the first test below but those
+// marked "as before" was refused as "Not moved yet", its question ending "can be moved back".
+const FAR_LINK = { ...DESK_LINK, [`${HOME}/Desktop/far`]: `${HOME}/Other/deep/x` }
+const FAR_FILES = { ...ARCHIVED, [`${HOME}/Other/deep/x/keep.md`]: 'kept\n', [`${HOME}/Desktop/other/y.md`]: 'y\n' }
+test('a move with anything after or before it that could change a file is asked about as a deletion, as main asks (#3478)', withKit, async ($, on) => {
+  const w = world($, on, { files: FAR_FILES, links: FAR_LINK })
+  const got: string[][] = []
+  for (const [command, names] of [
+    // The third review's two: far leads to Other/deep/x, so far/.. is Other/deep and the rm takes
+    // the folder the notes landed in; and a folder the command makes, removed under another case.
+    [`mv ${STAR_NAMES} ~/Desktop/far/ && rm -rf ~/Desktop/far/../x`, STAR_NAMES],
+    [`mv ${STAR_NAMES} ~/Desktop/far/ && cd ~/Desktop/far && rm -rf ../x`, STAR_NAMES],
+    [`mkdir -p ~/Desktop/new && mv ${STAR_NAMES} ~/Desktop/new/ && rm -rf ~/Desktop/NEW`, STAR_NAMES],
+    // A program nobody knows, handed no file, after the move and before it.
+    [`${BRACE_MOVED} && mytool`, BRACE_NAMES],
+    [`${BRACE_MOVED} && make clean`, BRACE_NAMES],
+    [`mytool; ${BRACE_MOVED}`, BRACE_NAMES],
+    // A job left running, a pipe, a redirect that writes, a substitution.
+    [`${BRACE_MOVED} & sleep 1`, BRACE_NAMES],
+    [`sleep 1 & ${BRACE_MOVED}`, BRACE_NAMES],
+    [`${BRACE_MOVED} | cat`, BRACE_NAMES],
+    [`${BRACE_MOVED} && ls ~/Desktop/archive > /tmp/list.txt`, BRACE_NAMES],
+    [`${BRACE_MOVED} && echo "$(mytool)"`, BRACE_NAMES],
+    [`${BRACE_MOVED} && echo \`mytool\``, BRACE_NAMES],
+    // A harmless name given another meaning, text run later, a loop, a group, a subshell.
+    [`ls() { mytool "$@"; }; ${BRACE_MOVED} && ls ~/Desktop/archive`, BRACE_NAMES],
+    [`function ls { mytool "$@"; }; ${BRACE_MOVED} && ls ~/Desktop/archive`, BRACE_NAMES],
+    [`trap 'mytool' EXIT; ${BRACE_MOVED}`, BRACE_NAMES],
+    [`for n in 1 2; do ${BRACE_MOVED}; done`, BRACE_NAMES],
+    [`if true; then ${BRACE_MOVED}; fi`, BRACE_NAMES],
+    [`{ ${BRACE_MOVED}; }`, BRACE_NAMES],
+    [`(${BRACE_MOVED})`, BRACE_NAMES],
+    // A setting or a runner that changes what a word runs or where a path leads.
+    [`PATH=/x:$PATH; ${BRACE_MOVED} && ls ~/Desktop/archive`, BRACE_NAMES],
+    [`PATH=/x ${BRACE_MOVED}`, BRACE_NAMES],
+    [`${BRACE_MOVED} && command ls ~/Desktop/archive`, BRACE_NAMES],
+    [`${BRACE_MOVED} && /bin/ls ~/Desktop/archive`, BRACE_NAMES],
+    // A path that climbs with `..`, anywhere in the command.
+    [`mv ${STAR_NAMES} ~/Desktop/far/../x/`, STAR_NAMES],
+    [`${BRACE_MOVED} && ls ~/Desktop/far/..`, BRACE_NAMES],
+    // A destination that is not there when the hook looks, unless a plain mkdir of the same text made it.
+    [`mv ${BRACE_NAMES} ~/Desktop/done/`, BRACE_NAMES],
+    [`mkdir -p ~/Desktop/done && mv ${BRACE_NAMES} ~/Desktop/DONE/`, BRACE_NAMES],
+    [`mkdir -p done && cd ~/Desktop && mv ${BRACE_NAMES} done/`, BRACE_NAMES],
+    // A copy before the move onto a file that is there, a copy after it, and anything else that writes.
+    [`cp ~/Desktop/other/y.md ~/Desktop/archive/x.md && ${BRACE_MOVED}`, BRACE_NAMES],
+    [`${BRACE_MOVED} && cp ~/Desktop/other/y.md ~/Desktop/fresh.md`, BRACE_NAMES],
+    [`cp -R ~/Desktop/other ~/Desktop/fresh && ${BRACE_MOVED}`, BRACE_NAMES],
+    [`touch ~/Desktop/archive/a.md && ${BRACE_MOVED}`, BRACE_NAMES],
+    // An option of mv this does not know.
+    [`mv -h ${BRACE_NAMES} ~/Desktop/archive/`, BRACE_NAMES],
+  ] as const)
+    got.push([command, await howAsked($, command, names)])
+  expect(got).toEqual(got.map(([command]) => [command, AS_A_DELETION]))
+  expect(got.length).toBe(33)
+  expect(w.ran).toEqual([])
+  expect(w.asked).toEqual([])
+})
+
+test('a move beside commands that can change no file is still asked about as a move (#3478)', withKit, async ($, on) => {
+  const w = world($, on, { files: FAR_FILES, links: FAR_LINK })
+  const got: string[][] = []
+  for (const command of [
+    BRACE_MOVED,
+    `${BRACE_MOVED} && ls ~/Desktop/archive`,
+    `${BRACE_MOVED} && ls -la ~/Desktop/archive && echo done; pwd; test -d ~/Desktop/archive || true`,
+    `${BRACE_MOVED}\nls ~/Desktop/archive`,
+    `mkdir -p ~/Desktop/archive && ${BRACE_MOVED} && cd ~/Desktop/archive && ls`,
+    `mkdir -p ~/Desktop/done && mv ${BRACE_NAMES} ~/Desktop/done/`,
+    `mkdir -p ~/Desktop/done/ && mv -v ${BRACE_NAMES} ~/Desktop/done/ && [ -d ~/Desktop/done ]`,
+    // Through a link, with nothing else: the notes are where the question says.
+    `mv ${BRACE_NAMES} ~/Desktop/link/ && ls ~/Desktop/link`,
+    // A copy before the move to a place where nothing is makes a new file and can replace none.
+    `cp ~/Desktop/other/y.md ~/Desktop/fresh.md && ${BRACE_MOVED}`,
+  ]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    got.push([command, why.startsWith(`${NOT_MOVED}: this moves lasting memory away (${BRACE_NAMES}, into ~/Desktop/`) && !why.includes('elete') ? 'asked as a move' : why.slice(0, 200)])
   }
+  expect(got).toEqual(got.map(([command]) => [command, 'asked as a move']))
+  expect(got.length).toBe(9)
+  expect(w.ran).toEqual([])
+})
+
+// The command the count found, as the issue gives it, and the same with the archive listed after:
+// mkdir, a backup copy of the index to a name not taken, then one mv by a brace pattern.
+test('the archive command, alone or with ls of the archive after it, is worded as a move; with its backup name taken it is worded as main words it (#3478)', withKit, async ($, on) => {
+  const archive = `mkdir -p ${ARCHIVE_SHOWN} && cp ${REMOVAL_MEM_SHOWN}/MEMORY.md ${REMOVAL_MEM_SHOWN}/MEMORY.md.bak && mv ${REMOVAL_MEM_SHOWN}/{a,b}.md ${ARCHIVE_SHOWN}/`
+  const moved = `Not run: this command moves lasting memory away (${REMOVAL_MEM_SHOWN}/{a,b}.md, into ${ARCHIVE_SHOWN}) and also writes lasting memory (${REMOVAL_MEM_SHOWN}/MEMORY.md.bak). Dan is asked about each by itself, since one answer cannot cover both. Send each as a command of its own.`
+  const w = world($, on, { files: ARCHIVED })
+  expect(refusalOf(await call($, { tool: 'Bash', command: archive }))).toBe(moved)
+  expect(refusalOf(await call($, { tool: 'Bash', command: `${archive} && ls ${ARCHIVE_SHOWN}` }))).toBe(moved)
+  expect(refusalOf(await call($, { tool: 'Bash', command: `${archive} && ls -la ${ARCHIVE_SHOWN}/` }))).toBe(moved)
+  expect(w.ran).toEqual([])
+})
+test('the archive command whose backup copy would replace a file is worded as main words it (#3478)', withKit, async ($, on) => {
+  const archive = `mkdir -p ${ARCHIVE_SHOWN} && cp ${REMOVAL_MEM_SHOWN}/MEMORY.md ${REMOVAL_MEM_SHOWN}/MEMORY.md.bak && mv ${REMOVAL_MEM_SHOWN}/{a,b}.md ${ARCHIVE_SHOWN}/`
+  const w = world($, on, { files: { ...ARCHIVED, [`${REMOVAL_MEMDIR}/MEMORY.md.bak`]: 'an older index\n' } })
+  expect(refusalOf(await call($, { tool: 'Bash', command: archive }))).toBe(
+    `Not run: this command deletes lasting memory (${REMOVAL_MEM_SHOWN}/{a,b}.md) and also writes lasting memory (${REMOVAL_MEM_SHOWN}/MEMORY.md.bak, ${ARCHIVE_SHOWN}/{a,b}.md). Dan is asked about each by itself, since one answer cannot cover both. Send each as a command of its own.`,
+  )
+  expect(w.ran).toEqual([])
+})
+
+// A look at the disk that never answers (a hung mount where the archive is) held the hook past its
+// 10 second budget, and a hook cut there lets the command run unasked. Each look the move's wording
+// needs is given MOVE_LOOK_MS in all; past it, or when one fails, the question is the one main asks.
+test('a look at where a move lands that never answers, or fails, leaves the question main asks, a deletion (#3478)', withKit, async ($, on) => {
+  const w = world($, on, { files: ARCHIVED, unanswered: [`${HOME}/Desktop/archive`], failing: [`${HOME}/Desktop/other`] })
+  const asked = call($, { tool: 'Bash', command: BRACE_MOVED })
+  // The clock is set before the first look, so once the disk has been asked the time can run out:
+  // one millisecond short of it nothing is decided, and at it the question is main's.
+  await w.unansweredAsked
+  await w.clock.advance(MOVE_LOOK_MS - 1)
+  let settled = false
+  void asked.then(() => (settled = true))
+  await Promise.resolve()
+  expect(settled).toBe(false)
+  await w.clock.advance(1)
+  const why = refusalOf(await asked)
+  expect(why.startsWith(`${NOT_DELETED}: this deletes lasting memory (${BRACE_NAMES}), so Dan decides first.`)).toBe(true)
+  expect(why).not.toContain('moved back')
+  expect(await howAsked($, `mv ${BRACE_NAMES} ~/Desktop/other/`, BRACE_NAMES)).toBe(AS_A_DELETION)
+  expect(w.ran).toEqual([])
 })
 
 test('notes moved in a command whose other half cannot be read for sure are asked about as main asked, as a deletion (#3478)', withKit, async ($, on) => {
@@ -4240,11 +4382,16 @@ test('the Move answer for a mv -n that will move nothing says so, as the questio
 
 // Found by the lessons review of the fix round's push: onto one name no path names (a variable),
 // nothing can be looked at, and the question still ended "and can be moved back".
+// Since the third fix round a pattern moved to a place no path names is the deletion main asks
+// about (the place cannot be shown to be there), and a note named outright still claims nothing.
 test('a move onto a name the words cannot place claims nothing about what is there (#3478)', withKit, async ($, on) => {
   const w = world($, on, { auto: true, files: ARCHIVED })
-  const asked = `Move ${BRACE_NAMES}: tidying the folder?`
-  await askRemoval($, w, refusalOf(await call($, { tool: 'Bash', command: `mv ${BRACE_NAMES} "$D"` })), 'Keep as is', asked)
-  expect(w.asked[0]?.questions[0]?.question).toBe(`${asked} ${PATTERN_SAID} It goes to $D. Whether a file is already there could not be read.`)
+  const note = `${REMOVAL_MEM_SHOWN}/note.md`
+  const asked = `Move ${note}: tidying the folder?`
+  await askRemoval($, w, refusalOf(await call($, { tool: 'Bash', command: `mv ${note} "$D"` })), 'Keep as is', asked)
+  expect(w.asked[0]?.questions[0]?.question).toBe(`${asked} It goes to $D. Whether a file is already there could not be read.`)
+  expect(await howAsked($, `mv ${BRACE_NAMES} "$D"`, BRACE_NAMES)).toBe(AS_A_DELETION)
+  expect(await howAsked($, `mv ${BRACE_NAMES} "$D/"`, BRACE_NAMES)).toBe(AS_A_DELETION)
   expect(w.ran).toEqual([])
 })
 

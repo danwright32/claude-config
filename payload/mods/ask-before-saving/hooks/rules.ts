@@ -1650,6 +1650,98 @@ export const EMPTY_IT = 'Empty'
 export const KEEP_IT = 'Keep as is'
 export const REMOVAL_HEADER = 'Memory file'
 
+/**
+ * How long, in all, the looks at the disk that a move's wording rests on may take for one call
+ * (#3478, the third fix round). Chosen, not measured: a look answers in well under a millisecond on
+ * a local disk, a hook has 10 seconds, and what follows a look that ran out of time (the question
+ * main asks, read again from the start) needs most of them.
+ */
+export const MOVE_LOOK_MS = 2000
+
+/**
+ * The commands that may stand beside a move of lasting memory without changing how it is worded
+ * (#3478, the third fix round): each can remove, move, empty or write over no file, wherever its
+ * words point and whatever options it is given. The whole list, in this one place, and short on
+ * purpose. It never decides whether Dan is asked: a command off it gets the question main asks (a
+ * pattern moved away is asked about as a deletion), so adding a name here can only change which of
+ * two wordings a question has, and a name belongs here only if no form of it can destroy a file.
+ * Not here, each for a form that can: mv (a second one can replace what the first moved), cp but
+ * for the one form `moveAlone` reads, touch and printf (bash's `printf -v` sets a variable), `[[`
+ * (its arithmetic can set one), and every program that only reads but has an option that writes.
+ */
+export const CHANGES_NO_FILE: ReadonlySet<string> = new Set(['mkdir', 'ls', 'echo', 'cd', 'pwd', 'test', '[', 'true'])
+
+// What `pipeline` may say of a command that stands beside such a move: its words, and how they were
+// quoted. Anything else it says (a pipe feeding it, a heredoc, a setting it is run with, a runner it
+// is behind, a substitution, text that cannot be read) is more than a plain command.
+const PLAIN_SAID: ReadonlySet<string> = new Set(['words', 'literal', 'unexpanded', 'splits'])
+// The options of mv this reads: replace or not, say what it does, and GNU's folder first.
+const MV_OPTION = /^(?:-[finv]+|-t|--target-directory(?:=.*)?|--force|--interactive|--no-clobber|--verbose|--)$/
+// A path that climbs: the reader folds `..` away in the words, and the disk does not where a folder
+// on the way is a link, so the two can name different places.
+const CLIMBS = /(?:^|\/)\.\.(?:\/|$)/
+// A word that says where it is whatever folder the command stands in.
+const FROM_ROOT = /^(?:\/|~\/|\$HOME\/|\$\{HOME\}\/)/
+const noSlash = (word: string): string => word.replace(/\/+$/, '') || '/'
+
+/**
+ * Whether a Bash call's text is commands one after another and nothing more: no backtick, no
+ * parenthesis (a substitution, a subshell, a function, a zsh pattern that runs code), no `<` or `>`
+ * (a redirect, a heredoc), no backslash, no `&` or `|` but doubled (a job left running, a pipe), and
+ * no `$` but before a plain name. Read from the text itself, quoted or not, so a quoted one counts
+ * too: the side that words fewer commands as a move.
+ */
+const plainText = (command: string): boolean => !/[`()<>\\]/.test(command) && !/[&|]/.test(command.replace(/&&|\|\|/g, '')) && !/\$(?![A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})/.test(command)
+
+/** What `moveAlone` leaves to ask the disk: the folders a plain mkdir makes before the mv, as written, and where each copy before it lands, as written. */
+export type MoveAlone = { made: string[]; copies: string[] }
+
+/**
+ * Whether a mv in this command may be worded as a move (#3478, the third fix round), read from the
+ * command's text and from its commands as mod-kit's `pipeline` gives them, in order, assignments
+ * included. Three reviews each found a deletion still said to be a move that "can be moved back",
+ * each time by a new way for a later command to reach the place the files landed (the folder
+ * removed, another spelling, /tmp against /private/tmp, a link, a path climbing out of a link with
+ * `..`, another case of a name). Comparing where two paths lead cannot be finished, so it no longer
+ * decides this. The rule is the other way round: it is a move only when the command can be shown to
+ * hold nothing that could take a file away, which is when all of this holds:
+ * - its text is plain commands one after another (`plainText`);
+ * - every command is said by `pipeline` in its words alone (`PLAIN_SAID`), no word climbs with `..`,
+ *   and there is exactly one mv, typed as `mv`, with only the options this reads;
+ * - every other command is on `CHANGES_NO_FILE`, typed by that name; or, before the mv only, is
+ *   `cp` of one file to one place (options -p, -n and -v), which the caller then shows to be a
+ *   place where nothing is, so the copy makes a new file and replaces none.
+ * So a loop, a condition, a group, a function, a trap, an alias, a setting and a program nobody
+ * knows each make it not plain, by the word that opens, closes or names it. Undefined when it is
+ * not; otherwise what is left to ask the disk. A relative folder a mkdir makes counts only where no
+ * cd stands before the mv, since a cd that fails leaves the folder made somewhere else.
+ */
+export const moveAlone = (command: string, cmds: readonly { words: readonly string[] }[]): MoveAlone | undefined => {
+  if (!plainText(command)) return undefined
+  const made: string[] = []
+  const copies: string[] = []
+  let moves = 0
+  let cds = 0
+  for (const c of cmds) {
+    const [name, ...rest] = c.words
+    if (name === undefined || Object.keys(c).some(k => !PLAIN_SAID.has(k)) || c.words.some(w => CLIMBS.test(w))) return undefined
+    const options = rest.filter(w => w.startsWith('-'))
+    const operands = rest.filter(w => !w.startsWith('-'))
+    if (name === 'mv') {
+      if (++moves > 1 || options.some(o => !MV_OPTION.test(o))) return undefined
+    } else if (name === 'cp') {
+      if (moves || operands.length !== 2 || options.some(o => !/^-[pnv]+$/.test(o)) || operands.some(w => /[*?[\]{}]/.test(w))) return undefined
+      copies.push(operands[1] as string)
+    } else if (!CHANGES_NO_FILE.has(name)) return undefined
+    else if (!moves && name === 'cd') cds++
+    else if (!moves && name === 'mkdir' && options.every(o => /^-[pv]+$/.test(o))) made.push(...operands.map(noSlash))
+  }
+  return moves === 1 ? { made: cds ? made.filter(m => FROM_ROOT.test(m)) : made, copies } : undefined
+}
+
+/** Whether a folder a move goes into, as the reader wrote it, is one a plain mkdir earlier in the command makes: the same text, a trailing slash aside. */
+export const madeFirst = (alone: MoveAlone, to: string): boolean => alone.made.includes(noSlash(to))
+
 /** Whether a change the write reader reports takes lasting memory away: a removal, or a file emptied in place. */
 export const takesAway = (does: string): boolean => does === 'remove' || does === 'truncate'
 
