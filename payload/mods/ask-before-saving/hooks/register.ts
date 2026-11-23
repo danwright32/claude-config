@@ -20,10 +20,13 @@ import {
   LESSON_SHORT_KEY,
   LESSON_SKIP,
   LESSON_SOURCE,
+  LOOKS_MS,
   MAX_CHECK,
   MAX_SHORT,
   MAX_SHORT_TEXT,
   MOVE_LOOK_MS,
+  NO_ANSWER,
+  WORDS_MS,
   madeFirst,
   moveAlone,
   MIN_RULE,
@@ -109,6 +112,7 @@ import {
   removalSaid,
   removalUnread,
   removalWords,
+  removalsUnseen,
   removedNames,
   replacedBy,
   splitAtAnswer,
@@ -324,14 +328,23 @@ const withoutText = async ($: EngineInterface, code: string): Promise<string> =>
 // files alone (#830). A file in a temporary folder counts inside a checkout there, found by mod-kit's
 // one walk for it (#726). A file that exists and cannot be read, or a disk that cannot say whether a
 // temporary file is in a checkout, fails the hook, and the hook fails closed.
-const lastingTargets = async ($: EngineInterface, tool: string, input: Record<string, unknown>, { cwd, home }: Where): Promise<Targets> => {
-  const inCheckout: InCheckout = async abs => (await $.modkit.workingTree({ path: abs })) !== null
+//
+// `disk` is what the judgement asks of the disk and the environment, handed in so the reading from
+// the words alone (fromWords, #3478) is this same judgement with nothing asked: by default each is
+// asked as it always was (diskOf).
+type Disk = { inCheckout: InCheckout; isSet: IsSet; texts: (paths: readonly string[]) => Promise<string[]> }
+const diskOf = async ($: EngineInterface, home: string): Promise<Disk> => ({
+  inCheckout: async abs => (await $.modkit.workingTree({ path: abs })) !== null,
+  isSet: await isSetIn($, home),
+  texts: paths => inputTexts({ exists: p => $.fs.exists(p), stat: (p, o) => $.fs.stat(p, o), read: p => $.fs.read(p) }, paths),
+})
+const lastingTargets = async ($: EngineInterface, tool: string, input: Record<string, unknown>, { cwd, home }: Where, disk?: Disk): Promise<Targets> => {
+  const { inCheckout, isSet, texts } = disk ?? (await diskOf($, home))
   if (tool !== 'Bash') {
     const abs = resolvePath(String(input.file_path ?? ''), cwd, home)
     return { files: (await lastingMemory(abs, home, inCheckout)) ? [display(abs, home)] : [], guessed: [], handed: [], unknown: [] }
   }
   const command = String(input.command ?? '')
-  const isSet = await isSetIn($, home)
   const w = await $.modkit.writes({ command, cwd, home })
   // Read only where the command mentions lasting memory at all, the one case it can change anything.
   const text = mentionsAny(command) ? await mentionText($, command) : command
@@ -371,7 +384,7 @@ const lastingTargets = async ($: EngineInterface, tool: string, input: Record<st
         out.push(m)
         guessed.push(m)
       }
-    const read = await inputTexts({ exists: p => $.fs.exists(p), stat: (p, o) => $.fs.stat(p, o), read: p => $.fs.read(p) }, u.inputs)
+    const read = await texts(u.inputs)
     for (const t of read) for (const m of await mentioned(patch ? (patchNames(t) ?? t) : t, home, inCheckout, isSet)) if (!out.includes(m)) out.push(m)
   }
   // #3021: a command mod-kit marks `unread` (eval, a command a value names, an alias, ssh, a trap
@@ -456,7 +469,8 @@ const movedOnto = async (look: Look, c: RemovalCandidate): Promise<{ into?: true
 // The looks at the disk a removal's wording rests on: whether something is at a path, what it is,
 // and the names a folder holds.
 type Look = { exists: (path: string) => Promise<boolean>; kind: (path: string) => ReturnType<typeof kindAt>; names: (folder: string) => Promise<string[]> }
-// As main looks: with no bound, a failure failing the hook, which fails closed.
+// As main looks: with no time of its own, only the one the hook gives all its looks (LOOKS_MS,
+// `judged` below), and a failure failing the hook, which fails closed.
 const plainLook = ($: EngineInterface): Look => ({ exists: path => $.fs.exists(path), kind: path => kindAt($, path), names: async folder => (await $.fs.list(folder)).map(e => e.name) })
 
 // A look that failed, or that did not answer inside MOVE_LOOK_MS (#3478, the third fix round).
@@ -520,28 +534,38 @@ const unmarked = (w: Writes): Writes => ({ ...w, changes: (w.changes ?? []).map(
 // file is where it lands, and a deletion says what git holds. A disk that cannot say fails the
 // hook, which fails closed, but for the looks a marked move's wording rests on: those share
 // MOVE_LOOK_MS, and one that fails or runs out of it leaves the question main asks, read with
-// main's own looks (below).
+// main's own looks (below). All of it, those looks and main's alike, runs inside the one time a
+// hook gives its looks (LOOKS_MS, `judged` below), past which the call is asked about from its
+// words alone.
+//
+// What the words would remove is read first, and a command that takes no lasting memory away ends
+// there, with no look at where anything lands (lessons review of 4800a64ad3: whether a marked move
+// stands was asked of the disk for every mv, so a move of any file to a slow place waited on it).
 const NO_REMOVALS: AskBeforeSavingRemoval[] = []
 const removalsOf = async ($: EngineInterface, tool: string, input: Record<string, unknown>, { home }: Where, w: Writes | undefined): Promise<AskBeforeSavingRemoval[]> => {
   if (tool !== 'Bash' || w === undefined || !(w.changes ?? []).some(c => takesAway(c.does))) return NO_REMOVALS
   const command = String(input.command ?? '')
+  const disk = await diskOf($, home)
+  const candidates = await candidatesOf($, command, home, w, disk)
+  if (!candidates.length) return NO_REMOVALS
   // A move the reader marked is worded as one only while the whole command and the disk bear it
   // out, every look bounded; otherwise, and when a look fails or runs out of time, the removals are
   // read again as main reads them, from writes with no move marked and with main's own looks.
-  if (!(w.changes ?? []).some(c => c.to !== undefined)) return removalsRead($, command, home, w, plainLook($))
+  if (!(w.changes ?? []).some(c => c.to !== undefined)) return removalsRead($, home, candidates, plainLook($))
   const look = boundedLook($)
   try {
-    if (await movesStand($, command, w, look)) return await removalsRead($, command, home, w, look)
+    if (await movesStand($, command, w, look)) return await removalsRead($, home, candidates, look)
   } catch (err) {
     if (!(err instanceof LookFailed)) throw err
   }
-  return removalsRead($, command, home, unmarked(w), plainLook($))
+  return removalsRead($, home, await candidatesOf($, command, home, unmarked(w), disk), plainLook($))
 }
-const removalsRead = async ($: EngineInterface, command: string, home: string, w: Writes, look: Look): Promise<AskBeforeSavingRemoval[]> => {
-  const inCheckout: InCheckout = async abs => (await $.modkit.workingTree({ path: abs })) !== null
-  const text = mentionsAny(command) ? await mentionText($, command) : command
+// What a command's words would remove (rules.ts removalCandidates), read as its mentions are.
+const candidatesOf = async ($: EngineInterface, command: string, home: string, w: Writes, { inCheckout, isSet }: Disk): Promise<RemovalCandidate[]> =>
+  removalCandidates(w, home, inCheckout, command, isSet, { text: mentionsAny(command) ? await mentionText($, command) : command })
+const removalsRead = async ($: EngineInterface, home: string, candidates: readonly RemovalCandidate[], look: Look): Promise<AskBeforeSavingRemoval[]> => {
   const out: AskBeforeSavingRemoval[] = []
-  for (const c of await removalCandidates(w, home, inCheckout, command, await isSetIn($, home), { text })) {
+  for (const c of candidates) {
     const found: string[] = []
     if (c.holds) {
       for (const p of c.holds.paths) if (await $.fs.exists(p)) found.push(display(p, home))
@@ -571,6 +595,97 @@ const removalsRead = async ($: EngineInterface, command: string, home: string, w
     } else out.push({ ...shape, how: c.how, ...(c.path !== undefined ? await gitHolds($, c.path) : { back: 'unknown' as const, why: 'its path could not be read from the command' }) })
   }
   return out
+}
+
+// The one time a hook gives all its looks for a Bash call (#3478, the fifth fix round; the list of
+// them is in docs/mods-design.md). Every look is a call on the engine that answers later, none
+// reads the disk in the hook's own turn, so each can be left behind: `within` answers with the work
+// or, once the time is up, throws Late, and the work left waiting changes nothing when it ends,
+// since a reading only looks. Until this, only a marked move's looks had a time (MOVE_LOOK_MS);
+// the reading that followed them, what git holds, a patch file, a checkout under a temporary
+// folder and a shell profile had none, on main as here, so a disk that never answered held the
+// hook until Claude Code cut it, and a hook cut there lets the command run with no question.
+//
+// A clock that cannot be set (a reload drops it) leaves the looks with no time, as they were:
+// refusing instead would refuse every Bash call of the session.
+class Late extends Error {}
+type Due = { within: <T>(work: () => Promise<T>) => Promise<T> }
+let toldNoClock = false
+const dueIn = ($: EngineInterface, ms: number): Due => {
+  // A timer that is never set never comes, so `within` is then the work alone. In this mod's tests
+  // the engine keeps such a failure to itself ("$.clock.after refused", in its own report) and the
+  // call returns as if set, so the line below is for an engine that throws, which no test reaches.
+  const late = new Promise<never>((_, reject) => {
+    try {
+      $.clock.after(ms, () => reject(new Late(NO_ANSWER.message)))
+    } catch (err) {
+      if (toldNoClock) return
+      toldNoClock = true
+      $.ui.log(`Ask before saving could not time its looks at the disk (${message(err)}), so a Bash call waits on a disk that does not answer for as long as it takes. A new session sets the clock again.`)
+    }
+  })
+  late.catch(() => undefined)
+  return { within: work => Promise.race([work(), late]) }
+}
+const dueFor = ($: EngineInterface, tool: string): Due | undefined => (tool === 'Bash' ? dueIn($, LOOKS_MS) : undefined)
+
+// What a call saves and what it removes, as one hook judges it: `targets` and `removes`, or `held`,
+// the refusal for a call nothing could be said of. `late` marks a reading made from the words alone.
+type Judged = { targets: Targets; removes: AskBeforeSavingRemoval[]; late?: true }
+type Held = { held: string }
+
+// A Bash call read from its words alone, once its looks ran out of time (#3478, the fifth fix
+// round): the same judgement with nothing asked of the disk, each answer it would have given taken
+// on the side that asks. A rules file under a temporary folder counts as in a checkout, a variable
+// as set, and every file the words would remove as there (removalsUnseen: a deletion nothing can be
+// said to bring back, never a move). A patch or script file the command reads cannot be read, and
+// may name any file, so no question could name what the call writes: it is refused outright, as is
+// a call whose words name no lasting memory at all, since the look that ran out of time was made
+// for something. It never throws and has a time of its own, so a call is never passed, and a hook
+// never fails a second time, for want of this.
+const fromWords = async ($: EngineInterface, input: Record<string, unknown>, at: Where): Promise<Judged | Held> => {
+  const held = (why: string): Held => ({ held: cannotCheck({ message: why }) })
+  try {
+    return await dueIn($, WORDS_MS).within(async () => {
+      const unread = { inputs: false }
+      const always = async () => true
+      const none: Disk = {
+        inCheckout: always,
+        isSet: always,
+        texts: async paths => {
+          if (paths.length) unread.inputs = true
+          return []
+        },
+      }
+      const targets = await lastingTargets($, 'Bash', input, at, none)
+      if (unread.inputs) return held(NO_ANSWER.message)
+      const command = String(input.command ?? '')
+      const w = targets.writes
+      const removes = w === undefined || !(w.changes ?? []).some(c => takesAway(c.does)) ? NO_REMOVALS : removalsUnseen(await candidatesOf($, command, at.home, unmarked(w), none), at.home)
+      return targets.files.length || removes.length ? { targets, removes, late: true as const } : held(NO_ANSWER.message)
+    })
+  } catch (err) {
+    return held(err instanceof Late ? NO_ANSWER.message : `${NO_ANSWER.message}, and its words could not be read either: ${message(err)}`)
+  }
+}
+
+// One hook's judgement of a call: the files it saves to and, where `wants` says so, what it
+// removes, every look a Bash call needs inside `due`. A look that fails still fails the hook, which
+// judges once more and then refuses (main's rule, kept: a refusal passes nothing, and a question
+// there would let Dan approve what main refuses outright). Only time running out is answered from
+// the words.
+const judged = async ($: EngineInterface, tool: string, input: Record<string, unknown>, at: Where, due: Due | undefined, wants: (targets: Targets) => boolean = () => true): Promise<Judged | Held> => {
+  const read = async (): Promise<Judged> => {
+    const targets = await lastingTargets($, tool, input, at)
+    return { targets, removes: wants(targets) ? await removalsOf($, tool, input, at, targets.writes) : NO_REMOVALS }
+  }
+  if (due === undefined) return read()
+  try {
+    return await due.within(read)
+  } catch (err) {
+    if (!(err instanceof Late)) throw err
+  }
+  return fromWords($, input, at)
 }
 
 // What would be saved, as the rule's text: a new file's whole text, the lines a rewrite adds, an
@@ -871,13 +986,21 @@ const coverFor = async ($: EngineInterface, used: AskBeforeSavingApproval): Prom
 // cover's file. Covers past their time are dropped in silence, here and wherever the list is written:
 // Dan never answered about the index, so there is nothing of his to say lapsed. A shell command not
 // read as a plain append takes nothing, and answers the covers that stand for that index (#2181).
-const takeCover = async ($: EngineInterface, tool: string, input: Record<string, unknown>, at: Where, { files, guessed, handed }: Targets): Promise<AskBeforeSavingIndexCover | { unread: AskBeforeSavingIndexCover[] } | undefined> => {
+// The index is read inside the time the hook gives its looks for a Bash call (`due`, #3478): one
+// that does not answer in it covers nothing, so the save is asked about.
+const takeCover = async ($: EngineInterface, tool: string, input: Record<string, unknown>, at: Where, { files, guessed, handed }: Targets, due: Due | undefined): Promise<AskBeforeSavingIndexCover | { unread: AskBeforeSavingIndexCover[] } | undefined> => {
   if (files.length !== 1 || guessed.length || handed.length) return undefined
   const now = await $.clock.now()
   const standing = ((await $.state.get(coversRef)).value ?? []).filter(c => stands(c.until, now) && display(c.index, at.home) === files[0])
   const index = standing[0]?.index
   if (index === undefined) return undefined
-  const line = await indexLineOf($, tool, input, at, index)
+  const read = () => indexLineOf($, tool, input, at, index)
+  const line = await (due === undefined
+    ? read()
+    : due.within(read).catch((err: unknown) => {
+        if (err instanceof Late) return undefined
+        throw err
+      }))
   if (line === NOT_AN_APPEND) return { unread: standing.filter(c => c.index === index) }
   if (line === undefined) return undefined
   let hit = undefined as AskBeforeSavingIndexCover | undefined
@@ -943,7 +1066,11 @@ const saveCall: MatchedHook<'tool.call', { tool: typeof TOOL_NAMES }> = async ($
   // lasting memory, and never asked about. One the tool.check hook beneath must let through.
   if (e.agentId !== undefined) {
     const at = await whereOf($)
-    const targets = await lastingTargets($, tool, input, at)
+    // What it removes is read only where it saves nothing, as it always was. A Bash call whose
+    // looks ran out of time is judged from its words, and one nothing can be said of is refused.
+    const read = await judged($, tool, input, at, dueFor($, tool), t => !t.files.length)
+    if ('held' in read) return { deny: read.held }
+    const { targets, removes: gone } = read
     if (targets.files.length) {
       const where = targets.files.join(', ')
       const listed = (await $.agent.list()).some(a => a.id === e.agentId)
@@ -957,7 +1084,6 @@ const saveCall: MatchedHook<'tool.call', { tool: typeof TOOL_NAMES }> = async ($
       return { deny: agentRefusal(targets) }
     }
     // Nor does a subagent remove lasting memory, move it away or empty it (#3402): refused, never asked about.
-    const gone = await removalsOf($, tool, input, at, targets.writes)
     if (gone.length) return { deny: agentRemovalRefusal(gone) }
     const key = saveKey(tool, input, at.cwd, at.home)
     fromAgent.set(key, (fromAgent.get(key) ?? 0) + 1)
@@ -985,13 +1111,17 @@ const saveCall: MatchedHook<'tool.call', { tool: typeof TOOL_NAMES }> = async ($
     // leave unnamed is left for the tool.check hook to ask about, held to those facts.
     const edit = await lessonEdit($, tool, input, at)
     const entry = edit.touched.length > 0 || !coversFacts(edit.facts, (await $.state.get(promptRef)).value)
-    const targets = entry ? undefined : await lastingTargets($, tool, input, at)
+    // Nor a Bash call whose looks ran out of time (#3478, the fifth fix round), read from its words
+    // alone or not at all: nothing is taken as covered on such a reading, and the tool.check hook
+    // judges it again in its own time.
+    const read = entry ? undefined : await judged($, tool, input, at, dueFor($, tool), t => t.files.length > 0 && !shellLessons(tool, t, at.home))
+    const sure = read === undefined || 'held' in read || read.late ? undefined : read
     // Nor a shell command that writes or may write the lessons file (#3343): left for the
     // tool.check hook to refuse the same way, with the Edit route named.
-    files = targets === undefined || shellLessons(tool, targets, at.home) ? [] : targets.files
+    files = sure === undefined || shellLessons(tool, sure.targets, at.home) ? [] : sure.targets.files
     // Nor a command that removes lasting memory, moves it away or empties it (#3402): his words made a rule
     // permanent, and said nothing of a file going, so it is left for the tool.check hook to ask about.
-    if (files.length && (await removalsOf($, tool, input, at, targets?.writes)).length) files = []
+    if (files.length && sure?.removes.length) files = []
     if (files.length) approved.add((key = saveKey(tool, input, at.cwd, at.home)))
   }
   let r: Awaited<ReturnType<typeof next>>
@@ -1128,14 +1258,18 @@ const saveCheck: Hook<'tool.check'> = async ($, e, next) => {
   const at = await whereOf($)
   const key = saveKey(tool, input, at.cwd, at.home)
   if (approved.delete(key) || fromAgent.has(key)) return next(e)
-  const targets = await lastingTargets($, tool, input, at)
+  // Every look this hook makes for a Bash call shares one time (#3478, the fifth fix round): past
+  // it the call is judged from its words alone, and one nothing can be said of is refused.
+  const due = dueFor($, tool)
+  const read = await judged($, tool, input, at, due)
+  if ('held' in read) return { decision: 'deny', reason: read.held }
+  const { targets, removes } = read
   const { files } = targets
   // A command that removes lasting memory, moves it away or empties it (#3402) is judged by itself, under the
   // removal's own question and approval: nothing below, which is all about a save, is reached.
   // The one exception is a command that also writes the lessons file by shell (a move that lands on
   // it among them): that was refused outright before #3402, with no question waiting (#3343), and it
   // still is, below, so no Delete, Move or Empty can approve what no For good could.
-  const removes = await removalsOf($, tool, input, at, targets.writes)
   if (removes.length && !shellLessons(tool, targets, at.home)) {
     const id = String(raw.tool_use_id ?? '')
     const mine = await takeRemoval($, key, removes, files)
@@ -1183,7 +1317,7 @@ const saveCheck: Hook<'tool.check'> = async ($, e, next) => {
     return next(e)
   }
   // The one index line a saved memory file's For good covers (#1794): on beneath the same way.
-  const byCover = await takeCover($, tool, input, at, targets)
+  const byCover = await takeCover($, tool, input, at, targets, due)
   const cover = byCover && !('unread' in byCover) ? byCover : undefined
   if (cover) {
     coverTaken.set(String(raw.tool_use_id ?? ''), cover)
@@ -1451,8 +1585,12 @@ export const register: Register = on => {
     // typed answer approve nothing, and neither does any answer of a save's question.
     const removalAnswered = async (q: AskBeforeSavingQuestion) => {
       const at = await whereOf($)
-      const targets = await lastingTargets($, q.tool, q.input, at)
-      const removes = await removalsOf($, q.tool, q.input, at, targets.writes)
+      // Read in the one time a hook gives its looks, as when the call was sent (#3478, the fifth
+      // fix round): a disk that still does not answer leaves the question the words alone give,
+      // which says so, and his answer then holds exactly that.
+      const read = await judged($, q.tool, q.input, at, dueFor($, q.tool))
+      if ('held' in read) return { deny: `Ask before saving could not read what this removal takes now (${NO_ANSWER.message}), so nothing is approved. Ask him again.` }
+      const { targets, removes } = read
       const waitsNoMore = () => update($, pendingRef, p => (p ?? []).filter(x => x.id !== id))
       if (!removes.length) {
         await waitsNoMore()

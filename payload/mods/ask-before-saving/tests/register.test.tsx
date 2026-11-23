@@ -2,7 +2,7 @@ import { expect, mock, type Engine } from 'claude-code/testing'
 import { awaitAtEnd, never, test } from './mod-kit/tests/hang-ceiling.ts'
 import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
-import { APPROVAL_MS, MAX_CHECK, MAX_QUESTION, MAX_QUESTION_ROWS, MAX_SHORT_TEXT, MOVE_LOOK_MS, QUESTION_COLUMNS, askInstruction, pickerOnly, rowsAt, sendFirstNote, shownFault } from '../hooks/rules.ts'
+import { APPROVAL_MS, LOOKS_MS, MAX_CHECK, MAX_QUESTION, MAX_QUESTION_ROWS, MAX_SHORT_TEXT, MOVE_LOOK_MS, QUESTION_COLUMNS, askInstruction, pickerOnly, rowsAt, sendFirstNote, shownFault } from '../hooks/rules.ts'
 import { SHAPED, entryOf, without } from './lessons-shaped.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { pipeline } from './mod-kit/hooks/commands.ts'
@@ -55,6 +55,9 @@ const modKit: { name: string; register: Register } = {
         // other checkout in a temporary folder (#726).
         workingTree: async ({ path }: { path: string }) => {
           if (path.startsWith('/tmp/locked/')) throw new Error('EACCES: /tmp/locked')
+          // A folder the disk may never answer about (#3478): asked as mod-kit asks, for a .git there,
+          // so a world that leaves that look unanswered holds this one too.
+          if (path.startsWith('/tmp/hung/')) await built.fs.exists('/tmp/hung/.git')
           return path.startsWith('/tmp/repo/') ? '/tmp/repo' : null
         },
         // The kit's other members, which these tests never reach: each refuses by name if one ever is.
@@ -193,9 +196,23 @@ type Asked = { questions: { question: string; header: string; options: { label: 
 // since ('changed'), in a repository that does not hold it ('untracked'), or git failing ('breaks');
 // a path not listed is in no repository. A folder is there when a file of the world is under it.
 type GitState = 'clean' | 'changed' | 'untracked' | 'breaks'
-const world = (engine: Engine, on: On, init: { files?: Record<string, string>; links?: Record<string, string>; git?: Record<string, GitState>; fifos?: string[]; stdinLinks?: string[]; failWrites?: boolean; throwsRun?: boolean; cwdFails?: boolean; auto?: boolean; ownClock?: true; unanswered?: string[]; failing?: string[]; agents?: string[]; env?: Record<string, string>; gate?: { reached: () => void; opened: Promise<void> } } = {}) => {
+const world = (engine: Engine, on: On, init: { files?: Record<string, string>; links?: Record<string, string>; git?: Record<string, GitState>; fifos?: string[]; stdinLinks?: string[]; failWrites?: boolean; throwsRun?: boolean; cwdFails?: boolean; auto?: boolean; ownClock?: true; unanswered?: string[]; gitUnanswered?: string[]; failing?: string[]; agents?: string[]; env?: Record<string, string>; gate?: { reached: () => void; opened: Promise<void> } } = {}) => {
   let gateReads = 0
   const gitAsked: string[] = []
+  // `unanswered` (#3478): paths the disk never answers about, as a hung mount does, each look at one
+  // held until the test ends, whether it asks if something is there, what it is or what a folder
+  // holds; `gitUnanswered`: files git never answers about. `unansweredAt(n)` comes once n such
+  // looks have been made, and `unansweredAsked` at the first.
+  let unansweredLooks = 0
+  const waiting: { n: number; go: () => void }[] = []
+  const unansweredAt = (n: number) => new Promise<void>(go => (unansweredLooks >= n ? go() : waiting.push({ n, go })))
+  const unansweredAsked = unansweredAt(1)
+  const isUnanswered = (path: string) => (init.unanswered ?? []).includes(path)
+  const unanswered = <T,>(): Promise<T> => {
+    unansweredLooks++
+    for (const x of waiting) if (unansweredLooks >= x.n) x.go()
+    return never<T>()
+  }
   const files: Record<string, string> = { ...(init.files ?? {}) }
   const ran: { tool: string; input: Record<string, unknown> }[] = []
   const asked: Asked[] = []
@@ -240,6 +257,7 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string>; l
       const path = `${String(e.argv[2])}/${String(e.argv[e.argv.length - 1])}`
       const state = (init.git ?? {})[path]
       gitAsked.push(`${String(e.argv[4])} ${path}`)
+      if ((init.gitUnanswered ?? []).includes(path)) return { value: await unanswered() } as never
       const out = (exitCode: number, stdout: string, stderr = '') => ({ value: { exitCode, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false } }) as never
       if (state === undefined) return out(128, '', 'fatal: not a git repository (or any of the parent directories): .git')
       if (state === 'breaks') return out(128, '', 'fatal: index file corrupt')
@@ -290,25 +308,21 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string>; l
     if (files[at] === undefined) throw new Error(`ENOENT: ${path}`)
     return { kind: 'file', ...said, size: 1 }
   }
-  // `unanswered` (#3478): paths the disk never answers about, as a hung mount does, held until the
-  // test ends; `unansweredAsked` comes once the first of them is asked. `failing`: paths a look at
-  // fails for.
-  let askedUnanswered = () => {}
-  const unansweredAsked = new Promise<void>(r => (askedUnanswered = r))
-  on('fs.exists', ($, e) => {
+  // `failing` (#3478): paths a look at fails for.
+  on('fs.exists', async ($, e) => {
     if ((init.failing ?? []).includes(e.path)) throw new Error(`EIO: i/o error, stat '${e.path}'`)
-    if (!(init.unanswered ?? []).includes(e.path)) return { value: existsAt(e.path) } as never
-    askedUnanswered()
-    return never(() => ({ value: false })) as never
+    if (!isUnanswered(e.path)) return { value: existsAt(e.path) } as never
+    return { value: await unanswered<boolean>() } as never
   })
   // A folder's own entries (#3402): each file or folder directly in it, once.
-  on('fs.list', ($, e) => {
+  on('fs.list', async ($, e) => {
+    if (isUnanswered(e.path.replace(/\/$/, ''))) return { value: await unanswered() } as never
     const at = follow(e.path.replace(/\/$/, ''))
     const names = [...new Set(under(at).map(f => f.slice(at.length + 1).split('/')[0] as string))]
     // 'dir' is the engine's own word for a folder ($.fs.stat and $.fs.list: 'file' | 'dir' | 'other').
     return { value: names.map(name => ({ name, kind: files[`${at}/${name}`] !== undefined ? 'file' : 'dir' })) } as never
   })
-  on('fs.stat', ($, e) => ({ value: statAt(e.path, e.resolve) }) as never)
+  on('fs.stat', async ($, e) => ({ value: isUnanswered(e.path) ? await unanswered() : statAt(e.path, e.resolve) }) as never)
   on('fs.read', async ($, e) => {
     if (isOther(e.path)) {
       opened.push(e.path)
@@ -378,7 +392,7 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string>; l
     notes.push(content.map(c => c.text ?? '').join(''))
     return appended
   })
-  return { files, ran, asked, dialog, toasts, prompts, clock, at, printenv, ctl, notes, logs, opened, readAttempted, gitAsked, unansweredAsked }
+  return { files, ran, asked, dialog, toasts, prompts, clock, at, printenv, ctl, notes, logs, opened, readAttempted, gitAsked, unansweredAsked, unansweredAt, unansweredLooks: () => unansweredLooks }
 }
 type W = ReturnType<typeof world>
 
@@ -4303,6 +4317,217 @@ test('a look at where a move lands that never answers, or fails, leaves the ques
   expect(why).not.toContain('moved back')
   expect(await howAsked($, `mv ${BRACE_NAMES} ~/Desktop/other/`, BRACE_NAMES)).toBe(AS_A_DELETION)
   expect(w.ran).toEqual([])
+})
+
+// The fifth fix round (lessons review of 4800a64ad3). The question main asks after a move's looks
+// ran out of time was read with looks of its own that had no bound, so a note named outright and
+// moved to a mount that never answers held the hook until Claude Code cut it, and a hook cut there
+// lets the command run with no question. On main the same command waits on the same looks. Every
+// look one hook makes for a Bash call now shares LOOKS_MS, and past it the call is asked about from
+// its words alone, as a deletion nothing can be said to bring back.
+const HUNG_NOTE = `${REMOVAL_MEM_SHOWN}/note.md`
+// A folder on a mount that never answers, and the place a note moved into it would have.
+const HUNG_ARCHIVE = [`${HOME}/Desktop/archive`, `${HOME}/Desktop/archive/note.md`]
+const NO_ANSWER_SAID = 'Whether git holds it could not be read (the disk did not answer in time), so take it that it cannot be got back.'
+const fromWordsAlone = (why: string, file: string) =>
+  why.startsWith(`${NOT_DELETED}: this deletes lasting memory (${file}), so Dan decides first.`) && why.includes(`"Delete ${file}: <why>?", with the options Keep as is and Delete.`) && !why.includes('moves lasting memory') && !why.includes('moved back')
+    ? 'asked as a deletion, from its words'
+    : why.slice(0, 200)
+// A hook's whole time for its looks, spent once `looks` of them wait unanswered: the share a move's
+// own looks have, then, once main's reading has looked in its turn (`then` looks in all), the rest.
+const outwait = async (w: W, looks: number, then = looks + 1) => {
+  await w.unansweredAt(looks)
+  await w.clock.advance(MOVE_LOOK_MS)
+  await w.unansweredAt(then)
+  await w.clock.advance(LOOKS_MS - MOVE_LOOK_MS)
+}
+
+test('a note moved to a folder the disk never answers about is asked about from its words alone, and Delete runs the identical call once (#3478)', withKit, async ($, on) => {
+  const w = world($, on, { files: ARCHIVED, unanswered: HUNG_ARCHIVE })
+  const command = `mv ${HUNG_NOTE} ~/Desktop/archive/`
+  const sent = call($, { tool: 'Bash', command })
+  // The first look is the move's own, at the folder; the second the one main's reading makes, at
+  // the place the note would have in it.
+  await w.unansweredAt(1)
+  await w.clock.advance(MOVE_LOOK_MS)
+  await w.unansweredAt(2)
+  await w.clock.advance(LOOKS_MS - MOVE_LOOK_MS - 1)
+  let settled = false
+  void sent.then(() => (settled = true))
+  await Promise.resolve()
+  expect(settled).toBe(false)
+  await w.clock.advance(1)
+  const why = refusalOf(await sent)
+  expect(fromWordsAlone(why, HUNG_NOTE)).toBe('asked as a deletion, from its words')
+  expect(w.ran).toEqual([])
+  // Dan is asked what the words say, with what could not be read said so, while the disk still hangs.
+  const asking = askRemoval($, w, why, 'Delete', `Delete ${HUNG_NOTE}: it was written up elsewhere?`)
+  await outwait(w, 3)
+  const answered = await asking
+  expect(answered.deny).toBeUndefined()
+  expect(w.asked[0]?.questions[0]?.question).toBe(`Delete ${HUNG_NOTE}: it was written up elsewhere? ${NO_ANSWER_SAID}`)
+  expect(w.asked[0]?.questions[0]?.options.map(o => o.label)).toEqual(['Keep as is', 'Delete'])
+  // His Delete covers the identical call, read the same way while the disk still does not answer.
+  const again = call($, { tool: 'Bash', command })
+  await outwait(w, 5)
+  expect((await again).deny).toBeUndefined()
+  expect(w.ran.map(r => r.input.command)).toEqual([command])
+  // And once: the call sent a third time is asked about again.
+  const third = call($, { tool: 'Bash', command })
+  await outwait(w, 7)
+  expect(fromWordsAlone(refusalOf(await third), HUNG_NOTE)).toBe('asked as a deletion, from its words')
+  expect(w.ran.length).toBe(1)
+})
+
+test('a look that never answers after others have answered is held to the same time: the place a note would have inside the folder (#3478)', withKit, async ($, on) => {
+  // The folder answers and the place the note would have inside it does not: the third look at
+  // where the move lands, in the move's own reading and then in main's.
+  const inside = world($, on, { files: ARCHIVED, unanswered: [`${HOME}/Desktop/archive/note.md`] })
+  const moved = call($, { tool: 'Bash', command: `mv ${HUNG_NOTE} ~/Desktop/archive/` })
+  await outwait(inside, 1)
+  expect(fromWordsAlone(refusalOf(await moved), HUNG_NOTE)).toBe('asked as a deletion, from its words')
+  expect(inside.ran).toEqual([])
+})
+
+test("a deletion whose question to git is never answered is asked about from its words alone, in main's own reading (#3478)", withKit, async ($, on) => {
+  // No move at all, and so none of this pull request's looks: the note is there, and git, asked
+  // whether it holds the note, never answers.
+  const w = world($, on, { files: ARCHIVED, gitUnanswered: [`${REMOVAL_MEMDIR}/note.md`] })
+  const removed = call($, { tool: 'Bash', command: `rm ${HUNG_NOTE}` })
+  await w.unansweredAt(1)
+  expect(w.gitAsked).toEqual([`ls-files ${REMOVAL_MEMDIR}/note.md`])
+  await w.clock.advance(LOOKS_MS - 1)
+  let settled = false
+  void removed.then(() => (settled = true))
+  await Promise.resolve()
+  expect(settled).toBe(false)
+  await w.clock.advance(1)
+  const why = refusalOf(await removed)
+  expect(fromWordsAlone(why, HUNG_NOTE)).toBe('asked as a deletion, from its words')
+  // The question says why nothing is known of git: the time ran out, in those words.
+  const asking = askRemoval($, w, why, 'Keep as is', `Delete ${HUNG_NOTE}: it was written up elsewhere?`)
+  await w.unansweredAt(2)
+  await w.clock.advance(LOOKS_MS)
+  expect((await asking).deny).toBeUndefined()
+  expect(w.asked[0]?.questions[0]?.question).toBe(`Delete ${HUNG_NOTE}: it was written up elsewhere? ${NO_ANSWER_SAID}`)
+  expect(w.ran).toEqual([])
+})
+
+// Finding 3 of the same review: whether a marked move stands was asked of the disk for every mv,
+// before anyone knew lasting memory was in it, so a move of any file to a slow place waited.
+test('a move of a file that is no lasting memory makes no look at where it lands (#3478)', withKit, async ($, on) => {
+  const w = world($, on, { files: ARCHIVED, unanswered: [`${HOME}/Desktop/archive`] })
+  expect((await call($, { tool: 'Bash', command: 'mv notes.md ~/Desktop/archive/' })).deny).toBeUndefined()
+  expect(w.ran.map(r => r.input.command)).toEqual(['mv notes.md ~/Desktop/archive/'])
+  expect(w.unansweredLooks()).toBe(0)
+})
+
+test('a file emptied, a pattern moved and a folder taken whole are each said from the words alone when the disk never answers (#3478)', withKit, async ($, on) => {
+  const w = world($, on, { files: ARCHIVED, unanswered: [`${REMOVAL_MEMDIR}/note.md`, REMOVAL_MEMDIR, `${HOME}/.claude/projects`] })
+  // Emptied in place: said as emptied, with no word of what git holds.
+  const emptied = call($, { tool: 'Bash', command: `truncate -s 0 ${HUNG_NOTE}` })
+  await w.unansweredAt(1)
+  await w.clock.advance(LOOKS_MS)
+  const why = refusalOf(await emptied)
+  expect(why.startsWith(`Not emptied yet: this empties lasting memory (${HUNG_NOTE}), so Dan decides first.`)).toBe(true)
+  // A pattern in the memory folder, moved: a deletion, as main words it, and no place it goes.
+  const pattern = call($, { tool: 'Bash', command: `mv ${STAR_NAMES} /Volumes/backup/` })
+  await w.unansweredAt(2)
+  await w.clock.advance(LOOKS_MS)
+  expect(fromWordsAlone(refusalOf(await pattern), STAR_NAMES)).toBe('asked as a deletion, from its words')
+  // A folder above the memory folders, taken whole: what the words say it holds, never passed for
+  // want of a list of what is in it.
+  const whole = call($, { tool: 'Bash', command: 'rm -rf ~/.claude/projects' })
+  await w.unansweredAt(3)
+  await w.clock.advance(LOOKS_MS)
+  expect(refusalOf(await whole).startsWith(`${NOT_DELETED}: this deletes lasting memory (~/.claude/projects, which holds `)).toBe(true)
+  expect(w.ran).toEqual([])
+})
+
+test('a save whose folder the disk never answers about is asked about by the words alone, and one whose patch cannot be read is refused, never run (#3478)', withKit, async ($, on) => {
+  const w = world($, on, { files: KEPT, unanswered: ['/tmp/hung/.git', '/Volumes/backup/fix.patch'] })
+  // A rules file in a temporary folder counts only inside a checkout, which the disk is asked: with
+  // no answer it is taken as one, the side that asks.
+  const saved = call($, { tool: 'Bash', command: "echo '- use pnpm' >> /tmp/hung/CLAUDE.md" })
+  await w.unansweredAt(1)
+  await w.clock.advance(LOOKS_MS - 1)
+  let settled = false
+  void saved.then(() => (settled = true))
+  await Promise.resolve()
+  expect(settled).toBe(false)
+  await w.clock.advance(1)
+  const why = refusalOf(await saved)
+  expect(why).toContain(ASKS)
+  expect(why).toContain('/tmp/hung/CLAUDE.md')
+  // A patch that cannot be read may name any file, so no question can name what it writes: refused.
+  const patched = call($, { tool: 'Bash', command: 'git apply /Volumes/backup/fix.patch' })
+  await w.unansweredAt(2)
+  await w.clock.advance(LOOKS_MS)
+  const held = refusalOf(await patched)
+  expect(held).toBe('Not saved: Ask before saving could not check whether this writes lasting memory (the disk did not answer in time). Tell Dan what you meant to save instead.')
+  expect(w.ran).toEqual([])
+  expect(w.asked).toEqual([])
+})
+
+test("a subagent's move to a place the disk never answers about is refused from its words, and Dan's permanent words never skip the question (#3478)", withKit, async ($, on) => {
+  const w = world($, on, { files: ARCHIVED, agents: ['agent-a1'], unanswered: [...HUNG_ARCHIVE, '/tmp/hung/.git'] })
+  const byAgent = call($, { tool: 'Bash', command: `mv ${HUNG_NOTE} ~/Desktop/archive/`, agentId: 'agent-a1' })
+  await outwait(w, 1)
+  const why = refusalOf(await byAgent)
+  expect(why).toContain(`Not deleted: this deletes lasting memory (${HUNG_NOTE}), which only the main session may do, after asking Dan; a subagent never asks him.`)
+  expect(why).not.toContain('AskUserQuestion')
+  // His words made a rule permanent, and the look that would say whether this saves one never
+  // answers: nothing is taken as approved, and the call is asked about beneath, in its own time.
+  await dan($, 'From now on, always use pnpm.')
+  const saved = call($, { tool: 'Bash', command: "echo '- use pnpm' >> /tmp/hung/CLAUDE.md" })
+  await w.unansweredAt(3)
+  await w.clock.advance(LOOKS_MS)
+  await w.unansweredAt(4)
+  await w.clock.advance(LOOKS_MS)
+  expect(refusalOf(await saved)).toContain(ASKS)
+  expect(w.ran).toEqual([])
+})
+
+test('the index line a For good covers is asked about when the index cannot be read in time, never passed (#3478)', withKit, async ($, on) => {
+  const unanswered: string[] = []
+  const w = world($, on, { auto: true, files: { [INDEX]: INDEX_TEXT }, unanswered })
+  await saveMemoryFile($, w, 'rule-hung.md')
+  const ran = w.ran.length
+  // The index stops answering after the save: the cover stands, and its one look has no answer.
+  unanswered.push(INDEX)
+  const line = call($, { tool: 'Bash', command: `echo '${indexLine('rule-hung.md')}' >> ${INDEX_SHOWN}` })
+  await w.unansweredAt(1)
+  await w.clock.advance(LOOKS_MS)
+  expect(refusalOf(await line)).toContain(ASKS)
+  expect(w.ran.length).toBe(ran)
+})
+
+test('on a disk that answers, the same commands are asked about exactly as before, with no time spent (#3478)', withKit, async ($, on) => {
+  const w = world($, on, { files: ARCHIVED })
+  const moved = refusalOf(await call($, { tool: 'Bash', command: `mv ${HUNG_NOTE} ~/Desktop/archive/` }))
+  expect(moved.startsWith(`${NOT_MOVED}: this moves lasting memory away (${HUNG_NOTE}, to ~/Desktop/archive/note.md), so Dan decides first.`)).toBe(true)
+  const removed = refusalOf(await call($, { tool: 'Bash', command: `rm ${HUNG_NOTE}` }))
+  expect(removed.startsWith(`${NOT_DELETED}: this deletes lasting memory (${HUNG_NOTE}), so Dan decides first.`)).toBe(true)
+  const asking = await askRemoval($, w, removed, 'Keep as is', `Delete ${HUNG_NOTE}: it was written up elsewhere?`)
+  expect(asking.deny).toBeUndefined()
+  expect(w.asked[0]?.questions[0]?.question).toBe(`Delete ${HUNG_NOTE}: it was written up elsewhere? Git does not hold it, so once deleted it cannot be got back from git.`)
+  // A command that touches no lasting memory runs, and one in a checkout under a temporary folder is asked about.
+  expect((await call($, { tool: 'Bash', command: 'ls ~/Desktop/archive' })).deny).toBeUndefined()
+  expect(refusalOf(await call($, { tool: 'Bash', command: "echo '- use pnpm' >> /tmp/repo/CLAUDE.md" }))).toContain(ASKS)
+  expect((await call($, { tool: 'Bash', command: "echo '- use pnpm' >> /tmp/scratch/CLAUDE.md" })).deny).toBeUndefined()
+  expect(w.ran.map(r => r.input.command)).toEqual(['ls ~/Desktop/archive', "echo '- use pnpm' >> /tmp/scratch/CLAUDE.md"])
+})
+
+test('with a clock that cannot be set, a Bash call is judged as before, with no time on its looks (#3478)', withKit, async ($, on) => {
+  on('clock.now', () => ({ value: 0 }) as never)
+  on('clock.after', () => {
+    throw new Error('the mod reloaded')
+  })
+  const w = world($, on, { files: ARCHIVED, ownClock: true })
+  const removed = refusalOf(await call($, { tool: 'Bash', command: `rm ${HUNG_NOTE}` }))
+  expect(removed.startsWith(`${NOT_DELETED}: this deletes lasting memory (${HUNG_NOTE}), so Dan decides first.`)).toBe(true)
+  expect((await call($, { tool: 'Bash', command: 'ls ~/Desktop/archive' })).deny).toBeUndefined()
+  expect(w.ran.map(r => r.input.command)).toEqual(['ls ~/Desktop/archive'])
 })
 
 test('notes moved in a command whose other half cannot be read for sure are asked about as main asked, as a deletion (#3478)', withKit, async ($, on) => {

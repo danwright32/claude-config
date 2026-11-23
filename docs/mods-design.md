@@ -3660,6 +3660,34 @@ lasting memory file, or moved one away, ran with no question. Measured in the mo
   `=`, which zsh makes the path of a program. This is deliberately coarse: `cd <folder> && mv
   <notes> archive/; ls archive` gets main's wording, since the `;` could as well stand before the
   mv. The list of commands is unchanged.
+- **A disk that does not answer is asked about from the words, never waited on (#3478, the lessons
+  review of its fourth round).** `MOVE_LOOK_MS` bounded only the looks a marked move's wording
+  rests on. The reading that followed a look out of time made looks of its own with no bound, and
+  so did everything main already asked for a Bash call: whether the file that goes is there and
+  is a folder, what a folder taken whole holds, what git holds (two processes of 5 seconds each),
+  a patch or script file the command reads, whether a rules file under a temporary folder is in a
+  checkout, a shell profile, and the index a For good covers one line of. A note moved to a mount
+  that never answers held the hook until Claude Code cut it, and a hook cut there lets the command
+  run with no question, on main as here. No look is made in the hook's own turn (the mod reaches
+  the disk only through `$.fs`, `$.process.run` and mod-kit's nouns), so all of them can be raced:
+  each of the four hooks that read a Bash call (`saveCall` for a subagent and for Dan's permanent
+  words, `saveCheck`, and the question as Dan is asked it) gives every look it makes one time,
+  `LOOKS_MS` (4 seconds), through `judged` in `register.ts`. Past it the call is read from its
+  words alone (`fromWords`), which is the same judgement with every answer taken on the side that
+  asks: a rules file under a temporary folder counts, a variable is set, and every file the words
+  would remove is there. What goes is then asked about as a deletion that nothing can be said to
+  bring back (`removalsUnseen`), a move included, since whether the file arrives could not be
+  looked at; a save is asked about by the files the words name. A command that reads a patch or a
+  script file, which may name any file, and one whose words name no lasting memory, is refused
+  outright with no question: the look that ran out of time was made for something. Dan's
+  permanent words cover nothing on such a reading. The words only reading has one second of its
+  own (`WORDS_MS`) and never throws, so nothing is passed for want of it. A look that fails,
+  rather than never answering, still fails the hook, which judges once more and then refuses, as
+  on main: a question there would let Dan approve what main refuses outright. A clock that cannot
+  be set leaves the looks with no time, as before, since refusing instead would refuse every Bash
+  call of the session. Both times are chosen, not measured. The
+  same change reads what the words would remove before asking whether a marked move stands, so a
+  move of a file that is no lasting memory no longer waits on a look at where it lands.
 - **A brace pattern is multiplied out only up to 256 names (#3478, the second review).** To say
   which files a pattern moved into a folder would replace there, its brace lists are multiplied
   out and each name tried against every name the two folders share. With no limit, six lists of

@@ -1654,9 +1654,27 @@ export const REMOVAL_HEADER = 'Memory file'
  * How long, in all, the looks at the disk that a move's wording rests on may take for one call
  * (#3478, the third fix round). Chosen, not measured: a look answers in well under a millisecond on
  * a local disk, a hook has 10 seconds, and what follows a look that ran out of time (the question
- * main asks, read again from the start) needs most of them.
+ * main asks, read again from the start) needs most of them. That reading has the rest of LOOKS_MS,
+ * which this is inside.
  */
 export const MOVE_LOOK_MS = 2000
+
+/**
+ * How long, in all, the looks one hook makes for a Bash call may take (#3478, the fifth fix round):
+ * every look at the disk, at git and at the environment that judging the call needs, the move's own
+ * (MOVE_LOOK_MS, inside this) and the reading that follows them alike. Past it the call is asked
+ * about from its words alone (removalsUnseen, and the files the words name), never passed. Chosen,
+ * not measured: on a disk that answers the whole reading is a few looks and a few short processes,
+ * a hook has 10 seconds, and the reading from the words that follows has WORDS_MS of its own, so
+ * the two together stay at half the hook's time.
+ */
+export const LOOKS_MS = 4000
+
+/** How long the reading from the words alone may take, once the looks ran out of time. It asks the disk nothing. */
+export const WORDS_MS = 1000
+
+/** Why a call was read from its words alone, as Dan and Claude read it. */
+export const NO_ANSWER = { message: 'the disk did not answer in time' }
 
 /**
  * The commands that may stand beside a move of lasting memory without changing how it is worded
@@ -2014,7 +2032,33 @@ export const removalCandidates = async (w: Writes, home: string, inCheckout: InC
 }
 
 type Removal = AskBeforeSavingRemoval
-const allMoves = (removes: readonly Removal[]): boolean => removes.length > 0 && removes.every(r => r.how === 'move')
+
+/**
+ * The removals a command's words would make, said with nothing asked of the disk (#3478, the fifth
+ * fix round): what is asked about when the looks ran out of time (LOOKS_MS). Every candidate
+ * stands, since none can be shown to be absent. A move is said as a deletion, with no place it
+ * goes: whether the file arrives there could not be looked at, so "can be moved back" is never
+ * said of it. An emptying stays one. Each says that what git holds could not be read, and why, so
+ * the question tells Dan to take it that the file cannot be got back. A folder taken whole is said
+ * by the lasting memory its path says it may hold, never by a list read off the disk, and whether
+ * a path is itself a folder is left unsaid.
+ */
+export const removalsUnseen = (candidates: readonly RemovalCandidate[], home: string): Removal[] =>
+  candidates.map(c => {
+    const holds = c.holds ? [...c.holds.paths.map(p => display(p, home)), ...(c.holds.projects !== undefined ? [`any memory folder under ${display(c.holds.projects, home)}`] : [])] : []
+    return {
+      file: c.file,
+      how: c.how === 'empty' ? ('empty' as const) : ('delete' as const),
+      ...(c.pattern ? { pattern: true as const } : {}),
+      ...(c.names ? { names: c.names } : {}),
+      ...(holds.length ? { holds } : {}),
+      ...(c.guessed ? { guessed: true as const } : {}),
+      back: 'unknown' as const,
+      why: NO_ANSWER.message,
+    }
+  })
+
+const allMoves =(removes: readonly Removal[]): boolean => removes.length > 0 && removes.every(r => r.how === 'move')
 const allEmptied = (removes: readonly Removal[]): boolean => removes.length > 0 && removes.every(r => r.how === 'empty')
 // `does` and `may` are what the command does to lasting memory, as a fact and as a guess; `takes` what
 // it does to a file its words do not name; `kept` and `press` the two answers' descriptions.

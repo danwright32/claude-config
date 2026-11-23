@@ -2546,3 +2546,39 @@ test('a pattern moved into a folder replaces a name there that differs only by l
   expect(replacedBy('{a,b}.md', ['Notes.md', 'a.md'], ['notes.md'])).toEqual([])
   expect(replacedBy('*.md', ['notes.md'], ['notes.md'])).toEqual(['notes.md'])
 })
+
+// ---- #3478, the fifth fix round: what is asked when the disk did not answer in time ----
+import { LOOKS_MS, MOVE_LOOK_MS, NO_ANSWER, WORDS_MS, removalsUnseen } from '../hooks/rules.ts'
+
+test('removals read from the words alone keep every file, say a move as a deletion and claim nothing of the disk (#3478)', async () => {
+  const unseen = async (command: string) => {
+    const w = commandWrites(command, SLATE, HOME)
+    // As the mod reads main's question: no move marked, every answer on the side that asks.
+    const unmarked = { ...w, changes: (w.changes ?? []).map(({ to: _to, ...c }) => c) }
+    return removalsUnseen(await removalCandidates(unmarked, HOME, async () => true, command, async () => true), HOME)
+  }
+  const gone = { back: 'unknown', why: 'the disk did not answer in time' }
+  expect(await unseen(`mv ${MEM}/note.md ~/Desktop/archive/`)).toEqual([{ file: `${MEM}/note.md`, how: 'delete', ...gone }])
+  expect(await unseen(`mv ${MEM}/note.md ${MEM}/kept.md`)).toEqual([{ file: `${MEM}/note.md`, how: 'delete', ...gone }])
+  expect(await unseen(`mv ${MEM}/{a,b}.md ~/Desktop/archive/`)).toEqual([{ file: `${MEM}/{a,b}.md`, how: 'delete', pattern: true, ...gone }])
+  expect(await unseen(`rm ${MEM}/note.md`)).toEqual([{ file: `${MEM}/note.md`, how: 'delete', ...gone }])
+  expect(await unseen(`truncate -s 0 ${MEM}/note.md`)).toEqual([{ file: `${MEM}/note.md`, how: 'empty', ...gone }])
+  // A folder taken whole: what its path says it may hold, with no list read off the disk.
+  expect(await unseen('rm -rf ~/.claude')).toEqual([{ file: '~/.claude', how: 'delete', holds: ['~/.claude/CLAUDE.md', '~/.claude/LESSONS.md', 'any memory folder under ~/.claude/projects'], ...gone }])
+  expect(await unseen('rm -rf ~/.claude/projects/p')).toEqual([{ file: '~/.claude/projects/p', how: 'delete', holds: ['~/.claude/projects/p/memory'], ...gone }])
+  // A rules file under a temporary folder counts, since no disk said it is outside a checkout.
+  expect(await unseen('rm /tmp/scratch/CLAUDE.md')).toEqual([{ file: '/tmp/scratch/CLAUDE.md', how: 'delete', ...gone }])
+  // A command that takes no lasting memory away gives none.
+  expect(await unseen('rm notes.md')).toEqual([])
+  expect(await unseen('mv notes.md ~/Desktop/archive/')).toEqual([])
+  // No sentence of the question says a file can be moved back, and each says why git was not read.
+  const said = removalSaid(await unseen(`mv ${MEM}/note.md ~/Desktop/archive/`))
+  expect(said).toBe('Whether git holds it could not be read (the disk did not answer in time), so take it that it cannot be got back.')
+  expect(removalOptions(await unseen(`mv ${MEM}/note.md ~/Desktop/archive/`)).map(o => o.label)).toEqual(['Keep as is', 'Delete'])
+})
+
+test("the time a hook gives its looks holds the move's own and, with the reading from the words, is half the hook's 10 seconds (#3478)", () => {
+  expect(MOVE_LOOK_MS).toBeLessThan(LOOKS_MS)
+  expect(LOOKS_MS + WORDS_MS).toBeLessThanOrEqual(5000)
+  expect(NO_ANSWER.message).toBe('the disk did not answer in time')
+})
