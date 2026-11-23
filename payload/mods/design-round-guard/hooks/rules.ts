@@ -2371,7 +2371,11 @@ const OWN_MARK = 'zz3416'
 const OWN_OUTER = `${OWN_MARK}outer`
 const OWN_FEED = `${OWN_MARK}feed`
 const OWN_PROBE = `${OWN_MARK}probe`
-const OWN_PROBED = new RegExp(`^${OWN_PROBE}(\\d+)$`)
+// The command a probe writes just before its brace, which says what group that brace closes, and
+// one whole probe as it stands inside a word of a text that holds it as text (#3461).
+const OWN_BEFORE = `${OWN_MARK}before`
+const OWN_BEFORED = new RegExp(`^${OWN_BEFORE}(\\d+)$`)
+const OWN_WRITTEN = new RegExp(`\\n${OWN_BEFORE}\\d+\\n\\}\\n${OWN_PROBE}\\d+\\n${OWN_FEED}\\d+ \\| \\{\\n`, 'g')
 const OWN_NONE = `\${${OWN_MARK}none}`
 const OWN_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
 const OWN_DEPTH = 3
@@ -2582,6 +2586,9 @@ const wholeGroup = async (io: OwnCallIo, inner: string): Promise<readonly RunCom
  *   subshell), before every call; one the script unsets, or a script holding an alias; a name the
  *   script and a file it reads in both define, or two such files, in a function's body as much as
  *   at the top (a function that would define the name again once it is called);
+ * - any name in a text whose reading for what stands at the top does not give back the commands
+ *   the text gives read plain (#3461, `probe`, where the places a probe is written are listed): a
+ *   probe written there changed how the text is read, so nothing in it is taken for the top;
  * - text that may run after the definition and that this reading cannot follow, wherever it is
  *   typed, since a function typed above the definition can be called below it: an eval anywhere in
  *   the script; a trap whose text the shell fills in (trapUnseen, #3460), anywhere in the script or
@@ -2692,25 +2699,74 @@ export const withoutOwnCalls = async (given: OwnCallIo, text: string, commands: 
   // an inner pipe; in a substitution it is fed by nothing; in a quote or a heredoc it is no command.
   // `probe` is that reading for any places in a text: for each place that stands in no group, where
   // among the commands it gives the first command typed there is, and the pipe that feeds it.
-  const probe = async (t: string, places: readonly number[], assignments = false): Promise<{ cmds: readonly RunCommand[]; starts: Map<number, number> }> => {
+  //
+  // Where a probe is written, and why it changes nothing else there (#3461). The patterns that find
+  // the places read the text alone, so a place is any of these, and the probe is inert in each:
+  // - the start of a command, in a group of any kind or in none (a branch, a loop, a function, a
+  //   case's clause, a subshell, a substitution): the brace written in closes the group the place
+  //   stands in, and the one opened after it is closed by that group's own end, so the text's
+  //   commands are the same and each later one stands as deep as it did;
+  // - inside a quote, a heredoc's body or a case's pattern: what is written in is text there, no
+  //   command, and the commands are the ones the text gives without it;
+  // - after a `#` that may start a comment: not probed at all (maybeComment).
+  // Anywhere else a probe is not inert, and no pattern tells those places from these: it ends a
+  // heredoc that ends on `}`, starts a heredoc's body early on the line that opens it, and makes a
+  // command of the words after a separator a backslash escapes or a line a backslash carries on.
+  // So the reading is checked rather than the place, and gives up, with no place at the top,
+  // unless both hold:
+  // - its commands are the ones `plain` holds, the same text read with nothing written in, with
+  //   each probe's own four commands whole between them and nothing else added, lost or changed
+  //   (a word holding a probe as text, in a quote, is compared without it);
+  // - a place is at the top only where the command written just before its brace is fed by the
+  //   pipe this reading opened after the last place at the top, so the group that brace closes is
+  //   that one. A closing word the reader takes for the end of a group the text never opened
+  //   (`x=${y%;}`, a `fi` or `}` among the words of an array or of `[[ ]]`, loose text after an
+  //   `exit`) closes this reading's own group instead, and below it a place inside a function
+  //   would stand exactly where the top did.
+  const probe = async (t: string, places: readonly number[], plain: readonly RunCommand[], assignments = false): Promise<{ cmds: readonly RunCommand[]; starts: Map<number, number> }> => {
     let probed = `${OWN_OUTER} | {\n${OWN_FEED}0 | {\n`
     let from = 0
     places.forEach((at, i) => {
-      probed += `${t.slice(from, at)}\n}\n${OWN_PROBE}${i}\n${OWN_FEED}${i + 1} | {\n`
+      probed += `${t.slice(from, at)}\n${OWN_BEFORE}${i}\n}\n${OWN_PROBE}${i}\n${OWN_FEED}${i + 1} | {\n`
       from = at
     })
     const cmds = await io.pipeline(probed + t.slice(from), assignments)
+    const gaveUp = { cmds, starts: new Map<number, number>() }
+    if (!sameWords(cmds[0]?.words, [OWN_OUTER]) || !sameWords(cmds[1]?.words, [`${OWN_FEED}0`]) || !sameWords(cmds[1]?.pipedFrom, [OWN_OUTER])) return gaveUp
     const seen = new Map<number, number>()
     const starts = new Map<number, number>()
-    cmds.forEach((c, k) => {
-      const m = c.words.length === 1 ? OWN_PROBED.exec(c.words[0] as string) : null
-      const i = m ? Number(m[1]) : -1
-      if (!m || i >= places.length) return
+    // The feed whose group stands open at the top, and how many of the text's own commands are passed.
+    let open = 0
+    let own = 0
+    for (let k = 2; k < cmds.length; ) {
+      const c = cmds[k] as RunCommand
+      const m = c.words.length === 1 ? OWN_BEFORED.exec(c.words[0] as string) : null
+      if (!m) {
+        // One of the text's own commands: the next one `plain` holds, word for word.
+        if (
+          !sameWords(
+            plain[own]?.words,
+            c.words.map(w => (w.includes(OWN_MARK) ? w.replace(OWN_WRITTEN, '') : w)),
+          )
+        )
+          return gaveUp
+        own++
+        k++
+        continue
+      }
+      // A probe: the command before the brace, the brace, the probe, then the pipe opened after it,
+      // and what is typed at the place as the first command that pipe feeds.
+      const i = Number(m[1])
+      const [brace, mark, feed] = [cmds[k + 1], cmds[k + 2], cmds[k + 3]]
+      if (i >= places.length || !sameWords(brace?.words, ['}']) || !sameWords(mark?.words, [`${OWN_PROBE}${i}`]) || !sameWords(feed?.words, [`${OWN_FEED}${i + 1}`])) return gaveUp
       seen.set(i, (seen.get(i) ?? 0) + 1)
-      // The probe, then the pipe opened after it, then what is typed at the place as the first command it feeds.
-      const feed = cmds[k + 1]
-      if (sameWords(c.pipedFrom, [OWN_OUTER]) && sameWords(feed?.words, [`${OWN_FEED}${i + 1}`]) && sameWords(feed?.pipedFrom, [OWN_OUTER])) starts.set(i, k + 2)
-    })
+      if (sameWords(c.pipedFrom, [`${OWN_FEED}${open}`]) && sameWords(mark?.pipedFrom, [OWN_OUTER]) && sameWords(feed?.pipedFrom, [OWN_OUTER])) {
+        starts.set(i, k + 4)
+        open = i + 1
+      }
+      k += 4
+    }
+    if (own !== plain.length) return gaveUp
     for (const [i, n] of seen) if (n !== 1) starts.delete(i)
     return { cmds, starts }
   }
@@ -2733,6 +2789,7 @@ export const withoutOwnCalls = async (given: OwnCallIo, text: string, commands: 
       const { cmds, starts } = await probe(
         u.text,
         all.map(p => p.at),
+        u.commands,
       )
       const defs: number[] = []
       const reads: { i: number; at: number }[] = []
@@ -2792,7 +2849,7 @@ export const withoutOwnCalls = async (given: OwnCallIo, text: string, commands: 
         if (!a || a.words.length !== 1 || a.env?.length || !liveWord(a, 0) || a.pipedFrom !== undefined || withoutOwnFolder(a.words[0] as string) !== `${v}=/own-folder`) return undefined
         const places = [...text.matchAll(new RegExp(`(?<![^\\n;&|(){}])[ \\t]*${v}=`, 'g'))].map(m => m.index as number).filter(at => !maybeComment(text, at))
         if (!places.length || places.length > OWN_TRIES) return undefined
-        const { cmds: read, starts } = await probe(text, places, true)
+        const { cmds: read, starts } = await probe(text, places, cmds, true)
         let tops = 0
         for (const [i, k] of starts) {
           // The commands of the idiom's own substitution come first, fed by no pipe, as the
