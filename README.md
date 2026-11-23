@@ -5025,6 +5025,37 @@ As of 2026-11-22 the count of past commands it newly refuses had been made on ne
 the area check held the command that runs it on the personal MacBook.
 Suite: `test-slack-drafts-python-file-runs.sh`.
 
+Two refusals of a file left unread now read the file where what it holds is certain
+(claude-config#3395). Counted for #3218 over one Mac's records of 2026-11-08 to 11-21, a sourced
+path the gate could not work out refused 59 commands and a script written earlier in the same
+command 49, and none of the 108 posted. Put through the gate as it stood on 2026-11-22 most of
+those shapes already passed; the ones below did not.
+A sourced path built from the script's own `$0` through a variable
+(`D="$(cd "$(dirname "$0")" && pwd)"` then `. "$D/lib/x.sh"`), or from a word the command line
+hands the script (`. "$1"` in `bash probe.sh lib/x.sh`), is worked out and the file read
+(`lib/script-params.py`). The `$0` is taken for a text bash or dash reads; `$1` from a script run
+by its path or by a shell with no option but `-e`, `-u`, `-x`, `-v` and `-n`, and only before
+anything in the script that could change it (shift, set with an operand, eval, a sourced file, a
+function, a loop). They are taken up only where a source command of the script names a path the
+gate cannot work out without them, which is where it refused the script unread: a script with
+no such command is read exactly as before, and from that command on the script's variables are
+known with them to every command after it. A first form gave them to every script, and a script
+that only hands its `$1` on to a program was then refused where it had passed (three cases of
+the gate's own suite, 2026-11-22).
+A script made earlier in the command by a sed filter sent to a file
+(`sed 's/a/b/' x.sh > y.sh; bash y.sh`) is read as sed leaves it, by an emulation of the part of
+sed POSIX fixes (`p`, `d`, `s` with `g` and `p`; line, `$` and regex addresses, ranges, `!`;
+`-n`, `-E`, `-e`) on input known exactly, held to this Mac's sed on every program its suite
+gives it; and one made by `git show HEX:PATH > y.sh` (or `cat-file -p`, `cat-file blob`) is read
+as the commit holds it, for a hex object name only, since an earlier command can move a ref
+(`lib/exact-output.py`).
+Still refused unread, each by choice: awk, a group's output sent to a file, a file Python
+writes, `sed -i` with a program that is not written out, a symbolic ref (`HEAD`, `origin/main`),
+a function's `$1`, a sourced file's `$1`, a script handed its words by xargs or `find -exec`, and
+a variable set from `mktemp` or the environment. A module the gate cannot find, and a script
+handed a file that names the send call, are refused as before (#3218).
+Suite: `test-slack-drafts-reads-more.sh`.
+
 Running `python3 payload/skills/nudge/test_nudge.py` directly is refused, because its fake server
 names `chat.postMessage`, and since claude-config#2844 so is `python3 -m unittest` over the same
 file, which before then passed only because the gate did not read what unittest runs. The suite
@@ -8671,6 +8702,29 @@ asks. Since #3343 a shell command that writes that file is refused too, with Edi
 its place, and the For good question about a write that takes an entry out, moves one to another
 section or changes a section heading is refused until it names each of them (both told in full
 below).
+Since #3402 a shell command that deletes a lasting memory file or moves one away is asked about
+too, in a question of its own: every removal mod-kit's reader reports (rm, unlink, rmdir, a mv's
+source, find -delete, shred -u, a packer's source) whose words name lasting memory or match it, the
+memory folder taken whole, and a folder that holds the memory under home (`~/.claude/projects/<a
+project>`, `~/.claude`). A file emptied in place (`truncate`, `shred`) is asked about the same way,
+said as emptied. Where the reader cannot limit what goes under a folder (`rm -r`, what a
+`find -exec` hands to rm), the lasting memory the command names under it is asked about as a
+guess. A file that is not there is not asked about. Claude's question names what
+goes and says why, and the mod adds what it measured as Dan is asked: where a move puts the file,
+or whether git can bring a deleted or emptied one back (held unchanged, held with changes since,
+not held, or not readable). The answers are Keep as is, first, and Delete, Move or Empty; a save's
+For good approves no removal and a removal's answer approves no save, a removal whose consequence
+changes after he answers (what git holds of the file, where a move lands, what a folder holds) is
+asked about again, his "from now on" words cover no removal, and a subagent's removal is refused.
+A command that removes lasting memory and also writes other lasting memory is refused
+whole, each part to be sent by itself, and one that also writes the lessons file by shell is
+refused as it was before (#3343). What the command does is read again when its question arrives,
+and one that has become either by then, or takes files away in more than one way, is refused
+before Dan reads the question. Not covered: what git itself removes or puts back (Dan's
+decision on #1136 stands), `git clean`, `git stash` and `git reset --hard`, what a `find -exec`
+hands to rm by a pattern, what `xargs` hands to rm, and any other folder taken whole that holds a
+lasting memory file the command does not name (docs/mods-design.md, "A removal is asked about in a
+question of its own").
 Since #3295 the picker is refused, before he is asked and saying which character and
 where, when its rule or its question holds a character he cannot see: a control other than the
 newline (a tab, a carriage return, the escape of a terminal sequence), a format character (zero
