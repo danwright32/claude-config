@@ -336,8 +336,10 @@ says "and as a check it could not make" "$COULD_NOT"
 # A heredoc on ONE line: no shell gives it a body, so every command after the << on the line runs
 # (bash 3.2 and zsh, measured 2026-11-23 with `cat <<E; echo RAN; E`). The reader took the "; " for
 # a flattened line break and the command for the body, so a file that posts, run between the <<
-# and a later word that is the marker, was read by nobody.
-for one in "cat <<E; bash posts.sh; E" "cat <<'E'; bash posts.sh; E" "cat <<E; bash posts.sh; E; echo end"; do
+# and a later word that is the marker, was read by nobody. The file's command is held in HIDDEN,
+# so that no word of this suite is itself such a heredoc with a command the gate reads on its
+# line: written out here, the gate refused running this suite by name (the case at its foot).
+for one in "cat <<E; $HIDDEN; E" "cat <<'E'; $HIDDEN; E" "cat <<E; $HIDDEN; E; echo end"; do
   run_bash "$one" "$T/open"
   refused "a file that posts, run on the line of a heredoc and before its marker, is refused: $one"
   says "and as a check it could not make: $one" "$COULD_NOT"
@@ -570,6 +572,46 @@ if [ -n "$ROOT" ]; then
 else
   echo "SUITE-PART-UNMEASURED whether running the payload write gate's suite by name is allowed, because this copy is not in a claude-config checkout"
 fi
+
+echo "slack drafts only: the gate's own suites, and its reader's, can be run by name (review of claude-config#3495)"
+
+# The gate reads every word of a script it is asked to run, and a word holding a command that
+# starts with a program it reads by its name is read as a command line of its own. A case's text
+# written out as such a word in a suite is read too, and where it is itself a shape the reader is
+# not sure of, the gate refuses running that whole suite as a check it could not make. The one
+# line heredoc cases above, written out in full, did that on 2026-11-23: no session could have run
+# this suite by name once that gate was installed, and the #3277 case of
+# test-slack-drafts-unknown-program.sh, which walks these suites, lost its driver to it. Such a
+# case's command is held in a variable instead (QUIET, HIDDEN), which leaves the word a text the
+# gate reads no command in, and the gate is handed the same text as before when the suite runs.
+# Every suite of the gate and of its reader beside this one is asked about, found afresh on each
+# run. This suite must be allowed outright. Of the others only that one kind of refusal fails
+# here: where the gate refuses one as a post it says it found, that is another rule's to answer
+# for, and whether that suite holds a text the gate cannot check was not measured, because the
+# gate stopped reading at the refusal.
+ME="$DIR/$(basename "${BASH_SOURCE[0]}")"
+asked=0
+asked_me=""
+for suite in "$DIR"/test-slack-drafts-*.sh "$DIR"/test-shell-words-*.sh; do
+  [ -f "$suite" ] || continue
+  asked=$((asked + 1))
+  run_bash "bash $suite" "$DIR"
+  if [ "$suite" = "$ME" ]; then
+    asked_me=1
+    allowed "running this suite by name is allowed"
+    continue
+  fi
+  by_name="running a suite of the gate or of its reader by name is not refused as a check the gate could not make: ${suite##*/}"
+  case "$RC:$ERR" in
+    0:*) check "$by_name" ok ;;
+    2:*"$COULD_NOT"*) check "$by_name" "the gate said: ${ERR:0:400}" ;;
+    2:*) other="${ERR//$DIR\//}"
+      echo "SUITE-PART-UNMEASURED whether ${suite##*/} holds a text the gate cannot check, because the gate refused running it by name for another reason first: $(printf '%s' "${other:0:200}" | tr '\n' ' ')" ;;
+    *) check "$by_name" "exit $RC, stdout: ${OUT:0:200}, stderr: ${ERR:0:300}" ;;
+  esac
+done
+if [ -n "$asked_me" ] && [ "$asked" -ge 2 ]; then check "this suite and the suites beside it were found to ask about ($asked)" ok
+else check "this suite and the suites beside it were found to ask about" "$asked found beside $DIR${asked_me:+, this suite among them}"; fi
 
 echo
 
