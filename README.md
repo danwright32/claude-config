@@ -5054,6 +5054,17 @@ writes, `sed -i` with a program that is not written out, a symbolic ref (`HEAD`,
 a function's `$1`, a sourced file's `$1`, a script handed its words by xargs or `find -exec`, and
 a variable set from `mktemp` or the environment. A module the gate cannot find, and a script
 handed a file that names the send call, are refused as before (#3218).
+Since claude-config#3410 that last refusal says only what was measured. A script not seen to be
+unable to act, handed a file that only names an endpoint (`python3 sweep.py recorded.txt`), is
+still refused, and the refusal now leads with "the gate could not check whether this command
+posts to Slack", as one for a module the gate cannot find does. It then says the file only names
+the endpoint, and keeps the draft rule for a command that does send a message. Before, it led
+with "this command posts to Slack", a post nobody had found, 55 times in two weeks of the
+personal MacBook's records, and a count by the could not check wording missed every one. The
+cause is recorded apart from what the walk could not follow (`name_only`, never `unfollow`): a
+reason recorded there is dropped inside a script on disk, which would pass a script that is
+refused today. A file that posts, handed to a script that runs what it is handed, is still
+refused as a post found.
 Suite: `test-slack-drafts-reads-more.sh`.
 
 Running `python3 payload/skills/nudge/test_nudge.py` directly is refused, because its fake server
