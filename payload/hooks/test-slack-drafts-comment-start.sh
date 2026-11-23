@@ -191,8 +191,11 @@ done
 # line wherever every shell keeps the # inside the word, so it can say that nothing there posts: a
 # quiet command passes, as the same command with no # does (claude-config#3481).
 printf '%s\n' 'echo quiet' > "$T/quiet.sh"
-for sure in "echo see$BS # 3; bash quiet.sh" "echo a$BS${NL}# c; bash quiet.sh" "echo \$(echo b)# c; bash quiet.sh" \
-  "echo a$BS|# c; bash quiet.sh"; do
+# Held in a variable, so that no word of this file is itself a command after such a #: the gate
+# reads the words of a script it is asked to run, and this suite is run by name.
+QUIET="bash quiet.sh"
+for sure in "echo see$BS # 3; $QUIET" "echo a$BS${NL}# c; $QUIET" "echo \$(echo b)# c; $QUIET" \
+  "echo a$BS|# c; $QUIET"; do
   run_seen "$sure${NL}echo done"
   read_through "a quiet script after a # every shell keeps inside a word is read by the reader: $(shown "$sure")"
   allowed "and passes, its line read as the shell reads it: $(shown "$sure")"
@@ -201,7 +204,7 @@ for sure in "echo see$BS # 3; bash quiet.sh" "echo a$BS${NL}# c; bash quiet.sh" 
 done
 # Where the reader is not sure (the shells differ, or the text is inside backquotes) it refuses the
 # #, quiet or not: it has not read the rest of that line, so it cannot say that nothing there posts.
-for doubt in "x=(a b)# c; bash quiet.sh" "echo \`echo a # c\`; bash quiet.sh"; do
+for doubt in "x=(a b)# c; $QUIET" "echo \`echo a # c\`; $QUIET"; do
   run_seen "$doubt${NL}echo done"
   refused "a # the gate cannot tell from a comment is refused wherever the reader is started: $(shown "$doubt")"
   says "and as a check it could not make: $(shown "$doubt")" "REFUSED: the gate could not check whether this command posts to Slack"
