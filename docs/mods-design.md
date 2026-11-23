@@ -2711,6 +2711,45 @@ that kind at its top (in the push test gate's suite, read for this, the suite de
 a path typed with the own folder idiom inside the word, which the reader does not place). Reading
 such a file would close it for a suite of that shape and is a wider reading, Dan's to decide.
 
+**A trap whose text the shell fills in (#3460), fixed 2026-11-23.** `trap "$LATER" DEBUG`, then
+`run() { true; }` and `run app/page.tsx`, was read as the harmless body of `run`, while the shell
+runs whatever `$LATER` holds before each command. Measured that day in bash and in zsh, with LATER
+holding a second definition of `run`: the call ran that definition on DEBUG and on ERR, with the
+trap set above the helper's definition or below it, and through the guard's own hook all eight
+cases (DEBUG, ERR, RETURN and EXIT, above and below) ran unasked. Such a trap is text that may run
+after the definition and that the reading cannot follow, so it now holds every helper call of the
+script (`trapUnseen` in rules.ts): a trap with a value in the word where its text stands, the first
+after `trap` and a typed `--`, past `builtin` and `command`. That takes in a variable, a
+substitution, typed text joined to a value and every word from one value (`trap "$@"`). It holds
+on any signal and wherever it is typed, in the script or in a file the guard read: in a function,
+a branch, a subshell, after the call, on a signal the script never sends. That is the safer of the
+two readings the issue asked about. The other, holding only where the trap can fire before the
+call, would let EXIT and an unsent signal be, and was not built: which signals fire and when is
+not something the reading follows (ERR fires on any failing command, RETURN when a file read in
+ends, a trap typed in a function is set when the function is called, and in zsh an EXIT trap set in
+a function fires when that function ends: measured, the call after it ran the trap's definition,
+where bash ran the typed body). A typed trap is read as it was, as the commands its
+text runs: held where they define the name again, unset it, set an alias, run an eval or read in
+a file the guard cannot read, and let be otherwise (`trap 'rm -rf "$T"' EXIT`). `trap - SIG`,
+`trap '' SIG` and a typed trap whose signal is a value run no unread text and are let be. 59 forms
+were read by the base's modules and the change's: 37 cleared by the base are held, 22 read the
+same, none is held less. Not followed still, and measured the same day: a command whose name is a
+variable (`$CMD`, holding an eval of a second definition) defines the name again in bash and does
+not hold the call. Suites here often run a program through a variable, so holding on every such
+command is a wider reading with a cost nobody has measured, Dan's to decide. `PROMPT_COMMAND` set
+from a variable does not run in a script (measured in bash and zsh) and is let be. Also left open,
+and older than this fix: the reading takes each script's text by itself, so text run later that is
+set outside the suite's own text is not seen. A trap of this kind, or a function holding an eval,
+typed in the command (`trap "$LATER" DEBUG; source suite.sh`) or in a script that reads the suite
+in, ran unasked through the guard's hook before this fix and after it (which of those a real shell
+carries into the suite was not measured). The count again, on the
+personal MacBook, 2026-11-23 from 12:31 AM ET (45 days of records, 60,199 shell calls, 54,170
+distinct, 5,478 running a shell script the guard reads, the base's modules and the change's asked
+of each call): 45 calls, 40 distinct, hand a held file to a program the reader does not know, the
+base's helper reading clears 26 of them, 23 distinct, and the change clears the same 26. None is
+judged again, none is held less, no reader threw, and nothing else read differently. The count
+stops unless a control suite with such a trap is judged again and three others are not.
+
 The recount (2026-11-22, the personal MacBook's records for the 45 days to that day: 56,698 shell
 calls, 51,250 distinct, 5,339 running a shell script the guard reads, as the scripts are on disk that
 day; every rule asked of the guard's own modules, the files read in handed over as register.ts hands
