@@ -4649,9 +4649,9 @@ for byte what origin/main holds, which changes no look that has not already ship
   written this way from origin/main; none of the three would pass as built, two because a `cp` of
   the file ran before the restore in the same call (the builder's own shape) and one because its
   line, a test run piped through three commands after the restore, is not a plain one. The two
-  with a copy stay held by Dan's answer above, and their refusal now says how. Reading the third
-  needs mod-kit's reader saying which commands a line groups, so a parenthesis in a quoted pattern
-  need not count.
+  with a copy stay held by Dan's answer above, and their refusal now says how. The third is covered
+  by #3401, with no change to mod-kit's reader: a parenthesis in a quoted pattern no longer counts
+  as grouping (What #3401 changed, below).
 
 ### What #3401 changed: a quoted parenthesis after an exact restore, 2026-11-22
 
