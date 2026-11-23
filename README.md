@@ -3530,7 +3530,9 @@ How each gate knows the base's own changes are judged:
 - The test gate: nothing judges tests at a merge, so an open pull request is not enough. The range
   moves to the base's head only when this Mac's push gate ledger shows the test gate judged the push
   that delivered that head (an outcome of pass, nosource or docsonly for that tree) and holds no
-  override or could not judge line for any commit of the base's own range. The ledger is per Mac, so
+  override or could not judge line for any commit of the base's own range. That range must hold at
+  least one commit and at most 500 (`PC_BASE_JUDGED_MAX` in `hooks/lib/push-changes.sh`); a longer
+  one is never looked up, and the branch is judged from the default branch. The ledger is per Mac, so
   a base pushed from the other Mac leaves the branch on top of it judged from the default branch.
   Judged from its base, a stacked branch answers for its own tests: the base's test files are not
   counted as tests it pushed earlier.
@@ -3540,10 +3542,32 @@ base owns included; nothing is waived for where a finding points. A refusal by e
 test gate's ledger line (`range started at the head of <base> (pull request #N)`), says when the
 base was used. When
 another branch lies under the pushed one and was not taken as its base, a refusal by either gate
-says why (no pull request, a pull request that is not open, a read of GitHub that failed, no record
-that the test gate judged the base's push), since that branch's changes are then in what was judged.
+says why, since that branch's changes are then in what was judged. The reasons either gate gives:
+
+- more than one branch lies under it, and none of them holds the others
+- a tool the check needs is missing: gh, jq or perl, or a library file of the hooks
+- GitHub did not answer within the time limit
+- a read of GitHub that failed
+- no pull request
+- GitHub answered about another branch
+- a pull request that is not open
+- a pull request from a fork
+- GitHub has the pull request at another commit than this checkout's copy of the branch
+- GitHub's answer left out one of the fields asked for, or held more or fewer than were asked for
+
+And the test gate's own, for a base that is an open pull request:
+
+- no record on this Mac that the test gate judged the push that put the base at its head, or no push
+  gate ledger yet
+- the push gate ledger could not be read
+- git could not read the base's head or its own commits
+- the base holds no commits of its own over the default branch
+- the base holds more than 500 commits of its own, which are never looked up
+- a push of the base's own commits was let through unjudged, by an override or a gate that failed
+  open
+
 `test-stacked-base.sh` holds both refusals as cases, and one case for every push that must stay
-judged from the default branch.
+judged from the default branch, and fails when the code can give a reason these lists do not name.
 
 Not covered: a branch not rebased onto its base's current head is judged from the default branch
 (the base's head is then not in its history), and so is a review of the same head that a commit
