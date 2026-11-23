@@ -2630,7 +2630,9 @@ changing file (`says "..." "... tools/post.swift"`, `fires ... app/page.tsx`). N
 such as prettier. The reader marks a function the text itself defines as a program it does not
 know, on a command line as in a script, and leaving such a function out would be an exemption, so
 it was not built with the rule: Dan chose it the next day, below. The same count over the work
-MacBook's records is still owed.
+MacBook's records (215,592 shell calls, posted on pull request 3427 on 2026-11-22, with the helper
+reading below) found 4 calls newly judged: 1 cleared by reading the helper's body and 3 still
+judged, and no call the base judged is no longer judged.
 
 **A function the script itself defines (#3416), built 2026-11-22 for the design round guard.** Dan
 chose it by picker that day: "Build the exemption (Recommended)". A call of a function the script's
