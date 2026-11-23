@@ -2088,11 +2088,16 @@ export const settleOnDisk = async (w: ModKitWrites, fs: LinkFs): Promise<ModKitW
           return undefined
         }
         // Not there when followed. A link is still there when looked at itself, and leads nowhere.
+        // A look that fails is nothing there, unless the failure names another system error (no
+        // permission, a loop of links, a failed read): then the disk has not said what is there.
+        // Told by the code where the failure carries one; a failure in words this does not know
+        // counts as nothing there, or a folder not made yet would never be a place to compare.
         try {
           await fs.stat(path)
           return undefined
-        } catch {
-          return null
+        } catch (err) {
+          const said = `${String((err as { code?: unknown } | null)?.code ?? '')} ${String(err)}`
+          return /\b(EACCES|EPERM|ELOOP|EIO|EBADF|EBUSY|ENAMETOOLONG|ETIMEDOUT)\b/.test(said) ? undefined : null
         }
       })()
       asked.set(path, answer)

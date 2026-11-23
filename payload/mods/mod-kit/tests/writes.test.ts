@@ -1318,7 +1318,7 @@ describe('writes: changes that put no content in, carried over from the collisio
   // and folder that exists, by where it really is. As the engine answers (read from Claude Code
   // 2.1.x's own stat): exists follows links, stat of a link that leads nowhere answers with no
   // realPath, and stat of nothing throws. Every question is counted.
-  const disk = (links: Record<string, string>, there: string[], fail: { exists?: string } = {}) => {
+  const disk = (links: Record<string, string>, there: string[], fail: { exists?: string; denied?: string } = {}) => {
     const asked: string[] = []
     const follow = (path: string): string => {
       let p = path
@@ -1338,6 +1338,7 @@ describe('writes: changes that put no content in, carried over from the collisio
       },
       stat: async (path, options) => {
         asked.push(`stat ${path}`)
+        if (fail.denied !== undefined && (path === fail.denied || path.startsWith(`${fail.denied}/`))) throw new Error(`EACCES: permission denied, lstat '${path}'`)
         const real = follow(path)
         if (!is(real)) {
           if (links[path] !== undefined) return { isLink: true }
@@ -1387,6 +1388,11 @@ describe('writes: changes that put no content in, carried over from the collisio
     expect(await keptOn(disk(dangling, THERE), 'mkdir ~/Desktop/later && mv ~/notes/*.md ~/Desktop/link/ && rm -rf ~/Desktop/later')).toEqual([])
     // A disk that fails the question, which is never thrown on to the caller.
     expect(await keptOn(disk({}, THERE, { exists: `${HOME}/notes` }), 'mv ~/notes/*.md ~/archive/ && rm -rf ~/elsewhere')).toEqual([])
+    // A look that fails for a reason other than nothing being there (found by the review of this
+    // round's push): the folder may be a link the disk would not show, so it is no place to compare.
+    expect(await keptOn(disk({}, THERE, { denied: `${DESK}/locked` }), 'mv ~/notes/*.md ~/Desktop/locked/in/ && rm -rf ~/Desktop/archive')).toEqual([])
+    // A look that fails because nothing is there is the ordinary case, and the name stands as written.
+    expect(await keptOn(disk({}, THERE), 'mv ~/notes/*.md ~/Desktop/new/in/ && rm -rf ~/Desktop/archive')).toEqual(['~/notes/*.md'])
     // With nothing else changing a file there is nothing to compare, and the move stands as read.
     expect(await keptOn(disk(dangling, THERE), 'mv ~/notes/*.md ~/Desktop/link/')).toEqual(['~/notes/*.md'])
   })
