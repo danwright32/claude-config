@@ -2595,8 +2595,8 @@ const wholeGroup = async (io: OwnCallIo, inner: string): Promise<readonly RunCom
  *   the definition", says what closing that was measured to cost);
  * - a helper from a file read in only sometimes (in a branch, a loop, a function, a subshell, after
  *   `&&`, in a pipe), read in twice, read in with words of its own, or from a file that may leave
- *   (`return`, `exit`) before the definition, or that holds an eval, an alias, an unset or a file
- *   it reads in itself;
+ *   (`return`, `exit`) before the definition, or that holds an eval, an alias, an unset, a file it
+ *   reads in itself or a trap whose text the shell fills in;
  * - a file read in by a path the guard cannot work out, from outside the script's folder, or one
  *   the command or a script it runs writes (readInFile);
  * - a call behind a program that runs its words (`timeout 5 run f`, `env`, `command`, `xargs`,
@@ -2894,8 +2894,9 @@ export const withoutOwnCalls = async (given: OwnCallIo, text: string, commands: 
     const again = ownDefinitions(cmds, name)
     return again.braces.length > 0 || again.other > 0
   }
-  // What a file read in may not hold: text run as commands, a file it reads in itself (a file read
-  // in is followed one file deep, and no deeper), or a change to which function a name runs.
+  // What a file read in may not hold: text run as commands, now or later by a trap whose text the
+  // shell fills in (#3460), a file it reads in itself (a file read in is followed one file deep,
+  // and no deeper), or a change to which function a name runs.
   const rereads = (cmds: readonly RunCommand[]): boolean => cmds.some(r => ['eval', 'source', '.', 'alias', 'unset'].includes(ranBy(r)) || trapUnseen(r))
   const found = new Map<string, Promise<Own | undefined>>()
   const find = async (name: string): Promise<Own | undefined> => {
