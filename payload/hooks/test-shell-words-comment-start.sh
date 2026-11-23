@@ -160,7 +160,9 @@ REAL = {"a space before it", "an escaped backslash, then a space", "a ; before i
 # A # the shell reads inside a word (`same`: the shell runs the marker after the ;). The marker is
 # listed: where the reader always read the # as text (PLAIN), and where it took it for a comment
 # and now, for a caller that asks which lines it is unsure of, reads on as every shell does
-# (claude-config#3481; bash, sh, dash, zsh and ksh measured 2026-11-23).
+# (claude-config#3481; bash, sh, dash, zsh and ksh measured 2026-11-23). A caller that does not
+# ask is given what it always was, row by row: the marker where the # was always text (PLAIN), and
+# the line left out everywhere else, since the other gates read through the reader unasked.
 WORD = {"mid word (a#b)", "an escaped space before it", "three backslashes, then a space",
         "an escaped tab before it", "an escaped ; before it", "an escaped & before it",
         "an escaped | before it", "an escaped ( before it", "an escaped ) before it",
@@ -235,6 +237,13 @@ say([t.strip() for _, t in unasked] == ["echo a\\", "echo done"],
 say([t.strip() for _, t in told] == ["echo a\\ # c", "touch ran", "echo done"] and asked == [],
     "#3481 a caller that asks is given the rest of a line whose # every shell keeps inside a word",
     "commands gave %r and named %r" % (told, asked))
+# A caller that asks for comments alone keeps the old reading too, and such a # is in neither list:
+# only asking which lines the reader is unsure of changes what is read.
+alone = []
+kept = sw.commands("echo a\\ # c; touch ran\necho done\n", comments=alone)
+say([t.strip() for _, t in kept] == ["echo a\\", "echo done"] and alone == [],
+    "#3481 a caller that asks for comments alone is given the reading it always was",
+    "commands gave %r and named %r" % (kept, alone))
 # A reading that went on past such a # and cannot be read to its end is not one to vouch for: the #
 # is named, so a caller that judges an unreadable text by other means still knows of it.
 asked = []
@@ -306,6 +315,13 @@ for name, kind, text in rows:
     if name in WORD and kind == "same":
         say(got == "listed", "#3464 a # the shell reads inside a word hides nothing: a # %s" % name,
             "the reader said %s, wanted listed: [%s]" % (got, shown))
+        try:
+            unasked = "listed" if any(t.strip() == "touch ran" for _, t in sw.commands(text)) else "not listed"
+        except sw.Unreadable:
+            unasked = "unreadable"
+        want = "listed" if name in PLAIN else "not listed"
+        say(unasked == want, "#3481 a caller that does not ask is given the reading it always was: a # %s" % name,
+            "unasked, the reader said %s, wanted %s: [%s]" % (unasked, want, shown))
     if kind == "open":
         want = "listed" if ran else "not listed"
         say(got == want, "#3481 past a # every shell keeps inside a word the reader reads what the shell does: a # %s" % name,
