@@ -168,10 +168,19 @@ const movesReader: { name: string; register: Register } = {
 const movedOn = async ($: unknown, on: On, links: Record<string, string>, command: string) => {
   mock.env(on, { SHELL: '/bin/zsh', HOME: '/h' })
   const folders = ['/', '/h', '/h/Desktop', '/h/Desktop/archive', '/h/notes']
+  // Every look at the disk is recorded, whichever way it asks (lessons review of 4ad8a11055: only
+  // fs.stat was, so a reader gone back to asking whether a path is there would have passed).
   const asked: string[] = []
-  on('fs.exists', ($, e) => ({ value: folders.includes(e.path) || links[e.path] !== undefined }) as never)
+  on('fs.exists', ($, e) => {
+    asked.push(`exists ${e.path}`)
+    return { value: folders.includes(e.path) || links[e.path] !== undefined } as never
+  })
+  on('fs.list', ($, e) => {
+    asked.push(`list ${e.path}`)
+    return { value: [] } as never
+  })
   on('fs.stat', ($, e) => {
-    asked.push(e.path)
+    asked.push(`stat ${e.path}`)
     const leads = links[e.path]
     if (leads === undefined && !folders.includes(e.path)) throw new Error(`ENOENT: ${e.path}`)
     return { value: { kind: 'dir', size: 0, mtimeMs: 0, isLink: leads !== undefined, ...(e.resolve ? { realPath: leads ?? e.path } : {}) } } as never

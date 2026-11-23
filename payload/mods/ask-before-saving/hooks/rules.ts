@@ -1665,10 +1665,11 @@ export const MOVE_LOOK_MS = 2000
  * (MOVE_LOOK_MS, inside this) and the reading that follows them alike. Past it the call is asked
  * about from its words alone (removalsUnseen, and the files the words name), never passed. Chosen,
  * not measured: on a disk that answers the whole reading is a few looks and a few short processes,
- * a hook has 10 seconds, and the reading from the words that follows has WORDS_MS of its own, so
- * the two together stay at half the hook's time.
+ * and a hook has 10 seconds. The reading from the words that follows has WORDS_MS of its own, and
+ * a look that fails has the hook judge the call once more from the start (its catch), so the
+ * longest a hook can take is two of these and WORDS_MS: 7 seconds.
  */
-export const LOOKS_MS = 4000
+export const LOOKS_MS = 3000
 
 /** How long the reading from the words alone may take, once the looks ran out of time. It asks the disk nothing. */
 export const WORDS_MS = 1000
@@ -1863,9 +1864,10 @@ export const patternMayMatch = (pattern: string, name: string): boolean => {
 // round). Multiplied out with no limit, six lists of ten are a million names, each then tried
 // against every name the two folders share: 2.3 seconds for one shared name and ten times that for
 // each further list (measured with bun on 2026-11-23, an idle Mac), where a hook has 10 seconds and
-// one cut at its budget lets the command run unasked. At 256 names, 200 shared names cost about a
-// tenth of a second, so the bound stays far inside the budget on a loaded Mac, and a list of every
-// note in a folder by name still fits.
+// one cut at its budget lets the command run unasked. At 256 names, 200 shared names cost about 10
+// milliseconds (the middle of seven samples with bun on 2026-11-23, at a load average of 10 on 12
+// cores), so the bound stays far inside the budget on a loaded Mac, and a list of every note in a
+// folder by name still fits.
 export const MAX_BRACE_NAMES = 256
 
 /**

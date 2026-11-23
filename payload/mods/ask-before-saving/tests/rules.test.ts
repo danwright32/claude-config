@@ -2577,8 +2577,9 @@ test('removals read from the words alone keep every file, say a move as a deleti
   expect(removalOptions(await unseen(`mv ${MEM}/note.md ~/Desktop/archive/`)).map(o => o.label)).toEqual(['Keep as is', 'Delete'])
 })
 
-test("the time a hook gives its looks holds the move's own and, with the reading from the words, is half the hook's 10 seconds (#3478)", () => {
+test("the time a hook gives its looks holds the move's own, and twice over with the reading from the words stays inside the hook's 10 seconds (#3478)", () => {
   expect(MOVE_LOOK_MS).toBeLessThan(LOOKS_MS)
-  expect(LOOKS_MS + WORDS_MS).toBeLessThanOrEqual(5000)
+  // Twice: a look that fails has the hook's catch judge the call once more from the start.
+  expect(2 * LOOKS_MS + WORDS_MS).toBeLessThanOrEqual(7000)
   expect(NO_ANSWER.message).toBe('the disk did not answer in time')
 })

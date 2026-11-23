@@ -3672,7 +3672,7 @@ lasting memory file, or moved one away, ran with no question. Measured in the mo
   the disk only through `$.fs`, `$.process.run` and mod-kit's nouns), so all of them can be raced:
   each of the four hooks that read a Bash call (`saveCall` for a subagent and for Dan's permanent
   words, `saveCheck`, and the question as Dan is asked it) gives every look it makes one time,
-  `LOOKS_MS` (4 seconds), through `judged` in `register.ts`. Past it the call is read from its
+  `LOOKS_MS` (3 seconds), through `judged` in `register.ts`. Past it the call is read from its
   words alone (`fromWords`), which is the same judgement with every answer taken on the side that
   asks: a rules file under a temporary folder counts, a variable is set, and every file the words
   would remove is there. What goes is then asked about as a deletion that nothing can be said to
@@ -3685,7 +3685,8 @@ lasting memory file, or moved one away, ran with no question. Measured in the mo
   rather than never answering, still fails the hook, which judges once more and then refuses, as
   on main: a question there would let Dan approve what main refuses outright. A clock that cannot
   be set leaves the looks with no time, as before, since refusing instead would refuse every Bash
-  call of the session. Both times are chosen, not measured. The
+  call of the session. Both times are chosen, not measured, so that a hook whose look failed and
+  which judged the call once more still ends inside 7 of its 10 seconds. The
   same change reads what the words would remove before asking whether a marked move stands, so a
   move of a file that is no lasting memory no longer waits on a look at where it lands.
 - **A brace pattern is multiplied out only up to 256 names (#3478, the second review).** To say
@@ -3695,8 +3696,9 @@ lasting memory file, or moved one away, ran with no question. Measured in the mo
   each further list (measured with bun, 2026-11-23), where a hook has 10 seconds and one cut at
   its budget lets the command run unasked. The names are counted in one pass before any is made
   (`braceNames` in `rules.ts`). Past 256 none is made, and a move by such a pattern is asked
-  about as the deletion main asked about. 256 names against 200 shared names cost about a tenth
-  of a second, and a list naming every note in a folder still fits. Main multiplies out no brace,
+  about as the deletion main asked about. 256 names against 200 shared names cost about 10
+  milliseconds (the middle of seven samples with bun on 2026-11-23, at a load average of 10 on 12
+  cores), and a list naming every note in a folder still fits. Main multiplies out no brace,
   and `rm` of a brace pattern never reached this code. A pattern of more than four stars is
   taken to match anything, since a search for one grows with each star.
 - **Asleep**, the removal is noted for the morning report as a finding (the report's kind for
