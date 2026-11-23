@@ -4521,9 +4521,156 @@ whatever the number said.
   a run of short options) hold the command, with how to write it. A commit with no such parent is
   one git cannot answer for, and is held.
 - Known limits. A session's own environment may already carry `GIT_DIR` or `GIT_WORK_TREE` before
-  any command is typed, which no reader sees. The collision guard and scope modes place a git
-  command by `-C` alone and are unchanged here. The shared reader keeps only the last `-C`, while
-  git reads each from the one before it.
+  any command is typed, which no reader sees. Scope modes places a git command by `-C` alone and
+  is unchanged here. The collision guard did too until #3398 (below), which has it ask about every
+  checkout the command acts on. The shared reader kept only the last `-C`, while git reads each
+  from the one before it, and #3398 added the folder a chain of them leads to.
+
+### What #3398 changed: the folder more than one -C leads to, 2026-11-22
+
+git reads each `-C` from the one before it. mod-kit's git reader kept only the last, so every mod
+placed `git -C /a -C b merge y`, which runs in `/a/b`, in `<the folder it runs in>/b`.
+
+- Measured with git 2.51.1 on macOS, in throwaway repositories `m/a`, `m/a/b`, `m/b` and `m/c`, run
+  from `m` and asked `git rev-parse --show-toplevel`. `-C <m>/a -C b` and `-C a -C b` answer
+  `m/a/b`. `-C a -C <m>/c` answers `m/c`: an absolute one starts again from itself. `-C a -C ""`
+  answers `m/a`, `-C "" -C b` answers `m/b` and `-C a -C "" -C b` answers `m/a/b`: an empty one
+  changes nothing. `-C a -C ../c` answers `m/c`. `-C nothere -C <m>/c` and `-C a -C nothere` both
+  exit 128 (`cannot change to 'nothere'`) and run nothing, so a folder that is not there stops git
+  wherever it stands in the chain. git's other global options between two (`-c core.x=y`,
+  `--no-pager`) change nothing. `-Ca` and `-C=a` are no option (exit 129). A relative `--git-dir`
+  or `--work-tree` is read from the folder every `-C` leads to (`-C a --git-dir=b/.git -C b` is
+  refused: there is no `a/b/b/.git`).
+- `$.modkit.git` hands that folder on as `chained`, as written and read as `dir` is, and only where
+  it is not what `dir` says: never for one `-C` or none, nor for a chain whose last `-C` is
+  absolute. A value starting `~/` or `$HOME/` is the home folder, as every path reader here
+  takes it.
+- `dir` is unchanged: the last `-C` as written. A mod that places a git command by `dir` judges
+  exactly the calls it judged before, so nothing held under the old reading passes because the
+  reader moved. A mod moves to `chained` in its own change, and decides there whether it goes on
+  judging `dir` too. The collision guard is the first (below). The design round guard, the write
+  reader's placing of what git itself writes, and scope modes still place a chained command by
+  `dir`.
+- Where the chain cannot be worked out, `chained` is null, the mark `pipeline` gives the folder of
+  a command behind a `cd` it cannot follow, and never a guess. That is a value the shell fills in
+  after another `-C` (`-C /a -C "$B"`: absolute or relative, which only the shell knows), a folder
+  read from such a value (`-C "$A" -C b`: empty, `$A` changes nothing and git runs in `b`), a
+  pattern, a brace list and another user's home. Only a later absolute `-C` makes it known again.
+  One `-C` the shell fills in is still handed on in `dir` as written, as it always was.
+- The answer to #3398's first open question, whether the shared reader should mark a path it can
+  only guess: yes for the one place this reader would otherwise have had to guess, and that mark
+  is the null above. The write reader's guessed path (a working folder named by a value it cannot
+  follow) is not marked here. It is the write reader's to mark, in its own change.
+
+The collision guard judged a checkout wide git command (a branch switch, `reset --hard`, `stash
+pop`, `add -A`, `branch -D`) against the sessions in one folder: the last `-C` read from the
+session's folder, else that folder. It handed mod-kit's git reader no settings and followed no
+`cd`, so `git --git-dir=/other/.git --work-tree=/other checkout main`, the same through `GIT_DIR`
+and `GIT_WORK_TREE`, `cd /other && git -C sub checkout main` and `git -C /other -C sub checkout
+main` each ran unjudged beside a session at work in `/other`.
+
+- It now asks about every checkout the command acts on. The folder it runs in comes from
+  `$.modkit.pipeline` (where a `cd` leaves the shell) and the reader's `chained` or `dir`, put to
+  git as `git -C <folder> -C <as written> rev-parse --show-toplevel`, so git reads a relative
+  `-C` itself. For a command naming its repository or working folder apart, git is asked with the
+  command's own naming where the files land, and which repository it is
+  (`rev-parse --absolute-git-dir`): the checkout around that repository is judged, and so is every
+  other session's checkout that git says is that same repository. With only the repository named,
+  the files land in the folder the command runs in and the branch that moves is the named
+  repository's (measured), so both are judged. The rule is `whereGit` in `collide.ts`.
+- The folder the guard always asked about is still asked first, in the same words. A command
+  judged before is judged as it was, and a plain command, one with one `-C` and one in the folder
+  it runs in put exactly the one question to git they always put. Nothing more is asked while no
+  other session is open.
+- That old question is Dan's to drop. For `git -C /other -C sub checkout main` and for
+  `cd /other && git checkout main` it names the session's own checkout, which git does not touch.
+  Read as git reads them, both would run unjudged with nobody in `/other`. That is the correct
+  reading and a loosening, so both questions are put until he decides (the test is marked his).
+- Where the guard cannot tell the repository, it stops the command while any other session is
+  open, and says to write every folder out in full. That is a `-C`, `--git-dir` or `--work-tree`
+  value the shell fills in, a chain mod-kit marks null, a `cd` that cannot be followed before a
+  relative folder, and `GIT_DIR` or `GIT_WORK_TREE` named anywhere in the call but on the git
+  command itself (git reads an exported one, which no reader follows). Nothing is put to the
+  judge and no session is told, since there is no checkout to name to either. Until now each of
+  these ran unjudged. A folder git names no checkout for has nobody in it to ask, as before.
+- A `-C` folder named with a variable the same call sets is followed, and the command judged by
+  the folder the variable holds (Dan, 2026-11-22, asked to sign the stop above off: "Follow the
+  variable first"). Counted that day over each Mac's recorded commands, the watched commands the
+  guard could not tell were nearly all one form, `W=<folder>; git -C "$W" checkout ...`: 12 of 13
+  on the personal MacBook and 11 of 12 on the work MacBook. Each ran unjudged before #3398 and was
+  stopped by the bullet above. Followed, a folder where another session is at work is held as any
+  command there is, and one where none is runs. The guard asks `$.modkit.pipeline` with
+  `follow: true`, and `followedFolders` in `collide.ts` writes the value mod-kit gives into the
+  word after each `-C` of git's own (one standing before the subcommand; a subcommand's `-C`, as
+  in `git switch -C`, names a branch). The command is then read by `$.modkit.git` and `whereGit`
+  as if the folder had been typed, and git is always asked about it, since the question the guard
+  always put was put with the variable as typed and finds nothing.
+- Following may only ever put the true folder where the guard had "cannot tell". It never guesses,
+  and whether a variable can be followed is decided in mod-kit's reader alone (`fixedWords` in
+  `commands.ts`, built from the tests the loop reading of #3272 is built from). A variable is
+  followed only where all of this holds:
+  - it is set in the run of plain settings the call opens with: statements that are only
+    `NAME=value`, each ended by a `;` or a new line and nothing else, so it is set before anything
+    runs, in the call's own shell;
+  - the value is plain characters as typed (letters, digits, `_`, `.`, `/`, `-`), bare or in one
+    pair of quotes: no space, no `~`, no `$`, no pattern;
+  - it is set once, and its name is one letter, or mixes capitals and small letters;
+  - no other word of the call names it, the call holds no heredoc and no `(( ))`, no sum, no
+    `${...}` beyond `${NAME}`, no `eval`, `source`, `.`, `trap`, `alias`, `builtin`, `emulate`,
+    `let`, `declare`, `typeset`, `local`, function definition or command named by a value, and
+    nothing names `IFS`;
+  - every word the shell fills in or matches against files, with a value the reading does not
+    know, stands in a git command or is the value of a setting standing alone, since any other
+    command may be a builtin handed a name only the running shell knows (`read $x`);
+  - the use is the variable alone, `$W` or `${W}`, bare or in one pair of double quotes.
+- So these are not followed and stay stopped: a variable set twice, after its use, in a subshell,
+  a function, a loop, a branch or a group, as a setting in front of the command (which reaches git
+  and not the word), from a command's output or another variable, or in an earlier call. Kept
+  strict although the value could be worked out, each Dan's to widen: a name that is all capitals
+  or all small letters of two or more characters (`REPO`, `wt`), `W=/a && git ...`,
+  `export W=/a`, a value with a space or a `~`, `"$W/sub"`, a call holding a heredoc, a call where
+  a command that is not git is handed a pattern or a value not known, and a repository or working
+  folder named by a variable (`--git-dir "$G"`). The name rule keeps no list: a shell keeps names
+  for itself that change with no word naming them (`cd` writes `PWD`, `RANDOM` is worked out when
+  read), and each of the 166 names a fresh zsh 5.9 and bash 3.2.57 define on the personal MacBook
+  is all capitals or all small letters of two or more characters, or `_` (measured 2026-11-22),
+  so the form refuses them all and no list can be missing one.
+- `followed` is given only to a reader that asks, the words are never changed, and only the
+  call's own text is read so (never a substitution, a shell's script or a trap's text). Every
+  other mod is handed byte for byte what it was handed: over the personal MacBook's recorded
+  commands, none of the 11,659 calls with git in their text is read another way by `commands`,
+  `pipeline`, `pipelineIn` or `commandWrites` asked as they were (measured 2026-11-22 against the
+  reader before this change). A copy of mod-kit loaded before this takes no such option and
+  follows nothing, so the guard stops the command as above.
+- Recounted on the personal MacBook on 2026-11-22, over the same records and against the same
+  base: of 242 calls holding a watched git command, 204 are asked the base's one question, 25 one
+  more, 12 are followed and judged where they were stopped, and 1 still cannot be told. No
+  command the guard could already tell is told another way, and every question the base put to
+  git is still put first.
+- What the reading cannot see, as the loop reading cannot: a function or alias the shell already
+  had under a name the call uses, a builtin outside the lists above that runs text it builds a
+  name in, and a sum a builtin works out from another variable's value. The one past command of
+  the 13 that is not this form stands behind a `cd` into a folder a command made
+  (`d=$(mktemp -d) && cd "$d" && git checkout ...`) and stays stopped.
+- A question nobody answers stops the command too, while any other session is open (the lessons
+  review of this change, 2026-11-22). Each question above was read as no checkout there when it
+  failed, so the command ran with nothing asked. git exits 128 for every failure (measured,
+  2.51.1), so its words decide. `not a git repository`, `cannot change to '<folder>': No such file
+  or directory` and `this operation must be run in a work tree` are answers: nobody to ask there,
+  as before. Anything else (a folder git may not enter, a repository it will not read, a timeout,
+  the engine failing to run it) stops the command, and so does a throw from mod-kit's walk for
+  the checkout around a named repository, which had been taken for no checkout. The refusal is
+  the sentence above naming the question, with "Try again, or ask Dan." The walk answering null
+  is still no checkout there.
+- Not closed by that. The folder the guard always asked about, the folder of a command that
+  cannot be read and the judge's own reads still take a failed git for nothing there, as they
+  did before #3398. A folder that is not there when the guard asks has nobody to ask, though the
+  command line may make it first (a clone, then a `cd` into it). `-C` into a repository's own
+  `.git` folder has no working folder, so a command that moves a branch from there (`branch -D`
+  works there, measured) is asked nothing. git's words are matched in English.
+- Not covered: the files such a command writes are still placed by the write reader, by `dir`.
+  A session's own environment carrying either variable before any command is typed is seen by
+  no reader.
 
 ### What #3280 changed: a file put back exactly as the default branch holds it, 2026-11-21
 

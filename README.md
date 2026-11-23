@@ -7904,7 +7904,14 @@ what its -exec runs, since each can change the folder or the environment with no
 and the options that do it are not given, and with `assignments: true` each command that only sets
 a value (`T=x;`, which runs nothing and is otherwise left out) as its assignments (a guard relying
 on any of the three first asks about a line it knows the answer for, since a copy of mod-kit
-loaded before #3093 answers with none of them and says nothing), of which files a command
+loaded before #3093 answers with none of them and says nothing), and with `follow: true` (#3398)
+each command's `followed`: for a word that is one variable alone (`$W`, `"$W"`, `${W}`), the value
+the call itself gives it, only where the call's own text makes that certain (set once, in the plain
+settings the call opens with, `W=/path;` or on a line of its own; a name of one letter or one
+mixing capitals and small letters; nothing else in the call able to change it; no heredoc), null
+for every other word, the words themselves never changed and nothing given to a reader that does
+not ask, so every other mod reads exactly what it read (docs/mods-design.md has every condition;
+a copy of mod-kit loaded before it follows nothing), of which files a command
 changes (`$.modkit.writes({ command, cwd, home })`: redirects, `tee`, the destination of `cp`, `mv`,
 `ln`, `install`, `rsync` and `ditto` (into a folder, under each source's name), every file of `sed`,
 `perl`, `ruby` or `gawk` editing in place, `dd of=`, since #3279 every file an editor is opened on
@@ -7977,7 +7984,9 @@ question again, used by the design round guard and ask before saving), of git co
 (`$.modkit.git({ words, env })`: the subcommand, its arguments, the folder `-C` names and, since
 #3337, the repository and the working folder the command names apart from that folder, by
 `--git-dir`, `--work-tree`, `GIT_DIR` or `GIT_WORK_TREE`, each as written, the two variables read
-from the `env` that `pipeline` gives the command), of gh commands
+from the `env` that `pipeline` gives the command, and, since #3398, the folder more than one `-C`
+leads to, each read from the one before it as git reads them, as `chained`, null where it cannot
+be worked out, beside `dir`, which stays the last `-C` as written), of gh commands
 (`$.modkit.gh({ words })`: the subcommand and action past gh's
 global flags, each flag as pflag reads it, the positionals, the repository the command names itself,
 from `-R`, a github.com link or a `gh repo` owner/name, and for `gh api` its method, endpoint,
@@ -8229,7 +8238,17 @@ changes (a checkout of a path, `git restore`, `git rm`, `git mv`); a script's wr
 docs/mods-design.md, but since #1592 a file handed to a script file as its argument, `python3
 tool.py notes.txt`, is judged and noted as an edit of it), or a checkout wide git command (checkout,
 switch, `branch -D`, `reset --hard`, `stash pop`, `add -A` or `.`) in a checkout another open
-session works in, or since #3021 a command there whose effect cannot be read (mod-kit's `unread`:
+session works in (since #3398 every checkout the command acts on as git reads it: where a `cd`
+before it and each `-C` lead, and the repository and working folder it names by `--git-dir`,
+`--work-tree`, `GIT_DIR` or `GIT_WORK_TREE`, beside the folder the guard always asked about; a
+`-C` folder named with a variable the same call sets, `W=/path; git -C "$W" checkout x`, is
+judged by the folder the variable holds, exactly where mod-kit's `followed` gives it, so set once
+at the start of the call under a name of one letter or of mixed capitals and small letters, and
+used alone; one whose repository cannot be told, any other folder the shell fills in or a `cd`
+that cannot be followed, is stopped while another session is open, with how to write it, and so
+is one where git or mod-kit's walk for a checkout did not answer, to try again), or since #3021
+a command there
+whose effect cannot be read (mod-kit's `unread`:
 `eval`, a command a value names, an alias being set, `ssh`), judged once per checkout against the
 folder it runs in, asks Sonnet for Proceed, Worktree or Stop with the other session's latest request
 (read from its transcript). Proceed is a toast; Worktree and Stop are the grey card plus a message
