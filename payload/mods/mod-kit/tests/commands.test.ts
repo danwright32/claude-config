@@ -1,6 +1,6 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './hang-ceiling.ts'
-import { commands, git, pipeline } from '../hooks/commands.ts'
+import { READ_STOPPED, commands, git, pipeline } from '../hooks/commands.ts'
 
 // The one reader of shell commands every guard uses (L613): the secret guard, the keystroke guard
 // and the collision guard each kept their own before this.
@@ -1615,8 +1615,7 @@ describe("$'...' and a script not read to its end (#3491)", () => {
     expect(commands(`echo $'a${BS}${BS}' $'a${BS}"b' $'a${BS}nb'; ${NEXT}`)).toEqual([['echo', `$a${BS}${BS}`, `$a${BS}"b`, `$a${BS}nb`], next])
   })
 
-  test("a quote after $$ or an escaped $ is a plain one, and in double quotes $' is text", () => {
-    expect(commands(`echo $$'a${BS}' b; ${NEXT}`)).toEqual([['echo', `$$a${BS}`, 'b'], next])
+  test("a quote after an escaped $ is a plain one, and in double quotes $' is text", () => {
     expect(commands(`echo ${BS}$'a${BS}' b; ${NEXT}`)).toEqual([['echo', `$a${BS}`, 'b'], next])
     expect(commands(`echo ${BS}${BS}$'a${BS}'b' c; ${NEXT}`)).toEqual([['echo', `${BS}$a${BS}'b`, 'c'], next])
     expect(commands(`echo "$'a" b; ${NEXT}`)).toEqual([['echo', `$'a`, 'b'], next])
@@ -1658,8 +1657,86 @@ describe("$'...' and a script not read to its end (#3491)", () => {
     expect(read(`cat <<EOF; echo "a\nb"\nbody\nEOF\necho "c"; ${NEXT}`)[0]).toEqual(['cat <<EOF', TORN])
   })
 
+  // The fix round on pull request #3493. A Bash call here runs in zsh, and bash and zsh do not read
+  // every quote alike. Measured 2026-11-23 on bash 3.2 and zsh 5.9, with texts that only echo:
+  // after an even run of $ (`$$'`, `$$$$'`, `X$$'`, `\\$$'`) bash reads its own number and a plain
+  // quote where a command stands, and zsh a `$'...'` string, so `p1 $$'a\'b' ; p2 # it's` runs p2 in
+  // zsh alone and `p1 $$'a\' b; p2` runs both in bash and neither in zsh. Inside `(( ))` and
+  // `$(( ))` bash reads a quote and zsh reads none, so `(( 1 'a ))` then a line `p2 # b'` runs p2 in
+  // zsh alone. Inside `"${...}"` bash pairs single quotes and zsh reads them as text, so
+  // `p1 "${u:-'"'}" ; p2 # it's` runs p2 in bash alone. The reader read each as one of the two and
+  // gave the other's commands no sign. It picks neither now: the command read past such a quote, and
+  // every command after it, is unread.
+  const SHELLS = 'read past a quote bash and zsh do not read alike, so what the shell runs from that quote on cannot be read'
+  const readAll = (cmd: string) => pipeline(cmd).map(c => [c.words, c.unread])
+  const marksIn = (cmd: string) => ({ cmd, marks: [...new Set(pipeline(cmd).map(c => c.unread))] })
+
+  test('a quote after $$ that bash and zsh close at different places marks its command unread, and each one after it', () => {
+    // The reviewer's texts: zsh runs the command after the string, read here into the string's word.
+    expect(readAll(`x=$$'a${BS}'b'\n${NEXT} # it's`)).toEqual([[[`x=$$a${BS}b\n${NEXT} # its`], SHELLS]])
+    expect(readAll(`p1 $$'a${BS}'b' ; ${NEXT} # it's`)).toEqual([[['p1', `$$a${BS}b ; ${NEXT} # its`], SHELLS]])
+    for (const pre of ['$$$$', 'X$$', `${BS}${BS}$$`, `${BS}$$$`, '${x}$$']) {
+      const cmd = `p1 ${pre}'a${BS}'b' ; ${NEXT} # it's`
+      expect(marksIn(cmd)).toEqual({ cmd, marks: [SHELLS] })
+    }
+    // bash runs both of these and zsh neither.
+    expect(readAll(`echo $$'a${BS}' b; ${NEXT}`)).toEqual([[['echo', `$$a${BS}`, 'b'], SHELLS], [next, SHELLS]])
+    // It is one of the reasons the reader stopped, so the write reader still lists the command's run.
+    expect(READ_STOPPED.has(SHELLS)).toBe(true)
+  })
+
+  test('what is read after such a quote is unread wherever it stands, and what stands before it is read as ever', () => {
+    // In a substitution (both shells run the command after it): the commands inside and the one holding it.
+    const inSub = `p3 $(p1 $$'a${BS}'b') ; ${NEXT} # it's`
+    expect(marksIn(inSub)).toEqual({ cmd: inSub, marks: [SHELLS] })
+    // The commands of a substitution in a command after it.
+    expect(pipeline(`echo $$'a${BS}' b; echo "$(${NEXT})"`).filter(c => c.words[0] === 'prettier').map(c => c.unread)).toEqual([SHELLS])
+    // A heredoc opened after it: zsh reads `# it's <<EOF` as a comment and runs the line below it, so
+    // the lines taken as its body are read as commands too, never as neither.
+    expect(pipeline(`p1 $$'a${BS}'b' # it's <<EOF\n${NEXT}\nEOF\necho done`).filter(c => c.words[0] === 'prettier').map(c => c.unread)).toEqual([SHELLS])
+    expect(readAll(`git status; p1 $$'a${BS}'b' ; ${NEXT} # it's`)[0]).toEqual([['git', 'status'], undefined])
+  })
+
+  test('a quote inside (( )) that bash reads and zsh does not marks what is read from there on unread', () => {
+    for (const cmd of [`(( 1 'a ))\n${NEXT} # b'`, `(( 1 $'a ))\n${NEXT} # b'`, `(( 1 "a ))\n${NEXT} # b"`]) expect(marksIn(cmd)).toEqual({ cmd, marks: [SHELLS] })
+    // In a `$(( ))`: from the command holding it on, the subshell's own parenthesis before it left alone.
+    const inWord = readAll(`( echo $(( 1 'a )) )\n${NEXT} # b'`)
+    expect(inWord[0]).toEqual([['('], undefined])
+    expect([...new Set(inWord.slice(1).map(r => r[1]))]).toEqual([SHELLS])
+  })
+
+  test('a single quote inside "${...}" that bash pairs and zsh reads as text marks what is read from there on unread', () => {
+    for (const cmd of [`p1 "\${u:-'"'}" ; ${NEXT} # it's`, `p1 "\${u:-"'"}" ; ${NEXT} # it's`, `p1 "\${u//'/x}" ; ${NEXT} # it's`]) expect(marksIn(cmd)).toEqual({ cmd, marks: [SHELLS] })
+    // A backslash right before a quote there: zsh runs both commands, bash neither (measured 2026-11-23).
+    for (const cmd of [`p1 "\${u:-$'a${BS}'b'}" ; ${NEXT} # it's`, `p1 "\${u:-$'a${BS}${BS}'}" ; ${NEXT} # it's`, `p1 "\${u:-'a${BS}'b'}" ; ${NEXT} # it's`]) expect(marksIn(cmd)).toEqual({ cmd, marks: [SHELLS] })
+    // Inside a substitution: bash runs the command after it and zsh nothing (measured 2026-11-23), and
+    // where the substitution ends cannot be read, so the command holding it is unread too.
+    const inSub = `p3 $(p1 "\${u:-'"'}") ; ${NEXT} # it's`
+    expect(marksIn(inSub)).toEqual({ cmd: inSub, marks: [SHELLS] })
+  })
+
+  test('a "${ held in single quotes, as a pattern handed to grep, is text to both shells and marks nothing', () => {
+    // The first build of this round searched the text as written for the "${...}" shape and marked 12
+    // recorded calls of this shape. bash and zsh both read the single quotes first and run each command.
+    for (const cmd of [`grep -n '"\${HOME' f; ${NEXT} # it's`, `grep -c '"\${u:-' a.txt b.txt; ${NEXT}`]) expect(marksIn(cmd)).toEqual({ cmd, marks: [undefined] })
+  })
+
   test('a script read to its end marks nothing unread', () => {
     const whole = [
+      // Quotes bash and zsh read alike (the fix round on #3493): after $$ where both readings close
+      // at one place, after an odd run of $, inside (( )) where the quote moves nothing, inside a
+      // substitution that stands in arithmetic, in a program's text, and paired inside "${...}".
+      `echo $$'ab' $$'a${BS}nb' $$'a${BS}${BS}'; ${NEXT}`,
+      `echo $$$'a${BS}'b' ${BS}$$'c${BS}'d'; ${NEXT}`,
+      `(( 'a' + "b" ))\n${NEXT}`,
+      `if (( $(grep -c ')' f) > 0 )); then ${NEXT}; fi`,
+      `echo $(( $(wc -l < "f") + 1 )); ${NEXT}`,
+      `python3 -c 'print((1, "a"))'; ${NEXT}`,
+      `echo "\${u:-'a b'}" "\${u:-x}'s" "\${u:-\${v:-'a'}}"; ${NEXT}`,
+      // A backslash inside "${...}" that stands before no quote: the value differs between the two
+      // shells, the commands they run do not (measured 2026-11-23). The first is the shape of three
+      // recorded calls the count found marked.
+      `x="\${R%$'${BS}n'*}"; echo "\${u:-$'a${BS}tb'x}" "\${u//$'${BS}t'/ }" "\${u:-'a${BS}b'}"; ${NEXT}`,
       `echo 'a' "b" $'c${BS}'d'; ${NEXT}`,
       `cat <<EOF\nbody 'with a quote\nEOF\n${NEXT}`,
       `git commit -m "$(cat <<'EOF'\nit's a message\nEOF\n)"`,

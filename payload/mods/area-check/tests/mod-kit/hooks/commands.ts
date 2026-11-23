@@ -111,29 +111,36 @@ const DELIMITER_END = new Set([' ', '\t', '\n', ';', '&', '|', '<', '>', '(', ')
 // macOS sh and ksh: `x=$'it\'s'` sets `it's` and the next line runs. Read as a plain single quoted
 // string, where a backslash escapes nothing, it closed at the escaped quote and its last quote
 // opened a string that ran to the end of the script, so every command after it was a word of that
-// string and no guard judged any of them. The $ before the quote is one the shell reads there: not
-// the second of a `$$` (the shell's own number, the quote after it a plain one) and not one a
-// backslash escapes. dash has no such string: to it the $ is a character and the quote a plain one
-// (measured: `echo $'a\' ; echo b ; echo 'c'` prints three lines in dash and is a syntax error to the
-// others). A Bash call runs in bash or zsh (writes.ts, callShell), so this is read as they read it.
-const opensAnsi = (text: string, i: number): boolean => {
+// string and no guard judged any of them. The $ before the quote is one the shell reads there: an
+// odd run of them, counting none a backslash escapes. dash has no such string: to it the $ is a
+// character and the quote a plain one (measured: `echo $'a\' ; echo b ; echo 'c'` prints three lines
+// in dash and is a syntax error to the others). A Bash call runs in bash or zsh (writes.ts,
+// callShell), so this is read as they read it. After an even run (`$$'`) the two do not agree
+// (shellsDiffer): the quote is read as a plain one here, and where that matters the command is unread.
+const opensAnsi = (text: string, i: number): boolean => dollarsBefore(text, i) % 2 === 1
+// How many $ the shell reads as its own stand right before the character at `i`: the run of $
+// before it, less the first where a backslash escapes it.
+const dollarsBefore = (text: string, i: number): number => {
   let dollars = 0
   while (text[i - 1 - dollars] === '$') dollars++
   let slashes = 0
   while (text[i - 1 - dollars - slashes] === '\\') slashes++
-  return (dollars - (slashes % 2)) % 2 === 1
+  return dollars - (slashes % 2)
 }
-// Where the quote the ' at `i` opens closes, -1 when it never does: at the next ', or for a `$'...'`
-// string at the next one no backslash escapes. The one reading of a single quote's end every reader
-// here uses (the word reader, a substitution's end, a test's end, a line's comment, a delimiter).
-const singleEnd = (text: string, i: number): number => {
-  if (!opensAnsi(text, i)) return text.indexOf("'", i + 1)
+// Where a `$'...'` string whose quote opens at `i` closes: the next ' no backslash escapes, -1 when
+// none does.
+const ansiEnd = (text: string, i: number): number => {
   for (let j = i + 1; j < text.length; j++) {
     if (text[j] === '\\') j++
     else if (text[j] === "'") return j
   }
   return -1
 }
+// Where the quote the ' at `i` opens closes, -1 when it never does: at the next ', or for a `$'...'`
+// string at the next one no backslash escapes. The one reading of a single quote's end for the
+// readers of a substitution's end, a test's end and a delimiter; the word reader and the line reader
+// ask opensAnsi and close the string as they go.
+const singleEnd = (text: string, i: number): number => (opensAnsi(text, i) ? ansiEnd(text, i) : text.indexOf("'", i + 1))
 
 // The delimiter word starting at s[j], as the shell compares it with each body line: the whole
 // word with its quotes taken out, and whether ANY part of it was quoted, by quotes or a backslash,
@@ -477,7 +484,7 @@ const testEndFrom = (cmd: string, from: number): number => {
   }
   return -1
 }
-const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, unexpanded?: Set<number>, subbed?: Map<number, InWord[]>, worked?: Map<number, string>, compares?: Set<number>): Split[] => {
+const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, unexpanded?: Set<number>, subbed?: Map<number, InWord[]>, worked?: Map<number, string>, compares?: Set<number>, braces?: number[]): Split[] => {
   const cmds: Split[] = []
   let words: string[] = []
   let starts: number[] = []
@@ -618,6 +625,9 @@ const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, 
   for (let i = 0; i < cmd.length; i++) {
     const c = cmd[i] as string
     if (quote) {
+      // A `${` in double quotes holding a single quote bash and zsh do not read alike (braceDiffers):
+      // `braces`, where given, is filled with where each one stands.
+      if (braces && quote === '"' && c === '$' && cmd[i + 1] === '{' && braceDiffers(cmd, i)) braces.push(i)
       const sub = quote === '"' && c !== '<' && c !== '>' ? subEnd(cmd, i) : undefined
       const summed = quote === '"' ? sumEnd(cmd, i, true) : undefined
       if (ansi && c === '\\' && i + 1 < cmd.length) {
@@ -991,12 +1001,15 @@ const SSH_UNREAD = 'run by ssh on another machine, so what it does cannot be rea
 const QUOTE_UNREAD = 'holding a quote that never closes, so what the shell runs from there on cannot be read'
 const HEREDOC_UNREAD = 'fed a heredoc that never ends, so where its body stops cannot be read'
 const TORN_UNREAD = 'fed a heredoc opened on a line that ends inside a quote, so where its body starts cannot be read'
+// A quote bash and zsh do not read alike (shellsDiffer): the command it stands in, and every one
+// read after it, since the reader took one shell's reading and the other shell runs the call too.
+const SHELLS_UNREAD = 'read past a quote bash and zsh do not read alike, so what the shell runs from that quote on cannot be read'
 /**
  * The reasons a command is `unread` because the reader stopped in it (#3491), not because of what
  * it is. Its words are read as they always were, so a reader of what a command does still reads
  * them: the mark is added to that reading and never stands in its place.
  */
-export const READ_STOPPED: ReadonlySet<string> = new Set([QUOTE_UNREAD, HEREDOC_UNREAD, TORN_UNREAD])
+export const READ_STOPPED: ReadonlySet<string> = new Set([QUOTE_UNREAD, HEREDOC_UNREAD, TORN_UNREAD, SHELLS_UNREAD])
 const SETS_PART = /^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=/
 const PLAIN_NAME = /^[A-Za-z0-9._+@%,:-]+$/
 type Places = { unexpanded?: boolean[]; bare?: number[][]; arithmetic?: boolean }
@@ -1957,7 +1970,9 @@ export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
   const worked = new Map<number, string>()
   // Each `<` and `>` that compares two strings inside a `[[ ]]` test (#3415), by its place in the text.
   const compares = new Set<number>()
-  const read = split(text, bare, literal, unexpanded, subbed, worked, compares)
+  // Each `${` in double quotes holding a quote bash and zsh do not read alike (braceDiffers), by its place.
+  const braces: number[] = []
+  const read = split(text, bare, literal, unexpanded, subbed, worked, compares, braces)
   const begun = read.map(r => begins(r.words, r.starts, (w, at) => /[$`]/.test(w) && !unexpanded.has(at)))
   // A substitution runs in the shell running the line, so it splits words as that shell does, and
   // is run with that shell's settings, behind what that shell is (#3093).
@@ -1971,13 +1986,29 @@ export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
     })
     ran.set(k, [...(ran.get(k) ?? []), sub])
   }
+  // `doubt` is where the first quote bash and zsh do not read alike stands (shellsDiffer, and the
+  // word reader's `braces`), or before all of the text where the line is itself read past one. From
+  // there on the reader has one shell's reading of a text the other reads another way, so
+  // everything read after it is unread (SHELLS_UNREAD), the commands of a substitution or a
+  // heredoc's body that starts after it included. A substitution whose own text is read past one
+  // (DOUBTED) may end elsewhere than read here, so the quote stands for the line too, at the
+  // substitution, and the substitutions are read once more from there.
+  const feedPast = (from: number | undefined, at: number): Feed => (from !== undefined && at > from ? { ...subFeed, unread: SHELLS_UNREAD } : subFeed)
   // Each substitution in the line's own text is read from its text with the heredoc lines dropped
   // from within it put back (#2141), so a heredoc it holds feeds the command there, and is read once:
   // by where it stands, for the words it sits in.
-  const subs = ranged(text, false).map(s => {
-    const whole = restored(text, removed, s.from, s.to)
-    return { ...s, line: readLine(s.tick ? unticked(whole) : whole, nested, subFeed) }
-  })
+  const readSubs = (from: number | undefined) =>
+    ranged(text, false).map(s => {
+      const whole = restored(text, removed, s.from, s.to)
+      return { ...s, line: readLine(s.tick ? unticked(whole) : whole, nested, feedPast(from, s.from)) }
+    })
+  const written = shellsDiffer(text)
+  const own = outer.unread === SHELLS_UNREAD ? -1 : written === undefined ? braces[0] : Math.min(written, braces[0] ?? written)
+  const firstSubs = readSubs(own)
+  const inside = firstSubs.find(s => DOUBTED.has(s.line) && (own === undefined || s.at < own))
+  const doubt = inside ? inside.at : own
+  const subs = inside ? readSubs(doubt) : firstSubs
+  const feedAt = (at: number): Feed => feedPast(doubt, at)
   for (const s of subs) place(s.at, s.line)
   // A heredoc's body inside a substitution is read with it, so only the rest are read here.
   const inSub = (at: number) => subs.some(s => s.from <= at && at < s.to)
@@ -1991,13 +2022,24 @@ export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
     const r = runOf(h.at)
     const sub = subs.find(s => s.from <= h.at && h.at < s.to)
     if (!sub || !r || holds(text, sub.from, sub.to, r.at)) continue
-    if (!unheld.has(r)) place(h.at, readLine(r.lines.join('\n'), nested, subFeed))
+    if (!unheld.has(r)) place(h.at, readLine(r.lines.join('\n'), nested, feedAt(h.at)))
     unheld.add(r)
-    if (!h.quoted) for (const s of substitutions(h.body, true)) place(h.at, readLine(s.text, nested, subFeed))
+    if (!h.quoted) for (const s of substitutions(h.body, true)) place(h.at, readLine(s.text, nested, feedAt(h.at)))
   }
   for (const h of [...heredocs, ...(unended ? [unended] : [])]) {
-    if (!h.quoted && !inSub(h.at)) for (const s of substitutions(h.body, true)) place(h.at, readLine(s.text, nested, subFeed))
+    if (!h.quoted && !inSub(h.at)) for (const s of substitutions(h.body, true)) place(h.at, readLine(s.text, nested, feedAt(h.at)))
   }
+  // A heredoc opened after such a quote may be none to the shell that reads the quote the other way,
+  // which then runs its lines (measured 2026-11-23: zsh reads `p1 $$'a\'b' # it's <<EOF` as a
+  // command and a comment, and runs the line below it). So its lines are read as commands too,
+  // never as neither, each run of lines once.
+  if (doubt !== undefined)
+    for (const h of heredocs) {
+      const r = runOf(h.at)
+      if (h.at <= doubt || !r || unheld.has(r)) continue
+      place(h.at, readLine(r.lines.join('\n'), nested, feedAt(h.at)))
+      unheld.add(r)
+    }
   const runSubs = (k: number) => {
     for (const s of ran.get(k) ?? []) out.push({ sub: s })
   }
@@ -2084,6 +2126,15 @@ export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
   read.forEach((r, k) => {
     if (r.unclosed && !stops.has(k)) stops.set(k, QUOTE_UNREAD)
   })
+  // The command read past a quote bash and zsh do not read alike, and every command after it: each
+  // was read by one shell's reading alone. A reason already given stands.
+  if (doubt !== undefined) {
+    let first = 0
+    read.forEach((r, j) => {
+      if ((r.starts[0] ?? 0) <= doubt) first = j
+    })
+    for (let k = first; k < read.length; k++) if (!stops.has(k)) stops.set(k, SHELLS_UNREAD)
+  }
   read.forEach((r, k) => {
     runSubs(k)
     const b = begun[k] as Begun
@@ -2118,6 +2169,7 @@ export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
       emit(c.words, fedOf(c), feed, out, nested, outer.splits ? c.starts.map(s => bare.get(s) ?? []) : undefined, c.starts.map(s => literal.has(s)), c.starts.map(s => unexpanded.has(s)), derivedOf(c), c.starts.map(s => worked.get(s) ?? null), tests ? c.starts.map(s => compares.has(s)) : undefined, fixed?.size ? c.starts.map(s => fixed.get(s) ?? null) : undefined)
   })
   for (const texts of later.reverse()) runLater(texts)
+  if (doubt !== undefined) DOUBTED.add(out)
   return out
 }
 
@@ -2177,6 +2229,80 @@ const subEnd = (text: string, i: number): number | undefined => {
 const unticked = (s: string) => s.replace(/\\([$`\\])/g, '$1')
 // A # begins a comment only where a word would begin.
 const commentAt = (text: string, i: number, start = 0) => i === start || /[\s;&|()]/.test(text[i - 1] as string)
+
+// Where the ) closing a ( whose text starts at `from` stands when no quote, backslash or comment is
+// read: only the parentheses are counted, and a substitution inside is stepped over whole. That is
+// how zsh finds the end of `(( ))` and `$(( ))` (shellsDiffer). -1 when none closes it.
+const bareClosing = (text: string, from: number): number => {
+  let depth = 1
+  for (let i = from; i < text.length; i++) {
+    const c = text[i] as string
+    if (c === '`') i = tickEnd(text, i + 1)
+    else if (c === '$' && text[i + 1] === '(') i = closing(text, i + 2)
+    else if (c === '(') depth++
+    else if (c === ')' && --depth === 0) return i
+    if (i < 0) return -1
+  }
+  return -1
+}
+// Where the first quote stands that bash and zsh do not read alike, undefined where the text holds
+// none. A Bash call runs in either (writes.ts, callShell), and this Mac's run in zsh, so a text one
+// of them reads another way than this reader does runs commands the reader never gave. Each shape
+// was measured 2026-11-23 on bash 3.2 and zsh 5.9 with texts that only echo (the fix round on pull
+// request #3493; the table is in that pull request):
+// - A ' after an even run of two or more $ (`$$'`, `$$$$'`, `X$$'`, `\\$$'`). Where a command
+//   stands bash reads its own number and a plain quote, zsh a `$'...'` string: `p1 $$'a\'b' ; p2 #
+//   it's` runs p2 in zsh alone, `p1 $$'a\' b; p2` runs both in bash and neither in zsh. Inside
+//   `${...}`, `$( )` and arithmetic bash reads the string too. Only where the two readings close at
+//   different places: `$$'ab'` is one word either way.
+// - A `((` whose closing parenthesis moves with the quotes. Inside `(( ))` and `$(( ))` bash reads
+//   a quote and zsh reads none, counting parentheses alone: `(( 1 'a ))` then a line `p2 # b'` runs
+//   p2 in zsh alone. A quote that moves nothing (`(( 'a' + "b" ))`) reads alike, as does one inside
+//   a substitution there.
+// The text is searched for these two as written, with no reading of where each stands (in a
+// comment, in quoted text, in a program's code), so the search finds every place a reader of quotes
+// would and more: it can mark a command neither shell reads another way, never miss one they do
+// (L648). The third shape, a quote inside `"${...}"`, is found by the word reader where it reads
+// double quotes (braceDiffers): searched for as written it marked 17 recorded calls, 12 of them a
+// `${` in a pattern handed to grep inside single quotes. Over 45 days of recorded calls (61,981,
+// the count of 2026-11-23 on the final code) the round's mark falls on one: a measurement of the
+// first shape itself, in the script it hands to a shell, already unread for a quote that never closes.
+const shellsDiffer = (text: string): number | undefined => {
+  const found: number[] = []
+  for (let i = text.indexOf("'"); i >= 0; i = text.indexOf("'", i + 1)) {
+    const dollars = dollarsBefore(text, i)
+    if (dollars < 2 || dollars % 2 === 1 || text.indexOf("'", i + 1) === ansiEnd(text, i)) continue
+    found.push(i)
+    break
+  }
+  for (let i = text.indexOf('(('); i >= 0; i = text.indexOf('((', i + 1)) {
+    if (closing(text, i + 2) === bareClosing(text, i + 2)) continue
+    found.push(i)
+    break
+  }
+  return found.length ? Math.min(...found) : undefined
+}
+// Whether the `${` at `i`, standing inside double quotes, holds a single quote bash and zsh do not
+// read alike (measured 2026-11-23 on bash 3.2 and zsh 5.9 with texts that only echo). There bash
+// pairs single quotes, a backslash escaping none, and reads a `$'...'` string; zsh reads each quote
+// as text. So `p1 "${u:-'"'}" ; p2 # it's` runs p2 in bash alone (the " between the quotes closes
+// nothing to bash), and `p1 "${u//'/x}" ; p2 # it's` runs both in zsh and neither in bash. A
+// backslash right before a quote moves where bash closes it (`"${u:-$'a\'b'}"`, `"${u:-$'a\\'}"`,
+// `"${u:-'a\'b'}"`: zsh runs both commands, bash neither). Quotes paired before the next } with no
+// " between the braces and no backslash before a quote read alike, whatever the value comes to:
+// `"${u:-'a b'}"`, `"${u:-${v:-'a'}}"`, `"${R%$'\n'*}"`, `"${u:-$'a\tb'x}"` and `"${u:-'a\b'}"`
+// run the same commands in both. Anything else holding a quote is taken as one they differ on: the
+// shapes measured, and those not measured.
+const braceDiffers = (text: string, i: number): boolean => {
+  const end = text.indexOf('}', i + 2)
+  const inner = text.slice(i + 2, end < 0 ? text.length : end)
+  const quotes = inner.split("'").length - 1
+  return quotes > 0 && (quotes % 2 === 1 || /"|\\'/.test(inner))
+}
+// Each line read past a quote bash and zsh do not read alike, so the line a substitution stands in
+// can tell that the substitution's own text was (readLine): where such a substitution ends cannot
+// be read either, so the command holding it is read past the quote too.
+const DOUBTED = new WeakSet<Line>()
 
 /**
  * Each command substitution the shell runs in `text`, a process substitution (`<(...)`, `>(...)`,
