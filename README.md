@@ -8683,6 +8683,29 @@ asks. Since #3343 a shell command that writes that file is refused too, with Edi
 its place, and the For good question about a write that takes an entry out, moves one to another
 section or changes a section heading is refused until it names each of them (both told in full
 below).
+Since #3402 a shell command that deletes a lasting memory file or moves one away is asked about
+too, in a question of its own: every removal mod-kit's reader reports (rm, unlink, rmdir, a mv's
+source, find -delete, shred -u, a packer's source) whose words name lasting memory or match it, the
+memory folder taken whole, and a folder that holds the memory under home (`~/.claude/projects/<a
+project>`, `~/.claude`). A file emptied in place (`truncate`, `shred`) is asked about the same way,
+said as emptied. Where the reader cannot limit what goes under a folder (`rm -r`, what a
+`find -exec` hands to rm), the lasting memory the command names under it is asked about as a
+guess. A file that is not there is not asked about. Claude's question names what
+goes and says why, and the mod adds what it measured as Dan is asked: where a move puts the file,
+or whether git can bring a deleted or emptied one back (held unchanged, held with changes since,
+not held, or not readable). The answers are Keep as is, first, and Delete, Move or Empty; a save's
+For good approves no removal and a removal's answer approves no save, a removal whose consequence
+changes after he answers (what git holds of the file, where a move lands, what a folder holds) is
+asked about again, his "from now on" words cover no removal, and a subagent's removal is refused.
+A command that removes lasting memory and also writes other lasting memory is refused
+whole, each part to be sent by itself, and one that also writes the lessons file by shell is
+refused as it was before (#3343). What the command does is read again when its question arrives,
+and one that has become either by then, or takes files away in more than one way, is refused
+before Dan reads the question. Not covered: what git itself removes or puts back (Dan's
+decision on #1136 stands), `git clean`, `git stash` and `git reset --hard`, what a `find -exec`
+hands to rm by a pattern, what `xargs` hands to rm, and any other folder taken whole that holds a
+lasting memory file the command does not name (docs/mods-design.md, "A removal is asked about in a
+question of its own").
 Since #3295 the picker is refused, before he is asked and saying which character and
 where, when its rule or its question holds a character he cannot see: a control other than the
 newline (a tab, a carriage return, the escape of a terminal sequence), a format character (zero

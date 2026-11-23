@@ -3322,6 +3322,97 @@ and the band question is removed rather than kept beside it (L29). Three defects
   are refused, never asked, and the main session is told what it would have saved (above).
 - The band look (mod-kit's `$.modkit.question`) had no other caller, so it was removed too (#796).
 
+### A removal is asked about in a question of its own (#3402)
+
+The mod judged only the files a command puts content into, so a shell command that deleted a
+lasting memory file, or moved one away, ran with no question. Measured in the mod's suite on
+2026-11-22 before any change: `rm`, `unlink`, `shred -u`, `gzip`, `rm -r` of the memory folder,
+`find -delete` and `mv` away each ran unasked, for every kind of lasting memory file.
+
+- **What counts.** A change mod-kit's write reader reports as a removal (`changes` with
+  `does: 'remove'`: rm, unlink, rmdir, a mv's source, find -delete, shred -u, a packer's source)
+  whose words name a lasting memory file or match one: a path, a path through a variable the reader
+  follows, a pattern (`rm *.md` is judged by the lasting memory names it may match in the folder it
+  lands in, `rm <memory folder>/*.md` by the folder), a find -delete limited to a lasting memory
+  name. A folder taken whole counts when it is itself lasting memory (the memory folder), or holds
+  the memory under home: a project's records under `~/.claude/projects`, that folder, or
+  `~/.claude` and anything above it. A target the words cannot name is judged by the lasting memory
+  the command mentions, exactly as a write is (`lastingFiles`), and said as a guess.
+- **A file emptied in place counts too.** `truncate` and `shred` leave the file and take what it
+  held, which the reader reports as a change that truncates (`does: 'truncate'`). It ran unasked
+  with the first pass built (measured 2026-11-22). It is asked about as a removal is, said as
+  emptied: "Empty <file>: <why>?", then "The file stays, and what is in it is cut short or wiped."
+  and what git holds, with the answers "Keep as is" and "Empty". A file the same command empties
+  and then removes (`shred -u`) is one deletion.
+- **A folder the reader cannot limit.** For `rm -r <folder>`, a `mv` of a folder and what a
+  `find -exec` hands to rm, the reader reports a removal under the folder with no names (it carries
+  a find's `-name` for `-delete` alone). The lasting memory the command names under that folder is
+  then taken as what may go: a path spelled out where it is under the folder, a bare name where it
+  would sit at the folder's top, which is where the disk is asked. It is said as a guess.
+  `find . -name CLAUDE.md -exec rm {} +` ran unasked before this (measured 2026-11-22).
+- **The disk decides the rest.** A file that is not there is no removal, so `rm -f CLAUDE.md` in a
+  folder with none is not asked about. A folder above the memory under home counts only for what is
+  found under it. A disk that cannot say whether a file is there fails the hook, which fails
+  closed. One that says a path is there and cannot say what is at it does not: the removal is
+  still asked about, without the sentence that it is a whole folder, and a move onto such a path
+  is said as replacing what is there.
+- **The question is the removal's own** (the issue's first open question, settled by the building
+  session, not by Dan). It is tied to the call by the same `metadata.source` a save's question
+  carries. Claude's sentence names what goes and says why; the mod adds, as Dan is asked, what it
+  measured: where a move puts the file and whether one is there already, or whether git can bring a
+  deleted or emptied file back (`git ls-files` and `git status` on the file: held unchanged, held with changes
+  since its last commit, not held, or not readable, which is said as not readable and never as
+  held). The header is "Memory file" and the answers are "Keep as is", first, and "Delete", "Move"
+  or "Empty". None of a save's words or answers appear in it (L9, L180), nor in its refusal when
+  the answer cannot be read, which said "Not saved" until 2026-11-22 and says "Not deleted", "Not
+  moved" or "Not emptied" and that nothing was.
+- **The two approvals never stand in for each other.** A removal's approval is a record with
+  `removes` (what goes, how, where to, what git held), and lets through only the same call removing
+  exactly that with the same consequence (`coversRemoval`), so a removal whose consequence changes
+  after Dan answers is asked about again: what git holds of the file, where a move lands and
+  whether a file is there, what a folder holds, the names a find is limited to. What is in a file
+  is not compared, so a file git does not hold can change after he answers and still go. A save's approval carries no `removes` and lets no removal through;
+  an approval with `removes` lets no save through, and `$.askBeforeSaving.isApproved` answers false
+  for it. Dan's own permanent words ("from now on") cover no removal. A subagent's removal is
+  refused and never asked about, as its save is, and one that takes files away in more than one
+  way is refused in words that say each way, never all of it as a deletion.
+- **One question per command.** A command that removes lasting memory and also writes lasting
+  memory other than where its move lands, or that takes files away in more than one way (one
+  deleted, another moved or emptied), is refused whole with no question waiting, and each part is
+  asked about when sent by itself. A lasting memory file moved onto another is one move question,
+  which says the file there is replaced.
+- **The same rule again as Dan would be asked** (lessons review of #3430). What a command does is
+  read from the disk when the call is sent and again when its question arrives, and the two can
+  differ though the command's words are the same: a file its other half takes away has arrived, or
+  the patch it applies has come to name lasting memory. Measured 2026-11-22 at e369a51a35, where the answer
+  applied neither refusal: `rm CLAUDE.md && mv AGENTS.md /tmp/A.md`, first sent while AGENTS.md was
+  absent, was put to Dan under Delete with "Deletes" said of both files once it had arrived, and
+  his Delete ran both halves; `rm *.md && git apply fix.patch` was put to him as a plain deletion
+  after the patch came to name a memory file, and the call was refused whole only once he had
+  answered. So the answer asks the one rule the first check asks (`splitBy`), and the lessons file
+  by shell with it, and such a command is refused before Dan reads the question, saying what it
+  does now, with nothing left waiting. The approval's `files` are those of the first check that
+  are still written as he is asked, never more.
+- **The lessons file by shell stays refused.** A command that removes lasting memory and also
+  writes the lessons file by shell (`mv CLAUDE.md ~/.claude/LESSONS.md` among them) was refused
+  outright before #3402, with no question waiting (#3343). With the first pass built it had become
+  a Move question Dan could approve (measured 2026-11-22), so such a command is left to the save
+  side, which refuses it as before: no Move or Delete approves what no For good could.
+- **Asleep**, the removal is noted for the morning report as a finding (the report's kind for
+  anything else noticed; a kind of its own would be a change to the report) and refused.
+- **Not covered.** What git itself removes or puts back (`git rm`, `git mv`, a checkout or restore
+  of a path) is reported by the reader as `byGit` and left unjudged by Dan's decision on #1136
+  (2026-10-13: "the design round guard and the collision guard judge git made changes (byGit). Ask
+  before saving does not."); `git clean`, `git stash` and `git reset --hard` are not reported by
+  the reader at all. Nor is what a `find -exec` hands to rm by a pattern (`-name '*.md'`): covering
+  it needs the reader to carry a find's `-name` patterns onto the changes its `-exec` command
+  makes, as it does for `-delete` (`findNames` in mod-kit's `writes.ts`). Nor what `xargs` hands to
+  rm, which is asked about as a possible save, as before. Nor any other folder taken whole that
+  holds a lasting memory file the command does not name (`rm -rf <a project folder>`): the reader
+  reports it, and the mod could look at the folder's top, but it would then ask each time a
+  worktree or a copy of a repository is removed with rm, and refuse a subagent's, so it is left for
+  Dan to decide, as a tree written over such a folder is not looked into either.
+
 ## Design round guard (#978), built 2026-10-08
 
 Dan, 2026-10-08: "can we add a standing rule across all sessions that if claude is building
