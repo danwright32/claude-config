@@ -2920,10 +2920,13 @@ ps_upstream_remote() {
 }
 
 ps_upstream_set_aside() {
-  local rc=0
+  local rc=0 def
   ps__upstream_read || rc=$?
   [ "$rc" -eq 2 ] || return 1
-  ps__aside_default >/dev/null || return 1
+  def="$(ps__aside_default)" || return 1
+  # An upstream that IS the default branch, moved on since this branch was cut from it, is what the
+  # push is judged against either way: nothing was set aside for anything else, so nothing is said.
+  [ "$def" != "$PS__UP" ] || return 1
   printf "the branch's upstream, %s, %s" "$PS__UP" "$PS__UP_WHY"
 }
 

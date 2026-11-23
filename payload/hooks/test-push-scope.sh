@@ -1330,6 +1330,35 @@ got="$( cd "$MB/rin" && declare -F ps_upstream_remote >/dev/null && ps_upstream_
   && check "#3454 a set aside upstream on origin is still a branch the remote holds" ok \
   || check "#3454 a set aside upstream on origin is still a branch the remote holds" "got=[$got]"
 
+# The upstream is the remote's DEFAULT branch, which moved on: the commonest case there is, a branch
+# cut from a tracked origin/main with main merged into since. Its tip is not in this branch's
+# history, and the push is judged against that same branch either way, so nothing was set aside and
+# nothing is said: a note on every refusal that the upstream "is not in this branch's history,
+# so the gate judged from origin/main" would be noise about the branch it was judged from (L36).
+git init -q --bare "$MB/dm.git" 2>/dev/null
+git init -q -b main "$MB/dm" 2>/dev/null
+mb_commit "$MB/dm" seed
+( cd "$MB/dm" && git config branch.autoSetupMerge false && git remote add origin "$MB/dm.git" \
+    && git push -q origin main && git checkout -q -b feat && git branch -q --set-upstream-to=origin/main ) >/dev/null 2>&1
+mb_commit "$MB/dm" feat1
+( cd "$MB/dm" && git checkout -q main ) >/dev/null 2>&1
+mb_commit "$MB/dm" main2
+( cd "$MB/dm" && git push -q origin main && git checkout -q feat ) >/dev/null 2>&1
+if [ "$(git -C "$MB/dm" rev-parse --abbrev-ref '@{u}' 2>/dev/null)" = "origin/main" ] \
+   && ! git -C "$MB/dm" merge-base --is-ancestor origin/main HEAD 2>/dev/null; then
+  check "#3454 fixture: the upstream is origin's main, which moved past where this branch was cut" ok
+else
+  check "#3454 fixture: the upstream is origin's main, which moved past where this branch was cut" "upstream=$(git -C "$MB/dm" rev-parse --abbrev-ref '@{u}' 2>&1)"
+fi
+got="$(up_ref "$MB/dm")"; got_mb="$(up_plain "$MB/dm")"
+[ "$got" = "origin/main" ] && [ "$got_mb" = "$(sha_of "$MB/dm" main~1)" ] \
+  && check "#3454 an upstream that is the default branch is what the push is judged against, moved on or not" ok \
+  || check "#3454 an upstream that is the default branch is what the push is judged against, moved on or not" "ref=$got start=$got_mb"
+got="$(up_aside "$MB/dm")"; rc=$?
+[ "$rc" -ne 0 ] && [ -z "$got" ] \
+  && check "#3454 and it is not reported as set aside for itself" ok \
+  || check "#3454 and it is not reported as set aside for itself" "rc=$rc got=[$got]"
+
 # 4. The branch's OWN copy on origin is the base whether or not its tip is in the history: the
 #    diverged branch of #456 above is judged exactly as it was.
 got="$(up_ref "$MB/dv")"
@@ -1377,17 +1406,32 @@ got="$(up_ref "$MB/orph")"; got_mb="$(up_plain "$MB/orph")"
 # a suite's fixture builder are test code, which sets and checks an upstream of its own making. Both
 # spellings of the selector are assembled here so these lines do not match themselves (L245).
 up_sel='@{'; up_long="${up_sel}upstream}"; up_sel="${up_sel}u}"
-own_up="$(grep -lF -e "$up_sel" -e "$up_long" "$DIR"/*.sh "$DIR"/lib/*.sh 2>/dev/null | grep -v -e '/test-' -e '-fixture\.sh$' -e '/lib/push-scope\.sh$' | tr '\n' ' ')"
+# Judged by each file's own NAME, never by its path: a checkout under a folder whose name starts
+# with test- would otherwise exempt every hook in it.
+up_scan() {   # $1 = a hooks folder; prints the files in it and its lib/ that read the upstream
+  local f
+  for f in "$1"/*.sh "$1"/lib/*.sh; do
+    [ -f "$f" ] || continue
+    case "${f##*/}" in test-*|*-fixture.sh) continue ;; esac
+    [ "$f" = "$1/lib/push-scope.sh" ] && continue
+    if grep -qF -e "$up_sel" -e "$up_long" "$f" 2>/dev/null; then printf '%s ' "${f#"$1"/}"; fi
+  done
+}
+own_up="$(up_scan "$DIR")"
 case "$own_up" in
   *[![:space:]]*) check "#3454 no hook reads the branch's upstream for itself" "still in: $own_up" ;;
   *) check "#3454 no hook reads the branch's upstream for itself" ok ;;
 esac
-# The scan can see a hand rolled read: a file holding one is named (L1).
-mkdir -p "$MB/scan/lib"
-printf 'up="$(git rev-parse --abbrev-ref %s)"\n' "'$up_sel'" > "$MB/scan/lib/reader.sh"
-[ -n "$(grep -lF -e "$up_sel" -e "$up_long" "$MB/scan"/lib/*.sh 2>/dev/null | grep -v -e '/test-' -e '-fixture\.sh$' -e '/lib/push-scope\.sh$')" ] \
-  && check "#3454 control: the scan names a file that reads the upstream for itself" ok \
-  || check "#3454 control: the scan names a file that reads the upstream for itself" "it found nothing"
+# The scan can see a hand rolled read (L1): a file holding one is named, in a hooks folder whose own
+# path holds a folder named test-, and the library and a suite beside it are not.
+mkdir -p "$MB/test-parent/hooks/lib"
+printf 'up="$(git rev-parse --abbrev-ref %s)"\n' "'$up_sel'" > "$MB/test-parent/hooks/lib/reader.sh"
+cp "$MB/test-parent/hooks/lib/reader.sh" "$MB/test-parent/hooks/lib/push-scope.sh"
+cp "$MB/test-parent/hooks/lib/reader.sh" "$MB/test-parent/hooks/test-reader.sh"
+got="$(up_scan "$MB/test-parent/hooks")"
+[ "$got" = "lib/reader.sh " ] \
+  && check "#3454 control: the scan names a file that reads the upstream for itself, and only that file" ok \
+  || check "#3454 control: the scan names a file that reads the upstream for itself, and only that file" "got=[$got]"
 
 # A repository with no commits has no range at all: every entry point answers nothing and says so
 # with its status, rather than printing something a caller would diff against.
