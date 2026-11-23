@@ -1299,6 +1299,9 @@ describe('writes: changes that put no content in, carried over from the collisio
     const keeps = (command: string) => read(command).changes.filter(c => c.does === 'remove').map(c => c.to?.keeps ?? false)
     for (const flag of ['-n', '-vn', '-nv', '--no-clobber']) expect([flag, keeps(`mv ${flag} notes/*.md ~/archive/`)]).toEqual([flag, [true]])
     for (const flag of ['', '-v', '-f', '--no-target-directory']) expect([flag, keeps(`mv ${flag} notes/*.md ~/archive`)]).toEqual([flag, [false]])
+    // Of -n, -f and -i the last one given wins, so beside either of the others, in any order, it is
+    // not said: `mv -n -f` replaces the file (found by the lessons review of the push that added this).
+    for (const flag of ['-n -f', '-nf', '-fn', '-f -n', '--no-clobber --force', '-n -i', '-in', '--interactive -n']) expect([flag, keeps(`mv ${flag} notes/*.md ~/archive/`)]).toEqual([flag, [false]])
     // With it and without it are two ways of moving one thing, so neither is said.
     expect(kept('mv -n notes/*.md ~/archive/; mv notes/*.md ~/archive/')).toEqual([])
   })

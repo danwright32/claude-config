@@ -1636,7 +1636,10 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
         const places = sources.map(placeOf)
         const apart = places.every((a, i) => places.every((b, j) => j <= i || (a !== undefined && b !== undefined && (a.folder === b.folder || (a.name !== undefined && b.name !== undefined && a.name !== b.name)))))
         // mv -n (--no-clobber) replaces nothing: a source whose name is taken there stays where it was.
-        const keeps = [...opts.keys()].some(k => k === '--no-clobber' || /^-[A-Za-z]*n/.test(k)) ? { keeps: true as const } : {}
+        // Of -n, -f and -i the last one given wins (`mv -n -f` replaces), so it is said only where
+        // neither of the other two is given at all, the side that never calls a replaced file kept.
+        const flags = [...opts.keys()]
+        const keeps = flags.some(k => k === '--no-clobber' || /^-[A-Za-z]*n/.test(k)) && !flags.some(k => k === '--force' || k === '--interactive' || /^-[A-Za-z]*[fi]/.test(k)) ? { keeps: true as const } : {}
         const to: ModKitChange['to'] =
           isDevice(destPath ?? dest) || !apart
             ? undefined
