@@ -60,7 +60,9 @@ Every mirrored file (hooks, skills, agents, commands) and the hooks fragment are
 Mac's config directory written as `__CLAUDE_HOME__`, and expanded to each Mac's own on the way in,
 so an absolute path inside one is correct on both machines. The top-level rules files are the
 exception: they are merged entry by entry, so their bytes are left exactly as written, and a path
-in one of them should be a `~` path. `hooks/check-home-paths.sh` enforces that split. Its suite
+in one of them should be a `~` path. `hooks/check-home-paths.sh` enforces that split, and every
+send asks it first, over the files the send would publish, and is held whole while one fails
+(#3465, below). Its suite
 lists the checkout's synced files, so the gate before a push (`scanners-before-push.sh`) runs it as
 well as CI, over the checkout with no allowance for this Mac's own home (#1734). The gate runs
 before every push each suite with a line of code that lists the repository's files, through
@@ -147,6 +149,36 @@ exits 3 and names the line when the file names a work organisation, and 4 when t
 run, so a scan that judged nothing is never reported as a name found (the hook tells the session
 that wrote it, in words that fit each, while it can fix it), `check-lessons` refuses on either, and `next-lesson` still mints a
 number but warns that every send is refused until the line is fixed.
+
+A send that would publish a file failing the home path check is held whole (#3465). On 2026-11-22
+at 3:44 PM ET a send pushed 126 scratch files a measuring session had written into folders named
+`run` under one Mac's config, 100 of them naming that Mac's home folder, and main's own run of
+`hooks/check-home-paths.sh` was red until 4:22 PM ET, as was every pull request brought up to date
+with it: the check ran only on GitHub, after the push. Now every send asks that same check first, at
+the end of staging and after the work names scan, over the finished payload, so a path under this
+Mac's own config has already become the placeholder and the check reads what main's run would
+read. It is handed only the files this send carries (`--files0-from`): every payload file that
+differs from the clone's last commit, new ones included, and the files changed by commits the
+shared repo lacks; without git, the whole payload. A failing file already on main therefore never
+holds an unrelated send, and a send that removes it goes through. One failing file holds
+everything, because a send is one commit and the other Mac mirrors what the payload holds, so half
+a change would arrive with nothing to say which half. Nothing is committed or pushed, and nothing
+in this Mac's config is touched. The refusal names how many files fail, the first five with their
+line, and the check's reason; every line the check reported is kept, each cut to 500 characters, in
+`.send-suite-output/home-path-check.log` in the clone. `claude-sync status`, `claude-sync stuck` and
+the per prompt notice say it as "sending is refused: the home path check has refused every send",
+with how many sends in a row and since when. To clear it, take the files out of this Mac's config
+if they do not belong there, or write each path from the home folder (a `~` or `$HOME`); a line
+that must name a real home, such as a fixture, carries the check's own
+`claude-sync-allow-home-path` marker. The next send then carries everything that was held. There is
+no override variable, and a check that is missing or could not run refuses the send too, said as
+that rather than as a finding. In the change watcher a standing hold is said in full once, then in
+one short line pointing at status with no desktop notice, until its files change, it clears or a
+day passes; every refusal is still counted. Measured on 2026-11-22 against a clone of main with
+1,446 payload files, at a load average between 104 and 178 on 12 cores, 10 samples a case: the
+check adds 53 to 72 ms to a send with nothing in the payload to read, 85 to 149 ms to a send of one
+edited hook and one new file, and 4.1 to 4.3 seconds to a replay of the 2026-11-22 send, nearly all
+of it the check's own handling of lines a megabyte long (#3479).
 
 Text that is never a file is held to the same rule (#1995), because this repository squash merges
 with the commit messages as the body: a name in a message lands in main. The scanner reads labelled

@@ -2762,6 +2762,63 @@ stand in answering per commit, with a one second timer and every run ending on t
 for; `tests/test-hook-suite-rerun.sh` and `hooks/test-sync-stuck-notice.sh` hold the unverified
 record and its notice.
 
+## A send that fails the home path check is held whole (#3465)
+
+On 2026-11-22 at 3:44 PM ET a send from one Mac pushed 126 scratch files that a measuring session
+had written into folders named `run` under that Mac's config. 100 of them named its home folder, so
+`hooks/check-home-paths.sh` failed in main's own run, and in every pull request brought up to date
+with main, until 4:22 PM ET. Nothing had stopped the push: the check ran only on GitHub, after it.
+These choices were made by the session that built the fix, not by Dan, and are his to change.
+
+- **A third scan in the existing chain.** `scan_home_paths` runs at the end of
+  `stage_local_to_payload`, after `scan_secrets` and `scan_work_names`, with their contract: the
+  refusal is written to `.send-refused` (causes `home-paths` and `home-paths-unjudged`), then the
+  send dies, or on a sync hands back so receiving still works (#947). Every send route passes
+  through that function. Ruled out: checking the live config before staging, because the payload
+  after the placeholder is written is what main's run reads.
+- **One implementation of the rule (L370).** The send runs the check itself, handed a list through
+  a new `--files0-from` option that reads a listed file exactly when its tree walk would. An empty
+  or unreadable list, or a listed file that is missing, exits 2, never a pass. The send unsets
+  `CLAUDE_HOME_PATH_ROOTS`, the check's seam for its own suite, so it judges by the default roots
+  as main's run does.
+- **Only the files the send carries.** Payload paths that differ from the clone's last commit, new
+  ones included, plus payload paths changed by commits the upstream lacks; without git, the whole
+  payload. A failing file main already holds is not this send's to answer for, so it never holds an
+  unrelated send, and a send that removes it goes through.
+- **The whole send is held.** A send is one commit, and the other Mac mirrors what the payload
+  holds: a hook without the file it reads, or half a change, would arrive with nothing to say which
+  half. Ruled out: holding only the failing files and sending the rest. It is the alternative most
+  worth Dan's look, since it would keep unrelated edits moving while scratch sits in the config.
+- **No override.** A missing check, or one that could not run, refuses as `home-paths-unjudged`.
+  The check's own `claude-sync-allow-home-path` marker, visible on the line it excuses, is the only
+  exception, and it is the check's, not the send's.
+- **Not a hot loop.** The watcher sends on every burst of edits, and a session writing scratch
+  makes one every few seconds. A standing hold is said in full once, then in one short line with
+  no desktop notice, until its files change, it clears or a day passes, through the
+  `.send-holds-told` store the send gate already keeps (#3179). Every refusal is still counted.
+- **Output to a file.** The incident's lines were 1.6 MB each, 11.5 MB in all (measured
+  2026-11-22), so the check's output never passes through a shell variable, and the kept copy in
+  `.send-suite-output/home-path-check.log` cuts each line to 500 characters.
+
+Ruled out as well: the send gate declaration (`# send-gate: scans ...`, #809), which would have run
+the check's whole suite on every send. Measured 2026-11-22: 9.8, 10.1 and 12.8 seconds a run at a
+load average of 77; it holds files back by scope and sends the rest, which is the partial send
+above; and the suite had no declaration that day.
+
+What it costs, measured on 2026-11-22 against a throwaway clone of main with 1,446 payload files,
+the functions cut from the branch's claude-sync by name, 10 samples a case and a baseline of bash
+starting taken off, at a load average of 104 rising to 178 on 12 cores: 53 to 72 ms for a send with
+nothing under the payload to read, 85 to 149 ms for one edited hook and one new file, 4.1 to 4.3
+seconds for a replay of the 2026-11-22 send (refused, naming 100 files), against 1.0 seconds for the
+whole tree walk the send does not run. The replay took 6.5 to 12.4 seconds before the output went to
+a file. What is left is the check reading megabyte lines in the shell (#3479). Replayed over the
+newest 300 of main's sync commits, the check would have held 2: the incident, and one on 2026-10-04
+carrying a mod's test file from before the check read mods. It could judge every one, and held
+nothing that passes main's run.
+
+`tests/test-claude-sync.sh` (the section "a send carrying a file that fails the home path check
+is held whole") and `hooks/test-check-home-paths.sh` (the `--files0-from` cases) hold it.
+
 ## Things known to be wrong and left that way
 
 Markers are keyed on hostname, which is a mutable string. Renaming or reinstalling a Mac abandons
