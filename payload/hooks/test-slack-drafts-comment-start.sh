@@ -285,6 +285,17 @@ printf '%s\n' 'echo ok;# set -- x' > "$P/lib/glued.sh"
 reads glued.sh "calm hot"
 refused "as before, a set in a comment right after a ; still reads as moving the parameters"
 
+# Routine commands of this repository stay allowed. The gate reads the python and awk programs that
+# payload-write-gate.sh carries as shell too, and a comment line there holding backquotes was a #
+# it could not tell from a comment, so running that hook's suite by name was refused as a check it
+# could not make. Its comments name things in plain words now; a backquote put back in one fails
+# here, and in test-shell-words-comment-start.sh, which asks the reader itself.
+ROOT="$(cd "$DIR/../.." && pwd)"
+for routine in "bash payload/hooks/test-payload-write-gate.sh" "bash payload/hooks/payload-write-gate.sh"; do
+  run_bash "$routine" "$ROOT"
+  allowed "a routine command of this repository is allowed: $routine"
+done
+
 echo
 
 echo "passed: $pass, failed: $fail"

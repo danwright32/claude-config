@@ -232,6 +232,45 @@ real = []
 sw.commands("echo a # c; touch ran\necho done\n", comments=real)
 say(real == [(7, 21)], "#3464 a comment the shell starts too is given to comments", "named %r" % (real,))
 
+# payload-write-gate.sh carries python and awk programs inside its shell, and the Slack drafts gate
+# reads such a program as shell as well. A comment there holding backquotes was a # the reader
+# could not be sure of, so the Slack drafts gate refused running that hook's suite by name. The file
+# and every program word its commands carry (a word holding a line break) are read again here, and
+# none may name a # the reader is not sure of.
+gate_path = os.path.join(os.path.dirname(os.path.dirname(sw_path)), "payload-write-gate.sh")
+with open(gate_path, encoding="utf-8") as f:
+    gate_text = f.read()
+named, programs, seen = [], 0, set()
+
+
+def unsure_lines(s):
+    marks = []
+    try:
+        cut = sw.commands(s, unsure=marks)
+    except sw.Unreadable:
+        cut = []
+    found = []
+    for at, _ in marks:
+        start = s.rfind("\n", 0, at) + 1
+        end = s.find("\n", at)
+        found.append(s[start:len(s) if end < 0 else end].strip()[:120])
+    return cut, found
+
+
+cut, found = unsure_lines(gate_text)
+named += found
+for _, cmd in cut:
+    for word in sw.command_words(cmd):
+        if "\n" in word and word not in seen:
+            seen.add(word)
+            programs += 1
+            named += unsure_lines(word)[1]
+say(len(cut) > 100 and programs >= 5,
+    "#3464 payload-write-gate.sh and the programs it carries were read",
+    "read %d commands and %d program words" % (len(cut), programs))
+say(not named, "#3464 the reader is sure of every # in payload-write-gate.sh and the programs it carries",
+    "unsure of: %s" % " | ".join(named))
+
 rows = [(name, kind, text) for name, prefix, close in PREFIXES for kind, text in texts(prefix, close)]
 rows += WHOLE
 print("shells\t" + " ".join(HAVE))
