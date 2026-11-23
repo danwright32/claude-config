@@ -3,7 +3,7 @@
 import type { DesignRoundSubject } from '../types/index.d.ts'
 import { quotedEnd } from './mod-kit/quoted.ts'
 import { isTestPath } from './mod-kit/testfile.ts'
-import { leadingVariable, madeTemp, ownFolderPath, tempWord } from './mod-kit/scriptvars.ts'
+import { leadingVariable, madeTemp, ownFolderPath, tempWord, withoutOwnFolder } from './mod-kit/scriptvars.ts'
 
 export const GUARD = 'Design round guard'
 /** The dialog's header chip; Claude Code takes at most 12 characters. */
@@ -1741,9 +1741,11 @@ export const scriptUnread = (script: string, file: string): string =>
  * form of a listed one that writes (#3323; Dan, 2026-11-21: "Turn it round, with the list
  * (Recommended)"). `why` and `remedy` are the reader's own words for that run, the same in every
  * guard (L111, L118): which program was not known, or which form writes, and what to do about it.
+ * With `script` (#3416), the program is handed the file by a script file the command runs, in that
+ * script's own text, and the refusal names the script too, as the command names it.
  */
-export const programUnknown = (program: string, file: string, why: string, remedy: string): string =>
-  `The design round guard judged ${file}, which ${program} is handed, as a write of that file: ${why}. ${remedy}`
+export const programUnknown = (program: string, file: string, why: string, remedy: string, script?: string): string =>
+  `The design round guard judged ${file}, which ${script === undefined ? `${program} is handed` : `${script} hands ${program}`}, as a write of that file: ${why}. ${remedy}`
 
 /**
  * What a refusal says of a file a script file's own code writes (#2847): the script was read as
@@ -1826,6 +1828,17 @@ export type RunCommand = {
   unread?: string
   /** The settings written in front of it, as mod-kit gives them: where a git command names its repository by GIT_DIR or GIT_WORK_TREE (#3337). */
   env?: string[]
+  /** The commands whose output it reads through a pipe, as mod-kit names them (#3416, withoutOwnCalls). */
+  pipedFrom?: readonly string[]
+  /** For each word, whether every `$` and backtick in it is one the shell hands on as written (#3416). */
+  unexpanded?: readonly boolean[]
+  /**
+   * The programs that run it, as mod-kit names them: `timeout`, `env`, `command`, a new shell, `xargs`,
+   * `find`. Its words are then run as a program, never as a function of the script (#3416).
+   */
+  behind?: readonly string[]
+  xargs?: boolean
+  found?: readonly string[]
 }
 
 // The words the shell reads as its own grammar where a command begins, which no expansion ever is,
@@ -2229,13 +2242,17 @@ const placed = (p: string | undefined): boolean => p !== undefined && p !== UNPL
  * the runners RUNS_LATER names, and any command mod-kit marks unread), and each file it sources is one the guard read and found the same
  * (`sourced`). An argument reaches a command only through `$1`, `$@` or a variable holding it, which
  * the reader can never place, so each such route shows here as a name it could not place.
- * What this trusts is mod-kit's reader of what a command writes, with one difference from a command
- * typed whole (#3323): there, a program the reader does not know, handed a word that spells a path,
- * is read as writing that file. In a script's own text it is read as writing none, as it was before
- * that rule, so a run the reader marks `unknown` is no route here. Nearly every script holds one
- * (`exit 1`, `sleep 2`, `gh pr view 5`), so counting them would hold every script handed a file,
- * which is what #2924 ended. So a script that hands its argument to a program nobody has listed is
- * not caught by this guard.
+ * What this trusts is mod-kit's reader of what a command writes. A program the reader does not know,
+ * handed a word that spells a path (#3323), is a run it marks `unknown`. The file such a run names
+ * in a script's own text is judged as a write of that file since #3416 (handedToUnknown), and is a
+ * name the text spells, so it is no route here, as a file the script's commands write by a placed
+ * name is none. Nearly every script holds such a run (`exit 1`, `sleep 2`, `gh pr view 5`), so
+ * counting each as a route would hold every script handed a file, which is what #2924 ended.
+ * One limit is left (#3416): a script that passes what it was handed on to such a program
+ * (`mystery "$1"`) is not caught. The reader hands on only a word that spells a path, which `$1`
+ * never does, and it gives `case`, `[[`, `exit`, `shift` and `basename` as programs it does not
+ * know as it does `mystery`, so reading each one handed `$1` as a route would hold nearly every
+ * script again. Telling them apart takes a list of the shell's own words, which only Dan may add.
  */
 export const argumentUnreached = (reading: ScriptReading, commands: readonly RunCommand[], temp: (word: string) => boolean, sourced: (c: RunCommand) => boolean): string | undefined => {
   for (const c of commands) {
@@ -2254,6 +2271,808 @@ export const argumentUnreached = (reading: ScriptReading, commands: readonly Run
   for (const u of reading.unnamed) if (!u.onlyLoads && !(u.targets && u.targets.every(placed))) return 'it runs a program whose writes are not all named'
   if (reading.runs?.some(r => !r.unknown)) return 'it hands another script its words'
   return undefined
+}
+
+/** A run as mod-kit's write reader gives it, as handedToUnknown reads it (#3416). */
+export type HandedRun = { script: string; what: string; unknown?: true; why?: string; remedy?: string; args: readonly { word: string; path?: string }[] }
+
+/**
+ * Each file a shell script's own text hands a program mod-kit's write reader does not know (#3416),
+ * from `runs`, the reader's runs over that text: every run it marks `unknown` (#3323: a program on
+ * none of its lists, or a form of one that only reads which writes a file or runs a program), with
+ * each word it is handed that spells a path. Each is judged as a write of that file, as the same
+ * line typed whole is; before, a script's text was read only for the files its commands write by
+ * the reader's own tables, so `bash fmt.sh`, fmt.sh holding `prettier --write app/page.tsx`, ran
+ * unasked. `program` is the program as written, and `why` and `remedy` are the reader's own words
+ * for the run, the same in every guard. The rule is the reader's, asked here and never kept here:
+ * the list of programs that only read applies in a script's text as it does on a command line.
+ * A word the reader cannot place is not handed on by it (a variable the script never sets to one
+ * value, what the script itself was handed, a pattern, a command's output), so none is given here;
+ * argumentUnreached says what that leaves open. A script file, a module and a tool run through
+ * npx are runs of another kind, read by the rules that were there before.
+ */
+export const handedToUnknown = (runs: readonly HandedRun[] | undefined): { word: string; path: string; program: string; why: string; remedy: string }[] =>
+  (runs ?? [])
+    .filter(r => r.unknown)
+    .flatMap(r => r.args.flatMap(a => (a.path === undefined ? [] : [{ word: a.word, path: a.path, program: r.script, why: r.why ?? `${r.script} is ${r.what}`, remedy: r.remedy ?? '' }])))
+
+/** What withoutOwnCalls asks of mod-kit's readers, and of the files a script reads in (#3416). */
+export type OwnCallIo = {
+  /** mod-kit's pipeline over a text, in the script's folder; with `assignments`, a bare assignment is a command too. */
+  pipeline: (text: string, assignments?: boolean) => Promise<readonly RunCommand[]>
+  /** mod-kit's write reader over a text, in the script's folder. */
+  writes: (text: string) => Promise<Record<string, unknown> & { runs?: readonly HandedRun[] }>
+  /**
+   * The file a `source` or `.` command reads in (readInFile), or undefined where the guard cannot
+   * say which file that is or did not read it. `beside` is the name after the variable, where the
+   * command spells the file `$V/name` and the script's own commands surely set V to its own folder.
+   */
+  sourced?: (c: RunCommand, beside?: string) => Promise<ReadIn | undefined>
+}
+
+/** A file a script reads in, as the guard read it for this call (#3416), with its commands where the guard has them already. */
+export type ReadIn = { path: string; text: string; commands?: readonly RunCommand[] }
+
+/**
+ * The file one `source` or `.` command of a script reads in, read from the disk now (#3416, Dan
+ * 2026-11-22: "Read the files a suite reads in (Recommended)"), or undefined, and then whatever
+ * asked is judged as it was before. Nothing is trusted for being read in: withoutOwnCalls checks
+ * the file as it checks the script's own text.
+ *
+ * Which file it is must be certain: a word with no expansion, `~`, `$HOME`, `$PWD` or a variable the
+ * script sets to a literal (scriptPath, with no file of its own, so mod-kit's reading of an own
+ * folder from the text alone is not used here), or `beside`, the name withoutOwnCalls found under a
+ * variable the script's commands surely set to its own folder, and then only where the command runs
+ * in the folder the script started in (a cd before the assignment moves what a relative name of the
+ * script is read from). A variable set from a command, an argument, a pattern and a name holding
+ * another value give none.
+ *
+ * The file must lie in the folder the script file is in, or below it. That is the one bound that
+ * needs nothing looked up: a suite and the library beside it are one piece of work in one checkout,
+ * and where a repository starts would have to be found on the disk, wrongly for a checkout inside
+ * another. A file in the home folder, a temporary folder or another checkout is not read.
+ *
+ * What the guard reads is the file as it is now, before the command runs, as the script itself is
+ * read. `written` is every path the command, or a script it runs, writes, removes or changes by a
+ * name the reader places: a file so written, or under a folder so written, may not be what the
+ * script reads in, and is not read. A file that is not there, is a link or no ordinary file, is
+ * larger than SCRIPT_MAX or cannot be opened is not read either: that is no failure to report, the
+ * call it would have cleared is held.
+ */
+export const readInFile = async (
+  io: { stat: (path: string) => Promise<{ kind: string; size?: number; isLink?: boolean } | undefined>; read: ScriptIo['read'] },
+  c: RunCommand,
+  beside: string | undefined,
+  script: { path: string; text: string; folder: string | undefined },
+  home: string,
+  known: (path: string) => ReadIn | undefined,
+  written: readonly (string | undefined)[],
+): Promise<ReadIn | undefined> => {
+  const folder = c.folder === null || c.folder === undefined || c.folder === UNPLACED || c.folder.startsWith(`${UNPLACED}/`) ? undefined : c.folder
+  const own = script.path.slice(0, script.path.lastIndexOf('/'))
+  const path = beside === undefined ? scriptPath(c.words[1] ?? '', script.text, folder, home) : folder !== undefined && folder === script.folder ? resolvePath(`${own}/${beside}`, '/', home) : undefined
+  if (path === undefined || !own || !path.startsWith(`${own}/`)) return undefined
+  if (written.some(w => w !== undefined && w !== '' && (w === path || path.startsWith(`${w}/`)))) return undefined
+  try {
+    // A link beside the script may point outside its folder, so one is not read.
+    const kind = await io.stat(path)
+    if (!kind || kind.kind !== 'file' || kind.isLink || (kind.size ?? 0) > SCRIPT_MAX) return undefined
+    const had = known(path)
+    if (had) return had
+    return { path, text: await io.read(path) }
+  } catch {
+    return undefined
+  }
+}
+
+// Names this reading writes into a text it hands mod-kit, which no script holds: a text that holds
+// them is not read here at all.
+const OWN_MARK = 'zz3416'
+const OWN_OUTER = `${OWN_MARK}outer`
+const OWN_FEED = `${OWN_MARK}feed`
+const OWN_PROBE = `${OWN_MARK}probe`
+const OWN_PROBED = new RegExp(`^${OWN_PROBE}(\\d+)$`)
+const OWN_NONE = `\${${OWN_MARK}none}`
+const OWN_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
+const OWN_DEPTH = 3
+// A body longer than this, or with more closing braces before its own than this, is not looked for.
+const OWN_BODY_MAX = 20_000
+const OWN_TRIES = 64
+// Every place a text types a function's definition with its opening brace: `name() {`,
+// `function name {`, `function name() {`, the brace on that line or the next.
+const OWN_TYPED = /(?<![^\n;&|(){}])[ \t]*(?:function[ \t]+([A-Za-z_][A-Za-z0-9_]*)[ \t]*(?:\(\))?|([A-Za-z_][A-Za-z0-9_]*)\(\))[ \t]*\n?[ \t]*\{/g
+// What may follow the brace closing a body on its line: nothing, a comment, or a `;` ending the
+// command. A redirect there is applied at every call with the call's words (`run() { true; } > "$1"`
+// empties the file it is handed), and `&` or `|` defines the function in a subshell only.
+const OWN_TAIL = /[ \t]*(?:\n|#|;(?![;&|])|$)/y
+// A line that the next one carries on: it ends in `&&`, `||`, `|` or a backslash, a comment after or not.
+const OWN_CARRIES = /(?:&&|\|\||\||\\)\s*(?:#.*)?$/
+
+/**
+ * How many characters of text one reading of a script's own calls may hand mod-kit's readers
+ * (#3416): eight times the script, and 200,000 more. The readers cost about a millisecond a thousand
+ * characters on a loaded Mac, and this reading runs in a hook before the command does. What it costs
+ * grows two ways, the definitions looked for and the calls times the body each is read as, and
+ * nothing else bounds the second. Past the limit every run not yet read is given back as it was.
+ */
+export const ownBudget = (text: string): number => 200_000 + 8 * text.length
+const OWN_OVER = Symbol('over the limit of ownBudget')
+
+// Whether the text before `at`, where a definition is typed, ends a command, so the definition is a
+// command of its own: the start of the text, a `;`, or a line break where the last line before it
+// that is neither blank nor a comment does not carry on (OWN_CARRIES). `x && run() { true; }` and
+// `x &&`, a line break, `run() { true; }` define the function only where x succeeds. Where that
+// last line is one word a heredoc before it ends on, the line judged is the one that opened the
+// heredoc: `cat <<EOF &&` carries on past its body.
+const endsCommand = (text: string, at: number): boolean => {
+  if (at === 0) return true
+  if (text[at - 1] === ';') return text[at - 2] !== ';'
+  if (text[at - 1] !== '\n') return false
+  for (let end = at - 1; ; ) {
+    if (end <= 0) return true
+    const start = text.lastIndexOf('\n', end - 1) + 1
+    const line = text.slice(start, end).trim()
+    if (line !== '' && !line.startsWith('#')) {
+      if (OWN_CARRIES.test(line)) return false
+      if (/\s/.test(line)) return true
+      const opened = text.slice(0, start).lastIndexOf(`<<`) < 0 ? [] : [...text.slice(0, start).matchAll(new RegExp(`<<-?[ \\t]*["'\\\\]?${line.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9_])`, 'g'))]
+      const last = opened[opened.length - 1]
+      if (!last) return true
+      const from = text.lastIndexOf('\n', last.index as number) + 1
+      const to = text.indexOf('\n', last.index as number)
+      return !OWN_CARRIES.test(text.slice(from, to < 0 ? text.length : to).trim())
+    }
+    end = start - 1
+  }
+}
+// The command a command's words run, past the shell's own words for running a builtin.
+const ranBy = (c: RunCommand): string => c.words.find(w => w !== 'builtin' && w !== 'command') ?? ''
+// A command the shell itself runs: one behind `timeout`, `env`, `command`, a new shell, `xargs` or
+// `find` is a program of that name, which knows nothing of the script's functions.
+const plainCall = (c: RunCommand): boolean => !c.behind?.length && !c.xargs && !c.found?.length
+// Any mention of what a function was handed, and the plain ones this reading can write a word in
+// place of: `$1` to `$9`, `${1}`, `$@`, `$*`, `${@}`, `${*}`. `$0` and `$#` are not what it was handed.
+const HANDED = /\$(?:[1-9@*]|\{[#!]?[0-9@*])/
+const HANDED_PLAIN = /\$(?:[1-9@*]|\{(?:[1-9]|[@*])\})/g
+const ASSIGNS = /^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=/
+// What changes the words a function was handed, runs text as commands, or changes which function a
+// name runs: a body holding one is not read as its commands with the call's words in place.
+const OWN_REFUSED = new Set(['shift', 'set', 'getopts', 'eval', 'source', '.', 'trap', 'alias', 'unalias', 'unset', 'function'])
+// The builtins and loops that set a variable they name as a word: one of them naming a variable is
+// another place that variable may get its value (the list mod-kit's ownFolderVar holds a text to).
+const OWN_SETS = new Set(['export', 'declare', 'typeset', 'local', 'readonly', 'read', 'printf', 'getopts', 'mapfile', 'readarray', 'unset', 'let', 'for', 'select'])
+const sameWords = (a: readonly string[] | undefined, b: readonly string[]): boolean => a !== undefined && a.length === b.length && a.every((w, i) => w === b[i])
+const liveWord = (c: RunCommand, i: number): boolean => /[$`]/.test(c.words[i] ?? '') && !c.unexpanded?.[i]
+const safeWord = (word: string): string => word.replace(/[^A-Za-z0-9_@%+=:,./-]/g, '_')
+
+/**
+ * Where a shell text defines the function `name`, as mod-kit's pipeline gives its commands: `braces`,
+ * each command that is `name()`, `function name` or `function name()`, whose body the pipeline reads
+ * as the commands after it; and `other`, how many times it is defined in a form this reading does
+ * not follow (`name ()`, the name and its parentheses apart).
+ */
+export const ownDefinitions = (commands: readonly RunCommand[], name: string): { braces: number[]; other: number } => {
+  const braces: number[] = []
+  let other = 0
+  commands.forEach((c, i) => {
+    const w = c.words
+    if (sameWords(w, [`${name}()`]) || sameWords(w, ['function', name]) || sameWords(w, ['function', `${name}()`])) braces.push(i)
+    else if (sameWords(w, [name]) && sameWords(commands[i + 1]?.words, ['(']) && sameWords(commands[i + 2]?.words, [')'])) other++
+  })
+  return { braces, other }
+}
+
+/**
+ * A function's body with each word of one call written in place of `$1`, `$2`, `$@` and `$*`
+ * (#3416), or undefined where it holds a heredoc, whose text this reading does not follow. `values`
+ * are the call's words after the function's name, each made of characters the shell reads the same
+ * inside double quotes and outside them, so a word is written in as it stands wherever the body
+ * names it; text in single quotes and comments are left as written. Which quotes hold a character
+ * is read simply here, so the caller reads the result with mod-kit's pipeline and refuses any word
+ * still naming what the function was handed.
+ */
+export const calledWith = (body: string, values: readonly string[]): string | undefined => {
+  let out = ''
+  let quote: '"' | "'" | undefined
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i] as string
+    if (quote === "'") {
+      out += c
+      if (c === "'") quote = undefined
+    } else if (c === '\\') {
+      out += c + (body[i + 1] ?? '')
+      i++
+    } else if (c === "'" && !quote) {
+      quote = "'"
+      out += c
+    } else if (c === '"') {
+      quote = quote ? undefined : '"'
+      out += c
+    } else if (c === '#' && !quote && (i === 0 || /[\s;&|(]/.test(body[i - 1] as string))) {
+      const end = body.indexOf('\n', i)
+      out += body.slice(i, end < 0 ? body.length : end)
+      i = (end < 0 ? body.length : end) - 1
+    } else if (c === '<' && !quote && body[i + 1] === '<' && body[i + 2] !== '<' && body[i - 1] !== '<') {
+      return undefined
+    } else {
+      const m = c === '$' ? /^\$(?:([1-9])|\{([1-9])\}|[@*]|\{[@*]\})/.exec(body.slice(i, i + 4)) : null
+      if (!m) {
+        out += c
+        continue
+      }
+      const n = m[1] ?? m[2]
+      out += n ? (values[Number(n) - 1] ?? OWN_NONE) : values.join(' ')
+      i += m[0].length - 1
+    }
+  }
+  return out
+}
+
+// Why a function's body is not read with a call's words in place (#3416), from mod-kit's pipeline
+// over it with bare assignments given as commands; undefined where it can be.
+const ownBodyRefused = (body: readonly RunCommand[]): string | undefined => {
+  for (const c of body) {
+    const first = c.words[0] ?? ''
+    if (/\(\)$/.test(first) || OWN_REFUSED.has(first) || OWN_REFUSED.has(ranBy(c))) return `it runs ${first}`
+    const live = [...c.words.filter((_, i) => liveWord(c, i)), ...(c.env ?? [])].filter(w => HANDED.test(w))
+    if (live.some(w => HANDED.test(w.replace(HANDED_PLAIN, '')))) return 'it names what it was handed in a form that is not written out'
+    if (live.some(w => ASSIGNS.test(w))) return 'it keeps what it was handed in a variable'
+    if ((first === 'for' || first === 'select') && (c.words[2] !== 'in' || live.length)) return 'it loops over what it was handed'
+  }
+  return undefined
+}
+
+// A group's commands as mod-kit's pipeline reads them, where `inner` is one whole group: read as the
+// body of a group fed by a pipe, itself inside a group fed by another, the first command after the
+// brace that closes it is fed by the outer pipe. 'open' where the text leaves a group, a quote or a
+// case open (that command is still fed by the inner pipe, or is no command at all), and 'over' where
+// it closes a group it did not open: the command after is fed by nothing, or one inside the text is
+// fed by the outer pipe. A longer text from the same start is then 'over' too.
+const wholeGroup = async (io: OwnCallIo, inner: string): Promise<readonly RunCommand[] | 'open' | 'over'> => {
+  const cmds = await io.pipeline(`${OWN_OUTER} | {\n${OWN_FEED} | {\n${inner}\n}\n${OWN_PROBE}`)
+  const last = cmds[cmds.length - 1]
+  if (cmds.length < 4 || !sameWords(cmds[0]?.words, [OWN_OUTER]) || !sameWords(cmds[1]?.words, [OWN_FEED]) || !last || !sameWords(last.words, [OWN_PROBE])) return 'open'
+  if (!last.pipedFrom?.length) return 'over'
+  if (!sameWords(last.pipedFrom, [OWN_OUTER])) return 'open'
+  const body = cmds.slice(2, -2)
+  return sameWords(cmds[cmds.length - 2]?.words, ['}']) && !body.some(c => sameWords(c.pipedFrom, [OWN_OUTER])) ? body : 'over'
+}
+
+/**
+ * A shell script's runs without the files a call hands a function the script's own text defines,
+ * where that function's body hands them to nothing the reader judges (#3416, Dan 2026-11-22: "Build
+ * the exemption (Recommended)", leaving out a function the script itself defines so it is not read
+ * as an unknown program). Before, every such call was a run of a program the reader does not know:
+ * all 31 newly judged calls in the count for #3416 were a test suite calling its own helper.
+ *
+ * The function's name is never what is trusted. A call is read as the function's own commands with
+ * the call's words written in place of `$1`, `$2`, `$@` and `$*` (calledWith), and mod-kit's readers
+ * read that text as they read any other: a file of the call's is left out only where nothing in
+ * their reading names it. So `run() { prettier --write "$@"; }; run app/page.tsx` is still a write
+ * of app/page.tsx, as that line typed whole is. A call the function's body passes to another
+ * function of the script is followed the same way, OWN_DEPTH deep.
+ *
+ * A file the script reads in (`. lib.sh`, `source "$DIR/lib.sh"`) is read from the disk and checked
+ * as the script's own text is (Dan, 2026-11-22: "Read the files a suite reads in (Recommended)";
+ * readInFile says which files, and `beside` below which `$DIR`). So a file read in after a
+ * definition no longer leaves that helper's calls judged where it leaves the name alone, and a
+ * helper the script does not define is looked for in the files it reads in: found where exactly one
+ * `source` or `.` command reads in a file defining it, that command standing at the top of the
+ * script as a command of its own with no words after the file, and the file defining it exactly once
+ * at its own top, by the one reading and the same checks as a definition in the script (bodyOf). Its
+ * calls count from that command on. A file read in is followed one file deep and no deeper.
+ *
+ * Everything this cannot tell is judged as before, as a run of a program the reader does not know:
+ * - any name not defined exactly once, as `name() {` or `function name {` at the top of the text
+ *   that holds it (in no branch, loop, group, case, subshell, substitution or function), as a
+ *   command of its own (after no `&&`, `||` or `|`, which define it only sometimes or in a
+ *   subshell), before every call; one the script unsets, or a script holding an alias; a name the
+ *   script and a file it reads in both define, or two such files, in a function's body as much as
+ *   at the top (a function that would define the name again once it is called);
+ * - text that may run after the definition and that this reading cannot follow, wherever it is
+ *   typed, since a function typed above the definition can be called below it: an eval anywhere in
+ *   the script; a file the guard read, before the definition or after, that holds an eval, an
+ *   alias, an unset or a file it reads in itself; a file the guard did not read, unless it is read
+ *   in above the definition at the top of the script as a command of its own, where it has ended
+ *   before the definition. NOT told: a function such a file defined under another name, called
+ *   below the definition, could define the name again (docs/mods-design.md, "What may run after
+ *   the definition", says what closing that was measured to cost);
+ * - a helper from a file read in only sometimes (in a branch, a loop, a function, a subshell, after
+ *   `&&`, in a pipe), read in twice, read in with words of its own, or from a file that may leave
+ *   (`return`, `exit`) before the definition, or that holds an eval, an alias, an unset or a file
+ *   it reads in itself;
+ * - a file read in by a path the guard cannot work out, from outside the script's folder, or one
+ *   the command or a script it runs writes (readInFile);
+ * - a call behind a program that runs its words (`timeout 5 run f`, `env`, `command`, `xargs`,
+ *   `find -exec`, `bash -c`): that runs the program of that name, never the function. One such
+ *   call, or one before the definition, among others with the same words holds them all;
+ * - a body that is no `{ }` group this reading can find the end of, or is followed on its line by
+ *   anything but a comment or a `;` (a redirect there is applied with each call's words), or holds a
+ *   heredoc, a function, or shift, set, getopts, eval, source, trap, alias or unset;
+ * - a body that keeps what it was handed in a variable (`local f="$1"`, `for f in "$@"`), names it
+ *   in any other form (`${1:-x}`, `${@:2}`), runs it as a command, or hands it to a command the
+ *   reader marks unread or one that runs its words later (RUNS_LATER);
+ * - a word that joins what was handed to another value (`"$ROOT/$1"`), where the joined name has
+ *   the shape of a file the guard holds.
+ * `worth` says which paths the caller would hold: a run handing none of them is given back as it is.
+ * What a body passes on through a pipe or standard input is not followed, as it is not in a line
+ * typed whole. Not followed either: a command whose name is itself a variable, which could unset
+ * or define a function where its value is `unset` or `eval`.
+ *
+ * What it costs is bounded (ownBudget): the definitions are placed by one reading of the script
+ * for them all, each body by a few readings of its own text, and each call by two of the body. A
+ * file read in is read from the disk once however many commands read it in, and its text counts
+ * against the same limit, as each reading of it does: past the limit no more is read from the disk.
+ */
+export const withoutOwnCalls = async (given: OwnCallIo, text: string, commands: readonly RunCommand[], runs: readonly HandedRun[] | undefined, worth: (path: string) => boolean): Promise<HandedRun[]> => {
+  type Own = { body: string; end: number }
+  // Every text handed to a reader is counted against ownBudget, and past it nothing more is read.
+  const budget = ownBudget(text)
+  let spent = 0
+  const charge = (t: string): void => {
+    if (spent > budget) throw OWN_OVER
+    spent += t.length
+  }
+  const io: OwnCallIo = {
+    pipeline: async (t, assignments) => {
+      charge(t)
+      return given.pipeline(t, assignments)
+    },
+    writes: async t => {
+      charge(t)
+      return given.writes(t)
+    },
+  }
+  // A text this reading looks for definitions in: the script's own, or a file it reads in. `typed`
+  // is every definition the text types; a text holding OWN_MARK is not read at all.
+  type Placed = { cmds: readonly RunCommand[]; starts: Map<number, number>; defs: number[]; reads: { i: number; at: number }[] }
+  type Unit = { text: string; commands: readonly RunCommand[]; marked: boolean; typed: { name: string; at: number; brace: number }[]; placed?: Promise<Placed>; tops?: Promise<Set<number>> }
+  const unitOf = (t: string, cmds: readonly RunCommand[]): Unit => {
+    const marked = t.includes(OWN_MARK)
+    return { text: t, commands: cmds, marked, typed: marked ? [] : [...t.matchAll(OWN_TYPED)].map(m => ({ name: (m[1] ?? m[2]) as string, at: m.index as number, brace: (m.index as number) + m[0].length - 1 })) }
+  }
+  const script = unitOf(text, commands)
+  const marked = script.marked
+  // Each command by the word it starts with, so a name's calls are not looked for through them all.
+  const startsWith = new Map<string, number[]>()
+  commands.forEach((c, k) => {
+    const first = c.words[0] ?? ''
+    const at = startsWith.get(first)
+    if (at) at.push(k)
+    else startsWith.set(first, [k])
+  })
+  // The commands, by their place, that call `r`'s program with every file `r` hands it. Looked up
+  // by the word of the run's fewest commands hold, so a helper called three thousand times is not
+  // read through three thousand times for each of its runs.
+  const holding = new Map<string, Map<string, number[]>>()
+  const callsOf = (r: HandedRun): number[] => {
+    const all = startsWith.get(r.script) ?? []
+    let byWord = holding.get(r.script)
+    if (!byWord) {
+      byWord = new Map()
+      for (const k of all)
+        for (const w of new Set((commands[k] as RunCommand).words.slice(1))) {
+          const at = byWord.get(w)
+          if (at) at.push(k)
+          else byWord.set(w, [k])
+        }
+      holding.set(r.script, byWord)
+    }
+    let least = all
+    for (const a of r.args) {
+      const at = byWord.get(a.word) ?? []
+      if (at.length < least.length) least = at
+    }
+    return least.filter(k => r.args.every(a => (commands[k] as RunCommand).words.slice(1).includes(a.word)))
+  }
+  // Every definition the text types, and which of them stand at the top of the script (in no
+  // branch, loop, group, subshell, case, function, substitution, quote or heredoc), asked of mod-kit's
+  // pipeline once for them all (#3416: asked once a function over the text before it, a 6,370 line
+  // suite took 6.4 to 7.4 seconds). The script is read as a group fed by a pipe inside a group fed by another,
+  // and where each definition is typed that inner group is closed, a numbered probe written, and a
+  // new one opened. Each insert closes one group and opens one, so how deep every later command
+  // stands is unchanged, and a probe is fed by the outer pipe only where its definition stood in no
+  // group at all: inside one, the brace written in closes that one, and the probe is still fed by
+  // an inner pipe; in a substitution it is fed by nothing; in a quote or a heredoc it is no command.
+  // `probe` is that reading for any places in a text: for each place that stands in no group, where
+  // among the commands it gives the first command typed there is, and the pipe that feeds it.
+  const probe = async (t: string, places: readonly number[], assignments = false): Promise<{ cmds: readonly RunCommand[]; starts: Map<number, number> }> => {
+    let probed = `${OWN_OUTER} | {\n${OWN_FEED}0 | {\n`
+    let from = 0
+    places.forEach((at, i) => {
+      probed += `${t.slice(from, at)}\n}\n${OWN_PROBE}${i}\n${OWN_FEED}${i + 1} | {\n`
+      from = at
+    })
+    const cmds = await io.pipeline(probed + t.slice(from), assignments)
+    const seen = new Map<number, number>()
+    const starts = new Map<number, number>()
+    cmds.forEach((c, k) => {
+      const m = c.words.length === 1 ? OWN_PROBED.exec(c.words[0] as string) : null
+      const i = m ? Number(m[1]) : -1
+      if (!m || i >= places.length) return
+      seen.set(i, (seen.get(i) ?? 0) + 1)
+      // The probe, then the pipe opened after it, then what is typed at the place as the first command it feeds.
+      const feed = cmds[k + 1]
+      if (sameWords(c.pipedFrom, [OWN_OUTER]) && sameWords(feed?.words, [`${OWN_FEED}${i + 1}`]) && sameWords(feed?.pipedFrom, [OWN_OUTER])) starts.set(i, k + 2)
+    })
+    for (const [i, n] of seen) if (n !== 1) starts.delete(i)
+    return { cmds, starts }
+  }
+  const fedBy = (i: number): string[] => [`${OWN_FEED}${i + 1}`]
+  // A place typed after a `#` that may start a comment on its line is not probed by any reading
+  // here, and so is never at the top: a probe written into a comment ends the comment, the rest of
+  // the line is read as commands, and a `}` there closes a group the text never closed, after
+  // which what stands in a function reads as standing at the top.
+  const maybeComment = (t: string, at: number): boolean => /(?:^|[\s;&|()<>])#/.test(t.slice(t.lastIndexOf('\n', at - 1) + 1, at))
+  // The one reading of a text that places what it types: every definition, and in the script every
+  // `source` or `.` command too (readAtTop), which asked in a reading of its own cost the whole
+  // script once more. `defs` is each definition's place among the probes, in the order typed, and
+  // `reads` each such command's, with where in the text it is typed.
+  const placed = (u: Unit): Promise<Placed> => {
+    u.placed ??= (async () => {
+      const typed = u.typed.map((t, def) => ({ at: t.at, def }))
+      const taken = new Set(typed.map(t => t.at))
+      const read = u !== script || marked ? [] : [...text.matchAll(/(?<![^\n;&|(){}])[ \t]*(?:\.|source)[ \t]/g)].map(m => ({ at: m.index as number, def: -1 })).filter(r => !taken.has(r.at))
+      const all = [...typed, ...read].filter(p => !maybeComment(u.text, p.at)).sort((a, b) => a.at - b.at)
+      const { cmds, starts } = await probe(
+        u.text,
+        all.map(p => p.at),
+      )
+      const defs: number[] = []
+      const reads: { i: number; at: number }[] = []
+      all.forEach((p, i) => {
+        if (p.def < 0) reads.push({ i, at: p.at })
+        else defs[p.def] = i
+      })
+      return { cmds, starts, defs, reads }
+    })()
+    return u.placed
+  }
+  const atTop = (u: Unit): Promise<Set<number>> => {
+    u.tops ??= (async () => {
+      const { cmds, starts, defs } = await placed(u)
+      const top = new Set<number>()
+      defs.forEach((i, d) => {
+        const k = starts.get(i)
+        const def = k === undefined ? undefined : cmds[k]
+        if (def && ownDefinitions([def], (u.typed[d] as { name: string }).name).braces.length === 1 && sameWords(def.pipedFrom, fedBy(i))) top.add(d)
+      })
+      return top
+    })()
+    return u.tops
+  }
+  // The variables the script's own commands surely set to the folder the script file is in, each
+  // with the place, among the commands read with bare assignments, of the one command that sets it:
+  // a command of one word, `V=` and mod-kit's own folder idiom alone (withoutOwnFolder), expanded,
+  // typed once at the top of the script as a command of its own. Nothing else may set V: no other
+  // assignment in any command (a function's body and a command's own environment included), no
+  // builtin or loop naming it, no `${V:=x}`. Text the script only holds (a fixture it writes, a
+  // heredoc) is no command, which is what a reading of the text alone cannot tell (mod-kit's
+  // ownFolderVar, which the Slack gate's suite fails on its own fixtures).
+  let assigned: Promise<readonly RunCommand[]> | undefined
+  const folders = new Map<string, Promise<number | undefined>>()
+  const ownFolder = (v: string): Promise<number | undefined> => {
+    let known = folders.get(v)
+    if (!known) {
+      known = (async () => {
+        if (marked) return undefined
+        const cmds = await (assigned ??= io.pipeline(text, true))
+        const sets = new RegExp(`^${v}(?:\\[[^\\]]*\\])?\\+?=`)
+        const defaults = new RegExp(`\\$\\{${v}:?=`)
+        // An arithmetic command or expansion naming it may set it too; that is read from the text.
+        if (new RegExp(`\\(\\([^)]*(?<![A-Za-z0-9_])${v}(?![A-Za-z0-9_])`).test(text)) return undefined
+        // What sets it: a command of assignments alone, a command's own environment, a builtin or
+        // loop naming it, a default expansion. `V=x` as a word handed to any other command is text,
+        // and so it is to printf, which sets only a variable it is handed by name (`printf -v V`).
+        const setters = cmds.flatMap((c, i) =>
+          c.words.some(w => defaults.test(w)) ||
+          (c.env ?? []).some(w => sets.test(w)) ||
+          (c.words.every(w => ASSIGNS.test(w)) && c.words.some(w => sets.test(w))) ||
+          (OWN_SETS.has(ranBy(c)) && c.words.some(w => w === v || (ranBy(c) !== 'printf' && sets.test(w))))
+            ? [i]
+            : [],
+        )
+        const a = setters.length === 1 ? cmds[setters[0] as number] : undefined
+        if (!a || a.words.length !== 1 || a.env?.length || !liveWord(a, 0) || a.pipedFrom !== undefined || withoutOwnFolder(a.words[0] as string) !== `${v}=/own-folder`) return undefined
+        const places = [...text.matchAll(new RegExp(`(?<![^\\n;&|(){}])[ \\t]*${v}=`, 'g'))].map(m => m.index as number).filter(at => !maybeComment(text, at))
+        if (!places.length || places.length > OWN_TRIES) return undefined
+        const { cmds: read, starts } = await probe(text, places, true)
+        let tops = 0
+        for (const [i, k] of starts) {
+          // The commands of the idiom's own substitution come first, fed by no pipe, as the
+          // assignment is, which reads nothing; a command a pipe feeds, or another assignment,
+          // before it means the assignment found is not the one typed at this place.
+          // The value is typed in double quotes or bare: in single quotes it is the idiom's text,
+          // which the pipeline gives as the same word.
+          const rest = read.slice(k)
+          const n = rest.findIndex(c => c.words.length === 1 && sets.test(c.words[0] as string))
+          const quote = text[text.indexOf('=', places[i] as number) + 1]
+          if (n >= 0 && (quote === '"' || quote === '$') && sameWords(rest[n]?.words, a.words) && !rest.slice(0, n).some(c => c.pipedFrom !== undefined || (c.words.length === 1 && ASSIGNS.test(c.words[0] as string))) && endsCommand(text, places[i] as number)) tops++
+        }
+        return tops === 1 ? setters[0] : undefined
+      })()
+      folders.set(v, known)
+    }
+    return known
+  }
+  // The name a `source` or `.` command spells under a variable that is surely the script's own
+  // folder (`. "$DIR/lib/x.sh"` gives lib/x.sh), where every command with those words comes after
+  // the one that sets the variable; undefined for any other word, and for a name holding another
+  // value, a pattern or a backtick.
+  const beside = async (c: RunCommand): Promise<string | undefined> => {
+    const m = /^\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))\/([^$`*?[\]{}~\\]+)$/.exec(c.words[1] ?? '')
+    if (!m || !liveWord(c, 1)) return undefined
+    const set = await ownFolder((m[1] ?? m[2]) as string)
+    if (set === undefined) return undefined
+    const cmds = await (assigned as Promise<readonly RunCommand[]>)
+    const at = cmds.flatMap((x, i) => (sameWords(x.words, c.words) ? [i] : []))
+    if (!at.length || !at.every(i => i > set)) return undefined
+    // Between the assignment and the last such command nothing may run text as commands or read
+    // in any other file, either of which could set the variable again where this reading cannot see.
+    const between = cmds.slice(set + 1, at[at.length - 1] as number)
+    if (between.some(x => ranBy(x) === 'eval' || ((ranBy(x) === 'source' || ranBy(x) === '.') && !sameWords(x.words, c.words)))) return undefined
+    return m[3]
+  }
+  // Whether a file's text may set the variable `v`: it spells the name anywhere but in `$v` or
+  // `${v}`, or gives it a default. Asked of every file read in under that variable: read in twice,
+  // its first reading runs before the second is found, and so may have moved where that one looks.
+  const maySet = (t: string, v: string): boolean => new RegExp(`(?<![A-Za-z0-9_$])(?<!\\$\\{)${v}(?![A-Za-z0-9_])|\\$\\{${v}:?=`).test(t)
+  // The file a `source` or `.` command reads in, as a text to look for definitions in (readInFile,
+  // through the caller), or undefined where the guard cannot say which file it is or did not read
+  // it. A file is read from the disk once however many commands read it in, and its text is counted
+  // against the limit as a text handed to a reader is: past the limit no more is read from the disk.
+  const units = new Map<string, Promise<Unit>>()
+  const asked = new Map<string, Promise<Unit | undefined>>()
+  const readIn = (c: RunCommand): Promise<Unit | undefined> => {
+    // Which file a command reads in is set by its words and the folder it runs in.
+    const key = `${c.folder ?? ''}\n${c.words.join('\n')}`
+    let got = asked.get(key)
+    if (!got) {
+      got = (async () => {
+        if (!given.sourced || c.words[0] !== ranBy(c)) return undefined
+        const under = await beside(c)
+        charge('')
+        const file = await given.sourced(c, under)
+        if (!file) return undefined
+        if (under !== undefined && maySet(file.text, (/^\$\{?([A-Za-z_]\w*)/.exec(c.words[1] ?? '') as RegExpExecArray)[1] as string)) return undefined
+        let unit = units.get(file.path)
+        if (!unit) {
+          unit = (async () => {
+            charge(file.text)
+            return unitOf(file.text, file.commands ?? (await io.pipeline(file.text)))
+          })()
+          units.set(file.path, unit)
+        }
+        return unit
+      })()
+      asked.set(key, got)
+    }
+    return got
+  }
+  // Each `source` or `.` command that stands at the top of the script as a command of its own, by
+  // its words: read in whenever the script runs, where one in a branch, a loop, a function, a
+  // subshell or after `&&` is read in only sometimes, or into a shell that ends.
+  let topReads: Promise<string[]> | undefined
+  const readAtTop = async (c: RunCommand): Promise<boolean> => {
+    topReads ??= (async () => {
+      const { cmds, starts, reads } = await placed(script)
+      const out: string[] = []
+      const readsIn = (c: RunCommand | undefined): boolean => c?.words[0] === '.' || c?.words[0] === 'source'
+      for (const { i, at } of reads) {
+        const k = starts.get(i)
+        if (k === undefined) continue
+        // The commands of a substitution in the file's own name (`. "$(cd "$(dirname "$0")" && pwd)/lib.sh"`)
+        // are given before the command, fed by nothing: the first command the place's pipe feeds
+        // is the one typed there.
+        let j = k
+        while (cmds[j] && !readsIn(cmds[j]) && !sameWords(cmds[j]?.pipedFrom, fedBy(i))) j++
+        const read = cmds[j]
+        if (read && readsIn(read) && sameWords(read.pipedFrom, fedBy(i)) && endsCommand(text, at)) out.push(read.words.join('\n'))
+      }
+      return out
+    })()
+    const said = c.words.join('\n')
+    return (await topReads).filter(w => w === said).length === commands.filter(x => sameWords(x.words, c.words)).length
+  }
+  const definedAgain = (cmds: readonly RunCommand[], name: string): boolean => {
+    const again = ownDefinitions(cmds, name)
+    return again.braces.length > 0 || again.other > 0
+  }
+  // What a file read in may not hold: text run as commands, a file it reads in itself (a file read
+  // in is followed one file deep, and no deeper), or a change to which function a name runs.
+  const rereads = (cmds: readonly RunCommand[]): boolean => cmds.some(r => ['eval', 'source', '.', 'alias', 'unset'].includes(ranBy(r)))
+  const found = new Map<string, Promise<Own | undefined>>()
+  const find = async (name: string): Promise<Own | undefined> => {
+    if (!OWN_NAME.test(name) || marked) return undefined
+    for (const c of commands) {
+      const first = ranBy(c)
+      if (first === 'alias') return undefined
+      if (first === 'unset' && c.words.slice(1).some(w => w === name || /[$`*?[\]{}]/.test(w))) return undefined
+    }
+    // Where the name is defined, and after which of the script's commands it is: by the script's
+    // own text, or, where that defines it nowhere, by the one file read in that does (Dan,
+    // 2026-11-22: "Read the files a suite reads in (Recommended)"). The body is then found in that
+    // text by the one reading below, and checked by the same checks, whichever text holds it.
+    let from: { unit: Unit; d: number } | undefined
+    let after: number | undefined
+    if (definedAgain(commands, name)) {
+      const d = definedOnce(script, name)
+      if (d === undefined) return undefined
+      from = { unit: script, d }
+      after = d
+    } else {
+      const reads: { at: number; c: RunCommand; unit: Unit }[] = []
+      for (const [i, c] of commands.entries()) {
+        const first = ranBy(c)
+        if (first !== 'source' && first !== '.') continue
+        const unit = await readIn(c)
+        if (unit && definedAgain(unit.commands, name)) reads.push({ at: i, c, unit })
+      }
+      // One command reads it in, with no words of its own, in no pipe and behind no program, whenever
+      // the script runs; and the file makes the definition whenever it is read in: it holds no eval,
+      // alias or unset, reads in no file itself, and does not leave before the definition.
+      const r = reads.length === 1 ? reads[0] : undefined
+      if (!r || r.c.words.length !== 2 || !plainCall(r.c) || r.c.pipedFrom !== undefined || !(await readAtTop(r.c))) return undefined
+      const d = r.unit.marked || rereads(r.unit.commands) ? undefined : definedOnce(r.unit, name)
+      if (d === undefined || r.unit.commands.slice(0, d).some(x => ['return', 'exit'].includes(ranBy(x)))) return undefined
+      from = { unit: r.unit, d }
+      after = r.at
+    }
+    for (const [i, c] of commands.entries()) {
+      const first = ranBy(c)
+      if (i === after) continue
+      if (first === 'source' || first === '.') {
+        const read = await readIn(c)
+        // A file the guard read is held to the same checks wherever it is read in: a function it
+        // defines before the definition can be called after it, and what that function holds then
+        // runs after it. A file the guard did not read is let be only where it has surely ended
+        // before the definition: read in above it, at the top of the script, as a command of its
+        // own. In a function, a branch or a loop above it, it may be read in after it.
+        if (read ? definedAgain(read.commands, name) || rereads(read.commands) : i > after || !(await readAtTop(c))) return undefined
+        // Text run as commands holds the call wherever it is typed: in a function typed above the
+        // definition it runs when that function is called, which can be after it.
+      } else if (first === 'eval') return undefined
+    }
+    const got = await bodyOf(from.unit, name, from.d)
+    return got && { body: got.body, end: from.unit === script ? got.end : after }
+  }
+  // Defined once, and by a command no pipe feeds: `echo x | run() { true; }` defines it in a subshell.
+  const definedOnce = (u: Unit, name: string): number | undefined => {
+    const defs = ownDefinitions(u.commands, name)
+    const d = defs.braces[0]
+    return d === undefined || defs.braces.length !== 1 || defs.other || (u.commands[d] as RunCommand).pipedFrom !== undefined ? undefined : d
+  }
+  // The body of the one definition of `name` a text types, `d` its place among that text's
+  // commands, and the place of the brace that closes it; undefined where the body is not one this
+  // reading reads with a call's words in place.
+  const bodyOf = async (u: Unit, name: string, d: number): Promise<Own | undefined> => {
+    const mine = u.typed.flatMap((t, i) => (t.name === name ? [i] : []))
+    const t = mine.length === 1 ? u.typed[mine[0] as number] : undefined
+    if (!t || !endsCommand(u.text, t.at) || !(await atTop(u)).has(mine[0] as number)) return undefined
+    let tried = 0
+    for (let p = t.brace + 1; p < u.text.length && p - t.brace <= OWN_BODY_MAX; p++) {
+      if (u.text[p] !== '}' || !/[\s;&|()]/.test(u.text[p - 1] as string) || !/^(?:$|[\s;()|&<>])/.test(u.text.slice(p + 1, p + 2))) continue
+      if (++tried > OWN_TRIES) return undefined
+      const body = u.text.slice(t.brace + 1, p)
+      const inner = await wholeGroup(io, body)
+      // Closed already: no later brace is this body's.
+      if (inner === 'over') return undefined
+      // The pipeline's own reading of the text gives the same commands after the definition, then the brace.
+      if (inner === 'open' || !inner.every((c, i) => sameWords(u.commands[d + 1 + i]?.words, c.words)) || !sameWords(u.commands[d + 1 + inner.length]?.words, ['}'])) continue
+      OWN_TAIL.lastIndex = p + 1
+      if (!OWN_TAIL.test(u.text)) return undefined
+      return ownBodyRefused(await io.pipeline(body, true)) === undefined ? { body, end: d + 1 + inner.length } : undefined
+    }
+    return undefined
+  }
+  const own = (name: string): Promise<Own | undefined> => {
+    const known = found.get(name)
+    if (known) return known
+    const made = find(name)
+    found.set(name, made)
+    return made
+  }
+  const within = (text: string, marks: readonly string[]): string[] => marks.filter(t => text.includes(t))
+  // The marks of the call's files that the body, read with `values` in place, hands to something
+  // the reader judges; every mark where that cannot be told.
+  const kept = async (fn: Own, values: readonly string[], marks: readonly string[], call: number, depth: number): Promise<Set<string>> => {
+    const all = new Set(marks)
+    const written = calledWith(fn.body, values)
+    if (written === undefined) return all
+    const cmds = await io.pipeline(written)
+    const out = new Set<string>()
+    for (const c of cmds) {
+      const said = c.words.join(' ')
+      const first = c.words[0] ?? ''
+      if (c.unread || RUNS_LATER.test(first) || first === 'command') for (const t of within(said, marks)) out.add(t)
+      // What the function was handed, run as the command itself.
+      for (const t of within(first, marks)) out.add(t)
+      for (const [i, w] of c.words.entries()) {
+        if (!liveWord(c, i)) continue
+        if (HANDED.test(w)) return all
+        const plain = w.replace(/\$\{[^{}]*\}|\$[A-Za-z_][A-Za-z0-9_]*|\$[?!$#-]/g, 'X')
+        if (/[$`]/.test(plain) || shapeKind(plain) !== null || isModHook(plain) || isModHookTs(plain)) for (const t of within(w, marks)) out.add(t)
+      }
+    }
+    const read = await io.writes(written)
+    const inner: HandedRun[] = []
+    const rest: HandedRun[] = []
+    for (const r of read.runs ?? []) (r.unknown && depth < OWN_DEPTH && (await own(r.script))?.end !== undefined ? inner : rest).push(r)
+    for (const t of within(JSON.stringify({ ...read, runs: rest }), marks)) out.add(t)
+    for (const r of inner) {
+      const next = (await own(r.script)) as Own
+      const calls = cmds.filter(c => c.words[0] === r.script && r.args.every(a => c.words.slice(1).includes(a.word)))
+      // Defined after this call, or one of the commands it may be is a program of that name.
+      if (next.end >= call || !calls.length || !calls.every(plainCall)) {
+        for (const t of within(JSON.stringify(r), marks)) out.add(t)
+        continue
+      }
+      for (const c of calls) {
+        const passed = c.words.slice(1).map((w, i) => {
+          const holds = within(w, marks)
+          if (holds.length === 1 && holds[0] === w) return w
+          // A word holding a call's file among other characters is not that file to the next function.
+          if (!liveWord(c, i + 1)) for (const t of holds) out.add(t)
+          return holds.length || liveWord(c, i + 1) ? OWN_NONE : safeWord(w)
+        })
+        for (const t of await kept(next, passed, marks, call, depth + 1)) out.add(t)
+      }
+    }
+    return out
+  }
+  const keptWords = new Map<string, Promise<string[]>>()
+  // What is left of one run: itself where its program is no function of the script, or where one
+  // of the commands it may be stands before the definition or is a program of that name.
+  const leftOf = async (r: HandedRun): Promise<HandedRun | undefined> => {
+    const fn = r.unknown && r.args.some(a => a.path !== undefined && worth(a.path)) ? await own(r.script) : undefined
+    const calls = fn ? callsOf(r) : []
+    if (!fn || !calls.length || !calls.every(k => k > fn.end && plainCall(commands[k] as RunCommand))) return r
+    const keep = new Set<string>()
+    const said = r.args.map(a => `${a.word}\t${a.path ?? ''}`).join('\n')
+    for (const k of calls) {
+      // Read once for each command and each way of naming its files: runs with the same words
+      // each match every such command, and would be read once for each pair.
+      const key = `${k}\n${said}`
+      let words = keptWords.get(key)
+      if (!words) {
+        words = (async () => {
+          const c = commands[k] as RunCommand
+          const marks: string[] = []
+          const of = new Map<string, string>()
+          const values = c.words.slice(1).map((w, i) => {
+            const path = r.args.find(a => a.word === w)?.path
+            if (path === undefined) return liveWord(c, i + 1) ? OWN_NONE : safeWord(w)
+            const mark = `/${OWN_MARK}/a${i + 1}${safeWord(path.startsWith('/') ? path : `/${path}`)}`
+            marks.push(mark)
+            of.set(mark, w)
+            return mark
+          })
+          return [...(await kept(fn, values, marks, k, 0))].map(t => of.get(t) as string)
+        })()
+        keptWords.set(key, words)
+      }
+      for (const w of await words) keep.add(w)
+    }
+    const args = r.args.filter(a => a.path === undefined || keep.has(a.word))
+    return args.some(a => a.path !== undefined) ? { ...r, args } : undefined
+  }
+  const left: HandedRun[] = []
+  let over = false
+  for (const r of runs ?? []) {
+    if (over) {
+      left.push(r)
+      continue
+    }
+    try {
+      const mine = await leftOf(r)
+      if (mine) left.push(mine)
+    } catch (err) {
+      if (err !== OWN_OVER) throw err
+      over = true
+      left.push(r)
+    }
+  }
+  return left
 }
 
 /**
