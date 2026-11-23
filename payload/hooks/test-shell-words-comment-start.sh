@@ -273,7 +273,7 @@ case " $SHELLS_READ " in
 esac
 case " $SHELLS_READ " in
   *" zsh "*) ;;
-  *) echo "UNMEASURED: there is no zsh on this machine, so each text was run by bash alone." ;;
+  *) echo "SUITE-PART-UNMEASURED what zsh does with each text, because there is no zsh on this machine and each was run by bash alone" ;;
 esac
 # A run that compared nothing must not read as a pass.
 [ "$pass" -ge 150 ] || check "the comparison checked its rows" "only $pass checks passed, of the 210 or so the table makes"
