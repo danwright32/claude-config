@@ -4106,6 +4106,160 @@ test('#3416: a comment that spells a definition or a read in command is never pr
   expect(folder).toEqual([])
 })
 
+// #3461: every place the three patterns can match where a probe written there may not be inert,
+// each tried with the pattern matching inside it. Below each place stands a helper the shell makes
+// only when `wrap` is called (NESTED), a file read in only when `load` is (LOAD), or the folder
+// idiom inside a function (SETDIR), so `held` is what the shell does; where the helper stands at
+// the top instead, `cleared` is right and holding only costs a question.
+test('#3461: a probe written where it changes how the script is read gives the reading up, and a place is at the top only where the group closed there is the one the reading opened', async () => {
+  const RUN = 'run() { true; }\n'
+  const CALL = 'run app/page.tsx\n'
+  const NESTED = `wrap () {\n  true\n  run() { true; }\n}\n${CALL}`
+  const LIB = { '/s/lib.sh': 'lib_fn() { echo "$1"; }\n' }
+  const LOAD = 'load () {\n  true\n  . lib.sh\n}\nlib_fn app/page.tsx\n'
+  const UNDER = { '/s/lib/x.sh': 'helper() { echo x; }\n' }
+  const SETDIR = `setdir () {\n  true\n  ${OWN_DIR}}\n${RUN}. "$DIR/lib/x.sh"\n${CALL}`
+  const wrong: { place: string; text: string; left: string[] }[] = []
+  const want = async (verdict: 'held' | 'cleared', place: string, text: string, files: Record<string, string> = {}): Promise<void> => {
+    const left = await readLeft(text, files)
+    if ((left.length ? 'held' : 'cleared') !== verdict) wrong.push({ place, text, left })
+  }
+  const def = (place: string, before: string) => want('held', `${place}, a definition`, `${before}${NESTED}`)
+  const read = (place: string, before: string) => want('held', `${place}, a read`, `${before}${LOAD}`, LIB)
+  const dir = (place: string, before: string) => want('held', `${place}, an assignment`, `${before}${SETDIR}`, UNDER)
+  const top = (place: string, before: string) => want('cleared', `${place}, the helper at the top`, `${before}${RUN}${CALL}`)
+
+  // The controls: nothing before.
+  await def('nothing before', '')
+  await read('nothing before', '')
+  await dir('nothing before', '')
+  await top('nothing before', '')
+
+  // A probe written here changed how the rest was read, and what stood in a function below read as
+  // standing at the top. Each of these cleared the call before.
+  // A heredoc ending on a brace: the brace written in ends it, and its body is read as commands.
+  await def("heredoc ending on '}'", "cat <<'}'\nb() { c; }; }\n}\n")
+  // The line that opens a heredoc: the newline written in starts the body there, so the rest of
+  // the line, an `if` it opens included, is read as text.
+  await want('held', 'line opening a heredoc, a branch opened after the place', `cat <<EOF; b() { :; }; if false; then\nbody\nEOF\n  run() { true; }\nfi\n${CALL}`)
+  // A separator a backslash escapes: the words after it are words of that command, and with the
+  // probe between they read as a command of their own, a read in at the top.
+  await read('escaped separator', 'echo \\; . lib.sh\n')
+  // A closing word the reader takes for the end of a group the text never opened closes the group
+  // the probe reading itself wrote around the script.
+  await def('closing word in an expansion', 'x=${y%;}\n')
+  await read('closing word in an expansion', 'x=${y%;}\n')
+  await read('closing word in a replacement', 'echo ${list//;/ . y; fi }\n')
+  await def('closing word inside [[ ]]', '[[ $a == x ||\n  fi == $a ]]\n')
+  await def('closing words in an array', 'arr=(\nfunction b {\n}\n}\n)\n')
+  await def('closing word in arithmetic', '((\nb() { c; }; }\n)) || true\n')
+  await def('closing word, then an opening one', 'x=${y%;}\narr=( if )\n')
+  // Text after an exit the shell never reads: held now, where either answer is right.
+  await def('text after exit', 'exit 0\nb() { c; }; }\n')
+  await def('text after exec', 'exec true\nb() { c; }; }\n')
+
+  // Places where a probe is inert, as they were. In a quote, a heredoc's body or a case's pattern
+  // what is written in is text, so the commands are the ones read without it.
+  await def('double quotes over lines', 'x="one\nb() { c; }; }\n"\n')
+  await read('double quotes over lines', 'x="one\n. y; }\n"\n')
+  await dir('double quotes over lines', 'x="one\nDIR=x; }\n"\n')
+  await top('double quotes over lines', 'x="one\nb() { c; }; }\n"\n')
+  await def('single quotes over lines', "x='one\nb() { c; }; }\n'\n")
+  await def("$'..' over lines", "x=$'one\nb() { c; }; }\n'\n")
+  await def('double quotes on one line', 'echo "a; b() { c; }; }"\n')
+  await def('here string over lines', 'cat <<< "one\nb() { c; }; }\n"\n')
+  await def('heredoc body', 'cat <<EOF\nb() { c; }; }\nEOF\n')
+  await def('heredoc body, quoted word', "cat <<'EOF'\nb() { c; }; }\nEOF\n")
+  await def('heredoc body, tabs stripped', 'cat <<-EOF\n\tb() { c; }; }\n\tEOF\n')
+  await read('heredoc body', 'cat <<EOF\n. y; }\nEOF\n')
+  await dir('heredoc body', 'cat <<EOF\nDIR=x; }\nEOF\n')
+  await top('heredoc body', 'cat <<EOF\nb() { c; }; }\nEOF\n')
+  await def('heredoc ending on }, bare', 'cat <<}\nb() { c; }; }\n}\n')
+  await def('heredoc ending on }, tabs stripped', 'cat <<-}\n\tb() { c; }; }\n}\n')
+  await read('heredoc ending on }, bare', 'cat <<}\n. y; }\n}\n')
+  await dir('heredoc ending on }, bare', 'cat <<}\nDIR=x; }\n}\n')
+  await read('case pattern, a dot', 'case $x in\n. ) echo dot ;;\nesac\n')
+  await read('case pattern, source and another', 'case $x in\nsource | other) echo ;;\nesac\n')
+  await read('case pattern, second clause', 'case $x in\na) echo ;;\n. ) echo dot ;;\nb) echo ;;\nesac\n')
+  await dir('case pattern', 'case $1 in\nDIR=*) echo ;;\nother) echo ;;\nesac\n')
+  // At a command's start, in a group of any kind, the brace written in closes that group and the
+  // one opened after it is closed by the group's own end, so nothing after it stands deeper or
+  // shallower: a case's clause, a subshell, a substitution, a branch, a loop, a function.
+  await def('case clause, two more after', 'case $x in\n  a) b() { c; } ;;\n  d) echo ;;\n  e) echo ;;\nesac\n')
+  await def('case clause, on its own line', 'case $x in\n  a)\n    b() { c; }\n    ;;\n  d) echo ;;\nesac\n')
+  await def('case clause, the last, no ;;', 'case $x in\n  a) echo ;;\n  d) b() { c; }\nesac\n')
+  await read('case clause', 'case $x in\n  a) . y ;;\n  d) echo ;;\n  e) echo ;;\nesac\n')
+  await dir('case clause', 'case $x in\n  a) DIR=x ;;\n  d) echo ;;\n  e) echo ;;\nesac\n')
+  await top('case clause', 'case $x in\n  a) b() { c; } ;;\n  d) echo ;;\n  e) echo ;;\nesac\n')
+  await want('held', 'case clause, the helper in it', `case $x in\n  a) run() { true; } ;;\n  d) echo ;;\nesac\n${CALL}`)
+  await def('command substitution over lines', 'x=$(\nb() { c; }\nb\n)\n')
+  await def('command substitution in double quotes', 'x="$(\nb() { c; }\nb\n)"\n')
+  await def('backticks over lines', 'x=`\nb() { c; }\nb\n`\n')
+  await def('process substitution over lines', 'cat <(\nb() { c; }\nb\n)\n')
+  await def('subshell over lines', '(\nb() { c; }\nb\n)\n')
+  await def('subshell on one line', '( b() { c; }; b )\n')
+  await read('command substitution over lines', 'x=$(\n. y\n)\n')
+  await read('subshell over lines', '(\n. y\n)\n')
+  await dir('command substitution over lines', 'x=$(\nDIR=x\n)\n')
+  await dir('subshell over lines', '(\nDIR=x\n)\n')
+  await want('held', 'subshell, the helper in it', `(\nrun() { true; }\n)\n${CALL}`)
+  await want('held', 'command substitution, the helper in it', `x=$(\nrun() { true; }\n)\n${CALL}`)
+  await def('if branch', 'if x; then\n  b() { c; }\nfi\n')
+  await def('while loop', 'while x; do\n  b() { c; }\ndone\n')
+  await def('for loop', 'for f in a b; do\n  b() { c; }\ndone\n')
+  await def('brace group', '{\n  b() { c; }\n}\n')
+  await def('brace group, right after the brace', '{ b() { c; }; }\n')
+  await def('function with a subshell body', 'f() (\n  b() { c; }\n)\n')
+  await def('function body', 'outer() {\n  b() { c; }\n}\n')
+  await read('function body', 'outer() {\n  . y\n}\n')
+  await want('held', 'function body not closed, the helper and its call in it', `wrap() {\n  true\n  run() { true; }\n${CALL}`)
+  await def('function body not closed', 'open() {\n  b() { c; }\n')
+  // The words of another command, or what the reader takes for commands, with nothing closed.
+  await read('[[ ]] over lines', '[[ $x == a ||\n. == $y ]]\n')
+  await def('[[ ]] on one line', '[[ $x =~ ^(a|b() {)$ ]]\n')
+  await read('array literal', 'arr=(\n  . x\n  source y\n)\n')
+  await dir('array literal', 'arr=(\nDIR=x\nOTHER=y\n)\n')
+  await def('array literal on one line', 'arr=( a; function b { )\n')
+  await def('array literal, a closing word', 'arr=( done )\n')
+  await read('arithmetic expansion over lines', 'x=$((\n. y; }\n)) || true\n')
+  await dir('arithmetic command', '(( DIR=1 ))\n')
+  await dir('arithmetic for', 'for ((DIR=0; DIR<2; DIR++)); do :; done\n')
+  await def('parameter expansion over lines', ': ${X:-\nb() { c; done; done\n}\n')
+  await def('parameter expansion over lines, in double quotes', ': "${X:-\nb() { c; done; done\n}"\n')
+  await read('parameter expansion over lines', ': ${X:-\n. y; fi\n}\n')
+  await dir('parameter expansion over lines', ': ${X:-\nDIR=x; fi\n}\n')
+  await read('line carried by a backslash', 'echo \\\n. lib.sh\n')
+  await dir('line carried by a backslash', `env \\\n${OWN_DIR.trim()} true\n`)
+  for (const sep of ['&', '|', '(', '{']) await read(`escaped ${sep}`, `echo \\${sep} . lib.sh\n`)
+  await want('held', 'escaped separator, the folder idiom as words of echo', `echo \\; ${OWN_DIR}${RUN}. "$DIR/lib/x.sh"\n${CALL}`, UNDER)
+  await want('held', 'line opening a heredoc, carried on by a backslash', `cat <<EOF \\\n  ; b() { :; }; if false; then\nbody\nEOF\n  run() { true; }\nfi\n${CALL}`)
+  await want('held', 'line opening a heredoc, a read', 'cat <<EOF; . y; if false; then\nbody\nEOF\n  . lib.sh\nfi\nlib_fn app/page.tsx\n', LIB)
+  await want('held', 'line opening a heredoc, an assignment', `cat <<EOF; DIR=x; if false; then\nbody\nEOF\n  ${OWN_DIR}fi\n${RUN}. "$DIR/lib/x.sh"\n${CALL}`, UNDER)
+  await want('held', 'line opening a heredoc, the helper itself on it', `cat <<EOF; run() { true; }\nbody\nEOF\n${CALL}`)
+  await want('held', 'after a pipe over lines', `echo x |\nrun() { true; }\n${CALL}`)
+  await want('held', 'after && over lines', `false &&\nrun() { true; }\n${CALL}`)
+  await def('after && over lines', 'false &&\nb() { c; }\n')
+  await want('held', 'text after a guarded exit', `[ -n "$X" ] || exit 1\n${NESTED}`)
+  // A closing brace in a comment taken for the end of a body: the body's own commands are still
+  // the ones the script's reading gives.
+  await want('held', 'body end in a comment, a redirect after it', `run() { true # }\n  > "$1"\n}\n${CALL}`)
+  await want('held', 'body end in a comment, a command after it', `run() { true # }\n  mystery "$1"\n}\n${CALL}`)
+
+  // The shapes of a real suite, let be as they were.
+  await want('cleared', 'here string, the helper after it', `cat <<< x; ${RUN}${CALL}`)
+  await want('cleared', 'a fixture written from a heredoc', `cat > "$T/g.sh" <<'EOF'\n#!/bin/bash\nb() { c; }\n. lib.sh\nDIR=x\nEOF\n${RUN}${CALL}`)
+  await want('cleared', 'a trap whose typed text defines a function', `trap 'b() { c; }; b' EXIT\n${RUN}${CALL}`)
+  await want('cleared', 'a shell run on typed text over lines', `bash -c '\nb() { c; }\nb\n'\n${RUN}${CALL}`)
+  await want('cleared', 'no newline at the end', `${RUN}run app/page.tsx`)
+  await want('cleared', 'a comment at the end, no newline', `${RUN}${CALL}# done`)
+  await want('cleared', 'two helpers and a group', `a() { true; }\n{\n  echo x\n}\n${RUN}${CALL}`)
+  await want('cleared', 'a helper in a function above', `outer() {\n  inner() { true; }\n  inner\n}\n${RUN}${CALL}`)
+  await want('cleared', 'text after exit below the helper and its call', `${RUN}${CALL}exit 0\nb() { c; }; } "\n`)
+  await want('cleared', 'the library read at the top', '. lib.sh\nlib_fn app/page.tsx\n', LIB)
+  await want('cleared', 'the folder idiom and a library under it', `${OWN_DIR}${RUN}. "$DIR/lib/x.sh"\n${CALL}`, UNDER)
+  expect(wrong.map(w => w.place)).toEqual([])
+})
+
 test('#3416: the files a suite reads in are counted against the limit, and past it no more are read from the disk', async () => {
   // Counted in characters read from the disk, never timed. Without the count every file is read:
   // sixty files of this size are 6.4 million characters, in a hook that runs before the command.

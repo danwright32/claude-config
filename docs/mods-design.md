@@ -2711,6 +2711,30 @@ that kind at its top (in the push test gate's suite, read for this, the suite de
 a path typed with the own folder idiom inside the word, which the reader does not place). Reading
 such a file would close it for a suite of that shape and is a wider reading, Dan's to decide.
 
+**A probe written where it changes the script (#3461), fixed 2026-11-23.** The comment was one
+such place of several. Every place the three patterns can match was tried with the pattern matching
+inside it, 116 scripts in all, each with a helper, a read in command or the folder assignment typed
+inside a function below it. Ten cleared a call the shell runs as an unknown program. A probe's
+brace ended a heredoc that ends on `}`. A probe's line break, on the line that opens a heredoc,
+started the body there, so an `if` typed after it was read as text. A probe after a separator a
+backslash escapes (`echo \; . lib.sh`) made a read in command of the words of `echo`. And with no
+probe misplaced at all, a closing word the reader takes for a group's end though the text opened
+none (`x=${y%;}`, which the reader splits at the `;`, a `fi` among the words of `[[ ]]`, a `}`
+among the words of an array or in an arithmetic command) closed the group the reading itself writes around the
+script, after which a place inside a function stood exactly where the top did. Inert, as tried: a
+quote over lines, a heredoc's body, a case's pattern, and the start of a command in any group, a
+case's clause, a subshell and a substitution included. The fix checks the reading, not the place:
+its commands must be the ones the same text gives with nothing written in, with each probe's own
+commands whole between them, or no place is at the top; and each probe now writes a command just
+before its brace, so a place is at the top only where that command is fed by the pipe the reading
+opened after the last place at the top. Two more that ran unasked are held now, where either
+answer is right (loose text after an `exit` or an `exec`), none is held less, and over the 615 shell files of
+this repository that hand a file to anything (50,606 runs) what is left held is the same 44,743
+runs before and after, for 0.17% more text handed to the readers. Left open, both the reader's and
+neither a probe's: inside a function, `x=${y%;}` is read as that function's end, so a helper typed
+after it in the same function reads as standing at the top; and a heredoc opened on a line that
+also holds a quote over lines is read as one word to the end of the script.
+
 **A trap whose text the shell fills in (#3460), fixed 2026-11-23.** `trap "$LATER" DEBUG`, then
 `run() { true; }` and `run app/page.tsx`, was read as the harmless body of `run`, while the shell
 runs whatever `$LATER` holds before each command. Measured that day in bash and in zsh, with LATER

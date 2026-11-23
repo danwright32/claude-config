@@ -5515,6 +5515,51 @@ test('#3416: a function of the script that hands on what it was handed, or that 
   expect(w.files[KEYS]).toBe(KEYS_TEXT)
 })
 
+// #3461: the reading that says which helpers stand at the top of a script writes a probe into its
+// text at every place a definition, a read in command or an assignment is typed (rules.ts
+// withoutOwnCalls). Written where it changed how the rest was read, it made a helper typed inside a
+// function, which the shell defines only when that function is called, read as standing at the top,
+// and the call below it, a run of a program named run, ran unasked.
+test('#3461: a script whose text a probe would change is held where the helper it calls stands inside a function, and runs as before where it stands at the top', withKit, async ($, on) => {
+  const NESTED = 'wrap () {\n  true\n  run() { true; }\n}\nrun /w/slate/app/page.tsx\n'
+  const TOP = 'run() { true; }\nrun /w/slate/app/page.tsx\n'
+  const LOAD = `load () {\n  true\n  . ${NOTES}/lib.sh\n}\nlib_note /w/slate/app/page.tsx\n`
+  const held: Record<string, string> = {
+    // The brace written in ends the heredoc, and its body is read as commands.
+    'brace-heredoc.sh': `cat <<'}'\nb() { c; }; }\n}\n${NESTED}`,
+    // The newline written in starts the heredoc's body there, and the `if` after it is read as text.
+    'heredoc-line.sh': 'cat <<EOF; b() { :; }; if false; then\nbody\nEOF\n  run() { true; }\nfi\nrun /w/slate/app/page.tsx\n',
+    // The words after an escaped separator read as a command of their own, a read in at the top.
+    'escaped.sh': `echo \\; . ${NOTES}/lib.sh\n${LOAD}`,
+    // A closing word the reader takes for a group's end closes the group the reading wrote around the script.
+    'expansion.sh': `x=\${y%;}\n${NESTED}`,
+    'replacement.sh': `echo \${list//;/ . y; fi }\n${LOAD}`,
+    'brackets.sh': `[[ $a == x ||\n  fi == $a ]]\n${NESTED}`,
+    'array.sh': `arr=(\nfunction b {\n}\n}\n)\n${NESTED}`,
+    'arithmetic.sh': `((\nb() { c; }; }\n)) || true\n${NESTED}`,
+    // The controls, held before as now: nothing above the function, and a probe in a quote.
+    'nested.sh': NESTED,
+    'quoted.sh': `x="one\nb() { c; }; }\n"\n${NESTED}`,
+  }
+  const cleared: Record<string, string> = {
+    'top.sh': TOP,
+    'quoted-top.sh': `x="one\nb() { c; }; }\n"\n${TOP}`,
+    'fixture-top.sh': `cat > "$T/g.sh" <<'EOF'\nb() { c; }\n. lib.sh\nEOF\n${TOP}`,
+    'reads-top.sh': `. ${NOTES}/lib.sh\nlib_note /w/slate/app/page.tsx\n`,
+  }
+  const scripts = { ...held, ...cleared, 'lib.sh': 'lib_note() { echo "$1"; }\n' }
+  const w = world($, on, { files: { ...WITH_SCRATCH, ...Object.fromEntries(Object.entries(scripts).map(([name, text]) => [`${NOTES}/${name}`, text])) } })
+  const sh = (command: string) => call($, { tool: 'Bash', command })
+  const notHeld: string[] = []
+  for (const name of Object.keys(held)) if (!refusalOf(await sh(`bash ${NOTES}/${name}`)).includes(SKIP_QUESTION)) notHeld.push(name)
+  expect(notHeld).toEqual([])
+  expect(w.ran).toEqual([])
+  const notCleared: string[] = []
+  for (const name of Object.keys(cleared)) if (refusalOf(await sh(`bash ${NOTES}/${name}`)) !== '') notCleared.push(name)
+  expect(notCleared).toEqual([])
+  expect(w.ran.length).toBe(Object.keys(cleared).length)
+})
+
 // #3460: a trap whose text the shell fills in (`trap "$LATER" DEBUG`) runs text nobody can read
 // before then, and that text can define the helper's name again before the call. Measured in bash
 // and zsh on 2026-11-23: with LATER holding a second definition of run, the call below ran that
