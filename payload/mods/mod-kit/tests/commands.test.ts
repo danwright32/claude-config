@@ -323,7 +323,9 @@ describe('pipeline: heredocs', () => {
   test('a heredoc inside a word feeds the cat there, and one that never ends has no body', () => {
     const cat = { words: ['cat', '<<EOF'], heredocs: [{ word: 1, body: "it's done", quoted: true }], substitution: true as const }
     expect(pipeline(`git commit -m "$(cat <<'EOF'\nit's done\nEOF\n)"`)).toEqual([cat, { words: ['git', 'commit', '-m', "$(cat <<'EOF'\n)"], derived: [null, null, null, { text: "it's done", commands: [cat] }] }])
-    expect(pipeline('cat <<EOF\ngit status')).toEqual([{ words: ['cat', '<<EOF'] }, { words: ['git', 'status'] }])
+    // Its lines are read as commands, as they always were, and since #3491 the cat says the reader
+    // could not tell where its body stops.
+    expect(pipeline('cat <<EOF\ngit status')).toEqual([{ words: ['cat', '<<EOF'], unread: 'fed a heredoc that never ends, so where its body stops cannot be read' }, { words: ['git', 'status'] }])
   })
   test('the commands are the ones commands gives, word for word', () => {
     const cmd = `X=1 cat > f.js <<'EOF'\nosascript -e 'x'\nEOF\n(cd sub && printf x >> notes.txt) 2>&1 | tee log`
@@ -1587,5 +1589,90 @@ describe('pipeline: a variable the call itself sets, read as its value (#3398)',
     followedAsWritten()
     const cmd = 'd=$(mktemp -d) && cd "$d" && git init -q && git checkout -q main; git -C "$d" rev-parse --verify --quiet HEAD'
     expect(pipeline(cmd, { follow: true }).filter(c => 'followed' in c)).toEqual([])
+  })
+})
+
+// #3491: `$'...'` was read as a plain single quoted string, where a backslash escapes nothing, so
+// `x=$'it\'s'` closed at the escaped quote and its last quote opened a string that never closed: the
+// rest of the script became one word of a command that only sets a variable, which is no command,
+// and every guard judged nothing after it. Measured 2026-11-23 on bash 3.2, zsh 5.9, macOS sh and
+// ksh: the string is `it's` and the next line runs. And a script the reader cannot read to its end
+// gave no sign of it: now the command it stops in is marked `unread`, which every guard holds.
+describe("$'...' and a script not read to its end (#3491)", () => {
+  const BS = '\\'
+  const NEXT = 'prettier --write app/page.tsx'
+  const next = ['prettier', '--write', 'app/page.tsx']
+  const QUOTE = 'holding a quote that never closes, so what the shell runs from there on cannot be read'
+  const HEREDOC = 'fed a heredoc that never ends, so where its body stops cannot be read'
+  const TORN = 'fed a heredoc opened on a line that ends inside a quote, so where its body starts cannot be read'
+
+  test("an escaped quote inside $'...' does not close it, so the commands after it are read", () => {
+    expect(commands(`x=$'it${BS}'s'\n${NEXT}`)).toEqual([next])
+    expect(commands(`echo $'it${BS}'s' done; ${NEXT}`)).toEqual([['echo', `$it${BS}'s`, 'done'], next])
+    expect(commands(`echo $'a${BS}${BS}${BS}'b' done; ${NEXT}`)).toEqual([['echo', `$a${BS}${BS}${BS}'b`, 'done'], next])
+    // The word is given as it always was, the $ kept and the text between the quotes as typed, so a
+    // string holding no escaped quote reads exactly as before.
+    expect(commands(`echo $'a${BS}${BS}' $'a${BS}"b' $'a${BS}nb'; ${NEXT}`)).toEqual([['echo', `$a${BS}${BS}`, `$a${BS}"b`, `$a${BS}nb`], next])
+  })
+
+  test("a quote after $$ or an escaped $ is a plain one, and in double quotes $' is text", () => {
+    expect(commands(`echo $$'a${BS}' b; ${NEXT}`)).toEqual([['echo', `$$a${BS}`, 'b'], next])
+    expect(commands(`echo ${BS}$'a${BS}' b; ${NEXT}`)).toEqual([['echo', `$a${BS}`, 'b'], next])
+    expect(commands(`echo ${BS}${BS}$'a${BS}'b' c; ${NEXT}`)).toEqual([['echo', `${BS}$a${BS}'b`, 'c'], next])
+    expect(commands(`echo "$'a" b; ${NEXT}`)).toEqual([['echo', `$'a`, 'b'], next])
+  })
+
+  test("the readers of a substitution's end, a test's end and a line's comment read $'...' the same way", () => {
+    expect(commands(`echo $(printf $'it${BS}'s (') done; ${NEXT}`)).toEqual([['printf', `$it${BS}'s (`], ['echo', `$(printf $'it${BS}'s (')`, 'done'], next])
+    expect(commands(`[[ $'it${BS}'s' == x || -n y ]] && ${NEXT}`)).toEqual([['[[', `$it${BS}'s`, '==', 'x', '||', '-n', 'y', ']]'], next])
+    expect(commands(`echo $'it${BS}'s' # see <<EOF\n${NEXT}`)).toEqual([['echo', `$it${BS}'s`], next])
+    expect(commands(`cat <<$'E${BS}'OF'\nbody\nE'OF\n${NEXT}`)).toEqual([['cat', `<<$E${BS}'OF`], next])
+  })
+
+  test('a quote that never closes marks the command it stands in unread', () => {
+    const read = (cmd: string) => pipeline(cmd).map(c => [c.words, c.unread])
+    expect(read(`echo 'abc\n${NEXT}`)).toEqual([[['echo', `abc\n${NEXT}`], QUOTE]])
+    expect(read(`echo "abc\n${NEXT}`)).toEqual([[['echo', `abc\n${NEXT}`], QUOTE]])
+    expect(read(`echo $'it${BS}'s\n${NEXT}`)).toEqual([[['echo', `$it${BS}'s\n${NEXT}`], QUOTE]])
+    // A command that only sets a variable is no command, but one the reader stops in is given.
+    expect(read(`git status; x='abc\n${NEXT}`)).toEqual([[['git', 'status'], undefined], [[`x=abc\n${NEXT}`], QUOTE]])
+    // The commands of a shell's script that stops in a quote are each unread.
+    expect(read(`bash -c 'echo "abc' ; ${NEXT}`)).toEqual([[['echo', 'abc'], QUOTE], [next, undefined]])
+    // What already said why it cannot be read keeps its own reason.
+    expect(read(`eval 'abc\n${NEXT}`).map(r => r[1])).toEqual(['run as text by eval, so what it runs cannot be read'])
+  })
+
+  test('a heredoc that never ends marks the command it feeds unread, its lines still read as commands', () => {
+    const read = (cmd: string) => pipeline(cmd).map(c => [c.words.join(' '), c.unread])
+    expect(read(`cat <<EOF\n${NEXT}`)).toEqual([['cat <<EOF', HEREDOC], [NEXT, undefined]])
+    expect(read(`git status; cat > f.txt <<'EOF'\nbody`)).toEqual([['git status', undefined], ['cat > f.txt <<EOF', HEREDOC], ['body', undefined]])
+    // One a substitution inside double quotes opens is a heredoc, and never ending it is said too.
+    expect(pipeline(`git commit -m "$(cat <<'EOF'\nmsg`).filter(c => c.words[0] === 'git').map(c => c.unread)).toEqual([HEREDOC])
+  })
+
+  test('a heredoc opened on a line that ends inside a quote marks the command it feeds unread', () => {
+    // Measured 2026-11-23 on bash 3.2, zsh 5.9, macOS sh, dash and ksh: the body starts after the line
+    // the quote closes on. This reader takes it from the next line, so it says it cannot read it.
+    const read = (cmd: string) => pipeline(cmd).filter(c => c.unread !== undefined).map(c => [c.words.join(' '), c.unread])
+    expect(read(`cat <<EOF; x="a\nb"\nbody\nEOF\n${NEXT}`)[0]).toEqual(['cat <<EOF', TORN])
+    expect(read(`cat <<EOF; echo "a\nb"\nbody\nEOF\necho "c"; ${NEXT}`)[0]).toEqual(['cat <<EOF', TORN])
+  })
+
+  test('a script read to its end marks nothing unread', () => {
+    const whole = [
+      `echo 'a' "b" $'c${BS}'d'; ${NEXT}`,
+      `cat <<EOF\nbody 'with a quote\nEOF\n${NEXT}`,
+      `git commit -m "$(cat <<'EOF'\nit's a message\nEOF\n)"`,
+      `x="a\nb"; cat <<EOF\nbody\nEOF\n${NEXT}`,
+      `cat <<EOF # it's a comment\nbody\nEOF\n${NEXT}`,
+      `echo "a 'b" 'c "d'; ${NEXT}`,
+      // A << where the shell opens no heredoc: in quoted text, and inside (( )), where it shifts.
+      `bash -lc 'python3 - <<EOF\nprint(1)\nEOF'`,
+      `git commit -m "see <<EOF\nmore"; ${NEXT}`,
+      `python3 -c "print(1 << n)"\n${NEXT}`,
+      `echo $((1 << n))\n${NEXT}`,
+      `(( x = 1 << n ))\n${NEXT}`,
+    ]
+    expect(whole.filter(cmd => pipeline(cmd).some(c => c.unread !== undefined))).toEqual([])
   })
 })
