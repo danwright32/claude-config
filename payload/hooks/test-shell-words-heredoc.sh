@@ -678,7 +678,7 @@ for shell in zsh dash ksh; do
   esac
 done
 # A run that compared nothing must not read as a pass.
-[ "$OPEN_ROWS" -ge 100 ] || check "#3492 the comparison checked its rows" "only $OPEN_ROWS checks were made, of the 115 the table makes"
+[ "$OPEN_ROWS" -ge 100 ] || check "#3492 the comparison checked its rows" "only $OPEN_ROWS checks were made, where the table makes two for each row and more, well over 100"
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

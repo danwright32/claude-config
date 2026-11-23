@@ -341,6 +341,13 @@ for one in "cat <<E; bash posts.sh; E" "cat <<'E'; bash posts.sh; E" "cat <<E; b
   run_bash "$one" "$T/open"
   refused "a file that posts, run on the line of a heredoc and before its marker, is refused: $one"
   says "and as a check it could not make: $one" "$COULD_NOT"
+  # The reason is the one line, not a backslash or an unquoted marker, so the advice is to put the
+  # body and the marker on lines of their own, never to quote the marker (two of these are quoted).
+  says "naming the heredoc on one line and how to write it: $one" "it opens a heredoc on the one line \`$one\`"
+  case "$ERR" in
+    *"quote the marker"*) check "and not telling the session to quote the marker: $one" "said: ${ERR:0:400}" ;;
+    *) check "and not telling the session to quote the marker: $one" ok ;;
+  esac
 done
 # The controls: with no marker after it the reading goes on to the command, as the shells run it,
 # and finds the post; a quiet one passes.

@@ -1885,6 +1885,9 @@ class UnsureComment(BaseException):
         end = text.find("\n", at)
         self.line = text[start:len(text) if end < 0 else end].strip()[:120]
         self.heredoc = text.startswith("<<", at)
+        # A text with no line break: the reader names a heredoc there for the one line, quoted or
+        # not, since no shell gives it a body (claude-config#3492), so the reason says that.
+        self.one_line = "\n" not in text
 
 
 def comment_why(line):
@@ -1894,7 +1897,12 @@ def comment_why(line):
             "Write that # in quotes, or put the comment on a line of its own (claude-config#3464)" % line)
 
 
-def heredoc_why(line):
+def heredoc_why(line, one_line=False):
+    if one_line:
+        return ("it opens a heredoc on the one line `%s`, and the gate cannot tell whether the commands "
+                "after it on that line are its body or commands: typed on one line, no shell gives the "
+                "heredoc a body and every one of them runs. Put the heredoc's body and its end marker on "
+                "lines of their own after the line that opens it (claude-config#3492)" % line)
     return ("it opens a heredoc the gate cannot find the end of, in the line `%s`: the end marker is not "
             "quoted, and it either never stands on a line of its own or stands right after a line that "
             "ends in a backslash, which a shell joins to the marker's line, so that the heredoc does not "
@@ -8123,7 +8131,7 @@ def main():
         except NulPath:
             reason = judge.unfollow(NUL_WHY)  # never kept: only an allowed judgement is
         except UnsureComment as e:
-            reason = judge.unfollow((heredoc_why if e.heredoc else comment_why)(e.line))
+            reason = judge.unfollow(heredoc_why(e.line, e.one_line) if e.heredoc else comment_why(e.line))
         finally:
             judge.unwatch()
         if judge.overran:
