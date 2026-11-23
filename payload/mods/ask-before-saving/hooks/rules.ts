@@ -1670,7 +1670,7 @@ export type RemovalCandidate = {
   toPath?: string
   into?: true
   onto?: true
-  /** The mv was told to replace nothing (-n), so a file already where this one goes is kept. */
+  /** The mv was told to replace nothing (-n) and given neither -f nor -i, so a file already where this one goes is kept. */
   keeps?: true
   tree?: true
   names?: string[]
@@ -1809,7 +1809,7 @@ export const removalCandidates = async (w: Writes, home: string, inCheckout: InC
       // move is said as it was before, by the name the words give, so a write inside that folder is
       // still a save of its own that one question cannot cover.
       ...(!emptied && c.to !== undefined && !c.to.into ? { onto: true as const } : {}),
-      // A mv told to replace nothing (-n): a file already where this one goes is kept, never replaced.
+      // A mv told to replace nothing (-n, with neither -f nor -i): a file already where this one goes is kept, never replaced.
       ...(!emptied && at !== undefined && c.to?.keeps ? { keeps: true as const } : {}),
     }
     // A pattern, in the folder it lands in: every file it matches in a folder of lasting memory, or

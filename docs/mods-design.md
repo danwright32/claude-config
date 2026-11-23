@@ -270,8 +270,10 @@ there: it removes or empties the source another way (under any spelling of its p
 paths) or moves it to a second place; another command removes, empties or writes over where it
 lands, what holds that or what is under it; the mv is onto a device or of two sources that may land
 on one name; or the command holds anything whose changes the reader cannot name (an unread command,
-a write its words do not name, a run, git). `keeps` on it says the mv was told to replace nothing
-(`-n`). Where the copies
+a write its words do not name, a run, git, a command that makes a link, an rsync told to remove
+what it sent). `$.modkit.writes` settles it once more against the disk, where a folder reached
+through a link is the folder it leads to. `keeps` on it says the mv was told to replace nothing
+(`-n`) and given neither `-f` nor `-i`. Where the copies
 disagreed, each case was decided and tested: `>& file` writes the file (the collision guard's
 reading), `wget --spider` saves nothing (no build's), `find -fprint` writes its file and `find
 -delete` removes what it finds (no build's), and a download whose files no word names says the
