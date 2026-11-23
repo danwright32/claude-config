@@ -8943,7 +8943,10 @@ commit, and `git ls-tree` for whether that commit holds the file; the command mu
 its source and its paths alone (`git checkout origin/main -- <file>`, `git restore --source
 origin/main <file>`), with nothing before or beside it that may change what the name means, though
 on a line that groups nothing what runs once the restore has finished no longer counts, a test run
-piped to its last lines included; any other commit, a local branch that differs from what was
+piped to its last lines included, and since #3401 a brace or parenthesis that mod-kit's own reading
+of the line shows to be quoted text groups nothing (a search for `"(fail|pass)"`), while a
+subshell, a group, a substitution, text handed to a shell and anything that reading does not
+account for still do; any other commit, a local branch that differs from what was
 fetched, the index, any option, a pattern, a file the default branch does not hold and every case
 git cannot answer for is judged as before, and so is putting the changed file back afterwards),
 since #3279 what a git command that moves committed work brings into the working tree (Dan,
@@ -9023,7 +9026,22 @@ decides, and source only files read the same, is not judged as writing the argum
 so `milestone-candidates.sh --like "<title naming page.html>"` runs; since #3021 the script's text
 is read through mod-kit alone, which keeps a `[[ ]]` test whole and reads a trap's text, and a
 command in it that mod-kit marks unread, or that runs through `setsid`, `flock`, `ionice`, `arch` or
-`ssh`, keeps its arguments judged), a patch git apply, git am or patch reads from a file judged
+`ssh`, keeps its arguments judged; since #3416 a file a shell script's own text hands a program the
+write reader does not know (`bash fmt.sh`, fmt.sh holding `prettier --write app/page.tsx`) is judged
+as a write of it, as that line typed whole is since #3323, in the script the command runs and each
+script that one runs, the list of programs that only read applying there as on a command line,
+and a call of a shell function the script's own text defines read as that function's commands with
+the call's words in place, so a helper that only compares and prints is no such program and a
+wrapper around one still is (Dan, 2026-11-22), a function from a file the script reads in checked
+the same way where the reader can say which file it is, a file in the script's own folder or below
+read in by name or under the folder the script sets as its own, one file deep (a function from a
+file outside that folder, from a path held in any other variable, from a file read in only inside
+an `if`, or one that keeps what it was handed in a variable, stays judged, as does a helper of a
+script that holds an eval anywhere, or that reads in a file the reader could not read anywhere but
+at its own top above the helper; of the 51 past calls in 45 days the rule newly judges, this
+reading clears 27),
+while what the script itself was handed, passed on to such a program (`mystery "$1"`), is still not
+caught), a patch git apply, git am or patch reads from a file judged
 since #3022 by the files it changes (mod-kit's patch reader, placed as the command places them), and
 a look changing file an inline script, or a patch that cannot be read whole or comes on standard
 input, only mentions, and since #3021 one named in the words of a command typed whole that mod-kit
@@ -9370,7 +9388,7 @@ Dan as a change to a message's words.
 
 #978, #1138, #1158, #1191, #1194, #1248, #1275, #1296, #1306, #1322, #1341, #1524, #1576, #1586,
 #1593, #1682, #1773, #1765, #1814, #1815, #1823, #1832, #1841, #1864, #1904, #1911, #1951, #1953,
-#1954, #2261, #2830, #2845, #2847, #2855, #2924, #2991, #3144, #3214
+#1954, #2261, #2830, #2845, #2847, #2855, #2924, #2991, #3144, #3214, #3416
 
 </td></tr>
 <tr><td>
