@@ -1254,8 +1254,9 @@ const printfText = (args: readonly string[]): string | undefined => {
  * one, never judging it by its words alone. It also marks the command this reader could not read
  * the text past (#3491): one holding a quote that never closes, given even where it only sets a
  * variable, its words as read with the rest of the text inside the last; one fed a heredoc that
- * never ends; and one fed a heredoc opened on a line that ends inside a quote. So a script that
- * could not be read to its end always gives a command marked so, and one that gives no commands
+ * never ends; one fed a heredoc opened on a line that ends inside a quote; and one read past a quote
+ * bash and zsh do not read alike, with every command read after it (shellsDiffer, braceDiffers).
+ * So a script that could not be read to its end always gives a command marked so, and one that gives no commands
  * has none to give. A command whose program is the variable of a loop over
  * words written out is not one (#3272, loopPrograms): it is given once for each word, that word in
  * the variable's place, as if typed with it.
