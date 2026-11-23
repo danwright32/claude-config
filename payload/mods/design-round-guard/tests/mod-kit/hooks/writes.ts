@@ -1966,7 +1966,8 @@ const madeBy = (entry: object, command: object) => {
   else MADE_BY.set(entry, new Set([command]))
 }
 // What was read holding a command that changes files in a way no write or change is given for: git
-// (but for the four subcommands in byGit), a script file, a module, a tool, a command fed by xargs.
+// (every git command, the four subcommands in byGit included), a script file, a module, a tool, a
+// command fed by xargs.
 const UNSURE = new WeakSet<ModKitWrites>()
 // Whether one of two places is the other, is under it or holds it. A pattern stands for the folder
 // it is matched in, since no name in that folder can be shown not to match it.

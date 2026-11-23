@@ -4135,9 +4135,11 @@ const KEEPS: [string, string, string, string][] = [
   ['a note the folder holds one of', `mv -n ${REMOVAL_MEM_SHOWN}/old.md ${ARCHIVE_SHOWN}`, `${REMOVAL_MEM_SHOWN}/old.md`, `It stays where it is: a file is at ${ARCHIVE_SHOWN}/old.md already, and mv -n replaces nothing.`],
   ['a pattern naming a file the folder holds', `mv -n ${REMOVAL_MEM_SHOWN}/{old,a}.md ${ARCHIVE_SHOWN}/`, `${REMOVAL_MEM_SHOWN}/{old,a}.md`, `${PATTERN_SAID} Each goes into the folder ${ARCHIVE_SHOWN} and can be moved back, but for one whose name a file there already has: that one stays where it is, since mv -n replaces nothing.`],
   ['a pattern naming none the folder holds', `mv -n ${REMOVAL_MEM_SHOWN}/{a,b}.md ${ARCHIVE_SHOWN}/`, `${REMOVAL_MEM_SHOWN}/{a,b}.md`, `${PATTERN_SAID} Each goes into the folder ${ARCHIVE_SHOWN}, and can be moved back.`],
+  // -f after -n wins in mv, so the file there is replaced: never said to stay where it is.
+  ['-n with -f after it, a note the folder holds one of', `mv -n -f ${REMOVAL_MEM_SHOWN}/old.md ${ARCHIVE_SHOWN}`, `${REMOVAL_MEM_SHOWN}/old.md`, `It goes to ${ARCHIVE_SHOWN}/old.md, replacing the file that is there now.`],
 ]
 for (const [what, command, names, said] of KEEPS)
-  test(`a mv that replaces nothing is never said to replace a file: ${what} (#3478)`, withKit, async ($, on) => {
+  test(`a mv -n is said to replace a file there only where a later -f makes it: ${what} (#3478)`, withKit, async ($, on) => {
     const w = world($, on, { auto: true, files: ARCHIVED })
     const asked = `Move ${names}: tidying the folder?`
     await askRemoval($, w, refusalOf(await call($, { tool: 'Bash', command })), 'Keep as is', asked)
