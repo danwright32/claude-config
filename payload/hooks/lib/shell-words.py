@@ -488,7 +488,7 @@ def moved(cwd, old, target):
 WORD_BREAKS = " \t\n;&|()"
 
 
-def word_starts(s, i, breaks=WORD_BREAKS, closed=None, layered=False):
+def word_starts(s, i, breaks=WORD_BREAKS, closed=None, layered=False, ended=None):
     """Whether a word starts at s[i], so that a # there starts a comment: True, False where s[i] is
     inside a word, and None where that cannot be told. i is where a reader that follows the quoting
     is outside every quote, and s[i] is not itself escaped.
@@ -500,13 +500,29 @@ def word_starts(s, i, breaks=WORD_BREAKS, closed=None, layered=False):
     inside its word (a substitution's), None where the shells differ or the reader does not know
     what it closed); with no closed, a `)` before s[i] cannot be told. layered says the text is
     inside backquotes, whose own reading of backslashes comes before the shell's, so a backslash
-    before the break cannot be counted here."""
+    before the break cannot be counted here.
+
+    Everything this looks back at is either next to s[i] on its line, and so read in the state the
+    caller vouches for at i, or on an earlier line it reaches over a backslash newline, and that
+    backslash joins the lines only where it is live. One that ends a COMMENT, or the closing line
+    of a heredoc, joins nothing, and the # that starts the next line starts a comment in every
+    shell: walking back over it took that # for text, and an apostrophe in it then opened a string
+    over the commands of the lines after (claude-config#3481; bash, bash --posix, sh, dash, zsh, zsh
+    emulating sh and ksh, measured 2026-11-23). ended is what the reader knows of that:
+    {the index of a line break: True where the line it ends is a comment the shell reads too or a
+    heredoc's closing line, so a word starts after it whatever stands before it; None where the
+    reader took a comment there and cannot tell whether the shell did}. A line break it does not
+    hold ends a line of live text. With no ended the caller has no reading of the earlier lines, so
+    an answer that rests on a joined line being live, "inside a word", is None: only True, which
+    holds whether that backslash joined anything or not, is given past one."""
+    walked = False
     while True:
         if i <= 0:
             return True
         p = s[i - 1]
+        inside = None if walked and ended is None else False
         if p not in breaks:
-            return False
+            return inside
         k = i - 2
         while k >= 0 and s[k] == "\\":
             k -= 1
@@ -515,8 +531,11 @@ def word_starts(s, i, breaks=WORD_BREAKS, closed=None, layered=False):
             return None
         if slashes % 2:
             if p != "\n":
-                return False
+                return inside
+            if ended is not None and i - 1 in ended:
+                return ended[i - 1]
             i -= 2
+            walked = True
             continue
         if p == ")":
             return closed[1] if closed and closed[0] == i else None
@@ -615,6 +634,11 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, un
     # Where the last ) the reading went by ended, and what a # right after it is (word_starts): True
     # where the ) ended a command, False where it is still inside a word, None where that is not known.
     closed = [-1, None]
+    # The line breaks a backslash before which joins nothing, for word_starts: where a comment this
+    # reading took ends (True where the shell reads that comment too, None where that cannot be
+    # told) and where a heredoc's closing line ends (True). Without it a # at the start of the line
+    # after a comment that ended in a backslash was read as text (claude-config#3481).
+    ended = {}
     # Each (start, end) the reading went on from where it used to leave the line out, for a caller
     # that asks for unsure (comment_end). A reading that then cannot be read to its end gives them
     # to unsure before it raises (unreadable).
@@ -647,7 +671,7 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, un
         end = n if j < 0 else j
         if comments is not None or unsure is not None:
             ticked = any(g["k"] == "tick" for g in frames)
-            starts = word_starts(s, at, breaks, closed, ticked)
+            starts = word_starts(s, at, breaks, closed, ticked, ended)
             if starts is False and unsure is not None and not ticked:
                 # Every shell keeps this # inside its word and runs the rest of the line (bash, sh,
                 # dash, zsh and ksh, measured 2026-11-23), so a caller that asks which lines the
@@ -659,6 +683,11 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, un
             given = comments if sure else unsure
             if given is not None:
                 given.append((at, end))
+            # A backslash at the end of this line is inside the comment and joins nothing, where
+            # the shell reads the comment too. Where it may not (a # this reading is unsure of, or
+            # one it leaves out for a caller that did not ask where the shell reads on), whether
+            # the next line is joined cannot be told.
+            ended[end] = True if sure else None
         return end
 
     def note_case(f, end):
@@ -914,7 +943,7 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, un
         if pending and s.startswith(line_break, i):
             # The bodies start on the next line: find the closing line of each in turn. One that never
             # closes is not skipped, so nothing after it is hidden.
-            j, unquoted, skipped, where = i, [], [], []
+            j, unquoted, skipped, where, closes = i, [], [], [], []
             for word, strip_tabs, quoted, before, at in pending:
                 m = re.compile(closing_line % ("\t*" if strip_tabs else "", re.escape(word))).search(s, j)
                 if not m:
@@ -926,12 +955,17 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, un
                 skipped.append((quoted, before, body[len(line_break):] if body.startswith(line_break) else body))
                 where.append((at, j, m.start()))
                 j = m.end()
+                closes.append(j)  # the line break that ends this closing line
             if j is not None and heredocs is not None:
                 heredocs.extend(skipped)
             if j is not None and spans is not None:
                 spans.extend(where)
             pending.clear()
             if j is not None:
+                # A closing line is read as it is written, so a backslash that ends one (an end
+                # marker written 'E\') joins nothing and a word starts on the next line.
+                for close in closes:
+                    ended[close] = True
                 cut(f, i, "\n")
                 f["start"] = i = j
                 # Each unquoted body is read for its substitutions, the first first, and the reading

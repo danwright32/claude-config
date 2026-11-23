@@ -88,7 +88,10 @@ PARAMS_END = re.compile(
 # word_starts, which counts the backslashes before the white space and walks back over a line a
 # backslash joined: `echo a\ #b` prints "a #b"), and uncommented() asks it of each. This file had a
 # pattern of its own for that, which took any backslash before the white space for an escape
-# (claude-config#3481).
+# (claude-config#3481). It is asked here with the text alone, so it has no reading of the lines
+# before a # and cannot know whether a backslash that ends one joined anything (one that ends a
+# comment does not): past such a line it answers True, which holds either way, or None, never
+# "inside a word", and only True blanks anything here.
 COMMENT_START = re.compile(r"(?:\A|(?<=\s))#")
 # The shells whose $0 is the script's everywhere in a text they read (module docstring).
 ZERO_SHELLS = ("bash", "dash")

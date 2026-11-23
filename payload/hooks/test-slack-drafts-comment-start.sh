@@ -228,6 +228,37 @@ run_bash "bash hash-posts.sh"
 refused "a script whose post follows a # the shell reads inside a word is refused"
 run_bash "bash hash-quiet.sh"
 allowed "the control: a script whose post is written in a real comment passes"
+# A backslash joins a line to the next only where it is live. One that ends a comment, or the
+# closing line of a heredoc, joins nothing: every shell reads the # that starts the next line as a
+# comment too and runs the lines after it (bash, bash --posix, sh, dash, zsh, zsh emulating sh and
+# ksh, measured 2026-11-23 with texts that only echo). The reader walked back over that backslash
+# as if it joined the two lines, took the second # for text, and the apostrophe in it opened a
+# string that held the lines after it, so a script run on one of them was read by nobody
+# (claude-config#3481). The file that posts is named with no directory, so that nothing but the
+# reading of its own line finds it.
+# Seen to fail on 2026-11-23, before the reader asked what the earlier line was: exit 0 for each.
+mkdir -p "$T/dead"
+printf '%s\n' "$POST" > "$T/dead/posts.sh"
+printf '%s\n' 'echo quiet' > "$T/dead/quiet.sh"
+HIDDEN="bash posts.sh"
+CALM="bash quiet.sh"
+for ends in "true # a note that ends in a$BS" "true # a note that ends in a$BS$BS$BS" "# a note$BS" \
+  "cat <<'E$BS'${NL}body${NL}E$BS"; do
+  printf '%s\n' "$ends" "#it's" "$HIDDEN" "echo end #'" > "$T/dead/script.sh"
+  run_bash "bash script.sh" "$T/dead"
+  refused "a script that runs a file that posts, on a line after a backslash that joins nothing and a #, is refused: $(shown "$ends")"
+  run_bash "$ends${NL}#it's${NL}$HIDDEN${NL}echo end #'" "$T/dead"
+  refused "and the same lines as the command itself are refused: $(shown "$ends")"
+  # The control: the same lines running a quiet file pass, so nothing was fixed by refusing them all.
+  printf '%s\n' "$ends" "#it's" "$CALM" "echo end #'" > "$T/dead/script.sh"
+  run_bash "bash script.sh" "$T/dead"
+  allowed "the control: the same script running a quiet file passes: $(shown "$ends")"
+done
+# The control beside them: two backslashes, where the reader always read the next line's # as the
+# comment it is. Refused before and now.
+printf '%s\n' "true # a note that ends in a$BS$BS" "#it's" "$HIDDEN" "echo end #'" > "$T/dead/script.sh"
+run_bash "bash script.sh" "$T/dead"
+refused "the control: after a comment that ends in two backslashes the script that posts is refused"
 
 echo "slack drafts only: a post reached with no posting word in the command is not hidden by such a # either (claude-config#3464)"
 

@@ -97,6 +97,20 @@ PREFIXES = [
     ("a line joined after a ;", "echo a;\\\n", ""),
     ("a line joined after an escaped ;", "echo a\\;\\\n", ""),
     ("a line joined after a $( )", "echo $(echo b)\\\n", ""),
+    # A backslash joins a line to the next only where it is live. One that ends a COMMENT, or the
+    # closing line of a heredoc, joins nothing, so the # that starts the next line starts a comment
+    # (claude-config#3481; bash, bash --posix, sh, dash, zsh, zsh emulating sh and ksh, measured
+    # 2026-11-23 as a -c text, a file and an eval). Two backslashes are the control beside them.
+    ("the line after a comment that ends in a backslash", "true # a note\\\n", ""),
+    ("the line after a comment that ends in three backslashes", "true # a note\\\\\\\n", ""),
+    ("the line after a comment that ends in two backslashes", "true # a note\\\\\n", ""),
+    ("the line after a whole line comment that ends in a backslash", "# a note\\\n", ""),
+    ("the line after two comments that each end in a backslash", "true # one\\\n# two\\\n", ""),
+    ("the line after a comment on a joined line that ends in a backslash", "true \\\n# a\\\n", ""),
+    ("the line after a comment in a { } that ends in a backslash", "{ true # a\\\n", "}"),
+    ("the line after a heredoc whose closing line ends in a backslash", "cat <<'E\\'\nbody\nE\\\n", ""),
+    ("the line after a heredoc whose closing line ends in three backslashes", "cat <<'E\\\\\\'\nbody\nE\\\\\\\n", ""),
+    ("the line after a heredoc whose closing line ends in two backslashes", "cat <<'E\\\\'\nbody\nE\\\\\n", ""),
     ("at the start of the text", "", ""),
     ("at the start of a line", "echo a\n", ""),
     ("right after an array", "x=(a b)", ""),
@@ -145,6 +159,34 @@ WHOLE = [
     ("in a heredoc body's $( ), after a space", "next", "cat <<E\n$(echo a # it's\ntouch ran\n)\nE\necho 'x'\n"),
     ("in a heredoc body's $( ), after two backslashes and a space", "same", "cat <<E\n$(echo a\\\\ # c; touch ran\n)\nE\n"),
     ("in a heredoc body's $( ), after two backslashes and a space", "next", "cat <<E\n$(echo a\\\\ # it's\ntouch ran\n)\nE\necho 'x'\n"),
+    # After a backslash that joins nothing, with the string the comment's apostrophe would open
+    # closed two lines on: read as text, that # put the marker inside a string of a reading that
+    # reached its end, so the reader read less than the shell ran and named nothing (seen
+    # 2026-11-23, claude-config#3481). The shell reads three comments and runs the marker.
+    ("the line after a comment that ends in a backslash, its apostrophe closed two lines on", "next",
+     "true # a note that ends in a\\\n#it's\ntouch ran\necho end #'\n"),
+    ("the line after a comment that ends in three backslashes, its apostrophe closed two lines on", "next",
+     "true # a note that ends in a\\\\\\\n#it's\ntouch ran\necho end #'\n"),
+    ("the line after a comment that ends in two backslashes, its apostrophe closed two lines on", "next",
+     "true # a note that ends in a\\\\\n#it's\ntouch ran\necho end #'\n"),
+    ("the line after a whole line comment that ends in a backslash, its apostrophe closed two lines on", "next",
+     "# a note\\\n#it's\ntouch ran\necho end #'\n"),
+    ("the line after a comment in a case branch that ends in a backslash, its apostrophe closed later", "next",
+     "case a in a) true # n\\\n#it's\ntouch ran\n;; esac\necho end #'\n"),
+    ("the line after a comment in a subshell that ends in a backslash, its apostrophe closed later", "next",
+     "(true # a\\\n#it's\ntouch ran\n)\necho end #'\n"),
+    ("the line after a comment in a $( ) that ends in a backslash, its apostrophe closed later", "next",
+     "x=$(true # a\\\n#it's\ntouch ran\n)\necho end #'\n"),
+    ("the line after a comment that follows a # inside a word and ends in a backslash", "next",
+     "echo a\\ #x # real\\\n#it's\ntouch ran\necho end #'\n"),
+    ("the line after a heredoc whose closing line ends in a backslash, its apostrophe closed two lines on", "next",
+     "cat <<'E\\'\nbody\nE\\\n#it's\ntouch ran\necho end #'\n"),
+    ("the line after a heredoc whose bare end marker ends in a backslash, its apostrophe closed two lines on", "next",
+     "cat <<E\\\\\nbody\nE\\\n#it's\ntouch ran\necho end #'\n"),
+    # The other side: where the backslash is live the # is text in every shell, the apostrophe does
+    # open a string, and the marker is inside it.
+    ("a line joined mid word, its apostrophe closed two lines on", "open", "echo a\\\n#it's\ntouch ran\necho end #'\n"),
+    ("a line joined after three backslashes, its apostrophe closed two lines on", "open", "echo a\\\\\\\n#it's\ntouch ran\necho end #'\n"),
 ]
 # The controls: a real comment, which the reader must go on leaving out (`same`: the marker on its
 # line is listed by nobody) and reading past (`next`: the marker on the next line is listed).
@@ -156,7 +198,27 @@ REAL = {"a space before it", "an escaped backslash, then a space", "a ; before i
         "right after a case pattern", "after a here string", "after then", "after a {",
         "in a $( ) in double quotes, after a space", "in backquotes, after a space",
         "in backquotes closed on a later line, after a space",
-        "right after an arithmetic command"}
+        "right after an arithmetic command",
+        "the line after a comment that ends in a backslash",
+        "the line after a comment that ends in three backslashes",
+        "the line after a comment that ends in two backslashes",
+        "the line after a whole line comment that ends in a backslash",
+        "the line after two comments that each end in a backslash",
+        "the line after a comment on a joined line that ends in a backslash",
+        "the line after a comment in a { } that ends in a backslash",
+        "the line after a heredoc whose closing line ends in a backslash",
+        "the line after a heredoc whose closing line ends in three backslashes",
+        "the line after a heredoc whose closing line ends in two backslashes",
+        "the line after a comment that ends in a backslash, its apostrophe closed two lines on",
+        "the line after a comment that ends in three backslashes, its apostrophe closed two lines on",
+        "the line after a comment that ends in two backslashes, its apostrophe closed two lines on",
+        "the line after a whole line comment that ends in a backslash, its apostrophe closed two lines on",
+        "the line after a comment in a case branch that ends in a backslash, its apostrophe closed later",
+        "the line after a comment in a subshell that ends in a backslash, its apostrophe closed later",
+        "the line after a comment in a $( ) that ends in a backslash, its apostrophe closed later",
+        "the line after a comment that follows a # inside a word and ends in a backslash",
+        "the line after a heredoc whose closing line ends in a backslash, its apostrophe closed two lines on",
+        "the line after a heredoc whose bare end marker ends in a backslash, its apostrophe closed two lines on"}
 # A # the shell reads inside a word (`same`: the shell runs the marker after the ;). The marker is
 # listed: where the reader always read the # as text (PLAIN), and where it took it for a comment
 # and now, for a caller that asks which lines it is unsure of, reads on as every shell does
@@ -259,6 +321,67 @@ real = []
 sw.commands("echo a # c; touch ran\necho done\n", comments=real)
 say(real == [(7, 21)], "#3464 a comment the shell starts too is given to comments", "named %r" % (real,))
 
+
+# Looking back from a #, the rule must know the state of the text it looks at. A backslash at the
+# end of a line joins it to the next only where it is live: one that ends a comment, or a heredoc's
+# closing line, joins nothing. So commands() gives word_starts what it knows of the line breaks
+# before (ended), and a caller with no reading of them is never told "inside a word" on the
+# strength of a line that only seems joined: it is told that cannot be known (claude-config#3481).
+def starts(text, at, **known):
+    try:
+        return sw.word_starts(text, at, **known)
+    except TypeError as e:
+        return "raised %s" % e
+
+
+joined, dead = "echo a\\\n#b", "true # a\\\n#b"
+got = (starts(joined, 8), starts(joined, 8, ended={}), starts("echo a \\\n#b", 9), starts("echo a\\ #b", 8))
+say(got == (None, False, True, False),
+    "#3481 with no reading of the lines before, a # after a joined line is never called inside a word",
+    "word_starts gave %r, wanted (None, False, True, False)" % (got,))
+got = (starts(dead, 10, ended={9: True}), starts(dead, 10, ended={9: None}), starts(dead, 10, ended={}))
+say(got == (True, None, False),
+    "#3481 a backslash that ends a comment the reader took joins nothing, and one it was unsure of cannot be told",
+    "word_starts gave %r, wanted (True, None, False)" % (got,))
+# The reader's own reading of the reviewed text: three comments, three commands, no line named.
+given, named = [], []
+try:
+    cut = [t.strip() for _, t in sw.commands("true # a note\\\n#it's\ntouch ran\necho end #'\n",
+                                             comments=given, unsure=named)]
+except sw.Unreadable:
+    cut = "unreadable"
+say(cut == ["true", "touch ran", "echo end"] and named == [] and given == [(5, 14), (15, 20), (40, 42)],
+    "#3481 the line after a comment that ends in a backslash is read as the comment it is",
+    "commands gave %r, comments %r and named %r" % (cut, given, named))
+# A caller that asks for comments alone is given the same three: lib/script-params.py and
+# uncommented() blank what is in that list.
+alone = []
+sw.commands("true # a note\\\n#it's\ntouch ran\necho end #'\n", comments=alone)
+say(alone == [(5, 14), (15, 20), (40, 42)],
+    "#3481 a caller that asks for comments alone is given the comment after a comment that ends in a backslash",
+    "comments were %r" % (alone,))
+# Inside an array, where the marker on the next line would be one of the array's words: read to
+# its end, with both comments given and no line named.
+given, named = [], []
+try:
+    cut = [t.strip() for _, t in sw.commands("x=(a # note\\\n#it's\nb)\ntouch ran\necho end #'\n",
+                                             comments=given, unsure=named)]
+except sw.Unreadable:
+    cut = "unreadable"
+say(cut == ["x=(a # note\\\n#it's\nb)", "touch ran", "echo end"] and named == [] and len(given) == 3,
+    "#3481 in an array, the line after a comment that ends in a backslash is read as the comment it is",
+    "commands gave %r, comments %r and named %r" % (cut, given, named))
+# After a # the reader is not sure of (right after an array), a backslash at the end of its line is
+# one it cannot call live or dead, so the # that starts the next line is named as well.
+named = []
+try:
+    sw.commands("x=(a b)# c\\\n#it's\ntouch ran\necho end #'\n", unsure=named)
+except sw.Unreadable:
+    pass
+say([at for at, _ in named] == [7, 12],
+    "#3481 after a # the reader is not sure of that ends in a backslash, the next line's # is named too",
+    "named %r, wanted the # at 7 and the # at 12" % (named,))
+
 # payload-write-gate.sh carries python and awk programs inside its shell, and the Slack drafts gate
 # reads such a program as shell as well. A comment there holding backquotes was a # the reader
 # could not be sure of, so the Slack drafts gate refused running that hook's suite by name. The file
@@ -352,7 +475,7 @@ case " $SHELLS_READ " in
   *) echo "SUITE-PART-UNMEASURED what zsh does with each text, because there is no zsh on this machine and each was run by bash alone" ;;
 esac
 # A run that compared nothing must not read as a pass.
-[ "$pass" -ge 150 ] || check "the comparison checked its rows" "only $pass checks passed, of the 210 or so the table makes"
+[ "$pass" -ge 250 ] || check "the comparison checked its rows" "only $pass checks passed, of the 330 or so the table makes"
 
 echo
 
