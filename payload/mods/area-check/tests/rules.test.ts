@@ -800,6 +800,48 @@ test("a trap's text is read as what it runs: none for a trap that lists, resets 
   expect(unreadIn(`trap 'eval "$FIX"' EXIT\n`)).toContain('eval')
 })
 
+// #3323: mod-kit's reader gives a program it does not know as a run marked unknown wherever it is
+// handed a word that spells a path. That rule covers a command as typed. A script's own text is read
+// as it was before it: nearly every script holds such a program (`exit 1`, `sleep 2`), so counting
+// one as a script it runs in turn, or as a write of what it is handed, would have every script
+// reach the whole folder, and every script handed a folder be held again (#2407, #2565).
+test("a program the write reader does not know, in a script's own text, is no script it runs and no write of its own (#3323)", () => {
+  const F = '/w/app/src'
+  const unknown = (script: string, word: string) => ({ what: 'a program the write reader does not know', script, tool: true as const, unknown: true as const, why: `${script} is not known`, remedy: 'Use cat.', args: [{ word, path: `${SCRIPT_RUN_FROM}/${word}` }] })
+  const read = commandWrites('exit 1\nsleep 2\nmystery "$1"\necho done', '/s', '/h')
+  expect(read.runs?.map(r => [r.script, r.unknown])).toEqual([['exit', true], ['sleep', true]])
+  expect(scriptReach({ ...NONE, runs: [unknown('exit', '1'), unknown('sleep', '2')] }, F)).toEqual({ placed: [] })
+  // Its own writes are still placed, and a script or a tool it runs in turn still reaches the folder.
+  expect(scriptReach({ ...NONE, files: [{ word: '$1/gen.ts' }], runs: [unknown('exit', '1')] }, F)).toEqual({ placed: [{ word: '$1/gen.ts', path: '/w/app/src/gen.ts', handed: true }] })
+  expect(scriptReach({ ...NONE, runs: [unknown('exit', '1'), { what: 'a tool run through npx', script: 'prettier', tool: true, args: [{ word: '$1' }] }] }, F)).toEqual({ reaches: 'it runs a tool run through npx (prettier), whose writes are not read' })
+})
+
+// #3323: in a command as typed the area check leaves such a run out too (Dan, 2026-11-21, "Leave the
+// area check out for now (Recommended)": gh is handed an option's value that names a folder too
+// often, so it gets its own reading first, #3412). Each command below gives the targets it gave over the
+// reader as it stood on main before #3323 (measured at commit 3cf551888f), which marked no such run.
+test('a path handed to a program the write reader does not know is no target, and what else the command writes is judged as before (#3323)', () => {
+  const read = (c: string) => commandWrites(c, '/w/app', '/h')
+  const SCAN = { what: 'a bash script file', path: '/w/app/scan.sh' }
+  const cases: [string, unknown[]][] = [
+    ['prettier --write src/big.ts && mystery src/big.ts', []],
+    ['gh pr view 5 --json state', []],
+    ['claude plugin test payload/mods/area-check', []],
+    ['swiftc -o x y.swift', []],
+    ['rg --pre ./tool x src/big.ts', []],
+    // A path a script is also handed is that script's, alone, whichever comes first.
+    ['bash scan.sh src/ && mystery src/', [{ word: 'src/', path: '/w/app/src', runs: [SCAN] }]],
+    ['mystery src/ && bash scan.sh src/', [{ word: 'src/', path: '/w/app/src', runs: [SCAN] }]],
+    // One the command also writes itself is that write.
+    ['prettier --check src/big.ts > src/big.ts', [{ word: 'src/big.ts', path: '/w/app/src/big.ts' }]],
+  ]
+  for (const [c, want] of cases) {
+    // The reader does mark a run, so an empty answer is the area check leaving it out.
+    expect([c, read(c).runs?.some(r => r.unknown)]).toEqual([c, true])
+    expect([c, shellTargets(read(c), '/h')]).toEqual([c, want])
+  }
+})
+
 // #2565: where a script's writes land, read with the folder it is handed. A write whose place is
 // known is judged there; one whose place cannot be told reaches the whole folder, as #2321 judged it.
 test('a script handed a folder places each write it can, and reaches the whole folder with any it cannot (#2565)', () => {

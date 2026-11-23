@@ -62,7 +62,10 @@ so an absolute path inside one is correct on both machines. The top-level rules 
 exception: they are merged entry by entry, so their bytes are left exactly as written, and a path
 in one of them should be a `~` path. `hooks/check-home-paths.sh` enforces that split. Its suite
 lists the checkout's synced files, so the gate before a push (`scanners-before-push.sh`) runs it as
-well as CI, over the checkout with no allowance for this Mac's own home (#1734).
+well as CI, over the checkout with no allowance for this Mac's own home (#1734). The gate runs
+before every push each suite with a line of code that lists the repository's files, through
+`hooks/lib/repo-files.sh` or git itself. A string or a heredoc holding either name counts as code,
+and a comment naming one selects nothing (#3409).
 
 A file stored that way never equals its payload copy byte for byte, so every comparison between the
 two sides goes through one view of the payload as it should look on THIS Mac. `claude-sync status`
@@ -610,6 +613,10 @@ one with each such library taken away. A library a gate loads with a stand in fu
 `this_mac_name` for `lib/this-mac.sh`, which only names the Mac in a record. Each gate is run with
 each examined one gone as well, and must decide its judged call as it does with the library in
 place. Until #2634 every stand in was optional by its shape, so no gate was ever run without one.
+The suite's tables of the gates it runs are held both ways against its scans of the settings: a
+gate the scans find and a table lacks fails, and so does a gate a table names that the scans no
+longer find, its registration removed or its refusal moved where they cannot see it, until the
+same change takes its row out (#3414). `--list-found` prints what the scans find in the tree.
 
 Before a Bash call the write gate also notes what an at risk `payload/` holds, in
 `~/.claude-payload-write-gate`, so that after the call it can name anything written there that the
@@ -1939,6 +1946,8 @@ refuse the push with their read key, and `PR_REVIEW_READ=<key> <the push command
 findings and an empty diff pass; a review that could not run refuses in its own words with the
 restart command and `SKIP_PR_REVIEW=1 <the push command>`, explained to Dan first. A commit and a
 push in one command is refused, because the head it pushes does not exist yet for anything to read.
+A branch stacked on another open branch is read from that branch's head, when that is established
+("A stacked branch is judged from its base, when the base is established", claude-config#3444).
 
 The merge gate is exactly as strict as before. Reviews are keyed by repository (a hash of the origin
 URL, so every worktree and clone of one repository shares them) and commit, so the merge finds the
@@ -3480,6 +3489,68 @@ long a Linux run takes is not measured on this Mac, whose docker daemon was not 
 The readings are of the INSTALLED hooks, which is what a push waits on. A gate edited in this
 checkout costs nothing until it is installed (L423).
 
+### A stacked branch is judged from its base, when the base is established
+
+A branch cut from another open branch used to be judged all the way back to the default branch when
+it was pushed, so its push answered for the base branch's changes too (claude-config#3444). On
+2026-11-21 the test gate refused a branch stacked on pull request 3421 for changes that belong to
+3421, and on 2026-11-22 the lessons review twice refused a branch stacked two deep for stopping
+findings in files its base branches own.
+
+Two gates now judge such a branch from its base: the pre push test gate
+(`require-tests-before-push.sh`) and the lessons review before a push (`pr-review-push-gate.sh`,
+with the review `ai-review-on-pr.sh` starts at a commit). Whether a branch is stacked, and on what,
+is one function both ask, `sb_stacked_base` in `hooks/lib/stacked-base.sh`. Every other push gate
+(the simplify gate, style, deferrals, scanners and the rest) still judges from where it always did.
+
+A base is established only when all of this holds, and anything short of it is judged from the
+default branch exactly as before:
+
+- HEAD is on a named branch.
+- A branch on origin, other than the default branch and this branch's own copy, has
+  its head in this branch's history, short of HEAD and not already on the default branch. A branch
+  that only names a base (an upstream, the setting `gh pr create` records, its own pull request's
+  base) and does not descend from it establishes nothing.
+- It is the nearest such branch. When it fails the next check, the branch under it is never tried,
+  because the nearest one's own changes would then be judged by nobody.
+- GitHub says an open pull request of this repository, never a fork's, has that branch as its head
+  at exactly that commit. A remote ref in a checkout can be moved by hand, so this checkout's copy
+  alone is not believed. A base that was never pushed, was deleted, or whose pull request is closed
+  or merged fails here, and so does a read of GitHub that fails or runs past its own time limit
+  (`SB_READ_SECONDS` in that file).
+
+How each gate knows the base's own changes are judged:
+
+- The lessons review: the base is an open pull request, and no pull request merges until the merge
+  gate's review of its whole range has been read. The push gate now names the base it reads from to
+  the checker on every push, the default branch included, so a review that read from a base which
+  has since stopped being an open pull request is run again from the default branch, never reused.
+  At the merge of the stacked branch's own pull request the existing rule still applies: a review is
+  reused only when it covers the pull request's base.
+- The test gate: nothing judges tests at a merge, so an open pull request is not enough. The range
+  moves to the base's head only when this Mac's push gate ledger shows the test gate judged the push
+  that delivered that head (an outcome of pass, nosource or docsonly for that tree) and holds no
+  override or could not judge line for any commit of the base's own range. The ledger is per Mac, so
+  a base pushed from the other Mac leaves the branch on top of it judged from the default branch.
+  Judged from its base, a stacked branch answers for its own tests: the base's test files are not
+  counted as tests it pushed earlier.
+
+A stopping finding the narrowed review raises still refuses the push wherever it points, a file the
+base owns included; nothing is waived for where a finding points. A refusal by either gate, and the
+test gate's ledger line (`range started at the head of <base> (pull request #N)`), says when the
+base was used. When
+another branch lies under the pushed one and was not taken as its base, a refusal by either gate
+says why (no pull request, a pull request that is not open, a read of GitHub that failed, no record
+that the test gate judged the base's push), since that branch's changes are then in what was judged.
+`test-stacked-base.sh` holds both refusals as cases, and one case for every push that must stay
+judged from the default branch.
+
+Not covered: a branch not rebased onto its base's current head is judged from the default branch
+(the base's head is then not in its history), and so is a review of the same head that a commit
+started before the base's pull request was open, which read the whole range and is reused; restart
+it with `bash ~/.claude/hooks/lib/pr-review.sh restart --dir <repo> --sha <head> --base-ref
+origin/<base>`, which the push gate still checks against the base it establishes itself.
+
 ### The two model judged push gates, and their record
 
 `require-tests-before-push.sh` (a sonnet judge of whether each change carries a test) and
@@ -3489,7 +3560,8 @@ what a push carries, and call their judge, through one library, `hooks/lib/push-
 written in the same `git add ... && git commit ... && git push` reached the test judge as a file
 name with none of its text, and a push run from a subdirectory showed both judges nothing outside
 that subdirectory, so it went through unjudged. `test-push-changes.sh` fails if either gate grows
-its own copy again.
+its own copy again. Only the test gate asks the library to start a stacked branch's range at its
+base (`pc_resolve "$cmd" stacked`, the section above, #3444); the simplify gate does not.
 
 The simplify judge is shown the diff's hunks, never whole files, so it cannot see a use on an
 unchanged line away from them. On 2026-10-25 it blocked a work project's push calling an import unused
@@ -7884,7 +7956,16 @@ a bash or zsh, and for a script a shell is given, that shell, so on a Mac whose 
 zsh only a `bash -c` or `sh -c` script is split), which the design round guard, ask before saving,
 the collision guard and scope modes' overnight LESSONS.md check judge as a write of each file
 (#1592), as winding down counts each among this session's uncommitted work (#1664), and which no
-build reads; and, apart in `byGit`, what git mv, git rm, a checkout of a path and git restore change
+build reads; since #3323 also, in `runs` and marked `unknown`, a program on none of the reader's
+lists that is handed a word that spells a path, read as a writer of that file and carrying `why` it
+was and the `remedy`, unless it is one of the 32 programs Dan signed off by name as only reading
+(`READ_ONLY`, an exemption list nothing joins without his sign off; the five forms of them that
+write a file or run a program, `rg --pre` and `file -C` among them, are read as writers), which the
+same guards judge as they do a script's arguments, while the area check leaves those runs out until
+gh has a reading of its own (#3412), and unpacking an archive (`tar -x`, `unzip`, `cpio -i`) as a
+write the words do not name into the folder it unpacks into, with each member it names as a file
+(the list, Dan's decisions and the limits are in docs/mods-design.md, "The programs that only
+read"); and, apart in `byGit`, what git mv, git rm, a checkout of a path and git restore change
 (a checkout or restore carrying `from`, where git puts the file back from, #1158; since #3337 each
 relative path placed in the working folder the command names by `--work-tree` or `GIT_WORK_TREE`
 when it runs outside that folder, and left in the folder the command runs in, where it was placed
@@ -9426,11 +9507,13 @@ reflection and issue review, the PR quiz, the lesson fan out notice and claude-s
 (written to its log instead) all stand down. `tests/test-sleep-silence.sh` derives every route that
 can reach Dan (settings hooks on turn end and waiting events, every mod's notifier, sound, question
 and classic Stop, Notification or PermissionRequest hook, claude-sync's `notify`) and fails on one
-that neither reads the sleep record nor sits on its exempt list with a reason, then runs each shell
-route asleep and awake, and runs the same way the one exempt settings route whose reason is that it
-prints nothing, the write gate on `PermissionDenied` (#3253). The night's report (#835),
-`~/Downloads/Sleep report <night>.md`, is written
-from the first minute of `/sleep` (start time ET, power, workers), rebuilt after every note, and
+that neither reads the sleep record nor sits on its exempt list with a reason. It also keeps a
+recorded list of the routes that read it, held both ways, so one that is no longer found, or no
+longer reads it, fails by name until the list changes in the same pull request (#3411). It then
+runs each shell route asleep and awake, and runs the same way the one exempt settings route
+whose reason is that it prints nothing, the write gate on `PermissionDenied` (#3253). The night's
+report (#835), `~/Downloads/Sleep report <night>.md`, is written from the first minute of `/sleep`
+(start time ET, power, workers), rebuilt after every note, and
 once more at wake or the limit with done read from GitHub and checked against the notes, sessions
 and claims that went quiet flagged, each rate limit wait and paid usage; every note, the noun's and
 the shell's `sleep_note` in `hooks/lib/sleep.sh` alike, goes through `hooks/lib/sleep-report.py`,
@@ -9503,7 +9586,8 @@ hook's request beneath it to run the call again (whether the session itself may 
 is "One unchanged resend after no verdict" in `payload/CLAUDE.md`, that rule's one home, #3224, and
 a call the check gave no verdict on that is sent again and runs is noted `redone`); and in every
 session the ban
-list in `hooks/overnight.ts` is refused by effect (issue, label and milestone writes, every gh write
+list in `hooks/overnight.ts` is refused by effect (issue, label and milestone writes, with one label
+on a PR excepted since #3439, below; every gh write
 but a comment, opening, readying, retitling or merging a PR on the checkout's own repository, any
 write whose repository cannot be resolved, whatever `rtk proxy` runs judged as the same command
 written plainly (mod-kit's reader reads it so for every mod since #2983, and a single word the shell
@@ -9592,7 +9676,30 @@ no status pending or failed. Anything GitHub does not answer, a base branch requ
 all, and a merge the night would not let run anyway (the repository waits, or a merge there deploys)
 refuse; any other `adminMerge` value makes the whole file unreadable. Dan's list, confirmed on
 2026-10-07, is in that file and summarised under "Sleep mode" below, without naming the
-repositories (#2112). At
+repositories (#2112). One label may be set on a PR overnight (#3439, judged in
+`hooks/requiredlabel.ts`): the label the repository's own merge gate requires. On 2026-11-21 the ban
+on PR labels refused `gh pr create ... --label changelog/technical` in a project where
+`require-changelog-tag.sh` refuses a merge without one changelog label, so the PR was opened without
+it, went green and waited ten and a half hours for the morning. Allowed now, on the checkout's own
+repository only: `gh pr create` with `--label` or `-l`, and `gh pr edit <number or the PR's own
+link> --add-label` on a PR the session's own record says it opened (the `opened` list winding down
+keeps, written from the link each `gh pr create` printed; GitHub's author is the same account for
+every session, so it cannot tell them apart), each naming exactly one label. Which labels is the
+gate's answer, never a list in the mod: the mod runs `node ~/.claude/hooks/lib/changelog-entry.js
+required-labels <owner/name>`, which answers `required` with every label the gate takes and whether
+each needs a sentence in the description, `not-required` for a repository nobody gated, or `unknown`
+with why (a registry missing or unreadable, a repository listed with no start date or a bad one). A
+label the gate says needs a sentence a manager reads (`changelog/visible`) may be set like the
+others (Dan, 2026-11-22, by picker: "Also allow changelog/visible"), so a session can merge
+overnight a PR whose changelog sentence he has not read. The gate still refuses that merge while
+the description has no such sentence, and the result of the call that sets the label says so, to
+the session or the agent that made it. Still refused, in the words it always was (`set labels
+or a milestone on a PR`), with the reason in brackets wherever the judge was reached: any other
+label, a second label beside it, `--remove-label`, a milestone, a PR the session did not open or
+does not name by number, a repository whose gate requires no label, a gate or a record that cannot
+be read, and every label write through `gh issue edit`, `gh label` or `gh api`. Both sides are
+held to one committed set of cases, `tests/gate-label-fixtures.ts`, read by the gate's suite and
+the mod's. At
 `/sleep` each repository a worker with a goal is in that the file does not decide is asked about
 (each question waits ten minutes, a chosen limit, not a measurement; the answer written into this
 Mac's own file, so it is asked once on each Mac; "Go to sleep, no more questions" asks nothing
@@ -10011,6 +10118,12 @@ repository's open structural issues naming a file, which the hold lists, the ses
 where it is in no checkout, or where the repository has no fast growing file and no structural issue
 naming a file. Removals, `touch`, `mkdir` and mode changes are not judged, and a
 program that builds its own file names (`node gen.js`) reads as writing nothing, so it is not held.
+Nor is what a program the write reader does not know is handed (`prettier --write src/big.ts` typed
+without `npx`), which the reader marks as a run since #3323: the area check leaves those runs out
+until gh has a reading of its own (#3412; Dan, 2026-11-21, after a count found gh handed an option's
+value that names a folder in 633 past calls in 35 days), so it judges such a command as it did
+before, while an archive unpacked (`tar -x`, `unzip`, `cpio -i`) is judged as a write whose files
+cannot be named, in the checkout of the folder it unpacks into, and a member it names as that file.
 A command reaching a whole folder (a `find -exec` over it, a folder handed to a script) is held once
 for the folder (#2920): every held file under it is named in one refusal, and one decision covers
 them all, each file claimed and decided on record, where it was held once per file, each needing its
@@ -10097,6 +10210,15 @@ checkout, a changed copy, a second argument, a file or a pattern in place of the
 shell, the file its output is redirected into, and the script chained with any other command, in a
 loop or in a function, which is judged with that command as before. Each such run is one
 `named-reader` line in the log, `passed` or `judged` with why.
+A hold on what a run that was not let through reaches says that reason (#3162). Where the reason
+is what else the command runs (the script run more than once, another command before or after it,
+a value set on its own), the hold also says the one shape let through: the script once, with
+nothing before it but a `cd` and nothing after it but readers its output is piped into (#3417).
+So several mods are checked with one command each, and an exit code is read from the command's own
+result, never from an `echo` after it. On 2026-11-21 a line running the check three times, an
+`echo` after each, was held with the reason alone and taken for a hold on every run of the check.
+What is held did not change: letting such a line through would widen the exemption, which is
+Dan's to sign off.
 `tests/test-area-check-check-mods-read-only.sh` is the proof: it runs the real script from a
 throwaway checkout and is red when a run changes a file git tracks there or adds one git does not
 ignore (the pinned compiler's links under the ignored `tools/typescript/node_modules` are all it
@@ -10574,7 +10696,11 @@ reaches 95 percent; if it is already there when sleep starts, each session stops
 end and the report says why.
 
 **What it will not do overnight.** Ask you anything; file or edit issues, labels or milestones
-(a comment is allowed); add lessons; merge or deploy anywhere the list below says wait, or anywhere it has no
+(a comment is allowed, and so is the one label a project's own merge gate requires on a pull
+request the session opened, such as `changelog/technical` or `changelog/visible` where a merge is
+refused without a changelog label; a pull request labelled `changelog/visible` can then merge
+overnight with a changelog sentence you have not read, as you chose on 2026-11-22); add lessons;
+merge or deploy anywhere the list below says wait, or anywhere it has no
 answer for; push straight to a default branch; force push or delete branches; switch branches in
 your main checkout; write to a database (Supabase, psql); use claude.ai, Chrome or PostHog tools that
 write; run `claude-sync` pull or install; retry anything Claude Code's own safety check refused; or
