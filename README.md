@@ -60,7 +60,9 @@ Every mirrored file (hooks, skills, agents, commands) and the hooks fragment are
 Mac's config directory written as `__CLAUDE_HOME__`, and expanded to each Mac's own on the way in,
 so an absolute path inside one is correct on both machines. The top-level rules files are the
 exception: they are merged entry by entry, so their bytes are left exactly as written, and a path
-in one of them should be a `~` path. `hooks/check-home-paths.sh` enforces that split. Its suite
+in one of them should be a `~` path. `hooks/check-home-paths.sh` enforces that split, and every
+send asks it first, over the files the send would publish, and is held whole while one fails
+(#3465, below). Its suite
 lists the checkout's synced files, so the gate before a push (`scanners-before-push.sh`) runs it as
 well as CI, over the checkout with no allowance for this Mac's own home (#1734). The gate runs
 before every push each suite with a line of code that lists the repository's files, through
@@ -147,6 +149,40 @@ exits 3 and names the line when the file names a work organisation, and 4 when t
 run, so a scan that judged nothing is never reported as a name found (the hook tells the session
 that wrote it, in words that fit each, while it can fix it), `check-lessons` refuses on either, and `next-lesson` still mints a
 number but warns that every send is refused until the line is fixed.
+
+A send that would publish a file failing the home path check is held whole (#3465). On 2026-11-22
+at 3:44 PM ET a send pushed 126 scratch files a measuring session had written into folders named
+`run` under one Mac's config, 100 of them naming that Mac's home folder, and main's own run of
+`hooks/check-home-paths.sh` was red until 4:22 PM ET, as was every pull request brought up to date
+with it: the check ran only on GitHub, after the push. Now every send asks that same check first, at
+the end of staging and after the work names scan, over the finished payload, so a path under this
+Mac's own config has already become the placeholder and the check reads what main's run would
+read. It is handed only the files this send carries (`--files0-from`): every payload file that
+differs from the clone's last commit, new ones included, and the files changed by commits the
+shared repo lacks (with no upstream set, the commits no remote branch holds); without git, the whole
+payload. The names are passed NUL separated from git to the check, so a name git would quote (one
+holding a double quote, a backslash or a newline) is read like any other. A failing file already on main therefore never
+holds an unrelated send, and a send that removes it goes through. One failing file holds
+everything, because a send is one commit and the other Mac mirrors what the payload holds, so half
+a change would arrive with nothing to say which half. Nothing is committed or pushed, and no file in
+this Mac's config is changed or removed: a send leaves the config alone, and a sync, which sets the
+held copies in the clone aside so it can still receive (#947), adds a `<file>.conflict-<host>` copy
+beside a live file only when the clone's copy held something that file lacks. The refusal names how many files fail, the first five with their
+line, and the check's reason; every line the check reported is kept, each cut to 500 characters, in
+`.send-suite-output/home-path-check.log` in the clone. `claude-sync status`, `claude-sync stuck` and
+the per prompt notice say it as "sending is refused: the home path check has refused every send",
+with how many sends in a row and since when. To clear it, take the files out of this Mac's config
+if they do not belong there, or write each path from the home folder (a `~` or `$HOME`); a line
+that must name a real home, such as a fixture, carries the check's own
+`claude-sync-allow-home-path` marker. The next send then carries everything that was held. There is
+no override variable, and a check that is missing or could not run refuses the send too, said as
+that rather than as a finding. In the change watcher a standing hold is said in full once, then in
+one short line pointing at status with no desktop notice, until its files change, it clears or a
+day passes; every refusal is still counted. Measured on 2026-11-22 against a clone of main with
+1,446 payload files, at a load average between 104 and 178 on 12 cores, 10 samples a case: the
+check adds 53 to 72 ms to a send with nothing in the payload to read, 85 to 149 ms to a send of one
+edited hook and one new file, and 4.1 to 4.3 seconds to a replay of the 2026-11-22 send, nearly all
+of it the check's own handling of lines a megabyte long (#3479).
 
 Text that is never a file is held to the same rule (#1995), because this repository squash merges
 with the commit messages as the body: a name in a message lands in main. The scanner reads labelled
@@ -800,9 +836,9 @@ it is said once in the session, in status's own words and naming the clone, and 
 ends that session is told it is moving again. A count going up is the same stretch and is not said
 twice. A change watcher stuck on an older `claude-sync` because the newer one on disk is broken
 (#1569) is said at once rather than after the threshold, since no wait clears it, and its end is
-said too. So is a send refused by the secret scan or the work names scan (`send-refused`, #2530):
-every later send meets the same content, so it never clears by itself, and the session hears again
-when a send gets through. A record that is there and cannot be read, a stretch whose start cannot be read, and a clone
+said too. So is a send refused by the secret scan, the work names scan or the home path check
+(`send-refused`, #2530, #3465): every later send meets the same content, so it never clears by
+itself, and the session hears again when a send gets through. A record that is there and cannot be read, a stretch whose start cannot be read, and a clone
 too old to have the command are each said once in their own words, never read as a healthy sync.
 It asks nothing of the network and takes no lock: measured 2026-09-17, about 70ms per prompt with
 one clone to ask, and 16ms on a Mac with no automatic sync installed, where there is nothing that
@@ -11304,8 +11340,8 @@ catch up and after it is read, so it can only describe the run that wrote it
 
 </td><td>
 
-the secret scan or the work names scan, whenever either refuses a send (#947, #1568), through one
-writer, `record_send_refused`
+the secret scan, the work names scan or the home path check, whenever one of them refuses a send
+(#947, #1568, #3465), through one writer, `record_send_refused`
 
 </td><td>
 
@@ -11317,12 +11353,13 @@ and `claude-sync status`, `claude-sync stuck` and so the per prompt notice, whic
 </td><td>
 
 absent means no send is being refused by the scan, which is the normal state. One line, tab
-separated: when the latest refusal was, what it found, why (empty for a possible secret, else
-`unlisted`, `work-names` or `work-names-unjudged`), how many sends in a row have been refused, and
-when the first of them was, plus `atleast` when that run began under a record from before the
-count, which makes the count a floor. The secret scan removes it whenever it passes or is skipped,
-and the work names scan after it writes only on a refusal, so it stands exactly while sends are
-refused. A record from before the count is reported without one; one that cannot be read, or whose
+separated: when the latest refusal was, what it found (for the home path check, how many files and
+the first five with their lines), why (empty for a possible secret, else `unlisted`, `work-names`,
+`work-names-unjudged`, `home-paths` or `home-paths-unjudged`), how many sends in a row have been
+refused, and when the first of them was, plus `atleast` when that run began under a record from
+before the count, which makes the count a floor. The secret scan removes it whenever it passes or
+is skipped, and the work names scan and the home path check after it write only on a refusal, so it
+stands exactly while sends are refused. A record from before the count is reported without one; one that cannot be read, or whose
 time will not parse, is reported as `send-refused-unreadable`, never as nothing refused
 
 </td></tr>
@@ -11406,16 +11443,18 @@ because what it saves is re-running a red suite on every keystroke while the syn
 
 </td><td>
 
-a send whose suite failed or was stopped at its deadline, one `<suite>.log` per suite
+a send whose suite failed or was stopped at its deadline, one `<suite>.log` per suite; and a send
+the home path check held, as `home-path-check.log` (#3465)
 
 </td><td>
 
-a person, from the path the NOT publishing line names
+a person, from the path the NOT publishing line or the refusal names
 
 </td><td>
 
-absent means no suite the send ran is red. Each file is replaced by that suite's next run and
-removed once it passes, so it holds one file per red suite at most (#3176)
+absent means no suite the send ran is red and the home path check is holding nothing. Each file is
+replaced by that suite's next run, or the check's next refusal, and removed once it passes, so it
+holds one file per red suite at most, and one for the check (#3176)
 
 </td></tr>
 <tr><td>
@@ -11424,7 +11463,9 @@ removed once it passes, so it holds one file per red suite at most (#3176)
 
 </td><td>
 
-the change watcher's send, when it says a hold: when, the suite, the held files, and the hold as said
+the change watcher's send, when it says a hold: when, the suite, the held files, and the hold as
+said. The home path check's hold is a line here too, under the name `home-path-check`, with how many
+files it held and a digest of which (#3465)
 
 </td><td>
 
@@ -11433,8 +11474,8 @@ the next watcher send, to decide whether a hold is news, and to say once that it
 </td><td>
 
 absent means every hold is said on the next watcher pass, which is the pre-#3179 behaviour. One line
-per suite; a line older than a day is dropped on the next write, since a hold still standing has
-been said again by then (#3179)
+per suite, and one for the home path check; a line older than a day is dropped on the next write,
+since a hold still standing has been said again by then (#3179)
 
 </td></tr>
 <tr><td>
