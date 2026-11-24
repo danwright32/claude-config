@@ -6710,6 +6710,18 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             if more != words:
                 rest = (d, depth, shell_hint, lang, inline, held_code, actor, True)
                 return self.every_file(words, *rest) or self.every_file(more, *rest)
+        if lang == "py":
+            # A folder Python is handed is the __main__.py in it, and an archive it runs is one the
+            # gate does not open (py_run_words in lib/py-file-runs.py, claude-config#3441): the
+            # words are read with each such folder replaced by that file, and then as written
+            # below, as before, so this reading can only refuse more.
+            swapped, unread = self.py_run_words(words, d, not (inline or actor))
+            if unread:
+                return unread
+            if swapped != words:
+                reason = self.every_file(swapped, d, depth, shell_hint, lang, inline, held_code, actor, expanded)
+                if reason:
+                    return reason
         code, data = [], []
         names_before = len(self.held_names())
         on_disk = {}  # each script read from a file, by its label: what it writes is not otherwise noted

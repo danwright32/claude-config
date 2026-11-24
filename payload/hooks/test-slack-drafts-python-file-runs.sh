@@ -33,8 +33,10 @@
 #   * a judgement kept in the cache does not outlive the file it read;
 #   * a call that runs the file at a path, handed an archive with text in front of it, a path under
 #     an archive, or a folder whose __main__ is compiled or a package, is refused as unread where
-#     typed (claude-config#3441; the cases and what was measured are at the end). python3 handed a
-#     folder or an archive as its own script is NOT read by this rule and still passes.
+#     typed (claude-config#3441; the cases and what was measured are at the end);
+#   * python3 handed a folder as its own script, or a script handed one, is judged by the
+#     __main__.py the folder runs, and python3 handed an archive, a path under one, or a folder
+#     whose __main__ is not text, is refused as unread where typed (claude-config#3441).
 set -uo pipefail
 
 # Its own wall clock, and whatever it starts stopped with it however it ends (claude-config#465).
@@ -621,10 +623,6 @@ EOF" "$P"
 else
   check "#3441 the archives for these cases could be made" "python3 -m zipfile, zipapp or py_compile made nothing, so the cases were not run"
 fi
-# Not covered here, and still allowed: python3 handed the folder or the archive as its own script
-# (`python3 pkg`, `python3 app.zip`), measured the same day on main in this harness, where
-# pkg/__main__.py posts and the archive holds one. That reading is made in the gate's every_file,
-# which calls nothing in lib/py-file-runs.py (claude-config#3441 stays open for it).
 
 echo "slack drafts only: an error while reading what a path runs refuses the call (claude-config#3441)"
 
@@ -655,6 +653,166 @@ run_failing_3441 "python3 -c \"import runpy; runpy.run_path('qpkg')\""
 allowed "#3441 the copy made to fail judges code that runs a quiet folder as the gate does where nothing fails"
 run_failing_3441 "python3 -c \"import runpy; runpy.run_path('fails3441')\""
 refused "#3441 a reading of a path code runs that fails part way is refused, not taken as a path that runs nothing"
+says "#3441 and that refusal says the call could not be judged" "could not judge"
+
+echo "slack drafts only: python3 handed a folder is judged by the __main__.py it runs (claude-config#3441)"
+
+# Measured on main at bfc43f1b53 on 2026-11-24, in this harness: `python3 pkg`, `python3 ./pkg/` and
+# every spelling below passed where pkg/__main__.py posts, and so did `python3 app.zip` where the
+# archive holds one. A word naming a folder names no file, so nothing was read for it.
+mkdir -p "$P/qpycdir"
+printf '%s\n' 'import runpy, sys' 'runpy.run_path(sys.argv[1])' > "$P/runner.py"
+printf '%s\n' 'import sys' 'print(len(sys.argv[1]))' > "$P/reader.py"
+printf '%s\n' 'python3 pkg' > "$P/runs-pkg.sh"
+printf '%s\n' 'python3 qpkg' > "$P/runs-qpkg.sh"
+printf '%s\n' 'python3 quiet.zip' > "$P/runs-zip.sh"
+ln -s pkg "$P/link"
+ln -s qpkg "$P/qlink"
+h_run() { run_at "$1" "${2:-$P}"; }
+h_pair() { # h_pair <a command holding DIR> <a folder whose __main__.py posts> <its twin>
+  h_run "${1//DIR/$2}"
+  read_refused "#3441 a folder whose __main__.py posts is refused: ${1//DIR/$2}"
+  says "#3441 and the refusal names the file python3 runs: ${1//DIR/$2}" "__main__.py"
+  h_run "${1//DIR/$3}"
+  allowed "#3441 and its twin whose __main__.py posts nothing passes: ${1//DIR/$3}"
+}
+
+h_run "python3 pkg/__main__.py"
+read_refused "#3441 the control: python3 run on the folder's __main__.py by its path is refused"
+h_run "python3 qpkg/__main__.py"
+allowed "#3441 the control: and on the quiet folder's passes"
+
+h_pair "python3 DIR" pkg qpkg
+h_pair "python3 ./DIR/" pkg qpkg
+h_pair "python3 $P/DIR" pkg qpkg
+h_pair "python3 DIR one two" pkg qpkg
+h_pair "python3 DIR" link qlink
+# Options before the folder, and the other names the interpreter goes by.
+h_pair "python3 -I DIR" pkg qpkg
+h_pair "python3 -B DIR" pkg qpkg
+h_pair "python3 -X dev DIR" pkg qpkg
+h_pair "python3 -u -W ignore DIR" pkg qpkg
+h_pair "python3 -- DIR" pkg qpkg
+h_pair "python DIR" pkg qpkg
+h_pair "python3.12 DIR" pkg qpkg
+h_pair "/usr/bin/python3 DIR" pkg qpkg
+h_pair "env python3 DIR" pkg qpkg
+h_pair "nohup python3 DIR" pkg qpkg
+h_pair "pypy3 DIR" pkg qpkg
+# Through a variable the command sets, a cd, a shell handed the command, a script on disk.
+h_pair "D=DIR; python3 \"\$D\"" pkg qpkg
+h_pair "cd DIR && python3 ." pkg qpkg
+h_pair "cd sub && python3 ../DIR" pkg qpkg
+h_pair "bash -c 'python3 DIR'" pkg qpkg
+h_pair "bash runs-DIR.sh" pkg qpkg
+# A pattern the shell fills in with the folder before python3 starts.
+h_pair "python3 DIR*" pk qpk
+h_run "python3 {pkg,qpkg}"
+read_refused "#3441 a brace pattern naming the folder whose __main__.py posts is refused"
+h_run "python3 {qpkg,nomain}"
+allowed "#3441 and one naming only folders that post nothing passes"
+h_run "python3 'pk*'"
+allowed "#3441 a quoted pattern is python3's own text, which names no folder, and passes"
+# A folder an earlier command of the same call makes.
+h_run "mkdir made && cp posts.py made/__main__.py && python3 made"
+read_refused "#3441 a folder the same command makes around a file that posts is refused"
+h_run "mkdir made && cp quiet.py made/__main__.py && python3 made"
+allowed "#3441 and one it makes around a quiet file passes"
+h_run "cp -r pkg copied && python3 copied"
+read_refused "#3441 a folder the same command copies from one whose __main__.py posts is refused"
+h_run "cp -r qpkg copied && python3 copied"
+allowed "#3441 and a copy of the quiet one passes"
+# Inline Python that starts python3 on the folder by a command line it holds.
+h_run "python3 -c \"import os; os.system('python3 pkg')\""
+read_refused "#3441 inline code whose command line starts python3 on the folder is refused"
+h_run "python3 -c \"import os; os.system('python3 qpkg')\""
+allowed "#3441 and on the quiet folder passes"
+# A folder handed to a script that runs what it is handed, as a file handed to it is read.
+h_run "python3 runner.py posts.py"
+read_refused "#3441 the control: a script that runs what it is handed, handed a file that posts, is refused"
+h_run "python3 runner.py pkg"
+read_refused "#3441 the same script handed a folder whose __main__.py posts is refused"
+h_run "python3 runner.py qpkg"
+allowed "#3441 and handed the quiet folder passes"
+h_run "python3 reader.py pkg"
+allowed "#3441 a script that only reads its arguments, handed the folder, passes"
+
+echo "slack drafts only: a folder python3 runs nothing from, or one that posts nothing, passes (claude-config#3441)"
+
+h_run "python3 nomain"
+allowed "#3441 a folder holding no __main__.py runs nothing and passes"
+h_run "python3 quiet.py"
+allowed "#3441 a plain script that posts nothing passes"
+h_run "python3 quiet.py nomain"
+allowed "#3441 a plain script handed a folder with no __main__.py passes"
+h_run "ls pkg"
+allowed "#3441 a program that only lists the folder passes"
+h_run "python3 -m py_compile pkg/__main__.py"
+allowed "#3441 compiling the folder's file runs none of it and passes, as before"
+
+echo "slack drafts only: python3 handed an archive, or a folder whose __main__ is not text, is refused as unread (claude-config#3441)"
+
+( cd "$P/qpkg" && python3 -m zipfile -c ../quiet.zip __main__.py ) \
+  && ( cd "$P" && python3 -c 'import py_compile; py_compile.compile("quiet.py", cfile="qpycdir/__main__.pyc")' )
+cp "$P/app.zip" "$P/named.py" 2>/dev/null
+cp "$P/app.zip" "$P/noext" 2>/dev/null
+h_unread() { # h_unread <what> <command>: refused as something the gate could not read
+  h_run "$2"
+  read_refused "#3441 $1 is refused: $2"
+  says "#3441 and the refusal says the gate could not check it: $2" "could not check"
+}
+if [ -s "$P/app.zip" ] && [ -s "$P/quiet.zip" ] && [ -s "$P/deep.zip" ] && [ -s "$P/qdeep.zip" ] && [ -s "$P/quiet.pyz" ] \
+    && [ -s "$P/pycdir/__main__.pyc" ] && [ -s "$P/qpycdir/__main__.pyc" ] && [ -s "$P/front.py" ]; then
+  h_unread "python3 handed an archive whose __main__.py posts" "python3 app.zip"
+  h_unread "python3 handed an archive is refused whatever it holds, so one that posts nothing" "python3 quiet.zip"
+  h_unread "an archive by its full path" "python3 $P/quiet.zip"
+  h_unread "an archive behind options" "python3 -I -X dev quiet.zip"
+  h_unread "an archive a pattern names" "python3 quiet.z*"
+  h_unread "an archive with a #! line in front" "python3 quiet.pyz"
+  h_unread "an archive with a Python file's text in front" "python3 front.py"
+  h_unread "an archive under a name that says Python" "python3 named.py"
+  h_unread "an archive under a name that says nothing" "python3 noext"
+  h_unread "a path under an archive, whose __main__.py posts" "python3 deep.zip/inner"
+  h_unread "a path under an archive that posts nothing" "python3 qdeep.zip/inner"
+  h_unread "a folder whose only __main__ is compiled, from a file that posts" "python3 pycdir"
+  h_unread "a folder whose only __main__ is compiled, from a quiet file" "python3 qpycdir"
+  h_unread "a folder holding a package named __main__ beside a quiet __main__.py" "python3 mpkg"
+  h_unread "inline code that starts python3 on an archive" "python3 -c \"import subprocess; subprocess.run(['python3', 'app.zip'])\""
+  h_unread "an archive the same command copies and runs" "cp quiet.zip run.zip && python3 run.zip"
+  # In a script on disk what cannot be read is left as it was, as an unread feed is.
+  h_run "bash runs-zip.sh"
+  allowed "#3441 a script on disk that starts python3 on an archive is left as it was"
+  # An archive python3 does not run is data: handed to a script after its own file, read by code
+  # that can run nothing, listed, or handed to another program.
+  h_run "python3 quiet.py quiet.zip"
+  allowed "#3441 a plain script handed an archive as an argument passes"
+  h_run "python3 -c \"import sys; print(len(open(sys.argv[1], 'rb').read()))\" quiet.zip"
+  allowed "#3441 code that only reads an archive it is handed passes"
+  h_run "python3 -m zipfile -l quiet.zip"
+  allowed "#3441 listing an archive with the standard library's own tool passes"
+  h_run "unzip -l quiet.zip"
+  allowed "#3441 another program handed the archive passes"
+  # A judgement kept in the cache does not outlive the folder it read.
+  mkdir -p "$P/later/turns"
+  cp "$P/quiet.py" "$P/later/turns/__main__.py"
+  h_run "python3 turns" "$P/later"
+  allowed "#3441 a folder whose __main__.py posts nothing passes"
+  cp "$P/posts.py" "$P/later/turns/__main__.py"
+  h_run "python3 turns" "$P/later"
+  read_refused "#3441 and once its __main__.py posts the same command is refused, not served from the cache"
+  h_run "python3 arrives" "$P/later"
+  allowed "#3441 a word naming no folder yet passes"
+  mkdir -p "$P/later/arrives"
+  cp "$P/posts.py" "$P/later/arrives/__main__.py"
+  h_run "python3 arrives" "$P/later"
+  read_refused "#3441 and once a folder whose __main__.py posts is there the same command is refused, not served from the cache"
+else
+  check "#3441 the archives for these cases could be made" "python3 -m zipfile, zipapp or py_compile made nothing, so the cases were not run"
+fi
+run_failing_3441 "python3 qpkg"
+allowed "#3441 the copy made to fail judges a quiet folder as the gate does where nothing fails"
+run_failing_3441 "python3 fails3441"
+refused "#3441 a reading of the folder python3 is handed that fails part way is refused"
 says "#3441 and that refusal says the call could not be judged" "could not judge"
 
 echo
