@@ -81,37 +81,39 @@ comes from a file, since the code names no file. A way to open a file that
 OPENERS does not hold, by a path built at run time, is not seen. Code handed to a module python3
 runs with -m (`python3 -m timeit "..."`) is not read as code. A Python file on disk that runs a
 file it names (`python3 runner.py`, `import runner`, `python3 - < runner.py`) is read as it was:
-this reading is of code the command itself carries. In a script on disk only a
-finding that something posts stands, and a path or code that cannot be worked out is left as it
-was there, as an unread feed is.
+this reading is of code the command itself carries. `python3 <folder holding __main__.py>` and
+`python3 <archive>` typed as a command are not this reading's either: measured again on main at
+bfc43f1b53 on 2026-11-24, each passes where the __main__.py posts. They are judged in the gate's
+every_file, which calls nothing here, and claude-config#3441 stays open for them. In a script on
+disk only a finding that something posts stands, and a path or code that cannot be worked out is
+left as it was there, as an unread feed is.
 
-A FOLDER OR AN ARCHIVE IN PLACE OF A SCRIPT (claude-config#3441). Measured on main at bfc43f1b53 on
-2026-11-24: `python3 pkg`, where pkg/__main__.py posts, and `python3 app.zip`, where the archive
-holds one, passed in every spelling tried. A word naming a folder names no file, so nothing was
-read for it, and an archive was read as the text it is not. What python3 does was measured the same
-day with files that only print (Python 3.14.4), and py_handed answers by it:
+WHAT A PATH RUNS WHEN IT IS NOT A SCRIPT'S TEXT (py_handed, claude-config#3441). A call that runs
+the file at a path (PATH_SINKS) was refused as unread only for a file with a NUL in its first line.
+Measured on main at bfc43f1b53 on 2026-11-24, each of these passed, handed to runpy.run_path in
+code given by -c: an archive zipapp wrote with a #! line in front, an archive with a Python file's
+text in front, a path under an archive, a folder whose only __main__ is compiled, and a folder
+holding a package named __main__. What Python does with each was measured the same day with files
+that only print (Python 3.14.4), and py_handed answers by it:
 
-  * Handed a folder, python3 and runpy.run_path run the __main__.py in it. That file is what is
-    judged: py_run_words gives the command's words again with each such folder replaced by its
-    __main__.py, for the gate to read as it reads any words (every_file), so a folder python3 runs
-    is read as its script and a folder handed to code is read as a file handed to it is. A
-    pattern the shell fills in with folders (`python3 pk*`) is replaced by each one's __main__.py.
+  * Handed a folder, python3 and runpy.run_path run the __main__.py in it (read as that file
+    since #3397).
   * Handed a file whose last 65,557 bytes hold a zip end record, they run the __main__.py inside
-    it, whatever the file is called and whatever text stands in front (zipapp's #! line, a whole
-    Python file): py_archive, which looks exactly as far back as zipimport does. Handed a path
-    under such a file (app.zip/inner), they run the __main__.py under that path inside it. The gate
-    does not open an archive: what is inside imports from inside it, which none of the gate's
-    readers follow, so reading one file of it would pass an archive whose other files post. It is
-    refused as unread where it is typed, whatever it holds.
+    it, whatever the file is called and whatever text stands in front: py_archive, which looks
+    exactly as far back as zipimport does. Handed a path under such a file (app.zip/inner), they
+    run the __main__.py under that path inside it. The gate does not open an archive: what is
+    inside imports from inside it, which none of the gate's readers follow, so reading one file of
+    it would pass an archive whose other files post. It is refused as unread where it is typed,
+    whatever it holds.
   * Handed a folder with no __main__.py and a compiled __main__.pyc, they run that. One holding an
     extension module named __main__, or a package named __main__ (which this Python refuses to run
     and another may not), is not a __main__.py the gate can read either. Each is refused as unread
     where it is typed.
 
-  An archive is refused only where python3 itself runs it (the word in its script's place) or
-  where code hands it to a call that runs the file at a path (PATH_SINKS). An archive that is an
-  argument is data far more often than code (a spreadsheet, a wheel, a document are all zip
-  files), and is judged as it was. A folder holding no __main__ at all runs nothing and passes.
+  Only a path handed to a call that runs the file at it is judged this way. An archive the code
+  names any other way is data far more often than code (a spreadsheet, a wheel and a document are
+  all zip files), and is judged as it was. A folder holding no __main__ at all runs nothing and
+  passes.
 """
 import ast
 import os
@@ -168,8 +170,6 @@ ZIP_TAIL = 22 + 65535
 MAIN_NOT_TEXT = re.compile(r"__main__(?:\.[^/]*)?\.(?:pyc|so|pyd)\Z")
 # How many folders up from a path that names nothing an archive holding it is looked for.
 MAX_UP = 64
-# What makes a word a pattern the shell replaces with its matches.
-FOLDER_PATTERN = re.compile(r"[*?\[{]")
 
 
 def make(py_nodes, unknown_dir):
@@ -519,8 +519,11 @@ def make(py_nodes, unknown_dir):
                     return True
             for source in sources:
                 try:
+                    # Through the gate's own open, so the judgement cache records the read
+                    # (lib/judgement-cache.py); 2 is io.SEEK_END, written out because the cache's
+                    # stand in for os knows only the names it lists.
                     with open(source, "rb") as f:
-                        f.seek(0, os.SEEK_END)
+                        f.seek(0, 2)
                         f.seek(max(f.tell() - ZIP_TAIL, 0))
                         if ZIP_END in f.read(ZIP_TAIL):
                             return True
@@ -530,13 +533,15 @@ def make(py_nodes, unknown_dir):
 
         def py_handed(self, path):
             """What python3, or a call that runs the file at a path, runs when handed path, where
-            that is not the text of a script: ("main", the __main__.py of the folder there),
-            ("unread", what it runs that the gate cannot read), or None for a file of text and for
-            a path that runs nothing (A FOLDER OR AN ARCHIVE above). A folder an earlier command of
-            this call copies is read by the folder it was copied from as well."""
+            that is something the gate cannot read, as words for a refusal: an archive, a path
+            under one, or a folder whose __main__ is compiled, an extension module or a package.
+            None for a file of text, for a folder whose __main__.py is one (read as that file
+            where it is named), and for a path that runs nothing (WHAT A PATH RUNS above). A folder
+            an earlier command of this call copies is read by the folder it was copied from as
+            well."""
             if self.is_file(path):
                 if self.py_archive(path):
-                    return "unread", "an archive, which Python runs by the __main__.py inside it"
+                    return "an archive, which Python runs by the __main__.py inside it"
                 return None
             has_main = self.is_file(os.path.join(path, "__main__.py"))
             for folder in (path, (self.made_dirs.get(os.path.realpath(path)) or (None,))[0]):
@@ -546,83 +551,25 @@ def make(py_nodes, unknown_dir):
                     names = []  # no folder there, or one Python cannot list either
                 for name in names:
                     if name == "__main__" and os.path.isdir(os.path.join(folder, name)):
-                        return "unread", "a folder holding a package named __main__, which is not a __main__.py"
+                        return "a folder holding a package named __main__, which is not a __main__.py"
                     if MAIN_NOT_TEXT.match(name) and not (has_main and name.endswith(".pyc")):
-                        return "unread", f"a folder Python runs by its {name}, which is not text"
+                        return f"a folder Python runs by its {name}, which is not text"
             if has_main:
-                return "main", os.path.join(path, "__main__.py")
+                return None
             # A path that names nothing on disk can lie inside an archive: the nearest thing above
             # it that is there says which.
             head = path.rstrip("/") or path
             for _ in range(MAX_UP):
                 if os.path.lexists(head) or self.is_file(head):
                     if self.is_file(head) and self.py_archive(head):
-                        return "unread", (f"a path under the archive {os.path.basename(head)}, which Python "
-                                          "runs by the __main__.py inside it")
+                        return (f"a path under the archive {os.path.basename(head)}, which Python "
+                                "runs by the __main__.py inside it")
                     break
                 parent = os.path.dirname(head)
                 if parent == head:
                     break
                 head = parent
             return None
-
-        def py_run_words(self, words, d, runs_slot):
-            """(the words with each folder Python runs replaced by the __main__.py in it, the
-            reason what python3 runs cannot be read or None) (A FOLDER OR AN ARCHIVE above). The
-            caller reads the first as it reads any words, after the words as they were written, so
-            this can only refuse more.
-
-            runs_slot says python3 runs one of these words as its script (it was given no code by
-            -c, no module by -m and none on its input). That word is the one in the script's place
-            by Python's own options (operands) and, in case that table is ever wrong, the first
-            word that is no option and names something on disk. Either is refused as unread, where
-            it is typed, when it is an archive, a path under one, or a folder whose __main__ is not
-            text. Every word naming a folder that holds a __main__.py is replaced by that file,
-            wherever it stands: its place decides how it is read (the script, or a file handed to
-            code that may run it), and that is the caller's to say, as it is for a file. So is a
-            pattern the shell fills in with such folders. A word a redirection names is the
-            shell's and is left as it is."""
-            slot = self.operands(words)[0] if runs_slot else None
-            out, first, target = list(words[:1]), runs_slot, False
-            for w in words[1:]:
-                redirect = self.sw.REDIRECT_WORD.match(w)
-                if target or redirect or not w or w[:1] in "-+" or len(w) > MAX_PATH or "\0" in w or "\n" in w:
-                    target = bool(redirect) and not redirect.group(1)
-                    out.append(w)
-                    continue
-                path = self.resolve(w, d)
-                in_slot = runs_slot and w == slot
-                if first and (in_slot or self.is_file(path) or os.path.lexists(path)):
-                    in_slot, first = True, False
-                if in_slot:
-                    got = self.py_handed(path)
-                    if got and got[0] == "unread":
-                        why = self.unread_typed(
-                            f"Python is handed {w}, {got[1]}, so what it runs is not read and whether it "
-                            "posts cannot be checked (claude-config#3441). Run the script itself by its path")
-                        if why:
-                            return words, why
-                if not self.is_file(path) and self.is_file(os.path.join(path, "__main__.py")):
-                    out.append(os.path.join(w, "__main__.py"))
-                    continue
-                if FOLDER_PATTERN.search(w) and not re.search(r"[$`<>\s()]", w) and not self.is_file(path) \
-                        and not os.path.lexists(path) and self.pattern_bare(w):
-                    # A pattern the shell fills in with folders before Python starts (`python3 pk*`):
-                    # the __main__.py of each folder it matches, found as the gate finds the files a
-                    # pattern matches (pattern_matches in lib/program-runs.py, with its limits).
-                    mains = self.pattern_matches(os.path.join(w, "__main__.py"), d)
-                    if mains is None:
-                        why = self.unread_typed(
-                            f"the pattern {w} may hand Python a folder to run, and it matches more than the "
-                            "gate reads, so the __main__.py of each folder was not read and whether one posts "
-                            "cannot be checked (claude-config#3441). Name the folder")
-                        if why:
-                            return words, why
-                    elif mains:
-                        out.extend(mains)
-                        continue
-                out.append(w)
-            return out, None
 
         def py_file_runs(self, label, code, here, d, depth, filled=False, fed=None):
             """The reason code given to python3 posts through a file, a module or a command it names
@@ -693,9 +640,9 @@ def make(py_nodes, unknown_dir):
                     if binary:
                         opaque.append(f"{name}({text[:80]!r})")
                         break
-                    got = self.py_handed(path)
-                    if got and got[0] == "unread":
-                        handed.append(f"{name}({text[:80]!r}), {got[1]}")
+                    what = self.py_handed(path)
+                    if what:
+                        handed.append(f"{name}({text[:80]!r}), {what}")
                         break
             lines, spelled = [], set()
             for text in texts:
