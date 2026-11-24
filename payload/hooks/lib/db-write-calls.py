@@ -1486,8 +1486,50 @@ UNSURE_LINE = ("the command holds a # the shared reader cannot tell from a comme
                "it on that line could not be read")
 UNREAD_LINE = ("the command holds a # the shell reads inside a word, and read that way, with the rest "
                "of its line, the command is not one this hook approves")
-CANNOT_ASK = ("lib/shell-words.py cannot say which lines it is unsure of (its commands() takes no "
-              "`unsure`), so no command read through it is approved")
+CANNOT_SAY = "lib/shell-words.py cannot say which lines it is unsure of (its commands() takes no `unsure`)"
+CANNOT_ASK = CANNOT_SAY + ", so no command read through it is approved"
+
+
+def asked_reading(sw, read):
+    """(what read() gives, None) when read() is run by the reading sw gives a caller that asks
+    which lines it is unsure of (asking()), every one of its readings being of commands with no
+    line named. (None, UNSURE_LINE) when a reading named a #, whatever read() then made of the
+    part it was given, and (None, CANNOT_SAY) when the reader cannot be asked. Any other failure
+    of read() is raised. This is the one place a caller turns a reading into "sure, and this is
+    it" or "not sure, and why" (claude-config#3472): cli_read_approval() approves by it,
+    bash_findings() and dry_push_dir() decide by it, and db-write-ask.sh reads a commit by it."""
+    try:
+        with asking(sw) as named:
+            try:
+                got = read()
+            except Exception:
+                # A reading that named a line and then failed is the unsure line's doing.
+                if not named:
+                    raise
+                got = None
+    except CannotAsk:
+        return None, CANNOT_SAY
+    if named:
+        return None, UNSURE_LINE
+    return got, None
+
+
+def second_reading(command, sw, cwd, first, read):
+    """asked_reading()'s answer for a caller whose read() is costly and that already holds first,
+    what read() gave by the reader's own reading: (first, None) without running read() again when
+    the command holds no #, or when the reader gives a caller that asks the very commands it gives
+    one that does not (every_command(), every wrapped string and substitution among them), since
+    read() would then be told nothing new; else asked_reading(sw, read). db-write-ask.sh reads a
+    commit this way, whose read() has git look at the checkout (claude-config#3472)."""
+    if "#" not in command:
+        return first, None
+    plain = sw.every_command(command, cwd)
+    same, fault = asked_reading(sw, lambda: sw.every_command(command, cwd) == plain)
+    if fault is not None:
+        return None, fault
+    if same:
+        return first, None
+    return asked_reading(sw, read)
 
 
 def cli_read_approval(command, cwd, judge, sw):
@@ -1510,16 +1552,13 @@ def cli_read_approval(command, cwd, judge, sw):
     if not ok:
         return ok, why
     try:
-        with asking(sw) as named:
-            sure, _ = _cli_read_approval(command, cwd, judge, sw)
-    except CannotAsk:
-        return False, CANNOT_ASK
+        sure, fault = asked_reading(sw, lambda: _cli_read_approval(command, cwd, judge, sw))
     except Exception as e:
         return False, ("the command could not be read a second time, asking the reader which lines it "
                        "is unsure of (%s)" % type(e).__name__)
-    if named:
-        return False, UNSURE_LINE
-    if not sure:
+    if fault is not None:
+        return False, CANNOT_ASK if fault is CANNOT_SAY else fault
+    if not sure[0]:
         return False, UNREAD_LINE
     return ok, why
 
@@ -1563,7 +1602,24 @@ DRY_RUN_FLAGS = {"--dry-run", "--linked", "--yes", "--workdir", "--debug"}
 def dry_push_dir(command, sw, cwd):
     """The directory whose supabase/migrations a Bash command previews, when the whole command is
     one `supabase db push --dry-run` of the linked project (plain_supabase(), so nothing else in it
-    could change the folder), else None (claude-config#2829)."""
+    could change the folder), else None (claude-config#2829).
+
+    Since #3472 a command holding a # must be that dry run, of that directory, by both readings: the
+    reader's own, and the one it gives a caller that asks (asked_reading()). One the shell reads on
+    past the # is no dry run of it (None), and one with a # that cannot be told from a comment
+    raises UnsureLine (CannotAsk when the reader cannot be asked), which the Apply check reports as
+    a command it could not read, so no push is let through on the strength of it."""
+    here = _dry_push_dir(command, sw, cwd)
+    if here is None or "#" not in command:
+        return here
+    sure, fault = asked_reading(sw, lambda: _dry_push_dir(command, sw, cwd))
+    if fault is not None:
+        raise (CannotAsk if fault is CANNOT_SAY else UnsureLine)(fault)
+    return here if sure == here else None
+
+
+def _dry_push_dir(command, sw, cwd):
+    """dry_push_dir()'s answer by one reading of the command, whichever sw gives."""
     plain = plain_supabase(command, sw, cwd)
     if plain is None:
         return None
@@ -1576,12 +1632,83 @@ def dry_push_dir(command, sw, cwd):
     return _workdir(here, flags)
 
 
+class SecondReading(tuple):
+    """A finding, (why, statement), that is what it is because the command was read a second time,
+    as the reader gives it to a caller that asks (claude-config#3472): that it could not be read
+    that way (a # the reader cannot tell from a comment, or a reader that cannot be asked), or that
+    a run the first reading took for the whole of its command is not that. It is a finding like any
+    other to whoever unpacks it, and db-write-ask.sh names the issue by the type."""
+    __slots__ = ()
+
+
+def is_second_reading(finding):
+    """Whether one of bash_findings()'s findings is one only the second reading of the command
+    accounts for (SecondReading)."""
+    return isinstance(finding, SecondReading)
+
+
+def unsure_why(fault, untold):
+    """One of asked_reading()'s faults and what it leaves untold, as one sentence."""
+    return fault + (" and " if fault is UNSURE_LINE else ", so ") + untold
+
+
+READ_ON = (", in a command where the shell reads a # inside a word and runs the rest of that line, so it is "
+           "not the one run of the whole command that an Apply or a test project list could cover")
+
+
+def _not_whole(finding):
+    """An Applicable finding as one nothing covers, saying why."""
+    return SecondReading((finding[0] + READ_ON, finding[1]))
+
+
+def _same_run(finding):
+    """What makes an Applicable finding of one reading the same run as one of the other."""
+    return tuple(finding), finding.workdir, tuple(tuple(flag) for flag in finding.flags), finding.file
+
+
 def bash_findings(command, judge, sw, cwd=""):
     """Every (why, statement) one Bash command is asked about, in the order it runs them; [] when it
     runs no database client, or only statements judge() shows to be read only. cwd is the session's
-    directory, which a plain Supabase run is read against."""
+    directory, which a plain Supabase run is read against.
+
+    Since #3472 a command holding a # is read twice: by the reader's own reading, as it always was,
+    and by the one the reader gives a caller that asks which lines it is unsure of
+    (asked_reading()). The reader took a # for a comment by a rule the shell does not follow, so a
+    write on the rest of that line was in no finding, and a push with such a line was Applicable,
+    which let the line through with it. Now:
+
+    - what the first reading finds is still found, in the same words and the same order, so nothing
+      asked about before stops being asked about;
+    - what only the second reading finds, a write on a line the shell reads on into, is added;
+    - a # the reader cannot tell from a comment (or a reader that cannot be asked) is a finding of
+      its own, the first, since nobody can say such a command holds no write, and no finding
+      beside it is Applicable;
+    - a finding is Applicable only when both readings find that same run, the whole of its command,
+      so an Apply or a test project list covers nothing the second reading shows beside it; one
+      that only one reading finds so says why nothing covers it (is_second_reading()).
+
+    A command holding no # has no # to be unsure of: the reader's `unsure` is a list of them, so its
+    two readings are one, and it is read once."""
     if not CLIENT_WORD.search(command):
         return []
+    found = _bash_findings(command, judge, sw, cwd)
+    if "#" not in command:
+        return found
+    sure, fault = asked_reading(sw, lambda: _bash_findings(command, judge, sw, cwd))
+    if fault is not None:
+        return ([SecondReading((unsure_why(fault, "the call could not be classified as read only"), None))]
+                + [tuple(f) if is_applicable(f) else f for f in found])
+    whole = {_same_run(f) for f in sure if is_applicable(f)}
+    out = [_not_whole(f) if is_applicable(f) and _same_run(f) not in whole else f for f in found]
+    first = {(tuple(f), is_function_deploy(f)) for f in found}
+    for f in sure:
+        if (tuple(f), is_function_deploy(f)) not in first:
+            out.append(_not_whole(f) if is_applicable(f) else f)
+    return out
+
+
+def _bash_findings(command, judge, sw, cwd):
+    """bash_findings()'s answer by one reading of the command, whichever sw gives."""
     scripted = scripted_queries(command, sw, cwd)
     if scripted is not None:
         return _scripted_findings(scripted, judge)
