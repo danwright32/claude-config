@@ -99,10 +99,13 @@ order_c="$(order_of "$out_c")"
 # an ordinary lane. Five seconds at one slot (seeded above, not measured), then under a second at
 # four slots: four slots cannot
 # make a suite more than four times quicker, so its time at one slot is at most 4 seconds (the
-# measurement rounds down, so one second more than it read), and that is what is kept.
+# measurement rounds down, so one second more than it read), and that is what is kept. The suite
+# takes milliseconds but its time is whole seconds read off the clock, so a launch that crosses a
+# second boundary reads 1 and allows up to 8: either way the one slot figure, 5, is kept or brought
+# to 4, and its share stays 1. A runner keeping the last wall clock writes '0 1' or '1 1'.
 case "$(record "$ST" lead)" in
-  '4 1 1') check "#3388 lead's record keeps its one slot time, bounded by what four slots measured" ok ;;
-  *) check "#3388 lead's record keeps its one slot time, bounded by what four slots measured" "it reads '$(record "$ST" lead)', expected '4 1 1'" ;;
+  '4 1 1'|'5 1 1') check "#3388 lead's record keeps its one slot time, bounded by what four slots measured" ok ;;
+  *) check "#3388 lead's record keeps its one slot time, bounded by what four slots measured" "it reads '$(record "$ST" lead)', expected '4 1 1' (or '5 1 1' if it read 1 second)" ;;
 esac
 
 # And the run that led correctly says nothing about it. The check that names a wrong lead judged
@@ -125,9 +128,11 @@ for n in lead runnerup q1 q2; do mk_suite "$FX2/suites" "$n"; done
 printf '50 1 1\n' > "$ST2/$(key lead)"
 printf '3 1 1\n' > "$ST2/$(key runnerup)"
 run_fixture "$FX2" "$ST2" >/dev/null
+# 4 when it read 0 seconds, 8 when it read 1, 12 when it read 2 on a loaded machine: each far below
+# 50, which is what a runner without the ceiling keeps.
 case "$(record "$ST2" lead)" in
-  '4 1 1') check "#3388 a figure four slots prove too high is brought down to what they allow" ok ;;
-  *) check "#3388 a figure four slots prove too high is brought down to what they allow" "it reads '$(record "$ST2" lead)', expected '4 1 1'" ;;
+  '4 1 1'|'8 1 1'|'12 1 1') check "#3388 a figure four slots prove too high is brought down to what they allow" ok ;;
+  *) check "#3388 a figure four slots prove too high is brought down to what they allow" "it reads '$(record "$ST2" lead)', expected '4 1 1' (or 8 or 12 if it read 1 or 2 seconds)" ;;
 esac
 
 # ---------------------------------------------------------------------------
@@ -161,9 +166,11 @@ mkdir -p "$ST4"
 mk_suite "$FX4/suites" only
 printf '50 1 8\n' > "$ST4/$(key only)"
 run_fixture "$FX4" "$ST4" 4 4 >/dev/null
+# Its own time, 0 or 1 seconds as the clock falls, at share 4: never the 50 seeded above, which is
+# not measured.
 case "$(record "$ST4" only)" in
-  '0 1 4') check "#3388 a measurement at a smaller share replaces a figure from a larger one" ok ;;
-  *) check "#3388 a measurement at a smaller share replaces a figure from a larger one" "it reads '$(record "$ST4" only)', expected '0 1 4'" ;;
+  '0 1 4'|'1 1 4') check "#3388 a measurement at a smaller share replaces a figure from a larger one" ok ;;
+  *) check "#3388 a measurement at a smaller share replaces a figure from a larger one" "it reads '$(record "$ST4" only)', expected '0 1 4' (or '1 1 4')" ;;
 esac
 
 # A record written before the share was kept has no third field, so nothing says what share its
@@ -172,8 +179,8 @@ esac
 printf '50 1\n' > "$ST4/$(key only)"
 run_fixture "$FX4" "$ST4" 4 4 >/dev/null
 case "$(record "$ST4" only)" in
-  '0 1 4') check "#3388 a record with no share is replaced by the next measurement and its share" ok ;;
-  *) check "#3388 a record with no share is replaced by the next measurement and its share" "it reads '$(record "$ST4" only)', expected '0 1 4'" ;;
+  '0 1 4'|'1 1 4') check "#3388 a record with no share is replaced by the next measurement and its share" ok ;;
+  *) check "#3388 a record with no share is replaced by the next measurement and its share" "it reads '$(record "$ST4" only)', expected '0 1 4' (or '1 1 4')" ;;
 esac
 
 echo "passed: $pass, failed: $fail"

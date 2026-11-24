@@ -638,7 +638,8 @@ suite_key(){   # suite_key <suite path> -> the record's file name, or nothing
   printf '%s' "${_sk#"$root"/}" | sed 's/%/%25/g; s#/#%2F#g'
 }
 
-# What that suite was last measured at, or NOTHING. A record that is not a whole number of seconds
+# What that suite's record holds (its ranked figure, check count and share), or NOTHING for each
+# part that is missing or unreadable. A record that is not a whole number of seconds
 # is treated as no record rather than guessed at as a number: the store is a cache, and a corrupt
 # entry there is not a reason to refuse to run the tests. Falling back is safe here in a way it
 # usually is not, because the only thing the record decides is the launch ORDER, and being wrong
@@ -1415,7 +1416,7 @@ if [ "$ran" -gt 0 ]; then
   trap 'runner_cleanup; exit 143' TERM
   trap 'runner_cleanup; exit 129' HUP
 
-  # Launched LONGEST FIRST, judged by what each suite was last MEASURED to cost (#144). Lane 1
+  # Launched LONGEST FIRST, judged by what each suite was MEASURED to cost (#144). Lane 1
   # carries the largest share of the budget and lane 1 is whatever launches first, so this line
   # decides which suite the machine is actually spent on.
   #
