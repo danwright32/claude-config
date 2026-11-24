@@ -145,11 +145,11 @@ const singleEnd = (text: string, i: number): number => (opensAnsi(text, i) ? ans
 // The delimiter word starting at s[j], as the shell compares it with each body line: the whole
 // word with its quotes taken out, and whether ANY part of it was quoted, by quotes or a backslash,
 // whole (`'EOF'`, `"EOF"`, `\EOF`) or in part (`'E'OF`, `E"OF"`, `E\OF`, `$'EOF'`), which stops the
-// shell expanding the body. A hyphen is part of the word (`END-OF`). Undefined when there is no word
-// or a quote in it never closes. The same reading as lib/shell-words.py's heredoc_opener, which the
-// python gates use (#2060); this reader is TypeScript and cannot call it, so the two are held to the
-// same markers by their tests (#2073).
-const readDelimiter = (s: string, j: number): { end: string; quoted: boolean } | undefined => {
+// shell expanding the body. A hyphen is part of the word (`END-OF`). `next` is the place right after
+// the word. Undefined when there is no word or a quote in it never closes. The same reading as
+// lib/shell-words.py's heredoc_opener, which the python gates use (#2060); this reader is TypeScript
+// and cannot call it, so the two are held to the same markers by their tests (#2073).
+const readDelimiter = (s: string, j: number): { end: string; quoted: boolean; next: number } | undefined => {
   const start = j
   const word: string[] = []
   let quoted = false
@@ -181,7 +181,7 @@ const readDelimiter = (s: string, j: number): { end: string; quoted: boolean } |
       j++
     }
   }
-  return j === start ? undefined : { end: word.join(''), quoted }
+  return j === start ? undefined : { end: word.join(''), quoted, next: j }
 }
 
 // `quoted` when any of its delimiter was quoted or escaped, which stops the shell expanding $ and
@@ -192,7 +192,8 @@ const readDelimiter = (s: string, j: number): { end: string; quoted: boolean } |
 type Heredoc = { at: number; body: string; quoted: boolean; torn?: true; inText?: true }
 
 // What dropHeredocs asks of one line, its quotes read on that line alone (a `$'...'` string with its
-// escapes, #3491):
+// escapes, #3491), from its first character, or from `from` where the line is known to start inside
+// a quote that closes right before there (dropHeredocs, `sure`):
 // `comment`, where its comment starts (#2407): the first # where a word would begin, outside quotes,
 // or the line's length. A << after it opens no heredoc, as the shell reads it; a # misjudged as one
 // only leaves a heredoc's lines to be read as commands, never drops any.
@@ -201,10 +202,10 @@ type Heredoc = { at: number; body: string; quoted: boolean; torn?: true; inText?
 // `quotes`, each quote on it (#3491): where it opens, where it closes (undefined for the one the
 // line ends inside), and its kind.
 type LineQuote = { from: number; to?: number; kind: '"' | "'" | 'ansi' }
-const readsLine = (line: string): { comment: number; joins: boolean; quotes: LineQuote[] } => {
+const readsLine = (line: string, from = 0): { comment: number; joins: boolean; quotes: LineQuote[] } => {
   const quotes: LineQuote[] = []
   let quote: LineQuote | undefined
-  for (let i = 0; i < line.length; i++) {
+  for (let i = from; i < line.length; i++) {
     const c = line[i] as string
     const last = i === line.length - 1
     if (quote) {
@@ -236,6 +237,127 @@ const standsInText = (line: string, quotes: readonly LineQuote[], at: number): b
   const q = quotes.find(s => s.from < at && (s.to === undefined || at < s.to))
   return q !== undefined && (q.kind !== '"' || !/\$\(|`/.test(line.slice(q.from, at)))
 }
+// Each heredoc a line opens, as dropHeredocs has always opened them: every << before the line's
+// comment whose marker can be read, in order, with where the << stands on the line, the marker's
+// word as written, and what readDelimiter reads of it.
+type Opened = { at: number; tabs: boolean; word: string; end: string; quoted: boolean; next: number }
+const opensOn = (line: string, facts: { comment: number }): Opened[] => {
+  const found: Opened[] = []
+  for (const m of line.matchAll(OPENING)) {
+    const at = m.index ?? 0
+    if (at >= facts.comment) break
+    const d = readDelimiter(line, at + m[0].length)
+    if (d) found.push({ at, tabs: m[1] === '-', word: line.slice(at + m[0].length, d.next), ...d })
+  }
+  return found
+}
+// A marker bash and zsh are known to read alike: a plain name, bare or whole in one pair of quotes.
+const PLAIN_MARKER = /^(?:[A-Za-z_]\w*|'[A-Za-z_]\w*'|"[A-Za-z_]\w*")$/
+// Whether a line that opens the heredocs `found`, the first of them where the scan of quoted text
+// stopped, is one whose heredocs bash and zsh surely place as this reader does (dropHeredocs,
+// `sure`). It joins no next line and ends inside no quote, so the first body starts on the next
+// line; each marker is a plain one; and the scan follows the rest of the line to its end, stopping
+// only at each further << this reader opens, so none of them stands in quoted text and no other <<
+// opens a heredoc this reader does not. `wholes` is what the scan read whole on the line before
+// the first of them.
+// And each heredoc is the one input of a plain command that starts on this line, since zsh
+// feeds a command every input it is given, one after another, where bash feeds it the last alone
+// (measured 2026-11-24 on bash 3.2 and zsh 5.9: after `p1 | cat <<EOF`, `cat <<A <<B`,
+// `cat <<EOF <f`, `cat <<<s <<EOF`, `p2 | { cat; } <<EOF`, `p2 | (p3; cat) <<EOF`,
+// `p2 | while read l; do p3 "$l"; done <<EOF`, `p2 | cat $(p3; p4) <<EOF` and a function given
+// the heredoc where it is made and called after a pipe, zsh fed more lines), and with no command
+// at all zsh runs one of its own on the heredoc where bash runs none. So, outside what the scan
+// read whole: no other < stands on the line from `from`, where the line's own reading starts;
+// before each << stands a `;`, `&&`, `||` or `&`, or the start of a line that starts outside
+// quotes (`carried` is whether it starts inside one) and after no line ending in a pipe (`piped`);
+// and what stands between the last of those and the << (plainCommand) is a command's name and
+// its words, with no pipe, no parenthesis, brace or bracket, so the << feeds no command that
+// started before the separator, no group, loop or function a pipe may feed, and no command whose
+// word held the separator. A line that starts outside quotes is read as it always was whatever
+// this says of it: there it only decides whether the lines after it may still be read so.
+const opensPlainly = (line: string, from: number, carried: boolean, piped: boolean, facts: { joins: boolean; quotes: readonly LineQuote[] }, found: readonly Opened[], wholes: Wholes): boolean => {
+  if (facts.joins || facts.quotes.some(q => q.to === undefined) || !found.every(f => PLAIN_MARKER.test(f.word))) return false
+  const quotes = [...wholes.quotes]
+  const steps = [...wholes.steps]
+  for (let k = 0; k < found.length; k++) {
+    const next = (found[k] as Opened).next
+    const rest = scanQuotes(`${line.slice(next)}\n`)
+    const stop = next + rest.stop
+    if (stop > line.length ? k < found.length - 1 : found[k + 1]?.at !== stop) return false
+    for (const [a, b] of rest.quotes) quotes.push([a + next, b + next])
+    for (const [a, b] of rest.steps) steps.push([a + next, b + next])
+  }
+  // Where the text of the command being read starts, the line's start or right after a separator:
+  // undefined while none has been met on a line that starts inside a quote or after a pipe, and
+  // after a pipe, a parenthesis, a brace, a bracket or a heredoc.
+  let command: number | undefined = carried || piped ? undefined : 0
+  // Whether a pipe stands before the `&&` or `||` being read, in the same list: what follows may
+  // then run in one shell alone (`p2 | y=1 && cat <<EOF` ran cat in bash and not in zsh, which
+  // gives a pipe into a variable's setting the status of what wrote into it), so it starts no
+  // command known to run alike.
+  let after = !carried && piped
+  for (let i = from, k = 0; i < line.length; i++) {
+    const c = line[i] as string
+    const quote = quotes.find(([a, b]) => a <= i && i <= b)
+    const step = steps.find(([a, b]) => a <= i && i <= b)
+    if (quote) i = quote[1]
+    else if (c === '<' && i !== found[k]?.at) return false
+    else if (step) {
+      // A substitution holding a separator is one the command reader may split a command at
+      // (`cat ${y:-a;b} <<EOF` came out as two commands, the second fed the heredoc).
+      if (/[;|&]/.test(line.slice(Math.max(step[0], 0), step[1] + 1))) return false
+      i = step[1]
+    } else if (c === '\\') i++
+    else if (c === '<') {
+      if (command === undefined || !plainCommand(line.slice(command, i))) return false
+      command = undefined
+      i = (found[k++] as Opened).next - 1
+    } else if (c === ';') {
+      command = i + 1
+      after = false
+    } else if (c === '|') {
+      const second = line[i + 1]
+      if (second === '|' || second === '&') i++
+      command = second === '|' && !after ? i + 1 : undefined
+      if (second !== '|') after = true
+    } else if (c === '&' && line[i - 1] !== '>' && line[i + 1] !== '>') {
+      const and = line[i + 1] === '&'
+      if (and) i++
+      command = and && after ? undefined : i + 1
+      if (!and) after = false
+    } else if ('(){}[]'.includes(c)) command = undefined
+  }
+  return true
+}
+// What the scan of quoted text (scanQuotes) read whole on one line, as places on that line: each
+// quote, and each substitution it stepped over.
+type Wholes = { quotes: [number, number][]; steps: [number, number][] }
+// Whether the word the quote opening at `at` stands in is a variable's setting (`x='...'`,
+// `x+=...`, `x[1]=...`), the word read back from the quote through whatever the scan read whole
+// beside it. After a pipe into a setting alone zsh gives the status of what wrote into the pipe
+// and bash gives success, so a command after `&&` ran in bash alone (measured 2026-11-24:
+// `p2 | x='a` then `b' && cat <<EOF`): a line that starts inside such a quote is read alone.
+const inSetting = (text: string, at: number, wholes: readonly [number, number][]): boolean => {
+  let p = at
+  for (;;) {
+    while (p > 0 && (!/[\s;&|(){}<>'"`]/.test(text[p - 1] as string) || text[p - 2] === '\\')) p--
+    const whole = wholes.find(([, to]) => to === p - 1)
+    if (!whole) break
+    p = whole[0]
+  }
+  return /^[A-Za-z_]\w*(?:\[[^\]]*\])?\+?=/.test(text.slice(p))
+}
+// Whether the text between a separator and a << is a plain command's: any settings of variables to
+// plain values, then a name, which holds a letter and is no word of the shell's own grammar, then
+// anything but a number right before the <<, which names another input than the command's own
+// for the heredoc to feed. After `then`, `do`, `!` or `time` the << may feed no command, and after
+// `done`, `fi` or `esac` one that began earlier; `exec` with no command turns the heredoc on the
+// shell itself, for a later command to read.
+const SHELL_WORD = new Set(['if', 'then', 'else', 'elif', 'fi', 'do', 'done', 'while', 'until', 'for', 'case', 'esac', 'in', 'select', 'function', 'time', 'coproc', 'repeat', 'foreach', 'end', 'always', 'nocorrect', 'exec'])
+const plainCommand = (text: string): boolean => {
+  const name = /^[ \t]*(?:[A-Za-z_]\w*=[\w./:~+,@%-]*[ \t]+)*([\w./~+-]+)(?=[ \t]|$)/.exec(text)?.[1]
+  return name !== undefined && /[A-Za-z]/.test(name) && !SHELL_WORD.has(name) && !/(?:^|[ \t])\d+$/.test(text)
+}
 
 // A heredoc body is text, not commands, so it is dropped before anything else is read: left in, an
 // apostrophe in it would open a quote that swallows the commands after it. Each body is kept with
@@ -263,7 +385,8 @@ export const dropHeredocs = (cmd: string, quotes = true): { text: string; heredo
   const heredocs: Heredoc[] = []
   const removed: { at: number; lines: string[] }[] = []
   // `whole` is where its << stands in `cmd` itself, known while no line has been taken out; -1 after.
-  const open: { end: string; tabs: boolean; at: number; quoted: boolean; torn: boolean; inText: boolean; whole: number }[] = []
+  // `alone` is whether its line, read alone, ends inside a quote opened after it (`sure`, below).
+  const open: { end: string; tabs: boolean; at: number; quoted: boolean; torn: boolean; alone: boolean; inText: boolean; whole: number }[] = []
   let body: string[] = []
   // The lines of the heredoc being read, as written, put back as commands if it never ends.
   let unended: string[] = []
@@ -275,32 +398,90 @@ export const dropHeredocs = (cmd: string, quotes = true): { text: string; heredo
   }
   // Whether the command line before this one joins it on.
   let joined = false
+  // `sure` is whether every heredoc opened so far is one the scan of quoted text (scanQuotes) and
+  // this reader place alike, `fresh` where in `cmd` the next scan starts (the line after the last
+  // such heredoc's marker, where a shell is outside every quote), and `begins` where the next line
+  // starts in `cmd`. See the line that opens a heredoc, below.
+  let sure = quotes
+  let fresh = 0
+  let scan: (ReturnType<typeof scanQuotes> & { from: number }) | undefined
+  let begins = 0
+  // Whether the command line before this one ends in a pipe (or a `||`, read as one: the harmless
+  // side), so the command this line starts with is fed by it (opensPlainly).
+  let piped = false
   for (const line of cmd.split('\n')) {
+    const starts = begins
+    begins += line.length + 1
     const h = open[0]
     if (h && !joined) {
       remove(line)
       if (line.trim() === h.end) {
-        heredocs.push({ at: h.at, body: body.join('\n'), quoted: h.quoted, ...(h.torn ? { torn: true as const } : {}) })
+        // A shell ends a heredoc only at a line that is its marker and nothing more, a <<- one's
+        // leading tabs aside, and reads on past this one (#3496).
+        if ((h.tabs ? line.replace(/^\t+/, '') : line) !== h.end) sure = false
+        // One not read alike from its << to its marker keeps the mark its line read alone gave it.
+        heredocs.push({ at: h.at, body: body.join('\n'), quoted: h.quoted, ...(h.torn || (h.alone && !sure) ? { torn: true as const } : {}) })
         open.shift()
         body = []
         unended = []
+        if (!open.length) fresh = begins
       } else {
+        // A backslash ending a line of a body the shell expands may join the marker's line to it,
+        // and the shell then reads on past that marker (#3496).
+        if (!h.quoted && line.endsWith('\\')) sure = false
         body.push(h.tabs ? line.replace(/^\t+/, '') : line)
         unended.push(line)
       }
       continue
     }
     out.push(line)
-    const facts = readsLine(line)
-    for (const m of line.matchAll(OPENING)) {
-      if ((m.index ?? 0) >= facts.comment) break
-      const d = readDelimiter(line, (m.index ?? 0) + m[0].length)
-      const at = m.index ?? 0
-      const torn = facts.quotes.some(q => q.to === undefined && q.from > at)
-      if (d) open.push({ end: d.end, tabs: m[1] === '-', at: offset + at, quoted: d.quoted, torn, inText: standsInText(line, facts.quotes, at), whole: quotes && !removed.length ? offset + at : -1 })
+    const alone = readsLine(line)
+    let facts = alone
+    let found = opensOn(line, facts)
+    // A line read alone has its quotes the wrong way round when it starts inside a quote opened on
+    // an earlier line: the quote's close is taken for an opening, so a << after it stands in quoted
+    // text and the line seems to end inside a quote (the fourth fix round on pull request #3493: a
+    // count over 202,875 recorded commands found 5 marked `torn` for nothing, each a program in
+    // single quotes over several lines that closes on the line where the next command opens a
+    // heredoc; bash 3.2 and zsh 5.9 ran three texts of those shapes alike on 2026-11-24). So such
+    // a line is read from where that quote closes, but only where that reading is sure. The scan
+    // of quoted text, started where a shell is outside every quote, stops at its first << outside
+    // quotes, and that must be the first heredoc this line opens: then both place every heredoc
+    // so far alike, and the line either starts inside a quote the scan read whole, which closes
+    // before that <<, or starts outside every quote, where its reading is the one it always had.
+    // And the line must be one that opensPlainly. Anywhere else (a line continuation, a
+    // substitution or a comment the scan does not follow, a << this reader opens inside quoted
+    // text, a line that joins the next or ends inside a quote, a heredoc that is not the one input
+    // of a plain command starting on its line, a quote that stands in a variable's setting) the
+    // line is read alone exactly as before, with whatever mark that gives it, and so is every line
+    // after: `sure` never comes back. The mark a line read alone gives (`alone`) is taken off only
+    // a heredoc that also ends at a line that is its marker and nothing more. Read from where the
+    // quote closes, a line can gain what it lacked too: a heredoc that never ends is said, where
+    // read alone its << stood in quoted text.
+    if (sure && found.length) {
+      if (scan?.from !== fresh) scan = { from: fresh, ...scanQuotes(cmd.slice(fresh)) }
+      const at = starts - fresh
+      const quote = scan.quotes.find(([from, to]) => from < at && at <= to)
+      const from = quote ? quote[1] - at + 1 : 0
+      const real = quote ? readsLine(line, from) : facts
+      const realFound = quote ? opensOn(line, real) : found
+      const onLine = (wholes: [number, number][]) => wholes.filter(([, to]) => to >= at).map(([a, b]): [number, number] => [a - at, b - at])
+      const setting = quote !== undefined && inSetting(cmd.slice(fresh), quote[0], [...scan.quotes, ...scan.steps])
+      sure = !setting && realFound[0]?.at === scan.stop - at && opensPlainly(line, from, quote !== undefined, piped, real, realFound, { quotes: onLine(scan.quotes), steps: onLine(scan.steps) })
+      if (sure) {
+        facts = real
+        found = realFound
+      }
+    }
+    for (const f of found) {
+      const torn = (read: { quotes: LineQuote[] }) => read.quotes.some(q => q.to === undefined && q.from > f.at)
+      open.push({ end: f.end, tabs: f.tabs, at: offset + f.at, quoted: f.quoted, torn: torn(facts), alone: torn(alone), inText: standsInText(line, facts.quotes, f.at), whole: quotes && !removed.length ? offset + f.at : -1 })
     }
     offset += line.length + 1
     joined = facts.joins
+    // A line holding a comment alone, or nothing, leaves a pipe before it open.
+    const code = line.slice(0, facts.comment)
+    if (code.trim()) piped = /\|[ \t]*$/.test(code)
   }
   const h = open[0]
   // The lines of one that never ends are put back, at the end where they stood, so none was removed.
@@ -2290,13 +2471,22 @@ const ONLY_JS_SPACE = /[^\S \t\n]/
 // what a shell does read inside double quotes is never in a run, and nor is anything inside
 // arithmetic, where zsh reads no quote. Wrong toward calling too little quoted, which leaves a
 // mark where it was, never toward too much (L648).
-const quotedText = (text: string): [number, number][] => {
+const quotedText = (text: string): [number, number][] => scanQuotes(text).runs
+// That scan, with what dropHeredocs asks of it besides (the fourth fix round on pull request #3493):
+// `quotes`, each quote it read whole, from its opening quote to the one that closes it, a double
+// quote's substitutions included; `steps`, each substitution outside quotes it stepped over, from
+// its first character to its last; and `stop`, where it stopped, which is the text's length when
+// it read all of it. A stop at a `<<` is at one outside quotes, comments and substitutions.
+const scanQuotes = (text: string): { runs: [number, number][]; quotes: [number, number][]; steps: [number, number][]; stop: number } => {
   const runs: [number, number][] = []
+  const quotes: [number, number][] = []
+  const steps: [number, number][] = []
   // Whether a word is being read. A # starts a comment only where none is, as the word reader has
   // it (split): `p3 $(p1 a)#it's` holds a quote, not a comment, and the quote runs on over the
   // next line (measured 2026-11-23, both shells).
   let word = false
-  for (let i = 0; i < text.length; i++) {
+  let i = 0
+  for (; i < text.length; i++) {
     const c = text[i] as string
     if (c === '\\') {
       // A backslash before a new line joins the two lines, and what stands either side of the pair
@@ -2326,6 +2516,7 @@ const quotedText = (text: string): [number, number][] => {
       const end = singleEnd(text, i)
       if (end < 0) break
       runs.push([i, end])
+      quotes.push([i, end])
       i = end
       word = true
     } else if (c === '"') {
@@ -2336,18 +2527,19 @@ const quotedText = (text: string): [number, number][] => {
         // In double quotes bash joins a `$` and a `(` either side of a backslash and new line into
         // a substitution and runs it, and zsh hands the text on, so nothing from the quote's
         // opening on is called quoted text (`p1 "$\` then `(p3 '(( x')" ; p2` ran p3 in bash alone).
-        if (d === '\\' && text[j + 1] === '\n') return runs
+        if (d === '\\' && text[j + 1] === '\n') return { runs, quotes, steps, stop: i }
         if (d === '\\') j++
         else if (d === '`' || (d === '$' && (text[j + 1] === '(' || text[j + 1] === '{' || text[j + 1] === '['))) {
           runs.push([from, j])
           const end = stepped(text, j)
-          if (end < 0) return runs
+          if (end < 0) return { runs, quotes, steps, stop: i }
           from = end
           j = end
         }
       }
       if (j >= text.length) break
       runs.push([from, j])
+      quotes.push([i, j])
       i = j
       word = true
     } else if (c === '`' || ((c === '$' || c === '<' || c === '>' || c === '(') && text[i + 1] === '(') || (c === '$' && (text[i + 1] === '{' || text[i + 1] === '['))) {
@@ -2356,6 +2548,7 @@ const quotedText = (text: string): [number, number][] => {
       // is stepped over whole or the scan stops.
       const end = stepped(text, i)
       if (end < 0) break
+      steps.push([i, end])
       i = end
       word = c !== '('
     } else {
@@ -2364,7 +2557,7 @@ const quotedText = (text: string): [number, number][] => {
       word = !/[ \t\n;&|()<>]/.test(c)
     }
   }
-  return runs
+  return { runs, quotes, steps, stop: Math.min(i, text.length) }
 }
 // Whether the character at `at` stands inside one of those runs.
 const inQuotedText = (runs: readonly [number, number][], at: number): boolean => runs.some(([from, to]) => from < at && at < to)

@@ -1914,6 +1914,257 @@ describe("$'...' and a script not read to its end (#3491)", () => {
     for (const [cmd, marks] of past) expect(marksIn(cmd)).toEqual({ cmd, marks })
   })
 
+  // The fourth fix round on pull request #3493. A count over a second Mac's 202,875 recorded
+  // commands found 5 ordinary ones still marked unread for nothing, all one shape: a program in
+  // single quotes that runs over several lines and closes on the line where a later command opens
+  // a heredoc. dropHeredocs read each line's quotes on that line alone, so on such a line it took
+  // the closing quote for an opening one and every quote after it the wrong way round, and found a
+  // quote opened after the << that the line ends inside. Each text of the four tests below was run
+  // on bash 3.2.57 and zsh 5.9 on 2026-11-24 with programs that only print. Both shells ran the same
+  // commands and fed them the same lines for every text the reader now gives no mark, and where
+  // they did not for a text that keeps one, the test says what each did.
+  // Each command's program, the body of each heredoc feeding it, and its mark.
+  const shape = (cmd: string) => pipeline(cmd).map(c => [c.words[0], ...(c.heredocs ? [c.heredocs.map(h => h.body)] : []), ...(c.unread ? [c.unread] : [])])
+  const inWords = (cmd: string) => pipeline(cmd).map(c => [c.words.join(' '), ...(c.heredocs ? [c.heredocs.map(h => h.body)] : []), ...(c.unread ? [c.unread] : [])])
+
+  test('a heredoc opened on the line where a quote from an earlier line closes is read, with no mark', () => {
+    // The three shapes of the 5 recorded commands, each with a command after the heredoc's body,
+    // which a reader that lost the body's end would not give. A program fed the heredoc:
+    expect(inWords(`p1 -c '\nimport a\nprint(a)\n' && cat - <<'PY'\nprint(1)\nPY\n${NEXT}`)).toEqual([['p1 -c \nimport a\nprint(a)\n'], ['cat - <<PY', ['print(1)']], [NEXT]])
+    // the same after an earlier heredoc that is whole:
+    expect(inWords(`cat > /dev/null <<'E1'\nfirst\nE1\np1 -c '\nimport a\n' && cat - <<'PY'\nprint(1)\nPY\n${NEXT}`)).toEqual([['cat > /dev/null <<E1', ['first']], ['p1 -c \nimport a\n'], ['cat - <<PY', ['print(1)']], [NEXT]])
+    // and one fed the heredoc and piped on to a program with a one line program in quotes.
+    expect(inWords(`p1 '\nselect a\n' ; cat <<EOF | p2 -c 'import json; print(1)'\nbody\nEOF\n${NEXT}`)).toEqual([['p1 \nselect a\n'], ['cat <<EOF', ['body']], ['p2 -c import json; print(1)'], [NEXT]])
+    expect(inWords(`p1 '\nselect a\n' ; cat <<'EOF' | p2 -c 'import json; print(1)'\nbody\nEOF\n${NEXT}`)).toEqual([['p1 \nselect a\n'], ['cat <<EOF', ['body']], ['p2 -c import json; print(1)'], [NEXT]])
+  })
+
+  test('the shapes beside it that both shells run alike are read the same way', () => {
+    const read: [string, unknown[][]][] = [
+      // A dollar quote string over the lines, and a pair of quotes after the one that closes.
+      [`p1 $'\na${BS}'b\n' ; cat <<'EOF'\nbody\nEOF\n${NEXT}`, [['p1'], ['cat', ['body']], ['prettier']]],
+      [`p1 '\na\n' 'b' ; cat <<'EOF'\nbody\nEOF\n${NEXT}`, [['p1'], ['cat', ['body']], ['prettier']]],
+      // A body holding an apostrophe, and a backslash before a new line inside the single quotes,
+      // where it joins nothing.
+      [`p1 '\na\n' ; cat <<'EOF'\nit's a body\nEOF\n${NEXT}`, [['p1'], ['cat', ["it's a body"]], ['prettier']]],
+      [`p1 'a ${BS}\nb' ; cat <<'EOF'\nbody\nEOF\n${NEXT}`, [['p1'], ['cat', ['body']], ['prettier']]],
+      // Two heredocs on that line, each feeding its own command, and one whose body and marker lose
+      // their leading tabs.
+      [`p1 '\na\n' ; cat <<A ; cat <<'B'\nbody a\nA\nbody b\nB\n${NEXT}`, [['p1'], ['cat', ['body a']], ['cat', ['body b']], ['prettier']]],
+      [`p1 '\na\n' ; cat <<-'EOF'\n\tbody\n\tEOF\n${NEXT}`, [['p1'], ['cat', ['body']], ['prettier']]],
+      // After a comment holding an apostrophe, and inside a subshell opened on an earlier line.
+      [`# it's\np1 '\na\n' ; cat <<'EOF'\nbody\nEOF\n${NEXT}`, [['p1'], ['cat', ['body']], ['prettier']]],
+      [`( p1 '\na\n' ; cat <<'EOF'\nbody\nEOF\n)\n${NEXT}`, [['('], ['p1'], ['cat', ['body']], [')'], ['prettier']]],
+      // The heredoc's command after more of the line: a pipe that ends at a separator before it, a
+      // command sent to the background, one that only runs if the one before fails, a variable set
+      // for it, its name given as a path, and words that are substitutions.
+      [`p1 '\na\n' ; p2 | p3 $(p4) ; cat <<'EOF'\nbody\nEOF\n${NEXT}`, [['p1'], ['p2'], ['p4'], ['p3'], ['cat', ['body']], ['prettier']]],
+      [`p1 '\na\n' ; p2 x & cat <<'EOF'\nbody\nEOF\n${NEXT}`, [['p1'], ['p2'], ['cat', ['body']], ['prettier']]],
+      [`p1 '\na\n' ; false || cat <<'EOF'\nbody\nEOF\n${NEXT}`, [['p1'], ['false'], ['cat', ['body']], ['prettier']]],
+      [`p1 '\na\n' ; Y=1 cat <<'EOF'\nbody\nEOF\n${NEXT}`, [['p1'], ['cat', ['body']], ['prettier']]],
+      [`p1 '\na\n' ; /bin/echo x <<'EOF' >&9\nbody\nEOF\n${NEXT}`, [['p1'], ['/bin/echo', ['body']], ['prettier']]],
+      [`p1 '\na\n' ; cat $(p3) \${x} <<'EOF'\nbody\nEOF\n${NEXT}`, [['p1'], ['p3'], ['cat', ['body']], ['prettier']]],
+      // The quote in a flag that holds an equals sign, which is no variable's setting, also after a
+      // pipe, and in the word of a command a variable is set for.
+      [`p1 --opt='\na\n' && cat <<'EOF'\nbody\nEOF\n${NEXT}`, [['p1'], ['cat', ['body']], ['prettier']]],
+      [`p2 | p1 --opt='\na\n' && cat <<'EOF'\nbody\nEOF\n${NEXT}`, [['p2'], ['p1'], ['cat', ['body']], ['prettier']]],
+      [`p2 | Y=1 p1 '\na\n' && cat <<'EOF'\nbody\nEOF\n${NEXT}`, [['p2'], ['p1'], ['cat', ['body']], ['prettier']]],
+      // A subshell or a group opened on that line, one of them after a pipe, with the heredoc on a
+      // command inside it: the pipe feeds the group, and the heredoc alone feeds that command.
+      [`p1 '\na\n' ; (p3; cat <<'EOF'\nbody\nEOF\n)\n${NEXT}`, [['p1'], ['('], ['p3'], ['cat', ['body']], [')'], ['prettier']]],
+      [`p1 '\na\n' ; p2 | (p3; cat <<'EOF'\nbody\nEOF\n)\n${NEXT}`, [['p1'], ['p2'], ['('], ['p3'], ['cat', ['body']], [')'], ['prettier']]],
+      [`p1 '\na\n' ; p2 | { p3; cat <<'EOF'\nbody\nEOF\n}\n${NEXT}`, [['p1'], ['p2'], ['p3'], ['cat', ['body']], ['}'], ['prettier']]],
+      // After earlier heredocs that are whole: one with tabs, one whose line holds quoted words and
+      // a comment, and the shape itself twice in a row.
+      [`cat <<-E1\n\tfirst\n\tE1\np1 '\na\n' ; cat <<'EOF'\nbody\nEOF\n${NEXT}`, [['cat', ['first']], ['p1'], ['cat', ['body']], ['prettier']]],
+      [`cat <<E1 | p2 'a b' "c" # it's\nfirst\nE1\np1 '\na\n' ; cat <<'EOF'\nbody\nEOF\n${NEXT}`, [['cat', ['first']], ['p2'], ['p1'], ['cat', ['body']], ['prettier']]],
+      [`p1 '\na\n' ; cat <<'EOF'\nbody\nEOF\np2 '\nb\n' ; cat <<'E2'\nsecond\nE2\n${NEXT}`, [['p1'], ['cat', ['body']], ['p2'], ['cat', ['second']], ['prettier']]],
+      // These were read with no mark before and still are: the quote is a double one, or the marker
+      // is bare, in double quotes or after a backslash.
+      [`p1 "\na\n" ; cat <<'EOF'\nbody\nEOF\n${NEXT}`, [['p1'], ['cat', ['body']], ['prettier']]],
+      [`p1 '\na\n' ; cat <<EOF\nbody $x\nEOF\n${NEXT}`, [['p1'], ['cat', ['body $x']], ['prettier']]],
+      [`p1 '\na\n' ; cat <<"EOF"\nbody $x\nEOF\n${NEXT}`, [['p1'], ['cat', ['body $x']], ['prettier']]],
+      [`p1 '\na\n' ; cat <<${BS}EOF\nbody $x\nEOF\n${NEXT}`, [['p1'], ['cat', ['body $x']], ['prettier']]],
+      // A line continuation inside double quotes before they close: read with no mark, as before.
+      [`p1 "a ${BS}\nb" ; cat <<'EOF'\nbody\nEOF\n${NEXT}`, [['p1'], ['cat', ['body']], ['prettier']]],
+    ]
+    for (const [cmd, commands] of read) expect({ cmd, commands: shape(cmd) }).toEqual({ cmd, commands })
+  })
+
+  test('the shapes beside it the reader cannot read to the end keep a mark, or gain one', () => {
+    const marked = (cmd: string) => pipeline(cmd).filter(c => c.unread !== undefined).map(c => [c.words[0], c.unread])
+    // The line closes the quote it starts in and ends inside another, still open: the body starts
+    // after the line that one closes on, in both shells. Such a line is not one read from where
+    // the carried quote closes, so it is read alone, as it always was: the last quote's words and
+    // the commands after the body are lost into a quote that never closes, which is the mark.
+    expect(marked(`p1 '\na\n' ; cat <<EOF; p2 "c\nd"\nbody\nEOF\n${NEXT}`)).toEqual([['p2', QUOTE]])
+    expect(marked(`p1 '\na\n' ; cat <<'EOF'; p2 'c\nd'\nbody\nEOF\n${NEXT}`)).toEqual([['p2', QUOTE]])
+    // A quote that never closes: the one the program opens, and one after the marker.
+    expect(marked(`p1 '\na\n ; cat <<EOF\nbody\nEOF\n${NEXT}`)).toEqual([['p1', QUOTE]])
+    expect(marked(`p1 '\na\n' ; cat <<'EOF' 'b\nbody\nEOF\n${NEXT}`)).toEqual([['cat', QUOTE]])
+    // A heredoc that never ends. Read on that line alone its << stood inside a quote, where the
+    // shell opens none, so it was not said.
+    expect(marked(`p1 '\na\n' ; cat <<'EOF'\nbody\n${NEXT}`)).toEqual([['cat', HEREDOC]])
+    expect(marked(`p1 '\na\n' ; cat <<EOF\nbody\n${NEXT}`)).toEqual([['cat', HEREDOC]])
+    // The same inside a shell's script, where the heredoc's lines stand in quoted text of the
+    // call and were taken out of the script before it is read: its heredoc has no body to give.
+    expect(marked(`bash -c 'p1 "\na\n" ; cat <<EOF\nbody\nEOF\np2 in'\n${NEXT}`)).toEqual([['cat', HEREDOC]])
+    // A quote bash and zsh close at different places keeps its own mark on all that follows.
+    expect(marked(`p1 $$'\na${BS}'b\n' ; cat <<'EOF'\nbody\nEOF\n${NEXT}`).map(m => m[1])).toContain(SHELLS)
+    const keeps = (cmds: string[]) => {
+      for (const cmd of cmds) expect({ cmd, torn: marked(cmd).map(m => m[1]).includes(TORN) }).toEqual({ cmd, torn: true })
+    }
+    // What the scan of quoted text cannot follow to the heredoc's line leaves the line read alone,
+    // with the mark it had: a line continuation before the quote opens, a heredoc inside the
+    // program's text, a << this reader opens inside quoted text on the heredoc's own line or on
+    // a line before, and a program inside a substitution.
+    keeps([
+      `p1 ${BS}\n'a\nb' ; cat <<'EOF'\nbody\nEOF\n${NEXT}`,
+      `p1 '\ncat <<EOF\nx\nEOF\n' ; cat <<'E2'\nbody\nE2\n${NEXT}`,
+      `p1 '\na\nb <<X ' ; cat <<'EOF'\nbody\nEOF\nX\n${NEXT}`,
+      `p1 'a <<X b'\np2 '\nX\n' ; cat <<'EOF'\nbody\nEOF\n${NEXT}`,
+      `p1 "$(p2 '\na\n' ; cat <<'EOF'\nbody\nEOF\n)"\n${NEXT}`,
+    ])
+    // After an earlier heredoc this reader may not place as a shell does, every later line is read
+    // alone as before. One it ends where a shell reads on (#3496): at a marker indented by spaces,
+    // followed by a blank, or joined to the line before by a backslash. One whose own line ends
+    // inside a quote. And one whose marker is not a plain name (both shells ran this one alike:
+    // the harmless side, L648).
+    keeps([
+      `cat <<'E1'\nfirst\n  E1\np1 '\na\n' ; cat <<'EOF'\nbody\nEOF\n${NEXT}`,
+      `cat <<E1\nfirst\nE1 \np2 hidden\nE1\np1 '\na\n' ; cat <<'EOF'\nbody\nEOF\n${NEXT}`,
+      `cat <<E1\nfirst ${BS}\nE1\np1 '\na\n' ; cat <<'EOF'\nbody\nEOF\n${NEXT}`,
+      `cat <<E1 ; p2 "a\nb"\nfirst\nE1\np1 '\na\n' ; cat <<'EOF'\nbody\nEOF\n${NEXT}`,
+      `cat <<E'1'\nfirst\nE1\np1 '\na\n' ; cat <<'EOF'\nbody\nEOF\n${NEXT}`,
+    ])
+    // The same after an earlier heredoc that is not surely the one input of a plain command: one
+    // a pipe feeds besides, on its own line or the line before, and one beside a here string (zsh
+    // fed each of those commands more lines than bash did), and one fed to a loop (both shells
+    // ran this one alike: the harmless side).
+    keeps([
+      `p2 | cat <<E1\nfirst\nE1\np1 '\na\n' ; cat <<'EOF'\nbody\nEOF\n${NEXT}`,
+      `p2 |\ncat <<E1\nfirst\nE1\np1 '\na\n' ; cat <<'EOF'\nbody\nEOF\n${NEXT}`,
+      `cat - <<E1 <<<"s"\nfirst\nE1\np1 '\na\n' ; cat <<'EOF'\nbody\nEOF\n${NEXT}`,
+      `while read l; do p2 "$l"; done <<E1\nfirst\nE1\np1 '\na\n' ; cat <<'EOF'\nbody\nEOF\n${NEXT}`,
+    ])
+    // The heredoc itself not placed as a shell surely places it: its marker is quoted in part
+    // (both shells ran it alike: the harmless side), or it ends at a line a shell reads on past,
+    // one indented by spaces or followed by a carriage return.
+    keeps([
+      `p1 '\na\n' ; cat <<E'O'F\nbody $x\nEOF\n${NEXT}`,
+      `p1 '\na\n' ; cat <<'EOF'\nbody\n  EOF\np3 hidden\nEOF\n${NEXT}`,
+      `p1 '\na\n' ; cat <<'EOF'\nbody\nEOF\r\np3 hidden\nEOF\n${NEXT}`,
+    ])
+    // The heredoc's line joined to the next by a backslash: the next line is more of the command
+    // and the body starts after it, in both shells. Such a line is read alone, as it always was:
+    // the backslash stands inside a quote, the pipe's second program is lost into the body, and
+    // the mark says so.
+    const joined = `p1 '\na\n' ; cat <<'EOF' ${BS}\n| p2\nbody\nEOF\n${NEXT}`
+    expect(marked(joined)).toEqual([['cat', TORN]])
+    // A command given two inputs: zsh feeds it both, one after the other, and bash the last alone,
+    // so what the heredoc's command is fed differs. A pipe into it, a here string or a file beside
+    // the heredoc, and two heredocs on one command. With a pipe before the program in quotes the
+    // command may be fed twice too, so one that holds both the quotes and the heredoc keeps the
+    // mark though both shells ran this one alike.
+    keeps([
+      `p1 '\na\n' | cat <<'EOF'\nbody\nEOF\n${NEXT}`,
+      `p1 '\na\n' ; p2 | cat <<'EOF'\nbody\nEOF\n${NEXT}`,
+      `p1 '\na\n' ; cat <<'EOF' <<<"s"\nbody\nEOF\n${NEXT}`,
+      `p1 '\na\n' ; cat <<'EOF' < /dev/null\nbody\nEOF\n${NEXT}`,
+      `p1 '\na\n' ; cat <<A <<'EOF'\nbody a\nA\nbody\nEOF\n${NEXT}`,
+      `cat '\na\n' - <<'EOF'\nbody\nEOF\n${NEXT}`,
+    ])
+    // The same two inputs where the heredoc is given to more than a plain command: a loop, a group
+    // or a subshell a pipe feeds, closed on that line or opened on an earlier one; a command a pipe
+    // feeds whose word holds a semicolon, in a substitution, in backticks, in a variable's default or in
+    // quotes inside a substitution; a function given the heredoc where it is made and called after
+    // a pipe; and the receiver of the heredoc command's own pipe given a second heredoc. zsh fed
+    // each of these more lines than bash did.
+    keeps([
+      `p1 '\na\n' ; p2 | while read l; do p3 "$l"; done <<'EOF'\nbody\nEOF\n${NEXT}`,
+      `p1 '\na\n' ; p2 | { cat; } <<'EOF'\nbody\nEOF\n${NEXT}`,
+      `p1 '\na\n' ; p2 | (p3; cat) <<'EOF'\nbody\nEOF\n${NEXT}`,
+      `p2 | while read l; do\np1 '\na\n' ; p3 "$l"; done <<'EOF'\nbody\nEOF\n${NEXT}`,
+      `p2 | {\np1 '\na\n' ; cat; } <<'EOF'\nbody\nEOF\n${NEXT}`,
+      `p1 '\na\n' ; p2 | cat $(p3; p4) <<'EOF'\nbody\nEOF\n${NEXT}`,
+      `p1 '\na\n' ; p2 | cat \`p3; p4\` <<'EOF'\nbody\nEOF\n${NEXT}`,
+      `p1 '\na\n' ; p2 | cat \${y:-a;b} <<'EOF'\nbody\nEOF\n${NEXT}`,
+      `p1 '\na\n' ; p2 | cat "$(p3 "a ; b")" <<'EOF'\nbody\nEOF\n${NEXT}`,
+      `p1 '\na\n' ; f() { cat; } <<'EOF'\nbody\nEOF\np2 | f\n${NEXT}`,
+      `p1 '\na\n' ; p2 <<'EOF' | cat <<'B'\nbody\nEOF\nbody b\nB\n${NEXT}`,
+      `p1 '\na\n' ; p2 |& cat <<'EOF'\nbody\nEOF\n${NEXT}`,
+    ])
+    // A command that runs in one shell alone: after a pipe into a variable's setting zsh gives the
+    // status of what wrote into the pipe and bash gives success, so the command after && ran in
+    // bash and not in zsh. The setting holding the quote, and one on the heredoc's line. So a
+    // quote in any setting, and any && or || after a pipe, keep the mark, though both shells ran
+    // the last two alike.
+    keeps([
+      `p2 | x='\na\n' && cat <<'EOF'\nbody\nEOF\n${NEXT}`,
+      `p1 '\na\n' ; p2 | y=1 && cat <<'EOF'\nbody\nEOF\n${NEXT}`,
+      `x='\na\n' && cat <<'EOF'\nbody\nEOF\n${NEXT}`,
+      `p1 '\na\n' ; p2 | p3 && cat <<'EOF'\nbody\nEOF\n${NEXT}`,
+    ])
+    // The setting is found however the quote's word is written: after another quote, after an
+    // escaped blank, adding to the variable, and as the second setting of two (cat ran in bash
+    // alone in each). After a substitution, inside a group, and in a command's word that only
+    // looks like a setting, both shells ran these alike and the mark stays.
+    keeps([
+      `p2 | x='a b''\nc\n' && cat <<'EOF'\nbody\nEOF\n${NEXT}`,
+      `p2 | x=a${BS} b'\nc\n' && cat <<'EOF'\nbody\nEOF\n${NEXT}`,
+      `p2 | x+='\nc\n' && cat <<'EOF'\nbody\nEOF\n${NEXT}`,
+      `p2 | y=1 x='\na\n' && cat <<'EOF'\nbody\nEOF\n${NEXT}`,
+      `p2 | x=$(p3)'\nc\n' && cat <<'EOF'\nbody\nEOF\n${NEXT}`,
+      `p2 | { x='\na\n'; } && cat <<'EOF'\nbody\nEOF\n${NEXT}`,
+      `p2 | p1 a=b'\nc\n' && cat <<'EOF'\nbody\nEOF\n${NEXT}`,
+    ])
+    // A heredoc with no command to feed: zsh runs a command of its own on it and bash runs none.
+    // Alone after the separator, beside an output redirect alone, after the word then, and on a
+    // descriptor's number.
+    keeps([
+      `p1 '\na\n' ; <<'EOF'\nbody\nEOF\n${NEXT}`,
+      `p1 '\na\n' ; > /dev/null <<'EOF'\nbody\nEOF\n${NEXT}`,
+      `p1 '\na\n' ; if true; then <<'EOF'\nbody\nEOF\nfi\n${NEXT}`,
+      `p1 '\na\n' ; 3<<'EOF'\nbody\nEOF\n${NEXT}`,
+    ])
+    // What is not surely a plain command fed the heredoc alone keeps the mark too, though both
+    // shells ran each of these alike (the harmless side, L648): a loop, a condition, a group or a
+    // subshell given the heredoc with no pipe, a command in a case arm, a loop's or a condition's
+    // own command, a variable setting alone, the heredoc before its command's name, a negated or
+    // timed command, exec (the heredoc then feeds the shell, and a later command reads it), a
+    // test in double brackets, a line holding another < anywhere, and a heredoc on a descriptor's
+    // number, which feeds another input than the command's own.
+    keeps([
+      `p1 '\na\n' ; cat 3<<'EOF'\nbody\nEOF\n${NEXT}`,
+      `p1 '\na\n' ; while read l; do p2 "$l"; done <<'EOF'\nbody\nEOF\n${NEXT}`,
+      `p1 '\na\n' ; if true; then cat; fi <<'EOF'\nbody\nEOF\n${NEXT}`,
+      `p1 '\na\n' ; { cat; } <<'EOF'\nbody\nEOF\n${NEXT}`,
+      `p1 '\na\n' ; (cat) <<'EOF'\nbody\nEOF\n${NEXT}`,
+      `p1 '\na\n' ; case a in a) cat <<'EOF'\nbody\nEOF\n;; esac\n${NEXT}`,
+      `p1 '\na\n' ; p2 | while read l; do cat <<'EOF'\nbody\nEOF\ndone\n${NEXT}`,
+      `p1 '\na\n' ; p2 | if true; then cat <<'EOF'\nbody\nEOF\nfi\n${NEXT}`,
+      `p1 '\na\n' ; y=1 <<'EOF'\nbody\nEOF\n${NEXT}`,
+      `p1 '\na\n' ; <<'EOF' cat\nbody\nEOF\n${NEXT}`,
+      `p1 '\na\n' ; ! cat <<'EOF'\nbody\nEOF\n${NEXT}`,
+      `p1 '\na\n' ; time cat <<'EOF'\nbody\nEOF\n${NEXT}`,
+      `p1 '\na\n' ; exec <<'EOF'\nbody\nEOF\ncat\n${NEXT}`,
+      `p1 '\na\n' ; p2 | [[ a && b ]] <<'EOF'\nbody\nEOF\n${NEXT}`,
+      `p1 '\na\n' ; cat <(p3) <<'EOF'\nbody\nEOF\n${NEXT}`,
+      `p1 '\na\n' ; p2 <<<s ; cat <<'EOF'\nbody\nEOF\n${NEXT}`,
+    ])
+  })
+
+  test('a command after the body of such a heredoc is given, so no guard is handed a short list', () => {
+    const programs = (cmd: string) => pipeline(cmd).map(c => c.words[0])
+    // On the heredoc's own line after the marker, on the line after the body, and inside the body
+    // of an unquoted heredoc, where the shell runs it.
+    expect(programs(`p1 '\na\n' && cat <<'EOF' ; p2 hidden\nbody\nEOF\np3 hidden ; ${NEXT}`)).toEqual(['p1', 'cat', 'p2', 'p3', 'prettier'])
+    expect(programs(`p1 '\na\n' && cat <<EOF\nbody $(p2 hidden)\nEOF\n${NEXT}`)).toEqual(['p1', 'p2', 'cat', 'prettier'])
+    // After a marker line indented by spaces the shells read on to the true marker, and the reader
+    // ends the body early (#3496), as it does on a line that starts outside quotes: the lines
+    // after are read as commands, more than the shells run and never fewer.
+    expect(programs(`p1 '\na\n' ; cat <<'EOF'\nbody\n  EOF\np3 hidden\nEOF\n${NEXT}`)).toEqual(['p1', 'cat', 'p3', 'EOF', 'prettier'])
+  })
+
   test('a script read to its end marks nothing unread', () => {
     const whole = [
       // Quotes bash and zsh read alike (the fix round on #3493): after $$ where both readings close
