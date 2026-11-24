@@ -836,6 +836,8 @@ echo "payload write gate: a file a command only reads is not a file it writes (c
 # a scratch folder, named by a relative path after a cd, was refused as a write to that payload file,
 # and on 2026-11-22 a cp -R of a payload folder out to a scratch folder was too. Only the plain form
 # is read this way: cp itself, flags that take no value, and words with nothing the shell expands.
+# And only in a command made of nothing but the few forms that cannot change what cp means or run
+# anything else (one cp, cd to a written folder that is there, mkdir -p, ls), further down.
 S3443="$FIX/scratch3443"
 mkdir -p "$S3443/short-before"
 : > "$FIX/dev/payload/hooks/a.sh"
@@ -846,8 +848,10 @@ runbash "cp -R $FIX/dev/payload/hooks $S3443/" "$FIX/dev"
 allowed "#3443 so is a cp -R of a payload folder out to a scratch folder"
 runbash "cp payload/LESSONS.md payload/hooks/a.sh $S3443/" "$FIX/dev"
 allowed "#3443 and a cp of two payload files, named from the checkout, out to one"
-runbash "cd payload/hooks && cp -p a.sh $S3443/a-copy.sh" "$FIX/dev"
+runbash "cd ./payload/hooks && cp -p a.sh $S3443/a-copy.sh" "$FIX/dev"
 allowed "#3443 and a cp from inside payload out to a file elsewhere"
+runbash "/bin/cp -pv payload/LESSONS.md $S3443/by-path.md" "$FIX/dev"
+allowed "#3443 and a cp named by its own path, /bin/cp"
 # Every copy that lands under payload is refused exactly as before.
 runbash "cp $S3443/x payload/LESSONS.md" "$FIX/dev"
 refused "#3443 a cp into a payload file is still refused"
@@ -911,10 +915,136 @@ runbash "if true; then cp payload/LESSONS.md $S3443/x; fi" "$FIX/dev"
 refused "#3443 and a cp after a reserved word"
 runbash "cp payload/LESSONS.md $S3443/x # a note" "$FIX/dev"
 refused "#3443 and a cp with a comment after it"
-runbash "bash -c 'cp payload/LESSONS.md $S3443/x'" "$FIX/dev"
-allowed "#3443 a plain cp out of payload that bash -c runs is allowed"
 runbash "bash -c 'cp $S3443/x payload/LESSONS.md'" "$FIX/dev"
 refused "#3443 and one into payload that bash -c runs is still refused"
+
+# The review of pull request #3521 turned cp into mv by ten routes a list of forbidden words did not
+# name (eval, zsh's own tables, a sourced file, a shell started with a startup file, enable -f).
+# Each REMOVES the payload file it was let through to copy. So the reading is no longer guarded by
+# what a command must not hold. It applies only when the whole command is made of the few forms
+# below, none of which can give cp another meaning or run anything else; one word outside them,
+# anywhere in the command, and every word of the cp is a write again, as on main. No case here is
+# ever run: its text is handed to the gate.
+stopped(){ # stopped <description> <command> [cwd]
+  runbash "$2" "${3:-$FIX/dev}"
+  refused "#3443 $1"
+}
+passes(){ # passes <description> <command> [cwd]
+  runbash "$2" "${3:-$FIX/dev}"
+  allowed "#3443 $1"
+}
+OUT3443="cp payload/LESSONS.md $S3443/x"
+: > "$S3443/rc"
+stopped "review: a cp made a function inside eval, single quoted" "eval 'cp(){ mv \"\$@\"; }'; $OUT3443"
+stopped "review: the same inside eval, double quoted" "eval \"cp(){ mv \\\"\\\$@\\\"; }\"; $OUT3443"
+stopped "review: and with the name built by printf" "eval \"\$(printf 'c%s(){ mv \"\$@\"; }' p)\"; $OUT3443"
+stopped "review: a cp made a function through zsh's functions table" "functions[cp]='mv \"\$@\"'; $OUT3443"
+stopped "review: a cp made an alias through zsh's aliases table, on the line before" "aliases[cp]=mv
+$OUT3443"
+stopped "review: a cp pointed at mv through zsh's commands table" "commands[cp]=/bin/mv; $OUT3443"
+stopped "review: a folder put first on zsh's path array" "path[1,0]=$S3443; $OUT3443"
+stopped "review: a file sourced before the cp" "source $S3443/rc; $OUT3443"
+stopped "review: and one read with a dot" ". $S3443/rc && $OUT3443"
+stopped "review: a cp in a bash started with a startup file" "BASH_ENV=$S3443/rc bash -c '$OUT3443'"
+stopped "review: and with the startup file exported first" "export BASH_ENV=$S3443/rc; bash -c '$OUT3443'"
+stopped "review: a cp in an sh started with ENV" "ENV=$S3443/rc sh -i -c '$OUT3443'"
+stopped "review: a cp loaded as a builtin with enable -f" "enable -f $S3443/cp.so cp; $OUT3443"
+stopped "review: a trap that moves the payload file when the command ends" "trap 'mv payload/LESSONS.md $S3443/z' EXIT; $OUT3443"
+stopped "review: a cp another program is handed more words for" "printf 'payload/hooks/\\n' | parallel $OUT3443"
+# Every other word that is not one of the forms, several per kind.
+stopped "an assignment before the cp" "X=1 $OUT3443"
+stopped "and one in a command before it" "X=1; $OUT3443"
+stopped "a cp behind command" "command $OUT3443"
+stopped "and behind exec" "exec $OUT3443"
+stopped "and behind env" "env $OUT3443"
+stopped "a plain cp out of payload that bash -c runs is refused again (allowed by this pull request's first build)" "bash -c '$OUT3443'"
+stopped "and one sh -c runs" "sh -c '$OUT3443'"
+stopped "and one zsh -c runs" "zsh -c '$OUT3443'"
+stopped "a cp with its errors sent away" "$OUT3443 2>/dev/null"
+stopped "a cp followed by a program that is not one of the forms" "$OUT3443; echo done"
+stopped "and by true" "$OUT3443 && true"
+stopped "and by pwd, which was left off the list" "$OUT3443 && pwd"
+stopped "and by cat" "$OUT3443 && cat $S3443/x"
+stopped "a cp in a pipeline" "$OUT3443 | cat"
+stopped "a cp with a substitution among its words" "cp payload/LESSONS.md \$(echo $S3443/x)"
+# One cp only: an earlier cp could plant a link the later one writes through.
+mkdir -p "$S3443/merged/hooks"
+ln -s "$FIX/dev/payload/LESSONS.md" "$S3443/merged/hooks/a.sh"
+stopped "two copies out in one command" "$OUT3443 && cp payload/hooks/a.sh $S3443/y"
+stopped "and a second cp named by its path" "$OUT3443; /bin/cp payload/hooks/a.sh $S3443/y"
+stopped "and a first cp that copies a link the second then writes through" "cp -R $S3443/merged $S3443/out && cp payload/hooks/a.sh $S3443/out/hooks/a.sh"
+# cd: one written folder that is there now, beginning /, ~/ or ./, with no .. in it.
+mkdir -p "$S3443/home/out"
+: > "$S3443/plain.txt"
+passes "a cd then a cp after a semicolon" "cd $S3443; cp $FIX/dev/payload/hooks/a.sh ./short-before"
+passes "and on the next line" "cd $S3443
+cp $FIX/dev/payload/hooks/a.sh short-before"
+HOME="$S3443/home" passes "and a cd to a folder under the home folder" "cd ~/out && cp $FIX/dev/payload/hooks/a.sh ./"
+stopped "a cd to a bare relative folder, which CDPATH could take elsewhere" "cd payload/hooks && cp -p a.sh $S3443/a-copy.sh"
+stopped "a cd to a folder that is not there, which leaves the cp where it was" "cd $S3443/nowhere && cp $FIX/dev/payload/hooks/a.sh x"
+stopped "a cd to a file" "cd $S3443/plain.txt && cp $FIX/dev/payload/hooks/a.sh x"
+stopped "a cd whose path climbs with .." "cd $S3443/short-before/.. && cp $FIX/dev/payload/hooks/a.sh x"
+stopped "a cd with a flag" "cd -P $S3443 && cp $FIX/dev/payload/hooks/a.sh x"
+stopped "a cd with two words" "cd $S3443 $S3443 && cp $FIX/dev/payload/hooks/a.sh x"
+stopped "a cd with no word" "cd && cp $FIX/dev/payload/hooks/a.sh x"
+stopped "a cd to an entry of zsh's folder stack" "cd +1 && cp $FIX/dev/payload/hooks/a.sh x"
+stopped "a cd in a pipeline, which moves nothing after it" "cd $S3443 | cp $FIX/dev/payload/hooks/a.sh x"
+# mkdir -p of written folders, and nothing else of mkdir.
+passes "a mkdir -p of the scratch folder the cp then fills" "mkdir -p $S3443/new1 && cp payload/LESSONS.md $S3443/new1/"
+passes "and of two folders, before a cp -R" "mkdir -p $S3443/n1 $S3443/n2; cp -R payload/hooks $S3443/n2"
+stopped "a mkdir without -p" "mkdir $S3443/new2 && cp payload/LESSONS.md $S3443/new2/"
+stopped "a mkdir with a mode" "mkdir -p -m 777 $S3443/new3 && cp payload/LESSONS.md $S3443/new3/"
+stopped "a mkdir with another flag joined to -p" "mkdir -pv $S3443/new3 && cp payload/LESSONS.md $S3443/new3/"
+stopped "a mkdir -p under payload, whose own words are still writes" "mkdir -p payload/newdir && $OUT3443"
+stopped "a cd into a folder the mkdir before it has yet to make" "mkdir -p $S3443/new4 && cd $S3443/new4 && cp $FIX/dev/payload/hooks/a.sh ."
+# ls of written paths.
+passes "an ls of the scratch folder after the cp" "$OUT3443 && ls -la $S3443"
+passes "an ls of the payload folder before a cp -R of it" "ls payload/hooks; cp -R payload/hooks $S3443/out2"
+passes "a cp run only when an ls fails" "ls $S3443/none || $OUT3443"
+stopped "an ls whose output is sent into payload" "$OUT3443 && ls -la $S3443 > payload/hooks/list.txt"
+stopped "an ls of a pattern" "$OUT3443 && ls $S3443/*"
+stopped "an ls with a long flag" "$OUT3443 && ls --color=always $S3443"
+stopped "an ls piped on" "$OUT3443 && ls -la $S3443 | head"
+stopped "a program whose name only begins ls" "$OUT3443 && lsof $S3443/x"
+# cp's own flags: only single letters that take no value and make no link, all before the files.
+stopped "a cp with a suffix flag that takes a value" "cp -S .bak payload/LESSONS.md $S3443/x"
+stopped "a cp that makes a hard link" "cp -l payload/LESSONS.md $S3443/x"
+stopped "a cp that makes a symbolic link" "cp -s payload/LESSONS.md $S3443/x"
+stopped "a cp with -- before its files" "cp -- payload/LESSONS.md $S3443/x"
+stopped "a cp with -T" "cp -T payload/LESSONS.md $S3443/x"
+stopped "a cp with a flag after its files" "cp payload/LESSONS.md -R $S3443/x"
+stopped "a cp with a long flag naming where it writes" "cp --target-directory=$S3443 payload/LESSONS.md payload/hooks/a.sh"
+# Where the copy really lands. The words of a destination can name a scratch folder while the file
+# written is a payload file: through a link, another spelling of payload on a disk that ignores
+# letter case, or a second name for the same file. The reading resolves the destination as the disk
+# does, and reads the cp the old way whenever what it would write is not certainly a new file, or
+# a plain file with one name, with no folder named payload (in any letter case) above it.
+ln -s "$FIX/dev/payload" "$S3443/link"
+ln -s "$FIX/dev/payload/LESSONS.md" "$S3443/lessons-link"
+ln "$FIX/dev/payload/hooks/a.sh" "$S3443/hard.sh"
+mkdir -p "$S3443/into" "$S3443/into2" "$S3443/into3" "$S3443/have"
+ln -s "$FIX/dev/payload/LESSONS.md" "$S3443/into/a.sh"
+ln "$FIX/dev/payload/hooks/a.sh" "$S3443/into2/LESSONS.md"
+ln -s "$FIX/dev/payload/LESSONS.md" "$S3443/into3/a.sh"
+: > "$S3443/have/LESSONS.md"
+stopped "review: a cp to a link that points at a payload file" "cp payload/hooks/a.sh $S3443/lessons-link"
+stopped "review: a cp into a link that points at the payload folder" "cp payload/hooks/a.sh $S3443/link/"
+stopped "and the same with no slash after the link" "cp payload/hooks/a.sh $S3443/link"
+stopped "review: a cp through such a link and back down with .." "cp payload/hooks/a.sh $S3443/link/../payload/LESSONS.md"
+stopped "review: a cp to payload spelled in capitals" "cp payload/hooks/a.sh $FIX/dev/PAYLOAD/LESSONS.md"
+stopped "a cp from a folder a cd reached through a link into payload" "cd $S3443/link/hooks && cp $FIX/dev/payload/LESSONS.md ./x"
+stopped "and from a folder a cd reached by payload spelled in capitals" "cd $FIX/dev/PAYLOAD/hooks && cp $FIX/dev/payload/LESSONS.md ./y"
+stopped "a cp to a second name of a payload file" "cp payload/LESSONS.md $S3443/hard.sh"
+stopped "a cp into a folder where the file it would write is a link to a payload file" "cp payload/hooks/a.sh $S3443/into/"
+stopped "and where it is a second name of one" "cp payload/LESSONS.md $S3443/into2"
+stopped "a cp -R onto a folder that is already there, which may hold such a link" "cp -R payload/hooks $S3443/merged"
+stopped "a cp -R of a folder's contents, named with a slash, into a folder already there" "cp -R payload/hooks/ $S3443/into3"
+stopped "and named with a dot" "cp -R payload/hooks/. $S3443/into3"
+stopped "a cp to a folder named payload outside any checkout, read the old way to stay certain" "cp payload/LESSONS.md $S3443/payload/x"
+passes "a cp over a plain scratch file that is already there" "cp payload/LESSONS.md $S3443/plain.txt"
+passes "and over one inside a scratch folder" "cp payload/LESSONS.md $S3443/have/"
+passes "a cp -R of a folder's contents into a folder not made yet" "cp -R payload/hooks/ $S3443/fresh"
+
 # The other programs that write what they name are read as before.
 runbash "mv payload/LESSONS.md $S3443/x" "$FIX/dev"
 refused "#3443 a mv out of payload is still refused, since it removes the file"
@@ -936,10 +1066,15 @@ if [ "$RC" -eq 2 ]; then check "#3443 and a payload file that changed while it r
 else check "#3443 and a payload file that changed while it ran is still reported afterwards" "exit $RC, said: ${OUT:0:160}"; fi
 says "#3443 naming the file" "$FIX/dev/payload/LESSONS.md"
 
-# A python script given on stdin whose every write the gate can place. On 2026-11-22 a python heredoc
-# editing a scratch script was refused because its text held payload/ inside a regular expression.
-# Where the whole script is plain reads, text edits and writes to files it names outright, the files
-# it writes are the ones it names, and a quoted piece of text holding payload/ is not one of them.
+# A python script given on stdin. On 2026-11-22 a python heredoc editing a scratch script was refused
+# because its text held payload/ inside a regular expression: item 2 of claude-config#3443, which is
+# STILL OPEN. A reading of such a script as python was built in pull request #3521 and taken out
+# again: it changed the verdict of none of 837 recorded python heredocs, and its review found a
+# script it let through could write a file the same command then ran without naming it again
+# (bash S/w.s?, a loop over S/*.sh, make -C S), or a pathlib.py that python loads from the folder it
+# runs in. So the first three cases below record that these shapes are refused today, wrongly, and
+# whoever takes item 2 up will see them turn. Every case after them is a script that must stay
+# refused under any later reading.
 : > "$S3443/sweep.py"
 runbash "python3 - <<'PY'
 import re
@@ -950,27 +1085,27 @@ s = s.replace('old', 'new')
 s = re.sub(r'payload/hooks/[a-z-]+[.]sh', 'X', s)
 open(p, 'w').write(s)
 PY" "$FIX/dev"
-allowed "#3443 a python heredoc editing a scratch script, its text holding payload/ in a regular expression, is allowed"
+refused "#3443 item 2, open: a python heredoc editing a scratch script, its text holding payload/ in a regular expression, is refused today"
 runbash "python3 - <<'PY'
 p = '$S3443/sweep.py'
 t = open(p).read()
 t = t.replace('HOOK=\"x\"', 'HOOK=\"payload/hooks/a.sh\"')
 open(p, 'w').write(t + 'payload/LESSONS.md')
 PY" "$FIX/dev"
-allowed "#3443 and one writing text that names payload files into a scratch file"
+refused "#3443 item 2, open: and so is one writing text that names payload files into a scratch file"
 runbash "python3 <<'PY'
 from pathlib import Path
 p = Path('$S3443/sweep.py')
 s = p.read_text()
 p.write_text(s.replace('payload/hooks/a.sh', 'payload/hooks/b.sh'))
 PY" "$FIX/dev"
-allowed "#3443 and the same edit made through pathlib"
+refused "#3443 item 2, open: and the same edit made through pathlib"
 runbash "python3 - <<'PY'
 s = open('payload/LESSONS.md').read()
 print(len(s), 'payload/LESSONS.md' in s)
 PY" "$FIX/dev"
 allowed "#3443 and a script that opens a payload file only to read it"
-# A script that writes under payload is refused as before, now by the file it really writes.
+# A script that writes under payload is refused, as before.
 runbash "python3 - <<'PY'
 p = '$FIX/dev/payload/LESSONS.md'
 s = open(p).read()
@@ -994,7 +1129,8 @@ from pathlib import Path
 Path('$FIX/dev/payload/hooks/a.sh').write_text('x')
 PY" "$FIX/dev"
 refused "#3443 and one writing a payload file through pathlib"
-# Anything in the script the gate cannot place keeps every quoted payload path read as a write.
+# Shapes a reading of the script as python must never let through: each has a quoted payload path
+# and a write it could not place.
 PYOPEN="p = '$S3443/sweep.py'
 s = open(p).read()"
 pyrefused(){ # pyrefused <description> <rest of the script>
@@ -1036,7 +1172,7 @@ pyrefused "and one that does not parse" "open(p, 'w').write(s
 x = 'payload/LESSONS.md'"
 pyrefused "and one declaring a source encoding" "# -*- coding: utf-7 -*-
 open(p, 'w').write(s + 'payload/LESSONS.md')"
-# So does any way of running it other than python reading exactly this text from stdin, alone.
+# Nor any way of running it other than python reading exactly this text from stdin, alone.
 PYBODY="$PYOPEN
 open(p, 'w').write(s + 'payload/LESSONS.md')"
 runbash "python3 - <<PY
@@ -1074,6 +1210,52 @@ $PYBODY
 PY
 cp $S3443/x payload/LESSONS.md" "$FIX/dev"
 refused "#3443 and a real write after the script is still refused"
+# The holes the review of pull request #3521 found in the python reading that was taken out. Each
+# was allowed by it and is refused today. A later reading of item 2 has to keep all of them refused:
+# a file the script writes can be run by the same command without being named again, and python
+# loads a pathlib.py from the folder it runs in before its own.
+PYREAD="import re
+s = open('$S3443/x').read()
+s = re.sub(r'payload/hooks/[a-z]+[.]sh', 'X', s)"
+runbash "python3 - <<'PY'
+$PYREAD
+open('$S3443/w.sh', 'w').write('cp $S3443/x $FIX/dev/payload/LESSONS.md')
+PY
+bash $S3443/w.s?" "$FIX/dev"
+refused "#3443 review: a script writing a shell file the command then runs by a pattern"
+runbash "python3 - <<'PY'
+$PYREAD
+open('$S3443/w.sh', 'w').write('cp $S3443/x $FIX/dev/payload/LESSONS.md')
+PY
+for f in $S3443/*.sh; do bash \$f; done" "$FIX/dev"
+refused "#3443 review: and by a loop over every shell file in the folder"
+runbash "python3 - <<'PY'
+$PYREAD
+open('$S3443/rc.sh', 'w').write('mv $FIX/dev/payload/LESSONS.md $S3443/z')
+PY
+for f in $S3443/r*; do . \$f; done" "$FIX/dev"
+refused "#3443 review: and by a loop that sources each"
+runbash "python3 - <<'PY'
+$PYREAD
+open('$S3443/Makefile', 'w').write('all:\n\tcp $S3443/x $FIX/dev/payload/LESSONS.md\n')
+PY
+make -C $S3443" "$FIX/dev"
+refused "#3443 review: a script writing a Makefile that make then runs from its folder"
+runbash "python3 - <<'PY'
+$PYREAD
+open('$S3443/pathlib.py', 'w').write('open(\"$FIX/dev/payload/LESSONS.md\", \"w\")')
+PY
+cd $S3443 && python3 - <<'PY'
+from pathlib import Path
+print(Path('$S3443/x').read_text())
+PY" "$FIX/dev"
+refused "#3443 review: a script writing a pathlib.py that a second script in that folder then loads"
+runbash "printf 'import os\n' > pathlib.py && python3 - <<'PY'
+from pathlib import Path
+p = Path('$S3443/x')
+p.write_text(p.read_text().replace('payload/hooks/a.sh', 'payload/hooks/b.sh'))
+PY" "$FIX/dev"
+refused "#3443 review: a pathlib.py written into the folder python runs in, then a script that imports pathlib"
 
 echo "payload write gate: files that already match the installed config are left out of the report (claude-config#1211)"
 # On 2026-10-15 a fast forward pull of the checkout, right after the same commit was installed,

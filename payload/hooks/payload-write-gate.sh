@@ -713,194 +713,6 @@ try:
 except Exception:
     shell_text = cmd
 
-# A python script given on stdin whose every write can be placed (claude-config#3443). The scan
-# below takes any quoted text holding payload/ in a command that also holds a write call for a file
-# the command writes, since a script routinely keeps its path in a name before opening it. On
-# 2026-11-22 that refused a python heredoc editing a scratch script, for a regular expression in its
-# text. Python can say where its own strings begin and end and what each call is, so a script is
-# read here as python, and only when ALL of it is one of the few forms below: a name given a text
-# or a number, text put together with +, compared, or asked one of a few questions no object but
-# text answers; open(path) read whole; open(path, mode).write(text); the same two through
-# pathlib.Path; re.sub, re.search and re.escape; len and print. A path is text written out in the
-# script, or a name given such text exactly once, so its value is known whatever order the lines
-# run in. Nothing in those forms runs text as code, starts a program, or holds a file object, a
-# function, a loop or an attribute, so the files such a script writes are exactly the paths its
-# write forms name. Those are what is judged, each by where it lands, and the rest of its text
-# is text. One line outside the forms (an import of anything else, a keyword argument, a call this
-# does not list, a name used before the script gives it a value) and the script is read as it
-# always was, every quoted payload path a write. So is one whose write names a relative path, or
-# that declares a source encoding, which could make its text mean something else to python.
-PY_TEXT_CALLS = {"replace": (2, 3), "count": (1, 1), "startswith": (1, 1), "endswith": (1, 1),
-                 "find": (1, 1), "strip": (0, 0), "lstrip": (0, 0), "rstrip": (0, 0)}
-PY_RE_CALLS = {"sub": 3, "search": 2, "escape": 1}
-PY_GIVEN = ("open", "print", "len", "re", "Path")
-# A command that could make python3 something else is never read this way, as for cat and tee above.
-PY_REDEFINED = re.compile(r"[<>]\(|\bfunction\b|\balias\b|\bhash\b|\b(?:PATH|path)\+?=|(?:^|[\s;&|(){}])python3?\s*\(\s*\)")
-
-def python_writes(body):
-    """The files a python script writes, each the absolute path it names outright, when the whole
-    script is the forms above, or None when any of it is not. Raises when it does not parse."""
-    import ast
-    # Looked for anywhere in it, never only where python honours one: which lines those are is not
-    # worth being wrong about.
-    if re.search(r"coding[:=]", body):
-        return None
-    given, has_re, has_path = {}, False, False
-    tree = ast.parse(body)
-    for st in tree.body:
-        if isinstance(st, ast.Import):
-            if [(a.name, a.asname) for a in st.names] != [("re", None)]:
-                return None
-            has_re = True
-        elif isinstance(st, ast.ImportFrom):
-            if st.module != "pathlib" or st.level or [(a.name, a.asname) for a in st.names] != [("Path", None)]:
-                return None
-            has_path = True
-        elif isinstance(st, ast.Assign):
-            if len(st.targets) != 1 or not isinstance(st.targets[0], ast.Name):
-                return None
-            given.setdefault(st.targets[0].id, []).append(st.value)
-        elif not isinstance(st, (ast.Expr, ast.Assert)):
-            return None
-    if any(name in given for name in PY_GIVEN):
-        return None
-
-    def text(n):
-        return isinstance(n, ast.Constant) and isinstance(n.value, str)
-
-    def path_of(n):
-        """The path Path(text) names, or None for anything else."""
-        if has_path and isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "Path" \
-                and len(n.args) == 1 and not n.keywords and text(n.args[0]):
-            return n.args[0].value
-        return None
-
-    paths = {k: v[0].value for k, v in given.items() if len(v) == 1 and text(v[0])}
-    path_objects = {k: path_of(v[0]) for k, v in given.items() if len(v) == 1 and path_of(v[0]) is not None}
-    writes = []
-
-    def opened(n):
-        """(path, whether it is opened to write) for open(path) or open(path, mode), or None."""
-        if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "open"
-                and not n.keywords and 1 <= len(n.args) <= 2):
-            return None
-        where = n.args[0]
-        p = where.value if text(where) else paths.get(where.id) if isinstance(where, ast.Name) else None
-        if p is None or (len(n.args) == 2 and not text(n.args[1])):
-            return None
-        mode = n.args[1].value if len(n.args) == 2 else "r"
-        if not re.fullmatch(r"[rwaxbt+]+", mode):
-            return None
-        return p, any(c in mode for c in "wax+")
-
-    def ok(n):
-        if isinstance(n, ast.Constant):
-            return n.value is None or isinstance(n.value, (str, int))
-        if isinstance(n, ast.Name):
-            return isinstance(n.ctx, ast.Load) and n.id in given and n.id not in path_objects
-        if isinstance(n, ast.BinOp):
-            return isinstance(n.op, ast.Add) and ok(n.left) and ok(n.right)
-        if isinstance(n, ast.UnaryOp):
-            return isinstance(n.op, ast.Not) and ok(n.operand)
-        if isinstance(n, ast.BoolOp):
-            return all(ok(v) for v in n.values)
-        if isinstance(n, ast.Compare):
-            return ok(n.left) and all(ok(c) for c in n.comparators) and all(
-                isinstance(o, (ast.In, ast.NotIn, ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE)) for o in n.ops)
-        if not isinstance(n, ast.Call) or n.keywords:
-            return False
-        f, args = n.func, n.args
-        if isinstance(f, ast.Name):
-            return (f.id == "print" or (f.id == "len" and len(args) == 1)) and all(ok(a) for a in args)
-        if not isinstance(f, ast.Attribute):
-            return False
-        o = opened(f.value)
-        if o is not None:
-            if f.attr == "read" and not args and not o[1]:
-                return True
-            if f.attr == "write" and len(args) == 1 and o[1] and ok(args[0]):
-                writes.append(o[0])
-                return True
-            return False
-        p = path_objects.get(f.value.id) if isinstance(f.value, ast.Name) else path_of(f.value)
-        if p is not None:
-            if f.attr == "read_text" and not args:
-                return True
-            if f.attr == "write_text" and len(args) == 1 and ok(args[0]):
-                writes.append(p)
-                return True
-            return False
-        if isinstance(f.value, ast.Name) and f.value.id == "re":
-            return has_re and PY_RE_CALLS.get(f.attr) == len(args) and all(ok(a) for a in args)
-        if f.attr in PY_TEXT_CALLS:
-            low, high = PY_TEXT_CALLS[f.attr]
-            return low <= len(args) <= high and ok(f.value) and all(ok(a) for a in args)
-        return False
-
-    for st in tree.body:
-        if isinstance(st, ast.Assign):
-            if st.targets[0].id not in path_objects and not ok(st.value):
-                return None
-        elif isinstance(st, ast.Expr):
-            if not ok(st.value):
-                return None
-        elif isinstance(st, ast.Assert):
-            if not ok(st.test) or (st.msg is not None and not ok(st.msg)):
-                return None
-    if any(not w.startswith("/") or re.search(r"[\x00-\x1f]", w) for w in writes):
-        return None
-    return writes
-
-def python_edits(cmd, shell_text):
-    """(shell_text with the body of each such script blank, its line breaks kept, and the files
-    those scripts write), or (shell_text, []) wherever that cannot be read. Only a script python
-    reads from a heredoc whose end marker is quoted, so the shell changes nothing in it, run by the
-    session shell itself as python3 or python with at most -I and -, its output piped nowhere."""
-    if "<<" not in cmd or "\n" not in cmd or "python" not in cmd:
-        return shell_text, []
-    parts, spans, heredocs = [], [], []
-    _sw.commands(cmd, heredocs=heredocs, parts=parts, spans=spans)
-    if len(heredocs) != len(spans):
-        return shell_text, []
-    out, rest_of_it, files, read_one = list(shell_text), list(cmd), [], False
-    for (opener, start, end), (quoted, _, _) in zip(spans, heredocs):
-        part = next((p for p in parts if any(o[0] == opener for o in p["openers"])), None)
-        if not quoted or part is None or part["scope"] != (0,) or part["how"] == "|" \
-                or part["inner"] or len(part["openers"]) != 1:
-            continue
-        try:
-            toks = [str(t) for t in _sw.shell_tokens(cmd[part["start"]:part["end"]])]
-        except Exception:
-            continue
-        if len(toks) < 3 or toks[0] not in ("python3", "python") or toks[-2] != "<<" \
-                or toks[1:-2] not in ([], ["-"], ["-I"], ["-I", "-"]):
-            continue
-        try:
-            written = python_writes(cmd[start:end])
-        except Exception:
-            written = None
-        if written is None:
-            continue
-        # A file it writes that the command names again anywhere else may be run, so that script
-        # is read as before.
-        rest = cmd[:part["start"]] + cmd[part["end"]:start] + cmd[end:]
-        if any(os.path.basename(f) in rest for f in written):
-            continue
-        for k in range(start, end):
-            if out[k] != "\n":
-                out[k] = rest_of_it[k] = " "
-        files += written
-        read_one = True
-    if not read_one or PY_REDEFINED.search("".join(rest_of_it)):
-        return shell_text, []
-    return "".join(out), files
-
-python_files = []
-try:
-    shell_text, python_files = python_edits(cmd, shell_text)
-except Exception:
-    python_files = []
-
 # Commands whose arguments ARE what they write. Scanned per segment, in order, so a read in one
 # segment is not blamed on a write in the next, and a cd moves where the rest resolve.
 WRITERS = ("tee", "cp", "mv", "rm", "touch", "mkdir", "patch", "install", "rsync", "truncate",
@@ -910,79 +722,157 @@ WRITERS = ("tee", "cp", "mv", "rm", "touch", "mkdir", "patch", "install", "rsync
 # for a file it writes, so on 2026-11-21 a cp of a worktree payload file into a scratch folder was
 # refused as a write to that payload file, and on 2026-11-22 a cp -R of a payload folder out was.
 # The last word of a cp is where it writes and the words before it are what it reads, and that is
-# certain only for the plain form, so only that form is read this way: the command is cp or /bin/cp
-# itself, with nothing before it (no assignment, no sudo, xargs or other launcher, which can add
-# words after the ones written), run from a folder this reading knows; its flags are single letters
-# that take no value on macOS or GNU cp, all before the files, so no -t or --target-directory can
-# name the destination first; it names two files or more; every word is plain path characters, so
-# no quote, variable, pattern, brace or operator can make the shell hand cp other words than these;
-# and nothing in the whole command defines a function or an alias, or changes PATH or the command
-# hash. Anything else keeps every word a write, as before. What is read is still handed back, so
-# the checkout it is in is noted before the call and anything changed there is named after it.
+# certain only for the plain form: cp or /bin/cp itself, flags that are single letters taking no
+# value and making no link on macOS or GNU cp, all before the files, and two files or more.
+#
+# And it is certain only when nothing in the command can give cp another meaning. The first build
+# of this looked for the words that could (function, alias, PATH), and its review found ten routes
+# those words did not name: eval, the zsh tables functions, aliases, commands and path, a sourced
+# file, a shell started with BASH_ENV or ENV, and enable -f. Each made cp a mv, which removes the
+# payload file. So the rule is the other way round. The reading applies only when the WHOLE
+# command, every character of it, is made of the forms below, and one thing outside them anywhere
+# means every word of the cp is a write, as it always was.
+#
+# The characters: letters, digits and _ . / @ % + , : - in words, ~ only as ~/ opening a word,
+# spaces, tabs and line breaks between words, and && || ; between commands. So no quote, variable,
+# substitution, pattern, brace, redirect, pipe, background &, backslash or comment, no = (so no
+# assignment word and no zsh =name), and no ( or { for a group or a function to open with.
+# The commands, each for its reason:
+#   cp        exactly one in the command, in the plain form above. One, because an earlier cp -R
+#             can copy a link into place that a later cp would then write through.
+#   cd        to one written folder beginning / ~/ or ./ (a bare name can be taken elsewhere by
+#             CDPATH or by zsh cdable_vars, or as +1 into its folder stack), with no .. in it (so
+#             a shell that follows links on cd and one that does not arrive in the same folder),
+#             and a folder that is there now (a cd that fails leaves the cp where it was). It
+#             runs nothing and defines nothing, and where it leaves the cp is known.
+#   mkdir -p  of written folders. It makes folders and nothing else, so it cannot put a link or
+#             a second name where the cp will write. Its words are still judged as writes below.
+#   ls        of written paths, with single letter flags. It only reads.
+# Nothing else is on the list: no echo, pwd, true, test or cat, no shell or interpreter, no eval,
+# source, ., exec, trap, enable, builtin, command or env. Adding a program here is a decision that
+# it can never run another program, read a startup file or define a name, under bash and zsh both.
+#
+# Then where the copy really lands (the same review). The words of a destination can name a scratch
+# folder while the file written is a payload file: through a link, through another spelling of
+# payload on a disk that ignores letter case, or through a second name (a hard link) of the same
+# file. So the destination is resolved as the disk resolves it, links followed and each .. taken
+# after them, and the reading is refused unless every file the cp would write is certainly a new
+# file, or a plain file with one name, under no folder named payload in any letter case. A folder
+# named payload outside every checkout is refused with the rest: being wrong that way costs only a
+# refusal main already gives. What is read is still handed back, so the checkout it is in is noted
+# before the call and anything changed there is named after it.
 CP_FLAGS = re.compile(r"-[RrfinpavXcHLP]+")
-CP_WORD = re.compile(r"(?:~/)?[A-Za-z0-9_./@%+,:-]+")
-CP_REDEFINED = re.compile(r"\bfunction\b|\balias\b|\bhash\b|\b(?:PATH|path)\+?=|(?:^|[\s;&|(){}])cp\s*\(\s*\)")
+CP_NAMES = ("cp", "/bin/cp")
+LS_FLAGS = re.compile(r"-[A-Za-z1]+")
+PLAIN_TEXT = re.compile(r"[A-Za-z0-9_./@%+,:~ \t\n&;|-]*")
+PLAIN_WORD = re.compile(r"(?:~/)?[A-Za-z0-9_./@%+,:-]+")
+PLAIN_CUT = re.compile(r"&&|\|\||;|\n")
 
 def plain_copy(words):
     """(the words a plain cp only reads, the word it writes), or None when words is not one."""
-    if len(words) < 3 or words[0] not in ("cp", "/bin/cp"):
+    if len(words) < 3 or words[0] not in CP_NAMES:
         return None
     files = []
     for w in words[1:]:
         if w.startswith("-"):
             if files or not CP_FLAGS.fullmatch(w):
                 return None
-        elif not CP_WORD.fullmatch(w):
+        elif not PLAIN_WORD.fullmatch(w):
             return None
         else:
             files.append(w)
     return (files[:-1], files[-1]) if len(files) >= 2 else None
 
+def real_path(word, base):
+    """Where the disk takes word, named from the folder base: links followed and each .. taken
+    after them, as the kernel does and a path put in order as text does not. None when unknown."""
+    if word.startswith("~/"):
+        if not HOME.startswith("/"):
+            return None
+        word = HOME + word[1:]
+    if not word.startswith("/"):
+        if not base.startswith("/"):
+            return None
+        word = os.path.join(base, word)
+    return os.path.realpath(word)
 
-# The cut below is crude: it breaks a command at every separator and line break, inside quotes, a
-# heredoc body or a line carried on with a backslash alike, so a segment that reads cp a b can be
-# words the shell hands to another program (a line continuing mv, a body line xargs rm is fed).
-# Reading every word of it as a write was safe for those; reading some as only read is not. So a
-# segment is marked Whole only when it is exactly one command the session shell itself runs, start
-# to end, as lib/shell-words.py reads the command, and only a Whole one is ever read as a plain
-# copy. Where that reading fails nothing is marked.
-CUT = re.compile(r"&&|\|\||;|\||\n")
-
-class Whole(str):
-    """A segment that is one whole command a shell runs, never a piece of one or text given to one."""
-
-def trimmed(text, a, b):
-    while a < b and text[a] in " \t":
-        a += 1
-    while b > a and text[b - 1] in " \t":
-        b -= 1
-    return a, b
-
-def cut(text):
-    """text cut into segments as it always was, each that is exactly one command the session shell
-    itself runs, holding no substitution and opening no heredoc, marked Whole."""
-    spans = set()
+def lands_outside(sources, dest, base):
+    """True only when every file a plain cp of sources to dest, run in base, would write is
+    certainly a new file, or a plain file with one name, under no folder named payload."""
+    import stat
+    to = real_path(dest, base)
+    if not to or any(part.casefold() == "payload" for part in to.split("/")):
+        return False
     try:
-        parts = []
-        # Read only for a command that could hold a cp at all, the one thing a mark is used for.
-        if "cp" in text:
-            _sw.commands(text, parts=parts)
-        for p in parts:
-            if p["scope"] == (0,) and not p["inner"] and not p["openers"]:
-                spans.add(trimmed(text, p["start"], p["end"]))
-    except Exception:
-        spans = set()
-    out, at = [], 0
-    for m in list(CUT.finditer(text)) + [None]:
-        end = m.start() if m else len(text)
-        out.append(Whole(text[at:end]) if trimmed(text, at, end) in spans else text[at:end])
-        at = m.end() if m else end
-    return out
+        st = os.lstat(to)
+    except FileNotFoundError:
+        return True  # nothing is there, so whatever the cp makes is new
+    if stat.S_ISREG(st.st_mode):
+        return st.st_nlink == 1
+    if not stat.S_ISDIR(st.st_mode):
+        return False
+    # A folder that is there: each source lands in it under its own last name.
+    for s in sources:
+        name = s.rsplit("/", 1)[-1]
+        if name in ("", ".", ".."):
+            return False  # cp copies what is INSIDE such a source, under names not written here
+        try:
+            st = os.lstat(os.path.join(to, name))
+        except FileNotFoundError:
+            continue
+        # A folder already there is refused too: a cp -R onto it writes through whatever it holds.
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+            return False
+    return True
+
+def plain_command(text, start):
+    """(the words of its one cp, the words that cp only reads, the word it writes) when ALL of text
+    is the forms above and the copy lands outside every payload folder, or None."""
+    if not start.startswith("/") or not PLAIN_TEXT.fullmatch(text):
+        return None
+    at, copy = start, None
+    for piece in PLAIN_CUT.split(text):
+        words = piece.split()
+        if not words:
+            continue
+        if not all(PLAIN_WORD.fullmatch(w) for w in words):
+            return None
+        head, rest = words[0], words[1:]
+        if head in CP_NAMES:
+            found = plain_copy(words)
+            if copy or not found:
+                return None
+            copy = (words, at) + found
+        elif head == "cd":
+            if len(rest) != 1 or not rest[0].startswith(("/", "~/", "./")) or ".." in rest[0].split("/"):
+                return None
+            to = real_path(rest[0], at)
+            if not to or not os.path.isdir(to) or not os.access(to, os.X_OK):
+                return None
+            at = place(rest[0], at)[0]
+        elif head == "mkdir":
+            if len(rest) < 2 or rest[0] != "-p" or any(w.startswith("-") for w in rest[1:]):
+                return None
+        elif head == "ls":
+            if any(w.startswith("-") and not LS_FLAGS.fullmatch(w) for w in rest):
+                return None
+        else:
+            return None
+    if not copy:
+        return None
+    words, at, sources, dest = copy
+    return (words, sources, dest) if lands_outside(sources, dest, at) else None
+
+# Any failure in that reading is the old reading, never a pass.
+try:
+    PLAIN = plain_command(as_typed, cwd)
+except Exception:
+    PLAIN = None
 
 reads = []
 base = cwd
 CD_TO = object()  # marks a segment that is a directory the commands after it run in
-segments = cut(shell_text)
+segments = re.split(r"&&|\|\||;|\||\n", shell_text)
 # The commands a shell runs from its -c string, eval from its words and env -S from its string
 # (claude-config#1478), read by lib/shell-words.py as commands of their own, each after a cd to the
 # directory it runs in, so a cd inside one moves only what follows it there. Only added to the
@@ -1000,9 +890,7 @@ try:
             # The directory itself, never a cd segment: those are cut into words at each space,
             # so a checkout whose path holds one resolved against its first word (#2080). One the
             # reading could not work out is kept as its words, never as where the session is (#2128).
-            # A command this reading gives that the cut leaves in one piece is that whole command.
-            pieces = CUT.split(text)
-            segments += [(CD_TO, move(d, cwd) if d else cwd)] + ([Whole(text)] if len(pieces) == 1 else pieces)
+            segments += [(CD_TO, move(d, cwd) if d else cwd)] + re.split(r"&&|\|\||;|\||\n", text)
 except Exception:
     # With no reading of the wrapped commands, a command naming a wrapper has every payload path it
     # holds taken for a write: the reading that sees more writes, never fewer (L42). So does one
@@ -1113,15 +1001,13 @@ for seg in segments:
             if w.startswith("of="):
                 add(w[3:], base)
     elif head in WRITERS:
-        copy = None
-        if isinstance(seg, Whole) and k == 0 and not base.startswith(UNKNOWN) and not CP_REDEFINED.search(as_typed):
-            copy = plain_copy(words)
-        if copy:
-            for w in copy[0]:
+        if PLAIN and words == PLAIN[0]:
+            # The one cp of a command that is nothing but the plain forms (claude-config#3443).
+            for w in PLAIN[1]:
                 p, known = place(w, base)
                 if p and known:
                     reads.append(p)
-            add(copy[1], base)
+            add(PLAIN[2], base)
         else:
             for w in args:
                 if not w.startswith("-"):
@@ -1136,10 +1022,6 @@ for m in (re.finditer(SCRIPT_PATH, shell_text) if WRITE_SCRIPT else ()):
 for m in re.finditer(OPENED_PATH, shell_text):
     if m.group(1) not in placed:
         add(m.group(1), cwd)
-
-# The files a script read as python writes (claude-config#3443), each already a whole path.
-for f in python_files:
-    targets.append(os.path.normpath(f))
 
 seen = []
 for t in targets:
