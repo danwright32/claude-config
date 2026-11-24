@@ -3,14 +3,15 @@
 # merge-when-ready-harness.sh: the one world the suites of lib/merge-when-ready.sh run the helper in
 # (claude-config#3572).
 #
-# test-merge-when-ready.sh held every check of the helper until its section 34, the bypass merge
-# and sleep mode's say over it (claude-config#3534, 249 checks), took that suite past
-# run-all-tests.sh's 1,200 second wall limit on a slow GitHub runner on 2026-11-24 (exit 124),
-# which stopped the config sync between the two Macs. Those checks are now test-merge-when-ready-bypass.sh, a suite
-# of their own that the runner deals to a part by its own measured cost (L315). Both suites run the
-# helper in the same world, so that world is here, once, and neither suite holds a copy of it
-# (L613): a second copy of the fake gh would let the two drift apart until a check in one passed
-# against a GitHub the other no longer described.
+# test-merge-when-ready.sh held every check of the helper, 1,600 of them, until it ran past
+# run-all-tests.sh's 1,200 second wall limit on GitHub's runners on 2026-11-24 (exit 124), which
+# stopped the config sync between the two Macs: one piece held against a fixed deadline had grown to
+# most of it (L315). Its sections are now six suites, each dealt to a part by its own measured cost:
+# test-merge-when-ready.sh (the documentation checks and sections 1 to 10), -heads (11 to 21),
+# -turn (22 to 26b), -line (27 to 30), -untested (31 to 33) and -bypass (the bypass merge and sleep
+# mode, once section 34). Every suite runs the helper in the same world, so that world is here, once,
+# and no suite holds a copy of it (L613): a second copy of the fake gh would let them drift apart
+# until a check in one passed against a GitHub the others no longer described.
 #
 # Sourced, never run, after the suite has armed its own deadline (lib/suite-deadline.sh) and set
 # DIR to the hooks folder. Sourcing it sets only what every run of a suite needs, its
@@ -19,13 +20,16 @@
 # check_eq; and mwr_harness_result. mwr_harness_build then makes the rest: the fake gh, which holds
 # the pull request's state in files under $ST and moves it as GitHub does; the injected sleep and
 # clock; the stub gates and review checker; git with no network; the checkout of acme/widget to
-# run from; and fresh, run, present and count.
+# run from; fresh, run, present and count; and, last, what one section sets and a section in
+# another suite reads.
 #
 # mwr_harness_build's body is the opening of test-merge-when-ready.sh moved here unchanged, with the
-# two answers of GitHub's that both suites read (WRONG and LIMITED) moved up beside it, and the stub
-# gates moved, each unchanged, into files under merge-when-ready-fixtures/stub-gates. It is not
-# indented, which keeps each heredoc's end marker at the left margin, where bash looks for it. A
-# section named in its comments is a section of test-merge-when-ready.sh.
+# stub gates moved, each unchanged, into files under merge-when-ready-fixtures/stub-gates, since a
+# script under hooks/lib that prints a hook's answer is judged as a hook by lib/hook-output.py. What
+# it ends with was each set by one section and read in another suite, and is as it was where it was
+# first set, apart from the decoy, a file there for the same reason. It is not indented, which keeps
+# each heredoc's end marker at the left margin, where bash looks for it. A section named in its
+# comments is the section of that number in whichever suite holds it; each keeps its number.
 #
 # USE, in a suite:
 #
@@ -527,8 +531,94 @@ run(){ (cd "$REPO" && bash "$HELPER" "$@" 2>&1); }
 present(){ jq -nc --arg c "$1" --arg d "$REPO" '{tool_name:"Bash",tool_input:{command:$c},cwd:$d}' | bash "$DIR/pr-review-gate.sh" 2>&1; }
 count(){ if [ -f "$ST/$1" ]; then grep -c -- "$2" "$ST/$1"; else echo 0; fi; }
 
-# GitHub's own words for two answers both suites give the helper: its "Something went wrong" to a
+# GitHub's own words for two answers several suites give the helper: its "Something went wrong" to a
 # merge (claude-config#2289, section 8) and its rate limit refusal (claude-config#1482, section 21).
 WRONG='GraphQL: Something went wrong while executing your query. This may be the result of a timeout, or it could be a GitHub bug. Please include `AB12:3C4D:5E6F` when reporting this issue.'
 LIMITED="gh: API rate limit exceeded for user ID 241846707. (HTTP 403)"
+
+# Set by one section and read by a section in another suite, so made here for every suite
+# (claude-config#3572). Each is as it was where it was first set.
+#
+# GitHub's and gh's words for a refused sign in and a connection gh could not make (sections 8, 24
+# and 33).
+SIGNIN='HTTP 401: Requires authentication (https://api.github.com/graphql)'
+CONNECT='error connecting to api.github.com'
+# The line of gh-calls a call was first made at (sections 12 and 16).
+line_of(){ grep -n -m1 -- "$1" "$ST/gh-calls" | cut -d: -f1; }
+# The seconds the injected clock has run (sections 17 and 24).
+el(){ printf '%s' "$(( $(cat "$ST/clock") - 1000000 ))"; }
+# Its default deadline, found by running it out (L107), into default_deadline, with the run's out
+# and rc (checked by section 11; section 24 holds is-it-live's window to it).
+mwr_default_deadline(){
+fresh "$OLD" 0 "$PENDING"
+out="$(MWR_POLL_SECONDS=600 run 7 --squash)"; rc=$?
+default_deadline=$(( $(cat "$ST/clock") - 1000000 ))
+}
+# is-it-live's WAIT_MS, read from the mod's own source into wait_line and wait_expr, and into wait_s
+# in seconds when it reads as a number, empty when not (sections 11 and 24).
+mwr_wait_ms(){
+wait_line="$(grep -E '^export const WAIT_MS = ' "$DIR/../mods/is-it-live/hooks/merges.ts" 2>/dev/null)"
+wait_expr="$(printf '%s' "${wait_line#*= }" | tr -d '_ ')"
+wait_s=""
+if [[ "$wait_expr" =~ ^[0-9*]+$ ]]; then
+  wait_s=$(( wait_expr / 1000 ))
+fi
+}
+# The repository's turn (section 22, and sections 29 and 30).
+TURN_LIB="$DIR/lib/merge-turn.sh"
+LIVE_START="$(ps -o lstart= -p 1 2>/dev/null | sed -e 's/^ *//' -e 's/ *$//')"
+# take-turn <slug> <pr> [pid] [start]: another run joins the line, by default a live one (pid 1,
+# which always runs, with its own start time).
+cat > "$BIN/take-turn" <<EOS
+#!/usr/bin/env bash
+. "$TURN_LIB"
+TURN_PID="\${3:-1}"; TURN_PID_START="\${4:-$LIVE_START}"
+turn_open "\$1" && turn_join "\$2" "\$(cat "\$ST/clock")"
+EOS
+chmod +x "$BIN/take-turn"
+# leave <pr>: the step that ends that pull request's place in line, whichever ticket it has.
+leave(){ printf 'for f in "$MWR_TURN_DIR"/acme/widget/[0-9]*; do grep -qx "pr %s" "$f" && rm -f "$f" "$f.head"; done' "$1"; }
+# An installed copy of the helper, whose installed scripts are stand ins, and fake_in, which runs a
+# command outside a test run with every setting naming a decoy (sections 10 and 20).
+FAKE_HOOKS="$WORKDIR/installed-hooks"
+mkdir -p "$FAKE_HOOKS"
+cp -R "$DIR/lib" "$FAKE_HOOKS/lib"
+FAKE_HELPER="$FAKE_HOOKS/lib/merge-when-ready.sh"
+installed(){ # installed <path inside the fake hooks folder> <the script it hands to>
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "%s" >> "$ST/installed-asked"\nexec bash "%s" "$@"\n' "$1" "$2" > "$FAKE_HOOKS/$1"
+}
+installed block-red-merge.sh "$STUBS/red-gate.sh"
+installed pr-review-gate.sh "$STUBS/review-gate.sh"
+installed require-changelog-tag.sh "$STUBS/changelog-gate.sh"
+installed design-score-gate.sh "$STUBS/design-gate.sh"
+installed require-verification-run.sh "$STUBS/verify-gate.sh"
+installed check-closing-merge.sh "$STUBS/closing-gate.sh"
+installed check-work-names-merge.sh "$STUBS/work-names-gate.sh"
+installed lib/pr-review.sh "$STUBS/pr-review.sh"
+# The worktree check hands to the real one, so a removal it allows really happens.
+installed check-stale-worktrees.sh "$DIR/check-stale-worktrees.sh"
+DECOY="$WORKDIR/decoy.sh"
+cp "$DIR/merge-when-ready-fixtures/decoy.sh" "$DECOY"
+# The wait and the clock name commands this helper runs too, so MWR_SLEEP and MWR_NOW are honoured
+# only under the marker as well (claude-config#2399), and outside a test run the sleep and the date
+# on the PATH run. So these cases put a sleep and a date first on the PATH that record that they ran
+# and then act as the suite's own (the sleep moves the injected clock on and runs the queued step,
+# and date +%s prints the injected clock), and the two settings name decoys that record and act the
+# same. Either way no case here waits for real or reads the real clock (L524).
+REAL_DATE="$(command -v date)"
+CLOCKBIN="$WORKDIR/path-clock"; mkdir -p "$CLOCKBIN"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$1" >> "$ST/path-sleeps"\nexec "%s" "$@"\n' "$BIN/fake-sleep" > "$CLOCKBIN/sleep"
+printf '#!/usr/bin/env bash\nif [ "$*" = "+%%s" ]; then echo read >> "$ST/path-dates"; cat "$ST/clock"; else exec "%s" "$@"; fi\n' "$REAL_DATE" > "$CLOCKBIN/date"
+DECOY_SLEEP="$WORKDIR/decoy-sleep"; DECOY_NOW="$WORKDIR/decoy-now"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$1" >> "$ST/decoy-sleeps"\nexec "%s" "$@"\n' "$BIN/fake-sleep" > "$DECOY_SLEEP"
+printf '#!/usr/bin/env bash\necho read >> "$ST/decoy-nows"\ncat "$ST/clock"\n' > "$DECOY_NOW"
+chmod +x "$CLOCKBIN/sleep" "$CLOCKBIN/date" "$DECOY_SLEEP" "$DECOY_NOW"
+# fake_in <folder> [VAR=value ...] <command ...>: outside a test run, every setting naming a decoy.
+fake_in(){
+  local d="$1"; shift
+  (cd "$d" && env HOOK_TESTS_RUNNING= MWR_RED_GATE="$DECOY" MWR_REVIEW_GATE="$DECOY" MWR_CHANGELOG_GATE="$DECOY" \
+    MWR_DESIGN_GATE="$DECOY" MWR_VERIFY_GATE="$DECOY" MWR_CLOSING_GATE="$DECOY" MWR_WORK_NAMES_GATE="$DECOY" \
+    MWR_REVIEW_LIB="$DECOY" MWR_WORKTREE_CHECK="$DECOY" MWR_SLEEP="$DECOY_SLEEP" MWR_NOW="$DECOY_NOW" \
+    PATH="$CLOCKBIN:$PATH" "$@" 2>&1)
+}
 }
