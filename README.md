@@ -5049,6 +5049,19 @@ sed POSIX fixes (`p`, `d`, `s` with `g` and `p`; line, `$` and regex addresses, 
 gives it; and one made by `git show HEX:PATH > y.sh` (or `cat-file -p`, `cat-file blob`) is read
 as the commit holds it, for a hex object name only, since an earlier command can move a ref
 (`lib/exact-output.py`).
+What a program writes is believed only where the program the shell would run is for certain the
+system's own (`system_program` there, the gate's one judgement of it, claude-config#3440): by a
+path only in a folder the gate takes for the system's, by a bare name only where the session's
+PATH holds whole paths and no text that runs the command names PATH, never behind a word that
+runs it for the shell, and never where a function or an alias has the name. That holds for sed
+and git, and for what printf, echo and cat print, what tee writes and what cp, mv, ln, install
+and link copy: `./cat calm.sh > run.sh; bash run.sh` is refused as a check that could not be
+made. echo and printf by their bare names are the shell's builtins, which PATH does not move.
+For those older readings PATH named in the text of a script on disk is not counted, only PATH
+named in the command line that was typed: 160 of this repository's 315 suites name PATH, and
+with their text counted the gate refused the run of its own suite (2026-11-22).
+Still believed by name alone: what dd, tar, unzip, `sed -i`, awk, a git checkout and a compiler
+write, and the lists of programs taken to write or do nothing.
 Still refused unread, each by choice: awk, a group's output sent to a file, a file Python
 writes, `sed -i` with a program that is not written out, a symbolic ref (`HEAD`, `origin/main`),
 a function's `$1`, a sourced file's `$1`, a script handed its words by xargs or `find -exec`, and

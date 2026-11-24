@@ -643,6 +643,102 @@ else
   echo "SUITE-PART-UNMEASURED #3395: git show of a commit's file: git could not make a repository with one commit under $T"
 fi
 
+echo "slack drafts only: what cat, cp, tee and the rest write is believed only of the system's own program (claude-config#3440)"
+# The gate's own older readings took a program by the last part of its word too: what printf, echo
+# and cat print, into a file or down a pipe, what cp, mv, ln, install and link copy, and what tee
+# writes. Every command below marked NEW was ALLOWED on this change's base (a49e2ec940,
+# 2026-11-22): the scripts named for those programs here print a line that posts, and the gate read
+# calm.sh as what the file that is then run held. They are refused now as a check that could not
+# be made, by the one judgement lib/exact-output.py already made for sed and git (system_program).
+# echo and printf by their bare names are the shell's own builtins, which PATH does not move.
+# Not held here, and still believed by name: what dd, tar, unzip, sed -i, awk, a git checkout and a
+# compiler write (lib/program-writes.py note_program), seen allowed the same way on that base.
+M="$T/same3440"
+mkdir -p "$M/bin"
+printf '%s\n' '#!/bin/sh' "echo '$POST'" > "$M/cat"
+for n in cp mv ln install link tee echo printf bin/cat; do cp "$M/cat" "$M/$n"; done
+chmod +x "$M/cat" "$M/cp" "$M/mv" "$M/ln" "$M/install" "$M/link" "$M/tee" "$M/echo" "$M/printf" "$M/bin/cat"
+printf '%s\n' 'echo ok' > "$M/calm.sh"
+printf '%s\n' "$POST" > "$M/posts.sh"
+printf '%s\n' 'cat calm.sh > made.sh' 'bash made.sh' > "$M/copy.sh"
+printf '%s\n' "PATH=$M:\$PATH" 'cat calm.sh > made.sh' 'bash made.sh' > "$M/path-copy.sh"
+printf '%s\n' './cp calm.sh made.sh' 'bash made.sh' > "$M/local-copy.sh"
+printf '%s\n' 'cp calm.sh made.sh' 'bash made.sh' > "$M/copy-run.sh"
+mkdir -p "$M/into"
+printf '%s\n' './cat posts.sh | bash' > "$M/local-feed.sh"
+CR="calm.sh > run.sh; bash run.sh"
+found40() { refused "#3440 $1 is refused"; says "#3440 $1: as a post found" "$FOUND"; }
+unsure() { refused "#3440 $1 is refused"; says "#3440 $1: as a check that could not be made" "REFUSED: $UNREAD"; }
+still() { allowed "#3440 $1 still passes"; }
+run_path40() { local keep="$PATH"; export PATH="$1"; run "$2" "$3"; export PATH="$keep"; }
+# The plain forms, read as before.
+run "cat $CR" "$M";                                still "cat by its bare name, of a file that does not post,"
+run "cat posts.sh > run.sh; bash run.sh" "$M";     found40 "cat by its bare name, of a file that posts,"
+run "/bin/cat $CR" "$M";                           still "cat by its path in a system folder"
+run "/bin/cat posts.sh > run.sh; bash run.sh" "$M"; found40 "cat by its path in a system folder, of a file that posts,"
+run "cp calm.sh run.sh; bash run.sh" "$M";         still "cp by its bare name"
+run "cp posts.sh run.sh; bash run.sh" "$M";        found40 "cp by its bare name, of a file that posts,"
+run "/bin/cp calm.sh run.sh; bash run.sh" "$M";    still "cp by its path in a system folder"
+run "mv calm.sh run.sh; bash run.sh" "$M";         still "mv by its bare name"
+run "cat calm.sh | tee run.sh; bash run.sh" "$M";  still "tee by its bare name"
+run "cat posts.sh | tee run.sh; bash run.sh" "$M"; found40 "tee by its bare name, fed a file that posts,"
+run "cat calm.sh | bash" "$M";                     still "cat by its bare name into a shell"
+run "cat posts.sh | bash" "$M";                    found40 "cat of a file that posts into a shell"
+run "echo 'echo ok' > run.sh; bash run.sh" "$M";   still "echo by its bare name"
+run "printf 'echo ok\n' > run.sh; bash run.sh" "$M"; still "printf by its bare name"
+run "export PATH=$M:\$PATH; echo 'echo ok' > run.sh; bash run.sh" "$M"
+still "echo after PATH is exported, which is the shell's own echo whatever PATH holds,"
+run "export PATH=$M:\$PATH; printf '%s\n' '$POST' > run.sh; bash run.sh" "$M"
+found40 "printf of a line that posts, after PATH is exported,"
+run "bash copy.sh" "$M";                           still "a script that runs what its cat wrote, with PATH left alone,"
+# NEW: a path that is not one of the system's folders.
+run "./cat $CR" "$M";                              unsure "a script named cat, run by its path in the folder,"
+run "$M/cat $CR" "$M";                             unsure "a script named cat, run by a whole path outside the system's folders,"
+run "bin/cat $CR" "$M";                            unsure "a script named cat, run by a path under the folder,"
+run "./cp calm.sh run.sh; bash run.sh" "$M";       unsure "a script named cp"
+run "./cp calm.sh into/; bash into/calm.sh" "$M";  unsure "a script named cp, copying into a folder,"
+run "./cp calm.sh run.sh; bash calm.sh" "$M";      unsure "a script named cp, for the file it was handed to copy from,"
+run "cp calm.sh run.sh; bash calm.sh" "$M";        still "the system's cp, for the file it copied from,"
+run "./mv calm.sh run.sh; bash run.sh" "$M";       unsure "a script named mv"
+run "./ln -s calm.sh run.sh; bash run.sh" "$M";    unsure "a script named ln"
+run "./install calm.sh run.sh; bash run.sh" "$M";  unsure "a script named install"
+run "./link calm.sh run.sh; bash run.sh" "$M";     unsure "a script named link"
+run "cat calm.sh | ./tee run.sh; bash run.sh" "$M"; unsure "a script named tee"
+run "./cat calm.sh | tee run.sh; bash run.sh" "$M"; unsure "a script named cat feeding the system's tee"
+run "./echo 'echo ok' > run.sh; bash run.sh" "$M"; unsure "a script named echo, run by its path,"
+run "./printf 'echo ok\n' > run.sh; bash run.sh" "$M"; unsure "a script named printf, run by its path,"
+run "./cat calm.sh | bash" "$M";                   unsure "a script named cat piped into a shell"
+# NEW: PATH named in the command, or in a text that runs it.
+run "PATH=$M:\$PATH; cat $CR" "$M";                unsure "cat after PATH is set"
+run "export PATH=$M:\$PATH; cat $CR" "$M";         unsure "cat after PATH is exported"
+run "cat $CR; PATH=$M:\$PATH" "$M";                unsure "cat in a command that sets PATH anywhere"
+run "export PATH=$M:\$PATH; cp calm.sh run.sh; bash run.sh" "$M"; unsure "cp after PATH is exported"
+run "export PATH=$M:\$PATH; cat calm.sh | tee run.sh; bash run.sh" "$M"; unsure "tee after PATH is exported"
+run "export PATH=$M:\$PATH; cat calm.sh | bash" "$M"; unsure "cat piped into a shell after PATH is exported"
+run "export PATH=$M:\$PATH; bash copy.sh" "$M";    refused "#3440 a script whose caller exported PATH, running what its cat wrote, is refused"
+run "export PATH=$M:\$PATH; bash copy-run.sh" "$M"; refused "#3440 a script whose caller exported PATH, running what its cp copied, is refused"
+# PATH named in the text of a script on disk is not counted for these readings (system_program in
+# lib/exact-output.py says why: counted on 2026-11-22, 160 of this repository's 315 suites name
+# PATH, and most make a file with cat or cp and then run it). So this still passes, as it did, and
+# is left for its own change.
+run "bash path-copy.sh" "$M";                      still "a script on disk that names PATH and runs what its cat wrote"
+# In a script on disk, and a post in what the system's program would have written is still found.
+run "bash local-copy.sh" "$M";                     refused "#3440 a script on disk that runs what a script named cp copied is refused"
+run "bash local-feed.sh" "$M";                     found40 "a script on disk that pipes a file that posts through a script named cat into a shell"
+run "./cat posts.sh > run.sh; bash run.sh" "$M";   refused "#3440 a script named cat, of a file that posts, is still refused"
+run "./cat posts.sh | bash" "$M";                  found40 "a script named cat, of a file that posts, piped into a shell"
+run "./cp posts.sh run.sh; bash run.sh" "$M";      refused "#3440 a script named cp, of a file that posts, is still refused"
+# NEW: a word in front that runs it for the shell, a function or an alias of the name.
+run "command cat $CR" "$M";                        unsure "cat behind command"
+run "cat() { /bin/echo '$POST'; }; cat $CR" "$M";  refused "#3440 a function named cat, whose output is run, is refused"
+run "alias cat=./cat; cat $CR" "$M";               refused "#3440 an alias named cat, whose output is run, is refused"
+run "echo() { /bin/echo '$POST'; }; echo 'echo ok' > run.sh; bash run.sh" "$M"
+refused "#3440 a function named echo, whose output is run, is refused"
+# NEW: the session's own PATH, where an entry is the folder the command runs in.
+run_path40 ".:$PATH" "cat $CR" "$M";               unsure "cat where the session's PATH holds the folder itself"
+run_path40 "$PATH:" "cp calm.sh run.sh; bash run.sh" "$M"; unsure "cp where the session's PATH ends with an empty entry"
+run_path40 ".:$PATH" "echo 'echo ok' > run.sh; bash run.sh" "$M"; still "echo where the session's PATH holds the folder itself"
+
 echo "slack drafts only: an error inside either reading refuses the call (claude-config#3395)"
 # A copy of the gate whose two readings raise when the command holds a marker word. A reading that
 # caught its own errors would let such a call through as one it had nothing to say about.

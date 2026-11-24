@@ -2335,11 +2335,14 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                                              copier=True)
             else:
                 self.note_copy(name, vals[1:], d)
+            # Believed only of the system's own program (lib/exact-output.py, claude-config#3440).
+            self.copy_believed(name, args, vals, d, text)
             out = []
         elif name in SH_PRINTERS:
-            out = self.sh_prints(name, args, vals, d, stdin)
+            out = self.believed(self.sh_prints(name, args, vals, d, stdin), vals[0], name, text)
         elif name in ("tee", "gtee"):
             append = any(v and re.fullmatch(r"-[a-zA-Z]*a[a-zA-Z]*", v) for v in vals[1:]) or "--append" in vals[1:]
+            stdin = self.believed(stdin, vals[0], name, text)
             for a, v in zip(args[1:], vals[1:]):
                 if v is not None and (v == "-" or v.startswith("-")):
                     continue
