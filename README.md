@@ -5073,11 +5073,35 @@ sed POSIX fixes (`p`, `d`, `s` with `g` and `p`; line, `$` and regex addresses, 
 gives it; and one made by `git show HEX:PATH > y.sh` (or `cat-file -p`, `cat-file blob`) is read
 as the commit holds it, for a hex object name only, since an earlier command can move a ref
 (`lib/exact-output.py`).
+What a program writes is believed only where the program the shell would run is for certain the
+system's own (`system_program` there, the gate's one judgement of it, claude-config#3440): by a
+path only in a folder the gate takes for the system's, by a bare name only where the session's
+PATH holds whole paths and no text that runs the command names PATH, never behind a word that
+runs it for the shell, and never where a function or an alias has the name. That holds for sed
+and git, and for what printf, echo and cat print, what tee writes and what cp, mv, ln, install
+and link copy: `./cat calm.sh > run.sh; bash run.sh` is refused as a check that could not be
+made. echo and printf by their bare names are the shell's builtins, which PATH does not move.
+For those older readings PATH named in the text of a script on disk is not counted, only PATH
+named in the command line that was typed: 160 of this repository's 315 suites name PATH, and
+with their text counted the gate refused the run of its own suite (2026-11-22).
+Still believed by name alone: what dd, tar, unzip, `sed -i`, awk, a git checkout and a compiler
+write, and the lists of programs taken to write or do nothing.
 Still refused unread, each by choice: awk, a group's output sent to a file, a file Python
 writes, `sed -i` with a program that is not written out, a symbolic ref (`HEAD`, `origin/main`),
 a function's `$1`, a sourced file's `$1`, a script handed its words by xargs or `find -exec`, and
 a variable set from `mktemp` or the environment. A module the gate cannot find, and a script
 handed a file that names the send call, are refused as before (#3218).
+Since claude-config#3410 that last refusal says only what was measured. A script not seen to be
+unable to act, handed a file that only names an endpoint (`python3 sweep.py recorded.txt`), is
+still refused, and the refusal now leads with "the gate could not check whether this command
+posts to Slack", as one for a module the gate cannot find does. It then says the file only names
+the endpoint, and keeps the draft rule for a command that does send a message. Before, it led
+with "this command posts to Slack", a post nobody had found, 55 times in two weeks of the
+personal MacBook's records, and a count by the could not check wording missed every one. The
+cause is recorded apart from what the walk could not follow (`name_only`, never `unfollow`): a
+reason recorded there is dropped inside a script on disk, which would pass a script that is
+refused today. A file that posts, handed to a script that runs what it is handed, is still
+refused as a post found.
 Suite: `test-slack-drafts-reads-more.sh`.
 
 Running `python3 payload/skills/nudge/test_nudge.py` directly is refused, because its fake server
@@ -5129,6 +5153,19 @@ unchanged, and running out of it still refuses the call. The gate's phase line
 (`SLACK_GATE_PHASE_LOG`) counts the real parses and readings (`py_parse`, `py_marker_read`), and the
 suite holds each by that count, which no load can move, and sees each fail on a copy of the gate
 that holds nothing (`ONCE = False`).
+
+More repeated work was taken out on 2026-11-22 (#3406), again with every verdict as it was. Judging
+`bash tests/test-claude-sync.sh` from an empty cache had crept from 40.9 units of the yardstick on
+2026-11-17 to about 55, against a limit of 57 that single readings crossed. Four readings are now
+made once for each text: a command's first word, where the gate looks through a text for a
+function's calls (`held_first_word`; it cut about 8,500 commands into words 152,393 times in that
+judgement), the commands of a text for the readings of what is around a program (`held_parsed`,
+49 copies before), the functions a text defines (`sh_funcs_of`, six searches of the suite's 1.8
+million characters before) and whether it runs shopt (`sh_runs_shopt`). Measured that day on the
+personal MacBook, ten readings each taken in turn at a load of 37 to 103: 5.61 s and 56.4 units
+before, 5.33 s and 53.7 after (the middle readings, a unit 0.100 s). No limit was changed with it.
+Suite: `test-slack-drafts-held-once.sh`, which holds each reading by a count and saw each count
+fail on the gate as it was.
 
 Three things that pull request left were settled on 2026-11-21 (#3255), all measured that day on the
 personal MacBook with a unit at 0.097 s:
