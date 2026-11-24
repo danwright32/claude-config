@@ -811,16 +811,15 @@ def lands_outside(sources, dest, base):
         return st.st_nlink == 1
     if not stat.S_ISDIR(st.st_mode):
         return False
-    # A folder that is there: each source lands in it under its own last name.
+    # A folder that is there: each source lands in it under its own last name. A folder already
+    # there under that name is refused too, since a cp -R onto it writes through whatever it holds.
+    # That takes in a source ending in a slash or a dot, whose last name is the folder itself: cp
+    # copies what is INSIDE such a source, under names not written in the command.
     for s in sources:
-        name = s.rsplit("/", 1)[-1]
-        if name in ("", ".", ".."):
-            return False  # cp copies what is INSIDE such a source, under names not written here
         try:
-            st = os.lstat(os.path.join(to, name))
+            st = os.lstat(os.path.join(to, s.rsplit("/", 1)[-1]))
         except FileNotFoundError:
             continue
-        # A folder already there is refused too: a cp -R onto it writes through whatever it holds.
         if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
             return False
     return True
