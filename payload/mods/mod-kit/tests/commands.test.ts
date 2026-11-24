@@ -1846,6 +1846,70 @@ describe("$'...' and a script not read to its end (#3491)", () => {
     expect(marked(`p3 "$(p1 '\nx << n\n')"; ${NEXT}`)).toEqual([['p1', HEREDOC], ['p3', HEREDOC]])
   })
 
+  // The third review of pull request #3493 found two kinds of text the scan of quoted text
+  // (quotedText) called quoted where a shell reads a command, so a mark went from texts bash and
+  // zsh run differently. Each text of the two tests below was run on bash 3.2 and zsh 5.9 on
+  // 2026-11-23 with programs that only print.
+  test('a # after a character only JavaScript calls a space starts no comment, so what a shell reads after it keeps the mark', () => {
+    const marked = (cmd: string) => pipeline(cmd).filter(c => c.unread !== undefined).map(c => [c.words[0], c.unread])
+    // Every character JavaScript's \s holds but space, tab and new line: a vertical tab, a carriage
+    // return, a form feed, a no-break space and eighteen rarer ones. bash and zsh blank none of
+    // them, so `a`, the character and `#it` are one word, and the apostrophe opens a quote that the
+    // next line's apostrophe closes.
+    const spaces = [11, 13, 12, 0xa0, 0x1680, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200a, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000, 0xfeff]
+    expect(spaces.every(n => /\s/.test(String.fromCharCode(n)))).toBe(true)
+    for (const c of spaces.map(n => String.fromCharCode(n))) {
+      // The `((` stands outside quotes: zsh ran the last line and bash nothing.
+      const cmd = `p1 a${c}#it's\np1 b'; (( 1 + 'a ))\n${NEXT} # b'`
+      expect(marksIn(cmd)).toEqual({ cmd, marks: [undefined, SHELLS] })
+      // The << stands outside quotes: both shells opened the heredoc.
+      expect(marked(`p3 a${c}#it's\np1 '\ncat <<NEVER\n${NEXT} # '`)).toEqual([['cat', HEREDOC]])
+    }
+    // After a tab, as after a space, the # does start a comment, and the quoted text after it is
+    // still passed over.
+    const tab = String.fromCharCode(9)
+    const cmd = `p3 a${tab}# it's\ngrep -E "f${BS}((${BS})|,)" f; ${NEXT}`
+    expect(marksIn(cmd)).toEqual({ cmd, marks: [undefined] })
+  })
+
+  test('a backslash before a new line ends what the scan of quoted text answers for, so what a shell joins there keeps the mark', () => {
+    const marked = (cmd: string) => pipeline(cmd).filter(c => c.unread !== undefined).map(c => [c.words[0], c.unread])
+    const kept: [string, (string | undefined)[]][] = [
+      // In double quotes bash joins the $ and the ( either side of the pair into a substitution and
+      // ran p3, or stopped at its arithmetic; zsh handed the text on and ran the rest.
+      [`p1 "$${BS}\n(p3 '(( x')" ; ${NEXT}`, [SHELLS]],
+      [`p1 "$${BS}\n(p3 '((' x)" ; ${NEXT}`, [SHELLS]],
+      [`p1 "$${BS}\n( (( 1 'a ))\n ${NEXT} # b' )" ; p3`, [SHELLS]],
+      [`p1 "$${BS}\n(( 1 + ')' ))" ; ${NEXT}`, [SHELLS]],
+      // Outside quotes both shells join the $ and the ' into a $'...' string that ends at its third
+      // apostrophe, so the `((` stands outside quotes: zsh ran the last line and bash nothing.
+      [`p1 $${BS}\n'a${BS}'b' ; (( 1 + 'a ))\n${NEXT} # b'`, [SHELLS]],
+      // A < either side of the pair: bash opened a heredoc and zsh ran nothing.
+      [`cat <${BS}\n<EOF\nit's\nEOF\n(( 1 + 'a ))\n${NEXT} # b'`, [undefined, SHELLS]],
+    ]
+    for (const [cmd, marks] of kept) expect(marksIn(cmd)).toEqual({ cmd, marks })
+    // The same for a << that never ends: after the joined $'...' string both shells opened the
+    // heredoc, and inside the substitution bash joins, bash did.
+    expect(marked(`p1 $${BS}\n'a${BS}' '\ncat <<NEVER\n${NEXT} # '`)).toEqual([['p1', HEREDOC]])
+    expect(marked(`p1 "$${BS}\n(cat <<NEVER\n)" ; ${NEXT}`)).toEqual([['p1', HEREDOC]])
+    // What joins nothing still marks nothing: two backslashes before a new line, the pair inside
+    // single quotes and inside $'...', where it is text, and the pair after the quoted text.
+    for (const cmd of [
+      `p1 a ${BS}${BS}\np3 '((' "x)" ; ${NEXT}`,
+      `p1 "a ${BS}${BS}\n" ; p3 '((' "x)" ; ${NEXT}`,
+      `p1 'a ${BS}\nb' ; p3 '((' "x)" ; ${NEXT}`,
+      `p1 $'a${BS}\n' '((' "x)" ; ${NEXT}`,
+      `p3 '((' "x)" ${BS}\n b ; ${NEXT}`,
+    ]) expect(marksIn(cmd)).toEqual({ cmd, marks: [undefined] })
+    // Past the pair the scan answers for nothing, so quoted text there has its mark again though
+    // both shells ran these alike: the harmless side (L648).
+    const past: [string, (string | undefined)[]][] = [
+      [`p1 -n ${BS}\n  '((' "x)" ; ${NEXT}`, [SHELLS]],
+      [`p1 "a ${BS}\n b" ; p3 '((' "x)" ; ${NEXT}`, [undefined, SHELLS]],
+    ]
+    for (const [cmd, marks] of past) expect(marksIn(cmd)).toEqual({ cmd, marks })
+  })
+
   test('a script read to its end marks nothing unread', () => {
     const whole = [
       // Quotes bash and zsh read alike (the fix round on #3493): after $$ where both readings close
