@@ -110,7 +110,7 @@ def proc_start():
 key = hashlib.sha1(session.encode("utf-8", "replace")).hexdigest()[:12]
 state_path = os.path.join(os.environ["MRF_STATE_DIR"], "claude-mod-reload-%s.json" % key)
 try:
-    with open(state_path) as f:
+    with open(state_path, encoding="utf-8", errors="replace") as f:
         st = json.load(f)
     if not isinstance(st, dict):
         st = {}
@@ -131,7 +131,7 @@ if st.get("path") != path:
 def save():
     try:
         tmp = state_path + ".%d" % os.getpid()
-        with open(tmp, "w") as f:
+        with open(tmp, "w", encoding="utf-8", errors="replace") as f:
             json.dump(st, f)
         os.replace(tmp, state_path)
     except Exception:

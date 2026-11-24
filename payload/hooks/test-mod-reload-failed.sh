@@ -314,5 +314,27 @@ v="$(hook_notice_verdict "$out" 'could not read the transcript of this session')
 out="$(prompt s7 "$TMPROOT/missing.jsonl")"
 [ -z "$out" ] && check "and said once" ok || check "and said once" "said: $out"
 
+# ---------------------------------------------------------------------------
+# A byte that is not UTF-8 in the session's record of what it has told does not lose that record:
+# a failure already told is not told again.
+# ---------------------------------------------------------------------------
+T11="$TMPROOT/eleven.jsonl"
+row "$T11" fail picker-manners 2026-11-05T21:41:31.651Z
+out="$(prompt s11 "$T11")"
+v="$(hook_notice_verdict "$out" '^picker-manners failed to reload')"
+[ -z "$v" ] && check "a failure is told before the record is damaged (the control)" ok \
+  || check "a failure is told before the record is damaged (the control)" "$v"
+python3 - "$CLAUDE_MOD_RELOAD_STATE_DIR" s11 <<'PY'
+import hashlib, json, os, sys
+p = os.path.join(sys.argv[1], "claude-mod-reload-%s.json" % hashlib.sha1(sys.argv[2].encode()).hexdigest()[:12])
+st = json.load(open(p, encoding="utf-8"))
+st["note"] = "x"
+open(p, "wb").write(json.dumps(st).encode().replace(b'"note": "x"', b'"note": "x\xff"'))
+PY
+row "$T11" fail picker-manners 2026-11-05T21:42:00.179Z
+out="$(prompt s11 "$T11")"
+[ -z "$out" ] && check "a record holding a byte that is not UTF-8 still holds what was told" ok \
+  || check "a record holding a byte that is not UTF-8 still holds what was told" "said: $out"
+
 printf 'SUITE-RESULT passed=%d failed=%d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
