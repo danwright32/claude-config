@@ -162,7 +162,16 @@ differs from the clone's last commit, new ones included, and the files changed b
 shared repo lacks (with no upstream set, the commits no remote branch holds; after a send that went
 up on top of a shared head still being tested, the commits made since that send, because the
 earlier ones are already in the shared repo under another id, #3499); without git, the whole
-payload. The names are passed NUL separated from git to the check, so a name git would quote (one
+payload. Those earlier commits are left out only on trust that nothing puts them back on the shared
+branch, and the staging runs before the fetch, so it cannot know. A run that left them out therefore
+asks the check again just before each push of the branch, about every payload file that push would
+add to the shared repo or change there: commits replayed over a shared repo that still holds their
+files change nothing and are not read, and a file the pull replayed over the other Mac's deletion
+of it, one built into a send from the merge base, or one a merge made by hand put back is held
+there, in the same words, with the receiving half of a sync still run. In such a run a push from a
+clone that does not sit on top of the shared repo as it last saw it is not tried at all (git would
+refuse it unless the shared branch had been moved back, and then it would carry exactly the files
+left out); `push` says so and names `sync`, and a send goes on to its reconcile. The names are passed NUL separated from git to the check, so a name git would quote (one
 holding a double quote, a backslash or a newline) is read like any other, and a file whose name
 holds a line break is named in the refusal on one line with the break written as `\n` (#3499: it
 used to be held as a check that could not judge). A failing file already on main therefore never

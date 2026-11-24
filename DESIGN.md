@@ -2815,6 +2815,30 @@ These choices were made by the session that built the fix, not by Dan, and are h
   `unsent_commit_range` does. Every commit after that point and every uncommitted file is read as
   before, and the suite holds both halves: the file already sent no longer holds a send, and a
   commit not yet sent, and a file only staged, still do.
+- **What the staging leaves out is judged at the push (the review of #3518).** Leaving those
+  commits out is sound only while nothing puts them back on the shared branch, and the hold runs in
+  the staging, before the fetch. The review drove one state where something did: the other Mac
+  deletes a file those commits added, the clone holds an uncommitted edit, so
+  `adopt_sent_over_untested` returns without moving the commits onto what they became, the pull
+  replays them over the deletion, and the push sent the file back with exit 0. Three more were then
+  found and driven the same way: a send on top of a head still being tested, built from the merge
+  base because the fetch showed the record no longer holds; a merge made by hand; and a push onto a
+  shared branch moved back to before the send. Rejected: using the record only when the adopt step
+  will run and succeed. Whether it will is decided after the fetch (the gate's verdict, a rebase
+  that may fail, a record that stops holding), so the staging cannot know, and each state above is
+  a different route to the same result, so guarding routes one at a time leaves the next one open
+  (L247). Chosen: the state itself is judged. A staging that left commits out sets
+  `HOME_PATH_SKIPPED_SENT`, and every push of the branch in that run (`plain_push_may_go` for a
+  push of HEAD, `home_paths_at_push` inside `send_over_untested_tip`) first hands the check every
+  payload file that differs between the shared branch as this clone last saw it and the commit
+  about to be put there. Commits replayed over a shared repo that still holds their files differ in
+  nothing and are not read, which is what keeps the fault fixed for a clone that is not clean. A
+  push of HEAD is made only when HEAD sits on top of that branch, since otherwise it lands only on
+  a branch that was moved back and carries what was left out; it is not tried, and the caller's way
+  on from a refused push applies. A staging that left nothing out has read every unsent file, as
+  before #3499, and the push pays nothing. The suite scans the tool for a push of the branch with
+  no such call above it, so a sixth push cannot be added without one. Still judged from the working
+  copy of each file, as the staging does, never from the commit's own blob.
 - **A name holding a line break is held for the true cause (#3499).** The check prints such a name
   across two lines, so reading its output a line at a time found no file and the send was held as
   a check that could not judge. The send asks the check about each such name alone and names it on
