@@ -38,21 +38,23 @@ export const gitNamesPlace = (g: GitRead): boolean => g.dir !== undefined || g.c
 export const gitGlobals = (words: readonly string[], g: { sub?: string; args: readonly string[] }): string[] =>
   g.sub === undefined ? words.slice(1) : words.slice(1, words.length - g.args.length - 1)
 
-// GIT_DIR, GIT_WORK_TREE or GIT_COMMON_DIR given a value anywhere in a call's text: the reading the
-// overnight rule has kept since #1124 for a folder that says nothing about where git acts.
+// GIT_DIR, GIT_WORK_TREE or GIT_COMMON_DIR given a value anywhere in a call's text (the reading the
+// overnight rule has kept since #1124 for a folder that says nothing about where git acts), and one
+// of them as a whole word of any command.
 const GIT_ENV_SET = /(?:^|[^\w$])GIT_(?:DIR|WORK_TREE|COMMON_DIR)=/
 const GIT_ENV_NAME = /^GIT_(?:DIR|WORK_TREE|COMMON_DIR)$/
-/** Whether a call's text gives one of them a value (`GIT_DIR=...` in front of a command, exported, or set on a line of its own). */
-export const gitEnvSet = (raw: string): boolean => GIT_ENV_SET.test(raw)
 /**
- * Whether a call names one of them at all: given a value in its text, or handed whole to a command
- * that can set or export it with no `=` (`export GIT_DIR`, `read GIT_DIR`, `printf -v GIT_DIR`).
- * mod-kit's reader hands on only the setting written in front of the git command itself; any other
- * naming reaches git only through the shell, which no reader here follows, so the repository of
- * every git command in such a call is one that cannot be told.
+ * Whether a call names one of them at all: given a value in its text (`GIT_DIR=...` in front of a
+ * command, exported, or on a line of its own), or handed whole to a command that can set or export
+ * it with no `=` (`export GIT_DIR`, `read GIT_DIR`, `printf -v GIT_DIR`). mod-kit's reader hands on
+ * only the setting written in front of the git command itself; any other naming reaches git only
+ * through the shell, which no reader here follows, so the repository of every git command in such
+ * a call is one that cannot be told. The one predicate every rule here asks, so no two of them
+ * part on what names a repository (the overnight rule's temp folder allowances asked a narrower
+ * one of their own until the lessons review of #3398).
  */
 export const gitEnvNamed = (raw: string, commands: readonly { words: readonly string[] }[]): boolean =>
-  gitEnvSet(raw) || commands.some(c => c.words.some(w => GIT_ENV_NAME.test(w)))
+  GIT_ENV_SET.test(raw) || commands.some(c => c.words.some(w => GIT_ENV_NAME.test(w)))
 
 /** Where a git command acts, as `gitPlace` reads it. */
 export type GitPlace = {

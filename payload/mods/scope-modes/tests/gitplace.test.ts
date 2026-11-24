@@ -1,6 +1,6 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
-import { branchFolder, checkoutFolder, gitEnvNamed, gitEnvSet, gitFolder, gitGlobals, gitNamesPlace, gitPlace, gitRead, type GitRead } from '../hooks/gitplace.ts'
+import { branchFolder, checkoutFolder, gitEnvNamed, gitFolder, gitGlobals, gitNamesPlace, gitPlace, gitRead, type GitRead } from '../hooks/gitplace.ts'
 import { resolveDir } from '../hooks/overnight.ts'
 import { readCommands } from './read.ts'
 
@@ -89,8 +89,8 @@ describe('where a git command runs', () => {
     // Prose that only mentions one, and a read of one, name no repository.
     expect(gitEnvNamed('git commit -m "read GIT_DIR as git does" && git checkout main', readCommands('git commit -m "read GIT_DIR as git does" && git checkout main'))).toBe(false)
     expect(gitEnvNamed('echo "$GIT_DIR"; git checkout main', readCommands('echo "$GIT_DIR"; git checkout main'))).toBe(false)
-    expect(gitEnvSet('GIT_DIR=/o/.git git log')).toBe(true)
-    expect(gitEnvSet('git log --format=%H')).toBe(false)
+    expect(gitEnvNamed('GIT_DIR=/o/.git git log', [])).toBe(true)
+    expect(gitEnvNamed('git log --format=%H', readCommands('git log --format=%H'))).toBe(false)
   })
   test('the one folder a rule reads: where git runs, or none where the repository cannot be told from a folder', () => {
     expect(gitFolder(place('git -C /other push'))).toBe('/other')

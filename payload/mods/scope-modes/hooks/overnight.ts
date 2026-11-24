@@ -1,7 +1,7 @@
 import type { ModKitGh, ModKitWrites } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import { DEPLOYERS, EDITORS, databaseRefusal, dbToolRefusal, flagOf, hasFlag, inScratch, operations, type Cmd } from './nobuild.ts'
 import { browserRefusal, type Browser } from './browser.ts'
-import { gitEnvNamed, gitEnvSet, gitGlobals, gitPlace, type GitRead } from './gitplace.ts'
+import { gitEnvNamed, gitGlobals, gitPlace, type GitRead } from './gitplace.ts'
 
 // Sleep mode phase 3 (#834): what is refused while the Mac sleeps, judged by what a call DOES and
 // by the repository it reaches, never by a phrase anywhere in it (L673). Dan's decision, 2026-10-06
@@ -235,10 +235,13 @@ export const tempWords = (raw: string): ((word: string) => string) => {
 // run somewhere other than the folder it names with -C or a cd, so that folder being a temp one
 // says nothing. Read from the words before the subcommand mod-kit's reading found, never from a
 // list of git's options here: anything there but one -C and its folder counts.
-const gitElsewhere = (words: readonly string[], g: NonNullable<Cmd['git']>, raw: string): boolean => {
+// `envNamed` is whether the call names one of those variables at all (gitEnvNamed, #3398): given a
+// value, or handed to a command that sets or exports it with no `=` (`read GIT_DIR; export GIT_DIR`),
+// which reaches git the same and was read until then as naming nothing.
+const gitElsewhere = (words: readonly string[], g: NonNullable<Cmd['git']>, envNamed: boolean): boolean => {
   const globals = gitGlobals(words, g)
   const plain = globals.length === 0 || (globals.length === 2 && globals[0] === '-C')
-  return !plain || gitEnvSet(raw)
+  return !plain || envNamed
 }
 // The repositories a push writes to, as git names them: the repository after its flags, and
 // --repo. Each a temp path, as written or relative to the folder git runs in: a remote's name or a
@@ -1050,7 +1053,7 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
     // path (`grep gh README.md`, `ls gh`, `grep -n -e gh -e x src`) runs nothing.
     if (cmd !== 'gh' && !NAMES_ONLY.has(cmd) && !(cmd === 'command' && /^-[vV]$/.test(words[1] ?? '')) && words.slice(1).some((w, i) => (w === 'gh' || w.endsWith('/bin/gh')) && ghRunsFrom(words.slice(i + 2)))) return UNRESOLVED
     if (c.git) {
-      const why = await gitRefusal(c.git, dir, call.home, look, { temp, elsewhere: gitElsewhere(c.words, c.git, call.raw), worktrees, envNamed })
+      const why = await gitRefusal(c.git, dir, call.home, look, { temp, elsewhere: gitElsewhere(c.words, c.git, envNamed), worktrees, envNamed })
       if (why) return why
       continue
     }

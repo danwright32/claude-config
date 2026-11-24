@@ -780,6 +780,18 @@ describe('the checkout, force pushes, branch deletes and the live config', () =>
       expect({ c, r: await bash(c, { cwd: WT }) }).toEqual({ c, r: untold })
     expect(await bash(`git --git-dir=${REPO}/.git --work-tree=${REPO} switch -c x`, { cwd: WT })).toBe('run git switch where it could not be told whether this is a primary checkout')
   })
+  test('a variable named with no value in the line takes the temp folder allowances away too, as one given a value always did (#3398 lessons review)', async () => {
+    // The controls: in a throwaway repository under the temp folder each of these goes ahead.
+    expect(await bash('cd /tmp/t3 && git checkout main')).toBeUndefined()
+    expect(await bash('cd /tmp/t3 && git branch -D x')).toBeUndefined()
+    expect(await bash('cd /tmp/t3 && git push -f /tmp/t1 main')).toBeUndefined()
+    // GIT_DIR read or exported with no `=` reaches git all the same, so the folder says nothing.
+    for (const naming of ['read GIT_DIR; export GIT_DIR', 'export GIT_DIR', 'printf -v GIT_WORK_TREE %s /x; export GIT_WORK_TREE', 'export GIT_DIR=/x/.git']) {
+      expect({ naming, r: await bash(`cd /tmp/t3 && ${naming}; git checkout main`) }).toEqual({ naming, r: untold })
+      expect({ naming, r: await bash(`cd /tmp/t3 && ${naming}; git branch -D x`) }).toEqual({ naming, r: 'delete a branch' })
+      expect({ naming, r: await bash(`cd /tmp/t3 && ${naming}; git push -f /tmp/t1 main`) }).toEqual({ naming, r: 'force push' })
+    }
+  })
   test('more than one -C is read as git chains them: the folder they lead to is the one asked about (#3398)', async () => {
     // Typed in a folder of the linked worktree, the last -C alone names a folder of that worktree.
     expect(await bash(`git -C ${'/Users'}/x -C repo checkout main`, { cwd: `${WT}/a` })).toBe('run git checkout in a primary checkout')
