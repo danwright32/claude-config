@@ -63,10 +63,25 @@ Not looked at, and so still believed: a bare name the session's PATH resolves ou
 folders, a file an earlier command wrote into a PATH folder, zsh's path array, the shell's hash
 table (hash -p), and a PATH or function set by a file the command sources.
 
+That judgement is system_program, and it is the gate's one judgement of it (claude-config#3440).
+The gate's older readings took a program by the last part of its word in the same way: with a
+script called cat in the folder, `./cat calm.sh > run.sh; bash run.sh` was read as calm.sh and
+allowed, and so were a bare cat after PATH was set and a script called cp (seen on a49e2ec940,
+2026-11-22). They now ask it too: what printf, echo and cat print into a file or down a pipe and
+what tee writes, through believed, which keeps the pieces and adds one the gate could not read;
+and what cp, mv, ln, install and link copy, through copy_believed. echo and printf by their
+bare names are the shell's builtins, which PATH does not move. For these readings PATH named in
+the text of a script on disk is not counted (system_program says why). Still believed by its
+name alone:
+what dd, tar, unzip, sed -i, awk, a git checkout and a compiler write (lib/program-writes.py
+note_program), a program taken to write or do nothing (NON_WRITERS there, the gate's SH_INERT),
+and $(dirname X).
+
 slack_drafts_only_gate.py loads this file and gives its Judge the class make() returns as a base, so
 the methods use the Judge's own state (shell) and readers (made_from, resolve, sh_cwd, sh_funcs,
 git_out, sw).
 """
+import glob
 import os
 import re
 
@@ -88,8 +103,13 @@ GIT_PLACES = ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTOR
               "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CEILING_DIRECTORIES", "GIT_CONFIG_GLOBAL",
               "GIT_CONFIG_SYSTEM", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS")
 ALIAS = r"(?m)(?<![\w.-])alias\s[^\n]*(?<![\w.-])%s="
+# Each stretch of a text ALIAS can match in, from the word alias to the end of its line.
+ALIAS_LINE = re.compile(r"(?m)(?<![\w.-])alias\s[^\n]*")
 # PATH as a name of its own (never part of PYTHONPATH or GIT_EXEC_PATH), written any way at all.
 PATH_NAMED = re.compile(r"(?<!\w)PATH(?!\w)")
+# The programs among those the gate reads by name that bash, zsh and dash each run as a builtin of
+# their own where the name is written bare, whatever PATH holds (system_program).
+BUILTINS = frozenset({"echo", "printf"})
 
 
 class Outside(Exception):
@@ -497,25 +517,13 @@ def make(unknown_dir, system_bin):
                 # allowed without this line, test-slack-drafts-reads-more.sh, 2026-11-22).
                 return None
             # What is read is what the SYSTEM's sed or git prints, so the program the shell would
-            # run has to be that one for certain (module docstring, "The program"). By a path, only
-            # in a folder the gate takes for the system's; by its bare name, only where nothing
-            # says the shell may find another: the session's PATH, PATH named in a text that runs
-            # the command, a word in front that runs it for the shell.
-            bare = "/" not in vals[0]
-            if not bare and os.path.dirname(vals[0]) not in system_bin:
-                return None
-            if bare and not self.exact_session_path():
+            # run has to be that one for certain (system_program).
+            if not self.system_program(vals[0], name, text):
                 return None
             if self.sw.command_rest(text)[1].strip() or self.sh_cwd(d) == unknown_dir:
                 return None
-            if self.exact_run_for_it(text):
-                return None
             ctx = self.shell
             while ctx is not None:
-                if self.exact_shadowed(ctx["text"], name):
-                    return None  # a function or an alias of that name is not the program
-                if bare and self.exact_names_path(ctx["text"]):
-                    return None
                 if git is not None and any(n.startswith("GIT_") for n in list(ctx["exported"]) + list(ctx["pending"])):
                     return None
                 ctx = ctx.get("parent")
@@ -533,6 +541,97 @@ def make(unknown_dir, system_bin):
                 return None
             out = sed_apply(prog, quiet, data.decode("utf-8", "replace"))
             return None if out is None else [("text", out, "what sed prints")]
+
+        def system_program(self, word, name, text, scripts=True):
+            """Whether the program the shell would run for word, the first word of the command text
+            as worked out and name its last part, is for certain the system's own of that name
+            (module docstring, "The program"). The one judgement of that for the whole gate
+            (claude-config#3440): every reading of what a program prints, copies or writes by its
+            name asks it, here (exact_output, believed, copy_believed), so the forms it takes and
+            the forms it leaves have one home. By a path, only in a folder the gate takes for the
+            system's. By its bare name, only where nothing says the shell may find another: the
+            session's PATH, PATH named in a text that runs the command, a word in front that runs
+            it for the shell. Never where a text that runs the command defines a function or an
+            alias of the name.
+
+            The shell's own builtins (BUILTINS) by their bare names are not looked for on PATH at
+            all, so for those only the function and the alias are asked.
+
+            scripts False leaves out one thing: PATH named in the text of a script on DISK. It
+            is passed for the readings of printf, echo, cat, tee and the copiers, and only for
+            them. 160 of this repository's 315 suites name PATH somewhere, most of them make a
+            file with cat or cp and then run it, and with that text counted the gate refused the
+            run of its own suite, of tests/test-mods.sh and of test-scanners-before-push.sh (8
+            cases of test-slack-drafts-only-gate.sh, 2026-11-22). A script on disk is read by the
+            gate before it runs, and a post built inside one is outside what the gate answers
+            (the gate's note_unreadable says the same of a path it cannot work out there). PATH
+            named in the command line that was typed still counts, for the line and for every
+            script it runs."""
+            bare = "/" not in word
+            builtin = bare and name in BUILTINS
+            if not bare and os.path.dirname(word) not in system_bin:
+                return False
+            if bare and not builtin and not self.exact_session_path():
+                return False
+            # A text that begins with the program's own word has no word in front of it, so the
+            # shared reader is asked only of the others: asked of every cat and cp of a long
+            # script, it took judging `bash tests/test-claude-sync.sh` past its cost limit
+            # (62.1 units against 57.0, test-slack-drafts-only-gate.sh, 2026-11-22).
+            head = text.lstrip()
+            begins = head.startswith(word) and head[len(word):len(word) + 1] in ("", " ", "\t", "\n")
+            if not builtin and not begins and self.exact_run_for_it(text):
+                return False
+            ctx = self.shell
+            while ctx is not None:
+                if self.exact_shadowed(ctx["text"], name):
+                    return False  # a function or an alias of that name is not the program
+                if bare and not builtin and (scripts or not ctx.get("on_disk")) \
+                        and self.exact_names_path(ctx["text"]):
+                    return False
+                ctx = ctx.get("parent")
+            return True
+
+        def believed(self, pieces, word, name, text):
+            """pieces, what the program named name is read as printing or writing (the gate's
+            sh_prints, tee's input), as far as they may be believed (claude-config#3440):
+            themselves where the program the shell would run is for certain the system's own
+            (system_program), and with one unreadable piece after them where it is not. The
+            pieces are kept, so a post in what the system's program would have written is still
+            found, and the piece after them leaves the file or the pipe one the gate could not
+            read: `./cat calm.sh > run.sh; bash run.sh` with a script called cat in the folder
+            was read as calm.sh and allowed (seen on a49e2ec940, 2026-11-22). None stays None,
+            and is answered first, so a program the gate reads nothing of costs nothing here."""
+            if pieces is None or self.system_program(word, name, text, scripts=False):
+                return pieces
+            return list(pieces) + [("unknown", None, self.not_the_systems(name))]
+
+        def copy_believed(self, name, args, vals, d, text):
+            """After the gate's note_writes has read a cp, mv, ln, install or link by its sources:
+            where the program is not certain to be the system's (system_program), each word of
+            it that can be the file it writes, and every file under one that is a folder, holds
+            something the gate could not read from here on, beside what the system's program
+            would have copied there, so a post in the source is still found. In a command line
+            that was typed, each other file it names may have been written, as a file named to
+            any program the gate does not know may (note_named in lib/program-writes.py)."""
+            if self.system_program(vals[0], name, text, scripts=False):
+                return
+            label = self.not_the_systems(name)
+            on_disk = self.shell.get("on_disk")
+            for i, (a, v) in enumerate(zip(args[1:], vals[1:]), 1):
+                if v is not None and v.startswith("-"):
+                    continue
+                if v is None or self.copy_target_may_be(name, args, vals, i):
+                    self.note_unreadable(a, v, d, label, copier=True)
+                    if v is not None:
+                        under = glob.escape(os.path.realpath(self.resolve(v, d)).rstrip("/")) + "/*"
+                        self.made_unknown.append((under, "" if on_disk else label))
+                elif not on_disk:
+                    self.note_named(a, v, d, label)
+
+        @staticmethod
+        def not_the_systems(name):
+            """What a refusal says wrote a file, for a program not certain to be the system's."""
+            return f"{name}, which is not certain to be the system's own {name}"
 
         def exact_shadowed(self, text, name):
             """Whether text defines a function or an alias called name, so that the word in a command
@@ -552,7 +651,13 @@ def make(unknown_dir, system_bin):
                 memo = self.__dict__["_exact_shadowed"] = {}
             key = (text, name)
             if key not in memo:
-                memo[key] = name in self.sh_funcs(text) or bool(re.search(ALIAS % re.escape(name), text))
+                # The functions of a text and its lines that hold an alias are found once for the
+                # text, not once for each name: since claude-config#3440 this is asked of echo,
+                # printf, cat, cp and the rest too, and tests/test-claude-sync.sh is 1.8 MB (its
+                # cost case read 62.1 and 63.5 units against 57.0 with the search made per name).
+                funcs = self.exact_once(("functions", text), lambda: self.sh_funcs(text))
+                aliases = self.exact_once(("alias lines", text), lambda: "\n".join(ALIAS_LINE.findall(text)))
+                memo[key] = name in funcs or bool(aliases and re.search(ALIAS % re.escape(name), aliases))
             return memo[key]
 
         def exact_once(self, key, work):
