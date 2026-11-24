@@ -10378,7 +10378,7 @@ report_set_aside(){   # $1 = why they were set aside, a clause
 # from a state is confidently wrong when it is wrong, and #52 was exactly that.
 pull_from_repo_or_die(){
   local branch ahead behind err
-  local pending="" incoming="" clashing="" outside="" p set_aside=0
+  local pending="" incoming="" in_both="" clashing="" outside="" p set_aside=0
   # No origin configured is not a failure to report: a repo with no remote has nothing to receive,
   # and the offline paths (and the suite's local-only fixtures) drive the payload directly.
   git -C "$SYNC_REPO" remote get-url origin >/dev/null 2>&1 || return 0
@@ -10447,9 +10447,12 @@ pull_from_repo_or_die(){
     # the comment over uncommitted_paths): clashing and outside are kept only as what the messages
     # below print, one name a line, and clash_list is what is set aside.
     local clash_list=() left_in_way=""
-    if pending="$(scratch_file)" && incoming="$(scratch_file)"; then
+    # The names in both go through a third file, never a process substitution, whose child this
+    # shell never waits for (#2040).
+    if pending="$(scratch_file)" && incoming="$(scratch_file)" && in_both="$(scratch_file)"; then
       if uncommitted_paths > "$pending" && [ -s "$pending" ] \
-         && git -C "$SYNC_REPO" diff -z --name-only --no-renames HEAD "origin/$branch" > "$incoming" 2>/dev/null; then
+         && git -C "$SYNC_REPO" diff -z --name-only --no-renames HEAD "origin/$branch" > "$incoming" 2>/dev/null \
+         && names_in_both "$pending" "$incoming" > "$in_both"; then
         while IFS= read -r -d '' p; do
           case "$p" in
             payload/*) clash_list+=("$p"); clashing="$clashing$(name_on_one_line "$p")
@@ -10457,11 +10460,12 @@ pull_from_repo_or_die(){
             *) outside="$outside$(name_on_one_line "$p")
 " ;;
           esac
-        done < <(names_in_both "$pending" "$incoming")
+        done < "$in_both"
       fi
     fi
     [ -z "${pending:-}" ] || rm -f "$pending"
     [ -z "${incoming:-}" ] || rm -f "$incoming"
+    [ -z "${in_both:-}" ] || rm -f "$in_both"
     if [ "${#clash_list[@]}" -gt 0 ] && [ -z "$outside" ]; then
       set_aside_payload_edits "${clash_list[@]}"
       # Only when something was: a path whose name holds a line break is left where it is.

@@ -14038,10 +14038,11 @@ check "#3499 and says which file stands in the way, why it was left there, and w
   "line_has \"\$out_hp17\" 'left where they were' 'line break' 'hooks/two.nlines\.sh' 'Rename each in this Mac.s config'"
 check "#3499 and never calls it an edit outside the payload to commit or discard" \
   "out_lacks \"\$out_hp17\" 'OUTSIDE the payload|discard'"
+# The name is held in a variable the expression expands, so a failure prints the expression on one
+# line rather than going on at the margin (test-fail-margin.sh).
+hp_nl_name=$'two\nlines.sh'
 check "#3499 and this Mac's own copy, and the staged one, are as they were" \
-  "grep -qx 'echo two lines' '$HPH/hooks/two
-lines.sh' && grep -qx 'echo two lines' '$HPC/payload/hooks/two
-lines.sh'"
+  "grep -qx 'echo two lines' \"$HPH/hooks/\$hp_nl_name\" && grep -qx 'echo two lines' \"$HPC/payload/hooks/\$hp_nl_name\""
 rm -f "$HPH/hooks/quo\"ted.sh" "$HPH/hooks/back\\slash.sh" "$HPH/hooks/tab$(printf '\t')name.sh" "$HPH/hooks/two
 lines.sh" "$HPH/hooks/other.sh"
 rm -f "$HPH"/hooks/*.conflict-* 2>/dev/null || true
