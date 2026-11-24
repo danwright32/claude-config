@@ -1180,7 +1180,7 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
   // its {} stood for, which reaches everything under it (#760); a path it names itself does not.
   let foundRoots: readonly string[] = []
   // `shown`, where the caller knows it, is the word as the command spells it (#752).
-  const add = (word: string, path: string | undefined, extra?: { sources?: string[]; edits?: true; mayBeFolder?: true; tree?: true }, shown?: string) => {
+  const add = (word: string, path: string | undefined, extra?: { sources?: string[]; edits?: true; mayBeFolder?: true; tree?: true; shared?: true }, shown?: string) => {
     // Where a find -exec's {} stood, the write reaches every file under that folder (#760), as does
     // a copy of what a folder holds (#2372).
     const tree = foundRoots.includes(word) || !!extra?.tree
@@ -1194,6 +1194,9 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
       if (had) madeBy(had, now)
       else unsure = true
       if (had && tree) had.tree = true
+      // Said by either write of the path, it stays said (#3505): the second of two sources of one
+      // name lands here, on the write the first one made.
+      if (had && extra?.shared) had.shared = true
       if (had && alone.has(had) && aloneIn(had.word) === null) alone.set(had, null)
       return
     }
@@ -1208,6 +1211,7 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
       ...(extra?.edits ? { edits: true as const } : {}),
       ...(extra?.mayBeFolder ? { mayBeFolder: true as const } : {}),
       ...(tree ? { tree: true as const } : {}),
+      ...(extra?.shared ? { shared: true as const } : {}),
     }
     files.push(entry)
     madeBy(entry, now)
@@ -1587,11 +1591,66 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
         // disk can say (the collision guard's reading, #654), so the write says so.
         else add(dest, abs(dest), { sources: absAll(sources), mayBeFolder: true })
       }
+      // For each source, whether another source of the same command may land on the name it lands
+      // on in the folder they go into. Two cannot where one folder holds both, or both are named
+      // outright by names that differ by more than letter case and the Unicode form of an accent:
+      // a disk that ignores case, macOS's own, keeps a.md and A.md as one file, so names alike but
+      // for those are taken as one name on every disk, the side that claims less (lessons review
+      // of 9dd4eb16c0). A pattern in another folder may match the name, and a word no path names
+      // may hold it.
+      const sharesName = (among: readonly string[]): boolean[] => {
+        const placeOf = (s: string): { folder: string; name?: string } | undefined => {
+          const p = abs(s)
+          if (p) return { folder: p.slice(0, p.lastIndexOf('/')) || '/', name: baseOf(p) }
+          const folder = patternFolder(s, dir, home)
+          return folder ? { folder } : undefined
+        }
+        const places = among.map(placeOf)
+        // A name as a disk that ignores letter case and the Unicode form of an accent compares it:
+        // decomposed, then in small letters and in capitals, either of which two names may share
+        // (#3505). Small letters alone, as this was until then, keep a sharp s apart from SS, a
+        // long s from s, a final sigma from a capital one and the ff ligature from FF, each of
+        // which this Mac's APFS disk keeps as one file (measured 2026-11-23). It is the rule ask
+        // before saving compares a moved name with the names a folder holds by (its foldedName),
+        // and it can take two names the disk keeps apart as one (a dotless i and I), the side
+        // that claims less.
+        const folded = (n: string): string[] => {
+          const form = n.normalize('NFD')
+          return [form.toLowerCase().normalize('NFD'), form.toUpperCase().normalize('NFD')]
+        }
+        // One pass over the sources, never each against each: a command can name thousands, and
+        // this runs inside the time a guard has to judge the call. A source no path places may
+        // share with any other. Otherwise the folders that hold a pattern, and for each form of a
+        // name the folders that hold one alike, say whether another folder holds a match.
+        if (places.length < 2) return places.map(() => false)
+        if (places.some(p => p === undefined)) return places.map(() => true)
+        const known = places as { folder: string; name?: string }[]
+        const patternIn = new Set<string>()
+        const nameIn = new Map<string, Set<string>>()
+        for (const p of known) {
+          if (p.name === undefined) patternIn.add(p.folder)
+          else
+            for (const f of folded(p.name)) {
+              const at = nameIn.get(f) ?? new Set<string>()
+              at.add(p.folder)
+              nameIn.set(f, at)
+            }
+        }
+        const folders = new Set(known.map(p => p.folder))
+        const elsewhere = (holding: ReadonlySet<string> | undefined, folder: string): boolean => holding !== undefined && (holding.size > 1 || (holding.size === 1 && !holding.has(folder)))
+        return known.map(p => (p.name === undefined ? elsewhere(folders, p.folder) : elsewhere(patternIn, p.folder) || folded(p.name).some(f => elsewhere(nameIn.get(f), p.folder))))
+      }
       if (copied && into !== undefined) {
         const intoPath = abs(into)
         // The word keeps the folder as written, so one reached through a variable still says so (#752).
         const folder = (asWritten.get(into) ?? into).replace(/\/+$/, '')
-        for (const s of sources) add(`${into.replace(/\/+$/, '')}/${baseOf(s)}`, intoPath ? `${intoPath}/${baseOf(s)}` : undefined, { sources: absAll([s]) }, `${folder}/${baseOf(s)}`)
+        // #3505: a write another source of this command may also land on says so. One of the two
+        // replaces the other there (measured on macOS, 2026-11-23: of `mv mem/a.md full/A.md
+        // archive/` and of two sources named a.md, the source named last is the one kept, and cp
+        // does the same), which the write alone, naming its one source, did not say: ask before
+        // saving read it as where the first source "can be moved back" from.
+        const shares = sharesName(sources)
+        sources.forEach((s, i) => add(`${into.replace(/\/+$/, '')}/${baseOf(s)}`, intoPath ? `${intoPath}/${baseOf(s)}` : undefined, { sources: absAll([s]), ...(shares[i] ? { shared: true as const } : {}) }, `${folder}/${baseOf(s)}`))
       }
       // macOS cp (BSD) copies what a source ending in a slash holds into the destination, and makes
       // the destination as that copy where it does not exist, so either way the write reaches every
@@ -1621,23 +1680,12 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
       // It is said only for a mv that can leave each source there: never onto a device, which holds
       // no file (macOS mv refuses, "Operation not permitted", and keeps the source; measured
       // 2026-11-22), and never where two sources may land on one name, the second replacing the
-      // first. Two cannot where one folder holds both, or both are named outright by names that
-      // differ by more than letter case and the Unicode form of an accent: a disk that ignores
-      // case, macOS's own, keeps a.md and A.md as one file, so names alike but for those are taken
-      // as one name on every disk, the side that claims less (lessons review of 9dd4eb16c0). What
+      // first (sharesName above, which the writes of such sources say too, as `shared`). What
       // the rest of the command does to the place is judged once it is all read (settleMoves).
       if (name === 'mv' && copied) {
         const dest = (into ?? ops[ops.length - 1]) as string
         const destPath = abs(dest)
-        const placeOf = (s: string): { folder: string; name?: string } | undefined => {
-          const p = abs(s)
-          if (p) return { folder: p.slice(0, p.lastIndexOf('/')) || '/', name: baseOf(p) }
-          const folder = patternFolder(s, dir, home)
-          return folder ? { folder } : undefined
-        }
-        const places = sources.map(placeOf)
-        const folded = (n: string): string => n.normalize('NFD').toLowerCase()
-        const apart = places.every((a, i) => places.every((b, j) => j <= i || (a !== undefined && b !== undefined && (a.folder === b.folder || (a.name !== undefined && b.name !== undefined && folded(a.name) !== folded(b.name))))))
+        const apart = !sharesName(sources).some(Boolean)
         // mv -n (--no-clobber) replaces nothing: a source whose name is taken there stays where it was.
         // Of -n, -f and -i the last one given wins (`mv -n -f` replaces), so it is said only where
         // neither of the other two is given at all, the side that never calls a replaced file kept.
@@ -2071,6 +2119,7 @@ const merge = (into: ModKitWrites, from: ModKitWrites) => {
     if (f.tree) had.tree = true
     if (f.edits) had.edits = true
     if (f.mayBeFolder) had.mayBeFolder = true
+    if (f.shared) had.shared = true
     if (f.sources?.length) had.sources = [...new Set([...(had.sources ?? []), ...f.sources])]
     // #2171: values hold only where both writes of the word have them; the line's assignments never
     // reach a substitution's write.

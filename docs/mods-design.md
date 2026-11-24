@@ -3703,6 +3703,23 @@ lasting memory file, or moved one away, ran with no question. Measured in the mo
   cores), and a list naming every note in a folder still fits. Main multiplies out no brace,
   and `rm` of a brace pattern never reached this code. A pattern of more than four stars is
   taken to match anything, since a search for one grows with each star.
+- **Two sources of one mv or cp that may land on one name are no move (#3505).** Measured on this
+  Mac's APFS disk on 2026-11-23: `mv <memory>/a.md <folder>/A.md <archive>/`, and the same with two
+  sources named exactly `a.md`, leaves only the source named last in the archive, for `mv` and
+  `cp` alike; `mv -n` loses neither. The reader had dropped `to` from such a mv, but the write the
+  first source lands on still named it as its one source, so the question said it "can be moved
+  back". mod-kit's reader now marks each write of a copy or move into a folder `shared` where
+  another source of the same command may land on the same name: another folder holding a name
+  alike but for letter case and the Unicode form of an accent, a pattern, or a word no path names.
+  `removalCandidates` in `rules.ts` takes no `shared` write as where a file goes, so the removal
+  is main's Delete question, with no new sentence; a `mv -n` is worded the same, the harmless side
+  to be wrong on. The mark is on the write rather than the removal, so `cp a b <folder>/ && rm a`
+  is covered too. Names are compared in small letters and in capitals, as `foldedName` does: the
+  same disk keeps `straße.md` and `STRASSE.md`, a long s and s, a final sigma and a capital one,
+  and the ff ligature and FF each as one file, which small letters alone kept apart. Measured over
+  162 commands (the 129 of pull request #3485's table and 33 new): the same 157 stop before and after, none of the 129
+  changed, and none of the 21 that changed now says "can be moved back" where it did not. Left as
+  it was: two separate `mv` commands onto one name are still worded as a move.
 - **Asleep**, the removal is noted for the morning report as a finding (the report's kind for
   anything else noticed; a kind of its own would be a change to the report) and refused.
 - **Not covered.** What git itself removes or puts back (`git rm`, `git mv`, a checkout or restore
