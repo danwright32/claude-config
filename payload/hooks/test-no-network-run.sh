@@ -26,8 +26,13 @@
 #     disk is still refused; a library the caller names is loaded into a program compiled here and
 #     not into ps; what ps shows of another process (this user's environment, which the kernel
 #     already gave without ps, and another user's arguments, which it did not) is asserted as
-#     measured; and a copy of the wrapper whose rule names curl lets curl's post arrive, which is
-#     what the rule does to the program it names;
+#     measured; and a copy of the wrapper without the rule still refuses ps;
+#   * one program and never a list (the review of 2026-11-24): every profile the wrapper hands the
+#     sandbox tool, read from a stand in for that tool, is the one this suite holds whole; and
+#     twelve ways of writing a second program into the profile, each in a copy of the wrapper, are
+#     each refused by the wrapper's own check of its profile with nothing handed to the sandbox
+#     tool and nothing arriving, and, with that check taken out of the copy, each lets curl's post
+#     arrive (which is what the rule does to a program it names) and each is caught by this suite;
 #   * nothing is run when no command is given, when the first word starts with a dash, when the
 #     sandbox tool is missing, when the profile cannot be applied, when the sandbox does not block
 #     the wrapper's own connection, when that connection does not arrive even outside the sandbox,
@@ -668,19 +673,27 @@ HELD_LINE="$(printf '%s\t%s' -p "$HELD_PROFILE")"
 MORE_OUT="lets more than /bin/ps out of the sandbox"
 NOT_A_DENY="holds something other than"
 
-# suite_holds <wrapper file> <what it handed the sandbox tool>: HOLDS is ok when this suite's own
-# check finds that the file lets one program out, and says why not otherwise. This is the check as
-# it stood at 0ce9ac84e0: it reads the file alone, and counts LINES that say 'with no-sandbox'.
+
+# suite_holds <what a copy handed the sandbox tool>: HOLDS is ok when the copy handed a profile
+# over at least once and every profile it handed over is the one held above, whole; otherwise it
+# says what was handed. It reads what REACHED the sandbox tool and not the lines of the file, so
+# it does not matter how a second rule was written or where: the check it replaces counted the
+# lines saying 'with no-sandbox', and passed eleven of the twelve spellings below (the red run of
+# 2026-11-24, 59 failures).
 suite_holds() {
-  local outside rules
-  outside="$(sed -n "s/^OUTSIDE='\(.*\)'\$/\1/p" "$1")"
-  rules="$(grep -v '^ *#' "$1" | grep -c 'with no-sandbox' || true)"
-  if [ "$outside" != "$PS_PROG" ]; then HOLDS="its line OUTSIDE='...' holds '$outside'"
-  elif [ "$rules" != "1" ]; then HOLDS="$rules lines of it that are not comments say 'with no-sandbox'"
+  local all other
+  all="$(grep -c '' "$1" 2>/dev/null || true)"
+  other="$(grep -c -v -x -F -e "$HELD_LINE" "$1" 2>/dev/null || true)"
+  if [ "${all:-0}" -lt 1 ]; then HOLDS="it handed the sandbox tool nothing"
+  elif [ "$other" != "0" ]; then HOLDS="$other of its $all hand overs to the sandbox tool were not '-p' and the profile held in this suite"
   else HOLDS=ok; fi
 }
-suite_holds "$WRAP" ""
-check "the wrapper's profile has one rule that lets a program out" "$HOLDS"
+# occurs <text> <word>: how many times the word is in the text.
+occurs() {
+  local left="$1" n=0
+  while [ "$left" != "${left#*"$2"}" ]; do left="${left#*"$2"}"; n=$((n + 1)); done
+  echo "$n"
+}
 
 # spelled <name> <kept|out> [sed expression ...]: a copy of the wrapper at $T/<name>.sh with the
 # expressions applied. Its sandbox tool is a stand in that writes down the first two words it is
@@ -721,7 +734,7 @@ spelling() {
   one curl 127.0.0.1 "$name-out" "$T/$name-out.sh"
   if [ "$OUTCOME" = "sent" ] && [ "$(arrived "$name-out")" = "1" ]; then check "$what, with the wrapper's own check taken out: curl's post ARRIVES" ok
   else check "$what, with the wrapper's own check taken out: curl's post ARRIVES" "outcome '$OUTCOME', arrived $(arrived "$name-out"), stderr: $(head -c 300 "$T/err.txt")"; fi
-  suite_holds "$T/$name-out.sh" "$T/$name-out.handed"
+  suite_holds "$T/$name-out.handed"
   if [ "$HOLDS" = ok ]; then check "$what, with the wrapper's own check taken out: this suite's check catches it" "this suite's check passed it"
   else check "$what, with the wrapper's own check taken out: this suite's check catches it" ok; fi
 
@@ -746,6 +759,35 @@ spelling() {
   if [ "$(arrived "$name-kept")" = "0" ]; then check "$what: nothing arrives" ok
   else check "$what: nothing arrives" "arrived $(arrived "$name-kept")"; fi
 }
+
+# The wrapper as it ships, with nothing changed but the stand in for its sandbox tool.
+ONE_RULE='(allow process-exec (literal "/bin/ps") (with no-sandbox))'
+spelled shipped kept
+run "$T/shipped.sh" /usr/bin/touch "$T/ran.shipped"
+exits "the wrapper as it ships, its sandbox tool written down: the command's exit code comes through" 0
+ran "the wrapper as it ships, its sandbox tool written down: the command is run" shipped
+suite_holds "$T/shipped.handed"
+check "the wrapper's profile has one rule that lets a program out: every profile it hands the sandbox tool is the one held here, whole" "$HOLDS"
+HANDED="$(grep -c '' "$T/shipped.handed" || true)"
+if [ "$HANDED" -ge 2 ]; then check "the wrapper hands its profile to the sandbox tool for its proof and again for the command" ok
+else check "the wrapper hands its profile to the sandbox tool for its proof and again for the command" "$HANDED hand overs were written down"; fi
+# The same promise counted in what was handed over for the command, so that it does not rest on
+# the copy of the profile held above being right.
+LAST="$(tail -n 1 "$T/shipped.handed")"
+if [ "$(occurs "$LAST" no-sandbox)" = "1" ]; then check "the profile handed over for the command says no-sandbox once" ok
+else check "the profile handed over for the command says no-sandbox once" "it says it $(occurs "$LAST" no-sandbox) times"; fi
+if [ "$(occurs "$LAST" allow)" = "2" ] && [ "$(occurs "$LAST" "(allow default)")" = "1" ]; then check "the profile handed over for the command holds two allows, its opening and the one rule" ok
+else check "the profile handed over for the command holds two allows, its opening and the one rule" "it says allow $(occurs "$LAST" allow) times and (allow default) $(occurs "$LAST" "(allow default)") times"; fi
+if [ "$(occurs "$LAST" "$ONE_RULE")" = "1" ]; then check "the profile handed over for the command holds the one rule for $PS_PROG, word for word" ok
+else check "the profile handed over for the command holds the one rule for $PS_PROG, word for word" "that rule is in it $(occurs "$LAST" "$ONE_RULE") times"; fi
+# Everything above reads what the stand in was handed, so the wrapper must have no second way to
+# the sandbox tool: its code names the tool once, on the line the stand in replaces.
+NAMED="$(grep -v '^ *#' "$WRAP" | grep -o 'sandbox-exec' | grep -c '' || true)"
+if [ "$NAMED" = "1" ] && grep -q '^SANDBOX=/usr/bin/sandbox-exec$' "$WRAP"; then check "the wrapper's code names the sandbox tool once, on its SANDBOX line" ok
+else check "the wrapper's code names the sandbox tool once, on its SANDBOX line" "its lines that are not comments name sandbox-exec $NAMED times"; fi
+# And the wrapper's own check holds the same rule, written out and not built from OUTSIDE.
+if [ "$(grep -c -x -F -e "ONE_OUT='$ONE_RULE'" "$WRAP" || true)" = "1" ]; then check "the wrapper's own check holds the one rule for $PS_PROG, word for word" ok
+else check "the wrapper's own check holds the one rule for $PS_PROG, word for word" "no line ONE_OUT='$ONE_RULE' in $WRAP"; fi
 
 if [ -n "$PORT" ]; then
   NL='
@@ -813,6 +855,22 @@ if [ "$RC" -eq 0 ] && [ "${OUT//[[:space:]]/}" = "$$" ]; then
   run "$WRAP" "$T/ps-link" -o pid= -p "$$"
   if [ "$RC" -eq 0 ] && [ "${OUT//[[:space:]]/}" = "$$" ]; then check "with the wrapper a link to ps runs it" ok
   else check "with the wrapper a link to ps runs it" "exit $RC, it printed '${OUT:0:60}', stderr: ${ERR:0:300}"; fi
+
+  # WHY THE RULE IS THERE, kept measured. A copy of the wrapper without it passes the wrapper's own
+  # check of its profile (a profile made narrower is not refused) and runs its command, and ps does
+  # not start in it. Should ps start there one day, macOS has stopped refusing it inside a sandbox
+  # and the rule is no longer needed: that is Dan's to hear, since the rule would go on starting
+  # ps outside with nothing else here turning red.
+  changed norule 's| *(allow process-exec (literal \\"\$OUTSIDE\\") (with no-sandbox))||'
+  run "$T/norule.sh" /usr/bin/touch "$T/ran.norule"
+  exits "a copy without the one rule passes the wrapper's own check of its profile" 0
+  ran "a copy without the one rule: the command is run" norule
+  run "$T/norule.sh" /bin/sh -c '/bin/ps -o pid= -p "$1"' ps-case "$$"
+  if [ "$RC" -ne 0 ] && [ -z "${OUT//[[:space:]]/}" ]; then check "a copy without the one rule: ps does not start, which is why the rule is there" ok
+  else check "a copy without the one rule: ps does not start, which is why the rule is there" "exit $RC, it printed '${OUT:0:60}': macOS now starts ps inside a sandbox, so the rule is no longer needed and Dan should hear of it"; fi
+  # The wrapper's own notice names that error on every run, so the shell's line about ps is matched.
+  case "$ERR" in *"ps: Operation not permitted"*) check "a copy without the one rule: ps is refused with the sandbox's permission error" ok ;;
+    *) check "a copy without the one rule: ps is refused with the sandbox's permission error" "stderr: ${ERR:0:300}" ;; esac
 
   # WHAT THE RULE DOES NOT LET THROUGH.
   # The command that ran ps is still in the sandbox: its post fails and nothing arrives.
@@ -963,11 +1021,22 @@ fi
 
 echo "no network run: the sandbox is proved on every run, and a run that cannot prove it runs nothing"
 
-changed unapplied "s|^PROFILE=.*|PROFILE='(version 1)(allow default'|"
+# A profile the sandbox tool cannot read. It ends in a refusal that is never closed, which the
+# wrapper's own check of its profile lets by (that check looks for what is let out, not for a
+# profile that reads), so this is refused by the proof.
+changed unapplied "s|^PROFILE=.*|PROFILE='(version 1)(allow default)(deny network*'|"
 run "$T/unapplied.sh" /usr/bin/touch "$T/ran.unapplied"
 exits "a profile that cannot be applied is refused" 70
 says "a profile that cannot be applied says the check was not made" "could not be checked"
 not_ran "a profile that cannot be applied runs nothing" unapplied
+
+# A profile that does not start with the opening is refused before that, by the wrapper's own
+# check of its profile: it cannot be told what such a profile lets through.
+changed headless "s|^PROFILE=.*|PROFILE='(version 1)(allow default'|"
+run "$T/headless.sh" /usr/bin/touch "$T/ran.headless"
+exits "a profile without its opening is refused" 70
+says "a profile without its opening is refused by the wrapper's own check of it" "$NOT_A_DENY"
+not_ran "a profile without its opening runs nothing" headless
 
 changed open "s|^PROFILE=.*|PROFILE='(version 1)(allow default)'|"
 run "$T/open.sh" /usr/bin/touch "$T/ran.open"

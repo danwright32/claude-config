@@ -73,8 +73,22 @@
 #     that are NOT this user's: the kernel refuses those to a wrapped command, and ps, which is
 #     root's while it runs, prints them. Whether it prints their environment too was not
 #     measured: no process of another user's could be given a marker without being root.
-# A second program is not a line to add here. The suite runs a copy of this file whose rule names
-# curl, and curl's post arrives.
+#
+# ONE PROGRAM AND NEVER A LIST. A second program is not a line to add here: whatever a rule with
+# (with no-sandbox) names runs with the network on. Twelve ways of writing a second one into the
+# profile were each run in a copy of this file with the check below taken out, and in every one
+# curl's post arrived (measured 2026-11-24, macOS 26.6.2, the personal MacBook): a second rule on
+# the same line, on a continued line, built from a variable, written process-exec*, a regex in
+# place of the literal, a subpath, a prefix, a second literal inside the one rule, a later line
+# that adds to the profile, a line just before the command is run, a rule in a file the profile
+# imports, and the one rule naming curl. So this file checks its own profile on every run, before
+# anything is handed to the sandbox tool ("THE PROFILE IS HELD TO ONE PROGRAM" below), and runs
+# nothing when the profile lets more out than ps: a suite that is not run stops nothing, and this
+# does not wait for one. It reads the profile as put together, not the lines that made it, so it
+# does not matter how the second rule was written. The suite holds the same promise a second way,
+# from its own copy of the whole profile and from what this file is seen to hand the sandbox tool,
+# so a change made to the profile and to the check below together is still caught there. Neither
+# stops somebody who rewrites this file: that is "WHAT IT DOES NOT COVER", a file.
 #
 # There is no retry, backoff or poll here. The one time limit is PROBE_SECONDS, a ceiling only a
 # hang reaches, and a constant so that the suite can shorten it on a copy (L524).
@@ -108,7 +122,8 @@
 # "Operation not permitted".
 #
 # EXIT: the command's own exit code, unchanged. 64 for no command or an option, 69 for a missing
-# tool, 70 when the sandbox could not be proved; each says on stderr that nothing was run.
+# tool, 70 when the sandbox could not be proved or this file's own profile lets more out than ps;
+# each says on stderr that nothing was run.
 # Tests: test-no-network-run.sh.
 set -u
 SANDBOX=/usr/bin/sandbox-exec
@@ -136,6 +151,30 @@ case "$1" in
 esac
 [ -x "$SANDBOX" ] || refuse 69 "$SANDBOX, the macOS tool that takes the network away, is not on this machine, so no command can be run without the network here."
 [ -x "$PYTHON" ] || refuse 69 "$PYTHON, which checks that the sandbox really blocks a connection, is not on this machine. It comes with Apple's command line developer tools, and no other python3 is used, since one found on the PATH would run outside the sandbox."
+
+# THE PROFILE IS HELD TO ONE PROGRAM, ON EVERY RUN (the review of 2026-11-24, "ONE PROGRAM AND
+# NEVER A LIST" above). The profile is checked as it was put together, whatever lines made it:
+#   * with the one rule for ps taken out once, nothing left may say no-sandbox;
+#   * what is left must be the opening and then refusals that name their paths with (literal ...),
+#     and no other form.
+# Then it is made read only, so that no later line adds to it. ONE_OUT is written out here a second
+# time and is not built from OUTSIDE, so that changing either one alone is refused. A profile made
+# narrower passes.
+ONE_OUT='(allow process-exec (literal "/bin/ps") (with no-sandbox))'
+rest="${PROFILE/"$ONE_OUT"/}"
+case "$rest" in
+  *no-sandbox*) refuse 70 "this file's own sandbox profile lets more than /bin/ps out of the sandbox: it holds a (with no-sandbox) beyond the one rule for ps (#3482), and whatever that names would run with the network on. A second program let out is Dan's decision, not a line to add." ;;
+esac
+case "$rest" in
+  "(version 1)(allow default)"*) shape="${rest#"(version 1)(allow default)"}" ;;
+  *) shape="(" ;;
+esac
+shape="${shape//"(deny "/}"
+shape="${shape//"(literal "/}"
+case "$shape" in
+  *"("*) refuse 70 "this file's own sandbox profile holds something other than its opening, its refusals and the one rule for /bin/ps (#3482), so what else it lets through cannot be told here. Beside that rule only (deny ...) rules naming (literal ...) paths are taken." ;;
+esac
+readonly PROFILE
 
 # The proof. Its code comes on its input, which leaves the command's own input untouched: the
 # heredoc is this one program's alone. -I keeps PYTHONPATH and its like out of it, and the folder
