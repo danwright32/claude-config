@@ -522,14 +522,14 @@ echo "judgement cache: a cache folder that is not an absolute path is not used (
 # gate judged, so two folders made two caches, and the ones under ~/.claude were synced to main. Such
 # a setting is ignored: the call is judged with no cache, and the gate says why once on stderr, after
 # its verdict, since the wrapper reads the two together and takes the first line as the verdict.
-mkdir -p "$T/rel/one" "$T/rel/two/exists" "$T/rel/home"
+mkdir -p "$T/rel/one" "$T/rel/two/exists" "$T/rel/userdir"
 printf '%s\n' 'echo hi' > "$T/rel/run.sh"
 # rel_judge <folder it runs from> <setting> <command>: what the wrapper printed, then rc=<its exit code>.
 rel_judge() {
   local p
   p="$(python3 -c 'import json, sys; print(json.dumps({"session_id": "s", "hook_event_name": "PreToolUse", "tool_name": "Bash", "cwd": sys.argv[2], "tool_input": {"command": sys.argv[1], "description": "d"}}))' "$3" "$1")"
   : > "$T/rel/trace"
-  ( cd "$1" && printf '%s' "$p" | env -u PYTHONHASHSEED -u HOOK_TESTS_RUNNING HOME="$T/rel/home" SLACK_GATE_CACHE_DIR="$2" SLACK_GATE_CACHE_TRACE="$T/rel/trace" bash "$DIR/slack-drafts-only-gate.sh" 2>&1; echo "rc=$?" )
+  ( cd "$1" && printf '%s' "$p" | env -u PYTHONHASHSEED -u HOOK_TESTS_RUNNING HOME="$T/rel/userdir" SLACK_GATE_CACHE_DIR="$2" SLACK_GATE_CACHE_TRACE="$T/rel/trace" bash "$DIR/slack-drafts-only-gate.sh" 2>&1; echo "rc=$?" )
 }
 # made <what> <path that must not exist>
 made() { if [ -e "$2" ]; then check "$1" "it was made: $(cd "$T/rel" && find . -newer "$T/rel/run.sh" | sort | tr '\n' ' ')"; else check "$1" ok; fi; }
@@ -544,10 +544,10 @@ case "$(cat "$T/rel/trace")" in *"off: "*"not an absolute path"*) check "the tra
 out="$(rel_judge "$T/rel/one" "~/gate-cache" "bash $T/rel/run.sh")"
 [ "$out" = "rc=0" ] && check "with a tilde cache folder the call is allowed" ok || check "with a tilde cache folder the call is allowed" "the wrapper said: $out"
 made "and no folder named ~ is made in the working folder" "$T/rel/one/~"
-made "nor one under HOME" "$T/rel/home/gate-cache"
+made "nor one under HOME" "$T/rel/userdir/gate-cache"
 out="$(rel_judge "$T/rel/one" "" "bash $T/rel/run.sh")"
 [ "$out" = "rc=0" ] && check "with an empty cache folder the call is allowed" ok || check "with an empty cache folder the call is allowed" "the wrapper said: $out"
-made "and the cache under HOME is not used in its place" "$T/rel/home/.claude"
+made "and the cache under HOME is not used in its place" "$T/rel/userdir/.claude"
 out="$(rel_judge "$T/rel/one" "$T/rel/one/../dotdot-cache" "bash $T/rel/run.sh")"
 [ "$out" = "rc=0" ] && check "with a cache folder holding .. the call is allowed" ok || check "with a cache folder holding .. the call is allowed" "the wrapper said: $out"
 made "and no cache is made where the .. leads" "$T/rel/dotdot-cache"
@@ -563,7 +563,7 @@ n="$(grep -c "SLACK_GATE_CACHE_DIR" <<< "$out")"
 [ "$n" = 1 ] && check "and the refusal says once that the cache folder was ignored" ok || check "and the refusal says once that the cache folder was ignored" "it said so $n times: ${out//$'\n'/ | }"
 # The gate on its own: the verdict alone on stdout, the notice alone on stderr, one line.
 p="$(python3 -c 'import json, sys; print(json.dumps({"session_id": "s", "hook_event_name": "PreToolUse", "tool_name": "Bash", "cwd": sys.argv[2], "tool_input": {"command": sys.argv[1], "description": "d"}}))' "bash $T/rel/run.sh" "$T/rel/one")"
-( cd "$T/rel/one" && printf '%s' "$p" | env -u HOOK_TESTS_RUNNING HOME="$T/rel/home" GATE_DIR="$DIR" PYTHONHASHSEED=0 SLACK_GATE_CACHE_DIR=run/cache-base python3 "$DIR/slack_drafts_only_gate.py" > "$T/rel/stdout" 2> "$T/rel/stderr" )
+( cd "$T/rel/one" && printf '%s' "$p" | env -u HOOK_TESTS_RUNNING HOME="$T/rel/userdir" GATE_DIR="$DIR" PYTHONHASHSEED=0 SLACK_GATE_CACHE_DIR=run/cache-base python3 "$DIR/slack_drafts_only_gate.py" > "$T/rel/stdout" 2> "$T/rel/stderr" )
 [ "$(cat "$T/rel/stdout")" = allow ] && check "the gate's stdout is its verdict alone" ok || check "the gate's stdout is its verdict alone" "it was: $(cat "$T/rel/stdout")"
 case "$(wc -l < "$T/rel/stderr" | tr -d ' '):$(cat "$T/rel/stderr")" in
   "1:"*"SLACK_GATE_CACHE_DIR"*"'run/cache-base'"*"not an absolute path"*"no cache"*) check "and its stderr is one line saying the setting was ignored and why" ok ;;
