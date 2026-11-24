@@ -4383,7 +4383,11 @@ Each entry is signed with a key only this Mac's user can read, `~/.claude/state/
 (made on first use, mode 600), so a process that can write entries cannot forge one; a key that is
 missing, unreadable or readable by others means no cache, never an unsigned one (#2965). The wrapper
 runs the gate with `PYTHONHASHSEED=0`, so it iterates its sets in the same order every run, and the
-cache keeps and uses nothing from a run where that order is random. Under a test run the cache is off unless `SLACK_GATE_CACHE_DIR` names one. It does nothing for a cold
+cache keeps and uses nothing from a run where that order is random. Under a test run the cache is off unless `SLACK_GATE_CACHE_DIR` names one.
+A `SLACK_GATE_CACHE_DIR` that is empty, is not an absolute path (a `~` is not expanded, so it counts as
+relative) or holds a `..` is ignored: the call is judged with no cache, and the gate says why once on
+stderr after its verdict, which reaches the session only with a refusal, since the wrapper drops what
+follows an allow (#3466). The cache does nothing for a cold
 run, so a CI runner judges as before.
 
 Beside the judgements, the same folder keeps the shell reader's parse of any text of 64 KB or more
@@ -5201,6 +5205,9 @@ judgement), the commands of a text for the readings of what is around a program 
 million characters before) and whether it runs shopt (`sh_runs_shopt`). Measured that day on the
 personal MacBook, ten readings each taken in turn at a load of 37 to 103: 5.61 s and 56.4 units
 before, 5.33 s and 53.7 after (the middle readings, a unit 0.100 s). No limit was changed with it.
+The limits were set again on 2026-11-23, to 67 units on macOS and 91 off it (Dan's choice, the
+highest reading on each platform plus 15 percent; the comment above them in the gate's suite
+holds the readings).
 Suite: `test-slack-drafts-held-once.sh`, which holds each reading by a count and saw each count
 fail on the gate as it was.
 
@@ -5224,8 +5231,8 @@ personal MacBook with a unit at 0.097 s:
   alone in 10.7 to 10.8, and the suite after one write in 34.4 to 35.0. That record is as it was:
   changing when it is kept is its own piece of work. Until then a call that starts a suite is
   cheapest when it writes nothing before it.
-- `bash tests/test-claude-sync.sh` still reads 52.0 to 53.0 units against its 57 (3 readings,
-  2026-11-21), and nothing was found to take out. One judgement is 28 million calls with no function above 5% of the
+- `bash tests/test-claude-sync.sh` still reads 52.0 to 53.0 units against the limit of 57 it had
+  then (3 readings, 2026-11-21), and nothing was found to take out. One judgement is 28 million calls with no function above 5% of the
   time, and the disk is 0.05 s of it. The two things found are small: half a million lookups of an
   already compiled pattern, about 0.8 units, less than the readings spread, and 1,043 patterns
   compiled once each for a shell name, about 3%. The limit was not moved.
