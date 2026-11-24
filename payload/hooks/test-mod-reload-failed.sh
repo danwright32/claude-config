@@ -301,6 +301,9 @@ v="$(hook_notice_verdict "$out" 'could not run \(ValueError')"
 [ -z "$v" ] && check "a broken check says so" ok || check "a broken check says so" "$v"
 out="$(CLAUDE_MOD_RELOAD_NOW=soon CLAUDE_MOD_RELOAD_PROCESS=6161 prompt s10 "$T9")"
 [ -z "$out" ] && check "and says so once" ok || check "and says so once" "said: $out"
+out="$(CLAUDE_MOD_RELOAD_NOW=soon CLAUDE_MOD_RELOAD_PROCESS=6161 CLAUDE_MOD_RELOAD_PROCESS_START=1793926000 prompt s10 "$T9")"
+v="$(hook_notice_verdict "$out" 'could not run \(ValueError')"
+[ -z "$v" ] && check "a later process given the same pid is told again" ok || check "a later process given the same pid is told again" "$v"
 
 # ---------------------------------------------------------------------------
 # A transcript that cannot be read is said once, never on every prompt, and never as all clear.

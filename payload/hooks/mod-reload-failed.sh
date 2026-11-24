@@ -276,7 +276,8 @@ rc=$?
 if [ "$rc" -ne 0 ]; then
   why="$(tail -n 1 "$ERR_FILE" 2>/dev/null)"
   rm -f "$ERR_FILE" 2>/dev/null
-  marker="$STATE_DIR/claude-mod-reload-broken-$PROC"
+  # Keyed on the process and its start, since a later process can be given the same pid.
+  marker="$STATE_DIR/claude-mod-reload-broken-$PROC-$(printf '%s' "$PROC_START" | tr -c 'A-Za-z0-9' '_')"
   [ -e "$marker" ] && exit 0
   : > "$marker" 2>/dev/null || true
   hook_allow_notice "mod-reload-failed: the check of whether a mod's reload failed could not run (${why:-python exited $rc}), so a mod still running an old copy in this session would not be noticed. This is said once for this session."
