@@ -32,10 +32,13 @@
 #     measured; and a copy of the wrapper without the rule still refuses ps;
 #   * one program and never a list (the review of 2026-11-24): every profile the wrapper hands the
 #     sandbox tool, read from a stand in for that tool, is the one this suite holds whole; and
-#     twelve ways of writing a second program into the profile, each in a copy of the wrapper, are
-#     each refused by the wrapper's own check of its profile with nothing handed to the sandbox
-#     tool and nothing arriving, and, with that check taken out of the copy, each lets curl's post
-#     arrive (which is what the rule does to a program it names) and each is caught by this suite;
+#     twelve ways of writing a second program into the profile are each run in a copy of the
+#     wrapper. Eleven are refused by the wrapper's own check of its profile, with nothing handed
+#     to the sandbox tool. The twelfth, a line placed just before the command is run, is not
+#     refused: its write to the read only profile fails and the profile handed over is the held
+#     one. Nothing arrives in any of the twelve. With the wrapper's check taken out of the copy,
+#     each lets curl's post arrive (which is what the rule does to a program it names) and each
+#     is caught by this suite;
 #   * nothing is run when no command is given, when the first word starts with a dash, when the
 #     sandbox tool is missing, when the profile cannot be applied, when the sandbox does not block
 #     the wrapper's own connection, when that connection does not arrive even outside the sandbox,
@@ -946,13 +949,14 @@ else:
                           stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     said = done.stdout.decode("utf-8", "replace").strip() or "nothing (exit %d)" % done.returncode
     # A datagram on loopback is in the listener's queue before the write that sent it returns,
-    # and ps has ended, so what is there now is all there will be.
+    # and ps has ended, so what is there now is all there will be. Only an empty queue ends the
+    # count: any other error ends this program with no count, which fails the case (L11).
     sink.setblocking(False)
     count = 0
     while True:
         try:
             sink.recv(4096)
-        except OSError:
+        except BlockingIOError:
             break
         count += 1
     print("%s arrived-%d" % (said, count))
