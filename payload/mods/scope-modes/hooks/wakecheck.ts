@@ -42,6 +42,30 @@ export type WakeFindings = { hits: string[]; unmeasured: string[]; checked: stri
  * issue, so the report says it once, in one line under Done, and the morning puts no picker to him.
  */
 export type Filed = { repo: string; issue: number; title: string }
+/**
+ * #3273: every kind of row the check puts to Dan ("Done overnight, check it", one picker a kind),
+ * each looked at on Dan's reasoning for filed issues: a row stays only where something is left for
+ * him to decide. Every row is written with one of these leads, and test-sleep-report.sh fails on one
+ * that is not, so a new kind is decided on here before it reaches the morning.
+ */
+export const ROW_KINDS = {
+  // Only one that needs him: filed without a required field, in a repository no session worked
+  // tonight (a public one is seen by other people), or with the title of an open issue there.
+  issue: 'Issue created overnight',
+  // The night's own work and changes from his own accounts are left out above, so what is left is
+  // another person's change or the milestone itself, which the overnight rules refuse.
+  milestone: 'Milestone touched overnight',
+  // Kept as they were: whether either can be dropped is Dan's to say (#3273). The
+  // overnight rules refuse a write to LESSONS.md, but a night's merge of a branch written in the day,
+  // or a sync pull of the other Mac's day, changes it too, and the check cannot tell them apart yet.
+  lessonsGithub: 'LESSONS.md changed overnight on GitHub',
+  lessonsInstalled: 'The installed LESSONS.md changed overnight',
+  // Healthy runs are counted in `checked`, never rows (#2766, #3282): what is left failed, is a
+  // passing deploy of a merge nothing the night recorded accounts for, or was still running at wake.
+  deploy: 'Deploy run overnight',
+  scheduled: 'Scheduled run overnight',
+  dispatched: 'Dispatched run overnight',
+} as const
 // The issue field gate's own rules (hooks/issue_field_gate.py: LEVEL, has_category, HEADING_LINE),
 // which test-sleep-report.sh holds these to: a priority level, any other label as a category, and
 // an Open questions heading on a line of its own.
@@ -349,7 +373,7 @@ export const wakeCheck = async (
         const twin = open.titles.find(o => o.number !== c.issue && sameTitle(o.title) === sameTitle(c.title))
         if (twin) needs.push(`with the same title as open issue #${twin.number}`)
       }
-      if (needs.length) hits.push(`Issue created overnight: ${key} "${c.title}" (${needs.join('; ')})`)
+      if (needs.length) hits.push(`${ROW_KINDS.issue}: ${key} "${c.title}" (${needs.join('; ')})`)
       else filed.push(c)
     }
   }
@@ -373,7 +397,7 @@ export const wakeCheck = async (
     if (me) {
       type Commit = { sha?: string; commit?: { message?: string } }
       const commits = await json<Commit[]>(['gh', 'api', `repos/${config}/commits?path=payload/LESSONS.md&since=${since}`], 'LESSONS.md changes on GitHub')
-      for (const c of commits ?? []) lessonHits.push(`LESSONS.md changed overnight on GitHub: ${(c.sha ?? '').slice(0, 7)} "${firstLine(c.commit?.message ?? '')}"`)
+      for (const c of commits ?? []) lessonHits.push(`${ROW_KINDS.lessonsGithub}: ${(c.sha ?? '').slice(0, 7)} "${firstLine(c.commit?.message ?? '')}"`)
     }
   }
   // Dated by the caller's file stat, $.fs.stat in the hooks (#2016), never a stat process: BSD's
@@ -386,7 +410,7 @@ export const wakeCheck = async (
     unreadMtime = firstLine(errorText(err, 'scope-modes')) || 'the read failed'
   }
   if (!Number.isFinite(mtime) || mtime <= 0) unmeasured.push(`the installed LESSONS.md was not checked (its last change could not be read: ${unreadMtime})`)
-  else if (mtime >= o.since) lessonHits.push(`The installed LESSONS.md changed overnight, at ${etWhen(mtime)}`)
+  else if (mtime >= o.since) lessonHits.push(`${ROW_KINDS.lessonsInstalled}, at ${etWhen(mtime)}`)
 
   // #2393: updated_at says only that a milestone changed, so the night's own merges and filings
   // were put to Dan every morning. The repository's issue events for the night say what changed;
@@ -542,7 +566,7 @@ export const wakeCheck = async (
       // Every reason something was not read is said, and a named change never hides one: else the
       // report names one change and reads as though the milestone was read whole (lessons review).
       const whyNot = [...new Set(undecided), ...(gap === null ? [] : [gapText])]
-      if (unexplained.length) hits.push(`Milestone touched overnight: ${repo} "${title}", by changes nothing the night recorded accounts for: ${unexplained.join('; ')}`)
+      if (unexplained.length) hits.push(`${ROW_KINDS.milestone}: ${repo} "${title}", by changes nothing the night recorded accounts for: ${unexplained.join('; ')}`)
       if (whyNot.length)
         unmeasured.push(
           unexplained.length
@@ -700,7 +724,7 @@ export const wakeCheck = async (
           } else if (p.exitCode !== SKIPPED) why = `; which merge started it could not be read (${p.exitCode !== 0 ? firstLine(p.stderr) || `exit ${p.exitCode}` : 'the answer was not JSON'})`
         }
         // Said as what GitHub says it was: a deploy by its name, else by what started it (#3282).
-        deployHits.push(`${cron ? 'Scheduled' : deployNamed ? 'Deploy' : 'Dispatched'} run overnight: ${repo} ${name}${outcome} (${r.html_url ?? ''})${why}`)
+        deployHits.push(`${ROW_KINDS[cron ? 'scheduled' : deployNamed ? 'deploy' : 'dispatched']}: ${repo} ${name}${outcome} (${r.html_url ?? ''})${why}`)
       }
     }
   }

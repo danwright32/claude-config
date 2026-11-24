@@ -261,7 +261,20 @@ into, it reports `changes`: a file removed (`rm`, `unlink`, `rmdir`, a `mv`'s so
 in mode (`chmod`, `chown`, `chgrp`), with `tree` where the whole folder is reached (`rm -r`, `-R`, a
 `mv`'s source, `find -delete`); ask before saving reads only `files`, so a removal is not taken for a
 save. A file edited in place is marked `edits`, a copy of one source onto one name `mayBeFolder` (it
-lands inside the name when that is a folder, which only the disk can say). Where the copies
+lands inside the name when that is a folder, which only the disk can say). Since #3478 the removal
+a `mv` makes carries `to`, where that `mv` puts it (the folder it lands inside, marked `into`, or
+the one name it is moved onto), because a write's `sources` hold paths alone and so never name a
+pattern or a variable. It says the file is there once the whole command has run, so it is settled
+when every line and substitution is read, and left off wherever the command may not leave the file
+there: it removes or empties the source another way (under any spelling of its path, compared as
+paths) or moves it to a second place; another command removes, empties or writes over where it
+lands, what holds that or what is under it; the mv is onto a device or of two sources that may land
+on one name; or the command holds anything whose changes the reader cannot name (an unread command,
+a write its words do not name, a run, git, a command that makes a link, an rsync told to remove
+what it sent). It is a reading of the words alone, asked of no disk, so it is never enough on its
+own: a reader that words anything by it must show the command can change no file another way, as
+ask before saving's `moveAlone` does (below). `keeps` on it says the mv was told to replace nothing
+(`-n`) and given neither `-f` nor `-i`. Where the copies
 disagreed, each case was decided and tested: `>& file` writes the file (the collision guard's
 reading), `wget --spider` saves nothing (no build's), `find -fprint` writes its file and `find
 -delete` removes what it finds (no build's), and a download whose files no word names says the
@@ -3097,8 +3110,10 @@ and the band question is removed rather than kept beside it (L29). Three defects
   under `~/.claude/state/asked-questions`, at most 2,000 kept. `tools/asked-questions-count.ts`
   reads them, for the reading two weeks from 2026-11-21 that decides whether to hold them.
   Those two answers meet at picker manners: a mod's question naming an issue would be refused like
-  a session's. The coordinating session's rule (2026-11-21, until Dan settles it) is that a mod's
-  own dialog is asked and its answer written onto no issue, as every such picker was before. It is
+  a session's. Dan settled how the two meet (5:46 PM ET on 2026-11-21, from a picker: "Yes, as
+  built (Recommended)"): a mod's own dialog is asked, its length recorded and its answer written
+  onto no issue, and the two week reading of the recorded lengths (recording began with #3407,
+  merged 2026-11-22) decides whether the mods' own questions are held too. It is
   told apart by the asking mod's own `$.state` (key `asking`), which holds the whole dialog while
   it is open: the engine lets only the owner write a state ("scope-modes owns that value and only
   its owner writes it", measured in picker manners' suite) and a session has only tools. The call
@@ -3353,7 +3368,14 @@ and the band question is removed rather than kept beside it (L29). Three defects
   the index and a toast saying it went unused would be noise. A write of the line that does not land
   gives the cover back for the rest of the window, as an approval is given back; a shell command
   that failed spends it. A Bash For good covering more than one file, and Dan's own permanent words,
-  record no cover. The noun (`isApproved`, #1483) does not answer for a cover: its one caller asks
+  record no cover. What Claude is told with the save follows the index as it is when the save lands
+  (#3506, after a session told the line "may be added" read that as leave to rewrite the line already
+  there, 2026-11-23): an index with a line whose one link is the file (`linksOnlyTo`) is said to link
+  it already, with a change to that line asked about; one with no such line, or none yet, is offered
+  the line; one that is no ordinary file, fails to read or does not answer in the time the hook gives
+  its looks gets no word about the line either way, since whether it already links the file could
+  not be told, and the guard covers no line written to an index it cannot read. Only the words
+  changed: the cover is recorded as before in every case. The noun (`isApproved`, #1483) does not answer for a cover: its one caller asks
   only about the lessons file.
 - **What Dan reads as the rule:** Claude's own plain sentence and the file (#777). The band showed a
   new file's whole text, the lines a rewrite adds, an Edit's new text, or a Bash command as written,
@@ -3549,6 +3571,162 @@ lasting memory file, or moved one away, ran with no question. Measured in the mo
   outright before #3402, with no question waiting (#3343). With the first pass built it had become
   a Move question Dan could approve (measured 2026-11-22), so such a command is left to the save
   side, which refuses it as before: no Move or Delete approves what no For good could.
+- **A move into a folder is a move, whatever names the files (#3478).** The count for #3430 found
+  a past command that moved 28 notes out of a memory folder into an archive folder with one `mv`
+  and a brace pattern. mod-kit's reader names a write's `sources` only where a path names them,
+  and a pattern has no path, so such a removal had nowhere to go and read as a deletion. Measured
+  on main through the whole mod on 2026-11-22: into a folder outside the memory folder it was
+  asked about as "Delete", with "once deleted it cannot be got back from git"; into a folder
+  inside the memory folder it was refused whole as a deletion beside a save, with no question;
+  and a note moved onto a folder with no trailing slash was said to be one that "can be moved
+  back" whatever the folder held. The reader now marks the removal a `mv` makes with where that
+  `mv` puts it (`to`: the folder it lands inside, or the one name it is moved onto), and only
+  where the command, read whole, leaves the file there (the next entry), so `rm <pattern>; mv
+  <pattern> dir/` and `cp other/*.md backup/ && rm <pattern>` stay deletions. Linking the two in
+  this mod by
+  matching words would have called that last command a move. A file named outright is said by
+  the path it will have, with a trailing slash on the folder or none ("It goes to
+  <folder>/<name>"); a pattern or a guess has no one path and is said by the folder ("Each goes
+  into the folder <folder>"). What is replaced is read from the disk: the file of that name in
+  the folder, or for a pattern each name it can match that both folders hold; where the folder
+  cannot be looked at the question says so and claims neither.
+- **"Can be moved back" is said only of a command that, read whole, leaves each moved file where
+  the question says it goes (#3478, the review of its first pull request).** As first built, the
+  mark was dropped only when the same spelling of the same thing was removed again. Measured
+  through the whole mod on 2026-11-22: `mv <memory>/{a,b}.md <folder>/ && rm -rf <folder>` was
+  asked about as "Move ... can be moved back" where main asked "Delete", and so were a later `rm`
+  of the files there, `shred -u`, `find -delete`, `truncate`, a redirect over a moved file, a
+  second `mv` of the folder followed by `rm`, and `mv <memory>/*.md <a folder that is not there>/ ;
+  rm $HOME/<the same folder>/*.md`, where the mv fails and the rm deletes every note. A guard that
+  words a deletion as something that can be undone has failed in the costly direction. So the
+  reader settles the mark once the whole command is read (mod-kit's `settleMoves`, and the list
+  under `to` above), comparing places as paths and counting a pattern as its whole folder, since
+  no name in a folder can be shown not to match one. Whatever it cannot be sure of takes the mark
+  off: a variable or a substitution in another command, a loop's value, text handed to eval, a
+  program it does not know handed a file, a script, an inline program, git. With the mark off the
+  mod says what main said: a pattern is a deletion, and a file named outright is the move its
+  write's `sources` make it. `onto`, which has the disk asked whether the one name a file is moved
+  onto is a folder, is set only with the mark, so `mv <note> <folder> && echo x >
+  <folder>/<note>` is refused whole as it was on main (the echo's write is a save of its own).
+  A command that deletes one memory file and moves others by a pattern in the same folder is one
+  Delete question, as on main: the pattern cannot be shown not to match the file deleted. A `mv
+  -n` with neither `-f` nor `-i` is never said to replace a file: where one of the name is there,
+  the question says the file stays where it is. Given `-f` or `-i` as well, in any order, it is
+  said to replace one, since mv obeys whichever of the three comes last. Left as on main, and
+  recorded: a note named outright that is moved and whose folder the same command then removes
+  is asked about as main asks, as the move its write's `sources` make it. A pattern moved into a
+  folder that is not there, where the mv fails and nothing happens, was said to be one that "can
+  be moved back" until the third review; it is now the deletion main asked about, unless the command
+  makes that folder first (the entry for the third review, below).
+- **Two names for one folder are one place (#3478, the second review).** Comparing places as
+  paths misses a folder that has two. Measured through the whole mod on 2026-11-23, 8 commands
+  of 8: `mv <memory>/{a,b}.md /tmp/zz/ && rm -rf /private/tmp/zz` was asked about as a move that
+  "can be moved back", since macOS keeps `/tmp`, `/var` and `/etc` as links into `/private`, and
+  so was any linked folder (`mv ... ~/Desktop/link/ && rm -rf ~/Desktop/archive`), a link the
+  command makes itself, and `rsync --remove-source-files` run on where the notes went. The
+  second round settled the mark a second time against the disk, taking each place to its real
+  path; the third took that out (next entry), since it had no deadline on its look and still
+  missed a path climbing out of a linked folder with `..` and another case of a name. What stays
+  in mod-kit: `/tmp`, `/var` and `/etc` are folded onto their `/private` names in the reading by
+  words, and a command that makes a link (`ln`, `link`) or an rsync told to remove what it sent
+  is unsure by its words, so the mark comes off. The reader gives no removal for such an rsync,
+  which also means `rsync --remove-source-files <memory>/ <elsewhere>/` alone is not asked about,
+  on main either (recorded).
+- **A move is worded as one only when nothing beside it could change a file (#3478, the third
+  review).** Each of three reviews found a deletion still said to be a move, each by a new
+  spelling of one place: the folder removed, `/tmp` against `/private/tmp`, a link, `..` out of a
+  linked folder, another case of a name. Comparing where two paths lead cannot be finished, so
+  ask before saving no longer rests on it. Its `moveAlone` (in `rules.ts`) turns the rule round:
+  a move of lasting memory is worded as "Move ... can be moved back" only when the command's text
+  is plain commands one after another (no substitution, redirect, pipe, background job, backslash
+  or `$` but before a plain name), there is exactly one `mv`, typed as such with only the options
+  it reads, no word climbs with `..`, and every other command is on `CHANGES_NO_FILE`: `mkdir`,
+  `ls`, `echo`, `cd`, `pwd`, `test`, `[` and `true`, the one list, kept short on purpose. Before
+  the mv only, a `cp` of one file to one place where nothing is yet is allowed too, which is the
+  issue's own backup of `MEMORY.md`. Anything else gets the question main asks, so the list only
+  ever chooses between two wordings of a question asked either way. The place a moved file lands
+  must be there now, or be made by a plain `mkdir` earlier in the command (a relative one only
+  where no `cd` stands before the mv). Every look at the disk this rests on shares one bound,
+  `MOVE_LOOK_MS` (2 seconds): a look that fails or runs late drops the move wording, and the
+  question is read again as main reads it. mod-kit's own disk settling (`settleOnDisk`) went with
+  this change, so `$.modkit.writes` asks the disk nothing. Measured over 109 commands against main
+  and the second round's head: the same commands stop on all three, and none worded as a move here
+  loses a file. A repeat archive whose backup name is already taken gets main's wording.
+- **A word of the mv is trusted only where the reader places it as the shell does (#3478, the
+  fourth review).** Two faults were left, both where the mv's own words land somewhere other than
+  read. One: names were compared exactly, and this Mac's disk holds `Notes.md` and `notes.md` as
+  one file, so a pattern moved into a folder holding the other spelling replaced it unsaid.
+  `replacedBy` now compares names folded for letter case and for the Unicode form of an accent,
+  on every disk, which can only add a "replacing". Two: a word not from the root (`/`, `~`,
+  `$HOME`) is read in the folder a `cd` leaves, and a cd can fail with the mv still run (zsh
+  refuses `cd <folder> x`, both shells refuse `cd -s <a link>`, and `! cd <no such folder> && mv`
+  runs the mv) or go elsewhere (`cd sub` with CDPATH set). So `moveAlone` trusts such a word of
+  the mv or of a copy only where no cd stands before the mv, or where every cd before it is `cd`
+  and one word from the root and nothing joins the commands but `&&`, with no `!`: then a cd that
+  fails stops the mv (measured in bash 3.2.57 and zsh 5.9). Three more words the shell places
+  elsewhere than mod-kit's reader lose the wording too: a quoted `~` and one after an option's
+  `=`, which both shells leave as text and the reader places at home, and a word opening with
+  `=`, which zsh makes the path of a program. This is deliberately coarse: `cd <folder> && mv
+  <notes> archive/; ls archive` gets main's wording, since the `;` could as well stand before the
+  mv. The list of commands is unchanged.
+- **A disk that does not answer is asked about from the words, never waited on (#3478, the lessons
+  review of its fourth round).** `MOVE_LOOK_MS` bounded only the looks a marked move's wording
+  rests on. The reading that followed a look out of time made looks of its own with no bound, and
+  so did everything main already asked for a Bash call: whether the file that goes is there and
+  is a folder, what a folder taken whole holds, what git holds (two processes of 5 seconds each),
+  a patch or script file the command reads, whether a rules file under a temporary folder is in a
+  checkout, a shell profile, and the index a For good covers one line of. A note moved to a mount
+  that never answers held the hook until Claude Code cut it, and a hook cut there lets the command
+  run with no question, on main as here. No look is made in the hook's own turn (the mod reaches
+  the disk only through `$.fs`, `$.process.run` and mod-kit's nouns), so all of them can be raced:
+  each of the four hooks that read a Bash call (`saveCall` for a subagent and for Dan's permanent
+  words, `saveCheck`, and the question as Dan is asked it) gives every look it makes one time,
+  `LOOKS_MS` (3 seconds), through `judged` in `register.ts`. Past it the call is read from its
+  words alone (`fromWords`), which is the same judgement with every answer taken on the side that
+  asks: a rules file under a temporary folder counts, a variable is set, and every file the words
+  would remove is there. What goes is then asked about as a deletion that nothing can be said to
+  bring back (`removalsUnseen`), a move included, since whether the file arrives could not be
+  looked at; a save is asked about by the files the words name. A command that reads a patch or a
+  script file, which may name any file, and one whose words name no lasting memory, is refused
+  outright with no question: the look that ran out of time was made for something. Dan's
+  permanent words cover nothing on such a reading. The words only reading has one second of its
+  own (`WORDS_MS`) and never throws, so nothing is passed for want of it. A look that fails,
+  rather than never answering, still fails the hook, which judges once more and then refuses, as
+  on main: a question there would let Dan approve what main refuses outright. A clock that cannot
+  be set leaves the looks with no time, as before, since refusing instead would refuse every Bash
+  call of the session. Both times are chosen, not measured, so that a hook whose look failed and
+  which judged the call once more still ends inside 7 of its 10 seconds. The
+  same change reads what the words would remove before asking whether a marked move stands, so a
+  move of a file that is no lasting memory no longer waits on a look at where it lands.
+- **A brace pattern is multiplied out only up to 256 names (#3478, the second review).** To say
+  which files a pattern moved into a folder would replace there, its brace lists are multiplied
+  out and each name tried against every name the two folders share. With no limit, six lists of
+  ten are a million names: 2.3 seconds for one shared name on an idle Mac and ten times that for
+  each further list (measured with bun, 2026-11-23), where a hook has 10 seconds and one cut at
+  its budget lets the command run unasked. The names are counted in one pass before any is made
+  (`braceNames` in `rules.ts`). Past 256 none is made, and a move by such a pattern is asked
+  about as the deletion main asked about. 256 names against 200 shared names cost about 10
+  milliseconds (the middle of seven samples with bun on 2026-11-23, at a load average of 10 on 12
+  cores), and a list naming every note in a folder still fits. Main multiplies out no brace,
+  and `rm` of a brace pattern never reached this code. A pattern of more than four stars is
+  taken to match anything, since a search for one grows with each star.
+- **Two sources of one mv or cp that may land on one name are no move (#3505).** Measured on this
+  Mac's APFS disk on 2026-11-23: `mv <memory>/a.md <folder>/A.md <archive>/`, and the same with two
+  sources named exactly `a.md`, leaves only the source named last in the archive, for `mv` and
+  `cp` alike; `mv -n` loses neither. The reader had dropped `to` from such a mv, but the write the
+  first source lands on still named it as its one source, so the question said it "can be moved
+  back". mod-kit's reader now marks each write of a copy or move into a folder `shared` where
+  another source of the same command may land on the same name: another folder holding a name
+  alike but for letter case and the Unicode form of an accent, a pattern, or a word no path names.
+  `removalCandidates` in `rules.ts` takes no `shared` write as where a file goes, so the removal
+  is main's Delete question, with no new sentence; a `mv -n` is worded the same, the harmless side
+  to be wrong on. The mark is on the write rather than the removal, so `cp a b <folder>/ && rm a`
+  is covered too. Names are compared in small letters and in capitals, as `foldedName` does: the
+  same disk keeps `straße.md` and `STRASSE.md`, a long s and s, a final sigma and a capital one,
+  and the ff ligature and FF each as one file, which small letters alone kept apart. Measured over
+  162 commands (the 129 of pull request #3485's table and 33 new): the same 157 stop before and after, none of the 129
+  changed, and none of the 21 that changed now says "can be moved back" where it did not. Left as
+  it was: two separate `mv` commands onto one name are still worded as a move.
 - **Asleep**, the removal is noted for the morning report as a finding (the report's kind for
   anything else noticed; a kind of its own would be a change to the report) and refused.
 - **Not covered.** What git itself removes or puts back (`git rm`, `git mv`, a checkout or restore
