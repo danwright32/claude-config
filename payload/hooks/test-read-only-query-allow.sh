@@ -190,6 +190,140 @@ PY
 )"
 check "the settings run the hook for execute_sql, the six read only Salesforce tools and Bash, and nothing else" "$wiring"
 
+# ---- a line the shared reader is unsure of is never approved (claude-config#3472) ----------------
+#
+# The hook reads a Bash command through lib/shell-words.py, which took a # for a comment by a rule
+# the shell does not follow, so a write on the rest of that line was left out of what the hook
+# judged and the call was approved with it (the shapes are test-shell-words-comment-start.sh's,
+# measured against bash and zsh for claude-config#3464). The reader now says which lines it is not
+# sure of to a caller that asks, and reads on where every shell does. So: every shape that hid a
+# write is left to the usual check, what was already left to it still is, and the reads the hook
+# exists for are still approved. Each command here is only ever text in a payload: nothing runs.
+UNSURE_WORK="$(mktemp -d)"
+cat > "$UNSURE_WORK/cases.py" <<'PY'
+import json, os, subprocess, sys
+
+hook, work = sys.argv[1], sys.argv[2]
+R = 'supabase db query --linked "select id from runs"'
+W = 'supabase db query --linked "delete from runs"'
+
+
+def decided(command, cwd):
+    payload = json.dumps({"session_id": "s1", "hook_event_name": "PreToolUse", "cwd": cwd, "tool_name": "Bash",
+                          "tool_input": {"command": command, "description": "d"}})
+    p = subprocess.run(["bash", hook], input=payload.encode(), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    out = p.stdout.decode("utf-8", "replace").strip()
+    if not out:
+        return "none rc=%d" % p.returncode
+    try:
+        d = json.loads(out)
+    except ValueError:
+        return "badjson rc=%d" % p.returncode
+    h = d.get("hookSpecificOutput") if isinstance(d, dict) else None
+    return "%s rc=%d" % ((h or {}).get("permissionDecision", "none"), p.returncode)
+
+
+rows = []
+# Where every shell reads the # inside a word and runs the rest of the line.
+for name, before in (("an escaped space", "\\ "), ("an escaped tab", "\\\t"),
+                     ("three backslashes and a space", "\\\\\\ "), ("an escaped ;", "\\;"),
+                     ("an escaped &", "\\&"), ("an escaped |", "\\|"), ("an escaped (", "\\("),
+                     ("an escaped )", "\\)"), ("a line joined mid word", "\\\n"),
+                     ("a line joined after an escaped space", "\\ \\\n"),
+                     ("a line joined after an escaped ;", "\\;\\\n")):
+    rows.append(("none", "a write on the line of a # after %s" % name, R + " -o json" + before + "# c; " + W + "\n"))
+rows.append(("none", "a write on the line of a # after two lines joined mid word",
+             R + " -o js\\\non\\\n# c; " + W + "\n"))
+# Where the reader cannot tell which the shell does, and names the line.
+rows += [
+    ("none", "a write on the line of a # after a word that ends in a parenthesis", R + " -o a(b)# c; " + W + "\n"),
+    ("none", "a write on the line of a # after a cd to a folder that ends in a parenthesis",
+     "cd /tmp/a(b)# c; " + W + "\n" + R + "\n"),
+    ("none", "a write on the line of a # after a cd and a stray )", "cd /tmp/x)# c; " + W + "\n" + R + "\n"),
+    ("none", "a write on a # line after a comment the reader is unsure of that ends in a backslash",
+     R + " -o a(b)# c\\\n# d; " + W + "\n"),
+]
+# The hidden command is anything at all, and the read may be a dry run or follow a cd.
+rows += [
+    ("none", "a folder removal on the line of a # after a dry run push",
+     "supabase db push --linked --dry-run --workdir here\\ # c; rm -rf supabase/migrations\n"),
+    ("none", "a drop on the line of a # after a cd and a read",
+     "cd /tmp && " + R + " -o json\\ # c; supabase db query --linked \"drop table runs\"\n"),
+]
+# What was left to the usual check before still is.
+rows += [
+    ("none", "a write on the line of a # after a query of a file the command wrote from a heredoc",
+     "cat > %s/hidden.sql <<'SQL'\nselect id from runs;\nSQL\nsupabase db query --linked -f %s/hidden.sql\\\n# c; %s\n"
+     % (work, work, W)),
+    ("none", "a write in plain sight after the read", R + "; " + W + "\n"),
+    ("none", "a write on the line of a # right after a $( )", R + " -o $(echo json)# c; " + W + "\n"),
+    ("none", "a write on the line of a # right after a <( )", R + " -o <(echo json)# c; " + W + "\n"),
+    ("none", "a write on the line of a # right after a $(( ))", R + " -o $((1))# c; " + W + "\n"),
+    ("none", "a write on the line of a # right after an array", R + " x=(a b)# c; " + W + "\n"),
+    ("none", "a write after a # in backquotes", R + " -o `echo json # c `; " + W + "\n`\n"),
+    ("none", "a write alone on a line with a # in it", W + " # c\n"),
+]
+# The reads the hook exists for, a # in them or not, are approved as they were.
+rows += [
+    ("allow", "one read", R),
+    ("allow", "one read that ends in a line break", R + "\n"),
+    ("allow", "one read after a cd", "cd /tmp && " + R + "\n"),
+    ("allow", "a dry run push", "supabase db push --linked --dry-run\n"),
+    ("allow", "a read with a comment after a space, which every shell leaves out", R + " # the runs of last night\n"),
+    ("allow", "a read under a line that is all comment", "# the runs of last night\n" + R + "\n"),
+    ("allow", "a read with a comment after it whose text holds a ;", R + " # c; " + W + "\n"),
+    ("allow", "a read after a cd to a folder with a # inside its name", "cd /tmp/a#b && " + R + "\n"),
+    ("allow", "a read whose statement holds a # in a string",
+     "supabase db query --linked \"select id from runs where note = 'a # b'\"\n"),
+    ("allow", "a query of a file the command wrote from a heredoc",
+     "cat > %s/plain.sql <<'SQL'\nselect id from runs;\nSQL\nsupabase db query --linked -f %s/plain.sql\n" % (work, work)),
+]
+for want, label, command in rows:
+    got = decided(command, work)
+    wanted = want + " rc=0"
+    print("%s\t%s" % ("ok" if got == wanted else "wanted %s, got %s" % (wanted, got),
+                      ("%s is left to the usual check" if want == "none" else "%s is approved") % label))
+
+# The library's own answers: why each kind is not approved, that the reader it was handed reads as
+# it did afterwards, and that a reader with no `unsure` to ask for approves nothing.
+import importlib.util, types
+
+
+def load(name, file):
+    spec = importlib.util.spec_from_file_location(name, os.path.join(os.path.dirname(hook), "lib", file))
+    lib = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(lib)
+    return lib
+
+
+ro, calls, sw = load("ro", "sql-read-only.py"), load("calls", "db-write-calls.py"), load("sw", "shell-words.py")
+reads_as = sw.commands
+facts = []
+got = calls.cli_read_approval(R + " -o json\\ # c; " + W + "\n", work, ro.judge, sw)
+facts.append(("a # the shell reads inside a word is said to be why", got == (False, getattr(calls, "UNREAD_LINE", None)), got))
+got = calls.cli_read_approval(R + " -o a(b)# c; " + W + "\n", work, ro.judge, sw)
+facts.append(("a # that cannot be told from a comment is said to be why", got == (False, getattr(calls, "UNSURE_LINE", None)), got))
+facts.append(("the reader it was handed reads as it did afterwards", sw.commands is reads_as, sw.commands))
+older = types.SimpleNamespace(**{k: getattr(sw, k) for k in dir(sw) if not k.startswith("__")})
+older.commands = lambda s, cwd="", heredocs=None, parts=None, spans=None, comments=None: reads_as(
+    s, cwd, heredocs=heredocs, parts=parts, spans=spans, comments=comments)
+got = calls.cli_read_approval(R, work, ro.judge, older)
+facts.append(("a reader with no unsure to ask for approves not even a plain read",
+              got == (False, getattr(calls, "CANNOT_ASK", None)), got))
+for label, ok, got in facts:
+    print("%s\t%s" % ("ok" if ok else "got %s" % (got,), label))
+print("ran\t%d" % (len(rows) + len(facts)))
+PY
+unsure_rows="$(python3 -B "$UNSURE_WORK/cases.py" "$HOOK" "$UNSURE_WORK" 2>&1)"
+unsure_ran=""
+while IFS=$'\t' read -r verdict label; do
+  if [ "$verdict" = "ran" ]; then unsure_ran="$label"; continue; fi
+  [ -n "$label" ] && check "#3472 $label" "$verdict"
+done <<< "$unsure_rows"
+# A program that stopped early checks nothing and would read as a pass (L288).
+[ "$unsure_ran" = "40" ] && check "#3472 all 40 unsure line cases ran" ok || check "#3472 all 40 unsure line cases ran" "ran: ${unsure_ran:-none}; ${unsure_rows:0:300}"
+rm -rf "$UNSURE_WORK"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
