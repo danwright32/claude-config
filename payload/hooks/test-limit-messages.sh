@@ -206,5 +206,74 @@ out="$(HOME="$H4" python3 "$TOOL" days 2>&1)"; rc=$?
 same "14 the reader exits 0 on a record line holding such a byte" "0" "$rc"
 check "14 the reader prints the day" "Five hour limit: 1 day" "$out"
 
+# 15. A failure while Dan is awake is one plain line on stderr and a non zero exit, never a
+# traceback; while the Mac is asleep it prints nothing at all and leaves a note for the morning
+# report (lib/sleep.sh's sleep_note), Dan's choice on 2026-11-24. Asleep and awake are each a real
+# sleep record in a home of its own, judged by lib/sleep.sh's sleep_active, never a stand in flag.
+BOOT="$(bash -c '. "$1" && sleep_boot_of "$(sysctl -n kern.boottime 2>/dev/null)"' _ "$DIR/lib/sleep.sh")"
+[ -n "$BOOT" ] || BOOT=1   # no sysctl: sleep.sh skips the boot check, so any boot will do
+NOW_MS="$(( $(date +%s) * 1000 ))"
+failure_world() {   # failure_world <name> <asleep|awake> -> sets FH (its home) and FREC (its sleep record)
+  FH="$WORK/fail-$1-$2"; FREC="$FH/.claude/state/sleep/current.json"
+  mkdir -p "$FH/.claude/state/sleep"
+  if [ "$2" = asleep ]; then
+    printf '{"v":1,"generation":"g-test","since":%s,"until":%s,"night":"2026-11-24","bootTime":%s,"report":"%s/r.md","startedBy":{"sessionId":"s0","cwd":"/"},"workers":[],"placeBefore":"home"}\n' \
+      "$((NOW_MS - 60000))" "$((NOW_MS + 3600000))" "$BOOT" "$FH" > "$FREC"
+  fi
+}
+run_failure() {   # run_failure <payload> [tool] -> FOUT, FERR, FRC, in the current world
+  printf '%s' "$1" | HOME="$FH" CLAUDE_SLEEP_RECORD="$FREC" python3 "${2:-$TOOL}" record >"$WORK/f.out" 2>"$WORK/f.err"; FRC=$?
+  FOUT="$(cat "$WORK/f.out")"; FERR="$(cat "$WORK/f.err")"
+}
+notes_of() { cat "$FH/.claude/state/sleep/notes/g-test.jsonl" 2>/dev/null; }
+failures_of() { cat "$FH/.claude/state/limit-messages/failures.jsonl" 2>/dev/null; }
+NOT_OBJECT='[]'
+# A StopFailure on a limit whose wording is a number: a payload no handler foresaw, which once
+# ended in a traceback.
+UNFORESEEN='{"session_id":"s","hook_event_name":"StopFailure","error":"rate_limit","last_assistant_message":5}'
+for path in not-json unwritable not-object unforeseen; do
+  for state in awake asleep; do
+    failure_world "$path" "$state"
+    case "$path" in
+      not-json) payload='not json'; said="was not JSON" ;;
+      unwritable) payload="$STOP_PAYLOAD"; said="could not record a usage limit message"
+        mkdir -p "$FH/.claude/state"; printf 'a file where the folder goes\n' > "$FH/.claude/state/limit-messages" ;;
+      not-object) payload="$NOT_OBJECT"; said="was not a JSON object" ;;
+      unforeseen) payload="$UNFORESEEN"; said="failed unexpectedly" ;;
+    esac
+    run_failure "$payload"
+    same "15 $path $state: nothing on stdout" "" "$FOUT"
+    absent "15 $path $state: never a traceback" "Traceback" "$FERR"
+    if [ "$state" = awake ]; then
+      if [ "$FRC" -ne 0 ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: 15 $path awake exits non zero (exit $FRC)"; fi
+      same "15 $path awake: exactly one line on stderr" "1" "$(printf '%s\n' "$FERR" | grep -c .)"
+      check "15 $path awake: the line names the failure" "$said" "$FERR"
+      same "15 $path awake: no note is written while awake" "" "$(notes_of)"
+    else
+      same "15 $path asleep: nothing on stderr" "" "$FERR"
+      check "15 $path asleep: the failure is a note for the morning report" "$said" "$(notes_of)"
+    fi
+    # Every failure is also kept in the recorder's own failure log, except the one where that log's
+    # folder is the thing that cannot be written.
+    if [ "$path" != unwritable ]; then check "15 $path $state: kept in failures.jsonl" "$said" "$(failures_of)"; fi
+  done
+done
+
+# 16. A normal run while asleep is what it is awake: silent, exit 0, and the message recorded.
+failure_world normal asleep
+run_failure "$STOP_PAYLOAD"
+same "16 asleep normal run exits 0" "0" "$FRC"
+same "16 asleep normal run prints nothing" "" "$FOUT$FERR"
+same "16 asleep normal run records the message" "1" "$(grep -c . "$FH/.claude/state/limit-messages/records.jsonl" 2>/dev/null || true)"
+same "16 asleep normal run writes no note" "" "$(notes_of)"
+
+# 17. A sleep predicate that cannot be asked (lib/sleep.sh not beside the hook) reads as awake, so
+# the failure is printed rather than lost, even under a record that says asleep.
+BARE="$WORK/bare"; mkdir -p "$BARE"; cp "$TOOL" "$BARE/limit-messages.py"
+failure_world no-predicate asleep
+run_failure 'not json' "$BARE/limit-messages.py"
+check "17 no predicate: the failure is printed" "was not JSON" "$FERR"
+if [ "$FRC" -ne 0 ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: 17 no predicate exits non zero (exit $FRC)"; fi
+
 printf 'SUITE-RESULT passed=%d failed=%d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

@@ -474,6 +474,13 @@ headless run or agent), and the account as a key (never a name), read only while
 No conversation text. `hooks/limit-messages.py` writes it from the StopFailure and SubagentStop
 hooks, and its header holds where a limit message can be seen and why.
 
+A normal run prints nothing, awake or asleep, and records the same either way. A run that fails (a
+payload that is not a JSON object, a record it cannot write, anything else) keeps the failure in
+`failures.jsonl` beside the record, which `days` reports. While Dan is awake it also prints one
+plain line saying what failed and exits 1. While the Mac is asleep it prints nothing and leaves the
+failure as a finding in the morning report instead (Dan's choice, 2026-11-24). Whether the Mac is
+asleep is `lib/sleep.sh`'s `sleep_active`, and one that cannot be asked counts as awake.
+
 - `python3 ~/.claude/hooks/limit-messages.py days` prints limit days by kind, in ET, with the reset
   times each day named, so a five hour limit day is never counted with a model limit day.
 - `python3 ~/.claude/hooks/limit-messages.py scan` fills the record from the transcripts still on

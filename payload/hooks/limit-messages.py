@@ -40,14 +40,22 @@ cannot be read the record says so (account null), never a guess from whatever is
 THE RECORD lives at ~/.claude/state/limit-messages/records.jsonl, local to this Mac and never
 synced. Each message is written once, keyed by its transcript line's uuid (a hashed key for one
 taken from the hook's wording), under a lock, so a hook that runs twice or races the backfill adds
-nothing. A record that cannot be written exits 1 with the cause on stderr, and the failure is kept
-in failures.jsonl beside it where that can be written, for the reader to say.
+nothing.
+
+A FAILURE (a payload that is not a JSON object, a record that cannot be written, anything no handler
+foresaw) is kept in failures.jsonl beside the record where that can be written, for the reader to
+say, and then told according to sleep mode, as Dan chose on 2026-11-24. Awake, it is one plain line
+on stderr and exit 1, never a traceback. Asleep (lib/sleep.sh's sleep_active, the one predicate),
+nothing is printed at all: the failure becomes a note for the morning report through sleep_note,
+the one writer of the night's notes, and the hook exits 0 once that note is written (1, still
+silent, when it could not be). A normal run is the same awake or asleep: silent, and it records.
 """
 import fcntl
 import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -334,14 +342,62 @@ def retry_delays():
         return [0.0]
 
 
+# lib/sleep.sh beside this hook: the one sleep predicate (sleep_active) and the one writer of the
+# night's notes (sleep_note), asked through bash since both are shell.
+SLEEP_SH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib", "sleep.sh")
+
+
+def asleep():
+    """Whether the Mac is asleep, by lib/sleep.sh's sleep_active. A predicate that cannot be asked
+    (sleep.sh missing or failing to load, no bash, a timeout) reads as AWAKE, so a failure is printed
+    rather than lost: a line that should not have shown beats a silence nobody can see (L523)."""
+    try:
+        r = subprocess.run(["bash", "-c", '. "$1" && sleep_active', "_", SLEEP_SH],
+                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return r.returncode == 0
+
+
+def note_for_morning(why):
+    """The failure as a finding in the night's notes, through sleep_note. True once written. Its
+    output is kept from Dan's screen: asleep, the hook prints nothing at all."""
+    line = json.dumps({"kind": "finding", "text": "limit-messages: " + why})
+    try:
+        r = subprocess.run(["bash", "-c", '. "$1" && sleep_note "$2"', "_", SLEEP_SH, line],
+                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return r.returncode == 0
+
+
+def failed(why):
+    """Every failure of the record hook ends here: kept in failures.jsonl where that can be written,
+    then one plain line on stderr while awake, or a note for the morning report and silence while
+    asleep."""
+    note_failure(why)
+    if asleep():
+        return 0 if note_for_morning(why) else 1
+    print("limit-messages: " + why, file=sys.stderr)
+    return 1
+
+
 def cmd_record():
+    try:
+        return record_payload()
+    except Exception as e:  # anything no handler foresaw: said in one line, never a traceback
+        return failed("could not record: it failed unexpectedly (%s: %s)" % (type(e).__name__, " ".join(str(e).split())))
+
+
+def record_payload():
     try:
         # Read as bytes: a byte that is not UTF-8 anywhere in the payload (the wording, a path)
         # must not cost the record of the limit itself.
         p = json.loads(sys.stdin.buffer.read().decode("utf-8", errors="replace"))
     except ValueError:
-        print("limit-messages: could not record: the hook payload was not JSON", file=sys.stderr)
-        return 1
+        return failed("could not record: the hook payload was not JSON")
+    if not isinstance(p, dict):
+        return failed("could not record: the hook payload was not a JSON object")
     event = p.get("hook_event_name")
     if event == "SubagentStop":
         path, error, said = p.get("agent_transcript_path"), None, None
@@ -375,10 +431,7 @@ def cmd_record():
                 who = "agent" if p.get("agent_id") else "session"
                 st.add([build(now, said or "", None, who, p.get("session_id"), rid, "hook message", error)])
     except OSError as e:
-        why = "could not record a usage limit message in %s: %s" % (record_dir(), e)
-        note_failure(why)
-        print("limit-messages: " + why, file=sys.stderr)
-        return 1
+        return failed("could not record a usage limit message in %s: %s" % (record_dir(), e))
     return 0
 
 
