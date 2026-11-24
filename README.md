@@ -1806,8 +1806,9 @@ A lesson entry added to `~/.claude/LESSONS.md` goes to the lesson picker, where 
 and its SHORT line. A pull request that edits a checkout's `payload/LESSONS.md` reached the same
 file on both Macs at the next pull with nothing shown to him, so `lessons-merge-gate.sh`
 (claude-config#3343; Dan, 2026-11-20: "Guard the merge") holds its merge until he has answered for
-exactly that change. It reads the file at the pull request's merge base and at its head and finds
-the entries added, changed (any line of one, a rule wrapped another way included), removed, or
+exactly that change. It reads the file at the pull request's merge base and at its head (at the
+pinned commit when the merge names a whole one, since that is what GitHub would merge, and then
+whatever the file list says) and finds the entries added, changed (any line of one, a rule wrapped another way included), removed, or
 moved to another section. Text above the first section, blank lines and the order of entries or
 sections are no entry's change and are never asked about. The refusal names one picker (metadata
 `source` `lesson-merge`, the repository, the number and a sha256 of the change) and the lines its
@@ -1822,7 +1823,9 @@ read again from GitHub, gives the sha256 it named and the question held every li
 an answer for another pull request, or one given before a push changed an entry, covers nothing.
 Asleep he is not asked: the refusal says the merge waits. An entry whose rule a picker would draw
 as less than its text names no picker until the entry is reworded. The sync's own send is a push,
-never a pull request, so it never meets the gate. There is no override. What it cannot see: a
+never a pull request, so it never meets the gate. A file list naming the file while GitHub returns
+it at neither commit, and a shortened pin that does not start the head, are refused rather than
+read as untouched. There is no override. What it cannot see: a
 merge made on GitHub's own page or app or in a terminal Dan types in, a push straight to main, a
 head pushed after `gh pr merge --auto` was typed, and a line written into the record by an Edit or
 a script (a shell command naming the record's folder is refused). The rule is
@@ -3265,6 +3268,21 @@ beside `block-red-merge.sh`, which reads the same pull request
 timed from outside and so including a python start of about 0.02 seconds; it leaves before loading
 anything on a command naming no merge. On a merge, two GitHub reads: the pull request's title,
 description and commits, and the scanner at its base commit
+
+</td></tr>
+<tr><td>
+
+`lessons-merge-gate.sh` (#3343)
+
+</td><td>
+
+2026-11-24: 0.006 seconds on `git status`, five readings at load average 11 to 19, timed from
+outside; it leaves before loading anything on a command with no `merge` word. 0.075 to 0.082
+seconds on `git push -u origin fix/3343-guard-the-merge-lessons`, whose branch name holds the word
+and so loads the shared reader to find no merge. On a merge, through the real gh: about 1 second for
+claude-config #3367, which leaves the lessons file alone (one read, the pull request's file list);
+about 3 seconds for #1598, which changes 51 entries (four reads: the file list, the merge base and
+the file at both commits)
 
 </td></tr>
 <tr><td>

@@ -246,9 +246,29 @@ expect_allow "starting the merge helper is not refused"
 expect_calls "and reads nothing from GitHub" 0
 if [ "$(wc -l < "$RECORD/answers.jsonl" 2>/dev/null | tr -d ' ')" = 1 ]; then pass; else fail "starting the helper keeps his answer on the record: $(ls "$RECORD" 2>&1)"; fi
 
-# A pin that is not the head GitHub shows.
-run_hook "$MERGE 7 --squash --match-head-commit dddddddddddddddddddddddddddddddddddddddd"
-expect_deny "a merge pinned to another commit than the head judged is refused" "pinned to"
+# A merge pinned to a whole commit is judged at that commit, which is what GitHub would merge,
+# whatever head GitHub's view shows (it can show the last one late, and the helper pins the head it
+# read itself). Its file list is the head's, so it cannot say the pinned commit leaves the file alone.
+PIN_SHA="dddddddddddddddddddddddddddddddddddddddd"
+lessons "$WORK/gh/blob-$PIN_SHA" add:900 add:901
+run_hook "$MERGE 7 --squash --match-head-commit $PIN_SHA"
+expect_deny "a merge pinned to another commit than the head is judged at the pinned commit" "2 entries added (L900, L901)."
+pr_json 7 2 "README.md:MODIFIED" "docs/x.md:MODIFIED"
+run_hook "$MERGE 7 --squash --match-head-commit $PIN_SHA"
+expect_deny "the head's file list leaving the file alone does not clear a pinned commit that changes it" "2 entries added (L900, L901)."
+lessons "$WORK/gh/blob-$PIN_SHA" add:900
+run_hook "$MERGE 7 --squash --match-head-commit $PIN_SHA"
+expect_allow "a pinned commit whose change he answered for merges"
+pull add:900
+run_hook "$MERGE 7 --squash --match-head-commit ddddddd"
+expect_deny "a shortened pin that is not the start of the head is refused" "pinned to ddddddd"
+run_hook "$MERGE 7 --squash --match-head-commit a111111"
+expect_allow "a shortened pin that starts the head is judged at the head"
+
+# The file list names the lessons file, yet GitHub has it at neither commit: refused, never untouched.
+rm -f "$WORK/gh/blob-$MB_SHA" "$WORK/gh/blob-$HEAD_SHA"
+run_hook "$MERGE 7 --squash"
+expect_deny "a lessons file the list names but GitHub has at neither commit is refused" "names payload/LESSONS.md as changed"
 
 # --- an answer for another change does not count ---------------------------------------------------
 fresh; pull add:900

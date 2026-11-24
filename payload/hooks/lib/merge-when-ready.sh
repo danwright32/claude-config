@@ -249,7 +249,7 @@
 # and why), and the commands and scripts it runs, each honoured only with
 # HOOK_TESTS_RUNNING=1 (claude-config#2231, #2317, #2399, see mwr_script): MWR_SLEEP (sleep), MWR_RED_GATE, MWR_REVIEW_GATE,
 # MWR_CHANGELOG_GATE, MWR_DESIGN_GATE, MWR_VERIFY_GATE, MWR_CLOSING_GATE, MWR_WORK_NAMES_GATE,
-# MWR_REVIEW_LIB, MWR_WORKTREE_CHECK (the check that judges the merged branch's agent worktree),
+# MWR_LESSONS_GATE, MWR_REVIEW_LIB, MWR_WORKTREE_CHECK (the check that judges the merged branch's agent worktree),
 # MWR_UNTESTED_RUNNER (the runner the untested suites are run by, the head's own run-all-tests.sh).
 #
 # AFTER A MERGE THAT LANDED it removes the merged branch's agent worktree when
@@ -2793,6 +2793,11 @@ EOF_VIEW
     if ! why="$(ask_gate "$WORK_NAMES_GATE" "$(merge_text "$head")")"; then
       stop 1 "Stopped: check-work-names-merge.sh refused the merge of #$pr before any wait: $why Nothing was merged; run this again once that is dealt with."
     fi
+    # A change to lesson entries Dan has not answered for, asked before any wait so a merge waiting
+    # on his answer is known at once rather than after a check run (claude-config#3343, L667).
+    if ! why="$(ask_gate "$LESSONS_GATE" "$(merge_text "$head")")"; then
+      stop 1 "Stopped: lessons-merge-gate.sh refused the merge of #$pr before any wait: $why Nothing was merged; run this again once that is dealt with."
+    fi
   fi
 
   # Based on a branch that is not the default one: wait for that branch to merge, with no place in
@@ -3007,6 +3012,11 @@ EOF_VIEW
   # (claude-config#1995).
   if ! why="$(ask_gate "$WORK_NAMES_GATE" "$cmd")"; then
     stop 1 "Stopped: check-work-names-merge.sh refused the merge of #$pr at ${head:0:7}: $why"
+  fi
+  # Asked again here because a push while this waits can change a lesson entry, and his answer
+  # covers only the change he read (claude-config#3343).
+  if ! why="$(ask_gate "$LESSONS_GATE" "$cmd")"; then
+    stop 1 "Stopped: lessons-merge-gate.sh refused the merge of #$pr at ${head:0:7}: $why"
   fi
   # A pull request whose closing keywords name a Match the settled design issue merges only at 100% on
   # both halves of the design match score at this head (claude-config#1364).

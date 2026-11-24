@@ -234,13 +234,21 @@ if [ -z "$number" ] || [ -z "$base_oid" ] || [ -z "$head_oid" ] || [ -z "$api_sl
   deny "$WHAT: GitHub's answer about the pull request named no number, base commit, head commit or repository, so what it changes cannot be read."
 fi
 
-# The entries judged are the head's. A merge pinned to another commit would merge entries nobody
-# judged, or be refused by GitHub; either way this cannot say yes to it.
+# The entries judged are those at the commit that would merge. A merge pinned to a whole commit
+# merges that commit or nothing (GitHub refuses one whose head is not it), so that commit is judged,
+# whatever head GitHub's view shows: the view can show a pushed head late, and merge-when-ready.sh
+# pins the head it read itself, so refusing every difference would stop the helper on a stale view.
+# The view's file list is about its own head, so with a pinned commit that is not it the list cannot
+# say the file is untouched. A shortened pin that does not start the head names a commit this gate
+# cannot read by that name, so it refuses.
+judged_oid="$head_oid"; judged_words="the head"
 if [ -n "${MT_PIN_SHA:-}" ]; then
   pin="$(printf '%s' "$MT_PIN_SHA" | tr 'A-F' 'a-f')"
   case "$head_oid" in
     "$pin"*) ;;
-    *) deny "Refusing to merge PR #$number: the merge is pinned to $pin, and the pull request's head on GitHub is $head_oid, so the lesson entries that would merge are not the ones this gate can read. Merge the head GitHub shows, or wait for it to show the pinned commit." ;;
+    *)
+      [ "${#pin}" = 40 ] || deny "Refusing to merge PR #$number: the merge is pinned to $pin, which is shortened and does not start the pull request's head on GitHub ($head_oid), so the commit that would merge cannot be read to judge its lesson entries. Pin the whole commit, or the head GitHub shows."
+      judged_oid="$pin"; judged_words="the pinned commit" ;;
   esac
 fi
 
@@ -253,6 +261,7 @@ touch=$(printf '%s' "$view" | jq -r --arg p "$LESSONS_PATH" '
   elif .changedFiles > (.files | length) then "maybe"
   elif all(.files[]; (.changeType // "") as $t | ["MODIFIED", "ADDED", "DELETED", "CHANGED"] | index($t)) then "no"
   else "maybe" end' 2>/dev/null)
+[ "$judged_oid" = "$head_oid" ] || touch=maybe
 [ "$touch" = no ] && exit 0   # the commonest answer: one read, and nothing asked
 
 SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/lessons-gate.XXXXXX") \
@@ -280,12 +289,12 @@ must_read(){  # $1 = what is being read, in words ; the answer lands in $api_out
 }
 
 # The merge base: what the pull request changes is measured from where its branch left the base.
-api_out="$SCRATCH/mergebase"; api_args=(--jq '.merge_base_commit.sha // ""' "repos/$api_slug/compare/$base_oid...$head_oid")
+api_out="$SCRATCH/mergebase"; api_args=(--jq '.merge_base_commit.sha // ""' "repos/$api_slug/compare/$base_oid...$judged_oid")
 must_read "the merge base of PR #$number in $api_slug"
 merge_base="$(tr -d '[:space:]' < "$SCRATCH/mergebase" 2>/dev/null)"
 case "$merge_base" in *[!0-9a-f]*) merge_base="" ;; esac
 if [ "$MT_READ_STATE" != ok ] || [ "${#merge_base}" != 40 ]; then
-  deny "$WHAT: GitHub's comparison of $base_oid and $head_oid in $api_slug named no merge base (${MT_READ_ERR:-it answered without one}), so what PR #$number changes in $LESSONS_PATH cannot be measured."
+  deny "$WHAT: GitHub's comparison of $base_oid and $judged_oid in $api_slug named no merge base (${MT_READ_ERR:-it answered without one}), so what PR #$number changes in $LESSONS_PATH cannot be measured."
 fi
 
 # The lessons file at a commit. gh's own 404 is a file that is not there, which reads as a file
@@ -301,12 +310,14 @@ lessons_at(){  # $1 = commit, $2 = where to put it, $3 = in words
   [ "$size" -le "$MAX_BYTES" ] || deny "$WHAT: $LESSONS_PATH at $3 $1 of $api_slug is $size bytes, more than the $MAX_BYTES bytes this gate reads, so the entries PR #$number changes in it were not compared. That is this gate's limit, not a verdict on the pull request."
 }
 lessons_at "$merge_base" "$SCRATCH/base.md" "the merge base"
-lessons_at "$head_oid" "$SCRATCH/head.md" "the head"
+lessons_at "$judged_oid" "$SCRATCH/head.md" "$judged_words"
 
-# The same bytes, or absent at both: the pull request does nothing to the file.
+# The same bytes, or absent at both: the pull request does nothing to the file. Absent at both while
+# its own file list names the file as changed is GitHub's two answers disagreeing, and refuses.
 if [ -f "$SCRATCH/base.md" ] && [ -f "$SCRATCH/head.md" ]; then
   cmp -s "$SCRATCH/base.md" "$SCRATCH/head.md" && exit 0
 elif [ ! -f "$SCRATCH/base.md" ] && [ ! -f "$SCRATCH/head.md" ]; then
+  [ "$touch" = yes ] && deny "$WHAT: GitHub's file list for PR #$number names $LESSONS_PATH as changed, yet GitHub returned no such file at the merge base $merge_base or at $judged_words $judged_oid, so what changes in it cannot be read."
   exit 0
 fi
 
