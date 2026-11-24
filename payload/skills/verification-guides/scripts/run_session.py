@@ -38,7 +38,10 @@ the drive helper run under a sandbox profile that reports every connection to a 
 machine, and the receipt lists each destination seen with its count, judged against areas.json's
 egress.allow. The verdict is `clean` only when the monitor was proved live from before serve
 started until after it stopped and nothing outside the allowed hosts was reached; `not-clean`
-names what was; `unmeasured` says why the monitor could not see, and never passes for clean.
+names what was; `unmeasured` says why the monitor could not see, and never passes for clean. Drive
+calls run under a second profile that also refuses one kind of connection, the helper browser's UDP
+connect to port 443 off this machine, and the receipt counts each refusal in `egress.refused`
+(#3319).
 
 Env: VERIFICATION_HOME (see verification.py). Two injectable clocks (L524), each a number of at
 least 0 that multiplies seconds, default 1: VERIFICATION_TIME_SCALE scales every poll delay (the
@@ -362,7 +365,10 @@ def supervise(rdir, repo_lock_fd, pipe_w):
         monitor = egress.Monitor(rdir, rec["receipt_id"], doc["egress"]["allow"], doc["timeouts"]["egress_s"])
         unavailable = monitor.start()
         wrap = None if unavailable else [monitor.sandbox, "-f", monitor.profile]
-        update_receipt(rdir, egress_sandbox=wrap,
+        # Drive calls get a profile of their own: serve's, and the one refusal egress.py describes
+        # (the helper browser's UDP connect to port 443 off this machine, claude-config#3319).
+        drive_wrap = None if unavailable else [monitor.sandbox, "-f", monitor.drive_profile]
+        update_receipt(rdir, egress_sandbox=wrap, egress_drive_sandbox=drive_wrap,
                        egress_monitor_pgid=None if unavailable else monitor.proc.pid)
         if v.serves(doc):
             log = open(os.path.join(rdir, "serve.log"), "ab")
@@ -520,7 +526,7 @@ def start(repo, sha, areas_csv):
                        stop_command_exit=None, worktree=wt, worktree_removed=False, supervisor_pid=None,
                        serve_pid=None, serve_pgid=None, build_stamp=None, build_stamp_source="none",
                        egress={"verdict": "unmeasured", "why": EGRESS_WHY}, egress_sandbox=None,
-                       egress_monitor_pgid=None, drives="drives.jsonl")
+                       egress_drive_sandbox=None, egress_monitor_pgid=None, drives="drives.jsonl")
         git(repo, "worktree", "add", "--detach", wt, sha)
         checkout = git(wt, "rev-parse", "HEAD").stdout.strip()
         update_receipt(rdir, checkout_sha=checkout)
@@ -611,9 +617,12 @@ def drive(rid, area, args):
     env.pop("VERIFICATION_URL", None)  # set only when this run serves, never inherited (claude-config#2951)
     if rec.get("url"):
         env["VERIFICATION_URL"] = rec["url"]
-    # Under the same reporting sandbox as serve, so the run's egress verdict covers the drive helper
-    # too. None when the monitor could not start, and then the verdict is already unmeasured.
-    wrap = rec.get("egress_sandbox") or []
+    # Under the reporting sandbox, so the run's egress verdict covers the drive helper too: the drive
+    # profile, which reports as serve's does and also refuses the helper browser's UDP connect to port
+    # 443 off this machine (claude-config#3319). A run whose supervisor predates that profile recorded
+    # only serve's, and its drive calls keep running under that. None when the monitor could not
+    # start, and then the verdict is already unmeasured.
+    wrap = rec.get("egress_drive_sandbox") or rec.get("egress_sandbox") or []
     r = subprocess.run(list(wrap) + ["/bin/sh", "-c", doc["commands"]["drive"] + ' "$@"', "sh"] + list(args),
                        cwd=rec["worktree"], env=env)
     line = json.dumps({"at": v.utc_now(), "area": area, "args": list(args), "exit": r.returncode}) + "\n"

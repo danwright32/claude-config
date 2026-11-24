@@ -31,10 +31,35 @@ def report(pid, port, tag, process="node", dupes=None):
     return json.dumps({"eventMessage": msg}).encode() + b"\n"
 
 
+def refusal(pid, tag, process="chrome-headless-shell", port=443, dupes=None):
+    """The kernel's line for a connection the sandbox refused, as macOS 26.6 writes it (measured for
+    claude-config#3319): the word deny where a report says allow, and the message of the rule."""
+    msg = "Sandbox: %s(%d) deny(1) network-outbound remote:*:%d\n%s" % (process, pid, port, tag)
+    if dupes:
+        msg = "%d duplicate reports for %s" % (dupes, msg)
+    return json.dumps({"eventMessage": msg}).encode() + b"\n"
+
+
+def canary_runs(**said):
+    """A subprocess.run for rounds of canaries. Each of a round's three processes says what the kernel
+    did with its connect, and is known here by the profile it was started under. The default is what
+    a working sandbox does; a keyword changes one part's answer."""
+    words = {"serve": "passed", "drive": "passed", "refusal": "refused"}
+    words.update(said)
+
+    def run(cmd, **kw):
+        with open(cmd[2]) as f:
+            text = f.read()
+        part = "refusal" if '"^/"' in text else "drive" if "chrome-headless-shell" in text else "serve"
+        return egress.subprocess.CompletedProcess(cmd, 0, "%s\n500\n" % words[part], "")
+    return run
+
+
 class FakeStream:
     def __init__(self, lines):
         self.stdout = io.BytesIO(b"".join(lines))
         self.pid = 0
+        self.returncode = 0
 
     def poll(self):
         return 0
@@ -127,6 +152,222 @@ class ReaderAndJudgment(unittest.TestCase):
         self.assertIn("before the egress monitor had proved", out["why"])
 
 
+class Refusals(unittest.TestCase):
+    """The one connection the sandbox refuses (claude-config#3319): a UDP connect to port 443 off this
+    machine by the helper browser a drive call starts. A refusal is written into the record, counted
+    apart from a connection that left, and never hides one. The same rules against a real sandbox,
+    and a real browser, are EgressTests in test_run_session.py."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.m = egress.Monitor(self.tmp.name, RID, list(v.EGRESS_LOCAL_HOSTS), 30)
+        # A case here that fails after a monitor really started must not leave its report stream
+        # running: the red run of these cases left one behind for 23 minutes.
+        self.addCleanup(self.m.stop_stream)
+        self.refused_tag = self.m.tag + "-refused"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def read(self, lines, names=None):
+        self.m.proc = FakeStream(lines)
+        with mock.patch.object(self.m, "_name", side_effect=lambda pid, port: ((names or {}).get(pid, []), None)):
+            self.m._read()
+
+    def events(self, kind):
+        with open(self.m.events_path) as f:
+            return [e for e in map(json.loads, f) if e.get("event") == kind]
+
+    def test_a_refused_probe_is_recorded_and_counted_and_the_run_is_clean(self):
+        self.read([refusal(700, self.refused_tag), refusal(701, self.refused_tag, dupes=2)])
+        out = self.m.judge()
+        self.assertEqual(out["verdict"], "clean", out)
+        self.assertEqual((out["destinations"], out["unnamed"]), ([], []))
+        self.assertEqual(out["refused"], [{"process": "chrome-headless-shell", "port": 443, "reports": 3,
+                                           "pids": [700, 701], "by_the_rule": True}])
+        self.assertIn("chrome-headless-shell UDP port 443 (3 reports)", out["why"])
+        self.assertIn("refused", out["why"])
+        written = self.events("refused")
+        self.assertEqual([(e["pid"], e["process"], e["port"], e["count"]) for e in written],
+                         [(700, "chrome-headless-shell", 443, 1), (701, "chrome-headless-shell", 443, 2)])
+        self.assertEqual(self.events("report"), [], "a refusal must never be written as a connection that left")
+
+    def test_a_run_with_no_refusal_says_so_with_an_empty_list(self):
+        self.read([])
+        out = self.m.judge()
+        self.assertEqual((out["verdict"], out["refused"]), ("clean", []))
+        self.assertNotIn("refused", out["why"])
+
+    def test_a_refusal_never_hides_a_connection_that_left(self):
+        # The same browser, the same port: the probe was refused (UDP), and a TCP connection to port
+        # 443 was reported and had closed before lsof read it. The second one left this machine.
+        self.read([refusal(710, self.refused_tag),
+                   report(710, 443, self.m.tag, process="chrome-headless-shell"),
+                   report(710, 8443, self.m.tag, process="chrome-headless-shell")], {710: []})
+        out = self.m.judge()
+        self.assertEqual(out["verdict"], "not-clean", out)
+        self.assertEqual([(u["process"], u["port"], u["reports"]) for u in out["unnamed"]],
+                         [("chrome-headless-shell", 443, 1), ("chrome-headless-shell", 8443, 1)])
+        self.assertEqual([(r["port"], r["reports"]) for r in out["refused"]], [(443, 1)])
+        self.assertIn("chrome-headless-shell port 443 (1 report): closed before it could be read", out["why"])
+        self.assertEqual((len(self.events("refused")), len(self.events("report"))), (1, 2))
+
+    def test_a_named_outside_connection_by_the_browser_is_still_not_clean(self):
+        self.read([refusal(711, self.refused_tag), report(711, 8080, self.m.tag, process="chrome-headless-shell")],
+                  {711: ["192.0.2.1"]})
+        out = self.m.judge()
+        self.assertEqual(out["verdict"], "not-clean", out)
+        self.assertEqual([(d["address"], d["port"]) for d in out["destinations"]], [("192.0.2.1", 8080)])
+
+    def test_a_refusal_the_one_rule_could_not_have_produced_is_never_clean(self):
+        # The profile holds one refusal, for one executable name and one port. A refusal carrying this
+        # run's tag for anything else means the sandbox is refusing something nobody chose.
+        for process, port in (("node", 443), ("chrome-headless-shell", 80)):
+            with self.subTest(process=process, port=port):
+                m = egress.Monitor(tempfile.mkdtemp(dir=self.tmp.name), RID, list(v.EGRESS_LOCAL_HOSTS), 30)
+                m.proc = FakeStream([refusal(720, m.tag + "-refused", process=process, port=port)])
+                m._read()
+                out = m.judge()
+                self.assertEqual(out["verdict"], "not-clean", out)
+                self.assertEqual([(r["process"], r["port"], r["by_the_rule"]) for r in out["refused"]],
+                                 [(process, port, False)])
+                self.assertIn("%s port %d (1 report)" % (process, port), out["why"])
+                self.assertIn("could not have produced", out["why"])
+
+    def test_another_runs_refusals_are_not_counted(self):
+        self.read([refusal(730, "vg-egress-20261023T230000Z-7654321-fedcba-refused")])
+        out = self.m.judge()
+        self.assertEqual((out["verdict"], out["refused"]), ("clean", []))
+
+    def test_a_refusal_line_never_counts_as_a_report_and_a_report_never_as_a_refusal(self):
+        # The kernel's own word decides which it was, and the tag must agree with it.
+        allow_with_refused_tag = report(740, 443, self.refused_tag, process="chrome-headless-shell")
+        deny_with_report_tag = refusal(741, self.m.tag)
+        self.read([allow_with_refused_tag, deny_with_report_tag])
+        self.assertEqual((self.m.reports, self.m.refusals), ([], []))
+
+    def test_only_drive_calls_get_the_rule_and_it_names_only_the_helper_browser(self):
+        serve, drive = egress.profile_text("T"), egress.drive_profile_text("T")
+        self.assertNotIn("deny", serve)
+        self.assertTrue(drive.startswith(serve), drive)
+        self.assertEqual(drive[len(serve):].splitlines(), [
+            '(deny network-outbound (require-all (process-path-regex "/chrome-headless-shell$")'
+            ' (remote udp "*:443")) (with message "T-refused"))',
+            '(allow network-outbound (require-all (process-path-regex "/chrome-headless-shell$")'
+            ' (remote udp "localhost:443")))'])
+
+    def test_the_monitor_writes_both_profiles_or_does_not_start(self):
+        real_open = open
+
+        def no_drive_profile(path, *a, **kw):
+            if str(path).endswith("egress-drive.sb"):
+                raise OSError(28, "No space left on device")
+            return real_open(path, *a, **kw)
+
+        with mock.patch.object(egress.sys, "platform", "darwin"), \
+                mock.patch.object(egress.os, "access", return_value=True), \
+                mock.patch("builtins.open", side_effect=no_drive_profile):
+            why = self.m.start()
+        self.assertIn("No space left on device", why or "")
+        out = self.m.finish()
+        self.assertEqual(out["verdict"], "unmeasured", out)
+        self.assertIn("No space left on device", out["why"])
+
+    def test_a_canary_the_sandbox_did_not_refuse_cannot_prove_the_monitor(self):
+        # One canary tries the refused kind of connection under the rule aimed at itself. One that
+        # got through means the sandbox here does not apply the rule, so the monitor must not start.
+        with mock.patch.object(egress.subprocess, "run", side_effect=canary_runs(refusal="passed")):
+            with self.assertRaises(egress.Unavailable) as caught:
+                self.m._fire_canary()
+        self.assertIn("did not refuse", str(caught.exception))
+
+    def test_a_drive_profile_that_refuses_another_program_cannot_prove_the_monitor(self):
+        # One canary runs under the exact profile of drive calls as a program that is not the helper
+        # browser. Refused there, the rule reaches further than the one executable it names.
+        with mock.patch.object(egress.subprocess, "run", side_effect=canary_runs(drive="refused")):
+            with self.assertRaises(egress.Unavailable) as caught:
+                self.m._fire_canary()
+        self.assertIn("the profile of drive calls", str(caught.exception))
+        self.assertIn("more would be refused", str(caught.exception))
+
+    def a_round_missing(self, ending):
+        """The verdict of a run whose every round of canaries arrives but for the message that ends so."""
+        m = egress.Monitor(self.tmp.name, RID, list(v.EGRESS_LOCAL_HOSTS), 0.3)
+        fire = m._fire_canary
+
+        def all_but_one():
+            want = fire()
+            self.assertEqual(len([w for w in want if w.endswith(ending)]), 1, want)
+            m.canaries_seen.update(w for w in want if not w.endswith(ending))
+            return want
+
+        with mock.patch.object(egress.subprocess, "run", side_effect=canary_runs()), \
+                mock.patch.object(m, "_fire_canary", side_effect=all_but_one):
+            self.assertFalse(m._canary_seen())
+            m.started_at = v.utc_now()
+            out = m.finish()
+        self.assertEqual(out["verdict"], "unmeasured", out)
+        return out["why"]
+
+    def test_a_canary_whose_refusal_never_reaches_the_record_is_not_proof(self):
+        why = self.a_round_missing("-self-refused")
+        self.assertIn("the record of the connection the sandbox refused it", why)
+
+    def test_a_canary_the_drive_profile_let_through_unreported_is_not_proof(self):
+        # Measured on macOS 26.6.2: one line fewer in the profile and another program's UDP connect
+        # to port 443 is let through with no report. Every run proves that did not happen to it.
+        why = self.a_round_missing("-drive")
+        self.assertIn("its report under the profile of drive calls", why)
+
+    def test_a_round_whose_lines_arrive_after_the_next_was_fired_still_counts(self):
+        # A round needs three lines where the canary used to need one, and a loaded Mac delivers them
+        # late. A round fired by this wait is proof whenever it becomes whole, never thrown away for
+        # the retry that followed it. (A round from an earlier wait never counts: CanaryIdentity.)
+        m = egress.Monitor(self.tmp.name, RID, list(v.EGRESS_LOCAL_HOSTS), 2)
+        fire, fired = m._fire_canary, []
+
+        def late():
+            fired.append(fire())
+            if len(fired) == 2:
+                m.canaries_seen.update(fired[0])  # the first round's lines, arriving only now
+            return fired[-1]
+
+        with mock.patch.object(egress.subprocess, "run", side_effect=canary_runs()), \
+                mock.patch.object(egress, "CANARY_RETRY_S", 0.05), \
+                mock.patch.object(m, "_fire_canary", side_effect=late):
+            self.assertTrue(m._canary_seen())
+        self.assertEqual(len(fired), 2)
+
+    def test_a_whole_round_of_canaries_is_proof_and_none_of_it_is_the_runs(self):
+        m = egress.Monitor(self.tmp.name, RID, list(v.EGRESS_LOCAL_HOSTS), 5)
+        m.proc = FakeStream([report(750, 9, m.canary_tag + "-1", process="Python"),
+                             report(751, 443, m.canary_tag + "-1-drive", process="Python"),
+                             refusal(752, m.canary_tag + "-1-self-refused", process="Python")])
+        m._read()
+        m.stream_ended = False
+        with mock.patch.object(egress.subprocess, "run", side_effect=canary_runs()):
+            self.assertTrue(m._canary_seen())
+        out = m.judge()
+        self.assertEqual((out["verdict"], out["refused"], out["unnamed"]), ("clean", [], []))
+
+    def test_a_refusal_that_cannot_be_written_into_the_record_is_unmeasured(self):
+        real_event = self.m._event
+
+        def full_disk(obj):
+            if obj.get("event") == "refused":
+                raise OSError(28, "No space left on device")
+            return real_event(obj)
+
+        self.m.proc = FakeStream([refusal(760, self.refused_tag)])
+        with mock.patch.object(self.m, "_event", side_effect=full_disk):
+            self.m._read()
+            self.m.started_at = v.utc_now()
+            with mock.patch.object(egress.subprocess, "run", side_effect=canary_runs()):
+                out = self.m.finish()
+        self.assertEqual(out["verdict"], "unmeasured", out)
+        self.assertIn("No space left on device", out["why"])
+
+
 class ExitStatuses(unittest.TestCase):
     """A tool that failed is a failure to read, never an answer (L184)."""
 
@@ -180,9 +421,8 @@ class CanaryIdentity(unittest.TestCase):
         # no report of the end canary arrives. The end must not count as proved (the #1571 review).
         with tempfile.TemporaryDirectory() as tmp:
             m = egress.Monitor(tmp, RID, list(v.EGRESS_LOCAL_HOSTS), 0.3)
-            ran = egress.subprocess.CompletedProcess(["canary"], 0, "500\n", "")
-            with mock.patch.object(egress.subprocess, "run", return_value=ran):
-                m.canaries_seen.add(m._fire_canary())  # the start canary, seen
+            with mock.patch.object(egress.subprocess, "run", side_effect=canary_runs()):
+                m.canaries_seen.update(m._fire_canary())  # the start canary's whole round, seen
                 self.assertFalse(m._canary_seen())
             self.assertGreater(m.canaries_fired, 1)
             with open(m.canary_profile) as f:

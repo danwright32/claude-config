@@ -12,8 +12,23 @@ How, and why this way (measured on macOS 26 without a password, 2026-10-23; see 
   * serve and the drive helper run under `sandbox-exec` with a profile that ALLOWS every outbound
     connection but asks the kernel to REPORT each one whose remote is not localhost, tagged with
     this run's id. A sandbox is inherited by every descendant whatever its process group or
-    session, so a child that daemonizes is still seen, and nothing is blocked: the app behaves as
-    it would anywhere else.
+    session, so a child that daemonizes is still seen. Serve's profile blocks nothing: the app
+    behaves as it would anywhere else.
+  * ONE kind of connection is refused, in the profile of drive calls only (claude-config#3319,
+    Dan's decision of 2026-11-24): a UDP connect to port 443 on any address but this machine's
+    loopback, by a process whose executable file is named chrome-headless-shell, the helper
+    browser the drive helpers start. Before its first address lookup that browser asks whether a
+    fixed public IPv6 address could be reached, with a UDP connect that sends no packet and is
+    closed before lsof can read it, so every run with a browser was not clean. Refused, the
+    attempt never leaves, so `clean` still means nothing left this machine for a host outside
+    the allowed ones. Each refusal is
+    reported by the kernel with a message of its own, written into the record as an event of its
+    own (`refused`, never `report`) and counted in the receipt's `refused`, apart from every
+    connection that left. Nothing else is refused: the same browser on TCP, or on UDP to any other
+    port, is reported as before, and so is every other program and all of serve, an executable of
+    the same name included. A page that would use HTTP/3 (which is UDP on port 443) falls back to
+    HTTP over TCP, which is reported. A refusal carrying this run's tag that the rule could not
+    have produced (another process name, another port) makes the run not clean.
   * The reports are read live with `log stream`, which needs no root. They name the process and
     the port but spell the address as `*`, so each report is NAMED by reading that process's open
     sockets with `lsof` the moment it arrives. A connection that closed before then, or whose
@@ -26,6 +41,15 @@ How, and why this way (measured on macOS 26 without a password, 2026-10-23; see 
     monitor counts as started only once the start canary's report arrives, and the run's verdict
     counts only once an end canary, fired after serve's whole process group is gone, has arrived.
     Anything less is `unmeasured` with the reason, never `clean` (L1, L98, L557).
+  * Each canary is a round of three processes (CANARY_PARTS), because what a compiled profile
+    reports cannot be read off its text (see refusal_rule). One runs under serve's profile, as the
+    canary always did. One runs under the exact profile of drive calls and tries the refused kind
+    of connection as a program that is not the helper browser: it must be let through AND
+    reported, or that profile hides or refuses more than the one connection chosen. One runs
+    under the refusal rule aimed at itself: it must be refused, and the refusal must reach the
+    report stream. A round counts only when all three arrived. Anything less is `unmeasured` and
+    says which part was missing. A refusal that cannot be written into the record stops the
+    reader, and the run is `unmeasured` with that error.
 
 Options measured and rejected: `nettop` and `lsof -i` sampling miss a connection that opens and
 closes between samples (nettop, one second apart, missed a whole TCP connection to 1.0.0.1:80 by
@@ -62,18 +86,35 @@ CANARY_RUN_MAX_S = 30  # one canary process, which a loaded Mac can take seconds
 
 
 def finish_budget_s(egress_s):
-    """The longest Monitor.finish can take: canaries until egress_s, the last one started just before
-    it and running its whole limit, then stopping the stream and joining its reader (which may be in
-    the middle of one lsof). Whoever waits for a supervisor's stop adds this (the #1571 review)."""
-    return egress_s + CANARY_RUN_MAX_S + 3 * STREAM_STOP_S
-CANARY = ("import os, socket\n"
+    """The longest Monitor.finish can take: canaries until egress_s, the last round started just before
+    it and each of its processes running its whole limit, then stopping the stream and joining its
+    reader (which may be in the middle of one lsof). Whoever waits for a supervisor's stop adds this
+    (the #1571 review)."""
+    return egress_s + len(CANARY_PARTS) * CANARY_RUN_MAX_S + 3 * STREAM_STOP_S
+# The one refusal (claude-config#3319). The helper browser is known by the file name of its
+# executable, which is all a sandbox profile can know a process by here, and the port is the one its
+# reachability probe uses.
+HELPER_BROWSER = "chrome-headless-shell"
+REFUSED_PORT = 443
+HELPER_BROWSER_PATH = "/%s$" % HELPER_BROWSER  # a regular expression over the executable's resolved path
+ANY_PATH = "^/"  # the refusal canary's own rule: whatever program the canary runs as
+REFUSED = "-refused"  # what a refusal's message carries after the tag of the profile that refused it
+# One canary process: a UDP connect to the port it is given, which sends no packet, saying whether
+# the kernel let it happen.
+CANARY = ("import os, socket, sys\n"
           "s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\n"
-          "s.connect(('198.51.100.1', 9))\n"
+          "try:\n"
+          "    s.connect(('198.51.100.1', int(sys.argv[1])))\n"
+          "    print('passed')\n"
+          "except PermissionError:\n"
+          "    print('refused')\n"
           "s.close()\n"
           "print(os.getpid())\n")
-# "Sandbox: node(123) allow network-outbound remote:*:443\n<tag>", or the same line prefixed with
+# "Sandbox: node(123) allow network-outbound remote:*:443\n<tag>" for a connection that was let
+# through and reported, "Sandbox: node(123) deny(1) network-outbound remote:*:443\n<tag>-refused" for
+# one that was refused (both measured on macOS 26.6), or either line prefixed with
 # "N duplicate reports for " when the kernel collapsed repeats of it.
-REPORT = re.compile(r"^(?:(\d+) duplicate reports? for )?Sandbox: (.*)\((\d+)\) allow network-outbound"
+REPORT = re.compile(r"^(?:(\d+) duplicate reports? for )?Sandbox: (.*)\((\d+)\) (allow|deny\(\d+\)) network-outbound"
                     r" remote:\S*?:(\d+)\n(\S+)\s*\Z", re.S)
 
 
@@ -82,10 +123,56 @@ class Unavailable(Exception):
 
 
 def profile_text(tag):
+    """Serve's profile: every connection allowed, each one off this machine reported."""
     return ("(version 1)\n"
             "(allow default)\n"
             "(allow network-outbound (remote ip \"*:*\") (with report) (with message \"%s\"))\n"
             "(allow network-outbound (remote ip \"localhost:*\"))\n" % tag)
+
+
+def refusal_rule(path_regex, tag):
+    """Refuse a UDP connect to REFUSED_PORT off this machine by a process whose executable path
+    matches, reported under `tag` + REFUSED, and leave the same port on loopback alone. A later rule
+    wins in a profile, so these two lines go after profile_text's.
+
+    The second line does more than its words say, measured on macOS 26.6.2 (2026-11-24): with the
+    deny as the profile's LAST rule, a program the deny does not name has its UDP connect to this
+    port let through with NO report, where every other route is still reported. With the second
+    line after it, every route by every other program is reported as under profile_text alone. So
+    what a compiled profile reports cannot be read off its text. The whole table of routes is
+    pinned by EgressTests in test_run_session.py, and every run proves the one that broke with a
+    canary under this exact shape (CANARY_PARTS)."""
+    who = '(process-path-regex "%s")' % path_regex
+    return ('(deny network-outbound (require-all %s (remote udp "*:%d")) (with message "%s%s"))\n'
+            '(allow network-outbound (require-all %s (remote udp "localhost:%d")))\n'
+            % (who, REFUSED_PORT, tag, REFUSED, who, REFUSED_PORT))
+
+
+def drive_profile_text(tag):
+    """The profile of drive calls: serve's, and the one refusal, for the helper browser alone."""
+    return profile_text(tag) + refusal_rule(HELPER_BROWSER_PATH, tag)
+
+
+def canary_profile_text(tag):
+    """The refusal canary's profile: the same two halves, with the refusal aimed at the canary itself."""
+    return profile_text(tag) + refusal_rule(ANY_PATH, tag)
+
+
+# One round of canaries is three processes, each under a profile of its own shape and tag:
+# (name, the profile, what its tag adds to the round's, the port, what the kernel must do, what the
+# report stream must then show, in the words of a reason).
+#   serve    serve's profile reports a connection off this machine, as it always has.
+#   drive    the profile of drive calls, the exact text a drive call runs under but for the tag,
+#            neither refuses nor hides a UDP connect to the refused port by a program that is not
+#            the helper browser (the canary is Python): it is let through AND reported.
+#   refusal  the refusal rule, aimed at the canary itself, refuses, and the refusal reaches the
+#            report stream, so what a drive call's profile refuses can reach the record.
+CANARY_PARTS = (
+    ("serve", profile_text, "", 9, "passed", "its report under serve's profile"),
+    ("drive", drive_profile_text, "-drive", REFUSED_PORT, "passed", "its report under the profile of drive calls"),
+    ("refusal", canary_profile_text, "-self", REFUSED_PORT, "refused",
+     "the record of the connection the sandbox refused it"),
+)
 
 
 def remote_addresses(lsof_output, port):
@@ -145,6 +232,13 @@ class Monitor:
         self.allow = list(allow)
         self.egress_s = egress_s
         self.profile = os.path.join(rdir, "egress.sb")
+        # Drive calls run under a profile of their own, the only one that carries the refusal, so
+        # nothing serve starts is ever refused anything, whatever its executable is called.
+        self.drive_profile = os.path.join(rdir, "egress-drive.sb")
+        self.refused_tag = self.tag + REFUSED
+        self.refusals = []
+        self.canary_want = []  # the last round of canaries: (what the stream must show, in words; its message)
+        self.reader_error = None
         self.events_path = os.path.join(rdir, "egress.jsonl")
         self.sandbox = os.environ.get("VERIFICATION_EGRESS_SANDBOX") or SANDBOX_EXEC
         self.log = os.environ.get("VERIFICATION_EGRESS_LOG") or LOG
@@ -182,6 +276,10 @@ class Monitor:
                               " sandbox" % self.sandbox)
         with open(self.profile, "w", errors="replace") as f:
             f.write(profile_text(self.tag))
+        # Both profiles exist before anything is measured: a drive profile that cannot be written is
+        # a monitor that cannot start, never a drive call run under serve's profile instead.
+        with open(self.drive_profile, "w", errors="replace") as f:
+            f.write(drive_profile_text(self.tag))
         self.allowed_ips, self.unresolved = resolve(self.allow)
         predicate = 'sender == "Sandbox" AND eventMessage CONTAINS "%s"' % self.tag
         try:
@@ -194,8 +292,8 @@ class Monitor:
         self.thread = threading.Thread(target=self._read, daemon=True)
         self.thread.start()
         if not self._canary_seen():
-            raise Unavailable("the report stream showed no report of the start canary within %ss, so it cannot be"
-                              " shown to see this run's connections%s" % (self.egress_s, self._stream_state()))
+            raise Unavailable("the report stream showed %s within %ss, so it cannot be shown to see this run's"
+                              " connections%s" % (self._canary_gap("start"), self.egress_s, self._stream_state()))
         exited = proc.poll()
         if exited is not None:  # it reported the canary and then died: nothing would see serve
             raise Unavailable("the report stream exited with %s right after the start canary%s"
@@ -215,24 +313,42 @@ class Monitor:
                     self.chatter = (self.chatter + [line[:200]])[-5:]
                     continue
                 m = REPORT.match(ev.get("eventMessage") or "") if isinstance(ev, dict) else None
-                tag = m.group(5) if m else None
-                if tag is not None and tag.startswith(self.canary_tag + "-"):
+                if not m:
+                    continue
+                # The kernel's own word says whether the connection was let through or refused, and
+                # the message must be the one the rule of that kind carries. A line where the two
+                # disagree is nothing either profile can produce, and counts as neither.
+                refused, tag = m.group(4) != "allow", m.group(6)
+                if refused != tag.endswith(REFUSED):
+                    continue
+                if tag.startswith(self.canary_tag + "-"):
                     with self.cond:
                         self.canaries_seen.add(tag)
                         self.cond.notify_all()
                     self._event({"event": "canary", "at": v.utc_now(), "canary": tag})
                     continue
-                if tag != self.tag:
+                if tag != (self.refused_tag if refused else self.tag):
                     continue
-                pid, port = int(m.group(3)), int(m.group(4))
-                rec = {"event": "report", "at": v.utc_now(), "pid": pid, "process": m.group(2), "port": port,
-                       "count": int(m.group(1) or 1)}
+                pid, port = int(m.group(3)), int(m.group(5))
+                rec = {"event": "refused" if refused else "report", "at": v.utc_now(), "pid": pid,
+                       "process": m.group(2), "port": port, "count": int(m.group(1) or 1)}
+                if refused:
+                    # Nothing to name: the connect never happened, so the process holds no socket for
+                    # lsof to read. It is kept apart from the reports from here on.
+                    with self.cond:
+                        self.refusals.append(rec)
+                    self._event(rec)
+                    continue
                 rec["addresses"], why = self._name(pid, port)
                 if why:
                     rec["name_error"] = why
                 with self.cond:
                     self.reports.append(rec)
                 self._event(rec)
+        except Exception as e:
+            # A line that could not be written into the record (a full disk) or read at all. The
+            # reader stops, so the end canary is never seen and the run is unmeasured, saying this.
+            self.reader_error = "%s: %s" % (type(e).__name__, e)
         finally:
             with self.cond:
                 self.stream_ended = True
@@ -261,41 +377,76 @@ class Monitor:
     # -- the canary ------------------------------------------------------------------------------
 
     def _fire_canary(self):
-        """Run one canary under a profile tagged for it alone, and return that tag."""
+        """Run one round of canaries (CANARY_PARTS), each under a profile tagged for it alone, and
+        return the messages the report stream must show for the round to count."""
         self.canaries_fired += 1
-        tag = "%s-%d" % (self.canary_tag, self.canaries_fired)
-        with open(self.canary_profile, "w", errors="replace") as f:
-            f.write(profile_text(tag))
-        try:
-            r = subprocess.run([self.sandbox, "-f", self.canary_profile, sys.executable, "-c", CANARY],
-                               capture_output=True, text=True, timeout=CANARY_RUN_MAX_S, errors="replace")
-        except (OSError, subprocess.TimeoutExpired) as e:
-            raise Unavailable("the canary could not run under %s: %s" % (self.sandbox, e))
-        out = r.stdout.strip()
-        if r.returncode != 0 or not out.isdigit():
-            raise Unavailable("the canary could not run under %s (exit %s): %s"
-                              % (self.sandbox, r.returncode, (r.stderr or r.stdout).strip()[-300:]))
-        return tag
+        base = "%s-%d" % (self.canary_tag, self.canaries_fired)
+        self.canary_want = []
+        for name, text, suffix, port, must, shown in CANARY_PARTS:
+            tag = base + suffix
+            with open(self.canary_profile, "w", errors="replace") as f:
+                f.write(text(tag))
+            try:
+                r = subprocess.run([self.sandbox, "-f", self.canary_profile, sys.executable, "-c", CANARY, str(port)],
+                                   capture_output=True, text=True, timeout=CANARY_RUN_MAX_S, errors="replace")
+            except (OSError, subprocess.TimeoutExpired) as e:
+                raise Unavailable("the canary could not run under %s: %s" % (self.sandbox, e))
+            out = r.stdout.split()
+            if r.returncode != 0 or len(out) != 2 or out[0] not in ("passed", "refused") or not out[1].isdigit():
+                raise Unavailable("the canary could not run under %s (exit %s): %s"
+                                  % (self.sandbox, r.returncode, (r.stderr or r.stdout).strip()[-300:]))
+            if out[0] != must:
+                # The kernel did the opposite of what this profile is written to do, so nothing the
+                # profiles of this run say about what is refused can be relied on here.
+                if must == "refused":
+                    raise Unavailable("%s did not refuse the canary's UDP connect to port %d under the refusal"
+                                      " rule, so the one kind of connection a drive call's profile refuses cannot"
+                                      " be shown to be refused here" % (self.sandbox, port))
+                raise Unavailable("%s refused the canary's UDP connect to port %d under %s, which must refuse it"
+                                  " nothing, so more would be refused here than the one connection chosen"
+                                  % (self.sandbox, port, "serve's profile" if name == "serve"
+                                     else "the profile of drive calls"))
+            self.canary_want.append((shown, tag + (REFUSED if must == "refused" else "")))
+        return [message for _, message in self.canary_want]
 
     def _canary_seen(self):
-        """Fire canaries until one's report arrives, the stream ends, or egress_s passes."""
+        """Fire rounds of canaries until every message of one round has arrived (its report under each
+        profile and the record of its refused connection), the stream ends, or egress_s passes. Any
+        round fired by THIS call counts once it is whole, so three lines that take longer than one
+        retry to arrive on a loaded Mac are not thrown away; a round from an earlier call never does."""
         deadline = time.monotonic() + self.egress_s
+        rounds = []
         while time.monotonic() < deadline:
-            tag = self._fire_canary()
+            rounds.append(self._fire_canary())
+
+            def whole():
+                return any(all(message in self.canaries_seen for message in want) for want in rounds)
             with self.cond:
-                self.cond.wait_for(lambda: tag in self.canaries_seen or self.stream_ended,
+                self.cond.wait_for(lambda: whole() or self.stream_ended,
                                    timeout=max(0.0, min(CANARY_RETRY_S, deadline - time.monotonic())))
-                if tag in self.canaries_seen:
+                if whole():
                     return True
                 if self.stream_ended:
                     return False
         return False
 
+    def _canary_gap(self, which):
+        """What the last round of canaries was still waiting for, in the words of a reason."""
+        with self.cond:
+            missing = [shown for shown, message in self.canary_want if message not in self.canaries_seen]
+        if len(missing) == len(self.canary_want):
+            return "no report of the %s canary" % which
+        return "the %s canary only in part, without %s," % (which, " or ".join(missing))
+
     def _stream_state(self):
+        said = ""
+        if self.reader_error:
+            said = " (the reader of the report stream stopped on an error, so the record is incomplete: %s)" \
+                % self.reader_error
         if self.proc is not None and self.proc.poll() is not None:
-            said = "; ".join(self.chatter) or "nothing"
-            return " (the stream exited with %s and said: %s)" % (self.proc.returncode, said)
-        return ""
+            said += " (the stream exited with %s and said: %s)" % (self.proc.returncode,
+                                                                    "; ".join(self.chatter) or "nothing")
+        return said
 
     # -- stopping --------------------------------------------------------------------------------
 
@@ -331,9 +482,9 @@ class Monitor:
             except Unavailable as e:
                 return self.field("unmeasured", "the end of the run could not be proved: %s" % e)
             if not ended:
-                return self.field("unmeasured", "the report stream showed no report of the end canary within %ss,"
-                                  " so connections made late in the run may be missing%s"
-                                  % (self.egress_s, self._stream_state()))
+                return self.field("unmeasured", "the report stream showed %s within %ss, so connections made or"
+                                  " refused late in the run may be missing%s"
+                                  % (self._canary_gap("end"), self.egress_s, self._stream_state()))
             self.stop_stream()
             return self.judge()
         except Exception as e:
@@ -343,17 +494,43 @@ class Monitor:
 
     # -- the verdict -----------------------------------------------------------------------------
 
-    def field(self, verdict, why, destinations=(), unnamed=()):
+    def field(self, verdict, why, destinations=(), unnamed=(), refused=()):
         return {"verdict": verdict, "why": why, "monitor": MONITOR, "allowed_hosts": self.allow,
                 "allowed_unresolved": self.unresolved, "measured_from": self.started_at,
                 "measured_to": v.utc_now() if verdict != "unmeasured" else None,
-                "destinations": list(destinations), "unnamed": list(unnamed)}
+                "destinations": list(destinations), "unnamed": list(unnamed), "refused": list(refused)}
+
+    def refused(self):
+        """What the sandbox refused, one entry per process name and port. `by_the_rule` says whether
+        the entry is what the one refusal rule produces (the helper browser, REFUSED_PORT); the log
+        line holds nothing more to check it against, and an entry that is not is never clean."""
+        with self.cond:
+            refusals = list(self.refusals)
+        out = {}
+        for r in refusals:
+            e = out.setdefault((r["process"], r["port"]), {
+                "process": r["process"], "port": r["port"], "reports": 0, "pids": [],
+                "by_the_rule": r["process"] == HELPER_BROWSER and r["port"] == REFUSED_PORT})
+            e["reports"] += r["count"]
+            if r["pid"] not in e["pids"]:
+                e["pids"].append(r["pid"])
+        return sorted(out.values(), key=lambda e: (e["process"], e["port"]))
 
     def judge(self):
         more, unresolved = resolve(self.allow)
         allowed_ips = dict(self.allowed_ips, **more)
         self.unresolved = sorted(set(self.unresolved) | set(unresolved))
         dests, unnamed = {}, {}
+        refused = self.refused()
+        ruled = [e for e in refused if e["by_the_rule"]]
+        strays = [e for e in refused if not e["by_the_rule"]]
+        # Said on every verdict that has one, so a refusal is always visible beside what left.
+        refused_said = ""
+        if ruled:
+            refused_said = (". The sandbox refused these before they left this machine, and they are counted"
+                            " apart from any connection that left: " + "; ".join(
+                                "%s UDP port %d (%s)" % (e["process"], e["port"], plural(e["reports"]))
+                                for e in ruled))
         with self.cond:
             reports = list(self.reports)
         for r in reports:
@@ -378,8 +555,16 @@ class Monitor:
         dests = sorted(dests.values(), key=lambda d: (d["address"], d["port"]))
         unnamed = sorted(unnamed.values(), key=lambda u: (u["process"], u["port"], u["name_error"] or ""))
         outside = [d for d in dests if not d["allowed"]]
-        if outside or unnamed:
+        if outside or unnamed or strays:
             parts = []
+            if strays:
+                # Fail closed: the profile holds one refusal, so anything else refused under this
+                # run's tag is the sandbox doing something nobody chose, and nothing here can say what.
+                parts.append("the sandbox refused connections that its one refusal rule (%s, UDP port %d) could"
+                             " not have produced, so what else it refused is not known: " % (HELPER_BROWSER,
+                                                                                             REFUSED_PORT)
+                             + "; ".join("%s port %d (%s)" % (e["process"], e["port"], plural(e["reports"]))
+                                         for e in strays))
             if outside:
                 parts.append("serve or the drive helper reached hosts outside egress.allow: " + "; ".join(
                     "%s port %d (%s, %s)" % (d["address"], d["port"], ", ".join(d["processes"]), plural(d["reports"]))
@@ -390,14 +575,14 @@ class Monitor:
                                              "lsof could not read it: " + u["name_error"] if u["name_error"]
                                              else "closed before it could be read")
                     for u in unnamed))
-            return self.field("not-clean", ". ".join(parts), dests, unnamed)
+            return self.field("not-clean", ". ".join(parts) + refused_said, dests, unnamed, refused)
         if dests:
             why = "every connection outside this machine went to an allowed host: " + "; ".join(
                 "%s port %d (%s)" % (d["address"], d["port"], d["allowed_as"]) for d in dests)
         else:
             why = ("the sandbox reported no connection from serve or the drive helper to any host other than %s"
                    " or %s for the whole run" % (", ".join(v.EGRESS_LOCAL_HOSTS[:-1]), v.EGRESS_LOCAL_HOSTS[-1]))
-        return self.field("clean", why, dests, unnamed)
+        return self.field("clean", why + refused_said, dests, unnamed, refused)
 
 
 def plural(n):
