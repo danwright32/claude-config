@@ -234,7 +234,7 @@ const ENTRIES: Entry[] = [
   {"method":"writes","input":{"command":"rm -rf src","cwd":"/repo","home":""},"want":{"files":[],"changes":[{"word":"src","path":"/repo/src","does":"remove","tree":true}],"unnamed":[]}},
   {"method":"commands","input":{"command":"mv src /tmp/old-src"},"want":[["mv","src","/tmp/old-src"]]},
   {"method":"git","input":{"words":["mv","src","/tmp/old-src"]},"want":null},
-  {"method":"writes","input":{"command":"mv src /tmp/old-src","cwd":"/repo","home":""},"want":{"files":[{"word":"/tmp/old-src","path":"/tmp/old-src","sources":["/repo/src"],"mayBeFolder":true}],"changes":[{"word":"src","path":"/repo/src","does":"remove","tree":true}],"unnamed":[]}},
+  {"method":"writes","input":{"command":"mv src /tmp/old-src","cwd":"/repo","home":""},"want":{"files":[{"word":"/tmp/old-src","path":"/tmp/old-src","sources":["/repo/src"],"mayBeFolder":true}],"changes":[{"word":"src","path":"/repo/src","does":"remove","tree":true,"to":{"word":"/tmp/old-src","path":"/tmp/old-src"}}],"unnamed":[]}},
   {"method":"commands","input":{"command":"cp -r /tmp/sub docs; rm -r docs/sub"},"want":[["cp","-r","/tmp/sub","docs"],["rm","-r","docs/sub"]]},
   {"method":"git","input":{"words":["cp","-r","/tmp/sub","docs"]},"want":null},
   {"method":"git","input":{"words":["rm","-r","docs/sub"]},"want":null},
