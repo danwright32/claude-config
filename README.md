@@ -5096,10 +5096,11 @@ pattern the shell fills in with such folders is replaced the same way. The word 
 as its script is refused as unread, where typed, when it is an archive, a path under one, or a
 folder whose `__main__` is compiled, an extension module or a package. An archive that is an
 argument (a spreadsheet, a wheel and a document are zip files too) is judged as it was.
-Cost of that reading, in processor time for one judgement with an empty cache, five samples of
-ten judgements each way taken in turn on 2026-11-24 at load averages of 10 to 22: a plain script
-handed a data file 0.169 to 0.174 s before and 0.170 to 0.172 s after, and a folder holding
-`__main__.py` 0.171 to 0.173 s before and 0.172 to 0.175 s after, ranges that overlap.
+Cost of that reading, in processor time for one judgement with an empty cache, two runs of five
+samples of ten judgements each way taken in turn on 2026-11-24 at load averages of 7 to 22: a
+plain script handed a data file had the same mean before and after in both runs (0.1711 and
+0.1713 s, then 0.1755 and 0.1756 s), and a folder holding `__main__.py`, whose file is now read,
+took about 0.002 s more (means of 0.1721 and 0.1739 s, then 0.1769 and 0.1785 s).
 Not covered, each measured on 2026-11-22 as allowed where the file posts:
 a Python file on disk that runs a file it names
 (`python3 runner.py`, `import runner`); code the shell fills in whole
