@@ -63,6 +63,11 @@
 # several does not take one run per cause to discover (claude-config#108). Exit 2
 # = nothing was scanned, which is a failure rather than a pass: an empty answer
 # from a scan that read no files is indistinguishable from a clean tree (L98).
+# Exit 2 as well when the lines the search matched could not be put to the rules.
+#
+# A reported line is the file, the line number and the line itself. A line longer
+# than 300 bytes is reported as 300 bytes of it around what was found, with a note
+# of which bytes those are and how long the line is (claude-config#3479).
 # One thing this file must never do: write the sync's placeholder out in full. The
 # apply expands that placeholder in EVERY mirrored file, and it cannot tell a line
 # that means the placeholder from a line that means a path, so a file discussing it
@@ -331,21 +336,6 @@ ANGLE_TOKEN="<""HOME>"
 # file, and no rule can forget to honour it. -I so a binary that happens to hold the bytes is
 # skipped rather than reported as a line nobody can read.
 ALL_PAT="${MACHINE_PATH}|${CS_TOKEN}|${ANGLE_TOKEN}"
-# Two walks rather than one only because the deeper skill exclusions must not reach hooks, agents
-# or commands, where a folder sharing a plugin skill's name is ordinary config.
-#
-# The listed form reads its files by name, a few hundred to a call so a long list never outgrows
-# what one command line may carry, and with -H so a call left holding one file still names it.
-raw_all="$(
-  { _i=0
-    while [ "$_i" -lt "${#list_files[@]}" ]; do
-      grep -InHE "$ALL_PAT" "${list_files[@]:_i:400}" 2>/dev/null
-      _i=$((_i + 400))
-    done
-    [ "${#targets[@]}" -eq 0 ] || grep -rInE "${SKIP[@]}" "$ALL_PAT" "${targets[@]}" 2>/dev/null
-    [ "${#skill_targets[@]}" -eq 0 ] || grep -rInE "${SKIP[@]}" ${skill_grep_skip[@]+"${skill_grep_skip[@]}"} \
-      "$ALL_PAT" "${skill_targets[@]}" 2>/dev/null
-  } | grep -v 'claude-sync-allow-home-path' || true)"
 
 # Is the tree being scanned this machine's own config directory? Compared as resolved physical
 # paths, because /tmp and /private/tmp are the same directory here and a string comparison would
@@ -361,26 +351,118 @@ hits=""      # rule 1: one machine's home directory
 tokbad=""    # rule 2: the sync's placeholder written where it is not fronting a path
 angbad=""    # rule 3: the hand substituted placeholder
 
-# The two regex rules are matched with bash's own ERE engine rather than by piping each line into
-# `grep -qE` (claude-config#162). `grep -q` leaves on its first match, its producer is killed by
-# SIGPIPE, and under `pipefail` the pipeline's status becomes that death, so a line that DID match
-# can be reported as clean. That is fail-open in a guard whose whole job is refusing, and it is a
-# size threshold nobody watches rather than a bug that shows up once (L183). Bash's `=~` is POSIX
-# ERE, the same dialect `grep -E` reads, so the patterns are unchanged; there is no second process
-# to kill, and four sites become none.
+# ---- every matching line judged outside the shell, and cut there (claude-config#3479) ----
+# The three rules used to be asked by this shell, of each matching line held whole in a variable.
+# On 2026-11-22 a send published 126 scratch files whose matching lines ran to 1.6 MB each, and the
+# shell copied every one of them on every use: 6 to 10 seconds and 11.5 MB of report, where the
+# search alone took under a second. Under the bash macOS ships, removing this Mac's own config
+# path from one such line (the allowance below) did not finish in three minutes.
 #
-# Held in variables because that is the only reliable way to feed a pattern to `=~`: written inline,
-# an unquoted `$)` and a `${` are read by the shell before the regex engine ever sees them.
-_RE_TOK_SUBST='[$][{][^}]*'"$CS_TOKEN"
-_RE_TOK_LOOSE="$CS_TOKEN"'([^/]|$)'
-while IFS= read -r line; do
-  [ -n "$line" ] || continue
+# So one awk program reads the lines the search matched, straight off the pipe, puts each to the
+# three rules, and hands the shell one short record per finding: the rule's number, a tab, and the
+# line as it is reported. A line of HP_CUT bytes or fewer is reported whole, byte for byte as it
+# always was. A longer one is reported as HP_CUT bytes of it, starting HP_LEAD bytes before what
+# the rule found, so the part shown is the part to act on, followed by a note of which bytes are
+# shown and how long the line is. The cut is made AFTER the line is judged, on the whole line: a
+# line cut first would pass everything that sat below the cut.
+#
+# What each rule refuses is what it refused in the shell. Each is asked the way the shell asked it,
+# with plain string comparison wherever the rule has no variable part, so the answer does not turn
+# on one regex engine agreeing with another. Three things are matched as patterns, each as simple
+# as a pattern gets: the home path itself, the placeholder followed by one character that is not a
+# slash, and this Mac's own config path where the allowance removes it. It runs with LC_ALL=C, so
+# a byte is a byte whatever the line holds and a cut is counted in bytes. The search and the
+# marker filter in front of it are the ones this file always ran, in the locale it always ran
+# them in, so which lines reach the rules has not moved either.
+#
+# Measured on those 126 files on 2026-11-23, eight rounds at a load average near 175: 3.8 to 4.3
+# seconds before, 0.4 to 0.8 after, with the bare search at 0.05 to 0.12 and the same run over
+# 126 one line files at 0.09 to 0.17. What is left above the search is the marker filter (about
+# 0.15) and awk reading 12 MB (about 0.25 in the awk macOS ships).
+#
+# There is still no `grep -q` at the end of a pipe (claude-config#162): awk reads every line it is
+# sent, so nothing upstream is killed by a reader that left early. And a judge that fails, or ends
+# well without reaching its last line, is exit 2 below, never a clean tree (L98).
+HP_CUT=300    # the most bytes of a matching line a report carries
+HP_LEAD=60    # how many of those come before what the rule found
+IFS= read -r -d '' _HP_JUDGE <<'JUDGE' || true
+# A string as a pattern that matches exactly that string.
+function literal_re(s,    out, i, c) {
+  out = ""
+  for (i = 1; i <= length(s); i++) {
+    c = substr(s, i, 1)
+    if (c == "\\") out = out "\\\\"
+    else if (c == "^") out = out "\\^"
+    else if (index(".[]()*+?{}|$", c) > 0) out = out "[" c "]"
+    else out = out c
+  }
+  return out
+}
+# Where the placeholder is written somewhere it is not fronting a path, or 0. Two ways, as ever:
+# followed by anything but a slash (the end of the line included), or inside a ${...} that has not
+# closed before it. The first is one pass over the line and the second one split on the closing
+# brace, because a line can hold the placeholder thousands of times (15,280 on a line of 1.6 MB,
+# measured on the files of 2026-11-22) and anything done once per appearance, a split on the
+# placeholder included, took a second a line in the awk macOS ships.
+function token_misused(s,    n, i, off, p, found, segs) {
+  found = 0
+  if (match(s, TOKLOOSE)) found = RSTART
+  else if (substr(s, length(s) - length(TOK) + 1) == TOK) found = length(s) - length(TOK) + 1
+  n = split(s, segs, "}")
+  off = 0
+  for (i = 1; i <= n; i++) {
+    p = index(segs[i], "${")
+    if (p > 0 && index(substr(segs[i], p + 2), TOK) > 0) {
+      if (found == 0 || off + p < found) found = off + p
+      break
+    }
+    off += length(segs[i]) + 1
+  }
+  return found
+}
+# Where the first home path that is not this Mac's own config path starts. Only for choosing the
+# part of a long line to show: the verdict is made before this is asked.
+function foreign_pos(s,    n, i, off, parts) {
+  n = split(s, parts, SELFRE)
+  off = 0
+  for (i = 1; i <= n; i++) {
+    if (match(parts[i], MACH)) return off + RSTART
+    off += length(parts[i]) + length(SELF)
+  }
+  return 1
+}
+function report(rule, pos,    start) {
+  if (len <= CUT) { print rule "\t" line; return }
+  start = pos - LEAD
+  if (start > len - CUT + 1) start = len - CUT + 1
+  if (start < 1) start = 1
+  print rule "\t" prefix substr(content, start, CUT) " [line cut: bytes " start " to " (start + CUT - 1) " of " len " shown]"
+}
+BEGIN {
+  TOK = ENVIRON["HP_TOKEN"]; ANG = ENVIRON["HP_ANGLE"]; MACH = ENVIRON["HP_MACHINE"]
+  SELF = ENVIRON["HP_SELF_HOME"]; ROOT = ENVIRON["HP_ROOT"]
+  ALLOW = ENVIRON["HP_ALLOW_SELF"] + 0; CUT = ENVIRON["HP_CUT"] + 0; LEAD = ENVIRON["HP_LEAD"] + 0
+  if (TOK == "" || ANG == "" || MACH == "" || CUT < 1 || (ALLOW && SELF == "")) { unset = 1; exit 2 }
+  nd = split(ENVIRON["HP_MIRRORED"], MIRR, "\n")
+  # The placeholder followed by anything but a slash. It is letters and underscores, so it is its
+  # own pattern; the end of the line, the other half of that rule, is compared as a string.
+  TOKLOOSE = TOK "[^/]"
+  if (ALLOW) SELFRE = literal_re(SELF)
+}
+$0 == "" { next }
+{
+  line = $0
   # The file's own CONTENT, never the whole grep line. That line begins with the path of the file
   # it came from, which is itself under somebody's home directory, so testing the whole line
   # answers about the scanned tree's LOCATION rather than about what the file says (L135: a check
   # matched over the wrong span is answered by the wrong thing, and this one passed a deliberately
   # broken build because of it).
-  content="${line#*:}"; content="${content#*:}"
+  # Cut at the first colon, then at the next, exactly as the shell cut it (${line#*:} twice).
+  content = line
+  c = index(content, ":"); if (c > 0) content = substr(content, c + 1)
+  c = index(content, ":"); if (c > 0) content = substr(content, c + 1)
+  len = length(content)
+  prefix = substr(line, 1, length(line) - len)
 
   # Each rule is asked independently, never as an else-if: a line can commit two of these at once
   # and reporting only the first found would hide the second behind the fix for it.
@@ -394,16 +476,14 @@ while IFS= read -r line; do
   # So it is allowed immediately followed by a slash, and refused everywhere else, which covers
   # naming it in prose and refuses it again inside a ${...} substitution, where a following slash
   # is the substitution's own separator rather than a path.
-  if [[ $content =~ $_RE_TOK_SUBST ]] || [[ $content =~ $_RE_TOK_LOOSE ]]; then
-    tokbad="$tokbad$line
-"
-  fi
+  if (index(content, TOK) > 0) {
+    pos = token_misused(content)
+    if (pos > 0) report("2", pos)
+  }
 
   # Rule 3. A literal comparison, not a regex: the spelling has no variable part.
-  case "$content" in
-    *"$ANGLE_TOKEN"*) angbad="$angbad$line
-" ;;
-  esac
+  pos = index(content, ANG)
+  if (pos > 0) report("3", pos)
 
   # Rule 1, and its one allowance. claude-sync rewrites this Mac's config directory to its token in
   # every mirrored file on the way out and expands it again per Mac on the way in, so inside a LIVE
@@ -413,28 +493,85 @@ while IFS= read -r line; do
   # has been through a send, every machine path is still refused, and a path in a top level rule
   # file is refused everywhere, because rule files are merged entry by entry and are deliberately
   # not rewritten.
-  if [[ $content =~ $MACHINE_PATH ]]; then
-    _keep=1
-    if [ "$allow_self" -eq 1 ]; then
-      rel="${line%%:*}"; rel="${rel#"$ROOT"/}"
-      mirrored=0
-      for d in ${MIRRORED_DIRS[@]+"${MIRRORED_DIRS[@]}"}; do
-        case "$rel" in "$d"/*) mirrored=1; break ;; esac
-      done
-      if [ "$mirrored" -eq 1 ]; then
+  if (match(content, MACH)) {
+    pos = RSTART
+    keep = 1
+    if (ALLOW) {
+      # The file the line came from, relative to the root: what sits before the first colon.
+      rel = line
+      c = index(rel, ":"); if (c > 0) rel = substr(rel, 1, c - 1)
+      if (index(rel, ROOT "/") == 1) rel = substr(rel, length(ROOT) + 2)
+      mirrored = 0
+      for (i = 1; i <= nd; i++) {
+        if (MIRR[i] != "" && index(rel, MIRR[i] "/") == 1) { mirrored = 1; break }
+      }
+      if (mirrored) {
         # This machine's own config path removed, then the content asked again: what is left is any
         # OTHER machine's home, which is the defect. Done per line, so one portable path never
         # excuses a stale one sitting beside it.
-        _stripped="${content//$SELF_HOME/}"
-        [[ $_stripped =~ $MACHINE_PATH ]] || _keep=0
-      fi
-    fi
-    [ "$_keep" -eq 1 ] && hits="$hits$line
-"
-  fi
-done <<HITS
-$raw_all
-HITS
+        stripped = content
+        gsub(SELFRE, "", stripped)
+        if (match(stripped, MACH)) pos = foreign_pos(content)
+        else keep = 0
+      }
+    }
+    if (keep) report("1", pos)
+  }
+}
+# The last line, and the proof the lines above were all read: the shell refuses a run without it.
+END { if (unset) exit 2; print "E\t" NR }
+JUDGE
+
+_mirrored_nl=""
+for d in ${MIRRORED_DIRS[@]+"${MIRRORED_DIRS[@]}"}; do _mirrored_nl="$_mirrored_nl$d
+"; done
+
+# Two walks rather than one only because the deeper skill exclusions must not reach hooks, agents
+# or commands, where a folder sharing a plugin skill's name is ordinary config.
+#
+# The listed form reads its files by name, a few hundred to a call so a long list never outgrows
+# what one command line may carry, and with -H so a call left holding one file still names it.
+#
+# The searches end in `true` and the marker filter in `|| true`, as they always did (a search that
+# matches nothing is not a failure), so under pipefail the status left is the judge's own.
+judged="$(
+  { _i=0
+    while [ "$_i" -lt "${#list_files[@]}" ]; do
+      grep -InHE "$ALL_PAT" "${list_files[@]:_i:400}" 2>/dev/null
+      _i=$((_i + 400))
+    done
+    [ "${#targets[@]}" -eq 0 ] || grep -rInE "${SKIP[@]}" "$ALL_PAT" "${targets[@]}" 2>/dev/null
+    [ "${#skill_targets[@]}" -eq 0 ] || grep -rInE "${SKIP[@]}" ${skill_grep_skip[@]+"${skill_grep_skip[@]}"} \
+      "$ALL_PAT" "${skill_targets[@]}" 2>/dev/null
+    true
+  } | { grep -v 'claude-sync-allow-home-path' || true; } \
+    | LC_ALL=C HP_TOKEN="$CS_TOKEN" HP_ANGLE="$ANGLE_TOKEN" HP_MACHINE="$MACHINE_PATH" \
+      HP_ALLOW_SELF="$allow_self" HP_ROOT="$ROOT" HP_SELF_HOME="$SELF_HOME" HP_MIRRORED="$_mirrored_nl" \
+      HP_CUT="$HP_CUT" HP_LEAD="$HP_LEAD" awk "$_HP_JUDGE"
+)"
+judge_rc=$?
+
+# One short record per finding, sorted into the three rules. Nothing read here is longer than a
+# file's path and HP_CUT bytes of one of its lines.
+_tab=$'\t'
+judge_ended=0
+while IFS= read -r _rec; do
+  case "$_rec" in
+    "1$_tab"*) hits="$hits${_rec#??}
+" ;;
+    "2$_tab"*) tokbad="$tokbad${_rec#??}
+" ;;
+    "3$_tab"*) angbad="$angbad${_rec#??}
+" ;;
+    "E$_tab"*) judge_ended=1 ;;
+  esac
+done <<JUDGED
+$judged
+JUDGED
+if [ "$judge_rc" -ne 0 ] || [ "$judge_ended" -ne 1 ]; then
+  echo "check-home-paths: the lines the search matched could not be judged: the step that puts each one to the three rules ended with exit $judge_rc and $([ "$judge_ended" -eq 1 ] && echo "said it had read them all" || echo "never said it had read them all"). Nothing is known about those lines, so this is not a clean scan." >&2
+  exit 2
+fi
 hits="${hits%$'\n'}"
 
 # Counted from a directory walk rather than from the grep above, and deliberately: grep can only
