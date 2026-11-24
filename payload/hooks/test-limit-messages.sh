@@ -190,5 +190,21 @@ printf '{"at":"2026-11-20T15:10:00Z","why":"invented failure"}\n' > "$HOME/.clau
 out="$(python3 "$TOOL" days 2>&1)"
 check "13 failure dated" "last at Fri Nov 20 10:10 AM ET: invented failure" "$out"
 
+# 14. A byte that is not UTF-8, in the hook's payload, on the transcript's limit line and on a line
+# already in the record, loses nothing: the message is still recorded from its transcript line, with
+# its structured reset, and the reader still prints it.
+H4="$WORK/home4"; mkdir -p "$H4/.claude/projects/-proj" "$H4/.claude/state/limit-messages"
+BADT="$H4/.claude/projects/-proj/sess-bad.jsonl"
+printf '{"type":"assistant","isSidechain":false,"sessionId":"sess-bad","uuid":"bad-1","timestamp":"2026-11-12T19:02:00.000Z","entrypoint":"cli","gitBranch":"br\xff","isApiErrorMessage":true,"error":"rate_limit","quotaLimits":{"status":"rejected","resetsAt":1794341400,"rateLimitType":"five_hour"},"message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your 5-hour limit, resets 3:10pm (America/New_York)"}]}}\n' > "$BADT"
+printf '{"v":1,"id":"old\xff","at":"2026-11-01T10:00:00Z","kind":"other"}\n' > "$H4/.claude/state/limit-messages/records.jsonl"
+out="$(printf '{"session_id":"sess-bad","transcript_path":"%s","cwd":"/x\xff","hook_event_name":"StopFailure","error":"rate_limit","last_assistant_message":"You have hit your 5-hour limit, resets 3:10pm (America/New_York)"}' "$BADT" | HOME="$H4" python3 "$TOOL" record 2>&1)"; rc=$?
+same "14 a payload holding a byte that is not UTF-8 exits 0" "0" "$rc"
+recs4="$(cat "$H4/.claude/state/limit-messages/records.jsonl" 2>/dev/null)"
+check "14 recorded from the transcript line holding such a byte" '"source": "transcript"' "$recs4"
+check "14 its structured reset kept" '"resets_from": "structured"' "$recs4"
+out="$(HOME="$H4" python3 "$TOOL" days 2>&1)"; rc=$?
+same "14 the reader exits 0 on a record line holding such a byte" "0" "$rc"
+check "14 the reader prints the day" "Five hour limit: 1 day" "$out"
+
 printf 'SUITE-RESULT passed=%d failed=%d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

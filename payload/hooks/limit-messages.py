@@ -199,13 +199,14 @@ def account_key(session_id):
         return None
     p = os.path.join(home(), ".claude", "state", "status-bar", session_id + ".json")
     try:
-        o = json.load(open(p))
+        with open(p, encoding="utf-8", errors="replace") as fh:
+            o = json.load(fh)
     except (OSError, ValueError):
         return None
     a = o.get("account") if isinstance(o, dict) and o.get("v") == 1 else None
     if not isinstance(a, dict) or not a.get("accountUuid") or not a.get("organizationUuid"):
         return None
-    return hashlib.sha256(("%s:%s" % (a["accountUuid"], a["organizationUuid"])).encode()).hexdigest()[:16]
+    return hashlib.sha256(("%s:%s" % (a["accountUuid"], a["organizationUuid"])).encode("utf-8", "surrogatepass")).hexdigest()[:16]
 
 
 def who_of(o):
@@ -255,7 +256,7 @@ def from_line(o):
     if at is None:
         return None
     q = o.get("quotaLimits") or ((o.get("apiErrorParams") or {}).get("rate_limit_info") if isinstance(o.get("apiErrorParams"), dict) else None)
-    rid = "line:" + hashlib.sha256(str(o.get("uuid") or (o.get("timestamp"), o.get("sessionId"))).encode()).hexdigest()[:20]
+    rid = "line:" + hashlib.sha256(str(o.get("uuid") or (o.get("timestamp"), o.get("sessionId"))).encode("utf-8", "surrogatepass")).hexdigest()[:20]
     return build(at, text_of(o), q, who_of(o), o.get("sessionId"), rid, "transcript", o.get("error"))
 
 
@@ -269,7 +270,9 @@ def lines_in(path, texts=None):
             if b"isApiErrorMessage" not in raw:
                 continue
             try:
-                o = json.loads(raw)
+                # Decoded first, so a byte that is not UTF-8 elsewhere on the line costs only that
+                # byte, never the whole limit line.
+                o = json.loads(raw.decode("utf-8", errors="replace"))
             except ValueError:
                 continue
             if is_limit_line(o):
@@ -287,11 +290,11 @@ class Store:
 
     def __enter__(self):
         os.makedirs(record_dir(), exist_ok=True)
-        self.lock = open(os.path.join(record_dir(), ".lock"), "a")
+        self.lock = open(os.path.join(record_dir(), ".lock"), "a", encoding="utf-8", errors="replace")
         fcntl.flock(self.lock, fcntl.LOCK_EX)
         self.ids = set()
         try:
-            with open(record_path()) as fh:
+            with open(record_path(), encoding="utf-8", errors="replace") as fh:
                 for l in fh:
                     try:
                         self.ids.add(json.loads(l).get("id"))
@@ -304,7 +307,7 @@ class Store:
     def add(self, recs):
         new = [r for r in recs if r["id"] not in self.ids]
         if new:
-            with open(record_path(), "a") as fh:
+            with open(record_path(), "a", encoding="utf-8", errors="replace") as fh:
                 fh.write("".join(json.dumps(r, ensure_ascii=False, sort_keys=True) + "\n" for r in new))
             self.ids.update(r["id"] for r in new)
         return len(new)
@@ -317,7 +320,7 @@ class Store:
 def note_failure(why):
     try:
         os.makedirs(record_dir(), exist_ok=True)
-        with open(os.path.join(record_dir(), "failures.jsonl"), "a") as fh:
+        with open(os.path.join(record_dir(), "failures.jsonl"), "a", encoding="utf-8", errors="replace") as fh:
             fh.write(json.dumps({"at": iso(datetime.now(timezone.utc)), "why": why}) + "\n")
     except OSError:
         pass
@@ -333,7 +336,9 @@ def retry_delays():
 
 def cmd_record():
     try:
-        p = json.load(sys.stdin)
+        # Read as bytes: a byte that is not UTF-8 anywhere in the payload (the wording, a path)
+        # must not cost the record of the limit itself.
+        p = json.loads(sys.stdin.buffer.read().decode("utf-8", errors="replace"))
     except ValueError:
         print("limit-messages: could not record: the hook payload was not JSON", file=sys.stderr)
         return 1
@@ -366,7 +371,7 @@ def cmd_record():
                 # with no structured block. If its line is written later, a later run records that
                 # too, so this one message can be counted twice; a limit DAY is counted once either way.
                 now = datetime.now(timezone.utc)
-                rid = "hook:" + hashlib.sha256(("%s|%s|%s" % (p.get("session_id"), said, now.strftime("%Y-%m-%dT%H:%M"))).encode()).hexdigest()[:20]
+                rid = "hook:" + hashlib.sha256(("%s|%s|%s" % (p.get("session_id"), said, now.strftime("%Y-%m-%dT%H:%M"))).encode("utf-8", "surrogatepass")).hexdigest()[:20]
                 who = "agent" if p.get("agent_id") else "session"
                 st.add([build(now, said or "", None, who, p.get("session_id"), rid, "hook message", error)])
     except OSError as e:
@@ -424,7 +429,7 @@ def clock(ts):
 def cmd_days():
     rows, torn = [], 0
     try:
-        with open(record_path()) as fh:
+        with open(record_path(), encoding="utf-8", errors="replace") as fh:
             for l in fh:
                 if not l.strip():
                     continue
@@ -444,7 +449,7 @@ def cmd_days():
         return 1
     failures, failures_unread = [], None
     try:
-        with open(os.path.join(record_dir(), "failures.jsonl")) as fh:
+        with open(os.path.join(record_dir(), "failures.jsonl"), encoding="utf-8", errors="replace") as fh:
             for l in fh:
                 try:
                     f = json.loads(l)
@@ -503,6 +508,9 @@ def cmd_days():
 
 
 def main(argv):
+    # A model name or a reset time read from a line holding a lone surrogate is still printed.
+    sys.stdout.reconfigure(errors="replace")
+    sys.stderr.reconfigure(errors="replace")
     cmds = {"record": cmd_record, "scan": cmd_scan, "days": cmd_days}
     if len(argv) != 2 or argv[1] not in cmds:
         print("usage: limit-messages.py record|scan|days", file=sys.stderr)
