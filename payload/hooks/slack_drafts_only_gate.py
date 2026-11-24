@@ -1675,12 +1675,27 @@ def remember_readings(mod):
     second each; command_rest() three times for each of its 14,000 commands (claude-config#2784).
     Only this run's own copy of the reader is changed. Each caller gets lists of its own. A call
     asking for heredoc bodies, their spans or the runners passed is read afresh, and a text the
-    reader cannot read raises as it did, every time it is asked for."""
+    reader cannot read raises as it did, every time it is asked for. So is one asking where the
+    comments are (claude-config#3464).
+
+    Every reading asks the reader which # it took for a comment without being sure the shell does
+    (its `unsure`), and one that names any is not used: UnsureComment, which main() refuses as a
+    check it could not make. It is never kept, in this run or between runs."""
     plain, memo = mod.commands, {}
 
-    def commands(s, cwd="", heredocs=None, parts=None, spans=None):
-        if heredocs is not None or spans is not None:
-            return plain(s, cwd, heredocs=heredocs, parts=parts, spans=spans)
+    def sure(s, cwd, **asked):
+        marks = []
+        try:
+            return plain(s, cwd, unsure=marks, **asked)
+        finally:
+            # Whether the reading ended or gave up (Unreadable, which a # read as a comment can
+            # cause by itself: it hides the ) or the quote that closes something).
+            if marks:
+                raise UnsureComment(s, marks[0][0])
+
+    def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None):
+        if heredocs is not None or spans is not None or comments is not None:
+            return sure(s, cwd, heredocs=heredocs, parts=parts, spans=spans, comments=comments)
         key = (s, cwd)
         if key not in memo:
             # A large text's parse is kept between runs too, keyed on its contents, wherever the
@@ -1694,7 +1709,7 @@ def remember_readings(mod):
                     os.path.expanduser("~" + name)
             else:
                 where = []
-                got = (plain(s, cwd, parts=where), where)
+                got = (sure(s, cwd, parts=where), where)
                 if kept is not None:
                     kept.put(s, cwd, got)
             memo[key] = got
@@ -1860,6 +1875,33 @@ class NulPath(BaseException):
 
 NUL_WHY = ("it names a path holding a NUL byte, which bash drops, zsh keeps inside the word and every program "
            "reads as the end of the name, so which file it is cannot be worked out (claude-config#2892)")
+
+
+class UnsureComment(BaseException):
+    """Raised by this run's reader (remember_readings) for a text holding a # that the reader took for
+    a comment where it cannot be told whether the shell does (lib/shell-words.py word_starts):
+    right after a closing parenthesis whose kind is not known or that bash and zsh read
+    differently, and inside backquotes. The shell may run the rest of that line, which the reading
+    left out, so a post written there was allowed (claude-config#3464). Where every shell keeps the
+    # inside its word (after an escaped space or separator, right after the ) of a substitution, on
+    a line a backslash joined to a word) the reader reads the rest of the line as the shell does
+    and names nothing, unless that reading then cannot be read to its end, when the # is named and
+    this is raised all the same (claude-config#3481). A BaseException, as NulPath is, so nothing in
+    the walk reads it as a text that merely could not be read; main() refuses the call as one it
+    could not check."""
+
+    def __init__(self, text, at):
+        super().__init__(at)
+        start = text.rfind("\n", 0, at) + 1
+        end = text.find("\n", at)
+        self.line = text[start:len(text) if end < 0 else end].strip()[:120]
+
+
+def comment_why(line):
+    return ("it holds a # the gate cannot tell from a comment, in the line `%s`: a shell can read a # "
+            "inside a word where a closing parenthesis or a backslash stands right before it, or inside "
+            "backquotes, and then runs the rest of that line, which the gate could not read for certain. "
+            "Write that # in quotes, or put the comment on a line of its own (claude-config#3464)" % line)
 
 
 def budget_clock():
@@ -3907,7 +3949,15 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             body = self.content(os.path.realpath(self.resolve(v, d))).decode("utf-8", "replace")
         except OSError:
             return False
-        body = re.sub(r"(?m)(^|\s)#.*$", r"\1", body)  # comments, which say "set" in prose
+        # Comments, which say "set" in prose, are left out: the ones the reader itself reads as
+        # comments, and of those only one that starts the text or follows white space. A pattern
+        # took every # after white space for one, quoted or not, so a quoted # before a shift on
+        # its line hid the shift, and the string's $1 stayed where the shell had moved on
+        # (claude-config#3464). A file the reader cannot read is not known to keep them.
+        try:
+            body = self.sw.uncommented(body, spaced=True)
+        except self.sw.Unreadable:
+            return False
         # shift, or a set with an operand or -- after any options (set -e -- x sets them too).
         return not re.search(r"(?<![\w-])(shift|set(?:\s+[-+][A-Za-z]+)*\s+(?:--|[^-+\s]))", body)
 
@@ -8091,6 +8141,8 @@ def main():
             reason = judge.line(cmd, cwd, 0, cmd)
         except NulPath:
             reason = judge.unfollow(NUL_WHY)  # never kept: only an allowed judgement is
+        except UnsureComment as e:
+            reason = judge.unfollow(comment_why(e.line))
         finally:
             judge.unwatch()
         if judge.overran:

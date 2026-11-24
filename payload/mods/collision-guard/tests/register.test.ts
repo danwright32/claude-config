@@ -375,7 +375,7 @@ const KIT = new Map<string, unknown>([
   ["writes {\"command\":\"rm -rf src\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[],"changes":[{"word":"src","path":"/repo/src","does":"remove","tree":true}],"unnamed":[]}],
   ["commands {\"command\":\"mv src /tmp/old-src\"}", [["mv","src","/tmp/old-src"]]],
   ["git {\"words\":[\"mv\",\"src\",\"/tmp/old-src\"]}", null],
-  ["writes {\"command\":\"mv src /tmp/old-src\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[{"word":"/tmp/old-src","path":"/tmp/old-src","sources":["/repo/src"],"mayBeFolder":true}],"changes":[{"word":"src","path":"/repo/src","does":"remove","tree":true}],"unnamed":[]}],
+  ["writes {\"command\":\"mv src /tmp/old-src\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[{"word":"/tmp/old-src","path":"/tmp/old-src","sources":["/repo/src"],"mayBeFolder":true}],"changes":[{"word":"src","path":"/repo/src","does":"remove","tree":true,"to":{"word":"/tmp/old-src","path":"/tmp/old-src"}}],"unnamed":[]}],
   ["commands {\"command\":\"cp -r /tmp/sub docs; rm -r docs/sub\"}", [["cp","-r","/tmp/sub","docs"],["rm","-r","docs/sub"]]],
   ["git {\"words\":[\"cp\",\"-r\",\"/tmp/sub\",\"docs\"]}", null],
   ["git {\"words\":[\"rm\",\"-r\",\"docs/sub\"]}", null],
