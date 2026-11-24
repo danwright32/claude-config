@@ -50,5 +50,6 @@ which is NOT loaded into the session.
 - L742. On a rejected token reply, refresh the token and retry that call once; evicting and failing loses every in-flight request.
 - L745. An existence check must treat a record marked deleted, such as Google's status cancelled or a trash label, as absent, never only a 404.
 - L746. Order every OFFSET or range paged read by a unique key, or pages silently skip and repeat rows while the total looks right.
+- L867. Page a table that is written during the read by key position, never OFFSET: a row landing between pages repeats or skips one even under a unique order.
 - L753. In a Next.js error boundary wire Try again to retry, never reset: reset re-renders the payload the browser holds, so the button looks dead.
 - L866. Never export or pass as an argument a value of unbounded size (commit message, diff, API body): pipe it or use a file, or every later exec fails.

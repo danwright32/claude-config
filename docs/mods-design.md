@@ -3110,8 +3110,10 @@ and the band question is removed rather than kept beside it (L29). Three defects
   under `~/.claude/state/asked-questions`, at most 2,000 kept. `tools/asked-questions-count.ts`
   reads them, for the reading two weeks from 2026-11-21 that decides whether to hold them.
   Those two answers meet at picker manners: a mod's question naming an issue would be refused like
-  a session's. The coordinating session's rule (2026-11-21, until Dan settles it) is that a mod's
-  own dialog is asked and its answer written onto no issue, as every such picker was before. It is
+  a session's. Dan settled how the two meet (5:46 PM ET on 2026-11-21, from a picker: "Yes, as
+  built (Recommended)"): a mod's own dialog is asked, its length recorded and its answer written
+  onto no issue, and the two week reading of the recorded lengths (recording began with #3407,
+  merged 2026-11-22) decides whether the mods' own questions are held too. It is
   told apart by the asking mod's own `$.state` (key `asking`), which holds the whole dialog while
   it is open: the engine lets only the owner write a state ("scope-modes owns that value and only
   its owner writes it", measured in picker manners' suite) and a session has only tools. The call
@@ -3366,7 +3368,14 @@ and the band question is removed rather than kept beside it (L29). Three defects
   the index and a toast saying it went unused would be noise. A write of the line that does not land
   gives the cover back for the rest of the window, as an approval is given back; a shell command
   that failed spends it. A Bash For good covering more than one file, and Dan's own permanent words,
-  record no cover. The noun (`isApproved`, #1483) does not answer for a cover: its one caller asks
+  record no cover. What Claude is told with the save follows the index as it is when the save lands
+  (#3506, after a session told the line "may be added" read that as leave to rewrite the line already
+  there, 2026-11-23): an index with a line whose one link is the file (`linksOnlyTo`) is said to link
+  it already, with a change to that line asked about; one with no such line, or none yet, is offered
+  the line; one that is no ordinary file, fails to read or does not answer in the time the hook gives
+  its looks gets no word about the line either way, since whether it already links the file could
+  not be told, and the guard covers no line written to an index it cannot read. Only the words
+  changed: the cover is recorded as before in every case. The noun (`isApproved`, #1483) does not answer for a cover: its one caller asks
   only about the lessons file.
 - **What Dan reads as the rule:** Claude's own plain sentence and the file (#777). The band showed a
   new file's whole text, the lines a rewrite adds, an Edit's new text, or a Bash command as written,
@@ -3701,6 +3710,23 @@ lasting memory file, or moved one away, ran with no question. Measured in the mo
   cores), and a list naming every note in a folder still fits. Main multiplies out no brace,
   and `rm` of a brace pattern never reached this code. A pattern of more than four stars is
   taken to match anything, since a search for one grows with each star.
+- **Two sources of one mv or cp that may land on one name are no move (#3505).** Measured on this
+  Mac's APFS disk on 2026-11-23: `mv <memory>/a.md <folder>/A.md <archive>/`, and the same with two
+  sources named exactly `a.md`, leaves only the source named last in the archive, for `mv` and
+  `cp` alike; `mv -n` loses neither. The reader had dropped `to` from such a mv, but the write the
+  first source lands on still named it as its one source, so the question said it "can be moved
+  back". mod-kit's reader now marks each write of a copy or move into a folder `shared` where
+  another source of the same command may land on the same name: another folder holding a name
+  alike but for letter case and the Unicode form of an accent, a pattern, or a word no path names.
+  `removalCandidates` in `rules.ts` takes no `shared` write as where a file goes, so the removal
+  is main's Delete question, with no new sentence; a `mv -n` is worded the same, the harmless side
+  to be wrong on. The mark is on the write rather than the removal, so `cp a b <folder>/ && rm a`
+  is covered too. Names are compared in small letters and in capitals, as `foldedName` does: the
+  same disk keeps `straße.md` and `STRASSE.md`, a long s and s, a final sigma and a capital one,
+  and the ff ligature and FF each as one file, which small letters alone kept apart. Measured over
+  162 commands (the 129 of pull request #3485's table and 33 new): the same 157 stop before and after, none of the 129
+  changed, and none of the 21 that changed now says "can be moved back" where it did not. Left as
+  it was: two separate `mv` commands onto one name are still worded as a move.
 - **Asleep**, the removal is noted for the morning report as a finding (the report's kind for
   anything else noticed; a kind of its own would be a change to the report) and refused.
 - **Not covered.** What git itself removes or puts back (`git rm`, `git mv`, a checkout or restore

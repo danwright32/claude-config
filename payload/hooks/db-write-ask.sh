@@ -87,6 +87,19 @@
 # project's write carries. Before, the failed save was swallowed, and the next session asked him
 # to approve the same line again with no reason given.
 #
+# A COMMAND HOLDING A #, since #3472. The shared reader took a # for a comment by a rule the shell
+# does not follow, so a command on the rest of that line was left out of what this hook judged: a
+# write there was not asked about, a push Dan applied was let through with that line riding along,
+# and a commit there of an unapproved list line was not asked about (all three reproduced,
+# test-db-write-ask-unsure-line.sh). The reader now reads on where every shell does, and names a #
+# it cannot tell from a comment, but only for a caller that asks. So a Bash command holding a # is
+# judged by both readings (lib/db-write-calls.py, bash_findings(), dry_push_dir() and
+# second_reading()): what either finds is asked about; a # that cannot be told, or a reader that
+# cannot be asked, is asked about saying so, since nobody can say such a command holds no write;
+# and a push or a write from a file is let through only when both readings find that same run as
+# the whole of its command, after a dry run that both read as a dry run. A command with no # has
+# none to be unsure of and is read once, as before.
+#
 # THE SCREEN. The hook now runs on every Bash and MCP call, and since #2643 every Edit, Write and
 # MultiEdit, so it leaves before python3 starts unless the payload holds one of DB_SCREEN_WORDS, which
 # every word lib/db-write-calls.py can ask about holds (test-db-write-ask.sh checks that), as does the
@@ -377,14 +390,37 @@ if tool == "Bash":
         if missing:
             ask(missing + ", so whether this command writes the test project list of a checkout, or commits a "
                 "project onto one, could not be told", "2989", "change to a test project list")
+        def shell_change():
+            return ap.list_shell_change(bcmd, d.get("cwd"), bsw, strip, d.get("session_id"),
+                                        d.get("transcript_path"), bool(d.get("agent_id")), UNKEPT)
+        untold_what = "whether it writes a test project list of a checkout, or commits a project onto one, could not be told"
+        untold = ", so " + untold_what
+        decided_by = "2989, claude-config#3023"
         try:
-            change = ap.list_shell_change(bcmd, d.get("cwd"), bsw, strip, d.get("session_id"),
-                                          d.get("transcript_path"), bool(d.get("agent_id")), UNKEPT)
+            change = shell_change()
+            if change is None and "#" in bcmd:
+                # The reader left out the rest of a line whose # the shell reads inside a word, so a
+                # commit there was never seen (claude-config#3472). A command holding a # is read
+                # again as the reader gives it to a caller that asks, and one whose # cannot be told
+                # from a comment is asked about. The library that asks is loaded only here, as for a
+                # redirection above, so a commit holding no # pays nothing for it.
+                load_calls()
+                if calls is None:
+                    change = calls_why + ", so the command, which holds a #, could not be read as the shell runs it" + untold
+                else:
+                    bcwd = d.get("cwd")
+                    change, unsure = calls.second_reading(bcmd, bsw, bcwd if isinstance(bcwd, str) and bcwd.startswith("/") else "",
+                                                          None, shell_change)
+                    # Read twice, what could not be saved is said once.
+                    UNKEPT[:] = list(dict.fromkeys(UNKEPT))
+                    if unsure is not None:
+                        change = calls.unsure_why(unsure, untold_what)
+                if change is not None:
+                    decided_by += ", claude-config#3472"
         except Exception as e:
-            change = ((calls_why or "the command could not be read (" + type(e).__name__ + ")") + ", so whether "
-                      "it writes a test project list of a checkout, or commits a project onto one, could not be told")
+            change = (calls_why or "the command could not be read (" + type(e).__name__ + ")") + untold
         if change is not None:
-            ask(change, "2989, claude-config#3023", "change to a test project list")
+            ask(change, decided_by, "change to a test project list")
 if COMMIT_ONLY:
     # Nothing else to read: the screen found no word a database call could hold.
     sys.exit()
@@ -453,8 +489,8 @@ if tool == "Bash":
     # A `supabase db push`, or a `supabase db query` write from a -f file, that is the whole of its
     # command is let through when the Apply Dan answered in the /db-apply picker in this session
     # covers it, and asked about, saying why, when none does (claude-config#2763). A finding is
-    # Applicable only in a command that holds nothing else but cd, so letting it through lets
-    # nothing else through with it.
+    # Applicable only in a command that holds nothing else but cd, by both of the reader readings
+    # since #3472, so letting it through lets nothing else through with it.
     pushes = [f for f in found if calls.is_applicable(f)]
     if pushes:
         ap, ap_why = part("db_apply_approval_shared", "db-apply-approval.py")
@@ -501,8 +537,11 @@ if tool == "Bash":
     # command holds, or both, and names the issue behind each (claude-config#2660).
     deploys = [f for f in found if calls.is_function_deploy(f)]
     kinds = ([DATABASE_CALL] if len(deploys) < len(found) else []) + ([DEPLOY] if deploys else [])
+    # A finding only the second reading of the command accounts for names the issue that decided
+    # it (claude-config#3472): a # that cannot be told from a comment, or a run that is not the
+    # whole of its command once the shell reads on past a #.
     issues = ((["2536"] if len(deploys) < len(found) else []) + (["2660"] if deploys else [])
-              + (["2763"] if pushes else []))
+              + (["2763"] if pushes else []) + (["3472"] if any(calls.is_second_reading(f) for f in found) else []))
     ask("; ".join(shown) + ("; and " + str(more) + " more in the same command" if more else ""),
         ", claude-config#".join(issues), " and ".join(kinds))
 

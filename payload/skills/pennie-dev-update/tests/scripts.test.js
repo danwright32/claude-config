@@ -878,6 +878,72 @@ function commitCase(extraState) {
   check(again.code !== 0 && /already/i.test(again.err) && committed(ws)[PET].lastEnd === '2026-10-03T12:00:00Z',
     'running commit-state twice on one gather refuses the second time and changes nothing', again.all);
 }
+
+// claude-config#3503: commit-state is handed the gathered file, whose pull request bodies can name a
+// Slack posting method, as one did on 2026-11-23, and the Slack drafts gate then refuses the
+// command. commit-state needs no network, so the skill runs it under the no network wrapper
+// (SKILL.md sections 2 and 10). Held here: it runs to the end there, so a change that adds a
+// network call to it fails in this suite rather than partway through a real run. The wrapper is the
+// payload's own, which sits beside the skill as it does once installed. Where the wrapper cannot run
+// anything at all (not macOS, or this suite already running with no network) the case says it was
+// not measured, never passed or failed (L411). The method's name is built from parts, so this file
+// holds none of it literally: the Slack drafts gate reads the files a command runs.
+const WRAP = path.join(SKILL, '..', '..', 'hooks', 'no-network-run.sh');
+const SLACK_METHOD = 'chat.post' + 'Message';
+function commitUnderWrapper(script) {
+  const ws = workspace({ pulls: { [SONAR]: [], [PET]: [
+    pr(101, '2026-10-02T12:00:00Z', { body: 'Alerts now post with ' + SLACK_METHOD + '.' }),
+    pr(102, '2026-10-03T12:00:00Z'),
+  ] }, compare: { [PET]: { [sha(101) + '...' + sha(900)]: 'ahead', [sha(102) + '...' + sha(900)]: 'ahead' } } },
+  null, { [PET]: { lastEnd: '2026-10-01T00:00:00Z', heldBack: [] } });
+  gather(ws, LIVE_OK);
+  ws.draft = path.join(ws.dir, 'Draft for Dan' + APOS + 's post.txt');
+  fs.writeFileSync(ws.draft, 'Updates for October 1 to 8 :thread:\n\nGOALS\nA line.\n');
+  let gathered = '';
+  try { gathered = fs.readFileSync(ws.out, 'utf8'); } catch (e) { gathered = 'no gathered file: ' + e.code; }
+  const p = spawnSync(WRAP, [process.execPath, script, 'commit-state', '--gathered', ws.out, '--state', ws.state,
+    '--draft', ws.draft, '--repo', PET, '--listed', '101,102', '--headings', 'GOALS'],
+  { env: env(ws), encoding: 'utf8', timeout: 120000 });
+  const r = { code: p.status, all: (p.stdout || '') + (p.stderr || '') + (p.error ? String(p.error) : ''),
+    namesMethod: gathered.indexOf(SLACK_METHOD) !== -1, gathered: gathered, unmeasured: null, lastEnd: null };
+  // The wrapper's own refusals end "Nothing was run." 69 is a tool missing from this machine; 70
+  // with "even outside the sandbox" is a connection that failed before any sandbox was applied,
+  // which is this suite itself having no network. Any other refusal is the wrapper broken, a failure.
+  if (/Nothing was run\./.test(r.all) && (r.code === 69 || (r.code === 70 && /even outside the sandbox/.test(r.all)))) {
+    r.unmeasured = r.all.trim().split('\n').pop();
+  }
+  // What the command itself said: the wrapper's own lines are left out, since its banner names the
+  // permission error it explains.
+  r.own = r.all.split('\n').filter(function (l) { return l.indexOf('no-network-run: ') !== 0; }).join('\n');
+  try { r.lastEnd = committed(ws)[PET].lastEnd; } catch (e) { r.lastEnd = null; }
+  return r;
+}
+{
+  const r = commitUnderWrapper(GATHER);
+  if (r.unmeasured) console.log('SUITE-PART-UNMEASURED commit-state running to the end with no network: ' + r.unmeasured);
+  else {
+    check(r.namesMethod, 'the fixture gathered file names a Slack posting method, as the one on 2026-11-23 did', r.gathered);
+    check(r.code === 0 && /running with no network access/.test(r.all) && !/EPERM|Operation not permitted/.test(r.own)
+      && r.lastEnd === '2026-10-03T12:00:00Z',
+    'commit-state runs to the end under the no network wrapper and writes the state', 'exit ' + r.code + ', lastEnd ' + r.lastEnd + ': ' + r.all);
+  }
+}
+{
+  // The case above seen to fail (L1): a copy of gather.js whose commit-state also opens a connection,
+  // to a port on this Mac, as a later change adding a network call would. Under the wrapper the
+  // connection is refused with the sandbox's permission error, and the run fails.
+  const src = fs.readFileSync(GATHER, 'utf8');
+  const hooked = src.replace('function cmdCommitState(args) {', "function cmdCommitState(args) {\n  require('net').connect(9, '127.0.0.1');");
+  check(hooked !== src, 'the copy of gather.js with a network call differs from it', 'the line it is added after was not found');
+  const copy = path.join(SCRATCH, 'gather with a network call.js');
+  fs.writeFileSync(copy, hooked);
+  const r = commitUnderWrapper(copy);
+  if (r.unmeasured) console.log('SUITE-PART-UNMEASURED a commit-state that opens a connection failing under the wrapper: ' + r.unmeasured);
+  else {
+    check(r.code !== 0 && /running with no network access/.test(r.all) && /EPERM|Operation not permitted/.test(r.own),
+      'a commit-state that opens a connection fails under the wrapper, so the case above would go red', 'exit ' + r.code + ': ' + r.all);
+  }
+}
 {
   const { ws } = commitCase();
   fs.writeFileSync(ws.draft, 'Updates for October 1 to 8 :thread:\n\nA line.\n');

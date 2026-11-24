@@ -245,6 +245,23 @@ not gathered or was held back, and when the state moved since the gather (so run
 changes nothing). It takes `lastEnd` from the gathered `merged_at` of the newest listed PR,
 `heldBack` from what gather found not yet live, and keeps every other field.
 
+**`commit-state` runs under the no network wrapper** (claude-config#3503), as step 7 of section 10
+gives it:
+
+```bash
+__CLAUDE_HOME__/hooks/no-network-run.sh node __CLAUDE_HOME__/skills/pennie-dev-update/gather.js commit-state --gathered <scratchpad>/gathered.json ...
+```
+
+It is handed the gathered file, which carries every gathered PR's body, and a body can name a Slack
+posting method: on 2026-11-23 one did, in a PR about Slack alerts. From then on the Slack drafts gate
+refused every command handed that file, though `commit-state` only reads it and the draft and
+writes the state file, and its refusal of `commit-state` offered no way forward. Under the wrapper
+the command cannot reach the network at all, so the gate lets it through. The gate takes that route
+only when the wrapper's path is the call's first word and no word after it holds a tilde or a
+variable, so every path in the command is written out in full. The gather itself reads GitHub and
+never runs under the wrapper. `tests/scripts.test.js` runs `commit-state` under it, so a change that
+gives it a network call fails there rather than partway through a run.
+
 ### `--since <ISO timestamp>` is an escape hatch
 
 Only for redoing a period or recovering lost state. When it is **later** than `lastEnd`,
@@ -753,7 +770,14 @@ files in the session scratchpad.
    `first_appearance` (section 2: introduce it, list nothing), `refused` or `unreachable`. A repo
    refused because its account is not signed in names the account and the command that signs it
    in; give Dan both, word for word.
-3. Classify (section 5) the `ok` repos' PRs. Read bodies where ambiguous.
+3. Classify (section 5) the `ok` repos' PRs. Read bodies where ambiguous. Read the gathered file
+   with the Read tool, or, for counts and summaries, with a command run under the no network
+   wrapper, every path written out in full, for the reason in section 2 (a PR body that names a
+   Slack posting method makes the Slack drafts gate refuse any command handed the file):
+
+   ```bash
+   __CLAUDE_HOME__/hooks/no-network-run.sh node -e 'const g = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); for (const r of g.repos) console.log(r.repo, r.status, (r.prs || []).length + " PRs", (r.heldBack || []).length + " held")' <scratchpad>/gathered.json
+   ```
 4. Draft in the format (section 6), applying the accuracy pass (section 7).
 5. Write it, run `lint-post.js` until it is clean, run `/no-ai-tells` and lint again (section 8).
    Do not open it yet: the editor opens at step 8, once nothing is left to run.
@@ -763,10 +787,11 @@ files in the session scratchpad.
    listed and the headings it used:
 
    ```bash
-   node ~/.claude/skills/pennie-dev-update/gather.js commit-state --gathered <scratchpad>/gathered.json --draft <file> --repo <owner>/<name> --listed <n,n,...> --headings 'HEADING ONE|HEADING TWO'
+   __CLAUDE_HOME__/hooks/no-network-run.sh node __CLAUDE_HOME__/skills/pennie-dev-update/gather.js commit-state --gathered <scratchpad>/gathered.json --draft <file> --repo <owner>/<name> --listed <n,n,...> --headings 'HEADING ONE|HEADING TWO'
    ```
 
-   Leave out `--listed` for a first appearance and for a repo the post listed nothing from.
+   Leave out `--listed` for a first appearance and for a repo the post listed nothing from. It runs
+   under the no network wrapper with every path written out in full, never with a tilde (section 2).
 
    This records the post as checked, before Dan edits it, and does not wait for him. Waiting
    would keep the run going after the editor opens, and a post that goes out with no later turn

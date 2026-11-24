@@ -8119,6 +8119,13 @@ for reference; L6 was reviewed and deliberately not adopted.
   same data, offered none. Fixed for all 72 paged reads in slate#3280.)
   SHORT: Order every OFFSET or range paged read by a unique key, or pages silently skip and repeat rows while the total looks right.
 
+- **L867. A read paged by OFFSET or a range over a table that is written or purged while it is
+  read repeats and skips rows even under a unique order, because each insert or delete between
+  two page requests shifts every later row one place. Page such a table by key position (rows
+  after the last key seen) and count each key once.** (bidspoke#4022, 2026-11-24)
+  NO CHECK: no shared helper pages by key position yet, so only a reader holds this rule until one is built
+  SHORT: Page a table that is written during the read by key position, never OFFSET: a row landing between pages repeats or skips one even under a unique order.
+
 - **L753. In a Next.js App Router error boundary, wire Try again to `retry`, never `reset`**,
   because `reset` only re-renders the payload the browser already holds, so a read that failed on
   the server draws the same failure screen again and the button looks dead while reading as wired.
@@ -9039,6 +9046,12 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A plan shipped with its own audit unresolved is read as THE plan, so file the correction as a gating issue alongside the phase issues.
 
 ## Cross-system reliability
+- **L1040. A harness that runs generated or untrusted input gives each run a time limit that kills
+  its whole process group, and checks before it ends that no child is alive. One input that never
+  ends otherwise outlives the harness, and its cost shows in no folder size and no test result.**
+  (claude-config#3561, 2026-11-24)
+  NO CHECK: the leftover process check is filed as claude-config#3561 and is not built yet
+  SHORT: A harness running generated input gives each run a time limit that kills its process group, or one endless input outlives it unseen.
 - **L859. A check that reads a platform straight after writing to it must read again for a bounded time before it fails, through an injected sleep, because the platform's read path can lag its write path, and a single read turns that lag into a failed step that leaves the system half updated.**
   (pivot#1591, 2026-11-17)
   SHORT: A check reading a platform straight after writing to it must read again for a bounded time before failing: the read path can lag the write.
