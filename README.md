@@ -6085,7 +6085,9 @@ because it decides how many processes start.
 <tr><td><code>HOOK_TESTS_TIMINGS</code></td><td><code>~/.cache/claude-config/suite-timings</code></td><td>
 
 Where each suite's measured wall clock is kept between runs, one small file per suite, keyed on the
-suite's path inside the repo. It is what the launch order is built from. Set it to empty to turn the
+suite's path inside the repo, as `<seconds> <checks> <share>`: the seconds are its time at the
+smallest share of the budget it has been measured at, and the share is that number of slots. It is
+what the launch order is built from. Set it to empty to turn the
 record off, so a run reads nothing and writes nothing. Deliberately outside the config directory: a
 duration measured on this machine is not configuration, and mirroring it would make the other Mac
 order its runs by numbers from hardware it does not have.
@@ -6211,9 +6213,22 @@ fighting itself.
 Results are collected and printed in the order the suites were FOUND, never the order they
 finished, so two runs of the same tree produce the same page and a difference between them is a
 difference in the suites rather than in the machine's mood. Suites are launched longest first,
-judged by what each one was last MEASURED to cost: every run records each suite's wall clock and
-the next run orders by it. Lane 1 carries the largest share of the budget and lane 1 is whatever
+judged by what each one was MEASURED to cost: every run records each suite's wall clock with the
+share it ran at, and the next run orders by the figure below. Lane 1 carries the largest share of the budget and lane 1 is whatever
 launches first, so this is what decides which suite the machine is spent on.
+
+What a suite is ranked by is its time at the smallest share it has been measured at, recorded with
+that share, never simply its last wall clock (#3388). A suite that divides its own work by its share
+finishes much sooner in lane 1: the sync suite took about 7 minutes there and 23 to 27 anywhere else
+on the 18 core Mac, measured 2026-11-20 and 2026-11-21. Ranked by its last wall clock, it was recorded as quick every time it led, lost
+lane 1 on the next run, was recorded as slow, and led again on the one after, alternating through
+nine runs in a row (#2589) at a cost of about 5 minutes of every other run at a budget of 12. So a
+time measured at a larger share than the recorded one does not replace it. It only keeps it within
+what it proves: more slots never make a suite slower, so the figure is at least the new time, and
+`s` slots cannot make it more than `s/r` times quicker than `r`, so the figure is at most the new
+time times that ratio. The floor catches a suite that got slower, and the ceiling lets one that got
+quicker give lane 1 up rather than holding it on an old figure. The line naming a wrong lead
+compares the same figures, so a lead that finished early because it had lane 1 is not called wrong.
 
 A suite nobody has measured yet, which means a first run or a newly added suite, falls back to
 file size and follows the measured ones. Size is a heuristic and bytes are not seconds, so the
