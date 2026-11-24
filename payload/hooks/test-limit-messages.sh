@@ -153,12 +153,38 @@ out="$(HOME="$H2" python3 "$TOOL" days 2>&1)"; rc=$?
 same "9 empty exits 0" "0" "$rc"
 check "9 empty said" "No usage limit message has been recorded on this Mac" "$out"
 
-# 10. A record that cannot be written fails loud: a non zero exit and the cause on stderr.
-H3="$WORK/home3"; mkdir -p "$H3/.claude/state"; chmod 500 "$H3/.claude/state"
-out="$(printf '%s' "$STOP_PAYLOAD" | HOME="$H3" python3 "$TOOL" record 2>&1)"; rc=$?
-if [ "$rc" -ne 0 ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: 10 unwritable record exits non zero"; fi
-check "10 cause said" "could not record" "$out"
-chmod 700 "$H3/.claude/state"
+# Cases 10 and 11 take a permission away, which root ignores, so under root they are reported as
+# not measured rather than failing for a reason that is not the code's (L411).
+if [ "$(id -u)" = 0 ]; then
+  echo "UNMEASURED: cases 10 and 11 need a permission root ignores"
+else
+  # 10. A record that cannot be written fails loud: a non zero exit and the cause on stderr.
+  H3="$WORK/home3"; mkdir -p "$H3/.claude/state"; chmod 500 "$H3/.claude/state"
+  out="$(printf '%s' "$STOP_PAYLOAD" | HOME="$H3" python3 "$TOOL" record 2>&1)"; rc=$?
+  if [ "$rc" -ne 0 ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: 10 unwritable record exits non zero"; fi
+  check "10 cause said" "could not record" "$out"
+  chmod 700 "$H3/.claude/state"
+
+  # 11. A transcript the backfill cannot read is said and fails the run, never counted as scanned.
+  LOCKED="$HOME/.claude/projects/-proj/sess-locked.jsonl"
+  cp "$OLD" "$LOCKED"; chmod 000 "$LOCKED"
+  out="$(python3 "$TOOL" scan 2>&1)"; rc=$?
+  if [ "$rc" -ne 0 ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: 11 scan with an unreadable transcript exits non zero"; fi
+  check "11 unreadable count said" "1 transcript could not be read" "$out"
+  chmod 600 "$LOCKED"; rm -f "$LOCKED"
+fi
+
+# 12. A torn line in the record is skipped and said; the reader still prints every other day.
+printf '{"v":1,"id":"torn' >> "$REC"; printf '\n' >> "$REC"
+out="$(python3 "$TOOL" days 2>&1)"; rc=$?
+same "12 torn line still exits 0" "0" "$rc"
+check "12 other days still printed" "Five hour limit: 2 days" "$out"
+check "12 torn line said" "1 line of the record could not be read" "$out"
+
+# 13. A recorder failure is said with its date as well as its time, in ET.
+printf '{"at":"2026-11-20T15:10:00Z","why":"invented failure"}\n' > "$HOME/.claude/state/limit-messages/failures.jsonl"
+out="$(python3 "$TOOL" days 2>&1)"
+check "13 failure dated" "last at Fri Nov 20 10:10 AM ET: invented failure" "$out"
 
 printf 'SUITE-RESULT passed=%d failed=%d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

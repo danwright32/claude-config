@@ -477,7 +477,8 @@ hooks, and its header holds where a limit message can be seen and why.
 - `python3 ~/.claude/hooks/limit-messages.py days` prints limit days by kind, in ET, with the reset
   times each day named, so a five hour limit day is never counted with a model limit day.
 - `python3 ~/.claude/hooks/limit-messages.py scan` fills the record from the transcripts still on
-  disk. It adds nothing already recorded, and the messages it finds carry no account.
+  disk. It adds nothing already recorded, and a message it finds carries an account only when its
+  session is still running. A transcript it cannot read is named in a count and fails the run.
 
 It also adds this to `~/.zshrc`, so the shortcut arrives with the rest of the setup
 instead of being added by hand on each Mac (`~/.zshrc` is deliberately not synced):

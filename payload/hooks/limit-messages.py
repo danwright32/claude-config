@@ -25,7 +25,8 @@ back to the payload's own wording when the line is not there (it may not be writ
 
 WHAT A RECORD HOLDS: when, the kind, the model a model limit names, the reset time and whether it
 came from the structured block or the wording, the structured limit type and overage fields, who
-was stopped (main, headless or agent), a cycle key (kind, model and reset time: two different reset
+was stopped (main, headless or agent from the transcript line; "session" for a record made from the
+hook's own wording, which cannot tell a main session from a headless run), a cycle key (kind, model and reset time: two different reset
 times for one kind at once are two accounts or two cycles), and the account as far as it can be
 read. No conversation text, no session id, no email, no project folder.
 
@@ -378,15 +379,16 @@ def cmd_record():
 def cmd_scan():
     root = os.path.join(home(), ".claude", "projects")
     files = 0
+    unread = 0
     recs = []
     for dp, _, fs in os.walk(root):
         for f in fs:
             if f.endswith(".jsonl"):
-                files += 1
                 try:
                     recs.extend(lines_in(os.path.join(dp, f)))
+                    files += 1
                 except OSError:
-                    continue
+                    unread += 1
     try:
         with Store() as st:
             new = st.add(recs)
@@ -394,6 +396,11 @@ def cmd_scan():
         print("limit-messages: could not record the backfill in %s: %s" % (record_dir(), e), file=sys.stderr)
         return 1
     print("Scanned %d transcripts: %d usage limit messages, %d new to the record." % (files, len(recs), new))
+    if unread:
+        # A backfill that missed files must not read as complete.
+        print("%d transcript%s could not be read, so any limit message in %s is not in the record." % (
+            unread, "" if unread == 1 else "s", "it" if unread == 1 else "them"), file=sys.stderr)
+        return 1
     return 0
 
 
@@ -407,18 +414,40 @@ def clock(ts):
 
 
 def cmd_days():
+    rows, torn = [], 0
     try:
-        rows = [json.loads(l) for l in open(record_path()) if l.strip()]
+        with open(record_path()) as fh:
+            for l in fh:
+                if not l.strip():
+                    continue
+                try:
+                    r = json.loads(l)
+                except ValueError:
+                    r = None
+                # A torn or foreign line is counted and said, never a reason to print nothing.
+                if isinstance(r, dict) and parse_at(r.get("at")) is not None and isinstance(r.get("kind"), str):
+                    rows.append(r)
+                else:
+                    torn += 1
     except FileNotFoundError:
-        rows = []
-    except (OSError, ValueError) as e:
+        pass
+    except OSError as e:
         print("The record at %s could not be read: %s" % (record_path(), e), file=sys.stderr)
         return 1
-    failures = []
+    failures, failures_unread = [], None
     try:
-        failures = [json.loads(l) for l in open(os.path.join(record_dir(), "failures.jsonl")) if l.strip()]
-    except (OSError, ValueError):
+        with open(os.path.join(record_dir(), "failures.jsonl")) as fh:
+            for l in fh:
+                try:
+                    f = json.loads(l)
+                except ValueError:
+                    continue
+                if isinstance(f, dict):
+                    failures.append(f)
+    except FileNotFoundError:
         pass
+    except OSError as e:
+        failures_unread = str(e)
     if not rows:
         print("No usage limit message has been recorded on this Mac. Run `limit-messages.py scan` to fill the record from the transcripts still on disk.")
     else:
@@ -453,10 +482,15 @@ def cmd_days():
         read = sum(1 for r in rows if r.get("account"))
         print("")
         print("Account read for %d of %d messages. It is read only while the session is running (the status bar mod's session record); messages found by the backfill after a session ended carry none." % (read, len(rows)))
+    if torn:
+        print("%d line%s of the record could not be read and %s left out." % (torn, "" if torn == 1 else "s", "is" if torn == 1 else "are"))
     if failures:
-        print("The recorder failed %d time%s, last at %s ET: %s" % (
+        last = parse_at(failures[-1].get("at"))
+        print("The recorder failed %d time%s, last at %s: %s" % (
             len(failures), "" if len(failures) == 1 else "s",
-            clock(et(parse_at(failures[-1]["at"]))) if parse_at(failures[-1].get("at")) else "an unknown time", failures[-1].get("why")))
+            et(last).strftime("%a %b %d ") + clock(et(last)) + " ET" if last else "an unknown time", failures[-1].get("why")))
+    if failures_unread:
+        print("Whether the recorder has failed is not known: its failure log could not be read (%s)." % failures_unread)
     return 0
 
 
