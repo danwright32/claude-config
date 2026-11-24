@@ -5,8 +5,8 @@
 #
 # test-merge-when-ready.sh held every check of the helper until its section 34, the bypass merge
 # and sleep mode's say over it (claude-config#3534, 249 checks), took that suite past
-# run-all-tests.sh's 1,200 second wall limit on a slow GitHub runner (exit 124), which stopped the
-# config sync between the two Macs. Those checks are now test-merge-when-ready-bypass.sh, a suite
+# run-all-tests.sh's 1,200 second wall limit on a slow GitHub runner on 2026-11-24 (exit 124),
+# which stopped the config sync between the two Macs. Those checks are now test-merge-when-ready-bypass.sh, a suite
 # of their own that the runner deals to a part by its own measured cost (L315). Both suites run the
 # helper in the same world, so that world is here, once, and neither suite holds a copy of it
 # (L613): a second copy of the fake gh would let the two drift apart until a check in one passed

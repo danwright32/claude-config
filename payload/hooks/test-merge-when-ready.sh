@@ -14,7 +14,8 @@
 # That world, the counters and the result line are lib/merge-when-ready-harness.sh, which
 # test-merge-when-ready-bypass.sh sources too (claude-config#3572). The bypass merge and sleep mode
 # checks (claude-config#3534) were this suite's section 34 until they took it past run-all-tests.sh's
-# 1,200 second wall limit on a slow GitHub runner; they are that suite's now, dealt by their own cost.
+# 1,200 second wall limit on a slow GitHub runner on 2026-11-24; they are that suite's now, dealt by
+# their own cost.
 set -uo pipefail
 
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/suite-deadline.sh" || {
