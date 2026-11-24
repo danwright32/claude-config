@@ -4387,7 +4387,7 @@ cache keeps and uses nothing from a run where that order is random. Under a test
 A `SLACK_GATE_CACHE_DIR` that is empty, is not an absolute path (a `~` is not expanded, so it counts as
 relative) or holds a `..` is ignored: the call is judged with no cache, and the gate says why once on
 stderr after its verdict, which reaches the session only with a refusal, since the wrapper drops what
-follows an allow (#3466). It does nothing for a cold
+follows an allow (#3466). The cache does nothing for a cold
 run, so a CI runner judges as before.
 
 Beside the judgements, the same folder keeps the shell reader's parse of any text of 64 KB or more

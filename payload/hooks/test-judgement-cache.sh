@@ -568,6 +568,11 @@ p="$(python3 -c 'import json, sys; print(json.dumps({"session_id": "s", "hook_ev
 case "$(wc -l < "$T/rel/stderr" | tr -d ' '):$(cat "$T/rel/stderr")" in
   "1:"*"SLACK_GATE_CACHE_DIR"*"'run/cache-base'"*"not an absolute path"*"no cache"*) check "and its stderr is one line saying the setting was ignored and why" ok ;;
   *) check "and its stderr is one line saying the setting was ignored and why" "it was: $(cat "$T/rel/stderr")" ;; esac
+long="$(printf 'x%.0s' {1..5000})"
+( cd "$T/rel/one" && printf '%s' "$p" | env -u HOOK_TESTS_RUNNING HOME="$T/rel/userdir" GATE_DIR="$DIR" PYTHONHASHSEED=0 SLACK_GATE_CACHE_DIR="$long" python3 "$DIR/slack_drafts_only_gate.py" > "$T/rel/stdout" 2> "$T/rel/stderr" )
+n="$(wc -c < "$T/rel/stderr" | tr -d ' ')"
+case "$(cat "$T/rel/stderr")" in *"cut at 200 characters"*) [ "$n" -lt 600 ] && check "a long setting is cut short in the notice" ok || check "a long setting is cut short in the notice" "the notice is $n bytes" ;;
+  *) check "a long setting is cut short in the notice" "it was $n bytes and does not say it was cut" ;; esac
 
 echo
 echo "judgement cache: the reader's parses of large texts, kept between runs (#2918)"

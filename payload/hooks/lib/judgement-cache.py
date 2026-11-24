@@ -632,10 +632,11 @@ def unusable(named):
     cache is only ever where the setting plainly says."""
     if not named:
         return "SLACK_GATE_CACHE_DIR is set but empty"
+    shown = repr(named[:200]) + (" (cut at 200 characters)" if len(named) > 200 else "")
     if not _os.path.isabs(named):
-        return f"SLACK_GATE_CACHE_DIR is {named!r}, which is not an absolute path"
+        return f"SLACK_GATE_CACHE_DIR is {shown}, which is not an absolute path"
     if ".." in named.split(_os.sep):
-        return f"SLACK_GATE_CACHE_DIR is {named!r}, which has a .. in it"
+        return f"SLACK_GATE_CACHE_DIR is {shown}, which has a .. in it"
     return None
 
 
