@@ -468,7 +468,7 @@ describe('claude-sync pull, the config repository deploy step (#1106)', () => {
   const place: Place = { ...ON_BRANCH, own: CONFIG }
   const judge = (night: unknown, command: string, cwd = `${'/Users'}/x/repo`) => {
     const commands = cmds(command)
-    return judgeNight(night, commands, dirsOf(commands, cwd, HOME).map(d => (d === CLONE ? place : d === null ? null : { ...ON_BRANCH, own: 'o/r' })))
+    return judgeNight(night, commands, dirsOf(commands, cwd, HOME, command).map(d => (d === CLONE ? place : d === null ? null : { ...ON_BRANCH, own: 'o/r' })))
   }
   const lists = (j: object) => nightRepos(readRepoLists(JSON.stringify({ v: 1, mergeOnly: [], mayDeploy: [], ...j })), [])
   test('a pull is a deploy, by any path to the script, and only a pull among the reads', () => {
@@ -478,14 +478,15 @@ describe('claude-sync pull, the config repository deploy step (#1106)', () => {
       expect({ c, k: kinds(c) }).toEqual({ c, k: [] })
   })
   test('the folder a claude-sync command reaches is the clone its script lives in, never the session folder; a bare name is one that cannot be told', () => {
-    expect(dirsOf(cmds('~/claude-config-sync/claude-sync pull'), `${'/Users'}/x/repo`, HOME)).toEqual([CLONE])
-    expect(dirsOf(cmds('cd ~/claude-config-sync && ./claude-sync pull'), `${'/Users'}/x/repo`, HOME)).toEqual([CLONE, CLONE])
-    expect(dirsOf(cmds(`bash ${'/Users'}/x/Apps/claude-config/claude-sync pull`), `${'/Users'}/x/repo`, HOME)).toEqual([`${'/Users'}/x/Apps/claude-config`])
-    expect(dirsOf(cmds('claude-sync pull'), `${'/Users'}/x/repo`, HOME)).toEqual([null])
+    const dirs = (command: string) => dirsOf(cmds(command), `${'/Users'}/x/repo`, HOME, command)
+    expect(dirs('~/claude-config-sync/claude-sync pull')).toEqual([CLONE])
+    expect(dirs('cd ~/claude-config-sync && ./claude-sync pull')).toEqual([CLONE, CLONE])
+    expect(dirs(`bash ${'/Users'}/x/Apps/claude-config/claude-sync pull`)).toEqual([`${'/Users'}/x/Apps/claude-config`])
+    expect(dirs('claude-sync pull')).toEqual([null])
     // A shell's own options before the script, a value taking one included, are read past.
-    expect(dirsOf(cmds('bash -e -o pipefail ~/claude-config-sync/claude-sync pull'), `${'/Users'}/x/repo`, HOME)).toEqual([CLONE])
-    expect(dirsOf(cmds('bash --rcfile /tmp/rc ~/claude-config-sync/claude-sync pull'), `${'/Users'}/x/repo`, HOME)).toEqual([CLONE])
-    expect(dirsOf(cmds('bash ./other.sh ~/claude-config-sync/claude-sync pull'), `${'/Users'}/x/repo`, HOME)).toEqual([null])
+    expect(dirs('bash -e -o pipefail ~/claude-config-sync/claude-sync pull')).toEqual([CLONE])
+    expect(dirs('bash --rcfile /tmp/rc ~/claude-config-sync/claude-sync pull')).toEqual([CLONE])
+    expect(dirs('bash ./other.sh ~/claude-config-sync/claude-sync pull')).toEqual([null])
   })
   test('allowed exactly when the night says the config repository may deploy, from any session folder', () => {
     const night = lists({ mayDeploy: [CONFIG] })
@@ -514,7 +515,13 @@ describe('the folder a git command is placed in, by the repository it names (#33
   const HOME = `${'/Users'}/x`
   const CWD = `${'/Users'}/x/repo`
   const dirs = (command: string, cwd = CWD) => dirsOf(cmds(command), cwd, HOME, command)
-  const gitDir = (command: string, cwd = CWD) => {
+  // The type check is the judge of this one (tools/check-mods.sh checks a mod's tests too): a caller
+  // hands over the call's text every time. While it had a default, a caller leaving it out compiled
+  // and read `export GIT_DIR=...` earlier in the call as no naming at all, so the command was placed
+  // in the folder it ran in. The call below must not compile (#3398 lessons review).
+  // @ts-expect-error the fourth argument, the call's text, is required
+  void (() => dirsOf([], CWD, HOME))
+  const gitDir =(command: string, cwd = CWD) => {
     const all = cmds(command)
     const at = all.findIndex(c => c.git)
     return dirsOf(all, cwd, HOME, command)[at]
@@ -531,8 +538,8 @@ describe('the folder a git command is placed in, by the repository it names (#33
       'read GIT_DIR; export GIT_DIR; git push',
     ])
       expect({ c, at: gitDir(c) }).toEqual({ c, at: null })
-    // The same asked without the call's text (a caller that has none) still reads the setting in front of the command.
-    expect(dirsOf(cmds('GIT_DIR=/elsewhere/.git git push'), CWD, HOME)).toEqual([null])
+    // The same asked with an empty text still reads the setting in front of the command, which the reader hands on.
+    expect(dirsOf(cmds('GIT_DIR=/elsewhere/.git git push'), CWD, HOME, '')).toEqual([null])
   })
   test('so a push named that way is judged at its strictest, never by the branch of the folder it was typed in', () => {
     const night = nightRepos(readRepoLists(JSON.stringify({ v: 1, mergeOnly: [], mayDeploy: ['o/r'] })), [])

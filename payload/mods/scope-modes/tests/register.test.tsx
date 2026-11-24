@@ -7827,7 +7827,26 @@ for (const line of [
     expect(w.toasts).toEqual([`Winding down let the branch chore/readings start, for the cleanup Dan agreed to (${READINGS}).`])
   })
 
-for (const line of ['git -C /repo switch -c chore/readings', 'cd /repo/tests && git switch -c chore/readings', 'git -C tests checkout -b chore/readings'])
+// The lessons review of #3398 asked whether a call starting TWO agreed branches, each in another
+// checkout, lets the second through as the cleanup once the first is taken out. It does not: the
+// first one started elsewhere is no cleanup, so the call is refused whole, nothing in it runs, and
+// both answers are kept. A pin, green when written.
+test('a call starting two cleanup branches Dan agreed to, each in another checkout, is refused whole, and both answers are kept (#3398 lessons review)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, onMainDirty({ ask: 'Open it', trees: { '/other': '/other', '/third': '/third' } }))
+  await startWrote($ as never, clock)
+  await command($ as never, 'winddown')
+  expect(await call($ as never, cleanupAsk('chore/readings'))).toMatch(/^Dan agreed: make the branch chore\/readings now/)
+  expect(await call($ as never, cleanupAsk('chore/second', 'k2'))).toMatch(/^Dan agreed: make the branch chore\/second now/)
+  expect(await call($ as never, bash('git -C /other switch -c chore/readings && git -C /third switch -c chore/second', 'c2'))).toMatch(/^Blocked: winding down, so this did not start a new branch\. Dan agreed to chore\/readings for \/repo only, and this would start it in \/other\./)
+  // The same two the other way round: the one refused is the first in the call.
+  expect(await call($ as never, bash('git -C /third switch -c chore/second && git -C /other switch -c chore/readings', 'c3'))).toMatch(/^Blocked: winding down, so this did not start a new branch\. Dan agreed to chore\/second for \/repo only, and this would start it in \/third\./)
+  expect(w.toasts).toEqual([])
+  // Each answer still lets its branch start where he agreed to it.
+  expect(await call($ as never, bash('git switch -c chore/second', 'c4'))).toBe('ran')
+  expect(w.toasts).toEqual([`Winding down let the branch chore/second start, for the cleanup Dan agreed to (${READINGS}).`])
+})
+
+for (const line of ['git -C /repo switch -c chore/readings','cd /repo/tests && git switch -c chore/readings', 'git -C tests checkout -b chore/readings'])
   test(`the control: ${line} starts the cleanup branch in the checkout Dan agreed to it for (#3398)`, withDeps, async ($, on) => {
     const { w, clock } = world(on, onMainDirty({ ask: 'Open it', trees: { '/repo/': '/repo' } }))
     await startWrote($ as never, clock)

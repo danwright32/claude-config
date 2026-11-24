@@ -16,6 +16,13 @@ const gitOf = (command: string): GitRead => {
 }
 const place = (command: string, from: string | null = CWD) => gitPlace(gitOf(command), from, (w, f) => resolveDir(w, f, HOME), gitEnvNamed(command, readCommands(command)))
 
+// The type check is the judge of this one (tools/check-mods.sh checks a mod's tests too): a rule
+// placing a git command says, every time, whether the call names a git variable. While that had a
+// default, a rule leaving it out compiled and read a variable exported earlier in the call as no
+// naming at all, with nothing to say so. The call below must not compile (#3398 lessons review).
+// @ts-expect-error the fourth argument, whether the call names a git variable, is required
+void (() => gitPlace({ args: [] }, CWD, w => w))
+
 describe('the reading a command carries', () => {
   test('every naming mod-kit hands on is carried, and none where the command gives none', () => {
     expect(gitOf('git status')).toEqual({ sub: 'status', args: [] })

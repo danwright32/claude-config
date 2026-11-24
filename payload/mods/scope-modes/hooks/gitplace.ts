@@ -83,9 +83,10 @@ export type GitPlace = {
 /**
  * Where a git command acts. `from` is the folder the command runs in (null where a cd before it
  * cannot be followed), `resolve` the rule's own resolver of a folder as written, and `envNamed`
- * whether the call names GIT_DIR, GIT_WORK_TREE or GIT_COMMON_DIR anywhere (`gitEnvNamed`).
+ * whether the call names GIT_DIR, GIT_WORK_TREE or GIT_COMMON_DIR anywhere (`gitEnvNamed`), which
+ * every caller says: left out, a variable exported earlier in the call would read as no naming.
  */
-export const gitPlace = (g: GitRead, from: string | null, resolve: (word: string, from: string | null) => string | null, envNamed = false): GitPlace => {
+export const gitPlace = (g: GitRead, from: string | null, resolve: (word: string, from: string | null) => string | null, envNamed: boolean): GitPlace => {
   const asRead = g.dir === undefined ? from : resolve(g.dir, from)
   const runs = g.chained === undefined ? asRead : g.chained === null ? null : resolve(g.chained, from)
   const apart =

@@ -398,9 +398,10 @@ export type Place = Where & { own: string | undefined }
  * followed (a variable, a pattern, `cd -`, `popd`), and where a git command names its repository
  * apart from any folder (--git-dir, --work-tree, GIT_DIR, GIT_WORK_TREE), which is a repository
  * that cannot be told (L75). `raw` is the call's text, read for GIT_DIR, GIT_WORK_TREE or
- * GIT_COMMON_DIR named anywhere but in front of the git command itself (#3398).
+ * GIT_COMMON_DIR named anywhere but in front of the git command itself (#3398), and every caller
+ * hands it over: left out, `export GIT_DIR=...` earlier in the call would read as no naming.
  */
-export const dirsOf = (commands: Cmd[], cwd: string, home: string, raw = ''): (string | null)[] => {
+export const dirsOf = (commands: Cmd[], cwd: string, home: string, raw: string): (string | null)[] => {
   let dir: string | null = cwd || null
   const stack: (string | null)[] = []
   const out: (string | null)[] = []
