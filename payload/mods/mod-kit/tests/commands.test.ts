@@ -1721,6 +1721,131 @@ describe("$'...' and a script not read to its end (#3491)", () => {
     for (const cmd of [`grep -n '"\${HOME' f; ${NEXT} # it's`, `grep -c '"\${u:-' a.txt b.txt; ${NEXT}`]) expect(marksIn(cmd)).toEqual({ cmd, marks: [undefined] })
   })
 
+  // The second fix round on pull request #3493. A count over a second Mac's recorded commands
+  // (201,766 distinct, 2026-11-23) found the marks above on ordinary commands: nine with two opening
+  // parentheses in quoted text handed to a program (a perl substitution, a pattern for grep, a
+  // program for node) and two with a << in quoted text. To both shells text inside quotes is text.
+  // Every text in the four tests below was run on bash 3.2 and zsh 5.9 with programs that only
+  // print: the two ran the same commands for each one that marks nothing here, and each one that
+  // keeps its mark either ran differently in the two or is one the reader cannot follow as surely
+  // as a shell. The reader searched the text as written for `((`, and read each line's quotes
+  // alone, so a quote opened on an earlier line, or a backtick a backslash escapes, hid that a <<
+  // stood in text.
+  test('two opening parentheses inside quoted text are text to both shells and mark nothing', () => {
+    const texts = [
+      `perl -pe 's/${BS}(([^${BS})]*)${BS})/[$1]/' f; ${NEXT}`,
+      `perl -pe 's/(("|x)y)/z/g' f; ${NEXT}`,
+      `grep -E "((it's|x) y)" f; ${NEXT}`,
+      `grep -E "f${BS}((${BS})|,)" f; ${NEXT}`,
+      `node -e 'q((s || ")").length)'; ${NEXT}`,
+      `node -e "q((s || ')').length)"; ${NEXT}`,
+      `node -e '\nq((s || ")").length)\n'; ${NEXT}`,
+      // After a substitution the reader follows to its end, in double quotes and in backticks, and
+      // in the text of the double quotes that hold one.
+      `p3 "$(p1 "$x")"; perl -pe 's/${BS}(([^${BS})]*)${BS})/[$1]/' f; ${NEXT}`,
+      `grep -E "$x $(p3 a) f${BS}((${BS})|,)" f; ${NEXT}`,
+      `p3 \`p1 a\`; grep -E "\${x} f${BS}((${BS})|,)" f; ${NEXT}`,
+      // After arithmetic and a `\${ }` that hold no quote, and after a comment with an apostrophe.
+      `p3 $((1+2)) $(( (1+2)*3 )) \${x:-a b}; (( x = (1+2)*3 )); perl -pe 's/${BS}(([^${BS})]*)${BS})/[$1]/' f; ${NEXT}`,
+      `p3 a # it's\n[[ a == a # it's\n]]; grep -E "f${BS}((${BS})|,)" f; ${NEXT}`,
+    ]
+    for (const cmd of texts) expect(marksIn(cmd)).toEqual({ cmd, marks: [undefined] })
+    // The words are the ones given before.
+    expect(readAll(texts[0] as string)).toEqual([[['perl', '-pe', `s/${BS}(([^${BS})]*)${BS})/[$1]/`, 'f'], undefined], [next, undefined]])
+    // A shell's script in quotes is read as that shell reads it: its own commands keep the mark, and
+    // the command after it, which bash and zsh both run, has none.
+    expect(readAll(`bash -c '(( 1 "a ))\necho p2 # b"'; ${NEXT}`)).toEqual([[['('], SHELLS], [['('], SHELLS], [['1', 'a ))\necho p2 # b'], SHELLS], [next, undefined]])
+  })
+
+  test('the same parentheses where a shell reads them keep the mark', () => {
+    const kept: [string, (string | undefined)[]][] = [
+      // Outside quotes, after quoted words: zsh alone runs the line after it.
+      [`p1 'a' "$x"; (( 1 'a ))\n${NEXT} # b'`, [undefined, SHELLS]],
+      // In a substitution, or arithmetic, that double quotes leave live: zsh alone runs the commands.
+      [`p1 "$( (( 1 'a )) ; p3 )"\n${NEXT} # b'`, [SHELLS, QUOTE]],
+      [`p1 "a $(p3 $(( 1 'a )) ) b"\n${NEXT} # b'`, [SHELLS, QUOTE]],
+      [`p1 "a $(( 1 ')' )) b"; ${NEXT}`, [SHELLS]],
+      // In quotes that stand inside (( )), where zsh reads no quote: bash alone runs the next line
+      // after the first, and both run it after the second only because its parentheses happen to
+      // balance, which the reader does not ask.
+      [`(( 1 + '((${BS})' ))\n${NEXT}`, [SHELLS]],
+      [`(( 1 + '(( ${BS}) x)' ))\n${NEXT}`, [undefined, SHELLS]],
+      // After what the reader cannot follow as surely as a shell (zsh alone runs the next line of
+      // each): a case inside a substitution in double quotes, whose pattern's ) bash 3.2 ends the
+      // substitution at; a comment inside a substitution, which bash 3.2 reads as text; and the body
+      // of a heredoc the reader does not open.
+      [`p1 "$(case $x in a) p3 '"' ;; esac)"; (( 1 'a ))\n${NEXT} # b'`, [undefined, SHELLS]],
+      [`p3 $(p1 # it's\n); (( 1 'a ))\n${NEXT} # b'`, [undefined, SHELLS]],
+      [`cat <<1\nit's\n1\n(( 1 'a ))\n${NEXT} # b'`, [undefined, SHELLS]],
+      // A comment holding a parenthesis and no quote inside a substitution in double quotes: zsh ends
+      // the substitution on the next line, and the reader with it, but bash 3.2 ran neither line of
+      // either text, so the `((` after it is not called quoted text.
+      [`p1 "$(p3 # a ( b\n) c (( 1 'a ))" \n${NEXT} # '`, [undefined, SHELLS]],
+      [`p1 "$(p3 # a) $(p2 (\n) b (( 1 'a ))\n) c" ; ${NEXT} # '`, [undefined, SHELLS]],
+      // After a # inside a word, which starts no comment, so its apostrophe opens a quote and the
+      // `$((` on the next line stands outside quotes: after a substitution, on a line a backslash
+      // joins to a word, and after a parenthesis.
+      [`p3 $(p1 a)#it's\np1 '$(( 1 '"a ))\n${NEXT} # b"'`, [undefined, SHELLS]],
+      [`p3 a${BS}\n#it's\np1 '$(( 1 '"a ))\n${NEXT} # b"'`, [SHELLS]],
+      [`p3 x(#it's)\np1 '$(( 1 '"a ))\n${NEXT} # b"'`, [SHELLS]],
+      // After a heredoc the line reader closed inside quoted text: the lines it took out as a body
+      // hold a quote and a command, p3, that both shells run and the reader no longer gives.
+      [`p1 '\nx << n\ny' ; p3 '\nn\n(( 1 '"a ))\n${NEXT} # b"`, [SHELLS]],
+      // In quoted text inside a substitution: both shells run it alike, and the mark is left.
+      [`p3 "$(p1 'q((s || ")").length)')"; ${NEXT}`, [SHELLS]],
+      // The pull request's own case: a quote the two shells close at different places.
+      [`p1 'a' "b"; p1 $$'a${BS}'b' ; ${NEXT} # it's`, [undefined, SHELLS]],
+    ]
+    for (const [cmd, marks] of kept) expect(marksIn(cmd)).toEqual({ cmd, marks })
+  })
+
+  test('a << in quoted text that spans lines, or beside a backtick or $( a backslash escapes, marks nothing', () => {
+    for (const cmd of [
+      `node -e '\nx = 1 << n\nq(x)\n'; ${NEXT}`,
+      `p1 -m "a note\nthat quotes cat <<EOF in text\ndone"; ${NEXT}`,
+      `p1 -m "it's\nshift 1 << n here"; ${NEXT}`,
+      `p1 -m "see ${BS}\`cat <<EOF${BS}\` here"; ${NEXT}`,
+      `p1 -m "see ${BS}$(cat <<EOF) here"; ${NEXT}`,
+      `p3 "$(p1 "$x")"; p1 'x\ny << z\n'; ${NEXT}`,
+    ]) expect(marksIn(cmd)).toEqual({ cmd, marks: [undefined] })
+    expect(readAll(`node -e '\nx = 1 << n\nq(x)\n'; ${NEXT}`)).toEqual([[['node', '-e', '\nx = 1 << n\nq(x)\n'], undefined], [next, undefined]])
+    // A shell's script in quotes: the command its heredoc feeds keeps the mark, and the command after
+    // the script, which bash and zsh both run, has none.
+    expect(readAll(`bash -c '\ncat <<NEVER\nbody\n'; ${NEXT}`)).toEqual([[['cat', '<<NEVER'], HEREDOC], [['body'], undefined], [next, undefined]])
+  })
+
+  test('a << where a shell opens a heredoc that never ends keeps the mark', () => {
+    const marked = (cmd: string) => pipeline(cmd).filter(c => c.unread !== undefined).map(c => [c.words[0], c.unread])
+    // Outside quotes, after a quoted word.
+    expect(marked(`p1 'a'; cat <<NEVER\n${NEXT} 'b'`)).toEqual([['cat', HEREDOC]])
+    // In a substitution that double quotes leave live, on the quote's first line or a later one.
+    expect(marked(`p1 "$(cat <<NEVER\nbody)"; ${NEXT}`)).toEqual([['cat', HEREDOC], ['p1', HEREDOC]])
+    expect(marked(`p1 "a\n$(cat <<NEVER\nc\n)"; ${NEXT}`)).toEqual([['cat', HEREDOC], ['p1', HEREDOC]])
+    expect(marked(`p1 "a \`cat <<NEVER\`\nb"; ${NEXT}`)).toEqual([['cat', HEREDOC], ['p1', HEREDOC]])
+    // After what the reader cannot follow as surely as a shell: the body of a heredoc it does not
+    // open, one it ends too soon, and a comment inside a substitution. An apostrophe in each would
+    // put the << inside a quote that no shell reads.
+    expect(marked(`cat <<1\nit's\n1\ncat <<NEVER\n${NEXT} # it's`).map(r => r[1])).toEqual([HEREDOC])
+    expect(marked(`cat <<EOF\n  EOF\nit's body\nEOF\ncat <<NEVER\nx # '`).map(r => r[1])).toEqual([HEREDOC])
+    expect(marked(`p3 $(p1 # it's\n); cat <<NEVER\n${NEXT} # '`)).toEqual([['cat', HEREDOC]])
+    // A # inside a word starts no comment: after a substitution, and on a line a backslash joins to
+    // a word. The apostrophe after it opens a quote that the next line's quote closes, so the << two
+    // lines on stands outside quotes (bash ran the heredoc's line as its body, zsh did not).
+    expect(marked(`p3 $(p1 a)#it's\np1 '\ncat <<NEVER\n${NEXT} # '`)).toEqual([['cat', HEREDOC]])
+    expect(marked(`p3 a${BS}\n#it's\np1 '\ncat <<NEVER\n${NEXT} # '`)).toEqual([['cat', HEREDOC]])
+    // A # inside `\${ }`, `$[ ]` and `(( ))` starts no comment to a shell that reads a quote there:
+    // both shells stop at the first two, and after the third zsh runs p1 and bash nothing. The
+    // reader reads each # as a comment, so it cannot say the << stands in text.
+    expect(marked(`p3 \${x:- # it's}\np1 '\ncat <<NEVER\n${NEXT} # '`)).toEqual([['p1', HEREDOC]])
+    expect(marked(`p3 $[ 1 # it's ]\np1 '\ncat <<NEVER\n${NEXT} # '`)).toEqual([['p1', HEREDOC]])
+    expect(marked(`(( 1 +\n # it's\n 2 ))\np1 '\ncat <<NEVER\n${NEXT} # '`)).toEqual([['p1', HEREDOC]])
+    // After a heredoc the line reader closed inside quoted text, taking out a line that holds a quote
+    // and a command both shells run: where the second << stands in the whole text is not known.
+    expect(marked(`p1 '\nx << n\ny' ; p3 '\nn\n      cat <<NEVER\n${NEXT} # '`)).toEqual([['p1', HEREDOC]])
+    // In quoted text inside a substitution: both shells run it alike, and the mark is left.
+    expect(marked(`p3 "$(p1 '\nx << n\n')"; ${NEXT}`)).toEqual([['p1', HEREDOC], ['p3', HEREDOC]])
+  })
+
   test('a script read to its end marks nothing unread', () => {
     const whole = [
       // Quotes bash and zsh read alike (the fix round on #3493): after $$ where both readings close
