@@ -967,12 +967,20 @@ stopped "and by pwd, which was left off the list" "$OUT3443 && pwd"
 stopped "and by cat" "$OUT3443 && cat $S3443/x"
 stopped "a cp in a pipeline" "$OUT3443 | cat"
 stopped "a cp with a substitution among its words" "cp payload/LESSONS.md \$(echo $S3443/x)"
+# The shell cuts words at a space, a tab and a line break only, so any other blank is part of a
+# word to it, and a reading that cut there would see other words than the ones cp is handed.
+stopped "a cp whose line ends in a carriage return" "$OUT3443"$'\r'
+stopped "a cp with a vertical tab where a space would be" "cp payload/LESSONS.md"$'\v'"$S3443/x"
+stopped "and with a no-break space there" "cp payload/LESSONS.md"$'\xc2\xa0'"$S3443/x"
+passes "a cp whose words are parted by tabs" "cp"$'\t'"payload/LESSONS.md"$'\t'"$S3443/x"
 # One cp only: an earlier cp could plant a link the later one writes through.
 mkdir -p "$S3443/merged/hooks"
 ln -s "$FIX/dev/payload/LESSONS.md" "$S3443/merged/hooks/a.sh"
 stopped "two copies out in one command" "$OUT3443 && cp payload/hooks/a.sh $S3443/y"
 stopped "and a second cp named by its path" "$OUT3443; /bin/cp payload/hooks/a.sh $S3443/y"
 stopped "and a first cp that copies a link the second then writes through" "cp -R $S3443/merged $S3443/out && cp payload/hooks/a.sh $S3443/out/hooks/a.sh"
+stopped "and a first cp between two scratch files, before the copy out" "cp $S3443/rc $S3443/rc2 && $OUT3443"
+stopped "and three, the copy out last" "cp $S3443/rc $S3443/rc2; cp $S3443/rc $S3443/rc3; $OUT3443"
 # cd: one written folder that is there now, beginning /, ~/ or ./, with no .. in it.
 mkdir -p "$S3443/stand-in-for-home/out"
 : > "$S3443/plain.txt"
@@ -982,13 +990,20 @@ cp $FIX/dev/payload/hooks/a.sh short-before"
 HOME="$S3443/stand-in-for-home" passes "and a cd to a folder under the home folder" "cd ~/out && cp $FIX/dev/payload/hooks/a.sh ./"
 stopped "a cd to a bare relative folder, which CDPATH could take elsewhere" "cd payload/hooks && cp -p a.sh $S3443/a-copy.sh"
 stopped "a cd to a folder that is not there, which leaves the cp where it was" "cd $S3443/nowhere && cp $FIX/dev/payload/hooks/a.sh x"
+stopped "and so lets a cp to a relative payload path land in the checkout after all" "cd $S3443/nowhere; cp $FIX/dev/payload/hooks/a.sh payload/LESSONS.md"
 stopped "a cd to a file" "cd $S3443/plain.txt && cp $FIX/dev/payload/hooks/a.sh x"
 stopped "a cd whose path climbs with .." "cd $S3443/short-before/.. && cp $FIX/dev/payload/hooks/a.sh x"
+stopped "and one that climbs out of the folder the command starts in" "cd ./.. && cp $FIX/dev/payload/hooks/a.sh x"
+stopped "and one with .. in the middle of a path that is there" "cd $FIX/dev/payload/../tests && cp $FIX/dev/payload/hooks/a.sh x"
+stopped "a cd to a bare folder name from the folder above the checkout" "cd dev && $OUT3443" "$FIX"
+stopped "and to payload by its bare name" "cd payload && cp LESSONS.md $S3443/x"
 stopped "a cd with a flag" "cd -P $S3443 && cp $FIX/dev/payload/hooks/a.sh x"
 stopped "a cd with two words" "cd $S3443 $S3443 && cp $FIX/dev/payload/hooks/a.sh x"
+stopped "and with a second word that is a folder inside the first" "cd $S3443 short-before && cp $FIX/dev/payload/hooks/a.sh x"
 stopped "a cd with no word" "cd && cp $FIX/dev/payload/hooks/a.sh x"
 stopped "a cd to an entry of zsh's folder stack" "cd +1 && cp $FIX/dev/payload/hooks/a.sh x"
 stopped "a cd in a pipeline, which moves nothing after it" "cd $S3443 | cp $FIX/dev/payload/hooks/a.sh x"
+stopped "and so lets a cp to a relative payload path land in the checkout" "cd $S3443 | cp $FIX/dev/payload/hooks/a.sh payload/LESSONS.md"
 # mkdir -p of written folders, and nothing else of mkdir.
 passes "a mkdir -p of the scratch folder the cp then fills" "mkdir -p $S3443/new1 && cp payload/LESSONS.md $S3443/new1/"
 passes "and of two folders, before a cp -R" "mkdir -p $S3443/n1 $S3443/n2; cp -R payload/hooks $S3443/n2"
@@ -1004,7 +1019,11 @@ passes "a cp run only when an ls fails" "ls $S3443/none || $OUT3443"
 stopped "an ls whose output is sent into payload" "$OUT3443 && ls -la $S3443 > payload/hooks/list.txt"
 stopped "an ls of a pattern" "$OUT3443 && ls $S3443/*"
 stopped "an ls with a long flag" "$OUT3443 && ls --color=always $S3443"
+stopped "an ls with -- before its paths" "$OUT3443 && ls -- $S3443"
+stopped "an ls with a flag that is not a letter" "$OUT3443 && ls -l@ $S3443"
 stopped "an ls piped on" "$OUT3443 && ls -la $S3443 | head"
+stopped "a cp piped into an ls, both on the list" "$OUT3443 | ls"
+stopped "and an ls piped into the cp" "ls $S3443 | $OUT3443"
 stopped "a program whose name only begins ls" "$OUT3443 && lsof $S3443/x"
 # cp's own flags: only single letters that take no value and make no link, all before the files.
 stopped "a cp with a suffix flag that takes a value" "cp -S .bak payload/LESSONS.md $S3443/x"
@@ -1035,6 +1054,7 @@ stopped "review: a cp to payload spelled in capitals" "cp payload/hooks/a.sh $FI
 stopped "a cp from a folder a cd reached through a link into payload" "cd $S3443/link/hooks && cp $FIX/dev/payload/LESSONS.md ./x"
 stopped "and from a folder a cd reached by payload spelled in capitals" "cd $FIX/dev/PAYLOAD/hooks && cp $FIX/dev/payload/LESSONS.md ./y"
 stopped "a cp to a second name of a payload file" "cp payload/LESSONS.md $S3443/hard.sh"
+stopped "and to that second name by a relative path after a cd" "cd $S3443 && cp $FIX/dev/payload/LESSONS.md ./hard.sh"
 stopped "a cp into a folder where the file it would write is a link to a payload file" "cp payload/hooks/a.sh $S3443/into/"
 stopped "and where it is a second name of one" "cp payload/LESSONS.md $S3443/into2"
 stopped "a cp -R onto a folder that is already there, which may hold such a link" "cp -R payload/hooks $S3443/merged"
@@ -1073,8 +1093,8 @@ says "#3443 naming the file" "$FIX/dev/payload/LESSONS.md"
 # script it let through could write a file the same command then ran without naming it again
 # (bash S/w.s?, a loop over S/*.sh, make -C S), or a pathlib.py that python loads from the folder it
 # runs in. So the first three cases below record that these shapes are refused today, wrongly, and
-# whoever takes item 2 up will see them turn. Every case after them is a script that must stay
-# refused under any later reading.
+# whoever takes item 2 up will see them turn. The fourth only reads a payload file and is allowed,
+# as on main. Every case after it is a script that must stay refused under any later reading.
 : > "$S3443/sweep.py"
 runbash "python3 - <<'PY'
 import re
