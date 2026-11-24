@@ -47,6 +47,13 @@
 #      each file can hold, every loop value put in, and its present text, is a read by judge().
 #      Which commands those are is scripted_queries() in lib/db-write-calls.py; anything else in
 #      the command leaves it to the usual check, and db-write-ask.sh asks.
+#   Since #3472 a Bash command is approved under 3 or 4 only when it is one of those by two
+#   readings: the shared reader's own, and the one it gives a caller that asks which lines it is
+#   unsure of (cli_read_approval() and asking() in lib/db-write-calls.py). The reader took a # for
+#   a comment by a rule the shell does not follow, so a write on the rest of that line was left out
+#   of what was judged and approved with the read in front of it. A command holding a # the reader
+#   cannot tell from a comment, or one the shell reads inside a word with more commands after it
+#   on its line, is left to the usual check.
 #
 # WHAT IT CANNOT SEE: the database's own definitions. A select that reads a view whose definition
 # calls a function that writes, uses an operator or cast the database defined, calls a function on

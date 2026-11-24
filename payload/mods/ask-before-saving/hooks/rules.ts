@@ -24,8 +24,10 @@ export const MOD = 'ask-before-saving'
 // or a move brings to it, absolute, and `mayBeFolder` says one source was put onto one name, which
 // is inside it when that name is an existing folder. `to`, on a removal a mv makes (#3478), is
 // where that mv puts it: the folder it lands inside (`into`) or the one name it is moved onto.
+// `shared` (#3505) says another source of the same mv or cp may land on that file's name, so it is
+// no place a moved file can be said to go.
 export type Writes = {
-  files: { word: string; path?: string; sources?: string[]; mayBeFolder?: true }[]
+  files: { word: string; path?: string; sources?: string[]; mayBeFolder?: true; shared?: true }[]
   changes?: { word: string; path?: string; folder?: string; does: string; tree?: true; names?: string[]; to?: { word: string; path?: string; into?: true; keeps?: true } }[]
   unnamed: { what: string; words: string[]; inputs: string[]; targets?: string[] }[]
   runs?: { script?: string; unknown?: true; why?: string; remedy?: string; args: { word: string; path?: string }[] }[]
@@ -1921,6 +1923,12 @@ export const replacedBy = (pattern: string, from: readonly string[], there: read
 const bothForms = (text: string): string[] => [...new Set([text, text.normalize('NFC'), text.normalize('NFD')])]
 // A file name as a disk that ignores letter case and the Unicode form of an accent compares it:
 // decomposed, then in small letters and in capitals, either of which may be what two names share.
+// The capitals do not fold too far (#3505): this Mac's APFS disk keeps a sharp s and SS, a long s
+// and s, a final sigma and a capital one, and the ff ligature and FF each as one file (measured
+// 2026-11-23, each pair made in a scratch folder), and small letters alone keep every one of those
+// apart. Of the pairs tried, one the disk keeps apart is taken as one name here, a dotless i and I,
+// which can only add "replacing" to a question. mod-kit's reader compares two sources of one mv or
+// cp by the same rule (sharesName in its writes.ts).
 const foldedName = (name: string): string[] => {
   const form = name.normalize('NFD')
   return [form.toLowerCase().normalize('NFD'), form.toUpperCase().normalize('NFD')]
@@ -1961,7 +1969,13 @@ export const removalCandidates = async (w: Writes, home: string, inCheckout: InC
   const changes = w.changes ?? []
   for (const c of [...changes.filter(x => x.does === 'remove'), ...changes.filter(x => x.does === 'truncate')]) {
     const emptied = c.does === 'truncate'
-    const dest = emptied ? undefined : w.files.find(f => f.sources?.some(s => (c.path ? s === c.path : lastPart(s) === lastPart(c.word))))
+    // Never a write another source of the same mv or cp may also land on (#3505, the reader's
+    // `shared`): one of the two replaces the other there, which of them rests on their order and
+    // on the disk, so it is no place the file can be said to go. With no other place it goes, it
+    // is the deletion main asks about, the worse of the two readings, and never a move that "can
+    // be moved back". A mv -n loses neither file and is said the same, the harmless side to be
+    // wrong on.
+    const dest = emptied ? undefined : w.files.find(f => !f.shared && f.sources?.some(s => (c.path ? s === c.path : lastPart(s) === lastPart(c.word))))
     // A write that names it as a source says where it lands; failing that, its own mv does. Never
     // for a brace pattern of more names than are multiplied out (MAX_BRACE_NAMES): what it would
     // replace where it lands cannot be worked out inside a hook's time, so it is the deletion it

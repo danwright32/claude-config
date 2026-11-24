@@ -4383,7 +4383,11 @@ Each entry is signed with a key only this Mac's user can read, `~/.claude/state/
 (made on first use, mode 600), so a process that can write entries cannot forge one; a key that is
 missing, unreadable or readable by others means no cache, never an unsigned one (#2965). The wrapper
 runs the gate with `PYTHONHASHSEED=0`, so it iterates its sets in the same order every run, and the
-cache keeps and uses nothing from a run where that order is random. Under a test run the cache is off unless `SLACK_GATE_CACHE_DIR` names one. It does nothing for a cold
+cache keeps and uses nothing from a run where that order is random. Under a test run the cache is off unless `SLACK_GATE_CACHE_DIR` names one.
+A `SLACK_GATE_CACHE_DIR` that is empty, is not an absolute path (a `~` is not expanded, so it counts as
+relative) or holds a `..` is ignored: the call is judged with no cache, and the gate says why once on
+stderr after its verdict, which reaches the session only with a refusal, since the wrapper drops what
+follows an allow (#3466). The cache does nothing for a cold
 run, so a CI runner judges as before.
 
 Beside the judgements, the same folder keeps the shell reader's parse of any text of 64 KB or more
@@ -7933,6 +7937,24 @@ be checked for a merge or deploy), but at the worker's next Stop the driver lets
 touching its own manifest so it loads again while idle, then starts it again; still out of step, it
 stops for the night with its claim parked and the reason in the morning report.
 
+A reload can also fail outright: Claude Code then writes "<mod>: reload failed, the previous version
+stays loaded: <why>" into the session's transcript, as a system row, and goes on running the copy
+it had, for as long as the session lasts. On the work MacBook a session ran on an old mod-kit for
+six days that way (52 failed reloads), and the old code wrongly refused a builder's edit; on this
+Mac a session ran three days on an old picker-manners (#3309). Nothing said so to Dan: `claude-sync
+status` sees only that the installed mods are current, and `rule-files-changed.sh` only a mod a pull
+added, removed or replaced. So `hooks/mod-reload-failed.sh`, on every prompt, reads what the
+transcript gained since the last one, and when a mod's reload has failed since its copy loaded it
+tells Dan which mod, since when, which copy is still running and to start a new session, and hands
+the session the same with Claude Code's reason and an instruction to call a refusal from that mod
+out of date. Once per mod per failure: the later failed reloads are not told, a reload that works
+ends it quietly, and the same old copy still running a day after it was told is told again
+(`CLAUDE_MOD_RELOAD_RETELL_AFTER`). A failure written before the session's current process started
+counts for nothing, since that process loaded every mod afresh. It is a settings hook and depends on
+no mod, so a frozen mod cannot silence it. A guard's own refusal does not say it is out of date:
+the words come from the frozen copy's code, and Claude Code raises no event for a refusal by a mod
+that a hook could add to.
+
 After each apply, and after a send that changed which mods are named, `claude plugin list --json`
 and `claude plugin validate` are asked about every mod,
 and the pull names any mod Claude Code does not list as enabled, or that validation refuses, with
@@ -8833,7 +8855,11 @@ one mv, and beside it only plain commands on the mod's short list (`mkdir`, `ls`
 `pwd`, `test`, `[`, `true`), or before it a `cp` of one file to a place where nothing is yet, the
 folder it goes into there already or made by a `mkdir` first. Any other command is asked about
 as it was before #3478, a pattern moved away as a deletion; so is a command whose look at the disk
-fails or takes more than 2 seconds, and a brace pattern of more than 256 names. The answers
+fails or takes more than 2 seconds, and a brace pattern of more than 256 names. A file moved
+to a name another source of the same mv or cp may also land on (one from another folder of the
+same name, a name alike but for letter case or the form of an accent, a pattern, or a word no
+path names) is asked about as the deletion it may be, never as a move that can be moved back
+(#3505): the source named last is the one kept. The answers
 are Keep as is, first, and Delete, Move or Empty; a save's
 For good approves no removal and a removal's answer approves no save, a removal whose consequence
 changes after he answers (what git holds of the file, where a move lands, what a folder holds) is
