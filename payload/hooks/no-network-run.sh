@@ -57,8 +57,8 @@
 # alone). So every ps under this file ended "Operation not permitted", and four suites that read
 # a process through it could not pass on the route the gate sends them down. Reading the process
 # list was never something this file set out to stop: the profile allows everything it does not
-# name, and a wrapped command already reads the list from the kernel. But a profile has one form
-# that lets a setuid program start, (with no-sandbox), and it does what it says: the program it
+# name, and a wrapped command already reads another process from the kernel. But a profile has
+# one form that lets a setuid program start, (with no-sandbox), and it does what it says: the program it
 # names is started OUTSIDE the sandbox, network and all. Eight forms were tried and no other
 # starts ps. So the rule names ps by its real path and nothing else, and (each measured in
 # test-no-network-run.sh):
