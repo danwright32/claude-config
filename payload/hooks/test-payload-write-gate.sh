@@ -829,6 +829,252 @@ prepost PreToolUse "python3 $FIX/w.py" "$FIX/elsewhere" t8
 printf 'far\n' > "$FIX/elsewhere/notes.md"
 prepost PostToolUse "python3 $FIX/w.py" "$FIX/elsewhere" t8
 allowed "a call outside any checkout, writing outside one, is silent"
+
+echo "payload write gate: a file a command only reads is not a file it writes (claude-config#3443)"
+
+# What a cp copies FROM is read, never written. On 2026-11-21 a cp of a worktree's payload file into
+# a scratch folder, named by a relative path after a cd, was refused as a write to that payload file,
+# and on 2026-11-22 a cp -R of a payload folder out to a scratch folder was too. Only the plain form
+# is read this way: cp itself, flags that take no value, and words with nothing the shell expands.
+S3443="$FIX/scratch3443"
+mkdir -p "$S3443/short-before"
+: > "$FIX/dev/payload/hooks/a.sh"
+rm -f "$HOLD"; SID=""
+runbash "cd $S3443 && cp $FIX/dev/payload/hooks/a.sh short-before/" "$FIX/dev"
+allowed "#3443 a cp of a payload file into a scratch folder named by a relative path after a cd is allowed"
+runbash "cp -R $FIX/dev/payload/hooks $S3443/" "$FIX/dev"
+allowed "#3443 so is a cp -R of a payload folder out to a scratch folder"
+runbash "cp payload/LESSONS.md payload/hooks/a.sh $S3443/" "$FIX/dev"
+allowed "#3443 and a cp of two payload files, named from the checkout, out to one"
+runbash "cd payload/hooks && cp -p a.sh $S3443/a-copy.sh" "$FIX/dev"
+allowed "#3443 and a cp from inside payload out to a file elsewhere"
+# Every copy that lands under payload is refused exactly as before.
+runbash "cp $S3443/x payload/LESSONS.md" "$FIX/dev"
+refused "#3443 a cp into a payload file is still refused"
+runbash "cp payload/LESSONS.md payload/hooks/copy.md" "$FIX/dev"
+refused "#3443 and a cp from one payload file to another"
+runbash "cd payload && cp LESSONS.md hooks/copy.md" "$FIX/dev"
+refused "#3443 and the same after a cd into payload"
+runbash "cd $FIX/dev/payload/hooks && cp $S3443/x ." "$FIX/elsewhere"
+refused "#3443 and a cp to the folder a cd into payload left the command in"
+runbash "cp -R $S3443/short-before payload/hooks/" "$FIX/dev"
+refused "#3443 and a cp -R into a payload folder"
+runbash "cp payload/LESSONS.md $S3443/x && cp $S3443/x payload/hooks/a.sh" "$FIX/dev"
+refused "#3443 and a copy out followed by a copy back in"
+# Wherever which word is the destination is not certain, every word is a write, as it always was.
+runbash "cp -t payload/hooks $S3443/x $S3443/y" "$FIX/dev"
+refused "#3443 a cp naming its destination first with -t is still refused"
+runbash "cp payload/LESSONS.md -t $S3443" "$FIX/dev"
+refused "#3443 and a cp with a flag that takes a value has every word read as written"
+runbash "cp payload/LESSONS{.md,.bak}" "$FIX/dev"
+refused "#3443 and a cp whose one word the shell expands into two"
+runbash "cp payload/LESSONS.md \"\$OUT\"" "$FIX/dev"
+refused "#3443 and a cp to a destination only the shell can work out"
+runbash "cp payload/LESSONS.md $S3443/*" "$FIX/dev"
+refused "#3443 and a cp whose last word is a pattern"
+runbash "cp $S3443/x 'payload/my file.md'" "$FIX/dev"
+refused "#3443 and a cp with a quoted word"
+runbash "cp payload/LESSONS.md" "$FIX/dev"
+refused "#3443 and a cp naming one file only"
+runbash "cp payload/LESSONS.md $S3443/x > payload/hooks/log.txt" "$FIX/dev"
+refused "#3443 and a cp whose output is sent into payload"
+runbash "cp payload/LESSONS.md $S3443/x &" "$FIX/dev"
+refused "#3443 and a cp with any other operator among its words"
+runbash "cp(){ mv \"\$@\"; }; cp payload/LESSONS.md $S3443/x" "$FIX/dev"
+refused "#3443 and a cp this command defines as a function"
+runbash "alias cp=mv; cp payload/LESSONS.md $S3443/x" "$FIX/dev"
+refused "#3443 and a cp this command makes an alias"
+runbash "PATH=$S3443:\$PATH cp payload/LESSONS.md $S3443/x" "$FIX/dev"
+refused "#3443 and a cp run with PATH changed"
+runbash "$S3443/cp payload/LESSONS.md $S3443/x" "$FIX/dev"
+refused "#3443 and a program named cp in some other folder"
+runbash "xargs cp payload/LESSONS.md $S3443/x" "$FIX/dev"
+refused "#3443 and a cp another program runs with more words"
+runbash "sudo cp payload/LESSONS.md $S3443/x" "$FIX/dev"
+refused "#3443 and a cp run through sudo"
+# Words that only look like a cp command, because the line they are on is cut from another command.
+runbash "mv \\
+cp payload/LESSONS.md $S3443/x" "$FIX/dev"
+refused "#3443 a line carried on from mv, whose words mv moves, is not read as a cp"
+runbash "xargs rm <<EOF
+cp payload/LESSONS.md $S3443/x
+EOF" "$FIX/dev"
+refused "#3443 nor is a heredoc line fed to xargs rm"
+runbash "for f in \\
+cp payload/LESSONS.md $S3443/x; do rm \$f; done" "$FIX/dev"
+refused "#3443 nor the words of a loop that removes each"
+runbash "rm \"junk; cp payload/LESSONS.md $S3443/x ; \"" "$FIX/dev"
+refused "#3443 nor words inside a quoted string, read as they always were"
+runbash "( cp payload/LESSONS.md $S3443/x )" "$FIX/dev"
+refused "#3443 a cp inside a group is read as before"
+runbash "if true; then cp payload/LESSONS.md $S3443/x; fi" "$FIX/dev"
+refused "#3443 and a cp after a reserved word"
+runbash "cp payload/LESSONS.md $S3443/x # a note" "$FIX/dev"
+refused "#3443 and a cp with a comment after it"
+runbash "bash -c 'cp payload/LESSONS.md $S3443/x'" "$FIX/dev"
+allowed "#3443 a plain cp out of payload that bash -c runs is allowed"
+runbash "bash -c 'cp $S3443/x payload/LESSONS.md'" "$FIX/dev"
+refused "#3443 and one into payload that bash -c runs is still refused"
+# The other programs that write what they name are read as before.
+runbash "mv payload/LESSONS.md $S3443/x" "$FIX/dev"
+refused "#3443 a mv out of payload is still refused, since it removes the file"
+runbash "ln -s payload/LESSONS.md $S3443/x" "$FIX/dev"
+refused "#3443 and a program other than cp has every word read as written, as before"
+runbash "cat $S3443/x | tee payload/LESSONS.md" "$FIX/dev"
+refused "#3443 and tee into payload"
+runbash "sed -i '' 's/a/b/' payload/LESSONS.md" "$FIX/dev"
+refused "#3443 and sed -i on a payload file"
+runbash "cat $S3443/x > payload/LESSONS.md" "$FIX/dev"
+refused "#3443 and a redirect into payload"
+# A copy allowed for only reading a checkout still has that checkout noted, so anything that does
+# change under its payload while the command runs is reported after it, as before.
+prepost PreToolUse "cd $FIX/dev && cp payload/LESSONS.md $S3443/x" "$FIX/elsewhere" s3443
+allowed "#3443 a cp out of a checkout the command moved into is allowed"
+printf 'changed by the copy\n' > "$FIX/dev/payload/LESSONS.md"
+prepost PostToolUse "cd $FIX/dev && cp payload/LESSONS.md $S3443/x" "$FIX/elsewhere" s3443
+if [ "$RC" -eq 2 ]; then check "#3443 and a payload file that changed while it ran is still reported afterwards" ok
+else check "#3443 and a payload file that changed while it ran is still reported afterwards" "exit $RC, said: ${OUT:0:160}"; fi
+says "#3443 naming the file" "$FIX/dev/payload/LESSONS.md"
+
+# A python script given on stdin whose every write the gate can place. On 2026-11-22 a python heredoc
+# editing a scratch script was refused because its text held payload/ inside a regular expression.
+# Where the whole script is plain reads, text edits and writes to files it names outright, the files
+# it writes are the ones it names, and a quoted piece of text holding payload/ is not one of them.
+: > "$S3443/sweep.py"
+runbash "python3 - <<'PY'
+import re
+p = '$S3443/sweep.py'
+s = open(p).read()
+assert s.count('old') == 0
+s = s.replace('old', 'new')
+s = re.sub(r'payload/hooks/[a-z-]+[.]sh', 'X', s)
+open(p, 'w').write(s)
+PY" "$FIX/dev"
+allowed "#3443 a python heredoc editing a scratch script, its text holding payload/ in a regular expression, is allowed"
+runbash "python3 - <<'PY'
+p = '$S3443/sweep.py'
+t = open(p).read()
+t = t.replace('HOOK=\"x\"', 'HOOK=\"payload/hooks/a.sh\"')
+open(p, 'w').write(t + 'payload/LESSONS.md')
+PY" "$FIX/dev"
+allowed "#3443 and one writing text that names payload files into a scratch file"
+runbash "python3 <<'PY'
+from pathlib import Path
+p = Path('$S3443/sweep.py')
+s = p.read_text()
+p.write_text(s.replace('payload/hooks/a.sh', 'payload/hooks/b.sh'))
+PY" "$FIX/dev"
+allowed "#3443 and the same edit made through pathlib"
+runbash "python3 - <<'PY'
+s = open('payload/LESSONS.md').read()
+print(len(s), 'payload/LESSONS.md' in s)
+PY" "$FIX/dev"
+allowed "#3443 and a script that opens a payload file only to read it"
+# A script that writes under payload is refused as before, now by the file it really writes.
+runbash "python3 - <<'PY'
+p = '$FIX/dev/payload/LESSONS.md'
+s = open(p).read()
+open(p, 'w').write(s.replace('a', 'b'))
+PY" "$FIX/dev"
+refused "#3443 a python heredoc that really writes a payload file is still refused"
+says "#3443 naming the file it writes" "$FIX/dev/payload/LESSONS.md"
+runbash "python3 - <<'PY'
+p = 'payload/LESSONS.md'
+open(p, 'w').write('x')
+PY" "$FIX/dev"
+refused "#3443 and one writing a payload file by a relative path"
+runbash "python3 - <<'PY'
+s = open('$S3443/sweep.py').read()
+open('$S3443/sweep.py', 'w').write(s)
+open('$FIX/dev/payload/hooks/a.sh', 'a').write(s)
+PY" "$FIX/dev"
+refused "#3443 and one writing a scratch file and a payload file"
+runbash "python3 - <<'PY'
+from pathlib import Path
+Path('$FIX/dev/payload/hooks/a.sh').write_text('x')
+PY" "$FIX/dev"
+refused "#3443 and one writing a payload file through pathlib"
+# Anything in the script the gate cannot place keeps every quoted payload path read as a write.
+PYOPEN="p = '$S3443/sweep.py'
+s = open(p).read()"
+pyrefused(){ # pyrefused <description> <rest of the script>
+  runbash "python3 - <<'PY'
+$PYOPEN
+$2
+PY" "$FIX/dev"
+  refused "#3443 $1"
+}
+pyrefused "a script building the path it writes is read as before" "d = 'payload/' + 'LESSONS.md'
+open(d, 'w').write(s)"
+pyrefused "and one whose path name is given a second value" "p = 'payload/LESSONS.md'
+open(p, 'w').write(s)"
+pyrefused "and one moving a file with os.replace" "import os
+os.replace('payload/LESSONS.md', '$S3443/gone.md')"
+pyrefused "and one copying with shutil" "import shutil
+shutil.copy(p, 'payload/LESSONS.md')"
+pyrefused "and one running a command" "import subprocess
+subprocess.run(['cp', p, 'payload/LESSONS.md'])
+open(p, 'w').write(s)"
+pyrefused "and one running text as code" "exec(\"open('payload/LESSONS.md', 'w').write(s)\")
+open(p, 'w').write(s)"
+pyrefused "and one holding a function" "def save(where):
+    open(where, 'w').write(s)
+save('payload/LESSONS.md')"
+pyrefused "and one holding a loop" "for d in ['payload/LESSONS.md']:
+    open(d, 'w').write(s)"
+pyrefused "and one opening a file with a keyword" "open('payload/LESSONS.md', 'w', encoding='utf-8').write(s)"
+pyrefused "and one that gives open another meaning" "open = print
+open('payload/LESSONS.md', 'w')"
+pyrefused "and one calling a method the gate does not know" "s.format('payload/LESSONS.md')
+open(p, 'w').write(s)"
+pyrefused "and one keeping the open file" "f = open('payload/LESSONS.md', 'w')
+f.write(s)"
+pyrefused "and one renaming through pathlib" "from pathlib import Path
+q = Path(p)
+q.rename('payload/LESSONS.md')"
+pyrefused "and one that does not parse" "open(p, 'w').write(s
+x = 'payload/LESSONS.md'"
+pyrefused "and one declaring a source encoding" "# -*- coding: utf-7 -*-
+open(p, 'w').write(s + 'payload/LESSONS.md')"
+# So does any way of running it other than python reading exactly this text from stdin, alone.
+PYBODY="$PYOPEN
+open(p, 'w').write(s + 'payload/LESSONS.md')"
+runbash "python3 - <<PY
+$PYBODY
+PY" "$FIX/dev"
+refused "#3443 the same script under an unquoted end marker, which the shell expands, is read as before"
+runbash "python3 - <<'PY' | sh
+$PYBODY
+PY" "$FIX/dev"
+refused "#3443 and piped on into a shell"
+runbash "python3 - <<'PY' > payload/hooks/out.txt
+$PYBODY
+PY" "$FIX/dev"
+refused "#3443 and with its output sent into payload"
+runbash "python3 - <<'PY'
+$PYBODY
+PY
+python3 $S3443/sweep.py" "$FIX/dev"
+refused "#3443 and when the command then runs the file it wrote"
+runbash "alias python3=sh
+python3 - <<'PY'
+$PYBODY
+PY" "$FIX/dev"
+refused "#3443 and when the command makes python3 an alias"
+runbash "python3 $S3443/other.py <<'PY'
+$PYBODY
+PY" "$FIX/dev"
+refused "#3443 and when the text is only the input of another script"
+runbash "bash <<'SH'
+$PYBODY
+SH" "$FIX/dev"
+refused "#3443 and when a shell is what reads it"
+runbash "python3 - <<'PY'
+$PYBODY
+PY
+cp $S3443/x payload/LESSONS.md" "$FIX/dev"
+refused "#3443 and a real write after the script is still refused"
+
 echo "payload write gate: files that already match the installed config are left out of the report (claude-config#1211)"
 # On 2026-10-15 a fast forward pull of the checkout, right after the same commit was installed,
 # listed 27 files that all matched ~/.claude byte for byte: the daemon had nothing to revert. A
