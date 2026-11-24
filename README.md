@@ -338,7 +338,8 @@ password, so it is made by hand once per Mac. Both Macs have had it since 2026-1
 Why it is needed: on a Team or Enterprise account (Dan's is one), or on any Mac with managed
 settings, Claude Code's built-in security default seats itself ahead of every plugin and sends
 every `classic.*`, `prompt.section` and `prompt.context` hook (and, since 2.1.299, every
-`session.compact` and `prompt.attachment` hook) past the user tier our mods load in,
+`session.compact` and `prompt.attachment` hook, and since 2.1.331 every `session.info` and
+`session.redact` hook) past the user tier our mods load in,
 so those hooks never run and only a debug log line says so (#875). A managed `prependPlugins` list
 that leaves it out moves it to last, where it still loads. Without the file, the mod hooks listed
 in `tools/sec-default-bypassed-hooks.tsv` (scope-modes and manual-steps refusing a turn end, the
@@ -10578,7 +10579,8 @@ run over the real `payload/mods` writing to the real one.
 It also fails a mod whose hook is on an event Claude Code's built-in security default sends past
 the user tier every mod loads in (#875): every `classic.*` event, `prompt.section`, `prompt.context`,
 `prompt.compose`, `skill.prompt`, `attribution.text` and `settings.read`, and since Claude Code
-2.1.299 `prompt.attachment` and `session.compact` too (#1185). Seated outermost for a
+2.1.299 `prompt.attachment` and `session.compact` too (#1185), and since 2.1.331 `session.info`
+and `session.redact` (#3508). Seated outermost for a
 Team or Enterprise organization, it routes each of those straight past our mods, so such a hook
 never runs and only a debug log line says so (`bypassed by cc-plugin-sec-default`). Both Macs keep
 it out of first place with the managed settings file in "Setting up a new Mac" above, so these
