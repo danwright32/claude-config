@@ -4993,9 +4993,16 @@ Since the scope modes part of #3398 (2026-11-24):
   note, which asks the reader for itself, asks the same line.
 - A repository or working folder named apart (`--git-dir`, `--work-tree`, `GIT_DIR`,
   `GIT_WORK_TREE`, or one of those variables or `GIT_COMMON_DIR` named anywhere else in the
-  call, by one predicate, `gitEnvNamed`) is one that cannot be told, everywhere in the mod. The
-  merge and deploy rules close on it, sleep mode refuses the checkout, the notes note nothing
-  (the branch note says so) and the cleanup branch is refused. It is not followed by asking
+  call, by one predicate, `gitEnvNamed`) is one that cannot be told, everywhere in the mod. That
+  predicate reads the words of `echo`, `printf`, `grep` and `rg`, and the value of a commit's
+  `-m`, as plain data: a commit message or a searched pattern quoting `GIT_DIR=` names nothing,
+  but only where nothing in the call could carry the text on (no `$` or backtick, `eval` or
+  `source`, redirect, pipe, `xargs`, function or command the reader cannot read). Anywhere else
+  the text is believed, as before. The merge and deploy rules close on it, and on any word before
+  the subcommand that only spells `--git-dir` or `--work-tree` (`gitSpellsNaming`, kept beside
+  the reading because main's rule closed on those words), sleep mode refuses the checkout, the
+  three notes note nothing and each says so (the branch, patch and stash notes, one line a call)
+  and the cleanup branch is refused. It is not followed by asking
   git, as the collision guard follows it: a mod shares code only through mod-kit, and
   `whereGit` and `namedFolder` live in the collision guard.
 - A chain of `-C` is followed by the three notes, to the folder `chained` gives. Sleep mode asks
