@@ -64,15 +64,28 @@
 # test-no-network-run.sh):
 #   * a link to ps runs it. Another program called ps stays in the sandbox, and every other
 #     setuid program is still refused;
-#   * ps opens no connection and starts no program, and macOS does not load into it a library the
-#     caller names (DYLD_INSERT_LIBRARIES), so the caller's own code does not leave with it. The
-#     command that ran ps is where it was: its connection is refused and so are the hand offs;
+#   * macOS does not load into ps a library the caller names (DYLD_INSERT_LIBRARIES), whether ps
+#     is started plainly, under a debugger's hold or paused, and it refuses the caller the task
+#     port of a ps held either way, so the caller's own code does not leave with it. A traced ps
+#     is the one state in which a wrapped command holds a process that is outside the sandbox.
+#     Those two refusals are macOS's own and are all that keeps that state safe, so the suite
+#     holds both, each beside a program compiled on the spot for which the same step succeeds;
+#   * a socket the command makes and hands to ps as its output carries nothing out: the sandbox
+#     refuses its connection before ps has it. The command that ran ps is where it was, and so is
+#     a program it starts afterwards: the connection is refused and so are the hand offs;
 #   * what a wrapped command gains is what ps prints. The arguments and the environment of this
 #     user's other processes it could already read with no ps (sysctl, measured under the profile
 #     without the rule), so ps eww shows nothing new of them. NEW is the arguments of processes
 #     that are NOT this user's: the kernel refuses those to a wrapped command, and ps, which is
-#     root's while it runs, prints them. Whether it prints their environment too was not
-#     measured: no process of another user's could be given a marker without being root.
+#     root's while it runs, prints them.
+# NOT measured in the suite:
+#   * that ps itself opens no connection and starts no program. That is how ps is written (it
+#     reads the process table and prints it), and nothing here watches what ps does as it runs;
+#   * the environment of other users' processes. No marker can be put into one without being
+#     root, so there is no case. It was read once by hand, on the personal MacBook on 2026-11-24
+#     (the review of that day, macOS 26.6.2): ps asked for environments under this file showed
+#     one for 0 of 192 processes of other users, against 88 of 387 of this user's own. That is
+#     one Mac on one day and not a guarantee, and it has not been read on the work MacBook.
 #
 # ONE PROGRAM AND NEVER A LIST. A second program is not a line to add here: whatever a rule with
 # (with no-sandbox) names runs with the network on. Twelve ways of writing a second one into the

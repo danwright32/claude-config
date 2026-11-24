@@ -4319,21 +4319,68 @@ forms were tried and no other starts `ps`. So the rule names `ps` by its real pa
 else (`OUTSIDE` in the wrapper), and `test-no-network-run.sh` holds each of these as measured:
 
 - `ps` runs under the wrapper, by its path and through a link. Another program called `ps`, found
-  first on the `PATH`, stays in the sandbox.
-- The command that ran `ps` is where it was: its connection is refused, and so are `open`,
-  `osascript` and `launchctl`. Every other setuid program in `/bin`, `/usr/bin`, `/sbin` and
-  `/usr/sbin` is still refused, found on disk at each run (nine on this Mac; the three that ask
-  for a password are never started by the suite, refused or not).
+  first on the `PATH`, stays in the sandbox. A copy of the wrapper without the rule still refuses
+  `ps`, kept as a case so that a macOS which stops refusing it turns something red: the rule would
+  otherwise go on starting `ps` outside the sandbox with nothing to say it was no longer needed.
+- The command that ran `ps` is where it was, and so is a program it starts afterwards: the
+  connection is refused, and so are `open`, `osascript` and `launchctl`. Every other setuid
+  program in `/bin`, `/usr/bin`, `/sbin` and `/usr/sbin` is still refused, found on disk at each
+  run (nine on this Mac; the three that ask for a password are never started by the suite, refused
+  or not).
 - macOS does not load into `ps` a library the caller names (`DYLD_INSERT_LIBRARIES`), though it
-  loads it into a program compiled on the spot. So the caller's own code does not leave with `ps`.
+  loads it into a program compiled on the spot. That holds for a `ps` started under a debugger's
+  hold or paused as well, and macOS refuses the caller the task port of a `ps` held either way,
+  though it gives the port of a program signed on the spot to allow it. A traced `ps` runs as the
+  user, outside the sandbox, stopped, with the wrapped command holding it: the one state in which
+  a wrapped command holds a process that has the network. Those two refusals are macOS's own and
+  are all that keeps that state safe, so both are cases, each beside its control. So the caller's
+  own code does not leave with `ps`.
+- A socket the command makes and hands to `ps` as its output carries nothing out: the sandbox
+  refuses its connection before `ps` has it.
 - What a wrapped command gains is what `ps` prints. The arguments and the environment of this
   user's other processes it could already read from the kernel with no `ps` (`sysctl`, measured
   under the profile without the rule), so `ps eww` shows nothing new of them. New is the arguments
   of processes that are not this user's, which the kernel refuses a wrapped command and `ps`
-  prints. Whether `ps` shows their environment too was not measured: no process of another user's
-  could be given a marker without being root.
-- A copy of the wrapper whose rule names `curl` in place of `ps` lets `curl`'s post arrive. That is
-  what the rule does to the program it names, and why a second program is not a line to add.
+  prints.
+
+Two things the suite does not measure:
+
+- That `ps` itself opens no connection and starts no program. That is how `ps` is written (it reads
+  the process table and prints it), and nothing watches what `ps` does as it runs.
+- The environment of other users' processes. No marker can be put into one without being root, so
+  there is no case. It was read once by hand, on the personal MacBook on 2026-11-24 (the review of
+  that day): `ps` asked for environments under the wrapper showed one for 0 of 192 processes of
+  other users, against 88 of 387 of this user's own. That is one Mac on one day and not a
+  guarantee, and it has not been read on the work MacBook.
+
+One program and never a list. Whatever a rule with `(with no-sandbox)` names runs with the network
+on, so a second program is Dan's decision and not a line to add. Twelve ways of writing a second
+one into the profile were each run in a copy of the wrapper, and in every one `curl`'s post arrived
+(2026-11-24, the personal MacBook): a second rule on the same line, on a continued line, built from
+a variable, written `process-exec*`, a regex in place of the literal, a subpath, a prefix, a second
+literal inside the one rule, a later line that adds to the profile, a line just before the command
+is run, a rule in a file the profile imports, and the one rule naming `curl`. The suite's first
+guard counted the lines of the wrapper that said `with no-sandbox` and passed eleven of the twelve
+(the review of 2026-11-24). Two things hold the promise now:
+
+- The wrapper checks its own profile on every run, before anything is handed to the sandbox tool,
+  and runs nothing when it fails (exit 70). It reads the profile as put together, whatever lines
+  made it: with the one rule for `ps` taken out once, nothing left may say `no-sandbox`, and what
+  is left must be the opening and then refusals naming their paths with `(literal ...)`. Then the
+  profile is made read only. The rule is written out a second time for this check (`ONE_OUT`) and
+  is not built from `OUTSIDE`, so changing either alone is refused. This does not wait for a suite
+  to be run, and it is the same on both Macs.
+- The suite replaces the wrapper's sandbox tool, in a copy, with a stand in that writes down what
+  it is handed and then is the real tool. Every profile handed over must be the one the suite
+  holds whole, in its own words, so a change made to the profile and to the wrapper's check
+  together is still caught there. Each of the twelve spellings is a case twice: as written, the
+  wrapper refuses and hands the sandbox tool nothing (for the line placed just before the command
+  is run, the write to the read only profile fails and the profile handed over is the held one);
+  with the wrapper's check taken out of the copy, `curl`'s post arrives and the suite's check
+  alone catches it.
+
+Neither stops somebody who rewrites the wrapper itself: the sandbox allows every file write, as
+the next paragraph says.
 
 What the route is, so nobody reads more into it. It stops code from using the network while it runs
 under the wrapper, which is what makes an accidental post from a test impossible, and it refuses the
