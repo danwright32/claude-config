@@ -393,6 +393,8 @@ type Opts = {
   linkReaderFails?: boolean
   /** mod-kit's reader of the merge helper fails (#1251). */
   mergeHelperReaderFails?: boolean
+  /** mod-kit's git reader is a copy loaded before it said which repository a command names (#3398). */
+  oldGitReader?: boolean
   /** `touch` failing, with its stderr (#1281: the driver touches this mod's manifest to load it again). */
   touchFails?: string
   /** mod-kit's reader of a transcript's /goal fails (#1252). */
@@ -812,7 +814,7 @@ const world = (on: On, o: Opts = {}) => {
       return ok('')
     }
     if (cmd === '__modkit') {
-      const input = JSON.parse(a[1] as string) as { command?: string; cwd?: string; home?: string; words?: string[]; root?: string | null; remote?: string | null; path?: string; spelling?: string; link?: string }
+      const input = JSON.parse(a[1] as string) as { command?: string; cwd?: string; home?: string; words?: string[]; env?: string[]; root?: string | null; remote?: string | null; path?: string; spelling?: string; link?: string }
       if ((input.command ?? '').includes('__reader_fails')) return fail(1, 'the reader broke')
       if (a[0] === 'repo' && o.repoReaderFails) return fail(1, 'mod-kit is not loaded')
       if (a[0] === 'repo') return ok(JSON.stringify({ github: githubRepo(input.remote), name: repoName({ root: input.root, remote: input.remote }) }))
@@ -845,7 +847,13 @@ const world = (on: On, o: Opts = {}) => {
       if (a[0] === 'linkRepo') return ok(JSON.stringify(linkRepo(input.link)))
       if (a[0] === 'isDans') return ok(JSON.stringify(isDans((input as { origin?: never }).origin)))
       if (a[0] === 'mergeHelper' && o.mergeHelperReaderFails) return fail(1, 'mod-kit is not loaded')
-      const out = a[0] === 'pipeline' ? pipeline(input.command ?? '') : a[0] === 'writes' ? commandWrites(input.command ?? '', input.cwd ?? '', input.home ?? '') : a[0] === 'gh' ? ghArgs(input.words ?? []) : a[0] === 'mergeHelper' ? mergeHelperArgs(JSON.parse(a[1] as string) as Command) : git(input.words ?? [])
+      // The git reader as mod-kit answered before it said which repository a command names (#3337,
+      // #3398): the last -C alone, with no setting read.
+      if (a[0] === 'git' && o.oldGitReader) {
+        const old = git(input.words ?? [])
+        return ok(old === undefined ? '' : JSON.stringify({ sub: old.sub, args: old.args, dir: old.dir }))
+      }
+      const out = a[0] === 'pipeline' ? pipeline(input.command ?? '') : a[0] === 'writes' ? commandWrites(input.command ?? '', input.cwd ?? '', input.home ?? '') : a[0] === 'gh' ? ghArgs(input.words ?? []) : a[0] === 'mergeHelper' ? mergeHelperArgs(JSON.parse(a[1] as string) as Command) : git(input.words ?? [], input.env ?? [])
       return ok(out === undefined ? '' : JSON.stringify(out))
     }
     // The overnight driver's reads and writes (#844): the queue, the sleep/ branches, power and caffeinate.
@@ -6320,6 +6328,29 @@ test('asleep, a push from a detached head is refused wherever it could reach the
   expect(await call($ as never, bash('git -C /other push origin HEAD:feature-1'))).toMatch(/^Blocked overnight: this would push feature-1 from a checkout whose default branch could not be read \(a detached head names no branch\)/)
 })
 
+// #3398: the settings written in front of a git command reach mod-kit's reader, so a push or a
+// checkout naming its repository by GIT_DIR is no longer read as being about the session's folder.
+test('asleep, a push or a checkout naming its repository by GIT_DIR or GIT_WORK_TREE is one whose repository cannot be told (#3398)', withDeps, async ($, on) => {
+  const { clock } = world(on, { ...night(QUIET), origins: { '/repo': 'git@github.com:o/r.git', '/other': 'git@github.com:o/other.git' }, branches: { '/other': 'main' }, linkedWorktree: true })
+  await start($ as never, clock)
+  // The control: the session's own folder is a linked worktree on its branch.
+  expect(await call($ as never, bash('git push'))).toBe('ran')
+  expect(await call($ as never, bash('git checkout fix-1', 'c1b'))).toBe('ran')
+  expect(await call($ as never, bash('GIT_DIR=/other/.git git push', 'c2'))).toMatch(/^Blocked overnight: this would push from a branch that could not be read/)
+  expect(await call($ as never, bash('export GIT_DIR=/other/.git; git push', 'c3'))).toMatch(/^Blocked overnight: this would push from a branch that could not be read/)
+  expect(await call($ as never, bash('GIT_DIR=/other/.git GIT_WORK_TREE=/other git checkout main', 'c4'))).toMatch(/did not run git checkout where it could not be told whether this is a primary checkout/)
+  expect(await call($ as never, bash('git --git-dir=/other/.git --work-tree=/other checkout main', 'c5'))).toMatch(/did not run git checkout where it could not be told whether this is a primary checkout/)
+})
+
+test('a mod-kit loaded before it said which repository a git command names is never read as a command naming none: the reading throws, and asleep the call is refused (#3398)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ...night(QUIET), origins: { '/repo': 'git@github.com:o/r.git' } })
+  await start($ as never, clock)
+  w.o.oldGitReader = true
+  expect(await call($ as never, bash('GIT_DIR=/other/.git git push'))).toMatch(/^Blocked overnight: the merge and deploy check of this call failed \(the mod-kit loaded in this session does not say which repository a git command names/)
+  // A call with no git command asks the reader nothing more.
+  expect(await call($ as never, bash('ls', 'c2'))).toBe('ran')
+})
+
 test("asleep, a folder whose branch mod-kit's reader cannot give is judged the strict way (#980)", withDeps, async ($, on) => {
   const { clock } = world(on, { ...night(QUIET), origins: { '/repo': 'git@github.com:o/r.git', '/other': 'git@github.com:o/other.git' }, branchReaderFails: 'the disk cannot read /other' })
   await start($ as never, clock)
@@ -7771,6 +7802,41 @@ test('winding down with uncommitted work refuses a new branch until Dan agrees t
   expect(await call($ as never, bash('git switch -c chore/readings', 'c4'))).toMatch(/did not start a new branch/)
 })
 
+// #3398: Dan agrees to a cleanup branch for one checkout, where the uncommitted files are. The start
+// was never placed at all, so the same branch name started in any other repository went through as
+// the cleanup he agreed to, and used his answer up.
+for (const line of [
+  'git -C /other switch -c chore/readings',
+  'cd /other && git switch -c chore/readings',
+  'git --git-dir=/other/.git --work-tree=/other switch -c chore/readings',
+  'GIT_DIR=/other/.git GIT_WORK_TREE=/other git checkout -b chore/readings',
+  'export GIT_DIR=/other/.git; git switch -c chore/readings',
+  'git -C /other -C sub switch -c chore/readings',
+  'git -C "$W" switch -c chore/readings',
+  'cd "$W" && git switch -c chore/readings',
+])
+  test(`the cleanup branch Dan agreed to starts only in the checkout he agreed to it for: ${line} is refused, and his answer is kept (#3398)`, withDeps, async ($, on) => {
+    const { w, clock } = world(on, onMainDirty({ ask: 'Open it', trees: { '/other': '/other' } }))
+    await startWrote($ as never, clock)
+    await command($ as never, 'winddown')
+    expect(await call($ as never, cleanupAsk('chore/readings'))).toMatch(/^Dan agreed: make the branch chore\/readings now/)
+    expect(await call($ as never, bash(line, 'c2'))).toMatch(/^Blocked: winding down, so this did not start a new branch\. Dan agreed to chore\/readings for \/repo only, and this would start it (in \/other|where the repository it names could not be told)\./)
+    expect(w.toasts).toEqual([])
+    // His answer still lets the branch start where he agreed to it.
+    expect(await call($ as never, bash('git switch -c chore/readings', 'c3'))).toBe('ran')
+    expect(w.toasts).toEqual([`Winding down let the branch chore/readings start, for the cleanup Dan agreed to (${READINGS}).`])
+  })
+
+for (const line of ['git -C /repo switch -c chore/readings', 'cd /repo/tests && git switch -c chore/readings', 'git -C tests checkout -b chore/readings'])
+  test(`the control: ${line} starts the cleanup branch in the checkout Dan agreed to it for (#3398)`, withDeps, async ($, on) => {
+    const { w, clock } = world(on, onMainDirty({ ask: 'Open it', trees: { '/repo/': '/repo' } }))
+    await startWrote($ as never, clock)
+    await command($ as never, 'winddown')
+    await call($ as never, cleanupAsk('chore/readings'))
+    expect(await call($ as never, bash(line, 'c2'))).toBe('ran')
+    expect(w.toasts.filter(t => !t.startsWith('Winding down let the branch'))).toEqual([])
+  })
+
 test('the cleanup branch Dan agreed to is refused once anything beyond his files is uncommitted, naming it (#1051)', withDeps, async ($, on) => {
   const { w, clock } = world(on, onMainDirty({ ask: 'Open it' }))
   await startWrote($ as never, clock)
@@ -7887,6 +7953,53 @@ test("an agent's commit, or one after a cd, names no branch of this session's ch
   await command($ as never, 'winddown')
   expect((await stop($ as never)).block).toBeUndefined()
 })
+
+// #3398: the branch a commit lands on is the one checked out in the repository the command names.
+// Until then the note read the last -C alone, so a commit into another repository named by
+// --git-dir or GIT_DIR made the branch of the folder it was typed in the session's own to finish,
+// and a commit through a chain of -C written in full named none.
+const UNTOLD_BRANCH = (why: string) => `Scope modes could not note which branch this call made the session's own (${why}), so winding down may not finish it.`
+for (const [line, why] of [
+  ['git --git-dir=/other/.git commit -m wip', 'it names its repository apart from the folder it runs in (--git-dir or GIT_DIR)'],
+  ['git --git-dir /other/.git --work-tree=/other commit -m wip', 'it names its repository apart from the folder it runs in (--git-dir or GIT_DIR)'],
+  ['GIT_DIR=/other/.git git commit -m wip', 'it names its repository apart from the folder it runs in (--git-dir or GIT_DIR)'],
+  ['export GIT_DIR=/other/.git; git commit -m wip', 'the call names GIT_DIR, GIT_WORK_TREE or GIT_COMMON_DIR somewhere other than as a setting on the git command itself'],
+  ['GIT_DIR=/other/.git git push', 'it names its repository apart from the folder it runs in (--git-dir or GIT_DIR)'],
+] as const)
+  test(`a commit or push into a repository named apart names no branch of this session's checkout, and that is said: ${line} (#3398)`, withDeps, async ($, on) => {
+    const { w, clock } = world(on, { branch: 'fix-700' })
+    await start($ as never, clock)
+    expect(await call($ as never, bash(line))).toBe('ran')
+    expect(w.toasts).toEqual([UNTOLD_BRANCH(why)])
+    await command($ as never, 'winddown')
+    expect((await stop($ as never)).block).toBeUndefined()
+  })
+
+for (const line of ['git -C / -C repo commit -m wip', 'git -C /repo -C "" commit -m wip', 'git -C / -C repo push'])
+  test(`a commit through more than one -C written in full is of the branch checked out where they lead: ${line} (#3398)`, withDeps, async ($, on) => {
+    const { w, clock } = world(on, { branch: 'fix-700' })
+    await start($ as never, clock)
+    expect(await call($ as never, bash(line))).toBe('ran')
+    expect(w.toasts).toEqual([])
+    await command($ as never, 'winddown')
+    expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: there is no PR for fix-700 yet\./)
+  })
+
+for (const [line, noted] of [
+  ['git -C /repo commit -m wip', true],
+  ['git --work-tree=/elsewhere commit -m wip', true],
+  ['git -C repo commit -m wip', false],
+  ['git -C "$W" -C repo commit -m wip', false],
+  ['git -C a -C b commit -m wip', false],
+] as const)
+  test(`the control: ${line} ${noted ? 'is noted as before' : 'names no folder written in full, so no branch, as before'} (#3398)`, withDeps, async ($, on) => {
+    const { w, clock } = world(on, { branch: 'fix-700' })
+    await start($ as never, clock)
+    expect(await call($ as never, bash(line))).toBe('ran')
+    expect(w.toasts).toEqual([])
+    await command($ as never, 'winddown')
+    expect(/there is no PR for fix-700 yet/.test((await stop($ as never)).block ?? '')).toBe(noted)
+  })
 
 test("uncommitted work this session wrote in the checkout of a branch that is not the session's still counts, and Dan's answer to leave it settles it until another file changes (#1074, #1108)", withDeps, async ($, on) => {
   const { w, clock } = world(on, onSlate({ dirty: ['/repo'], dirtyFiles: ['notes.md'], ask: 'Leave it as it is' }))
@@ -8078,6 +8191,51 @@ test('a stash that cannot be read is said once, and the pop still runs (#1123)',
     "Scope modes could not read which files the stash this call takes holds (fatal: not a git repository), so winding down may not count them as this session's. Later failures go to the debug log.",
   ])
 })
+
+// #3398: a stash and a patch belong to the checkout of the repository the command names. Until then
+// each was read in the checkout of the last -C alone, else the session's, so a stash popped in
+// another repository named by --git-dir was read from the session's own stash (a stranger's files
+// counted as this session's), and one reached through a chain of -C was read in the wrong folder.
+for (const [how, line, extra] of [
+  ['a stash popped in a repository named by its options', 'git --git-dir=/other/.git --work-tree=/other stash pop', { stash: ['app.ts'] }],
+  ['a stash popped in a repository named by GIT_DIR', 'GIT_DIR=/other/.git GIT_WORK_TREE=/other git stash pop', { stash: ['app.ts'] }],
+  ['a stash popped with a working folder named apart', 'git --work-tree=/other stash apply', { stash: ['app.ts'] }],
+  ['a stash popped after GIT_DIR is exported', 'export GIT_DIR=/other/.git; git stash pop', { stash: ['app.ts'] }],
+  ['a patch applied in a repository named by its options', 'git --git-dir=/other/.git --work-tree=/other apply /tmp/fix.patch', { files: { '/tmp/fix.patch': PATCH } }],
+  ['a patch applied after GIT_WORK_TREE is exported', 'export GIT_WORK_TREE=/other; git apply /tmp/fix.patch', { files: { '/tmp/fix.patch': PATCH } }],
+] as [string, string, Opts][])
+  test(`${how} gives this session's checkout no file: its files land where only git can say (#3398)`, withDeps, async ($, on) => {
+    const { w, clock } = world(on, { branch: 'main', dirty: ['/repo'], dirtyFiles: ['app.ts'], ...extra })
+    await start($ as never, clock)
+    expect(await call($ as never, bash(line, 'g1'))).toBe('ran')
+    // The session's own stash is never read for a command that names another repository.
+    expect(w.runs.filter(r => r.includes('stash') && r.includes('show'))).toEqual([])
+    await command($ as never, 'winddown')
+    expect((await stop($ as never)).block ?? '').not.toContain('app.ts')
+  })
+
+for (const [how, line, extra] of [
+  ['a stash popped', 'git -C / -C repo stash pop', { stash: ['app.ts'] }],
+  ['a patch applied', 'git -C / -C repo apply /tmp/fix.patch', { files: { '/tmp/fix.patch': PATCH } }],
+] as [string, string, Opts][])
+  test(`${how} through more than one -C is read in the checkout they lead to (#3398)`, withDeps, async ($, on) => {
+    const { clock } = world(on, { branch: 'main', dirty: ['/repo'], dirtyFiles: ['app.ts', 'other/plan.md'], ...extra })
+    await start($ as never, clock)
+    expect(await call($ as never, bash(line, 'g1'))).toBe('ran')
+    await command($ as never, 'winddown')
+    const block = (await stop($ as never)).block ?? ''
+    expect(block).toMatch(/^Winding down is not finished: there are uncommitted changes \(app\.ts\): /)
+    expect(block).not.toContain('other/plan.md')
+  })
+
+for (const line of ['git -C /repo stash pop', 'git -C "$W" stash pop', 'git -C "$A" -C repo stash pop'])
+  test(`the control: ${line} is read ${line.includes('$') ? 'nowhere, as a folder the shell fills in always was' : 'in the checkout it names, as before'} (#3398)`, withDeps, async ($, on) => {
+    const { clock } = world(on, { branch: 'main', dirty: ['/repo'], dirtyFiles: ['app.ts'], stash: ['app.ts'] })
+    await start($ as never, clock)
+    expect(await call($ as never, bash(line, 'g1'))).toBe('ran')
+    await command($ as never, 'winddown')
+    expect(((await stop($ as never)).block ?? '').includes('app.ts')).toBe(!line.includes('$'))
+  })
 
 test("two calls finishing at once, the session's and an agent's, each keep the files they wrote (lessons review of #1108)", withDeps, async ($, on) => {
   const { clock } = world(on, { branch: 'main', dirty: ['/repo'], dirtyFiles: ['a.ts', 'b.ts', 'c.ts'] })

@@ -757,6 +757,59 @@ describe('the checkout, force pushes, branch deletes and the live config', () =>
   test('one whose checkout cannot be told is refused', async () => {
     expect(await bash('git checkout main', { cwd: `${'/Users'}/x/somewhere` })).toBe('run git checkout where it could not be told whether this is a primary checkout')
   })
+  // #3398: git acts on the repository a command names, never on the folder the call was typed in.
+  // Until then the rule asked only about the last -C read from that folder, else that folder, so
+  // each of these ran from a linked worktree and moved a primary checkout.
+  const WT = `${'/Users'}/x/wt`
+  const REPO = `${'/Users'}/x/repo`
+  const untold = 'run git checkout where it could not be told whether this is a primary checkout'
+  test('a checkout naming its repository apart is one that cannot be told, typed in a linked worktree or anywhere (#3398)', async () => {
+    for (const c of [
+      `git --git-dir=${REPO}/.git --work-tree=${REPO} checkout main`,
+      `git --git-dir ${REPO}/.git checkout main`,
+      `git --work-tree=${REPO} checkout main`,
+      `GIT_DIR=${REPO}/.git GIT_WORK_TREE=${REPO} git checkout main`,
+      `GIT_DIR=${REPO}/.git git checkout main`,
+      `GIT_WORK_TREE=${REPO} git checkout main`,
+      `env GIT_DIR=${REPO}/.git git checkout main`,
+      `export GIT_DIR=${REPO}/.git; git checkout main`,
+      `GIT_DIR=${REPO}/.git; export GIT_DIR; git checkout main`,
+      `read GIT_DIR; export GIT_DIR; git checkout main`,
+      `git -C ${WT} --git-dir=${REPO}/.git checkout main`,
+    ])
+      expect({ c, r: await bash(c, { cwd: WT }) }).toEqual({ c, r: untold })
+    expect(await bash(`git --git-dir=${REPO}/.git --work-tree=${REPO} switch -c x`, { cwd: WT })).toBe('run git switch where it could not be told whether this is a primary checkout')
+  })
+  test('more than one -C is read as git chains them: the folder they lead to is the one asked about (#3398)', async () => {
+    // Typed in a folder of the linked worktree, the last -C alone names a folder of that worktree.
+    expect(await bash(`git -C ${'/Users'}/x -C repo checkout main`, { cwd: `${WT}/a` })).toBe('run git checkout in a primary checkout')
+    expect(await bash(`git -C ${WT} -C ../repo switch main`, { cwd: `${WT}/a` })).toBe('run git switch in a primary checkout')
+    expect(await bash('git -C .. -C ../repo checkout main', { cwd: `${WT}/a` })).toBe('run git checkout in a primary checkout')
+    // A chain that leads nowhere known, or that mod-kit cannot work out, is one that cannot be told.
+    expect(await bash(`git -C ${'/Users'}/x -C somewhere checkout main`, { cwd: WT })).toBe(untold)
+    expect(await bash('git -C "$A" -C sub checkout main', { cwd: WT })).toBe(untold)
+    expect(await bash(`git -C ${WT} -C "$B" checkout main`, { cwd: WT })).toBe(untold)
+  })
+  test('what the old reading refused is still refused: the last -C alone is judged beside the chain (#3398, Dan to decide)', async () => {
+    // git runs in the linked worktree here, where a checkout is allowed. The last -C read alone
+    // names a folder of the primary checkout, which the rule refused before #3398 and still does:
+    // letting the chain alone decide is the right reading and a loosening, so it is Dan's to choose.
+    expect(await bash(`git -C ${WT} -C sub checkout main`, { cwd: REPO })).toBe('run git checkout in a primary checkout')
+    expect(await bash(`git -C ${WT} -C sub checkout main`, { cwd: `${'/Users'}/x/somewhere` })).toBe(untold)
+  })
+  test('the controls: a checkout placed by no -C, one -C or a cd is judged exactly as before (#3398)', async () => {
+    expect(await bash('git checkout main', { cwd: WT })).toBeUndefined()
+    expect(await bash(`git -C ${WT} checkout main`)).toBeUndefined()
+    expect(await bash(`cd ${WT} && git checkout main`)).toBeUndefined()
+    expect(await bash(`git -C ${WT} -C sub checkout main`, { cwd: WT })).toBeUndefined()
+    expect(await bash(`git -C ${'/Users'}/x -C wt checkout main`, { cwd: WT })).toBeUndefined()
+    expect(await bash('git -c advice.detachedHead=false checkout main', { cwd: WT })).toBeUndefined()
+    expect(await bash('git commit -m "read GIT_DIR as git does" && git checkout main', { cwd: WT })).toBeUndefined()
+    expect(await bash(`git -C ${REPO} checkout main`, { cwd: WT })).toBe('run git checkout in a primary checkout')
+    expect(await bash('git -C "$W" checkout main', { cwd: WT })).toBe(untold)
+    // Putting named files back moves no checkout, wherever it is named.
+    expect(await bash(`git --git-dir=${REPO}/.git --work-tree=${REPO} checkout -- a.ts`, { cwd: WT })).toBeUndefined()
+  })
   test('force pushes', async () => {
     for (const c of ['git push --force', 'git push -f origin x', 'git push -uf origin x', 'git push --force-with-lease origin x', 'git push origin +x', 'git push origin HEAD:+main', 'git push origin --force-with-lease=x:abc x', 'git push --force-if-includes --force-with-lease origin x', 'git push -fu origin x', 'git push --mirror', 'git push --forc origin x', 'git push --force-with origin x', 'git push --mirr'])
       expect({ c, r: await bash(c) }).toEqual({ c, r: 'force push' })

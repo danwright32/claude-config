@@ -46,6 +46,7 @@ import {
   type Scripts,
 } from './mergedeploy.ts'
 import { NEVER_ASKED, overnightRefusal, primaryFrom, readableWay, repoFromRemotes, type GithubOf, type Look } from './overnight.ts'
+import { branchFolder, checkoutFolder, gitEnvNamed, gitNamesPlace, gitRead, type GitRead } from './gitplace.ts'
 import { committedHosts, groupAfter, tabsAfter, type Browser, type BrowserTabs, type TabsAcross, type TestHosts } from './browser.ts'
 import { wakeCheck, workedOn } from './wakecheck.ts'
 import { lastSource, powerChange, powerOf, sleepRefusal, type Power } from './power.ts'
@@ -1165,15 +1166,16 @@ const askIssues = async ($: EngineInterface, dir: string, repos: string[], round
 }
 
 // What a Bash call would merge, deploy or push to a default branch tonight that the night's lists
-// refuse, with the branch and package scripts read only when the call needs them.
-const mergeDeployRefusal = async ($: EngineInterface, night: unknown, commands: Cmd[]) => {
+// refuse, with the branch and package scripts read only when the call needs them. `raw` is the
+// call's text, which says whether it names GIT_DIR or GIT_WORK_TREE apart from any command (#3398).
+const mergeDeployRefusal = async ($: EngineInterface, night: unknown, commands: Cmd[], raw: string) => {
   // A call with nothing to refuse even judged at its strictest (no folder, branch or scripts known)
   // is most calls, and needs nothing read.
   // A push or a gh call is never let through on that pass: which branch is the default is only
   // known once the folder is read (`develop` is neither main nor master).
   if (!needsOf(commands).branch && !judgeNight(night, commands, commands.map(() => null))) return undefined
   const needs = needsOf(commands)
-  const dirs = dirsOf(commands, await $.session.cwd(), (await $.env.get('HOME')) ?? '')
+  const dirs = dirsOf(commands, await $.session.cwd(), (await $.env.get('HOME')) ?? '', raw)
   // What each folder a command runs in says: its origin, branches and package scripts, read once.
   const read = new Map<string, Place>()
   const placeAt = async (dir: string): Promise<Place> => {
@@ -3335,11 +3337,26 @@ const hold = async ($: EngineInterface, label: string, prompt: string) => {
 // reads as the gh pr merge it runs (#1251). Every command is asked, since only mod-kit can say which
 // runs the helper; a reading mod-kit cannot give throws, and every check judging a call refuses it
 // (or leaves its permission prompt for Dan) on a throw, so no merge is judged unread (L42, #961).
+// #3398: the git reading is asked with the settings written in front of the command (GIT_DIR and
+// GIT_WORK_TREE reach git as its options do) and carried whole, every way the command names its
+// repository included (gitplace.ts), so each rule places it by what it names. Until then only the
+// last -C was carried and no setting was handed over. A mod-kit loaded before it could say all of
+// that (a mod reloaded before the one it depends on keeps the older copy, #1281) would answer with
+// no naming at all, which reads as a command naming nothing, so the reader is first asked about a
+// line whose answer is known, and one that cannot give it throws like any reading it cannot give.
+const GIT_NAMING_PROBE = { words: ['git', '-C', '/a', '-C', 'b', '--git-dir=/x', 'status'], env: ['GIT_WORK_TREE=/y'] }
 const readCommands = async ($: EngineInterface, raw: string): Promise<Cmd[]> => {
   const out: Cmd[] = []
+  let probed = false
   for (const c of await $.modkit.pipeline({ command: raw })) {
-    const g = await $.modkit.git({ words: c.words })
-    const cmd: Cmd = g ? { ...c, git: { sub: g.sub, args: g.args, ...(g.dir !== undefined ? { dir: g.dir } : {}) } } : { ...c }
+    const g = await $.modkit.git({ words: c.words, ...(c.env?.length ? { env: c.env } : {}) })
+    if (g && !probed) {
+      const known = await $.modkit.git(GIT_NAMING_PROBE)
+      if (known?.chained !== '/a/b' || known.gitDir !== '/x' || known.workTree !== '/y')
+        throw new Error('the mod-kit loaded in this session does not say which repository a git command names (it is older than scope modes, #3398); /reload-plugins loads the current one')
+      probed = true
+    }
+    const cmd: Cmd = g ? { ...c, git: gitRead(g) } : { ...c }
     const ghAt = ghWords(c.words)
     const gh = ghAt ? await $.modkit.gh({ words: ghAt }) : undefined
     if (gh) cmd.gh = gh
@@ -4925,8 +4942,12 @@ const sameText = (a: string, b: string) => a === b
 // The branches a Bash call made this session's own (#1074), whatever mode is on, from the session or
 // any of its agents: one it created or pushed by name, and for a commit or a push naming none, the
 // branch checked out where it ran. That is known only for the session's own call with no `cd` before
-// it (an agent works in a folder of its own), in its folder or the absolute one `git -C` names. A
-// note that cannot be made is said, since winding down would then not finish that branch.
+// it (an agent works in a folder of its own), in its folder or the one `git -C` names in full: where
+// every -C leads, since git reads each from the one before it (#3398; until then the last -C alone
+// was read, so `git -C /a -C b commit` named none). A commit into a repository named apart
+// (--git-dir, GIT_DIR) is of a branch no folder answers for: until #3398 it made the branch of the
+// folder it was typed in the session's own. A note that cannot be made is said, since winding down
+// would then not finish that branch.
 const noteBranches = async ($: EngineInterface, raw: string, agentId: unknown) => {
   try {
     const cmds = await readCommands($, raw)
@@ -4936,12 +4957,13 @@ const noteBranches = async ($: EngineInterface, raw: string, agentId: unknown) =
     const moved = cmds.some(c => c.words[0] === 'cd' || c.words[0] === 'pushd')
     // The branch checked out where the call ran, read only where it is known and needed.
     let here: string | undefined
+    let untold: string | undefined
     if ((current || pushed.some(p => p.from === null)) && agentId === undefined && !moved) {
-      const dir = cmds.find(c => c.git?.dir !== undefined)?.git?.dir
-      const path = dir === undefined ? await $.session.cwd() : dir.startsWith('/') ? dir : undefined
-      const at = path ? await $.modkit.branch({ path }) : null
-      if (at && 'unreadable' in at && at.unreadable !== DETACHED) throw new Error(at.unreadable)
-      if (at && !('unreadable' in at) && at.branch) here = at.branch
+      const at = branchFolder(cmds.find(c => c.git && gitNamesPlace(c.git))?.git, await $.session.cwd(), gitEnvNamed(raw, cmds))
+      if (at !== 'none' && 'untold' in at) untold = at.untold
+      const read = at !== 'none' && 'path' in at ? await $.modkit.branch({ path: at.path }) : null
+      if (read && 'unreadable' in read && read.unreadable !== DETACHED) throw new Error(read.unreadable)
+      if (read && !('unreadable' in read) && read.branch) here = read.branch
     }
     if (current && here) add.push(here)
     await addToList({ get: () => $.state.get(branchesRef), set: (l, v) => $.state.set(branchesRef, l, { ifVersion: v }) }, add, sameText)
@@ -4951,6 +4973,8 @@ const noteBranches = async ($: EngineInterface, raw: string, agentId: unknown) =
       return from && from !== p.to ? [{ from, to: p.to }] : []
     })
     await addToList({ get: () => $.state.get(pushedIntoRef), set: (l, v) => $.state.set(pushedIntoRef, l, { ifVersion: v }) }, into, (a, b) => a.from === b.from && a.to === b.to)
+    // Said once the branches the call names are noted, so only the one that cannot be told is lost.
+    if (untold) throw new Error(untold)
   } catch (err) {
     // A skew is said once, never on every call that notes a branch (#1281), with what it costs
     // until then, since every later note is dropped too (lessons review).
@@ -5051,7 +5075,7 @@ const noteWritten =async ($: EngineInterface, tool: string, input: Record<string
     // other route (#1123 lessons review).
     let patched: string[] = []
     try {
-      patched = await patchedFiles($, writes)
+      patched = await patchedFiles($, writes, raw)
     } catch (err) {
       // Reading the patch file and finding the checkout it applies in can each fail; the cause in
       // brackets says which, and the sentence claims only that the files could not be told.
@@ -5070,27 +5094,34 @@ const noteWritten =async ($: EngineInterface, tool: string, input: Record<string
   }
 }
 
-// The checkout a git command in a call works in (#1123): its -C folder, else the session's. A folder
+// The checkout a git command in a call works in (#1123): the folder its -C options lead to, each
+// read from the one before it (#3398; until then the last one alone), else the session's. A folder
 // spelled with a variable cannot be followed, so it names none, and neither does a folder in no
-// checkout. A cd earlier in the call is not followed: knowingly loose, since a stash and a patch's
+// checkout, nor a command naming its repository or its working folder apart (--git-dir,
+// --work-tree, GIT_DIR, GIT_WORK_TREE; `envNamed` says the call names one of those variables), whose
+// files land where only git can say: until #3398 such a stash or patch was read in the session's
+// own checkout. A cd earlier in the call is not followed: knowingly loose, since a stash and a patch's
 // paths both belong to the whole checkout, so only a cd into another checkout reads the wrong one.
-const gitCheckout = async ($: EngineInterface, dir: string | undefined): Promise<string | null> => {
-  if (dir !== undefined && /[$`]/.test(dir)) return null
-  const cwd = await $.session.cwd()
-  return $.modkit.workingTree({ path: dir === undefined ? cwd : dir.startsWith('/') ? dir : `${cwd}/${dir}` })
+const gitCheckout = async ($: EngineInterface, g: GitRead, envNamed: boolean): Promise<string | null> => {
+  const path = checkoutFolder(g, await $.session.cwd(), envNamed)
+  return path === null ? null : $.modkit.workingTree({ path })
 }
 
 // The files a patch git applies in a call changes (#1123), read from each patch file the write
 // reader names, as paths in the checkout git applies it in. A patch read from a device or a fifo is
 // never opened (#1765), as a missing one never was: the read waits for ever, so the call's result
 // never came back. Its files cannot be told, and those the call wrote by other routes still count.
-const patchedFiles = async ($: EngineInterface, writes: ModKitWrites): Promise<string[]> => {
+const patchedFiles = async ($: EngineInterface, writes: ModKitWrites, raw: string): Promise<string[]> => {
   const out: string[] = []
+  // Whether the call names GIT_DIR or GIT_WORK_TREE, read once and only for a call applying a patch:
+  // the write reader hands on a command's words without the settings in front of it (#3398).
+  let envNamed: boolean | undefined
   for (const u of writes.unnamed) {
     if (u.what !== 'a patch') continue
     const g = await $.modkit.git({ words: u.words })
     if (g?.sub !== 'apply' && g?.sub !== 'am') continue
-    const root = await gitCheckout($, g.dir)
+    envNamed ??= gitEnvNamed(raw, await $.modkit.pipeline({ command: raw }))
+    const root = await gitCheckout($, gitRead(g), envNamed)
     if (!root) continue
     const texts = await inputTexts({ exists: p => $.fs.exists(p), stat: (p, o) => $.fs.stat(p, o), read: p => $.fs.read(p) }, u.inputs)
     for (const t of texts) for (const p of patchedPaths(g.args, true, t)) out.push(`${root}/${p}`)
@@ -5106,10 +5137,12 @@ const stashedFiles = async ($: EngineInterface, raw: string): Promise<string[]> 
   if (!/\bstash\b/.test(raw)) return []
   const out: string[] = []
   try {
-    for (const c of await readCommands($, raw)) {
+    const cmds = await readCommands($, raw)
+    const envNamed = gitEnvNamed(raw, cmds)
+    for (const c of cmds) {
       const ref = c.git?.sub === 'stash' ? stashTaken(c.git.args) : undefined
-      if (!ref) continue
-      const root = await gitCheckout($, c.git?.dir)
+      if (!ref || !c.git) continue
+      const root = await gitCheckout($, c.git, envNamed)
       if (!root) continue
       // -z: one name per NUL, never quoted, so a name with a space or an accent is read as it is.
       const r = await run($, ['git', '-C', root, 'stash', 'show', '--include-untracked', '--name-only', '-z', ref])
@@ -5276,7 +5309,26 @@ const judge = async ($: EngineInterface, j: Judged): Promise<Verdict> => {
     }
     // Nothing uncommitted is no cleanup to carry, so an answer left over covers nothing (lessons review).
     const covered = Array.isArray(now) && now.length ? agreed.filter(c => (now as string[]).every(f => c.files.includes(f))) : []
-    const cleanBranches = covered.map(c => c.branch)
+    // #3398: he agreed to each for this checkout, where the uncommitted files are, so one starts only
+    // where the command acts on this checkout: the folder it runs in, a cd and its -C followed as
+    // the merge and deploy rule follows them (dirsOf), null where that cannot be followed or the
+    // command names its repository apart. Until #3398 the start was placed nowhere, so the same
+    // name started in any other repository went through as the cleanup, and used his answer up.
+    let elsewhere: { branch: string; where: string | null } | undefined
+    if (root && covered.length) {
+      const dirs = dirsOf(commands, await $.session.cwd(), (await $.env.get('HOME')) ?? '', raw)
+      for (const [i, c] of commands.entries()) {
+        const started = newBranchOf(c)
+        if (!started?.moves || !started.name || !covered.some(k => k.branch === started.name)) continue
+        const at = dirs[i] ?? null
+        // A checkout that cannot be looked for is one that cannot be told, which refuses.
+        const tree = at === null ? undefined : await $.modkit.workingTree({ path: at }).catch(() => undefined)
+        if (tree === root) continue
+        elsewhere = { branch: started.name, where: tree === undefined ? null : (tree ?? at) }
+        break
+      }
+    }
+    const cleanBranches = covered.filter(c => c.branch !== elsewhere?.branch).map(c => c.branch)
     let r = newWork({ tool, input, commands, issues: ownNumbers(t, opened), cleanBranches })
     // An agent named after this branch's PR or an issue it closes is this issue's work, so a PR not
     // looked up yet is looked up before the agent is refused (#702). A branch that is not the
@@ -5289,7 +5341,9 @@ const judge = async ($: EngineInterface, j: Judged): Promise<Verdict> => {
       // A branch Dan agreed to that is refused says why his answer did not cover it.
       const asked = r.branch ? agreed.find(c => c.branch === r?.branch) : undefined
       let why = ''
-      if (asked && now && !Array.isArray(now)) why = ` Dan agreed to ${asked.branch}, but what is uncommitted could not be read (${now.unreadable}).`
+      if (asked && elsewhere?.branch === asked.branch)
+        why = ` Dan agreed to ${asked.branch} for ${root} only, and this would start it ${elsewhere.where === null ? 'where the repository it names could not be told' : `in ${elsewhere.where}`}.`
+      else if (asked && now && !Array.isArray(now)) why = ` Dan agreed to ${asked.branch}, but what is uncommitted could not be read (${now.unreadable}).`
       else if (asked && Array.isArray(now) && !now.length) why = ` Dan agreed to ${asked.branch} to commit ${filesSaid(asked.files)}, and nothing is uncommitted now.`
       else if (asked && Array.isArray(now)) {
         const beyond = now.filter(f => !asked.files.includes(f))
@@ -6014,7 +6068,7 @@ export const register: Register = on => {
     if (sleeping.state === 'asleep' && raw) {
       let over: Awaited<ReturnType<typeof mergeDeployRefusal>>
       try {
-        over = await mergeDeployRefusal($, sleeping.record.repos, await readCommands($, raw))
+        over = await mergeDeployRefusal($, sleeping.record.repos, await readCommands($, raw), raw)
       } catch (err) {
         // #1281: a member mod-kit's loaded copy lacks is no merge found, and no one call's fault:
         // every call is refused alike (fail closed, none can be told from one that merges), Dan is
