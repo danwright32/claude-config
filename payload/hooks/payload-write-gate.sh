@@ -748,7 +748,10 @@ WRITERS = ("tee", "cp", "mv", "rm", "touch", "mkdir", "patch", "install", "rsync
 #             after && behind another such cd. After && the shell skips a cd when the command
 #             before it failed, and after || when that one worked, and the cp then runs where the
 #             command started. It runs nothing and defines nothing, and where it leaves the cp is
-#             known.
+#             known: only a cp joined by && to the cd, or to a command so joined, is certain to run
+#             where the cd leads. One after ; or a line break runs whether or not the cd worked,
+#             and one after || only when something before it failed, so such a cp is judged from
+#             the folder a failed cd would have left it in as well (the second review).
 #   mkdir -p  of written folders. It makes folders and nothing else, so it cannot put a link or
 #             a second name where the cp will write. Its words are still judged as writes below.
 #   ls        of written paths, with single letter flags. It only reads.
@@ -765,6 +768,23 @@ WRITERS = ("tee", "cp", "mv", "rm", "touch", "mkdir", "patch", "install", "rsync
 # named payload outside every checkout is refused with the rest: being wrong that way costs only a
 # refusal main already gives. What is read is still handed back, so the checkout it is in is noted
 # before the call and anything changed there is named after it.
+#
+# And what the copy itself makes (the second review, 2026-11-24). All of that looks at the disk
+# before the command runs, and one cp changes the disk as it goes: cp -P copies a link as a link,
+# and a later source of the same last name is then written through it. Measured on macOS 26.6 with
+# stand in files: cp -P replaced the file such a link pointed at, in either letter case of the
+# name, and cp -R did the same where the link was relative and stayed inside the destination folder
+# (it refused only a link leading out of it). The first source was a link in a scratch folder to a
+# payload file, the second a payload file, and main refuses that command for naming one. So the
+# reading applies only when the copy can make nothing but plain files and folders, each under a
+# name of its own:
+#   no source is a link, a fifo or a device, looked at on the disk without following it;
+#   several sources are all plain files, with last names that differ in any letter case;
+#   a folder is copied only alone, and one in a payload folder only when everything in it, at
+#   every depth, is a plain file or a folder. Two names inside one folder can only be one name in
+#   the copy when the copy lands on a disk that tells fewer names apart, and with no link in the
+#   folder that writes nothing but the copy.
+# A source that is not there is copied as nothing. Each of these costs only a refusal main gives.
 CP_FLAGS = re.compile(r"-[RrfinpavXcHLP]+")
 CP_NAMES = ("cp", "/bin/cp")
 LS_FLAGS = re.compile(r"-[A-Za-z1]+")
@@ -787,11 +807,17 @@ def plain_copy(words):
             return None
         else:
             files.append(w)
-    return (files[:-1], files[-1]) if len(files) >= 2 else None
+    if len(files) < 2:
+        return None
+    # Two sources with one last name land on one file, the second written onto whatever the first
+    # made there. A plain word is ASCII, so letter case is the only way two written names are one.
+    names = [f.rsplit("/", 1)[-1].casefold() for f in files[:-1]]
+    if len(set(names)) != len(names):
+        return None
+    return files[:-1], files[-1]
 
-def real_path(word, base):
-    """Where the disk takes word, named from the folder base: links followed and each .. taken
-    after them, as the kernel does and a path put in order as text does not. None when unknown."""
+def written(word, base):
+    """word as a whole path, named from the folder base, with nothing followed. None when unknown."""
     if word.startswith("~/"):
         if not HOME.startswith("/"):
             return None
@@ -800,14 +826,60 @@ def real_path(word, base):
         if not base.startswith("/"):
             return None
         word = os.path.join(base, word)
-    return os.path.realpath(word)
+    return word
+
+def real_path(word, base):
+    """Where the disk takes word, named from the folder base: links followed and each .. taken
+    after them, as the kernel does and a path put in order as text does not. None when unknown."""
+    word = written(word, base)
+    return os.path.realpath(word) if word else None
+
+def under_payload(path):
+    """True when path is, or is under, a folder named payload in any letter case."""
+    return any(part.casefold() == "payload" for part in path.split("/"))
+
+def all_plain(folder):
+    """True when folder holds nothing but plain files and folders, at every depth."""
+    stack = [folder]
+    while stack:
+        with os.scandir(stack.pop()) as entries:
+            for e in entries:
+                if e.is_dir(follow_symlinks=False):
+                    stack.append(e.path)
+                elif not e.is_file(follow_symlinks=False):
+                    return False
+    return True
+
+def makes_only_plain(sources, base):
+    """True only when a plain cp of sources, run in base, can make nothing but plain files and
+    folders, so nothing it makes is a link that a later write of the same cp goes through."""
+    import stat
+    for s in sources:
+        path = written(s, base)
+        if not path:
+            return False
+        try:
+            mode = os.lstat(path).st_mode
+        except (FileNotFoundError, NotADirectoryError):
+            continue  # nothing is there, and cp copies nothing for it
+        if stat.S_ISREG(mode):
+            continue
+        # A link, a fifo or a device is never read as plain. A folder is, only as the one source:
+        # beside others, what it holds lands under names the command does not write.
+        if not stat.S_ISDIR(mode) or len(sources) > 1:
+            return False
+        # A folder outside every payload folder is not looked through: no reading ever took it
+        # for a payload write, so this one changes nothing for it.
+        if under_payload(os.path.realpath(path)) and not all_plain(path):
+            return False
+    return True
 
 def lands_outside(sources, dest, base):
     """True only when every file a plain cp of sources to dest, run in base, would write is
     certainly a new file, or a plain file with one name, under no folder named payload."""
     import stat
     to = real_path(dest, base)
-    if not to or any(part.casefold() == "payload" for part in to.split("/")):
+    if not to or under_payload(to):
         return False
     try:
         st = os.lstat(to)
@@ -835,8 +907,10 @@ def plain_command(text, start):
     is the forms above and the copy lands outside every payload folder, or None."""
     if not start.startswith("/") or not PLAIN_TEXT.fullmatch(text):
         return None
-    # joined is what stands between a command and the one before it, and last is that one.
-    at, copy, joined, last = start, None, "", None
+    # joined is what stands between a command and the one before it, and last is that one. ats is
+    # every folder the command being read could run in, first the one every cd so far leads to,
+    # and behind is where it would be had one of those cds failed.
+    ats, behind, copy, joined, last = [start], [], None, "", None
     for n, piece in enumerate(PLAIN_CUT.split(text)):
         if n % 2:
             joined += piece
@@ -846,22 +920,29 @@ def plain_command(text, start):
             continue
         if not all(PLAIN_WORD.fullmatch(w) for w in words):
             return None
+        # Only a command joined by && to a cd, or to one so joined, is certain to run where that
+        # cd leads. Any other also runs, or only runs, where a cd that failed would have left it.
+        if not AFTER_AND.fullmatch(joined):
+            ats, behind = ats + [b for b in behind if b not in ats], []
         head, rest = words[0], words[1:]
         if head in CP_NAMES:
             found = plain_copy(words)
             if copy or not found:
                 return None
-            copy = (words, at) + found
+            copy = (words, ats) + found
         elif head == "cd":
             if len(rest) != 1 or not rest[0].startswith(("/", "~/", "./")) or ".." in rest[0].split("/"):
                 return None
             # Certain to run: it begins a list, or follows by && a cd that was itself certain.
             if not (BEGINS_LIST.fullmatch(joined) or (last == "cd" and AFTER_AND.fullmatch(joined))):
                 return None
-            to = real_path(rest[0], at)
+            # A relative cd leads somewhere else from each folder it could run in.
+            if len(ats) > 1 and rest[0].startswith("./"):
+                return None
+            to = real_path(rest[0], ats[0])
             if not to or not os.path.isdir(to) or not os.access(to, os.X_OK):
                 return None
-            at = place(rest[0], at)[0]
+            ats, behind = [place(rest[0], ats[0])[0]], behind + ats
         elif head == "mkdir":
             if len(rest) < 2 or rest[0] != "-p" or any(w.startswith("-") for w in rest[1:]):
                 return None
@@ -873,8 +954,11 @@ def plain_command(text, start):
         joined, last = "", head
     if not copy:
         return None
-    words, at, sources, dest = copy
-    return (words, sources, dest) if lands_outside(sources, dest, at) else None
+    words, ats, sources, dest = copy
+    for at in ats:
+        if not (makes_only_plain(sources, at) and lands_outside(sources, dest, at)):
+            return None
+    return words, sources, dest
 
 # Any failure in that reading is the old reading, never a pass.
 try:
