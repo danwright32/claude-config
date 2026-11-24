@@ -11,8 +11,10 @@
 // JSON) and acts on what comes back.
 //
 // Its files live in this skill's folder under the HOME directory, never beside this code, which
-// also runs from a checkout of a public repository. All are named *.local.json, which claude-sync
-// keeps on one Mac (LOCAL_FILE_GLOBS), because they name work repositories:
+// also runs from a checkout of a public repository. They name work repositories, so each is one
+// claude-sync keeps on one Mac (LOCAL_FILE_GLOBS): a *.local.json, or a copy of one, which that
+// list matches as *.local.json.* whatever follows (a backup's number, .lock, .tmp-<pid>,
+// .set-aside-<time>):
 //   config.local.json   the channel, the article bot and the owner's Slack user
 //   log.local.json      one entry per reviewed post, with rotating backups log.local.json.1 to .5
 //   apps.local.json     a standing description of each app, with the facts it was measured from
@@ -58,7 +60,8 @@ function parseArgs(argv) {
     const a = argv[i];
     if (a.slice(0, 2) !== '--') { out._.push(a); continue; }
     const key = a.slice(2);
-    if (flags[key]) { out[key] = true; continue; }
+    // Asked of the object's own keys only: every object also answers to "constructor".
+    if (Object.prototype.hasOwnProperty.call(flags, key)) { out[key] = true; continue; }
     if (i + 1 >= argv.length) fail('The option ' + a + ' needs a value.');
     out[key] = argv[++i];
   }
@@ -153,14 +156,44 @@ function remember(log, text) {
   Object.defineProperty(log, 'readFrom', { value: text, enumerable: false });
   return log;
 }
+// The check and the write happen under one lock, a folder made with mkdir, which only one
+// process can create. A holder that died leaves its folder behind, so a lock whose recorded
+// process is gone, or that is older than any write could take, is taken over (L409).
+let lockWaitMs = 5000;
+const LOCK_STALE_MS = 30000;
+function pause(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
+function withLogLock(work) {
+  const lock = local('log.local.json.lock');
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  const giveUpAt = Date.now() + lockWaitMs;
+  for (;;) {
+    try { fs.mkdirSync(lock); break; }
+    catch (e) { if (e.code !== 'EEXIST') throw e; }
+    let holderGone = false;
+    try {
+      const pid = Number(fs.readFileSync(path.join(lock, 'pid'), 'utf8'));
+      if (pid > 0) { try { process.kill(pid, 0); } catch (err) { holderGone = err.code === 'ESRCH'; } }
+      if (Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) holderGone = true;
+    } catch (e) { /* the lock went, or its holder has not written its pid yet: look again */ }
+    if (holderGone) { fs.rmSync(lock, { recursive: true, force: true }); continue; }
+    if (Date.now() >= giveUpAt) fail('The review log is being written by another session (the lock at ' + lock + ' is held). Nothing was written. Run this command again.');
+    pause(25);
+  }
+  try {
+    fs.writeFileSync(path.join(lock, 'pid'), String(process.pid));
+    return work();
+  } finally { fs.rmSync(lock, { recursive: true, force: true }); }
+}
 function writeLog(log) {
   const file = local('log.local.json');
-  let current = null;
-  try { current = fs.readFileSync(file, 'utf8'); } catch (e) { if (e.code !== 'ENOENT') throw e; }
-  if (current !== log.readFrom) {
-    fail('The review log at ' + file + ' changed after this command read it, so another session is writing to it. Nothing was written. Run this command again; it will read the log as it is now.');
-  }
-  writeRotating('log.local.json', log);
+  withLogLock(function () {
+    let current = null;
+    try { current = fs.readFileSync(file, 'utf8'); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+    if (current !== log.readFrom) {
+      fail('The review log at ' + file + ' changed after this command read it, so another session is writing to it. Nothing was written. Run this command again; it will read the log as it is now.');
+    }
+    writeRotating('log.local.json', log);
+  });
 }
 
 // ------------------------------------------------------------------ worklist
@@ -243,6 +276,18 @@ function worklist(args) {
 
 // ------------------------------------------------------------------ the log
 
+// A repeat is a second post of an article already reviewed. What it ended as is a fact the log
+// holds, so it is read from the log, never taken from what the caller says (L161).
+function repeatEntry(e, log) {
+  const name = String(e.repeatOf);
+  const first = log.articles.filter(function (a) { return a.ts === name && !a.repeatOf && a.outcome !== 'hand-marked'; })[0];
+  if (!first) fail('The post ' + name + ', named by repeatOf, is not a reviewed post in the log, so there is no outcome for this repeat to take.');
+  if (e.outcome !== undefined && e.outcome !== first.outcome) {
+    fail('The earlier post ' + name + ' ended as ' + first.outcome + ', and a repeat takes that outcome. Leave outcome, kind and reason out of a repeat\'s entry.');
+  }
+  return { ts: e.ts, url: e.url, title: e.title, published: e.published, source: e.source, kind: first.kind, outcome: first.outcome,
+    reason: 'A repeat of the post ' + first.ts + ', reviewed ' + first.reviewedAt + '.', proposals: [], repeatOf: name };
+}
 function validateEntry(e) {
   if (!e || typeof e !== 'object') fail('The entry must be a JSON object.');
   if (typeof e.ts !== 'string' || !/^\d+\.\d+$/.test(e.ts)) fail('The entry has no usable ts (the post\'s Slack timestamp).');
@@ -265,15 +310,17 @@ function validateEntry(e) {
       }
     }
   });
-  if (e.outcome === 'changed' && accepted === 0) fail('An outcome of changed needs at least one accepted proposal, and this entry has none.');
+  // A repeat carries no proposals of its own; the earlier post's entry holds them.
+  if (e.outcome === 'changed' && accepted === 0 && !e.repeatOf) fail('An outcome of changed needs at least one accepted proposal, and this entry has none.');
   if (e.outcome !== 'changed' && accepted > 0) fail('This entry holds ' + accepted + ' accepted proposal(s), so its outcome is changed, not ' + e.outcome + '.');
   return proposals;
 }
 function logAdd(args) {
   const now = nowIso(args);
-  const e = readJsonArg(args.entry, 'the entry, as --entry <file>');
-  const proposals = validateEntry(e);
+  const given = readJsonArg(args.entry, 'the entry, as --entry <file>');
   const log = readLog();
+  const e = given && given.repeatOf !== undefined ? repeatEntry(given, log) : given;
+  const proposals = validateEntry(e);
   const at = log.articles.findIndex(function (a) { return a.ts === e.ts; });
   if (at !== -1 && !args.replace) {
     fail('The post ' + e.ts + ' is already in the log as ' + log.articles[at].outcome + '. To record a fresh review of it, which keeps the earlier entry inside the new one, add --replace.');
@@ -318,9 +365,16 @@ function logRestore(args) {
 }
 function declined() {
   const out = [];
+  const seen = {};
   readLog().articles.forEach(function (a) {
-    (a.proposals || []).forEach(function (p) {
-      if (p.decision === 'declined') out.push({ summary: p.summary, declineReason: p.declineReason || null, title: a.title, url: a.url, reviewedAt: a.reviewedAt });
+    // A fresh review keeps the earlier entry inside the new one, and a decline made then still
+    // stands, so every version of the entry is read, newest first.
+    [a].concat((a.previous || []).slice().reverse()).forEach(function (version) {
+      (version.proposals || []).forEach(function (p) {
+        if (p.decision !== 'declined' || seen[a.ts + ' ' + p.summary]) return;
+        seen[a.ts + ' ' + p.summary] = true;
+        out.push({ summary: p.summary, declineReason: p.declineReason || null, title: a.title, url: a.url, reviewedAt: version.reviewedAt });
+      });
     });
   });
   print({ declined: out });
@@ -346,7 +400,9 @@ function tallyOf(log) {
     if (k.reviewed < FEED_THRESHOLD || k.offTopic !== k.reviewed) return false;
     const asked = log.feedSuggestions.filter(function (s) { return s.kind === name; });
     if (!asked.length) return true;
-    return k.reviewed >= asked[asked.length - 1].reviewed + FEED_THRESHOLD;
+    // A recorded count that cannot be read counts as none, so the kind comes due again (L50).
+    const then = Number(asked[asked.length - 1].reviewed);
+    return k.reviewed >= (isFinite(then) ? then : 0) + FEED_THRESHOLD;
   });
   return { kinds: kinds, handMarked: handMarked, dueForFeedSuggestion: due, feedSuggestions: log.feedSuggestions };
 }
@@ -482,7 +538,11 @@ const COMMANDS = {
 if (require.main === module) {
   try {
     const args = parseArgs(process.argv.slice(2));
-    const command = COMMANDS[args._[0]];
+    if (args['lock-wait'] !== undefined) {
+      if (!(Number(args['lock-wait']) >= 0)) fail('The time given to --lock-wait is a number of milliseconds.');
+      lockWaitMs = Number(args['lock-wait']);
+    }
+    const command = Object.prototype.hasOwnProperty.call(COMMANDS, args._[0]) ? COMMANDS[args._[0]] : null;
     if (!command) fail('Usage: node review.js <' + Object.keys(COMMANDS).join(' | ') + '> [options]');
     command(args);
   } catch (e) {

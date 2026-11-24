@@ -309,6 +309,52 @@ guarded('the two sessions case', function aStaleWriteIsRefused() {
     'declined proposals come back with their reason and the article they came from', r.out + r.err);
 })();
 
+guarded('declines from before a fresh review', function declinesSurviveAReplace() {
+  const home = newHome();
+  logAdd(home, entry(TS_NEW, 1, { kind: 'how-to', outcome: 'no-change', reason: 'One proposal, declined.',
+    proposals: [{ summary: 'Drop the plan first rule', decision: 'declined', declineReason: 'Kept on purpose.' }] }));
+  logAdd(home, entry(TS_NEW, 1, { kind: 'how-to', outcome: 'no-change', reason: 'Reviewed again, nothing new.' }), ['--replace']);
+  const r = run(home, ['declined']);
+  check(r.code === 0 && r.json && r.json.declined.length === 1 && r.json.declined[0].summary === 'Drop the plan first rule',
+    'a proposal declined in an earlier review of a post is still listed after a fresh review replaces the entry', r.out + r.err);
+});
+
+guarded('a repeat of an article that led to a change', function aRepeatTakesItsOutcomeFromTheLog() {
+  const home = newHome();
+  logAdd(home, entry(TS_OLD, 1, { kind: 'how-to', outcome: 'changed', reason: 'One change accepted.',
+    proposals: [{ summary: 'Shorten the builder brief', decision: 'accepted', issue: 'https://example.com/issues/1' }] }));
+  const r = logAdd(home, { ts: TS_NEW, url: 'https://example.com/a1', title: 'Article 1', repeatOf: TS_OLD });
+  const stored = r.code === 0 ? readLocal(home, 'log.local.json').articles[1] : {};
+  check(r.code === 0 && r.json && r.json.emoji === HANDS && stored.outcome === 'changed' && stored.kind === 'how-to'
+    && stored.repeatOf === TS_OLD && stored.proposals.length === 0,
+    'a repeat names the earlier post and takes its kind, outcome and emoji from the log, with no proposals of its own', r.out + r.err + JSON.stringify(stored));
+  const wrong = logAdd(home, { ts: '1795529999.000001', url: 'https://example.com/a1', title: 'Article 1', repeatOf: '1.000001' });
+  check(wrong.code !== 0 && /1\.000001/.test(wrong.err), 'a repeat of a post the log does not hold is refused', wrong.err);
+  const lying = logAdd(home, { ts: '1795529999.000001', url: 'https://example.com/a1', title: 'Article 1', repeatOf: TS_OLD, outcome: 'off-topic', kind: 'how-to', reason: 'x' });
+  check(lying.code !== 0 && /changed/.test(lying.err), 'a repeat that claims a different outcome from the earlier post is refused', lying.err);
+});
+
+guarded('the held lock case', function aHeldLockIsWaitedForThenRefused() {
+  const home = newHome();
+  logAdd(home, entry('1795000001.000001', 1));
+  const lock = localPath(home, 'log.local.json.lock');
+  fs.mkdirSync(lock);
+  fs.writeFileSync(path.join(lock, 'pid'), String(process.pid));   // a live holder: this test
+  const held = logAdd(home, entry('1795000002.000001', 2), ['--lock-wait', '150']);
+  check(held.code !== 0 && /another session/.test(held.err) && readLocal(home, 'log.local.json').articles.length === 1 && fs.existsSync(lock),
+    'while a live session holds the log, a write waits, then is refused, and leaves the lock alone', held.err);
+  const dead = spawnSync('node', ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' });
+  fs.writeFileSync(path.join(lock, 'pid'), dead.stdout);            // a holder that has exited
+  const taken = logAdd(home, entry('1795000002.000001', 2), ['--lock-wait', '150']);
+  check(taken.code === 0 && readLocal(home, 'log.local.json').articles.length === 2 && !fs.existsSync(lock),
+    'a lock left by a session that died is taken over, and released after the write', taken.out + taken.err);
+});
+
+(function inheritedNamesAreNotFlags() {
+  const r = run(newHome(), ['tally', '--constructor']);
+  check(r.code !== 0 && /needs a value/.test(r.err), 'an option that only looks like a flag because every object has it is not taken for one', r.out + r.err);
+})();
+
 // ---------------------------------------------------------------- the track record
 
 let seeded = 0;
@@ -340,7 +386,7 @@ guarded('the repeated post case', function aRepeatIsCountedOnce() {
   const home = newHome();
   seedOffTopic(home, 'customer-story', 4);
   const first = readLocal(home, 'log.local.json').articles[0];
-  const again = logAdd(home, entry('1797000009.000001', 'again', { url: first.url, repeatOf: first.ts }));
+  const again = logAdd(home, { ts: '1797000009.000001', url: first.url, title: first.title, repeatOf: first.ts });
   const r = run(home, ['tally']);
   check(again.code === 0 && r.code === 0 && r.json && r.json.kinds['customer-story'].reviewed === 4 && r.json.dueForFeedSuggestion.length === 0,
     'a repeated post is logged but adds nothing to its kind\'s count', again.err + r.out + r.err);
@@ -368,6 +414,12 @@ guarded('the repeated suggestion case', function suggestionIsNotRepeatedUntilFiv
   check(five.json && five.json.dueForFeedSuggestion.length === 1, 'it is made again once 5 more have gone the same way', five.out + five.err);
   const bad = run(home, ['feed-suggested', '--kind', 'case-study', '--decision', 'declined', '--now', NOW]);
   check(bad.code !== 0 && /customer-story/.test(bad.err), 'a suggestion for a kind outside the list is refused', bad.err);
+  // A recorded suggestion whose count cannot be read must not silence the kind for good (L50).
+  const log = readLocal(home, 'log.local.json');
+  log.feedSuggestions = [{ kind: 'customer-story', decision: 'declined', at: NOW }];
+  writeLocal(home, 'log.local.json', log);
+  const unread = run(home, ['tally']);
+  check(unread.json && unread.json.dueForFeedSuggestion.length === 1, 'a recorded suggestion with no readable count does not stop the kind coming due', unread.out + unread.err);
 });
 
 // ---------------------------------------------------------------- app descriptions

@@ -50,7 +50,7 @@ A log entry, written to a file in the scratchpad:
    {"summary": "...", "decision": "declined", "declineReason": "Dan's words, when he gave any"}]}
 ```
 
-A `hand-marked` entry needs only `ts`, `url`, `title` and `outcome`. A repeat adds `"repeatOf": "<sameAsTs>"`.
+A `hand-marked` entry needs only `ts`, `url`, `title` and `outcome`. A repeat's entry is `ts`, `url`, `title` and `"repeatOf": "<sameAsTs>"`: the script takes its kind, outcome and emoji from the earlier post's entry.
 
 ## The run
 
@@ -62,7 +62,7 @@ A `hand-marked` entry needs only `ts`, `url`, `title` and `outcome`. A repeat ad
 4. **The worklist is the whole answer to what gets reviewed.** Each post is judged alone. There is no cut off date and no "everything older than the newest marked post".
 5. **Settle the short lists.**
    - `handMarked`: `log-add` each as `hand-marked`.
-   - `repeats`: `log-add` with the earlier entry's kind and outcome and `repeatOf`, then mark it (step 12).
+   - `repeats`: `log-add` a repeat's entry, then mark it (step 12).
    - `owed`: add the emoji named and run `log-marked`.
    - `feed.quiet` is true: tell Dan the daily job has posted nothing for that many days and may have stopped.
 6. **Read every article on `toReview` in full**, from its link, with the session's web fetch. The bot's one sentence summary is never the basis for a call. After a second failed fetch the post stays unlogged and unmarked, and goes in the report.
