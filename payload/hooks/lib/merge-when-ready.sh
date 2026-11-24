@@ -131,7 +131,11 @@
 # to the head the gates judged, so it merges that commit or nothing. --admin is one flag that skips
 # every rule the account may bypass, not only the review (L448), so everything it would skip is read
 # first, and anything else it would skip, or any answer that cannot be read, stops the run with
-# nothing sent (see bypass_judge).
+# nothing sent (see bypass_judge). Sleep mode outranks all of it (Dan, 2026-11-24: "Respect sleep
+# mode first"): while this Mac is asleep the bypass merge is sent only in a repository where sleep
+# mode would allow an admin merge tonight, judged by the scope modes mod's own function at the
+# moment of the bypass, since a run started before bedtime can still be running after it (see
+# bypass_sleep).
 #
 # STOPS, each in its own words and none of them a merge:
 #   0  merged (or found already merged), confirmed by reading the pull request back
@@ -151,7 +155,8 @@
 #      closed without merging, or one merged while this stayed on its branch (claude-config#3118,
 #      see wait_for_base), or a default branch GitHub did not name, or an approving review the base
 #      branch's rules require that the account merging may not bypass, or whose bypass could not be
-#      read, or that is not all a bypass would skip (claude-config#3534, see bypass_judge)
+#      read, or that is not all a bypass would skip (claude-config#3534, see bypass_judge), or that
+#      sleep mode does not allow a merge past in this repository tonight (see bypass_sleep)
 #   3  still waiting (on checks, the review, a base still moving, the repository's turn, or the
 #      pull request of the branch it is based on, claude-config#3118) when the
 #      deadline, the time in line (the line standing still for MWR_LINE_SECONDS, claude-config#1697;
@@ -289,6 +294,12 @@ LINE="$(num_or "${MWR_LINE_SECONDS:-}" 10800)"
 MAX_POLLS="$(num_or "${MWR_MAX_POLLS:-}" $(( (LINE + DEADLINE) / POLL + 10 )))"
 SETTLE="$(num_or "${MWR_SETTLE_SECONDS:-}" 300)"
 NOW_CMD="$(mwr_script "${MWR_NOW:-}" "")"
+# This Mac's sleep record (claude-config#3534, see bypass_sleep). CLAUDE_SLEEP_RECORD is what the test
+# runner hands every suite so that none reads the real one (lib/sleep.sh); here it moves the record
+# only under the test marker, as every other setting naming something this runs or reads does, since
+# a record named somewhere empty would read as sleep mode being off. With no HOME there is no place
+# to look, which is said and refuses, never read as no record.
+SLEEP_RECORD="$(mwr_script "${CLAUDE_SLEEP_RECORD:-}" "${HOME:+$HOME/.claude/state/sleep/current.json}")"
 GRACE="$(num_or "${MWR_NO_CHECKS_GRACE_SECONDS:-}" 600)"
 LIST_WAIT="$(num_or "${MWR_CHECKS_LIST_SECONDS:-}" 300)"
 HEARTBEAT="$(num_or "${MWR_HEARTBEAT_SECONDS:-}" 120)"; [ "$HEARTBEAT" -ge 1 ] || HEARTBEAT=1
@@ -1701,6 +1712,50 @@ bypass_read(){
   return 0
 }
 policy_refused(){ case "$1" in *"the base branch policy prohibits the merge"*) return 0 ;; esac; return 1; }
+# SLEEP MODE OUTRANKS THE BYPASS (Dan, 2026-11-24: "Respect sleep mode first"). Overnight, sleep
+# mode allows a typed `gh pr merge --admin` only in a repository whose entry in its lists, as
+# settled at bedtime, is merge only, says a merge there does not deploy, and says adminMerge
+# green-pinned (mods/scope-modes/hooks/adminmerge.ts), and refuses it everywhere else. The bypass
+# merge here is sent inside this run, where no hook sees it, so it asks the same question itself,
+# as the last thing before bypass_judge allows it: a run started before bedtime can still be
+# running after it.
+# Sleep mode is one record for the whole Mac and holds every session on it, so "on" here means
+# what it means there: this Mac's record reads as asleep now.
+# Nothing of the judgement is written here. lib/sleep-admin-merge.mjs, under node, hands the record
+# to the mod's own readSleep and adminMergeNightRefusal, the function the mod's judge of a typed
+# admin merge asks first, so the two cannot drift apart (L370). What this adds is only what to do
+# with each answer: `awake` (no record, one that has ended, one from another boot) and `allowed`
+# send the bypass merge; `refused` stops in sleep mode's words; a record that cannot be read, a
+# node that is missing or cannot run the mod's files, and any answer that is none of those stop
+# too, since none is permission and none is sleep mode being off (L42). No record at all is the
+# mod's first answer and is settled before node is started, so a Mac that is awake runs nothing new.
+# What the mod's judge also holds a typed admin merge to, and this does not ask of it: a squash, and
+# a base branch that requires at least one check. Here the merge method is the caller's, judged
+# against the ruleset above, and the checks are block-red-merge.sh's to judge, as for every merge.
+SLEEP_ENTRY="$MWR_LIB/sleep-admin-merge.mjs"
+BY_SLEEP_AGAIN=" Run the same command again once that can be read or sleep mode is off, or have it approved first."
+bypass_sleep(){
+  local out rc verdict="" why="" flat
+  [ -n "$SLEEP_RECORD" ] \
+    || bypass_refuse "this run has no HOME folder to look for sleep mode's record under, so whether sleep mode allows a merge past that review in $slug tonight is not known, and $BY_UNREAD" "$BY_SLEEP_AGAIN"
+  [ -e "$SLEEP_RECORD" ] || return 0
+  out="$(node --experimental-strip-types --no-warnings "$SLEEP_ENTRY" "$SLEEP_RECORD" "$slug" "$(now)000" \
+    "$(sysctl -n kern.boottime 2>/dev/null)" "$(sysctl -n kern.bootsessionuuid 2>/dev/null)" 2>&1 </dev/null)"; rc=$?
+  if [ "$rc" -eq 0 ]; then
+    verdict="$(printf '%s' "$out" | jq -r 'if type == "object" then .verdict // "" | tostring else "" end' 2>/dev/null)" || verdict=""
+    why="$(printf '%s' "$out" | jq -r '.why // "" | tostring | gsub("[[:cntrl:]]"; " ") | .[0:400]' 2>/dev/null)" || why=""
+  fi
+  case "$verdict" in
+    awake) return 0 ;;
+    allowed)
+      say "Sleep mode is on, and it allows a merge past an approving review in $slug tonight (adminMerge on its entry in sleep mode's lists, as settled at bedtime)."
+      return 0 ;;
+    refused) bypass_refuse "sleep mode is on and does not allow a merge past that review in $slug tonight (sleep mode will not ${why:-say why})" " Have it approved, or run the same command again once sleep mode is off." ;;
+    unreadable) bypass_refuse "sleep mode's record on this Mac could not be read (${why:-it did not say why}), so whether it allows a merge past that review in $slug tonight is not known, and $BY_UNREAD" "$BY_SLEEP_AGAIN" ;;
+  esac
+  flat="${out//$'\n'/ }"
+  bypass_refuse "what sleep mode allows in $slug tonight could not be asked of the scope modes mod (node exited $rc: ${flat:0:300}), and $BY_UNREAD" "$BY_SLEEP_AGAIN"
+}
 # Called with the plain merge refused for the base branch policy and read back open at $head (after).
 # Returns 0 when the bypass merge may be sent, with by_as saying what it bypasses; 1 when GitHub
 # does not read the review as still to come, so nothing about a bypass was read; 5 to look again.
@@ -1758,6 +1813,9 @@ bypass_judge(){
       esac ;;
     *) bypass_refuse "$said (GitHub's answer for the branch did not say: ${ut_ans:0:200}), and $BY_UNREAD" "$BY_AGAIN" ;;
   esac
+  # Last, so it is asked as near the merge as anything here is: sleep mode, which stops unless this
+  # Mac is awake or tonight's lists allow an admin merge in this repository.
+  bypass_sleep
   by_as="as a bypass of the approving review $a1"
   say "GitHub refused the merge of #$pr at ${head:0:7} for $base's branch policy, and the only thing it lacks is the approving review $a1, which $who may bypass (current_user_can_bypass: $a2)."
   return 0

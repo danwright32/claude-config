@@ -5101,6 +5101,102 @@ check_eq "#3534 every ruleset was read as the account that merges" "writer" "$(s
 check_eq "#3534 and the bypass merge was made as it" "writer" "$(tail -n 1 "$ST/merge-as")"
 check "#3534 which the line names" "which writer may bypass" "$out"
 
+# SLEEP MODE OUTRANKS THE BYPASS (Dan, 2026-11-24: "Respect sleep mode first"). The bypass merge is made
+# inside the helper, where no hook sees it, so while this Mac is asleep the helper asks sleep mode's
+# own judgement of an admin merge in that repository tonight, at the moment of the bypass, and
+# sends it only where that allows one. The judgement is the scope modes mod's (readSleep and
+# adminMergeNightRefusal), asked through lib/sleep-admin-merge.mjs under node, so no rule of it is
+# written a second time here or in the helper. Every case above ran with no sleep record (the
+# suite's CLAUDE_SLEEP_RECORD names none), which is sleep mode off. Here the record is one of this
+# boot, as a fixed sysctl prints it, ending long after the suite's clock (1000000 s, which is
+# 1000000000 ms, the unit the record keeps its end in).
+BY_ENTRY="$DIR/lib/sleep-admin-merge.mjs"
+BY_SLEEP="$WORKDIR/by-sleep"; BY_REC="$BY_SLEEP/current.json"; mkdir -p "$BY_SLEEP/bin" "$BY_SLEEP/no-node"
+BY_BOOT='{ sec = 1700000000, usec = 0 } Tue Nov 14 17:13:20 2023'
+BY_SESSION='11111111-2222-3333-4444-555555555555'
+printf '#!/usr/bin/env bash\ncase "$*" in\n  "-n kern.boottime") echo "%s" ;;\n  "-n kern.bootsessionuuid") echo "%s" ;;\n  *) exit 1 ;;\nesac\n' "$BY_BOOT" "$BY_SESSION" > "$BY_SLEEP/bin/sysctl"
+# A node that cannot run the mod's judgement, as one too old to read its TypeScript answers.
+printf '#!/usr/bin/env bash\necho "TypeError [ERR_UNKNOWN_FILE_EXTENSION]: Unknown file extension .ts" >&2\nexit 1\n' > "$BY_SLEEP/no-node/node"
+chmod +x "$BY_SLEEP/bin/sysctl" "$BY_SLEEP/no-node/node"
+by_night(){   # by_night <the night's lists, as JSON> [<when it ends, in ms>]: the record of a sleep of this boot
+  jq -nc --argjson repos "$1" --argjson until "${2:-2000000000000}" --arg session "$BY_SESSION" '{v: 1, generation: "g", since: 1, until: $until, night: "2026-11-24", bootTime: 1700000000, bootSession: $session, report: "r", startedBy: {sessionId: "s", cwd: "/"}, workers: [], placeBefore: "home", repos: $repos}' > "$BY_REC"
+}
+by_lists(){ jq -nc --argjson e "$1" '{mayDeploy: [], mergeOnly: [$e], closed: []}'; }   # by_lists <one mergeOnly entry>
+# What sleep mode answers for acme/widget at the suite's clock, asked of the entry directly: its verdict and why.
+by_verdict(){ node --experimental-strip-types --no-warnings "$BY_ENTRY" "$BY_REC" acme/widget 1000000000 "$BY_BOOT" "${1:-$BY_SESSION}" 2>&1 | jq -r '[.verdict, (.why // "")] | join(": ")' 2>&1; }
+by_asleep(){ PATH="$BY_SLEEP/bin:$PATH" CLAUDE_SLEEP_RECORD="$BY_REC" run "$@"; }
+BY_OPTED='{"repo":"acme/widget","mergeDeploys":false,"adminMerge":"green-pinned"}'
+BY_PLAIN='{"repo":"acme/widget","mergeDeploys":false}'
+BY_SLEEP_NO="sleep mode is on and does not allow a merge past that review in acme/widget tonight (sleep mode will not admin merge a PR in acme/widget"
+
+# Asleep, in a repository whose entry allows an admin merge tonight: sent, and said.
+by_state; by_night "$(by_lists "$BY_OPTED")"
+out="$(by_asleep 7 --squash)"; rc=$?
+check_eq "#3534 asleep, where sleep mode allows an admin merge tonight, the bypass merge merges" "0" "$rc"
+check "#3534 asleep and allowed: as a bypass" "Merged #7 in acme/widget at ${OLD:0:7} $BY_AS" "$out"
+check "#3534 asleep and allowed: it says sleep mode allows it" "Sleep mode is on, and it allows a merge past an approving review in acme/widget tonight" "$out"
+check_eq "#3534 asleep and allowed: one bypass merge" "1" "$(by_admin)"
+
+# Asleep, merge only, with no adminMerge on its entry: nothing merges there overnight past an approval.
+by_state; by_night "$(by_lists "$BY_PLAIN")"
+out="$(by_asleep 7 --squash)"; rc=$?
+by_refused "asleep, merge only with no adminMerge" "$rc" "$out"
+check "#3534 asleep, merge only with no adminMerge: it says sleep mode does not allow it there, in sleep mode's words" "$BY_SLEEP_NO, which does not allow admin merges overnight (adminMerge on its mergeOnly entry in mods/sleep-repos.local.json))" "$out"
+check "#3534 asleep, merge only with no adminMerge: and what to do" "Have it approved, or run the same command again once sleep mode is off." "$out"
+check_eq "#3534 asleep, merge only with no adminMerge: only the plain merge was sent" "1" "$(count gh-calls '^pr merge')"
+
+# The same lists once the sleep has ended (its record still there, as it is until a session moves it
+# aside): sleep mode is off, so the bypass merge is sent as it was before this.
+by_state; by_night "$(by_lists "$BY_PLAIN")" 999999999
+out="$(by_asleep 7 --squash)"; rc=$?
+check_eq "#3534 a sleep that has ended is sleep mode off: the bypass merge merges" "0" "$rc"
+check "#3534 a sleep that has ended: as a bypass" "Merged #7 in acme/widget at ${OLD:0:7} $BY_AS" "$out"
+check_not "#3534 a sleep that has ended: and nothing is said about sleep mode" "leep mode" "$out"
+
+# A record that cannot be read is never taken as permission, nor as sleep mode being off.
+by_state; printf '{"v":1,' > "$BY_REC"
+out="$(by_asleep 7 --squash)"; rc=$?
+by_refused "a sleep record that cannot be read" "$rc" "$out"
+check "#3534 a sleep record that cannot be read: it says so, with why" "sleep mode's record on this Mac could not be read (the sleep record is not JSON), so whether it allows a merge past that review in acme/widget tonight is not known, and an answer that cannot be read is never taken as permission" "$out"
+check "#3534 a sleep record that cannot be read: and what to do" "Run the same command again once that can be read or sleep mode is off, or have it approved first." "$out"
+
+# Nor is a judgement that could not be run: a record is there, and node cannot ask the mod about it.
+by_state; by_night "$(by_lists "$BY_OPTED")"
+out="$(PATH="$BY_SLEEP/no-node:$PATH" by_asleep 7 --squash)"; rc=$?
+by_refused "sleep mode's judgement cannot be run" "$rc" "$out"
+check "#3534 sleep mode's judgement cannot be run: it says so, with what node answered" "what sleep mode allows in acme/widget tonight could not be asked of the scope modes mod (node exited 1: TypeError [ERR_UNKNOWN_FILE_EXTENSION]: Unknown file extension .ts), and an answer that cannot be read is never taken as permission" "$out"
+
+# With no HOME there is nowhere to look for the record, which is not the same as there being none.
+by_state
+out="$(HOME="" CLAUDE_SLEEP_RECORD="" run 7 --squash)"; rc=$?
+by_refused "no HOME folder to look for sleep mode's record under" "$rc" "$out"
+check "#3534 no HOME folder: it says so" "this run has no HOME folder to look for sleep mode's record under, so whether sleep mode allows a merge past that review in acme/widget tonight is not known" "$out"
+
+# What sleep mode answers for every other night, asked of the entry directly: one run of node each,
+# not a whole run of the helper (L298). The helper sends the bypass merge on `awake` and `allowed`
+# alone, which the runs above and the weakened helper prove; these prove which nights get which.
+by_night "$(by_lists "$BY_OPTED")"
+check_eq "#3534 sleep mode's answer: an entry with adminMerge green-pinned whose merge does not deploy" "allowed: " "$(by_verdict)"
+check_eq "#3534 sleep mode's answer: a record of another boot is not this sleep" "awake: other-boot" "$(by_verdict 99999999-2222-3333-4444-555555555555)"
+by_night "$(by_lists '{"repo":"acme/widget","mergeDeploys":true,"adminMerge":"green-pinned"}')"
+check_eq "#3534 sleep mode's answer: where a merge deploys" "refused: admin merge a PR in acme/widget, where a merge deploys, so it is never merged overnight" "$(by_verdict)"
+by_night "$(by_lists '{"repo":"acme/widget","mergeDeploys":"unknown","adminMerge":"green-pinned"}')"
+check_eq "#3534 sleep mode's answer: where whether a merge deploys is not recorded" "refused: admin merge a PR in acme/widget, where whether a merge deploys is not recorded, so it is never merged overnight" "$(by_verdict)"
+by_night "$(jq -nc --argjson e "$BY_OPTED" '{mayDeploy: [], mergeOnly: [$e], closed: [{repo: "acme/widget", why: "the question about acme/widget was left unanswered at bedtime"}]}')"
+check_eq "#3534 sleep mode's answer: a repository closed for the night" "refused: admin merge a PR in acme/widget, and the question about acme/widget was left unanswered at bedtime, so tonight it neither merges nor deploys" "$(by_verdict)"
+by_night "$(by_lists '{"repo":"acme/other","mergeDeploys":false,"adminMerge":"green-pinned"}')"
+check_eq "#3534 sleep mode's answer: a repository on neither list" "refused: admin merge a PR in acme/widget, and acme/widget is on neither list in mods/sleep-repos.local.json, so tonight it neither merges nor deploys" "$(by_verdict)"
+by_night '{"mayDeploy": ["acme/widget"], "mergeOnly": [], "closed": []}'
+check "#3534 sleep mode's answer: a repository that may deploy is not one that allows an admin merge" "refused: admin merge a PR in acme/widget, which does not allow admin merges overnight" "$(by_verdict)"
+by_night '{"mayDeploy": [], "mergeOnly": "acme/widget"}'
+check_eq "#3534 sleep mode's answer: lists that are not the shape expected" "refused: admin merge a PR in acme/widget, and the sleep record carries no merge and deploy lists, so tonight it neither merges nor deploys" "$(by_verdict)"
+by_night null
+check_eq "#3534 sleep mode's answer: a record with no lists" "refused: admin merge a PR in acme/widget, and the sleep record carries no merge and deploy lists, so tonight it neither merges nor deploys" "$(by_verdict)"
+printf '{"v":1,"bootTime":1700000000}' > "$BY_REC"
+check_eq "#3534 sleep mode's answer: a record naming no end" "unreadable: the sleep record names no end" "$(by_verdict)"
+rm -f "$BY_REC"
+check_eq "#3534 sleep mode's answer: no record" "awake: none" "$(by_verdict)"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

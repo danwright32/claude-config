@@ -2472,6 +2472,25 @@ line says it merged as a bypass of the approving review, naming the ruleset. The
 repository opt in list (Dan, 2026-11-24): the ruleset's own bypass list is the permission. Not
 built: vouching for required checks held in a ruleset the account may bypass, which refuses today.
 
+Sleep mode outranks that bypass (Dan, 2026-11-24: "Respect sleep mode first"). The bypass merge is
+sent inside the helper, where no hook sees it, so sleep mode's rule for a typed `gh pr merge
+--admin` would never have judged it. While this Mac is asleep the helper therefore sends it only
+in a repository where sleep mode would allow an admin merge tonight: its entry in the night's
+lists, as settled at bedtime, is merge only, says a merge does not deploy, and says `adminMerge:
+green-pinned`. Anywhere else it stops with exit 1, saying sleep mode does not allow a merge past
+that review in that repository tonight, in sleep mode's own words for why. It asks as the last
+thing before the bypass merge, never when the run starts, because a run started before bedtime can
+still be running after it. Sleep mode is one record for the whole Mac, so on means that this Mac's
+record reads as asleep at that moment, whichever session started the run. None of the judgement is
+written a second time: `hooks/lib/sleep-admin-merge.mjs`, run under node, hands the record to the
+scope modes mod's own `readSleep` and to `adminMergeNightRefusal`, the function its judge of a
+typed admin merge asks first. A record that cannot be read, a node that is missing or cannot run
+the mod's files, and an answer that is none of the four it knows all stop the run too, since none
+of them is permission and none is sleep mode being off. With no sleep record the helper runs
+nothing new and behaves as it did. Two things sleep mode holds a typed admin merge to are not asked
+of the helper's: that it is a squash, and that the base branch requires at least one check. The
+merge method is judged against the ruleset, and the checks by `block-red-merge.sh`, as above.
+
 Checks that have reported being green is not the head's CI being green (claude-config#1087). A
 workflow run can exist for minutes before any of its jobs registers a check (the booking app's CI waits on a
 concurrency group), so a fast check from another workflow can be the only one on the head. Both the

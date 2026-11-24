@@ -165,10 +165,14 @@ const statusReports = (json: unknown): Report[] | { short: true } | null => {
 }
 
 /**
- * Why an admin merge is refused tonight in `repo` (the repository the overnight write rule resolved
- * it to), or undefined when it may run. `night` is the sleep record's lists, as settled at bedtime.
+ * Why the night's lists refuse an admin merge in `repo`, or undefined when they allow one: the
+ * repository is not closed tonight, is merge only, a merge there does not deploy, and its entry says
+ * adminMerge. Nothing about the command or GitHub is read. It is the first thing judgeAdminMerge
+ * asks, and all that the merge helper asks of sleep mode before the bypass merge it sends itself,
+ * which no hook sees (hooks/lib/merge-when-ready.sh, through hooks/lib/sleep-admin-merge.mjs,
+ * claude-config#3534), so a typed admin merge and the helper's are held to this one judgement.
  */
-export const judgeAdminMerge = async (night: unknown, g: ModKitGh, repo: string, api: GhJson, linkRepo: LinkRepo): Promise<string | undefined> => {
+export const adminMergeNightRefusal = (night: unknown, repo: string): string | undefined => {
   const policy = policyOf(night, repo)
   const what = `admin merge a PR in ${repo}`
   if (policy.kind === 'closed') return `${what}, and ${policy.why}, so tonight it neither merges nor deploys`
@@ -177,6 +181,16 @@ export const judgeAdminMerge = async (night: unknown, g: ModKitGh, repo: string,
   if (policy.mergeDeploys === true) return `${what}, where a merge deploys, so it is never merged overnight`
   if (policy.mergeDeploys !== false) return `${what}, where whether a merge deploys is not recorded, so it is never merged overnight`
   if (policy.adminMerge !== ADMIN_MERGE) return off
+  return undefined
+}
+
+/**
+ * Why an admin merge is refused tonight in `repo` (the repository the overnight write rule resolved
+ * it to), or undefined when it may run. `night` is the sleep record's lists, as settled at bedtime.
+ */
+export const judgeAdminMerge = async (night: unknown, g: ModKitGh, repo: string, api: GhJson, linkRepo: LinkRepo): Promise<string | undefined> => {
+  const byLists = adminMergeNightRefusal(night, repo)
+  if (byLists !== undefined) return byLists
 
   const p = pinned(g)
   if ('refuse' in p) return p.refuse
