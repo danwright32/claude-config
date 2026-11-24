@@ -192,7 +192,7 @@ done
 # post"). So BBEdit is first named in section 10 only after the issue check (the step running
 # `gather.js gh`) and the state commit, and the Slack draft, which is saved from the file Dan may
 # have edited there, comes after the editor opens. Line numbers within section 10, first mention.
-seq_line(){ printf '%s\n' "$sequence" | awk -v s="$1" 'index($0, s) { print NR; exit }'; }
+seq_line(){ awk -v s="$1" 'index($0, s) { print NR; exit }' <<< "$sequence"; }
 open_at="$(seq_line 'BBEdit')"; issue_at="$(seq_line 'gather.js gh')"
 commit_at="$(seq_line 'gather.js commit-state')"; draft_at="$(seq_line "$DRAFT_TOOL")"
 if [ -z "$open_at" ] || [ -z "$issue_at" ] || [ -z "$commit_at" ] || [ -z "$draft_at" ]; then
