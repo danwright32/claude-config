@@ -151,6 +151,63 @@ test('$.modkit.writes follows CLAUDE_CODE_SHELL over SHELL', { plugins: [writesR
   expect(await handedUnder($, on, { CLAUDE_CODE_SHELL: '/bin/bash', SHELL: '/bin/zsh', HOME: '/h' })).toEqual([['/w/a.ts', '/w/b.ts']])
 })
 
+// #3478: where a mv puts a file is read from the words alone. The second fix round settled it
+// against the disk, with no deadline on the look; the third took that out, and a reader that words
+// a move as one (ask before saving) now does so only when nothing else in the command can remove,
+// move, empty or write over anything, so a folder reached through a link cannot be emptied behind
+// the move it was told of.
+const movesReader: { name: string; register: Register } = {
+  name: 'moves-reader',
+  register: on => {
+    on('tool.call', { tool: 'Bash' }, async ($, e) => {
+      const command = String((e as { command?: string }).command)
+      // The positive control: a call the kit answers by asking the disk, through the same recorders.
+      if (command.startsWith('tree ')) return { deny: JSON.stringify(await $.modkit.workingTree({ path: command.slice(5) })) }
+      const w = await $.modkit.writes({ command, cwd: '/w', home: '/h' })
+      return { deny: JSON.stringify(w.changes.filter(c => c.to !== undefined).map(c => c.word)) }
+    })
+  },
+}
+const movedOn = async ($: unknown, on: On, links: Record<string, string>, command: string) => {
+  mock.env(on, { SHELL: '/bin/zsh', HOME: '/h' })
+  const folders = ['/', '/h', '/h/Desktop', '/h/Desktop/archive', '/h/notes']
+  // Every look at the disk is recorded, whichever way it asks (lessons review of 4ad8a11055: only
+  // fs.stat was, so a reader gone back to asking whether a path is there would have passed).
+  const asked: string[] = []
+  on('fs.exists', ($, e) => {
+    asked.push(`exists ${e.path}`)
+    return { value: folders.includes(e.path) || links[e.path] !== undefined } as never
+  })
+  on('fs.list', ($, e) => {
+    asked.push(`list ${e.path}`)
+    return { value: [] } as never
+  })
+  on('fs.stat', ($, e) => {
+    asked.push(`stat ${e.path}`)
+    const leads = links[e.path]
+    if (leads === undefined && !folders.includes(e.path)) throw new Error(`ENOENT: ${e.path}`)
+    return { value: { kind: 'dir', size: 0, mtimeMs: 0, isLink: leads !== undefined, ...(e.resolve ? { realPath: leads ?? e.path } : {}) } } as never
+  })
+  on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
+  const r = await ($ as { tool: { call: (e: never) => Promise<{ deny?: string; text?: string }> } }).tool.call({ tool: 'Bash', command } as never)
+  return { moved: JSON.parse(r.deny ?? r.text ?? '[]') as unknown, asked }
+}
+test('$.modkit.writes reads a move from the words alone, asking the disk nothing, so a link is left for the reader (#3478)', { plugins: [movesReader] }, async ($, on) => {
+  const r = await movedOn($, on, { '/h/Desktop/link': '/h/Desktop/archive' }, 'mv ~/notes/*.md ~/Desktop/link/ && rm -rf ~/Desktop/archive')
+  expect(r.moved).toEqual(['~/notes/*.md'])
+  expect(r.asked).toEqual([])
+})
+test('$.modkit.writes asks the disk nothing for a command that moves nothing (#3478)', { plugins: [movesReader] }, async ($, on) => {
+  expect((await movedOn($, on, {}, 'rm -rf ~/Desktop/archive && echo x > ~/notes/a.md')).asked).toEqual([])
+})
+// The control for the two above (lessons review of a38570eb00): in the same setup a look the kit does
+// make is recorded, so their empty lists are a measurement and not recorders that are never reached.
+test('a look the kit does make is recorded by the same setup, so an empty list above means none was made (#3478)', { plugins: [movesReader] }, async ($, on) => {
+  const r = await movedOn($, on, {}, 'tree /h/notes/a.md')
+  expect(r.moved).toBe(null)
+  expect(r.asked).toContain('exists /h/notes/.git')
+})
+
 // #698: a reader that judges what a heredoc feeds asks for its body through the kit, as plain data.
 const heredocReader: { name: string; register: Register } = {
   name: 'heredoc-reader',

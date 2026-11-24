@@ -208,6 +208,27 @@ eq "#2757 control: that load's own bytecode landed in its throwaway prefix" 1 "$
 _pyc="$(find "$W/pyc" -name 'shell-words*' | sed 's#.*/##' | paste -sd' ' -)"
 eq "#2080 loading the reader leaves no shell-words bytecode (written by this load)" "" "$_pyc"
 
+# A # after an escaped space, ; or ( is inside a word, so a quote that opens after it on the line is
+# open on the lines that follow, which are text (claude-config#3464). The reader took the # for a
+# comment, skipped the quote, and read those lines as code. It asks lib/shell-words.py's word_starts
+# now, the rule the command reader asks. The control is a real comment: its quote opens nothing, so line 3 opens one instead.
+lines_of() { # lines_of <first line of a four line file>: the numbers of its code lines
+  printf '%s\ntext | grep -q x\ncloses"\necho code\n' "$1" > "$W/hash.sh"
+  python3 -I -B -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+from shell_code_lines import code_lines
+print(" ".join(str(n) for n, _ in code_lines(open(sys.argv[2]).read())))
+' "$LIB" "$W/hash.sh" 2>&1
+}
+eq "#3464 a quote after a # that follows an escaped space is open on the next lines" "1 4 5" "$(lines_of 'echo a\ # "opens')"
+eq "#3464 and after a # that follows an escaped ;" "1 4 5" "$(lines_of 'echo a\;# "opens')"
+eq "#3464 and after a # that follows an escaped (" "1 4 5" "$(lines_of 'echo a\(# "opens')"
+eq "#3464 the control: mid word it always was" "1 4 5" "$(lines_of 'echo a# "opens')"
+eq "#3464 the control: a real comment's quote opens nothing, so the next lines are code, after a space" "1 2 3" "$(lines_of 'echo a # "opens')"
+eq "#3464 the control: and after an escaped backslash and a space" "1 2 3" "$(lines_of 'echo a \\ # "opens')"
+eq "#3464 the control: and after a ;" "1 2 3" "$(lines_of 'echo a;# "opens')"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

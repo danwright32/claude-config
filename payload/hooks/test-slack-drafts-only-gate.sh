@@ -3889,10 +3889,10 @@ spec = importlib.util.spec_from_file_location("shell_words", os.path.join(os.pat
 sw = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(sw)
 parses, real = {}, sw.commands
-def counting(s, cwd="", heredocs=None, parts=None, spans=None):
+def counting(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, unsure=None):
     if heredocs is None and spans is None:
         parses[(s, cwd)] = parses.get((s, cwd), 0) + 1
-    return real(s, cwd, heredocs=heredocs, parts=parts, spans=spans)
+    return real(s, cwd, heredocs=heredocs, parts=parts, spans=spans, comments=comments, unsure=unsure)
 sw.commands = counting
 gate.remember_readings(sw)
 judge = gate.Judge(sw)
@@ -3979,10 +3979,10 @@ spec.loader.exec_module(sw)
 # Counted beneath whatever the gate puts over the reader, so each count is a real reading.
 reads, rests = {}, {}
 plain, plain_rest = sw.commands, sw.command_rest
-def commands(s, cwd="", heredocs=None, parts=None, spans=None):
+def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, unsure=None):
     if heredocs is None and spans is None:
         reads[(s, cwd)] = reads.get((s, cwd), 0) + 1
-    return plain(s, cwd, heredocs=heredocs, parts=parts, spans=spans)
+    return plain(s, cwd, heredocs=heredocs, parts=parts, spans=spans, comments=comments, unsure=unsure)
 def command_rest(text, passed=None):
     if passed is None:
         rests[text] = rests.get(text, 0) + 1
