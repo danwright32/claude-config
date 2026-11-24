@@ -2592,15 +2592,166 @@ known. A member renamed on the way out is not read.
   and over the 51,765 recorded calls the area check's reading is the same as main's in all but 76,
   each an unpack.
 
-**A script's own text is read as before.** The rule covers a command as typed. Where a guard reads
-the text of a script a command runs (the design round guard's `argumentUnreached`, the area check's
-`scriptReach`), a run marked unknown counts for nothing: nearly every script holds one (`exit 1`,
-`sleep 2`), so counting them would have every script handed a folder reach the whole of it, which
-#2924, #2407 and #2565 ended. So a script that hands its folder to a program nobody has listed is
-not caught.
+**Inside a script's own text (#3416), built 2026-11-21 for the design round guard.** The rule first
+covered only a command as typed. Two guards read the text of a script a command runs, the design
+round guard and the area check. Ask before saving, the collision guard and scope modes open no
+script a command runs (they read a patch file, or a program file a write reads from, for the names
+in it), so there was nothing to build in them.
 
-**The count behind it** (the personal MacBook's records, 35 days to 2026-11-21, 51,590 shell calls
-when it was taken): with the built rule 16 past calls are newly held by the two guards it was
+In the design round guard, a file a shell script's own text hands a program the reader does not
+know, by a path the reader places, is judged as a write of that file, as the same line typed whole
+is (`handedToUnknown` in its `rules.ts`). `bash fmt.sh`, fmt.sh holding `prettier --write
+app/page.tsx`, is held, and the refusal names the script and the program. The list of programs that
+only read applies there as it does on a command line, and nothing was added to it. The reading goes
+as deep as every other rule of the script reading (`SHELL_DEPTH`): the script the command runs and
+each script that one runs. A third is opened by no rule, and this rule needed no deeper reading to
+be right about the scripts it does read, so the depth was kept.
+
+Two things are left as they were. The area check reads a script's text as before (`scriptReach`: a
+run marked unknown counts for nothing there), by Dan's fourth decision above, until #3412. And in
+both guards a script that passes what it was handed on to such a program (`mystery "$1"`) is not
+caught. The reader hands on only a word that spells a path, which `$1` never does, and it gives
+`case`, `[[`, `exit`, `shift` and `basename` as programs it does not know exactly as it gives
+`mystery`. A rule reading each one handed `$1` as a route would hold nearly every script handed a
+file again, which #2924, #2407 and #2565 ended, and telling the shell's own words from a real
+program takes a list, which only Dan adds to. In the records below, 1 past call handed a file the
+guard holds to a script it reads as unable to write it, so 1 is the most such a rule could add.
+
+**The count behind #3416** (the personal MacBook's records, counted 2026-11-21: 53,367 shell calls.
+Dan's own sessions hold 22,275 of them over 34 days from 2026-10-19; agents' records hold 30,891
+and worktree and temporary folder records 201, both over only the 8 days from 2026-11-14, since a
+daily job removes those two kinds 7 days after they were last written): 4,830 calls ran a shell
+script the guard reads, as the script is on disk today. 31 of them, 26 distinct, are newly judged:
+27 asked about before they run, and 4 handing over only a mod hook file, which is judged once the
+command ran and passes where it was left as it was. 22 of the 31 are in the agents' 8 days, so at
+that rate a month of full records would hold about 90. Every one is a test suite or a probe script
+calling a shell function, its own or one from a file it reads in, with a word that spells a look
+changing file (`says "..." "... tools/post.swift"`, `fires ... app/page.tsx`). None is a program
+such as prettier. The reader marks a function the text itself defines as a program it does not
+know, on a command line as in a script, and leaving such a function out would be an exemption, so
+it was not built with the rule: Dan chose it the next day, below. The same count over the work
+MacBook's records (215,592 shell calls, posted on pull request 3427 on 2026-11-22, with the helper
+reading below) found 4 calls newly judged: 1 cleared by reading the helper's body and 3 still
+judged, and no call the base judged is no longer judged.
+
+**A function the script itself defines (#3416), built 2026-11-22 for the design round guard.** Dan
+chose it by picker that day: "Build the exemption (Recommended)". A call of a function the script's
+own text defines is read as that function's own commands with the call's words written in place of
+`$1`, `$2`, `$@` and `$*` (rules.ts `withoutOwnCalls`), and mod-kit's readers read that text as
+they read any other. A file of the call is left out only where nothing in that reading names it.
+The function's name is never what is trusted, so a wrapper cannot hide a program:
+`run() { prettier --write "$@"; }; run app/page.tsx` is still a write of app/page.tsx, as that line
+typed whole is. Everything the reading cannot tell stays judged as it was: a function from a file
+the script reads in that the reader cannot place (see the next paragraph); a name not defined exactly once, at the top of the script, as a command of its
+own (after `&&`, `||` or a pipe it is defined only sometimes, or in a subshell); a name the text
+unsets, an alias, or text run as commands anywhere in the script; a call before the definition, or
+behind `timeout`, `env`, `command`, `xargs`, `find` or a new shell, which run the program of that
+name and never the function; a body followed on its line by a redirect, `&` or `|`; a body that
+keeps what it was handed in a variable, shifts it, loops over it or names it as `${1:-x}`; and a
+word joining what was handed to another value where the joined name has a held file's shape. A
+command whose name is itself a variable is not followed, so one whose value is `unset` or `eval`
+could change a function unseen. The built in list of the shell's own words was not widened (a
+helper handing a file to `[[` is judged as that line typed whole is), and neither was following a
+variable: each is a wider exemption, Dan's to decide.
+
+**A function from a file the script reads in (#3416), built 2026-11-22.** Dan chose it by picker
+that day: "Read the files a suite reads in (Recommended)". A file a `source` or `.` command reads in
+is read, and a function it defines is checked exactly as one the script's own text defines (rules.ts
+`readInFile`, used only by `withoutOwnCalls`); nothing new is trusted. Only a file the reader can
+place is read: one in the script's own folder or below, named in the text or under a variable the
+script sets to its own folder. That variable must be set once, by mod-kit's own folder idiom typed
+at the top of the script as a command of its own, with nothing else setting it (no other assignment,
+builtin, loop, default or arithmetic naming it), no eval and no other file read in between that
+assignment and the read, and the file read in must not spell the variable itself. A link is not
+followed, and the reading goes one file deep: a file that itself reads in a file, or holds an eval,
+an alias or an unset, lends no function. The function must be defined once at that file's top, the
+file read in by exactly one command at the script's top as a command of its own (in no pipe, behind
+no program, with no words after the file), and the file must not `return` or `exit` before the
+definition; a name the script and a file both define stays judged. A file that the command, or a
+script it runs, writes, removes or changes by a name the reader places, or under a folder so
+written, is not read, since what would run is the changed file. Left open: a write by a name the
+reader cannot place, or by a program it does not know, could change a file between the reading and
+the run. A design file written that way is not judged directly either, so this adds no route that
+was not already open. The stricter form, judging any script that holds such a write, was measured
+on the Slack gate's suite: it holds 465 file writes the reader cannot place and does not call
+temporary, so the stricter form would clear none of the earlier count's 24 calls.
+
+**What may run after the definition (#3416), fixed 2026-11-22.** The reading asked what follows a
+helper's definition by where a command is typed, and a function typed above the definition is
+called below it: `setup() { eval "$X"; }`, then `run() { true; }`, `setup` and `run app/page.tsx`
+was read as the harmless body of `run`, while the shell runs whatever the eval installed. So text
+that may run after the definition and that the reading cannot follow now holds the call wherever it
+is typed: an eval anywhere in the script; a file the guard read, above the definition or below,
+that holds an eval, an alias, an unset or a file it reads in itself; and a file the guard did not
+read, unless it is read in above the definition at the top of the script as a command of its own,
+where it has ended before the definition. That last test (`readAtTop`) cannot tell a function's
+body from a branch or a loop, so a file the guard did not read that is read in above the definition
+inside an `if` is held too. A definition of the name inside another function's body, in the script
+or in a file the guard read, was held already, since every definition the reader lists is counted,
+a function's body included. A function that is never called by a command of its name is held like
+one that is: a call can come by a route the reading does not follow (a command whose name is a
+variable, a trap, a file it did not read). Replayed on the recount's 47 distinct newly judged calls
+the same day, the fix judges none of the 25 cleared calls again; 20 stay judged, 3 of their helpers
+for one of the new reasons where another reason held them before (G, silent, fires), and 2 calls'
+scripts are gone from the disk with the worktrees they ran in. Whether a `source` command stands at
+the top is asked in the one reading that places the script's definitions (`placed`): asked in a
+reading of its own it handed the readers the whole script once more, 1,806,612 characters in place
+of 1,355,198 for the Slack gate's suite. And a place typed after a `#` that may start a comment on
+its line is not probed, so it is never at the top: a probe written into a comment ends the comment,
+the rest of the line is read as commands, and a `}` there closed a group the script never closed,
+after which a definition or a read in command inside a function read as standing at the top (so on
+the branch before this fix too). The same holds for the places the folder variable is assigned
+(`ownFolder`), and one check (`maybeComment`) serves all three readings. A `#` inside a quoted
+string is taken for a comment as well, which only judges. Left open, as it was: a file the guard
+did not read, read in at the top of the script above the definition, could define a function under
+another name that, called below the definition, defines the helper's name again. Judging whenever
+such a file is read in closes it and was measured on the same 47 calls, not built: it clears 0 of
+them, all 25 judged again (23 `says`, 2 `call_has`), since the suites they run read in a file of
+that kind at its top (in the push test gate's suite, read for this, the suite deadline library, by
+a path typed with the own folder idiom inside the word, which the reader does not place). Reading
+such a file would close it for a suite of that shape and is a wider reading, Dan's to decide.
+
+The recount (2026-11-22, the personal MacBook's records for the 45 days to that day: 56,698 shell
+calls, 51,250 distinct, 5,339 running a shell script the guard reads, as the scripts are on disk that
+day; every rule asked of the guard's own modules, the files read in handed over as register.ts hands
+them). 51 calls, 47 distinct, are newly judged by the rule. The reading clears 27 of them, 25
+distinct: all 25 `says` calls (the Slack gate's suite and a suite of the same shape in another
+project, whose `lib/settings-file.sh` is now read) and 2 `call_has` calls. 24, 22 distinct, stay
+judged; for each, the files held before the exemption are the files still held. An eval after the
+definition: assert_contains and make_repo, 5 calls, and a sixth that runs that suite and the next. A
+function from a file the reader cannot place: fh_code_only, 6 calls, from an agent's check script
+that reads in hooks/lib/failure-handling.sh from outside its own folder; silent and fires, 3 calls
+and the sixth above, whose suite reads the same library through `$LIB`, set from `$DIR`, inside an
+`if`, and hands the predicate's name over as `"$1"`, a word run as the command, which is not
+followed. A body that keeps what it was handed in a variable: mutant, 4 calls, and control, 2, whose
+named_rule comes from a file read in after another file read in through `$ROOT`. A function defined
+before a file read in that the reader cannot place, because another file was read in between the
+folder variable's assignment and it (test-pr-review-push.sh and test-check-duplication.sh, 1 call
+each), or because it is read in under `$ROOT`, set from `$DIR` (test-stat-order.sh, 1). Of the
+earlier count's 24 calls, replayed with reasons the same day, 6 are cleared and 18 stay, for the same
+reasons. Each remaining kind needs a widening that was not built, and no count below was measured
+with one in place, so each is a most: trusting an eval, 5 alone; following a word a helper runs as
+its command together with a library read through a second variable inside an `if`, 3 alone (the
+sixth call needs that and the eval); a bound wider than the script's own folder together with
+following a variable a function keeps its argument in, 6 (fh_code_only's body hands its file to
+fh__run, which keeps it in a variable); following such a variable, 4 alone for mutant, whose file
+goes to tools/prove-it-fails.sh `--sed`, which does change it for a while, and 2 for control only
+with a folder variable set from another placed as well; letting a file read in between stand where
+the reader read it and found it does not spell the variable, 2; placing a folder variable set from
+the script's own folder variable, 1.
+
+What the reading costs is bounded, since it runs in a hook before the command. Placing each
+definition by rereading the script before it, once a function, took 6.4 to 7.4 seconds on a made up
+6,370 line suite defining 40 helpers (five readings, load average 39 to 48, 2026-11-22). One
+reading now places them all: the script is read as a group fed by a pipe inside a group fed by
+another, a numbered probe written in where each definition is typed, and a probe fed by the outer
+pipe stands in no group. The same suite takes 0.67 to 0.80 seconds (five readings, load average 45,
+2026-11-22), beside about 0.7 seconds for the one reading of the script the guard already made.
+`ownBudget` caps the text one script's calls may hand the readers (eight times the script and
+200,000 characters more); past it the runs not yet read stay judged. No real suite was timed alone.
+
+**The count behind #3323, the rule for a command as typed** (the personal MacBook's records, 35 days
+to 2026-11-21, 51,590 shell calls when it was taken): with the built rule 16 past calls are newly held by the two guards it was
 decided on, the design round guard 13 and ask before saving 3 (swiftc 8, gh 3, chk 2, swift 1, set
 1, one not a plain name), against 36 predicted and a gate of about 60. `[[` was handed a word that
 spells a path in 9 calls, none a path either guard holds. 75 calls were unpacks. The same count over

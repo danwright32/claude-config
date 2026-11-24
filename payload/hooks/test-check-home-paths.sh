@@ -513,6 +513,146 @@ grep -q "synced-trees.sh" <<< "$out_wide" \
   || check "#2754 and the run names the list it could not read" "out=$out_wide"
 
 # ---------------------------------------------------------------------------
+# A list of files, for the sync to ask about what a send is about to publish
+# (claude-config#3465). On 2026-11-22 a send pushed 126 scratch files to main,
+# 100 of them naming one Mac's home, and this check ran only afterwards, on
+# GitHub. The send now asks first, and it asks about the
+# files it is sending rather than walking the tree on every change, so the check
+# takes a list: --files0-from <file>, NUL separated paths relative to the root.
+#
+# The list narrows WHICH files are read and nothing else. A listed file is read
+# exactly when the whole tree walk would read it, by the same three rules, so
+# the send and main's own run cannot disagree about a file (L370). That is held
+# below by asking both forms about one tree holding every kind of place.
+# ---------------------------------------------------------------------------
+list_of() { # list_of <list file> <path>...  -> writes the paths NUL separated
+  local f="$1" p
+  shift
+  : > "$f"
+  for p in "$@"; do printf '%s\0' "$p" >> "$f"; done
+}
+LST="$(tree listed)"
+mkdir -p "$LST/hooks/run/cache-base" "$LST/state"
+printf 'cwd %s/projects/x\n' "$BADHOME" > "$LST/hooks/run/cache-base/entry.json"
+printf 'echo clean\n' > "$LST/hooks/clean.sh"
+printf 'elsewhere %s/notes\n' "$BADHOME" > "$LST/hooks/untouched.sh"
+printf 'note %s/x\n' "$BADHOME" > "$LST/state/local.md"
+printf '{"hooks":{}}\n' > "$LST/settings.json"
+LISTF="$TMPROOT/listed.files"
+
+list_of "$LISTF" hooks/run/cache-base/entry.json hooks/clean.sh
+out_l1="$(bash "$CHECK" --files0-from "$LISTF" "$LST" 2>&1)"
+code_l1=$?
+[ "$code_l1" -eq 1 ] && grep -q "hooks/run/cache-base/entry.json:1:" <<< "$out_l1" \
+  && check "#3465 a listed file naming a home folder fails the check, with its line" ok \
+  || check "#3465 a listed file naming a home folder fails the check, with its line" "exit=$code_l1 out=$out_l1"
+grep -q "untouched.sh" <<< "$out_l1" \
+  && check "#3465 and a file that was not listed is not read" "out=$out_l1" \
+  || check "#3465 and a file that was not listed is not read" ok
+
+# The control for the two above: the same tree walked whole does report the file the list left out,
+# so the list is what kept it from being read, not the file being clean.
+out_l1w="$(bash "$CHECK" "$LST" 2>&1)"
+code_l1w=$?
+[ "$code_l1w" -eq 1 ] && grep -q "hooks/untouched.sh:1:" <<< "$out_l1w" \
+  && check "#3465 control: the whole tree walk reports the file the list left out" ok \
+  || check "#3465 control: the whole tree walk reports the file the list left out" "exit=$code_l1w out=$out_l1w"
+
+list_of "$LISTF" hooks/clean.sh
+out_l2="$(bash "$CHECK" --files0-from "$LISTF" "$LST" 2>&1)"
+code_l2=$?
+[ "$code_l2" -eq 0 ] \
+  && check "#3465 a list of clean files passes in a tree that holds a failing file elsewhere" ok \
+  || check "#3465 a list of clean files passes in a tree that holds a failing file elsewhere" "exit=$code_l2 out=$out_l2"
+grep -q "1 of 1 listed file" <<< "$out_l2" \
+  && check "#3465 and the pass says how many of the listed files it read" ok \
+  || check "#3465 and the pass says how many of the listed files it read" "out=$out_l2"
+
+# Listed files the whole tree walk never reads (a folder the sync does not mirror, settings.json)
+# are not read here either. That is a pass, since the list was the caller's and none of it was this
+# check's to judge, and it is said as that rather than as files found clean (L11).
+list_of "$LISTF" state/local.md settings.json
+out_l3="$(bash "$CHECK" --files0-from "$LISTF" "$LST" 2>&1)"
+code_l3=$?
+[ "$code_l3" -eq 0 ] \
+  && check "#3465 listed files outside the synced set are not judged" ok \
+  || check "#3465 listed files outside the synced set are not judged" "exit=$code_l3 out=$out_l3"
+grep -q "none of the 2 listed file" <<< "$out_l3" \
+  && check "#3465 and the run says it read none of them, not that they were clean" ok \
+  || check "#3465 and the run says it read none of them, not that they were clean" "out=$out_l3"
+grep -q "state/local.md" <<< "$out_l1w" \
+  && check "#3465 control: the whole tree walk does not read that folder either" "out=$out_l1w" \
+  || check "#3465 control: the whole tree walk does not read that folder either" ok
+
+# A list that cannot answer the question is a failure, never a pass (L98): nothing listed, a list
+# that is not there, and a listed file that is not there are each a scan of something other than
+# what was asked about.
+: > "$LISTF"
+out_l4="$(bash "$CHECK" --files0-from "$LISTF" "$LST" 2>&1)"
+code_l4=$?
+[ "$code_l4" -eq 2 ] && grep -q "names no files" <<< "$out_l4" \
+  && check "#3465 an empty list is refused, not reported clean" ok \
+  || check "#3465 an empty list is refused, not reported clean" "exit=$code_l4 out=$out_l4"
+out_l5="$(bash "$CHECK" --files0-from "$TMPROOT/no-such-list" "$LST" 2>&1)"
+code_l5=$?
+[ "$code_l5" -eq 2 ] && grep -q "no-such-list" <<< "$out_l5" \
+  && check "#3465 a list file that is not there is refused" ok \
+  || check "#3465 a list file that is not there is refused" "exit=$code_l5 out=$out_l5"
+list_of "$LISTF" hooks/clean.sh hooks/gone.sh
+out_l6="$(bash "$CHECK" --files0-from "$LISTF" "$LST" 2>&1)"
+code_l6=$?
+[ "$code_l6" -eq 2 ] && grep -q "hooks/gone.sh" <<< "$out_l6" \
+  && check "#3465 a listed file that is not there is refused, by name" ok \
+  || check "#3465 a listed file that is not there is refused, by name" "exit=$code_l6 out=$out_l6"
+out_l7="$(bash "$CHECK" --files0-from 2>&1)"
+code_l7=$?
+[ "$code_l7" -eq 2 ] && grep -q "needs the file" <<< "$out_l7" \
+  && check "#3465 the option with no list file is refused" ok \
+  || check "#3465 the option with no list file is refused" "exit=$code_l7 out=$out_l7"
+
+# The two forms agree. One tree holding a failing line in every kind of place: read (a hook, a mod,
+# a real skill, a folder named like a platform folder inside a real skill, a rule file), left out (a
+# plugin skill, a platform folder, a folder the sync does not mirror, bytecode, a conflict copy,
+# node_modules), excused by the marker, and the two placeholder rules. Listing every file in it must
+# report exactly the lines the walk reports.
+EQ="$(tree agree)"
+mkdir -p "$EQ/hooks/__pycache__" "$EQ/hooks/node_modules/pkg" "$EQ/mods/demo" "$EQ/state" \
+         "$EQ/skills/$PLATFORM_NAME/bucket-1" "$EQ/skills/$PLUGIN_NAME" "$EQ/skills/demo/$PLUGIN_NAME" \
+         "$EQ/skills/demo/$PLATFORM_NAME"
+printf 'a %s/a\n' "$BADHOME" > "$EQ/hooks/a.sh"
+printf 'b %s/b\n' "$BADHOME" > "$EQ/mods/demo/b.ts"
+printf 'c %s/c\n' "$BADHOME" > "$EQ/skills/demo/SKILL.md"
+printf 'd %s/d\n' "$BADHOME" > "$EQ/skills/demo/$PLATFORM_NAME/d.md"
+printf 'e %s/e\n' "$BADHOME" > "$EQ/CLAUDE.md"
+printf 'f %s/f\n' "$BADHOME" > "$EQ/skills/$PLUGIN_NAME/SKILL.md"
+printf 'g %s/g\n' "$BADHOME" > "$EQ/skills/demo/$PLUGIN_NAME/g.md"
+printf 'h %s/h\n' "$BADHOME" > "$EQ/skills/$PLATFORM_NAME/bucket-1/h.md"
+printf 'i %s/i\n' "$BADHOME" > "$EQ/state/i.md"
+printf 'j %s/j\n' "$BADHOME" > "$EQ/hooks/__pycache__/j.txt"
+printf 'k %s/k\n' "$BADHOME" > "$EQ/hooks/k.pyc"
+printf 'l %s/l\n' "$BADHOME" > "$EQ/hooks/l.sh.conflict-othermac"
+printf 'm %s/m\n' "$BADHOME" > "$EQ/hooks/node_modules/pkg/m.js"
+printf 'n %s/n claude-sync-allow-home-path\n' "$BADHOME" > "$EQ/hooks/n.sh"
+printf 'o names the %s token in prose\n' "__CLAUDE""_HOME__" > "$EQ/hooks/o.sh"
+printf 'p %s/p\n' "<""HOME>" > "$EQ/hooks/p.sh"
+printf 'q clean\n' > "$EQ/agents/q.md"
+EQLIST="$TMPROOT/agree.files"
+( cd "$EQ" && find . -type f | sed 's|^\./||' | sort | tr '\n' '\0' ) > "$EQLIST"
+eq_listed="$(tr '\0' '\n' < "$EQLIST" | grep -c . || true)"
+out_eqw="$(bash "$CHECK" "$EQ" 2>&1)"
+code_eqw=$?
+out_eql="$(bash "$CHECK" --files0-from "$EQLIST" "$EQ" 2>&1)"
+code_eql=$?
+eq_w="$(grep '^  ' <<< "$out_eqw" | sort)"
+eq_l="$(grep '^  ' <<< "$out_eql" | sort)"
+[ "$code_eqw" -eq 1 ] && [ "$(grep -c . <<< "$eq_w")" -eq 7 ] \
+  && check "#3465 control: the walk reports the seven lines in the places it reads" ok \
+  || check "#3465 control: the walk reports the seven lines in the places it reads" "exit=$code_eqw out=$out_eqw"
+[ "$code_eql" -eq "$code_eqw" ] && [ -n "$eq_l" ] && [ "$eq_l" = "$eq_w" ] \
+  && check "#3465 listing every file ($eq_listed of them) reports exactly the lines the walk reports" ok \
+  || check "#3465 listing every file ($eq_listed of them) reports exactly the lines the walk reports" "walk exit=$code_eqw list exit=$code_eql walk=[$eq_w] list=[$eq_l]"
+
+# ---------------------------------------------------------------------------
 # The real tree this file lives in, which is the whole point. It runs LAST, so
 # by the time it reports clean the scanner has been watched failing four ways.
 # ---------------------------------------------------------------------------
@@ -553,6 +693,20 @@ if [ -n "$CO" ]; then
   else
     check "#1734 and it read every file the repository holds in the synced folders" "lib/repo-files.sh could not list $CO, so what the check should have read is unknown"
   fi
+  # The same checkout asked the way a send asks (claude-config#3465): every file under payload
+  # listed. It must give the walk's verdict and read at least as many of the repository's files, or
+  # a send would be held over a tree main's own run passes, or let through one it fails (L147).
+  COLIST="$TMPROOT/checkout.files"
+  ( cd "$CO/payload" && find . -type f | sed 's|^\./||' | tr '\n' '\0' ) > "$COLIST"
+  out_col="$(CLAUDE_HOME="$TMPROOT/no-live-config" bash "$CHECK" --files0-from "$COLIST" "$CO/payload" 2>&1)"
+  code_col=$?
+  [ "$code_col" -eq "$code_co" ] \
+    && check "#3465 the checkout's files, listed, get the verdict the walk gives" ok \
+    || check "#3465 the checkout's files, listed, get the verdict the walk gives" "walk exit=$code_co list exit=$code_col out=$out_col"
+  read_l="$(sed -n 's/^check-home-paths: \([0-9][0-9]*\) of [0-9][0-9]* listed file(s) .*/\1/p' <<< "$out_col")"
+  [ -n "${co_n:-}" ] && [ "${co_n:-0}" -gt 0 ] && [ -n "$read_l" ] && [ "$read_l" -ge "$co_n" ] \
+    && check "#3465 and the listed form read every file the repository holds in the synced folders" ok \
+    || check "#3465 and the listed form read every file the repository holds in the synced folders" "the repository lists ${co_n:-no count} there and the listed form read ${read_l:-no count}: $out_col"
 else
   echo "  (no claude-config checkout above $DIR, so only the scan above ran; the checkout form runs where the repository is)"
 fi
