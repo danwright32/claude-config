@@ -2494,6 +2494,10 @@ being off. With no sleep record the helper runs
 nothing new and behaves as it did. Two things sleep mode holds a typed admin merge to are not asked
 of the helper's: that it is a squash, and that the base branch requires at least one check. The
 merge method is judged against the ruleset, and the checks by `block-red-merge.sh`, as above.
+The bypass merge and sleep mode checks are `hooks/test-merge-when-ready-bypass.sh`, a suite of
+their own since claude-config#3572: as part of `hooks/test-merge-when-ready.sh` they took that
+suite past the runner's 1,200 second wall limit on a slow GitHub runner. Both suites run the helper
+in one shared world, `hooks/lib/merge-when-ready-harness.sh`.
 
 Checks that have reported being green is not the head's CI being green (claude-config#1087). A
 workflow run can exist for minutes before any of its jobs registers a check (the booking app's CI waits on a
