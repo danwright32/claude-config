@@ -142,6 +142,19 @@ check "#3028 a hold the brief does not cover is reported, not decided" "$(has "$
 # skill a builder does not load.
 check "#3390 agent rules ask for a test seen to fail before the code is edited" "$(has "$RULES" 'Test first: write the test, run it, and see it fail before you edit the code it covers.')"
 check "#3390 agent rules name no skill for working test first" "$(grep -F -q -- 'superpowers:test-driven-development' "$RULES" && echo 'still names superpowers:test-driven-development' || echo ok)"
+# Measured on 2026-11-23 on the personal MacBook: 74% of builds that changed a test and its code ran
+# the test and saw it fail first, while the orchestrator checked that claim after about 1 hand back
+# in 100. So the builder keeps the failing run as red.txt and the orchestrator reads it, rerunning
+# only when it is missing or names no new test. Dan, 2026-11-24, by picker: "3.2.1 Make the change
+# (Recommended)".
+check "#3390 agent rules say to save the failing run as red.txt in the working folder" "$(has "$RULES" 'as `red.txt` in your working folder')"
+check "#3390 agent rules say red.txt must name the new test or case" "$(has "$RULES" 'must name the new test or case')"
+review_step="$(section "## 5. When an agent reports" | grep '^1\. ')"
+before_put_back="${review_step%%git checkout origin/main*}"
+text_has() { grep -F -q -- "$2" <<< "$1" && echo ok || echo "$3"; }
+check "#3390 the review step reads the agent's red.txt" "$(text_has "$review_step" 'read its `red.txt`' 'step 1 does not read red.txt')"
+check "#3390 the review step reruns only when red.txt is missing or names no new test" "$(text_has "$review_step" 'only when `red.txt` is missing or does not name the new test' 'no rerun condition on red.txt')"
+check "#3390 the review step reads red.txt before it reruns" "$(text_has "$before_put_back" 'red.txt' 'red.txt is not read before the put back')"
 check "#3028 every brief, a reviewer's included, starts with the agent rules" "$(has "$SKILL" '1. `Read ~/.claude/skills/orchestrate/agent-rules.md before anything else and follow it.`')"
 check "#3028 the brief parts apply to a reviewer's brief too" "$(has "$SKILL" 'Every brief has exactly these parts')"
 
