@@ -1092,6 +1092,66 @@ stopped "a cp to a folder named payload outside any checkout, read the old way t
 passes "a cp over a plain scratch file that is already there" "cp payload/LESSONS.md $S3443/plain.txt"
 passes "and over one inside a scratch folder" "cp payload/LESSONS.md $S3443/have/"
 passes "a cp -R of a folder's contents into a folder not made yet" "cp -R payload/hooks/ $S3443/fresh"
+# What the copy itself makes (the second review of pull request #3521). The gate looks at the disk
+# before the command runs, so it cannot see a link the cp makes on the way: cp -P copies a link as
+# a link, and a later source of the same last name is then written THROUGH it, onto the payload
+# file it points at. Measured with stand in files on macOS 26.6: cp -P writes through any such link,
+# and cp -R through one whose text is relative and stays inside the destination folder. So the
+# reading applies only when the copy can make nothing but plain files and folders: no source is a
+# link, several sources are all plain files with last names that differ in any letter case, and a
+# payload folder copied alone holds nothing but plain files and folders at every depth.
+mkdir -p "$S3443/A" "$S3443/A2" "$S3443/A3" "$S3443/B" "$S3443/dest" "$S3443/two/hooks"
+ln -s "$FIX/dev/payload/LESSONS.md" "$S3443/A/a.sh"
+ln -s "$FIX/dev/payload/LESSONS.md" "$S3443/A2/A.SH"
+ln -s payload/LESSONS.md "$S3443/A3/a.sh"
+: > "$S3443/B/a.sh"
+: > "$S3443/B/LESSONS.MD"
+stopped "review 2: two sources with one last name, the first a link to a payload file that cp -P copies and then writes the second through" "cp -P $S3443/A/a.sh $FIX/dev/payload/hooks/a.sh $S3443/dest"
+stopped "review 2: the same with the one name in two letter cases" "cp -P $S3443/A2/A.SH $FIX/dev/payload/hooks/a.sh $S3443/dest"
+stopped "review 2: and into a folder the mkdir -p before it makes" "mkdir -p $S3443/new5 && cp -P $S3443/A/a.sh $FIX/dev/payload/hooks/a.sh $S3443/new5"
+stopped "review 2: and by relative words after a cd" "cd $S3443 && cp -Pp ./A/a.sh $FIX/dev/payload/hooks/a.sh ./dest"
+stopped "review 2: and with -H before the -P" "cp -HP $S3443/A/a.sh $FIX/dev/payload/hooks/a.sh $S3443/dest"
+stopped "review 2: and on the third line of a command" "cd $S3443
+ls -la
+cp -P A/a.sh $FIX/dev/payload/hooks/a.sh dest"
+stopped "review 2: and with the link named again after the payload file" "cp -P $S3443/A/a.sh $FIX/dev/payload/hooks/a.sh $S3443/A/a.sh $S3443/dest"
+stopped "the same under cp -R into the checkout, where the link's relative text stays inside the folder copied into" "cp -R $S3443/A3/a.sh $FIX/dev/payload/hooks/a.sh $FIX/dev"
+stopped "two plain files with one last name, the second written onto what the first made" "cp $S3443/B/a.sh payload/hooks/a.sh $S3443/dest"
+stopped "and with that name in two letter cases" "cp $S3443/B/LESSONS.MD payload/LESSONS.md $S3443/dest"
+stopped "and one payload file named twice" "cp payload/LESSONS.md payload/LESSONS.md $S3443/dest"
+stopped "a link among several sources, though no other source has its name" "cp -P $S3443/A/a.sh payload/LESSONS.md $S3443/dest"
+stopped "a folder named with a dot among several sources, whose contents land under names the command does not write" "mkdir -p $S3443/new6 && cp -R $S3443/A/. $FIX/dev/payload/hooks/a.sh $S3443/new6"
+stopped "and one named with a slash" "mkdir -p $S3443/new6 && cp -R $S3443/A/ $FIX/dev/payload/hooks/a.sh $S3443/new6"
+stopped "and a plain payload folder beside a payload file, read the old way to stay certain" "cp -R payload/hooks payload/LESSONS.md $S3443/dest"
+mkdir -p "$FIX/dev/payload/plain3443/sub"
+: > "$FIX/dev/payload/plain3443/f.md"
+: > "$FIX/dev/payload/plain3443/sub/g.md"
+passes "a cp -R of a payload folder that holds only plain files and folders" "cp -R payload/plain3443 $S3443/fresh3"
+ln -s ../../LESSONS.md "$FIX/dev/payload/plain3443/sub/l.md"
+stopped "the same folder once it holds a link one folder down, which the copy would bring along" "cp -R payload/plain3443 $S3443/fresh3"
+stopped "and its contents, named with a slash" "cp -R payload/plain3443/ $S3443/fresh3"
+stopped "one payload source that is itself a link" "cp -P payload/plain3443/sub/l.md $S3443/fresh4"
+stopped "and without the -P" "cp payload/plain3443/sub/l.md $S3443/fresh4"
+rm "$FIX/dev/payload/plain3443/sub/l.md"
+mkfifo "$FIX/dev/payload/plain3443/sub/pipe"
+stopped "a payload folder that holds a fifo, which cp -R would make again" "cp -R payload/plain3443 $S3443/fresh3"
+stopped "and a fifo as the one source" "cp -R payload/plain3443/sub/pipe $S3443/fresh4"
+rm -rf "$FIX/dev/payload/plain3443"
+passes "a cp of two payload files with different last names into a folder already there" "cp payload/LESSONS.md payload/hooks/a.sh $S3443/dest"
+passes "and with a source that is not there, for which cp copies nothing" "cp payload/LESSONS.md payload/hooks/not-there.sh $S3443/dest"
+# A cp that runs only when a cd FAILED, or whether or not it worked, is judged from the folder it
+# would then be in as well (the same review). After || behind a cd the cp runs only in the world
+# the gate had assumed away; after ; or a line break it runs in either.
+stopped "review 2: a cp after || behind a cd, which runs only if the cd failed, and then in payload" "cd $S3443 || cp $FIX/dev/payload/hooks/a.sh LESSONS.md" "$FIX/dev/payload"
+stopped "review 2: and after an ls that fails behind the cd" "cd $S3443 && ls $S3443/nope || cp $FIX/dev/payload/hooks/a.sh LESSONS.md" "$FIX/dev/payload"
+stopped "review 2: and after a second cd" "cd $S3443 && cd ./short-before || cp $FIX/dev/payload/hooks/a.sh LESSONS.md" "$FIX/dev/payload"
+stopped "a cp after a cd and a semicolon, whose relative destination is a payload file had the cd failed" "cd $S3443; cp $FIX/dev/payload/hooks/a.sh LESSONS.md" "$FIX/dev/payload"
+stopped "and on the line after the cd" "cd $S3443
+cp $FIX/dev/payload/hooks/a.sh LESSONS.md" "$FIX/dev/payload"
+stopped "and after a cd, an ls joined to it and a semicolon" "cd $S3443 && ls; cp $FIX/dev/payload/hooks/a.sh LESSONS.md" "$FIX/dev/payload"
+stopped "a relative cd after a cd and a semicolon, which leads into payload had the first cd failed" "cd $S3443/two; cd ./hooks && cp $FIX/dev/payload/LESSONS.md a.sh" "$FIX/dev/payload"
+passes "a cd to a checkout, a semicolon, then a cp out by a relative source that is only there after the cd" "cd $FIX/dev; cp payload/LESSONS.md $S3443/x" "$FIX/elsewhere"
+passes "a cd, a semicolon, a second cd by its whole path, then the cp" "cd $S3443/two; cd $S3443 && cp $FIX/dev/payload/hooks/a.sh ./dest" "$FIX/dev/payload"
 
 # The other programs that write what they name are read as before.
 runbash "mv payload/LESSONS.md $S3443/x" "$FIX/dev"
