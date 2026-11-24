@@ -1009,6 +1009,23 @@ stopped "a cd to an entry of zsh's folder stack" "cd +1 && cp $FIX/dev/payload/h
 stopped "a cd in a pipeline, which moves nothing after it" "cd $S3443 | cp $FIX/dev/payload/hooks/a.sh x"
 # As above, the form that does harm, kept as a record and not as the guard of the rule about pipes.
 stopped "the same with a relative payload path for the cp, which lands in the checkout too" "cd $S3443 | cp $FIX/dev/payload/hooks/a.sh payload/LESSONS.md"
+# A cd counts only when it is certain to RUN (the lessons review of this branch at f1f6e93). After
+# && the shell skips it when the command before it failed, and after || when that one succeeded,
+# and the cp then runs where the command started: from inside payload, a cp to a bare name the
+# gate placed in the scratch folder lands in payload. So a cd is read only where it begins a list
+# (first, or after ; or a line break) or follows another such cd by &&.
+passes "a cd after a cd, joined by &&" "cd $S3443 && cd ./short-before && cp $FIX/dev/payload/hooks/a.sh ./"
+passes "and with each && ending its line" "cd $S3443 &&
+cd ./short-before &&
+cp $FIX/dev/payload/hooks/a.sh ./"
+passes "a cd after an ls and a semicolon, which always runs" "ls payload; cd $S3443; cp $FIX/dev/payload/hooks/a.sh short-before"
+stopped "a cd the shell skips because the ls before its && failed" "ls $S3443/missing && cd $S3443; cp $FIX/dev/payload/hooks/a.sh LESSONS.md" "$FIX/dev/payload"
+stopped "a cd the shell skips because the ls before its || worked" "ls $S3443 || cd $S3443; cp $FIX/dev/payload/hooks/a.sh LESSONS.md" "$FIX/dev/payload"
+stopped "a cd the shell skips because the mkdir before its && failed" "mkdir -p $S3443/plain.txt/sub && cd $S3443; cp $FIX/dev/payload/hooks/a.sh LESSONS.md" "$FIX/dev/payload"
+stopped "a second cd the shell skips because the first, before its ||, worked" "cd $S3443 || cd $S3443/short-before; cp $FIX/dev/payload/hooks/a.sh x"
+stopped "a cd after && on the line after an ls" "ls $S3443/missing &&
+cd $S3443
+cp $FIX/dev/payload/hooks/a.sh LESSONS.md" "$FIX/dev/payload"
 # mkdir -p of written folders, and nothing else of mkdir.
 passes "a mkdir -p of the scratch folder the cp then fills" "mkdir -p $S3443/new1 && cp payload/LESSONS.md $S3443/new1/"
 passes "and of two folders, before a cp -R" "mkdir -p $S3443/n1 $S3443/n2; cp -R payload/hooks $S3443/n2"

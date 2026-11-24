@@ -743,8 +743,12 @@ WRITERS = ("tee", "cp", "mv", "rm", "touch", "mkdir", "patch", "install", "rsync
 #   cd        to one written folder beginning / ~/ or ./ (a bare name can be taken elsewhere by
 #             CDPATH or by zsh cdable_vars, or as +1 into its folder stack), with no .. in it (so
 #             a shell that follows links on cd and one that does not arrive in the same folder),
-#             and a folder that is there now (a cd that fails leaves the cp where it was). It
-#             runs nothing and defines nothing, and where it leaves the cp is known.
+#             and a folder that is there now (a cd that fails leaves the cp where it was). And
+#             only where it is certain to RUN: first in the command, after ; or a line break, or
+#             after && behind another such cd. After && the shell skips a cd when the command
+#             before it failed, and after || when that one worked, and the cp then runs where the
+#             command started. It runs nothing and defines nothing, and where it leaves the cp is
+#             known.
 #   mkdir -p  of written folders. It makes folders and nothing else, so it cannot put a link or
 #             a second name where the cp will write. Its words are still judged as writes below.
 #   ls        of written paths, with single letter flags. It only reads.
@@ -766,7 +770,9 @@ CP_NAMES = ("cp", "/bin/cp")
 LS_FLAGS = re.compile(r"-[A-Za-z1]+")
 PLAIN_TEXT = re.compile(r"[A-Za-z0-9_./@%+,:~ \t\n&;|-]*")
 PLAIN_WORD = re.compile(r"(?:~/)?[A-Za-z0-9_./@%+,:-]+")
-PLAIN_CUT = re.compile(r"&&|\|\||;|\n")
+PLAIN_CUT = re.compile(r"(&&|\|\||;|\n)")
+BEGINS_LIST = re.compile(r"\n*;?\n*")
+AFTER_AND = re.compile(r"&&\n*")
 
 def plain_copy(words):
     """(the words a plain cp only reads, the word it writes), or None when words is not one."""
@@ -829,8 +835,12 @@ def plain_command(text, start):
     is the forms above and the copy lands outside every payload folder, or None."""
     if not start.startswith("/") or not PLAIN_TEXT.fullmatch(text):
         return None
-    at, copy = start, None
-    for piece in PLAIN_CUT.split(text):
+    # joined is what stands between a command and the one before it, and last is that one.
+    at, copy, joined, last = start, None, "", None
+    for n, piece in enumerate(PLAIN_CUT.split(text)):
+        if n % 2:
+            joined += piece
+            continue
         words = piece.split()
         if not words:
             continue
@@ -845,6 +855,9 @@ def plain_command(text, start):
         elif head == "cd":
             if len(rest) != 1 or not rest[0].startswith(("/", "~/", "./")) or ".." in rest[0].split("/"):
                 return None
+            # Certain to run: it begins a list, or follows by && a cd that was itself certain.
+            if not (BEGINS_LIST.fullmatch(joined) or (last == "cd" and AFTER_AND.fullmatch(joined))):
+                return None
             to = real_path(rest[0], at)
             if not to or not os.path.isdir(to) or not os.access(to, os.X_OK):
                 return None
@@ -857,6 +870,7 @@ def plain_command(text, start):
                 return None
         else:
             return None
+        joined, last = "", head
     if not copy:
         return None
     words, at, sources, dest = copy
