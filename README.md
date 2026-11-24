@@ -6220,7 +6220,7 @@ launches first, so this is what decides which suite the machine is spent on.
 What a suite is ranked by is its time at the smallest share it has been measured at, recorded with
 that share, never simply its last wall clock (#3388). A suite that divides its own work by its share
 finishes much sooner in lane 1: the sync suite took about 7 minutes there and 23 to 27 anywhere else
-on the 18 core Mac. Ranked by its last wall clock, it was recorded as quick every time it led, lost
+on the 18 core Mac, measured 2026-11-20 and 2026-11-21. Ranked by its last wall clock, it was recorded as quick every time it led, lost
 lane 1 on the next run, was recorded as slow, and led again on the one after, alternating through
 nine runs in a row (#2589) at a cost of about 5 minutes of every other run at a budget of 12. So a
 time measured at a larger share than the recorded one does not replace it. It only keeps it within

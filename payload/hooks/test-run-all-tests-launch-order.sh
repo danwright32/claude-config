@@ -61,7 +61,8 @@ run_fixture() { # run_fixture <root> <store> [budget] [jobs]
 # ---------------------------------------------------------------------------
 # The order holds still across runs (the issue's own done line).
 # ---------------------------------------------------------------------------
-# `lead` was measured at 5 seconds in an ordinary lane, `runnerup` at 3. `runnerup` is the larger
+# `lead` is seeded at 5 seconds in an ordinary lane, `runnerup` at 3 (records this file writes, not
+# measured). `runnerup` is the larger
 # FILE, so a runner whose records all read 0 after one quick run orders by size and puts it first:
 # that is the flip, reproduced without a minute of real waiting.
 FX="$TMPROOT/flip"
@@ -95,7 +96,8 @@ order_c="$(order_of "$out_c")"
   || check "#3388 and two runs back to back of an unchanged tree launch in the same order" "'$order_b' then '$order_c'"
 
 # The record keeps the share its figure was measured at, so a lane 1 time is never read as one from
-# an ordinary lane. Five seconds at one slot, then under a second at four slots: four slots cannot
+# an ordinary lane. Five seconds at one slot (seeded above, not measured), then under a second at
+# four slots: four slots cannot
 # make a suite more than four times quicker, so its time at one slot is at most 4 seconds (the
 # measurement rounds down, so one second more than it read), and that is what is kept.
 case "$(record "$ST" lead)" in

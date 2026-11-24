@@ -643,7 +643,8 @@ suite_key(){   # suite_key <suite path> -> the record's file name, or nothing
 # entry there is not a reason to refuse to run the tests. Falling back is safe here in a way it
 # usually is not, because the only thing the record decides is the launch ORDER, and being wrong
 # about that costs wall clock and nothing else.
-# A record is `<seconds>` or `<seconds> <checks>`. It was seconds alone until #219 needed a second
+# A record is `<seconds>`, `<seconds> <checks>` or `<seconds> <checks> <share>`, the last being
+# what every run writes since #3388 (below). It was seconds alone until #219 needed a second
 # perishable number about the same suite, and one record with two fields is the answer rather than
 # a second store: the two facts are written by the same run, read by the same reader, and switched
 # off by the same empty HOOK_TESTS_TIMINGS. A second store would be a second absence to announce
@@ -671,18 +672,10 @@ suite_record(){   # suite_record <suite path> -> sets _rec_sec, _rec_checks and 
   IFS=' ' read -r _sr_1 _sr_2 _sr_3 _sr_rest < "$TIMINGS/$_sr_k" 2>/dev/null || [ -n "$_sr_1" ] || return 0
   case "$_sr_1" in ''|*[!0-9]*) ;; *) _rec_sec="$_sr_1" ;; esac
   case "$_sr_2" in ''|*[!0-9]*) ;; *) _rec_checks="$_sr_2" ;; esac
-  # A share is at least one slot, so a zero there is as unreadable as a word (L50).
-  case "$_sr_3" in ''|*[!0-9]*|0) ;; *) _rec_share="$_sr_3" ;; esac
+  # A share is at least one slot, so a zero there, however written, is as unreadable as a word (L50).
+  if _sr_wn="$(whole_above_zero "$_sr_3")"; then _rec_share="$_sr_wn"; fi
 }
 
-suite_record_field(){   # suite_record_field <suite path> <1, 2 or 3> -> that field, or nothing
-  suite_record "$1"
-  case "$2" in
-    1) printf '%s' "$_rec_sec" ;;
-    2) printf '%s' "$_rec_checks" ;;
-    3) printf '%s' "$_rec_share" ;;
-  esac
-}
 
 # The figure a suite is ranked by after a run, from what its record held and what this run
 # measured (claude-config#3388). Prints `<seconds> <share>`.
@@ -702,8 +695,8 @@ suite_record_field(){   # suite_record_field <suite path> <1, 2 or 3> -> that fi
 # else, which would otherwise keep lane 1 for good on a figure from before it changed.
 #
 # On the 18 core Mac at a budget of 12, lane 1 is 6 slots: the sync suite's 7 minutes there bound
-# its one slot figure between 7 and 42 minutes, and its 23 to 27 minutes measured at one slot sit
-# well inside, so an unchanged tree never moves it.
+# its one slot figure between 7 and 42 minutes, and its 23 to 27 minutes at one slot (both measured
+# 2026-11-20 and 2026-11-21, #2589) sit well inside, so an unchanged tree never moves it.
 rank_figure(){   # rank_figure <old seconds> <old share> <new seconds> <new share> -> "<seconds> <share>"
   local _os="$1" _osh="$2" _ns="$3" _nsh="$4" _hi
   if [ -z "$_os" ] || [ -z "$_osh" ] || [ -z "$_nsh" ] || [ "$_nsh" -le "$_osh" ]; then
@@ -716,17 +709,9 @@ rank_figure(){   # rank_figure <old seconds> <old share> <new seconds> <new shar
   printf '%s %s' "$_os" "$_osh"
 }
 
-suite_seconds(){   # suite_seconds <suite path> -> whole seconds, or nothing
-  suite_record_field "$1" 1
-}
-
-# How many checks that suite ran last time (claude-config#219), or NOTHING, which is what a first
-# run, a newly added suite and every record written before this field existed all report. Nothing
-# is not zero here and must never be rendered as one: a suite compared against a stored zero has
-# dropped nothing by definition, so the one case this exists to catch would be the one it stayed
-# quiet about (L90, L98).
-suite_checks(){   # suite_checks <suite path> -> whole checks, or nothing
-  suite_record_field "$1" 2
+suite_seconds(){   # suite_seconds <suite path> -> whole seconds (the ranked figure), or nothing
+  suite_record "$1"
+  printf '%s' "$_rec_sec"
 }
 
 # The line printed the moment each suite finishes (claude-config#1979). The report below waits for
@@ -1455,7 +1440,8 @@ if [ "$ran" -gt 0 ]; then
   # What it ranks by is each suite's time at the smallest share it has been measured at, never the
   # last wall clock alone (claude-config#3388, rank_figure). Lane 1's grant makes a suite that
   # divides its work by its share look quick, and ranking by that time gave the sync suite lane 1 on
-  # every other run, which cost about 5 minutes of every other run at a budget of 12.
+  # every other run, which cost about 5 minutes of every other run at a budget of 12 (measured
+  # 2026-11-20 and 2026-11-21, #2589).
   # THE LIVE SPOOL, before anything runs. No suite may write into Dan's real
   # store of subagent findings, and for weeks one did: test-blank-check-cost.sh
   # sourced the spool library and only then set the override, so the location had
@@ -1853,6 +1839,9 @@ LAUNCH
   for suite in ${suites[@]+"${suites[@]}"}; do
     now_checks[$_ci]="$(suite_result_checks "$(cat "$WORK/$_ci.out" 2>/dev/null)")"
     suite_record "$suite"
+    # Empty, never zero, for a first run, a new suite and a record from before #219: a suite
+    # compared against a stored zero has dropped nothing, so a zero here would hide the one case
+    # the comparison exists to catch (L90, L98).
     prev_checks[$_ci]="$_rec_checks"
     rank_now[$_ci]="$_rec_sec"; rank_share[$_ci]="$_rec_share"
     _rn_sec="$(cat "$WORK/$_ci.sec" 2>/dev/null)"

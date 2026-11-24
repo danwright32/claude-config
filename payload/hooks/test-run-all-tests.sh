@@ -831,9 +831,9 @@ t_recs="$(ls "$TSTORE" 2>/dev/null | grep -c 'test-.*\.sh$' || true)"
 # `awk NR==1` rather than `head -1`, which leaves on its first line and can kill its own producer
 # under pipefail (#132, L183).
 t_slow_rec="$(ls "$TSTORE" 2>/dev/null | grep 'test-slowpoke\.sh$' | awk 'NR==1')"
-# The record is `<seconds>` or `<seconds> <checks>` since #219 put a second perishable number about
-# the same suite beside the first. Read the FIELD rather than the whole line, and pin the shape of
-# the whole record too, so a third field cannot be added without this saying so (L317).
+# The record is `<seconds> <checks> <share>` since #3388 added the share the seconds were measured
+# at, and #219 the check count before it. Read the FIELD rather than the whole line, and pin the
+# shape of the whole record too, so a fourth field cannot be added without this saying so (L317).
 t_slow_line="$(cat "$TSTORE/$t_slow_rec" 2>/dev/null)"
 case "$(printf '%s\n' "$t_slow_line" | awk 'NR == 1 { print $1 }')" in
   ''|*[!0-9]*) check "#144 and what it records is a whole number of seconds" "the record for test-slowpoke.sh reads '$t_slow_line'" ;;
