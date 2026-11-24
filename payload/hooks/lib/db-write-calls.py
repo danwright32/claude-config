@@ -39,8 +39,22 @@ call without signing in.
   dry_push_dir(command, sw, cwd)         the directory whose migrations a Bash command previews,
                                          when it is one `supabase db push --dry-run` of the linked
                                          project, else None; lib/db-apply-approval.py reads the
-                                         session's dry runs with it (claude-config#2829)
+                                         session's dry runs with it (claude-config#2829). It raises
+                                         UnsureLine, or CannotAsk, for a command it reads as that
+                                         dry run but cannot vouch for (claude-config#3472)
+  is_second_reading(finding)             whether a finding is one only the second reading of the
+                                         command accounts for (claude-config#3472)
+  asked_reading(sw, read)                what read() gives by the reading sw gives a caller that
+                                         asks which lines it is unsure of, or why it gives none
+  second_reading(command, sw, cwd, first, read)
+                                         the same for a caller whose read() is costly, run again
+                                         only when the two readings of the command differ
+  unsure_why(fault, untold)              one of asked_reading()'s faults as a sentence
   asked_words()                          every word a call must hold for this file to ask about it
+
+A Bash command holding a # is judged by two readings of it since #3472, the reader's own and the one
+it gives a caller that asks (asking()). bash_findings(), dry_push_dir() and cli_read_approval() each
+say how they put the two together.
 
 Each finding is (why the call is asked about, the statement it is about or None).
 
@@ -168,7 +182,6 @@ API (curl, a script). The setting in supabase/config.toml is never read; the she
 would apply it is asked about whatever its flags.
 """
 import contextlib
-import inspect
 import json
 import os
 import re
@@ -1457,11 +1470,12 @@ def asking(sw):
     for raises CannotAsk before the block starts, so a caller that cannot ask never passes for one
     that asked and was told nothing. sw reads as it did once the block ends."""
     plain, named = sw.commands, []
-    try:
-        can_ask = "unsure" in inspect.signature(plain).parameters
-    except (TypeError, ValueError):
-        can_ask = False
-    if not can_ask:
+    # Whether commands() takes `unsure` is read from its own code object, which a function written
+    # in Python has: importing the inspect module to ask cost every call that loads this file 8 ms
+    # (python3 -X importtime, the personal MacBook, 2026-11-24). A callable with no code object of
+    # its own cannot be asked.
+    code = getattr(plain, "__code__", None)
+    if code is None or "unsure" not in code.co_varnames[:code.co_argcount + code.co_kwonlyargcount]:
         raise CannotAsk()
 
     def commands(*args, **asked):
