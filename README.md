@@ -7705,10 +7705,19 @@ anybody wrote. Both rules were decided by Dan on 2026-11-01.
   worktrees, commit shas, pull requests, agents and background jobs still running, with their
   ids); each item's status and the next step of the one in progress; every question waiting on
   Dan. The orchestrate skill's section 7 and its `agent-rules.md` carry the same list.
-- **The long session nudge** (`CONTEXT_COMPACTIONS_NUDGE`, 5). A main session compacted that many
-  times is told, with Dan, to start fresh (/handoff, then a new session), with what its next
-  request costs: at least what its last one carried, beside its average, its size before its last
-  compaction and what it started from. Said again at each further multiple.
+- **The long session question** (`CONTEXT_COMPACTIONS_NUDGE`, 5; #3307). A main session compacted
+  that many times has Dan asked, in a picker, whether to hand off to a fresh session. The same
+  script runs as a Stop hook: at the end of a turn past the line it holds that turn's end once and
+  tells the session to ask with AskUserQuestion, word for word, saying what the session has read
+  so far (tokens and requests), what its requests average, what a fresh session would start near
+  (what this one started from) and so about how much less each early request would read, said as
+  an estimate. Answers, recommended first: Hand off (the session writes the handoff note first,
+  then Dan starts a fresh session from it), Carry on, and Keep for a day. It is asked again only
+  once the session has read half as much again as when it was last asked, and after Keep for a
+  day not for 24 hours either; Dan's answer is read back from the transcript. Never asked while
+  the Mac sleeps (held for the first turn's end after wake), in a subagent, a detached or headless
+  run, or on a turn's end another stop hook is already continuing. Until #3307 this was a notice
+  the session read, and on the work MacBook one session carried on past it 24 times.
 - **Measured defaults.** `hooks/lib/context_size.py` records both measurements, and
   `python3 tools/cache-usage.py --days 31 --summary` re-measures them through the same defaults and
   the same sum: its CONTEXT lines give the share of requests and tokens over the line, its

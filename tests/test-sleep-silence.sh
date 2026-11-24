@@ -88,6 +88,7 @@ settings:Stop:check-later-nudge.sh
 settings:Stop:feature-issue-review.sh
 settings:Stop:session-reflection.sh
 settings:Stop:pr-merge-quiz.sh
+settings:Stop:context-size-notice.sh
 mod:goal-tracker/hooks/register.tsx:notify:notifier
 mod:scope-modes/hooks/register.ts:leavePrOpen:ask
 mod:scope-modes/hooks/register.ts:leaveBranch:ask
@@ -363,6 +364,10 @@ transcript() {   # a turn that did real work, so the end of turn hooks take thei
     '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Edit","id":"t1","input":{}}]}}' \
     '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}' \
     "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"${RUN_LAST_TEXT:-done}\"}]}}" > "$1"
+  # Lines a route reads before the turn, given by seed_route (the long session question's compactions).
+  if [ -n "${RUN_EARLIER:-}" ]; then
+    { printf '%s\n' "$RUN_EARLIER"; cat "$1"; } > "$1.tmp" && mv "$1.tmp" "$1"
+  fi
 }
 run_route() {   # run_route <script> <event> [arguments...] -> stdout of the hook, run in the current world
   local t="$WORK/t.$RANDOM.jsonl"; transcript "$t"
@@ -377,7 +382,17 @@ run_route() {   # run_route <script> <event> [arguments...] -> stdout of the hoo
 seed_route() {   # seed_route <script> <arguments>
   RUN_SESSION=""
   RUN_LAST_TEXT=""
+  RUN_EARLIER=""
   case "$1 $2" in
+    "context-size-notice.sh --stop")
+      # A session compacted five times, past the long session line, the thing it asks Dan about (#3307).
+      local u='{"type":"assistant","entrypoint":"cli","message":{"id":"m%s","model":"claude-opus-5-5","role":"assistant","content":[{"type":"text","text":"x"}],"usage":{"input_tokens":10,"cache_read_input_tokens":699890,"cache_creation_input_tokens":100}}}'
+      local c='{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"auto","preTokens":780000,"postTokens":17067}}'
+      local i
+      for i in 1 2 3 4 5; do
+        RUN_EARLIER="$RUN_EARLIER${RUN_EARLIER:+$'\n'}$(printf "$u" "$i")"$'\n'"$c"
+      done
+      ;;
     "check-later-nudge.sh ")
       # A turn that promises to look again on a later day (#2079), the thing it speaks about.
       RUN_LAST_TEXT="I'll check again tomorrow."

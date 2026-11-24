@@ -204,6 +204,24 @@ with open(sys.argv[1], "w") as f:
     f.write(json.dumps({"type": "user", "message": {"content": "last"}}) + "\n")
     f.write(json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Edit", "input": {"file_path": "/y"}}]}}) + "\n")
 ' "$F/t.jsonl" "$n" ;;
+    context-size-notice.sh)
+      # With --stop, at every turn end (#3307). What piles up is the session's own transcript, of
+      # which it reads only the bytes since its last run, and every other session's and agent's
+      # state file in the one shared folder, of which it must open its own alone, never list them.
+      mkdir -p "$F/home/.claude/state/context-size"
+      i=0; while [ "$i" -lt "$n" ]; do
+        printf '{"v":2,"offset":0}\n' > "$F/home/.claude/state/context-size/other-$i.main.json"
+        : > "$F/home/.claude/state/context-size/other-$i.main.lock"
+        i=$((i + 1))
+      done
+      python3 -c '
+import json, sys
+with open(sys.argv[1], "w") as f:
+    for i in range(int(sys.argv[2])):
+        f.write(json.dumps({"type": "assistant", "entrypoint": "cli", "message": {"id": "m%d" % i,
+                "model": "claude-opus-5-5", "usage": {"input_tokens": 10, "cache_read_input_tokens": 700000}}}) + "\n")
+        f.write(json.dumps({"type": "system", "subtype": "compact_boundary", "compactMetadata": {"preTokens": 780000}}) + "\n")
+' "$F/t.jsonl" "$n" ;;
     pr-merge-quiz.sh)
       # With --release-held, at every turn end (#1768). What piles up is every OTHER session's held
       # merges, one file each in the one shared folder, plus any a stopped release left part taken;
