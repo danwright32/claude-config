@@ -974,12 +974,12 @@ stopped "two copies out in one command" "$OUT3443 && cp payload/hooks/a.sh $S344
 stopped "and a second cp named by its path" "$OUT3443; /bin/cp payload/hooks/a.sh $S3443/y"
 stopped "and a first cp that copies a link the second then writes through" "cp -R $S3443/merged $S3443/out && cp payload/hooks/a.sh $S3443/out/hooks/a.sh"
 # cd: one written folder that is there now, beginning /, ~/ or ./, with no .. in it.
-mkdir -p "$S3443/home/out"
+mkdir -p "$S3443/stand-in-for-home/out"
 : > "$S3443/plain.txt"
 passes "a cd then a cp after a semicolon" "cd $S3443; cp $FIX/dev/payload/hooks/a.sh ./short-before"
 passes "and on the next line" "cd $S3443
 cp $FIX/dev/payload/hooks/a.sh short-before"
-HOME="$S3443/home" passes "and a cd to a folder under the home folder" "cd ~/out && cp $FIX/dev/payload/hooks/a.sh ./"
+HOME="$S3443/stand-in-for-home" passes "and a cd to a folder under the home folder" "cd ~/out && cp $FIX/dev/payload/hooks/a.sh ./"
 stopped "a cd to a bare relative folder, which CDPATH could take elsewhere" "cd payload/hooks && cp -p a.sh $S3443/a-copy.sh"
 stopped "a cd to a folder that is not there, which leaves the cp where it was" "cd $S3443/nowhere && cp $FIX/dev/payload/hooks/a.sh x"
 stopped "a cd to a file" "cd $S3443/plain.txt && cp $FIX/dev/payload/hooks/a.sh x"
