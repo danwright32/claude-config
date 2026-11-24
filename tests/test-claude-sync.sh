@@ -13997,8 +13997,13 @@ dbg "what the held sync left uncommitted in the clone: $hp_left14"
 # from this Mac's config (measured here on 2026-11-23, which is why it is left).
 check "#3499 and no staged copy with a quote, a backslash or a tab in its name is left behind in the clone" \
   "out_lacks \"\$hp_left14\" 'quo|slash|tab|k\.json'"
+# Each is a whole status line, as git spells the name in quotes, so a match is that one file in the
+# payload and nothing that merely holds the same letters (#55, #71). Measured against git's own
+# output for these two names on 2026-11-23.
+hp_status_nl='^.. "payload/hooks/two\\nlines\.sh"$'
+hp_status_quo='^.. "payload/hooks/quo\\"ted\.sh"$'
 check "#3499 and the one whose name holds a line break is left where it was, and nothing else is" \
-  "[ \"\$(grep -c . <<< \"\$hp_left14\")\" -eq 1 ] && grep -q 'two.nlines\.sh' <<< \"\$hp_left14\""
+  "[ \"\$(grep -c . <<< \"\$hp_left14\")\" -eq 1 ] && grep -qE \"\$hp_status_nl\" <<< \"\$hp_left14\""
 check "#3499 and the sync says so, naming it on one line with why and what to do" \
   "line_has \"\$out_hp14\" 'NOT set aside' 'line break' 'hooks/two.nlines\.sh' 'rename the file'"
 check "#3499 and names the rest as set aside, each on that one line" \
@@ -14010,7 +14015,7 @@ check "#3499 and names the rest as set aside, each on that one line" \
 if out_hp15="$(_hp bash "$SCRIPT" send)"; then rc_hp15=0; else rc_hp15=$?; fi
 hp_left15="$(git -C "$HPC" status --porcelain --untracked-files=all -- payload 2>/dev/null || true)"
 check "#3499 control: a refused send leaves its staged copies uncommitted in the clone" \
-  "[ '$rc_hp15' -ne 0 ] && grep -q 'quo' <<< \"\$hp_left15\" && grep -q 'lines.sh' <<< \"\$hp_left15\""
+  "[ '$rc_hp15' -ne 0 ] && grep -qE \"\$hp_status_quo\" <<< \"\$hp_left15\" && grep -qE \"\$hp_status_nl\" <<< \"\$hp_left15\""
 git -C "$HPO" pull -q origin main 2>/dev/null
 printf 'echo quoted, from the other Mac\n' > "$HPO/payload/hooks/quo\"ted.sh"
 git -C "$HPO" add payload/hooks
