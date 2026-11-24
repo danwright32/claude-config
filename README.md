@@ -2449,6 +2449,52 @@ fails often no longer looks like one that failed once under load. The gates the 
 run under no hook timeout, so it hands them a longer read budget, `MWR_GATE_READ_BUDGET_SECONDS`
 (90, a setting): a read that never answers still refuses.
 
+The helper sends one merge with `--admin` itself, and still refuses `--admin` as an argument
+(claude-config#3534). On 2026-11-24, in a repository whose ruleset asks for one code owner approval
+and lets a team bypass it for pull requests, every gate passed and gh then answered "the base
+branch policy prohibits the merge": gh refuses a pull request GitHub reads as BLOCKED by itself
+unless `--admin` is passed, so every merge there needed a second command sent by hand. Now, when the
+plain merge is refused in those words and the pull request reads back still open at the head the
+gates judged, the helper asks GitHub, at that moment and as the account the merge is made as, what
+a bypass would skip, and sends the same merge with `--admin`, pinned to that head, only when all of
+this holds: GitHub reads the review as `REVIEW_REQUIRED` (a reviewer asking for changes is never
+bypassed); every rule in force on the base branch that asks for a review belongs to a ruleset whose
+`current_user_can_bypass` is `pull_requests_only` or `always`, and at least one such rule exists;
+every ruleset the account may bypass holds nothing else in force on the branch that a merge could
+break (only the review rule, `deletion`, `non_fast_forward` and `creation` pass, the review rule
+must not also ask for every conversation resolved and must allow the merge method), because
+`--admin` skips a ruleset whole and not only its review; the base branch has no merge queue; and it
+has no classic branch protection, which no ruleset answers for. The checks gate is then asked about
+the exact bypass command before it is sent. An answer that cannot be read, is cut short or is not
+the shape expected is never taken as permission. When any of it fails the run stops with exit 1,
+saying an approving review is missing and why no bypass merge was sent; when it merges, the log
+line says it merged as a bypass of the approving review, naming the ruleset. There is no per
+repository opt in list (Dan, 2026-11-24): the ruleset's own bypass list is the permission. Not
+built: vouching for required checks held in a ruleset the account may bypass, which refuses today.
+
+Sleep mode outranks that bypass (Dan, 2026-11-24: "Respect sleep mode first"). The bypass merge is
+sent inside the helper, where no hook sees it, so sleep mode's rule for a typed `gh pr merge
+--admin` would never have judged it. While this Mac is asleep the helper therefore sends it only
+in a repository where sleep mode would allow an admin merge tonight: its entry in the night's
+lists, as settled at bedtime, is merge only, says a merge does not deploy, and says `adminMerge:
+green-pinned`. Anywhere else it stops with exit 1, saying sleep mode does not allow a merge past
+that review in that repository tonight, in sleep mode's own words for why. It never asks when the
+run starts, because a run started before bedtime can still be running after it. It asks twice:
+once GitHub's answers allow the bypass, so a night that refuses stops before the checks gate is
+asked, and again as the very last thing before the merge is sent, after the checks gate, which
+reads GitHub under a budget of its own and during which this Mac can have gone to sleep. Sleep
+mode is one record for the whole Mac, so on means that this Mac's
+record reads as asleep at that moment, whichever session started the run. None of the judgement is
+written a second time: `hooks/lib/sleep-admin-merge.mjs`, run under node, hands the record to the
+scope modes mod's own `readSleep` and to `adminMergeNightRefusal`, the function its judge of a
+typed admin merge asks first. A record that cannot be read, a node that is missing or cannot run
+the mod's files, an answer that is none of the four it knows, and a run with no HOME folder to look
+for the record under all stop the run too, since none of them is permission and none is sleep mode
+being off. With no sleep record the helper runs
+nothing new and behaves as it did. Two things sleep mode holds a typed admin merge to are not asked
+of the helper's: that it is a squash, and that the base branch requires at least one check. The
+merge method is judged against the ruleset, and the checks by `block-red-merge.sh`, as above.
+
 Checks that have reported being green is not the head's CI being green (claude-config#1087). A
 workflow run can exist for minutes before any of its jobs registers a check (the booking app's CI waits on a
 concurrency group), so a fast check from another workflow can be the only one on the head. Both the
