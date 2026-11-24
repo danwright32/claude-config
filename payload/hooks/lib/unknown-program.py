@@ -353,8 +353,8 @@ def make(judged_by_name, sh_redirect):
                 # Asked only here, once there are words to read: an unread cap that says nothing
                 # allows what stands past it (the lessons review of this branch, 2026-11-19).
                 return self.unread_typed(
-                    f"{unknown}, and they could start a command {MAX_NESTED} such readings inside one another, "
-                    "more than the gate reads, so whether the command posts cannot be checked")
+                    f"{unknown}, and it already stands inside {MAX_NESTED} readings of such a program's words, "
+                    "the most the gate reads inside one another, so whether the command posts cannot be checked")
             if len(starts) + len(lines) > MAX_STARTS:
                 return self.unread_typed(
                     f"{unknown}, and {len(starts) + len(lines)} of them could each start a command, more than "
