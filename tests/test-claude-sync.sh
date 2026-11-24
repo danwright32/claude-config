@@ -3029,6 +3029,19 @@ seed_unmanaged_list(){   # $1 = a clone directory holding a copied claude-sync
 seed_work_names_scanner(){   # $1 = a clone directory holding a copied claude-sync
   mkdir -p "$1/payload/hooks/lib"
   python3 "$(dirname "$SCRIPT")/payload/hooks/lib/install-hook-libs.py" "$(dirname "$SCRIPT")/payload/hooks/lib" "$1/payload/hooks/lib" work-names.py dev-update-registry.js || bad "seed_work_names_scanner: the install refused"
+  # Every copy that sends is put to the home path check too (claude-config#3465), so it is given
+  # that check with the scanner, here, rather than at each of the sites that make a copy.
+  seed_home_path_check "$1"
+}
+# A send refuses the same way when the home path check is not beside the tool (claude-config#3465),
+# so a copy of the tool that sends is given the check and the two lists it reads, as its own checkout
+# holds them. Never an exemption: the copy's send is checked like any other.
+seed_home_path_check(){   # $1 = a clone directory holding a copied claude-sync
+  mkdir -p "$1/payload/hooks/lib"
+  cp "$(dirname "$SCRIPT")/payload/hooks/check-home-paths.sh" "$1/payload/hooks/check-home-paths.sh" \
+    || bad "seed_home_path_check: the check could not be copied"
+  python3 "$(dirname "$SCRIPT")/payload/hooks/lib/install-hook-libs.py" "$(dirname "$SCRIPT")/payload/hooks/lib" "$1/payload/hooks/lib" synced-trees.sh unmanaged-skills.sh >/dev/null \
+    || bad "seed_home_path_check: the install refused"
 }
 # SUITE_DEBUG=1 prints tool output a scenario would otherwise throw away. It exists because a
 # failure that only happens on a machine you cannot run has to be MEASURED there, and a check
@@ -13636,6 +13649,270 @@ printf 'export AWS_KEY=AKIA%s\n' "$(printf 'a refused send names its scan' | sha
 rfs_notice_sec="$(grep 'still receives' "$RFSREC" 2>/dev/null || true)"
 dbg "notice for a secret scan refusal: $rfs_notice_sec"
 check "#2530 a secret scan refusal's notice still names the secret scan" "grep -q 'secret scan' <<< \"\$rfs_notice_sec\""
+
+section "== a send carrying a file that fails the home path check is held whole, and status names it until a send gets through (claude-config#3465) =="
+# On 2026-11-22 a send pushed 126 scratch files to main, written by a measuring session into folders
+# named run under one Mac's config. They named that Mac's home, so check-home-paths failed in main's
+# own run and in every pull request brought up to date with it, and nothing had stopped the push:
+# the check ran only afterwards, on GitHub. The home is written in pieces, so this file names none.
+HPB="$WORK/homepath-bare.git"; git init -q --bare -b main "$HPB"
+HPC="$WORK/homepath-clone"; git clone -q "$HPB" "$HPC" 2>/dev/null
+HPH="$WORK/homepath-home"; mkdir -p "$HPH/hooks" "$HPH/agents"; echo '{"hooks":{}}' > "$HPH/settings.json"
+printf 'echo base\n' > "$HPH/hooks/base.sh"
+HPE="$WORK/homepath-emptyhome"; mkdir -p "$HPE"
+HP_BAD="/Us""ers/sam"
+HPREC="$WORK/homepath-notice.rec"; HPNOTIFIER="$WORK/homepath-notifier"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\n' "$HPREC" > "$HPNOTIFIER"; chmod +x "$HPNOTIFIER"
+_hp(){ env HOME="$HPE" HOOK_TESTS_RUNNING=1 SYNC_LOG_FILE="$WORK/homepath-sync.log" SYNC_NO_HOOK_TESTS=1 SYNC_NO_SEND_TESTS=1 SYNC_NO_NOTIFY=1 SYNC_HOSTNAME=hpmac CLAUDE_HOME="$HPH" SYNC_REPO="$HPC" "$@" 2>&1; }
+_hp_live(){ ( cd "$HPH" && find . -type f -exec shasum {} + | sort -k2 ); }
+_hp bash "$SCRIPT" sync >/dev/null || true
+hp_head0="$(git -C "$HPB" rev-parse -q --verify main 2>/dev/null || true)"
+check "#3465 control: the home path fixture's first sync sends" "[ -n '$hp_head0' ]"
+# The send under test: a scratch file naming a home, beside two clean changes that would have gone.
+mkdir -p "$HPH/hooks/run/cache-base"
+printf '{"cwd":"%s/projects/site"}\n' "$HP_BAD" > "$HPH/hooks/run/cache-base/entry.json"
+printf 'echo base v2\n' > "$HPH/hooks/base.sh"
+printf 'a clean agent\n' > "$HPH/agents/clean.md"
+hp_live1="$(_hp_live)"
+if out_hp1="$(_hp bash "$SCRIPT" send)"; then rc_hp1=0; else rc_hp1=$?; fi
+dbg "send carrying a file naming a home: rc=$rc_hp1 $out_hp1"
+check "#3465 a send carrying a new file that names a home folder is refused" "[ '$rc_hp1' -ne 0 ]"
+check "#3465 and the refusal names the check, the file and the line" \
+  "line_has \"\$out_hp1\" 'home path check' 'hooks/run/cache-base/entry\.json:1'"
+check "#3465 and says why, in the check's own words" \
+  "line_has \"\$out_hp1\" 'home path check' 'one machine.s home directory'"
+check "#3465 and says the whole send is held, and where the check's full output is" \
+  "line_has \"\$out_hp1\" 'whole send is held' 'home-path-check\.log'"
+# Each reading of the shared repo is taken whole before it is searched: a search that stops at its
+# first match kills the command feeding it, and under pipefail that reads as no match (L183).
+hp_base1="$(git -C "$HPB" show main:payload/hooks/base.sh 2>/dev/null || true)"
+check "#3465 nothing reached the shared repo, the clean changes included" \
+  "[ \"\$(git -C '$HPB' rev-parse main)\" = '$hp_head0' ] && grep -q 'echo base' <<< \"\$hp_base1\" && ! grep -q 'base v2' <<< \"\$hp_base1\""
+check "#3465 and no commit was made in the clone" "[ \"\$(git -C '$HPC' rev-parse HEAD)\" = '$hp_head0' ]"
+check "#3465 and nothing in this Mac's config was deleted, moved or rewritten" "[ \"\$(_hp_live)\" = \"\$hp_live1\" ]"
+check "#3465 the check's full output is kept, naming the line" \
+  "grep -q 'hooks/run/cache-base/entry.json:1:' '$HPC/.send-suite-output/home-path-check.log'"
+out_hp_st1="$(_hp bash "$SCRIPT" stuck)"
+dbg "stuck after one held send: $out_hp_st1"
+check "#3465 stuck reports the held send as a refused send, counted" \
+  "printf '%s\n' \"\$out_hp_st1\" | awk -F'\t' '\$1==\"send-refused\" && \$2==1 {f=1} END{exit !f}'"
+check "#3465 and its sentence names the check and the file" \
+  "line_has \"\$out_hp_st1\" 'send-refused' 'home path check' 'hooks/run/cache-base/entry\.json:1'"
+# The change watcher sends on every burst of edits, and a session writing scratch makes a burst every
+# few seconds. A standing hold is said in full once, then in one short line until it changes, it
+# clears or a day passes, and only the full one posts a desktop notice, so a held send costs the log
+# no more than a sent one does.
+: > "$HPREC"
+if out_hp2="$(_hp SYNC_IN_WATCH=1 SYNC_NO_NOTIFY=0 SYNC_NOTIFIER="$HPNOTIFIER" bash "$SCRIPT" send)"; then rc_hp2=0; else rc_hp2=$?; fi
+hp_notices2="$(grep -c . "$HPREC" 2>/dev/null || true)"
+if out_hp3="$(_hp SYNC_IN_WATCH=1 SYNC_NO_NOTIFY=0 SYNC_NOTIFIER="$HPNOTIFIER" bash "$SCRIPT" send)"; then rc_hp3=0; else rc_hp3=$?; fi
+hp_notices3="$(grep -c . "$HPREC" 2>/dev/null || true)"
+dbg "watcher send, first: rc=$rc_hp2 $out_hp2"
+dbg "watcher send, the same hold again: rc=$rc_hp3 $out_hp3"
+check "#3465 the watcher's first held send says the hold in full" \
+  "[ '$rc_hp2' -ne 0 ] && line_has \"\$out_hp2\" 'home path check' 'hooks/run/cache-base/entry\.json:1'"
+check "#3465 and posts one desktop notice" "[ '$hp_notices2' -eq 1 ]"
+check "#3465 the same hold on the next tick is still refused" "[ '$rc_hp3' -ne 0 ]"
+check "#3465 and is said in one short line pointing at status, without the files" \
+  "line_has \"\$out_hp3\" 'still held' 'home path check' 'claude-sync status' && out_lacks \"\$out_hp3\" 'entry\.json' && [ \"\$(printf '%s\n' \"\$out_hp3\" | grep -c .)\" -eq 1 ]"
+check "#3465 and is shorter than the full one" "[ \"\${#out_hp3}\" -lt \"\${#out_hp2}\" ]"
+check "#3465 and posts no second desktop notice" "[ '$hp_notices3' -eq 1 ]"
+out_hp_st3="$(_hp bash "$SCRIPT" stuck)"; out_hp_status3="$(_hp bash "$SCRIPT" status)"
+dbg "status after three held sends: $out_hp_status3"
+check "#3465 every held send is counted, the short ones too" \
+  "printf '%s\n' \"\$out_hp_st3\" | awk -F'\t' '\$1==\"send-refused\" && \$2==3 {f=1} END{exit !f}'"
+check "#3465 status says sends are refused, by which check, how often, since when and over which file" \
+  "line_has \"\$out_hp_status3\" 'sending is refused' 'home path check' '3 times in a row since' 'hooks/run/cache-base/entry\.json:1'"
+# A day on, the standing hold is said in full again, so one nobody acted on is never silenced for good.
+if out_hp4="$(_hp SYNC_IN_WATCH=1 SYNC_SEND_HOLD_NOW="$(( $(date +%s) + 86401 ))" bash "$SCRIPT" send)"; then rc_hp4=0; else rc_hp4=$?; fi
+check "#3465 a hold still standing a day later is said in full again" \
+  "[ '$rc_hp4' -ne 0 ] && line_has \"\$out_hp4\" 'home path check' 'hooks/run/cache-base/entry\.json:1'"
+# A hold that changed is a new thing to say. Eight more files, as a session still writing would
+# leave: the refusal names the first five and counts the rest, never a list as long as the folder.
+mkdir -p "$HPH/hooks/run/cache-change"
+for hp_i in 1 2 3 4 5 6 7 8; do printf '{"cwd":"%s/projects/site/%s"}\n' "$HP_BAD" "$hp_i" > "$HPH/hooks/run/cache-change/k$hp_i.json"; done
+if out_hp5="$(_hp SYNC_IN_WATCH=1 bash "$SCRIPT" send)"; then rc_hp5=0; else rc_hp5=$?; fi
+dbg "watcher send after the held files changed: rc=$rc_hp5 $out_hp5"
+check "#3465 a hold whose files changed is said in full again, with the count" \
+  "[ '$rc_hp5' -ne 0 ] && line_has \"\$out_hp5\" 'home path check' '9 files' 'hooks/run/cache-base/entry\.json:1'"
+check "#3465 and names the first five and counts the other four" \
+  "line_has \"\$out_hp5\" 'cache-change/k4\.json:1' 'and 4 more' && out_lacks \"\$out_hp5\" 'cache-change/k5\.json'"
+out_hp_st5="$(_hp bash "$SCRIPT" stuck)"
+check "#3465 and status carries the same count and the same first five" \
+  "line_has \"\$out_hp_st5\" 'send-refused' '9 files' 'cache-change/k4\.json:1' 'and 4 more' && out_lacks \"\$out_hp_st5\" 'cache-change/k5\.json'"
+# Taking the files out of this Mac's config clears it, and the clean changes held with them go.
+rm -rf "$HPH/hooks/run"
+if out_hp6="$(_hp bash "$SCRIPT" send)"; then rc_hp6=0; else rc_hp6=$?; fi
+dbg "send after the files were taken out: rc=$rc_hp6 $out_hp6"
+check "#3465 the send goes through once the files are out of the config" "[ '$rc_hp6' -eq 0 ]"
+hp_base6="$(git -C "$HPB" show main:payload/hooks/base.sh 2>/dev/null || true)"
+check "#3465 and carries the clean changes that were held with them" \
+  "grep -q 'base v2' <<< \"\$hp_base6\" && git -C '$HPB' cat-file -e main:payload/agents/clean.md"
+hp_sent6="$(git -C "$HPB" log --all --name-only --format= 2>/dev/null || true)"
+check "#3465 control: the shared repo's history lists the files the sends carried" "[ \"\$(grep -c '^payload/' <<< \"\$hp_sent6\")\" -ge 3 ]"
+check "#3465 and the held files never reached the shared repo" "! grep -q 'hooks/run/' <<< \"\$hp_sent6\""
+out_hp_st6="$(_hp bash "$SCRIPT" stuck)"; out_hp_status6="$(_hp bash "$SCRIPT" status)"
+check "#3465 a send that gets through clears the held send from stuck" "! grep -q 'send-refused' <<< \"\$out_hp_st6\""
+check "#3465 and from status" "out_lacks \"\$out_hp_status6\" 'sending is refused'"
+check "#3465 and the kept output of the check is removed" "[ ! -e '$HPC/.send-suite-output/home-path-check.log' ]"
+# Only the files a send carries are its to answer for. One the shared repo already holds, unchanged
+# here, holds nothing back, so a send that fixes something else, or removes the file, is never held.
+printf 'legacy %s/old\n' "$HP_BAD" > "$HPH/agents/legacy.md"
+fixture_land "$HPC" agents/legacy.md "$HPH/agents/legacy.md"
+printf 'echo base v3\n' > "$HPH/hooks/base.sh"
+if out_hp7="$(_hp bash "$SCRIPT" send)"; then rc_hp7=0; else rc_hp7=$?; fi
+dbg "send beside a failing file the shared repo already holds: rc=$rc_hp7 $out_hp7"
+hp_base7="$(git -C "$HPB" show main:payload/hooks/base.sh 2>/dev/null || true)"
+check "#3465 a failing file the shared repo already holds does not hold an unrelated send" \
+  "[ '$rc_hp7' -eq 0 ] && grep -q 'base v3' <<< \"\$hp_base7\""
+printf 'legacy %s/old, edited\n' "$HP_BAD" > "$HPH/agents/legacy.md"
+if out_hp8="$(_hp bash "$SCRIPT" send)"; then rc_hp8=0; else rc_hp8=$?; fi
+check "#3465 the same file edited is this send's to answer for, and is held" \
+  "[ '$rc_hp8' -ne 0 ] && line_has \"\$out_hp8\" 'home path check' 'agents/legacy\.md:1'"
+rm -f "$HPH/agents/legacy.md"
+if out_hp9="$(_hp bash "$SCRIPT" send)"; then rc_hp9=0; else rc_hp9=$?; fi
+dbg "send removing the failing file: rc=$rc_hp9 $out_hp9"
+check "#3465 a send that removes the failing file goes through" \
+  "[ '$rc_hp9' -eq 0 ] && ! git -C '$HPB' cat-file -e main:payload/agents/legacy.md 2>/dev/null"
+# A name git quotes is still a file being sent. Without -z git prints a name holding a double quote,
+# a backslash or a newline inside double quotes with C escapes, even with core.quotePath off, and a
+# list read line by line for "payload/" dropped it, so the check never read it and the send pushed it
+# (#3483 review). Each name alone, so no other file in the send can be what holds it.
+hp_head_q="$(git -C "$HPB" rev-parse main)"
+mkdir -p "$HPH/hooks/runq"
+printf '{"cwd":"%s/projects/site"}\n' "$HP_BAD" > "$HPH/hooks/runq/key\"1.json"
+if out_hpq1="$(_hp bash "$SCRIPT" send)"; then rc_hpq1=0; else rc_hpq1=$?; fi
+dbg "send carrying a file whose name holds a double quote: rc=$rc_hpq1 $out_hpq1"
+check "#3465 a file whose name holds a double quote is read by the check, and the send is held" \
+  "[ '$rc_hpq1' -ne 0 ] && line_has \"\$out_hpq1\" 'home path check' 'runq/key\"1\.json:1'"
+rm -f "$HPH/hooks/runq/key\"1.json"
+printf '{"cwd":"%s/projects/site"}\n' "$HP_BAD" > "$HPH/hooks/runq/back\\slash.json"
+if out_hpq2="$(_hp bash "$SCRIPT" send)"; then rc_hpq2=0; else rc_hpq2=$?; fi
+dbg "send carrying a file whose name holds a backslash: rc=$rc_hpq2 $out_hpq2"
+check "#3465 a file whose name holds a backslash is read by the check, and the send is held" \
+  "[ '$rc_hpq2' -ne 0 ] && line_has \"\$out_hpq2\" 'home path check' 'slash\.json:1'"
+rm -f "$HPH/hooks/runq/back\\slash.json"
+printf '{"cwd":"%s/projects/site"}\n' "$HP_BAD" > "$HPH/hooks/runq/new
+line.json"
+if out_hpq3="$(_hp bash "$SCRIPT" send)"; then rc_hpq3=0; else rc_hpq3=$?; fi
+dbg "send carrying a file whose name holds a newline: rc=$rc_hpq3 $out_hpq3"
+# The check names the file across two lines, so the refusal cannot quote it back; it is held all the
+# same, as a check that could not name what it found.
+check "#3465 a file whose name holds a newline is read by the check, and the send is held" \
+  "[ '$rc_hpq3' -ne 0 ] && line_has \"\$out_hpq3\" 'home path check' 'nothing is sent'"
+check "#3465 and none of the three reached the shared repo" "[ \"\$(git -C '$HPB' rev-parse main)\" = '$hp_head_q' ]"
+rm -rf "$HPH/hooks/runq"
+if out_hpq4="$(_hp bash "$SCRIPT" send)"; then rc_hpq4=0; else rc_hpq4=$?; fi
+check "#3465 control: with those files gone the send goes through" "[ '$rc_hpq4' -eq 0 ]"
+# A commit the shared repo lacks is read even when the clone has no upstream set, as a commit made by
+# hand, or before the check, can be: the push sets one, so those commits used to go up unread (#3483
+# review). Here the failing file is in this Mac's config and committed in the clone, so nothing is
+# uncommitted and only the commit carries it.
+hp_up="$(git -C "$HPC" rev-parse --abbrev-ref '@{upstream}' 2>/dev/null || true)"
+check "#3465 control: the clone has an upstream to take away" "[ -n '$hp_up' ]"
+hp_head_u="$(git -C "$HPB" rev-parse main)"
+printf 'made by hand in %s/notes\n' "$HP_BAD" > "$HPH/agents/handmade.md"
+cp "$HPH/agents/handmade.md" "$HPC/payload/agents/handmade.md"
+git -C "$HPC" add payload/agents/handmade.md
+git -C "$HPC" -c user.email=t@example.com -c user.name=t commit -q -m 'a commit made by hand'
+git -C "$HPC" branch -q --unset-upstream
+if out_hpu1="$(_hp bash "$SCRIPT" send)"; then rc_hpu1=0; else rc_hpu1=$?; fi
+dbg "send over an unsent commit with no upstream set: rc=$rc_hpu1 $out_hpu1"
+check "#3465 a commit the shared repo lacks is read with no upstream set, and the send is held" \
+  "[ '$rc_hpu1' -ne 0 ] && line_has \"\$out_hpu1\" 'home path check' 'agents/handmade\.md:1'"
+check "#3465 and it did not reach the shared repo" "[ \"\$(git -C '$HPB' rev-parse main)\" = '$hp_head_u' ]"
+rm -f "$HPH/agents/handmade.md"
+git -C "$HPC" reset -q --hard "$hp_up"
+git -C "$HPC" branch -q -u "$hp_up"
+# A sync hands the refusal back and still receives (#947). Its notice names this check, nothing is
+# sent, and the copies it sets aside in the clone are never this Mac's own files.
+mkdir -p "$HPH/hooks/run"; printf '{"cwd":"%s/projects/site"}\n' "$HP_BAD" > "$HPH/hooks/run/k.json"
+hp_live2="$(_hp_live)"; hp_head2="$(git -C "$HPB" rev-parse main)"
+: > "$HPREC"
+if out_hp10="$(_hp SYNC_NO_NOTIFY=0 SYNC_NOTIFIER="$HPNOTIFIER" bash "$SCRIPT" sync)"; then rc_hp10=0; else rc_hp10=$?; fi
+dbg "sync carrying a file naming a home: rc=$rc_hp10 $out_hp10"
+check "#3465 a sync carrying such a file fails and sends nothing, in the check's name" \
+  "[ '$rc_hp10' -ne 0 ] && line_has \"\$out_hp10\" 'SENT NOTHING' 'home path check' 'hooks/run/k\.json:1' && [ \"\$(git -C '$HPB' rev-parse main)\" = '$hp_head2' ]"
+hp_notice10="$(grep 'still receives' "$HPREC" 2>/dev/null || true)"
+check "#3465 and its desktop notice names the home path check" "grep -q 'home path check' <<< \"\$hp_notice10\""
+check "#3465 and this Mac's config is as it was after the sync set its staged copies aside" "[ \"\$(_hp_live)\" = \"\$hp_live2\" ]"
+rm -rf "$HPH/hooks/run"
+# A check that could not run judged nothing, so the send is refused and says so, never passed
+# (L98): a copy of the tool with no check beside it, without git, where every file is being sent.
+HPT="$WORK/homepath-tool"; mkdir -p "$HPT/payload/hooks/lib"; cp "$SCRIPT" "$HPT/claude-sync"
+python3 "$(dirname "$SCRIPT")/payload/hooks/lib/install-hook-libs.py" "$(dirname "$SCRIPT")/payload/hooks/lib" "$HPT/payload/hooks/lib" work-names.py dev-update-registry.js >/dev/null \
+  || bad "#3465 the copy of the tool could not be given the work names scanner"
+HPN="$WORK/homepath-nocheck-home"; mkdir -p "$HPN"; echo '{"hooks":{}}' > "$HPN/settings.json"; printf '# rules\n' > "$HPN/CLAUDE.md"
+HPNR="$WORK/homepath-nocheck-repo"; mkdir -p "$HPNR/payload"
+_hpn(){ HOME="$HPE" HOOK_TESTS_RUNNING=1 SYNC_LOG_FILE="$WORK/homepath-sync.log" CLAUDE_HOME="$HPN" SYNC_REPO="$HPNR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$HPT/claude-sync" "$@" 2>&1; }
+if out_hp11="$(_hpn push)"; then rc_hp11=0; else rc_hp11=$?; fi
+dbg "push from a copy with no home path check beside it: rc=$rc_hp11 $out_hp11"
+check "#3465 a copy with no home path check beside it refuses the send" "[ '$rc_hp11' -ne 0 ]"
+check "#3465 and says the check could not run, never that a file failed it" \
+  "line_has \"\$out_hp11\" 'home path check' 'could not' 'nothing is sent' && out_lacks \"\$out_hp11\" 'fail the home path check'"
+out_hp_st11="$(_hpn stuck)"
+check "#3465 and stuck says the same of it" "line_has \"\$out_hp_st11\" 'send-refused' 'home path check' 'could not run'"
+# The control: the same copy, given the check, sends the same config.
+seed_home_path_check "$HPT"
+if out_hp12="$(_hpn push)"; then rc_hp12=0; else rc_hp12=$?; fi
+dbg "push from the copy once it holds the check: rc=$rc_hp12 $out_hp12"
+check "#3465 control: the same copy sends once the check is beside it" "[ '$rc_hp12' -eq 0 ]"
+# And without git a rule file at the top of the config is read like any other file being sent.
+printf '# rules\nnotes are kept in %s/notes\n' "$HP_BAD" > "$HPN/CLAUDE.md"
+if out_hp13="$(_hpn push)"; then rc_hp13=0; else rc_hp13=$?; fi
+check "#3465 without git, a rule file naming a home folder is refused by name and line" \
+  "[ '$rc_hp13' -ne 0 ] && line_has \"\$out_hp13\" 'home path check' 'CLAUDE\.md:2'"
+# Where the tool runs from the clone it sends from, as every Mac's does, the check that judges is the
+# copy staged from this Mac's config. Deleted there, the send would remove it, and that is the cause
+# to say, never a copy run outside its checkout (#3483 review, L11). The same hold on later watcher
+# ticks is said once, like a hold over files, rather than in full with a notice every tick.
+HPS="$WORK/homepath-selfrepo"; mkdir -p "$HPS"; cp "$SCRIPT" "$HPS/claude-sync"; seed_work_names_scanner "$HPS"
+HPSH="$WORK/homepath-selfhome"; mkdir -p "$HPSH"; echo '{"hooks":{}}' > "$HPSH/settings.json"; printf '# rules\n' > "$HPSH/CLAUDE.md"
+cp -R "$HPS/payload/hooks" "$HPSH/hooks"
+_hps(){ env HOME="$HPE" HOOK_TESTS_RUNNING=1 SYNC_LOG_FILE="$WORK/homepath-sync.log" CLAUDE_HOME="$HPSH" SYNC_REPO="$HPS" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_SEND_TESTS=1 "$@" bash "$HPS/claude-sync" push 2>&1; }
+if out_hps1="$(_hps)"; then rc_hps1=0; else rc_hps1=$?; fi
+dbg "push from the clone's own copy, the check in the config: rc=$rc_hps1 $out_hps1"
+check "#3465 control: the clone's own copy sends while the config holds the check" "[ '$rc_hps1' -eq 0 ]"
+rm -f "$HPSH/hooks/check-home-paths.sh"
+if out_hps2="$(_hps)"; then rc_hps2=0; else rc_hps2=$?; fi
+dbg "push once the config no longer holds the check: rc=$rc_hps2 $out_hps2"
+check "#3465 a send that would remove the check itself is held" "[ '$rc_hps2' -ne 0 ] && [ ! -e '$HPS/payload/hooks/check-home-paths.sh' ]"
+check "#3465 and says that is the cause, never a copy run outside its checkout" \
+  "line_has \"\$out_hps2\" 'home path check' 'would remove the check itself' && out_lacks \"\$out_hps2\" 'outside its own checkout'"
+: > "$HPREC"
+if out_hps3="$(_hps SYNC_IN_WATCH=1 SYNC_NO_NOTIFY=0 SYNC_NOTIFIER="$HPNOTIFIER")"; then rc_hps3=0; else rc_hps3=$?; fi
+# Only this check's notices are counted: the fixture's config lacks the hook registration reader, so
+# every send here also posts a notice that the hooks block was not published.
+hp_notices_s3="$(grep -c 'home path check' "$HPREC" 2>/dev/null || true)"
+if out_hps4="$(_hps SYNC_IN_WATCH=1 SYNC_NO_NOTIFY=0 SYNC_NOTIFIER="$HPNOTIFIER")"; then rc_hps4=0; else rc_hps4=$?; fi
+hp_notices_s4="$(grep -c 'home path check' "$HPREC" 2>/dev/null || true)"
+check "#3465 control: the notices this counts carry the check's name" "grep -q 'would remove the check itself' '$HPREC'"
+dbg "watcher, a check that could not judge, first: rc=$rc_hps3 $out_hps3"
+dbg "watcher, the same, next tick: rc=$rc_hps4 $out_hps4"
+check "#3465 the watcher says a check that could not judge in full once, with one notice" \
+  "[ '$rc_hps3' -ne 0 ] && line_has \"\$out_hps3\" 'home path check' 'would remove the check itself' && [ '$hp_notices_s3' -eq 1 ]"
+check "#3465 and on the next tick in one short line, with no second notice" \
+  "[ '$rc_hps4' -ne 0 ] && line_has \"\$out_hps4\" 'still held' 'home path check' 'claude-sync status' && out_lacks \"\$out_hps4\" 'would remove' && [ '$hp_notices_s4' -eq 1 ]"
+cp "$(dirname "$SCRIPT")/payload/hooks/check-home-paths.sh" "$HPSH/hooks/check-home-paths.sh"
+if out_hps5="$(_hps)"; then rc_hps5=0; else rc_hps5=$?; fi
+check "#3465 with the check back in the config the send goes through" "[ '$rc_hps5' -eq 0 ]"
+# The watcher itself, given two changes in one burst, which it makes two sends of (#262): its log
+# gets the hold in full once and one short line after it, so a session that keeps writing scratch
+# adds a line a tick, as a healthy watcher does, and never the list again.
+HPWB="$WORK/homepath-watch-bare.git"; git init -q --bare "$HPWB"
+HPWR="$WORK/homepath-watch-repo"; git clone -q "$HPWB" "$HPWR" 2>/dev/null
+HPW="$WORK/homepath-watch-home"; mkdir -p "$HPW/hooks/run"; echo '{"hooks":{}}' > "$HPW/settings.json"
+printf '{"cwd":"%s/projects/site"}\n' "$HP_BAD" > "$HPW/hooks/run/k.json"
+HPEMIT="$WORK/homepath-emit-fswatch"; printf '#!/usr/bin/env bash\necho 1\necho 1\n' > "$HPEMIT"; chmod +x "$HPEMIT"
+hp_wout="$(HOME="$HPE" HOOK_TESTS_RUNNING=1 SYNC_LOG_FILE="$WORK/homepath-sync.log" SYNC_NO_HOOK_TESTS=1 SYNC_NO_SEND_TESTS=1 SYNC_NO_NOTIFY=1 SYNC_FSWATCH="$HPEMIT" CLAUDE_HOME="$HPW" SYNC_REPO="$HPWR" bash "$SCRIPT" watch 2>&1 || true)"
+dbg "the watcher's log over two ticks of one hold: $hp_wout"
+hp_wfail="$(grep 'watch: sync FAILED' <<< "$hp_wout" || true)"
+hp_wfirst="$(sed -n '1p' <<< "$hp_wfail")"; hp_wsecond="$(sed -n '2p' <<< "$hp_wfail")"
+check "#3465 the watcher logs each of the two held ticks" "[ \"\$(grep -c . <<< \"\$hp_wfail\")\" -eq 2 ]"
+check "#3465 the first in full, naming the check, the file and the line" \
+  "line_has \"\$hp_wfirst\" 'watch: sync FAILED' 'home path check' 'hooks/run/k\.json:1'"
+check "#3465 the second as the short line, without the file" \
+  "line_has \"\$hp_wsecond\" 'watch: sync FAILED' 'still held' 'home path check' && out_lacks \"\$hp_wsecond\" 'k\.json'"
 
 section "== a pull never promises to send local files a send will refuse (#388) =="
 # The pull's "would have reverted these local edits" line says they go up on the next send. For a

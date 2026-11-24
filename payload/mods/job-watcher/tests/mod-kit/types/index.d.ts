@@ -584,8 +584,30 @@ export type ModKitWrite = { word: string; path?: string; folder?: string; source
  * reaches everything under a folder. `word`, `path` and `folder` as in a write. `names`, on a tree a
  * find -delete takes away, the -name and -iname patterns it is limited to: it takes away only an entry
  * whose name matches every one (-iname's ignoring case); absent wherever anything may widen it.
+ * `to`, on a source a mv takes away, where that mv puts it (#3478): with `into`, the folder it lands
+ * inside under its own name (a trailing slash, several sources, -t), `word` as written without the
+ * slash; without `into`, the one name a single source is moved onto, which is inside it when that
+ * name is an existing folder, as only the disk can say. `path` as in a write. It is the only word
+ * of where a pattern or a variable goes, since a write's `sources` hold paths alone. It says the
+ * file is there once the whole command has run, so it is absent on any other removal, on a mv onto
+ * a device or of two sources that may land on one name, and wherever the command, read whole, may
+ * not leave the file there: it removes or empties the source another way (under any spelling of
+ * its path) or moves it to a second place, another command removes, empties or writes over where
+ * it lands, what holds that or what is under it, or the command holds anything whose changes the
+ * reader cannot name (an unread command, a write its words do not name, a run, git, a command that
+ * makes a link, an rsync told to remove what it sent). Places are compared as paths, read from the
+ * words alone with nothing asked of the disk: home spelled any way, a dot, a doubled slash and a cd
+ * are one place, and /tmp, /var and /etc are /private/tmp, /private/var and /private/etc. One place
+ * can have names paths cannot show (a link, a `..` out of a linked folder, another case of a name on
+ * a disk that ignores case), so `to` is never enough on its own: a reader that words anything by it
+ * must itself show the command holds nothing else that could remove, move, empty or write over a
+ * file, as ask before saving does. A reader for whom it is absent says what it would say of a
+ * removal with nowhere to go. `keeps` says the mv was told to replace nothing (-n, --no-clobber) and given neither -f
+ * nor -i: a source whose name is taken there stays where it was. Beside either of those, in any
+ * order, it is absent: mv obeys the last of the three, and the order is not read, so `mv -f -n`,
+ * which replaces nothing, is read as one that may replace.
  */
-export type ModKitChange = { word: string; path?: string; folder?: string; does: 'remove' | 'touch' | 'truncate' | 'folder' | 'mode'; tree?: true; names?: string[] }
+export type ModKitChange = { word: string; path?: string; folder?: string; does: 'remove' | 'touch' | 'truncate' | 'folder' | 'mode'; tree?: true; names?: string[]; to?: { word: string; path?: string; into?: true; keeps?: true } }
 
 /**
  * What a command changes: the files its words name content goes into, the other changes it makes

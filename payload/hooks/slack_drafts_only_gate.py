@@ -1575,6 +1575,25 @@ def sh_strip_openers_of(t):
         t = t[m.end():].lstrip()
 
 
+@functools.lru_cache(maxsize=None)
+def sh_funcs_of(s):
+    """What Judge.sh_funcs finds in s, searched afresh: (the names written `name()`, the names
+    written `function name`), each in the order found, as tuples every caller can share. The walk
+    of a text's variables, the reading of a sed or git command's output (once for each such name)
+    and the reading of the words after an unknown program each searched the whole text for them,
+    six searches of the claude-sync suite's 1.8 MB where one serves (claude-config#3406)."""
+    return (tuple(re.findall(r"(?m)^\s*(?:function\s+)?([A-Za-z_][\w:.-]*)\s*\(\s*\)", s)),
+            tuple(re.findall(r"\bfunction\s+([A-Za-z_][\w:.-]*)", s)))
+
+
+@functools.lru_cache(maxsize=None)
+def sh_runs_shopt(s):
+    """Whether s holds the word shopt, which can change how a case's patterns match (Judge.sh_case),
+    searched for once for each text: the walk of a text's variables asks, and the reading of its
+    locals asked again, a second search of the whole text (claude-config#3406)."""
+    return bool(re.search(r"\bshopt\b", s))
+
+
 # The builtins after which a NAME=value in front of them outlives the command (POSIX special builtins,
 # and those that bind names), so it is an assignment like any other.
 SH_SPECIAL = frozenset({":", ".", "source", "break", "continue", "eval", "exec", "exit", "export", "readonly",
@@ -1806,8 +1825,8 @@ raise_qos = gate_qos.raise_qos
 QOS = [(None, "")]
 
 
-def draft_advice(where):
-    return (f"Save it as a draft instead: call slack_send_message_draft {where}, then tell Dan where the draft is "
+def draft_advice(where, opening="Save it as a draft instead"):
+    return (f"{opening}: call slack_send_message_draft {where}, then tell Dan where the draft is "
             "(the channel, or the person for a direct message, and the thread) and that nothing was sent. "
             f"Sessions never send or schedule a Slack message (Dan, 2026-11-05: \"it should only ever save as "
             f"draft in slack, never send directly\"; {ISSUE}). If he asked you to post it, still save the draft "
@@ -1919,6 +1938,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         self.no_network = self.installed_wrapper()  # no-network-run.sh beside this file (#3173)
         self.acting = set()  # the real path of each script acts() is judging, so a cycle ends
         self.unfollowed = []  # each thing the walk could not follow or read (unfollow)
+        self.named_only = []  # each refusal for a file that only names an endpoint (name_only, #3410)
         # (the reason, the mod's folder) of a refused `bun test` the call's own line runs in a mod's
         # folder, for the sentence that names the command to run instead (mod_tests_seen, #3356).
         self.mod_tests = None
@@ -2357,11 +2377,14 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                                              copier=True)
             else:
                 self.note_copy(name, vals[1:], d)
+            # Believed only of the system's own program (lib/exact-output.py, claude-config#3440).
+            self.copy_believed(name, args, vals, d, text)
             out = []
         elif name in SH_PRINTERS:
-            out = self.sh_prints(name, args, vals, d, stdin)
+            out = self.believed(self.sh_prints(name, args, vals, d, stdin), vals[0], name, text)
         elif name in ("tee", "gtee"):
             append = any(v and re.fullmatch(r"-[a-zA-Z]*a[a-zA-Z]*", v) for v in vals[1:]) or "--append" in vals[1:]
+            stdin = self.believed(stdin, vals[0], name, text)
             for a, v in zip(args[1:], vals[1:]):
                 if v is not None and (v == "-" or v.startswith("-")):
                     continue
@@ -3363,6 +3386,17 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         self.unfollowed.append(why)
         return why
 
+    def name_only(self, why):
+        """Record a refusal that is no post the gate found, and give it back: a file that only names
+        an endpoint, handed to a script not seen to be unable to act on it (claude-config#3410).
+        main() then says the check could not be made, keyed on this cause as it is on unfollow's.
+        Kept apart from unfollowed, which the readings of a script's own words consult to decide
+        what is refused: inside a script on disk they drop a reason found there (judge_unread_shapes,
+        lib/unknown-program.py), and this refusal stands wherever it stood (Dan, 2026-11-21, #3218).
+        Nothing reads this list but main(), so recording here changes no verdict."""
+        self.named_only.append(why)
+        return why
+
     def import_targets(self, text, kind, cur_dir, root, inserts=((), ()), strings=True, tagged=False, path=None,
                        held=None):
         """(the import as written, the files it runs, or False when it names a local file not there,
@@ -4043,7 +4077,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         rows, blocks = struct if struct else (None, None)
         allnames = set(re.findall(r"(?<![\w$])([A-Za-z_]\w*)(?:\[[^\]\n]*\])?\+?=", s))
         funcs = self.sh_funcs(s)
-        shopt = bool(re.search(r"\bshopt\b", s))
+        shopt = sh_runs_shopt(s)
         env, since, regions, spans, tainted, handled = {}, {}, {}, {}, set(), set()
         lost = [] if cwd_known else [(0, len(s))]
         bodies, fbody = [], {}
@@ -4481,9 +4515,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
 
     @staticmethod
     def sh_funcs(s):
-        """The names of the functions s defines."""
-        return set(re.findall(r"(?m)^\s*(?:function\s+)?([A-Za-z_][\w:.-]*)\s*\(\s*\)", s)) | \
-            set(re.findall(r"\bfunction\s+([A-Za-z_][\w:.-]*)", s))
+        """The names of the functions s defines, as a set of the caller's own, searched for once
+        for each text (sh_funcs_of) and built as it always was, so it lists them in the same order."""
+        plain, keyword = sh_funcs_of(s)
+        return set(plain) | set(keyword)
 
     @staticmethod
     def sh_binds(name, text, allowed=0):
@@ -4975,7 +5010,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 last, spans = idx, [(p["start"], p["end"])]
                 if v is not None:
                     if not shopt:
-                        shopt.append(bool(re.search(r"\bshopt\b", s)))
+                        shopt.append(sh_runs_shopt(s))
                     v, last, spans = self.sh_local_settles(s, items, rows, blocks, stack, idx, end, n, v, known,
                                                            script, here, shopt[0])
                 if v is None or sum(1 for x in words if re.match(re.escape(n) + r"(?:=|$)", x)) > 1:
@@ -6727,7 +6762,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 # A file naming an endpoint is still read against a script that writes, as before.
                 acts = script_acts(runs_only=True) if unread else script_acts()
                 if acts:
-                    return f"{script_label} {acts}, and is handed {what}"
+                    reason = f"{script_label} {acts}, and is handed {what}"
+                    # A file that names an endpoint is not a post found (#3410); unread() has
+                    # already recorded one the gate could not read.
+                    return reason if unread else self.name_only(reason)
                 if unread and script_label in on_disk and script_acts():
                     self.note_handed(on_disk[script_label], words, d, script_label)
             # Data every script beside it only reads; none sends or runs what it is handed.
@@ -8120,9 +8158,21 @@ def main():
         # cannot read; never matched by its wording) is not a post it found, so it says the check
         # could not be made rather than claiming a post (#2922).
         unfollowed = any(why in reason for why in judge.unfollowed)
+        # Nor is a file that only names an endpoint, handed to a script the gate could not see to be
+        # unable to act on it (name_only): it stays refused, and says what was measured (#3410).
+        named_only = not unfollowed and any(why in reason for why in judge.named_only)
         lead = ("REFUSED: the gate could not check whether this command posts to Slack: "
-                if unfollowed else "REFUSED: this command posts to Slack: ")
-        if unfollowed and not MARKER.search(cmd):
+                if unfollowed or named_only else "REFUSED: this command posts to Slack: ")
+        if named_only:
+            # The file may be a message's payload or a text that mentions the name, and the gate
+            # cannot tell which, so both are answered: the draft rule, and where to go with neither.
+            advice = ("This is not a finding that it posts: the file only names a Slack posting endpoint, and "
+                      "the gate could not tell whether the script sends anything to it. If the command sends no "
+                      "Slack message, there is no message to save as a draft: if it must run as written, say so "
+                      "to Dan (claude-config#3410). "
+                      + draft_advice("with the same channel and thread",
+                                     "If it does send one, save that message as a draft instead"))
+        elif unfollowed and not MARKER.search(cmd):
             # Nothing in the command names a posting endpoint, so it is no message, and telling the
             # session to save one as a draft only misleads it (claude-config#2631).
             advice = ("This is not a finding that it posts: the gate could not follow what it runs, and the "

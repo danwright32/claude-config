@@ -36,6 +36,18 @@
 #
 # Usage:
 #   check-home-paths.sh [config-root]
+#   check-home-paths.sh --files0-from <list> [config-root]
+#
+# The second form reads only the files named in <list>, NUL separated paths relative to the root
+# (claude-config#3465). claude-sync asks it about the files a send is about to publish, before it
+# publishes them: on 2026-11-22 a send pushed 126 scratch files to main, 100 of them naming one
+# Mac's home, and this check ran only afterwards, on GitHub. The list narrows WHICH
+# files are read and nothing else: a listed file is read exactly when the walk of the whole tree
+# would read it (the same folders, the same skills left out, the same names skipped), and by the
+# same three rules, so the send and main's own run cannot disagree about a file. A listed file
+# outside that set is not judged, and the run says how many of the listed files it read. An empty
+# list, a list that cannot be read and a listed file that is not there are exit 2, like any scan
+# that read something other than what it was asked about.
 #
 # CLAUDE_HOME_PATH_ROOTS overrides where home directories live (default "/Users
 # /home", which covers a Mac and the Linux runner). It exists so the allowance
@@ -66,6 +78,19 @@ CS_TOKEN="__CLAUDE""_HOME__"
 # Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
 case "${BASH_SOURCE[0]}" in */*) _HD="${BASH_SOURCE[0]%/*}" ;; *) _HD=. ;; esac
 _HD="$(cd "${_HD:-/}" && pwd)"
+FILES_FROM=""
+if [ "${1:-}" = "--files0-from" ]; then
+  if [ "$#" -lt 2 ] || [ -z "$2" ]; then
+    echo "check-home-paths: --files0-from needs the file holding the list of paths to read." >&2
+    exit 2
+  fi
+  FILES_FROM="$2"
+  shift 2
+  if [ ! -f "$FILES_FROM" ] || [ ! -r "$FILES_FROM" ]; then
+    echo "check-home-paths: the list of files to read, $FILES_FROM, is not there or cannot be read, so nothing was checked." >&2
+    exit 2
+  fi
+fi
 ROOT="${1:-$(cd "$_HD/.." && pwd)}"
 [ -d "$ROOT" ] || { echo "check-home-paths: no such directory: $ROOT" >&2; exit 2; }
 
@@ -139,9 +164,68 @@ if [ "$((${#skill_anchored[@]} + ${#skill_anywhere[@]}))" -eq 0 ]; then
   list_note="check-home-paths: could not read the list of skills the sync never carries ($UNMANAGED_LIB), so every skill was scanned, including any the sync would leave behind."
 fi
 
+# ---- the listed form: which of the listed files the walk below would read (claude-config#3465) ----
+# One question, asked of a path instead of answered by walking: is this file in a tree the walk
+# reads, outside every skill the sync leaves alone, and not one of the names the walk's grep skips?
+# test-check-home-paths.sh holds the two forms to the same lines over one tree holding every kind of
+# place, so a place added to the walk and missed here fails there.
+listed_in_scope(){   # $1 = a path relative to the root -> 0 when the walk reads it
+  local rel="$1" base top rest entry seg _n _in=0
+  case "$rel" in /*|..|../*|*/../*|*/..) return 1 ;; esac
+  base="${rel##*/}"
+  case "$base" in *.pyc|*.conflict-*) return 1 ;; esac
+  case "$rel" in
+    */*) ;;
+    *.md) return 0 ;;   # a rule file at the top of the root
+    *) return 1 ;;
+  esac
+  case "/${rel%/*}/" in */.git/*|*/__pycache__/*|*/node_modules/*) return 1 ;; esac
+  top="${rel%%/*}"; rest="${rel#*/}"
+  for seg in ${SCAN_DIRS[@]+"${SCAN_DIRS[@]}"}; do
+    [ "$seg" = "$top" ] && { _in=1; break; }
+  done
+  [ "$_in" -eq 1 ] || return 1
+  [ "$top" = skills ] || return 0
+  # The entry at the top of skills/, left out under either kind of name.
+  entry="${rest%%/*}"
+  for _n in ${skill_anchored[@]+"${skill_anchored[@]}"} ${skill_anywhere[@]+"${skill_anywhere[@]}"}; do
+    [ "$entry" = "$_n" ] && return 1
+  done
+  # Below it, only the names left out at any depth, as a folder or as a file.
+  case "$rest" in */*) rest="${rest#*/}" ;; *) return 0 ;; esac
+  while :; do
+    seg="${rest%%/*}"
+    for _n in ${skill_anywhere[@]+"${skill_anywhere[@]}"}; do
+      [ "$seg" = "$_n" ] && return 1
+    done
+    case "$rest" in */*) rest="${rest#*/}" ;; *) break ;; esac
+  done
+  return 0
+}
+list_files=()     # the listed files this run reads, as full paths
+list_missing=""   # listed, and not there
+listed_n=0
+if [ -n "$FILES_FROM" ]; then
+  # `|| [ -n ... ]` so a last path with no NUL after it is still read.
+  while IFS= read -r -d '' _rel || [ -n "$_rel" ]; do
+    [ -n "$_rel" ] || continue
+    listed_n=$((listed_n + 1))
+    if [ ! -e "$ROOT/$_rel" ] && [ ! -L "$ROOT/$_rel" ]; then
+      list_missing="$list_missing  $_rel
+"
+      continue
+    fi
+    # A link, a folder or a device is not something the walk's grep reads either.
+    if [ -f "$ROOT/$_rel" ] && [ ! -L "$ROOT/$_rel" ] && listed_in_scope "$_rel"; then
+      list_files+=("$ROOT/$_rel")
+    fi
+  done < "$FILES_FROM"
+fi
+
 targets=()        # everything outside skills/, scanned whole
 skill_targets=()  # the top level entries of skills/ the sync carries
 for d in ${SCAN_DIRS[@]+"${SCAN_DIRS[@]}"}; do
+  [ -n "$FILES_FROM" ] && break   # the listed form reads its list, never the trees
   [ -d "$ROOT/$d" ] || continue
   if [ "$d" != skills ]; then targets+=("$ROOT/$d"); continue; fi
   loop_input="$(find "$ROOT/skills" -mindepth 1 -maxdepth 1 2>/dev/null | sort)" || true
@@ -157,7 +241,8 @@ for d in ${SCAN_DIRS[@]+"${SCAN_DIRS[@]}"}; do
 $loop_input
 LOOP_INPUT
 done
-loop_input="$(find "$ROOT" -maxdepth 1 -type f -name '*.md' 2>/dev/null | sort)" || true
+loop_input=""
+[ -n "$FILES_FROM" ] || loop_input="$(find "$ROOT" -maxdepth 1 -type f -name '*.md' 2>/dev/null | sort)" || true
 while IFS= read -r f; do
   [ -n "$f" ] && targets+=("$f")
 done <<LOOP_INPUT
@@ -176,7 +261,23 @@ done
 [ -n "$trees_note" ] && echo "$trees_note" >&2
 [ -n "$list_note" ] && echo "$list_note" >&2
 
-if [ "$((${#targets[@]} + ${#skill_targets[@]}))" -eq 0 ]; then
+if [ -n "$FILES_FROM" ]; then
+  if [ "$listed_n" -eq 0 ]; then
+    echo "check-home-paths: the list of files to read, $FILES_FROM, names no files, so nothing was checked. Refusing to report a clean scan of nothing." >&2
+    exit 2
+  fi
+  case "$list_missing" in *[![:space:]]*)
+    echo "check-home-paths: these listed files are not under $ROOT, so they were not read and the list was not checked:" >&2
+    printf '%s' "$list_missing" >&2
+    exit 2 ;;
+  esac
+  if [ "${#list_files[@]}" -eq 0 ]; then
+    # A pass, and said as what it is: the list was the caller's, and nothing on it is a file this
+    # check reads, so no file was found clean and none was found at fault (L11).
+    echo "check-home-paths: none of the $listed_n listed file(s) under $ROOT is one this check reads (the synced folders and the top level rule files), so there was nothing of theirs to judge."
+    exit 0
+  fi
+elif [ "$((${#targets[@]} + ${#skill_targets[@]}))" -eq 0 ]; then
   echo "check-home-paths: found nothing to check under $ROOT (none of ${SCAN_DIRS[*]:-the synced trees}, and no rule files). Refusing to report a clean scan of nothing." >&2
   exit 2
 fi
@@ -232,8 +333,16 @@ ANGLE_TOKEN="<""HOME>"
 ALL_PAT="${MACHINE_PATH}|${CS_TOKEN}|${ANGLE_TOKEN}"
 # Two walks rather than one only because the deeper skill exclusions must not reach hooks, agents
 # or commands, where a folder sharing a plugin skill's name is ordinary config.
+#
+# The listed form reads its files by name, a few hundred to a call so a long list never outgrows
+# what one command line may carry, and with -H so a call left holding one file still names it.
 raw_all="$(
-  { [ "${#targets[@]}" -eq 0 ] || grep -rInE "${SKIP[@]}" "$ALL_PAT" "${targets[@]}" 2>/dev/null
+  { _i=0
+    while [ "$_i" -lt "${#list_files[@]}" ]; do
+      grep -InHE "$ALL_PAT" "${list_files[@]:_i:400}" 2>/dev/null
+      _i=$((_i + 400))
+    done
+    [ "${#targets[@]}" -eq 0 ] || grep -rInE "${SKIP[@]}" "$ALL_PAT" "${targets[@]}" 2>/dev/null
     [ "${#skill_targets[@]}" -eq 0 ] || grep -rInE "${SKIP[@]}" ${skill_grep_skip[@]+"${skill_grep_skip[@]}"} \
       "$ALL_PAT" "${skill_targets[@]}" 2>/dev/null
   } | grep -v 'claude-sync-allow-home-path' || true)"
@@ -344,6 +453,9 @@ scanned="$(
     for _t in ${skill_targets[@]+"${skill_targets[@]}"}; do [ -f "$_t" ] && printf '%s\n' "$_t"; done
   } | wc -l | tr -d ' ')"
 case "$scanned" in ''|*[!0-9]*) scanned=0 ;; esac
+# The listed form read the files it chose above, one by one, so that is its count, and it has
+# already left if there were none.
+[ -z "$FILES_FROM" ] || scanned="${#list_files[@]}"
 if [ "$scanned" -eq 0 ]; then
   echo "check-home-paths: the synced directories under $ROOT are all empty, so nothing was read. Refusing to report a clean scan of nothing." >&2
   exit 2
@@ -379,5 +491,9 @@ case "$angbad" in *[![:space:]]*)
 esac
 [ "$rc" -eq 0 ] || exit 1
 
+if [ -n "$FILES_FROM" ]; then
+  echo "check-home-paths: $scanned of $listed_n listed file(s) under $ROOT read, no machine specific home paths."
+  exit 0
+fi
 echo "check-home-paths: $scanned file(s) under $ROOT, no machine specific home paths."
 exit 0
