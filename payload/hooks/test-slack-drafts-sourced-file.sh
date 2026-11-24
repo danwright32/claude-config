@@ -155,6 +155,11 @@ moved e9 "a file whose eval is inside a group" '{ eval "$PREPARE"; }'
 moved e10 "a file whose eval is written with a backslash" "${BS}eval \"\$PREPARE\""
 moved e11 "a file whose eval is written in quotes" '"eval" "$PREPARE"'
 moved e12 "a file whose eval is inside a loop" 'for turn in 1; do' '  eval "$PREPARE"' 'done'
+# An eval right after a function's body or a subshell is outside it, at the file's top level.
+moved e13 "a file whose eval follows a function's closing brace" 'f() {' '  echo hi' '}' 'eval "$PREPARE"'
+moved e14 "a file whose eval follows a function on its line" 'f() { echo hi; }; eval "$PREPARE"'
+moved e15 "a file whose eval follows a subshell" '( echo hi ); eval "$PREPARE"'
+moved e16 "a file whose eval follows a function inside a function" 'f() {' '  g() { echo hi; }' '}' 'eval "$PREPARE"'
 
 echo "slack drafts only: a file that reads in a second file is followed to that file's end (claude-config#3474)"
 
@@ -172,6 +177,14 @@ moved d11 "a file that reads in the file that shifts by a path its own variable 
 moved d12 "a file that reads in the file that shifts beside itself" '. "${BASH_SOURCE[0]%/*}/mover.sh"'
 moved d13 "a file that reads in a quiet file and then the file that shifts" '. lib/quiet.sh' '. lib/mover.sh'
 moved d14 "a file whose second file evaluates text" '. lib/e1.sh'
+moved d16 "a file whose read of the file that shifts follows a function's closing brace" 'f() {' '  echo hi' '}' '. lib/mover.sh'
+# One file read in twice, from two directories, reads in a different lib/y.sh each time: the quiet
+# one from here, and from calm/ the one that shifts. The first reading does not answer for the second.
+printf '%s\n' 'echo quiet' > "$P/lib/y.sh"
+printf '%s\n' 'shift' > "$P/calm/lib/y.sh"
+file hop '. lib/y.sh'
+moved d17 "a file that reads one file in twice, the second time from a directory where it shifts," \
+  ". $P/lib/hop.sh" "cd $P/calm" ". $P/lib/hop.sh" "cd $P"
 # A second file the gate cannot work out the path of was refused before, for that path, and still is.
 file d15 '. "$LIBS/mover.sh"'
 reads d15.sh "calm hot"

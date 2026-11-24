@@ -3930,7 +3930,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
     def sh_keeps_positional(self, text, d):
         """Whether a command of a `bash -c` string certainly leaves its positional parameters as they
         were: not shift or a set that can set them, and not a sourced file (which shares them, and
-        may do either) unless that file is one whose text holds neither."""
+        may do either) unless that file is one sh_file_keeps_positional finds to keep them."""
         words = self.sw.command_words(self.sw.command_rest(text)[0])
         if not words:
             return True
@@ -3971,13 +3971,16 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         it runs in) and which, followed the same way to its end, keeps them too. Anything else is
         not: an eval at the file's top level, a read behind `command` or in quotes, one whose path
         is not certain or names no file, a file past MAX_DEPTH, and a word the reader places in no
-        command. A file being read already, further up, answers there for its own text."""
+        command. A file read already from the same directory under the same name, further up or
+        before, answered there for its own text; from another directory it is read again, as a
+        relative path in it names another file there."""
         real = os.path.realpath(path)
-        if real in seen:
+        once = (real, cwd, cwd_known, word)
+        if once in seen:
             return True
         if depth > MAX_DEPTH:
             return False
-        seen.add(real)
+        seen.add(once)
         if depth:
             self.tick(path)
         try:
