@@ -549,6 +549,13 @@ describe('the folder a git command is placed in, by the repository it names (#33
     expect(judge('GIT_DIR=/elsewhere/.git git push')?.what).toBe('push from a branch that could not be read')
     expect(judge('export GIT_DIR=/elsewhere/.git; git push')?.what).toBe('push from a branch that could not be read')
     expect(judge('GIT_WORK_TREE=/elsewhere git push origin HEAD')?.what).toBe('push from a branch that could not be read')
+    // The review of #3532: a commit message quoting a setting sets none, so the push behind it is
+    // judged by the branch of its folder, as it was before #3398. A setting that is a word of the
+    // git command itself, or of any command that is no plain data, still closes the rule.
+    expect(judge('git commit -m "read GIT_DIR=/elsewhere/.git as git does" && git push')).toBeUndefined()
+    expect(dirs('echo "GIT_DIR=/elsewhere/.git" && git push')).toEqual([CWD, CWD])
+    expect(judge('git -c GIT_DIR=/elsewhere/.git push')?.what).toBe('push from a branch that could not be read')
+    expect(gitDir('echo "GIT_DIR=/elsewhere/.git" > /tmp/e; . /tmp/e; git push')).toBeNull()
   })
   test('the controls: no -C, one -C and a cd are placed as before, and what was untold stays untold', () => {
     expect(dirs('git push')).toEqual([CWD])

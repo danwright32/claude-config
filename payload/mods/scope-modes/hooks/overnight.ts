@@ -1,7 +1,7 @@
 import type { ModKitGh, ModKitWrites } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import { DEPLOYERS, EDITORS, databaseRefusal, dbToolRefusal, flagOf, hasFlag, inScratch, operations, type Cmd } from './nobuild.ts'
 import { browserRefusal, type Browser } from './browser.ts'
-import { gitEnvNamed, gitGlobals, gitPlace, type GitRead } from './gitplace.ts'
+import { gitEnvNamed, gitEnvSpelled, gitGlobals, gitPlace, type GitRead } from './gitplace.ts'
 
 // Sleep mode phase 3 (#834): what is refused while the Mac sleeps, judged by what a call DOES and
 // by the repository it reaches, never by a phrase anywhere in it (L673). Dan's decision, 2026-10-06
@@ -238,10 +238,13 @@ export const tempWords = (raw: string): ((word: string) => string) => {
 // `envNamed` is whether the call names one of those variables at all (gitEnvNamed, #3398): given a
 // value, or handed to a command that sets or exports it with no `=` (`read GIT_DIR; export GIT_DIR`),
 // which reaches git the same and was read until then as naming nothing.
-const gitElsewhere = (words: readonly string[], g: NonNullable<Cmd['git']>, envNamed: boolean): boolean => {
+// `raw` is the call's text, asked beside it (gitEnvSpelled) as it has been since #1124: gitEnvNamed
+// reads a commit message or an echo quoting `GIT_DIR=` as naming nothing (the review of #3532), and
+// an allowance that text took away before #3398 is not given back by that reading.
+const gitElsewhere = (words: readonly string[], g: NonNullable<Cmd['git']>, envNamed: boolean, raw: string): boolean => {
   const globals = gitGlobals(words, g)
   const plain = globals.length === 0 || (globals.length === 2 && globals[0] === '-C')
-  return !plain || envNamed
+  return !plain || envNamed || gitEnvSpelled(raw)
 }
 // The repositories a push writes to, as git names them: the repository after its flags, and
 // --repo. Each a temp path, as written or relative to the folder git runs in: a remote's name or a
@@ -1053,7 +1056,7 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
     // path (`grep gh README.md`, `ls gh`, `grep -n -e gh -e x src`) runs nothing.
     if (cmd !== 'gh' && !NAMES_ONLY.has(cmd) && !(cmd === 'command' && /^-[vV]$/.test(words[1] ?? '')) && words.slice(1).some((w, i) => (w === 'gh' || w.endsWith('/bin/gh')) && ghRunsFrom(words.slice(i + 2)))) return UNRESOLVED
     if (c.git) {
-      const why = await gitRefusal(c.git, dir, call.home, look, { temp, elsewhere: gitElsewhere(c.words, c.git, envNamed), worktrees, envNamed })
+      const why = await gitRefusal(c.git, dir, call.home, look, { temp, elsewhere: gitElsewhere(c.words, c.git, envNamed, call.raw), worktrees, envNamed })
       if (why) return why
       continue
     }

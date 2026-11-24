@@ -8271,6 +8271,18 @@ for (const [how, line, extra] of [
     expect((await stop($ as never)).block ?? '').not.toContain('app.ts')
   })
 
+// The review of #3532: whether a call names a git variable is asked of one reading everywhere. The
+// patch note asked it of the reader's commands without their git reading, so a commit message
+// quoting `GIT_DIR=` beside a patch was plain data to every rule but this note.
+test("a patch applied behind a commit whose message quotes a setting is still read in this session's checkout (#3532 review)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { branch: 'main', dirty: ['/repo'], dirtyFiles: ['app.ts'], files: { '/tmp/fix.patch': PATCH } })
+  await start($ as never, clock)
+  expect(await call($ as never, bash('git commit -m "read GIT_DIR=/other/.git as git does" && git apply /tmp/fix.patch', 'g1'))).toBe('ran')
+  expect(w.toasts.filter(t => t.includes('the patch this call applied'))).toEqual([])
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block ?? '').toContain('app.ts')
+})
+
 test('a patch read with a mod-kit loaded before it said which repository a command names is never placed in the session checkout: that is said (#3398 lessons review)', withDeps, async ($, on) => {
   const { w, clock } = world(on, { branch: 'main', dirty: ['/repo'], dirtyFiles: ['app.ts'], files: { '/tmp/fix.patch': PATCH }, oldGitReader: true })
   await start($ as never, clock)

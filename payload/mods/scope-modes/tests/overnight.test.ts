@@ -792,6 +792,23 @@ describe('the checkout, force pushes, branch deletes and the live config', () =>
       expect({ naming, r: await bash(`cd /tmp/t3 && ${naming}; git push -f /tmp/t1 main`) }).toEqual({ naming, r: 'force push' })
     }
   })
+  // The review of #3532. Whether a call names a git variable is read from the reader's commands, so
+  // a commit message or an echo quoting `GIT_DIR=` names none. The temp folder allowances were
+  // taken away by that text anywhere in the call before #3398, and are still: they keep the text's
+  // own reading beside the reader's, so nothing refused then goes ahead now.
+  test('text that only quotes a setting still takes the temp folder allowances away, and moves no checkout out of reach (#3532 review)', async () => {
+    for (const data of ['echo "GIT_DIR=/x/.git"', 'git commit -m "GIT_DIR=/x/.git"', 'grep -rn "GIT_WORK_TREE=" notes']) {
+      expect({ data, r: await bash(`cd /tmp/t3 && ${data}; git branch -D x`) }).toEqual({ data, r: 'delete a branch' })
+      expect({ data, r: await bash(`cd /tmp/t3 && ${data}; git push -f /tmp/t1 main`) }).toEqual({ data, r: 'force push' })
+    }
+    // Typed in a linked worktree, the checkout behind such text is asked of that folder, as it was
+    // before #3398; in the primary checkout it is refused, as it always was.
+    expect(await bash('echo "GIT_DIR=/x/.git"; git checkout main', { cwd: WT })).toBeUndefined()
+    expect(await bash('git commit -m "GIT_DIR=/x/.git" && git checkout main', { cwd: WT })).toBeUndefined()
+    expect(await bash('echo "GIT_DIR=/x/.git"; git checkout main', { cwd: REPO })).toBe('run git checkout in a primary checkout')
+    // A real setting behind the same text still leaves the repository untold.
+    expect(await bash('echo "GIT_DIR=/x/.git"; export GIT_DIR=/x/.git; git checkout main', { cwd: WT })).toBe(untold)
+  })
   test('more than one -C is read as git chains them: the folder they lead to is the one asked about (#3398)', async () => {
     // Typed in a folder of the linked worktree, the last -C alone names a folder of that worktree.
     expect(await bash(`git -C ${'/Users'}/x -C repo checkout main`, { cwd: `${WT}/a` })).toBe('run git checkout in a primary checkout')

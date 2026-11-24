@@ -5152,14 +5152,16 @@ const patchedFiles = async ($: EngineInterface, writes: ModKitWrites, raw: strin
   // the write reader hands on a command's words without the settings in front of it (#3398). The
   // reader is asked about the known line at the same moment, once, as readCommands asks it: this
   // note takes the reader's answer for itself, and one that cannot say which repository a command
-  // names would have the patch read in the session's checkout.
+  // names would have the patch read in the session's checkout. The call's commands are read as
+  // every rule reads them (readCommands), each with its git reading, so what is plain data to the
+  // other rules (a commit's message) is plain data here too (the review of #3532).
   let envNamed: boolean | undefined
   for (const u of writes.unnamed) {
     if (u.what !== 'a patch') continue
     const g = await $.modkit.git({ words: u.words })
     if (g?.sub !== 'apply' && g?.sub !== 'am') continue
     if (envNamed === undefined) await gitNamingKnown($)
-    envNamed ??= gitEnvNamed(raw, await $.modkit.pipeline({ command: raw }))
+    envNamed ??= gitEnvNamed(raw, await readCommands($, raw))
     const root = await gitCheckout($, gitRead(g), envNamed)
     if (!root) continue
     const texts = await inputTexts({ exists: p => $.fs.exists(p), stat: (p, o) => $.fs.stat(p, o), read: p => $.fs.read(p) }, u.inputs)

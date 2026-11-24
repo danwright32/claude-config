@@ -99,6 +99,108 @@ describe('where a git command runs', () => {
     expect(gitEnvNamed('GIT_DIR=/o/.git git log', [])).toBe(true)
     expect(gitEnvNamed('git log --format=%H', readCommands('git log --format=%H'))).toBe(false)
   })
+  // The review of #3532: the test for a variable given a value matched the call's text, so a commit
+  // message quoting `GIT_DIR=` closed the merge rule on the push behind it and dropped the notes.
+  const named = (command: string) => gitEnvNamed(command, readCommands(command))
+  test('text the reader hands on as plain data names no repository: a commit message, what echo or printf prints, a pattern searched for (#3532 review)', () => {
+    for (const c of [
+      'git commit -m "read GIT_DIR=/o as git does" && git push',
+      'git commit --message "GIT_WORK_TREE=/o is read too" && git push',
+      'git commit --message="GIT_COMMON_DIR=/o" && git push',
+      'git -C /other commit -am "GIT_DIR=/o"; git -C /other push',
+      'echo "GIT_DIR=/o"; git push',
+      "printf '%s\\n' 'GIT_DIR=/o'; git push",
+      'grep -rn "GIT_DIR=" payload/mods && git push',
+      "rg -n 'GIT_WORK_TREE=' payload ; git push",
+      // A pipe behind another command of the call carries nothing the data command printed.
+      'git commit -m "GIT_DIR=/o" && git push 2>&1 | tail -5',
+      // Twice, each a word of its own.
+      'echo "GIT_DIR=/o" "GIT_DIR=/o"; git push',
+    ])
+      expect({ c, named: named(c) }).toEqual({ c, named: false })
+  })
+  test('every way of really setting one still names it, wherever in the call it stands (#3532 review)', () => {
+    for (const c of [
+      // In front of the git command, in front of another command, and through env.
+      'GIT_DIR=/o git push',
+      'GIT_DIR=/o git log; git push',
+      'GIT_DIR=/o make; git push',
+      'env GIT_DIR=/o git push',
+      // Exported or declared, with a value.
+      'export GIT_DIR=/o; git push',
+      'declare -x GIT_DIR=/o; git push',
+      'typeset -x GIT_WORK_TREE=/o; git push',
+      'readonly GIT_DIR=/o; git push',
+      // Set on a line or a command of its own, before the one that exports it or after.
+      'GIT_DIR=/o; git push',
+      'GIT_DIR=/o\ngit push',
+      'set -a; GIT_DIR=/o; git push',
+      // Inside a subshell, a function, a loop, a trap.
+      '(export GIT_DIR=/o; git push)',
+      'f() { export GIT_DIR=/o; }; f; git push',
+      'for r in a b; do export GIT_DIR=/o/$r; git push; done',
+      "trap 'export GIT_DIR=/o' EXIT; git push",
+      // Through eval, a here document, a file read into the shell.
+      'eval "export GIT_DIR=/o"; git push',
+      "eval 'GIT_DIR=/o git push'",
+      "bash <<'EOT'\nexport GIT_DIR=/o\ngit push\nEOT",
+      'cat > /tmp/e <<EOT\nexport GIT_DIR=/o\nEOT\n. /tmp/e; git push',
+      // From another variable.
+      'D=/o; export GIT_DIR=$D; git push',
+      'V="GIT_DIR=/o"; export "$V"; git push',
+      // As a word of a command that is no plain data.
+      'make GIT_DIR=/o push; git push',
+      'git -c GIT_DIR=/o push',
+      'git --namespace GIT_DIR=/o push',
+      // Spelled so the text never holds it whole: the reader's word does.
+      'export GIT_"DIR=/o"; git push',
+    ])
+      expect({ c, named: named(c) }).toEqual({ c, named: true })
+  })
+  test('plain data that could reach something setting a variable is no plain data, and where the reader cannot say, the text is believed (#3532 review)', () => {
+    for (const c of [
+      // Written to a file, sent down a pipe, or run inside a substitution.
+      'echo "GIT_DIR=/o" > /tmp/e; . /tmp/e; git push',
+      'echo "GIT_DIR=/o" >> notes.txt; git push',
+      'echo GIT_DIR=/o | xargs -I{} env {} git push',
+      'echo GIT_DIR=/o | tee /tmp/e; git push',
+      '{ echo GIT_DIR=/o; } | xargs -I{} env {} git push',
+      'export $(echo GIT_DIR=/o); git push',
+      'export `echo GIT_DIR=/o`; git push',
+      'source <(echo export GIT_DIR=/o); git push',
+      'read -r L < <(echo GIT_DIR=/o); export "$L"; git push',
+      // Piped into a shell, whose commands the reader gives in place of the pipe, or gives none.
+      'echo "GIT_DIR=/o; git push" | sh',
+      'echo GIT_DIR=/o | sh; git push',
+      "{ echo 'export GIT_DIR=/o'; echo 'git push'; } | sh",
+      // Run behind a shell or another runner, which may change what the command is run with.
+      "bash -c 'git commit -m \"GIT_DIR=/o\"; git push'",
+      'sudo echo GIT_DIR=/o; git push',
+      'echo "GIT_DIR=/o"; command git push',
+      // Anything the shell fills in, anywhere in the call: a value may carry the text to a setter.
+      'git commit -m "GIT_DIR=/o" && git push origin "$B"',
+      'git commit -m "GIT_DIR=/o"; eval "$(git log -1 --format=%B)"; git push',
+      // A command that runs text, or one whose name the call itself changes.
+      'echo "GIT_DIR=/o"; source /tmp/e; git push',
+      'echo "GIT_DIR=/o"; builtin . /tmp/e; git push',
+      'echo() { export "$1"; }; echo GIT_DIR=/o; git push',
+      'function echo { export "$1"; }; echo GIT_DIR=/o; git push',
+      'alias echo=export; echo GIT_DIR=/o; git push',
+      // The same text as plain data and as a setting.
+      'echo "GIT_DIR=/o"; export GIT_DIR=/o; git push',
+      'git commit -m "GIT_DIR=/o"; GIT_DIR=/o; git push',
+      // Text the reader hands on to no command: a comment, a here document's body.
+      'git push # GIT_DIR=/o',
+      'git commit -F - <<EOT\nnote GIT_DIR=/o\nEOT\ngit push',
+      // A message spelled so the text does not hold it as the reader's word does.
+      "git commit -m 'it'\\''s GIT_DIR=/o' && git push",
+      // Another program's words, and a commit's other values.
+      'cat "GIT_DIR=/o"; git push',
+      'git commit --author "GIT_DIR=/o" -m x; git push',
+      'git tag -m "GIT_DIR=/o" v1; git push',
+    ])
+      expect({ c, named: named(c) }).toEqual({ c, named: true })
+  })
   test('the one folder a rule reads: where git runs, or none where the repository cannot be told from a folder', () => {
     expect(gitFolder(place('git -C /other push'))).toBe('/other')
     expect(gitFolder(place('git -C /a -C b push'))).toBe('/a/b')
