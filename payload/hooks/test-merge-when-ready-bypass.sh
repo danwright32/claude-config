@@ -12,8 +12,8 @@
 #
 # The world they run in (the fake gh, the injected clock and sleep, the stub gates and review
 # checker, the checkout, the counters and the result line) is lib/merge-when-ready-harness.sh, the
-# one place both suites take it from, so nothing of it is copied here. Nothing reaches the network
-# or a real pull request (L2).
+# one place all six of the helper's suites take it from, so nothing of it is copied here. Nothing
+# reaches the network or a real pull request (L2).
 set -uo pipefail
 
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/suite-deadline.sh" || {
