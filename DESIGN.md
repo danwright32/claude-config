@@ -2828,17 +2828,54 @@ These choices were made by the session that built the fix, not by Dan, and are h
   that may fail, a record that stops holding), so the staging cannot know, and each state above is
   a different route to the same result, so guarding routes one at a time leaves the next one open
   (L247). Chosen: the state itself is judged. A staging that left commits out sets
-  `HOME_PATH_SKIPPED_SENT`, and every push of the branch in that run (`plain_push_may_go` for a
-  push of HEAD, `home_paths_at_push` inside `send_over_untested_tip`) first hands the check every
+  `HOME_PATH_SKIPPED_SENT`, and the push of the branch in that run first hands the check every
   payload file that differs between the shared branch as this clone last saw it and the commit
-  about to be put there. Commits replayed over a shared repo that still holds their files differ in
-  nothing and are not read, which is what keeps the fault fixed for a clone that is not clean. A
-  push of HEAD is made only when HEAD sits on top of that branch, since otherwise it lands only on
-  a branch that was moved back and carries what was left out; it is not tried, and the caller's way
-  on from a refused push applies. A staging that left nothing out has read every unsent file, as
-  before #3499, and the push pays nothing. The suite scans the tool for a push of the branch with
-  no such call above it, so a sixth push cannot be added without one. Still judged from the working
-  copy of each file, as the staging does, never from the commit's own blob.
+  about to be put there (`home_paths_at_push`). Commits replayed over a shared repo that still
+  holds their files differ in nothing and are not read, which is what keeps the fault fixed for a
+  clone that is not clean. A staging that left nothing out has read every unsent file, as before
+  #3499. Still judged from the working copy of each file, as the staging does, never from the
+  commit's own blob.
+- **One push of the branch, pinned to the commit it was judged against (the second review of
+  #3518).** The check at the push judged "this push onto the branch as this clone last saw it",
+  and no push told git where the branch had to be standing, so what landed was the push onto
+  wherever the branch stood by then. The review moved the shared branch back between a sync's
+  fetch and its push, with a stand in for git on PATH, and the push put back the file the branch
+  had lost, exit 0. A push or a send typed before the next fetch did the same with no race, and
+  always had. So the five places that sent the branch (a sync, a send, a typed push, the send on
+  top of a head still being tested, the publish of merged rule files) now call one function,
+  `push_shared_branch`, which makes one kind of push: one commit by its id, onto one branch, with
+  `--force-with-lease=refs/heads/<branch>:<the commit judged against>`. git refuses it when the
+  shared branch is anywhere else, forward or back, and the shared repo refuses an update whose
+  old value is not the one it holds, so nothing is left between the judging and the landing.
+  Measured before choosing it (git 2.51.1, no `+` and no `--force`): a lease that matches lets a
+  push REPLACE the branch with a commit that does not hold it, where the same push with no lease
+  is refused. A lease is therefore only given to a push that cannot need it: the function tries a
+  push only when the commit to send descends from the commit the lease names, checked on the two
+  ids the push is then made with, and otherwise does not push at all (the caller says "was not
+  tried" and names a sync). The suite holds that with a clone that has fetched a newer shared
+  head and not taken it in, which is the one state where a lease alone overwrites. Rejected:
+  comparing `git ls-remote` just before the push, which narrows the window and leaves it open,
+  and costs a second round trip on every send. What a refused push says: a typed push fetches
+  and tells apart a branch that holds commits this clone lacks, one that was moved somewhere that
+  holds none, and a refusal of git's own; a sync says the push lands only where the fetch found
+  the branch and quotes git; a send goes to its reconcile, as a refused push always did. The same
+  move back had a second way in. A staging reads what this clone holds past the commit it last
+  saw the shared branch at, so a run that fetches and then sends onto a branch moved back from
+  there would put back files no staging read. An ordinary pull does not (git replays only what
+  was never in the shared branch), but the send on top of a head still being tested builds what
+  it sends from the merge base and did, on main too. So the staging records the commit it
+  measured from (`HOME_PATH_STAGED_FROM`), and a push onto a commit that does not hold it is read
+  at the push like one whose staging left files out. The suite reads the tool's code lines for a
+  push or a send-pack of the branch written anywhere outside the one function, however git is
+  spelled in front of it, and is itself put to the spellings the scan before it passed. It cannot
+  see a push run through eval or made by another program.
+- **A hold found at the push is one hold to the watcher (the second review of #3518).** The
+  staging of a send that left files to the push passes, and a staging that passes ended the
+  record of the notice already posted, so each watcher send held at the push posted another:
+  three sends, three notices. A staging that left files to the push now ends nothing
+  (`home_path_scan_passed`); the push says whether the hold is over. That also keeps the check's
+  kept output in place between one refusal and the next, and stops a send with nothing new to
+  commit, which never reaches a push, from ending a hold that still stands.
 - **A name holding a line break is held for the true cause (#3499).** The check prints such a name
   across two lines, so reading its output a line at a time found no file and the send was held as
   a check that could not judge. The send asks the check about each such name alone and names it on

@@ -6027,6 +6027,16 @@ home_path_hold_over(){
   fi
   return 0
 }
+# A scan that found nothing to hold. For the check at the push, and for a staging that read every
+# unsent file, that is the hold over. A staging that left files to the push (HOME_PATH_SKIPPED_SENT,
+# below) has not finished judging this send, so it ends nothing: the push says whether the hold is
+# over. When it ended the record here, a hold found at the push was new to the watcher on every
+# send, each with a desktop notice of its own, three sends and three notices (the second review of
+# #3518), and the check's kept output was removed between one refusal and the next.
+home_path_scan_passed(){   # $1 = at-push for the check at the push
+  if [ "${1:-}" != at-push ] && [ "$HOME_PATH_SKIPPED_SENT" = 1 ]; then return 0; fi
+  home_path_hold_over
+}
 # WHAT THE WATCHER HAS ALREADY SAID OF THIS HOLD, and so how it is said now (claude-config#3499).
 # Sets HOME_PATH_TOLD to 1 when this same hold was said in full within the day, which makes it the
 # short line, and HOME_PATH_QUIET to 1 when a desktop notice for the hold was posted within the day,
@@ -6077,38 +6087,88 @@ home_path_refuse(){   # $1 = the refusal  $2 = 1 for no desktop notice
 # shared repo, read from the two commits themselves once this clone's side is final. A replayed
 # commit whose files the shared repo still holds changes nothing there and is not read; one that
 # puts a file back is. A run whose staging skipped nothing has already read every unsent file, as
-# before #3499, and pays nothing here.
-HOME_PATH_SKIPPED_SENT=0; HOME_PATH_PUSH_NOT_TRIED=0; SEND_REFUSED_AT_STAGING=""
+# before #3499, measured from the commit it saw the shared branch at (HOME_PATH_STAGED_FROM), and
+# pays one question here: does the commit the push lands on still hold that one. It does unless the
+# shared branch was moved back or rewritten since, and then the push would also put back whatever
+# the branch has lost, which no staging read, so that push is read too (the second review of #3518:
+# a send on top of a head still being tested builds what it sends from the merge base, and from a
+# clone that had not seen the move it carried the lost files up with exit 0, here and on main).
+HOME_PATH_SKIPPED_SENT=0; HOME_PATH_STAGED_FROM=""; SEND_REFUSED_AT_STAGING=""
 home_paths_at_push(){   # $1 = the commit the shared branch stands at  $2 = the commit a push puts there
-  [ "$HOME_PATH_SKIPPED_SENT" = 1 ] || return 0
+  if [ "$HOME_PATH_SKIPPED_SENT" != 1 ] && [ -n "$HOME_PATH_STAGED_FROM" ] \
+     && git -C "$SYNC_REPO" merge-base --is-ancestor "$HOME_PATH_STAGED_FROM" "$1" 2>/dev/null; then
+    return 0
+  fi
   # The record of refused sends as it stood before this send's staging, which is what a refusal
   # here counts on from: the secret scan passed in that staging and cleared the file since.
   local SEND_REFUSED_PRIOR="${SEND_REFUSED_AT_STAGING:-}"
   scan_home_paths at-push "$1" "$2"
   [ -z "$SEND_REFUSED" ]
 }
-# A push of HEAD onto the branch it tracks. It adds to the shared repo exactly what differs between
-# the two only when HEAD sits on top of that branch as this clone last saw it. When it does not, git
-# refuses the push unless the shared branch has been moved back, and then what lands is whatever
-# this clone holds past the point it was moved back to, the skipped files among them: so the push
-# is not tried, HOME_PATH_PUSH_NOT_TRIED says so, and the caller's own way on from a refused push
-# (a sync, which fetches first) is the way on from this.
-plain_push_may_go(){   # $1 = the shared branch as this clone last saw it -> 0 = the push may be made
-  local up=""
-  HOME_PATH_PUSH_NOT_TRIED=0
-  [ "$HOME_PATH_SKIPPED_SENT" = 1 ] || return 0
-  up="$(git -C "$SYNC_REPO" rev-parse --verify -q "$1^{commit}" 2>/dev/null)" || up=""
-  if [ -z "$up" ] || ! git -C "$SYNC_REPO" merge-base --is-ancestor "$up" HEAD 2>/dev/null; then
-    HOME_PATH_PUSH_NOT_TRIED=1
+# THE ONE PUSH OF THE BRANCH, AND WHAT IT IS PINNED TO (the second review of #3518).
+# Five places send this clone's commits to the shared branch: a sync, a send, a push typed by hand,
+# the send on top of a head still being tested, and the publish of merged rule files. Each used to
+# call git itself, with the check above written in front of it, and none told git which commit the
+# shared branch had to be standing at. So what was judged was "this push onto the branch as this
+# clone last saw it", and what landed was the push onto wherever the branch stood by then. Moved
+# back in between, by a forced push from anywhere, the branch took the push as a plain addition,
+# with every file it had lost: in the seconds between a sync's fetch and its push (measured with a
+# stand in for git that moves the branch under the push), and with no race at all for a push or a
+# send typed before the next fetch, which is as old as the tool.
+#
+# So every push of the branch is made here, and it is made in one shape: one commit, by its id,
+# onto one branch, with a lease naming the commit that branch must still stand at, which is the
+# commit the files were judged against. git asks the shared repo where the branch stands and
+# refuses the push when that is anywhere else ("stale info"), forward or back, and the shared
+# repo itself refuses an update whose old value is not the one it holds. Nothing is left between
+# the judging and the landing: the two are tied to the same commit.
+#
+# A LEASE IS A FORCE WHEN THE BRANCH IS WHERE IT NAMES. Measured on git 2.51.1, with no + and no
+# --force: a push naming the commit the branch stands at REPLACES the branch with a commit that
+# does not hold it, where the same push with no lease is refused. So the lease is only ever given
+# to a push that could not need it: the commit to send must descend from the commit the lease
+# names, checked here, on the two ids the push is then made with. A clone that is not on top of
+# the branch as it last saw it does not push at all (PUSH_REFUSED says not-on-top), and the
+# caller's way on is the one a refused push always had, a sync, which fetches first. The branch
+# not yet being there at all is a lease too: an empty one, which git reads as "must not exist".
+#
+# What the caller is told: 0 when the push landed, and otherwise PUSH_REFUSED says why
+# (not-on-top: not tried; held: the home path check refused what it would change there, in its
+# own words, handed back or ending the run as the caller arranged; git: git refused, and
+# PUSH_SAID holds what it said, which for a branch that moved is "stale info").
+# tests/test-claude-sync.sh fails on a push or a send-pack of the branch written anywhere else.
+PUSH_REFUSED=""; PUSH_SAID=""
+PUSH_NOT_TRIED_WORDS="this clone's commits do not sit on top of the shared repo as this clone last saw it, so a push could not simply add to it and was not tried"
+shared_branch_seen(){   # $1 = the branch -> the commit this clone last saw it at in the shared repo, or nothing
+  git -C "$SYNC_REPO" rev-parse --verify -q "refs/remotes/origin/$1^{commit}" 2>/dev/null || true
+}
+push_shared_branch(){   # $1 = the commit to put on the shared branch  $2 = the branch  $3 = the commit this clone last saw that branch at, or nothing when it has seen none  $4 = upstream, to leave the clone's branch tracking it as push -u does
+  local new="" at="" branch="${2:-}" rc=0
+  PUSH_REFUSED=""; PUSH_SAID=""
+  new="$(git -C "$SYNC_REPO" rev-parse --verify -q "${1:-HEAD}^{commit}" 2>/dev/null)" || new=""
+  if [ -z "$new" ] || [ -z "$branch" ]; then
+    PUSH_REFUSED=git; PUSH_SAID="there is no commit to push, or no branch to push it to"
     return 1
   fi
-  home_paths_at_push "$up" HEAD
+  if [ -n "${3:-}" ]; then
+    at="$(git -C "$SYNC_REPO" rev-parse --verify -q "$3^{commit}" 2>/dev/null)" || at=""
+    if [ -z "$at" ] || ! git -C "$SYNC_REPO" merge-base --is-ancestor "$at" "$new" 2>/dev/null; then
+      PUSH_REFUSED=not-on-top
+      return 1
+    fi
+    if ! home_paths_at_push "$at" "$new"; then PUSH_REFUSED=held; return 1; fi
+  fi
+  PUSH_SAID="$(git -C "$SYNC_REPO" push -q --force-with-lease="refs/heads/$branch:$at" origin "$new:refs/heads/$branch" 2>&1)" || rc=$?
+  if [ "$rc" -ne 0 ]; then PUSH_REFUSED=git; return 1; fi
+  if [ "${4:-}" = upstream ]; then
+    git -C "$SYNC_REPO" branch -q --set-upstream-to="origin/$branch" "$branch" >/dev/null 2>&1 || true
+  fi
+  return 0
 }
-PUSH_NOT_TRIED_WORDS="this clone's commits do not sit on top of the shared repo as this clone last saw it, so a push could not simply add to it and was not tried"
 scan_home_paths(){   # no argument = what a staging is about to commit; at-push $2 $3 = what a push of $3 onto $2 changes there
+  [ "${1:-}" = at-push ] || { HOME_PATH_SKIPPED_SENT=0; HOME_PATH_STAGED_FROM=""; }
   [ -d "$PAYLOAD" ] || return 0
   local lib list="" raw="" errf="" strip="payload/" up="" unsent="" mark="" rel n=0 outf="" rc=0 unjudged=""
-  [ "${1:-}" = at-push ] || HOME_PATH_SKIPPED_SENT=0
   local nl=$'\n' broken=() brokenlist="" brokenout="" brokentext="" brokenhits="" where_out rest
   local g=(git -C "$SYNC_REPO" -c core.quotePath=false)
   lib="$(home_path_check_lib)"
@@ -6134,7 +6194,9 @@ scan_home_paths(){   # no argument = what a staging is about to commit; at-push 
           # them failing the check held sends that had nothing to do with it. The record of that
           # send says where this clone's unsent work starts, as it does for unsent_commit_range.
           # Every commit after that point, and everything uncommitted, is read exactly as before.
-          # What is left out here is owed at the push: HOME_PATH_SKIPPED_SENT, above.
+          # What is left out here is owed at the push: HOME_PATH_SKIPPED_SENT, above. So is what
+          # a shared branch moved back from $up would take back: HOME_PATH_STAGED_FROM.
+          HOME_PATH_STAGED_FROM="$up"
           unsent="$up...HEAD"
           if mark="$(sent_over_untested)"; then unsent="${mark%% *}..HEAD"; HOME_PATH_SKIPPED_SENT=1; fi
           "${g[@]}" diff -z --name-only --diff-filter=d "$unsent" -- payload >> "$raw" 2> "$errf" \
@@ -6175,7 +6237,7 @@ scan_home_paths(){   # no argument = what a staging is about to commit; at-push 
   if [ -z "$unjudged" ]; then
     if [ "$n" -eq 0 ]; then
       rm -f "$list"
-      home_path_hold_over
+      home_path_scan_passed "${1:-}"
       return 0
     fi
     # Into a file, never a variable: the check prints each line it found whole, and the scratch
@@ -6186,7 +6248,7 @@ scan_home_paths(){   # no argument = what a staging is about to commit; at-push 
     rm -f "$list"
     if [ "$rc" -eq 0 ]; then
       rm -f "$outf"
-      home_path_hold_over
+      home_path_scan_passed "${1:-}"
       return 0
     fi
   fi
@@ -9004,10 +9066,12 @@ publish_merged_rule_files(){
         # shared head and would be refused: the merge goes up on top of it the way this Mac's other
         # work did this run (claude-config#2230). It records its own outcome.
         send_over_untested_tip "$branch"
-      # A staging that skipped what a send's record names owes the check at the push (home_paths_at_push).
-      elif plain_push_may_go "origin/$branch" && git -C "$SYNC_REPO" push -u origin "$branch" -q 2>/dev/null && [ "$ahead" = 1 ]; then
-        reconcile_outcome published "$(repo_head)"
-      elif [ "$HOME_PATH_PUSH_NOT_TRIED" = 1 ]; then
+      # Through the one push of the branch, which judges what it would change in the shared repo and
+      # lands only where this clone last saw the branch (push_shared_branch). A push git refused is
+      # said below, once the commit has been read back.
+      elif push_shared_branch HEAD "$branch" "$(shared_branch_seen "$branch")" upstream; then
+        if [ "$ahead" = 1 ]; then reconcile_outcome published "$(repo_head)"; fi
+      elif [ "$PUSH_REFUSED" = not-on-top ]; then
         echo "claude-sync: the merged rule files were committed here but NOT pushed, because $PUSH_NOT_TRIED_WORDS. They go out on the next sync." >&2
       fi
     fi
@@ -9900,28 +9964,43 @@ do_push(){
       # applied, and the next push would mirror this Mac's older copy over the other Mac's newer
       # one (L5). payload_fully_applied is exactly that question, asked after the push so the
       # commit just made is included in it.
-      # A staging that skipped what a send's record names owes the check at the push
-      # (home_paths_at_push), and this command never fetches, so a clone that is not on top of the
-      # shared repo it last saw says so rather than trying a push whose landing it cannot judge.
-      if ! plain_push_may_go '@{upstream}'; then
-        echo "claude-sync: NOT published, because $PUSH_NOT_TRIED_WORDS. This Mac's changes are committed in $SYNC_REPO and nothing was lost. Run 'claude-sync sync', which takes the shared repo's commits in and sends this Mac's on top of them." >&2
+      # Through the one push of the branch (push_shared_branch): it judges what the push would
+      # change in the shared repo where the staging left that to it, and it lands only on the commit
+      # this clone last saw the branch at. This command never fetches, so a clone that is not on top
+      # of that commit says so rather than trying a push whose landing it cannot judge.
+      local _pb="" _pseen="" _pnow="" _pbehind=0
+      if ! _pb="$(sync_branch)"; then
+        echo "claude-sync: NOT published, because this clone has no branch checked out (HEAD is detached), so there is no ref to push at. This Mac's changes are committed in $SYNC_REPO and nothing was lost. Put $SYNC_REPO back on a branch, then run this again." >&2
         return 1
       fi
-      if git -C "$SYNC_REPO" push; then
+      _pseen="$(shared_branch_seen "$_pb")"
+      if push_shared_branch HEAD "$_pb" "$_pseen"; then
         echo "Pushed."
         payload_fully_applied && repo_head > "$LAST_APPLIED_FILE" 2>/dev/null || true
+      elif [ "$PUSH_REFUSED" = not-on-top ]; then
+        echo "claude-sync: NOT published, because $PUSH_NOT_TRIED_WORDS. This Mac's changes are committed in $SYNC_REPO and nothing was lost. Run 'claude-sync sync', which takes the shared repo's commits in and sends this Mac's on top of them." >&2
+        return 1
       else
         # A REFUSED PUSH IS SAID, never left as git's own lines and a clean exit (claude-config#855).
         # Until #855 a clone the shared repo had moved past usually had the moved files held back
         # above, by a misreading of this Mac's own commits, and that message named the way out by
         # accident. Now that only the shared repo's commits count, the refusal is where it shows.
-        local _pb _pbehind=0
+        # Three causes, told apart by where the shared branch stands once it has been fetched
+        # (L11): it holds commits this clone lacks, it was moved somewhere that holds none (back,
+        # most often), or it is where this clone thought and git refused for a reason of its own.
+        [ -z "$PUSH_SAID" ] || printf '%s\n' "$PUSH_SAID" >&2
         git -C "$SYNC_REPO" fetch -q origin 2>/dev/null || true
-        if _pb="$(sync_branch)" && git -C "$SYNC_REPO" rev-parse --verify -q "origin/$_pb" >/dev/null 2>&1; then
+        _pnow="$(shared_branch_seen "$_pb")"
+        if [ -n "$_pnow" ]; then
           _pbehind="$(git -C "$SYNC_REPO" rev-list --count "HEAD..origin/$_pb" 2>/dev/null || echo 0)"
         fi
         if [ "${_pbehind:-0}" -gt 0 ] 2>/dev/null; then
           echo "claude-sync: NOT published, because the shared repo holds $_pbehind commit(s) this clone has not seen, so git refused the push. This Mac's changes are committed in $SYNC_REPO and nothing was lost. Run 'claude-sync sync', which takes those commits in and sends this Mac's on top of them." >&2
+        elif [ "$_pnow" != "$_pseen" ]; then
+          local _pwhere="it stood at ${_pseen:0:8} then and stands at ${_pnow:0:8} now"
+          [ -n "$_pseen" ] || _pwhere="it was not there then and stands at ${_pnow:0:8} now"
+          [ -n "$_pnow" ] || _pwhere="it stood at ${_pseen:0:8} then and is not there now"
+          echo "claude-sync: NOT published, because the shared repo's $_pb is not where this clone last saw it ($_pwhere), and a push lands only on the commit its files were judged against. This Mac's changes are committed in $SYNC_REPO and nothing was lost. Run 'claude-sync sync', which reads the branch where it stands now and sends this Mac's commits on top of it." >&2
         else
           echo "claude-sync: NOT published, because git refused the push (its reason is above). This Mac's changes are committed in $SYNC_REPO and nothing was lost; the next send tries again." >&2
         fi
@@ -11896,23 +11975,26 @@ send_over_untested_tip(){   # $1 = branch. Always 0: what happened is said, and 
     reconcile_outcome merge-refused
     return 0 ;;
   esac
-  # A staging that skipped what a send's record names owes the check at the push (home_paths_at_push):
-  # the record it read may have stopped holding once the fetch came in, and this commit was then
-  # built from the merge base, with every file the staging skipped in it. Handed back rather than
-  # ending the run, as a refusal in a sync's staging is, so whatever the caller does next still runs.
+  # Through the one push of the branch (push_shared_branch). A staging that skipped what a send's
+  # record names owes the check at the push: the record it read may have stopped holding once the
+  # fetch came in, and this commit was then built from the merge base, with every file the staging
+  # skipped in it. So does one whose shared branch was moved back since it was staged. The refusal
+  # is handed back rather than ending the run, as a refusal in a sync's staging is, so whatever
+  # the caller does next still runs.
+  # A plain fast forward of the shared branch, onto the head this commit was built on. If the
+  # branch moved since the fetch, forward or back, git refuses and nothing is lost: the next send
+  # builds again on whatever is there then.
   local deferred_was="${SCAN_REFUSAL_DEFERRED:-0}"
   SCAN_REFUSAL_DEFERRED=1
-  home_paths_at_push "$up" "$p" || true
+  push_shared_branch "$p" "$branch" "$up" || true
   SCAN_REFUSAL_DEFERRED="$deferred_was"
   if [ -n "${SEND_REFUSED:-}" ]; then
     say_send_refused
     reconcile_outcome scan-refused
     return 0
   fi
-  # A plain fast forward of the shared branch. If it moved since the fetch, git refuses and nothing
-  # is lost: the next send builds again on whatever is there then.
-  if ! err="$(git -C "$SYNC_REPO" push -q origin "$p:refs/heads/$branch" 2>&1)"; then
-    echo "claude-sync: this Mac's changes were not sent, because the shared repo moved while they were being sent and git refused the push. The next send tries again. git said: ${err:-<no output>}" >&2
+  if [ -n "$PUSH_REFUSED" ]; then
+    echo "claude-sync: this Mac's changes were not sent, because the shared repo moved while they were being sent and git refused the push. The next send tries again. git said: ${PUSH_SAID:-<no output>}" >&2
     reconcile_outcome push-refused
     return 0
   fi
@@ -12193,24 +12275,31 @@ do_sync(){
            && git -C "$SYNC_REPO" merge-base --is-ancestor HEAD "origin/$branch" 2>/dev/null; then
           already_there=1
         fi
-        # A staging that skipped what a send's record names owes the check at the push
-        # (home_paths_at_push), now that the pull has decided which of this clone's commits were
-        # replayed onto the shared repo. Handed back, like a refusal in the staging, so the apply
-        # below still runs and the run still fails in the check's own words.
-        local push_may_go=1
+        # Through the one push of the branch (push_shared_branch). A staging that skipped what a
+        # send's record names owes the check at the push, now that the pull has decided which of
+        # this clone's commits were replayed onto the shared repo. Handed back, like a refusal in
+        # the staging, so the apply below still runs and the run still fails in the check's own
+        # words. The push lands only while the shared branch still stands where the fetch above
+        # found it: one that moved in the seconds since, forward or back, is not pushed onto, and
+        # that is said, where git's own lines used to be all a refused push here left behind.
+        local push_at=""
+        push_at="$(shared_branch_seen "$branch")"
         SCAN_REFUSAL_DEFERRED=1
-        plain_push_may_go "origin/$branch" || push_may_go=0
+        push_shared_branch HEAD "$branch" "$push_at" upstream || true
         SCAN_REFUSAL_DEFERRED=0
         if [ -n "$SEND_REFUSED" ]; then
           say_send_refused
           reconcile_outcome scan-refused
-        elif [ "$push_may_go" -ne 1 ]; then
+        elif [ "$PUSH_REFUSED" = not-on-top ]; then
           echo "claude-sync: this Mac's changes were not sent, because $PUSH_NOT_TRIED_WORDS. They are committed in $SYNC_REPO and the next sync tries again." >&2
           reconcile_outcome push-refused
-        elif git -C "$SYNC_REPO" push -u origin "$branch" -q; then
-          if [ "$already_there" = 1 ]; then reconcile_outcome nothing; else reconcile_outcome published "$(repo_head)"; fi
-        else
+        elif [ -n "$PUSH_REFUSED" ]; then
+          echo "claude-sync: this Mac's changes were not sent, because git refused the push. It lands only while the shared repo's $branch still stands at the commit this run fetched and judged its files against (${push_at:0:8}), so a branch that moved since, forward or back, is not pushed onto. They are committed in $SYNC_REPO and nothing was lost: the next sync reads the branch where it stands then and sends them on top of it. git said: ${PUSH_SAID:-<no output>}" >&2
           reconcile_outcome push-refused
+        elif [ "$already_there" = 1 ]; then
+          reconcile_outcome nothing
+        else
+          reconcile_outcome published "$(repo_head)"
         fi
       else
         reconcile_outcome nothing
@@ -13639,10 +13728,14 @@ do_send(){
   # reads this Mac's own send as "behind the other Mac", dropping every later send
   # until something runs an apply. Only on a clean push: a failed push falls through
   # to do_sync, whose rebase rewrites this SHA and whose apply records the real one.
-  # A staging that skipped what a send's record names owes the check at the push
-  # (home_paths_at_push). A push that may not be tried goes the way a refused one does, to the
-  # reconcile below, which fetches and judges what it then sends.
-  if plain_push_may_go '@{upstream}' && git -C "$SYNC_REPO" push -q 2>/dev/null; then
+  # Through the one push of the branch (push_shared_branch), which judges what the push would
+  # change in the shared repo where the staging left that to it, and lands only on the commit this
+  # clone last saw the branch at. A push that is not tried, or that git refuses because the branch
+  # is somewhere else by now, goes the way a refused one always did, to the reconcile below, which
+  # fetches and judges what it then sends.
+  local send_branch=""
+  send_branch="$(sync_branch)" || send_branch=""
+  if [ -n "$send_branch" ] && push_shared_branch HEAD "$send_branch" "$(shared_branch_seen "$send_branch")"; then
     repo_head > "$LAST_APPLIED_FILE" 2>/dev/null || true
     # A push that succeeded is proof the repo was reachable, which is exactly what the
     # outage clock measures. Without this only the two-way sync stamps it, so a Mac edited

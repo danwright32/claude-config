@@ -194,7 +194,12 @@ one short line pointing at status with no desktop notice, until its files change
 day passes; every refusal is still counted. A hold whose files changed is said in full again, but
 it is one hold and posts one desktop notice, then another only a day after the last, whether the
 send ends there or reaches the hold through a sync (#3499: a session adding a scratch file a tick
-used to get a notice a tick). `status` and `stuck` point at the kept log only while it exists.
+used to get a notice a tick), and whether the hold is found in the staging or at the push.
+`status` and `stuck` point at the kept log only while it exists. Every push of the config branch
+lands only on the commit this clone last saw the shared branch at, which is the commit its files
+were judged against: a branch that moved since, forward or back, refuses the push, the run says so,
+and `claude-sync sync` is the way on. A clone that is not on top of that commit does not push at
+all and says the push was not tried.
 The work names scan, the secret scan's list of files outside the payload and the list of staged
 copies a sync or a pull sets aside read file names NUL separated too (#3499), so a name git would
 quote is scanned and set aside like any other. One kind is left in the clone and said: a staged

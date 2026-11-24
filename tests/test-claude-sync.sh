@@ -13975,7 +13975,7 @@ _hx_sent_over(){
 }
 # $1.. = what the other Mac does in its own clone before it commits and pushes. Sets HX_OTHER.
 _hx_other_mac(){
-  git clone -q "$HXB" "$HXO" 2>/dev/null
+  rm -rf "$HXO"; git clone -q "$HXB" "$HXO" 2>/dev/null
   ( cd "$HXO" && "$@" )
   git -C "$HXO" add -A
   _hx_git "$HXO" commit -q -m 'the other Mac'
@@ -14012,6 +14012,21 @@ dbg "sync replaying a sent commit the shared repo still holds, clone not clean: 
 hx_keep_base="$(git -C "$HXB" show main:payload/hooks/base.sh 2>/dev/null || true)"
 check "#3499 replayed over a shared repo that still holds them, the files already sent hold nothing: the new edit goes up" \
   "[ '$rc_hxk' -eq 0 ] && out_lacks \"\$out_hxk\" 'home path check' && [ \"\$hx_keep_base\" = 'echo base, edited after the send' ]"
+# THE PIN ON A PUSH IS NEVER A FORCE (the second review of #3518). Every push of the branch names the
+# commit the shared branch must still stand at, and git lets a push that names one REPLACE the branch
+# with a commit that does not hold it (measured, git 2.51.1). So the tool tries a push only from on
+# top of that commit. Here the other Mac has pushed again, this clone has fetched that and not taken
+# it in, and a push is typed: the shared branch stands exactly where the pin says, which is the one
+# state where a pin alone would overwrite the other Mac's commit.
+_hx_other_mac sh -c 'printf "more\n" > payload/agents/more.md'
+git -C "$HXC" fetch -q origin
+printf 'echo base, edited while behind\n' > "$HXH/hooks/base.sh"
+if out_hxo="$(_hx bash "$SCRIPT" push)"; then rc_hxo=0; else rc_hxo=$?; fi
+dbg "push from a clone that fetched a newer shared head and does not sit on top of it: rc=$rc_hxo $out_hxo"
+check "#3499 control: the clone knows the other Mac's newer commit, made one of its own, and does not sit on top of it" \
+  "[ \"\$(git -C '$HXC' rev-parse origin/main)\" = '$HX_OTHER' ] && ! git -C '$HXC' merge-base --is-ancestor '$HX_OTHER' HEAD && [ \"\$(git -C '$HXC' show HEAD:payload/hooks/base.sh 2>/dev/null)\" = 'echo base, edited while behind' ]"
+check "#3499 a push from a clone not on top of the shared branch never replaces it: the other Mac's commit stands, and the push fails" \
+  "[ '$rc_hxo' -ne 0 ] && [ \"\$(git -C '$HXB' rev-parse main)\" = '$HX_OTHER' ] && _hx_shared_has more.md"
 # 3. On top of a head still being tested. The shared branch was moved back to before the send and
 # another commit pushed, which this clone has not fetched, so the record holds while the staging
 # reads it and has stopped holding by the time the commit to send is built, from the merge base.
@@ -14056,7 +14071,11 @@ _hx_other_mac git rm -q payload/agents/gone.md
 git -C "$HXC" fetch -q origin
 _hx_git "$HXC" merge -q --no-edit origin/main >/dev/null 2>&1 || true
 printf 'echo base, edited after the merge\n' > "$HXH/hooks/base.sh"
-if out_hxn="$(_hx bash "$SCRIPT" send)"; then rc_hxn=0; else rc_hxn=$?; fi
+HXREC="$WORK/hx-notice.rec"; HXNOTIFIER="$WORK/hx-notifier"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\n' "$HXREC" > "$HXNOTIFIER"; chmod +x "$HXNOTIFIER"
+: > "$HXREC"
+if out_hxn="$(_hx env SYNC_IN_WATCH=1 SYNC_NO_NOTIFY=0 SYNC_NOTIFIER="$HXNOTIFIER" bash "$SCRIPT" send)"; then rc_hxn=0; else rc_hxn=$?; fi
+hx_notices1="$(grep -c . "$HXREC" 2>/dev/null || true)"
 dbg "send of a merge made by hand that puts a sent file back: rc=$rc_hxn $out_hxn"
 check "#3499 control: that send had an edit of this Mac's to commit, and committed it" \
   "[ \"\$(git -C '$HXC' show HEAD:payload/hooks/base.sh 2>/dev/null)\" = 'echo base, edited after the merge' ]"
@@ -14064,6 +14083,24 @@ check "#3499 nor by a send of a merge made by hand that puts the file back" \
   "! _hx_shared_has gone.md && [ \"\$(git -C '$HXB' rev-parse main)\" = '$HX_OTHER' ]"
 check "#3499 and that send of the merge fails, held by the home path check, naming the file and the line" \
   "[ '$rc_hxn' -ne 0 ] && line_has \"\$out_hxn\" 'home path check' 'agents/gone\.md:1'"
+# A HOLD FOUND AT THE PUSH IS ONE HOLD TO THE WATCHER TOO (the second review of #3518). The staging
+# of each of these sends passes, because it skipped the file as already sent, and a staging that
+# passes used to end the record of the notice already posted: so every send the watcher made posted
+# another, three sends and three notices. The rule is the one a hold found in the staging keeps: one
+# desktop notice, and another only a day after the last. Counted off what the notifier was handed.
+printf 'echo base, edited again after the merge\n' > "$HXH/hooks/base.sh"
+if out_hxn2="$(_hx env SYNC_IN_WATCH=1 SYNC_NO_NOTIFY=0 SYNC_NOTIFIER="$HXNOTIFIER" bash "$SCRIPT" send)"; then rc_hxn2=0; else rc_hxn2=$?; fi
+printf 'echo base, edited a third time after the merge\n' > "$HXH/hooks/base.sh"
+if out_hxn3="$(_hx env SYNC_IN_WATCH=1 SYNC_NO_NOTIFY=0 SYNC_NOTIFIER="$HXNOTIFIER" bash "$SCRIPT" send)"; then rc_hxn3=0; else rc_hxn3=$?; fi
+hx_notices3="$(grep -c . "$HXREC" 2>/dev/null || true)"
+dbg "the watcher's second send held at the push: rc=$rc_hxn2 $out_hxn2"
+dbg "the watcher's third send held at the push: rc=$rc_hxn3 $out_hxn3"
+dbg "desktop notices after one such send: $hx_notices1, after three: $hx_notices3: $(cat "$HXREC" 2>/dev/null)"
+check "#3499 control: the watcher's first send held at the push posts a desktop notice" "[ '$hx_notices1' -eq 1 ]"
+check "#3499 control: its next two sends are held the same way, and nothing reaches the shared repo" \
+  "[ '$rc_hxn2' -ne 0 ] && [ '$rc_hxn3' -ne 0 ] && ! _hx_shared_has gone.md && [ \"\$(git -C '$HXB' rev-parse main)\" = '$HX_OTHER' ]"
+check "#3499 three watcher sends held at the push by one hold post one desktop notice between them" \
+  "[ '$hx_notices3' -eq 1 ]"
 # 5. The shared branch moved back to before the send, and a push typed with no fetch. The clone does
 # not sit on the shared repo as it last saw it, so the push could only land on a branch that moved
 # back, and what it would carry there is exactly what the hold skipped: it is not tried.
@@ -14075,6 +14112,99 @@ check "#3499 nor by a push onto a shared branch that was moved back to before th
   "! _hx_shared_has gone.md && [ \"\$(git -C '$HXB' rev-parse main)\" = '$HX_T' ]"
 check "#3499 and that push says it was not tried, and fails" \
   "[ '$rc_hxw' -ne 0 ] && line_has \"\$out_hxw\" 'NOT published' 'was not tried'"
+# 6. THE SHARED BRANCH MOVES BETWEEN THE JUDGING AND THE PUSH (the second review of #3518). What a
+# push would change in the shared repo is judged against the commit this clone last saw the branch
+# at, and no push said so to git: a branch moved back after the judging took the push as a plain
+# addition, with every file it had lost since. Three ways in, one fixture, the branch put back to
+# where it was moved before each so that each is judged alone.
+# The first is the review's: the state of fixture 2, where the shared repo still holds the file, and
+# another writer moving the branch back to before the send between this sync's fetch and its push.
+# The other writer is a stand in for git, first on PATH for that one run, which moves the fixture's
+# shared branch just before the first push or send-pack that is not of this Mac's state ref.
+HXRACE="$WORK/hx-race-bin"; mkdir -p "$HXRACE"; hx_real_git="$(command -v git)"
+cat > "$HXRACE/git" <<HX_RACE_GIT
+#!/usr/bin/env bash
+if [ -n "\${RACE_BARE:-}" ] && [ ! -e "\${RACE_MARK:-/nonexistent/mark}" ]; then
+  hit=0
+  for a in "\$@"; do
+    case "\$a" in push|send-pack) hit=1 ;; *claude-sync-state*) hit=0; break ;; esac
+  done
+  if [ "\$hit" = 1 ]; then
+    "$hx_real_git" -C "\$RACE_BARE" update-ref refs/heads/main "\$RACE_TO"
+    printf '%s\n' "\$*" > "\$RACE_MARK"
+  fi
+fi
+exec "$hx_real_git" "\$@"
+HX_RACE_GIT
+chmod +x "$HXRACE/git"
+_hx_sent_over race
+_hx_other_mac sh -c 'printf "theirs\n" > payload/agents/theirs.md'
+printf 'an edit to the tool, not committed\n' >> "$HXC/toolnote.txt"
+printf 'echo base, edited after the send\n' > "$HXH/hooks/base.sh"
+if out_hxa="$(_hx env RACE_BARE="$HXB" RACE_TO="$HX_T" RACE_MARK="$WORK/hx-race-mark" PATH="$HXRACE:$PATH" bash "$SCRIPT" sync)"; then rc_hxa=0; else rc_hxa=$?; fi
+dbg "sync whose push meets a shared branch moved back since its fetch: rc=$rc_hxa $out_hxa; the push it was moved under: $(cat "$WORK/hx-race-mark" 2>/dev/null)"
+check "#3499 control: the branch was moved back under that sync's own push, after it had taken the other Mac's commit in" \
+  "[ -s '$WORK/hx-race-mark' ] && git -C '$HXC' merge-base --is-ancestor '$HX_OTHER' HEAD"
+check "#3499 a shared branch moved back between a sync's fetch and its push is not pushed onto: the file it lost stays lost" \
+  "! _hx_shared_has gone.md && [ \"\$(git -C '$HXB' rev-parse main)\" = '$HX_T' ]"
+# The second needs no race: a push typed with no fetch since the branch moved back. This one put the
+# file back on main too, before this pull request as after it.
+git -C "$HXB" update-ref refs/heads/main "$HX_T"
+hx_race_seen="$(git -C "$HXC" rev-parse origin/main)"
+printf 'echo base, edited once more\n' > "$HXH/hooks/base.sh"
+if out_hxb="$(_hx bash "$SCRIPT" push)"; then rc_hxb=0; else rc_hxb=$?; fi
+dbg "push with no fetch since the shared branch moved back (this clone last saw it at $hx_race_seen): rc=$rc_hxb $out_hxb"
+check "#3499 control: this clone last saw the shared branch somewhere other than where it had been moved back to" \
+  "[ -n '$hx_race_seen' ] && [ '$hx_race_seen' != '$HX_T' ]"
+check "#3499 nor by a push typed with no fetch since the branch moved back, which fails" \
+  "[ '$rc_hxb' -ne 0 ] && ! _hx_shared_has gone.md && [ \"\$(git -C '$HXB' rev-parse main)\" = '$HX_T' ]"
+# The third is a run that does fetch, and so pushes onto the branch where it now stands. Its staging
+# ran before the fetch and read only what this clone holds past the commit it had last seen, so the
+# files the branch lost were read by nothing. An ordinary pull leaves them out by itself (git
+# replays only what was never in the shared branch), but the send on top of a head still being
+# tested builds what it sends from the merge base and carried all of them up. Here the other Mac
+# has pushed onto the moved branch, that head is still being tested, and the clone's record of the
+# shared branch is put back to where it stood before the push above fetched.
+git -C "$HXB" update-ref refs/heads/main "$HX_T"
+_hx_other_mac sh -c 'mkdir -p payload/agents && printf "later\n" > payload/agents/later.md'
+git -C "$HXC" update-ref refs/remotes/origin/main "$hx_race_seen"
+printf 'echo base, edited a third time\n' > "$HXH/hooks/base.sh"
+if out_hxc="$(_hx env SYNC_GH="$HXBIN/gh" SYNC_REPO_SLUG=acme/widgets SYNC_IN_WATCH=1 SYNC_RECONCILE_RETRY=0 bash "$SCRIPT" sync)"; then rc_hxc=0; else rc_hxc=$?; fi
+dbg "watcher sync from a clone that had not seen the move back, head still being tested: rc=$rc_hxc $out_hxc"
+check "#3499 nor by a run that fetches and sends on top of where the branch now stands: what its staging did not read is read at the push" \
+  "! _hx_shared_has gone.md && [ \"\$(git -C '$HXB' rev-parse main)\" = '$HX_OTHER' ]"
+check "#3499 and that run fails, held by the home path check, naming the file and the line" \
+  "[ '$rc_hxc' -ne 0 ] && line_has \"\$out_hxc\" 'home path check' 'agents/gone\.md:1'"
+# 7. THE PUSH OF MERGED RULE FILES (the second review of #3518). A sync whose apply merged a rule
+# file commits the merge and pushes it, and with that push's check taken out every check above still
+# passed. Here that push is the only one the run makes (the staging holds this Mac's entry back, the
+# pull has nothing to take, the apply merges the two), and the stand in moves the shared branch back
+# under it to where the first sync left it.
+HXB="$WORK/hx-publish-bare.git"; HXC="$WORK/hx-publish-clone"; HXH="$WORK/hx-publish-home"; HXO="$WORK/hx-publish-other"
+git init -q --bare -b main "$HXB"; git clone -q "$HXB" "$HXC" 2>/dev/null
+mkdir -p "$HXH"; echo '{"hooks":{}}' > "$HXH/settings.json"
+printf '# rules\n@LESSONS.md\n@LESSONS-INDEX.md\n' > "$HXH/CLAUDE.md"
+printf '# Lessons\n\n## Proof over green\n\n- **L1. one.** body one\n\n## Data safety\n\n- **L2. two.** body two\n' > "$HXH/LESSONS.md"
+_hx bash "$SCRIPT" sync >/dev/null || true
+hx_pub_first="$(git -C "$HXB" rev-parse -q --verify main 2>/dev/null || true)"
+_hx_other_mac sh -c 'printf -- "- **L4. four.** written only on the other Mac\n" >> payload/LESSONS.md'
+git -C "$HXC" pull -q --rebase origin main 2>/dev/null || true
+python3 - "$HXH/LESSONS.md" <<'HX_PUB_PY'
+import sys
+p = sys.argv[1]
+t = open(p).read()
+old = "- **L1. one.** body one\n"
+assert t.count(old) == 1
+open(p, "w").write(t.replace(old, old + "- **L5. five.** written only on this Mac\n"))
+HX_PUB_PY
+rm -f "$WORK/hx-race-mark"
+if out_hxp="$(_hx env RACE_BARE="$HXB" RACE_TO="$hx_pub_first" RACE_MARK="$WORK/hx-race-mark" PATH="$HXRACE:$PATH" bash "$SCRIPT" sync)"; then rc_hxp=0; else rc_hxp=$?; fi
+dbg "sync whose only push is its merged rule file, the shared branch moved back under it: rc=$rc_hxp $out_hxp; the push it was moved under: $(cat "$WORK/hx-race-mark" 2>/dev/null)"
+hx_pub_head="$(git -C "$HXC" show HEAD:payload/LESSONS.md 2>/dev/null || true)"
+check "#3499 control: that sync merged the rule file and committed the merge, both Macs' entries in it, and pushed" \
+  "[ -n '$hx_pub_first' ] && grep -q 'L4. four' <<< \"\$hx_pub_head\" && grep -q 'L5. five' <<< \"\$hx_pub_head\" && [ -s '$WORK/hx-race-mark' ]"
+check "#3499 the push of merged rule files does not land on a shared branch that moved back since this clone read it" \
+  "[ \"\$(git -C '$HXB' rev-parse main)\" = '$hx_pub_first' ]"
 # A RECORD THAT NO LONGER HOLDS IS IGNORED, and every unsent file is read as before. The record names
 # two commits, and it holds only while the first is still in this clone's history and the second in
 # the shared repo's. Nothing tested that the hold reads them that way (the review of #3518). Each
@@ -14104,21 +14234,93 @@ if out_hxs4="$(_hx bash "$SCRIPT" push)"; then rc_hxs4=0; else rc_hxs4=$?; fi
 dbg "push with the record rewritten so that both halves hold: rc=$rc_hxs4 $out_hxs4"
 check "#3499 control: the same clone with a record whose two halves both hold is not held over that file" \
   "out_lacks \"\$out_hxs4\" 'home path check'"
-# EVERY PUSH OF THE BRANCH HAS THE CHECK AT THE PUSH IN FRONT OF IT. The staging may skip files only
-# because each push judges what it would change in the shared repo, so a push added without that
-# call is the leak again, by a route no fixture above drives (L247). Read off the tool's own lines:
-# a push of the branch is any git push that is not of this Mac's state ref, and the call must sit
-# within the few lines above it, in code, since a comment naming the call is not the call. The count
-# is the control: a scan that matched no push passes too.
-hx_push_scan="$(awk '
-  /^[^#]*(plain_push_may_go|home_paths_at_push)/ { seen = NR }
-  /^[^#]*git -C "\$SYNC_REPO" push/ && !/STATE_REF_PREFIX/ { n++; if (!seen || NR - seen > 14) bad = bad " line " NR }
-  END { printf "%d pushes;%s", n, bad }' "$SCRIPT")"
-dbg "pushes of the branch, and any with no check at the push above it: $hx_push_scan"
-check "#3499 control: the scan for pushes of the branch finds the five the tool makes, or more" \
-  "[ \"\${hx_push_scan%% *}\" -ge 5 ]"
-check "#3499 every push of the branch has the home path check at the push in front of it" \
+# THE BRANCH IS PUSHED IN ONE PLACE. The staging may skip files only because the push judges what it
+# would change in the shared repo, and the push lands only on the commit that was judged against, so
+# a push written anywhere but push_shared_branch is the leak again by a route no fixture above
+# drives (L247). The scan this replaces looked for one spelling of a push with a call a few lines
+# above it, and passed a push through the identity array, one with a -c option, one through an
+# array of git's own words, send-pack, and a second push beside an existing call (the second review
+# of #3518). This one reads the tool's code lines, never its comments, for a push or a send-pack
+# written as a word git is given, however git is spelled in front of it: after git itself, after a
+# quoted or braced word, after a variable, after an option or an option's value, carried over from a
+# line ending in a backslash, as the first word of an array, or put in a variable by itself. Two
+# things may hold one: push_shared_branch, and the two lines that push or delete this Mac's state
+# ref and nothing else. It cannot see a push run through eval, one made by another program, or one
+# whose words are put together a piece at a time, and it says nothing about what a caller hands the
+# one function.
+_hx_push_scan(){   # $1 = the tool, or lines written like it -> "<pushes inside push_shared_branch> <calls of it>;" then " line N" for every other push
+  awk '
+    function pushword(s) {
+      if (s ~ /(^|[^A-Za-z0-9_.\/-])(send-pack|http-push)([^A-Za-z0-9_-]|$)/) return 1
+      if (s ~ /(^|[^A-Za-z0-9_-])git[[:space:]]+push([^A-Za-z0-9_-]|$)/) return 1
+      if (s ~ /["}\])][[:space:]]+push([^A-Za-z0-9_-]|$)/) return 1
+      if (s ~ /\$[A-Za-z_][A-Za-z0-9_]*[[:space:]]+push([^A-Za-z0-9_-]|$)/) return 1
+      if (s ~ /(^|[[:space:]])-[A-Za-z-]+(=[^[:space:]]*)?[[:space:]]+push([^A-Za-z0-9_-]|$)/) return 1
+      if (s ~ /(^|[[:space:]])-[cC][[:space:]]+[^[:space:]]+[[:space:]]+push([^A-Za-z0-9_-]|$)/) return 1
+      if (s ~ /=["\047]?push["\047]?([[:space:];)]|$)/) return 1
+      if (s ~ /[(][[:space:]]*["\047]?push["\047]?([[:space:])]|$)/) return 1
+      if (carried && s ~ /^[[:space:]]*(push|send-pack)([^A-Za-z0-9_-]|$)/) return 1
+      return 0
+    }
+    /^[[:space:]]*#/ { next }
+    /^push_shared_branch\(\)\{/ { inside = 1; carried = 0; next }
+    inside && /^\}/ { inside = 0; carried = 0; next }
+    {
+      if (!inside && $0 ~ /(^|[^A-Za-z0-9_])push_shared_branch[[:space:]]/) calls++
+      if (pushword($0)) {
+        if (inside) own++
+        else if ($0 ~ /^[[:space:]]*(if )?git -C "\$SYNC_REPO" push -q (--force )?origin ":?\$STATE_REF_PREFIX\/\$host[:"]/ && $0 !~ /refs\/heads|branch/) state++
+        else bad = bad " line " NR
+      }
+      carried = ($0 ~ /\\$/)
+    }
+    END { printf "%d %d;%s", own, calls, bad }' "$1"
+}
+hx_push_scan="$(_hx_push_scan "$SCRIPT")"
+hx_push_counts="${hx_push_scan%%;*}"
+dbg "pushes inside push_shared_branch and calls of it, then every push of the branch written anywhere else: $hx_push_scan"
+check "#3499 control: the scan finds the one push of the branch, inside push_shared_branch, and the five places that call it, or more" \
+  "[ \"\${hx_push_counts%% *}\" -eq 1 ] && [ \"\${hx_push_counts#* }\" -ge 5 ]"
+check "#3499 no push or send-pack of the branch is written anywhere outside push_shared_branch" \
   "[ \"\${hx_push_scan#*;}\" = '' ]"
+# The scan put to the spellings the old one passed, one to a line, and to lines it must leave alone.
+# Each line below that pushes is numbered in the comment beside the list the check expects.
+hx_esc="$WORK/hx-push-escapes.sh"
+{ printf '%s\n' 'do_other(){'
+  printf '%s\n' '  git -C "$SYNC_REPO" "${SYNC_GIT_IDENTITY[@]}" push -q origin "$branch"'            # 2
+  printf '%s\n' '  git -C "$SYNC_REPO" -c push.default=current push'                                 # 3
+  printf '%s\n' '  "${g[@]}" push -u origin "$branch"'                                               # 4
+  printf '%s\n' '  git -C "$repo" push'                                                              # 5
+  printf '%s\n' '  local verb=push'                                                                  # 6
+  printf '%s\n' '  git -C "$SYNC_REPO" send-pack origin HEAD:refs/heads/main'                        # 7
+  printf '%s\n' '  if push_shared_branch HEAD "$branch" "$up"; then :; else git -C "$SYNC_REPO" push origin HEAD; fi'   # 8
+  printf '%s\n' '  git -C "$SYNC_REPO" \'
+  printf '%s\n' '    push origin main'                                                               # 10
+  printf '%s\n' '  $GIT push'                                                                        # 11
+  printf '%s\n' '  git push'                                                                         # 12
+  printf '%s\n' '  local words=(push -q origin main)'                                                # 13
+  printf '%s\n' '  git -C "$SYNC_REPO" push -q origin "$branch" "$STATE_REF_PREFIX/$host"'           # 14
+  printf '%s\n' '}'
+} > "$hx_esc"
+hx_esc_scan="$(_hx_push_scan "$hx_esc")"
+dbg "the scan put to the spellings the old one passed: $hx_esc_scan"
+check "#3499 the scan finds a push of the branch however it is written: through the identity array, with an option, through an array, another repo variable, a verb in a variable, send-pack, beside a call, across a line break, and with the state ref beside the branch" \
+  "[ \"\${hx_esc_scan#*;}\" = ' line 2 line 3 line 4 line 5 line 6 line 7 line 8 line 10 line 11 line 12 line 13 line 14' ]"
+hx_quiet="$WORK/hx-push-quiet.sh"
+{ printf '%s\n' '# git -C "$SYNC_REPO" push origin main'
+  printf '%s\n' '  echo "claude-sync: NOT published, because git refused the push (its reason is above)." >&2'
+  printf '%s\n' "  remedy=\"Run 'claude-sync push' from \$SYNC_REPO to see what git said.\""
+  printf '%s\n' '  push) run_locked do_push ;;'
+  printf '%s\n' '  git -C "$SYNC_REPO" push -q --force origin "$STATE_REF_PREFIX/$host:$STATE_REF_PREFIX/$host" 2>/dev/null || true'
+  printf '%s\n' '  if git -C "$SYNC_REPO" push -q origin ":$STATE_REF_PREFIX/$host" 2>/dev/null; then'
+  printf '%s\n' 'push_shared_branch(){'
+  printf '%s\n' '  PUSH_SAID="$(git -C "$SYNC_REPO" push -q origin "$new:refs/heads/$branch" 2>&1)" || rc=$?'
+  printf '%s\n' '}'
+} > "$hx_quiet"
+hx_quiet_scan="$(_hx_push_scan "$hx_quiet")"
+dbg "the scan put to lines it must leave alone: $hx_quiet_scan"
+check "#3499 control: and it leaves alone a comment, a sentence that names a push, the push command's own name, the two pushes of the state ref, and the one push inside push_shared_branch, which it counts" \
+  "[ \"\$hx_quiet_scan\" = '1 0;' ]"
 # A sync hands the refusal back and still receives (#947). Its notice names this check, nothing is
 # sent, and the copies it sets aside in the clone are never this Mac's own files.
 mkdir -p "$HPH/hooks/run"; printf '{"cwd":"%s/projects/site"}\n' "$HP_BAD" > "$HPH/hooks/run/k.json"
