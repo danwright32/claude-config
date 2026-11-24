@@ -659,11 +659,142 @@ AFTER_PS='/bin/ps -o pid= -p "$$" >/dev/null 2>&1 || { echo "ps did not run"; ex
 OUTSIDE="$(sed -n "s/^OUTSIDE='\(.*\)'\$/\1/p" "$WRAP")"
 if [ "$OUTSIDE" = "$PS_PROG" ]; then check "the wrapper lets one program leave the sandbox, and it is $PS_PROG" ok
 else check "the wrapper lets one program leave the sandbox, and it is $PS_PROG" "its line OUTSIDE='...' holds '$OUTSIDE'"; fi
-# One rule, on the one line that makes the profile: a second program let out would be a second
-# rule there or a second word in OUTSIDE, and either fails a case here.
-RULES="$(grep -v '^ *#' "$WRAP" | grep -c 'with no-sandbox' || true)"
-if [ "$RULES" = "1" ]; then check "the wrapper's profile has one rule that lets a program out" ok
-else check "the wrapper's profile has one rule that lets a program out" "$RULES lines of $WRAP that are not comments say 'with no-sandbox'"; fi
+
+# ONE PROGRAM, NEVER A LIST (the review of 2026-11-24). The profile, whole, as the wrapper hands it
+# to the sandbox tool, held here in this suite's own words and read from nowhere (L345).
+HELD_PROFILE='(version 1)(allow default)(deny network*)(deny process-exec* (literal "/usr/bin/open") (literal "/usr/bin/osascript") (literal "/bin/launchctl") (literal "/usr/bin/crontab") (literal "/usr/bin/shortcuts"))(deny lsopen)(deny appleevent-send)(deny job-creation)(allow process-exec (literal "/bin/ps") (with no-sandbox))'
+HELD_LINE="$(printf '%s\t%s' -p "$HELD_PROFILE")"
+# What the wrapper says when its own profile lets more out, and when it holds what is no refusal.
+MORE_OUT="lets more than /bin/ps out of the sandbox"
+NOT_A_DENY="holds something other than"
+
+# suite_holds <wrapper file> <what it handed the sandbox tool>: HOLDS is ok when this suite's own
+# check finds that the file lets one program out, and says why not otherwise. This is the check as
+# it stood at 0ce9ac84e0: it reads the file alone, and counts LINES that say 'with no-sandbox'.
+suite_holds() {
+  local outside rules
+  outside="$(sed -n "s/^OUTSIDE='\(.*\)'\$/\1/p" "$1")"
+  rules="$(grep -v '^ *#' "$1" | grep -c 'with no-sandbox' || true)"
+  if [ "$outside" != "$PS_PROG" ]; then HOLDS="its line OUTSIDE='...' holds '$outside'"
+  elif [ "$rules" != "1" ]; then HOLDS="$rules lines of it that are not comments say 'with no-sandbox'"
+  else HOLDS=ok; fi
+}
+suite_holds "$WRAP" ""
+check "the wrapper's profile has one rule that lets a program out" "$HOLDS"
+
+# spelled <name> <kept|out> [sed expression ...]: a copy of the wrapper at $T/<name>.sh with the
+# expressions applied. Its sandbox tool is a stand in that writes down the first two words it is
+# handed, one line a hand over in $T/<name>.handed, and then is the real tool. With "out" the
+# wrapper's own check of its profile is taken out of the copy. Each change is checked to have
+# landed (L100).
+spelled() {
+  local name="$1" guard="$2" e
+  local -a base own
+  shift 2
+  printf '%s\n' '#!/bin/sh' "printf '%s\\t%s\\n' \"\$1\" \"\$2\" >> '$T/$name.handed'" 'exec /usr/bin/sandbox-exec "$@"' > "$T/$name.tool"
+  chmod +x "$T/$name.tool"
+  : > "$T/$name.handed"
+  base=(-e "s|^SANDBOX=.*|SANDBOX=$T/$name.tool|")
+  if [ "$guard" = out ]; then base+=(-e '/^ONE_OUT=/,/^readonly PROFILE$/d'); fi
+  own=("${base[@]}")
+  for e in "$@"; do own+=(-e "$e"); done
+  sed "${base[@]}" "$WRAP" > "$T/$name.base"
+  sed "${own[@]}" "$WRAP" > "$T/$name.sh"
+  chmod +x "$T/$name.sh"
+  if ! grep -q "^SANDBOX=$T/$name.tool\$" "$T/$name.sh"; then check "the copy $name holds its changes" "its sandbox tool was not replaced by the one that writes down what it is handed"
+  elif [ "$#" -gt 0 ] && cmp -s "$T/$name.base" "$T/$name.sh"; then check "the copy $name holds its changes" "the change matched no line"
+  elif [ "$guard" = out ] && grep -q -e '^ONE_OUT=' -e '^readonly PROFILE' "$T/$name.sh"; then check "the copy $name holds its changes" "the wrapper's own check of its profile was not taken out"
+  else check "the copy $name holds its changes" ok; fi
+}
+
+# spelling <name> <refused|unchanged> <the wrapper's words> <what it is> <sed expression>...: one
+# way of writing a second program into the profile, measured twice with curl's post to this suite's
+# listener. With the wrapper's own check taken out, the post must ARRIVE (so the spelling is a real
+# way out and the two refusals below are of something, L1) and this suite's check alone must catch
+# it. With the wrapper as it ships plus the spelling, the wrapper must refuse and hand the sandbox
+# tool nothing, or (unchanged) the write to its profile must fail and every profile handed over be
+# the one held here; and nothing may arrive.
+spelling() {
+  local name="$1" kept="$2" words="$3" what="$4" other
+  shift 4
+  spelled "$name-out" out "$@"
+  one curl 127.0.0.1 "$name-out" "$T/$name-out.sh"
+  if [ "$OUTCOME" = "sent" ] && [ "$(arrived "$name-out")" = "1" ]; then check "$what, with the wrapper's own check taken out: curl's post ARRIVES" ok
+  else check "$what, with the wrapper's own check taken out: curl's post ARRIVES" "outcome '$OUTCOME', arrived $(arrived "$name-out"), stderr: $(head -c 300 "$T/err.txt")"; fi
+  suite_holds "$T/$name-out.sh" "$T/$name-out.handed"
+  if [ "$HOLDS" = ok ]; then check "$what, with the wrapper's own check taken out: this suite's check catches it" "this suite's check passed it"
+  else check "$what, with the wrapper's own check taken out: this suite's check catches it" ok; fi
+
+  spelled "$name-kept" kept "$@"
+  one curl 127.0.0.1 "$name-kept" "$T/$name-kept.sh"
+  ERR="$(cat "$T/err.txt")"
+  other="$(grep -c -v -x -F -e "$HELD_LINE" "$T/$name-kept.handed" || true)"
+  if [ "$kept" = refused ]; then
+    exits "$what: the wrapper refuses" 70
+    says "$what: the wrapper says its profile is not the one signed off" "$words"
+    if [ -s "$T/$name-kept.handed" ]; then check "$what: the wrapper hands the sandbox tool nothing" "it handed over $(grep -c '' "$T/$name-kept.handed") times, $other of them a profile that is not the one held here"
+    else check "$what: the wrapper hands the sandbox tool nothing" ok; fi
+  else
+    says "$what: the write to the profile fails" "PROFILE: readonly variable"
+    if [ -s "$T/$name-kept.handed" ] && [ "$other" = "0" ]; then check "$what: every profile handed to the sandbox tool is the one held here" ok
+    else check "$what: every profile handed to the sandbox tool is the one held here" "$(grep -c '' "$T/$name-kept.handed") hand overs, $other of them another profile"; fi
+    case "$OUTCOME" in
+      failed:*) check "$what: curl's post fails" ok ;;
+      *) check "$what: curl's post fails" "outcome '$OUTCOME'" ;;
+    esac
+  fi
+  if [ "$(arrived "$name-kept")" = "0" ]; then check "$what: nothing arrives" ok
+  else check "$what: nothing arrives" "arrived $(arrived "$name-kept")"; fi
+}
+
+if [ -n "$PORT" ]; then
+  NL='
+'
+  # The end of the line that makes the profile, and the rule's own filter, as sed finds them; and
+  # the same rule naming curl, as sed writes it.
+  END='(with no-sandbox))"$'
+  LIT='(literal \\"\$OUTSIDE\\")'
+  CURL_RULE='(allow process-exec (literal \\"/usr/bin/curl\\") (with no-sandbox))'
+  LATER='PROFILE="$PROFILE(allow process-exec (literal \\"/usr/bin/curl\\") (with no-""sandbox))"'
+  printf '%s\n' '(version 1)' '(allow process-exec (literal "/usr/bin/curl") (with no-sandbox))' > "$T/more.sb"
+
+  spelling same-line refused "$MORE_OUT" "a second rule on the same line" \
+    "/^PROFILE=/s|$END|(with no-sandbox))$CURL_RULE\"|"
+  spelling continued refused "$MORE_OUT" "a second rule on a continued line" \
+    "/^PROFILE=/s|$END|(with no-sandbox))"'(allow process-exec (literal \\"/usr/bin/curl\\") (with no-\\\'"$NL"'sandbox))"|'
+  spelling variable refused "$MORE_OUT" "a second rule built from a variable" \
+    "/^PROFILE=/s|$END|(with no-sandbox))"'(allow process-exec (literal \\"/usr/bin/curl\\") (with no-$WORD))"|' \
+    '/^PROFILE=/s|^|WORD=sandbox\'"$NL"'|'
+  spelling star refused "$MORE_OUT" "a second rule written process-exec*" \
+    "/^PROFILE=/s|$END|(with no-sandbox))"'(allow process-exec* (literal \\"/usr/bin/curl\\") (with no-sandbox))"|'
+  spelling regex refused "$MORE_OUT" "a regex in place of the literal" \
+    "/^PROFILE=/s,$LIT,"'(regex #\\"^/(bin/ps|usr/bin/curl)$\\"),'
+  spelling subpath refused "$MORE_OUT" "a second rule with a subpath" \
+    "/^PROFILE=/s|$END|(with no-sandbox))"'(allow process-exec (subpath \\"/usr/bin/curl\\") (with no-sandbox))"|'
+  spelling prefix refused "$MORE_OUT" "a second rule with a prefix" \
+    "/^PROFILE=/s|$END|(with no-sandbox))"'(allow process-exec (prefix \\"/usr/bin/cur\\") (with no-sandbox))"|'
+  spelling second-literal refused "$MORE_OUT" "a second literal inside the one rule" \
+    "/^PROFILE=/s,$LIT,"'(literal \\"$OUTSIDE\\") (literal \\"/usr/bin/curl\\"),'
+  spelling later-line refused "$MORE_OUT" "a later line that adds to the profile" \
+    '/^PROFILE=/s|$|\'"$NL$LATER"'|'
+  spelling last-line unchanged "" "a line just before the command is run that adds to the profile" \
+    '/^exec "\$SANDBOX"/s|^|'"$LATER"'\'"$NL"'|'
+  spelling import refused "$NOT_A_DENY" "a second rule in a file the profile imports" \
+    "/^PROFILE=/s|$END|(with no-sandbox))"'(import \\"'"$T"'/more.sb\\")"|'
+  # MEASURED: what the rule does to the program it names. A copy of the wrapper whose rule names
+  # curl in place of ps lets curl's post arrive, with every other line as shipped: the program
+  # named is outside the sandbox altogether, network and all. That is why the shipped rule names
+  # one program, and why adding a second one is a decision of Dan's and not a line to add.
+  spelling names-curl refused "$MORE_OUT" "the one rule naming curl in place of ps" \
+    "s|^OUTSIDE=.*|OUTSIDE='/usr/bin/curl'|"
+  one direct 127.0.0.1 out-direct "$T/names-curl-out.sh"
+  case "$OUTCOME" in
+    failed:*) check "the one rule naming curl in place of ps: a post by any other program still fails" ok ;;
+    *) check "the one rule naming curl in place of ps: a post by any other program still fails" "outcome '$OUTCOME'" ;;
+  esac
+  if [ "$(arrived out-direct)" = "0" ]; then check "the one rule naming curl in place of ps: nothing arrives from any other program" ok
+  else check "the one rule naming curl in place of ps: nothing arrives from any other program" "arrived $(arrived out-direct)"; fi
+fi
 
 run "$PS_PROG" -o pid= -p "$$"
 if [ "$RC" -eq 0 ] && [ "${OUT//[[:space:]]/}" = "$$" ]; then
@@ -825,25 +956,6 @@ PY
     else check "arguments: LET THROUGH, ps under the wrapper shows the arguments of a process that is not this user's" "it said '$OUT': the sandbox no longer behaves as no-network-run.sh and the README say, so bring both up to date"; fi
   else
     echo "SUITE-PART-UNMEASURED what ps adds for a process that is not this user's: the suite is running as root, which reads every process"
-  fi
-
-  # MEASURED: what the rule does to the program it names. A copy of the wrapper whose rule names
-  # curl in place of ps lets curl's post arrive, with every other line as shipped: the program
-  # named is outside the sandbox altogether, network and all. That is why the shipped rule names
-  # one program that opens no connection and starts no other program, and why adding a second one
-  # is a decision of Dan's and not a line to add.
-  if [ -n "$PORT" ]; then
-    changed names-curl "s|^OUTSIDE=.*|OUTSIDE='/usr/bin/curl'|"
-    one curl 127.0.0.1 out-curl "$T/names-curl.sh"
-    if [ "$OUTCOME" = "sent" ] && [ "$(arrived out-curl)" = "1" ]; then check "a copy whose rule names curl: curl's post ARRIVES, so the program the rule names is outside the sandbox" ok
-    else check "a copy whose rule names curl: curl's post ARRIVES, so the program the rule names is outside the sandbox" "outcome '$OUTCOME', arrived $(arrived out-curl): the rule no longer does what no-network-run.sh and the README say, so bring both up to date"; fi
-    one direct 127.0.0.1 out-direct "$T/names-curl.sh"
-    case "$OUTCOME" in
-      failed:*) check "a copy whose rule names curl: a post by any other program still fails" ok ;;
-      *) check "a copy whose rule names curl: a post by any other program still fails" "outcome '$OUTCOME'" ;;
-    esac
-    if [ "$(arrived out-direct)" = "0" ]; then check "a copy whose rule names curl: nothing arrives from any other program" ok
-    else check "a copy whose rule names curl: nothing arrives from any other program" "arrived $(arrived out-direct)"; fi
   fi
 else
   check "without the wrapper ps prints the pid it is asked for" "exit $RC, it printed '${OUT:0:60}', stderr: ${ERR:0:200}, so nothing about ps under the wrapper could be measured"
