@@ -2821,7 +2821,11 @@ starting taken off, at a load average of 104 rising to 178 on 12 cores: 53 to 72
 nothing under the payload to read, 85 to 149 ms for one edited hook and one new file, 4.1 to 4.3
 seconds for a replay of the 2026-11-22 send (refused, naming 100 files), against 1.0 seconds for the
 whole tree walk the send does not run. The replay took 6.5 to 12.4 seconds before the output went to
-a file. What is left is the check reading megabyte lines in the shell (#3479). Replayed over the
+a file. What was left was the check reading megabyte lines in the shell, and #3479 took that out:
+the check now puts each matching line to its rules in one awk pass and reports a long line as 300
+bytes of it. Measured on 2026-11-23 on the same 126 files, eight rounds at a load average near 175,
+the check alone took 3.8 to 4.3 seconds before and 0.4 to 0.8 after, its report fell from 11.5 MB
+to 70 KB, and it refused the same 100 files for the same 110 lines. Replayed over the
 newest 300 of main's sync commits, the check would have held 2: the incident, and one on 2026-10-04
 carrying a mod's test file from before the check read mods. It could judge every one, and held
 nothing that passes main's run.
