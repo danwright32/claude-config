@@ -37,7 +37,8 @@
 #
 # COST. It reads only what the transcript gained since the last prompt, and only whole lines: a row
 # still being written is read at the next prompt. The first prompt of a session that started before
-# this hook reads the whole file once (a 266 MB transcript here).
+# this hook reads the whole file once (a 266 MB transcript here took 0.6 seconds), in pieces whose
+# progress is recorded, so a read cut short by the timeout carries on at the next prompt.
 #
 # Env, for the suite:
 #   CLAUDE_MOD_RELOAD_STATE_DIR      where the per session record is kept (default TMPDIR)
@@ -45,6 +46,7 @@
 #   CLAUDE_MOD_RELOAD_PROCESS_START  when it started, in seconds since the epoch (default from ps)
 #   CLAUDE_MOD_RELOAD_NOW            the clock, in seconds since the epoch (default now)
 #   CLAUDE_MOD_RELOAD_RETELL_AFTER   seconds before an unchanged failure is told again (default 86400)
+#   CLAUDE_MOD_RELOAD_CHUNK          bytes read at a time (default 32 MiB, at least 1024)
 set -uo pipefail
 
 input="$(cat 2>/dev/null || true)"
@@ -72,7 +74,7 @@ mkdir -p "$STATE_DIR" 2>/dev/null || true
 # nothing. The record is written before anything is printed, so a notice cannot repeat itself if the
 # printing fails: once too few is the safe side here (L36).
 said="$(printf '%s' "$input" | MRF_STATE_DIR="$STATE_DIR" MRF_PROC="$PROC" MRF_PROC_START="$PROC_START" \
-  MRF_NOW="${CLAUDE_MOD_RELOAD_NOW:-}" MRF_RETELL="${CLAUDE_MOD_RELOAD_RETELL_AFTER:-86400}" python3 -c '
+  MRF_NOW="${CLAUDE_MOD_RELOAD_NOW:-}" MRF_CHUNK="${CLAUDE_MOD_RELOAD_CHUNK:-}" MRF_RETELL="${CLAUDE_MOD_RELOAD_RETELL_AFTER:-86400}" python3 -c '
 import datetime, hashlib, json, os, re, sys, time
 sys.stdout.reconfigure(errors="replace")
 
@@ -116,8 +118,9 @@ except Exception:
 
 proc = os.environ["MRF_PROC"]
 start = proc_start()
-if st.get("proc") != proc:
+if st.get("proc") != proc or st.get("start") != start:
     # A new process loaded every mod afresh: what the last one recorded is about copies gone now.
+    # Its start time is part of who it is, since a later process can be given the same pid.
     st = {"proc": proc, "start": start, "offset": st.get("offset", 0), "path": st.get("path"),
           "unread": st.get("unread"), "loaded": {}, "failing": {}}
 start = st.get("start", start) or 0.0
@@ -156,16 +159,8 @@ except Exception:
 st["unread"] = False
 
 loaded, failing = st.setdefault("loaded", {}), st.setdefault("failing", {})
-with f:
-    off = int(st.get("offset") or 0)
-    f.seek(0, 2)
-    if f.tell() < off:
-        off = 0  # the file was replaced under the same path: read it again from the start
-    f.seek(off)
-    data = f.read()
-end = data.rfind(b"\n") + 1  # a row still being written is read at the next prompt
-st["offset"] = off + end
-for line in data[:end].split(b"\n"):
+def scan(data):
+  for line in data.split(b"\n"):
     if b"informational" not in line or (b"reload" not in line):
         continue
     try:
@@ -191,6 +186,45 @@ for line in data[:end].split(b"\n"):
     if g:
         loaded[g.group(1)] = t
         failing.pop(g.group(1), None)
+
+# Read in pieces, recording how far each one got, so a first read of a long transcript that runs out
+# of time still moves on and the next prompt carries on from there rather than starting over. Only
+# whole lines are read: a row still being written is read at the next prompt. A row longer than a
+# piece is skipped whole, since a reload row is a few hundred bytes. Nothing is said until the end is
+# reached, so a notice never rests on half the transcript.
+try:
+    CHUNK = max(1024, int(os.environ["MRF_CHUNK"]))
+except ValueError:
+    CHUNK = 32 << 20
+with f:
+    f.seek(0, 2)
+    size = f.tell()
+    off = int(st.get("offset") or 0)
+    if size < off:
+        off = 0  # the file was replaced under the same path: read it again from the start
+    while off < size:
+        f.seek(off)
+        data = f.read(CHUNK)
+        end = data.rfind(b"\n") + 1
+        if end:
+            scan(data[:end])
+            off += end
+        elif len(data) < CHUNK:
+            break
+        else:
+            pos, nxt = off + len(data), -1
+            while nxt < 0:
+                more = f.read(CHUNK)
+                if not more:
+                    break
+                i = more.find(b"\n")
+                nxt = pos + i + 1 if i >= 0 else -1
+                pos += len(more)
+            if nxt < 0:
+                break
+            off = nxt
+        st["offset"] = off
+        save()
 
 due = [m for m in sorted(failing, key=lambda n: failing[n]["first"])
        if failing[m]["told"] is None or now - failing[m]["told"] >= retell]

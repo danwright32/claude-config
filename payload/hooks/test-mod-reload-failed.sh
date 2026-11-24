@@ -46,7 +46,7 @@ export CLAUDE_MOD_RELOAD_PROCESS_START=1793836800
 NOW0=1793916000
 export CLAUDE_MOD_RELOAD_NOW=$NOW0
 
-# row <file> <kind> <mod> <iso time> [<extra>]: append one transcript row.
+# row <file> <kind> <mod> <iso time>: append one transcript row.
 #   fail     Claude Code's reload failure row, as measured
 #   reloaded Claude Code's plain reload row
 #   changed  Claude Code's "plugin.json changed <dash> reloaded" row
@@ -54,6 +54,8 @@ export CLAUDE_MOD_RELOAD_NOW=$NOW0
 #   skew     a refused tool result carrying the mods' out of step sentence
 #   quote    a user row quoting the failure text, as a brief or an issue does
 #   partial  the start of a failure row with no line end yet
+#   rest     the rest of that row, with its line end
+#   fat      a tool result row of 100,000 bytes, as a big command output makes
 row() {
   python3 - "$@" <<'PY'
 import json, sys
@@ -78,6 +80,9 @@ elif kind == "skew":
             f"loads them together.</tool_use_error>")
     d = {"type": "user", "timestamp": ts, "message": {"role": "user", "content": [
         {"type": "tool_result", "tool_use_id": "toolu_x", "is_error": True, "content": text}]}}
+elif kind == "fat":
+    d = {"type": "user", "timestamp": ts, "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "toolu_y", "content": "x" * 100000}]}}
 elif kind == "quote":
     d = {"type": "user", "timestamp": ts, "message": {"role": "user", "content":
          f'every reload was refused with "{mod}: reload failed, the previous version stays loaded"'}}
@@ -251,6 +256,33 @@ row "$T6" rest picker-manners 2026-11-05T21:41:31.651Z
 out="$(prompt s6 "$T6")"
 [ -n "$(field "$out" systemMessage)" ] && check "the row is read once its line ends" ok \
   || check "the row is read once its line ends" "said: $out"
+
+# ---------------------------------------------------------------------------
+# A later process given the same pid is still a new process: told of its own failure at once, never
+# taken for the old one's failure going on.
+# ---------------------------------------------------------------------------
+T7="$TMPROOT/seven.jsonl"
+row "$T7" fail picker-manners 2026-11-05T21:41:31.651Z
+out="$(prompt s7r "$T7")"
+[ -n "$out" ] && check "the first process's failure is told" ok || check "the first process's failure is told" "said nothing"
+row "$T7" fail picker-manners 2026-11-06T02:00:00.000Z
+out="$(CLAUDE_MOD_RELOAD_PROCESS_START=1793926000 CLAUDE_MOD_RELOAD_NOW=$((NOW0 + 20000)) prompt s7r "$T7")"
+v="$(hook_notice_verdict "$out" '^picker-manners failed to reload at 9:00 PM ET on 5 November, so this session is still running the copy of it this session loaded when it started\.')"
+[ -z "$v" ] && check "a reused pid with a later start is a new process" ok || check "a reused pid with a later start is a new process" "$v"
+
+# ---------------------------------------------------------------------------
+# Read in pieces: a row longer than a piece is stepped over, and a failure row beside it still counts.
+# ---------------------------------------------------------------------------
+T8="$TMPROOT/eight.jsonl"
+row "$T8" fat x 2026-11-05T21:00:00.000Z
+row "$T8" fail picker-manners 2026-11-05T21:41:31.651Z
+row "$T8" fat x 2026-11-05T21:50:00.000Z
+row "$T8" fail mod-kit 2026-11-05T21:51:00.000Z
+out="$(CLAUDE_MOD_RELOAD_CHUNK=4096 prompt s8 "$T8")"
+msg="$(field "$out" systemMessage)"
+{ grep -q "^picker-manners failed to reload" <<< "$msg" && grep -q "mod-kit failed to reload" <<< "$msg"; } \
+  && check "rows longer than a piece are stepped over, and the failures beside them read" ok \
+  || check "rows longer than a piece are stepped over, and the failures beside them read" "said: $out"
 
 # ---------------------------------------------------------------------------
 # A transcript that cannot be read is said once, never on every prompt, and never as all clear.

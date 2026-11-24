@@ -208,7 +208,10 @@ with open(sys.argv[1], "w") as f:
       # The session's transcript, which only grows, with N failed and N good reloads of N mods in it
       # (claude-config#3309), and N other sessions' records beside this one's in the state folder,
       # which the hook must never list. Its bytes are read by its one python, which no process count
-      # can see; it reads only what the transcript gained since the last prompt.
+      # can see; it reads only what the transcript gained since the last prompt. The process is set to
+      # have started before the rows, and every prompt retells, so the counted run takes the path that
+      # speaks: read from ps instead, the start is now, every row predates it and nothing is said.
+      EXTRA_ENV=(CLAUDE_MOD_RELOAD_PROCESS=4242 CLAUDE_MOD_RELOAD_PROCESS_START=1793836800 CLAUDE_MOD_RELOAD_RETELL_AFTER=0)
       python3 -c '
 import json, sys
 with open(sys.argv[1], "w") as f:
