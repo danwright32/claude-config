@@ -14241,16 +14241,18 @@ check "#3499 control: the same clone with a record whose two halves both hold is
 # above it, and passed a push through the identity array, one with a -c option, one through an
 # array of git's own words, send-pack, and a second push beside an existing call (the second review
 # of #3518). This one reads the tool's code lines, never its comments, for a push or a send-pack
-# written as a word git is given, however git is spelled in front of it: after git itself, after a
-# quoted or braced word, after a variable, after an option or an option's value, carried over from a
-# line ending in a backslash, as the first word of an array, or put in a variable by itself. Two
-# things may hold one: push_shared_branch, and the two lines that push or delete this Mac's state
-# ref and nothing else. It cannot see a push run through eval, one made by another program, or one
-# whose words are put together a piece at a time, and it says nothing about what a caller hands the
-# one function.
+# written as a word git is given, bare or in quotes, however git is spelled in front of it: after
+# git itself, after a quoted or braced word, after a variable, after an option or an option's value,
+# carried over from a line ending in a backslash, as the first word of an array, put in a variable
+# by itself, or printed by printf (the third review). Two things may hold one: push_shared_branch,
+# and the two lines that push or delete this Mac's state ref and nothing else, read to their ends.
+# It cannot see a push run through eval, one made by another program, or one whose words are put
+# together a piece at a time, and it says nothing about what a caller hands the one function.
 _hx_push_scan(){   # $1 = the tool, or lines written like it -> "<pushes inside push_shared_branch> <calls of it>;" then " line N" for every other push
   awk '
     function pushword(s) {
+      gsub(/["\047]push["\047]/, "push", s)
+      if (s ~ /printf[[:space:]]+(-v[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+)?push([^A-Za-z0-9_-]|$)/) return 1
       if (s ~ /(^|[^A-Za-z0-9_.\/-])(send-pack|http-push)([^A-Za-z0-9_-]|$)/) return 1
       if (s ~ /(^|[^A-Za-z0-9_-])git[[:space:]]+push([^A-Za-z0-9_-]|$)/) return 1
       if (s ~ /["}\])][[:space:]]+push([^A-Za-z0-9_-]|$)/) return 1
@@ -14269,7 +14271,7 @@ _hx_push_scan(){   # $1 = the tool, or lines written like it -> "<pushes inside 
       if (!inside && $0 ~ /(^|[^A-Za-z0-9_])push_shared_branch[[:space:]]/) calls++
       if (pushword($0)) {
         if (inside) own++
-        else if ($0 ~ /^[[:space:]]*(if )?git -C "\$SYNC_REPO" push -q (--force )?origin ":?\$STATE_REF_PREFIX\/\$host[:"]/ && $0 !~ /refs\/heads|branch/) state++
+        else if ($0 ~ /^[[:space:]]*(if )?git -C "\$SYNC_REPO" push -q (--force )?origin ":?\$STATE_REF_PREFIX\/\$host(:\$STATE_REF_PREFIX\/\$host)?"( 2>\/dev\/null)?( [|][|] true|; then)?$/ && $0 !~ /refs\/heads|branch/) state++
         else bad = bad " line " NR
       }
       carried = ($0 ~ /\\$/)
@@ -14300,12 +14302,18 @@ hx_esc="$WORK/hx-push-escapes.sh"
   printf '%s\n' '  git push'                                                                         # 12
   printf '%s\n' '  local words=(push -q origin main)'                                                # 13
   printf '%s\n' '  git -C "$SYNC_REPO" push -q origin "$branch" "$STATE_REF_PREFIX/$host"'           # 14
+  printf '%s\n' '  git -C "$SYNC_REPO" push -q --force origin "$STATE_REF_PREFIX/$host:$STATE_REF_PREFIX/$host" HEAD:main 2>/dev/null || true'   # 15
+  printf '%s\n' '  git -C "$SYNC_REPO" push -q --force origin "$STATE_REF_PREFIX/$host:$STATE_REF_PREFIX/$host" "+$new:$_pb"'   # 16
+  printf '%s\n' '  git -C "$SYNC_REPO" "push" origin main'                                           # 17
+  printf '%s\n' "  git -C \"\$SYNC_REPO\" 'push' origin main"                                        # 18
+  printf '%s\n' '  git -C "$SYNC_REPO" $(printf push) origin main'                                   # 19
+  printf '%s\n' '  printf -v verb push'                                                              # 20
   printf '%s\n' '}'
 } > "$hx_esc"
 hx_esc_scan="$(_hx_push_scan "$hx_esc")"
 dbg "the scan put to the spellings the old one passed: $hx_esc_scan"
-check "#3499 the scan finds a push of the branch however it is written: through the identity array, with an option, through an array, another repo variable, a verb in a variable, send-pack, beside a call, across a line break, and with the state ref beside the branch" \
-  "[ \"\${hx_esc_scan#*;}\" = ' line 2 line 3 line 4 line 5 line 6 line 7 line 8 line 10 line 11 line 12 line 13 line 14' ]"
+check "#3499 the scan finds a push of the branch however it is written: through the identity array, with an option, through an array, another repo variable, a verb in a variable, send-pack, beside a call, across a line break, with the state ref beside the branch, with a second refspec after the state ref's own, with the verb in quotes, and with the verb made by printf" \
+  "[ \"\${hx_esc_scan#*;}\" = ' line 2 line 3 line 4 line 5 line 6 line 7 line 8 line 10 line 11 line 12 line 13 line 14 line 15 line 16 line 17 line 18 line 19 line 20' ]"
 hx_quiet="$WORK/hx-push-quiet.sh"
 { printf '%s\n' '# git -C "$SYNC_REPO" push origin main'
   printf '%s\n' '  echo "claude-sync: NOT published, because git refused the push (its reason is above)." >&2'
