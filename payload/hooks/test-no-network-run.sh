@@ -632,6 +632,214 @@ asked "a request to launchd to make a job (what launchctl asks)" denied job-crea
 # reading a preference in the same measurement, so it was left for Dan to decide (README).
 asked "finding a service by name: NOT COVERED, and so it" allowed mach-lookup global-name com.apple.pasteboard.1
 
+echo "no network run: ps, the one program that leaves the sandbox (claude-config#3482)"
+
+# macOS refuses to start a setuid program from inside ANY sandbox (the kernel's log line is
+# "deny(1) forbidden-exec-sugid", measured 2026-11-24 on macOS 26.6.2 under a profile that names
+# the network alone), and /bin/ps is one. So every ps under the wrapper ended "Operation not
+# permitted", and four suites that read a process through it could not pass there. A profile has
+# one form that lets such a program start, and that form starts it OUTSIDE the sandbox. What that
+# lets a wrapped command do, and what it does not, is measured below; nothing ps or the kernel
+# returns about another process is printed, only whether a marker this suite planted was in it.
+PS_PROG=/bin/ps
+# after_ps <words>: under sh, ps first, then the words in its place. A ps that does not run ends
+# the command with 99 and the words are never started, so a case about what follows a ps cannot
+# pass where ps was refused.
+AFTER_PS='/bin/ps -o pid= -p "$$" >/dev/null 2>&1 || { echo "ps did not run"; exit 99; }; exec "$@"'
+
+OUTSIDE="$(sed -n "s/^OUTSIDE='\(.*\)'\$/\1/p" "$WRAP")"
+if [ "$OUTSIDE" = "$PS_PROG" ]; then check "the wrapper lets one program leave the sandbox, and it is $PS_PROG" ok
+else check "the wrapper lets one program leave the sandbox, and it is $PS_PROG" "its line OUTSIDE='...' holds '$OUTSIDE'"; fi
+# One rule, on the one line that makes the profile: a second program let out would be a second
+# rule there or a second word in OUTSIDE, and either fails a case here.
+RULES="$(grep -v '^ *#' "$WRAP" | grep -c 'with no-sandbox' || true)"
+if [ "$RULES" = "1" ]; then check "the wrapper's profile has one rule that lets a program out" ok
+else check "the wrapper's profile has one rule that lets a program out" "$RULES lines of $WRAP that are not comments say 'with no-sandbox'"; fi
+
+run "$PS_PROG" -o pid= -p "$$"
+if [ "$RC" -eq 0 ] && [ "${OUT//[[:space:]]/}" = "$$" ]; then
+  check "without the wrapper ps prints the pid it is asked for" ok
+
+  run "$WRAP" /bin/sh -c '/bin/ps -o pid= -p "$1"' ps-case "$$"
+  if [ "$RC" -eq 0 ] && [ "${OUT//[[:space:]]/}" = "$$" ]; then check "with the wrapper a command can run ps" ok
+  else check "with the wrapper a command can run ps" "exit $RC, it printed '${OUT:0:60}', stderr: ${ERR:0:300}"; fi
+
+  run "$WRAP" "$PS_PROG" -o pid= -p "$$"
+  if [ "$RC" -eq 0 ] && [ "${OUT//[[:space:]]/}" = "$$" ]; then check "with the wrapper ps runs as the wrapper's own command" ok
+  else check "with the wrapper ps runs as the wrapper's own command" "exit $RC, it printed '${OUT:0:60}', stderr: ${ERR:0:300}"; fi
+
+  # A link is read through to the file it names, as it is for a program the wrapper refuses.
+  ln -s "$PS_PROG" "$T/ps-link"
+  run "$WRAP" "$T/ps-link" -o pid= -p "$$"
+  if [ "$RC" -eq 0 ] && [ "${OUT//[[:space:]]/}" = "$$" ]; then check "with the wrapper a link to ps runs it" ok
+  else check "with the wrapper a link to ps runs it" "exit $RC, it printed '${OUT:0:60}', stderr: ${ERR:0:300}"; fi
+
+  # WHAT THE RULE DOES NOT LET THROUGH.
+  # The command that ran ps is still in the sandbox: its post fails and nothing arrives.
+  if [ -n "$PORT" ]; then
+    one direct 127.0.0.1 open-after-ps /bin/sh -c "$AFTER_PS" after-ps
+    if [ "$OUTCOME" = "sent" ] && [ "$(arrived open-after-ps)" = "1" ]; then check "after ps: without the wrapper the post arrives" ok
+    else check "after ps: without the wrapper the post arrives" "outcome '$OUTCOME', arrived $(arrived open-after-ps)"; fi
+    one direct 127.0.0.1 shut-after-ps "$WRAP" /bin/sh -c "$AFTER_PS" after-ps
+    case "$OUTCOME" in
+      failed:*) check "after ps: with the wrapper the post of the command that ran ps fails" ok ;;
+      *) check "after ps: with the wrapper the post of the command that ran ps fails" "outcome '$OUTCOME'" ;;
+    esac
+    if [ "$(arrived shut-after-ps)" = "0" ]; then check "after ps: with the wrapper nothing arrives" ok
+    else check "after ps: with the wrapper nothing arrives" "arrived $(arrived shut-after-ps)"; fi
+
+    # The rule names a file, not a name: another program called ps, found first on the PATH, stays
+    # in the sandbox, and so does what it starts.
+    mkdir "$T/psbin"
+    printf '#!/bin/sh\nexec "$@"\n' > "$T/psbin/ps"
+    chmod +x "$T/psbin/ps"
+    one direct 127.0.0.1 open-named-ps /usr/bin/env PATH="$T/psbin:$PATH" ps
+    if [ "$OUTCOME" = "sent" ] && [ "$(arrived open-named-ps)" = "1" ]; then check "another program named ps: without the wrapper its post arrives" ok
+    else check "another program named ps: without the wrapper its post arrives" "outcome '$OUTCOME', arrived $(arrived open-named-ps)"; fi
+    one direct 127.0.0.1 shut-named-ps "$WRAP" /usr/bin/env PATH="$T/psbin:$PATH" ps
+    case "$OUTCOME" in
+      failed:*) check "another program named ps: with the wrapper its post fails" ok ;;
+      *) check "another program named ps: with the wrapper its post fails" "outcome '$OUTCOME'" ;;
+    esac
+    if [ "$(arrived shut-named-ps)" = "0" ]; then check "another program named ps: with the wrapper nothing arrives" ok
+    else check "another program named ps: with the wrapper nothing arrives" "arrived $(arrived shut-named-ps)"; fi
+  fi
+
+  # The three hand offs are still refused to a command that has run ps.
+  for prog in /usr/bin/open /usr/bin/osascript /bin/launchctl; do
+    run "$WRAP" /bin/sh -c "$AFTER_PS" after-ps "$PY_FIXED" -I "$T/start.py" "$prog"
+    if [ "$OUT" = "refused" ]; then check "after ps: with the wrapper $prog is still refused" ok
+    else check "after ps: with the wrapper $prog is still refused" "it said '$OUT' (exit $RC)"; fi
+  done
+
+  # Every other setuid program in the system's folders is still refused, found on disk so that one
+  # macOS adds is measured too (L96). Left out: ps itself, the programs the wrapper refuses by name
+  # (measured above), and the three that ask for a password, which this suite never starts, refused
+  # or not. Each start is the program with --help, and under the wrapper none of them starts.
+  run "$PY_FIXED" -I "$T/start.py" /usr/bin/atq
+  if [ "$OUT" = "started" ]; then
+    check "without the wrapper another setuid program, atq, starts" ok
+    MEASURED_SUID=0
+    for prog in $(find /bin /usr/bin /sbin /usr/sbin -maxdepth 1 -type f -perm -4000 2>/dev/null | sort); do
+      case "$prog" in "$PS_PROG"|/usr/bin/sudo|/usr/bin/su|/usr/bin/login) continue ;; esac
+      case " $LISTED " in *" $prog "*) continue ;; esac
+      run "$WRAP" "$PY_FIXED" -I "$T/start.py" "$prog"
+      if [ "$OUT" = "refused" ]; then check "with the wrapper the setuid program $prog is still refused" ok
+      else check "with the wrapper the setuid program $prog is still refused" "it said '$OUT'"; fi
+      MEASURED_SUID=$((MEASURED_SUID + 1))
+    done
+    if [ "$MEASURED_SUID" -ge 1 ]; then check "at least one other setuid program was found and measured" ok
+    else check "at least one other setuid program was found and measured" "none was found in /bin, /usr/bin, /sbin or /usr/sbin"; fi
+  else
+    echo "SUITE-PART-UNMEASURED every other setuid program being refused under the wrapper: outside it atq said '$OUT', so a refusal inside would prove nothing"
+  fi
+
+  # The caller cannot put its own code into the ps that leaves. A library named in
+  # DYLD_INSERT_LIBRARIES is loaded into a program compiled here, under the wrapper, and is not
+  # loaded into ps, which macOS starts without it as it does every program of its own.
+  cat > "$T/with-library.py" <<'PY'
+"""with-library.py <library> <marker file> <program> [words]: the program in this one's place,
+with the library named for the loader and the marker file named for the library."""
+import os
+import sys
+
+os.environ["DYLD_INSERT_LIBRARIES"] = sys.argv[1]
+os.environ["MARK_3482"] = sys.argv[2]
+os.execv(sys.argv[3], sys.argv[3:])
+PY
+  printf '%s\n' '#include <stdio.h>' '#include <stdlib.h>' \
+    '__attribute__((constructor)) static void loaded(void) {' \
+    '  const char *path = getenv("MARK_3482");' \
+    '  if (path) { FILE *f = fopen(path, "w"); if (f) { fputs("loaded\n", f); fclose(f); } }' \
+    '}' > "$T/inject.c"
+  printf '%s\n' '#include <unistd.h>' '#include <stdlib.h>' \
+    'int main(int argc, char **argv) { if (argc > 1) sleep((unsigned)atoi(argv[1])); return 0; }' > "$T/own.c"
+  if [ -x /usr/bin/cc ] && /usr/bin/cc -dynamiclib -o "$T/inject.dylib" "$T/inject.c" 2>"$T/cc.txt" && /usr/bin/cc -o "$T/own-prog" "$T/own.c" 2>>"$T/cc.txt"; then
+    run "$WRAP" "$PY_FIXED" -I "$T/with-library.py" "$T/inject.dylib" "$T/loaded.own" "$T/own-prog"
+    if [ -e "$T/loaded.own" ]; then
+      check "with the wrapper a library the caller names is loaded into a program compiled here" ok
+      run "$WRAP" "$PY_FIXED" -I "$T/with-library.py" "$T/inject.dylib" "$T/loaded.ps" "$PS_PROG" -o pid= -p "$$"
+      if [ "$RC" -eq 0 ] && [ "${OUT//[[:space:]]/}" = "$$" ]; then check "with the wrapper ps runs when the caller names a library for it" ok
+      else check "with the wrapper ps runs when the caller names a library for it" "exit $RC, it printed '${OUT:0:60}', stderr: ${ERR:0:300}"; fi
+      if [ -e "$T/loaded.ps" ]; then check "with the wrapper ps does not load a library the caller names" "the library WAS loaded into ps, which runs outside the sandbox: a wrapped command can run its own code there"
+      else check "with the wrapper ps does not load a library the caller names" ok; fi
+    else
+      check "with the wrapper a library the caller names is loaded into a program compiled here" "it was not loaded (exit $RC, ${ERR:0:200}), so its not loading into ps would prove nothing"
+    fi
+
+    # WHAT THE RULE DOES LET THROUGH, asserted as measured so the wrapper's own account stays true.
+    # A process of this user's, started outside the sandbox, with one marker among its arguments
+    # and one in its environment.
+    cat > "$T/procargs.py" <<'PY'
+"""procargs.py <pid> <marker>: whether the marker is in what the kernel hands back for the pid's
+arguments and environment (sysctl KERN_PROCARGS2). Prints found, absent or refused, and nothing
+of what was read."""
+import ctypes
+import ctypes.util
+import sys
+
+libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+mib = (ctypes.c_int * 3)(1, 49, int(sys.argv[1]))
+size = ctypes.c_size_t(1 << 20)
+buf = ctypes.create_string_buffer(size.value)
+if libc.sysctl(mib, 3, buf, ctypes.byref(size), None, 0) != 0:
+    print("refused")
+else:
+    print("found" if sys.argv[2].encode() in buf.raw[:size.value] else "absent")
+PY
+    MARK_ENV_3482=environment-marker-3482 "$T/own-prog" 300 argument-marker-3482 </dev/null >/dev/null 2>&1 &
+    OTHER=$!
+    hang_wait 'kill -0 "$OTHER" 2>/dev/null && [ "$("$PS_PROG" -o comm= -p "$OTHER" 2>/dev/null)" = "$T/own-prog" ]' || true
+    # ALREADY SO before the rule (measured 2026-11-24 under the profile without it): a wrapped
+    # command reads another of this user's processes' environment from the kernel, with no ps.
+    run "$WRAP" "$PY_FIXED" -I "$T/procargs.py" "$OTHER" environment-marker-3482
+    if [ "$OUT" = "found" ]; then check "environment: ALREADY SO without ps, a wrapped command reads another of this user's processes' environment from the kernel" ok
+    else check "environment: ALREADY SO without ps, a wrapped command reads another of this user's processes' environment from the kernel" "it said '$OUT': the sandbox no longer behaves as no-network-run.sh and the README say, so bring both up to date"; fi
+    # And ps, under the rule, shows the same environment: the same thing by a second route.
+    run "$WRAP" /bin/sh -c 'case "$(/bin/ps eww -o command= -p "$1" 2>/dev/null)" in *environment-marker-3482*) echo found ;; *) echo absent ;; esac' ps-env "$OTHER"
+    if [ "$OUT" = "found" ]; then check "environment: LET THROUGH, ps under the wrapper shows another of this user's processes' environment" ok
+    else check "environment: LET THROUGH, ps under the wrapper shows another of this user's processes' environment" "it said '$OUT': the sandbox no longer behaves as no-network-run.sh and the README say, so bring both up to date"; fi
+    kill "$OTHER" 2>/dev/null; wait "$OTHER" 2>/dev/null
+  else
+    echo "SUITE-PART-UNMEASURED whether a library the caller names is loaded into ps, and what ps shows of another process's environment: /usr/bin/cc could not compile the two small programs the cases need ($(head -c 200 "$T/cc.txt" 2>/dev/null))"
+  fi
+
+  # NEW with the rule: the arguments of a process that is NOT this user's. The kernel refuses them
+  # to a wrapped command that asks it directly, and ps, which is root's while it runs, shows them.
+  # Process 1 is launchd, root's on every Mac. Only the length of what came back is looked at.
+  if [ "$(id -u)" -ne 0 ]; then
+    run "$WRAP" "$PY_FIXED" -I "$T/procargs.py" 1 launchd
+    if [ "$OUT" = "refused" ]; then check "arguments: without ps the kernel refuses a wrapped command the arguments of a process that is not this user's" ok
+    else check "arguments: without ps the kernel refuses a wrapped command the arguments of a process that is not this user's" "it said '$OUT'"; fi
+    run "$WRAP" /bin/sh -c 'a="$(/bin/ps ww -o args= -p 1 2>/dev/null)"; if [ -n "$a" ]; then echo shown; else echo nothing; fi' ps-args
+    if [ "$OUT" = "shown" ]; then check "arguments: LET THROUGH, ps under the wrapper shows the arguments of a process that is not this user's" ok
+    else check "arguments: LET THROUGH, ps under the wrapper shows the arguments of a process that is not this user's" "it said '$OUT': the sandbox no longer behaves as no-network-run.sh and the README say, so bring both up to date"; fi
+  else
+    echo "SUITE-PART-UNMEASURED what ps adds for a process that is not this user's: the suite is running as root, which reads every process"
+  fi
+
+  # MEASURED: what the rule does to the program it names. A copy of the wrapper whose rule names
+  # curl in place of ps lets curl's post arrive, with every other line as shipped: the program
+  # named is outside the sandbox altogether, network and all. That is why the shipped rule names
+  # one program that opens no connection and starts no other program, and why adding a second one
+  # is a decision of Dan's and not a line to add.
+  if [ -n "$PORT" ]; then
+    changed names-curl "s|^OUTSIDE=.*|OUTSIDE='/usr/bin/curl'|"
+    one curl 127.0.0.1 out-curl "$T/names-curl.sh"
+    if [ "$OUTCOME" = "sent" ] && [ "$(arrived out-curl)" = "1" ]; then check "a copy whose rule names curl: curl's post ARRIVES, so the program the rule names is outside the sandbox" ok
+    else check "a copy whose rule names curl: curl's post ARRIVES, so the program the rule names is outside the sandbox" "outcome '$OUTCOME', arrived $(arrived out-curl): the rule no longer does what no-network-run.sh and the README say, so bring both up to date"; fi
+    one direct 127.0.0.1 out-direct "$T/names-curl.sh"
+    case "$OUTCOME" in
+      failed:*) check "a copy whose rule names curl: a post by any other program still fails" ok ;;
+      *) check "a copy whose rule names curl: a post by any other program still fails" "outcome '$OUTCOME'" ;;
+    esac
+    if [ "$(arrived out-direct)" = "0" ]; then check "a copy whose rule names curl: nothing arrives from any other program" ok
+    else check "a copy whose rule names curl: nothing arrives from any other program" "arrived $(arrived out-direct)"; fi
+  fi
+else
+  check "without the wrapper ps prints the pid it is asked for" "exit $RC, it printed '${OUT:0:60}', stderr: ${ERR:0:200}, so nothing about ps under the wrapper could be measured"
+fi
+
 echo "no network run: the sandbox is proved on every run, and a run that cannot prove it runs nothing"
 
 changed unapplied "s|^PROFILE=.*|PROFILE='(version 1)(allow default'|"

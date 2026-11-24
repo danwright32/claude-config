@@ -12,7 +12,7 @@
 # runs the command inside a macOS sandbox that denies every network operation, and the gate lets
 # a command through when its program is this file at its installed path (Dan, 2026-11-18: "Yes,
 # any command"). Every process the command starts inherits the sandbox, a detached one too, and
-# none can take it off.
+# none can take it off. There is one exception, which this file makes itself: ps (below).
 #
 # IT TAKES NO OPTION AND READS NO SETTING, so nothing in a command line can weaken it: a first
 # word starting with a dash is refused, and there is no "this Mac only" mode. The shebang's -p
@@ -50,6 +50,31 @@
 # Measured 2026-11-20 on macOS 26.6.2: the starts for real, and the three requests by asking the
 # sandbox what it answers (sandbox_check), not by making them. Making one that turned out not to
 # be refused would open, script or load something on a Mac in use.
+#
+# IT LETS ONE PROGRAM OUT: /bin/ps (#3482). macOS refuses to start a setuid program from inside
+# any sandbox, whatever the profile allows, and ps is one: the kernel logs "deny(1)
+# forbidden-exec-sugid" (measured 2026-11-24, macOS 26.6.2, under a profile naming the network
+# alone). So every ps under this file ended "Operation not permitted", and four suites that read
+# a process through it could not pass on the route the gate sends them down. Reading the process
+# list was never something this file set out to stop: the profile allows everything it does not
+# name, and a wrapped command already reads the list from the kernel. But a profile has one form
+# that lets a setuid program start, (with no-sandbox), and it does what it says: the program it
+# names is started OUTSIDE the sandbox, network and all. Eight forms were tried and no other
+# starts ps. So the rule names ps by its real path and nothing else, and (each measured in
+# test-no-network-run.sh):
+#   * a link to ps runs it. Another program called ps stays in the sandbox, and every other
+#     setuid program is still refused;
+#   * ps opens no connection and starts no program, and macOS does not load into it a library the
+#     caller names (DYLD_INSERT_LIBRARIES), so the caller's own code does not leave with it. The
+#     command that ran ps is where it was: its connection is refused and so are the hand offs;
+#   * what a wrapped command gains is what ps prints. The arguments and the environment of this
+#     user's other processes it could already read with no ps (sysctl, measured under the profile
+#     without the rule), so ps eww shows nothing new of them. NEW is the arguments of processes
+#     that are NOT this user's: the kernel refuses those to a wrapped command, and ps, which is
+#     root's while it runs, prints them. Whether it prints their environment too was not
+#     measured: no process of another user's could be given a marker without being root.
+# A second program is not a line to add here. The suite runs a copy of this file whose rule names
+# curl, and curl's post arrives.
 #
 # There is no retry, backoff or poll here. The one time limit is PROBE_SECONDS, a ceiling only a
 # hang reaches, and a constant so that the suite can shorten it on a copy (L524).
@@ -93,7 +118,10 @@ PYTHON=/Library/Developer/CommandLineTools/usr/bin/python3
 HANDOFFS='/usr/bin/open /usr/bin/osascript /bin/launchctl /usr/bin/crontab /usr/bin/shortcuts'
 DENY_STARTS=''
 for handoff in $HANDOFFS; do DENY_STARTS="$DENY_STARTS (literal \"$handoff\")"; done
-PROFILE="(version 1)(allow default)(deny network*)(deny process-exec*$DENY_STARTS)(deny lsopen)(deny appleevent-send)(deny job-creation)"
+# The one program started OUTSIDE the sandbox, by its real path (#3482, "IT LETS ONE PROGRAM OUT"
+# above). Whatever this names has the network back, so it is one program and never a list.
+OUTSIDE='/bin/ps'
+PROFILE="(version 1)(allow default)(deny network*)(deny process-exec*$DENY_STARTS)(deny lsopen)(deny appleevent-send)(deny job-creation)(allow process-exec (literal \"$OUTSIDE\") (with no-sandbox))"
 PROBE_SECONDS=20
 ME=no-network-run
 
