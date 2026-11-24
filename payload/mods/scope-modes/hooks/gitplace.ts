@@ -31,9 +31,6 @@ export const gitRead = (g: ModKitGit): GitRead => ({
   ...(g.workTree !== undefined ? { workTree: g.workTree } : {}),
 })
 
-/** Whether a git command names where it acts at all: a -C, or a repository or a working folder apart. */
-export const gitNamesPlace = (g: GitRead): boolean => g.dir !== undefined || g.chained !== undefined || g.gitDir !== undefined || g.workTree !== undefined
-
 /** git's own words before its subcommand, by the split mod-kit's reading made. */
 export const gitGlobals = (words: readonly string[], g: { sub?: string; args: readonly string[] }): string[] =>
   g.sub === undefined ? words.slice(1) : words.slice(1, words.length - g.args.length - 1)
@@ -112,11 +109,12 @@ export const gitFolder = (p: GitPlace): string | null => (p.apart ? null : p.run
  * winding down (#1074): where git runs, when that is written out in full, and the repository is the
  * one found from it. `untold` where the command names its repository apart, which no folder
  * answers for; `none` where the folder is not written in full (a relative one, a value the shell
- * fills in, a chain mod-kit cannot work out), as a relative -C always was.
+ * fills in, a chain mod-kit cannot work out), as a relative -C always was. Asked of the command
+ * that commits or pushes itself, never of another git command in the call.
  */
-export const branchFolder = (g: GitRead | undefined, cwd: string, envNamed: boolean): { path: string } | { untold: string } | 'none' => {
-  // A call whose git commands name no folder runs in the session's.
-  const p = gitPlace(g ?? { args: [] }, cwd, w => (w.startsWith('/') ? w : null), envNamed)
+export const branchFolder = (g: GitRead, cwd: string, envNamed: boolean): { path: string } | { untold: string } | 'none' => {
+  // A command naming no folder runs in the session's.
+  const p = gitPlace(g, cwd, w => (w.startsWith('/') ? w : null), envNamed)
   if (p.apart?.repository) return { untold: p.apart.said }
   return p.runs === null ? 'none' : { path: p.runs }
 }

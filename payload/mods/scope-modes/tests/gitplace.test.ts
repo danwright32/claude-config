@@ -1,6 +1,6 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
-import { branchFolder, checkoutFolder, gitEnvNamed, gitFolder, gitGlobals, gitNamesPlace, gitPlace, gitRead, type GitRead } from '../hooks/gitplace.ts'
+import { branchFolder, checkoutFolder, gitEnvNamed, gitFolder, gitGlobals, gitPlace, gitRead, type GitRead } from '../hooks/gitplace.ts'
 import { resolveDir } from '../hooks/overnight.ts'
 import { readCommands } from './read.ts'
 
@@ -111,7 +111,7 @@ describe('where a git command runs', () => {
 })
 
 describe('the folders the notes kept for winding down read', () => {
-  const branch = (command: string) => branchFolder(readCommands(command).find(c => c.git && gitNamesPlace(c.git))?.git, CWD, gitEnvNamed(command, readCommands(command)))
+  const branch = (command: string) => branchFolder(gitOf(command), CWD, gitEnvNamed(command, readCommands(command)))
   test('the branch a commit lands on: the folder git runs in when written in full, the session folder when none is named', () => {
     expect(branch('git commit -m x')).toEqual({ path: CWD })
     expect(branch('git -C /other commit -m x')).toEqual({ path: '/other' })

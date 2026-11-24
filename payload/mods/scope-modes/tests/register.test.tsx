@@ -7994,6 +7994,44 @@ for (const [line, why] of [
     expect((await stop($ as never)).block).toBeUndefined()
   })
 
+// #3398 lessons review: each commit, and each push naming no branch, is placed by its own reading.
+// Until then the first git command in the call that named a place answered for all of them, so a
+// read of another folder in front of a commit decided whose branch the commit was of.
+for (const line of ['git -C /repo log -1 && git --git-dir=/other/.git commit -m wip', 'git -C /repo status; GIT_DIR=/other/.git git push'])
+  test(`a commit or push into a repository named apart, behind a git command naming this checkout, still names no branch of it, and that is said: ${line} (#3398 lessons review)`, withDeps, async ($, on) => {
+    const { w, clock } = world(on, { branch: 'fix-700' })
+    await start($ as never, clock)
+    expect(await call($ as never, bash(line))).toBe('ran')
+    expect(w.toasts).toEqual([UNTOLD_BRANCH('it names its repository apart from the folder it runs in (--git-dir or GIT_DIR)')])
+    await command($ as never, 'winddown')
+    expect((await stop($ as never)).block).toBeUndefined()
+  })
+
+for (const line of ['git -C tests status && git commit -m wip', 'git -C "$W" log -1; git commit -m wip', 'git --git-dir=/other/.git log -1 && git -C /repo commit -m wip'])
+  test(`a commit in this checkout, behind a git command naming another place, is of the branch checked out here: ${line} (#3398 lessons review)`, withDeps, async ($, on) => {
+    const { w, clock } = world(on, { branch: 'fix-700' })
+    await start($ as never, clock)
+    expect(await call($ as never, bash(line))).toBe('ran')
+    expect(w.toasts).toEqual([])
+    await command($ as never, 'winddown')
+    expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: there is no PR for fix-700 yet\./)
+  })
+
+// The note runs after every call that may commit, push or start a branch, so a mod-kit that cannot
+// say which repository a git command names fails it on each of them, the same way each time: said
+// once, as a skew is (#1281).
+test('a mod-kit loaded before it said which repository a command names costs every branch note, and that is said once, never on every call that commits or pushes (#3398 lessons review)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { branch: 'fix-700', oldGitReader: true })
+  await start($ as never, clock)
+  await call($ as never, bash('git commit -m wip', 'g1'))
+  await call($ as never, bash('git commit -m more', 'g2'))
+  await call($ as never, bash('git push', 'g3'))
+  const said = w.toasts.filter(t => t.includes('could not note which branch'))
+  expect(said.length).toBe(1)
+  expect(said[0]).toContain('the mod-kit loaded in this session does not say which repository a git command names')
+  expect(said[0]).toContain('Until then no call that commits, pushes or starts a branch has its branch noted')
+})
+
 for (const line of ['git -C / -C repo commit -m wip', 'git -C /repo -C "" commit -m wip', 'git -C / -C repo push'])
   test(`a commit through more than one -C written in full is of the branch checked out where they lead: ${line} (#3398)`, withDeps, async ($, on) => {
     const { w, clock } = world(on, { branch: 'fix-700' })

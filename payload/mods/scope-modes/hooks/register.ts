@@ -46,7 +46,7 @@ import {
   type Scripts,
 } from './mergedeploy.ts'
 import { NEVER_ASKED, overnightRefusal, primaryFrom, readableWay, repoFromRemotes, type GithubOf, type Look } from './overnight.ts'
-import { branchFolder, checkoutFolder, gitEnvNamed, gitNamesPlace, gitRead, type GitRead } from './gitplace.ts'
+import { branchFolder, checkoutFolder, gitEnvNamed, gitRead, type GitRead } from './gitplace.ts'
 import { committedHosts, groupAfter, tabsAfter, type Browser, type BrowserTabs, type TabsAcross, type TestHosts } from './browser.ts'
 import { wakeCheck, workedOn } from './wakecheck.ts'
 import { lastSource, powerChange, powerOf, sleepRefusal, type Power } from './power.ts'
@@ -3348,10 +3348,12 @@ const hold = async ($: EngineInterface, label: string, prompt: string) => {
 // note asks the reader for itself, and until it asked this too an older mod-kit had it read a patch
 // applied in a repository named apart as landing in the session's checkout (#3398 lessons review).
 const GIT_NAMING_PROBE = { words: ['git', '-C', '/a', '-C', 'b', '--git-dir=/x', 'status'], env: ['GIT_WORK_TREE=/y'] }
+// Its own kind of error, so a note made after every call can say it once (noteBranches).
+class GitNamingSkew extends Error {}
 const gitNamingKnown = async ($: EngineInterface): Promise<void> => {
   const known = await $.modkit.git(GIT_NAMING_PROBE)
   if (known?.chained !== '/a/b' || known.gitDir !== '/x' || known.workTree !== '/y')
-    throw new Error('the mod-kit loaded in this session does not say which repository a git command names (it is older than scope modes, #3398); /reload-plugins loads the current one')
+    throw new GitNamingSkew('the mod-kit loaded in this session does not say which repository a git command names (it is older than scope modes, #3398); /reload-plugins loads the current one')
 }
 const readCommands = async ($: EngineInterface, raw: string): Promise<Cmd[]> => {
   const out: Cmd[] = []
@@ -4952,32 +4954,50 @@ const sameText = (a: string, b: string) => a === b
 // every -C leads, since git reads each from the one before it (#3398; until then the last -C alone
 // was read, so `git -C /a -C b commit` named none). A commit into a repository named apart
 // (--git-dir, GIT_DIR) is of a branch no folder answers for: until #3398 it made the branch of the
-// folder it was typed in the session's own. A note that cannot be made is said, since winding down
-// would then not finish that branch.
+// folder it was typed in the session's own. Each commit, and each push naming no branch, is placed
+// by its own reading (#3398 lessons review): until then the first git command in the call that
+// named a place answered for every one of them, so `git -C /here log && git --git-dir=/o/.git
+// commit` made the branch of /here the session's own, and a commit behind a read of a folder not
+// written in full named none. A note that cannot be made is said, since winding down would then not
+// finish that branch.
+let namingSkewSaid = false
 const noteBranches = async ($: EngineInterface, raw: string, agentId: unknown) => {
   try {
     const cmds = await readCommands($, raw)
-    const { named, current } = branchesTouched(cmds)
-    const pushed = branchesPushedInto(cmds)
-    const add = [...named]
-    const moved = cmds.some(c => c.words[0] === 'cd' || c.words[0] === 'pushd')
-    // The branch checked out where the call ran, read only where it is known and needed.
-    let here: string | undefined
+    const add = [...branchesTouched(cmds).named]
+    const into: ScopeModesPushedInto[] = []
+    const known = agentId === undefined && !cmds.some(c => c.words[0] === 'cd' || c.words[0] === 'pushd')
+    const cwd = known ? await $.session.cwd() : ''
+    const envNamed = gitEnvNamed(raw, cmds)
+    // The branch checked out where one command ran, read only where it is known and needed, once a folder.
+    const read = new Map<string, string | undefined>()
     let untold: string | undefined
-    if ((current || pushed.some(p => p.from === null)) && agentId === undefined && !moved) {
-      const at = branchFolder(cmds.find(c => c.git && gitNamesPlace(c.git))?.git, await $.session.cwd(), gitEnvNamed(raw, cmds))
-      if (at !== 'none' && 'untold' in at) untold = at.untold
-      const read = at !== 'none' && 'path' in at ? await $.modkit.branch({ path: at.path }) : null
-      if (read && 'unreadable' in read && read.unreadable !== DETACHED) throw new Error(read.unreadable)
-      if (read && !('unreadable' in read) && read.branch) here = read.branch
+    const hereOf = async (g: GitRead): Promise<string | undefined> => {
+      const at = branchFolder(g, cwd, envNamed)
+      if (at === 'none') return undefined
+      if ('untold' in at) {
+        untold ??= at.untold
+        return undefined
+      }
+      if (!read.has(at.path)) {
+        const b = await $.modkit.branch({ path: at.path })
+        if (b && 'unreadable' in b && b.unreadable !== DETACHED) throw new Error(b.unreadable)
+        read.set(at.path, b && !('unreadable' in b) && b.branch ? b.branch : undefined)
+      }
+      return read.get(at.path)
     }
-    if (current && here) add.push(here)
+    for (const c of cmds) {
+      const current = branchesTouched([c]).current
+      const pushed = branchesPushedInto([c])
+      const here = c.git && known && (current || pushed.some(p => p.from === null)) ? await hereOf(c.git) : undefined
+      if (current && here) add.push(here)
+      // Which branch each push into another came from (#2533), so the finish check reads that one's PR.
+      for (const p of pushed) {
+        const from = p.from ?? here
+        if (from && from !== p.to) into.push({ from, to: p.to })
+      }
+    }
     await addToList({ get: () => $.state.get(branchesRef), set: (l, v) => $.state.set(branchesRef, l, { ifVersion: v }) }, add, sameText)
-    // Which branch each push into another came from (#2533), so the finish check reads that one's PR.
-    const into = pushed.flatMap(p => {
-      const from = p.from ?? here
-      return from && from !== p.to ? [{ from, to: p.to }] : []
-    })
     await addToList({ get: () => $.state.get(pushedIntoRef), set: (l, v) => $.state.set(pushedIntoRef, l, { ifVersion: v }) }, into, (a, b) => a.from === b.from && a.to === b.to)
     // Said once the branches the call names are noted, so only the one that cannot be told is lost.
     if (untold) throw new Error(untold)
@@ -4989,7 +5009,16 @@ const noteBranches = async ($: EngineInterface, raw: string, agentId: unknown) =
       if (news) $.ui.toast(`${news} ${NOTES_LOST}`)
       return
     }
-    $.ui.toast(`Scope modes could not note which branch this call made the session's own (${msg(err)}), so winding down may not finish it.`)
+    const said = `Scope modes could not note which branch this call made the session's own (${msg(err)}), so winding down may not finish it.`
+    // The same for a mod-kit that cannot say which repository a git command names (#3398): every
+    // call that reaches this note fails it the same way until the mods are reloaded.
+    if (err instanceof GitNamingSkew) {
+      if (namingSkewSaid) $.ui.log(`scope-modes: ${said}`, { to: 'debug' })
+      else $.ui.toast(`${said} Until then no call that commits, pushes or starts a branch has its branch noted; later ones go to the debug log.`)
+      namingSkewSaid = true
+      return
+    }
+    $.ui.toast(said)
   }
 }
 
@@ -6347,6 +6376,7 @@ export const register: Register = on => {
     await $.state.set(writtenPartsRef, 0)
     writtenHeld = null
     writeNoteSaid = false
+    namingSkewSaid = false
     // What was held overnight, the night seen and the morning put are this session's (#1284, #1285, #1383), so a new session starts with none.
     heldNow = []
     heldLoaded = true
