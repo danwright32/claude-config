@@ -13521,6 +13521,36 @@ check "#1621 and the refusal still names the file and line" \
 # hand, never at an override the watcher has just said it ignores (L111).
 check "#1621 and the watcher's refusal points the override at a send run by hand" \
   "line_has \"\$out_wn3\" 'names a work organisation' 'one send run by hand' 'claude-sync send'"
+# With git, the files the scan reads are the ones git lists, and without -z git prints a name
+# holding a double quote, a backslash, a line break or a tab inside quotes with escapes. Read by
+# lines, that spelling named no file, so the file was dropped from the list, never scanned, and sent
+# (claude-config#3499, the same fault #3483's review found in the home path check). Each name alone,
+# so no other file in the send can be what refuses it, after a control with a plain name.
+WNB="$WORK/worknames-bare.git"; git init -q --bare -b main "$WNB"
+WNC="$WORK/worknames-clone"; git clone -q "$WNB" "$WNC" 2>/dev/null
+WNG="$WORK/worknames-githome"; mkdir -p "$WNG/agents"; echo '{"hooks":{}}' > "$WNG/settings.json"; printf '# rules\n' > "$WNG/CLAUDE.md"
+_wng(){ env HOME="$WNE" HOOK_TESTS_RUNNING=1 WORK_NAMES_EXTRA_HASHES="$WNHASH" SYNC_LOG_FILE="$WNLOG" SYNC_NO_HOOK_TESTS=1 SYNC_NO_SEND_TESTS=1 SYNC_NO_NOTIFY=1 SYNC_HOSTNAME=wnmac CLAUDE_HOME="$WNG" SYNC_REPO="$WNC" bash "$SCRIPT" send 2>&1; }
+_wng >/dev/null || true
+wn_head0="$(git -C "$WNB" rev-parse -q --verify main 2>/dev/null || true)"
+check "#3499 control: the work names fixture's first send goes through" "[ -n '$wn_head0' ]"
+printf 'see acme-hq/widgets#12 for the history\n' > "$WNG/agents/plain.md"
+if out_wng1="$(_wng)"; then rc_wng1=0; else rc_wng1=$?; fi
+check "#3499 control: with git, a plain name carrying the organisation is refused by file and line" \
+  "[ '$rc_wng1' -ne 0 ] && line_has \"\$out_wng1\" 'names a work organisation' 'agents/plain\.md:1'"
+rm -f "$WNG/agents/plain.md"
+printf 'see acme-hq/widgets#12 for the history\n' > "$WNG/agents/quo\"ted.md"
+if out_wng2="$(_wng)"; then rc_wng2=0; else rc_wng2=$?; fi
+dbg "send carrying the organisation in a file whose name holds a double quote: rc=$rc_wng2 $out_wng2"
+check "#3499 a file whose name holds a double quote is scanned for work names, and the send refused" \
+  "[ '$rc_wng2' -ne 0 ] && line_has \"\$out_wng2\" 'names a work organisation' 'agents/quo\"ted\.md:1' && out_lacks \"\$out_wng2\" 'acme-hq'"
+rm -f "$WNG/agents/quo\"ted.md"
+printf 'see acme-hq/widgets#12 for the history\n' > "$WNG/agents/two
+lines.md"
+if out_wng3="$(_wng)"; then rc_wng3=0; else rc_wng3=$?; fi
+dbg "send carrying the organisation in a file whose name holds a line break: rc=$rc_wng3 $out_wng3"
+check "#3499 a file whose name holds a line break is scanned for work names, and the send refused" \
+  "[ '$rc_wng3' -ne 0 ] && line_has \"\$out_wng3\" 'names a work organisation' 'lines\.md:1' && out_lacks \"\$out_wng3\" 'acme-hq'"
+check "#3499 and neither reached the shared repo" "[ \"\$(git -C '$WNB' rev-parse main)\" = '$wn_head0' ]"
 
 section "== a refused send is reported by status and stuck until a send gets through, and a lesson naming a work organisation is caught when written (#2530) =="
 # On one Mac the change watcher's send was refused 71 times by the work names scan, and the only
@@ -13698,6 +13728,17 @@ check "#3465 stuck reports the held send as a refused send, counted" \
   "printf '%s\n' \"\$out_hp_st1\" | awk -F'\t' '\$1==\"send-refused\" && \$2==1 {f=1} END{exit !f}'"
 check "#3465 and its sentence names the check and the file" \
   "line_has \"\$out_hp_st1\" 'send-refused' 'home path check' 'hooks/run/cache-base/entry\.json:1'"
+# Where the check's output is kept is said only while that file is there (claude-config#3499). stuck
+# and status said every line was in it whether or not it existed, so a reader was sent to a file
+# that a failed write, or a tidy up, had left missing.
+check "#3499 while the check's output is kept, stuck says where it is" \
+  "line_has \"\$out_hp_st1\" 'send-refused' 'Every line the check reported is in' 'home-path-check\.log'"
+mv "$HPC/.send-suite-output/home-path-check.log" "$WORK/homepath-kept.aside"
+out_hp_st1b="$(_hp bash "$SCRIPT" stuck)"
+mv "$WORK/homepath-kept.aside" "$HPC/.send-suite-output/home-path-check.log"
+dbg "stuck with the kept output gone: $out_hp_st1b"
+check "#3499 with that file gone, stuck still reports the held send and points at no file that is not there" \
+  "line_has \"\$out_hp_st1b\" 'send-refused' 'home path check' 'hooks/run/cache-base/entry\.json:1' && out_lacks \"\$out_hp_st1b\" 'home-path-check\.log'"
 # The change watcher sends on every burst of edits, and a session writing scratch makes a burst every
 # few seconds. A standing hold is said in full once, then in one short line until it changes, it
 # clears or a day passes, and only the full one posts a desktop notice, so a held send costs the log
@@ -13740,6 +13781,23 @@ check "#3465 and names the first five and counts the other four" \
 out_hp_st5="$(_hp bash "$SCRIPT" stuck)"
 check "#3465 and status carries the same count and the same first five" \
   "line_has \"\$out_hp_st5\" 'send-refused' '9 files' 'cache-change/k4\.json:1' 'and 4 more' && out_lacks \"\$out_hp_st5\" 'cache-change/k5\.json'"
+# A hold that keeps growing is one hold. A session still writing scratch adds a file a tick, so the
+# files named change every time and the words are said again, but the desktop notice is posted once
+# for a standing hold and again only a day after the last one: a notice a tick is what the short line
+# was added to end (claude-config#3499).
+: > "$HPREC"
+printf '{"cwd":"%s/projects/site/9"}\n' "$HP_BAD" > "$HPH/hooks/run/cache-change/k9.json"
+if out_hp5b="$(_hp SYNC_IN_WATCH=1 SYNC_NO_NOTIFY=0 SYNC_NOTIFIER="$HPNOTIFIER" bash "$SCRIPT" send)"; then rc_hp5b=0; else rc_hp5b=$?; fi
+hp_notices5b="$(grep -c . "$HPREC" 2>/dev/null || true)"
+dbg "watcher send after the hold grew by one file: rc=$rc_hp5b $out_hp5b"
+check "#3499 a hold that grew is said in full again, with the new count" \
+  "[ '$rc_hp5b' -ne 0 ] && line_has \"\$out_hp5b\" 'home path check' '10 files' 'hooks/run/cache-base/entry\.json:1'"
+check "#3499 and posts no further desktop notice within a day of the last one" "[ '$hp_notices5b' -eq 0 ]"
+printf '{"cwd":"%s/projects/site/10"}\n' "$HP_BAD" > "$HPH/hooks/run/cache-change/k10.json"
+if out_hp5c="$(_hp SYNC_IN_WATCH=1 SYNC_NO_NOTIFY=0 SYNC_NOTIFIER="$HPNOTIFIER" SYNC_SEND_HOLD_NOW="$(( $(date +%s) + 172900 ))" bash "$SCRIPT" send)"; then rc_hp5c=0; else rc_hp5c=$?; fi
+hp_notices5c="$(grep -c . "$HPREC" 2>/dev/null || true)"
+check "#3499 a day after the last notice, a hold that grew again posts one, so it is never silenced for good" \
+  "[ '$rc_hp5c' -ne 0 ] && line_has \"\$out_hp5c\" 'home path check' '11 files' && [ '$hp_notices5c' -eq 1 ]"
 # Taking the files out of this Mac's config clears it, and the clean changes held with them go.
 rm -rf "$HPH/hooks/run"
 if out_hp6="$(_hp bash "$SCRIPT" send)"; then rc_hp6=0; else rc_hp6=$?; fi
@@ -13796,10 +13854,17 @@ printf '{"cwd":"%s/projects/site"}\n' "$HP_BAD" > "$HPH/hooks/runq/new
 line.json"
 if out_hpq3="$(_hp bash "$SCRIPT" send)"; then rc_hpq3=0; else rc_hpq3=$?; fi
 dbg "send carrying a file whose name holds a newline: rc=$rc_hpq3 $out_hpq3"
-# The check names the file across two lines, so the refusal cannot quote it back; it is held all the
-# same, as a check that could not name what it found.
+# The check prints that name across two lines, so reading its output line by line found no file and
+# the send was held as a check that could not judge, which is the wrong cause and sends the reader to
+# look for a broken check (claude-config#3499). The cause said is the true one, a file that fails the
+# check, and the file is named on one line with its line break written as git writes it.
 check "#3465 a file whose name holds a newline is read by the check, and the send is held" \
-  "[ '$rc_hpq3' -ne 0 ] && line_has \"\$out_hpq3\" 'home path check' 'nothing is sent'"
+  "[ '$rc_hpq3' -ne 0 ] && line_has \"\$out_hpq3\" 'home path check' 'whole send is held'"
+check "#3499 and held for the true cause, a file that fails the check, named with its line" \
+  "line_has \"\$out_hpq3\" '1 file this send would publish fails the home path check' 'runq/new.nline\.json:1' && out_lacks \"\$out_hpq3\" 'could not judge'"
+out_hpq3_st="$(_hp bash "$SCRIPT" stuck)"
+check "#3499 and stuck names the same file on its one line" \
+  "line_has \"\$out_hpq3_st\" 'send-refused' 'did not pass that check' 'runq/new.nline\.json:1'"
 check "#3465 and none of the three reached the shared repo" "[ \"\$(git -C '$HPB' rev-parse main)\" = '$hp_head_q' ]"
 rm -rf "$HPH/hooks/runq"
 if out_hpq4="$(_hp bash "$SCRIPT" send)"; then rc_hpq4=0; else rc_hpq4=$?; fi
@@ -13824,6 +13889,52 @@ check "#3465 and it did not reach the shared repo" "[ \"\$(git -C '$HPB' rev-par
 rm -f "$HPH/agents/handmade.md"
 git -C "$HPC" reset -q --hard "$hp_up"
 git -C "$HPC" branch -q -u "$hp_up"
+# A send that went up on top of a shared head still being tested (#1398) leaves this clone's commits
+# beside the shared repo's copy of them, under another id, until that head is taken in. Listed from
+# the upstream, those commits' files read as unsent on every later send, so one of them failing the
+# check held sends that had nothing to do with it (claude-config#3499). What the shared repo already
+# holds is not this send's to answer for; what it does not hold still is, committed or only staged.
+# The fixture is the state send_over_untested_tip leaves: the clone's commit, the same tree in the
+# shared repo as a commit on the upstream's tip, and the record naming both. Sent with push, which
+# stages and scans and has no receiving half to take the shared head in.
+hp_up_sha="$(git -C "$HPC" rev-parse "$hp_up")"
+printf 'already in the shared repo, %s/notes\n' "$HP_BAD" > "$HPH/agents/sentover.md"
+cp "$HPH/agents/sentover.md" "$HPC/payload/agents/sentover.md"
+git -C "$HPC" add payload/agents/sentover.md
+git -C "$HPC" -c user.email=t@example.com -c user.name=t commit -q -m 'sent on top of a head still being tested'
+hp_sent_l="$(git -C "$HPC" rev-parse HEAD)"
+hp_sent_p="$(git -C "$HPC" -c user.email=t@example.com -c user.name=t commit-tree "$hp_sent_l^{tree}" -p "$hp_up_sha" -m 'the same work, as the shared repo holds it')"
+git -C "$HPC" push -q origin "$hp_sent_p:refs/heads/main"
+printf '%s %s\n' "$hp_sent_l" "$hp_sent_p" > "$HPC/.sent-over-untested"
+hp_stale_listing="$(git -C "$HPC" diff --name-only '@{upstream}...HEAD' 2>/dev/null || true)"
+check "#3499 control: the shared repo holds the file, and the listing from the upstream still names it" \
+  "git -C '$HPB' cat-file -e main:payload/agents/sentover.md && [ \"\$hp_stale_listing\" = 'payload/agents/sentover.md' ]"
+printf 'echo base v5\n' > "$HPH/hooks/base.sh"
+if out_hpv1="$(_hp bash "$SCRIPT" push)"; then rc_hpv1=0; else rc_hpv1=$?; fi
+dbg "push beside a failing file that already went up on top of an untested head: rc=$rc_hpv1 $out_hpv1"
+hp_base_v1="$(git -C "$HPC" show HEAD:payload/hooks/base.sh 2>/dev/null || true)"
+check "#3499 a failing file that already went up on top of an untested head does not hold a later send" \
+  "out_lacks \"\$out_hpv1\" 'home path check' && grep -q 'base v5' <<< \"\$hp_base_v1\""
+# And the other half, which is what keeps this a guard: a commit the shared repo does not hold, and
+# a file only staged from this Mac's config, are still read and still hold the send.
+printf 'made by hand and never sent, %s/notes\n' "$HP_BAD" > "$HPH/agents/notsent.md"
+cp "$HPH/agents/notsent.md" "$HPC/payload/agents/notsent.md"
+git -C "$HPC" add payload/agents/notsent.md
+git -C "$HPC" -c user.email=t@example.com -c user.name=t commit -q -m 'a commit made by hand, never sent'
+printf 'only in this config, %s/notes\n' "$HP_BAD" > "$HPH/agents/stagedonly.md"
+hp_head_v="$(git -C "$HPB" rev-parse main)"
+if out_hpv2="$(_hp bash "$SCRIPT" push)"; then rc_hpv2=0; else rc_hpv2=$?; fi
+dbg "push over an unsent commit and a staged file, beside the one already sent: rc=$rc_hpv2 $out_hpv2"
+check "#3499 a commit the shared repo lacks and a file only staged still hold the send, each named" \
+  "[ '$rc_hpv2' -ne 0 ] && line_has \"\$out_hpv2\" 'home path check' 'agents/notsent\.md:1' 'agents/stagedonly\.md:1' && [ \"\$(git -C '$HPB' rev-parse main)\" = '$hp_head_v' ]"
+check "#3499 and they are the only two: the file the shared repo already holds is not among them" \
+  "line_has \"\$out_hpv2\" 'home path check' '2 files this send would publish fail' && out_lacks \"\$out_hpv2\" 'sentover'"
+rm -f "$HPH/agents/notsent.md" "$HPH/agents/stagedonly.md" "$HPH/agents/sentover.md" "$HPC/.sent-over-untested"
+git -C "$HPC" reset -q --hard "$hp_up"
+git -C "$HPC" clean -q -fd -- payload
+if out_hpv3="$(_hp bash "$SCRIPT" sync)"; then rc_hpv3=0; else rc_hpv3=$?; fi
+dbg "sync once the fixture is put back: rc=$rc_hpv3 $out_hpv3"
+check "#3499 control: with the fixture put back, a sync goes through" "[ '$rc_hpv3' -eq 0 ]"
 # A sync hands the refusal back and still receives (#947). Its notice names this check, nothing is
 # sent, and the copies it sets aside in the clone are never this Mac's own files.
 mkdir -p "$HPH/hooks/run"; printf '{"cwd":"%s/projects/site"}\n' "$HP_BAD" > "$HPH/hooks/run/k.json"
@@ -13836,6 +13947,104 @@ check "#3465 a sync carrying such a file fails and sends nothing, in the check's
 hp_notice10="$(grep 'still receives' "$HPREC" 2>/dev/null || true)"
 check "#3465 and its desktop notice names the home path check" "grep -q 'home path check' <<< \"\$hp_notice10\""
 check "#3465 and this Mac's config is as it was after the sync set its staged copies aside" "[ \"\$(_hp_live)\" = \"\$hp_live2\" ]"
+# The watcher reaches the same hold through a sync when this Mac is behind, and a sync posts its own
+# notice that the send was refused. A standing hold already said is the short line there too, with
+# no notice a tick (claude-config#3499).
+: > "$HPREC"
+if out_hp10b="$(_hp SYNC_IN_WATCH=1 SYNC_NO_NOTIFY=0 SYNC_NOTIFIER="$HPNOTIFIER" bash "$SCRIPT" sync)"; then rc_hp10b=0; else rc_hp10b=$?; fi
+hp_notices10b="$(grep -c 'home path check' "$HPREC" 2>/dev/null || true)"
+if out_hp10c="$(_hp SYNC_IN_WATCH=1 SYNC_NO_NOTIFY=0 SYNC_NOTIFIER="$HPNOTIFIER" bash "$SCRIPT" sync)"; then rc_hp10c=0; else rc_hp10c=$?; fi
+hp_notices10c="$(grep -c 'home path check' "$HPREC" 2>/dev/null || true)"
+dbg "the watcher's sync meeting the hold, first: rc=$rc_hp10b $out_hp10b"
+dbg "the watcher's sync meeting the same hold again: rc=$rc_hp10c $out_hp10c"
+check "#3499 the watcher's sync that meets the hold says it in full and posts one notice" \
+  "[ '$rc_hp10b' -ne 0 ] && line_has \"\$out_hp10b\" 'SENT NOTHING' 'home path check' 'hooks/run/k\.json:1' && [ '$hp_notices10b' -eq 1 ]"
+check "#3499 and its next sync over the same hold says the short line and posts no second notice" \
+  "[ '$rc_hp10c' -ne 0 ] && line_has \"\$out_hp10c\" 'SENT NOTHING' 'still held' 'home path check' && [ '$hp_notices10c' -eq 1 ]"
+# What the other Mac sent still arrives while this Mac's send is held (claude-config#3499): the
+# receiving half of a held sync, with something to receive. Two of the files held with the failing
+# one carry names git quotes, a double quote and a line break, and they are set aside like any other
+# staged copy: read by lines, git's quoted spelling of each named no file, so both stayed behind in
+# the clone, uncommitted, for the receive to meet.
+HPO="$WORK/homepath-other"; git clone -q "$HPB" "$HPO" 2>/dev/null
+printf 'echo from the other Mac\n' > "$HPO/payload/hooks/other.sh"
+git -C "$HPO" add payload/hooks/other.sh
+git -C "$HPO" -c user.email=t@example.com -c user.name=t commit -q -m 'the other Mac sends a hook'
+git -C "$HPO" push -q origin HEAD:main
+hp_head3="$(git -C "$HPB" rev-parse main)"
+printf 'echo quoted\n' > "$HPH/hooks/quo\"ted.sh"
+printf 'echo backslash\n' > "$HPH/hooks/back\\slash.sh"
+printf 'echo tab\n' > "$HPH/hooks/tab$(printf '\t')name.sh"
+printf 'echo two lines\n' > "$HPH/hooks/two
+lines.sh"
+_hp_held_kept(){   # every file held with the failing one is still in this Mac's config, as written
+  grep -q 'projects/site' "$HPH/hooks/run/k.json" && grep -qx 'echo quoted' "$HPH/hooks/quo\"ted.sh" \
+    && grep -qx 'echo backslash' "$HPH/hooks/back\\slash.sh" && grep -qx 'echo tab' "$HPH/hooks/tab$(printf '\t')name.sh" \
+    && grep -qx 'echo two lines' "$HPH/hooks/two
+lines.sh"
+}
+if out_hp14="$(_hp bash "$SCRIPT" sync)"; then rc_hp14=0; else rc_hp14=$?; fi
+dbg "held sync with the other Mac's change coming in: rc=$rc_hp14 $out_hp14"
+check "#3499 a held sync still fails in the check's name and sends nothing" \
+  "[ '$rc_hp14' -ne 0 ] && line_has \"\$out_hp14\" 'SENT NOTHING' 'home path check' 'hooks/run/k\.json:1' && [ \"\$(git -C '$HPB' rev-parse main)\" = '$hp_head3' ]"
+check "#3499 and receives what the other Mac sent, into the clone and into this Mac's config" \
+  "[ \"\$(git -C '$HPC' rev-parse HEAD)\" = '$hp_head3' ] && grep -q 'from the other Mac' '$HPH/hooks/other.sh'"
+check "#3499 and the held files are all still in this Mac's config, whatever their names hold" "_hp_held_kept"
+hp_left14="$(git -C "$HPC" status --porcelain --untracked-files=all -- payload 2>/dev/null || true)"
+dbg "what the held sync left uncommitted in the clone: $hp_left14"
+# A name holding a line break is the one kind left in the clone, on purpose and said: the apply that
+# follows reads its lists a line at a time, and with that staged copy set aside it removed the file
+# from this Mac's config (measured here on 2026-11-23, which is why it is left).
+check "#3499 and no staged copy with a quote, a backslash or a tab in its name is left behind in the clone" \
+  "out_lacks \"\$hp_left14\" 'quo|slash|tab|k\.json'"
+check "#3499 and the one whose name holds a line break is left where it was, and nothing else is" \
+  "[ \"\$(grep -c . <<< \"\$hp_left14\")\" -eq 1 ] && grep -q 'two.nlines\.sh' <<< \"\$hp_left14\""
+check "#3499 and the sync says so, naming it on one line with why and what to do" \
+  "line_has \"\$out_hp14\" 'NOT set aside' 'line break' 'hooks/two.nlines\.sh' 'rename the file'"
+check "#3499 and names the rest as set aside, each on that one line" \
+  "line_has \"\$out_hp14\" 'were set aside' 'hooks/quo\"ted\.sh' 'hooks/back.slash\.sh' 'hooks/tab.tname\.sh' 'hooks/run/k\.json'"
+# The same names where a pull sets aside what stands in its way. A refused send leaves its staged
+# copies uncommitted in the clone, the other Mac then changes one of those files, and the pull has to
+# set this Mac's copy aside to fast forward. Read by lines, the quoted name looked like a file
+# outside the payload, which a pull never touches, so the pull refused and blamed somebody's own work.
+if out_hp15="$(_hp bash "$SCRIPT" send)"; then rc_hp15=0; else rc_hp15=$?; fi
+hp_left15="$(git -C "$HPC" status --porcelain --untracked-files=all -- payload 2>/dev/null || true)"
+check "#3499 control: a refused send leaves its staged copies uncommitted in the clone" \
+  "[ '$rc_hp15' -ne 0 ] && grep -q 'quo' <<< \"\$hp_left15\" && grep -q 'lines.sh' <<< \"\$hp_left15\""
+git -C "$HPO" pull -q origin main 2>/dev/null
+printf 'echo quoted, from the other Mac\n' > "$HPO/payload/hooks/quo\"ted.sh"
+git -C "$HPO" add payload/hooks
+git -C "$HPO" -c user.email=t@example.com -c user.name=t commit -q -m 'the other Mac sends a file with a quote in its name'
+git -C "$HPO" push -q origin HEAD:main
+hp_head4="$(git -C "$HPB" rev-parse main)"
+if out_hp16="$(_hp bash "$SCRIPT" pull)"; then rc_hp16=0; else rc_hp16=$?; fi
+dbg "pull over a staged copy whose name git quotes: rc=$rc_hp16 $out_hp16"
+check "#3499 a pull sets aside a staged copy whose name holds a double quote, and receives" \
+  "[ \"\$(git -C '$HPC' rev-parse HEAD)\" = '$hp_head4' ] && line_has \"\$out_hp16\" 'set aside' 'quo.ted\.sh' && out_lacks \"\$out_hp16\" 'OUTSIDE the payload'"
+check "#3499 and this Mac's own copy of it is not lost" "grep -rqx 'echo quoted' '$HPH/hooks'"
+# The name holding a line break is left where it is by a pull too, so when the other Mac changes that
+# file git refuses to receive over it. That refusal is said for what it is, with the way out, never
+# as an edit outside the payload that somebody should commit or discard.
+printf 'echo two lines, from the other Mac\n' > "$HPO/payload/hooks/two
+lines.sh"
+git -C "$HPO" add payload/hooks
+git -C "$HPO" -c user.email=t@example.com -c user.name=t commit -q -m 'the other Mac sends a file with a line break in its name'
+git -C "$HPO" push -q origin HEAD:main
+if out_hp17="$(_hp bash "$SCRIPT" pull)"; then rc_hp17=0; else rc_hp17=$?; fi
+dbg "pull over a staged copy whose name holds a line break: rc=$rc_hp17 $out_hp17"
+check "#3499 a pull that cannot receive over a staged copy whose name holds a line break refuses, and receives nothing" \
+  "[ '$rc_hp17' -ne 0 ] && [ \"\$(git -C '$HPC' rev-parse HEAD)\" = '$hp_head4' ] && line_has \"\$out_hp17\" 'git refused to fast-forward' 'NOTHING was received'"
+check "#3499 and says which file stands in the way, why it was left there, and what clears it" \
+  "line_has \"\$out_hp17\" 'left where they were' 'line break' 'hooks/two.nlines\.sh' 'Rename each in this Mac.s config'"
+check "#3499 and never calls it an edit outside the payload to commit or discard" \
+  "out_lacks \"\$out_hp17\" 'OUTSIDE the payload|discard'"
+check "#3499 and this Mac's own copy, and the staged one, are as they were" \
+  "grep -qx 'echo two lines' '$HPH/hooks/two
+lines.sh' && grep -qx 'echo two lines' '$HPC/payload/hooks/two
+lines.sh'"
+rm -f "$HPH/hooks/quo\"ted.sh" "$HPH/hooks/back\\slash.sh" "$HPH/hooks/tab$(printf '\t')name.sh" "$HPH/hooks/two
+lines.sh" "$HPH/hooks/other.sh"
+rm -f "$HPH"/hooks/*.conflict-* 2>/dev/null || true
 rm -rf "$HPH/hooks/run"
 # A check that could not run judged nothing, so the send is refused and says so, never passed
 # (L98): a copy of the tool with no check beside it, without git, where every file is being sent.
@@ -24017,6 +24226,46 @@ dbg "#1133 the send said: $out_so"
 check "#1133 the send refuses a credential in the counts it committed" "[ \$rc_so -ne 0 ]"
 check "#1133 and names the counts file" "grep -q 'possible secret found in: lesson-counts/MacScan\.tsv' <<< \"\$out_so\""
 check "#1133 and the shared repo never receives it" "[ \"\$(git -C '$SOB' rev-parse main 2>/dev/null)\" = '$so_tip' ]"
+# The files outside the payload are the ones git lists, and without -z git prints a name holding a
+# double quote, a backslash, a line break or a tab inside quotes with escapes. Read by lines, that
+# spelling named no file, so the file was left out of the scan and pushed (claude-config#3499). Its
+# own clone, each name in a commit of its own, after a control with a plain name; every planted value
+# is made here from a hash.
+SQB="$WORK/scanquote-bare.git"; git init -q --bare -b main "$SQB"
+SQR="$WORK/scanquote-repo"; git clone -q "$SQB" "$SQR" 2>/dev/null
+mkdir -p "$SQR/payload" "$SQR/notes"; echo '{"hooks":{}}' > "$SQR/payload/settings.hooks.json"; echo '# rules' > "$SQR/payload/CLAUDE.md"
+git -C "$SQR" checkout -q -b main 2>/dev/null || true
+git -C "$SQR" add -A && git -C "$SQR" -c user.name=t -c user.email=t@e commit -q -m seed && git -C "$SQR" push -q -u origin main
+SQH="$WORK/scanquote-home"; mkdir -p "$SQH"; echo '{"hooks":{}}' > "$SQH/settings.json"; echo '# rules' > "$SQH/CLAUDE.md"
+_sq(){ CLAUDE_HOME="$SQH" SYNC_REPO="$SQR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" push 2>&1; }
+_sq_commit(){   # $1 = a path under notes/, written with a planted value and committed, unpushed
+  printf 'api_key=%s\n' "$(printf 'a name git quotes %s' "$1" | shasum -a 256 | cut -c1-40)" > "$SQR/notes/$1"
+  git -C "$SQR" add notes && git -C "$SQR" -c user.name=t -c user.email=t@e commit -q -m 'a record outside the payload'
+}
+_sq_drop(){   # the commit just made is undone by another, so the next name is judged alone
+  git -C "$SQR" rm -q -r --cached notes >/dev/null 2>&1; rm -rf "$SQR/notes"; mkdir -p "$SQR/notes"
+  git -C "$SQR" -c user.name=t -c user.email=t@e commit -q -m 'the record is removed' 2>/dev/null || true
+}
+_sq >/dev/null 2>&1
+sq_tip="$(git -C "$SQB" rev-parse main 2>/dev/null)"
+_sq_commit plain.txt
+out_sq1="$(_sq)"; rc_sq1=$?
+check "#3499 control: a plain name outside the payload carrying a credential is refused by name" \
+  "[ \$rc_sq1 -ne 0 ] && grep -q 'possible secret found in: notes/plain\.txt' <<< \"\$out_sq1\""
+_sq_drop
+_sq_commit 'quo"ted.txt'
+out_sq2="$(_sq)"; rc_sq2=$?
+dbg "#3499 push over a committed record whose name holds a double quote: rc=$rc_sq2 $out_sq2"
+check "#3499 a file outside the payload whose name holds a double quote is scanned, and the send refused" \
+  "[ \$rc_sq2 -ne 0 ] && grep -q 'possible secret found in: notes/quo\"ted\.txt' <<< \"\$out_sq2\""
+_sq_drop
+_sq_commit 'two
+lines.txt'
+out_sq3="$(_sq)"; rc_sq3=$?
+dbg "#3499 push over a committed record whose name holds a line break: rc=$rc_sq3 $out_sq3"
+check "#3499 a file outside the payload whose name holds a line break is scanned, and the send refused" \
+  "[ \$rc_sq3 -ne 0 ] && line_has \"\$out_sq3\" 'possible secret found in' 'lines\.txt'"
+check "#3499 and none of the three reached the shared repo" "[ \"\$(git -C '$SQB' rev-parse main 2>/dev/null)\" = '$sq_tip' ]"
 
 section "== the daily re-rank job commits the tags of this Mac's new lessons (claude-config#566) =="
 # The monthly re-rank refuses while any lesson is untagged, and lessons arrive weekly, so the daily

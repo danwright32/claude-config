@@ -2800,15 +2800,43 @@ These choices were made by the session that built the fix, not by Dan, and are h
   makes one every few seconds. A standing hold is said in full once, then in one short line with
   no desktop notice, until its files change, it clears or a day passes, through the
   `.send-holds-told` store the send gate already keeps (#3179). A hold because the check could not
-  judge is said the same way, keyed on its reason. Every refusal is still counted. What it does not
-  quiet: a session that keeps adding NEW files changes the held set on each tick, so each tick is a
-  new hold said in full, with a notice. That is the hold changing, and is left to be said.
+  judge is said the same way, keyed on its reason. Every refusal is still counted. A session that
+  keeps adding NEW files changes the held set on each tick, so each tick says the hold in full
+  again, since what it names is new. It is still one hold, so since #3499 the desktop notice is
+  posted once and again only a day after the last: the record's fifth field keeps when a notice
+  was last posted, apart from the first field, which moves on every change, so a hold that never
+  stops changing is still posted once a day (L523). A sync the watcher reaches the hold through
+  posts no notice of its own for a hold already said (`SEND_REFUSED_QUIET`). Before #3499 each
+  tick of a growing hold posted a notice, which the first design had left to be said.
+- **What already went up is not read again (#3499).** After a send on top of a shared head still
+  being tested (#1398) this clone's commits sit beside the shared repo's copy of them until that
+  head is taken in, and listed from the upstream their files read as unsent on every send. The
+  list now starts where that send's record says this clone's unsent work starts, as
+  `unsent_commit_range` does. Every commit after that point and every uncommitted file is read as
+  before, and the suite holds both halves: the file already sent no longer holds a send, and a
+  commit not yet sent, and a file only staged, still do.
+- **A name holding a line break is held for the true cause (#3499).** The check prints such a name
+  across two lines, so reading its output a line at a time found no file and the send was held as
+  a check that could not judge. The send asks the check about each such name alone and names it on
+  one line with the break written as `\n`. `check-home-paths.sh` itself is unchanged.
 - **A missing check names its true cause.** On every Mac the tool runs from the clone it sends from,
   so the check is the copy staged from this Mac's config, and its absence means this send would
   remove it. Only a copy of the tool run elsewhere is told it is outside its checkout (L11).
 - **Output to a file.** The incident's lines were 1.6 MB each, 11.5 MB in all (measured
   2026-11-22), so the check's output never passes through a shell variable, and the kept copy in
   `.send-suite-output/home-path-check.log` cuts each line to 500 characters.
+- **The other three listings read names NUL separated too (#3499).** `scan_work_names`, the secret
+  scan's list of files outside the payload, and `uncommitted_paths` with its two readers (the set
+  aside after a refused sync, and the pull that sets aside what stands in its way) listed names
+  without `-z`, so a name git quotes named no file: it was sent unscanned by the first two, and by
+  the third reported as a deletion and left behind, or taken for a file outside the payload.
+- **A staged copy whose name holds a line break is left in the clone, and said (#3499).** Chosen by
+  the session that built it, and Dan's to change. Setting a copy aside is safe only because the
+  apply that follows keeps this Mac's own unsent file, and the apply reads its lists a line at a
+  time: in the suite on 2026-11-23, with such a copy set aside, the apply removed the file from
+  the config. Left where it is, which is what happened before the list was read by name, the
+  config keeps it. The cost is that a receive over the same file is refused by git until the file
+  is renamed, and the refusal says so. The lasting fix is in the apply, which is not this change.
 
 Ruled out as well: the send gate declaration (`# send-gate: scans ...`, #809), which would have run
 the check's whole suite on every send. Measured 2026-11-22: 9.8, 10.1 and 12.8 seconds a run at a
