@@ -2358,9 +2358,11 @@ const quotedText = (text: string): [number, number][] => {
       if (end < 0) break
       i = end
       word = c !== '('
+    } else {
       // Space, tab and new line are the only blanks bash and zsh read, so no other character ends
       // a word here (ONLY_JS_SPACE).
-    } else word = !/[ \t\n;&|()<>]/.test(c)
+      word = !/[ \t\n;&|()<>]/.test(c)
+    }
   }
   return runs
 }
