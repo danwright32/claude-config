@@ -8214,6 +8214,17 @@ for (const [how, line, extra] of [
     expect((await stop($ as never)).block ?? '').not.toContain('app.ts')
   })
 
+test('a patch read with a mod-kit loaded before it said which repository a command names is never placed in the session checkout: that is said (#3398 lessons review)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { branch: 'main', dirty: ['/repo'], dirtyFiles: ['app.ts'], files: { '/tmp/fix.patch': PATCH }, oldGitReader: true })
+  await start($ as never, clock)
+  expect(await call($ as never, bash('git --git-dir=/other/.git --work-tree=/other apply /tmp/fix.patch', 'g1'))).toBe('ran')
+  const said = w.toasts.filter(t => t.includes('the patch this call applied'))
+  expect(said.length).toBe(1)
+  expect(said[0]).toContain('the mod-kit loaded in this session does not say which repository a git command names')
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block ?? '').not.toContain('app.ts')
+})
+
 for (const [how, line, extra] of [
   ['a stash popped', 'git -C / -C repo stash pop', { stash: ['app.ts'] }],
   ['a patch applied', 'git -C / -C repo apply /tmp/fix.patch', { files: { '/tmp/fix.patch': PATCH } }],

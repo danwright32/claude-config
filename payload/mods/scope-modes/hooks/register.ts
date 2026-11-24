@@ -3344,16 +3344,22 @@ const hold = async ($: EngineInterface, label: string, prompt: string) => {
 // that (a mod reloaded before the one it depends on keeps the older copy, #1281) would answer with
 // no naming at all, which reads as a command naming nothing, so the reader is first asked about a
 // line whose answer is known, and one that cannot give it throws like any reading it cannot give.
+// One function asks, for every place that places a git command from the reader's answer: the patch
+// note asks the reader for itself, and until it asked this too an older mod-kit had it read a patch
+// applied in a repository named apart as landing in the session's checkout (#3398 lessons review).
 const GIT_NAMING_PROBE = { words: ['git', '-C', '/a', '-C', 'b', '--git-dir=/x', 'status'], env: ['GIT_WORK_TREE=/y'] }
+const gitNamingKnown = async ($: EngineInterface): Promise<void> => {
+  const known = await $.modkit.git(GIT_NAMING_PROBE)
+  if (known?.chained !== '/a/b' || known.gitDir !== '/x' || known.workTree !== '/y')
+    throw new Error('the mod-kit loaded in this session does not say which repository a git command names (it is older than scope modes, #3398); /reload-plugins loads the current one')
+}
 const readCommands = async ($: EngineInterface, raw: string): Promise<Cmd[]> => {
   const out: Cmd[] = []
   let probed = false
   for (const c of await $.modkit.pipeline({ command: raw })) {
     const g = await $.modkit.git({ words: c.words, ...(c.env?.length ? { env: c.env } : {}) })
     if (g && !probed) {
-      const known = await $.modkit.git(GIT_NAMING_PROBE)
-      if (known?.chained !== '/a/b' || known.gitDir !== '/x' || known.workTree !== '/y')
-        throw new Error('the mod-kit loaded in this session does not say which repository a git command names (it is older than scope modes, #3398); /reload-plugins loads the current one')
+      await gitNamingKnown($)
       probed = true
     }
     const cmd: Cmd = g ? { ...c, git: gitRead(g) } : { ...c }
@@ -5114,12 +5120,16 @@ const gitCheckout = async ($: EngineInterface, g: GitRead, envNamed: boolean): P
 const patchedFiles = async ($: EngineInterface, writes: ModKitWrites, raw: string): Promise<string[]> => {
   const out: string[] = []
   // Whether the call names GIT_DIR or GIT_WORK_TREE, read once and only for a call applying a patch:
-  // the write reader hands on a command's words without the settings in front of it (#3398).
+  // the write reader hands on a command's words without the settings in front of it (#3398). The
+  // reader is asked about the known line at the same moment, once, as readCommands asks it: this
+  // note takes the reader's answer for itself, and one that cannot say which repository a command
+  // names would have the patch read in the session's checkout.
   let envNamed: boolean | undefined
   for (const u of writes.unnamed) {
     if (u.what !== 'a patch') continue
     const g = await $.modkit.git({ words: u.words })
     if (g?.sub !== 'apply' && g?.sub !== 'am') continue
+    if (envNamed === undefined) await gitNamingKnown($)
     envNamed ??= gitEnvNamed(raw, await $.modkit.pipeline({ command: raw }))
     const root = await gitCheckout($, gitRead(g), envNamed)
     if (!root) continue
