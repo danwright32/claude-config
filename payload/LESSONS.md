@@ -9046,6 +9046,12 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A plan shipped with its own audit unresolved is read as THE plan, so file the correction as a gating issue alongside the phase issues.
 
 ## Cross-system reliability
+- **L1040. A harness that runs generated or untrusted input gives each run a time limit that kills
+  its whole process group, and checks before it ends that no child is alive. One input that never
+  ends otherwise outlives the harness, and its cost shows in no folder size and no test result.**
+  (claude-config#3561, 2026-11-24)
+  NO CHECK: the leftover process check is filed as claude-config#3561 and is not built yet
+  SHORT: A harness running generated input gives each run a time limit that kills its process group, or one endless input outlives it unseen.
 - **L859. A check that reads a platform straight after writing to it must read again for a bounded time before it fails, through an injected sleep, because the platform's read path can lag its write path, and a single read turns that lag into a failed step that leaves the system half updated.**
   (pivot#1591, 2026-11-17)
   SHORT: A check reading a platform straight after writing to it must read again for a bounded time before failing: the read path can lag the write.
