@@ -5069,6 +5069,14 @@ typed: every string naming a file is judged as `python3 <file>` is, a folder hol
 module run by a name written out is read as an import of it; and a file run by a path the gate
 cannot work out, a file run that is not text (an archive, compiled code), and code this python3
 cannot parse that names a way to run a file are each refused as unread.
+A path handed to a call that runs the file at it (`runpy.run_path`, `zipimport`) is refused as
+unread for three more things Python runs and the gate cannot read (`py_handed`,
+claude-config#3441): an archive with text in front of it, found by its zip end record as far
+back as `zipimport` looks, whatever the file is called; a path under an archive
+(`app.zip/inner`); and a folder whose `__main__` is compiled, an extension module or a package.
+Measured on main on 2026-11-24, each passed: only a NUL in a file's first line told an archive
+from text, so the archive `zipapp` writes behind a `#!` line read as a script that names
+nothing.
 It cannot tell a file such code only reads from one it runs, so a data file naming an endpoint
 refuses the command (`import subprocess, json; json.load(open('named.json'))`), and "can run
 code" holds every module the gate does not know to be unable to. Code that can run nothing
@@ -5078,7 +5086,9 @@ runs one is read this way, and a path or code that cannot be worked out is left 
 `tests/test-readme-mods-table.sh` loads a module by its path and then reads this file, and with
 every string read there it was refused (measured 2026-11-22).
 Not covered, each measured on 2026-11-22 as allowed where the file posts: `python3` handed a
-folder holding `__main__.py` or an archive; a Python file on disk that runs a file it names
+folder holding `__main__.py` or an archive (measured again on 2026-11-24; that word is read in
+the gate's own `every_file`, which calls nothing in this library, and claude-config#3441 stays
+open for it); a Python file on disk that runs a file it names
 (`python3 runner.py`, `import runner`); code the shell fills in whole
 (`python3 -c "$(cat posts.py)"`), which claude-config#3278's timing line keeps as it was; and
 code handed to a module run with `-m` (`python3 -m timeit`).
