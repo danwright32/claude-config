@@ -1023,6 +1023,10 @@ stopped "a cd the shell skips because the ls before its && failed" "ls $S3443/mi
 stopped "a cd the shell skips because the ls before its || worked" "ls $S3443 || cd $S3443; cp $FIX/dev/payload/hooks/a.sh LESSONS.md" "$FIX/dev/payload"
 stopped "a cd the shell skips because the mkdir before its && failed" "mkdir -p $S3443/plain.txt/sub && cd $S3443; cp $FIX/dev/payload/hooks/a.sh LESSONS.md" "$FIX/dev/payload"
 stopped "a second cd the shell skips because the first, before its ||, worked" "cd $S3443 || cd $S3443/short-before; cp $FIX/dev/payload/hooks/a.sh x"
+# With the cp joined to the cd by &&. The cases above end the cd with ; and since the second review
+# such a cp is judged from both folders, so these two hold the rule on where a cd is read at all.
+stopped "a cd the shell skips because the ls before its || worked, with the cp joined to the cd by &&" "ls $S3443 || cd $S3443 && cp $FIX/dev/payload/hooks/a.sh LESSONS.md" "$FIX/dev/payload"
+stopped "a cd after && behind an ls, with the cp joined to it by &&: a cd is read first, after ; or behind another cd, and nowhere else" "ls $S3443 && cd $S3443 && cp $FIX/dev/payload/hooks/a.sh ./x9"
 stopped "a cd after && on the line after an ls" "ls $S3443/missing &&
 cd $S3443
 cp $FIX/dev/payload/hooks/a.sh LESSONS.md" "$FIX/dev/payload"
