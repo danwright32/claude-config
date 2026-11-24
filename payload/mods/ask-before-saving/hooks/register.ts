@@ -968,9 +968,27 @@ const indexLineOf = async ($: EngineInterface, tool: string, input: Record<strin
   return appended === undefined ? NOT_AN_APPEND : indexLineAdded(old, (old ?? '') + appended)
 }
 
+// Whether a line of the index already links `name`, read as the guard reads the line it covers
+// (linksOnlyTo), inside the time the hook gives its looks (#3478). Undefined when that cannot be
+// told: no ordinary file, a read that fails, or a disk that does not answer in time. Nothing is then
+// said of the line either way (#3506): whether the index already links the file is unknown, and the
+// guard covers no line written to an index it cannot read (indexLineOf).
+const indexLinks = async ($: EngineInterface, index: string, name: string): Promise<boolean | undefined> => {
+  try {
+    const now = await dueIn($, LOOKS_MS).within(() => textNow($, index))
+    if ('unreadable' in now) return undefined
+    return 'text' in now && now.text.split('\n').some(line => linksOnlyTo(line, name))
+  } catch {
+    return undefined
+  }
+}
+
 // A For good on one memory file, once its save lands, also covers the one line in its folder's index
 // linking to it (#1794), until the approval itself would lapse. Answers what Claude is told of it, or
-// nothing when the save was no memory file's, or more than one file's, which covers no line.
+// nothing when the save was no memory file's, or more than one file's, which covers no line. The
+// cover is made as before in every case; only what Claude reads of it follows the index as it is
+// (#3506): an index already linking the file is told so, with a change to that line asked about,
+// since a session told a line "may be added" read it as leave to rewrite the one already there.
 const coverFor = async ($: EngineInterface, used: AskBeforeSavingApproval): Promise<string | undefined> => {
   if (used.files.length !== 1) return undefined
   const { home } = await whereOf($)
@@ -978,6 +996,9 @@ const coverFor = async ($: EngineInterface, used: AskBeforeSavingApproval): Prom
   if (!file) return undefined
   const made: AskBeforeSavingIndexCover = { ...file, files: used.files, until: used.until }
   await update($, coversRef, a => [...(a ?? []), made])
+  const linked = await indexLinks($, file.index, file.name)
+  if (linked === undefined) return undefined
+  if (linked) return `${display(file.index, home)} already links to ${file.name}, and this For good does not cover changing that line: a change to it is asked about.`
   return `The one line in ${display(file.index, home)} that links to ${file.name} may be added without asking him again until this For good lapses; any other change to that index is asked about.`
 }
 
