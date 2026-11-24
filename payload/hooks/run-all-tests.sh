@@ -54,7 +54,7 @@
 #                             to 8, then two thirds of them, #2548)
 #   HOOK_TESTS_CORES          the core count that default is derived from (default: this machine's)
 #   HOOK_TESTS_SLOTS          set BY this script FOR each suite: its share of that budget
-#   HOOK_TESTS_TIMINGS        where each suite's measured wall clock is kept between runs.
+#   HOOK_TESTS_TIMINGS        where each suite's ranked time, check count and share are kept between runs.
 #                             Empty turns the record off entirely: nothing is read, nothing written.
 #   HOOK_TESTS_FLAKY_OUTPUT   where the first, failing run of a suite marked FLAKY is kept, its
 #                             path named on the FAIL line (default

@@ -6213,8 +6213,8 @@ fighting itself.
 Results are collected and printed in the order the suites were FOUND, never the order they
 finished, so two runs of the same tree produce the same page and a difference between them is a
 difference in the suites rather than in the machine's mood. Suites are launched longest first,
-judged by what each one was MEASURED to cost: every run records each suite's wall clock and
-the next run orders by it. Lane 1 carries the largest share of the budget and lane 1 is whatever
+judged by what each one was MEASURED to cost: every run records each suite's wall clock with the
+share it ran at, and the next run orders by the figure below. Lane 1 carries the largest share of the budget and lane 1 is whatever
 launches first, so this is what decides which suite the machine is spent on.
 
 What a suite is ranked by is its time at the smallest share it has been measured at, recorded with
