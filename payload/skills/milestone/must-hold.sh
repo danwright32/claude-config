@@ -8,10 +8,14 @@
 #   must-hold.sh list <file>            one line per rule, tab separated:
 #                                       number, rule, what is still possible, kind of holder, its name
 #
-# Exit: 0 well formed, 1 the list has faults (each named on stderr), 2 wrong usage or a file that
-# cannot be read, 3 the file has no "Must always be true" section at all. A file with no list and a
-# list with a fault are never reported as sound, and `list` prints no rules from a list with a fault,
-# so nothing reads half a list. This refuses nothing by itself: no gate runs it.
+# Exit codes, each set by this script:
+#   0: the list is well formed
+#   1: the list has faults, each named on stderr
+#   2: wrong usage, or the path given cannot be read
+#   3: nothing in what was read is a "Must always be true" section
+# A body with no list and a list with a fault are never reported as sound, and `list` prints no
+# rules from a list with a fault, so nothing reads half a list. This refuses nothing by itself: no
+# gate runs it.
 set -uo pipefail
 
 usage(){
@@ -50,7 +54,8 @@ awk -v mode="$mode" -v built="$built" -v file="$file" '
     return ""
   }
   BEGIN {
-    # Longest first, so "property test" is never read as the kind "test" with a name.
+    # A kind counts only at the very start of the line and with a name after it, so "property test
+    # of refunds" is a property test and "test" alone, or "tested by hand", is no kind at all.
     nkinds = split("database constraint|property test|model check|guard|type|test", kinds, "|")
   }
   { sub(/\r$/, "") }
