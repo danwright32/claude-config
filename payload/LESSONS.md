@@ -5793,6 +5793,12 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: Judge whether another writer moved a field by that field's own prior value, never the record's last modified time, which any write to any field moves.
 
 ## Security and privacy
+- **L868. A key carried in a page address is read by every script on that page and by any app
+  hosting the browser, so swap a link's key for a cookie and redirect to a clean address before
+  the page renders. Otherwise whoever those scripts report to holds the key.**
+  (trypennie#744, 2026-11-24)
+  NO CHECK: each project needs its own route test
+  SHORT: A key in a page address is read by every script on the page and by an in-app browser, so swap it for a cookie and redirect before rendering.
 - **L864. A filter that removes data by its shape must run on the text in the form it will be
   output in, after every squeeze, join, unescape and normalisation, because reshaping text after
   the filter can rebuild a shape the filter had passed. Prove it with one test over every caller:
