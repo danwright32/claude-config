@@ -162,8 +162,9 @@ function remember(log, text) {
 let lockWaitMs = 5000;
 const LOCK_STALE_MS = 30000;
 function pause(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
-function withLogLock(work) {
-  const lock = local('log.local.json.lock');
+function withLogLock(work) { return withLock('log.local.json', work); }
+function withLock(name, work) {
+  const lock = local(name + '.lock');
   fs.mkdirSync(path.dirname(lock), { recursive: true });
   const giveUpAt = Date.now() + lockWaitMs;
   for (;;) {
@@ -173,10 +174,13 @@ function withLogLock(work) {
     try {
       const pid = Number(fs.readFileSync(path.join(lock, 'pid'), 'utf8'));
       if (pid > 0) { try { process.kill(pid, 0); } catch (err) { holderGone = err.code === 'ESRCH'; } }
-      if (Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) holderGone = true;
-    } catch (e) { /* the lock went, or its holder has not written its pid yet: look again */ }
+    } catch (e) { /* its holder has not named itself yet, or died before it could: age decides */ }
+    // Age is judged whether or not an owner is named, so a holder that died straight after
+    // making the folder cannot hold the log for ever.
+    try { if (Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) holderGone = true; }
+    catch (e) { continue; }   // the lock was released while this looked: try for it again
     if (holderGone) { fs.rmSync(lock, { recursive: true, force: true }); continue; }
-    if (Date.now() >= giveUpAt) fail('The review log is being written by another session (the lock at ' + lock + ' is held). Nothing was written. Run this command again.');
+    if (Date.now() >= giveUpAt) fail(local(name) + ' is being written by another session (the lock at ' + lock + ' is held). Nothing was written. Run this command again.');
     pause(25);
   }
   try {
@@ -358,9 +362,13 @@ function logRestore(args) {
   try { value = JSON.parse(fs.readFileSync(from, 'utf8')); } catch (e) { return fail('The backup ' + from + ' could not be read (' + e.message + ').'); }
   if (!isLog(value)) fail('The backup ' + from + ' is not a readable log.');
   const file = local('log.local.json');
-  // The file being replaced is kept beside the log, never deleted (L5).
-  if (fs.existsSync(file)) fs.renameSync(file, file + '.set-aside-' + Date.now());
-  fs.copyFileSync(from, file);
+  // Under the same lock as every other write to the log, so a restore never lands in the middle
+  // of another session's check and write.
+  withLogLock(function () {
+    // The file being replaced is kept beside the log, never deleted (L5).
+    if (fs.existsSync(file)) fs.renameSync(file, file + '.set-aside-' + Date.now());
+    fs.copyFileSync(from, file);
+  });
   print({ restoredFrom: from, articles: value.articles.length });
 }
 function declined() {
@@ -419,8 +427,13 @@ function feedSuggested(args) {
 
 // ------------------------------------------------------------------ app descriptions
 
+// Every git command has a time limit and may not stop to ask for a password, so a remote that
+// never answers makes the app a reported failure and never a run that hangs.
+let gitTimeoutMs = 120000;
 function git(folder, gitArgs, okCodes) {
-  const r = spawnSync('git', ['-C', folder].concat(gitArgs), { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  const r = spawnSync('git', ['-C', folder].concat(gitArgs), { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
+    timeout: gitTimeoutMs, env: Object.assign({}, process.env, { GIT_TERMINAL_PROMPT: '0' }) });
+  if (r.error && r.error.code === 'ETIMEDOUT') throw new Error('git ' + gitArgs[0] + ' did not finish within ' + gitTimeoutMs + ' ms and was stopped');
   if (r.error) throw new Error('git could not be run: ' + r.error.message);
   if ((okCodes || [0]).indexOf(r.status) === -1) throw new Error('git ' + gitArgs.slice(0, 2).join(' ') + ' failed: ' + (r.stderr || '').trim().split('\n')[0]);
   return { code: r.status, out: r.stdout };
@@ -496,10 +509,14 @@ function appsSet(args) {
     try { app.facts = measure(app.path, now); }
     catch (err) { fail('The app "' + app.name + '" could not be measured: ' + err.message + '. Nothing was stored.'); }
   }
-  const value = readApps(true);
-  const at = value.apps.findIndex(function (a) { return a.name === app.name; });
-  if (at === -1) value.apps.push(app); else value.apps[at] = app;
-  writeRotating('apps.local.json', value);
+  // Read, changed and written under one lock, so two sessions describing different apps at once
+  // both land. The slow part, the measurement above, is done before the lock is taken.
+  withLock('apps.local.json', function () {
+    const value = readApps(true);
+    const at = value.apps.findIndex(function (a) { return a.name === app.name; });
+    if (at === -1) value.apps.push(app); else value.apps[at] = app;
+    writeRotating('apps.local.json', value);
+  });
   print({ name: app.name, facts: app.facts });
 }
 function appsCheck(args) {
@@ -541,6 +558,10 @@ if (require.main === module) {
     if (args['lock-wait'] !== undefined) {
       if (!(Number(args['lock-wait']) >= 0)) fail('The time given to --lock-wait is a number of milliseconds.');
       lockWaitMs = Number(args['lock-wait']);
+    }
+    if (args['git-timeout'] !== undefined) {
+      if (!(Number(args['git-timeout']) > 0)) fail('The time given to --git-timeout is a number of milliseconds above 0.');
+      gitTimeoutMs = Number(args['git-timeout']);
     }
     const command = Object.prototype.hasOwnProperty.call(COMMANDS, args._[0]) ? COMMANDS[args._[0]] : null;
     if (!command) fail('Usage: node review.js <' + Object.keys(COMMANDS).join(' | ') + '> [options]');

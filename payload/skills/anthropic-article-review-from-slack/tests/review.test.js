@@ -350,6 +350,33 @@ guarded('the held lock case', function aHeldLockIsWaitedForThenRefused() {
     'a lock left by a session that died is taken over, and released after the write', taken.out + taken.err);
 });
 
+guarded('the lock with no owner case', function anOwnerlessLockAgesOut() {
+  const home = newHome();
+  logAdd(home, entry('1795000001.000001', 1));
+  const lock = localPath(home, 'log.local.json.lock');
+  fs.mkdirSync(lock);                                              // made, and its maker died before naming itself
+  const young = logAdd(home, entry('1795000002.000001', 2), ['--lock-wait', '100']);
+  check(young.code !== 0 && /another session/.test(young.err) && fs.existsSync(lock),
+    'a lock that names no owner yet is waited for while it is new, since its maker may be about to', young.err);
+  const longAgo = new Date(Date.now() - 120000);
+  fs.utimesSync(lock, longAgo, longAgo);
+  const old = logAdd(home, entry('1795000002.000001', 2), ['--lock-wait', '100']);
+  check(old.code === 0 && readLocal(home, 'log.local.json').articles.length === 2 && !fs.existsSync(lock),
+    'a lock that names no owner and is older than any write could take is taken over', old.out + old.err);
+});
+
+guarded('restoring under the lock', function restoreWaitsForTheLock() {
+  const home = newHome();
+  logAdd(home, entry('1795000001.000001', 1));
+  logAdd(home, entry('1795000002.000001', 2));
+  const lock = localPath(home, 'log.local.json.lock');
+  fs.mkdirSync(lock);
+  fs.writeFileSync(path.join(lock, 'pid'), String(process.pid));
+  const r = run(home, ['log-restore', '--from', '1', '--lock-wait', '100']);
+  check(r.code !== 0 && /another session/.test(r.err) && readLocal(home, 'log.local.json').articles.length === 2,
+    'a restore is refused while another session holds the log, and replaces nothing', r.out + r.err);
+});
+
 (function inheritedNamesAreNotFlags() {
   const r = run(newHome(), ['tally', '--constructor']);
   check(r.code !== 0 && /needs a value/.test(r.err), 'an option that only looks like a flag because every object has it is not taken for one', r.out + r.err);
@@ -550,6 +577,31 @@ guarded('the broken app case', function aBrokenAppIsLoud() {
   const r = appsCheck(home);
   check(r.code !== 0 && r.json && r.json.apps[0].state === 'failed' && r.json.apps[0].why.length > 0,
     'an app whose folder cannot be measured is reported as failed and the command exits non zero', r.out + r.err);
+});
+
+guarded('two sessions describing apps', function appWritesTakeTheirOwnLock() {
+  const home = newHome();
+  const repo = makeRepo(modelFiles(1));
+  appsSet(home, appEntry('alpha', repo.work));
+  const lock = localPath(home, 'apps.local.json.lock');
+  fs.mkdirSync(lock);
+  fs.writeFileSync(path.join(lock, 'pid'), String(process.pid));
+  const r = run(home, ['apps-set', '--entry', tmpJson(appEntry('beta', repo.work)), '--now', NOW, '--lock-wait', '100']);
+  check(r.code !== 0 && /another session/.test(r.err) && readLocal(home, 'apps.local.json').apps.length === 1,
+    'an app description is not written while another session holds the app descriptions', r.out + r.err);
+  fs.rmSync(lock, { recursive: true, force: true });
+  const ok = run(home, ['apps-set', '--entry', tmpJson(appEntry('beta', repo.work)), '--now', NOW, '--lock-wait', '100']);
+  check(ok.code === 0 && readLocal(home, 'apps.local.json').apps.length === 2, 'and is written once the lock is free', ok.out + ok.err);
+});
+
+guarded('the hung remote case', function aSlowRemoteIsAFailureNotAStall() {
+  const home = newHome();
+  const repo = makeRepo(modelFiles(2));
+  appsSet(home, appEntry('alpha', repo.work));
+  // A limit no git command can meet stands in for a remote that never answers.
+  const r = run(home, ['apps-check', '--now', NOW, '--git-timeout', '1']);
+  check(r.code !== 0 && r.json && r.json.apps[0].state === 'failed' && /did not finish/.test(r.json.apps[0].why),
+    'a git command that outlasts its limit is stopped and the app reported as failed', r.out + r.err);
 });
 
 guarded('refused app entries', function appsSetRefusesBadEntries() {
