@@ -1952,7 +1952,7 @@ test('a heading Dan could not read as written cannot be named, so its save is re
 })
 
 // ---- #3402: the lasting memory a command's words would remove, and how a removal is said ----
-import { coversRemoval, patternMayMatch, removalCandidates, removalInstruction, removalOptions, removalSaid, removalWords, removesWhat, splitRefusal, approvedFor, pressed } from '../hooks/rules.ts'
+import { MAX_BRACE_NAMES, braceAlternatives, braceNames, coversRemoval, patternMayMatch, removalCandidates, removalInstruction, removalNote, removalOptions, removalSaid, removalWords, removesWhat, replacedBy, splitBy, splitRefusal, approvedFor, pressed } from '../hooks/rules.ts'
 import type { AskBeforeSavingRemoval } from '../types/index.d.ts'
 
 const SLATE = `${HOME}/Apps/slate`
@@ -1975,6 +1975,181 @@ test('a removal is a candidate when its words name lasting memory or match it: a
   expect(await candidatesOf('mv CLAUDE.md docs/OLD.md')).toEqual([['~/Apps/slate/CLAUDE.md', 'move', '~/Apps/slate/docs/OLD.md', 'tree']])
   // A copy the same command then removes is a move too: the file is where the copy put it.
   expect(await candidatesOf('cp AGENTS.md /tmp/A.md && rm AGENTS.md')).toEqual([['~/Apps/slate/AGENTS.md', 'move', '/tmp/A.md', '']])
+})
+
+// ---- #3478: a move into another folder is a move, said with where the files go ----
+// Measured on main at bf2c7370a4 before any change: `mv <memory folder>/{a,b}.md <folder>/` was read
+// as a deletion, because mod-kit's reader names a write's sources only where a path names them and a
+// pattern has none. So the question said Delete of files that stay on the disk, and inside a memory
+// folder the command was refused whole as a deletion beside a save. The removal now says where its
+// own mv puts it (mod-kit's `to`), which is read here.
+const MEM = '~/.claude/projects/p/memory'
+const movesOf = async (command: string) =>
+  (await removalCandidates(commandWrites(command, SLATE, HOME), HOME, checkouts().inCheckout, command, async () => false)).map(c => [c.file, c.how, c.to ?? '', [c.into ? 'into' : '', c.onto ? 'onto' : '', c.pattern ? 'pattern' : '', c.guessed ? 'guessed' : ''].filter(Boolean).join(' ')])
+
+test('a pattern a mv takes into another folder is a move into that folder, never a deletion (#3478)', async () => {
+  for (const [command, file, to, flags] of [
+    [`mv ${MEM}/{a,b}.md ${MEM}/archive/`, `${MEM}/{a,b}.md`, `${MEM}/archive`, 'into pattern'],
+    [`mv -t ${MEM}/archive ${MEM}/{a,b}.md`, `${MEM}/{a,b}.md`, `${MEM}/archive`, 'into pattern'],
+    [`mv ${MEM}/{a,b}.md ~/Desktop/archive/`, `${MEM}/{a,b}.md`, '~/Desktop/archive', 'into pattern'],
+    [`mv ${MEM}/*.md ~/Desktop/archive/`, `${MEM}/*.md`, '~/Desktop/archive', 'into pattern'],
+    [`cd ${MEM} && mv {a,b}.md archive/`, `${MEM}/{a,b}.md`, `${MEM}/archive`, 'into pattern'],
+    // The command the count on #3430 found, in its shape: the folder made and the index backed up first.
+    [`mkdir -p ${MEM}/archive && cp ${MEM}/MEMORY.md ${MEM}/MEMORY.md.bak && mv ${MEM}/{a,b}.md ${MEM}/archive/`, `${MEM}/{a,b}.md`, `${MEM}/archive`, 'into pattern'],
+    // One word onto one name: a folder only if the disk says so, which is asked where the call is judged.
+    [`mv ${MEM}/{a,b}.md ${MEM}/archive`, `${MEM}/{a,b}.md`, `${MEM}/archive`, 'onto pattern'],
+  ] as const)
+    expect([command, await movesOf(command)]).toEqual([command, [[file, 'move', to, flags]]])
+  // A pattern outside a memory folder: each lasting memory name it may match, into the folder.
+  expect(await movesOf('mv CLAUDE.* docs/')).toEqual([['~/Apps/slate/CLAUDE.md', 'move', '~/Apps/slate/docs', 'into']])
+  // A target the words cannot name, guessed at from what the command mentions, goes where its mv says.
+  expect(await movesOf('mv "$(ls -t CLAUDE.md | head -1)" ~/old/')).toEqual([['CLAUDE.md', 'move', '~/old', 'into guessed']])
+})
+
+test('a file a mv names goes where it went before, and onto one name says the disk decides whether it is a folder (#3478)', async () => {
+  expect(await movesOf(`mv ${MEM}/note.md ${MEM}/archive/`)).toEqual([[`${MEM}/note.md`, 'move', `${MEM}/archive/note.md`, '']])
+  expect(await movesOf(`mv ${MEM}/a.md ${MEM}/b.md ${MEM}/archive`)).toEqual([
+    [`${MEM}/a.md`, 'move', `${MEM}/archive/a.md`, ''],
+    [`${MEM}/b.md`, 'move', `${MEM}/archive/b.md`, ''],
+  ])
+  expect(await movesOf(`mv ${MEM}/note.md ${MEM}/archive`)).toEqual([[`${MEM}/note.md`, 'move', `${MEM}/archive`, 'onto']])
+  expect(await movesOf(`mv ${MEM}/note.md ${MEM}/note-old.md`)).toEqual([[`${MEM}/note.md`, 'move', `${MEM}/note-old.md`, 'onto']])
+  // A copy the same command then removes is said as it was before: by the name the words give. No
+  // mv vouches that the file is left there, so the disk is not asked what is inside that name.
+  expect(await movesOf('cp AGENTS.md /tmp/A.md && rm AGENTS.md')).toEqual([['~/Apps/slate/AGENTS.md', 'move', '/tmp/A.md', '']])
+})
+
+// The fix round: the reader's word that the file is left where its mv put it is what a move's
+// "can be moved back" stands on. Measured at 3c7b756211, before this: each pattern below was a move
+// into the folder, and each named note carried `onto`, which let a write inside the folder pass as
+// the move's own landing place.
+test('a move the rest of the command may undo is said as it was before the mv said where it goes (#3478)', async () => {
+  for (const then of ['&& rm -rf ~/Desktop/archive', '; rm ~/Desktop/archive/*.md', '&& echo x > ~/Desktop/archive/a.md', '&& rm -rf "$X"', '&& eval "rm -rf ~/Desktop/archive"', '&& mytool ~/Desktop/archive', '&& git clean -fdx'])
+    // The pattern's own candidate: a removal by name in the other folder adds the names it may match there.
+    expect([then, (await movesOf(`mv ${MEM}/{a,b}.md ~/Desktop/archive/ ${then}`))[0]]).toEqual([then, [`${MEM}/{a,b}.md`, 'delete', '', 'pattern']])
+  // The same files removed under another spelling of their path.
+  expect(await movesOf(`mv ${MEM}/*.md ~/Desktop/nowhere/ ; rm $HOME/.claude/projects/p/memory/*.md`)).toEqual([[`${MEM}/*.md`, 'delete', '', 'pattern']])
+  // A note named outright is still the move its write says it is, with no word of what the folder holds.
+  expect(await movesOf(`mv ${MEM}/note.md ${MEM}/archive && echo x > ${MEM}/archive/note.md`)).toEqual([[`${MEM}/note.md`, 'move', `${MEM}/archive`, '']])
+  expect(splitBy([{ file: `${MEM}/note.md`, how: 'move', to: `${MEM}/archive` }], [`${MEM}/archive/note.md`])).toEqual([`${MEM}/archive/note.md`])
+  // Onto a device nothing is moved.
+  expect(await movesOf(`mv ${MEM}/note.md /dev/null`)).toEqual([[`${MEM}/note.md`, 'delete', '', '']])
+})
+
+test('a pattern is a deletion still wherever no mv moves it, or the command removes it another way as well (#3478)', async () => {
+  for (const command of [
+    `rm ${MEM}/{a,b}.md`,
+    // Other files copied into a folder, then the pattern removed: nothing of it is kept anywhere.
+    `cp ~/Desktop/archive/*.md ~/Desktop/backup/ && rm ${MEM}/*.md`,
+    `cp ${MEM}/*.md ~/Desktop/backup/ && rm ${MEM}/*.md`,
+    `rm ${MEM}/{a,b}.md; mv ${MEM}/{a,b}.md ${MEM}/archive/`,
+    `mv ${MEM}/{a,b}.md ${MEM}/archive/; rm ${MEM}/{a,b}.md`,
+    `mv ${MEM}/{a,b}.md ~/one/; mv ${MEM}/{a,b}.md ~/two/`,
+  ])
+    expect([command, (await movesOf(command)).map(c => [c[1], c[2]])]).toEqual([command, [['delete', '']]])
+})
+
+test('a move into a folder is said with where it goes: a named file by its new path, a pattern by the folder (#3478)', () => {
+  const pattern: AskBeforeSavingRemoval = { file: `${MEM}/{a,b}.md`, how: 'move', to: `${MEM}/archive`, into: true, pattern: true }
+  expect(removalWords([pattern]).label).toBe('Move')
+  expect(removesWhat([pattern])).toBe(`this moves lasting memory away (${MEM}/{a,b}.md, into ${MEM}/archive)`)
+  expect(removalInstruction('toolu_1', [pattern])).toContain(`Not moved yet: this moves lasting memory away (${MEM}/{a,b}.md, into ${MEM}/archive), so Dan decides first.`)
+  expect(removalInstruction('toolu_1', [pattern])).toContain(`such as "Move ${MEM}/{a,b}.md: <why>?", with the options Keep as is and Move. Where it goes is added to your question`)
+  expect(removalOptions([pattern])).toEqual([
+    { label: 'Keep as is', description: 'Nothing is moved' },
+    { label: 'Move', description: `Moves ${MEM}/{a,b}.md into ${MEM}/archive` },
+  ])
+  const first = 'That is every file the pattern matches in a folder of lasting memory.'
+  expect(removalSaid([pattern])).toBe(`${first} Each goes into the folder ${MEM}/archive, and can be moved back.`)
+  expect(removalSaid([{ ...pattern, replaces: true }])).toBe(`${first} Each goes into the folder ${MEM}/archive, replacing a file of the same name that is there now.`)
+  expect(removalSaid([{ ...pattern, unseen: true }])).toBe(`${first} Each goes into the folder ${MEM}/archive. Whether a file of the same name is already there could not be read.`)
+  // A file named outright lands under its own name, and is said by the path it will have.
+  const named: AskBeforeSavingRemoval = { file: `${MEM}/note.md`, how: 'move', to: `${MEM}/archive`, into: true }
+  expect(removesWhat([named])).toBe(`this moves lasting memory away (${MEM}/note.md, to ${MEM}/archive/note.md)`)
+  expect(removalOptions([named])[1]?.description).toBe(`Moves ${MEM}/note.md to ${MEM}/archive/note.md`)
+  expect(removalSaid([named])).toBe(`It goes to ${MEM}/archive/note.md, and can be moved back.`)
+  expect(removalSaid([{ ...named, replaces: true }])).toBe(`It goes to ${MEM}/archive/note.md, replacing the file that is there now.`)
+  // A guess names no file for certain, so it is said by the folder, and nothing is claimed of what is there.
+  const guess: AskBeforeSavingRemoval = { file: 'CLAUDE.md', how: 'move', to: '~/old', into: true, guessed: true, unseen: true }
+  expect(removesWhat([guess])).toBe('this may move lasting memory away (CLAUDE.md): its words do not name the file it removes, and they mention CLAUDE.md')
+  expect(removalSaid([guess])).toBe("The command's words do not name the file it removes; they mention this one. It goes into the folder ~/old. Whether a file of the same name is already there could not be read.")
+  // Several: each is named, and the two kinds read side by side.
+  expect(removalSaid([pattern, named])).toBe(
+    `That is every file the pattern matches in a folder of lasting memory. Each file ${MEM}/{a,b}.md matches goes into the folder ${MEM}/archive, and can be moved back. ${MEM}/note.md goes to ${MEM}/archive/note.md, and can be moved back.`,
+  )
+  expect(removalNote([pattern], 'mv x y')).toContain(`a Bash command would move ${MEM}/{a,b}.md, into ${MEM}/archive. ${first} Each goes into the folder`)
+})
+
+test('what a pattern moved into a folder replaces there is each name it can match that both folders hold (#3478)', () => {
+  const from = ['a.md', 'b.md', 'old.md', 'MEMORY.md']
+  expect(replacedBy('{a,b}.md', from, ['old.md'])).toEqual([])
+  expect(replacedBy('{old,a}.md', from, ['old.md'])).toEqual(['old.md'])
+  expect(replacedBy('*.md', from, ['old.md', 'x.md'])).toEqual(['old.md'])
+  expect(replacedBy('?.md', from, ['old.md', 'a.md'])).toEqual(['a.md'])
+  expect(replacedBy('*.md', from, [])).toEqual([])
+  // Brace lists side by side are multiplied out, as the shell does.
+  expect(replacedBy('{a,o}{,ld}.md', from, ['old.md', 'b.md'])).toEqual(['old.md'])
+  // A brace this does not split (nested, a range) may match anything: every name both hold counts,
+  // which errs toward saying a file is replaced.
+  expect(replacedBy('{a,{b,c}}.md', from, ['old.md'])).toEqual(['old.md'])
+  expect(replacedBy('note{1..3}.md', from, ['old.md'])).toEqual(['old.md'])
+})
+
+// The second fix round of #3478. Brace lists side by side were multiplied out with no limit: six
+// lists of ten are a million names and took 12 seconds (measured 2026-11-23), past the 10 seconds a
+// hook has, and a hook cut at its budget lets the command run unasked. So the names are counted
+// before any is made, and a pattern over the bound is never multiplied out.
+const LISTS = (lists: number, each: number) => `${`{${Array.from({ length: each }, (_, i) => String.fromCharCode(97 + i)).join(',')}}`.repeat(lists)}.md`
+test('a brace pattern is multiplied out only up to a bound on its names, counted before any is made (#3478)', async () => {
+  // At the bound it is multiplied out, and matches only the names it spells.
+  expect(MAX_BRACE_NAMES).toBe(256)
+  expect(braceNames(LISTS(8, 2))).toBe(256)
+  expect(braceAlternatives(LISTS(8, 2))?.length).toBe(256)
+  expect(replacedBy(LISTS(8, 2), ['aaaaaaaa.md', 'old.md'], ['aaaaaaaa.md', 'old.md'])).toEqual(['aaaaaaaa.md'])
+  // One name over, none is made: the count stops as soon as it passes the bound, however many
+  // lists follow, and the pattern may then match anything, which errs toward saying a file is replaced.
+  expect(braceNames(LISTS(9, 2))).toBe(512)
+  expect(braceAlternatives(LISTS(9, 2))).toBe(null)
+  expect(braceNames(LISTS(6, 10))).toBe(1000)
+  expect(braceNames(LISTS(4000, 10))).toBe(1000)
+  expect(braceAlternatives(LISTS(6, 10))).toBe(null)
+  expect(braceAlternatives(LISTS(4000, 10))).toBe(null)
+  expect(replacedBy(LISTS(6, 10), ['a.md', 'old.md'], ['old.md'])).toEqual(['old.md'])
+  // A list the shell would not split (a range, one alternative) counts as one name.
+  expect(braceNames('note{1..300}{a}.md')).toBe(1)
+  // And a move of such a pattern is the deletion main asked about, never a move.
+  expect(await movesOf(`mv ${MEM}/${LISTS(8, 2)} ~/Desktop/archive/`)).toEqual([[`${MEM}/${LISTS(8, 2)}`, 'move', '~/Desktop/archive', 'into pattern']])
+  expect(await movesOf(`mv ${MEM}/${LISTS(9, 2)} ~/Desktop/archive/`)).toEqual([[`${MEM}/${LISTS(9, 2)}`, 'delete', '', 'pattern']])
+  expect(await movesOf(`mv ${MEM}/${LISTS(6, 10)} ~/Desktop/archive/`)).toEqual([[`${MEM}/${LISTS(6, 10)}`, 'delete', '', 'pattern']])
+})
+test('a pattern of many stars is not handed to a search whose work grows with each star (#3478)', () => {
+  // Up to four stars it is matched; runs of stars are one star.
+  expect([patternMayMatch('*a*b*c*.md', 'xaxbxc.md'), patternMayMatch('*a*b*c*.md', 'xaxbx.md'), patternMayMatch('**a***b**.md', 'x.md')]).toEqual([true, false, false])
+  // Over four it may match anything, the side that asks.
+  expect(patternMayMatch('*a*a*a*a*a*b', 'x.md')).toBe(true)
+})
+
+test('one question covers a move into a folder and the write the reader names for it, and nothing else the command saves (#3478)', () => {
+  const pattern: AskBeforeSavingRemoval = { file: `${MEM}/{a,b}.md`, how: 'move', to: `${MEM}/archive`, into: true, pattern: true }
+  // Inside a memory folder the landing place is lasting memory too: the reader's own name for it.
+  expect(splitBy([pattern], [`${MEM}/archive/{a,b}.md`])).toBeUndefined()
+  const renamed: AskBeforeSavingRemoval = { file: `${MEM}/{a,b}.md`, how: 'move', to: `${MEM}/archive`, pattern: true }
+  expect(splitBy([renamed], [`${MEM}/archive`])).toBeUndefined()
+  expect(splitBy([{ file: `${MEM}/note.md`, how: 'move', to: `${MEM}/archive`, into: true }], [`${MEM}/archive`])).toBeUndefined()
+  // Any other save is asked about by itself, in the move's own words.
+  expect(splitBy([pattern], [`${MEM}/MEMORY.md.bak`, `${MEM}/archive/{a,b}.md`])).toEqual([`${MEM}/MEMORY.md.bak`])
+  expect(splitRefusal([pattern], [`${MEM}/MEMORY.md.bak`])).toBe(
+    `Not run: this command moves lasting memory away (${MEM}/{a,b}.md, into ${MEM}/archive) and also writes lasting memory (${MEM}/MEMORY.md.bak). Dan is asked about each by itself, since one answer cannot cover both. Send each as a command of its own.`,
+  )
+  // A guess lands nowhere the words name, so a save beside it is never taken as its landing place.
+  expect(splitBy([{ file: 'CLAUDE.md', how: 'move', to: '~/.claude', into: true, guessed: true }], ['~/.claude/CLAUDE.md'])).toEqual(['~/.claude/CLAUDE.md'])
+  // Dan's Move covers the move he read: into the folder, with what he was told of the files there.
+  const asked: AskBeforeSavingApproval = { id: 'q9', key: 'k', files: [], until: 1, removes: [pattern] }
+  expect(coversRemoval(asked, [pattern], [])).toBe(true)
+  expect(coversRemoval(asked, [renamed], [])).toBe(false)
+  expect(coversRemoval(asked, [{ ...pattern, replaces: true }], [])).toBe(false)
+  expect(coversRemoval(asked, [{ ...pattern, unseen: true }], [])).toBe(false)
+  expect(coversRemoval(asked, [{ ...pattern, to: '~/Desktop/archive' }], [])).toBe(false)
 })
 
 test('a folder taken whole is a candidate only when it is lasting memory or holds the memory under home (#3402)', async () => {
@@ -2122,4 +2297,289 @@ test('an emptying is said in its own words: the file stays, and git is asked as 
   expect(splitRefusal([{ file: '~/a/AGENTS.md', how: 'delete', back: 'none' }, ...emptied], [])).toBe(
     'Not run: this command deletes lasting memory (~/a/AGENTS.md) and also empties lasting memory (~/Apps/slate/CLAUDE.md). Dan is asked about each by itself, since one answer cannot cover both. Send each as a command of its own.',
   )
+})
+
+// ---- #3478, the third fix round: when a mv may be worded as a move at all ----
+import { CHANGES_NO_FILE, madeFirst, moveAlone } from '../hooks/rules.ts'
+
+const aloneOf = (command: string) => moveAlone(command, pipeline(command, { assignments: true }))
+const MV = `mv ${MEM}/{a,b}.md ~/Desktop/archive/`
+
+test('the list of commands that can change no file is the short one written down, and holds nothing that can remove, move or write (#3478)', () => {
+  expect([...CHANGES_NO_FILE].sort()).toEqual(['[', 'cd', 'echo', 'ls', 'mkdir', 'pwd', 'test', 'true'])
+  for (const name of ['mv', 'cp', 'rm', 'rmdir', 'unlink', 'touch', 'tee', 'ln', 'printf', '[[', 'cat', 'find', 'sed', 'rsync', 'truncate', 'shred', 'git', 'sh', 'bash', 'zsh', 'eval', 'exec', 'command', 'env', 'sudo', 'xargs', 'trap', 'alias', 'source', '.', 'export', 'set']) expect([name, CHANGES_NO_FILE.has(name)]).toEqual([name, false])
+})
+
+test('a mv stands alone with nothing beside it but commands on the list, and a plain mkdir or copy before it (#3478)', () => {
+  for (const [command, made, copies] of [
+    [MV, [], []],
+    [`${MV} && ls ~/Desktop/archive`, [], []],
+    [`${MV}; ls -la ~/Desktop/archive; echo done; pwd; test -d ~/Desktop/archive || true`, [], []],
+    [`${MV}\nls`, [], []],
+    [`${MV} && [ -d ~/Desktop/archive ] && cd ~/Desktop/archive && mkdir -p later`, [], []],
+    [`mkdir -p ~/Desktop/archive && ${MV}`, ['~/Desktop/archive'], []],
+    [`mkdir -pv ~/Desktop/archive/ $HOME/x rel && ${MV}`, ['~/Desktop/archive', '$HOME/x', 'rel'], []],
+    // A mkdir with any other option still changes no file, and makes nothing that is counted on.
+    [`mkdir -m 700 ~/Desktop/archive && ${MV}`, [], []],
+    // After a cd, a relative folder a mkdir makes is not counted on: a cd that fails leaves it elsewhere.
+    [`cd ${MEM} && mkdir -p archive /abs/made && mv {a,b}.md archive/`, ['/abs/made'], []],
+    [`mkdir -p ${MEM}/archive && cp ${MEM}/MEMORY.md ${MEM}/MEMORY.md.bak && mv ${MEM}/{a,b}.md ${MEM}/archive/`, [`${MEM}/archive`], [`${MEM}/MEMORY.md.bak`]],
+    [`cp -p ${MEM}/MEMORY.md ~/backup.md && mv -n ${MEM}/{a,b}.md ~/Desktop/archive/ && ls ~/Desktop/archive`, [], ['~/backup.md']],
+    [`mv -t ~/Desktop/archive -v ${MEM}/{a,b}.md`, [], []],
+    // Quoted words stand, but for a quoted ~ (the fourth review's test below).
+    [`mv "$HOME/notes/{a,b}.md" '$HOME/Desktop/archive/'`, [], []],
+  ] as const)
+    expect([command, aloneOf(command)]).toEqual([command, { made: [...made], copies: [...copies] }])
+})
+
+test('a mv does not stand alone beside anything that could take a file away, in any shape a command can give it (#3478)', () => {
+  const got: [string, unknown][] = []
+  for (const command of [
+    // No mv, or more than one: a second can replace what the first moved.
+    'ls ~/Desktop/archive',
+    `${MV} && mv ${MEM}/sub/a.md ~/Desktop/archive/`,
+    `mv ~/x/a.md ~/Desktop/archive/ && ${MV}`,
+    // A command off the list, after the mv and before it.
+    `${MV} && rm -rf ~/Desktop/archive`,
+    `${MV} && mytool`,
+    `${MV} && touch ~/Desktop/archive/a.md`,
+    `${MV} && cat ~/Desktop/archive/a.md`,
+    `${MV} && printf x`,
+    `${MV} && [[ -d ~/Desktop/archive ]]`,
+    `${MV} && ln -s ~/Desktop/archive ~/l`,
+    `${MV} && git status`,
+    `${MV} && exit 0`,
+    `mytool && ${MV}`,
+    `rm -f ~/Desktop/archive/a.md; ${MV}`,
+    `set -e; ${MV}`,
+    // A copy after the mv, or one that is more than one file to one place.
+    `${MV} && cp ~/a ~/b`,
+    `cp -R ~/a ~/b && ${MV}`,
+    `cp -f ~/a ~/b && ${MV}`,
+    `cp ~/a ~/b ~/c/ && ${MV}`,
+    `cp ~/a/*.md ~/c && ${MV}`,
+    `cp ~/a && ${MV}`,
+    // A listed name typed any other way, or run behind something.
+    `${MV} && /bin/ls ~/Desktop/archive`,
+    `${MV} && ./ls`,
+    `${MV} && command ls`,
+    `${MV} && sudo ls`,
+    `${MV} && env ls`,
+    `${MV} && time ls`,
+    `${MV} && builtin echo hi`,
+    `/bin/mv ${MEM}/{a,b}.md ~/Desktop/archive/`,
+    `sudo ${MV}`,
+    // A listed name given another meaning, and text run later.
+    `ls() { mytool; }; ${MV} && ls`,
+    `function ls { mytool; }; ${MV} && ls`,
+    `alias ls=mytool; ${MV} && ls`,
+    `trap 'mytool' EXIT; ${MV}`,
+    // A setting, before the mv or on a command.
+    `PATH=/x; ${MV}`,
+    `export PATH=/x; ${MV}`,
+    `D=~/Desktop/archive; mv ${MEM}/{a,b}.md "$D/"`,
+    `X=1 ${MV}`,
+    `${MV} && LC_ALL=C ls`,
+    // A loop, a condition, a group, a subshell, a case.
+    `for n in 1 2; do ${MV}; done`,
+    `while true; do ${MV}; done`,
+    `until false; do ${MV}; done`,
+    `if true; then ${MV}; fi`,
+    `{ ${MV}; }`,
+    `(${MV})`,
+    `case x in x) ${MV};; esac`,
+    // A job left running, a pipe, a redirect, a heredoc, a substitution of any kind.
+    `${MV} &`,
+    `${MV} & ls`,
+    `ls & ${MV}`,
+    `${MV} | cat`,
+    `${MV} && ls | ls`,
+    `${MV} && echo x > ~/Desktop/archive/a.md`,
+    `${MV} && echo x >> ~/log`,
+    `${MV} 2>/dev/null`,
+    `${MV} && ls 2>&1`,
+    `${MV} && ls < ~/x`,
+    `${MV} && ls <<EOF\nx\nEOF`,
+    `${MV} && echo $(mytool)`,
+    `${MV} && echo \`mytool\``,
+    `${MV} && ls <(mytool)`,
+    `${MV} && echo $((n=1))`,
+    `${MV} && echo \${X:=y}`,
+    `${MV} && echo $1`,
+    `${MV} && ls ~/Desktop/*(e:mytool:)`,
+    `${MV} && echo \\$x`,
+    // A path that climbs, anywhere.
+    `mv ${MEM}/{a,b}.md ~/Desktop/far/../x/`,
+    `mv ${MEM}/../memory/{a,b}.md ~/Desktop/archive/`,
+    `${MV} && ls ..`,
+    `cd .. && ${MV}`,
+    `${MV} && ls ~/Desktop/far/..`,
+    // An option of mv this does not read.
+    `mv -h ${MEM}/{a,b}.md ~/Desktop/archive/`,
+    `mv --backup ${MEM}/{a,b}.md ~/Desktop/archive/`,
+    `mv -T ${MEM}/{a,b}.md ~/Desktop/archive/`,
+    `mv -S .old ${MEM}/{a,b}.md ~/Desktop/archive/`,
+  ])
+    got.push([command, aloneOf(command)])
+  expect(got).toEqual(got.map(([command]) => [command, undefined]))
+  expect(got.length).toBe(74)
+})
+
+test('a folder the mv goes into counts as made first only under the same text, a trailing slash aside (#3478)', () => {
+  const alone = aloneOf(`mkdir -p ~/Desktop/new && mv ${MEM}/{a,b}.md ~/Desktop/new/`)
+  expect(alone).toEqual({ made: ['~/Desktop/new'], copies: [] })
+  if (alone === undefined) return
+  expect(['~/Desktop/new', '~/Desktop/new/', '~/Desktop/NEW', '$HOME/Desktop/new', `${HOME}/Desktop/new`, '~/Desktop/new/sub', '~/Desktop'].map(to => madeFirst(alone, to))).toEqual([true, true, false, false, false, false, false])
+})
+
+// ---- #3478, the fourth review: a word that is not from the root is trusted only where the folder it is read in is certain ----
+// Measured at 72816e97aa: every command in the first test below stood alone, so its mv was worded
+// "can be moved back" though the notes can land in another folder than the one the reader placed
+// them in, on files of the same name there. Measured in bash 3.2.57 and zsh 5.9 on this Mac, in a
+// scratch folder: `cd <folder> x` fails in zsh ("string not in pwd") and the mv after a `;` then runs
+// in the session folder, while bash goes to the folder; `cd -s <a link>` fails in both; `! cd <no
+// such folder> && mv` runs the mv in both; with CDPATH set, `cd sub` goes to another folder's sub in
+// both; a quoted ~ is left as text by both, and zsh alone makes `=ls` the path of ls.
+test('a mv with a word that is not from the root does not stand alone after a cd that can fail without stopping the command, or go elsewhere (#3478)', () => {
+  const got: [string, unknown][] = []
+  for (const command of [
+    // The fourth review's three, and the same class in each other join.
+    `cd ~/Desktop x; mv ${MEM}/{a,b}.md archive/`,
+    `cd ~/Desktop x || mv ${MEM}/{a,b}.md archive/`,
+    `cd -s ~/Desktop/link; mv ${MEM}/{a,b}.md ./`,
+    `cd ~/Desktop/link x; mv ${MEM}/{a,b}.md .`,
+    `cd ~/Desktop; mv ${MEM}/{a,b}.md archive/`,
+    `cd ~/Desktop\nmv ${MEM}/{a,b}.md archive/`,
+    `cd ~/Desktop || mv ${MEM}/{a,b}.md archive/`,
+    `cd ~/Desktop || true; mv ${MEM}/{a,b}.md archive/`,
+    `! cd ~/Desktop && mv ${MEM}/{a,b}.md archive/`,
+    `true && ! cd ~/Desktop && mv ${MEM}/{a,b}.md archive/`,
+    // Joined so that a failure stops the command, but the join is not the only one in the text.
+    `cd ~/Desktop && mv ${MEM}/{a,b}.md archive/; ls`,
+    `ls; cd ~/Desktop && mv ${MEM}/{a,b}.md archive/`,
+    `cd ~/Desktop && mv ${MEM}/{a,b}.md archive/ || true`,
+    // A cd that is more than one word from the root: the two shells read two words differently,
+    // an option can refuse a link, no word is home, a lone `-` is the folder before, and a name that
+    // is not from the root can be found along CDPATH first.
+    `cd ~/Desktop x && mv ${MEM}/{a,b}.md archive/`,
+    `cd -s ~/Desktop/link && mv ${MEM}/{a,b}.md ./`,
+    `cd -P ~/Desktop && mv ${MEM}/{a,b}.md archive/`,
+    `cd -- ~/Desktop && mv ${MEM}/{a,b}.md archive/`,
+    `cd && mv ${MEM}/{a,b}.md archive/`,
+    `cd - && mv ${MEM}/{a,b}.md archive/`,
+    `cd sub && mv ${MEM}/{a,b}.md archive/`,
+    `cd ./sub && mv ${MEM}/{a,b}.md archive/`,
+    `cd ~/Desktop && cd archive && mv ${MEM}/{a,b}.md ./`,
+    `cd '$HOME/Desktop' && mv ${MEM}/{a,b}.md archive/`,
+    // The word that is not from the root can be the notes, the folder given with -t, or a copy's.
+    `cd ${MEM} x; mv {a,b}.md ~/Desktop/archive/`,
+    `cd ~/Desktop x; mv -t archive ${MEM}/{a,b}.md`,
+    `cd ~/Desktop x; mv --target-directory=archive ${MEM}/{a,b}.md`,
+    `cd ~/Desktop x; mv ${MEM}/{a,b}.md '$HOME/archive/'`,
+    `cd ~/Desktop x; cp ${MEM}/MEMORY.md MEMORY.bak && mv ${MEM}/{a,b}.md ~/Desktop/archive/`,
+    `cd ~/Desktop x; cp MEMORY.md ~/MEMORY.bak && mv ${MEM}/{a,b}.md ~/Desktop/archive/`,
+    // A ~ the shell leaves as text, which the reader places at home: the word is not from the root.
+    `mv ${MEM}/{a,b}.md "~/Desktop/archive/"`,
+    `mv ${MEM}/{a,b}.md '~/Desktop/archive/'`,
+    `mv ${MEM}/{a,b}.md ~"/Desktop/archive/"`,
+    `mv "${MEM}/{a,b}.md" ~/Desktop/archive/`,
+    `mkdir -p '~/Desktop/new' && mv ${MEM}/{a,b}.md ~/Desktop/new/`,
+    `mv --target-directory=~/Desktop/archive ${MEM}/{a,b}.md`,
+    // A word zsh makes the path of a program.
+    `mv ${MEM}/{a,b}.md =archive`,
+    `mkdir -p =new && mv ${MEM}/{a,b}.md =new`,
+    `cp ${MEM}/MEMORY.md =bak && ${MV}`,
+  ])
+    got.push([command, aloneOf(command)])
+  expect(got).toEqual(got.map(([command]) => [command, undefined]))
+  expect(got.length).toBe(38)
+})
+
+test('a mv still stands alone after a cd of one word from the root joined by && alone, with no cd before it, and where its every word is from the root (#3478)', () => {
+  for (const [command, made, copies] of [
+    // One word from the root, and nothing joins the commands but &&: a cd that fails stops the mv.
+    [`cd ${MEM} && mv {a,b}.md archive/`, [], []],
+    [`cd ~/Desktop && mv ${MEM}/{a,b}.md archive/`, [], []],
+    [`cd ~ && mv ${MEM}/{a,b}.md Desktop/archive/ && ls Desktop/archive`, [], []],
+    [`cd $HOME/Desktop && cd /tmp/x && mv -t archive ${MEM}/{a,b}.md`, [], []],
+    [`cd "$HOME/Desktop" && mv --target-directory=archive ${MEM}/{a,b}.md`, [], []],
+    [`cd ~/Desktop && cp ${MEM}/MEMORY.md MEMORY.bak && mv ${MEM}/{a,b}.md archive/`, [], ['MEMORY.bak']],
+    // A folder made after a cd under a name that is not from the root is still not counted on.
+    [`cd ~/Desktop && mkdir -p archive /abs/made && mv ${MEM}/{a,b}.md archive/`, ['/abs/made'], []],
+    // Every word of the mv from the root: no cd before it, whatever its shape, moves where they lead.
+    [`cd ~/Desktop x; ${MV}`, [], []],
+    [`cd -s ~/Desktop/link; ${MV}; ls`, [], []],
+    [`cd sub || true; mv -t ~/Desktop/archive ${MEM}/{a,b}.md`, [], []],
+    [`! cd ~/Desktop && mv --target-directory=/tmp/x ${MEM}/{a,b}.md`, [], []],
+    [`cd ~/Desktop x; cp ${MEM}/MEMORY.md ~/MEMORY.bak && ${MV}`, [], ['~/MEMORY.bak']],
+    // No cd before the mv: words that are not from the root are read in the session folder, whatever
+    // joins the commands and whatever cd comes after.
+    [`mkdir -p archive; mv ${MEM}/{a,b}.md archive/; ls archive`, ['archive'], []],
+    [`mv *.md docs/ || true; cd docs x; ls`, [], []],
+    [`mv ${MEM}/{a,b}.md '$HOME/archive/'`, [], []],
+    [`cp MEMORY.md MEMORY.bak; mv ${MEM}/{a,b}.md archive/`, [], ['MEMORY.bak']],
+    // A = or a quote that opens no word of the mv, a copy or a mkdir.
+    [`${MV} && echo a=b "done" && ls ~/Desktop/archive`, [], []],
+  ] as const)
+    expect([command, aloneOf(command)]).toEqual([command, { made: [...made], copies: [...copies] }])
+})
+
+// ---- #3478, the fourth review: a name the folder holds in another case, or another Unicode form ----
+// Measured on this Mac's disk (APFS, which ignores case) in a scratch folder: `mv src/*.md arch2/`
+// with src/Notes.md and arch2/notes.md leaves arch2 holding one file, the note, and the older file
+// gone. At 72816e97aa names were compared exactly, so replacedBy gave [] for each of the first six.
+test('a pattern moved into a folder replaces a name there that differs only by letter case or by the Unicode form of an accent (#3478)', () => {
+  const composed = `caf${String.fromCharCode(233)}.md`
+  const decomposed = `cafe${String.fromCharCode(0x301)}.md`
+  const capitals = `CAF${String.fromCharCode(201)}.md`
+  expect([composed.length, decomposed.length, composed === decomposed, composed.normalize('NFD') === decomposed]).toEqual([7, 8, false, true])
+  expect(replacedBy('*.md', ['Notes.md', 'a.md'], ['notes.md'])).toEqual(['Notes.md'])
+  expect(replacedBy('{notes,a}.md', ['Notes.md', 'a.md'], ['NOTES.MD'])).toEqual(['Notes.md'])
+  expect(replacedBy('*.md', [composed], [decomposed])).toEqual([composed])
+  expect(replacedBy('*.md', [decomposed], [composed])).toEqual([decomposed])
+  expect(replacedBy('*.md', [capitals], [decomposed])).toEqual([capitals])
+  // The name typed in one form in a brace list, the folder holding it in the other.
+  expect(replacedBy(`{${composed.slice(0, -3)},a}.md`, [decomposed], [composed])).toEqual([decomposed])
+  // Controls: a name that is another name is not replaced, and a pattern that cannot match it moves none.
+  expect(replacedBy('*.md', ['Notes.md', 'a.md'], ['note.md', 'b.md'])).toEqual([])
+  expect(replacedBy('*.md', ['cafe.md'], [composed, decomposed])).toEqual([])
+  expect(replacedBy('{a,b}.md', ['Notes.md', 'a.md'], ['notes.md'])).toEqual([])
+  expect(replacedBy('*.md', ['notes.md'], ['notes.md'])).toEqual(['notes.md'])
+})
+
+// ---- #3478, the fifth fix round: what is asked when the disk did not answer in time ----
+import { LOOKS_MS, MOVE_LOOK_MS, NO_ANSWER, WORDS_MS, removalsUnseen } from '../hooks/rules.ts'
+
+test('removals read from the words alone keep every file, say a move as a deletion and claim nothing of the disk (#3478)', async () => {
+  const unseen = async (command: string) => {
+    const w = commandWrites(command, SLATE, HOME)
+    // As the mod reads main's question: no move marked, every answer on the side that asks.
+    const unmarked = { ...w, changes: (w.changes ?? []).map(({ to: _to, ...c }) => c) }
+    return removalsUnseen(await removalCandidates(unmarked, HOME, async () => true, command, async () => true), HOME)
+  }
+  const gone = { back: 'unknown', why: 'the disk did not answer in time' }
+  expect(await unseen(`mv ${MEM}/note.md ~/Desktop/archive/`)).toEqual([{ file: `${MEM}/note.md`, how: 'delete', ...gone }])
+  expect(await unseen(`mv ${MEM}/note.md ${MEM}/kept.md`)).toEqual([{ file: `${MEM}/note.md`, how: 'delete', ...gone }])
+  expect(await unseen(`mv ${MEM}/{a,b}.md ~/Desktop/archive/`)).toEqual([{ file: `${MEM}/{a,b}.md`, how: 'delete', pattern: true, ...gone }])
+  expect(await unseen(`rm ${MEM}/note.md`)).toEqual([{ file: `${MEM}/note.md`, how: 'delete', ...gone }])
+  expect(await unseen(`truncate -s 0 ${MEM}/note.md`)).toEqual([{ file: `${MEM}/note.md`, how: 'empty', ...gone }])
+  // A folder taken whole: what its path says it may hold, with no list read off the disk.
+  expect(await unseen('rm -rf ~/.claude')).toEqual([{ file: '~/.claude', how: 'delete', holds: ['~/.claude/CLAUDE.md', '~/.claude/LESSONS.md', 'any memory folder under ~/.claude/projects'], ...gone }])
+  expect(await unseen('rm -rf ~/.claude/projects/p')).toEqual([{ file: '~/.claude/projects/p', how: 'delete', holds: ['~/.claude/projects/p/memory'], ...gone }])
+  // A rules file under a temporary folder counts, since no disk said it is outside a checkout.
+  expect(await unseen('rm /tmp/scratch/CLAUDE.md')).toEqual([{ file: '/tmp/scratch/CLAUDE.md', how: 'delete', ...gone }])
+  // A command that takes no lasting memory away gives none.
+  expect(await unseen('rm notes.md')).toEqual([])
+  expect(await unseen('mv notes.md ~/Desktop/archive/')).toEqual([])
+  // No sentence of the question says a file can be moved back, and each says why git was not read.
+  const said = removalSaid(await unseen(`mv ${MEM}/note.md ~/Desktop/archive/`))
+  expect(said).toBe('Whether git holds it could not be read (the disk did not answer in time), so take it that it cannot be got back.')
+  expect(removalOptions(await unseen(`mv ${MEM}/note.md ~/Desktop/archive/`)).map(o => o.label)).toEqual(['Keep as is', 'Delete'])
+})
+
+test("the time a hook gives its looks holds the move's own, and twice over with the reading from the words stays inside the hook's 10 seconds (#3478)", () => {
+  expect(MOVE_LOOK_MS).toBeLessThan(LOOKS_MS)
+  // Twice: a look that fails has the hook's catch judge the call once more from the start.
+  expect(2 * LOOKS_MS + WORDS_MS).toBeLessThanOrEqual(7000)
+  expect(NO_ANSWER.message).toBe('the disk did not answer in time')
 })

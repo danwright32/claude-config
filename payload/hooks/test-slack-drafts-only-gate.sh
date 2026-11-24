@@ -3889,10 +3889,10 @@ spec = importlib.util.spec_from_file_location("shell_words", os.path.join(os.pat
 sw = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(sw)
 parses, real = {}, sw.commands
-def counting(s, cwd="", heredocs=None, parts=None, spans=None):
+def counting(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, unsure=None):
     if heredocs is None and spans is None:
         parses[(s, cwd)] = parses.get((s, cwd), 0) + 1
-    return real(s, cwd, heredocs=heredocs, parts=parts, spans=spans)
+    return real(s, cwd, heredocs=heredocs, parts=parts, spans=spans, comments=comments, unsure=unsure)
 sw.commands = counting
 gate.remember_readings(sw)
 judge = gate.Judge(sw)
@@ -3979,10 +3979,10 @@ spec.loader.exec_module(sw)
 # Counted beneath whatever the gate puts over the reader, so each count is a real reading.
 reads, rests = {}, {}
 plain, plain_rest = sw.commands, sw.command_rest
-def commands(s, cwd="", heredocs=None, parts=None, spans=None):
+def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, unsure=None):
     if heredocs is None and spans is None:
         reads[(s, cwd)] = reads.get((s, cwd), 0) + 1
-    return plain(s, cwd, heredocs=heredocs, parts=parts, spans=spans)
+    return plain(s, cwd, heredocs=heredocs, parts=parts, spans=spans, comments=comments, unsure=unsure)
 def command_rest(text, passed=None):
     if passed is None:
         rests[text] = rests.get(text, 0) + 1
@@ -4336,27 +4336,42 @@ fi
 # a slow CI runner (PR #2917, 2026-11-13). Profiled, the time was work repeated per name, per local
 # and per command over the same text, now done once (#2918). Held in units of the fixed yardstick, as
 # above, so no load moves it: at 0.095 s a unit on the personal MacBook the 11 s budget is about 116
-# units, and the ceiling of 57 is about half of it, which leaves a runner twice as slow per unit inside
-# the budget. Measured on 2026-11-13 in readings of claude-sync: about 22 before #2918 (21.5 to 24
-# under load), about 15 after; on 2026-11-15 in units: 44.8 to 45.7 at a load of 11.
+# units, and the limit of 67 is about 58 percent of it, which leaves a machine 1.7 times as slow per
+# unit inside the budget. Measured on 2026-11-13 in readings of claude-sync: about 22 before #2918
+# (21.5 to 24 under load), about 15 after; on 2026-11-15 in units: 44.8 to 45.7 at a load of 11.
 #
-# OFF macOS THE LIMIT IS 77 (#3167, Dan's choice of 2026-11-17). The yardstick does not carry over
-# to CI's Linux runners for this line: the one lesson line reads 1.05 to 1.35 times its macOS units
-# there, this line 1.2 to 1.9 times, and 57 failed about one PR run in 20 (7 first run failures in
-# about 144 runs, 2026-11-16 to 11-17). The Linux readings it was set from, every one CI has printed:
-# five that passed, first judgement each, 49.4, 49.5, 54.3 and 56.7 (runs 44189981436, 44191721861,
-# 44194128760, 44195907808 on this branch, 2026-11-17) and 55.1 (43798917120, 2026-11-16); and the
-# seven that failed 57, least of three, 58.0, 58.6, 58.6, 59.3, 60.3 and 66.3 (2026-11-16) and 68.2
-# (2026-11-17), whose 21 samples ran 58.0 to 75.9. Rather than widen 57, which still holds macOS to
-# its own premise, the runner gets its own limit set the same way: 57 is 1.41 times the macOS reading
-# (40.3, the mean of 15 readings on 2026-11-17, and 40.1 to 40.4 in the other sets that day), and 77
-# is 1.41 times the middle passing Linux reading, 54.3, rounded up. Every reading above passes it.
-# What fails it: the least of three cold judgements past 77 units, which is a gate about 1.42 times
-# as slow as that middle reading; the slowed gate check below shows one failing it. On a runner
-# whose unit is past about 0.14 s, 77 units is at or past the gate's own 11 s budget, which refuses first.
+# THE LIMIT IS 67 ON macOS AND 91 OFF IT (#3406, Dan's choice of 2026-11-23: "Top reading plus 15%
+# (Recommended)"). Each is the highest reading that platform gave with the gate as it has been
+# since #3486, times 1.15, to the nearest unit. macOS: 58.3, on the work MacBook (57.3 and 58.3 at
+# a load of 2 to 4, 2026-11-23; the personal MacBook read 54.5 to 56.7 that day), so 67. Linux:
+# 78.9, the highest of CI's three readings that day: 74.2 (run 45288689074), then 78.9 and, for
+# the same commit run again, 73.3 (run 45295975472, both attempts), so 91. One machine moves about
+# 7 percent between runs of the same code (those two), so each limit sits about two such moves
+# above its highest reading. Read once more before the limits went in, on main at f8ae7710f9 and
+# the pull requests of that evening: the personal MacBook 55.1 and 55.3 (two whole runs of this
+# suite at a load of 34 to 181); Linux 74.8 for main's own tree (run 45308408783) and 63.8, 64.0,
+# 65.2, 67.4 and 67.9 on five pull request runs (45302832678, 45311844748, 45303036287,
+# 45305899804, 45311774478). So Linux read from about 64 to 79 on the same gate code: the
+# yardstick does not cancel the runner's speed there, and across those nine runs the slower the
+# runner, the lower the reading, from 78.9 at 0.078 s a unit to 63.8 at 0.162 s. The highest
+# readings come from the fastest runners.
+# What fails it: the least of three cold judgements past the limit, which is a gate about 15
+# percent slower than the highest reading above, and about a fifth slower than the middle ones (56
+# on the personal MacBook, 74 on Linux); the slowed gate check below shows one failing it (114 on
+# the personal MacBook and 128 to 144 on Linux that evening). On a runner whose unit is past about
+# 0.12 s, 91 units is more than the gate's own 11 s budget, so there a gate inside the limit can
+# run out of its seconds first; cost.py then reads the line again on the step clock and holds
+# those units to the same limit (#3170). Five of the six runners read that evening were that slow,
+# and the judgement took 9.5 to 10.4 s of the 11 on each.
+#
+# BEFORE THAT: 57 and 77 (#3167, Dan's choice of 2026-11-17), each 1.41 times that day's reading,
+# 40.3 on macOS (the mean of 15) and 54.3 on Linux (the middle of five passing runs). Work added to
+# the gate since took the readings to within 2 percent of both (#3406: 55 to 56 on the personal
+# MacBook, 77.7 to 81.4 on Linux), #3486 took 3 to 6 units back out, and what was left still crossed
+# them from run to run on unchanged code: 57.3 and 58.3 on the work MacBook, 78.9 on Linux.
 case "$(uname -s)" in
-  Darwin) cold_ceiling=57 ;;
-  *) cold_ceiling=77 ;;
+  Darwin) cold_ceiling=67 ;;
+  *) cold_ceiling=91 ;;
 esac
 if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; then
   warm="$(mktemp -d "$T/warm.XXXXXX")"
@@ -4546,8 +4561,9 @@ if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; t
   # the middle reading after, 18.9, rounded up, as the limit for the claude-sync suite is set (this
   # suite with the checks of #3255 in it read 19.2 to 19.6, 3 samples), and the copy of
   # the gate that holds no reading (made above, the gate as it was) must be past it, on the step
-  # clock so its seconds cannot run out first. Off macOS the limit is wider by the same 77 to 57 the
-  # claude-sync suite's is (#3167): no Linux reading of this line existed when it was set, so each
+  # clock so its seconds cannot run out first. Off macOS the limit is wider by the 77 to 57 the
+  # claude-sync suite's limits were then (#3167; they are 91 and 67 since #3406, and 27 times 91
+  # over 67 is 36.7, the same 37): no Linux reading of this line existed when it was set, so each
   # run prints its reading below, and the limit is set again from those. This suite's own text is
   # what is judged, so the reading grows as the suite does (L323): a limit crossed by growth alone
   # is raised with the readings that show it, never by guessing.

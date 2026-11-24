@@ -4383,7 +4383,11 @@ Each entry is signed with a key only this Mac's user can read, `~/.claude/state/
 (made on first use, mode 600), so a process that can write entries cannot forge one; a key that is
 missing, unreadable or readable by others means no cache, never an unsigned one (#2965). The wrapper
 runs the gate with `PYTHONHASHSEED=0`, so it iterates its sets in the same order every run, and the
-cache keeps and uses nothing from a run where that order is random. Under a test run the cache is off unless `SLACK_GATE_CACHE_DIR` names one. It does nothing for a cold
+cache keeps and uses nothing from a run where that order is random. Under a test run the cache is off unless `SLACK_GATE_CACHE_DIR` names one.
+A `SLACK_GATE_CACHE_DIR` that is empty, is not an absolute path (a `~` is not expanded, so it counts as
+relative) or holds a `..` is ignored: the call is judged with no cache, and the gate says why once on
+stderr after its verdict, which reaches the session only with a refusal, since the wrapper drops what
+follows an allow (#3466). The cache does nothing for a cold
 run, so a CI runner judges as before.
 
 Beside the judgements, the same folder keeps the shell reader's parse of any text of 64 KB or more
@@ -5201,6 +5205,9 @@ judgement), the commands of a text for the readings of what is around a program 
 million characters before) and whether it runs shopt (`sh_runs_shopt`). Measured that day on the
 personal MacBook, ten readings each taken in turn at a load of 37 to 103: 5.61 s and 56.4 units
 before, 5.33 s and 53.7 after (the middle readings, a unit 0.100 s). No limit was changed with it.
+The limits were set again on 2026-11-23, to 67 units on macOS and 91 off it (Dan's choice, the
+highest reading on each platform plus 15 percent; the comment above them in the gate's suite
+holds the readings).
 Suite: `test-slack-drafts-held-once.sh`, which holds each reading by a count and saw each count
 fail on the gate as it was.
 
@@ -5224,8 +5231,8 @@ personal MacBook with a unit at 0.097 s:
   alone in 10.7 to 10.8, and the suite after one write in 34.4 to 35.0. That record is as it was:
   changing when it is kept is its own piece of work. Until then a call that starts a suite is
   cheapest when it writes nothing before it.
-- `bash tests/test-claude-sync.sh` still reads 52.0 to 53.0 units against its 57 (3 readings,
-  2026-11-21), and nothing was found to take out. One judgement is 28 million calls with no function above 5% of the
+- `bash tests/test-claude-sync.sh` still reads 52.0 to 53.0 units against the limit of 57 it had
+  then (3 readings, 2026-11-21), and nothing was found to take out. One judgement is 28 million calls with no function above 5% of the
   time, and the disk is 0.05 s of it. The two things found are small: half a million lookups of an
   already compiled pattern, about 0.8 units, less than the readings spread, and 1,043 patterns
   compiled once each for a shell name, about 3%. The limit was not moved.
@@ -6085,7 +6092,9 @@ because it decides how many processes start.
 <tr><td><code>HOOK_TESTS_TIMINGS</code></td><td><code>~/.cache/claude-config/suite-timings</code></td><td>
 
 Where each suite's measured wall clock is kept between runs, one small file per suite, keyed on the
-suite's path inside the repo. It is what the launch order is built from. Set it to empty to turn the
+suite's path inside the repo, as `<seconds> <checks> <share>`: the seconds are its time at the
+smallest share of the budget it has been measured at, and the share is that number of slots. It is
+what the launch order is built from. Set it to empty to turn the
 record off, so a run reads nothing and writes nothing. Deliberately outside the config directory: a
 duration measured on this machine is not configuration, and mirroring it would make the other Mac
 order its runs by numbers from hardware it does not have.
@@ -6211,9 +6220,22 @@ fighting itself.
 Results are collected and printed in the order the suites were FOUND, never the order they
 finished, so two runs of the same tree produce the same page and a difference between them is a
 difference in the suites rather than in the machine's mood. Suites are launched longest first,
-judged by what each one was last MEASURED to cost: every run records each suite's wall clock and
-the next run orders by it. Lane 1 carries the largest share of the budget and lane 1 is whatever
+judged by what each one was MEASURED to cost: every run records each suite's wall clock with the
+share it ran at, and the next run orders by the figure below. Lane 1 carries the largest share of the budget and lane 1 is whatever
 launches first, so this is what decides which suite the machine is spent on.
+
+What a suite is ranked by is its time at the smallest share it has been measured at, recorded with
+that share, never simply its last wall clock (#3388). A suite that divides its own work by its share
+finishes much sooner in lane 1: the sync suite took about 7 minutes there and 23 to 27 anywhere else
+on the 18 core Mac, measured 2026-11-20 and 2026-11-21. Ranked by its last wall clock, it was recorded as quick every time it led, lost
+lane 1 on the next run, was recorded as slow, and led again on the one after, alternating through
+nine runs in a row (#2589) at a cost of about 5 minutes of every other run at a budget of 12. So a
+time measured at a larger share than the recorded one does not replace it. It only keeps it within
+what it proves: more slots never make a suite slower, so the figure is at least the new time, and
+`s` slots cannot make it more than `s/r` times quicker than `r`, so the figure is at most the new
+time times that ratio. The floor catches a suite that got slower, and the ceiling lets one that got
+quicker give lane 1 up rather than holding it on an old figure. The line naming a wrong lead
+compares the same figures, so a lead that finished early because it had lane 1 is not called wrong.
 
 A suite nobody has measured yet, which means a first run or a newly added suite, falls back to
 file size and follows the measured ones. Size is a heuristic and bytes are not seconds, so the
@@ -7918,6 +7940,24 @@ be checked for a merge or deploy), but at the worker's next Stop the driver lets
 touching its own manifest so it loads again while idle, then starts it again; still out of step, it
 stops for the night with its claim parked and the reason in the morning report.
 
+A reload can also fail outright: Claude Code then writes "<mod>: reload failed, the previous version
+stays loaded: <why>" into the session's transcript, as a system row, and goes on running the copy
+it had, for as long as the session lasts. On the work MacBook a session ran on an old mod-kit for
+six days that way (52 failed reloads), and the old code wrongly refused a builder's edit; on this
+Mac a session ran three days on an old picker-manners (#3309). Nothing said so to Dan: `claude-sync
+status` sees only that the installed mods are current, and `rule-files-changed.sh` only a mod a pull
+added, removed or replaced. So `hooks/mod-reload-failed.sh`, on every prompt, reads what the
+transcript gained since the last one, and when a mod's reload has failed since its copy loaded it
+tells Dan which mod, since when, which copy is still running and to start a new session, and hands
+the session the same with Claude Code's reason and an instruction to call a refusal from that mod
+out of date. Once per mod per failure: the later failed reloads are not told, a reload that works
+ends it quietly, and the same old copy still running a day after it was told is told again
+(`CLAUDE_MOD_RELOAD_RETELL_AFTER`). A failure written before the session's current process started
+counts for nothing, since that process loaded every mod afresh. It is a settings hook and depends on
+no mod, so a frozen mod cannot silence it. A guard's own refusal does not say it is out of date:
+the words come from the frozen copy's code, and Claude Code raises no event for a refusal by a mod
+that a hook could add to.
+
 After each apply, and after a send that changed which mods are named, `claude plugin list --json`
 and `claude plugin validate` are asked about every mod,
 and the pull names any mod Claude Code does not list as enabled, or that validation refuses, with
@@ -8810,7 +8850,20 @@ said as emptied. Where the reader cannot limit what goes under a folder (`rm -r`
 guess. A file that is not there is not asked about. Claude's question names what
 goes and says why, and the mod adds what it measured as Dan is asked: where a move puts the file,
 or whether git can bring a deleted or emptied one back (held unchanged, held with changes since,
-not held, or not readable). The answers are Keep as is, first, and Delete, Move or Empty; a save's
+not held, or not readable). A move into another folder is asked about as a move however the files
+are named (#3478): a file named outright by the path it will have, a pattern by the folder ("Each
+goes into the folder ..."), with whether a file of the same name there is replaced. It is worded
+as a move only when nothing else in the command could remove, move, empty or write over a file:
+one mv, and beside it only plain commands on the mod's short list (`mkdir`, `ls`, `echo`, `cd`,
+`pwd`, `test`, `[`, `true`), or before it a `cp` of one file to a place where nothing is yet, the
+folder it goes into there already or made by a `mkdir` first. Any other command is asked about
+as it was before #3478, a pattern moved away as a deletion; so is a command whose look at the disk
+fails or takes more than 2 seconds, and a brace pattern of more than 256 names. A file moved
+to a name another source of the same mv or cp may also land on (one from another folder of the
+same name, a name alike but for letter case or the form of an accent, a pattern, or a word no
+path names) is asked about as the deletion it may be, never as a move that can be moved back
+(#3505): the source named last is the one kept. The answers
+are Keep as is, first, and Delete, Move or Empty; a save's
 For good approves no removal and a removal's answer approves no save, a removal whose consequence
 changes after he answers (what git holds of the file, where a move lands, what a folder holds) is
 asked about again, his "from now on" words cover no removal, and a subagent's removal is refused.

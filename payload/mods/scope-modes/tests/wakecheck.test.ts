@@ -1,7 +1,7 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import type { GithubOf } from '../hooks/overnight.ts'
-import { wakeCheck, workedOn, type Ran } from '../hooks/wakecheck.ts'
+import { ROW_KINDS, wakeCheck, workedOn, type Ran } from '../hooks/wakecheck.ts'
 import { githubRepo } from './mod-kit/hooks/repo.ts'
 
 // mod-kit's reader of a remote, as $.modkit.repo answers it: its byte for byte copy (#951).
@@ -875,5 +875,33 @@ describe('an issue filed overnight is put to Dan only when it needs him (#3273)'
     expect(r.hits).toEqual([])
     expect(r.filed.map(f => f.issue)).toEqual([9, 10])
     expect(r.asked.filter(a => a === OPEN('o/r'))).toHaveLength(1)
+  })
+})
+
+// #3273, its last point: every other kind of row the check puts to Dan was looked at on the same
+// reasoning, and each one kept is held in ROW_KINDS with why. On a night producing every kind, a row
+// the check writes outside that list fails, as does a kind listed that the check no longer writes.
+describe('every kind of row the check puts to Dan is one that was decided (#3273)', () => {
+  test('a night with one of each kind gives exactly the kinds ROW_KINDS holds', async () => {
+    const r = await check({
+      'gh api users/dan/events?per_page=100&page=1': ok(JSON.stringify([{ type: 'PushEvent', created_at: AFTER, repo: { name: 'o/r' } }])),
+      ...SEARCH_9(),
+      [ISSUE('o/r', 9)]: ok(JSON.stringify({ ...COMPLETE, milestone: null })),
+      [OPEN('o/r')]: ok(JSON.stringify([{ number: 9, title: 'Filed overnight' }])),
+      'gh api repos/o/r/milestones?state=all&per_page=100': ok(JSON.stringify([{ number: 4, title: 'New one', updated_at: AFTER }])),
+      'gh api repos/o/r/issues/events?per_page=100&page=1': ok('[]'),
+      'gh api repos/o/claude-config/commits?path=payload/LESSONS.md&since=2026-10-08T03:00:00Z': ok(JSON.stringify([{ sha: 'abcdef1234', commit: { message: 'Add L999' } }])),
+      [`mtime ${'/Users'}/x/.claude/LESSONS.md`]: ok(String(SINCE + 60_000)),
+      [RUNS('o/r')]: runs([
+        { name: 'Deploy', event: 'push', status: 'completed', conclusion: 'failure', created_at: AFTER, html_url: 'https://github.com/o/r/actions/runs/1' },
+        { name: 'Drift check', event: 'schedule', status: 'completed', conclusion: 'failure', created_at: AFTER, html_url: 'https://github.com/o/r/actions/runs/2' },
+        { name: 'Smoke canary', event: 'workflow_dispatch', status: 'completed', conclusion: 'failure', created_at: AFTER, html_url: 'https://github.com/o/r/actions/runs/3' },
+      ]),
+    }, github, undefined, ['o/r'])
+    expect(r.unmeasured).toEqual([])
+    const leads: string[] = Object.values(ROW_KINDS)
+    // Every row leads with a kind held there, and every kind held there is written.
+    expect(r.hits.filter(h => !leads.some(k => h.startsWith(k)))).toEqual([])
+    expect(leads.filter(k => !r.hits.some(h => h.startsWith(k)))).toEqual([])
   })
 })

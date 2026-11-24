@@ -668,6 +668,12 @@ EOF
 VERDICT_BEHIND=99 gate_says refused "#3304 and it is the nesting limit's refusal" "inside one another" 3<<EOF
 op run -- node --test test/notify.test.js
 EOF
+# The limit's refusal read "and they could start a command 3 such readings inside one another",
+# which is not a sentence (the lessons review of pull request 3394, claude-config#3333). It now says
+# where the program stands and why its words go unread, whole.
+VERDICT_BEHIND=99 gate_says refused "#3333 and the nesting limit's refusal says, as a sentence, that the program already stands at the limit" "$KNOWS, and it already stands inside 3 readings of such a program's words, the most the gate reads inside one another, so whether the command posts cannot be checked" 3<<EOF
+op run -- node --test test/notify.test.js
+EOF
 VERDICT_BEHIND=99 helper_counts "#3304 the helper counts the nesting limit's own refusal as this rule's" 1 3<<EOF
 op run -- node --test test/notify.test.js
 EOF

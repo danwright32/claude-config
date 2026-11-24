@@ -167,6 +167,8 @@ deploy through a Supabase server whose name does not hold supabase, and a call t
 API (curl, a script). The setting in supabase/config.toml is never read; the shell deploy that
 would apply it is asked about whatever its flags.
 """
+import contextlib
+import inspect
 import json
 import os
 import re
@@ -1436,6 +1438,58 @@ def _scripted_findings(queries, judge):
     return out
 
 
+class UnsureLine(Exception):
+    """A reading named a # it took for a comment without knowing that the shell does."""
+
+
+class CannotAsk(Exception):
+    """The reader's commands() has no `unsure` to ask for, so it cannot say which lines those are."""
+
+
+@contextlib.contextmanager
+def asking(sw):
+    """Inside the block, every reading sw's commands() makes asks the reader which # it took for a
+    comment without being sure the shell does (its `unsure`, claude-config#3464), and a reading
+    that names one raises UnsureLine, whether it reached its end or gave up, as the Slack drafts
+    gate's readings do. A caller that asks is also given the rest of the line read as commands
+    wherever every shell reads the # inside a word (claude-config#3481), so nothing on such a line
+    is left out. The block is given the list of every # named. A reader with no `unsure` to ask
+    for raises CannotAsk before the block starts, so a caller that cannot ask never passes for one
+    that asked and was told nothing. sw reads as it did once the block ends."""
+    plain, named = sw.commands, []
+    try:
+        can_ask = "unsure" in inspect.signature(plain).parameters
+    except (TypeError, ValueError):
+        can_ask = False
+    if not can_ask:
+        raise CannotAsk()
+
+    def commands(*args, **asked):
+        if asked.get("unsure") is not None:
+            return plain(*args, **asked)
+        marks = []
+        try:
+            return plain(*args, unsure=marks, **asked)
+        finally:
+            if marks:
+                named.extend(marks)
+                raise UnsureLine(marks[0][0])
+
+    sw.commands = commands
+    try:
+        yield named
+    finally:
+        sw.commands = plain
+
+
+UNSURE_LINE = ("the command holds a # the shared reader cannot tell from a comment, so what runs after "
+               "it on that line could not be read")
+UNREAD_LINE = ("the command holds a # the shell reads inside a word, and read that way, with the rest "
+               "of its line, the command is not one this hook approves")
+CANNOT_ASK = ("lib/shell-words.py cannot say which lines it is unsure of (its commands() takes no "
+              "`unsure`), so no command read through it is approved")
+
+
 def cli_read_approval(command, cwd, judge, sw):
     """(True, why) when the whole Bash command is one Supabase CLI run that changes nothing: a `db
     query` whose every statement, in its words or its -f files, judge() shows to be read only, or a
@@ -1443,7 +1497,35 @@ def cli_read_approval(command, cwd, judge, sw):
     itself from heredocs (scripted_queries()), when every text those files can hold and every
     statement in the runs' words judge() shows to be read only. Else (False, why not).
     db-write-ask.sh asks about none of these, by the same reading (bash_findings()), so the two
-    hooks cannot disagree about one (L342)."""
+    hooks cannot disagree about one (L342).
+
+    Since #3472 the command must be one of those by two readings: the reader's own, and the one it
+    gives a caller that asks which lines it is unsure of (asking()). The reader took a # for a
+    comment by a rule the shell does not follow, so a command on the rest of that line was left out
+    of the first reading, and a write there was approved along with the read in front of it. Read
+    the second way such a line is read as the shell runs it, and a # that cannot be told from a
+    comment is named, which approves nothing. Both must approve, so nothing is approved now that
+    was not before."""
+    ok, why = _cli_read_approval(command, cwd, judge, sw)
+    if not ok:
+        return ok, why
+    try:
+        with asking(sw) as named:
+            sure, _ = _cli_read_approval(command, cwd, judge, sw)
+    except CannotAsk:
+        return False, CANNOT_ASK
+    except Exception as e:
+        return False, ("the command could not be read a second time, asking the reader which lines it "
+                       "is unsure of (%s)" % type(e).__name__)
+    if named:
+        return False, UNSURE_LINE
+    if not sure:
+        return False, UNREAD_LINE
+    return ok, why
+
+
+def _cli_read_approval(command, cwd, judge, sw):
+    """cli_read_approval()'s answer by one reading of the command, whichever sw gives."""
     plain = plain_supabase(command, sw, cwd)
     if plain is None:
         scripted = scripted_queries(command, sw, cwd)

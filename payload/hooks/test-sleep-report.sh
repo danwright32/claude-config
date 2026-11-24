@@ -1107,6 +1107,14 @@ check_eq "the wake check's priority level is the gate's (#3273)" \
   "$(sed -n 's/^LEVEL = re.compile(r"\(.*\)", re.IGNORECASE)$/\1/p' "$GATE")" "$(sed -n 's|^const LEVEL = /\(.*\)/i$|\1|p' "$WC")"
 check_eq "the wake check's Open questions heading is the gate's (#3273)" \
   "$(sed -n 's/^HEADING_LINE = re.compile(r"(?im)\(.*\)")$/\1/p' "$GATE")" "$(sed -n 's|^const OPEN_QUESTIONS = /\(.*\)/im$|\1|p' "$WC")"
+# Every row the wake check puts to Dan leads with a kind ROW_KINDS holds, each one decided on (#3273):
+# read from the source, so a kind added later without a decision fails here, which a test of the rows
+# a fixture produces cannot see. The count of rows written is pinned first, so a read finding none
+# cannot pass as all of them decided.
+rows_written="$(grep -c -E '(hits|lessonHits|deployHits)\.push\(' "$WC")"
+check_eq "the wake check's rows are read from its source (#3273)" 5 "$rows_written"
+check_eq "every row the wake check writes leads with a kind it decided on (#3273)" "$rows_written" \
+  "$(grep -c -E '(hits|lessonHits|deployHits)\.push\(`\$\{ROW_KINDS[.[]' "$WC")"
 
 # ---- where the writes landed ----
 # The stamp is proved present in what this suite wrote before its absence from the real Downloads is
