@@ -6089,7 +6089,9 @@ because it decides how many processes start.
 <tr><td><code>HOOK_TESTS_TIMINGS</code></td><td><code>~/.cache/claude-config/suite-timings</code></td><td>
 
 Where each suite's measured wall clock is kept between runs, one small file per suite, keyed on the
-suite's path inside the repo. It is what the launch order is built from. Set it to empty to turn the
+suite's path inside the repo, as `<seconds> <checks> <share>`: the seconds are its time at the
+smallest share of the budget it has been measured at, and the share is that number of slots. It is
+what the launch order is built from. Set it to empty to turn the
 record off, so a run reads nothing and writes nothing. Deliberately outside the config directory: a
 duration measured on this machine is not configuration, and mirroring it would make the other Mac
 order its runs by numbers from hardware it does not have.
@@ -6215,9 +6217,22 @@ fighting itself.
 Results are collected and printed in the order the suites were FOUND, never the order they
 finished, so two runs of the same tree produce the same page and a difference between them is a
 difference in the suites rather than in the machine's mood. Suites are launched longest first,
-judged by what each one was last MEASURED to cost: every run records each suite's wall clock and
-the next run orders by it. Lane 1 carries the largest share of the budget and lane 1 is whatever
+judged by what each one was MEASURED to cost: every run records each suite's wall clock with the
+share it ran at, and the next run orders by the figure below. Lane 1 carries the largest share of the budget and lane 1 is whatever
 launches first, so this is what decides which suite the machine is spent on.
+
+What a suite is ranked by is its time at the smallest share it has been measured at, recorded with
+that share, never simply its last wall clock (#3388). A suite that divides its own work by its share
+finishes much sooner in lane 1: the sync suite took about 7 minutes there and 23 to 27 anywhere else
+on the 18 core Mac, measured 2026-11-20 and 2026-11-21. Ranked by its last wall clock, it was recorded as quick every time it led, lost
+lane 1 on the next run, was recorded as slow, and led again on the one after, alternating through
+nine runs in a row (#2589) at a cost of about 5 minutes of every other run at a budget of 12. So a
+time measured at a larger share than the recorded one does not replace it. It only keeps it within
+what it proves: more slots never make a suite slower, so the figure is at least the new time, and
+`s` slots cannot make it more than `s/r` times quicker than `r`, so the figure is at most the new
+time times that ratio. The floor catches a suite that got slower, and the ceiling lets one that got
+quicker give lane 1 up rather than holding it on an old figure. The line naming a wrong lead
+compares the same figures, so a lead that finished early because it had lane 1 is not called wrong.
 
 A suite nobody has measured yet, which means a first run or a newly added suite, falls back to
 file size and follows the measured ones. Size is a heuristic and bytes are not seconds, so the
@@ -7922,6 +7937,24 @@ be checked for a merge or deploy), but at the worker's next Stop the driver lets
 touching its own manifest so it loads again while idle, then starts it again; still out of step, it
 stops for the night with its claim parked and the reason in the morning report.
 
+A reload can also fail outright: Claude Code then writes "<mod>: reload failed, the previous version
+stays loaded: <why>" into the session's transcript, as a system row, and goes on running the copy
+it had, for as long as the session lasts. On the work MacBook a session ran on an old mod-kit for
+six days that way (52 failed reloads), and the old code wrongly refused a builder's edit; on this
+Mac a session ran three days on an old picker-manners (#3309). Nothing said so to Dan: `claude-sync
+status` sees only that the installed mods are current, and `rule-files-changed.sh` only a mod a pull
+added, removed or replaced. So `hooks/mod-reload-failed.sh`, on every prompt, reads what the
+transcript gained since the last one, and when a mod's reload has failed since its copy loaded it
+tells Dan which mod, since when, which copy is still running and to start a new session, and hands
+the session the same with Claude Code's reason and an instruction to call a refusal from that mod
+out of date. Once per mod per failure: the later failed reloads are not told, a reload that works
+ends it quietly, and the same old copy still running a day after it was told is told again
+(`CLAUDE_MOD_RELOAD_RETELL_AFTER`). A failure written before the session's current process started
+counts for nothing, since that process loaded every mod afresh. It is a settings hook and depends on
+no mod, so a frozen mod cannot silence it. A guard's own refusal does not say it is out of date:
+the words come from the frozen copy's code, and Claude Code raises no event for a refusal by a mod
+that a hook could add to.
+
 After each apply, and after a send that changed which mods are named, `claude plugin list --json`
 and `claude plugin validate` are asked about every mod,
 and the pull names any mod Claude Code does not list as enabled, or that validation refuses, with
@@ -8822,7 +8855,11 @@ one mv, and beside it only plain commands on the mod's short list (`mkdir`, `ls`
 `pwd`, `test`, `[`, `true`), or before it a `cp` of one file to a place where nothing is yet, the
 folder it goes into there already or made by a `mkdir` first. Any other command is asked about
 as it was before #3478, a pattern moved away as a deletion; so is a command whose look at the disk
-fails or takes more than 2 seconds, and a brace pattern of more than 256 names. The answers
+fails or takes more than 2 seconds, and a brace pattern of more than 256 names. A file moved
+to a name another source of the same mv or cp may also land on (one from another folder of the
+same name, a name alike but for letter case or the form of an accent, a pattern, or a word no
+path names) is asked about as the deletion it may be, never as a move that can be moved back
+(#3505): the source named last is the one kept. The answers
 are Keep as is, first, and Delete, Move or Empty; a save's
 For good approves no removal and a removal's answer approves no save, a removal whose consequence
 changes after he answers (what git holds of the file, where a move lands, what a folder holds) is
