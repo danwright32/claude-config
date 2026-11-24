@@ -30,7 +30,7 @@ export TZ=UTC
 export LIMIT_MESSAGES_RETRY_DELAYS="0"
 mkdir -p "$HOME/.claude/state/status-bar" "$HOME/.claude/projects/-proj/sess-a/subagents"
 REC="$HOME/.claude/state/limit-messages/records.jsonl"
-SECRET="SENTINEL-TYPED-BY-A-PERSON-91"
+TYPED="SENTINEL-TYPED-BY-A-PERSON-91"
 records(){ cat "$REC" 2>/dev/null; }
 count(){ if [ -f "$REC" ]; then grep -c . "$REC"; else echo 0; fi; }
 field(){ python3 -c 'import json,sys
@@ -46,8 +46,8 @@ KEY="$(printf 'acct-1:org-1' | shasum -a 256 | cut -c1-16)"
 
 MAIN="$HOME/.claude/projects/-proj/sess-a.jsonl"
 cat > "$MAIN" <<EOF
-{"type":"user","isSidechain":false,"sessionId":"sess-a","uuid":"u-1","timestamp":"2026-11-10T19:00:00.000Z","message":{"role":"user","content":"$SECRET"}}
-{"type":"assistant","isSidechain":false,"sessionId":"sess-a","uuid":"u-2","timestamp":"2026-11-10T19:00:05.000Z","entrypoint":"cli","message":{"model":"claude-fable","content":[{"type":"text","text":"$SECRET reply"}]}}
+{"type":"user","isSidechain":false,"sessionId":"sess-a","uuid":"u-1","timestamp":"2026-11-10T19:00:00.000Z","message":{"role":"user","content":"$TYPED"}}
+{"type":"assistant","isSidechain":false,"sessionId":"sess-a","uuid":"u-2","timestamp":"2026-11-10T19:00:05.000Z","entrypoint":"cli","message":{"model":"claude-fable","content":[{"type":"text","text":"$TYPED reply"}]}}
 {"type":"assistant","isSidechain":false,"sessionId":"sess-a","uuid":"u-3","timestamp":"2026-11-10T19:01:00.000Z","entrypoint":"cli","isApiErrorMessage":true,"error":"server_error","message":{"model":"<synthetic>","content":[{"type":"text","text":"API Error: 529 Overloaded. This is a server-side issue, usually temporary"}]}}
 {"type":"assistant","isSidechain":false,"sessionId":"sess-a","uuid":"u-4","timestamp":"2026-11-10T19:02:00.000Z","entrypoint":"cli","isApiErrorMessage":true,"error":"rate_limit","apiError":"usage_limit_reached","apiErrorStatus":429,"apiErrorParams":{"rate_limit_info":{"status":"rejected","resetsAt":1794341400,"rateLimitType":"five_hour","overageStatus":"rejected","overageDisabledReason":"out_of_credits","isUsingOverage":false}},"quotaLimits":{"status":"rejected","resetsAt":1794341400,"rateLimitType":"five_hour","overageStatus":"rejected","overageDisabledReason":"out_of_credits","isUsingOverage":false},"message":{"model":"<synthetic>","content":[{"type":"text","text":"You've hit your 5-hour limit · resets 3:10pm (America/New_York)"}]}}
 EOF
@@ -64,7 +64,7 @@ same "1 who" "main" "$(field 0 who)"
 same "1 account key" "$KEY" "$(field 0 account)"
 same "1 overage reason" "out_of_credits" "$(field 0 overage_reason)"
 same "1 cycle names kind and reset" "five_hour@2026-11-10T20:10:00Z" "$(field 0 cycle)"
-absent "1 no conversation text" "$SECRET" "$(records)"
+absent "1 no conversation text" "$TYPED" "$(records)"
 absent "1 no email" "invented@example.com" "$(records)"
 absent "1 no session id" "sess-a" "$(records)"
 
@@ -76,7 +76,7 @@ same "2 run twice, one record" "1" "$(count)"
 #    structured type is the ambiguous seven_day_overage_included), so the wording decides the kind.
 AG="$HOME/.claude/projects/-proj/sess-a/subagents/agent-x1.jsonl"
 cat > "$AG" <<EOF
-{"type":"user","isSidechain":true,"agentId":"x1","sessionId":"sess-a","uuid":"a-1","timestamp":"2026-11-14T02:49:00.000Z","message":{"role":"user","content":"$SECRET"}}
+{"type":"user","isSidechain":true,"agentId":"x1","sessionId":"sess-a","uuid":"a-1","timestamp":"2026-11-14T02:49:00.000Z","message":{"role":"user","content":"$TYPED"}}
 {"type":"assistant","isSidechain":true,"agentId":"x1","sessionId":"sess-a","uuid":"a-2","timestamp":"2026-11-14T02:49:54.000Z","entrypoint":"cli","isApiErrorMessage":true,"error":"rate_limit","apiError":"usage_limit_reached","apiErrorStatus":429,"apiErrorType":"rate_limit_error","quotaLimits":{"status":"rejected","resetsAt":1795064400,"rateLimitType":"seven_day_overage_included","overageStatus":"rejected","overageDisabledReason":"out_of_credits","isUsingOverage":false},"message":{"model":"<synthetic>","content":[{"type":"text","text":"You've hit your Fable limit · resets Nov 19 at 12am (America/New_York). /model to switch models."}]}}
 EOF
 printf '{"session_id":"sess-a","transcript_path":"%s","agent_id":"x1","agent_transcript_path":"%s","hook_event_name":"SubagentStop","stop_hook_active":false}' "$MAIN" "$AG" | python3 "$TOOL" record >/dev/null 2>&1
@@ -115,7 +115,7 @@ same "4 rate limit names no reset" "None" "$(field 5 resets_at)"
 # 5. The error line is not in the transcript yet: the record is made from the hook's own message,
 #    marked as such, with the account still read from the session.
 EMPTY="$HOME/.claude/projects/-proj/sess-a-late.jsonl"
-printf '{"type":"user","sessionId":"sess-a","uuid":"c-1","timestamp":"2026-11-18T18:14:00.000Z","message":{"content":"%s"}}\n' "$SECRET" > "$EMPTY"
+printf '{"type":"user","sessionId":"sess-a","uuid":"c-1","timestamp":"2026-11-18T18:14:00.000Z","message":{"content":"%s"}}\n' "$TYPED" > "$EMPTY"
 printf '{"session_id":"sess-a","transcript_path":"%s","hook_event_name":"StopFailure","error":"rate_limit","last_assistant_message":"You'"'"'ve hit your weekly limit \\u00b7 resets Nov 23 at 3am (America/New_York)"}' "$EMPTY" | python3 "$TOOL" record >/dev/null 2>&1
 same "5 recorded from the message" "7" "$(count)"
 same "5 source" "hook message" "$(field 6 source)"
@@ -125,7 +125,7 @@ same "5 account" "$KEY" "$(field 6 account)"
 # 6. A StopFailure that is not a limit (an overloaded server) records nothing.
 printf '{"session_id":"sess-a","transcript_path":"%s","hook_event_name":"StopFailure","error":"overloaded","last_assistant_message":"API Error: 529 Overloaded"}' "$EMPTY" | python3 "$TOOL" record >/dev/null 2>&1
 same "6 overloaded records nothing" "7" "$(count)"
-absent "6 still no conversation text anywhere" "$SECRET" "$(records)"
+absent "6 still no conversation text anywhere" "$TYPED" "$(records)"
 
 # 7. The reader: limit days by kind in ET, a five hour day never counted with a model limit day.
 out="$(python3 "$TOOL" days 2>&1)"; rc=$?
@@ -139,7 +139,7 @@ check "7 spend heading" "Monthly spend limit: 1 day" "$out"
 check "7 rate heading" "Account rate limit: 1 day" "$out"
 check "7 account coverage said" "Account read for 3 of 7 messages" "$out"
 check "7 who" "main 1" "$out"
-absent "7 no conversation text" "$SECRET" "$out"
+absent "7 no conversation text" "$TYPED" "$out"
 
 # 8. The backfill scans every transcript, subagents included, and adds nothing already recorded.
 out="$(python3 "$TOOL" scan 2>&1)"; rc=$?
