@@ -2971,6 +2971,67 @@ test('For good on a memory file also lets the one index line linking it through,
   quietOnMain(w)
 })
 
+// #3506: after a For good on a memory file the index already linked, Claude was told the one line
+// linking it "may be added without asking him again", read that as leave to bring the existing line
+// up to date (2026-11-23), and was refused with a second question. The note now says what holds for
+// the index as it is when the save lands; what the guard lets through is unchanged.
+const ALLOWANCE = (name: string) => `The one line in ${INDEX_SHOWN} that links to ${name} may be added without asking him again until this For good lapses; any other change to that index is asked about.`
+const ALREADY_LINKED = (name: string) => `${INDEX_SHOWN} already links to ${name}, and this For good does not cover changing that line: a change to it is asked about.`
+const SAVED_ALONE = (name: string) => `Saved to ${MEMDIR_SHOWN}/${name}, as Dan answered For good.`
+
+test('For good on a memory file the index already links offers no line to add, and says a change to that line is asked about (#3506)', withKit, async ($, on) => {
+  // Linked by its name, and by ./ before it, as the guard reads a line linking a file.
+  const lines = { 'rule.md': indexLine('rule.md'), 'next.md': indexLine('next.md', './next.md') }
+  const w = world($, on, { auto: true, files: { [INDEX]: `${INDEX_TEXT}${lines['rule.md']}\n${lines['next.md']}\n` } })
+  for (const [name, existing] of Object.entries(lines)) {
+    const told = contextOf(await saveMemoryFile($, w, name))
+    expect(`${name}: ${told}`).toBe(`${name}: ${SAVED_ALONE(name)} ${ALREADY_LINKED(name)}`)
+    // The change the session sent on 2026-11-23, bringing that line up to date: still asked about.
+    const update = { tool: 'Edit', file_path: INDEX, old_string: existing, new_string: `${existing}, as it now reads` }
+    expect(refusalOf(await call($, update))).toContain(ASKS)
+  }
+  expect(w.ran.length).toBe(2)
+})
+
+// Every case where no line of the index links the file by the guard's own reading of a line
+// (linksOnlyTo): the allowance is offered as before, and holds.
+test('the note offers the index line wherever no line links the file yet: no index, one naming it only in prose, or a line of two links (#3506)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true })
+  const append = (n: string) => ({ tool: 'Bash', command: `echo '${indexLine(n)}' >> ${INDEX_SHOWN}` })
+  const cases: [string, string, string | undefined, (name: string) => Record<string, unknown>][] = [
+    ['no index yet', 'none.md', undefined, n => ({ tool: 'Write', file_path: INDEX, content: `${indexLine(n)}\n` })],
+    ['named in prose, no link', 'prose.md', `${INDEX_TEXT}See prose.md before merging.\n`, append],
+    ['a line linking it beside another link', 'two.md', `${INDEX_TEXT}- [Rule](two.md) and [Notes](notes.md)\n`, append],
+  ]
+  for (const [what, name, index, line] of cases) {
+    if (index === undefined) delete w.files[INDEX]
+    else w.files[INDEX] = index
+    const told = contextOf(await saveMemoryFile($, w, name))
+    expect(`${what}: ${told}`).toBe(`${what}: ${SAVED_ALONE(name)} ${ALLOWANCE(name)}`)
+    // And the allowance it states holds: the one line goes through, then a second is asked about.
+    expect(`${what}: ${refusalOf(await call($, line(name)))}`).toBe(`${what}: `)
+    expect(refusalOf(await call($, line(name)))).toContain(ASKS)
+  }
+})
+
+test('an index that is a fifo gets no word about its line either way, is never opened, and the save is still told (#3506)', withKit, async ($, on) => {
+  const fifo = world($, on, { auto: true, fifos: [INDEX] })
+  expect(contextOf(await saveMemoryFile($, fifo, 'rule.md'))).toBe(SAVED_ALONE('rule.md'))
+  expect(fifo.opened).toEqual([])
+})
+
+test('an index whose disk does not answer gets no word about its line either way, and the save is told once the looks run out of time (#3506)', withKit, async ($, on) => {
+  const hung = world($, on, { auto: true, unanswered: [INDEX] })
+  const input = { tool: 'Write', file_path: `${MEMDIR}/rule.md`, content: '---\nname: rule.md\n---\nAsk before merging.\n' }
+  await askDan($, hung, refusalOf(await call($, input)), 'For good', `${MEMDIR_SHOWN}/rule.md`)
+  const saving = call($, input)
+  await hung.unansweredAt(1)
+  await hung.clock.advance(LOOKS_MS)
+  const saved = await saving
+  expect(refusalOf(saved)).toBe('')
+  expect(contextOf(saved)).toBe(SAVED_ALONE('rule.md'))
+})
+
 test('the index line an approval covers is the one line linking that file: anything else to MEMORY.md is asked about, and uses nothing up (#1794)', withKit, async ($, on) => {
   const OTHER_INDEX = `${HOME}/.claude/projects/-Users-dan-Apps-other/memory/MEMORY.md`
   const w = world($, on, { auto: true, files: { [INDEX]: INDEX_TEXT, [OTHER_INDEX]: INDEX_TEXT } })
