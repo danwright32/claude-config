@@ -5069,6 +5069,14 @@ typed: every string naming a file is judged as `python3 <file>` is, a folder hol
 module run by a name written out is read as an import of it; and a file run by a path the gate
 cannot work out, a file run that is not text (an archive, compiled code), and code this python3
 cannot parse that names a way to run a file are each refused as unread.
+A path handed to a call that runs the file at it (`runpy.run_path`, `zipimport`) is refused as
+unread for three more things Python runs and the gate cannot read (`py_handed`,
+claude-config#3441): an archive with text in front of it, found by its zip end record as far
+back as `zipimport` looks, whatever the file is called; a path under an archive
+(`app.zip/inner`); and a folder whose `__main__` is compiled, an extension module or a package.
+Measured on main on 2026-11-24, each passed: only a NUL in a file's first line told an archive
+from text, so the archive `zipapp` writes behind a `#!` line read as a script that names
+nothing.
 It cannot tell a file such code only reads from one it runs, so a data file naming an endpoint
 refuses the command (`import subprocess, json; json.load(open('named.json'))`), and "can run
 code" holds every module the gate does not know to be unable to. Code that can run nothing
@@ -5077,8 +5085,24 @@ only to write is not read. In a script on disk only a file the code hands to som
 runs one is read this way, and a path or code that cannot be worked out is left as it was:
 `tests/test-readme-mods-table.sh` loads a module by its path and then reads this file, and with
 every string read there it was refused (measured 2026-11-22).
-Not covered, each measured on 2026-11-22 as allowed where the file posts: `python3` handed a
-folder holding `__main__.py` or an archive; a Python file on disk that runs a file it names
+`python3` handed a folder or an archive in place of a script is judged by what it runs
+(`py_run_words`, called from the gate's `every_file` for every Python command,
+claude-config#3441). Measured on main on 2026-11-24, `python3 pkg` passed where
+`pkg/__main__.py` posts, in every spelling tried, and so did `python3 app.zip`: a word naming a
+folder names no file, so nothing was read for it. Now each word naming a folder that holds a
+`__main__.py` is replaced by that file and the words are read again, so a folder `python3` runs
+is read as its script and a folder handed to a script is read as a file handed to it is; a
+pattern the shell fills in with such folders is replaced the same way. The word `python3` runs
+as its script is refused as unread, where typed, when it is an archive, a path under one, or a
+folder whose `__main__` is compiled, an extension module or a package. An archive that is an
+argument (a spreadsheet, a wheel and a document are zip files too) is judged as it was.
+Cost of that reading, in processor time for one judgement with an empty cache, two runs of five
+samples of ten judgements each way taken in turn on 2026-11-24 at load averages of 7 to 22: a
+plain script handed a data file had the same mean before and after in both runs (0.1711 and
+0.1713 s, then 0.1755 and 0.1756 s), and a folder holding `__main__.py`, whose file is now read,
+took about 0.002 s more (means of 0.1721 and 0.1739 s, then 0.1769 and 0.1785 s).
+Not covered, each measured on 2026-11-22 as allowed where the file posts:
+a Python file on disk that runs a file it names
 (`python3 runner.py`, `import runner`); code the shell fills in whole
 (`python3 -c "$(cat posts.py)"`), which claude-config#3278's timing line keeps as it was; and
 code handed to a module run with `-m` (`python3 -m timeit`).
