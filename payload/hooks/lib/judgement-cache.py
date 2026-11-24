@@ -45,11 +45,14 @@ with PYTHONHASHSEED=0, so the order is the same on every run.
 
 WHERE: $HOME/.claude/state/slack-gate-cache (the sync never carries ~/.claude/state), or
 SLACK_GATE_CACHE_DIR, with the key beside it. Under a test run (HOOK_TESTS_RUNNING=1) it is off unless a directory is named,
-so no suite reads or writes this Mac's. At most MAX_ENTRIES entries and MAX_TOTAL bytes, the least
+so no suite reads or writes this Mac's. A SLACK_GATE_CACHE_DIR that is empty, not an absolute path, or
+holds a .. is ignored: the call is judged with no cache, and the gate says why once on stderr, after its
+verdict (unusable(), claude-config#3466). At most MAX_ENTRIES entries and MAX_TOTAL bytes, the least
 recently used removed first; one file per key, written to a temporary name and renamed into place.
 SLACK_GATE_CACHE_TRACE names a file each run appends what the cache did to (a suite's view of it).
 """
 import ast as _ast
+import atexit
 import builtins
 import glob as _glob
 import hashlib
@@ -607,7 +610,11 @@ def trace(line):
 def where():
     """The cache's directory, or (None, why it is off)."""
     named = _os.environ.get("SLACK_GATE_CACHE_DIR")
-    if named:
+    if named is not None:
+        why = unusable(named)
+        if why:
+            ignored(why)
+            return None, why
         return named, None
     if _os.environ.get("HOOK_TESTS_RUNNING") == "1":
         return None, "a test run names no cache directory"
@@ -615,6 +622,43 @@ def where():
     if not home:
         return None, "HOME is not set"
     return _os.path.join(home, ".claude", "state", "slack-gate-cache"), None
+
+
+def unusable(named):
+    """Why the folder SLACK_GATE_CACHE_DIR names is not used, or None (claude-config#3466). A relative
+    path is read from wherever the gate runs, so each working folder got a cache of its own, and a ~ is
+    never expanded here, so it is relative too. A .. can lead anywhere. And an empty value is a setting
+    that went wrong, not a request for the cache under HOME. Each is ignored, never repaired, so the
+    cache is only ever where the setting plainly says."""
+    if not named:
+        return "SLACK_GATE_CACHE_DIR is set but empty"
+    if not _os.path.isabs(named):
+        return f"SLACK_GATE_CACHE_DIR is {named!r}, which is not an absolute path"
+    if ".." in named.split(_os.sep):
+        return f"SLACK_GATE_CACHE_DIR is {named!r}, which has a .. in it"
+    return None
+
+
+_IGNORED = []
+
+
+def ignored(why):
+    """Say once, on stderr, that the setting was ignored and why. Said when the process ends, after the
+    verdict is flushed: the wrapper reads stdout and stderr together and takes the first line as the
+    verdict, so a line written before it would turn every judged call into one it could not read."""
+    if not _IGNORED:
+        atexit.register(_say_ignored)
+    _IGNORED.append(why)
+
+
+def _say_ignored():
+    try:
+        sys.stdout.flush()
+        sys.stderr.write(_IGNORED[0] + ", so it was ignored: this call was judged with no cache and nothing "
+                         "was kept. Set it to an absolute path with no .. in it, or unset it (claude-config#3466).\n")
+        sys.stderr.flush()
+    except Exception:
+        pass
 
 
 class Call:

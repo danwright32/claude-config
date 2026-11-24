@@ -4383,7 +4383,11 @@ Each entry is signed with a key only this Mac's user can read, `~/.claude/state/
 (made on first use, mode 600), so a process that can write entries cannot forge one; a key that is
 missing, unreadable or readable by others means no cache, never an unsigned one (#2965). The wrapper
 runs the gate with `PYTHONHASHSEED=0`, so it iterates its sets in the same order every run, and the
-cache keeps and uses nothing from a run where that order is random. Under a test run the cache is off unless `SLACK_GATE_CACHE_DIR` names one. It does nothing for a cold
+cache keeps and uses nothing from a run where that order is random. Under a test run the cache is off unless `SLACK_GATE_CACHE_DIR` names one.
+A `SLACK_GATE_CACHE_DIR` that is empty, is not an absolute path (a `~` is not expanded, so it counts as
+relative) or holds a `..` is ignored: the call is judged with no cache, and the gate says why once on
+stderr after its verdict, which reaches the session only with a refusal, since the wrapper drops what
+follows an allow (#3466). It does nothing for a cold
 run, so a CI runner judges as before.
 
 Beside the judgements, the same folder keeps the shell reader's parse of any text of 64 KB or more
