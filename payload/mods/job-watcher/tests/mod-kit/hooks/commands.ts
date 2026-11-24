@@ -2266,6 +2266,12 @@ const stepped = (text: string, i: number): number => {
   const inner = text.slice(i + (tick ? 1 : 2), end)
   return (brace ? /^[^'"\\`()<]*$/.test(inner) : FOLLOWED.test(inner) && !/\bcase\b/.test(inner)) ? end : -1
 }
+// A character JavaScript's \s holds and bash and zsh do not blank: a carriage return, a vertical
+// tab, a form feed, a no-break space and the other Unicode spaces. After one a # is part of the
+// word, so `p1 a`, a vertical tab and `#it's` hold a quote and no comment (measured 2026-11-23 on
+// bash 3.2 and zsh 5.9, under a UTF-8 and a C locale: every character from 1 to 127 and those
+// spaces before a #, where only space, tab, new line, ; & | ( ) < and > let it start a comment).
+const ONLY_JS_SPACE = /[^\S \t\n]/
 // Each run of quoted text in `text` that bash and zsh both hand on as written, as the places it
 // stands between: a single quoted or `$'...'` string from its opening quote to its closing one, and
 // in double quotes the text from the opening quote, or the end of a substitution, to the next
@@ -2277,7 +2283,9 @@ const stepped = (text: string, i: number): number => {
 // as `closing` does and a comment as the word reader does, and stops for good, so that nothing
 // after is called quoted text, at the first thing it cannot follow as surely as a shell: a quote
 // that never closes, a substitution, `(( ))` or `${ }` that is not `stepped` over, a `$[`, a #
-// right after a parenthesis, and a << outside quotes, whose body's lines may stand in the text
+// right after a parenthesis or a character only JavaScript calls a space (ONLY_JS_SPACE), a
+// backslash before a new line anywhere but inside single quotes or `$'...'`, where it joins
+// nothing, and a << outside quotes, whose body's lines may stand in the text
 // (dropHeredocs opens none for `<<1`, and ends one early at a marker a shell reads on, #3496). So
 // what a shell does read inside double quotes is never in a run, and nor is anything inside
 // arithmetic, where zsh reads no quote. Wrong toward calling too little quoted, which leaves a
@@ -2285,15 +2293,25 @@ const stepped = (text: string, i: number): number => {
 const quotedText = (text: string): [number, number][] => {
   const runs: [number, number][] = []
   // Whether a word is being read. A # starts a comment only where none is, as the word reader has
-  // it (split): `p3 $(p1 a)#it's` and `p3 a\` joined to a line `#it's` each hold a quote, not a
-  // comment, and the quote runs on over the next line (measured 2026-11-23, both shells).
+  // it (split): `p3 $(p1 a)#it's` holds a quote, not a comment, and the quote runs on over the
+  // next line (measured 2026-11-23, both shells).
   let word = false
   for (let i = 0; i < text.length; i++) {
     const c = text[i] as string
     if (c === '\\') {
-      // A backslash before a new line joins the two lines, and a word being read goes on.
-      if (text[i + 1] !== '\n') word = true
+      // A backslash before a new line joins the two lines, and what stands either side of the pair
+      // into one thing: `$` and `'` into a `$'...'` string, `<` and `<EOF` into a heredoc (bash
+      // alone, zsh ran nothing), `$` and `(` into a substitution. The scan reads each side apart,
+      // so it stops (the third review of pull request #3493).
+      if (text[i + 1] === '\n') break
+      word = true
       i++
+    } else if (c === '#' && i > 0 && ONLY_JS_SPACE.test(text[i - 1] as string)) {
+      // Right after a character JavaScript calls a space and no shell blanks, the # is part of a
+      // word to both shells. Until the third review of pull request #3493 the scan read a comment
+      // here, so it stops rather than read on as a word: the change may put a mark back and take
+      // none off.
+      break
     } else if (c === '#' && !word) {
       // Right after a parenthesis, a < or a > the shells are not known to agree on a comment.
       if (i > 0 && /[()<>]/.test(text[i - 1] as string)) break
@@ -2315,6 +2333,10 @@ const quotedText = (text: string): [number, number][] => {
       let j = i + 1
       for (; j < text.length && text[j] !== '"'; j++) {
         const d = text[j] as string
+        // In double quotes bash joins a `$` and a `(` either side of a backslash and new line into
+        // a substitution and runs it, and zsh hands the text on, so nothing from the quote's
+        // opening on is called quoted text (`p1 "$\` then `(p3 '(( x')" ; p2` ran p3 in bash alone).
+        if (d === '\\' && text[j + 1] === '\n') return runs
         if (d === '\\') j++
         else if (d === '`' || (d === '$' && (text[j + 1] === '(' || text[j + 1] === '{' || text[j + 1] === '['))) {
           runs.push([from, j])
@@ -2336,7 +2358,9 @@ const quotedText = (text: string): [number, number][] => {
       if (end < 0) break
       i = end
       word = c !== '('
-    } else word = !/[\s;&|()<>]/.test(c)
+      // Space, tab and new line are the only blanks bash and zsh read, so no other character ends
+      // a word here (ONLY_JS_SPACE).
+    } else word = !/[ \t\n;&|()<>]/.test(c)
   }
   return runs
 }

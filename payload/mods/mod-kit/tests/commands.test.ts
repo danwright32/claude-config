@@ -1864,6 +1864,10 @@ describe("$'...' and a script not read to its end (#3491)", () => {
       expect(marksIn(cmd)).toEqual({ cmd, marks: [undefined, SHELLS] })
       // The << stands outside quotes: both shells opened the heredoc.
       expect(marked(`p3 a${c}#it's\np1 '\ncat <<NEVER\n${NEXT} # '`)).toEqual([['cat', HEREDOC]])
+      // The scan stops at such a # rather than read on, so quoted text after it keeps the mark it
+      // had, though both shells ran this one alike: the harmless side (L648).
+      const alike = `p1 a${c}#it's\np1 b' ; p3 '((' "x)" # '`
+      expect(marksIn(alike)).toEqual({ cmd: alike, marks: [undefined, SHELLS] })
     }
     // After a tab, as after a space, the # does start a comment, and the quoted text after it is
     // still passed over.
