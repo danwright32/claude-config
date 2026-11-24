@@ -530,7 +530,7 @@ def make(py_nodes, unknown_dir):
             for kind, value, _ in self.made_from(path) or ():
                 if kind == "file":
                     sources.append(value)
-                elif kind == "text" and ZIP_END.decode("latin-1") in value:
+                elif kind == "text" and ZIP_END.decode("latin-1", "strict") in value:
                     return True
             for source in sources:
                 try:
