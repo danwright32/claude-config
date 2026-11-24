@@ -282,6 +282,20 @@ hashed "a sourced file after a # in single quotes" "echo 'see # 3'; . lib/shifte
 hashed "a sourced file after a # in double quotes" 'echo "see # 3"; . lib/shifter.sh'
 plain "a shift in a case branch" 'case "$MODE" in "a b") shift ;; esac' "calm hot"
 hashed "a shift after a # in a quoted case pattern" 'case "$MODE" in "a # b") shift ;; esac'
+# A command that posts, written after a # of the two kinds the shell keeps inside a word, in a
+# script run with a $1 whose file does not post. The reader took such a # for a comment and left the
+# rest of its line out (claude-config#3464), so the post is what must be found, by the reader
+# reading that line as the shell does.
+# Seen to fail on 2026-11-23 against main as it was at e3c530797c: both scripts passed (exit 0).
+posted() {
+  Q=$((Q + 1))
+  printf '%s\n' "$2" "$READS" > "$G/q3451-$Q.sh"
+  run "bash q3451-$Q.sh calm"
+  refused "#3464 $1 is refused, though the file under \$1 does not post"
+  says "#3464 $1 is refused as the post it is" "$FOUND"
+}
+posted "a post after a # that an escaped space joins to its word" 'echo see\ # 3; '"$POST"
+posted "a post after a # that a line joined by a backslash puts inside a word" 'echo see\'$'\n''#3; '"$POST"
 
 # A real comment is still left out, so the words in it end nothing (the control that must not
 # change: each of these passed and was refused the same way before this reading was changed).
@@ -300,6 +314,13 @@ reads "a line that is only a comment naming shift, eval and a loop" '# shift the
 reads "a comment inside a substitution that spans lines" 'X="$(' '  # shift nothing here' '  echo ok' ')"'
 reads "a # inside a word, with no comment and no shift after it," 'echo a#b $# ${#X}'
 reads "a comment after a quoted string that holds a #" "echo 'see # 3' # shift 3"
+# Where a comment starts is asked of the reader's one rule (lib/shell-words.py word_starts), which
+# counts the backslashes: two before a space are an escaped backslash and the # after them starts a
+# comment, as it does on a line joined after a space. The pattern this reading had of its own took
+# any backslash before the white space for an escape, so the shift named in these comments ended
+# what was certain. Seen to fail on 2026-11-23 against that pattern: both were refused with calm.
+reads "a comment after two backslashes and a space" 'echo see\\ # shift 3; set -- hot'
+reads "a comment on a line joined after a space" 'echo see \'$'\n''# shift 3; set -- hot'
 
 echo "slack drafts only: a script's \$0 and \$1 are taken up only where a sourced path needs them (claude-config#3395)"
 # Seen to fail on 2026-11-22 against the first form of this change, which gave every command of a

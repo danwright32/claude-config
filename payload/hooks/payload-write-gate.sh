@@ -67,7 +67,7 @@ payload="$(cat 2>/dev/null || true)"
 #
 # Both libraries below answer every question this gate asks: whether a watcher could revert the
 # write, whether it runs from here, whether a hold covers it, and what the command writes. They were
-# sourced with `|| exit 0`, so a hook dir missing either let every payload write through with
+# sourced with || exit 0 after it, so a hook dir missing either let every payload write through with
 # nothing said, which looks exactly like a write nothing could revert. Now the call is refused when
 # its raw payload names payload/ at all, since nothing here can read more than that, and the
 # refusal names the file. A library that sources but lacks the function asked for (an empty or cut
@@ -414,12 +414,12 @@ for v in seen:
     # Nothing can revert anything with no watcher, so none of the reading below is paid for then.
     [ -n "$(sc_watcher_cmd || true)" ] || exit 0
     # Only the paths in a WRITE POSITION, never every payload path in a command that happens to
-    # contain a redirect somewhere. `cat payload/x 2>/dev/null` holds both and writes nothing, and
+    # contain a redirect somewhere. The command cat payload/x 2>/dev/null holds both and writes nothing, and
     # reading is the overwhelming majority of what a session does in a checkout: a gate that refused
     # those would be turned off within the hour (L36, L104).
     #
     # Judged by the DESTINATION (claude-config#647): a relative path is resolved against where the
-    # command actually runs, the session's directory or a `cd` earlier in the same command, so a
+    # command actually runs, the session's directory or a cd earlier in the same command, so a
     # write made from inside payload/ counts whether or not its words say payload.
     targets="$(printf '%s' "$cmd" | GATE_CWD="$cwd" PS_SHELL_WORDS="$PS_SHELL_WORDS" python3 -B -c '
 import importlib.util, os, re, sys
@@ -449,7 +449,7 @@ targets = []
 
 # A directory only the shell can work out (a cd to a variable, or to an OLDPWD this cannot know) is
 # kept as its words behind this mark, never taken for the directory it was moved from: that let a
-# write after `cd "$P"` be judged where the session was and let through (claude-config#2128).
+# write after cd $P be judged where the session was and let through (claude-config#2128).
 UNKNOWN = "\x00"
 SHELL_VALUE = re.compile(r"\$[A-Za-z_{(0-9@*#?$!-]|`")
 HOME = os.environ.get("HOME", "")
@@ -501,7 +501,7 @@ def add(tok, base):
         targets.append(p)
 
 # Every line is read as shell, a heredoc body line included (Dan, 2026-11-02, "Also read heredoc
-# text", claude-config#2080). A body is data the shell never runs, so a `a > b` in one can be refused
+# text", claude-config#2080). A body is data the shell never runs, so the text a > b in one can be refused
 # as a redirect; that was chosen over a reading of where a body ends that could ever hide a command
 # after it, as the pattern this gate kept did with <<'E'OF, <<END-OF and a << inside a quoted string.
 # Where a body really ends is read by lib/shell-words.py, below, for the commands the shell runs.
@@ -712,7 +712,7 @@ except Exception:
     shell_text = cmd
 
 # Commands whose arguments ARE what they write. Scanned per segment, in order, so a read in one
-# segment is not blamed on a write in the next, and a `cd` moves where the rest resolve.
+# segment is not blamed on a write in the next, and a cd moves where the rest resolve.
 WRITERS = ("tee", "cp", "mv", "rm", "touch", "mkdir", "patch", "install", "rsync", "truncate",
            "ln", "ditto", "unlink", "rmdir")
 base = cwd
@@ -732,7 +732,7 @@ segments = re.split(r"&&|\|\||;|\||\n", shell_text)
 try:
     for d, text, _, _, depth in _sw.every_command(cmd):
         if depth > 0 or "$(" in cmd or "`" in cmd or "<<" in cmd:
-            # The directory itself, never a `cd` segment: those are cut into words at each space,
+            # The directory itself, never a cd segment: those are cut into words at each space,
             # so a checkout whose path holds one resolved against its first word (#2080). One the
             # reading could not work out is kept as its words, never as where the session is (#2128).
             segments += [(CD_TO, move(d, cwd) if d else cwd)] + re.split(r"&&|\|\||;|\||\n", text)
@@ -787,7 +787,7 @@ for seg in segments:
     if k >= len(words):
         continue
     # Past the launchers that run the command after them, sudo, env, nohup, timeout, xargs and the rest
-    # (lib/shell-words.py RUNNERS, claude-config#1478), so `sudo cp x payload/y` is the copy it runs.
+    # (lib/shell-words.py RUNNERS, claude-config#1478), so sudo cp x payload/y is the copy it runs.
     try:
         past = _sw.command_rest(" ".join(words[k:]))[0].split() or words[k:]
     except Exception:
@@ -805,8 +805,8 @@ for seg in segments:
                 gbase = move(front[i + 1], gbase)
             i += 2 if front[i] in GIT_VALUED else 1
         if sub in GIT_WRITERS:
-            # checkout and restore name a branch or commit before `--`, and only the paths after
-            # it are rewritten; a bare `git checkout main` switches branches and names no path.
+            # checkout and restore name a branch or commit before the -- separator, and only the paths
+            # after it are rewritten; a bare git checkout main switches branches and names no path.
             if sub == "restore":
                 # --staged alone rewrites the index, never the file; -s/--source names a commit.
                 if ("--staged" in rest or "-S" in rest) and not ("--worktree" in rest or "-W" in rest):

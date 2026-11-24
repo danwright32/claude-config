@@ -88,7 +88,10 @@ def scan(line, frames, keep=None, parens=None):
         c = line[i]
         st = frames[-1]
         if st is None:
-            if c == '#' and (i == 0 or line[i - 1] in ' \t;('):
+            # A comment, only where a word starts: after an escaped space, ; or ( the # is inside a
+            # word, and a quote opening after it on the line is open on the lines that follow. The
+            # rule is lib/shell-words.py's, the one the command reader asks (claude-config#3464).
+            if c == '#' and _sw.word_starts(line, i, ' \t;('):
                 break
             if c == '\\':
                 i += 2
