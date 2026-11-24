@@ -990,7 +990,11 @@ cp $FIX/dev/payload/hooks/a.sh short-before"
 HOME="$S3443/stand-in-for-home" passes "and a cd to a folder under the home folder" "cd ~/out && cp $FIX/dev/payload/hooks/a.sh ./"
 stopped "a cd to a bare relative folder, which CDPATH could take elsewhere" "cd payload/hooks && cp -p a.sh $S3443/a-copy.sh"
 stopped "a cd to a folder that is not there, which leaves the cp where it was" "cd $S3443/nowhere && cp $FIX/dev/payload/hooks/a.sh x"
-stopped "and so lets a cp to a relative payload path land in the checkout after all" "cd $S3443/nowhere; cp $FIX/dev/payload/hooks/a.sh payload/LESSONS.md"
+# The next case is the form of that which does harm, kept as a record: the first build of this
+# allowed it, and the cp lands in the checkout. It does not guard the rule that the folder must be
+# there (it is stopped for the folder named payload on its path as well); the case before it,
+# which writes a plain x, does that.
+stopped "the same with a relative payload path for the cp, which lands in the checkout" "cd $S3443/nowhere; cp $FIX/dev/payload/hooks/a.sh payload/LESSONS.md"
 stopped "a cd to a file" "cd $S3443/plain.txt && cp $FIX/dev/payload/hooks/a.sh x"
 stopped "a cd whose path climbs with .." "cd $S3443/short-before/.. && cp $FIX/dev/payload/hooks/a.sh x"
 stopped "and one that climbs out of the folder the command starts in" "cd ./.. && cp $FIX/dev/payload/hooks/a.sh x"
@@ -1003,7 +1007,8 @@ stopped "and with a second word that is a folder inside the first" "cd $S3443 sh
 stopped "a cd with no word" "cd && cp $FIX/dev/payload/hooks/a.sh x"
 stopped "a cd to an entry of zsh's folder stack" "cd +1 && cp $FIX/dev/payload/hooks/a.sh x"
 stopped "a cd in a pipeline, which moves nothing after it" "cd $S3443 | cp $FIX/dev/payload/hooks/a.sh x"
-stopped "and so lets a cp to a relative payload path land in the checkout" "cd $S3443 | cp $FIX/dev/payload/hooks/a.sh payload/LESSONS.md"
+# As above, the form that does harm, kept as a record and not as the guard of the rule about pipes.
+stopped "the same with a relative payload path for the cp, which lands in the checkout too" "cd $S3443 | cp $FIX/dev/payload/hooks/a.sh payload/LESSONS.md"
 # mkdir -p of written folders, and nothing else of mkdir.
 passes "a mkdir -p of the scratch folder the cp then fills" "mkdir -p $S3443/new1 && cp payload/LESSONS.md $S3443/new1/"
 passes "and of two folders, before a cp -R" "mkdir -p $S3443/n1 $S3443/n2; cp -R payload/hooks $S3443/n2"
