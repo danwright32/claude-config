@@ -41,8 +41,7 @@ fi
 INPUT=$(cat)
 # Cleaned by the shared reader before jq reads it: a lone surrogate escape anywhere in the payload
 # made jq read nothing, so the command was never rewritten (claude-config#1944). Without the library
-# the payload is read as it came, as before; the gh and git log reading below says what its absence
-# costs.
+# the payload is read as it came, as before; the gh reading below says what its absence costs.
 # shellcheck source=lib/push-scope.sh
 . "$RTK_HOOK_DIR/lib/push-scope.sh" 2>/dev/null && INPUT="$(ps_clean_payload "$INPUT")"
 CMD=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
@@ -178,8 +177,7 @@ fi
 # `rtk git diff` is a different destination and was measured to carry its exit code through (a
 # dirty tree gave 1 through both the real git and rtk), so it is untouched here and
 # `git diff --quiet` goes on answering. So do `rtk ls`, `rtk git status` and `rtk git log`, all
-# measured to agree in both directions. That is their exit codes only: `rtk git log` changes which
-# commits it lists, and is refused for that below, with gh (claude-config#3469).
+# measured to agree in both directions.
 #
 # `cmp` needs no refusal because rtk 0.31.0 does not rewrite it at all, so it always runs raw; the
 # exit fidelity check probes it for the day that changes (claude-config#399).
@@ -301,37 +299,21 @@ done <<< "$rtk_invocations"
 # one started python3 for nothing (claude-config#1880). Every character but a letter, digit or
 # underscore counts as a boundary, so it errs toward reading, and the C locale keeps a byte that is
 # not UTF-8 from failing the match and skipping the reader.
-#
-# NEVER rewrite into `rtk git log` (claude-config#3469), judged by the same reader and in the same
-# walk, because git too takes options in front of its subcommand (`git -C <dir> log`). rtk 0.31.0
-# runs every git log it filters with `--no-merges` put in front of the command's own arguments
-# (unless they name `--merges`), and `-10` or `-50` when they set no count: measured through a stub
-# git recording its argv, `rtk git log -1 --format=%H` ran `git log --no-merges -1 --format=%H`. So
-# a head check on a branch whose newest commit is a merge named an older commit with no error, and
-# a range left out every merge and stopped at 50. That changes the answer, not only its length.
-# `git show -s --format=%H` and `git rev-parse HEAD` were measured to name the true head. The
-# reader is started only when the words git and log both appear, with the same boundaries as the
-# gh word, so an `rtk git status` costs nothing more, and an rtk flag in front of git
-# (`rtk -v git log`) is still read, as `rtk -v gh` is.
 RTK_GH_WORD='(^|[^A-Za-z0-9_])gh([^A-Za-z0-9_]|$)'
-RTK_GIT_WORD='(^|[^A-Za-z0-9_])git([^A-Za-z0-9_]|$)'
-RTK_LOG_WORD='(^|[^A-Za-z0-9_])log([^A-Za-z0-9_]|$)'
 rtk_names_gh() { local LC_ALL=C; [[ "$1" =~ $RTK_GH_WORD ]]; }
-rtk_may_run_git_log() { local LC_ALL=C; [[ "$1" =~ $RTK_GIT_WORD ]] && [[ "$1" =~ $RTK_LOG_WORD ]]; }
-if rtk_names_gh "$REWRITTEN" || rtk_may_run_git_log "$REWRITTEN"; then
+if rtk_names_gh "$REWRITTEN"; then
   rtk_hook_dir="${BASH_SOURCE[0]%/*}"; [ "$rtk_hook_dir" != "${BASH_SOURCE[0]}" ] || rtk_hook_dir=.
   # shellcheck source=lib/push-scope.sh
-  # Without it neither gh api nor git log can be told from the rest, so the rewrite is not made,
-  # and that is said rather than passed in silence (claude-config#1922).
+  # Without it gh api cannot be told from the rest, so the rewrite is not made, and that is said
+  # rather than passed in silence (claude-config#1922).
   . "$rtk_hook_dir/lib/push-scope.sh" 2>/dev/null \
-    || hook_allow_notice "[rtk] DID NOT RUN: rtk-rewrite.sh could not load lib/push-scope.sh (reinstall the hooks with claude-sync pull), so whether this rewrite would drop a field from a GitHub API call, or drop merge commits from a git log, could not be read, and the command runs unrewritten."
+    || hook_allow_notice "[rtk] DID NOT RUN: rtk-rewrite.sh could not load lib/push-scope.sh (reinstall the hooks with claude-sync pull), so whether this rewrite would drop a field from a GitHub API call could not be read, and the command runs unrewritten."
   ps__read "$REWRITTEN"; [ "$?" -ne 1 ] || exit 0
   rtk_rec="${PS__M_FIRST[$PS__HIT]}"; rtk_rec_end=$((rtk_rec + PS__M_COUNT[PS__HIT]))
   while [ "$rtk_rec" -lt "$rtk_rec_end" ]; do
     case $'\x1f'"${PS__R_WORDS[$rtk_rec]}"$'\x1f' in
       *$'\x1f'rtk$'\x1f'*)
-        if ! ps_runs_at gh "$rtk_rec" api && [ -n "$PS_RUN_SUB" ]; then exit 0; fi
-        if ps_runs_at git "$rtk_rec" log; then exit 0; fi ;;
+        if ! ps_runs_at gh "$rtk_rec" api && [ -n "$PS_RUN_SUB" ]; then exit 0; fi ;;
     esac
     rtk_rec=$((rtk_rec + 1))
   done
