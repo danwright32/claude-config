@@ -148,17 +148,17 @@ done
 WRAP_RUN='__CLAUDE_HOME__/hooks/no-network-run.sh '
 if [ -f "$DIR/../payload/hooks/no-network-run.sh" ]; then check "the wrapper the skill names exists in the payload" ok
 else check "the wrapper the skill names exists in the payload" "no payload/hooks/no-network-run.sh"; fi
-commit_line="$(printf '%s\n' "$sequence" | grep -E '^[[:space:]]*[^[:space:]].*gather\.js commit-state ' | head -n 1)"
+commit_line="$(awk 'index($0, "gather.js commit-state ") { print; exit }' <<< "$sequence")"
 case "${commit_line#"${commit_line%%[![:space:]]*}"}" in
   "${WRAP_RUN}node __CLAUDE_HOME__/skills/pennie-dev-update/gather.js commit-state "*) check "the sequence runs commit-state under the no network wrapper" ok ;;
   *) check "the sequence runs commit-state under the no network wrapper" "its line is: ${commit_line:-none}" ;; esac
 case "$commit_line" in
   *'~'*) check "the commit-state line holds no tilde, which takes it off the wrapper's route" "$commit_line" ;;
   *) check "the commit-state line holds no tilde, which takes it off the wrapper's route" ok ;; esac
-read_line="$(printf '%s\n' "$sequence" | grep -F -- "${WRAP_RUN}node -e " | grep -F 'gathered.json' | head -n 1)"
+read_line="$(awk -v w="${WRAP_RUN}node -e " 'index($0, w) && index($0, "gathered.json") { print; exit }' <<< "$sequence")"
 if [ -n "$read_line" ]; then check "the sequence reads the gathered file's counts under the no network wrapper" ok
 else check "the sequence reads the gathered file's counts under the no network wrapper" "section 10 has no '${WRAP_RUN}node -e' line reading gathered.json"; fi
-gather_line="$(printf '%s\n' "$sequence" | grep -F 'gather.js gather ' | head -n 1)"
+gather_line="$(awk 'index($0, "gather.js gather ") { print; exit }' <<< "$sequence")"
 case "$gather_line" in
   *no-network-run*) check "the gather, which reads GitHub, is not put under the wrapper" "$gather_line" ;;
   '') check "the gather, which reads GitHub, is not put under the wrapper" "section 10 has no gather line" ;;
