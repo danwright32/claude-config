@@ -173,9 +173,12 @@ done
 #
 # Each line: the route, a tab, and the first build known to route it (0 for every build #875 met).
 # Builds differ (#1185): 2.1.299 added prompt.attachment and session.compact, which 2.1.296 did not
-# route (2.1.297 and 2.1.298 were never measured). The hook check just below uses EVERY route whatever
-# build is installed, so a hook that is dead on the newest build fails on every Mac and on CI; only
-# the comparison with an installed build further down holds that build to the routes listed for it.
+# route (2.1.297 and 2.1.298 were never measured). 2.1.331 added session.info and session.redact
+# (#3508), measured on 2026-11-23 against the builds then installed on the personal MacBook: 2.1.327
+# to 2.1.330 do not route them (2.1.300 to 2.1.326 were never measured). The hook check just below
+# uses EVERY route whatever build is installed, so a hook that is dead on the newest build fails on
+# every Mac and on CI; only the comparison with an installed build further down holds that build to
+# the routes listed for it.
 BYPASSED_ROUTES_SINCE="attribution.text	0
 classic.*	0
 prompt.attachment	2.1.299
@@ -183,6 +186,8 @@ prompt.compose	0
 prompt.context	0
 prompt.section	0
 session.compact	2.1.299
+session.info	2.1.331
+session.redact	2.1.331
 settings.read	0
 skill.prompt	0"
 BYPASSED_ROUTES="$(printf '%s\n' "$BYPASSED_ROUTES_SINCE" | cut -f1)"
