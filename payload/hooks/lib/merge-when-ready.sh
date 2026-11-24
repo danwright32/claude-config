@@ -32,8 +32,8 @@
 # NOTHING HERE DECIDES A MERGE. The gates a typed merge meets cannot see a merge made inside a
 # script, so before it merges this hands the EXACT merge command it is about to run to the same
 # gates, block-red-merge.sh, pr-review-gate.sh, require-changelog-tag.sh, check-closing-merge.sh
-# (#1550), check-work-names-merge.sh (#1995), design-score-gate.sh and require-verification-run.sh
-# (#1529), as a hook payload, and merges
+# (#1550), check-work-names-merge.sh (#1995), lessons-merge-gate.sh (#3343), design-score-gate.sh
+# and require-verification-run.sh (#1529), as a hook payload, and merges
 # only when every one allows it. Green, up to date, pinned, reviewed, carrying its changelog record,
 # closing no issue its body says stays open and, when it closes a Match the settled design issue, at 100% of its
 # design match score (#1364) are therefore judged by the one implementation of each rule, never by a
@@ -261,6 +261,7 @@ DESIGN_GATE="$(mwr_script "${MWR_DESIGN_GATE:-}" "$MWR_HOOKS/design-score-gate.s
 VERIFY_GATE="$(mwr_script "${MWR_VERIFY_GATE:-}" "$MWR_HOOKS/require-verification-run.sh")"
 CLOSING_GATE="$(mwr_script "${MWR_CLOSING_GATE:-}" "$MWR_HOOKS/check-closing-merge.sh")"
 WORK_NAMES_GATE="$(mwr_script "${MWR_WORK_NAMES_GATE:-}" "$MWR_HOOKS/check-work-names-merge.sh")"
+LESSONS_GATE="$(mwr_script "${MWR_LESSONS_GATE:-}" "$MWR_HOOKS/lessons-merge-gate.sh")"
 REVIEW_LIB="$(mwr_script "${MWR_REVIEW_LIB:-}" "$MWR_LIB/pr-review.sh")"
 # The wait and the clock name commands this runs as well, so they take the same rule
 # (claude-config#2399): outside a test run the sleep on the PATH waits and date is the clock.
