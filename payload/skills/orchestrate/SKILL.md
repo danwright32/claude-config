@@ -87,7 +87,7 @@ The rules every agent shares live in `agent-rules.md`, so a brief never restates
 
 ## 5. When an agent reports
 
-1. Read the report against its brief. For a fix, check its claim that the test failed first: in its worktree, put back main's version of the fixed file with `git checkout origin/main -- <file>`, run the test, then restore the file.
+1. Read the report against its brief. For a fix, check its claim that the test failed first: read its `red.txt` in its working folder, which settles the claim when it names the new test with a failing line (Dan, 2026-11-24, claude-config#3390). Rerun the check only when `red.txt` is missing or does not name the new test: in its worktree, put back main's version of the fixed file with `git checkout origin/main -- <file>`, run the test, then restore the file.
 2. Open the pull request yourself (an agent in a worktree cannot), using its `pr-body.md` after `/no-ai-tells`.
 3. Review the full diff against the item. Send problems back to the same agent with `SendMessage`, naming each one; it pushes again.
 4. One merge at a time per repo. Merge in the background with `bash ~/.claude/hooks/lib/merge-when-ready.sh <n> --repo <owner>/<name> --squash --delete-branch`, run from inside a checkout of the repository, with the repository's recorded merge method in place of `--squash` or, where none is recorded, the one its history uses (it stops, naming them, when the repository allows more than one and none is passed), which brings a branch that has fallen behind up to date and waits for checks. For a log, add `--log=<file>`; never pipe it into `tee`, which reports exit 0 however the helper ended (claude-config#2304). Confirm with `gh pr view <n> --json state`.
