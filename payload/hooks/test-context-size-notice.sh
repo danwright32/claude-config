@@ -379,6 +379,28 @@ if [ "$(id -u)" != 0 ]; then
   check_eq "4 writable again: the question is put" "block" "$(field "$(CONTEXT_SIZE_STATE_DIR="$NW" stop_fire c10 "$C10")" decision)"
 fi
 
+# No request counted: past the line on compactions, but nothing read to show (only lines of model
+# output Claude Code writes itself, or no usage at all, as when Claude Code moves the field, L506).
+# There is no cost to ask about, and asking would repeat at every turn's end (the second review).
+C12="$WORK/proj/c12.jsonl"; : > "$C12"
+i=1; while [ "$i" -le 5 ]; do
+  printf '{"type":"assistant","message":{"id":"msg_s%s","model":"<synthetic>","usage":{"input_tokens":0,"output_tokens":0}}}\n' "$i" >> "$C12"
+  compacted "$C12" 780000; i=$((i + 1))
+done
+check_eq "4 only synthetic usage lines: the turn's end is not held" "" "$(stop_fire c12 "$C12")"
+check_eq "4 nor the next one" "" "$(stop_fire c12 "$C12")"
+C13="$WORK/proj/c13.jsonl"; : > "$C13"
+i=1; while [ "$i" -le 5 ]; do compacted "$C13" 780000; i=$((i + 1)); done
+check_eq "4 no usage at all: the turn's end is not held" "" "$(stop_fire c13 "$C13")"
+
+# Once put, the very next turn's end with the same figures is never held, whatever they are: the
+# next question needs more read than this one, even where half as much again rounds to nothing.
+C14="$WORK/proj/c14.jsonl"; : > "$C14"
+printf '{"type":"assistant","message":{"id":"msg_one","model":"claude-opus-5-5","usage":{"input_tokens":1}}}\n' >> "$C14"
+i=1; while [ "$i" -le 5 ]; do compacted "$C14" 780000; i=$((i + 1)); done
+check_eq "4 one token read: asked at the line" "block" "$(field "$(stop_fire c14 "$C14")" decision)"
+check_eq "4 one token read: the next turn's end with the same figures is not held" "" "$(stop_fire c14 "$C14")"
+
 # A transcript rewritten shorter after the question was put is read again from the start, keeping
 # what Dan was asked, which the transcript alone cannot say again: never asked again for it.
 C11="$WORK/proj/c11.jsonl"; long_fixture "$C11" 5

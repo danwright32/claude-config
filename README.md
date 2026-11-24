@@ -7719,8 +7719,10 @@ anybody wrote. Both rules were decided by Dan on 2026-11-01.
   only after his answer. It is asked again only
   once the session has read half as much again as when it was last asked, and after Keep for a
   day not for 24 hours either; Dan's answer is read back from the transcript. Never asked while
-  the Mac sleeps (held for the first turn's end after wake), in a subagent, a detached or headless
-  run, or on a turn's end that is itself the continuation of an earlier hold (`stop_hook_active`).
+  the Mac sleeps (held for the first turn's end after wake), in a subagent or a detached run, in a
+  run whose requests name any entrypoint other than "cli" (a headless run, and equally any other
+  entrypoint Claude Code may write, which nobody has measured; a transcript naming none is asked),
+  when no request has been counted (nothing read, so no cost to show), or on a turn's end that is itself the continuation of an earlier hold (`stop_hook_active`).
   That flag is all it can see of the other Stop hooks: the session reflection, the issue review,
   the is it live card, the steps card and a /goal's own hook can hold the same turn's end, so the
   question can arrive beside theirs, and on the first turn's end of a /goal run, in the middle of

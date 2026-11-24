@@ -56,10 +56,11 @@ asked on 2026-11-19 what should happen to the notice, Dan said "Strengthen it". 
   refuses AskUserQuestion asleep besides), so nothing is raised until the first turn's end after
   wake, which asks with the figures as they are then. Never in a subagent (its
   Stop is SubagentStop, never wired here, and a payload with an agent_id is refused besides), in a
-  detached run (CLAUDE_DETACHED_RUN), or in a run whose transcript says it is headless (a request's
-  `entrypoint` other than "cli": measured on the personal MacBook on 2026-11-23, all 19,929 usage
-  lines of one interactive session's transcript carried "cli", and tools/transcript-shares.py reads
-  "sdk-cli" as headless). A transcript naming no entrypoint is asked, the side that costs one turn's
+  detached run (CLAUDE_DETACHED_RUN), or in a run whose requests name any entrypoint other than
+  "cli": a headless run, and equally any other entrypoint Claude Code may write, which nobody here
+  has measured, so a session started some other way would never be asked. On the personal MacBook
+  on 2026-11-23 all 19,929 usage lines of one interactive session's transcript carried "cli", and
+  tools/transcript-shares.py reads "sdk-cli" as headless. A transcript naming no entrypoint is asked, the side that costs one turn's
   end rather than silence if Claude Code stops writing the field (L506). Never on a
   turn's end that is itself the continuation of an earlier hold (stop_hook_active): it waits for
   the next. That flag is all it can see of other Stop hooks. The ones that run on the SAME turn's
@@ -461,6 +462,10 @@ def long_session_ask(state, every, now, stop_active, payload):
     never reached: context-size-notice.sh --stop asks lib/sleep.sh's sleep_active first and stops."""
     if state["compactions"] < every or state["entrypoint"] not in (None, "cli"):
         return None
+    if not state["requests"]:
+        # Nothing counted (only synthetic lines, or usage moved where this cannot read it, L506):
+        # there is no cost to show, so nothing honest to ask.
+        return None
     ask = state["ask"]
     if not (ask.get("raised") and not ask.get("put")):
         if state["ctx_sum"] < state["next_ask_read"] or now < state["keep_until"]:
@@ -471,7 +476,9 @@ def long_session_ask(state, every, now, stop_active, payload):
         return None
     q, answers = long_question(state)
     ask.update(put=True, question=q, read=state["ctx_sum"], at=now)
-    state["next_ask_read"] = int(state["ctx_sum"] * ASK_GROWTH)
+    # Always more than was read now, so no state (a tiny or zero sum, where half again rounds to
+    # nothing) can put the question again at the very next turn's end with the same figures.
+    state["next_ask_read"] = max(int(state["ctx_sum"] * ASK_GROWTH), state["ctx_sum"] + 1)
     return ask_reason(q, answers, payload)
 
 
