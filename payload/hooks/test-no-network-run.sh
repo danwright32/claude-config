@@ -19,6 +19,15 @@
 #     still starts, and a service is still found by its name, each asserted as measured so the
 #     wrapper's "what it does not cover" stays true. Every start here is the program with --help,
 #     which prints its usage and ends, so nothing is opened, scripted, loaded or scheduled;
+#   * ps, the one program the wrapper starts outside the sandbox (claude-config#3482): it runs
+#     with the wrapper, by its path and through a link, where macOS refuses every setuid program
+#     without the rule; the command that ran it is still refused the network and the three hand
+#     offs; another program named ps stays in the sandbox; every other setuid program found on
+#     disk is still refused; a library the caller names is loaded into a program compiled here and
+#     not into ps; what ps shows of another process (this user's environment, which the kernel
+#     already gave without ps, and another user's arguments, which it did not) is asserted as
+#     measured; and a copy of the wrapper whose rule names curl lets curl's post arrive, which is
+#     what the rule does to the program it names;
 #   * nothing is run when no command is given, when the first word starts with a dash, when the
 #     sandbox tool is missing, when the profile cannot be applied, when the sandbox does not block
 #     the wrapper's own connection, when that connection does not arrive even outside the sandbox,

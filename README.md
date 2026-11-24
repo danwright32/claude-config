@@ -4221,7 +4221,8 @@ sanctioned route past the gate:
 
 `hooks/no-network-run.sh` runs the command after it inside a macOS sandbox that denies every network
 operation, and since #3288 a hand off to something outside the sandbox as well (below). Every
-process the command starts inherits that, a detached one included, and none can take it off. It takes no option and reads no setting, there is no "this Mac only" mode, and the
+process the command starts inherits that, a detached one included, and none can take it off, with
+the one exception the wrapper makes itself, `ps` (#3482, below). It takes no option and reads no setting, there is no "this Mac only" mode, and the
 command's own exit code comes through unchanged. The gate passes a call that is that installed file
 and its command and nothing else, without reading what runs under it. The refusal of a file whose
 imports reach code
@@ -4299,6 +4300,40 @@ and 25 name a file that does, and every one of those is the Python function, a w
 prose. This repository's own suites start none of them for real: the ones that concern `launchctl`
 or `osascript` put a stand in on the `PATH` or replace the call, and several refuse to run
 otherwise. So nothing was exempted.
+
+One program is let out of the sandbox: `/bin/ps` (#3482). macOS refuses to start a setuid program
+from inside any sandbox, whatever the profile allows, and `ps` is one. The kernel's log line is
+`deny(1) forbidden-exec-sugid`, and a profile naming the network alone gives it (measured
+2026-11-24, macOS 26.6.2, the personal MacBook). So every `ps` under the wrapper ended "Operation
+not permitted", and four suites that read a process through it failed there:
+`test-unwaited-children.sh` (1 case), `test-payload-write-gate.sh` (not run at all, its fixture
+watcher could not be read), `test-gates-fail-closed.sh` (5 cases) and `test-pr-review.sh`
+(4 cases). The first three passed run directly the same night, and the fourth two days before.
+The wrapper is the route the gate names for a refused suite, so a builder sent there could not
+finish.
+
+Reading the process list was never something the wrapper set out to stop: the profile allows
+everything it does not name. But the one form a profile takes for a setuid program, `(with
+no-sandbox)`, starts the program it names outside the sandbox altogether, network included. Eight
+forms were tried and no other starts `ps`. So the rule names `ps` by its real path and nothing
+else (`OUTSIDE` in the wrapper), and `test-no-network-run.sh` holds each of these as measured:
+
+- `ps` runs under the wrapper, by its path and through a link. Another program called `ps`, found
+  first on the `PATH`, stays in the sandbox.
+- The command that ran `ps` is where it was: its connection is refused, and so are `open`,
+  `osascript` and `launchctl`. Every other setuid program in `/bin`, `/usr/bin`, `/sbin` and
+  `/usr/sbin` is still refused, found on disk at each run (nine on this Mac; the three that ask
+  for a password are never started by the suite, refused or not).
+- macOS does not load into `ps` a library the caller names (`DYLD_INSERT_LIBRARIES`), though it
+  loads it into a program compiled on the spot. So the caller's own code does not leave with `ps`.
+- What a wrapped command gains is what `ps` prints. The arguments and the environment of this
+  user's other processes it could already read from the kernel with no `ps` (`sysctl`, measured
+  under the profile without the rule), so `ps eww` shows nothing new of them. New is the arguments
+  of processes that are not this user's, which the kernel refuses a wrapped command and `ps`
+  prints. Whether `ps` shows their environment too was not measured: no process of another user's
+  could be given a marker without being root.
+- A copy of the wrapper whose rule names `curl` in place of `ps` lets `curl`'s post arrive. That is
+  what the rule does to the program it names, and why a second program is not a line to add.
 
 What the route is, so nobody reads more into it. It stops code from using the network while it runs
 under the wrapper, which is what makes an accidental post from a test impossible, and it refuses the
