@@ -8818,7 +8818,11 @@ one mv, and beside it only plain commands on the mod's short list (`mkdir`, `ls`
 `pwd`, `test`, `[`, `true`), or before it a `cp` of one file to a place where nothing is yet, the
 folder it goes into there already or made by a `mkdir` first. Any other command is asked about
 as it was before #3478, a pattern moved away as a deletion; so is a command whose look at the disk
-fails or takes more than 2 seconds, and a brace pattern of more than 256 names. The answers
+fails or takes more than 2 seconds, and a brace pattern of more than 256 names. A file moved
+to a name another source of the same mv or cp may also land on (one from another folder of the
+same name, a name alike but for letter case or the form of an accent, a pattern, or a word no
+path names) is asked about as the deletion it may be, never as a move that can be moved back
+(#3505): the source named last is the one kept. The answers
 are Keep as is, first, and Delete, Move or Empty; a save's
 For good approves no removal and a removal's answer approves no save, a removal whose consequence
 changes after he answers (what git holds of the file, where a move lands, what a folder holds) is

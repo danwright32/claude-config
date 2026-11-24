@@ -575,8 +575,18 @@ export type ModKitGhApi = { method: string; endpoint: string | undefined; fields
  * however many and wherever they stand (#2171); absent where it was not set before the write, where
  * anything else may set it (read, a loop, printf -v, an append, a declare with options, `${T:=x}`),
  * or where the command runs text eval, source, trap or alias may set it by.
+ *
+ * `shared`, on what one source of a copy or move into a folder puts there (#3505): another source of
+ * the same command may land on the same name, so one of the two replaces the other and what the
+ * replaced one held is gone (measured on macOS for mv and cp: the source named last is the one
+ * kept). Said where the other source is in another folder and is a name alike but for letter case
+ * and the Unicode form of an accent, a pattern, or a word no path names; never for two sources of
+ * one folder or a command of one source. Of two sources of one path there, the one write (the
+ * first source's, since a path is given once) carries it. A reader that says a file can be had back
+ * from where a write put it must take a write marked `shared` as no such place, as ask before
+ * saving does.
  */
-export type ModKitWrite = { word: string; path?: string; folder?: string; sources?: string[]; edits?: true; mayBeFolder?: true; tree?: true; values?: string[] }
+export type ModKitWrite = { word: string; path?: string; folder?: string; sources?: string[]; edits?: true; mayBeFolder?: true; tree?: true; values?: string[]; shared?: true }
 
 /**
  * One change a command makes to a file that puts no content in it: removed, stamped (touch),
@@ -605,7 +615,9 @@ export type ModKitWrite = { word: string; path?: string; folder?: string; source
  * removal with nowhere to go. `keeps` says the mv was told to replace nothing (-n, --no-clobber) and given neither -f
  * nor -i: a source whose name is taken there stays where it was. Beside either of those, in any
  * order, it is absent: mv obeys the last of the three, and the order is not read, so `mv -f -n`,
- * which replaces nothing, is read as one that may replace.
+ * which replaces nothing, is read as one that may replace. Where two sources of a mv may land on
+ * one name, `to` being absent does not say so by itself (it is absent of many moves nothing is lost
+ * by): the write where such a source lands says it, as `shared` (ModKitWrite).
  */
 export type ModKitChange = { word: string; path?: string; folder?: string; does: 'remove' | 'touch' | 'truncate' | 'folder' | 'mode'; tree?: true; names?: string[]; to?: { word: string; path?: string; into?: true; keeps?: true } }
 
