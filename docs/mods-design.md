@@ -3110,8 +3110,10 @@ and the band question is removed rather than kept beside it (L29). Three defects
   under `~/.claude/state/asked-questions`, at most 2,000 kept. `tools/asked-questions-count.ts`
   reads them, for the reading two weeks from 2026-11-21 that decides whether to hold them.
   Those two answers meet at picker manners: a mod's question naming an issue would be refused like
-  a session's. The coordinating session's rule (2026-11-21, until Dan settles it) is that a mod's
-  own dialog is asked and its answer written onto no issue, as every such picker was before. It is
+  a session's. Dan settled how the two meet (5:46 PM ET on 2026-11-21, from a picker: "Yes, as
+  built (Recommended)"): a mod's own dialog is asked, its length recorded and its answer written
+  onto no issue, and the two week reading of the recorded lengths (recording began with #3407,
+  merged 2026-11-22) decides whether the mods' own questions are held too. It is
   told apart by the asking mod's own `$.state` (key `asking`), which holds the whole dialog while
   it is open: the engine lets only the owner write a state ("scope-modes owns that value and only
   its owner writes it", measured in picker manners' suite) and a session has only tools. The call
