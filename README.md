@@ -7710,13 +7710,21 @@ anybody wrote. Both rules were decided by Dan on 2026-11-01.
   script runs as a Stop hook: at the end of a turn past the line it holds that turn's end once and
   tells the session to ask with AskUserQuestion, word for word, saying what the session has read
   so far (tokens and requests), what its requests average, what a fresh session would start near
-  (what this one started from) and so about how much less each early request would read, said as
-  an estimate. Answers, recommended first: Hand off (the session writes the handoff note first,
-  then Dan starts a fresh session from it), Carry on, and Keep for a day. It is asked again only
+  (what this one started from), what this one restarted at after its last compaction, and so how
+  much lighter a fresh session would start, said as an estimate. It never sets the average
+  against the fresh start: no request of either session would see that difference. Answers,
+  recommended first: Hand off (the session writes the handoff note first, then Dan starts a fresh
+  session from it), Carry on, and Keep for a day. The picker waits for Dan, and the session does
+  nothing more until he answers; agents it dispatched keep running, but their hand backs reach it
+  only after his answer. It is asked again only
   once the session has read half as much again as when it was last asked, and after Keep for a
   day not for 24 hours either; Dan's answer is read back from the transcript. Never asked while
   the Mac sleeps (held for the first turn's end after wake), in a subagent, a detached or headless
-  run, or on a turn's end another stop hook is already continuing. Until #3307 this was a notice
+  run, or on a turn's end that is itself the continuation of an earlier hold (`stop_hook_active`).
+  That flag is all it can see of the other Stop hooks: the session reflection, the issue review,
+  the is it live card, the steps card and a /goal's own hook can hold the same turn's end, so the
+  question can arrive beside theirs, and on the first turn's end of a /goal run, in the middle of
+  the run. Until #3307 this was a notice
   the session read, and on the work MacBook one session carried on past it 24 times (measured
   2026-11-19 for #1940, over 2 to 16 November 2026).
 - **Measured defaults.** `hooks/lib/context_size.py` records both measurements, and

@@ -125,9 +125,35 @@ run_hook(){ # run_hook <event> <name> -> runs it once in the current world, shim
 # being measured is registered with, set by the loop below and empty for every other run.
 EXTRA_ENV=()
 RUN_ARGS=()
+# AFTER_SETTLE, when an entry sets it, names a function run between the settling run and the
+# measured one, for a hook whose settling run spends the path that costs most (the long session
+# question is put once, so the measured run would otherwise be the quiet one, the #3519 review).
+# AFTER_MEASURE names one that prints "put" when the measured run really took that path (L102).
+AFTER_SETTLE=""
+AFTER_MEASURE=""
+rearm_long_question(){ # the settling run put the question: make it due again, nothing else changed
+  python3 -c '
+import json, sys
+p = sys.argv[1]
+s = json.load(open(p))
+s.update(ask={}, next_ask_read=0, keep_until=0)
+json.dump(s, open(p, "w"))
+' "$F/home/.claude/state/context-size/cost-session.main.json" 2>/dev/null
+}
+long_question_put(){ # "put" when the measured run composed and recorded the second question
+  python3 -c '
+import json, sys
+s = json.load(open(sys.argv[1]))
+a = s.get("ask", {})
+print("put" if s.get("asks") == 2 and a.get("put") and a.get("question")
+      else "asks %s, put %s" % (s.get("asks"), a.get("put")))
+' "$F/home/.claude/state/context-size/cost-session.main.json" 2>/dev/null || echo "no state file"
+}
 populate(){ # populate <name> <N> -> 0, or 1 with REASON set when the hook reads nothing that piles up
   local name="$1" n="$2" i
   EXTRA_ENV=()
+  AFTER_SETTLE=""
+  AFTER_MEASURE=""
   REASON=""
   case "$name" in
     turn-end-sound.sh)
@@ -208,6 +234,11 @@ with open(sys.argv[1], "w") as f:
       # With --stop, at every turn end (#3307). What piles up is the session's own transcript, of
       # which it reads only the bytes since its last run, and every other session's and agent's
       # state file in the one shared folder, of which it must open its own alone, never list them.
+      # The measured run is the one that composes the question: the line is set to 2 compactions,
+      # so the 2 deep arm is past it too, and the question the settling run put is made due again.
+      EXTRA_ENV=(CONTEXT_COMPACTIONS_NUDGE=2)
+      AFTER_SETTLE=rearm_long_question
+      AFTER_MEASURE=long_question_put
       mkdir -p "$F/home/.claude/state/context-size"
       i=0; while [ "$i" -lt "$n" ]; do
         printf '{"v":2,"offset":0}\n' > "$F/home/.claude/state/context-size/other-$i.main.json"
@@ -244,7 +275,9 @@ launches(){ # launches <event> <name> <N> -> processes started by one settled ru
   fresh "$3"
   populate "$2" "$3"
   run_hook "$1" "$2"          # settles anything a first prompt seeds
+  [ -z "$AFTER_SETTLE" ] || "$AFTER_SETTLE"
   run_hook "$1" "$2"          # counted in a log of its own, never the settling run's
+  [ -z "$AFTER_MEASURE" ] || "$AFTER_MEASURE" > "$WORK/took-path.$2.$3"
   local n
   n="$(grep -c . "$SHIM_LOG" 2>/dev/null)"
   echo "${n:-0}"
@@ -273,6 +306,13 @@ while IFS="$(printf '\t')" read -r ev name args; do
   b="$(launches "$ev" "$name" "$LARGE")"
   measured=$((measured + 1))
   echo "  $ev $name: $a processes with $SMALL, $b with $LARGE"
+  if [ -n "$AFTER_MEASURE" ]; then
+    took_small="$(cat "$WORK/took-path.$name.$SMALL" 2>/dev/null)"
+    took_large="$(cat "$WORK/took-path.$name.$LARGE" 2>/dev/null)"
+    [ "$took_small" = put ] && [ "$took_large" = put ] \
+      && check "$ev hook $name: the measured run took the path that speaks, in both arms" ok \
+      || check "$ev hook $name: the measured run took the path that speaks, in both arms" "with $SMALL: ${took_small:-nothing}; with $LARGE: ${took_large:-nothing}"
+  fi
   if [ "$a" = "$b" ]; then
     check "$ev hook $name starts as many processes with $LARGE of what it reads as with $SMALL ($a)" ok
   else

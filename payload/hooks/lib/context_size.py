@@ -41,8 +41,9 @@ past it 24 times, to 26 compactions and 2.47 billion tokens read, 11.8% of every
 asked on 2026-11-19 what should happen to the notice, Dan said "Strengthen it". So now:
 
 - Asked at the END of a turn (the Stop event), never mid step: the hook holds that turn's end once
-  and tells the session to ask with AskUserQuestion, word for word (long_question). The answer then
-  arrives as Dan's next message, so asking holds up no work, and agents keep running throughout.
+  and tells the session to ask with AskUserQuestion, word for word (long_question). The picker then
+  waits for Dan, and so does the session: it does nothing more until he answers. Agents it
+  dispatched keep running, but their hand backs reach it only after he has answered.
 - Once per crossing. A held turn's end is recorded before it is said, so the question is put once;
   whatever happens to it, the next is put only once the session has read ASK_GROWTH (half) as many
   tokens again as when this one was raised (L36: 24 notices were the noise this replaces).
@@ -60,12 +61,17 @@ asked on 2026-11-19 what should happen to the notice, Dan said "Strengthen it". 
   lines of one interactive session's transcript carried "cli", and tools/transcript-shares.py reads
   "sdk-cli" as headless). A transcript naming no entrypoint is asked, the side that costs one turn's
   end rather than silence if Claude Code stops writing the field (L506). Never on a
-  turn's end another stop hook is already continuing (stop_hook_active): it waits for the next.
+  turn's end that is itself the continuation of an earlier hold (stop_hook_active): it waits for
+  the next. That flag is all it can see of other Stop hooks. The ones that run on the SAME turn's
+  end (the session reflection, the issue review, the is it live card, the steps card, a /goal's
+  own hook) can hold it too, so the question can arrive beside theirs, and on the first turn's end
+  of a /goal run, in the middle of that run (whether to skip it then is Dan's, on #3519).
 
-What a fresh session would save is an estimate, said as one: a fresh session starts near what this
-one started from (its first request), so its early requests would each read about the difference
-between this session's average request and that start. It grows again as it works, which the
-question says. A compaction is a `type: system, subtype: compact_boundary` line (measured on Claude
+What a fresh session would save is an estimate, said as one, and compares like with like (L11): a
+fresh session starts near what this one started from (its first request), while this one starts
+each stretch at its floor, the first request after its last compaction. The question says how much
+lighter that start is, and nothing about this session's lifetime average against it, which no
+request of either session would see. It grows again as it works, which the question says. A compaction is a `type: system, subtype: compact_boundary` line (measured on Claude
 Code 2.1.316 transcripts, its compactMetadata carrying preTokens and postTokens).
 
   Default 5. Measured on Bidspoke 16 to 30 October 2026 (bidspoke#2192): one session with 13
@@ -380,9 +386,13 @@ def amount(n):
     return "{:,}".format(n)
 
 
-def about(n):
+def rounded(n):
     """One request's tokens, to the nearest thousand: the figures in the question are estimates."""
-    return "{:,}".format(int(round(n, -3)) if n >= 1000 else n)
+    return int(round(n, -3)) if n >= 1000 else n
+
+
+def about(n):
+    return "{:,}".format(rounded(n))
 
 
 def long_question(state):
@@ -392,13 +402,22 @@ def long_question(state):
     again = amount(int(total * ASK_GROWTH))
     q = ("This session has read %s tokens over %s requests and been compacted %d times. "
          "Its requests average %s tokens each. A fresh session started from a handoff note would "
-         "start near %s, what this one started from, "
+         "start near %s, what this one started from. "
          % (amount(total), "{:,}".format(state["requests"]), state["compactions"], about(avg), about(start)))
-    if avg > start:
-        q += ("so its early requests would read about %s fewer tokens each. That is an estimate: a "
-              "fresh session grows again as it works. " % about(avg - start))
-    else:
-        q += "so starting fresh would save little on each request. "
+    # The saving compares like with like (L11): the first request of a stretch. This session starts
+    # every stretch at its floor, the first request after its last compaction; a fresh one near this
+    # one's first request. The average against that start is no saving any request would see: on a
+    # real 62 compaction session it said 246,000 where the restart differed by 50,000 (#3519 review).
+    if state["compactions"] and state["stretch_requests"]:
+        # Both rounded before the difference, so the sentence adds up as Dan reads it.
+        lighter = rounded(state["floor_ctx"]) - rounded(start)
+        if lighter > 0:
+            q += ("After its last compaction this one restarted at %s, so a fresh session would start "
+                  "about %s tokens lighter. That is an estimate, and a fresh session grows again as it "
+                  "works. " % (about(state["floor_ctx"]), "{:,}".format(lighter)))
+        else:
+            q += ("After its last compaction this one restarted at %s, so a fresh session would start "
+                  "no lighter. " % about(state["floor_ctx"]))
     q += "Hand off to a fresh session, or carry on here?"
     answers = [
         (ASK_OPTIONS[0], "This session first writes everything decided and still running into a "
@@ -435,8 +454,9 @@ def long_session_ask(state, every, now, stop_active, payload):
     """At a main session's turn end: the reason to hold it and ask Dan, or None (#3307).
 
     A question is raised once the session is past the line, has read at least next_ask_read, and
-    is past keep_until. A raised question is held, unspent, while another stop hook continues this
-    turn's end, and put at the first turn's end that is not. Putting it records the question word
+    is past keep_until. A raised question is held, unspent, while this turn's end is the continuation
+    of an earlier hold (stop_hook_active), and put at the first turn's end that is not; a hold by
+    another Stop hook on that same turn's end cannot be seen here. Putting it records the question word
     for word, to read his answer by, and when the next may be raised. While the Mac sleeps this is
     never reached: context-size-notice.sh --stop asks lib/sleep.sh's sleep_active first and stops."""
     if state["compactions"] < every or state["entrypoint"] not in (None, "cli"):

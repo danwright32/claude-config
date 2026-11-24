@@ -259,7 +259,12 @@ check "4 counting a request written as two lines once" "over 8 requests" "$why"
 check "4 and how often it has been compacted" "compacted 5 times" "$why"
 check "4 what its requests average" "average 457,000 tokens each" "$why"
 check "4 what a fresh session would start near" "start near 44,000" "$why"
-check "4 what that saves on each early request" "about 413,000 fewer tokens" "$why"
+# The saving compares like with like, the first request of a stretch (L11): this session restarts
+# at its floor after each compaction (61,000 here), a fresh one near this one's first request. Its
+# lifetime average against a fresh start is no saving any request will see (the #3519 review).
+check "4 where this session restarted after its last compaction" "After its last compaction this one restarted at 61,000" "$why"
+check "4 so how much lighter a fresh session would start" "start about 17,000 tokens lighter" "$why"
+check_not "4 never the average against a fresh start, which no request saves" "fewer tokens each" "$why"
 check "4 and that the saving is an estimate" "an estimate" "$why"
 check "4 the recommended answer is first" "1. Hand off (Recommended)" "$why"
 check "4 then carry on" "2. Carry on" "$why"
@@ -314,7 +319,8 @@ answered "$C6" "$(asked_question "$CONTEXT_SIZE_STATE_DIR/c6.main.json")" "Hand 
 usage "$C6" msg_c 60000
 check_eq "4 hand off: not asked again at the next turn's end" "" "$(stop_fire c6 "$C6")"
 
-# Another stop hook already holding this turn's end: the question waits for the next one.
+# A turn's end that is the continuation of an earlier hold (stop_hook_active): the question waits
+# for the next one. Another Stop hook holding the SAME turn's end cannot be seen, so is not tested.
 C7="$WORK/proj/c7.jsonl"; long_fixture "$C7" 5
 usage "$C7" msg_b 52000
 check_eq "4 a turn's end another stop hook is continuing is never held again" "" "$(stop_fire c7 "$C7" true)"
@@ -346,7 +352,40 @@ check_eq "4 a detached run is never asked" "" "$(CLAUDE_DETACHED_RUN=1 stop_fire
 
 C2="$WORK/proj/c2.jsonl"; long_fixture "$C2" 2
 usage "$C2" msg_1 30000
-check "4 CONTEXT_COMPACTIONS_NUDGE moves the line" "compacted 2 times" "$(CONTEXT_COMPACTIONS_NUDGE=2 stop_fire c2 "$C2")"
+out="$(CONTEXT_COMPACTIONS_NUDGE=2 stop_fire c2 "$C2")"
+check "4 CONTEXT_COMPACTIONS_NUDGE moves the line" "compacted 2 times" "$out"
+check "4 a session restarting lighter than it started is told a fresh one would start no lighter" "would start no lighter" "$out"
+check_not "4 and is promised no saving" "tokens lighter" "$out"
+
+# Compacted with no request since: there is no restart size to compare, so none is claimed.
+C9="$WORK/proj/c9.jsonl"; long_fixture "$C9" 5
+out="$(field "$(stop_fire c9 "$C9")" reason)"
+check "4 compacted with no request since: still asked" "compacted 5 times" "$out"
+check_not "4 with no restart size claimed" "restarted at" "$out"
+
+# A state folder the question cannot be recorded in: never held, since a question that cannot be
+# recorded as put would hold every turn's end after it (the return after a failed save at Stop).
+# Root ignores a folder's permissions, so there this cannot be measured.
+if [ "$(id -u)" != 0 ]; then
+  NW="$WORK/nowrite"; mkdir -p "$NW"
+  C10="$WORK/proj/c10.jsonl"; long_fixture "$C10" 4
+  usage "$C10" msg_b 52000
+  check_eq "4 unwritable: below the line, the state and its lock are made" "" "$(CONTEXT_SIZE_STATE_DIR="$NW" stop_fire c10 "$C10")"
+  usage "$C10" msg_c 700000; compacted "$C10" 790000; usage "$C10" msg_d 61000
+  chmod 500 "$NW"
+  check_eq "4 unwritable: past the line, the turn's end is not held" "" "$(CONTEXT_SIZE_STATE_DIR="$NW" stop_fire c10 "$C10")"
+  check_eq "4 unwritable: nor the next one" "" "$(CONTEXT_SIZE_STATE_DIR="$NW" stop_fire c10 "$C10")"
+  chmod 700 "$NW"
+  check_eq "4 writable again: the question is put" "block" "$(field "$(CONTEXT_SIZE_STATE_DIR="$NW" stop_fire c10 "$C10")" decision)"
+fi
+
+# A transcript rewritten shorter after the question was put is read again from the start, keeping
+# what Dan was asked, which the transcript alone cannot say again: never asked again for it.
+C11="$WORK/proj/c11.jsonl"; long_fixture "$C11" 5
+i=1; while [ "$i" -le 6 ]; do usage "$C11" "msg_x$i" 60000; i=$((i + 1)); done
+check_eq "4 rewritten: asked at the line" "block" "$(field "$(stop_fire c11 "$C11")" decision)"
+long_fixture "$C11" 5; usage "$C11" msg_y 52000
+check_eq "4 rewritten shorter after asking: not asked again" "" "$(stop_fire c11 "$C11")"
 
 # ---- 5. Reading only what is new, and a transcript that was rewritten ----
 R="$WORK/proj/r1/subagents/agent-r1.jsonl"; mkdir -p "$WORK/proj/r1/subagents"; : > "$R"; : > "$WORK/proj/r1.jsonl"
