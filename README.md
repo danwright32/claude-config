@@ -2449,6 +2449,29 @@ fails often no longer looks like one that failed once under load. The gates the 
 run under no hook timeout, so it hands them a longer read budget, `MWR_GATE_READ_BUDGET_SECONDS`
 (90, a setting): a read that never answers still refuses.
 
+The helper sends one merge with `--admin` itself, and still refuses `--admin` as an argument
+(claude-config#3534). On 2026-11-24, in a repository whose ruleset asks for one code owner approval
+and lets a team bypass it for pull requests, every gate passed and gh then answered "the base
+branch policy prohibits the merge": gh refuses a pull request GitHub reads as BLOCKED by itself
+unless `--admin` is passed, so every merge there needed a second command sent by hand. Now, when the
+plain merge is refused in those words and the pull request reads back still open at the head the
+gates judged, the helper asks GitHub, at that moment and as the account the merge is made as, what
+a bypass would skip, and sends the same merge with `--admin`, pinned to that head, only when all of
+this holds: GitHub reads the review as `REVIEW_REQUIRED` (a reviewer asking for changes is never
+bypassed); every rule in force on the base branch that asks for a review belongs to a ruleset whose
+`current_user_can_bypass` is `pull_requests_only` or `always`, and at least one such rule exists;
+every ruleset the account may bypass holds nothing else in force on the branch that a merge could
+break (only the review rule, `deletion`, `non_fast_forward` and `creation` pass, the review rule
+must not also ask for every conversation resolved and must allow the merge method), because
+`--admin` skips a ruleset whole and not only its review; the base branch has no merge queue; and it
+has no classic branch protection, which no ruleset answers for. The checks gate is then asked about
+the exact bypass command before it is sent. An answer that cannot be read, is cut short or is not
+the shape expected is never taken as permission. When any of it fails the run stops with exit 1,
+saying an approving review is missing and why no bypass merge was sent; when it merges, the log
+line says it merged as a bypass of the approving review, naming the ruleset. There is no per
+repository opt in list (Dan, 2026-11-24): the ruleset's own bypass list is the permission. Not
+built: vouching for required checks held in a ruleset the account may bypass, which refuses today.
+
 Checks that have reported being green is not the head's CI being green (claude-config#1087). A
 workflow run can exist for minutes before any of its jobs registers a check (the booking app's CI waits on a
 concurrency group), so a fast check from another workflow can be the only one on the head. Both the

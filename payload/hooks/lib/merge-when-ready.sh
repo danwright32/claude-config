@@ -122,6 +122,17 @@
 # like), which would widen this into a bypass (L448). There is no override here: a merge that needs
 # one is typed, visibly.
 #
+# WHY IT MAY SEND --admin WHEN A CALLER MAY NOT PASS IT (claude-config#3534). A caller's --admin would
+# reach gh before anything here had judged the pull request, and would skip whatever the account may
+# bypass, which is why it stays refused as an argument, as --auto does. The helper sends it itself in
+# one case only: every gate has passed on this head, gh has refused the plain merge for the base
+# branch policy, and GitHub's own answers, read at that moment, say an approving review is the one
+# thing missing and that the account merging may bypass the ruleset asking for it. It is sent pinned
+# to the head the gates judged, so it merges that commit or nothing. --admin is one flag that skips
+# every rule the account may bypass, not only the review (L448), so everything it would skip is read
+# first, and anything else it would skip, or any answer that cannot be read, stops the run with
+# nothing sent (see bypass_judge).
+#
 # STOPS, each in its own words and none of them a merge:
 #   0  merged (or found already merged), confirmed by reading the pull request back
 #   1  needs a person: a gate refused, the review has findings to read (they are printed, with how to
@@ -138,7 +149,9 @@
 #      confirmed (claude-config#2629, see resolve_merger), or a pull request based on a branch other
 #      than the default one that nothing will move onto it: no pull request for that branch, one
 #      closed without merging, or one merged while this stayed on its branch (claude-config#3118,
-#      see wait_for_base), or a default branch GitHub did not name
+#      see wait_for_base), or a default branch GitHub did not name, or an approving review the base
+#      branch's rules require that the account merging may not bypass, or whose bypass could not be
+#      read, or that is not all a bypass would skip (claude-config#3534, see bypass_judge)
 #   3  still waiting (on checks, the review, a base still moving, the repository's turn, or the
 #      pull request of the branch it is based on, claude-config#3118) when the
 #      deadline, the time in line (the line standing still for MWR_LINE_SECONDS, claude-config#1697;
@@ -509,7 +522,9 @@ merge_argv=(pr merge "$pr" --repo "$slug")
 for f in ${flags[@]+"${flags[@]}"}; do
   case "$f" in --delete-branch|-d) want_delete=1 ;; *) merge_argv+=("$f"); method="$f" ;; esac
 done
-merge_text(){ printf 'gh'; printf ' %s' "${merge_argv[@]}" --match-head-commit "$1"; }
+# $2 is --admin for the one bypass merge this sends itself (claude-config#3534, see bypass_judge),
+# and nothing for every other merge.
+merge_text(){ printf 'gh'; printf ' %s' "${merge_argv[@]}" ${2:+"$2"} --match-head-commit "$1"; }
 
 # Hand one gate a PreToolUse payload for the merge command; prints its reason when it refuses.
 # MWR_DELETE_BRANCH tells block-red-merge.sh this run was asked for --delete-branch, which the merge
@@ -1592,12 +1607,204 @@ choose_method(){
 }
 read_back(){   # sets after
   local env
-  env="$(mt_pr_view "$pr" "state,headRefOid" "$slug" "$slug")"
+  # reviewDecision is read for bypass_judge (claude-config#3534), in the one read that already says
+  # whether the merge landed and whether the head moved, so that reading is no older than those.
+  env="$(mt_pr_view "$pr" "state,headRefOid,reviewDecision" "$slug" "$slug")"
   after="$(printf '%s' "$env" | jq -c '.view // {}' 2>/dev/null)"
   [ "$(printf '%s' "$env" | jq -r '.found // false' 2>/dev/null)" = "true" ] && return 0
   read_err="$(printf '%s' "$env" | jq -r '.error // ""' 2>/dev/null)"
   ghp_rate_limited "$read_err" && return 5
   mt_gh_read_class "$read_err" "$(printf '%s' "$env" | jq -r '.errorAccount // ""' 2>/dev/null)"
+}
+
+# THE ONE BYPASS MERGE IT SENDS ITSELF (claude-config#3534). On 2026-11-24, in a repository whose
+# ruleset asks for one code owner approval and lets a team bypass it for pull requests, every gate
+# here passed and gh then answered "the base branch policy prohibits the merge": gh refuses a pull
+# request GitHub reads as BLOCKED by itself, before it asks GitHub to merge anything, unless --admin
+# is passed, and --admin is refused here as an argument. So every merge there needed a second
+# command sent by hand. Now, when the plain merge is refused in those words and the pull request reads
+# back still open at the head the gates judged, bypass_judge asks GitHub, at that moment and as the
+# account the merge is made as, whether the review is the only thing a bypass would skip:
+#   1  GitHub reads the pull request's review as REVIEW_REQUIRED, read in the read back above. A
+#     reviewer asking for changes is not a review still to come, and is never bypassed.
+#   2  Every rule in force on the base branch that asks for a review (a pull_request rule wanting an
+#     approval, a code owner's review or a named reviewer's) belongs to a ruleset GitHub says this
+#     account may bypass (current_user_can_bypass: pull_requests_only or always), and at least one
+#     such rule was found, so the review GitHub asks for is one a ruleset answers for.
+#   3  A ruleset the account may bypass is bypassed whole, whether it asks for a review or not. So
+#     each of its rules in force on the branch must be the review itself or one no pull request merge
+#     can break (deletion, non_fast_forward, creation), its review rule must not also ask for every
+#     conversation resolved, and must allow the merge method. A rule of any other kind there
+#     (required checks, deployments, signatures, linear history, code scanning) would be skipped
+#     unjudged, so it refuses, naming the rule. Rules in a ruleset the account may NOT bypass need
+#     no reading here: GitHub goes on enforcing them, whatever gh is passed.
+#   4  The base branch has no merge queue, which a bypass merge would jump.
+#   5  The base branch has no classic branch protection, which an administrator's merge can skip and
+#     no ruleset answers for. GitHub shows anyone who can read the repository whether a branch has
+#     it (protection.enabled, false on 2026-11-24 for a branch only rulesets protect and true for
+#     three branches with classic protection). Where that reads true, the protection itself is
+#     read, which GitHub shows only to an account that administers the repository: "Branch not
+#     protected" means none, any protection it shows refuses, and so does an answer that shows nothing.
+# Every one of those is read from GitHub, and an answer that could not be read, was cut short or was
+# not the shape expected is never taken as permission (L42): it stops, saying an approving review is
+# missing and what could not be read. There is deliberately no per repository opt in list (Dan,
+# 2026-11-24: "Bypass list is enough"): the ruleset's own bypass list is the permission.
+# The reads are ut_api_read's, asked again as every read here is. Not built, and the first thing to
+# add when a repository needs it: vouching for required checks held in a ruleset the account may
+# bypass, by reading each required one as passed on the head.
+BY_UNREAD="an answer that cannot be read is never taken as permission"
+# The rules as this reads them, or an error when the answer is not a list of rules, each naming its
+# kind and its ruleset, and each pull_request rule saying what review it asks for.
+BY_RULES_JQ='if type != "array" then error("not a list") else
+  map(if type == "object" and (.type | type) == "string" and (.ruleset_id | type) == "number"
+        and (.type != "pull_request" or ((.parameters | type) == "object"
+          and (.parameters.required_approving_review_count | type) == "number"
+          and (.parameters.require_code_owner_review | type) == "boolean"))
+      then {type: (.type | gsub("[^a-z_]"; "?")), ruleset_id, parameters: (.parameters // {})}
+      else error("not a rule") end) end'
+# One line, tab separated: the verdict, then what its sentence names. $rules is the list above,
+# $sets each ruleset by id as {name, can}, $method the merge method.
+BY_VERDICT_JQ='
+def set: $sets[.ruleset_id | tostring];
+def may: set.can == "pull_requests_only" or set.can == "always";
+def asks: .type == "pull_request" and (.parameters.required_approving_review_count > 0
+  or .parameters.require_code_owner_review or ((.parameters.required_reviewers // []) | length) > 0);
+first(
+  ($rules[] | select(.type == "merge_queue") | ["queue", "-", "-"]),
+  ($sets[] | select(.can as $c | ["never", "pull_requests_only", "always"] | index($c) | not)
+    | ["unsaid", .name, (if .can == "" then "nothing" else .can end)]),
+  (if any($rules[]; asks) then empty else ["unasked", "-", "-"] end),
+  ($rules[] | select(asks and (may | not)) | ["never", set.name, set.can]),
+  ($rules[] | select(may)
+    | if .type == "pull_request" then
+        (if .parameters.required_review_thread_resolution == true then ["threads", set.name, "-"]
+         elif (.parameters.allowed_merge_methods | type) == "array" and (.parameters.allowed_merge_methods | index($method) | not)
+         then ["method", set.name, "-"] else empty end)
+      elif .type == "deletion" or .type == "non_fast_forward" or .type == "creation" then empty
+      else ["also", set.name, .type] end),
+  ([$rules[] | select(asks) | set] | unique
+    | ["ok", (if length == 1 then "the ruleset \"\(.[0].name)\" requires" else "the rulesets \"\(map(.name) | join("\" and \""))\" require" end),
+       (map(.can) | unique | join(", "))])
+) | @tsv'
+# Every refusal to send the bypass says the same first thing: an approving review is missing.
+# $2 is what to do, when it is not simply to have the pull request approved.
+bypass_refuse(){ stop 1 "Stopped: GitHub refused the merge of #$pr at ${head:0:7} for $base's branch policy: it lacks an approving review GitHub requires, and $1. No bypass merge was sent and nothing was merged.${2:- Have it approved, then run the same command again.}"; }
+BY_AGAIN=" Run the same command again once GitHub answers, or have it approved first."
+# bypass_read <what is read> <API path>: 0 with GitHub's answer in ut_ans, 5 to look again (GitHub
+# paused this session's reads); a read that fails stops, as a refusal to send the bypass.
+bypass_read(){
+  local rrc
+  ut_q="$2"
+  with_retries "$1" ut_api_read; rrc=$?
+  [ "$rrc" -eq 5 ] && return 5
+  [ "$rrc" -eq 0 ] || bypass_refuse "$(signin_or_unread "$1" "$rrc"), so whether $(who_is "$account") may bypass that review is not known, and $BY_UNREAD" "$BY_AGAIN"
+  return 0
+}
+policy_refused(){ case "$1" in *"the base branch policy prohibits the merge"*) return 0 ;; esac; return 1; }
+# Called with the plain merge refused for the base branch policy and read back open at $head (after).
+# Returns 0 when the bypass merge may be sent, with by_as saying what it bypasses; 1 when GitHub
+# does not read the review as still to come, so nothing about a bypass was read; 5 to look again.
+# Every other outcome stops.
+by_as=""
+bypass_judge(){
+  local who b rules ids id one sets='{}' m verdict kind a1 a2 rrc said
+  by_as=""
+  [ "$(printf '%s' "$after" | jq -r '.reviewDecision // ""' 2>/dev/null)" = "REVIEW_REQUIRED" ] || return 1
+  who="$(who_is "$account")"
+  b="$(jq -rn --arg b "$base" '$b | @uri')"
+  bypass_read "the rules in force on $base in $slug" "repos/$slug/rules/branches/$b?per_page=100" || return 5
+  rules="$(printf '%s' "$ut_ans" | jq -c "$BY_RULES_JQ" 2>/dev/null)" \
+    || bypass_refuse "GitHub's answer for the rules in force on $base was not a list of rules this can read (${ut_ans:0:200}), and $BY_UNREAD" "$BY_AGAIN"
+  # One page holds 100, so a full page may be a list cut short.
+  [ "$(printf '%s' "$rules" | jq 'length')" -lt 100 ] \
+    || bypass_refuse "GitHub listed 100 rules or more in force on $base, one page of them and so possibly cut short, and $BY_UNREAD"
+  ids="$(printf '%s' "$rules" | jq -r '[.[].ruleset_id] | unique | .[]')"
+  for id in $ids; do
+    bypass_read "ruleset $id of $slug" "repos/$slug/rulesets/$id" || return 5
+    one="$(printf '%s' "$ut_ans" | jq -c --arg id "$id" 'if type == "object" and (.id | tostring) == $id
+      then {name: ((.name // "" | tostring | gsub("[[:cntrl:]]"; " ") | .[0:80]) | if . == "" then $id else . end), can: (.current_user_can_bypass // "" | tostring | .[0:40])}
+      else error("not that ruleset") end' 2>/dev/null)" \
+      || bypass_refuse "GitHub's answer for ruleset $id of $slug was not that ruleset (${ut_ans:0:200}), so whether $who may bypass it is not known, and $BY_UNREAD" "$BY_AGAIN"
+    sets="$(printf '%s' "$sets" | jq -c --arg id "$id" --argjson one "$one" '.[$id] = $one')"
+  done
+  m="${method#--}"; case "$m" in -s) m=squash ;; -m) m=merge ;; -r) m=rebase ;; esac
+  verdict="$(jq -rn --argjson rules "$rules" --argjson sets "$sets" --arg method "$m" "$BY_VERDICT_JQ" 2>/dev/null)" || verdict=""
+  IFS=$'\t' read -r kind a1 a2 <<<"$verdict"
+  case "$kind" in
+    ok) ;;
+    queue) bypass_refuse "$base has a merge queue, which a bypass merge would jump" ;;
+    unsaid) bypass_refuse "GitHub did not say whether $who may bypass the ruleset \"$a1\" (current_user_can_bypass: $a2), and $BY_UNREAD" ;;
+    unasked) bypass_refuse "no ruleset in force on $base asks for that review, so nothing GitHub answered says $who may bypass it" ;;
+    never) bypass_refuse "$who may not bypass the ruleset \"$a1\" that requires it (GitHub answers current_user_can_bypass: $a2)" ;;
+    threads) bypass_refuse "the ruleset \"$a1\" also requires every review conversation resolved, which a bypass merge would skip unjudged" ;;
+    method) bypass_refuse "the ruleset \"$a1\" does not allow merging by $(method_name "$m"), which a bypass merge would skip" ;;
+    also) bypass_refuse "the ruleset \"$a1\", which $who may bypass, also holds a $a2 rule that a bypass merge would skip unjudged" ;;
+    *) bypass_refuse "the rules in force on $base could not be judged (${verdict:0:200}), and $BY_UNREAD" ;;
+  esac
+  said="whether $base also has classic branch protection could not be read"
+  bypass_read "branch $base of $slug" "repos/$slug/branches/$b" || return 5
+  case "$(printf '%s' "$ut_ans" | jq -r 'if type == "object" and (.protection | type) == "object" and (.protection.enabled | type) == "boolean" then .protection.enabled else "unsaid" end' 2>/dev/null)" in
+    false) ;;
+    true)
+      ut_q="repos/$slug/branches/$b/protection"
+      with_retries "the classic protection of $base in $slug" ut_api_read; rrc=$?
+      [ "$rrc" -eq 5 ] && return 5
+      [ "$rrc" -ne 0 ] || bypass_refuse "$base also has classic branch protection, which a bypass merge can skip and no ruleset answers for"
+      # GitHub's own words for a branch with none, shown only to an account that administers the
+      # repository; any other account is answered a bare Not Found, which says nothing either way.
+      case "$rrc:$ut_ans" in
+        1:*"Branch not protected"*) ;;
+        *) bypass_refuse "$said: $(signin_or_unread "its classic protection" "$rrc"), which GitHub shows only to an account that administers $slug, and $BY_UNREAD" ;;
+      esac ;;
+    *) bypass_refuse "$said (GitHub's answer for the branch did not say: ${ut_ans:0:200}), and $BY_UNREAD" "$BY_AGAIN" ;;
+  esac
+  by_as="as a bypass of the approving review $a1"
+  say "GitHub refused the merge of #$pr at ${head:0:7} for $base's branch policy, and the only thing it lacks is the approving review $a1, which $who may bypass (current_user_can_bypass: $a2)."
+  return 0
+}
+# WHAT A MERGE COMMAND LEFT, judged once for the plain merge and for the bypass merge
+# (claude-config#3534), so neither is handled by a copy of the other's judgement. It reads merge_out
+# and merge_rc, what gh printed and exited with, and judges by the state the command left, never by
+# those: gh can fail after the merge has landed. Merged finishes the run. It returns 0 when the loop
+# should go round again, where the read at its top and every gate judge afresh: the pull request
+# could not be read back, the head moved, GitHub refused for its rate limit, or GitHub failed to run
+# the merge and a try is left. It returns 1 when the pull request is still open at this head and
+# none of those explains it, which is the caller's to name.
+merge_settle(){
+  local rrc note
+  with_retries "#$pr back after the merge" read_back; rrc=$?
+  if [ "$rrc" -ne 0 ]; then
+    # Unreadable is not "the head moved": say what is known and look again, where the read at the
+    # top of the loop either finds it merged or stops naming GitHub's error.
+    say "After the merge command (gh exited $merge_rc: ${merge_out:0:200}), $(signin_or_unread "#$pr back" "$rrc"); looking again."
+    return 0
+  fi
+  if [ "$(printf '%s' "$after" | jq -r '.state // ""')" = "MERGED" ]; then
+    note=""; [ "$merge_rc" -ne 0 ] && note=" (gh exited $merge_rc after merging: ${merge_out:0:200})"
+    finish_branch "Merged #$pr in $slug at ${head:0:7}${by_as:+ $by_as}$note"
+  fi
+  if [ "$(printf '%s' "$after" | jq -r '.headRefOid // ""')" != "$head" ]; then
+    say "The head moved while it was being merged (GitHub refused the pin on ${head:0:7}); judging the new head."
+    return 0
+  fi
+  # Refused for the rate limit, which merges nothing: paused, and judged again at a later look
+  # (claude-config#1482).
+  if ghp_rate_limited "$merge_out"; then rate_pause "the merge of #$pr" "$merge_out"; return 0; fi
+  # GitHub failing to run the merge (claude-config#2289): read back above as still open at this head,
+  # so nothing merged. It goes round again after MERGE_WAIT, where every gate is asked again and the
+  # merge is pinned to whatever head they allow, so only a head the gates allowed is ever merged.
+  if mt_gh_went_wrong "$merge_out"; then
+    [ "$wrong_head" = "$head" ] || { wrong_head="$head"; wrong_tries=0; }
+    wrong_tries=$((wrong_tries + 1))
+    wrong_said="GitHub answered the merge of #$pr at ${head:0:7} with Something went wrong"
+    if [ "$wrong_tries" -lt "$MERGE_TRIES" ]; then
+      say "$wrong_said (try $wrong_tries of $MERGE_TRIES: ${merge_out:0:300}), and reading it back shows it still open at that head, so nothing merged. Asking every gate again and trying the merge, pinned to the head they allow, in $(span "$MERGE_WAIT")."
+      last_status="waiting to try the merge of #$pr again"; rest "$MERGE_WAIT"; last_status=""
+      return 0
+    fi
+    stop 1 "Stopped: $wrong_said $MERGE_TRIES times, $(span "$MERGE_WAIT") apart, and reading it back shows it still open at that head, so nothing merged: ${merge_out:0:500}. That is GitHub failing to run the merge, not a gate refusing it: run the same command again in a few minutes."
+  fi
+  return 1
 }
 
 # THE BRANCH IS DELETED HERE, NEVER BY gh (claude-config#1337). On 2026-10-19 this merged
@@ -2755,39 +2962,30 @@ EOF_VIEW
   [ -z "$ut_ran" ] || continue
   say_untested
   say "Head ${head:0:7} is green, up to date with $base and reviewed, and every merge gate allows it. Merging, pinned to that head."
+  by_as=""
   merge_out="$(gh_as "${merge_argv[@]}" --match-head-commit "$head" 2>&1)"; merge_rc=$?
-  # Judged by the state it leaves, never by what gh printed: gh can fail after the merge has landed.
-  with_retries "#$pr back after the merge" read_back; rrc=$?
-  if [ "$rrc" -ne 0 ]; then
-    # Unreadable is not "the head moved": say what is known and look again, where the read at the
-    # top of the loop either finds it merged or stops naming GitHub's error.
-    say "After the merge command (gh exited $merge_rc: ${merge_out:0:200}), $(signin_or_unread "#$pr back" "$rrc"); looking again."
-    continue
-  fi
-  if [ "$(printf '%s' "$after" | jq -r '.state // ""')" = "MERGED" ]; then
-    note=""; [ "$merge_rc" -ne 0 ] && note=" (gh exited $merge_rc after merging: ${merge_out:0:200})"
-    finish_branch "Merged #$pr in $slug at ${head:0:7}$note"
-  fi
-  if [ "$(printf '%s' "$after" | jq -r '.headRefOid // ""')" != "$head" ]; then
-    say "The head moved while it was being merged (GitHub refused the pin on ${head:0:7}); judging the new head."
-    continue
-  fi
-  # Refused for the rate limit, which merges nothing: paused, and judged again at a later look
-  # (claude-config#1482).
-  if ghp_rate_limited "$merge_out"; then rate_pause "the merge of #$pr" "$merge_out"; continue; fi
-  # GitHub failing to run the merge (claude-config#2289): read back above as still open at this head,
-  # so nothing merged. It goes round again after MERGE_WAIT, where every gate is asked again and the
-  # merge is pinned to whatever head they allow, so only a head the gates allowed is ever merged.
-  if mt_gh_went_wrong "$merge_out"; then
-    [ "$wrong_head" = "$head" ] || { wrong_head="$head"; wrong_tries=0; }
-    wrong_tries=$((wrong_tries + 1))
-    wrong_said="GitHub answered the merge of #$pr at ${head:0:7} with Something went wrong"
-    if [ "$wrong_tries" -lt "$MERGE_TRIES" ]; then
-      say "$wrong_said (try $wrong_tries of $MERGE_TRIES: ${merge_out:0:300}), and reading it back shows it still open at that head, so nothing merged. Asking every gate again and trying the merge, pinned to the head they allow, in $(span "$MERGE_WAIT")."
-      last_status="waiting to try the merge of #$pr again"; rest "$MERGE_WAIT"; last_status=""
-      continue
+  merge_settle && continue
+  # Still open at this head, and refused by gh for the base branch policy: the one merge this sends
+  # with --admin, and only when GitHub's own answers, read now, say the review is all a bypass would
+  # skip and that this account may bypass it (claude-config#3534, see bypass_judge).
+  if policy_refused "$merge_out"; then
+    bypass_judge; brc=$?
+    [ "$brc" -eq 5 ] && continue
+    if [ "$brc" -eq 0 ]; then
+      # The checks gate judges the exact command that runs, as it judged the plain one: the same
+      # pull request, pinned to the same head, read green again at this moment. The other gates
+      # judged this head a moment ago and read nothing that --admin changes.
+      cmd="$(merge_text "$head" --admin)"
+      if ! why="$(ask_gate "$RED_GATE" "$cmd")"; then
+        stop 1 "Stopped: block-red-merge.sh refused the bypass merge of #$pr at ${head:0:7}: $why"
+      fi
+      say "Sending the same merge $by_as, pinned to that head."
+      merge_out="$(gh_as "${merge_argv[@]}" --admin --match-head-commit "$head" 2>&1)"; merge_rc=$?
+      merge_settle && continue
+      stop 1 "Stopped: GitHub did not merge #$pr at ${head:0:7} $by_as: ${merge_out:0:500} Nothing was merged."
     fi
-    stop 1 "Stopped: $wrong_said $MERGE_TRIES times, $(span "$MERGE_WAIT") apart, and reading it back shows it still open at that head, so nothing merged: ${merge_out:0:500}. That is GitHub failing to run the merge, not a gate refusing it: run the same command again in a few minutes."
+    rv="$(printf '%s' "$after" | jq -r '.reviewDecision // ""' 2>/dev/null)"
+    stop 1 "Stopped: gh pr merge did not merge #$pr at ${head:0:7}: ${merge_out:0:500} GitHub reads its review as ${rv:-not required}, not as an approving review still to come, so no bypass merge was considered. Nothing was merged."
   fi
   stop 1 "Stopped: gh pr merge did not merge #$pr at ${head:0:7}: ${merge_out:0:500}"
 done
