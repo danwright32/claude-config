@@ -207,6 +207,8 @@ kept n2 "a file that reads in a file that reads in a quiet file" '. lib/n1.sh'
 kept n3 "a file that reads in a quiet file by a path its own variable holds" 'D=lib' '. "$D/quiet.sh"'
 kept n4 "a file that reads in a quiet file beside itself" '. "${BASH_SOURCE[0]%/*}/quiet.sh"'
 kept n5 "a file that reads in a quiet file inside an if" 'if true; then . lib/quiet.sh; fi'
+# n6 is itself the file the string names, so n6, k2, k3 and k4 are four files, the last MAX_DEPTH
+# below the first: one fewer than the chain from k0 above, which is refused.
 kept n6 "a chain of files as long as the gate follows" '. lib/k2.sh'
 # A function has positional parameters of its own, so an eval or a read inside its body moves the
 # function's and never the string's (bash 3.2.57 and zsh 5.9 both read calm's x.sh after each).
@@ -233,6 +235,14 @@ allowed "lib/suite-deadline.sh, read in first, leaves \$2, and the quiet file un
 real "$P/hot/lib/x.sh"
 refused "and with the file that posts under \$2 it is refused"
 says "as the post it read" "REFUSED: this command posts to Slack"
+# And that suite as a command typed, which the gate reads with the strings in it: the measurement
+# the case above stands in for, taken from the file itself.
+if [ -f "$DIR/test-sleep-state.sh" ]; then
+  run_bash "bash $DIR/test-sleep-state.sh" "$DIR"
+  allowed "bash test-sleep-state.sh, whose strings read in lib/suite-deadline.sh before the path in \$2, is not refused"
+else
+  check "test-sleep-state.sh is beside this suite, to be read as a command typed" "there is none at $DIR"
+fi
 
 echo "passed: $pass, failed: $fail"
 
