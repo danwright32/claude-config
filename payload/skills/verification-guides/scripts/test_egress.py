@@ -184,7 +184,7 @@ class Refusals(unittest.TestCase):
         self.assertEqual(out["verdict"], "clean", out)
         self.assertEqual((out["destinations"], out["unnamed"]), ([], []))
         self.assertEqual(out["refused"], [{"process": "chrome-headless-shell", "port": 443, "reports": 3,
-                                           "pids": [700, 701], "by_the_rule": True}])
+                                           "pids": [700, 701], "by_the_rule": True, "mismatch": False}])
         self.assertIn("chrome-headless-shell UDP port 443 (3 reports)", out["why"])
         self.assertIn("refused", out["why"])
         written = self.events("refused")
@@ -239,12 +239,91 @@ class Refusals(unittest.TestCase):
         out = self.m.judge()
         self.assertEqual((out["verdict"], out["refused"]), ("clean", []))
 
-    def test_a_refusal_line_never_counts_as_a_report_and_a_report_never_as_a_refusal(self):
-        # The kernel's own word decides which it was, and the tag must agree with it.
-        allow_with_refused_tag = report(740, 443, self.refused_tag, process="chrome-headless-shell")
-        deny_with_report_tag = refusal(741, self.m.tag)
-        self.read([allow_with_refused_tag, deny_with_report_tag])
+    # The kernel's own word (allow or deny) decides what a line is, never the message it carries (the
+    # review of #3570). What a compiled profile does cannot be read off its text, so a line whose
+    # word and message disagree is the sandbox doing something nobody wrote. It is recorded by the
+    # kernel's word, marked `mismatch`, and the run is never clean. Until that review one case here
+    # asserted that both such lines were dropped, which let a connection that left read as clean.
+
+    def test_a_connection_let_through_under_the_refusal_message_left_and_is_never_clean(self):
+        # `allow` under the refused tag: the kernel says this connection LEFT this machine, whatever
+        # the message says its rule does.
+        self.read([report(740, 443, self.refused_tag, process="chrome-headless-shell")], {740: []})
+        out = self.m.judge()
+        self.assertEqual(out["verdict"], "not-clean", out)
+        self.assertEqual(out["refused"], [], "a connection the kernel let through is never a refusal")
+        self.assertEqual([(u["process"], u["port"], u["reports"]) for u in out["unnamed"]],
+                         [("chrome-headless-shell", 443, 1)])
+        self.assertIn("let through", out["why"])
+        self.assertIn("chrome-headless-shell port 443 (1 report)", out["why"])
+        self.assertEqual([(e["pid"], e["port"], e.get("mismatch")) for e in self.events("report")],
+                         [(740, 443, True)])
+        self.assertEqual(self.events("refused"), [], "nor is it written into the record as one")
+
+    def test_a_refusal_under_the_report_message_is_recorded_and_never_clean(self):
+        # `deny` under the plain tag: nothing left, but no rule of either profile refuses under that
+        # message, so what refused it is not known. The helper browser on port 443 is what the one
+        # refusal names, so there only the message tells this line from the refusal that was chosen.
+        for process, port in (("chrome-headless-shell", 443), ("node", 80)):
+            with self.subTest(process=process, port=port):
+                m = egress.Monitor(tempfile.mkdtemp(dir=self.tmp.name), RID, list(v.EGRESS_LOCAL_HOSTS), 30)
+                m.proc = FakeStream([refusal(741, m.tag, process=process, port=port)])
+                m._read()
+                out = m.judge()
+                self.assertEqual(out["verdict"], "not-clean", out)
+                self.assertEqual(out["refused"], [{"process": process, "port": port, "reports": 1, "pids": [741],
+                                                   "by_the_rule": False, "mismatch": True}])
+                self.assertEqual((out["destinations"], out["unnamed"]), ([], []),
+                                 "a refusal is never counted as a connection that left")
+                self.assertIn("reporting rule", out["why"])
+                self.assertIn("%s port %d (1 report)" % (process, port), out["why"])
+                with open(m.events_path) as f:
+                    written = [json.loads(line) for line in f]
+                self.assertEqual([(e["event"], e["pid"], e.get("mismatch")) for e in written], [("refused", 741, True)])
+
+    def test_the_chosen_refusal_and_one_under_the_report_message_are_counted_apart(self):
+        self.read([refusal(750, self.refused_tag), refusal(751, self.m.tag)])
+        out = self.m.judge()
+        self.assertEqual(out["verdict"], "not-clean", out)
+        self.assertEqual([(r["pids"], r["by_the_rule"], r["mismatch"]) for r in out["refused"]],
+                         [([750], True, False), ([751], False, True)])
+
+    def test_the_kernels_word_decides_in_each_of_the_four_combinations(self):
+        # One connection by the helper browser to port 443 at an address the project allows, so a
+        # report of it is clean by itself: whatever is not clean below is so for the mismatch alone.
+        for word, message, event, mismatch, verdict in (("allow", "report", "report", None, "clean"),
+                                                        ("deny", "refused", "refused", None, "clean"),
+                                                        ("allow", "refused", "report", True, "not-clean"),
+                                                        ("deny", "report", "refused", True, "not-clean")):
+            with self.subTest(word=word, message=message):
+                m = egress.Monitor(tempfile.mkdtemp(dir=self.tmp.name), RID,
+                                   list(v.EGRESS_LOCAL_HOSTS) + ["192.0.2.1"], 30)
+                tag = m.tag + ("-refused" if message == "refused" else "")
+                line = (report(770, 443, tag, process="chrome-headless-shell") if word == "allow"
+                        else refusal(770, tag))
+                m.proc = FakeStream([line])
+                with mock.patch.object(m, "_name", return_value=(["192.0.2.1"], None)):
+                    m._read()
+                out = m.judge()
+                with open(m.events_path) as f:
+                    written = [json.loads(line) for line in f]
+                self.assertEqual([(e["event"], e.get("mismatch")) for e in written], [(event, mismatch)])
+                self.assertEqual(out["verdict"], verdict, out)
+                self.assertEqual((len(m.reports), len(m.refusals)), (1, 0) if word == "allow" else (0, 1))
+                self.assertEqual([(d["address"], d["allowed"]) for d in out["destinations"]],
+                                 [("192.0.2.1", True)] if word == "allow" else [])
+
+    def test_a_canary_line_whose_word_and_message_disagree_proves_no_canary(self):
+        # A canary proves a profile only by the line that profile is written to produce. The other
+        # line under its tag leaves the round unfinished, which is `unmeasured`, as it always was.
+        base = self.m.canary_tag + "-1"
+        self.read([report(760, 443, base + "-self-refused", process="Python"),
+                   refusal(761, base + "-drive", process="Python")])
+        self.assertEqual(self.m.canaries_seen, set())
         self.assertEqual((self.m.reports, self.m.refusals), ([], []))
+        self.read([refusal(760, base + "-self-refused", process="Python"),
+                   report(761, 443, base + "-drive", process="Python")])
+        self.assertEqual(self.m.canaries_seen, {base + "-self-refused", base + "-drive"})
 
     def test_only_drive_calls_get_the_rule_and_it_names_only_the_helper_browser(self):
         serve, drive = egress.profile_text("T"), egress.drive_profile_text("T")

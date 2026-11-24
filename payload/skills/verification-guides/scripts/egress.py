@@ -28,7 +28,10 @@ How, and why this way (measured on macOS 26 without a password, 2026-10-23; see 
     port, is reported as before, and so is every other program and all of serve, an executable of
     the same name included. A page that would use HTTP/3 (which is UDP on port 443) falls back to
     HTTP over TCP, which is reported. A refusal carrying this run's tag that the rule could not
-    have produced (another process name, another port) makes the run not clean.
+    have produced (another process name, another port) makes the run not clean. The kernel's own
+    word decides what a line is, never its message: `allow` under the refusal's message is a
+    connection that left and is recorded as a `report`, `deny` under the reporting message is a
+    `refused`, each is marked `mismatch`, and either makes the run not clean.
   * The reports are read live with `log stream`, which needs no root. They name the process and
     the port but spell the address as `*`, so each report is NAMED by reading that process's open
     sockets with `lsof` the moment it arrives. A connection that closed before then, or whose
@@ -316,22 +319,31 @@ class Monitor:
                 if not m:
                     continue
                 # The kernel's own word says whether the connection was let through or refused, and
-                # the message must be the one the rule of that kind carries. A line where the two
-                # disagree is nothing either profile can produce, and counts as neither.
+                # that word alone decides what the line is. The message is the one the rule of that
+                # kind carries, and a line where the two disagree is nothing either profile is
+                # written to produce. It is never dropped for that: what a compiled profile does
+                # cannot be read off its text (see refusal_rule), so an `allow` under the refusal's
+                # message is a connection that left, and it is counted as one.
                 refused, tag = m.group(4) != "allow", m.group(6)
-                if refused != tag.endswith(REFUSED):
-                    continue
+                mismatch = refused != tag.endswith(REFUSED)
                 if tag.startswith(self.canary_tag + "-"):
-                    with self.cond:
-                        self.canaries_seen.add(tag)
-                        self.cond.notify_all()
-                    self._event({"event": "canary", "at": v.utc_now(), "canary": tag})
+                    # A canary proves a profile only by the line that profile is written to produce,
+                    # so the other line under its tag proves nothing: the round stays unfinished and
+                    # the run is unmeasured.
+                    if not mismatch:
+                        with self.cond:
+                            self.canaries_seen.add(tag)
+                            self.cond.notify_all()
+                        self._event({"event": "canary", "at": v.utc_now(), "canary": tag})
                     continue
-                if tag != (self.refused_tag if refused else self.tag):
+                if tag not in (self.tag, self.refused_tag):
                     continue
                 pid, port = int(m.group(3)), int(m.group(5))
                 rec = {"event": "refused" if refused else "report", "at": v.utc_now(), "pid": pid,
                        "process": m.group(2), "port": port, "count": int(m.group(1) or 1)}
+                if mismatch:
+                    # Recorded by the kernel's word and marked, and judge() never calls it clean.
+                    rec["mismatch"] = True
                 if refused:
                     # Nothing to name: the connect never happened, so the process holds no socket for
                     # lsof to read. It is kept apart from the reports from here on.
@@ -501,20 +513,24 @@ class Monitor:
                 "destinations": list(destinations), "unnamed": list(unnamed), "refused": list(refused)}
 
     def refused(self):
-        """What the sandbox refused, one entry per process name and port. `by_the_rule` says whether
-        the entry is what the one refusal rule produces (the helper browser, REFUSED_PORT); the log
-        line holds nothing more to check it against, and an entry that is not is never clean."""
+        """What the sandbox refused, one entry per process name, port and `mismatch`. `mismatch` says
+        the kernel's line carried the message of the reporting rule, which refuses nothing, and not
+        the refusal's. `by_the_rule` says whether the entry is what the one refusal rule produces
+        (the helper browser, REFUSED_PORT, under the refusal's message); the log line holds nothing
+        more to check it against, and an entry that is not is never clean."""
         with self.cond:
             refusals = list(self.refusals)
         out = {}
         for r in refusals:
-            e = out.setdefault((r["process"], r["port"]), {
+            mismatch = bool(r.get("mismatch"))
+            e = out.setdefault((r["process"], r["port"], mismatch), {
                 "process": r["process"], "port": r["port"], "reports": 0, "pids": [],
-                "by_the_rule": r["process"] == HELPER_BROWSER and r["port"] == REFUSED_PORT})
+                "by_the_rule": not mismatch and r["process"] == HELPER_BROWSER and r["port"] == REFUSED_PORT,
+                "mismatch": mismatch})
             e["reports"] += r["count"]
             if r["pid"] not in e["pids"]:
                 e["pids"].append(r["pid"])
-        return sorted(out.values(), key=lambda e: (e["process"], e["port"]))
+        return sorted(out.values(), key=lambda e: (e["process"], e["port"], e["mismatch"]))
 
     def judge(self):
         more, unresolved = resolve(self.allow)
@@ -523,7 +539,9 @@ class Monitor:
         dests, unnamed = {}, {}
         refused = self.refused()
         ruled = [e for e in refused if e["by_the_rule"]]
-        strays = [e for e in refused if not e["by_the_rule"]]
+        strays = [e for e in refused if not e["by_the_rule"] and not e["mismatch"]]
+        unruled = [e for e in refused if e["mismatch"]]  # refused under the reporting rule's message
+        let_through = {}  # let through under the refusal's message, by process name and port
         # Said on every verdict that has one, so a refusal is always visible beside what left.
         refused_said = ""
         if ruled:
@@ -534,6 +552,11 @@ class Monitor:
         with self.cond:
             reports = list(self.reports)
         for r in reports:
+            if r.get("mismatch"):
+                # Counted here AND below as the connection it is, so its address is in the receipt.
+                lt = let_through.setdefault((r["process"], r["port"]), {"process": r["process"],
+                                                                        "port": r["port"], "reports": 0})
+                lt["reports"] += r["count"]
             if r.get("addresses"):
                 for addr in r["addresses"]:
                     d = dests.setdefault((addr, r["port"]), {"address": addr, "port": r["port"], "reports": 0,
@@ -555,8 +578,22 @@ class Monitor:
         dests = sorted(dests.values(), key=lambda d: (d["address"], d["port"]))
         unnamed = sorted(unnamed.values(), key=lambda u: (u["process"], u["port"], u["name_error"] or ""))
         outside = [d for d in dests if not d["allowed"]]
-        if outside or unnamed or strays:
+        let_through = [let_through[k] for k in sorted(let_through)]
+        if outside or unnamed or strays or unruled or let_through:
             parts = []
+            if let_through:
+                # Fail closed, whatever host it reached: the kernel let through what the one refusal
+                # is written to refuse, so nothing this run's profiles say about refusing holds here.
+                parts.append("the kernel let through connections that carry the message of the refusal rule, which"
+                             " is written to refuse them, so what this sandbox refuses is not what its profile"
+                             " says: " + "; ".join("%s port %d (%s)" % (e["process"], e["port"], plural(e["reports"]))
+                                                   for e in let_through))
+            if unruled:
+                # Fail closed: no rule of either profile refuses under that message.
+                parts.append("the sandbox refused connections under the message of its reporting rule, which is"
+                             " written to refuse nothing, so what refused them is not known: "
+                             + "; ".join("%s port %d (%s)" % (e["process"], e["port"], plural(e["reports"]))
+                                         for e in unruled))
             if strays:
                 # Fail closed: the profile holds one refusal, so anything else refused under this
                 # run's tag is the sandbox doing something nobody chose, and nothing here can say what.

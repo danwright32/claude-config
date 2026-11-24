@@ -148,8 +148,14 @@ means nothing left this machine for a host outside the allowed ones. What follow
 
 - Each refused attempt is recorded: a `refused` event in `egress.jsonl` (a connection that left is
   a `report` event, never the same kind), and an entry in the receipt's `refused`, each
-  `{process, port, reports, pids, by_the_rule}`. `why` says how many were refused, on a clean
-  verdict and on a not clean one, apart from what left.
+  `{process, port, reports, pids, by_the_rule, mismatch}`. `why` says how many were refused, on a
+  clean verdict and on a not clean one, apart from what left.
+- The kernel's own word, `allow` or `deny`, decides which event a line is, never the message it
+  carries. A line where the two disagree is nothing either profile is written to produce, so it is
+  recorded with `mismatch` true and the run is `not-clean`: `allow` under the refusal's message is
+  a connection that left, a `report` event judged like any other and never clean whatever host it
+  reached, and `deny` under the reporting message is a `refused` event whose entry has
+  `by_the_rule` false. `why` names each.
 - Nothing else newly passes. The same browser over TCP, or over UDP to any other port, is reported
   and judged as before, and so is the same connection by any other program in a drive call and by
   anything serve starts, an executable of the same name included.
