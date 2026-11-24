@@ -8119,6 +8119,13 @@ for reference; L6 was reviewed and deliberately not adopted.
   same data, offered none. Fixed for all 72 paged reads in slate#3280.)
   SHORT: Order every OFFSET or range paged read by a unique key, or pages silently skip and repeat rows while the total looks right.
 
+- **L867. A read paged by OFFSET or a range over a table that is written or purged while it is
+  read repeats and skips rows even under a unique order, because each insert or delete between
+  two page requests shifts every later row one place. Page such a table by key position (rows
+  after the last key seen) and count each key once.** (bidspoke#4022, 2026-11-24)
+  NO CHECK: no shared helper pages by key position yet, so only a reader holds this rule until one is built
+  SHORT: Page a table that is written during the read by key position, never OFFSET: a row landing between pages repeats or skips one even under a unique order.
+
 - **L753. In a Next.js App Router error boundary, wire Try again to `retry`, never `reset`**,
   because `reset` only re-renders the payload the browser already holds, so a read that failed on
   the server draws the same failure screen again and the button looks dead while reading as wired.
