@@ -866,7 +866,9 @@ if [ "$RC" -eq 0 ] && [ "${OUT//[[:space:]]/}" = "$$" ]; then
   exits "a copy without the one rule passes the wrapper's own check of its profile" 0
   ran "a copy without the one rule: the command is run" norule
   run "$T/norule.sh" /bin/sh -c '/bin/ps -o pid= -p "$1"' ps-case "$$"
-  if [ "$RC" -ne 0 ] && [ -z "${OUT//[[:space:]]/}" ]; then check "a copy without the one rule: ps does not start, which is why the rule is there" ok
+  PRINTED=no
+  case "$OUT" in *[![:space:]]*) PRINTED=yes ;; esac
+  if [ "$RC" -ne 0 ] && [ "$PRINTED" = no ]; then check "a copy without the one rule: ps does not start, which is why the rule is there" ok
   else check "a copy without the one rule: ps does not start, which is why the rule is there" "exit $RC, it printed '${OUT:0:60}': macOS now starts ps inside a sandbox, so the rule is no longer needed and Dan should hear of it"; fi
   # The wrapper's own notice names that error on every run, so the shell's line about ps is matched.
   case "$ERR" in *"ps: Operation not permitted"*) check "a copy without the one rule: ps is refused with the sandbox's permission error" ok ;;
