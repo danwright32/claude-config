@@ -7717,7 +7717,8 @@ anybody wrote. Both rules were decided by Dan on 2026-11-01.
   day not for 24 hours either; Dan's answer is read back from the transcript. Never asked while
   the Mac sleeps (held for the first turn's end after wake), in a subagent, a detached or headless
   run, or on a turn's end another stop hook is already continuing. Until #3307 this was a notice
-  the session read, and on the work MacBook one session carried on past it 24 times.
+  the session read, and on the work MacBook one session carried on past it 24 times (measured
+  2026-11-19 for #1940, over 2 to 16 November 2026).
 - **Measured defaults.** `hooks/lib/context_size.py` records both measurements, and
   `python3 tools/cache-usage.py --days 31 --summary` re-measures them through the same defaults and
   the same sum: its CONTEXT lines give the share of requests and tokens over the line, its

@@ -137,7 +137,9 @@ def fresh_state():
     return {"v": STATE_VERSION, "offset": 0, "last_id": None, "last_ctx": 0,
             "first_ctx": 0, "requests": 0, "ctx_sum": 0, "compactions": 0, "last_pre": 0,
             "stretch_requests": 0, "floor_ctx": 0,
-            "orchestrator": False, "band_told": 0, "compactions_told": 0, "unreadable_told": False,
+            # compactions_told, the old notice's count, is no longer kept: a state still holding it
+            # is read as it is, the field ignored (#3307).
+            "orchestrator": False, "band_told": 0, "unreadable_told": False,
             # The long session question (#3307). Added inside version 2 with these defaults, so a
             # state written before it is read on, never started again (with_defaults).
             "entrypoint": None, "ask": {}, "next_ask_read": 0, "keep_until": 0, "asks": 0}

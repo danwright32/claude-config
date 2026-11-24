@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Tests for context-size-notice.sh (claude-config#1960, #1940): the context line and the long
-# session nudge, both read from the transcript a PostToolUse payload names.
+# Tests for context-size-notice.sh (claude-config#1960, #1940, #3307): the context line, read from
+# the transcript a PostToolUse payload names, and the long session question, asked from a Stop.
 #
 # - A builder (any subagent) or an orchestrator (a main session that has dispatched an agent or set
 #   a /goal) whose last request carried more than the line (CONTEXT_LINE_TOKENS, 330,000) ABOVE its
@@ -293,7 +293,8 @@ check_eq "4 unanswered and grown less than half: quiet" "" "$(stop_fire c5 "$C5"
 usage "$C5" msg_d 900000; usage "$C5" msg_e 900000
 check_eq "4 unanswered and grown by half: asked again" "block" "$(field "$(stop_fire c5 "$C5")" decision)"
 
-# Keep for a day: not asked again for 24 hours, however much it reads, and then only on growth.
+# Keep for a day: not asked again for a day (KEEP_SECONDS, set in the code, not measured), however
+# much it reads, and then only on growth.
 C4="$WORK/proj/c4.jsonl"; long_fixture "$C4" 5
 usage "$C4" msg_b 52000
 T0=1800000000
