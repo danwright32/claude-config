@@ -3366,7 +3366,14 @@ and the band question is removed rather than kept beside it (L29). Three defects
   the index and a toast saying it went unused would be noise. A write of the line that does not land
   gives the cover back for the rest of the window, as an approval is given back; a shell command
   that failed spends it. A Bash For good covering more than one file, and Dan's own permanent words,
-  record no cover. The noun (`isApproved`, #1483) does not answer for a cover: its one caller asks
+  record no cover. What Claude is told with the save follows the index as it is when the save lands
+  (#3506, after a session told the line "may be added" read that as leave to rewrite the line already
+  there, 2026-11-23): an index with a line whose one link is the file (`linksOnlyTo`) is said to link
+  it already, with a change to that line asked about; one with no such line, or none yet, is offered
+  the line; one that is no ordinary file, fails to read or does not answer in the time the hook gives
+  its looks gets no word about the line either way, since whether it already links the file could
+  not be told, and the guard covers no line written to an index it cannot read. Only the words
+  changed: the cover is recorded as before in every case. The noun (`isApproved`, #1483) does not answer for a cover: its one caller asks
   only about the lessons file.
 - **What Dan reads as the rule:** Claude's own plain sentence and the file (#777). The band showed a
   new file's whole text, the lines a rewrite adds, an Edit's new text, or a Bash command as written,
