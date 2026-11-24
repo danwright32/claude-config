@@ -1807,8 +1807,8 @@ and its SHORT line. A pull request that edits a checkout's `payload/LESSONS.md` 
 file on both Macs at the next pull with nothing shown to him, so `lessons-merge-gate.sh`
 (claude-config#3343; Dan, 2026-11-20: "Guard the merge") holds its merge until he has answered for
 exactly that change. It reads the file at the pull request's merge base and at its head (at the
-pinned commit when the merge names a whole one, since that is what GitHub would merge, and then
-whatever the file list says) and finds the entries added, changed (any line of one, a rule wrapped another way included), removed, or
+pinned commit when the merge names a whole one, since that is what GitHub would merge, read even
+when the head's file list leaves the file alone) and finds the entries added, changed (any line of one, a rule wrapped another way included), removed, or
 moved to another section. Text above the first section, blank lines and the order of entries or
 sections are no entry's change and are never asked about. The refusal names one picker (metadata
 `source` `lesson-merge`, the repository, the number and a sha256 of the change) and the lines its

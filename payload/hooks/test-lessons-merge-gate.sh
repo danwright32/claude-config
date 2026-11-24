@@ -432,7 +432,9 @@ if [ "$hook_rc" -eq 2 ] && says "jq or python3"; then pass; else fail "with neit
 # __pycache__ in the lib folder, which the sync carries (#2600). Run a copy of the two files with
 # bytecode left on and look for one.
 LIBCOPY="$WORK/libcopy"; mkdir -p "$LIBCOPY" "$WORK/bytecode-record"
-cp "$HOOK_DIR/lib/lesson-merge.py" "$HOOK_DIR/lib/db-apply-approval.py" "$LIBCOPY/"
+python3 "$HOOK_DIR/lib/install-hook-libs.py" "$HOOK_DIR/lib" "$LIBCOPY" lesson-merge.py db-apply-approval.py >/dev/null \
+  || fail "lib/install-hook-libs.py could not install the lessons rule and the approval reader"
+rm -rf "$LIBCOPY/__pycache__"   # whatever the install left, so the run below is what is judged
 printf '{}\n' > "$WORK/bytecode-transcript.jsonl"
 env -u PYTHONDONTWRITEBYTECODE python3 "$LIBCOPY/lesson-merge.py" harvest --record-dir "$WORK/bytecode-record" \
   --transcript "$WORK/bytecode-transcript.jsonl" --session s >/dev/null 2>&1
