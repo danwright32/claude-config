@@ -1717,8 +1717,12 @@ policy_refused(){ case "$1" in *"the base branch policy prohibits the merge"*) r
 # settled at bedtime, is merge only, says a merge there does not deploy, and says adminMerge
 # green-pinned (mods/scope-modes/hooks/adminmerge.ts), and refuses it everywhere else. The bypass
 # merge here is sent inside this run, where no hook sees it, so it asks the same question itself,
-# as the last thing before bypass_judge allows it: a run started before bedtime can still be
-# running after it.
+# twice, because a run started before bedtime can still be running after it. First as the last
+# thing bypass_judge does, so a night that refuses stops before the checks gate is asked for
+# nothing. Then again (`bypass_sleep again`) as the very last thing before the merge is sent, after
+# the checks gate: that gate reads GitHub under a budget of its own (MWR_GATE_READ_BUDGET_SECONDS),
+# so a sleep that began while it was asked would otherwise go unseen. The second ask is the one the
+# merge rests on, and says nothing when it allows, the first having said it.
 # Sleep mode is one record for the whole Mac and holds every session on it, so "on" here means
 # what it means there: this Mac's record reads as asleep now.
 # Nothing of the judgement is written here. lib/sleep-admin-merge.mjs, under node, hands the record
@@ -1734,7 +1738,7 @@ policy_refused(){ case "$1" in *"the base branch policy prohibits the merge"*) r
 # against the ruleset above, and the checks are block-red-merge.sh's to judge, as for every merge.
 SLEEP_ENTRY="$MWR_LIB/sleep-admin-merge.mjs"
 BY_SLEEP_AGAIN=" Run the same command again once that can be read or sleep mode is off, or have it approved first."
-bypass_sleep(){
+bypass_sleep(){   # bypass_sleep [again]: returns 0 when the bypass merge may be sent; every other outcome stops
   local out rc verdict="" why="" flat
   [ -n "$SLEEP_RECORD" ] \
     || bypass_refuse "this run has no HOME folder to look for sleep mode's record under, so whether sleep mode allows a merge past that review in $slug tonight is not known, and $BY_UNREAD" "$BY_SLEEP_AGAIN"
@@ -1748,7 +1752,7 @@ bypass_sleep(){
   case "$verdict" in
     awake) return 0 ;;
     allowed)
-      say "Sleep mode is on, and it allows a merge past an approving review in $slug tonight (adminMerge on its entry in sleep mode's lists, as settled at bedtime)."
+      [ "${1:-}" = again ] || say "Sleep mode is on, and it allows a merge past an approving review in $slug tonight (adminMerge on its entry in sleep mode's lists, as settled at bedtime)."
       return 0 ;;
     refused) bypass_refuse "sleep mode is on and does not allow a merge past that review in $slug tonight (sleep mode will not ${why:-say why})" " Have it approved, or run the same command again once sleep mode is off." ;;
     unreadable) bypass_refuse "sleep mode's record on this Mac could not be read (${why:-it did not say why}), so whether it allows a merge past that review in $slug tonight is not known, and $BY_UNREAD" "$BY_SLEEP_AGAIN" ;;
@@ -1813,8 +1817,9 @@ bypass_judge(){
       esac ;;
     *) bypass_refuse "$said (GitHub's answer for the branch did not say: ${ut_ans:0:200}), and $BY_UNREAD" "$BY_AGAIN" ;;
   esac
-  # Last, so it is asked as near the merge as anything here is: sleep mode, which stops unless this
-  # Mac is awake or tonight's lists allow an admin merge in this repository.
+  # Sleep mode, which stops unless this Mac is awake or tonight's lists allow an admin merge in this
+  # repository. Asked here so a night that refuses stops before the checks gate is asked, and asked
+  # again just before the merge is sent (see bypass_sleep).
   bypass_sleep
   by_as="as a bypass of the approving review $a1"
   say "GitHub refused the merge of #$pr at ${head:0:7} for $base's branch policy, and the only thing it lacks is the approving review $a1, which $who may bypass (current_user_can_bypass: $a2)."
@@ -3037,6 +3042,9 @@ EOF_VIEW
       if ! why="$(ask_gate "$RED_GATE" "$cmd")"; then
         stop 1 "Stopped: block-red-merge.sh refused the bypass merge of #$pr at ${head:0:7}: $why"
       fi
+      # Sleep mode once more, the last thing before the send: the gate just asked read GitHub under
+      # its own budget, and this Mac can have gone to sleep meanwhile (see bypass_sleep).
+      bypass_sleep again
       say "Sending the same merge $by_as, pinned to that head."
       merge_out="$(gh_as "${merge_argv[@]}" --admin --match-head-commit "$head" 2>&1)"; merge_rc=$?
       merge_settle && continue

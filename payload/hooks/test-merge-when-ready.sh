@@ -525,6 +525,11 @@ if [ -s "$ST/red-gate-deny-admin" ]; then
   last="$(tail -n 1 "$ST/red-gate-payloads")"
   case "$last" in *" --admin "*) jq -nc --arg r "$(cat "$ST/red-gate-deny-admin")" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}' ;; esac
 fi
+# on-red-gate-admin: a step run once, while the gate is asked about the bypass merge, for something
+# that changes between the helper's last look and the merge it sends (claude-config#3534).
+if [ -s "$ST/on-red-gate-admin" ]; then
+  case "$(tail -n 1 "$ST/red-gate-payloads")" in *" --admin "*) s="$(cat "$ST/on-red-gate-admin")"; : > "$ST/on-red-gate-admin"; eval "$s" ;; esac
+fi
 exit 0
 EOS
 cat > "$STUBS/review-gate.sh" <<'EOS'
@@ -5135,6 +5140,7 @@ out="$(by_asleep 7 --squash)"; rc=$?
 check_eq "#3534 asleep, where sleep mode allows an admin merge tonight, the bypass merge merges" "0" "$rc"
 check "#3534 asleep and allowed: as a bypass" "Merged #7 in acme/widget at ${OLD:0:7} $BY_AS" "$out"
 check "#3534 asleep and allowed: it says sleep mode allows it" "Sleep mode is on, and it allows a merge past an approving review in acme/widget tonight" "$out"
+check_eq "#3534 asleep and allowed: said once, though sleep mode is asked twice" "1" "$(printf '%s\n' "$out" | grep -c 'Sleep mode is on, and it allows')"
 check_eq "#3534 asleep and allowed: one bypass merge" "1" "$(by_admin)"
 
 # Asleep, merge only, with no adminMerge on its entry: nothing merges there overnight past an approval.
@@ -5165,6 +5171,16 @@ by_state; by_night "$(by_lists "$BY_OPTED")"
 out="$(PATH="$BY_SLEEP/no-node:$PATH" by_asleep 7 --squash)"; rc=$?
 by_refused "sleep mode's judgement cannot be run" "$rc" "$out"
 check "#3534 sleep mode's judgement cannot be run: it says so, with what node answered" "what sleep mode allows in acme/widget tonight could not be asked of the scope modes mod (node exited 1: TypeError [ERR_UNKNOWN_FILE_EXTENSION]: Unknown file extension .ts), and an answer that cannot be read is never taken as permission" "$out"
+
+# A sleep that begins while the checks gate is asked about the bypass command, after bypass_judge
+# found this Mac awake. The gate reads GitHub under a budget of its own, so sleep mode is asked
+# again as the very last thing before the merge is sent, and the sleep is seen.
+by_state; by_night "$(by_lists "$BY_PLAIN")"; mv "$BY_REC" "$BY_SLEEP/next.json"
+printf 'cp "%s" "%s"' "$BY_SLEEP/next.json" "$BY_REC" > "$ST/on-red-gate-admin"
+out="$(by_asleep 7 --squash)"; rc=$?
+by_refused "a sleep that begins while the checks gate is asked" "$rc" "$out"
+check "#3534 a sleep that begins while the checks gate is asked: it says sleep mode does not allow it there" "$BY_SLEEP_NO, which does not allow admin merges overnight" "$out"
+check_eq "#3534 a sleep that begins while the checks gate is asked: the gate had been asked about the bypass command, so the first ask found this Mac awake" "1" "$(grep -c -- ' --admin ' "$ST/red-gate-payloads")"
 
 # With no HOME there is nowhere to look for the record, which is not the same as there being none.
 by_state

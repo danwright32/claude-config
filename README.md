@@ -2478,15 +2478,19 @@ sent inside the helper, where no hook sees it, so sleep mode's rule for a typed 
 in a repository where sleep mode would allow an admin merge tonight: its entry in the night's
 lists, as settled at bedtime, is merge only, says a merge does not deploy, and says `adminMerge:
 green-pinned`. Anywhere else it stops with exit 1, saying sleep mode does not allow a merge past
-that review in that repository tonight, in sleep mode's own words for why. It asks as the last
-thing before the bypass merge, never when the run starts, because a run started before bedtime can
-still be running after it. Sleep mode is one record for the whole Mac, so on means that this Mac's
+that review in that repository tonight, in sleep mode's own words for why. It never asks when the
+run starts, because a run started before bedtime can still be running after it. It asks twice:
+once GitHub's answers allow the bypass, so a night that refuses stops before the checks gate is
+asked, and again as the very last thing before the merge is sent, after the checks gate, which
+reads GitHub under a budget of its own and during which this Mac can have gone to sleep. Sleep
+mode is one record for the whole Mac, so on means that this Mac's
 record reads as asleep at that moment, whichever session started the run. None of the judgement is
 written a second time: `hooks/lib/sleep-admin-merge.mjs`, run under node, hands the record to the
 scope modes mod's own `readSleep` and to `adminMergeNightRefusal`, the function its judge of a
 typed admin merge asks first. A record that cannot be read, a node that is missing or cannot run
-the mod's files, and an answer that is none of the four it knows all stop the run too, since none
-of them is permission and none is sleep mode being off. With no sleep record the helper runs
+the mod's files, an answer that is none of the four it knows, and a run with no HOME folder to look
+for the record under all stop the run too, since none of them is permission and none is sleep mode
+being off. With no sleep record the helper runs
 nothing new and behaves as it did. Two things sleep mode holds a typed admin merge to are not asked
 of the helper's: that it is a squash, and that the base branch requires at least one check. The
 merge method is judged against the ruleset, and the checks by `block-red-merge.sh`, as above.
