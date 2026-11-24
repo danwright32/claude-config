@@ -25,8 +25,9 @@ back to the payload's own wording when the line is not there (it may not be writ
 
 WHAT A RECORD HOLDS: when, the kind, the model a model limit names, the reset time and whether it
 came from the structured block or the wording, the structured limit type and overage fields, who
-was stopped (main, headless or agent from the transcript line; "session" for a record made from the
-hook's own wording, which cannot tell a main session from a headless run), a cycle key (kind, model and reset time: two different reset
+was stopped (main, headless or agent from the transcript line, or unknown for a line that names no
+entrypoint; "session" for a record made from the hook's own wording, which cannot tell a main
+session from a headless run), a cycle key (kind, model and reset time: two different reset
 times for one kind at once are two accounts or two cycles), and the account as far as it can be
 read. No conversation text, no session id, no email, no project folder.
 
@@ -381,7 +382,11 @@ def cmd_scan():
     files = 0
     unread = 0
     recs = []
-    for dp, _, fs in os.walk(root):
+    if not os.path.isdir(root):
+        print("limit-messages: there is no transcript folder at %s to scan." % root, file=sys.stderr)
+        return 1
+    dirs_unread = []
+    for dp, _, fs in os.walk(root, onerror=dirs_unread.append):
         for f in fs:
             if f.endswith(".jsonl"):
                 try:
@@ -396,12 +401,15 @@ def cmd_scan():
         print("limit-messages: could not record the backfill in %s: %s" % (record_dir(), e), file=sys.stderr)
         return 1
     print("Scanned %d transcripts: %d usage limit messages, %d new to the record." % (files, len(recs), new))
+    # A backfill that missed files or folders must not read as complete.
     if unread:
-        # A backfill that missed files must not read as complete.
         print("%d transcript%s could not be read, so any limit message in %s is not in the record." % (
             unread, "" if unread == 1 else "s", "it" if unread == 1 else "them"), file=sys.stderr)
-        return 1
-    return 0
+    if dirs_unread:
+        print("%d folder%s under the transcripts could not be listed, so what %s hold%s is not in the record." % (
+            len(dirs_unread), "" if len(dirs_unread) == 1 else "s", "it" if len(dirs_unread) == 1 else "they",
+            "s" if len(dirs_unread) == 1 else ""), file=sys.stderr)
+    return 1 if unread or dirs_unread else 0
 
 
 def et(ts):

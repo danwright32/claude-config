@@ -152,11 +152,15 @@ H2="$WORK/home2"; mkdir -p "$H2"
 out="$(HOME="$H2" python3 "$TOOL" days 2>&1)"; rc=$?
 same "9 empty exits 0" "0" "$rc"
 check "9 empty said" "No usage limit message has been recorded on this Mac" "$out"
+# A backfill with no transcript folder at all found nothing to read, which is not a clean scan.
+out="$(HOME="$H2" python3 "$TOOL" scan 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: 9 scan with no transcript folder exits non zero"; fi
+check "9 no folder said" "there is no transcript folder" "$out"
 
 # Cases 10 and 11 take a permission away, which root ignores, so under root they are reported as
 # not measured rather than failing for a reason that is not the code's (L411).
 if [ "$(id -u)" = 0 ]; then
-  echo "UNMEASURED: cases 10 and 11 need a permission root ignores"
+  echo "SUITE-PART-UNMEASURED cases 10 and 11, since they take away a permission root ignores"
 else
   # 10. A record that cannot be written fails loud: a non zero exit and the cause on stderr.
   H3="$WORK/home3"; mkdir -p "$H3/.claude/state"; chmod 500 "$H3/.claude/state"
