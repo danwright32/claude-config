@@ -158,6 +158,10 @@ if [ -n "$CLAUDE_MD" ]; then
   # that design work runs on Opus (#2547).
   check "the pointer's summary names all three models" \
     "$(grep -q -F 'Sonnet' <<< "$pointer_lines" && grep -q -F 'Fable' <<< "$pointer_lines" && grep -q -F 'Opus' <<< "$pointer_lines" && echo ok || echo "the pointer line does not name Sonnet, Fable and Opus")"
+  # And its Fable summary is the narrowed one, so a reader who stops there does not send a red
+  # check on a security item to Fable (#3393).
+  check "the pointer's summary narrows Fable to what a control decides or shows" \
+    "$(grep -q -F 'what a design, security or compliance control decides or shows' <<< "$pointer_lines" && echo ok || echo "the pointer line still sends all design, security and compliance work to Fable")"
 else
   echo "SUITE-PART-UNMEASURED $DIR/../.. is not the payload of a claude-config checkout, so the pointer in its CLAUDE.md was not read"
 fi
