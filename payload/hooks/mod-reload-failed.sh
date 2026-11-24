@@ -73,6 +73,7 @@ mkdir -p "$STATE_DIR" 2>/dev/null || true
 # One python prints the person's text and the session's context, joined by the unit separator, or
 # nothing. The record is written before anything is printed, so a notice cannot repeat itself if the
 # printing fails: once too few is the safe side here (L36).
+ERR_FILE="$STATE_DIR/claude-mod-reload-err-$$"
 said="$(printf '%s' "$input" | MRF_STATE_DIR="$STATE_DIR" MRF_PROC="$PROC" MRF_PROC_START="$PROC_START" \
   MRF_NOW="${CLAUDE_MOD_RELOAD_NOW:-}" MRF_CHUNK="${CLAUDE_MOD_RELOAD_CHUNK:-}" MRF_RETELL="${CLAUDE_MOD_RELOAD_RETELL_AFTER:-86400}" python3 -c '
 import datetime, hashlib, json, os, re, sys, time
@@ -167,7 +168,7 @@ def scan(data):
         d = json.loads(line)
     except Exception:
         continue
-    if d.get("type") != "system" or d.get("subtype") != "informational":
+    if not isinstance(d, dict) or d.get("type") != "system" or d.get("subtype") != "informational":
         continue
     text = d.get("content")
     t = when(str(d.get("timestamp") or ""))
@@ -243,7 +244,8 @@ except Exception:
 
 def et(ts):
     if ET is None:
-        return datetime.datetime.fromtimestamp(ts, datetime.timezone.utc).strftime("%H:%M UTC on %d %B").lstrip("0")
+        u = datetime.datetime.fromtimestamp(ts, datetime.timezone.utc)
+        return "%d:%02d UTC on %d %s" % (u.hour, u.minute, u.day, u.strftime("%B"))
     t = datetime.datetime.fromtimestamp(ts, ET)
     return "%d:%02d %s ET on %d %s" % ((t.hour % 12) or 12, t.minute, "AM" if t.hour < 12 else "PM", t.day, t.strftime("%B"))
 
@@ -266,7 +268,20 @@ reasons = " ".join("Claude Code gave this reason for %s: %s." % (m, failing[m]["
 context = " ".join(x for x in (person, reasons,
     "Until a new session, when %s refuses or blocks something, say in your reply that the refusal came from an out of date copy and may be wrong. The refusal still stands; tell Dan rather than working around it." % names) if x)
 sys.stdout.write(person + "\x1f" + context)
-' 2>/dev/null || true)"
+' 2>"$ERR_FILE")"
+rc=$?
+
+# A check that broke must not read as a check that found nothing (L98): said once per process, with
+# the last line python gave, then quiet, since it would break the same way at every prompt (L36).
+if [ "$rc" -ne 0 ]; then
+  why="$(tail -n 1 "$ERR_FILE" 2>/dev/null)"
+  rm -f "$ERR_FILE" 2>/dev/null
+  marker="$STATE_DIR/claude-mod-reload-broken-$PROC"
+  [ -e "$marker" ] && exit 0
+  : > "$marker" 2>/dev/null || true
+  hook_allow_notice "mod-reload-failed: the check of whether a mod's reload failed could not run (${why:-python exited $rc}), so a mod still running an old copy in this session would not be noticed. This is said once for this session."
+fi
+rm -f "$ERR_FILE" 2>/dev/null
 
 [ -n "$said" ] || exit 0
 case "$said" in

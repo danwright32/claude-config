@@ -285,6 +285,24 @@ msg="$(field "$out" systemMessage)"
   || check "rows longer than a piece are stepped over, and the failures beside them read" "said: $out"
 
 # ---------------------------------------------------------------------------
+# A line that is JSON but not an object, carrying both words, is passed over, not a crash.
+# ---------------------------------------------------------------------------
+T9="$TMPROOT/nine.jsonl"
+printf '["informational", "reload"]\n' > "$T9"
+row "$T9" fail picker-manners 2026-11-05T21:41:31.651Z
+out="$(prompt s9 "$T9")"
+grep -q "^picker-manners failed to reload" <<< "$(field "$out" systemMessage)" \
+  && check "a JSON line that is not an object is passed over" ok \
+  || check "a JSON line that is not an object is passed over" "said: $out"
+
+# A check that breaks says so once, never reads as a clean answer, and is then quiet.
+out="$(CLAUDE_MOD_RELOAD_NOW=soon CLAUDE_MOD_RELOAD_PROCESS=6161 prompt s10 "$T9")"
+v="$(hook_notice_verdict "$out" 'could not run \(ValueError')"
+[ -z "$v" ] && check "a broken check says so" ok || check "a broken check says so" "$v"
+out="$(CLAUDE_MOD_RELOAD_NOW=soon CLAUDE_MOD_RELOAD_PROCESS=6161 prompt s10 "$T9")"
+[ -z "$out" ] && check "and says so once" ok || check "and says so once" "said: $out"
+
+# ---------------------------------------------------------------------------
 # A transcript that cannot be read is said once, never on every prompt, and never as all clear.
 # ---------------------------------------------------------------------------
 out="$(prompt s7 "$TMPROOT/missing.jsonl")"

@@ -205,7 +205,7 @@ with open(sys.argv[1], "w") as f:
     f.write(json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Edit", "input": {"file_path": "/y"}}]}}) + "\n")
 ' "$F/t.jsonl" "$n" ;;
     mod-reload-failed.sh)
-      # The session's transcript, which only grows, with N failed and N good reloads of N mods in it
+      # The session's transcript, which only grows, with N mods each failing, reloading and failing again
       # (claude-config#3309), and N other sessions' records beside this one's in the state folder,
       # which the hook must never list. Its bytes are read by its one python, which no process count
       # can see; it reads only what the transcript gained since the last prompt. The process is set to
