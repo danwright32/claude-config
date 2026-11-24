@@ -23,8 +23,11 @@
 #     with the wrapper, by its path and through a link, where macOS refuses every setuid program
 #     without the rule; the command that ran it is still refused the network and the three hand
 #     offs; another program named ps stays in the sandbox; every other setuid program found on
-#     disk is still refused; a library the caller names is loaded into a program compiled here and
-#     not into ps; what ps shows of another process (this user's environment, which the kernel
+#     disk is still refused; a program the command starts after ps is still refused the network; a
+#     socket handed to ps as its output carries nothing out; a library the caller names is loaded
+#     into a program compiled here and not into ps, started plainly, traced or paused; the task
+#     port of a ps held traced or paused is refused where that of a program signed here to allow
+#     it is given; what ps shows of another process (this user's environment, which the kernel
 #     already gave without ps, and another user's arguments, which it did not) is asserted as
 #     measured; and a copy of the wrapper without the rule still refuses ps;
 #   * one program and never a list (the review of 2026-11-24): every profile the wrapper hands the
@@ -888,6 +891,90 @@ if [ "$RC" -eq 0 ] && [ "${OUT//[[:space:]]/}" = "$$" ]; then
     if [ "$(arrived shut-after-ps)" = "0" ]; then check "after ps: with the wrapper nothing arrives" ok
     else check "after ps: with the wrapper nothing arrives" "arrived $(arrived shut-after-ps)"; fi
 
+    # And so is a NEW program the command starts once ps has run (the review of 2026-11-24): the
+    # post is made by a child of the command, started after the ps.
+    one child 127.0.0.1 open-child-after-ps /bin/sh -c "$AFTER_PS" after-ps
+    if [ "$OUTCOME" = "sent" ] && [ "$(arrived open-child-after-ps)" = "1" ]; then check "a child started after ps: without the wrapper its post arrives" ok
+    else check "a child started after ps: without the wrapper its post arrives" "outcome '$OUTCOME', arrived $(arrived open-child-after-ps)"; fi
+    one child 127.0.0.1 shut-child-after-ps "$WRAP" /bin/sh -c "$AFTER_PS" after-ps
+    case "$OUTCOME" in
+      failed:*) check "a child started after ps: with the wrapper its post fails" ok ;;
+      *) check "a child started after ps: with the wrapper its post fails" "outcome '$OUTCOME'" ;;
+    esac
+    if [ "$(arrived shut-child-after-ps)" = "0" ]; then check "a child started after ps: with the wrapper nothing arrives" ok
+    else check "a child started after ps: with the wrapper nothing arrives" "arrived $(arrived shut-child-after-ps)"; fi
+  fi
+
+  # A SOCKET HANDED TO ps (the review of 2026-11-24). ps runs outside the sandbox, so what it writes
+  # is not held back, and a command can give it any descriptor as its output. What stops that
+  # carrying anything out is that the command cannot connect the socket first: the sandbox refuses
+  # the connection, and ps is handed a socket that leads nowhere. Measured with a listener of this
+  # case's own on loopback, and ps asked only for the pid of the process asking, so what arrives
+  # without the wrapper is a number.
+  cat > "$T/hand.py" <<'PY'
+"""hand.py outer [front ...] | hand.py inner <port>. outer opens a UDP listener on loopback, runs
+"<front> python3 hand.py inner <port>" and prints what inner said and how many datagrams arrived.
+inner makes a UDP socket, tries to connect it to the listener, runs ps once into a pipe to see that
+ps runs at all, and once with the socket as its output."""
+import os
+import socket
+import subprocess
+import sys
+
+PS = ["/bin/ps", "-o", "pid=", "-p", str(os.getpid())]
+if sys.argv[1] == "inner":
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("127.0.0.1", int(sys.argv[2])))
+        state = "connected"
+    except PermissionError:
+        state = "refused"
+    except OSError as e:
+        state = "failed:%d" % e.errno
+    try:
+        plain = subprocess.run(PS, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        ran = "ran" if plain.returncode == 0 and plain.stdout.decode().strip() == str(os.getpid()) else "odd"
+        subprocess.run(PS, stdin=subprocess.DEVNULL, stdout=s.fileno(), stderr=subprocess.DEVNULL)
+    except OSError:
+        ran = "unstarted"
+    print(state + " ps-" + ran)
+else:
+    sink = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sink.bind(("127.0.0.1", 0))
+    done = subprocess.run(sys.argv[2:] + [sys.executable, "-I", os.path.abspath(__file__), "inner",
+                                          str(sink.getsockname()[1])],
+                          stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    said = done.stdout.decode("utf-8", "replace").strip() or "nothing (exit %d)" % done.returncode
+    # A datagram on loopback is in the listener's queue before the write that sent it returns,
+    # and ps has ended, so what is there now is all there will be.
+    sink.setblocking(False)
+    count = 0
+    while True:
+        try:
+            sink.recv(4096)
+        except OSError:
+            break
+        count += 1
+    print("%s arrived-%d" % (said, count))
+PY
+  run "$PY_FIXED" -I "$T/hand.py" outer
+  if [ "$OUT" = "connected ps-ran arrived-1" ]; then
+    check "a socket handed to ps: without the wrapper what ps prints arrives" ok
+    run "$PY_FIXED" -I "$T/hand.py" outer "$WRAP"
+    case "$OUT" in
+      "refused ps-ran "*) check "a socket handed to ps: with the wrapper its connection is refused before ps has it, and ps runs" ok ;;
+      *) check "a socket handed to ps: with the wrapper its connection is refused before ps has it, and ps runs" "it said '$OUT'" ;;
+    esac
+    case "$OUT" in
+      *" arrived-0") check "a socket handed to ps: with the wrapper nothing arrives" ok ;;
+      *) check "a socket handed to ps: with the wrapper nothing arrives" "it said '$OUT'" ;;
+    esac
+  else
+    check "a socket handed to ps: without the wrapper what ps prints arrives" "it said '$OUT' (exit $RC), so nothing arriving with the wrapper would prove nothing"
+  fi
+
+  if [ -n "$PORT" ]; then
+
     # The rule names a file, not a name: another program called ps, found first on the PATH, stays
     # in the sandbox, and so does what it starts.
     mkdir "$T/psbin"
@@ -967,6 +1054,145 @@ PY
       check "with the wrapper a library the caller names is loaded into a program compiled here" "it was not loaded (exit $RC, ${ERR:0:200}), so its not loading into ps would prove nothing"
     fi
 
+    # A TRACED OR A PAUSED ps (the review of 2026-11-24). A wrapped command can start ps under a
+    # debugger's hold (fork, PT_TRACE_ME, exec) or paused (posix_spawn, START_SUSPENDED). The
+    # traced one then runs as the user, OUTSIDE the sandbox, stopped, with the sandboxed command
+    # holding it: the one state in which a wrapped command holds a process that has the network.
+    # It is safe only because macOS refuses that command the process's task port and loads no
+    # library the command names into it, and both are macOS's to change. So both are held here,
+    # each beside a program compiled on the spot for which the same step succeeds (L248). Where a
+    # control does not hold on this Mac the case is unmeasured, never passed (L411).
+    cat > "$T/held.c" <<'C'
+/* held <t|s> <library|-> <program> [words]: start the program traced (t) or paused (s), with the
+   library named for it alone, never for this launcher. While it is held, print whether it is in a
+   sandbox and whether its task port is given. Then let it run and print how it ended. Nothing is
+   written into the program: the port is only asked for. */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <signal.h>
+#include <spawn.h>
+#include <sys/types.h>
+#include <sys/ptrace.h>
+#include <sys/wait.h>
+#include <mach/mach.h>
+
+extern char **environ;
+extern int sandbox_check(pid_t pid, const char *operation, int type, ...);
+
+int main(int argc, char **argv) {
+  pid_t pid;
+  int st;
+  mach_port_t task = MACH_PORT_NULL;
+  if (argc < 4) return 64;
+  if (argv[1][0] == 't') {
+    pid = fork();
+    if (pid < 0) { printf("held=no: fork failed\n"); return 2; }
+    if (pid == 0) {
+      if (strcmp(argv[2], "-")) setenv("DYLD_INSERT_LIBRARIES", argv[2], 1);
+      if (ptrace(PT_TRACE_ME, 0, 0, 0) != 0) _exit(126);
+      execv(argv[3], argv + 3);
+      _exit(127);
+    }
+    if (waitpid(pid, &st, WUNTRACED) != pid || !WIFSTOPPED(st)) {
+      printf("held=no: the program did not stop when it was started traced\n");
+      return 3;
+    }
+    printf("held=traced\n");
+  } else {
+    posix_spawnattr_t attr;
+    int r;
+    if (strcmp(argv[2], "-")) setenv("DYLD_INSERT_LIBRARIES", argv[2], 1);
+    posix_spawnattr_init(&attr);
+    posix_spawnattr_setflags(&attr, POSIX_SPAWN_START_SUSPENDED);
+    r = posix_spawn(&pid, argv[3], NULL, &attr, argv + 3, environ);
+    if (r) { printf("held=no: the program could not be started paused (%d)\n", r); return 2; }
+    printf("held=paused\n");
+  }
+  printf("sandboxed=%d\n", sandbox_check(pid, NULL, 0));
+  printf("port=%d\n", (int)task_for_pid(mach_task_self(), pid, &task));
+  fflush(stdout);
+  if (argv[1][0] == 't') ptrace(PT_CONTINUE, pid, (caddr_t)1, 0);
+  else kill(pid, SIGCONT);
+  waitpid(pid, &st, 0);
+  printf("ended=%d\n", WIFEXITED(st) ? WEXITSTATUS(st) : -WTERMSIG(st));
+  return 0;
+}
+C
+    # held_run <t|s> <library|-> <marker name> <program> [words]: the program started traced or
+    # paused under the wrapper. HELD, BOXED, GIVEN and ENDED are what the launcher printed (GIVEN
+    # is 0 when the task port was given), and LOADED is whether the library wrote its marker.
+    said() { printf '%s\n' "$OUT" | sed -n "s/^$1=//p" | head -n 1; }
+    held_run() {
+      local how="$1" library="$2" mark="$T/loaded.$3"
+      shift 3
+      rm -f "$mark"
+      run "$WRAP" /usr/bin/env MARK_3482="$mark" "$T/held" "$how" "$library" "$@"
+      HELD="$(said held)"; BOXED="$(said sandboxed)"; GIVEN="$(said port)"; ENDED="$(said ended)"
+      if [ -e "$mark" ]; then LOADED=yes; else LOADED=no; fi
+    }
+    if /usr/bin/cc -o "$T/held" "$T/held.c" 2>"$T/cc-held.txt"; then
+      # The control for the task port: a program signed here to allow it, started paused under
+      # the wrapper, whose port IS given to the wrapped command.
+      printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' \
+        '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
+        '<plist version="1.0"><dict><key>com.apple.security.get-task-allow</key><true/></dict></plist>' > "$T/allow.plist"
+      cp "$T/own-prog" "$T/own-allowed"
+      PORT_CONTROL=no
+      HELD="not started"; GIVEN=""
+      if /usr/bin/codesign -s - -f --entitlements "$T/allow.plist" "$T/own-allowed" >"$T/sign.txt" 2>&1; then
+        held_run s - allowed "$T/own-allowed"
+        if [ "$HELD" = paused ] && [ "$GIVEN" = "0" ]; then PORT_CONTROL=yes; fi
+      fi
+      if [ "$PORT_CONTROL" = yes ]; then check "held: with the wrapper the task port of a program signed here to allow it IS given to the wrapped command" ok
+      else echo "SUITE-PART-UNMEASURED whether a wrapped command is refused the task port of a traced or a paused ps: the program to compare with, signed here to allow it and started paused under the wrapper, said held='$HELD' port='$GIVEN' ($(head -c 200 "$T/sign.txt" 2>/dev/null)), so a refusal for ps would prove nothing"; fi
+
+      held_run t "$T/inject.dylib" traced-own "$T/own-prog"
+      if [ "$HELD" = traced ] && [ "$LOADED" = yes ] && [ "$BOXED" = "1" ]; then
+        check "traced: with the wrapper a program compiled here, started traced, is in the sandbox and loads the library named for it" ok
+        held_run t "$T/inject.dylib" traced-ps "$PS_PROG" -o pid= -p "$$"
+        if [ "$HELD" = traced ]; then
+          if [ "$ENDED" = "0" ]; then check "traced: with the wrapper a ps started traced is held, let go and runs to its end" ok
+          else check "traced: with the wrapper a ps started traced is held, let go and runs to its end" "it ended '$ENDED', stderr: ${ERR:0:300}"; fi
+          if [ "$BOXED" = "0" ]; then check "traced: MEASURED, the traced ps is outside the sandbox while the wrapped command holds it" ok
+          else check "traced: MEASURED, the traced ps is outside the sandbox while the wrapped command holds it" "the launcher said sandboxed='$BOXED': the sandbox no longer behaves as no-network-run.sh and the README say, so bring both up to date"; fi
+          if [ "$LOADED" = no ]; then check "traced: with the wrapper the traced ps does not load a library the caller names" ok
+          else check "traced: with the wrapper the traced ps does not load a library the caller names" "the library WAS loaded into a ps that runs outside the sandbox: a wrapped command can run its own code there"; fi
+          if [ "$PORT_CONTROL" = yes ]; then
+            if [ -n "$GIVEN" ] && [ "$GIVEN" != "0" ]; then check "traced: the wrapped command is refused the task port of the traced ps" ok
+            else check "traced: the wrapped command is refused the task port of the traced ps" "the launcher said port='$GIVEN': a wrapped command can take control of a ps that runs outside the sandbox"; fi
+          fi
+        else
+          echo "SUITE-PART-UNMEASURED a traced ps under the wrapper: the launcher said '${HELD:-nothing}' (exit $RC, stderr: ${ERR:0:200})"
+        fi
+      else
+        echo "SUITE-PART-UNMEASURED a traced ps under the wrapper: the control did not hold (a program compiled here, started traced under the wrapper, said held='$HELD' sandboxed='$BOXED', library loaded: $LOADED), so nothing read from a traced ps would prove anything"
+      fi
+
+      held_run s "$T/inject.dylib" paused-own "$T/own-prog"
+      if [ "$HELD" = paused ] && [ "$LOADED" = yes ]; then
+        check "paused: with the wrapper a program compiled here, started paused, loads the library named for it" ok
+        held_run s "$T/inject.dylib" paused-ps "$PS_PROG" -o pid= -p "$$"
+        if [ "$HELD" = paused ]; then
+          if [ "$ENDED" = "0" ]; then check "paused: with the wrapper a ps started paused is held, let go and runs to its end" ok
+          else check "paused: with the wrapper a ps started paused is held, let go and runs to its end" "it ended '$ENDED', stderr: ${ERR:0:300}"; fi
+          if [ "$LOADED" = no ]; then check "paused: with the wrapper the paused ps does not load a library the caller names" ok
+          else check "paused: with the wrapper the paused ps does not load a library the caller names" "the library WAS loaded into a ps that runs outside the sandbox: a wrapped command can run its own code there"; fi
+          if [ "$PORT_CONTROL" = yes ]; then
+            if [ -n "$GIVEN" ] && [ "$GIVEN" != "0" ]; then check "paused: the wrapped command is refused the task port of the paused ps" ok
+            else check "paused: the wrapped command is refused the task port of the paused ps" "the launcher said port='$GIVEN': a wrapped command can take control of a ps that runs outside the sandbox"; fi
+          fi
+        else
+          echo "SUITE-PART-UNMEASURED a paused ps under the wrapper: the launcher said '${HELD:-nothing}' (exit $RC, stderr: ${ERR:0:200})"
+        fi
+      else
+        echo "SUITE-PART-UNMEASURED a paused ps under the wrapper: the control did not hold (a program compiled here, started paused under the wrapper, said held='$HELD', library loaded: $LOADED), so nothing read from a paused ps would prove anything"
+      fi
+    else
+      echo "SUITE-PART-UNMEASURED a traced and a paused ps under the wrapper: /usr/bin/cc could not compile the launcher the cases need ($(head -c 200 "$T/cc-held.txt" 2>/dev/null))"
+    fi
+
     # WHAT THE RULE DOES LET THROUGH, asserted as measured so the wrapper's own account stays true.
     # A process of this user's, started outside the sandbox, with one marker among its arguments
     # and one in its environment.
@@ -1001,7 +1227,7 @@ PY
     else check "environment: LET THROUGH, ps under the wrapper shows another of this user's processes' environment" "it said '$OUT': the sandbox no longer behaves as no-network-run.sh and the README say, so bring both up to date"; fi
     kill "$OTHER" 2>/dev/null; wait "$OTHER" 2>/dev/null
   else
-    echo "SUITE-PART-UNMEASURED whether a library the caller names is loaded into ps, and what ps shows of another process's environment: /usr/bin/cc could not compile the two small programs the cases need ($(head -c 200 "$T/cc.txt" 2>/dev/null))"
+    echo "SUITE-PART-UNMEASURED whether a library the caller names is loaded into ps (started plainly, traced or paused), whether a wrapped command is refused the task port of a ps it holds, and what ps shows of another process's environment: /usr/bin/cc could not compile the two small programs the cases need ($(head -c 200 "$T/cc.txt" 2>/dev/null))"
   fi
 
   # NEW with the rule: the arguments of a process that is NOT this user's. The kernel refuses them
