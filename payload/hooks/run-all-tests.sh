@@ -54,7 +54,7 @@
 #                             to 8, then two thirds of them, #2548)
 #   HOOK_TESTS_CORES          the core count that default is derived from (default: this machine's)
 #   HOOK_TESTS_SLOTS          set BY this script FOR each suite: its share of that budget
-#   HOOK_TESTS_TIMINGS        where each suite's measured wall clock is kept between runs.
+#   HOOK_TESTS_TIMINGS        where each suite's ranked time, check count and share are kept between runs.
 #                             Empty turns the record off entirely: nothing is read, nothing written.
 #   HOOK_TESTS_FLAKY_OUTPUT   where the first, failing run of a suite marked FLAKY is kept, its
 #                             path named on the FAIL line (default
@@ -638,12 +638,14 @@ suite_key(){   # suite_key <suite path> -> the record's file name, or nothing
   printf '%s' "${_sk#"$root"/}" | sed 's/%/%25/g; s#/#%2F#g'
 }
 
-# What that suite was last measured at, or NOTHING. A record that is not a whole number of seconds
+# What that suite's record holds (its ranked figure, check count and share), or NOTHING for each
+# part that is missing or unreadable. A record that is not a whole number of seconds
 # is treated as no record rather than guessed at as a number: the store is a cache, and a corrupt
 # entry there is not a reason to refuse to run the tests. Falling back is safe here in a way it
 # usually is not, because the only thing the record decides is the launch ORDER, and being wrong
 # about that costs wall clock and nothing else.
-# A record is `<seconds>` or `<seconds> <checks>`. It was seconds alone until #219 needed a second
+# A record is `<seconds>`, `<seconds> <checks>` or `<seconds> <checks> <share>`, the last being
+# what every run writes since #3388 (below). It was seconds alone until #219 needed a second
 # perishable number about the same suite, and one record with two fields is the answer rather than
 # a second store: the two facts are written by the same run, read by the same reader, and switched
 # off by the same empty HOOK_TESTS_TIMINGS. A second store would be a second absence to announce
@@ -652,26 +654,65 @@ suite_key(){   # suite_key <suite path> -> the record's file name, or nothing
 # Every record on disk the day this ships holds seconds alone, so the second field is OPTIONAL on
 # the way in and the first is read the same way either way. A reader of one field that refused a
 # record carrying two would have turned the next run into a cold start (L255).
-suite_record_field(){   # suite_record_field <suite path> <1 or 2> -> that field, or nothing
+#
+# The third field is the SHARE the first was measured at, the slots that suite was granted
+# (claude-config#3388), and the first is no longer simply the last wall clock: it is the time at the
+# smallest share the suite has been measured at, kept within what later runs prove. Lane 1 grants
+# the largest share, and a suite that divides its own work by it finishes there in a fraction of its
+# time anywhere else: the sync suite took about 7 minutes in lane 1 and 23 to 27 outside it on the
+# 18 core Mac. Recording the last wall clock alone gave that suite lane 1 on every other run, because
+# each run that gave it the lane recorded it as quick (nine runs in a row on 2026-11-20 and 21, #2589).
+# A record without the third field says nothing about its share and is replaced by the next
+# measurement, the way every record was before. See rank_figure below for the rule.
+suite_record(){   # suite_record <suite path> -> sets _rec_sec, _rec_checks and _rec_share, each a whole number or empty
+  _rec_sec=""; _rec_checks=""; _rec_share=""
   [ -n "$TIMINGS" ] || return 0
   _sr_k="$(suite_key "$1")"
-  [ -n "$_sr_k" ] || return 0
-  _sr_v="$(awk -v f="$2" 'NR == 1 { print $f }' "$TIMINGS/$_sr_k" 2>/dev/null)"
-  case "$_sr_v" in ''|*[!0-9]*) return 0 ;; esac
-  printf '%s' "$_sr_v"
+  [ -n "$_sr_k" ] && [ -f "$TIMINGS/$_sr_k" ] || return 0
+  _sr_1=""; _sr_2=""; _sr_3=""
+  IFS=' ' read -r _sr_1 _sr_2 _sr_3 _sr_rest < "$TIMINGS/$_sr_k" 2>/dev/null || [ -n "$_sr_1" ] || return 0
+  case "$_sr_1" in ''|*[!0-9]*) ;; *) _rec_sec="$_sr_1" ;; esac
+  case "$_sr_2" in ''|*[!0-9]*) ;; *) _rec_checks="$_sr_2" ;; esac
+  # A share is at least one slot, so a zero there, however written, is as unreadable as a word (L50).
+  if _sr_wn="$(whole_above_zero "$_sr_3")"; then _rec_share="$_sr_wn"; fi
 }
 
-suite_seconds(){   # suite_seconds <suite path> -> whole seconds, or nothing
-  suite_record_field "$1" 1
+
+# The figure a suite is ranked by after a run, from what its record held and what this run
+# measured (claude-config#3388). Prints `<seconds> <share>`.
+#
+# A measurement at a share no larger than the figure's replaces it, as does any measurement when
+# there is no figure or nothing says what share the figure was measured at: it is the closer
+# description of what the suite costs in an ordinary lane, which is the question the launch order
+# asks (which suite becomes the tail of the run if it does NOT get lane 1).
+#
+# A measurement at a LARGER share cannot replace it, because it describes a suite given more of the
+# machine. It is still evidence, within two bounds that need no model of how a suite divides its
+# work. More slots never make a suite slower, so the figure is at least what was just measured; and
+# s slots cannot make it more than s/r times quicker than r slots, so the figure is at most the new
+# seconds times new share over the figure's share. The measurement is whole seconds rounded down, so
+# the ceiling uses one second more than it read. The floor raises a suite that got slower; the
+# ceiling brings down a suite that got quicker while lane 1 kept it from being measured anywhere
+# else, which would otherwise keep lane 1 for good on a figure from before it changed.
+#
+# On the 18 core Mac at a budget of 12, lane 1 is 6 slots: the sync suite's 7 minutes there bound
+# its one slot figure between 7 and 42 minutes, and its 23 to 27 minutes at one slot (both measured
+# 2026-11-20 and 2026-11-21, #2589) sit well inside, so an unchanged tree never moves it.
+rank_figure(){   # rank_figure <old seconds> <old share> <new seconds> <new share> -> "<seconds> <share>"
+  local _os="$1" _osh="$2" _ns="$3" _nsh="$4" _hi
+  if [ -z "$_os" ] || [ -z "$_osh" ] || [ -z "$_nsh" ] || [ "$_nsh" -le "$_osh" ]; then
+    printf '%s %s' "$_ns" "$_nsh"
+    return 0
+  fi
+  _hi=$(( ((_ns + 1) * _nsh + _osh - 1) / _osh ))
+  [ "$_os" -ge "$_ns" ] || _os="$_ns"
+  [ "$_os" -le "$_hi" ] || _os="$_hi"
+  printf '%s %s' "$_os" "$_osh"
 }
 
-# How many checks that suite ran last time (claude-config#219), or NOTHING, which is what a first
-# run, a newly added suite and every record written before this field existed all report. Nothing
-# is not zero here and must never be rendered as one: a suite compared against a stored zero has
-# dropped nothing by definition, so the one case this exists to catch would be the one it stayed
-# quiet about (L90, L98).
-suite_checks(){   # suite_checks <suite path> -> whole checks, or nothing
-  suite_record_field "$1" 2
+suite_seconds(){   # suite_seconds <suite path> -> whole seconds (the ranked figure), or nothing
+  suite_record "$1"
+  printf '%s' "$_rec_sec"
 }
 
 # The line printed the moment each suite finishes (claude-config#1979). The report below waits for
@@ -1375,7 +1416,7 @@ if [ "$ran" -gt 0 ]; then
   trap 'runner_cleanup; exit 143' TERM
   trap 'runner_cleanup; exit 129' HUP
 
-  # Launched LONGEST FIRST, judged by what each suite was last MEASURED to cost (#144). Lane 1
+  # Launched LONGEST FIRST, judged by what each suite was MEASURED to cost (#144). Lane 1
   # carries the largest share of the budget and lane 1 is whatever launches first, so this line
   # decides which suite the machine is actually spent on.
   #
@@ -1396,6 +1437,12 @@ if [ "$ran" -gt 0 ]; then
   #
   # Nothing here learns WHICH suite is slow from a list anybody maintains. The record is written
   # by the run itself, at the bottom of this file, from the clock (L96).
+  #
+  # What it ranks by is each suite's time at the smallest share it has been measured at, never the
+  # last wall clock alone (claude-config#3388, rank_figure). Lane 1's grant makes a suite that
+  # divides its work by its share look quick, and ranking by that time gave the sync suite lane 1 on
+  # every other run, which cost about 5 minutes of every other run at a budget of 12 (measured
+  # 2026-11-20 and 2026-11-21, #2589).
   # THE LIVE SPOOL, before anything runs. No suite may write into Dan's real
   # store of subagent findings, and for weeks one did: test-blank-check-cost.sh
   # sourced the spool library and only then set the override, so the location had
@@ -1676,7 +1723,7 @@ LIVECOPY
   # nothing the machine does afterwards can move it.
   echo "run-all-tests: launch order: $(printf '%s\n' "$launch_order" | awk -F"$(printf '\t')" 'NF{printf "%s%s", (NR>1 ? " " : ""), $5}' | sed "s#[^ ]*/##g")"
 
-  lane_pid=()
+  lane_pid=(); share_of=()
   _l=1
   while [ "$_l" -le "$at_once" ]; do lane_pid[$_l]=""; _l=$(( _l + 1 )); done
   while IFS="$(printf '\t')" read -r _have _sec _size idx suite; do
@@ -1751,6 +1798,10 @@ LIVECOPY
       done
       progress_line "$_done_n" "$ran" "${suite##*/}" "$_src" "$(( _run_at + SECONDS ))" ) < /dev/null &
     lane_pid[$lane]=$!
+    # The share it was granted, kept beside its time, because its time means nothing without it: a
+    # suite that divides its work by its share measures a fraction of its ordinary time in lane 1
+    # (claude-config#3388). A variable, not a file, so the runner still writes nothing until the wait.
+    share_of[$idx]="${LANES[$lane]}"
   done <<LAUNCH
 $launch_order
 LAUNCH
@@ -1777,11 +1828,30 @@ LAUNCH
   # (claude-config#219). The order matters and is the whole of it: the write below replaces the
   # record this comparison is against, so reading afterwards would compare every suite with itself
   # and no drop could ever be seen (L105).
-  now_checks=(); prev_checks=()
+  #
+  # And from the same read, the figure each suite will be ranked by from now on (claude-config#3388):
+  # rank_figure of its record and this run's measurement for a suite whose run counts (it measured a
+  # whole number of seconds and left a result line, the same test the writer below applies), or the
+  # figure its record already holds for one that does not. Worked out whether or not the store is
+  # on, because the check further down that names a wrong lead asks the same question the launch
+  # order does and must get the same answer (L261).
+  now_checks=(); prev_checks=(); rank_now=(); rank_share=()
   _ci=0
   for suite in ${suites[@]+"${suites[@]}"}; do
     now_checks[$_ci]="$(suite_result_checks "$(cat "$WORK/$_ci.out" 2>/dev/null)")"
-    prev_checks[$_ci]="$(suite_checks "$suite")"
+    suite_record "$suite"
+    # Empty, never zero, for a first run, a new suite and a record from before #219: a suite
+    # compared against a stored zero has dropped nothing, so a zero here would hide the one case
+    # the comparison exists to catch (L90, L98).
+    prev_checks[$_ci]="$_rec_checks"
+    rank_now[$_ci]="$_rec_sec"; rank_share[$_ci]="$_rec_share"
+    _rn_sec="$(cat "$WORK/$_ci.sec" 2>/dev/null)"
+    case "$_rn_sec:${now_checks[$_ci]}" in
+      *[!0-9:]*|:*|*:) ;;
+      *)
+        _rn_fig="$(rank_figure "$_rec_sec" "$_rec_share" "$_rn_sec" "${share_of[$_ci]:-}")"
+        rank_now[$_ci]="${_rn_fig%% *}"; rank_share[$_ci]="${_rn_fig#* }" ;;
+    esac
     _ci=$((_ci + 1))
   done
 
@@ -1799,6 +1869,7 @@ LAUNCH
         # rather than a fabricated zero, so the next run reads no count for it and says it had
         # none, instead of reporting that everything it had is gone (L90).
         _rc="${now_checks[$_ri]:-}"
+        _rf="${rank_now[$_ri]:-}"; _rs="${rank_share[$_ri]:-}"
         _ri=$((_ri + 1))
         [ -n "$_rk" ] || continue
         case "$_rv" in ''|*[!0-9]*) continue ;; esac
@@ -1819,7 +1890,11 @@ LAUNCH
         # did the work is a better answer than none, and being wrong about launch order costs wall
         # clock and nothing else.
         case "$_rc" in ''|*[!0-9]*) continue ;; esac
-        case "$_rc" in ''|*[!0-9]*) _rline="$_rv" ;; *) _rline="$_rv $_rc" ;; esac
+        # The figure worked out above and the share it stands for, never this run's wall clock
+        # alone (claude-config#3388). A share nobody recorded leaves the record at two fields,
+        # which the next run reads as a figure of unknown share and replaces.
+        case "$_rf" in ''|*[!0-9]*) _rf="$_rv"; _rs="" ;; esac
+        case "$_rs" in ''|*[!0-9]*) _rline="$_rf $_rc" ;; *) _rline="$_rf $_rc $_rs" ;; esac
         _rt="$TIMINGS/.writing.$$.$_rk"
         if printf '%s\n' "$_rline" > "$_rt" 2>/dev/null && mv -f "$_rt" "$TIMINGS/$_rk" 2>/dev/null; then
           :
@@ -2344,12 +2419,31 @@ echo
 #
 # Said only when it is WRONG. A run that led correctly is the ordinary case and a line on every run
 # is one nobody reads (L36).
-if [ -n "$slow_profile" ] && [ -n "${launch_order:-}" ]; then
+#
+# Judged by the figure the launch order itself ranks by, never by this run's wall clock
+# (claude-config#3388). The lead ran in lane 1 with the largest share, so a suite dividing its work
+# by its share finished there sooner than suites it would outlast in any other lane, and comparing
+# wall clocks named a correct lead as wrong: in this run that is what made the next one lead with
+# something else. The figure is what the next run will order by, so this says the lead was wrong
+# exactly when the next run will lead with another suite. Strictly more, so a tie, settled by size,
+# is not called wrong; and a lead with no figure at all is not judged.
+if [ -n "${launch_order:-}" ] && [ -n "${rank_now[*]+set}" ]; then
+  _lead_i="$(printf '%s\n' "$launch_order" | awk -F"$(printf '\t')" 'NR == 1 { print $4 }')"
   _lead_first="$(printf '%s\n' "$launch_order" | awk -F"$(printf '\t')" 'NR == 1 { print $5 }')"
   _lead_first="${_lead_first##*/}"
-  _lead_slowest="$(printf '%s' "$slow_profile" | sort -r | awk -F"$(printf '\t')" 'NR == 1 { print $2 }')"
+  _lead_fig="${rank_now[${_lead_i:-0}]:-}"
+  _lead_slowest=""; _lead_top="$_lead_fig"
+  _li=0
+  for suite in ${suites[@]+"${suites[@]}"}; do
+    _lf="${rank_now[$_li]:-}"
+    case "$_lf:$_lead_top" in
+      *[!0-9:]*|:*|*:) ;;
+      *) if [ "$_lf" -gt "$_lead_top" ]; then _lead_top="$_lf"; _lead_slowest="${suite##*/}"; fi ;;
+    esac
+    _li=$((_li + 1))
+  done
   if [ -n "$_lead_first" ] && [ -n "$_lead_slowest" ] && [ "$_lead_first" != "$_lead_slowest" ]; then
-    echo "run-all-tests: the suite launched first is not the one that took longest: it led with $_lead_first and $_lead_slowest took the longest."
+    echo "run-all-tests: the suite launched first is not the one that costs the most: it led with $_lead_first and $_lead_slowest costs more (${_lead_top}s against ${_lead_fig}s, each at the smallest share it has been measured at)."
     echo "  Lane 1 carries the largest share of the budget and is whatever launches first, so this run spent the machine on the wrong suite."
     echo "  The order comes from $TIMINGS. A record there that measured a refusal rather than a run is how this happens (#229)."
   fi

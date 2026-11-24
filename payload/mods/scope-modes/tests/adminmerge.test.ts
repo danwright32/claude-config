@@ -1,6 +1,6 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
-import { adminEndpoints, ghApiOf, judgeAdminMerge, pinnedOf, type GhJson } from '../hooks/adminmerge.ts'
+import { adminEndpoints, adminMergeNightRefusal, ghApiOf, judgeAdminMerge, pinnedOf, type GhJson } from '../hooks/adminmerge.ts'
 import type { ModKitGh } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import { readCommands } from './read.ts'
 import { linkRepo } from './mod-kit/hooks/repo.ts'
@@ -81,6 +81,31 @@ describe('the repository must opt in, and its night must let it merge', () => {
     expect(await judge(PINNED, green(), nightWith({ repo: 'o/r', mergeDeploys: true, adminMerge: 'green-pinned' }), asked)).toBe('admin merge a PR in o/r, where a merge deploys, so it is never merged overnight')
     expect(await judge(PINNED, green(), nightWith({ repo: 'o/r', mergeDeploys: 'unknown', adminMerge: 'green-pinned' }), asked)).toBe('admin merge a PR in o/r, where whether a merge deploys is not recorded, so it is never merged overnight')
     expect(asked).toEqual([])
+  })
+  // #3534: the merge helper asks the same judgement before the bypass merge it sends itself, with
+  // no command to read, so what the lists alone answer is one function both go through.
+  test('what the lists alone answer is one judgement, which judgeAdminMerge asks first and the merge helper asks too', async () => {
+    expect(adminMergeNightRefusal(NIGHT, 'o/r')).toBeUndefined()
+    expect(adminMergeNightRefusal(NIGHT, 'O/R')).toBeUndefined()
+    const nights: unknown[] = [
+      nightWith({ repo: 'o/r', mergeDeploys: false }),
+      { mayDeploy: ['o/r'], mergeOnly: [], closed: [] },
+      nightWith(OPTED, { waitOwners: ['O'] }),
+      nightWith(OPTED, { closed: [{ repo: 'o/r', why: 'the question about o/r was left unanswered at bedtime' }] }),
+      nightWith({ repo: 'x/y', mergeDeploys: false, adminMerge: 'green-pinned' }),
+      nightWith({ repo: 'o/r', mergeDeploys: true, adminMerge: 'green-pinned' }),
+      nightWith({ repo: 'o/r', mergeDeploys: 'unknown', adminMerge: 'green-pinned' }),
+      null,
+      { mayDeploy: [], mergeOnly: 'o/r' },
+    ]
+    for (const night of nights) {
+      const no = adminMergeNightRefusal(night, 'o/r')
+      expect(no).toMatch(/^admin merge a PR in o\/r, /)
+      // A command that would pass every other check is refused in the same words, and GitHub is never asked.
+      const asked: string[] = []
+      expect(await judgeAdminMerge(night, gh(PINNED), 'o/r', apiOf(green(), asked), linkRepoOf)).toBe(no)
+      expect(asked).toEqual([])
+    }
   })
 })
 
