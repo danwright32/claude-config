@@ -46,7 +46,7 @@ import {
   type Scripts,
 } from './mergedeploy.ts'
 import { NEVER_ASKED, overnightRefusal, primaryFrom, readableWay, repoFromRemotes, type GithubOf, type Look } from './overnight.ts'
-import { branchFolder, checkoutFolder, gitEnvNamed, gitRead, type GitRead } from './gitplace.ts'
+import { branchFolder, checkoutApart, checkoutFolder, gitEnvNamed, gitRead, type GitRead } from './gitplace.ts'
 import { committedHosts, groupAfter, tabsAfter, type Browser, type BrowserTabs, type TabsAcross, type TestHosts } from './browser.ts'
 import { wakeCheck, workedOn } from './wakecheck.ts'
 import { lastSource, powerChange, powerOf, sleepRefusal, type Power } from './power.ts'
@@ -5156,17 +5156,32 @@ const patchedFiles = async ($: EngineInterface, writes: ModKitWrites, raw: strin
   // every rule reads them (readCommands), each with its git reading, so what is plain data to the
   // other rules (a commit's message) is plain data here too (the review of #3532).
   let envNamed: boolean | undefined
+  let cmds: Cmd[] | undefined
+  // What names a patch's repository apart, for the first one in the call that is (see below).
+  let apart: string | undefined
   for (const u of writes.unnamed) {
     if (u.what !== 'a patch') continue
     const g = await $.modkit.git({ words: u.words })
     if (g?.sub !== 'apply' && g?.sub !== 'am') continue
     if (envNamed === undefined) await gitNamingKnown($)
-    envNamed ??= gitEnvNamed(raw, await readCommands($, raw))
-    const root = await gitCheckout($, gitRead(g), envNamed)
-    if (!root) continue
+    cmds ??= await readCommands($, raw)
+    envNamed ??= gitEnvNamed(raw, cmds)
+    // The command's own reading among the call's commands, which carries the settings in front of
+    // it, where the call holds it word for word; else the reading of its words alone.
+    const reading = cmds.find(c => c.git && c.words.length === u.words.length && c.words.every((w, i) => w === u.words[i]))?.git ?? gitRead(g)
+    const root = await gitCheckout($, reading, envNamed)
+    if (!root) {
+      apart ??= checkoutApart(reading, envNamed)
+      continue
+    }
     const texts = await inputTexts({ exists: p => $.fs.exists(p), stat: (p, o) => $.fs.stat(p, o), read: p => $.fs.read(p) }, u.inputs)
     for (const t of texts) for (const p of patchedPaths(g.args, true, t)) out.push(`${root}/${p}`)
   }
+  // A patch applied in a repository or a working folder named apart lands where only git can say,
+  // so its files are not counted, and that is said: one line a call, as the branch note says a
+  // commit named apart (the review of #3532; until then it dropped with no word). A folder that
+  // only cannot be followed names no checkout without a word, as it always did.
+  if (apart) $.ui.toast(`Scope modes could not tell which files the patch this call applied changed (${apart}), so winding down may not count them as this session's.`)
   return out
 }
 
@@ -5177,6 +5192,8 @@ let stashSaid = false
 const stashedFiles = async ($: EngineInterface, raw: string): Promise<string[]> => {
   if (!/\bstash\b/.test(raw)) return []
   const out: string[] = []
+  // What names a stash's repository apart, for the first one in the call that is.
+  let apart: string | undefined
   try {
     const cmds = await readCommands($, raw)
     const envNamed = gitEnvNamed(raw, cmds)
@@ -5184,7 +5201,10 @@ const stashedFiles = async ($: EngineInterface, raw: string): Promise<string[]> 
       const ref = c.git?.sub === 'stash' ? stashTaken(c.git.args) : undefined
       if (!ref || !c.git) continue
       const root = await gitCheckout($, c.git, envNamed)
-      if (!root) continue
+      if (!root) {
+        apart ??= checkoutApart(c.git, envNamed)
+        continue
+      }
       // -z: one name per NUL, never quoted, so a name with a space or an accent is read as it is.
       const r = await run($, ['git', '-C', root, 'stash', 'show', '--include-untracked', '--name-only', '-z', ref])
       if (r.exitCode !== 0) throw new Error(r.stderr.trim() || `git stash show exited ${r.exitCode}`)
@@ -5196,6 +5216,11 @@ const stashedFiles = async ($: EngineInterface, raw: string): Promise<string[]> 
     else $.ui.toast(`${said} Later failures go to the debug log.`)
     stashSaid = true
   }
+  // A stash taken in a repository or a working folder named apart is read from no checkout, so its
+  // files are not counted, and that is said: one line a call, as the branch note says a commit
+  // named apart (the review of #3532; until then it dropped with no word). Said whether or not
+  // another stash in the call could not be read, which is its own cause and has its own line.
+  if (apart) $.ui.toast(`Scope modes could not tell which files the stash this call takes holds (${apart}), so winding down may not count them as this session's.`)
   return out
 }
 

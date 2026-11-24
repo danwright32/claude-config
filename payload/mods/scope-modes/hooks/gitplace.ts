@@ -240,3 +240,12 @@ export const checkoutFolder = (g: GitRead, cwd: string, envNamed: boolean): stri
   const p = gitPlace(g, cwd, (w, from) => (/[$`]/.test(w) || from === null ? null : w.startsWith('/') ? w : `${from}/${w}`), envNamed)
   return gitFolder(p)
 }
+
+/**
+ * What names a command's repository or working folder apart, in words, where that is why
+ * `checkoutFolder` names no checkout for it: a note dropped for that is said, as the branch note
+ * says its own (the review of #3532; until then a stash or a patch named apart dropped its note
+ * with no word). Undefined where nothing is named apart, so for a folder that only cannot be
+ * followed, which names no checkout without a word, as it always did.
+ */
+export const checkoutApart = (g: GitRead, envNamed: boolean): string | undefined => gitPlace(g, null, () => null, envNamed).apart?.said

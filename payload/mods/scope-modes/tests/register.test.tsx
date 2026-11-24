@@ -8271,6 +8271,68 @@ for (const [how, line, extra] of [
     expect((await stop($ as never)).block ?? '').not.toContain('app.ts')
   })
 
+// The review of #3532: each of those dropped with no word, so winding down stopped counting files
+// that may be this session's and nobody was told. Each is said as the branch note beside them says
+// its own: one line a call, with what names the repository or the working folder apart.
+const APART = {
+  repository: 'it names its repository apart from the folder it runs in (--git-dir or GIT_DIR)',
+  workingFolder: 'it names its working folder apart from the folder it runs in (--work-tree or GIT_WORK_TREE)',
+  elsewhere: 'the call names GIT_DIR, GIT_WORK_TREE or GIT_COMMON_DIR somewhere other than as a setting on the git command itself',
+}
+const stashUntold = (why: string) => `Scope modes could not tell which files the stash this call takes holds (${why}), so winding down may not count them as this session's.`
+const patchUntold = (why: string) => `Scope modes could not tell which files the patch this call applied changed (${why}), so winding down may not count them as this session's.`
+const notCounted = (w: { toasts: string[] }) => w.toasts.filter(t => t.includes('so winding down may not count them'))
+for (const [how, line, extra, said] of [
+  ['a stash popped in a repository named by its options', 'git --git-dir=/other/.git --work-tree=/other stash pop', { stash: ['app.ts'] }, stashUntold(APART.repository)],
+  ['a stash popped in a repository named by GIT_DIR', 'GIT_DIR=/other/.git GIT_WORK_TREE=/other git stash pop', { stash: ['app.ts'] }, stashUntold(APART.repository)],
+  ['a stash popped with a working folder named apart', 'git --work-tree=/other stash apply', { stash: ['app.ts'] }, stashUntold(APART.workingFolder)],
+  ['a stash popped after GIT_DIR is exported', 'export GIT_DIR=/other/.git; git stash pop', { stash: ['app.ts'] }, stashUntold(APART.elsewhere)],
+  ['a patch applied in a repository named by its options', 'git --git-dir=/other/.git --work-tree=/other apply /tmp/fix.patch', { files: { '/tmp/fix.patch': PATCH } }, patchUntold(APART.repository)],
+  ['a patch applied in a repository named by GIT_DIR', 'GIT_DIR=/other/.git git apply /tmp/fix.patch', { files: { '/tmp/fix.patch': PATCH } }, patchUntold(APART.repository)],
+  ['a patch applied with a working folder named by GIT_WORK_TREE', 'GIT_WORK_TREE=/other git apply /tmp/fix.patch', { files: { '/tmp/fix.patch': PATCH } }, patchUntold(APART.workingFolder)],
+  ['a patch applied after GIT_WORK_TREE is exported', 'export GIT_WORK_TREE=/other; git apply /tmp/fix.patch', { files: { '/tmp/fix.patch': PATCH } }, patchUntold(APART.elsewhere)],
+] as [string, string, Opts, string][])
+  test(`${how} says in one line that its files are not counted, with what names it apart (#3532 review)`, withDeps, async ($, on) => {
+    const { w, clock } = world(on, { branch: 'main', dirty: ['/repo'], dirtyFiles: ['app.ts'], ...extra })
+    await start($ as never, clock)
+    expect(await call($ as never, bash(line, 'g1'))).toBe('ran')
+    expect(notCounted(w)).toEqual([said])
+  })
+
+test('two stashes taken in one call, each named apart, are said in one line, and a later call says its own again (#3532 review)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { branch: 'main', dirty: ['/repo'], dirtyFiles: ['app.ts'], stash: ['app.ts'] })
+  await start($ as never, clock)
+  expect(await call($ as never, bash('git --git-dir=/other/.git stash pop; git --work-tree=/third stash apply', 'g1'))).toBe('ran')
+  expect(notCounted(w)).toEqual([stashUntold(APART.repository)])
+  expect(await call($ as never, bash('git --work-tree=/third stash apply', 'g2'))).toBe('ran')
+  expect(notCounted(w)).toEqual([stashUntold(APART.repository), stashUntold(APART.workingFolder)])
+})
+
+test('two patches applied in one call, each named apart, are said in one line, and a later call says its own again (#3532 review)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { branch: 'main', dirty: ['/repo'], dirtyFiles: ['app.ts'], files: { '/tmp/fix.patch': PATCH } })
+  await start($ as never, clock)
+  expect(await call($ as never, bash('git --git-dir=/other/.git apply /tmp/fix.patch; git --work-tree=/third apply /tmp/fix.patch', 'g1'))).toBe('ran')
+  expect(notCounted(w)).toEqual([patchUntold(APART.repository)])
+  expect(await call($ as never, bash('git --work-tree=/third apply /tmp/fix.patch', 'g2'))).toBe('ran')
+  expect(notCounted(w)).toEqual([patchUntold(APART.repository), patchUntold(APART.workingFolder)])
+})
+
+// The controls: a stash or a patch in this session's checkout is counted and nothing is said, and
+// one whose folder the shell fills in names no checkout without a word, as it always did.
+for (const [line, extra] of [
+  ['git stash pop', { stash: ['app.ts'] }],
+  ['git -C /repo stash pop', { stash: ['app.ts'] }],
+  ['git -C "$W" stash pop', { stash: ['app.ts'] }],
+  ['git apply /tmp/fix.patch', { files: { '/tmp/fix.patch': PATCH } }],
+  ['git -C "$W" apply /tmp/fix.patch', { files: { '/tmp/fix.patch': PATCH } }],
+] as [string, Opts][])
+  test(`the control: ${line} names no repository apart, so nothing is said of it (#3532 review)`, withDeps, async ($, on) => {
+    const { w, clock } = world(on, { branch: 'main', dirty: ['/repo'], dirtyFiles: ['app.ts'], ...extra })
+    await start($ as never, clock)
+    expect(await call($ as never, bash(line, 'g1'))).toBe('ran')
+    expect(notCounted(w)).toEqual([])
+  })
+
 // The review of #3532: whether a call names a git variable is asked of one reading everywhere. The
 // patch note asked it of the reader's commands without their git reading, so a commit message
 // quoting `GIT_DIR=` beside a patch was plain data to every rule but this note.
