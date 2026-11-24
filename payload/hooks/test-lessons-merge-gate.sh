@@ -290,7 +290,8 @@ run_hook "$MERGE 7 --squash"
 expect_deny "thirty entries changed: refused, naming the count" "30 entries changed (between L1 and L30)."
 expect_deny "a sweep is asked for the change in the session's words" 'a line starting "The change: "'
 if [ "$(printf '%s' "$reason" | grep -c 'AskUserQuestion')" = 1 ] && [ "$(printf '%s' "$reason" | grep -c '^Pull request #7')" = 1 ]; then pass; else fail "a sweep names ONE picker with one facts line: $reason"; fi
-if printf '%s' "$reason" | grep -q '^L1: '; then fail "a sweep does not list every rule: $reason"; else pass; fi
+nl=$'\n'
+case "$nl$reason" in *"${nl}L1: "*) fail "a sweep does not list every rule: $reason" ;; *) pass ;; esac
 sweep="$reason"; said sweep-of-thirty
 answer "$sweep"
 run_hook "$MERGE 7 --squash"

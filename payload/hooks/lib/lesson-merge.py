@@ -206,7 +206,10 @@ def missing(question, lines, sweep):
 
 def _approval():
     import importlib.util
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "db-apply-approval.py")
+    # Loading a lib file with bytecode on would leave a __pycache__ in a folder the sync carries
+    # (#2600).
+    sys.dont_write_bytecode = True
+    path =os.path.join(os.path.dirname(os.path.abspath(__file__)), "db-apply-approval.py")
     spec = importlib.util.spec_from_file_location("db_apply_approval", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
