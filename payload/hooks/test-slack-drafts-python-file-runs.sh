@@ -30,7 +30,10 @@
 #     shell filling part of it in or not), are each refused as unread where typed;
 #   * an error inside the reading refuses the call (seen to fail against a copy of the library that
 #     swallowed the error, on 2026-11-22);
-#   * a judgement kept in the cache does not outlive the file it read.
+#   * a judgement kept in the cache does not outlive the file it read;
+#   * python3 handed a folder in place of a script is judged by the __main__.py it runs, and handed
+#     an archive, a path under one, or a folder whose __main__ is not text, is refused as unread
+#     where typed (claude-config#3441; the cases and what was measured are at the end).
 set -uo pipefail
 
 # Its own wall clock, and whatever it starts stopped with it however it ends (claude-config#465).
@@ -572,6 +575,14 @@ p_pair "cd DIR && python3 ." pkg qpkg
 p_pair "cd sub && python3 ../DIR" pkg qpkg
 p_pair "bash -c 'python3 DIR'" pkg qpkg
 p_pair "bash runs-DIR.sh" pkg qpkg
+# A pattern the shell fills in with the folder before python3 starts.
+p_pair "python3 DIR*" pk qpk
+p_run "python3 {pkg,qpkg}"
+read_refused "#3441 a brace pattern naming the folder whose __main__.py posts is refused"
+p_run "python3 {qpkg,nomain}"
+allowed "#3441 and one naming only folders that post nothing passes"
+p_run "python3 'pk*'"
+allowed "#3441 a quoted pattern is python3's own text, which names no folder, and passes"
 # A folder an earlier command of the same call makes.
 p_run "mkdir made && cp posts.py made/__main__.py && python3 made"
 read_refused "#3441 a folder the same command makes around a file that posts is refused"
@@ -633,6 +644,7 @@ if [ -s "$P/app.zip" ] && [ -s "$P/quiet.zip" ] && [ -s "$P/deep.zip" ] && [ -s 
   unread_3441 "python3 handed an archive is refused whatever it holds, so one that posts nothing" "python3 quiet.zip"
   unread_3441 "an archive by its full path" "python3 $P/quiet.zip"
   unread_3441 "an archive behind options" "python3 -I -X dev quiet.zip"
+  unread_3441 "an archive a pattern names" "python3 quiet.z*"
   unread_3441 "an archive with a #! line in front" "python3 quiet.pyz"
   unread_3441 "an archive with a Python file's text in front" "python3 front.py"
   unread_3441 "an archive under a name that says Python" "python3 named.py"
@@ -668,6 +680,42 @@ if [ -s "$P/app.zip" ] && [ -s "$P/quiet.zip" ] && [ -s "$P/deep.zip" ] && [ -s 
 else
   check "#3441 the archives for these cases could be made" "python3 -m zipfile, zipapp or py_compile made nothing, so the cases were not run"
 fi
+
+echo "slack drafts only: an error while reading what python3 is handed refuses the call (claude-config#3441)"
+
+# As for #3397 above: the gate's own code, with the step that says what a path runs made to fail on
+# a marker in the path. The control is the same copy on a path without it.
+mkdir -p "$T/failing3441" "$P/fails3441"
+cp "$HOOK" "$T/failing3441/slack-drafts-only-gate.sh"
+ln -s "$DIR/lib" "$T/failing3441/lib"
+cat > "$T/failing3441/slack_drafts_only_gate.py" <<'PY'
+import importlib.util, os
+spec = importlib.util.spec_from_file_location("gate", os.environ["REAL_GATE_3441"])
+gate = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gate)
+real = gate.Judge.py_handed
+def failing(self, path, *a, **k):
+    if "fails3441" in path:
+        raise RuntimeError("made to fail by the suite")
+    return real(self, path, *a, **k)
+gate.Judge.py_handed = failing
+gate.main()
+PY
+run_failing_3441() { # run_failing_3441 <command>: judged by the copy whose reading fails on fails3441
+  local errf; errf="$(mktemp "${TMPDIR:-/tmp}/slack-gate-err.XXXXXXXX")"
+  OUT="$(payload Bash "$(bash_input "$1")" "$P" | REAL_GATE_3441="$DIR/slack_drafts_only_gate.py" bash "$T/failing3441/slack-drafts-only-gate.sh" 2>"$errf")"; RC=$?
+  ERR="$(cat "$errf")"; rm -f "$errf"
+}
+run_failing_3441 "python3 qpkg"
+allowed "#3441 the copy made to fail judges a quiet folder as the gate does where nothing fails"
+run_failing_3441 "python3 -c \"import runpy; runpy.run_path('qpkg')\""
+allowed "#3441 and code that runs the quiet folder by its path"
+run_failing_3441 "python3 -c \"import runpy; runpy.run_path('fails3441')\""
+refused "#3441 a reading of a path code runs that fails part way is refused, not taken as a path that runs nothing"
+says "#3441 and that refusal says the call could not be judged" "could not judge"
+run_failing_3441 "python3 fails3441"
+refused "#3441 a reading of the folder python3 is handed that fails part way is refused"
+says "#3441 and that refusal says the call could not be judged" "could not judge"
 
 echo
 
