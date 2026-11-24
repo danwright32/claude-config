@@ -55,6 +55,13 @@ import {
   editWouldNotApply,
   outputTrusted,
   argumentUnreached,
+  handedToUnknown,
+  withoutOwnCalls,
+  readInFile,
+  type OwnCallIo,
+  ownBudget,
+  calledWith,
+  ownDefinitions,
   type RunCommand,
   argvStart,
   argvIndex,
@@ -121,6 +128,7 @@ import {
   MODULES_MAX,
 } from '../hooks/rules.ts'
 import { commandWrites, pipelineIn } from './mod-kit/hooks/writes.ts'
+import { pipeline } from './mod-kit/hooks/commands.ts'
 import { tempWord } from '../hooks/mod-kit/scriptvars.ts'
 import * as allRules from '../hooks/rules.ts'
 import { HELD_2141_AFTER, HELD_2141_BEFORE } from './held-2141-fixture.ts'
@@ -3302,10 +3310,150 @@ test('#3280: plainLine is a line that groups nothing, whatever it quotes', () =>
     'case x in x) git checkout origin/main -- f.tsx;; esac | git fetch',
     'time git checkout origin/main -- f.tsx | git fetch',
     'coproc git fetch; git checkout origin/main -- f.tsx',
-    // A parenthesis in quotes is not told from one that groups, so it is none either.
+    // Without the reader's account of the line (#3401), a parenthesis in quotes is not told from
+    // one that groups, so it is none either.
     'git checkout origin/main -- f.tsx && bun test | grep -E "(fail|pass)"',
   ])
     expect({ line, plain: plainLine(line) }).toEqual({ line, plain: false })
+})
+
+// #3401: #3280 read any brace, parenthesis or backtick anywhere in a call's text as grouping, so a
+// restore followed by a test piped through a search for "(fail|pass)" stayed held, though the
+// parentheses sit inside a quoted pattern and group nothing. Given mod-kit's own reading of the
+// line, plainLine reads such a character as text where that reading shows it so: every command is
+// one of the line's own, standing where it is typed, and every word holding such a character is
+// marked as handed on as its characters (literal: each pattern character quoted or after a
+// backslash, and no $ or backtick anywhere in the word). Each line here is read by the real reader.
+const R_3401 = 'git checkout origin/main -- f.tsx'
+const plain3401 = (line: string) => plainLine(line, pipeline(line))
+
+test('#3401: plainLine reads a quoted or escaped grouping character as text, by the reader\'s own account of the line', () => {
+  for (const line of [
+    // The issue's own line, and the same in single quotes.
+    `${R_3401} && bun test | grep -E "(fail|pass)"`,
+    `${R_3401} && bun test | grep -E '(fail|pass)'`,
+    `${R_3401} && claude plugin test payload/mods/demo 2>&1 | grep -E "(fail|pass)" | tail -3`,
+    // In a word of the test command itself.
+    `${R_3401} && bun test -t "renders (dark)" | tail -3`,
+    // A quoted brace, and one in a program for awk or sed, which no shell reads.
+    `${R_3401} && bun test | grep -E "a{2}"`,
+    `${R_3401} && bun test | awk '{print}'`,
+    `${R_3401} && bun test | sed -E 's/(pass|fail)/x/'`,
+    // After a backslash, outside quotes and inside double quotes.
+    `${R_3401} && bun test | grep fail\\(`,
+    `${R_3401} && bun test | grep "\\(a\\)"`,
+    // Joined by each of the ways a plain line joins commands, a cd and a setting beside them.
+    `${R_3401}; bun test | grep "(x)"`,
+    `${R_3401}\nbun test | grep "(x)"`,
+    `${R_3401} || bun test | grep "(x)"`,
+    `cd app && ${R_3401} && CI=1 bun test $FILES | grep "(x)"`,
+    // A quote that never ends: bash and zsh refuse the command it is in and run nothing of it
+    // (measured 2026-11-22, bash 3.2 and zsh 5.9, as -c text and through eval).
+    `${R_3401} && bun test | grep '(x`,
+  ])
+    expect({ line, plain: plain3401(line) }).toEqual({ line, plain: true })
+  // What already was plain still is, with the reading or without.
+  for (const line of [`${R_3401} && claude plugin test x 2>&1 | tail -5`, `git status; ${R_3401} || echo no`])
+    expect({ line, plain: plain3401(line), unread: plainLine(line) }).toEqual({ line, plain: true, unread: true })
+})
+
+test('#3401: plainLine still reads as grouping every character the shell, or a shell handed the text, may read as one', () => {
+  for (const line of [
+    // A subshell, a group, and a pipe out of either.
+    `${R_3401} && (bun test | tail)`,
+    `(${R_3401}) | git fetch`,
+    `${R_3401} && { bun test; } | tail`,
+    `{ ${R_3401}; } | git fetch`,
+    `${R_3401} && bun test | grep "(x)" | (cat)`,
+    `${R_3401} && { bun test | grep "(x)"`,
+    // A command the shell runs to fill in a word: double quotes do not stop one.
+    `${R_3401} && echo $(git fetch) | tail`,
+    `${R_3401} && echo "$(git fetch)" | tail`,
+    `${R_3401} && echo \`git fetch\` | tail`,
+    `${R_3401} && echo "\`git fetch\`" | tail`,
+    `X=$(git fetch) ${R_3401} | tail`,
+    // A backtick in single quotes runs nothing, but no mark of the reader says so of a word.
+    `${R_3401} && echo '\`git fetch\`' | tail`,
+    // A process substitution, bash's and zsh's.
+    `${R_3401} && diff <(git fetch) f.tsx | tail`,
+    `${R_3401} > >(git fetch)`,
+    `${R_3401} && diff =(git fetch) f.tsx | tail`,
+    // Arithmetic, as a word and as a command.
+    `${R_3401} && echo $((1+2)) | tail`,
+    `${R_3401} && (( x = 1 )) | tail`,
+    // A function, and what it is defined with.
+    `f() { bun test; }; ${R_3401} && f | tail`,
+    `function f { bun test; }; ${R_3401} && f | grep "(x)"`,
+    // Every word a compound command is written with, a quoted parenthesis beside it.
+    `if ${R_3401}; then bun test | grep "(x)"; fi`,
+    `for f in a; do ${R_3401}; done | grep "(x)"`,
+    `while ${R_3401}; do break; done | grep "(x)"`,
+    `until ${R_3401}; do break; done | grep "(x)"`,
+    `case x in x) ${R_3401};; esac | grep "(x)"`,
+    `select f in a; do ${R_3401}; done | grep "(x)"`,
+    `coproc git fetch; ${R_3401} | grep "(x)"`,
+    `time ${R_3401} | grep "(x)"`,
+    // A heredoc's body, read by the shell or not.
+    `${R_3401} && cat <<EOF | tail\n(a)\nEOF`,
+    `${R_3401} && cat <<'EOF' | tail\n(a)\nEOF`,
+    // Text another shell reads is code: eval, a shell's -c, xargs, find's -exec, ssh, a trap, an alias.
+    `${R_3401} && eval "(bun test)" | tail`,
+    `${R_3401} && bash -c '(bun test) | tail'`,
+    `${R_3401} && bash -c 'echo "(x)"' | tail`,
+    `${R_3401} && sh -c 'echo "(x)"' | tail`,
+    `${R_3401} && zsh -c 'echo "(x)"' | tail`,
+    `${R_3401} && bash -c "$X" | grep "(x)"`,
+    `${R_3401} && ls | xargs -I'{}' echo '{}'`,
+    `${R_3401} && find . -exec echo '{}' \\; | tail`,
+    `${R_3401} && ssh host '(x)' | tail`,
+    `${R_3401} && trap '(x)' EXIT | tail`,
+    `${R_3401} && alias x='(a)' | tail`,
+    // A command run behind another (the reader says which, never whether that one is a shell).
+    `${R_3401} && timeout 5 bun test | grep "(x)"`,
+    `${R_3401} && sudo bun test | grep "(x)"`,
+    `${R_3401} && rtk proxy bun test | grep "(x)"`,
+    // A parenthesis in an unquoted pattern, and braces that make more words.
+    `${R_3401} && ls @(a|b) | tail`,
+    `${R_3401} && ls !(x) | tail`,
+    `${R_3401} && ls *(.) | tail`,
+    `${R_3401} && ls {a,b} | tail`,
+    `${R_3401} && ls a{1,2}.tsx | grep "(x)"`,
+    // Inside a test, a parenthesis groups what is tested.
+    `${R_3401} && [[ ( -n a ) ]] | tail`,
+    // A word holding a $ is never read as text: in double quotes the shell expands it, and for one
+    // in single quotes no mark of the reader says its braces are quoted too (awk's own program).
+    `${R_3401} && echo "$HOME (x)" | tail`,
+    `${R_3401} && bun test | grep "\${X}(a)"`,
+    `${R_3401} && bun test | awk '{print $1}'`,
+    // The reader does not read a $'...' string, whose \\' does not end it: here the shell runs the
+    // group, and the reader gives one quoted word. Any line holding such a string is not plain.
+    `${R_3401} && echo $'\\' x' | (git fetch; cat) #'`,
+    `${R_3401} && echo $'(a)' | tail`,
+    `${R_3401} && bun test | grep 'x$' | grep "(a)"`,
+    // What the reader leaves out of a command's words: a comment, and a setting's value.
+    `${R_3401} && bun test | tail # (x)`,
+    `${R_3401} && bun test | grep "(x)" # \`git fetch\``,
+    `${R_3401} && X="(a)" bun test | tail`,
+  ])
+    expect({ line, plain: plain3401(line) }).toEqual({ line, plain: false })
+  // No reading given, as when the reader could not read the line.
+  expect(plainLine(`${R_3401} && bun test | grep "(x)"`)).toBe(false)
+  // A reading that does not account for the text: a mark this rule does not know, a word with the
+  // character and no mark, a character no word holds, and a word holding one more than the text.
+  const line = `${R_3401} && bun test | grep "(x)"`
+  const read = [{ words: ['git', 'checkout', 'origin/main', '--', 'f.tsx'] }, { words: ['bun', 'test'] }, { words: ['grep', '(x)'], pipedFrom: ['bun', 'test'], literal: [false, true] }]
+  expect(plainLine(line, read)).toBe(true)
+  expect(plainLine(line, read.map((c, i) => (i === 1 ? { ...c, groupedSomeNewWay: true } : c)))).toBe(false)
+  for (const mark of ['substitution', 'arithmetic', 'xargs', 'proxied'])
+    expect({ mark, plain: plainLine(line, read.map((c, i) => (i === 2 ? { ...c, [mark]: true } : c))) }).toEqual({ mark, plain: false })
+  for (const mark of ['behind', 'found', 'heredocs', 'derived', 'worked', 'compares'])
+    expect({ mark, plain: plainLine(line, read.map((c, i) => (i === 2 ? { ...c, [mark]: [] } : c))) }).toEqual({ mark, plain: false })
+  expect(plainLine(line, read.map((c, i) => (i === 2 ? { ...c, unread: 'run as text by eval' } : c)))).toBe(false)
+  expect(plainLine(line, read.map(c => ({ words: c.words, pipedFrom: c.pipedFrom })))).toBe(false)
+  expect(plainLine(line, read.map((c, i) => (i === 2 ? { ...c, literal: [false, false] } : c)))).toBe(false)
+  expect(plainLine(line, read.slice(0, 2))).toBe(false)
+  expect(plainLine(line, [...read, { words: ['echo', '(y)'], literal: [false, true] }])).toBe(false)
+  expect(plainLine(`${line} | grep ")("`, [...read, { words: ['grep', '(('], literal: [false, true] }])).toBe(false)
 })
 
 test('#3280: holdsAsFile reads git ls-tree as holding exactly the one file asked for', () => {
@@ -3408,6 +3556,664 @@ test('#2924: argumentUnreached finds no route to a write in a script writing onl
   expect(commandWrites('mystery /s/app/page.tsx', '/s', '/h').runs?.map(r => r.unknown)).toEqual([true])
   expect(unreached(`${BASE_2924}mystery /s/app/page.tsx\n`)).toBeUndefined()
   expect(unreached(`${BASE_2924}python3 -m json.tool "$like"\n`)).toBe('it hands another script its words')
+  // #3416: the file such a run names is judged as a write of it by handedToUnknown, below, so it is
+  // still no route here. What the script was handed, passed on to such a program, is a known limit
+  // and still no route: the reader gives `case`, `[[`, `exit`, `shift` and `basename` as programs it
+  // does not know, so reading every one handed `$1` as a route holds nearly every script again, and
+  // telling them apart takes a list only Dan may add to.
+  expect(unreached(`${BASE_2924}mystery "$like"\n`)).toBeUndefined()
+  expect(unreached(`${BASE_2924}case "$1" in a) shift ;; esac\n`)).toBeUndefined()
+})
+
+// #3416: each file a shell script's own text hands a program the write reader does not know, by a
+// path the reader places, as the reader's rule for a command typed whole gives it (#3323). The list
+// of programs that only read applies in a script's text as it does on a command line, and so does
+// each form of a listed one that writes.
+test('#3416: handedToUnknown gives each file a script text hands a program the reader does not know, with the reader\'s words for it', () => {
+  const handed = (text: string) => handedToUnknown(commandWrites(text, '/s', '/h').runs)
+  expect(handed('set -e\nprettier --write /s/app/page.tsx\n').map(h => ({ program: h.program, path: h.path }))).toEqual([{ program: 'prettier', path: '/s/app/page.tsx' }])
+  const [first] = handed('mystery app/page.tsx\n')
+  expect(first?.path).toBe('/s/app/page.tsx')
+  expect(first?.why).toBe('mystery is a program the mods do not know, so what it does with a file it is handed cannot be read before it runs')
+  expect(first?.remedy).toContain('If mystery only reads too, ask Dan to add it to that list: only he may.')
+  // A variable the script sets to one value is followed; one it is handed, a pattern and a
+  // command's output spell no path, so the reader hands none on.
+  expect(handed('P=/s/app/page.tsx\nmystery "$P"\n').map(h => h.path)).toEqual(['/s/app/page.tsx'])
+  expect(handed('mystery "$1"\nmystery "$@"\nmystery app/*.tsx\nmystery "$(ls app)"\n')).toEqual([])
+  // The programs that only read hand nothing on, but in a form that writes or runs a program.
+  expect(handed('cat /s/app/page.tsx\ngrep -n x /s/app/page.tsx | head -3\n[ -f /s/app/page.tsx ]\ntest -f /s/app/page.tsx\nwc -l /s/app/page.tsx\n')).toEqual([])
+  expect(handed('rg --pre ./tool x /s/app/page.tsx\n').map(h => ({ program: h.program, path: h.path, why: h.why }))).toContainEqual({ program: 'rg', path: '/s/app/page.tsx', why: 'rg with --pre runs a program on each file' })
+  // A script file, a module and a tool run through npx are runs of another kind, judged by the
+  // rules that were there before; none is given here.
+  expect(handed('bash /s/other.sh /s/app/page.tsx\npython3 -m json.tool /s/app/page.tsx\nnpx prettier --write /s/app/page.tsx\n')).toEqual([])
+  expect(handedToUnknown(undefined)).toEqual([])
+})
+
+// #3416, Dan 2026-11-22 ("Build the exemption (Recommended)"): a call of a function the script's own
+// text defines is not read as a program the reader does not know. All 31 newly judged calls in the
+// count were a suite calling its own helper. What is left of a script's runs once such calls are
+// read as the function's own commands, as `program path` for each look changing file still handed on.
+const ownLeft = async (text: string, sourced?: OwnCallIo['sourced']): Promise<string[]> => {
+  const io = {
+    pipeline: async (t: string, assignments?: boolean) => pipelineIn(t, '/s', '/h', assignments ? { assignments: true } : {}) as readonly RunCommand[],
+    writes: async (t: string) => commandWrites(t, '/s', '/h') as never,
+    ...(sourced ? { sourced } : {}),
+  }
+  const worth = (p: string) => allRules.shapeKind(p) !== null || isModHookTs(p)
+  const left = await withoutOwnCalls(io, text, pipelineIn(text, '/s', '/h') as readonly RunCommand[], commandWrites(text, '/s', '/h').runs as never, worth)
+  return handedToUnknown(left)
+    .filter(h => worth(h.path))
+    .map(h => `${h.program} ${h.path}`)
+}
+const CHECK = 'check() { if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 ($2)"; fi; }\n'
+const SAYS = `says() { case "$ERR" in *"$2"*) check "$1" ok ;; *) check "$1" "stderr did not say '$2': \${ERR:0:400}" ;; esac; }\n`
+
+test('#3416: a call of a function the script itself defines, whose body hands what it was handed to nothing the reader judges, is left out', async () => {
+  // The shapes the count found: a helper that compares and prints, one calling another helper of the
+  // script, one that pipes what it was handed to a program that only reads.
+  expect(await ownLeft(`${CHECK}${SAYS}says "the refusal names app/page.tsx" "refused app/page.tsx"\n`)).toEqual([])
+  expect(await ownLeft(`${CHECK}check "a label naming app/page.tsx" ok\n`)).toEqual([])
+  expect(await ownLeft('assert_contains() {\n  # $1 desc, $2 needle, $3 haystack\n  if printf \'%s\' "$3" | grep -qF "$2"; then\n    PASS=$((PASS+1)); echo "PASS: $1"\n  else\n    FAIL=$((FAIL+1)); echo "FAIL: $1 (missing: $2)"\n  fi\n}\nassert_contains "names the page" app/page.tsx "$out"\n')).toEqual([])
+  expect(await ownLeft('function note {\n  echo "$1"\n}\nnote /s/app/page.tsx\nnote "${2}" /s/app/globals.css\n')).toEqual([])
+  // A group inside the body does not end it early, and what follows the group is still read.
+  expect(await ownLeft('need() { [ -n "$1" ] || { echo "no file"; return 1; }; echo "$1"; }\nneed /s/app/page.tsx\n')).toEqual([])
+  // Each file of a call by itself: the one the body only prints is left out, the other is not.
+  expect(await ownLeft('note() { echo "$1"; mystery "$2"; }\nnote /s/app/a.tsx /s/app/b.tsx\n')).toEqual(['note /s/app/b.tsx'])
+  // Every other run is given back as it was.
+  expect(await ownLeft(`${CHECK}prettier --write /s/app/page.tsx\ncheck app/page.tsx ok\n`)).toEqual(['prettier /s/app/page.tsx'])
+})
+
+test('#3416: a function that hands on what it was handed is still a run of a program the reader does not know', async () => {
+  const held = ['run /s/app/page.tsx']
+  for (const text of [
+    // A wrapper: the program it hands the file to is the one that was never known.
+    'run() { someunknownprogram "$@"; }\nrun /s/app/page.tsx\n',
+    'run() { prettier --write "$1"; }\nrun app/page.tsx\n',
+    'run() { [ -n "$1" ] || { echo no; return 1; }; prettier --write "$1"; }\nrun app/page.tsx\n',
+    'function run {\n  timeout 5 prettier --write "${1}"\n}\nrun app/page.tsx\n',
+    // Its body writes the file, takes it away or runs it.
+    'run() { sed -i s/a/b/ "$1"; }\nrun app/page.tsx\n',
+    'run() { echo x > "$1"; }\nrun app/page.tsx\n',
+    'run() { rm -f "$1"; }\nrun app/page.tsx\n',
+    'run() { "$1" --fix; }\nrun app/page.tsx\n',
+    'run() { eval "$1"; }\nrun app/page.tsx\n',
+    // It keeps the file in a variable, loops over it, or changes what `$1` is.
+    'run() { local f="$1"; mystery "$f"; }\nrun app/page.tsx\n',
+    'run() {\n  f=$1\n  mystery "$f"\n}\nrun app/page.tsx\n',
+    'run() { for f in "$@"; do mystery "$f"; done; }\nrun app/page.tsx\n',
+    'run() { for f; do mystery "$f"; done; }\nrun app/page.tsx\n',
+    'run() { shift; mystery "$1"; }\nrun x app/page.tsx\n',
+    'run() { mystery "${1:-x}"; }\nrun app/page.tsx\n',
+    'run() { mystery "${@:1}"; }\nrun app/page.tsx\n',
+    // A name joined to another value, and one handed on through another function of the script.
+    'run() { prettier --write "$ROOT/$1"; }\nrun app/page.tsx\n',
+    'inner() { mystery "$1"; }\nrun() { inner "$1"; }\nrun app/page.tsx\n',
+    'inner() { mystery "$1"; }\nrun() { inner "see $1"; }\nrun app/page.tsx\n',
+    // Defined after the call, only inside a branch, loop, group or function, or as no group.
+    'run /s/app/page.tsx\nrun() { true; }\n',
+    'if [ -n "$X" ]; then\n  run() { true; }\nfi\nrun app/page.tsx\n',
+    'for x in 1; do run() { true; }; done\nrun app/page.tsx\n',
+    '{ run() { true; }; }\nrun app/page.tsx\n',
+    'outer() {\n  run() { true; }\n}\nrun app/page.tsx\n',
+    'run()( true )\nrun app/page.tsx\n',
+    'run () { true; }\nrun app/page.tsx\n',
+    // Defined, then unset, defined again (before the call or after it), or behind an alias.
+    'run() { true; }\nunset -f run\nrun app/page.tsx\n',
+    'run() { true; }\nunset "$which"\nrun app/page.tsx\n',
+    'run() { true; }\nrun() { mystery "$1"; }\nrun app/page.tsx\n',
+    'run() { true; }\nrun app/page.tsx\nrun() { mystery "$1"; }\n',
+    'run() { true; }\nrun () { mystery "$1"; }\nrun app/page.tsx\n',
+    'alias run=prettier\nrun() { true; }\nrun app/page.tsx\n',
+    // Text run as commands after the definition may define it again.
+    'run() { true; }\neval "$later"\nrun app/page.tsx\n',
+    'run() { true; }\n. /s/lib.sh\nrun app/page.tsx\n',
+    // A heredoc in the body, and a name this reading writes into the text it hands the reader.
+    'run() {\n  cat <<EOF\n$1\nEOF\n}\nrun app/page.tsx\n',
+    'run() { true; } # zz3416\nrun app/page.tsx\n',
+  ])
+    expect({ text, left: await ownLeft(text) }).toEqual({ text, left: held })
+  // A function from a file the guard did not read is no function it can read the body of.
+  expect(await ownLeft('. /s/lib.sh\nlib_fn app/page.tsx\n')).toEqual(['lib_fn /s/app/page.tsx'])
+  // A file read in after the definition: left out only where the guard read it and it leaves the name alone.
+  const after = 'run() { true; }\n. /s/lib.sh\nrun app/page.tsx\n'
+  const lib = (text: string) => async () => ({ path: '/s/lib.sh', text, commands: pipelineIn(text, '/s', '/h') as readonly RunCommand[] })
+  expect(await ownLeft(after, lib('helper() { echo x; }\n'))).toEqual([])
+  expect(await ownLeft(after, lib('run() { mystery "$1"; }\n'))).toEqual(held)
+  expect(await ownLeft(after, lib('eval "$x"\n'))).toEqual(held)
+  expect(await ownLeft(after, async () => undefined)).toEqual(held)
+  // A mod hook file handed to a helper that passes it to a script is still judged.
+  expect(await ownLeft('mutant(){\n  local file="$4" expr="$5"\n  bash /s/tools/prove.sh --sed "$file" "$expr"\n}\nmutant a b PROVED payload/mods/x/hooks/rules.ts s/a/b/\n')).toEqual(['mutant /s/payload/mods/x/hooks/rules.ts'])
+})
+
+// #3416, Dan 2026-11-22 ("Read the files a suite reads in (Recommended)"): what is left of a suite's
+// runs where the guard reads each file the suite reads in from a disk holding `files` (readInFile).
+// The suite is /s/suite.sh, run in /s. `read` counts the characters read from that disk.
+const OWN_DIR = 'DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"\n'
+const readLeft = async (text: string, files: Record<string, string>, given: { written?: string[]; unreadable?: string[]; links?: string[]; read?: { chars: number } } = {}): Promise<string[]> => {
+  const disk = {
+    stat: async (p: string) => {
+      const f = files[p]
+      if (f === undefined) throw new Error('ENOENT')
+      return { kind: 'file', size: f.length, isLink: given.links?.includes(p) ?? false }
+    },
+    read: async (p: string) => {
+      if (given.unreadable?.includes(p)) throw new Error('EACCES')
+      if (given.read) given.read.chars += (files[p] as string).length
+      return files[p] as string
+    },
+  }
+  return ownLeft(text, (c, beside) => readInFile(disk, c, beside, { path: '/s/suite.sh', text, folder: '/s' }, '/h', () => undefined, given.written ?? []))
+}
+
+test('#3416: a file a suite reads in after its helper, by a path the guard can work out, is read from the disk', async () => {
+  const RUN = 'run() { true; }\n'
+  const CALL = 'run app/page.tsx\n'
+  const held = ['run /s/app/page.tsx']
+  const lib = { '/s/lib/x.sh': 'helper() { echo x; }\n' }
+  // The shape the count found six times: the suite sets DIR to its own folder once, as a command of
+  // its own, and holds the same line again as text it writes into fixtures, with a cd inside the
+  // same idiom on an earlier line. Read as text alone (mod-kit's ownFolderVar) that is no one value.
+  const suite = `. "$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)/lib/suite-deadline.sh" || {\n  exit 1\n}\n${OWN_DIR}${CHECK}${SAYS}top='DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"'\nprintf '%s\\n' "$top" 'DIR=/elsewhere' > "$T/fixture.sh"\ncat > "$T/other.sh" <<'EOF'\nDIR=/elsewhere\nEOF\n. "$DIR/lib/x.sh"\nsays app/page.tsx "refused"\n`
+  expect(await readLeft(suite, lib)).toEqual([])
+  for (const text of [
+    `${OWN_DIR}${RUN}. "$DIR/lib/x.sh"\n${CALL}`,
+    `${OWN_DIR}${RUN}source "\${DIR}/lib/x.sh" || {\n  exit 1\n}\n${CALL}`,
+    // Whether the file is read in or not, it leaves the name alone: a branch around it changes nothing.
+    `${OWN_DIR}${RUN}if [ -f "$DIR/lib/x.sh" ]; then\n  . "$DIR/lib/x.sh"\nfi\n${CALL}`,
+    // A path with no expansion, from the folder the suite runs in or from the top of the disk.
+    `${RUN}. lib/x.sh\n${CALL}`,
+    `${RUN}. /s/lib/x.sh\n${CALL}`,
+  ])
+    expect({ text, left: await readLeft(text, lib) }).toEqual({ text, left: [] })
+  // The control: the same suites with nothing on the disk to read are held, so the file is what clears them.
+  expect(await readLeft(suite, {})).toEqual(['says /s/app/page.tsx'])
+  expect(await readLeft(`${OWN_DIR}${RUN}. "$DIR/lib/x.sh"\n${CALL}`, {})).toEqual(held)
+
+  // A path the guard cannot work out: the file is not read, and the call is judged as before.
+  for (const text of [
+    // A variable set from a command, an argument, a pattern, a file that is not there.
+    `${RUN}LIB="$(find . -name x.sh)"\n. "$LIB"\n${CALL}`,
+    `${OWN_DIR}${RUN}LIB="$DIR/lib/x.sh"\n. "$LIB"\n${CALL}`,
+    `${RUN}. "$1"\n${CALL}`,
+    `${RUN}. lib/*.sh\n${CALL}`,
+    `${RUN}. lib/missing.sh\n${CALL}`,
+    `${OWN_DIR}${RUN}. "$DIR/lib/$NAME.sh"\n${CALL}`,
+    // DIR is not surely the suite's own folder: set twice, in a function, in a branch, only where
+    // another command says so, by a builtin, by a default, after the file is read in, as text in
+    // single quotes, from $0 (the caller's name in a file read in), with more joined on, or after a
+    // cd has moved the folder a relative name of the suite is read from.
+    `${OWN_DIR}DIR=/elsewhere\n${RUN}. "$DIR/lib/x.sh"\n${CALL}`,
+    `${OWN_DIR}other() { DIR=/elsewhere; }\n${RUN}. "$DIR/lib/x.sh"\n${CALL}`,
+    `if [ -n "$X" ]; then\n${OWN_DIR}fi\n${RUN}. "$DIR/lib/x.sh"\n${CALL}`,
+    `[ -n "$X" ] && ${OWN_DIR}${RUN}. "$DIR/lib/x.sh"\n${CALL}`,
+    `[ -n "$X" ] &&\n${OWN_DIR}${RUN}. "$DIR/lib/x.sh"\n${CALL}`,
+    `${OWN_DIR}read -r DIR\n${RUN}. "$DIR/lib/x.sh"\n${CALL}`,
+    `${OWN_DIR}other() { local DIR; }\n${RUN}. "$DIR/lib/x.sh"\n${CALL}`,
+    `${OWN_DIR}other() { local DIR=/elsewhere; }\n${RUN}. "$DIR/lib/x.sh"\n${CALL}`,
+    `${OWN_DIR}printf -v DIR '%s' /elsewhere\n${RUN}. "$DIR/lib/x.sh"\n${CALL}`,
+    `${OWN_DIR}for DIR in a b; do true; done\n${RUN}. "$DIR/lib/x.sh"\n${CALL}`,
+    `${OWN_DIR}: "\${DIR:=/elsewhere}"\n${RUN}. "$DIR/lib/x.sh"\n${CALL}`,
+    `${OWN_DIR}DIR=/elsewhere true\n${RUN}. "$DIR/lib/x.sh"\n${CALL}`,
+    `export ${OWN_DIR}${RUN}. "$DIR/lib/x.sh"\n${CALL}`,
+    `${RUN}. "$DIR/lib/x.sh"\n${OWN_DIR}${CALL}`,
+    `DIR='$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)'\n${RUN}. "$DIR/lib/x.sh"\n${CALL}`,
+    `DIR="$(cd "$(dirname "$0")" && pwd)"\n${RUN}. "$DIR/lib/x.sh"\n${CALL}`,
+    `DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)/lib"\n${RUN}. "$DIR/x.sh"\n${CALL}`,
+    `cd /elsewhere\n${OWN_DIR}${RUN}. "$DIR/lib/x.sh"\ncd /s\n${CALL}`,
+    // Or something between the assignment and the file could set it again unseen: an eval, another
+    // file read in, arithmetic naming it.
+    `${OWN_DIR}eval "$SETUP"\n${RUN}. "$DIR/lib/x.sh"\n${CALL}`,
+    `${OWN_DIR}. lib/quiet.sh\n${RUN}. "$DIR/lib/x.sh"\n${CALL}`,
+    `${OWN_DIR}${RUN}. "$DIR/lib/quiet.sh"\n. "$DIR/lib/x.sh"\n${CALL}`,
+    `${OWN_DIR}: $((DIR = 1))\n${RUN}. "$DIR/lib/x.sh"\n${CALL}`,
+    `${OWN_DIR}(( DIR++ ))\n${RUN}. "$DIR/lib/x.sh"\n${CALL}`,
+    // The file read in under DIR may set DIR itself, so a second reading of it could be of another file.
+    `${OWN_DIR}${RUN}. "$DIR/lib/sets.sh"\n${CALL}`,
+    `${OWN_DIR}${RUN}. "$DIR/lib/locals.sh"\n${CALL}`,
+  ])
+    expect({ text, left: await readLeft(text, { ...lib, '/s/lib/.sh': lib['/s/lib/x.sh'], '/s/x.sh': lib['/s/lib/x.sh'], '/s/lib/quiet.sh': 'quiet() { echo x; }\n', '/s/lib/sets.sh': 'DIR=/elsewhere\n', '/s/lib/locals.sh': 'helper() { local DIR; }\n' }) }).toEqual({ text, left: held })
+  // The same file read in twice under DIR, and one that only reads DIR, are read.
+  expect(await readLeft(`${OWN_DIR}${RUN}. "$DIR/lib/x.sh"\n. "$DIR/lib/x.sh"\n${CALL}`, lib)).toEqual([])
+  expect(await readLeft(`${OWN_DIR}${RUN}. "$DIR/lib/x.sh"\n${CALL}`, { '/s/lib/x.sh': 'helper() { cat "$DIR/notes" "${DIR}/more"; }\n' })).toEqual([])
+  // A file that is there and cannot be read, a link (which may point outside the folder), and one too large to read.
+  expect(await readLeft(`${RUN}. lib/x.sh\n${CALL}`, lib, { unreadable: ['/s/lib/x.sh'] })).toEqual(held)
+  expect(await readLeft(`${RUN}. lib/x.sh\n${CALL}`, lib, { links: ['/s/lib/x.sh'] })).toEqual(held)
+  expect(await readLeft(`${RUN}. lib/x.sh\n${CALL}`, { '/s/lib/x.sh': `helper() { echo x; }\n${'#'.repeat(allRules.SCRIPT_MAX)}\n` })).toEqual(held)
+
+  // A file outside the folder the suite is in is not read: by a whole path, by a climb, in the home folder.
+  const outside = { '/elsewhere/lib.sh': lib['/s/lib/x.sh'], '/lib.sh': lib['/s/lib/x.sh'], '/h/lib.sh': lib['/s/lib/x.sh'], '/s/lib/x.sh': lib['/s/lib/x.sh'] }
+  for (const text of [`${RUN}. /elsewhere/lib.sh\n${CALL}`, `${OWN_DIR}${RUN}. "$DIR/../lib.sh"\n${CALL}`, `${RUN}. ../lib.sh\n${CALL}`, `${RUN}. ~/lib.sh\n${CALL}`, `${OWN_DIR}${RUN}. "$DIR/lib/../../elsewhere/lib.sh"\n${CALL}`])
+    expect({ text, left: await readLeft(text, outside) }).toEqual({ text, left: held })
+  // The climb that stays inside the folder is read.
+  expect(await readLeft(`${OWN_DIR}${RUN}. "$DIR/lib/../lib/x.sh"\n${CALL}`, outside)).toEqual([])
+
+  // A file the command, or a script it runs, writes, removes or changes by a name the reader places,
+  // or a folder above it so written: what the guard read may not be what the suite reads in.
+  for (const written of [['/s/lib/x.sh'], ['/s/lib'], ['/s'], ['/s/app/other.tsx', '/s/lib/x.sh']]) expect({ written, left: await readLeft(`${RUN}. lib/x.sh\n${CALL}`, lib, { written }) }).toEqual({ written, left: held })
+  expect(await readLeft(`${RUN}. lib/x.sh\n${CALL}`, lib, { written: ['/s/lib/y.sh', '/s/library', '/s/lib/x.sh.bak'] })).toEqual([])
+
+  // What the file holds: the name again, an eval, a file it reads in itself, an alias, an unset.
+  for (const file of ['run() { mystery "$1"; }\n', 'run () { mystery "$1"; }\n', 'helper() { echo x; }\neval "$X"\n', 'helper() { echo x; }\n. /s/lib/more.sh\n', 'helper() { echo x; }\nsource /s/lib/more.sh\n', 'alias run=mystery\n', 'unset -f run\n'])
+    expect({ file, left: await readLeft(`${RUN}. lib/x.sh\n${CALL}`, { '/s/lib/x.sh': file, '/s/lib/more.sh': 'helper2() { echo x; }\n' }) }).toEqual({ file, left: held })
+})
+
+test('#3416: a helper from a file a suite reads in is read as its body with the call\'s words in place, by the checks a helper of the suite\'s own gets', async () => {
+  const CALL = 'lib_fn app/page.tsx\n'
+  const held = ['lib_fn /s/app/page.tsx']
+  const libs = { '/s/lib.sh': 'lib_fn() { echo "$1"; }\nlib_two() {\n  lib_fn "$1"\n}\nlib_fmt() { prettier --write "$1"; }\n' }
+  for (const text of [
+    `. lib.sh\n${CALL}`,
+    `. /s/lib.sh\n${CALL}`,
+    `${OWN_DIR}. "$DIR/lib.sh" || {\n  exit 1\n}\n${CALL}`,
+    // A helper of the file that passes the file on to another helper of the file.
+    '. lib.sh\nlib_two app/page.tsx\n',
+    // A helper of the suite's own that passes the file on to a helper of the file.
+    '. lib.sh\nfires() {\n  if lib_fn "$1"; then pass=$((pass + 1)); else fail=$((fail + 1)); fi\n}\nfires app/page.tsx\n',
+  ])
+    expect({ text, left: await readLeft(text, libs) }).toEqual({ text, left: [] })
+  // The controls: nothing on the disk, and a file that does not define the name.
+  expect(await readLeft(`. lib.sh\n${CALL}`, {})).toEqual(held)
+  expect(await readLeft(`. lib.sh\n${CALL}`, { '/s/lib.sh': 'other() { echo "$1"; }\n' })).toEqual(held)
+
+  // The name is never what is trusted: a body that hands the file on, writes it, removes it, runs
+  // it or keeps it in a variable is judged, as the same body in the suite's own text is.
+  expect(await readLeft('. lib.sh\nlib_fmt app/page.tsx\n', libs)).toEqual(['lib_fmt /s/app/page.tsx'])
+  expect(await readLeft('. lib.sh\nfires() {\n  if lib_fmt "$1"; then pass=1; fi\n}\nfires app/page.tsx\n', libs)).toEqual(['fires /s/app/page.tsx'])
+  // A helper that runs the predicate it is handed (`fires lib_fn app/page.tsx`, the shape the count
+  // found four times) is judged as before, whichever predicate: the predicate's name is a word the
+  // reader places as a file, and a file run as the command is not followed.
+  for (const predicate of ['lib_fn', 'lib_fmt']) expect(await readLeft(`. lib.sh\nfires() {\n  if "$1" "$2"; then pass=1; fi\n}\nfires ${predicate} app/page.tsx\n`, libs)).toEqual(['fires /s/app/page.tsx'])
+  for (const file of [
+    'lib_fn() { someunknownprogram "$@"; }\n',
+    'lib_fn() { echo x > "$1"; }\n',
+    'lib_fn() { sed -i s/a/b/ "$1"; }\n',
+    'lib_fn() { rm -f "$1"; }\n',
+    'lib_fn() { "$1" --fix; }\n',
+    'lib_fn() { eval "$1"; }\n',
+    'lib_fn() { local f="$1"; mystery "$f"; }\n',
+    'lib_fn() { for f in "$@"; do mystery "$f"; done; }\n',
+    'lib_fn() { shift; mystery "$1"; }\n',
+    'lib_fn() { mystery "${1:-x}"; }\n',
+    'lib_fn() { timeout 5 prettier --write "$1"; }\n',
+    'lib_fn() { lib_inner "$1"; }\nlib_inner() { prettier --write "$1"; }\n',
+    'lib_fn() {\n  cat <<EOF\n$1\nEOF\n}\n',
+    // A definition the shell may not make, or makes more than once, in the file.
+    'if [ -n "$X" ]; then\nlib_fn() { echo "$1"; }\nfi\n',
+    '[ -n "$X" ] && lib_fn() { echo "$1"; }\n',
+    '[ -n "$X" ] &&\nlib_fn() { echo "$1"; }\n',
+    'echo x | lib_fn() { echo "$1"; }\n',
+    'wrap() {\n  lib_fn() { echo "$1"; }\n}\n',
+    'lib_fn() { echo "$1"; }\nlib_fn() { echo "$1"; }\n',
+    'lib_fn () { echo "$1"; }\n',
+    'lib_fn() { echo "$1"; } > "$1"\n',
+    // The file leaves early before the definition, so the shell may never make it.
+    '[ -n "$LOADED" ] && return 0\nlib_fn() { echo "$1"; }\n',
+    '[ -n "$LOADED" ] && exit 0\nlib_fn() { echo "$1"; }\n',
+    // The file holds an eval, an alias or an unset, or reads in a file itself: one file deep, no deeper.
+    'lib_fn() { echo "$1"; }\neval "$X"\n',
+    'alias lib_fn=mystery\nlib_fn() { echo "$1"; }\n',
+    'lib_fn() { echo "$1"; }\nunset -f lib_fn\n',
+    'lib_fn() { echo "$1"; }\n. /s/more.sh\n',
+    '. /s/more.sh\nlib_fn() { echo "$1"; }\n',
+    'lib_fn() { echo "$1"; } # zz3416\n',
+  ])
+    expect({ file, left: await readLeft(`. lib.sh\n${CALL}`, { '/s/lib.sh': file, '/s/more.sh': 'more() { echo x; }\n' }) }).toEqual({ file, left: held })
+
+  // What the suite does around the file it reads in.
+  for (const text of [
+    // The name is defined in the suite and in the file, whichever comes last.
+    `lib_fn() { true; }\n. lib.sh\n${CALL}`,
+    `. lib.sh\nlib_fn() { true; }\n${CALL}`,
+    // The call comes before the file is read in, or runs a program of that name.
+    `${CALL}. lib.sh\n`,
+    '. lib.sh\ntimeout 5 lib_fn app/page.tsx\n',
+    '. lib.sh\nfind . -name x -exec lib_fn app/page.tsx \\;\n',
+    // The file is read in only sometimes, in a subshell, with words of its own, or twice.
+    `[ -f lib.sh ] && . lib.sh\n${CALL}`,
+    `[ -f lib.sh ] &&\n. lib.sh\n${CALL}`,
+    `if [ -f lib.sh ]; then\n  . lib.sh\nfi\n${CALL}`,
+    `load() {\n  . lib.sh\n}\nload\n${CALL}`,
+    `( . lib.sh )\n${CALL}`,
+    `echo x | . lib.sh\n${CALL}`,
+    `. lib.sh extra\n${CALL}`,
+    `command . lib.sh\n${CALL}`,
+    `. lib.sh\n. lib.sh\n${CALL}`,
+    // An eval, an alias, an unset, or a file the guard did not read, after it.
+    `. lib.sh\neval "$X"\n${CALL}`,
+    `. lib.sh\nalias lib_fn=mystery\n${CALL}`,
+    `. lib.sh\nunset -f lib_fn\n${CALL}`,
+    `. lib.sh\n. "$1"\n${CALL}`,
+    `. lib.sh\n. lib/missing.sh\n${CALL}`,
+    // Two files read in define it.
+    `. lib.sh\n. second.sh\n${CALL}`,
+    `. second.sh\n. lib.sh\n${CALL}`,
+    // A path the guard cannot work out, or a file outside the suite's folder.
+    `LIB="$(find . -name lib.sh)"\n. "$LIB"\n${CALL}`,
+    `. /elsewhere/lib.sh\n${CALL}`,
+  ])
+    expect({ text, left: await readLeft(text, { ...libs, '/s/second.sh': 'lib_fn() { echo "$1"; }\n', '/elsewhere/lib.sh': libs['/s/lib.sh'] }) }).toEqual({ text, left: held })
+  // A file the command or a script it runs writes is not read for a helper either.
+  expect(await readLeft(`. lib.sh\n${CALL}`, libs, { written: ['/s/lib.sh'] })).toEqual(held)
+})
+
+test('#3416: a name some function would define again when called is held, in the suite or a file it reads in, called or not', async () => {
+  const RUN = 'run() { true; }\n'
+  const CALL = 'run app/page.tsx\n'
+  const held = ['run /s/app/page.tsx']
+  // What a function holds that makes the name run another body once the function is called.
+  const AGAIN = ['run() { someunknownprogram "$@"; }', 'function run { someunknownprogram "$@"; }', 'run () { someunknownprogram "$@"; }']
+  for (const again of AGAIN) {
+    const setup = `setup() { ${again}; }\n`
+    const lib = { '/s/lib.sh': setup }
+    for (const text of [
+      // A file read in before the suite defines the name: the shell runs the body `setup` installed.
+      `. lib.sh\n${RUN}setup\n${CALL}`,
+      // The same in a file read in after the suite's definition.
+      `${RUN}. lib.sh\nsetup\n${CALL}`,
+      // Never called by a command of that name: still held, since a call can come by a route this
+      // reading does not follow (a command whose name is a variable, a trap, a file it did not read).
+      `. lib.sh\n${RUN}${CALL}`,
+      `${RUN}. lib.sh\n${CALL}`,
+    ])
+      expect({ text, left: await readLeft(text, lib) }).toEqual({ text, left: held })
+    // Another helper of the suite's own holds it, before the definition or after, called or not.
+    for (const text of [`${RUN}${setup}setup\n${CALL}`, `${setup}${RUN}setup\n${CALL}`, `${RUN}${setup}${CALL}`, `${setup}${RUN}${CALL}`]) expect({ text, left: await ownLeft(text) }).toEqual({ text, left: held })
+    // The helper comes from a file read in, and the suite's own function would define it again.
+    for (const text of [`. lib2.sh\n${setup}setup\n${CALL}`, `${setup}. lib2.sh\n${CALL}`]) expect({ text, left: await readLeft(text, { '/s/lib2.sh': RUN }) }).toEqual({ text, left: held })
+  }
+  // The controls: the same suites where the function defines another name are left out.
+  const other = 'setup() { walk() { someunknownprogram "$@"; }; }\n'
+  for (const text of [`. lib.sh\n${RUN}setup\n${CALL}`, `${RUN}. lib.sh\nsetup\n${CALL}`]) expect({ text, left: await readLeft(text, { '/s/lib.sh': other }) }).toEqual({ text, left: [] })
+  for (const text of [`${RUN}${other}setup\n${CALL}`, `${other}${RUN}setup\n${CALL}`]) expect({ text, left: await ownLeft(text) }).toEqual({ text, left: [] })
+  expect(await readLeft(`. lib2.sh\n${other}setup\n${CALL}`, { '/s/lib2.sh': RUN })).toEqual([])
+})
+
+test('#3416: text that may run after the definition and that the guard cannot read holds the call, wherever it is typed', async () => {
+  const RUN = 'run() { true; }\n'
+  const CALL = 'run app/page.tsx\n'
+  const held = ['run /s/app/page.tsx']
+  // Every case is read, and each one read wrongly is named, so one wrong case does not hide the rest.
+  const wrong: { text: string; files: Record<string, string>; left: string[] }[] = []
+  const want = async (text: string, files: Record<string, string>, expected: string[]): Promise<void> => {
+    const left = await readLeft(text, files)
+    if (left.join('\n') !== expected.join('\n')) wrong.push({ text, files, left })
+  }
+  // What a function typed BEFORE the definition may hold that defines the name again, or takes it
+  // away, once the function is called after the definition: text run as commands, a file the guard
+  // did not read, and in a file read in, an unset or an alias (the suite's own are held already).
+  const UNSEEN = ['eval "$X"', 'builtin eval "$X"', '. "$X"', 'source /s/missing.sh']
+  for (const unseen of UNSEEN) {
+    const setup = `setup() { ${unseen}; }\n`
+    for (const text of [
+      // A helper of the suite's own, called after the definition.
+      `${setup}${RUN}setup\n${CALL}`,
+      // Never called by a command of that name: still held, as a call can come by a route this
+      // reading does not follow.
+      `${setup}${RUN}${CALL}`,
+    ])
+      await want(text, {}, held)
+  }
+  for (const inFile of [...UNSEEN, 'unset -f run', 'alias run=mystery']) {
+    const lib = { '/s/lib.sh': `setup() { ${inFile}; }\n`, '/s/lib2.sh': RUN }
+    for (const text of [
+      // The function comes from a file read in before the suite's definition.
+      `. lib.sh\n${RUN}setup\n${CALL}`,
+      `. lib.sh\n${RUN}${CALL}`,
+      // The helper comes from one file read in, the function from another read in before it.
+      `. lib.sh\n. lib2.sh\nsetup\n${CALL}`,
+    ])
+      await want(text, lib, held)
+  }
+  // Text run as commands anywhere in the suite, and a file the guard did not read that is read in
+  // before the definition anywhere but the top of the suite (in a function, a branch, a loop, after
+  // `&&`), are held too: this reading does not tell a function's body from a branch.
+  for (const text of [`eval "$X"\n${RUN}${CALL}`, `if [ -f lib/missing.sh ]; then\n  . lib/missing.sh\nfi\n${RUN}${CALL}`, `[ -f lib/missing.sh ] && . lib/missing.sh\n${RUN}${CALL}`, `eval "$X"\n. lib2.sh\n${CALL}`])
+    await want(text, { '/s/lib2.sh': RUN }, held)
+  // The same where the file's name holds a substitution, whose commands the reader gives first.
+  const IDIOM = '. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/x.sh"'
+  for (const text of [`setup() { ${IDIOM}; }\n${RUN}setup\n${CALL}`, `if [ -n "$X" ]; then\n  ${IDIOM}\nfi\n${RUN}${CALL}`, `[ -n "$X" ] &&\n${IDIOM}\n${RUN}${CALL}`, `setup() {\n  true\n  ${IDIOM}\n}\n${RUN}${CALL}`]) await want(text, {}, held)
+  // A file read in before the definition that runs text as commands at its own top, or reads in a file.
+  for (const file of ['eval "$X"\n', '. /s/more.sh\n']) await want(`. lib.sh\n${RUN}${CALL}`, { '/s/lib.sh': file, '/s/more.sh': 'more() { echo x; }\n' }, held)
+
+  // The controls. A function that does none of that, in the suite or in a file read in before.
+  await want(`setup() { echo x; }\n${RUN}setup\n${CALL}`, {}, [])
+  await want(`. lib.sh\n${RUN}setup\n${CALL}`, { '/s/lib.sh': 'setup() { echo x; }\n' }, [])
+  await want(`. lib.sh\n. lib2.sh\nsetup\n${CALL}`, { '/s/lib.sh': 'setup() { echo x; }\n', '/s/lib2.sh': RUN }, [])
+  // Left as it was, and not closed here: a file the guard did not read that is read in at the top
+  // of the suite, as a command of its own, before the definition. It has ended by the definition,
+  // which then replaces whatever it defined under the name; a function it defined under another
+  // name, called after the definition, is what the guard cannot see.
+  for (const text of [`. /elsewhere/lib.sh\n${RUN}${CALL}`, `. lib/missing.sh || {\n  exit 1\n}\n${RUN}${CALL}`, `${IDIOM}\n${RUN}${CALL}`, `${IDIOM} || {\n  exit 1\n}\n${RUN}${CALL}`]) await want(text, {}, [])
+  expect(wrong).toEqual([])
+})
+
+test('#3416: a comment that spells a definition or a read in command is never probed, so it cannot move what stands at the top', async () => {
+  const RUN = 'run() { true; }\n'
+  const CALL = 'run app/page.tsx\n'
+  const lib = { '/s/lib.sh': 'lib_fn() { echo "$1"; }\n' }
+  const wrong: { text: string; left: string[] }[] = []
+  const want = async (text: string, expected: string[]): Promise<void> => {
+    const left = await readLeft(text, lib)
+    if (left.join('\n') !== expected.join('\n')) wrong.push({ text, left })
+  }
+  // A probe written into a comment ends the comment, and the rest of the line is read as commands.
+  // A `}` there closed a group the script never closed, so what stood in a function looked as if it
+  // stood at the top: a definition the shell makes only when `wrap` is called, and a file read in
+  // only when `load` is.
+  await want(`# usage: a; b() { c; }; }\nwrap () {\n  true\n  run() { true; }\n}\nwrap\n${CALL}`, ['run /s/app/page.tsx'])
+  await want('# see (x). y; }\nload () {\n  true\n  . lib.sh\n}\nload\nlib_fn app/page.tsx\n', ['lib_fn /s/app/page.tsx'])
+  // The other way, the shape of a real suite's comment: a sentence ending in a bracket and a full
+  // stop, with an issue number in brackets, left the helper below it looking as if it stood in a group.
+  const said = '# by $cmd (its argument or LOAD_AVERAGE_CMD). One more is a command nobody has looked at (#3134), and one\n'
+  await want(`${said}${RUN}${CALL}`, [])
+  await want(`${said}. lib.sh\nlib_fn app/page.tsx\n`, [])
+  // A definition or a read in command typed after a `#` on its own line may be inside a comment:
+  // it is not probed, and so is never at the top.
+  await want(`x=1 # then; run() { true; }\n${CALL}`, ['run /s/app/page.tsx'])
+  await want('x=1 # then; . lib.sh\nlib_fn app/page.tsx\n', ['lib_fn /s/app/page.tsx'])
+  // The controls: a `#` that starts no comment on the line before, and one inside the helper's body.
+  await want(`n=\${#list[@]}\n${RUN}${CALL}`, [])
+  await want(`run() { true; } # the helper\n${CALL}`, [])
+  await want('. lib.sh # the library\nlib_fn app/page.tsx\n', [])
+  expect(wrong).toEqual([])
+
+  // The same for the places the folder variable is set (ownFolder): a comment made an assignment
+  // inside a function read as standing at the top, so a file under `$DIR` was read from the
+  // suite's folder though the shell, with DIR not yet set, reads another.
+  const under = { '/s/lib/x.sh': 'helper() { echo x; }\n' }
+  const folder: { text: string; left: string[] }[] = []
+  const wantUnder = async (text: string, expected: string[]): Promise<void> => {
+    const left = await readLeft(text, under)
+    if (left.join('\n') !== expected.join('\n')) folder.push({ text, left })
+  }
+  await wantUnder(`# note; DIR=x; }\nsetdir () {\n  true\n  ${OWN_DIR}}\n${RUN}. "$DIR/lib/x.sh"\n${CALL}`, ['run /s/app/page.tsx'])
+  await wantUnder(`# why; DIR=elsewhere (#12), and so\n${OWN_DIR}${RUN}. "$DIR/lib/x.sh"\n${CALL}`, [])
+  // The control: no comment, and the assignment in the function is not at the top.
+  await wantUnder(`setdir () {\n  true\n  ${OWN_DIR}}\n${RUN}. "$DIR/lib/x.sh"\n${CALL}`, ['run /s/app/page.tsx'])
+  expect(folder).toEqual([])
+})
+
+test('#3416: the files a suite reads in are counted against the limit, and past it no more are read from the disk', async () => {
+  // Counted in characters read from the disk, never timed. Without the count every file is read:
+  // sixty files of this size are 6.4 million characters, in a hook that runs before the command.
+  const big = `helper() { echo x; }\n${'# a line of a long library\n'.repeat(4000)}`
+  const files = Object.fromEntries(Array.from({ length: 60 }, (_, i) => [`/s/lib/f${i}.sh`, big]))
+  const text = `run() { true; }\n${Array.from({ length: 60 }, (_, i) => `. lib/f${i}.sh`).join('\n')}\nrun app/page.tsx\n`
+  const read = { chars: 0 }
+  // Past the limit the run is given back as it was, a run of a program the reader does not know.
+  expect(await readLeft(text, files, { read })).toEqual(['run /s/app/page.tsx'])
+  expect(read.chars).toBeGreaterThan(0)
+  expect(read.chars).toBeLessThan(ownBudget(text) + 2 * big.length)
+  // A file whose commands the guard holds already is handed to no reader again, so only the count
+  // of its own text bounds it: without that count all sixty are handed over.
+  const had = { chars: 0 }
+  const commands = pipelineIn(big, '/s', '/h') as readonly RunCommand[]
+  const known: OwnCallIo['sourced'] = async c => {
+    had.chars += big.length
+    return { path: `/s/${c.words[1]}`, text: big, commands }
+  }
+  expect(await ownLeft(text, known)).toEqual(['run /s/app/page.tsx'])
+  expect(had.chars).toBeLessThan(ownBudget(text) + big.length)
+  // The same file read in sixty times is read from the disk once.
+  const again = { chars: 0 }
+  expect(await readLeft(`run() { true; }\n${'. lib/f0.sh\n'.repeat(60)}run app/page.tsx\n`, { '/s/lib/f0.sh': 'helper() { echo x; }\n' }, { read: again })).toEqual([])
+  expect(again.chars).toBe('helper() { echo x; }\n'.length)
+})
+
+test('#3416: a definition the shell may not make, and a call that runs a program of the same name, are still held', async () => {
+  const held = ['run /s/app/page.tsx']
+  const CALL = '\nrun app/page.tsx\n'
+  for (const text of [
+    // Made only where the command before it says so, or in the subshell a pipe runs it in.
+    `[ -n "$X" ] && run() { true; }${CALL}`,
+    `false || run() { true; }${CALL}`,
+    `echo x | run() { true; }${CALL}`,
+    `[ -n "$X" ] &&\nrun() { true; }${CALL}`,
+    `[ -n "$X" ] && \\\nrun() { true; }${CALL}`,
+    `[ -n "$X" ] && # only then\nrun() { true; }${CALL}`,
+    `[ -n "$X" ] ||\n\n# only then\n\nrun() { true; }${CALL}`,
+    `cat <<EOF &&\nx\nEOF\nrun() { true; }${CALL}`,
+    `cat <<'E-O-F' |\nx\nE-O-F\nrun() { true; }${CALL}`,
+    // Made in a subshell, a case, a loop, the other branch, or a command substitution.
+    `( run() { true; } )${CALL}`,
+    `case "$X" in a) run() { true; } ;; esac${CALL}`,
+    `case "$X" in\n  a)\n    run() { true; }\n    ;;\nesac${CALL}`,
+    `while false; do run() { true; }; done${CALL}`,
+    `until true; do\n  run() { true; }\ndone${CALL}`,
+    `if x; then :; else\n  run() { true; }\nfi${CALL}`,
+    `x=$(run() { true; }; echo)${CALL}`,
+    `x=$(\nrun() { true; }\n)${CALL}`,
+    'cat <<EOF\n$(\nrun() { true; }\n)\nEOF\nrun() { true; }\nrun app/page.tsx\n',
+    // What follows the body's closing brace is part of every call: a file it writes, a pipe, a subshell.
+    `run() { true; } > "$1"${CALL}`,
+    `run() { true; } >> "$1"${CALL}`,
+    `run() { echo x; } 2>"$1"${CALL}`,
+    `run() { true; } &${CALL}`,
+    `run() { true; } | cat${CALL}`,
+    // Unset or run as text behind the shell's own words for running a builtin.
+    `run() { true; }\ncommand unset -f run${CALL}`,
+    `run() { true; }\nbuiltin unset -f run${CALL}`,
+    `run() { true; }\nbuiltin eval "$later"${CALL}`,
+    `run() { true; }\nbuiltin . /s/lib.sh${CALL}`,
+    // A call behind a program that runs its words is a run of the program of that name, never the
+    // function: timeout, env, command, a new shell, xargs and find know nothing of a shell function.
+    'run() { true; }\ntimeout 5 run app/page.tsx\n',
+    'run() { true; }\nenv run app/page.tsx\n',
+    'run() { true; }\ncommand run app/page.tsx\n',
+    'run() { true; }\nnohup run app/page.tsx\n',
+    'run() { true; }\nexec run app/page.tsx\n',
+    "run() { true; }\nbash -c 'run app/page.tsx'\n",
+    'run() { true; }\nxargs run app/page.tsx\n',
+    'run() { true; }\nfind . -exec run app/page.tsx \\;\n',
+    // The same inside a body: what it hands on goes to the program, not the script's function.
+    `inner() { true; }\nrun() { timeout 5 inner "$1"; }${CALL}`,
+    `inner() { true; }\nrun() { command inner "$1"; }${CALL}`,
+  ])
+    expect({ text, left: await ownLeft(text) }).toEqual({ text, left: held })
+  // One such call, or one before the definition, among plain calls with the same words cannot be
+  // told from them, so each is held.
+  expect(await ownLeft('run() { true; }\nrun app/page.tsx\ntimeout 5 run app/page.tsx\n')).toEqual([...held, ...held])
+  expect(await ownLeft('run app/page.tsx\nrun() { true; }\nrun app/page.tsx\n')).toEqual([...held, ...held])
+  // What is surely the script's own stays left out: a definition after a whole line, a comment or a
+  // semicolon, with a comment after its brace, called in a subshell, a pipe or a substitution.
+  for (const text of [
+    `[ -d "$T" ] || mkdir "$T"\n# a helper\n\nrun() { true; }${CALL}`,
+    `cat <<EOF\nx &&\nEOF\nrun() { true; }${CALL}`,
+    `if [ -n "$X" ]; then\n  true\nfi\nrun() { true; }${CALL}`,
+    `set -u; run() { true; }; run app/page.tsx\n`,
+    `run() { true; } # says nothing${CALL}`,
+    `run() { (true)}${CALL}`,
+    'run() {\n  # one } in a comment\n  true\n}\nrun app/page.tsx\n',
+    'run() { true; }\n( run app/page.tsx )\n',
+    'run() { true; }\necho x | run app/page.tsx\n',
+    'run() { true; }\nx=$(run app/page.tsx)\n',
+  ])
+    expect({ text, left: await ownLeft(text) }).toEqual({ text, left: [] })
+})
+
+// A made up suite the shape of the repository's long ones: each section defines its own helper and
+// calls it once a case with a file the guard holds, six lines a case. What reading its own calls
+// costs scales with the helpers times the text before each, so the helpers are spread through it.
+const longSuite = (sections: number, cases: number): string => {
+  const out = ['#!/bin/bash', 'set -u', 'PASS=0; FAIL=0', 'ROOT="$(cd "$(dirname "$0")" && pwd)"', 'pass() { PASS=$((PASS + 1)); }', 'fail() { FAIL=$((FAIL + 1)); echo "FAIL: $1"; }', '']
+  for (let s = 0; s < sections; s++) {
+    out.push(`# section ${s}`, `check_${s}() {`, '  if grep -qF "$2" "$1"; then', '    pass', '  else', '    fail "$2"', '    echo "$1"', '  fi', '}')
+    for (let c = 0; c < cases; c++)
+      out.push(
+        `OUT=$(printf '%s' '{"tool_name":"Bash","tool_input":{"command":"echo ${s} ${c}"}}' | bash "$ROOT/gate.sh" 2>&1)`,
+        'RC=$?',
+        `if [ "$RC" -eq 0 ]; then pass; else fail "case ${s}.${c} left $RC"; fi`,
+        `check_${s} docs/rounds/round-${s}-${c}.html "expected ${c}"`,
+        `[ -n "$OUT" ] || { echo "case ${s}.${c} said nothing"; FAIL=$((FAIL + 1)); }`,
+        '',
+      )
+  }
+  out.push('echo "$PASS passed, $FAIL failed"', '[ "$FAIL" -eq 0 ]', '')
+  return out.join('\n')
+}
+// What withoutOwnCalls leaves of a text's runs, and how many characters of text it handed mod-kit's
+// readers to decide it: the work a hook does before the command runs, counted and never timed.
+const ownCost = async (text: string): Promise<{ held: number; runs: number; handed: number }> => {
+  let handed = 0
+  const io = {
+    pipeline: async (t: string, assignments?: boolean) => {
+      handed += t.length
+      return pipelineIn(t, '/s', '/h', assignments ? { assignments: true } : {}) as readonly RunCommand[]
+    },
+    writes: async (t: string) => {
+      handed += t.length
+      return commandWrites(t, '/s', '/h') as never
+    },
+  }
+  const runs = commandWrites(text, '/s', '/h').runs ?? []
+  const left = await withoutOwnCalls(io, text, pipelineIn(text, '/s', '/h') as readonly RunCommand[], runs as never, p => allRules.shapeKind(p) !== null)
+  return { held: handedToUnknown(left).length, runs: runs.length, handed }
+}
+
+test('#3416: reading a long suite\'s own calls hands the reader a few times its text, however many helpers it defines', async () => {
+  // 2026-11-22: finding each helper reread the whole script before it, once a helper, so this
+  // suite's 308,214 characters cost 6,711,692 handed to the reader (21.8 times the text, 6.4 to 7.4
+  // seconds in five readings), in a hook that runs before the command does.
+  const text = longSuite(40, 25)
+  expect(text.split('\n').length).toBeGreaterThan(6000)
+  const cost = await ownCost(text)
+  // Every call was read and left out: the cost below is the work done, not the work skipped.
+  expect({ runs: cost.runs, held: cost.held }).toEqual({ runs: 1000, held: 0 })
+  expect(cost.handed / text.length).toBeLessThan(4)
+  // The same suite reading in a file the guard cannot read at its top, as the repository's long
+  // suites do. Whether that command stands at the top is asked in the reading that places the
+  // definitions, not in one of its own: asked apart it handed the reader the whole text once more
+  // (the Slack gate's suite, 449,087 characters: 1,355,198 handed before, 1,806,612 with it).
+  const reading = text.replace('set -u\n', 'set -u\n. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/suite-deadline.sh" || {\n  exit 1\n}\n')
+  expect(reading.length).toBeGreaterThan(text.length)
+  const withRead = await ownCost(reading)
+  // One run more, and the one left: the command that reads the file in, which is no call of a helper.
+  expect({ runs: withRead.runs, held: withRead.held }).toEqual({ runs: 1001, held: 1 })
+  expect(withRead.handed / reading.length).toBeLessThan(4)
+  expect(withRead.handed - cost.handed).toBeLessThan(reading.length / 2)
+})
+
+test('#3416: a script whose own calls would cost more to read than the limit keeps the rest held', async () => {
+  // The other way the cost grows: calls times the size of the body each is read as. Past the limit
+  // (ownBudget) every run not yet read is given back as it was, a run of a program not known.
+  const body = Array.from({ length: 60 }, (_, i) => `  if grep -qF "needle ${i}" "$1"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi`).join('\n')
+  const text = `check() {\n${body}\n}\n${Array.from({ length: 400 }, (_, i) => `check docs/rounds/round-${i}.html`).join('\n')}\n`
+  const cost = await ownCost(text)
+  expect(cost.runs).toBe(400)
+  expect(cost.handed).toBeLessThan(ownBudget(text) + 4 * text.length)
+  expect(cost.held).toBeGreaterThan(0)
+  expect(cost.held).toBeLessThan(400)
+  // A short script is nowhere near it.
+  expect((await ownCost(`check() {\n${body}\n}\ncheck docs/rounds/round-1.html\n`)).held).toBe(0)
+})
+
+test('#3416: calledWith writes a call\'s words in place of what the body names, and ownDefinitions finds each definition', () => {
+  expect(calledWith(' echo "$1" $2 "${3}" \'$1\' \\$1 "it\'s $1" # $1\n mystery "$@" $* ', ['/a', '/b'])).toBe(' echo "/a" /b "${zz3416none}" \'$1\' \\$1 "it\'s /a" # $1\n mystery "/a /b" /a /b ')
+  expect(calledWith('grep -q x <<< "$1"', ['/a'])).toBe('grep -q x <<< "/a"')
+  expect(calledWith('cat <<EOF\n$1\nEOF', ['/a'])).toBeUndefined()
+  const defs = (text: string) => ownDefinitions(pipelineIn(text, '/s', '/h') as readonly RunCommand[], 'run')
+  expect(defs('run() { true; }\nfunction run { true; }\nfunction run() { true; }\nrunner() { true; }\n')).toEqual({ braces: [0, 3, 6], other: 0 })
+  expect(defs('run () { true; }\n')).toEqual({ braces: [], other: 1 })
 })
 
 // #3017: on 2026-11-15 the conflict fixes for #3008 and #3011 in this guard's own register.ts were

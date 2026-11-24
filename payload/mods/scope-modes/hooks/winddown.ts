@@ -334,6 +334,14 @@ export const stashTaken = (args: readonly string[]): string | undefined => {
 const matchKey = (p: string) => p.toLowerCase().replace(/^\/private(?=\/(?:var|tmp|etc)\/)/, '')
 
 /**
+ * How many paths one part of the list of written files holds before a new part is begun (#3418): a
+ * call reads and writes at most this many of them, however long the list grows (10,547 paths, 1.5 MB
+ * as JSON, measured over the personal MacBook's records on 2026-11-21). A size, never a cap: no
+ * path is ever dropped for it.
+ */
+export const WRITTEN_PART = 256
+
+/**
  * The uncommitted files git status names relative to `root`, split into this session's own (`written`
  * names it, or a folder holding it) and the rest (#1108).
  */

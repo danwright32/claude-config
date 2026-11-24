@@ -91,6 +91,12 @@ const RUNS_TEXT = new Set(['eval', 'source', '.'])
 // `${T:=x}` or `${T=x}`, or any text eval, source, trap or alias runs, which may set it.
 const RUNS_TEXT_LATER = new Set(['trap', 'alias'])
 const SETS_IF_UNSET = /\$\{([A-Za-z_][A-Za-z0-9_]*):?=/g
+// Inside `(( ))` (#3415): a name given a whole number written out (`F=3`, never `F=010`, which is 8),
+// and each name a sum gives a value, by `=` alone or after an operator (`+=`, `<<=`), or by `++` or
+// `--` on either side of it. `==`, `!=`, `<=` and `>=` give none. The words are joined by a space, so
+// an operator the command reader split in two (`>>` and `=`) is still read.
+const ARITHMETIC_NUMBER = /^[A-Za-z_][A-Za-z0-9_]*=(?:0|[1-9][0-9]*)$/
+const ARITHMETIC_SETS = /([A-Za-z_][A-Za-z0-9_]*)\s*(?:\[[^\]]*\]\s*)?(?:(?:[-+*/%&|^]|<<|>>)?\s*=(?!=)|\+\+|--)|(?:\+\+|--)\s*([A-Za-z_][A-Za-z0-9_]*)/g
 const ALONE = /^\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))$/
 type Vars = Map<string, string | null>
 // A loop word the reader follows: nothing the shell expands or matches against files. One holding a
@@ -665,13 +671,16 @@ const isRemote = (w: string) => /^[^/]*:/.test(w) && !w.startsWith('/')
 
 // Input words: `<` and the file after it, `<file`, a heredoc's `<<EOF` (or `<<` and its delimiter
 // as the next word, #698), a here-string's `<<<` and its text, each with any descriptor number
-// before it. Taken out of a command's words, so its operands are what is left.
-const splitInputs = (words: string[]): { rest: string[]; files: string[] } => {
+// before it. Taken out of a command's words, so its operands are what is left. `comparing` is the
+// place of each `<` that compares two strings inside a `[[ ]]` test (#3415): a word of the test,
+// with the word after it, and no input.
+const splitInputs = (words: string[], comparing?: ReadonlySet<number>): { rest: string[]; files: string[] } => {
   const rest: string[] = []
   const files: string[] = []
   for (let i = 0; i < words.length; i++) {
     const w = words[i] as string
-    if (/^\d*<<<$/.test(w)) i++
+    if (comparing?.has(i)) rest.push(w)
+    else if (/^\d*<<<$/.test(w)) i++
     else if (/^\d*<<</.test(w)) continue
     else if (/^\d*<</.test(w)) {
       if (/^\d*<<-?$/.test(w)) i++
@@ -1319,6 +1328,16 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     folders.push(dir)
     const written = c.words
     for (const w of written) for (const m of w.matchAll(SETS_IF_UNSET)) setBy.set(m[1] as string, null)
+    // What stands inside `(( ))` is a sum the shell works out (#3415, Command.arithmetic): it runs
+    // no program, its `<` and `>` compare two numbers, and no word of it names a file, so it is no
+    // write, no input and no run. Read as a command, `(( n > 3 ))` was a write of a file named 3.
+    // A name it gives a value is one whose value the reader no longer knows, but for a whole number
+    // written out (`((F=3))`), which is the value the shell gives it.
+    if (c.arithmetic) {
+      if (written.length === 1 && ARITHMETIC_NUMBER.test(written[0] as string)) assign(written[0] as string)
+      else for (const m of written.join(' ').matchAll(ARITHMETIC_SETS)) unknown((m[1] ?? m[2]) as string)
+      continue
+    }
     if (written.length === 1 && written[0] === '(') {
       outside.push(dir)
       varsOutside.push(new Map(vars))
@@ -1376,7 +1395,7 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     }
     written.forEach((w, n) => {
       const prior = written[n - 1] ?? ''
-      const target = WRITE_REDIRECT.test(prior) || /^\d*>&$/.test(prior)
+      const target = !c.compares?.[n - 1] && (WRITE_REDIRECT.test(prior) || /^\d*>&$/.test(prior))
       const asText = c.unexpanded?.[n] === true
       const loopText = !asText && handsOnAsText(w, c.splits?.[n])
       for (const read of asText ? [w] : target ? [expand(w)] : fields(w, c.splits?.[n]))
@@ -1397,10 +1416,16 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     // Output redirects first, and taken out of the words, with descriptor copies (2>&1). A `>&`
     // with nothing attached takes the next word: a number or - is a descriptor copied, anything
     // else a file both outputs go to (the collision guard's reading, #654, kept in #712).
+    // A `<` or a `>` comparing two strings inside a `[[ ]]` test (#3415, Command.compares) is a word
+    // of the test like `==`, by its place in `words`: no redirect here, and no input below.
     const words: string[] = []
+    const comparing = new Set<number>()
     for (let i = 0; i < raw.length; i++) {
       const w = raw[i] as string
-      if (WRITE_REDIRECT.test(w)) {
+      if (c.compares?.[from[i] as number]) {
+        comparing.add(words.length)
+        words.push(w)
+      } else if (WRITE_REDIRECT.test(w)) {
         const target = raw[++i]
         if (target !== undefined) named(target, undefined, written[from[i] as number])
         if (target !== undefined && STDOUT_REDIRECT.test(w)) toStdout(target, written[from[i] as number])
@@ -1414,7 +1439,7 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
       else words.push(w)
     }
     if (raw[0] === ')') continue
-    const { rest: args, files: inputs } = splitInputs(words)
+    const { rest: args, files: inputs } = splitInputs(words, comparing)
     const name = baseOf(args[0] ?? '')
     const kind = kindOf(args[0])
     const rest = args.slice(1)

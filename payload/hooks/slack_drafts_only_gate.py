@@ -1575,6 +1575,25 @@ def sh_strip_openers_of(t):
         t = t[m.end():].lstrip()
 
 
+@functools.lru_cache(maxsize=None)
+def sh_funcs_of(s):
+    """What Judge.sh_funcs finds in s, searched afresh: (the names written `name()`, the names
+    written `function name`), each in the order found, as tuples every caller can share. The walk
+    of a text's variables, the reading of a sed or git command's output (once for each such name)
+    and the reading of the words after an unknown program each searched the whole text for them,
+    six searches of the claude-sync suite's 1.8 MB where one serves (claude-config#3406)."""
+    return (tuple(re.findall(r"(?m)^\s*(?:function\s+)?([A-Za-z_][\w:.-]*)\s*\(\s*\)", s)),
+            tuple(re.findall(r"\bfunction\s+([A-Za-z_][\w:.-]*)", s)))
+
+
+@functools.lru_cache(maxsize=None)
+def sh_runs_shopt(s):
+    """Whether s holds the word shopt, which can change how a case's patterns match (Judge.sh_case),
+    searched for once for each text: the walk of a text's variables asks, and the reading of its
+    locals asked again, a second search of the whole text (claude-config#3406)."""
+    return bool(re.search(r"\bshopt\b", s))
+
+
 # The builtins after which a NAME=value in front of them outlives the command (POSIX special builtins,
 # and those that bind names), so it is an assignment like any other.
 SH_SPECIAL = frozenset({":", ".", "source", "break", "continue", "eval", "exec", "exit", "export", "readonly",
@@ -1777,6 +1796,10 @@ NoNetworkRoute = load_lib("no_network_route", "no-network-route.py").make(HERE)
 UnknownProgram = load_lib("unknown_program", "unknown-program.py").make(judged_by_name, SH_REDIRECT)
 # A file, a module or a command that code given to python3 names in its own text (claude-config#3397).
 PyFileRuns = load_lib("py_file_runs", "py-file-runs.py").make(py_nodes, SH_UNKNOWN_DIR)
+# A script's own $0 and $1..., from the command that runs it (claude-config#3395).
+ScriptParams = load_lib("script_params", "script-params.py").make(SHELLS, SH_REDIRECT, SH_UNKNOWN_DIR)
+# What a sed filter or a git show of one file prints, where that is known exactly (claude-config#3395).
+ExactOutput = load_lib("exact_output", "exact-output.py").make(SH_UNKNOWN_DIR, SYSTEM_BIN)
 # The cache of the calls this gate allowed (claude-config#2918).
 _cache = load_lib("judgement_cache", "judgement-cache.py")
 # The scheduling priority the gate judges at, raised so a busy Mac keeps it on a performance core
@@ -1787,8 +1810,8 @@ raise_qos = gate_qos.raise_qos
 QOS = [(None, "")]
 
 
-def draft_advice(where):
-    return (f"Save it as a draft instead: call slack_send_message_draft {where}, then tell Dan where the draft is "
+def draft_advice(where, opening="Save it as a draft instead"):
+    return (f"{opening}: call slack_send_message_draft {where}, then tell Dan where the draft is "
             "(the channel, or the person for a direct message, and the thread) and that nothing was sent. "
             f"Sessions never send or schedule a Slack message (Dan, 2026-11-05: \"it should only ever save as "
             f"draft in slack, never send directly\"; {ISSUE}). If he asked you to post it, still save the draft "
@@ -1858,7 +1881,7 @@ def budget_clock():
 
 
 class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, ShWalkShapes, NoNetworkRoute,
-            UnknownProgram, PyFileRuns):
+            UnknownProgram, PyFileRuns, ScriptParams, ExactOutput):
     def __init__(self, sw):
         self.sw = sw
         # The walk's clock and budget (budget_clock), the moment it started, and the script whose
@@ -1873,6 +1896,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         self.no_network = self.installed_wrapper()  # no-network-run.sh beside this file (#3173)
         self.acting = set()  # the real path of each script acts() is judging, so a cycle ends
         self.unfollowed = []  # each thing the walk could not follow or read (unfollow)
+        self.named_only = []  # each refusal for a file that only names an endpoint (name_only, #3410)
         # (the reason, the mod's folder) of a refused `bun test` the call's own line runs in a mod's
         # folder, for the sentence that names the command to run instead (mod_tests_seen, #3356).
         self.mod_tests = None
@@ -2311,11 +2335,14 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                                              copier=True)
             else:
                 self.note_copy(name, vals[1:], d)
+            # Believed only of the system's own program (lib/exact-output.py, claude-config#3440).
+            self.copy_believed(name, args, vals, d, text)
             out = []
         elif name in SH_PRINTERS:
-            out = self.sh_prints(name, args, vals, d, stdin)
+            out = self.believed(self.sh_prints(name, args, vals, d, stdin), vals[0], name, text)
         elif name in ("tee", "gtee"):
             append = any(v and re.fullmatch(r"-[a-zA-Z]*a[a-zA-Z]*", v) for v in vals[1:]) or "--append" in vals[1:]
+            stdin = self.believed(stdin, vals[0], name, text)
             for a, v in zip(args[1:], vals[1:]):
                 if v is not None and (v == "-" or v.startswith("-")):
                     continue
@@ -2326,6 +2353,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 self.note_unreadable(a, v, d, f"{name}, which downloads it")
             # Any other program, by the files it names or unpacks (lib/program-writes.py, #2772).
             out = self.note_program(name, args, vals, d, stdin)
+            if out is None:
+                # What a sed filter or a git show of one file prints, where that is known exactly
+                # (lib/exact-output.py, claude-config#3395).
+                out = self.exact_output(name, vals, d, stdin, text)
         if out is None:
             out = [("unknown", None, label)]
         files = []  # (raw target, its value, whether it takes the output, appending)
@@ -3001,7 +3032,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             py = dict(self.py_cmd, cwd=self.py_cmd["cwd"] if there else None)
             key = (real, sourced, word, label, d if there else None, depth, shell_hint, lang,
                    self.sh_cwd(d) != SH_UNKNOWN_DIR, repr(sorted(py.items())), repr(self.exported),
-                   self.shell.get("program") if sourced else None)
+                   self.shell.get("program") if sourced else None,
+                   self.script_reads_by(word, sourced, real))  # its $0, the words it is handed (#3395)
             if key in self.clean:
                 if sourced:
                     self.exported = self.clean[key]
@@ -3064,6 +3096,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             try:
                 self.next_script = word  # its BASH_SOURCE, as written in the command (claude-config#2449)
                 self.next_zero = self.shell.get("zero") if sourced else word  # and its $0 (#2913)
+                # What finds its $0 and $1..., should a sourced path of it need them (#3395).
+                self.next_ran = (real, None if sourced else word)
                 self.next_on_disk = True
                 self.next_cwd_known = self.sh_cwd(d) != SH_UNKNOWN_DIR
                 self.next_program = prog  # what a file it sources is read by (claude-config#2977)
@@ -3308,6 +3342,17 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         be made, keyed on this cause rather than on the words it is put in; and give it back. Every
         one is kept, so a later cause the verdict does not carry cannot hide the one it does (#2922)."""
         self.unfollowed.append(why)
+        return why
+
+    def name_only(self, why):
+        """Record a refusal that is no post the gate found, and give it back: a file that only names
+        an endpoint, handed to a script not seen to be unable to act on it (claude-config#3410).
+        main() then says the check could not be made, keyed on this cause as it is on unfollow's.
+        Kept apart from unfollowed, which the readings of a script's own words consult to decide
+        what is refused: inside a script on disk they drop a reason found there (judge_unread_shapes,
+        lib/unknown-program.py), and this refusal stands wherever it stood (Dan, 2026-11-21, #3218).
+        Nothing reads this list but main(), so recording here changes no verdict."""
+        self.named_only.append(why)
         return why
 
     def import_targets(self, text, kind, cur_dir, root, inserts=((), ()), strings=True, tagged=False, path=None,
@@ -3775,6 +3820,9 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         """sh_var for a sourced file's path, HOME taken from the session where the text never binds it,
         and $0, $1... from the arguments of the `bash -c` string being read (sh_positional)."""
         pos = self.shell.get("positional")
+        if pos is None and name.isdigit():
+            # A script's own, for the word of a source command alone (lib/script-params.py, #3395).
+            pos = self.source_word_params()
         if pos is not None and name.isdigit():
             return pos[int(name)] if int(name) < len(pos) else None
         if name == "0":
@@ -3914,7 +3962,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
     def sh_known(self, s, cwd, script, cwd_known=True, depth=0):
         """sh_walk(), worked out once for each text, which is asked about from several places. A text
         that sources itself finds nothing certain on the way back in."""
-        key = (s, cwd, script, cwd_known)
+        key = (s, cwd, script, cwd_known, self.script_walk_key(s))  # and its $0 and $1... (#3395)
         if key not in self.known_memo:
             self.known_memo[key] = {"regions": {}, "top": 0, "lost": [], "bodies": []}
             self.known_memo[key] = self.sh_walk(s, cwd, script, cwd_known, depth)
@@ -3979,7 +4027,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         rows, blocks = struct if struct else (None, None)
         allnames = set(re.findall(r"(?<![\w$])([A-Za-z_]\w*)(?:\[[^\]\n]*\])?\+?=", s))
         funcs = self.sh_funcs(s)
-        shopt = bool(re.search(r"\bshopt\b", s))
+        shopt = sh_runs_shopt(s)
         env, since, regions, spans, tainted, handled = {}, {}, {}, {}, set(), set()
         lost = [] if cwd_known else [(0, len(s))]
         bodies, fbody = [], {}
@@ -4000,6 +4048,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             return self.sh_dir(d)
 
         def look(n):
+            if n == "0":
+                return self.script_zero(s)  # the script's own $0 (lib/script-params.py, #3395)
             return self.sh_home(n, s, env.get(n))
 
         def setv(n, v, at):
@@ -4088,6 +4138,9 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             when is where what it changes is changed from (the end of the command, or the start of
             the compound holding it, which can run it more than once)."""
             w = p["end"] if when is None else when
+
+            def here(n):  # $1... too, where the command is before anything that could change them (#3395)
+                return self.script_param(n, s, p["start"]) if n.isdigit() else look(n)
             # The names of the for loops around it whose values the walk tries in turn (#2912): a
             # command that may set one spoils that loop (spoil), as a path built from it next is not
             # the word.
@@ -4097,7 +4150,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 if a[0] in own_names and spoil({a[0]}, p["start"]):
                     return "dead"
                 spans.setdefault(a[0], []).append((p["start"], p["end"]))
-                setv(a[0], self.sh_word(a[1], where(d, p["start"]), look, script, True)[0] if run else None, w)
+                setv(a[0], self.sh_word(a[1], where(d, p["start"]), here, script, True)[0] if run else None, w)
                 return None
             rest, _ = self.rest_of(head)
             words = self.words_of(rest)
@@ -4115,10 +4168,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                     if res:
                         return res
             wd = where(d, p["start"])
-            v, bad = self.sh_source_word(head, wd, look, script)
+            v, bad = self.sh_source_word(head, wd, here, script)
             # Inside a for loop over words written out, the path is worked out once for each (#2912).
             usable = [lp for lp in loops if lp[0] not in spoiled]
-            each = self.sh_source_each(head, wd, look, script, usable, p["start"]) if bad else None
+            each = self.sh_source_each(head, wd, here, script, usable, p["start"]) if bad else None
             if bad and each is None:
                 return "dead"
             if each is not None:
@@ -4412,9 +4465,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
 
     @staticmethod
     def sh_funcs(s):
-        """The names of the functions s defines."""
-        return set(re.findall(r"(?m)^\s*(?:function\s+)?([A-Za-z_][\w:.-]*)\s*\(\s*\)", s)) | \
-            set(re.findall(r"\bfunction\s+([A-Za-z_][\w:.-]*)", s))
+        """The names of the functions s defines, as a set of the caller's own, searched for once
+        for each text (sh_funcs_of) and built as it always was, so it lists them in the same order."""
+        plain, keyword = sh_funcs_of(s)
+        return set(plain) | set(keyword)
 
     @staticmethod
     def sh_binds(name, text, allowed=0):
@@ -4906,7 +4960,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 last, spans = idx, [(p["start"], p["end"])]
                 if v is not None:
                     if not shopt:
-                        shopt.append(bool(re.search(r"\bshopt\b", s)))
+                        shopt.append(sh_runs_shopt(s))
                     v, last, spans = self.sh_local_settles(s, items, rows, blocks, stack, idx, end, n, v, known,
                                                            script, here, shopt[0])
                 if v is None or sum(1 for x in words if re.match(re.escape(n) + r"(?:=|$)", x)) > 1:
@@ -5692,7 +5746,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             # reader's words reached os.path and crashed the gate (claude-config#2892). Unfollowed:
             # no finding that it posts. A file bash refuses as binary never gets here (script_body).
             self.next_script, self.next_cwd_known, self.next_on_disk, self.next_program = None, True, False, None
-            self.next_zero = self.next_handed = None
+            self.next_zero = self.next_handed = self.next_ran = None
             return self.unfollow("it holds a NUL byte, which bash drops, zsh keeps inside a word and every "
                                  "program reads as the end of one, so what it runs cannot be worked out "
                                  "(claude-config#2892)")
@@ -5700,6 +5754,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         self.shell["on_disk"] = self.next_on_disk
         self.shell["program"] = self.next_program
         self.shell["zero"], self.next_zero = self.next_zero, None
+        self.shell["ran"], self.next_ran = self.next_ran, None
         self.shell["parent"] = saved  # the text that runs this one, whose output carries it (#2913)
         self.next_script, self.next_cwd_known, self.next_on_disk, self.next_program = None, True, False, None
         handed, self.next_handed = self.next_handed, None
@@ -6271,7 +6326,9 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             # that still cannot be worked out is refused unread (claude-config#2538, on since
             # 2026-11-13, once the scripts it newly refused were read or rewritten).
             # Inside a for loop over words written out, each value's file is read (#2912).
-            choices = self.sh_source_choices(text, d)
+            # Where that refuses it, the script's own $0 and $1... are taken up and it is read once
+            # more (lib/script-params.py, claude-config#3395); unread is the refusal that is left.
+            choices, unread = self.source_word_choices(text, d)
             # A loop over no words sources nothing: no choices, and nothing read (#2912).
             if choices and choices[0][1]:
                 raw = self.sh_source_target(text)
@@ -6280,7 +6337,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 # (claude-config#2683, on for a sourced file since #2538).
                 if raw and not re.search(r"[$`]", raw):
                     return self.script(words[1], d, depth, True, sourced=True)
-                return self.unworked_path(text, 1, d, "sources")
+                return unread
             for v, _ in choices:
                 reason = self.script(v, d, depth, True, sourced=True) if v is not None else None
                 if reason:
@@ -6655,7 +6712,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 # A file naming an endpoint is still read against a script that writes, as before.
                 acts = script_acts(runs_only=True) if unread else script_acts()
                 if acts:
-                    return f"{script_label} {acts}, and is handed {what}"
+                    reason = f"{script_label} {acts}, and is handed {what}"
+                    # A file that names an endpoint is not a post found (#3410); unread() has
+                    # already recorded one the gate could not read.
+                    return reason if unread else self.name_only(reason)
                 if unread and script_label in on_disk and script_acts():
                     self.note_handed(on_disk[script_label], words, d, script_label)
             # Data every script beside it only reads; none sends or runs what it is handed.
@@ -8046,9 +8106,21 @@ def main():
         # cannot read; never matched by its wording) is not a post it found, so it says the check
         # could not be made rather than claiming a post (#2922).
         unfollowed = any(why in reason for why in judge.unfollowed)
+        # Nor is a file that only names an endpoint, handed to a script the gate could not see to be
+        # unable to act on it (name_only): it stays refused, and says what was measured (#3410).
+        named_only = not unfollowed and any(why in reason for why in judge.named_only)
         lead = ("REFUSED: the gate could not check whether this command posts to Slack: "
-                if unfollowed else "REFUSED: this command posts to Slack: ")
-        if unfollowed and not MARKER.search(cmd):
+                if unfollowed or named_only else "REFUSED: this command posts to Slack: ")
+        if named_only:
+            # The file may be a message's payload or a text that mentions the name, and the gate
+            # cannot tell which, so both are answered: the draft rule, and where to go with neither.
+            advice = ("This is not a finding that it posts: the file only names a Slack posting endpoint, and "
+                      "the gate could not tell whether the script sends anything to it. If the command sends no "
+                      "Slack message, there is no message to save as a draft: if it must run as written, say so "
+                      "to Dan (claude-config#3410). "
+                      + draft_advice("with the same channel and thread",
+                                     "If it does send one, save that message as a draft instead"))
+        elif unfollowed and not MARKER.search(cmd):
             # Nothing in the command names a posting endpoint, so it is no message, and telling the
             # session to save one as a draft only misleads it (claude-config#2631).
             advice = ("This is not a finding that it posts: the gate could not follow what it runs, and the "

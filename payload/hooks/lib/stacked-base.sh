@@ -93,6 +93,29 @@ sb_field() {   # $1 = sb_stacked_base's answer  $2 = ref | tip | pr
 
 sb__none() { printf 'none %s\n' "$1"; return 1; }
 
+# GitHub's one line answer split on tabs into the caller's `fields`, every empty field kept, the
+# last one included. Returns 1 unless there are exactly the five that were asked for.
+sb__fields() {   # $1 = the line
+  local rest="$1"
+  fields=()
+  while :; do
+    case "$rest" in
+      *$'\t'*) fields+=("${rest%%$'\t'*}"); rest="${rest#*$'\t'}" ;;
+      *) fields+=("$rest"); break ;;
+    esac
+  done
+  [ "${#fields[@]}" -eq 5 ]
+}
+
+# One more item on a list in words: "a", then "a and b", then "a, b and c".
+sb__and() {   # $1 = the list so far, or empty  $2 = the item
+  case "$1" in
+    "") printf '%s' "$2" ;;
+    *" and "*) printf '%s, %s and %s' "${1% and *}" "${1##* and }" "$2" ;;
+    *) printf '%s and %s' "$1" "$2" ;;
+  esac
+}
+
 sb__answer() {
   local dir="$1" floor="$2" head branch def tip ref near="" i j n holds
   local -a tips=() refs=()
@@ -139,7 +162,8 @@ SB_REFS
   done
   [ -n "$near" ] || { sb__none "more than one branch on origin lies under this one and none of them holds the others"; return 2; }
 
-  local t name why="" left deadline line num state hname hoid cross rerr
+  local t name why="" left deadline line num state hname hoid cross rerr missing
+  local -a fields=()
   for t in gh jq perl; do
     command -v "$t" >/dev/null 2>&1 || { sb__none "$t is not on PATH, so GitHub could not be asked whether the branch under this one is an open pull request"; return 2; }
   done
@@ -154,7 +178,7 @@ SB_REFS
     # A process of its own, so the bound can end it: the library's reader walks every logged in account.
     bounded_run "$left" bash -c '. "$1/merge-target.sh" 2>/dev/null && mt_pr_view "$2" "number,url,state,headRefName,headRefOid,isCrossRepository" "$(mt_remote_slug)" "" 2>/dev/null' _ "$SB__LIB_ABS" "$name"
     if [ "$BOUNDED_RC" -eq 124 ]; then why="GitHub did not answer about origin/$name within ${SB_READ_SECONDS}s"; break; fi
-    line="$(printf '%s' "$BOUNDED_OUT" | jq -r 'select(.found == true) | .view | [(.number | tostring), (.state // ""), (.headRefName // ""), (.headRefOid // ""), (.isCrossRepository | tostring)] | @tsv' 2>/dev/null)"
+    line="$(printf '%s' "$BOUNDED_OUT" | jq -r 'select(.found == true) | .view | [(.number | tostring), (.state // ""), (.headRefName // ""), (.headRefOid // ""), (if .isCrossRepository == null then "" else (.isCrossRepository | tostring) end)] | @tsv' 2>/dev/null)"
     if [ -z "$line" ]; then
       # No pull request, and a read that failed, are different faults with different remedies
       # (L11): the reader's envelope says which, and a process that printed none says its exit.
@@ -167,7 +191,20 @@ SB_REFS
       else why="GitHub named no pull request for origin/$name"; fi
       continue
     fi
-    IFS=$'\t' read -r num state hname hoid cross <<< "$line"
+    # Split keeping empty fields: tab is whitespace to `read`, which merges two tabs into one and
+    # moves every later field along, so the reason named the wrong one (claude-config#3463). Only
+    # the first line is read, as `read` read it.
+    if ! sb__fields "${line%%$'\n'*}"; then
+      why="GitHub's answer about origin/$name could not be read: it held ${#fields[@]} fields where 5 were expected"; continue
+    fi
+    num="${fields[0]}"; state="${fields[1]}"; hname="${fields[2]}"; hoid="${fields[3]}"; cross="${fields[4]}"
+    missing=""
+    [ -n "$num" ] || missing="$(sb__and "$missing" "its number")"
+    [ -n "$state" ] || missing="$(sb__and "$missing" "its state")"
+    [ -n "$hname" ] || missing="$(sb__and "$missing" "its head branch")"
+    [ -n "$hoid" ] || missing="$(sb__and "$missing" "its head commit")"
+    [ -n "$cross" ] || missing="$(sb__and "$missing" "whether it comes from a fork")"
+    if [ -n "$missing" ]; then why="GitHub's answer about origin/$name left out $missing"; continue; fi
     if [ "$hname" != "$name" ]; then why="GitHub answered about another branch than origin/$name"; continue; fi
     if [ "$state" != OPEN ]; then why="pull request #$num of origin/$name is not open (GitHub says $state)"; continue; fi
     if [ "$cross" != false ]; then why="pull request #$num of $name comes from a fork, not from this repository"; continue; fi
