@@ -8297,8 +8297,8 @@ question under `~/.claude/state/asked-questions` on this Mac, at most 2,000 kept
 dialog in the asking mod's own `$.state` (key `asking`) while it is open. Picker manners reads that
 state, so a mod's own dialog it would refuse is asked and written onto no issue (Dan's rule, 5:46 PM
 ET on 2026-11-21, from a picker: "Yes, as built (Recommended)"; the two week reading of the
-recorded lengths decides whether the mods' own questions are held too): only the mod writes its state,
-and a session writes none. The scan fails a mod calling `$.ui.ask` other than through
+recorded lengths decides whether the mods' own questions are held too): only the mod writes
+its state, and a session writes none. The scan fails a mod calling `$.ui.ask` other than through
 `recordedAsk`, and an asker missing from `OWN_ASKERS` or from picker manners' reads.
 `node tools/asked-questions-count.ts` reads the records, for the reading due two weeks from
 2026-11-21 on #3321. `node tools/picker-check-count.ts`
