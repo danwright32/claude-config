@@ -123,7 +123,7 @@ else check "every BBEdit open brings its window to the front" "$no_front"; fi
 # tells Claude to run them, so every script it names must exist beside it (L3: built is not wired),
 # and the sequence must run each one.
 SKILL_DIR="$(dirname "$SKILL")"
-named="$(grep -o '~/\.claude/skills/pennie-dev-update/[A-Za-z0-9_.-]*' "$SKILL" | sort -u)"
+named="$(grep -o -E '(~/\.claude|__CLAUDE_HOME__)/skills/pennie-dev-update/[A-Za-z0-9_.-]*' "$SKILL" | sort -u)"
 if [ -z "$named" ]; then check "the skill runs its scripts by path" "it names no script under ~/.claude/skills/pennie-dev-update/"
 else
   while IFS= read -r ref; do
@@ -137,6 +137,35 @@ sequence="$(awk '/^## 10\./ { f = 1; next } f' "$SKILL")"
 for step in 'gather.js gather' 'gather.js commit-state' 'lint-post.js'; do
   case "$sequence" in *"$step"*) check "the sequence runs $step" ok ;; *) check "the sequence runs $step" "section 10 never says $step" ;; esac
 done
+
+# ---- claude-config#3503: on 2026-11-23 a gathered pull request body named a Slack posting method,
+# and from then on the Slack drafts gate refused the skill's own local commands that are handed the
+# gathered file: a node one liner printing counts from it, and gather.js commit-state. Neither needs
+# the network, so both run under the no network wrapper, which the gate lets through only when the
+# wrapper's path is the call's first word, written out absolute, and no word after it is a tilde.
+# __CLAUDE_HOME__ is what the sync turns into this Mac's absolute path. The gather itself reads
+# GitHub, so it must NOT be put under the wrapper. Each claim is held to the code line that makes it.
+WRAP_RUN='__CLAUDE_HOME__/hooks/no-network-run.sh '
+if [ -f "$DIR/../payload/hooks/no-network-run.sh" ]; then check "the wrapper the skill names exists in the payload" ok
+else check "the wrapper the skill names exists in the payload" "no payload/hooks/no-network-run.sh"; fi
+commit_line="$(printf '%s\n' "$sequence" | grep -E '^[[:space:]]*[^[:space:]].*gather\.js commit-state ' | head -n 1)"
+case "${commit_line#"${commit_line%%[![:space:]]*}"}" in
+  "${WRAP_RUN}node __CLAUDE_HOME__/skills/pennie-dev-update/gather.js commit-state "*) check "the sequence runs commit-state under the no network wrapper" ok ;;
+  *) check "the sequence runs commit-state under the no network wrapper" "its line is: ${commit_line:-none}" ;; esac
+case "$commit_line" in
+  *'~'*) check "the commit-state line holds no tilde, which takes it off the wrapper's route" "$commit_line" ;;
+  *) check "the commit-state line holds no tilde, which takes it off the wrapper's route" ok ;; esac
+read_line="$(printf '%s\n' "$sequence" | grep -F -- "${WRAP_RUN}node -e " | grep -F 'gathered.json' | head -n 1)"
+if [ -n "$read_line" ]; then check "the sequence reads the gathered file's counts under the no network wrapper" ok
+else check "the sequence reads the gathered file's counts under the no network wrapper" "section 10 has no '${WRAP_RUN}node -e' line reading gathered.json"; fi
+gather_line="$(printf '%s\n' "$sequence" | grep -F 'gather.js gather ' | head -n 1)"
+case "$gather_line" in
+  *no-network-run*) check "the gather, which reads GitHub, is not put under the wrapper" "$gather_line" ;;
+  '') check "the gather, which reads GitHub, is not put under the wrapper" "section 10 has no gather line" ;;
+  *) check "the gather, which reads GitHub, is not put under the wrapper" ok ;; esac
+window_section="$(awk '/^## 2\./ { f = 1; next } f && /^## / { exit } f' "$SKILL")"
+case "$window_section" in *"${WRAP_RUN}"*) check "section 2 says commit-state runs under the wrapper" ok ;;
+  *) check "section 2 says commit-state runs under the wrapper" "section 2 never names ${WRAP_RUN% }" ;; esac
 
 # ---- claude-config#1182: a bare gh command runs as whichever account gh has active, which on the
 # personal MacBook is danwright32, and GitHub answers it 404 for the work organisation's private repos. So
