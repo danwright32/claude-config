@@ -7918,6 +7918,24 @@ be checked for a merge or deploy), but at the worker's next Stop the driver lets
 touching its own manifest so it loads again while idle, then starts it again; still out of step, it
 stops for the night with its claim parked and the reason in the morning report.
 
+A reload can also fail outright: Claude Code then writes "<mod>: reload failed, the previous version
+stays loaded: <why>" into the session's transcript, as a system row, and goes on running the copy
+it had, for as long as the session lasts. On the work MacBook a session ran on an old mod-kit for
+six days that way (52 failed reloads), and the old code wrongly refused a builder's edit; on this
+Mac a session ran three days on an old picker-manners (#3309). Nothing said so to Dan: `claude-sync
+status` sees only that the installed mods are current, and `rule-files-changed.sh` only a mod a pull
+added, removed or replaced. So `hooks/mod-reload-failed.sh`, on every prompt, reads what the
+transcript gained since the last one, and when a mod's reload has failed since its copy loaded it
+tells Dan which mod, since when, which copy is still running and to start a new session, and hands
+the session the same with Claude Code's reason and an instruction to call a refusal from that mod
+out of date. Once per mod per failure: the later failed reloads are not told, a reload that works
+ends it quietly, and the same old copy still running a day after it was told is told again
+(`CLAUDE_MOD_RELOAD_RETELL_AFTER`). A failure written before the session's current process started
+counts for nothing, since that process loaded every mod afresh. It is a settings hook and depends on
+no mod, so a frozen mod cannot silence it. A guard's own refusal does not say it is out of date:
+the words come from the frozen copy's code, and Claude Code raises no event for a refusal by a mod
+that a hook could add to.
+
 After each apply, and after a send that changed which mods are named, `claude plugin list --json`
 and `claude plugin validate` are asked about every mod,
 and the pull names any mod Claude Code does not list as enabled, or that validation refuses, with

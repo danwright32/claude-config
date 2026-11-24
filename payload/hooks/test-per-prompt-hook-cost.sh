@@ -204,6 +204,20 @@ with open(sys.argv[1], "w") as f:
     f.write(json.dumps({"type": "user", "message": {"content": "last"}}) + "\n")
     f.write(json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Edit", "input": {"file_path": "/y"}}]}}) + "\n")
 ' "$F/t.jsonl" "$n" ;;
+    mod-reload-failed.sh)
+      # The session's transcript, which only grows, with N failed and N good reloads of N mods in it
+      # (claude-config#3309), and N other sessions' records beside this one's in the state folder,
+      # which the hook must never list. Its bytes are read by its one python, which no process count
+      # can see; it reads only what the transcript gained since the last prompt.
+      python3 -c '
+import json, sys
+with open(sys.argv[1], "w") as f:
+    for i in range(int(sys.argv[2])):
+        for c in ("mod-%d: reload failed, the previous version stays loaded: it threw" % i, "mod-%d: reloaded (1 hook: tool.call)" % i):
+            f.write(json.dumps({"type": "system", "subtype": "informational", "timestamp": "2026-11-05T12:00:00.000Z", "content": c}) + "\n")
+        f.write(json.dumps({"type": "system", "subtype": "informational", "timestamp": "2026-11-05T13:00:00.000Z", "content": "mod-%d: reload failed, the previous version stays loaded: it threw" % i}) + "\n")
+' "$F/t.jsonl" "$n"
+      i=0; while [ "$i" -lt "$n" ]; do printf '{}\n' > "$F/tmp/claude-mod-reload-other$i.json"; i=$((i + 1)); done ;;
     pr-merge-quiz.sh)
       # With --release-held, at every turn end (#1768). What piles up is every OTHER session's held
       # merges, one file each in the one shared folder, plus any a stopped release left part taken;
