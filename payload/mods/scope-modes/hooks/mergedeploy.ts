@@ -1,7 +1,7 @@
 import type { ModKitGh } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import { deployWith, hasFlag, operations, runnerScript, type Cmd } from './nobuild.ts'
 import { resolveDir, syncCall } from './overnight.ts'
-import { gitEnvNamed, gitFolder, gitGlobals, gitPlace } from './gitplace.ts'
+import { gitEnvNamed, gitFolder, gitGlobals, gitPlace, gitSpellsNaming } from './gitplace.ts'
 
 // Sleep mode phase 7 (#843): what may merge and deploy overnight, per repository.
 //
@@ -429,8 +429,11 @@ export const dirsOf = (commands: Cmd[], cwd: string, home: string, raw: string):
       // followed, exactly as before: mod-kit now says where a chain leads (`place.runs`), and
       // placing it there is the right reading and a loosening, so it waits for Dan (the pull
       // request of #3398, "For Dan").
+      // A word before the subcommand that only spells --git-dir or --work-tree (the value of the
+      // option in front of it, or one with no value) closed this rule before #3398, which read the
+      // words, and closes it still (`gitSpellsNaming`, the review of #3532).
       let here: string | null = null
-      if (c.git && dir !== null && gitGlobals(c.words, c.git).filter(w => w === '-C').length <= 1)
+      if (c.git && dir !== null && gitGlobals(c.words, c.git).filter(w => w === '-C').length <= 1 && !gitSpellsNaming(c.words, c.git))
         here = gitFolder(gitPlace(c.git, dir, (w, from) => resolveDir(w, from, home), envNamed))
       out.push(here)
       continue

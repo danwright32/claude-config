@@ -566,6 +566,35 @@ describe('the folder a git command is placed in, by the repository it names (#33
     expect(dirs('git commit -m "read GIT_DIR as git does" && git push')).toEqual([CWD, CWD])
     expect(gitDir('echo "$GIT_DIR"; git push')).toBe(CWD)
   })
+  // The review of #3532. A word before the subcommand that only SPELLS --git-dir or --work-tree is,
+  // to mod-kit's reader as to git, the value of the option in front of it (--namespace, -c, -C), or
+  // names nothing where no value follows it. Until #3398 this rule read those words itself and
+  // closed on every one of them; read through the reader alone, each was placed in a folder, and a
+  // push spelled that way went ahead from a feature branch. Every form is built here, never listed:
+  // each option of git's that takes the next word, holding each spelling.
+  test('a word before the subcommand that only spells --git-dir or --work-tree still closes the rule, as the value of another option or with no value of its own (#3532 review)', () => {
+    const night = nightRepos(readRepoLists(JSON.stringify({ v: 1, mergeOnly: [], mayDeploy: ['o/r'] })), [])
+    const judge = (command: string) => judgeNight(night, cmds(command), dirs(command).map(d => (d === null ? null : { ...ON_BRANCH, own: 'o/r' })))
+    const spelled = ['--git-dir=/elsewhere/.git', '--git-dir', '--work-tree=/elsewhere', '--work-tree']
+    const forms: string[] = []
+    for (const option of ['--namespace', '-c', '-C'])
+      for (const word of spelled)
+        for (const first of ['', '-C . ', '-c x=y ']) forms.push(`git ${first}${option} ${word}`)
+    for (const f of forms) {
+      expect({ f, at: gitDir(`${f} push`) }).toEqual({ f, at: null })
+      expect({ f, at: gitDir(`${f} checkout main`) }).toEqual({ f, at: null })
+      expect({ f, what: judge(`${f} push`)?.what }).toEqual({ f, what: 'push from a branch that could not be read' })
+    }
+    // One with no value and no subcommand after it names nothing the reader hands on, and closed too.
+    for (const f of ['git --git-dir', 'git --work-tree', 'git -C . --git-dir', 'git -C /other --work-tree']) expect({ f, at: gitDir(f) }).toEqual({ f, at: null })
+    // The controls: the same options holding any other value are placed as they always were, and
+    // the spelling after the subcommand is an argument of it, which this rule never read.
+    expect(dirs('git --namespace ns push')).toEqual([CWD])
+    expect(dirs('git -c x=y push')).toEqual([CWD])
+    expect(dirs('git -C /other -c x=y push')).toEqual(['/other'])
+    expect(judge('git --namespace ns push')).toBeUndefined()
+    expect(dirs('git push origin --git-dir')).toEqual([CWD])
+  })
   test('more than one -C is still not followed here, wherever it leads (#3398, Dan to decide)', () => {
     // mod-kit now says where a chain leads (/a/b), and this rule read every chain as a repository
     // that cannot be told. Placing it where git runs is the right reading and a loosening (a push

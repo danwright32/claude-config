@@ -35,6 +35,19 @@ export const gitRead = (g: ModKitGit): GitRead => ({
 export const gitGlobals = (words: readonly string[], g: { sub?: string; args: readonly string[] }): string[] =>
   g.sub === undefined ? words.slice(1) : words.slice(1, words.length - g.args.length - 1)
 
+// --git-dir or --work-tree as a word of its own before the subcommand, with a value joined to it or
+// none, whatever the reader took the word for.
+const SPELLS_NAMING = /^--(?:git-dir|work-tree)(?:=|$)/
+/**
+ * Whether a word before the subcommand spells --git-dir or --work-tree. The reader hands on the
+ * two options where git reads them as options; where the word is the value of the option in front
+ * of it (`--namespace --git-dir=/o/.git`, `-c --work-tree=/o`, `-C --git-dir`), or has no value
+ * after it, the reader names nothing, as git does. The merge and deploy rule read these words
+ * itself until #3398 and closed on every one, so it asks this beside the reading and closes still
+ * (the review of #3532): a rule that refuses lets nothing through on the new reading alone.
+ */
+export const gitSpellsNaming = (words: readonly string[], g: { sub?: string; args: readonly string[] }): boolean => gitGlobals(words, g).some(w => SPELLS_NAMING.test(w))
+
 // GIT_DIR, GIT_WORK_TREE or GIT_COMMON_DIR given a value anywhere in a call's text (the reading the
 // overnight rule has kept since #1124 for a folder that says nothing about where git acts), and one
 // of them as a whole word of any command.
