@@ -1123,7 +1123,12 @@ C
     # held_run <t|s> <library|-> <marker name> <program> [words]: the program started traced or
     # paused under the wrapper. HELD, BOXED, GIVEN and ENDED are what the launcher printed (GIVEN
     # is 0 when the task port was given), and LOADED is whether the library wrote its marker.
-    said() { printf '%s\n' "$OUT" | sed -n "s/^$1=//p" | head -n 1; }
+    said() {
+      local line
+      while IFS= read -r line; do
+        case "$line" in "$1="*) printf '%s\n' "${line#"$1="}"; return ;; esac
+      done <<<"$OUT"
+    }
     held_run() {
       local how="$1" library="$2" mark="$T/loaded.$3"
       shift 3
