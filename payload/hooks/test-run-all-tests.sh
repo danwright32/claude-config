@@ -831,9 +831,9 @@ t_recs="$(ls "$TSTORE" 2>/dev/null | grep -c 'test-.*\.sh$' || true)"
 # `awk NR==1` rather than `head -1`, which leaves on its first line and can kill its own producer
 # under pipefail (#132, L183).
 t_slow_rec="$(ls "$TSTORE" 2>/dev/null | grep 'test-slowpoke\.sh$' | awk 'NR==1')"
-# The record is `<seconds>` or `<seconds> <checks>` since #219 put a second perishable number about
-# the same suite beside the first. Read the FIELD rather than the whole line, and pin the shape of
-# the whole record too, so a third field cannot be added without this saying so (L317).
+# The record is `<seconds> <checks> <share>` since #3388 added the share the seconds were measured
+# at, and #219 the check count before it. Read the FIELD rather than the whole line, and pin the
+# shape of the whole record too, so a fourth field cannot be added without this saying so (L317).
 t_slow_line="$(cat "$TSTORE/$t_slow_rec" 2>/dev/null)"
 case "$(printf '%s\n' "$t_slow_line" | awk 'NR == 1 { print $1 }')" in
   ''|*[!0-9]*) check "#144 and what it records is a whole number of seconds" "the record for test-slowpoke.sh reads '$t_slow_line'" ;;
@@ -841,15 +841,16 @@ case "$(printf '%s\n' "$t_slow_line" | awk 'NR == 1 { print $1 }')" in
 esac
 # Matched with `case` on a variable rather than `printf | grep -q`, which leaves on its first
 # match and can be killed by its own producer under pipefail (#132, L183). The shape is pinned in
-# three parts: it begins and ends with a digit, and taking the digits out leaves at most one
-# single space, so a third field cannot be added without this saying so (L317).
+# three parts: it begins and ends with a digit, and taking the digits out leaves at most two
+# single spaces, so a fourth field cannot be added without this saying so (L317). The third is the
+# share the seconds were measured at (#3388), and its rules are in test-run-all-tests-launch-order.sh.
 t_shape_ok=1
 case "$t_slow_line" in [0-9]*) ;; *) t_shape_ok=0 ;; esac
 case "$t_slow_line" in *[0-9]) ;; *) t_shape_ok=0 ;; esac
-case "$(printf '%s' "$t_slow_line" | tr -d '0-9')" in ''|' ') ;; *) t_shape_ok=0 ;; esac
+case "$(printf '%s' "$t_slow_line" | tr -d '0-9')" in ''|' '|'  ') ;; *) t_shape_ok=0 ;; esac
 [ "$t_shape_ok" -eq 1 ] \
-  && check "#219 and the record is that field, or that field and a check count, and nothing else" ok \
-  || check "#219 and the record is that field, or that field and a check count, and nothing else" "the record reads '$t_slow_line'"
+  && check "#219 and the record is that field, a check count and the share, and nothing else" ok \
+  || check "#219 and the record is that field, a check count and the share, and nothing else" "the record reads '$t_slow_line'"
 
 # Now the measurement disagrees with the file size, which is the case the issue is about. The
 # record is EDITED rather than fabricated from nothing, so the check runs against the same key the
@@ -1613,7 +1614,7 @@ HOOK_TESTS_ROOT="$RF" HOOK_TESTS_TIMINGS="$RFSTORE" HOOK_TESTS_BUDGET=4 bash "$R
   && check "#229 a good record survives a run in which that suite refused" ok \
   || check "#229 a good record survives a run in which that suite refused" "it now reads '$(cat "$RFSTORE/$RFK" 2>/dev/null)'"
 
-# And the run SAYS when the suite it launched first is not the one that took longest, which is the
+# And the run SAYS when the suite it launched first is not the one that costs the most, which is the
 # single line that would have made the original defect visible without reading the cache by hand
 # (L11). The refuser has no record so it is launched last by size among the unmeasured, and the
 # honest suite leads; the fixture below is the other way round.
@@ -1632,7 +1633,7 @@ printf '99\n' > "$LEADSTORE/$(printf '%s' "suites/test-quick.sh" | sed 's/%/%25/
 printf '0\n'  > "$LEADSTORE/$(printf '%s' "suites/test-slowest.sh" | sed 's/%/%25/g; s#/#%2F#g')"
 out_lead="$(HOOK_TESTS_ROOT="$LEAD" HOOK_TESTS_TIMINGS="$LEADSTORE" HOOK_TESTS_BUDGET=4 HOOK_TESTS_JOBS=2 bash "$RUNNER" "$LEAD/suites" 2>&1)"
 case "$out_lead" in
-  *"launched first is not the one that took longest"*)
+  *"launched first is not the one that costs the most"*)
     check "#229 the run says when the suite it launched first was not the slowest" ok ;;
   *)
     check "#229 the run says when the suite it launched first was not the slowest" "out=$out_lead" ;;
@@ -1642,7 +1643,7 @@ esac
 # the suite that really is slowest.
 out_lead2="$(HOOK_TESTS_ROOT="$LEAD" HOOK_TESTS_TIMINGS="$LEADSTORE" HOOK_TESTS_BUDGET=4 HOOK_TESTS_JOBS=2 bash "$RUNNER" "$LEAD/suites" 2>&1)"
 case "$out_lead2" in
-  *"launched first is not the one that took longest"*)
+  *"launched first is not the one that costs the most"*)
     check "#229 and a run that led with the slowest suite says nothing" "out=$out_lead2" ;;
   *)
     check "#229 and a run that led with the slowest suite says nothing" ok ;;

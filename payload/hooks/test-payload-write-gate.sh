@@ -713,10 +713,11 @@ mkdir -p "$FIX/brokencommands"
 cp "$HOOK" "$FIX/brokencommands/payload-write-gate.sh"
 cp -R "$DIR/lib" "$FIX/brokencommands/lib"
 python3 - "$FIX/brokencommands/lib/shell-words.py" <<'PY'
-import sys
+import re, sys
 p = sys.argv[1]
 s = open(p).read()
-s = s.replace('def commands(s, cwd="", heredocs=None, parts=None, spans=None):\n', 'def commands(s, cwd="", heredocs=None, parts=None, spans=None):\n    raise RuntimeError("broken for the test")\n', 1)
+# Whatever the reader's arguments are: the line named them once, and matched nothing when two were added (claude-config#3464).
+s = re.sub(r'(?m)^(def commands\(s, cwd=""[^\n]*\):\n)', r'\1    raise RuntimeError("broken for the test")\n', s, count=1)
 open(p, "w").write(s)
 PY
 grep -q 'broken for the test' "$FIX/brokencommands/lib/shell-words.py" && check "#2080 the broken commands reader is in place" ok || check "#2080 the broken commands reader is in place" "the replace matched nothing"

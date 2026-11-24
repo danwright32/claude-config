@@ -186,6 +186,28 @@ for said in 'no channel, say so and skip the draft' 'nothing was sent' 'belongs 
     *) check "the draft step says: $said" "section 10 does not say: $said" ;; esac
 done
 
+# ---- claude-config#3502: on 2026-11-23 the sequence opened the draft in BBEdit at step 5, then ran
+# the issue check and the state commit, and Dan took the open window to mean the run was finished
+# and edited the draft while it was still going ("You shouldn't open bbedit until it's ready to
+# post"). So BBEdit is first named in section 10 only after the issue check (the step running
+# `gather.js gh`) and the state commit, and the Slack draft, which is saved from the file Dan may
+# have edited there, comes after the editor opens. Line numbers within section 10, first mention.
+seq_line(){ awk -v s="$1" 'index($0, s) { print NR; exit }' <<< "$sequence"; }
+open_at="$(seq_line 'BBEdit')"; issue_at="$(seq_line 'gather.js gh')"
+commit_at="$(seq_line 'gather.js commit-state')"; draft_at="$(seq_line "$DRAFT_TOOL")"
+if [ -z "$open_at" ] || [ -z "$issue_at" ] || [ -z "$commit_at" ] || [ -z "$draft_at" ]; then
+  check "section 10 names the editor, the issue check, the state commit and the draft" "open=${open_at:-none} issue=${issue_at:-none} commit=${commit_at:-none} draft=${draft_at:-none}"
+else
+  if [ "$open_at" -gt "$issue_at" ] && [ "$open_at" -gt "$commit_at" ]; then
+    check "the editor opens only after the issue check and the state commit" ok
+  else
+    check "the editor opens only after the issue check and the state commit" "section 10 names BBEdit on its line $open_at, the issue check on $issue_at, the state commit on $commit_at"
+  fi
+  if [ "$draft_at" -gt "$open_at" ]; then check "the Slack draft is saved only after the editor opens" ok
+  else check "the Slack draft is saved only after the editor opens" "section 10 saves the draft on its line $draft_at, before BBEdit on $open_at"; fi
+fi
+gone "section 8 no longer opens the draft as soon as it is checked" "Then open it"
+
 echo "passed: $pass   failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
