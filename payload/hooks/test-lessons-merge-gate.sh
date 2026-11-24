@@ -408,6 +408,16 @@ done
 run_hook "$MERGE 7 --squash" PATH="$NOREADER"
 if [ "$hook_rc" -eq 2 ] && says "jq or python3"; then pass; else fail "with neither jq nor python3 a merge is refused naming them, got (exit $hook_rc): ${hook_out:0:400}"; fi
 
+# Reading the transcript loads the approval reader by path. With bytecode on that leaves a
+# __pycache__ in the lib folder, which the sync carries (#2600). Run a copy of the two files with
+# bytecode left on and look for one.
+LIBCOPY="$WORK/libcopy"; mkdir -p "$LIBCOPY" "$WORK/bytecode-record"
+cp "$HOOK_DIR/lib/lesson-merge.py" "$HOOK_DIR/lib/db-apply-approval.py" "$LIBCOPY/"
+printf '{}\n' > "$WORK/bytecode-transcript.jsonl"
+env -u PYTHONDONTWRITEBYTECODE python3 "$LIBCOPY/lesson-merge.py" harvest --record-dir "$WORK/bytecode-record" \
+  --transcript "$WORK/bytecode-transcript.jsonl" --session s >/dev/null 2>&1
+if [ -e "$LIBCOPY/__pycache__" ]; then fail "reading a transcript leaves a __pycache__ beside the lib files (#2600)"; else pass; fi
+
 echo
 echo "passed: $passed   failed: $failed"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$passed" "$failed"
