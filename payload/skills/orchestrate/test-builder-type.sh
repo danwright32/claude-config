@@ -83,6 +83,8 @@ Alpha opening words.
 - **First rule.** alpha keeps this
 - **Second rule.** alpha drops this
   and this second line of it
+
+      an indented block under the second rule, after a blank line
 - **Third rule.** alpha keeps this too
 
 ## Beta
@@ -135,6 +137,9 @@ check "a carried section keeps its opening words" "$(has "$OUT" "Alpha opening w
 check "a carried section keeps an item no row drops" "$(has "$OUT" "**First rule.** alpha keeps this")"
 check "a dropped item is gone" "$(lacks "$OUT" "alpha drops this")"
 check "a dropped item's second line goes with it" "$(lacks "$OUT" "and this second line of it")"
+# What is indented under a bullet is part of it across a blank line too (a command, a sub list),
+# or dropping the bullet would leave its example behind for a builder to follow.
+check "a dropped item's indented block after a blank line goes with it" "$(lacks "$OUT" "an indented block under the second rule")"
 check "the item after a dropped one is still carried" "$(has "$OUT" "**Third rule.** alpha keeps this too")"
 check "a left out section's heading is gone" "$(lacks "$OUT" "## Beta")"
 check "a left out section's items are gone" "$(lacks "$OUT" "nothing of beta is carried")"
@@ -149,7 +154,7 @@ check "the render says it is generated, below the head" "$(has "$OUT" "generated
 # Byte identical run to run, and nothing in it that two clean edits could collide over (L554).
 render --rules "$FX" --head "$HEAD" --table "$TABLE" > "$WORK/again.md" 2>/dev/null
 check "two renders of the same sources are byte identical" "$([ -s "$WORK/again.md" ] && cmp -s "$OUT" "$WORK/again.md" && echo ok || echo "they differ, or nothing was rendered")"
-aggregate="$(grep -nE '20[0-9]{2}-[0-9]{2}-[0-9]{2}|sha256|[0-9]+ (lessons|rules|sections|characters)' "$OUT" 2>/dev/null | head -1)"
+aggregate="$(grep -nE '20[0-9]{2}-[0-9]{2}-[0-9]{2}|sha256|[0-9]+ (lessons|rules|sections|characters)' "$OUT" 2>/dev/null)"
 check "the render carries no date, count or hash of its sources" "$([ -s "$OUT" ] && [ -z "$aggregate" ] && echo ok || echo "it holds one, or nothing was rendered: $aggregate")"
 
 # ---- strict: what a pull request is held to ----
@@ -199,6 +204,13 @@ check "a missing head is a failure" "$([ $? -eq 2 ] && echo ok || echo "it did n
 printf 'name: builder\n\nno frontmatter fence\n' > "$WORK/bad-head.md"
 render --rules "$FX" --head "$WORK/bad-head.md" --table "$TABLE" > /dev/null 2> "$WORK/missing.txt"
 check "a head that does not open with frontmatter is a failure" "$([ $? -eq 2 ] && echo ok || echo "it did not exit 2")"
+# Exit 1 means a stale copy and nothing else, so a source that is not text must not reach it by
+# way of an uncaught error.
+printf -- '---\nname: builder\n---\n\nbytes that are not text: \377\376\n' > "$WORK/not-text-head.md"
+render --rules "$FX" --head "$WORK/not-text-head.md" --table "$TABLE" > "$WORK/stdout.md" 2> "$WORK/missing.txt"
+rc=$?
+check "a source that is not readable text is a failure that says so, exit 2" \
+  "$([ "$rc" -eq 2 ] && [ ! -s "$WORK/stdout.md" ] && [ "$(has "$WORK/missing.txt" "nothing was rendered")" = ok ] && echo ok || echo "exit $rc: $(tail -1 "$WORK/missing.txt" | cut -c1-200)")"
 # An import below the first section is one Claude Code would follow and this cannot place.
 mkdir -p "$WORK/late"
 cp "$FX/RTK.md" "$FX/LESSONS-CORE-a.md" "$WORK/late/"
@@ -231,7 +243,8 @@ TYPE_HOME="### Which agent type a builder runs as"
 homes="$(grep -c -x -F -- "$TYPE_HOME" "$SKILL" 2>/dev/null || true)"
 check "the orchestrate skill says which agent type a builder runs as, once" "$([ "${homes:-0}" -eq 1 ] && echo ok || echo "'$TYPE_HOME' is a heading ${homes:-0} times in $(basename "$SKILL")")"
 section="$(awk -v h="$TYPE_HOME" '$0 == h { on = 1; next } on && /^#/ { exit } on { print }' "$SKILL" 2>/dev/null)"
-in_section() { printf '%s\n' "$section" | grep -qF -- "$1" && echo ok || echo "the section does not say '$1'"; }
+printf '%s\n' "$section" > "$WORK/section.txt"
+in_section() { grep -qF -- "$1" "$WORK/section.txt" && echo ok || echo "the section does not say '$1'"; }
 check "it names the type as the Agent call takes it" "$(in_section 'subagent_type: "builder"')"
 # A type the session's list lacks fails the Agent call, and the type is on a Mac only once that
 # Mac has rendered it, so the instruction has to turn on what the session can see.
@@ -264,7 +277,7 @@ else
   tools_of() { front_of "$1" | sed -n 's/^tools: *//p' | tr ',' '\n' | sed 's/^ *//; s/ *$//' | grep -v '^$'; }
   # The model rule (claude-config#1961) sets a builder's model on each dispatch. A model written
   # in the type would answer for a dispatch that named none, behind the gate's back.
-  sets_model() { front_of "$1" | grep -q '^model:'; }
+  sets_model() { front_of "$1" > "$WORK/front-model.txt"; grep -q '^model:' "$WORK/front-model.txt"; }
   # A connected server is told from a mod by where it comes from, never by a list kept here (L96):
   # a server this repository ships as a mod that registers a tool is the session's own, as is
   # Claude Code's browser extension. Anything else is a connector, and so is a wildcard, which
@@ -286,15 +299,18 @@ $(tools_of "$1")
 TOOLS
     printf '%s' "${out# }"
   }
-  front="$(front_of "$REAL")"
-  check "the type is named builder" "$(printf '%s\n' "$front" | grep -qx 'name: builder' && echo ok || echo "its frontmatter opens: $(printf '%s' "$front" | head -3 | tr '\n' '|')")"
-  check "the type does not load the rule files" "$(printf '%s\n' "$front" | grep -qx 'omitClaudeMd: true' && echo ok || echo "omitClaudeMd: true is not in its frontmatter")"
-  check "the type sets no model of its own" "$([ -n "$front" ] && ! sets_model "$REAL" && echo ok || echo "its frontmatter sets one, or there is none")"
+  # Each list goes to a file that grep reads, never down a pipe to a grep that stops at its first
+  # match: under pipefail that can report a failure that never happened (test-pipefail-shortcircuit.sh).
+  front_of "$REAL" > "$WORK/front.txt"
+  check "the type is named builder" "$(grep -qx 'name: builder' "$WORK/front.txt" && echo ok || echo "its frontmatter opens: $(sed -n 1,3p "$WORK/front.txt" | tr '\n' '|')")"
+  check "the type does not load the rule files" "$(grep -qx 'omitClaudeMd: true' "$WORK/front.txt" && echo ok || echo "omitClaudeMd: true is not in its frontmatter")"
+  check "the type sets no model of its own" "$([ -s "$WORK/front.txt" ] && ! sets_model "$REAL" && echo ok || echo "its frontmatter sets one, or there is none")"
   tools="$(tools_of "$REAL")"
+  printf '%s\n' "$tools" > "$WORK/tools.txt"
   check "the type has a tool list, so it does not inherit every connected server" \
     "$([ -n "$tools" ] && echo ok || echo "its frontmatter has no tools line")"
   for want in Bash Read Edit Write Skill SubagentHandback mcp__area-check mcp__job-watcher; do
-    check "the tool list keeps $want" "$(printf '%s\n' "$tools" | grep -qx -- "$want" && echo ok || echo "it is not listed")"
+    check "the tool list keeps $want" "$(grep -qx -- "$want" "$WORK/tools.txt" && echo ok || echo "it is not listed")"
   done
   strangers="$(strangers_of "$REAL")"
   check "the tool list names no connected server" "$([ -n "$tools" ] && [ -z "$strangers" ] && echo ok || echo "it names: $strangers, or there is no list")"
@@ -306,13 +322,14 @@ TOOLS
   BAD="$WORK/bad-tools.md"
   render --head "$BADHEAD" --out "$BAD" 2>/dev/null
   bad_strangers="$(strangers_of "$BAD")"
-  # Whole words, by grep -F on one entry a line: the entry for every server holds a `*`.
-  caught() { printf '%s\n' "$bad_strangers" | tr ' ' '\n' | grep -qxF -- "$1" && echo ok || echo "caught only: $bad_strangers"; }
+  # Whole entries, one a line, matched as fixed text: the entry for every server holds a `*`.
+  printf '%s\n' "$bad_strangers" | tr ' ' '\n' > "$WORK/bad-strangers.txt"
+  caught() { grep -qxF -- "$1" "$WORK/bad-strangers.txt" && echo ok || echo "caught only: $bad_strangers"; }
   check "a connector named in the tool list is caught" "$(caught 'mcp__claude_ai_Slack')"
   check "a tool list that takes every server at once is caught" "$(caught 'mcp__*')"
   check "a server that is no mod of this repository is caught" "$(caught 'mcp__not-a-mod-here__thing')"
   check "the mods a builder keeps are not caught with them" \
-    "$(printf '%s\n' "$bad_strangers" | grep -q -e area-check -e job-watcher -e claude-in-chrome && echo "caught: $bad_strangers" || echo ok)"
+    "$(grep -q -e area-check -e job-watcher -e claude-in-chrome "$WORK/bad-strangers.txt" && echo "caught: $bad_strangers" || echo ok)"
   check "a model written into the type is caught" "$(sets_model "$BAD" && echo ok || echo "a head with a model line passed")"
   check "the payload's lessons reach the rendered prompt" "$(has "$REAL" "- L1. A test or guard is only real once it has been seen to fail.")"
   check "the shell rules reach it" "$(has "$REAL" "## Shell Commands")"

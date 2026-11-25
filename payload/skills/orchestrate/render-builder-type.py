@@ -47,7 +47,6 @@ import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-TOP = "(top of the file)"
 NAME = "render-builder-type"
 MARK = (
     "# Global rules and lessons for a builder (generated, do not edit)\n"
@@ -69,6 +68,9 @@ def read(path, what):
             return fh.read()
     except OSError as e:
         raise CannotRender("%s %s could not be read (%s)" % (what, path, e.strerror or type(e).__name__))
+    except ValueError as e:
+        # Bytes that are not UTF-8. Uncaught, Python would exit 1, which here means a stale copy.
+        raise CannotRender("%s %s is not readable text (%s)" % (what, path, type(e).__name__))
 
 
 def opening(item):
@@ -82,21 +84,25 @@ def opening(item):
 
 
 def split_items(lines):
-    """A section's lines as items: a bullet with what is indented under it, or a paragraph."""
-    items, cur, after_blank = [], [], True
+    """A section's lines as items: a bullet with what is indented under it, or a paragraph.
+
+    An indented line belongs to the item above it even across a blank line (a command or a sub
+    list under a bullet), so dropping a bullet never leaves its example behind.
+    """
+    items, cur, blanks = [], [], 0
     for ln in lines:
         if not ln.strip():
-            if cur:
-                items.append(cur)
-                cur = []
-            after_blank = True
+            blanks += 1
             continue
-        starts = ln.startswith("- ") or (after_blank and not ln[0].isspace())
-        if starts and cur:
+        if cur and ln[0].isspace():
+            cur.extend([""] * blanks)
+            cur.append(ln)
+        elif cur and (ln.startswith("- ") or blanks):
             items.append(cur)
-            cur = []
-        cur.append(ln)
-        after_blank = False
+            cur = [ln]
+        else:
+            cur.append(ln)
+        blanks = 0
     if cur:
         items.append(cur)
     return items
@@ -336,8 +342,8 @@ def main(argv):
         try:
             with open(target, encoding="utf-8") as fh:
                 have = fh.read()
-        except OSError as e:
-            print("%s: STALE: %s could not be read (%s), so there is no copy to compare." % (NAME, target, e.strerror or type(e).__name__))
+        except (OSError, ValueError) as e:
+            print("%s: STALE: %s could not be read (%s), so there is no copy to compare." % (NAME, target, getattr(e, "strerror", None) or type(e).__name__))
             return 1
         diff = first_difference(text, have)
         if diff is None:
@@ -353,7 +359,9 @@ def main(argv):
             with open(target, encoding="utf-8") as fh:
                 if fh.read() == text:
                     return 0
-        except OSError:
+        except (OSError, ValueError):
+            # No copy yet, or one that cannot be read as text. Either is replaced by the write
+            # below, and a write that fails is said, with exit 2.
             pass
         tmp = "%s.tmp.%d" % (target, os.getpid())
         try:
