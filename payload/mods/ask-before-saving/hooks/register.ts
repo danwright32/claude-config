@@ -592,7 +592,14 @@ const removalsRead = async ($: EngineInterface, home: string, candidates: readon
       const { replaces, ...rest } = landed
       const said = replaces && c.keeps ? { ...rest, stays: true as const } : landed
       out.push({ ...shape, how: 'move', ...(c.to !== undefined ? { to: c.to } : {}), ...said })
-    } else out.push({ ...shape, how: c.how, ...(c.path !== undefined ? await gitHolds($, c.path) : { back: 'unknown' as const, why: 'its path could not be read from the command' }) })
+    } else
+      out.push({
+        ...shape,
+        how: c.how,
+        // A deletion that is a move onto a name another source of the command may take says where it was sent (#3505).
+        ...(c.how === 'delete' && c.sharedAt !== undefined ? { sharedAt: c.sharedAt } : {}),
+        ...(c.path !== undefined ? await gitHolds($, c.path) : { back: 'unknown' as const, why: 'its path could not be read from the command' }),
+      })
   }
   return out
 }

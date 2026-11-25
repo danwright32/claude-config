@@ -9015,7 +9015,10 @@ fails or takes more than 2 seconds, and a brace pattern of more than 256 names. 
 to a name another source of the same mv or cp may also land on (one from another folder of the
 same name, a name alike but for letter case or the form of an accent, a pattern, or a word no
 path names) is asked about as the deletion it may be, never as a move that can be moved back
-(#3505): the source named last is the one kept. The answers
+(#3505): the source named last is the one kept. Where the command's words name the file and
+the place, the question says why a command that moves is asked about as a deletion: "The command
+sends it to <the place>, and another file the same command names may land on that name too. Only
+one of the two would be kept there, so this file may be lost." The answers
 are Keep as is, first, and Delete, Move or Empty; a save's
 For good approves no removal and a removal's answer approves no save, a removal whose consequence
 changes after he answers (what git holds of the file, where a move lands, what a folder holds) is
