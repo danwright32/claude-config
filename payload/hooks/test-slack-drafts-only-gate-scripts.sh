@@ -245,7 +245,9 @@ allowed "a script that does not exist runs nothing"
 printf '%s\n' '#!/bin/bash' 'echo "chat.postMessage is only test data here"' "python3 - <<'PY'" 'print(1)' 'PY' > "$T/heredoc-clean.sh"
 run_bash "bash $T/heredoc-clean.sh"
 allowed "a script whose heredoc names no endpoint, beside a line that does"
-run_bash "bash $DIR/test-slack-drafts-only-gate.sh"
+# This suite since the split (#3575); test-slack-drafts-only-gate.sh, which held this case until
+# then, is judged by its own cost checks, which need it allowed.
+run_bash "bash $DIR/test-slack-drafts-only-gate-scripts.sh"
 allowed "running this suite itself"
 # Every suite sources lib/suite-deadline.sh, which sources its readers from inside its functions,
 # where a global's value cannot be proved (a function runs with whatever its caller set), so it names
@@ -407,7 +409,8 @@ refused "an import after a block comment that never closes"
 # Measured 2026-11-10 with bun 1.3.11, node 22.22.2 and deno: `import type ... from` never loads its
 # module, there or not, while `import { type A } from` is loaded by node, which only blanks the
 # names. So only the statement form is passed, and, where the file is missing, only for a .d.ts. One
-# that is there is not read for it either (#2890, cases at the end of this suite).
+# that is there is not read for it either (#2890, cases at the end of
+# test-slack-drafts-only-gate-tools-cache.sh).
 mkdir -p "$T/imp/dts/tests"
 D2526="'../types/index.d.ts'"
 dts_case() { # dts_case <lines of the test file...>: judge a bun test run of a test holding them

@@ -4267,6 +4267,8 @@ folder and its cache, the result line and the fixtures one suite reads from anot
 Each keeps its own copy of the helper functions a case is driven through, because the gate knows
 a shell function only where the text calling it defines it: from a sourced file, `run_bash "<a
 command that posts>"` reads as an unknown program running that command, and the suite is refused.
+`test-slack-drafts-gate-helper-copies.sh` holds those copies equal, naming the suite and the helper
+when two differ.
 
 ### Running a refused command with no network (#3173)
 

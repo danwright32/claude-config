@@ -10,8 +10,8 @@
 # for: asking for user initiated alone is accepted and changes nothing, because XNU squashes it to
 # legacy for a task with no application role (measured: base priority 31 before and after). Every
 # other judgement of the gate is in test-slack-drafts-only-gate.sh and the five suites split from it
-# (#3575), whose helpers, in lib/slack-drafts-gate-harness.sh since then, are copied here as they
-# are, so a case is driven the same way: a hook payload piped into slack-drafts-only-gate.sh,
+# (#3575), each holding its own copy of the helpers, which are copied here too as they are, so a
+# case is driven the same way: a hook payload piped into slack-drafts-only-gate.sh,
 # exit 0 allowed and 2 refused, the reason on stderr.
 set -uo pipefail
 
