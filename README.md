@@ -50,6 +50,15 @@ back.
   cost) and names it when this file has no effort for it, with the entry to add, so a newer model
   behind the alias is noticed rather than quietly running at its own default (#828). When the
   claude command cannot answer, status says it could not check, never that the model is fine.
+  Built and not yet carried: three Read deny rules for the folders of stored logins (#3563),
+  `Read(~/.ssh/**)`, `Read(~/.sfdx/**)` and `Read(~/Library/Preferences/.wrangler/config/**)`.
+  `claude-sync` holds the code to add them to each Mac's `permissions.deny` (adding only a rule
+  that Mac lacks, never rewriting or removing a rule of its own, and refusing any other key under
+  `permissions` and any other rule), and `claude-sync status` can name a rule a Mac lacks. None of
+  it runs: `permissions` is not on the sync's list of shared settings, so this file does not hold
+  the rules, a file that did would be refused whole, and neither Mac is given them. Putting that
+  name on the list makes the sync write a permission setting for the first time, which is Dan's
+  decision; the pull request for #3563 holds the proof that the rules work and what they leave open.
 - `payload/rtk-exclude-commands.txt`: the commands rtk leaves alone on every Mac, one per line
   (claude-config#1427). rtk keeps that list in its own config outside `~/.claude`
   (`~/Library/Application Support/rtk/config.toml`, the path `rtk config` prints), so every pull
