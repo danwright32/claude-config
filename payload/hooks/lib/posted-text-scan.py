@@ -145,12 +145,13 @@ def parse_since(raw):
 
 
 def eastern(when):
-    """The time as Dan reads it, or an empty string where this Mac holds no time zone data."""
+    """The time as Dan reads it. Where this machine holds no time zone data it says so, since a
+    window shown in UTC alone is easy to read five hours out (L11)."""
     try:
         from zoneinfo import ZoneInfo
         local = when.astimezone(ZoneInfo("America/New_York"))
     except Exception:
-        return ""
+        return " (Eastern time not shown: this machine has no time zone data)"
     hour = local.hour % 12 or 12
     return " (%d:%02d %s ET on %s)" % (hour, local.minute, "AM" if local.hour < 12 else "PM",
                                        local.strftime("%Y-%m-%d"))

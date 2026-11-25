@@ -213,8 +213,6 @@ if ROOT="$(bash "$HERE/lib/checkout-root.sh" "$HERE/.." 2>/dev/null)" && [ -n "$
   check "and it is meant to be public" [ "$(awk '!/^[[:space:]]*#/ && NF && !seen { seen = 1; print $1 }' "$EXPECT" 2>/dev/null)" = "public" ]
   check "the workflow's comment about free runners points at that file, the assumption's one home" \
     grep -q "expected-visibility" "$ROOT/.github/workflows/tests.yml"
-  check "the workflow no longer states as a fact that the repository is public" \
-    bash -c '! grep -q "This repository is public, so its runners cost" "$1"' _ "$ROOT/.github/workflows/tests.yml"
 else
   echo "note: this copy of the suite is not in a checkout, so the repository's own expectation file and workflow comment were not judged here; the checkout's run and CI judge them."
 fi

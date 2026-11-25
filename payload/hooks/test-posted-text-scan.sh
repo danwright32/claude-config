@@ -429,14 +429,17 @@ check "every GraphQL call is a query" [ "$(grep -c '^api graphql -f query=query'
 check "and at least one was made" [ "$(grep -c '^api graphql' "$CALLS")" -ge 1 ]
 check "none is a mutation" [ "$(grep -c -i 'mutation' "$CALLS")" = "0" ]
 # It loads the library by path, which must leave no bytecode in the installed lib/ (#2080). Judged
-# on a copy of the three files in a folder of its own, so what else sits in the real lib/ cannot
-# answer for it.
+# on a copy in a folder of its own, so what else sits in the real lib/ cannot answer for it. The
+# copy is made by the one installer of hook helpers, which brings what each file needs; the library
+# is named because the command loads it by path, which no import statement shows.
 mkdir -p "$WORK/copy/lib"
-cp "$SCAN" "$LIB" "$HERE/lib/dev-update-registry.js" "$WORK/copy/lib/"
+installed="$(python3 "$HERE/lib/install-hook-libs.py" "$HERE/lib" "$WORK/copy/lib" posted-text-scan.py work-names.py dev-update-registry.js 2>&1)"; irc=$?
+check "the command and what it loads install into a folder of their own: rc=$irc ${installed:0:300}" [ "$irc" -eq 0 ]
 : > "$CALLS"
 out="$(fixture_env python3 "$WORK/copy/lib/posted-text-scan.py" "$REPO" --since "$SINCE" 2>&1)"; rc=$?
-check "a copy of the command in a folder of its own runs the same: rc=$rc" [ "$rc" -eq 1 ]
-check "and wrote no bytecode beside the library: $(ls "$WORK/copy/lib" | tr '\n' ' ')" [ "$(ls "$WORK/copy/lib" | wc -l | tr -d ' ')" = "3" ]
+check "the copy runs the same: rc=$rc ${out:0:200}" [ "$rc" -eq 1 ]
+bytecode="$(find "$WORK/copy/lib" -name '__pycache__' -o -name '*.pyc')"
+check "and wrote no bytecode beside the library: $bytecode" [ -z "$bytecode" ]
 
 # ================================================================ 6. the gates let a session run it
 # The Slack drafts gate refused the scan a session wrote on 2026-11-24: that one handed a file of
