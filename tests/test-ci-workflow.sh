@@ -424,9 +424,9 @@ part_run "$FX/twice.tsv" 2 2
 # #3575: a part fails when a suite it ran cost more than half the wall limit every suite is stopped at.
 # ---------------------------------------------------------------------------
 # Two suites each took most of the 1,200 second limit on 2026-11-24 and were stopped there on a slow
-# runner, with no failing check until they crossed it (L315). The part judges what THIS run measured,
-# the same figure it writes for the next deal, because the store a pull request restores can be
-# hours and several splits old. The limit is read from lib/suite-deadline.sh, so this drives a copy
+# runner, with no failing check until they crossed it (L315). The part judges the wall clock THIS run
+# read for each suite, never the figure it writes for the next deal and never the store a pull
+# request restores, which can be hours and several splits old. The limit is read from lib/suite-deadline.sh, so this drives a copy
 # of the runner whose copy of that file says 4 seconds: a ceiling of 2, crossed by a 3 second sleep,
 # and no real wait near 600 seconds.
 CG="$TMPROOT/cost-tree"
