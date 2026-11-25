@@ -63,6 +63,8 @@
 #   FREE_SPACE_WINDOW_HOURS   readings older than this are pruned and never used (default 6)
 #   FREE_SPACE_RECOVERY_GB    a rise larger than this means the disk recovered, so no rate
 #   FREE_SPACE_PERSIST_MIN    only a fall that has lasted this long is projected (default 30, #1754)
+#   FREE_SPACE_STOPPED_MIN    a fast fall stands down once this many minutes on their own no longer
+#                             reach zero within the horizon (default FREE_SPACE_PERSIST_MIN, 0 off, #3608)
 #   FREE_SPACE_STATE_DIR      where the readings are kept
 #   FREE_SPACE_WARNINGS_DIR   where each warning's copy of its readings is kept (claude-config#3157;
 #                             default beside the readings when FREE_SPACE_STATE_DIR moves them, else
@@ -122,6 +124,7 @@ HORIZON_HOURS="${FREE_SPACE_HORIZON_HOURS:-6}"
 MIN_SPAN_MIN="${FREE_SPACE_MIN_SPAN_MIN:-10}"
 WINDOW_HOURS="${FREE_SPACE_WINDOW_HOURS:-6}"
 PERSIST_MIN="${FREE_SPACE_PERSIST_MIN:-30}"
+STOPPED_MIN="${FREE_SPACE_STOPPED_MIN:-$PERSIST_MIN}"
 SWAP_SHARE_PCT="${FREE_SPACE_SWAP_SHARE_PCT:-2}"
 SWAP_FULL_PCT="${FREE_SPACE_SWAP_FULL_PCT:-90}"
 TOP_SECONDS="${FREE_SPACE_TOP_SECONDS:-2}"
@@ -146,7 +149,7 @@ is_number(){ case "${1:-}" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
 # because a message that does not say which of the four is wrong cannot be acted on (L11, L80).
 for _setting in FREE_SPACE_FLOOR_GB:"$FLOOR_GB" FREE_SPACE_HORIZON_HOURS:"$HORIZON_HOURS" \
                 FREE_SPACE_MIN_SPAN_MIN:"$MIN_SPAN_MIN" FREE_SPACE_WINDOW_HOURS:"$WINDOW_HOURS" FREE_SPACE_RECOVERY_GB:"$RECOVERY_GB" \
-                FREE_SPACE_PERSIST_MIN:"$PERSIST_MIN" FREE_SPACE_SWAP_SHARE_PCT:"$SWAP_SHARE_PCT" \
+                FREE_SPACE_PERSIST_MIN:"$PERSIST_MIN" FREE_SPACE_STOPPED_MIN:"$STOPPED_MIN" FREE_SPACE_SWAP_SHARE_PCT:"$SWAP_SHARE_PCT" \
                 FREE_SPACE_SWAP_FULL_PCT:"$SWAP_FULL_PCT" FREE_SPACE_TOP_SECONDS:"$TOP_SECONDS" \
                 FREE_SPACE_WARNING_KEEP_DAYS:"$KEEP_DAYS"; do
   is_number "${_setting#*:}" || cannot "${_setting%%:*} is set to '${_setting#*:}', which is not a number"
@@ -559,6 +562,109 @@ EOF
       fi
       [ "$to_zero" -le $((HORIZON_HOURS * 3600)) ] && falling_fast=1
     fi
+  fi
+fi
+
+# ---------- a fall that has stopped is stood down on recent readings (claude-config#3608) ----------
+# The rate above runs from the start of the segment, which for a drop that happens once and stops
+# stays at the level before the drop until that reading ages out of the window. Measured on
+# 2026-11-25 on Daniels-MacBook-Pro-2: free space fell from 155.1 GB to 67.2 GB between 9:41 and
+# 10:12 AM ET and then held within 1.5 GB, and this said "zero in under an hour" (exit 4) at every
+# reading from 10:19 to 10:57, and would have gone on to about 3:50 PM. A session reads exit 4 as
+# "start nothing", and nothing was being written (L36). It is the shape L695 names: an alarm judged
+# by one aggregate over a trailing window cannot stand down until the window clears.
+#
+# So a fall the rule above calls fast is judged again on the last FREE_SPACE_STOPPED_MIN minutes on
+# their own (default the persistence window, 30): from the latest reading at least that old to now,
+# the most free space seen minus the least, over that span, projected from the least. Every dip in
+# there counts as space lost, even one that came back, so this can only overstate the pace. When
+# that pace does not reach zero within the horizon, it is not falling fast now, and the warning
+# stands down. It can only turn an exit 4 into 0: it never adds a warning, the floor (exit 3) is
+# decided below without it, and 0 turns it off, which is the rule as it was.
+#
+# NOT the recovery margin the issue suggested (stand down once the level holds within
+# FREE_SPACE_RECOVERY_GB for 30 minutes). On that day the level moved by 1.5 GB in the 30 minutes
+# before 10:45 AM, so a 1 GB margin would still have warned then. A pace judged against the horizon
+# is the question the warning asks in the first place.
+#
+# WHAT THIS COSTS (L93). A fall going at a steady pace fills the last 30 minutes, so it is reported
+# at the same reading as before; the suite replays a 19 GB an hour fall, sampled four ways, to the
+# same verdict at every reading. What is now reported later is a fall that PAUSES for 30 minutes or
+# more and then starts again: before, the stale aggregate was still warning when it restarted; now
+# the warning returns once the last 30 minutes reach zero within the horizon, never more than 30
+# minutes after the restart, about 9.5 GB at the 19 GB an hour of 2026-09-10 (15 minutes in the
+# suite's fixture).
+stood_down=""
+if [ "$falling_fast" -eq 1 ] && [ "$STOPPED_MIN" -gt 0 ]; then
+  _w=$((STOPPED_MIN * 60))
+  anc_t=""; r_max=""; r_min=""
+  # Sorted oldest first, so the anchor is the LAST reading at least the window old, and the band is
+  # every reading from it to now.
+  while IFS=' ' read -r _t _b; do
+    is_number "${_t:-}" || continue
+    is_number "${_b:-}" || continue
+    if [ "$_t" -le $((now - _w)) ]; then
+      anc_t="$_t"; r_max="$_b"; r_min="$_b"
+    elif [ -n "$anc_t" ]; then
+      [ "$_b" -gt "$r_max" ] && r_max="$_b"
+      [ "$_b" -lt "$r_min" ] && r_min="$_b"
+    fi
+  done <<EOF
+$series
+EOF
+  if [ -n "$anc_t" ]; then
+    r_span=$((now - anc_t)); r_range=$((r_max - r_min))
+    if [ "$r_range" -le 0 ] || [ $((r_min * r_span)) -gt $((HORIZON_HOURS * 3600 * r_range)) ]; then
+      falling_fast=0
+      stood_down=1
+    fi
+  fi
+fi
+
+# The words for a fall that has stood down: how much went, between which times, and how little it
+# has moved since. The drop ended at the first reading after the last one more than
+# FREE_SPACE_RECOVERY_GB above the recent band, and began at the last reading before that at the
+# level the rate above started from. Times are given in ET, as Dan reads every time.
+et_time(){ # et_time <epoch>: "9:41 AM", with the day when it is not today's
+  local f='%-I:%M %p' w
+  [ "$(TZ=America/New_York date -r "$1" '+%Y%m%d' 2>/dev/null || TZ=America/New_York date -d "@$1" '+%Y%m%d' 2>/dev/null)" = \
+    "$(TZ=America/New_York date -r "$now" '+%Y%m%d' 2>/dev/null || TZ=America/New_York date -d "@$now" '+%Y%m%d' 2>/dev/null)" ] || f='%a %-I:%M %p'
+  w="$(TZ=America/New_York date -r "$1" "+$f" 2>/dev/null || TZ=America/New_York date -d "@$1" "+$f" 2>/dev/null || true)"
+  [ -n "$w" ] && printf '%s' "$w" || printf '%s minute(s) before now' "$(((now - $1) / 60))"
+}
+if [ -n "$stood_down" ]; then
+  _tol=$((RECOVERY_GB * GIB)); set_t=""; set_b=""; out_b=""
+  while IFS=' ' read -r _t _b; do
+    is_number "${_t:-}" || continue
+    is_number "${_b:-}" || continue
+    if [ "$_b" -gt $((r_max + _tol)) ] || [ "$_b" -lt $((r_min - _tol)) ]; then
+      out_b="$_b"; set_t=""; set_b=""
+    elif [ -z "$set_t" ]; then
+      set_t="$_t"; set_b="$_b"; s_max="$_b"; s_min="$_b"
+    else
+      [ "$_b" -gt "$s_max" ] && s_max="$_b"
+      [ "$_b" -lt "$s_min" ] && s_min="$_b"
+    fi
+  done <<EOF
+$series
+EOF
+  start_t=""; start_b=""
+  if [ -n "$set_t" ] && [ -n "$out_b" ] && [ "$out_b" -gt "$r_max" ] && [ "$oldest_b" -gt $((r_max + _tol)) ]; then
+    while IFS=' ' read -r _t _b; do
+      is_number "${_t:-}" || continue
+      is_number "${_b:-}" || continue
+      [ "$_t" -lt "$set_t" ] && [ "$_b" -ge "$oldest_b" ] && { start_t="$_t"; start_b="$_b"; }
+    done <<EOF
+$series
+EOF
+  fi
+  if [ -n "$start_t" ]; then
+    _moved=$((s_max - s_min))
+    if [ "$_moved" -gt 0 ]; then _moved_words="has moved by no more than $(fs_words "$_moved")"; else _moved_words="has not moved"; fi
+    rate_clause=" That fall stopped at $(et_time "$set_t") ET: $(fs_words $((start_b - set_b))) went between $(et_time "$start_t") and $(et_time "$set_t"), and in the $(((now - set_t) / 60)) minute(s) since free space $_moved_words. At its pace over the last $((r_span / 60)) minute(s) it would not reach zero within $HORIZON_HOURS hour(s)."
+  else
+    if [ "$r_range" -gt 0 ]; then _moved_words="has moved by no more than $(fs_words "$r_range")"; else _moved_words="has not moved"; fi
+    rate_clause=" It is not falling fast now: in the last $((r_span / 60)) minute(s) free space $_moved_words, a pace that would not reach zero within $HORIZON_HOURS hour(s)."
   fi
 fi
 
