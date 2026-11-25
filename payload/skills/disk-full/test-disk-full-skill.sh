@@ -235,7 +235,7 @@ done
 # cannot be listed without a password).
 fsevents_line="$(grep -m 1 -F '/System/Volumes/Data/.fseventsd' <<< "$writer_code")"
 check "the writer step reads the file event log's size and link count" \
-  "$(case "$fsevents_line" in *'%z'*'%l'*) echo ok ;; *) echo "the line is: $fsevents_line" ;; esac)"
+  "$(case "$fsevents_line" in (*'%z'*'%l'*) echo ok ;; (*) echo "the line is: $fsevents_line" ;; esac)"
 check "and says the programs it could not read are unknown, never zero" \
   "$(grep -qi 'never as zero\|not zero\|never zero' <<< "$writer_section" && echo ok || echo "the step does not say so")"
 check "and says a file deleted while held open still takes space, and how it shows" \
