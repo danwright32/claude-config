@@ -2803,7 +2803,7 @@ What a session now sees:
   the same event, read an agent that then carries on (#898). An agent that ends without the hand
   back tool is asked nothing; what it left is said to Dan and spooled, once.
 - When it cannot tell, it says so and never says nothing was left: the process table could not be
-  read (`ps` failed or did not answer in 5 seconds, as inside a sandbox), the session's shells are
+  read (`ps` failed, or did not answer inside the reader's own time limit, as inside a sandbox), the session's shells are
   not recorded (it started before `bash-shell-mark.sh` was installed, so every session open at the
   install says this once and a new session does not), or the agent's transcript could not be read
   (a nested agent's is never written). The first two are said once a session.

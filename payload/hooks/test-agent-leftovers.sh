@@ -33,10 +33,10 @@ check() { # check <description> <result>   ("ok" passes, anything else is the fa
   if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 ($2)"; fi
 }
 has() { # has <description> <text> <ERE>
-  if printf '%s' "$2" | grep -Eq -- "$3"; then check "$1" ok; else check "$1" "wanted /$3/ in: ${2:0:400}"; fi
+  if grep -Eq -- "$3" <<< "$2"; then check "$1" ok; else check "$1" "wanted /$3/ in: ${2:0:400}"; fi
 }
 lacks() { # lacks <description> <text> <ERE>
-  if printf '%s' "$2" | grep -Eq -- "$3"; then check "$1" "found /$3/ in: ${2:0:400}"; else check "$1" ok; fi
+  if grep -Eq -- "$3" <<< "$2"; then check "$1" "found /$3/ in: ${2:0:400}"; else check "$1" ok; fi
 }
 . "$DIR/lib/hook-notice.sh" 2>/dev/null || true
 said() { # said <description> <stdout> <ERE>: one JSON object whose systemMessage says it
@@ -121,7 +121,7 @@ sout="$(printf '{"session_id":"%s","hook_event_name":"SessionStart"}' "$SESSION"
 printf '{"session_id":"%s","hook_event_name":"SessionStart"}' "$SESSION" | env CLAUDE_ENV_FILE="$ENVF" AGENT_LEFTOVERS_ROOT="$ROOT" bash "$MARK" >/dev/null 2>&1
 [ "$(wc -l < "$ENVF" | tr -d ' ')" = 1 ] && check "a second SessionStart of the same session adds no second copy of the line" ok || check "a second SessionStart of the same session adds no second copy of the line" "$(wc -l < "$ENVF") lines"
 for sh in /bin/bash /bin/zsh; do
-  [ -x "$sh" ] || { echo "UNMEASURED: $sh is not on this machine, so the marker line was not run in it"; continue; }
+  [ -x "$sh" ] || { echo "SUITE-PART-UNMEASURED the marker line in $sh, because $sh is not on this machine"; continue; }
   # As Claude Code runs it: the env file's lines, then a line that starts a new list, then the command.
   got="$("$sh" -c "set -o noclobber
 $(cat "$ENVF")
@@ -222,7 +222,7 @@ said "the third says to Dan what the agent left, by process id" "$OUT" 'pid 7322
 has "and spools it for the orchestrating session's review" "$(spooled)" '7322'
 gate two SubagentStop b1
 [ -f "$GATE" ] && silent "the stop after it does not say the same processes again" "$OUT$ERR" || check "the stop after it does not say the same processes again" "no gate"
-[ -f "$WORK/home/.claude/state/agent-leftovers/agents/$SESSION.b1.json" ] && check "what was said is kept in this Mac's own state folder" ok || check "what was said is kept in this Mac's own state folder" "$(ls -R "$WORK/home" 2>&1 | head -5)"
+[ -f "$WORK/home/.claude/state/agent-leftovers/agents/$SESSION.b1.json" ] && check "what was said is kept in this Mac's own state folder" ok || check "what was said is kept in this Mac's own state folder" "no file for agent b1 under $WORK/home/.claude/state/agent-leftovers/agents"
 [ -z "$(ls -A "$ROOT/$SESSION" | grep -v '^[0-9]*$')" ] && check "and the gate writes nothing into the marker folder, which only a session's shells write" ok || check "and the gate writes nothing into the marker folder, which only a session's shells write" "$(ls -A "$ROOT/$SESSION")"
 # A state folder that cannot be written must never become a refusal at every attempt.
 mkdir -p "$WORK/rohome/.claude/state"; : > "$WORK/rohome/.claude/state/agent-leftovers"
