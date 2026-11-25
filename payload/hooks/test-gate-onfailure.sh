@@ -79,6 +79,7 @@ REFUSING=(
   scratchpad-subagent-gate.sh
   monitor-action-gate.sh
   handback-claims-gate.sh
+  agent-leftovers-gate.sh
   playwright-subagent-gate.sh
   chrome-subagent-tab-gate.sh
   chrome-loopback-post-gate.sh
@@ -301,6 +302,7 @@ temp-worktree-gate.sh Bash,EnterWorktree
 fresh-worktree-base-gate.sh Edit,Write,MultiEdit,NotebookEdit
 monitor-action-gate.sh Monitor
 handback-claims-gate.sh SubagentHandback
+agent-leftovers-gate.sh SubagentHandback
 playwright-subagent-gate.sh mcp__playwright__browser_snapshot,mcp__plugin_playwright_playwright__browser_snapshot
 chrome-subagent-tab-gate.sh mcp__claude-in-chrome__navigate
 chrome-loopback-post-gate.sh mcp__claude-in-chrome__javascript_tool

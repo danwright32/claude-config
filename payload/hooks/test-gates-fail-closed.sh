@@ -756,6 +756,9 @@ bash_call(){ python3 -c 'import json, sys; print(json.dumps({"command": sys.argv
   judged scratchpad-subagent-gate.sh  Write '{"file_path": "/private/tmp/claude-501/proj/sess/scratchpad/notes.md", "content": "cut @@", "description": "cut @@"}' "$AGENT" "notice scratchpad-subagent-gate.sh header"
   judged monitor-action-gate.sh       Monitor "$(bash_call 'gh pr merge 5 --squash')" '{}' refuse
   judged handback-claims-gate.sh      SubagentHandback '{"message": "Done. No --no-verify, no overrides. cut @@", "description": "cut @@"}' "{\"agent_id\": \"a1b2c3d4\", \"agent_transcript_path\": \"$WORK/hb/agent.jsonl\"}" "notice handback-claims-gate.sh header"
+  # It reports what an agent's commands left running and stops nothing, so a hand back it cannot
+  # read is let through, saying the check did not run, by the decision in its header (#3561).
+  judged agent-leftovers-gate.sh      SubagentHandback '{"message": "Done. cut @@", "description": "cut @@"}' "{\"agent_id\": \"a1b2c3d4\", \"agent_transcript_path\": \"$WORK/hb/agent.jsonl\"}" "notice agent-leftovers-gate.sh header"
   # It only tightens, and a session cannot change a payload Claude Code wrote, so refusing the edit
   # would stop work with no remedy (#2517).
   judged fresh-worktree-base-gate.sh  Edit '{"file_path": "/nonexistent-2517/notes-@@.md", "old_string": "cut @@", "new_string": "b"}' '{}' "notice fresh-worktree-base-gate.sh header"
