@@ -7146,7 +7146,7 @@ left) stops after `FREE_SPACE_DERIVED_DATA_SECONDS` (default 6), the process gro
 runs out killed, and then the notice says it did not finish. Both keep the prompt hook inside its 10 second timeout (all three are settings,
 not measurements), so the free space warning itself always arrives. A bound of 0 turns that step
 off (no sizing, or no Xcode step at all) rather than leaving it unbounded. The disk-full skill's
-step 7 runs the listing and `--last`.
+step 8 runs the listing and `--last`.
 
 `derived-data-sweep.sh --remove-one <folder>` removes one named folder for `disk-remove.sh` below.
 It takes the automatic sweep's own lock first (exit 75 and nothing touched while a sweep holds it),
@@ -7423,6 +7423,21 @@ bare repository it merely finds at a folder.
 builds a repository whose own settings name a marker program, sees the marker run with the call as
 the scripts used to write it, and sees nothing run through `dc_git`. `test-disk-remove.sh` and
 `test-disk-clean-categories.sh` then run the remover and two judges on such a repository.
+
+## Naming the writer: disk-writers.py
+
+`hooks/lib/disk-writers.py` is the disk-full skill's step 4 (claude-config#3589). A folder ranking
+cannot say which program is filling the disk, and on 2026-11-24 and 25 the writers sat where no
+`du` of the home folder reaches. macOS keeps a count of the bytes each running program has written
+since it started (`proc_pid_rusage`, `ri_diskio_byteswritten`); this reads it twice, 10 seconds
+apart (`--seconds`, at most 120), and prints free space at both readings, what each program wrote in
+between, and what each has written since it started. It reads only programs running as the user,
+and counts the rest by who they run as (root, other system users), as unknown, never as zero; it
+exits 2 when it could read no program at all. It is read only. `DISK_WRITERS_SAMPLES` hands it a
+JSON file of readings in place of this Mac's, which is how `skills/disk-full/test-disk-full-skill.sh`
+runs it on a machine without macOS's libproc. The same step totals the space held by files deleted
+while still open, which only `lsof` sees, and reads the file event log's entry count from its
+folder's size.
 
 ## Removing anything: disk-remove.sh
 
