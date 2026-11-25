@@ -256,6 +256,28 @@ check "fixture home: says why" has "$out" "not this user's own ~/.claude"
 check "fixture home: no launchctl call" same "$(cat "$LCLOG")" ""
 check "fixture home: no record written" test ! -e "$RECORD"
 
+# ==== 8b. a watcher launchd did not start: named when it runs, never passed over when it could not be read (#3584) ====
+# retire reads what the process in the watcher's pid file IS with ps. A ps that could not run gave
+# the same empty answer as no watcher, so retire said nothing of one that might still be running.
+plant mac-watcher
+run install-autosync >/dev/null
+# The sleep itself carries the watcher's command line, so ending it leaves nothing behind.
+bash -c 'exec -a "claude-sync watch" sleep 120' >/dev/null 2>&1 < /dev/null & RW_PID=$!
+printf '%s\n' "$RW_PID" > "$FAKEHOME/.claude-sync-watch.pid"
+mkdir -p "$WORK/badps"
+printf '#!/bin/sh\necho "ps: operation not permitted" >&2\nexit 1\n' > "$WORK/badps/ps"; chmod +x "$WORK/badps/ps"
+check "watcher left running: (fixture) the stand in ps fails for a process that is running" test "$(PATH="$WORK/badps:$RUNPATH" ps -o command= -p "$RW_PID" >/dev/null 2>&1; echo $?)" != 0
+out="$(run retire -- --yes)"
+check "watcher left running: (control) with ps answering it is named, with how to end it" has "$out" "Still running: a claude-sync watcher as process $RW_PID"
+out="$(run retire PATH="$WORK/badps:$RUNPATH" -- --yes)"
+check "watcher unread: says whether one is still running could not be read" has "$out" "NOT confirmed: whether a claude-sync watcher that launchd did not start is still running could not be read"
+check "watcher unread: names the command that failed" has "$out" "ps -o command= -p $RW_PID exited 1"
+check "watcher unread: makes no claim that one is running" lacks "$out" "Still running: a claude-sync watcher"
+[ "$fail" -eq 0 ] || printf '  retire with a watcher it could not read said:\n%s\n' "$out"
+kill -9 "$RW_PID" 2>/dev/null; wait "$RW_PID" 2>/dev/null
+out="$(run retire PATH="$WORK/badps:$RUNPATH" -- --yes)"
+check "watcher gone: (control) a record left by a watcher that has gone is nothing to report, with ps or without" lacks "$out" "a claude-sync watcher"
+
 # ==== 9. the real agents on this Mac were never touched ====
 check "the real agents on this Mac are byte for byte as they were" same "$(real_agents)" "$REAL_BEFORE"
 

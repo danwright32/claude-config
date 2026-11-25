@@ -528,6 +528,10 @@ exits 2. `claude-sync retire --yes` is the inverse of `install-autosync`:
    `install-autosync` replaces, through the same helper `install-autosync` uses for those.
 3. It reads `launchctl list` back and says whether any of them is still loaded, exiting 1 if one is
    or if launchd cannot be read, rather than trusting the unload's exit code.
+4. It names a watcher launchd did not start that is still running, with the command that ends it.
+   When what the process in the watcher's pid file is could not be read, it says `NOT confirmed`
+   and names the command that failed, where it used to say nothing (#3584). Neither changes the
+   exit code, since such a watcher's next send refuses.
 
 It deletes nothing in `~/.claude` or the shared repo, and leaves this Mac's lesson number band and
 lesson counts in the repo for history. Running it again is safe: the first record is kept and it
@@ -1170,7 +1174,14 @@ been stopped, never by the runner, and it is a file in the clone, so it survives
 - **Never twice at once.** The rerun runs with the sync lock released, like every verdict, so it
   takes its own claim, `.hook-tests-rerun` (the lock in `hooks/lib/pid-lock.sh`). A receive that
   finds it held by a live claude-sync names that run's pid and runs nothing. A claim whose pid has
-  gone, or is now some other program after a restart, is taken over.
+  gone, or is now some other program after a restart, is taken over. Who holds it has three
+  answers, held, none, or could not be read (#3584): what the process is comes from `ps`, and a
+  `ps` that fails, is missing or says nothing about a running process used to read as nobody
+  holding it, so the claim was taken from a run that still held it. Now the claim is left alone,
+  the suite is not run, and the closing line says that it could not be read, naming the `ps`
+  command that failed and how it ended, that this is not the same as no run holding it, and what
+  settles it: that command run where `ps` answers, and `claude-sync recheck` if the process is
+  something else. `claude-sync status` says the same on its hook suite line.
 - **Who is told.** Nobody, for the first stopped run: a rerun usually clears it. A rerun that
   passes replaces the record with the pass; one that FAILS is notified like any failed run. A
   second run stopped at the deadline, or a record still owed after `SYNC_HOOK_RERUN_GIVE_UP`
@@ -7947,7 +7958,8 @@ work, which the drift report already lists. Past the window below, status prints
 which mods are behind and when the oldest change this Mac lacks landed, then the likely causes it
 can read, each only when it is true now: the clone stopped mid rebase, the CI gate holding receives
 (a red or unreadable verdict), a watcher hold, a launch agent not installed, the watcher installed
-but not running, and the clone itself being behind (with when it last received) or level with the
+but not running, or, when whether it is running could not be read, that and the command that
+failed (#3584), and the clone itself being behind (with when it last received) or level with the
 repo but not applied here (what a pull that stops before its apply leaves). The causes are read from
 the clone status runs in, which it names, so run it from the scheduled clone for that clone's
 records.
@@ -11690,8 +11702,14 @@ the loop has gone
 absent means no watcher has started here since this was added, and the next one starts normally. The
 pid in it is confirmed against what that process actually IS before it is believed, because a stale
 pid is reused by the system constantly and a guard that trusts the number refuses to start over
-something unrelated. It is removed on the way out, and only by the watcher whose own pid it holds,
-so one watcher exiting cannot clear another's record
+something unrelated. That reading has three answers, live, none, or could not be read (#3584): when
+the file names a running process and `ps` fails, is missing or says nothing about it, or the file
+is there and cannot be read, a starting watcher refuses rather than start beside what may be a live
+one, naming the `ps` command that failed and what to remove once that process is seen to be
+something else; a running watcher's loop sends nothing on that wake, says so, and looks again at
+the next one without stepping down. A process the shell may not signal counts as running for this.
+It is removed on the way out, and only by the watcher whose own pid it holds, so one watcher
+exiting cannot clear another's record
 
 </td></tr>
 <tr><td>
