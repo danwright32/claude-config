@@ -1,7 +1,7 @@
 import { update } from 'claude-code'
 import type { EngineInterface, Hook, MatchedHook, Register } from 'claude-code'
 import { errorText } from './mod-kit/skew.ts'
-import { neverThrows } from './mod-kit/hold.ts'
+import { cutCall, cutCheck } from './mod-kit/hold.ts'
 import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
 import { toolArgs } from './mod-kit/toolargs.ts'
 // The one check of text Dan approves in a picker (#3321), read from mod-kit's copy by name, which
@@ -1464,11 +1464,11 @@ export const register: Register = on => {
   // replay runs OUTSIDE neverThrows: the call already ran beneath, so a refusal saying it did not run
   // would be untrue and could make Claude run it twice, and the tool's own failure reaches Claude
   // instead. Every catch before next stays inside neverThrows (#2039).
-  on('tool.call', { tool: TOOL_NAMES }, saveCall).catch(($, e, next) => next.called ? next(e) : neverThrows(() => rerunInGrace(next.budget, () => saveCall($, e, next), reason => ({ deny: reason })),() => ({ deny: cannotCheck(next.error) }), heldCall))
+  on('tool.call', { tool: TOOL_NAMES }, saveCall).catch(($, e, next) => cutCall('Ask before saving', e, next, { work: () => rerunInGrace(next.budget, () => saveCall($, e, next), reason => ({ deny: reason })), held: () => ({ deny: cannotCheck(next.error) }), last: heldCall }))
 
   // At tool.check `next` only reads the verdict beneath and runs nothing, so a failed check is judged
   // once more whether or not it had read it (#2026).
-  on('tool.check', saveCheck).catch(($, e, next) => neverThrows(() => rerunInGrace(next.budget, () => saveCheck($, e, next), reason => ({ decision: 'deny' as const, reason })),() => ({ decision: 'deny' as const, reason: cannotCheck(next.error) }), heldCheck))
+  on('tool.check', saveCheck).catch(($, e, next) => cutCheck('Ask before saving', next, { work: () => rerunInGrace(next.budget, () => saveCheck($, e, next), reason => ({ decision: 'deny' as const, reason })), held: () => ({ decision: 'deny' as const, reason: cannotCheck(next.error) }), last: heldCheck }))
 
   // Claude asks in Claude Code's own dialog (#777). A question tied to a waiting save is checked and
   // given the mod's own answers, and Dan's answer is read from the dialog's result.
@@ -1761,7 +1761,7 @@ export const register: Register = on => {
     } catch (err) {
       return { deny: `Not saved: Ask before saving could not read Dan's answer (${message(err)}). Ask him again.` }
     }
-  })
+  }).catch(($, e, next) => cutCall('Ask before saving', e, next))
 
   // A reload drops the module's timers, never its approvals: each one waiting is timed again.
   on('session.start', async ($, e, next) => {
