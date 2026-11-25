@@ -27,13 +27,20 @@ exits  A helper must not report success when it failed. Three shapes are refused
        P1  a subprocess's exit status is never read: `subprocess.run` without `check=True` whose
            result has no `.returncode` read after it is assigned (followed through functions that
            return the result), `subprocess.call` or `os.system` whose result is dropped, or a
-           `Popen` whose status is never asked for.
+           `Popen` whose status is never asked for. A `Popen` whose status is read only as it
+           starts is refused too (#3650): one held on an attribute of self must have how it ended
+           read in another method of its class (and in the method that ends it, when one does), or
+           waited for where it starts; a local one read only by `poll()` must not be used again
+           after that read.
+       U1  not a finding: a process handed to something the check cannot follow, so whether its
+           ending is read was not judged. Printed and counted, and it does not fail the check.
        P2  an `except` that catches everything (bare, Exception, BaseException) and then does
            nothing (`pass`, `continue`, `...`, a bare return).
        S1  a `gh issue create` in a helper with no `--milestone` or no label: the issue field gate
            only sees commands typed in a session, so a script's own call goes past it.
 
-Prints one line per finding, then a summary line (`LINKS ...`, `UNRUN ...`, `EXITS ...`).
+Prints one line per finding (and per U1), then a summary line (`LINKS ...`, `UNRUN ...`,
+`EXITS ... findings=N unjudged=M`).
 Exit: 0 clean, 1 findings, 2 a folder is missing or holds nothing to check.
 """
 
@@ -268,6 +275,8 @@ class Module:
                 for a in node.names:
                     if a.name in ("subprocess", "os"):
                         self.module_names[a.asname or a.name] = a.name
+        # The file's own top level functions, by name: a process handed to one of them is followed.
+        self.functions = {n.name: n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
 
     def process_kind(self, call):
         """'run', 'int' or 'popen' when this call starts a process, else None."""
@@ -361,8 +370,308 @@ def status_reads(mod, scope, name, kind):
     return sorted(lines)
 
 
-def exits_python(path: str, rel: str):
+# A long lived process's ENDING (claude-config#3650). Judging one function at a time cannot tell a
+# poll() made just after a process starts from a read of how it ended. So a Popen whose handle
+# outlives the function that started it, held on an attribute of self, is followed through every
+# method of its class: directly, through a local taken from the attribute (`proc = self.x`, or
+# `proc, self.x = self.x, None`), and into a method or a top level function of the same file it is
+# handed to. In the method that starts it only a read that waits for the end counts. A local process
+# whose status is read only while it runs, and which is used again after that read, has had only its
+# start checked. A hand off the check cannot follow is said (U1), never passed in silence.
+ASKS = ("wait", "poll", "communicate")
+IDENTITY = ("pid", "args")  # reading these asks nothing of the process, running or ended
+
+
+def name_is(name):
+    return lambda n: isinstance(n, ast.Name) and n.id == name
+
+
+def attribute_is(owner, attr):
+    return lambda n: (isinstance(n, ast.Attribute) and n.attr == attr
+                      and isinstance(n.value, ast.Name) and n.value.id == owner)
+
+
+def self_name(fn):
+    """The first parameter of a method, by which it names its own object."""
+    params = fn.args.posonlyargs + fn.args.args
+    return params[0].arg if params else None
+
+
+def methods_of(cls):
+    return {n.name: n for n in cls.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+
+
+def loops_around(mod, node, scope):
+    out = set()
+    p = mod.parent.get(node)
+    while p is not None and p is not scope:
+        if isinstance(p, (ast.While, ast.For, ast.AsyncFor)):
+            out.add(p)
+        p = mod.parent.get(p)
+    return out
+
+
+def ends_it(mod, attribute):
+    """Whether this attribute of a process handle is the code ending the process: closing its input
+    (`proc.stdin.close()`), `terminate()`, `kill()` or `send_signal()`, or its pid handed to
+    os.kill or os.killpg."""
+    a, up = attribute.attr, mod.parent.get(attribute)
+    if a in ("terminate", "kill", "send_signal"):
+        return isinstance(up, ast.Call) and up.func is attribute
+    if a == "stdin":
+        return (isinstance(up, ast.Attribute) and up.attr == "close"
+                and isinstance(mod.parent.get(up), ast.Call) and mod.parent.get(up).func is up)
+    if a == "pid" and isinstance(up, ast.Call) and attribute in up.args:
+        f = up.func
+        return (isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name)
+                and mod.module_names.get(f.value.id) == "os" and f.attr in ("kill", "killpg")) \
+            or (isinstance(f, ast.Name) and mod.aliases.get(f.id) in (("os", "kill"), ("os", "killpg")))
+    return False
+
+
+def handle_uses(mod, scope, is_handle, start=0, until=float("inf")):
+    """Everything scope does with a process handle, as (line, what, node, detail), in line order.
+
+    what is one of: wait or poll (a call whose result is used), asked (wait, poll or communicate
+    called with its result dropped, or communicate; detail names which), returncode, use (any other
+    attribute), handed (the handle passed on; detail is the Call, or None when it goes somewhere no
+    call names: returned, yielded, stored in a container), alias (bound to a local; detail is its
+    name) and store (assigned to an attribute or item; detail is the target)."""
+    uses = []
+    for node in ast.walk(scope):
+        if not is_handle(node) or not (start <= node.lineno < until):
+            continue
+        if isinstance(getattr(node, "ctx", None), (ast.Store, ast.Del)):
+            continue
+        line, parent = node.lineno, mod.parent.get(node)
+        if isinstance(parent, ast.Attribute) and parent.value is node:
+            a = parent.attr
+            if a in ("returncode", "check_returncode"):
+                uses.append((line, "returncode", parent, None))
+            elif a in ASKS:
+                call = mod.parent.get(parent)
+                called = isinstance(call, ast.Call) and call.func is parent
+                if called and a in ("wait", "poll") and not isinstance(mod.parent.get(call), ast.Expr):
+                    uses.append((line, a, call, None))
+                else:
+                    uses.append((line, "asked", parent, a))
+            elif ends_it(mod, parent):
+                uses.append((line, "ends", parent, None))
+            elif a not in IDENTITY:
+                uses.append((line, "use", parent, None))
+            continue
+        holder = mod.parent.get(parent) if isinstance(parent, ast.keyword) else parent
+        if isinstance(holder, ast.Call) and holder.func is not node:
+            uses.append((line, "handed", node, holder))
+            continue
+        target = None
+        if isinstance(parent, (ast.Assign, ast.AnnAssign)) and parent.value is node:
+            targets = parent.targets if isinstance(parent, ast.Assign) else [parent.target]
+            target = targets[0] if len(targets) == 1 else None
+        elif isinstance(parent, ast.Tuple) and isinstance(mod.parent.get(parent), ast.Assign):
+            assign = mod.parent.get(parent)
+            lhs = assign.targets[0] if len(assign.targets) == 1 else None
+            if assign.value is parent and isinstance(lhs, ast.Tuple) and len(lhs.elts) == len(parent.elts):
+                target = next(t for t, v in zip(lhs.elts, parent.elts) if v is node)
+        if target is not None:
+            if isinstance(target, ast.Name):
+                uses.append((line, "alias", node, target.id))
+            elif isinstance(target, (ast.Attribute, ast.Subscript)):
+                uses.append((line, "store", node, target))
+            else:
+                uses.append((line, "handed", node, None))
+            continue
+        if isinstance(parent, (ast.Compare, ast.BoolOp, ast.UnaryOp, ast.If, ast.While, ast.IfExp, ast.Assert)):
+            continue  # tested, as in `proc is not None`, which asks nothing of the process
+        uses.append((line, "handed", node, None))
+    return sorted(uses, key=lambda u: (u[0], getattr(u[2], "col_offset", 0)))
+
+
+def handed_to(mod, call, node, scope, cls):
+    """The function of this file, and its parameter, that a call hands the handle to, or None."""
+    f, fn, skip = call.func, None, 0
+    if isinstance(f, ast.Name):
+        fn = mod.functions.get(f.id)
+    elif (cls is not None and isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name)
+          and f.value.id == self_name(scope)):
+        fn = methods_of(cls).get(f.attr)
+        skip = 1
+    if fn is None:
+        return None
+    params = [a.arg for a in fn.args.posonlyargs + fn.args.args][skip:]
+    for i, a in enumerate(call.args):
+        if a is node:
+            return (fn, params[i]) if i < len(params) else None
+    for k in call.keywords:
+        if k.value is node and k.arg:
+            return fn, k.arg
+    return None
+
+
+def with_aliases(mod, scope, uses):
+    """uses, plus what scope does through every local it binds the handle to."""
+    out = list(uses)
+    for u in uses:
+        if u[1] == "alias":
+            later = [ln for ln in bindings(scope, u[3]) if ln > u[0]]
+            out += handle_uses(mod, scope, name_is(u[3]), u[0], later[0] if later else float("inf"))
+    return sorted(out, key=lambda u: u[0])
+
+
+def classify(mod, scope, uses, cls):
+    """Sort a function's uses of a handle into reads of how it ended.
+
+    Returns (ending, reads, unfollowed): ending holds the lines that read the status once the process
+    is done (a wait() whose result is used, a returncode after a wait() or communicate(), a poll() a
+    loop repeats, or a hand off to a function of this file that reads it); reads holds every line
+    that reads the status at all (any of those, a poll() whose result is used, or a returncode after
+    anything asked for it); unfollowed holds the hand offs that could not be followed, as
+    (line, words)."""
+    ending, reads, unfollowed, asked, waited = [], [], [], False, False
+    for line, what, node, detail in uses:
+        if what == "wait":
+            ending.append(line)
+            reads.append(line)
+            asked = waited = True
+        elif what == "poll":
+            reads.append(line)
+            asked = True
+            if loops_around(mod, node, scope):
+                ending.append(line)
+        elif what == "asked":
+            asked = True
+            waited = waited or detail in ("wait", "communicate")
+        elif what == "returncode":
+            if asked:
+                reads.append(line)
+            if waited:
+                ending.append(line)
+        elif what == "handed":
+            target = handed_to(mod, detail, node, scope, cls) if detail is not None else None
+            if target is not None and status_reads(mod, target[0], target[1], "popen"):
+                ending.append(line)
+                reads.append(line)
+            elif target is None:
+                words = (f"{ast.unparse(detail.func)}(...)" if detail is not None
+                         else "something outside this function")
+                unfollowed.append((line, words))
+    return ending, reads, unfollowed
+
+
+def ending_in_class(mod, cls, attr, start_fn):
+    """Whether the methods of cls other than start_fn read how the process held on attr ended.
+
+    A method that ENDS the process (see ends_it) must read how it ended itself, or call a method of
+    cls that does: a read on some other path, such as an error branch, says nothing about the end the
+    code brings about. A process no method ends, which ends by itself, needs a read in any method.
+    Returns (read, enders that read nothing as (line, method name), unfollowed hand offs)."""
+    unfollowed, readers, enders = [], set(), {}
+    per = {}
+    for fn in methods_of(cls).values():
+        owner = self_name(fn)
+        if fn is start_fn or owner is None:
+            continue
+        uses = with_aliases(mod, fn, handle_uses(mod, fn, attribute_is(owner, attr)))
+        _, reads, lost = classify(mod, fn, uses, cls)
+        per[fn.name] = (fn, owner)
+        if reads:
+            readers.add(fn.name)
+        unfollowed += lost
+        ends = [u[0] for u in uses if u[1] == "ends"]
+        if ends:
+            enders[fn.name] = ends[0]
+    if not enders:
+        return bool(readers), [], unfollowed
+
+    def reads_through_a_call(name):
+        fn, owner = per[name]
+        for node in ast.walk(fn):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and isinstance(node.func.value, ast.Name) and node.func.value.id == owner
+                    and node.func.attr in readers):
+                return True
+        return False
+
+    silent = [(line, name) for name, line in sorted(enders.items(), key=lambda e: e[1])
+              if name not in readers and not reads_through_a_call(name)]
+    return not silent, silent, unfollowed
+
+
+def class_of(mod, scope):
+    """The class scope is a method of, or None."""
+    if not isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return None
+    cls = mod.parent.get(scope)
+    return cls if isinstance(cls, ast.ClassDef) else None
+
+
+def judge_ending(mod, call, what, scope, name, holder, uses, rel):
+    """Whether the ending of the process call started is read. uses is what scope does with its
+    handle: the local name it is bound to, which the rule above has already seen read at least once,
+    or holder, the attribute of self it is assigned straight to.
+
+    Returns None when the ending is read, else ("finding", text) or ("note", text)."""
+    cls = class_of(mod, scope)
+    owner = self_name(scope) if cls is not None else None
+    ending, reads, unfollowed = classify(mod, scope, uses, cls)
+    kept = [d for _, w, _, d in uses if w == "store"]
+    if holder is not None:
+        kept.append(holder)
+    held = [t.attr for t in kept if isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name)
+            and owner is not None and t.value.id == owner]
+    for attr in held:
+        ending += classify(mod, scope, with_aliases(mod, scope, handle_uses(
+            mod, scope, attribute_is(owner, attr), call.lineno)), cls)[0]
+    if ending:
+        return None
+    if held:
+        lost, silent = list(unfollowed), []
+        for attr in held:
+            found, quiet, more = ending_in_class(mod, cls, attr, scope)
+            if found:
+                return None
+            lost += more
+            silent += quiet
+        where = ", ".join(f"{owner}.{a}" for a in held)
+        if silent:
+            line, method = silent[0]
+            text = (f"{rel}:{call.lineno}: P1 {name} = {what}(...) is held on {where}, and {cls.name}.{method}() "
+                    f"ends it at line {line} without reading how it ended (a wait() or poll() whose result is "
+                    f"used, or returncode after one of them), so a failure at its end reads as success.")
+        else:
+            text = (f"{rel}:{call.lineno}: P1 {name} = {what}(...) is held on {where}, which outlives "
+                    f"{scope.name}(), and no method of {cls.name} reads how it ended (a wait() or poll() whose "
+                    f"result is used, or returncode after one of them), so a failure after it started reads as "
+                    f"success.")
+        if reads:
+            text += f" It is checked only at its start, at line {reads[0]}."
+        if lost:
+            text += f" It is handed to {lost[0][1]} at line {lost[0][0]}, which this check does not follow."
+        return "finding", text
+    if kept or unfollowed:
+        line, words = unfollowed[0] if unfollowed else next(
+            (ln, ast.unparse(d)) for ln, w, _, d in uses if w == "store")
+        return "note", (f"{rel}:{call.lineno}: U1 {name} = {what}(...) has its status read only while it runs "
+                        f"(line {reads[0] if reads else call.lineno}) and is handed to {words} at line {line}, "
+                        f"which this check does not follow, so whether its ending is read was not judged.")
+    if not reads:
+        return None
+    last = reads[-1]
+    polls = [n for _, w, n, _ in uses if w == "poll"]
+    later = [(ln, n) for ln, w, n, _ in uses if ln > last and w in ("use", "ends")
+             and not any(loops_around(mod, n, scope) & loops_around(mod, p, scope) for p in polls)]
+    if later:
+        return "finding", (f"{rel}:{call.lineno}: P1 {name} = {what}(...) has its status read only at line {last}, "
+                           f"while it is still running, and is used again at line {later[0][0]} with nothing after "
+                           f"that reading how it ended, so a failure after its start reads as success. Wait for "
+                           f"it once it is done with.")
+    return None
+
+
+def exits_python(path: str, rel: str, notes=None):
+    """The findings for one Python helper. What could not be judged is added to notes when given."""
     findings = []
+    notes = [] if notes is None else notes
     try:
         tree = ast.parse(open(path, encoding="utf-8", errors="replace").read(), filename=path)
     except (OSError, SyntaxError, ValueError) as exc:
@@ -396,6 +705,22 @@ def exits_python(path: str, rel: str):
                 if not any(call.lineno <= ln < until for ln in status_reads(mod, scope, name, kind)):
                     findings.append(f"{rel}:{call.lineno}: P1 {name} = {what}(...) never has its exit status read "
                                     f"before it is replaced or forgotten, so a failure reads as success.")
+                elif kind == "popen":
+                    uses = with_aliases(mod, scope, handle_uses(mod, scope, name_is(name), call.lineno, until))
+                    said = judge_ending(mod, call, what, scope, name, None, uses, rel)
+                    if said:
+                        (findings if said[0] == "finding" else notes).append(said[1])
+                continue
+            scope = mod.scope_of(call)
+            cls = class_of(mod, scope)
+            target = targets[0] if len(targets) == 1 else None
+            if (kind == "popen" and cls is not None and isinstance(target, ast.Attribute)
+                    and isinstance(target.value, ast.Name) and target.value.id == self_name(scope)):
+                uses = with_aliases(mod, scope, handle_uses(mod, scope, attribute_is(target.value.id, target.attr),
+                                                            call.lineno))
+                said = judge_ending(mod, call, what, scope, ast.unparse(target), target, uses, rel)
+                if said:
+                    (findings if said[0] == "finding" else notes).append(said[1])
                 continue
         if kind == "int":
             continue  # the status itself, used in an expression
@@ -522,7 +847,7 @@ def cmd_exits(argv) -> int:
     if not skills:
         return refuse(f"{folder} holds no skills, so there was nothing to check. Refusing to pass it.")
     n_py = n_sh = 0
-    findings = []
+    findings, unjudged = [], []
     for skill in skills:
         for path in walk_files(os.path.join(folder, skill)):
             name = os.path.basename(path)
@@ -531,13 +856,14 @@ def cmd_exits(argv) -> int:
             rel = os.path.relpath(path, folder)
             if name.endswith(".py"):
                 n_py += 1
-                findings += exits_python(path, rel)
+                findings += exits_python(path, rel, unjudged)
             elif name.endswith(".sh"):
                 n_sh += 1
                 findings += exits_shell(path, rel)
-    for f in findings:
+    for f in findings + unjudged:
         print(f)
-    print(f"EXITS skills={len(skills)} python={n_py} shell={n_sh} findings={len(findings)}")
+    print(f"EXITS skills={len(skills)} python={n_py} shell={n_sh} findings={len(findings)} "
+          f"unjudged={len(unjudged)}")
     return 0 if not findings else 1
 
 
