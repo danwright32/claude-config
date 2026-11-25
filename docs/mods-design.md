@@ -2305,6 +2305,28 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   and stop none from firing. None counts inside a quotation, after I or we in its sentence (a report
   of an edit Claude made itself, "I saved it with Cmd+S"), or after when, if, before, once and the
   like ("when you press Cmd+S", a key described rather than handed over).
+- **A slash command to type is answered only by a step that names it** (#3652). On 2026-11-25 a
+  session told Dan his next move was to start `/plan-council`, the brief in a code block near the
+  end of a long reply, while the card it pinned that turn held two other steps. He did those, the
+  card closed, and the command was forgotten. Two things let it through: no phrase knew "start
+  `/plan-council`", and any unfinished step on the card answered the prose check whatever that step
+  was. So `hooks/typed.ts` recognises a command handed over to type (an imperative to type, run,
+  start or paste it leading its sentence, its line or the words after a label's colon; "to do X,
+  type"; "until you run", "needs you to type", "remember to type"; "your next move is"; a fenced
+  block whose first line is the command), and the turn's end is held unless an unfinished step on
+  the card shown names the command. The prose check keeps its own rule, any unfinished step, since
+  arbitrary prose cannot be matched to a step. Not counted: a command in an offer or a condition
+  (if, could, want me, later, a question), one Claude runs or ran (I, we, will in its sentence),
+  "you can type", one quoted, and a path. Measured on 2026-11-25 over this Mac's 122 interactive
+  sessions of the 30 days before (2,914 turns; the 7,221 headless and SDK sessions are never held):
+  43 turns handed Dan a command, 20 had it in a card call already, and 23 would be held. All 23
+  hand him a command only he can type (13 `/reload-plugins`, 5 `/compact`, 3 `/goal`, 1
+  `/plan-lite`, 1 `/winddown`); 3 say it as why something is stale ("until you run") and 2 as one of
+  two ways, and none is a mention, an explanation or Claude's own run. Of the 193 turns naming a
+  known command at all, 30 named it near a verb and were not counted. Read, all but one were an
+  offer ("you can also type"), a description ("it now tells you to run"), Claude's own run or a
+  later step ("once it installs I'll ask you to run"); the one missed hand over put the command
+  after a colon with no verb ("To run when convenient: `/reload-plugins`").
 - **Waiting on you** (#863). While the open step is Dan's to do, the card's heading line reads
   "<heading>  waiting on you", the words dim after the amber heading; once its Done is sent the
   step waits on Claude, the step line says "sent", and the words go until the next step opens. On

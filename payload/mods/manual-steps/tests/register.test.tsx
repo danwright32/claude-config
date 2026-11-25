@@ -1295,6 +1295,66 @@ test('a block another Stop hook gives is kept beside this one (#863)', withKit, 
   expect(r.block).toMatch(/steps tool/)
 })
 
+// ---- #3652: a slash command handed to Dan to type goes on the card as a step of its own ----
+
+// The 2026-11-25 hand off, as the issue tells it: two steps on the card, and the command to type next
+// in the reply, with its brief in a code block, on no step of the card.
+const TYPED_STEP = 'The file share and the draft are on the card.\n\nYour next move after those is to start `/plan-council` with this brief:\n\n```\n/plan-council Plan the import of last season\'s galleries\n```'
+const SHARE = step({ title: 'Share the gallery file', url: 'https://drive.example/f' })
+const DRAFT = step({ title: 'Send the draft to the venue', url: 'https://mail.example/d' })
+
+test('a slash command left for Dan to type blocks the turn end though the card holds two other steps (#3652)', withKit, async ($, on) => {
+  world(on)
+  await start($)
+  await hand($, [SHARE, DRAFT])
+  const r = await turnStop($, TYPED_STEP)
+  expect(r.block).toMatch(/`\/plan-council`/)
+  expect(r.block).toMatch(/paste it where you type your messages to me/)
+  expect(r.block).toMatch(/mcp__manual-steps__steps\b/)
+  // Pinning replaces the card, so the block says to keep the unfinished steps on it.
+  expect(r.block).toMatch(/unfinished steps/)
+  // Once a turn, so it cannot loop.
+  expect((await turnStop($, TYPED_STEP, true)).block).toBeUndefined()
+})
+
+test('a command to type that the prose check already knows is still blocked while the card holds only other steps (#3652)', withKit, async ($, on) => {
+  world(on)
+  await start($)
+  const said = 'Type `/plan-council` with the brief below.'
+  // With no card, the prose check alone catches it ("type" before a code span, #863).
+  expect((await turnStop($, said)).block).toMatch(/mcp__manual-steps__steps\b/)
+  await hand($, [SHARE, DRAFT])
+  expect((await turnStop($, said)).block).toMatch(/`\/plan-council`/)
+})
+
+test('with no card at all, the command to type blocks the turn end (#3652)', withKit, async ($, on) => {
+  world(on)
+  await start($)
+  expect((await turnStop($, TYPED_STEP)).block).toMatch(/`\/plan-council`/)
+})
+
+test('once an unfinished step on the card holds the command, the same reply passes (#3652)', withKit, async ($, on) => {
+  world(on)
+  await start($)
+  const typed = { title: 'Start the planning panel', location: 'paste it where you type your messages to me', value: "/plan-council Plan the import of last season's galleries", checked: 'not-done' }
+  await hand($, [SHARE, DRAFT, typed])
+  expect((await turnStop($, TYPED_STEP)).block).toBeUndefined()
+  // A finished step no longer holds it: the card closing is not the command being typed.
+  await call($, VERDICT, { step: 1, checked: 'checked' })
+  await call($, VERDICT, { step: 2, checked: 'checked' })
+  await call($, VERDICT, { step: 3, checked: 'checked' })
+  expect((await turnStop($, TYPED_STEP)).block).toMatch(/`\/plan-council`/)
+})
+
+test('a reply that only names a slash command, or offers one, passes (#3652)', withKit, async ($, on) => {
+  world(on)
+  await start($)
+  await hand($, [SHARE])
+  expect((await turnStop($, 'For a feature this size, `/plan-lite` is the lighter planner; `/plan-council` runs a whole panel.')).block).toBeUndefined()
+  expect((await turnStop($, 'If you want a fuller plan, you could start `/plan-council` on it later.')).block).toBeUndefined()
+  expect((await turnStop($, "I'll run `/next-issue` once this merges.")).block).toBeUndefined()
+})
+
 // ---- #1608: every message of the turn is read, not only the last ----
 
 // The turn as the transcript reader prints it: Dan's prompt, then Claude's messages, each record
