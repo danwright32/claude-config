@@ -644,9 +644,11 @@ def make(py_nodes, unknown_dir):
 
             runs_slot says python3 runs one of these words as its script (it was given no code by
             -c, no module by -m and none on its input). That word is the one in the script's place
-            by Python's own options (operands) and, in case that table is ever wrong, the first
-            word that is no option and names something on disk. Either is refused as unread, where
-            it is typed, when it is an archive, a path under one, or a folder whose __main__ is not
+            by the gate's table of options (operands) and, where that table is wrong, the first
+            word that is no option and names something on disk; a command the table places
+            otherwise than Python does is also read spelled as Python reads it (py_own_reading,
+            claude-config#3539), where the table's word is Python's. Either is refused as unread,
+            where it is typed, when it is an archive, a path under one, or a folder whose __main__ is not
             text (py_handed). Every word naming a folder that holds a __main__.py is replaced by
             that file, wherever it stands: its place decides how it is read (the script, or a file
             handed to code that may run it), and that is the caller's to say, as it is for a file.
