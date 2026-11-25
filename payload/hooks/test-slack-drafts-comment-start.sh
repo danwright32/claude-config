@@ -260,6 +260,201 @@ printf '%s\n' "true # a note that ends in a$BS$BS" "#it's" "$HIDDEN" "echo end #
 run_bash "bash script.sh" "$T/dead"
 refused "the control: after a comment that ends in two backslashes the script that posts is refused"
 
+echo "slack drafts only: a heredoc the shells keep open hides no substitution after it (claude-config#3492)"
+
+# The same backslash, where it IS live: at the end of a line of an unquoted heredoc's body it joins
+# that line to the next, so an end marker there is the tail of a longer line and the heredoc stays
+# open. The rest of the text is then its body, and every shell runs a $( ) in it, single quotes or
+# not (bash 3.2, bash --posix, sh, dash, zsh, zsh emulating sh and ksh, measured 2026-11-23 with
+# texts that only echo). The reader closed the heredoc at the marker line and read the rest as
+# commands, where a substitution in single quotes is a word that runs nothing, so a script run from
+# one was read by nobody. An unquoted heredoc whose marker never comes was read the same way. The
+# last three shapes are ones the shells differ on: at least one of them keeps the heredoc open.
+# Seen to fail on 2026-11-23, before the reader named such a heredoc: exit 0 for each.
+mkdir -p "$T/open"
+printf '%s\n' "$POST" > "$T/open/posts.sh"
+printf '%s\n' 'echo quiet' > "$T/open/quiet.sh"
+RUNS="echo '\$(bash posts.sh)'"
+TAB=$'\t'
+COULD_NOT="REFUSED: the gate could not check whether this command posts to Slack"
+for opens in "cat <<E${NL}a$BS${NL}E" \
+  "cat <<E${NL}a$BS$BS$BS${NL}E" \
+  "cat <<-E${NL}${TAB}a$BS${NL}${TAB}E" \
+  "cat <<E${NL}body${NL}E$BS" \
+  "cat <<E${NL}body" \
+  "cat <<A <<B${NL}a${NL}A${NL}b$BS${NL}B" \
+  "cat <<A <<B${NL}a$BS${NL}A${NL}b${NL}B" \
+  "x=\$(cat <<E${NL}a$BS${NL}E" \
+  "cat <<E${NL}$BS${NL}E" \
+  "cat <<EOF${NL}a${NL}E$BS${NL}OF" \
+  "cat <<EOF${NL}EO$BS$BS${NL}EOF"; do
+  closes=""
+  case "$opens" in 'x=$('*) closes=")" ;; esac
+  printf '%s\n' "$opens" "$RUNS" $closes "echo end" > "$T/open/script.sh"
+  run_bash "bash script.sh" "$T/open"
+  refused "a script that runs a file that posts, from a \$( ) after a heredoc a shell keeps open, is refused: $(shown "$opens")"
+  says "and as a check it could not make: $(shown "$opens")" "$COULD_NOT"
+  run_bash "$opens${NL}$RUNS${NL}${closes:+$closes$NL}echo end" "$T/open"
+  refused "and the same lines as the command itself are refused: $(shown "$opens")"
+  says "naming the heredoc and the line it opens on: $(shown "$opens")" "it opens a heredoc the gate cannot find the end of, in the line \`${opens%%"$NL"*}\`"
+done
+# The endpoint named in the substitution itself, with no file between.
+run_bash "cat <<E${NL}a$BS${NL}E${NL}echo '\$($POST)'${NL}echo end" "$T/open"
+refused "a post written in a \$( ) after a heredoc a shell keeps open is refused"
+# The gate cannot follow such a text whatever it runs, so the same lines running a quiet file are
+# refused too, as a check it could not make and never as a post it found.
+run_bash "cat <<E${NL}a$BS${NL}E${NL}echo '\$(bash quiet.sh)'${NL}echo end" "$T/open"
+refused "the same open heredoc running a quiet file is refused too, since the gate cannot read it"
+says "and as a check it could not make, not as a post" "$COULD_NOT"
+# The controls: where every shell closes the heredoc at the first line that is its marker, as the
+# reader does, the line after it is the command it looks like, its single quoted words run nothing,
+# and the gate passes it. Two backslashes join nothing; a quoted marker's body is read as written;
+# a backslash in the middle of the body joins two body lines.
+for closed in "cat <<E${NL}a$BS$BS${NL}E" \
+  "cat <<'E'${NL}a$BS${NL}E" \
+  "cat <<E${NL}a$BS${NL}b${NL}E"; do
+  printf '%s\n' "$closed" "$RUNS" "echo end" > "$T/open/script.sh"
+  run_bash "bash script.sh" "$T/open"
+  allowed "the control: a script whose heredoc every shell closes passes, its quoted words running nothing: $(shown "$closed")"
+  run_bash "$closed${NL}$RUNS${NL}echo end" "$T/open"
+  allowed "the control: and the same lines as the command itself pass: $(shown "$closed")"
+done
+# A joined marker and then the marker on a line of its own: all seven shells close the heredoc at
+# the second, so the lines between are its body, where a $( ) runs and a plain line is text. The
+# gate read those lines as commands until now, and what it refused on that reading it must not
+# come to allow on the strength of the shells measured, so it names the heredoc here too: a file
+# that posts run from that body is refused, a quiet one is refused as it was (for another reason,
+# before), and the same heredoc with only quoted words after it, which passed, is refused now.
+for between in "\$(bash posts.sh)" "\$(bash quiet.sh)" "'\$(bash posts.sh)'" "bash posts.sh"; do
+  run_bash "cat <<E${NL}a$BS${NL}E${NL}$between${NL}E${NL}echo end" "$T/open"
+  refused "between a joined marker and the marker on its own line, the gate does not vouch for its reading: $between"
+  says "and says it could not check: $between" "$COULD_NOT"
+done
+run_bash "cat <<E${NL}a$BS${NL}E${NL}E${NL}$RUNS${NL}echo end" "$T/open"
+refused "a joined marker, then the marker, then only quoted words: refused, where it passed before"
+says "and as a check it could not make" "$COULD_NOT"
+# A heredoc on ONE line: no shell gives it a body, so every command after the << on the line runs
+# (bash 3.2 and zsh, measured 2026-11-23 with `cat <<E; echo RAN; E`). The reader took the "; " for
+# a flattened line break and the command for the body, so a file that posts, run between the <<
+# and a later word that is the marker, was read by nobody. The file's command is held in HIDDEN,
+# so that no word of this suite is itself such a heredoc with a command the gate reads on its
+# line: written out here, the gate refused running this suite by name (the case at its foot).
+for one in "cat <<E; $HIDDEN; E" "cat <<'E'; $HIDDEN; E" "cat <<E; $HIDDEN; E; echo end"; do
+  run_bash "$one" "$T/open"
+  refused "a file that posts, run on the line of a heredoc and before its marker, is refused: $one"
+  says "and as a check it could not make: $one" "$COULD_NOT"
+  # The reason is the one line, not a backslash or an unquoted marker, so the advice is to put the
+  # body and the marker on lines of their own, never to quote the marker (two of these are quoted).
+  says "naming the heredoc on one line and how to write it: $one" "it opens a heredoc on the one line \`$one\`"
+  case "$ERR" in
+    *"quote the marker"*) check "and not telling the session to quote the marker: $one" "said: ${ERR:0:400}" ;;
+    *) check "and not telling the session to quote the marker: $one" ok ;;
+  esac
+done
+# The controls: with no marker after it the reading goes on to the command, as the shells run it,
+# and finds the post; a quiet one passes.
+run_bash "cat <<E; bash posts.sh" "$T/open"
+refused "the control: a heredoc on one line with no marker after it, then a file that posts, is refused"
+run_bash "cat <<E; bash quiet.sh" "$T/open"
+allowed "the control: and the same with a quiet file passes"
+# The OPENER's own line ends in a backslash (review of #3495). Every shell joins that line to the
+# next, so the end marker is the word the two make, unquoted: after `cat <<E` and a backslash, the
+# line `x` and the line `E`, the marker is Ex, the E closes nothing, and the rest is a body whose
+# $( ) runs (bash 3.2, bash --posix, sh, dash, zsh and ksh, measured 2026-11-23 with texts that
+# only create a file). The reader took the backslash for one that quotes the marker, read the
+# rest as commands and named nothing. Seen to fail that day, before the reader named such an
+# opener: exit 0 for each.
+for joined in "cat <<E$BS${NL}x${NL}E" \
+  "cat <<E$BS${NL}E" \
+  "cat <<E$BS${NL}F${NL}body${NL}E" \
+  "cat <<$BS${NL}E${NL}body$BS${NL}E" \
+  "cat <<-E$BS${NL}x${NL}${TAB}E" \
+  "cat <<E$BS${NL}${NL}body${NL}F"; do
+  printf '%s\n' "$joined" "$RUNS" "echo end" > "$T/open/script.sh"
+  run_bash "bash script.sh" "$T/open"
+  refused "a script that runs a file that posts, from a \$( ) after a heredoc whose opener line ends in a backslash, is refused: $(shown "$joined")"
+  says "and as a check it could not make: $(shown "$joined")" "$COULD_NOT"
+  run_bash "$joined${NL}$RUNS${NL}echo end" "$T/open"
+  refused "and the same lines as the command itself are refused: $(shown "$joined")"
+  says "naming the heredoc, the line it opens on and the backslash that ends that line: $(shown "$joined")" "it opens a heredoc the gate cannot find the end of, in the line \`${joined%%"$NL"*}\`: that line ends in a backslash"
+  case "$ERR" in
+    *"Write the << and its whole end marker on one line"*) check "and saying how to write it: $(shown "$joined")" ok ;;
+    *) check "and saying how to write it: $(shown "$joined")" "said: ${ERR:0:500}" ;;
+  esac
+done
+# The gate does not vouch for such an opener whatever follows, so what it read as a command
+# before is never dropped on the strength of the join: with the joined marker closing the heredoc
+# and only a quiet file after it, refused, as a check it could not make.
+run_bash "cat <<E$BS${NL}x${NL}body${NL}Ex${NL}bash quiet.sh" "$T/open"
+refused "an opener line that ends in a backslash is refused even where the joined marker closes the heredoc"
+says "and as a check it could not make" "$COULD_NOT"
+# The controls: two backslashes are a quoted backslash and join nothing (the marker is E and a
+# backslash, quoted, and the line that is those two characters closes it), and a backslash after
+# a blank joins the next line to the command, with the marker whole on its own line. Both pass.
+run_bash "cat <<E$BS$BS${NL}x${NL}E$BS${NL}$RUNS${NL}echo end" "$T/open"
+allowed "the control: an opener line that ends in two backslashes passes, its quoted words running nothing"
+run_bash "cat <<E $BS${NL}quiet.sh${NL}body${NL}E${NL}echo end" "$T/open"
+allowed "the control: a backslash after a blank on the opener line joins the command, and passes"
+
+# A heredoc the shells keep open FEEDS the rest of the text to its command (review of #3495). With
+# no \$ and no backquote in that rest the reader vouched for its reading, the heredoc closed at the
+# joined marker and the rest commands, on the ground that no shell runs a substitution there. But
+# python3 fed by `<<E`, a comment line ending in a backslash, E, and then `import poster` was given
+# that import and ran it, in bash 3.2, bash --posix, sh, dash, zsh and ksh (measured 2026-11-23
+# with a module that only creates a file), while the gate judged the comment as the program and
+# the import as a shell command. Seen to fail that day: exit 0 for each.
+mkdir -p "$T/fed"
+printf '%s\n' 'import urllib.request' "urllib.request.urlopen('https://slack.com/api/chat.postMessage', b'text=hi')" > "$T/fed/poster.py"
+printf '%s\n' 'x = 1' > "$T/fed/quiet.py"
+run_bash "python3 <<E${NL}import poster${NL}E" "$T/fed"
+refused "the control: python3 fed a program that imports a module that posts is refused"
+run_bash "python3 <<E${NL}import quiet${NL}E" "$T/fed"
+allowed "the control: python3 fed a program that imports a quiet module passes"
+run_bash "python3 <<E${NL}# note${NL}E${NL}import poster" "$T/fed"
+allowed "the control: after a heredoc every shell closes, the same line is a shell command that names no file, and passes"
+for feeds in "python3 <<E${NL}# note$BS${NL}E" \
+  "python3 - <<E${NL}# note$BS${NL}E" \
+  "python3 <<-E${NL}${TAB}# note$BS${NL}${TAB}E" \
+  "python3 <<E${NL}# note$BS$BS$BS${NL}E" \
+  "python3 <<E | cat${NL}# note$BS${NL}E"; do
+  run_bash "$feeds${NL}import poster" "$T/fed"
+  refused "python3 fed a module that posts, through a heredoc a shell keeps open, is refused: $(shown "$feeds")"
+  says "and as a check it could not make: $(shown "$feeds")" "$COULD_NOT"
+  says "naming the heredoc and the line it opens on: $(shown "$feeds")" "it opens a heredoc the gate cannot find the end of, in the line \`${feeds%%"$NL"*}\`"
+  says "and saying what the shell does with the rest: $(shown "$feeds")" "feeds the rest to the heredoc's command"
+  printf '%s\n' "$feeds" "import poster" > "$T/fed/script.sh"
+  run_bash "bash script.sh" "$T/fed"
+  refused "and the same lines in a script that is run are refused: $(shown "$feeds")"
+done
+# The gate cannot follow such a text whatever it feeds, so a quiet module is refused too.
+run_bash "python3 <<E${NL}# note$BS${NL}E${NL}import quiet" "$T/fed"
+refused "the same open heredoc feeding a quiet module is refused too, since the gate cannot read it"
+says "and as a check it could not make, not as a post" "$COULD_NOT"
+# A quoted marker that holds a line break: no line is it, so bash, sh and zsh never close the
+# heredoc and feed python3 the rest, while dash and ksh close it at the two lines that spell it,
+# as the reader did. The reason says so, and does not tell the session to quote the marker.
+SPLIT="python3 <<'\"\"\"$BS${NL}\"\"\"'${NL}pass${NL}\"\"\"$BS${NL}\"\"\""
+run_bash "$SPLIT${NL}import poster" "$T/fed"
+refused "python3 fed a module that posts, after a quoted marker that holds a line break, is refused"
+says "and as a check it could not make" "$COULD_NOT"
+says "naming the marker that holds a line break" "its end marker is quoted and holds a line break"
+case "$ERR" in
+  *"or quote the marker"*) check "and not telling the session to quote the marker" "said: ${ERR:0:500}" ;;
+  *) check "and not telling the session to quote the marker" ok ;;
+esac
+# The controls: where every shell closes the heredoc (two backslashes; a quoted marker, whose body
+# is read as written) the program is the comment alone, and the line after is a shell command.
+for closed in "python3 <<E${NL}# note$BS$BS${NL}E" "python3 <<'E'${NL}# note$BS${NL}E"; do
+  run_bash "$closed${NL}import poster" "$T/fed"
+  allowed "the control: python3 fed a heredoc every shell closes passes: $(shown "$closed")"
+done
+# A marker that never comes at all: the gate already took the whole text for what python3 is fed
+# there (fed), so the module that posts was found before, and still is.
+for never in "python3 <<E${NL}import poster" "python3 <<'E'${NL}import poster"; do
+  run_bash "$never" "$T/fed"
+  refused "the control: python3 fed a module that posts by a heredoc whose marker never comes is refused: $(shown "$never")"
+done
+
 echo "slack drafts only: a post reached with no posting word in the command is not hidden by such a # either (claude-config#3464)"
 
 # The command names no endpoint: the file it runs holds the post. Each way of running that file,
@@ -377,6 +572,46 @@ if [ -n "$ROOT" ]; then
 else
   echo "SUITE-PART-UNMEASURED whether running the payload write gate's suite by name is allowed, because this copy is not in a claude-config checkout"
 fi
+
+echo "slack drafts only: the gate's own suites, and its reader's, can be run by name (review of claude-config#3495)"
+
+# The gate reads every word of a script it is asked to run, and a word holding a command that
+# starts with a program it reads by its name is read as a command line of its own. A case's text
+# written out as such a word in a suite is read too, and where it is itself a shape the reader is
+# not sure of, the gate refuses running that whole suite as a check it could not make. The one
+# line heredoc cases above, written out in full, did that on 2026-11-23: no session could have run
+# this suite by name once that gate was installed, and the #3277 case of
+# test-slack-drafts-unknown-program.sh, which walks these suites, lost its driver to it. Such a
+# case's command is held in a variable instead (QUIET, HIDDEN), which leaves the word a text the
+# gate reads no command in, and the gate is handed the same text as before when the suite runs.
+# Every suite of the gate and of its reader beside this one is asked about, found afresh on each
+# run. This suite must be allowed outright. Of the others only that one kind of refusal fails
+# here: where the gate refuses one as a post it says it found, that is another rule's to answer
+# for, and whether that suite holds a text the gate cannot check was not measured, because the
+# gate stopped reading at the refusal.
+ME="$DIR/$(basename "${BASH_SOURCE[0]}")"
+asked=0
+asked_me=""
+for suite in "$DIR"/test-slack-drafts-*.sh "$DIR"/test-shell-words-*.sh; do
+  [ -f "$suite" ] || continue
+  asked=$((asked + 1))
+  run_bash "bash $suite" "$DIR"
+  if [ "$suite" = "$ME" ]; then
+    asked_me=1
+    allowed "running this suite by name is allowed"
+    continue
+  fi
+  by_name="running a suite of the gate or of its reader by name is not refused as a check the gate could not make: ${suite##*/}"
+  case "$RC:$ERR" in
+    0:*) check "$by_name" ok ;;
+    2:*"$COULD_NOT"*) check "$by_name" "the gate said: ${ERR:0:400}" ;;
+    2:*) other="${ERR//$DIR\//}"
+      echo "SUITE-PART-UNMEASURED whether ${suite##*/} holds a text the gate cannot check, because the gate refused running it by name for another reason first: $(printf '%s' "${other:0:200}" | tr '\n' ' ')" ;;
+    *) check "$by_name" "exit $RC, stdout: ${OUT:0:200}, stderr: ${ERR:0:300}" ;;
+  esac
+done
+if [ -n "$asked_me" ] && [ "$asked" -ge 2 ]; then check "this suite and the suites beside it were found to ask about ($asked)" ok
+else check "this suite and the suites beside it were found to ask about" "$asked found beside $DIR${asked_me:+, this suite among them}"; fi
 
 echo
 

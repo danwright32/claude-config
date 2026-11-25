@@ -86,7 +86,7 @@
 # costs one fresh check run, not one per merge. There is no count of updates: the deadline, three
 # hours by default from taking the repository's turn (claude-config#1604, see out_of_time), and the
 # poll count bound the run, and is-it-live's window for a background merge (WAIT_MS, 24 hours) is held
-# at least twice its line budget plus that deadline, by test-merge-when-ready.sh (L227); since
+# at least twice its line budget plus that deadline, by test-merge-when-ready-turn.sh (L227); since
 # claude-config#2351 a line that keeps moving never ends a run, so one behind a very long moving line
 # can outlast that window, and past it is-it-live goes on asking only while the run still holds a
 # place in line (lib/merge-in-line.sh, claude-config#2403). Waiting changes only
@@ -556,7 +556,7 @@ GATE_BUDGET="$(num_or "${MWR_GATE_READ_BUDGET_SECONDS:-}" 90)"
 # up to MWR_GATE_TIMEOUT_TRIES (4) times in all, MWR_GATE_TIMEOUT_RETRY_SECONDS (30) apart through the
 # injected sleep (L524), each retry said in this run's log; both are settings, not measurements. A
 # gate that still has no time after that stops the run as before, saying how many asks it had. Any
-# other refusal is a decision and stops it at once, unasked again. test-merge-when-ready.sh reads
+# other refusal is a decision and stops it at once, unasked again. test-merge-when-ready-turn.sh reads
 # the sentence from each gate's own source, so a gate that rewords it fails the suite.
 GATE_TRIES="$(num_or "${MWR_GATE_TIMEOUT_TRIES:-}" 4)"; [ "$GATE_TRIES" -ge 1 ] || GATE_TRIES=1
 GATE_WAIT="$(num_or "${MWR_GATE_TIMEOUT_RETRY_SECONDS:-}" 30)"
@@ -2141,7 +2141,7 @@ updated_from=""; updated_at=0; catching_up=""
 # three hours. So the deadline, MWR_DEADLINE_SECONDS, now counts from the moment this run first took
 # the turn (taken_at), and the time before it, in line or before the first look took a place, has a
 # budget of its own, MWR_LINE_SECONDS. That budget and the deadline added together are what
-# is-it-live's window is held to (test-merge-when-ready.sh); since #1697 the line budget restarts
+# is-it-live's window is held to (test-merge-when-ready-turn.sh); since #1697 the line budget restarts
 # whenever the line moves, and since #2351 nothing else ends a moving line (below). A run passed over and back in line
 # keeps the deadline it has not yet held, which no longer runs while it waits (#1975, below).
 # A run that could take no turn at all goes on as before #1515, on its deadline from its start.
