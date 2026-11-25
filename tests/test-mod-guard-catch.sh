@@ -1,7 +1,8 @@
 #!/bin/bash
 # Tests for tools/check-mod-guard-catch.sh (claude-config#3655): every hook a mod registers at
 # tool.call or tool.check ends in a catch built by mod-kit's hooks/hold.ts, so a hook Claude Code
-# cuts at 10 s, or one that throws, never lets the call it was judging run unsaid.
+# cuts at 10 s, or one that throws, never lets the call it was judging run unsaid. Measured
+# 2026-11-25 on Claude Code 2.1.332 (#3627): cut with no catch, the call ran in 6 of 6 runs.
 #
 # Each way a tool hook can be without that catch is built as a fixture and seen to fail (L1), by
 # the state reached and never one spelling of it (L247). Then the real payload is checked, and must
