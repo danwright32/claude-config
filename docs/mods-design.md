@@ -3730,7 +3730,10 @@ lasting memory file, or moved one away, ran with no question. Measured in the mo
   scratch folder: the source named last is the one kept, so the note named last survives; `mv -n`
   keeps both; a pattern may match no such name). Claude's refusal says the same after its opening
   words, and Dan's Delete for a question that did not say it never covers a call that now does
-  (`sameRemoval`). Not said: the note named last of two sources of exactly one name, which the
+  (`sameRemoval`). The place is the mod's own text, so it is set aside before the question is
+  judged for text the dialog would not show (`askFault`), as the file's own name is: it ends in
+  that name, and a note whose name holds a zero width space could otherwise never be asked about
+  (the lessons review of 1e11889382, seen red first). Not said: the note named last of two sources of exactly one name, which the
   reader gives no write of its own, so that question is the Delete question with no such sentence. The mark is on the write rather than the removal, so `cp a b <folder>/ && rm a`
   is covered too. Names are compared in small letters and in capitals, as `foldedName` does: the
   same disk keeps `straße.md` and `STRASSE.md`, a long s and s, a final sigma and a capital one,

@@ -5278,7 +5278,7 @@ test('one mv that puts two files on one name is asked about as a deletion, never
   expect(w.ran).toEqual([])
 })
 
-test('the question for a note one mv may replace with another file of its name says what git holds, in a deletion\'s words, and Delete runs it once (#3505)', withKit, async ($, on) => {
+test('the question for a note one mv may replace with another file of its name says it may be lost there and what git holds, in a deletion\'s words, and Delete runs it once (#3505)', withKit, async ($, on) => {
   const w = world($, on, { auto: true, files: SHARED_NAME_FILES })
   const command = `mv ${NOTE_A} ~/Desktop/full/A.md ~/Desktop/archive/`
   const asked = `Delete ${NOTE_A}: it is finished work?`
@@ -5403,4 +5403,25 @@ test("Dan's Delete for a note another file may land on runs that command once, a
   expect((await call($, { tool: 'Bash', command })).deny).toBeUndefined()
   expect(w.ran.map(r => r.input.command)).toEqual([command])
   expect(refusalOf(await call($, { tool: 'Bash', command }))).toContain(NOT_DELETED)
+})
+
+// The lessons review of 1e11889382: the place a note is sent to is the mod's own text in the
+// question, so it is set aside before the question is judged, as the note's own name and the place
+// a move goes are. A note whose name holds a character the dialog would not show (a zero width
+// space) is sent to a path ending in that same name. Without the place set aside its question was
+// refused for the mod's own sentence, which Claude cannot reword, so the removal could never be
+// asked about at all (L665).
+test('a note whose name the dialog would not show whole can still be asked about when another file may land on its name (#3505)', withKit, async ($, on) => {
+  const odd = `od${pt(0x200b)}d.md`
+  const note = `${REMOVAL_MEM_SHOWN}/${odd}`
+  const w = world($, on, { auto: true, files: { ...SHARED_NAME_FILES, [`${REMOVAL_MEMDIR}/${odd}`]: 'a note\n', [`${HOME}/Desktop/exact/${odd}`]: 'another file of the same name\n' } })
+  const refusal = refusalOf(await call($, { tool: 'Bash', command: `mv ${note} ~/Desktop/exact/${odd} ~/Desktop/archive/` }))
+  expect(refusal.startsWith(`${NOT_DELETED}: this deletes lasting memory (${note}), so Dan decides first. The command sends ${note} to ~/Desktop/archive/${odd}, `)).toBe(true)
+  const asked = `Delete ${note}: it is finished work?`
+  const answered = await askRemoval($, w, refusal, 'Keep as is', asked)
+  expect(answered.deny).toBeUndefined()
+  expect(w.asked[0]?.questions[0]?.question).toBe(
+    `${asked} The command sends it to ~/Desktop/archive/${odd}, and another file the same command names may land on that name too. Only one of the two would be kept there, so this file may be lost. Git does not hold it, so once deleted it cannot be got back from git.`,
+  )
+  expect(w.ran).toEqual([])
 })
