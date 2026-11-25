@@ -693,17 +693,26 @@ GUARD_CATCH = {"tool.call": ("cutCall", "cutOwn"), "tool.check": ("cutCheck",)}
 # A site whose answer also decides whether a call runs, with no shared catch written for it yet.
 GUARD_UNBUILT = ("tool.run", "tool.judge")
 CATCH_OPEN = re.compile(r"\s*\.\s*catch\s*\(")
-CATCH_KIT = re.compile(r"\s*\(\s*\$\s*,\s*e\s*,\s*next\s*\)\s*=>\s*(cutCall|cutCheck|cutOwn)\s*\(")
+CATCH_KIT = re.compile(r"\s*(?:async\s+)?\(\s*\$\s*,\s*e\s*,\s*next\s*\)\s*=>\s*(cutCall|cutCheck|cutOwn)\s*\(")
 CATCH_WATCH = re.compile(r"\s*watchesOnly\s*\)")
 # An answer that refuses or asks, as a hook's own lines spell it: a deny or a decision it builds.
 REFUSES = re.compile(r"\bdeny\s*:|\bdecision\s*:|\{\s*(?:deny|decision)\s*[,}]")
-HOLD_IMPORT = r"import\s*\{[^}]*\b%s\b[^}]*\}\s*from\s*['\"]\./mod-kit/hold(?:\.ts)?['\"]"
+# The name as hold.ts exports it: `x as cutCall` brings something else in under the kit's name.
+HOLD_IMPORT = r"import\s*\{(?:[^}]*,)?\s*%s\s*(?:,[^}]*)?\}\s*from\s*['\"]\./mod-kit/hold(?:\.ts)?['\"]"
 
 
-def guard_catches(mod):
-    """Each tool hook of a mod that does not end in a shared catch: ([rel:line<TAB>why], how many).
-    A hook this cannot read is one of them, never passed over."""
+def _same_bytes(a, b):
+    with open(a, "rb") as f, open(b, "rb") as g:
+        return f.read() == g.read()
+
+
+def guard_catches(mod, kit_hold=None):
+    """Each tool hook of a mod that does not end in a shared catch: ([rel:line<TAB>why], how many
+    tool hooks were read, by the catch each ends in). A hook this cannot read is one of the first,
+    never passed over. kit_hold is mod-kit's own hooks/hold.ts where the caller has it: the hold.ts a
+    catch's name is imported from must then be that file, byte for byte."""
     found = []
+    read = {"cutCall": 0, "cutCheck": 0, "cutOwn": 0, "watchesOnly": 0, "none of them": 0}
     for path in mod_code(mod):
         with open(path, errors="replace") as f:
             text = f.read()
@@ -714,13 +723,16 @@ def guard_catches(mod):
         for m, event in on_calls(text, code, raw_kinds):
             at = f"{rel}:{code.count(chr(10), 0, m.start()) + 1}"
             if event is None:
+                read["none of them"] += 1
                 found.append(f"{at}\tits event is not a plain string, so whether it is a tool hook cannot be read")
                 continue
             if event in GUARD_UNBUILT:
+                read["none of them"] += 1
                 found.append(f"{at}\ta {event} hook decides whether a call runs, and hooks/hold.ts has no catch for that event yet: add one there, with its test, before registering this")
                 continue
             if event not in GUARD_CATCH:
                 continue
+            read["none of them"] += 1
             open_at = m.end() - 1
             end = closing(code, open_at)
             if end is None:
@@ -749,20 +761,35 @@ def guard_catches(mod):
                 if REFUSES.search(span):
                     found.append(f"{at}\tthe {event} hook is declared watchesOnly and its own lines answer a refusal: a hook that can refuse or ask ends in {' or '.join(GUARD_CATCH[event])}")
                     continue
+                if ANSWERS.search(span):
+                    found.append(f"{at}\tthe {event} hook is declared watchesOnly and its own lines answer the call themselves (a result), so cut it would let the call beneath run instead: a hook that answers a call ends in {' or '.join(GUARD_CATCH[event])}")
+                    continue
             else:
                 found.append(f"{at}\tthe {event} hook keeps a catch of its own: end it in .catch(($, e, next) => {GUARD_CATCH[event][0]}(...)) or .catch(watchesOnly)")
                 continue
-            if not re.search(HOLD_IMPORT % name, text):
-                found.append(f"{at}\tthe {event} hook's catch names {name}, which this file does not import from ./mod-kit/hold.ts")
-    return found, len(found)
+            # The import is read with comments blanked, so one commented out is no import.
+            if not re.search(HOLD_IMPORT % name, strip_comments(text, jsx)):
+                found.append(f"{at}\tthe {event} hook's catch names {name}, which this file does not import, under that name, from ./mod-kit/hold.ts")
+                continue
+            hold = os.path.join(os.path.dirname(path), "mod-kit", "hold.ts")
+            if not os.path.isfile(hold):
+                found.append(f"{at}\tthe {event} hook's catch names {name} from ./mod-kit/hold.ts, and no such file is beside it: copy mod-kit's hooks/hold.ts there")
+                continue
+            if kit_hold is not None and not _same_bytes(hold, kit_hold):
+                found.append(f"{at}\tthe {event} hook's catch names {name} from a hold.ts that is not mod-kit's hooks/hold.ts byte for byte, so it is not the shared catch: copy mod-kit's over it")
+                continue
+            read["none of them"] -= 1
+            read[name] += 1
+    return found, read
 
 
 if __name__ == "__main__":
-    if len(sys.argv) == 3 and sys.argv[1] == "guard-catches":
-        lines, bad = guard_catches(sys.argv[2])
-        if lines:
-            print("\n".join(lines))
-        sys.exit(1 if bad else 0)
+    if len(sys.argv) in (3, 4) and sys.argv[1] == "guard-catches":
+        lines, read = guard_catches(sys.argv[2], sys.argv[3] if len(sys.argv) == 4 else None)
+        # The last line is always the count of tool hooks read, so a caller can tell a mod with none
+        # from a reader that read nothing (L98): `read<TAB>cutCall=2 cutCheck=1 ...`.
+        print("\n".join(lines + ["read\t" + " ".join(f"{k.replace(' ', '-')}={v}" for k, v in read.items())]))
+        sys.exit(1 if lines else 0)
     if len(sys.argv) == 4 and sys.argv[1] == "strip-hooks":
         sys.exit(strip_hooks(sys.argv[2], sys.argv[3]))
     if len(sys.argv) == 3 and sys.argv[1] == "unscreened":
@@ -778,5 +805,5 @@ if __name__ == "__main__":
         if lines:
             print("\n".join(lines))
         sys.exit(bad)
-    print("usage: ts_source.py strip-hooks <mods dir> <out dir> | unscreened <hooks dir> | kit-test-takers <mod dir> | real-waits <mod dir> | guard-catches <mod dir>", file=sys.stderr)
+    print("usage: ts_source.py strip-hooks <mods dir> <out dir> | unscreened <hooks dir> | kit-test-takers <mod dir> | real-waits <mod dir> | guard-catches <mod dir> [mod-kit's hooks/hold.ts]", file=sys.stderr)
     sys.exit(2)

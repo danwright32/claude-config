@@ -2990,14 +2990,12 @@ export const register: Register = on => {
     // #3655: this hook judges what the command CHANGED, after it ran. Cut there, the result is
     // replayed with the note a look that failed gives, since the files went unjudged; cut before the
     // command ran, the call is refused.
-  }).catch(($, e, next) =>
-    cutCall('the design round guard', e, next, {
-      after: async () => {
-        const r = await next(e)
-        return r.deny !== undefined ? r : { ...r, context: [...(r.context ?? []), shellUnchecked(message(next.error))] }
-      },
-    }),
-  )
+  }).catch(($, e, next) => cutCall('the design round guard', e, next, {
+    after: async () => {
+      const r = await next(e)
+      return r.deny !== undefined ? r : { ...r, context: [...(r.context ?? []), shellUnchecked(message(next.error))] }
+    },
+  }))
 
   // The main session's call, judged beneath every mod's tool.call hook. A call that passes goes on
   // untouched; one that is refused goes to the settings hooks first, so a call one of them refuses is
