@@ -336,14 +336,16 @@ const ANNOUNCEMENT_OPENER = '@here';
 // markdown was not sent, so nobody knows what agents would see, and it is refused by name. Each
 // test reads one line of the post. A bullet is a hyphen, a star, a plus or a dot.
 const BULLET = '[-*+' + String.fromCharCode(0x2022) + ']';
+const TASK_BOX = new RegExp('^[ \\t]*' + BULLET + '[ \\t]+\\[[ xX]\\]');
+const NESTED_LIST = new RegExp('^(?:\\t+| {2,})(?:' + BULLET + '|\\d+[.)])[ \\t]+\\S');
 const UNMEASURED_MARKDOWN = [
   { name: 'code (a backtick)', test: function (line) { return line.indexOf('`') !== -1; } },
   { name: 'a block quote (a line starting with >)', test: function (line) { return /^[ \t]{0,3}>/.test(line); } },
   { name: 'a table (a line starting with |)', test: function (line) { return /^[ \t]*\|/.test(line); } },
   { name: 'a picture (![...])', test: function (line) { return line.indexOf('![') !== -1; } },
   { name: 'struck through text (~~)', test: function (line) { return line.indexOf('~~') !== -1; } },
-  { name: 'a task box ([ ] or [x] after a bullet)', test: (function (re) { return function (line) { return re.test(line); }; })(new RegExp('^[ \\t]*' + BULLET + '[ \\t]+\\[[ xX]\\]')) },
-  { name: 'a nested list (an indented bullet or number)', test: (function (re) { return function (line) { return re.test(line); }; })(new RegExp('^(?:\\t+| {2,})(?:' + BULLET + '|\\d+[.)])[ \\t]+\\S')) },
+  { name: 'a task box ([ ] or [x] after a bullet)', test: function (line) { return TASK_BOX.test(line); } },
+  { name: 'a nested list (an indented bullet or number)', test: function (line) { return NESTED_LIST.test(line); } },
   { name: 'a rule line (three hyphens, stars or underscores)', test: function (line) { return /^[ \t]*([-*_])(?:[ \t]*\1){2,}[ \t]*$/.test(line); } },
 ];
 
