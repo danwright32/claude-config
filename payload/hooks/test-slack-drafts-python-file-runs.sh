@@ -842,7 +842,9 @@ mkdir -p "$O/onpath"
 cp "$IP/posts.py" "$O/posts.py"
 cp "$IP/quiet.py" "$O/quiet.py"
 cp "$IP/quiet.py" "$O/quietmod.py"
-cp "$IP/post.sh" "$O/post.sh"
+# Under a name no other suite's fixtures use: test-slack-drafts-unknown-program.sh reads this file's
+# quoted commands in a folder of its own that holds a post.sh, where a command naming one posts.
+cp "$IP/post.sh" "$O/sends3539.sh"
 cp "$IP/calm.sh" "$O/calm.sh"
 cp "$IP/posts.py" "$O/-m"
 cp "$IP/posts.py" "$O/-post.py"
@@ -883,7 +885,7 @@ o_pair "a script that runs the file it is handed, with -m after the file" "pytho
 o_pair "a script that runs the file it is handed after -m" "python3 handed2.py -m posts.py" "python3 handed2.py -m quiet.py"
 o_run "python3 quiet.py -m posts.py"
 allowed "#3539 a script that runs nothing, handed a file that posts after -m, passes"
-o_pair "code in a heredoc that hands a shell its file, with -m after the file" "python3 - post.sh -m <<'EOF'
+o_pair "code in a heredoc that hands a shell its file, with -m after the file" "python3 - sends3539.sh -m <<'EOF'
 import subprocess, sys
 subprocess.run(['bash', sys.argv[1]])
 EOF" "python3 - calm.sh -m <<'EOF'
