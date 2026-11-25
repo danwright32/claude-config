@@ -1413,6 +1413,55 @@ written where a cap on agents is said, in any payload document; text in double q
 because a dated quotation is the record of a decision, not a restatement of the rule, and the lessons
 and dated audits are not read, because they record history (L613, L564).
 
+## The builder agent type: a rendered prompt, and no copy in the repository (#3389)
+
+Trials on 2026-11-25 (personal MacBook, three runs an arm) measured two trims of what a builder
+loads before its brief: withholding 48 connected servers saved 13,026 tokens of about 82,760, and
+loading the lessons core in the agent's prompt in place of every rule file saved 20,398. Dan chose
+both ("Servers and rule files (Recommended)"), with the rules a builder must still follow written
+into the type.
+
+Those rules are a copy of text whose home is `CLAUDE.md` and the lessons files, loaded into every
+builder and believed without checking (L244). So nothing in the type is a hand kept copy of a rule:
+`render-builder-type.py` walks `CLAUDE.md`, writes out each file it imports, and carries or leaves
+each section by a table of choices with a reason per row. Three shapes were weighed for where the
+rendered file lives:
+
+- **Committed in `payload/agents/` with a test that fails when it is stale.** Refused. The sources
+  changed in 103 commits in the 30 days to 2026-11-25 and 76 of those were the sync's own, from
+  either Mac, with no pull request: the suite would go red on main after most of them, and two
+  Macs that each changed a rule would conflict on the rendered file at the rebase, which the
+  sync's recovery does not know and hands to a person (L554). The table of contents the core
+  imports carries a count per section, so even an added lesson outside the core would move it.
+- **Committed, and taught to the sync as a derived file** like `LESSONS-CORE-*.md`. That means
+  `is_derived_rule_file` answering for a path inside a mirrored folder, which the conflict keeper,
+  the unsent edit report and the rebase recovery all consult. It works, and it widens three
+  exemptions for one file.
+- **Rendered on each Mac and never carried**, which is the one built toward: the repository holds
+  the renderer, the head and the table, and each Mac's copy is a function of its own installed
+  rules. It needs one thing from the sync, the file named in the mirror's exclusions so a send does
+  not publish it and an apply does not delete it. That entry is Dan's to approve and is not in this
+  change, so today the type is rendered by hand where it is wanted and nothing installs it.
+
+Every doubt in the table is settled by carrying (a section with no row, a row that matches
+nothing), because the failure this change can cause is a rule silently missing from every builder.
+The cost of that default is said rather than hidden: an item left out because it contradicts a
+builder's own rules (wait for approval, merge the pull request yourself, open a file on Dan's
+screen) comes back if its opening words are reworded. `--strict` makes each such case a failure,
+and the suite renders the payload strictly, so main says so. The rendered prompt holds no date,
+count or hash of its own, so a change to one rule changes that rule's lines and nothing else.
+
+Two things the trial did not surface are true of the type. `omitClaudeMd` is all or nothing, so the
+project's own `CLAUDE.md` and the memory index are left out with the global rules; the head tells
+the builder to read the project's file, and that is a rule in a prompt (L27). And a `CLAUDE.md` in
+a subfolder still loads when an agent reads a file under it: in this repository `payload/CLAUDE.md`
+is the global rules file with all its imports, so a builder of this type working under `payload/`
+loads the whole of what the type left out (seen once, 2026-11-25, in the run that built this).
+
+The tool list is an allow list because a deny list has to name each server and the two Macs
+connect different ones. The trial measured the deny form; that the allow form also takes the
+names out of the deferred tool list is not yet measured.
+
 ## A fixture home touches nothing that belongs to the Mac (#1453, #1470, #1486)
 
 rtk's config is one of several things `claude-sync` reaches that belong to the Mac rather than to

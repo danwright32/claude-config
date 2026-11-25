@@ -61,6 +61,16 @@ A builder agent's model is set by the kind of task (Dan, 2026-11-01, claude-conf
 - A fork ignores `model` and runs on the session's own model, so a builder whose tier is not the session's model is never a fork.
 - To run one brief on another model, suggest it to Dan with the reason: on the board, as that row's Model with the reason beside it, or before dispatching when there is no board.
 
+### Which agent type a builder runs as
+
+A `build` item is dispatched as the builder agent type, with `subagent_type: "builder"` on the Agent call, when the Agent tool's list of agent types names `builder`. Where the list does not name it, leave the type out, as every builder was dispatched before the type existed: a type the list lacks fails the call. A `check` or `investigate` item never uses it, because it may need a connected server and the builder type has none.
+
+The builder type starts with less than a general purpose agent (Dan, 2026-11-25, claude-config#3389: "Servers and rule files (Recommended)"). It lists no connected servers. It does not load the rule files: its own prompt carries the lessons core and the rules a builder must follow from the global CLAUDE.md, written from those files by `render-builder-type.py` in this folder, and `builder-type-rules.tsv` beside it records each section carried or left out and why. For the session dispatching it:
+
+- The model rule above holds for it unchanged. The type sets no model, so every dispatch names one, and `hooks/builder-model-gate.sh` counts a dispatch of the type as a builder whatever else it carries.
+- It does not load the project's CLAUDE.md or AGENTS.md, and is told to read that file first. It does not load the project's memory index at all, so part 2 of its brief names any memory file the item depends on, by path.
+- It cannot reach Slack, a database or any other connector, so an item that needs one is not dispatched as this type.
+
 ## 3. Briefs
 
 Every brief has exactly these parts, in this order, and nothing else:

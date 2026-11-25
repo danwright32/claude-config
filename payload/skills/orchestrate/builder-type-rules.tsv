@@ -1,0 +1,44 @@
+# What the builder agent type carries from the global CLAUDE.md (claude-config#3389).
+# Read by render-builder-type.py, whose header says how. Tab separated:
+#   carry <section> <reason>                 leave <section> <reason>
+#   drop <section> <the item's opening words> <reason>    (one item of a carried section left out)
+#   keep <section> <the item's opening words> <reason>    (one item of a left out section carried)
+# The test for leaving anything out: it is about talking with Dan live, about a tool this type
+# does not have, or about what the orchestrating session does once a builder has handed back.
+# Everything a builder writes, runs, commits or reports by is carried, and so is anything in doubt.
+carry	General Behavior	The rule on giving times in Eastern time governs a builder's notes and report.
+drop	General Behavior	When given a multi part request	It says to outline a plan and wait for approval. A builder's brief is its approval and it has nobody to wait for, so carrying it would stall the work.
+drop	General Behavior	Whenever you ask what to do next	A builder cannot show a picker. Its questions go in its report.
+carry	Driving Dan's Machine (keyboard, mouse, screen)	A builder must know that keystrokes, clicks and focus changes need Dan told first, which for a builder means it does not make them.
+carry	Slack: drafts only, never send	The standing rule that nothing is ever sent to Slack is kept, though this type has no Slack tools.
+drop	Slack: drafts only, never send	A message for someone is saved as a draft the moment	How a session saves a draft for Dan. This type has no Slack tools and its agent rules forbid sending anything to people.
+drop	Slack: drafts only, never send	A draft is written only once the checking	The same: it governs drafts a session writes.
+drop	Slack: drafts only, never send	A picker about a Slack reply	The same, and a builder has no picker.
+drop	Slack: drafts only, never send	Afterwards say plainly that it is a draft	The same.
+carry	Progress & Feedback (UI)	Rules for any screen a builder builds.
+carry	Building UI	Rules for any screen a builder builds.
+carry	Build-Time Reliability Rules	Rules for the code a builder writes, the alert rule included.
+carry	Code Editing Rules	Governs every edit.
+carry	Shell Commands	Governs every command.
+carry	Local tooling gotchas	The push hook and forbidden character rules bite on a builder's commits.
+drop	Local tooling gotchas	`bbedit` is NOT on PATH	Opening a file in an editor on Dan's screen is a session's hand off to him, never a builder's.
+carry	Hand-offs to Dan (manual steps)	The rules on secrets, on describing a key and on checking a step is not already done apply to what a builder asks of Dan in its report.
+drop	Hand-offs to Dan (manual steps)	Give numbered steps with exactly ONE copy-paste command	The layout of steps shown to Dan, which the session writes from the builder's report.
+drop	Hand-offs to Dan (manual steps)	For a manual file edit:	The same.
+drop	Hand-offs to Dan (manual steps)	Dan cannot see files delivered into the chat.	It says to open files on Dan's screen. A background builder must never move his focus.
+carry	Code Standards	Governs the code a builder writes.
+carry	Bug Fixes & Learning	Naming the mistake behind a bug is part of every fix.
+carry	Testing & Data	Governs every query and every piece of test data.
+carry	Claude Code Automation (all projects)	Test first, the subagent rules, the worktree rules, hand back, the one resend after no verdict, the agent cap, the model rule and plain language all bind a builder.
+drop	Claude Code Automation (all projects)	End of turn:	It describes the reflection and issue review that run at the end of a session's turn, not a builder's.
+drop	Claude Code Automation (all projects)	Stale rule files are announced	It describes a notice about rule files a session loaded. This type loads none: its rules are in its prompt from the start.
+carry	Memory	Where a learned fact belongs, which the bug fix rule above points at.
+carry	Workflow	Cheapest approach that does the job, right over fast, saying the git state, pushing without asking, the readiness check and keeping docs in step all bind a builder.
+drop	Workflow	Escalate planning by feature size	Offering a planning council is a session's conversation with Dan.
+drop	Workflow	Track big features as milestones	Milestones are made by the planning skills, which a session runs.
+drop	Workflow	Every issue gets a milestone	A builder files no issue: it records a finding in the issue spool and the session files it.
+drop	Workflow	Keep the issue loop moving	It says to merge the pull request and offer the next issues. A builder never merges its own work, and carrying this would contradict that rule.
+carry	Git & Authorship	Governs every commit, branch and push.
+leave	Projects	A list of where each project is checked out. A brief names the repository it sends a builder to.
+keep	Projects	Name the Macs as Dan does	A writing rule for anything a builder writes that names a Mac.
+carry	Writing Style	Governs everything a builder writes.

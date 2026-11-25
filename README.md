@@ -7840,6 +7840,54 @@ fallback for a session where no line arrived.
   `skills/production-ready/test-production-audit.sh` for the workflow's ceiling, and
   `tools/test-agent-cap-report.sh` for the measurement.
 
+## The builder agent type is rendered from the rules it carries
+
+A builder dispatched as a general purpose agent loads everything a session does before it reads its
+brief (#3389: about 82,760 tokens a start on the personal MacBook, 2026-11-25, three runs). The
+`builder` agent type starts with less. It lists no connected servers, and it does not load the rule
+files: its own prompt carries the lessons core and the builder's share of the global `CLAUDE.md`
+(Dan, 2026-11-25: "Servers and rule files (Recommended)").
+
+- **The prompt is rendered, never kept by hand.** `skills/orchestrate/render-builder-type.py` writes
+  the agent definition from `CLAUDE.md`, every file it imports (the lessons core arrives that way),
+  `builder-type-head.md` (the frontmatter and opening words) and `builder-type-rules.tsv`:
+
+      python3 -I payload/skills/orchestrate/render-builder-type.py --out <folder>/builder.md
+      python3 -I payload/skills/orchestrate/render-builder-type.py --check <folder>/builder.md
+      python3 -I payload/skills/orchestrate/render-builder-type.py --decisions
+
+  `--check` exits 1 and names the first line that differs when a written copy is stale. `--decisions`
+  prints, for each section of `CLAUDE.md`, whether a builder carries it, how much, and why.
+  `--rules <folder>` reads another copy of the rules, `~/.claude` for the ones a Mac has installed.
+- **No rendered copy is in the repository, and the sync does not install one yet.** The sources
+  changed in 103 commits in the 30 days to 2026-11-25, 76 of them made by the sync with no pull
+  request, so a committed copy would be stale within hours and two Macs would collide over it
+  (L554). The type exists on a Mac only where it has been rendered into an agents folder. Having
+  the sync render it on each Mac means naming the file in the sync's exclusions, which waits on
+  Dan's sign off (#3389).
+- **What a builder carries is one table.** `builder-type-rules.tsv` has a row for every section of
+  `CLAUDE.md`: `carry`, `leave`, and `drop` or `keep` for one item named by its opening words. A
+  section with no row is carried, a `drop` row that matches nothing drops nothing, and a `keep`
+  row that matches nothing carries its whole section, so a doubt always sends the rule to the
+  builder. The suite renders the payload with `--strict`, which turns each of those into a failure
+  that names it, so a new section gets its row in a pull request.
+- **What the type does not load, beyond the rule files.** The project's own `CLAUDE.md` or
+  `AGENTS.md` and its memory index go with the rule files, because Claude Code leaves them out
+  together. The head tells a builder to read the project's file first, and the orchestrate skill
+  tells the session to name any memory file in the brief. Nothing enforces either.
+- **The tool list is an allow list.** It names Claude Code's own tools, the Skill tool included,
+  and three servers: the area check mod, the job watcher mod and Claude in Chrome. A tool Claude
+  Code adds later reaches builders only once it is added to `builder-type-head.md`.
+- **The model rule holds for it.** The type sets no model. `hooks/builder-model-gate.sh` counts a
+  dispatch of the type as a builder by its type alone, so it refuses one that names no model in an
+  orchestrating session, with or without a worktree or a session line.
+- **Sessions use it when they can see it.** "Which agent type a builder runs as" in the orchestrate
+  skill says to dispatch a `build` item as `builder` when the Agent tool lists that type, and as
+  before where it does not.
+- Tests: `skills/orchestrate/test-builder-type.sh` (the renderer on a fixture, its failures, the
+  stale copy check, the payload's table, tool list and size budget of 98,000 bytes, against 93,942
+  rendered on 2026-11-25) and `hooks/test-builder-model-gate.sh`.
+
 ## The context line and the long session nudge
 
 Every request rereads the whole conversation, so the cost of a session is set by how much each
