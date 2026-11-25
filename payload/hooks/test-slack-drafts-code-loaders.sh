@@ -23,8 +23,9 @@
 # substitution, or handed one as the file it runs (#3213). And a package script judged with the words
 # after its name (#3143). And a shell handed its input by the group, loop, subshell, substitution or
 # string it is in, or by a redirection glued to its name or its file (#3229). Every other
-# judgement of the gate is in test-slack-drafts-only-gate.sh,
-# whose helpers below are copied as they are, so a case here is driven the same way: a hook payload
+# judgement of the gate is in test-slack-drafts-only-gate.sh and the five suites split from it
+# (#3575), whose helpers below, in lib/slack-drafts-gate-harness.sh since then, are copied as they
+# are, so a case here is driven the same way: a hook payload
 # piped into slack-drafts-only-gate.sh, exit 0 allowed and 2 refused, the reason on stderr.
 set -uo pipefail
 

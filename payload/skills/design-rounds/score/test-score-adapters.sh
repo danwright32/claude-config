@@ -36,8 +36,8 @@ suite_deadline_arm || exit $?
 # from BASH_SOURCE at that step, never "$HERE": the waits sourced above run their condition in this
 # shell, where it can set any name, so past that line the Slack drafts gate is sure of no variable.
 # It could not find pngio through $HERE and refused the whole suite when a session ran it
-# (claude-config#2668). test-slack-drafts-only-gate.sh judges this suite, so handing python "$HERE"
-# for an import fails there.
+# (claude-config#2668). test-slack-drafts-only-gate-scripts.sh judges this suite, so handing python
+# "$HERE" for an import fails there.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL="$(cd "$HERE/.." && pwd)"
 SCORE="$HERE/design_score.py"
