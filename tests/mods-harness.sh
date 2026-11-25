@@ -20,8 +20,9 @@
 # Every one of them runs check-mods.sh in the same world, so that world is here, once, and no suite
 # holds a copy of it (L613): the throwaway folder, the stub claude and the stub compiler, the records
 # every fixture is kept out of, the pinned compiler, and the result line. It is the opening of
-# test-mods.sh moved here unchanged, but for REAL_BIN, the claude the real tree is checked with,
-# which test-mods.sh alone finds, so no other piece can reach it (L2).
+# test-mods.sh moved here unchanged, but for the claude the real tree is checked with, which only
+# tests/mods-real-tree.sh finds, sourced by the real tree's parts alone, so no other piece can reach
+# it (L2).
 #
 # It sits in tests/, beside the suites, never in payload/hooks/lib: that folder is carried to every
 # Mac by the sync and is read as hook code by the hook scans, and tests/ already holds a harness
@@ -79,6 +80,9 @@ PINNED_WHY=""
 # file binds is unknown to the gate in the suite from then on, and the suites' own python3 runs place
 # their imports by ROOT.
 MODS_HARNESS_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The one test of a number above zero (whole_above_zero), which the deal below reads its count of
+# parts with. Missing, the deal refuses every count, by its own line.
+. "$MODS_HARNESS_ROOT/payload/hooks/lib/whole-number.sh" || echo "FAIL: the mods harness: payload/hooks/lib/whole-number.sh is missing, so the real tree cannot be dealt into parts."
 if [ -z "${CHECK_MODS_TS_DIR:-}" ]; then
   if . "$MODS_HARNESS_ROOT/tools/lib/pinned-compiler.sh"; then
     if pinned_compiler_ensure "$ROOT/tools/typescript"; then
@@ -138,7 +142,8 @@ runit(){   # $1 = mods dir -> sets out and code
 SHARED="$ROOT/tools/check-mod-shared-parts.sh"
 
 # THE REAL TREE'S PARTS (#3622). One run of check-mods.sh over every real mod read 490 and 667 s on a
-# runner, near the 600 s each suite is held under, so the real tree is checked by several suites, each
+# runner on 2026-11-25, near the 600 s each suite is held under, so the real tree is checked by
+# several suites, each
 # handing check-mods.sh the mods dealt to it (tests/mods-real-tree.sh). The deal is here, beside the
 # rest of the world, so the fixtures can hold it without reaching the real claude (L2).
 #
@@ -148,8 +153,8 @@ SHARED="$ROOT/tools/check-mod-shared-parts.sh"
 # (L315: by measured cost, never by count), by the seconds file (tests/mods-real-tree-seconds.tsv
 # unless named): a mod it does not name counts as 5. A missing seconds file is refused, never guessed.
 mods_real_deal(){
-  local parts="$1" mdir="${2:-$ROOT/payload/mods}" table="${3:-$DIR/mods-real-tree-seconds.tsv}" d
-  case "$parts" in ''|*[!0-9]*|0) echo "mods_real_deal: '$parts' is not a number of parts." >&2; return 1 ;; esac
+  local parts mdir="${2:-$ROOT/payload/mods}" table="${3:-$DIR/mods-real-tree-seconds.tsv}" d
+  parts="$(whole_above_zero "$1")" || { echo "mods_real_deal: '$1' is not a number of parts above zero." >&2; return 1; }
   if [ ! -f "$table" ]; then
     echo "mods_real_deal: $table, the seconds each mod's checks were measured to take, is missing, so the mods cannot be dealt by cost." >&2
     return 1

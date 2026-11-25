@@ -2128,7 +2128,7 @@ for t in "$CHECK" "$SHARED" "$DEPS" "$WAITS"; do
 done
 
 # 15. The real tree is checked in parts (#3622): one run of check-mods.sh over every mod read 490 and
-#     667 s on a runner, so each part suite hands it the names of the mods dealt to it. Named mods
+#     667 s on a runner on 2026-11-25, so each part suite hands it the names of the mods dealt to it. Named mods
 #     are checked as every mod is, and no other; the record of the build the mods last passed on is
 #     written only when one run's parts, together, passed every mod in the folder on one build.
 M15="$TMPROOT/m15"; mkmod "$M15" alpha; mkmod "$M15" beta; mkmod "$M15" gamma

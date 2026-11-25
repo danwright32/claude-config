@@ -36,7 +36,7 @@ REAL_BIN="${MODS_CLAUDE:-$(command -v claude 2>/dev/null || true)}"
 #    caller said or in the default places, never in this run's scratch. Given MODS_CLAUDE, the caller
 #    promised a claude, so a run that could not check the mods with it fails (#3297).
 mods_real_tree_part(){   # $1 = this part  $2 = how many parts
-  local part="$1" parts="$2" names=() n out code real_note round=""
+  local part="$1" parts="$2" names=() n dealt out code real_note round=""
   local real_env=(env)
   if [ "$REAL_KEPT_SET" = set ]; then real_env+=(CHECK_MODS_FAILURE_OUTPUT="$REAL_KEPT"); else real_env+=(-u CHECK_MODS_FAILURE_OUTPUT); fi
   if [ "$REAL_LAST_SET" = set ]; then real_env+=(CHECK_MODS_LAST_PASSED="$REAL_LAST"); else real_env+=(-u CHECK_MODS_LAST_PASSED); fi
@@ -49,7 +49,13 @@ mods_real_tree_part(){   # $1 = this part  $2 = how many parts
     return 0
   fi
   # The mods dealt to this part; none is said by the agreed line, and nothing is run.
-  while IFS= read -r n; do names+=("$n"); done < <(mods_real_part_names "$part" "$parts")
+  dealt="$(mods_real_part_names "$part" "$parts")"
+  while IFS= read -r n; do
+    [ -n "$n" ] || continue
+    names+=("$n")
+  done <<EOF
+$dealt
+EOF
   if [ "${#names[@]}" -eq 0 ] || [ "${names[0]#SUITE-PART-UNMEASURED }" != "${names[0]}" ]; then
     if [ "${#names[@]}" -gt 0 ]; then echo "${names[0]}"; else check "the real mods of part $part of $parts were dealt" "the deal could not be made (the reason is above)"; fi
     return 0

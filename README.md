@@ -10754,7 +10754,8 @@ process (its cached rollout switch saved off, or a setting such as `disableAllHo
 can set; it never counts that as every mod failing (#740). A failure carrying no verdict line names
 the exit code and the last lines of output instead of an empty reason.
 
-That run over the real tree is all `tests/test-mods.sh` holds now. The checks of `check-mods.sh` on
+That run over the real tree was then all `tests/test-mods.sh` held (now one part of it, below).
+The checks of `check-mods.sh` on
 fixture mods and a stub claude, and of the other mod scans, are `tests/test-mods-fixtures.sh`, and
 section 9, what every mod shares, is `tests/test-mods-shared-parts.sh`: one suite of 516 checks cut
 into three by what each section cost, after it read up to 777 seconds on GitHub's runners on

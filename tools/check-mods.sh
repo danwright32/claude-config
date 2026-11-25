@@ -9,7 +9,9 @@
 # Exit codes, each distinct so a caller can never read one as another (L11, L53):
 #   0  every mod passed (the count is printed)
 #   1  at least one mod failed, each named with the engine's reason
-#   2  the mods folder does not exist
+#   2  the mods folder does not exist, or what was asked cannot be run as given: a name after it that
+#      is not a mod there or is named twice, names after one mod's own folder, or a round
+#      (CHECK_MODS_ROUND) with no names or a name that could leave its folder (#3622). Nothing checked.
 #   3  UNMEASURED: mods are present but there is no claude command to ask (L411, L490)
 #   4  UNMEASURED: claude answered that hooks modules are switched off in this process (its cached
 #      rollout switch, cachedGrowthBookFeatures.tengu_plugin_hooks_modules in the user's
@@ -86,7 +88,8 @@ if [ -z "$dir" ] || [ ! -d "$dir" ]; then
 fi
 dir="${dir%/}"
 # Names after the folder check those mods of it and no other (#3622): the real tree's parts each hand
-# over the mods dealt to them, since one run over every mod read 490 and 667 s on a runner. Each named
+# over the mods dealt to them, since one run over every mod read 490 and 667 s on a runner on
+# 2026-11-25. Each named
 # mod is checked exactly as in a whole folder's run. A name that is not a mod there, or one named
 # twice, is refused before anything is checked, never skipped (L100).
 shift

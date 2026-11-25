@@ -414,7 +414,7 @@ jobs:
 
       # Left OFF the PATH and named to the mods' suites alone in MODS_CLAUDE: many other suites start a
       # real session whenever they find a claude, and none of them was written for this runner.
-      # MODS_CLAUDE also tells both suites a claude was promised, so one that cannot check the mods
+      # MODS_CLAUDE also tells each of those suites a claude was promised, so one that cannot check the mods
       # with it fails rather than saying UNMEASURED.
       - name: Install Claude Code for the mods' tests
         if: needs.deal.outputs.reused-run == ''
