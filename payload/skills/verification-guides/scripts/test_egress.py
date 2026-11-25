@@ -10,6 +10,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -344,12 +345,24 @@ class BeatProgram(unittest.TestCase):
             began = egress.time.monotonic()
             self.m._settle()  # the one beat is never reported: the wait must end by itself
             self.assertLess(egress.time.monotonic() - began, 5)
-        self.m.proc = FakeStream([report(4242, egress.BEAT_PORT + 1, self.m.beat_tag, process="egress-beat")])
-        self.m._read()
-        with mock.patch.object(egress, "SETTLE_S", 60):
+        # A second test connection whose report comes a fifth of a second late, with the stream
+        # still open: the wait must last until it comes, and end then, not at its limit of 8 s.
+        self.m._beat_reported(egress.BEAT_PORT + 1, 1)
+        self.m._beat()
+        late = threading.Timer(0.2, self.m._beat_reported, (egress.BEAT_PORT + 2, 1))
+        with mock.patch.object(egress, "SETTLE_S", 8):
+            late.start()
             began = egress.time.monotonic()
-            self.m._settle()  # everything is reported: nothing to wait for
-            self.assertLess(egress.time.monotonic() - began, 5)
+            self.m._settle()
+            waited = egress.time.monotonic() - began
+        late.join()
+        self.assertGreater(waited, 0.1, "settling returned before the late report had come")
+        self.assertLess(waited, 4, "settling went on after the late report had come")
+        self.assertTrue(all(b["seen"] for b in self.m.beats))
+        with mock.patch.object(egress, "SETTLE_S", 8):
+            began = egress.time.monotonic()
+            self.m._settle()  # everything is reported and the stream is open: nothing to wait for
+            self.assertLess(egress.time.monotonic() - began, 4)
 
 
 class Attaching(unittest.TestCase):
