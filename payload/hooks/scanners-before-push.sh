@@ -510,6 +510,164 @@ else
   unset _SC_SUPERVISED _SC_T0 _SC_PHASE_FILE _SC_WORK_PARENT
 fi
 
+# The gate's own state folder: the record of passes, the runs left going, and the turn below.
+_sc_state_dir="${SCANNERS_STATE_DIR:-$HOME/.claude/state/scanners-passed}"
+# A poll delay that can be injected (L524), for the wait on the turn below and on the suite lock
+# further down. It names a command this gate runs, so it is honoured only under the hooks' test
+# marker, HOOK_TESTS_RUNNING=1, which run-all-tests.sh exports to every suite and no real push carries
+# (claude-config#2399, the class #2317 closed for the merge gates' settings). Anywhere else the sleep
+# on the PATH runs.
+_sc_sleep=sleep
+[ "${HOOK_TESTS_RUNNING:-}" = 1 ] && [ -n "${SCANNERS_SLEEP:-}" ] && _sc_sleep="$SCANNERS_SLEEP"
+
+# PUSHES ON THIS MAC TAKE TURNS AT THE SCAN (claude-config#3536). Every push starts every scanner at
+# once, and nothing spaced two pushes apart, so on the night of 2026-11-23 to 24, at load averages
+# past 190 with five agents working, seven pushes from five agents were each stopped at the hard stop
+# of 160 seconds, and two more agents' first pushes were on 2026-11-25 at about 1:05 PM ET. Read from
+# the refusals in this Mac's session transcripts on 2026-11-25 (82 stops at 160 seconds over three
+# days, counting a refusal once per transcript that holds it), the run was stopped in every phase:
+# listing the suites, deciding about the runs, waiting on the scanners and reading back their
+# verdicts. That is a starved run, not one slow step, and each push starving the others is the part
+# of the load this gate makes itself.
+#
+# So the run takes this Mac's one turn at the scan before any of that work, and gives it back when it
+# ends. Not a new kind of lock (L655): the queue is lib/merge-turn.sh, the one the full suite runs
+# (lib/full-run-slot.sh), the merge helper and the load window already take turns in, kept in a
+# folder of the gate's own state, so a push never waits behind a full run or a merge, and they never
+# wait behind it (L519). Each ticket names the run's pid and its start time.
+#
+# WHEN ITS HOLDER DIES (L409, L617). The hard stop kills the run with SIGKILL, so no trap gives the
+# turn back; the ticket names a pid that is no longer running, and the next push to look passes over
+# it at once and says so. A live holder that has held the turn for the hard stop's cap or more is
+# passed over too (L523): every run is stopped by then, counted from a start before it took the turn,
+# so such a holder is no gate run scanning a push.
+#
+# THE WAIT IS SPENT OUT OF THE GATE'S BUDGET, never added to it: the budget and the hard stop are
+# counted from the same start as before, so a push that waits has less of its budget left to scan
+# in, and one whose budget runs out while it waits refuses, starting no scanner, in words that say it
+# waited behind another push's scan and can be sent again. It never goes out unscanned. A queue that
+# cannot be joined (its folder cannot be written, or its library is missing) is said, and the push
+# is scanned without a turn, as every push was before: that costs contention, never a scan.
+#
+# WHY A TURN AND NOT THE LOAD AVERAGE. Two pushes reading the load at the same moment both read it
+# low and both start, which is exactly the overlap at fault, while a turn excludes by construction;
+# and most of the load on those nights was other agents' work, so a threshold would hold every push
+# while doing nothing about any of it, with a number nobody has measured to set it by.
+#
+# WHAT IT DOES NOT COVER. A scanner left running in the background past the budget goes on after its
+# push gives the turn back, so the next push's scanners can still run beside it. And only this gate
+# takes the turn: a full run, another agent's build or the other MacBook's work are not spaced by it.
+#
+# A TEST CAN END THE BUDGET SOONER, NEVER LATER (claude-config#2206, L290). The suite's cases about
+# a scanner still running at the budget used a budget of 2 seconds counted from this gate's start,
+# and on 2026-11-04, under load, it ran out before the scanner had even started, so a case checking
+# what happens to a RUNNING scanner failed over one that never ran. Here a case gives the gate a
+# long budget and names a file (SCANNERS_BUDGET_ENDS_WHEN) its scanner writes once it is holding;
+# the budget then ends as soon as that file exists, but not before SCANNERS_BUDGET_ENDS_NOT_BEFORE
+# seconds. Ending sooner can only refuse a push the budget would have let through, never pass one it
+# would have refused, so this cannot loosen the gate. And it is honoured only under the hooks' test
+# marker, HOOK_TESTS_RUNNING=1, which run-all-tests.sh exports to every suite and no real push
+# carries: the one marker every hook's test only settings read (claude-config#2231), where this once
+# read a record of passes kept somewhere other than the real one (#2217). The wait for the turn ends
+# on it too, which is how the suite stages a push whose time runs out while it waits.
+_sc_budget_ends_when=""
+_sc_budget_not_before=0
+if [ -n "${SCANNERS_BUDGET_ENDS_WHEN:-}" ] && [ "${HOOK_TESTS_RUNNING:-}" = 1 ]; then
+  _sc_budget_ends_when="$SCANNERS_BUDGET_ENDS_WHEN"
+  _sc_budget_not_before="$(whole_above_zero "${SCANNERS_BUDGET_ENDS_NOT_BEFORE:-0}")" || _sc_budget_not_before=0
+fi
+_sc_budget_spent(){   # -> 0 once the budget has run out
+  local now
+  now="$(date +%s)"
+  [ "$now" -ge $(( _sc_t0 + _sc_budget )) ] && return 0
+  [ -n "$_sc_budget_ends_when" ] && [ "$now" -ge $(( _sc_t0 + _sc_budget_not_before )) ] && [ -e "$_sc_budget_ends_when" ]
+}
+
+_sc_turn_held=""
+_sc_turn_note=""
+_sc_turn_leave(){
+  [ -n "$_sc_turn_held" ] || return 0
+  turn_leave
+  _sc_turn_held=""
+  return 0
+}
+# What merge-turn.sh says about a ticket it passed over, in this gate's words.
+_sc_turn_said(){
+  [ -n "$TURN_SAID" ] || return 0
+  printf '%s\n' "$TURN_SAID" | sed \
+    -e "s/^#\(.*\)'s place in line was passed over: its run/the push from \1 was passed over in this Mac's turn at the scan: its run/" \
+    -e "s/^#\(.*\)'s turn ran out after \(.*\), past the \(.*\) any one pull request may hold it, so it passed to the next in line\./the push from \1 had held this Mac's turn at the scan for \2, past the \3 no run of this gate lives beyond, so it was passed over./" \
+    -e 's/^/scanners-before-push: /'
+}
+_sc_take_turn(){
+  local t0 t label hpid hlabel ahead said
+  label="$(pwd -P)"
+  case "$label" in "$HOME"/*) label="~${label#"$HOME"}" ;; esac
+  label="$(printf '%s' "$label" | tr '\n\t' '  ')"
+  if ! . "$HOOK_DIR/lib/merge-turn.sh" 2>/dev/null || ! command -v turn_look >/dev/null 2>&1; then
+    _sc_turn_note="scanners-before-push: $HOOK_DIR/lib/merge-turn.sh could not be loaded, so this push was scanned without taking this Mac's turn at the scan, and other pushes' scans may have run beside it (claude-config#3536)."
+    return 0
+  fi
+  TURN_PID="$$"; TURN_PID_START=""; TURN_TICKET=""
+  MWR_TURN_DIR="$_sc_state_dir/turn" turn_open "push-scans"
+  t0="$(date +%s)"
+  if ! turn_join "$label" "$t0"; then
+    _sc_turn_note="scanners-before-push: could not take a place in this Mac's turn at the scan ($TURN_ERR), so this push was scanned without one, and other pushes' scans may have run beside it (claude-config#3536)."
+    return 0
+  fi
+  _sc_turn_held=1
+  trap '_sc_turn_leave' EXIT
+  said=""
+  while :; do
+    t="$(date +%s)"
+    turn_look "$t" "$_sc_stop_cap"
+    [ -n "$TURN_SAID" ] && said="$said$(_sc_turn_said)"$'\n'
+    if [ -n "$TURN_GONE" ]; then
+      # Another push removed this one's ticket while it waited (it judged it gone), so it takes the
+      # same place back, or joins again at the back when it cannot.
+      turn_retake "$label" "$t0" || { TURN_TICKET=""; turn_join "$label" "$t" || {
+        _sc_turn_held=""
+        said="${said}scanners-before-push: lost this push's place in this Mac's turn at the scan and could not join again ($TURN_ERR), so it was scanned without one (claude-config#3536)."$'\n'
+        break; }; }
+      continue
+    fi
+    if [ "$TURN_MINE" = 1 ]; then
+      [ "$t" -gt "$t0" ] && said="${said}scanners-before-push: waited $(turn_dur $(( t - t0 ))) for its turn behind another push's scan on this Mac (claude-config#3536)."$'\n'
+      break
+    fi
+    hpid="$(turn_field "$TURN_REPO_DIR/$TURN_HEAD_TICKET" pid)"
+    hlabel="${TURN_HEAD_PR:-?}"
+    ahead=$(( TURN_AHEAD - 1 ))
+    _sc_phase "waiting its turn behind another push's scan: pid ${hpid:-?}, a push from $hlabel, scanning for $(turn_dur $(( t - ${TURN_HEAD_SINCE:-$t} )))"
+    if _sc_budget_spent; then
+      {
+        echo "PUSH BLOCKED: this push waited $(turn_dur $(( t - t0 ))) for its turn behind another push's scan on this Mac, and"
+        echo "the gate's time ran out before that turn came, so this push was not scanned and has not gone out."
+        echo ""
+        printf 'The scan it waited behind: pid %s, a push from %s, scanning for %s' "${hpid:-?}" "$hlabel" "$(turn_dur $(( t - ${TURN_HEAD_SINCE:-$t} )))"
+        if [ "$ahead" -eq 1 ]; then printf ', and 1 other push is waiting ahead of this one'
+        elif [ "$ahead" -gt 1 ]; then printf ', and %s other pushes are waiting ahead of this one' "$ahead"; fi
+        echo "."
+        [ -n "$said" ] && printf '%s' "$said"
+        echo ""
+        echo "Nothing here is a finding about your change, and no scanner was started for this push. Pushes on"
+        echo "this Mac take turns at the whole tree scan, so that several at once do not each start every"
+        echo "scanner beside the others and all run out of time (claude-config#3536). Send the same push again"
+        echo "once that push's scan has ended."
+        echo ""
+        echo "OVERRIDE, this one push: SKIP_SCANNERS_CHECK=1 <your original git push command>"
+        echo "Explain to the user first why skipping is legitimate. Never override silently."
+      } >&2
+      exit 2
+    fi
+    "$_sc_sleep" 1
+  done
+  _sc_turn_note="${said%$'\n'}"
+  return 0
+}
+_sc_phase "waiting its turn at the scan, behind any other push on this Mac"
+_sc_take_turn
+
 # THE MESSAGES of the commits this push adds name no work organisation (claude-config#1995) and no
 # work repository (claude-config#2111). This repository is public and squash merges with the commit
 # messages as the body, so a message naming one lands in main without ever being a file the scanners
@@ -914,7 +1072,8 @@ fi
 # Inside the supervisor's folder when there is one, so a run stopped at the hard stop, which never
 # reaches the line below that removes it, leaves nothing behind (claude-config#3357).
 _sc_work="$(mktemp -d "${_sc_work_parent:-${TMPDIR:-/tmp}}/scanners-before-push.XXXXXXXX")" || exit 0
-trap 'rm -rf "$_sc_work"' EXIT
+# The turn at the scan is given back on the same way out (claude-config#3536).
+trap '_sc_turn_leave; rm -rf "$_sc_work"' EXIT
 _sc_n=0
 
 # SKIPPING A SCANNER WHOSE INPUTS HAVE NOT CHANGED (claude-config#531). Measured 2026-09-21: the
@@ -943,7 +1102,6 @@ _sc_n=0
 # would be skipped. None of the scanners here does that today. The skip is announced with the number
 # skipped, so a run that scanned nothing never reads as a clean scan of everything.
 _sc_phase "working out what the scanners will read: the commit tree and a digest of every file that differs from it"
-_sc_state_dir="${SCANNERS_STATE_DIR:-$HOME/.claude/state/scanners-passed}"
 _sc_key=""
 _sc_tree="$(git rev-parse HEAD^{tree} 2>/dev/null || true)"
 # Read from the one listing made above. When that listing failed the files that differ are unknown,
@@ -1107,12 +1265,8 @@ mkdir -p "$_sc_runs" 2>/dev/null
 _sc_run_stale="${SCANNERS_RUN_STALE_SECONDS:-21600}"
 # Zero however written is the default, never "stale at once" (lib/whole-number.sh, claude-config#1948).
 _sc_run_stale="$(whole_above_zero "$_sc_run_stale")" || _sc_run_stale=21600
-# A poll delay that can be injected (L524), for the wait on the suite lock further down. It names a
-# command this gate runs, so it is honoured only under the hooks' test marker, HOOK_TESTS_RUNNING=1,
-# which run-all-tests.sh exports to every suite and no real push carries (claude-config#2399, the
-# class #2317 closed for the merge gates' settings). Anywhere else the sleep on the PATH runs.
-_sc_sleep=sleep
-[ "${HOOK_TESTS_RUNNING:-}" = 1 ] && [ -n "${SCANNERS_SLEEP:-}" ] && _sc_sleep="$SCANNERS_SLEEP"
+# The poll delay for the wait on the suite lock further down, _sc_sleep, is set beside the turn near
+# the top (claude-config#3536), which polls with it too.
 
 # The run's own script: it runs the suite with its output in the run's folder, then records how long
 # it took and, last, its exit code, written whole by a rename so a reader never sees half of one.
@@ -1314,29 +1468,8 @@ _sc_relaunch(){   # $1 = run index   $2 = the runs in flight at once
 #
 # The budget itself, _sc_budget, is read near the top, beside the hard stop over the whole run that
 # it sits inside (claude-config#3357), because the stop has to be set before any of the steps above.
-# A TEST CAN END THE BUDGET SOONER, NEVER LATER (claude-config#2206, L290). The suite's cases about
-# a scanner still running at the budget used a budget of 2 seconds counted from this gate's start,
-# and on 2026-11-04, under load, it ran out before the scanner had even started, so a case checking
-# what happens to a RUNNING scanner failed over one that never ran. Here a case gives the gate a
-# long budget and names a file (SCANNERS_BUDGET_ENDS_WHEN) its scanner writes once it is holding;
-# the budget then ends as soon as that file exists, but not before SCANNERS_BUDGET_ENDS_NOT_BEFORE
-# seconds. Ending sooner can only refuse a push the budget would have let through, never pass one it
-# would have refused, so this cannot loosen the gate. And it is honoured only under the hooks' test
-# marker, HOOK_TESTS_RUNNING=1, which run-all-tests.sh exports to every suite and no real push
-# carries: the one marker every hook's test only settings read (claude-config#2231), where this once
-# read a record of passes kept somewhere other than the real one (#2217).
-_sc_budget_ends_when=""
-_sc_budget_not_before=0
-if [ -n "${SCANNERS_BUDGET_ENDS_WHEN:-}" ] && [ "${HOOK_TESTS_RUNNING:-}" = 1 ]; then
-  _sc_budget_ends_when="$SCANNERS_BUDGET_ENDS_WHEN"
-  _sc_budget_not_before="$(whole_above_zero "${SCANNERS_BUDGET_ENDS_NOT_BEFORE:-0}")" || _sc_budget_not_before=0
-fi
-_sc_budget_spent(){   # -> 0 once the budget has run out
-  local now
-  now="$(date +%s)"
-  [ "$now" -ge $(( _sc_t0 + _sc_budget )) ] && return 0
-  [ -n "$_sc_budget_ends_when" ] && [ "$now" -ge $(( _sc_t0 + _sc_budget_not_before )) ] && [ -e "$_sc_budget_ends_when" ]
-}
+# _sc_budget_spent, and the way a test ends the budget sooner, are written beside the turn near the
+# top (claude-config#3536), because the wait for the turn is spent out of the same budget.
 _sc_budget_ended(){   # at the budget: says so, and stops waiting on this round's runs
   local given
   _sc_out_of_time=1
@@ -1869,7 +2002,10 @@ if [ -z "$failed" ]; then
   [ "$_sc_walkers_run" -gt 0 ] && _sc_covered="$_sc_covered $(printf '%s of those walk the checkout and were included because this push adds or changes a test suite (#3183).' "$_sc_walkers_run")"
   _sc_unremembered=""
   [ -n "$_sc_record_unwritten" ] && _sc_unremembered="scanners-before-push: ${_sc_record_unwritten}"$'\n'
-  hook_allow_notice "${_sc_unremembered}${_sc_bg}${_sc_covered}"
+  # The turn at the scan, when there was a wait or a holder passed over, said first (#3536).
+  _sc_turn_said_line=""
+  [ -n "$_sc_turn_note" ] && _sc_turn_said_line="${_sc_turn_note}"$'\n'
+  hook_allow_notice "${_sc_turn_said_line}${_sc_unremembered}${_sc_bg}${_sc_covered}"
 fi
 
 {
