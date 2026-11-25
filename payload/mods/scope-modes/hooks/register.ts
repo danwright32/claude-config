@@ -1,4 +1,5 @@
 import type { EngineInterface, Register } from 'claude-code'
+import { cutCall } from './mod-kit/hold.ts'
 import type { ModKitGh, ModKitWrites } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import { ghApiOf, judgeAdminMerge } from './adminmerge.ts'
 import { gateOf, judgeRequiredLabel, openedFrom } from './requiredlabel.ts'
@@ -6108,7 +6109,7 @@ export const register: Register = on => {
     }
     if (verdict && 'deny' in verdict) return verdict
     return go(verdict?.cleanups ?? [], verdict?.notes ?? [])
-  })
+  }).catch(($, e, next) => cutCall('scope modes', e, next))
 
   // A held row's button: asks Claude to do that one thing, now that Dan is here and chose it. Pressed
   // by a click or by /press (#939): mod-kit raises both as modkit.press.

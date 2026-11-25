@@ -685,7 +685,84 @@ def real_waits(mod):
     return found, failed
 
 
+# The catch every tool hook ends in (#3655). Claude Code cuts a hook at 10 s of its own time and
+# skips one that throws, and a tool.call or tool.check hook with no catch then lets the call run
+# unjudged. So each such registration ends in one of the catches mod-kit's hooks/hold.ts builds,
+# spelled as that file's header shows, and this reads the registrations to hold them to it.
+GUARD_CATCH = {"tool.call": ("cutCall", "cutOwn"), "tool.check": ("cutCheck",)}
+# A site whose answer also decides whether a call runs, with no shared catch written for it yet.
+GUARD_UNBUILT = ("tool.run", "tool.judge")
+CATCH_OPEN = re.compile(r"\s*\.\s*catch\s*\(")
+CATCH_KIT = re.compile(r"\s*\(\s*\$\s*,\s*e\s*,\s*next\s*\)\s*=>\s*(cutCall|cutCheck|cutOwn)\s*\(")
+CATCH_WATCH = re.compile(r"\s*watchesOnly\s*\)")
+# An answer that refuses or asks, as a hook's own lines spell it: a deny or a decision it builds.
+REFUSES = re.compile(r"\bdeny\s*:|\bdecision\s*:|\{\s*(?:deny|decision)\s*[,}]")
+HOLD_IMPORT = r"import\s*\{[^}]*\b%s\b[^}]*\}\s*from\s*['\"]\./mod-kit/hold(?:\.ts)?['\"]"
+
+
+def guard_catches(mod):
+    """Each tool hook of a mod that does not end in a shared catch: ([rel:line<TAB>why], how many).
+    A hook this cannot read is one of them, never passed over."""
+    found = []
+    for path in mod_code(mod):
+        with open(path, errors="replace") as f:
+            text = f.read()
+        jsx = is_jsx(path)
+        code = code_only(text, jsx)
+        raw_kinds = kinds(text, jsx)
+        rel = os.path.relpath(path, mod)
+        for m, event in on_calls(text, code, raw_kinds):
+            at = f"{rel}:{code.count(chr(10), 0, m.start()) + 1}"
+            if event is None:
+                found.append(f"{at}\tits event is not a plain string, so whether it is a tool hook cannot be read")
+                continue
+            if event in GUARD_UNBUILT:
+                found.append(f"{at}\ta {event} hook decides whether a call runs, and hooks/hold.ts has no catch for that event yet: add one there, with its test, before registering this")
+                continue
+            if event not in GUARD_CATCH:
+                continue
+            open_at = m.end() - 1
+            end = closing(code, open_at)
+            if end is None:
+                found.append(f"{at}\tthe {event} registration could not be read to its end")
+                continue
+            caught = CATCH_OPEN.match(code, end)
+            if not caught:
+                found.append(f"{at}\tthe {event} hook has no catch, so a call it was judging runs when the hook is cut or throws")
+                continue
+            kit = CATCH_KIT.match(code, caught.end())
+            watch = CATCH_WATCH.match(code, caught.end())
+            if kit:
+                name = kit.group(1)
+                if name not in GUARD_CATCH[event]:
+                    found.append(f"{at}\tthe {event} hook's catch answers through {name}, which answers in another event's shape: use {' or '.join(GUARD_CATCH[event])}")
+                    continue
+            elif watch:
+                name = "watchesOnly"
+                span = code[open_at:end]
+                handler = re.search(r",\s*([A-Za-z_$][\w$]*)\s*\)$", span)
+                if "=>" not in span and not re.search(r"\bfunction\b", span) and handler:
+                    span = function_code(code, handler.group(1), raw_kinds)
+                if span is None:
+                    found.append(f"{at}\tthe {event} hook is declared watchesOnly and its function could not be found to read")
+                    continue
+                if REFUSES.search(span):
+                    found.append(f"{at}\tthe {event} hook is declared watchesOnly and its own lines answer a refusal: a hook that can refuse or ask ends in {' or '.join(GUARD_CATCH[event])}")
+                    continue
+            else:
+                found.append(f"{at}\tthe {event} hook keeps a catch of its own: end it in .catch(($, e, next) => {GUARD_CATCH[event][0]}(...)) or .catch(watchesOnly)")
+                continue
+            if not re.search(HOLD_IMPORT % name, text):
+                found.append(f"{at}\tthe {event} hook's catch names {name}, which this file does not import from ./mod-kit/hold.ts")
+    return found, len(found)
+
+
 if __name__ == "__main__":
+    if len(sys.argv) == 3 and sys.argv[1] == "guard-catches":
+        lines, bad = guard_catches(sys.argv[2])
+        if lines:
+            print("\n".join(lines))
+        sys.exit(1 if bad else 0)
     if len(sys.argv) == 4 and sys.argv[1] == "strip-hooks":
         sys.exit(strip_hooks(sys.argv[2], sys.argv[3]))
     if len(sys.argv) == 3 and sys.argv[1] == "unscreened":
@@ -701,5 +778,5 @@ if __name__ == "__main__":
         if lines:
             print("\n".join(lines))
         sys.exit(bad)
-    print("usage: ts_source.py strip-hooks <mods dir> <out dir> | unscreened <hooks dir> | kit-test-takers <mod dir> | real-waits <mod dir>", file=sys.stderr)
+    print("usage: ts_source.py strip-hooks <mods dir> <out dir> | unscreened <hooks dir> | kit-test-takers <mod dir> | real-waits <mod dir> | guard-catches <mod dir>", file=sys.stderr)
     sys.exit(2)

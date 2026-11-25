@@ -382,6 +382,21 @@ test('the hook failing before its check holds a pull request command through its
   expect(ranBash(w, other)).toBe(true)
 })
 
+// #3655: the mod's tool.call hooks fail as one, and the catch of the first, which judges a subagent's
+// call, is the first asked. So a subagent's command the mod could not check is refused, where before
+// that hook had no catch and the command ran unless it could act on a pull request; the main
+// session's command is left to the pull request catch, as the test above holds.
+test("a subagent's command the hooks could not check is refused, never run unjudged (#3655)", KIT, async ($, on) => {
+  const w = world($, on)
+  seedAB(w)
+  w.ctl.cwdThrows = true
+  const other = 'gh issue list'
+  expect(refusal(await bash($ as never, w, other, { agentId: 'a1' }, 'b3'))).toBe(
+    'Blocked: the area check could not check this call (it failed), so the call was refused and did not run. This is not a judgement of what the call does: send the same call again. If it keeps happening, tell Dan.',
+  )
+  expect(ranBash(w, other)).toBe(false)
+})
+
 test('a command could hold a pull request command when its words name gh pr create, edit or merge, or the merge helper', () => {
   for (const c of ['gh pr create --title T', 'cd x && gh pr merge 5', 'gh  pr edit 5 --body-file b.md', 'bash ~/.claude/hooks/lib/merge-when-ready.sh 5']) expect(mayActOnPr(c)).toBe(true)
   for (const c of ['gh issue create --title T', 'gh pr view 5', 'gh pr list', 'gh api repos/dan/app']) expect(mayActOnPr(c)).toBe(false)
