@@ -6601,8 +6601,16 @@ SHARED_SETTINGS_FILE="settings.shared.json"
 # exactly that leaf from settings.json's env block and nothing else in it. Only a variable on
 # SHARED_ENV_ALLOWED may be null: any other is refused by name as before, so null cannot become a way
 # to delete a Mac's own variable, a credential included.
-SHARED_SETTINGS_ALLOWED="ultracode modelSettings skillListingMaxDescChars outputStyle env"
-SHARED_SETTINGS_DESC="ultracode, modelSettings.<model>.effortLevel, skillListingMaxDescChars, outputStyle, env.CLAUDE_CODE_SUBAGENT_MODEL"
+#
+# claudeMdExcludes is shared (#3635, Dan's sign off 2026-11-25). Claude Code loads a CLAUDE.md in a
+# subfolder of the working folder, with its imports, the first time a session touches a file beside
+# it, so in this repository payload/CLAUDE.md, the global rules, arrived a second time in 318 of 433
+# agents measured, a median 36,610 tokens each for the rest of the run. The setting skips files by
+# glob on their absolute path. Only its one shape is accepted: a list of patterns, each starting
+# with **/ (never a Mac's own home path) and ending in /payload/CLAUDE.md, so the shared file cannot
+# be used to stop any other rules file loading. The list is written whole, as every shared value is.
+SHARED_SETTINGS_ALLOWED="ultracode modelSettings skillListingMaxDescChars outputStyle env claudeMdExcludes"
+SHARED_SETTINGS_DESC="ultracode, modelSettings.<model>.effortLevel, skillListingMaxDescChars, outputStyle, env.CLAUDE_CODE_SUBAGENT_MODEL, claudeMdExcludes"
 SHARED_OUTPUT_STYLES="default Explanatory Learning"
 SHARED_ENV_ALLOWED="CLAUDE_CODE_SUBAGENT_MODEL"
 SHARED_MODEL_ALIASES="opus sonnet haiku fable"
@@ -6670,6 +6678,12 @@ shared_settings_wanted(){
              elif ($v | type) == "string" and (($aliases | split(" ") | index($v)) or ($v | test("^claude-[a-z0-9]+(-[a-z0-9]+)*$"))) then empty
              else "env.\(.key) is \($v | tojson), not a model alias (\($aliases | split(" ") | join(", "))), a full model name like claude-opus-5-5, or null to remove it" end))
         end)
+      else empty end),
+      (if has("claudeMdExcludes") then
+        (.claudeMdExcludes | if type != "array" or length == 0 then "claudeMdExcludes is \(tojson), not a list of patterns" else
+          (.[] | select(type != "string" or (startswith("**/") | not) or (endswith("/payload/CLAUDE.md") | not)) |
+            "claudeMdExcludes holds \(tojson), not a pattern starting with **/ and ending in /payload/CLAUDE.md (it may exclude only a copy of this repository'"'"'s rules file, and names no home folder)")
+        end)
       else empty end)
     ] | join("; ")' --arg styles "$SHARED_OUTPUT_STYLES" --arg envok "$SHARED_ENV_ALLOWED" --arg aliases "$SHARED_MODEL_ALIASES" <<< "$obj" 2>/dev/null)" || bad="the file could not be checked (jq failed on it)"
   if [ -n "$bad" ]; then
@@ -6687,7 +6701,8 @@ write_settings_extras(){
   # Every leaf by its path. Not paths(scalars): that keeps a path only where the filter's OUTPUT is
   # truthy, and for a false leaf the output is false, so a setting turned off went unnamed.
   # A null leaf is a removal (only env carries one, #2949), so it is named as removed, never as written.
-  names="$(jq -r '. as $s | [paths(type | . != "object" and . != "array") as $p | ($p | map(tostring) | join(".")) + (if ($s | getpath($p)) == null then " removed" else "" end)] | join(", ")' <<< "$shared" 2>/dev/null || true)"
+  # A list is one setting (claudeMdExcludes, #3635), named once rather than element by element.
+  names="$(jq -r '. as $s | [paths(type | . != "object") as $p | select($p | any(type == "number") | not) |($p | map(tostring) | join(".")) + (if ($s | getpath($p)) == null then " removed" else "" end)] | join(", ")' <<< "$shared" 2>/dev/null || true)"
   tmp="$(scratch_file)"
   # A Mac with no settings.json is written from an empty object, and the file appears only from the
   # finished write: a stub made first would be left behind by a write that then failed (review of #775).
