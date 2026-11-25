@@ -5425,3 +5425,27 @@ test('a note whose name the dialog would not show whole can still be asked about
   )
   expect(w.ran).toEqual([])
 })
+
+// The note named last of two sources of exactly one name is the one that survives: measured on
+// this Mac's disk on 2026-11-25, `mv full/A.md memory/a.md archive/` left the archive holding the
+// note's text, the source named last being the one kept. Of that note the sentence "this file may
+// be lost" is not said, through the whole mod: the shared reader gives the second of two sources of
+// one path no write of its own, so no write names the note as its source and no place is kept for
+// the question to name. It is still asked about, as a deletion, in the words main used before the
+// loss was named, and nothing runs. Pinned so that a change either way is seen.
+test('the note named last of two sources of exactly one name is asked about as a deletion with no word of it being lost where it lands (#3505)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: SHARED_NAME_FILES })
+  const refusal = refusalOf(await call($, { tool: 'Bash', command: `mv ~/Desktop/exact/a.md ${NOTE_A} ~/Desktop/archive/` }))
+  expect(refusal.startsWith(`${NOT_DELETED}: this deletes lasting memory (${NOTE_A}), so Dan decides first. Ask him now with AskUserQuestion`)).toBe(true)
+  expect(refusal).not.toContain('may land on that name')
+  expect(refusal).not.toContain('moved back')
+  const asked = `Delete ${NOTE_A}: it is finished work?`
+  const answered = await askRemoval($, w, refusal, 'Keep as is', asked)
+  expect(answered.deny).toBeUndefined()
+  const q = w.asked[0]?.questions[0]
+  expect(q?.question).toBe(`${asked} Git does not hold it, so once deleted it cannot be got back from git.`)
+  expect(q?.question).not.toContain('may be lost')
+  expect(q?.question).not.toContain('moved back')
+  expect(q?.options.map(o => o.label)).toEqual(['Keep as is', 'Delete'])
+  expect(w.ran).toEqual([])
+})
