@@ -40,7 +40,7 @@ const REACH = 500
 // Inside a quotation opened earlier on its line: quoted, not said to Dan ("a sentence like "it's
 // waiting on you" never fires"). The quote right before the phrase is QUOTED's, below. #1613 for
 // "waiting on you", #1680 for #863's other four.
-export const quotedOnLine = (before: string): boolean => {
+const quotedOnLine = (before: string): boolean => {
   const line = before.slice(before.lastIndexOf('\n') + 1)
   const count = (rx: RegExp) => (line.match(rx) ?? []).length
   return count(/"/g) % 2 === 1 || count(/“/g) > count(/”/g)

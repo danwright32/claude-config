@@ -10,7 +10,7 @@
 // "Manual steps").
 
 import type { StepsCard } from '../types/index.d.ts'
-import { dansNow, LEAD, quotedOnLine, sentenceStart } from './waiting.ts'
+import { dansNow, LEAD, sentenceStart } from './waiting.ts'
 
 // A slash command's name: lower case letters, digits and hyphens, with a plugin's prefix allowed
 // ("/superpowers:brainstorming"). It ends at white space, a closing mark or the end, or at a full stop
@@ -57,7 +57,8 @@ const sentenceAt = (plain: string, at: number): string => {
 
 /** Whether the command at `at` in `plain` is said to Dan to type now, not named, offered or Claude's. */
 const handedOver = (plain: string, at: number): boolean => {
-  if (quotedOnLine(plain.slice(0, at)) || !dansNow(plain, at)) return false
+  // dansNow also refuses a command quoted on its line.
+  if (!dansNow(plain, at)) return false
   const sentence = sentenceAt(plain, at)
   return !OFFER.test(sentence) && !/\?\s*$/.test(sentence)
 }
@@ -70,7 +71,7 @@ const leadIn = (plain: string, at: number): string => {
 
 // The patterns run without case so "Type" and "type" both lead, which lets their NAME match upper
 // case too; a name is held to lower case here, so a folder ("Run `/Applications`") is never a command.
-const LOWER = /^\/[a-z][a-z0-9-]*(?::[a-z0-9][a-z0-9-]*)?$/
+const LOWER = new RegExp(`^${NAME}$`)
 
 /** The slash commands `text` hands Dan to type, each once, in the order first handed over. */
 export const typedCommands = (text: string): string[] => {
@@ -86,7 +87,7 @@ export const typedCommands = (text: string): string[] => {
     const at = m.index ?? 0
     // Judged by the line that introduces it: a block shown as something Claude ran, or offered, is not.
     const said = leadIn(plain, at).trim()
-    if (said && (quotedOnLine(said) || !dansNow(said, said.length) || OFFER.test(said) || /\?\s*$/.test(said))) continue
+    if (said && (!dansNow(said, said.length) || OFFER.test(said) || /\?\s*$/.test(said))) continue
     found.push({ at, command: m[1] as string })
   }
   const kept = found.filter(f => LOWER.test(f.command)).sort((a, b) => a.at - b.at)
