@@ -1504,15 +1504,33 @@ done
 # a scanner too slow for the budget, and the fix was first aimed at the budget. Whether that last
 # try would have got the lock is not known, and the refusal says so rather than guessing.
 #
-# EACH RUN IS JUDGED ONCE, IN THE READ BACK BELOW, which reads its exit code once (claude-config#2033,
-# #3541). A retry, or a first try, can write its exit code in the instant after the watchdog stops
-# the wait. The runs that refused on the lock were once listed in a pass of their own and every exit
-# code was then read again in the read back, so a first try still starting when the budget ran out,
-# whose refusal landed between the two, was missed by the first and read by the second as a failing
-# scanner, "it exited 5 with no FAIL line", over the refusal line itself (2 of 8 tries of the
-# suite's case in a load window on 2026-11-25). Now a run with no exit code is judged by whether it
-# is a retry, and one with an exit code by whether it refused on the lock, from the same read, and
-# the refusal below is said once every run has been sorted.
+# A RETRY STILL IN FLIGHT AT THE BUDGET is judged HERE, as the budget ends, and refuses the push
+# whatever it reports afterwards: a pass landing a moment later is not counted, so this can never
+# let through a push it would have refused at the budget (#3541).
+#
+# A LOCK REFUSAL LANDING AFTER THAT is said as one, in the read back below (claude-config#3541). The
+# lock refusals were once all listed here, in a pass of their own, and every exit code was then read
+# again in the read back, so a first try still starting when the budget ran out, whose refusal
+# landed between the two, was read by the second as a failing scanner, "it exited 5 with no FAIL
+# line", over the refusal line itself (2 of 8 tries of the suite's case in a load window on
+# 2026-11-25). The read back now sorts a refusal on the lock (exit 5 and the suite's refusal line,
+# the same test as _sc_lock_refused) from its one read of that run's exit code, and every other run
+# exactly as before. Both ways refuse the push; only the reason given moves.
+#
+# The refusal for the lock is said once every run has been read, and it says beside it what FAILED,
+# what measured nothing and what did not finish (#3541): said alone, the reader retried for the lock
+# only to be refused next time for a failure this push already knew of.
+_sc_lock_inflight=""
+if [ -n "$_sc_out_of_time" ]; then
+  _sc_i=1
+  while [ "$_sc_i" -le "$_sc_n" ]; do
+    if [ -f "$_sc_work/$_sc_i.lockline" ] && [ ! -f "$(_sc_rd "$_sc_i")/rc" ]; then
+      _sc_lock_inflight="$_sc_lock_inflight$_sc_i"$'\n'
+      : > "$_sc_work/$_sc_i.inflight"
+    fi
+    _sc_i=$(( _sc_i + 1 ))
+  done
+fi
 _sc_lock_refusal(){   # at the read back, once every run is sorted: refuses the push when a run never got the lock
   [ -n "$_sc_locked" ] || [ -n "$_sc_lock_inflight" ] || return 0
   {
@@ -1544,6 +1562,26 @@ LOCKED
     done <<INFLIGHT
 $_sc_lock_inflight
 INFLIGHT
+    # What else this push already knows, so a retry for the lock is not the first anyone hears of it.
+    if [ -n "$failed" ]; then
+      echo ""
+      echo "Beside them, these scanners ran and FAILED, which waiting for the lock will not change:"
+      printf '%s' "$failed"
+    fi
+    if [ -n "$unmeasured" ]; then
+      echo ""
+      echo "Beside them, these scanners ran and measured nothing, each saying why:"
+      printf '%s' "$unmeasured"
+    fi
+    if [ -n "$unfinished" ]; then
+      echo ""
+      echo "Beside them, these scanners had not finished when this gate's own budget of ${_sc_budget}s ran out:"
+      printf '%s' "$unfinished"
+      if [ -n "$unfinished_cmds" ]; then
+        echo "  Each can be run directly:"
+        printf '%s' "$unfinished_cmds"
+      fi
+    fi
     echo ""
     echo "Retry the push when that run finishes. The line above names the process holding the lock"
     echo "and, when it is an orphan of a run that was killed, the command that ends it."
@@ -1586,27 +1624,18 @@ ran=0
 # Of those that ran, how many finished in the background after an earlier push had gone, said in
 # the summary so a verdict this push did not watch being made is never passed off as one it did.
 _sc_bg_done=0
-# The runs that never got the suite lock (above): refused on it, or a retry still in flight at the
-# budget. Sorted here from the one read of each exit code, and said once the loop is done.
+# The runs that refused on the suite lock, sorted from the read of each exit code below; the retries
+# in flight at the budget were listed above, as the budget ended, and are not read again.
 _sc_locked=""
-_sc_lock_inflight=""
 _sc_phase "reading back what the scanners found and writing its verdict, which takes the record's lock and each finished scanner's for up to 5 seconds each"
 _sc_i=1
 while [ "$_sc_i" -le "$_sc_n" ]; do
+  if [ -f "$_sc_work/$_sc_i.inflight" ]; then _sc_i=$(( _sc_i + 1 )); continue; fi
   _sc_what="$(head -2 "$_sc_work/$_sc_i.what" 2>/dev/null | tr '\n' ' ')"
   _sc_rdir="$(_sc_rd "$_sc_i")"
   ran=$(( ran + 1 ))
-  # Whether the run is still going is looked at BEFORE its exit code is read (#3541): a run seen
-  # going and then found with an exit code finished between the two and is judged by that code, and
-  # one seen gone with no exit code after it never wrote one. The other order would read a run that
-  # finished in between as gone without a verdict.
-  _sc_alive=""
-  [ -n "$_sc_out_of_time" ] && [ -n "$_sc_detach" ] && _sc_run_alive "$_sc_rdir" && _sc_alive=1
   _sc_rc_now="$(cat "$_sc_rdir/rc" 2>/dev/null || printf 'missing')"
-  if [ "$_sc_rc_now" = "missing" ] && [ -n "$_sc_out_of_time" ] && [ -f "$_sc_work/$_sc_i.lockline" ]; then
-    _sc_lock_inflight="$_sc_lock_inflight$_sc_i"$'\n'
-    _sc_i=$(( _sc_i + 1 )); continue
-  fi
+  # A refusal on the lock, from this same read: never a failing scanner (#3541).
   if [ "$_sc_rc_now" = "5" ] && grep -q '^test suite: another run is already going' "$_sc_rdir/out" 2>/dev/null; then
     _sc_locked="$_sc_locked$_sc_i"$'\n'
     _sc_i=$(( _sc_i + 1 )); continue
@@ -1616,11 +1645,11 @@ while [ "$_sc_i" -le "$_sc_n" ]; do
     _sc_passed_now="$_sc_passed_now$_sc_key $(head -1 "$_sc_work/$_sc_i.what" 2>/dev/null) $(sed -n 2p "$_sc_work/$_sc_i.what" 2>/dev/null)
 "
   fi
-  [ "$_sc_rc_now" != "missing" ] && [ -f "$_sc_work/$_sc_i.bg" ] && _sc_bg_done=$(( _sc_bg_done + 1 ))
+  [ -f "$_sc_rdir/rc" ] && [ -f "$_sc_work/$_sc_i.bg" ] && _sc_bg_done=$(( _sc_bg_done + 1 ))
   # Not finished: another push held its slot, or the budget ran out while it was still going. A run
   # that is gone without an exit code is not that, it is a missing verdict, below.
-  if [ "$_sc_rc_now" = "missing" ] && { [ -f "$_sc_work/$_sc_i.busy" ] \
-       || { [ -n "$_sc_out_of_time" ] && { [ -z "$_sc_detach" ] || [ -n "$_sc_alive" ]; }; }; }; then
+  if [ ! -f "$_sc_rdir/rc" ] && { [ -f "$_sc_work/$_sc_i.busy" ] \
+       || { [ -n "$_sc_out_of_time" ] && { [ -z "$_sc_detach" ] || _sc_run_alive "$_sc_rdir"; }; }; }; then
     _sc_s="$(sed -n 1p "$_sc_work/$_sc_i.what" 2>/dev/null)"; _sc_sec="$(sed -n 2p "$_sc_work/$_sc_i.what" 2>/dev/null)"
     _sc_label="$_sc_s"
     [ -n "$_sc_sec" ] && _sc_label="$_sc_s, section \"$_sc_sec\""
@@ -1649,7 +1678,7 @@ while [ "$_sc_i" -le "$_sc_n" ]; do
 "
       fi
     fi
-  elif [ "$_sc_rc_now" = "missing" ]; then
+  elif [ ! -f "$_sc_rdir/rc" ]; then
     failed="$failed=== $_sc_what ===
 this scanner never reported an exit code, so its verdict is missing rather than clean
 "

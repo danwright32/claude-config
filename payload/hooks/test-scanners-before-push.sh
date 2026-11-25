@@ -1316,7 +1316,7 @@ budgetfire(){ SCANNERS_STATE_DIR="$BUDGETSTATE" SCANNERS_BUDGET_SECONDS=20 SCANN
 # try and HOLDS its retry while a hold file exists, writing the budget file once it is holding, so
 # the budget ends while the retry is in flight at any load. The budget of 40 is a ceiling only a
 # hang reaches. The hold is at most 60 seconds, so a leaked stand in ends on its own.
-add_held_locked_scanner(){   # $1 = repo  $2 = name  $3 = the hold file  $4 = the try it holds on (1 its first, 2 its first retry)
+add_held_locked_scanner(){   # $1 = repo  $2 = name  $3 = the hold file  $4 = the try it holds on (1 its first, 2 its first retry)  [$5 = once released, run and exit this code rather than refuse]
   cat > "$1/payload/hooks/test-$2.sh" <<EOF
 #!/usr/bin/env bash
 git ls-files '*.sh' >/dev/null
@@ -1326,6 +1326,7 @@ if [ "\$n" -eq $4 ]; then
   : > "$(budget_ready "$1")"
   i=0
   while [ -e "$3" ] && [ "\$i" -lt 600 ]; do sleep 0.1; i=\$((i+1)); done
+  if [ -n "${5:-}" ]; then echo "scanner $2 ran"; exit ${5:-0}; fi
 fi
 echo "test suite: another run is already going: a suite run, process 4242 on here, started 30s ago. Refusing rather than queueing behind it." >&2
 exit 5
@@ -1366,26 +1367,35 @@ held_gone phi && check "#3541 and the held retry ends once released" ok \
 # holds, the budget ends, and a stand in for head, which the read back calls for each scanner before
 # it reads that scanner's exit code, releases the try and waits for its exit code before answering.
 # It acts only while the hold and the budget file both exist, so every other call reaches head.
-R3541="$(mkrepo latelock)"; HOLD3541="$TMPROOT/hold-3541"; : > "$HOLD3541"; LATESTATE="$TMPROOT/latelock-state"
-add_scanner "$R3541" alpha 0; add_held_locked_scanner "$R3541" late "$HOLD3541" 1; commit_all "$R3541"
-LATEBIN="$TMPROOT/latebin"; mkdir -p "$LATEBIN"
-cat > "$LATEBIN/head" <<EOF
+add_late_head(){   # $1 = repo  $2 = the hold file  $3 = the state folder  $4 = the line the released run prints -> the folder holding the stand in
+  local bin="$TMPROOT/$(basename "$1").latebin"
+  mkdir -p "$bin"
+  cat > "$bin/head" <<EOF
 #!/usr/bin/env bash
-if [ -e "$(budget_ready "$R3541")" ] && [ -e "$HOLD3541" ]; then
-  rm -f "$HOLD3541"
+if [ -e "$(budget_ready "$1")" ] && [ -e "$2" ]; then
+  rm -f "$2"
   i=0
   until [ "\$i" -ge 600 ]; do
-    for o in "$LATESTATE"/runs/*/*/out; do
-      grep -q '^test suite: another run is already going' "\$o" 2>/dev/null && [ -f "\${o%/out}/rc" ] && break 2
+    for o in "$3"/runs/*/*/out; do
+      grep -q '$4' "\$o" 2>/dev/null && [ -f "\${o%/out}/rc" ] && break 2
     done
     sleep 0.1; i=\$((i+1))
   done
 fi
 exec /usr/bin/head "\$@"
 EOF
-chmod +x "$LATEBIN/head"
-o3541="$(PATH="$LATEBIN:$PATH" HOOK_TESTS_RUNNING=1 SCANNERS_STATE_DIR="$LATESTATE" SCANNERS_SLEEP=true SCANNERS_LOCK_WAIT_SECONDS=60 SCANNERS_LOCK_POLL_SECONDS=2 \
-          SCANNERS_BUDGET_SECONDS=40 SCANNERS_BUDGET_ENDS_WHEN="$(budget_ready "$R3541")" fire "$R3541" "git push")"; c3541=$?
+  chmod +x "$bin/head"
+  printf '%s' "$bin"
+}
+latefire(){   # $1 = repo  $2 = the folder holding the stand in for head  $3 = the state folder -> the gate's output and exit code
+  PATH="$2:$PATH" HOOK_TESTS_RUNNING=1 SCANNERS_STATE_DIR="$3" SCANNERS_SLEEP=true SCANNERS_LOCK_WAIT_SECONDS=60 SCANNERS_LOCK_POLL_SECONDS=2 \
+    SCANNERS_BUDGET_SECONDS=40 SCANNERS_BUDGET_ENDS_WHEN="$(budget_ready "$1")" fire "$1" "git push"
+}
+LOCKLINE_RE='^test suite: another run is already going'
+R3541="$(mkrepo latelock)"; HOLD3541="$TMPROOT/hold-3541"; : > "$HOLD3541"; LATESTATE="$TMPROOT/latelock-state"
+add_scanner "$R3541" alpha 0; add_held_locked_scanner "$R3541" late "$HOLD3541" 1; commit_all "$R3541"
+LATEBIN="$(add_late_head "$R3541" "$HOLD3541" "$LATESTATE" "$LOCKLINE_RE")"
+o3541="$(latefire "$R3541" "$LATEBIN" "$LATESTATE")"; c3541=$?
 note_held late; rm -f "$HOLD3541"
 [ "$c3541" -eq 2 ] && grep -q 'another test run' <<< "$o3541" && grep -q 'test-late.sh' <<< "$o3541" \
   && check "#3541 a first try that refuses on the lock just after the budget ran out is said as a lock refusal" ok \
@@ -1401,6 +1411,56 @@ grep -q 'tried again' <<< "$o3541" \
   || check "#3541 and the refusal came from the first try, the one in flight at the budget" "tries=$(cat "$TMPROOT/late.tries" 2>/dev/null)"
 held_gone late && check "#3541 and the held first try ends once released" ok \
   || check "#3541 and the held first try ends once released" "pid $(cat "$TMPROOT/late.pid" 2>/dev/null) still running"
+
+# JUDGING EACH RUN ONCE MAY ONLY REFUSE AS MUCH AS BEFORE, AND SAY AS MUCH (claude-config#3541). An
+# independent review of the first version of that change drove both gates through 31 pushes, each
+# with a result landing just after the budget ended, and found three that changed more than words.
+# Each is staged here the same way as the case above.
+#
+# A retry still in flight when the budget ended is refused whatever it reports afterwards. The gate
+# judged it "waiting on the lock, whether it got the lock this time is not known" at the moment the
+# budget ended and refused; reading its exit code only in the read back let a pass landing in
+# between through, a refusal turned into a pass.
+R3541a="$(mkrepo lateretrypass)"; HOLD3541a="$TMPROOT/hold-3541a"; : > "$HOLD3541a"; ST3541a="$TMPROOT/lateretrypass-state"
+add_scanner "$R3541a" alpha 0; add_held_locked_scanner "$R3541a" rpass "$HOLD3541a" 2 0; commit_all "$R3541a"
+o3541a="$(latefire "$R3541a" "$(add_late_head "$R3541a" "$HOLD3541a" "$ST3541a" '^scanner rpass ran')" "$ST3541a")"; c3541a=$?
+note_held rpass; rm -f "$HOLD3541a"
+[ "$c3541a" -eq 2 ] && grep -q 'another test run' <<< "$o3541a" && grep -q 'is not known' <<< "$o3541a" \
+  && check "#3541 a retry in flight when the budget ended still refuses the push when it passes just after" ok \
+  || check "#3541 a retry in flight when the budget ended still refuses the push when it passes just after" "exit=$c3541a out=$o3541a"
+[ "$(cat "$TMPROOT/rpass.tries" 2>/dev/null)" = "2" ] && held_gone rpass \
+  && check "#3541 and that retry was released and passed" ok \
+  || check "#3541 and that retry was released and passed" "tries=$(cat "$TMPROOT/rpass.tries" 2>/dev/null)"
+
+# A refusal for the lock still shows what FAILED beside it. Reported as a failing scanner, the late
+# refusal used to come with its sibling's FAIL line; said as the lock, it came alone.
+R3541b="$(mkrepo latefailsib)"; HOLD3541b="$TMPROOT/hold-3541b"; : > "$HOLD3541b"; ST3541b="$TMPROOT/latefailsib-state"
+add_locked_scanner "$R3541b" gammab 0 1; add_held_locked_scanner "$R3541b" lateb "$HOLD3541b" 1; commit_all "$R3541b"
+o3541b="$(latefire "$R3541b" "$(add_late_head "$R3541b" "$HOLD3541b" "$ST3541b" "$LOCKLINE_RE")" "$ST3541b")"; c3541b=$?
+note_held lateb; rm -f "$HOLD3541b"
+[ "$c3541b" -eq 2 ] && grep -q 'another test run' <<< "$o3541b" && grep -q 'test-lateb.sh' <<< "$o3541b" \
+  && check "#3541 a late lock refusal beside a failing scanner is said as the lock" ok \
+  || check "#3541 a late lock refusal beside a failing scanner is said as the lock" "exit=$c3541b out=$o3541b"
+grep -q 'test-gammab.sh' <<< "$o3541b" && grep -q 'FAIL: scanner gammab found something' <<< "$o3541b" \
+  && check "#3541 and still names the failing scanner with its FAIL line" ok \
+  || check "#3541 and still names the failing scanner with its FAIL line" "out=$o3541b"
+held_gone lateb && check "#3541 and that held first try ends once released" ok \
+  || check "#3541 and that held first try ends once released" "pid $(cat "$TMPROOT/lateb.pid" 2>/dev/null) still running"
+
+# A refusal for the lock still names what did NOT FINISH beside it, which the failure report did.
+R3541c="$(mkrepo latebusysib)"; HOLD3541c="$TMPROOT/hold-3541c"; HOLDSIB3541c="$TMPROOT/hold-3541c-sib"; : > "$HOLD3541c"; : > "$HOLDSIB3541c"
+ST3541c="$TMPROOT/latebusysib-state"
+add_held_scanner "$R3541c" sibc "$HOLDSIB3541c" 0; add_held_locked_scanner "$R3541c" latec "$HOLD3541c" 1; commit_all "$R3541c"
+o3541c="$(latefire "$R3541c" "$(add_late_head "$R3541c" "$HOLD3541c" "$ST3541c" "$LOCKLINE_RE")" "$ST3541c")"; c3541c=$?
+note_held latec; note_held sibc; rm -f "$HOLD3541c" "$HOLDSIB3541c"
+[ "$c3541c" -eq 2 ] && grep -q 'another test run' <<< "$o3541c" && grep -q 'test-latec.sh' <<< "$o3541c" \
+  && check "#3541 a late lock refusal beside a scanner still running is said as the lock" ok \
+  || check "#3541 a late lock refusal beside a scanner still running is said as the lock" "exit=$c3541c out=$o3541c"
+grep -q 'test-sibc.sh: running for' <<< "$o3541c" \
+  && check "#3541 and still names the scanner that did not finish" ok \
+  || check "#3541 and still names the scanner that did not finish" "out=$o3541c"
+held_gone latec && held_gone sibc && check "#3541 and both held scanners end once released" ok \
+  || check "#3541 and both held scanners end once released" "pids $(cat "$TMPROOT/latec.pid" "$TMPROOT/sibc.pid" 2>/dev/null | tr '\n' ' ')"
 
 R1881="$(mkrepo outoftime)"; HOLD1881="$TMPROOT/hold-1881"; : > "$HOLD1881"
 add_scanner "$R1881" alpha 0; add_held_scanner "$R1881" omega "$HOLD1881" 0 alpha; commit_all "$R1881"
