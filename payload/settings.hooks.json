@@ -734,6 +734,24 @@
             "command": "__CLAUDE_HOME__/hooks/subagent-issue-harvest.sh",
             "timeout": 180,
             "async": true
+          },
+          {
+            "type": "command",
+            "command": "python3 __CLAUDE_HOME__/hooks/limit-messages.py record",
+            "timeout": 60,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 __CLAUDE_HOME__/hooks/limit-messages.py record",
+            "timeout": 60,
+            "async": true
           }
         ]
       }
