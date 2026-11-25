@@ -87,7 +87,15 @@ for h in EVERY + SOME:
         if text != first:
             print(f"{name}: {h} differs from the copy in {first_name}")
 PY
-report="$(python3 -B "$T/copies.py" "$HOOKS")"
+# The reader's exit and its stderr are read too (the lessons review of this pull request, 2026-11-25):
+# one that stops after printing its `suites` line has printed no finding, and with its exit thrown
+# away that read as every copy being the same.
+report="$(python3 -B "$T/copies.py" "$HOOKS" 2> "$T/copies.err")"; reader_rc=$?
+if [ "$reader_rc" -eq 0 ] && [ ! -s "$T/copies.err" ]; then
+  check "the reader of the copies ran to its end" ok
+else
+  check "the reader of the copies ran to its end" "exit $reader_rc, so its findings are not all here: $(tr '\n' ' ' < "$T/copies.err" | cut -c1-300)"
+fi
 n="$(printf '%s\n' "$report" | sed -n 's/^suites //p')"
 case "$n" in
   ''|0|1) check "the suites that share the harness are found (at least two)" "found ${n:-none} in $HOOKS" ;;

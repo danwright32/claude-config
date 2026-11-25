@@ -1737,7 +1737,7 @@ if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; t
   # gate before read 58.9 to 68.6, which is 10.2 to 10.7 of its 11 seconds). The limit is 1.41 times
   # the middle reading after, 18.9, rounded up, as the limit for the claude-sync suite is set (this
   # suite with the checks of #3255 in it read 19.2 to 19.6, 3 samples), and the copy of
-  # the gate that holds no reading (made above, the gate as it was) must be past it, on the step
+  # the gate that holds no reading (made in the harness, the gate as it was) must be past it, on the step
   # clock so its seconds cannot run out first. Off macOS the limit is wider by the 77 to 57 the
   # claude-sync suite's limits were then (#3167; they are 91 and 67 since #3406, and 27 times 91
   # over 67 is 36.7, the same 37): no Linux reading of this line existed when it was set, so each

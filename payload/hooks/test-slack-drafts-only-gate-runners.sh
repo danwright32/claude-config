@@ -115,7 +115,7 @@ held_n() {
   printf 'if python3 %s < /dev/null; then :; fi\n' "$DIR/slack_drafts_only_gate.py"
 } > "$T/held/runs-gate.sh"
 for arm in held unheld; do
-  # unheld: the copy made above the cost checks, which holds nothing.
+  # unheld: the copy lib/slack-drafts-gate-harness.sh makes, which holds nothing.
   if [ "$arm" = held ]; then asked="$HOOK"; else asked="$unheld_made/slack-drafts-only-gate.sh"; fi
   rc="$(held_judged "$asked" "$arm-runs" "bash $T/held/runs-gate.sh")"
   parses="$(held_n "$arm-runs" py_parse)"; marks="$(held_n "$arm-runs" py_marker_read)"
