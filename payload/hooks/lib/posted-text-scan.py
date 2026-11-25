@@ -591,6 +591,24 @@ def main(argv):
     return 0
 
 
+def run(argv):
+    """main, with every fault it did not foresee turned into the failure it is. Left to Python an
+    uncaught exception ends the run with exit 1, which here means names were found: a caller
+    reading the exit code would take a crash for a finding (L184, L11)."""
+    try:
+        return main(argv)
+    except KeyboardInterrupt:
+        sys.stderr.write("posted-text-scan: stopped before it finished. A scan that could not read "
+                         "everything is not a clean one (%s).\n" % ISSUE)
+        return 2
+    except Exception as e:
+        sys.stdout.flush()
+        sys.stderr.write("posted-text-scan: stopped by a fault it did not foresee (%s): %s. A scan that "
+                         "could not read everything is not a clean one (%s).\n"
+                         % (type(e).__name__, e, ISSUE))
+        return 2
+
+
 if __name__ == "__main__":
     sys.stdout.reconfigure(errors="replace")
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(run(sys.argv[1:]))

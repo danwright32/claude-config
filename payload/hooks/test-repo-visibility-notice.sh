@@ -187,6 +187,19 @@ repo odd "https://github.com/danwright-test/odd.git" "sometimes"
 start "$R"
 cannot "an expectation that is none of the three"
 check "an expectation that is none of the three: GitHub is not asked: $(asked)" [ "$(asked)" = "0" ]
+# A file that is there and cannot be read is said as that, never as a file holding a bad value. A
+# user who can read any file (root) cannot set this state up, and says so instead of failing.
+repo locked "https://github.com/danwright-test/locked.git" "public"
+chmod 000 "$R/.github/expected-visibility"
+if cat "$R/.github/expected-visibility" >/dev/null 2>&1; then
+  echo "note: this user can read a file with no read permission, so the unreadable expectation file case was not measured here."
+else
+  start "$R"
+  cannot "an expectation file that cannot be read"
+  check "an expectation file that cannot be read: it says the file could not be read: $out" has "$out" "is there but could not be read"
+  check "an expectation file that cannot be read: GitHub is not asked: $(asked)" [ "$(asked)" = "0" ]
+fi
+chmod 644 "$R/.github/expected-visibility"
 repo elsewhere "https://example.com/danwright-test/notes.git" "public"
 start "$R"
 cannot "an origin that is not GitHub"
@@ -197,7 +210,7 @@ cannot "no origin at all"
 answer PUBLIC
 : > "$CALLS"
 out="$(jq -nc --arg d "$WORK/notes" '{hook_event_name:"SessionStart",cwd:$d}' \
-  | env PATH="$BIN:$PATH" FAKE_CALLS="$CALLS" FAKE_ANSWER="$ANSWER" REPO_VISIBILITY_BOUND_SECONDS=nonsense bash "$HOOK" 2>&1)"; rc=$?
+  | env HOOK_TESTS_RUNNING=0 PATH="$BIN:$PATH" FAKE_CALLS="$CALLS" FAKE_ANSWER="$ANSWER" REPO_VISIBILITY_BOUND_SECONDS=nonsense bash "$HOOK" 2>&1)"; rc=$?
 check "outside a test run a bound named in the environment is not read: rc=$rc $out" [ -z "$out" ]
 # A payload that cannot be read falls back to the folder the hook runs in.
 answer PRIVATE

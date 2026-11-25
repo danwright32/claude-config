@@ -264,6 +264,13 @@ out="$(fixture_env REAL_LIB="$LIB" POSTED_TEXT_SCAN_LIB="$WORK/loud.py" python3 
 check "a scan that reports a line with no name in it stops too, exit 2: rc=$rc" [ "$rc" -eq 2 ]
 check "and says the scan cannot be trusted: $out" has "$out" "cannot be trusted"
 check "and read nothing of the repository: $(gathered)" [ "$(gathered)" = "0" ]
+# A fault nobody foresaw is a failure too. Left to Python it would end the run with exit 1, which
+# this command gives to mean that names were found.
+sed 's/^    return$/    raise RuntimeError("a fault nobody foresaw")/' "$WORK/blind.py" > "$WORK/faulty.py"
+: > "$CALLS"
+out="$(fixture_env REAL_LIB="$LIB" POSTED_TEXT_SCAN_LIB="$WORK/faulty.py" python3 "$SCAN" "$REPO" --since "$SINCE" 2>&1)"; rc=$?
+check "a fault nobody foresaw exits 2, never the 1 that means names were found: rc=$rc" [ "$rc" -eq 2 ]
+check "and is said as a scan that could not be completed, with the fault named: $out" has "$out" "a fault nobody foresaw. A scan that could not read everything is not a clean one"
 # The stand in library is a test setting: outside a test run it is never loaded.
 : > "$CALLS"
 out="$(fixture_env HOOK_TESTS_RUNNING=0 REAL_LIB="$LIB" POSTED_TEXT_SCAN_LIB="$WORK/blind.py" python3 "$SCAN" "$REPO" --since "$SINCE" 2>&1)"; rc=$?

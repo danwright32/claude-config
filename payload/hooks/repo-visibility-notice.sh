@@ -64,9 +64,17 @@ cwd="${cwd:-${CLAUDE_PROJECT_DIR:-$PWD}}"
 
 # No repository, or one that states no expectation: nothing to check, and nothing is asked.
 top="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)" || exit 0
+
+cannot_tell() {   # $1 = what it was about, $2 = why
+  printf '[%s] could not tell whether %s: %s. Nothing was checked, so this is not a statement that it is.\n' "$NAME" "$1" "$2"
+  exit 0
+}
+
 expect_file="$top/.github/expected-visibility"
 if [ -f "$expect_file" ]; then
-  expect_text="$(cat "$expect_file" 2>/dev/null)"
+  # A file that is there and cannot be read is its own cause, said as that and not as a bad value.
+  expect_text="$(cat "$expect_file" 2>/dev/null)" \
+    || cannot_tell "this repository is as visible as it is meant to be" "its .github/expected-visibility is there but could not be read"
 else
   # A checkout behind its origin may not hold the file yet: this repository's primary checkout was
   # 474 commits behind main on the night this was written, and a session started there is the one
@@ -79,11 +87,6 @@ else
   done
   [ -n "$expect_text" ] || exit 0
 fi
-
-cannot_tell() {   # $1 = what it was about, $2 = why
-  printf '[%s] could not tell whether %s: %s. Nothing was checked, so this is not a statement that it is.\n' "$NAME" "$1" "$2"
-  exit 0
-}
 
 # The first line that is not a comment or blank, its first word. awk reads to the end and never
 # leaves early, so nothing upstream of it is cut off mid write (test-pipefail-shortcircuit.sh).
