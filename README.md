@@ -296,8 +296,9 @@ description, and the description and homepage `gh repo create` or `gh repo edit`
 `gh gist edit` on a public gist is judged on its description and the files it adds or takes new
 text from (an editor's text and standard input refused), `gh repo edit --visibility public` is
 refused for a repository not yet public that no work owner owns, since every file and issue in it
-becomes public unread, and a body or notes file named inside clustered short flags (`-dF body.md`)
-is read. Since #2423 the repository named inside clustered short flags (`-dR o/x`) is read too, as
+becomes public unread (since #3582 the refusal names the command to run first, see "Text posted
+while a repository was private" below), and a body or notes file named inside clustered short
+flags (`-dF body.md`) is read. Since #2423 the repository named inside clustered short flags (`-dR o/x`) is read too, as
 gh reads the cluster, and every repository named is judged. Since #2430 release notes read from
 standard input (`--notes-file -`) are judged only when one heredoc, here-string or `<` file sits
 on gh itself with nothing piped in, and refused otherwise (#2442); since #2443 a pull request's,
@@ -307,6 +308,49 @@ redirects standard input more than once (`cat <<'EOF' < other.md > notes.md`) is
 shell feeds that stage only the last; the issue field gate still reads such a file from the
 command, as before. Still not covered: gh run by
 its absolute path, a script that rewrites PATH, and curl or an API library.
+
+**Text posted while a repository was private (#3582).** The publish gate judges text posted to a
+public repository and lets a private one through without reading its lists, so nothing judges text
+posted while a repository is private, and it is still unjudged when the repository turns public.
+On 2026-11-24 this repository was private for some hours and 8 lines naming a work organisation or
+repository were posted to it meanwhile. One command rechecks such a window, and the gate's refusal
+of `gh repo edit --visibility public` names it:
+
+```bash
+python3 ~/.claude/hooks/lib/posted-text-scan.py owner/name --since 2026-11-24T13:30:00-05:00
+```
+
+- **What it reads**, through `gh api` reads only (it posts nothing, edits nothing and writes no
+  file): the title and body of every issue and pull request updated since that time; issue, review
+  and commit comments; the review bodies and commit messages of each of those pull requests, which
+  reaches a commit whose branch was deleted after its merge; commit messages on every branch, and
+  each branch's name; every release's title, tag and notes; the repository's description, homepage
+  and topics; and the earlier revisions and titles GitHub still holds of each body, which is where
+  a name rewritten out of an issue is still readable.
+- **How it judges**: with `lib/work-names.py`'s own `work_repo_names` and `scan_text`, the lists and
+  the line scan the publish gate uses. A name taken from the lists at run time is planted in a made
+  up text first, beside a text with no name; unless the first is reported at its line and the second
+  is not, the run stops and says the scan cannot be trusted, before anything is read.
+- **What it prints**: each line found as `label:line: kind of name` (`issue #12 body:3: ...`), never
+  the name, and a branch by its tip commit, never by its name. Then how many are in text as it
+  stands, which is rewritten, and how many are in an earlier revision, which is deleted by hand on
+  GitHub from the edited menu above the text, since no API deletes a revision.
+- **What it does not read**, printed at the end of every run: a revision deleted from an edit
+  history (counted, its text is gone), earlier wording of a release or of the description, a commit
+  no branch or pull request reaches, a commit dated before the window and pushed inside it (GitHub
+  does not say when a commit was pushed, so give an earlier `--since`), and files, discussions, the
+  wiki, labels, milestones, projects, tags and gists.
+- **A failure is never a short clean result**: a failed call, a page that is not the list asked for,
+  an entry missing the field its text is in, a history GitHub cut short and a spent `--budget`
+  (100 seconds by default, a setting, not measured) each exit 2. Exit 0 is none found in what was read, 1 is names found.
+- `--since` needs its time zone (`Z`, or an offset such as `-05:00`): a time read as UTC by
+  mistake moves the window by hours. Measured on this repository on 2026-11-24: a nine hour window
+  was 330 texts in 95 calls and 18 seconds, and a week was 3,106 texts in 531 calls and 204 seconds,
+  so a window of more than a day or two needs a larger `--budget` and a command time limit to match.
+- A session can run it: it is handed no file, so the Slack drafts gate has nothing gathered to read
+  (the scan written by hand that night handed a file of gathered text to a script that can run
+  programs, and was refused over a Slack endpoint one text named). `hooks/test-posted-text-scan.sh`
+  holds all of this, the two gates' verdicts on the command included, against a stand in `gh`.
 
 Plugin-managed skills are excluded so plugin updates don't cause churn, and so is
 `skills/synced/`, where the Claude app downloads each account's built in skills, and any `.trash`
@@ -2867,6 +2911,24 @@ Reading an old checkout is the other half, and that one is said rather than refu
   only fetches, bounded at 5 seconds and cached for 10 minutes per repository, and a fetch that fails
   says the checkout could not be checked, never that it is level. The person is told once per
   session for each answer; a compaction, a `/clear` and each subagent get it again as context.
+- `repo-visibility-notice.sh` (SessionStart) tells a session when the repository it is in is not as
+  visible on GitHub as the repository says it is meant to be (claude-config#3582). On 2026-11-24
+  this repository was private for some hours and nobody was told: its workflow is sized for a
+  public repository's free 4 core runners, so suites ran past their limits on billed 2 core runners
+  and the account's minutes ran out, and the publish gate judged none of the text posted meanwhile.
+  The expectation has one home, the first line of `.github/expected-visibility` that is not a
+  comment (`public`, `private` or `internal`), which this repository carries and
+  `.github/workflows/tests.yml` points at. A checkout that does not hold the file yet, being behind
+  its origin, is judged by the copy on origin's default branch as last fetched, and a repository
+  with no such file in either place is never asked about.
+  When GitHub agrees the hook says nothing; when it does not, one notice names the repository, what
+  it is, what that costs and the command to run before it turns public again; when it cannot tell
+  (gh failed, answered something else or outlasted its 4 second bound, the file or the origin could
+  not be read) it says it could not tell, never that all is well. It costs one `gh repo view` per
+  session start in a repository that carries the file, measured at 0.32 to 0.54 seconds over ten
+  runs (1.2 on the first), against 0.06 to 0.07 in a repository with no file and 0.03 outside one.
+  It is wired to SessionStart only, never to a prompt.
+  Tests: `hooks/test-repo-visibility-notice.sh`.
 
 ### What a push actually waits on
 

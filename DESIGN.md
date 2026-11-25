@@ -1866,7 +1866,9 @@ a gist is public from `gh api gists/<id>` (refused when no account can read it) 
 edit` on a public one as it does `gh gist create`, refusing an editor's text (no file named for the
 new text, and no `--add` or `--remove`, `--desc` alone counted as not ruling the editor out) and
 standard input. `gh repo edit --visibility public` on a repository not yet public that no work owner
-owns is refused outright, since it publishes every file, commit and issue unread. A body or notes
+owns is refused outright, since it publishes every file, commit and issue unread; since #3582 the
+refusal names `lib/posted-text-scan.py` with the repository in it, the command that reads what was
+posted there (see "Text posted while a repository was private" below). A body or notes
 file inside clustered short flags is read through `flag_values(..., clustered=True)`, asked for only
 by the work names gate, where another file can only refuse more; the issue field gate, which a value
 can satisfy, keeps the plain reading.
@@ -1904,6 +1906,77 @@ with more than one such redirection (a heredoc, `<`, `<<<`, `<&` or `<>` on any 
 redirection aimed at descriptor 0), and the work names gate refuses a notes, body or gist file among
 them in a public repository, saying why. Counting a read on another descriptor (`3<`) is the reading
 that refuses more.
+
+### Text posted while a repository was private (#3582)
+
+The publish gate's rule is that a private repository is passed without its lists being read. That
+leaves a hole in time, not in the rule: text posted while a repository is private is judged by
+nothing, and turning the repository public publishes it unjudged. On 2026-11-24 this repository
+was private for some hours, 83 texts were posted, and a scan written by hand that night found 8
+lines in two issues naming a work organisation or repository. Three things were missing, and each
+is now a tested part.
+
+**The scan is one shipped command, `lib/posted-text-scan.py`.** It gathers through `gh api` reads
+and judges with `work_repo_names` and `scan_text` from `lib/work-names.py`, loaded by path: one
+reader of the lists and one line scan, never a second copy of the rule (L370). Decisions:
+
+- **Edit history is read, not listed as out of reach.** The issue that asked for this took it that
+  an earlier revision could not be reached. Measured 2026-11-24: GraphQL's `userContentEdits` hands
+  over every revision of an issue, pull request, comment or review body, its `diff` field holding
+  that revision's whole text and the oldest being the text as first posted; a deleted revision
+  comes back with `deletedAt` set and no text, and is counted. The first real run found all 8 of
+  that day's lines there, in the first revisions of two issues whose bodies had been rewritten,
+  and one older line in a third. A claim that something cannot be read has to come from trying
+  (L460).
+- **Whether a list was cut short is read from `pageInfo.hasNextPage`, never `totalCount`.** A
+  timeline's `totalCount` counts every item whatever `itemTypes` asked for (measured 2026-11-24,
+  when the first real run called 14 whole title histories cut short). The suite's recorded answer
+  carries that shape, so comparing against `totalCount` again fails there.
+- **The control is planted from the lists at run time**, since this file may not hold a work name.
+  It proves the lists were read, are not empty, and that a name is reported at its line; a second
+  text with no name proves the scan is not reporting everything (L497). It cannot prove the lists
+  are complete, which is `work-names.py`'s own question.
+- **Over reading is the harmless side** (L648). Commit comments and releases have no filter by
+  time, a review has no edit time, and an item updated in the window may have been edited in it, so
+  every revision of every text updated in the window is read, every review and commit of every
+  pull request updated in it, and every release.
+- **It also finds text the gate never saw.** The gate reads the commands a session runs; the scan
+  reads what GitHub holds, whatever posted it. Run over the week before 2026-11-24 it found lines
+  in earlier revisions, and one earlier title, from days the repository was public and the gate
+  was on. So it is worth running over a window with no private spell in it.
+- **Commits are chosen by their own date**, because GitHub does not say when one was pushed. A
+  commit written before the window and pushed inside it is read only when a pull request updated
+  in the window holds it. The run says so and says to give an earlier `--since`.
+- **It is handed no file.** The scan written by hand handed a file of gathered text to a script
+  that can run programs, which the Slack drafts gate reads for an endpoint, and one gathered text
+  named one. Texts held in memory give the gate nothing gathered to read, and no gate was changed.
+  The suite runs both gates on the command, with the refused shape beside it as the control.
+- **Not built**: deleting a revision (no API, measured that day), and reading discussions, the
+  wiki, labels, milestones, projects, tags, gists and files, each said at the end of every run.
+
+**The refusal of `gh repo edit --visibility public` names that command.** Its words changed and
+what it refuses did not: `test-gh-write-aliases.sh` holds the seven forms' decisions in one line.
+
+**A session is told when the repository is not as visible as it is meant to be**, by
+`hooks/repo-visibility-notice.sh` at SessionStart. Alternatives weighed:
+
+- A line in `claude-sync status` (not built). It is read when somebody asks for it, and the
+  sessions that need this are the ones about to wait on a pull request's checks or post text.
+- A step in the workflow reading `github.event.repository.private` (not built here). It costs no
+  call and speaks exactly where the minutes are spent, but only in a run's log, after the cost.
+  Worth adding beside this, as its own change to the workflow.
+- **A SessionStart hook reading `.github/expected-visibility` (chosen).** The workflow's comment
+  said "This repository is public" as a fact; it is now an expectation with one home, a file the
+  hook and the comment both point at, so any repository can state one and a repository that
+  states none is never asked about. A checkout behind its origin, which may not hold the file
+  yet, is judged by origin's copy as last fetched, since a session started in a stale checkout
+  is the one that most needs telling. Silence means checked and as expected, so every way of not knowing
+  is said as not knowing (L98). One `gh repo view` per session start, bounded at 4 seconds inside
+  the hook's 10 second timeout, both settings, not measured.
+
+Still open, and Dan's to decide (#3582): whether the publish gate should judge text posted to this
+repository even while it is private, since it is meant to be public. The scan is the remedy after
+the fact; that rule would be the prevention.
 
 ## One watcher, and a leftover loop stops itself (#604)
 
