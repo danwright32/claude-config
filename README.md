@@ -33,7 +33,13 @@ back.
   It was `opus` from 2026-11-10 (#2645). `null` under `env` means remove: the pull deletes that one
   variable from each Mac's `settings.json` and leaves every other variable there untouched, since
   leaving the key out of this file would leave each Mac's old value in place. It is the only variable
-  under `env` the sync writes or removes, and the rest of that block stays each Mac's own. It is
+  under `env` the sync writes or removes, and the rest of that block stays each Mac's own. And
+  `claudeMdExcludes` since 2026-11-25 (#3635, added to the sync's list by Dan's sign off): it keeps
+  this repository's own `payload/CLAUDE.md` (development checkout, its worktrees, the sync clone)
+  from loading as a subfolder rules file. See the `payload/CLAUDE.md` entry below for why. Each
+  pattern must be one of `**/claude-config/payload/CLAUDE.md`,
+  `**/claude-config/.claude/worktrees/*/payload/CLAUDE.md` and
+  `**/claude-config-sync/payload/CLAUDE.md`, or the pull refuses the file. It is
   edited in the repo, never published back from a Mac, and a pull writes each value into
   `settings.json` (refusing the whole file, by name, if it holds any key not on the allowlist in
   `claude-sync`, or a value Claude Code would not act on). Off is `false`, never a deletion; the one
@@ -55,6 +61,16 @@ back.
   both lists and `claude-sync pull` as the remedy, and `claude-sync verify` fails on it. Edit the
   list here, never in rtk's config, which the next pull puts back.
 - `payload/CLAUDE.md` and `payload/RTK.md` — your global rules files, synced verbatim (standing cross-project instructions travel here)
+  In this repository the copy under `payload/` is excluded from Claude Code's subfolder loading by
+  the shared `claudeMdExcludes` setting (#3635). Without it, Claude Code loads `payload/CLAUDE.md`
+  and its 14 imports the first time a session or agent reads, edits or writes any file under
+  `payload/`, a second copy beside the one from `~/.claude`. Measured 2026-11-25: 318 of 433 agents
+  in one session carried it, a median 36,610 tokens more on every later request. 22 headless runs
+  the same day showed the setting stops it in a main session and in agents, `omitClaudeMd` agents
+  included, drops the imports with it, and leaves `~/.claude/CLAUDE.md` loading.
+  `tests/test-claude-md-excludes.sh` holds the patterns to these copies only. Count on it only in a
+  session started after the pull that installed it: whether a session already running picks it up
+  has not been measured.
 
 Every mirrored file (hooks, skills, agents, commands) and the hooks fragment are stored with this
 Mac's config directory written as `__CLAUDE_HOME__`, and expanded to each Mac's own on the way in,
@@ -4327,6 +4343,18 @@ command that posts>"` reads as an unknown program running that command, and the 
 `test-slack-drafts-gate-helper-copies.sh` holds those copies equal, naming the suite and the helper
 when two differ.
 
+Since claude-config#3624 the code loaders checks are five suites on the same harness: on 2026-11-25
+the single `hooks/test-slack-drafts-code-loaders.sh`, 2,287 checks, read up to 485 seconds on
+GitHub's runners, 81 percent of the suite cost guard's line at half the wall limit. Its sections were
+dealt by their measured cost, kept together where one makes the fixtures another reads, into
+`test-slack-drafts-code-loaders.sh` itself (PHP includes, a NUL in a first line, `NODE_OPTIONS` and
+perl, sourced paths, `eval` and a shell's `-c` and `-n`, and the gate's verdict on running each of
+the five), `-data-names` (an address held as data, test files and mocks, a declared webhook name),
+`-package-runs` (a launcher's package run and a package script), `-python` (a Python script that
+only reads, modules under other names, routes to `os` and `sys`) and `-shell-input` (process
+substitution and a shell fed by what is around it). The helper copies guard holds their copies too,
+and runs every suite sharing the harness once without it, which must stop with a failed result line.
+
 ### Running a refused command with no network (#3173)
 
 The gate refuses a command whose files reach code able to post, and that stopped one test file being
@@ -8422,7 +8450,8 @@ and answers the second refusal's reason trimmed of its full stop; a mod sends on
 `reason`. A mod that answers a tool call itself, and so passes it to no guard beneath it, asks
 `$.modkit.screen(e)` before acting on it and answers with its refusal: mod-kit asks the secret guard
 wherever its folder sorts, answers null when the secret guard is not loaded, and refuses with the
-card when it cannot ask. `tools/check-mod-shared-parts.sh`, run by `tests/test-mods.sh`, fails any
+card when it cannot ask. `tools/check-mod-shared-parts.sh`, run by
+`tests/test-mods-shared-parts.sh`, fails any
 other mod that keeps its own copy, draws a result row or the band itself (any line naming
 `ToolResult` or `AbovePrompt` as a string, however the hook is written), draws a card's parts or
 left rule, retries a send, reads which files a command writes, walks up for a `.git` entry (`.git`
@@ -10798,6 +10827,14 @@ process (its cached rollout switch saved off, or a setting such as `disableAllHo
 can set; it never counts that as every mod failing (#740). A failure carrying no verdict line names
 the exit code and the last lines of output instead of an empty reason.
 
+That run over the real tree is all `tests/test-mods.sh` holds now. The checks of `check-mods.sh` on
+fixture mods and a stub claude, and of the other mod scans, are `tests/test-mods-fixtures.sh`, and
+section 9, what every mod shares, is `tests/test-mods-shared-parts.sh`: one suite of 516 checks cut
+into three by what each section cost, after it read up to 777 seconds on GitHub's runners on
+2026-11-25, against the 1,200 second wall limit (#3622). All three run in the world `tests/mods-harness.sh` sets up, and the
+last section of the fixtures suite holds them together: each piece is a suite the runner finds, each
+refuses to run without the harness, and only `tests/test-mods.sh` holds the real claude.
+
 In the pull request checks neither is UNMEASURED: the runner has no `claude` on its PATH, and the
 version in `.github/claude-code-version`, installed by `tools/install-claude-code.sh` from the
 vendor's npm package and cached on that file, is handed to `tests/test-mods.sh` and
@@ -10827,7 +10864,8 @@ another build says so in its first line, as does `tests/test-mods.sh` under its 
 runner's report: "Claude Code changed since the mods last passed on this Mac". A red with no commit
 to blame then reads as Claude Code's change first: on 2026-11-18, 2.1.328 turned two secret guard
 tests red and three builders each had to show it was not theirs. `CHECK_MODS_LAST_PASSED` moves the
-record, set empty it is off, and `tests/test-mods.sh` turns it off for every fixture.
+record, set empty it is off, and the mods suites' harness, `tests/mods-harness.sh`, turns it off for
+every fixture.
 Handed one mod's own folder (`bash tools/check-mods.sh payload/mods/scope-modes`), it checks that
 mod alone, reading its dependencies from the folder holding it. A folder holding no mod at all
 exits 5 and says nothing was checked, never a pass: until #3105 one mod's folder was searched for
@@ -10837,8 +10875,8 @@ kept too, one file per failure in `~/.cache/claude-config/mod-test-failures` (ou
 syncs), and the line ends `whole output kept in <file>`, so a failure seen once can still be read
 afterwards (#1788, L297). A copy stays 30 days, or while it is one of the newest 3 of its own mod and check, under 20 MB in all (#2959); a passing run writes nothing.
 `CHECK_MODS_FAILURE_OUTPUT` moves the folder, or set empty keeps nothing and the line says so.
-`tests/test-mods.sh` points it at its own throwaway folder for every fixture, and leaves only its
-run over the real `payload/mods` writing to the real one.
+`tests/mods-harness.sh` points it at its own throwaway folder for every fixture of the mods suites,
+and leaves only `tests/test-mods.sh`'s run over the real `payload/mods` writing to the real one.
 It also fails a mod whose hook is on an event Claude Code's built-in security default sends past
 the user tier every mod loads in (#875): every `classic.*` event, `prompt.section`, `prompt.context`,
 `prompt.compose`, `skill.prompt`, `attribution.text` and `settings.read`, and since Claude Code
@@ -10862,13 +10900,13 @@ It also type checks each mod strictly (#758), as the mod's own `tsconfig.json` s
 TypeScript compiler pinned in `tools/typescript` (#803; TypeScript 7.0.2, installed on CI before the
 suites; `TSC_BIN` overrides it, and `tsc` on the path is the last resort). A checkout without it, as
 every new worktree is, gets it with no manual step (#1496): `tools/lib/pinned-compiler.sh`, called by
-`check-mods.sh`, `check-mod-noun-waits.sh` and `tests/test-mods.sh`, links the checkout's
+`check-mods.sh`, `check-mod-noun-waits.sh` and `tests/mods-harness.sh`, links the checkout's
 `node_modules` (a real folder of links, so the ignore rule still covers it) to ONE install per clone
 and pin, kept in the clone's common git folder at `.git/pinned-typescript/<lockfile hash>-<platform>`.
 Only the first checkout of a clone after the pin moves installs it, with `npm ci --prefer-offline`
 (from the npm cache, 0.9 s measured on 2026-10-22, the registry only for what the cache lacks),
 stopped with everything it started after `PINNED_TS_INSTALL_DEADLINE` seconds (60). A test suite
-never asks the registry: `tests/test-mods.sh` sets `PINNED_TS_OFFLINE=1`, which reads the npm cache
+never asks the registry: `tests/mods-harness.sh` sets `PINNED_TS_OFFLINE=1`, which reads the npm cache
 only, so where the cache lacks the package its sections say UNMEASURED with that reason. Two runs
 installing at once each install into a folder of their own and publish it by one rename, so neither
 can see the other's half made copy and no lock is left behind by a run that is killed. A
@@ -10919,7 +10957,7 @@ a laid folder named as its argument, cuts the tsconfig's types back to the three
 session's MCP list, and leaves out every line that is wholly a comment but the engine's first, since
 comments carry no types and Claude Code's carry dashes and words the push gates refuse, refusing
 outright where such a character sits in what is kept), then run `tests/test-mods.sh` and
-commit the result with whatever the newer types ask of a mod. On 2.1.292, nineteen stand-ins
+`tests/test-mods-fixtures.sh` and commit the result with whatever the newer types ask of a mod. On 2.1.292, nineteen stand-ins
 returned their object cast to `never`, which passes any shape; removing those casts showed eight of
 them, in seven mods, hiding a missing member or a parameter narrower than the real one. Every one is
 now returned uncast, typed with the real noun's types, and `check-mods.sh` refuses such a cast in
@@ -10993,7 +11031,7 @@ the timer's arguments is worked out as the timer is set, so it is the noun's own
 call given as the callback (`$.clock.after(0, slow())`), and the arguments of a function making call,
 a function written in place there included (#2333).
 Run on its own, it installs that compiler as the type check does, and refuses (exit 4, naming why
-and `npm ci --prefix tools/typescript`) where it cannot. `tests/test-mods.sh` judges the compiler by whether it starts (a Mac's native build
+and `npm ci --prefix tools/typescript`) where it cannot. `tests/test-mods-fixtures.sh` judges the compiler by whether it starts (a Mac's native build
 copied to Linux is installed and cannot run), and where it does not, reports its noun wait checks
 UNMEASURED with the same command, as the type check above does, rather than failing. Under `CI=true`,
 where the workflow installs it, a compiler that does not start fails instead. (It no
