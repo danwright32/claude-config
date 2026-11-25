@@ -279,6 +279,16 @@ describe("codeVerdict reads node's vm however it is reached (#2925)", () => {
 
 // #2974: mod-kit's awk reader, raised by the lessons review of PR #2972 at e3edeee.
 describe("mod-kit's awk reader (#2974)", () => {
+  // A name is kept only to one character past the longest keyword (#3549), and that one character is
+  // what tells printfx or returnx from printf or return. Kept one shorter, a / after such a name was
+  // read as a regex, which paired with the string's / and left the string's > read as a redirect.
+  test('a name one character longer than a keyword is no keyword, so a / after it divides', () => {
+    expect(codeVerdict('awk', '{ n = printfx / 2; print "a/b > c" }')).toBeUndefined()
+  })
+  test('the same with the name directly before the slash, for every keyword', () => {
+    const verdicts = ['print', 'printf', 'return'].map(k => ({ name: `${k}a`, verdict: codeVerdict('awk', `{ n = ${k}a/2; print "a/b > c" }`) }))
+    expect(verdicts).toEqual(verdicts.map(v => ({ ...v, verdict: undefined })))
+  })
   // A line continued by a backslash runs on, and so does what came last: the backslash itself set it
   // to expect an operand, so a / after a continued name was read as a regex, which paired with a
   // string's / and left the string's -> read as a redirect.
