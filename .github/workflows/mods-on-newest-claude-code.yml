@@ -31,8 +31,8 @@ jobs:
   # Runs the newest release with no write access to anything: only the report job below may post.
   tests:
     runs-on: ubuntu-26.04
-    # The two suites bound their own wall clock (payload/hooks/lib/suite-deadline.sh); this sits above
-    # both of them together, with the install, so a suite is always the one to say where it hung.
+    # Each suite bounds its own wall clock (payload/hooks/lib/suite-deadline.sh); this sits above
+    # all of them together, with the install, so a suite is always the one to say where it hung.
     # Sixty five, not fifty: this workflow sets no deadline for the suite runner, so
     # tests/test-claude-sync.sh (#210) holds each of its jobs above the runner's default of an hour.
     timeout-minutes: 65
@@ -51,15 +51,21 @@ jobs:
           echo "MODS_CLAUDE=$claude_bin" >> "$GITHUB_ENV"
 
       - name: The mods' tests on it
-        # Both suites run whatever the first says, and the step fails when either did. Each one's
-        # whole output is kept for the report job, which reads what failed from it.
+        # Every suite runs whatever the others say, and the step fails when any did. Each one's
+        # whole output is kept for the report job, which reads what failed from it. Of the mods
+        # suites, the real tree's parts alone run the installed claude: tests/test-mods.sh and
+        # test-mods-real-tree-2.sh and -3.sh, each a part of the mods (#3622), into the one
+        # test-mods.log the report reads. The others, test-mods-fixtures.sh and
+        # test-mods-shared-parts.sh, run on a stub, so this build changes nothing they say.
         run: |
           set +e
           bash tests/test-mods.sh > "$RUNNER_TEMP/mods-logs/test-mods.log" 2>&1; mods_rc=$?
+          bash tests/test-mods-real-tree-2.sh >> "$RUNNER_TEMP/mods-logs/test-mods.log" 2>&1; part2_rc=$?
+          bash tests/test-mods-real-tree-3.sh >> "$RUNNER_TEMP/mods-logs/test-mods.log" 2>&1; part3_rc=$?
           bash tests/test-mods-load-engine.sh > "$RUNNER_TEMP/mods-logs/load-engine.log" 2>&1; load_rc=$?
           grep -E '^(FAIL: |SUITE-NOTE |SUITE-PART-UNMEASURED |SUITE-RESULT )' "$RUNNER_TEMP/mods-logs/test-mods.log" "$RUNNER_TEMP/mods-logs/load-engine.log"
-          echo "test-mods.sh exited $mods_rc, test-mods-load-engine.sh exited $load_rc"
-          [ "$mods_rc" -eq 0 ] && [ "$load_rc" -eq 0 ]
+          echo "the real tree's parts exited $mods_rc, $part2_rc and $part3_rc, test-mods-load-engine.sh exited $load_rc"
+          [ "$mods_rc" -eq 0 ] && [ "$part2_rc" -eq 0 ] && [ "$part3_rc" -eq 0 ] && [ "$load_rc" -eq 0 ]
 
       - name: Keep the logs for the report
         if: always()
