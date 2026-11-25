@@ -1,4 +1,5 @@
 import type { EngineInterface, Hook, Register } from 'claude-code'
+import { watchesOnly } from './mod-kit/hold.ts'
 import type { ModKitGoal } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import type { GoalTracker } from '../types/index.d.ts'
 import { baseName, firstWords, permissionFor, projectOf, rowsOf, type StateWord } from './goals.ts'
@@ -739,7 +740,7 @@ export const register: Register = on => {
     asking.delete(key)
     await questionOpened($, key, text, await nowOr($))
     return decided
-  })
+  }).catch(watchesOnly)
 
   on('tool.call', async ($, e, next) => {
     const input = e as unknown as Record<string, unknown>
@@ -869,5 +870,5 @@ export const register: Register = on => {
     // A change to the list or to failed is written at once; plain activity at most every thirty seconds.
     if (progress.steps !== before.steps || progress.failed !== before.failed || progress.goal !== before.goal || progress.waiting !== waitingBefore || at - lastTried >= ACTIVITY_WRITE_MS) await publish($, at)
     return withNotice(result)
-  })
+  }).catch(watchesOnly)
 }

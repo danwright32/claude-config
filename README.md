@@ -11056,6 +11056,33 @@ with the machine's own settings. The types say the reverse holds (a person's mod
 through every hook but the calling one", the organization's included), so the guards could be seated
 higher along with a mod; none has been moved, and moving one is Dan's decision.
 
+Every hook a mod registers at `tool.call` or `tool.check` ends in a catch built by mod-kit's
+`hooks/hold.ts` (#3655). Claude Code cuts a hook at 10 seconds of its own time and skips one that
+throws, and a hook with no catch is then passed over, so the call it was judging runs with nothing
+said: 6 of 6 runs measured for #3627 on 2026-11-25 on Claude Code 2.1.332, when 25 of the mods' 34
+such hooks had no catch. A hook that can refuse or ask ends in `cutCall` or `cutCheck`, one that
+answers the mod's own tool in `cutOwn`, and one that only watches a call in `watchesOnly`, which
+answers nothing so that a cut watcher never refuses an ordinary call. A guard that is cut now tells
+Claude: "Blocked: the style check could not check this call (it ran out of time), so the call was
+refused and did not run. This is not a judgement of what the call does: send the same call again.
+If it keeps happening, tell Dan." Seen live that day on scratch copies of the style check and the
+area check with one line added to make the hook slow: refused 3 of 3 each, where the code before
+this change let the call run 3 of 3. The cost is that a guard slow for an honest reason refuses a
+call that used to run unjudged; how often that happens has not been measured on either Mac.
+One call is let through when its guard is cut: scope modes' catch answers nothing for a `TaskStop`,
+so the stop runs as it did before, by Dan's decision on #1495 that a stop is never refused because
+scope modes' own check of it failed (read in the test engine, not in a live session).
+`tools/check-mod-guard-catch.sh` fails a mod whose tool hook ends in anything else (no catch, a
+catch of its own, a kit name it does not import from `./mod-kit/hold.ts`, a copy of `hold.ts` that
+is not mod-kit's, or `watchesOnly` on a hook whose own lines refuse), and whatever it cannot read is
+a failure, never a pass. `tests/test-mod-guard-catch.sh` runs it in every full suite run on a
+fixture for each of those, on `payload/mods`, on the real style check with its catch taken off, and
+against Claude Code's own list of each mod's tool hooks where Claude Code is installed. Six hooks
+at other events can refuse and still have no catch (three at a turn's end, one at a subagent's, two
+at a permission prompt): none lets a tool call run unjudged, and they are left to #3655. The whole
+rule, with what a hook that never yields does to its mod and to the mods beside it, is standing
+rule 7 in `docs/mods-design.md`.
+
 ## Sleep mode
 
 Sleep mode lets the Claude Code sessions you leave open keep working toward the goal you set each
