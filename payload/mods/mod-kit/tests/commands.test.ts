@@ -2459,8 +2459,15 @@ describe('the commands the reader missed (#3496)', () => {
       expect(cmds.map(c => c.words)).toEqual([['p1', 'x'], ['p2']])
       expect(cmds[1]?.pipedFrom).toEqual(['p1', 'x'])
     }
-    // A case clause's ;; after a pipe is no such thing.
+    // A ; with no pipe before it pipes nothing.
     expect(pipeline(`p1 ; p2`)[1]?.pipedFrom).toBe(undefined)
+    // A case clause's ;; after a pipe is no such thing: both shells refuse the line, and the ;;
+    // still ends the clause, so the next pattern is a pattern and never a command. Taken for a
+    // single ; it left `b` and `)` read as two commands.
+    for (const cmd of [`case x in a) p1 | ;; b) p2 ;; esac`, `case x in a) p1 |;; b) p2 ;; esac`]) {
+      expect(commands(cmd)).toEqual([['case', 'x', 'in'], ['p1'], ['p2'], ['esac']])
+      expect(pipeline(cmd).some(c => c.pipedFrom !== undefined)).toBe(false)
+    }
   })
 
   // After `(( 1 +`, `2 # it's` and `))`, zsh ran the two lines below and bash nothing; with `$((`
