@@ -1839,9 +1839,11 @@ LAUNCH
   # figure its record already holds for one that does not. Worked out whether or not the store is
   # on, because the check further down that names a wrong lead asks the same question the launch
   # order does and must get the same answer (L261).
-  # rank_fresh marks a figure worked out from THIS run's measurement, the only figure the cost
-  # ceiling below may judge: the rest are whatever the restored store held (claude-config#3575).
-  now_checks=(); prev_checks=(); rank_now=(); rank_share=(); rank_fresh=()
+  # wall_now is the wall clock THIS run read for the suite, and nothing else: the only figure the
+  # cost ceiling below may judge (claude-config#3575). Not rank_now, which rank_figure may keep
+  # above the reading when the record names a smaller share: right for the launch order, and not
+  # what the suite took. Empty where this run read no time.
+  now_checks=(); prev_checks=(); rank_now=(); rank_share=(); wall_now=()
   _ci=0
   for suite in ${suites[@]+"${suites[@]}"}; do
     now_checks[$_ci]="$(suite_result_checks "$(cat "$WORK/$_ci.out" 2>/dev/null)")"
@@ -1856,7 +1858,7 @@ LAUNCH
       *[!0-9:]*|:*|*:) ;;
       *)
         _rn_fig="$(rank_figure "$_rec_sec" "$_rec_share" "$_rn_sec" "${share_of[$_ci]:-}")"
-        rank_now[$_ci]="${_rn_fig%% *}"; rank_share[$_ci]="${_rn_fig#* }"; rank_fresh[$_ci]=1 ;;
+        rank_now[$_ci]="${_rn_fig%% *}"; rank_share[$_ci]="${_rn_fig#* }"; wall_now[$_ci]="$_rn_sec" ;;
     esac
     _ci=$((_ci + 1))
   done
@@ -2619,9 +2621,11 @@ fi
 # past 1,200 on 2026-11-24. A suite under half the limit has room for a runner twice as slow before it is stopped;
 # one over it is a slow runner away from the limit. tests/test-ci-workflow.sh holds the behaviour.
 #
-# What is judged is the figure this run measured, the one just written for the next deal (rank_now,
-# which in CI's equal shares is the wall clock itself), and only where this run measured one
-# (rank_fresh). Never the store the deal was made from: a pull request restores the newest record
+# What is judged is the wall clock this run read for the suite (wall_now), because the wall limit
+# stops a suite on its wall clock and on nothing else, and only where this run read one. Not the
+# figure written for the next deal: rank_figure keeps that above the reading when the record names
+# a smaller share than this run granted, so a suite that took no time could be judged at eight
+# seconds. And never the store the deal was made from: a pull request restores the newest record
 # its own branch or main saved, a pull request's cost reaches main's store only once a run of main
 # executes the suites, and a run of main whose tree a pull request already proved does not (#2690).
 # On 2026-11-25 the deal of run 45648140157 came from a run of the night before, made before two
@@ -2647,8 +2651,8 @@ if [ -n "$dealt_part" ] && [ "$ran" -gt 0 ]; then
     _ci=0
     for suite in ${suites[@]+"${suites[@]}"}; do
       _part_rel "$suite"
-      _cl_sec="${rank_now[$_ci]:-}"
-      if [ -z "${rank_fresh[$_ci]:-}" ] || [ -z "$_cl_sec" ]; then
+      _cl_sec="${wall_now[$_ci]:-}"
+      if [ -z "$_cl_sec" ]; then
         _cl_none="$_cl_none $_rel"
       else
         _cl_n=$((_cl_n + 1))

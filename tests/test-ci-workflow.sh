@@ -475,6 +475,19 @@ cost_run "$CG/hooks/run-all-tests.sh" "$CG/store" "$CG/deal2.tsv"
 { [ "$cost_rc" -eq 0 ] && grep -qE 'cost ceiling 2s .*1 of 2 suite\(s\) of this part measured' <<< "$cost_out"; } \
   && check "#3575 a part judges the cost it measured, never a stale figure in the restored store" ok \
   || check "#3575 a part judges the cost it measured, never a stale figure in the restored store" "rc=$cost_rc: $(grep -iE 'ceiling|NOT MEASURED|FAILED' <<< "$cost_out" | tr '\n' ' ')"
+# The same for a record that names the share it was measured at (#3388). A part that grants a suite
+# more slots than its record names ranks it by a figure bounded from BOTH readings, which is right
+# for the launch order and is not what the suite took: here the planted record (set by this test,
+# not measured) says 999 seconds at 1 slot, the part grants 8, and the ranked figure for a suite that
+# took no time at all is 8 seconds, four times the ceiling. The part judges the wall clock it read.
+printf '999 1 1\n' > "$CG/store/t%2Ftest-quick.sh"
+cost_out="$(HOOK_TESTS_ROOT="$CG" HOOK_TESTS_TIMINGS="$CG/store" HOOK_TESTS_FLAKY_OUTPUT= HOOK_TESTS_SLOT=0 \
+  HOOK_TESTS_JOBS=1 HOOK_TESTS_BUDGET=8 \
+  HOOK_TESTS_DEALT="$CG/deal2.tsv" HOOK_TESTS_PART=1 HOOK_TESTS_PARTS=1 bash "$CG/hooks/run-all-tests.sh" 2>&1)"; cost_rc=$?
+{ [ "$cost_rc" -eq 0 ] && ! grep -qE '^  t/test-quick\.sh took' <<< "$cost_out" \
+    && grep -qE 'cost ceiling 2s .*1 of 2 suite\(s\) of this part measured, the slowest t/test-quick\.sh at [0-2]s' <<< "$cost_out"; } \
+  && check "#3575 a part judges the wall clock it read, never a figure ranked up from an older record's share" ok \
+  || check "#3575 a part judges the wall clock it read, never a figure ranked up from an older record's share" "rc=$cost_rc: $(grep -iE 'ceiling|took|NOT MEASURED|FAILED' <<< "$cost_out" | tr '\n' ' ')"
 # The limit has ONE home. A copy of the deadline library that no longer says it leaves the part
 # unable to judge anything, and that is a red, never a quiet pass (L98).
 grep -v '^SUITE_WALL_DEFAULT=' "$DIR/../payload/hooks/lib/suite-deadline.sh" > "$CG/hooks/lib/suite-deadline.sh"
