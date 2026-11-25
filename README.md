@@ -8377,7 +8377,8 @@ and answers the second refusal's reason trimmed of its full stop; a mod sends on
 `reason`. A mod that answers a tool call itself, and so passes it to no guard beneath it, asks
 `$.modkit.screen(e)` before acting on it and answers with its refusal: mod-kit asks the secret guard
 wherever its folder sorts, answers null when the secret guard is not loaded, and refuses with the
-card when it cannot ask. `tools/check-mod-shared-parts.sh`, run by `tests/test-mods-shared-parts.sh`, fails any
+card when it cannot ask. `tools/check-mod-shared-parts.sh`, run by
+`tests/test-mods-shared-parts.sh`, fails any
 other mod that keeps its own copy, draws a result row or the band itself (any line naming
 `ToolResult` or `AbovePrompt` as a string, however the hook is written), draws a card's parts or
 left rule, retries a send, reads which files a command writes, walks up for a `.git` entry (`.git`
