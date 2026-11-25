@@ -3347,9 +3347,6 @@ test('#3401: plainLine reads a quoted or escaped grouping character as text, by 
     `${R_3401}\nbun test | grep "(x)"`,
     `${R_3401} || bun test | grep "(x)"`,
     `cd app && ${R_3401} && CI=1 bun test $FILES | grep "(x)"`,
-    // A quote that never ends: bash and zsh refuse the command it is in and run nothing of it
-    // (measured 2026-11-22, bash 3.2 and zsh 5.9, as -c text and through eval).
-    `${R_3401} && bun test | grep '(x`,
   ])
     expect({ line, plain: plain3401(line) }).toEqual({ line, plain: true })
   // What already was plain still is, with the reading or without.
@@ -3366,6 +3363,12 @@ test('#3401: plainLine still reads as grouping every character the shell, or a s
     `{ ${R_3401}; } | git fetch`,
     `${R_3401} && bun test | grep "(x)" | (cat)`,
     `${R_3401} && { bun test | grep "(x)"`,
+    // A quote that never ends. Bash and zsh refuse the command it is in and run nothing of it
+    // (measured 2026-11-22, bash 3.2 and zsh 5.9, as -c text and through eval), and until #3491 the
+    // line was read as plain on that. But a quote this reader sees no end to is most often one it
+    // has misread (#3491: `x=$'it\'s'` read that way and hid every command after it), so the reader
+    // marks the command it stands in unread, and a line holding one is not plain.
+    `${R_3401} && bun test | grep '(x`,
     // A command the shell runs to fill in a word: double quotes do not stop one.
     `${R_3401} && echo $(git fetch) | tail`,
     `${R_3401} && echo "$(git fetch)" | tail`,

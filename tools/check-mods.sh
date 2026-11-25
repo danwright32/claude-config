@@ -125,7 +125,7 @@ cc_now=""
 # carries: each Mac's record is about the build it runs. Written only by a run, never by hand, and
 # kept here rather than in a library this script would source, since the area check lets this script
 # run by its texts (payload/mods/area-check/hooks/named.ts). CHECK_MODS_LAST_PASSED names another
-# file (tests/test-mods.sh points every fixture at none), and set empty turns both the note and the
+# file (tests/mods-harness.sh points every fixture at none), and set empty turns both the note and the
 # record off.
 LAST_PASSED="${CHECK_MODS_LAST_PASSED-$HOME/.claude/state/mods-last-passed.tsv}"
 last_passed_note(){   # $1 = build installed now: one line when the mods last passed on another

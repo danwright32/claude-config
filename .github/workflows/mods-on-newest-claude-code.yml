@@ -52,7 +52,10 @@ jobs:
 
       - name: The mods' tests on it
         # Both suites run whatever the first says, and the step fails when either did. Each one's
-        # whole output is kept for the report job, which reads what failed from it.
+        # whole output is kept for the report job, which reads what failed from it. Of the mods
+        # suites, tests/test-mods.sh alone runs the installed claude (the real tree); the others,
+        # test-mods-fixtures.sh and test-mods-shared-parts.sh, run on a stub, so this build changes
+        # nothing they say (#3622).
         run: |
           set +e
           bash tests/test-mods.sh > "$RUNNER_TEMP/mods-logs/test-mods.log" 2>&1; mods_rc=$?
