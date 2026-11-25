@@ -23,9 +23,11 @@
 // per repo list of sections here would be a second mechanism deciding the same
 // headings, and the two would drift.
 //
-// Only the VISIBLE half requires prose. Most pull requests are plumbing, and
-// requiring a manager facing sentence on each one would be a cost paid on every
-// change to buy a line that gets collapsed into a single roll-up anyway.
+// Only a change a manager notices requires prose: the visible label needs the
+// Changelog sentence, and the announce label needs that sentence and the post for
+// agents as well. Most pull requests are plumbing, and requiring a manager facing
+// sentence on each one would be a cost paid on every change to buy a line that gets
+// collapsed into a single roll-up anyway.
 //
 // A fourth label, changelog/announce (claude-config#3665), is for a change whose
 // agents must or can act differently. It is a visible change that ALSO carries the

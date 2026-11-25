@@ -167,8 +167,9 @@ export const sentenceNote = (label: GateLabel, repo: string) => {
  * Why a `gh pr create` or `gh pr edit` that sets a label is refused tonight in `repo` (the repository
  * the overnight write rule resolved it to), or undefined when it may run. The command has passed
  * overnight.ts: it carries no milestone, removes no label, and no flag its action may not carry.
- * `note` is handed `sentenceNote` when the call may run and its label needs a sentence, never on a
- * refusal.
+ * `note` is handed `sentenceNote` when the call may run and the gate says its label needs writing
+ * in the description or needs Dan (a sentence, the post for agents, his approval of the wording),
+ * never on a refusal and never for a label that needs none of them.
  */
 export const judgeRequiredLabel = async (g: ModKitGh, repo: string, gate: Gate, opened: Opened, linkRepo: LinkRepo, note?: (text: string) => void): Promise<string | undefined> => {
   const flags = SETS_LABEL[g.act]

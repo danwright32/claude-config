@@ -463,9 +463,10 @@ function recordOf(entry, repoCfg, pr) {
   const parsed = entry.parseEntry({ labels: pr.labels, body: pr.body });
   if (parsed.ok) {
     // Whether managers would notice it is decided HERE, in code, from the parser's own map of the
-    // kinds, so the skill sorts a record by this field and a kind it has never heard of is still
-    // sorted (R5). A gap, a dependency update and a record judged by hand carry no such field:
-    // nothing decided it for them.
+    // kinds, so a kind the skill's text has never heard of still arrives sorted (R5). SKILL.md
+    // does not read this field yet: its label table and section 5 still sort by the label's name,
+    // and moving them onto it is claude-config#3668. A gap, a dependency update and a record
+    // judged by hand carry no such field: nothing decided it for them.
     const record = { kind: parsed.kind, line: parsed.line, managerVisible: entry.isManagerVisible(parsed.kind) };
     if (parsed.announcement !== undefined) record.announcement = parsed.announcement;
     return record;
