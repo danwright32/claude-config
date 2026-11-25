@@ -37,6 +37,12 @@ SCRIPT="$HERE/../claude-sync"
   exit 1
 }
 suite_deadline_arm || exit $?
+# The one ceiling a wait on a condition gives up at (claude-config#1620).
+. "$HERE/../payload/hooks/lib/hang-wait.sh" || {
+  echo "FAIL: $(basename "$0"): lib/hang-wait.sh is missing, so this suite's waits have no ceiling. Refusing to run."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
 
 pass=0; fail=0
 check(){   # $1 = name  $2 = a command string that succeeds when the check holds  [$3 = output to show]
@@ -102,27 +108,19 @@ no_ps_path(){ # no_ps_path <where to build it> -> the PATH
 NOPS="$(no_ps_path "$WORK/nops")"
 
 # A process whose command line really does look like a watcher, and one that is something else. Each
-# is the sleep itself, so killing it leaves nothing behind, and its own sleep bounds it besides.
-start_watcher_like(){ bash -c 'exec -a "claude-sync watch" sleep 120' >/dev/null 2>&1 < /dev/null & LAST_PID=$!; LIVE_PIDS="$LIVE_PIDS $LAST_PID"; }
-start_something_else(){ sleep 120 >/dev/null 2>&1 < /dev/null & LAST_PID=$!; LIVE_PIDS="$LIVE_PIDS $LAST_PID"; }
-end_process(){ kill -9 "$1" 2>/dev/null; wait "$1" 2>/dev/null; return 0; }
-# Bounded waits on a condition: a file gaining its Nth line, and a file gaining a line with a string.
-wait_lines(){ # wait_lines <file> <count>
-  local n=0
-  while [ "$n" -lt 300 ]; do
-    [ "$(grep -c . "$1" 2>/dev/null)" -ge "$2" ] 2>/dev/null && return 0
-    sleep 0.1; n=$((n + 1))
-  done
-  return 1
+# is the sleep itself, so killing it leaves nothing behind, and its own sleep bounds it besides. Each
+# is started by a subshell that ends at once and writes nowhere, with its pid recorded in a file, so
+# it is never this script's child (claude-config#2040).
+start_watcher_like(){
+  ( bash -c 'exec -a "claude-sync watch" sleep 120' </dev/null >/dev/null 2>&1 & printf '%s\n' "$!" > "$WORK/last.pid" ) </dev/null >/dev/null 2>&1
+  LAST_PID="$(cat "$WORK/last.pid" 2>/dev/null)"; LIVE_PIDS="$LIVE_PIDS $LAST_PID"
 }
-wait_said(){ # wait_said <file> <fixed string>
-  local n=0
-  while [ "$n" -lt 300 ]; do
-    grep -qF -- "$2" "$1" 2>/dev/null && return 0
-    sleep 0.1; n=$((n + 1))
-  done
-  return 1
+start_something_else(){
+  ( sleep 120 </dev/null >/dev/null 2>&1 & printf '%s\n' "$!" > "$WORK/last.pid" ) </dev/null >/dev/null 2>&1
+  LAST_PID="$(cat "$WORK/last.pid" 2>/dev/null)"; LIVE_PIDS="$LIVE_PIDS $LAST_PID"
 }
+# Ended, and seen to be gone before the next case reads it as gone.
+end_process(){ END_PID="$1"; kill -9 "$END_PID" 2>/dev/null; hang_wait '! kill -0 "$END_PID" 2>/dev/null'; return 0; }
 
 WH="$WORK/home"; mkdir -p "$WH/hooks"; echo '{"hooks":{}}' > "$WH/settings.json"
 WR="$WORK/repo"; git init -q -b main "$WR"
@@ -221,7 +219,7 @@ LGO2="$WORK/loop-go2"; LGO3="$WORK/loop-go3"; LEND="$WORK/loop-end"; LOUT="$WORK
 cat > "$WORK/fswatch-steps" <<FSEOF
 #!/usr/bin/env bash
 trap '' PIPE
-until_file(){ n=0; while [ ! -e "\$1" ] && [ \$n -lt 300 ]; do sleep 0.1; n=\$((n + 1)); done; }
+until_file(){ t0=\$SECONDS; while [ ! -e "\$1" ] && [ \$((SECONDS - t0)) -lt ${HANG_S:-300} ]; do sleep 0.1; done; }
 echo one
 until_file "$LGO2"; echo two
 until_file "$LGO3"; echo three
@@ -232,22 +230,24 @@ rm -f "$WPID"; : > "$HITS"
 PATH="$BADPS" CLAUDE_HOME="$WH" SYNC_REPO="$WR" SYNC_FSWATCH="$WORK/fswatch-steps" SYNC_WATCH_PID_FILE="$WPID" \
   SYNC_WATCH_SEND="printf 'x\n' >> '$HITS'" bash "$SCRIPT" watch > "$LOUT" 2>&1 &
 L_ROOT=$!; LIVE_PIDS="$LIVE_PIDS $L_ROOT"
-wait_lines "$HITS" 1
+# Nothing is printed between this watcher's start and the wait that reaps it but check's own lines,
+# and it is this script's child so that the wait can tell when it has ended (claude-config#2040).
+hang_wait '[ -s "$HITS" ]'
 check "(fixture) a watcher whose own record names it sends, whatever ps does" \
   "[ \"\$(grep -c . '$HITS')\" = 1 ] && [ \"\$(head -1 '$WPID' 2>/dev/null)\" = '$L_ROOT' ]" "$(cat "$LOUT" 2>&1)"
 start_something_else; L_OTHER="$LAST_PID"
 printf '%s\n' "$L_OTHER" > "$WPID"
 touch "$LGO2"
-wait_said "$LOUT" 'could not be read'
+hang_wait 'grep -qF "could not be read" "$LOUT" 2>/dev/null'
 check "a watcher whose record names a process it cannot read sends nothing for that change" \
   "[ \"\$(grep -c . '$HITS')\" = 1 ]" "$(cat "$LOUT" 2>&1)"
 check "and says so, with the command that failed and how it ended" \
   "line_has \"\$(cat '$LOUT')\" 'NOT sent' 'could not be read' \"ps -o command= -p $L_OTHER\" 'exited 1'" "$(cat "$LOUT" 2>&1)"
-check "and does not step down, which only another live watcher is a reason for" \
-  "kill -0 $L_ROOT 2>/dev/null && ! grep -q 'stepped down' '$LOUT'" "$(cat "$LOUT" 2>&1)"
+check "and does not step down, which only another live watcher is a reason for: it is still running" \
+  "kill -0 $L_ROOT 2>/dev/null" "$(cat "$LOUT" 2>&1)"
 printf '%s\n' "$L_ROOT" > "$WPID"
 touch "$LGO3"
-wait_lines "$HITS" 2
+hang_wait '[ "$(grep -c . "$HITS" 2>/dev/null)" -ge 2 ] 2>/dev/null'
 check "and sends again once its own record is back" "[ \"\$(grep -c . '$HITS')\" = 2 ]" "$(cat "$LOUT" 2>&1)"
 touch "$LEND"
 wait "$L_ROOT" 2>/dev/null
