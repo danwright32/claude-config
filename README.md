@@ -10745,10 +10745,11 @@ Two things are deliberately not carried:
   `tools/check-mods.sh` fails a mod without one, because the copy the engine would generate is
   otherwise sent up to main as a local edit (two arrived that way on 2026-10-04, #638).
 
-`tests/test-mods.sh` runs `tools/check-mods.sh` over `payload/mods`, which validates every mod and
-runs its own `*.test.ts` and `*.test.tsx` with `claude plugin test`. It runs in every full suite run
-on a Mac and in the pull request checks, which install Claude Code for it (#3297): no push gate runs
-it. Where no `claude` command exists it reports UNMEASURED rather than a pass, and the same, with its
+The real tree's parts (`tests/test-mods.sh` and its two siblings, below) run `tools/check-mods.sh`
+over `payload/mods`, which validates every mod and runs its own `*.test.ts` and `*.test.tsx` with
+`claude plugin test`. They run in every full suite run on a Mac and in the pull request checks, which
+install Claude Code for them (#3297): no push gate runs them. Where no `claude` command exists each
+reports UNMEASURED rather than a pass, and the same, with its
 own exit code and the engine's words, when `claude` answers that hooks modules are turned off in this
 process (its cached rollout switch saved off, or a setting such as `disableAllHooks`), which no test
 can set; it never counts that as every mod failing (#740). A failure carrying no verdict line names

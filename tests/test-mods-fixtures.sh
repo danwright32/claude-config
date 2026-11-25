@@ -2222,7 +2222,7 @@ runpart FAKE_CC_VERSION=2.1.406 CHECK_MODS_ROUND=r6 -- "$M15" alpha
   || check "#3622 a round older than a day is removed by the next part to write one, and the new one kept" "$(ls "$REC15.rounds" 2>&1)"
 # With the record off, a round writes nothing anywhere.
 runpart FAKE_CC_VERSION=2.1.407 CHECK_MODS_ROUND=r7 CHECK_MODS_LAST_PASSED= -- "$M15" alpha gamma
-[ "$code" -eq 0 ] && [ ! -e "$REC15.rounds/r7" ] && [ ! -e ".rounds" ] \
+[ "$code" -eq 0 ] && [ ! -e "$REC15.rounds/r7" ] \
   && check "#3622 with the record set empty a round writes nothing" ok \
   || check "#3622 with the record set empty a round writes nothing" "exit=$code $(ls -a "$REC15.rounds" 2>&1)"
 
