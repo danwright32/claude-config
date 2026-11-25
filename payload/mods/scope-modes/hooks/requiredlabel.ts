@@ -18,7 +18,8 @@ import { LABEL_REFUSAL, SETS_LABEL } from './overnight.ts'
 // - for `gh pr edit`, the command names one pull request by its number or its own link, and the
 //   session's record of the pull requests it opened holds that repository and number.
 //
-// A label the gate says needs a sentence a manager reads (today changelog/visible) is allowed like
+// A label the gate says needs a sentence a manager reads (changelog/visible, and changelog/announce
+// where a repository uses it) is allowed like
 // the others: Dan's decision of 2026-11-22, by picker, "Also allow changelog/visible", knowing a
 // session can then merge overnight a pull request whose changelog sentence he has not read. The gate
 // still refuses the merge of a pull request carrying it whose description has no such sentence, so

@@ -197,9 +197,10 @@ run "a detached headless run"        skip 'gh pr merge 42' 'CLAUDE_DETACHED_RUN=
 # declined five times, every one correctly judged internal. He was offered turning it
 # off and chose to narrow it instead.
 #
-# changelog/visible means exactly what the quiz's own user facing gate means, it is set
-# by a person at pull request time, and PET and Slate already enforce it at merge. So
-# the label narrows what reaches Claude. It does NOT replace the judgement: a mixed
+# A label of a kind a manager would notice (changelog/visible, and since claude-config#3665
+# changelog/announce, further down) means exactly what the quiz's own user facing gate
+# means, it is set by a person at pull request time, and PET and Slate already enforce it
+# at merge. So the label narrows what reaches Claude. It does NOT replace the judgement: a mixed
 # pull request can carry changelog/technical while touching something visible, so the
 # instruction keeps its own gate and the cases further down still pin it.
 record '[{"name":"changelog/technical"}]'
@@ -208,7 +209,8 @@ record '[{"name":"changelog/none"}]'
 run "a none record does not quiz"       skip 'gh pr merge 42'
 record '[{"name":"changelog/visible"}]'
 run "a visible record quizzes"          fire 'gh pr merge 42'
-# Mixed labels: visible wins, because the quiz is owed wherever any part of it shows.
+# Mixed labels: a kind a manager would notice wins over a quiet one beside it, because the
+# quiz is owed wherever any part of it shows.
 record '[{"name":"changelog/technical"},{"name":"changelog/visible"}]'
 run "visible beside technical quizzes"  fire 'gh pr merge 42'
 # Case and stray whitespace are the label reader's business, not this hook's, and the

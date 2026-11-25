@@ -84,7 +84,7 @@ function refusal(name, labels, body, expectCode) {
 
 refusal('no changelog label at all', ['priority-p2'], '## Changelog\nA line.', 'NO_LABEL');
 refusal('two changelog labels', ['changelog/visible', 'changelog/none'], '## Changelog\nA line.', 'MANY_LABELS');
-refusal('a label outside the three', ['changelog/goals'], '## Changelog\nA line.', 'UNKNOWN_KIND');
+refusal('a label outside the kinds', ['changelog/goals'], '## Changelog\nA line.', 'UNKNOWN_KIND');
 refusal('visible with no block in the body', ['changelog/visible'], 'Prose with no heading.', 'NO_BLOCK');
 refusal('a heading with nothing under it', ['changelog/visible'], '## Changelog\n\n## Testing\nx', 'EMPTY_BLOCK');
 refusal('a block saying None while labelled visible', ['changelog/visible'], '## Changelog\nNone\n', 'BLOCK_SAYS_NONE');
