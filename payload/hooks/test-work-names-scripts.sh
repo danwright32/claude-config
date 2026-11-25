@@ -510,7 +510,7 @@ check "a line naming another guard folder gets the newer line after it, and is k
 UNREAD="$ENVDIR/unreadable.sh"
 printf '%s\n' "$env_line" > "$UNREAD"; chmod 200 "$UNREAD"
 if [ -r "$UNREAD" ]; then
-  echo "UNMEASURED: a file set to write only is still readable here (running as root?), so whether the hook writes the line to a file it cannot read is not measured."
+  echo "SUITE-PART-UNMEASURED a file set to write only is still readable here (running as root?), so whether the hook writes the line to a file it cannot read is not measured."
 else
   start_hook "$UNREAD"; chmod 600 "$UNREAD"
   n="$(line_count "$UNREAD")"
@@ -521,7 +521,7 @@ fi
 # Where the file cannot be written and the line is not in it, the hook says so, as it always has.
 NOWRITE="$ENVDIR/readonly.sh"; : > "$NOWRITE"; chmod 400 "$NOWRITE"
 if [ -w "$NOWRITE" ]; then
-  echo "UNMEASURED: a file set to read only is still writable here (running as root?), so what the hook says when it cannot write is not measured."
+  echo "SUITE-PART-UNMEASURED a file set to read only is still writable here (running as root?), so what the hook says when it cannot write is not measured."
 else
   start_hook "$NOWRITE"
   check "a file that cannot be written, without the line, has the hook say the guard is not on PATH: $out" has "$out" "could not write"
