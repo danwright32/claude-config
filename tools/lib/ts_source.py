@@ -2,7 +2,7 @@
 """TypeScript and TSX source read the way the mod scans need it: which characters are code, which
 are a string, a regex literal, JSX text or a comment. One reader for every scan that has to tell a
 comment from code (tools/check-mod-shared-parts.sh, tools/check-mod-dependencies.sh,
-tools/check-mod-noun-waits.sh, tools/check-mod-tiers.sh and the contract check in tests/test-mods.sh), rather than a stripper
+tools/check-mod-noun-waits.sh, tools/check-mod-tiers.sh and the contract check in tests/test-mods-fixtures.sh), rather than a stripper
 per script that each misreads something of its own (L613). The one it replaces took a regex literal holding // or /* for a comment, and JSX
 text's // or apostrophe for a comment or a quote (#735); the shared parts scan dropped any line
 that merely started like a comment (#732).

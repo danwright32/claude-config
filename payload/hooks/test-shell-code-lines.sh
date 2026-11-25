@@ -278,7 +278,9 @@ mk h-split      "cat ${_H}EOF" 'body' 'E\' 'OF' 'echo after'
 mk h-rest       "cat ${_H}E" 'a\' 'E' '# $(echo RAN1)' "x='" '$(echo RAN2)' "'" 'echo end'
 mk h-tabs       "cat ${_H}-E" "${TAB}a\\" "${TAB}E" '# c' 'echo end'
 mk h-marker     "cat ${_H}E" 'body' 'E\' 'E' '# c' 'echo end'
-# Controls, closed at the marker in bash and zsh, so the comment after is a comment.
+# Closed at the marker in bash and zsh. In h-bare and h-tabbare a backslash joins the closing line to
+# the line before, where another shell reads on (lib/heredoc-closes.json), so those two are named
+# and the comment after them is not left out (#3592); after the rest the comment is a comment.
 mk h-bare       "cat ${_H}E" 'body' '\' 'E' '# c' 'echo after'
 mk h-two        "cat ${_H}E" 'a\\' 'E' '# c' 'echo after'
 mk h-quoted     "cat ${_H}'E'" 'a\' 'E' '# c' 'echo after'
@@ -337,14 +339,213 @@ eq "#3492 nor counted as the heredoc's body" "2" "$(reading_of h-rest body)"
 eq "#3492 the same under the tab stripping form" "1 2 4 5 6" "$(reading_of h-tabs code)"
 eq "#3492 and where the body line before is the marker and a backslash" "code heredoc heredoc end code code code" "$(reading_of h-marker kinds)"
 eq "#3492 none of that rest dropped either" "1 2 3 5 6 7" "$(reading_of h-marker code)"
-eq "#3492 the control: a backslash only line then the marker closes" "1 2 3 6 7" "$(reading_of h-bare code)"
+eq "#3492 a backslash only line then the marker closes, as bash and zsh read it" "code heredoc heredoc end code code code" "$(reading_of h-bare kinds)"
+eq "#3592 and another shell reads on there, so the comment after it is not left out" "1 2 3 5 6 7" "$(reading_of h-bare code)"
 eq "#3492 the control: two backslashes join nothing" "1 2 5 6" "$(reading_of h-two code)"
 eq "#3492 the control: a quoted marker's body joins nothing" "1 2 5 6" "$(reading_of h-quoted code)"
 eq "#3492 the control: a backslash in the middle of the body" "1 2 3 6 7" "$(reading_of h-middle code)"
-eq "#3492 the control: tabs, a backslash only line, the marker: closed, as bash reads it" "1 2 3 6 7" "$(reading_of h-tabbare code)"
+eq "#3492 tabs, a backslash only line, the marker: closed, as bash reads it" "code heredoc heredoc end code code code" "$(reading_of h-tabbare kinds)"
+eq "#3592 and another shell reads on there, so the comment after it is not left out" "1 2 3 5 6 7" "$(reading_of h-tabbare code)"
 eq "#3492 the control: inside a substitution with no real end, closed at the joined marker as bash 3.2 runs it" \
   "code heredoc end code code code" "$(reading_of h-inside kinds)"
 eq "#3492 the control: between a joined marker and the real end a # line is body, dropped as in any body" "1 2 3 6 7" "$(reading_of h-between code)"
+
+# ---- where a heredoc ends, against the shells (claude-config#3592) ----
+# The reader ends a heredoc where bash and zsh end it (#3500), and that left three kinds of heredoc
+# read with nothing said: one whose opener is joined to the next line by a backslash between its <<
+# and the end of its marker, so the marker is not the word on that line (the reader took `<<E` and a
+# backslash for a marker no line is, and read the rest of the file as the body, the code after the
+# real end included); one the shells do not end alike (a line that is only a backslash and then the
+# marker, a marker split over two lines, a marker after a line that starts as it does and ends in
+# backslashes: bash and zsh end it where dash or ksh read on, or the reverse); and one no shell ends
+# where the reader does (a marker joined to the line before, with no marker after it).
+#
+# unsure_heredocs(text) names each such heredoc by the line it opens on, and code_lines leaves out
+# nothing after one. The shapes are lib/heredoc-closes.json, the one list this suite and the mods'
+# reader's suite both run. Every row is run here through each shell the list was measured with, so
+# the list cannot say what the shells do not do, and then asked of the reader: a probe line is read
+# as every shell reads it, or its heredoc is named and the line is not left out.
+python3 -I -B - "$LIB" "$LIB/heredoc-closes.json" "$W" > "$W/closes.tsv" <<'PY'
+import importlib.util
+import json
+import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+
+lib, list_path, scratch = sys.argv[1:4]
+sys.dont_write_bytecode = True
+spec = importlib.util.spec_from_file_location("shell_code_lines", os.path.join(lib, "shell_code_lines.py"))
+scl = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(scl)
+with open(list_path) as f:
+    doc = json.load(f)
+
+
+def say(ok, what, why=""):
+    print("ok\t" + what if ok else "FAIL\t%s\t%s" % (what, why))
+
+
+# Where a shell is looked for and what it is run with: one path for both, so a shell that is only
+# on the caller's own path is said to be absent, never found and then not started.
+RUN_PATH = "/usr/bin:/bin"
+
+
+def run(argv, text):
+    """What the text prints, run by argv as a -c text; None when it is still running at 10 seconds.
+    The shell is started in a group of its own and the whole group is stopped with it."""
+    p = subprocess.Popen(argv + ["-c", text], cwd=scratch, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                         stderr=subprocess.DEVNULL, start_new_session=True,
+                         env={"PATH": RUN_PATH, "HOME": scratch})
+    try:
+        out, _ = p.communicate(timeout=10)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        p.communicate()
+        return None
+    return out.decode("utf-8", "replace")
+
+
+def classify(text, out):
+    """What a shell did with each probe line: ran it ("code") or kept it as text ("body")."""
+    got = {}
+    for n, line in enumerate(text.split("\n"), 1):
+        tag = "P%02d" % n
+        if "echo " + tag not in line:
+            continue
+        if out is None:
+            got[n] = "hung"
+        elif re.search("echo " + tag, out):
+            got[n] = "body"
+        elif re.search("(?m)^" + tag, out):
+            got[n] = "code"
+        else:
+            got[n] = "neither"
+    return got
+
+
+# A shell is held to the list only where it is the one the list was measured with (L411).
+measured = []
+for name, shell in doc["shells"].items():
+    if not shutil.which(shell["run"][0], path=RUN_PATH):
+        print("unmeasured\t%s\tthere is no %s in %s on this machine" % (name, shell["run"][0], RUN_PATH))
+    elif os.uname().sysname != doc["os"]:
+        print("unmeasured\t%s\tthe list was measured on %s and this is %s" % (name, doc["os"], os.uname().sysname))
+    elif (run(shell["run"], shell["probe"]) or "").strip() != shell["prints"]:
+        print("unmeasured\t%s\tit is not the %s the list was measured with" % (name, shell["run"][0]))
+    else:
+        measured.append(name)
+print("shells\t" + ",".join(measured))
+
+can_name = hasattr(scl, "unsure_heredocs")
+say(can_name, "#3592 the reader can say which heredocs it is not sure of", "shell_code_lines has no unsure_heredocs")
+for row in doc["rows"]:
+    name, text = row["name"], row["text"]
+    answers = {int(n): v for n, v in row["lines"].items()}
+    for shell in measured:
+        want = {n: v if isinstance(v, str) else next(k for k, who in v.items() if shell in who) for n, v in answers.items()}
+        got = classify(text, run(doc["shells"][shell]["run"], text))
+        say(got == want, "#3592 the list says what %s does: %s" % (shell, name), "the list says %r and %s did %r" % (want, shell, got))
+    marks = scl.unsure_heredocs(text) if can_name else []
+    code = {n for n, _ in scl.code_lines(text)}
+    body = scl.heredoc_body_lines(text)
+    want_named = row["named"]["scanner"]
+    say(bool(marks) == want_named, "#3592 the reader %s the heredoc: %s" % ("names" if want_named else "does not name", name),
+        "it named %r" % (marks,))
+    for n, v in sorted(answers.items()):
+        mine = "body" if n in body else "code" if n in code else "left out"
+        if marks:
+            say(n in code, "#3592 after a heredoc it names the reader leaves out no line: %s, line %d" % (name, n), "line %d was %s" % (n, mine))
+        else:
+            say(mine == v, "#3592 a line of a heredoc it does not name is read as every shell reads it: %s, line %d" % (name, n),
+                "the reader read %s, and the shells: %r" % (mine, v))
+
+# The heredoc is named by the line it opens on, once, whichever of its lines gave it away.
+if can_name:
+    marks = scl.unsure_heredocs("echo a\ncat <<E\nb\\\nE\necho c\n")
+    say([m[0] for m in marks] == [2] and all(isinstance(m[1], str) and m[1] for m in marks),
+        "#3592 a heredoc is named by the line it opens on, with why", "got %r" % (marks,))
+    marks = scl.unsure_heredocs("cat <<E\\\nx\nbody\nEx\necho c\n")
+    say([m[0] for m in marks] == [1], "#3592 an opener joined to the next line is named by its own line", "got %r" % (marks,))
+    marks = scl.unsure_heredocs("x=$((1<<\\\n2))\necho $x\n")
+    say(marks == [], "#3592 the control: a shift in arithmetic joined to the next line opens nothing and names nothing", "got %r" % (marks,))
+    marks = scl.unsure_heredocs("cat <<E | \\\ncat\nbody\nE\necho c\n")
+    say(marks == [], "#3592 the control: a backslash later on the opener's line joins the command, not the marker", "got %r" % (marks,))
+PY
+closes_rc=$?
+eq "#3592 the comparison with the shells ran to its end" "0" "$closes_rc"
+closes_checks=0
+while IFS="$TAB" read -r verdict what why; do
+  case "$verdict" in
+    ok) pass=$((pass + 1)); closes_checks=$((closes_checks + 1)) ;;
+    FAIL) fail=$((fail + 1)); closes_checks=$((closes_checks + 1)); echo "FAIL: $what ($why)" ;;
+    unmeasured) echo "SUITE-PART-UNMEASURED what $what does with each heredoc of #3592, because $why" ;;
+    shells) echo "the shells held to the list of #3592: ${what:-none}" ;;
+    *) fail=$((fail + 1)); echo "FAIL: #3592 a row of the comparison is one this suite reads (got: $verdict)" ;;
+  esac
+done < "$W/closes.tsv"
+# Each row makes one check of the reader's naming and one for each probe line, so a list that was
+# not read, or a comparison that stopped early, is caught by its count (L288).
+if [ "$closes_checks" -ge 120 ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: #3592 the comparison checked its rows (only $closes_checks checks, where the list makes well over 120)"; fi
+
+# Every scan that reads through this reader reads the repository's own shell files, so one check
+# here stands for them all: no tracked shell file holds a heredoc the reader is not sure of. A file
+# that gains one fails this suite, where each scan alone would have read on (L621).
+TREE_ROOT="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
+if [ -z "$TREE_ROOT" ] || [ ! -d "$TREE_ROOT" ]; then
+  echo "SUITE-PART-UNMEASURED whether a shell file of the repository holds a heredoc the reader is not sure of, because $DIR/.. is not the payload of a claude-config checkout"
+else
+  # The sync tool, a shell file with no extension, is added by name in the reading below: named
+  # here as a word after `bash`, the Slack drafts gate takes it for a script this suite may run.
+  bash "$DIR/lib/repo-files.sh" "$TREE_ROOT" '*.sh' > "$W/tree-files" 2>/dev/null
+  python3 -I -B - "$LIB" "$TREE_ROOT" "$W/tree-files" > "$W/tree-named" <<'PY'
+import os
+import sys
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[1])
+import shell_code_lines as scl
+read = 0
+for rel in open(sys.argv[3]).read().split("\n") + ["claude-sync"]:
+    path = os.path.join(sys.argv[2], rel)
+    if not rel or not os.path.isfile(path):
+        continue
+    try:
+        text = open(path, encoding="utf-8", errors="replace").read()
+    except OSError:
+        continue
+    read += 1
+    for line, why in (scl.unsure_heredocs(text) if hasattr(scl, "unsure_heredocs") else [(0, "the reader cannot say")]):
+        print("%s:%d: %s" % (rel, line, why))
+print("read %d" % read)
+PY
+  tree_read="$(sed -n 's/^read //p' "$W/tree-named")"
+  if [ "${tree_read:-0}" -ge 300 ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: #3592 the repository's shell files were read (only '${tree_read:-none}' of them, where it ships hundreds)"; fi
+  # The first twenty, each read from a file: a pipe into a reader that stops early can report a
+  # failure that never happened under pipefail (test-pipefail-shortcircuit.sh).
+  grep -v '^read ' "$W/tree-named" > "$W/tree-found" || true
+  eq "#3592 no shell file of the repository holds a heredoc the reader is not sure of" "" "$(sed -n '1,20p' "$W/tree-found")"
+  # The mods' reader is held to the same list, through a copy: a mod's tests can import only the
+  # mod's own files. The copy is the list's text after one line, so it cannot come to say otherwise.
+  # A copy that is not there and a copy that differs are said apart (L11).
+  COPY="$TREE_ROOT/payload/mods/mod-kit/tests/heredoc-closes.ts"
+  if [ ! -f "$COPY" ]; then
+    fail=$((fail + 1))
+    echo "FAIL: #3592 payload/mods/mod-kit/tests/heredoc-closes.ts is not there, so the mods' suite has no list to run: write it again, its header and then the text of payload/hooks/lib/heredoc-closes.json"
+  else
+    sed '1,/^export default$/d' "$COPY" > "$W/copy-text"
+    if cmp -s "$W/copy-text" "$LIB/heredoc-closes.json"; then
+      pass=$((pass + 1))
+    else
+      fail=$((fail + 1))
+      echo "FAIL: #3592 payload/mods/mod-kit/tests/heredoc-closes.ts no longer holds the text of payload/hooks/lib/heredoc-closes.json after its 'export default' line: put the list's text there again, whole"
+    fi
+  fi
+fi
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
