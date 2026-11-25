@@ -507,6 +507,15 @@ class EgressTests(RunFixture):
         self.assertFalse(os.path.exists(beat_program), "the beat program's copy was left in the receipt folder")
         self.assertEqual(wait_not_running(beat_program), [], "the beat program outlived the run")
 
+    def assert_the_real_beat_program_ended_well(self, rid):
+        """The real ad hoc signed copy of bash, under the real sandbox, ran until its input closed
+        and exited 0, and the monitor read that. A bad ending makes a run unmeasured, so this is what
+        shows the rule does not fire on the program as it really is (L147)."""
+        with open(os.path.join(self.home, "receipts", rid, "egress.jsonl")) as f:
+            events = [json.loads(line) for line in f]
+        ended = [(e["exit"], e["early"], e["killed"]) for e in events if e["event"] == "beat-ended"]
+        self.assertEqual(ended, [(0, False, False)], events)
+
     def merge_verdict(self, rid, sha):
         """The merge check's judgment in block mode, over this run's real receipt, through the same
         readers the hook uses (verification.py)."""
@@ -536,6 +545,7 @@ class EgressTests(RunFixture):
         self.assertEqual(egress["destinations"], [], egress)
         self.assertEqual(egress["allowed_hosts"], ["127.0.0.1", "localhost", "::1"])
         self.assert_no_beat_program_left(rid)
+        self.assert_the_real_beat_program_ended_well(rid)
         if self.withheld(egress):
             return self.assert_unmeasured_because_reports_were_withheld(rid, sha, egress)
         self.assertEqual(egress["verdict"], "clean", egress)

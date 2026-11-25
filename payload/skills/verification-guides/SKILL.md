@@ -151,11 +151,14 @@ program make a test connection of the canary's kind before the first canary, abo
 for the whole run, and once more after serve is gone; the copy is removed when the run stops.
 The receipt's `egress` records what was asked for and what came back: `beats` (`fired`,
 `reported`, the first 20 `unreported`, and `failure` when the beat program could not be made or
-run), `canaries` (`fired`, `seen`) and `attach` (the canaries that show the stream is attached
-before anything is counted). One test connection or canary that was never reported makes the run
-`unmeasured`, saying that this Mac did not report every connection it was asked to, and so does a
-beat program that could not be made. A connection that was seen outside the allowed hosts still
-reads `not-clean`, with the gap said beside it.
+run, or ended badly), `canaries` (`fired`, `seen`) and `attach` (the canaries that show the stream
+is attached before anything is counted). One test connection or canary that was never reported
+makes the run `unmeasured`, saying that this Mac did not report every connection it was asked to,
+and so does a beat program that could not be made or started, or that ended badly: the monitor
+reads its exit status when it stops, and one that had ended by itself before the run was over,
+that exited non zero, or that had to be killed makes the run `unmeasured` with that reason
+(`egress.jsonl` records every ending as `beat-ended`). A connection that was seen outside the
+allowed hosts still reads `not-clean`, with the gap said beside it.
 
 So on a Mac that withholds reports this check cannot be relied on for a clean reading, and in
 `block` mode a pull request that needs an area's run cannot merge on a receipt from that Mac,

@@ -306,6 +306,122 @@ class BeatProgram(unittest.TestCase):
             self.m._beat()
         self.assertEqual(len(self.m.beats), 1, "a connection never made must not be counted as fired")
 
+    # How the beat program ENDED is read too (the CI red on pull request 3593: its exit status was
+    # waited for and thrown away). Each stand in below made its one test connection and had it
+    # reported, so before the status was read every one of these runs read clean.
+
+    def events(self):
+        with open(self.m.events_path) as f:
+            return [json.loads(line) for line in f]
+
+    def stopped_and_judged(self):
+        """Report the one test connection made, stop the beat program and judge the run."""
+        self.m._beat_reported(egress.BEAT_PORT + 1, 1)
+        self.m._stop_beats()
+        return self.m.judge()
+
+    def test_a_program_that_ends_when_told_reads_clean_and_its_exit_is_recorded(self):
+        self.start()
+        out = self.stopped_and_judged()
+        self.assertIsNone(self.m.beat_failure)
+        self.assertEqual(out["verdict"], "clean", out)
+        ended = [e for e in self.events() if e["event"] == "beat-ended"]
+        self.assertEqual([(e["exit"], e["early"], e["killed"]) for e in ended], [(0, False, False)])
+
+    def test_a_program_that_exits_non_zero_when_told_to_end_is_unmeasured(self):
+        self.start(SH_LOOP_OK + "; exit 5")
+        self.assertIsNone(self.m.beat_failure)
+        out = self.stopped_and_judged()
+        self.assertIn("exit 5", self.m.beat_failure or "")
+        self.assertEqual(out["verdict"], "unmeasured", out)
+        self.assertIn("could not check that this Mac reports every connection", out["why"])
+        self.assertIn("exit 5", out["why"])
+        self.assertEqual(out["beats"]["failure"], self.m.beat_failure)
+        events = self.events()
+        self.assertEqual([e["why"] for e in events if e["event"] == "beat-failed"], [self.m.beat_failure])
+        self.assertEqual([(e["exit"], e["early"], e["killed"]) for e in events if e["event"] == "beat-ended"],
+                         [(5, False, False)])
+
+    def test_a_program_that_ended_by_itself_before_the_run_did_is_unmeasured(self):
+        # It answered for its one test connection and then left, with a status of 0: nothing made a
+        # test connection for the rest of the run, and no later one was asked for that would say so.
+        self.start('read -r n; echo "$n 0"')
+        proc = self.m.beat_proc
+        if proc is not None:  # None when the start saw it gone already, which is the same failure
+            proc.wait(timeout=20)
+        out = self.stopped_and_judged()
+        self.assertIn("ended by itself (exit 0)", self.m.beat_failure or "")
+        self.assertEqual(out["verdict"], "unmeasured", out)
+        self.assertIn("could not check that this Mac reports every connection", out["why"])
+
+    def test_a_program_gone_right_after_its_first_connection_fails_the_start(self):
+        real = self.m._beat
+
+        def beat_and_wait():
+            real()
+            self.m.beat_proc.wait(timeout=20)
+
+        with mock.patch.object(self.m, "_beat", side_effect=beat_and_wait):
+            self.start('read -r n; echo "$n 0"; exit 4')
+        self.assertIn("ended by itself (exit 4) right after its first test connection", self.m.beat_failure or "")
+        self.assertIsNone(self.m.beat_proc)
+        self.assertEqual(self.m.judge()["verdict"], "unmeasured")
+
+    def test_a_program_that_dies_between_connections_names_its_exit_status(self):
+        self.start('read -r n; echo "$n 0"; read -r n; exit 3')
+        self.assertIsNone(self.m.beat_failure)
+        with self.assertRaises(egress.Unavailable) as raised:
+            self.m._beat()
+        self.assertIn("exit 3", str(raised.exception))
+        self.assertEqual(len(self.m.beats), 1, "a connection never made must not be counted as fired")
+
+    def test_a_program_that_exits_at_once_is_a_failure_that_names_its_exit_status(self):
+        self.start("exit 3")
+        self.assertIn("exit 3", self.m.beat_failure or "")
+        self.assertEqual(self.m.beats, [])
+        out = self.m.judge()
+        self.assertEqual(out["verdict"], "unmeasured", out)
+        self.assertIn("could not check that this Mac reports every connection", out["why"])
+
+    def test_a_program_that_will_not_end_is_killed_and_the_run_is_unmeasured(self):
+        self.start(SH_LOOP_OK + "; exec sleep 600")
+        proc = self.m.beat_proc
+        with mock.patch.object(egress, "BEAT_STOP_S", 0.3):
+            out = self.stopped_and_judged()
+        self.assertEqual(proc.poll(), -egress.signal.SIGKILL, "the beat program was left running")
+        self.assertIn("did not end within 0.3s of its input closing", self.m.beat_failure or "")
+        self.assertEqual(out["verdict"], "unmeasured", out)
+        self.assertIn("could not check that this Mac reports every connection", out["why"])
+
+    def test_a_program_that_cannot_be_started_is_unmeasured(self):
+        def made():
+            with open(self.m.beat_program, "w") as f:
+                f.write("stand in\n")
+
+        with mock.patch.object(self.m, "_make_beat_program", side_effect=made), \
+                mock.patch.object(self.m, "_beat_argv", return_value=["/nonexistent/egress-beat"]):
+            self.m._start_beats()
+        self.assertIn("the beat program could not be started", self.m.beat_failure or "")
+        self.assertIsNone(self.m.beat_proc)
+        self.assertEqual(self.m.beats, [])
+        self.assertFalse(os.path.exists(self.m.beat_program), "a copy that is no use must not be left behind")
+        out = self.m.judge()
+        self.assertEqual(out["verdict"], "unmeasured", out)
+        self.assertIn("could not check that this Mac reports every connection", out["why"])
+
+    def test_a_seen_outside_connection_stays_not_clean_when_the_program_ended_badly(self):
+        self.start(SH_LOOP_OK + "; exit 5")
+        self.m._beat_reported(egress.BEAT_PORT + 1, 1)
+        self.m._stop_beats()
+        self.m.proc = FakeStream([report(700, 443, self.m.tag)])
+        with mock.patch.object(self.m, "_name", side_effect=lambda pid, port: (["203.0.113.7"], None)):
+            self.m._read()
+        out = self.m.judge()
+        self.assertEqual(out["verdict"], "not-clean", out)
+        self.assertIn("203.0.113.7 port 443", out["why"])
+        self.assertIn("there may have been more", out["why"])
+        self.assertIn("exit 5", out["why"])
+
     def test_a_copy_that_cannot_be_signed_is_a_failure_and_never_raises(self):
         refused = egress.subprocess.CompletedProcess(["codesign"], 1, "", "egress-beat: no identity found")
         with mock.patch.object(egress.subprocess, "run", return_value=refused):

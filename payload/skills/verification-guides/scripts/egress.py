@@ -43,8 +43,10 @@ How, and why this way (measured on macOS 26 without a password, 2026-10-23; see 
     Any test connection or canary never reported makes the run `unmeasured`, never `clean`: this
     Mac did not report every connection it was asked to, so finding nothing proves nothing. A
     connection that WAS seen outside the allowed hosts still reads `not-clean`. A beat program
-    that cannot be made or run is `unmeasured` too, with the reason. The rule rests on no count,
-    no order and no window length: one missing report is enough.
+    that cannot be made or run is `unmeasured` too, with the reason, and so is one that ended
+    badly: its exit status is read when it stops, and a program that had ended by itself before
+    the run was over, that exited non zero or that had to be killed is the reason. The rule rests
+    on no count, no order and no window length: one missing report is enough.
   * So that a report missed because the stream had not attached yet is never read as a withheld
     one (1 of 27 starts lost its first canary that way), the stream is first shown attached by an
     ATTACH canary: /bin/bash itself, signed by Apple, fired until one is reported. Unseen attach
@@ -99,6 +101,7 @@ ATTACH = "{ :; } 3<>/dev/udp/198.51.100.1/9"  # bash connects a UDP socket, whic
 BEAT_EVERY_S = 1.0  # the heartbeat: one test connection about this often for the whole run
 BEAT_RUN_MAX_S = 10  # how long the beat program may take to answer for one test connection
 BEAT_STOP_S = 5  # how long the beat program may take to end once its input is closed
+BEAT_EXIT_S = 1.0  # how long a beat program whose pipe has closed is waited for, to say how it ended
 SETTLE_S = 5.0  # how long a report still outstanding at the end of a run is waited for
 BEAT_PORT = 20000  # test connection n goes to port BEAT_PORT + n, so every report names its connection
 BEAT_PORTS = 40000  # and the ports go round again after this many
@@ -141,6 +144,11 @@ def profile_text(tag):
 
 def beat_program_path(rdir):
     return os.path.join(rdir, "egress-beat")
+
+
+def exit_words(status):
+    """A process's exit status in words: `exit 3`, or `killed by signal 9`."""
+    return "exit %d" % status if status >= 0 else "killed by signal %d" % -status
 
 
 def remove_beat_program(rdir):
@@ -226,7 +234,7 @@ class Monitor:
         self.beat_stop = threading.Event()
         self.beat_lock = threading.Lock()  # one test connection at a time
         self.beats = []  # every test connection made: {beat, port, at, t, seen}
-        self.beat_failure = None  # why the beat program could not be made or run, when it could not
+        self.beat_failure = None  # why the beat program could not be made or run, or how it ended badly
         self.allow = list(allow)
         self.egress_s = egress_s
         self.profile = os.path.join(rdir, "egress.sb")
@@ -477,9 +485,14 @@ class Monitor:
             with open(self.beat_profile, "w", errors="replace") as f:
                 f.write(profile_text(self.beat_tag))
             self.beat_err = open(self.beat_said, "ab")
-            self.beat_proc = subprocess.Popen(self._beat_argv(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                              stderr=self.beat_err, start_new_session=True, bufsize=0)
+            proc = subprocess.Popen(self._beat_argv(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                    stderr=self.beat_err, start_new_session=True, bufsize=0)
+            self.beat_proc = proc
             self._beat()
+            exited = proc.poll()
+            if exited is not None:  # it answered once and left: nothing would make the run's other test connections
+                raise Unavailable("the beat program ended by itself (%s) right after its first test connection%s"
+                                  % (exit_words(exited), self._beat_stderr()))
         except Unavailable as e:
             self._beats_failed(str(e))
         except Exception as e:  # any other fault is a reason too, never a crashed supervisor
@@ -516,8 +529,9 @@ class Monitor:
                                       % (answer, self._beat_stderr()))
             except (OSError, ValueError) as e:
                 self._unbeat(rec)
-                raise Unavailable("the beat program could not be told to make a test connection: %s%s"
-                                  % (e, self._beat_stderr()))
+                ended = self._beat_exit(proc, BEAT_EXIT_S)
+                raise Unavailable("the beat program could not be told to make a test connection: %s%s%s"
+                                  % (e, " (it had ended, %s)" % ended if ended else "", self._beat_stderr()))
             except Unavailable:
                 self._unbeat(rec)
                 raise
@@ -536,9 +550,20 @@ class Monitor:
                 raise Unavailable("the beat program gave no answer within %ss%s" % (BEAT_RUN_MAX_S, self._beat_stderr()))
             chunk = os.read(fd, 64)
             if not chunk:
-                raise Unavailable("the beat program ended (exit %s)%s" % (proc.poll(), self._beat_stderr()))
+                # Its output closed. The status is waited for, briefly and never past this answer's
+                # limit, so the reason says how it ended and not that it had not quite ended yet.
+                ended = self._beat_exit(proc, min(BEAT_EXIT_S, max(0.0, deadline - time.monotonic())))
+                raise Unavailable("the beat program %s%s" % ("ended (%s)" % ended if ended else
+                                                             "closed its output without ending", self._beat_stderr()))
             buf += chunk
         return buf.split(b"\n", 1)[0].decode(errors="replace").strip()
+
+    def _beat_exit(self, proc, within):
+        """How the beat program ended, in words, or None when it is still running after `within` s."""
+        try:
+            return exit_words(proc.wait(timeout=within))
+        except subprocess.TimeoutExpired:
+            return None
 
     def _beat_stderr(self):
         try:
@@ -616,25 +641,31 @@ class Monitor:
                 self.cond.wait(timeout=left)
 
     def _end_beat_program(self):
-        """End the beat program by closing its input, and remove its copy. Never raises."""
+        """End the beat program by closing its input, read how it ended, and remove its copy. Never
+        raises. A program that had ended before it was told to, that exited non zero, or that had to
+        be killed, is a reason the run reads unmeasured (see _beat_ended)."""
         proc, self.beat_proc = self.beat_proc, None
         if proc is not None:
+            early = proc.poll()  # not None: it ended by itself, before its input was closed
             try:
                 proc.stdin.close()
             except OSError:
                 pass
+            killed = False
             try:
-                proc.wait(timeout=BEAT_STOP_S)
+                status = proc.wait(timeout=BEAT_STOP_S)
             except subprocess.TimeoutExpired:
+                killed = True
                 try:
                     os.killpg(proc.pid, signal.SIGKILL)
                 except (ProcessLookupError, PermissionError):
                     pass
-                proc.wait()
+                status = proc.wait()
             try:
                 proc.stdout.close()
             except OSError:
                 pass
+            self._beat_ended(early, status, killed)
         err, self.beat_err = self.beat_err, None
         if err is not None:
             try:
@@ -649,6 +680,36 @@ class Monitor:
                 self._event({"event": "beat-program-left", "at": v.utc_now(), "why": left})
             except OSError:
                 pass
+
+    def _beat_ended(self, early, status, killed):
+        """Record how the beat program ended, and make a bad ending the run's reason for reading
+        unmeasured when nothing has failed already. Never raises.
+
+        The exit status comes from the system, not from the program's own answers, so it is the one
+        word about the program that the program cannot get wrong (L345). The program is written to
+        run until its input closes and then exit 0. One that ended by itself made no test connection
+        for the rest of the run, and after the last one nothing else would ever say so; one that
+        exited non zero or had to be killed did not do what it was written to do, so its answers are
+        not vouched for. The verdict rests on beat_failure, never on the log line being written."""
+        why = None
+        if early is not None:
+            why = "the beat program ended by itself (%s) before the run was over" % exit_words(early)
+        elif killed:
+            why = "the beat program did not end within %ss of its input closing and was killed" % BEAT_STOP_S
+        elif status != 0:
+            why = "the beat program ended badly (%s) when its input closed" % exit_words(status)
+        if why:
+            why += self._beat_stderr()
+        failed_now = why is not None and self.beat_failure is None
+        if failed_now:
+            self.beat_failure = why
+        try:
+            self._event({"event": "beat-ended", "at": v.utc_now(), "exit": status, "early": early is not None,
+                         "killed": killed})
+            if failed_now:
+                self._event({"event": "beat-failed", "at": v.utc_now(), "why": why})
+        except OSError:
+            pass
 
     def _stop_beats(self):
         """Stop the heartbeat and the beat program, and remove the program's copy. Never raises."""
