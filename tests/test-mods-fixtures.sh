@@ -2193,19 +2193,30 @@ done <<< "$(printf '%s\n%s\n' "$DIR/mods-harness.sh" "$pieces")"
 # With no claude anywhere, the real tree piece says so, UNMEASURED, and never records the mods
 # passing (L411): a machine without Claude Code must never read as one where every mod passed. Run
 # with no claude on PATH, none promised and a home with none, its records kept in this run's scratch.
-# Where there is one, test-mods.sh records the pass, as its own run in CI shows.
+# A folder on PATH holding a claude is stood in for by a folder of links to everything else in it,
+# since node, git or python3 may sit beside it (Homebrew's bin). The only check it may record is the
+# real mods' type check, which needs no claude; the pass it must never record is the one case 8
+# records where there is a claude, and as CI's own run of test-mods.sh shows, it does there.
 if [ -d "$ROOT/payload/mods" ]; then
-  nc_path=""
+  nc_path=""; nc_n=0
   IFS=: read -r -a nc_dirs <<< "$PATH"
   for d in "${nc_dirs[@]}"; do
-    [ -n "$d" ] && [ ! -x "$d/claude" ] && nc_path="${nc_path:+$nc_path:}$d"
+    [ -n "$d" ] || continue
+    if [ -e "$d/claude" ]; then
+      nc_n=$((nc_n + 1)); mkdir -p "$TMPROOT/no-claude-path/$nc_n"
+      ln -s "$d"/* "$TMPROOT/no-claude-path/$nc_n/" 2>/dev/null
+      rm -f "$TMPROOT/no-claude-path/$nc_n/claude"
+      d="$TMPROOT/no-claude-path/$nc_n"
+    fi
+    nc_path="${nc_path:+$nc_path:}$d"
   done
   mkdir -p "$TMPROOT/no-claude-home"; : > "$TMPROOT/no-claude-names"
   nc_out="$(env -u MODS_CLAUDE -u CHECK_MODS_REQUIRE_CLAUDE PATH="$nc_path" HOME="$TMPROOT/no-claude-home" \
     CHECK_MODS_FAILURE_OUTPUT="$TMPROOT/no-claude-kept" CHECK_MODS_LAST_PASSED="" MODS_HARNESS_NAMES="$TMPROOT/no-claude-names" \
     bash "$ROOT/tests/test-mods.sh" 2>&1)"; nc_rc=$?
+  nc_other="$(grep -v -x -F "but every real mod's types were checked, with no claude" "$TMPROOT/no-claude-names")"
   [ "$nc_rc" -eq 0 ] && printf '%s\n' "$nc_out" | grep -q "^SUITE-PART-UNMEASURED the real mods against Claude Code's own checks" \
-    && ! grep -qxF "every mod in payload/mods passes Claude Code's own checks" "$TMPROOT/no-claude-names" \
+    && [ -z "$nc_other" ] \
     && check "#3622 with no claude anywhere the real tree piece says UNMEASURED and never records the mods passing" ok \
     || check "#3622 with no claude anywhere the real tree piece says UNMEASURED and never records the mods passing" "exit=$nc_rc checks recorded: $(tr '\n' ';' < "$TMPROOT/no-claude-names") out=$nc_out"
 fi

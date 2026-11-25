@@ -1035,7 +1035,8 @@ if [ -n "$MODS_REPO" ] && [ -f "$MODS_REPO/tests/test-mods.sh" ] && [ -f "$MODS_
   # code sourcing the harness, never named here. test-mods.sh is among those found, or the finding
   # read nothing (L98).
   mods_pieces="$(grep -l -E '^[[:space:]]*(\.|source)[[:space:]].*mods-harness\.sh' "$MODS_REPO"/tests/test-*.sh 2>/dev/null)"
-  if printf '%s\n' "$mods_pieces" | grep -qxF "$MODS_REPO/tests/test-mods.sh"; then
+  case $'\n'"$mods_pieces"$'\n' in *$'\n'"$MODS_REPO/tests/test-mods.sh"$'\n'*) mods_found=1 ;; *) mods_found=0 ;; esac
+  if [ "$mods_found" = 1 ]; then
     while IFS= read -r piece; do
       { [ -n "$piece" ] && [ "$piece" != "$MODS_REPO/tests/test-mods.sh" ]; } || continue
       run_bash "cd $MODS_REPO && bash tests/${piece##*/}"
