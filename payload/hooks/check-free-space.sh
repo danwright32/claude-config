@@ -378,7 +378,7 @@ EOF
          echo "# exit $rc"
          echo "# volume: $VOLUME"
          echo "# at: $now${at:+ ($at)}"
-         echo "# settings: FREE_SPACE_FLOOR_GB=$FLOOR_GB FREE_SPACE_HORIZON_HOURS=$HORIZON_HOURS FREE_SPACE_MIN_SPAN_MIN=$MIN_SPAN_MIN FREE_SPACE_WINDOW_HOURS=$WINDOW_HOURS FREE_SPACE_RECOVERY_GB=$RECOVERY_GB FREE_SPACE_PERSIST_MIN=$PERSIST_MIN"
+         echo "# settings: FREE_SPACE_FLOOR_GB=$FLOOR_GB FREE_SPACE_HORIZON_HOURS=$HORIZON_HOURS FREE_SPACE_MIN_SPAN_MIN=$MIN_SPAN_MIN FREE_SPACE_WINDOW_HOURS=$WINDOW_HOURS FREE_SPACE_RECOVERY_GB=$RECOVERY_GB FREE_SPACE_PERSIST_MIN=$PERSIST_MIN FREE_SPACE_STOPPED_MIN=$STOPPED_MIN"
          echo "# To replay it, run the check once per line below, oldest first, with FREE_SPACE_NOW and FREE_SPACE_BYTES set to that line's two numbers, the settings above and a FREE_SPACE_STATE_DIR of its own."
          printf '%s\n' "$series"
        } 2>/dev/null > "$tmp" && mv -f "$tmp" "$name" 2>/dev/null; then

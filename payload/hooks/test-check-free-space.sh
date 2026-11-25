@@ -391,7 +391,8 @@ check "the fixture of 2026-11-25 is there with its 97 readings" \
 drop_rcs="$(replay_rcs "$DROP_DAY" "$TMPROOT/state-drop-3608")"
 check "the real readings of 2026-11-25: at 10:45 AM ET, 65.8 GB after 33 minutes within 1.5 GB, the check no longer exits 4" \
   "$(grep -q ' 1795621525:0' <<< " $drop_rcs" && echo ok || echo "replayed: $drop_rcs")"
-# Which readings still warn, and why each one should. 10:19 to 10:41: the drop ended at 10:12 and
+# Which readings of 2026-11-25 (measured that day, 97 readings) still warn, and why each one should.
+# 10:19 to 10:41: the drop ended at 10:12 and
 # has not yet held for 30 minutes, so the last 30 minutes still contain it. 10:57, 60.4 GB: the
 # slower fall that followed, 6.7 GB in the 32 minutes since 10:25, which reaches zero in under five
 # hours. Every other reading of the day, the 22 minutes before 10:19 and the flat stretch included,
@@ -455,10 +456,11 @@ check "a steady 19 GB an hour fall warns at exactly the readings it warned at be
 # Before this change the warning never went quiet in the pause, so it was already speaking when the
 # fall resumed. Now it stands down in the pause, and speaks again once the last 30 minutes reach
 # zero within the horizon: never more than 30 minutes (FREE_SPACE_STOPPED_MIN) after the fall
-# resumes, since by then the whole window is the fall, about 9.5 GB at 19 GB an hour. Here: 100 GB,
-# two hours at 19 GB an hour, an hour flat at about 62 GB, then 19 GB an hour again, read every 5
-# minutes. The rule as it was warns from the first fall through the pause and on (the control
-# below), so the first warning after the pause is the whole of the delay. Fixture readings.
+# resumes, since by then the whole window is the fall, about 9.5 GB at the 19 GB an hour measured on
+# 2026-09-10. The fixture's numbers below are set here, not measured: 100 GB, two hours at 19 GB an
+# hour, an hour flat at about 62 GB, then 19 GB an hour again, read every 5 minutes. The rule as it
+# was warns from the first fall through the pause and on (the control below), so the first warning
+# after the pause is the whole of the delay.
 S_PAUSE_F="$TMPROOT/pause.readings"; : > "$S_PAUSE_F"
 _t=$((T0 - 18000)); _i=0; PAUSE_END=$((T0 - 5400))
 while [ "$_t" -le "$T0" ]; do
@@ -639,6 +641,10 @@ $rep_lines
 EOF
 check "the copy's readings replayed through the check give the same exit 4" \
   "$([ "$rep_rc" = 4 ] && echo ok || echo "replayed to exit '${rep_rc:-<no readings>}' from $(sed -n 1,5p "$rep_file" 2>&1)")"
+# Every setting that decides between 4 and 0 is in the copy's settings line, the stand down's
+# included (#3608), or a copy made with it set otherwise replays to a different verdict.
+check "the copy's settings line names the stand down window it was judged by" \
+  "$(grep -q '^# settings: .*FREE_SPACE_PERSIST_MIN=30 FREE_SPACE_STOPPED_MIN=30$' "$rep_file" && echo ok || echo "settings: $(grep '^# settings' "$rep_file" 2>&1)")"
 rep_size="$(wc -c < "$rep_file" 2>/dev/null | tr -d ' ')"
 check "a copy of a busy night's readings stays small (under 8 KB)" \
   "$([ -n "$rep_size" ] && [ "$rep_size" -lt 8192 ] && echo ok || echo "size: ${rep_size:-unread} bytes")"
