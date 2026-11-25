@@ -292,6 +292,22 @@ gate againb PreToolUse j1 "Done."
 [ "$RC" -eq 2 ] && check "a later process given the same number is refused like any other" ok || check "a later process given the same number is refused like any other" "rc=$RC out=$OUT err=$ERR"
 has "and the refusal names it with its own command" "$ERR" 'pid 7650.*sleep 888'
 
+echo "a process that could not be told is still said when the same hand back is refused"
+# Agent l1's call left 7710 (its own) and, in another shell of that call, 7730, which started after
+# the call ended. The refusal is about 7710 only, so 7730 must still be said at a later pass.
+fixture mixed <<'EOF'
+proc 7710 1 7700 -99 sleep 240
+proc 7730 1 7720 -10 sleep 666
+mark sess-one 7700 -99.6
+mark sess-one 7720 -95.2
+bash l1.jsonl t1 -100 -90 python3 harness.py
+EOF
+gate mixed PreToolUse l1 "Done."
+[ "$RC" -eq 2 ] && check "the hand back is refused over the agent's own process" ok || check "the hand back is refused over the agent's own process" "rc=$RC out=$OUT err=$ERR"
+gate mixed PreToolUse l1 "Done. pid 7710 stays on purpose: it serves the next step."
+[ "$RC" -eq 0 ] && check "the next hand back, naming it, goes through" ok || check "the next hand back, naming it, goes through" "rc=$RC err=$ERR"
+said "and says the process that could not be told, which the refusal left unsaid" "$OUT" '7730.*could not be told|could not be told.*7730'
+
 echo "an id ending in a line break is not a plain name"
 out="$(AGENT_LEFTOVERS_ROOT="$ROOT" python3 "$READER" dir "$(printf 'sess-two\nx')" 2>/dev/null)"; rc=$?
 [ "$rc" -ne 0 ] && check "the reader names no folder for a session id holding a line break" ok || check "the reader names no folder for a session id holding a line break" "rc=$rc out=$out"

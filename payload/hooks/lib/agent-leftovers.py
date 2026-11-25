@@ -353,7 +353,6 @@ def gate(payload):
         acts.append('LEFTOVER PROCESS CHECK: %d process%s started by a Bash command of this session %s still running, and %s: %s. '
                      'Nothing was stopped (%s).' % (len(unsure), '' if len(unsure) == 1 else 'es', 'is' if len(unsure) == 1 else 'are',
                                                      whose, '; '.join(line_of(p) for p in unsure), ISSUE))
-        settled |= {key(p) for p in unsure}
 
     action, text = 'none', ''
     if mine:
@@ -383,6 +382,10 @@ def gate(payload):
                          'Nothing was stopped. Stop each with kill and its process id once you have checked it is not needed (%s).'
                          % (agent, len(unnamed), '' if len(unnamed) == 1 else 'es', '; '.join(line_of(p) for p in unnamed), ISSUE))
             settled |= {key(p) for p in unnamed}
+    if action != 'refuse':
+        # A refusal carries only the agent's own processes and the notice is not shown, so what
+        # could not be told stays unsettled until a pass that does say it.
+        settled |= {key(p) for p in unsure}
 
     if action == 'refuse' or settled != set(state['settled']):
         state['settled'] = sorted(settled)
