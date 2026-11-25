@@ -74,10 +74,13 @@
 # other (claude-config#3538: under a UTF-8 locale the search used to lose most of
 # them, silently). In the report each such byte is shown as a backslash and its
 # octal value, with a note of how many there are, so the report is always valid
-# text and the path beside the byte can still be read. A file holding a NUL is
-# still skipped as a binary. One thing about such a line is left as it was found:
-# whether the allow marker on it is honoured depends on the locale and on where
-# the byte sits (see the note above the search, below).
+# text and the path beside the byte can still be read. A file the search takes
+# for a binary is still skipped, and under C that takes a NUL (near the start of
+# the file, in the grep macOS ships: see the note above ALL_PAT). One thing
+# about such a line is left as it was found: whether the allow marker on it is
+# honoured depends on the locale and on where the byte sits (see the note above
+# the search, below).
+#
 # One thing this file must never do: write the sync's placeholder out in full. The
 # apply expands that placeholder in EVERY mirrored file, and it cannot tell a line
 # that means the placeholder from a line that means a path, so a file discussing it
