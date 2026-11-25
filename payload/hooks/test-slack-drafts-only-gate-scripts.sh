@@ -249,6 +249,16 @@ allowed "a script whose heredoc names no endpoint, beside a line that does"
 # then, is judged by its own cost checks, which need it allowed.
 run_bash "bash $DIR/test-slack-drafts-only-gate-scripts.sh"
 allowed "running this suite itself"
+# And each of the other five suites cut from it (#3575). Each holds its own copy of the helpers
+# because the gate knows a function only where the text calling it defines it: with them in a
+# sourced file it refused the suite's start command as a post (measured 2026-11-24). So the start
+# command of every one of them is judged here, and a suite whose helpers move out is refused.
+for sdg_suite in test-slack-drafts-only-gate-written-files.sh \
+  test-slack-drafts-only-gate-file-arguments.sh test-slack-drafts-only-gate.sh \
+  test-slack-drafts-only-gate-runners.sh test-slack-drafts-only-gate-tools-cache.sh; do
+  run_bash "bash $DIR/$sdg_suite"
+  allowed "running $sdg_suite itself"
+done
 # Every suite sources lib/suite-deadline.sh, which sources its readers from inside its functions,
 # where a global's value cannot be proved (a function runs with whatever its caller set), so it names
 # them by its own BASH_SOURCE, which the gate reads (claude-config#2465).

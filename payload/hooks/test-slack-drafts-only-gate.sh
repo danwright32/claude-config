@@ -1744,8 +1744,19 @@ if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; t
   # run prints its reading below, and the limit is set again from those. This suite's own text is
   # what is judged, so the reading grows as the suite does (L323): a limit crossed by growth alone
   # is raised with the readings that show it, never by guessing.
+  # Set again on 2026-11-24, when #3575 cut this suite to a quarter of its 6,561 lines and so moved
+  # both readings the 27 was set between (L220): measured on the work MacBook, one run after another
+  # at 1 minute load averages of 1.9 to 22, the command that starts this suite read 8.1, 8.1, 8.2,
+  # 8.5, 8.7, 8.8 and 9.4 units (each the least of 3 samples; the highest sample 9.6), and the gate
+  # that holds no reading 28.7, 29.3, 29.5, 30.9, 31.0, 32.0 and 33.4. The macOS limit is now near
+  # the geometric midpoint of the highest of the first and the lowest of the second, the square root
+  # of 9.6 times 28.7, 16.6, rounded to 17, which leaves 1.77 times of room above the one and 1.69
+  # below the other. Off macOS it stays 37 until the Linux readings of this suite as it now is are in
+  # hand (before the cut, CI's Linux runs read 24.3 and 35.0 for the first and 80.5 and 95.5 for the
+  # second, runs 45447561839 and 45468757442), so for now 37 no longer follows from the macOS limit
+  # by the 91 over 67 above, which would give 24.
   case "$(uname -s)" in
-    Darwin) own_ceiling=27 ;;
+    Darwin) own_ceiling=17 ;;
     *) own_ceiling=37 ;;
   esac
   several="$several own-suite"
