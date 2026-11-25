@@ -166,7 +166,7 @@ jq -c '. + {"claudeMdExcludes": ["**/elsewhere/payload/CLAUDE.md"]}' <<< "$ORIG"
 out="$(pull)"
 want="$(jq -c '.claudeMdExcludes' "$SETTINGS" 2>/dev/null)"
 if [ -n "$pats" ] && [ "$(jq -c '.claudeMdExcludes' "$H/settings.json" 2>/dev/null)" = "$want" ]; then ok
-else bad "a pull of payload/settings.shared.json did not write its claudeMdExcludes into settings.json; the pull said: $(printf '%s' "$out" | grep -m1 -i 'settings.shared.json\|claudeMdExcludes')"; fi
+else bad "a pull of payload/settings.shared.json did not write its claudeMdExcludes into settings.json; the pull said: $(grep -i -e 'settings.shared.json' -e 'claudeMdExcludes' <<< "$out")"; fi
 grep -q 'elsewhere' "$H/settings.json" && bad "a pull kept the Mac's own claudeMdExcludes instead of the shared list" || ok
 if grep -q 'claudeMdExcludes' <<< "$out" && ! grep -q 'claudeMdExcludes\.0' <<< "$out"; then ok
 else bad "the pull did not name claudeMdExcludes once as written (it must not list it element by element)"; fi
@@ -177,13 +177,14 @@ else bad "a pull changed a setting the shared file does not hold"; fi
 # A bad value is refused whole, naming the setting, and writes nothing.
 for c in 'string:"**/claude-config/payload/CLAUDE.md"' 'home:["/Users/someone/claude-config/payload/CLAUDE.md"]' \
          'other:["**/CLAUDE.md"]' 'anypayload:["**/payload/CLAUDE.md"]' 'anyparent:["**/*/payload/CLAUDE.md"]' \
-         'otherrepo:["**/Ovation/payload/CLAUDE.md"]' 'number:[3]' 'empty:[]'; do
+         'otherrepo:["**/Ovation/payload/CLAUDE.md"]' 'syncworktree:["**/claude-config-sync/.claude/worktrees/*/payload/CLAUDE.md"]' \
+         'number:[3]' 'empty:[]'; do
   name="${c%%:*}"; val="${c#*:}"
   fixture "bad-$name" "{\"claudeMdExcludes\": $val}"
   sum="$(cksum < "$H/settings.json")"
   out="$(pull)"
   [ "$(cksum < "$H/settings.json")" = "$sum" ] && ok || bad "a claudeMdExcludes of $val ($name) was written; it must be refused"
-  grep 'settings.shared.json' <<< "$out" | grep -q -e 'claudeMdExcludes is ' -e 'claudeMdExcludes holds ' && ok \
+  grep -q -E 'settings\.shared\.json.*claudeMdExcludes (is|holds) ' <<< "$out" && ok \
     || bad "the refusal of $val ($name) does not say what is wrong with claudeMdExcludes"
 done
 

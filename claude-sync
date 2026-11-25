@@ -6684,7 +6684,7 @@ shared_settings_wanted(){
       else empty end),
       (if has("claudeMdExcludes") then
         (.claudeMdExcludes | if type != "array" or length == 0 then "claudeMdExcludes is \(tojson), not a list of patterns" else
-          (.[] | select(type != "string" or (test("^\\*\\*/claude-config(-sync)?/(\\.claude/worktrees/\\*/)?payload/CLAUDE\\.md$") | not)) |
+          (.[] | select(type != "string" or (test("^\\*\\*/(claude-config/|claude-config/\\.claude/worktrees/\\*/|claude-config-sync/)payload/CLAUDE\\.md$") | not)) |
             "claudeMdExcludes holds \(tojson), not one of the forms **/claude-config/payload/CLAUDE.md, **/claude-config/.claude/worktrees/*/payload/CLAUDE.md or **/claude-config-sync/payload/CLAUDE.md (it may exclude only a copy of this repository'"'"'s rules file, and names no home folder)")
         end)
       else empty end)
