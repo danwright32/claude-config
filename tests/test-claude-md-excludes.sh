@@ -128,9 +128,9 @@ done
 
 # ---- The sync carries it: a pull installs it, refuses a bad one, and a send keeps it ----
 # claudeMdExcludes is a user setting, so it travels in payload/settings.shared.json and claude-sync
-# admits it by name (Dan's sign off, 2026-11-25). The sync checks its shape: a list of patterns,
-# each starting with **/ and ending in /payload/CLAUDE.md, so the shared file cannot be used to
-# stop any other rules file loading.
+# admits it by name (Dan's sign off, 2026-11-25). The sync checks its shape: a list of this
+# repository's three pattern forms only, so the shared file cannot be used to stop any other rules
+# file loading; **/payload/CLAUDE.md would reach every project's (lessons review of #3635).
 SCRIPT="$ROOT/claude-sync"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/claude-sync-work.mdexcl.XXXXXXXX")" || WORK=""
 case "${WORK%/}" in
@@ -176,7 +176,8 @@ else bad "a pull changed a setting the shared file does not hold"; fi
 
 # A bad value is refused whole, naming the setting, and writes nothing.
 for c in 'string:"**/claude-config/payload/CLAUDE.md"' 'home:["/Users/someone/claude-config/payload/CLAUDE.md"]' \
-         'other:["**/CLAUDE.md"]' 'number:[3]' 'empty:[]'; do
+         'other:["**/CLAUDE.md"]' 'anypayload:["**/payload/CLAUDE.md"]' 'anyparent:["**/*/payload/CLAUDE.md"]' \
+         'otherrepo:["**/Ovation/payload/CLAUDE.md"]' 'number:[3]' 'empty:[]'; do
   name="${c%%:*}"; val="${c#*:}"
   fixture "bad-$name" "{\"claudeMdExcludes\": $val}"
   sum="$(cksum < "$H/settings.json")"

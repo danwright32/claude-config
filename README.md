@@ -37,7 +37,9 @@ back.
   `claudeMdExcludes` since 2026-11-25 (#3635, added to the sync's list by Dan's sign off): it keeps
   this repository's own `payload/CLAUDE.md` (development checkout, its worktrees, the sync clone)
   from loading as a subfolder rules file. See the `payload/CLAUDE.md` entry below for why. Each
-  pattern must start with `**/` and end in `/payload/CLAUDE.md`, or the pull refuses the file. It is
+  pattern must be one of `**/claude-config/payload/CLAUDE.md`,
+  `**/claude-config/.claude/worktrees/*/payload/CLAUDE.md` and
+  `**/claude-config-sync/payload/CLAUDE.md`, or the pull refuses the file. It is
   edited in the repo, never published back from a Mac, and a pull writes each value into
   `settings.json` (refusing the whole file, by name, if it holds any key not on the allowlist in
   `claude-sync`, or a value Claude Code would not act on). Off is `false`, never a deletion; the one

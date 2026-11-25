@@ -6606,9 +6606,12 @@ SHARED_SETTINGS_FILE="settings.shared.json"
 # subfolder of the working folder, with its imports, the first time a session touches a file beside
 # it, so in this repository payload/CLAUDE.md, the global rules, arrived a second time in 318 of 433
 # agents measured, a median 36,610 tokens each for the rest of the run. The setting skips files by
-# glob on their absolute path. Only its one shape is accepted: a list of patterns, each starting
-# with **/ (never a Mac's own home path) and ending in /payload/CLAUDE.md, so the shared file cannot
-# be used to stop any other rules file loading. The list is written whole, as every shared value is.
+# glob on their absolute path. Only a list of this repository's three forms is accepted:
+# **/claude-config/payload/CLAUDE.md, **/claude-config/.claude/worktrees/*/payload/CLAUDE.md and
+# **/claude-config-sync/payload/CLAUDE.md. None names a Mac's home path, and a looser one such as
+# **/payload/CLAUDE.md would stop every project's payload/CLAUDE.md loading (lessons review of
+# #3635), so the shared file cannot be used to stop any other rules file. The list is written
+# whole, as every shared value is.
 SHARED_SETTINGS_ALLOWED="ultracode modelSettings skillListingMaxDescChars outputStyle env claudeMdExcludes"
 SHARED_SETTINGS_DESC="ultracode, modelSettings.<model>.effortLevel, skillListingMaxDescChars, outputStyle, env.CLAUDE_CODE_SUBAGENT_MODEL, claudeMdExcludes"
 SHARED_OUTPUT_STYLES="default Explanatory Learning"
@@ -6681,8 +6684,8 @@ shared_settings_wanted(){
       else empty end),
       (if has("claudeMdExcludes") then
         (.claudeMdExcludes | if type != "array" or length == 0 then "claudeMdExcludes is \(tojson), not a list of patterns" else
-          (.[] | select(type != "string" or (startswith("**/") | not) or (endswith("/payload/CLAUDE.md") | not)) |
-            "claudeMdExcludes holds \(tojson), not a pattern starting with **/ and ending in /payload/CLAUDE.md (it may exclude only a copy of this repository'"'"'s rules file, and names no home folder)")
+          (.[] | select(type != "string" or (test("^\\*\\*/claude-config(-sync)?/(\\.claude/worktrees/\\*/)?payload/CLAUDE\\.md$") | not)) |
+            "claudeMdExcludes holds \(tojson), not one of the forms **/claude-config/payload/CLAUDE.md, **/claude-config/.claude/worktrees/*/payload/CLAUDE.md or **/claude-config-sync/payload/CLAUDE.md (it may exclude only a copy of this repository'"'"'s rules file, and names no home folder)")
         end)
       else empty end)
     ] | join("; ")' --arg styles "$SHARED_OUTPUT_STYLES" --arg envok "$SHARED_ENV_ALLOWED" --arg aliases "$SHARED_MODEL_ALIASES" <<< "$obj" 2>/dev/null)" || bad="the file could not be checked (jq failed on it)"
