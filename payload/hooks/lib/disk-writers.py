@@ -36,7 +36,6 @@ Env: DISK_WRITERS_SAMPLES  a JSON file of readings to report on instead of this 
 
 import argparse
 import ctypes
-import errno
 import json
 import os
 import sys
@@ -132,12 +131,14 @@ def sample_this_mac(seconds, path):
         if pid in first:
             continue
         uid = proc.owner(pid)
-        if uid == 0:
+        if uid is None:
+            unread["gone"] += 1
+        elif uid == 0:
             unread["root"] += 1
-        elif uid is not None and uid != me:
+        elif uid != me:
             unread["other"] += 1
         else:
-            unread["gone"] += 1  # ended before it was read, or this user's and refused anyway
+            unread["refused"] = unread.get("refused", 0) + 1
     return {"seconds": elapsed, "free": [free0, free1], "total": len(pids),
             "read": len(rows), "unread": unread, "rows": rows}
 
@@ -165,6 +166,8 @@ def report(s, top):
     n_unread = u["root"] + u["other"]
     out.append("Read %d of %d programs. %d could not be read without a password (%d run as root, %d as other system users): their writes are unknown, not zero."
                % (s["read"], s["total"], n_unread, u["root"], u["other"]))
+    if u.get("refused"):
+        out.append("%d running as this user refused the read too: their writes are unknown, not zero." % u["refused"])
     if u["gone"]:
         out.append("%d ended while being read and are left out." % u["gone"])
     rows = s["rows"]
@@ -193,16 +196,29 @@ def main():
     if not 0 < a.seconds <= 120:
         print("disk-writers: --seconds must be above 0 and at most 120", file=sys.stderr)
         return 2
+    if a.top < 1:
+        print("disk-writers: --top must be 1 or more", file=sys.stderr)
+        return 2
     fixture = os.environ.get("DISK_WRITERS_SAMPLES")
-    try:
-        if fixture:
+    path = os.environ.get("DISK_WRITERS_PATH", "/System/Volumes/Data")
+    if fixture:
+        try:
             with open(fixture) as f:
                 s = json.load(f)
-        else:
-            s = sample_this_mac(a.seconds, os.environ.get("DISK_WRITERS_PATH", "/System/Volumes/Data"))
-    except (OSError, ValueError, AttributeError) as e:
-        print("disk-writers: could not read the process table: %s" % e, file=sys.stderr)
-        return 2
+        except (OSError, ValueError) as e:
+            print("disk-writers: could not read the readings in DISK_WRITERS_SAMPLES (%s): %s" % (fixture, e), file=sys.stderr)
+            return 2
+    else:
+        try:
+            volume_free(path)
+        except OSError as e:
+            print("disk-writers: could not read free space on %s: %s" % (path, e), file=sys.stderr)
+            return 2
+        try:
+            s = sample_this_mac(a.seconds, path)
+        except (OSError, AttributeError) as e:
+            print("disk-writers: could not read the process table: %s" % e, file=sys.stderr)
+            return 2
     if not s.get("read"):
         print("disk-writers: no program could be read, so nothing here says who is writing.", file=sys.stderr)
         return 2

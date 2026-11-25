@@ -227,10 +227,15 @@ check "and every fenced command in it is one line" \
 writers_line="$(grep -m 1 -xF 'python3 ~/.claude/hooks/lib/disk-writers.py' <<< "$writer_code")"
 held_line="$(grep -m 1 -F 'lsof +c 0 -n -P +L1' <<< "$writer_code")"
 for want in 'python3 ~/.claude/hooks/lib/disk-writers.py' 'lsof +c 0 -n -P +L1' 'lsof -a -n -P -p <pid> +L1' \
-    "stat -f 'size %z, links %l, last changed %Sm' /System/Volumes/Data/.fseventsd" 'memory_pressure | tail -1'; do
+    'memory_pressure | tail -1'; do
   check "the writer step runs: $want" \
     "$(grep -qF -- "$want" <<< "$writer_code" && echo ok || echo "not in a block of the writer step")"
 done
+# The file event log's entry count, read from its folder's size and link count (the folder itself
+# cannot be listed without a password).
+fsevents_line="$(grep -m 1 -F '/System/Volumes/Data/.fseventsd' <<< "$writer_code")"
+check "the writer step reads the file event log's size and link count" \
+  "$(case "$fsevents_line" in *'%z'*'%l'*) echo ok ;; *) echo "the line is: $fsevents_line" ;; esac)"
 check "and says the programs it could not read are unknown, never zero" \
   "$(grep -qi 'never as zero\|not zero\|never zero' <<< "$writer_section" && echo ok || echo "the step does not say so")"
 check "and says a file deleted while held open still takes space, and how it shows" \
@@ -253,8 +258,12 @@ check "the writer reading, run as written, sets the window's writes against free
   "$([ "$w_rc" -eq 0 ] && grep -qF 'fell 900 MB' <<< "$w_out" && grep -qF '885 MB in all' <<< "$w_out" && echo ok || echo "exit $w_rc, said: $w_out")"
 check "and counts the programs it could not read by who runs them, as unknown" \
   "$(grep -qF '255 could not be read without a password (160 run as root, 95 as other system users)' <<< "$w_out" && grep -qF 'unknown, not zero' <<< "$w_out" && echo ok || echo "said: $w_out")"
+# Each list read into a variable first: a grep -q at the end of a pipeline can stop its producer
+# early, which pipefail reports as a failure that never happened.
+w_first="$(grep -A1 'Written in those' <<< "$w_out")"
+w_life="$(grep -A2 'since each started' <<< "$w_out")"
 check "and names the writer in the window first, and the lifetime writers" \
-  "$(grep -A1 'Written in those' <<< "$w_out" | grep -qF 'Photo Editor' && grep -A2 'since each started' <<< "$w_out" | grep -qF 'sync client' && echo ok || echo "said: $w_out")"
+  "$(grep -qF 'Photo Editor' <<< "$w_first" && grep -qF 'sync client' <<< "$w_life" && echo ok || echo "said: $w_out")"
 printf '%s\n' '{"seconds": 10, "free": [1, 1], "total": 900, "read": 0, "unread": {"root": 900, "other": 0, "gone": 0}, "rows": []}' > "$WF"
 w_out="$(DISK_WRITERS_SAMPLES="$WF" bash -c "${writers_line//\~\/.claude\/hooks\//$HOOKS/}" 2>&1)"; w_rc=$?
 check "and fails loudly, exit 2, when it could read no program at all, never reporting nothing as no writer" \
@@ -269,7 +278,7 @@ if [ "$(uname -s)" = Darwin ]; then
   check "on this Mac the writer reading reads its own process table and states the unread count" \
     "$([ "$w_rc" -eq 0 ] && [ "${read_n:-0}" -gt 0 ] && grep -qF 'could not be read without a password' <<< "$w_out" && echo ok || echo "exit $w_rc, said: $w_out")"
 else
-  echo "UNMEASURED: the writer reading of a live process table needs macOS's libproc; not run on $(uname -s)."
+  echo "SUITE-PART-UNMEASURED the writer reading of a live process table, which needs macOS's libproc and so was not run on $(uname -s)"
 fi
 
 # The held open files command, run as written: this shell opens a file, deletes it and keeps it
@@ -279,10 +288,11 @@ if command -v lsof >/dev/null 2>&1 && [ -n "$held_line" ]; then
   # Without its last `| head`, since this Mac's own programs may hold more than these 4 MB.
   h_out="$(bash -c "${held_line% | head *}" 2>&1)"
   exec 7>&-
+  h_mine="$(grep -E "pid $$\$" <<< "$h_out")"
   check "the held files command, run as written, charges a deleted file held open to the program holding it" \
-    "$(grep -E "pid $$\$" <<< "$h_out" | grep -qE '^ +4 MB in 1 files' && echo ok || echo "said: $h_out")"
+    "$(grep -qE '^ +4 MB in 1 files' <<< "$h_mine" && echo ok || echo "said: $h_out")"
 else
-  echo "UNMEASURED: lsof is not installed here, or the step has no held files command, so it was not run."
+  echo "SUITE-PART-UNMEASURED the held files command, because lsof is not installed here or the step has no such command"
 fi
 
 echo ""
