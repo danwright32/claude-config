@@ -815,6 +815,198 @@ run_failing_3441 "python3 fails3441"
 refused "#3441 a reading of the folder python3 is handed that fails part way is refused"
 says "#3441 and that refusal says the call could not be judged" "could not judge"
 
+echo "slack drafts only: a Python command is read as python3 itself reads its options (claude-config#3539)"
+
+# Measured on main at 35f85db5cd on 2026-11-24, in this harness, against what python3 3.14.4 and
+# 3.9.6 themselves ran for 110 shapes of command line with scripts that only print (one run of each
+# shape on each): every command below that python3 runs something that posts by was allowed.
+#   * `python3 posts.py -m x` ran posts.py, and the gate read no file of a command holding the
+#     word -m anywhere, for python3 or any other interpreter (`node post.js -m x`);
+#   * `python3 -c'import posts'` and `python3 -Bc'import posts'` ran the code glued to -c, and the
+#     gate took the word for an option and the next file for the script;
+#   * `python3 -Wc posts.py` and `-Xc` ran posts.py (-W and -X take the rest of their word as
+#     their value), and the gate took the word for -c and posts.py for the code;
+#   * `python3 -BW quiet.py posts.py` ran posts.py (-W at the end of its word takes the next one),
+#     and the gate took quiet.py for the script and posts.py for a file it is handed;
+#   * `python3 -mdoc` ran the module doc, and the gate took a word of up to four letters before a
+#     c for -c, so the module was never read;
+#   * `python3 -- -post.py` ran the file named -post.py, and `python3 -- - <<EOF` the code on its
+#     input, and the gate read neither a script whose name starts with a dash nor that code;
+#   * `PYTHONPATH=onpath python3 -W error::warnmod.Loud quiet.py` imported warnmod before
+#     quiet.py ran, which the gate never read as an import.
+# What is held: each is refused, and its twin, the same words where nothing python3 runs posts,
+# passes; a command the earlier reading refused is still refused, since that reading is kept and
+# this one comes before it; an error inside the new reading refuses the call.
+O="$T/g3539"
+mkdir -p "$O/onpath"
+cp "$IP/posts.py" "$O/posts.py"
+cp "$IP/quiet.py" "$O/quiet.py"
+cp "$IP/quiet.py" "$O/quietmod.py"
+# Under a name no other suite's fixtures use: test-slack-drafts-unknown-program.sh reads this file's
+# quoted commands in a folder of its own that holds a post.sh, where a command naming one posts.
+cp "$IP/post.sh" "$O/sends3539.sh"
+cp "$IP/calm.sh" "$O/calm.sh"
+cp "$IP/posts.py" "$O/-m"
+cp "$IP/posts.py" "$O/-post.py"
+cp "$IP/quiet.py" "$O/-quiet.py"
+cp "$IP/posts.py" "$O/doc.py"
+cp "$IP/quiet.py" "$O/tic.py"
+printf '%s\n' 'import runpy, sys' 'runpy.run_path(sys.argv[1])' > "$O/handed.py"
+printf '%s\n' 'import runpy, sys' 'runpy.run_path(sys.argv[2])' > "$O/handed2.py"
+printf '%s\n' 'python3 posts.py -m x' > "$O/run.sh"
+printf '%s\n' 'python3 quiet.py -m x' > "$O/runcalm.sh"
+printf '%s\n' 'fetch("https://slack.com/api/chat.postMessage", {method: "POST", body: "x"})' > "$O/post.js"
+printf '%s\n' 'console.log(1)' > "$O/calm.js"
+printf '%s\n' 'require "net/http"' 'Net::HTTP.post(URI("https://slack.com/api/chat.postMessage"), "x")' > "$O/post.rb"
+printf '%s\n' 'puts 1' > "$O/calm.rb"
+printf '%s\n' 'use LWP::UserAgent;' 'LWP::UserAgent->new->post("https://slack.com/api/chat.postMessage");' > "$O/post.pl"
+printf '%s\n' 'print 1;' > "$O/calm.pl"
+printf '%s\n' 'import urllib.request' 'urllib.request.urlopen("https://slack.com/api/chat.postMessage", data=b"x")' 'class Loud(Warning): pass' > "$O/onpath/warnmod.py"
+printf '%s\n' 'class Loud(Warning): pass' > "$O/onpath/calmwarn.py"
+o_run() { run_at "$1" "${2:-$O}"; }
+o_pair() { # o_pair <what> <a command python3 runs something that posts by> <its twin, where nothing it runs posts>
+  o_run "$2"
+  read_refused "#3539 $1 is refused"
+  o_run "$3"
+  allowed "#3539 $1, where nothing it runs posts, passes"
+}
+
+# The word -m after the script is the script's own argument.
+o_pair "a script with -m and a word after it" "python3 posts.py -m quietmod" "python3 quiet.py -m quietmod"
+o_run "python3 posts.py -m quietmod"
+says "#3539 and the refusal names the script" "posts.py"
+o_pair "a script with -m as its last word" "python3 posts.py -m" "python3 quiet.py -m"
+o_pair "a script behind an option, with -m after it" "python3 -B posts.py -m quietmod" "python3 -B quiet.py -m quietmod"
+o_pair "a script after --, with -m after it" "python3 -- posts.py -m quietmod" "python3 -- quiet.py -m quietmod"
+o_pair "a script with -- and then -m after it" "python3 posts.py -- -m" "python3 quiet.py -- -m"
+o_pair "a script after -W, whose value is the word -m" "python3 -W -m posts.py" "python3 -W -m quiet.py"
+o_pair "a script after -X, whose value is the word -m" "python3 -X -m posts.py" "python3 -X -m quiet.py"
+o_pair "a script that runs the file it is handed, with -m after the file" "python3 handed.py posts.py -m x" "python3 handed.py quiet.py -m x"
+o_pair "a script that runs the file it is handed after -m" "python3 handed2.py -m posts.py" "python3 handed2.py -m quiet.py"
+o_run "python3 quiet.py -m posts.py"
+allowed "#3539 a script that runs nothing, handed a file that posts after -m, passes"
+o_pair "code in a heredoc that hands a shell its file, with -m after the file" "python3 - sends3539.sh -m <<'EOF'
+import subprocess, sys
+subprocess.run(['bash', sys.argv[1]])
+EOF" "python3 - calm.sh -m <<'EOF'
+import subprocess, sys
+subprocess.run(['bash', sys.argv[1]])
+EOF"
+# The same words reached another way.
+o_pair "the script and -m in a shell's -c string" "bash -c 'python3 posts.py -m x'" "bash -c 'python3 quiet.py -m x'"
+o_pair "the script and -m in a shell script on disk" "bash run.sh" "bash runcalm.sh"
+o_pair "the script and -m started by inline code" "python3 -c \"import os; os.system('python3 posts.py -m x')\"" "python3 -c \"import os; os.system('python3 quiet.py -m x')\""
+o_pair "the script and -m behind env" "env python3 posts.py -m x" "env python3 quiet.py -m x"
+o_pair "the script and -m through a variable" "S=posts.py; python3 \"\$S\" -m x" "S=quiet.py; python3 \"\$S\" -m x"
+# The same lines judge every interpreter, and none of them was read with -m after its script.
+o_pair "node handed a script with -m after it" "node post.js -m x" "node calm.js -m x"
+o_pair "ruby handed a script with -m after it" "ruby post.rb -m x" "ruby calm.rb -m x"
+o_pair "perl handed a script with -m after it" "perl post.pl -m x" "perl calm.pl -m x"
+
+# After --, the next word is the script whatever it starts with, and - is the code on its input.
+o_pair "a script named -m after --" "python3 -- -m quietmod" "python3 -- -quiet.py quietmod"
+o_pair "a script whose name starts with a dash after --" "python3 -- -post.py" "python3 -- -quiet.py"
+o_pair "code on the input by - after --" "python3 -- - <<'EOF'
+import posts
+EOF" "python3 -- - <<'EOF'
+import quiet
+EOF"
+
+# Code glued to -c, alone or at the end of a run of letters of any length.
+o_pair "code glued to -c" "python3 -c'import posts'" "python3 -c'import quiet'"
+o_pair "code glued to -c in double quotes" "python3 -c\"import posts\"" "python3 -c\"import quiet\""
+o_pair "code glued to -c after other letters" "python3 -Bc'import posts'" "python3 -Bc'import quiet'"
+o_pair "code glued to -c that runs a file it names, a quiet file after it" "python3 -c'import runpy; runpy.run_path(\"posts.py\")' quiet.py" "python3 -c'import runpy; runpy.run_path(\"quiet.py\")' quiet.py"
+o_pair "code given by -c after five other letters" "python3 -bBEsuc 'import posts'" "python3 -bBEsuc 'import quiet'"
+o_pair "code glued to -c that runs the file it is handed" "python3 -c'import runpy, sys; runpy.run_path(sys.argv[1])' posts.py" "python3 -c'import runpy, sys; runpy.run_path(sys.argv[1])' quiet.py"
+o_run "python3 -c'print(1)' posts.py"
+refused "#3539 quiet code glued to -c, handed a file that posts, is still refused as it was (the earlier reading is kept)"
+
+# -W and -X take the rest of their word, or the next word, as their value.
+o_pair "a script after -Wc, which is -W with the value c" "python3 -Wc posts.py" "python3 -Wc quiet.py"
+o_pair "a script after -Xc" "python3 -Xc posts.py" "python3 -Xc quiet.py"
+o_pair "a script after -BWc" "python3 -BWc posts.py" "python3 -BWc quiet.py"
+o_pair "a script after -BW and its value, a quiet file" "python3 -BW quiet.py posts.py" "python3 -BW ignore quiet.py"
+o_pair "a script after -BX and its value, a quiet file" "python3 -BX quiet.py posts.py" "python3 -BX ignore quiet.py"
+o_pair "a module after -BW and its value" "python3 -BW ignore -m doc" "python3 -BW ignore -m tic"
+
+# A module glued to -m, whose name of up to four letters ends in c.
+o_pair "a module glued to -m whose name ends in c" "python3 -mdoc" "python3 -mtic"
+o_pair "that module with a file after it" "python3 -mdoc quiet.py" "python3 -mtic quiet.py"
+
+# A -W value naming a warning class by its module has python3 import that module, from PYTHONPATH.
+o_pair "a -W value naming a class in a module that posts" "PYTHONPATH=onpath python3 -W error::warnmod.Loud quiet.py" "PYTHONPATH=onpath python3 -W error::calmwarn.Loud quiet.py"
+o_pair "that -W value glued to -W" "PYTHONPATH=onpath python3 -Werror::warnmod.Loud quiet.py" "PYTHONPATH=onpath python3 -Werror::calmwarn.Loud quiet.py"
+o_pair "that -W value before code given by -c" "PYTHONPATH=onpath python3 -W error::warnmod.Loud -c 'print(1)'" "PYTHONPATH=onpath python3 -W error::calmwarn.Loud -c 'print(1)'"
+o_run "python3 -W error::DeprecationWarning quiet.py"
+allowed "#3539 a -W value naming a built in warning passes"
+o_run "python3 -W ignore::nosuchmodule3539.Loud quiet.py"
+allowed "#3539 a -W value naming a class in a module found nowhere passes"
+
+# The command is spelled again from its words as written, so what the shell fills in, what stands
+# before python3 and a redirection are each read as they would be.
+o_pair "an option word in quotes" "python3 '-Wc' posts.py" "python3 '-Wc' quiet.py"
+o_pair "code glued to -c in one quoted word" "python3 \"-cimport posts\"" "python3 \"-cimport quiet\""
+o_pair "a script named through a variable, after -BW and its value" "S=posts.py; python3 -BW x \"\$S\"" "S=quiet.py; python3 -BW x \"\$S\""
+o_pair "a script after -Wc with a redirection glued to its target" "python3 -Wc posts.py 2>/dev/null" "python3 -Wc quiet.py 2>/dev/null"
+o_pair "a script after -Wc with redirections before and after it" "python3 2>/dev/null -Wc posts.py > out.txt" "python3 2>/dev/null -Wc quiet.py > out.txt"
+o_pair "code glued to -c that imports from the command's own PYTHONPATH" "PYTHONPATH=onpath python3 -Bc'import warnmod'" "PYTHONPATH=onpath python3 -Bc'import calmwarn'"
+o_pair "the same behind env" "env PYTHONPATH=onpath python3 -Bc'import warnmod'" "env PYTHONPATH=onpath python3 -Bc'import calmwarn'"
+o_pair "a script after -Wc inside an if" "if true; then python3 -Wc posts.py; fi" "if true; then python3 -Wc quiet.py; fi"
+printf '%s\n' 'python3 -Wc posts.py' > "$O/runw.sh"
+printf '%s\n' 'python3 -Wc quiet.py' > "$O/runwcalm.sh"
+o_pair "a script after -Wc in a shell script on disk" "bash runw.sh" "bash runwcalm.sh"
+# A spelling the gate cannot build is refused as unread where it is typed, and left as it was in a
+# script on disk, as an unread feed is.
+o_run "python3 '-Wc' \"\$X\""
+read_refused "#3539 an option word in quotes before a path the shell fills in is refused as unread"
+says "#3539 and that refusal says the gate could not check it" "could not check"
+printf '%s\n' "python3 '-Wc' \"\$X\"" > "$O/unread.sh"
+o_run "bash unread.sh"
+allowed "#3539 the same words in a script on disk are left as they were"
+
+# What python3 does not run stays unread, as before.
+o_run "python3 -m quietmod posts.py"
+allowed "#3539 a module that runs nothing, handed a file that posts, passes as before"
+o_run "python3 -c 'print(1)' -m posts.py"
+allowed "#3539 code that runs nothing, with -m and a file that posts after it, passes as before"
+o_run "python3 quiet.py -c 'import posts'"
+allowed "#3539 a script that runs nothing, with -c and code after it, passes as before"
+
+# An error inside the new reading refuses the call. The control is the same copy on other words.
+mkdir -p "$T/failing3539"
+cp "$HOOK" "$T/failing3539/slack-drafts-only-gate.sh"
+ln -s "$DIR/lib" "$T/failing3539/lib"
+cat > "$T/failing3539/slack_drafts_only_gate.py" <<'PY'
+import importlib.util, os
+spec = importlib.util.spec_from_file_location("gate", os.environ["REAL_GATE_3539"])
+gate = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gate)
+real = gate.Judge.py_cmdline
+def failing(self, words, *a, **k):
+    if "fails3539" in words:
+        raise RuntimeError("made to fail by the suite")
+    return real(self, words, *a, **k)
+gate.Judge.py_cmdline = failing
+gate.main()
+PY
+run_failing_3539() { # run_failing_3539 <command>: judged by the copy whose reading fails on the word fails3539
+  local errf; errf="$(mktemp "${TMPDIR:-/tmp}/slack-gate-err.XXXXXXXX")"
+  OUT="$(payload Bash "$(bash_input "$1")" "$O" | REAL_GATE_3539="$DIR/slack_drafts_only_gate.py" bash "$T/failing3539/slack-drafts-only-gate.sh" 2>"$errf")"; RC=$?
+  ERR="$(cat "$errf")"; rm -f "$errf"
+}
+if grep -q 'def py_cmdline' "$DIR/lib/py-file-runs.py"; then
+  run_failing_3539 "python3 -Wc quiet.py plain"
+  allowed "#3539 the copy made to fail judges a quiet script as the gate does where nothing fails"
+  run_failing_3539 "python3 -Wc posts.py plain"
+  refused "#3539 and refuses a script that posts as the gate does"
+  run_failing_3539 "python3 -Wc quiet.py fails3539"
+  refused "#3539 a reading of python3's own options that fails part way is refused"
+  says "#3539 and that refusal says the call could not be judged" "could not judge"
+else
+  check "#3539 the reading of python3's own options is there to be made to fail" "lib/py-file-runs.py defines no py_cmdline, so a command is not read as python3 reads its options"
+fi
+
 echo
 
 echo "passed: $pass, failed: $fail"
