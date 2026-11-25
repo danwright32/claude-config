@@ -9,7 +9,9 @@
 # repo keeps finding (L370).
 #
 #   sc_clone_root_of   is this directory inside a clone of the tool, and where is its root
-#   sc_watcher_cmd     the command line of a LIVE watch daemon, or nothing
+#   sc_watcher_read    is a watch daemon live, is none, or could that not be read (three answers)
+#   sc_watcher_possible could a watcher revert a write: yes unless it is settled that none is live
+#   sc_watcher_unread_sentence what every hook says of a watcher that could not be read
 #   sc_is_this_clone   does that watcher run from the clone in question
 #   sc_hold_covers     is a hold in force that protects THIS session's writes: its own, or a terminal's
 #   sc_hold_others     the short names of the other sessions holding the watcher
@@ -64,15 +66,78 @@ sc_clone_root_of(){ # sc_clone_root_of <dir> -> the clone root, or nothing
 # stale pid is reused by the system constantly, and a number alone cannot tell a live watcher from
 # whatever inherited it (L237). Deliberately the same test claude-sync's own watch_already_running
 # applies, for the same reason.
-sc_watcher_cmd(){ # -> a live watcher's command line, or nothing
-  local pid cmd
+#
+# THREE answers, never two (claude-config#3547, L10). This was sc_watcher_cmd, which printed the
+# command line or nothing and read it with ps, the failure discarded: a ps that could not run gave
+# an empty answer and no error, every caller read that as no watcher, and the payload write gate
+# let the write through. Found on 2026-11-24 under a wrapper that forbade ps. So the reading is
+# kept as a STATE the caller has to branch on, with no printed answer for an error to hide behind:
+#
+#   SC_WATCHER_STATE  live    a watcher is running, and SC_WATCHER_CMD is its command line
+#                     none    it is settled that none is: no pid file, no number in it, a pid that
+#                             is not running, or a running process that is something else
+#                     unread  the pid file names a running process and what it is could not be
+#                             read, or the pid file is there and cannot be read
+#   SC_WATCHER_WHY    when unread, what failed, as a clause a sentence can carry
+#   SC_WATCHER_PROBE  when unread, the command a person can run to see the failure for themselves
+#
+# Returns 0, 1 and 2 in that order. Call it in the hook's own shell, never in a command
+# substitution, whose subshell would keep the state to itself. The pid file is read and the pid
+# tested by the shell itself, so ps is the only tool whose failure this has to tell from an answer.
+#
+# A ps that fails is asked about twice. It exits non zero both when it could not run and when the
+# process ended a moment after it was seen running, so the pid is tested again afterwards: gone is
+# none, and still running with nothing learned about it is unread. A ps that exits 0 and prints
+# nothing about a running process has not answered either.
+sc_watcher_read(){ # -> SC_WATCHER_STATE, SC_WATCHER_CMD, SC_WATCHER_WHY, SC_WATCHER_PROBE
+  local pid="" cmd="" rc=0
+  SC_WATCHER_STATE=none; SC_WATCHER_CMD=""; SC_WATCHER_WHY=""; SC_WATCHER_PROBE=""
   [ -f "$SYNC_WATCH_PID_FILE" ] || return 1
-  pid="$(head -1 "$SYNC_WATCH_PID_FILE" 2>/dev/null || true)"
+  if [ ! -r "$SYNC_WATCH_PID_FILE" ]; then
+    SC_WATCHER_STATE=unread
+    SC_WATCHER_WHY="the watcher's pid file at $SYNC_WATCH_PID_FILE is there and cannot be read"
+    SC_WATCHER_PROBE="ls -l $SYNC_WATCH_PID_FILE"
+    return 2
+  fi
+  IFS= read -r pid 2>/dev/null < "$SYNC_WATCH_PID_FILE" || true
   case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  # Zero is no process's pid, and to kill it names this shell's own process group, which is
+  # always there.
+  case "$pid" in *[!0]*) ;; *) return 1 ;; esac
   kill -0 "$pid" 2>/dev/null || return 1
-  cmd="$(ps -o command= -p "$pid" 2>/dev/null || true)"
-  case "$cmd" in *claude-sync*watch*) printf '%s' "$cmd"; return 0 ;; esac
-  return 1
+  cmd="$(ps -o command= -p "$pid" 2>/dev/null)" || rc=$?
+  if [ "$rc" -eq 0 ] && [ -n "$cmd" ]; then
+    case "$cmd" in
+      *claude-sync*watch*) SC_WATCHER_STATE=live; SC_WATCHER_CMD="$cmd"; return 0 ;;
+    esac
+    return 1
+  fi
+  kill -0 "$pid" 2>/dev/null || return 1
+  SC_WATCHER_STATE=unread
+  SC_WATCHER_PROBE="ps -o command= -p $pid"
+  if [ "$rc" -eq 0 ]; then
+    SC_WATCHER_WHY="the watcher's pid file names process $pid, which is running, and $SC_WATCHER_PROBE printed nothing about it"
+  else
+    SC_WATCHER_WHY="the watcher's pid file names process $pid, which is running, and $SC_WATCHER_PROBE exited $rc without saying what it is"
+  fi
+  return 2
+}
+
+# Could a watcher revert a write? Yes unless it is SETTLED that none is running, so a watcher that
+# could not be read counts, and so would any state this does not know (L42). The one question
+# every hook asks first, in one place, so no caller writes its own test of an empty answer
+# (claude-config#3547, L621).
+sc_watcher_possible(){ # reads the watcher, then: is anything but none the answer
+  sc_watcher_read
+  [ "$SC_WATCHER_STATE" != none ]
+}
+
+# What every hook says of a watcher that could not be read, in one wording: that it could not be
+# read, why, and that this is not the same as none running. Nothing when the last reading was live
+# or none, so a caller can always append it.
+sc_watcher_unread_sentence(){
+  case "${SC_WATCHER_STATE:-none}" in live|none) return 0 ;; esac
+  printf 'Whether a watch daemon is live on this Mac could not be read: %s. That is not the same as none running.' "${SC_WATCHER_WHY:-the reading gave no reason}"
 }
 
 # Does that watcher run from THIS clone? Answered by substring against the whole command line, not

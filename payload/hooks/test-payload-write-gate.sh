@@ -1532,6 +1532,138 @@ else check "#3165 with git status failing before the call, the removed worktree'
 says "#3165 with the hold advice as before" "claude-sync hold 120"
 says "#3165 naming them" "$R/wt7/payload/hooks/h.sh"
 
+echo "payload write gate: a watcher it cannot read is not one that is absent (claude-config#3547)"
+
+# The watcher's command line is read with ps. Its failure was discarded, so a ps that could not run
+# gave an empty answer, the gate read that as no watcher, and every payload write was allowed with
+# nothing said: found on 2026-11-24 under a wrapper that forbade ps. Each case below takes ps away
+# for the gate alone, a stand in first on PATH that fails or a PATH that reaches none, so the fault
+# stays visible whatever a wrapper around the suite allows.
+SID=""
+rm -f "$HOLD"
+BADPS="$FIX/badps"; QUIETPS="$FIX/quietps"; mkdir -p "$BADPS" "$QUIETPS"
+printf '#!/bin/sh\necho "ps: operation not permitted" >&2\nexit 1\n' > "$BADPS/ps"
+printf '#!/bin/sh\nexit 0\n' > "$QUIETPS/ps"
+chmod +x "$BADPS/ps" "$QUIETPS/ps"
+# The fixture's own premise, asserted rather than assumed (L159).
+if PATH="$BADPS:$PATH" ps -o command= -p "$WPID" >/dev/null 2>&1; then
+  check "#3547 the stand in ps really fails" "it answered, so nothing below measures a ps that cannot run"
+else check "#3547 the stand in ps really fails" ok; fi
+UNREAD_WORDS="could not read whether a watch daemon is live"
+LIVE_WORDS="a watch daemon is live on this Mac running from another clone"
+unsaid(){ case "$OUT" in *"$2"*) check "$1" "it said '$2'" ;; *) check "$1" ok ;; esac; }
+
+PATH="$BADPS:$PATH" edit "$FIX/dev/payload/LESSONS.md" "$FIX/dev"
+refused "#3547 with a ps that fails, a payload Edit in a development checkout is refused, not allowed"
+says "#3547 and the refusal says the watcher could not be read" "$UNREAD_WORDS"
+says "#3547 and names the command it ran" "ps -o command= -p $WPID"
+says "#3547 and how that command ended" "exited 1"
+says "#3547 and the file it refused" "$FIX/dev/payload/LESSONS.md"
+says "#3547 and gives the hold command, which needs no ps" "claude-sync hold"
+says "#3547 and the way that needs no hold at all" "Edit ~/.claude directly"
+# A message may claim only what its check measured (L11): nothing here saw a live watcher.
+unsaid "#3547 and it does not claim a watcher is live, which nothing measured" "$LIVE_WORDS"
+PATH="$BADPS:$PATH" runbash "echo x > payload/LESSONS.md" "$FIX/dev"
+refused "#3547 with a ps that fails, a shell write under payload is refused too"
+says "#3547 saying the watcher could not be read" "$UNREAD_WORDS"
+PATH="$BADPS:$PATH" runbash "cp /tmp/x \"\$P/payload/LESSONS.md\"" "$FIX/dev"
+refused "#3547 and so is a write to a path only the shell can work out"
+says "#3547 saying the watcher could not be read" "$UNREAD_WORDS"
+PATH="$QUIETPS:$PATH" edit "$FIX/dev/payload/LESSONS.md" "$FIX/dev"
+refused "#3547 a ps that exits 0 and says nothing of a running process is refused the same way"
+says "#3547 saying the watcher could not be read" "$UNREAD_WORDS"
+# Which clone the watcher runs from is read from the same command line, so its own clone cannot be
+# told from any other while ps cannot run, and is refused with the rest.
+PATH="$BADPS:$PATH" edit "$FIX/src/payload/LESSONS.md" "$FIX/src"
+refused "#3547 the clone the watcher runs from cannot be told apart then, and is refused too"
+says "#3547 saying the watcher could not be read" "$UNREAD_WORDS"
+PATH="$BADPS:$PATH" edit "$G/primary/payload/a.md" "$G/primary"
+refused "#3547 and the primary checkout of a repository with worktrees"
+
+# ps MISSING, not failing: a PATH that reaches everything this gate runs but ps.
+NOPS_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/payload-write-gate-nops.XXXXXXXX")"
+NOPS="$NOPS_ROOT/bin"; NOPSPY="$NOPS_ROOT/nopy"; mkdir -p "$NOPS" "$NOPSPY"
+for tool in bash sh grep sed awk tr cat cut head sort dirname basename env uname mkdir mv rm date find comm cmp touch python3 git; do
+  toolpath="$(command -v "$tool" 2>/dev/null)"
+  [ -n "$toolpath" ] && ln -s "$toolpath" "$NOPS/$tool" 2>/dev/null
+  [ -n "$toolpath" ] && [ "$tool" != python3 ] && ln -s "$toolpath" "$NOPSPY/$tool" 2>/dev/null
+done
+if PATH="$NOPS" "$NOPS/bash" -c 'command -v ps >/dev/null 2>&1'; then
+  check "#3547 the bare directory really reaches no ps" "it found one, so nothing below measures its absence"
+else check "#3547 the bare directory really reaches no ps" ok; fi
+# And a python3 that runs from it, or the refusal below would be the missing reader's (#480).
+if [ "$(PATH="$NOPS" "$NOPS/bash" -c 'python3 -c "print(1)"' 2>/dev/null)" = 1 ]; then
+  check "#3547 and still reaches a python3 that runs" ok
+else check "#3547 and still reaches a python3 that runs" "python3 did not run from the bare directory, so the case below would measure that instead"; fi
+PATH="$NOPS" edit "$FIX/dev/payload/LESSONS.md" "$FIX/dev"
+refused "#3547 with no ps on PATH, a payload write is refused, not allowed"
+says "#3547 saying the watcher could not be read" "$UNREAD_WORDS"
+says "#3547 and that ps could not be started" "exited 127"
+unsaid "#3547 and it is not the missing reader's refusal" "python3 is not on PATH"
+# Neither reader: the call cannot be read and nor can the watcher. Refused, saying both.
+if PATH="$NOPSPY" "$NOPSPY/bash" -c 'command -v python3 >/dev/null 2>&1 || command -v ps >/dev/null 2>&1'; then
+  check "#3547 the second bare directory reaches neither python3 nor ps" "it found one"
+else check "#3547 the second bare directory reaches neither python3 nor ps" ok; fi
+OUT="$(printf '{"tool_name":"Edit","session_id":"","cwd":"%s","tool_input":{"file_path":"%s"}}' "$FIX/dev" "$FIX/dev/payload/LESSONS.md" \
+  | ( cd "$FIX/dev" && env SYNC_WATCH_PID_FILE="$PIDF" SYNC_HOLD_FILE="$HOLD" PATH="$NOPSPY" "$NOPSPY/bash" "$HOOK" 2>&1 ))"; RC=$?
+refused "#3547 with neither python3 nor ps, a call naming payload/ is refused, not allowed"
+says "#3547 naming the reader of the call that is missing" "python3"
+says "#3547 and saying the watcher could not be read either" "$UNREAD_WORDS"
+unsaid "#3547 without claiming a watcher is live" "$LIVE_WORDS"
+rm -rf "$NOPS_ROOT"
+
+# What no command text can show is still caught after it runs: the note is taken before the call
+# when the watcher could not be read, and the change is reported after it in those words.
+PATH="$BADPS:$PATH" prepost PreToolUse "python3 $FIX/w.py" "$FIX/dev" u1
+allowed "#3547 a script file is not refused before it runs over a ps that fails, since nothing shows its target"
+printf 'unread one\n' > "$FIX/dev/payload/LESSONS.md"
+PATH="$BADPS:$PATH" prepost PostToolUse "python3 $FIX/w.py" "$FIX/dev" u1
+if [ "$RC" -eq 2 ]; then check "#3547 and a payload file it changed is reported afterwards" ok
+else check "#3547 and a payload file it changed is reported afterwards" "exit $RC, said: ${OUT:0:160}"; fi
+says "#3547 naming the file" "$FIX/dev/payload/LESSONS.md"
+says "#3547 saying the watcher could not be read" "$UNREAD_WORDS"
+says "#3547 and giving the hold command" "claude-sync hold"
+unsaid "#3547 without claiming a watcher was live" "with a watch daemon live from another clone"
+# ps failing only AFTER the call: the note was taken with a live watcher seen, and a reading that
+# fails afterwards is not the watcher having gone.
+prepost PreToolUse "python3 $FIX/w.py" "$FIX/dev" u2
+printf 'unread two\n' > "$FIX/dev/payload/LESSONS.md"
+PATH="$BADPS:$PATH" prepost PostToolUse "python3 $FIX/w.py" "$FIX/dev" u2
+if [ "$RC" -eq 2 ]; then check "#3547 a ps that fails only after the call does not silence the report" ok
+else check "#3547 a ps that fails only after the call does not silence the report" "exit $RC, said: ${OUT:0:160}"; fi
+says "#3547 which says the watcher could not be read" "$UNREAD_WORDS"
+
+# And nothing else (L36, L54). A hold is read without ps, so the way on the refusal names works.
+printf '%s\n' "$(( $(date +%s) + 3600 ))" > "$HOLD"
+PATH="$BADPS:$PATH" edit "$FIX/dev/payload/LESSONS.md" "$FIX/dev"
+allowed "#3547 a hold in force still lets the write through while ps cannot run"
+PATH="$BADPS:$PATH" prepost PreToolUse "python3 $FIX/w.py" "$FIX/dev" u3
+printf 'unread three\n' > "$FIX/dev/payload/LESSONS.md"
+PATH="$BADPS:$PATH" prepost PostToolUse "python3 $FIX/w.py" "$FIX/dev" u3
+allowed "#3547 and a change made under that hold is not reported"
+rm -f "$HOLD"
+# Nothing mirrors into a linked worktree on its own branch, wherever a watcher runs from.
+PATH="$BADPS:$PATH" edit "$G/wt/payload/a.md" "$G/wt"
+allowed "#3547 a linked worktree on its own branch is still let through while ps cannot run"
+PATH="$BADPS:$PATH" edit "$FIX/dev/tests/a.sh" "$FIX/dev"
+allowed "#3547 a write outside payload is not refused over a ps it never needed"
+PATH="$BADPS:$PATH" runbash "cat $FIX/dev/payload/LESSONS.md" "$FIX/dev"
+allowed "#3547 nor is a command that only reads a payload file"
+# ps is asked only about a pid that is running: with no pid file, or one naming a dead pid, there
+# is no watcher, and that is settled without it.
+PATH="$BADPS:$PATH" edit "$FIX/dev/payload/LESSONS.md" "$FIX/dev" "$NOPIDF"
+allowed "#3547 with no pid file the write is allowed whatever ps does"
+printf '%s\n' "999999" > "$FIX/dead.pid"
+PATH="$BADPS:$PATH" edit "$FIX/dev/payload/LESSONS.md" "$FIX/dev" "$FIX/dead.pid"
+allowed "#3547 and with a pid file naming a dead pid"
+# The controls: with ps answering, the same writes are judged exactly as before (L159).
+edit "$FIX/dev/payload/LESSONS.md" "$FIX/dev"
+refused "#3547 control: with ps answering, the write is refused for the live watcher"
+says "#3547 control: in the words for a watcher that was seen" "$LIVE_WORDS"
+unsaid "#3547 control: and not in the words for one that could not be read" "$UNREAD_WORDS"
+edit "$FIX/src/payload/LESSONS.md" "$FIX/src"
+allowed "#3547 control: and the clone the watcher runs from is let through again"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

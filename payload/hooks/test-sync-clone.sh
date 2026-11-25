@@ -105,7 +105,7 @@ no sc_is_this_clone "$FIX/clone" "$FIX/x/a/b/claude-sync watch"
 echo "sync clone: whether a watcher is actually alive"
 
 DESC="with no pid file there is no watcher"
-no sc_watcher_cmd
+no sc_watcher_read
 # A REAL process with a real command line: a stub would only confirm this suite's own assumption
 # about what ps returns (L52).
 # Started by a subshell that ends at once and writes nowhere, its pid recorded, so it is never this
@@ -118,22 +118,124 @@ for _ in $(seq 1 200); do
   case "$(ps -o command= -p "$WPID" 2>/dev/null || true)" in *claude-sync*watch*) break ;; esac
 done
 printf '%s\n' "$WPID" > "$SYNC_WATCH_PID_FILE"
-case "$(sc_watcher_cmd || true)" in
+sc_watcher_read || true
+case "$SC_WATCHER_CMD" in
   *claude-sync*watch*) check "a live watcher is found, with its command line" ok ;;
-  *) check "a live watcher is found, with its command line" "got '$(sc_watcher_cmd || true)'" ;;
+  *) check "a live watcher is found, with its command line" "got '$SC_WATCHER_CMD'" ;;
 esac
 # A stale pid is reused by the system constantly, and a number alone cannot tell a live watcher
 # from whatever inherited it (L237).
 printf '%s\n' "999999" > "$SYNC_WATCH_PID_FILE"
 DESC="a dead pid is not a live watcher"
-no sc_watcher_cmd
+no sc_watcher_read
 # A live pid whose process is something else entirely: the pid file alone would say yes.
 printf '%s\n' "$$" > "$SYNC_WATCH_PID_FILE"
 DESC="a live pid that is not a watcher is not a watcher"
-no sc_watcher_cmd
+no sc_watcher_read
+want "and that is settled, not unread: ps answered, and the answer was another process" "none" "$SC_WATCHER_STATE"
 printf 'not a number\n' > "$SYNC_WATCH_PID_FILE"
 DESC="a pid file holding no number is not a watcher"
-no sc_watcher_cmd
+no sc_watcher_read
+printf '0\n' > "$SYNC_WATCH_PID_FILE"
+DESC="nor is one holding zero, which names no process"
+no sc_watcher_read
+want "and zero is settled, not unread" "none" "$SC_WATCHER_STATE"
+
+echo "sync clone: a watcher that cannot be read is not one that is absent (claude-config#3547)"
+
+# The command line was read with ps, its failure discarded, so a ps that could not run gave an
+# empty answer and no error, and every hook built on this took that for no watcher: the payload
+# write gate let the write through. The reading has three answers now, live, none and unread, and
+# only none says nothing can revert a write (L10).
+watcher_says(){ # watcher_says <PATH to ask under> -> "<exit code> <state>"
+  local rc=0
+  PATH="$1" sc_watcher_read 2>/dev/null || rc=$?
+  printf '%s %s' "$rc" "${SC_WATCHER_STATE:-}"
+}
+mkdir -p "$FIX/badps" "$FIX/nops" "$FIX/quietps" "$FIX/endps"
+printf '#!/bin/sh\necho "ps: operation not permitted" >&2\nexit 1\n' > "$FIX/badps/ps"
+printf '#!/bin/sh\nexit 0\n' > "$FIX/quietps/ps"
+chmod +x "$FIX/badps/ps" "$FIX/quietps/ps"
+# The stand ins' own premise, asserted rather than assumed (L159): each really fails to answer.
+if PATH="$FIX/badps:$PATH" ps -o command= -p "$WPID" >/dev/null 2>&1; then
+  check "the stand in ps really fails" "it answered, so nothing below measures a ps that cannot run"
+else check "the stand in ps really fails" ok; fi
+if PATH="$FIX/nops" command -v ps >/dev/null 2>&1; then
+  check "the empty directory really reaches no ps" "it found one"
+else check "the empty directory really reaches no ps" ok; fi
+printf '%s\n' "$WPID" > "$SYNC_WATCH_PID_FILE"
+want "with ps answering, a live watcher reads as live" "0 live" "$(watcher_says "$PATH")"
+sc_watcher_read 2>/dev/null || true
+case "${SC_WATCHER_CMD:-}" in
+  *"$FIX/clone/claude-sync watch"*) check "and its command line is kept for the question of which clone it runs from" ok ;;
+  *) check "and its command line is kept for the question of which clone it runs from" "got '${SC_WATCHER_CMD:-}'" ;;
+esac
+want "a ps that fails leaves a live pid unread, never absent" "2 unread" "$(watcher_says "$FIX/badps:$PATH")"
+# Under a PATH that reaches nothing at all, so the pid file is read and the pid tested by the shell
+# itself: no other tool's absence can stand in for the one being measured.
+want "a ps that is missing leaves it unread too" "2 unread" "$(watcher_says "$FIX/nops")"
+want "and so does a ps that exits 0 having said nothing about a running process" "2 unread" "$(watcher_says "$FIX/quietps:$PATH")"
+PATH="$FIX/badps:$PATH" sc_watcher_read 2>/dev/null || true
+case "${SC_WATCHER_WHY:-}" in
+  *"ps -o command= -p $WPID"*"exited 1"*) check "the reason names the command that was run and how it ended" ok ;;
+  *) check "the reason names the command that was run and how it ended" "got '${SC_WATCHER_WHY:-}'" ;;
+esac
+want "and the command to run by hand is that same one" "ps -o command= -p $WPID" "${SC_WATCHER_PROBE:-}"
+case "$(sc_watcher_unread_sentence 2>/dev/null || true)" in
+  *"could not be read"*"ps -o command= -p $WPID"*) check "one sentence says it could not be read and why, for every hook that says it" ok ;;
+  *) check "one sentence says it could not be read and why, for every hook that says it" "got '$(sc_watcher_unread_sentence 2>/dev/null || true)'" ;;
+esac
+PATH="$FIX/nops" sc_watcher_read 2>/dev/null || true
+case "${SC_WATCHER_WHY:-}" in
+  *"exited 127"*) check "a missing ps is told from a failing one by its exit code" ok ;;
+  *) check "a missing ps is told from a failing one by its exit code" "got '${SC_WATCHER_WHY:-}'" ;;
+esac
+# The question every hook asks: could a watcher revert this? Yes unless it is settled that none can.
+possible_under(){ PATH="$1" sc_watcher_possible 2>/dev/null; }
+DESC="an unread watcher counts as one that could revert a write"; yes possible_under "$FIX/badps:$PATH"
+DESC="and so does a live one"; yes possible_under "$PATH"
+DESC="an unread watcher is no clone's own, so no clone is taken for its source"
+no sc_is_this_clone "$FIX/clone" ""
+# ps is asked only about a pid that is running, so what was settled without it stays settled (L54).
+printf '%s\n' "999999" > "$SYNC_WATCH_PID_FILE"
+want "a dead pid is still no watcher when ps cannot run" "1 none" "$(watcher_says "$FIX/badps:$PATH")"
+DESC="and a settled none says nothing could revert"; no possible_under "$FIX/badps:$PATH"
+case "$(PATH="$FIX/badps:$PATH" sc_watcher_read 2>/dev/null; sc_watcher_unread_sentence 2>/dev/null || true)" in
+  "") check "and the could not read sentence says nothing then" ok ;;
+  *) check "and the could not read sentence says nothing then" "it spoke" ;;
+esac
+printf 'not a number\n' > "$SYNC_WATCH_PID_FILE"
+want "a pid file holding no number is still no watcher when ps cannot run" "1 none" "$(watcher_says "$FIX/nops")"
+rm -f "$SYNC_WATCH_PID_FILE"
+want "and no pid file is still no watcher when ps cannot run" "1 none" "$(watcher_says "$FIX/nops")"
+# A process that ends between the two looks is gone, not unread: this ps ends the process it is
+# asked about, waits until it is really gone, then fails as ps does of a pid that is not there.
+( bash -c 'exec -a "'"$FIX"'/clone/claude-sync watch" sleep 120' </dev/null >/dev/null 2>&1 &
+  printf '%s\n' "$!" > "$FIX/ending.pid" ) </dev/null >/dev/null 2>&1
+EPID="$(cat "$FIX/ending.pid" 2>/dev/null)"
+printf '#!/bin/sh\nkill -9 "$4" 2>/dev/null\nn=0\nwhile kill -0 "$4" 2>/dev/null && [ "$n" -lt 20000 ]; do n=$((n + 1)); done\nexit 1\n' > "$FIX/endps/ps"
+chmod +x "$FIX/endps/ps"
+printf '%s\n' "$EPID" > "$SYNC_WATCH_PID_FILE"
+want "a watcher that ended while ps was asked is gone, not unread" "1 none" "$(watcher_says "$FIX/endps:$PATH")"
+kill -9 "$EPID" 2>/dev/null
+# A pid file that is there and cannot be read is the same discarded failure one step earlier.
+printf '%s\n' "$WPID" > "$FIX/sealed.pid"
+chmod 000 "$FIX/sealed.pid"
+if [ -r "$FIX/sealed.pid" ]; then
+  echo "SUITE-PART-UNMEASURED a watcher pid file that cannot be read: this account reads a file with no permissions, so one could not be made"
+else
+  want "a pid file that is there and cannot be read is unread, never absent" "2 unread" \
+    "$(SYNC_WATCH_PID_FILE="$FIX/sealed.pid" watcher_says "$PATH")"
+  SYNC_WATCH_PID_FILE="$FIX/sealed.pid" sc_watcher_read 2>/dev/null || true
+  case "${SC_WATCHER_WHY:-}" in
+    *"$FIX/sealed.pid"*) check "and the reason names the pid file" ok ;;
+    *) check "and the reason names the pid file" "got '${SC_WATCHER_WHY:-}'" ;;
+  esac
+fi
+chmod 600 "$FIX/sealed.pid"
+# The control: with the real ps back, the first answer stands (L159).
+printf '%s\n' "$WPID" > "$SYNC_WATCH_PID_FILE"
+want "and with ps answering again the watcher reads as live" "0 live" "$(watcher_says "$PATH")"
 
 echo "sync clone: whether a hold covers the session asking"
 

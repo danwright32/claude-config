@@ -642,7 +642,20 @@ one place, `hooks/lib/hold-record.sh`, which `claude-sync` and those hooks both 
 `claude-sync` that cannot load it reads an existing record as held, says why, and clears nothing.
 When `hooks/lib/sync-clone.sh` itself cannot be loaded, the write gate refuses any call whose
 payload names `payload/`, naming the file and `claude-sync pull` as the fix, and the prompt hook
-says once a session that it could not check; both used to say nothing (#1900). Every other gate
+says once a session that it could not check; both used to say nothing (#1900). The same holds for a
+watcher that cannot be read (#3547). Whether a watch daemon is live, and which clone it runs from,
+is read from the process the pid file names, with `ps`, and that reading has three answers:
+live, none, or could not be read. None is a settled answer: no pid file, or one naming a process
+that is not running or is something else. When the pid file names a running process and `ps`
+fails, is missing or says nothing about it, or the pid file is there and cannot be read, the write
+gate refuses the payload write in its own
+words, naming the `ps` command that failed and how it ended, and the prompt hook says once that it
+could not check; both used to read the empty answer as no watcher and say nothing. The clone the
+watcher runs from cannot be told apart then, so it is refused with every other. What does not
+depend on the watcher still passes: a hold of the session's own, which is read from its own record
+and is the way on the refusal names, a linked worktree on its own branch, and a plain copy. The
+check after a Bash call reports a change the same way. Both hooks ask through `sc_watcher_possible`
+in `hooks/lib/sync-clone.sh`, which says no only when none is settled. Every other gate
 that refuses does the same for a library it needs, and `hooks/test-gates-fail-closed.sh` runs each
 one with each such library taken away. A library a gate loads with a stand in function
 (`. lib/x.sh || name() {`) is needed too, unless the suite names that stand in as examined:

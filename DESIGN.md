@@ -2242,6 +2242,21 @@ found at the copy's root or above it. A copy that is its own git checkout, a cop
 work tree, and anything git cannot answer for are judged as a checkout, and there is no list of
 exempt folders. Both hooks ask through `sc_is_plain_copy` in `hooks/lib/sync-clone.sh`.
 
+**A watcher that cannot be read is not one that is absent (#3547).** Whether a daemon is live is
+read from the process the pid file names, with `ps`. The helper used to print the command line or
+nothing, and discarded the failure of `ps`, so a `ps` that could not run gave the same empty answer
+as no watcher: the warning said nothing and the gate let the write through. It was found on
+2026-11-24 under a wrapper that forbade `ps`. The reading now has three answers, live, none and
+unread, kept as a state the caller branches on (`sc_watcher_read`) with no printed answer for an
+error to hide behind, and both hooks ask one question of it, `sc_watcher_possible`, which says no
+only when none is settled. A `ps` that fails is followed by a second test of the pid, because `ps`
+exits non zero both when it cannot run and when the process ended a moment after it was seen: gone
+is none, and still running with nothing learned about it is unread. For an unread watcher the pass
+for the clone it runs from is not given, since that is read from the same command line, and the
+passes that do not depend on the watcher stand (a hold, an own worktree, a plain copy). The
+refusal and the warning say that the watcher could not be read and name the command that failed,
+never that a watcher is live, which nothing measured.
+
 The recovery, if it happens again: find the sync commit (`git log --author=claude-config-sync`),
 take the file list it touched, and check those paths out of the commit BEFORE it, keeping
 `LESSONS.md` and its index, which carry the other Mac's real additions.
