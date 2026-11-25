@@ -77,7 +77,10 @@ and settles its own surfaces in rounds of its own before it is built.
      is asked after the hooks worker ended during tool.check: its caller is gone"), and the call
      ends as an error, "Error calling tool (Bash): no answer to a heartbeat within 5000ms: ...", and
      does not run, 3 of 3.
-   - **A subagent's call is treated the same** in every case above.
+   - **A subagent's call is treated the same** in each case measured for one (3 samples each): a
+     refusal at once, 7 s plus 7 s, an 11 s wait on a child process, and an 11 s cut with no
+     `.catch` on either hook. The busy loop and the `.catch` cases were measured in the main
+     session only.
 
    So every `tool.call` or `tool.check` hook that can refuse carries a `.catch` that refuses, and
    its own synchronous work stays well under 5 s. For a call that passes two judging hooks, as a
