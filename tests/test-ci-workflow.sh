@@ -465,8 +465,9 @@ cost_run "$CG/hooks/run-all-tests.sh" ""
 { [ "$cost_rc" -eq 0 ] && ! grep -qE 'took [0-9]+s, over the' <<< "$cost_out"; } \
   && check "#3575 a run that is not a dealt part is never failed for a suite's cost" ok \
   || check "#3575 a run that is not a dealt part is never failed for a suite's cost" "rc=$cost_rc: $(tail -3 <<< "$cost_out" | tr '\n' ' ')"
-# A record restored from an older run says the quick suite took 999 seconds. The part judges what it
-# measured now, so a store from before a split can never turn a part red.
+# A record planted here (set by this test, not measured) stands in for one restored from an older
+# run, putting the quick suite far over the ceiling. The part judges what it measured now, so a
+# store from before a split can never turn a part red.
 git -C "$CG" rm -q --cached t/test-slow.sh && rm -f "$CG/t/test-slow.sh"
 printf '999\n' > "$CG/store/t%2Ftest-quick.sh"
 HOOK_TESTS_ROOT="$CG" HOOK_TESTS_TIMINGS= HOOK_TESTS_DEAL=1 bash "$CG/hooks/run-all-tests.sh" > "$CG/deal2.tsv" 2>/dev/null
