@@ -111,6 +111,29 @@ def live_members(pgid):
     return live
 
 
+def running_from(program):
+    """Pids of the processes whose command starts with `program`, read straight from ps."""
+    out = subprocess.run(["ps", "-A", "-o", "pid=,command="], capture_output=True, text=True)
+    if out.returncode != 0:
+        raise AssertionError("ps failed: " + out.stderr)
+    found = []
+    for line in out.stdout.splitlines():
+        pid, _, command = line.strip().partition(" ")
+        if command.strip().startswith(program):
+            found.append(int(pid))
+    return found
+
+
+def wait_not_running(program, limit_s=20):
+    """Wait on the condition, no process running from `program`, and return those still there at the limit."""
+    deadline = time.monotonic() + limit_s
+    while True:
+        found = running_from(program)
+        if not found or time.monotonic() >= deadline:
+            return found
+        time.sleep(0.05)
+
+
 class RunFixture(unittest.TestCase):
     """The throwaway repository and the helpers both test classes use; it holds no tests."""
 
@@ -299,12 +322,20 @@ class RunSessionTests(RunFixture):
         self.assertEqual(r.returncode, 0, r.stderr)
         rid = json.loads(r.stdout)["receipt_id"]
         rec = self.receipt(rid)
+        beat_program = os.path.join(self.home, "receipts", rid, "egress-beat")
+        if rec.get("egress_sandbox"):  # the monitor started, so its beat program is running from its copy
+            self.assertTrue(os.path.exists(beat_program), "the monitor made no beat program")
+            self.assertTrue(running_from(beat_program), "the beat program is not running")
         os.kill(rec["supervisor_pid"], signal.SIGKILL)
         self.assertTrue(live_members(rec["serve_pgid"]), "serve should outlive its supervisor")
         s = self.run_cli("stop", rid)
         self.assertEqual(s.returncode, 0, s.stderr)
         rec = self.receipt(rid)
         self.assert_fully_stopped(rec, "recovered")
+        # The beat program ends by itself when its supervisor's death closes its input, and the
+        # stop removes the copy it ran from (claude-config#3576).
+        self.assertFalse(os.path.exists(beat_program), "the beat program's copy was left in the receipt folder")
+        self.assertEqual(wait_not_running(beat_program), [], "the beat program outlived its supervisor")
         # The monitor died with its supervisor, so the run cannot show what it reached, and the
         # report stream it left behind is stopped by the process group it recorded.
         self.assertEqual(rec["egress"]["verdict"], "unmeasured", rec["egress"])
@@ -373,6 +404,9 @@ def sandbox_unavailable():
 
 NO_SANDBOX = sandbox_unavailable()
 MEASURED = unittest.skipIf(NO_SANDBOX, "UNMEASURED, not passed: %s" % NO_SANDBOX)
+# The monitor's words for a Mac that did not write every sandbox report it asked for (claude-config#3576).
+WITHHELD = "this Mac did not report every connection it was asked to report"
+WITHHELD_AFTER_S = 3  # a report arrived within 5 ms when it arrived at all (420 rounds, 2026-11-24)
 
 FAKE_LOG_SILENT = r'''#!/bin/sh
 # A report stream that starts and then never reports anything: the canary is never seen.
@@ -406,18 +440,72 @@ class EgressTests(RunFixture):
         return rid, sha, self.receipt(rid)
 
     def wait_for_named(self, rid, address):
-        """Wait on the condition, the monitor naming the address, never a fixed time (L290)."""
+        """Wait on the condition, the monitor naming the address, never a fixed time (L290).
+
+        On a Mac that withholds sandbox reports (claude-config#3576) the address may never be named.
+        There the wait ends on another condition the monitor's own log shows: a test connection it
+        made has gone WITHHELD_AFTER_S with no report. The receipt then decides what the run read;
+        nothing here waits for a reporting window to come round."""
         path = os.path.join(self.home, "receipts", rid, "egress.jsonl")
         deadline = time.monotonic() + 60
+        unreported_since = {}
         while time.monotonic() < deadline:
             try:
                 with open(path) as f:
-                    if address in f.read():
-                        return
+                    text = f.read()
             except FileNotFoundError:
-                pass
+                text = ""
+            if address in text:
+                return
+            made, reported = set(), set()
+            for line in text.splitlines():
+                try:
+                    ev = json.loads(line)
+                except ValueError:  # a line still being written
+                    continue
+                if ev.get("event") == "beat-fired":
+                    made.add(ev["beat"])
+                elif ev.get("event") == "beat":
+                    reported.add(ev["beat"])
+            now = time.monotonic()
+            for beat in made - reported:
+                unreported_since.setdefault(beat, now)
+            if any(now - since >= WITHHELD_AFTER_S for beat, since in unreported_since.items() if beat not in reported):
+                return
             time.sleep(0.05)
-        self.fail("the monitor never named %s in %s" % (address, path))
+        self.fail("the monitor never named %s in %s, and its log shows no test connection unreported" % (address, path))
+
+    def withheld(self, egress):
+        """Whether this run's own receipt shows a report the monitor asked for that never arrived.
+        That is the kind of Mac the run was on, read from the run itself and never assumed (L411)."""
+        beats, canaries = egress["beats"], egress["canaries"]
+        self.assertIsNone(beats["failure"], egress)
+        # One before the first canary and one after serve was gone, at the least.
+        self.assertGreaterEqual(beats["fired"], 2, egress)
+        self.assertGreaterEqual(egress["attach"]["seen"], 1, egress)
+        if beats["reported"] < beats["fired"] or canaries["seen"] < canaries["fired"]:
+            # Said in the test's own output, so a run of the suite shows which arm each test took.
+            sys.stderr.write("[this Mac withheld %d of %d test connections and %d of %d canaries; the run read %s] "
+                             % (beats["fired"] - beats["reported"], beats["fired"],
+                                canaries["fired"] - canaries["seen"], canaries["fired"], egress["verdict"]))
+            return True
+        return False
+
+    def assert_unmeasured_because_reports_were_withheld(self, rid, sha, egress):
+        """What a run reads on a Mac that withheld a report: unmeasured, saying so, and no merge."""
+        self.assertEqual(egress["verdict"], "unmeasured", egress)
+        self.assertIn(WITHHELD, egress["why"])
+        self.assertIn("cannot be trusted", egress["why"])
+        self.assertIsNone(egress["measured_to"])
+        out = self.merge_verdict(rid, sha)
+        self.assertEqual(out["decision"], "refuse")
+        self.assertEqual(sorted({p["kind"] for p in out["problems"]}), ["egress-unmeasured"])
+        self.assertIn(WITHHELD, out["text"])
+
+    def assert_no_beat_program_left(self, rid):
+        beat_program = os.path.join(self.home, "receipts", rid, "egress-beat")
+        self.assertFalse(os.path.exists(beat_program), "the beat program's copy was left in the receipt folder")
+        self.assertEqual(wait_not_running(beat_program), [], "the beat program outlived the run")
 
     def merge_verdict(self, rid, sha):
         """The merge check's judgment in block mode, over this run's real receipt, through the same
@@ -434,14 +522,25 @@ class EgressTests(RunFixture):
         self.assertEqual(out["mode"], "block")
         return out
 
+    # The four runs below go through the real sandbox, and what each must read depends on the Mac
+    # (claude-config#3576). Where every report the monitor asked for arrived, the run reads as it
+    # always did. Where one did not, a run in which nothing outside was SEEN reads unmeasured,
+    # never clean, and a run in which something outside was seen still reads not-clean. Which Mac
+    # this is comes from the run's own receipt, and each arm asserts in full: nothing is retried
+    # until a reporting window has gone.
+
     @MEASURED
     def test_a_serve_that_reaches_only_this_machine_is_clean(self):
         rid, sha, rec = self.run_to_receipt("local")
         egress = rec["egress"]
-        self.assertEqual(egress["verdict"], "clean", egress)
         self.assertEqual(egress["destinations"], [], egress)
         self.assertEqual(egress["allowed_hosts"], ["127.0.0.1", "localhost", "::1"])
+        self.assert_no_beat_program_left(rid)
+        if self.withheld(egress):
+            return self.assert_unmeasured_because_reports_were_withheld(rid, sha, egress)
+        self.assertEqual(egress["verdict"], "clean", egress)
         self.assertIn("no connection", egress["why"])
+        self.assertEqual(egress["beats"]["unreported"], [], egress)
         out = self.merge_verdict(rid, sha)
         self.assertEqual((out["problems"], out["decision"]), ([], "allow"))
 
@@ -449,12 +548,18 @@ class EgressTests(RunFixture):
     def test_a_serve_that_reaches_an_outside_host_is_not_clean_and_names_it(self):
         rid, sha, rec = self.run_to_receipt("outside", wait_for="192.0.2.1")
         egress = rec["egress"]
+        named = [d for d in egress["destinations"] if d["address"] == "192.0.2.1"]
+        if not named:
+            # Only a Mac that withheld reports may fail to name it, and then the run is never clean.
+            self.assertTrue(self.withheld(egress), egress)
+            return self.assert_unmeasured_because_reports_were_withheld(rid, sha, egress)
         self.assertEqual(egress["verdict"], "not-clean", egress)
         self.assertIn("192.0.2.1", egress["why"])
-        named = [d for d in egress["destinations"] if d["address"] == "192.0.2.1"]
         self.assertEqual(len(named), 1, egress)
         self.assertEqual((named[0]["port"], named[0]["allowed"]), (9, False))
         self.assertGreaterEqual(named[0]["reports"], 1)
+        if self.withheld(egress):  # what was seen is never downgraded, and the gap is said beside it
+            self.assertIn(WITHHELD, egress["why"])
         out = self.merge_verdict(rid, sha)
         self.assertEqual(out["decision"], "refuse")
         self.assertEqual(sorted({p["kind"] for p in out["problems"]}), ["egress-not-clean"])
@@ -465,6 +570,9 @@ class EgressTests(RunFixture):
         self.doc_over = {"egress": {"allow": ["192.0.2.1"]}}
         rid, sha, rec = self.run_to_receipt("outside", wait_for="192.0.2.1")
         egress = rec["egress"]
+        if self.withheld(egress):
+            self.assertEqual([d for d in egress["destinations"] if not d["allowed"]], [], egress)
+            return self.assert_unmeasured_because_reports_were_withheld(rid, sha, egress)
         self.assertEqual(egress["verdict"], "clean", egress)
         self.assertEqual([(d["address"], d["allowed"]) for d in egress["destinations"]], [("192.0.2.1", True)])
 
@@ -472,8 +580,30 @@ class EgressTests(RunFixture):
     def test_the_drive_helper_is_measured_too(self):
         rid, sha, rec = self.run_to_receipt("local", drive_connect="192.0.2.2")
         egress = rec["egress"]
+        if not egress["unnamed"] and not egress["destinations"]:
+            # The drive helper's connection was never reported. Main read this run clean (the
+            # failure #3576 was filed for); it is unmeasured, and only on a Mac that withheld.
+            self.assertTrue(self.withheld(egress), egress)
+            return self.assert_unmeasured_because_reports_were_withheld(rid, sha, egress)
         self.assertEqual(egress["verdict"], "not-clean", egress)
         self.assertIn("port 9", egress["why"])
+
+    @MEASURED
+    def test_a_beat_program_that_cannot_be_signed_leaves_unmeasured(self):
+        # Nothing then shows whether this Mac reports every connection, so nothing may read clean;
+        # serve still runs under the reporting sandbox, so a connection that is seen still counts.
+        self.extra_env = {"VERIFICATION_EGRESS_CODESIGN": "/usr/bin/false"}
+        rid, sha, rec = self.run_to_receipt("local")
+        egress = rec["egress"]
+        self.assertEqual(egress["verdict"], "unmeasured", egress)
+        self.assertIn("could not check that this Mac reports every connection", egress["why"])
+        self.assertIn("could not be signed ad hoc (/usr/bin/false exit 1", egress["why"])
+        self.assertEqual((egress["beats"]["fired"], egress["beats"]["reported"]), (0, 0), egress)
+        self.assertTrue(rec.get("egress_sandbox"), "serve must still run under the reporting sandbox")
+        self.assert_no_beat_program_left(rid)
+        out = self.merge_verdict(rid, sha)
+        self.assertEqual(out["decision"], "refuse")
+        self.assertEqual(sorted({p["kind"] for p in out["problems"]}), ["egress-unmeasured"])
 
     def test_a_monitor_that_cannot_start_leaves_unmeasured(self):
         self.extra_env = {"VERIFICATION_EGRESS_LOG": "/nonexistent/log"}

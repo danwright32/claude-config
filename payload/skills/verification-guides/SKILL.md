@@ -33,7 +33,7 @@ starts and stops serve is [scripts/run_session.py](scripts/run_session.py). Both
 | `commands.drive` | The project's drive helper. Called with the arguments the runner passes, and with `VERIFICATION_URL` (when the run serves), `VERIFICATION_AREA`, `VERIFICATION_WORKTREE` and `VERIFICATION_RECEIPT_DIR` set; it saves screenshots into `VERIFICATION_RECEIPT_DIR`. |
 | `commands.stamp` | Optional. Prints the commit the SERVED build reports (a `/__build` route, a footer). Recorded as the receipt's `build_stamp`; the merge check wants it to equal the head SHA. |
 | `commands.native_shot` | Required when any screen is native, else absent. Runs the offscreen test that photographs one native screen, from the checkout root, with the shot named in `VERIFICATION_SHOT_*` (below). |
-| `timeouts` | Optional seconds: `ready_s` 300, `ready_interval_s` 2, `max_run_s` 3600 (the run's deadline, longer than `ready_s`), `stop_s` 60, `egress_s` 30 (how long the egress monitor's canary may take to show up, at the start and at the end). |
+| `timeouts` | Optional seconds: `ready_s` 300, `ready_interval_s` 2, `max_run_s` 3600 (the run's deadline, longer than `ready_s`), `stop_s` 60, `egress_s` 30 (how long each of the egress monitor's canaries may take to show up, at the start and at the end). |
 | `egress` | Optional `{"allow": [<host>, ...]}`: the hosts serve and the drive helper may reach during a run, as bare host names or IP addresses (no scheme, port, path or wildcard). `127.0.0.1`, `localhost` and `::1` are always allowed, and by default nothing else is. A run's egress verdict is `clean` only when nothing outside this list was reached. |
 | `areas` | A list of `{"name", "guide", "owns", "screens"}`: a lower case hyphenated name, the guide's repository path, the glob patterns of the files the area owns, and optionally the screens its pull requests are pictured at (below). |
 | `exempt` | A list of `{"glob", "why"}`: files no area verifies, each with its reason. |
@@ -130,13 +130,42 @@ proves the stream live at the start and again at the end. The field holds `verdi
 `allowed_hosts`, `destinations` (each `{address, port, reports, processes, allowed}`) and
 `unnamed` (connections whose address was never read, each with `name_error`: null when the
 connection closed before lsof could read it, else why lsof could not). `clean` means the monitor
-was proved live for the whole run and every destination was allowed; `not-clean` names what was
-reached, and an unnamed connection is never clean; `unmeasured` gives the reason the monitor could
-not see (not a Mac, `sandbox-exec` missing or refused, the canary never reported, the supervisor
+was proved live for the whole run, every report it asked for itself arrived, and every destination
+was allowed; `not-clean` names what was reached, and an unnamed connection is never clean;
+`unmeasured` gives the reason the monitor could not see (not a Mac, `sandbox-exec` missing or
+refused, the canary never reported, a report the monitor asked for never arrived, the supervisor
 killed). A request body or header is never recorded: the monitor never sees one. Two limits,
 stated: a serve or drive helper that applies its own macOS sandbox fails under this one, which
 shows as serve stopping, and the kernel collapses repeated reports, so `reports` is a lower bound.
-`egress.jsonl` beside the receipt is the monitor's own log of every report as it arrived.
+`egress.jsonl` beside the receipt is the monitor's own log of every report as it arrived, and of
+every canary and test connection as it was made.
+
+A Mac may not write every report it is asked for (#3576). Measured on macOS 26.6.2 on 2026-11-24:
+in each window of about a minute the kernel wrote none of the first 8 reports for programs not
+signed by Apple (node, a Homebrew python, the helper browser: the ordinary serve and drive
+helper), so a serve that connected out a few times a minute went wholly unreported and the run
+read `clean`. The monitor cannot see a report that was never written, so it asks for reports of
+its own and counts them. It copies `/bin/bash` into the receipt folder, signs the copy ad hoc with
+`codesign` (so it is a program not signed by Apple, with no compiler needed), and has that beat
+program make a test connection of the canary's kind before the first canary, about once a second
+for the whole run, and once more after serve is gone; the copy is removed when the run stops.
+The receipt's `egress` records what was asked for and what came back: `beats` (`fired`,
+`reported`, the first 20 `unreported`, and `failure` when the beat program could not be made or
+run), `canaries` (`fired`, `seen`) and `attach` (the canaries that show the stream is attached
+before anything is counted). One test connection or canary that was never reported makes the run
+`unmeasured`, saying that this Mac did not report every connection it was asked to, and so does a
+beat program that could not be made. A connection that was seen outside the allowed hosts still
+reads `not-clean`, with the gap said beside it.
+
+So on a Mac that withholds reports this check cannot give a clean reading, and in `block` mode no
+pull request with a required area can merge from it, until the monitor refuses every host the
+project has not allowed instead of watching for them (#3576, not built). A Mac that reports
+everything reads as before. Two things are not covered, stated: a run on a withholding Mac that
+starts and ends inside the part of a window where reports are written (the next run within the
+minute) can still read `clean`, with every one of its test connections reported; and a window
+whose withheld reports are all taken by serve or the drive helper between two test connections,
+within one second, leaves no test connection unreported. Whether the work MacBook or another
+macOS version withholds reports is not established.
 
 ## CREATE
 
