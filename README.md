@@ -159,9 +159,22 @@ the end of staging and after the work names scan, over the finished payload, so 
 Mac's own config has already become the placeholder and the check reads what main's run would
 read. It is handed only the files this send carries (`--files0-from`): every payload file that
 differs from the clone's last commit, new ones included, and the files changed by commits the
-shared repo lacks (with no upstream set, the commits no remote branch holds); without git, the whole
-payload. The names are passed NUL separated from git to the check, so a name git would quote (one
-holding a double quote, a backslash or a newline) is read like any other. A failing file already on main therefore never
+shared repo lacks (with no upstream set, the commits no remote branch holds; after a send that went
+up on top of a shared head still being tested, the commits made since that send, because the
+earlier ones are already in the shared repo under another id, #3499); without git, the whole
+payload. Those earlier commits are left out only on trust that nothing puts them back on the shared
+branch, and the staging runs before the fetch, so it cannot know. A run that left them out therefore
+asks the check again just before each push of the branch, about every payload file that push would
+add to the shared repo or change there: commits replayed over a shared repo that still holds their
+files change nothing and are not read, and a file the pull replayed over the other Mac's deletion
+of it, one built into a send from the merge base, or one a merge made by hand put back is held
+there, in the same words, with the receiving half of a sync still run. In such a run a push from a
+clone that does not sit on top of the shared repo as it last saw it is not tried at all (git would
+refuse it unless the shared branch had been moved back, and then it would carry exactly the files
+left out); `push` says so and names `sync`, and a send goes on to its reconcile. The names are passed NUL separated from git to the check, so a name git would quote (one
+holding a double quote, a backslash or a newline) is read like any other, and a file whose name
+holds a line break is named in the refusal on one line with the break written as `\n` (#3499: it
+used to be held as a check that could not judge). A failing file already on main therefore never
 holds an unrelated send, and a send that removes it goes through. One failing file holds
 everything, because a send is one commit and the other Mac mirrors what the payload holds, so half
 a change would arrive with nothing to say which half. Nothing is committed or pushed, and no file in
@@ -178,7 +191,21 @@ that must name a real home, such as a fixture, carries the check's own
 no override variable, and a check that is missing or could not run refuses the send too, said as
 that rather than as a finding. In the change watcher a standing hold is said in full once, then in
 one short line pointing at status with no desktop notice, until its files change, it clears or a
-day passes; every refusal is still counted. Measured on 2026-11-22 against a clone of main with
+day passes; every refusal is still counted. A hold whose files changed is said in full again, but
+it is one hold and posts one desktop notice, then another only a day after the last, whether the
+send ends there or reaches the hold through a sync (#3499: a session adding a scratch file a tick
+used to get a notice a tick), and whether the hold is found in the staging or at the push.
+`status` and `stuck` point at the kept log only while it exists. Every push of the config branch
+lands only on the commit this clone last saw the shared branch at, which is the commit its files
+were judged against: a branch that moved since, forward or back, refuses the push, the run says so,
+and `claude-sync sync` is the way on. A clone that is not on top of that commit does not push at
+all and says the push was not tried.
+The work names scan, the secret scan's list of files outside the payload and the list of staged
+copies a sync or a pull sets aside read file names NUL separated too (#3499), so a name git would
+quote is scanned and set aside like any other. One kind is left in the clone and said: a staged
+copy whose name holds a line break, because the apply reads its lists a line at a time and, with
+that copy set aside, removed the file from the config (measured 2026-11-23). Where the shared repo
+changes the same file the receive refuses and says to rename it. Measured on 2026-11-22 against a clone of main with
 1,446 payload files, at a load average between 104 and 178 on 12 cores, 10 samples a case: the
 check adds 53 to 72 ms to a send with nothing in the payload to read, 85 to 149 ms to a send of one
 edited hook and one new file, and 4.1 to 4.3 seconds to a replay of the 2026-11-22 send, nearly all
