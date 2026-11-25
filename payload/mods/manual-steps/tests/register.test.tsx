@@ -1321,10 +1321,16 @@ test('a command to type that the prose check already knows is still blocked whil
   world(on)
   await start($)
   const said = 'Type `/plan-council` with the brief below.'
-  // With no card, the prose check alone catches it ("type" before a code span, #863).
-  expect((await turnStop($, said)).block).toMatch(/mcp__manual-steps__steps\b/)
+  // With no card both checks find it: the command's ask, and the prose one ("type" before a code
+  // span, #863), which is all that held it before #3652.
+  const bare = (await turnStop($, said)).block ?? ''
+  expect(bare).toMatch(/a command to type himself \(`\/plan-council`\)/)
+  expect(bare).toMatch(/\("Type"\), and no steps card holds it/)
+  // Once a card of other steps is pinned the prose check passes, and only the command's ask holds it.
   await hand($, [SHARE, DRAFT])
-  expect((await turnStop($, said)).block).toMatch(/`\/plan-council`/)
+  const pinned = (await turnStop($, said)).block ?? ''
+  expect(pinned).toMatch(/`\/plan-council`/)
+  expect(pinned).not.toMatch(/no steps card holds it/)
 })
 
 test('with no card at all, the command to type blocks the turn end (#3652)', withKit, async ($, on) => {

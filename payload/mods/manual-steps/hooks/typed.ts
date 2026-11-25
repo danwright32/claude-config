@@ -63,11 +63,14 @@ const handedOver = (plain: string, at: number): boolean => {
 }
 
 // The line before a fenced block, blank lines passed over, that introduces it ("with this brief:").
-const leadIn = (plain: string, at: number): { text: string; at: number } => {
+const leadIn = (plain: string, at: number): string => {
   const before = plain.slice(0, at).replace(/\s+$/, '')
-  const start = before.lastIndexOf('\n') + 1
-  return { text: before.slice(start), at: start }
+  return before.slice(before.lastIndexOf('\n') + 1)
 }
+
+// The patterns run without case so "Type" and "type" both lead, which lets their NAME match upper
+// case too; a name is held to lower case here, so a folder ("Run `/Applications`") is never a command.
+const LOWER = /^\/[a-z][a-z0-9-]*(?::[a-z0-9][a-z0-9-]*)?$/
 
 /** The slash commands `text` hands Dan to type, each once, in the order first handed over. */
 export const typedCommands = (text: string): string[] => {
@@ -82,13 +85,12 @@ export const typedCommands = (text: string): string[] => {
   for (const m of plain.matchAll(FENCED)) {
     const at = m.index ?? 0
     // Judged by the line that introduces it: a block shown as something Claude ran, or offered, is not.
-    const lead = leadIn(plain, at)
-    const said = lead.text.trim()
+    const said = leadIn(plain, at).trim()
     if (said && (quotedOnLine(said) || !dansNow(said, said.length) || OFFER.test(said) || /\?\s*$/.test(said))) continue
     found.push({ at, command: m[1] as string })
   }
-  found.sort((a, b) => a.at - b.at)
-  return [...new Set(found.map(f => f.command))]
+  const kept = found.filter(f => LOWER.test(f.command)).sort((a, b) => a.at - b.at)
+  return [...new Set(kept.map(f => f.command))]
 }
 
 const escaped = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')

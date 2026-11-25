@@ -873,9 +873,10 @@ export const register: Register = on => {
     }
     const shown = card && !card.isCarried ? card : null
     const missing = commands.filter(c => !onCard(shown, c))
-    // The command's own block says all the prose one would of the same step, so it is given alone.
-    const ours = missing.length ? typedStep(missing) : phrase && !(shown && nextStep(shown) !== undefined) ? proseStep(phrase) : null
-    if (!ours) return r
+    // Both are given when both are found: the phrase may be about another step than the command.
+    const asks = [missing.length ? typedStep(missing) : null, phrase && !(shown && nextStep(shown) !== undefined) ? proseStep(phrase) : null].filter(a => a !== null)
+    if (!asks.length) return r
+    const ours = asks.join('\n\n')
     return { ...r, block: r.block ? `${r.block}\n\n${ours}` : ours }
   })
 

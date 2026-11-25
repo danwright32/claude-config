@@ -63,6 +63,9 @@ describe('typedCommands', () => {
     expect(typedCommands('```\n/Users/someone/file.txt\n```')).toEqual([])
     expect(typedCommands('```\n/tmp/build.log\n```')).toEqual([])
     expect(typedCommands('Run `/usr/bin/true` to check.')).toEqual([])
+    // Lower case only: a folder named after a verb is not a command (lessons review, fb7e67d).
+    expect(typedCommands('Use `/Applications` for the copy.')).toEqual([])
+    expect(typedCommands('Type `/Library` into the Go to Folder box.')).toEqual([])
   })
 
   test('a command quoted on its line passes', () => {

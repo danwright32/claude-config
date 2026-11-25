@@ -2311,7 +2311,8 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   card closed, and the command was forgotten. Two things let it through: no phrase knew "start
   `/plan-council`", and any unfinished step on the card answered the prose check whatever that step
   was. So `hooks/typed.ts` recognises a command handed over to type (an imperative to type, run,
-  start or paste it leading its sentence, its line or the words after a label's colon; "to do X,
+  start, paste, enter, use, invoke, launch or kick off it, all counted in the measurement below,
+  leading its sentence, its line or the words after a label's colon; "to do X,
   type"; "until you run", "needs you to type", "remember to type"; "your next move is"; a fenced
   block whose first line is the command), and the turn's end is held unless an unfinished step on
   the card shown names the command. The prose check keeps its own rule, any unfinished step, since
