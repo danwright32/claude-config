@@ -4602,6 +4602,24 @@ test('#3323: a program the write reader does not know, handed a file an exact re
   w.ctl.shell = {}
 })
 
+// #3491: mod-kit's reader took `$'...'` for a plain single quoted string, so `x=$'it\'s'` left a
+// quote open to the end of the script and the reader gave no command at all: a program handed a
+// screen file on the next line was judged by nothing. Bash, zsh and sh close that string and run the
+// next line. And a script the reader cannot read to its end (a quote that never closes) is held,
+// where it was read as a script with nothing in it to judge.
+test("#3491: a program handed a screen file after a $'...' string holding an escaped quote is judged, and a script that stops in a quote is held", withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate', files: { ...WITH_SCRATCH } })
+  const BS = '\\'
+  const held = async (command: string) => ({ command, held: refusalOf(await call($, { tool: 'Bash', command })) !== '' })
+  // The control: the line typed alone is held, so the lines below are held for it and nothing else.
+  expect(await held('prettier --write app/page.tsx')).toEqual({ command: 'prettier --write app/page.tsx', held: true })
+  for (const command of [`x=$'it${BS}'s'\nprettier --write app/page.tsx`, `echo $'it${BS}'s'\nprettier --write /w/slate/app/page.tsx`, `x='abc\nprettier --write app/page.tsx`, `x="abc\nprettier --write app/page.tsx`])
+    expect(await held(command)).toEqual({ command, held: true })
+  // A string the shell closes holds nothing by itself.
+  for (const command of [`x=$'it${BS}'s'\necho done`, `x=$'it${BS}'s'; echo "it's" 'done'`]) expect(await held(command)).toEqual({ command, held: false })
+  expect(w.ran.length).toBe(2)
+})
+
 // #3280: the way back is not loosened. Once main's copy has served its purpose, putting the changed
 // file back over it is a write like any other: one that changes what the file draws is judged as it
 // was before, whichever way it is put back, and only a change that draws nothing new goes back unasked.

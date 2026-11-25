@@ -2767,3 +2767,37 @@ describe('writes: an arithmetic test and a [[ ]] comparison redirect nothing (#3
     expect(pipeline('dash -c "[[ a > b ]]"').map(c => c.compares)).toEqual([undefined])
   })
 })
+
+// #3491: through the two entry points the mods are given. A script holding `x=$'it\'s'` gave no
+// commands and no runs, so nothing after the string was judged by any mod.
+describe("$'...' and a script not read to its end, as the mods are given them (#3491)", () => {
+  const BS = '\\'
+  const NEXT = 'prettier --write app/page.tsx'
+  const QUOTE = 'holding a quote that never closes, so what the shell runs from there on cannot be read'
+
+  test("the commands and the runs after a $'...' holding an escaped quote are given", () => {
+    const script = `x=$'it${BS}'s'\n${NEXT}`
+    expect(pipelineIn(script, CWD, HOME).map(c => [c.words, c.folder])).toEqual([[['prettier', '--write', 'app/page.tsx'], CWD]])
+    expect(read(NEXT).runs?.length).toBe(1)
+    expect(read(script)).toEqual(read(NEXT))
+  })
+
+  test('a script that stops in a quote is told apart from one with no commands', () => {
+    expect(read('x=1').unread).toBeUndefined()
+    expect(pipelineIn('x=1', CWD, HOME)).toEqual([])
+    const stopped = `x='abc\n${NEXT}`
+    expect(read(stopped).unread).toEqual([{ words: [`x=abc\n${NEXT}`], why: QUOTE, folder: CWD }])
+    expect(pipelineIn(stopped, CWD, HOME).map(c => c.unread)).toEqual([QUOTE])
+  })
+
+  // The mark is added to what was read, never put in its place: a program the write reader does
+  // not know is still given as a run of one, handed the files its words name, as it was before
+  // the command it stands in was marked. (A command eval or ssh makes unread is still not one.)
+  test('a command the reader stops in is still given as the run it was read as', () => {
+    const runs = (command: string) => read(command).runs?.map(r => [r.what, r.args?.map(a => a.word)])
+    expect(runs(`mystery notes.txt 'abc`)).toEqual([['a program the write reader does not know', ['notes.txt', 'abc']]])
+    expect(runs(`mystery notes.txt <<EOF\nbody`)).toEqual(runs('mystery notes.txt'))
+    expect(read(`mystery notes.txt 'abc`).unread?.map(u => u.why)).toEqual([QUOTE])
+    expect(runs('eval mystery notes.txt')).toBeUndefined()
+  })
+})
