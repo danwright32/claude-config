@@ -1603,7 +1603,7 @@ check_not "#583 a file marked generated only by this branch is not" "new.gen" "$
 # this suite sources hang-wait.sh, whose waits run their condition in this shell, where it can set
 # any name, so past that line the Slack drafts gate is sure of no variable. It could not find
 # design_file through one and refused the whole suite when a session ran it (claude-config#2668).
-# test-slack-drafts-only-gate.sh judges this suite, so putting a variable back fails there.
+# test-slack-drafts-only-gate-scripts.sh judges this suite, so putting a variable back fails there.
 seal_page(){   # $1 = the page's words -> a settled design page, sealed by design_file.py's own seal()
   python3 -I -B -c 'import sys; sys.path.insert(0, sys.argv[1]); import design_file
 page = "<html><body><p>" + sys.argv[2] + "</p>\n" \

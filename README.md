@@ -4310,6 +4310,23 @@ What passes: every Slack read, `slack_send_message_draft`, a command that only m
 (a grep, an echo, a test assertion), and `/nudge` at `skills/nudge/nudge.py`, the one script let
 through (Dan, 2026-11-05), matched by its real path, so a copy anywhere else is refused.
 
+Since claude-config#3575 the gate's own checks are six suites, not one: on 2026-11-24 the single
+`hooks/test-slack-drafts-only-gate.sh`, 2,633 checks, ran past the runner's 1,200 second wall limit
+on GitHub's runners, so its sections were cut, in their order and by their measured cost, into
+`test-slack-drafts-only-gate-scripts.sh` (tools, commands, scripts and the Python imports they
+reach), `-written-files` (data files, program options, files copied or written and run),
+`-file-arguments` (a file handed to code, redirects, code read on input),
+`test-slack-drafts-only-gate.sh` itself (`/nudge`, an unreadable payload, the time budget, a crash,
+the wiring and the cost checks), `-runners` (module runners, builds, git writes, package specs) and
+`-tools-cache` (native tools, written modules, the judgement cache and the misreads). All six run
+the gate in one shared world, `hooks/lib/slack-drafts-gate-harness.sh` (the gate, the throwaway
+folder and its cache, the result line and the fixtures one suite reads from another's sections).
+Each keeps its own copy of the helper functions a case is driven through, because the gate knows
+a shell function only where the text calling it defines it: from a sourced file, `run_bash "<a
+command that posts>"` reads as an unknown program running that command, and the suite is refused.
+`test-slack-drafts-gate-helper-copies.sh` holds those copies equal, naming the suite and the helper
+when two differ.
+
 ### Running a refused command with no network (#3173)
 
 The gate refuses a command whose files reach code able to post, and that stopped one test file being
@@ -6424,11 +6441,19 @@ suite that refused to run or crashed at its top writes nothing without that prov
 could not be checked or was not measured. It is not run on every full run: doing so costs about
 one full run again, and the runner already hands every suite the list.
 
-The main suite on its own:
+The main suite on its own, which is two suites, each half of its sections (claude-config#3594):
 
 ```bash
 bash tests/test-claude-sync.sh
+bash tests/test-claude-sync-part2.sh
 ```
+
+The second runs the same file with `SUITE_PART=2`, which deals the sections from the heading
+`SUITE_PART2_FROM` names to the end; the first deals the ones before it. One file keeps the
+harness, the prelude and every helper in one place, and two suites let each be budgeted and dealt
+by its own cost: on 2026-11-25 the whole file had grown to its section time budget on CI, which is
+judged per run and undivided by shards. `SECTION_ONLY` and `SECTION_UNTIL` reach any section from
+either.
 
 It fans its sections out across four processes. Measured on 2026-08-21, 87 sections taking 82
 seconds that way and 243 in a single process, with no single section dominating (the slowest five

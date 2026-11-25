@@ -162,7 +162,8 @@ eq "#2080 a quoted in part or hyphenated end marker is read whole, and arithmeti
 # A copy of the reader made in $W and imported from there showed the same, but the Slack drafts
 # gate reads this suite before it runs, when that copy is not on disk: it could not find the
 # module and refused the whole suite when a session ran it (claude-config#2668).
-# test-slack-drafts-only-gate.sh judges this suite, so importing from a folder made here fails there.
+# test-slack-drafts-only-gate-scripts.sh judges this suite, so importing from a folder made here
+# fails there.
 mkdir -p "$W/nolib"
 noreader="$(python3 -I -B -c '
 import importlib.util, os, sys
