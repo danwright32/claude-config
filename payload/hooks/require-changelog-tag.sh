@@ -378,9 +378,12 @@ if [ "$verdict_ok" != "true" ]; then
   verdict_reason=$(printf '%s' "$verdict" | jq -r '.reason // ""' 2>/dev/null)
   [ -n "$verdict_reason" ] || deny "Cannot judge this merge's changelog record: reading PR #$number through lib/changelog-entry.js produced no verdict at all. That is the gate failing, not the record passing, so it refuses rather than merging blind. Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>."
   case "$verdict_code" in
-    # About the announce label, or the post for agents under it. The override is not offered here:
-    # it skips this gate whole, and what these refuse is a post that reaches every agent, or a label
-    # this repository does not use, which a retyped command should never be how either goes through.
+    # The refusals that exist only for the announce label: the label where it is not in use, and
+    # the post for agents under it (missing, empty, or holding what may not be drafted). These do
+    # not PRINT the override, so nobody is pointed at it for a post that reaches every agent. That
+    # is all this does: the override still skips this gate whole when typed, and the refusals an
+    # announce pull request shares with a visible one (its labels, its Changelog sentence) keep the
+    # line they always had, below.
     ANNOUNCE_*|ANNOUNCEMENT_*|NO_ANNOUNCEMENT|EMPTY_ANNOUNCEMENT)
       deny "PR #$number cannot merge as it stands. $verdict_reason
 

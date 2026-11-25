@@ -526,10 +526,11 @@ valid_session_id "$session_id" || session_id=""
 # was offered turning the quiz off and chose to narrow it instead (claude-config#348).
 #
 # The signal did not exist when this hook was written and does now: PET and Slate
-# enforce exactly one of changelog/visible, changelog/technical or changelog/none on
-# every merged pull request, through require-changelog-tag.sh. changelog/visible means
-# precisely what this hook's own user facing gate means, it is chosen by a person while
-# they still hold the change, and it is already enforced at merge.
+# enforce exactly one changelog label on every merged pull request, through
+# require-changelog-tag.sh. A label of a kind a manager would notice (changelog/visible,
+# and changelog/announce where a repository uses it) means precisely what this hook's
+# own user facing gate means, it is chosen by a person while they still hold the change,
+# and it is already enforced at merge. The other kinds (technical, none) are quiet.
 #
 # So this file now owns TWO decisions rather than one, and the division of labour above
 # is written that way rather than carrying an exception bolted beside it. The second is
