@@ -2731,7 +2731,8 @@ rm -f "$HOLDTC"
 # saying it took the turn long before.
 sleep 300 </dev/null >/dev/null 2>&1 &
 _stuck=$!
-_stuck_dir="$(ls -d "$TURNSTATE"/turn/*/ 2>/dev/null | head -1)"
+_stuck_dir=""
+for _sd in "$TURNSTATE"/turn/*/; do [ -d "$_sd" ] && { _stuck_dir="$_sd"; break; }; done
 if [ -n "$_stuck_dir" ]; then
   printf 'pr %s\npid %s\nstart %s\njoined %s\norder 2\n' "stuck-checkout" "$_stuck" "$(ps -o lstart= -p "$_stuck" | sed -e 's/^ *//' -e 's/ *$//')" "$(( $(date +%s) - 1000 ))" > "${_stuck_dir}999"
   printf '%s %s\n' "$(( $(date +%s) - 1000 ))" "$_stuck" > "${_stuck_dir}999.head"
