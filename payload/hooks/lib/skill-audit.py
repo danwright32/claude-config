@@ -23,7 +23,8 @@ unrun  Every file shaped like a test is run by something. A `test-*.sh` is found
        repository, or by its path inside the skill from a suite that lives in that skill. Suites in
        a checkout nested inside this one (a worktree) are not this repository's and are skipped.
 
-exits  A helper must not report success when it failed. Three shapes are refused:
+exits  A helper must not report success when it failed. Three shapes are refused (P1, P2, S1),
+       and a fourth kind of line, U1, reports what could not be judged:
        P1  a subprocess's exit status is never read: `subprocess.run` without `check=True` whose
            result has no `.returncode` read after it is assigned (followed through functions that
            return the result), `subprocess.call` or `os.system` whose result is dropped, or a
@@ -433,8 +434,8 @@ def handle_uses(mod, scope, is_handle, start=0, until=float("inf")):
     """Everything scope does with a process handle, as (line, what, node, detail), in line order.
 
     what is one of: wait or poll (a call whose result is used), asked (wait, poll or communicate
-    called with its result dropped, or communicate; detail names which), returncode, use (any other
-    attribute), handed (the handle passed on; detail is the Call, or None when it goes somewhere no
+    called with its result dropped, or communicate; detail names which), returncode, ends (the code
+    ending the process, see ends_it), use (any other attribute), handed (the handle passed on; detail is the Call, or None when it goes somewhere no
     call names: returned, yielded, stored in a container), alias (bound to a local; detail is its
     name) and store (assigned to an attribute or item; detail is the target)."""
     uses = []
@@ -656,10 +657,10 @@ def judge_ending(mod, call, what, scope, name, holder, uses, rel):
                         f"which this check does not follow, so whether its ending is read was not judged.")
     if not reads:
         return None
+    # A poll() a loop repeats already counted as reading the end (classify), so every read left here
+    # was made once, and a use after the last of them comes after the only look at the process.
     last = reads[-1]
-    polls = [n for _, w, n, _ in uses if w == "poll"]
-    later = [(ln, n) for ln, w, n, _ in uses if ln > last and w in ("use", "ends")
-             and not any(loops_around(mod, n, scope) & loops_around(mod, p, scope) for p in polls)]
+    later = [(ln, n) for ln, w, n, _ in uses if ln > last and w in ("use", "ends")]
     if later:
         return "finding", (f"{rel}:{call.lineno}: P1 {name} = {what}(...) has its status read only at line {last}, "
                            f"while it is still running, and is used again at line {later[0][0]} with nothing after "
