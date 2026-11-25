@@ -37,8 +37,10 @@ drive call. It also records `egress`, the verdict of the egress monitor in egres
 the drive helper run under a sandbox profile that reports every connection to a host outside this
 machine, and the receipt lists each destination seen with its count, judged against areas.json's
 egress.allow. The verdict is `clean` only when the monitor was proved live from before serve
-started until after it stopped and nothing outside the allowed hosts was reached; `not-clean`
-names what was; `unmeasured` says why the monitor could not see, and never passes for clean.
+started until after it stopped, every report the monitor asked for itself arrived (its canaries and
+its test connections, #3576) and nothing outside the allowed hosts was reached; `not-clean`
+names what was; `unmeasured` says why the monitor could not see, a Mac that did not report every
+connection it was asked to among the reasons, and never passes for clean.
 
 Env: VERIFICATION_HOME (see verification.py). Two injectable clocks (L524), each a number of at
 least 0 that multiplies seconds, default 1: VERIFICATION_TIME_SCALE scales every poll delay (the
