@@ -188,8 +188,11 @@ program make a test connection of the canary's kind before the first canary, abo
 for the whole run, and once more after serve is gone; the copy is removed when the run stops.
 The receipt's `egress` records what was asked for and what came back: `beats` (`fired`,
 `reported`, the first 20 `unreported`, and `failure` when the beat program could not be made or
-run, or ended badly), `canaries` (`fired`, `seen`) and `attach` (the canaries that show the stream
-is attached before anything is counted). One test connection or canary that was never reported
+run, or ended badly), `canaries` and `attach` (the canaries that show the stream is attached before
+anything is counted). `canaries` counts by connection, since each canary is a round of three (see
+above): `rounds`, then `fired`, `seen` and `unseen` (how many under each of `serve`, `drive` and
+`refusal`). One test connection or canary connection that was never seen, whichever of a round's
+three it was and whether or not a later round arrived whole,
 makes the run `unmeasured`, saying that this Mac did not report every connection it was asked to,
 and so does a beat program that could not be made or started, or that ended badly: the monitor
 reads its exit status when it stops, and one that had ended by itself before the run was over,

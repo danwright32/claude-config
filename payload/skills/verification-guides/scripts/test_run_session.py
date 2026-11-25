@@ -639,13 +639,38 @@ class EgressTests(RunFixture):
         # One before the first canary and one after serve was gone, at the least.
         self.assertGreaterEqual(beats["fired"], 2, egress)
         self.assertGreaterEqual(egress["attach"]["seen"], 1, egress)
+        # A canary is a round of three connections (claude-config#3319), and the receipt counts them
+        # by connection: a whole number of rounds was fired, and no more were seen than fired.
+        self.assertEqual(canaries["fired"], 3 * canaries["rounds"], egress)
+        self.assertGreaterEqual(canaries["rounds"], 2, egress)  # the start canary and the end canary
+        self.assertLessEqual(canaries["seen"], canaries["fired"], egress)
+        self.assertEqual(sum(canaries["unseen"].values()), canaries["fired"] - canaries["seen"], egress)
         if beats["reported"] < beats["fired"] or canaries["seen"] < canaries["fired"]:
             # Said in the test's own output, so a run of the suite shows which arm each test took.
-            sys.stderr.write("[this Mac withheld %d of %d test connections and %d of %d canaries; the run read %s] "
+            sys.stderr.write("[this Mac withheld %d of %d test connections and %d of %d canary connections %s;"
+                             " the run read %s] "
                              % (beats["fired"] - beats["reported"], beats["fired"],
-                                canaries["fired"] - canaries["seen"], canaries["fired"], egress["verdict"]))
+                                canaries["fired"] - canaries["seen"], canaries["fired"],
+                                json.dumps(canaries["unseen"], sort_keys=True), egress["verdict"]))
             return True
         return False
+
+    def assert_only_what_was_seen_on_a_mac_that_withheld(self, rid, sha, egress, made, refusable=()):
+        """The withheld arm of a run whose fixture made connections off this machine: `made` is every
+        (process, port) it made that leaves, `refusable` the refused entries its drive call can
+        produce. Some of their reports may never have been written, so the run shows a part of them
+        and never anything else. Seeing any of them it reads not-clean, with the gap said beside
+        it; seeing none it reads unmeasured. Either way the merge is refused, and it is never clean."""
+        seen = set(self.left(egress))
+        self.assertLessEqual(seen, set(made), egress)
+        self.assertLessEqual(set(self.refused(egress)), set(refusable), egress)
+        if not seen:
+            return self.assert_unmeasured_because_reports_were_withheld(rid, sha, egress)
+        self.assertEqual(egress["verdict"], "not-clean", egress)
+        self.assertIn(WITHHELD, egress["why"])
+        out = self.merge_verdict(rid, sha)
+        self.assertEqual(out["decision"], "refuse")
+        self.assertEqual(sorted({p["kind"] for p in out["problems"]}), ["egress-not-clean"])
 
     def assert_unmeasured_because_reports_were_withheld(self, rid, sha, egress):
         """What a run reads on a Mac that withheld a report: unmeasured, saying so, and no merge."""
@@ -760,6 +785,12 @@ class EgressTests(RunFixture):
     # monitor could never name, so every run with a browser was not clean. The drive profile refuses
     # that one kind of connection for that one executable, and each refusal is written into the record.
     # 198.51.100.1 is TEST-NET-2 and 192.0.2.1 TEST-NET-1: reserved, so no real host is contacted.
+    #
+    # These runs go through the real sandbox too, so they read by the same rule as the four above
+    # (claude-config#3576): what the kernel DID to a connection (the program's own words, in
+    # drive-out) is asserted on every Mac, since no report is needed for it. What the run READ is
+    # asserted in full where every report the monitor asked for arrived, and on a Mac whose receipt
+    # shows one withheld it is unmeasured, or not-clean for whatever was seen, and never clean.
 
     def stand_in(self, name):
         """A real executable whose file is called `name` (a copy of perl), and the script it runs."""
@@ -800,8 +831,11 @@ class EgressTests(RunFixture):
         rid, sha, rec = self.run_to_receipt("local", commands={"drive": self.udp(BROWSER, "198.51.100.1,443")})
         self.assertEqual(self.said(), ["198.51.100.1,443 failed: Operation not permitted"])
         egress = rec["egress"]
-        self.assertEqual(egress["verdict"], "clean", egress)
         self.assertEqual((egress["destinations"], egress["unnamed"]), ([], []), egress)
+        if self.withheld(egress):
+            self.assertIn(self.refused(egress), ([], [(BROWSER, 443, True)]), egress)
+            return self.assert_unmeasured_because_reports_were_withheld(rid, sha, egress)
+        self.assertEqual(egress["verdict"], "clean", egress)
         self.assertEqual(self.refused(egress), [(BROWSER, 443, True)])
         self.assertGreaterEqual(egress["refused"][0]["reports"], 1)
         self.assertIn("refused", egress["why"])
@@ -827,6 +861,9 @@ class EgressTests(RunFixture):
         self.assertEqual(self.said(), ["198.51.100.1,443 failed: Operation not permitted", "198.51.100.1,9 connected",
                                        "198.51.100.1,8443 connected", "192.0.2.1,443,tcp started"])
         egress = rec["egress"]
+        if self.withheld(egress):
+            return self.assert_only_what_was_seen_on_a_mac_that_withheld(
+                rid, sha, egress, [(BROWSER, 9), (BROWSER, 443), (BROWSER, 8443)], [(BROWSER, 443, True)])
         self.assertEqual(egress["verdict"], "not-clean", egress)
         self.assertEqual(sorted(set(self.left(egress))), [(BROWSER, 9), (BROWSER, 443), (BROWSER, 8443)])
         self.assertEqual(self.refused(egress), [(BROWSER, 443, True)])
@@ -850,8 +887,11 @@ class EgressTests(RunFixture):
         self.assertEqual(self.said(), ["198.51.100.1,443 connected", "198.51.100.1,9 connected"])
         self.assertEqual(self.said("drive-out-tcp"), ["192.0.2.1,443,tcp started"])
         egress = rec["egress"]
-        self.assertEqual(egress["verdict"], "not-clean", egress)
         everything = [("other-by-tcp", 443), ("other-program", 9), ("other-program", 443)]
+        self.assertEqual(self.events(rid, "refused"), [])
+        if self.withheld(egress):
+            return self.assert_only_what_was_seen_on_a_mac_that_withheld(rid, sha, egress, everything)
+        self.assertEqual(egress["verdict"], "not-clean", egress)
         self.assertEqual(sorted(set(self.left(egress))), everything)
         self.assertEqual(self.reported(rid), everything)
         self.assertEqual(egress["refused"], [])
@@ -866,9 +906,11 @@ class EgressTests(RunFixture):
         rid, sha, rec = self.run_to_receipt("local", commands={"serve": serve})
         self.assertEqual(self.said("serve-out"), ["198.51.100.1,443 connected"])
         egress = rec["egress"]
+        self.assertEqual(egress["refused"], [])
+        if self.withheld(egress):
+            return self.assert_only_what_was_seen_on_a_mac_that_withheld(rid, sha, egress, [(BROWSER, 443)])
         self.assertEqual(egress["verdict"], "not-clean", egress)
         self.assertEqual(self.left(egress), [(BROWSER, 443)])
-        self.assertEqual(egress["refused"], [])
 
     @STAND_IN
     def test_udp_to_port_443_on_this_machine_is_not_refused(self):
@@ -877,8 +919,10 @@ class EgressTests(RunFixture):
             "local", commands={"drive": self.udp(BROWSER, "127.0.0.1,443", "::1,443")})
         self.assertEqual(self.said(), ["127.0.0.1,443 connected", "::1,443 connected"])
         egress = rec["egress"]
-        self.assertEqual(egress["verdict"], "clean", egress)
         self.assertEqual((egress["refused"], egress["destinations"], egress["unnamed"]), ([], [], []))
+        if self.withheld(egress):
+            return self.assert_unmeasured_because_reports_were_withheld(rid, sha, egress)
+        self.assertEqual(egress["verdict"], "clean", egress)
 
     def with_a_real_browser(self, goes=None):
         path, why = real_browser()
@@ -892,11 +936,15 @@ class EgressTests(RunFixture):
         rid, sha, rec = self.run_to_receipt("local", commands={"drive": "python3 scripts/drive_browser.py"})
         self.assertEqual(self.said(), ["page loaded"])
         egress = rec["egress"]
-        self.assertEqual(egress["verdict"], "clean", egress)
         self.assertEqual((egress["destinations"], egress["unnamed"]), ([], []), egress)
+        self.assertEqual(self.events(rid, "report"), [])
+        if self.withheld(egress):
+            # The record of the refusal is a line this Mac may not have written either.
+            self.assertIn(self.refused(egress), ([], [(BROWSER, 443, True)]), egress)
+            return self.assert_unmeasured_because_reports_were_withheld(rid, sha, egress)
+        self.assertEqual(egress["verdict"], "clean", egress)
         self.assertEqual(self.refused(egress), [(BROWSER, 443, True)])
         self.assertGreaterEqual(len(self.events(rid, "refused")), 1)
-        self.assertEqual(self.events(rid, "report"), [])
         out = self.merge_verdict(rid, sha)
         self.assertEqual((out["problems"], out["decision"]), ([], "allow"))
 
@@ -905,11 +953,18 @@ class EgressTests(RunFixture):
         # reported, named and not clean, whatever the refusal rule did to its probe.
         self.with_a_real_browser(goes="outside")
         rid, sha, rec = self.run_to_receipt("local", commands={"drive": "python3 scripts/drive_browser.py"})
-        self.assertEqual(self.said(), ["192.0.2.1 named"])
         egress = rec["egress"]
-        self.assertEqual(egress["verdict"], "not-clean", egress)
         named = [d for d in egress["destinations"] if d["address"] == "192.0.2.1"]
+        if not named:
+            # Only a Mac that withheld reports may fail to name it, and then the run is never clean.
+            self.assertTrue(self.withheld(egress), (self.said(), egress))
+            return self.assert_only_what_was_seen_on_a_mac_that_withheld(
+                rid, sha, egress, [(BROWSER, 8080)], [(BROWSER, 443, True)])
+        self.assertEqual(self.said(), ["192.0.2.1 named"])
+        self.assertEqual(egress["verdict"], "not-clean", egress)
         self.assertEqual([(d["port"], d["processes"], d["allowed"]) for d in named], [(8080, [BROWSER], False)])
+        if self.withheld(egress):  # what was seen is never downgraded, and the gap is said beside it
+            self.assertIn(WITHHELD, egress["why"])
         out = self.merge_verdict(rid, sha)
         self.assertEqual(out["decision"], "refuse")
         self.assertIn("192.0.2.1", out["text"])

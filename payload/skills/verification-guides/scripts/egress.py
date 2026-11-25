@@ -66,9 +66,13 @@ How, and why this way (measured on macOS 26 without a password, 2026-10-23; see 
         sends no packet, to 198.51.100.1, under a tag of its own, on a port that names it) before
         the first canary, one about every second for the whole run, and one after serve is gone.
         Every one is recorded when made and marked when its report arrives.
-      b. every canary fired counts too, where main waited for one to be seen and forgot the rest.
-    Any test connection or canary never reported makes the run `unmeasured`, never `clean`: this
-    Mac did not report every connection it was asked to, so finding nothing proves nothing. A
+      b. every canary connection fired counts too, all three of every round (its report under
+        serve's profile, its report under the profile of drive calls and the record of the one the
+        sandbox refused), where the monitor used to wait for one round to be seen and forget the
+        rest. They are counted by connection and never by round: a round whose first report came
+        says nothing of its other two.
+    Any test connection or canary connection never seen makes the run `unmeasured`, never `clean`:
+    this Mac did not report every connection it was asked to, so finding nothing proves nothing. A
     connection that WAS seen outside the allowed hosts still reads `not-clean`. A beat program
     that cannot be made or run is `unmeasured` too, with the reason, and so is one that ended
     badly: its exit status is read when it stops, and a program that had ended by itself before
@@ -229,6 +233,9 @@ CANARY_PARTS = (
     ("refusal", canary_profile_text, "-self", REFUSED_PORT, "refused",
      "the record of the connection the sandbox refused it"),
 )
+# Each part's canary connections that were never seen, in the words of a reason (withheld).
+CANARY_UNSEEN = {"serve": "under serve's profile", "drive": "under the profile of drive calls",
+                 "refusal": "that the sandbox refused"}
 
 
 def beat_program_path(rdir):
@@ -305,8 +312,12 @@ class Monitor:
         # earlier canary's report can ever be taken for the canary being waited on.
         self.canary_tag = self.tag + "-canary"
         self.canary_profile = os.path.join(rdir, "egress-canary.sb")
-        self.canaries_fired = 0
-        self.canary_at = {}  # each canary's tag: when it was fired, on the monotonic clock
+        self.canaries_fired = 0  # rounds of canaries, each of them len(CANARY_PARTS) connections
+        # Every canary connection fired, by the message the report stream must show for it: when it
+        # was fired, on the monotonic clock, and which part of its round it is. Each one is a report
+        # this monitor asked for, so each one never seen makes the run unmeasured (withheld).
+        self.canary_at = {}
+        self.canary_part = {}
         # The attach canary and the beat program (claude-config#3576), each under a tag of its own.
         self.attach_tag = self.tag + "-attach"
         self.attach_profile = os.path.join(rdir, "egress-attach.sb")
@@ -509,12 +520,17 @@ class Monitor:
         return the messages the report stream must show for the round to count."""
         self.canaries_fired += 1
         base = "%s-%d" % (self.canary_tag, self.canaries_fired)
-        with self.cond:
-            self.canary_at[base] = time.monotonic()
-        self._event({"event": "canary-fired", "at": v.utc_now(), "canary": base})
         self.canary_want = []
         for name, text, suffix, port, must, shown in CANARY_PARTS:
             tag = base + suffix
+            message = tag + (REFUSED if must == "refused" else "")
+            # Recorded as fired BEFORE it runs, under the message the report stream must show for it,
+            # so its line can never arrive ahead of the record. Every connection of every round is
+            # counted, not the round: a round whose first report came says nothing of its other two.
+            with self.cond:
+                self.canary_at[message] = time.monotonic()
+                self.canary_part[message] = name
+            self._event({"event": "canary-fired", "at": v.utc_now(), "canary": message, "part": name})
             with open(self.canary_profile, "w", errors="replace") as f:
                 f.write(text(tag))
             try:
@@ -537,7 +553,7 @@ class Monitor:
                                   " nothing, so more would be refused here than the one connection chosen"
                                   % (self.sandbox, port, "serve's profile" if name == "serve"
                                      else "the profile of drive calls"))
-            self.canary_want.append((shown, tag + (REFUSED if must == "refused" else "")))
+            self.canary_want.append((shown, message))
         return [message for _, message in self.canary_want]
 
     def _canary_seen(self):
@@ -800,7 +816,7 @@ class Monitor:
         with self.cond:
             while not self.stream_ended:
                 waiting = [b["t"] for b in self.beats if not b["seen"]]
-                waiting += [t for tag, t in self.canary_at.items() if tag not in self.canaries_seen]
+                waiting += [t for message, t in self.canary_at.items() if message not in self.canaries_seen]
                 if not waiting:
                     return
                 left = max(waiting) + SETTLE_S - time.monotonic()
@@ -937,7 +953,7 @@ class Monitor:
     def field(self, verdict, why, destinations=(), unnamed=(), refused=()):
         with self.cond:
             beats = [dict(b) for b in self.beats]
-            canaries_seen, attach_seen = len(self.canaries_seen), len(self.attach_seen)
+            attach_seen = len(self.attach_seen)
         unreported = [b for b in beats if not b["seen"]]
         return {"verdict": verdict, "why": why, "monitor": MONITOR, "allowed_hosts": self.allow,
                 "allowed_unresolved": self.unresolved, "measured_from": self.started_at,
@@ -946,7 +962,7 @@ class Monitor:
                 # What the monitor asked this Mac to report and what came back (claude-config#3576),
                 # so a run can be judged again later from its receipt alone.
                 "attach": {"fired": self.attach_fired, "seen": attach_seen},
-                "canaries": {"fired": self.canaries_fired, "seen": canaries_seen},
+                "canaries": self.canaries(),
                 "beats": {"fired": len(beats), "reported": len(beats) - len(unreported),
                           "unreported": [{"beat": b["beat"], "at": b["at"]} for b in unreported[:UNREPORTED_KEPT]],
                           "failure": self.beat_failure}}
@@ -971,21 +987,33 @@ class Monitor:
                 e["pids"].append(r["pid"])
         return sorted(out.values(), key=lambda e: (e["process"], e["port"], e["mismatch"]))
 
+    def canaries(self):
+        """What the canaries asked this Mac to report and what came back, counted by connection: the
+        rounds fired, the connections fired in them (len(CANARY_PARTS) to a whole round), how many of
+        those the report stream showed, and the ones it never showed by part. A line under a
+        canary's tag for a connection this monitor never fired counts for nothing."""
+        with self.cond:
+            unseen = [self.canary_part[message] for message in self.canary_at if message not in self.canaries_seen]
+            fired = len(self.canary_at)
+        return {"rounds": self.canaries_fired, "fired": fired, "seen": fired - len(unseen),
+                "unseen": {part[0]: unseen.count(part[0]) for part in CANARY_PARTS}}
+
     def withheld(self):
         """Why finding nothing would prove nothing, in words, or None when every report this monitor
         asked for arrived. One missing report is enough: the rule rests on no count and no timing."""
         with self.cond:
             fired = len(self.beats)
             unreported = sum(1 for b in self.beats if not b["seen"])
-            unseen = sum(1 for i in range(1, self.canaries_fired + 1)
-                         if "%s-%d" % (self.canary_tag, i) not in self.canaries_seen)
+        canaries = self.canaries()
+        unseen = canaries["fired"] - canaries["seen"]
         said = []
         missing = []
         if unreported:
             missing.append("%d of the %d test connections the monitor made from a program not signed by Apple"
                            % (unreported, fired))
         if unseen:
-            missing.append("%d of the %d canaries" % (unseen, self.canaries_fired))
+            missing.append("%d of the %d canary connections, %s," % (unseen, canaries["fired"], " and ".join(
+                "%d %s" % (n, CANARY_UNSEEN[name]) for name, n in canaries["unseen"].items() if n)))
         if missing:
             said.append("this Mac did not report every connection it was asked to report during the run (%s"
                         " never reported)" % " and ".join(missing))

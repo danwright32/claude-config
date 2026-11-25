@@ -169,6 +169,21 @@ def beat_report(m, i):
     return report(4242, 20000 + i, m.tag + "-beat", process="egress-beat")
 
 
+def fire_rounds(m, n):
+    """Have the monitor fire n rounds of canaries through its own _fire_canary, with a working sandbox
+    stood in for, and return each round's messages: what the report stream must show for it."""
+    with mock.patch.object(egress.subprocess, "run", side_effect=canary_runs()):
+        return [m._fire_canary() for _ in range(n)]
+
+
+def canary_lines(messages):
+    """The kernel's line for each canary message: a refusal for the one the sandbox must refuse, a
+    report for the others."""
+    return [refusal(900 + i, msg, process="Python") if msg.endswith("-refused")
+            else report(900 + i, 443 if msg.endswith("-drive") else 9, msg, process="Python")
+            for i, msg in enumerate(messages)]
+
+
 def reporting_mac(m):
     """A monitor on a Mac that reports everything it is asked to: its one test connection was made
     and reported. For the cases whose rule is about something else; WithheldReports covers the Mac
@@ -523,16 +538,116 @@ class WithheldReports(unittest.TestCase):
         self.assertEqual(out["verdict"], "clean", out)
         self.assertEqual((out["beats"]["fired"], out["beats"]["reported"], out["beats"]["unreported"]), (3, 3, []))
 
+    # A canary is a round of three connections (CANARY_PARTS, claude-config#3319), each under a profile
+    # and a message of its own, and every one of them is a report the monitor asked this Mac for. So
+    # the count of canaries never seen is a count over all three of every round fired. Counted by
+    # round, as it was before the two changes met, a round whose first connection was reported
+    # read as seen whatever became of the other two.
+
     def test_a_canary_never_seen_is_unmeasured_and_counted(self):
         # What main hid: nine canaries fired, only the ninth reported, and the run read clean.
         fired(self.m, 1)
-        self.m.canaries_fired = 9
-        self.read([beat_report(self.m, 1), report(501, 9, self.m.canary_tag + "-9", process="Python")])
+        rounds = fire_rounds(self.m, 9)
+        self.read([beat_report(self.m, 1)] + canary_lines(rounds[8]))
         out = self.m.judge()
         self.assertEqual(out["verdict"], "unmeasured", out)
         self.assertIn("this Mac did not report every connection it was asked to report", out["why"])
-        self.assertIn("8 of the 9 canaries", out["why"])
-        self.assertEqual(out["canaries"], {"fired": 9, "seen": 1})
+        self.assertIn("24 of the 27 canary connections", out["why"])
+        self.assertEqual(out["canaries"], {"rounds": 9, "fired": 27, "seen": 3,
+                                           "unseen": {"serve": 8, "drive": 8, "refusal": 8}})
+
+    def test_one_connection_of_an_earlier_round_never_seen_is_unmeasured(self):
+        # The start of a run on a Mac that withholds: one line of the first round never comes, the
+        # second round arrives whole and proves the stream live. Whichever of the three it was, the
+        # run did not get every report it asked for, and it must not read clean.
+        for part, ending, said in (("serve", "", "under serve's profile"),
+                                   ("drive", "-drive", "under the profile of drive calls"),
+                                   ("refusal", "-self-refused", "that the sandbox refused")):
+            with self.subTest(part=part):
+                m = reporting_mac(egress.Monitor(tempfile.mkdtemp(dir=self.tmp.name), RID,
+                                                 list(v.EGRESS_LOCAL_HOSTS), 30))
+                first, second = fire_rounds(m, 2)
+                missing = m.canary_tag + "-1" + ending
+                self.assertIn(missing, first)
+                m.proc = FakeStream(canary_lines([msg for msg in first if msg != missing] + second))
+                m._read()
+                out = m.judge()
+                self.assertEqual(out["verdict"], "unmeasured", out)
+                self.assertIn("this Mac did not report every connection it was asked to report", out["why"])
+                self.assertIn("1 of the 6 canary connections, 1 %s, never reported" % said, out["why"])
+                self.assertEqual(out["canaries"], {"rounds": 2, "fired": 6, "seen": 5, "unseen": dict(
+                    {"serve": 0, "drive": 0, "refusal": 0}, **{part: 1})})
+
+    def test_rounds_that_all_arrived_whole_read_clean(self):
+        fired(self.m, 1)
+        first, second = fire_rounds(self.m, 2)
+        self.read([beat_report(self.m, 1)] + canary_lines(first + second))
+        out = self.m.judge()
+        self.assertEqual(out["verdict"], "clean", out)
+        self.assertEqual(out["canaries"], {"rounds": 2, "fired": 6, "seen": 6,
+                                           "unseen": {"serve": 0, "drive": 0, "refusal": 0}})
+
+    def test_a_canary_line_for_a_connection_never_fired_is_not_counted_as_seen(self):
+        # A line under a canary's tag that this monitor never fired (round 7 of a run that fired one)
+        # must not stand in for one it did fire: two of the three came, and the receipt says two.
+        fired(self.m, 1)
+        (only,) = fire_rounds(self.m, 1)
+        self.read([beat_report(self.m, 1), report(501, 9, self.m.canary_tag + "-7", process="Python")]
+                  + canary_lines(only[:2]))
+        out = self.m.judge()
+        self.assertEqual(out["verdict"], "unmeasured", out)
+        self.assertEqual((out["canaries"]["fired"], out["canaries"]["seen"]), (3, 2), out)
+
+    def test_each_canary_connection_is_recorded_as_fired_before_it_is_made(self):
+        # So its report can never arrive ahead of the record, and a receipt's log names every
+        # connection that was asked for, by the message the report stream must show for it.
+        recorded_when_run, stand_in = [], canary_runs()
+
+        def run(cmd, **kw):
+            with open(self.m.events_path) as f:
+                recorded_when_run.append([e["canary"] for e in map(json.loads, f) if e["event"] == "canary-fired"])
+            return stand_in(cmd, **kw)
+
+        with mock.patch.object(egress.subprocess, "run", side_effect=run):
+            want = self.m._fire_canary()
+        self.assertEqual(want, [self.m.canary_tag + "-1", self.m.canary_tag + "-1-drive",
+                                self.m.canary_tag + "-1-self-refused"])
+        self.assertEqual(recorded_when_run, [want[:1], want[:2], want[:3]])
+
+    def test_settling_waits_for_a_late_canary_connection_of_any_part(self):
+        # The end round's report under the profile of drive calls comes a fifth of a second after the
+        # other two, with the stream still open: a line that is merely late must not read as withheld.
+        reporting_mac(self.m)
+        (only,) = fire_rounds(self.m, 1)
+        late_one = only[1]
+
+        def arrive():
+            with self.m.cond:
+                self.m.canaries_seen.add(late_one)
+                self.m.cond.notify_all()
+
+        with self.m.cond:
+            self.m.canaries_seen.update(msg for msg in only if msg != late_one)
+        late = threading.Timer(0.2, arrive)
+        with mock.patch.object(egress, "SETTLE_S", 8):
+            late.start()
+            began = egress.time.monotonic()
+            self.m._settle()
+            waited = egress.time.monotonic() - began
+        late.join()
+        self.assertGreater(waited, 0.1, "settling returned before the late canary connection had come")
+        self.assertLess(waited, 4, "settling went on after the late canary connection had come")
+        self.assertEqual(self.m.judge()["verdict"], "clean")
+
+    def test_a_refused_line_under_the_beats_tag_never_marks_a_test_connection_reported(self):
+        # The report pattern matches a refusal too (claude-config#3319). The beat's profile refuses
+        # nothing, so a refusal under its tag is no report of a test connection.
+        fired(self.m, 1)
+        self.read([refusal(4242, self.m.tag + "-beat", process="egress-beat", port=20001)])
+        out = self.m.judge()
+        self.assertEqual(out["verdict"], "unmeasured", out)
+        self.assertIn("1 of the 1 test connections", out["why"])
+        self.assertEqual((out["refused"], out["unnamed"]), ([], []), "nor is it a connection by serve")
 
     def test_a_seen_outside_connection_stays_not_clean_when_reports_were_withheld(self):
         fired(self.m, 4)
@@ -856,6 +971,16 @@ class Attaching(unittest.TestCase):
             self.assertEqual(m.attach_seen, {m.tag + "-attach-1"})
             self.assertEqual(m.reports, [])
 
+    def test_a_refused_line_under_an_attach_tag_shows_nothing_attached(self):
+        # The report pattern matches a refusal too (claude-config#3319). The attach canary's profile
+        # refuses nothing, so only a report under its tag shows the stream attached.
+        with tempfile.TemporaryDirectory() as tmp:
+            m = egress.Monitor(tmp, RID, list(v.EGRESS_LOCAL_HOSTS), 30)
+            m.proc = FakeStream([refusal(88, m.tag + "-attach-1", process="bash", port=9)])
+            m._read()
+            self.assertEqual(m.attach_seen, set())
+            self.assertEqual((m.reports, m.refusals), ([], []))
+
 
 class ExitStatuses(unittest.TestCase):
     """A tool that failed is a failure to read, never an answer (L184)."""
@@ -933,6 +1058,14 @@ class StopBudget(unittest.TestCase):
         # reports and ends the beat program, all before the stream is stopped (claude-config#3576).
         beats = 2 * egress.BEAT_RUN_MAX_S + egress.SETTLE_S + egress.BEAT_STOP_S
         self.assertGreaterEqual(egress.finish_budget_s(30), 30 + egress.CANARY_RUN_MAX_S + 2 * egress.STREAM_STOP_S + beats)
+
+    def test_the_budget_covers_a_whole_round_of_canaries_and_the_test_connections_together(self):
+        # Two changes each lengthened the budget, one for the three processes of a round (#3319) and
+        # one for the test connections (#3576). A finish can need both, so neither replaces the other.
+        beats = 2 * egress.BEAT_RUN_MAX_S + egress.SETTLE_S + egress.BEAT_STOP_S
+        self.assertEqual(len(egress.CANARY_PARTS), 3)
+        self.assertGreaterEqual(egress.finish_budget_s(30),
+                                30 + 3 * egress.CANARY_RUN_MAX_S + 2 * egress.STREAM_STOP_S + beats)
 
     def test_a_copy_of_areas_json_from_before_egress_s_still_has_a_budget(self):
         self.assertGreater(run_session.stop_wait_s({"stop_s": 10}), 2 * 10 + 30)
