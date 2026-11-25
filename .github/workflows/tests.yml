@@ -392,8 +392,8 @@ jobs:
       - name: Install the pinned TypeScript compiler
         if: needs.deal.outputs.reused-run == ''
         # tools/check-mod-noun-waits.sh resolves every call a mod's noun makes with this compiler's
-        # own checker (#895) and refuses outright when it cannot load it, so tests/test-mods.sh
-        # needs it here. The lockfile pins the version and carries the linux-x64 binary.
+        # own checker (#895) and refuses outright when it cannot load it, so tests/test-mods-fixtures.sh
+        # needs it here, as tests/test-mods.sh does for the real mods' strict type check. The lockfile pins the version and carries the linux-x64 binary.
         run: npm ci --prefix tools/typescript --no-audit --no-fund
 
       # Claude Code, so tests/test-mods.sh runs `claude plugin validate` and `claude plugin test` on
