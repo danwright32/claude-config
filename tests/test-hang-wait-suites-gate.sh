@@ -79,10 +79,19 @@ print(json.dumps({"session_id": "f6017250-8f33-47ac-bbb2-b82a7c319d0d", "transcr
 # why_ended <wait status>: what a judge's own exit status says about how it ended.
 why_ended(){
   case "$1" in
+    ''|*[!0-9]*) printf 'left no exit status (%s)' "${1:-none}" ;;
     127) printf 'was not a child of this suite when waited for (status 127)' ;;
-    1[3-9][0-9]|2[0-9][0-9]) printf 'was ended by signal %s' "$(( $1 - 128 ))" ;;
-    *) printf 'exited %s' "$1" ;;
+    *) if [ "$1" -gt 128 ]; then printf 'was ended by signal %s' "$(( $1 - 128 ))"; else printf 'exited %s' "$1"; fi ;;
   esac
+}
+# ended_outside <wait status> <what it printed>: whether a judge was ended by something outside it,
+# a signal or a fork the system refused, rather than by a fault of this suite (a write that failed,
+# a status lost, a clean exit with no line).
+ended_outside(){
+  case "$1" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$1" -gt 128 ] && [ "$1" -ne 255 ] && return 0
+  case "$2" in *"fork: "*|*"Resource temporarily unavailable"*) return 0 ;; esac
+  return 1
 }
 # judge <cwd> <list file> <out file> [<judge function>]: each path in the list judged, HW_WIDTH at a
 # time (the suite's share, read above), the lines gathered in the list's order. The judge function is
@@ -130,17 +139,17 @@ judge(){
 }
 # account <list file> <out file>: whether every path listed was judged, as one line on stdout.
 # `judged <n>` when all were. `unmeasured <sentence>` when the only ones missing are judges ended
-# from outside on both tries (a signal, or a status that is not a clean finish): the gate was never
-# asked, so nothing about the gate is measured, and the runner reads that as a part unmeasured
-# (L411). `missing <sentence>` for anything else, a judge that exited 0 and wrote nothing included,
-# which is a fault of this suite and fails.
+# from outside on both tries (ended_outside: a signal, or a fork refused): the gate was never asked,
+# so nothing about the gate is measured, and the runner reads that as a part unmeasured (L411).
+# `missing <sentence>` for anything else (a judge that exited 0, or 1 on a failed write, with no
+# line, or whose status was lost), which is a fault of this suite and fails.
 account(){
   local n judged lost st path said clean="" ended=""
   n="$(grep -c . "$1")"; judged="$(grep -c . "$2")"; lost="$(grep -c . "$2.lost")"
   if [ "$judged" -eq "$n" ] && [ "$lost" -eq 0 ]; then printf 'judged %s\n' "$judged"; return 0; fi
   while IFS=$'\t' read -r st path said; do
-    if [ "$st" = 0 ]; then clean="$clean $path (its judge exited 0 without writing a line: ${said:-it printed nothing});"
-    else ended="$ended $path (its judge $(why_ended "$st") before writing its line, on both tries: ${said:-it printed nothing});"; fi
+    if ended_outside "$st" "$said"; then ended="$ended $path (its judge $(why_ended "$st") before writing its line, on both tries: ${said:-it printed nothing});"
+    else clean="$clean $path (its judge $(why_ended "$st") without writing a line: ${said:-it printed nothing});"; fi
   done < "$2.lost"
   if [ -z "$clean" ] && [ "$lost" -gt 0 ] && [ $((judged + lost)) -eq "$n" ]; then
     printf 'unmeasured of the %s scripts listed, %s not judged, so whether the gate places what it reaches past lib/hang-wait.sh was not measured:%s\n' "$n" "$([ "$lost" -eq 1 ] && echo "1 was" || echo "$lost were")" "$ended"
@@ -168,17 +177,27 @@ printf '%s\n' '#!/bin/bash' "$top" ". \"$HOOKS/lib/hang-wait.sh\"" 'f="$1"' "han
 printf '%s\n' '#!/bin/bash' "$top" ". \"$HOOKS/lib/hang-wait.sh\"" 'f="$1"' "hang_wait '[ -e \"\$f\" ]'" "$py" > "$W/ctl/tests/written.sh"
 printf '%s\n' tests/built.sh tests/written.sh > "$W/ctl.list"
 judge "$W/ctl" "$W/ctl.list" "$W/ctl.out"
-built="$(grep -F "	tests/built.sh	" "$W/ctl.out")"
-written="$(grep -F "	tests/written.sh	" "$W/ctl.out")"
-case "$built" in 2*) placed_nowhere "$built" && check "the control: a wait on a condition built from a value, then an import through a variable, is refused as placed nowhere" ok \
-  || check "the control: a wait on a condition built from a value, then an import through a variable, is refused as placed nowhere" "refused for another reason: ${built:0:400}" ;;
-  *) check "the control: a wait on a condition built from a value, then an import through a variable, is refused as placed nowhere" "not refused: ${built:0:400}" ;; esac
-case "$written" in "0	tests/written.sh	") check "the control: the same with the condition written out is allowed" ok ;;
-  *) check "the control: the same with the condition written out is allowed" "${written:0:400}" ;; esac
+# The control's own lines are accounted for as the real ones are, so a judge of either ended from
+# outside on both tries is named and unmeasured, never read as the gate not refusing (#3656).
+got="$(account "$W/ctl.list" "$W/ctl.out")"
+case "$got" in
+  "judged "*)
+    built="$(grep -F "	tests/built.sh	" "$W/ctl.out")"
+    written="$(grep -F "	tests/written.sh	" "$W/ctl.out")"
+    case "$built" in 2*) placed_nowhere "$built" && check "the control: a wait on a condition built from a value, then an import through a variable, is refused as placed nowhere" ok \
+      || check "the control: a wait on a condition built from a value, then an import through a variable, is refused as placed nowhere" "refused for another reason: ${built:0:400}" ;;
+      *) check "the control: a wait on a condition built from a value, then an import through a variable, is refused as placed nowhere" "not refused: ${built:0:400}" ;; esac
+    case "$written" in "0	tests/written.sh	") check "the control: the same with the condition written out is allowed" ok ;;
+      *) check "the control: the same with the condition written out is allowed" "${written:0:400}" ;; esac
+    ;;
+  "unmeasured "*) echo "SUITE-PART-UNMEASURED the control, so what the gate prints for a module placed nowhere: ${got#unmeasured }" ;;
+  *) check "the control's two scripts were judged" "${got#missing }" ;;
+esac
 
 # The controls for gathering (#3656, L1): a stand in judge, in place of judge_one, for three listed
 # paths, whose judge of the middle one is ended by SIGKILL before it writes (the loss seen at a load
-# of 263), ended only the first time, or finishes cleanly with no line. Staged, never left to load.
+# of 263), ended only the first time, finishes cleanly with no line, or exits 1 with no line.
+# Staged, never left to load.
 # stand_in <cwd> <path> <out file>: writes a line as judge_one does, except for $SI_PATH (SI_MODE).
 stand_in(){
   if [ "$2" = "$SI_PATH" ]; then
@@ -186,6 +205,7 @@ stand_in(){
       ended) sh -c 'kill -KILL "$PPID"' ;;
       ended_once) [ -e "$W/si.once" ] || { : > "$W/si.once"; sh -c 'kill -KILL "$PPID"'; } ;;
       clean) return 0 ;;
+      failed) exit 1 ;;
     esac
   fi
   printf '0\t%s\t\n' "$2" > "$3.part" && mv -f "$3.part" "$3"
@@ -203,6 +223,9 @@ case "$got" in "unmeasured of the 3 scripts listed, 1 was not judged,"*" tests/b
 SI_MODE=clean; ( judge "$W" "$W/si.list" "$W/si.out" stand_in ) 2>> "$W/si.noise"; got="$(account "$W/si.list" "$W/si.out")"
 case "$got" in "missing 2 of 3 judged; tests/b.sh (its judge exited 0 without writing a line"*) check "the control: a judge that finished cleanly without a line is named, and fails" ok ;;
   *) check "the control: a judge that finished cleanly without a line is named, and fails" "account said '$got'" ;; esac
+SI_MODE=failed; ( judge "$W" "$W/si.list" "$W/si.out" stand_in ) 2>> "$W/si.noise"; got="$(account "$W/si.list" "$W/si.out")"
+case "$got" in "missing 2 of 3 judged; tests/b.sh (its judge exited 1 without writing a line"*) check "the control: a judge that failed by itself (as a write that fails does) without a line is named, and fails rather than being unmeasured" ok ;;
+  *) check "the control: a judge that failed by itself (as a write that fails does) without a line is named, and fails rather than being unmeasured" "account said '$got'" ;; esac
 
 # The real scripts: every shell file the repository ships whose code sources lib/hang-wait.sh.
 bash "$HOOKS/lib/repo-files.sh" "$ROOT" > "$W/files" 2>"$W/files.err" || { check "the repository's files were listed" "$(cat "$W/files.err")"; }
