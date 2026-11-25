@@ -256,12 +256,15 @@ check "a scan that does not report the planted control stops, exit 2: rc=$rc" [ 
 check "and says the scan cannot be trusted: $out" has "$out" "cannot be trusted"
 check "and never says none were found: $out" lacks "$out" "none found"
 check "and read nothing of the repository: $(gathered)" [ "$(gathered)" = "0" ]
-# A scanner that reports every line: a control with no name in it must stay quiet.
-sed 's/^    return$/    hits.extend("%s:%d: a work repository or owner name" % (shown, n) for n in range(1, len(text.splitlines()) + 1))/' \
+# A scanner that reports line 3 of whatever it is handed: the planted control passes, so only the
+# text with no name in it can catch this one. (One reporting every line fails the first control
+# instead, and never reached the branch this case is for.)
+sed 's/^    return$/    hits.append("%s:3: a work repository or owner name" % shown)/' \
   "$WORK/blind.py" > "$WORK/loud.py"
 : > "$CALLS"
 out="$(fixture_env REAL_LIB="$LIB" POSTED_TEXT_SCAN_LIB="$WORK/loud.py" python3 "$SCAN" "$REPO" --since "$SINCE" 2>&1)"; rc=$?
 check "a scan that reports a line with no name in it stops too, exit 2: rc=$rc" [ "$rc" -eq 2 ]
+check "and says it was the text with no name that was reported: $out" has "$out" "WITH NO NAME IN IT"
 check "and says the scan cannot be trusted: $out" has "$out" "cannot be trusted"
 check "and read nothing of the repository: $(gathered)" [ "$(gathered)" = "0" ]
 # A fault nobody foresaw is a failure too. Left to Python it would end the run with exit 1, which
