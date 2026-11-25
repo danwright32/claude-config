@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Tests for lib/judgement-cache.py, the Slack drafts gate's cache of the calls it allowed
 # (claude-config#2918). The judgements themselves (a changed sourced file, a changed disk answer and a
-# corrupt entry each judged afresh) are in test-slack-drafts-only-gate.sh; this suite checks the
-# cache's own parts:
+# corrupt entry each judged afresh) are in test-slack-drafts-only-gate-tools-cache.sh; this suite
+# checks the cache's own parts:
 #   - the one route to the disk: every module the gate and its libraries import is classified, none
 #     is reached around install()'s stand ins, and every environment variable read by name is in the
 #     key (L621: a new direct disk call fails here, not in a review);
