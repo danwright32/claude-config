@@ -826,26 +826,26 @@ code_jc=$?
 
 # ---------------------------------------------------------------------------
 # A line holding a byte that is not valid text (claude-config#3538). Measured on 2026-11-24 with
-# the grep macOS ships, under en_US.UTF-8: the search lost 17 of 23 matching lines that held such a
-# byte, with exit 0, nothing on stderr and no "Binary file matches", so a home path on one of those
-# lines passed. Under LC_ALL=C the same search found all 23.
+# the grep macOS ships, under a UTF-8 locale: the search lost 17 of 23 matching lines that held
+# such a byte, with exit 0, nothing on stderr and no "Binary file matches", so a home path on one
+# of those lines passed. Under LC_ALL=C the same search found all 23.
 #
 # The locale is SET for every run below, never inherited, because the fault shows in one locale and
 # not the other: a suite started under C would pass over the unfixed check and prove nothing
-# (L411). Each case is asked in a UTF-8 locale and in C, and when this machine has no UTF-8 locale
-# the suite says so rather than counting the C runs twice.
+# (L411). Each case is asked in a UTF-8 locale this machine has and in C. The locale comes from
+# lib/test_bad_byte_locale.sh, the one place suites take it from (claude-config#1923), which also
+# measures whether grep here loses such a line at all and says UNMEASURED where it does not, so a
+# pass on such a machine is not read as the fix being proved there.
 #
 # Every odd byte is a printf octal escape, so this file itself stays plain text.
 # ---------------------------------------------------------------------------
-utf8_locale=""
-for _cand in en_US.UTF-8 C.UTF-8 en_US.utf8 C.utf8; do
-  if [ "$(LC_ALL="$_cand" locale charmap 2>/dev/null)" = "UTF-8" ]; then utf8_locale="$_cand"; break; fi
-done
 ODD_LOCALES="C"
-if [ -n "$utf8_locale" ]; then
-  ODD_LOCALES="$utf8_locale C"
+if . "$DIR/lib/test_bad_byte_locale.sh" 2>/dev/null; then
+  BAD_BYTE_LOCALE="$(bad_byte_locale)"
+  [ "$BAD_BYTE_LOCALE" = C ] || ODD_LOCALES="$BAD_BYTE_LOCALE C"
+  bad_byte_measured grep "#3538 the search past a byte that is not valid text" || true
 else
-  echo "  (UNMEASURED: this machine has no UTF-8 locale, so the #3538 cases ran under C only, where the fault never showed)"
+  check "lib/test_bad_byte_locale.sh is beside this suite" "missing, so the #3538 cases have no UTF-8 locale to run under and ran under C only, where the fault never showed"
 fi
 H1="name one machine's home directory"
 H2="write the sync's placeholder somewhere"

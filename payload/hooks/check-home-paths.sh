@@ -678,7 +678,9 @@ judged="$(
 judge_rc=$?
 
 # One short record per finding, sorted into the three rules. Nothing read here is longer than a
-# file's path and HP_CUT bytes of one of its lines.
+# file's path, HP_CUT bytes of one of its lines as they are reported, and the notes after them. A
+# byte that is not valid text is reported as four characters, so at the very worst (HP_CUT such
+# bytes in a row) a record is four times HP_CUT and its path: still nothing like a whole line.
 _tab=$'\t'
 judge_ended=0
 while IFS= read -r _rec; do
