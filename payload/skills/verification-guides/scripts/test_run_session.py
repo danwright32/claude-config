@@ -778,6 +778,8 @@ class EgressTests(RunFixture):
             return self.assert_unmeasured_because_reports_were_withheld(rid, sha, egress)
         self.assertEqual(egress["verdict"], "not-clean", egress)
         self.assertIn("port 9", egress["why"])
+        if self.withheld(egress):  # what was seen is never downgraded, and the gap is said beside it
+            self.assertIn(WITHHELD, egress["why"])
 
     # The one refusal (claude-config#3319).
     # The helper browser a drive call starts asks, before its first address lookup, whether a fixed
