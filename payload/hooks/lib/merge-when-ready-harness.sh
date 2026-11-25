@@ -534,7 +534,13 @@ count(){ if [ -f "$ST/$1" ]; then grep -c -- "$2" "$ST/$1"; else echo 0; fi; }
 # GitHub's own words for two answers several suites give the helper: its "Something went wrong" to a
 # merge (claude-config#2289, section 8) and its rate limit refusal (claude-config#1482, section 21).
 WRONG='GraphQL: Something went wrong while executing your query. This may be the result of a timeout, or it could be a GitHub bug. Please include `AB12:3C4D:5E6F` when reporting this issue.'
-LIMITED="gh: API rate limit exceeded for user ID 241846707. (HTTP 403)"
+# The rate limit refusal is a file of its own, as the stub gates are: its first word is the program's
+# name, and lib/word-position-scan.py reads this file as a hook, so written here as an assignment it
+# was reported as a hook comparing a word with that name (claude-config#3572, the pull request's
+# first CI run on 2026-11-24). A missing or empty file stops the suite: an empty answer would let
+# every rate limit case pass or fail for the wrong reason.
+LIMITED="$(cat "$DIR/merge-when-ready-fixtures/rate-limited.txt" 2>/dev/null)"
+[ -n "$LIMITED" ] || { echo "merge-when-ready-harness: could not read $DIR/merge-when-ready-fixtures/rate-limited.txt, so no rate limit case can run" >&2; exit 2; }
 
 # Set by one section and read by a section in another suite, so made here for every suite
 # (claude-config#3572). Each is as it was where it was first set.
