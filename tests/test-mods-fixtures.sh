@@ -2151,7 +2151,7 @@ done <<< "$pieces"
 # counted once.
 dup="$(while IFS= read -r p; do
     [ -n "$p" ] || continue
-    grep -E '^# [0-9]+[a-z]*\. ' "$p" | LC_ALL=C sort -u
+    grep -E '^# [0-9]+[a-z0-9]*\. ' "$p" | LC_ALL=C sort -u
   done <<< "$pieces" | LC_ALL=C sort | uniq -d)"
 [ -z "$dup" ] && check "#3622 no numbered section of the mods suites is held by two pieces" ok \
   || check "#3622 no numbered section of the mods suites is held by two pieces" "in two pieces: $dup"
