@@ -15,5 +15,10 @@
   "outputStyle": "Explanatory",
   "env": {
     "CLAUDE_CODE_SUBAGENT_MODEL": null
-  }
+  },
+  "claudeMdExcludes": [
+    "**/claude-config/payload/CLAUDE.md",
+    "**/claude-config/.claude/worktrees/*/payload/CLAUDE.md",
+    "**/claude-config-sync/payload/CLAUDE.md"
+  ]
 }

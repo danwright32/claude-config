@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Tests for lib/judgement-cache.py, the Slack drafts gate's cache of the calls it allowed
 # (claude-config#2918). The judgements themselves (a changed sourced file, a changed disk answer and a
-# corrupt entry each judged afresh) are in test-slack-drafts-only-gate.sh; this suite checks the
-# cache's own parts:
+# corrupt entry each judged afresh) are in test-slack-drafts-only-gate-tools-cache.sh; this suite
+# checks the cache's own parts:
 #   - the one route to the disk: every module the gate and its libraries import is classified, none
 #     is reached around install()'s stand ins, and every environment variable read by name is in the
 #     key (L621: a new direct disk call fails here, not in a review);
@@ -755,7 +755,8 @@ echo "judgement cache: a standard library module the script reading asks is foun
 # gate loads its own libraries. So both are recorded, and a kept judgement is not used once either
 # has changed. Run against the library as it stood at 055ac70, which imported the module with
 # importlib.import_module: the first check failed, the import's own read of the file having marked
-# the record, so nothing was kept (the through the gate cases are in test-slack-drafts-code-loaders.sh).
+# the record, so nothing was kept (the through the gate cases are in
+# test-slack-drafts-code-loaders-python.sh).
 # A test cannot change a real standard library module's file, so the folder taken for the standard
 # library's is a throwaway one, on the path behind an empty folder. Each look is a new process, as
 # each run of the gate is: a module the asking process has loaded is found in memory, not on the disk.

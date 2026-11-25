@@ -125,4 +125,4 @@ if ! mv "$new" "$dest"; then
   exit 1
 fi
 rm -rf "$old" 2>/dev/null || echo "refresh-claude-code-types: the old pin, now unused, could not all be removed: $old" >&2
-echo "refresh-claude-code-types: pinned Claude Code $build's types in $dest. Run bash tests/test-mods.sh, then commit them with any change the newer types ask of a mod."
+echo "refresh-claude-code-types: pinned Claude Code $build's types in $dest. Run bash tests/test-mods.sh and bash tests/test-mods-fixtures.sh, then commit them with any change the newer types ask of a mod."
