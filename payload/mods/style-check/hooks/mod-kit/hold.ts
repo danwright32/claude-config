@@ -97,9 +97,10 @@ export const neverThrows = async <R>(work: () => R | Promise<R>, fallback: () =>
 // The catch cannot tell which of the two failed, which is why those words claim neither that
 // nothing was done nor that all of it was. An ordinary call (a Read, a Bash) never reaches a
 // cutOwn, whose hook does not match it.
-// Where no matching catch answers, Claude Code reads the hooks as absent and the call goes on. So a
-// `mine` that says no is the one way a catch here lets a cut call go on, and each use says why
-// beside it.
+// Where no matching catch answers, Claude Code reads the hooks as absent and the call goes on. That
+// is what watchesOnly is for, on a hook that judges nothing. On a hook that can refuse (cutCall,
+// cutCheck, cutOwn) a `mine` that says no is the one way its catch lets a cut call go on, and each
+// use says why beside it.
 //
 // A hook that computes without yielding is stopped by the hooks worker's heartbeat at about 6 s.
 // With no catch its mod is then UNLOADED and the call runs (3 of 3 runs, same day); with one of

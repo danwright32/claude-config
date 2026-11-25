@@ -159,9 +159,9 @@ and settles its own surfaces in rounds of its own before it is built.
      tool's `cutOwn` answers "could not finish answering this call to its own tool", which is why
      those words claim neither that nothing was done nor that all of it was. An ordinary call
      never reaches a `cutOwn`.
-   - **One catch lets a cut call go on.** Where no matching catch answers, the hooks are read as
-     absent and the call runs, so a `mine` that says no is the one way a shared catch passes a cut
-     call. Scope modes uses it for a `TaskStop` alone, by Dan's decision on #1495 (2026-10-22:
+   - **One guard's catch lets a cut call go on.** Where no matching catch answers, the hooks are read as
+     absent and the call runs. A watcher's `watchesOnly` does that by design. On a hook that can
+     refuse, a `mine` that says no is the one way its catch passes a cut call. Scope modes uses it for a `TaskStop` alone, by Dan's decision on #1495 (2026-10-22:
      "when scope modes' own check of a TaskStop errors, the stop is let through"), since stopping
      a job cannot break a mode and refusing the stop only keeps the job running. A cut `TaskStop`
      runs, as it did before this change; every other call scope modes is cut on is refused. This
