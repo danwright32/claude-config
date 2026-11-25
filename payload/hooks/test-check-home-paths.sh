@@ -889,8 +889,11 @@ odd_case "the hand substituted placeholder with such a byte right after it" 1 "$
 # such byte (GNU grep does, in a UTF-8 locale) would skip the file with -I and report nothing.
 odd_case "a home path on the line after one holding such a byte" 2 "$H1" "$BADHOME/six" 'first \377 line\n%s/six\n' "$BADHOME"
 odd_case "a home path on the line before one holding such a byte" 1 "$H1" "$BADHOME/seven" '%s/seven\nlater \377 line\n' "$BADHOME"
-# The marker excuses its own line and no other, in a file holding such bytes too.
-odd_case "an unmarked line below a marked one, each holding such a byte," 2 "$H1" "$BADHOME/eight" \
+# The marker excuses its own line and no other, in a file holding such a byte too. The marked
+# line here is valid text on purpose: whether a marked line that itself holds such a byte is
+# excused depends on the locale and on where the byte sits (the check's note above its search
+# says how), and that is left as it was found, so no case here holds it either way.
+odd_case "an unmarked line holding such a byte, below a marked line of valid text," 2 "$H1" "$BADHOME/eight" \
   'plain %s/excused claude-sync-allow-home-path \n\377 %s/eight\n' "$BADHOME" "$BADHOME"
 for loc in $ODD_LOCALES; do
   ! LC_ALL=C grep -a -q -F -- "hooks/odd.txt:1:" "$TMPROOT/odd$ODD_N.$loc.out" \
