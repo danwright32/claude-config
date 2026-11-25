@@ -420,6 +420,68 @@ part_run "$FX/twice.tsv" 2 2
   && check "#2463 a suite dealt to two parts makes the part refuse, naming it, and run nothing" ok \
   || check "#2463 a suite dealt to two parts makes the part refuse, naming it, and run nothing" "rc=$part_rc, dup '$dup': $(tail -2 <<< "$part_out" | tr '\n' ' ')"
 
+# ---------------------------------------------------------------------------
+# #3575: a part fails when a suite it ran cost more than half the wall limit every suite is stopped at.
+# ---------------------------------------------------------------------------
+# Two suites each took most of the 1,200 second limit on 2026-11-24 and were stopped there on a slow
+# runner, with no failing check until they crossed it (L315). The part judges what THIS run measured,
+# the same figure it writes for the next deal, because the store a pull request restores can be
+# hours and several splits old. The limit is read from lib/suite-deadline.sh, so this drives a copy
+# of the runner whose copy of that file says 4 seconds: a ceiling of 2, crossed by a 3 second sleep,
+# and no real wait near 600 seconds.
+CG="$TMPROOT/cost-tree"
+mkdir -p "$CG/t" "$CG/hooks" "$CG/store"
+cp "$RUNNER" "$CG/hooks/run-all-tests.sh"
+cp -R "$DIR/../payload/hooks/lib" "$CG/hooks/lib"
+sed 's/^SUITE_WALL_DEFAULT=[0-9][0-9]*$/SUITE_WALL_DEFAULT=4/' "$DIR/../payload/hooks/lib/suite-deadline.sh" > "$CG/hooks/lib/suite-deadline.sh"
+printf '#!/usr/bin/env bash\nsleep 3\necho "SUITE-RESULT passed=1 failed=0"\n' > "$CG/t/test-slow.sh"
+printf '#!/usr/bin/env bash\necho "SUITE-RESULT passed=1 failed=0"\n' > "$CG/t/test-quick.sh"
+# Slow too, but it leaves no result line, so the runner records no time for it: its cost is not
+# known, and it is named as unmeasured rather than failed or passed as zero (L90, L411).
+printf '#!/usr/bin/env bash\nsleep 3\necho "passed: 1, failed: 0"\n' > "$CG/t/test-prose.sh"
+git -C "$CG" init -q && git -C "$CG" add t
+cost_run(){ # cost_run <runner> <store, or empty> [deal file] -> output in cost_out, exit code in cost_rc
+  if [ -n "${3:-}" ]; then
+    cost_out="$(HOOK_TESTS_ROOT="$CG" HOOK_TESTS_TIMINGS="$2" HOOK_TESTS_FLAKY_OUTPUT= HOOK_TESTS_SLOT=0 \
+      HOOK_TESTS_DEALT="$3" HOOK_TESTS_PART=1 HOOK_TESTS_PARTS=1 bash "$1" 2>&1)"; cost_rc=$?
+  else
+    cost_out="$(HOOK_TESTS_ROOT="$CG" HOOK_TESTS_TIMINGS="$2" HOOK_TESTS_FLAKY_OUTPUT= HOOK_TESTS_SLOT=0 bash "$1" 2>&1)"; cost_rc=$?
+  fi
+}
+HOOK_TESTS_ROOT="$CG" HOOK_TESTS_TIMINGS= HOOK_TESTS_DEAL=1 bash "$CG/hooks/run-all-tests.sh" > "$CG/deal.tsv" 2>/dev/null
+cost_run "$CG/hooks/run-all-tests.sh" "" "$CG/deal.tsv"
+{ [ "$cost_rc" -ne 0 ] \
+    && grep -qE '^  t/test-slow\.sh took [3-9]s, over the 2s ceiling' <<< "$cost_out" \
+    && grep -qF 'half the 4s' <<< "$cost_out" \
+    && ! grep -qE '^  t/test-quick\.sh took' <<< "$cost_out"; } \
+  && check "#3575 a suite over half the wall limit turns its part red, naming it, its cost, the ceiling and the limit" ok \
+  || check "#3575 a suite over half the wall limit turns its part red, naming it, its cost, the ceiling and the limit" "rc=$cost_rc: $(grep -iE 'ceiling|wall limit|SUITES' <<< "$cost_out" | tr '\n' ' ')"
+{ grep -qE 'cost NOT MEASURED.*t/test-prose\.sh' <<< "$cost_out" && ! grep -qE '^  t/test-prose\.sh took' <<< "$cost_out"; } \
+  && check "#3575 a suite this run measured no time for is named as unmeasured, never failed for its cost" ok \
+  || check "#3575 a suite this run measured no time for is named as unmeasured, never failed for its cost" "$(grep -iE 'prose|NOT MEASURED' <<< "$cost_out" | tr '\n' ' ')"
+# A run on a Mac deals nothing, and its figures move with the machine's load, so it is never failed
+# for a suite's cost: the same slow tree passes there.
+cost_run "$CG/hooks/run-all-tests.sh" ""
+{ [ "$cost_rc" -eq 0 ] && ! grep -qE 'took [0-9]+s, over the' <<< "$cost_out"; } \
+  && check "#3575 a run that is not a dealt part is never failed for a suite's cost" ok \
+  || check "#3575 a run that is not a dealt part is never failed for a suite's cost" "rc=$cost_rc: $(tail -3 <<< "$cost_out" | tr '\n' ' ')"
+# A record restored from an older run says the quick suite took 999 seconds. The part judges what it
+# measured now, so a store from before a split can never turn a part red.
+git -C "$CG" rm -q --cached t/test-slow.sh && rm -f "$CG/t/test-slow.sh"
+printf '999\n' > "$CG/store/t%2Ftest-quick.sh"
+HOOK_TESTS_ROOT="$CG" HOOK_TESTS_TIMINGS= HOOK_TESTS_DEAL=1 bash "$CG/hooks/run-all-tests.sh" > "$CG/deal2.tsv" 2>/dev/null
+cost_run "$CG/hooks/run-all-tests.sh" "$CG/store" "$CG/deal2.tsv"
+{ [ "$cost_rc" -eq 0 ] && grep -qE 'cost ceiling 2s .*1 of 2 suite\(s\) of this part measured' <<< "$cost_out"; } \
+  && check "#3575 a part judges the cost it measured, never a stale figure in the restored store" ok \
+  || check "#3575 a part judges the cost it measured, never a stale figure in the restored store" "rc=$cost_rc: $(grep -iE 'ceiling|NOT MEASURED|FAILED' <<< "$cost_out" | tr '\n' ' ')"
+# The limit has ONE home. A copy of the deadline library that no longer says it leaves the part
+# unable to judge anything, and that is a red, never a quiet pass (L98).
+grep -v '^SUITE_WALL_DEFAULT=' "$DIR/../payload/hooks/lib/suite-deadline.sh" > "$CG/hooks/lib/suite-deadline.sh"
+cost_run "$CG/hooks/run-all-tests.sh" "" "$CG/deal2.tsv"
+{ [ "$cost_rc" -ne 0 ] && grep -qF 'wall limit could not be read' <<< "$cost_out"; } \
+  && check "#3575 a part that cannot read the wall limit fails rather than judging nothing" ok \
+  || check "#3575 a part that cannot read the wall limit fails rather than judging nothing" "rc=$cost_rc: $(tail -3 <<< "$cost_out" | tr '\n' ' ')"
+
 # The fan in's verdict, RUN rather than read: the body of the step that decides it is taken from the
 # workflow as it stands and executed with each result a part job can end in, so a red part is
 # proved to make a red `suite`, the one check every merge waits on (L305). A grep for its wording
