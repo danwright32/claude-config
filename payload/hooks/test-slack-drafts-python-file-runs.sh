@@ -851,7 +851,14 @@ cp "$IP/quiet.py" "$O/quietmod.py"
 # quoted commands in a folder of its own that holds a post.sh, where a command naming one posts.
 cp "$IP/post.sh" "$O/sends3539.sh"
 cp "$IP/calm.sh" "$O/calm.sh"
-cp "$IP/posts.py" "$O/-m"
+# The posting file named -m is in a folder of its own, where only the pair that runs it by that name
+# is judged. Since #3600 a file whose name starts with a dash is read where it follows a script that
+# runs what it is handed, so beside the other fixtures it would be one more file that posts in every
+# twin holding the word -m after such a script, and each twin says nothing it runs posts.
+mkdir -p "$O/dashm"
+cp "$IP/posts.py" "$O/dashm/-m"
+cp "$IP/quiet.py" "$O/dashm/quietmod.py"
+cp "$IP/quiet.py" "$O/dashm/-quiet.py"
 cp "$IP/posts.py" "$O/-post.py"
 cp "$IP/quiet.py" "$O/-quiet.py"
 cp "$IP/posts.py" "$O/doc.py"
@@ -909,7 +916,10 @@ o_pair "ruby handed a script with -m after it" "ruby post.rb -m x" "ruby calm.rb
 o_pair "perl handed a script with -m after it" "perl post.pl -m x" "perl calm.pl -m x"
 
 # After --, the next word is the script whatever it starts with, and - is the code on its input.
-o_pair "a script named -m after --" "python3 -- -m quietmod" "python3 -- -quiet.py quietmod"
+o_run "python3 -- -m quietmod" "$O/dashm"
+read_refused "#3539 a script named -m after -- is refused"
+o_run "python3 -- -quiet.py quietmod" "$O/dashm"
+allowed "#3539 a script named -m after --, where nothing it runs posts, passes"
 o_pair "a script whose name starts with a dash after --" "python3 -- -post.py" "python3 -- -quiet.py"
 o_pair "code on the input by - after --" "python3 -- - <<'EOF'
 import posts
@@ -1196,6 +1206,18 @@ h_pair "a script of any name sourced with a dot after --" ". -- sends3600.sh" ".
 h_pair "a shell script that runs the file it is handed, handed one named with a dash" "bash runs3600.sh -sends3600.sh" "bash runs3600.sh -calm3600.sh"
 h_pair "the same script run by its path" "./runs3600.sh -sends3600.sh" "./runs3600.sh -calm3600.sh"
 h_pair "a Python script that runs the file it is handed, handed one named with a dash" "python3 handed.py -post.py" "python3 handed.py -quiet.py"
+# The shapes six #3539 twins showed while a posting file named -m stood beside them: the word after
+# the script is a file the script is handed wherever the gate cannot tell what the script does with it.
+h_pair "a Python script named through a variable, handed one named with a dash" "S=quiet.py; python3 \"\$S\" -post.py" "S=quiet.py; python3 \"\$S\" -quiet.py"
+h_pair "code in a heredoc that hands a shell its file, handed one named with a dash" "python3 - calm3600.sh -sends3600.sh <<'EOF'
+import subprocess, sys
+subprocess.run(['bash', sys.argv[1]])
+EOF" "python3 - calm3600.sh -calm3600.sh <<'EOF'
+import subprocess, sys
+subprocess.run(['bash', sys.argv[1]])
+EOF"
+h_pair "a ruby script handed a file named with a leading dash" "ruby calm.rb -post.rb" "ruby calm.rb -calm.rb"
+h_pair "a perl script handed a file named with a leading dash" "perl calm.pl -post.pl" "perl calm.pl -calm.pl"
 h_pair "a ruby script named with a leading dash after --" "ruby -- -post.rb" "ruby -- -calm.rb"
 h_pair "a perl script named with a leading dash after --" "perl -- -post.pl" "perl -- -calm.pl"
 h_pair "a script named with a leading dash handed to bun after --" "bun -- -post.js" "bun -- -calm.js"
