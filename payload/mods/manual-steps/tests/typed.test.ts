@@ -60,7 +60,7 @@ describe('typedCommands', () => {
   })
 
   test('a path is not a command, in a code block or after run', () => {
-    expect(typedCommands('```\n/Users/someone/file.txt\n```')).toEqual([])
+    expect(typedCommands('```\n/Volumes/Backup/file.txt\n```')).toEqual([])
     expect(typedCommands('```\n/tmp/build.log\n```')).toEqual([])
     expect(typedCommands('Run `/usr/bin/true` to check.')).toEqual([])
     // Lower case only: a folder named after a verb is not a command (lessons review, fb7e67d).
