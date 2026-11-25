@@ -131,6 +131,8 @@ GO_EMBED = re.compile(r"^//go:embed\s+(.+)$", re.M)
 NATIVE_WALK = 5000
 NATIVE_FILES = 2000
 
+# The longest word read as the name of a file that starts with a dash (dash_file).
+DASH_NAME_MAX = 1024
 # A word that may be a file pattern (claude-config#3251), how many files one pattern is expanded to,
 # and how many directory entries its walk looks at. Past either the pattern is unread: refused where
 # typed, left alone in a script on disk.
@@ -1231,6 +1233,85 @@ def make(marker, judged_by_name, pkg_dir_opts=(), max_depth=3):
                         return words, why
                 out.extend(got or [w])
             return out, None
+
+        # ---- A file whose name starts with a dash (#3600) -----------------------------------------
+        #
+        # Measured on main at e4cf5e9919 on 2026-11-25, with stand in scripts that only wrote a
+        # marker: `bash -- -sends.sh` and `bash - -sends.sh` ran the file named -sends.sh, as sh,
+        # zsh, dash and ksh did, and so did `bash < -sends.sh`, `source -- -sends.sh` (bash, sh
+        # and zsh), `ruby -- -post.rb`, `perl -- -post.pl`, `bun -- -post.js` and `deno run --
+        # -post.js`; a script that runs the file it is handed ran one named so (`bash runs.sh
+        # -sends.sh`, where runs.sh is `bash -- "$1"`). Each passed where the file posts: every
+        # word starting with a dash was taken for an option and never read as a file, and
+        # `source -- sends.sh` read the word -- for the file, so no file at all. (`python3 --
+        # -post.py` is read since #3539, by py_own_reading in lib/py-file-runs.py.)
+
+        def dash_file(self, word, d):
+            """Whether word starts with a dash and names a file to read in the folder d."""
+            return len(word) > 1 and word[0] == "-" and word != "--" and len(word) <= DASH_NAME_MAX \
+                and "\0" not in word and "\n" not in word and self.is_file(self.resolve(word, d))
+
+        def dash_named(self, words, d, arguments=False):
+            """words with ./ put in front of each word that starts with a dash, names a file on
+            disk, and stands where the program reads no option of its own; words itself where
+            there is none. Such a word is a file the program runs or is handed, and spelled
+            with ./ the gate's readers take it for one. The caller (the gate's every_file)
+            reads the words so first and then as they were written, so this can only refuse
+            more.
+
+            A program reads no option of its own after `--`, after a lone `-` (which ends a
+            shell's options as -- does, and is the code on its input for the rest, whose
+            arguments follow), or after the word in its script's place by the gate's table of
+            options (operands), every word after which is the script's argument. arguments says
+            every word here is an argument already, of code given by an option or of a package
+            a launcher runs. A file fed on the input by a redirection is a file wherever it
+            stands. A word before those places is an option whatever file shares its name:
+            `bash -x calm.sh` runs calm.sh and reads no file named -x."""
+            slot = None if arguments else self.operands(words)[0]
+            out, over, fed, changed = list(words[:1]), arguments, False, False
+            for w in words[1:]:
+                m = self.sw.REDIRECT_WORD.match(w)
+                if m:
+                    feeds = bool(re.match(r"0?<(?![<>&])", w))
+                    if feeds and m.group(1) and self.dash_file(m.group(1), d):
+                        w, changed = w[:m.start(1)] + "./" + m.group(1), True
+                    fed = feeds and not m.group(1)
+                elif fed or over:
+                    fed = False
+                    if self.dash_file(w, d):
+                        w, changed = "./" + w, True
+                elif w in ("--", "-") or w == slot:
+                    over = True
+                out.append(w)
+            return out if changed else words
+
+        def source_past_dashes(self, words, text, judge):
+            """The reason `source -- FILE` or `. -- FILE` posts, or None (claude-config#3600).
+            bash, sh and zsh take the word after -- for the file whatever it starts with
+            (measured 2026-11-25), and the gate read the word -- as the file, so nothing. The
+            command is spelled again without the --, with ./ in front of a name that starts
+            with a dash, from its words as written (py_respelled in lib/py-file-runs.py, which
+            uses a spelling only once the gate's reader gives back the words it was built for),
+            and that text is judged as the command itself is (judge). Where no spelling reads
+            back, what it sources is refused as unread where typed. The caller reads the
+            command as written afterwards, as before, so this can only refuse more."""
+            if len(words) < 3 or words[1] != "--":
+                return None
+
+            def spell(ws):
+                if len(ws) < 3 or ws[1] != "--":
+                    return None
+                dashed = ws[2].lstrip("'\"").startswith("-")
+                return ws[:1] + [("./" if dashed else "") + ws[2]] + ws[3:]
+
+            again = self.py_respelled(text, spell(words), spell)
+            if again is None:
+                return self.unread_typed(
+                    f"{words[0]} is handed -- and then the file it runs, which the gate cannot spell out as a "
+                    "command it reads, so that file is not read and whether it posts cannot be checked "
+                    f"(claude-config#3600). Name the file right after {words[0]}, with ./ in front of a name "
+                    "that starts with a dash")
+            return judge(again)
 
         @staticmethod
         def braces(word):

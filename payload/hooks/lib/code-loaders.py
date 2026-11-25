@@ -23,6 +23,10 @@ Before these, four routes ran a file the gate never read:
     it, so #2892 only searched it for an endpoint, but zsh and dash run it. It is now read as the
     shell running it reads it (nul_reading).
 
+And one more since (claude-config#3600): input run after the code a program was given. `node -i -e
+CODE < post.js` and `perl -d -e CODE < post.pl` go on to run what they are fed once the code ends,
+and none of it was read (input_after_code).
+
 slack_drafts_only_gate.py loads this file and gives its Judge the class make() returns as a base, as
 it does lib/program-runs.py's, so the methods use the Judge's own readers (line, script, sh_value,
 sh_word_end, sh_cwd, is_file, content, made, shell, unfollow).
@@ -62,6 +66,15 @@ NODE_SELF = re.compile(r"\$\{NODE_OPTIONS\}|\$NODE_OPTIONS(?!\w)")
 NODE_ASSIGN = re.compile(r"(?<![\w$])NODE_OPTIONS\+?=")
 # Each word of NODE_OPTIONS, which node splits at white space outside double quotes.
 NODE_WORD = re.compile(r'"([^"]*)"|(\S+)')
+# An option that has a program given code go on to run its input as code once that code ends
+# (input_after_code, claude-config#3600), by the program's name: the words that are the option for
+# node, and for perl a run of letters holding d before any letter that takes the rest of its word
+# (-d, -de, -wd, -d:Trace; never -Mdiagnostics, whose d is part of -M's value).
+INPUT_AFTER_CODE = {
+    "node": re.compile(r"-i|--interactive"),
+    "nodejs": re.compile(r"-i|--interactive"),
+    "perl": re.compile(r"-[^-CDEFIMVeimx\W]*d.*", re.S),
+}
 # The shells that refuse to run a file with a NUL in its first line ("cannot execute binary file",
 # measured 2026-11-14 with /bin/bash 3.2, /bin/sh, which runs bash, and /bin/ksh). zsh 5.9 and
 # /bin/dash run it. A file run by its path with no #! is refused by the kernel and then by bash, zsh
@@ -221,6 +234,34 @@ def make(shell_bang, assign, marker, unknown_dir, max_depth, runs_refused):
                         where, name = self.held_names()[names]
                         return (f"{where.rstrip(',')}, which posts to Slack (it names {name}, held there only as data, but "
                                 "NODE_OPTIONS has node load it beside code judged apart from it, which can send it)")
+            return None
+
+        # ---- Input run after the code a program was given (#3600) ----------------------------------
+
+        @staticmethod
+        def input_after_code(name, options, read):
+            """The reason a program given code by an option goes on to run input that posts, or
+            None (claude-config#3600). Measured 2026-11-25 with stand in scripts that only wrote
+            a marker: `node -i -e 1 < post.js` (node 22.22.2) ran the lines of post.js, with -i
+            or --interactive before the code or after it, and with -p; `perl -d -e 1 < post.pl`
+            and `perl -de 1` (perl 5.34.1) ran those of post.pl, the debugger reading its
+            commands from the input where there is no terminal. Without the option neither ran
+            its input, and the gate read none of it for either. ruby (2.6.10) has no such
+            option: `ruby -e 1 < post.rb` and `ruby -e 1 - < post.rb` ran nothing fed.
+
+            options are the program's words but the code itself, and read the gate's reading of
+            what the command is fed on its input as code the program runs (its input_script).
+            A word after -- is the code's argument and is not an option."""
+            asks = INPUT_AFTER_CODE.get(name)
+            if asks is None:
+                return None
+            for w in options:
+                if w == "--":
+                    break
+                if asks.fullmatch(w):
+                    reason = read()
+                    return reason and (f"{name} is given {w}, so once the code it was given ends it goes on to "
+                                       f"run what it reads on its input (claude-config#3600): {reason}")
             return None
 
         # ---- A name perl's <> runs as a command (#2912) --------------------------------------------

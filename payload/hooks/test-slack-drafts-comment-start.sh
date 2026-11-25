@@ -442,6 +442,19 @@ case "$ERR" in
   *"or quote the marker"*) check "and not telling the session to quote the marker" "said: ${ERR:0:500}" ;;
   *) check "and not telling the session to quote the marker" ok ;;
 esac
+# A marker that holds a dollar quote (claude-config#3566): bash and zsh read the quote, dash takes
+# the $ for a character of the marker, so no line ends the body in every shell and the reader names
+# the heredoc. That marker is quoted, so the reason must not say it is not: measured on main at
+# e4cf5e9919 on 2026-11-25, it said "the end marker is not quoted" (claude-config#3600).
+run_bash "python3 <<\$'EOF'${NL}pass${NL}EOF${NL}import quiet" "$T/fed"
+refused "python3 fed after a marker that holds a dollar quote is refused"
+says "and as a check it could not make" "$COULD_NOT"
+says "naming the dollar quote in the marker" "its end marker holds a dollar quote"
+says "and saying what to write in its place" "plain single quotes"
+case "$ERR" in
+  *"the end marker is not quoted"*) check "and not saying that the marker is not quoted" "said: ${ERR:0:500}" ;;
+  *) check "and not saying that the marker is not quoted" ok ;;
+esac
 # The controls: where every shell closes the heredoc (two backslashes; a quoted marker, whose body
 # is read as written) the program is the comment alone, and the line after is a shell command.
 for closed in "python3 <<E${NL}# note$BS$BS${NL}E" "python3 <<'E'${NL}# note$BS${NL}E"; do

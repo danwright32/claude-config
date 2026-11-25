@@ -1693,10 +1693,12 @@ def remember_readings(mod):
             # cause by itself: it hides the ) or the quote that closes something).
             if marks:
                 # Which kind of heredoc was named, for the reason alone: one whose opener line
-                # ends in a backslash ("joined"), or one whose marker holds a line break ("split").
-                at, joins = marks[0][0], []
-                opener = mod.heredoc_opener(s, at, joins=joins) if s.startswith("<<", at) else None
-                raise UnsureComment(s, at, "joined" if joins else "split" if opener and "\n" in opener[0] else "")
+                # ends in a backslash ("joined"), one whose marker holds a line break ("split"),
+                # or one whose marker holds a dollar quote ("dollar", claude-config#3600).
+                at, joins, doubts = marks[0][0], [], []
+                opener = mod.heredoc_opener(s, at, joins=joins, doubts=doubts) if s.startswith("<<", at) else None
+                raise UnsureComment(s, at, "joined" if joins else "split" if opener and "\n" in opener[0] else
+                                    "dollar" if doubts else "")
 
     def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None):
         if heredocs is not None or spans is not None or comments is not None:
@@ -1903,7 +1905,8 @@ class UnsureComment(BaseException):
     heredoc, was named. opener says what about the heredoc's opener had it named, for the reason
     given: "joined" where its line ends in a backslash, which every shell joins to the next line,
     so that the end marker is not the word that line shows, "split" where its quoted marker holds
-    a line break, which no line of a body can be, and "" otherwise (review of #3495)."""
+    a line break, which no line of a body can be, "dollar" where its marker holds a dollar quote,
+    which shells read differently (claude-config#3566, #3600), and "" otherwise (review of #3495)."""
 
     def __init__(self, text, at, opener=""):
         super().__init__(at)
@@ -1947,6 +1950,13 @@ def heredoc_why(line, one_line=False, opener=""):
                 "that keeps the heredoc open feeds the rest of the text to the heredoc's command, which "
                 "the gate could not read for certain. Write the end marker as one word on the line that "
                 "opens the heredoc (claude-config#3492)" % line)
+    if opener == "dollar":
+        return ("it opens a heredoc the gate cannot find the end of, in the line `%s`: its end marker holds "
+                "a dollar quote ($'...' or $\"...\"), which shells read differently, so the heredoc ends at "
+                "one line in bash and zsh and at another, or at none, in dash and the shells that read as it "
+                "does. A shell that keeps the heredoc open feeds the rest of the text to the heredoc's "
+                "command, which the gate could not read for certain. Write the end marker in plain single "
+                "quotes (<<'EOF'), which every shell reads alike (claude-config#3566)" % line)
     return ("it opens a heredoc the gate cannot find the end of, in the line `%s`: the end marker is not "
             "quoted, and it either never stands on a line of its own or stands right after a line that "
             "ends in a backslash, which a shell joins to the marker's line, so that the heredoc does not "
@@ -2672,6 +2682,25 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         text as the commands or code it is (a heredoc's, as before, where the command is)."""
         pieces = self.fed_pieces(d, text, whole)
         return None if pieces is False else self.pieces_reason(name, pieces, d, depth, shell_hint, lang)
+
+    def input_script(self, name, d, text, whole, depth, lang, here, fed_by):
+        """The reason the script an interpreter reads from its input posts, or None: the text that
+        feeds it by the endpoint it names, a file or text fed to it as the code it is (input_code),
+        and the imports of a heredoc's body, which for Python is read as code given by -c is
+        (lib/py-file-runs.py, claude-config#3397). The one reading of an interpreter's input as its
+        script: of one given no script at all, and of one that goes on to run its input after the
+        script or the code it was given (python3 -i, node -i, perl -d; claude-config#3600)."""
+        fed, is_body = self.fed(fed_by, whole)
+        hit = MARKER.search(fed)
+        if hit:
+            return f"{name} runs a script from its input that names {hit.group(0)}"
+        reason = self.input_code(name, d, text, whole, depth, False, lang)
+        if reason:
+            return reason
+        reason = self.imports(f"the script {name} reads from its input", None, here, fed, lang) if lang else None
+        if lang == "py" and is_body and not reason:
+            reason = self.py_fed_runs(f"the code {name} reads from its input", fed, here, d, depth, fed_by)
+        return reason
 
     def pieces_reason(self, name, pieces, d, depth, shell_hint, lang, file_how="runs what it reads on its input",
                       text_how="runs commands from its input", unread=None):
@@ -6127,8 +6156,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         sourced = bool(words) and words[0] in ("source", ".")
         saved_exported = self.exported
         try:
-            # The modules a NODE_OPTIONS it sets has node load, whatever it runs (#2912).
-            reason = self.node_options(text, d, depth) or self.judge(d, text, wrapper, why, depth, whole)
+            # The modules a NODE_OPTIONS it sets has node load, whatever it runs (#2912), and what a
+            # PYTHONWARNINGS or PYTHONSTARTUP it sets has python3 load (lib/py-file-runs.py, #3600).
+            reason = self.node_options(text, d, depth) or self.py_env_loads(text, d, depth) \
+                or self.judge(d, text, wrapper, why, depth, whole)
             if not reason:
                 codes = len(self.made_code)
                 self.note_writes(d, text, whole)  # for a later command that runs what it wrote (#2525, #2721)
@@ -6413,8 +6444,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 # And the command as python3 itself reads its options, where the table above places
                 # what runs otherwise (py_own_reading in lib/py-file-runs.py, claude-config#3539):
                 # judged first, and then as the table reads it below, so this can only refuse more.
-                reason = self.py_own_reading(name, words, text, here, lambda again: self.judge_written(
-                    d, again, wrapper, why, depth, whole, fed_by))
+                # Given -i it goes on to run its input, read as its script is (claude-config#3600).
+                reason = self.py_own_reading(
+                    name, words, text, here,
+                    lambda again: self.judge_written(d, again, wrapper, why, depth, whole, fed_by),
+                    lambda: self.input_script(name, d, text, whole, depth, lang, here, fed_by))
                 if reason:
                     return reason
             if inline:
@@ -6439,6 +6473,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                     reason = self.imports(label, None, here, more, lang)
                     if reason:
                         break
+                # node given -i and perl given -d go on to run their input once the code ends
+                # (input_after_code in lib/code-loaders.py, claude-config#3600).
+                reason = reason or self.input_after_code(
+                    name, [w for w in words[1:] if w is not code],
+                    lambda: self.input_script(name, d, text, whole, depth, lang, here, fed_by))
                 if reason:
                     return reason
                 # The files after it are the code's arguments, never a script the program runs: each is
@@ -6492,23 +6531,19 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 return self.split_here(name, operand, d, text, whole, depth, False, lang) or \
                     self.unworked_path(text, "operand", d, "runs")
             if stdin:
-                fed, is_body = self.fed(fed_by, whole)
-                hit = MARKER.search(fed)
-                if hit:
-                    return f"{name} runs a script from its input that names {hit.group(0)}"
-                reason = self.input_code(name, d, text, whole, depth, False, lang)
-                if reason:
-                    return reason
-                reason = self.imports(f"the script {name} reads from its input", None, here, fed, lang) if lang else None
-                if lang == "py" and is_body and not reason:
-                    # Code in a heredoc, read as code given by -c is (lib/py-file-runs.py, #3397).
-                    reason = self.py_fed_runs(f"the code {name} reads from its input", fed, here, d, depth, fed_by)
-                return reason
+                return self.input_script(name, d, text, whole, depth, lang, here, fed_by)
             return None
         # A launcher handed `.` runs the package in the folder it is in, never the shell's builtin (#3083).
         if name in ("source", ".") and not (launcher and name == "."):
             if len(words) < 2:
                 return None
+            # After --, the next word is the file whatever it starts with: judged spelled without
+            # the -- first (source_past_dashes in lib/program-runs.py, claude-config#3600), and
+            # then as written below, as before, so this can only refuse more.
+            reason = self.source_past_dashes(words, text, lambda again: self.judge_written(
+                d, again, wrapper, why, depth, whole, fed_by))
+            if reason:
+                return reason
             # A path built from a variable or a substitution is worked out with the resolver (#2449)
             # and the file it names read (claude-config#2465): `. "$ROOT/lib/x.sh"` was never read, so a
             # sourced helper that posts passed. A literal path is read as it always was, ~ included. One
@@ -6772,6 +6807,16 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             if more != words:
                 rest = (d, depth, shell_hint, lang, inline, held_code, actor, True)
                 return self.every_file(words, *rest) or self.every_file(more, *rest)
+        # A word that starts with a dash and names a file, where the program reads no option of its
+        # own, is that file (dash_named in lib/program-runs.py, claude-config#3600): the words are
+        # read with ./ in front of each, and then as written below, so this can only refuse more.
+        dashed = self.dash_named(words, d, bool(inline or actor))
+        if dashed is not words:
+            reason = self.every_file(dashed, d, depth, shell_hint, lang, inline, held_code, actor, expanded)
+            if reason:
+                return (f"{reason} (read with each word that starts with a dash and names a file as that file, "
+                        f"which is what {os.path.basename(words[0])} runs or is handed after --, a lone - or its "
+                        "script: claude-config#3600)")
         if lang == "py":
             # A folder Python is handed is the __main__.py in it, and an archive it runs is one the
             # gate does not open (py_run_words in lib/py-file-runs.py, claude-config#3441): the
