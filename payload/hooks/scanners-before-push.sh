@@ -665,8 +665,6 @@ _sc_take_turn(){
   _sc_turn_note="${said%$'\n'}"
   return 0
 }
-_sc_phase "waiting its turn at the scan, behind any other push on this Mac"
-_sc_take_turn
 
 # THE MESSAGES of the commits this push adds name no work organisation (claude-config#1995) and no
 # work repository (claude-config#2111). This repository is public and squash merges with the commit
@@ -812,6 +810,15 @@ fi
 # the file matched, in place of its lines (L329, measured 2026-11-22 with this Mac's grep), and a
 # scanner with a real call would be missed. GNU grep's manual says it treats a byte that is not
 # valid in the locale the same way; that was not measured here, and the C locale has no such byte.
+#
+# THE TURN AT THE SCAN is taken here (claude-config#3536, written where _sc_take_turn is): after the
+# two checks above, which run no suite and whose refusals should not wait behind another push's
+# scan, and before this listing, the first of the steps a starved run was stopped in. A listing
+# (SCANNERS_LIST=1) runs no scanner, so it takes no turn and never waits.
+if [ "${SCANNERS_LIST:-}" != "1" ]; then
+  _sc_phase "waiting its turn at the scan, behind any other push on this Mac"
+  _sc_take_turn
+fi
 _sc_phase "listing the repository's test suites and choosing the scanners among them"
 REPO_FILES="$HOOK_DIR/lib/repo-files.sh"
 SCANS='ls-files|repo-files[.]sh'

@@ -3549,7 +3549,9 @@ nothing spaced two pushes apart, so on the night of 2026-11-23 to 24, at load av
 seven pushes from five agents were stopped at the hard stop, and two more on 2026-11-25; their
 refusals named every phase of the run, listing the suites, deciding about the runs, waiting on the
 scanners and reading their verdicts, which is a starved run rather than one slow step. So the run
-now takes this Mac's one turn at the scan before any of that work and gives it back as it ends. The
+now takes this Mac's one turn at the scan before any of that work and gives it back as it ends; the
+two checks before it (the commit messages, and each new suite's deadline) run no suite and do not
+wait, and a listing of the scanners (`SCANNERS_LIST=1`) takes no turn. The
 queue is `hooks/lib/merge-turn.sh`, the one the full suite runs, the merge helper and the load
 window already use, kept in the gate's own state folder (`~/.claude/state/scanners-passed/turn/`),
 so a push never waits behind a full run or a merge. The wait is spent out of the same 140 second

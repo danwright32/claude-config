@@ -2665,6 +2665,9 @@ RTB="$(mkrepo turn-second)"; MU_COUNT="$TMPROOT/mu-3536.count"
 add_counting_scanner "$RTB" mu "$MU_COUNT"; commit_all "$RTB"
 TURN_B_ENDS="$TMPROOT/turn-b-ends"; : > "$TURN_B_ENDS"
 turnfire_b(){ SCANNERS_STATE_DIR="$TURNSTATE" SCANNERS_BUDGET_SECONDS=20 SCANNERS_BUDGET_ENDS_WHEN="$TURN_B_ENDS" SCANNERS_BUDGET_ENDS_NOT_BEFORE=2 fire "$@"; }
+# A push that must go through gets the gate's own budget, as every passing case here does, never an
+# early end: that would fail a slow machine as out of time (L290).
+turnfire_ok(){ SCANNERS_STATE_DIR="$TURNSTATE" fire "$@"; }
 ( SCANNERS_STATE_DIR="$TURNSTATE" SCANNERS_BUDGET_SECONDS=50 fire "$RTA" "git push" > "$TMPROOT/turn-a.out"; echo $? > "$TMPROOT/turn-a.rc" ) &
 _turn_a=$!
 if hang_wait '[ -s "$TMPROOT/lambda.pid" ]'; then
@@ -2679,6 +2682,12 @@ if hang_wait '[ -s "$TMPROOT/lambda.pid" ]'; then
     && grep -q 'Send the same push again' <<< "$o3536b" && ! grep -q 'did not finish in' <<< "$o3536b" \
     && check "#3536 and says it waited its turn behind the named checkout's push, and that the push can be sent again" ok \
     || check "#3536 and says it waited its turn behind the named checkout's push, and that the push can be sent again" "out=$o3536b"
+  # A listing runs no scanner, so it takes no turn: with the turn held and the same early end, a
+  # listing that waited would be refused at it.
+  o3536l="$(SCANNERS_LIST=1 turnfire_b "$RTB" "git push")"; c3536l=$?
+  [ "$c3536l" -eq 0 ] && grep -q '^SUITE .*test-mu.sh' <<< "$o3536l" \
+    && check "#3536 a listing of the scanners takes no turn and answers while another push scans" ok \
+    || check "#3536 a listing of the scanners takes no turn and answers while another push scans" "exit=$c3536l out=$o3536l"
 else
   check "#3536 the first push's scanner started" "it never recorded its process id; first push: $(cat "$TMPROOT/turn-a.out" 2>/dev/null)"
 fi
@@ -2689,7 +2698,7 @@ wait "$_turn_a"
   || check "#3536 the push holding the turn goes through once its scan finishes" "exit=$(cat "$TMPROOT/turn-a.rc" 2>/dev/null) out=$(cat "$TMPROOT/turn-a.out" 2>/dev/null)"
 # Once the turn is free the same push takes it and is scanned.
 rm -f "$TURN_B_ENDS"
-o3536b2="$(turnfire_b "$RTB" "git push")"; c3536b2=$?
+o3536b2="$(turnfire_ok "$RTB" "git push")"; c3536b2=$?
 [ "$c3536b2" -eq 0 ] && [ "$(counted "$MU_COUNT")" = "1" ] \
   && check "#3536 once the turn is free the waiting push takes it and is scanned" ok \
   || check "#3536 once the turn is free the waiting push takes it and is scanned" "exit=$c3536b2 mu runs=$(counted "$MU_COUNT") out=$o3536b2"
@@ -2713,12 +2722,10 @@ if [ -n "$_tc_pid" ] && kill -0 "$_tc_pid" 2>/dev/null; then
   kill -KILL -- "-$_tc_pid" 2>/dev/null || kill -KILL "$_tc_pid" 2>/dev/null
   wait "$_turn_c"
   printf 'changed\n' > "$RTB/payload/hooks/changed-3536.sh"; commit_all "$RTB"
-  : > "$TURN_B_ENDS"
-  o3536d="$(turnfire_b "$RTB" "git push")"; c3536d=$?
+  o3536d="$(turnfire_ok "$RTB" "git push")"; c3536d=$?
   [ "$c3536d" -eq 0 ] && [ "$(counted "$MU_COUNT")" = "2" ] \
     && check "#3536 a push whose holder was killed mid scan is not blocked by the ticket it left" ok \
     || check "#3536 a push whose holder was killed mid scan is not blocked by the ticket it left" "exit=$c3536d mu runs=$(counted "$MU_COUNT") out=$o3536d"
-  rm -f "$TURN_B_ENDS"
 else
   check "#3536 a push holding the turn left a ticket naming its run" "no live pid found in $(ls -R "$TURNSTATE/turn" 2>/dev/null | tr '\n' ' ')"
   wait "$_turn_c"
@@ -2737,15 +2744,13 @@ if [ -n "$_stuck_dir" ]; then
   printf 'pr %s\npid %s\nstart %s\njoined %s\norder 2\n' "stuck-checkout" "$_stuck" "$(ps -o lstart= -p "$_stuck" | sed -e 's/^ *//' -e 's/ *$//')" "$(( $(date +%s) - 1000 ))" > "${_stuck_dir}999"
   printf '%s %s\n' "$(( $(date +%s) - 1000 ))" "$_stuck" > "${_stuck_dir}999.head"
   printf 'changed again\n' > "$RTB/payload/hooks/changed-3536.sh"; commit_all "$RTB"
-  : > "$TURN_B_ENDS"
-  o3536s="$(turnfire_b "$RTB" "git push")"; c3536s=$?
+  o3536s="$(turnfire_ok "$RTB" "git push")"; c3536s=$?
   [ "$c3536s" -eq 0 ] && [ "$(counted "$MU_COUNT")" = "3" ] && [ ! -e "${_stuck_dir}999" ] \
     && check "#3536 a live holder that has held the turn past the hard stop is passed over, and its ticket removed" ok \
     || check "#3536 a live holder that has held the turn past the hard stop is passed over, and its ticket removed" "exit=$c3536s mu runs=$(counted "$MU_COUNT") ticket left=$([ -e "${_stuck_dir}999" ] && echo yes || echo no) out=$o3536s"
   grep -q 'stuck-checkout' <<< "$o3536s" \
     && check "#3536 and the push says which holder it passed over" ok \
     || check "#3536 and the push says which holder it passed over" "out=$o3536s"
-  rm -f "$TURN_B_ENDS"
 else
   check "#3536 the gate keeps its turn in a folder under its state folder" "found none under $TURNSTATE/turn"
 fi
