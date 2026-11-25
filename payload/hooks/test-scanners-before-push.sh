@@ -488,36 +488,8 @@ _alpha_last="$(ls "$LOCKSTATE"/runs/*/"$(_slot_of alpha)-last" 2>/dev/null)"
   && check "#2033 and a run that scanned still records one" ok \
   || check "#2033 and a run that scanned still records one" "nothing under $LOCKSTATE/runs"
 
-# THE BUDGET RUNNING OUT WHILE A SCANNER WAITS ITS TURN ON THE LOCK is a lock refusal, said as one
-# (claude-config#2033, L11). On 2026-11-01 seven pushes were refused as "did not finish in 150
-# seconds" over a run started again for the lock 1 or 2 seconds earlier, which read as a scanner too
-# slow for the budget and sent the fix after the budget. Here a refusal takes 3 seconds on every try
-# after the first, so the budget of 2 runs out while a retry is in flight, as it did under load.
-add_slow_locked_scanner(){   # $1 = repo  $2 = name: refuses at once, then after 3 seconds, for ever
-  cat > "$1/payload/hooks/test-$2.sh" <<EOF
-#!/usr/bin/env bash
-git ls-files '*.sh' >/dev/null
-n="\$(cat "$TMPROOT/$2.tries" 2>/dev/null || echo 0)"; n=\$((n + 1)); echo "\$n" > "$TMPROOT/$2.tries"
-[ "\$n" -le 1 ] || sleep 3
-echo "test suite: another run is already going: a suite run, process 4242 on here, started 30s ago. Refusing rather than queueing behind it." >&2
-exit 5
-EOF
-  chmod +x "$1/payload/hooks/test-$2.sh"
-}
-R2033="$(mkrepo lockbudget)"; add_scanner "$R2033" alpha 0; add_slow_locked_scanner "$R2033" phi; commit_all "$R2033"
-o2033="$(HOOK_TESTS_RUNNING=1 SCANNERS_STATE_DIR="$TMPROOT/lockbudget-state" SCANNERS_SLEEP=true SCANNERS_LOCK_WAIT_SECONDS=60 SCANNERS_LOCK_POLL_SECONDS=2 SCANNERS_BUDGET_SECONDS=2 fire "$R2033" "git push")"; c2033=$?
-[ "$c2033" -eq 2 ] \
-  && check "#2033 a scanner still waiting its turn on the lock when the budget runs out blocks the push" ok \
-  || check "#2033 a scanner still waiting its turn on the lock when the budget runs out blocks the push" "exit=$c2033 out=$o2033"
-grep -q 'another test run' <<< "$o2033" && grep -q 'phi' <<< "$o2033" \
-  && check "#2033 and says another test run held the lock, naming the scanner" ok \
-  || check "#2033 and says another test run held the lock, naming the scanner" "out=$o2033"
-grep -q 'did not finish in' <<< "$o2033" \
-  && check "#2033 and never calls it a scanner that did not finish in the budget" "out=$o2033" \
-  || check "#2033 and never calls it a scanner that did not finish in the budget" ok
-grep -q 'process 4242' <<< "$o2033" \
-  && check "#2033 and names the run holding the lock, from the refusal before the retry" ok \
-  || check "#2033 and names the run holding the lock, from the refusal before the retry" "out=$o2033"
+# The budget running out while a scanner waits its turn on the lock (claude-config#2033) is checked
+# further down, after the held scanners, whose hold and budget file its stand in shares (#3541).
 
 # The lock wait's sleep names a command the gate runs, so it is honoured only under the test marker
 # (claude-config#2399, the class #2317 closed for the gate settings): outside a test run the sleep
@@ -1329,6 +1301,106 @@ reap_held(){
 trap 'reap_held; rm -rf "$TMPROOT"' EXIT
 BUDGETSTATE="$TMPROOT/budget-state"
 budgetfire(){ SCANNERS_STATE_DIR="$BUDGETSTATE" SCANNERS_BUDGET_SECONDS=20 SCANNERS_BUDGET_ENDS_WHEN="$(budget_ready "$1")" SCANNERS_BUDGET_ENDS_NOT_BEFORE=2 fire "$@"; }
+
+# THE BUDGET RUNNING OUT WHILE A SCANNER WAITS ITS TURN ON THE LOCK is a lock refusal, said as one
+# (claude-config#2033, L11). On 2026-11-01 seven pushes were refused as "did not finish in 150
+# seconds" over a run started again for the lock 1 or 2 seconds earlier, which read as a scanner too
+# slow for the budget and sent the fix after the budget.
+#
+# THE CASE WAITS ON THE RETRY BEING IN FLIGHT, NOT ON TWO SLEEPS (claude-config#3541, L290). It gave
+# the gate a budget of 2 seconds, counted from the gate's start, against a stand in whose retry slept
+# 3, so the budget had to run out during the retry. On a busy Mac it ran out before the FIRST try had
+# reported (2026-11-23 near 10:00 PM ET at a load average near 200; 2026-11-24 at 7:28 AM ET in a
+# merge helper's run; 2 of 8 tries in a load window at a load average of 30 to 35 on 2026-11-25),
+# and the case failed over a first try, never a retry. Now the stand in refuses at once on its first
+# try and HOLDS its retry while a hold file exists, writing the budget file once it is holding, so
+# the budget ends while the retry is in flight at any load. The budget of 40 is a ceiling only a
+# hang reaches. The hold is at most 60 seconds, so a leaked stand in ends on its own.
+add_held_locked_scanner(){   # $1 = repo  $2 = name  $3 = the hold file  $4 = the try it holds on (1 its first, 2 its first retry)
+  cat > "$1/payload/hooks/test-$2.sh" <<EOF
+#!/usr/bin/env bash
+git ls-files '*.sh' >/dev/null
+n="\$(cat "$TMPROOT/$2.tries" 2>/dev/null || echo 0)"; n=\$((n + 1)); echo "\$n" > "$TMPROOT/$2.tries"
+if [ "\$n" -eq $4 ]; then
+  echo \$\$ > "$TMPROOT/$2.pid"
+  : > "$(budget_ready "$1")"
+  i=0
+  while [ -e "$3" ] && [ "\$i" -lt 600 ]; do sleep 0.1; i=\$((i+1)); done
+fi
+echo "test suite: another run is already going: a suite run, process 4242 on here, started 30s ago. Refusing rather than queueing behind it." >&2
+exit 5
+EOF
+  chmod +x "$1/payload/hooks/test-$2.sh"
+}
+R2033="$(mkrepo lockbudget)"; HOLD2033="$TMPROOT/hold-2033"; : > "$HOLD2033"
+add_scanner "$R2033" alpha 0; add_held_locked_scanner "$R2033" phi "$HOLD2033" 2; commit_all "$R2033"
+o2033="$(HOOK_TESTS_RUNNING=1 SCANNERS_STATE_DIR="$TMPROOT/lockbudget-state" SCANNERS_SLEEP=true SCANNERS_LOCK_WAIT_SECONDS=60 SCANNERS_LOCK_POLL_SECONDS=2 \
+          SCANNERS_BUDGET_SECONDS=40 SCANNERS_BUDGET_ENDS_WHEN="$(budget_ready "$R2033")" fire "$R2033" "git push")"; c2033=$?
+note_held phi; rm -f "$HOLD2033"
+[ "$c2033" -eq 2 ] \
+  && check "#2033 a scanner still waiting its turn on the lock when the budget runs out blocks the push" ok \
+  || check "#2033 a scanner still waiting its turn on the lock when the budget runs out blocks the push" "exit=$c2033 out=$o2033"
+grep -q 'another test run' <<< "$o2033" && grep -q 'phi' <<< "$o2033" \
+  && check "#2033 and says another test run held the lock, naming the scanner" ok \
+  || check "#2033 and says another test run held the lock, naming the scanner" "out=$o2033"
+grep -q 'did not finish in' <<< "$o2033" \
+  && check "#2033 and never calls it a scanner that did not finish in the budget" "out=$o2033" \
+  || check "#2033 and never calls it a scanner that did not finish in the budget" ok
+grep -q 'process 4242' <<< "$o2033" \
+  && check "#2033 and names the run holding the lock, from the refusal before the retry" ok \
+  || check "#2033 and names the run holding the lock, from the refusal before the retry" "out=$o2033"
+# What the case is about, read from the stand in's own record rather than believed (L1): the budget
+# ended on its first retry, not on a first try.
+[ "$(cat "$TMPROOT/phi.tries" 2>/dev/null)" = "2" ] \
+  && check "#3541 and the budget ended while the first retry was in flight" ok \
+  || check "#3541 and the budget ended while the first retry was in flight" "tries=$(cat "$TMPROOT/phi.tries" 2>/dev/null)"
+held_gone phi && check "#3541 and the held retry ends once released" ok \
+  || check "#3541 and the held retry ends once released" "pid $(cat "$TMPROOT/phi.pid" 2>/dev/null) still running"
+
+# A FIRST TRY THAT REFUSES ON THE LOCK JUST AFTER THE BUDGET RAN OUT is a lock refusal too
+# (claude-config#3541, L11). The gate judged which runs had refused on the lock in one pass and read
+# every exit code again in a second, so on a busy Mac a first try still starting when the budget ran
+# out, whose refusal landed between the two passes, was read back as "a scanner that reads the WHOLE
+# repository fails" and "it exited 5 with no FAIL line", quoting the refusal line itself. That is
+# what the case above saw under load. Here the refusal lands at exactly that moment: the first try
+# holds, the budget ends, and a stand in for head, which the read back calls for each scanner before
+# it reads that scanner's exit code, releases the try and waits for its exit code before answering.
+# It acts only while the hold and the budget file both exist, so every other call reaches head.
+R3541="$(mkrepo latelock)"; HOLD3541="$TMPROOT/hold-3541"; : > "$HOLD3541"; LATESTATE="$TMPROOT/latelock-state"
+add_scanner "$R3541" alpha 0; add_held_locked_scanner "$R3541" late "$HOLD3541" 1; commit_all "$R3541"
+LATEBIN="$TMPROOT/latebin"; mkdir -p "$LATEBIN"
+cat > "$LATEBIN/head" <<EOF
+#!/usr/bin/env bash
+if [ -e "$(budget_ready "$R3541")" ] && [ -e "$HOLD3541" ]; then
+  rm -f "$HOLD3541"
+  i=0
+  until [ "\$i" -ge 600 ]; do
+    for o in "$LATESTATE"/runs/*/*/out; do
+      grep -q '^test suite: another run is already going' "\$o" 2>/dev/null && [ -f "\${o%/out}/rc" ] && break 2
+    done
+    sleep 0.1; i=\$((i+1))
+  done
+fi
+exec /usr/bin/head "\$@"
+EOF
+chmod +x "$LATEBIN/head"
+o3541="$(PATH="$LATEBIN:$PATH" HOOK_TESTS_RUNNING=1 SCANNERS_STATE_DIR="$LATESTATE" SCANNERS_SLEEP=true SCANNERS_LOCK_WAIT_SECONDS=60 SCANNERS_LOCK_POLL_SECONDS=2 \
+          SCANNERS_BUDGET_SECONDS=40 SCANNERS_BUDGET_ENDS_WHEN="$(budget_ready "$R3541")" fire "$R3541" "git push")"; c3541=$?
+note_held late; rm -f "$HOLD3541"
+[ "$c3541" -eq 2 ] && grep -q 'another test run' <<< "$o3541" && grep -q 'test-late.sh' <<< "$o3541" \
+  && check "#3541 a first try that refuses on the lock just after the budget ran out is said as a lock refusal" ok \
+  || check "#3541 a first try that refuses on the lock just after the budget ran out is said as a lock refusal" "exit=$c3541 out=$o3541"
+grep -q -e 'reads the WHOLE repository fails' -e 'no FAIL line' <<< "$o3541" \
+  && check "#3541 and is never reported as a failing scanner" "out=$o3541" \
+  || check "#3541 and is never reported as a failing scanner" ok
+grep -q 'tried again' <<< "$o3541" \
+  && check "#3541 and never says a try that was never repeated was tried again" "out=$o3541" \
+  || check "#3541 and never says a try that was never repeated was tried again" ok
+[ "$(cat "$TMPROOT/late.tries" 2>/dev/null)" = "1" ] \
+  && check "#3541 and the refusal came from the first try, the one in flight at the budget" ok \
+  || check "#3541 and the refusal came from the first try, the one in flight at the budget" "tries=$(cat "$TMPROOT/late.tries" 2>/dev/null)"
+held_gone late && check "#3541 and the held first try ends once released" ok \
+  || check "#3541 and the held first try ends once released" "pid $(cat "$TMPROOT/late.pid" 2>/dev/null) still running"
 
 R1881="$(mkrepo outoftime)"; HOLD1881="$TMPROOT/hold-1881"; : > "$HOLD1881"
 add_scanner "$R1881" alpha 0; add_held_scanner "$R1881" omega "$HOLD1881" 0 alpha; commit_all "$R1881"

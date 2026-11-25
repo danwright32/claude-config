@@ -1504,30 +1504,24 @@ done
 # a scanner too slow for the budget, and the fix was first aimed at the budget. Whether that last
 # try would have got the lock is not known, and the refusal says so rather than guessing.
 #
-# Both lists are made again here in ONE pass, each run judged once: a retry can write its exit code
-# in the instant after the watchdog stops the wait, so a list made inside the loop and a look made
-# after it could each miss it, and a refusal would then reach the read back below as a failure. A
-# run with no exit code yet is judged by whether it is a retry; one with an exit code by whether it
-# refused on the lock.
-_sc_phase "reading back what the scanners found and writing its verdict, which takes the record's lock and each finished scanner's for up to 5 seconds each"
-_sc_locked=""
-_sc_lock_inflight=""
-_sc_i=1
-while [ "$_sc_i" -le "$_sc_n" ]; do
-  if [ ! -f "$(_sc_rd "$_sc_i")/rc" ]; then
-    [ -n "$_sc_out_of_time" ] && [ -f "$_sc_work/$_sc_i.lockline" ] && _sc_lock_inflight="$_sc_lock_inflight$_sc_i"$'\n'
-  elif _sc_lock_refused "$_sc_i"; then
-    _sc_locked="$_sc_locked$_sc_i"$'\n'
-  fi
-  _sc_i=$(( _sc_i + 1 ))
-done
-if [ -n "$_sc_locked" ] || [ -n "$_sc_lock_inflight" ]; then
+# EACH RUN IS JUDGED ONCE, IN THE READ BACK BELOW, which reads its exit code once (claude-config#2033,
+# #3541). A retry, or a first try, can write its exit code in the instant after the watchdog stops
+# the wait. The runs that refused on the lock were once listed in a pass of their own and every exit
+# code was then read again in the read back, so a first try still starting when the budget ran out,
+# whose refusal landed between the two, was missed by the first and read by the second as a failing
+# scanner, "it exited 5 with no FAIL line", over the refusal line itself (2 of 8 tries of the
+# suite's case in a load window on 2026-11-25). Now a run with no exit code is judged by whether it
+# is a retry, and one with an exit code by whether it refused on the lock, from the same read, and
+# the refusal below is said once every run has been sorted.
+_sc_lock_refusal(){   # at the read back, once every run is sorted: refuses the push when a run never got the lock
+  [ -n "$_sc_locked" ] || [ -n "$_sc_lock_inflight" ] || return 0
   {
     echo "PUSH BLOCKED: a whole tree scanner could not run, because another test run is going."
     echo ""
     echo "These never ran, so they neither passed nor failed: each refused to start while another"
     if [ -n "$_sc_out_of_time" ]; then
-      echo "suite run held its lock, and was tried again until this gate's own budget of ${_sc_budget}s ran out:"
+      # Not "tried again": a first try whose refusal came after the budget never was (#3541, L11).
+      echo "suite run held its lock, and had not got it when this gate's own budget of ${_sc_budget}s ran out:"
     else
       echo "suite run held its lock, and the lock was still held after waiting for it (up to ${_sc_lock_wait}s,"
       echo "inside this gate's own budget of ${_sc_budget}s):"
@@ -1558,7 +1552,7 @@ INFLIGHT
     echo "Explain to the user first why skipping is legitimate. Never override silently."
   } >&2
   exit 2
-fi
+}
 
 # Read every result back. A run whose exit code was never written did not finish saying anything,
 # and that is not a pass: it is a scanner whose verdict is missing, which must not read as a clean
@@ -1592,22 +1586,41 @@ ran=0
 # Of those that ran, how many finished in the background after an earlier push had gone, said in
 # the summary so a verdict this push did not watch being made is never passed off as one it did.
 _sc_bg_done=0
+# The runs that never got the suite lock (above): refused on it, or a retry still in flight at the
+# budget. Sorted here from the one read of each exit code, and said once the loop is done.
+_sc_locked=""
+_sc_lock_inflight=""
+_sc_phase "reading back what the scanners found and writing its verdict, which takes the record's lock and each finished scanner's for up to 5 seconds each"
 _sc_i=1
 while [ "$_sc_i" -le "$_sc_n" ]; do
   _sc_what="$(head -2 "$_sc_work/$_sc_i.what" 2>/dev/null | tr '\n' ' ')"
   _sc_rdir="$(_sc_rd "$_sc_i")"
   ran=$(( ran + 1 ))
+  # Whether the run is still going is looked at BEFORE its exit code is read (#3541): a run seen
+  # going and then found with an exit code finished between the two and is judged by that code, and
+  # one seen gone with no exit code after it never wrote one. The other order would read a run that
+  # finished in between as gone without a verdict.
+  _sc_alive=""
+  [ -n "$_sc_out_of_time" ] && [ -n "$_sc_detach" ] && _sc_run_alive "$_sc_rdir" && _sc_alive=1
   _sc_rc_now="$(cat "$_sc_rdir/rc" 2>/dev/null || printf 'missing')"
+  if [ "$_sc_rc_now" = "missing" ] && [ -n "$_sc_out_of_time" ] && [ -f "$_sc_work/$_sc_i.lockline" ]; then
+    _sc_lock_inflight="$_sc_lock_inflight$_sc_i"$'\n'
+    _sc_i=$(( _sc_i + 1 )); continue
+  fi
+  if [ "$_sc_rc_now" = "5" ] && grep -q '^test suite: another run is already going' "$_sc_rdir/out" 2>/dev/null; then
+    _sc_locked="$_sc_locked$_sc_i"$'\n'
+    _sc_i=$(( _sc_i + 1 )); continue
+  fi
   if [ "$_sc_rc_now" = "0" ] && [ -n "$_sc_key" ]; then
     # Only a PASS is remembered, and it is remembered against the key it passed on.
     _sc_passed_now="$_sc_passed_now$_sc_key $(head -1 "$_sc_work/$_sc_i.what" 2>/dev/null) $(sed -n 2p "$_sc_work/$_sc_i.what" 2>/dev/null)
 "
   fi
-  [ -f "$_sc_rdir/rc" ] && [ -f "$_sc_work/$_sc_i.bg" ] && _sc_bg_done=$(( _sc_bg_done + 1 ))
+  [ "$_sc_rc_now" != "missing" ] && [ -f "$_sc_work/$_sc_i.bg" ] && _sc_bg_done=$(( _sc_bg_done + 1 ))
   # Not finished: another push held its slot, or the budget ran out while it was still going. A run
   # that is gone without an exit code is not that, it is a missing verdict, below.
-  if [ ! -f "$_sc_rdir/rc" ] && { [ -f "$_sc_work/$_sc_i.busy" ] \
-       || { [ -n "$_sc_out_of_time" ] && { [ -z "$_sc_detach" ] || _sc_run_alive "$_sc_rdir"; }; }; }; then
+  if [ "$_sc_rc_now" = "missing" ] && { [ -f "$_sc_work/$_sc_i.busy" ] \
+       || { [ -n "$_sc_out_of_time" ] && { [ -z "$_sc_detach" ] || [ -n "$_sc_alive" ]; }; }; }; then
     _sc_s="$(sed -n 1p "$_sc_work/$_sc_i.what" 2>/dev/null)"; _sc_sec="$(sed -n 2p "$_sc_work/$_sc_i.what" 2>/dev/null)"
     _sc_label="$_sc_s"
     [ -n "$_sc_sec" ] && _sc_label="$_sc_s, section \"$_sc_sec\""
@@ -1636,7 +1649,7 @@ while [ "$_sc_i" -le "$_sc_n" ]; do
 "
       fi
     fi
-  elif [ ! -f "$_sc_rdir/rc" ]; then
+  elif [ "$_sc_rc_now" = "missing" ]; then
     failed="$failed=== $_sc_what ===
 this scanner never reported an exit code, so its verdict is missing rather than clean
 "
@@ -1660,6 +1673,9 @@ $_sc_fails
   fi
   _sc_i=$(( _sc_i + 1 ))
 done
+# A run that never got the lock refuses the push here, saying so, before anything below writes a
+# verdict or a record of passes, as it did when it was judged in a pass of its own.
+_sc_lock_refusal
 
 # What passed on this key, written only when nothing failed or went unmeasured, so a run with
 # either in it never lets a sibling be skipped on the strength of a push that was blocked.
