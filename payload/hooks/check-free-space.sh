@@ -569,10 +569,11 @@ fi
 # The rate above runs from the start of the segment, which for a drop that happens once and stops
 # stays at the level before the drop until that reading ages out of the window. Measured on
 # 2026-11-25 on Daniels-MacBook-Pro-2: free space fell from 155.1 GB to 67.2 GB between 9:41 and
-# 10:12 AM ET and then held within 1.5 GB, and this said "zero in under an hour" (exit 4) at every
-# reading from 10:19 to 10:57, and would have gone on to about 3:50 PM. A session reads exit 4 as
-# "start nothing", and nothing was being written (L36). It is the shape L695 names: an alarm judged
-# by one aggregate over a trailing window cannot stand down until the window clears.
+# 10:12 AM ET and then held within 1.7 GB until 10:48, and this said "zero in under an hour"
+# (exit 4) at every reading from 10:19 to 10:57, and would have gone on to about 3:50 PM. A session
+# reads exit 4 as "start nothing", and through the 36 minutes the level held it was a false alarm
+# (L36). It is the shape L695 names: an alarm judged by one aggregate over a trailing window cannot
+# stand down until the window clears.
 #
 # So a fall the rule above calls fast is judged again on the last FREE_SPACE_STOPPED_MIN minutes on
 # their own (default the persistence window, 30): from the latest reading at least that old to now,

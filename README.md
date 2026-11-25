@@ -7045,7 +7045,7 @@ persistence window, 30): the most free space seen there minus the least, every d
 When that pace does not reach zero within the horizon the check exits 0, and `--report` says when
 the fall stopped, how much went and between which times (in ET), and how little it has moved since.
 On 2026-11-25 free space fell from 155.1 GB to 67.2 GB between 9:41 and 10:12 AM ET and then held
-within 1.5 GB, and the rate from the reading before the drop said "zero in under an hour" from 10:19
+within 1.7 GB until 10:48, and the rate from the reading before the drop said "zero in under an hour" from 10:19
 until 10:57; it now stands down at 10:44. It only ever turns a 4 into 0, and never touches the floor.
 A steady fall is reported at the same reading as before; the cost is a fall that pauses for 30
 minutes or more and then starts again, reported up to 30 minutes after it restarts (about 9.5 GB at

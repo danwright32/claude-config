@@ -363,9 +363,9 @@ check "a fall that lasts after that same spike still fires" \
 # check-free-space-fixtures/2026-11-25-drop-then-flat.readings holds the real readings this check
 # kept on Daniels-MacBook-Pro-2 on 2026-11-25 (epoch seconds, free bytes), copied unchanged, 97 of
 # them from 9:26 AM to 12:06 PM ET. Free space fell from 155.1 GB to 67.2 GB between 9:41 and
-# 10:12 AM ET, Dan's own work, and then held within 1.5 GB until 10:48. The rate ran from the oldest
+# 10:12 AM ET, Dan's own work, and then held within 1.7 GB until 10:48. The rate ran from the oldest
 # reading, which stayed at the level before the drop, so the check said "zero in under an hour" and
-# exited 4 at every reading from 10:19 to 10:57 while nothing was being written, and would have gone
+# exited 4 at every reading from 10:19 to 10:57, the 36 minutes the level held included, and would have gone
 # on until that reading aged out of the six hour window (L695). A session reads exit 4 as "start
 # nothing". Times below are the real ones, in ET.
 DROP_DAY="$DIR/check-free-space-fixtures/2026-11-25-drop-then-flat.readings"
@@ -389,7 +389,7 @@ fours(){ # fours <"epoch:exit" list>: the epochs that exited 4, oldest first
 check "the fixture of 2026-11-25 is there with its 97 readings" \
   "$([ -f "$DROP_DAY" ] && [ "$(grep -c '^[0-9]' "$DROP_DAY")" = 97 ] && echo ok || echo "missing or short: $DROP_DAY")"
 drop_rcs="$(replay_rcs "$DROP_DAY" "$TMPROOT/state-drop-3608")"
-check "the real readings of 2026-11-25: at 10:45 AM ET, 65.8 GB after 33 minutes within 1.5 GB, the check no longer exits 4" \
+check "the real readings of 2026-11-25: at 10:45 AM ET, 65.8 GB after 33 minutes within 1.6 GB, the check no longer exits 4" \
   "$(grep -q ' 1795621525:0' <<< " $drop_rcs" && echo ok || echo "replayed: $drop_rcs")"
 # Which readings of 2026-11-25 (measured that day, 97 readings) still warn, and why each one should.
 # 10:19 to 10:41: the drop ended at 10:12 and

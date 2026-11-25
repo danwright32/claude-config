@@ -1,6 +1,6 @@
 # Free space readings on the data volume of the personal MacBook, 2026-11-25, 9:26 AM to 12:06 PM ET,
 # as check-free-space.sh kept them (epoch seconds, free bytes), copied unchanged (claude-config#3608).
-# 155 GB fell to 67.2 GB between 9:41 and 10:12 AM ET and then held within 1.5 GB for 45 minutes;
+# 155 GB fell to 67.2 GB between 9:41 and 10:12 AM ET and then held within 1.7 GB until 10:48 AM ET, 36 minutes;
 # a slower fall with dips that came back followed. Replayed by test-check-free-space.sh.
 1795616798 155026206720
 1795616799 155027509248
