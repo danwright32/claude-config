@@ -396,8 +396,9 @@ jobs:
         # needs it here, as tests/test-mods.sh does for the real mods' strict type check. The lockfile pins the version and carries the linux-x64 binary.
         run: npm ci --prefix tools/typescript --no-audit --no-fund
 
-      # Claude Code, so tests/test-mods.sh runs `claude plugin validate` and `claude plugin test` on
-      # every mod and tests/test-mods-load-engine.sh loads them all, and a mod that fails either is a
+      # Claude Code, so the real tree's parts (tests/test-mods.sh, test-mods-real-tree-2.sh and -3.sh,
+      # #3622) run `claude plugin validate` and `claude plugin test` on every mod between them and
+      # tests/test-mods-load-engine.sh loads them all, and a mod that fails either is a
       # red check (claude-config#3297). Until then this runner had no claude and both said UNMEASURED
       # inside a green check, so #3291 and #3285 reached main. One exact version, written in
       # .github/claude-code-version alone and read by tools/install-claude-code.sh alone, so raising it
@@ -413,7 +414,7 @@ jobs:
 
       # Left OFF the PATH and named to the mods' suites alone in MODS_CLAUDE: many other suites start a
       # real session whenever they find a claude, and none of them was written for this runner.
-      # MODS_CLAUDE also tells both suites a claude was promised, so one that cannot check the mods
+      # MODS_CLAUDE also tells each of those suites a claude was promised, so one that cannot check the mods
       # with it fails rather than saying UNMEASURED.
       - name: Install Claude Code for the mods' tests
         if: needs.deal.outputs.reused-run == ''
