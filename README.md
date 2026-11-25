@@ -159,9 +159,22 @@ the end of staging and after the work names scan, over the finished payload, so 
 Mac's own config has already become the placeholder and the check reads what main's run would
 read. It is handed only the files this send carries (`--files0-from`): every payload file that
 differs from the clone's last commit, new ones included, and the files changed by commits the
-shared repo lacks (with no upstream set, the commits no remote branch holds); without git, the whole
-payload. The names are passed NUL separated from git to the check, so a name git would quote (one
-holding a double quote, a backslash or a newline) is read like any other. A failing file already on main therefore never
+shared repo lacks (with no upstream set, the commits no remote branch holds; after a send that went
+up on top of a shared head still being tested, the commits made since that send, because the
+earlier ones are already in the shared repo under another id, #3499); without git, the whole
+payload. Those earlier commits are left out only on trust that nothing puts them back on the shared
+branch, and the staging runs before the fetch, so it cannot know. A run that left them out therefore
+asks the check again just before each push of the branch, about every payload file that push would
+add to the shared repo or change there: commits replayed over a shared repo that still holds their
+files change nothing and are not read, and a file the pull replayed over the other Mac's deletion
+of it, one built into a send from the merge base, or one a merge made by hand put back is held
+there, in the same words, with the receiving half of a sync still run. In such a run a push from a
+clone that does not sit on top of the shared repo as it last saw it is not tried at all (git would
+refuse it unless the shared branch had been moved back, and then it would carry exactly the files
+left out); `push` says so and names `sync`, and a send goes on to its reconcile. The names are passed NUL separated from git to the check, so a name git would quote (one
+holding a double quote, a backslash or a newline) is read like any other, and a file whose name
+holds a line break is named in the refusal on one line with the break written as `\n` (#3499: it
+used to be held as a check that could not judge). A failing file already on main therefore never
 holds an unrelated send, and a send that removes it goes through. One failing file holds
 everything, because a send is one commit and the other Mac mirrors what the payload holds, so half
 a change would arrive with nothing to say which half. Nothing is committed or pushed, and no file in
@@ -178,7 +191,21 @@ that must name a real home, such as a fixture, carries the check's own
 no override variable, and a check that is missing or could not run refuses the send too, said as
 that rather than as a finding. In the change watcher a standing hold is said in full once, then in
 one short line pointing at status with no desktop notice, until its files change, it clears or a
-day passes; every refusal is still counted. Measured on 2026-11-22 against a clone of main with
+day passes; every refusal is still counted. A hold whose files changed is said in full again, but
+it is one hold and posts one desktop notice, then another only a day after the last, whether the
+send ends there or reaches the hold through a sync (#3499: a session adding a scratch file a tick
+used to get a notice a tick), and whether the hold is found in the staging or at the push.
+`status` and `stuck` point at the kept log only while it exists. Every push of the config branch
+lands only on the commit this clone last saw the shared branch at, which is the commit its files
+were judged against: a branch that moved since, forward or back, refuses the push, the run says so,
+and `claude-sync sync` is the way on. A clone that is not on top of that commit does not push at
+all and says the push was not tried.
+The work names scan, the secret scan's list of files outside the payload and the list of staged
+copies a sync or a pull sets aside read file names NUL separated too (#3499), so a name git would
+quote is scanned and set aside like any other. One kind is left in the clone and said: a staged
+copy whose name holds a line break, because the apply reads its lists a line at a time and, with
+that copy set aside, removed the file from the config (measured 2026-11-23). Where the shared repo
+changes the same file the receive refuses and says to rename it. Measured on 2026-11-22 against a clone of main with
 1,446 payload files, at a load average between 104 and 178 on 12 cores, 10 samples a case: the
 check adds 53 to 72 ms to a send with nothing in the payload to read, 85 to 149 ms to a send of one
 edited hook and one new file, and 4.1 to 4.3 seconds to a replay of the 2026-11-22 send, nearly all
@@ -2449,6 +2476,52 @@ fails often no longer looks like one that failed once under load. The gates the 
 run under no hook timeout, so it hands them a longer read budget, `MWR_GATE_READ_BUDGET_SECONDS`
 (90, a setting): a read that never answers still refuses.
 
+The helper sends one merge with `--admin` itself, and still refuses `--admin` as an argument
+(claude-config#3534). On 2026-11-24, in a repository whose ruleset asks for one code owner approval
+and lets a team bypass it for pull requests, every gate passed and gh then answered "the base
+branch policy prohibits the merge": gh refuses a pull request GitHub reads as BLOCKED by itself
+unless `--admin` is passed, so every merge there needed a second command sent by hand. Now, when the
+plain merge is refused in those words and the pull request reads back still open at the head the
+gates judged, the helper asks GitHub, at that moment and as the account the merge is made as, what
+a bypass would skip, and sends the same merge with `--admin`, pinned to that head, only when all of
+this holds: GitHub reads the review as `REVIEW_REQUIRED` (a reviewer asking for changes is never
+bypassed); every rule in force on the base branch that asks for a review belongs to a ruleset whose
+`current_user_can_bypass` is `pull_requests_only` or `always`, and at least one such rule exists;
+every ruleset the account may bypass holds nothing else in force on the branch that a merge could
+break (only the review rule, `deletion`, `non_fast_forward` and `creation` pass, the review rule
+must not also ask for every conversation resolved and must allow the merge method), because
+`--admin` skips a ruleset whole and not only its review; the base branch has no merge queue; and it
+has no classic branch protection, which no ruleset answers for. The checks gate is then asked about
+the exact bypass command before it is sent. An answer that cannot be read, is cut short or is not
+the shape expected is never taken as permission. When any of it fails the run stops with exit 1,
+saying an approving review is missing and why no bypass merge was sent; when it merges, the log
+line says it merged as a bypass of the approving review, naming the ruleset. There is no per
+repository opt in list (Dan, 2026-11-24): the ruleset's own bypass list is the permission. Not
+built: vouching for required checks held in a ruleset the account may bypass, which refuses today.
+
+Sleep mode outranks that bypass (Dan, 2026-11-24: "Respect sleep mode first"). The bypass merge is
+sent inside the helper, where no hook sees it, so sleep mode's rule for a typed `gh pr merge
+--admin` would never have judged it. While this Mac is asleep the helper therefore sends it only
+in a repository where sleep mode would allow an admin merge tonight: its entry in the night's
+lists, as settled at bedtime, is merge only, says a merge does not deploy, and says `adminMerge:
+green-pinned`. Anywhere else it stops with exit 1, saying sleep mode does not allow a merge past
+that review in that repository tonight, in sleep mode's own words for why. It never asks when the
+run starts, because a run started before bedtime can still be running after it. It asks twice:
+once GitHub's answers allow the bypass, so a night that refuses stops before the checks gate is
+asked, and again as the very last thing before the merge is sent, after the checks gate, which
+reads GitHub under a budget of its own and during which this Mac can have gone to sleep. Sleep
+mode is one record for the whole Mac, so on means that this Mac's
+record reads as asleep at that moment, whichever session started the run. None of the judgement is
+written a second time: `hooks/lib/sleep-admin-merge.mjs`, run under node, hands the record to the
+scope modes mod's own `readSleep` and to `adminMergeNightRefusal`, the function its judge of a
+typed admin merge asks first. A record that cannot be read, a node that is missing or cannot run
+the mod's files, an answer that is none of the four it knows, and a run with no HOME folder to look
+for the record under all stop the run too, since none of them is permission and none is sleep mode
+being off. With no sleep record the helper runs
+nothing new and behaves as it did. Two things sleep mode holds a typed admin merge to are not asked
+of the helper's: that it is a squash, and that the base branch requires at least one check. The
+merge method is judged against the ruleset, and the checks by `block-red-merge.sh`, as above.
+
 Checks that have reported being green is not the head's CI being green (claude-config#1087). A
 workflow run can exist for minutes before any of its jobs registers a check (the booking app's CI waits on a
 concurrency group), so a fast check from another workflow can be the only one on the head. Both the
@@ -4383,7 +4456,11 @@ Each entry is signed with a key only this Mac's user can read, `~/.claude/state/
 (made on first use, mode 600), so a process that can write entries cannot forge one; a key that is
 missing, unreadable or readable by others means no cache, never an unsigned one (#2965). The wrapper
 runs the gate with `PYTHONHASHSEED=0`, so it iterates its sets in the same order every run, and the
-cache keeps and uses nothing from a run where that order is random. Under a test run the cache is off unless `SLACK_GATE_CACHE_DIR` names one. It does nothing for a cold
+cache keeps and uses nothing from a run where that order is random. Under a test run the cache is off unless `SLACK_GATE_CACHE_DIR` names one.
+A `SLACK_GATE_CACHE_DIR` that is empty, is not an absolute path (a `~` is not expanded, so it counts as
+relative) or holds a `..` is ignored: the call is judged with no cache, and the gate says why once on
+stderr after its verdict, which reaches the session only with a refusal, since the wrapper drops what
+follows an allow (#3466). The cache does nothing for a cold
 run, so a CI runner judges as before.
 
 Beside the judgements, the same folder keeps the shell reader's parse of any text of 64 KB or more
@@ -5065,6 +5142,14 @@ typed: every string naming a file is judged as `python3 <file>` is, a folder hol
 module run by a name written out is read as an import of it; and a file run by a path the gate
 cannot work out, a file run that is not text (an archive, compiled code), and code this python3
 cannot parse that names a way to run a file are each refused as unread.
+A path handed to a call that runs the file at it (`runpy.run_path`, `zipimport`) is refused as
+unread for three more things Python runs and the gate cannot read (`py_handed`,
+claude-config#3441): an archive with text in front of it, found by its zip end record as far
+back as `zipimport` looks, whatever the file is called; a path under an archive
+(`app.zip/inner`); and a folder whose `__main__` is compiled, an extension module or a package.
+Measured on main on 2026-11-24, each passed: only a NUL in a file's first line told an archive
+from text, so the archive `zipapp` writes behind a `#!` line read as a script that names
+nothing.
 It cannot tell a file such code only reads from one it runs, so a data file naming an endpoint
 refuses the command (`import subprocess, json; json.load(open('named.json'))`), and "can run
 code" holds every module the gate does not know to be unable to. Code that can run nothing
@@ -5073,8 +5158,24 @@ only to write is not read. In a script on disk only a file the code hands to som
 runs one is read this way, and a path or code that cannot be worked out is left as it was:
 `tests/test-readme-mods-table.sh` loads a module by its path and then reads this file, and with
 every string read there it was refused (measured 2026-11-22).
-Not covered, each measured on 2026-11-22 as allowed where the file posts: `python3` handed a
-folder holding `__main__.py` or an archive; a Python file on disk that runs a file it names
+`python3` handed a folder or an archive in place of a script is judged by what it runs
+(`py_run_words`, called from the gate's `every_file` for every Python command,
+claude-config#3441). Measured on main on 2026-11-24, `python3 pkg` passed where
+`pkg/__main__.py` posts, in every spelling tried, and so did `python3 app.zip`: a word naming a
+folder names no file, so nothing was read for it. Now each word naming a folder that holds a
+`__main__.py` is replaced by that file and the words are read again, so a folder `python3` runs
+is read as its script and a folder handed to a script is read as a file handed to it is; a
+pattern the shell fills in with such folders is replaced the same way. The word `python3` runs
+as its script is refused as unread, where typed, when it is an archive, a path under one, or a
+folder whose `__main__` is compiled, an extension module or a package. An archive that is an
+argument (a spreadsheet, a wheel and a document are zip files too) is judged as it was.
+Cost of that reading, in processor time for one judgement with an empty cache, two runs of five
+samples of ten judgements each way taken in turn on 2026-11-24 at load averages of 7 to 22: a
+plain script handed a data file had the same mean before and after in both runs (0.1711 and
+0.1713 s, then 0.1755 and 0.1756 s), and a folder holding `__main__.py`, whose file is now read,
+took about 0.002 s more (means of 0.1721 and 0.1739 s, then 0.1769 and 0.1785 s).
+Not covered, each measured on 2026-11-22 as allowed where the file posts:
+a Python file on disk that runs a file it names
 (`python3 runner.py`, `import runner`); code the shell fills in whole
 (`python3 -c "$(cat posts.py)"`), which claude-config#3278's timing line keeps as it was; and
 code handed to a module run with `-m` (`python3 -m timeit`).
@@ -5201,6 +5302,9 @@ judgement), the commands of a text for the readings of what is around a program 
 million characters before) and whether it runs shopt (`sh_runs_shopt`). Measured that day on the
 personal MacBook, ten readings each taken in turn at a load of 37 to 103: 5.61 s and 56.4 units
 before, 5.33 s and 53.7 after (the middle readings, a unit 0.100 s). No limit was changed with it.
+The limits were set again on 2026-11-23, to 67 units on macOS and 91 off it (Dan's choice, the
+highest reading on each platform plus 15 percent; the comment above them in the gate's suite
+holds the readings).
 Suite: `test-slack-drafts-held-once.sh`, which holds each reading by a count and saw each count
 fail on the gate as it was.
 
@@ -5224,8 +5328,8 @@ personal MacBook with a unit at 0.097 s:
   alone in 10.7 to 10.8, and the suite after one write in 34.4 to 35.0. That record is as it was:
   changing when it is kept is its own piece of work. Until then a call that starts a suite is
   cheapest when it writes nothing before it.
-- `bash tests/test-claude-sync.sh` still reads 52.0 to 53.0 units against its 57 (3 readings,
-  2026-11-21), and nothing was found to take out. One judgement is 28 million calls with no function above 5% of the
+- `bash tests/test-claude-sync.sh` still reads 52.0 to 53.0 units against the limit of 57 it had
+  then (3 readings, 2026-11-21), and nothing was found to take out. One judgement is 28 million calls with no function above 5% of the
   time, and the disk is 0.05 s of it. The two things found are small: half a million lookups of an
   already compiled pattern, about 0.8 units, less than the readings spread, and 1,043 patterns
   compiled once each for a shell name, about 3%. The limit was not moved.
@@ -6085,7 +6189,9 @@ because it decides how many processes start.
 <tr><td><code>HOOK_TESTS_TIMINGS</code></td><td><code>~/.cache/claude-config/suite-timings</code></td><td>
 
 Where each suite's measured wall clock is kept between runs, one small file per suite, keyed on the
-suite's path inside the repo. It is what the launch order is built from. Set it to empty to turn the
+suite's path inside the repo, as `<seconds> <checks> <share>`: the seconds are its time at the
+smallest share of the budget it has been measured at, and the share is that number of slots. It is
+what the launch order is built from. Set it to empty to turn the
 record off, so a run reads nothing and writes nothing. Deliberately outside the config directory: a
 duration measured on this machine is not configuration, and mirroring it would make the other Mac
 order its runs by numbers from hardware it does not have.
@@ -6211,9 +6317,22 @@ fighting itself.
 Results are collected and printed in the order the suites were FOUND, never the order they
 finished, so two runs of the same tree produce the same page and a difference between them is a
 difference in the suites rather than in the machine's mood. Suites are launched longest first,
-judged by what each one was last MEASURED to cost: every run records each suite's wall clock and
-the next run orders by it. Lane 1 carries the largest share of the budget and lane 1 is whatever
+judged by what each one was MEASURED to cost: every run records each suite's wall clock with the
+share it ran at, and the next run orders by the figure below. Lane 1 carries the largest share of the budget and lane 1 is whatever
 launches first, so this is what decides which suite the machine is spent on.
+
+What a suite is ranked by is its time at the smallest share it has been measured at, recorded with
+that share, never simply its last wall clock (#3388). A suite that divides its own work by its share
+finishes much sooner in lane 1: the sync suite took about 7 minutes there and 23 to 27 anywhere else
+on the 18 core Mac, measured 2026-11-20 and 2026-11-21. Ranked by its last wall clock, it was recorded as quick every time it led, lost
+lane 1 on the next run, was recorded as slow, and led again on the one after, alternating through
+nine runs in a row (#2589) at a cost of about 5 minutes of every other run at a budget of 12. So a
+time measured at a larger share than the recorded one does not replace it. It only keeps it within
+what it proves: more slots never make a suite slower, so the figure is at least the new time, and
+`s` slots cannot make it more than `s/r` times quicker than `r`, so the figure is at most the new
+time times that ratio. The floor catches a suite that got slower, and the ceiling lets one that got
+quicker give lane 1 up rather than holding it on an old figure. The line naming a wrong lead
+compares the same figures, so a lead that finished early because it had lane 1 is not called wrong.
 
 A suite nobody has measured yet, which means a first run or a newly added suite, falls back to
 file size and follows the measured ones. Size is a heuristic and bytes are not seconds, so the
@@ -7918,6 +8037,24 @@ be checked for a merge or deploy), but at the worker's next Stop the driver lets
 touching its own manifest so it loads again while idle, then starts it again; still out of step, it
 stops for the night with its claim parked and the reason in the morning report.
 
+A reload can also fail outright: Claude Code then writes "<mod>: reload failed, the previous version
+stays loaded: <why>" into the session's transcript, as a system row, and goes on running the copy
+it had, for as long as the session lasts. On the work MacBook a session ran on an old mod-kit for
+six days that way (52 failed reloads), and the old code wrongly refused a builder's edit; on this
+Mac a session ran three days on an old picker-manners (#3309). Nothing said so to Dan: `claude-sync
+status` sees only that the installed mods are current, and `rule-files-changed.sh` only a mod a pull
+added, removed or replaced. So `hooks/mod-reload-failed.sh`, on every prompt, reads what the
+transcript gained since the last one, and when a mod's reload has failed since its copy loaded it
+tells Dan which mod, since when, which copy is still running and to start a new session, and hands
+the session the same with Claude Code's reason and an instruction to call a refusal from that mod
+out of date. Once per mod per failure: the later failed reloads are not told, a reload that works
+ends it quietly, and the same old copy still running a day after it was told is told again
+(`CLAUDE_MOD_RELOAD_RETELL_AFTER`). A failure written before the session's current process started
+counts for nothing, since that process loaded every mod afresh. It is a settings hook and depends on
+no mod, so a frozen mod cannot silence it. A guard's own refusal does not say it is out of date:
+the words come from the frozen copy's code, and Claude Code raises no event for a refusal by a mod
+that a hook could add to.
+
 After each apply, and after a send that changed which mods are named, `claude plugin list --json`
 and `claude plugin validate` are asked about every mod,
 and the pull names any mod Claude Code does not list as enabled, or that validation refuses, with
@@ -8255,9 +8392,10 @@ before bed round and leave open questions, the keystroke guard's) is not held to
 `hooks/mod-kit/asked.ts` by each mod that asks, records its sizes and never its text, one file a
 question under `~/.claude/state/asked-questions` on this Mac, at most 2,000 kept, and keeps the
 dialog in the asking mod's own `$.state` (key `asking`) while it is open. Picker manners reads that
-state, so a mod's own dialog it would refuse is asked and written onto no issue (the coordinating
-session's rule of 2026-11-21, until Dan settles how the two meet): only the mod writes its state,
-and a session writes none. The scan fails a mod calling `$.ui.ask` other than through
+state, so a mod's own dialog it would refuse is asked and written onto no issue (Dan's rule, 5:46 PM
+ET on 2026-11-21, from a picker: "Yes, as built (Recommended)"; the two week reading of the
+recorded lengths decides whether the mods' own questions are held too): only the mod writes
+its state, and a session writes none. The scan fails a mod calling `$.ui.ask` other than through
 `recordedAsk`, and an asker missing from `OWN_ASKERS` or from picker manners' reads.
 `node tools/asked-questions-count.ts` reads the records, for the reading due two weeks from
 2026-11-21 on #3321. `node tools/picker-check-count.ts`
@@ -8818,7 +8956,11 @@ one mv, and beside it only plain commands on the mod's short list (`mkdir`, `ls`
 `pwd`, `test`, `[`, `true`), or before it a `cp` of one file to a place where nothing is yet, the
 folder it goes into there already or made by a `mkdir` first. Any other command is asked about
 as it was before #3478, a pattern moved away as a deletion; so is a command whose look at the disk
-fails or takes more than 2 seconds, and a brace pattern of more than 256 names. The answers
+fails or takes more than 2 seconds, and a brace pattern of more than 256 names. A file moved
+to a name another source of the same mv or cp may also land on (one from another folder of the
+same name, a name alike but for letter case or the form of an accent, a pattern, or a word no
+path names) is asked about as the deletion it may be, never as a move that can be moved back
+(#3505): the source named last is the one kept. The answers
 are Keep as is, first, and Delete, Move or Empty; a save's
 For good approves no removal and a removal's answer approves no save, a removal whose consequence
 changes after he answers (what git holds of the file, where a move lands, what a folder holds) is

@@ -1345,6 +1345,63 @@ describe('writes: changes that put no content in, carried over from the collisio
     expect(kept('mv notes/a.md /dev/null')).toEqual([])
     expect(kept('mv notes/*.md /dev/null')).toEqual([])
   })
+  // #3505. Measured on macOS on 2026-11-23, in a scratch folder: `mv mem/a.md full/A.md archive/`
+  // and `mv mem/a.md exact/a.md archive/` each left one file there, holding the second source's
+  // text, and the first source was gone; cp of the same two sources left the same. At 1f537cbb67
+  // the reader only left out where such a mv puts its sources, which is also what it does of a
+  // move nothing is lost by, and the write the first source lands on still named it as its one
+  // source, so ask before saving read that write and said the file "can be moved back".
+  // Sharp s against SS and against ss, long s against s, final sigma against capital sigma, the ff
+  // ligature against FF, the Kelvin sign against k.
+  const SAME_ON_DISK: [string, string][] = [
+    [`stra${String.fromCharCode(0xdf)}e.md`, 'STRASSE.md'],
+    [`stra${String.fromCharCode(0xdf)}e.md`, 'strasse.md'],
+    [`${String.fromCharCode(0x17f)}.md`, 's.md'],
+    [`${String.fromCharCode(0x3c2)}.md`, `${String.fromCharCode(0x3a3)}.md`],
+    [`${String.fromCharCode(0xfb00)}.md`, 'FF.md'],
+    [`${String.fromCharCode(0x212a)}.md`, 'k.md'],
+  ]
+  test('what one source of a move or copy into a folder puts there says when another source may land on the same name (#3505)', () => {
+    const shared = (command: string) =>
+      read(command)
+        .files.filter(f => f.shared)
+        .map(f => f.word)
+    for (const by of ['mv', 'cp', 'mv -n', 'cp -p']) {
+      // Two sources of one path there are one write, the first source's.
+      expect([by, shared(`${by} one/x.md two/x.md ~/archive/`)]).toEqual([by, ['~/archive/x.md']])
+      expect([by, read(`${by} one/x.md two/x.md ~/archive/`).files.map(f => f.sources)]).toEqual([by, [[`${CWD}/one/x.md`]]])
+      expect([by, shared(`${by} one/a.md two/A.md ~/archive/`)]).toEqual([by, ['~/archive/a.md', '~/archive/A.md']])
+      expect([by, shared(`${by} one/a.md two/A.md ~/archive`)]).toEqual([by, ['~/archive/a.md', '~/archive/A.md']])
+      expect([by, shared(`${by} one/${'é'.normalize('NFC')}.md two/${'é'.normalize('NFD')}.md ~/archive/`).length]).toEqual([by, 2])
+      expect([by, shared(`${by} -t ~/archive one/a.md two/A.md`)]).toEqual([by, ['~/archive/a.md', '~/archive/A.md']])
+      // A pattern in another folder may match the name, and a variable may hold it.
+      expect([by, shared(`${by} one/a.md two/*.md ~/archive/`)]).toEqual([by, ['~/archive/a.md', '~/archive/*.md']])
+      expect([by, shared(`${by} one/a.md "$F" ~/archive/`)]).toEqual([by, ['~/archive/a.md', '~/archive/$F']])
+      // Only the sources that may share a name: one of another name beside them does not.
+      expect([by, shared(`${by} one/b.md one/a.md two/A.md ~/archive/`)]).toEqual([by, ['~/archive/a.md', '~/archive/A.md']])
+      // Names this Mac's disk keeps as one file though small letters alone do not show it (measured
+      // on its APFS volume, 2026-11-23, each pair made in a scratch folder: the second name
+      // answered to the first). At 1f537cbb67 these were compared in small letters only and taken
+      // as apart, so the mv said where it put each (`to`), which claims the file is there after.
+      for (const [a, b] of SAME_ON_DISK) {
+        expect([by, a, b, shared(`${by} one/${a} two/${b} ~/archive/`).length]).toEqual([by, a, b, 2])
+        expect([by, a, b, kept(`${by} one/${a} two/${b} ~/archive/`)]).toEqual([by, a, b, []])
+      }
+      // The disk keeps a dotted capital I and i as two names (measured the same way), and so does this.
+      expect([by, shared(`${by} one/${String.fromCharCode(0x130)}.md two/i.md ~/archive/`)]).toEqual([by, []])
+      // It stays said whatever else the command holds, and when the place is written again.
+      expect([by, shared(`${by} one/a.md two/A.md ~/archive/ && ls ~/archive; rm one/a.md`)]).toEqual([by, ['~/archive/a.md', '~/archive/A.md']])
+      expect([by, shared(`cp three/a.md ~/archive/; ${by} one/a.md two/a.md ~/archive/`)]).toEqual([by, ['~/archive/a.md']])
+      // Controls: one folder holds no two files of a name, other names stay apart, one source
+      // shares with nothing, and one source onto one name is a rename.
+      for (const command of [`${by} one/a.md one/b.md ~/archive/`, `${by} one/a.md two/b.md ~/archive/`, `${by} one/*.md one/x.txt ~/archive/`, `${by} one/a.md ~/archive/`, `${by} one/a.md two/a.md`])
+        expect([command, shared(command)]).toEqual([command, []])
+    }
+    // Two commands that each put one file on the name are not one command's two sources, and a
+    // removal that is no move lands nowhere.
+    for (const command of ['mv one/a.md ~/archive/ && mv two/a.md ~/archive/', 'cp one/a.md ~/archive/; cp two/A.md ~/archive/', 'rm one/a.md two/a.md'])
+      expect([command, shared(command)]).toEqual([command, []])
+  })
   // mv -n replaces nothing: a source whose name is taken where it goes is left where it was. At
   // 3c7b756211 the reader gave no word of it, and ask before saving said the file there was replaced.
   test('a mv told to replace nothing says so of where it puts each source (#3478)', () => {

@@ -58,6 +58,13 @@ never only as a file or a file card in the chat, which Dan cannot see. Keep it s
 part and one labelled arrow per flow of data, named in Dan's words rather than the code's. If
 drawing it shows a part or a flow the interview never covered, ask about it before moving on.
 
+### Write down what must always be true
+
+Before the hand off, write the feature's `Must always be true` list and ask Dan to approve it. The
+list's rules, and what each line of it says, live in one place,
+`~/.claude/skills/milestone/MUST-ALWAYS-BE-TRUE.md`: read it and follow it, never a shape remembered
+from an earlier plan. The approved list goes into the design and the plan unchanged.
+
 ### Then hand off
 
 - Hand off to `superpowers:brainstorming` to turn the understanding into a design,
