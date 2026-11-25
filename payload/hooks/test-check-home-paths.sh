@@ -825,6 +825,159 @@ code_jc=$?
   || check "#3479 and that holds on a tree with nothing to refuse, where silence would read as clean" "exit=$code_jc out=$out_jc"
 
 # ---------------------------------------------------------------------------
+# A line holding a byte that is not valid text (claude-config#3538). Measured on 2026-11-24 with
+# the grep macOS ships, under en_US.UTF-8: the search lost 17 of 23 matching lines that held such a
+# byte, with exit 0, nothing on stderr and no "Binary file matches", so a home path on one of those
+# lines passed. Under LC_ALL=C the same search found all 23.
+#
+# The locale is SET for every run below, never inherited, because the fault shows in one locale and
+# not the other: a suite started under C would pass over the unfixed check and prove nothing
+# (L411). Each case is asked in a UTF-8 locale and in C, and when this machine has no UTF-8 locale
+# the suite says so rather than counting the C runs twice.
+#
+# Every odd byte is a printf octal escape, so this file itself stays plain text.
+# ---------------------------------------------------------------------------
+utf8_locale=""
+for _cand in en_US.UTF-8 C.UTF-8 en_US.utf8 C.utf8; do
+  if [ "$(LC_ALL="$_cand" locale charmap 2>/dev/null)" = "UTF-8" ]; then utf8_locale="$_cand"; break; fi
+done
+ODD_LOCALES="C"
+if [ -n "$utf8_locale" ]; then
+  ODD_LOCALES="$utf8_locale C"
+else
+  echo "  (UNMEASURED: this machine has no UTF-8 locale, so the #3538 cases ran under C only, where the fault never showed)"
+fi
+H1="name one machine's home directory"
+H2="write the sync's placeholder somewhere"
+H3="carry the hand substituted home placeholder"
+valid_text() { iconv -f UTF-8 -t UTF-8 < "$1" > /dev/null 2>&1; }
+# The start of a report for a failure message, its odd bytes made visible. head reads the file
+# itself and cat reads all head gives it, so nothing here leaves a pipe early (claude-config#162).
+peek() { head -c "$2" "$1" | LC_ALL=C cat -v; } # peek <file> <bytes>
+ODD_N=0
+odd_case() { # odd_case <what the line is> <line number> <the rule's heading> <text the report must show> <printf format> [args]
+  local what="$1" lineno="$2" heading="$3" needle="$4" fmt="$5"; shift 5
+  local root loc out code n
+  ODD_N=$((ODD_N + 1))
+  root="$(tree "odd$ODD_N")"
+  # shellcheck disable=SC2059
+  printf "$fmt" "$@" > "$root/hooks/odd.txt"
+  for loc in $ODD_LOCALES; do
+    out="$TMPROOT/odd$ODD_N.$loc.out"
+    LC_ALL="$loc" bash "$CHECK" "$root" > "$out" 2>&1
+    code=$?
+    n="$(LC_ALL=C grep -a -F -- "hooks/odd.txt:$lineno:" "$out" | LC_ALL=C grep -a -c -F -- "$needle" || true)"
+    [ "$code" -eq 1 ] && [ "${n:-0}" -eq 1 ] && LC_ALL=C grep -a -q -F -- "$heading" "$out" \
+      && check "#3538 $what is reported with its file and line (locale $loc)" ok \
+      || check "#3538 $what is reported with its file and line (locale $loc)" "exit=$code, ${n:-0} reported line(s) name hooks/odd.txt:$lineno: and show it: $(peek "$out" 500)"
+  done
+}
+# Rule 1, a home path, with the byte in each place it was measured to hide the line.
+odd_case "a home path after a byte that is not valid text" 1 "$H1" "$BADHOME/one" 'x \377 %s/one\n' "$BADHOME"
+odd_case "a home path touching such a byte" 1 "$H1" "$BADHOME/two" '\377%s/two\n' "$BADHOME"
+odd_case "a home path after a character cut short" 1 "$H1" "$BADHOME/three" 'x \303 %s/three\n' "$BADHOME"
+odd_case "a home path after a Latin-1 letter" 1 "$H1" "$BADHOME/four" 'caf\351 %s/four\n' "$BADHOME"
+odd_case "a home path before such a byte" 1 "$H1" "$BADHOME/five" '%s/five \377 tail\n' "$BADHOME"
+# Rule 2, the sync's placeholder where it fronts no path.
+odd_case "the placeholder with such a byte right after it" 1 "$H2" "the $LTOK" 'the %s\377 token\n' "$LTOK"
+odd_case "the placeholder after such a byte" 1 "$H2" "the $LTOK token" '\377 the %s token\n' "$LTOK"
+odd_case "the placeholder ending a line on a character cut short" 1 "$H2" "x $LTOK" 'x %s\303\n' "$LTOK"
+# Rule 3, the hand substituted placeholder.
+odd_case "the hand substituted placeholder after such a byte" 1 "$H3" "$LANG_TOK/skills/x" '\377 %s/skills/x\n' "$LANG_TOK"
+odd_case "the hand substituted placeholder with such a byte right after it" 1 "$H3" "$LANG_TOK" 'see %s\377/skills/x\n' "$LANG_TOK"
+# The byte on ANOTHER line than the finding. A search that calls the whole file binary over one
+# such byte (GNU grep does, in a UTF-8 locale) would skip the file with -I and report nothing.
+odd_case "a home path on the line after one holding such a byte" 2 "$H1" "$BADHOME/six" 'first \377 line\n%s/six\n' "$BADHOME"
+odd_case "a home path on the line before one holding such a byte" 1 "$H1" "$BADHOME/seven" '%s/seven\nlater \377 line\n' "$BADHOME"
+# The marker excuses its own line and no other, in a file holding such bytes too.
+odd_case "an unmarked line below a marked one, each holding such a byte," 2 "$H1" "$BADHOME/eight" \
+  'plain %s/excused claude-sync-allow-home-path \n\377 %s/eight\n' "$BADHOME" "$BADHOME"
+for loc in $ODD_LOCALES; do
+  ! LC_ALL=C grep -a -q -F -- "hooks/odd.txt:1:" "$TMPROOT/odd$ODD_N.$loc.out" \
+    && check "#3538 and the marked line above it stays excused (locale $loc)" ok \
+    || check "#3538 and the marked line above it stays excused (locale $loc)" "$(peek "$TMPROOT/odd$ODD_N.$loc.out" 500)"
+done
+
+# Nothing after such a line is lost. A filter that reads the search's output and meets a byte it
+# calls binary can stop printing there (L329), so the findings that sort after it are the ones at
+# risk: three files, the odd one in the middle, and all three reported.
+ODDSEQ="$(tree oddseq)"
+printf 'plain %s/first\n' "$BADHOME" > "$ODDSEQ/hooks/a.txt"
+printf 'x \377 %s/second\n' "$BADHOME" > "$ODDSEQ/hooks/b.txt"
+printf 'plain %s/third\n' "$BADHOME" > "$ODDSEQ/hooks/c.txt"
+printf 'plain %s/fourth\n' "$BADHOME" > "$ODDSEQ/skills/demo/SKILL.md"
+for loc in $ODD_LOCALES; do
+  LC_ALL="$loc" bash "$CHECK" "$ODDSEQ" > "$TMPROOT/oddseq.out" 2>&1
+  code_seq=$?
+  seq_n="$(LC_ALL=C grep -a -c -E -- "hooks/(a|b|c)\.txt:1:|skills/demo/SKILL\.md:1:" "$TMPROOT/oddseq.out" || true)"
+  [ "$code_seq" -eq 1 ] && [ "${seq_n:-0}" -eq 4 ] \
+    && check "#3538 every finding beside a line holding such a byte is still reported (locale $loc)" ok \
+    || check "#3538 every finding beside a line holding such a byte is still reported (locale $loc)" "exit=$code_seq, ${seq_n:-0} of 4 findings reported: $(peek "$TMPROOT/oddseq.out" 600)"
+  # The listed form is a search of its own, the one a send runs, and must not lose the line either.
+  printf 'hooks/a.txt\0hooks/b.txt\0hooks/c.txt\0skills/demo/SKILL.md\0' > "$TMPROOT/oddseq.files"
+  LC_ALL="$loc" bash "$CHECK" --files0-from "$TMPROOT/oddseq.files" "$ODDSEQ" > "$TMPROOT/oddseq.listed.out" 2>&1
+  code_seql=$?
+  LC_ALL=C grep -a '^  ' "$TMPROOT/oddseq.out" | LC_ALL=C sort > "$TMPROOT/oddseq.lines"
+  LC_ALL=C grep -a '^  ' "$TMPROOT/oddseq.listed.out" | LC_ALL=C sort > "$TMPROOT/oddseq.listed.lines"
+  [ "$code_seql" -eq 1 ] && [ -s "$TMPROOT/oddseq.lines" ] && cmp -s "$TMPROOT/oddseq.lines" "$TMPROOT/oddseq.listed.lines" \
+    && [ "$(LC_ALL=C grep -a -c -F -- "hooks/b.txt:1:" "$TMPROOT/oddseq.listed.out" || true)" -eq 1 ] \
+    && check "#3538 the listed form reports those lines exactly as the walk does (locale $loc)" ok \
+    || check "#3538 the listed form reports those lines exactly as the walk does (locale $loc)" "walk exit=$code_seq list exit=$code_seql: $(peek "$TMPROOT/oddseq.listed.out" 600)"
+done
+
+# The report stays text a person and a program can both read. Each byte that is not valid text is
+# shown as a backslash and its octal value, with a note of how many there are, so the path beside
+# it is still on the line and the report is valid text whatever the file held. Valid text is
+# reported byte for byte, as it always was, whatever characters it holds.
+SHOW="$(tree oddshow)"
+printf 'x \377 %s/one \303 two\n' "$BADHOME" > "$SHOW/hooks/a.txt"
+printf 'caf\303\251 \342\202\254 \360\237\230\200 %s/valid\n' "$BADHOME" > "$SHOW/hooks/b.txt"
+for loc in $ODD_LOCALES; do
+  SOUT="$TMPROOT/oddshow.$loc.out"
+  LC_ALL="$loc" bash "$CHECK" "$SHOW" > "$SOUT" 2>&1
+  code_show=$?
+  # The fixture really is not valid text, or a report passing the same test would prove nothing.
+  ! valid_text "$SHOW/hooks/a.txt" && [ "$code_show" -eq 1 ] && valid_text "$SOUT" \
+    && check "#3538 the report of a line holding such bytes is itself valid text (locale $loc)" ok \
+    || check "#3538 the report of a line holding such bytes is itself valid text (locale $loc)" "exit=$code_show: $(peek "$SOUT" 600)"
+  LC_ALL=C grep -a -q -F -- "hooks/a.txt:1:x \\377 $BADHOME/one \\303 two [2 bytes that are not valid text, each shown as a backslash and its octal value]" "$SOUT" \
+    && check "#3538 each such byte is shown as its octal value beside the path, and counted (locale $loc)" ok \
+    || check "#3538 each such byte is shown as its octal value beside the path, and counted (locale $loc)" "exit=$code_show: $(peek "$SOUT" 600)"
+  LC_ALL=C grep -a -q -F -x -- "  $SHOW/hooks/b.txt:1:$(cat "$SHOW/hooks/b.txt")" "$SOUT" \
+    && check "#3538 a line of valid text, accents and all, is reported byte for byte (locale $loc)" ok \
+    || check "#3538 a line of valid text, accents and all, is reported byte for byte (locale $loc)" "exit=$code_show: $(peek "$SOUT" 600)"
+done
+
+# A long line is cut to a count of bytes, and a cut that lands inside a character would leave half
+# of one at the edge of the report: not valid text, from a file that is. So the cut moves to the
+# nearest whole character, and the note gives the bytes really shown. Two fixtures, each proved to
+# split a character when cut at the plain byte count, or the test would pass without the care.
+euros() { LC_ALL=C awk -v n="$1" 'BEGIN { for (i = 0; i < n; i++) printf "\342\202\254" }'; }
+CUTV="$(tree oddcut)"
+# The end of the cut: a home path at the start (43 bytes), then three byte characters, so byte 300
+# is the second byte of one.
+{ printf 'bash %s/.claude/x.sh ' "$BADHOME"; euros 200; printf '\n'; } > "$CUTV/hooks/tail.txt"
+# The start of the cut: 60 bytes before the home path is the second byte of a three byte character.
+{ printf 'x'; euros 300; printf '\303\251bash %s/.claude/x.sh ' "$BADHOME"; filler 400; printf '\n'; } > "$CUTV/hooks/head.txt"
+cut_tail_len="$(LC_ALL=C awk '{ print length($0) }' "$CUTV/hooks/tail.txt")"
+cut_head_len="$(LC_ALL=C awk '{ print length($0) }' "$CUTV/hooks/head.txt")"
+head -c 300 "$CUTV/hooks/tail.txt" > "$TMPROOT/oddcut.tail.plain"
+dd if="$CUTV/hooks/head.txt" of="$TMPROOT/oddcut.head.plain" bs=1 skip=848 count=300 2> /dev/null
+for loc in $ODD_LOCALES; do
+  COUT="$TMPROOT/oddcut.$loc.out"
+  LC_ALL="$loc" bash "$CHECK" "$CUTV" > "$COUT" 2>&1
+  code_cutv=$?
+  ! valid_text "$TMPROOT/oddcut.tail.plain" && ! valid_text "$TMPROOT/oddcut.head.plain" \
+    && [ "$code_cutv" -eq 1 ] && valid_text "$COUT" && ! LC_ALL=C grep -a -q "not valid text" "$COUT" \
+    && check "#3538 a cut never leaves half a character, or calls valid text invalid (locale $loc)" ok \
+    || check "#3538 a cut never leaves half a character, or calls valid text invalid (locale $loc)" "exit=$code_cutv: $(peek "$COUT" 900)"
+  LC_ALL=C grep -a -q -E -- "hooks/tail\.txt:1:bash $BADHOME/\.claude/x\.sh .* \[line cut: bytes 1 to 298 of $cut_tail_len shown\]$" "$COUT" \
+    && LC_ALL=C grep -a -q -E -- "hooks/head\.txt:1:.*$BADHOME/\.claude/x\.sh .* \[line cut: bytes 851 to 1148 of $cut_head_len shown\]$" "$COUT" \
+    && check "#3538 and the note names the bytes really shown (locale $loc)" ok \
+    || check "#3538 and the note names the bytes really shown (locale $loc)" "exit=$code_cutv: $(peek "$COUT" 900)"
+done
+
+# ---------------------------------------------------------------------------
 # The real tree this file lives in, which is the whole point. It runs LAST, so
 # by the time it reports clean the scanner has been watched failing four ways.
 # ---------------------------------------------------------------------------
