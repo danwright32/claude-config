@@ -648,9 +648,11 @@ is read from the process the pid file names, with `ps`, and that reading has thr
 live, none, or could not be read. None is a settled answer: no pid file, or one naming a process
 that is not running or is something else. When the pid file names a running process and `ps`
 fails, is missing or says nothing about it, or the pid file is there and cannot be read, the write
-gate refuses the payload write in its own
-words, naming the `ps` command that failed and how it ended, and the prompt hook says once that it
-could not check; both used to read the empty answer as no watcher and say nothing. The clone the
+gate refuses the payload write in its own words, naming the `ps` command that failed and how it
+ended, and the prompt hook says once that it could not check; both used to read the empty answer
+as no watcher and say nothing. A process the hook's shell may not signal counts as running for
+this: `kill -0` exits 1 for it exactly as for a dead pid, so only the shell's own words that there
+is no such process settle a pid as gone, and anything else is left to `ps`. The clone the
 watcher runs from cannot be told apart then, so it is refused with every other. What does not
 depend on the watcher still passes: a hold of the session's own, which is read from its own record
 and is the way on the refusal names, a linked worktree on its own branch, and a plain copy. The

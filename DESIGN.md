@@ -2251,7 +2251,11 @@ unread, kept as a state the caller branches on (`sc_watcher_read`) with no print
 error to hide behind, and both hooks ask one question of it, `sc_watcher_possible`, which says no
 only when none is settled. A `ps` that fails is followed by a second test of the pid, because `ps`
 exits non zero both when it cannot run and when the process ended a moment after it was seen: gone
-is none, and still running with nothing learned about it is unread. For an unread watcher the pass
+is none, and still running with nothing learned about it is unread. Whether the pid is running has
+three answers too (`sc_pid_running`): `kill -0` exits 1 for a process the shell may not signal
+exactly as for one that is gone, which under a sandbox that refuses signals settled a live watcher
+as none, so gone is said only on the shell's own words that there is no such process, and every
+other failure leaves the question to `ps`. For an unread watcher the pass
 for the clone it runs from is not given, since that is read from the same command line, and the
 passes that do not depend on the watcher stand (a hold, an own worktree, a plain copy). The
 refusal and the warning say that the watcher could not be read and name the command that failed,

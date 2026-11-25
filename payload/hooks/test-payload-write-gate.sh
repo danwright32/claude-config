@@ -1656,6 +1656,19 @@ allowed "#3547 with no pid file the write is allowed whatever ps does"
 printf '%s\n' "999999" > "$FIX/dead.pid"
 PATH="$BADPS:$PATH" edit "$FIX/dev/payload/LESSONS.md" "$FIX/dev" "$FIX/dead.pid"
 allowed "#3547 and with a pid file naming a dead pid"
+# The shell's own test of the pid can be refused as well: kill -0 exits 1 for a process it may not
+# signal exactly as for one that is gone, so a refusal was read as a dead pid. Pid 1 is running on
+# every machine and belongs to another account, so the gate's shell may not signal it.
+printf '1\n' > "$FIX/init.pid"
+if kill -0 1 2>/dev/null; then
+  echo "SUITE-PART-UNMEASURED #3547 a pid the gate may not signal: this account may signal pid 1, so none could be found"
+else
+  PATH="$BADPS:$PATH" edit "$FIX/dev/payload/LESSONS.md" "$FIX/dev" "$FIX/init.pid"
+  refused "#3547 a pid the gate may not signal, with a ps that fails, is refused, not taken for a dead one"
+  says "#3547 saying the watcher could not be read" "$UNREAD_WORDS"
+  edit "$FIX/dev/payload/LESSONS.md" "$FIX/dev" "$FIX/init.pid"
+  allowed "#3547 control: once ps says that pid is another process, there is no watcher and the write is allowed"
+fi
 # The controls: with ps answering, the same writes are judged exactly as before (L159).
 edit "$FIX/dev/payload/LESSONS.md" "$FIX/dev"
 refused "#3547 control: with ps answering, the write is refused for the live watcher"

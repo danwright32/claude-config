@@ -30,7 +30,8 @@
 # not at risk, and neither is one holding the watcher off.
 #
 # A watcher it could NOT READ counts as one that may be live (claude-config#3547): the pid file
-# names a running process and ps could not say what it is. That is refused in its own words, which
+# names a process that is running, or that the shell may not even test, and ps could not say what
+# it is. That is refused in its own words, which
 # name the command that failed, and the clone the watcher runs from cannot be told apart then, so
 # only a hold, an own worktree and a plain copy are let through. No watcher is a settled answer: no
 # pid file, or one naming a process that is not running or is something else.
@@ -988,7 +989,8 @@ TARGETS
 
 # BEFORE a Bash call it let through: a note of what each at risk payload/ holds, for the check after
 # it to compare against (claude-config#647). Taken only in the state that loses work, a live watcher
-# from another clone and no hold covering this session (the same question the refusal asks, so a
+# from another clone, or one that could not be read and so has no clone passed as its source
+# (claude-config#3547), and no hold covering this session (the same question the refusal asks, so a
 # call let through on another session's hold still has its note, claude-config#1886), and only for
 # the checkouts this command could reach: the one it runs in, and any its words name. Two finds
 # over a few hundred files, never one process per file.

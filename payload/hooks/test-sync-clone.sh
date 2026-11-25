@@ -233,6 +233,41 @@ else
   esac
 fi
 chmod 600 "$FIX/sealed.pid"
+# The shell's own test of the pid can be refused as well. kill -0 exits 1 for a process it may not
+# signal exactly as it does for one that is gone, and only its words tell the two apart, so a
+# refusal was read as a dead pid and settled as no watcher. Measured on 2026-11-24 under a sandbox
+# that refuses signals, which refused ps too. Pid 1 is running on every machine and belongs to
+# another account, so this shell may not signal it.
+printf '1\n' > "$SYNC_WATCH_PID_FILE"
+if kill -0 1 2>/dev/null; then
+  echo "SUITE-PART-UNMEASURED a process this shell may not signal: this account may signal pid 1, so none could be found"
+else
+  want "a process the shell may not signal is asked of ps, and is no watcher once ps says what it is" "1 none" "$(watcher_says "$PATH")"
+  want "and is unread, never absent, when ps cannot say either" "2 unread" "$(watcher_says "$FIX/badps:$PATH")"
+  PATH="$FIX/badps:$PATH" sc_watcher_read 2>/dev/null || true
+  case "${SC_WATCHER_WHY:-}" in
+    *"kill -0"*"ps -o command= -p 1"*) check "and the reason says the shell could not test it, and names the ps command" ok ;;
+    *) check "and the reason says the shell could not test it, and names the ps command" "got '${SC_WATCHER_WHY:-}'" ;;
+  esac
+  case "${SC_WATCHER_WHY:-}" in
+    *"which is running"*) check "without saying it is running, which nothing measured" "got '${SC_WATCHER_WHY:-}'" ;;
+    *) check "without saying it is running, which nothing measured" ok ;;
+  esac
+fi
+# The real thing rather than a stand in, where this Mac has it: a sandbox that refuses signals. The
+# live watcher must never read as absent there. Whether it reads as live or as unread depends on
+# whether that sandbox lets ps run, and either is a true answer.
+printf '%s\n' "$WPID" > "$SYNC_WATCH_PID_FILE"
+NOSIGNAL='(version 1)(allow default)(deny signal)'
+if [ "$(sandbox-exec -p "$NOSIGNAL" /bin/bash -c 'kill -0 "$1" 2>/dev/null && echo signalled || echo refused' _ "$WPID" 2>/dev/null)" = refused ]; then
+  got="$(sandbox-exec -p "$NOSIGNAL" /bin/bash -c '. "$1"; rc=0; sc_watcher_read 2>/dev/null || rc=$?; printf "%s %s" "$rc" "${SC_WATCHER_STATE:-}"' _ "$LIB" 2>/dev/null)"
+  case "$got" in
+    "2 unread"|"0 live") check "under a sandbox that refuses signals, a live watcher is never read as absent" ok ;;
+    *) check "under a sandbox that refuses signals, a live watcher is never read as absent" "got '$got'" ;;
+  esac
+else
+  echo "SUITE-PART-UNMEASURED a live watcher under a sandbox that refuses signals: sandbox-exec is not here, or could not start, or did not refuse the signal"
+fi
 # The control: with the real ps back, the first answer stands (L159).
 printf '%s\n' "$WPID" > "$SYNC_WATCH_PID_FILE"
 want "and with ps answering again the watcher reads as live" "0 live" "$(watcher_says "$PATH")"
