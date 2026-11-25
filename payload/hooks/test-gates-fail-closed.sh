@@ -837,6 +837,9 @@ export SYNC_WATCH_PID_FILE="$WORK/watch.pid" SYNC_HOLD_FILE="$WORK/no-hold"
 # anything. The gate is the one beside this suite unless a copy of the hooks is named.
 run_judged(){
   local R="$1" said decision
+  # A HOME of its own every time, so a run done again after one ended part way (#3656) starts from
+  # nothing the first left behind.
+  rm -rf "$R/home"
   mkdir -p "$R/home" "$R/repo"
   ( cd "$R/repo" && git init -q . 2>/dev/null )
   bounded_run 60 env HOME="$R/home" PATH="$WORK/bin:$PATH" CLAUDE_DETACHED_RUN= \
@@ -862,11 +865,88 @@ decided_as(){
   esac
   return 1
 }
+# A group of runs in the background ends by writing its done file, so a group ended from outside
+# before it finished (a signal, a fork refused) leaves none, and its decisions are never read as
+# the gate deciding: on 2026-11-25 the same loss in tests/test-hang-wait-suites-gate.sh, at a load
+# of 263, read as a missing line, and here it read as the gate deciding two ways, both blank (#3656).
+# gfc_wait_all <pids> <done files>: each group waited for by its own pid, never with a bare wait,
+# which would wait on the watcher above too, its exit status kept beside its done file. The two
+# arrays are named, not passed, so they line up.
+gfc_wait_all(){
+  local j=0
+  while [ "$j" -lt "${#pids[@]}" ]; do
+    wait "${pids[$j]}" 2>/dev/null; printf '%s' "$?" > "${dones[$j]}.st"
+    j=$((j + 1))
+  done
+  pids=(); dones=()
+}
+# gfc_ended <status>: how a group that left no done file ended, from its own exit status.
+gfc_ended(){
+  case "$1" in
+    ''|*[!0-9]*) printf 'left no exit status' ;;
+    *) if [ "$1" -gt 128 ]; then printf 'was ended by signal %s' "$(( $1 - 128 ))"; else printf 'exited %s' "$1"; fi ;;
+  esac
+}
+# gfc_finished <done file> <what> <command...>: true once the group behind the done file finished.
+# One that did not is run once more, in the background and waited for by its pid, so every gate is
+# still judged. One that still did not finish was ended from outside on both tries, and the gate
+# was never asked, so it is reported as a part unmeasured (L411), never read, and the caller skips
+# its checks. A group that exited 0 without its done file is a fault of this suite and fails.
+gfc_finished(){
+  local done="$1" what="$2" st
+  shift 2
+  [ -e "$done" ] && return 0
+  st="$(cat "$done.st" 2>/dev/null)"
+  echo "NOTE: $what were run again: the first try $(gfc_ended "$st") before finishing"
+  "$@" &
+  wait "$!" 2>/dev/null; st="$?"
+  [ -e "$done" ] && return 0
+  case "$st" in
+    0|1|127) bad "$what did not finish on both tries, and the second $(gfc_ended "$st"), which is a fault of this suite rather than something ending them from outside" ;;
+    *) echo "SUITE-PART-UNMEASURED $what did not finish on both tries (the second $(gfc_ended "$st")), so the gate was never asked and what it decides was not measured" ;;
+  esac
+  return 1
+}
+# The control for gfc_finished (#3656, L1): a stand in group ended by SIGKILL before it finishes,
+# the first time only, every time, or exiting 0 without its done file. Each run in a subshell whose
+# stderr is set aside, so the shell's own "Killed: 9" is not printed among the results, and whose
+# counts are its own, so the control's expected FAIL does not count against this suite.
+gfc_standin(){ # gfc_standin <dir> <once|always|clean>
+  case "$2" in
+    once) [ -e "$1/once" ] || { : > "$1/once"; sh -c 'kill -KILL "$PPID"'; } ;;
+    always) sh -c 'kill -KILL "$PPID"' ;;
+    clean) return 0 ;;
+  esac
+  : > "$1/done"
+}
+for mode in once always clean; do
+  mkdir -p "$WORK/gfc-ctl-$mode"
+  ( pids=(); dones=()
+    gfc_standin "$WORK/gfc-ctl-$mode" "$mode" &
+    pids+=("$!"); dones+=("$WORK/gfc-ctl-$mode/done")
+    gfc_wait_all
+    gfc_finished "$WORK/gfc-ctl-$mode/done" "the control's runs" gfc_standin "$WORK/gfc-ctl-$mode" "$mode"
+    echo "rc=$?" ) > "$WORK/gfc-ctl-$mode/said" 2>/dev/null
+done
+said="$(tr '\n' ' ' < "$WORK/gfc-ctl-once/said")"
+case "$said" in "NOTE: the control's runs were run again: the first try was ended by signal 9 before finishing rc=0 ") ok ;;
+  *) bad "#3656 the control: a group ended before it finished should be run again and then read; gfc_finished said: $said" ;; esac
+said="$(tr '\n' ' ' < "$WORK/gfc-ctl-always/said")"
+case "$said" in *"SUITE-PART-UNMEASURED the control's runs did not finish on both tries (the second was ended by signal 9)"*"rc=1 ") ok ;;
+  *) bad "#3656 the control: a group ended before it finished on both tries should be named as unmeasured and not read; gfc_finished said: $said" ;; esac
+said="$(tr '\n' ' ' < "$WORK/gfc-ctl-clean/said")"
+case "$said" in *"FAIL: the control's runs did not finish on both tries, and the second exited 0"*"rc=1 ") ok ;;
+  *) bad "#3656 the control: a group that exits 0 without finishing should fail, named; gfc_finished said: $said" ;; esac
+# judged_runs <run dir> <gate>: one gate's runs of the section above, then its done file.
+judged_runs(){
+  local c
+  for c in esc plain cut other listfield tistring toplist empty olist; do run_judged "$1/$c" "$2" "$1/$c.json"; done
+  : > "$1/done"
+}
 # Each gate's runs go in the background, GFC_WIDTH at a time (the suite's share, read at the top),
 # since each waits on its own git and python.
-# Waited on by pid, never with a bare wait, which would wait on the watcher above too.
 k=0
-pids=()
+pids=(); dones=()
 while IFS=$'\t' read -r g tool inp extra unread; do
   k=$((k + 1))
   R="$WORK/j$k"
@@ -879,16 +959,18 @@ while IFS=$'\t' read -r g tool inp extra unread; do
     mkdir -p "$R/$c"; judged_payload "$tool" "$inp" "$extra" 'Q' "$R/$c/repo" "$c" > "$R/$c.json"
   done
   mkdir -p "$R/olist"; judged_payload Bash '{"command": "ls -la"}' '{}' '' "$R/olist/repo" listfield > "$R/olist.json"
-  ( for c in esc plain cut other listfield tistring toplist empty olist; do run_judged "$R/$c" "$g" "$R/$c.json"; done ) &
-  pids+=("$!")
+  rm -f "$R/done"
+  judged_runs "$R" "$g" &
+  pids+=("$!"); dones+=("$R/done")
   live="$(live_now "${pids[@]}")"; [ "$live" -le "$GFC_MOST" ] || GFC_MOST="$live"
-  if [ "${#pids[@]}" -ge "$GFC_WIDTH" ]; then wait "${pids[@]}"; pids=(); fi
+  if [ "${#pids[@]}" -ge "$GFC_WIDTH" ]; then gfc_wait_all; fi
 done < "$WORK/judged"
-[ "${#pids[@]}" -eq 0 ] || wait "${pids[@]}"
+gfc_wait_all
 k=0
 while IFS=$'\t' read -r g tool inp extra unread; do
   k=$((k + 1))
   R="$WORK/j$k"
+  gfc_finished "$R/done" "$g's runs on the calls it judges" judged_runs "$R" "$g" < /dev/null || continue
   esc="$(cat "$R/esc/decision" 2>/dev/null)"; plain="$(cat "$R/plain/decision" 2>/dev/null)"
   if [ -n "$esc" ] && [ "$esc" = "$plain" ]; then ok
   else bad "$g decides differently on a call holding a lone surrogate escape ($esc) than on the same call with a letter in its place ($plain); it said: $(head -c 300 "$R/esc/said" 2>/dev/null)"; fi
@@ -947,6 +1029,8 @@ copy_hooks(){ # copy_hooks <dest>: the hooks as they are installed
 standin_runs(){
   local S="$1" c
   mkdir -p "$S"
+  # Records from a first try that was ended part way are not counted with the second's (#3656).
+  rm -rf "$S/with/ledger" "$S/whole/ledger" "$S/cut/ledger" "$S/other/ledger"
   judged_payload "$3" "$4" "$5" 'Q' "$S/with/repo" whole > "$S/with.json"
   judged_payload "$3" "$4" "$5" 'Q' "$S/whole/repo" whole > "$S/whole.json"
   judged_payload "$3" "$4" "$5" '' "$S/cut/repo" cut > "$S/cut.json"
@@ -957,6 +1041,7 @@ standin_runs(){
   for c in whole cut other; do
     WRAPPED_REFUSAL_LEDGER_DIR="$S/$c/ledger" PUSH_GATE_LEDGER_DIR="$S/$c/ledger" run_judged "$S/$c" "$2" "$S/$c.json" "$7"
   done
+  : > "$S/done"
 }
 # The Mac each line of a run's records names: the second field of both records a gate keeps.
 macs_recorded(){ # macs_recorded <run folder>
@@ -1033,32 +1118,43 @@ canary canary-open.sh this-mac.sh \
   '. "$HOOK_DIR/lib/this-mac.sh" 2>/dev/null || this_mac_name() { exit 0; }'
 PUSH_CALL="$(bash_call 'git push origin feature')"
 
-# A few pairs at a time, as above, and waited on by pid.
-pids=()
+# A few pairs at a time, as above, each waited on by its own pid.
+pids=(); dones=()
 while IFS=$'\t' read -r i g lib tool inp extra unread; do
-  ( standin_runs "$WORK/st$i" "$g" "$tool" "$inp" "$extra" "$WORK/hooks/whole" "$WORK/hooks/without-$lib" ) &
-  pids+=("$!")
+  rm -f "$WORK/st$i/done"
+  standin_runs "$WORK/st$i" "$g" "$tool" "$inp" "$extra" "$WORK/hooks/whole" "$WORK/hooks/without-$lib" &
+  pids+=("$!"); dones+=("$WORK/st$i/done")
   live="$(live_now "${pids[@]}")"; [ "$live" -le "$GFC_MOST" ] || GFC_MOST="$live"
-  if [ "${#pids[@]}" -ge "$GFC_WIDTH" ]; then wait "${pids[@]}"; pids=(); fi
+  if [ "${#pids[@]}" -ge "$GFC_WIDTH" ]; then gfc_wait_all; fi
 done < "$WORK/standin-pairs"
+# The three canaries in one group, so one of the share; each still writes its own done file.
+rm -f "$WORK/st-said/done" "$WORK/st-quiet/done" "$WORK/st-open/done"
 ( standin_runs "$WORK/st-said" canary-said.sh Bash "$PUSH_CALL" '{}' "$WORK/hooks/whole" "$WORK/hooks/without-hook-notice.sh"
   standin_runs "$WORK/st-quiet" canary-quiet.sh Bash "$PUSH_CALL" '{}' "$WORK/hooks/whole" "$WORK/hooks/without-hook-notice.sh"
   standin_runs "$WORK/st-open" canary-open.sh Bash "$PUSH_CALL" '{}' "$WORK/hooks/whole" "$WORK/hooks/without-this-mac.sh" ) &
-pids+=("$!")
+pids+=("$!"); dones+=("$WORK/st-said/done")
 live="$(live_now "${pids[@]}")"; [ "$live" -le "$GFC_MOST" ] || GFC_MOST="$live"
-wait "${pids[@]}"
+gfc_wait_all
+cp "$WORK/st-said/done.st" "$WORK/st-quiet/done.st" 2>/dev/null; cp "$WORK/st-said/done.st" "$WORK/st-open/done.st" 2>/dev/null
 [ "$GFC_MOST" -le "$GFC_WIDTH" ] && ok \
   || bad "#3170 this suite had $GFC_MOST of its gate runs going at once, more than its share of $GFC_WIDTH (HOOK_TESTS_SLOTS='${HOOK_TESTS_SLOTS:-}', 6 when unset), so it took processors run-all-tests.sh gave to the suites beside it"
 
-why="$(standin_verdict "$WORK/st-said" "notice canary")"
-[ -z "$why" ] && ok || bad "#2634 canary: a gate whose stand in says the notice as the library's header gives fails the check: $why"
-why="$(standin_verdict "$WORK/st-quiet" "notice canary")"
-case "$why" in *"cut short"*) ok ;; *) bad "#2634 canary: a gate whose stand in lets a call it cannot parse through in silence passes the check, so the check cannot see a stand in that allows quietly (it said: ${why:-nothing})" ;; esac
-why="$(standin_verdict "$WORK/st-open" refuse)"
-case "$why" in *"decides its judged call differently"*) ok ;; *) bad "#2634 canary: a gate whose stand in ends it before it refuses passes the check, so the check cannot see a stand in that lets the judged call through (it said: ${why:-nothing})" ;; esac
+if gfc_finished "$WORK/st-said/done" "the canary-said.sh runs" standin_runs "$WORK/st-said" canary-said.sh Bash "$PUSH_CALL" '{}' "$WORK/hooks/whole" "$WORK/hooks/without-hook-notice.sh"; then
+  why="$(standin_verdict "$WORK/st-said" "notice canary")"
+  [ -z "$why" ] && ok || bad "#2634 canary: a gate whose stand in says the notice as the library's header gives fails the check: $why"
+fi
+if gfc_finished "$WORK/st-quiet/done" "the canary-quiet.sh runs" standin_runs "$WORK/st-quiet" canary-quiet.sh Bash "$PUSH_CALL" '{}' "$WORK/hooks/whole" "$WORK/hooks/without-hook-notice.sh"; then
+  why="$(standin_verdict "$WORK/st-quiet" "notice canary")"
+  case "$why" in *"cut short"*) ok ;; *) bad "#2634 canary: a gate whose stand in lets a call it cannot parse through in silence passes the check, so the check cannot see a stand in that allows quietly (it said: ${why:-nothing})" ;; esac
+fi
+if gfc_finished "$WORK/st-open/done" "the canary-open.sh runs" standin_runs "$WORK/st-open" canary-open.sh Bash "$PUSH_CALL" '{}' "$WORK/hooks/whole" "$WORK/hooks/without-this-mac.sh"; then
+  why="$(standin_verdict "$WORK/st-open" refuse)"
+  case "$why" in *"decides its judged call differently"*) ok ;; *) bad "#2634 canary: a gate whose stand in ends it before it refuses passes the check, so the check cannot see a stand in that lets the judged call through (it said: ${why:-nothing})" ;; esac
+fi
 
 reached=0
 while IFS=$'\t' read -r i g lib tool inp extra unread; do
+  gfc_finished "$WORK/st$i/done" "$g's runs with lib/$lib gone" standin_runs "$WORK/st$i" "$g" "$tool" "$inp" "$extra" "$WORK/hooks/whole" "$WORK/hooks/without-$lib" < /dev/null || continue
   why="$(standin_verdict "$WORK/st$i" "$unread")"
   [ -z "$why" ] && ok || bad "#2634 $g with lib/$lib gone, which it loads with a stand in: $why"
   # Deciding alike proves little about a stand in the call never reached. Where the judged call
