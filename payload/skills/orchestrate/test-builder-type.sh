@@ -38,14 +38,15 @@ REPO="$(bash "$DIR/../../hooks/lib/checkout-root.sh" "$DIR/../.." 2>/dev/null ||
 PAYLOAD=""
 [ -n "$REPO" ] && PAYLOAD="$REPO/payload"
 
-# The most bytes the rendered prompt may hold. On 2026-11-25 the payload rendered to 93,942 (one
-# reading): 55,485 are the 355 lessons of the core with its table of contents, about 32,300 the
-# carried rules, and the rest the head and the tool notes. The budget leaves room for about 26 more
-# core lessons at their present average of 156, or 4,000 characters of new rules. Past it somebody
-# decides what a builder stops carrying, because every byte here is read again on every request a
-# builder makes: at the 2.85 characters a token that claude-config#3389's trial measured for this
-# text (58,216 characters removed for 20,398 tokens, three runs), 4,000 is about 1,400 tokens.
-BUDGET="${BUILDER_TYPE_BUDGET:-98000}"
+# The most bytes the rendered prompt may hold. On 2026-11-25 the payload rendered to 88,281 (two
+# readings), once the two UI sections were left out (93,942 before, one reading): 55,485 are the
+# 355 lessons of the core with its table of contents, 26,357 the carried rules, and the rest the
+# head and the tool notes. The budget leaves room for about 23 more core lessons at their present
+# average of 156, or 3,700 characters of new rules. Past it somebody decides what a builder stops
+# carrying, because every byte here is read again on every request a builder makes: at the 2.85
+# characters a token that claude-config#3389's trial measured for this text (58,216 characters
+# removed for 20,398 tokens, three runs), 3,700 is about 1,300 tokens.
+BUDGET="${BUILDER_TYPE_BUDGET:-92000}"
 
 pass=0
 fail=0
@@ -254,6 +255,11 @@ check "it keeps read only items off the type, which has no connected server" "$(
 check "it says the model rule holds and the type sets no model" "$([ "$(in_section "The model rule above holds")" = ok ] && [ "$(in_section "sets no model")" = ok ] && echo ok || echo "one of the two is missing")"
 check "it says the brief names any memory file, since the type loads no memory index" "$(in_section "names any memory file")"
 check "it says the type reads the project's own instructions itself" "$(in_section "told to read that file first")"
+# Dan, 2026-11-25 ("Cut the UI sections first"): the type no longer carries the two UI sections, so
+# the brief for an item that works on a screen sends the builder to them. A brief that does not say
+# so leaves a screen built without its rules and nothing in the type to say they were missing.
+check "it says a brief for an item on a screen names the two UI sections the type leaves out" \
+  "$([ "$(in_section "anything a person sees on a screen")" = ok ] && [ "$(in_section '"Progress & Feedback (UI)"')" = ok ] && [ "$(in_section '"Building UI"')" = ok ] && echo ok || echo "the condition or one of the two section names is missing")"
 # The agent rules send every agent to the global rules for the no verdict rule, "which you already
 # have loaded". A builder of this type has not loaded them: the rule is in its prompt.
 check "the agent rules say where a builder typed agent finds the no verdict rule" "$(has "$AGENT_RULES" "written out in your own prompt")"
@@ -338,6 +344,12 @@ TOOLS
   check "the test first rule reaches it" "$(has "$REAL" "**Test first, in the same commit:**")"
   check "the no verdict rule, whose one home is the global rules, reaches it" "$(has "$REAL" "**One unchanged resend after no verdict**")"
   check "the rule against weakening a security control reaches it" "$(has "$REAL" "Never weaken a security control")"
+  # The two UI sections are left out (Dan, 2026-11-25, "Cut the UI sections first"), and the head
+  # sends a builder whose item works on a screen to them, by name, in the file that holds them.
+  check "the Progress & Feedback (UI) section is not carried" "$(lacks "$REAL" "## Progress & Feedback (UI)")"
+  check "the Building UI section is not carried" "$(lacks "$REAL" "## Building UI")"
+  check "the head tells a builder working on a screen to read the two UI sections first" \
+    "$([ "$(has "$REAL" "anything a person sees on a screen")" = ok ] && [ "$(has "$REAL" '"Progress & Feedback (UI)" and "Building UI"')" = ok ] && [ "$(has "$REAL" 'the global rules file, `~/.claude/CLAUDE.md`')" = ok ] && echo ok || echo "the condition, a section name or the file is missing from the head")"
   size="$(wc -c < "$REAL" 2>/dev/null | tr -d ' ')"
   check "the rendered prompt is inside its budget of $BUDGET bytes" \
     "$([ "${size:-0}" -gt 0 ] && [ "$size" -le "$BUDGET" ] && echo ok || echo "it is ${size:-0} bytes")"

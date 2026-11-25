@@ -7862,9 +7862,9 @@ files: its own prompt carries the lessons core and the builder's share of the gl
 - **No rendered copy is in the repository, and the sync does not install one yet.** The sources
   changed in 103 commits in the 30 days to 2026-11-25, 76 of them made by the sync with no pull
   request, so a committed copy would be stale within hours and two Macs would collide over it
-  (L554). The type exists on a Mac only where it has been rendered into an agents folder. Having
-  the sync render it on each Mac means naming the file in the sync's exclusions, which waits on
-  Dan's sign off (#3389).
+  (L554). The type exists on a Mac only where it has been rendered into an agents folder. Dan
+  chose on 2026-11-25 that the sync writes it on each Mac from that Mac's rules and never carries
+  it ("Each Mac writes its own (Recommended)"); that step is not built yet (#3389).
 - **What a builder carries is one table.** `builder-type-rules.tsv` has a row for every section of
   `CLAUDE.md`: `carry`, `leave`, and `drop` or `keep` for one item named by its opening words. A
   section with no row is carried, a `drop` row that matches nothing drops nothing, and a `keep`
@@ -7874,7 +7874,15 @@ files: its own prompt carries the lessons core and the builder's share of the gl
 - **What the type does not load, beyond the rule files.** The project's own `CLAUDE.md` or
   `AGENTS.md` and its memory index go with the rule files, because Claude Code leaves them out
   together. The head tells a builder to read the project's file first, and the orchestrate skill
-  tells the session to name any memory file in the brief. Nothing enforces either.
+  tells the session to name any memory file in the brief. Nothing enforces either yet: Dan chose
+  on 2026-11-25 a check that holds a builder's first edit until it has read the project's file
+  ("Add a guard (Recommended)"), to be built with the install step.
+- **The two UI sections are left out and named instead.** "Progress & Feedback (UI)" and "Building
+  UI" are rules only screen work needs, about 5,900 characters every builder read again on each
+  request (Dan, 2026-11-25: "Cut the UI sections first"). The head tells a builder whose item
+  builds or changes anything a person sees on a screen to read those two sections of
+  `~/.claude/CLAUDE.md` before writing it, and the orchestrate skill tells the session that the
+  brief for such an item says so.
 - **The tool list is an allow list.** It names Claude Code's own tools, the Skill tool included,
   and three servers: the area check mod, the job watcher mod and Claude in Chrome. A tool Claude
   Code adds later reaches builders only once it is added to `builder-type-head.md`.
@@ -7885,8 +7893,9 @@ files: its own prompt carries the lessons core and the builder's share of the gl
   skill says to dispatch a `build` item as `builder` when the Agent tool lists that type, and as
   before where it does not.
 - Tests: `skills/orchestrate/test-builder-type.sh` (the renderer on a fixture, its failures, the
-  stale copy check, the payload's table, tool list and size budget of 98,000 bytes, against 93,942
-  rendered on 2026-11-25) and `hooks/test-builder-model-gate.sh`.
+  stale copy check, the payload's table, tool list and size budget of 92,000 bytes, against 88,281
+  rendered on 2026-11-25 once the UI sections were left out) and
+  `hooks/test-builder-model-gate.sh`.
 
 ## The context line and the long session nudge
 

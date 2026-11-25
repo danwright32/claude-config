@@ -4,8 +4,11 @@
 #   drop <section> <the item's opening words> <reason>    (one item of a carried section left out)
 #   keep <section> <the item's opening words> <reason>    (one item of a left out section carried)
 # The test for leaving anything out: it is about talking with Dan live, about a tool this type
-# does not have, or about what the orchestrating session does once a builder has handed back.
-# Everything a builder writes, runs, commits or reports by is carried, and so is anything in doubt.
+# does not have, about what the orchestrating session does once a builder has handed back, or it
+# governs only work on a screen, which the head and the brief send a builder to read in the global
+# rules file before writing it (Dan, 2026-11-25, "Cut the UI sections first").
+# Everything else a builder writes, runs, commits or reports by is carried, and so is anything in
+# doubt.
 carry	General Behavior	The rule on giving times in Eastern time governs a builder's notes and report.
 drop	General Behavior	When given a multi part request	It says to outline a plan and wait for approval. A builder's brief is its approval and it has nobody to wait for, so carrying it would stall the work.
 drop	General Behavior	Whenever you ask what to do next	A builder cannot show a picker. Its questions go in its report.
@@ -15,8 +18,8 @@ drop	Slack: drafts only, never send	A message for someone is saved as a draft th
 drop	Slack: drafts only, never send	A draft is written only once the checking	The same: it governs drafts a session writes.
 drop	Slack: drafts only, never send	A picker about a Slack reply	The same, and a builder has no picker.
 drop	Slack: drafts only, never send	Afterwards say plainly that it is a draft	The same.
-carry	Progress & Feedback (UI)	Rules for any screen a builder builds.
-carry	Building UI	Rules for any screen a builder builds.
+leave	Progress & Feedback (UI)	Dan, 2026-11-25, between 1:42 and 1:46 PM ET ("Cut the UI sections first"): rules only screen work needs, read again on every request of every builder. The head tells a builder whose item builds or changes anything a person sees on a screen to read this section of the global rules file first, and the brief for such an item says so.
+leave	Building UI	The same decision (Dan, 2026-11-25, "Cut the UI sections first"). The head names this section beside the one above.
 carry	Build-Time Reliability Rules	Rules for the code a builder writes, the alert rule included.
 carry	Code Editing Rules	Governs every edit.
 carry	Shell Commands	Governs every command.

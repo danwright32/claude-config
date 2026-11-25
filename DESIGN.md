@@ -1440,8 +1440,9 @@ rendered file lives:
 - **Rendered on each Mac and never carried**, which is the one built toward: the repository holds
   the renderer, the head and the table, and each Mac's copy is a function of its own installed
   rules. It needs one thing from the sync, the file named in the mirror's exclusions so a send does
-  not publish it and an apply does not delete it. That entry is Dan's to approve and is not in this
-  change, so today the type is rendered by hand where it is wanted and nothing installs it.
+  not publish it and an apply does not delete it. Dan chose this shape on 2026-11-25 ("Each Mac
+  writes its own (Recommended)"). The sync step is not in this change and comes to him before it
+  merges, so today the type is rendered by hand where it is wanted and nothing installs it.
 
 Every doubt in the table is settled by carrying (a section with no row, a row that matches
 nothing), because the failure this change can cause is a rule silently missing from every builder.
@@ -1451,9 +1452,20 @@ screen) comes back if its opening words are reworded. `--strict` makes each such
 and the suite renders the payload strictly, so main says so. The rendered prompt holds no date,
 count or hash of its own, so a change to one rule changes that rule's lines and nothing else.
 
+The table's test for leaving something out has a fourth case: a section that governs only work on
+a screen. Dan chose on 2026-11-25 ("Cut the UI sections first") to leave out "Progress & Feedback
+(UI)" and "Building UI", about 5,900 characters that every builder read again on every request
+while few items touch a screen. They are named rather than dropped silently: the head tells a
+builder whose item builds or changes anything a person sees on a screen to read them in
+`~/.claude/CLAUDE.md` first, and the brief for such an item says so. That too is a rule in a
+prompt, and the cost of it failing is a screen built without its rules, which the review of the
+screen, not the type, has to catch.
+
 Two things the trial did not surface are true of the type. `omitClaudeMd` is all or nothing, so the
 project's own `CLAUDE.md` and the memory index are left out with the global rules; the head tells
-the builder to read the project's file, and that is a rule in a prompt (L27). And a `CLAUDE.md` in
+the builder to read the project's file, and that is a rule in a prompt (L27), so Dan chose on
+2026-11-25 a check that holds a builder's first edit until it has read that file ("Add a guard
+(Recommended)"), built with the install step so the type never runs without it. And a `CLAUDE.md` in
 a subfolder still loads when an agent reads a file under it: in this repository `payload/CLAUDE.md`
 is the global rules file with all its imports, so a builder of this type working under `payload/`
 loads the whole of what the type left out (seen once, 2026-11-25, in the run that built this).

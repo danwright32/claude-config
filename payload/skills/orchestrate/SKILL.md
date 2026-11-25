@@ -70,6 +70,7 @@ The builder type starts with less than a general purpose agent (Dan, 2026-11-25,
 - The model rule above holds for it unchanged. The type sets no model, so every dispatch names one, and `hooks/builder-model-gate.sh` counts a dispatch of the type as a builder whatever else it carries.
 - It does not load the project's CLAUDE.md or AGENTS.md, and is told to read that file first. It does not load the project's memory index at all, so part 2 of its brief names any memory file the item depends on, by path.
 - It cannot reach Slack, a database or any other connector, so an item that needs one is not dispatched as this type.
+- It does not carry the global rules' two UI sections, "Progress & Feedback (UI)" and "Building UI" (Dan, 2026-11-25: "Cut the UI sections first"). The brief for an item that builds or changes anything a person sees on a screen says to read those two sections of `~/.claude/CLAUDE.md` before writing it.
 
 ## 3. Briefs
 
