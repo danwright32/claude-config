@@ -394,21 +394,31 @@ named, programs, seen = [], 0, set()
 
 
 def unsure_lines(s):
+    """(the commands, the line of each # named, the line of each heredoc named). The reader names a
+    heredoc too, by its <<, where it cannot find its end (claude-config#3492), and those are told
+    apart here: what this table holds is the #."""
     marks = []
     try:
         cut = sw.commands(s, unsure=marks)
     except sw.Unreadable:
         cut = []
-    found = []
+    found, opened = [], []
     for at, _ in marks:
         start = s.rfind("\n", 0, at) + 1
         end = s.find("\n", at)
-        found.append(s[start:len(s) if end < 0 else end].strip()[:120])
-    return cut, found
+        (opened if s.startswith("<<", at) else found).append(s[start:len(s) if end < 0 else end].strip()[:120])
+    return cut, found, opened
 
 
-cut, found = unsure_lines(gate_text)
+cut, found, opened = unsure_lines(gate_text)
 named += found
+# The same file is a real text the heredoc reading is held against: it opened 11 heredocs on
+# 2026-11-23, none of them quoted, and the reader must find the end of every one (across the 626
+# tracked shell files it names none, measured the same day). The programs it carries are Python, where a << is
+# no heredoc, so one named in a program read as shell says nothing about the script (the line
+# `"<<" in cmd` of one is named, as it must be were it shell: a marker that never comes).
+say(not opened, "#3492 the reader finds the end of every heredoc in payload-write-gate.sh",
+    "it cannot place: %s" % " | ".join(opened))
 for _, cmd in cut:
     for word in sw.command_words(cmd):
         if "\n" in word and word not in seen:
