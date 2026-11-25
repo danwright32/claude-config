@@ -545,7 +545,7 @@ rtk_output_read_by_program() { # rtk_output_read_by_program <command>  -> 0 to r
         if (c == "(") { flushword(); push("paren"); i++; continue }
         if (c == ")") {
           flushword()
-          # A `)` that closes nothing it can name (a case pattern, a stray) is not guessed at.
+          # A closing parenthesis that closes nothing it can name, a case pattern or a stray one, is not guessed at.
           if (depth == 0 || ctx[depth] == "brace" || ctx[depth] == "bt" || ctx[depth] == "kw") { bad = 1; break }
           popgroup(); i++; continue
         }

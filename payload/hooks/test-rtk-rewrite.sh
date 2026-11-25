@@ -54,6 +54,11 @@ cat > "$BIN/rtk" <<'STUB'
 case "${1:-}" in
   --version) cat "$RTK_STUB_DIR/version" 2>/dev/null || echo "rtk 0.31.0" ;;
   --help|help) cat "$RTK_STUB_DIR/help" 2>/dev/null || true ;;
+  # rtk's effective config, as `rtk config` prints it. With no fixture it answers as an rtk with no
+  # config file does: an empty excluded list (claude-config#3639).
+  config)
+    if [ -f "$RTK_STUB_DIR/config" ]; then cat "$RTK_STUB_DIR/config"
+    else printf 'Config: /stub/config.toml\n\n(default config, file not created)\n\n[hooks]\nexclude_commands = []\n'; fi ;;
   rewrite)
     if [ -s "$RTK_STUB_DIR/rewrite" ]; then cat "$RTK_STUB_DIR/rewrite"; exit 0; fi
     exit 1 ;;
@@ -815,6 +820,104 @@ else
     grep -q 'Files are identical' <<< "$out399" \
       && check "#399 and does not report the differing files as identical" "ran [$ran399]: $out399" \
       || check "#399 and does not report the differing files as identical" ok
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# #3639: a rewrite landing on an rtk subcommand that rtk's OWN excluded list names is refused.
+#
+# Every pull writes payload/rtk-exclude-commands.txt into rtk's config, yet rtk 0.31.0 still answers
+# `rtk grep` when something stands in front of the grep. Measured 2026-11-25 on the personal MacBook,
+# three argument sets each: `FOO=1 grep`, `VAR=1 OTHER=2 grep`, `env grep`, `env FOO=1 grep` and
+# `sudo grep` all came back as the same prefix before `rtk grep`, and so did every one of them with
+# rg. `rtk grep -h` is rtk's help, printed with exit 0 (3 runs), so the matches were lost with a
+# success exit. The rewrites below are those measured, byte for byte.
+# ---------------------------------------------------------------------------
+installed_list_config() { # the config rtk prints once a pull has written the shared list into it
+  { printf 'Config: /stub/config.toml\n\n[filters]\nignore_files = [\n    "*.lock",\n]\n\n[hooks]\nexclude_commands = [\n'
+    grep -vE '^[[:space:]]*(#|$)' "$DIR/../rtk-exclude-commands.txt" | sed 's/.*/    "&",/'
+    printf ']\n\n[limits]\ngrep_max_results = 200\n'; } > "$TMPROOT/config"
+}
+installed_list_config
+grep -q '"grep",' "$TMPROOT/config" \
+  && check "#3639 the fixture config carries the shared list, grep included" ok \
+  || check "#3639 the fixture config carries the shared list, grep included" "config was: $(cat "$TMPROOT/config")"
+check "#3639 an assignment in front of grep does not reach rtk grep" \
+  "$(runner_refused 'FOO=1 grep -h result a.txt b.txt c.txt' 'FOO=1 rtk grep -h result a.txt b.txt c.txt')"
+check "#3639 nor two assignments" \
+  "$(runner_refused 'VAR=1 OTHER=2 grep -n pattern src/file.sh' 'VAR=1 OTHER=2 rtk grep -n pattern src/file.sh')"
+check "#3639 nor env" "$(runner_refused 'env grep -h result a.txt b.txt c.txt' 'env rtk grep -h result a.txt b.txt c.txt')"
+check "#3639 nor env with an assignment" "$(runner_refused 'env FOO=1 grep -c x README.md' 'env FOO=1 rtk grep -c x README.md')"
+check "#3639 nor sudo" "$(runner_refused 'sudo grep -h result a.txt b.txt c.txt' 'sudo rtk grep -h result a.txt b.txt c.txt')"
+check "#3639 nor rg behind an assignment, which rtk also sends to rtk grep" \
+  "$(runner_refused 'FOO=1 rg -n pattern src/file.sh' 'FOO=1 rtk grep -n pattern src/file.sh')"
+check "#3639 nor sudo rg" "$(runner_refused 'sudo rg -c x README.md' 'sudo rtk grep -c x README.md')"
+check "#3639 nor a prefixed grep after cd &&" "$(runner_refused 'cd /repo && FOO=1 grep x f' 'cd /repo && FOO=1 rtk grep x f')"
+check "#3639 nor after a rewritten git part" \
+  "$(runner_refused 'git status; env grep x f' 'rtk git status; env rtk grep x f')"
+# cat, head and tail land on rtk read behind the same prefixes, refused there already.
+check "#3639 a prefixed cat lands on rtk read, refused" "$(runner_refused 'FOO=1 cat c.txt' 'FOO=1 rtk read c.txt')"
+check "#3639 and a prefixed tail" "$(runner_refused 'sudo tail README.md' 'sudo rtk read README.md')"
+# rtk can print the list on one line too.
+printf 'Config: /stub/config.toml\n\n[hooks]\nexclude_commands = ["rg", "grep"]\n' > "$TMPROOT/config"
+check "#3639 a list printed on one line is read too" \
+  "$(runner_refused 'FOO=1 grep x f' 'FOO=1 rtk grep x f')"
+# The controls (L159). The list, not the word grep, is what refuses: with the installed list a
+# rewrite to any other subcommand keeps its saving, and grep as an ARGUMENT is not a subcommand.
+installed_list_config
+check "#3639 the control: with the list installed, git status keeps its rewrite" "$(kept_as 'rtk git status')"
+check "#3639 nor does grep as an argument of another subcommand refuse" "$(kept_as 'rtk git log --grep x')"
+check "#3639 nor a prefixed command rtk was not told to leave alone" "$(kept_as 'FOO=1 rtk ls -la')"
+# With rtk's list empty, as on an rtk with no config file, rtk grep stays the rewrite rtk chose,
+# Dan's #1419 decision for a grep standing alone. So the refusal follows the one list, and taking
+# grep off it gives the rewrite back.
+rm -f "$TMPROOT/config"
+check "#3639 the control: with rtk's list empty, the same rewrite is kept" \
+  "$(kept_as 'FOO=1 rtk grep -h result a.txt b.txt c.txt')"
+printf 'Config: /stub/config.toml\n\n[filters]\nexclude_commands = ["grep"]\n\n[hooks]\nexclude_commands = []\n' > "$TMPROOT/config"
+check "#3639 and the same name under another table does not count as rtk's list" \
+  "$(kept_as 'FOO=1 rtk grep x f')"
+rm -f "$TMPROOT/config"
+
+# End to end against the REAL rtk: a config holding the shared list, the measured shapes, through
+# the real hook. The control proves this rtk still produces the shape, or the green measures nothing.
+if ! command -v rtk >/dev/null 2>&1; then
+  echo "note: rtk is not installed on this Mac, so the #3639 end to end check did not run."
+else
+  FX3639="$TMPROOT/fx3639"; mkdir -p "$FX3639/home"
+  printf 'result: 1\n' > "$FX3639/a.txt"; printf 'result: 2\n' > "$FX3639/b.txt"; printf 'other\n' > "$FX3639/c.txt"
+  # Where rtk reads its config is asked of rtk itself, as the sync does (L620).
+  cfg3639="$(HOME="$FX3639/home" rtk config 2>/dev/null | awk 'NR == 1 && sub(/^Config: /, "") { print }')"
+  if [ -z "$cfg3639" ]; then
+    check "#3639 rtk says where its config lives" "rtk config printed no Config: line"
+  else
+    mkdir -p "$(dirname "$cfg3639")"
+    { printf '[hooks]\nexclude_commands = ['
+      grep -vE '^[[:space:]]*(#|$)' "$DIR/../rtk-exclude-commands.txt" | sed 's/.*/"&"/' | paste -s -d, -
+      printf ']\n'; } > "$cfg3639"
+    ctl3639="$(HOME="$FX3639/home" rtk rewrite 'grep -h result a.txt b.txt c.txt' 2>/dev/null)"
+    [ -z "$ctl3639" ] \
+      && check "#3639 the control: the real rtk leaves a bare grep alone under the shared list" ok \
+      || check "#3639 the control: the real rtk leaves a bare grep alone under the shared list" "it rewrote to [$ctl3639]"
+    for cmd3639 in 'FOO=1 grep -h result a.txt b.txt c.txt' 'VAR=1 OTHER=2 grep -h result a.txt b.txt c.txt' \
+                   'env grep -h result a.txt b.txt c.txt' 'env FOO=1 rg -h result a.txt b.txt c.txt' \
+                   'sudo grep -h result a.txt b.txt c.txt'; do
+      shape3639="$(HOME="$FX3639/home" rtk rewrite "$cmd3639" 2>/dev/null)"
+      case "$shape3639" in
+        *"rtk grep"*) ;;
+        *) echo "note: this rtk ($(rtk --version 2>/dev/null)) no longer rewrites [$cmd3639] to rtk grep (got [$shape3639]), so its check below proves less than it did." ;;
+      esac
+      payload "$cmd3639"
+      sub3639="$(HOME="$FX3639/home" bash "$H" < "$TMPROOT/payload.json" 2>/dev/null | rewritten_to)"
+      [ -z "$sub3639" ] \
+        && check "#3639 the real hook runs [$cmd3639] as written" ok \
+        || check "#3639 the real hook runs [$cmd3639] as written" "it rewrote to [$sub3639]"
+    done
+    # And what runs then hands back the matches with grep's own exit code. sudo is never run here.
+    out3639="$(cd "$FX3639" && HOME="$FX3639/home" bash -c 'FOO=1 grep -h result a.txt b.txt c.txt' 2>&1)"; rc3639=$?
+    [ "$rc3639" -eq 0 ] && [ "$out3639" = "$(printf 'result: 1\nresult: 2')" ] \
+      && check "#3639 the prefixed grep, run as written, prints the matches" ok \
+      || check "#3639 the prefixed grep, run as written, prints the matches" "exit $rc3639: $out3639"
   fi
 fi
 
