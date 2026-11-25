@@ -513,6 +513,318 @@ grep -q "synced-trees.sh" <<< "$out_wide" \
   || check "#2754 and the run names the list it could not read" "out=$out_wide"
 
 # ---------------------------------------------------------------------------
+# A list of files, for the sync to ask about what a send is about to publish
+# (claude-config#3465). On 2026-11-22 a send pushed 126 scratch files to main,
+# 100 of them naming one Mac's home, and this check ran only afterwards, on
+# GitHub. The send now asks first, and it asks about the
+# files it is sending rather than walking the tree on every change, so the check
+# takes a list: --files0-from <file>, NUL separated paths relative to the root.
+#
+# The list narrows WHICH files are read and nothing else. A listed file is read
+# exactly when the whole tree walk would read it, by the same three rules, so
+# the send and main's own run cannot disagree about a file (L370). That is held
+# below by asking both forms about one tree holding every kind of place.
+# ---------------------------------------------------------------------------
+list_of() { # list_of <list file> <path>...  -> writes the paths NUL separated
+  local f="$1" p
+  shift
+  : > "$f"
+  for p in "$@"; do printf '%s\0' "$p" >> "$f"; done
+}
+LST="$(tree listed)"
+mkdir -p "$LST/hooks/run/cache-base" "$LST/state"
+printf 'cwd %s/projects/x\n' "$BADHOME" > "$LST/hooks/run/cache-base/entry.json"
+printf 'echo clean\n' > "$LST/hooks/clean.sh"
+printf 'elsewhere %s/notes\n' "$BADHOME" > "$LST/hooks/untouched.sh"
+printf 'note %s/x\n' "$BADHOME" > "$LST/state/local.md"
+printf '{"hooks":{}}\n' > "$LST/settings.json"
+LISTF="$TMPROOT/listed.files"
+
+list_of "$LISTF" hooks/run/cache-base/entry.json hooks/clean.sh
+out_l1="$(bash "$CHECK" --files0-from "$LISTF" "$LST" 2>&1)"
+code_l1=$?
+[ "$code_l1" -eq 1 ] && grep -q "hooks/run/cache-base/entry.json:1:" <<< "$out_l1" \
+  && check "#3465 a listed file naming a home folder fails the check, with its line" ok \
+  || check "#3465 a listed file naming a home folder fails the check, with its line" "exit=$code_l1 out=$out_l1"
+grep -q "untouched.sh" <<< "$out_l1" \
+  && check "#3465 and a file that was not listed is not read" "out=$out_l1" \
+  || check "#3465 and a file that was not listed is not read" ok
+
+# The control for the two above: the same tree walked whole does report the file the list left out,
+# so the list is what kept it from being read, not the file being clean.
+out_l1w="$(bash "$CHECK" "$LST" 2>&1)"
+code_l1w=$?
+[ "$code_l1w" -eq 1 ] && grep -q "hooks/untouched.sh:1:" <<< "$out_l1w" \
+  && check "#3465 control: the whole tree walk reports the file the list left out" ok \
+  || check "#3465 control: the whole tree walk reports the file the list left out" "exit=$code_l1w out=$out_l1w"
+
+list_of "$LISTF" hooks/clean.sh
+out_l2="$(bash "$CHECK" --files0-from "$LISTF" "$LST" 2>&1)"
+code_l2=$?
+[ "$code_l2" -eq 0 ] \
+  && check "#3465 a list of clean files passes in a tree that holds a failing file elsewhere" ok \
+  || check "#3465 a list of clean files passes in a tree that holds a failing file elsewhere" "exit=$code_l2 out=$out_l2"
+grep -q "1 of 1 listed file" <<< "$out_l2" \
+  && check "#3465 and the pass says how many of the listed files it read" ok \
+  || check "#3465 and the pass says how many of the listed files it read" "out=$out_l2"
+
+# Listed files the whole tree walk never reads (a folder the sync does not mirror, settings.json)
+# are not read here either. That is a pass, since the list was the caller's and none of it was this
+# check's to judge, and it is said as that rather than as files found clean (L11).
+list_of "$LISTF" state/local.md settings.json
+out_l3="$(bash "$CHECK" --files0-from "$LISTF" "$LST" 2>&1)"
+code_l3=$?
+[ "$code_l3" -eq 0 ] \
+  && check "#3465 listed files outside the synced set are not judged" ok \
+  || check "#3465 listed files outside the synced set are not judged" "exit=$code_l3 out=$out_l3"
+grep -q "none of the 2 listed file" <<< "$out_l3" \
+  && check "#3465 and the run says it read none of them, not that they were clean" ok \
+  || check "#3465 and the run says it read none of them, not that they were clean" "out=$out_l3"
+grep -q "state/local.md" <<< "$out_l1w" \
+  && check "#3465 control: the whole tree walk does not read that folder either" "out=$out_l1w" \
+  || check "#3465 control: the whole tree walk does not read that folder either" ok
+
+# A list that cannot answer the question is a failure, never a pass (L98): nothing listed, a list
+# that is not there, and a listed file that is not there are each a scan of something other than
+# what was asked about.
+: > "$LISTF"
+out_l4="$(bash "$CHECK" --files0-from "$LISTF" "$LST" 2>&1)"
+code_l4=$?
+[ "$code_l4" -eq 2 ] && grep -q "names no files" <<< "$out_l4" \
+  && check "#3465 an empty list is refused, not reported clean" ok \
+  || check "#3465 an empty list is refused, not reported clean" "exit=$code_l4 out=$out_l4"
+out_l5="$(bash "$CHECK" --files0-from "$TMPROOT/no-such-list" "$LST" 2>&1)"
+code_l5=$?
+[ "$code_l5" -eq 2 ] && grep -q "no-such-list" <<< "$out_l5" \
+  && check "#3465 a list file that is not there is refused" ok \
+  || check "#3465 a list file that is not there is refused" "exit=$code_l5 out=$out_l5"
+list_of "$LISTF" hooks/clean.sh hooks/gone.sh
+out_l6="$(bash "$CHECK" --files0-from "$LISTF" "$LST" 2>&1)"
+code_l6=$?
+[ "$code_l6" -eq 2 ] && grep -q "hooks/gone.sh" <<< "$out_l6" \
+  && check "#3465 a listed file that is not there is refused, by name" ok \
+  || check "#3465 a listed file that is not there is refused, by name" "exit=$code_l6 out=$out_l6"
+out_l7="$(bash "$CHECK" --files0-from 2>&1)"
+code_l7=$?
+[ "$code_l7" -eq 2 ] && grep -q "needs the file" <<< "$out_l7" \
+  && check "#3465 the option with no list file is refused" ok \
+  || check "#3465 the option with no list file is refused" "exit=$code_l7 out=$out_l7"
+
+# The two forms agree. One tree holding a failing line in every kind of place: read (a hook, a mod,
+# a real skill, a folder named like a platform folder inside a real skill, a rule file), left out (a
+# plugin skill, a platform folder, a folder the sync does not mirror, bytecode, a conflict copy,
+# node_modules), excused by the marker, and the two placeholder rules. Listing every file in it must
+# report exactly the lines the walk reports.
+EQ="$(tree agree)"
+mkdir -p "$EQ/hooks/__pycache__" "$EQ/hooks/node_modules/pkg" "$EQ/mods/demo" "$EQ/state" \
+         "$EQ/skills/$PLATFORM_NAME/bucket-1" "$EQ/skills/$PLUGIN_NAME" "$EQ/skills/demo/$PLUGIN_NAME" \
+         "$EQ/skills/demo/$PLATFORM_NAME"
+printf 'a %s/a\n' "$BADHOME" > "$EQ/hooks/a.sh"
+printf 'b %s/b\n' "$BADHOME" > "$EQ/mods/demo/b.ts"
+printf 'c %s/c\n' "$BADHOME" > "$EQ/skills/demo/SKILL.md"
+printf 'd %s/d\n' "$BADHOME" > "$EQ/skills/demo/$PLATFORM_NAME/d.md"
+printf 'e %s/e\n' "$BADHOME" > "$EQ/CLAUDE.md"
+printf 'f %s/f\n' "$BADHOME" > "$EQ/skills/$PLUGIN_NAME/SKILL.md"
+printf 'g %s/g\n' "$BADHOME" > "$EQ/skills/demo/$PLUGIN_NAME/g.md"
+printf 'h %s/h\n' "$BADHOME" > "$EQ/skills/$PLATFORM_NAME/bucket-1/h.md"
+printf 'i %s/i\n' "$BADHOME" > "$EQ/state/i.md"
+printf 'j %s/j\n' "$BADHOME" > "$EQ/hooks/__pycache__/j.txt"
+printf 'k %s/k\n' "$BADHOME" > "$EQ/hooks/k.pyc"
+printf 'l %s/l\n' "$BADHOME" > "$EQ/hooks/l.sh.conflict-othermac"
+printf 'm %s/m\n' "$BADHOME" > "$EQ/hooks/node_modules/pkg/m.js"
+printf 'n %s/n claude-sync-allow-home-path\n' "$BADHOME" > "$EQ/hooks/n.sh"
+printf 'o names the %s token in prose\n' "__CLAUDE""_HOME__" > "$EQ/hooks/o.sh"
+printf 'p %s/p\n' "<""HOME>" > "$EQ/hooks/p.sh"
+printf 'q clean\n' > "$EQ/agents/q.md"
+EQLIST="$TMPROOT/agree.files"
+( cd "$EQ" && find . -type f | sed 's|^\./||' | sort | tr '\n' '\0' ) > "$EQLIST"
+eq_listed="$(tr '\0' '\n' < "$EQLIST" | grep -c . || true)"
+out_eqw="$(bash "$CHECK" "$EQ" 2>&1)"
+code_eqw=$?
+out_eql="$(bash "$CHECK" --files0-from "$EQLIST" "$EQ" 2>&1)"
+code_eql=$?
+eq_w="$(grep '^  ' <<< "$out_eqw" | sort)"
+eq_l="$(grep '^  ' <<< "$out_eql" | sort)"
+[ "$code_eqw" -eq 1 ] && [ "$(grep -c . <<< "$eq_w")" -eq 7 ] \
+  && check "#3465 control: the walk reports the seven lines in the places it reads" ok \
+  || check "#3465 control: the walk reports the seven lines in the places it reads" "exit=$code_eqw out=$out_eqw"
+[ "$code_eql" -eq "$code_eqw" ] && [ -n "$eq_l" ] && [ "$eq_l" = "$eq_w" ] \
+  && check "#3465 listing every file ($eq_listed of them) reports exactly the lines the walk reports" ok \
+  || check "#3465 listing every file ($eq_listed of them) reports exactly the lines the walk reports" "walk exit=$code_eqw list exit=$code_eql walk=[$eq_w] list=[$eq_l]"
+
+# ---------------------------------------------------------------------------
+# A matching line far longer than anybody reads (claude-config#3479). On 2026-11-22 a send
+# published 126 scratch files whose matching lines ran to 1.6 MB each, and the check carried every
+# one of them whole through the shell and printed it whole: 11.5 MB of report, and 6 to 10 seconds
+# where the bare search took under one. A long line is now reported as the part around what was
+# found, and it is judged by exactly the rules a short one is.
+#
+# So every rule is asked here about a line of 100,000 bytes or more (1.5 MB where the size itself
+# is the point), with what it looks for far past any cut. A
+# line cut BEFORE it is judged passes everything that sat below the cut, which is the fault this
+# change could introduce, and a short fixture can never show it (L101). The reports go to files and
+# the failure texts give sizes, never the output: a megabyte in a failure line buries the sentence
+# saying what went wrong (L445).
+# ---------------------------------------------------------------------------
+filler() { # filler <bytes>  -> that many bytes of plain words on one line, with no newline
+  LC_ALL=C awk -v n="$1" 'BEGIN { w = "lorem ipsum dolor sit amet consectetur adipiscing "; l = length(w)
+    for (i = l; i <= n; i += l) printf "%s", w
+    printf "%s", substr(w, 1, n % l) }'
+}
+longest_line() { LC_ALL=C awk '{ if (length($0) > m) m = length($0) } END { print m + 0 }' "$1"; }
+size_of() { wc -c < "$1" | tr -d ' '; }
+HALF=750000   # the size that happened: the first fixture and the allowance are asked at 1.5 MB
+FAR=100000    # far past any cut, and a fifth of a megabyte a run cheaper, for the rest
+LTOK="__CLAUDE""_HOME__"
+LANG_TOK="<""HOME>"
+
+LONG="$(tree long)"
+{ printf 'a short first line\n'; filler "$HALF"; printf 'bash %s/.claude/x.sh ' "$BADHOME"; filler "$HALF"; printf '\n'; } > "$LONG/hooks/long.txt"
+LOUT="$TMPROOT/long.out"
+bash "$CHECK" "$LONG" > "$LOUT" 2>&1
+code_long=$?
+long_line_bytes="$(LC_ALL=C awk 'NR == 2 { print length($0) }' "$LONG/hooks/long.txt")"
+long_widest="$(longest_line "$LOUT")"
+[ "$code_long" -eq 1 ] \
+  && check "#3479 a file whose home path sits 750,000 bytes into a line still fails" ok \
+  || check "#3479 a file whose home path sits 750,000 bytes into a line still fails" "exit=$code_long, report of $(size_of "$LOUT") bytes"
+grep -q "hooks/long.txt:2:" "$LOUT" \
+  && check "#3479 and the report names the file and the line" ok \
+  || check "#3479 and the report names the file and the line" "exit=$code_long, report of $(size_of "$LOUT") bytes"
+[ "$long_widest" -le 1000 ] \
+  && check "#3479 a line of $long_line_bytes bytes is reported as a part of it, never whole" ok \
+  || check "#3479 a line of $long_line_bytes bytes is reported as a part of it, never whole" "the longest line of the report is $long_widest bytes, and the whole report $(size_of "$LOUT")"
+grep -q "$BADHOME/.claude/x.sh" "$LOUT" \
+  && check "#3479 the part reported is the part holding what was found" ok \
+  || check "#3479 the part reported is the part holding what was found" "the home path is not in a report of $(size_of "$LOUT") bytes whose longest line is $long_widest"
+grep -Eq "hooks/long.txt:2:.*\[line cut: bytes [0-9]+ to [0-9]+ of $long_line_bytes shown\]$" "$LOUT" \
+  && check "#3479 and it says the line was cut, which bytes are shown and how long the line is" ok \
+  || check "#3479 and it says the line was cut, which bytes are shown and how long the line is" "no such note in a report of $(size_of "$LOUT") bytes whose longest line is $long_widest"
+
+# The claim under all of it, measured where it can be seen without a stopwatch: a shell that holds
+# a line prints it in its own trace, so the trace of a run over a 1.5 MB line is megabytes if the
+# line went through the shell and a few thousand bytes if it did not. A timing would say the same
+# thing only on a quiet machine, and this one is never quiet when the suites run.
+bash -x "$CHECK" "$LONG" > /dev/null 2> "$TMPROOT/long.trace"
+trace_bytes="$(size_of "$TMPROOT/long.trace")"
+[ "$trace_bytes" -gt 0 ] && [ "$trace_bytes" -lt 200000 ] \
+  && check "#3479 the long line never passes through the shell (its trace stays small)" ok \
+  || check "#3479 the long line never passes through the shell (its trace stays small)" "the shell's own trace of the run is $trace_bytes bytes, for a line of $long_line_bytes"
+
+# The listed form is the one a send uses, and it must report what the walk reports here too.
+printf 'hooks/long.txt\0' > "$TMPROOT/long.files"
+bash "$CHECK" --files0-from "$TMPROOT/long.files" "$LONG" > "$LOUT.listed" 2>&1
+code_long_listed=$?
+grep '^  ' "$LOUT" > "$LOUT.lines"
+grep '^  ' "$LOUT.listed" > "$LOUT.listed.lines"
+[ "$code_long_listed" -eq 1 ] && [ -s "$LOUT.lines" ] && cmp -s "$LOUT.lines" "$LOUT.listed.lines" \
+  && check "#3479 the listed form reports the long line exactly as the walk does" ok \
+  || check "#3479 the listed form reports the long line exactly as the walk does" "walk exit=$code_long list exit=$code_long_listed, reports of $(size_of "$LOUT") and $(size_of "$LOUT.listed") bytes"
+
+# A line no longer than the cut is printed as it always was, byte for byte, and one byte more is
+# enough to cut it. 300 is the length the check cuts to.
+EDGE="$(tree edge)"
+edge_lead="bash $BADHOME/.claude/x.sh "
+{ printf '%s' "$edge_lead"; filler "$((300 - ${#edge_lead}))"; printf '\n'
+  printf '%s' "$edge_lead"; filler "$((301 - ${#edge_lead}))"; printf '\n'; } > "$EDGE/hooks/edge.txt"
+bash "$CHECK" "$EDGE" > "$TMPROOT/edge.out" 2>&1
+code_edge=$?
+edge_whole="  $EDGE/hooks/edge.txt:1:$(sed -n 1p "$EDGE/hooks/edge.txt")"
+[ "$code_edge" -eq 1 ] && grep -Fxq -- "$edge_whole" "$TMPROOT/edge.out" \
+  && check "#3479 a line of exactly 300 bytes is reported whole, byte for byte" ok \
+  || check "#3479 a line of exactly 300 bytes is reported whole, byte for byte" "exit=$code_edge out=$(cat "$TMPROOT/edge.out")"
+grep -Eq "hooks/edge.txt:2:.*\[line cut: bytes 1 to 300 of 301 shown\]$" "$TMPROOT/edge.out" \
+  && check "#3479 and a line of 301 bytes is cut to 300" ok \
+  || check "#3479 and a line of 301 bytes is cut to 300" "exit=$code_edge out=$(cat "$TMPROOT/edge.out")"
+
+# What is refused does not move. The marker still excuses its line from 200,000 bytes away: the
+# home path is at the start, where any cut keeps it, and the marker at the far end, where a cut
+# loses it.
+LMARK="$(tree longmark)"
+{ printf 'bash %s/.claude/x.sh ' "$BADHOME"; filler "$FAR"; filler "$FAR"; printf ' claude-sync-allow-home-path\n'; } > "$LMARK/hooks/long.txt"
+bash "$CHECK" "$LMARK" > "$TMPROOT/longmark.out" 2>&1
+code_lmark=$?
+[ "$code_lmark" -eq 0 ] \
+  && check "#3479 the marker at the far end of a long line still excuses it" ok \
+  || check "#3479 the marker at the far end of a long line still excuses it" "exit=$code_lmark, report of $(size_of "$TMPROOT/longmark.out") bytes"
+
+# The placeholder in front of a path, 100,000 bytes after a substitution that closed: allowed.
+LTOKTREE="$(tree longtoken)"
+{ printf 'A="${VAR}" '; filler "$FAR"; printf ' %s/skills/x/panel.js\n' "$LTOK"; } > "$LTOKTREE/hooks/long.txt"
+bash "$CHECK" "$LTOKTREE" > "$TMPROOT/longtok.out" 2>&1
+code_ltok=$?
+[ "$code_ltok" -eq 0 ] \
+  && check "#3479 the placeholder fronting a path, far into a long line, is left alone" ok \
+  || check "#3479 the placeholder fronting a path, far into a long line, is left alone" "exit=$code_ltok, report of $(size_of "$TMPROOT/longtok.out") bytes"
+# The same placeholder 100,000 bytes after a substitution that never closed: it is inside it.
+{ printf 'A="${VAR '; filler "$FAR"; printf ' %s/skills/x/panel.js\n' "$LTOK"; } > "$LTOKTREE/hooks/long.txt"
+bash "$CHECK" "$LTOKTREE" > "$TMPROOT/longtok.out" 2>&1
+code_ltok2=$?
+[ "$code_ltok2" -eq 1 ] && grep -q "not standing in front of a path" "$TMPROOT/longtok.out" && [ "$(longest_line "$TMPROOT/longtok.out")" -le 1000 ] \
+  && check "#3479 a substitution opened 100,000 bytes before the placeholder is still refused, and cut" ok \
+  || check "#3479 a substitution opened 100,000 bytes before the placeholder is still refused, and cut" "exit=$code_ltok2, report of $(size_of "$TMPROOT/longtok.out") bytes, longest line $(longest_line "$TMPROOT/longtok.out")"
+# And the placeholder as the last thing on a long line, with nothing after it at all.
+{ filler "$FAR"; filler "$FAR"; printf ' the %s\n' "$LTOK"; } > "$LTOKTREE/hooks/long.txt"
+bash "$CHECK" "$LTOKTREE" > "$TMPROOT/longtok.out" 2>&1
+code_ltok3=$?
+[ "$code_ltok3" -eq 1 ] && grep -q "not standing in front of a path" "$TMPROOT/longtok.out" && grep -Eq "the ${LTOK} \[line cut: " "$TMPROOT/longtok.out" \
+  && check "#3479 the placeholder ending a long line is refused, and the part shown holds it" ok \
+  || check "#3479 the placeholder ending a long line is refused, and the part shown holds it" "exit=$code_ltok3, report of $(size_of "$TMPROOT/longtok.out") bytes, longest line $(longest_line "$TMPROOT/longtok.out")"
+
+# The hand substituted placeholder, in the middle of a long line.
+LANGLE="$(tree longangle)"
+{ filler "$FAR"; printf ' cat %s/notes.md ' "$LANG_TOK"; filler "$FAR"; printf '\n'; } > "$LANGLE/hooks/long.txt"
+bash "$CHECK" "$LANGLE" > "$TMPROOT/longangle.out" 2>&1
+code_langle=$?
+[ "$code_langle" -eq 1 ] && grep -q "hand substituted home placeholder" "$TMPROOT/longangle.out" && grep -Fq "cat ${LANG_TOK}/notes.md" "$TMPROOT/longangle.out" \
+   && [ "$(longest_line "$TMPROOT/longangle.out")" -le 1000 ] \
+  && check "#3479 the hand substituted placeholder far into a long line is refused, cut around it" ok \
+  || check "#3479 the hand substituted placeholder far into a long line is refused, cut around it" "exit=$code_langle, report of $(size_of "$TMPROOT/longangle.out") bytes, longest line $(longest_line "$TMPROOT/longangle.out")"
+
+# The live config allowance. This Mac's own config path, twice on one long line, passes in its own
+# live tree; another Mac's home 750,000 bytes further along the same line does not, and the part
+# shown is the other Mac's path, not the first portable one.
+LLIVE="$(tree longlive)"
+{ printf 'bash %s/hooks/a.sh ' "$LLIVE"; filler "$HALF"; printf ' bash %s/hooks/b.sh ' "$LLIVE"; filler "$HALF"; printf '\n'; } > "$LLIVE/hooks/long.txt"
+CLAUDE_HOME_PATH_ROOTS="$TMPROOT" CLAUDE_HOME="$LLIVE" bash "$CHECK" "$LLIVE" > "$TMPROOT/longlive.out" 2>&1
+code_llive=$?
+[ "$code_llive" -eq 0 ] \
+  && check "#3479 this Mac's own config path, twice on a long line, passes in its live tree" ok \
+  || check "#3479 this Mac's own config path, twice on a long line, passes in its live tree" "exit=$code_llive, report of $(size_of "$TMPROOT/longlive.out") bytes"
+{ printf 'bash %s/hooks/a.sh ' "$LLIVE"; filler "$HALF"; printf ' bash %s/hooks/b.sh ' "$LLIVE"; filler "$HALF"
+  printf ' bash %s/other-mac/.claude/hooks/other.sh ' "$TMPROOT"; filler 4000; printf '\n'; } > "$LLIVE/hooks/long.txt"
+CLAUDE_HOME_PATH_ROOTS="$TMPROOT" CLAUDE_HOME="$LLIVE" bash "$CHECK" "$LLIVE" > "$TMPROOT/longlive.out" 2>&1
+code_llive2=$?
+[ "$code_llive2" -eq 1 ] && grep -q "other-mac/.claude/hooks/other.sh" "$TMPROOT/longlive.out" && [ "$(longest_line "$TMPROOT/longlive.out")" -le 1000 ] \
+  && check "#3479 another Mac's home at the far end of that line is refused, and is the part shown" ok \
+  || check "#3479 another Mac's home at the far end of that line is refused, and is the part shown" "exit=$code_llive2, report of $(size_of "$TMPROOT/longlive.out") bytes, longest line $(longest_line "$TMPROOT/longlive.out")"
+
+# The step that judges each line is a separate program, and a judge that broke must never read as
+# a clean tree: nothing it did not judge can be called clean (L98). Two ways it can break, each
+# with a stand in put first on the path: one that fails, and one that ends well having said
+# nothing. The stand in is only itself when asked to judge, so nothing else the check runs breaks.
+REAL_AWK="$(command -v awk)"
+mkdir -p "$TMPROOT/awk-fails" "$TMPROOT/awk-silent"
+printf '#!/bin/sh\n[ -n "${HP_TOKEN:-}" ] && exit 3\nexec "%s" "$@"\n' "$REAL_AWK" > "$TMPROOT/awk-fails/awk"
+printf '#!/bin/sh\n[ -n "${HP_TOKEN:-}" ] && { cat > /dev/null; exit 0; }\nexec "%s" "$@"\n' "$REAL_AWK" > "$TMPROOT/awk-silent/awk"
+chmod +x "$TMPROOT/awk-fails/awk" "$TMPROOT/awk-silent/awk"
+out_jf="$(PATH="$TMPROOT/awk-fails:$PATH" bash "$CHECK" "$BAD" 2>&1)"
+code_jf=$?
+[ "$code_jf" -eq 2 ] && grep -q "could not be judged" <<< "$out_jf" \
+  && check "#3479 a judging step that fails is exit 2 and says so, never a clean tree" ok \
+  || check "#3479 a judging step that fails is exit 2 and says so, never a clean tree" "exit=$code_jf out=$out_jf"
+out_js="$(PATH="$TMPROOT/awk-silent:$PATH" bash "$CHECK" "$BAD" 2>&1)"
+code_js=$?
+[ "$code_js" -eq 2 ] && grep -q "could not be judged" <<< "$out_js" \
+  && check "#3479 a judging step that ends well having judged nothing is exit 2 too" ok \
+  || check "#3479 a judging step that ends well having judged nothing is exit 2 too" "exit=$code_js out=$out_js"
+out_jc="$(PATH="$TMPROOT/awk-silent:$PATH" bash "$CHECK" "$GOOD" 2>&1)"
+code_jc=$?
+[ "$code_jc" -eq 2 ] \
+  && check "#3479 and that holds on a tree with nothing to refuse, where silence would read as clean" ok \
+  || check "#3479 and that holds on a tree with nothing to refuse, where silence would read as clean" "exit=$code_jc out=$out_jc"
+
+# ---------------------------------------------------------------------------
 # The real tree this file lives in, which is the whole point. It runs LAST, so
 # by the time it reports clean the scanner has been watched failing four ways.
 # ---------------------------------------------------------------------------
@@ -553,6 +865,20 @@ if [ -n "$CO" ]; then
   else
     check "#1734 and it read every file the repository holds in the synced folders" "lib/repo-files.sh could not list $CO, so what the check should have read is unknown"
   fi
+  # The same checkout asked the way a send asks (claude-config#3465): every file under payload
+  # listed. It must give the walk's verdict and read at least as many of the repository's files, or
+  # a send would be held over a tree main's own run passes, or let through one it fails (L147).
+  COLIST="$TMPROOT/checkout.files"
+  ( cd "$CO/payload" && find . -type f | sed 's|^\./||' | tr '\n' '\0' ) > "$COLIST"
+  out_col="$(CLAUDE_HOME="$TMPROOT/no-live-config" bash "$CHECK" --files0-from "$COLIST" "$CO/payload" 2>&1)"
+  code_col=$?
+  [ "$code_col" -eq "$code_co" ] \
+    && check "#3465 the checkout's files, listed, get the verdict the walk gives" ok \
+    || check "#3465 the checkout's files, listed, get the verdict the walk gives" "walk exit=$code_co list exit=$code_col out=$out_col"
+  read_l="$(sed -n 's/^check-home-paths: \([0-9][0-9]*\) of [0-9][0-9]* listed file(s) .*/\1/p' <<< "$out_col")"
+  [ -n "${co_n:-}" ] && [ "${co_n:-0}" -gt 0 ] && [ -n "$read_l" ] && [ "$read_l" -ge "$co_n" ] \
+    && check "#3465 and the listed form read every file the repository holds in the synced folders" ok \
+    || check "#3465 and the listed form read every file the repository holds in the synced folders" "the repository lists ${co_n:-no count} there and the listed form read ${read_l:-no count}: $out_col"
 else
   echo "  (no claude-config checkout above $DIR, so only the scan above ran; the checkout form runs where the repository is)"
 fi

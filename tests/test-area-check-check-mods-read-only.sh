@@ -87,9 +87,9 @@ lines="$(named_fact LINES)"
 # by file, line and variable, with the variable the environment names its program by (#3154). An
 # edit above one of these lines moves it, and the suite then names the line it is now on.
 KNOWN_BYVALUE='tools/check-mods.sh:118 $bin CLAUDE_BIN
-tools/check-mods.sh:521 $tsc TSC_BIN
-tools/check-mods.sh:644 $bin CLAUDE_BIN
-tools/check-mods.sh:665 $bin CLAUDE_BIN
+tools/check-mods.sh:526 $tsc TSC_BIN
+tools/check-mods.sh:649 $bin CLAUDE_BIN
+tools/check-mods.sh:670 $bin CLAUDE_BIN
 tools/lib/pinned-compiler.sh:323 $PINNED_TS_TEST_BEFORE_REMOVE PINNED_TS_TEST_BEFORE_REMOVE
 tools/lib/pinned-compiler.sh:361 $PINNED_TS_TEST_BEFORE_LINK PINNED_TS_TEST_BEFORE_LINK
 payload/hooks/lib/load-average.sh:32 $cmd LOAD_AVERAGE_CMD'

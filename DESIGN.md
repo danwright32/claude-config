@@ -2762,6 +2762,166 @@ stand in answering per commit, with a one second timer and every run ending on t
 for; `tests/test-hook-suite-rerun.sh` and `hooks/test-sync-stuck-notice.sh` hold the unverified
 record and its notice.
 
+## A send that fails the home path check is held whole (#3465)
+
+On 2026-11-22 at 3:44 PM ET a send from one Mac pushed 126 scratch files that a measuring session
+had written into folders named `run` under that Mac's config. 100 of them named its home folder, so
+`hooks/check-home-paths.sh` failed in main's own run, and in every pull request brought up to date
+with main, until 4:22 PM ET. Nothing had stopped the push: the check ran only on GitHub, after it.
+These choices were made by the session that built the fix, not by Dan, and are his to change.
+
+- **A third scan in the existing chain.** `scan_home_paths` runs at the end of
+  `stage_local_to_payload`, after `scan_secrets` and `scan_work_names`, with their contract: the
+  refusal is written to `.send-refused` (causes `home-paths` and `home-paths-unjudged`), then the
+  send dies, or on a sync hands back so receiving still works (#947). Every send route passes
+  through that function. Ruled out: checking the live config before staging, because the payload
+  after the placeholder is written is what main's run reads.
+- **One implementation of the rule (L370).** The send runs the check itself, handed a list through
+  a new `--files0-from` option that reads a listed file exactly when its tree walk would. An empty
+  or unreadable list, or a listed file that is missing, exits 2, never a pass. The send unsets
+  `CLAUDE_HOME_PATH_ROOTS`, the check's seam for its own suite, so it judges by the default roots
+  as main's run does.
+- **Only the files the send carries.** Payload paths that differ from the clone's last commit, new
+  ones included, plus payload paths changed by commits the upstream lacks (with no upstream set,
+  commits no remote branch holds); without git, the whole payload. A failing file main already
+  holds is not this send's to answer for, so it never holds an unrelated send, and a send that
+  removes it goes through. The names travel NUL separated (`-z`, `find -print0`) into the list,
+  because without `-z` git C quotes a name holding a double quote, a backslash or a control
+  character whatever `core.quotePath` says, and a reader by lines dropped exactly those files (found
+  in review of #3483, reproduced by the suite before the fix).
+- **The whole send is held.** A send is one commit, and the other Mac mirrors what the payload
+  holds: a hook without the file it reads, or half a change, would arrive with nothing to say which
+  half. Ruled out: holding only the failing files and sending the rest. It is the alternative most
+  worth Dan's look, since it would keep unrelated edits moving while scratch sits in the config.
+- **No override.** A missing check, or one that could not run, refuses as `home-paths-unjudged`.
+  The check's own `claude-sync-allow-home-path` marker, visible on the line it excuses, is the only
+  exception, and it is the check's, not the send's.
+- **Not a hot loop.** The watcher sends on every burst of edits, and a session writing scratch
+  makes one every few seconds. A standing hold is said in full once, then in one short line with
+  no desktop notice, until its files change, it clears or a day passes, through the
+  `.send-holds-told` store the send gate already keeps (#3179). A hold because the check could not
+  judge is said the same way, keyed on its reason. Every refusal is still counted. A session that
+  keeps adding NEW files changes the held set on each tick, so each tick says the hold in full
+  again, since what it names is new. It is still one hold, so since #3499 the desktop notice is
+  posted once and again only a day after the last: the record's fifth field keeps when a notice
+  was last posted, apart from the first field, which moves on every change, so a hold that never
+  stops changing is still posted once a day (L523). A sync the watcher reaches the hold through
+  posts no notice of its own for a hold already said (`SEND_REFUSED_QUIET`). Before #3499 each
+  tick of a growing hold posted a notice, which the first design had left to be said.
+- **What already went up is not read again (#3499).** After a send on top of a shared head still
+  being tested (#1398) this clone's commits sit beside the shared repo's copy of them until that
+  head is taken in, and listed from the upstream their files read as unsent on every send. The
+  list now starts where that send's record says this clone's unsent work starts, as
+  `unsent_commit_range` does. Every commit after that point and every uncommitted file is read as
+  before, and the suite holds both halves: the file already sent no longer holds a send, and a
+  commit not yet sent, and a file only staged, still do.
+- **What the staging leaves out is judged at the push (the review of #3518).** Leaving those
+  commits out is sound only while nothing puts them back on the shared branch, and the hold runs in
+  the staging, before the fetch. The review drove one state where something did: the other Mac
+  deletes a file those commits added, the clone holds an uncommitted edit, so
+  `adopt_sent_over_untested` returns without moving the commits onto what they became, the pull
+  replays them over the deletion, and the push sent the file back with exit 0. Three more were then
+  found and driven the same way: a send on top of a head still being tested, built from the merge
+  base because the fetch showed the record no longer holds; a merge made by hand; and a push onto a
+  shared branch moved back to before the send. Rejected: using the record only when the adopt step
+  will run and succeed. Whether it will is decided after the fetch (the gate's verdict, a rebase
+  that may fail, a record that stops holding), so the staging cannot know, and each state above is
+  a different route to the same result, so guarding routes one at a time leaves the next one open
+  (L247). Chosen: the state itself is judged. A staging that left commits out sets
+  `HOME_PATH_SKIPPED_SENT`, and the push of the branch in that run first hands the check every
+  payload file that differs between the shared branch as this clone last saw it and the commit
+  about to be put there (`home_paths_at_push`). Commits replayed over a shared repo that still
+  holds their files differ in nothing and are not read, which is what keeps the fault fixed for a
+  clone that is not clean. A staging that left nothing out has read every unsent file, as before
+  #3499. Still judged from the working copy of each file, as the staging does, never from the
+  commit's own blob.
+- **One push of the branch, pinned to the commit it was judged against (the second review of
+  #3518).** The check at the push judged "this push onto the branch as this clone last saw it",
+  and no push told git where the branch had to be standing, so what landed was the push onto
+  wherever the branch stood by then. The review moved the shared branch back between a sync's
+  fetch and its push, with a stand in for git on PATH, and the push put back the file the branch
+  had lost, exit 0. A push or a send typed before the next fetch did the same with no race, and
+  always had. So the five places that sent the branch (a sync, a send, a typed push, the send on
+  top of a head still being tested, the publish of merged rule files) now call one function,
+  `push_shared_branch`, which makes one kind of push: one commit by its id, onto one branch, with
+  `--force-with-lease=refs/heads/<branch>:<the commit judged against>`. git refuses it when the
+  shared branch is anywhere else, forward or back, and the shared repo refuses an update whose
+  old value is not the one it holds, so nothing is left between the judging and the landing.
+  Measured before choosing it (git 2.51.1, no `+` and no `--force`): a lease that matches lets a
+  push REPLACE the branch with a commit that does not hold it, where the same push with no lease
+  is refused. A lease is therefore only given to a push that cannot need it: the function tries a
+  push only when the commit to send descends from the commit the lease names, checked on the two
+  ids the push is then made with, and otherwise does not push at all (the caller says "was not
+  tried" and names a sync). The suite holds that with a clone that has fetched a newer shared
+  head and not taken it in, which is the one state where a lease alone overwrites. Rejected:
+  comparing `git ls-remote` just before the push, which narrows the window and leaves it open,
+  and costs a second round trip on every send. What a refused push says: a typed push fetches
+  and tells apart a branch that holds commits this clone lacks, one that was moved somewhere that
+  holds none, and a refusal of git's own; a sync says the push lands only where the fetch found
+  the branch and quotes git; a send goes to its reconcile, as a refused push always did. The same
+  move back had a second way in. A staging reads what this clone holds past the commit it last
+  saw the shared branch at, so a run that fetches and then sends onto a branch moved back from
+  there would put back files no staging read. An ordinary pull does not (git replays only what
+  was never in the shared branch), but the send on top of a head still being tested builds what
+  it sends from the merge base and did, on main too. So the staging records the commit it
+  measured from (`HOME_PATH_STAGED_FROM`), and a push onto a commit that does not hold it is read
+  at the push like one whose staging left files out. The suite reads the tool's code lines for a
+  push or a send-pack of the branch written anywhere outside the one function, however git is
+  spelled in front of it, and is itself put to the spellings the scan before it passed. It cannot
+  see a push run through eval or made by another program.
+- **A hold found at the push is one hold to the watcher (the second review of #3518).** The
+  staging of a send that left files to the push passes, and a staging that passes ended the
+  record of the notice already posted, so each watcher send held at the push posted another:
+  three sends, three notices. A staging that left files to the push now ends nothing
+  (`home_path_scan_passed`); the push says whether the hold is over. That also keeps the check's
+  kept output in place between one refusal and the next, and stops a send with nothing new to
+  commit, which never reaches a push, from ending a hold that still stands.
+- **A name holding a line break is held for the true cause (#3499).** The check prints such a name
+  across two lines, so reading its output a line at a time found no file and the send was held as
+  a check that could not judge. The send asks the check about each such name alone and names it on
+  one line with the break written as `\n`. `check-home-paths.sh` itself is unchanged.
+- **A missing check names its true cause.** On every Mac the tool runs from the clone it sends from,
+  so the check is the copy staged from this Mac's config, and its absence means this send would
+  remove it. Only a copy of the tool run elsewhere is told it is outside its checkout (L11).
+- **Output to a file.** The incident's lines were 1.6 MB each, 11.5 MB in all (measured
+  2026-11-22), so the check's output never passes through a shell variable, and the kept copy in
+  `.send-suite-output/home-path-check.log` cuts each line to 500 characters.
+- **The other three listings read names NUL separated too (#3499).** `scan_work_names`, the secret
+  scan's list of files outside the payload, and `uncommitted_paths` with its two readers (the set
+  aside after a refused sync, and the pull that sets aside what stands in its way) listed names
+  without `-z`, so a name git quotes named no file: it was sent unscanned by the first two, and by
+  the third reported as a deletion and left behind, or taken for a file outside the payload.
+- **A staged copy whose name holds a line break is left in the clone, and said (#3499).** Chosen by
+  the session that built it, and Dan's to change. Setting a copy aside is safe only because the
+  apply that follows keeps this Mac's own unsent file, and the apply reads its lists a line at a
+  time: in the suite on 2026-11-23, with such a copy set aside, the apply removed the file from
+  the config. Left where it is, which is what happened before the list was read by name, the
+  config keeps it. The cost is that a receive over the same file is refused by git until the file
+  is renamed, and the refusal says so. The lasting fix is in the apply, which is not this change.
+
+Ruled out as well: the send gate declaration (`# send-gate: scans ...`, #809), which would have run
+the check's whole suite on every send. Measured 2026-11-22: 9.8, 10.1 and 12.8 seconds a run at a
+load average of 77; it holds files back by scope and sends the rest, which is the partial send
+above; and the suite had no declaration that day.
+
+What it costs, measured on 2026-11-22 against a throwaway clone of main with 1,446 payload files,
+the functions cut from the branch's claude-sync by name, 10 samples a case and a baseline of bash
+starting taken off, at a load average of 104 rising to 178 on 12 cores: 53 to 72 ms for a send with
+nothing under the payload to read, 85 to 149 ms for one edited hook and one new file, 4.1 to 4.3
+seconds for a replay of the 2026-11-22 send (refused, naming 100 files), against 1.0 seconds for the
+whole tree walk the send does not run. The replay took 6.5 to 12.4 seconds before the output went to
+a file. What was left was the check reading megabyte lines in the shell, and #3479 took that out:
+the check now puts each matching line to its rules in one awk pass and reports a long line as 300
+bytes of it. Measured on 2026-11-23 on the same 126 files, eight rounds at a load average near 175,
+the check alone took 3.8 to 4.3 seconds before and 0.4 to 0.8 after, its report fell from 11.5 MB
+to 70 KB, and it refused the same 100 files for the same 110 lines. Replayed over the
+newest 300 of main's sync commits, the check would have held 2: the incident, and one on 2026-10-04
+carrying a mod's test file from before the check read mods. It could judge every one, and held
+nothing that passes main's run.
+
+`tests/test-claude-sync.sh` (the section "a send carrying a file that fails the home path check
+is held whole") and `hooks/test-check-home-paths.sh` (the `--files0-from` cases) hold it.
+
 ## Things known to be wrong and left that way
 
 Markers are keyed on hostname, which is a mutable string. Renaming or reinstalling a Mac abandons

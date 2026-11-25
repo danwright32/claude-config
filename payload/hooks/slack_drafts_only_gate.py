@@ -1575,6 +1575,25 @@ def sh_strip_openers_of(t):
         t = t[m.end():].lstrip()
 
 
+@functools.lru_cache(maxsize=None)
+def sh_funcs_of(s):
+    """What Judge.sh_funcs finds in s, searched afresh: (the names written `name()`, the names
+    written `function name`), each in the order found, as tuples every caller can share. The walk
+    of a text's variables, the reading of a sed or git command's output (once for each such name)
+    and the reading of the words after an unknown program each searched the whole text for them,
+    six searches of the claude-sync suite's 1.8 MB where one serves (claude-config#3406)."""
+    return (tuple(re.findall(r"(?m)^\s*(?:function\s+)?([A-Za-z_][\w:.-]*)\s*\(\s*\)", s)),
+            tuple(re.findall(r"\bfunction\s+([A-Za-z_][\w:.-]*)", s)))
+
+
+@functools.lru_cache(maxsize=None)
+def sh_runs_shopt(s):
+    """Whether s holds the word shopt, which can change how a case's patterns match (Judge.sh_case),
+    searched for once for each text: the walk of a text's variables asks, and the reading of its
+    locals asked again, a second search of the whole text (claude-config#3406)."""
+    return bool(re.search(r"\bshopt\b", s))
+
+
 # The builtins after which a NAME=value in front of them outlives the command (POSIX special builtins,
 # and those that bind names), so it is an assignment like any other.
 SH_SPECIAL = frozenset({":", ".", "source", "break", "continue", "eval", "exec", "exit", "export", "readonly",
@@ -1656,12 +1675,32 @@ def remember_readings(mod):
     second each; command_rest() three times for each of its 14,000 commands (claude-config#2784).
     Only this run's own copy of the reader is changed. Each caller gets lists of its own. A call
     asking for heredoc bodies, their spans or the runners passed is read afresh, and a text the
-    reader cannot read raises as it did, every time it is asked for."""
+    reader cannot read raises as it did, every time it is asked for. So is one asking where the
+    comments are (claude-config#3464).
+
+    Every reading asks the reader which # it took for a comment without being sure the shell does,
+    and which heredoc it cannot find the end of (its `unsure`, claude-config#3492), and one that
+    names any is not used: UnsureComment, which main() refuses as a check it could not make. It is
+    never kept, in this run or between runs."""
     plain, memo = mod.commands, {}
 
-    def commands(s, cwd="", heredocs=None, parts=None, spans=None):
-        if heredocs is not None or spans is not None:
-            return plain(s, cwd, heredocs=heredocs, parts=parts, spans=spans)
+    def sure(s, cwd, **asked):
+        marks = []
+        try:
+            return plain(s, cwd, unsure=marks, **asked)
+        finally:
+            # Whether the reading ended or gave up (Unreadable, which a # read as a comment can
+            # cause by itself: it hides the ) or the quote that closes something).
+            if marks:
+                # Which kind of heredoc was named, for the reason alone: one whose opener line
+                # ends in a backslash ("joined"), or one whose marker holds a line break ("split").
+                at, joins = marks[0][0], []
+                opener = mod.heredoc_opener(s, at, joins=joins) if s.startswith("<<", at) else None
+                raise UnsureComment(s, at, "joined" if joins else "split" if opener and "\n" in opener[0] else "")
+
+    def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None):
+        if heredocs is not None or spans is not None or comments is not None:
+            return sure(s, cwd, heredocs=heredocs, parts=parts, spans=spans, comments=comments)
         key = (s, cwd)
         if key not in memo:
             # A large text's parse is kept between runs too, keyed on its contents, wherever the
@@ -1675,7 +1714,7 @@ def remember_readings(mod):
                     os.path.expanduser("~" + name)
             else:
                 where = []
-                got = (plain(s, cwd, parts=where), where)
+                got = (sure(s, cwd, parts=where), where)
                 if kept is not None:
                     kept.put(s, cwd, got)
             memo[key] = got
@@ -1791,8 +1830,8 @@ raise_qos = gate_qos.raise_qos
 QOS = [(None, "")]
 
 
-def draft_advice(where):
-    return (f"Save it as a draft instead: call slack_send_message_draft {where}, then tell Dan where the draft is "
+def draft_advice(where, opening="Save it as a draft instead"):
+    return (f"{opening}: call slack_send_message_draft {where}, then tell Dan where the draft is "
             "(the channel, or the person for a direct message, and the thread) and that nothing was sent. "
             f"Sessions never send or schedule a Slack message (Dan, 2026-11-05: \"it should only ever save as "
             f"draft in slack, never send directly\"; {ISSUE}). If he asked you to post it, still save the draft "
@@ -1843,6 +1882,79 @@ NUL_WHY = ("it names a path holding a NUL byte, which bash drops, zsh keeps insi
            "reads as the end of the name, so which file it is cannot be worked out (claude-config#2892)")
 
 
+class UnsureComment(BaseException):
+    """Raised by this run's reader (remember_readings) for a text holding a # that the reader took for
+    a comment where it cannot be told whether the shell does (lib/shell-words.py word_starts):
+    right after a closing parenthesis whose kind is not known or that bash and zsh read
+    differently, and inside backquotes. The shell may run the rest of that line, which the reading
+    left out, so a post written there was allowed (claude-config#3464). Where every shell keeps the
+    # inside its word (after an escaped space or separator, right after the ) of a substitution, on
+    a line a backslash joined to a word) the reader reads the rest of the line as the shell does
+    and names nothing, unless that reading then cannot be read to its end, when the # is named and
+    this is raised all the same (claude-config#3481). A BaseException, as NulPath is, so nothing in
+    the walk reads it as a text that merely could not be read; main() refuses the call as one it
+    could not check.
+
+    Raised too for a heredoc the reader names there, by its <<, as one whose end it cannot vouch
+    for (claude-config#3492): an unquoted one the shells do not close at the first line that is
+    its marker, because a backslash joins that line to the one before, or close in different
+    places, or never close, where every shell runs the substitutions in the rest of the text as
+    its body and the reading took that rest for commands. heredoc says which of the two, a # or a
+    heredoc, was named. opener says what about the heredoc's opener had it named, for the reason
+    given: "joined" where its line ends in a backslash, which every shell joins to the next line,
+    so that the end marker is not the word that line shows, "split" where its quoted marker holds
+    a line break, which no line of a body can be, and "" otherwise (review of #3495)."""
+
+    def __init__(self, text, at, opener=""):
+        super().__init__(at)
+        start = text.rfind("\n", 0, at) + 1
+        end = text.find("\n", at)
+        self.line = text[start:len(text) if end < 0 else end].strip()[:120]
+        self.heredoc = text.startswith("<<", at)
+        self.opener = opener
+        # A text with no line break: the reader names a heredoc there for the one line, quoted or
+        # not, since no shell gives it a body (claude-config#3492), so the reason says that.
+        self.one_line = "\n" not in text
+
+
+def comment_why(line):
+    return ("it holds a # the gate cannot tell from a comment, in the line `%s`: a shell can read a # "
+            "inside a word where a closing parenthesis or a backslash stands right before it, or inside "
+            "backquotes, and then runs the rest of that line, which the gate could not read for certain. "
+            "Write that # in quotes, or put the comment on a line of its own (claude-config#3464)" % line)
+
+
+def heredoc_why(line, one_line=False, opener=""):
+    if one_line:
+        return ("it opens a heredoc on the one line `%s`, and the gate cannot tell whether the commands "
+                "after it on that line are its body or commands: typed on one line, no shell gives the "
+                "heredoc a body and every one of them runs. Put the heredoc's body and its end marker on "
+                "lines of their own after the line that opens it (claude-config#3492)" % line)
+    # What a shell that keeps an unquoted heredoc open does with the rest of the text.
+    keeps = ("A shell that keeps the heredoc open takes the rest of the text for its body: it runs every "
+             "$( ) there, in single quotes or not, and feeds the rest to the heredoc's command, which the "
+             "gate could not read for certain.")
+    if opener == "joined":
+        return ("it opens a heredoc the gate cannot find the end of, in the line `%s`: that line ends in a "
+                "backslash before the heredoc's end marker is whole, and a shell joins it to the next "
+                "line, so the end marker is the word the two lines make, which that backslash does not "
+                "quote. %s Write the << and its whole end marker on one line (claude-config#3492)"
+                % (line, keeps))
+    if opener == "split":
+        return ("it opens a heredoc the gate cannot find the end of, in the line `%s`: its end marker is "
+                "quoted and holds a line break, and no line of the text can be that marker, so some shells "
+                "never end the heredoc where others end it at the lines that spell the marker. A shell "
+                "that keeps the heredoc open feeds the rest of the text to the heredoc's command, which "
+                "the gate could not read for certain. Write the end marker as one word on the line that "
+                "opens the heredoc (claude-config#3492)" % line)
+    return ("it opens a heredoc the gate cannot find the end of, in the line `%s`: the end marker is not "
+            "quoted, and it either never stands on a line of its own or stands right after a line that "
+            "ends in a backslash, which a shell joins to the marker's line, so that the heredoc does not "
+            "end there or ends there in some shells only. %s End the heredoc with its marker alone on a "
+            "line that follows no backslash, or quote the marker (<<'EOF') where nothing in the body is "
+            "to be expanded (claude-config#3492)" % (line, keeps))
+
+
 def budget_clock():
     """(clock, budget): the clock the walk is timed by and the budget it is held to. Real seconds
     (BUDGET_SECONDS on time.monotonic), except under a test run (HOOK_TESTS_RUNNING=1, the rule the
@@ -1877,6 +1989,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         self.no_network = self.installed_wrapper()  # no-network-run.sh beside this file (#3173)
         self.acting = set()  # the real path of each script acts() is judging, so a cycle ends
         self.unfollowed = []  # each thing the walk could not follow or read (unfollow)
+        self.named_only = []  # each refusal for a file that only names an endpoint (name_only, #3410)
         # (the reason, the mod's folder) of a refused `bun test` the call's own line runs in a mod's
         # folder, for the sentence that names the command to run instead (mod_tests_seen, #3356).
         self.mod_tests = None
@@ -2315,11 +2428,14 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                                              copier=True)
             else:
                 self.note_copy(name, vals[1:], d)
+            # Believed only of the system's own program (lib/exact-output.py, claude-config#3440).
+            self.copy_believed(name, args, vals, d, text)
             out = []
         elif name in SH_PRINTERS:
-            out = self.sh_prints(name, args, vals, d, stdin)
+            out = self.believed(self.sh_prints(name, args, vals, d, stdin), vals[0], name, text)
         elif name in ("tee", "gtee"):
             append = any(v and re.fullmatch(r"-[a-zA-Z]*a[a-zA-Z]*", v) for v in vals[1:]) or "--append" in vals[1:]
+            stdin = self.believed(stdin, vals[0], name, text)
             for a, v in zip(args[1:], vals[1:]):
                 if v is not None and (v == "-" or v.startswith("-")):
                     continue
@@ -3321,6 +3437,17 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         self.unfollowed.append(why)
         return why
 
+    def name_only(self, why):
+        """Record a refusal that is no post the gate found, and give it back: a file that only names
+        an endpoint, handed to a script not seen to be unable to act on it (claude-config#3410).
+        main() then says the check could not be made, keyed on this cause as it is on unfollow's.
+        Kept apart from unfollowed, which the readings of a script's own words consult to decide
+        what is refused: inside a script on disk they drop a reason found there (judge_unread_shapes,
+        lib/unknown-program.py), and this refusal stands wherever it stood (Dan, 2026-11-21, #3218).
+        Nothing reads this list but main(), so recording here changes no verdict."""
+        self.named_only.append(why)
+        return why
+
     def import_targets(self, text, kind, cur_dir, root, inserts=((), ()), strings=True, tagged=False, path=None,
                        held=None):
         """(the import as written, the files it runs, or False when it names a local file not there,
@@ -3854,7 +3981,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
     def sh_keeps_positional(self, text, d):
         """Whether a command of a `bash -c` string certainly leaves its positional parameters as they
         were: not shift or a set that can set them, and not a sourced file (which shares them, and
-        may do either) unless that file is one whose text holds neither."""
+        may do either) unless that file is one sh_file_keeps_positional finds to keep them."""
         words = self.sw.command_words(self.sw.command_rest(text)[0])
         if not words:
             return True
@@ -3866,16 +3993,101 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                        for j, w in enumerate(words[1:], 1))
         if words[0] not in (".", "source"):
             return True
-        v, bad = self.sh_source_word(text, self.sh_cwd(d), self.sh_source_var, self.shell["script"])
+        wd = self.sh_cwd(d)
+        v, bad = self.sh_source_word(text, wd, self.sh_source_var, self.shell["script"])
         if bad or v is None:
             return False
+        return self.sh_file_keeps_positional(self.resolve(v, d), d, wd != SH_UNKNOWN_DIR, v, 0, set())
+
+    # What can move a sourced file's caller's positional parameters with no shift or set in the
+    # file's own text (claude-config#3474): eval, whose text is read nowhere here, and a dot command
+    # or source, whose file is another text. A dot is one standing as a word of its own with a word
+    # after it, in quotes or behind a backslash too, so `find . -name x` is one as well: each is
+    # only a place to look at, and sh_file_keeps_positional says what the command there is.
+    SH_POS_UNSEEN = re.compile(
+        r"""(?<![\w-])(?:eval|source)(?![\w-])|(?<![^\s;&|()`])[\\'"$]*\.['"]*[ \t]+(?![;&|)])\S""")
+
+    def sh_file_keeps_positional(self, path, cwd, cwd_known, word, depth, seen):
+        """Whether a file read in with . or source certainly leaves its caller's positional
+        parameters as they were: its text holds no shift and no set that can set them, and every
+        eval and every read of another file in it is accounted for (claude-config#3474). An eval's
+        text is not read here, and a second file is another text, so a file whose own words moved
+        nothing was taken to keep them while the shell had moved on: `eval "$PREPARE"`, and
+        `. lib/mover.sh` whose file is the one line shift, each read in before `. "$1/lib/x.sh"`,
+        had the gate read one x.sh while bash and zsh read in another (measured 2026-11-24).
+
+        One is accounted for inside a function's body, a subshell or a substitution, which have
+        positional parameters of their own, or where it is a read of a file whose path is worked
+        out from this file's own variables (sh_known; word is its BASH_SOURCE, cwd the directory
+        it runs in) and which, followed the same way to its end, keeps them too. Anything else is
+        not: an eval at the file's top level, a read behind `command` or in quotes, one whose path
+        is not certain or names no file, a file past MAX_DEPTH, and a word the reader places in no
+        command. A file read already from the same directory under the same name, further up or
+        before, answered there for its own text; from another directory it is read again, as a
+        relative path in it names another file there."""
+        real = os.path.realpath(path)
+        once = (real, cwd, cwd_known, word)
+        if once in seen:
+            return True
+        if depth > MAX_DEPTH:
+            return False
+        seen.add(once)
+        if depth:
+            self.tick(path)
         try:
-            body = self.content(os.path.realpath(self.resolve(v, d))).decode("utf-8", "replace")
+            text = self.content(real).decode("utf-8", "replace")
         except OSError:
             return False
-        body = re.sub(r"(?m)(^|\s)#.*$", r"\1", body)  # comments, which say "set" in prose
+        # Comments, which say "set" in prose, are left out: the ones the reader itself reads as
+        # comments, and of those only one that starts the text or follows white space. A pattern
+        # took every # after white space for one, quoted or not, so a quoted # before a shift on
+        # its line hid the shift, and the string's $1 stayed where the shell had moved on
+        # (claude-config#3464). A file the reader cannot read is not known to keep them.
+        try:
+            body = self.sw.uncommented(text, spaced=True)
+        except self.sw.Unreadable:
+            return False
         # shift, or a set with an operand or -- after any options (set -e -- x sets them too).
-        return not re.search(r"(?<![\w-])(shift|set(?:\s+[-+][A-Za-z]+)*\s+(?:--|[^-+\s]))", body)
+        if re.search(r"(?<![\w-])(shift|set(?:\s+[-+][A-Za-z]+)*\s+(?:--|[^-+\s]))", body):
+            return False
+        places = [m.start() for m in self.SH_POS_UNSEEN.finditer(body)]
+        if not places:
+            return True  # most files: nothing more is read or worked out for them
+        if text == self.shell["text"]:
+            return False  # the text being read, whose walk takes up that text's own $1 (#3395)
+        try:
+            cmds, parts = self.parsed(text, cwd)
+        except self.sw.Unreadable:
+            return False
+        items = list(zip(cmds, parts))
+        struct = self.sh_struct_of(text, cwd, items)
+        known, followed = None, set()
+        for at in places:
+            # The command the word is in: the innermost, as a substitution's is inside another's.
+            k = max((j for j, p in enumerate(parts) if p["start"] <= at < p["end"]),
+                    key=lambda j: parts[j]["start"], default=None)
+            if k is None:
+                return False
+            (d, t), p = items[k]
+            if len(p["scope"]) > 1 or k in followed:
+                continue
+            if struct and struct[0][k] and any(struct[1][b]["kind"] == "func" for b in struct[0][k][0]):
+                continue
+            head = SH_CASE_PATTERN.sub("", self.sh_strip_openers(t), count=1)
+            if self.sh_source_target(head) is None:
+                return False
+            if known is None:
+                known = self.sh_known(text, cwd, word, cwd_known, depth)
+            wd = self.sh_dir(d) if cwd_known and self.sh_cwd_at(known, p["start"]) else SH_UNKNOWN_DIR
+            # Only what this file's own text makes certain: its $1 is the caller's, and its HOME may be.
+            v, bad = self.sh_source_word(head, wd, lambda n, at=p["start"]: None if n[:1].isdigit() else
+                                         self.sh_at(known, n, at), word)
+            if bad or v is None or not self.is_file(self.resolve(v, d)):
+                return False
+            if not self.sh_file_keeps_positional(self.resolve(v, d), d, wd != SH_UNKNOWN_DIR, v, depth + 1, seen):
+                return False
+            followed.add(k)
+        return True
 
     def sh_home(self, name, text, v):
         """v, or for HOME unknown in a text that never binds it, the session's HOME: the command runs
@@ -3993,7 +4205,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         rows, blocks = struct if struct else (None, None)
         allnames = set(re.findall(r"(?<![\w$])([A-Za-z_]\w*)(?:\[[^\]\n]*\])?\+?=", s))
         funcs = self.sh_funcs(s)
-        shopt = bool(re.search(r"\bshopt\b", s))
+        shopt = sh_runs_shopt(s)
         env, since, regions, spans, tainted, handled = {}, {}, {}, {}, set(), set()
         lost = [] if cwd_known else [(0, len(s))]
         bodies, fbody = [], {}
@@ -4431,9 +4643,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
 
     @staticmethod
     def sh_funcs(s):
-        """The names of the functions s defines."""
-        return set(re.findall(r"(?m)^\s*(?:function\s+)?([A-Za-z_][\w:.-]*)\s*\(\s*\)", s)) | \
-            set(re.findall(r"\bfunction\s+([A-Za-z_][\w:.-]*)", s))
+        """The names of the functions s defines, as a set of the caller's own, searched for once
+        for each text (sh_funcs_of) and built as it always was, so it lists them in the same order."""
+        plain, keyword = sh_funcs_of(s)
+        return set(plain) | set(keyword)
 
     @staticmethod
     def sh_binds(name, text, allowed=0):
@@ -4925,7 +5138,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 last, spans = idx, [(p["start"], p["end"])]
                 if v is not None:
                     if not shopt:
-                        shopt.append(bool(re.search(r"\bshopt\b", s)))
+                        shopt.append(sh_runs_shopt(s))
                     v, last, spans = self.sh_local_settles(s, items, rows, blocks, stack, idx, end, n, v, known,
                                                            script, here, shopt[0])
                 if v is None or sum(1 for x in words if re.match(re.escape(n) + r"(?:=|$)", x)) > 1:
@@ -6548,6 +6761,18 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             if more != words:
                 rest = (d, depth, shell_hint, lang, inline, held_code, actor, True)
                 return self.every_file(words, *rest) or self.every_file(more, *rest)
+        if lang == "py":
+            # A folder Python is handed is the __main__.py in it, and an archive it runs is one the
+            # gate does not open (py_run_words in lib/py-file-runs.py, claude-config#3441): the
+            # words are read with each such folder replaced by that file, and then as written
+            # below, as before, so this reading can only refuse more.
+            swapped, unread = self.py_run_words(words, d, not (inline or actor))
+            if unread:
+                return unread
+            if swapped != words:
+                reason = self.every_file(swapped, d, depth, shell_hint, lang, inline, held_code, actor, expanded)
+                if reason:
+                    return reason
         code, data = [], []
         names_before = len(self.held_names())
         on_disk = {}  # each script read from a file, by its label: what it writes is not otherwise noted
@@ -6677,7 +6902,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 # A file naming an endpoint is still read against a script that writes, as before.
                 acts = script_acts(runs_only=True) if unread else script_acts()
                 if acts:
-                    return f"{script_label} {acts}, and is handed {what}"
+                    reason = f"{script_label} {acts}, and is handed {what}"
+                    # A file that names an endpoint is not a post found (#3410); unread() has
+                    # already recorded one the gate could not read.
+                    return reason if unread else self.name_only(reason)
                 if unread and script_label in on_disk and script_acts():
                     self.note_handed(on_disk[script_label], words, d, script_label)
             # Data every script beside it only reads; none sends or runs what it is handed.
@@ -8053,6 +8281,8 @@ def main():
             reason = judge.line(cmd, cwd, 0, cmd)
         except NulPath:
             reason = judge.unfollow(NUL_WHY)  # never kept: only an allowed judgement is
+        except UnsureComment as e:
+            reason = judge.unfollow(heredoc_why(e.line, e.one_line, e.opener) if e.heredoc else comment_why(e.line))
         finally:
             judge.unwatch()
         if judge.overran:
@@ -8068,9 +8298,21 @@ def main():
         # cannot read; never matched by its wording) is not a post it found, so it says the check
         # could not be made rather than claiming a post (#2922).
         unfollowed = any(why in reason for why in judge.unfollowed)
+        # Nor is a file that only names an endpoint, handed to a script the gate could not see to be
+        # unable to act on it (name_only): it stays refused, and says what was measured (#3410).
+        named_only = not unfollowed and any(why in reason for why in judge.named_only)
         lead = ("REFUSED: the gate could not check whether this command posts to Slack: "
-                if unfollowed else "REFUSED: this command posts to Slack: ")
-        if unfollowed and not MARKER.search(cmd):
+                if unfollowed or named_only else "REFUSED: this command posts to Slack: ")
+        if named_only:
+            # The file may be a message's payload or a text that mentions the name, and the gate
+            # cannot tell which, so both are answered: the draft rule, and where to go with neither.
+            advice = ("This is not a finding that it posts: the file only names a Slack posting endpoint, and "
+                      "the gate could not tell whether the script sends anything to it. If the command sends no "
+                      "Slack message, there is no message to save as a draft: if it must run as written, say so "
+                      "to Dan (claude-config#3410). "
+                      + draft_advice("with the same channel and thread",
+                                     "If it does send one, save that message as a draft instead"))
+        elif unfollowed and not MARKER.search(cmd):
             # Nothing in the command names a posting endpoint, so it is no message, and telling the
             # session to save one as a draft only misleads it (claude-config#2631).
             advice = ("This is not a finding that it posts: the gate could not follow what it runs, and the "

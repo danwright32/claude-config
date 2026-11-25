@@ -1,0 +1,496 @@
+#!/usr/bin/env bash
+# Where a comment starts, as the shared command reader (lib/shell-words.py commands()) decides it,
+# against the shells themselves (claude-config#3464).
+#
+# The reader took a # for a comment whenever the character before it was white space, a separator or
+# a parenthesis. The shell starts a comment only where a WORD starts: not after a space, a ; or a
+# parenthesis that a backslash escapes, not after the ) closing a $( ), a <( ) or a $(( )), which is
+# still inside its word, and not on a line a backslash joined to a word. Read as a comment there,
+# the rest of the line was nobody's text, so a command after a ; on that line was never given to any
+# gate that reads commands through the reader, while the shell ran it.
+#
+# Each row is a text built around one #, holding a marker command (touch ran) placed so that whether
+# the shell runs it depends on whether that # starts a comment: in a `same` text the marker follows
+# the # on its line, and runs only where the # starts none; in a `next` text it is on the line after
+# a comment holding an apostrophe, and runs only where the # does start one. This machine's bash,
+# and its zsh where there is one, run each text in an empty throwaway directory (nothing but echo,
+# true, cat and that touch is ever run), and the reader is asked whether it lists the marker as a
+# command of its own. THE PROPERTY: wherever a shell runs the marker, the reader lists it, says it
+# cannot read the text, or names the # line as one it is not sure of (its `unsure`, which the Slack
+# drafts gate refuses as a check it could not make). The controls hold the other side: a real
+# comment is still left out and never named, so nothing was fixed by doubting every #.
+set -uo pipefail
+
+# Its own wall clock, and whatever it starts stopped with it however it ends (claude-config#465).
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/suite-deadline.sh" || {
+  echo "FAIL: $(basename "$0"): lib/suite-deadline.sh is missing, so this suite cannot bound its own wall clock. Refusing to run unbounded."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+suite_deadline_arm || exit $?
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SW="$DIR/lib/shell-words.py"
+
+pass=0
+fail=0
+check() { if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 ($2)"; fi; }
+
+T="$(mktemp -d "${TMPDIR:-/tmp}/comment-start.XXXXXXXX")" || exit 1
+case "${T%/}" in ''|/|"${HOME%/}") echo "refusing to run: throwaway directory came back as '$T'" >&2; exit 2 ;; esac
+trap 'rm -rf "$T"' EXIT
+
+echo "the command reader: a # starts a comment only where the shell starts one (claude-config#3464)"
+
+# One line for each check: "ok<TAB>description" or "FAIL<TAB>description<TAB>why".
+python3 -B - "$SW" "$T" > "$T/rows.tsv" <<'PY'
+import importlib.util
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+
+sw_path, scratch = sys.argv[1], sys.argv[2]
+spec = importlib.util.spec_from_file_location("shell_words", sw_path)
+sw = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(sw)
+
+# (description, the text up to the #, how the text is closed where the prefix opened something)
+PREFIXES = [
+    ("a space before it", "echo a ", ""),
+    ("mid word (a#b)", "echo a", ""),
+    ("an escaped space before it", "echo a\\ ", ""),
+    ("an escaped backslash, then a space", "echo a\\\\ ", ""),
+    ("three backslashes, then a space", "echo a\\\\\\ ", ""),
+    ("an escaped tab before it", "echo a\\\t", ""),
+    ("a ; before it", "echo a;", ""),
+    ("an escaped ; before it", "echo a\\;", ""),
+    ("an escaped & before it", "echo a\\&", ""),
+    ("an escaped | before it", "echo a\\|", ""),
+    ("an escaped ( before it", "echo a\\(", ""),
+    ("an escaped ) before it", "echo a\\)", ""),
+    ("escaped itself", "echo a \\", ""),
+    ("after &&", "true &&", ""),
+    ("after a pipe", "echo a |", ""),
+    ("after a backgrounding &", "true &", ""),
+    ("right after a $( )", "echo $(echo b)", ""),
+    ("a space after a $( )", "echo $(echo b) ", ""),
+    ("right after a backquote", "echo `echo b`", ""),
+    ("right after a <( )", "cat <(echo b)", ""),
+    ("right after a $(( ))", "echo $((1))", ""),
+    ("right after an arithmetic command", "((1))", ""),
+    ("right after a subshell", "(echo a)", ""),
+    ("at the start of a subshell", "(", ")"),
+    ("at the start of a $( )", "echo $(", ")"),
+    ("at the start of a <( )", "cat <(", ")"),
+    ("after double quotes", 'echo "a"', ""),
+    ("after single quotes", "echo 'a'", ""),
+    ("after a ${ }", "echo ${x}", ""),
+    ("after a $ ($#)", "echo $", ""),
+    ("a line joined mid word", "echo a\\\n", ""),
+    ("a line joined after a space", "echo a \\\n", ""),
+    ("a line joined after an escaped space", "echo a\\ \\\n", ""),
+    ("two lines joined mid word", "echo a\\\n\\\n", ""),
+    ("two lines joined after a space", "echo a \\\n\\\n", ""),
+    ("a line joined at the start of the text", "\\\n", ""),
+    ("a line joined after a ;", "echo a;\\\n", ""),
+    ("a line joined after an escaped ;", "echo a\\;\\\n", ""),
+    ("a line joined after a $( )", "echo $(echo b)\\\n", ""),
+    # A backslash joins a line to the next only where it is live. One that ends a COMMENT, or the
+    # closing line of a heredoc, joins nothing, so the # that starts the next line starts a comment
+    # (claude-config#3481; bash, bash --posix, sh, dash, zsh, zsh emulating sh and ksh, measured
+    # 2026-11-23 as a -c text, a file and an eval). Two backslashes are the control beside them.
+    ("the line after a comment that ends in a backslash", "true # a note\\\n", ""),
+    ("the line after a comment that ends in three backslashes", "true # a note\\\\\\\n", ""),
+    ("the line after a comment that ends in two backslashes", "true # a note\\\\\n", ""),
+    ("the line after a whole line comment that ends in a backslash", "# a note\\\n", ""),
+    ("the line after two comments that each end in a backslash", "true # one\\\n# two\\\n", ""),
+    ("the line after a comment on a joined line that ends in a backslash", "true \\\n# a\\\n", ""),
+    ("the line after a comment in a { } that ends in a backslash", "{ true # a\\\n", "}"),
+    ("the line after a heredoc whose closing line ends in a backslash", "cat <<'E\\'\nbody\nE\\\n", ""),
+    ("the line after a heredoc whose closing line ends in three backslashes", "cat <<'E\\\\\\'\nbody\nE\\\\\\\n", ""),
+    ("the line after a heredoc whose closing line ends in two backslashes", "cat <<'E\\\\'\nbody\nE\\\\\n", ""),
+    ("at the start of the text", "", ""),
+    ("at the start of a line", "echo a\n", ""),
+    ("right after an array", "x=(a b)", ""),
+    ("in an array, after a space", "x=(a ", ")"),
+    ("at the start of an array", "x=(", ")"),
+    ("in an array, after an escaped space", "x=(a\\ ", ")"),
+    ("in an array, mid word", "x=(a", ")"),
+    ("in an array, on a line joined mid word", "x=(a\\\n", ")"),
+    ("right after a function's ( )", "f()", "{ :; }"),
+    ("right after a case pattern", "case a in a)", ";; esac"),
+    ("after a | in a case pattern", "case a in b|", "a) ;; esac"),
+    ("after a redirection", "echo a >/dev/null", ""),
+    ("after a here string", "cat <<<a ", ""),
+    ("after then", "if true; then ", "fi"),
+    ("after a {", "{ ", "}"),
+    ("in a $( ) in double quotes, after an escaped space", 'echo "$(echo a\\ ', ')"'),
+    ("in a $( ) in double quotes, after a space", 'echo "$(echo a ', ')"'),
+    ("in backquotes, after a space", "echo `echo a ", "`"),
+    ("in backquotes, after an escaped space", "echo `echo a\\ ", "`"),
+    ("in backquotes, after two backslashes and a space", "echo `echo a\\\\ ", "`"),
+    ("in backquotes, after four backslashes and a space", "echo `echo a\\\\\\\\ ", "`"),
+    ("in backquotes, on a line joined mid word", "echo `echo a\\\n", "`"),
+]
+# Texts written out whole: (description, kind, text).
+WHOLE = [
+    ("in double quotes", "same", 'echo "a # c"; touch ran\n'),
+    ("in single quotes", "same", "echo 'a # c'; touch ran\n"),
+    ("in a $'...' string", "same", "echo $'a # c'; touch ran\n"),
+    ("in a ${#x}", "same", "echo ${#x}; touch ran\n"),
+    # Whatever the rest of the line holds, it is read as the shell reads it (`open`: a string, a
+    # joined line, a heredoc, a cd, the ) of a subshell), since every shell keeps this # in its word.
+    ("an escaped space before it, the rest of the line a whole string", "same", "echo a\\ # 'x'; touch ran\necho done\n"),
+    ("an escaped space before it, the rest of the line opening a string", "open", "echo a\\ # 'x\ntouch ran\n'\n"),
+    ("an escaped space before it, the line joined to the next", "open", "echo a\\ # c \\\ntouch ran\n"),
+    ("an escaped space before it, the rest of the line opening a heredoc", "open", "echo a\\ # <<E\ntouch ran\nE\n"),
+    ("an escaped space before it, the rest of the line holding a cd", "open", "echo a\\ # c; cd .\ntouch ran\n"),
+    ("an escaped space before it, the rest of the line closing a subshell", "open", "(echo a\\ # c )\ntouch ran\n"),
+    ("in backquotes closed on a later line, after a space", "same", "echo `echo a # c; touch ran\n`\n"),
+    ("in backquotes closed on a later line, after a space", "next", "echo `echo a # it's\ntouch ran\n`\necho 'x'\n"),
+    ("in backquotes closed on a later line, after an escaped space", "same", "echo `echo a\\ # c; touch ran\n`\n"),
+    ("in backquotes closed on a later line, after an escaped space", "next", "echo `echo a\\ # it's\ntouch ran\n`\necho 'x'\n"),
+    ("in backquotes closed on a later line, after two backslashes and a space", "same", "echo `echo a\\\\ # c; touch ran\n`\n"),
+    ("in backquotes closed on a later line, after two backslashes and a space", "next", "echo `echo a\\\\ # it's\ntouch ran\n`\necho 'x'\n"),
+    ("in a heredoc body's $( ), after an escaped space", "same", "cat <<E\n$(echo a\\ # c; touch ran\n)\nE\n"),
+    ("in a heredoc body's $( ), after a space", "same", "cat <<E\n$(echo a # c; touch ran\n)\nE\n"),
+    ("in a heredoc body's $( ), after a space", "next", "cat <<E\n$(echo a # it's\ntouch ran\n)\nE\necho 'x'\n"),
+    ("in a heredoc body's $( ), after two backslashes and a space", "same", "cat <<E\n$(echo a\\\\ # c; touch ran\n)\nE\n"),
+    ("in a heredoc body's $( ), after two backslashes and a space", "next", "cat <<E\n$(echo a\\\\ # it's\ntouch ran\n)\nE\necho 'x'\n"),
+    # After a backslash that joins nothing, with the string the comment's apostrophe would open
+    # closed two lines on: read as text, that # put the marker inside a string of a reading that
+    # reached its end, so the reader read less than the shell ran and named nothing (seen
+    # 2026-11-23, claude-config#3481). The shell reads three comments and runs the marker.
+    ("the line after a comment that ends in a backslash, its apostrophe closed two lines on", "next",
+     "true # a note that ends in a\\\n#it's\ntouch ran\necho end #'\n"),
+    ("the line after a comment that ends in three backslashes, its apostrophe closed two lines on", "next",
+     "true # a note that ends in a\\\\\\\n#it's\ntouch ran\necho end #'\n"),
+    ("the line after a comment that ends in two backslashes, its apostrophe closed two lines on", "next",
+     "true # a note that ends in a\\\\\n#it's\ntouch ran\necho end #'\n"),
+    ("the line after a whole line comment that ends in a backslash, its apostrophe closed two lines on", "next",
+     "# a note\\\n#it's\ntouch ran\necho end #'\n"),
+    ("the line after a comment in a case branch that ends in a backslash, its apostrophe closed later", "next",
+     "case a in a) true # n\\\n#it's\ntouch ran\n;; esac\necho end #'\n"),
+    ("the line after a comment in a subshell that ends in a backslash, its apostrophe closed later", "next",
+     "(true # a\\\n#it's\ntouch ran\n)\necho end #'\n"),
+    ("the line after a comment in a $( ) that ends in a backslash, its apostrophe closed later", "next",
+     "x=$(true # a\\\n#it's\ntouch ran\n)\necho end #'\n"),
+    ("the line after a comment that follows a # inside a word and ends in a backslash", "next",
+     "echo a\\ #x # real\\\n#it's\ntouch ran\necho end #'\n"),
+    ("the line after a heredoc whose closing line ends in a backslash, its apostrophe closed two lines on", "next",
+     "cat <<'E\\'\nbody\nE\\\n#it's\ntouch ran\necho end #'\n"),
+    ("the line after a heredoc whose bare end marker ends in a backslash, its apostrophe closed two lines on", "next",
+     "cat <<E\\\\\nbody\nE\\\n#it's\ntouch ran\necho end #'\n"),
+    # The other side: where the backslash is live the # is text in every shell, the apostrophe does
+    # open a string, and the marker is inside it.
+    ("a line joined mid word, its apostrophe closed two lines on", "open", "echo a\\\n#it's\ntouch ran\necho end #'\n"),
+    ("a line joined after three backslashes, its apostrophe closed two lines on", "open", "echo a\\\\\\\n#it's\ntouch ran\necho end #'\n"),
+]
+# The controls: a real comment, which the reader must go on leaving out (`same`: the marker on its
+# line is listed by nobody) and reading past (`next`: the marker on the next line is listed).
+REAL = {"a space before it", "an escaped backslash, then a space", "a ; before it", "after &&",
+        "after a pipe", "after a backgrounding &", "a space after a $( )", "right after a subshell",
+        "at the start of a subshell", "at the start of a $( )", "a line joined after a space",
+        "two lines joined after a space", "a line joined at the start of the text",
+        "a line joined after a ;", "at the start of the text", "at the start of a line",
+        "right after a case pattern", "after a here string", "after then", "after a {",
+        "in a $( ) in double quotes, after a space", "in backquotes, after a space",
+        "in backquotes closed on a later line, after a space",
+        "right after an arithmetic command",
+        "the line after a comment that ends in a backslash",
+        "the line after a comment that ends in three backslashes",
+        "the line after a comment that ends in two backslashes",
+        "the line after a whole line comment that ends in a backslash",
+        "the line after two comments that each end in a backslash",
+        "the line after a comment on a joined line that ends in a backslash",
+        "the line after a comment in a { } that ends in a backslash",
+        "the line after a heredoc whose closing line ends in a backslash",
+        "the line after a heredoc whose closing line ends in three backslashes",
+        "the line after a heredoc whose closing line ends in two backslashes",
+        "the line after a comment that ends in a backslash, its apostrophe closed two lines on",
+        "the line after a comment that ends in three backslashes, its apostrophe closed two lines on",
+        "the line after a comment that ends in two backslashes, its apostrophe closed two lines on",
+        "the line after a whole line comment that ends in a backslash, its apostrophe closed two lines on",
+        "the line after a comment in a case branch that ends in a backslash, its apostrophe closed later",
+        "the line after a comment in a subshell that ends in a backslash, its apostrophe closed later",
+        "the line after a comment in a $( ) that ends in a backslash, its apostrophe closed later",
+        "the line after a comment that follows a # inside a word and ends in a backslash",
+        "the line after a heredoc whose closing line ends in a backslash, its apostrophe closed two lines on",
+        "the line after a heredoc whose bare end marker ends in a backslash, its apostrophe closed two lines on"}
+# A # the shell reads inside a word (`same`: the shell runs the marker after the ;). The marker is
+# listed: where the reader always read the # as text (PLAIN), and where it took it for a comment
+# and now, for a caller that asks which lines it is unsure of, reads on as every shell does
+# (claude-config#3481; bash, sh, dash, zsh and ksh measured 2026-11-23). A caller that does not
+# ask is given what it always was, row by row: the marker where the # was always text (PLAIN), and
+# the line left out everywhere else, since the other gates read through the reader unasked.
+WORD = {"mid word (a#b)", "an escaped space before it", "three backslashes, then a space",
+        "an escaped tab before it", "an escaped ; before it", "an escaped & before it",
+        "an escaped | before it", "an escaped ( before it", "an escaped ) before it",
+        "escaped itself", "right after a $( )", "right after a backquote", "right after a <( )",
+        "right after a $(( ))", "after double quotes", "after single quotes", "after a ${ }",
+        "after a $ ($#)", "a line joined mid word", "a line joined after an escaped space",
+        "two lines joined mid word", "a line joined after an escaped ;", "a line joined after a $( )",
+        "in double quotes", "in single quotes",
+        "in a $'...' string", "in a ${#x}",
+        "an escaped space before it, the rest of the line a whole string"}
+PLAIN = {"mid word (a#b)", "escaped itself", "right after a backquote", "after double quotes",
+         "after single quotes", "after a ${ }", "after a $ ($#)", "in double quotes", "in single quotes",
+         "in a $'...' string", "in a ${#x}"}
+# Where the reader must name the line as one it is not sure of, as (description, kind): bash reads a # right
+# after an array's ) inside the word and zsh as a comment; and bash ends backquotes at the next
+# backquote whether or not a comment stands before it, so a comment with one after it on its line
+# does not run to the line's end.
+UNSURE = {("right after an array", "same"), ("right after an array", "next"),
+          ("in backquotes, after a space", "same")}
+
+
+def texts(prefix, close):
+    if close:
+        yield "same", prefix + "# c " + close + "; touch ran\n" + close + "\n"
+        yield "next", prefix + "# it's\ntouch ran\n" + close + "\necho 'x'\n"
+    else:
+        yield "same", prefix + "# c; touch ran\necho done\n"
+        yield "next", prefix + "# it's\ntouch ran\necho 'x'\n"
+
+
+SHELLS = {"bash": ["bash", "--noprofile", "--norc", "-c"], "zsh": ["zsh", "-f", "-c"]}
+HAVE = [name for name in SHELLS if shutil.which(name)]
+
+
+def runs(shell, text):
+    d = tempfile.mkdtemp(prefix="run-", dir=scratch)
+    try:
+        subprocess.run(SHELLS[shell] + [text], cwd=d, stdin=subprocess.DEVNULL,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20,
+                       env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": d})
+        return os.path.exists(os.path.join(d, "ran"))
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def reading(text):
+    marks = []
+    try:
+        cut = sw.commands(text, unsure=marks)
+    except sw.Unreadable:
+        # A # read as a comment can hide the ) or the quote that closes something, so the line is
+        # named before the reading gives up, and a caller looks at the names either way.
+        return "unsure" if marks else "unreadable"
+    if marks:
+        return "unsure"
+    return "listed" if any(t.strip() == "touch ran" for _, t in cut) else "not listed"
+
+
+def say(ok, what, why=""):
+    print("ok\t" + what if ok else "FAIL\t" + what + "\t" + why)
+
+
+# A caller that does not ask is given the commands it was always given: other gates read through
+# the reader, and what a line the reader is not sure of means to each is that gate's to decide.
+asked, unasked = [], sw.commands("echo a\\ # c; touch ran\necho done\n")
+told = sw.commands("echo a\\ # c; touch ran\necho done\n", unsure=asked)
+say([t.strip() for _, t in unasked] == ["echo a\\", "echo done"],
+    "#3464 a caller that does not ask is given the reading it was always given",
+    "commands gave %r" % (unasked,))
+# A caller that asks is given the shell's own reading where every shell keeps the # inside the word
+# (claude-config#3481): the rest of the line is read, and no line is named.
+say([t.strip() for _, t in told] == ["echo a\\ # c", "touch ran", "echo done"] and asked == [],
+    "#3481 a caller that asks is given the rest of a line whose # every shell keeps inside a word",
+    "commands gave %r and named %r" % (told, asked))
+# A caller that asks for comments alone keeps the old reading too, and such a # is in neither list:
+# only asking which lines the reader is unsure of changes what is read.
+alone = []
+kept = sw.commands("echo a\\ # c; touch ran\necho done\n", comments=alone)
+say([t.strip() for _, t in kept] == ["echo a\\", "echo done"] and alone == [],
+    "#3481 a caller that asks for comments alone is given the reading it always was",
+    "commands gave %r and named %r" % (kept, alone))
+# A reading that went on past such a # and cannot be read to its end is not one to vouch for: the #
+# is named, so a caller that judges an unreadable text by other means still knows of it.
+asked = []
+try:
+    sw.commands("echo a\\ # it's\n", unsure=asked)
+    gave = "read"
+except sw.Unreadable:
+    gave = "unreadable"
+say(gave == "unreadable" and asked == [(8, 14)],
+    "#3481 a reading that went on past such a # and cannot be read to its end names the #",
+    "the reading was %s and named %r" % (gave, asked))
+real = []
+sw.commands("echo a # c; touch ran\necho done\n", comments=real)
+say(real == [(7, 21)], "#3464 a comment the shell starts too is given to comments", "named %r" % (real,))
+
+
+# Looking back from a #, the rule must know the state of the text it looks at. A backslash at the
+# end of a line joins it to the next only where it is live: one that ends a comment, or a heredoc's
+# closing line, joins nothing. So commands() gives word_starts what it knows of the line breaks
+# before (ended), and a caller with no reading of them is never told "inside a word" on the
+# strength of a line that only seems joined: it is told that cannot be known (claude-config#3481).
+def starts(text, at, **known):
+    try:
+        return sw.word_starts(text, at, **known)
+    except TypeError as e:
+        return "raised %s" % e
+
+
+joined, dead = "echo a\\\n#b", "true # a\\\n#b"
+got = (starts(joined, 8), starts(joined, 8, ended={}), starts("echo a \\\n#b", 9), starts("echo a\\ #b", 8))
+say(got == (None, False, True, False),
+    "#3481 with no reading of the lines before, a # after a joined line is never called inside a word",
+    "word_starts gave %r, wanted (None, False, True, False)" % (got,))
+got = (starts(dead, 10, ended={9: True}), starts(dead, 10, ended={9: None}), starts(dead, 10, ended={}))
+say(got == (True, None, False),
+    "#3481 a backslash that ends a comment the reader took joins nothing, and one it was unsure of cannot be told",
+    "word_starts gave %r, wanted (True, None, False)" % (got,))
+# The reader's own reading of the reviewed text: three comments, three commands, no line named.
+given, named = [], []
+try:
+    cut = [t.strip() for _, t in sw.commands("true # a note\\\n#it's\ntouch ran\necho end #'\n",
+                                             comments=given, unsure=named)]
+except sw.Unreadable:
+    cut = "unreadable"
+say(cut == ["true", "touch ran", "echo end"] and named == [] and given == [(5, 14), (15, 20), (40, 42)],
+    "#3481 the line after a comment that ends in a backslash is read as the comment it is",
+    "commands gave %r, comments %r and named %r" % (cut, given, named))
+# A caller that asks for comments alone is given the same three: lib/script-params.py and
+# uncommented() blank what is in that list.
+alone = []
+sw.commands("true # a note\\\n#it's\ntouch ran\necho end #'\n", comments=alone)
+say(alone == [(5, 14), (15, 20), (40, 42)],
+    "#3481 a caller that asks for comments alone is given the comment after a comment that ends in a backslash",
+    "comments were %r" % (alone,))
+# Inside an array, where the marker on the next line would be one of the array's words: read to
+# its end, with both comments given and no line named.
+given, named = [], []
+try:
+    cut = [t.strip() for _, t in sw.commands("x=(a # note\\\n#it's\nb)\ntouch ran\necho end #'\n",
+                                             comments=given, unsure=named)]
+except sw.Unreadable:
+    cut = "unreadable"
+say(cut == ["x=(a # note\\\n#it's\nb)", "touch ran", "echo end"] and named == [] and len(given) == 3,
+    "#3481 in an array, the line after a comment that ends in a backslash is read as the comment it is",
+    "commands gave %r, comments %r and named %r" % (cut, given, named))
+# After a # the reader is not sure of (right after an array), a backslash at the end of its line is
+# one it cannot call live or dead, so the # that starts the next line is named as well.
+named = []
+try:
+    sw.commands("x=(a b)# c\\\n#it's\ntouch ran\necho end #'\n", unsure=named)
+except sw.Unreadable:
+    pass
+say([at for at, _ in named] == [7, 12],
+    "#3481 after a # the reader is not sure of that ends in a backslash, the next line's # is named too",
+    "named %r, wanted the # at 7 and the # at 12" % (named,))
+
+# payload-write-gate.sh carries python and awk programs inside its shell, and the Slack drafts gate
+# reads such a program as shell as well. A comment there holding backquotes was a # the reader
+# could not be sure of, so the Slack drafts gate refused running that hook's suite by name. The file
+# and every program word its commands carry (a word holding a line break) are read again here, and
+# none may name a # the reader is not sure of.
+gate_path = os.path.join(os.path.dirname(os.path.dirname(sw_path)), "payload-write-gate.sh")
+with open(gate_path, encoding="utf-8") as f:
+    gate_text = f.read()
+named, programs, seen = [], 0, set()
+
+
+def unsure_lines(s):
+    """(the commands, the line of each # named, the line of each heredoc named). The reader names a
+    heredoc too, by its <<, where it cannot find its end (claude-config#3492), and those are told
+    apart here: what this table holds is the #."""
+    marks = []
+    try:
+        cut = sw.commands(s, unsure=marks)
+    except sw.Unreadable:
+        cut = []
+    found, opened = [], []
+    for at, _ in marks:
+        start = s.rfind("\n", 0, at) + 1
+        end = s.find("\n", at)
+        (opened if s.startswith("<<", at) else found).append(s[start:len(s) if end < 0 else end].strip()[:120])
+    return cut, found, opened
+
+
+cut, found, opened = unsure_lines(gate_text)
+named += found
+# The same file is a real text the heredoc reading is held against: it opened 11 heredocs on
+# 2026-11-23, none of them quoted, and the reader must find the end of every one (across the 626
+# tracked shell files it names none, measured the same day). The programs it carries are Python, where a << is
+# no heredoc, so one named in a program read as shell says nothing about the script (the line
+# `"<<" in cmd` of one is named, as it must be were it shell: a marker that never comes).
+say(not opened, "#3492 the reader finds the end of every heredoc in payload-write-gate.sh",
+    "it cannot place: %s" % " | ".join(opened))
+for _, cmd in cut:
+    for word in sw.command_words(cmd):
+        if "\n" in word and word not in seen:
+            seen.add(word)
+            programs += 1
+            named += unsure_lines(word)[1]
+say(len(cut) > 100 and programs >= 5,
+    "#3464 payload-write-gate.sh and the programs it carries were read",
+    "read %d commands and %d program words" % (len(cut), programs))
+say(not named, "#3464 the reader is sure of every # in payload-write-gate.sh and the programs it carries",
+    "unsure of: %s" % " | ".join(named))
+
+rows = [(name, kind, text) for name, prefix, close in PREFIXES for kind, text in texts(prefix, close)]
+rows += WHOLE
+print("shells\t" + " ".join(HAVE))
+for name, kind, text in rows:
+    got = reading(text)
+    ran = [shell for shell in HAVE if runs(shell, text)]
+    shown = text.replace("\\", "\\\\").replace("\n", "\\n").replace("\t", "\\t")
+    say(not (ran and got == "not listed"),
+        "#3464 a command the shell runs is never left out: a # %s (%s)" % (name, kind),
+        "%s ran the marker and the reader left it out: [%s]" % (" and ".join(ran), shown))
+    if name in REAL and (name, kind) not in UNSURE:
+        want = "not listed" if kind == "same" else "listed"
+        say(got == want, "#3464 the control: a real comment is still one: a # %s (%s)" % (name, kind),
+            "the reader said %s, wanted %s: [%s]" % (got, want, shown))
+    if name in WORD and kind == "same":
+        say(got == "listed", "#3464 a # the shell reads inside a word hides nothing: a # %s" % name,
+            "the reader said %s, wanted listed: [%s]" % (got, shown))
+        try:
+            unasked = "listed" if any(t.strip() == "touch ran" for _, t in sw.commands(text)) else "not listed"
+        except sw.Unreadable:
+            unasked = "unreadable"
+        want = "listed" if name in PLAIN else "not listed"
+        say(unasked == want, "#3481 a caller that does not ask is given the reading it always was: a # %s" % name,
+            "unasked, the reader said %s, wanted %s: [%s]" % (unasked, want, shown))
+    if kind == "open":
+        want = "listed" if ran else "not listed"
+        say(got == want, "#3481 past a # every shell keeps inside a word the reader reads what the shell does: a # %s" % name,
+            "the reader said %s, wanted %s: [%s]" % (got, want, shown))
+    if (name, kind) in UNSURE:
+        say(got == "unsure", "#3464 where it cannot be told the line is named: a # %s (%s)" % (name, kind),
+            "the reader said %s, wanted unsure: [%s]" % (got, shown))
+PY
+rc=$?
+[ "$rc" -eq 0 ] || check "the comparison ran to its end" "python3 exited $rc"
+
+SHELLS_READ=""
+while IFS=$'\t' read -r verdict what why; do
+  case "$verdict" in
+    ok) check "$what" ok ;;
+    FAIL) check "$what" "$why" ;;
+    shells) SHELLS_READ="$what" ;;
+    *) check "a row of the comparison is one this suite reads" "got: $verdict" ;;
+  esac
+done < "$T/rows.tsv"
+
+case " $SHELLS_READ " in
+  *" bash "*) check "the texts were run by this machine's bash" ok ;;
+  *) check "the texts were run by this machine's bash" "no bash was found, so no row was measured against a shell" ;;
+esac
+case " $SHELLS_READ " in
+  *" zsh "*) ;;
+  *) echo "SUITE-PART-UNMEASURED what zsh does with each text, because there is no zsh on this machine and each was run by bash alone" ;;
+esac
+# A run that compared nothing must not read as a pass.
+[ "$pass" -ge 250 ] || check "the comparison checked its rows" "only $pass checks passed, of the 330 or so the table makes"
+
+echo
+
+echo "passed: $pass, failed: $fail"
+
+printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
+
+[ "$fail" -eq 0 ]

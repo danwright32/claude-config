@@ -278,6 +278,138 @@ check_eq "S10 and it answers 1, an ordinary branch with nothing for a refusal to
 check_eq "S10 and GitHub was not asked" "0" "$(gh_calls)"
 
 # ===========================================================================================
+# E. GitHub's answer with a field left empty (claude-config#3463). The answer is one line of five
+# tab separated fields, and `read` merges two tabs into one, so an empty field moved every field
+# after it along and the reason named the wrong one ("another branch", "a fork"). Every case here
+# is not established before and after; only the reason is asked about. Where gh cannot leave a
+# field empty (the number, and any count of fields but five), jq is a stand in for the one call
+# that builds the line, and the real jq for every other call.
+# ===========================================================================================
+T=$'\t'
+EJQ="$WORKDIR/ejqbin"; mkdir -p "$EJQ"
+cat > "$EJQ/jq" <<'EOS'
+#!/usr/bin/env bash
+case "$*" in *headRefOid*@tsv*)
+  if [ -n "${FAKE_TSV+set}" ]; then cat >/dev/null; printf '%s\n' "$FAKE_TSV"; exit 0; fi ;;
+esac
+PATH="${PATH#*:}"; export PATH; exec jq "$@"
+EOS
+chmod +x "$EJQ/jq"
+gh_raw() { printf '%s\n' "$1" > "$FAKE_GH_DIR/base_one.json"; }
+sb_tsv() {   # $1 = the line GitHub's answer is reduced to
+  env FAKE_TSV="$1" PATH="$EJQ:$JUDGEBIN:$SYS_PATH" bash -c '. "$1/lib/stacked-base.sh" && sb_stacked_base "$2" ""' _ "$DIR" "$REPO" 2>&1
+}
+mk_stack e1 pushed
+E_WHY="none GitHub's answer about origin/base/one"
+gh_raw "{\"number\":7,\"state\":\"OPEN\",\"headRefName\":\"base/one\",\"headRefOid\":\"$BASE_TIP\",\"isCrossRepository\":false}"
+check_eq "E1 every field present: established, as before" "base origin/base/one $BASE_TIP 7" "$(sb)"
+gh_raw "{\"number\":7,\"state\":\"\",\"headRefName\":\"base/one\",\"headRefOid\":\"$BASE_TIP\",\"isCrossRepository\":false}"
+out="$(sb)"; rc=$?
+check "E2 an empty state is named as the state" "$E_WHY left out its state" "$out"
+check_not "E2 and not as another branch" "another branch" "$out"
+check_eq "E2 and it answers 2, for a refusal to say why" "2" "$rc"
+gh_raw "{\"number\":7,\"state\":null,\"headRefName\":\"base/one\",\"headRefOid\":\"$BASE_TIP\",\"isCrossRepository\":false}"
+check "E3 a null state is named as the state" "$E_WHY left out its state" "$(sb)"
+gh_raw "{\"number\":7,\"state\":\"OPEN\",\"headRefName\":\"\",\"headRefOid\":\"$BASE_TIP\",\"isCrossRepository\":false}"
+out="$(sb)"
+check "E4 an empty head branch is named as the head branch" "$E_WHY left out its head branch" "$out"
+check_not "E4 and not as another branch" "another branch" "$out"
+gh_raw "{\"number\":7,\"state\":\"OPEN\",\"headRefName\":\"base/one\",\"headRefOid\":\"\",\"isCrossRepository\":false}"
+out="$(sb)"
+check "E5 an empty head commit is named as the head commit" "$E_WHY left out its head commit" "$out"
+check_not "E5 and not as a fork" "fork, not from" "$out"
+gh_raw "{\"number\":7,\"state\":\"OPEN\",\"headRefName\":\"base/one\",\"headRefOid\":\"$BASE_TIP\"}"
+out="$(sb)"
+check "E6 no fork flag is named as no fork flag" "$E_WHY left out whether it comes from a fork" "$out"
+check_not "E6 and not as a fork" "fork, not from" "$out"
+gh_raw "{\"number\":7,\"state\":\"\",\"headRefName\":\"\",\"headRefOid\":\"$BASE_TIP\",\"isCrossRepository\":false}"
+check "E7 two adjacent empty fields are both named" "$E_WHY left out its state and its head branch" "$(sb)"
+gh_raw "{\"number\":7,\"state\":\"OPEN\",\"headRefName\":\"\",\"headRefOid\":\"\",\"isCrossRepository\":false}"
+check "E8 the head branch and head commit empty are both named" "$E_WHY left out its head branch and its head commit" "$(sb)"
+gh_raw "{\"number\":7,\"state\":\"\",\"headRefName\":\"\",\"headRefOid\":\"\",\"isCrossRepository\":false}"
+check "E9 three empty fields are all named" "$E_WHY left out its state, its head branch and its head commit" "$(sb)"
+check_eq "E10 the jq stand in reaches the check: a whole line is established" "base origin/base/one $BASE_TIP 7" "$(sb_tsv "7${T}OPEN${T}base/one${T}${BASE_TIP}${T}false")"
+check "E11 an empty number is named as the number" "$E_WHY left out its number" "$(sb_tsv "${T}OPEN${T}base/one${T}${BASE_TIP}${T}false")"
+check "E12 an empty last field is named, not dropped" "$E_WHY left out whether it comes from a fork" "$(sb_tsv "7${T}OPEN${T}base/one${T}${BASE_TIP}${T}")"
+check "E13 every field empty: all five are named" "$E_WHY left out its number, its state, its head branch, its head commit and whether it comes from a fork" "$(sb_tsv "${T}${T}${T}${T}")"
+out="$(sb_tsv "7${T}OPEN${T}base/one${T}${BASE_TIP}")"
+check "E14 four fields: not established, and never read as five" "$E_WHY could not be read: it held 4 fields where 5 were expected" "$out"
+out="$(sb_tsv "7${T}OPEN${T}base/one${T}${BASE_TIP}${T}false${T}extra")"
+check "E15 six fields: not established, and never read as five" "$E_WHY could not be read: it held 6 fields where 5 were expected" "$out"
+
+# R. The README's list of what a refusal says, held against every reason the code can give. The
+# reasons are enumerated from lib/stacked-base.sh and lib/push-changes.sh themselves, so one added
+# there fails here until it is placed below and the README names it (L96). "unsaid" is a reason
+# whose line answers 1, which no refusal prints; "-" is a wrapper or pass through of another reason.
+IFS= read -r -d '' REASONS_TABLE <<'EOS' || true
+$dir is not a directory that can be entered|||unsaid
+the repository has no commit yet|||unsaid
+HEAD is detached, so this branch's own copy on origin cannot be told from a base|||unsaid
+lib/push-scope.sh is missing, so origin's default branch could not be read|||unsaid
+this checkout knows no default branch for origin|||unsaid
+this branch has no merge base with $def|||unsaid
+no other branch on origin lies between $def and this branch|||unsaid
+more than one branch on origin lies under this one and none of them holds the others|||none of them holds the others
+$t is not on PATH, so GitHub could not be asked whether the branch under this one is an open pull request|||gh, jq or perl
+lib/bounded-run.sh is missing, so GitHub could not be asked inside a time limit|||a library file of the hooks
+lib/merge-target.sh is missing, so GitHub could not be asked|||a library file of the hooks
+GitHub did not answer about origin/$name within ${SB_READ_SECONDS}s|||GitHub did not answer within the time limit
+GitHub could not be read about origin/$name ($rerr)|||a read of GitHub that failed
+GitHub named no pull request for origin/$name|||no pull request
+GitHub's answer about origin/$name could not be read: it held ${#fields[@]} fields where 5 were expected|||held more or fewer than were asked for
+GitHub's answer about origin/$name left out $missing|||left out one of the fields asked for
+GitHub answered about another branch than origin/$name|||GitHub answered about another branch
+pull request #$num of origin/$name is not open (GitHub says $state)|||a pull request that is not open
+pull request #$num of $name comes from a fork, not from this repository|||a pull request from a fork
+GitHub has pull request #$num of origin/$name at ${hoid:0:7}, and this checkout's copy of that branch is at ${near:0:7}|||at another commit than this checkout's copy of the branch
+${why:-GitHub could not be asked about the branch under this one}|||a read of GitHub that failed
+lib/stacked-base.sh is missing|||a library file of the hooks
+${ans#none }|||-
+$ref is an open pull request (#$pr), but $PC_BASE_JUDGED_WHY|||-
+this Mac has no record that this gate judged the push that put it at ${1:0:7} (it has no push gate ledger yet)|||no push gate ledger yet
+this Mac's push gate ledger could not be read|||the push gate ledger could not be read
+git could not read the base's head, ${1:0:7}|||git could not read the base's head or its own commits
+git could not read the base's own commits|||git could not read the base's head or its own commits
+it holds no commits of its own over the default branch|||holds no commits of its own over the default branch
+it holds more than $PC_BASE_JUDGED_MAX commits of its own, more than this gate looks up in the ledger|||more than {MAX} commits of its own
+a push of that branch's own commits was let through unjudged, by an override or a gate that failed open|||let through unjudged, by an override or a gate that failed open
+this Mac has no record that this gate judged the push that put it at ${1:0:7}|||no record on this Mac that the test gate judged the push
+EOS
+REASONS_TABLE="${REASONS_TABLE%$'\n'}"
+CHECKOUT="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
+if [ -z "$CHECKOUT" ] || [ ! -f "$CHECKOUT/README.md" ]; then
+  echo "NOTE: UNMEASURED: $DIR is not in a checkout of this repository, so the README's list of reasons could not be compared."
+else
+  sec="$(awk '/^### A stacked branch is judged from its base/ { on = 1; next } on && /^### / { exit } on' "$CHECKOUT/README.md" | tr -d '`' | tr '\n' ' ' | tr -s ' ')"
+  max="$(sed -n 's/^PC_BASE_JUDGED_MAX=\([0-9][0-9]*\).*/\1/p' "$DIR/lib/push-changes.sh")"
+  reasons="$( { grep -o -E '(sb__none |why=)"[^"]*"' "$DIR/lib/stacked-base.sh" | sed -E 's/^(sb__none |why=)"//; s/"$//'
+                grep -o -E '(PC_BASE_JUDGED_WHY|PC_STACKED_WHY)="[^"]*"' "$DIR/lib/push-changes.sh" | sed -E 's/^[A-Z_]+="//; s/"$//'; } | awk 'NF' | sort -u)"
+  n_reasons="$(printf '%s\n' "$reasons" | awk 'NF' | wc -l | tr -d ' ')"
+  [ "$n_reasons" -ge 25 ] && ok || bad "R0 only $n_reasons reasons were found in the code, so the enumeration is not reading it"
+  [ -n "$sec" ] && ok || bad "R0 the README has no section headed 'A stacked branch is judged from its base'"
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    phrase="$(awk -v r="$r|||" 'index($0, r) == 1 { print substr($0, length(r) + 1); exit }' <<< "$REASONS_TABLE")"
+    case "$phrase" in
+      "") bad "R1 a reason the code can give is in neither the README's list nor this suite's table: $r" ;;
+      -) ok ;;
+      unsaid) rline="$(grep -F -- "\"$r\"" "$DIR/lib/stacked-base.sh")"
+              case "$rline" in
+                *"return 1"*) ok ;;
+                *) bad "R2 a reason marked as never said is on a line that does not answer 1: $r" ;;
+              esac ;;
+      *) check "R3 the README's list names: $r" "${phrase//\{MAX\}/$max}" "$sec" ;;
+    esac
+  done <<< "$reasons"
+  while IFS= read -r t; do
+    case $'\n'"$reasons"$'\n' in
+      *$'\n'"${t%%|||*}"$'\n'*) ok ;;
+      *) bad "R4 this suite lists a reason the code no longer gives: ${t%%|||*}" ;;
+    esac
+  done <<< "$REASONS_TABLE"
+fi
+
+# ===========================================================================================
 # T. The pre push test gate.
 # ===========================================================================================
 # T1 is the refusal of 2026-11-21: the child's push refused for the base's change.

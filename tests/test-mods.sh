@@ -1008,17 +1008,39 @@ runbp "$TMPROOT/claude-nine" 2.1.296
   && printf '%s\n' "$out" | grep 'routes past the user tier' | grep -q '2\.1\.296' \
   && check "a build older than the list says routing them fails, naming the build" ok \
   || check "a build older than the list says routing them fails, naming the build" "exit=$code out=$out"
+# 2.1.331 also routes session.info and session.redact (#3508), measured on the builds installed on the
+# personal MacBook on 2026-11-23: 2.1.327 to 2.1.330 route the nine above and 2.1.331 these eleven.
+{ cat "$FAKE"; routes_of "${SEVEN7B[@]}" prompt.attachment session.compact session.info session.redact; } > "$TMPROOT/claude-eleven"; chmod +x "$TMPROOT/claude-eleven"
+runbp "$TMPROOT/claude-eleven" 2.1.331
+[ "$code" -eq 0 ] && ! printf '%s\n' "$out" | grep -q 'routes past the user tier' && check "2.1.331 routing session.info and session.redact as well passes" ok \
+  || check "2.1.331 routing session.info and session.redact as well passes" "exit=$code out=$out"
+runbp "$TMPROOT/claude-nine" 2.1.331
+[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep -q 'listed, no longer routed: session.info session.redact' \
+  && check "a 2.1.331 that no longer routes session.info and session.redact fails, naming both" ok \
+  || check "a 2.1.331 that no longer routes session.info and session.redact fails, naming both" "exit=$code out=$out"
+runbp "$TMPROOT/claude-nine" 2.1.330
+[ "$code" -eq 0 ] && ! printf '%s\n' "$out" | grep -q 'routes past the user tier' && check "2.1.330 routing the nine passes" ok \
+  || check "2.1.330 routing the nine passes" "exit=$code out=$out"
+runbp "$TMPROOT/claude-eleven" 2.1.330
+[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep -q 'not listed: session.info session.redact' \
+  && printf '%s\n' "$out" | grep 'routes past the user tier' | grep -q '2\.1\.330' \
+  && check "a 2.1.330 routing session.info and session.redact fails, naming the build and both" ok \
+  || check "a 2.1.330 routing session.info and session.redact fails, naming the build and both" "exit=$code out=$out"
 # A later build is held to everything listed, so the next build that adds or drops a route fails on
 # whichever Mac installs it first.
+runbp "$TMPROOT/claude-eleven" 2.1.400
+[ "$code" -eq 0 ] && check "a later build routing the same eleven passes" ok || check "a later build routing the same eleven passes" "exit=$code out=$out"
 runbp "$TMPROOT/claude-nine" 2.1.400
-[ "$code" -eq 0 ] && check "a later build routing the same nine passes" ok || check "a later build routing the same nine passes" "exit=$code out=$out"
+[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep -q 'listed, no longer routed: session.info session.redact' \
+  && check "a later build routing only the nine fails, naming the two it lacks" ok \
+  || check "a later build routing only the nine fails, naming the two it lacks" "exit=$code out=$out"
 # A build whose version cannot be read is held to every route listed, and that is said.
-runbp "$TMPROOT/claude-nine" unknown
+runbp "$TMPROOT/claude-eleven" unknown
 [ "$code" -eq 0 ] && printf '%s\n' "$out" | grep -q 'could not read which Claude Code build' \
   && check "a build whose version cannot be read is held to every listed route, and says so" ok \
   || check "a build whose version cannot be read is held to every listed route, and says so" "exit=$code out=$out"
 runbp "$TMPROOT/claude-same" unknown
-[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep -q 'listed, no longer routed: prompt.attachment session.compact' \
+[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep -q 'listed, no longer routed: prompt.attachment session.compact session.info session.redact' \
   && check "and fails when it routes fewer" ok || check "and fails when it routes fewer" "exit=$code out=$out"
 
 # 7c. Whatever build a Mac runs, and on CI with none, a hook on either route 2.1.299 added fails
@@ -1035,6 +1057,21 @@ out="$(CLAUDE_BIN="$TMPROOT/no-such-claude" CHECK_MODS_BYPASS_KNOWN="$KNOWN7C" P
 out="$(STUB_LOG="$LOG" FAKE_CC_VERSION=2.1.296 CLAUDE_BIN="$TMPROOT/claude-same" CHECK_MODS_BYPASS_KNOWN="$KNOWN7C" TSC_BIN="$TSC_PASS" bash "$CHECK" "$M7C" 2>&1)"; code=$?
 [ "$code" -eq 1 ] && printf '%s\n' "$out" | grep -q 'compacts hooks session.compact, which' \
   && check "and on a Mac still running a build before 2.1.299" ok || check "and on a Mac still running a build before 2.1.299" "exit=$code out=$out"
+# The same for the two routes 2.1.331 added (#3508): a hook on either fails with no claude command and
+# on a Mac still running 2.1.330, the last build measured without them.
+M7D="$TMPROOT/m7d"; KNOWN7D="$TMPROOT/known7d.tsv"; : > "$KNOWN7D"
+mkmod "$M7D" redacts
+printf "export const register = on => {\n  on('session.info', async (\$, e, next) => next(e))\n  on('session.redact', async (\$, e, next) => next(e))\n}\n" > "$M7D/redacts/hooks/register.ts"
+out="$(CLAUDE_BIN="$TMPROOT/no-such-claude" CHECK_MODS_BYPASS_KNOWN="$KNOWN7D" PATH=/usr/bin:/bin TSC_BIN="$TSC_PASS" bash "$CHECK" "$M7D" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep -q 'redacts hooks session.info, which' \
+  && printf '%s\n' "$out" | grep -q 'redacts hooks session.redact, which' \
+  && check "with no claude command, hooks on session.info and session.redact fail" ok \
+  || check "with no claude command, hooks on session.info and session.redact fail" "exit=$code out=$out"
+out="$(STUB_LOG="$LOG" FAKE_CC_VERSION=2.1.330 CLAUDE_BIN="$TMPROOT/claude-nine" CHECK_MODS_BYPASS_KNOWN="$KNOWN7D" TSC_BIN="$TSC_PASS" bash "$CHECK" "$M7D" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep -q 'redacts hooks session.info, which' \
+  && printf '%s\n' "$out" | grep -q 'redacts hooks session.redact, which' \
+  && ! printf '%s\n' "$out" | grep -q 'routes past the user tier' \
+  && check "and on a Mac still running 2.1.330" ok || check "and on a Mac still running 2.1.330" "exit=$code out=$out"
 
 # 8. The real tree, with the real binary where this machine has one (REAL_BIN, found at the top).
 #    Nothing before this case starts the real claude, so the record of the build the mods last
