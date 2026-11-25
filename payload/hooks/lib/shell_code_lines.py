@@ -365,8 +365,9 @@ def _walk(text):
     body): the one walk code_lines and heredoc_body_lines both read.
 
     A line that starts with # is a comment unless the line before joined that # onto a word
-    (claude-config#3475). After a heredoc no shell closes nothing is left out but a closing word:
-    see _read."""
+    (claude-config#3475). After a heredoc the reader names as one it is not sure of (one no shell
+    closes, one the shells do not end alike, one whose opener is joined to the next line) nothing
+    is left out but a closing word: see _read."""
     for n, line, kind, _, ops, worded, rest in _read(text):
         if kind == "end":
             continue

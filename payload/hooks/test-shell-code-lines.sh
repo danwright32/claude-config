@@ -387,12 +387,17 @@ def say(ok, what, why=""):
     print("ok\t" + what if ok else "FAIL\t%s\t%s" % (what, why))
 
 
+# Where a shell is looked for and what it is run with: one path for both, so a shell that is only
+# on the caller's own path is said to be absent, never found and then not started.
+RUN_PATH = "/usr/bin:/bin"
+
+
 def run(argv, text):
     """What the text prints, run by argv as a -c text; None when it is still running at 10 seconds.
     The shell is started in a group of its own and the whole group is stopped with it."""
     p = subprocess.Popen(argv + ["-c", text], cwd=scratch, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                          stderr=subprocess.DEVNULL, start_new_session=True,
-                         env={"PATH": "/usr/bin:/bin", "HOME": scratch})
+                         env={"PATH": RUN_PATH, "HOME": scratch})
     try:
         out, _ = p.communicate(timeout=10)
     except subprocess.TimeoutExpired:
@@ -426,8 +431,8 @@ def classify(text, out):
 # A shell is held to the list only where it is the one the list was measured with (L411).
 measured = []
 for name, shell in doc["shells"].items():
-    if not shutil.which(shell["run"][0]):
-        print("unmeasured\t%s\tthere is no %s on this machine" % (name, shell["run"][0]))
+    if not shutil.which(shell["run"][0], path=RUN_PATH):
+        print("unmeasured\t%s\tthere is no %s in %s on this machine" % (name, shell["run"][0], RUN_PATH))
     elif os.uname().sysname != doc["os"]:
         print("unmeasured\t%s\tthe list was measured on %s and this is %s" % (name, doc["os"], os.uname().sysname))
     elif (run(shell["run"], shell["probe"]) or "").strip() != shell["prints"]:
@@ -519,14 +524,25 @@ print("read %d" % read)
 PY
   tree_read="$(sed -n 's/^read //p' "$W/tree-named")"
   if [ "${tree_read:-0}" -ge 300 ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: #3592 the repository's shell files were read (only '${tree_read:-none}' of them, where it ships hundreds)"; fi
-  eq "#3592 no shell file of the repository holds a heredoc the reader is not sure of" "" "$(grep -v '^read ' "$W/tree-named" | head -20)"
+  # The first twenty, each read from a file: a pipe into a reader that stops early can report a
+  # failure that never happened under pipefail (test-pipefail-shortcircuit.sh).
+  grep -v '^read ' "$W/tree-named" > "$W/tree-found" || true
+  eq "#3592 no shell file of the repository holds a heredoc the reader is not sure of" "" "$(sed -n '1,20p' "$W/tree-found")"
   # The mods' reader is held to the same list, through a copy: a mod's tests can import only the
   # mod's own files. The copy is the list's text after one line, so it cannot come to say otherwise.
-  if sed '1,/^export default$/d' "$TREE_ROOT/payload/mods/mod-kit/tests/heredoc-closes.ts" 2>/dev/null | cmp -s - "$LIB/heredoc-closes.json"; then
-    pass=$((pass + 1))
-  else
+  # A copy that is not there and a copy that differs are said apart (L11).
+  COPY="$TREE_ROOT/payload/mods/mod-kit/tests/heredoc-closes.ts"
+  if [ ! -f "$COPY" ]; then
     fail=$((fail + 1))
-    echo "FAIL: #3592 payload/mods/mod-kit/tests/heredoc-closes.ts no longer holds the text of payload/hooks/lib/heredoc-closes.json after its 'export default' line: put the list's text there again, whole"
+    echo "FAIL: #3592 payload/mods/mod-kit/tests/heredoc-closes.ts is not there, so the mods' suite has no list to run: write it again, its header and then the text of payload/hooks/lib/heredoc-closes.json"
+  else
+    sed '1,/^export default$/d' "$COPY" > "$W/copy-text"
+    if cmp -s "$W/copy-text" "$LIB/heredoc-closes.json"; then
+      pass=$((pass + 1))
+    else
+      fail=$((fail + 1))
+      echo "FAIL: #3592 payload/mods/mod-kit/tests/heredoc-closes.ts no longer holds the text of payload/hooks/lib/heredoc-closes.json after its 'export default' line: put the list's text there again, whole"
+    fi
   fi
 fi
 
