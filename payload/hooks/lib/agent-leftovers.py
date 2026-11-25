@@ -47,7 +47,7 @@ import time
 PS_SECONDS = 5
 MAX_REFUSALS = 2
 SLACK = 2.0          # seconds either side of a call: a start time is whole seconds
-PLAIN = re.compile(r'^[A-Za-z0-9_-]{1,64}$')
+PLAIN = re.compile(r'\A[A-Za-z0-9_-]{1,64}\Z')  # \Z, never $: $ also matches before a final line break
 ISSUE = 'claude-config#3561'
 
 
@@ -267,12 +267,18 @@ def line_of(p):
     return 'pid %d, started %s: %s' % (p['pid'], et(p['started']), short(p['command'], 160))
 
 
+def key(p):
+    """What a process is settled by: its id AND its start, since an id is given out again, and a
+    later process given a settled one's number has been neither named nor said."""
+    return '%d@%d' % (p['pid'], int(p['started']))
+
+
 def load_state(path):
     try:
         with open(path, encoding='utf-8') as f:
             s = json.load(f)
         if isinstance(s, dict):
-            return {'refusals': int(s.get('refusals') or 0), 'settled': [int(x) for x in s.get('settled') or []]}
+            return {'refusals': int(s.get('refusals') or 0), 'settled': [str(x) for x in s.get('settled') or []]}
     except (OSError, ValueError, TypeError):
         pass
     return {'refusals': 0, 'settled': []}
@@ -337,8 +343,8 @@ def gate(payload):
 
     state = load_state(state_path)
     settled = set(state['settled'])
-    unsure = [p for p in found['unsure'] if p['pid'] not in settled]
-    mine = [p for p in found['mine'] if p['pid'] not in settled]
+    unsure = [p for p in found['unsure'] if key(p) not in settled]
+    mine = [p for p in found['mine'] if key(p) not in settled]
     if unsure:
         whose = ('the transcript of agent %s could not be read, so whether its commands started them could not be told' % agent
                  if found['state'] == 'no-transcript' else
@@ -347,14 +353,14 @@ def gate(payload):
         acts.append('LEFTOVER PROCESS CHECK: %d process%s started by a Bash command of this session %s still running, and %s: %s. '
                      'Nothing was stopped (%s).' % (len(unsure), '' if len(unsure) == 1 else 'es', 'is' if len(unsure) == 1 else 'are',
                                                      whose, '; '.join(line_of(p) for p in unsure), ISSUE))
-        settled |= {p['pid'] for p in unsure}
+        settled |= {key(p) for p in unsure}
 
     action, text = 'none', ''
     if mine:
         tool_input = payload.get('tool_input') if isinstance(payload.get('tool_input'), dict) else {}
         report = str(tool_input.get('message') or '') if handback else ''
-        named = {p['pid'] for p in mine if re.search(r'(?<![0-9])%d(?![0-9])' % p['pid'], report)}
-        unnamed = [p for p in mine if p['pid'] not in named]
+        named = {key(p) for p in mine if re.search(r'(?<![0-9])%d(?![0-9])' % p['pid'], report)}
+        unnamed = [p for p in mine if key(p) not in named]
         settled |= named
         if handback and unnamed and state['refusals'] < MAX_REFUSALS:
             state['refusals'] += 1
@@ -376,7 +382,7 @@ def gate(payload):
             acts.append('LEFTOVER PROCESS CHECK: agent %s left %d process%s its commands started still running: %s. '
                          'Nothing was stopped. Stop each with kill and its process id once you have checked it is not needed (%s).'
                          % (agent, len(unnamed), '' if len(unnamed) == 1 else 'es', '; '.join(line_of(p) for p in unnamed), ISSUE))
-            settled |= {p['pid'] for p in unnamed}
+            settled |= {key(p) for p in unnamed}
 
     if action == 'refuse' or settled != set(state['settled']):
         state['settled'] = sorted(settled)

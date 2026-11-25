@@ -29,6 +29,7 @@
 #     above the settings hooks for that reason. So an agent that ends without the hand back tool
 #     is not asked anything: what it left is said to Dan and spooled, once.
 #   A process already named in the report, or already said, is not said again at a later stop.
+#   It is known by its id and its start time together, so a later process given the same id is.
 #
 # WHAT IT CANNOT TELL is said, never passed over: the process table could not be read, this
 # session's shells are not recorded, or the agent's transcript could not be read. Each lets the

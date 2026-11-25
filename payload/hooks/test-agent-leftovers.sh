@@ -270,6 +270,38 @@ gate reuse PreToolUse e1 "Done."
 said "it is said as one that could not be told" "$OUT" 'could not be told.*7999|7999.*could not be told'
 lacks "and never as one the agent left" "$OUT$ERR" 'agent e1 left|your commands started'
 
+echo "a process settled once does not settle a later one given the same number"
+# Agent j1's first hand back named pid 7650 and passed this check, but the agent carried on (another
+# hook refused that hand back). 7650 ended, and a later command of j1's left a child that was given
+# 7650 again (on 2026-11-25 a measurement sleep's number was given to another process within the hour,
+# one sample). That later child is j1's and unnamed, so it is said.
+fixture againa <<'EOF'
+proc 7650 1 7610 -99 sleep 240
+mark sess-one 7610 -99.6
+bash j1.jsonl t1 -100 -90 python3 harness.py
+EOF
+fixture againb <<'EOF'
+proc 7650 1 7620 -39 sleep 888
+mark sess-one 7620 -40.2
+bash j1.jsonl t1 -100 -90 python3 harness.py
+bash j1.jsonl t2 -40 -30 python3 second.py
+EOF
+gate againa PreToolUse j1 "Done. I left pid 7650 running on purpose."
+[ "$RC" -eq 0 ] && check "the first hand back, naming pid 7650, goes through" ok || check "the first hand back, naming pid 7650, goes through" "rc=$RC err=$ERR"
+gate againb PreToolUse j1 "Done."
+[ "$RC" -eq 2 ] && check "a later process given the same number is refused like any other" ok || check "a later process given the same number is refused like any other" "rc=$RC out=$OUT err=$ERR"
+has "and the refusal names it with its own command" "$ERR" 'pid 7650.*sleep 888'
+
+echo "an id ending in a line break is not a plain name"
+out="$(AGENT_LEFTOVERS_ROOT="$ROOT" python3 "$READER" dir "$(printf 'sess-two\nx')" 2>/dev/null)"; rc=$?
+[ "$rc" -ne 0 ] && check "the reader names no folder for a session id holding a line break" ok || check "the reader names no folder for a session id holding a line break" "rc=$rc out=$out"
+out="$(AGENT_LEFTOVERS_ROOT="$ROOT" python3 "$READER" dir "sess-two
+" 2>/dev/null)"; rc=$?
+[ "$rc" -ne 0 ] && [ -z "$out" ] && check "nor for one ending in a line break, which bash-shell-mark.sh refuses too" ok || check "nor for one ending in a line break, which bash-shell-mark.sh refuses too" "rc=$rc out=$out"
+GATE_SESSION="sess-nl
+" gate two PreToolUse k1 "Done."
+said "the gate says it did not run for a session id ending in a line break" "$OUT" 'DID NOT RUN'
+
 echo "what cannot be read is said as not told, never as nothing left"
 GATE_PS="$WORK/no-such-table" gate two PreToolUse f1 "Done."
 [ "$RC" -eq 0 ] && check "an unreadable process table never refuses the hand back" ok || check "an unreadable process table never refuses the hand back" "rc=$RC err=$ERR"
