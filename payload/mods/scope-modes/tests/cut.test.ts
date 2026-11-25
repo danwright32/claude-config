@@ -34,3 +34,23 @@ for (const [what, call, words] of CASES)
     expect(r.deny).toBe(words)
     expect(ran).toEqual([])
   })
+
+// #1495, Dan's decision 2026-10-22 (picker answer "Let stops through on a check error"): "when scope
+// modes' own check of a TaskStop errors, the stop is let through; every other refusal of a TaskStop,
+// and every other tool's fail closed behaviour, stays as it is." The hook's own try carries that out
+// for a judge that throws. A failure outside that try (here the mode's state cannot be read, so the
+// hook throws before it judges) or a cut for time reaches the registration's catch instead, which
+// therefore answers nothing for a TaskStop, the one call it lets go on, and refuses every other.
+test("#3655, #1495: a TaskStop whose hook throws is let through, and an edit whose hook throws the same way is refused", { plugins: [kit] }, async ($, on) => {
+  const ran: string[] = []
+  const store = { broken: false }
+  on('tool.call', async (_$, e) => (ran.push(String(e.tool)), { result: 'ran' }))
+  on('state.get', async (_$, e, next) => (store.broken && (e as { key: string }).key === 'scope' ? ({ deny: 'the state store broke' } as never) : next(e)))
+  store.broken = true
+  const stop = await $.tool.call({ tool: 'TaskStop', task_id: 'b1', tool_use_id: 't1' } as never)
+  expect(stop.deny).toBeUndefined()
+  expect(ran).toEqual(['TaskStop'])
+  const edit = await $.tool.call({ tool: 'Edit', file_path: '/repo/app.ts', old_string: 'a', new_string: 'b', tool_use_id: 't2' } as never)
+  expect(edit.deny).toBe('Blocked: scope modes could not check this call (it failed), so the call was refused and did not run. This is not a judgement of what the call does: send the same call again. If it keeps happening, tell Dan.')
+  expect(ran).toEqual(['TaskStop'])
+})

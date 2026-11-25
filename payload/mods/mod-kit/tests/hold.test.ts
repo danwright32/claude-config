@@ -1,4 +1,5 @@
 import { expect } from 'claude-code/testing'
+import type { Register } from 'claude-code'
 import { test } from './hang-ceiling.ts'
 import { CATCH_RESERVE_MS, cutRefusal, cutCall, cutCheck, cutOwn, neverThrows, ownRefusal, watchesOnly, withinGrace } from '../hooks/hold.ts'
 
@@ -168,4 +169,38 @@ test("#3655: the refusal says out of time for a timeout and for a missed heartbe
 
 test('#3655: a hook that only watches answers nothing in its catch, which the engine reads as the hook absent', () => {
   expect(watchesOnly()).toBeUndefined()
+})
+
+// #3655: which catches the engine asks about a failed call. Each plugin below is written whole inside
+// its own register, since an inline plugin cannot reach this file's variables. Seen the same way in
+// live sessions on 2026-11-25 (Claude Code 2.1.332, 3 of 3 runs for each of the two cases).
+const filteredFirst: { name: string; register: Register } = {
+  name: 'filter-probe',
+  register: on => {
+    on('tool.call', { tool: 'Read' }, async (_$, e, next) => next(e)).catch(() => ({ deny: 'the catch of the Read hook answered' }))
+    on('tool.call', { tool: 'Bash' }, async () => {
+      throw new Error('the Bash hook failed')
+    }).catch(() => ({ deny: 'the catch of the Bash hook answered' }))
+  },
+}
+const unfilteredFirst: { name: string; register: Register } = {
+  name: 'order-probe',
+  register: on => {
+    on('tool.call', async (_$, e, next) => next(e)).catch(() => ({ deny: 'the catch of the first hook answered' }))
+    on('tool.call', { tool: 'Bash' }, async () => {
+      throw new Error('the Bash hook failed')
+    }).catch(() => ({ deny: 'the catch of the Bash hook answered' }))
+  },
+}
+
+test("#3655: a catch is not asked about a call its hook's tool filter does not match, however early it was registered", { plugins: [filteredFirst] }, async ($, on) => {
+  on('tool.call', async () => ({ result: 'ran' }))
+  expect((await $.tool.call({ tool: 'Bash', command: 'true', tool_use_id: 't1' } as never)).deny).toBe('the catch of the Bash hook answered')
+  // A call neither hook fails on is untouched by either catch.
+  expect((await $.tool.call({ tool: 'Read', file_path: '/repo/a.ts', tool_use_id: 't2' } as never)).deny).toBeUndefined()
+})
+
+test('#3655: a first hook with no tool filter matches every call, so its catch answers for a later hook that failed', { plugins: [unfilteredFirst] }, async ($, on) => {
+  on('tool.call', async () => ({ result: 'ran' }))
+  expect((await $.tool.call({ tool: 'Bash', command: 'true', tool_use_id: 't1' } as never)).deny).toBe('the catch of the first hook answered')
 })

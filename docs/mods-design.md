@@ -143,13 +143,30 @@ and settles its own surfaces in rounds of its own before it is built.
    for 11 s, refused the call 3 of 3 in those words, where the same slowed copies of the code
    before this change let it run 3 of 3.
 
-   Three things the engine does that shape this, each seen live that day:
-   - **A mod's hooks on one event fail as one.** Whichever of them was cut, the engine asks their
-     catches in the order registered and takes the first answer (3 of 3: a slow second hook was
-     answered by the first hook's catch; 3 of 3: a first catch answering nothing handed on to the
-     second). So a first hook that judges only some calls says which with `mine`, and for any other
-     call its catch answers nothing: the area check's and the design round guard's hooks for a
-     subagent's call do.
+   Four things the engine does that shape this, each seen live that day except where it says not:
+   - **A mod's hooks on one event fail as one, among those whose tool filter matches the call.**
+     Whichever of them was cut, the engine asks the catches of those hooks in the order registered
+     and takes the first answer (3 of 3: a slow second hook was answered by the first hook's
+     catch; 3 of 3: a first catch answering nothing handed on to the second). The catch of a hook
+     registered for other tools is never asked (3 of 3: a refusing catch on a `Read` hook,
+     registered ahead of a slow `Bash` hook, was not asked about the Bash call, and the Bash hook's
+     own catch answered). So one catch answers for another hook's failure only where both hooks
+     match the call, which leaves two cases. A first hook with no tool filter matches every call,
+     so one that judges only some calls says which with `mine`, and for any other call its catch
+     answers nothing: the area check's and the design round guard's hooks for a subagent's call
+     do. And a mod's own tool shares its calls with the mod's unfiltered watchers (manual steps,
+     job watcher, is it live): where the watcher is what failed on a call to that tool, the
+     tool's `cutOwn` answers "could not finish answering this call to its own tool", which is why
+     those words claim neither that nothing was done nor that all of it was. An ordinary call
+     never reaches a `cutOwn`.
+   - **One catch lets a cut call go on.** Where no matching catch answers, the hooks are read as
+     absent and the call runs, so a `mine` that says no is the one way a shared catch passes a cut
+     call. Scope modes uses it for a `TaskStop` alone, by Dan's decision on #1495 (2026-10-22:
+     "when scope modes' own check of a TaskStop errors, the stop is let through"), since stopping
+     a job cannot break a mode and refusing the stop only keeps the job running. A cut `TaskStop`
+     runs, as it did before this change; every other call scope modes is cut on is refused. This
+     one is read in the test engine with a hook that throws (scope modes' `tests/cut.test.ts`),
+     not in a live session.
    - **A hook that never yields is stopped at about 6 s, and what follows depends on the catch.**
      The hooks worker misses a heartbeat at 5 s and is replaced. A mod with a catch stays loaded,
      its catch refuses the call (3 of 3 on a probe, 3 of 3 on the style check), and it judges the

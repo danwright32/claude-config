@@ -80,12 +80,26 @@ export const neverThrows = async <R>(work: () => R | Promise<R>, fallback: () =>
 // The handler is written out at the registration because Claude Code's validator takes only a
 // function literal there, or the name of a function (read 2026-11-25, 2.1.332).
 //
-// A mod's hooks on one event fail as ONE (read in the test engine the same day, 12 cases): whichever
-// of them failed, the engine asks their catches in the order they were registered, the first that
-// answers anything is the answer, and `next.called` says whether the call beneath the mod ran. So a
-// first hook's refusing catch answers for every later hook of the mod on that call, and one that
-// judges only some calls says which with `mine`: for any other call it answers nothing and the next
-// catch is asked. watchesOnly answers nothing for the same reason.
+// Which catches are asked. Of a mod's hooks on one event, those whose tool filter MATCHES the call
+// fail as one (read in the test engine the same day, 12 cases, and live, 3 of 3): whichever of them
+// failed, the engine asks the catches of those hooks in the order they were registered, the first
+// that answers anything is the answer, and `next.called` says whether the call beneath the mod ran.
+// A hook registered for other tools is no part of it: the catch of a `{ tool: 'Read' }` hook is never
+// asked about a Bash call, however early it was registered (3 of 3 live the same day, a refusing
+// catch on a Read hook registered ahead of a slow Bash hook; mod-kit's tests/hold.test.ts pins both).
+// So a catch can answer for another hook's failure only where both hooks match the call, in two
+// cases. One: a hook with NO tool filter matches every call, so where it is registered first its
+// refusing catch answers for every later hook of the mod. One that judges only some calls says
+// which with `mine`: for any other call it answers nothing and the next matching catch is asked.
+// Two: a hook filtered to the mod's own tool shares that tool's calls with the mod's unfiltered
+// hooks alone. Where one of those is a watcher and it is the one that failed, watchesOnly answers
+// nothing and the tool's cutOwn answers "could not finish answering this call to its own tool".
+// The catch cannot tell which of the two failed, which is why those words claim neither that
+// nothing was done nor that all of it was. An ordinary call (a Read, a Bash) never reaches a
+// cutOwn, whose hook does not match it.
+// Where no matching catch answers, Claude Code reads the hooks as absent and the call goes on. So a
+// `mine` that says no is the one way a catch here lets a cut call go on, and each use says why
+// beside it.
 //
 // A hook that computes without yielding is stopped by the hooks worker's heartbeat at about 6 s.
 // With no catch its mod is then UNLOADED and the call runs (3 of 3 runs, same day); with one of

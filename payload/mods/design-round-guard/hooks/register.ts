@@ -2989,9 +2989,10 @@ export const register: Register = on => {
     }
     // #3655: this hook judges what the command CHANGED, after it ran. Cut there, the result is
     // replayed with the note a look that failed gives, since the files went unjudged; cut before the
-    // command ran, the call is refused. A mod's tool.call catches are asked in the order registered
-    // whichever hook failed, so this one says the call is its own only for a shell call (`mine`):
-    // a question whose hook failed is left to the catch after this one, never given a shell note.
+    // command ran, the call is refused. The hook is registered for Bash alone, and a catch is asked
+    // only about calls its hook's tool filter matches (hold.ts), so a question whose hook failed
+    // never reaches this catch. `mine` says the same inside the catch, a second hold on the same
+    // line should the filter ever change: a question would be left to its own catch, with no shell note.
     // The note names the failure by its kind only (cutWhy), never its own words, which can quote
     // the input the look could not read (the lessons review of this change).
   }).catch(($, e, next) => cutCall('the design round guard', e, next, {

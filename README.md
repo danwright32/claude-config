@@ -11002,6 +11002,9 @@ If it keeps happening, tell Dan." Seen live that day on scratch copies of the st
 area check with one line added to make the hook slow: refused 3 of 3 each, where the code before
 this change let the call run 3 of 3. The cost is that a guard slow for an honest reason refuses a
 call that used to run unjudged; how often that happens has not been measured on either Mac.
+One call is let through when its guard is cut: scope modes' catch answers nothing for a `TaskStop`,
+so the stop runs as it did before, by Dan's decision on #1495 that a stop is never refused because
+scope modes' own check of it failed (read in the test engine, not in a live session).
 `tools/check-mod-guard-catch.sh` fails a mod whose tool hook ends in anything else (no catch, a
 catch of its own, a kit name it does not import from `./mod-kit/hold.ts`, a copy of `hold.ts` that
 is not mod-kit's, or `watchesOnly` on a hook whose own lines refuse), and whatever it cannot read is
