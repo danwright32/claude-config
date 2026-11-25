@@ -6,6 +6,10 @@ Full provenance per rule: ~/.claude/audits/2026-07-27-issue-audit/. Numbering is
 for reference; L6 was reviewed and deliberately not adopted.
 
 ## Proof over green
+- **L1041. A proof that a monitor is live, retried until it succeeds, proves only that it saw once. Every attempt that went unseen is a moment the monitor was blind, so count them and call the run unmeasured when there is one.**
+  (claude-config#3576, 2026-11-24)
+  NO CHECK: the monitor's own rule is filed as claude-config#3576 and is not built yet
+  SHORT: A liveness proof retried until it passes hides each unseen attempt, a moment the monitor was blind: count them and call the run unmeasured.
 - **L1039. When a check breaks a Python file on purpose and then restores it, clear its __pycache__ before every test run, because Python reuses a compiled copy whose source has the same size and the same second's timestamp, so the run tests the old code and the check reads wrong.**
   (intonation#17, 2026-11-20)
   NO CHECK: ad hoc mutation edits run in a session cannot be detected by a hook or test
@@ -5793,6 +5797,12 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: Judge whether another writer moved a field by that field's own prior value, never the record's last modified time, which any write to any field moves.
 
 ## Security and privacy
+- **L868. A key carried in a page address is read by every script on that page and by any app
+  hosting the browser, so swap a link's key for a cookie and redirect to a clean address before
+  the page renders. Otherwise whoever those scripts report to holds the key.**
+  (trypennie#744, 2026-11-24)
+  NO CHECK: each project needs its own route test
+  SHORT: A key in a page address is read by every script on the page and by an in-app browser, so swap it for a cookie and redirect before rendering.
 - **L864. A filter that removes data by its shape must run on the text in the form it will be
   output in, after every squeeze, join, unescape and normalisation, because reshaping text after
   the filter can rebuild a shape the filter had passed. Prove it with one test over every caller:
