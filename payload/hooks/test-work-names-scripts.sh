@@ -477,6 +477,60 @@ check "and that line is the whole of the file, so nothing else in it can undo th
 got_path="$(env -i HOME="$HOMEDIR" PATH="/usr/bin:/bin" bash -c "$env_line; command -v gh")"
 check "and a shell that runs that line, as one that sources the file does, runs the guard as gh: $got_path" [ "$got_path" = "$GUARD" ]
 
+# The hook runs at every SessionStart of one session (a start, a resume, a clear, a compaction)
+# against the same env file, and one shell was seen carrying the line 33 times (claude-config#3619).
+# The line goes in once. The lines are counted with grep -c alone: it prints 0 and exits 1 on none.
+start_hook(){   # $1 = the env file; output in out, exit code in rc
+  out="$(printf '{"session_id":"%s","hook_event_name":"SessionStart"}' "$SID" | CLAUDE_ENV_FILE="$1" bash "$START" 2>&1)"; rc=$?
+}
+line_count(){ grep -c -x -F -e "$env_line" "$1"; }
+ONCE="$ENVDIR/once.sh"; : > "$ONCE"
+start_hook "$ONCE"; start_hook "$ONCE"
+n="$(line_count "$ONCE")"
+check "the hook run twice against one env file leaves the line there once, not $n times: $(cat "$ONCE")" [ "$n" = 1 ]
+check "and the second run exits cleanly: rc=$rc $out" [ "$rc" -eq 0 ]
+check "and says nothing: $out" [ -z "$out" ]
+
+OLDER="$ENVDIR/older.sh"
+printf '%s\n' "export SOMETHING_ELSE=1" "$env_line" > "$OLDER"
+before="$(cat "$OLDER")"
+start_hook "$OLDER"
+check "a file already holding the line from an older run is not added to: $(cat "$OLDER")" [ "$(cat "$OLDER")" = "$before" ]
+
+# An older line naming another guard folder is a different line: the newer one goes in after it,
+# so it is first on PATH, and the older one is left where it was.
+MOVED="$ENVDIR/moved.sh"
+moved_line="export PATH=\"/an/older/guard/bin:\$PATH\""
+printf '%s\n' "$moved_line" > "$MOVED"
+start_hook "$MOVED"
+check "a line naming another guard folder gets the newer line after it, and is kept: $(cat "$MOVED")" [ "$(cat "$MOVED")" = "$(printf '%s\n%s' "$moved_line" "$env_line")" ]
+
+# Where the file cannot be read, whether the line is there cannot be known, so it is written as
+# before: a session is never left without the guard because of the check.
+UNREAD="$ENVDIR/unreadable.sh"
+printf '%s\n' "$env_line" > "$UNREAD"; chmod 200 "$UNREAD"
+if [ -r "$UNREAD" ]; then
+  echo "UNMEASURED: a file set to write only is still readable here (running as root?), so whether the hook writes the line to a file it cannot read is not measured."
+else
+  start_hook "$UNREAD"; chmod 600 "$UNREAD"
+  n="$(line_count "$UNREAD")"
+  check "a file that cannot be read still gets the line, since its presence cannot be checked: $n" [ "$n" = 2 ]
+  check "and that run exits cleanly: rc=$rc $out" [ "$rc" -eq 0 ]
+fi
+
+# Where the file cannot be written and the line is not in it, the hook says so, as it always has.
+NOWRITE="$ENVDIR/readonly.sh"; : > "$NOWRITE"; chmod 400 "$NOWRITE"
+if [ -w "$NOWRITE" ]; then
+  echo "UNMEASURED: a file set to read only is still writable here (running as root?), so what the hook says when it cannot write is not measured."
+else
+  start_hook "$NOWRITE"
+  check "a file that cannot be written, without the line, has the hook say the guard is not on PATH: $out" has "$out" "could not write"
+  printf '%s\n' "$env_line" > "$ENVDIR/readonly-held.sh"; chmod 400 "$ENVDIR/readonly-held.sh"
+  start_hook "$ENVDIR/readonly-held.sh"
+  check "and one that already holds the line has nothing to write, so the hook says nothing: rc=$rc $out" [ -z "$out" ]
+  chmod 600 "$NOWRITE" "$ENVDIR/readonly-held.sh"
+fi
+
 out="$(printf '{"session_id":"%s"}' "$SID" | env -u CLAUDE_ENV_FILE bash "$START" 2>&1)"; rc=$?
 check "with no env file the hook still exits cleanly: rc=$rc" [ "$rc" -eq 0 ]
 check "and says the guard is not on PATH: $out" has "$out" "not on PATH"
