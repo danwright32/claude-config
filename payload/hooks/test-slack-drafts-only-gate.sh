@@ -1751,13 +1751,19 @@ if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; t
   # that holds no reading 28.7, 29.3, 29.5, 30.9, 31.0, 32.0 and 33.4. The macOS limit is now near
   # the geometric midpoint of the highest of the first and the lowest of the second, the square root
   # of 9.6 times 28.7, 16.6, rounded to 17, which leaves 1.77 times of room above the one and 1.69
-  # below the other. Off macOS it stays 37 until the Linux readings of this suite as it now is are in
-  # hand (before the cut, CI's Linux runs read 24.3 and 35.0 for the first and 80.5 and 95.5 for the
-  # second, runs 45447561839 and 45468757442), so for now 37 no longer follows from the macOS limit
-  # by the 91 over 67 above, which would give 24.
+  # below the other. Off macOS the limit is set from Linux readings too, no longer from the macOS
+  # one by the 91 over 67 above, which would give 24 and leave the gate that holds no reading too
+  # close: the first CI run of this suite as it now is (run 45543054872, 2026-11-24) read 7.9 for the
+  # first (samples 8.0, 8.1, 7.9) and 30.4 for the second, close to macOS, and that run's check
+  # failed at the old 37, as it should. Before the cut two Linux runs read 24.3 and 35.0 for the
+  # first and 80.5 and 95.5 for the second (runs 45447561839 and 45468757442), a wider spread than
+  # macOS shows; cut by what the split cut macOS (8.2 over 24.1), that spread is about 8 to 12 and
+  # 27 to 33. The Linux limit is 18, the geometric midpoint of 12 and 27: 2.2 times of room above
+  # the 8.1 read and 1.69 below the 30.4, and 1.5 each way against that estimated spread. One
+  # Linux run is thin, so each run still prints its readings, and the limit is set again from them.
   case "$(uname -s)" in
     Darwin) own_ceiling=17 ;;
-    *) own_ceiling=37 ;;
+    *) own_ceiling=18 ;;
   esac
   several="$several own-suite"
   # Only the first of the three cold judgements is made in this folder, empty until then, and it is
@@ -1795,7 +1801,7 @@ else
 fi
 if [ -f "$T/cost.log" ]; then
   sed 's/^/cost measured (#2918): /' "$T/cost.log"
-  # The one lesson case (36 units) and the command that starts this suite (27 on macOS, 37 off it)
+  # The one lesson case (36 units) and the command that starts this suite (17 on macOS, 18 off it)
   # take several readings whether or not the first passes (#3170), so one run's log gives the spread
   # a limit is placed from, not a lone reading (L172). The fallback case, also held to 36, takes them
   # too and is checked above, where it also has to show each reading was taken on the step clock.
