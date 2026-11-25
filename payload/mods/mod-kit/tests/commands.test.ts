@@ -2321,33 +2321,39 @@ describe('the commands the reader missed (#3496)', () => {
   })
 
   // zsh ran p2 with b, then p1 with a, a file's name and c. bash refused the line.
-  test('zsh =( ) where a word begins is read as the commands it runs', () => {
+  test('zsh =( ) where a word begins: the commands inside are read, beside the words as they were', () => {
     const cmds = pipeline(`p1 a =(p2 b) c`)
-    expect(cmds.map(c => c.words)).toEqual([['p2', 'b'], ['p1', 'a', '=(p2 b)', 'c']])
+    // The command it stands in keeps the words the reader always gave it, so a guard that read a
+    // file's name from one of them still does: the commands inside are added and nothing is taken.
+    expect(cmds.map(c => c.words)).toEqual([['p2', 'b'], ['p1', 'a', '=(p2', 'b)', 'c']])
     expect(cmds[0]?.substitution).toBe(true)
-    expect(programs(`=(p2) a`)).toEqual(['p2', '=(p2)'])
-    expect(pipeline(`=(p2) a`)[1]?.unread).toBe('named by a value the shell expands, so what it runs cannot be read')
+    expect(marks(`=(p2) a`)).toEqual([[['p2'], undefined], [['=(p2)', 'a'], undefined]])
+    expect(commands(`p1 =(p2; p3 x) c`)).toEqual([['p2'], ['p3', 'x'], ['p1', '=(p2'], ['p3', 'x)', 'c']])
     // An array is still set, and inside double quotes it is text.
     expect(commands(`x=(a) ; p1 "=(p2)"`)).toEqual([['p1', '=(p2)']])
   })
 
-  // zsh ran p1 and then p2. bash refused the line.
-  test('zsh always on one line: the block after it is read as commands', () => {
-    expect(programs(`{ p1 } always { p2 }`)).toEqual(['p1', '}', 'p2'])
-    expect(commands(`{ p3; p1 a } always { p2 b }`)).toEqual([['p3'], ['p1', 'a'], ['}'], ['p2', 'b', '}']])
-    // Over several lines it was already read so, and a quoted word is a word.
-    expect(programs(`{\n  p1 a\n} always {\n  p2 b\n}`)).toEqual(['p1', '}', 'p2', '}'])
-    expect(commands(`p1 '}' always x`)).toEqual([['p1', '}', 'always', 'x']])
-    expect(commands(`p1 } 'always' x`)).toEqual([['p1', '}', 'always', 'x']])
+  // Two zsh shapes the first commit of #3496 read as zsh does, put back as they were, because that
+  // reading could give a guard less (measured 2026-11-25, bash 3.2.57 and zsh 5.9, once each).
+  // `{ p1 a } always { p2 b; }`: zsh ran p1 with a and then p2 with b, and bash ran p1 with the
+  // words a, }, always, {, p2 and b. Read as zsh does, the words bash hands p1 were gone, so
+  // `{ rm a } always { FILE; }` no longer removed FILE to the write reader. The reading is main's
+  // again until Dan chooses between a mark and both readings side by side.
+  test('zsh always on one line is left as it was read: bash hands the first command every word', () => {
+    expect(commands(`{ p1 a } always { p2 b; }`)).toEqual([['p1', 'a', '}', 'always', '{', 'p2', 'b'], ['}']])
+    expect(commands(`p1 a } always b`)).toEqual([['p1', 'a', '}', 'always', 'b']])
+    expect(marks(`{ p1 } always { p2 }`)).toEqual([[['p1', '}', 'always', '{', 'p2', '}'], undefined]])
   })
-
-  // zsh ran p1 with a for each (twice for repeat 2). bash found no such command and ran nothing.
-  test('zsh words that only run the command after them are looked past', () => {
-    expect(commands(`noglob p1 a`)).toEqual([['p1', 'a']])
-    expect(commands(`nocorrect p1 a`)).toEqual([['p1', 'a']])
-    expect(commands(`p4\n- p1 a`)).toEqual([['p4'], ['p1', 'a']])
-    expect(commands(`repeat 2 p1 a`)).toEqual([['p1', 'a']])
-    expect(pipeline(`noglob rm x`)[0]?.behind).toEqual(['noglob'])
+  // `noglob p1 a`, `nocorrect p1 a` and `repeat 2 p1 a`: zsh ran p1 with a (twice for repeat), and
+  // bash found no command of that name. Looked past, `noglob cat FILE` stopped being a program
+  // the mods do not know handed FILE, which several guards ask about, and became a plain read:
+  // right for both shells, and still a verdict that moves from ask to pass. Left as it was.
+  test('zsh words that only run the command after them are left as the program they were read as', () => {
+    expect(commands(`noglob p1 a`)).toEqual([['noglob', 'p1', 'a']])
+    expect(commands(`nocorrect p1 a`)).toEqual([['nocorrect', 'p1', 'a']])
+    expect(commands(`p4\n- p1 a`)).toEqual([['p4'], ['-', 'p1', 'a']])
+    expect(commands(`repeat 2 p1 a`)).toEqual([['repeat', '2', 'p1', 'a']])
+    expect(pipeline(`noglob rm x`)[0]?.behind).toBe(undefined)
   })
 
   // Both shells ran p2 and then p3 with the word a, the character and #x.

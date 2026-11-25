@@ -54,15 +54,6 @@ const RUNNERS = new Map<string, Runner>([
   // every gh and git command, so `rtk gh pr merge 7` is a merge to every guard (claude-config#1181:
   // the overnight judge read it as a command named rtk while the merge gates read the merge).
   ['rtk', {}],
-  // zsh's own words that only run the command after them (#3496; measured 2026-11-25 on zsh 5.9
-  // with programs that only print): `noglob p1 a`, `nocorrect p1 a` and `- p1 a` run p1 with a, and
-  // `repeat 2 p1 a` runs it twice. Each was read as a program of that name handed the real command
-  // as words, so `noglob rm x` removed nothing to the write reader. bash 3.2 finds no such command
-  // and runs nothing, so the command after it is the only one any shell runs.
-  ['noglob', {}],
-  ['nocorrect', {}],
-  ['-', {}],
-  ['repeat', { leading: 1 }],
 ])
 
 // Where the command a runner at `at` runs begins, past its options and their values, its leading
@@ -566,7 +557,7 @@ export const dropHeredocs = (cmd: string, quotes = true): { text: string; heredo
   // cannot say. Asked only of a << with every line before it still in place.
   const inText = h !== undefined && (h.inText || (h.whole >= 0 && inQuotedText(quotedText(cmd), h.whole)))
   if (h?.unsure) unsure.push(h.at)
-  return { text: [...out, ...unended].join('\n'), heredocs, removed, unsure, late, ...(h ?{ unended: { at: h.at, body: body.join('\n'), quoted: h.quoted, ...(inText ? { inText: true as const } : {}) } } : {}) }
+  return { text: [...out, ...unended].join('\n'), heredocs, removed, unsure, late, ...(h ? { unended: { at: h.at, body: body.join('\n'), quoted: h.quoted, ...(inText ? { inText: true as const } : {}) } } : {}) }
 }
 
 // Whether the substitution from `from` to `to` in what dropHeredocs left holds a run of heredoc lines
@@ -883,26 +874,6 @@ const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, 
     starts = []
     return ended
   }
-  // zsh's `{ ... } always { ... }` written on one line (#3496): a } that is a word of a command,
-  // then `always`, both as written with no quote. zsh 5.9 closes the group at that } and runs the
-  // block after `always` whatever the group did (measured 2026-11-25: `{ p1 } always { p2 }` runs
-  // p1 and p2), and bash 3.2 refuses the line. The reader gave p1 the words `}`, `always`, `{`,
-  // `p2` and `}`, and no p2. So the command ends before the }, the } closes its group as one where
-  // a command begins does, `always` is dropped, and what follows is read in command position.
-  // `end` is where the word `always` ends. Over several lines the } begins a command and the text
-  // was already read this way.
-  const always = (end: number) => {
-    const k = words.length
-    if (k < 3 || words[k - 1] !== 'always' || words[k - 2] !== '}') return
-    const braceAt = starts[k - 2] as number
-    if (starts[k - 1] !== end - 6 || cmd[braceAt] !== '}' || !/[ \t]/.test(cmd[braceAt + 1] ?? '')) return
-    words = words.slice(0, k - 2)
-    starts = starts.slice(0, k - 2)
-    endCmd()
-    subshells.pop()
-    listed()
-    cmds.push({ words: ['}'], starts: [braceAt] })
-  }
   // `case WORD in`, past the words that lead a command, ends a case's header: a command of its own,
   // then the group its clauses share, read from its first pattern.
   const caseIn = (): boolean => {
@@ -1018,8 +989,7 @@ const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, 
       starts.push(i)
       continue
     }
-    // zsh's `=(...)` where a word begins (#3496, equalsEnd) is read as a process substitution is.
-    const sub = subEnd(cmd, i) ?? (!inWord && i >= testEnd ? equalsEnd(cmd, i) : undefined)
+    const sub = subEnd(cmd, i)
     const summed = sumEnd(cmd, i, false)
     if (summed !== undefined) {
       sum(i, summed, false)
@@ -1157,11 +1127,9 @@ const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, 
       }
     } else if (c === '\n') {
       endWord()
-      always(i)
       if (!caseIn() && endCmd()) listed()
     } else if (c === ' ' || c === '\t') {
       endWord()
-      always(i)
       // `function name` is a command of its own too, so the `{` after it opens the body (#2619).
       if (!caseIn() && namesFunction(words, 2)) endCmd()
     } else if (c === '<' && inWord && wordParens === 0 && !/^\d*<*$/.test(word)) {
@@ -1392,7 +1360,7 @@ const unreadOf = (words: readonly string[], p: Places): string | undefined => {
   if (name === 'ssh') return SSH_UNREAD
   const text = trapText(words)
   if (text !== undefined && /[$`]/.test(words[text] as string) && !isText(text)) return TRAP_UNREAD
-  if (/^[<>=]\(/.test(head)) return NAMED_UNREAD
+  if (/^[<>]\(/.test(head)) return NAMED_UNREAD
   if (p.arithmetic || !/[$`]/.test(head) || isText(o) || SETS_PART.test(head)) return undefined
   if (p.bare?.[o]?.length) return NAMED_UNREAD
   return head.includes('/') && PLAIN_NAME.test(name) ? undefined : NAMED_UNREAD
@@ -2650,8 +2618,10 @@ const subEnd = (text: string, i: number): number | undefined => {
 // zsh's `=(...)` (#3496): where a word begins, zsh runs the commands inside, writes what they print
 // to a file and hands the command that file's name. Measured 2026-11-25 on zsh 5.9 with programs
 // that only print: `p1 a =(p2 b) c` runs p2 with b, then p1 with a, the file and c. The reader gave
-// p1 the words `=(p2` and `b)` and no p2 at all. bash 3.2 refuses the line and runs nothing, so
-// zsh's reading is the only one that runs. Where the `=(` at `i` ends, as subEnd says it for `<(`,
+// p1 the words `=(p2` and `b)` and no p2 at all. bash 3.2 refuses the line and runs nothing. The
+// commands inside are read as commands the line runs (ranged), and the command it stands in keeps
+// the words it was given before, `=(p2` and `b)`: a guard that read a file's name from one of them
+// still does, so the reading only grows. Where the `=(` at `i` ends, as subEnd says it for `<(`,
 // or undefined where none starts: only where a word begins, so `x=(a b)` still sets an array.
 const equalsEnd = (text: string, i: number): number | undefined => {
   if (text[i] !== '=' || text[i + 1] !== '(' || !(i === 0 || /[ \t\n;&|(]/.test(text[i - 1] as string))) return undefined
@@ -2659,7 +2629,7 @@ const equalsEnd = (text: string, i: number): number | undefined => {
   return end < 0 ? text.length - 1 : end
 }
 // Inside backticks a backslash before $, a backtick or a backslash stands for that character.
-const unticked =(s: string) => s.replace(/\\([$`\\])/g, '$1')
+const unticked = (s: string) => s.replace(/\\([$`\\])/g, '$1')
 // A # begins a comment only where a word would begin: at the start, or after a space, a tab, a new
 // line or one of ; & | ( ) that no backslash escapes. Until #3496 this asked JavaScript's \s, which
 // also holds a vertical tab, a carriage return and the Unicode spaces, and never looked for a

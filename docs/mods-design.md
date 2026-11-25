@@ -233,7 +233,10 @@ substitution never closed is read to the end of its text, the side that asks. A 
 before the change or after; and a variable the command sets is not followed into a substitution,
 so a path through one stays as written. Since #975 a process substitution (`<(...)`, `>(...)`) is
 read the same way, outside double quotes and heredoc bodies, where it is text; given as an operand
-(`tee >(cmd)`) it is a pipe, never a file. A program fed an unquoted heredoc (`bash <<EOF`) reads the
+(`tee >(cmd)`) it is a pipe, never a file. Since #3496 the commands inside zsh's `=(...)`, where a
+word begins, are read as run too, and the command it stands in keeps the words it was always given
+(`diff =(git fetch) a` is still read with the words `=(git` and `fetch)`), so that reading only
+grows. A program fed an unquoted heredoc (`bash <<EOF`) reads the
 body as the shell expanded it, the backslash taken off an escaped `$`, backtick or backslash and an
 escaped line end joined, so `\$(rm x)` there reaches a shell as `$(rm x)` and is read as run; a
 quoted body is read as written. And a substitution is one word with the word it sits in, its spaces,
