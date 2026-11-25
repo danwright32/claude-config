@@ -27,10 +27,11 @@ How, and why this way (measured on macOS 26 without a password, 2026-10-23; see 
     counts only once an end canary, fired after serve's whole process group is gone, has arrived.
     Anything less is `unmeasured` with the reason, never `clean` (L1, L98, L557).
   * A Mac may not WRITE every report it is asked for (claude-config#3576, measured on macOS 26.6.2
-    on 2026-11-24 over 17 windows: in each window of about 60 seconds the kernel wrote none of the
-    first 8 reports for programs not signed by Apple, counted across every profile and process, and
-    wrote every later one; programs signed by Apple were never withheld; refusals still held). So
-    a serve that connects out a few times a minute can go wholly unreported. The monitor cannot
+    on 2026-11-24: in each window of about 60 seconds the kernel did not write 8 of the reports for
+    programs not signed by Apple, counted across every profile and process. In 17 windows before
+    a restart of the Mac they were the first 8; in the windows measured after it, the first 5 and
+    then 3 more about 8 seconds on. Programs signed by Apple were never withheld; refusals still
+    held). So a serve that connects out a few times a minute can go wholly unreported. The monitor cannot
     see a report that was never written, so it asks for reports of its own and counts them:
       a. the BEAT PROGRAM, an ad hoc signed copy of /bin/bash made in the receipt folder (cp, then
         codesign, no compiler) and checked to be ad hoc signed, since only a program not signed by
@@ -42,17 +43,18 @@ How, and why this way (measured on macOS 26 without a password, 2026-10-23; see 
     Any test connection or canary never reported makes the run `unmeasured`, never `clean`: this
     Mac did not report every connection it was asked to, so finding nothing proves nothing. A
     connection that WAS seen outside the allowed hosts still reads `not-clean`. A beat program
-    that cannot be made or run is `unmeasured` too, with the reason. The rule rests on no count
-    and no window length: one missing report is enough.
+    that cannot be made or run is `unmeasured` too, with the reason. The rule rests on no count,
+    no order and no window length: one missing report is enough.
   * So that a report missed because the stream had not attached yet is never read as a withheld
     one (1 of 27 starts lost its first canary that way), the stream is first shown attached by an
     ATTACH canary: /bin/bash itself, signed by Apple, fired until one is reported. Unseen attach
     canaries are counted in the receipt and prove nothing either way.
-  What this does not catch, stated: a window that opens between two test connections and has all
-  of its withheld reports taken by serve or the drive helper within that second. And on a Mac
-  that withholds, a run can still read clean when it starts and ends inside the part of a window
-  where reports are written (the next run within the minute); every test connection was reported
-  in that case, one a second for the whole run.
+  What this does not catch, stated: a window whose withheld reports all fall on connections by
+  serve or the drive helper and none on a test connection, which needs them to arrive between two
+  test connections a second apart. And on a Mac that withholds, a run can still read clean when
+  it starts and ends in the part of a window after its withheld reports are spent (a second run
+  within the minute did, 6 of 6); every test connection was reported in that case, one a second
+  for the whole run.
 
 Options measured and rejected: `nettop` and `lsof -i` sampling miss a connection that opens and
 closes between samples (nettop, one second apart, missed a whole TCP connection to 1.0.0.1:80 by

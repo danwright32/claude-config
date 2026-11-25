@@ -141,10 +141,10 @@ shows as serve stopping, and the kernel collapses repeated reports, so `reports`
 every canary and test connection as it was made.
 
 A Mac may not write every report it is asked for (#3576). Measured on macOS 26.6.2 on 2026-11-24:
-in each window of about a minute the kernel wrote none of the first 8 reports for programs not
+in each window of about a minute the kernel did not write 8 of the reports for programs not
 signed by Apple (node, a Homebrew python, the helper browser: the ordinary serve and drive
-helper), so a serve that connected out a few times a minute went wholly unreported and the run
-read `clean`. The monitor cannot see a report that was never written, so it asks for reports of
+helper), usually the first 8, so a serve that connected out a few times a minute went wholly
+unreported and the run read `clean`. The monitor cannot see a report that was never written, so it asks for reports of
 its own and counts them. It copies `/bin/bash` into the receipt folder, signs the copy ad hoc with
 `codesign` (so it is a program not signed by Apple, with no compiler needed), and has that beat
 program make a test connection of the canary's kind before the first canary, about once a second
@@ -157,15 +157,15 @@ before anything is counted). One test connection or canary that was never report
 beat program that could not be made. A connection that was seen outside the allowed hosts still
 reads `not-clean`, with the gap said beside it.
 
-So on a Mac that withholds reports this check cannot give a clean reading, and in `block` mode no
-pull request with a required area can merge from it, until the monitor refuses every host the
-project has not allowed instead of watching for them (#3576, not built). A Mac that reports
-everything reads as before. Two things are not covered, stated: a run on a withholding Mac that
-starts and ends inside the part of a window where reports are written (the next run within the
-minute) can still read `clean`, with every one of its test connections reported; and a window
-whose withheld reports are all taken by serve or the drive helper between two test connections,
-within one second, leaves no test connection unreported. Whether the work MacBook or another
-macOS version withholds reports is not established.
+So on a Mac that withholds reports this check cannot be relied on for a clean reading, and in
+`block` mode a pull request that needs an area's run cannot merge on a receipt from that Mac,
+until the monitor refuses every host the project has not allowed instead of watching for them
+(#3576, not built). A Mac that reports everything reads as before. Two things are not covered,
+stated: a run on a withholding Mac that starts and ends after a window's withheld reports are
+spent (a second run within the minute) can still read `clean`, with every one of its test
+connections reported; and a window whose withheld reports all fall on connections by serve or the
+drive helper, between two test connections a second apart, leaves no test connection unreported.
+Whether the work MacBook or another macOS version withholds reports is not established.
 
 ## CREATE
 

@@ -146,7 +146,7 @@ def beat_report(m, i):
 class WithheldReports(unittest.TestCase):
     """A Mac that does not write every sandbox report it is asked for can never read clean
     (claude-config#3576). Measured on macOS 26.6.2 on 2026-11-24: in each window of about a minute
-    the kernel wrote none of the first 8 reports for programs not signed by Apple, so a serve that
+    the kernel did not write 8 of the reports for programs not signed by Apple, so a serve that
     connected out a few times a minute went wholly unreported and the run read clean."""
 
     def setUp(self):
@@ -173,6 +173,16 @@ class WithheldReports(unittest.TestCase):
         self.assertEqual((out["beats"]["fired"], out["beats"]["reported"]), (10, 2), out)
         self.assertEqual([b["beat"] for b in out["beats"]["unreported"]], list(range(1, 9)), out)
         self.assertIsNone(out["measured_to"])
+
+    def test_the_shape_measured_after_a_restart_is_unmeasured_too(self):
+        # 11:24 PM ET, after the Mac was restarted: of twelve made, number 1 and then 9, 10 and 11
+        # were never reported, with seven reported between them. No order is relied on.
+        fired(self.m, 12)
+        self.read([beat_report(self.m, i) for i in (2, 3, 4, 5, 6, 7, 8, 12)])
+        out = self.m.judge()
+        self.assertEqual(out["verdict"], "unmeasured", out)
+        self.assertIn("4 of the 12 test connections", out["why"])
+        self.assertEqual([b["beat"] for b in out["beats"]["unreported"]], [1, 9, 10, 11], out)
 
     def test_a_mac_that_reports_every_test_connection_still_reads_clean(self):
         fired(self.m, 3)
