@@ -2763,6 +2763,30 @@ pipe stands in no group. The same suite takes 0.67 to 0.80 seconds (five reading
 `ownBudget` caps the text one script's calls may hand the readers (eight times the script and
 200,000 characters more); past it the runs not yet read stay judged. No real suite was timed alone.
 
+**A word a script hands on as written (#3602), built 2026-11-25 for the design round guard.** Four
+of this repository's suites hand their own helper a command as text, for the gate under test to
+judge and never to run, and the text holds a `$(` the shell hands on as written (after a backslash,
+or in single quotes) with a bar inside it: `run_here 'bash -c "echo \$(sort ok.sh | bash)"'`.
+mod-kit's reader gives such a word as the one name it spells and marks it `unexpanded`.
+`handedToUnknown` dropped the mark, so the guard read the parenthesis and its bar as a group and
+the `$(` as a command's output, and held the word as a name that may be any screen file. The mark
+is now kept, and `patternMayBeLook(word, asWritten)` reads such a word as the characters it spells,
+its groups as each name they can spell, as any other word is. Only a word inside a script's own
+text is read so: the same word typed whole on a command line is judged as before, and a word that
+spells a screen file, one handed over beside it, or a suite that writes a stylesheet, is still
+held. This makes the guard hold less. Counted the same day over the personal MacBook's records
+(one run, 2026-11-25: 70,279 shell calls from 2026-10-24 to 2026-11-25, 63,186 distinct; 9,052
+distinct calls run a shell script the guard reads), each call judged whole by the guard at the
+base and with the change, in the test file's stand-in world with today's suites: 470 calls, 415
+distinct, held before pass now, 439 of them agents'. Every one runs one of the four suites
+(test-slack-drafts-code-loaders.sh 223 distinct, test-slack-drafts-unread-shapes.sh 78,
+test-work-names-publish.sh 70, test-db-write-ask.sh 49); in 30 distinct calls the suite run sits
+beside other commands (an edit to a suite or a gate by python3 or sed, git, cp, mkdir), which the
+guard reads the same with the change and passed before too. No call passed before and is held
+now. Still held: a suite whose helper is handed a fixture file's name and writes it under the
+suite's own work folder (test-lessons-advisory.sh, test-pr-review.sh), 4 calls, which needs the
+shared rule for a temporary folder to vouch for that folder, and it does not on the real suites.
+
 **The count behind #3323, the rule for a command as typed** (the personal MacBook's records, 35 days
 to 2026-11-21, 51,590 shell calls when it was taken): with the built rule 16 past calls are newly held by the two guards it was
 decided on, the design round guard 13 and ask before saving 3 (swiftc 8, gh 3, chk 2, swift 1, set
