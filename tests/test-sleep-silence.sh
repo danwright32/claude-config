@@ -88,6 +88,8 @@ settings:Stop:check-later-nudge.sh
 settings:Stop:feature-issue-review.sh
 settings:Stop:session-reflection.sh
 settings:Stop:pr-merge-quiz.sh
+settings:SubagentStop:limit-messages.py
+settings:StopFailure:limit-messages.py
 mod:goal-tracker/hooks/register.tsx:notify:notifier
 mod:scope-modes/hooks/register.ts:leavePrOpen:ask
 mod:scope-modes/hooks/register.ts:leaveBranch:ask
@@ -368,16 +370,30 @@ run_route() {   # run_route <script> <event> [arguments...] -> stdout of the hoo
   local t="$WORK/t.$RANDOM.jsonl"; transcript "$t"
   local proj; proj="$(mktemp -d "$WORK/proj.XXXXXX")"
   local script="$1" ev="$2"; shift 2
-  printf '{"session_id":"%s","transcript_path":"%s","cwd":"%s","hook_event_name":"%s","stop_hook_active":false}' "${RUN_SESSION:-s1}" "$t" "$proj" "$ev" \
+  # Run as the hook's command line runs it: python3 for a .py route (limit-messages.py), bash otherwise.
+  local interp=bash; case "$script" in *.py) interp=python3 ;; esac
+  # A route that speaks to Dan only on stderr (seed_route sets RUN_STDERR) is judged on stderr too.
+  local errs=/dev/null; [ -n "${RUN_STDERR:-}" ] && errs="$WORK/stderr.$RANDOM"
+  printf '{"session_id":"%s","transcript_path":"%s","cwd":"%s","hook_event_name":"%s","stop_hook_active":false%s}' "${RUN_SESSION:-s1}" "$t" "$proj" "$ev" "${RUN_EXTRA:-}" \
     | env HOME="$H" CLAUDE_HOME="$H/.claude" TMPDIR="$WORK/tmp" CLAUDE_PROJECT_DIR="$proj" PATH="$H/bin:$STUBS:$PATH" \
-        STOP_HOOK_NOTICE_DIR="$WORK/notices" bash "$HOOKS/$script" "$@" 2>/dev/null
+        STOP_HOOK_NOTICE_DIR="$WORK/notices" "$interp" "$HOOKS/$script" "$@" 2>"$errs"
+  [ "$errs" = /dev/null ] || cat "$errs"
 }
 # A route that speaks only about state it holds is given that state in each world, so its awake
 # control has something to say. Anything a route needs on PATH goes in "$H/bin", the world's own.
 seed_route() {   # seed_route <script> <arguments>
   RUN_SESSION=""
   RUN_LAST_TEXT=""
+  RUN_EXTRA=""
+  RUN_STDERR=""
   case "$1 $2" in
+    "limit-messages.py record")
+      # It speaks only when it fails (#3308), on stderr, so each world is given a record it cannot
+      # write (a file where its folder goes) and a usage limit to record, which StopFailure needs.
+      mkdir -p "$H/.claude/state"; printf 'a file where the folder goes\n' > "$H/.claude/state/limit-messages"
+      RUN_EXTRA=',"error":"rate_limit","last_assistant_message":"You have hit your 5-hour limit"'
+      RUN_STDERR=1
+      ;;
     "check-later-nudge.sh ")
       # A turn that promises to look again on a later day (#2079), the thing it speaks about.
       RUN_LAST_TEXT="I'll check again tomorrow."
@@ -412,6 +428,7 @@ while IFS=$'\t' read -r route consults where args; do
   [ -z "$out" ] && [ ! -s "$STUB_LOG" ] && check "$script on $ev is silent while asleep" ok \
     || check "$script on $ev is silent while asleep" "printed '${out:0:200}', ran: $(cat "$STUB_LOG")"
 done < "$ROUTES"
+RUN_EXTRA=""; RUN_STDERR=""   # what one route was seeded with is never carried into the runs below
 
 # A record that cannot be read counts as awake: the sound still plays.
 world unreadable awake; printf 'not json' > "$H/.claude/state/sleep/current.json"

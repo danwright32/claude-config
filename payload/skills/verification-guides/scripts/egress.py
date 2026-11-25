@@ -53,6 +53,37 @@ How, and why this way (measured on macOS 26 without a password, 2026-10-23; see 
     report stream. A round counts only when all three arrived. Anything less is `unmeasured` and
     says which part was missing. A refusal that cannot be written into the record stops the
     reader, and the run is `unmeasured` with that error.
+  * A Mac may not WRITE every report it is asked for (claude-config#3576, measured on macOS 26.6.2
+    on 2026-11-24: in each window of about 60 seconds the kernel did not write 8 of the reports for
+    programs not signed by Apple, counted across every profile and process. In 17 windows before
+    a restart of the Mac they were the first 8; in the windows measured after it, the first 5 and
+    then 3 more about 8 seconds on. Programs signed by Apple were never withheld; refusals still
+    held). So a serve that connects out a few times a minute can go wholly unreported. The monitor cannot
+    see a report that was never written, so it asks for reports of its own and counts them:
+      a. the BEAT PROGRAM, an ad hoc signed copy of /bin/bash made in the receipt folder (cp, then
+        codesign, no compiler) and checked to be ad hoc signed, since only a program not signed by
+        Apple is withheld. It makes one test connection (the canary's kind: a UDP connect that
+        sends no packet, to 198.51.100.1, under a tag of its own, on a port that names it) before
+        the first canary, one about every second for the whole run, and one after serve is gone.
+        Every one is recorded when made and marked when its report arrives.
+      b. every canary fired counts too, where main waited for one to be seen and forgot the rest.
+    Any test connection or canary never reported makes the run `unmeasured`, never `clean`: this
+    Mac did not report every connection it was asked to, so finding nothing proves nothing. A
+    connection that WAS seen outside the allowed hosts still reads `not-clean`. A beat program
+    that cannot be made or run is `unmeasured` too, with the reason, and so is one that ended
+    badly: its exit status is read when it stops, and a program that had ended by itself before
+    the run was over, that exited non zero or that had to be killed is the reason. The rule rests
+    on no count, no order and no window length: one missing report is enough.
+  * So that a report missed because the stream had not attached yet is never read as a withheld
+    one (1 of 27 starts lost its first canary that way), the stream is first shown attached by an
+    ATTACH canary: /bin/bash itself, signed by Apple, fired until one is reported. Unseen attach
+    canaries are counted in the receipt and prove nothing either way.
+  What this does not catch, stated: a window whose withheld reports all fall on connections by
+  serve or the drive helper and none on a test connection, which needs them to arrive between two
+  test connections a second apart. And on a Mac that withholds, a run can still read clean when
+  it starts and ends in the part of a window after its withheld reports are spent (a second run
+  within the minute did, 6 of 6); every test connection was reported in that case, one a second
+  for the whole run.
 
 Options measured and rejected: `nettop` and `lsof -i` sampling miss a connection that opens and
 closes between samples (nettop, one second apart, missed a whole TCP connection to 1.0.0.1:80 by
@@ -62,13 +93,16 @@ port) and by any raw socket; a sandbox profile cannot name a host other than `*`
 so it cannot enforce an allow list itself; and packet capture needs root (/dev/bpf* is root only).
 
 Env, for tests: VERIFICATION_EGRESS_SANDBOX (default /usr/bin/sandbox-exec) and
-VERIFICATION_EGRESS_LOG (default /usr/bin/log), the two tools a monitor cannot start without.
+VERIFICATION_EGRESS_LOG (default /usr/bin/log), the two tools a monitor cannot start without, and
+VERIFICATION_EGRESS_CODESIGN (default /usr/bin/codesign), which signs the beat program.
 """
 
 import ipaddress
 import json
 import os
 import re
+import select
+import shutil
 import signal
 import socket
 import subprocess
@@ -86,14 +120,33 @@ MONITOR = "sandbox-exec reports read with log stream, named with lsof"
 CANARY_RETRY_S = 1.0  # how long one canary is waited for before another is fired: never a fixed wait
 STREAM_STOP_S = 10
 CANARY_RUN_MAX_S = 30  # one canary process, which a loaded Mac can take seconds to start
+BASH = "/bin/bash"  # signed by Apple: the attach canary runs it as it is, the beat program is a copy signed ad hoc
+CODESIGN = "/usr/bin/codesign"
+CODESIGN_MAX_S = 30
+ATTACH_RETRY_S = 0.25  # how long one attach canary is waited for before another is fired
+ATTACH = "{ :; } 3<>/dev/udp/198.51.100.1/9"  # bash connects a UDP socket, which sends nothing, and closes it
+BEAT_EVERY_S = 1.0  # the heartbeat: one test connection about this often for the whole run
+BEAT_RUN_MAX_S = 10  # how long the beat program may take to answer for one test connection
+BEAT_STOP_S = 5  # how long the beat program may take to end once its input is closed
+BEAT_EXIT_S = 1.0  # how long a beat program whose pipe has closed is waited for, to say how it ended
+SETTLE_S = 5.0  # how long a report still outstanding at the end of a run is waited for
+BEAT_PORT = 20000  # test connection n goes to port BEAT_PORT + n, so every report names its connection
+BEAT_PORTS = 40000  # and the ports go round again after this many
+UNREPORTED_KEPT = 20  # how many unreported test connections a receipt lists; its counts are always whole
+# The beat program's whole job: told a port on its input, connect a UDP socket to it (no packet is
+# sent), close it, and answer with the port and whether the connect worked. It ends when its
+# input closes, so a supervisor that is killed leaves no beat program behind.
+BEAT_LOOP = 'while read -r n; do { :; } 3<>"/dev/udp/198.51.100.1/$n"; echo "$n $?"; done'
+BEAT_FINISH_S = 2 * BEAT_RUN_MAX_S + 1 + SETTLE_S + BEAT_STOP_S
 
 
 def finish_budget_s(egress_s):
-    """The longest Monitor.finish can take: canaries until egress_s, the last round started just before
-    it and each of its processes running its whole limit, then stopping the stream and joining its
-    reader (which may be in the middle of one lsof). Whoever waits for a supervisor's stop adds this
-    (the #1571 review)."""
-    return egress_s + len(CANARY_PARTS) * CANARY_RUN_MAX_S + 3 * STREAM_STOP_S
+    """The longest Monitor.finish can take: the heartbeat's last test connection and one more, canaries
+    until egress_s, the last round started just before it and each of its processes running its whole
+    limit, the wait for reports still outstanding, then stopping the beat program and the stream and
+    joining its reader (which may be in the middle of one lsof). Whoever waits for a supervisor's
+    stop adds this (the #1571 review)."""
+    return egress_s + len(CANARY_PARTS) * CANARY_RUN_MAX_S + 3 * STREAM_STOP_S + BEAT_FINISH_S
 # The one refusal (claude-config#3319). The helper browser is known by the file name of its
 # executable, which is all a sandbox profile can know a process by here, and the port is the one its
 # reachability probe uses.
@@ -178,6 +231,27 @@ CANARY_PARTS = (
 )
 
 
+def beat_program_path(rdir):
+    return os.path.join(rdir, "egress-beat")
+
+
+def exit_words(status):
+    """A process's exit status in words: `exit 3`, or `killed by signal 9`."""
+    return "exit %d" % status if status >= 0 else "killed by signal %d" % -status
+
+
+def remove_beat_program(rdir):
+    """Remove a run's beat program from its receipt folder. Returns why it could not, or None when it
+    is gone (or was never made). Also called for a run whose supervisor was killed (run_session.py)."""
+    try:
+        os.unlink(beat_program_path(rdir))
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        return "the beat program %s could not be removed: %s" % (beat_program_path(rdir), e)
+    return None
+
+
 def remote_addresses(lsof_output, port):
     """The non-loopback remote addresses on `port` in `lsof -F n` output."""
     found = set()
@@ -232,6 +306,24 @@ class Monitor:
         self.canary_tag = self.tag + "-canary"
         self.canary_profile = os.path.join(rdir, "egress-canary.sb")
         self.canaries_fired = 0
+        self.canary_at = {}  # each canary's tag: when it was fired, on the monotonic clock
+        # The attach canary and the beat program (claude-config#3576), each under a tag of its own.
+        self.attach_tag = self.tag + "-attach"
+        self.attach_profile = os.path.join(rdir, "egress-attach.sb")
+        self.attach_fired = 0
+        self.attach_seen = set()
+        self.beat_tag = self.tag + "-beat"
+        self.beat_profile = os.path.join(rdir, "egress-beat.sb")
+        self.beat_program = beat_program_path(rdir)
+        self.beat_said = os.path.join(rdir, "egress-beat.err")
+        self.codesign = os.environ.get("VERIFICATION_EGRESS_CODESIGN") or CODESIGN
+        self.beat_proc = None
+        self.beat_err = None
+        self.beat_thread = None
+        self.beat_stop = threading.Event()
+        self.beat_lock = threading.Lock()  # one test connection at a time
+        self.beats = []  # every test connection made: {beat, port, at, t, seen}
+        self.beat_failure = None  # why the beat program could not be made or run, or how it ended badly
         self.allow = list(allow)
         self.egress_s = egress_s
         self.profile = os.path.join(rdir, "egress.sb")
@@ -267,6 +359,7 @@ class Monitor:
         except Exception as e:  # any other fault is a reason too, never a crashed supervisor
             self.failure = "the egress monitor failed to start: %s: %s" % (type(e).__name__, e)
         if self.failure:
+            self._stop_beats()
             self.stop_stream()
         return self.failure
 
@@ -294,6 +387,13 @@ class Monitor:
         self.proc = proc
         self.thread = threading.Thread(target=self._read, daemon=True)
         self.thread.start()
+        if not self._attached():
+            raise Unavailable("the report stream showed no report at all within %ss, not even of the attach canary"
+                              " the monitor fires first, so it cannot be shown to see this run's connections%s"
+                              % (self.egress_s, self._stream_state()))
+        # The first test connection goes BEFORE the first canary: on a Mac that withholds reports the
+        # canary (whatever python runs this) could take every withheld one itself and leave none to see.
+        self._start_beats()
         if not self._canary_seen():
             raise Unavailable("the report stream showed %s within %ss, so it cannot be shown to see this run's"
                               " connections%s" % (self._canary_gap("start"), self.egress_s, self._stream_state()))
@@ -303,6 +403,7 @@ class Monitor:
                               % (exited, self._stream_state()))
         self.started_at = v.utc_now()
         self._event({"event": "started", "at": self.started_at})
+        self._start_heartbeat()
 
     # -- reading ---------------------------------------------------------------------------------
 
@@ -326,6 +427,21 @@ class Monitor:
                 # message is a connection that left, and it is counted as one.
                 refused, tag = m.group(4) != "allow", m.group(6)
                 mismatch = refused != tag.endswith(REFUSED)
+                if tag == self.beat_tag:
+                    # A test connection is reported only by the line the reporting rule is written
+                    # to produce. A refusal under the beat's tag marks nothing, so that connection
+                    # stays unreported and the run is unmeasured.
+                    if not refused:
+                        self._beat_reported(int(m.group(5)), int(m.group(1) or 1))
+                    continue
+                if tag.startswith(self.attach_tag + "-"):
+                    # The same for the attach canary: only a report shows the stream attached.
+                    if not refused:
+                        with self.cond:
+                            self.attach_seen.add(tag)
+                            self.cond.notify_all()
+                        self._event({"event": "attach", "at": v.utc_now(), "attach": tag})
+                    continue
                 if tag.startswith(self.canary_tag + "-"):
                     # A canary proves a profile only by the line that profile is written to produce,
                     # so the other line under its tag proves nothing: the round stays unfinished and
@@ -393,6 +509,9 @@ class Monitor:
         return the messages the report stream must show for the round to count."""
         self.canaries_fired += 1
         base = "%s-%d" % (self.canary_tag, self.canaries_fired)
+        with self.cond:
+            self.canary_at[base] = time.monotonic()
+        self._event({"event": "canary-fired", "at": v.utc_now(), "canary": base})
         self.canary_want = []
         for name, text, suffix, port, must, shown in CANARY_PARTS:
             tag = base + suffix
@@ -460,6 +579,311 @@ class Monitor:
                                                                     "; ".join(self.chatter) or "nothing")
         return said
 
+    # -- the attach canary (claude-config#3576) ---------------------------------------------------
+
+    def _fire_attach(self):
+        """Run one attach canary, /bin/bash as Apple signed it, under a profile tagged for it alone."""
+        self.attach_fired += 1
+        tag = "%s-%d" % (self.attach_tag, self.attach_fired)
+        with open(self.attach_profile, "w", errors="replace") as f:
+            f.write(profile_text(tag))
+        try:
+            r = subprocess.run([self.sandbox, "-f", self.attach_profile, BASH, "-c", ATTACH],
+                               capture_output=True, text=True, timeout=CANARY_RUN_MAX_S, errors="replace")
+        except (OSError, subprocess.TimeoutExpired) as e:
+            raise Unavailable("the attach canary could not run under %s: %s" % (self.sandbox, e))
+        if r.returncode != 0:
+            raise Unavailable("the attach canary could not run under %s (exit %s): %s"
+                              % (self.sandbox, r.returncode, (r.stderr or r.stdout).strip()[-300:]))
+        return tag
+
+    def _attached(self):
+        """Fire attach canaries until a report of one arrives, the stream ends, or egress_s passes."""
+        deadline = time.monotonic() + self.egress_s
+        while time.monotonic() < deadline:
+            self._fire_attach()
+            with self.cond:
+                self.cond.wait_for(lambda: self.attach_seen or self.stream_ended,
+                                   timeout=max(0.0, min(ATTACH_RETRY_S, deadline - time.monotonic())))
+                if self.attach_seen:
+                    return True
+                if self.stream_ended:
+                    return False
+        return False
+
+    # -- the beat program and its test connections (claude-config#3576) ---------------------------
+
+    def _codesign(self, *args):
+        try:
+            return subprocess.run([self.codesign] + list(args), capture_output=True, text=True,
+                                  timeout=CODESIGN_MAX_S, errors="replace")
+        except (OSError, subprocess.TimeoutExpired) as e:
+            raise Unavailable("%s could not run, so no program not signed by Apple could be made to test this"
+                              " Mac's reports: %s" % (self.codesign, e))
+
+    def _make_beat_program(self):
+        """Copy /bin/bash into the receipt folder, sign the copy ad hoc and check that it is: only a
+        program NOT signed by Apple is withheld, so a beat from any other would prove nothing."""
+        try:
+            shutil.copyfile(BASH, self.beat_program)
+            os.chmod(self.beat_program, 0o700)
+        except OSError as e:
+            raise Unavailable("%s could not be copied to make the beat program: %s" % (BASH, e))
+        signed = self._codesign("--force", "--sign", "-", self.beat_program)
+        if signed.returncode != 0:
+            raise Unavailable("the copy of %s could not be signed ad hoc (%s exit %s: %s)"
+                              % (BASH, self.codesign, signed.returncode,
+                                 (signed.stderr or signed.stdout).strip()[-300:]))
+        shown = self._codesign("--display", "--verbose=2", self.beat_program)
+        said = (shown.stderr or "") + (shown.stdout or "")
+        if shown.returncode != 0 or "Signature=adhoc" not in said:
+            raise Unavailable("the copy of %s is not ad hoc signed, so its reports would not show whether this Mac"
+                              " withholds any (%s exit %s said: %s)"
+                              % (BASH, self.codesign, shown.returncode, " ".join(said.split())[-300:]))
+
+    def _beat_argv(self):
+        return [self.sandbox, "-f", self.beat_profile, self.beat_program, "-c", BEAT_LOOP]
+
+    def _start_beats(self):
+        """Make the beat program, start it and have it make the first test connection. Never raises:
+        a failure is the run's reason for reading unmeasured, and serve still runs under the
+        reporting sandbox, so a connection that IS seen still reads not-clean."""
+        try:
+            self._make_beat_program()
+            with open(self.beat_profile, "w", errors="replace") as f:
+                f.write(profile_text(self.beat_tag))
+            self.beat_err = open(self.beat_said, "ab")
+            proc = subprocess.Popen(self._beat_argv(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                    stderr=self.beat_err, start_new_session=True, bufsize=0)
+            self.beat_proc = proc
+            self._beat()
+            exited = proc.poll()
+            if exited is not None:  # it answered once and left: nothing would make the run's other test connections
+                raise Unavailable("the beat program ended by itself (%s) right after its first test connection%s"
+                                  % (exit_words(exited), self._beat_stderr()))
+        except Unavailable as e:
+            self._beats_failed(str(e))
+        except Exception as e:  # any other fault is a reason too, never a crashed supervisor
+            self._beats_failed("the beat program could not be started: %s: %s" % (type(e).__name__, e))
+
+    def _beats_failed(self, why):
+        if self.beat_failure is None:
+            self.beat_failure = why
+            try:
+                self._event({"event": "beat-failed", "at": v.utc_now(), "why": why})
+            except OSError:
+                pass
+        self._end_beat_program()
+
+    def _beat(self):
+        """Have the beat program make one test connection. It is recorded as made BEFORE the program
+        is told, so its report can never arrive ahead of the record. Raises Unavailable, with nothing
+        left recorded, when the connection was not made."""
+        with self.beat_lock:
+            proc = self.beat_proc
+            if proc is None:
+                raise Unavailable("the beat program is not running")
+            with self.cond:
+                n = len(self.beats) + 1
+                rec = {"beat": n, "port": BEAT_PORT + 1 + (n - 1) % BEAT_PORTS, "at": v.utc_now(),
+                       "t": time.monotonic(), "seen": False}
+                self.beats.append(rec)
+                self.cond.notify_all()
+            try:
+                os.write(proc.stdin.fileno(), b"%d\n" % rec["port"])
+                answer = self._beat_answer(proc)
+                if answer != "%d 0" % rec["port"]:
+                    raise Unavailable("the beat program could not make its test connection (it answered %r%s)"
+                                      % (answer, self._beat_stderr()))
+            except (OSError, ValueError) as e:
+                self._unbeat(rec)
+                ended = self._beat_exit(proc, BEAT_EXIT_S)
+                raise Unavailable("the beat program could not be told to make a test connection: %s%s%s"
+                                  % (e, " (it had ended, %s)" % ended if ended else "", self._beat_stderr()))
+            except Unavailable:
+                self._unbeat(rec)
+                raise
+            self._event({"event": "beat-fired", "at": rec["at"], "beat": n, "port": rec["port"]})
+
+    def _unbeat(self, rec):
+        with self.cond:
+            self.beats.remove(rec)
+
+    def _beat_answer(self, proc):
+        """The beat program's one line of answer, waited for on its pipe and never past BEAT_RUN_MAX_S."""
+        fd, buf, deadline = proc.stdout.fileno(), b"", time.monotonic() + BEAT_RUN_MAX_S
+        while b"\n" not in buf:
+            left = deadline - time.monotonic()
+            if left <= 0 or not select.select([fd], [], [], left)[0]:
+                raise Unavailable("the beat program gave no answer within %ss%s" % (BEAT_RUN_MAX_S, self._beat_stderr()))
+            chunk = os.read(fd, 64)
+            if not chunk:
+                # Its output closed. The status is waited for, briefly and never past this answer's
+                # limit, so the reason says how it ended and not that it had not quite ended yet.
+                ended = self._beat_exit(proc, min(BEAT_EXIT_S, max(0.0, deadline - time.monotonic())))
+                raise Unavailable("the beat program %s%s" % ("ended (%s)" % ended if ended else
+                                                             "closed its output without ending", self._beat_stderr()))
+            buf += chunk
+        return buf.split(b"\n", 1)[0].decode(errors="replace").strip()
+
+    def _beat_exit(self, proc, within):
+        """How the beat program ended, in words, or None when it is still running after `within` s."""
+        try:
+            return exit_words(proc.wait(timeout=within))
+        except subprocess.TimeoutExpired:
+            return None
+
+    def _beat_stderr(self):
+        try:
+            with open(self.beat_said, errors="replace") as f:
+                said = " ".join(f.read().split())[-300:]
+        except OSError:
+            said = ""
+        return ", and said: " + said if said else ""
+
+    def _beat_reported(self, port, count):
+        """Mark the oldest unreported test connection on `port` as reported, `count` of them when the
+        kernel collapsed repeats. A report for a connection this monitor never made marks nothing."""
+        hit = []
+        with self.cond:
+            for b in self.beats:
+                if len(hit) == count:
+                    break
+                if b["port"] == port and not b["seen"]:
+                    b["seen"] = True
+                    hit.append(b["beat"])
+            self.cond.notify_all()
+        for n in hit:
+            self._event({"event": "beat", "at": v.utc_now(), "beat": n, "port": port})
+        if not hit:
+            self._event({"event": "beat-unknown", "at": v.utc_now(), "port": port})
+
+    def _start_heartbeat(self):
+        if self.beat_failure or self.beat_proc is None:
+            return
+        self.beat_stop.clear()
+        self.beat_thread = threading.Thread(target=self._heartbeat, daemon=True)
+        self.beat_thread.start()
+
+    def _heartbeat(self):
+        """One test connection about every BEAT_EVERY_S until stopped. The first that cannot be made
+        ends it with the reason: a heartbeat that died is never a heartbeat that saw nothing wrong."""
+        while not self.beat_stop.wait(BEAT_EVERY_S):
+            try:
+                self._beat()
+            except Unavailable as e:
+                self._beats_failed(str(e))
+                return
+            except Exception as e:
+                self._beats_failed("the heartbeat failed: %s: %s" % (type(e).__name__, e))
+                return
+
+    def _stop_heartbeat(self):
+        self.beat_stop.set()
+        t = self.beat_thread
+        if t is not None and t is not threading.current_thread():
+            t.join(timeout=BEAT_RUN_MAX_S + 1)
+
+    def _last_beat(self):
+        """Stop the heartbeat and make one more test connection, after serve is gone."""
+        self._stop_heartbeat()
+        if self.beat_failure:
+            return
+        try:
+            self._beat()
+        except Unavailable as e:
+            self._beats_failed(str(e))
+
+    def _settle(self):
+        """Wait for every report still outstanding, on the condition, and for none of them longer than
+        SETTLE_S after it was asked for: a report that is merely late must not read as withheld."""
+        with self.cond:
+            while not self.stream_ended:
+                waiting = [b["t"] for b in self.beats if not b["seen"]]
+                waiting += [t for tag, t in self.canary_at.items() if tag not in self.canaries_seen]
+                if not waiting:
+                    return
+                left = max(waiting) + SETTLE_S - time.monotonic()
+                if left <= 0:
+                    return
+                self.cond.wait(timeout=left)
+
+    def _end_beat_program(self):
+        """End the beat program by closing its input, read how it ended, and remove its copy. Never
+        raises. A program that had ended before it was told to, that exited non zero, or that had to
+        be killed, is a reason the run reads unmeasured (see _beat_ended)."""
+        proc, self.beat_proc = self.beat_proc, None
+        if proc is not None:
+            early = proc.poll()  # not None: it ended by itself, before its input was closed
+            try:
+                proc.stdin.close()
+            except OSError:
+                pass
+            killed = False
+            try:
+                status = proc.wait(timeout=BEAT_STOP_S)
+            except subprocess.TimeoutExpired:
+                killed = True
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+                status = proc.wait()
+            try:
+                proc.stdout.close()
+            except OSError:
+                pass
+            self._beat_ended(early, status, killed)
+        err, self.beat_err = self.beat_err, None
+        if err is not None:
+            try:
+                err.close()
+                if os.path.getsize(self.beat_said) == 0:  # it said nothing: leave no empty file in every receipt
+                    os.unlink(self.beat_said)
+            except OSError:
+                pass
+        left = remove_beat_program(self.rdir)
+        if left:
+            try:
+                self._event({"event": "beat-program-left", "at": v.utc_now(), "why": left})
+            except OSError:
+                pass
+
+    def _beat_ended(self, early, status, killed):
+        """Record how the beat program ended, and make a bad ending the run's reason for reading
+        unmeasured when nothing has failed already. Never raises.
+
+        The exit status comes from the system, not from the program's own answers, so it is the one
+        word about the program that the program cannot get wrong (L345). The program is written to
+        run until its input closes and then exit 0. One that ended by itself made no test connection
+        for the rest of the run, and after the last one nothing else would ever say so; one that
+        exited non zero or had to be killed did not do what it was written to do, so its answers are
+        not vouched for. The verdict rests on beat_failure, never on the log line being written."""
+        why = None
+        if early is not None:
+            why = "the beat program ended by itself (%s) before the run was over" % exit_words(early)
+        elif killed:
+            why = "the beat program did not end within %ss of its input closing and was killed" % BEAT_STOP_S
+        elif status != 0:
+            why = "the beat program ended badly (%s) when its input closed" % exit_words(status)
+        if why:
+            why += self._beat_stderr()
+        failed_now = why is not None and self.beat_failure is None
+        if failed_now:
+            self.beat_failure = why
+        try:
+            self._event({"event": "beat-ended", "at": v.utc_now(), "exit": status, "early": early is not None,
+                         "killed": killed})
+            if failed_now:
+                self._event({"event": "beat-failed", "at": v.utc_now(), "why": why})
+        except OSError:
+            pass
+
+    def _stop_beats(self):
+        """Stop the heartbeat and the beat program, and remove the program's copy. Never raises."""
+        self._stop_heartbeat()
+        self._end_beat_program()
+
     # -- stopping --------------------------------------------------------------------------------
 
     def stop_stream(self):
@@ -489,6 +913,7 @@ class Monitor:
                 return self.field("unmeasured", self.failure)
             if self.started_at is None:
                 return self.field("unmeasured", "the run stopped before the egress monitor had proved it could see")
+            self._last_beat()
             try:
                 ended = self._canary_seen()
             except Unavailable as e:
@@ -497,20 +922,34 @@ class Monitor:
                 return self.field("unmeasured", "the report stream showed %s within %ss, so connections made or"
                                   " refused late in the run may be missing%s"
                                   % (self._canary_gap("end"), self.egress_s, self._stream_state()))
+            self._settle()
+            self._stop_beats()
             self.stop_stream()
             return self.judge()
         except Exception as e:
             return self.field("unmeasured", "the egress monitor failed while finishing: %s: %s" % (type(e).__name__, e))
         finally:
+            self._stop_beats()
             self.stop_stream()
 
     # -- the verdict -----------------------------------------------------------------------------
 
     def field(self, verdict, why, destinations=(), unnamed=(), refused=()):
+        with self.cond:
+            beats = [dict(b) for b in self.beats]
+            canaries_seen, attach_seen = len(self.canaries_seen), len(self.attach_seen)
+        unreported = [b for b in beats if not b["seen"]]
         return {"verdict": verdict, "why": why, "monitor": MONITOR, "allowed_hosts": self.allow,
                 "allowed_unresolved": self.unresolved, "measured_from": self.started_at,
                 "measured_to": v.utc_now() if verdict != "unmeasured" else None,
-                "destinations": list(destinations), "unnamed": list(unnamed), "refused": list(refused)}
+                "destinations": list(destinations), "unnamed": list(unnamed), "refused": list(refused),
+                # What the monitor asked this Mac to report and what came back (claude-config#3576),
+                # so a run can be judged again later from its receipt alone.
+                "attach": {"fired": self.attach_fired, "seen": attach_seen},
+                "canaries": {"fired": self.canaries_fired, "seen": canaries_seen},
+                "beats": {"fired": len(beats), "reported": len(beats) - len(unreported),
+                          "unreported": [{"beat": b["beat"], "at": b["at"]} for b in unreported[:UNREPORTED_KEPT]],
+                          "failure": self.beat_failure}}
 
     def refused(self):
         """What the sandbox refused, one entry per process name, port and `mismatch`. `mismatch` says
@@ -532,7 +971,47 @@ class Monitor:
                 e["pids"].append(r["pid"])
         return sorted(out.values(), key=lambda e: (e["process"], e["port"], e["mismatch"]))
 
+    def withheld(self):
+        """Why finding nothing would prove nothing, in words, or None when every report this monitor
+        asked for arrived. One missing report is enough: the rule rests on no count and no timing."""
+        with self.cond:
+            fired = len(self.beats)
+            unreported = sum(1 for b in self.beats if not b["seen"])
+            unseen = sum(1 for i in range(1, self.canaries_fired + 1)
+                         if "%s-%d" % (self.canary_tag, i) not in self.canaries_seen)
+        said = []
+        missing = []
+        if unreported:
+            missing.append("%d of the %d test connections the monitor made from a program not signed by Apple"
+                           % (unreported, fired))
+        if unseen:
+            missing.append("%d of the %d canaries" % (unseen, self.canaries_fired))
+        if missing:
+            said.append("this Mac did not report every connection it was asked to report during the run (%s"
+                        " never reported)" % " and ".join(missing))
+        if self.beat_failure:
+            said.append("the monitor could not check that this Mac reports every connection: " + self.beat_failure)
+        elif not fired:
+            said.append("the monitor made no test connection, so nothing shows that this Mac reports every"
+                        " connection")
+        return "; and ".join(said) or None
+
     def judge(self):
+        """The verdict over the reports that arrived, and never clean when one the monitor asked for
+        did not. A connection that was seen outside the allowed hosts is still not-clean: what was
+        seen is never downgraded by what was not."""
+        out = self._judge_reports()
+        gap = self.withheld()
+        if gap is None:
+            return out
+        if out["verdict"] == "not-clean":
+            out["why"] += ". And there may have been more: " + gap
+            return out
+        return self.field("unmeasured", gap + ". So a reading that found nothing outside the allowed hosts cannot be"
+                          " trusted: a connection by serve or the drive helper could have gone unreported the"
+                          " same way", out["destinations"], out["unnamed"], out["refused"])
+
+    def _judge_reports(self):
         more, unresolved = resolve(self.allow)
         allowed_ips = dict(self.allowed_ips, **more)
         self.unresolved = sorted(set(self.unresolved) | set(unresolved))

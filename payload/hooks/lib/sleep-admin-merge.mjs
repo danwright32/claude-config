@@ -21,8 +21,8 @@
 //
 // Exit codes, each distinct (L11): 0 judged, 2 its arguments could not be read (said on stderr,
 // nothing printed). A caller that cannot run this, or reads none of the four verdicts, must not
-// take that as sleep mode being off or as permission. Proved by section 34 of
-// payload/hooks/test-merge-when-ready.sh.
+// take that as sleep mode being off or as permission. Proved by
+// payload/hooks/test-merge-when-ready-bypass.sh.
 import { existsSync, readFileSync } from 'node:fs'
 import { adminMergeNightRefusal } from '../../mods/scope-modes/hooks/adminmerge.ts'
 import { bootOf, bootSessionOf, readSleep } from '../../mods/scope-modes/hooks/sleep.ts'

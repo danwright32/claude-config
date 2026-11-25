@@ -37,11 +37,12 @@ drive call. It also records `egress`, the verdict of the egress monitor in egres
 the drive helper run under a sandbox profile that reports every connection to a host outside this
 machine, and the receipt lists each destination seen with its count, judged against areas.json's
 egress.allow. The verdict is `clean` only when the monitor was proved live from before serve
-started until after it stopped and nothing outside the allowed hosts was reached; `not-clean`
-names what was; `unmeasured` says why the monitor could not see, and never passes for clean. Drive
-calls run under a second profile that also refuses one kind of connection, the helper browser's UDP
-connect to port 443 off this machine, and the receipt counts each refusal in `egress.refused`
-(#3319).
+started until after it stopped, every report the monitor asked for itself arrived (its canaries and
+its test connections, #3576) and nothing outside the allowed hosts was reached; `not-clean`
+names what was; `unmeasured` says why the monitor could not see, a Mac that did not report every
+connection it was asked to among the reasons, and never passes for clean. Drive calls run under a
+second profile that also refuses one kind of connection, the helper browser's UDP connect to port
+443 off this machine, and the receipt counts each refusal in `egress.refused` (#3319).
 
 Env: VERIFICATION_HOME (see verification.py). Two injectable clocks (L524), each a number of at
 least 0 that multiplies seconds, default 1: VERIFICATION_TIME_SCALE scales every poll delay (the
@@ -280,16 +281,20 @@ def remove_worktree(repo, wt):
     return not os.path.exists(wt) and ("worktree " + wt + "\n") not in listed + "\n"
 
 
-def finish_egress(rec, monitor, egress_why):
+def finish_egress(rdir, rec, monitor, egress_why):
     """The receipt's egress field, and the report stream stopped, whatever state the monitor is in.
 
     With a monitor (the supervisor's own path) its end canary is fired now, after serve's whole
     group is gone. Without one, nothing measured the run: the reason is recorded as unmeasured,
     and a stream a killed supervisor left running is stopped by the process group it recorded
-    (L1011).
+    (L1011). The monitor's beat program ended by itself when the supervisor's death closed its
+    input; the copy of it left in the receipt folder is removed here (claude-config#3576).
     """
     if monitor is not None:
         return monitor.finish()
+    left = egress.remove_beat_program(rdir)
+    if left:
+        egress_why += "; " + left
     pgid = rec.get("egress_monitor_pgid")
     if pgid:
         try:
@@ -333,7 +338,7 @@ def do_stop(rdir, reason, proc=None, detail=None, monitor=None, egress_why=None)
             signal_group(pgid, signal.SIGKILL)
             wait_gone(pgid, stop_s)
     survivors = live_members(pgid)
-    egress_field = finish_egress(rec, monitor, egress_why or EGRESS_RECOVERED)
+    egress_field = finish_egress(rdir, rec, monitor, egress_why or EGRESS_RECOVERED)
     removed = remove_worktree(rec["repo"], wt)
     return update_receipt(rdir, stopped_at=v.utc_now(), stopped_by=reason, stop_detail=detail,
                           serve_exit=serve_exit, stop_command_exit=stop_exit, worktree_removed=removed,

@@ -33,7 +33,13 @@ back.
   It was `opus` from 2026-11-10 (#2645). `null` under `env` means remove: the pull deletes that one
   variable from each Mac's `settings.json` and leaves every other variable there untouched, since
   leaving the key out of this file would leave each Mac's old value in place. It is the only variable
-  under `env` the sync writes or removes, and the rest of that block stays each Mac's own. It is
+  under `env` the sync writes or removes, and the rest of that block stays each Mac's own. And
+  `claudeMdExcludes` since 2026-11-25 (#3635, added to the sync's list by Dan's sign off): it keeps
+  this repository's own `payload/CLAUDE.md` (development checkout, its worktrees, the sync clone)
+  from loading as a subfolder rules file. See the `payload/CLAUDE.md` entry below for why. Each
+  pattern must be one of `**/claude-config/payload/CLAUDE.md`,
+  `**/claude-config/.claude/worktrees/*/payload/CLAUDE.md` and
+  `**/claude-config-sync/payload/CLAUDE.md`, or the pull refuses the file. It is
   edited in the repo, never published back from a Mac, and a pull writes each value into
   `settings.json` (refusing the whole file, by name, if it holds any key not on the allowlist in
   `claude-sync`, or a value Claude Code would not act on). Off is `false`, never a deletion; the one
@@ -55,6 +61,16 @@ back.
   both lists and `claude-sync pull` as the remedy, and `claude-sync verify` fails on it. Edit the
   list here, never in rtk's config, which the next pull puts back.
 - `payload/CLAUDE.md` and `payload/RTK.md` — your global rules files, synced verbatim (standing cross-project instructions travel here)
+  In this repository the copy under `payload/` is excluded from Claude Code's subfolder loading by
+  the shared `claudeMdExcludes` setting (#3635). Without it, Claude Code loads `payload/CLAUDE.md`
+  and its 14 imports the first time a session or agent reads, edits or writes any file under
+  `payload/`, a second copy beside the one from `~/.claude`. Measured 2026-11-25: 318 of 433 agents
+  in one session carried it, a median 36,610 tokens more on every later request. 22 headless runs
+  the same day showed the setting stops it in a main session and in agents, `omitClaudeMd` agents
+  included, drops the imports with it, and leaves `~/.claude/CLAUDE.md` loading.
+  `tests/test-claude-md-excludes.sh` holds the patterns to these copies only. Count on it only in a
+  session started after the pull that installed it: whether a session already running picks it up
+  has not been measured.
 
 Every mirrored file (hooks, skills, agents, commands) and the hooks fragment are stored with this
 Mac's config directory written as `__CLAUDE_HOME__`, and expanded to each Mac's own on the way in,
@@ -159,9 +175,22 @@ the end of staging and after the work names scan, over the finished payload, so 
 Mac's own config has already become the placeholder and the check reads what main's run would
 read. It is handed only the files this send carries (`--files0-from`): every payload file that
 differs from the clone's last commit, new ones included, and the files changed by commits the
-shared repo lacks (with no upstream set, the commits no remote branch holds); without git, the whole
-payload. The names are passed NUL separated from git to the check, so a name git would quote (one
-holding a double quote, a backslash or a newline) is read like any other. A failing file already on main therefore never
+shared repo lacks (with no upstream set, the commits no remote branch holds; after a send that went
+up on top of a shared head still being tested, the commits made since that send, because the
+earlier ones are already in the shared repo under another id, #3499); without git, the whole
+payload. Those earlier commits are left out only on trust that nothing puts them back on the shared
+branch, and the staging runs before the fetch, so it cannot know. A run that left them out therefore
+asks the check again just before each push of the branch, about every payload file that push would
+add to the shared repo or change there: commits replayed over a shared repo that still holds their
+files change nothing and are not read, and a file the pull replayed over the other Mac's deletion
+of it, one built into a send from the merge base, or one a merge made by hand put back is held
+there, in the same words, with the receiving half of a sync still run. In such a run a push from a
+clone that does not sit on top of the shared repo as it last saw it is not tried at all (git would
+refuse it unless the shared branch had been moved back, and then it would carry exactly the files
+left out); `push` says so and names `sync`, and a send goes on to its reconcile. The names are passed NUL separated from git to the check, so a name git would quote (one
+holding a double quote, a backslash or a newline) is read like any other, and a file whose name
+holds a line break is named in the refusal on one line with the break written as `\n` (#3499: it
+used to be held as a check that could not judge). A failing file already on main therefore never
 holds an unrelated send, and a send that removes it goes through. One failing file holds
 everything, because a send is one commit and the other Mac mirrors what the payload holds, so half
 a change would arrive with nothing to say which half. Nothing is committed or pushed, and no file in
@@ -178,7 +207,21 @@ that must name a real home, such as a fixture, carries the check's own
 no override variable, and a check that is missing or could not run refuses the send too, said as
 that rather than as a finding. In the change watcher a standing hold is said in full once, then in
 one short line pointing at status with no desktop notice, until its files change, it clears or a
-day passes; every refusal is still counted. Measured on 2026-11-22 against a clone of main with
+day passes; every refusal is still counted. A hold whose files changed is said in full again, but
+it is one hold and posts one desktop notice, then another only a day after the last, whether the
+send ends there or reaches the hold through a sync (#3499: a session adding a scratch file a tick
+used to get a notice a tick), and whether the hold is found in the staging or at the push.
+`status` and `stuck` point at the kept log only while it exists. Every push of the config branch
+lands only on the commit this clone last saw the shared branch at, which is the commit its files
+were judged against: a branch that moved since, forward or back, refuses the push, the run says so,
+and `claude-sync sync` is the way on. A clone that is not on top of that commit does not push at
+all and says the push was not tried.
+The work names scan, the secret scan's list of files outside the payload and the list of staged
+copies a sync or a pull sets aside read file names NUL separated too (#3499), so a name git would
+quote is scanned and set aside like any other. One kind is left in the clone and said: a staged
+copy whose name holds a line break, because the apply reads its lists a line at a time and, with
+that copy set aside, removed the file from the config (measured 2026-11-23). Where the shared repo
+changes the same file the receive refuses and says to rename it. Measured on 2026-11-22 against a clone of main with
 1,446 payload files, at a load average between 104 and 178 on 12 cores, 10 samples a case: the
 check adds 53 to 72 ms to a send with nothing in the payload to read, 85 to 149 ms to a send of one
 edited hook and one new file, and 4.1 to 4.3 seconds to a replay of the 2026-11-22 send, nearly all
@@ -463,6 +506,29 @@ and a recount hours later reads a different set. So a count first runs `tools/re
 - The copy lives in `~/.claude/state`, which the sync never carries, the keep rules never walk, and
   `/disk-clean` never offers. Nothing removes a copy: delete it with the `rm -rf` line it prints
   once the count is finished.
+
+#### The usage limit record (#3308)
+
+Every usage limit message is kept in `~/.claude/state/limit-messages/records.jsonl`, one line each,
+local to the Mac and never synced, so it outlives the transcripts this job removes. A line holds
+when, the kind (five hour, weekly, a model's own limit, monthly spend, account rate limit), the
+model a model limit names, the reset time the message names, who was stopped (main session,
+headless run or agent), and the account as a key (never a name), read only while the session runs.
+No conversation text. `hooks/limit-messages.py` writes it from the StopFailure and SubagentStop
+hooks, and its header holds where a limit message can be seen and why.
+
+A normal run prints nothing, awake or asleep, and records the same either way. A run that fails (a
+payload that is not a JSON object, a record it cannot write, anything else) keeps the failure in
+`failures.jsonl` beside the record, which `days` reports. While Dan is awake it also prints one
+plain line saying what failed and exits 1. While the Mac is asleep it prints nothing and leaves the
+failure as a finding in the morning report instead (Dan's choice, 2026-11-24). Whether the Mac is
+asleep is `lib/sleep.sh`'s `sleep_active`, and one that cannot be asked counts as awake.
+
+- `python3 ~/.claude/hooks/limit-messages.py days` prints limit days by kind, in ET, with the reset
+  times each day named, so a five hour limit day is never counted with a model limit day.
+- `python3 ~/.claude/hooks/limit-messages.py scan` fills the record from the transcripts still on
+  disk. It adds nothing already recorded, and a message it finds carries an account only when its
+  session is still running. A transcript it cannot read is named in a count and fails the run.
 
 It also adds this to `~/.zshrc`, so the shortcut arrives with the rest of the setup
 instead of being added by hand on each Mac (`~/.zshrc` is deliberately not synced):
@@ -2494,6 +2560,13 @@ being off. With no sleep record the helper runs
 nothing new and behaves as it did. Two things sleep mode holds a typed admin merge to are not asked
 of the helper's: that it is a squash, and that the base branch requires at least one check. The
 merge method is judged against the ruleset, and the checks by `block-red-merge.sh`, as above.
+The bypass merge and sleep mode checks are `hooks/test-merge-when-ready-bypass.sh`. Since
+claude-config#3572 the helper's checks are six suites, not one: on 2026-11-24 the single
+`hooks/test-merge-when-ready.sh` ran past the runner's 1,200 second wall limit on GitHub's runners,
+so its sections were cut into `test-merge-when-ready.sh` (the documentation checks and sections 1
+to 10), `-heads` (11 to 21), `-turn` (22 to 26b), `-line` (27 to 30), `-untested` (31 to 33) and
+`-bypass`, each dealt to a part by its own measured cost. All six run the helper in one shared
+world, `hooks/lib/merge-when-ready-harness.sh`.
 
 Checks that have reported being green is not the head's CI being green (claude-config#1087). A
 workflow run can exist for minutes before any of its jobs registers a check (the booking app's CI waits on a
@@ -4252,6 +4325,35 @@ What it refuses:
 What passes: every Slack read, `slack_send_message_draft`, a command that only mentions an endpoint
 (a grep, an echo, a test assertion), and `/nudge` at `skills/nudge/nudge.py`, the one script let
 through (Dan, 2026-11-05), matched by its real path, so a copy anywhere else is refused.
+
+Since claude-config#3575 the gate's own checks are six suites, not one: on 2026-11-24 the single
+`hooks/test-slack-drafts-only-gate.sh`, 2,633 checks, ran past the runner's 1,200 second wall limit
+on GitHub's runners, so its sections were cut, in their order and by their measured cost, into
+`test-slack-drafts-only-gate-scripts.sh` (tools, commands, scripts and the Python imports they
+reach), `-written-files` (data files, program options, files copied or written and run),
+`-file-arguments` (a file handed to code, redirects, code read on input),
+`test-slack-drafts-only-gate.sh` itself (`/nudge`, an unreadable payload, the time budget, a crash,
+the wiring and the cost checks), `-runners` (module runners, builds, git writes, package specs) and
+`-tools-cache` (native tools, written modules, the judgement cache and the misreads). All six run
+the gate in one shared world, `hooks/lib/slack-drafts-gate-harness.sh` (the gate, the throwaway
+folder and its cache, the result line and the fixtures one suite reads from another's sections).
+Each keeps its own copy of the helper functions a case is driven through, because the gate knows
+a shell function only where the text calling it defines it: from a sourced file, `run_bash "<a
+command that posts>"` reads as an unknown program running that command, and the suite is refused.
+`test-slack-drafts-gate-helper-copies.sh` holds those copies equal, naming the suite and the helper
+when two differ.
+
+Since claude-config#3624 the code loaders checks are five suites on the same harness: on 2026-11-25
+the single `hooks/test-slack-drafts-code-loaders.sh`, 2,287 checks, read up to 485 seconds on
+GitHub's runners, 81 percent of the suite cost guard's line at half the wall limit. Its sections were
+dealt by their measured cost, kept together where one makes the fixtures another reads, into
+`test-slack-drafts-code-loaders.sh` itself (PHP includes, a NUL in a first line, `NODE_OPTIONS` and
+perl, sourced paths, `eval` and a shell's `-c` and `-n`, and the gate's verdict on running each of
+the five), `-data-names` (an address held as data, test files and mocks, a declared webhook name),
+`-package-runs` (a launcher's package run and a package script), `-python` (a Python script that
+only reads, modules under other names, routes to `os` and `sys`) and `-shell-input` (process
+substitution and a shell fed by what is around it). The helper copies guard holds their copies too,
+and runs every suite sharing the harness once without it, which must stop with a failed result line.
 
 ### Running a refused command with no network (#3173)
 
@@ -6367,11 +6469,19 @@ suite that refused to run or crashed at its top writes nothing without that prov
 could not be checked or was not measured. It is not run on every full run: doing so costs about
 one full run again, and the runner already hands every suite the list.
 
-The main suite on its own:
+The main suite on its own, which is two suites, each half of its sections (claude-config#3594):
 
 ```bash
 bash tests/test-claude-sync.sh
+bash tests/test-claude-sync-part2.sh
 ```
+
+The second runs the same file with `SUITE_PART=2`, which deals the sections from the heading
+`SUITE_PART2_FROM` names to the end; the first deals the ones before it. One file keeps the
+harness, the prelude and every helper in one place, and two suites let each be budgeted and dealt
+by its own cost: on 2026-11-25 the whole file had grown to its section time budget on CI, which is
+judged per run and undivided by shards. `SECTION_ONLY` and `SECTION_UNTIL` reach any section from
+either.
 
 It fans its sections out across four processes. Measured on 2026-08-21, 87 sections taking 82
 seconds that way and 243 in a single process, with no single section dominating (the slowest five
@@ -8283,7 +8393,8 @@ and answers the second refusal's reason trimmed of its full stop; a mod sends on
 `reason`. A mod that answers a tool call itself, and so passes it to no guard beneath it, asks
 `$.modkit.screen(e)` before acting on it and answers with its refusal: mod-kit asks the secret guard
 wherever its folder sorts, answers null when the secret guard is not loaded, and refuses with the
-card when it cannot ask. `tools/check-mod-shared-parts.sh`, run by `tests/test-mods.sh`, fails any
+card when it cannot ask. `tools/check-mod-shared-parts.sh`, run by
+`tests/test-mods-shared-parts.sh`, fails any
 other mod that keeps its own copy, draws a result row or the band itself (any line naming
 `ToolResult` or `AbovePrompt` as a string, however the hook is written), draws a card's parts or
 left rule, retries a send, reads which files a command writes, walks up for a `.git` entry (`.git`
@@ -10659,6 +10770,14 @@ process (its cached rollout switch saved off, or a setting such as `disableAllHo
 can set; it never counts that as every mod failing (#740). A failure carrying no verdict line names
 the exit code and the last lines of output instead of an empty reason.
 
+That run over the real tree is all `tests/test-mods.sh` holds now. The checks of `check-mods.sh` on
+fixture mods and a stub claude, and of the other mod scans, are `tests/test-mods-fixtures.sh`, and
+section 9, what every mod shares, is `tests/test-mods-shared-parts.sh`: one suite of 516 checks cut
+into three by what each section cost, after it read up to 777 seconds on GitHub's runners on
+2026-11-25, against the 1,200 second wall limit (#3622). All three run in the world `tests/mods-harness.sh` sets up, and the
+last section of the fixtures suite holds them together: each piece is a suite the runner finds, each
+refuses to run without the harness, and only `tests/test-mods.sh` holds the real claude.
+
 In the pull request checks neither is UNMEASURED: the runner has no `claude` on its PATH, and the
 version in `.github/claude-code-version`, installed by `tools/install-claude-code.sh` from the
 vendor's npm package and cached on that file, is handed to `tests/test-mods.sh` and
@@ -10688,7 +10807,8 @@ another build says so in its first line, as does `tests/test-mods.sh` under its 
 runner's report: "Claude Code changed since the mods last passed on this Mac". A red with no commit
 to blame then reads as Claude Code's change first: on 2026-11-18, 2.1.328 turned two secret guard
 tests red and three builders each had to show it was not theirs. `CHECK_MODS_LAST_PASSED` moves the
-record, set empty it is off, and `tests/test-mods.sh` turns it off for every fixture.
+record, set empty it is off, and the mods suites' harness, `tests/mods-harness.sh`, turns it off for
+every fixture.
 Handed one mod's own folder (`bash tools/check-mods.sh payload/mods/scope-modes`), it checks that
 mod alone, reading its dependencies from the folder holding it. A folder holding no mod at all
 exits 5 and says nothing was checked, never a pass: until #3105 one mod's folder was searched for
@@ -10698,8 +10818,8 @@ kept too, one file per failure in `~/.cache/claude-config/mod-test-failures` (ou
 syncs), and the line ends `whole output kept in <file>`, so a failure seen once can still be read
 afterwards (#1788, L297). A copy stays 30 days, or while it is one of the newest 3 of its own mod and check, under 20 MB in all (#2959); a passing run writes nothing.
 `CHECK_MODS_FAILURE_OUTPUT` moves the folder, or set empty keeps nothing and the line says so.
-`tests/test-mods.sh` points it at its own throwaway folder for every fixture, and leaves only its
-run over the real `payload/mods` writing to the real one.
+`tests/mods-harness.sh` points it at its own throwaway folder for every fixture of the mods suites,
+and leaves only `tests/test-mods.sh`'s run over the real `payload/mods` writing to the real one.
 It also fails a mod whose hook is on an event Claude Code's built-in security default sends past
 the user tier every mod loads in (#875): every `classic.*` event, `prompt.section`, `prompt.context`,
 `prompt.compose`, `skill.prompt`, `attribution.text` and `settings.read`, and since Claude Code
@@ -10723,13 +10843,13 @@ It also type checks each mod strictly (#758), as the mod's own `tsconfig.json` s
 TypeScript compiler pinned in `tools/typescript` (#803; TypeScript 7.0.2, installed on CI before the
 suites; `TSC_BIN` overrides it, and `tsc` on the path is the last resort). A checkout without it, as
 every new worktree is, gets it with no manual step (#1496): `tools/lib/pinned-compiler.sh`, called by
-`check-mods.sh`, `check-mod-noun-waits.sh` and `tests/test-mods.sh`, links the checkout's
+`check-mods.sh`, `check-mod-noun-waits.sh` and `tests/mods-harness.sh`, links the checkout's
 `node_modules` (a real folder of links, so the ignore rule still covers it) to ONE install per clone
 and pin, kept in the clone's common git folder at `.git/pinned-typescript/<lockfile hash>-<platform>`.
 Only the first checkout of a clone after the pin moves installs it, with `npm ci --prefer-offline`
 (from the npm cache, 0.9 s measured on 2026-10-22, the registry only for what the cache lacks),
 stopped with everything it started after `PINNED_TS_INSTALL_DEADLINE` seconds (60). A test suite
-never asks the registry: `tests/test-mods.sh` sets `PINNED_TS_OFFLINE=1`, which reads the npm cache
+never asks the registry: `tests/mods-harness.sh` sets `PINNED_TS_OFFLINE=1`, which reads the npm cache
 only, so where the cache lacks the package its sections say UNMEASURED with that reason. Two runs
 installing at once each install into a folder of their own and publish it by one rename, so neither
 can see the other's half made copy and no lock is left behind by a run that is killed. A
@@ -10780,7 +10900,7 @@ a laid folder named as its argument, cuts the tsconfig's types back to the three
 session's MCP list, and leaves out every line that is wholly a comment but the engine's first, since
 comments carry no types and Claude Code's carry dashes and words the push gates refuse, refusing
 outright where such a character sits in what is kept), then run `tests/test-mods.sh` and
-commit the result with whatever the newer types ask of a mod. On 2.1.292, nineteen stand-ins
+`tests/test-mods-fixtures.sh` and commit the result with whatever the newer types ask of a mod. On 2.1.292, nineteen stand-ins
 returned their object cast to `never`, which passes any shape; removing those casts showed eight of
 them, in seven mods, hiding a missing member or a parameter narrower than the real one. Every one is
 now returned uncast, typed with the real noun's types, and `check-mods.sh` refuses such a cast in
@@ -10854,7 +10974,7 @@ the timer's arguments is worked out as the timer is set, so it is the noun's own
 call given as the callback (`$.clock.after(0, slow())`), and the arguments of a function making call,
 a function written in place there included (#2333).
 Run on its own, it installs that compiler as the type check does, and refuses (exit 4, naming why
-and `npm ci --prefix tools/typescript`) where it cannot. `tests/test-mods.sh` judges the compiler by whether it starts (a Mac's native build
+and `npm ci --prefix tools/typescript`) where it cannot. `tests/test-mods-fixtures.sh` judges the compiler by whether it starts (a Mac's native build
 copied to Linux is installed and cannot run), and where it does not, reports its noun wait checks
 UNMEASURED with the same command, as the type check above does, rather than failing. Under `CI=true`,
 where the workflow installs it, a compiler that does not start fails instead. (It no
