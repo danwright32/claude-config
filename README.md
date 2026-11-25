@@ -3992,8 +3992,9 @@ repository's own merge tool, read by `lib/merge-target.sh`), it asks Claude for 
 how the product behaves now that the change shipped, and Claude skips it, in one line, for anything
 nobody using the product would notice. It also stands down for a repository with `.no-pr-quiz` at
 its root, a session snoozed with `pr-merge-quiz.sh --snooze-session <id>`, a pull request whose
-changelog label says it is not visible, sleep mode, and a headless run. What it decided is counted in
-`~/.claude-quiz-verdicts/counts`.
+changelog label says no manager would notice it (which labels those are is the answer of
+`hooks/lib/changelog-entry.js`, never a name in the quiz), sleep mode, and a headless run. What it
+decided is counted in `~/.claude-quiz-verdicts/counts`.
 
 A merge command still running in the background is not quizzed yet (#1768). A command that passes
 the Bash tool's 600 s limit is moved to the background, and the hook runs at that moment, before

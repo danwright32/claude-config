@@ -615,6 +615,12 @@ if [ "$NOREAD_RC" -eq 2 ]; then pass; else
   fail "with no jq the gate allowed the merge (rc=$NOREAD_RC): $NOREAD_OUT"; fi
 if says "$NOREAD_OUT" "jq"; then pass; else
   fail "the refusal does not name jq: $NOREAD_OUT"; fi
+# With the override typed the merge goes through, as it always did. But gh's answer was never read,
+# so the pull request may be an announcement, which the override does not cover, and the allow says
+# so instead of saying nothing (claude-config#3665; Dan, 2026-11-25).
+run_hook_on "$dir" "$nojq" "ALLOW_UNTAGGED_MERGE=1 $MERGE 7 --repo acme/widget --squash"
+if [ "$NOREAD_RC" -eq 0 ] && says "$NOREAD_OUT" '"systemMessage"' && says "$NOREAD_OUT" "jq is not installed" && says "$NOREAD_OUT" "an announcement" && says "$NOREAD_OUT" "could not be ruled out"; then pass; else
+  fail "#3665 with the override typed and no jq, the merge was refused, or let through with nothing said about an announcement (rc=$NOREAD_RC): $NOREAD_OUT"; fi
 # The control, same fixture and same command with both readers present: it merges, so every
 # refusal above is the reader's absence rather than a fixture that refuses everything (L159).
 if denied "$(run_hook "$dir" "$MERGE 7 --repo acme/widget --squash")"; then
@@ -880,11 +886,103 @@ for tagged in "$TECHNICAL" "$ANNOUNCE_FULL"; do
   else fail "#3665 a merge went through, or was refused in other words, where the announcements channel is not a channel id: $out"; fi
   rm -rf "$dir"
 done
-# The refusals about the announce label never offer the override that skips this gate.
-dir=$(make_repo acme/widget "$ANNOUNCE_FULL" "$REGISTRY")
-out=$(run_hook "$dir" "$MERGE 7 --squash")
-if says "$out" "ALLOW_UNTAGGED_MERGE"; then fail "#3665 the refusal of an announce label offers the override: $out"; else pass; fi
+# No refusal of a pull request carrying the announce label offers the override, which does not cover
+# it: not the refusals that exist only for that label, and not the ones it shares with a visible
+# pull request (its Changelog sentence, a second label). Each says the override does not cover it,
+# so nobody spends a merge finding that out.
+ANNOUNCE_AND_VISIBLE='{"number":7,"url":"https://github.com/acme/widget/pull/7","author":{"login":"dwright-pennie"},"labels":[{"name":"changelog/announce"},{"name":"changelog/visible"}],"body":"prose\n\n## Changelog\nAgents can now hand a call back to the queue."}'
+for each in "$ANNOUNCE_FULL|$REGISTRY" "$ANNOUNCE_NO_SENTENCE|$REGISTRY_ANNOUNCES" "$ANNOUNCE_AND_VISIBLE|$REGISTRY_ANNOUNCES"; do
+  dir=$(make_repo acme/widget "${each%%|*}" "${each#*|}")
+  out=$(run_hook "$dir" "$MERGE 7 --squash")
+  if denied "$out" && ! says "$out" "Deliberate override" && ! says "$out" "re-run with ALLOW_UNTAGGED_MERGE"; then pass
+  else fail "#3665 a refusal of a pull request carrying the announce label offers the override: $out"; fi
+  if says "$out" "ALLOW_UNTAGGED_MERGE=1 does not cover"; then pass; else fail "#3665 a refusal of a pull request carrying the announce label does not say the override does not cover it: $out"; fi
+  rm -rf "$dir"
+done
+
+# THE OVERRIDE DOES NOT COVER AN ANNOUNCEMENT (Dan, 2026-11-25: "No, announce is exempt"). The gate
+# left on ALLOW_UNTAGGED_MERGE=1 before it read anything, so a merge carrying it took an announce
+# pull request with no post (R1) or in a repository naming no channel (R7). Now, in a repository the
+# registry gates, the pull request is read with the override typed, and one carrying the announce
+# label is judged in full, as if the override were not there.
+OVERRIDDEN="ALLOW_UNTAGGED_MERGE=1 $MERGE 7 --squash"
+# R1 under the override: no post, no sentence, a post that does not open with @here, a second label.
+for each in "$ANNOUNCE_NO_POST|## Announcement" "$ANNOUNCE_NO_SENTENCE|## Changelog" "$ANNOUNCE_NO_OPENER|does not open with @here" "$ANNOUNCE_DASHED|dash as punctuation" "$ANNOUNCE_AND_VISIBLE|more than one changelog label"; do
+  dir=$(make_repo acme/widget "${each%%|*}" "$REGISTRY_ANNOUNCES")
+  out=$(run_hook "$dir" "$OVERRIDDEN")
+  if denied "$out" && says "$out" "${each#*|}"; then pass
+  else fail "#3665 R1: the override let an announce pull request merge that would be refused without it (wanted a refusal saying '${each#*|}'): $out"; fi
+  if says "$out" "ALLOW_UNTAGGED_MERGE=1 does not cover"; then pass; else fail "#3665 the refusal under the override does not say the override does not cover an announcement: $out"; fi
+  rm -rf "$dir"
+done
+# R7 under the override: complete writing, and a repository whose entry names no channel.
+for reg in "$REGISTRY" "$REGISTRY_MANAGERS_ONLY"; do
+  dir=$(make_repo acme/widget "$ANNOUNCE_FULL" "$reg")
+  out=$(run_hook "$dir" "$OVERRIDDEN")
+  if denied "$out" && says "$out" "is not in use here" && says "$out" "ALLOW_UNTAGGED_MERGE=1 does not cover"; then pass
+  else fail "#3665 R7: the override let an announce pull request merge in a repository whose registry entry names no announcements channel: $out"; fi
+  rm -rf "$dir"
+done
+# And one whose channel is not a channel id: the announce pull request is refused in those words,
+# while any other pull request there takes the override as it always did.
+dir=$(make_repo acme/widget "$ANNOUNCE_FULL" "$REGISTRY_BAD_ANNOUNCE")
+out=$(run_hook "$dir" "$OVERRIDDEN")
+if denied "$out" && says "$out" "not a Slack channel id" && says "$out" "ALLOW_UNTAGGED_MERGE=1 does not cover"; then pass
+else fail "#3665 the override let an announce pull request merge where the announcements channel is not a channel id: $out"; fi
 rm -rf "$dir"
+dir=$(make_repo acme/widget "$TECHNICAL" "$REGISTRY_BAD_ANNOUNCE")
+out=$(run_hook "$dir" "$OVERRIDDEN")
+if [ -z "$out" ]; then pass; else fail "#3665 the override no longer covers a pull request that is not an announcement where the channel is not a channel id: $out"; fi
+rm -rf "$dir"
+# Still possible: an announce pull request carrying both pieces merges with the override typed too.
+dir=$(make_repo acme/widget "$ANNOUNCE_FULL" "$REGISTRY_ANNOUNCES")
+out=$(run_hook "$dir" "$OVERRIDDEN")
+if [ -z "$out" ]; then pass; else fail "#3665 a complete announce pull request was refused, or drew a notice, with the override typed where the repository announces: $out"; fi
+rm -rf "$dir"
+# For every other pull request the override is what it always was: the merge goes through and
+# nothing is said. A record the gate would refuse under each of the other labels, and no label.
+for other in "$UNTAGGED" "$NOBLOCK" "$VISIBLE_WITH_POST" "$TECHNICAL"; do
+  dir=$(make_repo acme/widget "$other" "$REGISTRY_ANNOUNCES")
+  out=$(run_hook "$dir" "$OVERRIDDEN")
+  if [ -z "$out" ]; then pass; else fail "#3665 the override no longer lets a pull request that is not an announcement through in silence: $out"; fi
+  rm -rf "$dir"
+done
+# A repository the registry does not gate is none of this: nothing is read and nothing is said.
+dir=$(make_repo acme/widget "" "$REGISTRY_OTHER")
+out=$(run_hook "$dir" "$OVERRIDDEN")
+if [ -z "$out" ]; then pass; else fail "#3665 the override drew a refusal or a notice in a repository the registry does not gate: $out"; fi
+rm -rf "$dir"
+
+# LET THROUGH, SAID OUT LOUD (Dan, 2026-11-25). The override is the remedy the gate itself names for a
+# pull request it cannot read, so there it still lets the merge through. But a pull request nobody
+# read may be an announcement, and a silent allow would say it was not: the allow carries one
+# sentence, to the person and to the session, that an announcement could not be ruled out. The
+# notice's second copy, on stderr for the debug log, is dropped in these runs so this suite's own
+# output stays its verdicts.
+said_out_loud() {  # $1 = the hook output, $2 = what could not be read ; true when it is an allow carrying the notice
+  ! denied "$1" && says "$1" '"systemMessage"' && says "$1" '"additionalContext"' \
+    && says "$1" "$2" && says "$1" "an announcement" && says "$1" "could not be ruled out"
+}
+dir=$(make_repo acme/widget "" "$REGISTRY")
+out=$(run_hook "$dir" "$OVERRIDDEN" 2>/dev/null)
+if said_out_loud "$out" "gave no answer about"; then pass
+else fail "#3665 with the override typed and the pull request unreadable, the merge was refused, or let through with nothing said about an announcement: $out"; fi
+rm -rf "$dir"
+# An answer about another repository's pull request is not a reading of this one.
+dir=$(make_repo acme/widget "$WRONG_REPO" "$REGISTRY")
+out=$(run_hook "$dir" "$OVERRIDDEN" 2>/dev/null)
+if said_out_loud "$out" "the only answer gh gave was about" && says "$out" "someone/else"; then pass
+else fail "#3665 with the override typed and an answer about another repository, nothing was said about an announcement: $out"; fi
+rm -rf "$dir"
+# Where the registry cannot say whether the repository is gated, the pull request is never read
+# either, and the same is said.
+for reg in MISSING 'not json' "$REGISTRY_NO_DATE"; do
+  dir=$(make_repo acme/widget "$ANNOUNCE_NO_POST" "$reg")
+  out=$(run_hook "$dir" "$OVERRIDDEN" 2>/dev/null)
+  if said_out_loud "$out" "registry"; then pass
+  else fail "#3665 with the override typed and a registry that cannot say whether the repository is gated ($reg), nothing was said about an announcement: $out"; fi
+  rm -rf "$dir"
+done
 # While the refusals it always gave still do.
 dir=$(make_repo acme/widget "$UNTAGGED" "$REGISTRY")
 out=$(run_hook "$dir" "$MERGE 7 --squash")
@@ -913,6 +1011,32 @@ cp "$BROKEN/lib/changelog-entry.real.js" "$BROKEN/lib/changelog-entry.js"
 dir=$(make_repo acme/widget "$TAGGED" "$REGISTRY")
 out=$(HOOK="$BROKEN/require-changelog-tag.sh" run_hook "$dir" "$MERGE 7 --squash")
 if denied "$out"; then fail "#3665 the copied hooks refused a correctly tagged PR with a working judge: $out"; else pass; fi
+rm -rf "$dir"
+# Under the override a judge that fails is judged by what could still be told. A pull request
+# carrying the announce label is refused, since the override does not cover it and nothing judged
+# its post. One that does not carry it takes the override as it always did.
+cat > "$BROKEN/lib/changelog-entry.js" <<'JS'
+const real = require('./changelog-entry.real.js');
+module.exports = Object.assign({}, real, { gateRefusal: function () { throw new Error('the judge broke'); } });
+JS
+dir=$(make_repo acme/widget "$ANNOUNCE_FULL" "$REGISTRY_ANNOUNCES")
+out=$(HOOK="$BROKEN/require-changelog-tag.sh" run_hook "$dir" "$OVERRIDDEN")
+if denied "$out" && says "$out" "produced no verdict at all" && says "$out" "ALLOW_UNTAGGED_MERGE=1 does not cover"; then pass
+else fail "#3665 the override let an announce pull request merge when the judge itself failed: $out"; fi
+rm -rf "$dir"
+dir=$(make_repo acme/widget "$TAGGED" "$REGISTRY_ANNOUNCES")
+out=$(HOOK="$BROKEN/require-changelog-tag.sh" run_hook "$dir" "$OVERRIDDEN")
+if [ -z "$out" ]; then pass; else fail "#3665 the override no longer covers a pull request that is not an announcement when the judge fails: $out"; fi
+rm -rf "$dir"
+# And when not even the label can be told, the merge goes through and that is said out loud.
+cat > "$BROKEN/lib/changelog-entry.js" <<'JS'
+const real = require('./changelog-entry.real.js');
+module.exports = Object.assign({}, real, { carriesAnnounce: function () { throw new Error('the label reader broke'); } });
+JS
+dir=$(make_repo acme/widget "$ANNOUNCE_NO_POST" "$REGISTRY_ANNOUNCES")
+out=$(HOOK="$BROKEN/require-changelog-tag.sh" run_hook "$dir" "$OVERRIDDEN" 2>/dev/null)
+if said_out_loud "$out" "failed while reading the pull request's labels"; then pass
+else fail "#3665 with the override typed and the label reader failing, nothing was said about an announcement: $out"; fi
 rm -rf "$dir" "$BROKEN"
 
 echo "  $passed passed, $failed failed"

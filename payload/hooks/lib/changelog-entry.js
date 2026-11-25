@@ -128,6 +128,15 @@ function changelogLabels(labels) {
   return Array.from(new Set(tags));
 }
 
+// Does this pull request carry the announce label at all? Asked about the LABEL alone, whatever
+// else it carries and whether or not the record under it reads. The merge gate asks before it
+// honours its override, which does not cover an announcement (Dan, 2026-11-25), so a second label or
+// a missing post cannot turn one into a pull request the override covers. announcementOwed asks the
+// same question of a merged one.
+function carriesAnnounce(labels) {
+  return changelogLabels(labels).indexOf(ANNOUNCE) !== -1;
+}
+
 // The text under the block heading, folded to one line because a bullet in the
 // post is one line.
 //
@@ -256,8 +265,8 @@ function parseEntry(input) {
     return refuse('MANY_LABELS',
       'This pull request carries more than one changelog label ('
       + tags.map(function (t) { return LABEL_PREFIX + t; }).join(', ')
-      + '). A change is either something a manager notices, plumbing, or not worth mentioning. '
-      + 'Pick one.');
+      + '). The update files each change in one place, by its one label, so two labels file it '
+      + 'nowhere. Pick one.');
   }
 
   const kind = tags[0];
@@ -624,7 +633,7 @@ function announcementOwed(pr, read, slug, today) {
   if (!pr || typeof pr !== 'object' || Array.isArray(pr)) {
     return answer('unknown', 'the pull request on standard input could not be read as JSON holding its labels and body, so whether it owes an announcement cannot be told');
   }
-  if (changelogLabels(pr.labels).indexOf(ANNOUNCE) === -1) return answer('none', '');
+  if (!carriesAnnounce(pr.labels)) return answer('none', '');
   const entry = parseEntry({ labels: pr.labels, body: pr.body });
   if (!entry.ok) return answer('unknown', entry.reason);
   if (!read || read.state !== 'ok') return answer('unknown', (read && read.why) || 'the dev update registry could not be read', '', entry.announcement);
@@ -645,6 +654,7 @@ module.exports = {
   extractAnnouncement: extractAnnouncement,
   normalizeAnnouncement: normalizeAnnouncement,
   changelogLabels: changelogLabels,
+  carriesAnnounce: carriesAnnounce,
   repoScope: repoScope,
   requiredLabels: requiredLabels,
   announcementOwed: announcementOwed,

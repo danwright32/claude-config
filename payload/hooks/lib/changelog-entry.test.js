@@ -50,9 +50,10 @@ check(r.ok === false && r.code === 'NO_BLOCK',
 // ------------------------------------------------- plumbing needs no sentence
 // Most pull requests are plumbing. Requiring manager prose for each one would
 // be a cost paid on every change to buy a line that gets collapsed into a
-// single roll-up anyway, so technical carries no block requirement. Only the
-// visible half needs prose, because there the engineering-voiced title really
-// is not usable and the detail IS the substance.
+// single roll-up anyway, so technical carries no block requirement. Only a
+// label that says a manager would notice needs prose (visible, and announce,
+// further down), because there the engineering-voiced title really is not
+// usable and the detail IS the substance.
 
 r = parse(['changelog/technical'], 'Pinned the SFTP host key.');
 check(r.ok === true && r.kind === 'technical' && r.line === null,
@@ -274,7 +275,7 @@ function cli(args) {
 let c = cli(['required-labels', 'acme/board', cliRegistry]);
 check(c.status === 0 && c.json && c.json.state === 'required'
   && JSON.stringify(c.json.labels.map(function (l) { return l.label; })) === JSON.stringify(['changelog/visible', 'changelog/technical', 'changelog/none']),
-  'the command line did not answer required with the three labels for a gated repo: ' + JSON.stringify(c));
+  'the command line did not answer required, with the labels a caller passing no flag is handed, for a gated repo: ' + JSON.stringify(c));
 c = cli(['required-labels', 'acme/elsewhere', cliRegistry]);
 check(c.status === 0 && c.json && c.json.state === 'not-required' && c.json.labels.length === 0,
   'the command line did not answer not-required for an unlisted repo: ' + JSON.stringify(c));
@@ -633,6 +634,31 @@ check(c.status === 0 && c.json && c.json.state === 'unknown', 'nothing on standa
 c = cliIn(['announcement']);
 check(c.status === 2 && c.json === null, 'the announcement command answered with no repository named: ' + JSON.stringify(c));
 fs.rmSync(annDir, { recursive: true, force: true });
+
+// ---- two labels: the refusal was written when there were three kinds and sorted a change into
+// those three. It now says only what holds for any number of kinds, and names the labels carried.
+r = parse(['changelog/announce', 'changelog/visible'], ANNOUNCE_BODY);
+check(r.ok === false && r.code === 'MANY_LABELS' && /changelog\/announce, changelog\/visible/.test(r.reason),
+  'announce beside visible was not refused as two labels, naming both: ' + JSON.stringify(r));
+check(!/plumbing, or not worth mentioning/.test(r.reason || ''),
+  'the two label refusal still sorts a change into the three kinds there were before the announce label: ' + (r.reason || ''));
+
+// ---- carriesAnnounce: does this pull request carry the announce label at all?
+// Asked by the merge gate before it honours its override, which does not cover an announcement
+// (Dan, 2026-11-25). It answers about the LABEL, whatever else the pull request carries and whether
+// or not the record under it reads, so a second label or a missing post cannot turn an announcement
+// into a pull request the override covers.
+check(typeof entry.carriesAnnounce === 'function', 'the library does not export carriesAnnounce, so the gate has nothing to ask before its override');
+if (typeof entry.carriesAnnounce === 'function') {
+  check(entry.carriesAnnounce([{ name: 'changelog/announce' }]) === true, 'a pull request carrying only the announce label did not read as carrying it');
+  check(entry.carriesAnnounce(['priority-p1', 'Changelog/Announce ']) === true, 'the announce label as a bare string in another case did not read as carried');
+  check(entry.carriesAnnounce([{ name: 'changelog/announce' }, { name: 'changelog/visible' }]) === true, 'the announce label beside another changelog label did not read as carried, so two labels would put an announcement under the override');
+  entry.KINDS.filter(function (k) { return k !== entry.ANNOUNCE; }).forEach(function (k) {
+    check(entry.carriesAnnounce([{ name: entry.LABEL_PREFIX + k }]) === false, 'a pull request labelled ' + k + ' read as carrying the announce label');
+  });
+  check(entry.carriesAnnounce([]) === false && entry.carriesAnnounce(undefined) === false && entry.carriesAnnounce([{ name: 'announce' }]) === false,
+    'a pull request with no changelog label, or a label that only looks like it, read as carrying the announce label');
+}
 
 console.log('  ' + passed + ' passed, ' + failed + ' failed');
 console.log('SUITE-RESULT passed=' + passed + ' failed=' + failed);

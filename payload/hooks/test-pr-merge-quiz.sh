@@ -414,7 +414,7 @@ no_record
 # marker is a file at the checkout root, the same shape as the repo relative paths
 # lib/merge-target.sh reads to learn a repo carries its own merge tool.
 #
-# Every case uses a VISIBLE record, the strongest form: the one record that would
+# Every case uses a VISIBLE record, the strongest form: a record that would
 # otherwise always quiz, so a skip here can only be the marker's doing (L159).
 opted_out_line() {  # $1 = command, $2 = session cwd ; prints the hook's whole output
   python3 -c '
