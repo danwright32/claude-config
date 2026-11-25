@@ -491,6 +491,29 @@ and a recount hours later reads a different set. So a count first runs `tools/re
   `/disk-clean` never offers. Nothing removes a copy: delete it with the `rm -rf` line it prints
   once the count is finished.
 
+#### The usage limit record (#3308)
+
+Every usage limit message is kept in `~/.claude/state/limit-messages/records.jsonl`, one line each,
+local to the Mac and never synced, so it outlives the transcripts this job removes. A line holds
+when, the kind (five hour, weekly, a model's own limit, monthly spend, account rate limit), the
+model a model limit names, the reset time the message names, who was stopped (main session,
+headless run or agent), and the account as a key (never a name), read only while the session runs.
+No conversation text. `hooks/limit-messages.py` writes it from the StopFailure and SubagentStop
+hooks, and its header holds where a limit message can be seen and why.
+
+A normal run prints nothing, awake or asleep, and records the same either way. A run that fails (a
+payload that is not a JSON object, a record it cannot write, anything else) keeps the failure in
+`failures.jsonl` beside the record, which `days` reports. While Dan is awake it also prints one
+plain line saying what failed and exits 1. While the Mac is asleep it prints nothing and leaves the
+failure as a finding in the morning report instead (Dan's choice, 2026-11-24). Whether the Mac is
+asleep is `lib/sleep.sh`'s `sleep_active`, and one that cannot be asked counts as awake.
+
+- `python3 ~/.claude/hooks/limit-messages.py days` prints limit days by kind, in ET, with the reset
+  times each day named, so a five hour limit day is never counted with a model limit day.
+- `python3 ~/.claude/hooks/limit-messages.py scan` fills the record from the transcripts still on
+  disk. It adds nothing already recorded, and a message it finds carries an account only when its
+  session is still running. A transcript it cannot read is named in a count and fails the run.
+
 It also adds this to `~/.zshrc`, so the shortcut arrives with the rest of the setup
 instead of being added by hand on each Mac (`~/.zshrc` is deliberately not synced):
 
@@ -2521,6 +2544,13 @@ being off. With no sleep record the helper runs
 nothing new and behaves as it did. Two things sleep mode holds a typed admin merge to are not asked
 of the helper's: that it is a squash, and that the base branch requires at least one check. The
 merge method is judged against the ruleset, and the checks by `block-red-merge.sh`, as above.
+The bypass merge and sleep mode checks are `hooks/test-merge-when-ready-bypass.sh`. Since
+claude-config#3572 the helper's checks are six suites, not one: on 2026-11-24 the single
+`hooks/test-merge-when-ready.sh` ran past the runner's 1,200 second wall limit on GitHub's runners,
+so its sections were cut into `test-merge-when-ready.sh` (the documentation checks and sections 1
+to 10), `-heads` (11 to 21), `-turn` (22 to 26b), `-line` (27 to 30), `-untested` (31 to 33) and
+`-bypass`, each dealt to a part by its own measured cost. All six run the helper in one shared
+world, `hooks/lib/merge-when-ready-harness.sh`.
 
 Checks that have reported being green is not the head's CI being green (claude-config#1087). A
 workflow run can exist for minutes before any of its jobs registers a check (the booking app's CI waits on a
@@ -4279,6 +4309,23 @@ What it refuses:
 What passes: every Slack read, `slack_send_message_draft`, a command that only mentions an endpoint
 (a grep, an echo, a test assertion), and `/nudge` at `skills/nudge/nudge.py`, the one script let
 through (Dan, 2026-11-05), matched by its real path, so a copy anywhere else is refused.
+
+Since claude-config#3575 the gate's own checks are six suites, not one: on 2026-11-24 the single
+`hooks/test-slack-drafts-only-gate.sh`, 2,633 checks, ran past the runner's 1,200 second wall limit
+on GitHub's runners, so its sections were cut, in their order and by their measured cost, into
+`test-slack-drafts-only-gate-scripts.sh` (tools, commands, scripts and the Python imports they
+reach), `-written-files` (data files, program options, files copied or written and run),
+`-file-arguments` (a file handed to code, redirects, code read on input),
+`test-slack-drafts-only-gate.sh` itself (`/nudge`, an unreadable payload, the time budget, a crash,
+the wiring and the cost checks), `-runners` (module runners, builds, git writes, package specs) and
+`-tools-cache` (native tools, written modules, the judgement cache and the misreads). All six run
+the gate in one shared world, `hooks/lib/slack-drafts-gate-harness.sh` (the gate, the throwaway
+folder and its cache, the result line and the fixtures one suite reads from another's sections).
+Each keeps its own copy of the helper functions a case is driven through, because the gate knows
+a shell function only where the text calling it defines it: from a sourced file, `run_bash "<a
+command that posts>"` reads as an unknown program running that command, and the suite is refused.
+`test-slack-drafts-gate-helper-copies.sh` holds those copies equal, naming the suite and the helper
+when two differ.
 
 ### Running a refused command with no network (#3173)
 
@@ -6394,11 +6441,19 @@ suite that refused to run or crashed at its top writes nothing without that prov
 could not be checked or was not measured. It is not run on every full run: doing so costs about
 one full run again, and the runner already hands every suite the list.
 
-The main suite on its own:
+The main suite on its own, which is two suites, each half of its sections (claude-config#3594):
 
 ```bash
 bash tests/test-claude-sync.sh
+bash tests/test-claude-sync-part2.sh
 ```
+
+The second runs the same file with `SUITE_PART=2`, which deals the sections from the heading
+`SUITE_PART2_FROM` names to the end; the first deals the ones before it. One file keeps the
+harness, the prelude and every helper in one place, and two suites let each be budgeted and dealt
+by its own cost: on 2026-11-25 the whole file had grown to its section time budget on CI, which is
+judged per run and undivided by shards. `SECTION_ONLY` and `SECTION_UNTIL` reach any section from
+either.
 
 It fans its sections out across four processes. Measured on 2026-08-21, 87 sections taking 82
 seconds that way and 243 in a single process, with no single section dominating (the slowest five
