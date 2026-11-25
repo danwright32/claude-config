@@ -81,8 +81,9 @@ PINNED_WHY=""
 # their imports by ROOT.
 MODS_HARNESS_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # The one test of a number above zero (whole_above_zero), which the deal below reads its count of
-# parts with. Missing, the deal refuses every count, by its own line.
-. "$MODS_HARNESS_ROOT/payload/hooks/lib/whole-number.sh" || echo "FAIL: the mods harness: payload/hooks/lib/whole-number.sh is missing, so the real tree cannot be dealt into parts."
+# parts with. Missing, the deal refuses every count, and each real tree part fails on that refusal;
+# a suite that never deals is not failed for it.
+. "$MODS_HARNESS_ROOT/payload/hooks/lib/whole-number.sh" || echo "the mods harness: payload/hooks/lib/whole-number.sh is missing, so the real tree cannot be dealt into parts." >&2
 if [ -z "${CHECK_MODS_TS_DIR:-}" ]; then
   if . "$MODS_HARNESS_ROOT/tools/lib/pinned-compiler.sh"; then
     if pinned_compiler_ensure "$ROOT/tools/typescript"; then
