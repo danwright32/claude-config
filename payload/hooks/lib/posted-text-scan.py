@@ -101,6 +101,12 @@ HISTORY = ("query { nodes(ids: %%s) { __typename id ... on Issue { %(e)s %(r)s }
            % {"e": EDITS, "r": RENAMES})
 
 
+# The kinds of text counted, in the order the "read:" line gives them. These are names for what was
+# read, not words of any command.
+KINDS_READ = ("issue", "pull request", "comment", "review comment", "review", "commit comment",
+              "commit message", "branch", "release", "earlier revision", "earlier title")
+
+
 class Failed(Exception):
     """The scan could not be completed; the message says what could not be read."""
 
@@ -174,7 +180,9 @@ class Reader:
                       "larger --budget (and a command time limit to match), or a later --since"
                       % (self.budget, what))
 
-    def gh(self, args, what):
+    def gh(self, argv, what):
+        """argv is the whole gh command, gh first, as work-names.py's GitHub.run takes it: a command
+        this builds is written out whole, never as a list that starts at the subcommand."""
         left = self.left()
         if left <= 0:
             raise self.spent(what)
@@ -183,7 +191,7 @@ class Reader:
         try:
             # Its own process group, so a call stopped at the deadline takes with it the real gh
             # the guard on PATH started (L321).
-            p = subprocess.Popen(["gh"] + args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                  stdin=subprocess.DEVNULL, start_new_session=True)
         except FileNotFoundError:
             raise Failed("gh is not on PATH, so %s could not be read" % what)
@@ -205,7 +213,7 @@ class Reader:
 
     def pages(self, path, of=list):
         """Every page of one GET. -> the items of every page (of=list), or the one object (of=dict)."""
-        raw = self.gh(["api", "--paginate", "--slurp", path], path)
+        raw = self.gh(["gh", "api", "--paginate", "--slurp", path], path)
         try:
             got = json.loads(raw)
         except ValueError:
@@ -221,7 +229,7 @@ class Reader:
         return items
 
     def query(self, text, what):
-        raw = self.gh(["api", "graphql", "-f", "query=" + text], what)
+        raw = self.gh(["gh", "api", "graphql", "-f", "query=" + text], what)
         try:
             got = json.loads(raw)
         except ValueError:
@@ -554,9 +562,7 @@ def main(argv):
                          "one (%s).\n" % (e, ISSUE))
         return 2
 
-    order = ["issue", "pull request", "comment", "review comment", "review", "commit comment",
-             "commit message", "branch", "branch name", "release", "earlier revision", "earlier title"]
-    read = ", ".join(plural(got.counts.get(k, 0), k) for k in order if k != "branch name")
+    read = ", ".join(plural(got.counts.get(k, 0), k) for k in KINDS_READ)
     print("read: %s, and the repository's description, in %d texts, %d calls and %d seconds"
           % (read, len(got.texts), reader.calls, time.monotonic() - started))
     for h in hits:

@@ -212,6 +212,15 @@ answer PUBLIC
 out="$(jq -nc --arg d "$WORK/notes" '{hook_event_name:"SessionStart",cwd:$d}' \
   | env HOOK_TESTS_RUNNING=0 PATH="$BIN:$PATH" FAKE_CALLS="$CALLS" FAKE_ANSWER="$ANSWER" REPO_VISIBILITY_BOUND_SECONDS=nonsense bash "$HOOK" 2>&1)"; rc=$?
 check "outside a test run a bound named in the environment is not read: rc=$rc $out" [ -z "$out" ]
+# A payload holding half of a surrogate pair, which a prompt cut mid character leaves behind, is
+# cleaned by the shared reader and still names its folder. The escape is put together here, so this
+# file holds no such character itself.
+answer PRIVATE
+half='\'; half="${half}ud83d"
+: > "$CALLS"
+out="$(printf '{"hook_event_name":"SessionStart","cwd":"%s","prompt":"cut %s"}' "$WORK/notes" "$half" \
+  | env HOOK_TESTS_RUNNING=1 PATH="$BIN:$PATH" FAKE_CALLS="$CALLS" FAKE_ANSWER="$ANSWER" bash "$HOOK" 2>&1)"; rc=$?
+check "a payload holding a lone surrogate escape still judges the folder it names: rc=$rc $out" has "$out" "danwright-test/notes is PRIVATE"
 # A payload that cannot be read falls back to the folder the hook runs in.
 answer PRIVATE
 out="$(cd "$WORK/notes" && printf 'not json' | env HOOK_TESTS_RUNNING=1 PATH="$BIN:$PATH" FAKE_CALLS="$CALLS" FAKE_ANSWER="$ANSWER" bash "$HOOK" 2>&1)"; rc=$?

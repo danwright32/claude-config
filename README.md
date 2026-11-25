@@ -2955,8 +2955,8 @@ Reading an old checkout is the other half, and that one is said rather than refu
   it is, what that costs and the command to run before it turns public again; when it cannot tell
   (gh failed, answered something else or outlasted its 4 second bound, the file or the origin could
   not be read) it says it could not tell, never that all is well. It costs one `gh repo view` per
-  session start in a repository that carries the file, measured at 0.32 to 0.54 seconds over ten
-  runs (1.2 on the first), against 0.06 to 0.07 in a repository with no file and 0.03 outside one.
+  session start in a repository that carries the file, measured on 2026-11-25 at 0.51 to 0.80
+  seconds over five runs, against 0.10 in a repository with no file and 0.05 to 0.06 outside one.
   It is wired to SessionStart only, never to a prompt.
   Tests: `hooks/test-repo-visibility-notice.sh`.
 

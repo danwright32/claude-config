@@ -29,9 +29,9 @@
 # read), because silence here means checked and as expected, never unchecked (L98, L11).
 #
 # WHAT IT COSTS. One `gh repo view <owner/name> --json visibility` per session start, in a
-# repository that carries the file, and nothing anywhere else. Measured 2026-11-24 on the personal
-# MacBook, the hook whole: ten runs with the file took 0.32 to 0.54 seconds, after a first run of
-# 1.2; five in a repository with no file took 0.06 to 0.07, and three outside any repository 0.03.
+# repository that carries the file, and nothing anywhere else. Measured 2026-11-25 on the personal
+# MacBook, the hook whole as shipped: five runs with the file took 0.51 to 0.80 seconds, five in a
+# repository with no file 0.10 each, and three outside any repository 0.05 to 0.06.
 # Never per prompt: it is wired to
 # SessionStart only, which test-repo-visibility-notice.sh holds. The call is bounded
 # (BOUND_SECONDS, a setting, not a measurement) well inside the hook's timeout in
@@ -51,9 +51,13 @@ input="$(cat 2>/dev/null || true)"
 # can work out the library it sources. The same folder written in full is only for the notice.
 case "${BASH_SOURCE[0]}" in */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) HOOK_DIR=. ;; esac
 HOOK_SHOWN="$(cd "$HOOK_DIR" 2>/dev/null && pwd)" || HOOK_SHOWN="$HOOK_DIR"
+# A lone surrogate escape cleaned, where the library is, as every hook takes its payload
+# (claude-config#1944); without the library the payload is read as it came.
+. "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null && input="$(ps_clean_payload "$input")"
 
 cwd="$(printf '%s' "$input" | python3 -c '
 import json, sys
+sys.stdout.reconfigure(errors="replace")
 try:
     d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
     print(d.get("cwd") or "" if isinstance(d, dict) else "")
