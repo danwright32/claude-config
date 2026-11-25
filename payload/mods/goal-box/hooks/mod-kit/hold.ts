@@ -20,7 +20,9 @@
 //
 // Each guard keeps a copy at hooks/mod-kit/hold.ts, byte for byte, which
 // tools/check-mod-shared-parts.sh holds to this one. The same tool fails a registration catch that
-// does not go through neverThrows, and one that reruns its hook without withinGrace.
+// answers through anything but neverThrows or one of the three catches below built on it (cutCall,
+// cutCheck, cutOwn), and one that reruns its hook without withinGrace. Which catch each tool hook
+// must end in, watchesOnly included, is tools/check-mod-guard-catch.sh's rule, further down.
 
 /**
  * How much of a catch's 1,000 ms grace must be left for its slow part to start: half of it, against

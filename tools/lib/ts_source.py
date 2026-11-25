@@ -34,6 +34,12 @@ As a command:
       Prints, one per line as <file>:<line><TAB><what>, each wait on real time in the mod's tests: a
       setTimeout or setInterval whose delay is not a number at or under REAL_WAIT_FLOOR_MS, Bun.sleep,
       Atomics.wait, or timers taken from timers/promises (#1789). Exit 1 when a file cannot be read.
+  ts_source.py guard-catches <mod dir> [mod-kit's hooks/hold.ts]
+      Prints, one per line as <file>:<line><TAB><why>, each tool.call or tool.check hook of the mod
+      that does not end in a catch built by mod-kit's hooks/hold.ts (#3655), then always a last line
+      `read<TAB>cutCall=N cutCheck=N cutOwn=N watchesOnly=N none-of-them=N`, the tool hooks it read by
+      the catch each ends in. Given mod-kit's hold.ts, the copy a catch imports from must match it
+      byte for byte. Exit 1 when any hook is named. tools/check-mod-guard-catch.sh is its caller.
 """
 import os
 import re

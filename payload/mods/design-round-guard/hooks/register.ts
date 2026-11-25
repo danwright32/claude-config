@@ -164,7 +164,7 @@ import {
   unsure,
 } from './rules.ts'
 import { errorText } from './mod-kit/skew.ts'
-import { cutCall, cutCheck } from './mod-kit/hold.ts'
+import { cutCall, cutCheck, cutWhy } from './mod-kit/hold.ts'
 import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
 import { toolArgs } from './mod-kit/toolargs.ts'
 import { patchedPaths, readPatch } from './mod-kit/patch.ts'
@@ -2989,11 +2989,16 @@ export const register: Register = on => {
     }
     // #3655: this hook judges what the command CHANGED, after it ran. Cut there, the result is
     // replayed with the note a look that failed gives, since the files went unjudged; cut before the
-    // command ran, the call is refused.
+    // command ran, the call is refused. A mod's tool.call catches are asked in the order registered
+    // whichever hook failed, so this one says the call is its own only for a shell call (`mine`):
+    // a question whose hook failed is left to the catch after this one, never given a shell note.
+    // The note names the failure by its kind only (cutWhy), never its own words, which can quote
+    // the input the look could not read (the lessons review of this change).
   }).catch(($, e, next) => cutCall('the design round guard', e, next, {
+    mine: () => e.tool === 'Bash',
     after: async () => {
       const r = await next(e)
-      return r.deny !== undefined ? r : { ...r, context: [...(r.context ?? []), shellUnchecked(message(next.error))] }
+      return r.deny !== undefined ? r : { ...r, context: [...(r.context ?? []), shellUnchecked(cutWhy(next.error))] }
     },
   }))
 
