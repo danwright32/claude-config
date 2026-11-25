@@ -538,8 +538,13 @@ valid_session_id "$session_id" || session_id=""
 # mixed pull request can carry changelog/technical while touching something visible.
 #
 # Read through lib/changelog-entry.js, the same module the merge gate enforces with, so
-# there is one definition of the vocabulary rather than a copy of the three label names
+# there is one definition of the vocabulary rather than a copy of the label names
 # in shell that would drift from the one being enforced (L370, L611).
+#
+# WHICH kinds a manager would notice is that module's answer too (isManagerVisible), never a
+# kind named here. This asked for changelog/visible by name, so every other kind read as
+# quiet, and a fourth one, changelog/announce, which managers notice and agents are told
+# about, would have been quiet without anybody deciding it (claude-config#3665, L96).
 #
 # FAILS OPEN, on every route: gh missing, node missing, no answer, an unreadable answer,
 # an answer about another repo, or no changelog label at all. A hook that silently stops
@@ -634,7 +639,7 @@ quiz_owed_for() {  # $1 = the directory the merge runs in, $2 = the repository i
       try { labels = JSON.parse(raw); } catch (e) { process.stdout.write("unreadable"); return; }
       var kinds = entry.changelogLabels(labels);
       if (!kinds.length) { process.stdout.write("no-label"); return; }
-      process.stdout.write(kinds.indexOf(entry.VISIBLE) === -1 ? "quiet" : "visible");
+      process.stdout.write(kinds.some(entry.isManagerVisible) ? "visible" : "quiet");
     });
   ' 2>/dev/null)"
   case "$QUIZ_VERDICT" in

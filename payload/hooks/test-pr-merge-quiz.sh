@@ -215,6 +215,17 @@ run "visible beside technical quizzes"  fire 'gh pr merge 42'
 # reader is the same module the merge gate enforces with, so this proves the two agree.
 record '[{"name":"  Changelog/Technical  "}]'
 run "a label is read case blind"        skip 'gh pr merge 42'
+# An announce record is a change managers notice as well as one agents are told about, so it is
+# quizzed like a visible one (claude-config#3665). The hook asked "is it visible?" by that one name,
+# so any other kind, this one included, read as quiet. Now it asks the library's own map of the
+# kinds, which changelog-entry.test.js holds to an answer for every kind.
+record '[{"name":"changelog/announce"}]'
+run "an announce record quizzes"        fire 'gh pr merge 42'
+record '[{"name":"changelog/technical"},{"name":"changelog/announce"}]'
+run "announce beside technical quizzes" fire 'gh pr merge 42'
+# A label that is not one of the kinds is still not one a manager notices.
+record '[{"name":"changelog/goals"}]'
+run "a label outside the kinds does not quiz" skip 'gh pr merge 42'
 
 # THE FALLBACK, and it is the one that matters most: a repo that does not use the
 # convention has to keep working exactly as before, with Claude doing the judging. It

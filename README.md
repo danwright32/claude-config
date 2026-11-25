@@ -10088,9 +10088,14 @@ link> --add-label` on a PR the session's own record says it opened (the `opened`
 keeps, written from the link each `gh pr create` printed; GitHub's author is the same account for
 every session, so it cannot tell them apart), each naming exactly one label. Which labels is the
 gate's answer, never a list in the mod: the mod runs `node ~/.claude/hooks/lib/changelog-entry.js
-required-labels <owner/name>`, which answers `required` with every label the gate takes and whether
-each needs a sentence in the description, `not-required` for a repository nobody gated, or `unknown`
-with why (a registry missing or unreadable, a repository listed with no start date or a bad one). A
+required-labels <owner/name> --needs-dan`, which answers `required` with every label the gate takes
+in that repository and whether each needs a sentence in the description, `not-required` for a
+repository nobody gated, or `unknown` with why (a registry missing or unreadable, a repository
+listed with no start date or a bad one, or with an announcements channel that is not a channel id).
+The flag says the mod understands a label whose wording is Dan's to approve (#3665): the gate lists
+`changelog/announce`, with `needsAnnouncement` and `needsDan`, only to a caller passing it and only
+for a repository whose registry entry names an `announceChannel`, so a session still running the
+mod as it was is never handed that label, and until an entry names a channel no session is. A
 label the gate says needs a sentence a manager reads (`changelog/visible`) may be set like the
 others (Dan, 2026-11-22, by picker: "Also allow changelog/visible"), so a session can merge
 overnight a PR whose changelog sentence he has not read. The gate still refuses that merge while

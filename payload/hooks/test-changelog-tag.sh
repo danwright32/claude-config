@@ -769,6 +769,152 @@ out=$(run_hook "$dir" "gh -R acme/widget pr merge 7 --squash")
 if denied "$out"; then fail "#1186 a tagged PR merged with the repository flag in front was refused: $out"; else pass; fi
 rm -rf "$dir"
 
+echo "changelog record: the announce label (claude-config#3665)"
+
+# A fourth label, for a change whose agents must or can act differently. Its pull request carries the
+# sentence for managers and the whole post for agents. It is in use only in a repository whose
+# registry entry names an announcements channel, and refused at merge everywhere else. Every
+# repository and channel id here is invented.
+REGISTRY_ANNOUNCES='{"repos":[{"name":"Widget","repo":"acme/widget","changelogFrom":"2026-01-01","announceChannel":"C0000TEST02"}]}'
+# The managers' channel is the file's own key and says nothing about announcements.
+REGISTRY_MANAGERS_ONLY='{"repos":[{"name":"Widget","repo":"acme/widget","changelogFrom":"2026-01-01"}],"slackChannel":"C0000TEST01"}'
+REGISTRY_BAD_ANNOUNCE='{"repos":[{"name":"Widget","repo":"acme/widget","changelogFrom":"2026-01-01","announceChannel":"#announcements"}]}'
+pr_json() {  # $1 = the label, $2 = the body as a JSON string's inside
+  printf '{"number":7,"url":"https://github.com/acme/widget/pull/7","author":{"login":"dwright-pennie"},"labels":[{"name":"%s"}],"body":"%s"}' "$1" "$2"
+}
+A_SENTENCE='prose\n\n## Changelog\nAgents can now hand a call back to the queue.'
+A_POST='## Announcement\n@here\n**Handing a call back**\n\nYou can now hand a call back to the queue.\n\n- Press Hand back\n- Pick a reason\n\nMore in [the guide](https://example.com/guide).\n\n## Testing\nran it'
+ANNOUNCE_FULL="$(pr_json changelog/announce "$A_SENTENCE\\n\\n$A_POST")"
+ANNOUNCE_NO_POST="$(pr_json changelog/announce "$A_SENTENCE")"
+ANNOUNCE_NO_SENTENCE="$(pr_json changelog/announce "prose\\n\\n$A_POST")"
+ANNOUNCE_DASHED="$(pr_json changelog/announce "$A_SENTENCE\\n\\n## Announcement\\n@here\\nHand back - then pick a reason.")"
+ANNOUNCE_NO_OPENER="$(pr_json changelog/announce "$A_SENTENCE\\n\\n## Announcement\\nHi team\\nYou can now hand a call back.")"
+VISIBLE_WITH_POST="$(pr_json changelog/visible "$A_SENTENCE\\n\\n$A_POST")"
+
+# R7, and what "ships inert" means: while no registry entry names a channel, a pull request carrying
+# the label is refused however complete its writing. Each registry here is one a Mac has today.
+for reg in "$REGISTRY" "$REGISTRY_MANAGERS_ONLY"; do
+  dir=$(make_repo acme/widget "$ANNOUNCE_FULL" "$reg")
+  out=$(run_hook "$dir" "$MERGE 7 --squash")
+  if denied "$out"; then pass; else fail "#3665 an announce PR merged in a repository whose registry entry names no announcements channel: $out"; fi
+  if says "$out" "changelog/announce" && says "$out" "announceChannel"; then pass; else fail "#3665 the refusal does not name the label and the registry key: $out"; fi
+  # A lost key looks the same, so it says so and says how to check.
+  if says "$out" "lost its announceChannel key" && says "$out" "dev-update-registry.js announce-channel acme/widget"; then pass
+  else fail "#3665 the refusal does not say a lost key looks the same, or how to check: $out"; fi
+  # It never sends the reader to the label it has just refused.
+  if says "$out" "use one of: changelog/visible, changelog/technical, changelog/none."; then pass; else fail "#3665 the refusal does not name the labels this repository takes: $out"; fi
+  rm -rf "$dir"
+done
+# An incomplete one is told the same thing, not to finish writing for a label it cannot use.
+dir=$(make_repo acme/widget "$ANNOUNCE_NO_POST" "$REGISTRY")
+out=$(run_hook "$dir" "$MERGE 7 --squash")
+if denied "$out" && says "$out" "is not in use here"; then pass; else fail "#3665 an incomplete announce PR where the label is not in use was not told so: $out"; fi
+rm -rf "$dir"
+
+# R7 and R1, still possible: where the entry names a channel, one carrying both pieces merges.
+dir=$(make_repo acme/widget "$ANNOUNCE_FULL" "$REGISTRY_ANNOUNCES")
+out=$(run_hook "$dir" "$MERGE 7 --squash")
+if denied "$out"; then fail "#3665 an announce PR carrying the sentence and the post was refused where the repository announces: $out"; else pass; fi
+rm -rf "$dir"
+# And the other three labels merge there as they always did.
+for tagged in "$TAGGED" "$TECHNICAL" "$NONE_LBL"; do
+  dir=$(make_repo acme/widget "$tagged" "$REGISTRY_ANNOUNCES")
+  out=$(run_hook "$dir" "$MERGE 7 --squash")
+  if denied "$out"; then fail "#3665 a PR under one of the first three labels was refused where the repository announces: $out"; else pass; fi
+  rm -rf "$dir"
+done
+
+# R1: no post for agents, no merge. And no sentence for managers, no merge.
+dir=$(make_repo acme/widget "$ANNOUNCE_NO_POST" "$REGISTRY_ANNOUNCES")
+out=$(run_hook "$dir" "$MERGE 7 --squash")
+if denied "$out"; then pass; else fail "#3665 an announce PR with no Announcement block merged: $out"; fi
+if says "$out" "## Announcement" && says "$out" "@here"; then pass; else fail "#3665 the refusal does not name the heading to add and how the post opens: $out"; fi
+rm -rf "$dir"
+dir=$(make_repo acme/widget "$ANNOUNCE_NO_SENTENCE" "$REGISTRY_ANNOUNCES")
+out=$(run_hook "$dir" "$MERGE 7 --squash")
+if denied "$out" && says "$out" "## Changelog"; then pass; else fail "#3665 an announce PR with no Changelog sentence merged, or was not told what to add: $out"; fi
+rm -rf "$dir"
+
+# What the post may hold is the gate's to judge: a dash as punctuation, and a post that does not
+# open with @here.
+dir=$(make_repo acme/widget "$ANNOUNCE_DASHED" "$REGISTRY_ANNOUNCES")
+out=$(run_hook "$dir" "$MERGE 7 --squash")
+if denied "$out" && says "$out" "dash as punctuation" && says "$out" "Hand back - then pick a reason."; then pass
+else fail "#3665 a post with a dash as punctuation merged, or the refusal does not quote the line: $out"; fi
+rm -rf "$dir"
+dir=$(make_repo acme/widget "$ANNOUNCE_NO_OPENER" "$REGISTRY_ANNOUNCES")
+out=$(run_hook "$dir" "$MERGE 7 --squash")
+if denied "$out" && says "$out" "does not open with @here"; then pass; else fail "#3665 a post that does not open with @here merged: $out"; fi
+rm -rf "$dir"
+
+# Another label over an Announcement block: a post written and never drafted.
+dir=$(make_repo acme/widget "$VISIBLE_WITH_POST" "$REGISTRY_ANNOUNCES")
+out=$(run_hook "$dir" "$MERGE 7 --squash")
+if denied "$out" && says "$out" "carries an Announcement block" && says "$out" "relabel it changelog/announce"; then pass
+else fail "#3665 a visible PR carrying an Announcement block merged where the repository announces: $out"; fi
+rm -rf "$dir"
+dir=$(make_repo acme/widget "$VISIBLE_WITH_POST" "$REGISTRY")
+out=$(run_hook "$dir" "$MERGE 7 --squash")
+if denied "$out" && says "$out" "delete the block"; then pass; else fail "#3665 a visible PR carrying an Announcement block merged where the repository does not announce: $out"; fi
+if says "$out" "relabel it changelog/announce"; then fail "#3665 a repository that does not announce was told to relabel to the label it is refused for: $out"; else pass; fi
+rm -rf "$dir"
+
+# The labels a refusal offers are the ones THAT repository takes.
+dir=$(make_repo acme/widget "$UNTAGGED" "$REGISTRY_ANNOUNCES")
+out=$(run_hook "$dir" "$MERGE 7 --squash")
+if denied "$out" && says "$out" "changelog/visible, changelog/technical, changelog/none, changelog/announce"; then pass
+else fail "#3665 an untagged PR where the repository announces was not offered all four labels: $out"; fi
+rm -rf "$dir"
+dir=$(make_repo acme/widget "$UNTAGGED" "$REGISTRY")
+out=$(run_hook "$dir" "$MERGE 7 --squash")
+if denied "$out" && ! says "$out" "changelog/announce"; then pass; else fail "#3665 an untagged PR where the repository does not announce was offered the announce label: $out"; fi
+rm -rf "$dir"
+
+# An announcements channel that is not a channel id is a config error, refused for every merge there
+# with its own message, as a start date that is not a date is: read as "names none" it would switch
+# the label off in silence (L98).
+for tagged in "$TECHNICAL" "$ANNOUNCE_FULL"; do
+  dir=$(make_repo acme/widget "$tagged" "$REGISTRY_BAD_ANNOUNCE")
+  out=$(run_hook "$dir" "$MERGE 7 --squash")
+  if denied "$out" && says "$out" "not a Slack channel id" && says "$out" "#announcements" && says "$out" "announceChannel"; then pass
+  else fail "#3665 a merge went through, or was refused in other words, where the announcements channel is not a channel id: $out"; fi
+  rm -rf "$dir"
+done
+# The refusals about the announce label never offer the override that skips this gate.
+dir=$(make_repo acme/widget "$ANNOUNCE_FULL" "$REGISTRY")
+out=$(run_hook "$dir" "$MERGE 7 --squash")
+if says "$out" "ALLOW_UNTAGGED_MERGE"; then fail "#3665 the refusal of an announce label offers the override: $out"; else pass; fi
+rm -rf "$dir"
+# While the refusals it always gave still do.
+dir=$(make_repo acme/widget "$UNTAGGED" "$REGISTRY")
+out=$(run_hook "$dir" "$MERGE 7 --squash")
+if says "$out" "ALLOW_UNTAGGED_MERGE=1"; then pass; else fail "#3665 the untagged refusal lost its override line: $out"; fi
+rm -rf "$dir"
+
+# A judge that fails is not a record that passed (L98). The gate read "nothing printed" as the
+# passing answer, so a library that threw while judging let every merge through. Driven with a copy
+# of the hooks whose judge throws, and whose every other answer is the real library's.
+BROKEN="$(mktemp -d)"
+cp "$HOOK" "$BROKEN/"
+cp -R "$HOOK_DIR/lib" "$BROKEN/lib"
+mv "$BROKEN/lib/changelog-entry.js" "$BROKEN/lib/changelog-entry.real.js"
+cat > "$BROKEN/lib/changelog-entry.js" <<'JS'
+const real = require('./changelog-entry.real.js');
+module.exports = Object.assign({}, real, { gateRefusal: function () { throw new Error('the judge broke'); } });
+JS
+dir=$(make_repo acme/widget "$TAGGED" "$REGISTRY")
+out=$(HOOK="$BROKEN/require-changelog-tag.sh" run_hook "$dir" "$MERGE 7 --squash")
+if denied "$out" && says "$out" "produced no verdict at all"; then pass
+else fail "#3665 a merge went through, or was refused in other words, when the judge itself failed: $out"; fi
+rm -rf "$dir"
+# The same copy with the judge left alone takes the same pull request, so it is the judge that the
+# refusal above was about.
+cp "$BROKEN/lib/changelog-entry.real.js" "$BROKEN/lib/changelog-entry.js"
+dir=$(make_repo acme/widget "$TAGGED" "$REGISTRY")
+out=$(HOOK="$BROKEN/require-changelog-tag.sh" run_hook "$dir" "$MERGE 7 --squash")
+if denied "$out"; then fail "#3665 the copied hooks refused a correctly tagged PR with a working judge: $out"; else pass; fi
+rm -rf "$dir" "$BROKEN"
+
 echo "  $passed passed, $failed failed"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$passed" "$failed"
 [ "$failed" -eq 0 ]

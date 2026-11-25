@@ -456,8 +456,20 @@ function recordOf(entry, repoCfg, pr) {
   // The gate judged each merge by the local day it ran on, so the same day is used here, through
   // the parser's own helper, or a merge late on the evening before the cutover reads as a gap.
   if (!from || entry.localDay(new Date(pr.merged_at)) < from) return { kind: 'unrecorded' };
+  // parseEntry and never the merge gate's own gateRefusal: this reads what MERGED, on whichever Mac,
+  // so it must not ask this Mac's registry whether a label was allowed (claude-config#3665). A
+  // refusal here is a gap, "something merged around the gate", which a change that passed the gate
+  // on the other Mac is not.
   const parsed = entry.parseEntry({ labels: pr.labels, body: pr.body });
-  if (parsed.ok) return { kind: parsed.kind, line: parsed.line };
+  if (parsed.ok) {
+    // Whether managers would notice it is decided HERE, in code, from the parser's own map of the
+    // kinds, so the skill sorts a record by this field and a kind it has never heard of is still
+    // sorted (R5). A gap, a dependency update and a record judged by hand carry no such field:
+    // nothing decided it for them.
+    const record = { kind: parsed.kind, line: parsed.line, managerVisible: entry.isManagerVisible(parsed.kind) };
+    if (parsed.announcement !== undefined) record.announcement = parsed.announcement;
+    return record;
+  }
   return { kind: 'gap', code: parsed.code, reason: parsed.reason };
 }
 
@@ -600,6 +612,25 @@ function gatherRepo(ctx, repoCfg) {
   }
   if (counts.unchecked) out.notes.push(repoCfg.name + ' has no deploy record, so whether its ' + counts.unchecked + ' PR(s) reached production could not be checked.');
   if (counts.gaps) out.notes.push(counts.gaps + ' PR(s) merged after the changelog cutover carry no valid record: something merged around the gate.');
+  // Announce records in a repository this Mac's registry names no announcements channel for
+  // (claude-config#3665). The merge gate refuses that label there, so either they merged from a Mac
+  // whose registry names the channel, or this Mac's entry lost its key, and from here the two look
+  // the same. They are read as the records they are either way; this says so, where to draft them
+  // being the thing this Mac cannot tell. Judged by the registry's one reader of the key.
+  const announced = out.prs.filter(function (p) { return p.record.kind === ctx.entry.ANNOUNCE; }).length;
+  if (announced) {
+    const reader = loadRegistryReader();
+    const channel = reader.announceChannelOf(repoCfg);
+    const check = 'node ~/.claude/hooks/lib/dev-update-registry.js announce-channel ' + slug;
+    if (channel.bad) {
+      out.notes.push(announced + ' PR(s) carry changelog/announce, and ' + reader.badAnnounceWhy(slug, channel.value)
+        + ', so there is no channel to draft their announcements in. Fix announceChannel in its entry (check it with: ' + check + ').');
+    } else if (!channel.channel) {
+      out.notes.push(announced + ' PR(s) carry changelog/announce, and this Mac\'s registry names no announcements channel for '
+        + repoCfg.name + ' (announceChannel in its entry), so there is no channel to draft their announcements in. Either they '
+        + 'merged on a Mac whose registry names one, or this entry lost its key. Check it with: ' + check + '.');
+    }
+  }
   return out;
 }
 

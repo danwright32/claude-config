@@ -10,9 +10,14 @@
 # merge time, when the person who made the change is still holding it.
 #
 # The record is two halves:
-#   the LABEL   changelog/visible | changelog/technical | changelog/none
+#   the LABEL   changelog/visible | changelog/technical | changelog/none | changelog/announce
 #   the BODY    a "## Changelog" block carrying the sentence a manager reads,
-#               required only for changelog/visible
+#               required for changelog/visible and changelog/announce, and under
+#               changelog/announce an "## Announcement" block carrying the post for agents
+#
+# changelog/announce (claude-config#3665) is for a change whose agents must or can act
+# differently. It is in use only in a repository whose registry entry names an
+# announcements channel (announceChannel), and refused here everywhere else.
 #
 # Both are read through lib/changelog-entry.js, which is the single definition of
 # what a valid record is. A rule that lives only in a pull request template is a
@@ -295,6 +300,17 @@ fi
 in_scope=$(printf '%s' "$scope" | jq -r '.inScope // false')
 [ "$in_scope" = "true" ] || exit 0
 
+# An announcements channel that is not a channel id (claude-config#3665) is a config error in a gated
+# repository, refused for every merge there in its own words, exactly as a start date that is not a
+# date is above. Read as "this repository names no channel" it would refuse the announce label as
+# never set up, which sends somebody to relabel when the remedy is one key in the registry, and it
+# would quietly stop every later check that asks whether this repository announces (L98, L11).
+bad_announce=$(printf '%s' "$scope" | jq -r '.badAnnounce // false')
+if [ "$bad_announce" = "true" ]; then
+  why=$(printf '%s' "$scope" | jq -r '.why // ""')
+  deny "Cannot tell whether this repo takes the changelog/announce label: $why. Fix announceChannel in its entry in $REGISTRY, or remove the key if the repo does not announce. Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>."
+fi
+
 pr=$(mt_pr_number "$command")
 
 # The repository is passed to gh the same way the merge names it, so the question is about the
@@ -334,20 +350,45 @@ case "$author" in
   dependabot|dependabot\[bot\]|app/dependabot) exit 0 ;;
 esac
 
-verdict=$(printf '%s' "$view" | HOOK_DIR="$HOOK_DIR" node -e '
+# The record is read by parseEntry, which reads it the same on every Mac, and then judged by
+# gateRefusal, which is this gate's alone and is handed what the registry said about THIS repository
+# (claude-config#3665). The split is deliberate: parseEntry is also how merged history is read, so a
+# rule about a registry in there would turn a change that shipped into a gap on a Mac whose registry
+# differs. What comes back says so when the merge may go ahead, or is the refusal's code and its
+# sentence, which names the labels this repository takes.
+verdict=$(printf '%s' "$view" | HOOK_DIR="$HOOK_DIR" SCOPE="$scope" node -e '
   const entry = require(process.env.HOOK_DIR + "/lib/changelog-entry.js");
   let raw = "";
   process.stdin.on("data", function (d) { raw += d; });
   process.stdin.on("end", function () {
-    let pr;
-    try { pr = JSON.parse(raw); } catch (e) { process.stdout.write(""); return; }
+    let pr, scope;
+    try { pr = JSON.parse(raw); scope = JSON.parse(process.env.SCOPE); } catch (e) { process.stdout.write(""); return; }
     const got = entry.parseEntry({ labels: pr.labels, body: pr.body });
-    process.stdout.write(got.ok ? "" : got.reason);
+    const refused = entry.gateRefusal(got, pr.body, scope);
+    process.stdout.write(JSON.stringify(refused || { ok: true }));
   });
 ' 2>/dev/null)
 
-[ -n "$verdict" ] && deny "PR #$number carries no usable changelog record. $verdict
+# The judge says so when the record passes. Nothing at all is the judge failing (a library that
+# threw, an answer that could not be read), and that is never a record with nothing wrong: it used
+# to be read as one, since an empty answer was the passing answer (L98, L490).
+verdict_ok=$(printf '%s' "$verdict" | jq -r '.ok // false' 2>/dev/null)
+if [ "$verdict_ok" != "true" ]; then
+  verdict_code=$(printf '%s' "$verdict" | jq -r '.code // ""' 2>/dev/null)
+  verdict_reason=$(printf '%s' "$verdict" | jq -r '.reason // ""' 2>/dev/null)
+  [ -n "$verdict_reason" ] || deny "Cannot judge this merge's changelog record: reading PR #$number through lib/changelog-entry.js produced no verdict at all. That is the gate failing, not the record passing, so it refuses rather than merging blind. Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>."
+  case "$verdict_code" in
+    # About the announce label, or the post for agents under it. The override is not offered here:
+    # it skips this gate whole, and what these refuse is a post that reaches every agent, or a label
+    # this repository does not use, which a retyped command should never be how either goes through.
+    ANNOUNCE_*|ANNOUNCEMENT_*|NO_ANNOUNCEMENT|EMPTY_ANNOUNCEMENT)
+      deny "PR #$number cannot merge as it stands. $verdict_reason
+
+This is checked at merge time because the post under changelog/announce is drafted for agents exactly as the pull request holds it once the change is live." ;;
+  esac
+  deny "PR #$number carries no usable changelog record. $verdict_reason
 
 This is checked at merge time because judging it later means re-reading every merged title, which is what assembling the June to August update actually cost. Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>."
+fi
 
 exit 0
