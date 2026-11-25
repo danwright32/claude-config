@@ -127,6 +127,52 @@ that only print (Python 3.14.4), and py_handed answers by it:
   names any other way is data far more often than code (a spreadsheet, a wheel and a document are
   all zip files), and is judged as it was. A folder holding no __main__ at all runs nothing and
   passes.
+
+PYTHON'S OWN OPTIONS (py_own_reading, claude-config#3539). Which word of a command python3 runs
+was decided by the gate's table of options (operands), and that table is not Python's reader.
+Measured on main at 35f85db5cd on 2026-11-24, against what python3 3.14.4 and 3.9.6 themselves
+ran for 110 shapes of command line with scripts that only print (one run of each on each, the two
+agreeing on all but -P, which 3.9 does not know): each of these ran something that posts and
+passed.
+
+  * `python3 posts.py -m x` runs posts.py, -m being the script's own argument. No file of a
+    command holding the word -m anywhere was read, for python3 or any other interpreter.
+  * `python3 -c'import posts'` and `-Bc'import posts'` run the code glued to -c. The table took
+    the word for an option with no value and the next file for the script. `python3 -bBEsuc CODE`
+    runs CODE; the table knew a run of at most four letters before the c.
+  * `python3 -Wc posts.py` and `-Xc posts.py` run posts.py: -W and -X take the rest of their word
+    as their value. The table took the word for -c and posts.py for code.
+  * `python3 -BW quiet.py posts.py` runs posts.py: -W or -X ending a word takes the next word.
+    The table took quiet.py for the script and posts.py for a file it is handed.
+  * `python3 -mdoc` runs the module doc. The table took `-m` and up to three letters before a c
+    for -c, and the module was never read.
+  * `python3 -- -post.py` runs the file named -post.py, and `python3 -- -` the code on its input.
+    A script whose name starts with a dash was never read, nor that code.
+  * `PYTHONPATH=onpath python3 -W error::warnmod.Loud quiet.py` imports warnmod before anything
+    else runs: a -W value whose third field names a class by its module has Python import that
+    module, from PYTHONPATH and the standard places (not from the folder of the script).
+
+py_cmdline reads the words as CPython's own reader does (Python/getopt.c and the loop over it in
+Python/initconfig.c): a word that is `-` or starts with no dash ends the options and is the code
+on the input or the script; `--` ends them and the next word is the script whatever it starts
+with, or `-`; in a run of letters, c, m, W and X take the rest of the word, or the next word where
+the run ends there, and c and m end the options; `--check-hash-based-pycs` takes the next word;
+every other letter or long option takes none. A letter or long option Python does not know stops
+it with an error, as do -h, -V and their long forms without one, and is read on past here, so more
+is read than runs and never less.
+
+py_own_reading is one more reading, made before the table's and never in its place, so it can
+refuse a command the table lets through and never the reverse:
+
+  * The module each -W value names is read as one imported by code given to python3 is.
+  * Where the table's answer (operands, py_module) is not Python's, the command is spelled again so
+    the table reads it as Python does (py_respell: the script as the first word after python3, with
+    ./ in front of a name starting with a dash; `-c` and the code as two words; `-m` and the module
+    as two words; `-` alone), with its words as they were written, quotes and all, and that text
+    is judged as the command itself is. The options left out load nothing but the -W module above.
+  * A spelling is used only once the gate's own reader gives back the words it was built for. Where
+    neither the words as written nor those words quoted afresh read back so, what python3 runs is
+    refused as unread where the command is typed, and left as it was in a script on disk.
 """
 import ast
 import os
@@ -185,6 +231,10 @@ MAIN_NOT_TEXT = re.compile(r"__main__(?:\.[^/]*)?\.(?:pyc|so|pyd)\Z")
 MAX_UP = 64
 # What makes a word a pattern the shell replaces with its matches.
 FOLDER_PATTERN = re.compile(r"[*?\[{]")
+# Python's short options that take a value, the rest of their word or the next word, and its one
+# long option that takes the next word (PYTHON'S OWN OPTIONS above, claude-config#3539).
+PY_VALUE_LETTERS = "cmWX"
+PY_VALUE_LONG = "--check-hash-based-pycs"
 
 
 def make(py_nodes, unknown_dir):
@@ -642,6 +692,177 @@ def make(py_nodes, unknown_dir):
                         continue
                 out.append(w)
             return out, None
+
+        def py_cmdline(self, words):
+            """What python3 itself runs for a command's words, read as its own option reader reads
+            them (PYTHON'S OWN OPTIONS above): (kind, at, cut, end, warns, theirs).
+
+            kind is "script" (the word at index at), "code" or "module" (given by -c or -m: the
+            word at index at from its character cut on, which is the option's own word where the
+            value is glued to it and the next word, with cut 0, where it is not), "input" (the
+            code on its input: the word `-` at index at, or at None where no word is left), or
+            None where Python stops with an error for want of a value. end is the index of the
+            first word after the one that names what runs, warns the value of each -W, and
+            theirs the indexes of the words that are the shell's (a redirection, its target
+            glued or the next word), never Python's."""
+            mine, theirs, k = [], [], 1
+            while k < len(words):
+                m = self.sw.REDIRECT_WORD.match(words[k])
+                if m:
+                    theirs.extend(range(k, min(len(words), k + (1 if m.group(1) else 2))))
+                    k += 1 if m.group(1) else 2
+                    continue
+                mine.append(k)
+                k += 1
+            warns, p = [], 0
+            while p < len(mine):
+                at = mine[p]
+                w = words[at]
+                p += 1
+                if w == "--":
+                    if p == len(mine):
+                        return "input", None, 0, at + 1, warns, theirs
+                    at = mine[p]
+                    w = words[at]
+                    return ("input" if w == "-" else "script"), at, 0, at + 1, warns, theirs
+                if w == "-" or not w.startswith("-"):
+                    return ("input" if w == "-" else "script"), at, 0, at + 1, warns, theirs
+                if w.startswith("--"):
+                    p += w == PY_VALUE_LONG
+                    continue
+                for cut, ch in enumerate(w[1:], 2):
+                    if ch not in PY_VALUE_LETTERS:
+                        continue
+                    if not w[cut:]:
+                        if p == len(mine):
+                            return None, None, 0, len(words), warns, theirs
+                        at, cut = mine[p], 0
+                        p += 1
+                    if ch == "W":
+                        warns.append(words[at][cut:])
+                    if ch in "cm":
+                        return ("code" if ch == "c" else "module"), at, cut, at + 1, warns, theirs
+                    break
+            return "input", None, 0, len(words), warns, theirs
+
+        @staticmethod
+        def py_respell(words, read):
+            """words spelled so the gate's option table reads them as Python does (read, from
+            py_cmdline of the same words), or None where Python runs nothing: python3, the
+            redirections written before what it runs, then the script (with ./ in front of a
+            name starting with a dash), or -c and the code, or -m and the module, or - for the
+            code on its input, then every word after as it was. The options left out load
+            nothing the gate reads but a -W value's module, which py_own_reading reads."""
+            kind, at, cut, end, _, theirs = read
+            if kind == "script":
+                core = [("./" if words[at].startswith("-") else "") + words[at]]
+            elif kind in ("code", "module"):
+                core = ["-c" if kind == "code" else "-m", words[at][cut:]]
+            elif kind == "input":
+                core = [] if at is None else ["-"]
+            else:
+                return None
+            return words[:1] + [words[j] for j in theirs if j < end] + core + words[end:]
+
+        def py_respelled(self, text, want):
+            """One command's text spelled so its words read as want (py_respell of its words), or
+            None where no spelling the gate can build reads back so. Tried first with the words
+            as the command wrote them, quotes and expansions kept, so a path or code the shell
+            fills in is still worked out, or refused, as it would be; then with each word of
+            want quoted afresh, which is not tried where a word holds something the shell would
+            fill in, since quoting it would make it text. What stands before the program
+            (assignments, a runner) is kept as written."""
+            split = self.py_redirects_split
+            rest, assigns = self.rest_of(text)
+            if rest and text.endswith(rest):
+                head = text[:len(text) - len(rest)]
+            else:
+                head = "".join(a + " " for a in assigns.split("\n") if a)
+            raw = self.raw_words(text)
+            tries = [self.py_respell(raw, self.py_cmdline(raw))] if raw else []
+            if not any(SHELL_FILLS.search(w) for w in want):
+                quoted = []
+                for w in want:
+                    m = self.sw.REDIRECT_WORD.match(w)
+                    if not m:
+                        quoted.append(shlex.quote(w))
+                    elif m.group(1):
+                        quoted.append(w[:m.start(1)] + shlex.quote(m.group(1)))
+                    else:
+                        quoted.append(w)
+                tries.append(quoted)
+            for spelled in tries:
+                if not spelled:
+                    continue
+                again = head + " ".join(spelled)
+                if split(self.words_of(self.rest_of(again)[0])) == split(want):
+                    return again
+            return None
+
+        def py_redirects_split(self, words):
+            """words with each redirection glued to its target as two words, so the same command
+            written both ways compares equal."""
+            out = []
+            for w in words:
+                m = self.sw.REDIRECT_WORD.match(w)
+                if m and m.group(1):
+                    out.extend([w[:m.start(1)], m.group(1)])
+                else:
+                    out.append(w)
+            return out
+
+        def py_own_reading(self, name, words, text, here, judge):
+            """The reason a Python command posts when it is read as python3 itself reads its
+            options, or None (PYTHON'S OWN OPTIONS above, claude-config#3539). words are the
+            command's words and text the command, name the program, here the folder it runs in,
+            and judge the gate's judging of one command's text.
+
+            The module a -W value has Python import is read as an import. And where the gate's
+            option table places what runs otherwise than Python does, the command is spelled
+            again so the table reads it as Python does, and judged so. The caller goes on to
+            judge the command as the table reads it, as before, so this can only refuse more."""
+            read = self.py_cmdline(words)
+            kind, at, cut, end, warns, theirs = read
+            for warn in warns:
+                # action:message:category:module:lineno, and a category with a dot in it is a
+                # class Python imports the module of (warnings._getcategory).
+                fields = warn.split(":")
+                mod = fields[2].strip().rpartition(".")[0] if len(fields) > 2 else ""
+                if MODULE_NAME.fullmatch(mod):
+                    reason = self.imports(f"the -W option given to {name}", None, here, f"import {mod}", "py")
+                    if reason:
+                        return reason
+            if kind is None:
+                return None
+            value = words[at][cut:] if at is not None else None
+            operand, inline, stdin = self.operands(words)
+            module = None if inline else self.py_module(words)
+            if kind == "script":
+                same = not inline and not module and operand == value and not value.startswith("-")
+            elif kind == "code":
+                after = [words[j] for j in range(end, len(words)) if j not in theirs]
+                same = bool(inline) and inline[1] == value and inline[2] == after
+            elif kind == "module":
+                same = bool(module) and module[0] == value and len(module[1]) == len(words) - end
+            else:
+                same = not inline and not module and stdin
+            want = None if same else self.py_respell(words, read)
+            if not want or want == words:
+                return None
+            again = self.py_respelled(text, want)
+            if again is None:
+                return self.unread_typed(
+                    f"{name} reads the options of this command another way than the gate can spell out, so "
+                    "what it runs is not read and whether it posts cannot be checked (claude-config#3539). "
+                    "Write the script, -c and its code, or -m and its module as words of their own, right "
+                    f"after {name}")
+            # The judging sets what the command's sys.argv holds for itself; the caller's is put back.
+            keep = dict(self.py_cmd)
+            try:
+                return judge(again)
+            finally:
+                self.py_cmd.clear()
+                self.py_cmd.update(keep)
 
         def py_file_runs(self, label, code, here, d, depth, filled=False, fed=None):
             """The reason code given to python3 posts through a file, a module or a command it names
