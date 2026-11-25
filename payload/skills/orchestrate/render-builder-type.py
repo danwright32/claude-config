@@ -63,8 +63,11 @@ class CannotRender(Exception):
 
 
 def read(path, what):
+    # errors="strict" is the decision to refuse: a type rendered from rules with characters
+    # replaced or dropped would be wrong with nobody told, so a byte that is not UTF-8 stops the
+    # render below, exit 2, with nothing rendered.
     try:
-        with open(path, encoding="utf-8") as fh:
+        with open(path, encoding="utf-8", errors="strict") as fh:
             return fh.read()
     except OSError as e:
         raise CannotRender("%s %s could not be read (%s)" % (what, path, e.strerror or type(e).__name__))
@@ -339,8 +342,10 @@ def main(argv):
         sys.stdout.write(text)
         return 0
     if mode == "check":
+        # Strict: a copy that is not text is not what the sources render, so it is STALE, never a
+        # copy with its damage replaced and then compared.
         try:
-            with open(target, encoding="utf-8") as fh:
+            with open(target, encoding="utf-8", errors="strict") as fh:
                 have = fh.read()
         except (OSError, ValueError) as e:
             print("%s: STALE: %s could not be read (%s), so there is no copy to compare." % (NAME, target, getattr(e, "strerror", None) or type(e).__name__))
@@ -356,7 +361,8 @@ def main(argv):
     # --out: written beside the target and moved into place, so a reader never sees half a prompt.
     try:
         try:
-            with open(target, encoding="utf-8") as fh:
+            # Strict: a copy that is not text never compares equal by way of a replaced byte.
+            with open(target, encoding="utf-8", errors="strict") as fh:
                 if fh.read() == text:
                     return 0
         except (OSError, ValueError):
@@ -365,7 +371,9 @@ def main(argv):
             pass
         tmp = "%s.tmp.%d" % (target, os.getpid())
         try:
-            with open(tmp, "w", encoding="utf-8") as fh:
+            # Strict: every character of text came from a strict UTF-8 read above, so it holds no
+            # lone surrogate, and one arriving some other way raises here rather than being written.
+            with open(tmp, "w", encoding="utf-8", errors="strict") as fh:
                 fh.write(text)
             os.replace(tmp, target)
         finally:

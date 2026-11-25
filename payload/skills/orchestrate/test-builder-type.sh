@@ -236,6 +236,17 @@ render --rules "$FX" --head "$HEAD" --table "$TABLE" --out "$OUT" 2>/dev/null
 check "a new render carries a lesson added to the core" "$(has "$OUT" "- L3. a lesson added to the core")"
 render --rules "$FX" --head "$HEAD" --table "$TABLE" --check "$WORK/no-such-copy.md" > "$WORK/check.txt" 2>&1
 check "--check fails on a copy that is not there" "$([ $? -eq 1 ] && echo ok || echo "it did not exit 1")"
+# A copy holding bytes that are not text is read strictly: STALE under --check, never compared with
+# its damage replaced, and replaced whole by --out, never left in place.
+printf 'bytes that are not text: \377\376\n' > "$WORK/not-text-copy.md"
+render --rules "$FX" --head "$HEAD" --table "$TABLE" --check "$WORK/not-text-copy.md" > "$WORK/check.txt" 2>&1
+rc=$?
+check "--check calls a copy that is not text STALE, exit 1" \
+  "$([ "$rc" -eq 1 ] && [ "$(has "$WORK/check.txt" "STALE")" = ok ] && echo ok || echo "exit $rc: $(head -1 "$WORK/check.txt" | cut -c1-200)")"
+render --rules "$FX" --head "$HEAD" --table "$TABLE" --out "$WORK/not-text-copy.md" 2> "$WORK/out.txt"
+rc=$?
+check "--out replaces a copy that is not text with the render" \
+  "$([ "$rc" -eq 0 ] && cmp -s "$WORK/not-text-copy.md" "$OUT" && echo ok || echo "exit $rc, or the copy is not the render: $(head -1 "$WORK/out.txt" | cut -c1-200)")"
 
 # ---- how a session comes to use the type: the orchestrate skill and the agent rules ----
 SKILL="${BUILDER_TYPE_SKILL:-$DIR/SKILL.md}"
