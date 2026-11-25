@@ -10,19 +10,24 @@
     "it prints a line RAN, and expands the body when it prints v=2. closes maps each LINE to the shells",
     "that end the body there, by a group's name or a list of shells; never lists lines no shell ends",
     "it at; a shell named under no LINE ends it at none of them. quoted says the body is not expanded.",
+    "The rows say what these seven shells did, not what any shell called bash or sh does: on Linux sh is",
+    "often dash and bash is newer. So shells gives each one's run command, a probe that prints what it",
+    "is, and prints, how the probe's output starts for the shell that was measured (dash has no version",
+    "to print, so its probe names the system). A suite holds a shell to the rows only where the probe",
+    "prints that, and says the rest is unmeasured.",
     "A reader that vouches for its reading must give the LINE all seven shells share. Where they do",
     "not share one it must say so (shell-words.py names the heredoc in unsure), and where bash and",
     "zsh share one its marker must be that LINE."
   ],
   "measured": "2026-11-24 on macOS: bash 3.2.57 (as bash, as bash --posix and as sh), dash, zsh 5.9 (as zsh and emulating sh) and ksh 93u+",
   "shells": {
-    "bash": ["bash", "--noprofile", "--norc", "-c"],
-    "bash --posix": ["bash", "--posix", "--noprofile", "--norc", "-c"],
-    "sh": ["sh", "-c"],
-    "dash": ["dash", "-c"],
-    "zsh": ["zsh", "-f", "-c"],
-    "zsh as sh": ["zsh", "--emulate", "sh", "-f", "-c"],
-    "ksh": ["ksh", "-c"]
+    "bash": {"run": ["bash", "--noprofile", "--norc", "-c"], "prints": "3.2.", "probe": ["bash", "--noprofile", "--norc", "-c", "echo \"$BASH_VERSION\""]},
+    "bash --posix": {"run": ["bash", "--posix", "--noprofile", "--norc", "-c"], "prints": "3.2.", "probe": ["bash", "--posix", "--noprofile", "--norc", "-c", "echo \"$BASH_VERSION\""]},
+    "sh": {"run": ["sh", "-c"], "prints": "3.2.", "probe": ["sh", "-c", "echo \"$BASH_VERSION\""]},
+    "dash": {"run": ["dash", "-c"], "prints": "dash on Darwin", "probe": ["dash", "-c", "echo \"dash on $(uname -s)\""]},
+    "zsh": {"run": ["zsh", "-f", "-c"], "prints": "5.9", "probe": ["zsh", "-f", "-c", "echo \"$ZSH_VERSION\""]},
+    "zsh as sh": {"run": ["zsh", "--emulate", "sh", "-f", "-c"], "prints": "5.9", "probe": ["zsh", "--emulate", "sh", "-f", "-c", "echo \"$ZSH_VERSION\""]},
+    "ksh": {"run": ["ksh", "-c"], "prints": "Version AJM 93u+", "probe": ["ksh", "-c", "echo \"${.sh.version}\""]}
   },
   "groups": {
     "all": ["bash", "bash --posix", "sh", "dash", "zsh", "zsh as sh", "ksh"],

@@ -836,8 +836,10 @@ done
 # ran. This suite runs it; mod-kit's does not read the file, which claude-config#3566 is left open
 # for. It says, for each, the line each of seven shells ends the body at (measured 2026-11-24 with texts
 # that only print: bash 3.2.57, bash --posix, sh, dash, zsh 5.9, zsh emulating sh and ksh 93u+, each
-# as a -c text, a file and an eval). Every row is run here again by the shells of this machine, so
-# the list cannot say what they do not do, and then asked of the reader:
+# as a -c text, a file and an eval). Every row is run here again by each of those shells this
+# machine has, so the list cannot say what they do not do; a shell of the same name that is not the
+# one measured (sh that is dash, a newer bash) is said to be unmeasured and held to nothing. Then
+# every row is asked of the reader, on any machine:
 #   * where all seven share a line, the reader gives that marker and names nothing
 #   * where they do not, the reader names the heredoc in `unsure` for a caller that asks, and
 #     where bash and zsh share a line, which is every dollar quote whose escapes they read alike,
@@ -865,7 +867,6 @@ with open(rows_path) as f:
 
 B = "\\"
 SHELLS, GROUPS, ROWS = data["shells"], data["groups"], data["rows"]
-HAVE = [name for name in SHELLS if shutil.which(SHELLS[name][0])]
 EVERY = set(GROUPS["all"])
 
 
@@ -873,18 +874,45 @@ def members(v):
     return set(GROUPS[v] if isinstance(v, str) else v)
 
 
-def printed(shell, text):
-    """The lines the shell prints for a text that only prints."""
+def output_of(argv, text):
+    """The lines a shell prints for a text that only prints."""
     d = tempfile.mkdtemp(prefix="run-", dir=scratch)
     try:
-        p = subprocess.run(SHELLS[shell] + [text], cwd=d, stdin=subprocess.DEVNULL,
+        p = subprocess.run(argv + [text], cwd=d, stdin=subprocess.DEVNULL,
                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=20,
                            env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": d})
         return p.stdout.decode("utf-8", "replace").split("\n")
     except subprocess.TimeoutExpired:
-        return ["(no answer in 20 seconds)"]
+        return NO_ANSWER
     finally:
         shutil.rmtree(d, ignore_errors=True)
+
+
+# What output_of gives for a shell that did not finish: never read as "printed nothing".
+NO_ANSWER = ["(no answer in 20 seconds)"]
+
+
+def printed(shell, text):
+    return output_of(SHELLS[shell]["run"], text)
+
+
+# The list says what seven named shells did, on macOS. A machine's bash, sh or dash can be another
+# shell altogether (on Linux sh is often dash, and bash is newer than 3.2), so a shell here is held
+# to the list only where its probe prints what the measured one's did. The rest is said to be
+# unmeasured, by name, and is no failure: what the reader must give is read from the list alone,
+# on any machine.
+HAVE = []
+for name in SHELLS:
+    probe, want = SHELLS[name]["probe"], SHELLS[name]["prints"]
+    if not shutil.which(probe[0]):
+        print("unmeasured\twhat %s does with each marker of #3566, because there is no %s on this machine" % (name, probe[0]))
+        continue
+    said = output_of(probe[:-1], probe[-1])[0].strip()
+    if said.startswith(want):
+        HAVE.append(name)
+    else:
+        print("unmeasured\twhat %s does with each marker of #3566, because the list was measured on one that says '%s' and this machine's says '%s'"
+              % (name, want, said))
 
 
 def shown(t):
@@ -892,8 +920,12 @@ def shown(t):
     return "".join(c if " " <= c <= "~" else "<%02x>" % ord(c) for c in t)
 
 
-def say(ok, what, why=""):
+READER = [0]  # how many checks were of the reader alone, which no machine's shells decide
+
+
+def say(ok, what, why="", shells=False):
     print("ok\t" + what if ok else "FAIL\t" + what + "\t" + why)
+    READER[0] += 0 if shells else 1
 
 
 def opener(text, at):
@@ -919,7 +951,6 @@ def read(text, ask):
     return cut, bodies, marks
 
 
-print("shells\t" + " ".join(sorted({SHELLS[name][0] for name in HAVE})))
 BODY = "v=$((1+1))"
 for row in ROWS:
     name, word, quoted, closes = row["name"], row["word"], row["quoted"], row["closes"]
@@ -928,22 +959,24 @@ for row in ROWS:
     named = (4, len(head))
     where = "%s, <<%s" % (name, shown(word))
 
-    # The list against the shells of this machine: each ends the body at the lines the list says
-    # it does and at no other line the list names, and expands the body or not as it says.
-    for line in lines:
+    # The list against the measured shells this machine has: each ends the body at the lines the
+    # list says it does and at no other line the list names, and expands the body or not as it says.
+    for line in lines if HAVE else []:
         text = head + "\n" + BODY + "\n" + line + "\necho RAN\n"
         want = members(closes.get(line, []))
         wrong, kept = [], []
         for shell in HAVE:
             got = printed(shell, text)
-            if ("RAN" in got) != (shell in want):
+            if got == NO_ANSWER:
+                wrong.append("%s gave no answer, so what it does was not seen" % shell)
+            elif ("RAN" in got) != (shell in want):
                 wrong.append("%s %s" % (shell, "ended it there" if "RAN" in got else "did not end it there"))
             elif "RAN" in got and ("v=2" in got) == quoted:
                 kept.append(shell)
         say(not wrong, "#3566 the list says what each shell here does at the line %s: %s" % (shown(line), where),
-            "; ".join(wrong))
+            "; ".join(wrong), shells=True)
         say(not kept, "#3566 the list says whether the body is expanded, ended at the line %s: %s" % (shown(line), where),
-            "%s %s it" % (" and ".join(kept), "expanded" if quoted else "did not expand"))
+            "%s %s it" % (" and ".join(kept), "expanded" if quoted else "did not expand"), shells=True)
 
     seven = [line for line in closes if members(closes[line]) == EVERY]
     both = [line for line in closes if {"bash", "zsh"} <= members(closes[line])]
@@ -978,13 +1011,15 @@ for row in ROWS:
             if other == line:
                 continue
             text = head + "\n" + BODY + "\n" + line + "\necho BETWEEN\n" + other + "\necho RAN\n"
-            ran = [shell for shell in HAVE if shell in members(closes[line]) and "BETWEEN" in printed(shell, text)]
+            can = [shell for shell in HAVE if shell in members(closes[line])]
+            ran = [shell for shell in can if "BETWEEN" in printed(shell, text)]
             cut, bodies, marks = read(text, False)
             say("echo BETWEEN" in cut,
                 "#3566 a command after the line %s is a command, with the line %s after it: %s" % (shown(line), shown(other), where),
                 "%s ran it and the reader gave %r" % (" and ".join(ran) or "no shell here", cut))
-            say(bool(ran), "#3566 the row is a real one, a shell here runs the command after the line %s: %s" % (shown(line), where),
-                "none of %s ran it" % ", ".join(HAVE))
+            if can:
+                say(bool(ran), "#3566 the row is a real one, a shell here runs the command after the line %s: %s" % (shown(line), where),
+                    "none of %s ran it" % ", ".join(can), shells=True)
     if not both:
         # The shells share no line, so no reading is theirs: every one of them is named, and a
         # caller that asks is told, whichever line the text ends the body at.
@@ -1045,26 +1080,22 @@ p = subprocess.run([sys.executable, "-B", sw_path, "heredoc-markers"], stdout=su
 say(p.stdout.decode() == "1\tE\tF\n2\tp6\n", "#3566 heredoc-markers prints a translated marker, and no row for one that holds a line break",
     "printed %r" % (p.stdout.decode(),))
 print("listed\t%d" % len(ROWS))
+print("reader\t%d" % READER[0])
 PY
 rc=$?
 [ "$rc" -eq 0 ] || check "#3566 the comparison ran to its end" "python3 exited $rc"
 MARK_LISTED="$(awk -F'\t' '$1 == "listed" { print $2 }' "$MARK_T/rows.tsv")"
-grep -v '^listed	' "$MARK_T/rows.tsv" > "$MARK_T/checks.tsv"
+MARK_READER="$(awk -F'\t' '$1 == "reader" { print $2 }' "$MARK_T/rows.tsv")"
+# A shell this machine lacks, or one that is not the shell the list was measured on, is a part
+# not measured, said by name; the checks of the reader do not need it.
+awk -F'\t' '$1 == "unmeasured" { print "SUITE-PART-UNMEASURED " $2 }' "$MARK_T/rows.tsv"
+grep -v -E '^(listed|reader|unmeasured)	' "$MARK_T/rows.tsv" > "$MARK_T/checks.tsv"
 rows_checked "$MARK_T/checks.tsv" "#3566"
 rm -rf "$MARK_T"
-case " $ROWS_SHELLS " in
-  *" bash "*) check "#3566 the markers were run by this machine's bash" ok ;;
-  *) check "#3566 the markers were run by this machine's bash" "no bash was found, so no marker was measured against a shell" ;;
-esac
-for shell in zsh dash ksh; do
-  case " $ROWS_SHELLS " in
-    *" $shell "*) ;;
-    *) echo "SUITE-PART-UNMEASURED what $shell does with each marker of #3566, because there is no $shell on this machine" ;;
-  esac
-done
-# A run that compared nothing, or a list cut short, must not read as a pass.
+# A run that compared nothing, or a list cut short, must not read as a pass. The floor is on the
+# checks of the reader, which are made on every machine, whatever shells it has.
 [ "${MARK_LISTED:-0}" -ge 42 ] || check "#3566 the list holds its markers" "only ${MARK_LISTED:-0} markers were read from lib/heredoc-markers.json, where it holds 42"
-[ "$ROWS_COUNT" -ge 300 ] || check "#3566 the comparison checked its markers" "only $ROWS_COUNT checks were made, where the list makes well over 300"
+[ "${MARK_READER:-0}" -ge 200 ] || check "#3566 the comparison checked the reader" "only ${MARK_READER:-0} checks of the reader were made, where the list makes over 200"
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
