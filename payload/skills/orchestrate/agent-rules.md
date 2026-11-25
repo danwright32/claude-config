@@ -27,6 +27,7 @@ You are one of several agents, each working one item while the orchestrator sess
 - Write the commit message to a file and commit with `git commit -F <file>`. End it with the `Claude-Session:` line from your brief. Nothing may say or suggest Claude wrote the work.
 - No dashes as punctuation and no emoji in new lines. Never use `SKIP_TEST_CHECK`, `SKIP_STYLE_CHECK` or any other override; if a hook blocks you, fix the cause.
 - Push your branch. Do not open or merge a pull request. Write the PR description to `pr-body.md` in your working folder, ending with the session link line from your brief.
+- A fix round (problems the orchestrator sends back after review) ends with `pr-body.md` read again in full, not only the section you add for the round: every commit, count and claim the description states is checked against the new head, and the description's count prompt names the new head. A count or review made on an earlier commit says which commit it was, and a sentence such as "later commits change no rule" is checked against the files changed since (claude-config#3579).
 
 ## Never do these yourself
 
