@@ -866,7 +866,9 @@ check "#3639 a list printed on one line is read too" \
 # rewrite to any other subcommand keeps its saving, and grep as an ARGUMENT is not a subcommand.
 installed_list_config
 check "#3639 the control: with the list installed, git status keeps its rewrite" "$(kept_as 'rtk git status')"
-check "#3639 nor does grep as an argument of another subcommand refuse" "$(kept_as 'rtk git log --grep x')"
+# Not `rtk git log --grep`: the hook refuses `rtk git log` for #3469, so that control failed before
+# this fix for a reason of its own (seen in the red run of e853170). `ls` is refused by nothing.
+check "#3639 nor does grep as an argument of another subcommand refuse" "$(kept_as 'rtk ls grep')"
 check "#3639 nor a prefixed command rtk was not told to leave alone" "$(kept_as 'FOO=1 rtk ls -la')"
 # With rtk's list empty, as on an rtk with no config file, rtk grep stays the rewrite rtk chose,
 # Dan's #1419 decision for a grep standing alone. So the refusal follows the one list, and taking
