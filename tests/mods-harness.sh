@@ -9,8 +9,13 @@
 #
 #   tests/test-mods.sh               case 8, the real tree with the real claude where there is one
 #   tests/test-mods-shared-parts.sh  section 9, what every mod shares
-#   tests/test-mods-fixtures.sh      sections 1 to 7c and 10 to 13, then 14, which holds the three
-#                                    together
+#   tests/test-mods-fixtures.sh      sections 1 to 7c and 10 to 13, 15, then 14, which holds the
+#                                    pieces together
+#
+# Case 8 alone then read 490 and 667 s on a runner, so the real tree is itself in parts (#3622, second
+# part): tests/test-mods.sh and tests/test-mods-real-tree-2.sh and -3.sh each check the mods dealt to
+# them (mods_real_deal below), with the code they share in tests/mods-real-tree.sh. Measured on the work
+# MacBook on 2026-11-25: 67, 64 and 60 s, against 168 s for the one run they replace.
 #
 # Every one of them runs check-mods.sh in the same world, so that world is here, once, and no suite
 # holds a copy of it (L613): the throwaway folder, the stub claude and the stub compiler, the records
@@ -131,6 +136,48 @@ runit(){   # $1 = mods dir -> sets out and code
 # The shared parts check: section 9 (test-mods-shared-parts.sh) runs it and the last check of section
 # 13 (test-mods-fixtures.sh) holds it executable, so it is named once, here.
 SHARED="$ROOT/tools/check-mod-shared-parts.sh"
+
+# THE REAL TREE'S PARTS (#3622). One run of check-mods.sh over every real mod read 490 and 667 s on a
+# runner, near the 600 s each suite is held under, so the real tree is checked by several suites, each
+# handing check-mods.sh the mods dealt to it (tests/mods-real-tree.sh). The deal is here, beside the
+# rest of the world, so the fixtures can hold it without reaching the real claude (L2).
+#
+# mods_real_deal <parts> [mods dir] [seconds file]: every mod in the folder (payload/mods unless
+# named), read from disk, so a mod added later is dealt the day it lands (L96), one "<part><TAB><mod>"
+# line each, by part then name. Dealt longest first, each to the part with the fewest seconds so far
+# (L315: by measured cost, never by count), by the seconds file (tests/mods-real-tree-seconds.tsv
+# unless named): a mod it does not name counts as 5. A missing seconds file is refused, never guessed.
+mods_real_deal(){
+  local parts="$1" mdir="${2:-$ROOT/payload/mods}" table="${3:-$DIR/mods-real-tree-seconds.tsv}" d
+  case "$parts" in ''|*[!0-9]*|0) echo "mods_real_deal: '$parts' is not a number of parts." >&2; return 1 ;; esac
+  if [ ! -f "$table" ]; then
+    echo "mods_real_deal: $table, the seconds each mod's checks were measured to take, is missing, so the mods cannot be dealt by cost." >&2
+    return 1
+  fi
+  for d in "$mdir"/*/; do
+    [ -f "$d.claude-plugin/plugin.json" ] && basename "$d"
+  done | LC_ALL=C sort | awk -F'\t' -v parts="$parts" '
+    FILENAME == ARGV[1] { if ($0 !~ /^#/ && NF >= 2) secs[$1] = $2 + 0; next }
+    { print (($1 in secs) ? secs[$1] : 5) "\t" $1 }' "$table" - \
+    | LC_ALL=C sort -t "$(printf '\t')" -k1,1gr -k2,2 \
+    | awk -F'\t' -v parts="$parts" '
+      { best = 1; for (k = 2; k <= parts; k++) if (tot[k] + 0 < tot[best] + 0) best = k
+        tot[best] += $1; print best "\t" $2 }' \
+    | LC_ALL=C sort -t "$(printf '\t')" -k1,1n -k2,2
+}
+# mods_real_part_names <part> <parts> [mods dir] [seconds file]: the mods dealt to that part, one a
+# line. A part dealt none says so by the agreed line and returns 1, so its suite never hands
+# check-mods.sh no names, which would check the whole folder as this part's pass (L98).
+mods_real_part_names(){
+  local deal names
+  deal="$(mods_real_deal "$2" "${3:-}" "${4:-}")" || return 2
+  names="$(printf '%s\n' "$deal" | awk -F'\t' -v k="$1" '$1 == k { print $2 }')"
+  if [ -z "$names" ]; then
+    echo "SUITE-PART-UNMEASURED the real mods of part $1 of $2, because the deal gave this part no mod, so it has nothing to check"
+    return 1
+  fi
+  printf '%s\n' "$names"
+}
 
 # The totals and the agreed result line run-all-tests.sh reads, returning 1 when anything failed,
 # so a suite whose last command this is exits as it should.
