@@ -126,20 +126,30 @@ echo "slack drafts gate helper copies: a suite sharing the harness refuses to ru
 
 # Each held suite, copied into a hooks folder whose lib holds everything but the harness, run as
 # run-all-tests.sh runs it (claude-config#3624). It must exit non zero having printed the failed
-# result line of a suite that ran nothing: without the harness there is no gate under test and no throwaway folder,
-# and a suite that carried on would judge nothing, or run its cases against whatever its caller's
-# environment held. One check per suite, named by it, so a new suite is covered when it sources
-# the harness and a missing one is named.
-mkdir -p "$T/bare/hooks"
-cp -R "$HOOKS/lib" "$T/bare/hooks/lib"
-rm -f "$T/bare/hooks/lib/slack-drafts-gate-harness.sh"
+# result line of a suite that ran nothing, and said that the harness is what is missing: without
+# it there is no gate under test and no throwaway folder, and a suite that carried on would judge
+# nothing, or run its cases against whatever its caller's environment held. The harness's name is
+# required too because lib/suite-deadline.sh's own refusal prints the same result line, and a stop
+# there would say nothing about the harness (the lessons review of this change, 2026-11-25). One
+# check per suite, named by it, so a new suite is covered when it sources the harness.
+bare_ready=1
+mkdir -p "$T/bare/hooks" && cp -R "$HOOKS/lib" "$T/bare/hooks/lib" \
+  && rm "$T/bare/hooks/lib/slack-drafts-gate-harness.sh" && [ -f "$T/bare/hooks/lib/suite-deadline.sh" ] || bare_ready=0
+if [ "$bare_ready" -eq 1 ]; then
+  check "a hooks folder with every lib file but the harness was made" ok
+else
+  check "a hooks folder with every lib file but the harness was made" "copying $HOOKS/lib, or taking the harness out of the copy, failed, so no suite below ran without it"
+fi
 for held in $(printf '%s\n' "$report" | sed -n 's/^held //p'); do
+  [ "$bare_ready" -eq 1 ] || break
   cp "$HOOKS/$held" "$T/bare/hooks/$held"
   bare_out="$(bash "$T/bare/hooks/$held" 2>&1)"; bare_rc=$?
+  bare_name="$held stops with a failed result line when the harness is missing"
+  bare_tail="$(printf '%s' "$bare_out" | tail -3 | tr '\n' ' ' | cut -c1-300)"
   case "$bare_rc:$bare_out" in
-    0:*) check "$held stops with a failed result line when the harness is missing" "it exited 0: $(printf '%s' "$bare_out" | tail -3 | tr '\n' ' ' | cut -c1-300)" ;;
-    *"SUITE-RESULT passed=0 failed=1"*) check "$held stops with a failed result line when the harness is missing" ok ;;
-    *) check "$held stops with a failed result line when the harness is missing" "exit $bare_rc with no 'SUITE-RESULT passed=0 failed=1' line: $(printf '%s' "$bare_out" | tail -3 | tr '\n' ' ' | cut -c1-300)" ;;
+    0:*) check "$bare_name" "it exited 0: $bare_tail" ;;
+    *"slack-drafts-gate-harness.sh is missing"*"SUITE-RESULT passed=0 failed=1"*) check "$bare_name" ok ;;
+    *) check "$bare_name" "exit $bare_rc without saying the harness is missing and then 'SUITE-RESULT passed=0 failed=1': $bare_tail" ;;
   esac
 done
 
