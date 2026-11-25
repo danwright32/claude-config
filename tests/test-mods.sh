@@ -9,9 +9,9 @@
 # It is the only place in the mods suites the real claude is found, to validate and test the mods,
 # never to start a session (L2); section 14 of test-mods-fixtures.sh holds every other piece to that.
 #
-# This file held every check of the mods gate, 516 of them, until it read 498 to 777 seconds on
-# GitHub's runners on 2026-11-24 and 25, past half of run-all-tests.sh's 1,200 second wall limit (claude-config#3622,
-# L315). Its sections are now three suites sharing one harness, tests/mods-harness.sh, which says
+# This file held every check of the mods gate, 516 of them, until it read up to 777 seconds on
+# GitHub's runners (six runs on 2026-11-24 and 25 read 498 to 777), past half of run-all-tests.sh's
+# 1,200 second wall limit (claude-config#3622, L315). Its sections are now three suites sharing one harness, tests/mods-harness.sh, which says
 # what each holds and what each cost: this one, test-mods-shared-parts.sh (section 9) and
 # test-mods-fixtures.sh (every other section, on the stub claude). A comment saying "above" or
 # "below", or naming a case by its number, means in whichever of the three holds it. This is the one

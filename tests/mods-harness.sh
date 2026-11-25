@@ -1,9 +1,9 @@
 #!/bin/bash
 # mods-harness.sh: the one world the suites of tools/check-mods.sh run in (claude-config#3622).
 #
-# tests/test-mods.sh held every check of the mods gate, 516 of them, until it read 498 to 777
-# seconds in six runs on GitHub's runners (2026-11-24 and 25), past half of run-all-tests.sh's 1,200
-# second wall limit, one slow runner from being stopped there with no failing check (L315). Its
+# tests/test-mods.sh held every check of the mods gate, 516 of them, until it read up to 777 seconds
+# on GitHub's runners (six runs on 2026-11-24 and 25 read 498 to 777), past half of run-all-tests.sh's
+# 1,200 second wall limit, one slow runner from being stopped there with no failing check (L315). Its
 # sections are now three suites, cut by what each section was measured to cost (on the work MacBook
 # on 2026-11-25: the real tree 147 s, section 9 47 s, all the rest 33 s, of 227 s):
 #
