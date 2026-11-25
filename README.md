@@ -5249,6 +5249,26 @@ samples of ten judgements each way taken in turn on 2026-11-24 at load averages 
 plain script handed a data file had the same mean before and after in both runs (0.1711 and
 0.1713 s, then 0.1755 and 0.1756 s), and a folder holding `__main__.py`, whose file is now read,
 took about 0.002 s more (means of 0.1721 and 0.1739 s, then 0.1769 and 0.1785 s).
+A Python command is also read as `python3` itself reads its options (`py_own_reading`, called
+from the gate's interpreter lines before the reading there was, claude-config#3539). Which word
+runs was decided by the gate's table of options, which is not Python's reader. Measured on main
+on 2026-11-24 against what `python3` 3.14.4 and 3.9.6 ran for 110 shapes of command line with
+scripts that only print, each of these ran something that posts and passed: `python3 posts.py
+-m x` (no file of a command holding the word `-m` was read, for any interpreter, so `node
+post.js -m x` passed too); code glued to `-c` (`python3 -c'import posts'`); `python3 -Wc
+posts.py` and `-Xc`, where the letters after `-W` or `-X` are its value; `python3 -BW quiet.py
+posts.py`, where `-W` takes the next word; `python3 -mdoc`, a module whose short name ends in c;
+`python3 -- -post.py` and `python3 -- -` with code on its input; and a `-W` value naming a
+warning class by its module (`-W error::warnmod.Loud`), which `python3` imports from
+`PYTHONPATH` before anything else. Now the word `-m` hides nothing, the module a `-W` value
+names is read as an import, and where the table's answer is not Python's the command is spelled
+again so the table reads it as Python does, from its words as written, and judged so. The
+table's own reading still follows, so a command refused before is refused still. A spelling the
+gate cannot build is refused as unread where typed, and left as it was in a script on disk.
+Not covered by that reading, each measured on 2026-11-24 as allowed where the file posts:
+`python3 -i quiet.py < posts.py`, which runs the lines on its input after the script;
+`PYTHONWARNINGS`, which names a module as `-W` does; and a shell handed `--` and a script whose
+name starts with a dash (`bash -- -post.sh`), the shells' options being read by the table still.
 Not covered, each measured on 2026-11-22 as allowed where the file posts:
 a Python file on disk that runs a file it names
 (`python3 runner.py`, `import runner`); code the shell fills in whole
