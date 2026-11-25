@@ -154,10 +154,13 @@ account(){
   if [ -z "$clean" ] && [ "$lost" -gt 0 ] && [ $((judged + lost)) -eq "$n" ]; then
     printf 'unmeasured of the %s scripts listed, %s not judged, so whether the gate places what it reaches past lib/hang-wait.sh was not measured:%s\n' "$n" "$([ "$lost" -eq 1 ] && echo "1 was" || echo "$lost were")" "$ended"
   else
-    local unseen="" q
+    local unseen="" q seen
+    # Read into a variable and matched with case, never cut piped into grep -q: under pipefail the
+    # pipeline can fail on a match when grep stops reading first.
+    seen="$(cut -f2 "$2" "$2.lost")"
     while IFS= read -r q; do
       [ -n "$q" ] || continue
-      cut -f2 "$2" "$2.lost" | grep -q -x -F -- "$q" || unseen="$unseen $q (no line, and no record of its judge);"
+      case $'\n'"$seen"$'\n' in *$'\n'"$q"$'\n'*) ;; *) unseen="$unseen $q (no line, and no record of its judge);" ;; esac
     done < "$1"
     printf 'missing %s of %s judged;%s%s%s\n' "$judged" "$n" "$clean" "$ended" "$unseen"
   fi
@@ -223,6 +226,11 @@ case "$got" in "unmeasured of the 3 scripts listed, 1 was not judged,"*" tests/b
 SI_MODE=clean; ( judge "$W" "$W/si.list" "$W/si.out" stand_in ) 2>> "$W/si.noise"; got="$(account "$W/si.list" "$W/si.out")"
 case "$got" in "missing 2 of 3 judged; tests/b.sh (its judge exited 0 without writing a line"*) check "the control: a judge that finished cleanly without a line is named, and fails" ok ;;
   *) check "the control: a judge that finished cleanly without a line is named, and fails" "account said '$got'" ;; esac
+# And account read alone, on records no judge would write: a script with neither a line nor a record.
+printf '0\ttests/a.sh\t\n' > "$W/acct.out"; printf '137\ttests/b.sh\t\n' > "$W/acct.out.lost"
+got="$(account "$W/si.list" "$W/acct.out")"
+case "$got" in "missing 1 of 3 judged;"*" tests/c.sh (no line, and no record of its judge);") check "the control: a script with neither a line nor a record of its judge is named, and fails" ok ;;
+  *) check "the control: a script with neither a line nor a record of its judge is named, and fails" "account said '$got'" ;; esac
 SI_MODE=failed; ( judge "$W" "$W/si.list" "$W/si.out" stand_in ) 2>> "$W/si.noise"; got="$(account "$W/si.list" "$W/si.out")"
 case "$got" in "missing 2 of 3 judged; tests/b.sh (its judge exited 1 without writing a line"*) check "the control: a judge that failed by itself (as a write that fails does) without a line is named, and fails rather than being unmeasured" ok ;;
   *) check "the control: a judge that failed by itself (as a write that fails does) without a line is named, and fails rather than being unmeasured" "account said '$got'" ;; esac
