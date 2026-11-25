@@ -4327,6 +4327,18 @@ command that posts>"` reads as an unknown program running that command, and the 
 `test-slack-drafts-gate-helper-copies.sh` holds those copies equal, naming the suite and the helper
 when two differ.
 
+Since claude-config#3624 the code loaders checks are five suites on the same harness: on 2026-11-25
+the single `hooks/test-slack-drafts-code-loaders.sh`, 2,287 checks, read up to 485 seconds on
+GitHub's runners, 81 percent of the suite cost guard's line at half the wall limit. Its sections were
+dealt by their measured cost, kept together where one makes the fixtures another reads, into
+`test-slack-drafts-code-loaders.sh` itself (PHP includes, a NUL in a first line, `NODE_OPTIONS` and
+perl, sourced paths, `eval` and a shell's `-c` and `-n`, and the gate's verdict on running each of
+the five), `-data-names` (an address held as data, test files and mocks, a declared webhook name),
+`-package-runs` (a launcher's package run and a package script), `-python` (a Python script that
+only reads, modules under other names, routes to `os` and `sys`) and `-shell-input` (process
+substitution and a shell fed by what is around it). The helper copies guard holds their copies too,
+and runs every suite sharing the harness once without it, which must stop with a failed result line.
+
 ### Running a refused command with no network (#3173)
 
 The gate refuses a command whose files reach code able to post, and that stopped one test file being
