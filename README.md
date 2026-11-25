@@ -2508,7 +2508,8 @@ plain merge is refused in those words and the pull request reads back still open
 gates judged, the helper asks GitHub, at that moment and as the account the merge is made as, what
 a bypass would skip, and sends the same merge with `--admin`, pinned to that head, only when all of
 this holds: GitHub reads the review as `REVIEW_REQUIRED` (a reviewer asking for changes is never
-bypassed); every rule in force on the base branch that asks for a review belongs to a ruleset whose
+bypassed); the pull request was opened by the account the merge is made as (claude-config#3571, the
+next paragraph); every rule in force on the base branch that asks for a review belongs to a ruleset whose
 `current_user_can_bypass` is `pull_requests_only` or `always`, and at least one such rule exists;
 every ruleset the account may bypass holds nothing else in force on the branch that a merge could
 break (only the review rule, `deletion`, `non_fast_forward` and `creation` pass, the review rule
@@ -2521,6 +2522,24 @@ saying an approving review is missing and why no bypass merge was sent; when it 
 line says it merged as a bypass of the approving review, naming the ruleset. There is no per
 repository opt in list (Dan, 2026-11-24): the ruleset's own bypass list is the permission. Not
 built: vouching for required checks held in a ruleset the account may bypass, which refuses today.
+
+The bypass is sent only for a pull request the merging account opened itself (claude-config#3571).
+A ruleset like that one exists so that other people's pull requests wait for the owner's approval,
+and until 2026-11-25 the helper never read who opened the pull request, so a run on a teammate's or
+a bot's pull request would have merged it with no approval. A pull request from anyone else never
+needs the bypass: the owner can approve it, and the plain merge then goes through. Who opened it is
+read in the same read back that says the pull request's state, head and review, so it is no older
+than those. Who merges is asked of GitHub, `gh api user`, with the token the merge is sent with.
+That is a call of its own, made only once the plain merge has been refused for the branch policy:
+the name gh holds for an account is what it was called when it signed in, with no account named
+the helper holds no name for it at all, and no other read it makes names the account asking. The
+bypass merge is then sent with that same token, so the account compared is the account that merges
+even when gh's active account is switched while the checks gate is asked. A bot is someone else
+whatever it is called. An author GitHub's answer does not name, a login that cannot be read and a
+gh with no token to give are never taken as a match. Each of those stops the run with exit 1 before
+any rule is read. For someone else's pull request the stop names who opened it, and who would have
+merged it unless a bot opened it, and says it waits for the review. When the bypass is sent, the
+line saying why it may be names the login that opened the pull request.
 
 Sleep mode outranks that bypass (Dan, 2026-11-24: "Respect sleep mode first"). The bypass merge is
 sent inside the helper, where no hook sees it, so sleep mode's rule for a typed `gh pr merge
