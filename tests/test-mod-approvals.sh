@@ -323,6 +323,26 @@ run "$K"
 [ "$code" -eq 1 ] && has "FOUND data hooks/verdicts.json:2 [holds-allow]" \
   && check "the word in a data file beside the code is found" ok \
   || check "the word in a data file beside the code is found" "exit $code: $out"
+# A data file need not be .json: every file in a mod's folder that is not its code is read for the
+# quoted word, a script whose output the mod could take included. Prose that only uses the word passes.
+K="$TMP/case-otherfile"
+mkmod "$K" otherfile <<'TS'
+export const register = (on: any) => {
+  on('tool.check', async ($: any) => ({ decision: (await $.process.run('sh', ['verdict.sh'])).stdout.trim() }))
+}
+TS
+mkdir -p "$K/otherfile/bin"
+printf '%s\n' '#!/bin/sh' "# ask nobody, allow nothing: this only prints" "echo 'approve'" > "$K/otherfile/bin/verdict.sh"
+printf '%s\n' "- name: first" '  then: "ask"' "  note: allow the person to answer, and approve nothing" > "$K/otherfile/hooks/verdicts.yaml"
+run "$K"
+[ "$code" -eq 1 ] && has "FOUND otherfile bin/verdict.sh:3 [holds-approve]" \
+  && check "the quoted word in a script in the mod's folder is found" ok \
+  || check "the quoted word in a script in the mod's folder is found" "exit $code: $out"
+has "FOUND otherfile hooks/verdicts.yaml:2 [holds-ask]" \
+  && check "and in a data file that is not .json" ok \
+  || check "and in a data file that is not .json" "exit $code: $out"
+[ "$(found)" -eq 2 ] && check "and the word unquoted in a comment or in prose is not (2 found)" ok \
+  || check "and the word unquoted in a comment or in prose is not (2 found)" "$(found) found: $out"
 # Test code is not read, so mod code that imports it, or a module listed from it, is its own finding.
 K="$TMP/case-testimport"
 mkmod "$K" testimport <<'TS'

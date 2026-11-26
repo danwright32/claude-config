@@ -14,19 +14,23 @@
 #   [answers-allow]       the value 'allow' or 'approve' given to decision, permissionDecision or
 #                         behavior, which is how a tool.check or tool.judge hook, a
 #                         classic.PermissionRequest hook and a classic.PreToolUse hook approve; and
-#                         allow: true, the PreToolUse result's own spelling.
+#                         the name allow, the PreToolUse result's own spelling ({ allow: true }),
+#                         wherever it is a key, a shorthand property, a variable or assigned to,
+#                         unless the key is given false, undefined or null. What approves there
+#                         is true, which can be computed anywhere, so the name itself is read.
 #   [answers-ask]         the value 'ask' given to one of those keys: over a refusal beneath it, a
 #                         question is a loosening, and a permission prompt is what a mod can approve.
-#   [holds-ask]           the word ask as a whole string anywhere else, in the mod's code or in a
-#                         .json file beside it, since a decision can be computed from it
-#                         (ok ? 'ask' : 'deny') or read from the file. Unlike allow, the word has
-#                         harmless uses, so it passes in the positions below and nowhere else.
-#   [holds-allow]         the word allow as a whole string anywhere else in the mod's code or in a
-#                         .json file beside it, since a decision can be computed from it or read
-#                         from the file. The approving value has to come from somewhere.
+#   [holds-allow]         the word allow as a whole string anywhere else in the mod's code, or quoted
+#   [holds-approve]       in any other file of the mod (a .json file, a script, a data file), and
+#   [holds-ask]           the same for approve and for ask, since a decision can be computed from
+#                         the word (ok ? 'approve' : 'deny') or read from the file. The approving value has to come from somewhere. allow
+#                         passes nowhere. approve and ask have harmless uses, so they pass in the
+#                         positions below and nowhere else.
 #   [changes-permissions] updatedPermissions (a PermissionRequest answer that adds rules or sets
-#                         the mode), the words setMode and bypassPermissions, a permissionMode given
-#                         to an agent the mod starts, and $.config.set.
+#                         the mode), the words setMode and bypassPermissions, the name
+#                         permissionMode wherever it is not read off something (a key, a shorthand
+#                         property, a variable: what a mod gives an agent it starts), and
+#                         $.config.set.
 #   [rewrites-settings]   a hook on settings.read, which answers what the session's settings hold,
 #                         its permission rules included.
 #   [own-tool-call]       tool.call or mcp.call on any object: $.tool.call and $.mcp.call run a tool
@@ -35,7 +39,14 @@
 #                         reached by a computed name ($['tool']), so a call through it cannot be read.
 #   [reads-unread-code]   an import from a tests folder, node_modules or outside the mods folder, or
 #                         a hooks module listed from a folder this check does not read.
-# Where the word ask passes, each by the shape of the code around it and never by a list of files:
+# Every decision word that does not refuse (allow, approve, ask) is held both ways, beside a
+# decision key and apart from one, by one function (word_route) for code and data files alike. The
+# suite reads the decision values out of the pinned mod API types and fails for any value that is
+# not, so a build that adds one cannot pass unnoticed. approve is not in those types: it is the
+# classic hooks' spelling, whose results the types do not describe, so it is held on that ground.
+#
+# Where the words approve and ask pass, each by the shape of the code around the word and never by
+# a list of files:
 #   as a property's value, when the key is not one of the three decision keys: `key: 'ask'` or
 #     `key?: 'ask'` with the key a plain or quoted name that follows a {, a comma or a (. That
 #     shape is a property of an object, a member of a type, a parameter's type, or a label whose
@@ -51,9 +62,6 @@
 # value, a default, a return, an arrow's body, an argument, a list's element, the value of a
 # computed key, an element's attribute, and every type position not named above (a type alias of
 # the word alone, a variable's or a function's declared type), which is stricter than it need be.
-# approve stays read only beside a decision key: the mod API's types hold no such value (the pinned
-# build's, which tests/test-mod-approvals.sh reads, and 2.1.332's read on 2026-11-25), so a
-# decision computed from it approves nothing, and scope-modes holds the word in a list of verbs.
 #
 # The value is read whatever quotes it, with the key quoted or not, in every source file that is a
 # mod's own code (mod_code in lib/ts_source.py: mod-kit, and each mod's own copy of mod-kit under
@@ -100,38 +108,54 @@ WHAT = {
     "answers-allow": "answers allow for a tool call or a permission prompt",
     "answers-ask": "answers ask, which turns a refusal beneath it into a question",
     "holds-allow": "holds the word allow as a value a decision could be computed or read from",
-    "holds-ask": "holds the word ask where a decision could be computed or read from it (it passes only as the value of a property that is no decision key, in a comparison, or in a type's union or first or last argument)",
     "changes-permissions": "changes the permission rules or the permission mode",
     "rewrites-settings": "hooks settings.read, which answers what the session's permission rules are",
     "own-tool-call": "makes a tool call of its own, which no permission rule covers",
     "takes-namespace": "takes the engine's tool, mcp or config object whole, or a member of $ by a computed name, so a call through it cannot be read",
     "reads-unread-code": "runs code from a place this check does not read",
 }
-# The values that loosen, by the key they are given to; and the words that are a finding wherever
-# they stand as a whole string.
+# The decision words that do not refuse, each with the route it is a finding by when it is given
+# to one of KEYS. EVERY word here is also a finding apart from those keys, by the route holds-<word>,
+# through the one function word_route below, for code and for data files alike: four rounds of
+# review each found a word that one rule held and another did not, so no rule names a word of its
+# own. tests/test-mod-approvals.sh section 4c reads the decision values out of the pinned mod API
+# types and fails for any that is not held both ways.
 LOOSE = {"allow": "answers-allow", "approve": "answers-allow", "ask": "answers-ask"}
 KEYS = ("decision", "permissionDecision", "behavior")
-WORDS = {"allow": "holds-allow", "updatedPermissions": "changes-permissions", "setMode": "changes-permissions",
+# The decision words with a use that decides nothing (a picker's id, a verb, a type's member name).
+# Apart from a decision key these pass where taken() below says the word cannot become a value. A
+# word not named here, allow today, passes nowhere.
+MAY_STAND = ("approve", "ask")
+WHAT.update({"holds-" + w: f"holds the word {w} where a decision could be computed or read from it (it passes only as the value of a property that is no decision key, in a comparison, or in a type's union or first or last argument)" for w in MAY_STAND})
+# The other words that are a finding wherever they stand as a whole string.
+WORDS = {"updatedPermissions": "changes-permissions", "setMode": "changes-permissions",
          "bypassPermissions": "changes-permissions", "permissionMode": "changes-permissions"}
-# The word that is a finding wherever it stands but where taken() below says it cannot become a
-# value, the comparisons whose answer is true or false, and the characters operators are made of.
-APART = "ask"
+# The comparisons whose answer is true or false, and the characters operators are made of.
 SAME = ("===", "!==", "==", "!=")
 SIGNS = frozenset("=!<>|&?:+-*/%^~")
 LITERAL = re.compile(r"(['\"`])([A-Za-z_$][\w$]*)\1\Z")
 MEMBER = r"\s*(?:\?\.|\.)\s*"
+# The names that approve or set the mode by being a KEY, whatever they are given: allow (what
+# approves there is true, which no rule for a word can hold) and permissionMode. Each is a finding
+# wherever it stands as a name in code, written out, as a shorthand property or assigned to, and
+# passes only where it is read off something (x.allow, not assigned) or, for allow, is a key given
+# false, undefined or null.
+NAMES = {"allow": "answers-allow", "permissionMode": "changes-permissions"}
+NAME = re.compile(r"(?<![\w$])(" + "|".join(NAMES) + r")(?![\w$])")
+ASSIGNED = re.compile(r"\s*(?:\*\*|<<|>>>?|&&|\|\||\?\?|[-+*/%&|^])?=(?!=)")
+REFUSES = re.compile(r"\s*\??\s*:\s*(?:false|undefined|null)\s*(?:[,;})]|\Z)")
 IN_CODE = (
-    (re.compile(r"\ballow\s*:\s*true\b"), "answers-allow"),
     (re.compile(r"\bupdatedPermissions\b"), "changes-permissions"),
-    (re.compile(r"\bpermissionMode\s*:"), "changes-permissions"),
     (re.compile(r"\$" + MEMBER + r"config" + MEMBER + r"set\b"), "changes-permissions"),
     (re.compile(r"\b(?:tool|mcp)" + MEMBER + r"call\b"), "own-tool-call"),
     (re.compile(r"\$" + MEMBER + r"(?:tool|mcp|config)\b(?!" + MEMBER + r"[A-Za-z_$])"), "takes-namespace"),
     (re.compile(r"\$\s*(?:\?\.)?\s*\["), "takes-namespace"),
 )
 IMPORT = re.compile(r"(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)(['\"`])([^'\"`\n]+)\1")
-IN_DATA = re.compile(r"\"(allow|updatedPermissions|setMode|bypassPermissions|permissionMode)\"")
-APART_IN_DATA = re.compile(r"\"" + APART + r"\"")
+# A word in a file of the mod that is not its code: in a .json file as JSON writes a string, in
+# any other file (a script, a .yaml, a text file) inside quotes of any kind.
+IN_DATA = re.compile(r"\"(" + "|".join(list(LOOSE) + list(WORDS)) + r")\"")
+IN_OTHER = re.compile(r"(['\"`])(" + "|".join(list(LOOSE) + list(WORDS)) + r")\1")
 KEY_IN_DATA = re.compile(r"\"([^\"\\\n]*)\"\s*:\s*\Z")
 ROW = ("mod", "file", "route", "statement", "issue", "reason")
 unread = 0
@@ -164,6 +188,18 @@ def unread_place(path, mod_folder):
     if ".test." in parts[-1]:
         return "it is a test file"
     return None
+
+
+def word_route(word, key, apart):
+    """The route by which a decision word (one of LOOSE) is a finding, or None where it passes.
+    key is the key the word is given to, or None. apart is whether it stands where it cannot
+    become a value a decision is made from, which only a word in MAY_STAND is ever asked. The one
+    rule for every decision word, in code and in a data file."""
+    if key in KEYS:
+        return LOOSE[word]
+    if word in MAY_STAND and apart:
+        return None
+    return "holds-" + word
 
 
 def read_source(text, jsx, path, mod_folder, add):
@@ -301,12 +337,19 @@ def read_source(text, jsx, path, mod_folder, add):
             if not m:
                 continue
             word = m.group(2)
-            if word in LOOSE and key_before(s) in KEYS:
-                add(s, LOOSE[word])
+            if word in LOOSE:
+                route = word_route(word, key_before(s), word in MAY_STAND and taken(s, e))
+                if route:
+                    add(s, route)
             elif word in WORDS:
                 add(s, WORDS[word])
-            elif word == APART and not taken(s, e):
-                add(s, "holds-" + APART)
+    for m in NAME.finditer(code):
+        before = code[: m.start()].rstrip()
+        if before.endswith(".") and not before.endswith("...") and not ASSIGNED.match(code, m.end()):
+            continue
+        if m.group(1) == "allow" and not before.endswith(".") and REFUSES.match(code, m.end()):
+            continue
+        add(m.start(), NAMES[m.group(1)])
     for pattern, route in IN_CODE:
         for m in pattern.finditer(code):
             add(m.start(), route)
@@ -438,13 +481,16 @@ def main():
                 continue
             files += 1
             read_source(text, is_jsx(path), path, folder, lambda i, route, path=path, text=text: add_at(path, text, i, route))
-        # The data files beside the code, which the code could read a decision from.
+        # Every other file of the mod, which its code could read a decision from or run for
+        # one: a .json file, a script, any data file. A source file is code, read above, or a
+        # test file or a .d.ts, which is no session's code.
         for base, dirs, names in os.walk(folder, onerror=unlisted):
             dirs[:] = sorted(d for d in dirs if d not in NOT_MOD_CODE)
             for name in sorted(names):
-                if not name.endswith(".json"):
+                if name.endswith(SOURCE):
                     continue
                 path = os.path.join(base, name)
+                json_file = name.endswith(".json")
                 try:
                     with open(path, errors="replace") as f:
                         text = f.read()
@@ -452,16 +498,19 @@ def main():
                     cannot(f"{os.path.relpath(path, root)} cannot be read ({e}), so whether it holds a decision is not known.")
                     continue
                 files += 1
-                for m in IN_DATA.finditer(text):
-                    add_at(path, text, m.start(), WORDS[m.group(1)])
-                # The word ask in a data file passes only as the value of a key that is no
-                # decision key, as it does in code: a list's element, or a key of that name, is found.
-                for m in APART_IN_DATA.finditer(text):
-                    key = KEY_IN_DATA.search(text, max(0, m.start() - 400), m.start())
-                    if key is None:
-                        add_at(path, text, m.start(), "holds-" + APART)
-                    elif key.group(1) in KEYS:
-                        add_at(path, text, m.start(), LOOSE[APART])
+                # A decision word in a data file is read by the rule code is read by: beside a
+                # decision key it answers, and apart from one it passes only as the value of some
+                # other key, so a list's element is found. Only a .json file has keys this check
+                # can read, so in any other file the quoted word is found wherever it stands.
+                for m in (IN_DATA if json_file else IN_OTHER).finditer(text):
+                    word = m.group(m.lastindex)
+                    if word in WORDS:
+                        add_at(path, text, m.start(), WORDS[word])
+                        continue
+                    key = KEY_IN_DATA.search(text, max(0, m.start() - 400), m.start()) if json_file else None
+                    route = word_route(word, key.group(1) if key else None, key is not None)
+                    if route:
+                        add_at(path, text, m.start(), route)
         read_modules(mod, folder, add_at)
 
     found = allowed = 0
@@ -481,7 +530,8 @@ def main():
         print(f"{P}Claude Code's built in guard is off on both Macs (#876, #3681), so nothing but this check stops a mod's approval beating a deny rule. Take the statement out, or have Dan decide on an issue whether it is allowed by name in {list_path}.")
     print(f"{P}{len(mods)} mods checked in {root}, {files} files read; {found} found, {allowed} allowed by name, {len(gone)} listed but gone ({list_path}). "
           "Not read: a decision built while running from pieces of a word or read from outside the mod's folder (a file elsewhere, the network, a setting), "
-          "the word ask read back out of a property it was given to (held.id, or by taking the object apart), an allow: given anything but the word true, "
+          "a decision word written without quotes in a file of the mod that is not its code, "
+          "the word approve or ask read back out of a property it was given to (held.id, or by taking the object apart), "
           "a call made through a renamed copy of the engine's tool object, a hook that passes on the engine's verdict for a different call than the one asked about, "
           "what a mod does itself with $.process.run, $.fs or $.http (no tool call, and no permission rule covers it), a package a mod imports by name, "
           "each mod's tests folder, and any plugin that is not under this folder.")
@@ -491,7 +541,7 @@ def main():
 # Anything this check did not foresee, its shared reader failing to load included, is its own
 # answer: exit 4 with words, never a traceback's exit 1, which here means a statement was found (L10).
 try:
-    from ts_source import CODE, COMMENT, NOT_MOD_CODE, STRING, code_only, hook_events, is_jsx, kinds, mod_code
+    from ts_source import CODE, COMMENT, NOT_MOD_CODE, SOURCE, STRING, code_only, hook_events, is_jsx, kinds, mod_code
     code = main()
 except Exception as e:
     traceback.print_exc()
