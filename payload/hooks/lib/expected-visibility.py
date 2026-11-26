@@ -56,12 +56,13 @@ NOT_ONE_OF = "the first line of its %s that is not a comment is not public, priv
 # at a load average near 40. It is one bound and not one per read so that the notice, whose hook
 # has a 10 second timeout and then asks GitHub for up to 4, still gets to say it could not tell: cut
 # off by that timeout it would say nothing, which reads as checked and as expected (the lessons
-# review of cce2f6f). A read that outlasts it, one not made because the time had passed, and a git
+# review of cce2f6f). test-repo-visibility-notice.sh holds that timeout above this bound, gh's and
+# 3 seconds more, so raising this fails there until the timeout follows (the review of e1fc74a). A read that outlasts it, one not made because the time had passed, and a git
 # that cannot be run are SILENT, never no checkout, no origin or no file: each of those would send
 # the publish gate to GitHub's copy in the place of this checkout's own, which can say what
 # GitHub's does not (the lessons review of 3a7131c). EXPECTED_VISIBILITY_GIT_SECONDS replaces the
 # bound for the suites, and is read only under HOOK_TESTS_RUNNING=1.
-GIT_SECONDS = 4
+GIT_SECONDS = 3
 
 _COMMENT = re.compile(r"[ \t\r\f\v]*#")
 _FIELDS = re.compile(r"[ \t]+")

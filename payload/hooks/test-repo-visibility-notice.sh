@@ -334,8 +334,18 @@ check "the file holding the hooks block is beside the hooks: ${SETTINGS:-none fo
 holds(){ jq -e "$1" "$SETTINGS" >/dev/null 2>&1; }   # $1 = a jq test of the hooks block
 check "the hook is wired to SessionStart" \
   holds '[.hooks.SessionStart[].hooks[].command] | any(endswith("/hooks/repo-visibility-notice.sh"))'
-check "once, with a timeout longer than its own bound" \
-  holds '[.hooks.SessionStart[].hooks[] | select(.command | endswith("/hooks/repo-visibility-notice.sh")) | .timeout] | length == 1 and all(. >= 10)'
+# The hook can spend two bounds back to back before it speaks: the reader's one bound for all of its
+# git reads, then gh's. Its timeout has to outlast their sum, with room to start bash, Python twice
+# and git (3 seconds, a setting, not measured), or the hook is cut off before it can say it could
+# not tell, and no line reads as checked and as expected (the lessons review of e1fc74a). Both
+# bounds are read from where they are set, so raising either one fails here until the timeout follows.
+gh_bound="$(sed -n 's/^BOUND_SECONDS=\([0-9][0-9]*\)$/\1/p' "$HOOK")"
+git_bound="$(sed -n 's/^GIT_SECONDS = \([0-9][0-9]*\)$/\1/p' "$HERE/lib/expected-visibility.py")"
+check "the hook's bound on gh is a whole number of seconds where this can read it: '${gh_bound}'" [ -n "$gh_bound" ]
+check "the reader's bound on git is a whole number of seconds where this can read it: '${git_bound}'" [ -n "$git_bound" ]
+timeout_needed=$(( ${gh_bound:-999} + ${git_bound:-999} + 3 ))
+check "once, with a timeout that outlasts both bounds and 3 seconds more (gh $gh_bound + git $git_bound + 3 = $timeout_needed)" \
+  holds '[.hooks.SessionStart[].hooks[] | select(.command | endswith("/hooks/repo-visibility-notice.sh")) | .timeout] | length == 1 and all(. >= '"$timeout_needed"')'
 check "and to no other event, where it would be a network call on every prompt or tool call" \
   holds '[.hooks | to_entries[] | select(.key != "SessionStart") | .value[].hooks[].command] | all(endswith("/hooks/repo-visibility-notice.sh") | not)'
 check "(control) the same test of the hooks block can fail: a hook that is not there is not found" \

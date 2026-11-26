@@ -2042,7 +2042,10 @@ what it refuses did not: `test-gh-write-aliases.sh` holds the seven forms' decis
   yet, is judged by origin's copy as last fetched, since a session started in a stale checkout
   is the one that most needs telling. Silence means checked and as expected, so every way of not knowing
   is said as not knowing (L98). One `gh repo view` per session start, bounded at 4 seconds inside
-  the hook's 10 second timeout, both settings, not measured.
+  the hook's 10 second timeout, both settings, not measured. Since the file is read through
+  `lib/expected-visibility.py`, its git reads share one bound of 3 seconds before that, also a
+  setting, and the suite holds the timeout above the two bounds and 3 seconds more, read from
+  where each is set, so a hook cut off mid wait cannot leave a session with no line at all.
 
 **A repository that declares itself public is judged while it is private.** Decided by Dan, by
 picker on 2026-11-25, as the comment of that date on #3582 records it: "Yes, check it anyway
