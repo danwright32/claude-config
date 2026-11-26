@@ -66,8 +66,9 @@
 #
 # An announce pull request also merges only on wording Dan approved (claude-config#3666): the
 # Announcement block as GitHub holds it at the merge must hash to an approval lib/announce-approval.py
-# holds for this repository, from his own picker answer about the file he was shown. The last
-# section of this file says how, and marks the wording used once the merge is let through.
+# holds for this repository, from his own picker answer about the file he was shown, and one
+# approval covers one pull request (Dan, 2026-11-25). The last section of this file says how, and
+# records the pull request as the one using the approval when the merge is let through.
 #
 # Seams, for the tests: CHANGELOG_REGISTRY points at a different registry file, and
 # ANNOUNCE_APPROVALS_DIR (read by lib/announce-approval.py) at a different record of approved wording.
@@ -526,28 +527,52 @@ fi
 # and sleep mode can answer one with Dan asleep (db-write-ask.sh). Only his picker clears it. And a
 # check that gives no verdict (python3 or node missing, the library throwing, an answer that cannot
 # be read) is refused in its own words, since nothing at all is never an approval (L98).
+#
+# ONE APPROVAL COVERS ONE PULL REQUEST (Dan, 2026-11-25, by picker: "One approval, one pull
+# request"). The question names this pull request and claims: the library, holding a lock on the
+# record, decides and writes this pull request down as the one using the approval in one step, so
+# of two pull requests reaching this gate at once on one approval exactly one is let through. The
+# pull request that used an approval may try its merge again; a different one carrying the same
+# wording is refused and asks him again. An approval nobody has used covers whichever pull request
+# gets here first. And when the claim cannot be written the merge is REFUSED, saying what could not
+# be written and where (Dan, 2026-11-25, by picker: "Refuse the merge"): let through unrecorded, the
+# next pull request with the same wording would merge on the same approval. This is the last thing
+# that can refuse, so a pull request refused for anything else has claimed nothing.
+#
+# The library's answer says which of these it is (.state), so each refusal's first sentence says
+# what was found and no other (L11): wording he never approved, an approval another pull request
+# used, or a use that could not be recorded.
 block=$(printf '%s' "$view" | jq -r '.body // ""' | node "$HOOK_DIR/lib/changelog-entry.js" announcement-hash --body 2>/dev/null)
 block_hash=$(printf '%s' "$block" | jq -r '.hash // ""' 2>/dev/null)
 approval=""
 if [ -n "$block_hash" ] && command -v python3 >/dev/null 2>&1; then
-  approval=$(printf '%s' "$payload" | python3 -B "$HOOK_DIR/lib/announce-approval.py" check --repo "$slug" --hash "$block_hash" 2>/dev/null)
+  approval=$(printf '%s' "$payload" | python3 -B "$HOOK_DIR/lib/announce-approval.py" check --repo "$slug" --hash "$block_hash" --pr "$number" --claim 2>/dev/null)
 fi
-case "$(printf '%s' "$approval" | jq -r 'if .approved == true then "yes" elif .approved == false then "no" else "" end' 2>/dev/null)" in
+case "$(printf '%s' "$approval" | jq -r 'if .approved == true then "yes" elif .approved == false then (if .state == "used" or .state == "unrecorded" then .state else "no" end) else "" end' 2>/dev/null)" in
   yes) ;;
   no)
     deny "PR #$number cannot merge as it stands: it carries changelog/announce, and its announcement is not wording Dan approved. $(printf '%s' "$approval" | jq -r '.why // ""') $(printf '%s' "$approval" | jq -r '.how // ""')
 
 This is checked at merge time because the post is drafted for agents exactly as the pull request holds it once the change is live, so an edit to it after he approved, by any route, is asked about again. $not_covered" ;;
+  used)
+    deny "PR #$number cannot merge as it stands: it carries changelog/announce, and Dan's approval of its announcement was used by another pull request. $(printf '%s' "$approval" | jq -r '.why // ""') $(printf '%s' "$approval" | jq -r '.how // ""')
+
+This is checked at merge time because each announcement that merges is drafted for agents once the change is live, so the same post in a second pull request is a second post, and he is asked about it. $not_covered" ;;
+  unrecorded)
+    deny "PR #$number cannot merge as it stands: it carries changelog/announce, and that it is using Dan's approval of its announcement could not be recorded. $(printf '%s' "$approval" | jq -r '.why // ""') $(printf '%s' "$approval" | jq -r '.how // ""')
+
+This is checked at merge time because one approval of his covers one pull request, and a merge let through unrecorded would leave that approval open to the next pull request carrying the same wording. $not_covered" ;;
   *)
     deny "Cannot tell whether Dan approved the announcement in PR #$number: hashing its Announcement block through lib/changelog-entry.js and asking lib/announce-approval.py produced no verdict at all (python3 and node both run them). That is the gate failing, not the wording being approved, so it refuses rather than merging blind. Reinstall the hooks with claude-sync pull. $not_covered" ;;
 esac
 
-# MARKED USED. The gate is letting this merge go ahead, so the wording is recorded as used by this
-# pull request, with each issue the pull request closes and that issue's milestone: what the later
-# check that a feature Dan said yes to announcing does not finish under another label reads. It is
-# written before the merge runs, so it says this gate let it through, never that GitHub merged it.
-# Nothing here can stop the merge: issues that cannot be read are recorded as unread with why, and a
-# line that cannot be written is said beside the merge.
+# THE ISSUES IT CLOSES. The gate is letting this merge go ahead, and the claim above already recorded
+# this pull request as the one using the approval. Beside it goes each issue the pull request closes
+# with that issue's milestone: what the later check that a feature Dan said yes to announcing does
+# not finish under another label reads. Both are written before the merge runs, so they say this
+# gate let it through, never that GitHub merged it. Nothing from here on can stop the merge: issues
+# that cannot be read are recorded as unread with why, and a line that cannot be written is said
+# beside the merge.
 said=$(printf '%s' "$approval" | jq -r '(.notes // []) | join(" ")' 2>/dev/null)
 account=$(printf '%s' "$envelope" | jq -r '.account // ""' 2>/dev/null)
 closes=""; closes_unread=""
@@ -566,7 +591,7 @@ fi
 used=$(python3 -B "$HOOK_DIR/lib/announce-approval.py" used --repo "$slug" --hash "$block_hash" --pr "$number" \
   ${closes:+--closes "$closes"} ${closes_unread:+--unread "$closes_unread"} 2>/dev/null)
 if [ "$(printf '%s' "$used" | jq -r '.written // false' 2>/dev/null)" != "true" ]; then
-  said="${said:+$said }The wording of PR #$number was not marked used on this Mac's record of approved announcements ($(printf '%s' "$used" | jq -r '.why // ""' 2>/dev/null)), so the check that a feature Dan said yes to announcing does not finish under another label will not find this merge there."
+  said="${said:+$said }PR #$number is recorded as the one using Dan's approval, but the issues it closes could not be added to this Mac's record of approved announcements ($(printf '%s' "$used" | jq -r '.why // ""' 2>/dev/null)), so the check that a feature Dan said yes to announcing does not finish under another label will not find them there."
 fi
 [ -n "$said" ] && hook_allow_notice "$said" PreToolUse
 

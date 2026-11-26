@@ -1194,6 +1194,57 @@ out=$(FAKE_NODE_JSON="$CLOSING" run_hook "$dir" "$MERGE 7 --squash")
 if [ -z "$out" ]; then pass; else fail "#3666 the merge was refused, or drew a notice, once its closing issues could be read: $out"; fi
 if says "$(used_line "$dir")" '"issue": 12' && says "$(used_line "$dir")" '"milestone": "Hand back"' && says "$(used_line "$dir")" '"issue": 13' && says "$(used_line "$dir")" '"milestone": null'; then pass
 else fail "#3666 the used line does not name each issue the pull request closes with its milestone: $(used_line "$dir")"; fi
+
+# ONE APPROVAL COVERS ONE PULL REQUEST (Dan, 2026-11-25, by picker: "One approval, one pull
+# request"). Pull request 7 used his approval above. Pull request 8, carrying the same wording, is
+# not approved and asks him again, in this session (which holds the picker 7 used) and in a later one.
+pr_number() {  # $1 = fixture dir, $2 = the number its pull request now carries
+  jq -c --argjson n "$2" '.number = $n | .url = "https://github.com/acme/widget/pull/\($n)"' "$1/pr.json" > "$1/pr.json.new" && mv "$1/pr.json.new" "$1/pr.json"
+}
+used_by() { grep -c "\"kind\": \"used\".*\"pr\": $2[,}]" "$1/approvals/record.jsonl" 2>/dev/null || true; }
+if grep '"kind": "used"' "$dir/approvals/record.jsonl" | head -1 | grep -q '"claim": true.*"pr": 7'; then pass
+else fail "#3666 the first line recording pull request 7's use of the approval is not its claim: $(cat "$dir/approvals/record.jsonl")"; fi
+pr_number "$dir" 8
+for talk in "" "$dir/talk.jsonl"; do
+  out=$(TALK="$talk" run_hook "$dir" "$MERGE 8 --squash")
+  if asks_dan "$out" && says "$out" "used by another pull request" && says "$out" "pull request 7 used that approval" && says "$out" "one approval covers one pull request"; then pass
+  else fail "#3666 R2: a second pull request merged, or was refused in other words, on wording whose one approval pull request 7 used (transcript '${talk:-none}'): $out"; fi
+done
+if [ "$(used_by "$dir" 8)" = 0 ]; then pass; else fail "#3666 a refused pull request was recorded as using the approval: $(cat "$dir/approvals/record.jsonl")"; fi
+# The override does not clear it.
+out=$(run_hook "$dir" "ALLOW_UNTAGGED_MERGE=1 $MERGE 8 --squash")
+if asks_dan "$out" && says "$out" "used by another pull request"; then pass
+else fail "#3666 R2: the override let a second pull request merge on an approval another one used: $out"; fi
+# Still possible: the pull request that used it tries its merge again, and nothing more is recorded.
+pr_number "$dir" 7
+before=$(used_by "$dir" 7)
+out=$(run_hook "$dir" "$MERGE 7 --squash")
+if [ -z "$out" ] && [ "$(used_by "$dir" 7)" = "$before" ]; then pass
+else fail "#3666 R2 still possible: the pull request that used the approval was refused its merge again, or was recorded again: $out $(cat "$dir/approvals/record.jsonl")"; fi
+# Still possible: asked again, his second approval of the same wording covers the second pull request.
+aaf_talk "$dir/talk.jsonl" bash "$AAF_BBEDIT --front-window $shown_file"
+aaf_talk "$dir/talk.jsonl" ask acme/widget "$shown_file"
+pr_number "$dir" 8
+out=$(TALK="$dir/talk.jsonl" run_hook "$dir" "$MERGE 8 --squash")
+if [ -z "$out" ] && [ "$(used_by "$dir" 8)" -ge 1 ]; then pass
+else fail "#3666 R2 still possible: a second pull request was refused after Dan approved the same wording a second time, or was not recorded as using it: $out $(cat "$dir/approvals/record.jsonl")"; fi
+rm -rf "$dir"
+
+# A USE THAT CANNOT BE RECORDED REFUSES THE MERGE (Dan, 2026-11-25, by picker: "Refuse the merge").
+# The record holds his approval and can no longer be written: the merge is refused saying what could
+# not be written and where, and the remedy is the record, not asking him again.
+dir=$(make_repo acme/widget "$ANNOUNCE_FULL" "$REGISTRY_ANNOUNCES")
+approved_on_record "$dir"
+chmod 400 "$dir/approvals/record.jsonl"; chmod 500 "$dir/approvals"
+out=$(run_hook "$dir" "$MERGE 7 --squash")
+chmod 700 "$dir/approvals"; chmod 600 "$dir/approvals/record.jsonl"
+if denied "$out" && says "$out" "could not be recorded" && says "$out" "$dir/approvals/record.jsonl, could not be written" \
+  && says "$out" "run the same merge again" && ! says "$out" "AskUserQuestion" && ! says "$out" "is not wording Dan approved" \
+  && says "$out" "ALLOW_UNTAGGED_MERGE=1 does not cover"; then pass
+else fail "#3666 R2: an announce pull request merged, or was refused in other words, when its use of Dan's approval could not be recorded: $out"; fi
+out=$(run_hook "$dir" "ALLOW_UNTAGGED_MERGE=1 $MERGE 7 --squash")
+if [ -z "$out" ] && [ "$(used_by "$dir" 7)" -ge 1 ]; then pass
+else fail "#3666 R2 still possible: the same merge was refused once the record could be written, or was not recorded: $out"; fi
 rm -rf "$dir"
 
 # A check that fails is not an approval (L98). Driven with a copy of the hooks whose approval

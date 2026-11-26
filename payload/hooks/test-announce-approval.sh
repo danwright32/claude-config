@@ -311,6 +311,164 @@ check "R2 a used line approves nothing" "$([[ "$r" == "no|"* ]] && echo ok || ec
 r="$(used --repo acme/widget --hash nothex --pr 9)"
 check "a used line naming no hash is refused, and said" "$([[ "$r" == *'"written": false'* ]] && echo ok || echo "$r")"
 
+echo "one approval covers one pull request (Dan, 2026-11-25: \"One approval, one pull request\")"
+# for_pr <transcript> <repo> <hash> <pull request number, or ""> [claim] [session]: the library's
+# answer for one pull request, as "<yes|no>|<state>|<why>|<how>|<notes>". With claim it is the merge
+# gate's question, which records the pull request as using the approval when it is let through.
+for_pr() {
+  python3 -c 'import json, os, sys
+d = {"session_id": sys.argv[2], "transcript_path": sys.argv[1], "hook_event_name": "PreToolUse", "tool_name": "Bash"}
+if os.environ.get("AGENT") == "1":
+    d["agent_id"] = "a9bba4c0ffee"
+print(json.dumps(d))' "$1" "${6:-s1}" \
+    | ANNOUNCE_APPROVALS_DIR="${STORE_USED:-$STORE}" python3 -B "$LIB" check --repo "$2" --hash "$3" ${4:+--pr "$4"} ${5:+--claim} \
+    | python3 -c 'import json, sys
+d = json.load(sys.stdin)
+print(("yes" if d["approved"] is True else "no") + "|" + str(d.get("state")) + "|" + d["why"] + "|" + d["how"] + "|" + " ".join(d["notes"]), end="")'
+}
+# approval_line <picker>: one approval of POST for acme/widget on the record, as a hook run writes it.
+approval_line() { mkdir -p "$STORE_USED"; printf '{"kind": "approved", "repo": "acme/widget", "hash": "%s", "session": "s0", "picker": "%s", "at": "2026-11-25T00:00:00Z"}\n' "$H" "$1" >> "$STORE_USED/record.jsonl"; }
+used_lines() { grep -c "\"kind\": \"used\".*\"pr\": $1[,}]" "$STORE_USED/record.jsonl" 2>/dev/null || true; }
+STORE_USED="$WORK/store-one"
+T="$WORK/one.jsonl"; new_talk "$T"
+approval_line toolu_a
+# An approval nobody has used covers whichever pull request asks, and a question that claims nothing
+# (the label hook's) writes nothing.
+r="$(for_pr "$T" acme/widget "$H" 12)"
+check "an approval nobody has used covers a pull request that asks about it" "$([[ "$r" == "yes|approved|"* ]] && echo ok || echo "$r")"
+check "and asking without claiming records no use" "$([ "$(grep -c '"kind": "used"' "$STORE_USED/record.jsonl")" = 0 ] && echo ok || cat "$STORE_USED/record.jsonl")"
+r="$(for_pr "$T" acme/widget "$H" "")"
+check "nor does a command naming no pull request, while an approval is unused" "$([[ "$r" == "yes|approved|"* ]] && echo ok || echo "$r")"
+# The merge gate's question: pull request 7 uses the approval, and is recorded as using it.
+r="$(for_pr "$T" acme/widget "$H" 7 claim)"
+check "one pull request uses the approval at the merge" "$([[ "$r" == "yes|approved|"* ]] && echo ok || echo "$r")"
+check "and is recorded as the one that used it, its issues not read yet" "$([ "$(used_lines 7)" = 1 ] && grep '"pr": 7' "$STORE_USED/record.jsonl" | grep -q '"closes": null' && echo ok || cat "$STORE_USED/record.jsonl")"
+# The same pull request again: a merge that failed is tried again without asking him.
+r="$(for_pr "$T" acme/widget "$H" 7 claim)"
+check "the same pull request may try its merge again" "$([[ "$r" == "yes|approved|"* ]] && echo ok || echo "$r")"
+check "and is not recorded a second time" "$([ "$(used_lines 7)" = 1 ] && echo ok || cat "$STORE_USED/record.jsonl")"
+used --repo acme/widget --hash "$H" --pr 7 --closes '[{"issue": 12, "milestone": "Hand back"}]' >/dev/null
+check "the line naming the issues it closes is added after the claim" "$([ "$(used_lines 7)" = 2 ] && grep '"pr": 7' "$STORE_USED/record.jsonl" | tail -n 1 | grep -q '"issue": 12' && echo ok || cat "$STORE_USED/record.jsonl")"
+r="$(for_pr "$T" acme/widget "$H" 7 claim)"
+check "and the same pull request still goes through after it" "$([[ "$r" == "yes|approved|"* ]] && [ "$(used_lines 7)" = 2 ] && echo ok || echo "$r")"
+# A different pull request carrying the same wording asks him again.
+r="$(for_pr "$T" acme/widget "$H" 8 claim)"
+check "R2 a different pull request with the same wording is refused at the merge" "$([[ "$r" == "no|used|"* ]] && echo ok || echo "$r")"
+check "the refusal names the pull request that used the approval, and that one covers one" "$([[ "$r" == *"pull request 7"* && "$r" == *"one approval covers one pull request"* ]] && echo ok || echo "$r")"
+check "and says how to ask him again" "$([[ "$r" == *"AskUserQuestion"* && "$r" == *"Approve the wording"* ]] && echo ok || echo "$r")"
+check "a refused pull request is not recorded as using anything" "$([ "$(used_lines 8)" = 0 ] && echo ok || cat "$STORE_USED/record.jsonl")"
+r="$(for_pr "$T" acme/widget "$H" 8)"
+check "and is refused before the merge too, where the label hook asks" "$([[ "$r" == "no|used|"* ]] && echo ok || echo "$r")"
+r="$(for_pr "$T" acme/widget "$H" 7)"
+check "the pull request that used it is still approved there" "$([[ "$r" == "yes|approved|"* ]] && echo ok || echo "$r")"
+r="$(for_pr "$T" acme/widget "$H" "")"
+check "a command naming no pull request is refused once the approval is used, saying it names none" "$([[ "$r" == "no|used|"*"names no pull request"* ]] && echo ok || echo "$r")"
+# The same approval written to the record twice (two hook runs at once) is one approval.
+approval_line toolu_a
+r="$(for_pr "$T" acme/widget "$H" 8 claim)"
+check "one approval on the record twice is still one approval" "$([[ "$r" == "no|used|"* ]] && echo ok || echo "$r")"
+# A second approval of the same wording lets a second pull request through.
+approval_line toolu_b
+r="$(for_pr "$T" acme/widget "$H" 8 claim)"
+check "a second approval of the same wording lets a second pull request through" "$([[ "$r" == "yes|approved|"* ]] && [ "$(used_lines 8)" = 1 ] && echo ok || echo "$r")"
+r="$(for_pr "$T" acme/widget "$H" 9 claim)"
+check "and a third is refused, naming both that used them" "$([[ "$r" == "no|used|"*"pull requests 7 and 8"* ]] && echo ok || echo "$r")"
+r="$(for_pr "$T" acme/widget "$H" 7 claim)"
+check "the first still goes through" "$([[ "$r" == "yes|approved|"* ]] && echo ok || echo "$r")"
+# A use recorded with no approval behind it covers nothing: the first uses, as many as there are
+# approvals, are the ones covered, so a used line never approves by itself.
+STORE_USED="$WORK/store-one-forged"
+approval_line toolu_a
+used --repo acme/widget --hash "$H" --pr 7 >/dev/null
+used --repo acme/widget --hash "$H" --pr 8 >/dev/null
+r="$(for_pr "$T" acme/widget "$H" 8 claim)"
+check "R2 a use recorded beyond the approvals there are covers nothing" "$([[ "$r" == "no|used|"* ]] && echo ok || echo "$r")"
+r="$(for_pr "$T" acme/widget "$H" 7 claim)"
+check "and takes nothing from the pull request that used the approval first" "$([[ "$r" == "yes|approved|"* ]] && echo ok || echo "$r")"
+STORE_USED="$WORK/store-one-usedonly"
+mkdir -p "$STORE_USED"
+used --repo acme/widget --hash "$H" --pr 7 >/dev/null
+r="$(for_pr "$T" acme/widget "$H" 7 claim)"
+check "R2 a pull request recorded as using wording nobody approved is not approved" "$([[ "$r" == "no|unapproved|"*"has not approved this wording"* ]] && echo ok || echo "$r")"
+# In the session that asked him: his picker is one approval, kept with the picker it came from, and
+# asking him again about the same file in the same session is a second one.
+STORE_USED="$WORK/store-one-session"
+F="$(shown onesession)"; T="$WORK/onesession.jsonl"
+talk "$T" ask acme/widget "$F"
+HF="$(hash_file "$F")"
+r="$(for_pr "$T" acme/widget "$HF" 30 claim)"
+check "his picker in this session covers the pull request merged on it" "$([[ "$r" == "yes|approved|"* ]] && echo ok || echo "$r")"
+check "the approval is kept with the session and the picker it came from" "$(grep '"kind": "approved"' "$STORE_USED/record.jsonl" | grep '"session": "s1"' | grep -q '"picker": "toolu_ask' && echo ok || cat "$STORE_USED/record.jsonl")"
+r="$(for_pr "$T" acme/widget "$HF" 31 claim)"
+check "the same picker read again is no second approval" "$([[ "$r" == "no|used|"*"pull request 30"* ]] && [ "$(recorded)" = 1 ] && echo ok || echo "$r")"
+talk "$T" bash "$BBEDIT --front-window $F"
+talk "$T" ask acme/widget "$F"
+r="$(for_pr "$T" acme/widget "$HF" 31 claim)"
+check "asked again in the same session, his second approval covers the second pull request" "$([[ "$r" == "yes|approved|"* ]] && [ "$(recorded)" = 2 ] && echo ok || echo "$r")"
+# A subagent's merge uses the approval too: the use is recorded whoever makes the call.
+STORE_USED="$WORK/store-one-agent"
+F="$(shown oneagent)"; T="$WORK/oneagent.jsonl"
+talk "$T" ask acme/widget "$F"
+HF="$(hash_file "$F")"
+r="$(AGENT=1 for_pr "$T" acme/widget "$HF" 40 claim)"
+check "a subagent's merge on his picker is recorded as the use of it" "$([[ "$r" == "yes|approved|"* ]] && [ "$(used_lines 40)" = 1 ] && ! grep -q '"kind": "approved"' "$STORE_USED/record.jsonl" && echo ok || echo "$r")"
+r="$(for_pr "$T" acme/widget "$HF" 41 claim)"
+check "so the main session's merge of another pull request on the same picker is refused" "$([[ "$r" == "no|used|"*"pull request 40"* ]] && echo ok || echo "$r")"
+
+echo "two pull requests reaching the merge at once on one approval"
+# Each claim holds the record while it decides and writes (the pause widens the moment between the
+# two, so the case does not depend on luck): exactly one is let through, whichever came first.
+STORE_USED="$WORK/store-race"
+T="$WORK/race.jsonl"; new_talk "$T"
+approval_line toolu_a
+for n in 21 22 23 24; do
+  ( ANNOUNCE_APPROVAL_CLAIM_PAUSE=0.4 for_pr "$T" acme/widget "$H" "$n" claim > "$WORK/race-$n.out" 2>&1 ) &
+done
+wait
+won="$(cat "$WORK"/race-2?.out | grep -o 'yes|approved' | wc -l | tr -d ' ')"
+lost="$(cat "$WORK"/race-2?.out | grep -o 'no|used' | wc -l | tr -d ' ')"
+check "of four claims at once on one approval exactly one wins" "$([ "$won" = 1 ] && [ "$lost" = 3 ] && echo ok || echo "won=$won lost=$lost: $(cat "$WORK"/race-2?.out | cut -c1-120)")"
+check "and exactly one pull request is recorded as using it" "$([ "$(grep -c '"kind": "used"' "$STORE_USED/record.jsonl")" = 1 ] && echo ok || cat "$STORE_USED/record.jsonl")"
+winner="$(grep -l 'yes|approved' "$WORK"/race-2?.out | sed 's/.*race-\([0-9]*\)\.out/\1/')"
+check "the one recorded is the one that was let through" "$([ -n "$winner" ] && [ "$(used_lines "$winner")" = 1 ] && echo ok || echo "winner=$winner: $(cat "$STORE_USED/record.jsonl")")"
+
+echo "a use that cannot be recorded refuses the merge (Dan, 2026-11-25: \"Refuse the merge\")"
+# The record's folder cannot be made: his picker in this session still counts for a question that
+# claims nothing (above, "who may write the record"), but the merge is refused, since the next pull
+# request with the same wording could not be told from this one.
+STORE_USED="$WORK/store-noclaim/inner"
+printf 'not a folder\n' > "$WORK/store-noclaim"
+F="$(shown noclaim)"; T="$WORK/noclaim.jsonl"
+talk "$T" ask acme/widget "$F"
+HF="$(hash_file "$F")"
+r="$(for_pr "$T" acme/widget "$HF" 50 claim)"
+check "R2 a merge whose use of the approval cannot be recorded is refused" "$([[ "$r" == "no|unrecorded|"* ]] && echo ok || echo "$r")"
+check "the refusal says what could not be written and where" "$([[ "$r" == *"could not be written"* && "$r" == *"$STORE_USED/record.jsonl"* ]] && echo ok || echo "$r")"
+check "and that the remedy is the folder, not asking him again" "$([[ "$r" == *"run the same merge again"* && "$r" != *"AskUserQuestion"* ]] && echo ok || echo "$r")"
+r="$(for_pr "$T" acme/widget "$HF" 50)"
+check "the same picker still counts for a question that claims nothing" "$([[ "$r" == "yes|approved|"*"could not be saved"* ]] && echo ok || echo "$r")"
+# The record holds his approval and can be read, and can no longer be written.
+STORE_USED="$WORK/store-readonly"
+T="$WORK/readonly.jsonl"; new_talk "$T"
+approval_line toolu_a
+chmod 400 "$STORE_USED/record.jsonl"; chmod 500 "$STORE_USED"
+r="$(for_pr "$T" acme/widget "$H" 51 claim)"
+chmod 700 "$STORE_USED"; chmod 600 "$STORE_USED/record.jsonl"
+check "R2 a record that reads and cannot be written refuses the merge, naming it" "$([[ "$r" == "no|unrecorded|"*"$STORE_USED/record.jsonl, could not be written"* ]] && echo ok || echo "$r")"
+check "and nothing was recorded for it" "$([ "$(grep -c '"kind": "used"' "$STORE_USED/record.jsonl")" = 0 ] && echo ok || cat "$STORE_USED/record.jsonl")"
+r="$(for_pr "$T" acme/widget "$H" 51 claim)"
+check "still possible: the same merge goes through once the record can be written" "$([[ "$r" == "yes|approved|"* ]] && [ "$(used_lines 51)" = 1 ] && echo ok || echo "$r")"
+# Wording nobody approved is refused as that, whatever the record's folder can take.
+STORE_USED="$WORK/store-noclaim/inner"
+T="$WORK/noclaim-none.jsonl"; new_talk "$T"
+r="$(for_pr "$T" acme/widget "$H" 52 claim)"
+check "wording nobody approved is refused as not approved, not as a record that cannot be written" "$([[ "$r" == "no|unapproved|"*"has not approved this wording"* ]] && echo ok || echo "$r")"
+# The merge gate always names the pull request; a claim naming none records nothing and is refused.
+STORE_USED="$WORK/store-nopr"
+approval_line toolu_a
+r="$(for_pr "$T" acme/widget "$H" "" claim)"
+check "a claim naming no pull request is refused, and records nothing" "$([[ "$r" == "no|unrecorded|"*"no pull request number"* ]] && [ "$(grep -c '"kind": "used"' "$STORE_USED/record.jsonl")" = 0 ] && echo ok || echo "$r")"
+
 unset STORE_USED
 
 echo "the record is this suite's own"

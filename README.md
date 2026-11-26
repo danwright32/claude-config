@@ -1850,10 +1850,18 @@ What is hashed is the FILE as it stands, never a hash the session supplies, by
 `hooks/lib/changelog-entry.js`'s `announcementHash`: the sha256 of the one normalised form (line
 endings, spaces at the ends of lines, outer blank lines) every comparison uses, so the file on this
 Mac and the block GitHub returns are hashed by one function. A hook run that reads his Approve
-writes `{"kind": "approved", "repo", "hash", "at", "session"}` to
+writes `{"kind": "approved", "repo", "hash", "at", "session", "picker"}` to
 `~/.claude/state/announce-approvals/record.jsonl`, on this Mac only and never synced, so wording he
 approved merges unchanged in a later session or overnight. A subagent's call counts his picker for
 that call and writes nothing.
+
+One approval covers one pull request (Dan, 2026-11-25, by picker: "One approval, one pull request").
+An approval is one answer of his in one picker, counted once by the session and the picker it came
+from. An approval nobody has used covers whichever pull request reaches the merge gate first, so he
+can approve the wording before the pull request exists. The pull request that used it may try a
+failed merge again without asking him. A different pull request carrying the same wording is
+refused, named the pull request that used the approval, and told to ask him again; his second
+approval of the same wording covers it.
 
 Two hooks ask the library, and both DENY, never ask: a permission prompt shows the command and not
 the wording, and sleep mode can answer one with Dan asleep.
@@ -1861,16 +1869,25 @@ the wording, and sleep mode can answer one with Dan asleep.
 - `require-changelog-tag.sh`, at the merge. For an announce pull request it hashes the Announcement
   block as GitHub holds it and refuses unless that hash is approved for the repository, saying how
   to ask him. An edit to the wording after his approval, by any route including GitHub's own page,
-  changes the hash and is refused the same way; an edit elsewhere in the description is not. When it
-  lets the merge through it writes a `used` line naming the pull request and, for each issue the
-  pull request closes, its milestone (read in one GraphQL call; issues that cannot be read are
-  recorded as unread with why, and block nothing). The line says the gate let the merge go ahead,
-  never that GitHub merged it, and it grants nothing.
+  changes the hash and is refused the same way; an edit elsewhere in the description is not. Its
+  question names the pull request and claims the approval: holding a lock on the record, the
+  library decides and writes a `used` line marked `"claim": true` for that pull request in one
+  step, so of two pull requests reaching the gate at once on one approval, the first is let through
+  and the second is refused. When that claim cannot be written (the record's folder or file cannot
+  take a line, or its lock is held for 3 seconds), the merge is refused, saying what could not be
+  written and where (Dan, 2026-11-25, by picker: "Refuse the merge"); the remedy is the record, and
+  he is not asked again. After the claim it adds a `used` line naming, for each issue the pull
+  request closes, its milestone (read in one GraphQL call; issues that cannot be read are recorded
+  as unread with why, and block nothing). These lines say the gate let the merge go ahead, never
+  that GitHub merged it, and a `used` line approves nothing by itself.
 - `announce-label-ask.sh`, before the label goes on. It reads every Bash call naming the label:
   `gh pr create --label`, `gh pr edit --add-label`, `gh issue edit --add-label` and a `gh api`
   write to a pull request's labels are refused unless the wording the command would leave is
   approved, read from its `--body`, from the file its `--body-file` names, or from GitHub for an
-  edit that gives neither. A form the wording cannot be read from (`--fill`, a template, a body on
+  edit that gives neither. It asks for the pull request the command names by number or link (or
+  GitHub's answer names) and records nothing: the pull request that used an approval keeps it, and
+  any other, or a command naming none (a create), goes through only while an approval of that
+  wording is unused. A form the wording cannot be read from (`--fill`, a template, a body on
   standard input, a body file the same command writes, an empty body, more than one pull request,
   another GitHub write in the same call) is refused with the form to use. So is a call that puts
   the label on in more than one command: each is judged by reads of its own, and one per call is

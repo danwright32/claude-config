@@ -240,6 +240,36 @@ r="$(run "$EDIT")"
 check "so a later session's command goes through on the record" "$(passed "$r" && echo ok || echo "$r")"
 forget
 
+echo "one approval covers one pull request (Dan, 2026-11-25: \"One approval, one pull request\")"
+# Pull request 7 merged on his one approval of this wording: the merge gate recorded it as the one
+# that used it. The label still goes on pull request 7, however the command names it, and on no
+# other pull request, nor on one not yet made, until he approves the wording again.
+approve
+printf '{"kind": "used", "repo": "acme/widget", "hash": "%s", "pr": 7, "claim": true, "closes": null}\n' "$H" >> "$STORE/record.jsonl"
+for cmd in "gh pr edit 7 --add-label $LABEL" "gh pr edit --add-label $LABEL" "gh pr edit 7 --add-label $LABEL --body-file body.md" \
+           "gh pr edit https://github.com/acme/widget/pull/7 --add-label $LABEL --body-file body.md" \
+           "gh issue edit 7 --add-label $LABEL --body-file body.md" "gh api repos/acme/widget/issues/7/labels -f 'labels[]=$LABEL'"; do
+  r="$(run "$cmd")"
+  check "still possible: the label goes on the pull request that used his approval: $cmd" "$(passed "$r" && echo ok || echo "$r")"
+done
+for cmd in "$CREATE --body-file body.md" "gh pr edit 8 --add-label $LABEL --body-file body.md" \
+           "gh pr edit https://github.com/acme/widget/pull/8 --add-label $LABEL --body-file body.md" \
+           "gh pr edit some-branch --add-label $LABEL --body-file body.md"; do
+  r="$(run "$cmd")"
+  check "R10 the label on another pull request with the same wording is refused, and asks him again: $cmd" "$(asks_dan "$r" && [[ "$r" == *"pull request 7 used that approval"* && "$r" == *"one approval covers one pull request"* && "$r" != *"Dan has not approved"* ]] && echo ok || echo "$r")"
+done
+r="$(run "$CREATE --body-file body.md")"
+check "a command naming no pull request by number is told so" "$([[ "$r" == *"names no pull request by number"* ]] && echo ok || echo "$r")"
+# Approved a second time, the same wording goes on a second pull request.
+printf '{"kind": "approved", "repo": "acme/widget", "hash": "%s", "session": "s0", "picker": "toolu_second"}\n' "$H" >> "$STORE/record.jsonl"
+for cmd in "$CREATE --body-file body.md" "gh pr edit 8 --add-label $LABEL --body-file body.md"; do
+  r="$(run "$cmd")"
+  check "still possible: approved a second time, the wording goes on a second pull request: $cmd" "$(passed "$r" && echo ok || echo "$r")"
+done
+# The label hook only asks: the use of an approval is recorded at the merge, never here.
+check "the label hook records no use of an approval" "$([ "$(grep -c '"kind": "used"' "$STORE/record.jsonl")" = 1 ] && [ "$(wc -l < "$STORE/record.jsonl" | tr -d ' ')" = 3 ] && echo ok || cat "$STORE/record.jsonl")"
+forget
+
 echo "commands that put the label on no pull request"
 for cmd in "gh pr edit 7 --remove-label $LABEL" "gh pr view 7 --json labels | grep $LABEL" "gh pr list --label $LABEL" \
            "git commit -m 'explain $LABEL'" "grep -rn $LABEL payload/" "gh pr edit 7 --body 'relabel to $LABEL later'" \

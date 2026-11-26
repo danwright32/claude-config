@@ -14,7 +14,10 @@ Judged here, each only when the command names the label:
       Announcement block of its --body, or of the file its --body-file names, or, for an edit that
       gives neither, of the description GitHub holds now. A form the wording cannot be read from
       (--fill, a template, a body on standard input, a body file the same command writes, more
-      than one pull request) is refused with the form to use.
+      than one pull request) is refused with the form to use. One approval covers one pull request
+      (Dan, 2026-11-25): the pull request that used an approval keeps it, and any other, or a
+      command naming none by number, goes through only while an approval of that wording is
+      unused. This hook asks and records nothing; the merge gate records which one uses it.
   gh api writing to repos/<owner>/<name>/issues/<number>/labels
       The same, from the description GitHub holds. Any other gh api write naming the label is
       refused with the form to use, since nothing here can place it.
@@ -152,8 +155,9 @@ def _bounded(args, folder, seconds):
 
 def _github(selector, repo_flag, folder):
     """What GitHub holds for one pull request, through lib/merge-target.sh's reader (each logged in
-    account, an answer about another repository refused): (owner/name, its description), or Refuse.
-    selector is the number, link or branch the command names, empty for the current branch's."""
+    account, an answer about another repository refused): (owner/name, its description, its number
+    or None when GitHub's answer gave none), or Refuse. selector is the number, link or branch the
+    command names, empty for the current branch's."""
     script = ('. "$1/lib/merge-target.sh" 2>/dev/null && declare -F mt_pr_view >/dev/null || exit 3\n'
               'slug="${3:-$(mt_remote_slug)}"\n'
               'printf \'%s\\n\' "$slug"\n'
@@ -182,7 +186,10 @@ def _github(selector, repo_flag, folder):
                      + (" (" + str(said)[:200] + ")" if said else "") + ", so whether Dan approved it could not be "
                      "told. " + USE_BODY_FILE)
     m = PULL_URL.match(view.get("url") or "")
-    return ("%s/%s" % (m.group(1), m.group(2)) if m else slug.strip()), view["body"]
+    number = view.get("number")
+    if not isinstance(number, int) or isinstance(number, bool):
+        number = int(m.group(3)) if m else None
+    return ("%s/%s" % (m.group(1), m.group(2)) if m else slug.strip()), view["body"], number
 
 
 def _repo(args, envs, place, cwd):
@@ -255,9 +262,21 @@ def _given_body(kind, args, command, place, cwd, environ):
     return None
 
 
-def _wording_approved(repo, body, payload, notes):
+def _number(selector):
+    """The pull request a command names by number or by link, or None (a branch, or nothing)."""
+    m = PULL_URL.match(selector or "")
+    if m:
+        return int(m.group(3))
+    return int(selector) if (selector or "").isdigit() else None
+
+
+def _wording_approved(repo, body, payload, notes, pr=None):
     """Refuse unless the Announcement block of body, a description as bytes, is wording Dan approved
-    for repo."""
+    for repo, under an approval that pull request pr may use: one approval covers one pull request
+    (Dan, 2026-11-25), so the pull request that used one keeps it, and any other, or a command that
+    names none by number (a create, an edit by branch that gives its own description), is covered
+    only while an approval of that wording is unused. Nothing is recorded here: the merge gate
+    records which pull request uses an approval."""
     answer, why = approval.hash_of(body, True)
     if why is not None:
         raise Refuse("the wording could not be hashed (" + why + "), so whether Dan approved it could not be told.")
@@ -268,7 +287,7 @@ def _wording_approved(repo, body, payload, notes):
     if not answer["hash"]:
         raise Refuse("the `## Announcement` block of the description it would leave is empty, so there is no wording "
                      "Dan could have approved. " + approval.HOW_TO_ASK)
-    verdict = approval.check(repo, answer["hash"], payload)
+    verdict = approval.check(repo, answer["hash"], payload, pr)
     notes.extend(verdict["notes"])
     if verdict["approved"] is not True:
         raise Refuse(verdict["why"] + " " + verdict["how"])
@@ -315,9 +334,9 @@ def _judge_put(kind, args, envs, place, command, cwd, payload, notes, writes):
                          "description GitHub holds now may not be the one the label would sit on. Put the label on "
                          "in a command of its own, once the other has run: `gh pr edit <number> --add-label " + LABEL
                          + "`.")
-        repo, held = _github(selector, repo_flag, _run_dir(place, cwd))
-        return _wording_approved(repo, held.encode("utf-8", "replace"), payload, notes)
-    _wording_approved(repo_flag or _repo(args, envs, place, cwd), body, payload, notes)
+        repo, held, number = _github(selector, repo_flag, _run_dir(place, cwd))
+        return _wording_approved(repo, held.encode("utf-8", "replace"), payload, notes, number)
+    _wording_approved(repo_flag or _repo(args, envs, place, cwd), body, payload, notes, _number(selector))
 
 
 def _judge_rename(args):
@@ -364,8 +383,8 @@ def _judge_api(args, cwd, payload, notes):
     m = ISSUE_LABELS.fullmatch(endpoint)
     if m and (names or unseen):
         _one_judgment()
-        repo, held = _github(m.group(3), repo_of(m), cwd)
-        return _wording_approved(repo, held.encode("utf-8", "replace"), payload, notes)
+        repo, held, number = _github(m.group(3), repo_of(m), cwd)
+        return _wording_approved(repo, held.encode("utf-8", "replace"), payload, notes, number)
     if REPO_LABELS.fullmatch(endpoint):
         # Making the label in a repository: it goes on no pull request, so nothing is judged.
         return
@@ -459,8 +478,10 @@ def main():
     notes = []
     why = judge_label(command, cwd, data, notes)
     if why:
-        return deny("this command would put " + LABEL + " on wording Dan has not approved, or in a way that cannot be "
-                    "checked: " + why)
+        # True of every refusal below it: wording he never approved, an approval another pull
+        # request used, and a form that cannot be read (L11).
+        return deny("this command would put " + LABEL + " on a pull request with no approval of Dan's covering it, or "
+                    "in a way that cannot be checked: " + why)
     if notes:
         text = " ".join(notes)
         json.dump({"systemMessage": text,

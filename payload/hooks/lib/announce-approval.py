@@ -45,19 +45,40 @@ THE RECORD keeps an approval past the session: <record>/record.jsonl, where <rec
 $ANNOUNCE_APPROVALS_DIR when set (the tests) and else $CLAUDE_HOME/state/announce-approvals, on this
 Mac only (the state folder is never synced, as the record of approved test project lines is kept).
 One JSON object a line, each carrying its repository:
-    {"kind": "approved", "repo": "<owner/name>", "hash": "<sha256>", "at": "<when>", "session": "<id>"}
+    {"kind": "approved", "repo": "<owner/name>", "hash": "<sha256>", "at": "<when>", "session": "<id>",
+     "picker": "<the picker's tool_use id>"}
+    {"kind": "used", "repo": ..., "hash": ..., "pr": <number>, "claim": true, "closes": null, ...}
     {"kind": "used", "repo": ..., "hash": ..., "pr": <number>, "closes": [...], "unread": ..., "at": ...}
 A hook run that reads his Approve writes the approved line, unless the call is a subagent's (the
 payload carries agent_id): a subagent's call counts his picker for that call and writes nothing. When
 the record cannot take a line, the main session's call still counts his picker and the failed save
 is said beside it, as lib/db-apply-approval.py does for a line he approved (Dan, 2026-11-16).
 
-A `used` line is written by the merge gate when it lets an announce pull request through: which pull
-request took the wording, and, for the later check that a feature Dan said yes to announcing does
-not finish under another label, each issue that pull request closes with its milestone. It is
-written BEFORE the merge runs, so it says the gate let the merge go ahead, never that GitHub merged
-it: a reader that needs "merged" asks GitHub about the pull request. It grants nothing, so it is
-written whoever makes the call, and a hash stays approved after it is used.
+ONE APPROVAL COVERS ONE PULL REQUEST (Dan, 2026-11-25, by picker: "One approval, one pull request").
+An approval is one answer of his in one picker, so it is counted by the session and the picker it
+came from, once however many lines say it (two hook runs at once can each write it). A `used` line
+names a pull request that used one. For a wording and a repository, the first pull requests to use
+it, as many as there are approvals, are the ones covered. So:
+  - an approval nobody has used covers whichever pull request reaches the merge gate first, which
+    is how an approval given before the pull request exists is used;
+  - the pull request that used it may try its merge again without asking him;
+  - a different pull request carrying the same wording is not approved, and asks him again;
+  - a `used` line approves nothing by itself: with no approval behind it, it covers nothing.
+The merge gate asks with claim: holding a lock on the record (flock, which a holder that dies
+releases), it reads the record again, decides, and writes the pull request's claim, a `used` line
+with "claim": true, in that same hold, so of two pull requests reaching the gate at once on one
+approval exactly one is let through. When the claim cannot be written the merge is REFUSED, saying
+what could not be written and where (Dan, 2026-11-25, by picker: "Refuse the merge"): the next pull
+request with the same wording could not be told from this one. The claim is written whoever makes
+the call, a subagent included, since a merge by anyone uses the approval. The label hook asks
+without claim and writes no use: it passes the pull request's number when the command names one,
+and a command naming none (a create) is approved only while an approval is unused.
+
+After the claim the merge gate reads the issues the pull request closes and adds a `used` line
+naming each with its milestone, for the later check that a feature Dan said yes to announcing does
+not finish under another label (or one saying why they could not be read). These lines are written
+BEFORE the merge runs, so they say the gate let the merge go ahead, never that GitHub merged it: a
+reader that needs "merged" asks GitHub about the pull request.
 
 WHAT IT CANNOT SEE. A write to the file, between the open and his answer, by something the
 transcript does not name it in (a script building the name at run time, a subagent's own tools).
@@ -66,16 +87,21 @@ guarded by announce-label-ask.sh, which refuses an edit under it and a shell com
 is not one only reading it, but a script that builds the path at run time is not seen. And an
 approval given on one Mac is unknown to the other, which asks again.
 
-  check(repo, digest, payload)
-      {"approved": bool, "why": str, "how": HOW_TO_ASK, "notes": [str]}: whether digest, an
-      announcementHash, is wording Dan approved for repo, after reading this session's pickers.
-      payload is the hook payload (session_id, transcript_path, agent_id).
+  check(repo, digest, payload, pr=None, claim=False)
+      {"approved": bool, "state": str, "why": str, "how": str, "notes": [str]}: whether digest, an
+      announcementHash, is wording Dan approved for repo that pull request pr may use, after
+      reading this session's pickers. payload is the hook payload (session_id, transcript_path,
+      agent_id). state says which answer it is, so a caller words its own first sentence truly:
+      "approved"; "unapproved" (he approved no such wording; how says how to ask him); "used" (he
+      did, and other pull requests used every approval; how says how to ask him again);
+      "unrecorded" (he did, and the claim could not be written; how says what to put right).
   mark_used(repo, digest, pr, closes, unread)   None, or why the line could not be written.
   hash_of(data, body=False)                     (announcement-hash's answer, None) or (None, why).
   is_record_path(path)                          whether a path is the record or under it.
 
 Command lines, each printing JSON and exiting 0 when it could answer:
-  announce-approval.py check --repo <owner/name> --hash <sha256>     the hook payload on standard input
+  announce-approval.py check --repo <owner/name> --hash <sha256> [--pr <number>] [--claim]
+                                                                     the hook payload on standard input
   announce-approval.py used --repo <owner/name> --hash <sha256> --pr <number> [--closes <json>] [--unread <why>]
   announce-approval.py list                                          the record, as it reads
 """
@@ -104,7 +130,13 @@ EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 SENDING_TOOLS = ("Agent", "Task")
 HASH_SECONDS = 5
 CHECK_SECONDS = 12
-HERE = os.path.dirname(os.path.abspath(__file__))
+# How long a claim waits for the record's lock. Its holder reads the record and writes one line, so
+# a wait this long means something is wrong, and the merge is refused saying so. Chosen, not measured.
+CLAIM_LOCK_SECONDS = 3
+# Seams: the wait between two tries for the lock, and the clock that bounds them (L524).
+_sleep = time.sleep
+_clock = time.monotonic
+HERE =os.path.dirname(os.path.abspath(__file__))
 
 HOW_TO_ASK = (
     "To ask him: write the post to a file, run /no-ai-tells on it, open it in a command of its own with "
@@ -176,8 +208,43 @@ def read_record():
     return out, None
 
 
-def _on_record(entries, repo, digest, kind="approved"):
-    return any(e.get("kind") == kind and e.get("repo") == repo and e.get("hash") == digest for e in entries)
+def _text(value):
+    return value if isinstance(value, str) and value else None
+
+
+def _approval_keys(entries, found, session_id, repo, digest):
+    """Each approval of digest for repo, once: the (session, picker) it came from, on the record or
+    found in this session and not yet on it. A line naming neither is one approval with every other
+    such line, so a line repeated is never a second approval."""
+    keys = {(_text(e.get("session")), _text(e.get("picker"))) for e in entries or []
+            if e.get("kind") == "approved" and e.get("repo") == repo and e.get("hash") == digest}
+    keys.update((_text(session_id), f["picker"]) for f in found if f["repo"] == repo and f["hash"] == digest)
+    return keys
+
+
+def _users(entries, repo, digest):
+    """The pull requests `used` lines name for digest in repo, each once, in the order they used it."""
+    out = []
+    for e in entries or []:
+        pr = e.get("pr")
+        if (e.get("kind") == "used" and e.get("repo") == repo and e.get("hash") == digest
+                and isinstance(pr, int) and not isinstance(pr, bool) and pr not in out):
+            out.append(pr)
+    return out
+
+
+def _covers(count, users, pr):
+    """Whether count approvals cover pull request pr, given the pull requests that used them: one
+    that used one is covered when it is among the first count to, and any other (or a command naming
+    none) only while an approval is unused."""
+    if isinstance(pr, int) and pr in users:
+        return pr in users[:count]
+    return count > len(users)
+
+
+def _unwritable(path, e):
+    return ("the record of the wording Dan approved, " + path + ", could not be written ("
+            + type(e).__name__ + (": " + e.strerror if e.strerror else "") + ")")
 
 
 def _append(entries):
@@ -194,8 +261,7 @@ def _append(entries):
         finally:
             os.close(fd)
     except OSError as e:
-        return ("the record of the wording Dan approved, " + path + ", could not be written ("
-                + type(e).__name__ + (": " + e.strerror if e.strerror else "") + ")")
+        return _unwritable(path, e)
     if written != len(data):
         return ("the record of the wording Dan approved, " + path + ", took only " + str(written) + " of the "
                 + str(len(data)) + " bytes written to it")
@@ -325,6 +391,7 @@ def _asked(transcript_path, session_id):
                 pair = waiting.pop(item["tool_use_id"].encode("utf-8", "surrogatepass"), None)
                 if pair is not None:
                     out.append({"ask": pair[0], "sent": pair[1], "answered": n, "stamp": e.get("timestamp"),
+                                "picker": item["tool_use_id"],
                                 "result": e.get("toolUseResult"), "is_error": item.get("is_error")})
     return out
 
@@ -378,7 +445,7 @@ def _file_events(transcript_path, session_id, targets, sw):
 
 def approvals(session_id, transcript_path, deadline=None):
     """(approved, untaken, None) for this session's pickers, or ([], [], why they could not be looked
-    for). approved is [{repo, hash, file}] for each wording Dan approved that counts (module
+    for). approved is [{repo, hash, file, picker}] for each wording Dan approved that counts (module
     docstring); untaken is [{repo, file, why}] for each Approve of his that does not, so a refusal
     can say what stood in the way of the very approval the session thinks it holds."""
     if not isinstance(transcript_path, str) or not transcript_path or not isinstance(session_id, str) or not session_id:
@@ -450,7 +517,7 @@ def approvals(session_id, transcript_path, deadline=None):
         if why is not None:
             untaken.append({"repo": p["repo"], "file": p["file"], "why": why})
         else:
-            approved.append({"repo": p["repo"], "hash": digest, "file": p["file"]})
+            approved.append({"repo": p["repo"], "hash": digest, "file": p["file"], "picker": p["picker"]})
     return approved, untaken, None
 
 
@@ -504,10 +571,15 @@ def _harvest(payload, notes):
     found, untaken, unlooked = approvals(payload.get("session_id"), payload.get("transcript_path"), deadline)
     entries, unreadable = read_record()
     if found and not payload.get("agent_id"):
-        fresh = [f for f in found if entries is None or not _on_record(entries, f["repo"], f["hash"])]
+        # One line per picker of his: the same wording approved in a second picker is a second
+        # approval, which covers a second pull request.
+        session = _text(payload.get("session_id"))
+        fresh = [f for f in found if entries is None or not any(
+            e.get("kind") == "approved" and e.get("repo") == f["repo"] and e.get("hash") == f["hash"]
+            and e.get("session") == session and e.get("picker") == f["picker"] for e in entries)]
         if fresh:
             failed = _append([{"kind": "approved", "repo": f["repo"], "hash": f["hash"], "at": _now(),
-                               "session": payload.get("session_id")} for f in fresh])
+                               "session": session, "picker": f["picker"]} for f in fresh])
             if failed:
                 notes.append(
                     "Dan approved the wording in " + ", ".join(sorted({f["file"] for f in fresh})) + " in a picker in "
@@ -530,9 +602,80 @@ def _said(why, key, untaken, unreadable, unlooked):
     return ". ".join(w.rstrip(".") for w in why) + "."
 
 
-def check(repo, digest, payload):
-    """Whether digest is wording Dan approved for repo (module docstring)."""
-    out = {"approved": False, "why": "", "how": HOW_TO_ASK, "notes": []}
+def _pull_requests(numbers):
+    """Pull requests named in a sentence: `pull request 7`, `pull requests 7 and 8`."""
+    named = [str(n) for n in numbers]
+    if len(named) == 1:
+        return "pull request " + named[0]
+    return "pull requests " + ", ".join(named[:-1]) + " and " + named[-1]
+
+
+def _lock(fd):
+    """Take the record's lock for a claim: None once it is held, else why not. The lock is the
+    kernel's (flock), so a holder that dies releases it."""
+    import fcntl
+    deadline = _clock() + CLAIM_LOCK_SECONDS
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return None
+        except BlockingIOError:
+            if _clock() >= deadline:
+                return ("the record of the wording Dan approved, " + record_path() + ", was held by another check for "
+                        + str(CLAIM_LOCK_SECONDS) + " seconds, so this pull request's use of his approval could not "
+                        "be written to it")
+            _sleep(0.02)
+        except OSError as e:
+            return _unwritable(record_path(), e)
+
+
+def _claim_pause():
+    """Seam, for the tests: a wait, of at most 2 seconds, between a claim's decision and its write,
+    inside the lock, so a case with two claims at once does not depend on luck. It can only make a
+    claim hold the lock longer; it lets nothing through."""
+    try:
+        seconds = float(os.environ.get("ANNOUNCE_APPROVAL_CLAIM_PAUSE") or "")
+    except ValueError:
+        return
+    if 0 < seconds <= 2:
+        _sleep(seconds)
+
+
+def _claim(repo, digest, pr, judged):
+    """The merge gate's question, answered and recorded in one hold of the record's lock: (whether
+    pr is covered, the count of approvals, the pull requests that used them, None), or (False, 0,
+    [], why its use could not be recorded). judged(entries) is check's own reading of a record."""
+    if not isinstance(pr, int) or isinstance(pr, bool):
+        return False, 0, [], "the merge gate named no pull request number, so there is no pull request to record as using it"
+    folder, path = record_dir(), record_path()
+    try:
+        os.makedirs(folder, mode=0o700, exist_ok=True)
+        fd = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o600)
+    except OSError as e:
+        return False, 0, [], _unwritable(path, e)
+    try:
+        held = _lock(fd)
+        if held is not None:
+            return False, 0, [], held
+        entries, unreadable = read_record()
+        if entries is None:
+            return False, 0, [], unreadable
+        count, users, covered = judged(entries)
+        if covered and pr not in users:
+            _claim_pause()
+            failed = _append([{"kind": "used", "repo": repo, "hash": digest, "pr": pr, "claim": True, "closes": None,
+                               "unread": None, "at": _now()}])
+            if failed:
+                return False, 0, [], failed
+        return covered, count, users, None
+    finally:
+        os.close(fd)
+
+
+def check(repo, digest, payload, pr=None, claim=False):
+    """Whether digest is wording Dan approved for repo that pull request pr may use, and, with
+    claim, the record of pr using it (module docstring)."""
+    out = {"approved": False, "state": "unapproved", "why": "", "how": HOW_TO_ASK, "notes": []}
     key = repo_key(repo)
     if key is None:
         out["why"] = "the repository could not be told as owner/name, so no approval of Dan's could be looked up for it"
@@ -540,26 +683,62 @@ def check(repo, digest, payload):
     if not isinstance(digest, str) or not SHA.fullmatch(digest):
         out["why"] = "the announcement gave no hash, so there is no wording to look an approval up for"
         return out
-    found, untaken, unlooked, entries, unreadable = _harvest(payload if isinstance(payload, dict) else {}, out["notes"])
-    if any(f["repo"] == key and f["hash"] == digest for f in found) or (entries and _on_record(entries, key, digest)):
-        out["approved"] = True
+    payload = payload if isinstance(payload, dict) else {}
+    pr = pr if isinstance(pr, int) and not isinstance(pr, bool) else None
+    found, untaken, unlooked, entries, unreadable = _harvest(payload, out["notes"])
+
+    def judged(record):
+        count = len(_approval_keys(record, found, payload.get("session_id"), key, digest))
+        users = _users(record, key, digest)
+        return count, users, _covers(count, users, pr)
+
+    # A record that cannot be read names no pull request that used anything: his picker in this
+    # session still counts for a question that claims nothing (Dan, 2026-11-16), and a claim, which
+    # reads the record again under its lock, is refused there.
+    count, users, covered = judged(entries)
+    if count == 0:
+        why = ["Dan has not approved this wording for " + key + ": no approval on this Mac's record, and none in this "
+               "session, is of the announcement as it reads here"]
+        for f in found:
+            if f["repo"] == key:
+                why.append("the wording he approved in " + f["file"] + " is not this wording (they differ once "
+                           "normalised), so make the Announcement block that file's text, or ask him again")
+        out["why"] = _said(why, key, untaken, unreadable, unlooked)
         return out
-    why = ["Dan has not approved this wording for " + key + ": no approval on this Mac's record, and none in this "
-           "session, is of the announcement as it reads here"]
-    for f in found:
-        if f["repo"] == key:
-            why.append("the wording he approved in " + f["file"] + " is not this wording (they differ once "
-                       "normalised), so make the Announcement block that file's text, or ask him again")
-    out["why"] = _said(why, key, untaken, unreadable, unlooked)
+    if covered and claim:
+        covered, count, users, failed = _claim(key, digest, pr, judged)
+        if failed is not None:
+            out["state"] = "unrecorded"
+            out["why"] = ("Dan approved this wording for " + key + ", but nothing could record that "
+                          + ("pull request " + str(pr) if pr is not None else "this merge") + " used that approval: "
+                          + failed + ". One approval covers one pull request, so a merge whose use of it cannot be "
+                          "recorded is refused.")
+            out["how"] = ("Put that right (the record is kept in " + record_dir() + ", which must take a line), then "
+                          "run the same merge again: he does not need to be asked again.")
+            return out
+    if covered:
+        out["approved"], out["state"] = True, "approved"
+        return out
+    out["state"] = "used"
+    took = users[:count]
+    why = ("Dan approved this wording for " + key + (" once" if count == 1 else " %d times" % count) + ", and "
+           + _pull_requests(took) + " used " + ("that approval" if count == 1 else "those approvals") + ": one approval "
+           "covers one pull request, which may try its merge again, and a different pull request carrying the same "
+           "wording asks him again")
+    if pr is None:
+        why += (". This command names no pull request by number, so it could not be told from "
+                + ("that one" if len(took) == 1 else "those"))
+    out["why"] = _said([why], key, untaken, unreadable, unlooked)
     return out
 
 
 def mark_used(repo, digest, pr, closes=None, unread=None):
     """Record that the merge gate let pull request pr of repo through on digest: None, or why the
     line could not be written. closes is [{issue, milestone}] for the issues it closes, or None with
-    unread saying why they could not be read. One pull request and one wording get at most two
-    lines: one saying its issues could not be read, when that came first, and one naming them. A
-    merge tried again adds nothing it already said, and an unread line never follows a read one."""
+    unread saying why they could not be read. Beside its claim (check, with claim), one pull request
+    and one wording get at most two lines: one saying its issues could not be read, when that came
+    first, and one naming them. A merge tried again adds nothing it already said, and an unread line
+    never follows a read one."""
     key = repo_key(repo)
     if key is None or not isinstance(digest, str) or not SHA.fullmatch(digest) or not isinstance(pr, int):
         return "the used line names no repository as owner/name, no hash or no pull request number"
@@ -567,7 +746,8 @@ def mark_used(repo, digest, pr, closes=None, unread=None):
     if entries is None:
         return why
     mine = [e for e in entries
-            if e.get("kind") == "used" and e.get("repo") == key and e.get("hash") == digest and e.get("pr") == pr]
+            if e.get("kind") == "used" and e.get("repo") == key and e.get("hash") == digest and e.get("pr") == pr
+            and e.get("claim") is not True]
     if any(e.get("closes") is not None for e in mine) or (closes is None and mine):
         return None
     return _append([{"kind": "used", "repo": key, "hash": digest, "pr": pr, "closes": closes,
@@ -585,7 +765,9 @@ def main(argv):
             payload = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
         except ValueError:
             payload = {}
-        json.dump(check(_flag(args, "--repo"), _flag(args, "--hash"), payload), sys.stdout)
+        pr = _flag(args, "--pr")
+        json.dump(check(_flag(args, "--repo"), _flag(args, "--hash"), payload,
+                        int(pr) if pr and pr.isdigit() else None, "--claim" in args), sys.stdout)
         return 0
     if command == "used":
         pr, closes = _flag(args, "--pr"), _flag(args, "--closes")
@@ -601,7 +783,7 @@ def main(argv):
         entries, why = read_record()
         json.dump({"record": record_path(), "entries": entries, "why": why or ""}, sys.stdout)
         return 0
-    sys.stderr.write("Usage: announce-approval.py check --repo <owner/name> --hash <sha256>, with the hook payload on "
+    sys.stderr.write("Usage: announce-approval.py check --repo <owner/name> --hash <sha256> [--pr <number>] [--claim], with the hook payload on "
                      "standard input | used --repo <owner/name> --hash <sha256> --pr <number> [--closes <json>] "
                      "[--unread <why>] | list\n")
     return 2

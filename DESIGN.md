@@ -2982,6 +2982,29 @@ the builder's were made by the sessions that built it, not by Dan, and are his t
   asks GitHub (the builder's). It carries each closed issue's milestone, which the later check
   that a feature Dan said yes to announcing does not finish under another label reads. Issues that
   cannot be read are recorded as unread with why, never as an empty list, and block nothing.
+- **One approval covers one pull request** (Dan, 2026-11-25, by picker: "One approval, one pull
+  request"). Ruled out: wording that stays approved for any later pull request, which would merge a
+  second one unasked and draft the same post for agents twice. How it is counted is the builders':
+  an approval is one picker of his, keyed by its session and its tool use id, so a line written
+  twice is one approval and the same wording approved twice is two; the pull requests `used` lines
+  name, in order, take them one each. So a `used` line with no approval behind it covers nothing,
+  and a use recorded by hand can only refuse more. The count is read where it is judged and never
+  stored, so nothing can drift from the lines (L559).
+- **The use is claimed under a lock, at the merge gate only.** The gate's question names the pull
+  request and claims: holding the kernel's lock on the record file (`flock`, which a holder that
+  dies releases, L409), the library reads the record again, decides, and writes the claim in the
+  same hold. Without the lock two pull requests reaching the gate together both read "unused" and
+  both merge; the suite's case for it was seen to fail with the lock taken out. The label hook asks
+  the same question without claiming, so an approval given before the pull request exists is still
+  unused when the pull request reaches the merge. The claim is the last thing in the gate that can
+  refuse, so a pull request refused for anything else has claimed nothing.
+- **A claim that cannot be written refuses the merge** (Dan, 2026-11-25, by picker: "Refuse the
+  merge"). Ruled out: letting the merge through with a sentence saying the use was not recorded,
+  which would leave the approval open to the next pull request carrying the same wording. This
+  differs on purpose from a failed save of the approval itself, where his picker still counts for
+  the call (Dan, 2026-11-16): there the session holds his answer, and here nothing would hold the
+  use. The refusal names the record and says to run the same merge again once it can be written;
+  it does not send the session back to him.
 - **Several merges in one command are refused with the override typed too** (Dan, 2026-11-25, by
   picker: "Refuse it"). The gate reads one pull request per command, and the override over several
   merges let one through unread. One merge per command is always open, which is what separates
