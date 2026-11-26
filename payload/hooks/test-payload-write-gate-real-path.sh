@@ -106,11 +106,13 @@ echo "real path: a destination written by disk number and file number"
 
 # stat prints the two numbers macOS resolves under its volume folder. On a system with no such
 # folder there is nothing to measure, and the cases say so rather than pass.
+# The disk number and file number of a file, as stat prints them: GNU's form first, then BSD's.
+numbers_of(){ stat -c '%d/%i' "$1" 2>/dev/null || stat -f '%d/%i' "$1" 2>/dev/null; }
 VOLF=""; VOLD=""; VOLOUT=""
 if [ -d /.vol ] && [ "$(uname -s)" = Darwin ]; then
-  VOLF="/.vol/$(stat -f '%d/%i' "$FIX/dev/payload/hooks/x.sh" 2>/dev/null)"
-  VOLD="/.vol/$(stat -f '%d/%i' "$FIX/dev/payload/hooks" 2>/dev/null)"
-  VOLOUT="/.vol/$(stat -f '%d/%i' "$FIX/elsewhere/a.txt" 2>/dev/null)"
+  VOLF="/.vol/$(numbers_of "$FIX/dev/payload/hooks/x.sh")"
+  VOLD="/.vol/$(numbers_of "$FIX/dev/payload/hooks")"
+  VOLOUT="/.vol/$(numbers_of "$FIX/elsewhere/a.txt")"
   [ -f "$VOLF" ] && [ -d "$VOLD" ] && [ -f "$VOLOUT" ] || VOLF=""
 fi
 if [ -z "$VOLF" ]; then
