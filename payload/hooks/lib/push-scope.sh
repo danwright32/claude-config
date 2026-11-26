@@ -306,8 +306,23 @@ sys.exit(1 if v is None or isinstance(v, str) else 0)' 2>/dev/null
 # flattening does. That needs python3 and the reader's file; with either missing, or a command
 # that reader cannot vouch for, the text is flattened as it always was. The pair is found in the
 # raw payload first, by every way JSON can spell it, so a command holding none starts nothing more.
+#
+# A COMMAND AFTER A HEREDOC'S OPENER, ON THE OPENER'S LINE, IS READ TOO (claude-config#3739). The
+# shell runs every command on the line that opens a heredoc and reads the body from the next line.
+# With that line break written as "; " the reader cannot tell it from a ; after the opener, so in
+# `cat <<EOF; git push`, the body and EOF, the push was the body's first line to every hook
+# reading the segmented form, with no backslash anywhere, and the same on a command of one line,
+# which no shell gives a body at all. So a payload in which a ; and a blank follow a << before
+# that line ends is flattened by the same mode of lib/shell-words.py, which moves each body up to
+# follow the command that opens it (the shape this form has always been read right in), and
+# never hands back a text naming fewer commands. The look for it is a pattern over the raw
+# payload, so a heredoc with nothing after its opener, which is nearly every one, starts nothing
+# more: the gap between the << and the ; may hold anything but the two characters JSON writes a
+# line break as (a backslash and an n), and a payload spelling a <, a ; or a blank as an escape of
+# its code point is handed over whatever else it holds.
+PS__OPENER_LINE='<<([^\\]|\\[^n])*; '
 ps_parse_payload() {   # $1 = payload JSON  $2 = segmented (default) | raw
-  local payload mode="${2:-segmented}" sep out
+  local payload mode="${2:-segmented}" sep out flatten=""
   case "$mode" in
     segmented) sep="; " ;;
     raw)       sep="" ;;
@@ -319,15 +334,17 @@ ps_parse_payload() {   # $1 = payload JSON  $2 = segmented (default) | raw
   payload="$(ps_clean_payload "${1:-}")"
   if [ "$mode" = segmented ]; then
     case "$payload" in
-      *'\\\n'*|*'\\\u000'[aA]*|*'\u005'[cC]*)
-        # Printed only once the reader has finished, the x keeping a line break that ends the text.
-        if command -v python3 >/dev/null 2>&1 && [ -f "${PS_SHELL_WORDS:-}" ]; then
-          if out="$(printf '%s' "$payload" | python3 "$PS_SHELL_WORDS" flatten 2>/dev/null && printf x)" \
-            && [ "${out: -1}" = x ]; then
-            printf '%s' "${out%x}"; return 0
-          fi
-        fi ;;
+      *'\\\n'*|*'\\\u000'[aA]*|*'\u005'[cC]*) flatten=1 ;;
+      *'\u003'[cCbB]*|*'\u002'[0]*) flatten=1 ;;
+      *'<<'*) [[ "$payload" =~ $PS__OPENER_LINE ]] && flatten=1 ;;
     esac
+    # Printed only once the reader has finished, the x keeping a line break that ends the text.
+    if [ -n "$flatten" ] && command -v python3 >/dev/null 2>&1 && [ -f "${PS_SHELL_WORDS:-}" ]; then
+      if out="$(printf '%s' "$payload" | python3 "$PS_SHELL_WORDS" flatten 2>/dev/null && printf x)" \
+        && [ "${out: -1}" = x ]; then
+        printf '%s' "${out%x}"; return 0
+      fi
+    fi
   fi
   if command -v jq >/dev/null 2>&1; then
     printf '%s' "$payload" | jq -j --arg sep "$sep" '

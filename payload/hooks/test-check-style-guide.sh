@@ -244,6 +244,30 @@ W="$(mk_style_repo 'const label = "Loading, please wait";')"
 run_style_hook "$E2E" "cd $W && ${PAIR}git push"
 want_style_code 0 "#3470 control: clean copy pushed after && and the pair is allowed"
 
+# A push written after a heredoc's opener, on the opener's own line, is checked as the bare push is
+# (claude-config#3739). The shell runs every command on that line and reads the body from the next;
+# the segmented form writes the line break as "; ", so the ; after the opener was taken for the
+# line break that starts the body and the push for body text, and each of these exited 0 on a
+# commit holding the character, with nothing said and no backslash anywhere.
+NL=$'\n'; TAB=$'\t'
+W="$(mk_style_repo "$BAD")"
+shape=0
+for c in "cd $W && cat <<EOF; git push${NL}body${NL}EOF" "cd $W && cat <<'EOF'; git push${NL}body${NL}EOF" \
+         "cd $W && cat <<-EOF; git push${NL}${TAB}body${NL}${TAB}EOF" "cd $W && cat <<A <<B; git push${NL}one${NL}A${NL}two${NL}B" \
+         "cd $W && x=\$(cat <<EOF; git push${NL}body${NL}EOF${NL})" "cd $W && cat <<EOF | cat; git push${NL}body${NL}EOF" \
+         "cd $W && git commit -F - <<EOF; git push${NL}body${NL}EOF" "cd $W && cat <<EOF; git push; EOF"; do
+  shape=$((shape + 1))
+  run_style_hook "$E2E" "$c"
+  want_style_code 2 "#3739 a forbidden character blocks a push written after a heredoc's opener on its line (shape $shape of 8: an unquoted marker; a quoted one; the dash form; two openers; inside a substitution; after a pipe; after a commit reading the heredoc; on a command of one line)"
+done
+run_style_hook "$E2E" "cd $W && cat <<EOF${NL}x; git push${NL}EOF"
+want_style_code 0 "#3739 control: a push written in the heredoc's body alone is no push, as in the shell"
+run_style_hook "$E2E" "cd $W && cat <<EOF; git status${NL}body${NL}EOF"
+want_style_code 0 "#3739 control: a status after the opener is no push"
+W="$(mk_style_repo 'const label = "Loading, please wait";')"
+run_style_hook "$E2E" "cd $W && cat <<EOF; git push${NL}body${NL}EOF"
+want_style_code 0 "#3739 control: clean copy pushed after the opener is allowed"
+
 # --- what the push would actually CARRY, not what happens to be lying about ----
 #
 # This gate is PreToolUse, so on a chained commit and push it runs BEFORE the commit

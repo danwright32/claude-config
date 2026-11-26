@@ -201,6 +201,16 @@ refused "#3470 rtk, the pair, init -g" "rtk ${PAIR}init -g"
 refused "#3470 after && and the pair, rtk init -g" "echo ok && ${PAIR}rtk init -g"
 allowed "#3470 control: rtk, the pair, gain" "rtk ${PAIR}gain"
 
+# The same command written after a heredoc's opener, on the opener's own line, is the same command
+# (claude-config#3739): the shell runs every command on that line and reads the body from the next,
+# and the form this gate reads wrote the line break as "; ", so the ; after the opener was taken for
+# the line break that starts the body and each of these exited 0.
+NL=$'\n'
+refused "#3739 rtk init -g after a heredoc's opener" "cat <<EOF; rtk init -g${NL}body${NL}EOF"
+refused "#3739 the same after a quoted marker" "cat <<'EOF'; rtk init -g${NL}body${NL}EOF"
+allowed "#3739 control: rtk gain after a heredoc's opener" "cat <<EOF; rtk gain${NL}body${NL}EOF"
+allowed "#3739 control: rtk init written in the heredoc's body alone" "cat <<EOF${NL}x; rtk init -g${NL}EOF"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

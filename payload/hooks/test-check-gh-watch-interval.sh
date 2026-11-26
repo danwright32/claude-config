@@ -173,6 +173,18 @@ refused "#3470 after && and the pair, gh pr checks --watch" "echo ok && ${PAIR}g
 allowed "#3470 control: gh run, the pair, view" "gh run ${PAIR}view 123456"
 allowed "#3470 control: a minute interval after the pair" "gh pr checks 12 --watch ${PAIR}--interval 60"
 
+# The same watcher written after a heredoc's opener, on the opener's own line, is the same watcher
+# (claude-config#3739): the shell runs every command on that line and reads the body from the next,
+# and the form this gate reads wrote the line break as "; ", so the ; after the opener was taken for
+# the line break that starts the body and each of these exited 0.
+NL=$'\n'
+refused "#3739 gh run watch after a heredoc's opener" "cat <<EOF; gh run watch 123456${NL}body${NL}EOF"
+refused "#3739 gh pr checks --watch after a quoted marker" "cat <<'EOF'; gh pr checks 12 --watch${NL}body${NL}EOF"
+refused "#3739 gh run watch on a command of one line" "cat <<EOF; gh run watch 123456; EOF"
+allowed "#3739 control: gh run view after a heredoc's opener" "cat <<EOF; gh run view 123456${NL}body${NL}EOF"
+allowed "#3739 control: a minute interval after a heredoc's opener" "cat <<EOF; gh pr checks 12 --watch --interval 60${NL}body${NL}EOF"
+allowed "#3739 control: a watcher written in the heredoc's body alone" "cat <<EOF${NL}x; gh run watch 123456${NL}EOF"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

@@ -114,6 +114,17 @@ refused "#3470 gh, the pair, pr view --comments" "gh ${PAIR}pr view 12 --comment
 refused "#3470 after && and the pair, gh issue view --comments" "echo ok && ${PAIR}gh issue view 12 --comments"
 allowed "#3470 control: gh pr, the pair, view --json title" "gh pr ${PAIR}view 12 --json title"
 
+# The same view written after a heredoc's opener, on the opener's own line, is the same view
+# (claude-config#3739): the shell runs every command on that line and reads the body from the next,
+# and the form this gate reads wrote the line break as "; ", so the ; after the opener was taken for
+# the line break that starts the body and each of these exited 0.
+NL=$'\n'
+refused "#3739 gh pr view --comments after a heredoc's opener" "cat <<EOF; gh pr view 12 --comments${NL}body${NL}EOF"
+refused "#3739 gh issue view --comments after a quoted marker" "cat <<'EOF'; gh issue view 12 --comments${NL}body${NL}EOF"
+refused "#3739 gh pr view --comments on a command of one line" "cat <<EOF; gh pr view 12 --comments; EOF"
+allowed "#3739 control: gh pr view --json title after a heredoc's opener" "cat <<EOF; gh pr view 12 --json title${NL}body${NL}EOF"
+allowed "#3739 control: a view written in the heredoc's body alone" "cat <<EOF${NL}x; gh pr view 12 --comments${NL}EOF"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
