@@ -114,6 +114,16 @@ shape "readings with one free space reading, not two" "$TMP/one-free.json" '"fre
 python3 -c 'import json, sys; s = json.load(open(sys.argv[1], encoding="utf-8")); s["rows"][0]["pid"] = "41"; json.dump(s, open(sys.argv[2], "w", encoding="utf-8"))' \
   "$GOOD" "$TMP/text-pid.json"
 shape "readings with a pid written as text" "$TMP/text-pid.json" '"pid"'
+# json.load reads NaN and Infinity as numbers, and a start far past any date as one too; each must
+# be refused here, never reach round() or localtime() in the report and end in a traceback there.
+sed -e 's/"seconds": 10,/"seconds": NaN,/' "$GOOD" > "$TMP/nan-seconds.json"
+shape "readings whose seconds is NaN" "$TMP/nan-seconds.json" '"seconds"'
+sed -e 's/"free": \[60000000000, 59000000000\]/"free": [Infinity, 59000000000]/' "$GOOD" > "$TMP/inf-free.json"
+shape "readings whose free space is Infinity" "$TMP/inf-free.json" '"free"'
+sed -e 's/"lifetime": 88000000000/"lifetime": -Infinity/' "$GOOD" > "$TMP/inf-lifetime.json"
+shape "readings with a lifetime of minus Infinity" "$TMP/inf-lifetime.json" '"lifetime"'
+sed -e 's/"start": 1764000000, "lifetime": 88000000000/"start": 1e20, "lifetime": 88000000000/' "$GOOD" > "$TMP/far-start.json"
+shape "readings with a start far past any date" "$TMP/far-start.json" '"start"'
 
 # ---- 4. a name that cannot be printed as it stands is printed replaced, never a traceback ----
 # A lone surrogate, which json.loads makes of an escape such as \ud800, cannot be written to a
@@ -123,10 +133,14 @@ sed -e 's/"name": "Photo Editor"/"name": "Photo \\ud800 Editor"/' "$GOOD" > "$TM
 run "$TMP/surrogate.json"
 check "a name holding a lone surrogate is printed with it replaced, exit 0" \
   "$([ "$rc" -eq 0 ] && no_trace "$out" && grep -qF 'Editor' <<< "$out" && echo ok || echo "exit $rc, said: $out")"
-sed -e "s/\"name\": \"Photo Editor\"/\"name\": \"Photo $(printf '\377') Editor\"/" "$GOOD" > "$TMP/byte.json"
-run "$TMP/byte.json"
-check "a name holding a byte that is not UTF-8 is printed with it replaced, exit 0" \
-  "$([ "$rc" -eq 0 ] && no_trace "$out" && grep -qF 'Editor' <<< "$out" && echo ok || echo "exit $rc, said: $out")"
+# Only where a python3 file read of such a byte really fails under the helper's locale does this case
+# measure anything; elsewhere it says UNMEASURED rather than passing with or without the fix.
+if bad_byte_measured python-file "#3589 a readings file whose program name holds a byte that is not UTF-8"; then
+  sed -e "s/\"name\": \"Photo Editor\"/\"name\": \"Photo $(printf '\377') Editor\"/" "$GOOD" > "$TMP/byte.json"
+  run "$TMP/byte.json"
+  check "a name holding a byte that is not UTF-8 is printed with it replaced, exit 0" \
+    "$([ "$rc" -eq 0 ] && no_trace "$out" && grep -qF 'Editor' <<< "$out" && echo ok || echo "exit $rc, said: $out")"
+fi
 
 echo ""
 echo "passed: $pass, failed: $fail"

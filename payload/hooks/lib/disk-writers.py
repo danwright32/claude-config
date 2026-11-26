@@ -29,7 +29,9 @@ same file, counts every write; a clone or a sparse file can hold less than was w
 figure names a CANDIDATE, and only free space falling by about as much over the same window makes it
 the cause.
 
-Exit: 0 read, 2 could not read the process table or no program at all (never a report of nothing).
+Exit: 0 read; 2 for a refused --seconds or --top, free space or the process table that could not be
+      read, readings in DISK_WRITERS_SAMPLES that could not be read or are not in the shape this
+      reads, or no program read at all (never a report of nothing).
 Env: DISK_WRITERS_SAMPLES  a JSON file of readings to report on instead of this Mac's, for the tests
      DISK_WRITERS_PATH     the volume whose free space is read (default /System/Volumes/Data)
 """
@@ -37,6 +39,7 @@ Env: DISK_WRITERS_SAMPLES  a JSON file of readings to report on instead of this 
 import argparse
 import ctypes
 import json
+import math
 import os
 import sys
 import time
@@ -143,8 +146,13 @@ def sample_this_mac(seconds, path):
             "read": len(rows), "unread": unread, "rows": rows}
 
 
+# The last second of 9999-12-31 UTC, past which localtime() cannot name a date on any platform.
+LAST_DATE = 253402300799
+
+
 def _number(v):
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
+    """A finite number: json.load reads NaN and Infinity as floats, which no figure here can be."""
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
 
 
 def _count(v):
@@ -191,7 +199,7 @@ def shape_fault(s):
         for key in ("lifetime", "window"):
             if not _number(r[key]):
                 return '"%s" in row %d is not a number of bytes' % (key, i + 1)
-        if r.get("start") is not None and not _number(r["start"]):
+        if r.get("start") is not None and not (_number(r["start"]) and 0 <= r["start"] <= LAST_DATE):
             return '"start" in row %d is not a time' % (i + 1)
     return None
 
