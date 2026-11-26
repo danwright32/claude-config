@@ -1415,6 +1415,8 @@ rm -rf "$dir"
 BROKEN="$(mktemp -d)"
 cp "$HOOK" "$BROKEN/"
 cp -R "$HOOK_DIR/lib" "$BROKEN/lib"
+# With the reader of the call's writes, which the gate asks before the approval (#3742, item 4).
+cp "$HOOK_DIR/gh_issue_scan.py" "$BROKEN/"
 printf 'raise RuntimeError("the approval reader broke")\n' > "$BROKEN/lib/announce-approval.py"
 dir=$(make_repo acme/widget "$ANNOUNCE_FULL" "$REGISTRY_ANNOUNCES")
 approved_on_record "$dir"
@@ -1426,6 +1428,87 @@ printf '%s' "$TAGGED" > "$dir/pr.json"
 out=$(HOOK="$BROKEN/require-changelog-tag.sh" run_hook "$dir" "$MERGE 7 --squash")
 if [ -z "$out" ]; then pass; else fail "#3666 a pull request that is no announcement was refused over the approval check: $out"; fi
 rm -rf "$dir" "$BROKEN"
+
+echo "changelog record: an announcement's merge is its call's one GitHub write (claude-config#3742, item 4)"
+
+# The gate reads the description BEFORE the command runs. So a call that edits the description and
+# then merges was judged on the wording as it stood: approved wording was found and claimed, the
+# command then replaced the block, and what merged was wording Dan never saw. For a pull request
+# carrying the label, a call holding any other GitHub write beside the one merge is refused and told
+# to run them apart, with or without the override, and it claims nothing.
+others_refused() {  # $1 = the hook output ; true when it is the refusal of another write beside the merge
+  denied "$1" && says "$1" "beside the merge" && says "$1" "Run them apart" && says "$1" "ALLOW_UNTAGGED_MERGE=1 does not cover"
+}
+dir=$(make_repo acme/widget "$ANNOUNCE_FULL" "$REGISTRY_ANNOUNCES")
+approved_on_record "$dir"
+for c in "gh pr edit 7 --body-file new.md && $MERGE 7 --squash" \
+         "gh pr edit 7 --body 'other wording'; $MERGE 7 --squash" \
+         "gh issue edit 7 --body-file new.md && $MERGE 7 --squash" \
+         "gh api -X PATCH repos/acme/widget/pulls/7 -f body=other && $MERGE 7 --squash" \
+         "bash -c 'gh pr edit 7 --body-file new.md' && $MERGE 7 --squash" \
+         "gh pr edit 7 --body-file new.md && gh api -X PUT repos/acme/widget/pulls/7/merge" \
+         "ALLOW_UNTAGGED_MERGE=1 gh pr edit 7 --body-file new.md && ALLOW_UNTAGGED_MERGE=1 $MERGE 7 --squash"; do
+  out=$(run_hook "$dir" "$c" 2>/dev/null)
+  if others_refused "$out" && [ "$(used_by "$dir" 7)" = 0 ]; then pass
+  else fail "#3742 item 4: an announce pull request merged in a call holding another GitHub write, was refused in other words, or claimed Dan's approval before it was refused [$c]: $out"; fi
+done
+out=$(FAKE_NODE_JSON="$NODE_WIDGET" run_hook "$dir" "gh pr edit 7 --body-file new.md && $GQL_MERGE" 2>/dev/null)
+if others_refused "$out" && [ "$(used_by "$dir" 7)" = 0 ]; then pass
+else fail "#3742 item 4: an announce pull request merged through GraphQL in a call holding another GitHub write: $out"; fi
+# Still possible: the merge alone, by each route, a read of GitHub beside it, and the text the merge
+# helper hands the gates (gh, its merge arguments, then the commit it pins).
+for c in "$MERGE 7 --squash" "cd . && $MERGE 7 --squash --delete-branch" \
+         "gh pr view 7 --json state && $MERGE 7 --squash" "gh pr checks 7; $MERGE 7 --squash" \
+         "$MERGE 7 --squash --match-head-commit a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0" \
+         "gh api -X PUT repos/acme/widget/pulls/7/merge -f merge_method=squash"; do
+  out=$(run_hook "$dir" "$c" 2>/dev/null)
+  if owes_draft "$out" 7; then pass
+  else fail "#3742 item 4, still possible: an approved announce merge that is its call's one GitHub write was refused, or said something other than the one line about the draft it owes [$c]: $out"; fi
+done
+out=$(FAKE_NODE_JSON="$NODE_WIDGET" run_hook "$dir" "$GQL_MERGE" 2>/dev/null)
+if owes_draft "$out" 7; then pass
+else fail "#3742 item 4, still possible: an approved announce merge through GraphQL, the call's one GitHub write, was refused: $out"; fi
+# A count that cannot be made is not a count of none (L98). Driven with a copy of the hooks that
+# lacks the reader of the call's writes, and then the same copy with it.
+BROKEN="$(mktemp -d)"
+cp "$HOOK" "$BROKEN/"
+cp -R "$HOOK_DIR/lib" "$BROKEN/lib"
+out=$(HOOK="$BROKEN/require-changelog-tag.sh" run_hook "$dir" "$MERGE 7 --squash" 2>/dev/null)
+if denied "$out" && says "$out" "could not be read" && says "$out" "gh_issue_scan.py" && says "$out" "ALLOW_UNTAGGED_MERGE=1 does not cover"; then pass
+else fail "#3742 item 4: an announce pull request merged, or was refused in other words, when the call's GitHub writes could not be counted: $out"; fi
+cp "$HOOK_DIR/gh_issue_scan.py" "$BROKEN/"
+out=$(HOOK="$BROKEN/require-changelog-tag.sh" run_hook "$dir" "$MERGE 7 --squash" 2>/dev/null)
+if owes_draft "$out" 7; then pass
+else fail "#3742 item 4: the copied hooks refused an approved announce merge with the reader of the call's writes in place: $out"; fi
+rm -rf "$dir" "$BROKEN"
+# Every other pull request is untouched: the same call, in the same repository, merges with nothing said.
+dir=$(make_repo acme/widget "$TAGGED" "$REGISTRY_ANNOUNCES")
+out=$(run_hook "$dir" "gh pr edit 7 --body-file new.md && $MERGE 7 --squash")
+if [ -z "$out" ]; then pass; else fail "#3742 item 4: a pull request that is no announcement was refused, or drew a notice, over another GitHub write beside its merge: $out"; fi
+rm -rf "$dir"
+# ONE count, asked by this gate and by the label hook (announce_label_gate.py), which judges a
+# description left to GitHub only when its command is the call's one write. The count lives in
+# gh_issue_scan.py and both ask it there, over the same commands.
+got="$(printf '%s' "gh pr edit 7 --body-file new.md && gh api -X PATCH repos/acme/widget/pulls/7 -f body=x; $MERGE 7 --squash" | python3 -B "$HOOK_DIR/gh_issue_scan.py" writes "$PWD" 2>/dev/null)"
+if [ "$(printf '%s' "$got" | jq -r '.writes' 2>/dev/null)" = 2 ]; then pass; else fail "#3742 item 4: gh_issue_scan.py writes did not count an edit and an API write beside a merge as two: $got"; fi
+got="$(printf '%s' "$MERGE 7 --squash" | python3 -B "$HOOK_DIR/gh_issue_scan.py" writes "$PWD" 2>/dev/null)"
+if [ "$(printf '%s' "$got" | jq -r '.writes' 2>/dev/null)" = 0 ]; then pass; else fail "#3742 item 4: gh_issue_scan.py writes counted a merge alone as another write: $got"; fi
+got="$(printf '%s' "gh pr edit 7 --body 'unclosed && $MERGE 7" | python3 -B "$HOOK_DIR/gh_issue_scan.py" writes "$PWD" 2>/dev/null)"
+if [ -n "$(printf '%s' "$got" | jq -r '.unread // ""' 2>/dev/null)" ]; then pass; else fail "#3742 item 4: gh_issue_scan.py writes gave a count for a command it cannot read: $got"; fi
+if grep -q 'scan\.gh_writes(' "$HOOK_DIR/announce_label_gate.py" && ! grep -q 'def _api_calls\|def _api_write' "$HOOK_DIR/announce_label_gate.py"; then pass
+else fail "#3742 item 4: announce_label_gate.py does not count a call's writes through gh_issue_scan.py's gh_writes, or keeps a copy of the count"; fi
+# A plain heredoc into a file, never one inside $(...), which bash 3.2 mis-parses (make_repo, above).
+samepy="$(mktemp)"
+cat > "$samepy" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("gate", sys.argv[1])
+gate = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gate)
+print("same" if frozenset(gate.PUTS) == gate.scan.WRITE_KINDS else "differ")
+PY
+same="$(GATE_DIR="$HOOK_DIR" python3 -B "$samepy" "$HOOK_DIR/announce_label_gate.py" 2>/dev/null)"
+rm -f "$samepy"
+if [ "$same" = same ]; then pass; else fail "#3742 item 4: the commands the label hook counts as writes are not the ones gh_issue_scan.py counts ($same)"; fi
 
 # #3667: only an announcement owes a draft. A pull request under any other label, in the same
 # repository and with the same registry, merges with nothing said of one.

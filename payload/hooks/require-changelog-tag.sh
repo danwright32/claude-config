@@ -546,6 +546,36 @@ fi
 # Every other pull request is done here: its record passed.
 [ "$carries" = yes ] || exit 0
 
+# THE MERGE IS THE CALL'S ONE GITHUB WRITE (claude-config#3742, item 4).
+#
+# Everything below judges the Announcement block as GitHub holds it NOW, which is before this call
+# runs. A call that edits the description and then merges (`gh pr edit 7 --body-file new.md && gh pr
+# merge 7`) was judged on the wording as it stood: approved wording was found and claimed, then the
+# command replaced the block and merged wording Dan never saw. So for an announcement a call holding
+# any other GitHub write beside the one merge is refused and told to run them apart, which is always
+# open. It is asked here, before the approval is claimed, so a call refused for it claims nothing.
+#
+# The count is gh_issue_scan.py's gh_writes, the one the label hook asks (announce_label_gate.py),
+# never a second reading of the call kept here. A merge through the GitHub API is itself one of the
+# writes it counts, so that route is allowed one (MT_API_ROUTE, set where the merge was told above).
+# The merge helper's own call is gh, its merge arguments and the commit it pins: no other write.
+# A count that could not be made is refused in its own words, never read as none (L98).
+merge_writes=0
+case "${MT_API_ROUTE:-}" in rest|graphql) merge_writes=1 ;; esac
+call_writes=""
+if command -v python3 >/dev/null 2>&1; then
+  call_writes=$(printf '%s' "$command" | python3 -B "$HOOK_DIR/gh_issue_scan.py" writes "$cwd" 2>/dev/null)
+fi
+writes=$(printf '%s' "$call_writes" | jq -r 'if (.writes | type) == "number" then .writes else "" end' 2>/dev/null)
+case "$writes" in
+  ''|*[!0-9]*)
+    writes_why=$(printf '%s' "$call_writes" | jq -r '.unread // ""' 2>/dev/null)
+    deny "PR #$number cannot merge in this call: it carries changelog/announce, and whether the call holds another GitHub write beside the merge could not be read (${writes_why:-gh_issue_scan.py, which python3 runs beside this hook, gave no count}). Its announcement is judged as the description holds it before the call runs, so a write ahead of the merge could change the wording after it was judged. Run the merge as a call of its own: gh pr merge $number --repo $slug. If it is refused again, reinstall the hooks with claude-sync pull. $not_covered" ;;
+esac
+if [ "$writes" -gt "$merge_writes" ]; then
+  deny "PR #$number cannot merge in this call: it carries changelog/announce, and the call holds $((writes - merge_writes)) other GitHub write$([ $((writes - merge_writes)) -eq 1 ] || printf 's') beside the merge (gh pr create, gh pr edit, gh issue edit or a gh api call that writes). Its announcement is judged as the description holds it before the call runs, so a write ahead of the merge could change the wording after Dan approved it and after it was judged. Run them apart: the other write in a call of its own, then the merge alone. $not_covered"
+fi
+
 # THE WORDING DAN APPROVED (claude-config#3666; Dan: "it should ask me before applying the label").
 #
 # The record passed, so this is an announcement carrying its post. That post is drafted for agents

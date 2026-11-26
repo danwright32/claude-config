@@ -1973,7 +1973,8 @@ when all of these hold, each failure said in its own words:
   (Dan, by picker, 2026-11-26: "Refuse and ask again"): it is an answer of his that is no approval,
   as `Not yet` is, and the refusal gives his words and says to fix the wording and ask him again.
   White space is no words, and neither is the chosen option's own preview. Anything that comes
-  back there in a form the library does not read is taken as words of his;
+  back there in a form the library does not read is taken as words of his, which includes anything
+  under a key other than his notes and that preview;
 - the file has not changed since he answered (its status change time is before his answer);
 - no later picker about the same file ended any other way;
 - the file holds no run of more than two blank lines with wording below it (#3703). Blank lines are
@@ -2077,7 +2078,16 @@ the wording, and sleep mode can answer one with Dan asleep.
   that GitHub merged it, and a `used` line approves nothing by itself. A pull request the
   dependency bot opened is let through unjudged only once its labels have been read and it does not
   carry `changelog/announce` (#3703): one that carries the label is judged like any other, and one
-  whose labels could not be read is refused like any other the judge could not read.
+  whose labels could not be read is refused like any other the judge could not read. The merge must
+  be its call's one GitHub write (#3742). The gate reads the description before the command runs,
+  so `gh pr edit 7 --body-file new.md && gh pr merge 7` was judged on the wording as it stood, then
+  replaced the block and merged. For an announce pull request a call holding `gh pr create`, `gh pr
+  edit`, `gh issue edit` or a `gh api` write beside the one merge is refused before anything is
+  claimed and told to run them apart, with or without the override; a merge through the API counts
+  as the one. The count is `gh_writes` in `hooks/gh_issue_scan.py`, the one the label hook asks,
+  reached from bash as `gh_issue_scan.py writes`, and a count that cannot be made is refused in its
+  own words. Every other pull request is untouched by it. It does not see a write gh makes under
+  another subcommand, which cannot change a description, or one made by anything but gh.
 - `announce-label-ask.sh`, before the label goes on. It reads every Bash call naming the label:
   `gh pr create --label`, `gh pr edit --add-label`, `gh issue edit --add-label` and a `gh api`
   write to a pull request's labels are refused unless the wording the command would leave is
