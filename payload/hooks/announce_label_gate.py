@@ -97,7 +97,9 @@ EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 PULL_URL = re.compile(r"https://github\.com/([^/\s]+)/([^/\s]+)/(?:pull|issues)/(\d+)")
 ISSUE_LABELS = re.compile(r"repos/([^/]+)/([^/]+)/issues/(\d+)/labels")
 REPO_LABELS = re.compile(r"repos/([^/]+)/([^/]+)/labels")
-CRUDE_WRITE = re.compile(r"\bgh\b[^\n]*(?:--add-label|--label|\s-l\s|\bapi\b|\blabel\s+(?:create|edit|clone)\b)")
+# What a command that cannot be read is judged by. Making the label (gh label create, gh label
+# clone) is not among them: it needs no approval, read or unread.
+CRUDE_WRITE = re.compile(r"\bgh\b[^\n]*(?:--add-label|--label|\s-l\s|\bapi\b|\blabel\s+edit\b)")
 
 USE_BODY_FILE = ("Give the description with --body-file <file>, a file written in a command of its own, so the "
                  "wording the label would sit on can be read: `gh pr create ... --body-file <file> --label " + LABEL

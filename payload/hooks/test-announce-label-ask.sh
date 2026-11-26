@@ -306,10 +306,21 @@ r="$(run "gh pr edit 7 --add-label $LABEL --title 'unclosed")"
 check "a command it cannot read that names the label and a gh write is refused" "$(refused "$r" && [[ "$r" == *"could not read this command"* ]] && echo ok || echo "$r")"
 r="$(run "echo 'unclosed $LABEL")"
 check "a command it cannot read that runs no gh write passes" "$(passed "$r" && echo ok || echo "$r")"
+# Making the label needs no approval, so a command it cannot read that only makes it passes too,
+# and one that may rename another label onto it is still refused.
+for cmd in "gh label create $LABEL --description 'unclosed" "gh label clone acme/other --repo acme/widget # $LABEL 'unclosed"; do
+  r="$(run "$cmd")"
+  check "a command it cannot read that only makes the label passes: $cmd" "$(passed "$r" && echo ok || echo "$r")"
+done
+r="$(run "gh label edit bug --name $LABEL --description 'unclosed")"
+check "a command it cannot read that may rename a label onto it is refused" "$(refused "$r" && [[ "$r" == *"could not read this command"* ]] && echo ok || echo "$r")"
 # A payload that is not a call: refused when it names the label, naming the payload, and passed otherwise.
 cut_payload() { printf '%s' "$1" | ( cd "$REPO" && PATH="$WORK/bin:$PATH" ANNOUNCE_APPROVALS_DIR="$STORE" bash "$HOOK" 2>&1 ); printf ' rc=%s' "$?"; }
 r="$(cut_payload '{"tool_name": "Bash", "tool_input": {"command": "gh pr edit 7 --add-label changelog/announce"}')"
 check "a payload it cannot parse that names the label is refused, naming the payload" "$([[ "$r" == *"payload"*" rc=2" ]] && echo ok || echo "$r")"
+# GitHub reads a label's name in any letter case, so the words of such a payload are read so too.
+r="$(cut_payload '{"tool_name": "Bash", "tool_input": {"command": "gh pr edit 7 --add-label CHANGELOG/ANNOUNCE"}')"
+check "a payload it cannot parse that names the label in capitals is refused, naming the payload" "$([[ "$r" == *"payload"*" rc=2" ]] && echo ok || echo "$r")"
 r="$(cut_payload '{"tool_name": "Bash", "tool_input": {"command": "ls -la"}')"
 check "a payload it cannot parse that names nothing it judges passes" "$([[ "$r" == " rc=0" ]] && echo ok || echo "$r")"
 
