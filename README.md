@@ -11023,7 +11023,8 @@ on each such command (#3021; the area check read them its own way until #3022): 
 it sets, a command named by a value (`"$TOOL" --write "$1"`, `"$@"`, `bash -c "$FIX"`), `ssh`, a
 trap whose text the shell expands as it is set, and a trap
 whose own text, read as the commands it is, writes. A value in an argument, an assignment or
-arithmetic names no command. So
+arithmetic names no command (inside `(( ))` that sh or dash runs it does, since to them `((` opens
+two subshells, #3442). So
 the text of `tools/check-mods.sh` still cannot be read as writing nothing in the folder it is
 handed, though no longer for copying into a folder
 of its own: it runs Claude Code and the TypeScript compiler through variables (`"$bin" plugin test

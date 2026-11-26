@@ -342,12 +342,27 @@ handed each word of its test (#3323); and a name a sum gives a value (`(( F = 2 
 one whose value the reader no longer knows, so a later `> out$F` is given as written. Only for bash,
 zsh and ksh, measured on this Mac on 2026-11-21 with each case run in an empty folder: dash does
 write the file (to it `((` opens two subshells and `[[` is a program's name), and sh is dash on
-other machines, so what a `sh -c` or a `dash -c` runs is read as before. Three forms are knowingly
+other machines, so what a `sh -c` or a `dash -c` runs is read as before. Three forms were knowingly
 left as they were, each read as a write that does not happen, never the reverse: a test behind
 `time`, a `]]` with a redirect written against it (`]]>out`), and a comparison written with anything
 a redirect can carry (`[[ a >> b ]]`, which every shell refuses). The count over the personal
 MacBook's records when it was built (66,268 shell calls: main sessions from 2026-10-19, agents' and
 worktree sessions' from 2026-11-14) is none: no call ran an arithmetic test or such a comparison.
+
+Since #3442 the first two of those three are read as the tests they are, for bash, zsh and ksh
+(measured on the personal MacBook on 2026-11-26, one run of each form in an empty folder).
+`[[ a > b ]]>out` writes out and no b. `time [[ a > b ]]` writes nothing where `time` is the shell's
+reserved word: written bare, the first word of its command, the test right after it. Where bash 3.2
+runs the program `time` instead, and so writes b, the reading is as it was: right after a pipe,
+after an `if` or a `!`, in a case's clause, and wherever `time` is quoted, escaped, named by a path,
+given an option or `--`, or has a value set in front of it. What sh or dash runs is read as before
+for both forms, the `||` inside included, since each runs what follows it as a command. The same
+change stops a value inside `(( ))` from losing its unread mark in sh and dash: there `((` opens two
+subshells, so `dash -c '(( $x > 3 ))'` runs the program x names, and that command is now marked as
+named by a value, as it is anywhere else. The count over the personal MacBook's recorded calls of
+the 30 days to 2026-11-26 (80,846 shell calls, 71,939 distinct commands) is none for all three: no
+call held `time` before a test, a redirect against a `]]`, or a value inside `(( ))` run by sh or
+dash.
 
 Since #965 it reports what a command substitution changes. The shell runs the commands inside a
 `$(...)` or backticks before the command they sit in, and in a heredoc whose delimiter is not quoted
@@ -1076,6 +1091,17 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
   measured on zsh 5.9): zsh's `--emulate` takes the shell to emulate as its next word and its `-O`
   takes none (bash's does), so `zsh --emulate sh -c '...'` is read as the commands in its text,
   split into words as the emulated shell splits them, and never as a zsh script file named `sh`.
+  A shell told only to check a script file runs none of it, and is read as running no script
+  (#3442, measured on bash 3.2, zsh 5.9, macOS sh, dash and ksh93): `bash -n x.sh` and
+  `bash -o noexec x.sh`. It is still read as a run where the check is taken back (`+n`,
+  `+o noexec`), where another option names exec (zsh and ksh run the script for `-n -o exec`), and
+  under `-i`, since bash says an interactive shell ignores `-n`. The long spelling `--interactive`,
+  which only zsh and ksh take, keeps the check: measured 2026-11-26 on the same five shells, with no
+  terminal, zsh and ksh ran neither the script nor a start up file for `-n --interactive x.sh`
+  (zsh's manual says `-n` given at startup holds in an interactive shell), and bash, sh and dash
+  refuse the option and run nothing. Text given with `-c` or on standard
+  input is read as the commands it holds even with `-n`, which judges more than runs and hides
+  nothing.
   The code is then judged per language by what it can
   do (mod-kit's `hooks/code.ts` since #712), for python, node (and deno, bun), ruby, perl, AppleScript, awk and sed:
   write or update a file (python's `open` in any of w, a, x or +, pathlib, `os` and `shutil`;

@@ -243,3 +243,58 @@ describe("zsh's options that take a value are zsh's own (#3621)", () => {
     for (const shell of ['bash', 'sh', 'dash', 'ksh']) expect(scripts(`${shell} --emulate sh -c 'make test'`)).toEqual([{ files: ['sh'] }])
   })
 })
+
+// claude-config#3442: `bash -n x.sh` checks the script's syntax and runs none of it, and was read as
+// a run of it, so every reader of a script a command runs judged what the script's text does.
+// Measured 2026-11-26 on the personal MacBook (bash 3.2.57, zsh 5.9, macOS sh, dash and ksh93), one
+// run of each form in an empty folder with a script that only makes a file, the folder listed
+// afterwards: all five make no file for every form in the first test, and the file for `+n`,
+// `-n +n` and `-n +o noexec`; zsh and ksh make it for `-n -o exec` and `-n --exec` too.
+describe('a shell told only to check its script runs none of it (#3442)', () => {
+  const ALL = ['bash', 'sh', 'zsh', 'dash', 'ksh']
+  test('-n or -o noexec before a script file names no script the command runs', () => {
+    for (const shell of ALL)
+      for (const options of ['-n', '-vn', '-n -x', '-n -l', '-n --', '-o noexec', '-n -o noexec']) expect([shell, options, scripts(`${shell} ${options} x.sh`)]).toEqual([shell, options, [undefined]])
+    expect(scripts('bash -n x.sh a b')).toEqual([undefined])
+    expect(scripts('/bin/bash -n ./tools/x.sh && bash ./tools/x.sh')).toEqual([undefined, { files: ['./tools/x.sh'] }])
+    // The command is still given, with the words it was written with.
+    expect(words('bash -n x.sh')).toEqual([['bash', '-n', 'x.sh']])
+  })
+  test('a check taken back, or one a shell may not keep, is read as a run', () => {
+    // `-i` is read as a run: bash says an interactive shell ignores -n. The shells on this Mac ran
+    // nothing for it with nothing to read on standard input, and no other build was measured.
+    for (const shell of ALL)
+      for (const options of ['+n', '-n +n', '-n +o noexec', '-o noexec +n', '-n -o exec', '-n +o exec', '-n -o NO_EXEC', '-n --exec', '-n --no-exec', '-n -i', '-i -n', '-in'])
+        expect([shell, options, scripts(`${shell} ${options} x.sh`)]).toEqual([shell, options, [{ files: ['x.sh'] }]])
+    // An -n after the script file is the script's own argument.
+    expect(scripts('bash x.sh -n')).toEqual([{ files: ['x.sh'] }])
+  })
+  test('the long spelling --interactive keeps the check, as the shells that take it do', () => {
+    // Raised at a push: `zsh -n --interactive x.sh` is read as a check that runs nothing while `-i`
+    // is read as a run, so is the long spelling read wrongly? Measured 2026-11-26 on the personal
+    // MacBook (zsh 5.9, ksh 93u+ 2012-08-01, bash 3.2.57, macOS sh, dash), two runs of each form with
+    // a script and start up files that each only make a file, a clean environment, no terminal and
+    // standard input from /dev/null. zsh and ksh, the two that take the option, make no file for any
+    // form below, the start up files' included; zsh's manual says -n given at startup holds in an
+    // interactive shell. bash, sh and dash refuse `--interactive` and run nothing. So the reading is
+    // right for every shell measured, and this pins it. (Each of the five also made no file for
+    // `-n -i`, which stays read as a run for the builds not measured.)
+    for (const shell of ALL) expect([shell, scripts(`${shell} -n --interactive x.sh`)]).toEqual([shell, [undefined]])
+    for (const shell of ['zsh', 'bash', 'ksh']) expect([shell, scripts(`${shell} --interactive -n x.sh`)]).toEqual([shell, [undefined]])
+    for (const options of ['-n --interactive --', '-o noexec --interactive', '-n -f --interactive'])
+      expect([options, scripts(`zsh ${options} x.sh`)]).toEqual([options, [undefined]])
+    // The control: with the check taken back zsh and ksh made the script's file and the interactive
+    // start up file's, so the option is taken and those forms are a run.
+    for (const command of ['zsh -n --interactive +n x.sh', 'zsh -n --interactive --exec x.sh', 'ksh -n --interactive +n x.sh'])
+      expect([command, scripts(command)]).toEqual([command, [{ files: ['x.sh'] }]])
+  })
+  test('text given inline or on standard input is read as it was', () => {
+    // Every shell measured runs none of it. Reading it as run judges more than is there and misses
+    // nothing, and the issue names only the script file.
+    expect(commands(`bash -nc 'make test'`)).toEqual([['make', 'test']])
+    expect(commands(`bash -n -c 'make test'`)).toEqual([['make', 'test']])
+    expect(commands("bash -n <<'EOF'\nmake test\nEOF")).toEqual([['make', 'test']])
+    expect(scripts('bash -n < x.sh')).toEqual([{ files: ['x.sh'], stdin: true }])
+    expect(scripts('cat x.sh | bash -n')).toEqual([undefined, { files: ['x.sh'], stdin: true }])
+  })
+})
