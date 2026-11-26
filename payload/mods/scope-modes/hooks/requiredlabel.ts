@@ -18,7 +18,8 @@ import { LABEL_REFUSAL, SETS_LABEL } from './overnight.ts'
 // - for `gh pr edit`, the command names one pull request by its number or its own link, and the
 //   session's record of the pull requests it opened holds that repository and number.
 //
-// A label the gate says needs a sentence a manager reads (today changelog/visible) is allowed like
+// A label the gate says needs a sentence a manager reads (changelog/visible, and changelog/announce
+// where a repository uses it) is allowed like
 // the others: Dan's decision of 2026-11-22, by picker, "Also allow changelog/visible", knowing a
 // session can then merge overnight a pull request whose changelog sentence he has not read. The gate
 // still refuses the merge of a pull request carrying it whose description has no such sentence, so
@@ -26,9 +27,17 @@ import { LABEL_REFUSAL, SETS_LABEL } from './overnight.ts'
 // result). Whether a label needs one is still the gate's answer, and an answer that does not say is
 // one that could not be read.
 //
+// A label may also need the post for agents in the description, and wording that is Dan's to approve
+// (#3665, the announce label, which the gate lists only for a repository whose registry entry names
+// an announcements channel). Those are the gate's answers too, `needsAnnouncement` and `needsDan` on
+// each label, and this reader says it understands them by asking with `--needs-dan`: the gate lists
+// such a label to no caller that does not, so a session still running this mod as it was is never
+// handed a label it would set with nothing said. The label is allowed like the others, and the
+// session is told what the merge waits on and that the wording is for Dan.
+//
 // Which labels those are is the gate's answer, never a list here, so the two cannot drift: the gate
 // (payload/hooks/require-changelog-tag.sh) keeps its rule in payload/hooks/lib/changelog-entry.js,
-// and this asks that file's command line, `required-labels <owner/name>`. Which pull requests the
+// and this asks that file's command line, `required-labels <owner/name> --needs-dan`. Which pull requests the
 // session opened is the record winding down already keeps (`opened` in this mod's state, written
 // from the link each `gh pr create` printed, by the session or any of its agents); GitHub's author
 // would not do, since every session on the Mac opens pull requests as the same account.
@@ -41,8 +50,12 @@ import { LABEL_REFUSAL, SETS_LABEL } from './overnight.ts'
 // A refusal here is overnight.ts's own for any label on a pull request (LABEL_REFUSAL), with why in
 // brackets after it.
 
-/** One label a merge gate takes, and whether it refuses it on a description carrying no sentence. */
-export type GateLabel = { label: string; needsSentence: boolean }
+/**
+ * One label a merge gate takes, and what the gate says of it: whether it refuses it on a description
+ * carrying no sentence, whether it refuses it on one carrying no post for agents, and whether the
+ * wording under it is Dan's to approve.
+ */
+export type GateLabel = { label: string; needsSentence: boolean; needsAnnouncement: boolean; needsDan: boolean }
 /** A merge gate's answer about one repository: the labels it requires one of, none, or why it cannot be told. */
 export type GateAnswer = { state: 'required'; labels: GateLabel[] } | { state: 'not-required' } | { state: 'unknown'; why: string }
 export type Gate = (repo: string) => Promise<GateAnswer>
@@ -54,8 +67,12 @@ export type Opened = () => Promise<readonly OpenedPr[] | { why: string }>
 const msg = (err: unknown) => (err instanceof Error ? err.message : String(err))
 const record = (v: unknown): Record<string, unknown> | null => (v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null)
 
-/** How the gate is asked: its own library's command line, in the hooks installed on this Mac. */
-export const gateArgv = (home: string, repo: string): string[] => ['node', `${home}/.claude/hooks/lib/changelog-entry.js`, 'required-labels', repo]
+/**
+ * How the gate is asked: its own library's command line, in the hooks installed on this Mac. The
+ * flag says this reader understands a label's `needsDan`, which is what makes the gate list a label
+ * that needs him (#3665).
+ */
+export const gateArgv = (home: string, repo: string): string[] => ['node', `${home}/.claude/hooks/lib/changelog-entry.js`, 'required-labels', repo, '--needs-dan']
 
 const SHAPE = 'its answer was not one this reader knows'
 /** The gate's answer, read from what running it printed. Anything but a whole answer is unknown, never "requires nothing". */
@@ -78,7 +95,10 @@ export const gateAnswerOf = (r: Ran): GateAnswer => {
     const one = record(l)
     // A label holding a comma could never be named alone, since gh splits a label flag's value on them.
     if (!one || typeof one.label !== 'string' || !one.label || one.label.includes(',') || typeof one.needsSentence !== 'boolean') return { state: 'unknown', why: SHAPE }
-    labels.push({ label: one.label, needsSentence: one.needsSentence })
+    // Asked with the flag, every label says both. One that does not is the answer of a library that
+    // does not know the flag, which could not be read, never a label that needs neither.
+    if (typeof one.needsAnnouncement !== 'boolean' || typeof one.needsDan !== 'boolean') return { state: 'unknown', why: SHAPE }
+    labels.push({ label: one.label, needsSentence: one.needsSentence, needsAnnouncement: one.needsAnnouncement, needsDan: one.needsDan })
   }
   return { state: 'required', labels }
 }
@@ -129,19 +149,28 @@ const editedPr = async (g: ModKitGh, repo: string, linkRepo: LinkRepo): Promise<
 }
 
 /**
- * What a session is told as it sets a label the gate takes only with a sentence in the description:
- * the merge is refused until that sentence is there. What the sentence must look like is the gate's
- * to say, in its own refusal, so it is not restated here.
+ * What a session is told as it sets a label the gate takes only with writing in the description:
+ * the merge is refused until that writing is there, each piece named (the sentence a manager reads,
+ * and under the announce label the post for agents too, #3665), and whose the wording is to approve
+ * where the gate says it needs Dan. What each piece must look like is the gate's to say, in its own
+ * refusal, so it is not restated here. Empty for a label that needs nothing.
  */
-export const sentenceNote = (label: string, repo: string) =>
-  `The merge gate of ${repo} refuses the merge of a PR labelled ${label} until its description carries the Changelog sentence a manager reads, so see that the description has it before merging.`
+export const sentenceNote = (label: GateLabel, repo: string) => {
+  const pieces = [...(label.needsSentence ? ['the Changelog sentence a manager reads'] : []), ...(label.needsAnnouncement ? ['the post for agents under an Announcement heading'] : [])]
+  const writing = pieces.length
+    ? `The merge gate of ${repo} refuses the merge of a PR labelled ${label.label} until its description carries ${pieces.join(' and ')}, so see that the description has ${pieces.length > 1 ? 'both' : 'it'} before merging.`
+    : ''
+  const dan = label.needsDan ? `The wording under ${label.label} is Dan's to approve before the PR merges.` : ''
+  return [writing, dan].filter(Boolean).join(' ')
+}
 
 /**
  * Why a `gh pr create` or `gh pr edit` that sets a label is refused tonight in `repo` (the repository
  * the overnight write rule resolved it to), or undefined when it may run. The command has passed
  * overnight.ts: it carries no milestone, removes no label, and no flag its action may not carry.
- * `note` is handed `sentenceNote` when the call may run and its label needs a sentence, never on a
- * refusal.
+ * `note` is handed `sentenceNote` when the call may run and the gate says its label needs writing
+ * in the description or needs Dan (a sentence, the post for agents, his approval of the wording),
+ * never on a refusal and never for a label that needs none of them.
  */
 export const judgeRequiredLabel = async (g: ModKitGh, repo: string, gate: Gate, opened: Opened, linkRepo: LinkRepo, note?: (text: string) => void): Promise<string | undefined> => {
   const flags = SETS_LABEL[g.act]
@@ -165,7 +194,8 @@ export const judgeRequiredLabel = async (g: ModKitGh, repo: string, gate: Gate, 
   const label = answer.labels.find(l => l.label === name)
   if (!label) return because(`${shown(name)} is not a label the merge gate of ${repo} requires`)
   const allowed = () => {
-    if (label.needsSentence) note?.(sentenceNote(label.label, repo))
+    const told = sentenceNote(label, repo)
+    if (told) note?.(told)
     return undefined
   }
   if (g.act === 'create') return allowed()

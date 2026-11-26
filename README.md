@@ -33,7 +33,13 @@ back.
   It was `opus` from 2026-11-10 (#2645). `null` under `env` means remove: the pull deletes that one
   variable from each Mac's `settings.json` and leaves every other variable there untouched, since
   leaving the key out of this file would leave each Mac's old value in place. It is the only variable
-  under `env` the sync writes or removes, and the rest of that block stays each Mac's own. It is
+  under `env` the sync writes or removes, and the rest of that block stays each Mac's own. And
+  `claudeMdExcludes` since 2026-11-25 (#3635, added to the sync's list by Dan's sign off): it keeps
+  this repository's own `payload/CLAUDE.md` (development checkout, its worktrees, the sync clone)
+  from loading as a subfolder rules file. See the `payload/CLAUDE.md` entry below for why. Each
+  pattern must be one of `**/claude-config/payload/CLAUDE.md`,
+  `**/claude-config/.claude/worktrees/*/payload/CLAUDE.md` and
+  `**/claude-config-sync/payload/CLAUDE.md`, or the pull refuses the file. It is
   edited in the repo, never published back from a Mac, and a pull writes each value into
   `settings.json` (refusing the whole file, by name, if it holds any key not on the allowlist in
   `claude-sync`, or a value Claude Code would not act on). Off is `false`, never a deletion; the one
@@ -55,6 +61,16 @@ back.
   both lists and `claude-sync pull` as the remedy, and `claude-sync verify` fails on it. Edit the
   list here, never in rtk's config, which the next pull puts back.
 - `payload/CLAUDE.md` and `payload/RTK.md` — your global rules files, synced verbatim (standing cross-project instructions travel here)
+  In this repository the copy under `payload/` is excluded from Claude Code's subfolder loading by
+  the shared `claudeMdExcludes` setting (#3635). Without it, Claude Code loads `payload/CLAUDE.md`
+  and its 14 imports the first time a session or agent reads, edits or writes any file under
+  `payload/`, a second copy beside the one from `~/.claude`. Measured 2026-11-25: 318 of 433 agents
+  in one session carried it, a median 36,610 tokens more on every later request. 22 headless runs
+  the same day showed the setting stops it in a main session and in agents, `omitClaudeMd` agents
+  included, drops the imports with it, and leaves `~/.claude/CLAUDE.md` loading.
+  `tests/test-claude-md-excludes.sh` holds the patterns to these copies only. Count on it only in a
+  session started after the pull that installed it: whether a session already running picks it up
+  has not been measured.
 
 Every mirrored file (hooks, skills, agents, commands) and the hooks fragment are stored with this
 Mac's config directory written as `__CLAUDE_HOME__`, and expanded to each Mac's own on the way in,
@@ -692,7 +708,22 @@ one place, `hooks/lib/hold-record.sh`, which `claude-sync` and those hooks both 
 `claude-sync` that cannot load it reads an existing record as held, says why, and clears nothing.
 When `hooks/lib/sync-clone.sh` itself cannot be loaded, the write gate refuses any call whose
 payload names `payload/`, naming the file and `claude-sync pull` as the fix, and the prompt hook
-says once a session that it could not check; both used to say nothing (#1900). Every other gate
+says once a session that it could not check; both used to say nothing (#1900). The same holds for a
+watcher that cannot be read (#3547). Whether a watch daemon is live, and which clone it runs from,
+is read from the process the pid file names, with `ps`, and that reading has three answers:
+live, none, or could not be read. None is a settled answer: no pid file, or one naming a process
+that is not running or is something else. When the pid file names a running process and `ps`
+fails, is missing or says nothing about it, or the pid file is there and cannot be read, the write
+gate refuses the payload write in its own words, naming the `ps` command that failed and how it
+ended, and the prompt hook says once that it could not check; both used to read the empty answer
+as no watcher and say nothing. A process the hook's shell may not signal counts as running for
+this: `kill -0` exits 1 for it exactly as for a dead pid, so only the shell's own words that there
+is no such process settle a pid as gone, and anything else is left to `ps`. The clone the
+watcher runs from cannot be told apart then, so it is refused with every other. What does not
+depend on the watcher still passes: a hold of the session's own, which is read from its own record
+and is the way on the refusal names, a linked worktree on its own branch, and a plain copy. The
+check after a Bash call reports a change the same way. Both hooks ask through `sc_watcher_possible`
+in `hooks/lib/sync-clone.sh`, which says no only when none is settled. Every other gate
 that refuses does the same for a library it needs, and `hooks/test-gates-fail-closed.sh` runs each
 one with each such library taken away. A library a gate loads with a stand in function
 (`. lib/x.sh || name() {`) is needed too, unless the suite names that stand in as examined:
@@ -3995,8 +4026,9 @@ repository's own merge tool, read by `lib/merge-target.sh`), it asks Claude for 
 how the product behaves now that the change shipped, and Claude skips it, in one line, for anything
 nobody using the product would notice. It also stands down for a repository with `.no-pr-quiz` at
 its root, a session snoozed with `pr-merge-quiz.sh --snooze-session <id>`, a pull request whose
-changelog label says it is not visible, sleep mode, and a headless run. What it decided is counted in
-`~/.claude-quiz-verdicts/counts`.
+changelog label says no manager would notice it (which labels those are is the answer of
+`hooks/lib/changelog-entry.js`, never a name in the quiz), sleep mode, and a headless run. What it
+decided is counted in `~/.claude-quiz-verdicts/counts`.
 
 A merge command still running in the background is not quizzed yet (#1768). A command that passes
 the Bash tool's 600 s limit is moved to the background, and the hook runs at that moment, before
@@ -4328,6 +4360,35 @@ What it refuses:
 What passes: every Slack read, `slack_send_message_draft`, a command that only mentions an endpoint
 (a grep, an echo, a test assertion), and `/nudge` at `skills/nudge/nudge.py`, the one script let
 through (Dan, 2026-11-05), matched by its real path, so a copy anywhere else is refused.
+
+Since claude-config#3575 the gate's own checks are six suites, not one: on 2026-11-24 the single
+`hooks/test-slack-drafts-only-gate.sh`, 2,633 checks, ran past the runner's 1,200 second wall limit
+on GitHub's runners, so its sections were cut, in their order and by their measured cost, into
+`test-slack-drafts-only-gate-scripts.sh` (tools, commands, scripts and the Python imports they
+reach), `-written-files` (data files, program options, files copied or written and run),
+`-file-arguments` (a file handed to code, redirects, code read on input),
+`test-slack-drafts-only-gate.sh` itself (`/nudge`, an unreadable payload, the time budget, a crash,
+the wiring and the cost checks), `-runners` (module runners, builds, git writes, package specs) and
+`-tools-cache` (native tools, written modules, the judgement cache and the misreads). All six run
+the gate in one shared world, `hooks/lib/slack-drafts-gate-harness.sh` (the gate, the throwaway
+folder and its cache, the result line and the fixtures one suite reads from another's sections).
+Each keeps its own copy of the helper functions a case is driven through, because the gate knows
+a shell function only where the text calling it defines it: from a sourced file, `run_bash "<a
+command that posts>"` reads as an unknown program running that command, and the suite is refused.
+`test-slack-drafts-gate-helper-copies.sh` holds those copies equal, naming the suite and the helper
+when two differ.
+
+Since claude-config#3624 the code loaders checks are five suites on the same harness: on 2026-11-25
+the single `hooks/test-slack-drafts-code-loaders.sh`, 2,287 checks, read up to 485 seconds on
+GitHub's runners, 81 percent of the suite cost guard's line at half the wall limit. Its sections were
+dealt by their measured cost, kept together where one makes the fixtures another reads, into
+`test-slack-drafts-code-loaders.sh` itself (PHP includes, a NUL in a first line, `NODE_OPTIONS` and
+perl, sourced paths, `eval` and a shell's `-c` and `-n`, and the gate's verdict on running each of
+the five), `-data-names` (an address held as data, test files and mocks, a declared webhook name),
+`-package-runs` (a launcher's package run and a package script), `-python` (a Python script that
+only reads, modules under other names, routes to `os` and `sys`) and `-shell-input` (process
+substitution and a shell fed by what is around it). The helper copies guard holds their copies too,
+and runs every suite sharing the harness once without it, which must stop with a failed result line.
 
 ### Running a refused command with no network (#3173)
 
@@ -5223,6 +5284,26 @@ samples of ten judgements each way taken in turn on 2026-11-24 at load averages 
 plain script handed a data file had the same mean before and after in both runs (0.1711 and
 0.1713 s, then 0.1755 and 0.1756 s), and a folder holding `__main__.py`, whose file is now read,
 took about 0.002 s more (means of 0.1721 and 0.1739 s, then 0.1769 and 0.1785 s).
+A Python command is also read as `python3` itself reads its options (`py_own_reading`, called
+from the gate's interpreter lines before the reading there was, claude-config#3539). Which word
+runs was decided by the gate's table of options, which is not Python's reader. Measured on main
+on 2026-11-24 against what `python3` 3.14.4 and 3.9.6 ran for 110 shapes of command line with
+scripts that only print, each of these ran something that posts and passed: `python3 posts.py
+-m x` (no file of a command holding the word `-m` was read, for any interpreter, so `node
+post.js -m x` passed too); code glued to `-c` (`python3 -c'import posts'`); `python3 -Wc
+posts.py` and `-Xc`, where the letters after `-W` or `-X` are its value; `python3 -BW quiet.py
+posts.py`, where `-W` takes the next word; `python3 -mdoc`, a module whose short name ends in c;
+`python3 -- -post.py` and `python3 -- -` with code on its input; and a `-W` value naming a
+warning class by its module (`-W error::warnmod.Loud`), which `python3` imports from
+`PYTHONPATH` before anything else. Now the word `-m` hides nothing, the module a `-W` value
+names is read as an import, and where the table's answer is not Python's the command is spelled
+again so the table reads it as Python does, from its words as written, and judged so. The
+table's own reading still follows, so a command refused before is refused still. A spelling the
+gate cannot build is refused as unread where typed, and left as it was in a script on disk.
+Not covered by that reading, each measured on 2026-11-24 as allowed where the file posts:
+`python3 -i quiet.py < posts.py`, which runs the lines on its input after the script;
+`PYTHONWARNINGS`, which names a module as `-W` does; and a shell handed `--` and a script whose
+name starts with a dash (`bash -- -post.sh`), the shells' options being read by the table still.
 Not covered, each measured on 2026-11-22 as allowed where the file posts:
 a Python file on disk that runs a file it names
 (`python3 runner.py`, `import runner`); code the shell fills in whole
@@ -8367,7 +8448,8 @@ and answers the second refusal's reason trimmed of its full stop; a mod sends on
 `reason`. A mod that answers a tool call itself, and so passes it to no guard beneath it, asks
 `$.modkit.screen(e)` before acting on it and answers with its refusal: mod-kit asks the secret guard
 wherever its folder sorts, answers null when the secret guard is not loaded, and refuses with the
-card when it cannot ask. `tools/check-mod-shared-parts.sh`, run by `tests/test-mods.sh`, fails any
+card when it cannot ask. `tools/check-mod-shared-parts.sh`, run by
+`tests/test-mods-shared-parts.sh`, fails any
 other mod that keeps its own copy, draws a result row or the band itself (any line naming
 `ToolResult` or `AbovePrompt` as a string, however the hook is written), draws a card's parts or
 left rule, retries a send, reads which files a command writes, walks up for a `.git` entry (`.git`
@@ -10041,9 +10123,14 @@ link> --add-label` on a PR the session's own record says it opened (the `opened`
 keeps, written from the link each `gh pr create` printed; GitHub's author is the same account for
 every session, so it cannot tell them apart), each naming exactly one label. Which labels is the
 gate's answer, never a list in the mod: the mod runs `node ~/.claude/hooks/lib/changelog-entry.js
-required-labels <owner/name>`, which answers `required` with every label the gate takes and whether
-each needs a sentence in the description, `not-required` for a repository nobody gated, or `unknown`
-with why (a registry missing or unreadable, a repository listed with no start date or a bad one). A
+required-labels <owner/name> --needs-dan`, which answers `required` with every label the gate takes
+in that repository and whether each needs a sentence in the description, `not-required` for a
+repository nobody gated, or `unknown` with why (a registry missing or unreadable, a repository
+listed with no start date or a bad one, or with an announcements channel that is not a channel id).
+The flag says the mod understands a label whose wording is Dan's to approve (#3665): the gate lists
+`changelog/announce`, with `needsAnnouncement` and `needsDan`, only to a caller passing it and only
+for a repository whose registry entry names an `announceChannel`, so a session still running the
+mod as it was is never handed that label, and until an entry names a channel no session is. A
 label the gate says needs a sentence a manager reads (`changelog/visible`) may be set like the
 others (Dan, 2026-11-22, by picker: "Also allow changelog/visible"), so a session can merge
 overnight a PR whose changelog sentence he has not read. The gate still refuses that merge while
@@ -10734,18 +10821,40 @@ Two things are deliberately not carried:
   `tools/check-mods.sh` fails a mod without one, because the copy the engine would generate is
   otherwise sent up to main as a local edit (two arrived that way on 2026-10-04, #638).
 
-`tests/test-mods.sh` runs `tools/check-mods.sh` over `payload/mods`, which validates every mod and
-runs its own `*.test.ts` and `*.test.tsx` with `claude plugin test`. It runs in every full suite run
-on a Mac and in the pull request checks, which install Claude Code for it (#3297): no push gate runs
-it. Where no `claude` command exists it reports UNMEASURED rather than a pass, and the same, with its
+The real tree's parts (`tests/test-mods.sh` and its two siblings, below) run `tools/check-mods.sh`
+over `payload/mods`, which validates every mod and runs its own `*.test.ts` and `*.test.tsx` with
+`claude plugin test`. They run in every full suite run on a Mac and in the pull request checks, which
+install Claude Code for them (#3297): no push gate runs them. Where no `claude` command exists each
+reports UNMEASURED rather than a pass, and the same, with its
 own exit code and the engine's words, when `claude` answers that hooks modules are turned off in this
 process (its cached rollout switch saved off, or a setting such as `disableAllHooks`), which no test
 can set; it never counts that as every mod failing (#740). A failure carrying no verdict line names
 the exit code and the last lines of output instead of an empty reason.
 
+That run over the real tree was then all `tests/test-mods.sh` held (now one part of it, below).
+The checks of `check-mods.sh` on
+fixture mods and a stub claude, and of the other mod scans, are `tests/test-mods-fixtures.sh`, and
+section 9, what every mod shares, is `tests/test-mods-shared-parts.sh`: one suite of 516 checks cut
+into three by what each section cost, after it read up to 777 seconds on GitHub's runners on
+2026-11-25, against the 1,200 second wall limit (#3622). All three run in the world `tests/mods-harness.sh` sets up, and the
+last section of the fixtures suite holds them together: each piece is a suite the runner finds, each
+refuses to run without the harness, and only the real tree's parts can reach the real claude.
+
+The run over the real tree then read 490 and 667 seconds by itself on a runner, nearly all of it the
+engine running each mod's own tests one after another, so it is in parts too (#3622):
+`tests/test-mods.sh`, `tests/test-mods-real-tree-2.sh` and `tests/test-mods-real-tree-3.sh`, with
+the code they share in `tests/mods-real-tree.sh`, the one place the real claude is found. Each hands
+`check-mods.sh` the names of the mods dealt to it (`bash tools/check-mods.sh payload/mods <mod> ...`
+checks those mods of the folder, each exactly as in a whole run, and refuses a name that is not a
+mod there). The deal reads every mod from disk and gives each to the part with the fewest seconds so
+far, by the measured seconds in `tests/mods-real-tree-seconds.tsv` (a mod it does not name counts as
+5). Measured on the work MacBook on 2026-11-25: 67, 64 and 60 seconds, against 168 for one run.
+`scope-modes` alone takes about 50 of part 1's, the engine building its hooks module afresh for each
+of its 559 register tests, and no part can be cheaper than that one mod's `claude plugin test`.
+
 In the pull request checks neither is UNMEASURED: the runner has no `claude` on its PATH, and the
 version in `.github/claude-code-version`, installed by `tools/install-claude-code.sh` from the
-vendor's npm package and cached on that file, is handed to `tests/test-mods.sh` and
+vendor's npm package and cached on that file, is handed to the real tree's parts and
 `tests/test-mods-load-engine.sh` alone in `MODS_CLAUDE`. That is a promise a claude is there, so
 `check-mods.sh` is run with `CHECK_MODS_REQUIRE_CLAUDE=1` and a missing or switched off claude fails
 with exit 6, and the load test fails when the claude it was given is missing. The load test no
@@ -10755,8 +10864,9 @@ ran in an empty home folder with the network blocked. To move the checks to a ne
 change the version line in `.github/claude-code-version` and open a pull request.
 
 Once a day (6:17 AM ET in winter), `.github/workflows/mods-on-newest-claude-code.yml` installs the
-newest release and runs both suites on it, so a release that breaks a mod is found within a day
-without turning any pull request red (it never runs on a push or a pull request). A passing day posts
+newest release and runs the real tree's parts and the load test on it, so a release that breaks a
+mod is found within a day without turning any pull request red (it never runs on a push or a pull
+request). A passing day posts
 nothing. A failing day opens one issue (labels `priority-p1`, `bug`, `mods`, milestone Ungrouped)
 naming the version and the failing mods, or, while that issue is open, comments on it instead
 (`tools/report-mods-on-newest-claude-code.sh`). Only the job that posts has write access, and it
@@ -10769,10 +10879,17 @@ Each Mac records the Claude Code build the mods last passed on, in
 record is about the build that Mac runs). `check-mods.sh` writes it when a whole mods folder passes
 on a real `claude`, never on a failure, an UNMEASURED run or one mod checked alone, and a run on
 another build says so in its first line, as does `tests/test-mods.sh` under its line in the
-runner's report: "Claude Code changed since the mods last passed on this Mac". A red with no commit
+runner's report: "Claude Code changed since the mods last passed on this Mac". The real tree's parts
+each check only some mods, so none writes it from its own pass: each part of one run of
+`run-all-tests.sh` joins that run's round (`CHECK_MODS_ROUND`, from the run id), leaves a file
+naming the mods it passed and the build, and reads the round's files; the part that finds every mod
+in the folder passed on the build installed now writes the record. A failing part leaves no file,
+two parts finishing at once each write before they read so the last to read records, and a part
+killed halfway leaves only a file never read. A part run by hand joins no round. A red with no commit
 to blame then reads as Claude Code's change first: on 2026-11-18, 2.1.328 turned two secret guard
 tests red and three builders each had to show it was not theirs. `CHECK_MODS_LAST_PASSED` moves the
-record, set empty it is off, and `tests/test-mods.sh` turns it off for every fixture.
+record, set empty it is off, and the mods suites' harness, `tests/mods-harness.sh`, turns it off for
+every fixture.
 Handed one mod's own folder (`bash tools/check-mods.sh payload/mods/scope-modes`), it checks that
 mod alone, reading its dependencies from the folder holding it. A folder holding no mod at all
 exits 5 and says nothing was checked, never a pass: until #3105 one mod's folder was searched for
@@ -10782,8 +10899,8 @@ kept too, one file per failure in `~/.cache/claude-config/mod-test-failures` (ou
 syncs), and the line ends `whole output kept in <file>`, so a failure seen once can still be read
 afterwards (#1788, L297). A copy stays 30 days, or while it is one of the newest 3 of its own mod and check, under 20 MB in all (#2959); a passing run writes nothing.
 `CHECK_MODS_FAILURE_OUTPUT` moves the folder, or set empty keeps nothing and the line says so.
-`tests/test-mods.sh` points it at its own throwaway folder for every fixture, and leaves only its
-run over the real `payload/mods` writing to the real one.
+`tests/mods-harness.sh` points it at its own throwaway folder for every fixture of the mods suites,
+and leaves only the real tree parts' runs over the real `payload/mods` writing to the real one.
 It also fails a mod whose hook is on an event Claude Code's built-in security default sends past
 the user tier every mod loads in (#875): every `classic.*` event, `prompt.section`, `prompt.context`,
 `prompt.compose`, `skill.prompt`, `attribution.text` and `settings.read`, and since Claude Code
@@ -10807,13 +10924,13 @@ It also type checks each mod strictly (#758), as the mod's own `tsconfig.json` s
 TypeScript compiler pinned in `tools/typescript` (#803; TypeScript 7.0.2, installed on CI before the
 suites; `TSC_BIN` overrides it, and `tsc` on the path is the last resort). A checkout without it, as
 every new worktree is, gets it with no manual step (#1496): `tools/lib/pinned-compiler.sh`, called by
-`check-mods.sh`, `check-mod-noun-waits.sh` and `tests/test-mods.sh`, links the checkout's
+`check-mods.sh`, `check-mod-noun-waits.sh` and `tests/mods-harness.sh`, links the checkout's
 `node_modules` (a real folder of links, so the ignore rule still covers it) to ONE install per clone
 and pin, kept in the clone's common git folder at `.git/pinned-typescript/<lockfile hash>-<platform>`.
 Only the first checkout of a clone after the pin moves installs it, with `npm ci --prefer-offline`
 (from the npm cache, 0.9 s measured on 2026-10-22, the registry only for what the cache lacks),
 stopped with everything it started after `PINNED_TS_INSTALL_DEADLINE` seconds (60). A test suite
-never asks the registry: `tests/test-mods.sh` sets `PINNED_TS_OFFLINE=1`, which reads the npm cache
+never asks the registry: `tests/mods-harness.sh` sets `PINNED_TS_OFFLINE=1`, which reads the npm cache
 only, so where the cache lacks the package its sections say UNMEASURED with that reason. Two runs
 installing at once each install into a folder of their own and publish it by one rename, so neither
 can see the other's half made copy and no lock is left behind by a run that is killed. A
@@ -10864,7 +10981,7 @@ a laid folder named as its argument, cuts the tsconfig's types back to the three
 session's MCP list, and leaves out every line that is wholly a comment but the engine's first, since
 comments carry no types and Claude Code's carry dashes and words the push gates refuse, refusing
 outright where such a character sits in what is kept), then run `tests/test-mods.sh` and
-commit the result with whatever the newer types ask of a mod. On 2.1.292, nineteen stand-ins
+`tests/test-mods-fixtures.sh` and commit the result with whatever the newer types ask of a mod. On 2.1.292, nineteen stand-ins
 returned their object cast to `never`, which passes any shape; removing those casts showed eight of
 them, in seven mods, hiding a missing member or a parameter narrower than the real one. Every one is
 now returned uncast, typed with the real noun's types, and `check-mods.sh` refuses such a cast in
@@ -10938,7 +11055,7 @@ the timer's arguments is worked out as the timer is set, so it is the noun's own
 call given as the callback (`$.clock.after(0, slow())`), and the arguments of a function making call,
 a function written in place there included (#2333).
 Run on its own, it installs that compiler as the type check does, and refuses (exit 4, naming why
-and `npm ci --prefix tools/typescript`) where it cannot. `tests/test-mods.sh` judges the compiler by whether it starts (a Mac's native build
+and `npm ci --prefix tools/typescript`) where it cannot. `tests/test-mods-fixtures.sh` judges the compiler by whether it starts (a Mac's native build
 copied to Linux is installed and cannot run), and where it does not, reports its noun wait checks
 UNMEASURED with the same command, as the type check above does, rather than failing. Under `CI=true`,
 where the workflow installs it, a compiler that does not start fails instead. (It no
@@ -10968,6 +11085,33 @@ suite run and in the pull request checks, on fixtures for each of those seats an
 with the machine's own settings. The types say the reverse holds (a person's mod's call "runs
 through every hook but the calling one", the organization's included), so the guards could be seated
 higher along with a mod; none has been moved, and moving one is Dan's decision.
+
+Every hook a mod registers at `tool.call` or `tool.check` ends in a catch built by mod-kit's
+`hooks/hold.ts` (#3655). Claude Code cuts a hook at 10 seconds of its own time and skips one that
+throws, and a hook with no catch is then passed over, so the call it was judging runs with nothing
+said: 6 of 6 runs measured for #3627 on 2026-11-25 on Claude Code 2.1.332, when 25 of the mods' 34
+such hooks had no catch. A hook that can refuse or ask ends in `cutCall` or `cutCheck`, one that
+answers the mod's own tool in `cutOwn`, and one that only watches a call in `watchesOnly`, which
+answers nothing so that a cut watcher never refuses an ordinary call. A guard that is cut now tells
+Claude: "Blocked: the style check could not check this call (it ran out of time), so the call was
+refused and did not run. This is not a judgement of what the call does: send the same call again.
+If it keeps happening, tell Dan." Seen live that day on scratch copies of the style check and the
+area check with one line added to make the hook slow: refused 3 of 3 each, where the code before
+this change let the call run 3 of 3. The cost is that a guard slow for an honest reason refuses a
+call that used to run unjudged; how often that happens has not been measured on either Mac.
+One call is let through when its guard is cut: scope modes' catch answers nothing for a `TaskStop`,
+so the stop runs as it did before, by Dan's decision on #1495 that a stop is never refused because
+scope modes' own check of it failed (read in the test engine, not in a live session).
+`tools/check-mod-guard-catch.sh` fails a mod whose tool hook ends in anything else (no catch, a
+catch of its own, a kit name it does not import from `./mod-kit/hold.ts`, a copy of `hold.ts` that
+is not mod-kit's, or `watchesOnly` on a hook whose own lines refuse), and whatever it cannot read is
+a failure, never a pass. `tests/test-mod-guard-catch.sh` runs it in every full suite run on a
+fixture for each of those, on `payload/mods`, on the real style check with its catch taken off, and
+against Claude Code's own list of each mod's tool hooks where Claude Code is installed. Six hooks
+at other events can refuse and still have no catch (three at a turn's end, one at a subagent's, two
+at a permission prompt): none lets a tool call run unjudged, and they are left to #3655. The whole
+rule, with what a hook that never yields does to its mod and to the mods beside it, is standing
+rule 7 in `docs/mods-design.md`.
 
 ## Sleep mode
 

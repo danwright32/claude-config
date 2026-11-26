@@ -8155,6 +8155,10 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: Never export or pass as an argument a value of unbounded size (commit message, diff, API body): pipe it or use a file, or every later exec fails.
 
 ## Building with AI
+- **L1042. A model writes a structured record's fields in the order asked and cannot revise one already written, so ask for the evidence and reasoning fields before the verdict field, and give the verdict a value that withdraws the record. Asked for the verdict first, or given no way out, it commits and then argues against itself, or invents a difference to fill a required field.**
+  (PostRoll#1655, 2026-11-25)
+  CHECK: danwright32/PostRoll:tests/test_flag_recommendation.py (partial)
+  SHORT: A model writes record fields in order and cannot go back: ask for evidence before the verdict, and give the verdict a withdrawn value.
 - **L860. When an AI review of a piece of work returns safe with nothing blocking, merge it and file the optional suggestions as issues, because sending them back as a build round brings another review, and a fresh reviewer always finds more: across five pieces 21 of 36 reviews said safe, every one was followed by another round, and the optional items per review never fell.**
   (slate#3007, 2026-11-17)
   SHORT: A review that says safe means merge and file its optional items as issues; a build round for them brings another review that finds more.

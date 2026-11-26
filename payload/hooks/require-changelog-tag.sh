@@ -10,9 +10,14 @@
 # merge time, when the person who made the change is still holding it.
 #
 # The record is two halves:
-#   the LABEL   changelog/visible | changelog/technical | changelog/none
+#   the LABEL   changelog/visible | changelog/technical | changelog/none | changelog/announce
 #   the BODY    a "## Changelog" block carrying the sentence a manager reads,
-#               required only for changelog/visible
+#               required for changelog/visible and changelog/announce, and under
+#               changelog/announce an "## Announcement" block carrying the post for agents
+#
+# changelog/announce (claude-config#3665) is for a change whose agents must or can act
+# differently. It is in use only in a repository whose registry entry names an
+# announcements channel (announceChannel), and refused here everywhere else.
 #
 # Both are read through lib/changelog-entry.js, which is the single definition of
 # what a valid record is. A rule that lives only in a pull request template is a
@@ -46,6 +51,15 @@
 #
 # Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command> (visible in the
 # command, so it cannot happen by accident or go unnoticed in the transcript).
+#
+# The override does NOT cover a pull request carrying changelog/announce (Dan, 2026-11-25,
+# claude-config#3665). So with it typed, in a repository the registry gates, the pull request is
+# still read: one carrying that label is judged in full, as if the override were not there, and
+# every other one merges with nothing said, as it always did. Where the labels cannot be read at
+# all (gh gives no answer, the registry cannot say whether the repository is gated, a tool is
+# missing) the override still lets the merge through, since it is the remedy this gate names for
+# exactly that, and the allow says in one sentence that an announcement could not be ruled out.
+# The two exits that come before the command can even be parsed keep the override as it was.
 #
 # Seams, for the tests: CHANGELOG_REGISTRY points at a different registry file.
 
@@ -135,7 +149,34 @@ cwd="${parsed#*$'\x1f'}"
 # is taken, so it asks about the merge itself.
 mt_runs_merge "$command" || exit 0
 
+# How this gate says something beside a merge it lets through (lib/hook-notice.sh).
+. "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
+  printf '%s\n' "$1" >&2
+  printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
+
+# THE OVERRIDE, read once (claude-config#3665; the head of this file). It used to leave here, before
+# anything was read. `overridden` stays true until the pull request has been read and found to carry
+# the announce label, which the override does not cover: from then on this merge is judged as if the
+# override had not been typed. `unread` is what is standing between the gate and the labels at each
+# step below, in words for the notice.
+overridden=false
+case "$command" in
+  *ALLOW_UNTAGGED_MERGE=1*) overridden=true ;;
+esac
+unread="this Mac's dev update registry could not be read"
+
+# Let through, said out loud (Dan, 2026-11-25). With the override typed and the labels unread, the
+# merge goes ahead, as the override always meant. But an unread pull request may be an announcement,
+# and an allow that says nothing would read as "it was not one" (L98). So the person is shown one
+# sentence and the session is handed the same one.
+override_allows() {
+  hook_allow_notice "ALLOW_UNTAGGED_MERGE=1 let this merge through, but $unread, so whether it carries changelog/announce was never read and an announcement, which the override does not cover, could not be ruled out." PreToolUse
+}
+
+# Every refusal below goes through here. While the override stands, a refusal is not given: each one
+# ahead of the label reading is a way the labels could not be read, so it becomes the allow above.
 deny() {
+  [ "$overridden" = true ] && override_allows
   jq -nc --arg reason "$1" '{
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
@@ -145,10 +186,6 @@ deny() {
   }'
   exit 0
 }
-
-case "$command" in
-  *ALLOW_UNTAGGED_MERGE=1*) exit 0 ;;
-esac
 
 # node reads the changelog entry itself, so with it absent there is no rule this machine can
 # apply at all, and nothing a person here could do about it (L324). It also reads the registry, so
@@ -163,6 +200,12 @@ command -v node >/dev/null 2>&1 || exit 0
 # and everything left is jq's. The record arrives from gh as JSON, the scope answer is JSON, and
 # deny() builds its own refusal with jq. A gate that cannot read any of that has to say so rather
 # than fall through the reading and find nothing to complain about (claude-config#480, L490).
+# With the override typed that refusal was never given, and still is not: the merge goes through,
+# with the sentence about an announcement, which hook_allow_notice writes without jq.
+if ps_reader_missing jq && [ "$overridden" = true ]; then
+  unread="jq is not installed, so gh's answer about the pull request could not be read"
+  override_allows
+fi
 ps_reader_missing jq && refuse_no_reader "jq is not on PATH" \
   "require-changelog-tag.sh reads gh's answer about this pull request with it, and the record it is looking for is inside that answer, so with jq absent nothing here can tell a tagged pull request from an untagged one." \
   "jq"
@@ -191,6 +234,7 @@ esac
 # check could say matters (claude-config#1526). Only the direct form, because a wrapper names its number as a
 # positional argument the shell reads and names no repository at all.
 if mt_is_pr_merge "$command" && mt_reader_missing; then
+  unread="python3 is not installed, so which pull request this command merges could not be read"
   deny "Cannot tell whether this repo needs a changelog record: $(mt_reader_absent_why) Reading another pull request's record while merging this one would lose this change from the next manager update. Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>."
 fi
 
@@ -233,6 +277,7 @@ if span_why="$(mt_merge_span_why "$command" "$cwd")"; then
     fi
   done <<< "$t_all"
   [ -n "$gated" ] || exit 0
+  unread="this command merges more than one pull request and this gate reads one"
   deny "Cannot judge this merge's changelog record: $span_why (One of them, $gated, may be gated by the changelog registry.) Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>."
 fi
 
@@ -241,6 +286,7 @@ fi
 # told, and cannot tell is never "not gated" (L490). Asked in this shell, so a GraphQL merge's node is
 # resolved once and the repository and number read below take that answer.
 if mt_api_merge_untold "$command"; then
+  unread="which pull request this command merges could not be told"
   deny "Cannot judge this merge's changelog record: $MT_API_WHY Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>."
 fi
 
@@ -263,6 +309,7 @@ slug="${repo_flag:-$local_slug}"
 # treating "cannot tell" as "not in scope" is how a gate goes quiet at exactly
 # the moment it stopped working (L214, L98).
 scope=$(scope_for "$slug")
+unread="this Mac's dev update registry could not say whether ${slug:-this repository} is gated"
 
 [ -n "$scope" ] || deny "Cannot tell whether this repo needs a changelog record: reading $REGISTRY through lib/changelog-entry.js produced nothing at all. That is the gate failing, not the repo opting out, so it refuses rather than merging blind. Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>."
 
@@ -295,6 +342,21 @@ fi
 in_scope=$(printf '%s' "$scope" | jq -r '.inScope // false')
 [ "$in_scope" = "true" ] || exit 0
 
+# An announcements channel that is not a channel id (claude-config#3665) is a config error in a gated
+# repository, refused for every merge there in its own words, exactly as a start date that is not a
+# date is above. Read as "this repository names no channel" it would refuse the announce label as
+# never set up, which sends somebody to relabel when the remedy is one key in the registry, and it
+# would quietly stop every later check that asks whether this repository announces (L98, L11).
+#
+# With the override typed it waits until the pull request has been read, below: the override clears
+# it for a pull request that is not an announcement, as it clears a start date that is not a date,
+# and does not clear it for one that is.
+bad_announce=$(printf '%s' "$scope" | jq -r '.badAnnounce // false')
+bad_announce_why=$(printf '%s' "$scope" | jq -r '.why // ""')
+if [ "$bad_announce" = "true" ] && [ "$overridden" != true ]; then
+  deny "Cannot tell whether this repo takes the changelog/announce label: $bad_announce_why. Fix announceChannel in its entry in $REGISTRY, or remove the key if the repo does not announce. Deliberate override, for a pull request that does not carry changelog/announce: ALLOW_UNTAGGED_MERGE=1 <the same command>."
+fi
+
 pr=$(mt_pr_number "$command")
 
 # The repository is passed to gh the same way the merge names it, so the question is about the
@@ -308,6 +370,7 @@ if [ "$found" != "true" ]; then
   pr_label="$(mt_pr_label "$pr")"
   wrong=$(printf '%s' "$envelope" | jq -r '.wrongRepo // ""' 2>/dev/null)
   if [ -n "$wrong" ]; then
+    unread="the only answer gh gave was about $wrong, not about $slug"
     deny "Refusing to merge: the only answer gh gave was about $wrong, not about $slug. Reading one pull request's changelog record while merging a different one records the wrong thing about both. Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>."
   fi
   # NOT FOUND is not "the record could not be read" (L11). Every account answered that there is no
@@ -315,9 +378,11 @@ if [ "$found" != "true" ]; then
   # right repository, not the override: offering the override for a pull request whose record is
   # sitting in another repository teaches reaching for it (L36, claude-config#470).
   if [ "$(printf '%s' "$envelope" | jq -r '.notFound // false' 2>/dev/null)" = "true" ]; then
+    unread="no $pr_label was found in $searched"
     deny "Refusing to merge: no $pr_label was found in $searched under any logged-in account, so there is no changelog record here to read. It was looked for there because $searched_why. If it lives in another repository, name that repository with --repo owner/name on the merge, or cd into its checkout before the merge."
   fi
   gh_error=$(printf '%s' "$envelope" | jq -r '.error // ""' 2>/dev/null)
+  unread="gh gave no answer about the $pr_label in $searched"
   deny "Cannot read this pull request's changelog record (gh pr view returned nothing for the $pr_label in $searched under any logged-in account${gh_error:+, $gh_error}), so whether a manager would notice this change would go unrecorded. Check the pull request, then re-run with ALLOW_UNTAGGED_MERGE=1 if the record is genuinely there."
 fi
 
@@ -334,20 +399,95 @@ case "$author" in
   dependabot|dependabot\[bot\]|app/dependabot) exit 0 ;;
 esac
 
-verdict=$(printf '%s' "$view" | HOOK_DIR="$HOOK_DIR" node -e '
+# The record is read by parseEntry, which reads it the same on every Mac, and then judged by
+# gateRefusal, which is this gate's alone and is handed what the registry said about THIS repository
+# (claude-config#3665). The split is deliberate: parseEntry is also how merged history is read, so a
+# rule about a registry in there would turn a change that shipped into a gap on a Mac whose registry
+# differs.
+#
+# What comes back is one JSON object. `announce` is whether the pull request carries the announce
+# label at all, asked first and of the label alone, because it decides whether the override covers
+# this merge. Then `ok` when the merge may go ahead, or the refusal's `code` and its `reason`, which
+# names the labels this repository takes. A judge that throws leaves `announce` standing with
+# neither, and one that cannot even read the label prints nothing.
+verdict=$(printf '%s' "$view" | HOOK_DIR="$HOOK_DIR" SCOPE="$scope" node -e '
   const entry = require(process.env.HOOK_DIR + "/lib/changelog-entry.js");
   let raw = "";
   process.stdin.on("data", function (d) { raw += d; });
   process.stdin.on("end", function () {
-    let pr;
-    try { pr = JSON.parse(raw); } catch (e) { process.stdout.write(""); return; }
-    const got = entry.parseEntry({ labels: pr.labels, body: pr.body });
-    process.stdout.write(got.ok ? "" : got.reason);
+    let pr, scope, out;
+    try {
+      pr = JSON.parse(raw); scope = JSON.parse(process.env.SCOPE);
+      out = { announce: entry.carriesAnnounce(pr.labels) === true };
+    } catch (e) { process.stdout.write(""); return; }
+    try {
+      const got = entry.parseEntry({ labels: pr.labels, body: pr.body });
+      const refused = entry.gateRefusal(got, pr.body, scope);
+      if (refused) { out.code = refused.code; out.reason = refused.reason; } else { out.ok = true; }
+    } catch (e) { /* announce alone: the judge failed, and whether this is an announcement is still known */ }
+    process.stdout.write(JSON.stringify(out));
   });
 ' 2>/dev/null)
 
-[ -n "$verdict" ] && deny "PR #$number carries no usable changelog record. $verdict
+# Does it carry the announce label? "yes", "no", or nothing when not even that could be told.
+carries=$(printf '%s' "$verdict" | jq -r 'if .announce == true then "yes" elif .announce == false then "no" else "" end' 2>/dev/null)
+
+# THE OVERRIDE'S ONE EXCEPTION (the head of this file). The labels have been read, so the override is
+# settled here and nowhere later: a pull request that is not an announcement takes it, exactly as it
+# always did, whatever is wrong with its record. One that is an announcement does not, and from this
+# line on it is judged as if the override had not been typed. Where the label could not be told the
+# merge goes through and that is said.
+if [ "$overridden" = true ]; then
+  case "$carries" in
+    no) exit 0 ;;
+    yes) overridden=false ;;
+    *) unread="lib/changelog-entry.js failed while reading the pull request's labels"
+       override_allows ;;
+  esac
+fi
+
+# What every refusal of a pull request carrying the announce label ends with, in place of the
+# override the other refusals offer: offered there, it would send somebody to a command that is
+# refused again.
+not_covered="ALLOW_UNTAGGED_MERGE=1 does not cover a pull request carrying changelog/announce, so it is judged in full with or without it."
+
+# The channel that is not a channel id, held back above while the override stood.
+if [ "$bad_announce" = "true" ]; then
+  deny "PR #$number cannot merge as it stands: it carries changelog/announce and $bad_announce_why. Fix announceChannel in its entry in $REGISTRY. $not_covered"
+fi
+
+# The judge says so when the record passes. Nothing at all is the judge failing (a library that
+# threw, an answer that could not be read), and that is never a record with nothing wrong: it used
+# to be read as one, since an empty answer was the passing answer (L98, L490).
+verdict_ok=$(printf '%s' "$verdict" | jq -r '.ok // false' 2>/dev/null)
+if [ "$verdict_ok" != "true" ]; then
+  verdict_code=$(printf '%s' "$verdict" | jq -r '.code // ""' 2>/dev/null)
+  verdict_reason=$(printf '%s' "$verdict" | jq -r '.reason // ""' 2>/dev/null)
+  if [ -z "$verdict_reason" ]; then
+    no_verdict="Cannot judge this merge's changelog record: reading PR #$number through lib/changelog-entry.js produced no verdict at all. That is the gate failing, not the record passing, so it refuses rather than merging blind."
+    [ "$carries" = yes ] && deny "$no_verdict Reinstall the hooks with claude-sync pull. $not_covered"
+    deny "$no_verdict Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>."
+  fi
+  # A pull request carrying the announce label, whatever it is refused for: the label where it is
+  # not in use, the post for agents under it (missing, empty, or holding what may not be drafted),
+  # and equally the refusals it shares with a visible one (a second label, its Changelog sentence).
+  if [ "$carries" = yes ]; then
+    deny "PR #$number cannot merge as it stands. $verdict_reason
+
+This is checked at merge time because the post under changelog/announce is drafted for agents exactly as the pull request holds it once the change is live. $not_covered"
+  fi
+  case "$verdict_code" in
+    # A post for agents under another label. The override does cover this pull request, and its
+    # refusal still does not print it, so nobody is pointed at the override for a post somebody
+    # meant agents to read.
+    ANNOUNCE_*|ANNOUNCEMENT_*|NO_ANNOUNCEMENT|EMPTY_ANNOUNCEMENT)
+      deny "PR #$number cannot merge as it stands. $verdict_reason
+
+This is checked at merge time because a post written under an Announcement heading is one somebody meant agents to read, and only changelog/announce drafts it." ;;
+  esac
+  deny "PR #$number carries no usable changelog record. $verdict_reason
 
 This is checked at merge time because judging it later means re-reading every merged title, which is what assembling the June to August update actually cost. Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>."
+fi
 
 exit 0

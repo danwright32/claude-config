@@ -31,6 +31,7 @@ payload/hooks/test-python-c-ascii.sh
 payload/hooks/test-repo-files.sh
 payload/hooks/test-repo-slug.sh
 payload/hooks/test-run-all-tests-real-tree.sh
+payload/hooks/test-shell-code-lines.sh
 payload/hooks/test-suite-modes.sh
 payload/hooks/test-suite-result-line.sh
 payload/hooks/test-suite-scratch-isolation.sh
@@ -57,4 +58,5 @@ WHEN-A-SUITE-CHANGES payload/hooks/test-scan-subshell-globals.sh
 WHEN-A-SUITE-CHANGES payload/hooks/test-skill-helper-exits.sh
 WHEN-A-SUITE-CHANGES payload/hooks/test-skill-integrity.sh
 WHEN-A-SUITE-CHANGES payload/hooks/test-skill-python-tests.sh
+WHEN-A-SUITE-CHANGES payload/hooks/test-slack-drafts-only-gate-runners.sh
 WHEN-A-SUITE-CHANGES payload/skills/design-rounds/test-headless-chrome.sh
