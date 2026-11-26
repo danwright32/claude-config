@@ -1107,6 +1107,30 @@ check "claude records judge: session notes are not offerable" "$(has "$JUDGED" "
 judge claude-records "$H/Downloads"
 check "claude records judge: a folder it does not list is not offerable" "$(has "$JUDGED" "not offerable: it is not one of the records this kind shows")"
 
+# Everything else in ~/.claude, which no kind sized until #3235's third reading (2026-11-26: uploads,
+# backups, telemetry, debug output and the like, 18 MB, besides the installed config), is counted in
+# the note; transcripts, state and file history are not, since rows and other kinds size them. And
+# the folders in ~/.cache named for Claude Code or this config join the home entries the note counts.
+fresh
+mkdir -p "$H/.claude/uploads/$U5" "$H/.claude/backups" "$H/.claude/hooks" "$H/.claude/projects/-Users-x" "$H/.claude/state/x" \
+  "$H/.claude/file-history/$U5" "$H/.cache/claude-config/suite-timings" "$H/.cache/gh"
+printf 'u\n' > "$H/.claude/uploads/$U5/a.png"; printf 'b\n' > "$H/.claude/backups/b.json"; printf 'h\n' > "$H/.claude/hooks/h.sh"
+printf '{}\n' > "$H/.claude/history.jsonl"; printf 't\n' > "$H/.claude/projects/-Users-x/$U5.jsonl"
+printf 's\n' > "$H/.cache/claude-config/suite-timings/t"; printf 'g\n' > "$H/.cache/gh/g"
+old "$H"
+run_scan --only claude-records
+check "claude records, the rest of ~/.claude: the scan exits 0" "$(eq "$RC" 0)"
+# Exact, so counting projects, state or file history in it too would fail this.
+check "claude records, the rest of ~/.claude: its other entries are counted and sized in the note" \
+  "$(has "$(note_of claude-records)" "4 other files and folders in ~/.claude hold 49 KB")"
+check "claude records, the rest of ~/.claude: and none is a row" "$(eq "$(item_of "$H/.claude/uploads")$(item_of "$H/.claude/hooks")" "")"
+check "claude records, ~/.cache: a folder there named for this config is counted with the home entries" \
+  "$(has "$(note_of claude-records)" "1 other files and folders in the home folder named for Claude Code or this config hold 12 KB")"
+judge claude-records "$H/.claude/uploads"
+check "claude records judge: an entry in ~/.claude it counts is not offerable" "$(has "$JUDGED" "not offerable: ")"
+judge claude-records "$H/.cache/claude-config"
+check "claude records judge: a ~/.cache folder it counts is not offerable" "$(has "$JUDGED" "not offerable: ")"
+
 # ------------------------------------------------------------------------------------------------
 # Folders of images and documents in ended sessions' notes (#3235). The daily keep rules keep them
 # (Dan, 2026-11-18: "2.4 Keep, and show in disk cleanup") and write which they are to
@@ -1804,6 +1828,59 @@ judge claude-user-temp "$DC_TMPDIR/claude-add-scope-0f6a3deac760.state"
 check "user temp judge: an entry is not offerable" "$(has "$JUDGED" "not offerable: ")"
 
 # ================================================================================================
+# Leftovers in the user temp folder (#3235): what test runs, gates and tools leave in $TMPDIR under
+# other names (pytest-of-*, pkg-*, tmp.*, browser profiles), 883 MB in 2,922 entries on the personal
+# MacBook on 2026-11-26, which no kind sized. An entry of 1 MB or more is a row, offered by deleting
+# it when no process holds a file in it and nothing in it was changed or opened in 30 days; smaller
+# ones are counted in the note. macOS's own entries and the Claude named ones are never this kind's.
+# ================================================================================================
+fresh
+UT="$(cd -P "$DC_TMPDIR" && pwd -P)"
+mkdir -p "$UT/pytest-of-dan/run-1" "$UT/pkg-held/x" "$UT/tmp.small1" "$UT/tmp.small2" "$UT/com.apple.FileProvider.big" \
+  "$UT/TemporaryItems/big" "$UT/claude-add-scope-big" "$UT/claude-$(id -u)/proj" "$UT/linked-big-target"
+printf 'p\n' > "$UT/pytest-of-dan/run-1/a.txt"; printf 'h\n' > "$UT/pkg-held/x/lock"
+printf 's\n' > "$UT/tmp.small1/f"; printf 's\n' > "$UT/tmp.small2/f"; printf 'f\n' > "$UT/loose-big-file.bin"
+ln -s "$UT/linked-big-target" "$UT/link-big"
+old "$UT"
+# Sizes from du: every name holding "big", "pytest" or "pkg" is 4 MB; the rest 12 KB.
+dc_stub du 'for a in "$@"; do case "$a" in -*) continue ;; esac; case "${a##*/}" in *big*|pytest*|pkg*) printf "4096\t%s\n" "$a" ;; *) printf "12\t%s\n" "$a" ;; esac; done'
+dc_stub lsof "printf 'p10\ncpython3\nf3\nn%s\n' $(printf %q "$UT/pkg-held/x/lock")"
+run_scan --only temp-leftovers
+check "temp leftovers: the scan exits 0" "$(eq "$RC" 0)"
+check "temp leftovers: an idle entry of 1 MB or more nothing holds is offered" "$(eq "$(state_of "$UT/pytest-of-dan")" offerable)"
+check "temp leftovers: by deleting it" "$(eq "$(method_of "$UT/pytest-of-dan")" delete)"
+check "temp leftovers: a loose file of 1 MB or more is a row too" "$(eq "$(state_of "$UT/loose-big-file.bin")" offerable)"
+check "temp leftovers: an entry a process holds a file in is not offered" "$(has "$(state_of "$UT/pkg-held")" "not offerable: in use by python3")"
+check "temp leftovers: a link is not offered" "$(has "$(state_of "$UT/link-big")" "not offerable: ")"
+for n in com.apple.FileProvider.big TemporaryItems claude-add-scope-big "claude-$(id -u)"; do
+  check "temp leftovers: $n is not this kind's row" "$(eq "$(item_of "$UT/$n")" "")"
+done
+check "temp leftovers: an entry under 1 MB is not a row" "$(eq "$(item_of "$UT/tmp.small1")" "")"
+check "temp leftovers: the note counts the smaller entries and their size" "$(has "$(note_of temp-leftovers)" "smaller entries")"
+check "temp leftovers: the scan removed nothing" "$([ -f "$UT/pytest-of-dan/run-1/a.txt" ] && [ -f "$UT/loose-big-file.bin" ] && [ -f "$UT/tmp.small1/f" ] && echo ok || echo "a fixture went")"
+judge temp-leftovers "$UT/pytest-of-dan"
+check "temp leftovers judge: an idle entry is offerable" "$(eq "$JUDGED" offerable)"
+floor_checks temp-leftovers "$UT/pytest-of-dan" "$UT/pytest-of-dan/run-1/a.txt" folder
+judge temp-leftovers "$UT/pkg-held"
+check "temp leftovers judge: an entry a process holds a file in is not" "$(has "$JUDGED" "not offerable: in use by python3")"
+judge temp-leftovers "$UT/com.apple.FileProvider.big"
+check "temp leftovers judge: macOS's own entry is never offered" "$(has "$JUDGED" "not offerable: ")"
+judge temp-leftovers "$UT/TemporaryItems"
+check "temp leftovers judge: TemporaryItems is never offered" "$(has "$JUDGED" "not offerable: ")"
+judge temp-leftovers "$UT/claude-add-scope-big"
+check "temp leftovers judge: a Claude named entry is another kind's" "$(has "$JUDGED" "not offerable: ")"
+judge temp-leftovers "$UT/pytest-of-dan/run-1"
+check "temp leftovers judge: something inside an entry is not one" "$(has "$JUDGED" "not offerable: it is not an entry directly in the user temp folder")"
+judge temp-leftovers "$H/Downloads"
+check "temp leftovers judge: a folder elsewhere is not one" "$(has "$JUDGED" "not offerable: it is not an entry directly in the user temp folder")"
+judge temp-leftovers "$UT/link-big"
+check "temp leftovers judge: a link is not offerable" "$(has "$JUDGED" "not offerable: ")"
+dc_stub lsof 'echo "lsof: WARNING: can not stat() fuse file system" >&2; exit 1'
+run_scan --only temp-leftovers
+check "temp leftovers: lsof saying anything on stderr makes in use unknown, never free" "$(has "$(state_of "$UT/pytest-of-dan")" "unmeasured: could not tell whether it is in use")"
+default_stubs
+
+# ================================================================================================
 # Every kind keeps the 30 day floor (#2134), enumerated from the folder, so a kind added later
 # without it fails here (L613). The Trash is exempt by Dan's decision; Docker's floor reads
 # Docker's own times, since its targets are not files.
@@ -1818,10 +1895,10 @@ for m in "$CATS"/*.sh; do
     check "floor: ${m##*/} applies dcs_floor" "$(grep -q 'dcs_floor "' "$m" && echo ok || echo "no dcs_floor call in $m")"
   fi
 done
-for c in transcript-extras claude-records claude-versions claude-user-temp gh-cache package-caches; do
+for c in transcript-extras claude-records claude-versions claude-user-temp gh-cache package-caches temp-leftovers; do
   check "titles: $c has a title in words, so the page never shows its code name" "$(t="$(dcr_title "$c")"; [ -n "$t" ] && [ "$t" != "$c" ] && echo ok || echo "titled '$t'")"
 done
-check "floor: the folder holds the kinds this suite expects (a control on the loop)" "$(eq "$(ls "$CATS"/*.sh | wc -l | tr -d ' ')" 19)"
+check "floor: the folder holds the kinds this suite expects (a control on the loop)" "$(eq "$(ls "$CATS"/*.sh | wc -l | tr -d ' ')" 20)"
 check "floor: exactly the one kind that only shows space says it offers nothing (a control on the marker)" \
   "$(eq "$(grep -lx '# offers: nothing' "$CATS"/*.sh | sed 's|.*/||' | tr '\n' ' ')" "claude-user-temp.sh ")"
 

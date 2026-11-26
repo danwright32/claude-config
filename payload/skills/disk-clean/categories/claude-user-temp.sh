@@ -11,27 +11,17 @@
 # offered. Measured on the personal MacBook on 2026-11-18: about 1,050 entries holding 2.2 MB, all
 # made since the restart of 2026-11-17, which emptied the folder. So the kind lists no rows (a
 # thousand greyed rows for 2 MB would bury the page) and says the count and size in its note.
-# Claude Code's own temp folder, claude-<uid>, is the claude-temp kind's and is not counted here.
-# Outside test mode the folder is TMPDIR only when it is under /private/var/folders; otherwise which
-# folder is the user's is not known, and the kind is unmeasured.
+# Claude Code's own temp folder, claude-<uid>, is the claude-temp kind's and is not counted here, and
+# every entry under another name is the temp-leftovers kind's. Which folder is the user temp folder
+# is dcs_user_temp's answer (scan-lib.sh); when it is not known, the kind is unmeasured.
 set -uo pipefail
 HERE="${BASH_SOURCE[0]%/*}"; [ "$HERE" != "${BASH_SOURCE[0]}" ] || HERE=.
 . "$HERE/../scan-lib.sh" || { echo "unmeasured: scan-lib.sh is missing beside the categories folder"; exit 0; }
 
-# Sets UT to the user temp folder's physical path, or UT_WHY to why it is not known.
-user_temp() {
-  UT=""; UT_WHY=""
-  [ -n "${TMPDIR:-}" ] || { UT_WHY="TMPDIR is not set, so the user temp folder is not known"; return; }
-  UT="$(CDPATH= cd -P "$TMPDIR" 2>/dev/null && pwd -P)" || UT=""
-  [ -n "$UT" ] || { UT_WHY="the user temp folder $TMPDIR could not be read"; return; }
-  if [ -z "$DCS_TEST_ROOT" ]; then
-    case "$UT" in /private/var/folders/?*) ;; *) UT_WHY="TMPDIR is $TMPDIR, not a folder under /var/folders, so the user temp folder is not known"; UT=""; return ;; esac
-  fi
-}
-
 do_scan() {
-  user_temp
-  if [ -n "$UT_WHY" ]; then dcs_status "unmeasured: $UT_WHY"; return 0; fi
+  dcs_user_temp
+  UT="$DCS_UT"
+  if [ -n "$DCS_UT_WHY" ]; then dcs_status "unmeasured: $DCS_UT_WHY"; return 0; fi
   local e n=0 oldest="" m
   : > "$DCS_WORK/ut.paths"
   for e in "$UT"/claude* "$UT"/.claude*; do
