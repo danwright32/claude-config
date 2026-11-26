@@ -33,11 +33,11 @@ and settles its own surfaces in rounds of its own before it is built.
    no bound under 10 s: it answers at once, or settles from a timer under 10 s. A hook that must
    wait on Dan asks through an engine `$` call, which does not spend its budget, or refuses and lets
    the answer arrive later, as ask before saving does. `tools/check-mod-noun-waits.sh`, run by
-   `tests/test-mods.sh`, fails a mod whose noun's code waits on `$.ui.ask` or on a promise only a
+   `tests/test-mods-fixtures.sh`, fails a mod whose noun's code waits on `$.ui.ask` or on a promise only a
    later event settles (its resolve kept, handed on or called back) with no timer under 10 s
    settling it in the same executor. Before #744 removed it, picker manners' `$.pickers.wait` failed
    it (`payload/mods/picker-manners/hooks/register.ts:89` at 53c803b, which `git show` still
-   reproduces); in the tree, the `waits-in-map` fixture in `tests/test-mods.sh` is that shape and
+   reproduces); in the tree, the `waits-in-map` fixture in `tests/test-mods-fixtures.sh` is that shape and
    fails it on every run. Since #756 it also follows a promise made outside a noun's code (in
    another hook) and kept in a variable, map or list a noun reads, and counts a wait bounded when
    the noun races it against a timer under 10 s made in another executor, a helper's included.
@@ -105,6 +105,99 @@ and settles its own surfaces in rounds of its own before it is built.
    the same `$.state`, and every fact moved by #1703 has such a test, seen failing first. The sweep
    of every mod, with each module variable that stays and why, is in the description of the pull
    request that closed #1703.
+7. **Every hook at `tool.call` or `tool.check` ends in a catch built by mod-kit (#3655).** Claude
+   Code cuts a hook at 10 s of its own time and skips one that throws, and a hook with no catch is
+   then passed over: the call it was judging runs, and nothing reaches Claude or Dan. Measured for
+   #3627 on 2026-11-25 on Claude Code 2.1.332 with a probe mod in headless sessions: a hook with no
+   catch cut at 10 s let the call run in 6 of 6 runs, and a catch that refuses held it in 9 of 9.
+   On that day 25 of the 34 such hooks in `payload/mods` had no catch (9 of 17 guards, 8 of 9 hooks
+   answering a mod's own tool, all 8 watchers). A rule each mod must remember is one a mod leaves
+   out (L621), so the catch is built in one file, mod-kit's `hooks/hold.ts`, which each mod keeps
+   byte for byte at `hooks/mod-kit/hold.ts`, and every registration ends in one of four:
+   - `.catch(($, e, next) => cutCall('the mod', e, next))` on a `tool.call` hook that can refuse or
+     ask. Cut before it passed the call on, it refuses. Cut after, the call has already run, so it
+     replays what the call settled to, since a refusal saying it did not run would be untrue.
+   - `.catch(($, e, next) => cutCheck('the mod', next))` on a `tool.check` hook. Nothing has run at
+     the check, so it always refuses.
+   - `.catch(($, e, next) => cutOwn('the mod', next))` on a hook that answers the mod's own tool.
+     Such a call was never one that ran unjudged (no hook answering it, it fails), so this adds no
+     refusal: it says in the mod's name what happened and that part of the work may stand.
+   - `.catch(watchesOnly)` on a hook that never refuses or asks, only records the call or adds to
+     its result. It answers nothing, which the engine reads as the hook absent, so a watcher that
+     is cut cannot refuse an ordinary call it was never judging.
+
+   A cut guard says: "Blocked: the style check could not check this call (it ran out of time), so
+   the call was refused and did not run. This is not a judgement of what the call does: send the
+   same call again. If it keeps happening, tell Dan." It says "(it failed)" for a throw, and never
+   quotes the failure's own words, which can hold the input the guard could not read, a secret
+   included (the lessons review of #1298). A guard that does more in its catch (ask before saving
+   judges the call once more inside the catch's 1,000 ms, five other mods answer in their own
+   words) hands that in as `work`, `held` and `last`, and it runs inside `neverThrows` there, so a mod's
+   own catch code can still never be the reason a call ran. The handler is written out at each
+   registration because `claude plugin validate` takes only a function literal or the name of a
+   function there (read on 2.1.332).
+
+   Seen live on the same day and build, on scratch copies of this branch's mods with one line added
+   to make the hook slow, loaded into a scratch HOME (3 samples each, load average 5 to 10 on 12
+   cores): the style check's `tool.call` hook and the area check's `tool.check` hook, each asleep
+   for 11 s, refused the call 3 of 3 in those words, where the same slowed copies of the code
+   before this change let it run 3 of 3.
+
+   Four things the engine does that shape this, each seen live that day except where it says not:
+   - **A mod's hooks on one event fail as one, among those whose tool filter matches the call.**
+     Whichever of them was cut, the engine asks the catches of those hooks in the order registered
+     and takes the first answer (3 of 3: a slow second hook was answered by the first hook's
+     catch; 3 of 3: a first catch answering nothing handed on to the second). The catch of a hook
+     registered for other tools is never asked (3 of 3: a refusing catch on a `Read` hook,
+     registered ahead of a slow `Bash` hook, was not asked about the Bash call, and the Bash hook's
+     own catch answered). So one catch answers for another hook's failure only where both hooks
+     match the call, which leaves two cases. A first hook with no tool filter matches every call,
+     so one that judges only some calls says which with `mine`, and for any other call its catch
+     answers nothing: the area check's and the design round guard's hooks for a subagent's call
+     do. And a mod's own tool shares its calls with the mod's unfiltered watchers (manual steps,
+     job watcher, is it live): where the watcher is what failed on a call to that tool, the
+     tool's `cutOwn` answers "could not finish answering this call to its own tool", which is why
+     those words claim neither that nothing was done nor that all of it was. An ordinary call
+     never reaches a `cutOwn`.
+   - **One guard's catch lets a cut call go on.** Where no matching catch answers, the hooks are read as
+     absent and the call runs. A watcher's `watchesOnly` does that by design. On a hook that can
+     refuse, a `mine` that says no is the one way its catch passes a cut call. Scope modes uses it for a `TaskStop` alone, by Dan's decision on #1495 (2026-10-22:
+     "when scope modes' own check of a TaskStop errors, the stop is let through"), since stopping
+     a job cannot break a mode and refusing the stop only keeps the job running. A cut `TaskStop`
+     runs, as it did before this change; every other call scope modes is cut on is refused. This
+     one is read in the test engine with a hook that throws (scope modes' `tests/cut.test.ts`),
+     not in a live session.
+   - **A hook that never yields is stopped at about 6 s, and what follows depends on the catch.**
+     The hooks worker misses a heartbeat at 5 s and is replaced. A mod with a catch stays loaded,
+     its catch refuses the call (3 of 3 on a probe, 3 of 3 on the style check), and it judges the
+     next calls of the session as before (3 of 3). A mod with no catch is unloaded and judges
+     nothing afterwards: the next call it would have refused ran, and it saw none of the three
+     calls after the wedge (4 of 4; a longer session was not tried). Another mod on the same worker goes on judging
+     either way (8 of 8). Where the wedging mod has no catch, the other mod's catch refuses the
+     call that was in flight (4 of 4), which a lone mod with no catch let run (3 of 3 for #3627);
+     where both have one, the mod loaded first answers (the bystander in 1 of 1, the wedging mod in
+     3 of 3). So the refusal can name a guard that did nothing wrong. A hook of another mod in
+     flight on the lost worker fails with it (mod-kit's `session.start` was skipped in 3 of the 3
+     style check runs).
+   - **The same cut reaches hooks this rule does not cover.** A `classic.Stop` hook that blocks,
+     cut at 10 s with no catch, let the turn end unblocked 3 of 3. Three `classic.Stop` hooks (is it
+     live, manual steps, scope modes), the job watcher's `classic.SubagentStop` and two
+     `classic.PermissionRequest` hooks (job watcher, scope modes) can refuse and have no catch.
+     None lets a tool call run unjudged, a refusing catch at a stop can turn one slow hook into a
+     loop of blocked stops, and one at a permission prompt would refuse a prompt Dan would have
+     answered, so each is a decision of its own and is left to #3655.
+
+   `tools/check-mod-guard-catch.sh` fails a mod whose `tool.call` or `tool.check` hook ends in
+   anything else: no catch, a catch of its own, the other event's catch, a kit name its file does
+   not import under that name from `./mod-kit/hold.ts`, a copy of `hold.ts` that is not mod-kit's,
+   or `watchesOnly` on a hook whose own lines refuse, decide or answer the call. A `tool.judge` or
+   `tool.run` hook fails too until `hold.ts` has a catch for it, and a registration it cannot read
+   is a failure, never a pass. It cannot see a watcher that refuses through a function it calls.
+   `tests/test-mod-guard-catch.sh` runs it on a fixture for each of those, on `payload/mods`, on the
+   real style check with its catch taken off, and against Claude Code's own list of each mod's tool
+   hooks (`claude plugin validate --json`) where Claude Code is installed. The trade is stated
+   plainly: a guard that is slow for an honest reason now refuses a call that used to run without
+   being judged, and how often that happens on either Mac has not been measured.
 
 ## Guard surfaces (#607, #608, #609)
 
@@ -2762,6 +2855,30 @@ pipe stands in no group. The same suite takes 0.67 to 0.80 seconds (five reading
 2026-11-22), beside about 0.7 seconds for the one reading of the script the guard already made.
 `ownBudget` caps the text one script's calls may hand the readers (eight times the script and
 200,000 characters more); past it the runs not yet read stay judged. No real suite was timed alone.
+
+**A word a script hands on as written (#3602), built 2026-11-25 for the design round guard.** Four
+of this repository's suites hand their own helper a command as text, for the gate under test to
+judge and never to run, and the text holds a `$(` the shell hands on as written (after a backslash,
+or in single quotes) with a bar inside it: `run_here 'bash -c "echo \$(sort ok.sh | bash)"'`.
+mod-kit's reader gives such a word as the one name it spells and marks it `unexpanded`.
+`handedToUnknown` dropped the mark, so the guard read the parenthesis and its bar as a group and
+the `$(` as a command's output, and held the word as a name that may be any screen file. The mark
+is now kept, and `patternMayBeLook(word, asWritten)` reads such a word as the characters it spells,
+its groups as each name they can spell, as any other word is. Only a word inside a script's own
+text is read so: the same word typed whole on a command line is judged as before, and a word that
+spells a screen file, one handed over beside it, or a suite that writes a stylesheet, is still
+held. This makes the guard hold less. Counted the same day over the personal MacBook's records
+(one run, 2026-11-25: 70,279 shell calls from 2026-10-24 to 2026-11-25, 63,186 distinct; 9,052
+distinct calls run a shell script the guard reads), each call judged whole by the guard at the
+base and with the change, in the test file's stand-in world with today's suites: 470 calls, 415
+distinct, held before pass now, 439 of them agents'. Every one runs one of the four suites
+(test-slack-drafts-code-loaders.sh 223 distinct, test-slack-drafts-unread-shapes.sh 78,
+test-work-names-publish.sh 70, test-db-write-ask.sh 49); in 30 distinct calls the suite run sits
+beside other commands (an edit to a suite or a gate by python3 or sed, git, cp, mkdir), which the
+guard reads the same with the change and passed before too. No call passed before and is held
+now. Still held: a suite whose helper is handed a fixture file's name and writes it under the
+suite's own work folder (test-lessons-advisory.sh, test-pr-review.sh), 4 calls, which needs the
+shared rule for a temporary folder to vouch for that folder, and it does not on the real suites.
 
 **The count behind #3323, the rule for a command as typed** (the personal MacBook's records, 35 days
 to 2026-11-21, 51,590 shell calls when it was taken): with the built rule 16 past calls are newly held by the two guards it was
