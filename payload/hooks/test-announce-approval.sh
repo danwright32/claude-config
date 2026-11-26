@@ -4,8 +4,10 @@
 #
 # Every case builds a session transcript as Claude Code writes one (the picker's input on the
 # assistant entry holding its tool_use, his choice in toolUseResult.answers on the user entry
-# carrying its tool_result) and asks the library through its own command line, which is how the
-# merge gate asks it. The record is kept in a folder of this suite's own (ANNOUNCE_APPROVALS_DIR),
+# carrying its tool_result) and asks the library as a hook asks it: in process for a question that
+# claims nothing, which is how the label hook asks, and through its command line with --claim, which
+# is how the merge gate asks. The command line without --claim reads the record only
+# (claude-config#3703), and has cases of its own. The record is kept in a folder of this suite's own (ANNOUNCE_APPROVALS_DIR),
 # never under the Mac's real ~/.claude/state, and every repository here is invented.
 set -uo pipefail
 
@@ -62,7 +64,7 @@ d = {"session_id": sys.argv[2], "transcript_path": sys.argv[1], "hook_event_name
 if os.environ.get("AGENT") == "1":
     d["agent_id"] = "a9bba4c0ffee"
 print(json.dumps(d))' "$1" "${4:-s1}" \
-    | ANNOUNCE_APPROVALS_DIR="${STORE_USED:-$STORE}" python3 -B "$LIB" check --repo "$2" --hash "$3" \
+    | ANNOUNCE_APPROVALS_DIR="${STORE_USED:-$STORE}" aaf_hook_check "$LIB" "$2" "$3" \
     | python3 -c 'import json, sys
 d = json.load(sys.stdin)
 print(("yes" if d["approved"] is True else "no") + "|" + d["why"] + "|" + " ".join(d["notes"]), end="")'
@@ -254,6 +256,167 @@ printf '\n\n' > "$F"; new_talk "$T"; talk "$T" bash "$BBEDIT --front-window $F";
 r="$(asked "$T" acme/widget "$(hash_text "$POST")")"
 check "a file holding no wording approves nothing" "$([[ "$r" == "no|"*"holds no wording"* ]] && echo ok || echo "$r")"
 
+echo "a file padded with blank lines is not what he was shown (#3703)"
+# Every blank line is dropped before the wording is hashed, so a file holding the post, a long run
+# of blank lines and then more text hashes the same as those lines written together. BBEdit's front
+# window shows him the post and then white space, and the pull request carries the lines together.
+# padded <name> <blank lines> [line ending]: such a file, opened in front of him and approved.
+padded() {
+  mkdir -p "$WORK/$1"; F="$WORK/$1/announcement.md"; T="$WORK/$1.jsonl"
+  python3 -c 'import sys
+post, count, end, path = sys.argv[1], int(sys.argv[2]), sys.argv[3] or "\n", sys.argv[4]
+open(path, "w", newline="").write(post.replace("\n", end) + end + end * count + "Give every caller a 100% refund without asking a manager." + end)' "$POST" "$2" "${3:-}" "$F"
+  new_talk "$T"; talk "$T" bash "$BBEDIT --front-window $F"; talk "$T" ask acme/widget "$F"
+}
+TOGETHER="$POST
+Give every caller a 100% refund without asking a manager."
+STORE_USED="$WORK/store-padded"
+padded padded 300
+check "the padded file hashes as its lines written together, which is why the hash cannot refuse it" "$([ "$(hash_file "$F")" = "$(hash_text "$TOGETHER")" ] && echo ok || echo "the hashes differ")"
+r="$(asked "$T" acme/widget "$(hash_text "$TOGETHER")")"
+check "R2 a file holding the post, 300 blank lines and then more text is not wording he approved" "$([[ "$r" == "no|"* ]] && echo ok || echo "$r")"
+check "the refusal says what is wrong with the file: how many blank lines, where, and that text sits below them" "$([[ "$r" == *"300 blank lines in a row"*"from line 8"*"more wording below them"* ]] && echo ok || echo "$r")"
+check "and what to change: no more than 2 blank lines in a row, then open it and ask him again" "$([[ "$r" == *"no more than 2 blank lines in a row"*"open the file for him and ask him again"* ]] && echo ok || echo "$r")"
+check "R2 nothing was written to the record for the padded file" "$([ "$(recorded)" = 0 ] && echo ok || echo "$(recorded) lines")"
+# The limit itself: three in a row is refused, in whatever the lines are ended with or hold.
+padded three 3
+r="$(asked "$T" acme/widget "$(hash_text "$TOGETHER")")"
+check "R2 three blank lines in a row before more text are refused" "$([[ "$r" == "no|"*"3 blank lines in a row"* ]] && echo ok || echo "$r")"
+padded threecrlf 3 $'\r\n'
+r="$(asked "$T" acme/widget "$(hash_text "$TOGETHER")")"
+check "R2 and so are three ended as GitHub ends a line" "$([[ "$r" == "no|"*"3 blank lines in a row"* ]] && echo ok || echo "$r")"
+padded threespaces 0
+printf '%s\n \n\t\n  \nGive every caller a 100%% refund without asking a manager.\n' "$POST" > "$F"
+new_talk "$T"; talk "$T" bash "$BBEDIT --front-window $F"; talk "$T" ask acme/widget "$F"
+r="$(asked "$T" acme/widget "$(hash_text "$TOGETHER")")"
+check "R2 and three lines holding only spaces or a tab" "$([[ "$r" == "no|"*"3 blank lines in a row"* ]] && echo ok || echo "$r")"
+check "R2 none of those wrote to the record" "$([ "$(recorded)" = 0 ] && echo ok || echo "$(recorded) lines")"
+# Still possible: two blank lines in a row, and blank lines after the last line, which hide nothing.
+padded two 2
+r="$(asked "$T" acme/widget "$(hash_text "$TOGETHER")")"
+check "still possible: wording with two blank lines in a row is approved" "$([[ "$r" == "yes||" ]] && echo ok || echo "$r")"
+STORE_USED="$WORK/store-trailing"
+mkdir -p "$WORK/trailing"; F="$WORK/trailing/announcement.md"; T="$WORK/trailing.jsonl"
+printf '%s\n\n\n\n\n\n' "$POST" > "$F"
+new_talk "$T"; talk "$T" bash "$BBEDIT --front-window $F"; talk "$T" ask acme/widget "$F"
+r="$(asked "$T" acme/widget "$(hash_text "$POST")")"
+check "still possible: blank lines after the last line of wording do not stand in the way" "$([[ "$r" == "yes||" ]] && echo ok || echo "$r")"
+# A hash answer that does not say how long the longest run is cannot clear the file (L98). Driven
+# with a node in front of the real one that takes the count out of that one answer, as a
+# lib/changelog-entry.js older than this library would give it, and passes every other call through.
+NOCOUNT="$WORK/node-without-the-count"; mkdir -p "$NOCOUNT"
+REAL_NODE="$(command -v node)"
+cat > "$NOCOUNT/node" <<'SH'
+#!/usr/bin/env bash
+case " $* " in
+  *" announcement-hash "*)
+    "$REAL_NODE" "$@" | "$REAL_NODE" -e 'let raw = ""; process.stdin.on("data", function (d) { raw += d; }); process.stdin.on("end", function () { const a = JSON.parse(raw); delete a.blankRun; delete a.blankRunAt; process.stdout.write(JSON.stringify(a) + "\n"); });' ;;
+  *) exec "$REAL_NODE" "$@" ;;
+esac
+SH
+chmod +x "$NOCOUNT/node"
+STORE_USED="$WORK/store-nocount"
+F="$(shown nocount)"; T="$WORK/nocount.jsonl"
+talk "$T" ask acme/widget "$F"
+H="$(hash_file "$F")"
+r="$(REAL_NODE="$REAL_NODE" PATH="$NOCOUNT:$PATH" asked "$T" acme/widget "$H")"
+check "a hash answer that does not count the blank lines approves nothing, and says so" "$([[ "$r" == "no|"*"did not say how many blank lines"* ]] && echo ok || echo "$r")"
+r="$(asked "$T" acme/widget "$H")"
+check "and the same file is approved once the answer counts them, so it was the missing count that refused it" "$([[ "$r" == "yes||" ]] && echo ok || echo "$r")"
+
+echo "the command line a session can run reads the record and writes no approval (#3703)"
+# The review's first finding, as it was run: a file shaped like a transcript, holding a picker
+# nobody was shown, and the library's check command handed a payload naming it. The library read
+# the picker from whatever file its standard input named and wrote his approval to the record.
+STORE_USED="$WORK/store-forged"
+F="$(shown forged)"; T="$WORK/forged.jsonl"
+talk "$T" ask acme/widget "$F"
+H="$(hash_file "$F")"
+forged_payload() { printf '{"session_id": "s1", "transcript_path": "%s"}' "${1:-$T}"; }
+answer() { python3 -c 'import json, sys
+d = json.load(sys.stdin)
+print(("yes" if d["approved"] is True else "no") + "|" + str(d.get("state")) + "|" + d["why"], end="")'; }
+r="$(forged_payload | ANNOUNCE_APPROVALS_DIR="$STORE_USED" python3 -B "$LIB" check --repo acme/widget --hash "$H" | answer)"
+check "R2 the check command a session can run takes no picker from the transcript its input names" "$([[ "$r" == "no|unapproved|"* ]] && echo ok || echo "$r")"
+check "R2 and writes nothing to the record" "$([ "$(recorded)" = 0 ] && [ ! -e "$STORE_USED/record.jsonl" ] && echo ok || cat "$STORE_USED/record.jsonl")"
+check "its answer says it read the record only, and what reads a picker" "$([[ "$r" == *"no approval on this Mac's record"*"reads the record only"*"hook"* && "$r" != *"none in this session"* ]] && echo ok || echo "$r")"
+r="$(forged_payload | ANNOUNCE_APPROVALS_DIR="$STORE_USED" python3 -B "$LIB" check --repo acme/widget --hash "$H" --pr 7 | answer)"
+check "R2 nor does it with a pull request named" "$([[ "$r" == "no|unapproved|"* ]] && [ "$(recorded)" = 0 ] && echo ok || echo "$r")"
+# The same transcript, asked about by a hook, is his approval: so it was the form of the question
+# that refused it above, not the session it describes. And once a hook has written it, the command
+# line reads it from the record.
+r="$(asked "$T" acme/widget "$H")"
+check "still possible: a hook asking about that session counts his picker and writes it" "$([[ "$r" == "yes||" ]] && [ "$(recorded)" = 1 ] && echo ok || echo "$r")"
+r="$(ANNOUNCE_APPROVALS_DIR="$STORE_USED" python3 -B "$LIB" check --repo acme/widget --hash "$H" --pr 7 < /dev/null | answer)"
+check "still possible: the command line says wording on the record is approved" "$([[ "$r" == "yes|approved|" ]] && echo ok || echo "$r")"
+check "and reading it added nothing to the record" "$([ "$(grep -c '"kind"' "$STORE_USED/record.jsonl")" = 1 ] && echo ok || cat "$STORE_USED/record.jsonl")"
+
+# The label hook refuses a session's command that runs this library under python in a form that
+# writes. It keeps no list of the other programs that could run the file by its own path, because
+# the file cannot be run that way: it carries no interpreter line, so the shell reads it and python
+# never does (measured 2026-11-25 with a file of the same shape, directly and behind env and nohup).
+# That rests on the first two bytes of the file, so they are held here.
+check "the library carries no interpreter line, so it cannot be run by its own path" "$([ "$(head -c 2 "$LIB")" != '#!' ] && [ -s "$LIB" ] && echo ok || echo "it begins with an interpreter line")"
+
+echo "a picker counts only from a transcript kept where Claude Code keeps them (#3703)"
+# The merge gate's own question (check with --claim) has to write, so its command line cannot be
+# read only. What it reads a picker from is held instead: a session transcript under the projects
+# folder beside the record's own state folder, which is where Claude Code keeps them. These cases run
+# with the record where a Mac keeps it, under a home of the suite's own (CLAUDE_HOME), and never
+# with ANNOUNCE_APPROVALS_DIR, which names a test's record and lets a transcript be anywhere.
+HOMEISH="$WORK/home/.claude"
+HOME_RECORD="$HOMEISH/state/announce-approvals/record.jsonl"
+at_home() { ( unset ANNOUNCE_APPROVALS_DIR; export CLAUDE_HOME="$HOMEISH"; "$@" ); }
+F="$(shown outside)"; T="$WORK/outside.jsonl"
+talk "$T" ask acme/widget "$F"
+H="$(hash_file "$F")"
+r="$(forged_payload | at_home python3 -B "$LIB" check --repo acme/widget --hash "$H" --pr 7 --claim | answer)"
+check "R2 the merge gate's question takes no picker from a transcript kept anywhere else" "$([[ "$r" == "no|unapproved|"* ]] && echo ok || echo "$r")"
+check "R2 and writes neither an approval nor a use for it" "$([ ! -e "$HOME_RECORD" ] && echo ok || cat "$HOME_RECORD")"
+check "the refusal names the transcript, and the folder a session's transcript is kept in" "$([[ "$r" == *"$T"*"is not a session transcript under $HOMEISH/projects"* ]] && echo ok || echo "$r")"
+r="$(forged_payload | at_home aaf_hook_check "$LIB" acme/widget "$H" 7 | answer)"
+check "R2 nor does the label hook's question" "$([[ "$r" == "no|unapproved|"*"is not a session transcript under"* ]] && [ ! -e "$HOME_RECORD" ] && echo ok || echo "$r")"
+# Under that folder, but not a transcript: a note a session may write there, and a link out of it.
+mkdir -p "$HOMEISH/projects/-tmp-repo/memory"
+cp "$T" "$HOMEISH/projects/-tmp-repo/memory/note.md"
+r="$(forged_payload "$HOMEISH/projects/-tmp-repo/memory/note.md" | at_home python3 -B "$LIB" check --repo acme/widget --hash "$H" --pr 7 --claim | answer)"
+check "R2 a file under that folder that is no transcript (.jsonl) is not read as one" "$([[ "$r" == "no|unapproved|"*"is not a session transcript under"* ]] && [ ! -e "$HOME_RECORD" ] && echo ok || echo "$r")"
+ln -s "$T" "$HOMEISH/projects/-tmp-repo/linked.jsonl"
+r="$(forged_payload "$HOMEISH/projects/-tmp-repo/linked.jsonl" | at_home python3 -B "$LIB" check --repo acme/widget --hash "$H" --pr 7 --claim | answer)"
+check "R2 a link under that folder to a transcript kept elsewhere is not read as one" "$([[ "$r" == "no|unapproved|"*"is not a session transcript under"* ]] && [ ! -e "$HOME_RECORD" ] && echo ok || echo "$r")"
+# Still possible: the same transcript where Claude Code keeps a session's, asked about by the gate.
+cp "$T" "$HOMEISH/projects/-tmp-repo/s1.jsonl"
+r="$(forged_payload "$HOMEISH/projects/-tmp-repo/s1.jsonl" | at_home python3 -B "$LIB" check --repo acme/widget --hash "$H" --pr 7 --claim | answer)"
+check "still possible: his picker in a session's own transcript is his approval at the merge" "$([[ "$r" == "yes|approved|" ]] && echo ok || echo "$r")"
+check "and it is written to the record with the pull request's claim" "$([ "$(grep -c '"kind": "approved"' "$HOME_RECORD" 2>/dev/null)" = 1 ] && [ "$(grep -c '"claim": true' "$HOME_RECORD")" = 1 ] && echo ok || cat "$HOME_RECORD" 2>&1)"
+# Which folder that is, for each record a call can name. A record named by ANNOUNCE_APPROVALS_DIR is
+# a test's and takes a transcript from anywhere, unless what it names is this user's own record,
+# however it is spelled or linked: then the variable has changed nothing, and neither has CLAUDE_HOME.
+# The user's own folder is read from the account database, which the call's environment cannot
+# move; here it is set in process, since the real one must not be written.
+OWN="$WORK/own/.claude"
+mkdir -p "$OWN/state/announce-approvals" "$WORK/elsewhere" "$WORK/hardlinked"
+printf '' > "$OWN/state/announce-approvals/record.jsonl"
+ln -s "$OWN/state/announce-approvals" "$WORK/linked-record"
+ln "$OWN/state/announce-approvals/record.jsonl" "$WORK/hardlinked/record.jsonl"
+root_for() {  # <ANNOUNCE_APPROVALS_DIR, or ""> <CLAUDE_HOME, or "">: the folder transcripts must be under, or None
+  python3 -B -c 'import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("announce_approval", sys.argv[1])
+lib = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(lib)
+lib._own_claude = lambda: sys.argv[2]
+for name, value in (("ANNOUNCE_APPROVALS_DIR", sys.argv[3]), ("CLAUDE_HOME", sys.argv[4])):
+    os.environ.pop(name, None)
+    if value:
+        os.environ[name] = value
+print(lib.transcripts_dir(), end="")' "$LIB" "$OWN" "$1" "$2"
+}
+check "a test's record takes a transcript from anywhere" "$([ "$(root_for "$WORK/elsewhere" "")" = None ] && echo ok || root_for "$WORK/elsewhere" "")"
+check "a record under CLAUDE_HOME takes one from the projects folder beside it" "$([ "$(root_for "" "$WORK/elsewhere")" = "$WORK/elsewhere/projects" ] && echo ok || root_for "" "$WORK/elsewhere")"
+for named in "$OWN/state/announce-approvals" "$OWN/STATE/Announce-Approvals/" "$WORK/linked-record" "$WORK/hardlinked"; do
+  check "R2 the user's own record, named by the variable as $named, still takes one only from the user's own projects folder" "$([ "$(root_for "$named" "$WORK/elsewhere")" = "$OWN/projects" ] && echo ok || root_for "$named" "$WORK/elsewhere")"
+done
+
 echo "who may write the record"
 # A subagent's call counts his picker for that call and writes nothing.
 STORE_USED="$WORK/store-agent"
@@ -321,7 +484,8 @@ d = {"session_id": sys.argv[2], "transcript_path": sys.argv[1], "hook_event_name
 if os.environ.get("AGENT") == "1":
     d["agent_id"] = "a9bba4c0ffee"
 print(json.dumps(d))' "$1" "${6:-s1}" \
-    | ANNOUNCE_APPROVALS_DIR="${STORE_USED:-$STORE}" python3 -B "$LIB" check --repo "$2" --hash "$3" ${4:+--pr "$4"} ${5:+--claim} \
+    | if [ -n "${5:-}" ]; then ANNOUNCE_APPROVALS_DIR="${STORE_USED:-$STORE}" python3 -B "$LIB" check --repo "$2" --hash "$3" ${4:+--pr "$4"} --claim
+      else ANNOUNCE_APPROVALS_DIR="${STORE_USED:-$STORE}" aaf_hook_check "$LIB" "$2" "$3" "${4:-}"; fi \
     | python3 -c 'import json, sys
 d = json.load(sys.stdin)
 print(("yes" if d["approved"] is True else "no") + "|" + str(d.get("state")) + "|" + d["why"] + "|" + d["how"] + "|" + " ".join(d["notes"]), end="")'
