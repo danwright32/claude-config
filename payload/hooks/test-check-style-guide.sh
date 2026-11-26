@@ -224,6 +224,26 @@ W="$(mk_style_repo "$BAD")"
 run_style_hook "$E2E" "cd $W && echo \"bash -c 'git push'\""
 want_style_code 0 "#1478 control: a push only echoed is no push"
 
+# A push written across a line a backslash joins to the next is checked as the bare push is
+# (claude-config#3470). The shell removes the backslash and its line break before it reads words;
+# the segmented form wrote the line break as a separator the backslash then escaped, so each of
+# these exited 0 on a commit holding the character, with nothing said. PAIR is that pair, a
+# backslash and then a line break.
+PAIR=$'\\\n'
+W="$(mk_style_repo "$BAD")"
+shape=0
+for c in "cd $W && ${PAIR}git push" "cd $W && git ${PAIR}push" "cd $W && git pu${PAIR}sh" \
+         "cd $W && echo a${PAIR}#b && git push" "cd $W && x=\$(git ${PAIR}push)" "cd $W && bash -c \"git ${PAIR}push\""; do
+  shape=$((shape + 1))
+  run_style_hook "$E2E" "$c"
+  want_style_code 2 "#3470 a forbidden character blocks a push written across a joined line (shape $shape of 6: after && and the pair; git, the pair, push; push across the pair; after a hash in a joined word; in a substitution; in a wrapper's double quoted string)"
+done
+run_style_hook "$E2E" "cd $W && echo a ${PAIR}#b && git push"
+want_style_code 0 "#3470 control: a push inside a real comment after the pair is no push, as in the shell"
+W="$(mk_style_repo 'const label = "Loading, please wait";')"
+run_style_hook "$E2E" "cd $W && ${PAIR}git push"
+want_style_code 0 "#3470 control: clean copy pushed after && and the pair is allowed"
+
 # --- what the push would actually CARRY, not what happens to be lying about ----
 #
 # This gate is PreToolUse, so on a chained commit and push it runs BEFORE the commit
