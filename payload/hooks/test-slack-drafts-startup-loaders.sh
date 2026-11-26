@@ -209,15 +209,15 @@ echo "slack drafts only: a module PERL5OPT names, and the debugger PERL5LIB puts
 # -m, with =arguments after the name, and Deep::Mod as Deep/Mod.pm. `PERL5OPT=-d` and `perl -d`
 # ran the perl5db.pl of a PERL5LIB folder in place of perl's own, and `PERL5OPT=-d:Mod` ran
 # Devel/Mod.pm.
-mkdir -p "$G/plib/Deep" "$G/pcalm/Deep" "$G/pdb/Devel" "$G/pdbcalm/Devel"
+mkdir -p "$G/plib/Deep" "$G/pcalm/Deep" "$G/pdb" "$G/pdbcalm" "$G/pdev/Devel" "$G/pdevcalm/Devel"
 plpost "$G/plib/Optmod.pm" Optmod
 printf '%s\n' 'package Optmod;' '1;' > "$G/pcalm/Optmod.pm"
 plpost "$G/plib/Deep/Mod.pm" Deep::Mod
 printf '%s\n' 'package Deep::Mod;' '1;' > "$G/pcalm/Deep/Mod.pm"
 plpost "$G/pdb/perl5db.pl" DB
 printf '%s\n' 'package DB;' 'sub DB {}' '1;' > "$G/pdbcalm/perl5db.pl"
-plpost "$G/pdb/Devel/Mark.pm" Devel::Mark
-printf '%s\n' 'package Devel::Mark;' 'sub DB::DB {}' '1;' > "$G/pdbcalm/Devel/Mark.pm"
+plpost "$G/pdev/Devel/Mark.pm" Devel::Mark
+printf '%s\n' 'package Devel::Mark;' 'sub DB::DB {}' '1;' > "$G/pdevcalm/Devel/Mark.pm"
 trio "a module PERL5OPT names, found through PERL5LIB" PERL5OPT "PERL5OPT=-MOptmod PERL5LIB=plib perl quiet.pl" "PERL5OPT=-MOptmod PERL5LIB=pcalm perl quiet.pl" "PERL5LIB=plib perl quiet.pl"
 pair "a module PERL5OPT names, found through -I on perl's command line" PERL5OPT "PERL5OPT=-MOptmod perl -Iplib quiet.pl" "PERL5OPT=-MOptmod perl -Ipcalm quiet.pl"
 pair "a module PERL5OPT names, found through an -I inside PERL5OPT" PERL5OPT "PERL5OPT='-Iplib -MOptmod' perl quiet.pl" "PERL5OPT='-Ipcalm -MOptmod' perl quiet.pl"
@@ -225,7 +225,7 @@ pair "a module PERL5OPT names with -m" PERL5OPT "PERL5OPT=-mOptmod PERL5LIB=plib
 pair "a module PERL5OPT names with arguments" PERL5OPT "PERL5OPT=-MOptmod=a,b PERL5LIB=plib perl quiet.pl" "PERL5OPT=-MOptmod=a,b PERL5LIB=pcalm perl quiet.pl"
 pair "a module PERL5OPT names in a package folder" PERL5OPT "PERL5OPT=-MDeep::Mod PERL5LIB=plib perl quiet.pl" "PERL5OPT=-MDeep::Mod PERL5LIB=pcalm perl quiet.pl"
 pair "a module PERL5OPT names, with PERL5LIB exported first" PERL5OPT "export PERL5LIB=plib; PERL5OPT=-MOptmod perl quiet.pl" "export PERL5LIB=pcalm; PERL5OPT=-MOptmod perl quiet.pl"
-pair "the debugger module PERL5OPT names with -d:" PERL5OPT "PERL5OPT=-d:Mark PERL5LIB=pdb perl quiet.pl" "PERL5OPT=-d:Mark PERL5LIB=pdbcalm perl quiet.pl"
+pair "the debugger module PERL5OPT names with -d:" PERL5OPT "PERL5OPT=-d:Mark PERL5LIB=pdev perl quiet.pl" "PERL5OPT=-d:Mark PERL5LIB=pdevcalm perl quiet.pl"
 pair "the perl5db.pl in a PERL5LIB folder, with -d in PERL5OPT" PERL5LIB "PERL5OPT=-d PERL5LIB=pdb perl quiet.pl" "PERL5OPT=-d PERL5LIB=pdbcalm perl quiet.pl"
 pair "the perl5db.pl in a PERL5LIB folder, with -d on perl's command line" PERL5LIB "PERL5LIB=pdb perl -d quiet.pl" "PERL5LIB=pdbcalm perl -d quiet.pl"
 for runs in "PERL5OPT=-MCarp perl quiet.pl" "PERL5OPT=-w perl quiet.pl" "PERL5OPT='-Mstrict -Mwarnings' perl quiet.pl"; do
@@ -251,7 +251,9 @@ pair "the file BASH_ENV names, with no extension, in front of bash -c" BASH_ENV 
 pair "the file BASH_ENV names, in front of a script run by its path" BASH_ENV "BASH_ENV=envposts.sh ./bang.sh" "BASH_ENV=envcalm.sh ./bang.sh"
 pair "the file BASH_ENV names, set through env" BASH_ENV "env BASH_ENV=envposts.sh bash quiet.sh" "env BASH_ENV=envcalm.sh bash quiet.sh"
 pair "the file an exported BASH_ENV names" BASH_ENV "export BASH_ENV=envposts.sh; bash quiet.sh" "export BASH_ENV=envcalm.sh; bash quiet.sh"
-pair "the file BASH_ENV names, by a path with a variable the gate works out" BASH_ENV 'BASH_ENV="$PWD/envposts.sh" bash quiet.sh' 'BASH_ENV="$PWD/envcalm.sh" bash quiet.sh'
+pair "the file BASH_ENV names, by a path with a variable the gate works out" BASH_ENV 'D=.; BASH_ENV="$D/envposts.sh" bash quiet.sh' 'D=.; BASH_ENV="$D/envcalm.sh" bash quiet.sh'
+run_g 'D=.; BASH_ENV="$D/envposts.sh" bash quiet.sh'
+says "#3675 and that refusal is of the file read, by its name" "envposts.sh, which BASH_ENV has bash run"
 pair "the file BASH_ENV names inside a script the command runs" BASH_ENV "bash runs-env.sh" "bash runs-envcalm.sh"
 run_g 'BASH_ENV="$UNSET_3675" bash quiet.sh'
 read_refused "#3675 a BASH_ENV the gate cannot work out is refused"
@@ -364,6 +366,30 @@ allowed "#3675 a dash named main file in lib/node that does not post passes"
 jspost "$G/-infolder.js"
 run_g "node -- -infolder.js"
 read_refused "#3675 a dash named file in the folder is still refused after --, as #3600 left it"
+
+echo "slack drafts only: a start up variable in front of a program that names no interpreter (claude-config#3675)"
+# The wrapper in front of the rule starts python3 only for a payload that could post. A command
+# such as `BASH_ENV=envposts make` names no script, shell or interpreter, so nothing in it sent the
+# call to the rule, and make starts a bash that runs the file. Each variable's name now does.
+mkdir -p "$G/zbare" "$G/zbarecalm" "$G/rbare" "$G/rbarecalm" "$G/pbare" "$G/pbarecalm"
+printf '%s\n' "$POST" > "$G/zbare/.zshenv"
+printf '%s\n' 'echo z' > "$G/zbarecalm/.zshenv"
+cp "$G/rgems/rubygems.rb" "$G/rbare/rubygems.rb"
+cp "$G/rgemscalm/rubygems.rb" "$G/rbarecalm/rubygems.rb"
+cp "$G/pdb/perl5db.pl" "$G/pbare/perl5db.pl"
+cp "$G/pdbcalm/perl5db.pl" "$G/pbarecalm/perl5db.pl"
+pair "BASH_ENV in front of make" BASH_ENV "BASH_ENV=envposts make" "BASH_ENV=envcalm make"
+pair "ENV in front of make" ENV "ENV=envposts make" "ENV=envcalm make"
+pair "ZDOTDIR in front of make" ZDOTDIR "ZDOTDIR=zbare make" "ZDOTDIR=zbarecalm make"
+pair "PYTHONPATH in front of make" PYTHONPATH "PYTHONPATH=custom make" "PYTHONPATH=calm make"
+pair "PYTHONUSERBASE in front of make" PYTHONUSERBASE "PYTHONUSERBASE=userbase make" "PYTHONUSERBASE=calmbase make"
+pair "RUBYLIB in front of make" RUBYLIB "RUBYLIB=rbare make" "RUBYLIB=rbarecalm make"
+pair "RUBYOPT in front of make" RUBYOPT "RUBYOPT=-rlibmod RUBYLIB=rlib make" "RUBYOPT=-rlibmod RUBYLIB=rcalm make"
+pair "PERL5LIB in front of make" PERL5LIB "PERL5LIB=pbare make" "PERL5LIB=pbarecalm make"
+pair "PERL5OPT in front of make" PERL5OPT "PERL5OPT=-MOptmod PERL5LIB=plib make" "PERL5OPT=-MOptmod PERL5LIB=pcalm make"
+pair "an exported BASH_ENV and then make" BASH_ENV "export BASH_ENV=envposts; make" "export BASH_ENV=envcalm; make"
+run_g "make"
+allowed "#3675 make with no start up variable passes"
 
 echo
 sdg_harness_result

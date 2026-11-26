@@ -27,6 +27,46 @@ And one more since (claude-config#3600): input run after the code a program was 
 CODE < post.js` and `perl -d -e CODE < post.pl` go on to run what they are fed once the code ends,
 and none of it was read (input_after_code).
 
+And the files an interpreter loads as it starts because the command sets a variable that names
+them (claude-config#3675). Measured on 2026-11-25 with stand in scripts that only wrote a marker
+file, one run of each shape (python 3.14.4 and 3.9.6, ruby 2.6.10, perl 5.34.1, bash 3.2.57, zsh
+5.9, dash, ksh, node 22.22.2, bun): each ran the extra file, and the gate allowed each where that
+file posts, since it read only the quiet script the command names.
+
+  * `PYTHONPATH=dir python3 quiet.py` imports dir/sitecustomize.py and dir/usercustomize.py (a
+    package folder of either name too), from any entry of the value; not with -S, -E or -I.
+    `PYTHONUSERBASE=dir` has it run usercustomize and the import lines of each .pth file in
+    dir/lib/python/site-packages, and `HOME=dir` the same in the user site folder under dir.
+  * `RUBYOPT=-r./mod ruby quiet.rb` loads mod.rb; `RUBYOPT=-rmod` loads it from a folder RUBYLIB,
+    an -I inside RUBYOPT or an -I on ruby's command line names. `RUBYLIB=dir ruby quiet.rb` loads
+    dir/rubygems.rb in place of ruby's own.
+  * `PERL5OPT=-MMod perl quiet.pl` loads Mod.pm from a folder PERL5LIB or an -I names (-m, and
+    -d:Name for Devel/Name.pm, the same). `PERL5LIB=dir perl -d quiet.pl` loads dir/perl5db.pl in
+    place of perl's own debugger.
+  * `BASH_ENV=file bash quiet.sh` runs file first (bash, and a script run by its path whose first
+    line names bash; not sh, bash --posix or bash -p). `ENV=file` does for sh, dash and ksh given
+    -i. `ZDOTDIR=dir zsh quiet.sh` runs dir/.zshenv (and .zprofile, .zshrc, .zlogin given -l or
+    -i; not with -f), and `HOME=dir` the same files, bash's .bashrc and .bash_profile, .profile
+    and .kshrc for a shell given -i or -l.
+  * `BUN_OPTIONS='--preload ./mod.js' bun quiet.js` loads mod.js, and
+    `NODE_REPL_EXTERNAL_MODULE=./mod.js node -i` runs it.
+  * `node -- -x.js`: node looks for a main file named with a leading dash in the folders NODE_PATH
+    names, in .node_modules and .node_libraries under HOME, and in lib/node beside its own
+    folder, never in the folder it runs in (node_dash_main).
+
+startup_loads reads each wherever a command sets one, whatever program it runs, so more is read
+than runs (-S, -E, -f, --posix and a shell given no -i are not looked for). A value the gate
+cannot work out is refused as unread where the command is typed (startup_unread).
+
+WHAT THAT DOES NOT COVER. A value the session's own environment holds and the command did not
+set. A HOME or NODE_PATH the gate cannot work out, and a PYTHONPATH or ENV it cannot work out in
+front of any program but python3 or a shell, which pass as before. PYTHONHOME, PYTHONBREAKPOINT
+(python3 imports the module it names where the script calls breakpoint()), PERL5DB (code perl -d
+runs), a module of ruby's or perl's own shadowed through RUBYLIB or PERL5LIB other than
+rubygems.rb and perl5db.pl, DYLD_INSERT_LIBRARIES, and bash functions handed in through the
+environment. LUA_INIT and TCL_LIBRARY (lua 5.5 and tclsh ran the file each names): the gate reads
+no lua or tcl program at all, so `lua posts.lua` passes with or without them.
+
 slack_drafts_only_gate.py loads this file and gives its Judge the class make() returns as a base, as
 it does lib/program-runs.py's, so the methods use the Judge's own readers (line, script, sh_value,
 sh_word_end, sh_cwd, is_file, content, made, shell, unfollow).
@@ -66,6 +106,77 @@ NODE_SELF = re.compile(r"\$\{NODE_OPTIONS\}|\$NODE_OPTIONS(?!\w)")
 NODE_ASSIGN = re.compile(r"(?<![\w$])NODE_OPTIONS\+?=")
 # Each word of NODE_OPTIONS, which node splits at white space outside double quotes.
 NODE_WORD = re.compile(r'"([^"]*)"|(\S+)')
+# The variables whose value has an interpreter load a file as it starts (startup_loads,
+# claude-config#3675), each with how a refusal names the file it loads ("the file F, which ...") and
+# how one names a value the gate cannot work out ("it sets V, ...").
+STARTUP_WHAT = {
+    "PYTHONPATH": ("which PYTHONPATH has python3 import as it starts",
+                   "whose folders python3 imports sitecustomize and usercustomize from as it starts"),
+    "PYTHONUSERBASE": ("which PYTHONUSERBASE has python3 run as it starts",
+                       "whose user site folder python3 runs usercustomize and each .pth file from as it starts"),
+    "RUBYOPT": ("which RUBYOPT has ruby load before the script it is given",
+                "whose libraries ruby loads before the script it is given"),
+    "RUBYLIB": ("which RUBYLIB has ruby load as it starts, in place of its own",
+                "whose folders ruby loads rubygems.rb and the libraries RUBYOPT names from"),
+    "PERL5OPT": ("which PERL5OPT has perl load before the script it is given",
+                 "whose modules perl loads before the script it is given"),
+    "PERL5LIB": ("which PERL5LIB has perl load when it is given -d, in place of its own",
+                 "whose folders perl loads its debugger and the modules PERL5OPT names from"),
+    "BASH_ENV": ("which BASH_ENV has bash run before the script it is given",
+                 "the file bash runs before the script it is given"),
+    "ENV": ("which ENV has sh, dash and ksh run first when they are given -i",
+            "the file sh, dash and ksh run first when they are given -i"),
+    "ZDOTDIR": ("which ZDOTDIR has zsh run as it starts", "the folder zsh runs its start up files from"),
+    "HOME": ("which HOME has a shell or python3 run as it starts",
+             "the folder a shell and python3 run their start up files from"),
+    "BUN_OPTIONS": ("which BUN_OPTIONS has bun load before the script it is given",
+                    "whose files bun loads before the script it is given"),
+    "NODE_REPL_EXTERNAL_MODULE": ("which NODE_REPL_EXTERNAL_MODULE has node run in place of its own prompt",
+                                  "the file node runs in place of its own prompt"),
+    "NODE_PATH": ("which NODE_PATH has node look in", "the folders node looks in for a main file handed after --"),
+}
+# One assignment of any of them among a command's words, the builtins whose words are assignments,
+# and the quick test for a text that may hold one.
+STARTUP_ASSIGN = re.compile(r"(%s)\+?=(.*)\Z" % "|".join(STARTUP_WHAT), re.S)
+STARTUP_QUICK = re.compile(r"(?:%s)\+?=" % "|".join(STARTUP_WHAT))
+STARTUP_SETTERS = frozenset({"export", "declare", "typeset", "local", "readonly"})
+# The ones whose value is a list, where the variable's own value inside it is the session's.
+STARTUP_LISTS = frozenset({"PYTHONPATH", "RUBYLIB", "PERL5LIB", "NODE_PATH", "RUBYOPT", "PERL5OPT", "BUN_OPTIONS"})
+# The ones a value the gate cannot work out is refused for where the command is typed
+# (startup_unread): PYTHONPATH and ENV only in front of the interpreter itself, HOME and NODE_PATH
+# never.
+STARTUP_STRICT = frozenset(STARTUP_WHAT) - {"HOME", "NODE_PATH"}
+STARTUP_FILLS = re.compile(r"[$`]")
+# The ones whose value is one file, with the shell that runs it or its language (the Judge's
+# script()).
+STARTUP_FILES = {"BASH_ENV": ("bash", None), "ENV": ("sh", None), "NODE_REPL_EXTERNAL_MODULE": (False, "js")}
+# The files of fixed names an interpreter loads from a folder one of them names, each with the
+# shell that runs it or its language. Measured 2026-11-25 with stand in files that only wrote a
+# marker: python3 3.14.4 and 3.9.6 imported sitecustomize and usercustomize, as a module or a
+# package, from any PYTHONPATH entry; ruby 2.6.10 loaded rubygems.rb from a RUBYLIB folder in place
+# of its own; perl 5.34.1 given -d loaded perl5db.pl from a PERL5LIB folder in place of its own;
+# zsh 5.9 ran .zshenv from ZDOTDIR, or from HOME with no ZDOTDIR, and .zprofile, .zshrc and .zlogin
+# given -l or -i; bash 3.2.57 ran .bashrc given -i and .bash_profile given -l; sh, dash and ksh ran
+# .profile given -l, and ksh .kshrc given -i.
+STARTUP_CUSTOMIZE = ("sitecustomize.py", "sitecustomize/__init__.py", "usercustomize.py", "usercustomize/__init__.py")
+_ZSH_FILES = tuple((name, "zsh", None) for name in (".zshenv", ".zprofile", ".zshrc", ".zlogin"))
+STARTUP_FOLDER_FILES = {
+    "PYTHONPATH": tuple((name, False, "py") for name in STARTUP_CUSTOMIZE),
+    "RUBYLIB": (("rubygems.rb", False, None),),
+    "PERL5LIB": (("perl5db.pl", False, None),),
+    "ZDOTDIR": _ZSH_FILES,
+    "HOME": _ZSH_FILES + ((".bashrc", "bash", None), (".bash_profile", "bash", None), (".bash_login", "bash", None),
+                          (".profile", "sh", None), (".kshrc", "ksh", None)),
+}
+# Where the Python user site folder is under a folder one of them names, as a pattern: python3
+# ran usercustomize and each .pth file's import lines from PYTHONUSERBASE's
+# lib/python/site-packages, and 3.14.4 from HOME's Library/Python/3.14/lib/python/site-packages
+# (measured 2026-11-25; the .local form is the one Python uses off macOS).
+STARTUP_USER_SITES = {
+    "PYTHONUSERBASE": (os.path.join("lib", "python*", "site-packages"),),
+    "HOME": (os.path.join("Library", "Python", "*", "lib", "python", "site-packages"),
+             os.path.join(".local", "lib", "python*", "site-packages")),
+}
 # An option that has a program given code go on to run its input as code once that code ends
 # (input_after_code, claude-config#3600), by the program's name: the words that are the option for
 # node, and for perl a run of letters holding d before any letter that takes the rest of its word
@@ -234,6 +345,302 @@ def make(shell_bang, assign, marker, unknown_dir, max_depth, runs_refused):
                         where, name = self.held_names()[names]
                         return (f"{where.rstrip(',')}, which posts to Slack (it names {name}, held there only as data, but "
                                 "NODE_OPTIONS has node load it beside code judged apart from it, which can send it)")
+            return None
+
+        # ---- Files an interpreter loads as it starts, by a variable the command sets (#3675) -------
+
+        def startup_kept(self):
+            """The values of the start up variables set so far in this call by export, by a
+            declaration or by a plain assignment, by variable, in the order they were read: a
+            command from there on runs with them (startup_loads)."""
+            got = self.__dict__.get("_startup_kept")
+            if got is None:
+                got = self.__dict__["_startup_kept"] = {}
+            return got
+
+        def startup_loads(self, text, d, depth):
+            """The reason a command that sets one of the start up variables (STARTUP_WHAT) has the
+            interpreter it starts load a file that posts, or None (module docstring,
+            claude-config#3675). Read wherever the command sets one, in its own prefix, by
+            export, env and their kin, or as a plain assignment, and whatever program it runs,
+            since any of them can start the interpreter (as node_options reads NODE_OPTIONS).
+            The assignments are the command's own, as the shared reader gives them, so the same
+            text inside a quoted word of another command is none.
+
+            What a value names by itself is read where it is set (startup_set). What depends on
+            two settings, or on the program's own words, is read by each command that runs a
+            program, with the values its own prefix gives and those set before it in this call
+            (startup_kept): the library RUBYOPT names is found through RUBYLIB or an -I, the
+            module PERL5OPT names through PERL5LIB or an -I, and the main file node is handed
+            after -- through NODE_PATH and HOME (startup_options, node_dash_main).
+
+            A value holding something the shell fills in is worked out where the gate can, the
+            variable's own value left out of a list (it is the session's, which a command
+            adding to it keeps). One the gate cannot work out is refused as unread where the
+            command is typed, and left as it was in a script on disk: always for the variables
+            that exist to load code, and for the ones set for many other reasons only in front
+            of the interpreter itself (STARTUP_STRICT, startup_unread). The session's own
+            value, which the command did not set, is not read."""
+            kept = self.__dict__.get("_startup_kept")
+            dashed = "--" in text and "node" in text
+            if not kept and not dashed and not STARTUP_QUICK.search(text):
+                return None
+            rest, assigns = self.rest_of(text)
+            words = self.words_of(rest)
+            runs = bool(words) and words[0] not in STARTUP_SETTERS
+            # The reader gives each leading assignment on a line of its own, its quotes taken off.
+            pairs = [a for a in assigns.split("\n") if a] + ([] if runs or not words else words[1:])
+            own = {}
+            for m in filter(None, map(STARTUP_ASSIGN.match, pairs)):
+                var, value = m.group(1), m.group(2)
+                if var in STARTUP_LISTS:
+                    value = re.sub(r"\$\{%s\}|\$%s(?!\w)" % (var, var), "", value)
+                if STARTUP_FILLS.search(value):
+                    value = self.sh_value('"%s"' % value.replace("\\", "\\\\").replace('"', '\\"'), d)
+                if value is None:
+                    reason = self.startup_unread(var, words)
+                    if reason:
+                        return reason
+                else:
+                    reason = self.startup_set(var, value, d, depth)
+                    if reason:
+                        return reason
+                (own if runs else self.startup_kept()).setdefault(var, []).append(value)
+            if not runs:
+                return None
+            kept = self.__dict__.get("_startup_kept") or {}
+
+            def values(var):
+                return own.get(var, []) + kept.get(var, [])
+
+            return self.startup_options(words, values, d, depth) or (
+                self.node_dash_main(words, values, d, depth) if dashed else None)
+
+        def startup_unread(self, var, words):
+            """The refusal of a start up variable set to a value the gate cannot work out, where
+            the command is typed, or None: in a script on disk, and for a variable set for many
+            other reasons anywhere but in front of the interpreter that reads it (PYTHONPATH in
+            front of python3, ENV in front of a shell). HOME and NODE_PATH are never refused
+            here: of the 27 recorded commands that set HOME, 16 held something the shell fills
+            in (counted 2026-11-25 over 61,293 recorded commands)."""
+            name = os.path.basename(words[0]) if words else ""
+            if var == "PYTHONPATH" and not self.py_cmd.get("interp"):
+                return None
+            if var == "ENV" and self.family(name) != "shell":
+                return None
+            if var not in STARTUP_STRICT:
+                return None
+            return self.unread_typed(
+                f"it sets {var}, {STARTUP_WHAT[var][1]}, to a value the gate cannot work out, so what "
+                "that loads is not read and whether it posts cannot be checked (claude-config#3675). Write the "
+                f"value of {var} out in the command")
+
+        def startup_set(self, var, value, d, depth):
+            """The reason a file one start up variable's value names by itself posts, or None:
+            the file BASH_ENV, ENV or NODE_REPL_EXTERNAL_MODULE names, each file BUN_OPTIONS
+            names, and the files of fixed names in the folders the others name
+            (STARTUP_FOLDER_FILES), each read as the interpreter that loads it reads it."""
+            if not value:
+                return None
+            if var == "HOME" and os.path.realpath(self.resolve(value, d)) == os.path.realpath(os.environ.get("HOME") or "/"):
+                return None  # the session's own, which loads the same with nothing set
+            what = STARTUP_WHAT[var][0] + ","
+            if var in STARTUP_FILES:
+                shell_hint, lang = STARTUP_FILES[var]
+                return self.script(value, d, depth, shell_hint, lang, f"the file {value}, {what}")
+            if var == "BUN_OPTIONS":
+                for quoted, plain in NODE_WORD.findall(value):
+                    w = quoted or plain
+                    if w.startswith("-"):
+                        w = w.partition("=")[2]
+                    reason = w and self.script(w, d, depth, False, "js", f"the file {w}, {what}")
+                    if reason:
+                        return reason
+                return None
+            folders = value.split(os.pathsep) if var in STARTUP_LISTS else [value]
+            for folder in filter(None, folders):
+                for name, shell_hint, lang in STARTUP_FOLDER_FILES.get(var, ()):
+                    path = os.path.join(folder, name)
+                    reason = self.script(path, d, depth, shell_hint, lang, f"the file {path}, {what}")
+                    if reason:
+                        return reason
+                for pattern in STARTUP_USER_SITES.get(var, ()):
+                    for site in sorted(glob.glob(os.path.join(glob.escape(self.resolve(folder, d)), pattern))):
+                        reason = self.startup_user_site(site, what, d, depth)
+                        if reason:
+                            return reason
+            return None
+
+        def startup_user_site(self, site, what, d, depth):
+            """The reason a Python user site folder holds something python3 runs as it starts
+            that posts, or None: usercustomize or sitecustomize, as a module or a package, and
+            the import lines of each .pth file, which site.py runs (measured 2026-11-25)."""
+            for name in STARTUP_CUSTOMIZE:
+                path = os.path.join(site, name)
+                reason = self.script(path, d, depth, False, "py", f"the file {path}, {what}")
+                if reason:
+                    return reason
+            for pth in sorted(glob.glob(os.path.join(glob.escape(site), "*.pth"))):
+                try:
+                    lines = self.content(pth).decode("utf-8", "replace").split("\n")
+                except OSError:
+                    continue
+                body = "\n".join(line for line in lines if line.startswith(("import ", "import\t")))
+                if not body:
+                    continue
+                label = f"the file {pth}, whose import lines python3 runs as it starts and {what}"
+                hit = marker.search(body)
+                if hit:
+                    return f"{label} posts to Slack (it names {hit.group(0)})"
+                reason = self.imports(label, pth, site, body, "py")
+                if reason:
+                    return reason
+            return None
+
+        def startup_options(self, words, values, d, depth):
+            """The reason a library RUBYOPT names or a module PERL5OPT names posts, or None, for
+            one command that runs a program: values(var) are the values of a variable the
+            command runs with. Each is looked for where ruby or perl looks first: a path as it
+            is written (ruby's -r./x), else the folders an -I inside the value names, those of
+            RUBYLIB or PERL5LIB, and those an -I among the program's own words names. One found
+            in none of those is ruby's or perl's own or an installed one, which is not ours to
+            read. perl's -d has it load perl5db.pl from the same folders, and -d:Name
+            Devel/Name.pm."""
+            name = os.path.basename(words[0])
+            for var, prog, libs in (("RUBYOPT", "ruby", "RUBYLIB"), ("PERL5OPT", "perl", "PERL5LIB")):
+                wanted, folders = [], []
+                for value in filter(None, values(var)):
+                    got = self.ruby_opt_names(value) if prog == "ruby" else self.perl_opt_names(value)
+                    wanted += got[0]
+                    folders += got[1]
+                if not wanted:
+                    continue
+                for value in filter(None, values(libs)):
+                    folders += [f for f in value.split(os.pathsep) if f]
+                if name == prog:
+                    for k, w in enumerate(words[1:], 1):
+                        if w == "-I" and k + 1 < len(words):
+                            folders.append(words[k + 1])
+                        elif w.startswith("-I") and len(w) > 2:
+                            folders.append(w[2:])
+                if any(STARTUP_FILLS.search(f) for f in folders):
+                    reason = self.unread_typed(
+                        f"it sets {var}, {STARTUP_WHAT[var][1]}, and names a folder to look in that the "
+                        "gate cannot work out, so what that loads is not read and whether it posts cannot be "
+                        "checked (claude-config#3675). Write the folder out in the command")
+                    if reason:
+                        return reason
+                what = STARTUP_WHAT[var][0] + ","
+                for lib in wanted:
+                    if prog == "ruby" and lib.startswith(("./", "../", "/", "~")):
+                        tries = [lib, lib + ".rb"]
+                    else:
+                        tries = [os.path.join(f, t) for f in folders for t in ((lib, lib + ".rb") if prog == "ruby" else (lib,))]
+                    for path in tries:
+                        reason = self.script(path, d, depth, False, None, f"the file {path}, {what}")
+                        if reason:
+                            return reason
+            return None
+
+        @staticmethod
+        def ruby_opt_names(value):
+            """(the libraries, the folders) a RUBYOPT value names: -rNAME or -r NAME, and -IDIR
+            or -I DIR, which ruby reads from it as from its command line (measured 2026-11-25,
+            ruby 2.6.10)."""
+            libs, folders, toks = [], [], value.split()
+            k = 0
+            while k < len(toks):
+                t = toks[k]
+                for letter, into in (("-r", libs), ("-I", folders)):
+                    if t == letter and k + 1 < len(toks):
+                        k += 1
+                        into.append(toks[k])
+                    elif t.startswith(letter) and len(t) > 2:
+                        into.append(t[2:])
+                k += 1
+            return libs, folders
+
+        @staticmethod
+        def perl_opt_names(value):
+            """(the files, the folders) a PERL5OPT value names: -MName and -mName (Name.pm, with
+            :: or ' for a folder, past a leading - and before any =arguments), -d:Name
+            (Devel/Name.pm), -d alone (perl5db.pl), and -IDIR. A letter that takes no value may
+            stand in front in the same word (-wMName); perl takes no space after -M (measured
+            2026-11-25, perl 5.34.1: "Missing argument to -M")."""
+            files, folders = [], []
+            for t in value.split():
+                if not t.startswith("-"):
+                    continue
+                for k in range(1, len(t)):
+                    c, after = t[k], t[k + 1:]
+                    if c in "Mm":
+                        mod = re.split(r"[=\s]", after.lstrip("-"), 1)[0]
+                        if mod:
+                            files.append(re.sub(r"::|'", "/", mod) + ".pm")
+                        break
+                    if c == "I":
+                        if after:
+                            folders.append(after)
+                        break
+                    if c == "d":
+                        mod = re.match(r"t?:([\w:']+)", after)
+                        files.append("Devel/" + re.sub(r"::|'", "/", mod.group(1)) + ".pm" if mod else "perl5db.pl")
+                        break
+                    if c in "CDFilx0":
+                        break  # the rest of the word is this letter's value
+            return files, folders
+
+        def node_dash_main(self, words, values, d, depth):
+            """The reason the main file node finds for a name starting with a dash, handed after
+            --, posts, or None (claude-config#3675). Measured 2026-11-25 with node 22.22.2 and
+            stand in files that only wrote a marker: `node -- -x.js` ran no -x.js in the folder
+            it ran in and none under node_modules there or above ("Cannot find module
+            '-x.js'"). A main file whose name starts with a dash is not made a path, so node
+            looks for it only where it looks for a package given no folder to start from: each
+            folder NODE_PATH names (the command's, else the session's), then .node_modules and
+            .node_libraries in HOME, then lib/node beside the folder its own program is in; as
+            a file, with an extension added, or as a folder by its package.json or index. Each
+            of those found is read as JavaScript. The gate's reading of a file of that name in
+            the folder itself (dash_named in lib/program-runs.py, #3600) is left as it is,
+            which refuses a file node would not run and never passes one it would."""
+            if len(words) < 3 or os.path.basename(words[0]) not in ("node", "nodejs") or "--" not in words:
+                return None
+            name = self.operands(words)[0]
+            if not name or name == "-" or not name.startswith("-") or words[words.index("--") + 1:][:1] != [name]:
+                return None
+            here = os.path.abspath(d or os.getcwd())
+            paths, homes = values("NODE_PATH"), values("HOME")
+            if any(v is None for v in paths + homes):
+                reason = self.unread_typed(
+                    f"node looks for {name} in the folders NODE_PATH names and under HOME, and this command sets "
+                    "one of those to a value the gate cannot work out, so the file node runs is not read and "
+                    "whether it posts cannot be checked (claude-config#3675). Write the value out in the command")
+                if reason:
+                    return reason
+            # Every value set is read, the command's own and those set before it: more than the
+            # one node gets, which costs only a refusal. With none set, the session's.
+            paths = [v for v in paths if v] or [os.environ.get("NODE_PATH") or ""]
+            homes = [v for v in homes if v] or [os.environ.get("HOME") or ""]
+            places = [(os.path.join(here, p), "a folder NODE_PATH names")
+                      for path in paths for p in path.split(os.pathsep) if p]
+            for home in filter(None, homes):
+                home = os.path.join(here, home)
+                places += [(os.path.join(home, ".node_modules"), ".node_modules in HOME"),
+                           (os.path.join(home, ".node_libraries"), ".node_libraries in HOME")]
+            for folder in os.environ.get("PATH", "").split(os.pathsep):
+                program = os.path.join(folder, os.path.basename(words[0]))
+                if folder and os.path.isfile(program):
+                    prefix = os.path.dirname(os.path.dirname(os.path.realpath(program)))
+                    places.append((os.path.join(prefix, "lib", "node"), "lib/node beside the folder node itself is in"))
+                    break
+            for folder, place in places:
+                found = self.resolve_import("./" + name, folder)
+                reason = found and self.script(
+                    found, d, depth, False, "js",
+                    f"the file {found}, which node runs for {name} after -- (it looks in {place}, never in the "
+                    "folder it runs in),")
+                if reason:
+                    return reason
             return None
 
         # ---- Input run after the code a program was given (#3600) ----------------------------------

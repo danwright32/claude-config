@@ -5284,15 +5284,42 @@ after a lone `-`, after the script as its argument, or fed with `<`, so `bash --
 `bash - -post.sh`, `ruby -- -post.rb` and a script that runs the file it is handed, handed
 `-post.sh`, are each judged by that file; `source -- post.sh`, where the word `--` was read
 for the file, is judged spelled without it. A word starting with a dash where the program
-still reads its options stays an option. Not covered, each measured on 2026-11-25 as run and as
-allowed where the file posts: `sitecustomize.py` and `usercustomize.py` in a folder
-`PYTHONPATH` names, `RUBYOPT` (`-r`), `PERL5OPT` (`-M`), `BASH_ENV`, `ENV` for a shell given
-`-i`, and `.zshenv` in the folder `ZDOTDIR` names (claude-config#3675); and a `PYTHONWARNINGS`
-or `PYTHONSTARTUP` the session's own environment holds. `node -- -post.js` is judged by the
-file of that name in the folder the command runs in, as it is for the other interpreters, and
-is refused where that file posts, although node 22 did not run that file in the measurement:
-it looked for the name under `node_modules`. A file of that name under `node_modules` is not
-read, and whether node runs one there was not measured.
+still reads its options stays an option. Not covered: a `PYTHONWARNINGS` or `PYTHONSTARTUP` the
+session's own environment holds.
+The files an interpreter loads as it starts because the command sets a variable are read since
+claude-config#3675 (`startup_loads` in `lib/code-loaders.py`), each measured on 2026-11-25 as run
+by the interpreter and as allowed by the gate where the file posts (one run of each shape, the
+same versions, with bun as installed): `sitecustomize.py` and `usercustomize.py`, as a module or
+a package, in a folder `PYTHONPATH` names; `usercustomize.py` and each `.pth` file's import lines
+in the user site folder `PYTHONUSERBASE` or `HOME` places; a library `RUBYOPT` names with `-r`,
+found by its path or through `RUBYLIB`, an `-I` inside `RUBYOPT` or an `-I` on ruby's command
+line, and the `rubygems.rb` a `RUBYLIB` folder puts in front of ruby's own; a module `PERL5OPT`
+names with `-M`, `-m` or `-d:`, found through `PERL5LIB` or an `-I`, and the `perl5db.pl` a
+`PERL5LIB` folder puts in front of perl's own debugger; the file `BASH_ENV` names; the file
+`ENV` names, which sh, dash and ksh run when given `-i`; `.zshenv`, `.zprofile`, `.zshrc` and
+`.zlogin` in the folder `ZDOTDIR` names, and those, `.bashrc`, `.bash_profile`, `.profile` and
+`.kshrc` in the folder `HOME` names; each file `BUN_OPTIONS` names; and the file
+`NODE_REPL_EXTERNAL_MODULE` names. Each is read wherever a command sets the variable (its own
+prefix, `export`, `env`, a plain assignment), whatever program it runs, since any of them can
+start the interpreter, and the refusal names the variable. More is read than runs: the gate does
+not look for `-S`, `-E`, `-f`, `--posix` or a shell given no `-i`. A value the gate cannot work
+out is refused as unread where the command is typed, and left as it was in a script on disk:
+always for the variables that exist to load code, for `PYTHONPATH` only in front of `python3`
+itself and for `ENV` only in front of a shell, and never for `HOME` or `NODE_PATH`, which are set
+for many other reasons. The wrapper in front of the rule sends a payload naming one of these
+variables to the rule, so `BASH_ENV=posts make` is judged though it names no script or
+interpreter. `node -- -post.js`: node 22.22.2 ran no file of that name in the folder it ran in
+and none under `node_modules` there or above; a main file named with a leading dash is looked
+for only in the folders `NODE_PATH` names, in `.node_modules` and `.node_libraries` under `HOME`,
+and in `lib/node` beside node's own folder, and the gate now reads the file found in each
+(`node_dash_main`). It still reads a file of that name in the folder, as #3600 left it, which
+refuses a file node would not run and passes none it would. Not covered: a value of any of these
+the session's own environment holds; `PYTHONHOME`, `PYTHONBREAKPOINT`, `PERL5DB`,
+`DYLD_INSERT_LIBRARIES` and a bash function handed in through the environment; a module of
+ruby's or perl's own other than `rubygems.rb` and `perl5db.pl` shadowed through `RUBYLIB` or
+`PERL5LIB`; and `LUA_INIT` and `TCL_LIBRARY`, since the gate reads no lua or tcl program at all
+(`lua posts.lua` passes with or without them). php and R are not installed on the Mac this was
+measured on, so `PHPRC`, `PHP_INI_SCAN_DIR` and `R_PROFILE_USER` were not measured.
 Not covered, each measured on 2026-11-22 as allowed where the file posts:
 a Python file on disk that runs a file it names
 (`python3 runner.py`, `import runner`); code the shell fills in whole

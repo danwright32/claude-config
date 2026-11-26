@@ -6158,8 +6158,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         try:
             # The modules a NODE_OPTIONS it sets has node load, whatever it runs (#2912), and what a
             # PYTHONWARNINGS or PYTHONSTARTUP it sets has python3 load (lib/py-file-runs.py, #3600).
+            # And the file any other start up variable it sets has an interpreter load
+            # (startup_loads in lib/code-loaders.py, #3675).
             reason = self.node_options(text, d, depth) or self.py_env_loads(text, d, depth) \
-                or self.judge(d, text, wrapper, why, depth, whole)
+                or self.startup_loads(text, d, depth) or self.judge(d, text, wrapper, why, depth, whole)
             if not reason:
                 codes = len(self.made_code)
                 self.note_writes(d, text, whole)  # for a later command that runs what it wrote (#2525, #2721)
