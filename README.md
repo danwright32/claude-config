@@ -376,7 +376,10 @@ gate judge and refuse more.
   word, in any letter case: `public`, `private` or `internal`.
 - **Cannot tell is refused**, whatever the text: a file that is there and cannot be read, an empty
   one, one of comments alone, a word that is none of the three, a folder at that path, GitHub
-  failing to hand it over, or an answer about another repository. The refusal says which, and says
+  failing to hand it over, an answer about another repository, or git not answering which
+  checkout the command runs in, what its origin is or what origin's copy of the file holds (never
+  read as no checkout, no origin or no file, each of which would ask GitHub in the checkout's
+  place). The refusal says which, and says
   the repository is judged because of its own declaration.
 - **A work owner's repository** that declares itself public may still name its own work, as a
   public one may.

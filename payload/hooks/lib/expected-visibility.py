@@ -20,8 +20,11 @@ says it could not tell, and the gate refuses.
                       STATED: value holds what it says
                       UNREADABLE: it is there and could not be read (why says how)
                       UNKNOWN: it was read and states none of the three (why says so)
+                      SILENT: git did not answer, so none of the above is known (why says when);
+                      top is None when it was the first question, which checkout this is
         origin_state  ORIGIN_OK (slug is owner/name), ORIGIN_NONE (no origin remote),
-                      ORIGIN_UNREAD (an origin that is not a GitHub address this can read)
+                      ORIGIN_UNREAD (an origin that is not a GitHub address this can read),
+                      ORIGIN_SILENT (git did not answer when asked for it)
 
 WHERE IT IS READ. The working tree's copy when something is at that path: a regular file is read,
 and anything else there (a folder, a link to nothing) is UNREADABLE. With nothing at that path the
@@ -43,14 +46,16 @@ sys.dont_write_bytecode = True
 
 PATH = ".github/expected-visibility"
 VALUES = ("public", "private", "internal")
-NONE, STATED, UNREADABLE, UNKNOWN = "none", "stated", "unreadable", "unknown"
-ORIGIN_OK, ORIGIN_NONE, ORIGIN_UNREAD = "ok", "none", "unread"
+NONE, STATED, UNREADABLE, UNKNOWN, SILENT = "none", "stated", "unreadable", "unknown", "silent"
+ORIGIN_OK, ORIGIN_NONE, ORIGIN_UNREAD, ORIGIN_SILENT = "ok", "none", "unread", "silent"
 REFS = ("refs/remotes/origin/HEAD", "refs/remotes/origin/main", "refs/remotes/origin/master")
 NOT_ONE_OF = "the first line of its %s that is not a comment is not public, private or internal" % PATH
 # Each git read's bound, a setting, not a measurement: the reads took 0.020 to 0.023 seconds together
 # over five runs on the personal MacBook on 2026-11-26, at a load average near 40. A read that
-# outlasts it is never taken as no file: outside a checkout's root it reads as no checkout, which
-# sends the gate to GitHub, and on origin's copy it is UNREADABLE.
+# outlasts it, or a git that cannot be run, is SILENT, never no checkout, no origin or no file: each
+# of those would send the publish gate to GitHub's copy in the place of this checkout's own, which
+# can say what GitHub's does not (the lessons review of 3a7131c). EXPECTED_VISIBILITY_GIT_SECONDS
+# replaces the bound for the suites, and is read only under HOOK_TESTS_RUNNING=1.
 GIT_SECONDS = 5
 
 _COMMENT = re.compile(r"[ \t\r\f\v]*#")
@@ -98,10 +103,19 @@ class Checkout:
         self.origin_state, self.slug = ORIGIN_NONE, None
 
 
+def _bound():
+    if os.environ.get("HOOK_TESTS_RUNNING") == "1":
+        try:
+            return float(os.environ["EXPECTED_VISIBILITY_GIT_SECONDS"])
+        except (KeyError, ValueError):
+            pass
+    return GIT_SECONDS
+
+
 def _git(top, *args):
     """-> (exit code, stdout as text), or (None, "") when git could not be run or did not answer."""
     try:
-        p = subprocess.run(["git", "-C", top] + list(args), capture_output=True, timeout=GIT_SECONDS)
+        p = subprocess.run(["git", "-C", top] + list(args), capture_output=True, timeout=_bound())
     except (OSError, subprocess.SubprocessError):
         return None, ""
     return p.returncode, p.stdout.decode("utf-8", "replace")
@@ -116,8 +130,14 @@ def _stated(co, text):
 
 
 def checkout(folder):
-    """The declaration and the origin of the git checkout folder is in, or None when it is in none."""
+    """The declaration and the origin of the git checkout folder is in, or None when git says it is
+    in none. When git does not answer that first question the Checkout has no top and is SILENT."""
     rc, out = _git(folder or os.getcwd(), "rev-parse", "--show-toplevel")
+    if rc is None:
+        co = Checkout(None)
+        co.state, co.origin_state = SILENT, ORIGIN_SILENT
+        co.why = "git did not answer when asked which checkout this is"
+        return co
     top = out.strip("\n")
     if rc != 0 or not top:
         return None
@@ -137,14 +157,16 @@ def checkout(folder):
         for ref in REFS:
             rc, out = _git(top, "show", "%s:%s" % (ref, PATH))
             if rc is None:
-                co.state = UNREADABLE
+                co.state = SILENT
                 co.why = "git did not answer when asked for the copy of %s on origin's default branch" % PATH
                 break
             if rc == 0:
                 _stated(co, out)
                 break
     rc, out = _git(top, "remote", "get-url", "origin")
-    if rc == 0:
+    if rc is None:
+        co.origin_state = ORIGIN_SILENT
+    elif rc == 0:
         co.slug = slug_of(out)
         co.origin_state = ORIGIN_OK if co.slug else ORIGIN_UNREAD
     return co

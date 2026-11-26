@@ -348,12 +348,22 @@ def declared(full, vis, cwd):
     an origin this cannot read) the folder's file says nothing about it, so GitHub is asked for the
     copy on that repository's default branch."""
     co = ev.checkout(cwd or os.getcwd())
+    # git not answering which checkout this is, or what its origin is, is never read as a folder that
+    # is no checkout of the repository: that would ask GitHub in the place of a checkout whose own
+    # file may say public where GitHub's copy does not (the lessons review of 3a7131c).
+    if co is not None and (co.top is None or co.origin_state == ev.ORIGIN_SILENT):
+        raise _undeclared(full, vis, "%s, so whether the command runs in a checkout of %s, whose own %s "
+                          "would be the one to read, could not be told"
+                          % (co.why if co.top is None else "git did not answer when asked for the origin "
+                             "of the checkout the command runs in", full, ev.PATH))
     here = co is not None and co.slug is not None and co.slug.lower() == full.lower()
     key = (full.lower(), co.top if here else None)
     if key in _DECLARED:
         return _DECLARED[key]
     if not here:
         value = _declared_on_github(full, vis)
+    elif co.state == ev.SILENT:
+        raise _undeclared(full, vis, co.why)
     elif co.state in (ev.UNREADABLE, ev.UNKNOWN):
         # The guard withholds the path as it withholds the name: a script's error output can land in a
         # log, and a checkout's path can hold a name (claude-config#2909).

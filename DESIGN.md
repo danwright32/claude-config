@@ -2079,7 +2079,11 @@ own pull requests and issues, where they belong. How it is built, and what was w
 - **Cannot tell is refused, whatever the text** (L98, L345): that comment's own words are that the
   gate "must say it could not tell, and refuse, when it cannot read the declaration of a repository
   it is about to post to". An empty file and a file of comments alone are refused too: a file that
-  is there has been written to say something.
+  is there has been written to say something. So is git not answering which checkout the command
+  runs in, or what its origin is: read as no checkout, that sent the question to GitHub in the
+  place of a checkout whose own file can say public where GitHub's copy does not, and the text
+  passed (found by the lessons review of the first commit, reproduced with a stand in git that
+  sleeps past the reader's bound, then fixed).
 - **Asked of GitHub only when the checkout cannot answer** (weighed, not built: asking GitHub
   every time). GitHub's copy on the default branch cannot be changed by a branch's working tree
   and is never stale, but asking it for every post to a private repository adds a call, 0.39 to

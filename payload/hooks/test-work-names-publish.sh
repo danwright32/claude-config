@@ -1320,5 +1320,39 @@ check "#3582 after GitHub was asked for that repository's own: $(asked_github)" 
 RUN_DIR="$WORK/on-disk" run 'GH_REPO=danwright-test/odd-word gh issue comment 5 --body "nothing to see"'
 check "#3582 and a repository named by GH_REPO is judged by its own declaration, here one that cannot be understood: $out" could_not_tell
 
+# (f) git not answering is never read as a folder that is no checkout, or as a checkout with no
+# origin. Either reading sends the question to GitHub, whose copy can lack what the checkout's own
+# file says, and the text would pass unjudged (the lessons review of 3a7131c). The stand in is git
+# itself, except that a call holding the word FAKE_GIT_SILENT names sleeps past the reader's bound,
+# which EXPECTED_VISIBILITY_GIT_SECONDS shortens for a test run.
+REAL_GIT="$(command -v git)"
+mkdir -p "$WORK/gitbin"
+cat > "$WORK/gitbin/git" <<'SH'
+#!/usr/bin/env bash
+if [ -n "${FAKE_GIT_SILENT:-}" ]; then
+  for a in "$@"; do [ "$a" = "$FAKE_GIT_SILENT" ] && exec sleep 8; done
+fi
+exec "$FAKE_REAL_GIT" "$@"
+SH
+chmod +x "$WORK/gitbin/git"
+silent(){   # $1 = the word of the git call that does not answer, $2 = the folder, $3 = the command
+  FAKE_GIT_SILENT="$1" FAKE_REAL_GIT="$REAL_GIT" EXPECTED_VISIBILITY_GIT_SECONDS=1 BIN="$BIN:$WORK/gitbin" RUN_DIR="$2" run "$3"
+}
+# GitHub now answers for this repository, and says its default branch holds no such file.
+rm -f "$DECL/danwright-test__on-disk.fail"
+silent no-such-word "$WORK/on-disk" 'gh issue comment 5 --body "seen in zephyr"'
+check "#3582 (control) through the stand in git, with every call answered, the checkout's own file is read: $out" refused
+check "#3582 (control) and the refusal is for the name: $out" has "$out" "zephyr"
+check "#3582 (control) GitHub, which would have said no file, is not asked: $(asked_github)" [ "$(asked_github)" = "0" ]
+silent --show-toplevel "$WORK/on-disk" 'gh issue comment 5 --body "seen in zephyr"'
+check "#3582 git not answering which checkout this is refuses, never asks GitHub in the checkout's place: $out" could_not_tell
+check "#3582 saying git did not answer: $out" has "$out" "git did not answer"
+silent get-url "$WORK/on-disk" 'gh issue comment 5 --body "seen in zephyr"'
+check "#3582 git not answering for the checkout's origin refuses the same way: $out" could_not_tell
+check "#3582 saying git did not answer: $out" has "$out" "git did not answer"
+silent show "$WORK/behind" 'gh issue comment 5 --body "seen in zephyr"'
+check "#3582 git not answering for origin's copy of the file refuses: $out" could_not_tell
+check "#3582 saying git did not answer: $out" has "$out" "git did not answer"
+
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

@@ -3,9 +3,11 @@
 # GitHub is not what the repository says it is meant to be (claude-config#3582).
 #
 # On 2026-11-24 this repository was private for some hours and nobody was told. Its workflow is
-# sized for a public repository's free 4 core runners, and the work names publish gate judges only
-# text posted to a public repository, so the cost was suites running past their limits on billed 2
-# core runners and posted text nothing judged. This suite holds:
+# sized for a public repository's free 4 core runners, and the work names publish gate then judged
+# only text posted to a public repository, so the cost was suites running past their limits on
+# billed 2 core runners and posted text nothing judged. (Since Dan's decision of 2026-11-25 the gate
+# judges a repository whose file says public even while it is private, through the same reader.)
+# This suite holds:
 #   1. A repository that states no expectation is never asked about: no call, no line.
 #   2. A repository that is what it says it is meant to be costs one call and says nothing.
 #   3. One that is not gets one notice naming the repository, what it is, what that costs and the
@@ -229,6 +231,31 @@ git -C "$R" reset -q --hard HEAD~1
 check "(the fixture) the checkout itself does not hold the empty file" [ ! -e "$R/.github/expected-visibility" ]
 start "$R"
 cannot "an empty expectation file on origin's default branch"
+# git not answering is said as that, never as a repository with no origin or no file (the lessons
+# review of 3a7131c). The stand in is git itself, except that a call holding the word
+# FAKE_GIT_SILENT names sleeps past the reader's bound, which a test run shortens.
+REAL_GIT="$(command -v git)"
+mkdir -p "$WORK/gitbin"
+cat > "$WORK/gitbin/git" <<'SH'
+#!/usr/bin/env bash
+if [ -n "${FAKE_GIT_SILENT:-}" ]; then
+  for a in "$@"; do [ "$a" = "$FAKE_GIT_SILENT" ] && exec sleep 8; done
+fi
+exec "$FAKE_REAL_GIT" "$@"
+SH
+chmod +x "$WORK/gitbin/git"
+silent(){   # $1 = the word of the git call that does not answer, $2 = the folder the session starts in
+  FAKE_GIT_SILENT="$1" FAKE_REAL_GIT="$REAL_GIT" EXPECTED_VISIBILITY_GIT_SECONDS=1 BIN="$BIN:$WORK/gitbin" start "$2"
+}
+answer PRIVATE
+silent no-such-word "$WORK/notes"
+check "(control) through the stand in git, with every call answered, the notice is given: $out" has "$out" "danwright-test/notes is PRIVATE"
+silent get-url "$WORK/notes"
+cannot "git not answering for the origin"
+check "git not answering for the origin: it says git did not answer, not that there is no origin: $out" has "$out" "git did not answer"
+silent show "$WORK/behind"
+cannot "git not answering for origin's copy of the file"
+check "git not answering for origin's copy of the file: it says git did not answer: $out" has "$out" "git did not answer"
 # One reader for the notice and the publish gate, so the two cannot come to read the file
 # differently: neither holds a reading of its own.
 check "the notice reads the expectation through lib/expected-visibility.py" grep -q 'lib/expected-visibility.py' "$HOOK"

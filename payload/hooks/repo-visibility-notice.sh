@@ -101,6 +101,8 @@ case "$state" in
   # Something at that path that cannot be read is its own cause, said as that and not as a bad value.
   unreadable) cannot_tell "$as_meant" "its .github/expected-visibility is there but could not be read" ;;
   unknown) cannot_tell "$as_meant" "the first line of its .github/expected-visibility that is not a comment is not public, private or internal" ;;
+  # git not answering is its own cause too, never a repository that states nothing.
+  silent) cannot_tell "$as_meant" "git did not answer when asked for its .github/expected-visibility" ;;
   *) cannot_tell "$as_meant" "its reader, lib/expected-visibility.py beside this hook, answered something this cannot read" ;;
 esac
 case "$expected" in
@@ -110,6 +112,7 @@ esac
 case "$origin_state" in
   ok) ;;
   none) cannot_tell "this repository is still $expected, as its .github/expected-visibility says" "it has no origin remote to ask GitHub about" ;;
+  silent) cannot_tell "this repository is still $expected, as its .github/expected-visibility says" "git did not answer when asked for its origin remote" ;;
   *) cannot_tell "this repository is still $expected, as its .github/expected-visibility says" "its origin remote is not a GitHub repository address this can read" ;;
 esac
 [ -n "$slug" ] \
