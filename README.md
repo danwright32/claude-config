@@ -778,7 +778,8 @@ in its own words, which say to run the command directly: a command string whose 
 (`os.system(cmd)`) and a script file it could not read, each only when the call names a `payload/`
 path besides or runs inside a payload folder, and a pattern with more than 512 files or a `**` in a
 checkout at risk. From a script file only a link is read, and only one whose path can be placed.
-Each loop is held to a count (256 command strings, 512 files of a pattern, 8 script files).
+Each loop is held to a count, a limit set in the gate and not a measurement (256 command strings,
+512 files of a pattern, 8 script files).
 `hooks/test-payload-write-gate-script-string.sh` holds the cases, on stand in files.
 
 Before a Bash call the write gate also notes what an at risk `payload/` holds, in

@@ -1013,14 +1013,15 @@ def string_segments(text, b):
     return out
 
 def program_is_value(text):
-    """Whether a command in text names its program by a value, so what runs cannot be told."""
+    """Whether a command in text names its program by a value, so what runs cannot be told. A
+    reading of it that fails is not one that found a program, so that cannot be told either (L11)."""
     try:
         for _, inner, _, why, _ in _sw.every_command(text):
             w = _sw.first_word(_sw.command_rest(inner)[0])[0]
             if (w and w[0] in "$`") or why == _sw.WHY_VARIABLE:
                 return True
     except Exception:
-        return False
+        return True
     return False
 
 strings_read = [0]
