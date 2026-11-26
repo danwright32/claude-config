@@ -16,9 +16,11 @@
 # issue's comment) and 2026-11-26 on main at 6c4cee7247, through this wrapper: exit 0 for each.
 #
 # fed() now reads the body to where bash 3.2 and zsh end it, and where it cannot tell (a line
-# joined by a backslash before the marker, a marker it cannot read) the gate refuses the command
-# as one it could not check. The last section holds fed() against the shells of the machine the
-# suite runs on, with texts that only print.
+# joined by a backslash before the marker, more than one << in the command, a marker it reads the
+# first letters of and not the rest) the gate refuses the command as one it could not check. An
+# opener it never took for one (a marker written with a backslash) is not refused: the body is
+# handed on after the command's line where its end is certain. The last section holds fed()
+# against the shells of the machine the suite runs on, with texts that only print.
 #
 # Kept apart from test-slack-drafts-comment-start.sh, which covers the reader's side of a heredoc,
 # so that suite does not grow; the helpers below are copied from it as they are, so a case here is
@@ -144,18 +146,63 @@ done <<'SHAPES'
 : <<A | @P@ <<B@NL@B@NL@A@NL@@M@@NL@B
 SHAPES
 
-# A marker written with a backslash is a quoted one to the shells, and a word fed() never read as
-# an opener at all: it gave the program's own line for what it is fed, so the body was read by
-# nobody. Reading it now would let through what a pipe from such a heredoc was refused for (what
-# cat prints from one was not known), so the gate says it does not read that marker, whatever the
-# body holds, and how to write it.
-for marked in "python3 <<${BS}E" "python3 - <<${BS}EOF" "bash <<${BS}E" "python3 <<E <<F"; do
-  for body in "import poster" "import quiet"; do
-    run_bash "$marked${NL}$body${NL}E" "$FED"
-    refused "a program fed by a heredoc whose marker the gate does not read is refused: $marked, $body"
-    says "as a check it could not make: $marked, $body" "$COULD_NOT"
-    says "naming the line and how to write the marker: $marked, $body" "it feeds a program by a heredoc whose end the gate does not read, in the line \`$marked\`"
-  done
+# A marker written with a backslash, or in quotes with a character that is no letter, digit or
+# underscore, is a quoted one to the shells, and a word fed() never read as an opener at all: it
+# gave the program's own line for what it is fed, so the body was read by nobody, and python3
+# <<\E importing a module that posts passed (measured 2026-11-26 on main at 6c4cee7247). fed() now
+# gives that line and then the body, where it reads the marker and finds where the shells end it,
+# and still does not call it a body: python3 fed that way has its imports read, while what a pipe
+# from such a heredoc carries stays not worked out, and refused, as it was. Each row is the opener,
+# then the line that ends the body; the last body is never ended, and the shells feed it whole.
+while IFS='|' read -r marked closes; do
+  [ -n "$marked" ] || continue
+  run_bash "$marked${NL}import poster${NL}$closes" "$FED"
+  refused "python3 fed a module that posts by a heredoc whose marker the loose reading never took is refused: $marked"
+  says "as the post it is: $marked" "$POSTS"
+  printf '%s\n' "$marked${NL}import poster${NL}$closes" > "$FED/script.sh"
+  run_bash "bash script.sh" "$FED"
+  refused "and the same lines in a script that is run are refused: $marked"
+  run_bash "$marked${NL}import quiet${NL}$closes" "$FED"
+  allowed "the same heredoc feeding a quiet module passes: $marked"
+done <<'MARKED'
+python3 <<\E|E
+python3 - <<\EOF|EOF
+python3 <<'E.\'|E.\
+python3 <<"E F"|E F
+python3 <<\EOF|E
+MARKED
+
+# The first build of this change refused every such opener as one the gate does not read, and so
+# refused a program that is no shell and no interpreter, fed a quiet body: the control
+# test-slack-drafts-comment-start.sh pins for a quoted marker ending in a backslash (seen
+# 2026-11-26). These hold that it passes, and that the opener alone is no refusal.
+run_bash "cat <<'E$BS'${NL}body${NL}E$BS" "$FED"
+allowed "cat fed a quiet body by a heredoc whose quoted marker ends in a backslash passes"
+run_bash "cat <<${BS}E${NL}body${NL}E" "$FED"
+allowed "cat fed a quiet body by a heredoc whose marker is written with a backslash passes"
+run_bash "cat <<'E$BS' > out.txt${NL}import poster${NL}E$BS" "$FED"
+allowed "cat writing out a body that only names a module, by such a heredoc, passes"
+# What such a heredoc hands down a pipe is still not worked out (fed() gives no word that it is a
+# body), so a shell reading that pipe is refused whatever the body holds, as it was before.
+run_bash "cat <<${BS}E | bash${NL}bash quiet.sh${NL}E" "$FED"
+refused "a shell reading a pipe from a heredoc with a backslash marker is still refused, its input not worked out"
+# A shell fed a line that names a send route by such a heredoc passed as well (measured on main
+# the same day): the body is handed on now, so the name is found in it.
+run_bash "bash <<${BS}E${NL}curl -s -X POST -d text=hi https://slack.com/api/chat.postMessage${NL}E" "$FED"
+refused "a shell fed a line that names a send route by a heredoc with a backslash marker is refused"
+says "as the post it is" "$POSTS"
+run_bash "bash <<${BS}E${NL}echo hi${NL}E" "$FED"
+allowed "the same heredoc feeding a shell a line that does not post passes"
+# Not covered, and so not asserted either way: bash <<\E whose body runs a script that posts. The
+# body is handed over without the word that it is one, so its lines are not walked as commands.
+
+# More than one << in the command is still a heredoc whose end the gate does not read: refused as
+# a check it could not make, whatever the bodies hold, with how to write it.
+for body in "import poster" "import quiet"; do
+  run_bash "python3 <<E <<F${NL}$body${NL}E${NL}F" "$FED"
+  refused "a program fed by two heredocs in one command is refused: $body"
+  says "as a check it could not make: $body" "$COULD_NOT"
+  says "naming the line and how to write the marker: $body" "it feeds a program by a heredoc whose end the gate does not read, in the line \`python3 <<E <<F\`"
 done
 
 # The measured shape: an earlier heredoc whose body leaves a substitution open makes the shared
@@ -198,7 +245,9 @@ echo "slack drafts only: fed() ends a heredoc where the shells of this machine e
 # prints is what it fed. fed() must give that body ("same"); or at least those lines, for a
 # heredoc that follows another on its line, where it goes on giving the lines it always gave
 # ("more"); or raise the refusal (UnsureComment), for a row it does not vouch for ("refuse": it
-# must raise, and may never give a body the shell does not feed). One line per finding, then the
+# must raise, and may never give a body the shell does not feed); or, for an opener the loose
+# reading never took, give the command's line and then that body, without calling it a body and
+# without raising ("lines"). One line per finding, then the
 # count of comparisons made and the shells they ran in, so comparing nothing is a finding and not
 # a pass (L98).
 cat > "$T/shells.py" <<'PY'
@@ -232,7 +281,12 @@ ROWS = [
     ("cat <<E" + BS + "OF", ["cat <<E" + BS + "OF", "a", "E", "b", "EOF"], "same"),
     ("cat <<B", [": <<A | cat <<B", "B", "A", "x", "B"], "more"),
     ("cat <<B", [": <<A | cat <<B", "a", "A", "x", " B", "y", "B"], "more"),
-    ("cat <<" + BS + "E", ["cat <<" + BS + "E", "a", "E"], "refuse"),
+    ("cat <<" + BS + "E", ["cat <<" + BS + "E", "a", "E"], "lines"),
+    ("cat <<" + BS + "E", ["cat <<" + BS + "E", "a", " E", "b", "E"], "lines"),
+    ("cat <<" + BS + "E", ["cat <<" + BS + "E", "a", " E", "b"], "lines"),
+    ("cat <<'E" + BS + "'", ["cat <<'E" + BS + "'", "a", "E", "b", "E" + BS], "lines"),
+    ('cat <<"E F"', ['cat <<"E F"', "a", "E", "b", "E F"], "lines"),
+    ("cat <<-" + BS + "E", ["cat <<-" + BS + "E", "a", " E", "b", TAB + "E"], "lines"),
     ("cat <<E", ["cat <<E", "a" + BS, "E", "b", "E"], "refuse"),
     ("cat <<E", ["cat <<E", "a" + BS, "E", "b"], "refuse"),
     ("cat <<E", ["cat <<E", BS, "E", "b", "E"], "refuse"),
@@ -276,6 +330,14 @@ for command, lines, want in ROWS:
             if got is not None:
                 print("FAIL fed() did not refuse a heredoc it cannot vouch for, and gave %r where %s fed %r: %s"
                       % (got[0], shell, out, where))
+        elif want == "lines":
+            if got is None:
+                print("FAIL fed() refused a heredoc whose opener the loose reading never took: %s" % where)
+            elif got[1]:
+                print("FAIL fed() called what it gave a body, for an opener the loose reading never took: %s" % where)
+            elif got[0].rstrip("\n") != (command + "\n" + out).rstrip("\n"):
+                print("FAIL fed() gave %r, which is not the command's line and then the %r that %s fed: %s"
+                      % (got[0], out, shell, where))
         elif got is None:
             print("FAIL fed() refused a heredoc %s ends plainly: %s" % (shell, where))
         elif not got[1]:

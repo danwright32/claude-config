@@ -5356,9 +5356,25 @@ marker with a blank beside it and at the first letters of a longer marker, and t
 went on feeding python3 were read as shell commands. It gives every line it gave before, and more
 where the shells feed more. Where it cannot tell where they end the body, the call is refused as a
 check the gate could not make: a marker that a backslash joins to the line before (which the
-shared reader refuses too, but not in a text it gives up on before it reaches that heredoc), a
-marker that starts with a backslash or holds a dollar sign or a backquote, and more than one `<<`
-in the command.
+shared reader refuses too, but not in a text it gives up on before it reaches that heredoc), more
+than one `<<` in the command, a marker whose first letters it reads and whose rest it does not, an
+opener line that ends in a backslash, and a heredoc opened earlier on that line that cannot be read
+or never ends. It reads a plain word, bare or in quotes (`word()` in that file is the whole rule);
+among those it does not read are a marker that holds a dollar sign or a backquote, one with a
+character outside quotes that is not a letter, a digit or one of `_ . , : / @ % + = ^ -`, and one
+whose quote never closes. The refusal says how to write the marker so that it is read.
+
+A marker that reading never took for an opener at all is not refused: one written with a
+backslash (`<<\EOF`), or in quotes with a character that is no letter, digit or underscore. `cat
+<<'E\'` with a quiet body is an ordinary command, and `test-slack-drafts-comment-start.sh` pins
+it. `fed()` gave the command's own line for such a heredoc and no body, so `python3 <<\EOF`
+importing a module that posts passed, and so did `bash <<\EOF` fed a line naming a send route. It
+now gives that line and then the body, where it reads the marker and the end is certain, and goes
+on saying it is no body. An interpreter's imports and a send route's name are read there, and what
+a pipe from such a heredoc carries stays not worked out and refused, as before. Not read: the
+lines of a shell fed that way as commands (`bash <<\EOF` whose body runs a script that posts),
+what code fed to python3 that way runs beyond its imports, and a body whose marker holds a dollar
+sign or a backquote.
 
 Since claude-config#2844 it also reads what a runner or a compiler runs without the command naming
 it as a script (`payload/hooks/lib/program-runs.py`): the script or module `python3 -m` runpy, pdb,

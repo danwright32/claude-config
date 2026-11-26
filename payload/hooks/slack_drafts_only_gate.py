@@ -1935,12 +1935,13 @@ HeredocFed = load_lib("heredoc_fed", "heredoc-fed.py")
 def heredoc_why(line, one_line=False, opener=""):
     if opener == "marker":
         # Named by Judge.fed, the gate's own reading of what a heredoc feeds a program (#3497).
-        return ("it feeds a program by a heredoc whose end the gate does not read, in the line `%s`: the end "
-                "marker starts with a backslash or holds a dollar sign or a backquote, or more than one << "
-                "stands on that line, or the line ends in a backslash, so the gate cannot tell which lines "
-                "the shell feeds the program. Write one << on the command's last line, with the end marker "
-                "as one plain word, in single quotes where nothing in the body is to be expanded (<<'EOF') "
-                "(claude-config#3497)" % line)
+        return ("it feeds a program by a heredoc whose end the gate does not read, in the line `%s`: more "
+                "than one << stands in the command, or the end marker holds a dollar sign, a backquote, a "
+                "quote that never closes or another character the gate does not read in one, or the line "
+                "ends in a backslash, or a heredoc opened earlier on the line cannot be read to its end, so "
+                "the gate cannot tell which lines the shell feeds the program. Write one << on the "
+                "command's last line, with the end marker as one plain word, in single quotes where "
+                "nothing in the body is to be expanded (<<'EOF') (claude-config#3497)" % line)
     if one_line:
         return ("it opens a heredoc on the one line `%s`, and the gate cannot tell whether the commands "
                 "after it on that line are its body or commands: typed on one line, no shell gives the "

@@ -25,8 +25,18 @@ fed() here gives every line the loose reading gave and, where bash 3.2 and zsh e
 later than it did, the lines up to there as well, so it can only hand the gate more to read. Where
 it cannot tell where they end it, it raises what the caller hands it as `unsure`, which the gate
 refuses as a check it could not make: a marker a backslash joins to the line before, a line that
-is the marker only once joined, a marker written in a way this does not read, more than one << in
-the command, or a body that never ends and holds a $ or a backquote, which the shells expand.
+is the marker only once joined, a marker the loose reading took the first letters of and word()
+does not read, more than one << in the command, an opener line that ends in a backslash, an
+earlier heredoc on that line that cannot be read or never ends, or a body that never ends and
+holds a $ or a backquote, which the shells expand.
+
+An opener the loose reading never took (<<\\E, <<'E\\', <<"E F") is not refused. fed() gave the
+command's own line for it and no body, so `python3 <<\\E` importing a module that posts passed. It
+now gives that line and then the body, where word() reads the marker and the end is certain, and
+goes on saying it is no body: an interpreter's imports and a send route's name are read there,
+what a pipe from such a heredoc carries stays not worked out, and a shell fed that way still has
+its lines read by nobody as commands. Where the marker is not read (a $ or a backquote in it)
+nothing is added.
 """
 import bisect
 import re
@@ -132,9 +142,21 @@ def fed(text, whole, lines_of, unsure):
     lead = len(text) - len(text.lstrip())
     opens = [o.start() - lead for o in OPENS.finditer(text)]
     if not m:
-        if opens:
-            raise unsure(ats[0][1] + opens[0], "marker")
-        return "\n".join(lines[i] for i, _ in ats), False
+        # An opener the loose reading never took for one: a marker written with a backslash, or in
+        # quotes with a character that is no letter, digit or underscore (<<\E, <<'E\', <<"E F").
+        # It always gave the lines holding the command and no body, and still says this is no
+        # body, so what a pipe from such a heredoc carries stays not worked out, and refused, as
+        # it was. Where the marker is read and its end is certain the body follows those lines,
+        # so that a caller searching what it is handed (an interpreter's imports, a send route's
+        # name) reads what the shells feed. Never a refusal here: raising for every such opener
+        # refused cat <<'E\' with a quiet body, which test-slack-drafts-comment-start.sh pins.
+        held = [lines[i] for i, _ in ats]
+        strict = word(key, opens[0]) if len(opens) == 1 else None
+        for i, at in ats if strict else ():
+            got = body_at(lines, starts, i, at, strict)
+            if not isinstance(got, str):
+                held.append("\n".join(lines[got[0]:got[1]]))
+        return "\n".join(held), False
     # The shells' reading of the opener, None where the only << is the tail of a here string's <<<,
     # which the loose reading alone goes on answering for.
     strict = None
@@ -149,22 +171,33 @@ def fed(text, whole, lines_of, unsure):
             return whole, False  # a body never closed: read it all
         last = loose
         if strict:
-            here = at + opens[0]
-            if odd(lines[i]):
-                raise unsure(here, "marker")  # the command goes on over the next line
-            # A heredoc opened earlier on the line takes its body first.
-            k = i + 1
-            for o in OPENS.finditer(lines[i], 0, at - starts[i]):
-                earlier = word(lines[i], o.start())
-                k = end(lines, k, *earlier) if earlier else None
-                if k is None or k >= len(lines):
-                    raise unsure(here, "marker")
-                k += 1
-            stop = end(lines, k, *strict)
-            if stop is None:
-                raise unsure(here, "")
-            if stop >= len(lines) and not strict[2] and re.search(r"[$`]", "\n".join(lines[k:])):
-                raise unsure(here, "")  # never ended, and the shells expand what the rest holds
-            last = max(loose, stop)
+            got = body_at(lines, starts, i, at, strict)
+            if isinstance(got, str):
+                raise unsure(at + opens[0], got)
+            last = max(loose, got[1])
         bodies.append("\n".join(lines[i + 1:last]))
     return "\n".join(bodies), True
+
+
+def body_at(lines, starts, i, at, strict):
+    """(first, stop): lines[first:stop] is the body bash 3.2 and zsh feed the heredoc that word()
+    read as strict, opened by the command at offset at of the text, on lines[i]. Where that cannot
+    be told, the kind of doubt fed() names instead: "marker" for an opener line that goes on over
+    the next, or an earlier heredoc on it that cannot be read or never ends, and "" for a body
+    whose end cannot be found, or that never ends and holds a $ or a backquote."""
+    if odd(lines[i]):
+        return "marker"  # the command goes on over the next line
+    # A heredoc opened earlier on the line takes its body first.
+    k = i + 1
+    for o in OPENS.finditer(lines[i], 0, at - starts[i]):
+        earlier = word(lines[i], o.start())
+        k = end(lines, k, *earlier) if earlier else None
+        if k is None or k >= len(lines):
+            return "marker"
+        k += 1
+    stop = end(lines, k, *strict)
+    if stop is None:
+        return ""
+    if stop >= len(lines) and not strict[2] and re.search(r"[$`]", "\n".join(lines[k:])):
+        return ""  # never ended, and the shells expand what the rest holds
+    return k, stop
