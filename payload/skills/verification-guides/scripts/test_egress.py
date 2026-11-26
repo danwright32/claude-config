@@ -608,5 +608,87 @@ class StopBudget(unittest.TestCase):
         self.assertGreater(run_session.stop_wait_s({"stop_s": 10}), 2 * 10 + 30)
 
 
+class FakeEnding:
+    """A report stream whose ending the test sets: `early` is what poll() says before anything stops
+    it, `status` how it ends once stopped, and `hangs` makes a timed wait run out."""
+
+    def __init__(self, early=None, status=-15, hangs=False):
+        self.pid, self.early, self.status, self.hangs = 4321, early, status, hangs
+
+    def poll(self):
+        return self.early
+
+    def wait(self, timeout=None):
+        if self.hangs and timeout is not None:
+            raise egress.subprocess.TimeoutExpired("log", timeout)
+        self.early = self.status
+        return self.status
+
+
+class StreamEnding(unittest.TestCase):
+    """How the report stream ended is read and kept when it is stopped (claude-config#3663), and
+    it changes nothing about the verdict."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.m = egress.Monitor(self.tmp.name, RID, list(v.EGRESS_LOCAL_HOSTS), 30)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def stop(self, stream):
+        self.m.proc = stream
+        with mock.patch.object(egress.os, "killpg") as killpg:
+            self.m.stop_stream()
+        return killpg
+
+    def ended_events(self):
+        with open(self.m.events_path) as f:
+            return [json.loads(line) for line in f if '"stream-ended"' in line]
+
+    def test_a_stream_it_stops_is_read_as_it_ends(self):
+        killpg = self.stop(FakeEnding(status=-15))
+        self.assertEqual(self.m.stream_exit, {"exit": -15, "early": False, "killed": False})
+        self.assertEqual(killpg.call_args_list, [mock.call(4321, egress.signal.SIGTERM)])
+        self.assertEqual([(e["exit"], e["early"], e["killed"]) for e in self.ended_events()], [(-15, False, False)])
+
+    def test_a_stream_that_had_ended_by_itself_is_kept_as_such(self):
+        killpg = self.stop(FakeEnding(early=1))
+        self.assertEqual(self.m.stream_exit, {"exit": 1, "early": True, "killed": False})
+        killpg.assert_not_called()
+
+    def test_a_stream_that_will_not_end_is_killed_and_read(self):
+        stream = FakeEnding(status=-9, hangs=True)
+        self.m.proc = stream
+        with mock.patch.object(egress.os, "killpg") as killpg:
+            with mock.patch.object(stream, "wait", side_effect=[egress.subprocess.TimeoutExpired("log", 1), -9]):
+                self.m.stop_stream()
+        self.assertEqual(self.m.stream_exit, {"exit": -9, "early": False, "killed": True})
+        self.assertEqual(killpg.call_args_list[-1], mock.call(4321, egress.signal.SIGKILL))
+
+    def test_a_second_stop_keeps_the_first_reading(self):
+        stream = FakeEnding(status=-15)
+        self.stop(stream)
+        self.stop(stream)  # finish() stops the stream again in its finally
+        self.assertEqual(self.m.stream_exit, {"exit": -15, "early": False, "killed": False})
+        self.assertEqual(len(self.ended_events()), 1)
+
+    def test_the_verdict_is_the_same_however_the_stream_ended(self):
+        verdicts = []
+        for stream in (FakeEnding(status=-15), FakeEnding(early=1), FakeEnding(early=0)):
+            m = egress.Monitor(self.tmp.name, RID, list(v.EGRESS_LOCAL_HOSTS), 30)
+            fired(m, 1)
+            m.beats[0]["seen"] = True
+            m.started_at = "2026-11-26T10:00:00Z"
+            m.proc = stream
+            with mock.patch.object(m, "_last_beat"), mock.patch.object(m, "_canary_seen", return_value=True), \
+                    mock.patch.object(m, "_settle"), mock.patch.object(m, "_stop_beats"), \
+                    mock.patch.object(egress.os, "killpg"):
+                verdicts.append(m.finish())
+        self.assertEqual(verdicts[0]["verdict"], "clean")
+        self.assertEqual(verdicts[1], verdicts[0])
+        self.assertEqual(verdicts[2], verdicts[0])
+
+
 if __name__ == "__main__":
     unittest.main()
