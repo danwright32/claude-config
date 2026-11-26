@@ -4621,7 +4621,10 @@ test('notes moved in a command whose other half cannot be read for sure are aske
 test('a note moved onto a folder and then written over where it lands is refused whole, as it was before the move was read off the disk (#3478)', withKit, async ($, on) => {
   const w = world($, on, { files: ARCHIVED })
   const note = `${REMOVAL_MEM_SHOWN}/note.md`
-  const refusal = `Not run: this command moves lasting memory away (${note}, to ${ARCHIVE_SHOWN}) and also writes lasting memory (${ARCHIVE_SHOWN}/note.md). Dan is asked about each by itself, since one answer cannot cover both. Send each as a command of its own.`
+  // The words changed with #3649, on purpose, and the decision did not: the echo writes the name
+  // the note lands on, after the move, so the note is the one replaced. Until then this read "moves
+  // lasting memory away (<the note>, to <the folder>) and also writes lasting memory (<the folder>/note.md)".
+  const refusal = `Not run: this command moves lasting memory onto a name a later command of it may replace it at (${note}, to ${ARCHIVE_SHOWN}) and also writes lasting memory (${ARCHIVE_SHOWN}, ${ARCHIVE_SHOWN}/note.md). Dan is asked about each by itself, since one answer cannot cover both. Send each as a command of its own.`
   // No trailing slash: the disk says the note lands inside the folder, where the echo then writes.
   expect(refusalOf(await call($, { tool: 'Bash', command: `mv ${note} ${ARCHIVE_SHOWN} && echo x > ${ARCHIVE_SHOWN}/note.md` }))).toBe(refusal)
   // The same by a copy the command then removes, which no mv vouches for.
@@ -5448,4 +5451,170 @@ test('the note named last of two sources of exactly one name is asked about as a
   expect(q?.question).not.toContain('moved back')
   expect(q?.options.map(o => o.label)).toEqual(['Keep as is', 'Delete'])
   expect(w.ran).toEqual([])
+})
+
+// ---- #3649: two commands of one call that put two files on one name ----
+// Measured on this Mac's disk on 2026-11-26 (macOS 26.6.2), plain files in a scratch folder, each
+// command run once: `mv memory/a.md archive/ && mv exact/a.md archive/` left archive/a.md holding
+// the second file's text and no file holding the note's; joined by `;`, onto one file name, with
+// the second name in capitals, and with `cp` or a redirect as the later command, the same. In the
+// other order the note was the one kept. After `||` the second mv did not run and the note was
+// kept, and it ran, leaving the note where it was, when the first failed; inside an `if` the note
+// was lost when the test held and kept when it did not. Two files of different names moved onto
+// one name left only the second, but for a folder of that name made first, which kept both.
+// Measured through the whole mod on main at 2168997b49 the same day: every command of LOST_LATER
+// was asked about as "Move <the note>: <why>? It goes to <the place>, and can be moved back."
+const lossSaid = (at: string) => `The command sends it to ${at}, and another file the same command names may land on that name too. Only one of the two would be kept there, so this file may be lost.`
+const AT_A = '~/Desktop/archive/a.md'
+const TWO_COMMAND_FILES: Record<string, string> = { ...SHARED_NAME_FILES, [`${HOME}/Desktop/held/sub/x.md`]: 'x\n' }
+// What each is, the command, and where the question says the note was sent.
+const LOST_LATER: [string, string, string][] = [
+  ['into a folder, joined by two ampersands', `mv ${NOTE_A} ~/Desktop/archive/ && mv ~/Desktop/exact/a.md ~/Desktop/archive/`, AT_A],
+  ['into a folder, joined by a semicolon', `mv ${NOTE_A} ~/Desktop/archive/; mv ~/Desktop/exact/a.md ~/Desktop/archive/`, AT_A],
+  ['onto one file name, joined by two ampersands', `mv ${NOTE_A} ~/Desktop/archive/a.md && mv ~/Desktop/exact/a.md ~/Desktop/archive/a.md`, AT_A],
+  ['onto one file name, joined by a semicolon', `mv ${NOTE_A} ~/Desktop/archive/a.md; mv ~/Desktop/exact/a.md ~/Desktop/archive/a.md`, AT_A],
+  ['the later name differs only by letter case', `mv ${NOTE_A} ~/Desktop/archive/ && mv ~/Desktop/full/A.md ~/Desktop/archive/`, AT_A],
+  ['into a folder named with no slash, both times', `mv ${NOTE_A} ~/Desktop/archive && mv ~/Desktop/exact/a.md ~/Desktop/archive`, '~/Desktop/archive'],
+  ['a file of another name onto the same new file name', `mv ${NOTE_A} ~/Desktop/archive/old.md && mv ~/Desktop/exact/other.md ~/Desktop/archive/old.md`, '~/Desktop/archive/old.md'],
+  ['a file of another name onto the same name, where a file is already', `mv ${NOTE_A} ~/Desktop/archive/x.md; mv ~/Desktop/exact/other.md ~/Desktop/archive/x.md`, '~/Desktop/archive/x.md'],
+  // A mkdir of the folder above makes no folder of the name itself (the lessons review of 968ff604cc: any mkdir in the command left this a move).
+  ['a file of another name onto the same new file name, in a folder the command makes first', `mkdir -p ~/Desktop/archive && mv ${NOTE_A} ~/Desktop/archive/old.md && mv ~/Desktop/exact/other.md ~/Desktop/archive/old.md`, '~/Desktop/archive/old.md'],
+  // The first open question: a copy or a redirect that writes the name after the move loses the note as a second move does.
+  ['a copy onto the name after the move', `mv ${NOTE_A} ~/Desktop/archive/ && cp ~/Desktop/exact/a.md ~/Desktop/archive/`, AT_A],
+  ['a redirect that writes the name after the move', `mv ${NOTE_A} ~/Desktop/archive/ && echo x > ~/Desktop/archive/a.md`, AT_A],
+  // The second open question: a later command that only may run may replace the note, and the question says "may".
+  ['a second move after two bars', `mv ${NOTE_A} ~/Desktop/archive/ || mv ~/Desktop/exact/a.md ~/Desktop/archive/`, AT_A],
+  ['a second move inside an if', `mv ${NOTE_A} ~/Desktop/archive/; if [ -f ~/Desktop/exact/a.md ]; then mv ~/Desktop/exact/a.md ~/Desktop/archive/; fi`, AT_A],
+]
+for (const [what, command, at] of LOST_LATER)
+  test(`the question for a note a later command of the same call may replace where it was moved says it may be lost there, never that it can be moved back: ${what} (#3649)`, withKit, async ($, on) => {
+    const w = world($, on, { auto: true, files: TWO_COMMAND_FILES })
+    const refusal = refusalOf(await call($, { tool: 'Bash', command }))
+    expect(refusal.startsWith(`${NOT_DELETED}: this deletes lasting memory (${NOTE_A}), so Dan decides first. The command sends ${NOTE_A} to ${at}, and another file it names may land on that name too, so only one of the two would be kept there. `)).toBe(true)
+    const asked = `Delete ${NOTE_A}: it is finished work?`
+    await askRemoval($, w, refusal, 'Keep as is', asked)
+    const q = w.asked[0]?.questions[0]
+    expect(q?.question).toBe(`${asked} ${lossSaid(at)} Git does not hold it, so once deleted it cannot be got back from git.`)
+    expect(q?.question).not.toContain('moved back')
+    expect(q?.options.map(o => [o.label, o.description])).toEqual([
+      ['Keep as is', 'Nothing is deleted'],
+      ['Delete', `Deletes ${NOTE_A}`],
+    ])
+    expect(w.ran).toEqual([])
+  })
+
+// The words are the one command case's own (#3505), from the one place: the same sentence, the place aside.
+test('two commands onto one name are said in the words one mv of two sources is said in (#3649)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: TWO_COMMAND_FILES })
+  const asked = `Delete ${NOTE_A}: it is finished work?`
+  await askRemoval($, w, refusalOf(await call($, { tool: 'Bash', command: `mv ${NOTE_A} ~/Desktop/exact/a.md ~/Desktop/archive/` })), 'Keep as is', asked)
+  await askRemoval($, w, refusalOf(await call($, { tool: 'Bash', command: `mv ${NOTE_A} ~/Desktop/archive/ && mv ~/Desktop/exact/a.md ~/Desktop/archive/` })), 'Keep as is', asked)
+  expect(w.asked.length).toBe(2)
+  expect(w.asked[1]?.questions[0]?.question).toBe(w.asked[0]?.questions[0]?.question)
+  expect(w.asked[1]?.questions[0]?.options).toEqual(w.asked[0]?.questions[0]?.options)
+})
+
+test("Dan's Delete for a note a later command may replace runs that command once, and a second send is asked about again (#3649)", withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: TWO_COMMAND_FILES })
+  const command = `mv ${NOTE_A} ~/Desktop/archive/ && mv ~/Desktop/exact/a.md ~/Desktop/archive/`
+  const answered = await askRemoval($, w, refusalOf(await call($, { tool: 'Bash', command })), 'Delete', `Delete ${NOTE_A}: it is finished work?`)
+  expect(contextOf(answered)).toContain(`Dan answered Delete to deleting ${NOTE_A}`)
+  expect((await call($, { tool: 'Bash', command })).deny).toBeUndefined()
+  expect(w.ran.map(r => r.input.command)).toEqual([command])
+  expect(refusalOf(await call($, { tool: 'Bash', command }))).toContain(NOT_DELETED)
+})
+
+// The note that is not the one replaced is asked about exactly as main asks: each question below is
+// main's own, word for word (measured at 2168997b49 through the whole mod, 2026-11-26), and this
+// passes before and after the change. The note moved last is the one kept (measured above). Where
+// its name differs from the earlier file's only by letter case it is a plain move. Where the two
+// names are the same, main asks about it as a deletion with no word of where it goes, since the
+// reader gives the second write of one path no write of its own; that is left as it is, pinned.
+const AS_MAIN_ASKS: [string, string, string][] = [
+  ['the note moved last, the earlier name differing only by letter case', `mv ~/Desktop/full/A.md ~/Desktop/archive/ && mv ${NOTE_A} ~/Desktop/archive/`, `Move ${NOTE_A}: why? It goes to ~/Desktop/archive/a.md, and can be moved back.`],
+  ['the note moved last, into a folder', `mv ~/Desktop/exact/a.md ~/Desktop/archive/ && mv ${NOTE_A} ~/Desktop/archive/`, `Delete ${NOTE_A}: why? Git does not hold it, so once deleted it cannot be got back from git.`],
+  ['the note moved last, joined by a semicolon', `mv ~/Desktop/exact/a.md ~/Desktop/archive/; mv ${NOTE_A} ~/Desktop/archive/`, `Delete ${NOTE_A}: why? Git does not hold it, so once deleted it cannot be got back from git.`],
+  ['the note moved last, onto one file name', `mv ~/Desktop/exact/a.md ~/Desktop/archive/a.md && mv ${NOTE_A} ~/Desktop/archive/a.md`, `Delete ${NOTE_A}: why? Git does not hold it, so once deleted it cannot be got back from git.`],
+  ['the note moved last, onto one file name, joined by a semicolon', `mv ~/Desktop/exact/a.md ~/Desktop/archive/a.md; mv ${NOTE_A} ~/Desktop/archive/a.md`, `Delete ${NOTE_A}: why? Git does not hold it, so once deleted it cannot be got back from git.`],
+  // The first open question, the other order: a copy or a redirect that writes the name BEFORE the move is replaced by the note, which is kept.
+  ['a copy onto the name before the move', `cp ~/Desktop/exact/a.md ~/Desktop/archive/ && mv ${NOTE_A} ~/Desktop/archive/`, `Delete ${NOTE_A}: why? Git does not hold it, so once deleted it cannot be got back from git.`],
+  ['a redirect that writes the name before the move', `echo x > ~/Desktop/archive/a.md; mv ${NOTE_A} ~/Desktop/archive/`, `Delete ${NOTE_A}: why? Git does not hold it, so once deleted it cannot be got back from git.`],
+  // Nothing replaces the note: another name, a folder both land inside, a folder the command may make first, an append.
+  ['a later move of a file of another name into the folder', `mv ${NOTE_A} ~/Desktop/archive/ && mv ~/Desktop/exact/other.md ~/Desktop/archive/`, `Move ${NOTE_A}: why? It goes to ~/Desktop/archive/a.md, and can be moved back.`],
+  ['a file of another name onto the same name, which is a folder', `mv ${NOTE_A} ~/Desktop/archive && mv ~/Desktop/exact/other.md ~/Desktop/archive`, `Move ${NOTE_A}: why? It goes to ~/Desktop/archive, and can be moved back.`],
+  ['a file of another name onto the same name, which the command may make a folder first', `mkdir -p ~/Desktop/new && mv ${NOTE_A} ~/Desktop/new && mv ~/Desktop/exact/other.md ~/Desktop/new`, `Move ${NOTE_A}: why? It goes to ~/Desktop/new, and can be moved back.`],
+  ['an append to the name after the move', `mv ${NOTE_A} ~/Desktop/archive/ && echo done >> ~/Desktop/archive/a.md`, `Move ${NOTE_A}: why? It goes to ~/Desktop/archive/a.md, and can be moved back.`],
+]
+test('the note a later command does not replace is asked about exactly as main asks, the one moved last included (#3649)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: TWO_COMMAND_FILES })
+  const got: string[][] = []
+  for (const [what, command] of AS_MAIN_ASKS) {
+    const refusal = refusalOf(await call($, { tool: 'Bash', command }))
+    const lead = /such as "(Delete|Move) /.exec(refusal)?.[1] ?? 'Delete'
+    const before = w.asked.length
+    await askRemoval($, w, refusal, 'Keep as is', `${lead} ${NOTE_A}: why?`)
+    got.push([what, w.asked[before]?.questions[0]?.question ?? refusal.slice(0, 200)])
+  }
+  expect(got).toEqual(AS_MAIN_ASKS.map(([what, , question]) => [what, question]))
+  expect(w.ran).toEqual([])
+})
+
+// The hard rule of #3649: the mod asks or refuses in no fewer cases than main. For every command
+// above, and for the commands that take lasting memory away in a second way below, what the mod
+// decides is what main decided (measured at 2168997b49 through the whole mod, 2026-11-26: the
+// test of DECIDED_ALIKE passes there as it does here). Only the words differ. Nothing runs.
+const decided = (refusal: string): string => (idIn(refusal) !== undefined ? 'asked' : refusal.startsWith('Not run:') ? 'refused whole' : `neither: ${refusal.slice(0, 120)}`)
+const NOTE_Q = '~/.claude/projects/q/memory/a.md'
+const DECIDED_ALIKE: [string, string, string][] = [
+  ...LOST_LATER.map(([what, command]): [string, string, string] => [what, command, 'asked']),
+  ...AS_MAIN_ASKS.map(([what, command]): [string, string, string] => [what, command, 'asked']),
+  // Two notes of one name, each moved by a command of its own: the first is the one replaced.
+  ['two notes of one name, joined by two ampersands', `mv ${NOTE_A} ~/Desktop/archive/ && mv ${NOTE_Q} ~/Desktop/archive/`, 'refused whole'],
+  ['two notes of one name, the second after two bars', `mv ${NOTE_A} ~/Desktop/archive/ || mv ${NOTE_Q} ~/Desktop/archive/`, 'refused whole'],
+  ['the replaced note beside a note deleted outright', `mv ${NOTE_A} ~/Desktop/archive/ && mv ~/Desktop/exact/a.md ~/Desktop/archive/ && rm ${REMOVAL_MEM_SHOWN}/b.md`, 'refused whole'],
+  ['the replaced note beside a note emptied', `mv ${NOTE_A} ~/Desktop/archive/ && mv ~/Desktop/exact/a.md ~/Desktop/archive/ && truncate -s 0 ${REMOVAL_MEM_SHOWN}/b.md`, 'refused whole'],
+  ['two notes each replaced by a later command', `mv ${NOTE_A} ~/Desktop/archive/ && mv ${REMOVAL_MEM_SHOWN}/b.md ~/Desktop/archive/ && cp ~/Desktop/exact/a.md ~/Desktop/archive/a.md && cp ~/Desktop/exact/other.md ~/Desktop/archive/b.md`, 'asked'],
+]
+// Asked about on main (the test of these fails there, each read as 'asked') and refused whole now,
+// which is no less: a deletion and a move, or a deletion and a save, are each asked about by
+// themselves, as they are for every other command.
+const DECIDED_MORE: [string, string][] = [
+  ['the replaced note beside a note moved elsewhere', `mv ${NOTE_A} ~/Desktop/archive/ && mv ~/Desktop/exact/a.md ~/Desktop/archive/ && mv ${REMOVAL_MEM_SHOWN}/b.md ~/Desktop/held/`],
+  ['the replaced note moved inside the memory folder', `mv ${NOTE_A} ${ARCHIVE_SHOWN}/ && mv ~/Desktop/exact/a.md ${ARCHIVE_SHOWN}/`],
+]
+test('every command of two that put two files on one name is asked about or refused as main asks or refuses it, and nothing runs (#3649)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: TWO_COMMAND_FILES })
+  const got: string[][] = []
+  for (const [what, command] of DECIDED_ALIKE) got.push([what, decided(refusalOf(await call($, { tool: 'Bash', command })))])
+  expect(got).toEqual(DECIDED_ALIKE.map(([what, , how]) => [what, how]))
+  expect(got.length).toBe(LOST_LATER.length + AS_MAIN_ASKS.length + 5)
+  expect(w.ran).toEqual([])
+})
+
+test('a note a later command may replace, beside a note moved elsewhere or moved inside the memory folder, is refused whole where main asked one Move question (#3649)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: TWO_COMMAND_FILES })
+  const more: string[][] = []
+  for (const [what, command] of DECIDED_MORE) more.push([what, decided(refusalOf(await call($, { tool: 'Bash', command })))])
+  expect(more).toEqual(DECIDED_MORE.map(([what]) => [what, 'refused whole']))
+  expect(w.ran).toEqual([])
+})
+
+test('a command refused whole for a note a later command may replace says so in words of its own, beside what else it takes away (#3649)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: TWO_COMMAND_FILES })
+  // Main: "deletes lasting memory (<q>) and also moves lasting memory away (<p>, to ...)", the two the wrong way round.
+  expect(refusalOf(await call($, { tool: 'Bash', command: `mv ${NOTE_A} ~/Desktop/archive/ && mv ${NOTE_Q} ~/Desktop/archive/` }))).toBe(
+    `Not run: this command deletes lasting memory (${NOTE_Q}) and also moves lasting memory onto a name a later command of it may replace it at (${NOTE_A}, to ${AT_A}). Dan is asked about each by itself, since one answer cannot cover both. Send each as a command of its own.`,
+  )
+  expect(refusalOf(await call($, { tool: 'Bash', command: `mv ${NOTE_A} ~/Desktop/archive/ && mv ~/Desktop/exact/a.md ~/Desktop/archive/ && mv ${REMOVAL_MEM_SHOWN}/b.md ~/Desktop/held/` }))).toBe(
+    `Not run: this command moves lasting memory onto a name a later command of it may replace it at (${NOTE_A}, to ${AT_A}) and also moves lasting memory away (${REMOVAL_MEM_SHOWN}/b.md, to ~/Desktop/held/b.md). Dan is asked about each by itself, since one answer cannot cover both. Send each as a command of its own.`,
+  )
+  expect(w.ran).toEqual([])
+})
+
+test("a subagent's two commands onto one name are refused in a deletion's words, and Dan is not asked (#3649)", withKit, async ($, on) => {
+  const w = world($, on, { files: TWO_COMMAND_FILES, agents: ['agent-a1'] })
+  const agent = refusalOf(await call($, { tool: 'Bash', command: `mv ${NOTE_A} ~/Desktop/archive/ && mv ~/Desktop/exact/a.md ~/Desktop/archive/`, agentId: 'agent-a1' }))
+  expect(agent.startsWith(`Not deleted: this deletes lasting memory (${NOTE_A}), which only the main session may do`)).toBe(true)
+  expect(w.ran).toEqual([])
+  expect(w.asked).toEqual([])
 })

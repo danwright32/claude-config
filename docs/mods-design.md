@@ -3856,8 +3856,36 @@ lasting memory file, or moved one away, ran with no question. Measured in the mo
   same disk keeps `straße.md` and `STRASSE.md`, a long s and s, a final sigma and a capital one,
   and the ff ligature and FF each as one file, which small letters alone kept apart. Measured over
   162 commands (the 129 of pull request #3485's table and 33 new): the same 157 stop before and after, none of the 129
-  changed, and none of the 21 that changed now says "can be moved back" where it did not. Left as
-  it was: two separate `mv` commands onto one name are still worded as a move.
+  changed, and none of the 21 that changed now says "can be moved back" where it did not.
+- **Two commands of one call that put two files on one name are no move for the first (#3649).**
+  Measured on macOS 26.6.2 on 2026-11-26, 19 commands each run once on plain files in a scratch
+  folder: after `mv <memory>/a.md <archive>/ && mv <folder>/a.md <archive>/` the archive holds the
+  second file's text and nothing holds the note's. The same joined by `;`, onto one file name, with
+  the second name in capitals, and with a `cp` or a redirect as the later command. In the other
+  order the note is the one kept, as it is when the copy or the redirect comes before the move.
+  After `||` the second mv ran only when the first failed, which left the note where it was; inside
+  an `if` the note was lost when the test held. Until this the first file was asked about as a move
+  that "can be moved back". mod-kit's reader now marks a write `again` when a later command, in the
+  order the commands are written, writes the same place or a name there alike but for letter case
+  and the Unicode form of an accent. A later command that only may run counts. An append (`>>`) and
+  an edit in place replace no file and mark nothing, nor does what a substitution writes.
+  `removalCandidates` takes a write marked `again` as no place a file goes, as it does a `shared`
+  one, and keeps the place (`sharedAt`), so the question is the one sentence of #3505, from the one
+  function that says it (`sentWhere`), and Claude's refusal says the same. Two files of different
+  names each put onto one name share it only while that name is no folder (`again: 'file'`), which
+  the disk says where the removal is read: a folder there keeps both and is said as before,
+  anything else is replaced, and a name where nothing is yet is said as replaced unless a `mkdir`
+  in the command names it (one that makes only the folder above does not). The decision is held to main's: such a removal carries `replacedLater`, and
+  counts as a move as well as a deletion where one question may cover a command (`severalWays`), so
+  beside a deletion or an emptying it is refused whole as the move it was said to be, and beside a
+  move as the deletion it is asked about as. Its landing place is no longer a move's own, so one
+  inside a memory folder is a save beside a deletion, refused whole where main asked one Move
+  question. Read from the words alone, once the disk does not answer, it is the plain deletion
+  main read it as, with the place said. Left as it was: the file moved last, which is a plain move
+  where the earlier name differs by letter case and, where the two names are the same, main's
+  Delete question with no word of where it goes (the reader gives a second write of one path no
+  write of its own); a later command the reader does not place after it in the text (a function
+  defined first and called last); and a name reached by another spelling of its folder.
 - **Asleep**, the removal is noted for the morning report as a finding (the report's kind for
   anything else noticed; a kind of its own would be a change to the report) and refused.
 - **Not covered.** What git itself removes or puts back (`git rm`, `git mv`, a checkout or restore

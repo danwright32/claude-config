@@ -551,19 +551,36 @@ const removalsOf = async ($: EngineInterface, tool: string, input: Record<string
   // A move the reader marked is worded as one only while the whole command and the disk bear it
   // out, every look bounded; otherwise, and when a look fails or runs out of time, the removals are
   // read again as main reads them, from writes with no move marked and with main's own looks.
-  if (!(w.changes ?? []).some(c => c.to !== undefined)) return removalsRead($, home, candidates, plainLook($))
+  if (!(w.changes ?? []).some(c => c.to !== undefined)) return removalsRead($, home, candidates, plainLook($), command)
   const look = boundedLook($)
   try {
-    if (await movesStand($, command, w, look)) return await removalsRead($, home, candidates, look)
+    if (await movesStand($, command, w, look)) return await removalsRead($, home, candidates, look, command)
   } catch (err) {
     if (!(err instanceof LookFailed)) throw err
   }
-  return removalsRead($, home, await candidatesOf($, command, home, unmarked(w), disk), plainLook($))
+  return removalsRead($, home, await candidatesOf($, command, home, unmarked(w), disk), plainLook($), command)
 }
 // What a command's words would remove (rules.ts removalCandidates), read as its mentions are.
 const candidatesOf = async ($: EngineInterface, command: string, home: string, w: Writes, { inCheckout, isSet }: Disk): Promise<RemovalCandidate[]> =>
   removalCandidates(w, home, inCheckout, command, isSet, { text: mentionsAny(command) ? await mentionText($, command) : command })
-const removalsRead = async ($: EngineInterface, home: string, candidates: readonly RemovalCandidate[], look: Look): Promise<AskBeforeSavingRemoval[]> => {
+// Whether the one name a note is moved onto is no folder, so that a file of another name a later
+// command puts onto that name replaces the note (#3649, the reader's `again: 'file'`). Measured on
+// macOS on 2026-11-26, each command run once in a scratch folder: `mv memory/a.md archive/old.md &&
+// mv exact/b.md archive/old.md` left old.md holding the second file's text, onto a name where
+// nothing was the same, and with a folder of that name made first both files were kept inside it.
+// So a folder there now keeps both, anything else there is replaced, and a name where nothing is
+// becomes a file, unless a mkdir in the command names it: then the command may make that folder
+// first, and the move is said as main says it. The mkdir is read from the text, up to whatever ends
+// that command, for the last part of the name; one that makes only the folder above (the lessons
+// review of 968ff604cc), or names it through a variable, leaves the file said as replaced, the
+// side that claims less. A place no path names cannot be looked at, and is said as main says it.
+const replacedAsAFile = async (look: Look, c: RemovalCandidate, command: string): Promise<boolean> => {
+  if (c.toPath === undefined) return false
+  if (await look.exists(c.toPath)) return (await look.kind(c.toPath)) !== 'dir'
+  const name = (c.toPath.replace(/\/+$/, '').split('/').pop() ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return name === '' || !new RegExp(`\\bmkdir\\b[^;&|\\n]*[\\s/'"]${name}(?![^\\s/'"])`).test(command)
+}
+const removalsRead = async ($: EngineInterface, home: string, candidates: readonly RemovalCandidate[], look: Look, command: string): Promise<AskBeforeSavingRemoval[]> => {
   const out: AskBeforeSavingRemoval[] = []
   for (const c of candidates) {
     const found: string[] = []
@@ -586,7 +603,10 @@ const removalsRead = async ($: EngineInterface, home: string, candidates: readon
       ...(found.length ? { holds: found.slice(0, 3), ...(found.length > 3 ? { more: true as const } : {}) } : {}),
       ...(c.guessed ? { guessed: true as const } : {}),
     }
-    if (c.how === 'move') {
+    // A move onto one name that a later command puts a file of another name onto (#3649) is the
+    // deletion it would be wherever that name is no folder, said with where it was sent.
+    const replaced = c.how === 'move' && c.replacedIfFile === true && c.to !== undefined && (await replacedAsAFile(look, c, command))
+    if (c.how === 'move' && !replaced) {
       const landed = await movedOnto(look, c)
       // A mv told to replace nothing (-n) leaves both files as they are where it would have replaced one.
       const { replaces, ...rest } = landed
@@ -595,9 +615,11 @@ const removalsRead = async ($: EngineInterface, home: string, candidates: readon
     } else
       out.push({
         ...shape,
-        how: c.how,
-        // A deletion that is a move onto a name another source of the command may take says where it was sent (#3505).
-        ...(c.how === 'delete' && c.sharedAt !== undefined ? { sharedAt: c.sharedAt } : {}),
+        how: replaced ? 'delete' : c.how,
+        // A deletion that is a move onto a name another source of the command may take says where it was sent (#3505),
+        // and whether the other file comes by a later command (#3649).
+        ...(replaced && c.to !== undefined ? { sharedAt: c.to, replacedLater: true as const } : {}),
+        ...(c.how === 'delete' && c.sharedAt !== undefined ? { sharedAt: c.sharedAt, ...(c.replacedLater ? { replacedLater: true as const } : {}) } : {}),
         ...(c.path !== undefined ? await gitHolds($, c.path) : { back: 'unknown' as const, why: 'its path could not be read from the command' }),
       })
   }

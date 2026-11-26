@@ -9387,7 +9387,12 @@ path names) is asked about as the deletion it may be, never as a move that can b
 (#3505): the source named last is the one kept. Where the command's words name the file and
 the place, the question says why a command that moves is asked about as a deletion: "The command
 sends it to <the place>, and another file the same command names may land on that name too. Only
-one of the two would be kept there, so this file may be lost." The answers
+one of the two would be kept there, so this file may be lost." The same is asked, in the same
+words, of a file one command of a call moves to a name that a later command of the same call
+writes too (#3649): a second mv, a cp or a redirect, joined by `&&`, `;` or `||`, or inside an
+`if`, since a later command that only may run may still replace it. The file moved last is asked
+about as it was. Such a file shares a question only with others like it, so a command that was
+refused whole is refused whole still. The answers
 are Keep as is, first, and Delete, Move or Empty; a save's
 For good approves no removal and a removal's answer approves no save, a removal whose consequence
 changes after he answers (what git holds of the file, where a move lands, what a folder holds) is
