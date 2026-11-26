@@ -381,10 +381,17 @@ route_fields(){   # $1 = event
   done <<< "$BYPASSED_ROUTES_SINCE
 $BYPASSED_SOME_SINCE"
 }
+# Called inside a command substitution, so it reads nothing through a process substitution, which
+# bash 3.2 can lose there (lessons review of #3697): the fields are matched as text.
 hook_key(){   # $1 = event  $2 = the hook's matcher pairs, k=v joined by commas
-  local fields kept
-  fields="$(route_fields "$1" | LC_ALL=C sort -u)"
-  kept="$(printf '%s\n' "$2" | tr ',' '\n' | awk -F= 'FILENAME == ARGV[1] { if ($0 != "") f[$0] = 1; next } ($1 in f)' <(printf '%s\n' "$fields") - | LC_ALL=C sort -u | paste -sd, -)"
+  local fields kept="" p
+  fields=",$(route_fields "$1" | LC_ALL=C sort -u | paste -sd, -),"
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    case "$fields" in *",${p%%=*},"*) kept="$kept$p
+" ;; esac
+  done <<< "$(printf '%s\n' "$2" | tr ',' '\n')"
+  kept="$(printf '%s' "$kept" | LC_ALL=C sort -u | paste -sd, -)"
   if [ -n "$kept" ]; then printf '%s{%s}\n' "$1" "$kept"; else printf '%s\n' "$1"; fi
 }
 # Every event a mod's own hook files register, one per line: on('<event>' in command position, in
