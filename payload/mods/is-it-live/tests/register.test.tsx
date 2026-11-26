@@ -1696,6 +1696,30 @@ test('a draft to another thread, one Slack refused, or one with no thread leaves
   expect((await turnEnd($)).block).toBeUndefined()
 })
 
+// #3617: an MCP call can be handed to the background, answering at once that it was accepted. Such
+// an answer is not denied, not an error and names none of Slack's errors, so it settled the thread
+// before any draft existed. None has been seen, so the answer here stands in for one.
+test('a draft call answered without the saved draft\'s link leaves the turn held, and the hold still says how to save it (#3617)', withKit, async ($, on) => {
+  const w = world(on, { prView: merged(412) })
+  await start($)
+  await says($, THREAD)
+  await mergeAndCard($)
+  w.w.slackDraft = { text: 'The call is still running and moved to a background task. Task ID: mcp-task-7f3a. Its result arrives as a task notification.' }
+  expect((await draft($)).isError).toBeUndefined()
+  const held = String((await turnEnd($)).block)
+  expect(held).toContain(THREAD)
+  expect(held).toContain(SOURCE)
+  expect(held).toContain('attached_draft_exists')
+  // An answer with nothing in it settles nothing either.
+  w.w.slackDraft = { text: '' }
+  await draft($)
+  expect((await turnEnd($)).block).toContain(SOURCE)
+  // Slack's own answer for a saved draft, as before.
+  w.w.slackDraft = { text: '{"result":"Draft created","channel_link":"https://app.slack.com/client/T1/C07ABCDEF"}' }
+  await draft($)
+  expect((await turnEnd($)).block).toBeUndefined()
+})
+
 // #2578 reversed this test's last clause, "a thread pasted after a merge is owed one": a thread
 // pasted once the session is under way is owed a reply only after a merge for it (tests below).
 test('a draft saved before a merge does not count for it, and a later merge asks again (#2436)', withKit, async ($, on) => {

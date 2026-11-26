@@ -9202,7 +9202,15 @@ card asked a draft of its message for is held for that message, word for word, n
 reply. Slack keeps one attached draft per channel and refuses another with
 `attached_draft_exists`, which the hold says to resolve with Dan. Any draft Slack saved to that
 thread, under any Slack server and from any part of the session (the card's message for a thread
-requester, #2435, included), settles it until the next merge. Which came first is kept as a count
+requester, #2435, included), settles it until the next merge. A draft counts as saved only when
+Slack's answer carries its link, read as the value of the answer's `channel_link` field (#3617):
+the draft tool's description says it returns one, and each of the 636 saved drafts counted on
+2026-11-25 carried it. An answer that was refused, is marked an error
+or names one of Slack's errors is no saved draft, as before, and neither now is one with no link:
+an empty answer, one that cannot be read, or one that says only that the call was accepted and
+gives a task id, as an MCP call handed to the background answers. The word `channel_link` in a
+sentence or inside another field is no link. So the check holds when it cannot tell: the thread
+stays owed and the turn end asks for the draft once more. Which came first is kept as a count
 of steps in the session, never two clock readings.
 Held once per thread and merge in a chain of turn ends, as the card is, then let go with a toast.
 A thread Slack says no longer exists, a draft to it answering `invalid_thread_ts` or a read of it
@@ -9236,7 +9244,7 @@ cleared, as before.
 
 </td><td>
 
-#617, #663, #707, #771, #1244, #1271, #2435, #2436, #2515, #2578, #2630, #2653, #2849
+#617, #663, #707, #771, #1244, #1271, #2435, #2436, #2515, #2578, #2630, #2653, #2849, #3617
 
 </td></tr>
 <tr><td>
