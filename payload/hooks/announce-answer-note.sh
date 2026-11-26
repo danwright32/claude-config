@@ -25,7 +25,7 @@
 # It never blocks: the picker is already answered. When the note could not be taken it says so on
 # standard error and exits 2, which Claude Code shows the session, because a missing note is what
 # sends a merge through the helper back to "ask him" for wording he approved. A picker that is not
-# this one leaves at the first test, before anything is loaded.
+# this one leaves at the first test, before anything is loaded or run.
 #
 # Seam, for the tests: ANNOUNCE_APPROVALS_DIR (read by lib/announce-approval.py) names another record.
 
@@ -33,15 +33,17 @@ set -uo pipefail
 
 payload="$(cat)"
 
+# Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130). Found
+# before the first test, which costs one subshell after a picker and lets test-lib-self-locate.sh
+# see it found on any input.
+case "${BASH_SOURCE[0]}" in */*) HERE="${BASH_SOURCE[0]%/*}" ;; *) HERE=. ;; esac
+HERE="$(cd "${HERE:-/}" && pwd)"
+
 # Every picker reaches this hook. Only one whose input names the source is noted.
 case "$payload" in
   *changelog-announce*) ;;
   *) exit 0 ;;
 esac
-
-# Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
-case "${BASH_SOURCE[0]}" in */*) HERE="${BASH_SOURCE[0]%/*}" ;; *) HERE=. ;; esac
-HERE="$(cd "${HERE:-/}" && pwd)"
 
 SAYS="Dan's answer about an announcement's wording was not noted on this Mac's record"
 THEN="A merge of that pull request through lib/merge-when-ready.sh will not find his approval until a hook reads this session's transcript, which a command putting the label on does: \`gh pr edit <number> --add-label changelog/announce\`, run in this session. He does not need to be asked again."
