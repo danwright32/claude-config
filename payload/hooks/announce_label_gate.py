@@ -362,24 +362,6 @@ def _judge_rename(args):
                      "carrying that one with no wording read for any of them. " + USE_PR_EDIT)
 
 
-def _api_write(args):
-    return "DELETE" not in {v.upper() for v in scan.flag_values(args, "--method", "-X")} and scan.api_writes(args)
-
-
-def _api_calls(command):
-    """The arguments of each gh api call the command makes, as the session link gate finds them."""
-    out = []
-    pipelines, _bodies = scan._stages(command)
-    for stages in pipelines:
-        if not isinstance(stages, list):
-            continue
-        for words, _redirects, _heredocs in stages:
-            found = scan.gh_command(words)
-            if found and found[0] == "api":
-                out.append(list(found[2]) + list(found[3]))
-    return out
-
-
 def _judge_api(args, cwd, payload, notes):
     """One gh api write, in a command that names the label somewhere."""
     names = LABEL in " ".join(args).lower()
@@ -415,11 +397,10 @@ def judge_label(command, cwd, payload, notes):
     if LABEL not in command.lower() or not re.search(r"\bgh\b", command):
         return None
     try:
-        found = scan.scan_gh_in_context(command, cwd, dict(os.environ), KINDS)
-        apis = [args for args in _api_calls(command) if _api_write(args)]
         # How many commands of this call write to GitHub: an edit that leaves the description to
-        # GitHub is judged by what GitHub holds now, which holds only when it is the one write.
-        writes = sum(1 for kind, _, _, _ in found if kind in PUTS) + len(apis)
+        # GitHub is judged by what GitHub holds now, which holds only when it is the one write. The
+        # count is the shared reader's, which the merge gate asks too (claude-config#3742).
+        found, apis, writes = scan.gh_writes(command, cwd, dict(os.environ), KINDS)
         for kind, args, envs, place in found:
             if kind in PUTS:
                 _judge_put(kind, args, envs, place, command, cwd, payload, notes, writes)

@@ -507,6 +507,17 @@
         ]
       },
       {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/announce-answer-note.sh",
+            "timeout": 15,
+            "statusMessage": "Noting Dan's answer about the announcement wording"
+          }
+        ]
+      },
+      {
         "matcher": "Edit|Write|MultiEdit",
         "hooks": [
           {
