@@ -237,6 +237,39 @@ else
 fi
 gone "section 8 no longer opens the draft as soon as it is checked" "Then open it"
 
+# ---- claude-config#3668: the announce label (R5, R6). Whether managers notice a change is decided in
+# code (gather.js's record.managerVisible), so the label table and section 5 sort by that field and
+# never by a label's name, or a fourth label reads as one nobody handles. And the dev update is the
+# safety net for an announcement nobody sent, so every one is settled before the run is recorded.
+said_in(){   # $1 = what it holds  $2 = the section's text, whitespace collapsed  $3 = the phrase
+  case "$2" in *"$3"*) check "$1" ok ;; *) check "$1" "it does not say: $3" ;; esac
+}
+flat(){ printf '%s\n' "$1" | tr -s '[:space:]' ' '; }
+gathering="$(flat "$(awk '/^## 3\./ { f = 1; next } f && /^## / { exit } f' "$SKILL")")"
+classifying="$(flat "$(awk '/^## 5\./ { f = 1; next } f && /^## / { exit } f' "$SKILL")")"
+announcing_raw="$(awk '/^## 11\./ { f = 1; next } f && /^## / { exit } f' "$SKILL")"
+announcing=""; [ -n "$announcing_raw" ] && announcing="$(flat "$announcing_raw")"
+said_in "the label table has a row for changelog/announce" "$gathering" '| `changelog/announce` |'
+said_in "the label table is sorted by record.managerVisible" "$gathering" '`record.managerVisible`'
+said_in "section 5 sorts by record.managerVisible" "$classifying" 'decides by `record.managerVisible`'
+gone "section 5 no longer sorts by the label's name" '`changelog/visible` is manager-visible, `changelog/technical` is behind the scenes'
+if [ -z "$announcing" ]; then check "the skill has a section 11 for announcements for agents" "no '## 11.' section"
+else
+  check "the skill has a section 11 for announcements for agents" ok
+  said_in "section 11 reads the channel with slack_read_channel" "$announcing" 'slack_read_channel'
+  said_in "section 11 says found posted at a time and asks nothing" "$announcing" 'found posted at <time>'
+  said_in "section 11 asks one picker per announcement otherwise" "$announcing" 'one picker per announcement'
+  said_in "section 11 says a failed read as that, never as nothing posted" "$announcing" 'never as "nothing posted"'
+  said_in "section 11 says a cut short read as that" "$announcing" 'cut short'
+  said_in "section 11 keeps the announcement away from lint-post.js" "$announcing" 'never goes through `lint-post.js`'
+  posted_line="$(awk '/^## 11\./ { f = 1; next } f && /^## / { exit } f && index($0, "gather.js posted ") { print; exit }' "$SKILL")"
+  case "${posted_line#"${posted_line%%[![:space:]]*}"}" in
+    "${WRAP_RUN}node __CLAUDE_HOME__/skills/pennie-dev-update/gather.js posted "*) check "section 11 compares under the no network wrapper" ok ;;
+    *) check "section 11 compares under the no network wrapper" "its line is: ${posted_line:-none}" ;; esac
+fi
+case "$commit_line" in *'--outcomes'*) check "the state commit passes each announcement's outcome" ok ;;
+  *) check "the state commit passes each announcement's outcome" "its line is: ${commit_line:-none}" ;; esac
+
 echo "passed: $pass   failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
