@@ -28,11 +28,13 @@
 #   * a post in what the system's program would have written is still refused.
 #
 # Not held here, and seen ALLOWED on that base and on this change: each of these programs behind
-# the word `command` (`command dd if=calm.sh of=run.sh; bash run.sh`, and the same for tar, sed -i,
-# a git checkout and chmod). The gate's note_writes takes that word off before it calls
-# note_program and does not hand over the command as written, so the judgement cannot see it.
-# Handing it over is one argument at that call in slack_drafts_only_gate.py
-# (`self.note_program(name, args, vals, d, stdin, text)`), which this change does not make.
+# a word that runs it for the shell (`command dd if=calm.sh of=run.sh; bash run.sh`, and the same
+# for tar, sed -i, a git checkout and chmod; `env true run.sh; bash run.sh` and `env PATH=. test -f
+# run.sh; bash run.sh`, where env runs a program named for a builtin). The words note_program is
+# handed begin at the program, and the gate's note_writes does not hand over the command as
+# written, so the judgement cannot see the word in front. Handing it over is one argument at that
+# call in slack_drafts_only_gate.py (`self.note_program(name, args, vals, d, stdin, text)`), which
+# this change does not make; named_certain already refuses the form once it can see it.
 set -uo pipefail
 
 # Its own wall clock, and whatever it starts stopped with it however it ends (claude-config#465).

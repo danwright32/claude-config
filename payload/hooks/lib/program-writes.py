@@ -75,15 +75,6 @@ NON_WRITERS = frozenset({
     "for", "select", "case", "esac", "in", "while", "until", "if", "then", "elif", "else", "fi", "do",
     "done", "function", "{", "}", "!", "]]", "let", "read", "getopts", "alias", "builtin", "command",
     "exec", "eval", "trap", "ulimit", "umask", "shopt", "setopt"})
-# The NON_WRITERS that bash and zsh each run themselves where the name is written bare, a reserved
-# word or a builtin of both, whatever PATH holds (named_certain). shopt is bash's alone and setopt
-# zsh's alone, so neither is here: the other shell looks for it on PATH.
-SHELL_OWN = frozenset({
-    "cd", "pushd", "popd", "test", "[", "[[", "]]", "type", "hash", "true", "false", ":", "export", "unset",
-    "set", "local", "declare", "typeset", "readonly", "kill", "wait", "source", ".", "exit", "return",
-    "shift", "echo", "printf", "for", "select", "case", "esac", "in", "while", "until", "if", "then",
-    "elif", "else", "fi", "do", "done", "function", "{", "}", "!", "let", "read", "getopts", "alias",
-    "builtin", "command", "exec", "eval", "trap", "ulimit", "umask", "time"})
 # NON_WRITERS that can still change a module a script wrote before it imports it (raw_unchanged):
 # one that removes files, so Python finds the module somewhere else, and the shell's own words that
 # change directory, read a file as commands, run text given to them or run another program.
@@ -375,9 +366,10 @@ def make(interpreter, shells, awks, senders):
             may write. Returns what it prints, as pieces, or None where that is not known. text is the
             command as written. The gate's note_writes does not hand it over yet, so it is put back
             together from the command's words as written, which is the same command without its
-            redirections and, where note_writes took one off the front, without the word `command`
-            or `builtin`: so `command dd ...` is still read as dd is (not held; the suite's header
-            says what closes it).
+            redirections and without any word in front that runs it for the shell (env, sudo, nice,
+            xargs, command, builtin), since the words begin at the program: so `env dd ...` and
+            `command dd ...` are still read as dd is, and `env true run.sh` as the builtin (not
+            held; the suite's header says what closes it).
 
             In a script on disk only a build is followed (#2852): what it builds is read as its
             sources where a later command runs it (`npm run build && node dist/x.js`), and nothing it
@@ -420,16 +412,18 @@ def make(interpreter, shells, awks, senders):
             the command whose first word, worked out, is word and whose last part is name: the
             gate's one judgement of that (system_program in lib/exact-output.py, with PATH named in
             the text of a script on disk left out, as for cat and cp, since nothing here marks a file
-            in a script on disk). A word the shell runs itself whatever PATH holds (SHELL_OWN),
-            written bare, is not looked for on PATH, so of those only a function or an alias of the
-            name is asked."""
-            if "/" not in word and name in SHELL_OWN:
-                ctx = self.shell
-                while ctx is not None:
-                    if self.exact_shadowed(ctx["text"], name):
-                        return False
-                    ctx = ctx.get("parent")
-                return True
+            in a script on disk). A word the shell runs itself whatever PATH holds, written bare, is
+            not looked for on PATH, so of those only a function or an alias of the name is asked:
+            that too is system_program's answer, from its one list of them (BUILTINS there).
+
+            Never behind a word that runs the command for the shell (env, sudo, nice, xargs): there
+            even a builtin's name is a program looked for on PATH (`env PATH=. true run.sh`), which
+            system_program does not ask of a builtin, so it is asked here first. It is seen only in
+            the command as written, which note_program is not handed yet (its docstring)."""
+            head = text.lstrip()
+            begins = head.startswith(word) and head[len(word):len(word) + 1] in ("", " ", "\t", "\n")
+            if not begins and self.exact_run_for_it(text):
+                return False
             return self.system_program(word, name, text, scripts=False)
 
         def note_by_name(self, name, args, vals, d, stdin, believe):

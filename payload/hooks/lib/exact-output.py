@@ -74,8 +74,9 @@ bare names are the shell's builtins, which PATH does not move. For these reading
 the text of a script on disk is not counted (system_program says why). What dd, tar, unzip, sed
 -i, awk, an interpreter given code, a git checkout and a compiler write, and a program taken to
 write nothing (NON_WRITERS), ask it too, in lib/program-writes.py (note_program, named_certain).
-Still believed by its name alone: any of those behind the word `command`, which the gate's
-note_writes takes off before note_program is called; a program the gate's own walk takes to do
+Still believed by its name alone: any of those behind a word that runs it for the shell (env,
+command), which note_program cannot see until the gate's note_writes hands it the command as
+written, and with them a program named for a builtin behind env; a program the gate's own walk takes to do
 nothing or to be a shell or an interpreter (its SH_INERT and GIT_INERT, `./bash -c ...`);
 PIPE_SAFE in lib/data-names.py and DATA_FILTERS in lib/shell-words.py; and $(dirname X).
 
@@ -109,9 +110,22 @@ ALIAS = r"(?m)(?<![\w.-])alias\s[^\n]*(?<![\w.-])%s="
 ALIAS_LINE = re.compile(r"(?m)(?<![\w.-])alias\s[^\n]*")
 # PATH as a name of its own (never part of PYTHONPATH or GIT_EXEC_PATH), written any way at all.
 PATH_NAMED = re.compile(r"(?<!\w)PATH(?!\w)")
-# The programs among those the gate reads by name that bash, zsh and dash each run as a builtin of
-# their own where the name is written bare, whatever PATH holds (system_program).
-BUILTINS = frozenset({"echo", "printf"})
+# The names among those the gate reads that the shell runs itself where the name is written bare,
+# whatever PATH holds (system_program). echo and printf are builtins of bash, zsh and dash alike.
+# The rest are reserved words or builtins of both bash and zsh, the shells a typed command runs
+# in, and are asked only by lib/program-writes.py (named_certain), which marks nothing in a script
+# on disk; they are its NON_WRITERS that are the shell's own. dash lacks some of them ([[, pushd,
+# source), so a string typed for `dash -c` that uses one is read as bash would run it. shopt is
+# bash's alone and setopt zsh's alone, so neither is here: the other shell looks for it on PATH.
+# This is the Slack drafts gate's one list of them, as system_program is its one judgement
+# (claude-config#3440).
+BUILTINS = frozenset({
+    "echo", "printf",
+    "cd", "pushd", "popd", "test", "[", "[[", "]]", "type", "hash", "true", "false", ":", "export", "unset",
+    "set", "local", "declare", "typeset", "readonly", "kill", "wait", "source", ".", "exit", "return",
+    "shift", "for", "select", "case", "esac", "in", "while", "until", "if", "then", "elif", "else", "fi",
+    "do", "done", "function", "{", "}", "!", "let", "read", "getopts", "alias", "builtin", "command",
+    "exec", "eval", "trap", "ulimit", "umask", "time"})
 
 
 class Outside(Exception):
