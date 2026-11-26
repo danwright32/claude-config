@@ -237,6 +237,107 @@ const LIVE_OK = ['--live', PET + '=' + sha(900) + '@2026-10-08T10:00:00Z'];
     'the counts say how many carried a record, how many were judged by hand, and how many are gaps', p && JSON.stringify(p.counts));
 }
 
+// ---------------------------------------------------------------- the announce label (claude-config#3665)
+//
+// A fourth label: a change managers notice whose agents are also told, with the post for agents in
+// its pull request. gather marks every record with whether managers notice it (R5), reads an
+// announce record whatever this Mac's registry says, and says so when the registry names no channel.
+
+const ENTRY = require(path.join(SKILL, '..', '..', 'hooks', 'lib', 'changelog-entry.js'));
+const ANNOUNCE_POST = '@here\n**Handing a call back**\n\nYou can now hand a call back to the queue.\n\n' + HY + ' Press Hand back\n' + HY + ' Pick a reason';
+const ANNOUNCE_BODY = 'Why.\r\n\r\n## Changelog\r\nAgents can now hand a call back to the queue.\r\n\r\n## Announcement\r\n'
+  + ANNOUNCE_POST.replace(/\n/g, '\r\n') + '\r\n\r\n## Testing\r\nran it';
+function announceCase(petEntryExtra, pulls) {
+  const cfg = defaultConfig();
+  Object.assign(cfg.repos[0], petEntryExtra || {});
+  const compare = {};
+  pulls.forEach(function (p) { compare[p.merge_commit_sha + '...' + sha(900)] = 'ahead'; });
+  const ws = workspace({ pulls: { [SONAR]: [], [PET]: pulls }, compare: { [PET]: compare } }, cfg,
+    { [PET]: { lastEnd: '2026-09-30T00:00:00Z' }, [SONAR]: { lastEnd: '2026-10-01T00:00:00Z' } });
+  const r = gather(ws, LIVE_OK);
+  const p = repoOf(r, PET);
+  const rec = {};
+  (p ? p.prs : []).forEach(function (x) { rec[x.number] = x.record; });
+  return { r: r, p: p, rec: rec, notes: (p && p.notes) || [] };
+}
+function announceNotes(notes) { return notes.filter(function (n) { return /announceChannel/.test(n); }); }
+const ANNOUNCE_PULLS = function () {
+  return [
+    pr(40, '2026-10-02T12:00:00Z', { labels: ['changelog/announce'], body: ANNOUNCE_BODY }),
+    pr(41, '2026-10-02T13:00:00Z', { labels: ['changelog/announce'], body: 'Why.\n\n## Changelog\nAgents can now do a thing.' }),
+    pr(42, '2026-10-02T14:00:00Z', { labels: ['changelog/visible'], body: VISIBLE_BODY }),
+    pr(43, '2026-10-02T15:00:00Z', { labels: ['changelog/technical'] }),
+    pr(44, '2026-10-02T16:00:00Z', { labels: ['changelog/none'] }),
+    pr(45, '2026-10-02T17:00:00Z', { author: 'dependabot[bot]' }),
+  ];
+};
+{
+  // This Mac's registry names NO announcements channel for the repository, the state every Mac is in
+  // until the label is switched on, and the state of a Mac whose entry lost the key.
+  const c = announceCase(null, ANNOUNCE_PULLS());
+  check(c.rec[40] && c.rec[40].kind === 'announce' && c.rec[40].line === 'Agents can now hand a call back to the queue.',
+    'an announce record is read as one, with its sentence for managers, on a Mac whose registry names no channel (never as a gap)', JSON.stringify(c.rec[40]));
+  check(c.rec[40] && c.rec[40].announcement === ANNOUNCE_POST, 'an announce record carries the post for agents, line breaks kept and CRLF gone', JSON.stringify(c.rec[40]));
+  check(c.rec[40] && c.rec[40].managerVisible === true, 'an announce record is marked as one managers notice', JSON.stringify(c.rec[40]));
+  check(c.rec[42] && c.rec[42].managerVisible === true && c.rec[42].kind === 'visible' && c.rec[42].line === 'Managers now see the Rolled column.',
+    'a visible record is marked as one managers notice, and reads as it did', JSON.stringify(c.rec[42]));
+  check(c.rec[43] && c.rec[43].managerVisible === false && c.rec[43].kind === 'technical', 'a technical record is marked as one managers do not notice', JSON.stringify(c.rec[43]));
+  check(c.rec[44] && c.rec[44].managerVisible === false && c.rec[44].kind === 'none', 'a none record is marked as one managers do not notice', JSON.stringify(c.rec[44]));
+  check(c.rec[42] && !('announcement' in c.rec[42]) && c.rec[43] && !('announcement' in c.rec[43]), 'a record under another label carries no announcement', JSON.stringify([c.rec[42], c.rec[43]]));
+  // A record gather cannot read, or one judged by hand, is not marked either way: nothing decided it.
+  check(c.rec[41] && c.rec[41].kind === 'gap' && c.rec[41].code === 'NO_ANNOUNCEMENT' && !('managerVisible' in c.rec[41]),
+    'an announce label with no post for agents is a gap with the parser\'s own code, marked neither way', JSON.stringify(c.rec[41]));
+  check(c.rec[45] && c.rec[45].kind === 'dependency' && !('managerVisible' in c.rec[45]), 'a dependency update is marked neither way', JSON.stringify(c.rec[45]));
+  check(c.p && c.p.counts.recorded === 4 && c.p.counts.gaps === 1, 'an announce record counts as one that carried a record', c.p && JSON.stringify(c.p.counts));
+  const said = announceNotes(c.notes);
+  check(said.length === 1 && /1 PR\(s\)/.test(said[0]) && /changelog\/announce/.test(said[0]) && /names no announcements channel/.test(said[0]),
+    'the repo says, in its own words, that it holds announce records and this Mac\'s registry names no channel for it', JSON.stringify(c.notes));
+  check(said.length === 1 && /announce-channel acme\/pet/.test(said[0]), 'and says how to check whether the key was lost', JSON.stringify(said));
+  check(c.r.code === 0, 'which is said, never refused: the run still gathers', c.r.all.slice(0, 600));
+}
+{
+  // The registry names the channel: nothing to say.
+  const c = announceCase({ announceChannel: 'C0000TEST02' }, ANNOUNCE_PULLS());
+  check(c.rec[40] && c.rec[40].kind === 'announce' && announceNotes(c.notes).length === 0,
+    'with the channel named, announce records are read and nothing is said about a missing channel', JSON.stringify(c.notes));
+}
+{
+  // A channel that is not a channel id is said as that, not as none named.
+  const c = announceCase({ announceChannel: '#announcements' }, ANNOUNCE_PULLS());
+  const said = announceNotes(c.notes);
+  check(said.length === 1 && /not a Slack channel id/.test(said[0]) && /#announcements/.test(said[0]),
+    'an announcements channel that is not a channel id is said as that', JSON.stringify(c.notes));
+}
+{
+  // No announce records: a repository naming no channel is the ordinary case, and nothing is said.
+  const c = announceCase(null, ANNOUNCE_PULLS().slice(2));
+  check(c.p && c.p.status === 'ok' && announceNotes(c.notes).length === 0, 'a repo holding no announce record says nothing about a channel', JSON.stringify(c.notes));
+}
+{
+  // R5, for every kind the gate knows, so a kind added later is marked here or this fails: one
+  // merged change per kind, each with a body that makes a valid record of it, and each marked with
+  // the library's own answer for that kind.
+  const bodies = [ANNOUNCE_BODY, 'no block'];
+  const pulls = [];
+  const kindOf = {};
+  ENTRY.KINDS.forEach(function (kind, i) {
+    const body = bodies.filter(function (b) { return ENTRY.parseEntry({ labels: ['changelog/' + kind], body: b }).ok; })[0];
+    check(body !== undefined, 'this suite knows a body that makes a valid ' + kind + ' record (add one for a new kind)');
+    if (body === undefined) return;
+    kindOf[60 + i] = kind;
+    pulls.push(pr(60 + i, '2026-10-03T1' + i + ':00:00Z', { labels: ['changelog/' + kind], body: body }));
+  });
+  const c = announceCase({ announceChannel: 'C0000TEST02' }, pulls);
+  check(Object.keys(kindOf).length === ENTRY.KINDS.length && ENTRY.KINDS.length >= 4, 'every kind has a merged change in this case', JSON.stringify(kindOf));
+  Object.keys(kindOf).forEach(function (n) {
+    const kind = kindOf[n];
+    check(c.rec[n] && c.rec[n].kind === kind && typeof c.rec[n].managerVisible === 'boolean' && c.rec[n].managerVisible === ENTRY.isManagerVisible(kind),
+      'a record of the kind ' + kind + ' is marked managerVisible=' + ENTRY.isManagerVisible(kind), JSON.stringify(c.rec[n]));
+  });
+  check(c.rec[60 + ENTRY.KINDS.indexOf('announce')] && c.rec[60 + ENTRY.KINDS.indexOf('announce')].managerVisible === true,
+    'an announce change appears as one managers would notice (R5)', JSON.stringify(c.rec));
+}
+
 // ---------------------------------------------------------------- did it ship
 
 function deployCase(liveArgs, compare, pulls, stateEntry) {
