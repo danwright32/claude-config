@@ -5453,6 +5453,174 @@ test('a note whose name the dialog would not show whole can still be asked about
   expect(w.ran).toEqual([])
 })
 
+// ---- #3637: the path a file has inside the folder it is moved onto is the mod's own text ----
+// Measured on 2026-11-26 at 3566f98fd5 through the whole mod, before any change. A note whose name
+// holds a zero width space, moved onto a folder named with no slash after it, had its question
+// refused with "The question would not reach Dan as written", for the character in "It goes to
+// <the folder>/<its name>": the mod's own sentence, which Claude cannot reword, so the move could
+// never be asked about at all (L665). The words give one name there, the disk says it is a folder,
+// and the mod then works out the path the file has inside it. The file's own path and the folder
+// were set aside before the question was judged, and the path made of the two was not. Every form
+// of ODD_ONTO_A_FOLDER was refused so, the fourth for the same path in the Move answer, and the
+// fifth with the folder's half of the path set aside and the file's name left. Every form of
+// ODD_ASKED_ALREADY was asked: there the reader of the command names the path itself (a slash
+// after the folder, -t, two files), or the path is one the list held (a new name, what a folder
+// holds).
+const ODD_NAME = `od${pt(0x200b)}d.md`
+const ODD_NOTE = `${REMOVAL_MEM_SHOWN}/${ODD_NAME}`
+const ODD_TWO_NAME = `tw${pt(0x200b)}o.md`
+const ODD_TWO = `${REMOVAL_MEM_SHOWN}/${ODD_TWO_NAME}`
+const ODD_FOLDER = `~/Desktop/arch${pt(0x200b)}ive`
+const ODD_PROJECT_NAME = `q${pt(0x200b)}r`
+const ODD_PROJECT = `~/.claude/projects/${ODD_PROJECT_NAME}`
+const ODD_NEW_NAME = `re${pt(0x200b)}named.md`
+const ODD_FILES: Record<string, string> = {
+  ...ARCHIVED,
+  [`${REMOVAL_MEMDIR}/${ODD_NAME}`]: 'a note\n',
+  [`${REMOVAL_MEMDIR}/${ODD_TWO_NAME}`]: 'another note\n',
+  [`${HOME}/Desktop/held/${ODD_NAME}`]: 'another file of the same name\n',
+  [`${HOME}/Desktop/arch${pt(0x200b)}ive/x.md`]: 'x\n',
+  [`${HOME}/.claude/projects/${ODD_PROJECT_NAME}/memory/MEMORY.md`]: '- [note](note.md)\n',
+}
+const BACK = 'and can be moved back.'
+const NOT_IN_GIT = 'Git does not hold it, so once deleted it cannot be got back from git.'
+const holdsSaid = (...held: string[]) => `It is a folder that holds lasting memory (${held.join(', ')}), which goes with it.`
+// What each is, the command, what Claude's question names, what the mod adds to it, and what the
+// answer that is not Keep as is says.
+type OddRow = [string, string, string, string, string]
+const ODD_ONTO_A_FOLDER: OddRow[] = [
+  ['a note', `mv ${ODD_NOTE} ~/Desktop/archive`, ODD_NOTE, `It goes to ~/Desktop/archive/${ODD_NAME}, ${BACK}`, `Moves ${ODD_NOTE} to ~/Desktop/archive/${ODD_NAME}`],
+  ['a note named from inside its own folder', `cd ${REMOVAL_MEM_SHOWN} && mv ${ODD_NAME} ~/Desktop/archive`, ODD_NOTE, `It goes to ~/Desktop/archive/${ODD_NAME}, ${BACK}`, `Moves ${ODD_NOTE} to ~/Desktop/archive/${ODD_NAME}`],
+  ['a note the folder holds one of', `mv ${ODD_NOTE} ~/Desktop/held`, ODD_NOTE, `It goes to ~/Desktop/held/${ODD_NAME}, replacing the file that is there now.`, `Moves ${ODD_NOTE} to ~/Desktop/held/${ODD_NAME}`],
+  [
+    'a note the folder holds one of, by a mv told to replace nothing',
+    `mv -n ${ODD_NOTE} ~/Desktop/held`,
+    ODD_NOTE,
+    `It stays where it is: a file is at ~/Desktop/held/${ODD_NAME} already, and mv -n replaces nothing.`,
+    `Moves ${ODD_NOTE} nowhere, since a file is at ~/Desktop/held/${ODD_NAME} already`,
+  ],
+  // The folder's own name holds such a character too. The path inside it is set aside whole, before
+  // the folder is: with the folder first, its half of the path went and the note's name was judged.
+  ['a note, onto a folder whose own name the dialog would not show whole', `mv ${ODD_NOTE} ${ODD_FOLDER}`, ODD_NOTE, `It goes to ${ODD_FOLDER}/${ODD_NAME}, ${BACK}`, `Moves ${ODD_NOTE} to ${ODD_FOLDER}/${ODD_NAME}`],
+  [
+    'a project folder that holds lasting memory',
+    `mv ${ODD_PROJECT} ~/Desktop/archive`,
+    ODD_PROJECT,
+    `${holdsSaid(`${ODD_PROJECT}/memory`)} It goes to ~/Desktop/archive/${ODD_PROJECT_NAME}, ${BACK}`,
+    `Moves ${ODD_PROJECT} to ~/Desktop/archive/${ODD_PROJECT_NAME}`,
+  ],
+]
+// Every other path the mod's sentences build, each with such a character in it: asked before the
+// change and after it, since each was in the list already.
+const ODD_ASKED_ALREADY: OddRow[] = [
+  ['a note into a folder named with a slash after it', `mv ${ODD_NOTE} ~/Desktop/archive/`, ODD_NOTE, `It goes to ~/Desktop/archive/${ODD_NAME}, ${BACK}`, `Moves ${ODD_NOTE} to ~/Desktop/archive/${ODD_NAME}`],
+  ['a note into a folder given first, with -t', `mv -t ~/Desktop/archive ${ODD_NOTE}`, ODD_NOTE, `It goes to ~/Desktop/archive/${ODD_NAME}, ${BACK}`, `Moves ${ODD_NOTE} to ~/Desktop/archive/${ODD_NAME}`],
+  [
+    'two notes onto a folder whose own name the dialog would not show whole',
+    `mv ${ODD_NOTE} ${ODD_TWO} ${ODD_FOLDER}`,
+    `${ODD_NOTE}, ${ODD_TWO}`,
+    `${ODD_NOTE} goes to ${ODD_FOLDER}/${ODD_NAME}, ${BACK} ${ODD_TWO} goes to ${ODD_FOLDER}/${ODD_TWO_NAME}, ${BACK}`,
+    `Moves ${ODD_NOTE} to ${ODD_FOLDER}/${ODD_NAME}, ${ODD_TWO} to ${ODD_FOLDER}/${ODD_TWO_NAME}`,
+  ],
+  ['a note given a new name', `mv ${REMOVAL_MEM_SHOWN}/note.md ~/Desktop/archive/${ODD_NEW_NAME}`, `${REMOVAL_MEM_SHOWN}/note.md`, `It goes to ~/Desktop/archive/${ODD_NEW_NAME}, ${BACK}`, `Moves ${REMOVAL_MEM_SHOWN}/note.md to ~/Desktop/archive/${ODD_NEW_NAME}`],
+  ['a note given a new name in a folder whose own name the dialog would not show whole', `mv ${ODD_NOTE} ${ODD_FOLDER}/${ODD_NEW_NAME}`, ODD_NOTE, `It goes to ${ODD_FOLDER}/${ODD_NEW_NAME}, ${BACK}`, `Moves ${ODD_NOTE} to ${ODD_FOLDER}/${ODD_NEW_NAME}`],
+  [
+    'a project folder into a folder named with a slash after it',
+    `mv ${ODD_PROJECT} ~/Desktop/archive/`,
+    ODD_PROJECT,
+    `${holdsSaid(`${ODD_PROJECT}/memory`)} It goes to ~/Desktop/archive/${ODD_PROJECT_NAME}, ${BACK}`,
+    `Moves ${ODD_PROJECT} to ~/Desktop/archive/${ODD_PROJECT_NAME}`,
+  ],
+  ['a project folder deleted', `rm -rf ${ODD_PROJECT}`, ODD_PROJECT, `${holdsSaid(`${ODD_PROJECT}/memory`)} ${NOT_IN_GIT}`, `Deletes ${ODD_PROJECT}`],
+  [
+    'the projects folder deleted, with such a project in it',
+    'rm -rf ~/.claude/projects',
+    '~/.claude/projects',
+    `${holdsSaid(`${REMOVAL_MEM_SHOWN}`, `${ODD_PROJECT}/memory`)} ${NOT_IN_GIT}`,
+    'Deletes ~/.claude/projects',
+  ],
+]
+const oddAsked = async ($: Engine, on: On, [, command, names, said, pressed]: OddRow) => {
+  const w = world($, on, { auto: true, files: ODD_FILES })
+  const move = pressed.startsWith('Moves ')
+  const refusal = refusalOf(await call($, { tool: 'Bash', command }))
+  expect(refusal.startsWith(move ? `${NOT_MOVED}: this moves lasting memory away (${names.split(', ')[0]}, to ` : `${NOT_DELETED}: this deletes lasting memory (${names}, which holds `)).toBe(true)
+  const asked = `${move ? 'Move' : 'Delete'} ${names}: tidying up?`
+  const answered = await askRemoval($, w, refusal, 'Keep as is', asked)
+  expect(answered.deny).toBeUndefined()
+  const q = w.asked[0]?.questions[0]
+  expect(q?.question).toBe(`${asked} ${said}`)
+  expect(q?.options.map(o => [o.label, o.description])).toEqual([
+    ['Keep as is', move ? 'Nothing is moved' : 'Nothing is deleted'],
+    [move ? 'Move' : 'Delete', pressed],
+  ])
+  expect(w.ran).toEqual([])
+}
+for (const row of ODD_ONTO_A_FOLDER)
+  test(`a file whose name the dialog would not show whole can still be asked about when it is moved onto a folder: ${row[0]} (#3637)`, withKit, async ($, on) => {
+    await oddAsked($, on, row)
+  })
+for (const row of ODD_ASKED_ALREADY)
+  test(`a path the mod's own text already counted, holding what the dialog would not show, is asked about as it was: ${row[0]} (#3637)`, withKit, async ($, on) => {
+    await oddAsked($, on, row)
+  })
+
+const ODD_MOVE = `mv ${ODD_NOTE} ~/Desktop/archive`
+test("Dan's Move for a note whose name the dialog would not show whole runs the move onto the folder once (#3637)", withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: ODD_FILES })
+  const answered = await askRemoval($, w, refusalOf(await call($, { tool: 'Bash', command: ODD_MOVE })), 'Move', `Move ${ODD_NOTE}: it is finished work?`)
+  expect(contextOf(answered)).toContain(`Dan answered Move to moving ${ODD_NOTE}`)
+  expect((await call($, { tool: 'Bash', command: ODD_MOVE })).deny).toBeUndefined()
+  expect(w.ran.map(r => r.input.command)).toEqual([ODD_MOVE])
+  expect(refusalOf(await call($, { tool: 'Bash', command: ODD_MOVE }))).toContain(NOT_MOVED)
+})
+
+// Only the path the mod built is set aside, and only whole. Every other word of the question is
+// Claude's, and is judged as it was: a character Dan cannot see anywhere else in it is refused, and
+// so is the same name standing anywhere but at the end of the one path the note lands at. Each is
+// refused for the character where Claude wrote it, named by the text that ends right before it.
+// Each was seen to fail on 2026-11-26 with the change made wider: the three that name a path with
+// the file's last name set aside too, and all of them with the question not judged at all.
+const ODD_ELSEWHERE: [string, string, string][] = [
+  ['in the reason Claude gives', `Move ${ODD_NOTE}: it is fin${pt(0x200d)}ished work?`, ': it is fin"'],
+  ["the note's name standing alone", `Move ${ODD_NOTE}: ${ODD_NAME} is finished work?`, ': od"'],
+  ['the name under another folder', `Move ${ODD_NOTE}: it belongs beside ~/Desktop/elsewhere/${ODD_NAME} as finished work?`, 'Desktop/elsewhere/od"'],
+  ['another name in the folder it goes to', `Move ${ODD_NOTE}: it replaces ~/Desktop/archive/older-${ODD_NAME} as finished work?`, 'Desktop/archive/older-od"'],
+  // Where it lands is set aside here too, as it is wherever it stands, and what follows it is judged.
+  ['a longer name that starts with where it lands', `Move ${ODD_NOTE}: see ~/Desktop/archive/${ODD_NAME}${pt(0x200b)}.bak, it is finished work?`, ', right after "'],
+]
+for (const [what, asked, fault] of ODD_ELSEWHERE)
+  test(`a question about a move onto a folder is still refused for a character Dan cannot see in Claude's own words: ${what} (#3637)`, withKit, async ($, on) => {
+    const w = world($, on, { auto: true, files: ODD_FILES })
+    const answered = await askRemoval($, w, refusalOf(await call($, { tool: 'Bash', command: ODD_MOVE })), 'Move', asked)
+    expect(answered.deny).toContain('The question would not reach Dan as written: character ')
+    expect(answered.deny).toContain(fault)
+    expect(w.asked).toEqual([])
+    expect(w.ran).toEqual([])
+  })
+
+// A field Claude sends beside the question is judged as it was, whatever the note is called.
+test('a field beside the question about a move onto a folder is still refused for a character Dan cannot see (#3637)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: ODD_FILES })
+  const answered = await askRemoval($, w, refusalOf(await call($, { tool: 'Bash', command: ODD_MOVE })), 'Move', `Move ${ODD_NOTE}: it is finished work?`, { title: `Tidy${pt(0x200b)}` })
+  expect(answered.deny).toContain('Field "title" would not reach Dan as written: character 5 of it is U+200B')
+  expect(w.asked).toEqual([])
+  expect(w.ran).toEqual([])
+})
+
+// A move whose words do not say one path the file lands at (a pattern) is said by the folder, so no
+// path inside the folder is the mod's own there, and one Claude writes is judged.
+test('a path inside the folder that the mod did not build is still judged in the question about a pattern moved into it (#3637)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: ODD_FILES })
+  const names = `${REMOVAL_MEM_SHOWN}/{a,b}.md`
+  const refusal = refusalOf(await call($, { tool: 'Bash', command: `mv ${names} ~/Desktop/archive` }))
+  const answered = await askRemoval($, w, refusal, 'Move', `Move ${names}: they sit beside ~/Desktop/archive/${ODD_NAME} as finished work?`)
+  expect(answered.deny).toContain('The question would not reach Dan as written: character ')
+  expect(answered.deny).toContain('~/Desktop/archive/od"')
+  expect(w.asked).toEqual([])
+  expect(w.ran).toEqual([])
+})
+
 // The note named last of two sources of exactly one name is the one that survives: measured on
 // this Mac's disk on 2026-11-25, `mv full/A.md memory/a.md archive/` left the archive holding the
 // note's text, the source named last being the one kept. Of that note the sentence "this file may
