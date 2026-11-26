@@ -4069,7 +4069,7 @@ reservations are one line each in `~/.claude/state/lesson-reservations.tsv` (num
 lapses, the session that asked), written under a small lock of its own, never the sync lock. An ask
 gives up only when one other ask has kept that lock for ten seconds: the wait starts again each time
 the lock changes hands, so several sessions asking at once on a busy Mac queue rather than refuse
-(`hooks/lib/pid-lock.sh`, claude-config#3683). That
+(`hooks/lib/pid-lock.sh`, claude-config#3683). The reservations
 file is never synced, so a reservation cannot cross Macs. A reservation clears once its lesson is
 written in either copy, and one nobody uses lapses, after which its number is offered again since it
 was never published. `check-lessons` and a pull's renumber skip reserved numbers without reserving
