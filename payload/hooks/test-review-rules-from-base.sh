@@ -280,6 +280,15 @@ check_eq "6 a base that is not a commit id leaves the review running" "ok" "$(me
 check "6 and is said" "Review rules: no REVIEW.md was applied" "$(body notrepo)"
 check_eq "6 recorded as unreadable" "unreadable" "$(meta notrepo review_rules)"
 
+# The base is read but the HEAD cannot be: the base's rules still apply, and the answer says that
+# whether the change alters the file is unknown, rather than passing it off as unchanged (L11).
+run_rules headgone "$MAIN1" "$GONE"
+check_eq "6 a head that cannot be read leaves the review running" "ok" "$(meta headgone status)"
+check "6 the base's rules still reach the reviewer" "BASE-RULE-ALPHA" "$(msg)"
+check "6 and the answer says the change's side could not be read" "Review rules: whether this change itself alters REVIEW.md could not be read" "$(body headgone)"
+check "6 and which version was applied" "applied the base commit ${MAIN1:0:7}" "$(body headgone)"
+check_eq "6 the record still says applied" "applied" "$(meta headgone review_rules)"
+
 # ===== 7. (g) A REVIEW.md that is not an ordinary small text file at the base =====
 SREPO="$WORKDIR/shapes"
 mkdir -p "$SREPO/docs"

@@ -23,10 +23,12 @@ hook inherits that variable from the session that fired it. Removing it here rat
 shell keeps the whole command in one place the test can read back from the fake claude's recorded
 environment.
 
-The lessons index is the appended system prompt. The message is two context lines (the framework
-read from package.json, or that there was none, and which files handle failure), then the
-repository's own REVIEW.md when its base commit holds one (review_rules, claude-config#3558), then
-the text of ai-review-prompt.txt, verbatim, with the diff after it on stdin. The file is the prompt the test
+The lessons index is the appended system prompt. The message is the context lines (the framework
+read from package.json, or that there was none; which files handle failure; and, only when the
+branch itself adds, changes or deletes REVIEW.md, a line saying its new text is not in force), then
+the repository's own REVIEW.md when its base commit holds one (review_rules, claude-config#3558),
+then a pr review's --scope-file, then the text of ai-review-prompt.txt, verbatim, with the diff
+after it on stdin. The file is the prompt the test
 compares against, so the hook never holds wording of its own (L41). The lessons, identical across
 reviews and most of the prompt, come first as the system prompt, so a review started within five
 minutes of another reads them back from the prompt cache (claude-config#1599).
@@ -260,15 +262,19 @@ def review_rules(repo_dir, base, head):
                 if text:
                     meta["review_rules_bytes"] = size
     # What the change itself does to the file, so neither the reviewer nor the reader takes the
-    # change's version for the one in force. A head that cannot be read here says nothing of one.
+    # change's version for the one in force. A head that cannot be read is said to be unread,
+    # never passed off as a change that leaves the file alone (L11); what applied does not move.
+    context, note, change = "", "", ""
     try:
         at_head = _rules_entry(repo_dir, head)
-    except OSError:
+    except OSError as e:
         at_head = entry
-    change = ""
+        applied = (f"The review applied the base commit {short}'s version" if text else
+                   f"No repository review rules were in force from the base commit {short}")
+        note = (f"Review rules: whether this change itself alters {RULES_FILE} could not be read ("
+                + " ".join(str(e).split()) + f"). {applied}. {never}")
     if at_head != entry:
         change = "adds" if entry is None else "deletes" if at_head is None else "changes"
-    context, note = "", ""
     if unusable:
         note = f"Review rules: no {RULES_FILE} was applied, because {unusable}. {never}"
     if change:
@@ -1332,8 +1338,9 @@ def main(argv):
             with open(a.scope_file, encoding="utf-8", errors="replace") as f:
                 scope = f.read().strip() + "\n\n"
         # THE ORDER, for the prompt cache (claude-config#1599). The lessons, identical in every
-        # review and most of its prompt, are the appended system prompt; the message is the two per
-        # diff context lines, then the scope and the instructions, with the diff after them on stdin.
+        # review and most of its prompt, are the appended system prompt; the message is the per diff
+        # context lines, then the repository's own review rules when its base holds any (#3558), then
+        # the scope and the instructions, with the diff after them on stdin.
         # Reordering inside the message is not enough: the message is ONE content block and a cache
         # is read back only up to a block boundary, so with the lessons first in it a second review
         # read back only the 18,902 token tool and system prefix (measured 2026-10-23, Claude Code
