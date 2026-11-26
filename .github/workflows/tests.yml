@@ -396,12 +396,13 @@ jobs:
       - name: Install the pinned TypeScript compiler
         if: needs.deal.outputs.reused-run == ''
         # tools/check-mod-noun-waits.sh resolves every call a mod's noun makes with this compiler's
-        # own checker (#895) and refuses outright when it cannot load it, so tests/test-mods.sh
-        # needs it here. The lockfile pins the version and carries the linux-x64 binary.
+        # own checker (#895) and refuses outright when it cannot load it, so tests/test-mods-fixtures.sh
+        # needs it here, as tests/test-mods.sh does for the real mods' strict type check. The lockfile pins the version and carries the linux-x64 binary.
         run: npm ci --prefix tools/typescript --no-audit --no-fund
 
-      # Claude Code, so tests/test-mods.sh runs `claude plugin validate` and `claude plugin test` on
-      # every mod and tests/test-mods-load-engine.sh loads them all, and a mod that fails either is a
+      # Claude Code, so the real tree's parts (tests/test-mods.sh, test-mods-real-tree-2.sh and -3.sh,
+      # #3622) run `claude plugin validate` and `claude plugin test` on every mod between them and
+      # tests/test-mods-load-engine.sh loads them all, and a mod that fails either is a
       # red check (claude-config#3297). Until then this runner had no claude and both said UNMEASURED
       # inside a green check, so #3291 and #3285 reached main. One exact version, written in
       # .github/claude-code-version alone and read by tools/install-claude-code.sh alone, so raising it
@@ -417,7 +418,7 @@ jobs:
 
       # Left OFF the PATH and named to the mods' suites alone in MODS_CLAUDE: many other suites start a
       # real session whenever they find a claude, and none of them was written for this runner.
-      # MODS_CLAUDE also tells both suites a claude was promised, so one that cannot check the mods
+      # MODS_CLAUDE also tells each of those suites a claude was promised, so one that cannot check the mods
       # with it fails rather than saying UNMEASURED.
       - name: Install Claude Code for the mods' tests
         if: needs.deal.outputs.reused-run == ''
@@ -575,9 +576,10 @@ jobs:
           slots="$(sed -n 's/.* \([0-9][0-9]*\) slot(s) each.*/\1/p' "$log" | awk 'NR<=1')"
           case "${slots:-}" in ''|*[!0-9]*) slots=0 ;; esac
           if [ -z "$div" ]; then
-            # Only the sync suite divides its own work, and it runs in one part (#2463).
-            if ! awk -F'\t' -v p="$HOOK_TESTS_PART" '$1 == p && $2 == "tests/test-claude-sync.sh" { f = 1 } END { exit !f }' "$RUNNER_TEMP/deal.tsv"; then
-              echo "The sync suite, the one suite that divides its own work, was dealt to another part, so there was nothing here to divide."
+            # Only the sync suite divides its own work (#2463), and it is several suite files, its
+            # parts, each of which may be dealt to any of this job's parts (#3594, #3680).
+            if ! awk -F'\t' -v p="$HOOK_TESTS_PART" '$1 == p && $2 ~ /^tests\/test-claude-sync(-part[0-9]+)?\.sh$/ { f = 1 } END { exit !f }' "$RUNNER_TEMP/deal.tsv"; then
+              echo "No part of the sync suite, the one suite that divides its own work, was dealt here, so there was nothing here to divide."
               exit 0
             fi
             if [ "$slots" -le 1 ]; then

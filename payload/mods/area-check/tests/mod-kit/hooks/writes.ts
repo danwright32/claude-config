@@ -1119,6 +1119,21 @@ const testRunner = (name: string, args: readonly string[], script: string | unde
  */
 export const writes = (cmds: readonly Command[], cwd: string | undefined, home: string): ModKitWrites => settleMoves(readWrites(cmds, cwd, home).writes)
 
+// #3626: how many times the reader has held one write or change against another, counted where it
+// does so, for its tests to hold its cost to a number of steps rather than a time (L290). One mv
+// of 8,000 sources took 4 s here on 2026-11-25 (median of 5, load 17 on 12 cores), each source held
+// against every other in `changed` and in settleMoves, where ask before saving gives its looks 3 s.
+let compared = 0
+export const comparisonsSoFar = (): number => compared
+// The first entry kept at each path, and of those with no path, at each word (readWrites).
+type Firsts<T> = { path: Map<string, T>; word: Map<string, T> }
+const placesFor = <T>(): Firsts<T> => ({ path: new Map(), word: new Map() })
+const firstAt = <T>(at: Firsts<T>, path: string | undefined, word: string, entry: T) => {
+  const by = path ? at.path : at.word
+  const key = path ? path : word
+  if (!by.has(key)) by.set(key, entry)
+}
+
 // The writes, and the folder each command runs in, by its place in `cmds` (#2000): where a cd before
 // it leaves the shell, followed as a relative path is, undefined where that cannot be followed.
 const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: string): { writes: ModKitWrites; folders: (string | undefined)[] } => {
@@ -1179,6 +1194,12 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
   // For a command a find -exec runs, the folders find starts from: a change at one of them is one
   // its {} stood for, which reaches everything under it (#760); a path it names itself does not.
   let foundRoots: readonly string[] = []
+  // #3626: the first write, and the first change of each kind, at each path, or with no path of
+  // each word, kept as each is given, so one given again is found in one step rather than by
+  // holding it against every one before it. Neither list is ever reordered or shortened, and no
+  // entry's path, word or kind is ever changed, so the first kept is the one a search would find.
+  const fileAt = placesFor<ModKitWrite>()
+  const changeAt = new Map<ModKitChange['does'], Firsts<ModKitChange>>()
   // `shown`, where the caller knows it, is the word as the command spells it (#752).
   const add = (word: string, path: string | undefined, extra?: { sources?: string[]; edits?: true; mayBeFolder?: true; tree?: true; shared?: true }, shown?: string) => {
     // Where a find -exec's {} stood, the write reaches every file under that folder (#760), as does
@@ -1188,7 +1209,10 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     const key = path ?? `word:${word}`
     // A path written twice is kept once, a tree on either keeping the tree, as a change does.
     if (seen.has(key)) {
-      const had = files.find(f => (path ? f.path === path : !f.path && f.word === (shown ?? asWritten.get(word) ?? word)))
+      // The first write of that path, or with no path the first of that word, as a search of every
+      // write before it finds it, in one step (#3626).
+      compared++
+      const had = path ? fileAt.path.get(path) : fileAt.word.get(shown ?? asWritten.get(word) ?? word)
       // Who wrote it a second time is kept (#3478); a write that cannot be found again is one no
       // move can be checked against.
       if (had) madeBy(had, now)
@@ -1214,6 +1238,7 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
       ...(extra?.shared ? { shared: true as const } : {}),
     }
     files.push(entry)
+    firstAt(fileAt, entry.path, entry.word, entry)
     madeBy(entry, now)
     const set = path ? undefined : aloneIn(entry.word)
     if (set !== undefined) alone.set(entry, set)
@@ -1239,7 +1264,10 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     // A path changed the same way twice is kept once, a tree on either keeping the tree. It stays
     // limited to names only where both were limited to the same ones, and says where it goes only
     // where both were moves to the same place.
-    const had = changes.find(x => x.does === does && (path ? x.path === path : !x.path && x.word === written))
+    let at = changeAt.get(does)
+    if (!at) changeAt.set(does, (at = placesFor<ModKitChange>()))
+    compared++
+    const had = path ? at.path.get(path) : at.word.get(written)
     if (had) {
       madeBy(had, now)
       if (tree) had.tree = true
@@ -1250,6 +1278,7 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     const folder = path ? undefined : patternFolder(word, dir, home)
     const entry: ModKitChange = { word: written, ...(path ? { path } : {}), ...(folder ? { folder } : {}), does, ...(tree ? { tree: true as const } : {}), ...(tree && names ? { names } : {}), ...(to ? { to } : {}) }
     changes.push(entry)
+    firstAt(at, entry.path, entry.word, entry)
     madeBy(entry, now)
   }
   const abs = (p: string) => pathOf(p, dir)
@@ -2045,6 +2074,78 @@ const landsOf = (m: ModKitChange): (string | undefined)[] => {
 // whatever is on the disk. Said the /private way. On a system where they are folders of their own
 // this takes two places for one, which only ever takes a mark off.
 const knownPlace = (path: string): string => path.replace(/^\/(tmp|var|etc)(?=\/|$)/, '/private/$1')
+// Whether a write or change is where it may be on one branch with one of `places`: anywhere, for
+// one with no place or a place that is not known.
+const reachesFrom = (x: { path?: string; folder?: string }, places: readonly (string | undefined)[], where: (p: string | undefined) => string | undefined): boolean => {
+  const at = where(placeOfChange(x))
+  return at === undefined || places.some(p => p === undefined || onOneBranch(at, p))
+}
+// Every place a path is under, as isUnder reads it: the text before each slash in it, with and
+// without that slash, but never the path itself. isUnder(a, b) holds exactly where b is one of
+// these for a (#3626), which is what lets settleMoves look a branch up instead of comparing.
+const holders = (a: string): string[] => {
+  const out = new Set<string>()
+  for (let i = a.indexOf('/'); i >= 0; i = a.indexOf('/', i + 1)) {
+    out.add(a.slice(0, i))
+    if (i + 1 < a.length) out.add(a.slice(0, i + 1))
+  }
+  return [...out]
+}
+/**
+ * The writes or changes of a command filed by where they are (#3626), to say in a few steps what
+ * settleMoves once found by holding every move against every entry: whether any entry made by a
+ * command other than the move's own (none of its makers, or one the move was not made by) is
+ * anywhere at all where a place is not known, has no place, or is on one branch with a place: at
+ * it, holding it, or under it. Entries made by the same commands are filed once together, since
+ * only who made them is asked of them, so a mv's thousands of sources are one entry to step over.
+ */
+const branchIndex = <T extends object>(entries: readonly T[], placeOf: (x: T) => string | undefined) => {
+  // Each bucket keeps one entry's makers for each set of makers among its entries, undefined for
+  // none, keyed by that set.
+  type Bucket = Map<string, ReadonlySet<object> | undefined>
+  const ids = new Map<object, number>()
+  const id = (c: object) => {
+    let n = ids.get(c)
+    if (n === undefined) ids.set(c, (n = ids.size))
+    return n
+  }
+  const all: Bucket = new Map()
+  const placeless: Bucket = new Map()
+  const at = new Map<string, Bucket>()
+  const under = new Map<string, Bucket>()
+  const file = (bucket: Bucket, key: string, by: ReadonlySet<object> | undefined) => {
+    if (!bucket.has(key)) bucket.set(key, by)
+  }
+  const fileAt = (buckets: Map<string, Bucket>, place: string, key: string, by: ReadonlySet<object> | undefined) => {
+    let bucket = buckets.get(place)
+    if (!bucket) buckets.set(place, (bucket = new Map()))
+    file(bucket, key, by)
+  }
+  for (const x of entries) {
+    const by = MADE_BY.get(x)
+    const key = by ? [...by].map(id).sort((a, b) => a - b).join(',') : 'none'
+    const place = placeOf(x)
+    file(all, key, by)
+    if (place === undefined) file(placeless, key, by)
+    else {
+      fileAt(at, place, key, by)
+      for (const h of holders(place)) fileAt(under, h, key, by)
+    }
+  }
+  // Whether a bucket holds an entry made by another command than any of `own`.
+  const another = (bucket: Bucket | undefined, own: ReadonlySet<object>): boolean => {
+    if (!bucket) return false
+    for (const by of bucket.values()) {
+      compared++
+      if (!by || [...by].some(c => !own.has(c))) return true
+    }
+    return false
+  }
+  return {
+    reaches: (places: readonly (string | undefined)[], own: ReadonlySet<object>): boolean =>
+      another(placeless, own) || places.some(p => (p === undefined ? another(all, own) : another(at.get(p), own) || another(under.get(p), own) || holders(p).some(h => another(at.get(h), own)))),
+  }
+}
 
 /**
  * Takes `to` off every removal whose file the command, read whole, may not leave where its mv put
@@ -2080,22 +2181,26 @@ const settleMoves = (w: ModKitWrites): ModKitWrites => {
   const moved = w.changes.filter(c => c.to !== undefined)
   if (!moved.length) return w
   const blind = UNSURE.has(w) || w.unnamed.length > 0 || !!w.unread?.length || !!w.runs?.length || !!w.byGit?.length
+  if (blind) {
+    for (const m of moved) delete m.to
+    return w
+  }
   const where = (p: string | undefined): string | undefined => (p === undefined ? undefined : knownPlace(p))
+  // #3626: every removal and every write is filed once by where it is, so each move asks only about
+  // the places on its own branch, never every removal and write in turn, which made one mv of
+  // thousands of sources take seconds.
+  const removals = branchIndex(w.changes.filter(x => x.does === 'remove' || x.does === 'truncate'), x => where(placeOfChange(x)))
+  const written = branchIndex(w.files, f => where(placeOfChange(f)))
   for (const m of moved) {
-    const own = MADE_BY.get(m) ?? new Set<object>()
-    const byAnother = (x: object): boolean => {
-      const by = MADE_BY.get(x)
-      return !by || [...by].some(c => !own.has(c))
-    }
     const source = where(placeOfChange(m))
     const lands = landsOf(m).map(where)
-    const reaches = (x: { path?: string; folder?: string }, places: readonly (string | undefined)[]): boolean => {
-      const at = where(placeOfChange(x))
-      return at === undefined || places.some(p => p === undefined || onOneBranch(at, p))
-    }
-    const taken = w.changes.some(x => x !== m && (x.does === 'remove' || x.does === 'truncate') && byAnother(x) && reaches(x, [source, ...lands]))
-    const writtenOver = w.files.some(f => byAnother(f) && reaches(f, lands))
-    if (blind || taken || writtenOver) delete m.to
+    const own = MADE_BY.get(m)
+    // Every change the reader gives was made by a command (madeBy), so a removal with none is never
+    // met; read as it always was, each other entry held against it in turn.
+    const byAnyone = (x: object) => (MADE_BY.get(x)?.size ?? 1) > 0
+    const taken = own ? removals.reaches([source, ...lands], own) : w.changes.some(x => (compared++, x !== m && (x.does === 'remove' || x.does === 'truncate') && byAnyone(x) && reachesFrom(x, [source, ...lands], where)))
+    const writtenOver = own ? written.reaches(lands, own) : w.files.some(f => (compared++, byAnyone(f) && reachesFrom(f, lands, where)))
+    if (taken || writtenOver) delete m.to
   }
   return w
 }
@@ -2223,7 +2328,7 @@ const lineFolders = (line: Line, cwd: string | undefined, home: string, inSubsti
  * that only sets a value (`T=x;`) is given too, as its assignments, with the folder it stands in.
  */
 export const pipelineIn = (command: string, cwd: string, home: string, opts: ReadOptions = {}): (Command & { folder: string | null })[] => {
-  const read = lineFolders(readLine(command, { assignments: true }), cwd, home)
+  const read =lineFolders(readLine(command, { assignments: true }), cwd, home)
   const same = (a: Command, b: Command) => a.words.length === b.words.length && a.words.every((w, i) => w === b.words[i])
   let at = 0
   return pipeline(command, opts).map(c => {

@@ -1,5 +1,6 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './hang-ceiling.ts'
+import HEREDOC_CLOSES from './heredoc-closes.ts'
 import { READ_STOPPED, commands, git, pipeline } from '../hooks/commands.ts'
 
 // The one reader of shell commands every guard uses (L613): the secret guard, the keystroke guard
@@ -1826,7 +1827,8 @@ describe("$'...' and a script not read to its end (#3491)", () => {
     // open, one it ends too soon, and a comment inside a substitution. An apostrophe in each would
     // put the << inside a quote that no shell reads.
     expect(marked(`cat <<1\nit's\n1\ncat <<NEVER\n${NEXT} # it's`).map(r => r[1])).toEqual([HEREDOC])
-    expect(marked(`cat <<EOF\n  EOF\nit's body\nEOF\ncat <<NEVER\nx # '`).map(r => r[1])).toEqual([HEREDOC])
+    // The one it ends too soon is marked for that as well (#3592); the mark this test holds stays.
+    expect(marked(`cat <<EOF\n  EOF\nit's body\nEOF\ncat <<NEVER\nx # '`).map(r => r[1])).toEqual(['fed a heredoc the shells do not end where it is read to end, so where its body stops cannot be read', HEREDOC])
     expect(marked(`p3 $(p1 # it's\n); cat <<NEVER\n${NEXT} # '`)).toEqual([['cat', HEREDOC]])
     // A # inside a word starts no comment: after a substitution, and on a line a backslash joins to
     // a word. The apostrophe after it opens a quote that the next line's quote closes, so the << two
@@ -1838,7 +1840,10 @@ describe("$'...' and a script not read to its end (#3491)", () => {
     // reader reads each # as a comment, so it cannot say the << stands in text.
     expect(marked(`p3 \${x:- # it's}\np1 '\ncat <<NEVER\n${NEXT} # '`)).toEqual([['p1', HEREDOC]])
     expect(marked(`p3 $[ 1 # it's ]\np1 '\ncat <<NEVER\n${NEXT} # '`)).toEqual([['p1', HEREDOC]])
-    expect(marked(`(( 1 +\n # it's\n 2 ))\np1 '\ncat <<NEVER\n${NEXT} # '`)).toEqual([['p1', HEREDOC]])
+    // Since #3496 the third says so as well: a # and then a quote inside `(( ))` is read by zsh as
+    // a comment and by bash as a quote, so every command from the `((` on is marked for that, and
+    // the one fed the heredoc keeps the mark it had.
+    expect(marked(`(( 1 +\n # it's\n 2 ))\np1 '\ncat <<NEVER\n${NEXT} # '`)).toEqual([['(', SHELLS], ['(', SHELLS], ['1', SHELLS], ['2', SHELLS], [')', SHELLS], [')', SHELLS], ['p1', HEREDOC]])
     // After a heredoc the line reader closed inside quoted text, taking out a line that holds a quote
     // and a command both shells run: where the second << stands in the whole text is not known.
     expect(marked(`p1 '\nx << n\ny' ; p3 '\nn\n      cat <<NEVER\n${NEXT} # '`)).toEqual([['p1', HEREDOC]])
@@ -1888,8 +1893,9 @@ describe("$'...' and a script not read to its end (#3491)", () => {
       // Outside quotes both shells join the $ and the ' into a $'...' string that ends at its third
       // apostrophe, so the `((` stands outside quotes: zsh ran the last line and bash nothing.
       [`p1 $${BS}\n'a${BS}'b' ; (( 1 + 'a ))\n${NEXT} # b'`, [SHELLS]],
-      // A < either side of the pair: bash opened a heredoc and zsh ran nothing.
-      [`cat <${BS}\n<EOF\nit's\nEOF\n(( 1 + 'a ))\n${NEXT} # b'`, [undefined, SHELLS]],
+      // A < either side of the pair: bash opened a heredoc and zsh ran nothing. Since #3496 the
+      // command holding the pair says so itself, where it had no mark.
+      [`cat <${BS}\n<EOF\nit's\nEOF\n(( 1 + 'a ))\n${NEXT} # b'`, ['holding a backslash and a new line inside what bash joins into one mark and zsh does not, so what the shell runs there cannot be read', SHELLS]],
     ]
     for (const [cmd, marks] of kept) expect(marksIn(cmd)).toEqual({ cmd, marks })
     // The same for a << that never ends: after the joined $'...' string both shells opened the
@@ -2195,5 +2201,282 @@ describe("$'...' and a script not read to its end (#3491)", () => {
       `(( x = 1 << n ))\n${NEXT}`,
     ]
     expect(whole.filter(cmd => pipeline(cmd).some(c => c.unread !== undefined))).toEqual([])
+  })
+})
+
+// #3592: the reader ended a heredoc at any line that is its marker once the blanks beside it are
+// taken off, and at a marker a backslash joins to the line before. No shell ends one at either: a
+// marker with a space or a tab beside it is a line of the body (only a <<- lets go of tabs, and
+// only before it), and a line of an unquoted body that ends in a backslash is joined to the next
+// before anything is compared, so the marker is the tail of a longer line. The shells read on, the
+// lines after are the body, and a `$( )` in them runs, in single quotes or not, where the reader
+// took them for commands and read such a substitution as a word that runs nothing. The reverse
+// too: a marker split over two lines by a backslash ends the heredoc in bash and zsh, and the
+// reader read on, taking the commands after it for the body.
+//
+// The reading stays as it was. The command fed such a heredoc is marked unread, as one fed a
+// heredoc that never ends is (#3491), so every guard holds or asks. The shapes are
+// hooks/lib/heredoc-closes.json, each measured 2026-11-25 in bash 3.2, bash --posix, sh, dash, zsh,
+// zsh emulating sh and ksh, the one list this suite and the script scanner's suite both run
+// (test-shell-code-lines.sh, which also runs every row through the shells). A mod's tests import
+// only the mod's own files, so the list is read from its copy, heredoc-closes.ts, which that
+// suite holds to the list's text.
+describe('a heredoc the shells do not end where the reader ends it (#3592)', () => {
+  type Answer = string | Record<string, string[]>
+  type Row = { name: string; text: string; lines: Record<string, Answer>; named: { scanner: boolean; mods: boolean } }
+  const rows = (HEREDOC_CLOSES as unknown as { rows: Row[] }).rows
+  const ENDS = 'fed a heredoc the shells do not end where it is read to end, so where its body stops cannot be read'
+  const BS = '\\'
+  // Each probe line the reader lists as a command, and each reason it stopped for.
+  const read = (text: string) => {
+    const cmds = pipeline(text)
+    const listed = new Set(cmds.filter(c => c.words[0] === 'echo' && /^P\d\d/.test(c.words[1] ?? '')).map(c => (c.words[1] as string).slice(0, 3)))
+    const stopped = [...new Set(cmds.map(c => c.unread).filter((u): u is string => u !== undefined && READ_STOPPED.has(u)))]
+    return { listed, stopped }
+  }
+  const tag = (n: string) => `P${n.padStart(2, '0')}`
+
+  test('the list is read, its controls among it', () => {
+    expect(rows.length).toBeGreaterThanOrEqual(38)
+    expect(rows.filter(r => !r.named.mods).length).toBeGreaterThanOrEqual(7)
+  })
+
+  test('the command fed a heredoc the reader is not sure of is marked unread, and no control is', () => {
+    expect(rows.filter(r => read(r.text).stopped.length > 0 !== r.named.mods).map(r => r.name)).toEqual([])
+  })
+
+  test('where nothing is marked, a line is a command exactly where every shell runs it', () => {
+    const wrong: string[] = []
+    for (const r of rows) {
+      const { listed, stopped } = read(r.text)
+      if (stopped.length) continue
+      for (const [n, answer] of Object.entries(r.lines)) if (listed.has(tag(n)) !== (answer === 'code')) wrong.push(`${r.name}, line ${n}`)
+    }
+    expect(wrong).toEqual([])
+  })
+
+  test('the mark is on the command the heredoc feeds, with its own reason, and the words are read as before', () => {
+    const marks = (cmd: string) => pipeline(cmd).map(c => [c.words, c.unread])
+    expect(READ_STOPPED.has(ENDS)).toBe(true)
+    // A marker joined to the line before: every shell reads on to the end.
+    expect(marks(`cat <<E\na${BS}\nE\ngit status`)).toEqual([[['cat', '<<E'], ENDS], [['git', 'status'], undefined]])
+    // A marker after spaces: every shell reads on to the marker itself.
+    expect(marks(`cat <<E\nbody\n  E\ngit status\nE\ngit log`)).toEqual([[['cat', '<<E'], ENDS], [['git', 'status'], undefined], [['E'], undefined], [['git', 'log'], undefined]])
+    // A marker split over two lines: bash and zsh end the heredoc there and run the next line.
+    expect(pipeline(`cat <<EOF\nbody\nE${BS}\nOF\ngit status\nEOF\ngit log`).map(c => c.unread)).toContain(ENDS)
+    // An opener joined to the next line before its marker: the marker is not the word on that line.
+    expect(pipeline(`cat <<${BS}\nE\nbody\nE\ngit log`).some(c => c.unread === ENDS)).toBe(true)
+    expect(pipeline(`cat <<E${BS}\nx\nbody\nEx\ngit status\nE${BS}\ngit log`).some(c => c.unread !== undefined && READ_STOPPED.has(c.unread))).toBe(true)
+    // Inside a substitution the mark is on the command the heredoc feeds there.
+    expect(pipeline(`echo "$(cat <<E\nbody\n E\nmore\nE\n)"\ngit log`).some(c => c.unread === ENDS)).toBe(true)
+  })
+
+  test('the controls: a backslash that joins nothing at the marker, and tabs a <<- lets go of, mark nothing', () => {
+    const quiet = [
+      `cat <<E\na${BS}\nb\nE\ngit status`,
+      `cat <<E\na${BS}${BS}\nE\ngit status`,
+      `cat <<'E'\na${BS}\nE\ngit status`,
+      `cat <<-E\n\tbody\n\t\tE\ngit status`,
+      `cat <<E | sort ${BS}\n  -u\nbody\nE\ngit status`,
+    ]
+    expect(quiet.filter(cmd => pipeline(cmd).some(c => c.unread !== undefined))).toEqual([])
+  })
+})
+
+// #3496: commands a shell runs that the reader did not give, or gave with the wrong program, each
+// with no mark. Every text here was run on 2026-11-25 on the personal MacBook in bash 3.2.57 and
+// zsh 5.9, once each as a -c text, with stand in programs that only log their own words (p1 to
+// p5), in an empty folder: what each shell ran is in the comment above its test. Where the reader
+// can read the shape as the only shell that runs it does, it does. Where the two shells part, or
+// the reader cannot follow, the command keeps its words and is marked unread with a reason of its
+// own that joins READ_STOPPED, the direction every guard reads as hold or ask.
+describe('the commands the reader missed (#3496)', () => {
+  const BS = '\\'
+  const VT = String.fromCharCode(11)
+  const CR = String.fromCharCode(13)
+  const ZSH = 'holding a pattern whose qualifier zsh may run as code, so what the shell runs there cannot be read'
+  const WORD = 'holding a word bash and zsh do not hand on alike, so what it names cannot be read'
+  const JOINED = 'holding a backslash and a new line inside what bash joins into one mark and zsh does not, so what the shell runs there cannot be read'
+  const INPUTS = 'given more than one input, which zsh feeds it one after another and bash only the last of, so what it reads cannot be read'
+  const UNPLACED = 'beside a heredoc that no word of a command opens as read, so what is fed its body cannot be read'
+  const SOURCE = 'run as text by source from its standard input, which cannot be read, so what it runs cannot be read'
+  const SHELLS = 'read past a quote bash and zsh do not read alike, so what the shell runs from that quote on cannot be read'
+  const marks = (cmd: string) => pipeline(cmd).map(c => [c.words, c.unread])
+  const programs = (cmd: string) => pipeline(cmd).map(c => c.words[0])
+
+  test('every new reason is one the reader gives beside the words, never in their place', () => {
+    for (const why of [ZSH, WORD, JOINED, INPUTS, UNPLACED, SOURCE]) expect(READ_STOPPED.has(why)).toBe(true)
+  })
+
+  // zsh ran p2 once for each of the three files the pattern matched, then p1. bash refused the line.
+  test('a pattern whose qualifier zsh runs as code marks its command', () => {
+    expect(marks(`p1 /usr/bin/tru*(e:'p2 q':)`)).toEqual([[['p1', '/usr/bin/tru*(e:p2 q:)'], ZSH]])
+    expect(marks(`p1 *(+p2)`)).toEqual([[['p1', '*(+p2)'], ZSH]])
+    expect(marks(`p1 *(e{'p2 q'}) ; p3`)).toEqual([[['p1', '*(e{p2 q})'], ZSH], [['p3'], undefined]])
+  })
+  // zsh ran p1 with the one newest file and nothing else: a qualifier that sorts runs no code.
+  test('the controls: a qualifier that only sorts or picks, an array, and a function mark nothing', () => {
+    const quiet = [`p1 /usr/bin/tru*(om[1])`, `p1 *(.N)`, `x=(one +two) ; p1 a`, `x+=(e)`, `f() { p1 a; }`, `p1 "*(e:p2:)"`, `[[ $x == *(e) ]] && p1`, `p1 a(e)b`]
+    expect(quiet.filter(cmd => pipeline(cmd).some(c => c.unread !== undefined))).toEqual([])
+  })
+
+  // zsh ran p2 with b, then p1 with a, a file's name and c. bash refused the line.
+  test('zsh =( ) where a word begins: the commands inside are read, beside the words as they were', () => {
+    const cmds = pipeline(`p1 a =(p2 b) c`)
+    // The command it stands in keeps the words the reader always gave it, so a guard that read a
+    // file's name from one of them still does: the commands inside are added and nothing is taken.
+    expect(cmds.map(c => c.words)).toEqual([['p2', 'b'], ['p1', 'a', '=(p2', 'b)', 'c']])
+    expect(cmds[0]?.substitution).toBe(true)
+    expect(marks(`=(p2) a`)).toEqual([[['p2'], undefined], [['=(p2)', 'a'], undefined]])
+    expect(commands(`p1 =(p2; p3 x) c`)).toEqual([['p2'], ['p3', 'x'], ['p1', '=(p2'], ['p3', 'x)', 'c']])
+    // An array is still set, and inside double quotes it is text.
+    expect(commands(`x=(a) ; p1 "=(p2)"`)).toEqual([['p1', '=(p2)']])
+  })
+
+  // Two zsh shapes the first commit of #3496 read as zsh does, put back as they were, because that
+  // reading could give a guard less (measured 2026-11-25, bash 3.2.57 and zsh 5.9, once each).
+  // `{ p1 a } always { p2 b; }`: zsh ran p1 with a and then p2 with b, and bash ran p1 with the
+  // words a, }, always, {, p2 and b. Read as zsh does, the words bash hands p1 were gone, so
+  // `{ rm a } always { FILE; }` no longer removed FILE to the write reader. The reading is main's
+  // again until Dan chooses between a mark and both readings side by side.
+  test('zsh always on one line is left as it was read: bash hands the first command every word', () => {
+    expect(commands(`{ p1 a } always { p2 b; }`)).toEqual([['p1', 'a', '}', 'always', '{', 'p2', 'b'], ['}']])
+    expect(commands(`p1 a } always b`)).toEqual([['p1', 'a', '}', 'always', 'b']])
+    expect(marks(`{ p1 } always { p2 }`)).toEqual([[['p1', '}', 'always', '{', 'p2', '}'], undefined]])
+  })
+  // `noglob p1 a`, `nocorrect p1 a` and `repeat 2 p1 a`: zsh ran p1 with a (twice for repeat), and
+  // bash found no command of that name. Looked past, `noglob cat FILE` stopped being a program
+  // the mods do not know handed FILE, which several guards ask about, and became a plain read:
+  // right for both shells, and still a verdict that moves from ask to pass. Left as it was.
+  test('zsh words that only run the command after them are left as the program they were read as', () => {
+    expect(commands(`noglob p1 a`)).toEqual([['noglob', 'p1', 'a']])
+    expect(commands(`nocorrect p1 a`)).toEqual([['nocorrect', 'p1', 'a']])
+    expect(commands(`p4\n- p1 a`)).toEqual([['p4'], ['-', 'p1', 'a']])
+    expect(commands(`repeat 2 p1 a`)).toEqual([['repeat', '2', 'p1', 'a']])
+    expect(pipeline(`noglob rm x`)[0]?.behind).toBe(undefined)
+  })
+
+  // Both shells ran p2 and then p3 with the word a, the character and #x.
+  test('a # after a character only JavaScript calls a space starts no comment', () => {
+    expect(programs(`p3 a${VT}#x $(p2)`)).toEqual(['p2', 'p3'])
+    expect(programs(`p3 a${CR}#x $(p2)`)).toEqual(['p2', 'p3'])
+    // Both shells fed p3 the body and ran p2 and p1. The reader read the body's lines as commands,
+    // where the apostrophe opened a quote that took p2 and p1 for its text. The heredoc opens now,
+    // so p2 and p1 are given, and its lines are still read as commands beside it, as they were.
+    const cmds = pipeline(`p3 a${VT}#x <<EOF\nit's\nEOF\np2 ; p1 'y' # z'`)
+    expect(cmds.map(c => c.words)).toEqual([['its\nEOF'], ['p3', `a${VT}#x`, '<<EOF'], ['p2'], ['p1', 'y']])
+    expect(cmds[1]?.heredocs?.[0]?.body).toBe("it's")
+    expect(commands(`p3 a${VT}#x <<EOF\nit's\nEOF\np2 ; p1 'y' # z'`.replace(VT, CR)).slice(2)).toEqual([['p2'], ['p1', 'y']])
+  })
+  // Both shells ran p2 with `a #b` and printed the body, then ran p4.
+  test('a # after an escaped blank starts no comment, so the heredoc after it opens', () => {
+    // The heredoc's lines were read as commands before, and still are, beside the heredoc.
+    const cmds = pipeline(`p2 a${BS} #b ; cat <<EOF\np3 x\nEOF\np4 y`)
+    expect(cmds.map(c => c.words)).toEqual([['p2', 'a #b'], ['p3', 'x'], ['EOF'], ['cat', '<<EOF'], ['p4', 'y']])
+    expect(cmds[3]?.heredocs?.[0]?.body).toBe('p3 x')
+    // A heredoc after a real comment sign opens none, and one that always opened is read as it was.
+    expect(commands(`p2 a #b ; cat <<EOF\np3 x\nEOF\np4 y`)).toEqual([['p2', 'a'], ['p3', 'x'], ['EOF'], ['p4', 'y']])
+    expect(commands(`p2 a ; cat <<EOF\np3 x\nEOF\np4 y`)).toEqual([['p2', 'a'], ['cat', '<<EOF'], ['p4', 'y']])
+    // Both shells ran p3 inside the substitution: the ; is escaped, so the # is in the word.
+    expect(programs(`p2 a${BS};#b $(p3 x)`)).toEqual(['p3', 'p2'])
+    // A joined line: after a blank the # is a comment (both ran p2 and p4 alone), after a letter
+    // it is part of the word (both ran p3, p2 and p4).
+    expect(programs(`p2 a ${BS}\n#b $(p3 x)\np4`)).toEqual(['p2', 'p4'])
+    expect(programs(`p2 a${BS}\n#b $(p3 x)\np4`)).toEqual(['p3', 'p2', 'p4'])
+    // An ordinary comment is one still.
+    expect(commands(`p1 a # b $(p3 x)\np4 ;# c $(p3)`)).toEqual([['p1', 'a'], ['p4']])
+  })
+
+  // bash ran p3 with x, zsh with $x.
+  test('a $"..." word marks its command', () => {
+    expect(marks(`p3 $"x" ; p2`)).toEqual([[['p3', '$x'], WORD], [['p2'], undefined]])
+    expect(marks(`p3 "a$" "b" ${BS}$"c"`).map(m => m[1])).toEqual([undefined])
+  })
+
+  // bash ran p1 and p2, zsh nothing.
+  test('a quote after a ${ } inside another ${ } in double quotes is one the shells read differently', () => {
+    expect(pipeline(`p1 "\${u:-\${v}'"'}" ; p2 # it's`).map(c => c.unread)).toEqual([SHELLS])
+    // Both ran p1 and p2.
+    expect(marks(`p1 "\${u:-\${v:-'a'}}" ; p2 # it's`)).toEqual([[['p1', "${u:-${v:-'a'}}"], undefined], [['p2'], undefined]])
+  })
+
+  // bash ran p3 inside a substitution and zsh handed the text on; bash opened a heredoc and zsh
+  // refused the line; both read a $'...' string.
+  test('a backslash and a new line right after a $ or between two < marks its command', () => {
+    expect(marks(`p1 "$${BS}\n(p3 a)"`)).toEqual([[['p1', '$(p3 a)'], JOINED]])
+    expect(pipeline(`cat <${BS}\n<EOF\np2 x\nEOF\np3 y`).map(c => c.unread)).toEqual([JOINED, undefined, undefined, undefined])
+    expect(pipeline(`p1 $${BS}\n'a' ; p2`).map(c => c.unread)).toEqual([JOINED, undefined])
+    // An ordinary continuation between words marks nothing.
+    expect(marks(`p1 a ${BS}\n  b`)).toEqual([[['p1', 'a', 'b'], undefined]])
+  })
+
+  // zsh fed p2 the piped line and then the body; bash fed it the body alone.
+  test('a command given more than one input is marked', () => {
+    expect(pipeline(`echo piped | p2 <<EOF\nbody\nEOF`).map(c => c.unread)).toEqual([undefined, INPUTS])
+    expect(pipeline(`p2 <<A <<B\none\nA\ntwo\nB`).map(c => c.unread)).toEqual([INPUTS])
+    expect(pipeline(`p2 <<A </dev/null\none\nA`).map(c => c.unread)).toEqual([INPUTS])
+    expect(pipeline(`p2 <<A <<<x\none\nA`).map(c => c.unread)).toEqual([INPUTS])
+    // zsh ran `p3 one` from the pipe as sh's script; bash ran `p2 two` from the body alone.
+    expect(marks(`echo p3 one | sh <<EOF\np2 two\nEOF`)).toEqual([[['echo', 'p3', 'one'], undefined], [['p2', 'two'], INPUTS]])
+    // A group fed by a pipe and given a heredoc: zsh fed p2 both, bash the body alone.
+    expect(marks(`echo piped | { p2; } <<EOF\nbody\nEOF`)).toEqual([[['echo', 'piped'], undefined], [['p2'], undefined], [['}', '<<EOF'], INPUTS]])
+  })
+  test('the controls: one input each, a loop fed by a pipe, a quoted < and a test mark nothing', () => {
+    const quiet = [
+      `cat <<EOF | p2\nbody\nEOF`,
+      `echo a | while read l; do p2 <<<"$l"; done`,
+      `p1 < a.txt | p2 > b.txt`,
+      `echo a | grep '<' a.txt`,
+      `echo a | p2 "<b" '<<c'`,
+      `while read l; do p2; done < a.txt`,
+      `[[ a < b ]] && p1 < c.txt`,
+    ]
+    expect(quiet.filter(cmd => pipeline(cmd).some(c => c.unread !== undefined))).toEqual([])
+  })
+
+  // Both shells ran p2 with x from the body, then p3.
+  test('a heredoc no word of a command opens marks the command beside it, and its lines are read as commands', () => {
+    expect(marks(`bash -s '<'<<'EOF'\np2 x\nEOF\np3 y`)).toEqual([[['p2', 'x'], undefined], [['EOF'], undefined], [['EOF'], UNPLACED], [['p3', 'y'], undefined]])
+    expect(pipeline(`cat '<'<<'EOF'\np2 x\nEOF\np3 y`).find(c => c.words[0] === 'cat')?.unread).toBe(UNPLACED)
+    // A heredoc a word opens marks nothing.
+    expect(marks(`cat <<'EOF'\np2 x\nEOF\np3 y`)).toEqual([[['cat', '<<EOF'], undefined], [['p3', 'y'], undefined]])
+  })
+
+  // Both shells ran p2 with x.
+  test('source and . reading standard input: the text there is read as commands', () => {
+    expect(commands(`source /dev/stdin <<'EOF'\np2 x\nEOF`)).toEqual([['source', '/dev/stdin', '<<EOF'], ['p2', 'x']])
+    expect(commands(`. /dev/stdin <<'EOF'\np2 x\np3\nEOF`)).toEqual([['.', '/dev/stdin', '<<EOF'], ['p2', 'x'], ['p3']])
+    expect(commands(`echo p2 x | source /dev/stdin`)).toEqual([['echo', 'p2', 'x'], ['source', '/dev/stdin'], ['p2', 'x']])
+    // What cannot be read is said, and a file is a file.
+    expect(marks(`p1 | source /dev/stdin`)).toEqual([[['p1'], undefined], [['source', '/dev/stdin'], SOURCE]])
+    expect(marks(`source ./env.sh`)).toEqual([[['source', './env.sh'], undefined]])
+  })
+
+  // zsh piped p1 into p2 in each. bash refused each line.
+  test('a ; right after a pipe: zsh pipes into the command after it', () => {
+    for (const cmd of [`p1 x |; p2`, `p1 x | ; p2`, `p1 x |& ; p2`, `p1 x |\n; p2`]) {
+      const cmds = pipeline(cmd)
+      expect(cmds.map(c => c.words)).toEqual([['p1', 'x'], ['p2']])
+      expect(cmds[1]?.pipedFrom).toEqual(['p1', 'x'])
+    }
+    // A ; with no pipe before it pipes nothing.
+    expect(pipeline(`p1 ; p2`)[1]?.pipedFrom).toBe(undefined)
+    // A case clause's ;; after a pipe is no such thing: both shells refuse the line, and the ;;
+    // still ends the clause, so the next pattern is a pattern and never a command. Taken for a
+    // single ; it left `b` and `)` read as two commands.
+    for (const cmd of [`case x in a) p1 | ;; b) p2 ;; esac`, `case x in a) p1 |;; b) p2 ;; esac`]) {
+      expect(commands(cmd)).toEqual([['case', 'x', 'in'], ['p1'], ['p2'], ['esac']])
+      expect(pipeline(cmd).some(c => c.pipedFrom !== undefined)).toBe(false)
+    }
+  })
+
+  // After `(( 1 +`, `2 # it's` and `))`, zsh ran the two lines below and bash nothing; with `$((`
+  // bash ran them and zsh nothing.
+  test('a # and then a quote inside (( )) is read by one shell as a comment and by the other as a quote', () => {
+    expect(new Set(pipeline(`(( 1 +\n2 # it's\n))\np2 x\np3 ' y'`).map(c => c.unread))).toEqual(new Set([SHELLS]))
+    expect(new Set(pipeline(`p1 $(( 1 +\n2 # it's\n))\np2 x\np3 ' y'`).map(c => c.unread))).toEqual(new Set([SHELLS]))
+    // A comment with no quote, and a # that starts none, mark nothing.
+    expect(pipeline(`(( 1 +\n2 # two\n))\np2 x`).some(c => c.unread !== undefined)).toBe(false)
+    expect(pipeline(`p1 $(( \${#a} + 1 )) "b"`).some(c => c.unread !== undefined)).toBe(false)
   })
 })

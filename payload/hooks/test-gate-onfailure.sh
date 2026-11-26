@@ -79,10 +79,12 @@ REFUSING=(
   scratchpad-subagent-gate.sh
   monitor-action-gate.sh
   handback-claims-gate.sh
+  agent-leftovers-gate.sh
   playwright-subagent-gate.sh
   chrome-subagent-tab-gate.sh
   chrome-loopback-post-gate.sh
   no-session-link-in-comments.sh
+  announce-label-ask.sh
   slack-drafts-only-gate.sh
   builder-model-gate.sh
   # It asks rather than refuses, but it fails closed (#2521): a crash or a timeout must stop a
@@ -301,11 +303,13 @@ temp-worktree-gate.sh Bash,EnterWorktree
 fresh-worktree-base-gate.sh Edit,Write,MultiEdit,NotebookEdit
 monitor-action-gate.sh Monitor
 handback-claims-gate.sh SubagentHandback
+agent-leftovers-gate.sh SubagentHandback
 playwright-subagent-gate.sh mcp__playwright__browser_snapshot,mcp__plugin_playwright_playwright__browser_snapshot
 chrome-subagent-tab-gate.sh mcp__claude-in-chrome__navigate
 chrome-loopback-post-gate.sh mcp__claude-in-chrome__javascript_tool
 builder-model-gate.sh Agent
 no-session-link-in-comments.sh Bash,mcp__plugin_slack_slack__slack_send_message
+announce-label-ask.sh Bash,Edit,Write,MultiEdit,NotebookEdit
 slack-drafts-only-gate.sh Bash,mcp__claude_ai_Slack__slack_read_channel
 db-write-ask.sh Bash,Edit,Write,MultiEdit,mcp__claude_ai_Supabase__execute_sql,mcp__claude_ai_SFDC_USE__createSobjectRecord,mcp__playwright__browser_snapshot"
 if [ -s "$WORK/received.tsv" ]; then

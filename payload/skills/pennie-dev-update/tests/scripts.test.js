@@ -237,6 +237,107 @@ const LIVE_OK = ['--live', PET + '=' + sha(900) + '@2026-10-08T10:00:00Z'];
     'the counts say how many carried a record, how many were judged by hand, and how many are gaps', p && JSON.stringify(p.counts));
 }
 
+// ---------------------------------------------------------------- the announce label (claude-config#3665)
+//
+// A fourth label: a change managers notice whose agents are also told, with the post for agents in
+// its pull request. gather marks every record with whether managers notice it (R5), reads an
+// announce record whatever this Mac's registry says, and says so when the registry names no channel.
+
+const ENTRY = require(path.join(SKILL, '..', '..', 'hooks', 'lib', 'changelog-entry.js'));
+const ANNOUNCE_POST = '@here\n**Handing a call back**\n\nYou can now hand a call back to the queue.\n\n' + HY + ' Press Hand back\n' + HY + ' Pick a reason';
+const ANNOUNCE_BODY = 'Why.\r\n\r\n## Changelog\r\nAgents can now hand a call back to the queue.\r\n\r\n## Announcement\r\n'
+  + ANNOUNCE_POST.replace(/\n/g, '\r\n') + '\r\n\r\n## Testing\r\nran it';
+function announceCase(petEntryExtra, pulls) {
+  const cfg = defaultConfig();
+  Object.assign(cfg.repos[0], petEntryExtra || {});
+  const compare = {};
+  pulls.forEach(function (p) { compare[p.merge_commit_sha + '...' + sha(900)] = 'ahead'; });
+  const ws = workspace({ pulls: { [SONAR]: [], [PET]: pulls }, compare: { [PET]: compare } }, cfg,
+    { [PET]: { lastEnd: '2026-09-30T00:00:00Z' }, [SONAR]: { lastEnd: '2026-10-01T00:00:00Z' } });
+  const r = gather(ws, LIVE_OK);
+  const p = repoOf(r, PET);
+  const rec = {};
+  (p ? p.prs : []).forEach(function (x) { rec[x.number] = x.record; });
+  return { r: r, p: p, rec: rec, notes: (p && p.notes) || [] };
+}
+function announceNotes(notes) { return notes.filter(function (n) { return /announceChannel/.test(n); }); }
+const ANNOUNCE_PULLS = function () {
+  return [
+    pr(40, '2026-10-02T12:00:00Z', { labels: ['changelog/announce'], body: ANNOUNCE_BODY }),
+    pr(41, '2026-10-02T13:00:00Z', { labels: ['changelog/announce'], body: 'Why.\n\n## Changelog\nAgents can now do a thing.' }),
+    pr(42, '2026-10-02T14:00:00Z', { labels: ['changelog/visible'], body: VISIBLE_BODY }),
+    pr(43, '2026-10-02T15:00:00Z', { labels: ['changelog/technical'] }),
+    pr(44, '2026-10-02T16:00:00Z', { labels: ['changelog/none'] }),
+    pr(45, '2026-10-02T17:00:00Z', { author: 'dependabot[bot]' }),
+  ];
+};
+{
+  // This Mac's registry names NO announcements channel for the repository, the state every Mac is in
+  // until the label is switched on, and the state of a Mac whose entry lost the key.
+  const c = announceCase(null, ANNOUNCE_PULLS());
+  check(c.rec[40] && c.rec[40].kind === 'announce' && c.rec[40].line === 'Agents can now hand a call back to the queue.',
+    'an announce record is read as one, with its sentence for managers, on a Mac whose registry names no channel (never as a gap)', JSON.stringify(c.rec[40]));
+  check(c.rec[40] && c.rec[40].announcement === ANNOUNCE_POST, 'an announce record carries the post for agents, line breaks kept and CRLF gone', JSON.stringify(c.rec[40]));
+  check(c.rec[40] && c.rec[40].managerVisible === true, 'an announce record is marked as one managers notice', JSON.stringify(c.rec[40]));
+  check(c.rec[42] && c.rec[42].managerVisible === true && c.rec[42].kind === 'visible' && c.rec[42].line === 'Managers now see the Rolled column.',
+    'a visible record is marked as one managers notice, and reads as it did', JSON.stringify(c.rec[42]));
+  check(c.rec[43] && c.rec[43].managerVisible === false && c.rec[43].kind === 'technical', 'a technical record is marked as one managers do not notice', JSON.stringify(c.rec[43]));
+  check(c.rec[44] && c.rec[44].managerVisible === false && c.rec[44].kind === 'none', 'a none record is marked as one managers do not notice', JSON.stringify(c.rec[44]));
+  check(c.rec[42] && !('announcement' in c.rec[42]) && c.rec[43] && !('announcement' in c.rec[43]), 'a record under another label carries no announcement', JSON.stringify([c.rec[42], c.rec[43]]));
+  // A record gather cannot read, or one judged by hand, is not marked either way: nothing decided it.
+  check(c.rec[41] && c.rec[41].kind === 'gap' && c.rec[41].code === 'NO_ANNOUNCEMENT' && !('managerVisible' in c.rec[41]),
+    'an announce label with no post for agents is a gap with the parser\'s own code, marked neither way', JSON.stringify(c.rec[41]));
+  check(c.rec[45] && c.rec[45].kind === 'dependency' && !('managerVisible' in c.rec[45]), 'a dependency update is marked neither way', JSON.stringify(c.rec[45]));
+  check(c.p && c.p.counts.recorded === 4 && c.p.counts.gaps === 1, 'an announce record counts as one that carried a record', c.p && JSON.stringify(c.p.counts));
+  const said = announceNotes(c.notes);
+  check(said.length === 1 && /1 PR\(s\)/.test(said[0]) && /changelog\/announce/.test(said[0]) && /names no announcements channel/.test(said[0]),
+    'the repo says, in its own words, that it holds announce records and this Mac\'s registry names no channel for it', JSON.stringify(c.notes));
+  check(said.length === 1 && /announce-channel acme\/pet/.test(said[0]), 'and says how to check whether the key was lost', JSON.stringify(said));
+  check(c.r.code === 0, 'which is said, never refused: the run still gathers', c.r.all.slice(0, 600));
+}
+{
+  // The registry names the channel: nothing to say.
+  const c = announceCase({ announceChannel: 'C0000TEST02' }, ANNOUNCE_PULLS());
+  check(c.rec[40] && c.rec[40].kind === 'announce' && announceNotes(c.notes).length === 0,
+    'with the channel named, announce records are read and nothing is said about a missing channel', JSON.stringify(c.notes));
+}
+{
+  // A channel that is not a channel id is said as that, not as none named.
+  const c = announceCase({ announceChannel: '#announcements' }, ANNOUNCE_PULLS());
+  const said = announceNotes(c.notes);
+  check(said.length === 1 && /not a Slack channel id/.test(said[0]) && /#announcements/.test(said[0]),
+    'an announcements channel that is not a channel id is said as that', JSON.stringify(c.notes));
+}
+{
+  // No announce records: a repository naming no channel is the ordinary case, and nothing is said.
+  const c = announceCase(null, ANNOUNCE_PULLS().slice(2));
+  check(c.p && c.p.status === 'ok' && announceNotes(c.notes).length === 0, 'a repo holding no announce record says nothing about a channel', JSON.stringify(c.notes));
+}
+{
+  // R5, for every kind the gate knows, so a kind added later is marked here or this fails: one
+  // merged change per kind, each with a body that makes a valid record of it, and each marked with
+  // the library's own answer for that kind.
+  const bodies = [ANNOUNCE_BODY, 'no block'];
+  const pulls = [];
+  const kindOf = {};
+  ENTRY.KINDS.forEach(function (kind, i) {
+    const body = bodies.filter(function (b) { return ENTRY.parseEntry({ labels: ['changelog/' + kind], body: b }).ok; })[0];
+    check(body !== undefined, 'this suite knows a body that makes a valid ' + kind + ' record (add one for a new kind)');
+    if (body === undefined) return;
+    kindOf[60 + i] = kind;
+    pulls.push(pr(60 + i, '2026-10-03T1' + i + ':00:00Z', { labels: ['changelog/' + kind], body: body }));
+  });
+  const c = announceCase({ announceChannel: 'C0000TEST02' }, pulls);
+  check(Object.keys(kindOf).length === ENTRY.KINDS.length && ENTRY.KINDS.length >= 4, 'every kind has a merged change in this case', JSON.stringify(kindOf));
+  Object.keys(kindOf).forEach(function (n) {
+    const kind = kindOf[n];
+    check(c.rec[n] && c.rec[n].kind === kind && typeof c.rec[n].managerVisible === 'boolean' && c.rec[n].managerVisible === ENTRY.isManagerVisible(kind),
+      'a record of the kind ' + kind + ' is marked managerVisible=' + ENTRY.isManagerVisible(kind), JSON.stringify(c.rec[n]));
+  });
+  check(c.rec[60 + ENTRY.KINDS.indexOf('announce')] && c.rec[60 + ENTRY.KINDS.indexOf('announce')].managerVisible === true,
+    'an announce change appears as one managers would notice (R5)', JSON.stringify(c.rec));
+}
+
 // ---------------------------------------------------------------- did it ship
 
 function deployCase(liveArgs, compare, pulls, stateEntry) {
@@ -1188,6 +1289,225 @@ const MULTI_OPENER = 'Updates for September 29 to October 13 :thread:';
 {
   const r = run(LINT, ['--config', LINT_CONFIG, path.join(SCRATCH, 'no such draft.txt')], { scenario: '', ghLog: '' });
   check(r.code === 2 && /no such draft/.test(r.err), 'a draft that cannot be read is its own exit, named', r.all);
+}
+
+// ---------------------------------------------------------------- announcements (claude-config#3668)
+//
+// Every announce change the run can see, in the window or carried from an earlier run's state, is
+// listed under `announcements`, and commit-state refuses to record the run until each one that is
+// out has an outcome (R6). One only drafted, or with none, stays in the state file, so the next run
+// lists it again whatever its merge date; one sent or not being announced is never asked about again.
+
+const ANN_CHANNEL = 'C0123456789';
+function annPulls() {
+  return [
+    pr(50, '2026-09-20T12:00:00Z', { labels: ['changelog/announce'], body: ANNOUNCE_BODY }),
+    pr(51, '2026-09-21T12:00:00Z', { labels: ['changelog/announce'], body: ANNOUNCE_BODY }),
+    pr(70, '2026-10-02T12:00:00Z', { labels: ['changelog/announce'], body: ANNOUNCE_BODY }),
+    pr(71, '2026-10-07T12:00:00Z', { labels: ['changelog/announce'], body: ANNOUNCE_BODY }),
+    pr(72, '2026-10-03T12:00:00Z', { labels: ['changelog/visible'], body: VISIBLE_BODY }),
+  ];
+}
+function annCase(stateEntry, pulls) {
+  const cfg = defaultConfig();
+  cfg.repos[0].announceChannel = ANN_CHANNEL;
+  const live = sha(900);
+  const compare = {};
+  (pulls || annPulls()).forEach(function (p) { compare[p.merge_commit_sha + '...' + live] = p.number === 71 ? 'behind' : 'ahead'; });
+  const ws = workspace({ pulls: { [SONAR]: [], [PET]: pulls || annPulls() }, compare: { [PET]: compare } }, cfg,
+    { [PET]: Object.assign({ lastEnd: '2026-09-30T00:00:00Z', heldBack: [] }, stateEntry || {}), [SONAR]: { lastEnd: '2026-10-01T00:00:00Z' } });
+  const g = gather(ws, LIVE_OK);
+  ws.draft = path.join(ws.dir, 'Draft for Dan' + APOS + 's post.txt');
+  fs.writeFileSync(ws.draft, 'Updates for October 1 to 8 :thread:\n\nCALLS\nA line.\n');
+  const p = repoOf(g, PET);
+  const ann = {};
+  ((p && p.announcements) || []).forEach(function (a) { ann[a.number] = a; });
+  return { ws: ws, g: g, p: p, ann: ann };
+}
+const CARRIED = { announcements: [
+  { number: 50, mergedAt: '2026-09-20T12:00:00Z', outcome: 'drafted' },
+  { number: 51, mergedAt: '2026-09-21T12:00:00Z', outcome: null },
+] };
+{
+  const c = annCase(CARRIED);
+  check(c.p && c.p.status === 'ok' && Array.isArray(c.p.announcements), 'gather lists the announcements of a repo it read', c.p && JSON.stringify(c.p.announcements));
+  check(JSON.stringify(Object.keys(c.ann).map(Number)) === '[50,51,70,71]',
+    'the announcements are the window\'s announce changes plus every one the state carried, never a visible change', JSON.stringify(Object.keys(c.ann)));
+  check(JSON.stringify(nums(c.p && c.p.prs)) === '[70,72,71]', 'a carried announcement is not listed as a change in the post again', JSON.stringify(nums(c.p && c.p.prs)));
+  const a = c.ann[70] || {};
+  check(a.mergedAt === '2026-10-02T12:00:00Z' && a.live === true && a.deploy === 'live' && a.channel === ANN_CHANNEL && a.state === 'owed'
+    && a.text === ANNOUNCE_POST && a.carried === false && a.previousOutcome === null && a.needsOutcome === true,
+  'an announcement carries its merge time, whether it is live, its text and its channel, and asks for an outcome', JSON.stringify(a));
+  check(a.oldest === String(Date.parse('2026-10-02T12:00:00Z') / 1000), 'and the Slack timestamp of its merge, to read the channel from', JSON.stringify(a));
+  check(c.ann[71] && c.ann[71].live === false && c.ann[71].deploy === 'held' && c.ann[71].needsOutcome === false,
+    'one not live yet asks for no outcome', JSON.stringify(c.ann[71]));
+  check(c.ann[50] && c.ann[50].carried === true && c.ann[50].previousOutcome === 'drafted' && c.ann[50].needsOutcome === true && c.ann[50].live === true,
+    'a carried drafted one is listed again, live, and asks again', JSON.stringify(c.ann[50]));
+  check(c.ann[51] && c.ann[51].carried === true && c.ann[51].previousOutcome === null && c.ann[51].needsOutcome === true,
+    'a carried one with no outcome is listed again whatever its merge date', JSON.stringify(c.ann[51]));
+}
+{
+  // R6: the run is not recorded while a live announcement has no outcome.
+  const c = annCase(CARRIED);
+  const before = fs.readFileSync(c.ws.state, 'utf8');
+  const r = commitState(c.ws, ['--draft', c.ws.draft, '--repo', PET, '--listed', '70,72', '--headings', 'CALLS']);
+  check(r.code !== 0 && /#50/.test(r.err) && /#51/.test(r.err) && /#70/.test(r.err) && !/#71/.test(r.err),
+    'commit-state refuses while a live announcement has no outcome, naming each one and not the one still held (R6)', r.all);
+  check(fs.readFileSync(c.ws.state, 'utf8') === before, 'and leaves the state byte for byte as it was', fs.readFileSync(c.ws.state, 'utf8'));
+  const r2 = commitState(c.ws, ['--draft', c.ws.draft, '--repo', PET, '--listed', '70,72', '--outcomes', '50=drafted,51=not-announcing']);
+  check(r2.code !== 0 && /#70/.test(r2.err) && fs.readFileSync(c.ws.state, 'utf8') === before, 'one outcome short is still refused', r2.all);
+  const r3 = commitState(c.ws, ['--draft', c.ws.draft, '--repo', PET, '--outcomes', '50=drafted,51=posted,70=sent']);
+  check(r3.code !== 0 && /posted/.test(r3.err) && fs.readFileSync(c.ws.state, 'utf8') === before, 'an outcome that is not sent, drafted or not-announcing is refused by name', r3.all);
+  const r4 = commitState(c.ws, ['--draft', c.ws.draft, '--repo', PET, '--outcomes', '50=drafted,51=sent,70=sent,72=sent']);
+  check(r4.code !== 0 && /#72/.test(r4.err) && fs.readFileSync(c.ws.state, 'utf8') === before, 'an outcome for a change that is not an announcement is refused', r4.all);
+  const r5 = commitState(c.ws, ['--draft', c.ws.draft, '--repo', PET, '--outcomes', '50=drafted,51=sent,70=sent,70=drafted']);
+  check(r5.code !== 0 && /#70/.test(r5.err) && fs.readFileSync(c.ws.state, 'utf8') === before, 'two outcomes for one announcement are refused', r5.all);
+}
+{
+  const c = annCase(CARRIED);
+  const r = commitState(c.ws, ['--draft', c.ws.draft, '--repo', PET, '--listed', '70,72', '--headings', 'CALLS', '--outcomes', '50=drafted,51=not-announcing,70=sent']);
+  const st = committed(c.ws)[PET];
+  check(r.code === 0 && st.lastEnd === '2026-10-03T12:00:00Z', 'with every live announcement given an outcome, the run is recorded', r.all);
+  const kept = (st.announcements || []).map(function (a) { return a.number + '=' + a.outcome; });
+  check(JSON.stringify(kept) === '["50=drafted","71=null"]',
+    'the state keeps the drafted one and the one with none, and drops the sent and the not announcing ones', JSON.stringify(st.announcements));
+  // The next run lists the kept ones again, and never the one sent.
+  const g2 = gather(c.ws, LIVE_OK.concat(['--now', '2026-10-09T16:00:00Z']));
+  const p2 = repoOf(g2, PET);
+  const ann2 = ((p2 && p2.announcements) || []).map(function (a) { return a.number + (a.needsOutcome ? '?' : ''); });
+  check(JSON.stringify(ann2) === '["50?","71"]', 'the next run lists the drafted one again and the held one, and never the sent one', JSON.stringify(p2 && p2.announcements));
+}
+{
+  // Settled, but still able to come back: nothing listed, so lastEnd stays and #70 is in the window
+  // again. Its outcome is kept so it is not asked about a second time, and an outcome for a held one
+  // is taken too.
+  const c = annCase(CARRIED);
+  const r = commitState(c.ws, ['--draft', c.ws.draft, '--repo', PET, '--outcomes', '50=sent,51=sent,70=sent,71=not-announcing']);
+  const st = committed(c.ws)[PET];
+  check(r.code === 0 && st.lastEnd === '2026-09-30T00:00:00Z', 'nothing listed: recorded, lastEnd unmoved', r.all);
+  const kept = (st.announcements || []).map(function (a) { return a.number + '=' + a.outcome; });
+  check(JSON.stringify(kept) === '["70=sent","71=not-announcing"]',
+    'a settled one that can come back into the window or from heldBack keeps its outcome; one that cannot is dropped', JSON.stringify(st.announcements));
+  const again = commitState(c.ws, ['--draft', c.ws.draft, '--repo', PET, '--outcomes', '50=sent,51=sent,70=sent,71=not-announcing']);
+  check(again.code === 0 && JSON.stringify(committed(c.ws)[PET]) === JSON.stringify(st), 'running the same record twice writes the same state', again.all);
+  const g2 = gather(c.ws, LIVE_OK);
+  const p2 = repoOf(g2, PET);
+  const a70 = ((p2 && p2.announcements) || []).filter(function (a) { return a.number === 70; })[0];
+  check(a70 && a70.previousOutcome === 'sent' && a70.needsOutcome === false, 'a sent one back in the window is listed as sent and asks nothing (never drafted twice)', JSON.stringify(a70));
+  const c3 = commitState(c.ws, ['--draft', c.ws.draft, '--repo', PET]);
+  check(c3.code === 0, 'and the next record needs no outcome for it', c3.all);
+}
+{
+  // Crash midway: the state write fails partway, and every unsettled announcement is still there.
+  const c = annCase(CARRIED);
+  const dir = path.dirname(c.ws.state);
+  const before = fs.readFileSync(c.ws.state, 'utf8');
+  fs.chmodSync(dir, 0o555);
+  let r;
+  try { r = commitState(c.ws, ['--draft', c.ws.draft, '--repo', PET, '--listed', '70,72', '--outcomes', '50=drafted,51=not-announcing,70=sent']); }
+  finally { fs.chmodSync(dir, 0o755); }
+  check(r.code !== 0 && fs.readFileSync(c.ws.state, 'utf8') === before && /"outcome":"drafted"/.test(before),
+    'a record that dies writing the state leaves the state as it was, the drafted and unsettled announcements in it', r.all);
+}
+{
+  // A gathered file from before this change carries no announcements: never read as "none".
+  const c = annCase();
+  const g = JSON.parse(fs.readFileSync(c.ws.out, 'utf8'));
+  g.repos.forEach(function (x) { delete x.announcements; });
+  fs.writeFileSync(c.ws.out, JSON.stringify(g));
+  const r = commitState(c.ws, ['--draft', c.ws.draft, '--repo', PET]);
+  check(r.code !== 0 && /announcements/.test(r.err), 'a gathered file with no announcements list is refused, never read as having none', r.all);
+}
+{
+  // A state file whose announcements is not a list is broken, never read as "none kept", which would
+  // drop every unsent announcement it held.
+  const c = annCase({ announcements: { number: 50, outcome: 'drafted' } });
+  check(c.p && c.p.status === 'refused' && /not a list/.test(c.p.reason) && c.p.announcements === null,
+    'an announcements entry in the state that is not a list refuses the repo, never reads as none kept', c.p && JSON.stringify(c.p));
+}
+{
+  const c = annCase({ announcements: [{ number: 999, mergedAt: '2026-09-01T00:00:00Z', outcome: null }] });
+  check(c.p && c.p.status === 'refused' && /#999/.test(c.p.reason) && c.p.announcements === null,
+    'a carried announcement GitHub does not show as merged refuses the repo, its announcements unknown rather than empty', c.p && JSON.stringify(c.p));
+}
+{
+  const c = annCase(null, [pr(72, '2026-10-03T12:00:00Z', { labels: ['changelog/visible'], body: VISIBLE_BODY })]);
+  check(c.p && c.p.status === 'ok' && JSON.stringify(c.p.announcements) === '[]', 'a repo read in full with no announce change lists none', c.p && JSON.stringify(c.p.announcements));
+  const ws = workspace({ pulls: { [SONAR]: [], [PET]: [] } }, null, { [PET]: { lastEnd: '2026-09-30T00:00:00Z' }, [SONAR]: { lastEnd: '2026-10-01T00:00:00Z' } });
+  const refused = repoOf(gather(ws, []), PET);
+  check(refused && refused.status === 'refused' && refused.announcements === null, 'a refused repo\'s announcements are unknown (null), never an empty list', refused && JSON.stringify(refused));
+}
+{
+  // A carried one whose pull request no longer carries the label is dropped, and said.
+  const pulls = annPulls();
+  pulls[1] = pr(51, '2026-09-21T12:00:00Z', { labels: ['changelog/visible'], body: VISIBLE_BODY });
+  const c = annCase(CARRIED, pulls);
+  check(c.p && !c.ann[51] && c.p.notes.some(function (n) { return /#51/.test(n) && /changelog\/announce/.test(n); }),
+    'a carried announcement relabelled since is dropped with a note naming it', c.p && JSON.stringify(c.p.notes));
+}
+{
+  // An announce change on a Mac whose registry names no channel: listed, unknown, with the reason,
+  // and still owed an outcome. Never dropped.
+  const c = annCase(null);
+  const cfg = JSON.parse(fs.readFileSync(c.ws.config, 'utf8'));
+  delete cfg.repos[0].announceChannel;
+  fs.writeFileSync(c.ws.config, JSON.stringify(cfg));
+  const p = repoOf(gather(c.ws, LIVE_OK), PET);
+  const a = ((p && p.announcements) || []).filter(function (x) { return x.number === 70; })[0];
+  check(a && a.state === 'unknown' && a.channel === '' && /announceChannel/.test(a.why) && a.text === ANNOUNCE_POST && a.needsOutcome === true,
+    'with no channel on this Mac an announcement is listed as unknown with its reason and its text, still owed', JSON.stringify(a));
+}
+
+// ---------------------------------------------------------------- found posted (claude-config#3668)
+//
+// Measured 2026-11-25 (claude-config#3664): a post read back from Slack has *bold*, <url|label>
+// links, dot bullets, lost blank lines, and opens <!here>; & may come back as &amp;. So "found
+// posted" compares the words only.
+
+let POSTED = null;
+try { POSTED = require(path.join(SKILL, 'posted.js')); } catch (e) { check(false, 'the found posted comparison loads from posted.js beside gather.js', e.message); }
+const DRAFTED = '@here\n**Handing a call back**\n\nYou can now hand a call back to the queue & pick a reason.\n\n'
+  + HY + ' Press Hand back\n' + HY + ' Read [the guide](https://example.com/guide?a=1)\n\n1. Open a call\n2. Press it';
+const READ_BACK = 'Messages in channel:\n[2026-10-02 09:14:03 EDT] Dan: Morning all\n'
+  + '[2026-10-02 10:01:44 EDT] Dan: <!here>\n*Handing a call back*\nYou can now hand a call back to the queue &amp; pick a reason.\n'
+  + BULLET + ' Press Hand back\n' + BULLET + ' Read <https://example.com/guide?a=1|the guide>\n1. Open a call\n2. Press it\n'
+  + '[2026-10-02 11:00:00 EDT] Sam: thanks';
+if (POSTED) {
+  const f = POSTED.foundPosted(DRAFTED, READ_BACK);
+  check(f.found === true, 'an announcement read back with Slack\'s markup, links, bullets, entities and lost blank lines is found posted', JSON.stringify(f));
+  check(f.found && /10:01:44/.test(f.before), 'and what was read just before it is handed back, to tell the time it was posted at', JSON.stringify(f));
+  const changed = POSTED.foundPosted(DRAFTED, READ_BACK.replace('pick a reason', 'pick one reason'));
+  check(changed.found === false, 'a post whose words differ by one word is not found posted', JSON.stringify(changed));
+  const cut = POSTED.foundPosted(DRAFTED, READ_BACK.replace('2. Press it\n', ''));
+  check(cut.found === false, 'a post missing its last line is not found posted', JSON.stringify(cut));
+  let threw = '';
+  try { POSTED.foundPosted('', READ_BACK); } catch (e) { threw = e.message; }
+  check(/no words/.test(threw), 'an announcement with no words is refused, never found in everything', threw);
+  const sample = '<!here> *Bold* <https://x.example/a-b|the guide> &amp; [it](https://y.example) don' + APOS + 't';
+  check(JSON.stringify(POSTED.words(sample)) === '["here","bold","the","guide","it","don","t"]',
+    'the words of a read back post: no markup, no link targets, no entities', JSON.stringify(POSTED.words(sample)));
+}
+{
+  // The command: gather.js posted reads the announcement from the gathered file, never retyped.
+  const c = annCase(CARRIED);
+  const read = path.join(c.ws.dir, 'channel read 1.txt');
+  fs.writeFileSync(read, READ_BACK.replace(/<!here>[\s\S]*2\. Press it\n/, '<!here>\n' + ANNOUNCE_POST.replace(/^@here\n/, '').replace(/\*\*/g, '*') + '\n'));
+  const r = run(GATHER, ['posted', '--gathered', c.ws.out, '--repo', PET, '--number', '70', '--read', read], c.ws);
+  let j = null; try { j = JSON.parse(r.out); } catch (e) { j = null; }
+  check(r.code === 0 && j && j.found === true && j.number === 70, 'gather.js posted finds the gathered announcement in a channel read', r.all);
+  const other = path.join(c.ws.dir, 'channel read 2.txt');
+  fs.writeFileSync(other, 'Messages in channel:\n[2026-10-02 09:14:03 EDT] Dan: Morning all\n');
+  const r2 = run(GATHER, ['posted', '--gathered', c.ws.out, '--repo', PET, '--number', '70', '--read', other], c.ws);
+  let j2 = null; try { j2 = JSON.parse(r2.out); } catch (e) { j2 = null; }
+  check(r2.code === 0 && j2 && j2.found === false && /not found in what was read/.test(j2.said), 'and says not found in what was read, nothing more, when it is not there', r2.all);
+  const empty = path.join(c.ws.dir, 'channel read 3.txt');
+  fs.writeFileSync(empty, '  \n');
+  const r3 = run(GATHER, ['posted', '--gathered', c.ws.out, '--repo', PET, '--number', '70', '--read', empty], c.ws);
+  check(r3.code !== 0 && /empty/.test(r3.err), 'an empty read is refused, never reported as nothing posted', r3.all);
+  const r4 = run(GATHER, ['posted', '--gathered', c.ws.out, '--repo', PET, '--number', '72', '--read', read], c.ws);
+  check(r4.code !== 0 && /#72/.test(r4.err), 'a number that is not a gathered announcement is refused', r4.all);
+  const r5 = run(GATHER, ['posted', '--gathered', c.ws.out, '--repo', PET, '--number', '70', '--read', path.join(c.ws.dir, 'no such read.txt')], c.ws);
+  check(r5.code !== 0 && /no such read/.test(r5.err), 'a read file that is not there is refused by name', r5.all);
 }
 
 fs.rmSync(SCRATCH, { recursive: true, force: true });
