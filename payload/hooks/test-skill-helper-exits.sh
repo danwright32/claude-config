@@ -450,6 +450,87 @@ has "$out" "$FILE:13:" && has "$out" "p.communicate() at line 16 waits for its e
 has "$out" "$FILE:21:" && bad "#3650 a returncode read after a dropped wait() passes" "$out" || ok
 has "$out" "$FILE:29:" && bad "#3650 a returncode read after communicate() passes" "$out" || ok
 has "$out" "findings=2 unjudged=0" && ok || bad "#3650 exactly the two waits with nothing reading the end" "$out"
+
+# A process handed to a function of the file counts as having its ending read only when that
+# function waits for the end. One that only polls it once is a start read, and must not excuse the
+# rules above (PR #3659 review at 4f31de6).
+cat > "$S/monitor.py" <<'PY'
+import subprocess
+
+
+class StartedByAPoller:
+    def start(self):
+        self.p = subprocess.Popen(["cat"], stdin=subprocess.PIPE)
+        self._check(self.p)
+
+    def _check(self, proc):
+        if proc.poll() is not None:
+            raise RuntimeError("ended at once")
+
+    def stop(self):
+        self.p.stdin.close()
+
+
+def handed_to_a_poller():
+    p = subprocess.Popen(["cat"], stdin=subprocess.PIPE)
+    if p.poll() is not None:
+        return 1
+    _check_started(p)
+    p.stdin.close()
+    return 0
+
+
+def _check_started(proc):
+    if proc.poll() is not None:
+        raise RuntimeError("ended at once")
+
+
+def handed_to_a_waiter():
+    p = subprocess.Popen(["cat"], stdin=subprocess.PIPE)
+    if p.poll() is not None:
+        return 1
+    p.stdin.close()
+    return _finish(p)
+
+
+def _finish(proc):
+    return proc.wait(timeout=5)
+
+
+def handed_to_a_looping_poller():
+    p = subprocess.Popen(["cat"], stdin=subprocess.PIPE)
+    if p.poll() is not None:
+        return 1
+    p.stdin.close()
+    return _drain(p)
+
+
+def _drain(proc):
+    while proc.poll() is None:
+        pass
+    return proc.returncode
+
+
+def handed_to_a_communicator():
+    p = subprocess.Popen(["cat"], stdin=subprocess.PIPE)
+    if p.poll() is not None:
+        return 1
+    p.stdin.close()
+    return _talk(p)
+
+
+def _talk(proc):
+    proc.communicate()
+    return proc.returncode
+PY
+scan
+[ "$rc" -eq 1 ] && ok || bad "#3650 a process handed only to a function that polls it once fails (rc=$rc)" "$out"
+fires P1 6 "#3650 a held process whose starting method hands it to a poll-only method is checked only at its start"
+fires P1 18 "#3650 a local process handed to a poll-only function and then ended has had only its start read"
+has "$out" "$FILE:32:" && bad "#3650 a local process handed to a function that waits on it passes" "$out" || ok
+has "$out" "$FILE:44:" && bad "#3650 a local process handed to a function whose loop polls it passes" "$out" || ok
+has "$out" "$FILE:58:" && bad "#3650 a local process handed to a function that reads returncode after communicate() passes" "$out" || ok
+has "$out" "findings=2 unjudged=0" && ok || bad "#3650 exactly the two processes handed only to a poll" "$out"
 rm -f "$S/monitor.py"
 
 # --- S1: a script filing an issue the field gate never sees -------------------------------------
