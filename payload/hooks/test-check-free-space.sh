@@ -1263,6 +1263,15 @@ sd_run "$SC_HOME" "$SC_TMP" "$SWAP_SMALL" "$((T0 + 120))"
 check "and carried once: later runs add no day twice, and the old record goes once the new one holds all of it" \
   "$([ "$(cat "$SC_NEW" 2>/dev/null)" = "$sc_want" ] && [ ! -e "$SC_OLD" ] && echo ok || echo "record: $(cat "$SC_NEW" 2>&1 | tr '\n' ' '); old: $(cat "$SC_OLD" 2>&1 | tr '\n' ' ')")"
 
+# An old record at its 120 day cap: the carry keeps the newest 120 days, so its oldest day is dropped,
+# and that day must not keep the old record alive to be merged again on every prompt.
+SK_STATE="$TMPROOT/state-sk"; SK_DIR="$TMPROOT/sk-kept"; mkdir -p "$SK_STATE"
+awk 'BEGIN { for (m = 1; m <= 4; m++) for (d = 1; d <= 30; d++) printf "2025-%02d-%02d 500 7\n", m, d }' > "$SK_STATE/_fixture.swap-days"
+swap_probe "$((200 * GB))" "$SK_STATE" "$SWAP_SMALL" "" FREE_SPACE_SWAP_DAYS_DIR="$SK_DIR"
+swap_probe "$((200 * GB))" "$SK_STATE" "$SWAP_SMALL" "" FREE_SPACE_SWAP_DAYS_DIR="$SK_DIR"
+check "an old record at its 120 day cap is carried and then removed, not merged again on every prompt" \
+  "$([ ! -e "$SK_STATE/_fixture.swap-days" ] && [ "$(grep -c . "$SK_DIR/_fixture.swap-days")" -eq 120 ] && echo ok || echo "old: $([ -e "$SK_STATE/_fixture.swap-days" ] && echo still there || echo gone), new: $(grep -c . "$SK_DIR/_fixture.swap-days" 2>&1) line(s)")"
+
 # Assume it runs at once in several sessions: six runs in the same instant, with an old record still
 # to carry, leave every old day once, today once, and nothing else in the file.
 SP_HOME="$TMPROOT/sp-home"; SP_TMP="$TMPROOT/sp-tmpdir"
@@ -1286,7 +1295,7 @@ sd_pair(){   # sd_pair <name> <free bytes> <swap reader> -> sets SD_BASE_RC/MSG 
 }
 sd_same(){   # the blocked run said the base's words, plus one line naming the folder, with the base's exit code
   [ "$PROBE_RC" -eq "$SD_BASE_RC" ] && [ "$(grep -vF "$SD_NOTE" <<< "$PROBE_MSG")" = "$SD_BASE_MSG" ] \
-    && grep -F "$SD_NOTE" <<< "$PROBE_MSG" | grep -qF "$TMPROOT/sd-blocked/swap-days" && echo ok \
+    && grep -qF "$SD_NOTE in $TMPROOT/sd-blocked/swap-days (" <<< "$PROBE_MSG" && echo ok \
     || echo "base exit $SD_BASE_RC, blocked exit $PROBE_RC, said: $PROBE_MSG"
 }
 sd_pair low "$((7 * GB))" "$SWAP_SMALL"
@@ -1301,14 +1310,14 @@ check "and a disk with room still exits 0 and prints nothing on a prompt" \
 sd_report="$(env FREE_SPACE_BYTES="$((200 * GB))" FREE_SPACE_NOW="$T0" FREE_SPACE_STATE_DIR="$TMPROOT/state-sd-report" FREE_SPACE_PATH=/fixture \
   FREE_SPACE_SWAP_CMD="$SWAP_SMALL" FREE_SPACE_SWAP_DAYS_DIR="$TMPROOT/sd-blocked/swap-days" bash "$CHECK" --report 2>&1)"; sd_report_rc=$?
 check "while --report on a disk with room says it, and still exits 0" \
-  "$([ "$sd_report_rc" -eq 0 ] && grep -F "$SD_NOTE" <<< "$sd_report" | grep -qF 'the folder could not be made' && echo ok || echo "exit $sd_report_rc, said: $sd_report")"
+  "$([ "$sd_report_rc" -eq 0 ] && grep -qF "$SD_NOTE in $TMPROOT/sd-blocked/swap-days (the folder could not be made)" <<< "$sd_report" && echo ok || echo "exit $sd_report_rc, said: $sd_report")"
 SU_DIR="$TMPROOT/sd-unreadable"; mkdir -p "$SU_DIR"
 printf '2025-09-01 500 7\n' > "$SU_DIR/_fixture.swap-days"; chmod 000 "$SU_DIR/_fixture.swap-days"
 su_report="$(env FREE_SPACE_BYTES="$((200 * GB))" FREE_SPACE_NOW="$T0" FREE_SPACE_STATE_DIR="$TMPROOT/state-su-report" FREE_SPACE_PATH=/fixture \
   FREE_SPACE_SWAP_CMD="$SWAP_SMALL" FREE_SPACE_SWAP_DAYS_DIR="$SU_DIR" bash "$CHECK" --report 2>&1)"; su_report_rc=$?
 chmod 600 "$SU_DIR/_fixture.swap-days"
 check "a record that cannot be read is said, exits 0, and is left as it was rather than replaced by today alone" \
-  "$([ "$su_report_rc" -eq 0 ] && grep -F "$SD_NOTE" <<< "$su_report" | grep -qF 'could not be read' && [ "$(cat "$SU_DIR/_fixture.swap-days")" = "2025-09-01 500 7" ] && echo ok || echo "exit $su_report_rc, record: $(cat "$SU_DIR/_fixture.swap-days"), said: $su_report")"
+  "$([ "$su_report_rc" -eq 0 ] && grep -qF "$SD_NOTE in $SU_DIR/_fixture.swap-days (the record there could not be read" <<< "$su_report" && [ "$(cat "$SU_DIR/_fixture.swap-days")" = "2025-09-01 500 7" ] && echo ok || echo "exit $su_report_rc, record: $(cat "$SU_DIR/_fixture.swap-days"), said: $su_report")"
 # An old record that cannot be carried is said and left where it is, today is still kept, and the
 # low disk warning keeps its exit 3.
 SF_HOME="$TMPROOT/sf-home"; SF_TMP="$TMPROOT/sf-tmpdir"

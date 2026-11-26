@@ -798,11 +798,13 @@ swap_days_merge(){
     $1 ~ D && $2 ~ /^[0-9]+$/ { if (!($1 in v) || $2 + 0 > v[$1] + 0) { v[$1] = $2; s[$1] = ($3 == "" ? "-" : $3) } }
     END { for (d in v) print d, v[d], s[d] }' "$@" | sort
 }
-# Succeeds when every day of the old record is in the new one with a reading as high.
+# Succeeds when every day of the old record is in the new one with a reading as high. A day older
+# than every day in a new record holding its 120 days counts as carried: the cap took it, as it would
+# have taken it from the old record, so asking for it again would merge on every prompt for ever.
 swap_days_carried(){
   awk 'BEGIN { D = "^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$" }
-    FILENAME == ARGV[1] { if ($1 ~ D && $2 ~ /^[0-9]+$/) have[$1] = $2; next }
-    $1 ~ D && $2 ~ /^[0-9]+$/ && (!($1 in have) || have[$1] + 0 < $2 + 0) { missing = 1 }
+    FILENAME == ARGV[1] { if ($1 ~ D && $2 ~ /^[0-9]+$/) { have[$1] = $2; n++; if (oldest == "" || $1 < oldest) oldest = $1 }; next }
+    $1 ~ D && $2 ~ /^[0-9]+$/ && !(n >= 120 && $1 < oldest) && (!($1 in have) || have[$1] + 0 < $2 + 0) { missing = 1 }
     END { exit missing }' "$SWAP_DAYS" "$SWAP_DAYS_OLD" 2>/dev/null
 }
 swap_day="$(date -u -r "$now" +%F 2>/dev/null || date -u -d "@$now" +%F 2>/dev/null || true)"
