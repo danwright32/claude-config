@@ -634,6 +634,10 @@ declare_advisory(){ printf '%s\t%s\t%s\n' "$1" "$2" "$3"; }
   # so it declares a fallback for each library instead, and test-session-end-notice.sh runs it with
   # each one gone (claude-config#1949).
   declare_advisory sync-stuck-notice.sh    UserPromptSubmit "-"
+  # announce-answer-note.sh runs after a picker, which this table's payloads cannot make. It loads
+  # its library before it reads what the call was, so with the library gone it says so on any call,
+  # this one included (claude-config#3742).
+  declare_advisory announce-answer-note.sh PostToolUse  "gh pr view 5"
 } > "$WORK/advisory"
 # A stand in rtk, so rtk-rewrite.sh reaches the reading it needs the library for on a machine with no
 # rtk or a different one: it rewrites every command by putting rtk in front.
