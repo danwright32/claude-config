@@ -2917,8 +2917,9 @@ These choices were made by the session that built the fix, not by Dan, and are h
   this Mac's copy. A staged copy can then only be one an older version left, and it stays left:
   set aside, it was measured on 2026-11-25 to keep this Mac's file, but where it held lines this
   Mac's copy lacks it becomes a conflict copy whose name holds the same character, and the reports
-  of conflict copies read their lists one name to a line. The cost is unchanged: a receive over
-  the same file is refused by git until the file is renamed, and the refusal says so.
+  of conflict copies read their lists one name to a line. The cost: a receive over the same file
+  is refused by git, and since no send or receive changes such a copy any more, renaming this
+  Mac's file no longer clears it, so the refusal says to move the copy out of the clone.
 - **A name holding a control character is not carried, both ways (#3540).** The apply's steps pass
   lists of files one name to a line: rsync's itemized lines (`locally_ahead_paths`,
   `deleted_leftovers_here`, `past_release_paths`, the mirror's record of what it applied), git's

@@ -14740,7 +14740,7 @@ dbg "pull over a staged copy whose name holds a line break: rc=$rc_hp17 $out_hp1
 check "#3499 a pull that cannot receive over a staged copy whose name holds a line break refuses, and receives nothing" \
   "[ '$rc_hp17' -ne 0 ] && [ \"\$(git -C '$HPC' rev-parse HEAD)\" = '$hp_head4' ] && line_has \"\$out_hp17\" 'git refused to fast-forward' 'NOTHING was received'"
 check "#3499 and says which file stands in the way, why it was left there, and what clears it" \
-  "line_has \"\$out_hp17\" 'left where they were' 'line break' 'hooks/two.nlines\.sh' 'Rename each in this Mac.s config'"
+  "line_has \"\$out_hp17\" 'left where they were' 'line break or another control character' 'hooks/two.nlines\.sh' 'Move each out of'"
 check "#3499 and never calls it an edit outside the payload to commit or discard" \
   "out_lacks \"\$out_hp17\" 'OUTSIDE the payload|discard'"
 # The name is held in a variable the expression expands, so a failure prints the expression on one
@@ -14748,6 +14748,16 @@ check "#3499 and never calls it an edit outside the payload to commit or discard
 hp_nl_name=$'two\nlines.sh'
 check "#3499 and this Mac's own copy, and the staged one, are as they were" \
   "grep -qx 'echo two lines' \"$HPH/hooks/\$hp_nl_name\" && grep -qx 'echo two lines' \"$HPC/payload/hooks/\$hp_nl_name\""
+# What the refusal says clears it does (L111): since claude-config#3540 no send or receive changes such
+# a staged copy, so renaming this Mac's file alone left it standing in the way. Moved out of the
+# clone, the next pull receives, and this Mac's own copy is not touched.
+mv "$HPC/payload/hooks/$hp_nl_name" "$WORK/homepath-legacy-staged.aside"
+if out_hp18="$(_hp bash "$SCRIPT" pull)"; then rc_hp18=0; else rc_hp18=$?; fi
+dbg "pull once the staged copy is moved out of the clone: rc=$rc_hp18 $out_hp18"
+check "#3540 with that staged copy moved out of the clone, as the refusal says, the pull receives" \
+  "[ '$rc_hp18' -eq 0 ] && [ \"\$(git -C '$HPC' rev-parse HEAD)\" = \"\$(git -C '$HPB' rev-parse main)\" ]"
+check "#3540 and this Mac's own copy of it is untouched by what arrived under its name" \
+  "grep -qx 'echo two lines' \"$HPH/hooks/\$hp_nl_name\""
 rm -f "$HPH/hooks/quo\"ted.sh" "$HPH/hooks/back\\slash.sh" "$HPH/hooks/tab$(printf '\t')name.sh" "$HPH/hooks/two
 lines.sh" "$HPH/hooks/other.sh"
 rm -f "$HPH"/hooks/*.conflict-* 2>/dev/null || true

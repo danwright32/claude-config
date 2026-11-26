@@ -237,8 +237,9 @@ exactly where they are on this Mac", or "NOT received onto this Mac"), naming ea
 character written as `\n`, `\r` or a backslash and three digits, and `claude-sync status` lists
 them under "files the sync does not carry". Rename the file so its name holds no such character
 and the next send carries it. A staged copy of one that an older version of the tool left in the
-clone is left there and said; where the shared repo changes the same file the receive refuses and
-says to rename it. Measured on 2026-11-22 against a clone of main with
+clone is left there and said, and no send or receive changes it; where the shared repo changes the
+same file the receive refuses and says to move that copy out of the clone, which lets the next
+pull receive. Measured on 2026-11-22 against a clone of main with
 1,446 payload files, at a load average between 104 and 178 on 12 cores, 10 samples a case: the
 check adds 53 to 72 ms to a send with nothing in the payload to read, 85 to 149 ms to a send of one
 edited hook and one new file, and 4.1 to 4.3 seconds to a replay of the 2026-11-22 send, nearly all
