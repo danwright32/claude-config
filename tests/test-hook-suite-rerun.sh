@@ -19,6 +19,8 @@
 #      failed run (the failure path).
 #   7. A record owed for longer than a rerun is given ends in one notification even when the load
 #      never allowed a rerun, and  claude-sync recheck, the remedy it names, clears it.
+#   8. A claim whose holder could not be read, because ps failed or is missing, is not taken: the
+#      receive says so and runs nothing, and status says so too (claude-config#3584).
 #
 # Everything runs as a fixture home: CLAUDE_HOME and SYNC_REPO are throwaways in WORK, so
 # claude-sync touches nothing that belongs to the Mac (README "A fixture home touches nothing that
@@ -118,7 +120,7 @@ rr_pull(){ # rr_pull <load> [env assignments...] -> the pull's output; its exit 
     "$@" bash "$SCRIPT" pull 2>&1 || rc=$?
   echo "$rc" > "$RRT/rc"
 }
-rr_status(){ env -u SYNC_NO_HOOK_TESTS -u SYNC_NO_SEND_TESTS CLAUDE_HOME="$RRH" SYNC_REPO="$RRR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1; }
+rr_status(){ env -u SYNC_NO_HOOK_TESTS -u SYNC_NO_SEND_TESTS CLAUDE_HOME="$RRH" SYNC_REPO="$RRR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 "$@" bash "$SCRIPT" status 2>&1; }
 # A record as a stopped run writes one, owed since the time given.
 rr_forge(){ # rr_forge <owed since> [stopped]
   printf 'outcome=incomplete\tat=%s\texit=0\tran=?\tnotrun=?\tseconds=1800\tnotrun_names=?\towed_since=%s\tstopped=%s\n' \
@@ -257,6 +259,103 @@ sk13="$(rr_stuck)"
 check "#3396 a run that waited out its bound for the suite slot is reported as unverified, saying it never ran" \
   "line_has \"\$sk13\" 'UNVERIFIED' 'never started' && ! line_has \"\$sk13\" 'stopped at its'" "$sk13"
 printf 'outcome=passed\tat=%s\texit=0\tran=3\tnotrun=0\tseconds=40\tnotrun_names=\n' "$(date +%s)" > "$RRR/.hook-tests"
+
+# ---- 8. a ps that cannot run is not a claim nobody holds (claude-config#3584) ----
+# What holds the claim is read with ps, and the failure was discarded: a ps that could not run gave
+# the same empty answer as a pid that is something else, so the claim was taken from a run that
+# still held it and the suite ran beside that run. Read in the code on 2026-11-24 and reproduced
+# here before the fix. The runner passes at once in this part, so a claim wrongly taken shows as
+# one more run, and nothing is left running by a stop that itself needs ps.
+#
+# A PATH that reaches everything this one does except ps: each folder holding a ps is stood in for
+# by a folder of links to everything else in it.
+rr_no_ps_path(){ # rr_no_ps_path <where to build it> -> the PATH
+  local d out="" n=0 IFS=:
+  for d in $PATH; do
+    [ -n "$d" ] || continue
+    if [ -e "$d/ps" ]; then
+      n=$((n + 1)); mkdir -p "$1/$n"
+      ln -s "$d"/* "$1/$n/" 2>/dev/null || true
+      rm -f "$1/$n/ps"
+      d="$1/$n"
+    fi
+    out="${out:+$out:}$d"
+  done
+  printf '%s' "$out"
+}
+mkdir -p "$RRT/badps"
+printf '#!/bin/sh\necho "ps: operation not permitted" >&2\nexit 1\n' > "$RRT/badps/ps"; chmod +x "$RRT/badps/ps"
+RR_BADPS="$RRT/badps:$PATH"; RR_NOPS="$(rr_no_ps_path "$RRT/nops")"
+bash "$RRT/claude-sync-standin" >/dev/null 2>&1 < /dev/null & STANDIN_PID=$!
+# The stand ins' own premise, asserted rather than assumed (L159).
+check "(fixture) the stand in ps fails for a process that is running" \
+  "! PATH=\"\$RR_BADPS\" ps -o command= -p $STANDIN_PID >/dev/null 2>&1"
+check "(fixture) the PATH with ps taken out reaches no ps, and still reaches bash" \
+  "! PATH=\"\$RR_NOPS\" command -v ps >/dev/null 2>&1 && PATH=\"\$RR_NOPS\" command -v bash >/dev/null 2>&1" "$RR_NOPS"
+rr_forge "$(date +%s)"; echo pass > "$RRT/mode"
+printf '%s\n' "$STANDIN_PID" > "$RRR/.hook-tests-rerun"
+rr8_runs="$(rr_runs)"
+out8a="$(rr_pull 1 PATH="$RR_BADPS")"
+check "#3584 a receive whose ps fails does not take the rerun from a run that may still hold it" \
+  "[ \"\$(rr_runs)\" = $rr8_runs ]" "$out8a"
+check "#3584 and says what holds it could not be read, naming the command that failed and how it ended" \
+  "line_has \"\$out8a\" 'not run again here' 'could not be read' \"ps -o command= -p $STANDIN_PID\" 'exited 1'" "$out8a"
+check "#3584 and that this is not the same as no run holding it, with a step that settles it" \
+  "line_has \"\$out8a\" 'not the same as' 'claude-sync recheck'" "$out8a"
+check "#3584 and leaves the claim and the owed record as they were" \
+  "[ \"\$(cat '$RRR/.hook-tests-rerun' 2>/dev/null)\" = '$STANDIN_PID' ] && grep -q '^outcome=incomplete' '$RRR/.hook-tests'" \
+  "$(head -1 "$RRR/.hook-tests" 2>/dev/null)"
+st8a="$(rr_status PATH="$RR_BADPS")"
+check "#3584 status says the same, and does not promise a run by the next pull" \
+  "line_has \"\$st8a\" 'could not be read' \"ps -o command= -p $STANDIN_PID\" && ! line_has \"\$st8a\" 'owed a second run'" "$st8a"
+out8b="$(rr_pull 1 PATH="$RR_NOPS")"
+check "#3584 with no ps on PATH at all the rerun is not taken either" \
+  "[ \"\$(rr_runs)\" = $rr8_runs ] && [ \"\$(cat '$RRR/.hook-tests-rerun' 2>/dev/null)\" = '$STANDIN_PID' ]" "$out8b"
+check "#3584 and the reason is that no ps is on PATH, told from one that failed" \
+  "line_has \"\$out8b\" 'not run again here' 'could not be read' 'no ps is on' && ! line_has \"\$out8b\" 'without saying what it is'" "$out8b"
+# The controls: what ps settles stays settled, and what is settled without ps does not need it (L248).
+out8c="$(rr_pull 1)"
+check "#3584 (control) with ps answering, the same claim is one another run holds" \
+  "[ \"\$(rr_runs)\" = $rr8_runs ] && line_has \"\$out8c\" 'not run again here' \"another run (pid $STANDIN_PID)\"" "$out8c"
+# A process the shell may not signal: kill -0 exits 1 for it exactly as for one that has gone. Pid 1
+# is running on every machine and belongs to another account. Read through status, which only
+# reads: lib/pid-lock.sh, which takes the claim, tests the pid for itself.
+if kill -0 1 2>/dev/null; then
+  echo "SUITE-PART-UNMEASURED a claim naming a process this shell may not signal: this account may signal pid 1, so none could be found"
+else
+  printf '1\n' > "$RRR/.hook-tests-rerun"
+  st8p="$(rr_status PATH="$RR_BADPS")"
+  check "#3584 a claim naming a process the shell may not signal is unread, never unheld, when ps cannot say what it is" \
+    "line_has \"\$st8p\" 'could not be read' 'kill -0' 'ps -o command= -p 1'" "$st8p"
+  st8q="$(rr_status)"
+  check "#3584 (control) and is no run's claim once ps says what that process is" \
+    "! line_has \"\$st8q\" 'could not be read' && line_has \"\$st8q\" 'owed a second run'" "$st8q"
+fi
+# A claim that is there and cannot be read is the same discarded failure one step earlier. Read
+# through status for the same reason.
+printf '%s\n' "$STANDIN_PID" > "$RRR/.hook-tests-rerun"; chmod 000 "$RRR/.hook-tests-rerun"
+if [ -r "$RRR/.hook-tests-rerun" ]; then
+  echo "SUITE-PART-UNMEASURED a rerun claim that cannot be read: this account reads a file with no permissions, so one could not be made"
+else
+  st8s="$(rr_status)"
+  check "#3584 a claim that is there and cannot be read is unread, never unheld, and the file is named" \
+    "line_has \"\$st8s\" 'could not be read' \"$RRR/.hook-tests-rerun is there and cannot be read\" && ! line_has \"\$st8s\" 'owed a second run'" "$st8s"
+fi
+chmod 600 "$RRR/.hook-tests-rerun"
+kill "$STANDIN_PID" 2>/dev/null; wait "$STANDIN_PID" 2>/dev/null; rr8_dead="$STANDIN_PID"; STANDIN_PID=""
+# A running process that ps says is something else is a pid reused since that run ended.
+sleep 60 >/dev/null 2>&1 < /dev/null & STANDIN_PID=$!
+printf '%s\n' "$STANDIN_PID" > "$RRR/.hook-tests-rerun"
+out8d="$(rr_pull 1)"
+check "#3584 (control) a claim naming a running process that ps says is something else is taken over, as before" \
+  "[ \"\$(rr_runs)\" = $(( rr8_runs + 1 )) ] && grep -q '^outcome=passed' '$RRR/.hook-tests'" "$out8d"
+kill "$STANDIN_PID" 2>/dev/null; wait "$STANDIN_PID" 2>/dev/null; STANDIN_PID=""
+# ps is asked only about a pid that is running, so a claim left by a run that has gone is taken
+# over with or without it.
+rr_forge "$(date +%s)"; printf '%s\n' "$rr8_dead" > "$RRR/.hook-tests-rerun"
+out8e="$(rr_pull 1 PATH="$RR_BADPS")"
+check "#3584 (control) a claim left by a run that has gone is still taken over when ps cannot run" \
+  "[ \"\$(rr_runs)\" = $(( rr8_runs + 2 )) ] && grep -q '^outcome=passed' '$RRR/.hook-tests'" "$out8e"
 
 # ---- where the writes landed (L322): the fixture, and nothing of this Mac's ----
 check "every record and claim this suite caused is inside the fixture clone" \

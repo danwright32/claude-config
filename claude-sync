@@ -10973,31 +10973,156 @@ hook_suite_record_set(){   # $1 = the record's `at` as the caller read it  $2.. 
 # pid that is alive but is not a claude-sync is one reused since that run ended, a restart in
 # between, and is taken over the same way, serialised through the lib's own break lock.
 HOOK_RERUN_CLAIM="$SYNC_REPO/.hook-tests-rerun"
-hook_rerun_holder(){   # [$1 = the claim file] -> the pid of a live claude-sync holding it, or nothing
-  local f="${1:-$HOOK_RERUN_CLAIM}" p
-  p="$(cat "$f" 2>/dev/null || true)"
-  case "$p" in ''|*[!0-9]*) return 0 ;; esac
-  kill -0 "$p" 2>/dev/null || return 0
-  case "$(ps -o command= -p "$p" 2>/dev/null || true)" in *claude-sync*) printf '%s' "$p" ;; esac
-  return 0
+
+# WHAT A PROCESS IS, WITH THREE ANSWERS, NEVER TWO (claude-config#3584, L10). Two guards here ask
+# what the process a pid file names IS: the rerun's claim just below, and the one watcher rule
+# (watch_already_running). Each read it with `ps -o command=`, the failure discarded, so a ps that
+# could not run gave the same empty answer as a process that is something else: the claim was taken
+# from a run that still held it, and a second watch daemon started beside a live one. Reproduced on
+# 2026-11-24 with a stand in ps that exits 1 and with none on PATH; ps fails for real under the no
+# network wrapper (#3482) and in any sandbox that refuses setuid programs. It is the fault #3547
+# found in lib/sync-clone.sh, and this follows the shape and words of that fix so the two read
+# alike. The reading is kept as a STATE the caller has to branch on, with no printed answer for an
+# error to hide behind:
+#
+#   PROC_STATE  named   the process is running, and PROC_CMD is its command line
+#               gone    it is settled that there is no such process
+#               unread  it is running, or the shell could not test whether it is, and what it is
+#                       could not be read
+#   PROC_WHY    when unread, what failed, as a clause a sentence can carry
+#   PROC_PROBE  when unread, the command a person can run to see the failure for themselves
+#
+# Returns 0, 1 and 2 in that order. Call it in the caller's own shell, never in a command
+# substitution, whose subshell would keep the state to itself.
+#
+# A ps that fails is asked about twice. It exits non zero both when it could not run and when the
+# process ended a moment after it was seen running, so the pid is tested again afterwards: gone is
+# gone, and anything else with nothing learned about it is unread. A ps that exits 0 and prints
+# nothing about a running process has not answered either. Whether a ps is on PATH at all is asked
+# of the shell, so a missing one is said to be missing rather than inferred from an exit code (L11).
+process_read(){   # $1 = a pid, a whole number above zero -> PROC_STATE, PROC_CMD, PROC_WHY, PROC_PROBE
+  local pid="$1" cmd="" rc=0 alive=0 seen=""
+  PROC_STATE=gone; PROC_CMD=""; PROC_WHY=""; PROC_PROBE=""
+  pid_running "$pid" || alive=$?
+  [ "$alive" -ne 1 ] || return 1                    # gone
+  cmd="$(ps -o command= -p "$pid" 2>/dev/null)" || rc=$?
+  if [ "$rc" -eq 0 ] && [ -n "$cmd" ]; then
+    PROC_STATE=named; PROC_CMD="$cmd"
+    return 0
+  fi
+  alive=0
+  pid_running "$pid" || alive=$?
+  [ "$alive" -ne 1 ] || return 1                    # gone since the first look
+  PROC_STATE=unread
+  PROC_PROBE="ps -o command= -p $pid"
+  # Said to be running only when the shell saw that it is (L11).
+  if [ "$alive" -eq 0 ]; then seen="which is running"
+  else seen="which the shell could not test, its kill -0 of that pid being refused"; fi
+  if ! command -v ps >/dev/null 2>&1; then
+    PROC_WHY="process $pid, $seen, and no ps is on this run's PATH to say what it is ($PROC_PROBE exited $rc)"
+  elif [ "$rc" -eq 0 ]; then
+    PROC_WHY="process $pid, $seen, and $PROC_PROBE printed nothing about it"
+  else
+    PROC_WHY="process $pid, $seen, and $PROC_PROBE exited $rc without saying what it is"
+  fi
+  return 2
 }
-hook_rerun_claim(){   # -> 0 once this run holds the claim
+
+# Is this pid running? Three answers as well: 0 it is, 1 it is gone, 2 the shell could not tell.
+# kill -0 exits 1 both for a pid that is not there and for a process this shell may not signal,
+# another account's or any at all under a sandbox that refuses signals, and only its words tell the
+# two apart. So gone is said only on the shell's own words that there is no such process, read in
+# the C locale so they are the words bash writes whatever language the Mac is in, and every other
+# failure is "could not tell", which leaves the question to ps.
+pid_running(){   # $1 = a pid
+  local err
+  kill -0 "$1" 2>/dev/null && return 0
+  # A subshell, so the locale is this one command's and nobody else's.
+  err="$( (LC_ALL=C; kill -0 "$1") 2>&1 )" && return 0
+  case "$err" in *"No such process"*) return 1 ;; esac
+  return 2
+}
+
+# Who holds the rerun's claim. Three answers, kept as a state for the same reason (#3584):
+#
+#   HOOK_RERUN_HOLDER_STATE  held    a live claude-sync holds it, and HOOK_RERUN_HOLDER_PID is its pid
+#                            none    it is settled that none does: no claim file, no pid in it, a
+#                                    pid that is not running, or a running process that is
+#                                    something else (a pid reused since that run ended)
+#                            unread  the claim names a process that is running, or that the shell
+#                                    could not test, and what it is could not be read; or the claim
+#                                    file is there and cannot be read
+#   HOOK_RERUN_HOLDER_WHY    when unread, what failed, as a clause a sentence can carry
+#   HOOK_RERUN_HOLDER_PROBE  when unread, the command a person can run to see it for themselves
+#
+# Returns 0, 1 and 2 in that order. Call it in the caller's own shell, never in a command
+# substitution.
+hook_rerun_holder(){   # [$1 = the claim file] -> HOOK_RERUN_HOLDER_STATE, _PID, _WHY, _PROBE
+  local f="${1:-$HOOK_RERUN_CLAIM}" p=""
+  HOOK_RERUN_HOLDER_STATE=none; HOOK_RERUN_HOLDER_PID=""; HOOK_RERUN_HOLDER_WHY=""; HOOK_RERUN_HOLDER_PROBE=""
+  [ -f "$f" ] || return 1
+  if [ ! -r "$f" ]; then
+    HOOK_RERUN_HOLDER_STATE=unread
+    HOOK_RERUN_HOLDER_WHY="the rerun's claim at $f is there and cannot be read"
+    HOOK_RERUN_HOLDER_PROBE="ls -l $f"
+    return 2
+  fi
+  IFS= read -r p 2>/dev/null < "$f" || true
+  case "$p" in ''|*[!0-9]*) return 1 ;; esac
+  # Zero is no process's pid, and to kill it names this shell's own process group, which is
+  # always there.
+  case "$p" in *[!0]*) ;; *) return 1 ;; esac
+  process_read "$p" || true
+  case "$PROC_STATE" in
+    gone) return 1 ;;
+    named)
+      case "$PROC_CMD" in *claude-sync*) HOOK_RERUN_HOLDER_STATE=held; HOOK_RERUN_HOLDER_PID="$p"; return 0 ;; esac
+      return 1 ;;
+  esac
+  HOOK_RERUN_HOLDER_STATE=unread
+  HOOK_RERUN_HOLDER_WHY="the rerun's claim at $f names $PROC_WHY"
+  HOOK_RERUN_HOLDER_PROBE="$PROC_PROBE"
+  return 2
+}
+# Returns 0 once this run holds the claim, 1 when another run holds it, and 2 when whether one does
+# could not be read (claude-config#3584): the claim is then left exactly as it was, since taking it
+# over would start a second suite beside a run that may still be running the first. Leaves
+# hook_rerun_holder's state for the caller to say which.
+hook_rerun_claim(){
   local p
   # No wait: a held claim is a run already acting on the record, and waiting out a whole suite
   # behind it would verify nothing it does not. Twice, because a takeover of a dead holder's claim
   # spends the first attempt.
   take_pid_lock "$HOOK_RERUN_CLAIM" 0 && return 0
-  if [ -z "$(hook_rerun_holder)" ]; then
+  hook_rerun_holder || true
+  # Taken over only when it is SETTLED that no claude-sync holds it, checked again under the break
+  # lock, so an unread holder, like any state this does not know, keeps its claim (L42).
+  if [ "$HOOK_RERUN_HOLDER_STATE" = none ]; then
     p="$(cat "$HOOK_RERUN_CLAIM" 2>/dev/null || true)"
     case "$p" in
       ''|*[!0-9]*) : ;;
       *) if kill -0 "$p" 2>/dev/null && mkdir "$HOOK_RERUN_CLAIM.break" 2>/dev/null; then
-           [ "$(cat "$HOOK_RERUN_CLAIM" 2>/dev/null || true)" = "$p" ] && [ -z "$(hook_rerun_holder)" ] && rm -f "$HOOK_RERUN_CLAIM"
+           if [ "$(cat "$HOOK_RERUN_CLAIM" 2>/dev/null || true)" = "$p" ]; then
+             hook_rerun_holder || true
+             [ "$HOOK_RERUN_HOLDER_STATE" != none ] || rm -f "$HOOK_RERUN_CLAIM"
+           fi
            rmdir "$HOOK_RERUN_CLAIM.break" 2>/dev/null || true
          fi ;;
     esac
+    take_pid_lock "$HOOK_RERUN_CLAIM" 0 && return 0
+    hook_rerun_holder || true
   fi
-  take_pid_lock "$HOOK_RERUN_CLAIM" 0
+  case "$HOOK_RERUN_HOLDER_STATE" in held|none) return 1 ;; esac
+  return 2
+}
+# The step that settles a holder that could not be read, in one wording for the receive and for
+# status (L111). recheck runs the suite whatever the claim says, so it is offered only for a
+# process the reader has seen to be something else. No full stop at its end.
+hook_rerun_unread_step(){
+  case "${HOOK_RERUN_HOLDER_PROBE:-}" in
+    "ps "*) printf 'To settle it now, run  %s  where ps answers: if that process is a claude-sync, it is running the suite again and there is nothing to do; if it is anything else,  claude-sync recheck  runs the suite now and records what it says' "$HOOK_RERUN_HOLDER_PROBE" ;;
+    *) printf 'To settle it now, see what is wrong with that file with  %s  and make it readable or remove it, after which the next pull looks again and  claude-sync recheck  runs the suite now' "${HOOK_RERUN_HOLDER_PROBE:-ls -l $HOOK_RERUN_CLAIM}" ;;
+  esac
 }
 hook_rerun_release(){
   [ "$(cat "$HOOK_RERUN_CLAIM" 2>/dev/null || true)" = "$$" ] && rm -f "$HOOK_RERUN_CLAIM"
@@ -11037,10 +11162,17 @@ hook_rerun_give_up_after(){
 # printing nothing, when it does; exits 1 having printed the whole clause, the claim released, when
 # it does not.
 hook_rerun_begin(){
-  local line at since now bound age busy holder
-  if ! hook_rerun_claim; then
-    holder="$(hook_rerun_holder)"
-    printf ', and the hook suite left unverified by an earlier run was not run again here: another run (pid %s) is running it again now' "${holder:-unknown}"
+  local line at since now bound age busy claimed=0
+  hook_rerun_claim || claimed=$?
+  if [ "$claimed" -ne 0 ]; then
+    # Not taken, and in one of two sets of words (claude-config#3584, L10): another run holds it, or
+    # whether one does could not be read, which names what failed and the step that settles it.
+    if [ "$claimed" -eq 2 ] || [ "${HOOK_RERUN_HOLDER_STATE:-}" = unread ]; then
+      printf ', and the hook suite left unverified by an earlier run was not run again here: whether another run is running it again now could not be read (%s), which is not the same as no run holding it. The next pull or the receive timer'"'"'s sync looks again. %s' \
+        "${HOOK_RERUN_HOLDER_WHY:-the reading gave no reason}" "$(hook_rerun_unread_step)"
+      return 1
+    fi
+    printf ', and the hook suite left unverified by an earlier run was not run again here: another run (pid %s) is running it again now' "${HOOK_RERUN_HOLDER_PID:-unknown}"
     return 1
   fi
   # Read again under the claim: the run that held it may have settled the record meanwhile.
@@ -14299,7 +14431,7 @@ HSREOF
 # waiting for a quiet Mac, with the load the last try found. Each answer starts with a full stop
 # and ends without one, or is nothing.
 hook_suite_owed_words(){   # $1 = the record's first line  $2 = its clone's claim file, or empty for this one  $3 = the outcome
-  local gave why holder dat dload now bound
+  local gave why dat dload now bound
   gave="$(hook_suite_field "$1" gave_up)"
   now="$(date +%s)"
   if [ -n "$gave" ]; then
@@ -14314,11 +14446,20 @@ hook_suite_owed_words(){   # $1 = the record's first line  $2 = its clone's clai
     printf '. It will not be run again by itself, because %s, and that was notified once, %s: run  claude-sync recheck  once this Mac is quieter' "$why" "$gave"
     return 0
   fi
-  holder="$(hook_rerun_holder "${2:-$HOOK_RERUN_CLAIM}")"
-  if [ -n "$holder" ]; then
-    printf '. It is being run again now, by pid %s' "$holder"
-    return 0
-  fi
+  hook_rerun_holder "${2:-$HOOK_RERUN_CLAIM}" || true
+  case "$HOOK_RERUN_HOLDER_STATE" in
+    none) ;;
+    held)
+      printf '. It is being run again now, by pid %s' "$HOOK_RERUN_HOLDER_PID"
+      return 0 ;;
+    # Neither "being run again" nor "owed a second run": which of the two is true is what could not
+    # be read, and a receive that cannot read it either leaves the claim alone (claude-config#3584).
+    # recheck is on the line already, so only the command that shows the failure is added.
+    *)
+      printf '. Whether it is being run again now could not be read (%s), which is not the same as no run holding it, and a receive that cannot read it either does not run the suite again. See it for yourself with  %s' \
+        "${HOOK_RERUN_HOLDER_WHY:-the reading gave no reason}" "${HOOK_RERUN_HOLDER_PROBE:-ls -l ${2:-$HOOK_RERUN_CLAIM}}"
+      return 0 ;;
+  esac
   [ "$3" = incomplete ] || return 0
   printf '. It is owed a second run: the next pull or the receive timer'"'"'s sync runs it once the load average is no higher than the core count, and you are told only if that run fails or cannot finish either'
   dat="$(hook_suite_field "$1" deferred_at)"; dload="$(hook_suite_field "$1" deferred_load)"
@@ -14969,8 +15110,14 @@ CAUSEEOF
       [ -f "$tp" ] || echo "the receive timer is not installed, so nothing here receives on a schedule (claude-sync install-autosync)"
       if [ ! -f "$wp" ]; then
         echo "the change watcher is not installed, so no edit here catches this Mac up (claude-sync install-autosync)"
-      elif ! watch_already_running >/dev/null; then
-        echo "the change watcher is installed but not running, so no edit here catches this Mac up (claude-sync install-autosync starts it again)"
+      else
+        # Said to be not running only when that is settled (claude-config#3584, L11).
+        watch_already_running || true
+        case "$WATCH_OTHER_STATE" in
+          live) ;;
+          none) echo "the change watcher is installed but not running, so no edit here catches this Mac up (claude-sync install-autosync starts it again)" ;;
+          *) echo "whether the change watcher is running could not be read, because ${WATCH_OTHER_WHY:-the reading gave no reason}, so it is not known whether an edit here catches this Mac up (see it with  ${WATCH_OTHER_PROBE:-ls -l $SYNC_WATCH_PID_FILE} )" ;;
+        esac
       fi
     fi
   fi
@@ -16479,16 +16626,75 @@ PL
 # neither reads this Mac's record (so a live daemon never refuses it) nor writes it, which would
 # make the live daemon refuse to start, or step down for a watcher that is about to exit.
 SYNC_WATCH_PID_FILE="$(store_for_this_home "${SYNC_WATCH_PID_FILE:-}" "$HOME/.claude-sync-watch.pid")"
-watch_already_running(){   # -> prints the live watcher's pid, or nothing
-  local pid cmd
+#
+# THREE answers, never two (claude-config#3584, L10). This printed the live watcher's pid or
+# nothing and read the command line with ps, the failure discarded: a ps that could not run gave an
+# empty answer and no error, every caller read that as no watcher, and a second one started beside
+# a live one. So the reading is kept as a STATE the caller has to branch on (process_read, above):
+#
+#   WATCH_OTHER_STATE  live    another watcher is running, and WATCH_OTHER_PID is its pid
+#                      none    it is settled that none is: no pid file, no pid in it, this
+#                              process's own pid, a pid that is not running, or a running process
+#                              that is something else
+#                      unread  the pid file names a process that is running, or that the shell
+#                              could not test, and what it is could not be read; or the pid file
+#                              is there and cannot be read
+#   WATCH_OTHER_WHY    when unread, what failed, as a clause a sentence can carry
+#   WATCH_OTHER_PROBE  when unread, the command a person can run to see the failure for themselves
+#
+# Returns 0, 1 and 2 in that order. Call it in the caller's own shell, never in a command
+# substitution, whose subshell would keep the state to itself.
+watch_already_running(){   # -> WATCH_OTHER_STATE, WATCH_OTHER_PID, WATCH_OTHER_WHY, WATCH_OTHER_PROBE
+  local pid=""
+  WATCH_OTHER_STATE=none; WATCH_OTHER_PID=""; WATCH_OTHER_WHY=""; WATCH_OTHER_PROBE=""
   [ -f "$SYNC_WATCH_PID_FILE" ] || return 1
-  pid="$(head -1 "$SYNC_WATCH_PID_FILE" 2>/dev/null || true)"
+  if [ ! -r "$SYNC_WATCH_PID_FILE" ]; then
+    WATCH_OTHER_STATE=unread
+    WATCH_OTHER_WHY="the watcher's pid file at $SYNC_WATCH_PID_FILE is there and cannot be read"
+    WATCH_OTHER_PROBE="ls -l $SYNC_WATCH_PID_FILE"
+    return 2
+  fi
+  IFS= read -r pid 2>/dev/null < "$SYNC_WATCH_PID_FILE" || true
   case "$pid" in ''|*[!0-9]*) return 1 ;; esac
-  [ "$pid" = "$$" ] && return 1
-  kill -0 "$pid" 2>/dev/null || return 1
-  cmd="$(ps -o command= -p "$pid" 2>/dev/null || true)"
-  case "$cmd" in *claude-sync*watch*) printf '%s' "$pid"; return 0 ;; esac
-  return 1
+  # Zero is no process's pid, and to kill it names this shell's own process group, which is
+  # always there.
+  case "$pid" in *[!0]*) ;; *) return 1 ;; esac
+  [ "$pid" != "$$" ] || return 1
+  process_read "$pid" || true
+  case "$PROC_STATE" in
+    gone) return 1 ;;
+    named)
+      case "$PROC_CMD" in *claude-sync*watch*) WATCH_OTHER_STATE=live; WATCH_OTHER_PID="$pid"; return 0 ;; esac
+      return 1 ;;
+  esac
+  WATCH_OTHER_STATE=unread
+  WATCH_OTHER_WHY="the watcher's pid file at $SYNC_WATCH_PID_FILE names $PROC_WHY"
+  WATCH_OTHER_PROBE="$PROC_PROBE"
+  return 2
+}
+# What every caller says of another watcher that could not be read, in one wording: that it could
+# not be read, why, and that this is not the same as none running. Nothing when the last reading
+# was live or none, so a caller can always append it.
+watch_unread_sentence(){
+  case "${WATCH_OTHER_STATE:-none}" in live|none) return 0 ;; esac
+  printf 'Whether a claude-sync watcher is already running on this Mac could not be read: %s. That is not the same as none running.' "${WATCH_OTHER_WHY:-the reading gave no reason}"
+}
+# A start that would put this watcher beside another stops here. Beside a LIVE one it says so, in
+# the caller's words. Beside one that could not be read it stops as well (claude-config#3584),
+# since none is the only answer that makes a start safe, and it names the step that changes that:
+# the record is removed only by a person who has seen what the process it names is (L111).
+watch_refuse_beside_another(){   # $1 = what to say of a live one, with @PID@ wherever its pid goes
+  local step
+  watch_already_running || true
+  case "$WATCH_OTHER_STATE" in
+    none) return 0 ;;
+    live) die "${1//@PID@/$WATCH_OTHER_PID}" ;;
+  esac
+  case "$WATCH_OTHER_PROBE" in
+    "ps "*) step="Run  $WATCH_OTHER_PROBE  where ps answers: if that process is a claude-sync watcher, one is already running and there is nothing to start; if it is anything else, remove the record it left (rm $SYNC_WATCH_PID_FILE) and start the watcher again." ;;
+    *) step="See what is wrong with that file with  ${WATCH_OTHER_PROBE:-ls -l $SYNC_WATCH_PID_FILE} , and make it readable or remove it (rm $SYNC_WATCH_PID_FILE) once no watcher is running, then start the watcher again." ;;
+  esac
+  die "$(watch_unread_sentence) Several watchers all react to the same edit. Nothing was started. $step"
 }
 
 # WHETHER THIS LOOP SHOULD GO ON AT ALL (claude-config#604). The refusal above stops a second watcher
@@ -16499,17 +16705,31 @@ watch_already_running(){   # -> prints the live watcher's pid, or nothing
 # still the top process's id, so `kill -0 $$` failing means it has gone, and the pid file naming
 # another live watcher means this one was replaced. Either way it says so, with a time, and stops;
 # fswatch then ends on its next write.
+#
+# Returns 0 to stop, 1 to go on, and 2 when whether it was replaced could not be read
+# (claude-config#3584): the pid file names another process and what that is could not be told. It
+# says nothing then, and the caller decides: the loop sends nothing for that wake and says so
+# (watch_unread_wake_line), since two watchers must not both send, and looks again at the next
+# wake rather than stepping down, which only another LIVE watcher is a reason for. A watcher that
+# stepped down on a failed read would be started again by launchd and refused at its start for the
+# same reason, every ten seconds.
 watch_should_stop(){
-  local other
   if ! kill -0 "$$" 2>/dev/null; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: stopped, the watcher that started this loop (process $$) has gone, and a loop left behind would go on sending on every edit."
     return 0
   fi
-  if other="$(watch_already_running)"; then
-    echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: stepped down, $SYNC_WATCH_PID_FILE now names another live watcher (process $other), and two watchers would both react to every edit."
-    return 0
-  fi
-  return 1
+  watch_already_running || true
+  case "$WATCH_OTHER_STATE" in
+    none) return 1 ;;
+    live)
+      echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: stepped down, $SYNC_WATCH_PID_FILE now names another live watcher (process $WATCH_OTHER_PID), and two watchers would both react to every edit."
+      return 0 ;;
+  esac
+  return 2
+}
+# The line the loop writes for a wake it sent nothing on because of that (claude-config#3584).
+watch_unread_wake_line(){
+  echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: NOT sent: whether this watcher has been replaced by another could not be read, because ${WATCH_OTHER_WHY:-the reading gave no reason}. That is not the same as none running, and two watchers would both react to every edit, so nothing was sent or received on this wake. It looks again at the next one. See it for yourself with  ${WATCH_OTHER_PROBE:-ls -l $SYNC_WATCH_PID_FILE}"
 }
 
 # THE COPY OF claude-sync THIS PROCESS IS RUNNING (claude-config#420).
@@ -16541,10 +16761,8 @@ do_watch(){
   local fs="${SYNC_FSWATCH:-fswatch}"
   command -v "$fs" >/dev/null 2>&1 || \
     die "fswatch not installed — run: brew install fswatch, then: claude-sync install-autosync"
-  local live
-  if live="$(watch_already_running)"; then
-    die "a claude-sync watcher is already running on this Mac (process $live), and several watchers all react to the same edit. Nothing was started. End that one first if you meant to replace it: kill $live"
-  fi
+  # Refused beside a live watcher, and beside one that could not be read (claude-config#3584).
+  watch_refuse_beside_another 'a claude-sync watcher is already running on this Mac (process @PID@), and several watchers all react to the same edit. Nothing was started. End that one first if you meant to replace it: kill @PID@'
   # CLAIMED, not merely written (claude-config#604): with noclobber the write fails when another
   # watcher has written the file since the check above, so two watchers starting together cannot both
   # proceed. A record left by a watcher that has gone is REPLACED by a rename, never removed first: a
@@ -16562,15 +16780,13 @@ do_watch(){
   for _try in 1 2; do
     [ -n "$SYNC_WATCH_PID_FILE" ] || break
     if ( set -C; printf '%s\n' "$$" > "$SYNC_WATCH_PID_FILE" ) 2>/dev/null; then claimed=1; break; fi
-    if live="$(watch_already_running)"; then
-      die "a claude-sync watcher started at the same moment as this one (process $live) and claimed $SYNC_WATCH_PID_FILE first. Nothing was started."
-    fi
+    # A record that could not be read is never replaced: it may be a live watcher's
+    # (claude-config#3584).
+    watch_refuse_beside_another "a claude-sync watcher started at the same moment as this one (process @PID@) and claimed $SYNC_WATCH_PID_FILE first. Nothing was started."
     [ -e "$SYNC_WATCH_PID_FILE" ] || continue
     if printf '%s\n' "$$" > "$SYNC_WATCH_PID_FILE.$$" 2>/dev/null \
        && mv -f "$SYNC_WATCH_PID_FILE.$$" "$SYNC_WATCH_PID_FILE" 2>/dev/null; then
-      if live="$(watch_already_running)"; then
-        die "a claude-sync watcher started at the same moment as this one (process $live) and replaced the stale $SYNC_WATCH_PID_FILE first. Nothing was started."
-      fi
+      watch_refuse_beside_another "a claude-sync watcher started at the same moment as this one (process @PID@) and replaced the stale $SYNC_WATCH_PID_FILE first. Nothing was started."
       claimed=1
     fi
     break
@@ -16642,7 +16858,7 @@ do_watch(){
   # line to this command's own output, which the launchd plist already sends
   # to ~/.claude-sync.log, so a silently-broken sync leaves a durable trail
   # instead of just a notification nobody saw.
-  local again watch_fs_pid="" watch_rc=0
+  local again watch_fs_pid="" watch_rc=0 stop_rc=0
   # Started at the clock, so the first sweep happens one interval in rather than on the first edit
   # of the day: a daemon restarted often would otherwise sweep on every restart.
   #
@@ -16656,7 +16872,11 @@ do_watch(){
     sh "$WATCH_FS_PID_TAG" "$restart_tick" "$fs" -o -l "${SYNC_WATCH_LATENCY:-2}" "${paths[@]}" \
     | while watch_next_event; do
     case "$_ev" in "$WATCH_FS_PID_TAG "*) watch_fs_pid="${_ev#"$WATCH_FS_PID_TAG "}"; continue ;; esac
-    watch_should_stop && break
+    # 0 stops the loop, and 2, replaced or not could not be read, sends nothing on this wake and
+    # says so (claude-config#3584).
+    stop_rc=0; watch_should_stop || stop_rc=$?
+    [ "$stop_rc" -ne 0 ] || break
+    if [ "$stop_rc" -eq 2 ]; then watch_unread_wake_line; continue; fi
     # NOTHING CHANGED HERE FOR A WHOLE POLL (claude-config#3396). The watcher used to wake only on a
     # local change, so on 2026-11-21 two merges with green checks sat uninstalled on the personal
     # MacBook until a pull was typed. On a timer wake it asks the shared repo one question first,
@@ -16670,7 +16890,9 @@ do_watch(){
     again=1
     while [ "$again" -eq 1 ]; do
       again=0
-      watch_should_stop && break 2
+      stop_rc=0; watch_should_stop || stop_rc=$?
+      [ "$stop_rc" -ne 0 ] || break 2
+      if [ "$stop_rc" -eq 2 ]; then watch_unread_wake_line; break; fi
       # `if var=$(cmd)` (not a bare assignment) is the one form `set -e` does not
       # abort on when cmd fails -- a bare `out="$(do_send)"; rc=$?` would exit
       # the whole watch loop on failure before the check below ever ran.
@@ -17160,6 +17382,9 @@ watch_park(){
   echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: NOT watching: claude-sync $me has started $WATCH_LOOP_STARTS times in $(duration_in_words "$WATCH_LOOP_WINDOW") and ended each time, so this start stops here rather than end too and be started again by launchd every ten seconds. It sends nothing, and hands over by itself once a different claude-sync is in $SYNC_REPO. Why each start ended is in the lines above."
   while :; do
     sleep "$WATCH_PARK_POLL" 2>/dev/null || sleep 60
+    # Replaced or not could not be read (2) changes nothing here: a stopped watcher sends nothing
+    # whatever the answer, and a handover goes through a fresh start, which refuses beside a
+    # watcher it cannot read (claude-config#3584).
     watch_should_stop && return 0
     now_digest="$(script_digest || true)"
     [ -n "$now_digest" ] && [ "$now_digest" != "$WATCH_LOADED_DIGEST" ] || continue
@@ -17491,7 +17716,7 @@ RETIRE_LABELS
 
   echo "$recorded Every send, receive, watch and install-autosync here now refuses."
   if [ -n "$targets" ]; then echo "Unloaded and removed: $targets."; else echo "Removed nothing: no launch agent was installed or loaded."; fi
-  local rc=0 leftover="" pid
+  local rc=0 leftover=""
   while IFS= read -r label; do
     [ -n "$label" ] || continue
     if [ -e "$agentdir/$label.plist" ]; then leftover="${leftover:+$leftover, }$agentdir/$label.plist"; fi
@@ -17512,9 +17737,15 @@ RETIRE_LABELS
   else
     echo "Confirmed: launchctl list shows none of $(agent_labels | paste -sd ',' - | sed 's/,/, /g') loaded, and no older claude-sync agent either."
   fi
-  if pid="$(watch_already_running)"; then
-    echo "Still running: a claude-sync watcher as process $pid, which launchd did not start. Its next send refuses, since this Mac is retired. End it with: kill $pid"
-  fi
+  # Three answers (claude-config#3584): one that could not be read is said, never passed over as
+  # none. The exit code is left as it is for a watcher seen running, since either way its next send
+  # refuses.
+  watch_already_running || true
+  case "$WATCH_OTHER_STATE" in
+    none) ;;
+    live) echo "Still running: a claude-sync watcher as process $WATCH_OTHER_PID, which launchd did not start. Its next send refuses, since this Mac is retired. End it with: kill $WATCH_OTHER_PID" ;;
+    *) echo "NOT confirmed: whether a claude-sync watcher that launchd did not start is still running could not be read: ${WATCH_OTHER_WHY:-the reading gave no reason}. That is not the same as none running. If one is, its next send refuses, since this Mac is retired. See what that process is with: ${WATCH_OTHER_PROBE:-ls -l $SYNC_WATCH_PID_FILE}" ;;
+  esac
   echo "Left alone: $left."
   echo "To bring this Mac back into the sync: $(retired_way_back)"
   return "$rc"

@@ -1983,6 +1983,27 @@ so two watchers starting together cannot both run. Status judges watchers by roo
 is several nested command substitutions carrying the watcher's own command line, so one healthy
 watcher mid send reads three or four deep, which was the "nested up to 4 deep" of that report.
 
+**A process that cannot be read is not one that is absent (#3584).** The one watcher rule and the
+hook suite rerun's claim both ask what the process a pid file names IS, with `ps -o command=`. Each
+discarded the failure, so a `ps` that could not run gave the same empty answer as a process that is
+something else: a second watcher started beside a live one, and the claim was taken from a run that
+still held it. It was reproduced on 2026-11-24 with a stand in `ps` that exits 1 and with none on
+PATH; `ps` fails for real under the no network wrapper (#3482) and in any sandbox that refuses
+setuid programs. It is the fault #3547 found in `hooks/lib/sync-clone.sh`, and this follows the
+shape and words of that fix. One reader, `process_read`, gives three answers kept as a state the caller has to
+branch on, never a printed answer an error can hide behind: the command line, gone, or unread with
+what failed and the command that shows it. A `ps` that fails is followed by a second test of the
+pid, since `ps` exits non zero both when it cannot run and when the process ended a moment after it
+was seen, and whether the pid is running has three answers too (`pid_running`), because `kill -0`
+exits 1 for a process the shell may not signal exactly as for one that has gone. Each caller then
+acts only on a settled answer. A starting watcher refuses beside a watcher it could not read and
+never replaces that record. The claim is left alone and the suite is not run. A running watcher's
+loop sends nothing on that wake and looks again at the next, rather than stepping down: a watcher
+that stepped down on a failed read would be started again by launchd and refused at its start,
+every ten seconds. Status and retire say that it could not be read rather than "not running" or
+nothing. `claude-sync` and `lib/sync-clone.sh` each hold a copy of this reading: #3547's change to
+the library had not merged when this was written, so the two were not made one here.
+
 ## A watcher older than the claude-sync on disk restarts itself (#420, #1569)
 
 #420 made the watcher record a content hash of the `claude-sync` it loaded and refuse to send on any
@@ -2756,7 +2777,10 @@ again once the Mac was quiet. The choices:
   is released. `.hook-tests-rerun` is `lib/pid-lock.sh`'s lock, taken with no wait, holding the pid
   of the claude-sync that took it; a second receive names that pid and runs nothing. A claim whose
   pid is gone, or alive but no longer a claude-sync (reused after a restart), is taken over through
-  the lib's break lock. Every write to the record during a rerun is made under the claim, and an
+  the lib's break lock. A claim whose holder could not be read (`ps` failed, is missing or said
+  nothing about a running process) is neither: it is left alone and the receive runs nothing and
+  says so, since taking it would run a second suite beside the first (#3584, in "One watcher, and
+  a leftover loop stops itself"). Every write to the record during a rerun is made under the claim, and an
   amendment (a deferral, a give up) is made only while the record's `at` is still the one read.
 - **It ends in one notification.** Nothing is notified for the first stopped run. A second stopped
   run, or a record still owed after `SYNC_HOOK_RERUN_GIVE_UP` (two days, a product choice, so the
