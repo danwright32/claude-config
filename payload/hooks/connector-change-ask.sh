@@ -37,8 +37,10 @@
 # about, or holds no tool name whole and names one of the three connectors (a name cut short
 # cannot be judged by its verb); and, with python3 or lib/connector-changes.py missing or failing,
 # every call to a server whose name holds regal, better or cal, a read included, naming what is
-# missing. Without lib/sleep.sh it asks, saying that whether Dan is asleep could not be told. The
-# registration carries onFailure block, so a crash or a timeout stops the call.
+# missing. Without lib/sleep.sh, or the python3 it reads the sleep record with, whether Dan is
+# asleep cannot be told, and the call is refused and never asked about, saying which is missing:
+# a question would be the one answer sleep mode can say yes to at night. The registration carries
+# onFailure block, so a crash or a timeout stops the call.
 #
 # THE SCREEN. It runs on every MCP call, so it leaves before python3 starts unless the tool's name
 # holds regal, better or cal in any case, which every name the rule can ask about holds.
@@ -97,16 +99,23 @@ WHY="Dan decided on 2026-11-25 that a connector tool that deletes or changes som
 # passes costs nothing more.
 decide() {
   local asleep=0 untold=""
+  # Whether Dan is asleep is lib/sleep.sh's answer, which it reads with python3. With either gone
+  # nothing here can tell, and a question is the wrong answer to that: at night sleep mode says yes
+  # to it for any server that is not a claude.ai connector. So the call is refused, saying which.
   # shellcheck source=lib/sleep.sh
-  if . "$HOOK_DIR/lib/sleep.sh" 2>/dev/null; then
+  if ps_reader_missing python3; then
+    untold="python3 is not on PATH, and lib/sleep.sh reads the sleep record with it. Install python3"
+  elif . "$HOOK_DIR/lib/sleep.sh" 2>/dev/null; then
     sleep_active && asleep=1
   else
-    untold=" lib/sleep.sh is missing beside this hook, so whether Dan is asleep could not be told."
+    untold="lib/sleep.sh is missing beside this hook. A pull of the shared config puts it back"
   fi
-  if [ "$asleep" -eq 1 ]; then
+  if [ -n "$untold" ]; then
+    hook_deny_json "connector-change-ask.sh refused $1: $2 $WHY, and whether Dan is asleep could not be told, so it could not be asked about either: at night sleep mode answers such a question itself. $untold, then send the call again."
+  elif [ "$asleep" -eq 1 ]; then
     hook_deny_json "connector-change-ask.sh refused $1 because Dan is asleep (sleep mode is on): $2 $WHY, and nothing is asked at night. Do not send it again tonight or reach the same end another way: note it for the morning and go on with work that does not need it."
   else
-    hook_ask_json "connector-change-ask.sh asks before $1: $2$untold $WHY."
+    hook_ask_json "connector-change-ask.sh asks before $1: $2 $WHY."
   fi
   exit 0
 }

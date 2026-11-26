@@ -6069,6 +6069,9 @@ call, as `db-write-ask.sh` does for database writes. The rule is `hooks/lib/conn
   holds no tool name whole and names one of the three connectors; and, with python3 or one of its
   libraries missing or failing, every call to a server whose name holds regal, better or cal, a read
   included, saying what is missing. Its registration carries `onFailure` block.
+- When it cannot tell whether Dan is asleep (`lib/sleep.sh` is missing, or the python3 that reads
+  the sleep record is), it refuses and does not ask, saying which is missing: a question is the one
+  answer sleep mode can say yes to at night.
 
 It is a hook and not the `permissions.ask` rule the issue's text names, because the sync carries no
 permission rule to either Mac. Measured on the personal MacBook on 2026-11-26, one run each, in a

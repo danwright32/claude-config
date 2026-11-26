@@ -171,16 +171,18 @@ def verdict(raw):
                     "something live could not be told.")
         return ("this " + connector + " call",
                 tool + ", which " + what + ". It was called with " + shown(d.get("tool_input")) + ".")
-    # A payload that is not a tool call is judged by its text. The tool it names, when it names one
-    # whole, between its quotes: one the rule asks about is asked about, saying why.
-    m = re.search(r"\"tool_name\"\s*:\s*\"([^\"\\]*)\"", raw)
-    if m:
-        found = judge(m.group(1))
-        if found:
-            connector, tool, what = found
-            return ("this " + connector + " call",
-                    "the payload could not be read as a tool call, and its text names " + m.group(1)
-                    + (", which " + what if what else "") + ".")
+    # A payload that is not a tool call is judged by its text. Every tool it names whole, between
+    # quotes, is judged, never the first alone, since an input can hold a tool_name key of its own
+    # ahead of the call's: one the rule asks about is asked about, saying why.
+    whole = re.findall(r"\"tool_name\"\s*:\s*\"([^\"\\]*)\"", raw)
+    if whole:
+        for n in whole:
+            found = judge(n)
+            if found:
+                connector, tool, what = found
+                return ("this " + connector + " call",
+                        "the payload could not be read as a tool call, and its text names " + n
+                        + (", which " + what if what else "") + ".")
         return None
     # No name it holds whole: any MCP name in the text may be cut short, and a part of a name
     # cannot be judged by its verb ("del" reads as no delete). So one on any of the three

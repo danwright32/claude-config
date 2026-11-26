@@ -191,6 +191,10 @@ nested_first() {  # nested_first <the call's tool> <the tool its input names>
 }
 expect "a delete whose input, written ahead of its name, holds a tool_name key naming another server's tool is asked about" ask "$(nested_first "${REGAL}delete-team" mcp__lightroom__list_folders)"
 expect "a call on another server whose input names a Regal delete under a tool_name key is passed" none "$(nested_first mcp__lightroom__list_folders "${REGAL}delete-team")"
+# The same when the payload does not parse: every whole name its text holds is judged, never the
+# first alone.
+nested_cut="$(nested_first "${REGAL}delete-team" mcp__lightroom__list_folders)"
+expect "the same delete, its payload cut short, is asked about" ask "${nested_cut%?}"
 # A name the text holds only a part of cannot be judged by its verb: "del" reads as no delete.
 r="$(run "$HOOK" '{"session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "mcp__claude_ai_Regal_MCP__del')"
 [ "$(decision "$r")" = "ask rc=0" ] && check "a payload cut short inside a Regal tool's name is asked about" ok || check "a payload cut short inside a Regal tool's name is asked about" "$(decision "$r")"
@@ -221,7 +225,7 @@ says "the refusal says not to reach the same end another way" "$r" 'another way'
 expect "asleep, a read passes untouched" none "$(payload mcp__plugin_betterstack_betterstack__list_monitors)" "$ASLEEP"
 expect "asleep, a name it cannot read on Regal is refused" deny "$(payload mcp__regal)" "$ASLEEP"
 
-echo "with a library or python3 gone it still asks, saying what is missing"
+echo "with a library or python3 gone it still stops the call, saying what is missing"
 # The hook and the four files it loads, in a folder of their own with one taken away.
 copy_without() {  # copy_without <name> <file under lib to leave out, or -> -> the copied hook's path
   local to="$WORK/$1"
@@ -239,14 +243,23 @@ expect "and passes a read (the control)" none "$(payload "${REGAL}fetch-journey"
 for lib in hook-notice.sh push-scope.sh sleep.sh connector-changes.py; do
   H="$(copy_without "no-$lib" "$lib")"
   r="$(run "$H" "$(payload "${REGAL}delete-team" '{"teamId": "t1"}')")"
-  [ "$(decision "$r")" = "ask rc=0" ] && check "with lib/$lib gone, a Regal delete is still asked about" ok || check "with lib/$lib gone, a Regal delete is still asked about" "$(decision "$r"): ${r:0:200}"
+  # With lib/sleep.sh gone nothing says whether Dan is asleep, and at night sleep mode answers a
+  # question yes for a server that is not a claude.ai connector: so that one is refused, not asked.
+  case "$lib" in sleep.sh) want=deny ;; *) want=ask ;; esac
+  [ "$(decision "$r")" = "$want rc=0" ] && check "with lib/$lib gone, a Regal delete is still stopped ($want)" ok || check "with lib/$lib gone, a Regal delete is still stopped ($want)" "$(decision "$r"): ${r:0:200}"
   case "$lib" in
     push-scope.sh) ;;   # the payload is read as it came, which takes nothing away from the question
     *) says "and the question names lib/$lib" "$r" "lib/${lib//./\\.}" ;;
   esac
   expect "with lib/$lib gone, a call on another server is still passed" none "$(payload mcp__lightroom__delete_collection)" "$AWAKE" "$H"
 done
-expect "with lib/sleep.sh gone, a delete is asked about even while the record says asleep" ask "$(payload "${REGAL}delete-team")" "$ASLEEP" "$(copy_without no-sleep-asleep sleep.sh)"
+NO_SLEEP_LIB="$(copy_without no-sleep-asleep sleep.sh)"
+expect "with lib/sleep.sh gone, a delete is refused while the record says asleep" deny "$(payload mcp__plugin_betterstack_betterstack__delete_monitor)" "$ASLEEP" "$NO_SLEEP_LIB"
+r="$(run "$NO_SLEEP_LIB" "$(payload "${REGAL}delete-team")" "$AWAKE")"
+[ "$(decision "$r")" = "deny rc=0" ] && check "with lib/sleep.sh gone, a delete is refused with no sleep record too, since nothing could tell" ok || check "with lib/sleep.sh gone, a delete is refused with no sleep record too, since nothing could tell" "$(decision "$r")"
+says "and the refusal says that whether Dan is asleep could not be told" "$r" 'whether Dan is asleep could not be told'
+says "and how to get past it" "$r" 'pull of the shared config'
+expect "with lib/sleep.sh gone, a read still passes" none "$(payload "${REGAL}fetch-journey")" "$ASLEEP" "$NO_SLEEP_LIB"
 expect "with lib/hook-notice.sh gone, a delete is still refused while Dan is asleep" deny "$(payload "${REGAL}delete-team")" "$ASLEEP" "$(copy_without no-notice-asleep hook-notice.sh)"
 . "$DIR/lib/no-python-path.sh"
 NOPY="$WORK/nopy/bin"
@@ -257,8 +270,10 @@ else
   run_nopy() { local out rc; out="$(cd "$WORK" && printf '%s' "$1" | env -u CLAUDE_HOME HOME="$EMPTY_HOME" CLAUDE_SLEEP_RECORD="$AWAKE" PATH="$NOPY" "$NOPY/bash" "$HOOK" 2>/dev/null)"; rc=$?; printf '%s\nrc=%s\n' "$out" "$rc"; }
   r="$(run_nopy "$(payload "${REGAL}delete-team")")"
   case "$(decision "$r")|$(reason "$r")" in
-    "ask rc=0|"*"python3 is not on PATH"*) check "with no python3, a Regal delete is asked about, naming python3" ok ;;
-    *) check "with no python3, a Regal delete is asked about, naming python3" "$(decision "$r") $(reason "$r")" ;;
+    # Refused, not asked: lib/sleep.sh reads the sleep record with python3, so nothing could tell
+    # whether Dan is asleep either.
+    "deny rc=0|"*"python3 is not on PATH"*) check "with no python3, a Regal delete is refused, naming python3" ok ;;
+    *) check "with no python3, a Regal delete is refused, naming python3" "$(decision "$r") $(reason "$r")" ;;
   esac
   r="$(run_nopy "$(payload mcp__lightroom__delete_collection)")"
   [ "$(decision "$r")" = "none rc=0" ] && check "with no python3, a call on another server is passed" ok || check "with no python3, a call on another server is passed" "$(decision "$r")"
