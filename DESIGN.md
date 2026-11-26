@@ -3128,7 +3128,9 @@ newest 300 of main's sync commits, the check would have held 2: the incident, an
 carrying a mod's test file from before the check read mods. It could judge every one, and held
 nothing that passes main's run.
 
-Three more things the check does since #3586, each of which reports more and excuses nothing:
+Three more things the check does since #3586. None excuses a line it used to report. The first
+two report more lines than before; the third reports the same lines and changes only how they are
+shown:
 
 - **A name that starts with a letter outside ASCII is a name.** The account name in a home path
   had to start with an ASCII letter or digit, so that an elided example (the root, then dots or a
