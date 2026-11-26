@@ -677,6 +677,23 @@ describe('writes: a script run from a file, with the arguments it is handed (#15
     expect(runs('bash ./tools/fix.sh src/app.css').map(r => [r.what, r.args.map(a => a.path)])).toEqual([['a bash script file', [`${CWD}/src/app.css`]]])
     expect(runs('node build.mjs --out=dist/site.css').map(r => r.args)).toEqual([[{ word: 'dist/site.css', path: `${CWD}/dist/site.css` }]])
   })
+  // #3621: the word zsh's --emulate takes (`sh`) was given as a zsh script file the command runs,
+  // handed the -c text as its argument, so a guard worded its hold about a file that did not exist.
+  test("the shell zsh is told to emulate is no script file it runs: the text after -c is what runs", () => {
+    const named = (command: string) => runs(command).map(r => [r.what, r.script])
+    for (const before of ['--emulate sh', '-f --emulate sh']) {
+      expect(named(`zsh ${before} -c 'cat notes.md'`)).toEqual([])
+      expect(named(`zsh ${before} -c 'cat $(ls)'`)).toEqual([])
+      expect(paths(`zsh ${before} -c 'echo x > out.txt'`)).toEqual([`${CWD}/out.txt`])
+      expect(named(`zsh ${before} ./tools/fix.sh src/app.css`)).toEqual([['a zsh script file', './tools/fix.sh']])
+    }
+    // The controls: without the option, and with an option that takes nothing.
+    for (const before of ['', '-f', '--no-rcs']) {
+      expect(named(`zsh ${before} -c 'cat notes.md'`)).toEqual([])
+      expect(paths(`zsh ${before} -c 'echo x > out.txt'`)).toEqual([`${CWD}/out.txt`])
+      expect(named(`zsh ${before} ./tools/fix.sh src/app.css`)).toEqual([['a zsh script file', './tools/fix.sh']])
+    }
+  })
   test('a script file run directly, by a path or a script name, is one too', () => {
     expect(runs('./tools/fix app/page.tsx').map(r => [r.what, r.script, r.args.map(a => a.word)])).toEqual([['a script file run directly', './tools/fix', ['app/page.tsx']]])
     expect(runs('make-settled.py settled.json docs/design/x.html').map(r => r.args.map(a => a.word))).toEqual([['settled.json', 'docs/design/x.html']])
