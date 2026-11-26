@@ -24,7 +24,8 @@
 #                                    unread, nosave, whose question does not tell him to save the
 #                                    file, typed:<words>, where he typed those words beside the
 #                                    option he chose, typedform, where what came back beside his
-#                                    answer is in a form nobody has seen, and plain, an ordinary
+#                                    answer is in a form nobody has seen, typedkey, where it is
+#                                    under a key nobody has seen, and plain, an ordinary
 #                                    picker with no metadata) and two ways it carries what must be ignored
 #                                    (claimedhash:<hash>, a hash written into its metadata, and
 #                                    preview, an annotation holding the chosen option's preview and
@@ -117,6 +118,9 @@ def picker(repo, file, answer, shape):
     if shape == "typedform":
         # Not a form any transcript holds: his words as a list, which a reader of text would skip.
         result["annotations"] = {q: {"notes": ["approve, but fix line 2"]}}
+    if shape == "typedkey":
+        # Nor is this one: his words under a key that is neither notes nor the option's preview.
+        result["annotations"] = {q: {"preview": "Use it as it reads now", "comment": "approve, but fix line 2"}}
     return ask, result
 def arg(n):
     return rest[n] if len(rest) > n and rest[n] else ""

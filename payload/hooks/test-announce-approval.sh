@@ -1111,6 +1111,14 @@ F="$(shown typed-form)"; T="$WORK/typed-form.jsonl"
 talk "$T" ask acme/widget "$F" "" typedform
 r="$(asked "$T" acme/widget "$HT")"
 check "R2 words beside his Approve in a form that cannot be read approve nothing, and the refusal says so" "$([[ "$r" == "no|"*"could not be read"* ]] && [ "$(recorded)" = 0 ] && echo ok || echo "$r")"
+# The same for something under a key that is neither his notes nor the option's preview: only those
+# two keys are known, so any other one holding a value is a form nobody has seen (lessons review of
+# claude-config#3742). It was read as nothing typed, since only the notes key was looked at.
+STORE_USED="$WORK/store-typed-key"
+F="$(shown typed-key)"; T="$WORK/typed-key.jsonl"
+talk "$T" ask acme/widget "$F" "" typedkey
+r="$(asked "$T" acme/widget "$HT")"
+check "R2 something beside his Approve under a key nobody has seen approves nothing, and the refusal says so" "$([[ "$r" == "no|"*"could not be read"* ]] && [ "$(recorded)" = 0 ] && echo ok || echo "$r")"
 # What he typed is given whole up to a length, and a longer run is cut and says so.
 STORE_USED="$WORK/store-typed-long"
 F="$(shown typed-long)"; T="$WORK/typed-long.jsonl"

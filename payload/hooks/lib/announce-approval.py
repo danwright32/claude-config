@@ -652,7 +652,8 @@ def _typed_beside(result):
     annotations, keyed by the question: {"<question>": {"notes": "<his words>"}}, with the chosen
     option's "preview" beside them when it has one, which is none of his words. Anything there in a
     form that cannot be read as his words or as their absence is taken as words of his, so a form
-    nobody has seen never passes as nothing typed."""
+    nobody has seen never passes as nothing typed: those two keys are the only ones known, and any
+    other key holding a value is such a form."""
     notes = result.get("annotations") if isinstance(result, dict) else None
     if not notes:
         return None
@@ -661,6 +662,8 @@ def _typed_beside(result):
     words = []
     for about in notes.values():
         typed = about.get("notes") if isinstance(about, dict) else about
+        if isinstance(about, dict) and any(v for k, v in about.items() if k not in ("notes", "preview")):
+            words.append(TYPED_UNREAD)
         if isinstance(typed, str):
             words.append(" ".join(typed.split()))
         elif typed:
