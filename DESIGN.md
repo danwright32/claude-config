@@ -3212,6 +3212,55 @@ the builder's were made by the sessions that built it, not by Dan, and are his t
   second is refused and told to use a command of its own (the builder's). The bounds are chosen,
   not measured.
 
+Three gaps a review of the control found, each reproduced before it was closed (#3703; Dan asked
+for the review by picker, 2026-11-25: "Yes, attack it first"). The choices are the builder's.
+
+- **The dependency bot's exit stands after the label is read.** The merge gate left for a pull
+  request the bot opened before it asked about the announce label, so one relabelled and given an
+  Announcement block merged unapproved and unrecorded. The exit is now taken only when the label was
+  read and is not the announce label. Ruled out: leaving on a label that could not be read, since
+  that pull request is not known to be free of it; it is refused like any other the judge could not
+  read, with the override it always offered.
+- **A long run of blank lines in the wording file is refused, and the hash is left alone.** Blank
+  lines are dropped before the hash because Slack moves them (#3664), so the hash cannot tell a
+  padded file from its lines written together. Ruled out: hashing with blank lines kept, which
+  would make every comparison with what Slack holds fail on spacing. The run is counted where
+  "blank" is already defined (`changelog-entry.js`, beside the normaliser), so the count and the
+  hash cannot disagree about what a blank line is (L370), and the library refuses an answer that
+  carries no count (L98). Only a run with wording below it counts: blank lines after the last line
+  hide nothing, and refusing them would send a session back to Dan over a file he may have left
+  that way himself. The limit of two is chosen, not measured.
+- **Reading an approval and writing one are separate, and a picker counts only from a transcript
+  Claude Code keeps.** The library's `check` command read pickers from whatever transcript its
+  standard input named and wrote what it found. Nothing a process is handed can prove its caller is
+  a hook: a hook and a session's command are both started by Claude Code, as the same user, with
+  input the caller chooses. So the line is drawn in three places that each hold something. The
+  command line a session has a use for (`list`, `check` without `--claim`) reads the record and
+  nothing else. The label hook refuses a Bash command running the library in any other form,
+  which stops the route the review took and every accident. It judges python wherever it is named
+  in a command, with python's options read as python reads them, and asks nothing of the words in
+  front of it. It keeps no list of other programs that could run the file: the file carries no
+  interpreter line, so run by its own path the shell reads it and python never does (measured
+  2026-11-25, directly and behind `env` and `nohup`; the library's suite holds the missing line),
+  and a list of launchers is only ever short of one (L96). Ruled out: refusing every command that
+  names the file and is not known only to read, which refuses `git add` of it. A program that is
+  not python by name and is handed the file (`uv run`, `ipython`) is not seen. And whoever asks,
+  by whatever route, a picker is read only from a `.jsonl` transcript under the projects folder
+  beside the record's state folder, so a file shaped like a transcript and kept anywhere else
+  approves nothing; this one also covers the library reached without being named, and a hook run
+  by hand. The merge gate's own call (`check --claim`) is unchanged, since it must write and was
+  left as it is for the phase being built beside this one. Ruled out: refusing to write when
+  `CLAUDECODE` is set, which Claude Code sets in a Bash tool's shell (seen set to 1 there on
+  2026-11-25) and is understood not to set in a hook's, which was not measured.
+  A session started from inside another session's
+  shell would hand that variable to its own hooks, which would then never save an approval, and
+  Dan would be asked again for wording he had approved; and one word in the command clears it.
+  Ruled out too: a transcript root the tests could name through a variable of its own, which a
+  session's command could name as well. The tests' record variable waives the folder rule only for
+  a record that is not this user's own, with "own" read from the account database. What is left
+  open is said in the README: a transcript forged inside that folder, and the library reached
+  without its name. Both are writes to files on a Mac the session can write.
+
 `hooks/test-announce-approval.sh`, `hooks/test-announce-label-ask.sh` and the #3666 section of
 `hooks/test-changelog-tag.sh` hold it.
 

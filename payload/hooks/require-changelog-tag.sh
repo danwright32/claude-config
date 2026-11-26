@@ -407,15 +407,6 @@ view=$(printf '%s' "$envelope" | jq -c '.view')
 number=$(printf '%s' "$view" | jq -r '.number // "?"')
 author=$(printf '%s' "$view" | jq -r '.author.login // ""')
 
-# Dependabot writes no body block and merges itself through the auto-merge
-# workflow, so gating it would stall that workflow permanently on every bump.
-# Its changes are also not a per-change record in the update: they collapse into
-# one standing roll-up line about dependency updates, which is how the June to
-# August post already treated them.
-case "$author" in
-  dependabot|dependabot\[bot\]|app/dependabot) exit 0 ;;
-esac
-
 # The record is read by parseEntry, which reads it the same on every Mac, and then judged by
 # gateRefusal, which is this gate's alone and is handed what the registry said about THIS repository
 # (claude-config#3665). The split is deliberate: parseEntry is also how merged history is read, so a
@@ -448,6 +439,23 @@ verdict=$(printf '%s' "$view" | HOOK_DIR="$HOOK_DIR" SCOPE="$scope" node -e '
 
 # Does it carry the announce label? "yes", "no", or nothing when not even that could be told.
 carries=$(printf '%s' "$verdict" | jq -r 'if .announce == true then "yes" elif .announce == false then "no" else "" end' 2>/dev/null)
+
+# Dependabot writes no body block and merges itself through the auto-merge
+# workflow, so gating it would stall that workflow permanently on every bump.
+# Its changes are also not a per-change record in the update: they collapse into
+# one standing roll-up line about dependency updates, which is how the June to
+# August post already treated them.
+#
+# It leaves here only once the label has been read and is not the announce label
+# (claude-config#3703). This exit used to stand above that question, so a pull request the bot
+# opened, relabelled changelog/announce and given an Announcement block, merged on wording nobody
+# approved and left no line on the record. One that carries the label is judged like any other from
+# here on, and so is one whose labels could not be read, since that is not known to be free of it.
+if [ "$carries" = no ]; then
+  case "$author" in
+    dependabot|dependabot\[bot\]|app/dependabot) exit 0 ;;
+  esac
+fi
 
 # THE OVERRIDE'S ONE EXCEPTION (the head of this file). The labels have been read, so the override is
 # settled here and nowhere later: a pull request that is not an announcement takes it, exactly as it

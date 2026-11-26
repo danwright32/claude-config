@@ -1934,11 +1934,19 @@ when all of these hold, each failure said in its own words:
 - between that open and his answer the session did not write the file, run a command naming it, or
   send an agent a prompt naming it, so what he had in front of him is what he answered about;
 - the file has not changed since he answered (its status change time is before his answer);
-- no later picker about the same file ended any other way.
+- no later picker about the same file ended any other way;
+- the file holds no run of more than two blank lines with wording below it (#3703). Blank lines are
+  dropped before the hash, so a file holding the post, a long run of blank lines and then more text
+  hashes the same as those lines written together, while the window it was opened in showed him the
+  post and then white space. The refusal says how long the run is, the line it starts at, and to
+  leave no more than two in a row, then open the file and ask him again. Blank lines after the last
+  line of wording hide nothing and pass. The run is counted by `hooks/lib/changelog-entry.js`
+  (`blankRunBeforeWording`, in the answer of its `announcement-hash` command), by the same reading
+  of a blank line the hash drops them by, and an answer without the count approves nothing.
 
 What is hashed is the FILE as it stands, never a hash the session supplies, by
 `hooks/lib/changelog-entry.js`'s `announcementHash`: the sha256 of the one normalised form (line
-endings, spaces at the ends of lines, outer blank lines) every comparison uses, so the file on this
+endings, spaces at the ends of lines, every blank line) every comparison uses, so the file on this
 Mac and the block GitHub returns are hashed by one function. A hook run that reads his Approve
 writes `{"kind": "approved", "repo", "hash", "at", "session", "picker"}` to
 `~/.claude/state/announce-approvals/record.jsonl`, on this Mac only and never synced, so wording he
@@ -1969,7 +1977,10 @@ the wording, and sleep mode can answer one with Dan asleep.
   he is not asked again. After the claim it adds a `used` line naming, for each issue the pull
   request closes, its milestone (read in one GraphQL call; issues that cannot be read are recorded
   as unread with why, and block nothing). These lines say the gate let the merge go ahead, never
-  that GitHub merged it, and a `used` line approves nothing by itself.
+  that GitHub merged it, and a `used` line approves nothing by itself. A pull request the
+  dependency bot opened is let through unjudged only once its labels have been read and it does not
+  carry `changelog/announce` (#3703): one that carries the label is judged like any other, and one
+  whose labels could not be read is refused like any other the judge could not read.
 - `announce-label-ask.sh`, before the label goes on. It reads every Bash call naming the label:
   `gh pr create --label`, `gh pr edit --add-label`, `gh issue edit --add-label` and a `gh api`
   write to a pull request's labels are refused unless the wording the command would leave is
@@ -1990,15 +2001,42 @@ the wording, and sleep mode can answer one with Dan asleep.
 
 The same hook guards the record, which is why it is registered for the edit tools as well as Bash:
 an Edit, Write, MultiEdit or NotebookEdit under `state/announce-approvals` is refused, and so is a
-Bash command naming that folder that is not one only reading it. Read the record with `python3
-~/.claude/hooks/lib/announce-approval.py list`.
+Bash command naming that folder that is not one only reading it.
+
+Reading whether a wording is approved and writing an approval are separate (#3703). A review found
+that the library's `check` command read a session's pickers from whatever transcript its standard
+input named and wrote what it found, so a made up transcript left a line saying Dan approved
+wording he never saw. Three things now hold that:
+
+- **The command line a session can run only reads the record.** `python3
+  ~/.claude/hooks/lib/announce-approval.py list` prints it, and `... check --repo <owner/name>
+  --hash <sha256> [--pr <number>]` says whether that wording is approved on it. Neither reads
+  standard input, a transcript or a picker, and neither writes.
+- **An approval is written only when a hook asks.** The merge gate asks through `check ... --claim`
+  with the payload Claude Code handed it, and the label hook asks in process. Whoever asks, a
+  picker counts only from a session transcript (`.jsonl`) under the projects folder beside the
+  record's own state folder (`~/.claude/projects`), which is where Claude Code keeps them: a
+  transcript anywhere else is not read, and the refusal names it and that folder.
+  `ANNOUNCE_APPROVALS_DIR`, the tests' seam, names another record and lets its transcripts be
+  anywhere, unless the folder it names is this user's own record, however that is spelled or
+  linked, and the user's own folder is read from the account database, not from `HOME` or
+  `CLAUDE_HOME`.
+- **A session's Bash command that runs the library in any other form is refused** by
+  `announce-label-ask.sh`, whose first test knows the library's file name: `check --claim`,
+  `used`, a verb it cannot read, a program handed to python that names the file, and a heredoc
+  body naming it. Commands that name the file without running it (git, grep, a test suite) pass.
+  It judges python wherever a command names it and keeps no list of other programs that could
+  run the file, which has no interpreter line and so cannot be run by its own path.
 
 What none of this sees: a merge made in GitHub's own page; a write to the wording file, between the
 open and his answer, by something the transcript does not name it in (a script building the name at
 run time, a subagent's own tools); whether the picker's question named the right channel; a record
-line written by a script that builds the path at run time; a label put on by a route the hook cannot
-read (a variable, a file, a script, an alias, a wrapped `gh api`), which still cannot merge; and an
-approval given on one Mac, which the other does not know and asks for again.
+line written by a script that builds the path at run time; a transcript forged in the folder Claude
+Code keeps them in, or the library reached without naming it (a script file, a path built at run
+time, a hook run by hand) or run by a program that is not python by name (`uv run`), since the
+record and the transcripts are files on a Mac the session can write; a label put on by a route the
+hook cannot read (a variable, a file, a script, an alias, a wrapped `gh api`), which still cannot
+merge; and an approval given on one Mac, which the other does not know and asks for again.
 
 #### An approved announcement is owed as a Slack draft until it is settled (#3667)
 
@@ -3818,7 +3856,8 @@ names supabase leaves after reading its input, before loading anything
 2026-11-25: 0.004 to 0.005 seconds, five readings of the hook alone on a plain `git push` at load
 average 5 to 7; it reads every Bash call and every file edit, and one naming neither the
 `changelog/announce` label nor the record of approved wording leaves after reading its input, before
-loading anything
+loading anything. Since #3703 that first test also looks for the file name of the library that
+writes the record, one more pattern in the same test, and the hook was not timed again
 
 </td></tr>
 </tbody>
@@ -10538,8 +10577,13 @@ alone; since #3132 so is a created tab that left the group any other way, closed
 to a restart of Chrome, at the first result listing the group without it, and its number listed
 again later does not bring it back), and every Chrome tool reaching past those
 tabs (recordings to disk, local file uploads, saved workflows, another browser), judged in
-`hooks/browser.ts` (#2064), Supabase and psql writes, a branch switch in a primary checkout, force
-pushes, branch deletes, and `claude-sync` send, sync,
+`hooks/browser.ts` (#2064), Supabase and psql writes, a branch switch in a primary checkout (since
+#3398 the checkout every `-C` leads to, each read from the one before it, and refused as one that
+cannot be told where the command names its repository or working folder apart by `--git-dir`,
+`--work-tree`, `GIT_DIR` or `GIT_WORK_TREE`; the merge and deploy rules, the notes winding down
+keeps and its agreed cleanup branch place a git command from the same reading,
+`hooks/gitplace.ts`, set out in docs/mods-design.md under "What #3398 changed"), force pushes,
+branch deletes, and `claude-sync` send, sync,
 apply-only and install, and a pull from anywhere but the live sync clone `~/claude-config-sync` or
 with its environment changed; since #1106 that clone's pull is claude-config's deploy step, so it
 runs overnight exactly when the night lets claude-config deploy (`mayDeploy`) and waits for the
