@@ -14,7 +14,7 @@ imports it rather than copying the rule (L342, L370).
   own    Dan's own sessions: <project>/<session>.jsonl in a project folder that is not a run's
   agent  agent records: <project>/<session>/subagents/**/agent-*.jsonl and agent-*.meta.json
   run    worktree and temporary folder runs: every record in a project folder keyed to a worktree
-         (-claude-worktrees-) or to a run under /private/tmp
+         (-claude-worktrees-) or to a run under /private/tmp or the user temp folder (run_folder)
 A record is in a window of N days when it was last written at most N days before now.
 
 Modes, so the one that writes cannot be mistaken for the one that looks (L206):
