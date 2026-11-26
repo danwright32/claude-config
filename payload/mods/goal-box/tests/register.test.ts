@@ -6,8 +6,9 @@ import { CLOSE_HEADING, CLOSE_TITLE, QUIET_MS } from '../hooks/close.ts'
 
 // The Goal accomplished box (claude-config#1563) in a session: shown once when a /goal is met (the
 // session is sent a prompt of its own asking for it once the turn has ended, since the met record
-// lands after the Stop hooks and the mod hooks no Stop) or when Claude judges the work Dan asked for
+// lands after the Stop hooks, so that path reads no Stop) or when Claude judges the work Dan asked for
 // finished and calls the tool; never while a merge, a deploy, an agent or a pull request is in flight.
+// The close this session card (#3770) does hook classic.Stop, to record the stop's background lists.
 
 const T = `${'/Users'}/dan/.claude/projects/-repo/s1.jsonl`
 const TOOL = 'mcp__goal-box__goal_accomplished'
@@ -772,7 +773,7 @@ test('a /goal that cannot be read holds the box, saying why', withKit, async ($,
 })
 
 // Measured on 2.1.310: the met record is written after the Stop hooks, before the turn ends, so the
-// mod asks at turn.complete and hooks no Stop (no classic event reaches a mod, #875).
+// mod asks at turn.complete and reads no Stop for it (#875); classic.Stop is the close card's alone.
 test('a /goal met: once the turn has ended the session is sent one prompt to show the box, which names the goal', withKit, async ($, on) => {
   const { w, submitted, cards } = world(on, { goal: { state: 'set', condition: 'complete issue 1563' } })
   await start($)
