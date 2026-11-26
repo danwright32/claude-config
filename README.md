@@ -10848,7 +10848,14 @@ followed by the file (#2142).
 A write whose file cannot be named (a name built from a variable, a pattern, a program writing files
 its words do not name) is held saying it cannot be read, and may proceed, or fold into one of the
 repository's open structural issues naming a file, which the hold lists, the session's own included
-(#2706); a fold only records the issue, and the command runs as proceed would let it. It passes
+(#2706); a fold only records the issue, and the command runs as proceed would let it. Where the
+command only hands that word to a script (a path built from a variable the command does not set, or
+a folder holding more files that could be held than are judged one by one), the hold says so:
+"This command hands" the word "to a bash script file. Whether anything is written there cannot be
+read before it runs", with why, and the other way through it names is to hand the script one file by
+a path typed in full, which is judged as that file. It said such a command "writes a file whose name
+cannot be read", which read as a write for a command that only reads (#3550); what is held, and what
+may be decided, is as it was. It passes
 where it is in no checkout, or where the repository has no fast growing file and no structural issue
 naming a file. Removals, `touch`, `mkdir` and mode changes are not judged, and a
 program that builds its own file names (`node gen.js`) reads as writing nothing, so it is not held.

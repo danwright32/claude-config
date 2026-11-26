@@ -5637,7 +5637,15 @@ facts and the bar are unchanged.
   say it cannot be read, only `proceed` is taken (fold and restructure need a file to name), and the
   claim is keyed on the command (`shellKey`, a full SHA-256 of its whole text, since a short hash
   let another command sharing it through), so its unchanged resend runs and any other command is
-  judged. It passes where its folder is in no checkout, or where `couldHold` is false (no fast
+  judged. A word the command only hands to scripts (the target still carries its `runs`: a word
+  built as the command runs, a folder holding more files that could be held than are judged one by
+  one, a folder whose files cannot be listed, a path that may be a folder) is marked `handed` by the
+  hook (#3550), and its card and refusal then say "This command hands" the word to the script and
+  that "Whether anything is written there cannot be read before it runs", naming one file handed by
+  a path typed in full as the other way through, where they said the command "writes a file whose
+  name cannot be read". The mark changes words only: the verdict, the log record and the claim are
+  the ones an unmarked target gets, and a word the command also writes itself carries no `runs`, so
+  it keeps the old words. It passes where its folder is in no checkout, or where `couldHold` is false (no fast
   growing file and no structural issue at a held priority naming a file the session does not work
   on), since nothing there could hold it. Removals, `touch`, `mkdir`, mode changes and a folder
   handed to a script add no lines and are not judged. Measured blind spot: a program that builds
