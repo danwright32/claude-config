@@ -489,6 +489,14 @@ mkrun "$R12c/wrong.json" "$C12" "$(spec "$all3w" "$all3w" "$all3w" "$all3w" "$al
 out="$(score rescore "$R12c/wrong.json" --cases "$C12" --results-dir "$R12c")"; rc=$?
 check "#3556 a known wrong finding raised in eight more cases is a regression" "REGRESSION: known wrong findings raised 8 more often, 0 less often (p = 0.008)" "$out"
 check_rc "#3556 and exits 1" 1 "$rc"
+# The reason given for CANNOT TELL is the unclear side's own: one defect flipped while eight known
+# wrong findings went away must say the ONE change is too few, not count the other side's eight.
+R12f="$WORK/r12f"; mkdir -p "$R12f"; cp "$R12c/wrong.json" "$R12f/baseline.json"
+mkrun "$R12c/mixed2.json" "$C12" "$(spec "$two" "$all3" "$all3" "$all3" "$all3" "$all3" "$all3" "$all3")"
+out="$(score rescore "$R12c/mixed2.json" --cases "$C12" --results-dir "$R12f")"; rc=$?
+check "#3556 the unclear side gives its own change count" "catch 0 newly caught, 1 newly missed (p = 1.000), 1 change, too few for the 95% level" "$out"
+check "#3556 and the side that did clear it is still said" "Also better: known wrong findings raised 0 more often, 8 less often" "$out"
+check_rc "#3556 one side unclear is cannot tell overall" 4 "$rc"
 
 echo
 echo "passed: $pass, failed: $fail"

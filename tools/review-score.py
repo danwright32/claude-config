@@ -19,8 +19,8 @@ per case would give, since repeats of a case are not independent samples.
 
 A COMPARISON with the baseline is CASE BY CASE (paired): each real defect is newly caught, newly
 missed or the same, and each item judged wrong is raised more often, less often or the same, and an
-exact two sided sign test over the items that changed (McNemar's exact test when each case had one
-review per run) says whether the change holds at the 95% level the ranges use. Six changes all one
+exact two sided sign test over the items that changed (for the defects, McNemar's exact test when
+each case had one review per run) says whether the change holds at the 95% level the ranges use. Six changes all one
 way is the fewest that can. Inside that the runs CANNOT be told apart, and the tool says so rather
 than calling luck a regression or an improvement.
 
@@ -519,8 +519,8 @@ def file_hash(path):
 # ---------------------------------------------------------------------------------------------
 # Reporting
 
-def plural(n, word, words=None):
-    return f"{n} {word if n == 1 else (words or word + 's')}"
+def plural(n, word):
+    return f"{n} {word if n == 1 else word + 's'}"
 
 
 def catch_text(t):
@@ -624,9 +624,10 @@ def side_text(t):
 def paired(now, then, common, real):
     """Item by item over the cases both runs measured: (up, down, same) for the real defects when
     `real`, else for every item judged wrong. An item's figure is how often it was met per review
-    (caught, for a defect; matched by a finding, for a wrong item), so repeats compare as averages
-    and a run of one review per case compares as yes or no. Compared by cross multiplying, never by
-    dividing, so equal averages are equal."""
+    (caught, for a defect; matched by a finding, for a wrong item), so repeats compare as averages.
+    With one review per case a defect compares as yes or no, while a wrong item is a count, since
+    the same wrong claim raised twice counts twice in the rate too. Compared by cross multiplying,
+    never by dividing, so equal averages are equal."""
     up, down, same = [], [], 0
     for cid in common:
         for iid, (verdict, b_hits) in then[cid]["items"].items():
@@ -698,8 +699,8 @@ def compare(run, base, cases, window):
         lines.append(f"  raised more often: {', '.join(w_up)}")
     if w_down:
         lines.append(f"  raised less often: {', '.join(w_down)}")
-    lines.append("  Test: an exact two sided sign test over the items that changed, ties left out (McNemar's "
-                 "exact test when each case has one review per run), at the 95% level the ranges use; "
+    lines.append("  Test: an exact two sided sign test over the items that changed, ties left out (for the "
+                 "defects, McNemar's exact test when each case has one review per run), at the 95% level the ranges use; "
                  f"{FEWEST_FLIPS} changes all one way is the fewest that can clear it.")
     catch = judge(c_up, c_down, c_total)
     wrong = judge(w_down, w_up, w_total)  # fewer known wrong findings is the good direction
@@ -707,19 +708,25 @@ def compare(run, base, cases, window):
         "catch": lambda p: f"catch {len(c_up)} newly caught, {len(c_down)} newly missed (p = {p:.3f})",
         "wrong": lambda p: f"known wrong findings raised {len(w_up)} more often, {len(w_down)} less often (p = {p:.3f})",
     }
+    changed = {"catch": len(c_up) + len(c_down), "wrong": len(w_up) + len(w_down)}
+
+    def why(k):
+        """Why one side's change is inside the noise, from that side's own count."""
+        n = changed[k]
+        if n < FEWEST_FLIPS:
+            return (f", {n} {'change' if n == 1 else 'changes'}, too few for the 95% level, "
+                    f"which needs at least {FEWEST_FLIPS} all one way")
+        return ", too evenly split to tell from runs that came out differently by chance"
+
     verdicts = {"catch": catch, "wrong": wrong}
     worse = [say[k](p) for k, (v, p) in verdicts.items() if v == "worse"]
-    unclear = [say[k](p) for k, (v, p) in verdicts.items() if v == "unclear"]
+    unclear = [say[k](p) + why(k) for k, (v, p) in verdicts.items() if v == "unclear"]
     better = [say[k](p) for k, (v, p) in verdicts.items() if v == "better"]
     if worse:
         lines.append("REGRESSION: " + "; ".join(worse) + ". Keep the change only if this holds up on a second run.")
         return EXIT_WORSE, lines
     if unclear:
-        n_changed = max(len(c_up) + len(c_down), len(w_up) + len(w_down))
-        why = (f"{n_changed} {'change is' if n_changed == 1 else 'changes are'} too few for the exact test to reach the 95% level, which needs "
-               f"at least {FEWEST_FLIPS} all one way" if n_changed < FEWEST_FLIPS
-               else "the changes are too evenly split to tell from runs that came out differently by chance")
-        lines.append("CANNOT TELL: " + "; ".join(unclear) + f"; {why}. "
+        lines.append("CANNOT TELL: " + "; ".join(unclear) + ". "
                      + (f"Also better: {'; '.join(better)}. " if better else "")
                      + "Read the ranges above, or score more cases or more repeats.")
         return EXIT_CANNOT_TELL, lines

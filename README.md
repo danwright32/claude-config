@@ -2865,7 +2865,8 @@ review caught it.
 A comparison with the baseline is case by case. Each real defect is newly caught, newly missed or
 the same, and each item judged wrong is raised more often, less often or the same (with repeats, by
 how often per review, and both sides' counts are printed). An exact two sided sign test over the
-items that changed (McNemar's exact test when each run has one review per case) decides the verdict
+items that changed (for the defects, McNemar's exact test when each run has one review per case;
+an item judged wrong is compared by how many findings matched it) decides the verdict
 at the same 95% level: REGRESSION or IMPROVEMENT only when the change clears it, NO DIFFERENCE when
 nothing changed, and CANNOT TELL otherwise. Six changes all one way is the fewest that can clear it,
 so a change of five catches or fewer is always CANNOT TELL, however the rates move. A case measured in only
