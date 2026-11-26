@@ -73,6 +73,7 @@ REFUSING=(
   fresh-worktree-base-gate.sh
   check-rtk-init.sh
   check-zsh-builtins.sh
+  check-grep-file-order.sh
   check-screenshot-window.sh
   check-wrapped-commands.sh
   stacked-branch-delete-gate.sh

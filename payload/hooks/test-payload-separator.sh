@@ -139,6 +139,7 @@ family "branch delete" stacked-branch-delete-gate.sh Bash "git push origin --del
 family "wrapped commands" check-wrapped-commands.sh Bash 'bash -c "$CMD git"' "$PLAIN"
 family "rtk" check-rtk-init.sh Bash "rtk init -g" "$PLAIN"
 family "zsh builtins" check-zsh-builtins.sh Bash "zsh -c 'log show --last 1m'" "$PLAIN"
+family "grep file order" check-grep-file-order.sh Bash "grep -h result a.txt b.txt" "$PLAIN"
 family "gh watchers" check-gh-watch-interval.sh Bash "gh pr checks 5 --watch" "$PLAIN"
 family "issue fields" require-issue-fields.sh Bash "gh issue create --title x --body y" "$PLAIN"
 

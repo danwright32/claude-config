@@ -232,6 +232,12 @@
           },
           {
             "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/check-grep-file-order.sh",
+            "timeout": 10,
+            "onFailure": "block"
+          },
+          {
+            "type": "command",
             "command": "__CLAUDE_HOME__/hooks/check-screenshot-window.sh",
             "timeout": 10,
             "onFailure": "block"
