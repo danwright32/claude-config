@@ -408,6 +408,17 @@ for cmd in "$FORGED | python3 $LIBRARY check --repo acme/widget --hash $H --pr 7
            "$FORGED | xargs -0 python3 $LIBRARY check --claim" \
            "find $WORK/forged -name post.md -exec python3 $LIBRARY used --repo acme/widget --hash $H --pr 7 \\;" \
            "nice -n 5 caffeinate -i python3 $LIBRARY used --repo acme/widget --hash $H --pr 7" \
+           "sudo -u root python3 $LIBRARY used --repo acme/widget --hash $H --pr 7" \
+           "env -u ANNOUNCE_APPROVALS_DIR python3 $LIBRARY used --repo acme/widget --hash $H --pr 7" \
+           "echo acme/widget | xargs -I {} python3 $LIBRARY used --repo {} --hash $H --pr 7" \
+           "env -u ANNOUNCE_APPROVALS_DIR $LIBRARY used --repo acme/widget --hash $H --pr 7" \
+           "nohup $LIBRARY used --repo acme/widget --hash $H --pr 7" \
+           "python3 -BX utf8 $LIBRARY used --repo acme/widget --hash $H --pr 7" \
+           "python3 -Ic 'import runpy, sys; sys.dont_write_bytecode = True; runpy.run_path(\"$LIBRARY\", run_name=\"__main__\")'" \
+           "python3 -B -c\"import runpy; runpy.run_path('$LIBRARY', run_name='__main__')\"" \
+           "python3 -Bm runpy $LIBRARY used" \
+           "python3 -B --check-hash-based-pycs default $LIBRARY used --repo acme/widget --hash $H --pr 7" \
+           "echo python3 $LIBRARY used --repo acme/widget --hash $H --pr 7 | sudo -u root sh" \
            "bash -c 'python3 $LIBRARY used --repo acme/widget --hash $H --pr 7'" \
            "chmod +x $LIBRARY && $LIBRARY used --repo acme/widget --hash $H --pr 7" \
            "python3 $LIBRARY \"\$VERB\" --repo acme/widget --hash $H" \
@@ -430,6 +441,8 @@ check "R2 a program on standard input that names the library is refused, saying 
 # running it.
 for cmd in "python3 ~/.claude/hooks/lib/announce-approval.py list" \
            "python3 -B $LIBRARY check --repo acme/widget --hash $H" \
+           "sudo -u root python3 -BX utf8 $LIBRARY list" \
+           "python3 -Bm py_compile $LIBRARY" \
            "python3 $LIBRARY check --repo acme/widget --hash $H --pr 7 | python3 -m json.tool" \
            "git add payload/hooks/lib/announce-approval.py" \
            "git diff HEAD -- payload/hooks/lib/announce-approval.py" \

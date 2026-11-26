@@ -460,11 +460,12 @@ def judge_record(command, cwd):
 
 LIBRARY_FILE = "announce-approval.py"
 PYTHON = re.compile(r"(?:python|pypy)[0-9.]*")
-# Programs that run the command given after them, so python behind one is still python being run.
+# Programs whose whole job is to run the command given after them, so the library's file behind one,
+# with no interpreter named, is the file being run.
 RUNNERS = frozenset(("env", "xargs", "time", "nohup", "command", "exec", "builtin", "sudo", "nice", "caffeinate",
-                     "timeout", "gtimeout", "stdbuf", "arch", "rtk", "proxy", "uv", "run"))
-# python's own options that take the next word as their value.
-PYTHON_VALUE_FLAGS = ("-X", "-W")
+                     "timeout", "gtimeout", "stdbuf", "arch", "rtk", "uv"))
+# python's one letter options that take a value: the rest of their word, or else the next word.
+PYTHON_VALUE_LETTERS = "cmXW"
 # Modules that read a file handed to `python -m` and run none of it.
 COMPILES = ("py_compile", "compileall")
 
@@ -485,45 +486,73 @@ def _library_verb(args):
     return None
 
 
-def _runs_library(text, unread, sw):
-    """None, or how one command naming the library's file runs it in a form that may write."""
+def _python_runs(rest):
+    """None when the python these words follow does not run the library, else how it does in a form
+    that may write. python's options are read as python reads them: one letter options may share a
+    word (-Bc), and -c, -m, -X and -W take the rest of their word as their value (-c"...") or else
+    the next word, so a program or a module is found however it is spelled."""
+    i = 0
+    while i < len(rest):
+        word = rest[i]
+        if not word.startswith("-") or word == "-":
+            # The script python runs, or its standard input. Another script handed the file's name
+            # is not this library run.
+            if os.path.basename(word).lower() == LIBRARY_FILE:
+                return _library_verb(rest[i + 1:])
+            return None
+        # python's one long option that takes the next word as its value.
+        step = 2 if word == "--check-hash-based-pycs" else 1
+        if not word.startswith("--"):
+            for k, letter in enumerate(word[1:], 1):
+                if letter not in PYTHON_VALUE_LETTERS:
+                    continue
+                glued = word[k + 1:]
+                value = glued or (rest[i + 1] if i + 1 < len(rest) else "")
+                after = rest[i + 1:] if glued else rest[i + 2:]
+                named = LIBRARY_FILE in value.lower() or any(LIBRARY_FILE in w.lower() for w in after)
+                if letter == "c":
+                    if named:
+                        return "hands python a program that names it, and what that program does cannot be read here"
+                    return None
+                if letter == "m":
+                    if value in COMPILES or not named:
+                        return None
+                    return "runs it through python -m " + value + ", and what that does with it cannot be read here"
+                step = 1 if glued else 2
+                break
+        i += step
+    return None
+
+
+def _runs_library(text, unread, sw, only_reads):
+    """None, or how one command naming the library's file runs it in a form that may write.
+
+    Every python among the command's words is read, wherever it stands: what a program in front of
+    it takes as its own options and their values (sudo -u root, env -u NAME, xargs -I {}) cannot be
+    listed, so nothing is asked of the words before it. The one exception is a command known only to
+    read (grep -n python3 <the file>), which names python and runs nothing."""
     if unread:
         return "names it inside a wrapper whose string could not be read (" + unread + ")"
     try:
         words = sw.command_words(sw.command_rest(text)[0])
     except Exception:  # noqa: BLE001  a command nobody can read is not one known only to read
         return "names it and could not be read as words"
-    names = [os.path.basename(w).lower() == LIBRARY_FILE for w in words]
-    if names and names[0]:
-        return _library_verb(words[1:])
-    at = next((i for i, w in enumerate(words) if PYTHON.fullmatch(os.path.basename(w).lower())), None)
-    # python is being run only when everything before it is a program that runs what follows it, an
-    # option, an assignment or a number: `grep -n python3 <the file>` runs nothing.
-    if at is None or not all(os.path.basename(w) in RUNNERS or w.startswith("-") or "=" in w or w.isdigit()
-                             for w in words[:at]):
+    if not words:
         return None
-    rest, i = words[at + 1:], 0
-    while i < len(rest):
-        word = rest[i]
-        if word == "-c":
-            if any(LIBRARY_FILE in w.lower() for w in rest[i + 1:]):
-                return "hands python a program that names it, and what that program does cannot be read here"
+    program = os.path.basename(words[0]).lower()
+    pythons = [i for i, w in enumerate(words) if PYTHON.fullmatch(os.path.basename(w).lower())]
+    if pythons:
+        if pythons[0] != 0 and program not in RUNNERS and only_reads(text):
             return None
-        if word == "-m":
-            module = rest[i + 1] if i + 1 < len(rest) else ""
-            if module in COMPILES or not any(LIBRARY_FILE in w.lower() for w in rest[i + 1:]):
-                return None
-            return "runs it through python -m " + module + ", and what that does with it cannot be read here"
-        if word in PYTHON_VALUE_FLAGS:
-            i += 2
-            continue
-        if word.startswith("-") and word != "-":
-            i += 1
-            continue
-        # The script python runs. Another script handed the file's name is not this library run.
-        if os.path.basename(word).lower() == LIBRARY_FILE:
-            return _library_verb(rest[i + 1:])
+        for at in pythons:
+            held = _python_runs(words[at + 1:])
+            if held:
+                return held
         return None
+    # No interpreter: the file run by its own path, first or behind a program that runs what follows.
+    at = next((i for i, w in enumerate(words) if os.path.basename(w).lower() == LIBRARY_FILE), None)
+    if at is not None and (at == 0 or program in RUNNERS):
+        return _library_verb(words[at + 1:])
     return None
 
 
@@ -535,11 +564,16 @@ def judge_library(command, cwd):
         return None
     ap = _load("db_apply_approval_shared", "lib", "db-apply-approval.py")
     sw = _load("shell_words_shared", "lib", "shell-words.py")
+    calls = _load("db_write_calls_shared", "lib", "db-write-calls.py")
     here = cwd if isinstance(cwd, str) and cwd.startswith("/") else ""
+
+    def only_reads(text):
+        return ap._only_reads(text, sw, calls.strip_redirects, ap.GIT_LIST_READS, ("rg",))
+
     rest = command
     for _, text, _, why, _ in sw.every_command(command, here):
         if LIBRARY_FILE in text.lower():
-            held = _runs_library(text, why, sw)
+            held = _runs_library(text, why, sw, only_reads)
             if held:
                 return "the command `" + ap._shown(text) + "` " + held
             rest = rest.replace(text, "", 1)

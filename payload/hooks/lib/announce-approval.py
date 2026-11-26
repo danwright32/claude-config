@@ -910,9 +910,10 @@ def main(argv):
         entries, why = read_record()
         json.dump({"record": record_path(), "entries": entries, "why": why or ""}, sys.stdout)
         return 0
-    sys.stderr.write("Usage: announce-approval.py check --repo <owner/name> --hash <sha256> [--pr <number>] [--claim], with the hook payload on "
-                     "standard input | used --repo <owner/name> --hash <sha256> --pr <number> [--closes <json>] "
-                     "[--unread <why>] | list\n")
+    sys.stderr.write("Usage: announce-approval.py list | check --repo <owner/name> --hash <sha256> [--pr <number>], which reads "
+                     "the record only | check --repo <owner/name> --hash <sha256> --pr <number> --claim, with the hook payload "
+                     "on standard input | used --repo <owner/name> --hash <sha256> --pr <number> [--closes <json>] "
+                     "[--unread <why>]\n")
     return 2
 
 

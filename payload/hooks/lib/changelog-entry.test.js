@@ -690,7 +690,8 @@ check(c.json && c.json.blankRun === 300 && c.json.blankRunAt === 5,
   '#3703 a run of 300 blank lines before more wording was not reported with its length and the line it starts at: ' + JSON.stringify(c));
 c = cliIn(['announcement-hash'], '@here\n\nOne line.\n\n\nTwo.\n');
 check(c.json && c.json.blankRun === 2 && c.json.blankRunAt === 4, '#3703 the longest run was not the one reported: ' + JSON.stringify(c));
-// Blank as the hash reads it: a line of spaces, tabs or a no-break space, and each line ending.
+// Blank as the hash reads it: a line holding a space, a tab or a no-break space (the third blank
+// line below, written as its escape, u00a0), each ended as GitHub ends a line.
 c = cliIn(['announcement-hash'], '@here\r\n \r\n\t\r\n \r\nOne line.\r\n');
 check(c.json && c.json.blankRun === 3 && c.json.blankRunAt === 2, '#3703 lines holding only white space, ended as GitHub ends them, were not counted as blank: ' + JSON.stringify(c));
 // Blank lines after the last line of wording hide nothing, and neither does wording with none.
