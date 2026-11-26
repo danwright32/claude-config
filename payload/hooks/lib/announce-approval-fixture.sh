@@ -5,10 +5,11 @@
 #
 # Sourced by test suites only. No hook uses it.
 #
-# Three suites need the same session: the library's own, the merge gate's and the label hook's. Each
-# writes it as Claude Code writes one (the call's input on the assistant entry holding its tool_use,
-# its outcome on the user entry carrying its tool_result, and for a picker Dan's choice in
-# toolUseResult.answers), so the shape is built here once and not once per suite (L613).
+# Five suites need the same session: the library's own, the merge gate's, the label hook's, the
+# answer note hook's and the merge helper's. Each writes it as Claude Code writes one (the call's
+# input on the assistant entry holding its tool_use, its outcome on the user entry carrying its
+# tool_result, and for a picker Dan's choice in toolUseResult.answers and any words he typed beside
+# it in toolUseResult.annotations), so the shape is built here once and not once per suite (L613).
 #
 #   aaf_new <transcript>             a session's transcript holding nothing yet (session s1)
 #   aaf_talk <transcript> <action> ...   one more thing the session did:
