@@ -77,6 +77,26 @@ const LONG: Partial<Record<Kind, { inline?: string[]; file?: string[]; value?: s
   sed: { inline: ['--expression'], file: ['--file'], value: ['--line-length'] },
   shell: { value: ['--rcfile', '--init-file'] },
 }
+// zsh's own options (#3621), which the table above read as bash's: the word after `--emulate`
+// (`zsh --emulate sh -c '...'`) was taken for a script file zsh runs, so the text after -c was never
+// read, and the word after -O was skipped as a value it does not take, so `zsh -O -c '...'` named
+// its text as a script file and `zsh -O run.sh` named no script. Measured 2026-11-26 on the personal
+// MacBook, zsh 5.9, one run of each shape (the option, then two script files that each print their
+// own name, so the first prints when the option took nothing and the second when it took a word):
+// - `--emulate` takes the next word, whatever it is. zsh wants it before every other option and,
+//   after one, refuses and runs nothing; it is read the same there, which reads commands that never
+//   run and hides none. `--emulate=sh` is refused too, and is read as taking nothing.
+// - `-o` and `+o` take a value, the rest of the word or the next word. No other letter does (-O and
+//   +O take one in bash 3.2 and sh), and no other long option: each names an option of its own.
+//   bash's --rcfile and --init-file stay read as they were: zsh refuses both and runs nothing.
+const ZSH: { grammar: Grammar; long: { value: string[] } } = {
+  grammar: { ...GRAMMAR.shell, value: 'o' },
+  long: { value: [...(LONG.shell?.value ?? []), '--emulate'] },
+}
+// Whether zsh, told to emulate `mode`, splits an unquoted value into words (#3621). Measured
+// 2026-11-26 on zsh 5.9 with a text that only prints: emulating sh or ksh it does, emulating csh
+// or zsh it does not. Any other word is read as splitting, the reading that marks more.
+const emulationSplits = (mode: string | undefined): boolean => mode !== 'zsh' && mode !== 'csh'
 
 // A redirect as the reader splits it, its target in the same word or the next: output, input, a
 // heredoc (its delimiter next when spaced), a here-string. What feeds standard input is read by the
@@ -87,16 +107,20 @@ const INPUT = /^\d*(?:<<<|<<-?|<)(.*)$/
 /**
  * What a command runs as its program or script file, by its language's options, given what its
  * standard input holds. `module`, for python -m (#1682): the module's name and the index in `words`
- * where its own arguments start.
+ * where its own arguments start. `splits`, for zsh told to emulate a shell that splits an unquoted
+ * value into words (#3621, `zsh --emulate sh`): its script is read as that shell splits them.
  */
-export type Reading = { program?: Program; script?: Script; module?: { name: string; args: number } }
+export type Reading = { program?: Program; script?: Script; module?: { name: string; args: number }; splits?: true }
 export const readProgram = (words: readonly string[], stdin: Stdin | undefined): Reading => {
   const kind = kindOf(words[0])
   if (!kind) return {}
   // deno runs inline code as `deno eval <code>`, and a script with `deno run`.
   if (kind === 'deno') return words[1] === 'eval' ? { program: { text: words[2] ?? '' } } : {}
-  const g = GRAMMAR[kind]
-  const long = LONG[kind] ?? {}
+  // A shell's options are that shell's own (#3621): zsh's are not bash's.
+  const zsh = kind === 'shell' && base(words[0] ?? '') === 'zsh'
+  const g = zsh ? ZSH.grammar : GRAMMAR[kind]
+  const long: { inline?: string[]; file?: string[]; value?: string[] } = zsh ? ZSH.long : LONG[kind] ?? {}
+  let emulated = false
   // python and a shell run their first inline program, the words after it its arguments; every
   // other language runs every one given, so each is judged.
   const firstOnly = kind === 'python' || kind === 'shell'
@@ -142,7 +166,11 @@ export const readProgram = (words: readonly string[], stdin: Stdin | undefined):
         inline.push(code)
       } else if (long.file?.includes(name)) {
         programFiles.push(attached ?? words[++i] ?? '')
-      } else if (long.value?.includes(name) && attached === undefined) i++
+      } else if (long.value?.includes(name) && attached === undefined) {
+        // The shell zsh is told to emulate decides how its script splits words.
+        if (zsh && name === '--emulate' && emulationSplits(words[i + 1])) emulated = true
+        i++
+      }
       continue
     }
     if (a.startsWith('-') || (kind === 'shell' && a.startsWith('+'))) {
@@ -197,12 +225,13 @@ export const readProgram = (words: readonly string[], stdin: Stdin | undefined):
   if (programFiles.length) return { program: { unreadable: 'its program is in a file' }, script: { files: programFiles } }
   // Inline code is the program; the words after it are its data files.
   if (inline.length) return { program: { text: inline.join('\n') } }
-  if (kind === 'shell' && shellC) return operand !== undefined ? { program: { text: operand } } : {}
+  const splits = emulated ? { splits: true as const } : {}
+  if (kind === 'shell' && shellC) return operand !== undefined ? { program: { text: operand }, ...splits } : {}
   if (programWord) return operand !== undefined ? { program: { text: operand } } : {}
   if (operand !== undefined && operand !== '-' && !fromStdin) return { script: { files: [operand] } }
   // What standard input holds is the program: a heredoc's body, text, a file, or what cannot be read.
   if (!stdin) return {}
-  if ('text' in stdin) return { program: { text: stdin.text, stdin: true } }
+  if ('text' in stdin) return { program: { text: stdin.text, stdin: true }, ...splits }
   if ('files' in stdin) return { script: { files: stdin.files, stdin: true } }
   return { program: { unreadable: stdin.unreadable } }
 }
