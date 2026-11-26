@@ -1469,7 +1469,7 @@ let POSTED = null;
 // is it live mod's command line reaches it too.
 const COMPARE = path.join(SKILL, '..', '..', 'hooks', 'lib', 'announce-compare.js');
 try { POSTED = require(COMPARE); } catch (e) { check(false, 'the found posted comparison loads from the hooks library, hooks/lib/announce-compare.js', e.message); }
-check(!fs.existsSync(path.join(SKILL, 'posted.js')), 'a second copy of the comparison is back beside gather.js, as posted.js');
+check(!fs.existsSync(path.join(SKILL, 'posted.js')), 'no second copy of the comparison exists beside gather.js as posted.js');
 const DRAFTED = '@here\n**Handing a call back**\n\nYou can now hand a call back to the queue & pick a reason.\n\n'
   + HY + ' Press Hand back\n' + HY + ' Read [the guide](https://example.com/guide?a=1)\n\n1. Open a call\n2. Press it';
 const READ_BACK = 'Messages in channel:\n[2026-10-02 09:14:03 EDT] Dan: Morning all\n'
@@ -1638,6 +1638,29 @@ function draftCase(claims) {
   fs.writeFileSync(c.files(70).answer, NOT_KEPT_ANSWER);
   const bad2 = commit();
   check(bad2.code !== 0 && /#70/.test(bad2.err) && fs.readFileSync(c.ws.state, 'utf8') === before, 'and for an answer holding no draft_id', bad2.all);
+
+  // A draft call the session said failed: the record step judges it with that too, though it is not told it again.
+  fs.writeFileSync(c.files(70).answer, KEPT_ANSWER);
+  const failedKept = c.ask('drafted', 70, ['--tool-error', 'yes']);
+  check(failedKept.code === 0 && failedKept.json && failedKept.json.state === 'error' && failedKept.json.outcome === null,
+    'a tool call that failed is not recorded as drafted, though its answer text holds a draft_id', failedKept.all);
+  const bad3 = commit();
+  check(bad3.code !== 0 && /#70/.test(bad3.err) && /not recorded as drafted/.test(bad3.err) && fs.readFileSync(c.ws.state, 'utf8') === before,
+    'commit-state refuses drafted-now for a draft call that drafted was told failed, and leaves the state byte for byte as it was', bad3.all);
+  const reJudged = c.ask('drafted', 70);
+  check(reJudged.code === 0 && reJudged.json && reJudged.json.state === 'saved', 'the same answer judged again as a call that did not fail is saved', reJudged.all);
+  c.ask('drafted', 70, ['--tool-error', 'yes']);
+
+  // Asking again whether it may be drafted starts the draft over: nothing of the earlier attempt is left to judge.
+  const again = c.ask('draftable', 70);
+  check(again.code === 0 && again.json && again.json.draftable === true && !fs.existsSync(c.files(70).answer),
+    'asking again whether it may be drafted removes the earlier answer, so a draft_id from an earlier attempt is never judged', again.all + ' answer file there: ' + fs.existsSync(c.files(70).answer));
+  const stale = c.ask('drafted', 70);
+  check(stale.code !== 0 && /answer/.test(stale.err), 'and with no answer written for this attempt, nothing is judged', stale.all);
+  const bad4 = run(GATHER, ['commit-state', '--gathered', c.ws.out, '--state', c.ws.state, '--draft', c.ws.draft, '--repo', PET, '--listed', '70,72', '--headings', 'CALLS', '--outcomes', others + ',70=drafted-now', '--drafts', c.drafts], c.ws, c.extra);
+  check(bad4.code !== 0 && fs.readFileSync(c.ws.state, 'utf8') === before, 'nor is it recorded as drafted', bad4.all);
+
+  // The new attempt's answer is judged as its own: the earlier attempt's failure does not follow it.
   fs.writeFileSync(c.files(70).answer, KEPT_ANSWER);
   const good = commit();
   const st = committed(c.ws)[PET];

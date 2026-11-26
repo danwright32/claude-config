@@ -811,7 +811,7 @@ files in the session scratchpad.
    Leave out `--listed` for a first appearance and for a repo the post listed nothing from, and
    `--outcomes` where no announcement asks for one (`needsOutcome`). An announcement this run
    drafted on Dan's "Draft it now" is passed as `<n>=drafted-now`, with `--drafts <the folder
-   holding its draft's two files>` (section 11): the commit judges that draft again and refuses
+   holding its draft's files>` (section 11): the commit judges that draft again and refuses
    the run unless Slack kept it. It runs under the no network wrapper with every path written out
    in full, never with a tilde (section 2).
 
@@ -939,7 +939,9 @@ When Dan picks "Draft it now":
    __CLAUDE_HOME__/hooks/no-network-run.sh node __CLAUDE_HOME__/skills/pennie-dev-update/gather.js drafted --gathered <scratchpad>/gathered.json --repo <owner>/<name> --number <n> --drafts <scratchpad>/announce-drafts
    ```
 
-   Add `--tool-error yes` when the tool call itself failed. A draft counts only when Slack's answer
+   Add `--tool-error yes` when the tool call itself failed: the state commit then judges that
+   answer as a failed call too, without being told again. Running `draftable` again for the same
+   announcement removes the earlier answer, so write the answer after it. A draft counts only when Slack's answer
    holds a `draft_id`: with a draft already waiting in the channel the tool answers "Draft created"
    with none and keeps nothing (measured 2026-11-25, claude-config#3664).
 3. `state` `saved`: tell Dan it is a draft waiting in that channel for him to send and that

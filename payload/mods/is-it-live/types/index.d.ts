@@ -108,7 +108,10 @@ declare module 'claude-code' {
  * gate's own answer (hooks/lib/changelog-entry.js, `announcement`): the post exactly as written,
  * `normalized` the one form it is compared by, and `hash` the one hash of it. `why` is there when
  * that answer was `unknown`: the change is labelled as one to announce and something could not be
- * told on this Mac, so it is kept as owed with the reason and cannot be drafted from here.
+ * told on this Mac, so it is kept as owed with the reason and cannot be drafted from here. It is
+ * also there when the wording kept is not known to be the wording the pull request merged on
+ * (changed after Dan approved it, or his approval could not be read): the entry then cannot be
+ * drafted until a later card reads the pull request again.
  */
 export type IsItLiveAnnouncement = {
   repo: string

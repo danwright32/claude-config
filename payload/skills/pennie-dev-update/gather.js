@@ -785,7 +785,8 @@ function cmdGather(args) {
 // Dan answered or as the channel read showed. Refused, naming each one, while an announcement that
 // is out has no outcome (R6), and for any value or number that is not one of this run's.
 // 73=drafted-now is "Draft it now": recorded as drafted only when the draft's own files, in the
-// folder --drafts names, are judged saved here, again, so it never rests on the session's word.
+// folder --drafts names, are judged saved here, again, so it never rests on the session's word that
+// it was. A call `drafted` was told failed is judged as failed here too, from the file it left.
 function announcementOutcomes(repo, given, drafts) {
   const outcomes = new Map();
   const pairs = given ? given.split(',').map(function (s) { return s.trim(); }).filter(Boolean) : [];
@@ -807,7 +808,7 @@ function announcementOutcomes(repo, given, drafts) {
     if (outcomes.has(n)) refuse('--outcomes gives #' + n + ' two outcomes.');
     if (m[2] !== DRAFTED_NOW) { outcomes.set(n, m[2]); return; }
     if (!drafts) refuse('--outcomes gives #' + n + ' ' + DRAFTED_NOW + ', which needs --drafts <the folder holding its draft\'s files>, so the draft can be judged. Nothing was written.');
-    const v = draftedVerdict(repo, byNumber.get(n), drafts, false);
+    const v = draftedVerdict(repo, byNumber.get(n), drafts);
     if (v.state !== 'saved') refuse('#' + n + ' is not recorded as drafted: ' + v.said + ' Nothing was written.');
     outcomes.set(n, 'drafted');
   });
@@ -987,11 +988,23 @@ function cmdPosted(args) {
 // and whether the call left a draft, which is the hooks' one judgement of Slack's answer (judgeDraft
 // in the same file: a draft counts only when the answer holds a draft_id).
 //
-// The two files of one announcement's draft, in the folder --drafts names: its wording as gathered,
-// written by `draftable` for the session to pass on unretyped, and Slack's answer to the draft
-// call, written by the session exactly as the tool returned it.
+// The files of one announcement's draft, in the folder --drafts names: its wording as gathered,
+// written by `draftable` for the session to pass on unretyped; Slack's answer to the draft call,
+// written by the session exactly as the tool returned it; and, only when `drafted` was told the call
+// failed, a file saying so, so the state commit judges the answer with what `drafted` was told.
 function draftFiles(dir, n) {
-  return { message: path.join(dir, 'announce-' + n + '-message.txt'), answer: path.join(dir, 'announce-' + n + '-answer.txt') };
+  return {
+    message: path.join(dir, 'announce-' + n + '-message.txt'),
+    answer: path.join(dir, 'announce-' + n + '-answer.txt'),
+    failed: path.join(dir, 'announce-' + n + '-call-failed.txt'),
+  };
+}
+
+// Removes one of a draft's files, where it is there. A file that is there and cannot be removed is
+// refused, since what it says would be judged as this attempt's.
+function removeDraftFile(file, n) {
+  try { fs.rmSync(file, { force: true }); }
+  catch (e) { refuse(file + ', left by an earlier attempt to draft #' + n + ', could not be removed (' + e.code + '), so it would be judged as this attempt\'s. Nothing was written.'); }
 }
 
 // Whether an announcement may be drafted from here now: `said` is why not, each cause in its own
@@ -1013,8 +1026,9 @@ function draftableNow(repo, ann) {
 }
 
 // Before the picker: may "Draft it now" be offered for this announcement? Where it may, its wording
-// is written to its message file, exactly as gathered. Where it may not, nothing is written, so no
-// session holds a file of wording that must not be drafted.
+// is written to its message file, exactly as gathered, and whatever an earlier attempt left of
+// Slack's answer is removed first, so the only answer judged is one written after this. Where it may
+// not, nothing is written, so no session holds a file of wording that must not be drafted.
 function cmdDraftable(args) {
   if (!args.gathered || !args.repo || !args.number || !args.drafts) {
     refuse('Usage: gather.js draftable --gathered P --repo owner/name --number N --drafts DIR (a folder in the scratchpad for the draft\'s two files).');
@@ -1026,6 +1040,8 @@ function cmdDraftable(args) {
   if (verdict.draftable) {
     try {
       fs.mkdirSync(args.drafts, { recursive: true });
+      removeDraftFile(files.answer, one.n);
+      removeDraftFile(files.failed, one.n);
       fs.writeFileSync(files.message, one.ann.text);
     } catch (e) { refuse('The wording of #' + one.n + ' could not be written to ' + files.message + ' (' + e.code + '), so there is nothing to draft from.'); }
     out.messageFile = files.message;
@@ -1041,8 +1057,9 @@ function cmdDraftable(args) {
 // After the draft call: did it leave a draft of the approved wording? `state` is `saved` (and only
 // then is `outcome` drafted), `differs`, `not-kept` or `error` as judgeDraft tells them apart, or
 // `not-draftable` when the wording may not be drafted at all. Used by `drafted`, which says it, and
-// by commit-state, which records drafted-now on nothing less than `saved`.
-function draftedVerdict(repo, ann, dir, toolError) {
+// by commit-state, which records drafted-now on nothing less than `saved`. The call is judged as one
+// that failed when the file `drafted` leaves for that is there, so both judge it alike.
+function draftedVerdict(repo, ann, dir) {
   const tag = '#' + ann.number;
   const again = ' It is not recorded as drafted: ask the picker again without "Draft it now".';
   const may = draftableNow(repo, ann);
@@ -1056,7 +1073,7 @@ function draftedVerdict(repo, ann, dir, toolError) {
   const answer = read(files.answer, 'The draft tool\'s answer for ' + tag);
   if (!answer.trim()) refuse('The draft tool\'s answer at ' + files.answer + ' is empty. An empty answer is not a draft that was not kept: write down what the tool returned.');
   let j;
-  try { j = require(COMPARE_PATH).judgeDraft({ text: ann.text, message: message, answer: { text: answer, isError: toolError === true } }); }
+  try { j = require(COMPARE_PATH).judgeDraft({ text: ann.text, message: message, answer: { text: answer, isError: fs.existsSync(files.failed) } }); }
   catch (e) { refuse(tag + '\'s draft could not be judged: ' + e.message + '.'); }
   const where = 'channel ' + ann.channel;
   if (j.state === 'saved') {
@@ -1079,7 +1096,16 @@ function cmdDrafted(args) {
     refuse('Usage: gather.js drafted --gathered P --repo owner/name --number N --drafts DIR [--tool-error yes] (the folder gather.js draftable wrote the wording to, now also holding the tool\'s answer).');
   }
   const one = gatheredAnnouncement(args);
-  const v = draftedVerdict(one.repo, one.ann, args.drafts, args['tool-error'] === 'yes');
+  // What the session says of the call is kept beside its answer, written or removed on every run, so
+  // the state commit, which is told nothing of it, judges this answer as it is judged here.
+  const failed = draftFiles(args.drafts, one.n).failed;
+  if (args['tool-error'] === 'yes') {
+    try { fs.writeFileSync(failed, 'gather.js drafted was told the draft call for #' + one.n + ' failed.\n'); }
+    catch (e) { refuse('That the draft call for #' + one.n + ' failed could not be written to ' + failed + ' (' + e.code + '), so the state commit would judge its answer as one that did not fail. Nothing was judged.'); }
+  } else {
+    removeDraftFile(failed, one.n);
+  }
+  const v = draftedVerdict(one.repo, one.ann, args.drafts);
   process.stdout.write(JSON.stringify({ repo: one.repo.repo, number: one.n, state: v.state, outcome: v.outcome, draftId: v.draftId, said: v.said }, null, 2) + '\n');
   return 0;
 }

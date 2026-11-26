@@ -13,10 +13,12 @@ import type { IsItLiveAnnounceDone, IsItLiveAnnouncement } from '../types/index.
 //   announce-out:<owner/name>#<pr>   a card said its change is out, so it can be drafted now
 //   announce-done:<owner/name>#<pr>  it was settled (IsItLiveAnnounceDone), never taken back
 // So two sessions writing at once, or one writing twice, leave the same keys: an entry written again
-// is the same entry, and nothing that writes what is owed can undo that it was settled. The one
-// write that follows a read is the entry's own (announcing.ts, noteAnnouncement): it checks what is
-// kept, then writes, and an entry another session wrote in the instant between the two can be
-// replaced by one with a why, which the next card asks about again and mends.
+// is the same entry, and nothing that writes what is owed can undo that it was settled. Two
+// writes follow a read, both of the entry itself (announcing.ts): noteAnnouncement checks what is
+// kept, then writes, and keepUnapproved writes the entry it was handed back with a why. An entry
+// another session wrote between the read and the write can be replaced by one with a why, which the
+// next card asks about again and mends. For noteAnnouncement that is an instant; for keepUnapproved
+// it is as long as the check of the wording took, up to 30 seconds, since that check runs between.
 //
 // Which changes owe one, where it goes and its exact wording are the merge gate's answer
 // (hooks/lib/changelog-entry.js, `announcement <owner/name>`), never worked out here. Pure:
