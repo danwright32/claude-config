@@ -341,8 +341,9 @@ description, and the description and homepage `gh repo create` or `gh repo edit`
 `gh gist edit` on a public gist is judged on its description and the files it adds or takes new
 text from (an editor's text and standard input refused), `gh repo edit --visibility public` is
 refused for a repository not yet public that no work owner owns, since every file and issue in it
-becomes public unread, and a body or notes file named inside clustered short flags (`-dF body.md`)
-is read. Since #2423 the repository named inside clustered short flags (`-dR o/x`) is read too, as
+becomes public unread (since #3582 the refusal names the command to run first, see "Text posted
+while a repository was private" below), and a body or notes file named inside clustered short
+flags (`-dF body.md`) is read. Since #2423 the repository named inside clustered short flags (`-dR o/x`) is read too, as
 gh reads the cluster, and every repository named is judged. Since #2430 release notes read from
 standard input (`--notes-file -`) are judged only when one heredoc, here-string or `<` file sits
 on gh itself with nothing piped in, and refused otherwise (#2442); since #2443 a pull request's,
@@ -352,6 +353,49 @@ redirects standard input more than once (`cat <<'EOF' < other.md > notes.md`) is
 shell feeds that stage only the last; the issue field gate still reads such a file from the
 command, as before. Still not covered: gh run by
 its absolute path, a script that rewrites PATH, and curl or an API library.
+
+**Text posted while a repository was private (#3582).** The publish gate judges text posted to a
+public repository and lets a private one through without reading its lists, so nothing judges text
+posted while a repository is private, and it is still unjudged when the repository turns public.
+On 2026-11-24 this repository was private for some hours and 8 lines naming a work organisation or
+repository were posted to it meanwhile. One command rechecks such a window, and the gate's refusal
+of `gh repo edit --visibility public` names it:
+
+```bash
+python3 ~/.claude/hooks/lib/posted-text-scan.py owner/name --since 2026-11-24T13:30:00-05:00
+```
+
+- **What it reads**, through `gh api` reads only (it posts nothing, edits nothing and writes no
+  file): the title and body of every issue and pull request updated since that time; issue, review
+  and commit comments; the review bodies and commit messages of each of those pull requests, which
+  reaches a commit whose branch was deleted after its merge; commit messages on every branch, and
+  each branch's name; every release's title, tag and notes; the repository's description, homepage
+  and topics; and the earlier revisions and titles GitHub still holds of each body, which is where
+  a name rewritten out of an issue is still readable.
+- **How it judges**: with `lib/work-names.py`'s own `work_repo_names` and `scan_text`, the lists and
+  the line scan the publish gate uses. A name taken from the lists at run time is planted in a made
+  up text first, beside a text with no name; unless the first is reported at its line and the second
+  is not, the run stops and says the scan cannot be trusted, before anything is read.
+- **What it prints**: each line found as `label:line: kind of name` (`issue #12 body:3: ...`), never
+  the name, and a branch by its tip commit, never by its name. Then how many are in text as it
+  stands, which is rewritten, and how many are in an earlier revision, which is deleted by hand on
+  GitHub from the edited menu above the text, since no API deletes a revision.
+- **What it does not read**, printed at the end of every run: a revision deleted from an edit
+  history (counted, its text is gone), earlier wording of a release or of the description, a commit
+  no branch or pull request reaches, a commit dated before the window and pushed inside it (GitHub
+  does not say when a commit was pushed, so give an earlier `--since`), and files, discussions, the
+  wiki, labels, milestones, projects, tags and gists.
+- **A failure is never a short clean result**: a failed call, a page that is not the list asked for,
+  an entry missing the field its text is in, a history GitHub cut short and a spent `--budget`
+  (100 seconds by default, a setting, not measured) each exit 2. Exit 0 is none found in what was read, 1 is names found.
+- `--since` needs its time zone (`Z`, or an offset such as `-05:00`): a time read as UTC by
+  mistake moves the window by hours. Measured on this repository on 2026-11-24: a nine hour window
+  was 330 texts in 95 calls and 18 seconds, and a week was 3,106 texts in 531 calls and 204 seconds,
+  so a window of more than a day or two needs a larger `--budget` and a command time limit to match.
+- A session can run it: it is handed no file, so the Slack drafts gate has nothing gathered to read
+  (the scan written by hand that night handed a file of gathered text to a script that can run
+  programs, and was refused over a Slack endpoint one text named). `hooks/test-posted-text-scan.sh`
+  holds all of this, the two gates' verdicts on the command included, against a stand in `gh`.
 
 Plugin-managed skills are excluded so plugin updates don't cause churn, and so is
 `skills/synced/`, where the Claude app downloads each account's built in skills, and any `.trash`
@@ -1890,11 +1934,19 @@ when all of these hold, each failure said in its own words:
 - between that open and his answer the session did not write the file, run a command naming it, or
   send an agent a prompt naming it, so what he had in front of him is what he answered about;
 - the file has not changed since he answered (its status change time is before his answer);
-- no later picker about the same file ended any other way.
+- no later picker about the same file ended any other way;
+- the file holds no run of more than two blank lines with wording below it (#3703). Blank lines are
+  dropped before the hash, so a file holding the post, a long run of blank lines and then more text
+  hashes the same as those lines written together, while the window it was opened in showed him the
+  post and then white space. The refusal says how long the run is, the line it starts at, and to
+  leave no more than two in a row, then open the file and ask him again. Blank lines after the last
+  line of wording hide nothing and pass. The run is counted by `hooks/lib/changelog-entry.js`
+  (`blankRunBeforeWording`, in the answer of its `announcement-hash` command), by the same reading
+  of a blank line the hash drops them by, and an answer without the count approves nothing.
 
 What is hashed is the FILE as it stands, never a hash the session supplies, by
 `hooks/lib/changelog-entry.js`'s `announcementHash`: the sha256 of the one normalised form (line
-endings, spaces at the ends of lines, outer blank lines) every comparison uses, so the file on this
+endings, spaces at the ends of lines, every blank line) every comparison uses, so the file on this
 Mac and the block GitHub returns are hashed by one function. A hook run that reads his Approve
 writes `{"kind": "approved", "repo", "hash", "at", "session", "picker"}` to
 `~/.claude/state/announce-approvals/record.jsonl`, on this Mac only and never synced, so wording he
@@ -1925,7 +1977,10 @@ the wording, and sleep mode can answer one with Dan asleep.
   he is not asked again. After the claim it adds a `used` line naming, for each issue the pull
   request closes, its milestone (read in one GraphQL call; issues that cannot be read are recorded
   as unread with why, and block nothing). These lines say the gate let the merge go ahead, never
-  that GitHub merged it, and a `used` line approves nothing by itself.
+  that GitHub merged it, and a `used` line approves nothing by itself. A pull request the
+  dependency bot opened is let through unjudged only once its labels have been read and it does not
+  carry `changelog/announce` (#3703): one that carries the label is judged like any other, and one
+  whose labels could not be read is refused like any other the judge could not read.
 - `announce-label-ask.sh`, before the label goes on. It reads every Bash call naming the label:
   `gh pr create --label`, `gh pr edit --add-label`, `gh issue edit --add-label` and a `gh api`
   write to a pull request's labels are refused unless the wording the command would leave is
@@ -1946,15 +2001,42 @@ the wording, and sleep mode can answer one with Dan asleep.
 
 The same hook guards the record, which is why it is registered for the edit tools as well as Bash:
 an Edit, Write, MultiEdit or NotebookEdit under `state/announce-approvals` is refused, and so is a
-Bash command naming that folder that is not one only reading it. Read the record with `python3
-~/.claude/hooks/lib/announce-approval.py list`.
+Bash command naming that folder that is not one only reading it.
+
+Reading whether a wording is approved and writing an approval are separate (#3703). A review found
+that the library's `check` command read a session's pickers from whatever transcript its standard
+input named and wrote what it found, so a made up transcript left a line saying Dan approved
+wording he never saw. Three things now hold that:
+
+- **The command line a session can run only reads the record.** `python3
+  ~/.claude/hooks/lib/announce-approval.py list` prints it, and `... check --repo <owner/name>
+  --hash <sha256> [--pr <number>]` says whether that wording is approved on it. Neither reads
+  standard input, a transcript or a picker, and neither writes.
+- **An approval is written only when a hook asks.** The merge gate asks through `check ... --claim`
+  with the payload Claude Code handed it, and the label hook asks in process. Whoever asks, a
+  picker counts only from a session transcript (`.jsonl`) under the projects folder beside the
+  record's own state folder (`~/.claude/projects`), which is where Claude Code keeps them: a
+  transcript anywhere else is not read, and the refusal names it and that folder.
+  `ANNOUNCE_APPROVALS_DIR`, the tests' seam, names another record and lets its transcripts be
+  anywhere, unless the folder it names is this user's own record, however that is spelled or
+  linked, and the user's own folder is read from the account database, not from `HOME` or
+  `CLAUDE_HOME`.
+- **A session's Bash command that runs the library in any other form is refused** by
+  `announce-label-ask.sh`, whose first test knows the library's file name: `check --claim`,
+  `used`, a verb it cannot read, a program handed to python that names the file, and a heredoc
+  body naming it. Commands that name the file without running it (git, grep, a test suite) pass.
+  It judges python wherever a command names it and keeps no list of other programs that could
+  run the file, which has no interpreter line and so cannot be run by its own path.
 
 What none of this sees: a merge made in GitHub's own page; a write to the wording file, between the
 open and his answer, by something the transcript does not name it in (a script building the name at
 run time, a subagent's own tools); whether the picker's question named the right channel; a record
-line written by a script that builds the path at run time; a label put on by a route the hook cannot
-read (a variable, a file, a script, an alias, a wrapped `gh api`), which still cannot merge; and an
-approval given on one Mac, which the other does not know and asks for again.
+line written by a script that builds the path at run time; a transcript forged in the folder Claude
+Code keeps them in, or the library reached without naming it (a script file, a path built at run
+time, a hook run by hand) or run by a program that is not python by name (`uv run`), since the
+record and the transcripts are files on a Mac the session can write; a label put on by a route the
+hook cannot read (a variable, a file, a script, an alias, a wrapped `gh api`), which still cannot
+merge; and an approval given on one Mac, which the other does not know and asks for again.
 
 `push-scope-notice.sh` also refuses a push from a repository whose `core.hooksPath` names a folder
 that does not exist (claude-config#2070), because git then runs none of the repository's own hooks
@@ -3179,6 +3261,24 @@ Reading an old checkout is the other half, and that one is said rather than refu
   only fetches, bounded at 5 seconds and cached for 10 minutes per repository, and a fetch that fails
   says the checkout could not be checked, never that it is level. The person is told once per
   session for each answer; a compaction, a `/clear` and each subagent get it again as context.
+- `repo-visibility-notice.sh` (SessionStart) tells a session when the repository it is in is not as
+  visible on GitHub as the repository says it is meant to be (claude-config#3582). On 2026-11-24
+  this repository was private for some hours and nobody was told: its workflow is sized for a
+  public repository's free 4 core runners, so suites ran past their limits on billed 2 core runners
+  and the account's minutes ran out, and the publish gate judged none of the text posted meanwhile.
+  The expectation has one home, the first line of `.github/expected-visibility` that is not a
+  comment (`public`, `private` or `internal`), which this repository carries and
+  `.github/workflows/tests.yml` points at. A checkout that does not hold the file yet, being behind
+  its origin, is judged by the copy on origin's default branch as last fetched, and a repository
+  with no such file in either place is never asked about.
+  When GitHub agrees the hook says nothing; when it does not, one notice names the repository, what
+  it is, what that costs and the command to run before it turns public again; when it cannot tell
+  (gh failed, answered something else or outlasted its 4 second bound, the file or the origin could
+  not be read) it says it could not tell, never that all is well. It costs one `gh repo view` per
+  session start in a repository that carries the file, measured on 2026-11-25 at 0.51 to 0.80
+  seconds over five runs, against 0.10 in a repository with no file and 0.05 to 0.06 outside one.
+  It is wired to SessionStart only, never to a prompt.
+  Tests: `hooks/test-repo-visibility-notice.sh`.
 
 ### What a push actually waits on
 
@@ -3709,7 +3809,8 @@ names supabase leaves after reading its input, before loading anything
 2026-11-25: 0.004 to 0.005 seconds, five readings of the hook alone on a plain `git push` at load
 average 5 to 7; it reads every Bash call and every file edit, and one naming neither the
 `changelog/announce` label nor the record of approved wording leaves after reading its input, before
-loading anything
+loading anything. Since #3703 that first test also looks for the file name of the library that
+writes the record, one more pattern in the same test, and the hook was not timed again
 
 </td></tr>
 </tbody>
@@ -3837,6 +3938,26 @@ run, refuses in its own words, says what the run was doing and how many seconds 
 after its process did, and exits 2. The budget is 140 seconds (150 until #3357), so the 20 seconds
 left of Claude Code's 180 cover the time before the gate's clock starts, which Claude Code's limit
 counts and the gate cannot, and the stop itself, which is builtins only.
+
+Pushes on one Mac take turns at the scan (#3536). Every push started every scanner at once and
+nothing spaced two pushes apart, so on the night of 2026-11-23 to 24, at load averages past 190,
+seven pushes from five agents were stopped at the hard stop, and two more on 2026-11-25; their
+refusals named every phase of the run, listing the suites, deciding about the runs, waiting on the
+scanners and reading their verdicts, which is a starved run rather than one slow step. So the run
+now takes this Mac's one turn at the scan before any of that work and gives it back as it ends; the
+two checks before it (the commit messages, and each new suite's deadline) run no suite and do not
+wait, and a listing of the scanners (`SCANNERS_LIST=1`) takes no turn. The
+queue is `hooks/lib/merge-turn.sh`, the one the full suite runs, the merge helper and the load
+window already use, kept in the gate's own state folder (`~/.claude/state/scanners-passed/turn/`),
+so a push never waits behind a full run or a merge. The wait is spent out of the same 140 second
+budget, never added to it: a push whose budget runs out while it waits starts no scanner and is
+refused, saying it waited behind another push's scan, whose checkout it names, and that the same
+push can be sent again. A holder whose run has gone (the hard stop kills it, so nothing gives the
+turn back) is passed over at once by the next push, and so is a live one that has held the turn for
+160 seconds or more, longer than any run of the gate lives; a push that waited or passed a holder
+over says so when it goes through. A queue that cannot be joined is said and the push is scanned
+without a turn, as before. What it does not space: a scanner left running past the budget goes on
+after its push gives the turn back, and nothing else on the Mac takes this turn.
 
 The stop does not rest on one signal finding the supervisor at the right moment (#3333). A signal
 bash handles before its `wait` has begun does not end that wait, and a kill of the run's process
@@ -6259,7 +6380,17 @@ through `hooks/lib/skill-python-tests.py`, found from disk. To run one skill's a
 `python3 payload/hooks/lib/skill-python-tests.py payload/skills/<skill>`. Beside it,
 `test-skill-integrity.sh` fails on a relative link in a skill's markdown that reaches no file and on
 a file shaped like a test that nothing runs, and `test-skill-helper-exits.sh` on a skill helper that
-can report success when it failed (claude-config#676, #677).
+can report success when it failed (claude-config#676, #677). That includes a long running process
+whose status is checked only as it starts: one held on an attribute is followed through the methods
+of its class, and a method that ends it must read how it ended. A local process whose status was
+read while it ran and which is then handed to something the check cannot follow is printed as a
+`U1` line and counted as `unjudged=` in the summary, without failing the check. One held on an
+attribute whose ending no method reads is refused even when it is handed to something the check
+cannot follow, and the finding names that hand off (#3650). A local process's uses are compared in
+the order the code runs them, never by line: two on one line keep their order, a helper of the same
+file it is handed to has its uses judged at the hand off in its own order, and a read on the other
+arm of an if from a use never follows it. A read after a use that runs only on some of its paths
+(inside a branch, a handler or a loop the use is not in), or a hand off round a cycle, is a `U1`.
 
 The pull request checks install Claude Code for the mods' own tests (#3297), at the one version
 written in `.github/claude-code-version` and read by `tools/install-claude-code.sh` alone, so every

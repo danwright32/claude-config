@@ -4968,13 +4968,19 @@ const noteBranches = async ($: EngineInterface, raw: string, agentId: unknown) =
     const add = [...branchesTouched(cmds).named]
     const into: ScopeModesPushedInto[] = []
     const known = agentId === undefined && !cmds.some(c => c.words[0] === 'cd' || c.words[0] === 'pushd')
-    const cwd = known ? await $.session.cwd() : ''
     const envNamed = gitEnvNamed(raw, cmds)
+    // The session's folder, read once a call and only for a command that names no folder of its own
+    // (no -C), the one case `branchFolder` reads it for. Until the review of #3532 it was read ahead
+    // of every call with no cd, so one that could not be read cost the note of a branch the call
+    // names itself (`git checkout -b`, a push by name) or commits to in a folder written in full,
+    // none of which ask for it, and said so on each such call.
+    let cwd: string | undefined
     // The branch checked out where one command ran, read only where it is known and needed, once a folder.
     const read = new Map<string, string | undefined>()
     let untold: string | undefined
     const hereOf = async (g: GitRead): Promise<string | undefined> => {
-      const at = branchFolder(g, cwd, envNamed)
+      if (g.dir === undefined) cwd ??= await $.session.cwd()
+      const at = branchFolder(g, cwd ?? null, envNamed)
       if (at === 'none') return undefined
       if ('untold' in at) {
         untold ??= at.untold
