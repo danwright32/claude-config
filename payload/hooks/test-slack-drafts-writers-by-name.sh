@@ -46,6 +46,10 @@ suite_deadline_arm || exit $?
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$DIR/slack-drafts-only-gate.sh"
 unset SLACK_GATE_UNWORKED_PATHS
+# Started from a git hook or a rebase's exec line, the suite inherits git's own variables, and a
+# GIT_DIR there outranks the -C its fixture repository is made with: the init, commit and checkout
+# below would land in the repository the hook belongs to. So none of them is carried.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GIT_COMMON_DIR GIT_OBJECT_DIRECTORY
 
 pass=0
 fail=0
