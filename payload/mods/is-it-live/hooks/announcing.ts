@@ -213,6 +213,19 @@ async function claimed($: EngineInterface, a: IsItLiveAnnouncement): Promise<Cla
   }
 }
 
+// The same check, asked from a press. Claude Code cuts a press off at 10 seconds whatever it is
+// waiting on (#744), so the check gets 6 of them here, leaving the rest for the store reads before
+// it and the copy after. One that does not answer in time is unchecked: Copy then copies nothing and
+// says why, writes nothing, and the next press asks again. The check reads one file on this Mac, so
+// it answers in well under a second unless the Mac is starved.
+async function claimedAtPress($: EngineInterface, a: IsItLiveAnnouncement): Promise<Claimed> {
+  try {
+    return claimedOf(await $.process.run(claimArgv((await $.env.get('HOME')) ?? '', a.repo, a.pr), { stdin: a.text, timeoutMs: 6_000 }))
+  } catch (err) {
+    return { state: 'unchecked', why: `the check could not be run: ${msg(err)}` }
+  }
+}
+
 // An entry whose wording is not known to be the approved one is kept as one that cannot be drafted,
 // with why: /live, the row and each session start then say that, no draft is asked for or counted,
 // and, as with any entry kept with a why, the next card reads the pull request again, so wording put
@@ -474,7 +487,7 @@ export async function announcementPressed($: EngineInterface, p: { verb: Pressed
       return
     }
     // Copy hands over only the wording the pull request merged on, as a draft would.
-    const c = await claimed($, a)
+    const c = await claimedAtPress($, a)
     if (c.state !== 'approved') {
       $.ui.toast(notCopiedOf(a, c))
       return

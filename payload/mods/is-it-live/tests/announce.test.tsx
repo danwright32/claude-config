@@ -168,6 +168,8 @@ const world = (on: On, init: Partial<World> = {}) => {
   const copies: string[] = []
   const tools: string[] = []
   const runs: string[][] = []
+  // How long each command line was given to answer, as the mod asked for it.
+  const limits: { argv: string[]; ms: number | undefined }[] = []
   const clock = mock.clock(on, { now: T0 })
   // The store every session shares, held where a test can read it and write under the mod.
   const store = new Map<string, unknown>(Object.entries(w.stored ?? {}))
@@ -196,6 +198,7 @@ const world = (on: On, init: Partial<World> = {}) => {
       return ok(read === undefined ? '' : JSON.stringify(read))
     }
     runs.push([...e.argv])
+    limits.push({ argv: [...e.argv], ms: (e as { init?: { timeoutMs?: number } }).init?.timeoutMs })
     const a = e.argv.join(' ')
     const stdin = (e as { init?: { stdin?: string } }).init?.stdin
     let g: Gh = { exitCode: 1, stdout: '', stderr: 'unexpected' }
@@ -243,7 +246,7 @@ const world = (on: On, init: Partial<World> = {}) => {
     const { Text } = $.ui.resolve(e)
     return <Text>engine band</Text>
   })
-  return { w, toasts, copies, tools, runs, clock, store, keys: () => [...store.keys()].sort() }
+  return { w, toasts, copies, tools, runs, limits, clock, store, keys: () => [...store.keys()].sort() }
 }
 
 const DRAFT = 'mcp__plugin_slack_slack__slack_send_message_draft'
@@ -919,4 +922,30 @@ test('a draft of wording that was changed after Dan approved it is not counted, 
   // Mark sent and Not announcing still settle it: they hand no wording to anyone.
   await press($, `${BUTTON}none-${ID}`)
   expect(store.get(DONE_KEY)).toEqual({ how: 'not-announcing', at: T0 })
+})
+
+test('a press of Copy gives its check of the wording less than the 10 seconds Claude Code gives a press, so the press is never cut off waiting on it (#744)', withKit, async ($, on) => {
+  const { w, store, toasts, copies, limits } = world(on, { stored: OWED_AND_OUT })
+  await start($)
+  limits.length = 0
+  toasts.length = 0
+  await press($, `${BUTTON}copy-${ID}`)
+  expect(copies).toEqual([POST])
+  const given = limits.filter(l => l.argv[2] === 'claimed').map(l => l.ms)
+  expect(given.length).toBe(1)
+  expect(given[0]).toBeLessThan(10_000)
+  // A check that did not answer in that time copies nothing, says why, and leaves what is kept as it was.
+  const kept = JSON.stringify(store.get(`announce:${REPO}#7`))
+  copies.length = 0
+  toasts.length = 0
+  w.claim = () => {
+    throw new Error('timed out after 6000ms')
+  }
+  await press($, `${BUTTON}copy-${ID}`)
+  expect(copies).toEqual([])
+  expect(toasts.length).toBe(1)
+  expect(toasts[0]).toContain('Not copied:')
+  expect(toasts[0]).toContain('the check could not be run:')
+  expect(JSON.stringify(store.get(`announce:${REPO}#7`))).toBe(kept)
+  expect(store.get(DONE_KEY)).toBeUndefined()
 })
