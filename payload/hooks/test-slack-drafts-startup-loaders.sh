@@ -391,5 +391,50 @@ pair "an exported BASH_ENV and then make" BASH_ENV "export BASH_ENV=envposts; ma
 run_g "make"
 allowed "#3675 make with no start up variable passes"
 
+echo "slack drafts only: a file code writes under a name that starts with a dash (claude-config#3675)"
+# The reading of what a program given code may write (note_runner in lib/program-writes.py) took
+# every word after the code that starts with a dash for an option, so a file the code wrote under
+# such a name was never noted, and running it afterwards was a file that is not there: nothing to
+# read. Measured 2026-11-25: `python3 -c CODE -out.sh` hands the code -out.sh as its first
+# argument, and node, ruby, perl and bun do after `--` (without it each refuses the word as an
+# option of its own). The same command with a plain name was refused before this change, which
+# is the yardstick each case is held against.
+W="$G/written"
+mkdir -p "$W"
+run_w() { run_raw "$(payload Bash "$(bash_input "$1")" "$W")"; }
+printf '%s\n' "$POST" > "$W/posts.sh"
+printf '%s\n' 'echo hi' > "$W/quiet.sh"
+printf '%s\n' 'echo hi' > "$W/-calm.sh"
+PYCOPY='import sys; open(sys.argv[1], "w").write(open("posts.sh").read())'
+PYCALM='import sys; open(sys.argv[1], "w").write(open("quiet.sh").read())'
+NODECOPY='require("fs").copyFileSync("posts.sh", process.argv[1])'
+NODECALM='require("fs").copyFileSync("quiet.sh", process.argv[1])'
+run_w "python3 -c '$PYCOPY' out.sh && bash out.sh"
+read_refused "#3675 the yardstick: a plain named file python3 -c writes from a file that posts, then run"
+run_w "node -e '$NODECOPY' -- out.sh && bash out.sh"
+read_refused "#3675 the yardstick: a plain named file node -e writes from a file that posts, then run"
+for runs in "python3 -c '$PYCOPY' -out.sh && bash ./-out.sh" "python3 -c '$PYCOPY' -out.sh && bash -- -out.sh" \
+  "python3 -c '$PYCOPY' -out.sh; sh ./-out.sh" "node -e '$NODECOPY' -- -out.sh && bash ./-out.sh" \
+  "node -e '$NODECOPY' -- -out.sh && bash -- -out.sh" "bun -e '$NODECOPY' -- -out.sh && bash ./-out.sh"; do
+  run_w "$runs"
+  read_refused "#3675 a dash named file code writes from a file that posts, then run, is refused: $runs"
+  says "#3675 and the refusal names the file: $runs" "-out.sh"
+done
+for runs in "python3 -c '$PYCALM' -out.sh && bash ./-out.sh" "python3 -c '$PYCALM' -out.sh && bash -- -out.sh" \
+  "node -e '$NODECALM' -- -out.sh && bash ./-out.sh" "python3 -c 'print(1)' -calm.sh && bash ./-calm.sh" \
+  "python3 -c 'print(1)' -v && bash quiet.sh" "node -e '$NODECOPY' -out.sh; bash quiet.sh"; do
+  run_w "$runs"
+  allowed "#3675 a dash named file code writes from a file that does not post, or does not write, passes: $runs"
+done
+# ruby's and perl's code is not followed, so a plain named file either is handed and then run is
+# refused as unread; the dash named one, after --, now is too.
+run_w "ruby -e 'File.write(ARGV[0], File.read(\"posts.sh\"))' out.sh && bash out.sh"
+read_refused "#3675 the yardstick: a plain named file ruby -e is handed, then run"
+for runs in "ruby -e 'File.write(ARGV[0], File.read(\"posts.sh\"))' -- -out.sh && bash ./-out.sh" \
+  "perl -e 'open(my \$f, \">\", \$ARGV[0]); print \$f 1' -- -out.sh && bash ./-out.sh"; do
+  run_w "$runs"
+  read_refused "#3675 a dash named file ruby or perl code is handed after --, then run, is refused: $runs"
+done
+
 echo
 sdg_harness_result

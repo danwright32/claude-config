@@ -990,15 +990,33 @@ def make(interpreter, shells, awks, senders):
                         self.note_code(value, value, name, d, lang)
                     elif kind == "unknown":
                         self.made_maybe.append(("*", name))
-            self.code_inputs(start, d, [vals[k] for k in rest])
+            # A word after the code that starts with a dash is an option, except where the program
+            # reads no more options of its own and hands the word to the code as its argument: any
+            # word after python3's code, and for the rest a word after `--` (measured 2026-11-25:
+            # `python3 -c CODE -out.sh` gave sys.argv[1] as -out.sh; node, ruby, perl and bun gave
+            # it after `--` and refused the word as an option without). Such a word is a file the
+            # code may write, as one with a plain name is: taken for an option, a file written
+            # under it was never noted, and running it afterwards read nothing
+            # (claude-config#3675).
+            handed, past = set(), lang == "py"
+            for k in rest:
+                v = vals[k]
+                if v == "--" and not past:
+                    past = True
+                elif past and v is not None and len(v) > 1 and v.startswith("-") and v != "--":
+                    handed.add(k)
+            self.code_inputs(start, d, ["./" + vals[k] if k in handed else vals[k] for k in rest])
             codes = self.made_code[start:]
             for k in rest:
-                if vals[k] is not None and vals[k].startswith("-"):
+                if vals[k] is not None and vals[k].startswith("-") and k not in handed:
                     continue
+                # Spelled with ./ in front, a dash named file is one to the notes below, which
+                # leave out a word that starts with a dash.
+                value = "./" + vals[k] if k in handed else vals[k]
                 if codes:
-                    self.note_edited(args[k], vals[k], d, name, codes, strict=False)
+                    self.note_edited(args[k], value, d, name, codes, strict=False)
                 else:
-                    self.note_named(args[k], vals[k], d, name)
+                    self.note_named(args[k], value, d, name)
 
         def note_sed(self, args, vals, d):
             """sed: its program may write a file it names (w), and with -i it edits its input files."""
