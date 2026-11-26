@@ -28,6 +28,11 @@ _read_by_dan). Then, all of these, each failure said in its own words:
   - nothing of the session's touched the file between that open and his answer: no Edit, Write,
     MultiEdit or NotebookEdit of it, no Bash command naming its file name (which may write it), no
     agent sent a prompt naming it. So what he was shown is what he answered about.
+  - that open was the session's LAST TOOL CALL before the picker (claude-config#3742): no call of
+    any tool, naming the file or not, stands between the two in the transcript. The picker shows
+    him no file name, so with two wording files open his answer about the first was given with the
+    second in front. Any call between may have opened another window, and none is read to find
+    out. The refusal names the call and says to open the file again and ask in the next call.
   - the file has not changed since he answered: its status change time (st_ctime, which a write, a
     rename or a replacement sets and no command sets back) is before the moment his answer was
     recorded. Between the open and the answer the file may change, because that is Dan editing it.
@@ -208,7 +213,8 @@ HERE =os.path.dirname(os.path.abspath(__file__))
 
 HOW_TO_ASK = (
     "To ask him: write the post to a file, run /no-ai-tells on it, open it in a command of its own with "
-    "`/Applications/BBEdit.app/Contents/Helpers/bbedit_tool --front-window <file>`, then ask ONE AskUserQuestion "
+    "`/Applications/BBEdit.app/Contents/Helpers/bbedit_tool --front-window <file>`, then, as the very next tool call "
+    "(with any other call between the two his answer does not count), ask ONE AskUserQuestion "
     "picker of one question naming the pull request or feature and the channel, with the options `" + APPROVE
     + "` and `Not yet` and the metadata {\"source\": \"" + SOURCE + "\", \"repo\": \"<owner/name>\", \"file\": "
     "\"<absolute path>\"}. Leave the file alone once it is open (he may edit it before he answers), and make the "
@@ -533,8 +539,8 @@ def _asked(transcript_path, session_id):
 
 def _file_events(transcript_path, session_id, targets, sw):
     """What the session did with each wording file, {its path: (opens, touches)}: opens as (line
-    sent, line it finished without error), touches as the line of each call that wrote the file or
-    may have (module docstring). targets is {a file's real path: its file name}."""
+    sent, line it finished without error, the call's id), touches as the line of each call that
+    wrote the file or may have (module docstring). targets is {a file's real path: its file name}."""
     names = {name.encode("utf-8", "replace"): path for path, name in targets.items()}
     opening = {}
     found = {path: ([], []) for path in targets}
@@ -551,7 +557,7 @@ def _file_events(transcript_path, session_id, targets, sw):
             if item.get("type") == "tool_result" and isinstance(item.get("tool_use_id"), str):
                 was = opening.pop(item["tool_use_id"].encode("utf-8", "surrogatepass"), None)
                 if was is not None and not item.get("is_error"):
-                    found[was[0]][0].append((was[1], n))
+                    found[was[0]][0].append((was[1], n, item["tool_use_id"]))
                 continue
             if item.get("type") != "tool_use" or not isinstance(item.get("input"), dict):
                 continue
@@ -576,6 +582,31 @@ def _file_events(transcript_path, session_id, targets, sw):
                     if name in json.dumps(ti):
                         found[path][1].append(n)
     return found
+
+
+def _calls_on(transcript_path, session_id, first, last):
+    """The name of every tool call the session made on transcript lines first to last, as (its id,
+    its name), in order. Only those lines are parsed, so a long transcript costs one read of it. A
+    line there that holds a call and cannot be parsed is a call nobody can name, and is counted."""
+    out = []
+    with open(transcript_path, "rb") as f:
+        for n, raw in enumerate(f):
+            if n > last:
+                break
+            if n < first or b"tool_use" not in raw:
+                continue
+            try:
+                e = json.loads(raw.decode("utf-8", "replace"))
+            except ValueError:
+                out.append((None, "one on a line that could not be read"))
+                continue
+            if not isinstance(e, dict) or e.get("sessionId") != session_id:
+                continue
+            for item in _items(e):
+                if item.get("type") == "tool_use":
+                    name = item.get("name")
+                    out.append((item.get("id"), name if isinstance(name, str) and name else "one with no name"))
+    return out
 
 
 def note_answer(payload, deadline=None):
@@ -776,7 +807,8 @@ def approvals(session_id, transcript_path, deadline=None, noted=None):
     approved = []
     for p in readable:
         note = _note_for(p, noted)
-        why = _not_shown(p, events[p["file"]], ap, note)
+        why = _not_shown(p, events[p["file"]], ap, note,
+                         lambda first, last: _calls_on(transcript_path, session_id, first, last))
         digest = None
         if why is None and note is not None:
             # Hashed when he answered, so what the file holds now does not matter.
@@ -793,20 +825,35 @@ def approvals(session_id, transcript_path, deadline=None, noted=None):
     return approved, untaken, None
 
 
-def _not_shown(p, events, ap, note=None):
+def _not_shown(p, events, ap, note=None, calls_on=None):
     """None when the file Dan approved is the one that was in front of him and has not changed since,
     else why not. With note, the note taken when he answered (note_answer), "since" ends when the
-    file was hashed for that note: the change time noted then is the one judged."""
+    file was hashed for that note: the change time noted then is the one judged. calls_on(first,
+    last) gives the session's tool calls on those transcript lines (_calls_on)."""
     opens, touches = events
-    before = [sent for sent, done in opens if sent < p["sent"] and done < p["answered"]]
+    before = [(sent, uid) for sent, done, uid in opens if sent < p["sent"] and done < p["answered"]]
     if not before:
         return ("the file was not opened in front of him before the picker: no Bash call in this session is "
                 "nothing but a BBEdit open of it with the front window flag that finished without error")
-    opened = max(before)
+    opened, opener = max(before)
     if any(opened < t < p["answered"] for t in touches):
         return ("after the file was opened for him and before he answered, this session wrote it, or ran a "
                 "command or sent an agent a prompt naming it, so what he had in front of him may not be what is "
                 "in it")
+    # The open is the session's last tool call before the picker (claude-config#3742): any call
+    # between the two may have put another window in front, and the picker names no file to him.
+    if calls_on is not None:
+        try:
+            others = [name for uid, name in calls_on(opened, p["sent"]) if uid not in (opener, p["picker"])]
+        except OSError as e:
+            return ("this session's transcript could not be read (" + type(e).__name__ + "), so whether the open of the "
+                    "file was the session's last tool call before the picker could not be told")
+        if others:
+            return ("after the file was opened for him this session made another tool call (" + others[0]
+                    + (", and %d more" % (len(others) - 1) if len(others) > 1 else "") + ") before it put the picker, "
+                    "so another window may have been in front of him when he answered: the open must be the "
+                    "session's last tool call before the picker. To ask him again, open the file again and put the "
+                    "picker in the very next tool call")
     answered = ap._stamp_ns(p["stamp"])
     if answered is None:
         return "the transcript does not say when he answered, so whether the file changed afterwards could not be told"

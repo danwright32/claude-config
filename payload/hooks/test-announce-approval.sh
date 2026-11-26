@@ -799,6 +799,51 @@ check "a note the record cannot take is said, naming the record" "$([[ "$r" == "
 
 unset STORE_USED
 
+echo "the open of the file is the session's last tool call before the picker (#3742 item 2)"
+# Two wording files open at once: the second is the window in front when he answers about the
+# first, and the picker shows him neither file's name. So an open counts only when nothing else of
+# the session's ran between it and the picker.
+# The two are named apart: a command naming a file's own name already voids its open (above).
+STORE_USED="$WORK/store-two"
+mkdir -p "$WORK/two-a" "$WORK/two-b"
+FA="$WORK/two-a/post-a.md"; FB="$WORK/two-b/post-b.md"
+printf '%s\n' "$POST" > "$FA"; printf '%s\nA second post.\n' "$POST" > "$FB"
+T="$WORK/two.jsonl"; new_talk "$T"
+talk "$T" bash "$BBEDIT --front-window $FA"
+talk "$T" bash "$BBEDIT --front-window $FB"
+talk "$T" ask acme/two "$FA"
+r="$(asked "$T" acme/two "$(hash_file "$FA")")"
+check "R2 his Approve for a file opened before another file was opened is not approved" "$([[ "$r" == "no|"* ]] && echo ok || echo "$r")"
+check "the refusal says another call came between the open and the picker, names it, and says what to do" "$([[ "$r" == *"made another tool call (Bash)"* && "$r" == *"last tool call before the picker"* && "$r" == *"open the file again"* ]] && echo ok || echo "$r")"
+# The second file's open is not the last call before ITS picker either: the first picker came between.
+talk "$T" ask acme/two "$FB"
+r="$(asked "$T" acme/two "$(hash_file "$FB")")"
+check "R2 nor is the second file's, asked about after the first picker" "$([[ "$r" == "no|"*"made another tool call (AskUserQuestion)"* ]] && echo ok || echo "$r")"
+# Any call counts, one that names neither file included.
+F="$(shown between)"; T="$WORK/between.jsonl"
+talk "$T" bash "ls /tmp"
+talk "$T" ask acme/two "$F"
+r="$(asked "$T" acme/two "$(hash_file "$F")")"
+check "R2 a call that names no wording file, between the open and the picker, voids the open too" "$([[ "$r" == "no|"*"made another tool call (Bash)"* ]] && echo ok || echo "$r")"
+check "and nothing was written to the record for any of them" "$([ "$(recorded)" = 0 ] && echo ok || echo "$(recorded) lines")"
+# Still possible: each file opened and asked about in turn, and a file opened again after other work.
+T="$WORK/two-turns.jsonl"; new_talk "$T"
+talk "$T" bash "$BBEDIT --front-window $FA"
+talk "$T" ask acme/two "$FA"
+talk "$T" bash "$BBEDIT --front-window $FB"
+talk "$T" ask acme/two "$FB"
+r="$(asked "$T" acme/two "$(hash_file "$FA")")"
+check "R2 still possible: two files each opened and then asked about, the first" "$([[ "$r" == "yes||" ]] && echo ok || echo "$r")"
+r="$(asked "$T" acme/two "$(hash_file "$FB")")"
+check "R2 still possible: and the second" "$([[ "$r" == "yes||" ]] && echo ok || echo "$r")"
+F="$(shown reopened-two)"; T="$WORK/reopened-two.jsonl"
+talk "$T" bash "ls /tmp"
+talk "$T" bash "$BBEDIT --front-window $F"
+talk "$T" ask acme/two-reopened "$F"
+r="$(asked "$T" acme/two-reopened "$(hash_file "$F")")"
+check "R2 still possible: a file opened again after other work, and asked about next, is approved" "$([[ "$r" == "yes||" ]] && echo ok || echo "$r")"
+check "how to ask says the picker is the very next call after the open" "$(printf '{"session_id": "s1", "transcript_path": "%s"}' "$T" | ANNOUNCE_APPROVALS_DIR="$STORE" python3 -B "$LIB" check --repo acme/none --hash "$H" | grep -q "very next tool call" && echo ok || echo "the how to ask text does not say so")"
+
 echo "the record is this suite's own"
 check "no case wrote to this Mac's real record" "$([ "$(ls -la "$REAL_STORE" 2>/dev/null | cksum)" = "$real_before" ] && echo ok || echo "$REAL_STORE changed during the run")"
 
