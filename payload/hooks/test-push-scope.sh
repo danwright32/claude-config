@@ -2533,13 +2533,19 @@ shell_ran() { # shell_ran <shell> <command text> <words the stand in's log line 
   grep -q "^$3" "$J3470/log"
 }
 joined_row() { # joined_row <yes|no> <predicate> <log words> <command text> <description>
-  local want="$1" pred="$2" words="$3" text="$4" desc="$5" sh ran
+  local want="$1" pred="$2" words="$3" text="$4" desc="$5" sh ran rc=0
   for sh in $J3470_SHELLS; do
     ran=no; shell_ran "$sh" "$text" "$words" && ran=yes
     [ "$ran" = "$want" ] && check "#3470 ($sh) the row is the shell's own reading: $desc" ok \
       || check "#3470 ($sh) the row is the shell's own reading: $desc" "$sh ran it: $ran, the row says $want"
   done
-  if asked "$pred" "$text"; then ran=yes; else ran=no; fi
+  # 0 is yes and 1 is no; anything else is the parse or the predicate failing, and fails the row.
+  asked "$pred" "$text" || rc=$?
+  case "$rc" in
+    0) ran=yes ;;
+    1) ran=no ;;
+    *) check "#3470 $desc" "the check failed with exit $rc, which is neither yes (0) nor no (1)"; return ;;
+  esac
   [ "$ran" = "$want" ] && check "#3470 $desc" ok || check "#3470 $desc" "read as $ran, the shell says $want"
 }
 # What every shell runs and no hook saw.
@@ -2571,6 +2577,29 @@ joined_row no ps_is_git_push "git push" "echo a${J}#b && echo done" "quiet twin:
 joined_row no ps_is_git_push "git push" "echo git ${J}push" "quiet twin: git and push joined as the arguments of another command are no push"
 joined_row no ps_is_git_push "git push" "cat <<'EOF'"$'\n'"git ${J}push"$'\n'"EOF" "quiet twin: the pair in a quoted heredoc's body is text, and so is its push"
 joined_row no ps_is_git_add "git add" "git ${J}commit -m x" "quiet twin: git, the pair, commit is no add"
+
+# A CHECK THAT ERRORS IS NEITHER ANSWER. asked returns 2 when ps_parse_payload fails, and a predicate
+# can exit with anything; a row reading every exit but 0 as no passed each row that expects no on a
+# crash. These run joined_row itself, with check replaced inside a subshell so its verdict comes back
+# as text instead of being counted, and hold that verdict.
+exits_two() { return 2; }
+exits_three() { return 3; }
+row_verdict() { # row_verdict <joined_row arguments>: the verdict joined_row gave its own question
+  ( check() { printf '%s\n' "$2"; }; joined_row "$@" ) | tail -n 1
+}
+v3470="$(row_verdict no exits_two "git push" "git ${J}status" "a check that exits 2")"
+case "$v3470" in
+  *"exit 2,"*) check "#3470 a check that exits 2 fails a row that expects no, and the failure names the exit" ok ;;
+  *) check "#3470 a check that exits 2 fails a row that expects no, and the failure names the exit" "joined_row gave [$v3470]" ;;
+esac
+v3470="$(row_verdict yes exits_three "git push" "git ${J}push" "a check that exits 3")"
+case "$v3470" in
+  *"exit 3,"*) check "#3470 a check that exits 3 fails a row that expects yes, and the failure names the exit" ok ;;
+  *) check "#3470 a check that exits 3 fails a row that expects yes, and the failure names the exit" "joined_row gave [$v3470]" ;;
+esac
+v3470="$(row_verdict no false "git push" "git ${J}status" "a check that exits 1")"
+[ "$v3470" = ok ] && check "#3470 control: a check that exits 1 still passes a row that expects no" ok \
+  || check "#3470 control: a check that exits 1 still passes a row that expects no" "joined_row gave [$v3470]"
 
 # NO HOOK IS HANDED FEWER COMMANDS THAN BEFORE. The plain flattening names commands no shell runs,
 # and a hook refused on them: the joined text may not lose one. Neither text is run here (the
