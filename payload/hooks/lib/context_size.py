@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""The context line and the long session nudge (claude-config#1960, #1940), read from transcripts.
+"""The context line and the long session question (claude-config#1960, #1940, #3307), read from
+transcripts.
 
 Run by hooks/context-size-notice.sh on every PostToolUse, in the main session and in every
-subagent, with the hook payload on stdin. It reads ONLY usage fields and three kinds of marker from
-the transcript, never what anybody wrote (L222), and it reads each transcript once over its life:
+subagent, and at the main session's Stop, with the hook payload on stdin. It reads ONLY usage
+fields, three kinds of marker and Dan's answer to its own long session question from the
+transcript, never anything else anybody wrote (L222), and it reads each transcript once over its life:
 the byte offset it has read to is kept per session and agent, and each run reads only what was
 appended since, so a call costs the same at request 10 as at request 7,000.
 
@@ -32,12 +34,46 @@ nothing sent is no work at all.
   and 5 of 1,919 main stretches crossed, a median of 181 and 232 requests in; at 200,000 of work
   it would have been 34 and 8. Re-measure each Mac with that command, reading only those lines.
 
-THE LONG SESSION NUDGE (#1940, decided by Dan 2026-11-01). A main session compacted
-CONTEXT_COMPACTIONS_NUDGE times is told, with Dan, that it should start fresh, and what its next
-request costs: at least what its last one carried, beside its average, its size before its last
-compaction, and what it started from. Said again at each further multiple. A compaction is a
-`type: system, subtype: compact_boundary` line (measured on Claude Code 2.1.316 transcripts, its
-compactMetadata carrying preTokens and postTokens).
+THE LONG SESSION QUESTION (#1940, #3307). A main session compacted CONTEXT_COMPACTIONS_NUDGE times
+has Dan asked, in a picker, whether to hand off to a fresh session. Until #3307 it was a notice the
+session read (Dan, 2026-11-01), and on the work MacBook over 2 to 16 November one session carried on
+past it 24 times, to 26 compactions and 2.47 billion tokens read, 11.8% of everything in the window;
+asked on 2026-11-19 what should happen to the notice, Dan said "Strengthen it". So now:
+
+- Asked at the END of a turn (the Stop event), never mid step: the hook holds that turn's end once
+  and tells the session to ask with AskUserQuestion, word for word (long_question). The picker then
+  waits for Dan, and so does the session: it does nothing more until he answers. Agents it
+  dispatched keep running, but their hand backs reach it only after he has answered.
+- Once per crossing. A held turn's end is recorded before it is said, so the question is put once;
+  whatever happens to it, the next is put only once the session has read ASK_GROWTH (half) as many
+  tokens again as when this one was raised (L36: 24 notices were the noise this replaces).
+- Dan's answer is read back from the transcript (the AskUserQuestion result, keyed by the question
+  word for word). "Keep for a day" holds the question for KEEP_SECONDS (24 hours) as well as until
+  that growth; "Hand off" and "Carry on" wait for the growth alone. Handing off is the session's to
+  do, and it writes the handoff note before anything else, so whatever he picks no work is lost.
+- Never asked while the Mac sleeps: registered as `context-size-notice.sh --stop`, the script asks
+  lib/sleep.sh's sleep_active first and stops there, as every other Stop hook does (and scope modes
+  refuses AskUserQuestion asleep besides), so nothing is raised until the first turn's end after
+  wake, which asks with the figures as they are then. Never in a subagent (its
+  Stop is SubagentStop, never wired here, and a payload with an agent_id is refused besides), in a
+  detached run (CLAUDE_DETACHED_RUN), or in a run whose requests name any entrypoint other than
+  "cli": a headless run, and equally any other entrypoint Claude Code may write, which nobody here
+  has measured, so a session started some other way would never be asked. On the personal MacBook
+  on 2026-11-23 all 19,929 usage lines of one interactive session's transcript carried "cli", and
+  tools/transcript-shares.py reads "sdk-cli" as headless. A transcript naming no entrypoint is asked, the side that costs one turn's
+  end rather than silence if Claude Code stops writing the field (L506). Never on a
+  turn's end that is itself the continuation of an earlier hold (stop_hook_active): it waits for
+  the next. That flag is all it can see of other Stop hooks. The ones that run on the SAME turn's
+  end (the session reflection, the issue review, the is it live card, the steps card, a /goal's
+  own hook) can hold it too, so the question can arrive beside theirs, and on the first turn's end
+  of a /goal run, in the middle of that run (whether to skip it then is Dan's, on #3519).
+
+What a fresh session would save is an estimate, said as one, and compares like with like (L11): a
+fresh session starts near what this one started from (its first request), while this one starts
+each stretch at its floor, the first request after its last compaction. The question says how much
+lighter that start is, and nothing about this session's lifetime average against it, which no
+request of either session would see. It grows again as it works, which the question says. A compaction is a `type: system, subtype: compact_boundary` line (measured on Claude
+Code 2.1.316 transcripts, its compactMetadata carrying preTokens and postTokens).
 
   Default 5. Measured on Bidspoke 16 to 30 October 2026 (bidspoke#2192): one session with 13
   compactions and 7,309 requests read 3.63 billion tokens, 16% of everything in the window. On the
@@ -63,9 +99,16 @@ import json
 import os
 import re
 import sys
+import time
 
 DEFAULT_LINE = 330_000  # of work above the floor (Dan, 2026-11-05)
 DEFAULT_COMPACTIONS = 5
+# The long session question (#3307): asked again once the session has read this many times what it
+# had read when the last one was raised, and not before KEEP_SECONDS after "Keep for a day".
+ASK_GROWTH = 1.5
+KEEP_SECONDS = 24 * 3600
+ASK_HEADER = "Long session"
+ASK_OPTIONS = ("Hand off (Recommended)", "Carry on", "Keep for a day")
 # 2 (#2283) added the floor. A version 1 state is never read as a 2 with a floor of zero: it is
 # started again from the top of its transcript, which holds everything the state is derived from.
 STATE_VERSION = 2
@@ -101,7 +144,19 @@ def fresh_state():
     return {"v": STATE_VERSION, "offset": 0, "last_id": None, "last_ctx": 0,
             "first_ctx": 0, "requests": 0, "ctx_sum": 0, "compactions": 0, "last_pre": 0,
             "stretch_requests": 0, "floor_ctx": 0,
-            "orchestrator": False, "band_told": 0, "compactions_told": 0, "unreadable_told": False}
+            # compactions_told, the old notice's count, is no longer kept: a state still holding it
+            # is read as it is, the field ignored (#3307).
+            "orchestrator": False, "band_told": 0, "unreadable_told": False,
+            # The long session question (#3307). Added inside version 2 with these defaults, so a
+            # state written before it is read on, never started again (with_defaults).
+            "entrypoint": None, "ask": {}, "next_ask_read": 0, "keep_until": 0, "asks": 0}
+
+
+def with_defaults(state):
+    """A version 2 state, with any field added since it was written set to its starting value."""
+    for key, value in fresh_state().items():
+        state.setdefault(key, value)
+    return state
 
 
 def fresh_stretch():
@@ -155,11 +210,35 @@ def is_goal_set(d):
         and a.get("met") is False
 
 
-def scan(state, data, is_main):
+def record_answer(state, answer, now):
+    """Dan's answer to the long session question: when it may be asked again (#3307).
+
+    Every answer waits for the growth set when the question was raised; "Keep for a day" waits for
+    KEEP_SECONDS as well. An answer he typed himself reads as carry on. Only the question put last
+    is answered: an answer to an older one, or a second answer, changes nothing."""
+    ask = state["ask"]
+    if not ask.get("question") or ask.get("answer"):
+        return
+    ask["answer"] = answer if answer in ASK_OPTIONS else "other"
+    if answer == "Keep for a day":
+        state["keep_until"] = now + KEEP_SECONDS
+
+
+def answer_in(d, question):
+    """The answer a transcript line records to `question`, or None: the AskUserQuestion result,
+    whose answers are keyed by the question word for word (read off a real transcript, 2026-11-23)."""
+    result = d.get("toolUseResult") if d.get("type") == "user" else None
+    answers = result.get("answers") if isinstance(result, dict) else None
+    answer = answers.get(question) if isinstance(answers, dict) else None
+    return answer if isinstance(answer, str) else None
+
+
+def scan(state, data, is_main, now=None):
     """Fold the complete lines of `data` into `state`; returns the bytes consumed."""
     end = data.rfind(b"\n")
     if end < 0:
         return 0
+    question = state["ask"].get("question") if is_main and not state["ask"].get("answer") else None
     for raw in data[:end + 1].split(b"\n"):
         if not raw:
             continue
@@ -169,7 +248,9 @@ def scan(state, data, is_main):
         wanted_dispatch = is_main and not state["orchestrator"] and '"tool_use"' in line \
             and ('"name":"Agent"' in line or '"name":"Task"' in line)
         wanted_goal = is_main and not state["orchestrator"] and '"type":"goal_status"' in line
-        if not (wanted_usage or wanted_compact or wanted_dispatch or wanted_goal):
+        wanted_answer = bool(question) and '"toolUseResult"' in line and '"answers"' in line \
+            and ASK_HEADER in line
+        if not (wanted_usage or wanted_compact or wanted_dispatch or wanted_goal or wanted_answer):
             continue
         try:
             d = json.loads(line)
@@ -184,11 +265,18 @@ def scan(state, data, is_main):
             reset_floor(state)
         if (wanted_dispatch and is_dispatch(d)) or (wanted_goal and is_goal_set(d)):
             state["orchestrator"] = True
+        if wanted_answer:
+            answer = answer_in(d, question)
+            if answer is not None:
+                record_answer(state, answer, time.time() if now is None else now)
+                question = None
         if wanted_usage and d.get("type") == "assistant":
             msg = d.get("message") if isinstance(d.get("message"), dict) else {}
             usage = msg.get("usage")
             if not isinstance(usage, dict) or msg.get("model") == "<synthetic>":
                 continue
+            if isinstance(d.get("entrypoint"), str):
+                state["entrypoint"] = d["entrypoint"]
             ctx = context_of(usage)
             mid = msg.get("id")
             same = mid is not None and mid == state["last_id"]
@@ -290,20 +378,108 @@ def line_notice(state, line, is_main, payload=None):
     return ctx, ""
 
 
-def compaction_notice(state):
-    avg = state["ctx_sum"] // max(state["requests"], 1)
-    parts = ["This session has been compacted %d times (claude-config#1940)." % state["compactions"],
-             "Its next request reads at least %s tokens, what its last one carried;"
-             % "{:,}".format(state["last_ctx"]),
-             "across its %s requests it has averaged %s," % ("{:,}".format(state["requests"]),
-                                                             "{:,}".format(avg))]
-    if state["last_pre"]:
-        parts.append("it grew to %s before its last compaction," % "{:,}".format(state["last_pre"]))
-    parts.append("and it started from %s. A fresh session starts near that first figure: run "
-                 "/handoff, then start a new session with the saved prompt."
-                 % "{:,}".format(state["first_ctx"]))
-    text = " ".join(parts)
-    return text, text
+def amount(n):
+    """A total of tokens in words, as Dan reads it: 2.47 billion, 3.7 million, 512,000."""
+    if n >= 1_000_000_000:
+        return "%.2f billion" % (n / 1e9)
+    if n >= 1_000_000:
+        return "%.1f million" % (n / 1e6)
+    return "{:,}".format(n)
+
+
+def rounded(n):
+    """One request's tokens, to the nearest thousand: the figures in the question are estimates."""
+    return int(round(n, -3)) if n >= 1000 else n
+
+
+def about(n):
+    return "{:,}".format(rounded(n))
+
+
+def long_question(state):
+    """The long session question and its answers, from the state as it is now (#3307)."""
+    total, start = state["ctx_sum"], state["first_ctx"]
+    avg = total // max(state["requests"], 1)
+    again = amount(int(total * ASK_GROWTH))
+    q = ("This session has read %s tokens over %s requests and been compacted %d times. "
+         "Its requests average %s tokens each. A fresh session started from a handoff note would "
+         "start near %s, what this one started from. "
+         % (amount(total), "{:,}".format(state["requests"]), state["compactions"], about(avg), about(start)))
+    # The saving compares like with like (L11): the first request of a stretch. This session starts
+    # every stretch at its floor, the first request after its last compaction; a fresh one near this
+    # one's first request. The average against that start is no saving any request would see: on a
+    # real 62 compaction session it said 246,000 where the restart differed by 50,000 (#3519 review).
+    if state["compactions"] and state["stretch_requests"]:
+        # Both rounded before the difference, so the sentence adds up as Dan reads it.
+        lighter = rounded(state["floor_ctx"]) - rounded(start)
+        if lighter > 0:
+            q += ("After its last compaction this one restarted at %s, so a fresh session would start "
+                  "about %s tokens lighter. That is an estimate, and a fresh session grows again as it "
+                  "works. " % (about(state["floor_ctx"]), "{:,}".format(lighter)))
+        else:
+            q += ("After its last compaction this one restarted at %s, so a fresh session would start "
+                  "no lighter. " % about(state["floor_ctx"]))
+    q += "Hand off to a fresh session, or carry on here?"
+    answers = [
+        (ASK_OPTIONS[0], "This session first writes everything decided and still running into a "
+                         "handoff note, then you start a fresh session from it."),
+        (ASK_OPTIONS[1], "Keep working here. Asked again once this session has read %s tokens." % again),
+        (ASK_OPTIONS[2], "This work belongs in one session. Not asked again for 24 hours, and then "
+                         "only once it has read %s tokens." % again),
+    ]
+    return q, answers
+
+
+def ask_reason(q, answers, payload):
+    """What the held turn's end tells the session: the question word for word, then what to do."""
+    note, broken = note_place(payload or {})
+    lines = ["Long session (claude-config#3307): this session is past the long session line. Before "
+             "this turn ends, ask Dan this one question with AskUserQuestion, word for word, with "
+             "the header \"%s\" and these answers in this order, each with its description:" % ASK_HEADER,
+             "", "Question: " + q, ""]
+    lines += ["%d. %s: %s" % (i + 1, label, desc) for i, (label, desc) in enumerate(answers)]
+    lines += ["", "If he picks Hand off, first write handoff.md in this session's notes folder, at %s, "
+                  "covering %s. If agents you dispatched are still running, name them in the note "
+                  "with their ids and tell Dan to start the fresh session once they have handed back, "
+                  "since their reports come to this session. Then tell Dan in one line where the note "
+                  "is, and that typing /handoff saves the opening prompt that the next session in this "
+                  "repository offers above its prompt. For any other answer, go on with the work."
+                  % (note, WRITE_DOWN)]
+    if broken:
+        lines[-1] += (" But %s, so write the note where a restart of this Mac cannot clear it and "
+                      "tell Dan where." % broken)
+    return "\n".join(lines)
+
+
+def long_session_ask(state, every, now, stop_active, payload):
+    """At a main session's turn end: the reason to hold it and ask Dan, or None (#3307).
+
+    A question is raised once the session is past the line, has read at least next_ask_read, and
+    is past keep_until. A raised question is held, unspent, while this turn's end is the continuation
+    of an earlier hold (stop_hook_active), and put at the first turn's end that is not; a hold by
+    another Stop hook on that same turn's end cannot be seen here. Putting it records the question word
+    for word, to read his answer by, and when the next may be raised. While the Mac sleeps this is
+    never reached: context-size-notice.sh --stop asks lib/sleep.sh's sleep_active first and stops."""
+    if state["compactions"] < every or state["entrypoint"] not in (None, "cli"):
+        return None
+    if not state["requests"]:
+        # Nothing counted (only synthetic lines, or usage moved where this cannot read it, L506):
+        # there is no cost to show, so nothing honest to ask.
+        return None
+    ask = state["ask"]
+    if not (ask.get("raised") and not ask.get("put")):
+        if state["ctx_sum"] < state["next_ask_read"] or now < state["keep_until"]:
+            return None
+        state["asks"] += 1
+        ask = state["ask"] = {"id": state["asks"], "raised": True, "put": False}
+    if stop_active:
+        return None
+    q, answers = long_question(state)
+    ask.update(put=True, question=q, read=state["ctx_sum"], at=now)
+    # Always more than was read now, so no state (a tiny or zero sum, where half again rounds to
+    # nothing) can put the question again at the very next turn's end with the same figures.
+    state["next_ask_read"] = max(int(state["ctx_sum"] * ASK_GROWTH), state["ctx_sum"] + 1)
+    return ask_reason(q, answers, payload)
 
 
 def emit(ctx, system):
@@ -380,6 +556,8 @@ def run(payload_bytes):
     path, is_main, agent = transcript_of(d)
     if not is_name(session):
         return
+    if d.get("hook_event_name") == "Stop" and (not is_main or os.environ.get("CLAUDE_DETACHED_RUN")):
+        return   # the long session question is the main session's, with Dan there to answer it
     home = os.environ.get("CLAUDE_HOME") or os.path.expanduser("~/.claude")
     state_dir = os.environ.get("CONTEXT_SIZE_STATE_DIR") or os.path.join(home, "state", "context-size")
     key = state_key(session, agent, path, is_main)
@@ -425,11 +603,14 @@ def decide(state_dir, key, path, is_main, payload=None):
             state = fresh_state()
     except (OSError, ValueError):
         state = fresh_state()
+    state = with_defaults(state)
+    at_stop = (payload or {}).get("hook_event_name") == "Stop"
+    now = setting("CONTEXT_SIZE_NOW", 0) or time.time()
     try:
         size = os.path.getsize(path)
         fh = open(path, "rb")
     except (OSError, ValueError) as err:   # ValueError: a path holding a lone surrogate
-        if state.get("unreadable_told"):
+        if state.get("unreadable_told") or at_stop:   # said after a tool call, never at a turn's end
             return
         state["unreadable_told"] = True
         try:
@@ -443,7 +624,11 @@ def decide(state_dir, key, path, is_main, payload=None):
         return
     with fh:
         if size < state["offset"]:
-            state = fresh_state()   # rewritten under us: read it again from the start
+            # Rewritten under us: read it again from the start, keeping what Dan was asked and
+            # answered, which the transcript alone cannot say again.
+            kept = {k: state[k] for k in ("ask", "next_ask_read", "keep_until", "asks")}
+            state = fresh_state()
+            state.update(kept)
         fh.seek(state["offset"])
         # Read in pieces, so the first run over a long resumed transcript never holds it whole.
         buf = b""
@@ -452,13 +637,25 @@ def decide(state_dir, key, path, is_main, payload=None):
             if not chunk:
                 break
             buf += chunk
-            used = scan(state, buf, is_main)
+            used = scan(state, buf, is_main, now)
             state["offset"] += used
             buf = buf[used:]
     state["unreadable_told"] = False
 
+    if at_stop:
+        every = setting("CONTEXT_COMPACTIONS_NUDGE", DEFAULT_COMPACTIONS)
+        reason = long_session_ask(state, every, now, (payload or {}).get("stop_hook_active") is True, payload)
+        try:
+            save(state_path, state)
+        except OSError as err:
+            # Nothing held: a question that cannot be recorded as put would be put at every turn's end.
+            sys.stderr.write("context-size-notice: could not record %s (%s)\n" % (state_path, err))
+            return
+        if reason:
+            sys.stdout.write(json.dumps({"decision": "block", "reason": reason}) + "\n")
+        return
+
     line = setting("CONTEXT_LINE_TOKENS", DEFAULT_LINE)
-    every = setting("CONTEXT_COMPACTIONS_NUDGE", DEFAULT_COMPACTIONS)
     band = band_of(state["last_ctx"], state, line)
     say = []
     if band == 0:
@@ -466,10 +663,6 @@ def decide(state_dir, key, path, is_main, payload=None):
     elif band > state["band_told"] and (not is_main or state["orchestrator"]):
         state["band_told"] = band
         say.append(line_notice(state, line, is_main, payload))
-    step = state["compactions"] // every
-    if is_main and step > state["compactions_told"]:
-        state["compactions_told"] = step
-        say.append(compaction_notice(state))
     try:
         save(state_path, state)
     except OSError as err:

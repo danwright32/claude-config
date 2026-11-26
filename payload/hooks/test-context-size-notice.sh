@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Tests for context-size-notice.sh (claude-config#1960, #1940): the context line and the long
-# session nudge, both read from the transcript a PostToolUse payload names.
+# Tests for context-size-notice.sh (claude-config#1960, #1940, #3307): the context line, read from
+# the transcript a PostToolUse payload names, and the long session question, asked from a Stop.
 #
 # - A builder (any subagent) or an orchestrator (a main session that has dispatched an agent or set
 #   a /goal) whose last request carried more than the line (CONTEXT_LINE_TOKENS, 330,000) ABOVE its
@@ -9,8 +9,10 @@
 #   compaction (claude-config#2283), so the fixed load every request carries is never counted as
 #   work. Most fixtures below open with a small first request (`start`), so their floor is 10,000,
 #   and they are sized against the default line, so the first band is 330,000 to 660,000 of work.
-# - A main session compacted CONTEXT_COMPACTIONS_NUDGE (5) times is nudged to start fresh, saying
-#   what its next request costs.
+# - A main session compacted CONTEXT_COMPACTIONS_NUDGE (5) times has Dan asked, when its turn ends,
+#   whether to hand off to a fresh session, with what it has read and what a fresh session would
+#   save (claude-config#3307): once per crossing, again only once it has read half as much again,
+#   never asleep, never in a subagent or a headless run.
 # Every check below was seen failing before the hook existed (L1).
 set -uo pipefail
 
@@ -45,7 +47,9 @@ check_eq(){ if [[ "$3" == "$2" ]]; then pass=$((pass + 1)); else fail=$((fail + 
 
 export CLAUDE_HOME="$WORK/home"; mkdir -p "$CLAUDE_HOME"
 export CONTEXT_SIZE_STATE_DIR="$WORK/state"
-unset CONTEXT_LINE_TOKENS CONTEXT_COMPACTIONS_NUDGE
+unset CONTEXT_LINE_TOKENS CONTEXT_COMPACTIONS_NUDGE CONTEXT_SIZE_NOW CLAUDE_DETACHED_RUN
+# Awake unless a check below writes a sleep record (lib/sleep.sh reads a missing one as awake).
+export CLAUDE_SLEEP_RECORD="$WORK/no-sleep-record.json"
 
 # ---- transcript lines, written the way Claude Code writes them (compact JSON, one line each) ----
 usage(){ # usage <file> <message id> <context tokens>: one request whose input totals <context>
@@ -78,8 +82,34 @@ field(){ printf '%s' "$1" | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 k = sys.argv[1]
-print(d.get("systemMessage", "") if k == "system" else d.get("hookSpecificOutput", {}).get(k, ""))
+if k in ("decision", "reason"):
+    print(d.get(k, ""))
+else:
+    print(d.get("systemMessage", "") if k == "system" else d.get("hookSpecificOutput", {}).get(k, ""))
 ' "$2" 2>/dev/null; }
+stop_fire(){ # stop_fire <session> <transcript> [stop_hook_active]: the main session's turn ending,
+  # run as it is registered there (--stop)
+  printf '{"session_id":"%s","transcript_path":"%s","cwd":"/tmp","hook_event_name":"Stop","stop_hook_active":%s}' "$1" "$2" "${3:-false}" | bash "$HOOK" --stop 2>/dev/null
+}
+headless_usage(){ # headless_usage <file> <message id> <context>: a request of a claude -p run
+  printf '{"type":"assistant","entrypoint":"sdk-cli","message":{"id":"%s","model":"claude-opus-5-5","role":"assistant","content":[{"type":"text","text":"x"}],"usage":{"input_tokens":10,"cache_read_input_tokens":%d,"cache_creation_input_tokens":100}}}\n' "$2" "$(( $3 - 110 ))" >> "$1"
+}
+asked_question(){ # asked_question <state file>: the long session question the hook last put
+  python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("ask", {}).get("question", ""))' "$1" 2>/dev/null
+}
+answered(){ # answered <file> <question> <answer>: Dan's answer to that picker, as Claude Code writes it
+  # (toolUseResult with questions and answers keyed by the question, read off a real transcript).
+  python3 -c '
+import json, sys
+path, q, a = sys.argv[1:4]
+opts = [{"label": l, "description": "d"} for l in ("Hand off (Recommended)", "Carry on", "Keep for a day")]
+line = {"type": "user", "message": {"role": "user", "content": [
+          {"type": "tool_result", "tool_use_id": "toolu_long", "content": "answered"}]},
+        "toolUseResult": {"questions": [{"question": q, "header": "Long session", "options": opts,
+                                         "multiSelect": False}], "answers": {q: a}, "annotations": {}}}
+open(path, "a").write(json.dumps(line, separators=(",", ":")) + "\n")
+' "$1" "$2" "$3"
+}
 
 # ---- 1. A builder: any subagent, its own transcript beside its parent's ----
 P="$WORK/proj/s1.jsonl"; mkdir -p "$WORK/proj/s1/subagents"; : > "$P"
@@ -202,45 +232,182 @@ usage "$L2" msg_1 350000
 out="$(printf '{"session_id":"s2","transcript_path":"%s","agent_id":"b2","agent_transcript_path":"%s","hook_event_name":"PostToolUse","tool_name":"Read"}' "$WORK/proj/s2.jsonl" "$L2" | CONTEXT_LINE_TOKENS=lots bash "$HOOK" 2>/dev/null)"
 check "3 a setting that is not a number falls back to the default line" "past the line of 330,000" "$(field "$out" additionalContext)"
 
-# ---- 4. The long session nudge: compactions of a main session ----
-C="$WORK/proj/c1.jsonl"; : > "$C"
-usage "$C" msg_0 44000
-i=1; while [ "$i" -le 4 ]; do usage "$C" "msg_a$i" 700000; compacted "$C" 780000; i=$((i + 1)); done
+# ---- 4. The long session question (claude-config#3307): a main session past the line has Dan
+# asked, with the cost, once per crossing, when its turn ends ----
+long_fixture(){ # long_fixture <file> <compactions>: a session that started at 44,000 and compacted N times
+  : > "$1"
+  usage "$1" msg_0 44000
+  local i=1; while [ "$i" -le "$2" ]; do usage "$1" "msg_a$i" 700000; compacted "$1" 780000; i=$((i + 1)); done
+}
+C="$WORK/proj/c1.jsonl"; long_fixture "$C" 4
 usage "$C" msg_b 52000
-check_eq "4 four compactions say nothing" "" "$(main_fire c1 "$C")"
+check_eq "4 four compactions: nothing after a tool call" "" "$(main_fire c1 "$C")"
+check_eq "4 four compactions: nothing when the turn ends" "" "$(stop_fire c1 "$C")"
 usage "$C" msg_c 700000
 compacted "$C" 790000
 usage "$C" msg_d 61000
 usage "$C" msg_d 61000
-out="$(main_fire c1 "$C")"
-check_eq "4 the nudge is a JSON hook answer" "ok" "$(json_ok "$out")"
-ctx="$(field "$out" additionalContext)"
-sys="$(field "$out" system)"
-check "4 the fifth compaction nudges a fresh start" "compacted 5 times" "$sys"
-check "4 saying what its next request costs (at least its last)" "61,000" "$sys"
-check "4 its size before the last compaction" "790,000" "$sys"
-check "4 what it started from" "44,000" "$sys"
-check "4 and its average" "averaged" "$sys"
-check "4 counting a request written as two lines once" "across its 8 requests" "$sys"
-check "4 naming the issue" "claude-config#1940" "$sys"
-check "4 the session hears it as well" "compacted 5 times" "$ctx"
-check "4 and how to start fresh" "/handoff" "$sys"
-check_eq "4 once, not on every call after" "" "$(main_fire c1 "$C")"
+check_eq "4 past the line, a tool call says nothing: the question waits for the turn's end" "" "$(main_fire c1 "$C")"
+out="$(stop_fire c1 "$C")"
+check_eq "4 the turn's end is a JSON hook answer" "ok" "$(json_ok "$out")"
+check_eq "4 the fifth compaction holds the turn's end once, to ask Dan" "block" "$(field "$out" decision)"
+why="$(field "$out" reason)"
+check "4 asked of Dan with a picker" "AskUserQuestion" "$why"
+check "4 under the header Long session" "Long session" "$why"
+check "4 the question says what the session has read so far" "has read 3.7 million tokens" "$why"
+check "4 counting a request written as two lines once" "over 8 requests" "$why"
+check "4 and how often it has been compacted" "compacted 5 times" "$why"
+check "4 what its requests average" "average 457,000 tokens each" "$why"
+check "4 what a fresh session would start near" "start near 44,000" "$why"
+# The saving compares like with like, the first request of a stretch (L11): this session restarts
+# at its floor after each compaction (61,000 here), a fresh one near this one's first request. Its
+# lifetime average against a fresh start is no saving any request will see (the #3519 review).
+check "4 where this session restarted after its last compaction" "After its last compaction this one restarted at 61,000" "$why"
+check "4 so how much lighter a fresh session would start" "start about 17,000 tokens lighter" "$why"
+check_not "4 never the average against a fresh start, which no request saves" "fewer tokens each" "$why"
+check "4 and that the saving is an estimate" "an estimate" "$why"
+check "4 the recommended answer is first" "1. Hand off (Recommended)" "$why"
+check "4 then carry on" "2. Carry on" "$why"
+check "4 then keep it in one place for a stated stretch" "3. Keep for a day" "$why"
+check "4 carry on states when it asks again" "read 5.5 million tokens" "$why"
+check "4 keep states the stretch" "24 hours" "$why"
+check "4 handing off writes the note first, so no work is lost" "handoff.md" "$why"
+check "4 in this session's notes folder" "session-notes" "$why"
+check "4 and says what to do with agents still running" "still running" "$why"
+check "4 naming the issue" "claude-config#3307" "$why"
+q="$(asked_question "$CONTEXT_SIZE_STATE_DIR/c1.main.json")"
+check "4 the question it put is recorded, to read Dan's answer by" "has read 3.7 million tokens" "$q"
+check "4 and fits a picker Dan can read (at most 1500 characters)" "fits" "$([ "${#q}" -le 1500 ] && [ "${#q}" -gt 0 ] && echo fits)"
+check_eq "4 asked once: the next turn's end is quiet" "" "$(stop_fire c1 "$C")"
+check_eq "4 and so is the next tool call" "" "$(main_fire c1 "$C")"
+answered "$C" "$q" "Carry on"
 usage "$C" msg_e 70000
-check_eq "4 nor on the next request" "" "$(main_fire c1 "$C")"
+check_eq "4 Dan said carry on: not asked again while it grows less than half again" "" "$(stop_fire c1 "$C")"
 i=1; while [ "$i" -le 5 ]; do usage "$C" "msg_f$i" 700000; compacted "$C" 780000; i=$((i + 1)); done
 usage "$C" msg_g 50000
-check "4 ten compactions say it again" "compacted 10 times" "$(field "$(main_fire c1 "$C")" system)"
-C2="$WORK/proj/c2.jsonl"; : > "$C2"
-usage "$C2" msg_0 44000
-compacted "$C2" 500000; compacted "$C2" 500000
-usage "$C2" msg_1 30000
-check "4 CONTEXT_COMPACTIONS_NUDGE moves the count" "compacted 2 times" "$(printf '{"session_id":"c2","transcript_path":"%s","hook_event_name":"PostToolUse","tool_name":"Bash"}' "$C2" | CONTEXT_COMPACTIONS_NUDGE=2 bash "$HOOK" 2>/dev/null)"
+again="$(field "$(stop_fire c1 "$C")" reason)"
+check "4 asked again once it has read half as much again" "compacted 10 times" "$again"
+check "4 with the new figure" "has read 7.3 million tokens" "$again"
+
+# Unanswered: never asked on every turn's end, only again once the cost has grown by half.
+C5="$WORK/proj/c5.jsonl"; long_fixture "$C5" 5
+usage "$C5" msg_b 52000
+check_eq "4 unanswered: asked at the line" "block" "$(field "$(stop_fire c5 "$C5")" decision)"
+usage "$C5" msg_c 300000
+check_eq "4 unanswered and grown less than half: quiet" "" "$(stop_fire c5 "$C5")"
+usage "$C5" msg_d 900000; usage "$C5" msg_e 900000
+check_eq "4 unanswered and grown by half: asked again" "block" "$(field "$(stop_fire c5 "$C5")" decision)"
+
+# Keep for a day: not asked again for a day (KEEP_SECONDS, set in the code, not measured), however
+# much it reads, and then only on growth.
+C4="$WORK/proj/c4.jsonl"; long_fixture "$C4" 5
+usage "$C4" msg_b 52000
+T0=1800000000
+check_eq "4 keep: asked at the line" "block" "$(field "$(CONTEXT_SIZE_NOW=$T0 stop_fire c4 "$C4")" decision)"
+answered "$C4" "$(asked_question "$CONTEXT_SIZE_STATE_DIR/c4.main.json")" "Keep for a day"
+usage "$C4" msg_c 60000
+check_eq "4 keep: the answer is read on the next tool call" "" "$(CONTEXT_SIZE_NOW=$((T0 + 60)) main_fire c4 "$C4")"
+i=1; while [ "$i" -le 6 ]; do usage "$C4" "msg_k$i" 900000; i=$((i + 1)); done
+check_eq "4 keep: grown by half within the day, still not asked" "" "$(CONTEXT_SIZE_NOW=$((T0 + 23 * 3600)) stop_fire c4 "$C4")"
+check_eq "4 keep: past the day and grown by half, asked again" "block" "$(field "$(CONTEXT_SIZE_NOW=$((T0 + 25 * 3600)) stop_fire c4 "$C4")" decision)"
+
+# Hand off: the session goes on until Dan starts the fresh one, and is asked again only on growth.
+C6="$WORK/proj/c6.jsonl"; long_fixture "$C6" 5
+usage "$C6" msg_b 52000
+stop_fire c6 "$C6" >/dev/null
+answered "$C6" "$(asked_question "$CONTEXT_SIZE_STATE_DIR/c6.main.json")" "Hand off (Recommended)"
+usage "$C6" msg_c 60000
+check_eq "4 hand off: not asked again at the next turn's end" "" "$(stop_fire c6 "$C6")"
+
+# A turn's end that is the continuation of an earlier hold (stop_hook_active): the question waits
+# for the next one. Another Stop hook holding the SAME turn's end cannot be seen, so is not tested.
+C7="$WORK/proj/c7.jsonl"; long_fixture "$C7" 5
+usage "$C7" msg_b 52000
+check_eq "4 a turn's end another stop hook is continuing is never held again" "" "$(stop_fire c7 "$C7" true)"
+check_eq "4 the question waits for the next turn's end" "block" "$(field "$(stop_fire c7 "$C7")" decision)"
+
+# Asleep (sleep mode): nothing is asked, and the question is held for the first turn's end after wake.
+C8="$WORK/proj/c8.jsonl"; long_fixture "$C8" 5
+usage "$C8" msg_b 52000
+BOOT_NOW="$(sysctl -n kern.boottime 2>/dev/null | sed -n '1s/^[^0-9]*sec *= *\([0-9][0-9]*\).*/\1/p')"
+printf '{"v":1,"until":%s,"bootTime":%s}\n' "$(( ($(date +%s) + 3600) * 1000 ))" "${BOOT_NOW:-1}" > "$WORK/asleep.json"
+check_eq "4 asleep: the turn's end is not held" "" "$(CLAUDE_SLEEP_RECORD="$WORK/asleep.json" stop_fire c8 "$C8")"
+check_eq "4 awake again: the first turn's end asks" "block" "$(field "$(stop_fire c8 "$C8")" decision)"
+
+# Never asked: a subagent, a headless run, a detached run.
 S="$WORK/proj/c3/subagents/agent-d1.jsonl"; mkdir -p "$WORK/proj/c3/subagents"; : > "$S"; : > "$WORK/proj/c3.jsonl"
 usage "$S" msg_0 44000
 i=1; while [ "$i" -le 5 ]; do compacted "$S" 500000; i=$((i + 1)); done
 usage "$S" msg_1 30000
-check_eq "4 a subagent is never nudged to start a fresh session" "" "$(agent_fire c3 "$WORK/proj/c3.jsonl" d1 "$S")"
+check_eq "4 a subagent's tool call is never asked about" "" "$(agent_fire c3 "$WORK/proj/c3.jsonl" d1 "$S")"
+check_eq "4 nor its stop" "" "$(printf '{"session_id":"c3","transcript_path":"%s","agent_id":"d1","agent_transcript_path":"%s","hook_event_name":"Stop","stop_hook_active":false}' "$WORK/proj/c3.jsonl" "$S" | bash "$HOOK" --stop 2>/dev/null)"
+H="$WORK/proj/h1.jsonl"; : > "$H"
+headless_usage "$H" msg_0 44000
+i=1; while [ "$i" -le 5 ]; do headless_usage "$H" "msg_a$i" 700000; compacted "$H" 780000; i=$((i + 1)); done
+headless_usage "$H" msg_b 52000
+check_eq "4 a headless run (claude -p) has nobody to ask" "" "$(stop_fire h1 "$H")"
+D="$WORK/proj/d1.jsonl"; long_fixture "$D" 5
+usage "$D" msg_b 52000
+check_eq "4 a detached run is never asked" "" "$(CLAUDE_DETACHED_RUN=1 stop_fire d1 "$D")"
+
+C2="$WORK/proj/c2.jsonl"; long_fixture "$C2" 2
+usage "$C2" msg_1 30000
+out="$(CONTEXT_COMPACTIONS_NUDGE=2 stop_fire c2 "$C2")"
+check "4 CONTEXT_COMPACTIONS_NUDGE moves the line" "compacted 2 times" "$out"
+check "4 a session restarting lighter than it started is told a fresh one would start no lighter" "would start no lighter" "$out"
+check_not "4 and is promised no saving" "tokens lighter" "$out"
+
+# Compacted with no request since: there is no restart size to compare, so none is claimed.
+C9="$WORK/proj/c9.jsonl"; long_fixture "$C9" 5
+out="$(field "$(stop_fire c9 "$C9")" reason)"
+check "4 compacted with no request since: still asked" "compacted 5 times" "$out"
+check_not "4 with no restart size claimed" "restarted at" "$out"
+
+# A state folder the question cannot be recorded in: never held, since a question that cannot be
+# recorded as put would hold every turn's end after it (the return after a failed save at Stop).
+# Root ignores a folder's permissions, so there this cannot be measured.
+if [ "$(id -u)" != 0 ]; then
+  NW="$WORK/nowrite"; mkdir -p "$NW"
+  C10="$WORK/proj/c10.jsonl"; long_fixture "$C10" 4
+  usage "$C10" msg_b 52000
+  check_eq "4 unwritable: below the line, the state and its lock are made" "" "$(CONTEXT_SIZE_STATE_DIR="$NW" stop_fire c10 "$C10")"
+  usage "$C10" msg_c 700000; compacted "$C10" 790000; usage "$C10" msg_d 61000
+  chmod 500 "$NW"
+  check_eq "4 unwritable: past the line, the turn's end is not held" "" "$(CONTEXT_SIZE_STATE_DIR="$NW" stop_fire c10 "$C10")"
+  check_eq "4 unwritable: nor the next one" "" "$(CONTEXT_SIZE_STATE_DIR="$NW" stop_fire c10 "$C10")"
+  chmod 700 "$NW"
+  check_eq "4 writable again: the question is put" "block" "$(field "$(CONTEXT_SIZE_STATE_DIR="$NW" stop_fire c10 "$C10")" decision)"
+fi
+
+# No request counted: past the line on compactions, but nothing read to show (only lines of model
+# output Claude Code writes itself, or no usage at all, as when Claude Code moves the field, L506).
+# There is no cost to ask about, and asking would repeat at every turn's end (the second review).
+C12="$WORK/proj/c12.jsonl"; : > "$C12"
+i=1; while [ "$i" -le 5 ]; do
+  printf '{"type":"assistant","message":{"id":"msg_s%s","model":"<synthetic>","usage":{"input_tokens":0,"output_tokens":0}}}\n' "$i" >> "$C12"
+  compacted "$C12" 780000; i=$((i + 1))
+done
+check_eq "4 only synthetic usage lines: the turn's end is not held" "" "$(stop_fire c12 "$C12")"
+check_eq "4 nor the next one" "" "$(stop_fire c12 "$C12")"
+C13="$WORK/proj/c13.jsonl"; : > "$C13"
+i=1; while [ "$i" -le 5 ]; do compacted "$C13" 780000; i=$((i + 1)); done
+check_eq "4 no usage at all: the turn's end is not held" "" "$(stop_fire c13 "$C13")"
+
+# Once put, the very next turn's end with the same figures is never held, whatever they are: the
+# next question needs more read than this one, even where half as much again rounds to nothing.
+C14="$WORK/proj/c14.jsonl"; : > "$C14"
+printf '{"type":"assistant","message":{"id":"msg_one","model":"claude-opus-5-5","usage":{"input_tokens":1}}}\n' >> "$C14"
+i=1; while [ "$i" -le 5 ]; do compacted "$C14" 780000; i=$((i + 1)); done
+check_eq "4 one token read: asked at the line" "block" "$(field "$(stop_fire c14 "$C14")" decision)"
+check_eq "4 one token read: the next turn's end with the same figures is not held" "" "$(stop_fire c14 "$C14")"
+
+# A transcript rewritten shorter after the question was put is read again from the start, keeping
+# what Dan was asked, which the transcript alone cannot say again: never asked again for it.
+C11="$WORK/proj/c11.jsonl"; long_fixture "$C11" 5
+i=1; while [ "$i" -le 6 ]; do usage "$C11" "msg_x$i" 60000; i=$((i + 1)); done
+check_eq "4 rewritten: asked at the line" "block" "$(field "$(stop_fire c11 "$C11")" decision)"
+long_fixture "$C11" 5; usage "$C11" msg_y 52000
+check_eq "4 rewritten shorter after asking: not asked again" "" "$(stop_fire c11 "$C11")"
 
 # ---- 5. Reading only what is new, and a transcript that was rewritten ----
 R="$WORK/proj/r1/subagents/agent-r1.jsonl"; mkdir -p "$WORK/proj/r1/subagents"; : > "$R"; : > "$WORK/proj/r1.jsonl"
@@ -319,6 +486,15 @@ for m in d["hooks"].get("PostToolUse", []):
             print("matcher=" + repr(m.get("matcher")))
 ' "$SETTINGS" 2>/dev/null)"
 check_eq "8 registered as a PostToolUse hook on every tool (no matcher)" "matcher=None" "$reg"
+stop_reg="$(python3 -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+for m in d["hooks"].get("Stop", []):
+    for h in m.get("hooks", []):
+        if h.get("command", "").endswith("/hooks/context-size-notice.sh --stop"):
+            print("stop timeout=%s" % h.get("timeout"))
+' "$SETTINGS" 2>/dev/null)"
+check_eq "8 and as a Stop hook with --stop, where the long session question is asked (#3307)" "stop timeout=10" "$stop_reg"
 
 # ---- 9. lib/context_size.py, the one sum tools/cache-usage.py also reports through ----
 # lib/ is spelt from BASH_SOURCE here and in 10, never "$DIR/lib": this suite sources hang-wait.sh,
