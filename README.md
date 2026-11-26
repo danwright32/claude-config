@@ -6716,6 +6716,16 @@ each part's timings into the cache the next deal reads. A part refuses outright 
 not cover exactly the suites the tree holds, so a new suite can never be run by no job.
 `gh workflow run tests.yml --ref <branch>` runs a branch with no pull request open.
 
+Each part also fails when a suite it ran took more than half the 1,200 second wall limit every suite
+is stopped at (claude-config#3575), naming the suite, its seconds and the ceiling, so the next suite
+to grow is caught on its own pull request rather than stopped on main by a slow runner. It judges
+the wall clock this run read for each suite, which is what the wall limit stops a suite on: never
+the figure written for the next deal, which can sit above the reading when a record names a smaller
+share, and never the cache the deal was made from, which a pull request restores from an earlier
+run and can be several splits old. A suite
+that left no time is named as not measured. A run on a Mac is never judged. The remedy is to split
+the suite into suites sharing one harness, as #3581 and #3588 did.
+
 A pull request run whose exact tree already passed does not run the suites again (claude-config#2690,
 the cheap run after `gh pr update-branch`). Every full green run records its tree as an artifact
 named `green-tree-<tree>`; the `deal` job asks `tools/ci-reuse-green-tree.sh` whether this run's
