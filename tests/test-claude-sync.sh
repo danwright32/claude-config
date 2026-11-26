@@ -2281,6 +2281,8 @@ fn_drive(){
 # The workflow timeout reader the #1901 section uses, loaded here rather than in that section: past
 # its first check this file's variables are more than the drafts gate follows, so a path made from
 # SCRIPT there is one it refuses (#2538). The section checks it loaded.
+# The lock library the #1148 section drives directly, named here for the same reason (#3683).
+SUITE_PID_LOCK_LIB="${SCRIPT%/*}/payload/hooks/lib/pid-lock.sh"
 _wf_lib="${SCRIPT%/*}/payload/hooks/lib/workflow-job-timeout.sh"
 _wf_lib_ok=0
 if [ -f "$_wf_lib" ] && . "$_wf_lib"; then _wf_lib_ok=1; fi
@@ -13143,12 +13145,12 @@ fi
 echo \$(( 1000 + n ))
 RVSTEP
 chmod +x "$WORK/rv1148-step-clock"
-RV_PIDLOCK="${SCRIPT%/*}/payload/hooks/lib/pid-lock.sh"
 _rv_steplock(){   # $1 = 1 to hand the lock on -> the wait's exit code, then the clock reads it took
   local rc=0
   rm -f "$WORK/rv1148-step-n"; printf '%s\n' "${_rv_h[0]}" > "$RVF.lock"
-  RV_HANDOFF="$1" PID_LOCK_TEST_CLOCK="$WORK/rv1148-step-clock" \
-    bash -c '. "$1" && take_pid_lock "$2" 5' _ "$RV_PIDLOCK" "$RVF.lock" 2>/dev/null || rc=$?
+  # A subshell of its own, so the library and the clock reach nothing else in this suite.
+  ( export RV_HANDOFF="$1" PID_LOCK_TEST_CLOCK="$WORK/rv1148-step-clock"
+    . "$SUITE_PID_LOCK_LIB" && take_pid_lock "$RVF.lock" 5 ) 2>/dev/null || rc=$?
   echo "$rc $(cat "$WORK/rv1148-step-n" 2>/dev/null || echo none)"
 }
 rv_hand="$(_rv_steplock 1)"; rv_hand_lock="$(cat "$RVF.lock" 2>/dev/null)"; rm -f "$RVF.lock"
@@ -13156,12 +13158,12 @@ rv_keep="$(_rv_steplock 0)"; rv_keep_lock="$(cat "$RVF.lock" 2>/dev/null)"; rm -
 kill "${_rv_h[@]}" 2>/dev/null; wait "${_rv_h[@]}" 2>/dev/null
 dbg "#3683 lock handed on: rc and clock reads '$rv_hand'; kept: '$rv_keep'"
 check "#3683 a lock passed from holder to holder is waited for past the deadline and then taken" \
-  "[ \"\${rv_hand%% *}\" = 0 ] && [ \"\${rv_hand#* }\" = 12 ] && [ -n \"\$rv_hand_lock\" ] && [ \"\$rv_hand_lock\" != '${_rv_h[3]}' ]"
+  "[ \"\${rv_hand%% *}\" = 0 ] && [ \"\${rv_hand#* }\" = 12 ] && [ \"\$rv_hand_lock\" = '$$' ]"
 check "#3683 the control: one holder keeping it past the deadline is still refused, its lock left alone" \
   "[ \"\${rv_keep%% *}\" = 1 ] && [ \"\$rv_keep_lock\" = '${_rv_h[0]}' ]"
 printf '#!/usr/bin/env bash\necho soon\n' > "$WORK/rv1148-bad-clock"; chmod +x "$WORK/rv1148-bad-clock"
 rv_badclk_rc=0
-rv_badclk="$(printf '%s\n' "$$" > "$RVF.lock"; PID_LOCK_TEST_CLOCK="$WORK/rv1148-bad-clock" bash -c '. "$1" && take_pid_lock "$2" 5' _ "$RV_PIDLOCK" "$RVF.lock" 2>&1)" || rv_badclk_rc=$?
+rv_badclk="$(printf '%s\n' "$$" > "$RVF.lock"; export PID_LOCK_TEST_CLOCK="$WORK/rv1148-bad-clock"; . "$SUITE_PID_LOCK_LIB" && take_pid_lock "$RVF.lock" 5 2>&1)" || rv_badclk_rc=$?
 check "#3683 a lock test clock that prints no number gives the wait up, saying so" \
   "[ \"\$rv_badclk_rc\" -eq 1 ] && grep -q 'PID_LOCK_TEST_CLOCK' <<< \"\$rv_badclk\""
 rm -f "$RVF.lock"
