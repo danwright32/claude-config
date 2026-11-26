@@ -57,10 +57,11 @@ JUDGES="one that puts the changelog/announce label on a pull request, or writes 
 }
 payload="$(ps_clean_payload "$payload")"
 # A payload nothing can read as a call is judged by its words (#1922, #2057): refused when it names
-# the label or the record, naming the payload, and passed otherwise. The label is matched in any
-# letter case, as GitHub reads a label's name and as judged_call above does.
+# the label or the record, naming the payload, and passed otherwise. Both are matched in any letter
+# case, as judged_call above does: GitHub reads a label's name so, and a Mac's disk reads the
+# record's folder so.
 ps_parse_payload "$payload" raw >/dev/null \
-  || ps_unparsed_refuse "$payload" announce-label-ask.sh - "$JUDGES" '*[Cc][Hh][Aa][Nn][Gg][Ee][Ll][Oo][Gg]/[Aa][Nn][Nn][Oo][Uu][Nn][Cc][Ee]*' '*announce-approvals*'
+  || ps_unparsed_refuse "$payload" announce-label-ask.sh - "$JUDGES" '*[Cc][Hh][Aa][Nn][Gg][Ee][Ll][Oo][Gg]/[Aa][Nn][Nn][Oo][Uu][Nn][Cc][Ee]*' '*[Aa][Nn][Nn][Oo][Uu][Nn][Cc][Ee]-[Aa][Pp][Pp][Rr][Oo][Vv][Aa][Ll][Ss]*'
 
 if ! command -v python3 >/dev/null 2>&1; then
   echo "ANNOUNCE LABEL: python3 is not on PATH, so announce-label-ask.sh could not tell whether this call is $JUDGES. A gate that did not run is not one that found nothing. Install python3 and run the command again." >&2

@@ -321,6 +321,10 @@ check "a payload it cannot parse that names the label is refused, naming the pay
 # GitHub reads a label's name in any letter case, so the words of such a payload are read so too.
 r="$(cut_payload '{"tool_name": "Bash", "tool_input": {"command": "gh pr edit 7 --add-label CHANGELOG/ANNOUNCE"}')"
 check "a payload it cannot parse that names the label in capitals is refused, naming the payload" "$([[ "$r" == *"payload"*" rc=2" ]] && echo ok || echo "$r")"
+r="$(cut_payload '{"tool_name": "Write", "tool_input": {"file_path": "/Users/x/.claude/state/announce-approvals/record.jsonl"')"
+check "a payload it cannot parse that names the record is refused, naming the payload" "$([[ "$r" == *"payload"*" rc=2" ]] && echo ok || echo "$r")"
+r="$(cut_payload '{"tool_name": "Write", "tool_input": {"file_path": "/Users/x/.claude/STATE/Announce-Approvals/record.jsonl"')"
+check "a payload it cannot parse that names the record in other capitals is refused, naming the payload" "$([[ "$r" == *"payload"*" rc=2" ]] && echo ok || echo "$r")"
 r="$(cut_payload '{"tool_name": "Bash", "tool_input": {"command": "ls -la"}')"
 check "a payload it cannot parse that names nothing it judges passes" "$([[ "$r" == " rc=0" ]] && echo ok || echo "$r")"
 
