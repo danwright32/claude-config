@@ -141,6 +141,13 @@ checkout_parts(){
   grep -q -x 'WHEN-A-SUITE-CHANGES payload/hooks/test-scan-absence-needles.sh' <<< "$_sel" \
     && check "#3183 the real repo's absence needle scan is run when a push changes a suite" ok \
     || check "#3183 the real repo's absence needle scan is run when a push changes a suite" "got=$_sel"
+  # The Slack gate's runners suite walks nothing of the checkout: it names the helper only in a
+  # command it hands that gate, and the walk the old rule saw is that gate's own, in a lib program
+  # the suite names in a heredoc (claude-config#3662, Dan's decision of 2026-11-25). If it ever does
+  # walk the checkout, with the helper run in its own code, this check is the one to change.
+  grep -q 'test-slack-drafts-only-gate-runners[.]sh' <<< "$_sel" \
+    && check "#3662 the real repo's Slack gate runners suite, which walks nothing of the checkout, is not selected" "got=$_sel" \
+    || check "#3662 the real repo's Slack gate runners suite, which walks nothing of the checkout, is not selected" ok
   _real_floor="$(awk '/^[[:space:]]*#/ { next } $1 ~ /[.]sh$/ { print $1 } $1 == "WHEN-A-SUITE-CHANGES" { print $1 " " $2 }' "$REAL/.claude/scanners-floor.txt" 2>/dev/null | sort -u)"
   _real_n="$(grep -c . <<< "$_real_sel")"
   [ "$_real_n" -ge 21 ] && [ "$_real_sel" = "$_real_floor" ] \
@@ -2747,6 +2754,15 @@ out="$(fire "$RFW" "git push")"; rc=$?
 [ "$rc" -eq 2 ] && grep -q -F "payload/hooks/test-pwalk.sh" <<< "$out" \
   && check "#3183 a named walker that stops walking the checkout blocks the push, naming it" ok \
   || check "#3183 a named walker that stops walking the checkout blocks the push, naming it" "exit=$rc out=$out"
+# The refusal says how a walker is recognised in the words the rule now has (claude-config#3662), and
+# names the one way out a branch has when main stopped selecting the suite after the branch was cut:
+# its floor still names the suite, and taking main in removes the line.
+grep -q -F "its own code runs lib/checkout-root.sh" <<< "$out" \
+  && check "#3662 the refusal says a walker is a suite whose own code runs the helper" ok \
+  || check "#3662 the refusal says a walker is a suite whose own code runs the helper" "exit=$rc out=$out"
+grep -q -F "bring main into this branch" <<< "$out" \
+  && check "#3662 and tells a branch cut before main stopped selecting a suite to bring main in" ok \
+  || check "#3662 and tells a branch cut before main stopped selecting a suite to bring main in" "exit=$rc out=$out"
 # A walker that already passed on this exact tree is skipped like a scanner, and the line saying what
 # ran counts only the walkers that ran: a retry that ran none must not say it included them.
 RWP="$(pub_repo walkpass)"
@@ -2765,6 +2781,104 @@ out="$(SCANNERS_STATE_DIR="$WPSTATE" wn_fire "$RWP" "git push -u origin add-suit
   || check "#3183 and a retry that skipped it, having passed on this tree, does not say it was included" "exit=$rc out=$out"
 git -C "$RWP" checkout -q main
 
+# --- claude-config#3662: a suite FINDS its checkout only when its own code RUNS lib/checkout-root.sh.
+#     The helper's name inside text the suite hands to something else is not a run. Until
+#     2026-11-25 any code line naming the helper counted, and the gate took
+#     test-slack-drafts-only-gate-runners.sh for a walker on two mentions that are both text: a
+#     fixture command it hands the Slack gate names the helper, and a heredoc names a lib program
+#     holding that gate's own walk of a folder a command names. It walks nothing of the checkout,
+#     and it was the slowest suite the gate ran (85 to 89 seconds of processor time alone, 3 runs
+#     on 2026-11-25).
+#     Measured 2026-11-25 on main: of the 68 suites whose code names the helper, 66 run it inside a
+#     command substitution, and the 2 that never run it are that suite and the sync suite, which
+#     copies the helper into a scratch lib by name.
+#     One stand in per way the recogniser knows a suite reads the whole tree, so a tightening that
+#     drops a real kind fails here by name (L247), beside the shapes that are only text.
+RK="$(mkrepo kinds)"; mkdir -p "$RK/payload/hooks/lib"
+printf 'import os\nfor b, d, n in os.walk("."):\n    pass\n' > "$RK/payload/hooks/kwalk-beside.py"
+printf 'import pathlib\nfor p in pathlib.Path(".").rglob("*.sh"):\n    pass\n' > "$RK/payload/hooks/lib/kwalk-inlib.py"
+kind(){   # $1 = name, then the suite's lines, one per argument
+  local f="$RK/payload/hooks/test-k-$1.sh"; shift
+  { printf '#!/usr/bin/env bash\n'; printf '%s\n' "$@"; printf 'exit 0\n'; } > "$f"; chmod +x "$f"
+}
+K_RUN='REPO="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"'
+K_WALK='python3 -c "import os, sys; list(os.walk(sys.argv[1]))" "$REPO"'
+# Every way a walk is spelled, with the helper run inside a command substitution, as the real
+# walkers run it.
+kind oswalk "$K_RUN" "$K_WALK"
+kind rglob "$K_RUN" 'python3 -c "import pathlib, sys; list(pathlib.Path(sys.argv[1]).rglob(sys.argv[2]))" "$REPO" "*.sh"'
+kind find "$K_RUN" 'find "$REPO" \( -name .git -o -name worktrees \) -prune -o -type f -print >/dev/null'
+kind beside "$K_RUN" 'SCAN="$DIR/kwalk-beside.py"' 'python3 "$SCAN" "$REPO" >/dev/null'
+kind inlib "$K_RUN" 'AUDIT="$DIR/lib/kwalk-inlib.py"' 'python3 "$AUDIT" "$REPO" >/dev/null'
+# Every way the helper is run: behind a default, in backticks, inside another substitution, as a
+# command of its own (alone, after another command, as a condition, on the line after the
+# substitution opens), sourced, and through a variable holding its path.
+kind default 'REPO="${KIND_ROOT:-$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)}"' "$K_WALK"
+kind backtick 'REPO=`bash "$DIR/lib/checkout-root.sh" "$DIR/.."`' "$K_WALK"
+kind nested 'REPO="$(bash "$(dirname "$HOOK")/lib/checkout-root.sh" "$(dirname "$HOOK")")"' "$K_WALK"
+kind ownline 'bash "$DIR/lib/checkout-root.sh" "$DIR/.." > "$T/root" 2>/dev/null' 'read -r REPO < "$T/root"' "$K_WALK"
+kind chained 'cd "$DIR" && bash lib/checkout-root.sh "$DIR/.." > "$T/root"' 'read -r REPO < "$T/root"' "$K_WALK"
+kind tested 'if ! bash "$DIR/lib/checkout-root.sh" "$DIR/.." > "$T/root" 2>/dev/null; then exit 0; fi' 'read -r REPO < "$T/root"' "$K_WALK"
+kind split 'REPO="$(' '  bash "$DIR/lib/checkout-root.sh" "$DIR/.."' ')"' "$K_WALK"
+kind sourced '. "$DIR/lib/checkout-root.sh"' "$K_WALK"
+kind heldvar 'HELPER="$DIR/lib/checkout-root.sh"' 'REPO="$(bash "$HELPER" "$DIR/..")"' "$K_WALK"
+# The two ways a suite lists the repository's files, which every push runs.
+kind lsfiles 'git ls-files "*.sh" >/dev/null'
+kind repofiles 'bash "$DIR/lib/repo-files.sh" . "*.sh" >/dev/null'
+# Text only. The first is the runners suite's own shape, its line naming the helper copied from
+# that suite: commands in a list handed to another gate, and a lib program that walks named in a
+# heredoc. The second names the helper every other way that is not a run: among the lib files it
+# copies to a scratch folder, in a pattern, and in two messages, and it walks that scratch folder.
+kind fixturetext \
+  'for c in "bash $T/plain.sh" \' \
+  "         \"cat > \$T/h.py <<'EOF'" \
+  'print(2)' \
+  'EOF' \
+  'python3 $T/h.py" "bash $DIR/lib/checkout-root.sh $DIR/.." "source $DIR/lib/checkout-root.sh; ls" \' \
+  '         "curl -s https://example.invalid/x"; do' \
+  '  run_bash "$c"' \
+  'done' \
+  "cat > \"\$T/where.py\" <<'PY'" \
+  'print("ok" if where == {"kwalk-inlib.py"} else "no")' \
+  'PY'
+kind nametext \
+  'python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$T/lib" kill-tree.sh whole-number.sh \' \
+  '  load-average.sh checkout-root.sh >/dev/null' \
+  'cp "$DIR/lib/checkout-root.sh" "$T/lib/"' \
+  'case "$body" in *"lib/checkout-root.sh"*) uses=yes ;; *) uses=no ;; esac' \
+  'no_checkout="this suite is not in a checkout (lib/checkout-root.sh found none above $DIR)"' \
+  'check_eq "each suite asks lib/checkout-root.sh" \' \
+  '  "yes" "$uses"' \
+  'python3 -c "import os, sys; list(os.walk(sys.argv[1]))" "$T/lib"'
+commit_all "$RK"
+_kl="$(printf '{"tool_name":"Bash","tool_input":{"command":"git push"},"cwd":"%s"}' "$RK" | SCANNERS_LIST=1 bash "$H" 2>&1)"
+for _k in oswalk rglob find beside inlib; do
+  grep -q -x "WHEN-A-SUITE-CHANGES payload/hooks/test-k-$_k.sh" <<< "$_kl" \
+    && check "#3662 a suite that runs the helper and walks the tree ($_k) is still a walker" ok \
+    || check "#3662 a suite that runs the helper and walks the tree ($_k) is still a walker" "got=$_kl"
+done
+for _k in default backtick nested ownline chained tested split sourced heldvar; do
+  grep -q -x "WHEN-A-SUITE-CHANGES payload/hooks/test-k-$_k.sh" <<< "$_kl" \
+    && check "#3662 a suite that runs the helper another way ($_k) and walks is still a walker" ok \
+    || check "#3662 a suite that runs the helper another way ($_k) and walks is still a walker" "got=$_kl"
+done
+for _k in lsfiles repofiles; do
+  grep -q -x "SUITE payload/hooks/test-k-$_k.sh" <<< "$_kl" \
+    && check "#3662 a suite that lists the repository's files ($_k) is still a scanner every push runs" ok \
+    || check "#3662 a suite that lists the repository's files ($_k) is still a scanner every push runs" "got=$_kl"
+done
+grep -q 'test-k-fixturetext[.]sh' <<< "$_kl" \
+  && check "#3662 a suite naming the helper only in a command it hands another gate is not taken for a walker" "got=$_kl" \
+  || check "#3662 a suite naming the helper only in a command it hands another gate is not taken for a walker" ok
+grep -q 'test-k-nametext[.]sh' <<< "$_kl" \
+  && check "#3662 nor one naming it only as a file to copy, in a pattern and in messages, while walking a scratch folder" "got=$_kl" \
+  || check "#3662 nor one naming it only as a file to copy, in a pattern and in messages, while walking a scratch folder" ok
+# The stand ins are 16 selected and 2 not, so a listing that came back empty or refused cannot pass
+# the two absence checks above unseen (L98).
+[ "$(grep -c 'test-k-' <<< "$_kl")" -eq 16 ] \
+  && check "#3662 and the listing those were read from names all 16 stand ins that read the tree" ok \
+  || check "#3662 and the listing those were read from names all 16 stand ins that read the tree" "got=$_kl"
+
 # --- claude-config#3160: the Slack alert guard is retired, and with it the step that ran its suite
 #     before any push changing a file in its folder (#2834). A branch cut before the retirement can
 #     still carry such a file; the gate now judges it with the scanners alone, never refusing the
@@ -2779,6 +2893,114 @@ out="$(wn_fire "$RG" "git push -u origin stale")"; rc=$?
   && check "#3160 a push carrying a file in the retired guard's folder runs no guard suite and is judged by the scanners alone" ok \
   || check "#3160 a push carrying a file in the retired guard's folder runs no guard suite and is judged by the scanners alone" "exit=$rc out=$out"
 git -C "$RG" checkout -q main
+
+# --- PUSHES TAKE TURNS AT THE SCAN (claude-config#3536). Every push started every scanner at once,
+#     and nothing spaced two pushes apart, so several agents pushing on a loaded Mac each ran the
+#     whole selection beside the others' and every one of them was starved: on the night of
+#     2026-11-23 seven pushes from five agents were stopped at the hard stop of 160 seconds, and two
+#     more on 2026-11-25. Now one push at a time on this Mac scans, through the queue the full suite
+#     runs already take turns in (lib/merge-turn.sh), and a push waits its turn inside the time the
+#     gate has. Proved by condition, never a stopwatch (L290): the first push's scanner holds until
+#     this suite releases it, and the second push's budget is made to end, by the file this suite
+#     writes, while the first still holds the turn. Today the second push starts its own scanner at
+#     once beside the first's; it must instead start nothing and refuse, saying it waited.
+TURNSTATE="$TMPROOT/turn-state"
+RTA="$(mkrepo turn-first)"; HOLDTA="$TMPROOT/hold-3536a"; : > "$HOLDTA"
+add_held_scanner "$RTA" lambda "$HOLDTA" 0; commit_all "$RTA"
+RTB="$(mkrepo turn-second)"; MU_COUNT="$TMPROOT/mu-3536.count"
+add_counting_scanner "$RTB" mu "$MU_COUNT"; commit_all "$RTB"
+TURN_B_ENDS="$TMPROOT/turn-b-ends"; : > "$TURN_B_ENDS"
+turnfire_b(){ SCANNERS_STATE_DIR="$TURNSTATE" SCANNERS_BUDGET_SECONDS=20 SCANNERS_BUDGET_ENDS_WHEN="$TURN_B_ENDS" SCANNERS_BUDGET_ENDS_NOT_BEFORE=2 fire "$@"; }
+# A push that must go through gets the gate's own budget, as every passing case here does, never an
+# early end: that would fail a slow machine as out of time (L290).
+turnfire_ok(){ SCANNERS_STATE_DIR="$TURNSTATE" fire "$@"; }
+( SCANNERS_STATE_DIR="$TURNSTATE" SCANNERS_BUDGET_SECONDS=50 fire "$RTA" "git push" > "$TMPROOT/turn-a.out"; echo $? > "$TMPROOT/turn-a.rc" ) &
+_turn_a=$!
+if hang_wait '[ -s "$TMPROOT/lambda.pid" ]'; then
+  note_held lambda
+  o3536b="$(turnfire_b "$RTB" "git push")"; c3536b=$?
+  # A scanner that never ran wrote no count file at all, which counted reads as nothing.
+  _mu="$(counted "$MU_COUNT")"
+  [ "$c3536b" -eq 2 ] && [ "${_mu:-0}" = "0" ] \
+    && check "#3536 a push while another push's scan holds the turn starts no scanner of its own and is refused" ok \
+    || check "#3536 a push while another push's scan holds the turn starts no scanner of its own and is refused" "exit=$c3536b mu runs=$(counted "$MU_COUNT") out=$o3536b"
+  grep -q 'waited .* for its turn behind another push' <<< "$o3536b" && grep -q 'turn-first' <<< "$o3536b" \
+    && grep -q 'Send the same push again' <<< "$o3536b" && ! grep -q 'did not finish in' <<< "$o3536b" \
+    && check "#3536 and says it waited its turn behind the named checkout's push, and that the push can be sent again" ok \
+    || check "#3536 and says it waited its turn behind the named checkout's push, and that the push can be sent again" "out=$o3536b"
+  # A listing runs no scanner, so it takes no turn: with the turn held and the same early end, a
+  # listing that waited would be refused at it.
+  o3536l="$(SCANNERS_LIST=1 turnfire_b "$RTB" "git push")"; c3536l=$?
+  [ "$c3536l" -eq 0 ] && grep -q '^SUITE .*test-mu.sh' <<< "$o3536l" \
+    && check "#3536 a listing of the scanners takes no turn and answers while another push scans" ok \
+    || check "#3536 a listing of the scanners takes no turn and answers while another push scans" "exit=$c3536l out=$o3536l"
+else
+  check "#3536 the first push's scanner started" "it never recorded its process id; first push: $(cat "$TMPROOT/turn-a.out" 2>/dev/null)"
+fi
+rm -f "$HOLDTA"
+wait "$_turn_a"
+[ "$(cat "$TMPROOT/turn-a.rc" 2>/dev/null)" = "0" ] \
+  && check "#3536 the push holding the turn goes through once its scan finishes" ok \
+  || check "#3536 the push holding the turn goes through once its scan finishes" "exit=$(cat "$TMPROOT/turn-a.rc" 2>/dev/null) out=$(cat "$TMPROOT/turn-a.out" 2>/dev/null)"
+# Once the turn is free the same push takes it and is scanned.
+rm -f "$TURN_B_ENDS"
+o3536b2="$(turnfire_ok "$RTB" "git push")"; c3536b2=$?
+[ "$c3536b2" -eq 0 ] && [ "$(counted "$MU_COUNT")" = "1" ] \
+  && check "#3536 once the turn is free the waiting push takes it and is scanned" ok \
+  || check "#3536 once the turn is free the waiting push takes it and is scanned" "exit=$c3536b2 mu runs=$(counted "$MU_COUNT") out=$o3536b2"
+
+# A HOLDER THAT DIED NEVER BLOCKS THE NEXT (L409, L617). Proved by killing a real holder rather
+# than by a ticket written by hand: a push holding the turn has its whole run killed, as the hard stop
+# does, and leaves its ticket behind; the next push passes over it and is scanned.
+RTC="$(mkrepo turn-killed)"; HOLDTC="$TMPROOT/hold-3536c"; : > "$HOLDTC"
+add_held_scanner "$RTC" nu "$HOLDTC" 0; commit_all "$RTC"
+( SCANNERS_STATE_DIR="$TURNSTATE" SCANNERS_BUDGET_SECONDS=50 fire "$RTC" "git push" > /dev/null; echo $? > "$TMPROOT/turn-c.rc" ) &
+_turn_c=$!
+_tc_pid=""
+if hang_wait '[ -s "$TMPROOT/nu.pid" ]'; then
+  note_held nu
+  for _tf in "$TURNSTATE"/turn/*/[0-9]*; do
+    case "$_tf" in *.head) continue ;; esac
+    _tc_pid="$(awk '$1 == "pid" { print $2; exit }' "$_tf" 2>/dev/null)"
+  done
+fi
+if [ -n "$_tc_pid" ] && kill -0 "$_tc_pid" 2>/dev/null; then
+  kill -KILL -- "-$_tc_pid" 2>/dev/null || kill -KILL "$_tc_pid" 2>/dev/null
+  wait "$_turn_c"
+  printf 'changed\n' > "$RTB/payload/hooks/changed-3536.sh"; commit_all "$RTB"
+  o3536d="$(turnfire_ok "$RTB" "git push")"; c3536d=$?
+  [ "$c3536d" -eq 0 ] && [ "$(counted "$MU_COUNT")" = "2" ] \
+    && check "#3536 a push whose holder was killed mid scan is not blocked by the ticket it left" ok \
+    || check "#3536 a push whose holder was killed mid scan is not blocked by the ticket it left" "exit=$c3536d mu runs=$(counted "$MU_COUNT") out=$o3536d"
+else
+  check "#3536 a push holding the turn left a ticket naming its run" "no live pid found in $(ls -R "$TURNSTATE/turn" 2>/dev/null | tr '\n' ' ')"
+  wait "$_turn_c"
+fi
+rm -f "$HOLDTC"
+
+# A LIVE HOLDER STUCK PAST THE HARD STOP is passed over (L523): no gate run lives past the hard
+# stop's cap from its start (a setting the gate sets, not a measurement), so a ticket that has held
+# the turn longer is not a push being scanned. Staged with a live process this suite owns and a mark
+# saying it took the turn long before.
+sleep 300 </dev/null >/dev/null 2>&1 &
+_stuck=$!
+_stuck_dir=""
+for _sd in "$TURNSTATE"/turn/*/; do [ -d "$_sd" ] && { _stuck_dir="$_sd"; break; }; done
+if [ -n "$_stuck_dir" ]; then
+  printf 'pr %s\npid %s\nstart %s\njoined %s\norder 2\n' "stuck-checkout" "$_stuck" "$(ps -o lstart= -p "$_stuck" | sed -e 's/^ *//' -e 's/ *$//')" "$(( $(date +%s) - 1000 ))" > "${_stuck_dir}999"
+  printf '%s %s\n' "$(( $(date +%s) - 1000 ))" "$_stuck" > "${_stuck_dir}999.head"
+  printf 'changed again\n' > "$RTB/payload/hooks/changed-3536.sh"; commit_all "$RTB"
+  o3536s="$(turnfire_ok "$RTB" "git push")"; c3536s=$?
+  [ "$c3536s" -eq 0 ] && [ "$(counted "$MU_COUNT")" = "3" ] && [ ! -e "${_stuck_dir}999" ] \
+    && check "#3536 a live holder that has held the turn past the hard stop is passed over, and its ticket removed" ok \
+    || check "#3536 a live holder that has held the turn past the hard stop is passed over, and its ticket removed" "exit=$c3536s mu runs=$(counted "$MU_COUNT") ticket left=$([ -e "${_stuck_dir}999" ] && echo yes || echo no) out=$o3536s"
+  grep -q 'stuck-checkout' <<< "$o3536s" \
+    && check "#3536 and the push says which holder it passed over" ok \
+    || check "#3536 and the push says which holder it passed over" "out=$o3536s"
+else
+  check "#3536 the gate keeps its turn in a folder under its state folder" "found none under $TURNSTATE/turn"
+fi
+kill -9 "$_stuck" 2>/dev/null; wait "$_stuck" 2>/dev/null
 
 # --- no fixture reached the REAL pass cache (claude-config#789). The gate keys its record of passed
 #     scans by the repository's origin, or its path when it has none, as the fixtures do, so a
