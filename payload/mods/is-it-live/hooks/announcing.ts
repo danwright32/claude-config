@@ -2,16 +2,24 @@ import type { EngineInterface } from 'claude-code'
 import type { IsItLiveAnnounceDone, IsItLiveAnnouncement } from '../types/index.d.ts'
 import {
   type Asked,
+  type Claimed,
   type Judged,
   NO_WORDING,
   OWED,
   type Pressed,
   type Said,
   type Standing,
+  type Unapproved,
   alreadySettledOf,
   announceLetGoOf,
   announceRow,
   askedOf,
+  cardUnapprovedOf,
+  claimArgv,
+  claimedOf,
+  draftUnapprovedOf,
+  notCopiedOf,
+  unapprovedOf,
   firstPromptOf,
   holdOf,
   listOf,
@@ -194,6 +202,27 @@ export async function announcementOut($: EngineInterface, a: { repo: string; pr:
   return (await $.store.get(outKey(idOf(a.repo, a.pr)))) !== undefined
 }
 
+// Whether the wording kept for an announcement is the wording its pull request merged on, by the
+// hooks' one check (announce.ts says why it is asked). A check that could not be run is unchecked,
+// never approved.
+async function claimed($: EngineInterface, a: IsItLiveAnnouncement): Promise<Claimed> {
+  try {
+    return claimedOf(await $.process.run(claimArgv((await $.env.get('HOME')) ?? '', a.repo, a.pr), { stdin: a.text, timeoutMs: 30_000 }))
+  } catch (err) {
+    return { state: 'unchecked', why: `the check could not be run: ${msg(err)}` }
+  }
+}
+
+// An entry whose wording is not known to be the approved one is kept as one that cannot be drafted,
+// with why: /live, the row and each session start then say that, no draft is asked for or counted,
+// and, as with any entry kept with a why, the next card reads the pull request again, so wording put
+// back to what Dan approved is found.
+async function keepUnapproved($: EngineInterface, a: IsItLiveAnnouncement, c: Unapproved): Promise<IsItLiveAnnouncement> {
+  const kept: IsItLiveAnnouncement = { ...a, why: unapprovedOf(c) }
+  await $.store.set(owedKey(idOf(a.repo, a.pr)), kept)
+  return kept
+}
+
 // Settled, under its own key: written once and never taken back. Two sessions settling at once both
 // write that it is settled, and the later way of settling is the one kept.
 async function settle($: EngineInterface, a: { repo: string; pr: number }, how: IsItLiveAnnounceDone['how'], draftId?: string): Promise<void> {
@@ -214,13 +243,24 @@ export async function announcementAtCard($: EngineInterface, repo: string, pr: n
     if (!entry) return asked?.kind === 'unread' ? [cardUnreadOf({ repo, pr }, asked.why)] : []
     if (!isOut(state)) return [cardWaitsOf(entry)]
     if (!(await announcementOut($, entry))) await $.store.set(outKey(idOf(repo, pr)), { at: await $.clock.now() })
+    // A draft is asked for only where the wording kept is the wording the pull request merged on.
+    let kept = entry
+    let refused: Unapproved | undefined
+    if (draftable(entry)) {
+      const c = await claimed($, entry)
+      if (c.state !== 'approved') {
+        refused = c
+        kept = await keepUnapproved($, entry, c)
+      }
+    }
     // Owed and out: its row is pinned, so Mark sent and Not announcing are at hand from now on.
-    const unpinned = await pinAnnouncement($, entry)
-    const notes = unpinned === undefined ? [] : [unpinnedOf(entry, unpinned)]
-    if (!draftable(entry)) return [cardUndraftableOf(entry, unpinned === undefined), ...notes]
+    const unpinned = await pinAnnouncement($, kept)
+    const notes = unpinned === undefined ? [] : [unpinnedOf(kept, unpinned)]
+    if (refused) return [cardUnapprovedOf(kept, refused, unpinned === undefined), ...notes]
+    if (!draftable(kept)) return [cardUndraftableOf(kept, unpinned === undefined), ...notes]
     // This session's card asked for the draft, so its turn end is held for it once (announcementHold).
     await changeAsked($, ids => (ids.includes(idOf(repo, pr)) ? ids : [...ids, idOf(repo, pr)]))
-    return [cardDraftOf(entry, SAID), ...notes]
+    return [cardDraftOf(kept, SAID), ...notes]
   } catch (err) {
     return [cardUnreadOf({ repo, pr }, `what is kept for it could not be read or written: ${msg(err)}`)]
   }
@@ -253,7 +293,19 @@ export async function announcementDrafted<T extends Called>($: EngineInterface, 
     const owed = (await announcementsOwed($)).filter(a => draftable(a) && a.channel === call.channel)
     if (!owed.length) return done
     const judged: { a: IsItLiveAnnouncement; j: Judged }[] = []
-    for (const a of owed) judged.push({ a, j: await judge($, a, call.message, done) })
+    const unapproved: { context: string; toast: string }[] = []
+    for (const a of owed) {
+      // A draft is compared only with wording known to be what the pull request merged on: wording
+      // changed since, or whose approval cannot be read, is no approved wording to count a draft by.
+      const c = await claimed($, a)
+      if (c.state === 'approved') {
+        judged.push({ a, j: await judge($, a, call.message, done) })
+        continue
+      }
+      const kept = await keepUnapproved($, a, c)
+      if (await announcementOut($, kept)) await pinAnnouncement($, kept)
+      unapproved.push(draftUnapprovedOf(kept, c))
+    }
     // The draft is one message, so it is at most one announcement's: the first whose wording it holds.
     const saved = judged.find(x => x.j.state === 'saved')
     const said: { context: string; toast: string }[] = []
@@ -269,6 +321,7 @@ export async function announcementDrafted<T extends Called>($: EngineInterface, 
       // session that never carded it has it too).
       for (const x of judged) said.push(draftOutcomeOf(x.a, x.j, NEVER, (await announcementOut($, x.a)) && (await pinAnnouncement($, x.a)) === undefined))
     }
+    said.push(...unapproved)
     for (const s of said) $.ui.toast(s.toast)
     return { ...done, context: [...(done.context ?? []), ...said.map(s => s.context)] }
   } catch (err) {
@@ -418,6 +471,12 @@ export async function announcementPressed($: EngineInterface, p: { verb: Pressed
   if (p.verb === 'copy') {
     if (!a.text.trim()) {
       $.ui.toast(NO_WORDING)
+      return
+    }
+    // Copy hands over only the wording the pull request merged on, as a draft would.
+    const c = await claimed($, a)
+    if (c.state !== 'approved') {
+      $.ui.toast(notCopiedOf(a, c))
       return
     }
     try {

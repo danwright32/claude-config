@@ -114,6 +114,11 @@ type World = {
   labelsRead?: (argv: string[]) => Gh | undefined
   /** The one judgement of a draft (hooks/lib/announce-compare.js, `draft`), as its command line prints it. */
   judge: (input: Judged) => Gh
+  /**
+   * Whether the wording about to be drafted is the wording the pull request merged on
+   * (hooks/lib/announce-compare.js, `claimed`), as its command line prints it; the default says it is.
+   */
+  claim: (repo: string, pr: string, text: string) => Gh
   remote: string | null
   stored?: Record<string, unknown>
   /** When set, every read of the store fails with these words. */
@@ -157,7 +162,7 @@ const judges = (i: Judged): Gh => {
 }
 
 const world = (on: On, init: Partial<World> = {}) => {
-  const w: World = { prs: {}, reader: reads, judge: judges, remote: `git@github.com:${REPO}.git`, slackDraft: { text: '{"result":"Draft created","draft_id":"Dr0123ABC"}' }, ...init }
+  const w: World = { prs: {}, reader: reads, judge: judges, claim: () => ({ exitCode: 0, stdout: '{"state":"approved"}\n' }), remote: `git@github.com:${REPO}.git`, slackDraft: { text: '{"result":"Draft created","draft_id":"Dr0123ABC"}' }, ...init }
   const toasts: string[] = []
   const copies: string[] = []
   const tools: string[] = []
@@ -208,6 +213,7 @@ const world = (on: On, init: Partial<World> = {}) => {
     else if (a.startsWith('gh repo view')) g = { exitCode: 0, stdout: `${e.argv[3]}\n` }
     else if (e.argv[0] === 'node' && e.argv[1] === `${HOME}/.claude/hooks/lib/changelog-entry.js` && e.argv[2] === 'announcement') g = w.reader(e.argv[3] as string, JSON.parse(stdin ?? 'null'))
     else if (e.argv.join(' ') === `node ${HOME}/.claude/hooks/lib/announce-compare.js draft`) g = w.judge(JSON.parse(stdin ?? 'null'))
+    else if (e.argv.length === 7 && e.argv.slice(0, 4).join(' ') === `node ${HOME}/.claude/hooks/lib/announce-compare.js claimed --repo` && e.argv[5] === '--pr') g = w.claim(e.argv[4] as string, e.argv[6] as string, stdin ?? '')
     return { value: { exitCode: g.exitCode, stdout: g.stdout, stderr: g.stderr ?? '', isStdoutTruncated: false, isStderrTruncated: false } } as never
   })
   on('session.repo', () => ({ value: { root: FOLDER, remote: w.remote, isOwn: false } }) as never)
@@ -825,4 +831,91 @@ test('a press whose record cannot be written is said, and the row stays for anot
   await press($, `${BUTTON}sent-${ID}`)
   expect(store.get(DONE_KEY)).toEqual({ how: 'sent', at: T0 })
   expect(await shown($)).toEqual(['engine band'])
+})
+
+// ---- R8: only the wording the pull request merged on is ever drafted ----
+// A description can be edited after the merge by a command no hook judges, so before any draft is
+// asked for, counted or copied, the wording kept is checked against the hash the pull request
+// claimed at the merge gate (hooks/lib/announce-compare.js, `claimed`).
+
+const CHANGED: Gh = { exitCode: 0, stdout: '{"state":"changed","why":"the wording its description holds now is not the wording it merged on"}\n' }
+const NO_CLAIM = "this Mac's record of the announcements Dan approved names no approval that pull request 7 of acme/widget merged on"
+const WAS_CHANGED = 'the wording in its pull request was changed after Dan approved it'
+const claimRuns = (runs: string[][]) => runs.filter(r => r[0] === 'node' && r[2] === 'claimed')
+
+test('wording changed after Dan approved it is never asked for as a draft: the card says so in one sentence, and it stays owed until the pull request holds the approved wording again (R8)', withKit, async ($, on) => {
+  const asked: { repo: string; pr: string; text: string }[] = []
+  const { w, store, runs } = world(on, { prs: { [`${REPO}#7`]: ANNOUNCED } })
+  w.claim = (repo, pr, text) => {
+    asked.push({ repo, pr, text })
+    return CHANGED
+  }
+  await start($)
+  await bash($, 'gh pr merge 7 --squash')
+  const told = said(await card($))
+  // The check is asked about this pull request, with the wording about to be drafted and nothing else.
+  expect(asked).toEqual([{ repo: REPO, pr: '7', text: POST }])
+  expect(claimRuns(runs)[0]).toEqual(['node', `${HOME}/.claude/hooks/lib/announce-compare.js`, 'claimed', '--repo', REPO, '--pr', '7'])
+  expect(told).toContain(`${NAME} owes an announcement for agents, and it is not drafted: ${WAS_CHANGED}.`)
+  expect(told).toContain('he must be asked again')
+  // No draft is asked for, and the changed wording is not handed to the session at all.
+  expect(told).not.toContain('slack_send_message_draft with channel_id')
+  expect(told).not.toContain('Handing a call back')
+  expect(store.get(DONE_KEY)).toBeUndefined()
+  expect(await shown($)).toEqual(['Announcement for agents', `${NAME}: cannot be drafted from this Mac (${WAS_CHANGED}).`])
+  expect(await live($)).toContain(`- ${NAME}: cannot be drafted from this Mac (${WAS_CHANGED}).`)
+  // The turn end holds nothing for a draft that was never asked for.
+  expect((await turnEnd($)).block ?? '').not.toContain('nnouncement')
+  // Once the check passes for what the pull request holds, the next card reads it again and asks.
+  const before = readerRuns(runs).length
+  w.claim = () => ({ exitCode: 0, stdout: '{"state":"approved"}\n' })
+  expect(said(await card($))).toContain(`call slack_send_message_draft with channel_id "${CH}"`)
+  expect(readerRuns(runs).length).toBe(before + 1)
+  expect(await shown($)).toEqual(ROW)
+})
+
+test('an approval that cannot be read, or a check that cannot be run, drafts nothing and says which, never taking silence for approved (R8)', withKit, async ($, on) => {
+  const { w, store } = world(on, { prs: { [`${REPO}#7`]: ANNOUNCED } })
+  await start($)
+  await bash($, 'gh pr merge 7 --squash')
+  const answers: [Gh, string][] = [
+    [{ exitCode: 0, stdout: JSON.stringify({ state: 'unread', why: NO_CLAIM }) }, NO_CLAIM],
+    [{ exitCode: 2, stdout: '', stderr: 'The wording could not be checked: the repository was not given as owner/name. Usage: announce-compare.js claimed' }, 'The wording could not be checked: the repository was not given as owner/name. Usage: announce-compare.js claimed'],
+    [{ exitCode: 0, stdout: 'not json' }, 'its answer was not JSON'],
+    [{ exitCode: 0, stdout: '{"state":"approved","why":"x"}{' }, 'its answer was not JSON'],
+    [{ exitCode: 0, stdout: '{"state":"fine"}' }, 'its answer was not one this reader knows'],
+    [{ exitCode: 0, stdout: '{"state":"changed"}' }, 'its answer was not one this reader knows'],
+  ]
+  for (const [g, why] of answers) {
+    w.claim = () => g
+    const told = said(await card($))
+    expect(told).toContain(`${NAME} owes an announcement for agents, and it is not drafted: Dan's approval of its wording could not be read (${why}).`)
+    expect(told).toContain('he must be asked again')
+    expect(told).not.toContain('slack_send_message_draft with channel_id')
+    expect(told).not.toContain('Handing a call back')
+    expect(store.get(DONE_KEY)).toBeUndefined()
+  }
+})
+
+test('a draft of wording that was changed after Dan approved it is not counted, whoever made it, and Copy hands none of it over (R8)', withKit, async ($, on) => {
+  // Owed and live, and no card in this session checked it: a session drafts it on its own.
+  const { w, store, toasts, copies } = world(on, { stored: OWED_AND_OUT })
+  w.claim = () => CHANGED
+  await start($)
+  toasts.length = 0
+  const r = await draft($)
+  expect(store.get(DONE_KEY)).toBeUndefined()
+  expect(said(r)).toContain(`A Slack draft was just made in channel ${CH}, and it is not counted as the announcement for agents for ${NAME}: ${WAS_CHANGED}.`)
+  expect(said(r)).toContain('he must be asked again')
+  expect(said(r)).not.toContain('is saved as a Slack draft')
+  expect(toasts).toEqual([`A Slack draft in channel ${CH} is not counted as the announcement for agents for ${NAME}: ${WAS_CHANGED}. It is still owed.`])
+  expect(await shown($)).toEqual(['Announcement for agents', `${NAME}: cannot be drafted from this Mac (${WAS_CHANGED}).`])
+  // Copy is still on the row, and copies nothing that is not the approved wording.
+  toasts.length = 0
+  await press($, `${BUTTON}copy-${ID}`)
+  expect(copies).toEqual([])
+  expect(toasts).toEqual([`Not copied: the wording kept for ${NAME} is not known to be the wording you approved (${WAS_CHANGED}).`])
+  // Mark sent and Not announcing still settle it: they hand no wording to anyone.
+  await press($, `${BUTTON}none-${ID}`)
+  expect(store.get(DONE_KEY)).toEqual({ how: 'not-announcing', at: T0 })
 })

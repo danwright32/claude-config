@@ -161,6 +161,59 @@ export const cardUndraftableOf = (a: IsItLiveAnnouncement, row: boolean): string
 export const cardUnreadOf = (a: { repo: string; pr: number }, why: string): string =>
   `Whether ${nameOf(a)} owes an announcement for agents could not be told (${why}). If it was merged as a change to announce, call this card again once that can be read, so its draft is not missed.`
 
+// ---- before any draft: is the wording kept the wording the pull request merged on? ----
+// The post is read from the pull request's description, which an ordinary command can edit after
+// the merge with no hook judging it. So before a draft is asked for, before one is counted, and
+// before Copy hands the wording over, the wording kept is checked against the hash the pull request
+// claimed at the merge gate. That is the hooks' one check (hooks/lib/announce-compare.js,
+// `claimed`), which reads the record of approvals and never writes it; the dev update's "Draft it
+// now" asks the same one. Anything but its word that the wording is approved drafts nothing.
+
+/** How that check is asked: its command line, the wording about to be drafted on standard input. */
+export const claimArgv = (home: string, repo: string, pr: number): string[] => ['node', `${home}/.claude/hooks/lib/announce-compare.js`, 'claimed', '--repo', repo, '--pr', String(pr)]
+
+/**
+ * The check's answer: `approved`, `changed` (the pull request claimed other wording at the merge),
+ * `unread` (no claim of that pull request's could be read, `why`), or `unchecked`: the check gave
+ * no whole answer, which is never taken for approved.
+ */
+export type Claimed = { state: 'approved' } | { state: 'changed' } | { state: 'unread'; why: string } | { state: 'unchecked'; why: string }
+export type Unapproved = Exclude<Claimed, { state: 'approved' }>
+
+/** The check's answer, from what running it printed. */
+export const claimedOf = (r: Ran): Claimed => {
+  if (r.exitCode !== 0) return { state: 'unchecked', why: r.stderr.trim().split('\n').pop() || `the check exited ${r.exitCode}` }
+  if (r.isStdoutTruncated) return { state: 'unchecked', why: 'its answer was cut short' }
+  let o: Record<string, unknown> | null
+  try {
+    o = record(JSON.parse(r.stdout))
+  } catch {
+    return { state: 'unchecked', why: 'its answer was not JSON' }
+  }
+  if (o?.state === 'approved') return { state: 'approved' }
+  if (o?.state === 'changed' && text(o.why) && o.why.trim()) return { state: 'changed' }
+  if (o?.state === 'unread' && text(o.why) && o.why.trim()) return { state: 'unread', why: o.why.trim() }
+  return { state: 'unchecked', why: SHAPE }
+}
+
+/** Why wording that is not known to be approved is not drafted, as one clause: also kept as the entry's why. */
+export const unapprovedOf = (c: Unapproved): string => (c.state === 'changed' ? 'the wording in its pull request was changed after Dan approved it' : `Dan's approval of its wording could not be read (${c.why})`)
+
+/** What the card's answer says of an announcement whose wording is not known to be the approved one; `row` is whether its row is pinned. */
+export const cardUnapprovedOf = (a: { repo: string; pr: number }, c: Unapproved, row: boolean): string =>
+  `${nameOf(a)} owes an announcement for agents, and it is not drafted: ${unapprovedOf(c)}. Nothing is drafted, and it is still owed. Tell Dan that, and that he must be asked again before any wording is drafted for it. Do not draft what the pull request's description holds now. ${
+    row ? 'It stays listed in the band and in /live until it is drafted, he marks it sent or he says it is not being announced.' : 'It stays listed in /live until it is settled.'
+  }`
+
+/** What a draft call's answer carries, and what Dan is toasted, when a draft was made where such an announcement is owed. */
+export const draftUnapprovedOf = (a: IsItLiveAnnouncement, c: Unapproved): { context: string; toast: string } => ({
+  context: `A Slack draft was just made in channel ${a.channel}, and it is not counted as the announcement for agents for ${nameOf(a)}: ${unapprovedOf(c)}. The announcement is still owed. Tell Dan that, that he must be asked again before any wording is drafted for it, and that if the draft now waiting in that channel is this announcement he should not send it as it stands.`,
+  toast: `A Slack draft in channel ${a.channel} is not counted as the announcement for agents for ${nameOf(a)}: ${unapprovedOf(c)}. It is still owed.`,
+})
+
+/** Copy pressed for wording that is not known to be the approved one: nothing is copied. */
+export const notCopiedOf = (a: { repo: string; pr: number }, c: Unapproved): string => `Not copied: the wording kept for ${nameOf(a)} is not known to be the wording you approved (${unapprovedOf(c)}).`
+
 // ---- the draft's own answer: saved only when Slack kept it and it is the approved wording ----
 // Measured 2026-11-25 (claude-config#3664): a draft Slack kept is answered with a draft_id, and with
 // a draft already waiting in the channel the tool answers "Draft created" with none and keeps

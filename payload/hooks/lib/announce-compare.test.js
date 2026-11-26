@@ -112,6 +112,124 @@ check(c.status === 2 && /Usage/.test(c.stderr), 'no command did not print the us
 c = cli(['constructor'], '');
 check(c.status === 2 && /Usage/.test(c.stderr), 'a command nobody defined did not print the usage and exit 2', JSON.stringify(c));
 
+// ---- R8: only the wording the pull request merged on is drafted (claimedWording) ----
+// A pull request's description can be edited after its merge by a command no hook judges, so the
+// block read then is drafted only when its hash is the one the record of approvals holds as claimed
+// by that pull request at the merge gate. The record here is a scratch one, under the system's
+// temporary folder: the real record is never named, read or written by this suite.
+const fs = require('fs');
+const os = require('os');
+const entry = require(path.join(__dirname, 'changelog-entry.js'));
+const claimed = compare.claimedWording;
+check(typeof claimed === 'function', 'announce-compare.js has no claimedWording');
+
+if (typeof claimed === 'function') {
+  const HASH = entry.announcementHash(POST);
+  const OTHER = POST.replace('Press Hand back', 'Press Return call');
+  const approvedLine = function (hash) { return { kind: 'approved', repo: 'acme/widget', hash: hash, at: '2026-11-25T10:00:00Z', session: 's1', picker: 'toolu_1' }; };
+  const claimLine = function (hash, pr, repo) { return { kind: 'used', repo: repo || 'acme/widget', hash: hash, pr: pr, claim: true, closes: null, unread: null, at: '2026-11-25T10:05:00Z' }; };
+  const listed = function (entries) { return { record: '/scratch/record.jsonl', entries: entries, why: '' }; };
+  const ask = function (text, entries, more) { return claimed(Object.assign({ repo: 'acme/widget', pr: 7, text: text, listed: listed(entries) }, more || {})); };
+
+  let v = ask(POST, [approvedLine(HASH), claimLine(HASH, 7)]);
+  check(v.state === 'approved', 'the wording pull request 7 merged on is not judged approved', JSON.stringify(v));
+  // One normalised form: line endings, spaces at line ends and blank lines change no hash.
+  v = ask(POST.replace(/\n/g, '\r\n') + '  \n\n', [approvedLine(HASH), claimLine(HASH, 7)]);
+  check(v.state === 'approved', 'the same wording with other line endings and blank lines is not judged approved', JSON.stringify(v));
+  v = ask(POST, [approvedLine(HASH), claimLine(HASH, 7)], { repo: 'Acme/Widget' });
+  check(v.state === 'approved', 'the repository named in another case is not the one the record names', JSON.stringify(v));
+
+  v = ask(OTHER, [approvedLine(HASH), claimLine(HASH, 7)]);
+  check(v.state === 'changed' && typeof v.why === 'string' && v.why !== '', 'wording changed by one word after the merge is not judged changed, with why', JSON.stringify(v));
+  // Wording Dan approved for the repository, which this pull request never merged on, is still changed wording.
+  v = ask(OTHER, [approvedLine(HASH), approvedLine(entry.announcementHash(OTHER)), claimLine(HASH, 7)]);
+  check(v.state === 'changed', 'wording approved for the repository but never claimed by this pull request was judged approved', JSON.stringify(v));
+
+  // No claim by this pull request reads as unread, never as approved: another pull request's claim,
+  // an approval nobody used, a line naming the issues it closes, and another repository's claim.
+  [
+    ['another pull request claimed that wording', [approvedLine(HASH), claimLine(HASH, 8)]],
+    ['the approval was never used', [approvedLine(HASH)]],
+    ['only the line naming the issues it closes names it', [approvedLine(HASH), { kind: 'used', repo: 'acme/widget', hash: HASH, pr: 7, closes: [], at: 'x' }]],
+    ['the claim is another repository\'s', [approvedLine(HASH), claimLine(HASH, 7, 'acme/other')]],
+    ['the record is empty', []],
+    ['the claim line holds no hash', [{ kind: 'used', repo: 'acme/widget', pr: 7, claim: true }]],
+  ].forEach(function (c) {
+    const r = ask(POST, c[1]);
+    check(r.state === 'unread' && /names no approval/.test(r.why || ''), 'no claim by pull request 7 (' + c[0] + ') was not judged unread, saying the record names none', JSON.stringify(r));
+  });
+
+  // The latest claim is the one it merged on: wording approved and claimed earlier, then replaced, is changed.
+  const LATER = entry.announcementHash(OTHER);
+  v = ask(POST, [approvedLine(HASH), claimLine(HASH, 7), approvedLine(LATER), claimLine(LATER, 7)]);
+  check(v.state === 'changed', 'wording the pull request claimed before its latest claim was judged approved', JSON.stringify(v));
+  v = ask(OTHER, [approvedLine(HASH), claimLine(HASH, 7), approvedLine(LATER), claimLine(LATER, 7)]);
+  check(v.state === 'approved', 'the wording of the pull request\'s latest claim is not judged approved', JSON.stringify(v));
+
+  // A record that could not be read is unread with the reason it gave, never an empty record.
+  v = claimed({ repo: 'acme/widget', pr: 7, text: POST, listed: { record: '/scratch/record.jsonl', entries: null, why: 'the record could not be read (PermissionError)' } });
+  check(v.state === 'unread' && /PermissionError/.test(v.why || ''), 'a record that could not be read is not judged unread with its reason', JSON.stringify(v));
+  [undefined, null, 'x', {}, { entries: 'no' }].forEach(function (bad) {
+    const r = claimed({ repo: 'acme/widget', pr: 7, text: POST, listed: bad });
+    check(r.state === 'unread' && typeof r.why === 'string' && r.why !== '', 'a listing that is no list of the record was not judged unread, with why', JSON.stringify([bad, r]));
+  });
+
+  // What cannot be asked throws: never a verdict about nothing (L98).
+  [
+    { repo: 'acme/widget', pr: 7, text: ' \n ', listed: listed([]) },
+    { repo: 'acme/widget', pr: 7, listed: listed([]) },
+    { repo: 'acme/widget', pr: 0, text: POST, listed: listed([]) },
+    { repo: 'acme/widget', pr: '7', text: POST, listed: listed([]) },
+    { repo: 'widget', pr: 7, text: POST, listed: listed([]) },
+    null,
+  ].forEach(function (input) {
+    let threw = '';
+    try { claimed(input); } catch (e) { threw = e.message; }
+    check(threw !== '', 'a question that cannot be asked was answered', JSON.stringify(input));
+  });
+
+  // The command line, against a scratch record read through the approval library's own `list`.
+  const T = fs.mkdtempSync(path.join(os.tmpdir(), 'announce-claimed-'));
+  const RECORD = path.join(T, 'approvals', 'record.jsonl');
+  const env = Object.assign({}, process.env, { ANNOUNCE_APPROVALS_DIR: path.join(T, 'approvals') });
+  const claimedCli = function (args, input) {
+    const r = childProcess.spawnSync(process.execPath, [LIB, 'claimed'].concat(args), { input: input, encoding: 'utf8', env: env });
+    let json = null;
+    try { json = JSON.parse(r.stdout); } catch (e) { json = null; }
+    return { status: r.status, json: json, stderr: r.stderr };
+  };
+  try {
+    // No record at all: nothing claimed, and asking made none (the question only reads).
+    let k = claimedCli(['--repo', 'acme/widget', '--pr', '7'], POST);
+    check(k.status === 0 && k.json && k.json.state === 'unread' && /names no approval/.test(k.json.why), 'with no record the command did not answer unread', JSON.stringify(k));
+    check(!fs.existsSync(path.join(T, 'approvals')), 'asking whether wording was claimed made the record\'s folder');
+
+    fs.mkdirSync(path.join(T, 'approvals'));
+    const lines = [approvedLine(HASH), claimLine(HASH, 7)].map(function (l) { return JSON.stringify(l); }).join('\n') + '\n';
+    fs.writeFileSync(RECORD, lines);
+    k = claimedCli(['--repo', 'acme/widget', '--pr', '7'], POST);
+    check(k.status === 0 && k.json && k.json.state === 'approved', 'the command did not judge the claimed wording approved', JSON.stringify(k));
+    k = claimedCli(['--repo', 'acme/widget', '--pr', '7'], OTHER);
+    check(k.status === 0 && k.json && k.json.state === 'changed', 'the command did not exit 0 judging changed wording changed', JSON.stringify(k));
+    k = claimedCli(['--repo', 'acme/widget', '--pr', '8'], POST);
+    check(k.status === 0 && k.json && k.json.state === 'unread', 'the command judged a pull request with no claim as something other than unread', JSON.stringify(k));
+    check(fs.readFileSync(RECORD, 'utf8') === lines, 'asking whether wording was claimed changed the record');
+
+    // A record that cannot be read: said as that, with the library's own reason.
+    fs.rmSync(RECORD);
+    fs.mkdirSync(RECORD);
+    k = claimedCli(['--repo', 'acme/widget', '--pr', '7'], POST);
+    check(k.status === 0 && k.json && k.json.state === 'unread' && /could not be read/.test(k.json.why) && !/names no approval/.test(k.json.why), 'a record that cannot be read was not answered unread with why', JSON.stringify(k));
+
+    k = claimedCli(['--repo', 'acme/widget'], POST);
+    check(k.status === 2 && k.json === null && /Usage/.test(k.stderr), 'the command answered with no pull request named', JSON.stringify(k));
+    k = claimedCli(['--repo', 'acme/widget', '--pr', '7'], '  \n');
+    check(k.status === 2 && k.json === null && /wording/.test(k.stderr), 'the command answered for wording that says nothing', JSON.stringify(k));
+  } finally {
+    fs.rmSync(T, { recursive: true, force: true });
+  }
+}
+
 console.log('  ' + passed + ' passed, ' + failed + ' failed');
 console.log('SUITE-RESULT passed=' + passed + ' failed=' + failed);
 process.exit(failed === 0 ? 0 : 1);
