@@ -9220,11 +9220,11 @@ unaccounted_line_count(){   # $1 = ours  $2 = theirs
       body = ""
       theirs = ENVIRON["CS_UNACCOUNTED_THEIRS"]
       while ((r = (getline l < theirs)) > 0) body = body " " collapse(l)
-      if (r < 0) exit 2
+      unread = (r < 0)
       gsub(/[[:space:]]+/, " ", body)
     }
     { c = collapse($0); if (c == "") next; if (index(body, c) == 0) n++ }
-    END { print n+0 }
+    END { if (unread) exit 2; print n+0 }
   '
 }
 
