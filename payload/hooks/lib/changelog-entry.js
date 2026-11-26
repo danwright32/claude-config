@@ -663,7 +663,9 @@ function requiredLabels(read, slug, today, options) {
 //            change as owed with its reason instead of dropping it.
 function announcementOwed(pr, read, slug, today) {
   const answer = function (state, why, channel, text) {
-    return { state: state, channel: channel || '', text: text || '', normalized: normalizeAnnouncement(text || ''), why: why || '' };
+    // `hash` is announcementHash's, the empty string where no post could be read (#3667): the reader
+    // that keeps what is owed is a mod, which cannot load this file, so it is handed the hash here.
+    return { state: state, channel: channel || '', text: text || '', normalized: normalizeAnnouncement(text || ''), hash: announcementHash(text || ''), why: why || '' };
   };
   if (!pr || typeof pr !== 'object' || Array.isArray(pr)) {
     return answer('unknown', 'the pull request on standard input could not be read as JSON holding its labels and body, so whether it owes an announcement cannot be told');
@@ -717,7 +719,7 @@ module.exports = {
 //   announcement <owner/name> [file]
 //       reads one pull request as JSON on standard input ({labels, body}, as gh or the API gives it)
 //       and prints announcementOwed's answer: {state: owed | none | unknown, channel, text,
-//       normalized, why}.
+//       normalized, hash, why}.
 //   announcement-hash [--body]
 //       reads wording on standard input and prints {found, hash, lines, blankRun, blankRunAt}:
 //       announcementHash's answer, how many lines the normalised wording has, and

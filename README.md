@@ -826,6 +826,24 @@ busy Mac on 2026-11-25. `hooks/test-payload-write-gate-real-path.sh` holds the c
 files; its numbered path and letter case cases report themselves unmeasured on a system that has
 neither.
 
+Three more routes are read (#3689), each only ever adding a refusal. A command string an inline
+script hands to a shell (`os.system`, `subprocess` given one string or a list of words, perl, ruby,
+php and awk `system`, node `execSync`, a command in backquotes) is read the way that command typed
+directly is: cut into commands by `lib/shell-words.py` and judged by the same loop, in the
+directory the script runs in. A destination written as a pattern (`rm pay*/hooks/x.sh`, a list in
+braces) is judged as each file it matches at that moment. And each script file the command runs
+is read from disk for the links it makes, a shell script by `lib/shell-words.py` and a python,
+perl, ruby, node or php script by the calls that make a link. What the gate cannot tell is refused
+in its own words, which say to run the command directly: a command string whose program is a value
+(`os.system(cmd)`), a command string that goes on past what the gate reads, and
+a script file it could not read, each only when the call names a `payload/` path besides or runs
+inside a payload folder, and a pattern with more than 512 files or a `**` in a checkout at risk.
+From a script file only a link is read, and only one whose path can be placed. Each loop is held to
+a count, a limit set in the gate and not a measurement (256 command strings, 4,000 characters of
+one string, 512 files of a pattern, 8 script files, 256 quoted paths of one script file that makes
+a link).
+`hooks/test-payload-write-gate-script-string.sh` holds the cases, on stand in files.
+
 Before a Bash call the write gate also notes what an at risk `payload/` holds, in
 `~/.claude-payload-write-gate`, so that after the call it can name anything written there that the
 command's words could not show (#647). The note goes when the call ends, however it ends (#3253):
@@ -2108,6 +2126,53 @@ time, a hook run by hand) or run by a program that is not python by name (`uv ru
 record and the transcripts are files on a Mac the session can write; a label put on by a route the
 hook cannot read (a variable, a file, a script, an alias, a wrapped `gh api`), which still cannot
 merge; and an approval given on one Mac, which the other does not know and asks for again.
+
+#### An approved announcement is owed as a Slack draft until it is settled (#3667)
+
+Once an announce pull request merges, its approved wording is owed to agents as a Slack draft Dan
+sends himself. The is it live mod keeps that owed, asks for the draft, and says it until it is
+settled:
+
+- When a merge lands, the mod asks GitHub for the pull request's labels and description and runs
+  the merge gate's own reader on them (`hooks/lib/changelog-entry.js announcement`). What the
+  change owes is kept in the mod's store, which every session shares, one key per pull request and
+  per fact (`announce:`, `announce-out:` and `announce-done:`, each followed by `<owner/name>#<pr>`
+  and written whole), outside the list of cards that keeps only the newest 50. A reader answer of
+  `unknown` is kept as owed with its why. GitHub or the reader failing outright is said to Dan and
+  asked again at the next card, never kept on a guess.
+- A card saying the change is live tells the session to save the announcement as a Slack draft in
+  its channel, with no thread, word for word and without rewording it. A deploying card, or one
+  that could not confirm live, asks for nothing and settles nothing.
+- A draft counts only when Slack's answer holds a `draft_id` and the draft's words are the approved
+  wording's, judged by the one comparison in `hooks/lib/announce-compare.js` (the dev update skill
+  loads the same copy). A draft that differs, an answer with no `draft_id`, each error Slack names,
+  and a judgement that could not be made each have a sentence of their own and leave it owed. Once
+  drafted it is never asked for again.
+- Only the wording the pull request merged on is drafted, counted or copied, since a description
+  can be edited after the merge by a command no hook judges. The same library's `claimed` check
+  holds the wording's hash to the hash of that pull request's latest claim line in the record of
+  approvals, read through `announce-approval.py list`, which writes nothing. The mod asks it before
+  a card asks for a draft, before a draft is counted and before Copy hands the wording over. Wording
+  that fails it is kept as an entry that cannot be drafted, with the reason. A pull request that
+  went back to wording it claimed earlier reads as changed, which refuses a draft: the harmless side.
+- While one is owed it is said in four places. A row pinned in the band, "Announcement for agents"
+  in violet, one line saying where the draft stands, then Copy, Mark sent and Not announcing; the
+  row never draws the wording, and Copy copies nothing for wording that failed the claimed check,
+  saying why. Mark sent and Not announcing settle it for every session, and only a press of the
+  row's own button does. `/live` lists it. Every session started in that project says it in one
+  line, to Dan and with the session's first prompt. And the turn end of the session whose card found
+  it live is refused once per chain of turn ends.
+- The merge gate's allow for an announce merge (`require-changelog-tag.sh`) always carries one line
+  of context: the merge owes agents a draft, and a session whose card says nothing about it is
+  running an old copy of the mod and should run `/reload-plugins`. Nothing the gate decides changes.
+- The dev update skill's picker for an unsettled announcement gains a fourth answer, "Draft it now"
+  (Dan, 2026-11-25, by picker), offered only where `gather.js draftable` says the announcement may
+  be drafted, which asks the same claimed check. `gather.js drafted` reads Slack's answer, and the
+  state commit judges the draft again before it records the announcement drafted.
+
+What none of this sees: whether and when Dan sends a draft; a merge made in GitHub's own page, which
+no session cards and which has no claim line, so it is never drafted from here; and an announcement
+settled or approved on one Mac, which the other does not know.
 
 `push-scope-notice.sh` also refuses a push from a repository whose `core.hooksPath` names a folder
 that does not exist (claude-config#2070), because git then runs none of the repository's own hooks
@@ -5939,6 +6004,29 @@ the case can be counted from saved logs. The suite sees each of those verdicts o
 replayed through the check's own code (`SLACK_GATE_COST_REPLAY`, which runs no gate), and once per
 run on a real folder, where a copy of the gate with a budget of 0.2 s ran out.
 
+The cold check of `bash tests/test-claude-sync.sh` is unmeasured, not failed, where EVERY sample it
+took ran out of the gate's 11 seconds and was read on the step clock past its limit (#3406, Dan's
+decision of 2026-11-26 from a picker, "3.60.1 Read it as unmeasured"). On the pull request runs of
+that day every red on this check began with a first judgement that ran out; first judgements that
+finished inside the seconds read 66.8 to 88.5. Of the 8 reds whose logs were read, every sample ran
+out in 2 (runs 45817817409 and 45838830923); in the other 6 the later samples finished inside the
+seconds and read past 91 as well, and those still fail. The rule: one sample that finished inside
+the seconds and is past the limit fails the check as before, any sample at or under the limit
+passes as before, and the limits of 67 and 91 did not move. The cold check asks for this with
+`SLACK_GATE_COST_RAN_OUT_UNMEASURED=1`; no other cost check does, and each still fails on step clock
+readings. Its line is `SUITE-PART-UNMEASURED #3406: bash tests/test-claude-sync.sh is judged
+within ...`, printed by the same `cost_case` as the cached checks' `#3170` lines, with the processor
+seconds and unit of each sample that ran out and the step clock readings.
+
+So that a real slowdown cannot hide there, `tools/ci-cold-cost-streak.sh` runs in the deal job on
+every push to main and turns the run's `suite` check red when that line was printed on each of
+main's last 5 readable trees (its `STREAK` setting). It reads each tree's proving run through the
+`green-tree-<tree>` record a reuse stands on, so a main push that reused a pull request run is read
+through that run, and that run's `part-unmeasured-<n>` records, whose retention went from 1 day to
+7 for this. A tree with no live green record, or whose run handed back fewer records than it had
+parts, is skipped and never read as measured; fewer than 5 readable trees in main's newest 20 is a
+warning that the streak was not measured, never a pass. Suite: `tools/test-ci-cold-cost-streak.sh`.
+
 Some CI runners still read a few cost cases over their limits with the gate unchanged (#3170: 4 of
 127 runs from 2026-11-20 to 2026-11-21), and the logs could not say why: they held each case's
 reading in units, but the yardstick and the seconds only for one case, and only the least yardstick
@@ -6462,6 +6550,11 @@ the order the code runs them, never by line: two on one line keep their order, a
 file it is handed to has its uses judged at the hand off in its own order, and a read on the other
 arm of an if from a use never follows it. A read after a use that runs only on some of its paths
 (inside a branch, a handler or a loop the use is not in), or a hand off round a cycle, is a `U1`.
+A `poll()` only compared with None (`while p.poll() is None`) asks whether the process still runs
+and is no read of how it ended. A method that ends a held process must read how it ended after the
+end on every path out of it, and the method that starts one settles it alone only when every path
+out of it waits; a helper it is handed to is run along those paths from the state at the hand off
+(#3663).
 
 The pull request checks install Claude Code for the mods' own tests (#3297), at the one version
 written in `.github/claude-code-version` and read by `tools/install-claude-code.sh` alone, so every
@@ -9536,10 +9629,15 @@ tool, that its merges have nothing to do with the threads (#2653); since #2849 t
 merges already landed as well as later ones. It never clears a reply owed to a thread pasted mid
 session that a PR links, nor a card's message; a PR's link to a thread the session started from is
 cleared, as before.
+A merge labelled `changelog/announce` also owes agents a Slack draft of the wording Dan approved
+(#3667). The mod keeps it in its store outside the cards, the live card asks for the draft, and a
+band row with Copy, Mark sent and Not announcing, `/live`, each session start in that project and
+one refused turn end say it until it is drafted on the claimed wording or Dan settles it. The rules
+are in "An approved announcement is owed as a Slack draft until it is settled (#3667)" above.
 
 </td><td>
 
-#617, #663, #707, #771, #1244, #1271, #2435, #2436, #2515, #2578, #2630, #2653, #2849
+#617, #663, #707, #771, #1244, #1271, #2435, #2436, #2515, #2578, #2630, #2653, #2849, #3667
 
 </td></tr>
 <tr><td>

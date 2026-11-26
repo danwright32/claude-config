@@ -2451,6 +2451,51 @@ of about 35 ms either way in the cases where both arms run the same code. The le
 asking from inside the two readers that already run would add no process, at the price of the
 same code in two inline scripts or a library the gate must refuse without.
 
+**A command string an inline script hands to a shell, a pattern, and a script file's links
+(#3689).** Three routes were let through, each staged on stand in files first. The words of
+`os.system('cp x payload/y')` sit in a quoted string with spaces in it, which the match for a
+quoted payload path never read; #3537 read such a string for `ln` alone. `rm pay*/hooks/x.sh`
+names no payload folder and the shell writes it out as one. And `bash mk.sh` or `python3 mk.py`
+made a link that nothing read, since only an inline script was.
+
+The string is read by the readers a typed command already has and no third. It is found after a
+call that runs a command (the names #3537 chose, plus php's and AppleScript's), cut into commands
+by `lib/shell-words.py`, and each is judged by the gate's own loop over segments, which grows as
+strings are found, so a `cd` inside the string, a shell it runs and a string inside a string are
+all read as typed. The shared reader could not do the first step alone: it reads shell, and which
+quoted text a python or perl call hands to a shell is not shell. Nothing read before is skipped,
+so no verdict can turn from refused to allowed, and the two suites that existed pass with the same
+counts. A value the script fills in (an f string, a `+`, a `%`) is read as a shell variable would
+be, so a path holding one is judged as a typed path holding `$X` is. Where the program itself is a
+value, nothing can be told, and that is refused in words that say so, narrowed as an unreadable
+call always was: only when the call names a `payload/` path or runs inside a payload folder, so a
+script in another project that runs a value is not refused for a config it never touches.
+
+A pattern is written out in the real path step, as the files it matches at that moment and each
+word of a list in braces, and each is judged as that file typed directly is, a file with more
+than one name included. At most 512 are read. More than that, or a `**`, is refused as untold
+only where the pattern's fixed part is in a checkout at risk, since a refusal for every large
+pattern anywhere on the disk would be one nobody keeps.
+
+A script file is read as it is on disk when the gate runs, which was the open question: read it,
+or refuse what was not read. Both, on the safe side. A shell script is read by the reading
+`lib/shell-words.py` already has for the other gates (#2301), one it runs included; one too large
+for that reader, up to 4 MB, is searched for its link commands as text; a python, perl, ruby,
+node or php script is searched for the calls that make a link. Only a link, and only one whose
+path can be placed: this repository's suites make links in temporary folders named by a variable,
+in at least eleven files, and judging each as the payload write it may be would refuse running
+them from a session with no hold. A script file that cannot be read (not there, named by a value,
+too large) is refused in its own words when the call names a `payload/` path besides the script,
+and only for a script the command itself runs. One the command writes from its own heredoc is
+read from that text.
+
+Measured 2026-11-26 on the personal MacBook at a load of about 8 to 10, two rounds of 15 samples
+an arm: a command with no interpreter went from a median of 127 to 128 ms to 133 to 134 ms; a
+copy typed directly from 197 to about 210 ms (the real path step now loads two more modules); an
+inline script running a copy from about 130 ms to 208 to 237 ms, because its string now has
+destinations and so pays for the real path step as the typed copy always did; a command running a
+script file was the same within noise.
+
 The recovery, if it happens again: find the sync commit (`git log --author=claude-config-sync`),
 take the file list it touched, and check those paths out of the commit BEFORE it, keeping
 `LESSONS.md` and its index, which carry the other Mac's real additions.
