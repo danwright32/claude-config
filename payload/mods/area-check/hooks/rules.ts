@@ -107,17 +107,26 @@ export type ShellTarget = { word: string; path: string; tree?: true; runs?: Shel
 
 /**
  * A word a command only hands to scripts, held because whether anything is written there cannot be
- * read (#3550): what it is handed to, and why that cannot be read, as the hold says them. The hold
- * said such a command "writes a file whose name cannot be read", so one that only reads read as a
- * write, with no word that the path was only handed on.
+ * read (#3550): what is handed it, as the sentence opens (`A bash script file is`, `2 scripts are`),
+ * and why that cannot be read, as the hold says them. The hold said such a command "writes a file
+ * whose name cannot be read", so one that only reads read as a write, with no word that the path was
+ * only handed on.
  */
 export type Handed = { to: string; why: string }
 
 /** Why a word built as the command runs, only handed to scripts, cannot be judged, as the hold says it (#3550). */
-export const HANDED_BUILT = 'a word built as the command runs'
+export const HANDED_BUILT = 'the word is built as the command runs'
 
-/** What a word is handed to, from the scripts that are the command's one way of reaching it (#3550): each kind of script once. */
-export const handedTo = (runs: readonly ShellRun[]): string => listed([...new Set(runs.map(r => r.what))])
+/**
+ * What is handed a word, from the scripts that are the command's one way of reaching it (#3550), as
+ * the hold's sentence opens: the one script as mod-kit names its kind (`A bash script file is`), or
+ * how many there are (`2 scripts are`). Kept this short so no sentence of the hold is longer than the
+ * one it replaces, which named no script for a folder.
+ */
+export const handedTo = (runs: readonly ShellRun[]): string => {
+  const what = (runs[0] as ShellRun | undefined)?.what ?? 'a script'
+  return runs.length > 1 ? `${runs.length} scripts are` : `${what.charAt(0).toUpperCase()}${what.slice(1)} is`
+}
 
 /**
  * Whether a word opens a `$(`, `${`, `$[` or backtick it never closes (#3082): the shell refuses such
@@ -945,10 +954,11 @@ export const heldCall = (h: Held): string => (h.unread?.handed ? 'Bash command' 
  * The way past a hold on a write that cannot be named, other than deciding it, as each of the three
  * sentences that name it says it: the refusal (`you`), the refused decision (`decide`) and the card
  * (`card`). For a word only handed to scripts (#3550) there may be no change to make with Edit or
- * Write, so it is handing the script one file by a path typed in full, which is judged as that file.
+ * Write, so it is handing the script one file by its full path, which is judged as that file. Worded
+ * to be no longer than the way it replaces, in each of the three.
  */
 const otherWay = (h: Held, form: 'you' | 'decide' | 'card'): string => {
-  if (h.unread?.handed) return `${form === 'you' ? 'hand it' : form === 'decide' ? 'hand the script' : 'hands the script'} one file by a path typed in full, which the area check can judge`
+  if (h.unread?.handed) return `${form === 'you' ? 'hand it' : form === 'decide' ? 'hand the script' : 'hands it'} one file by its full path, which the area check can judge`
   return `${form === 'card' ? 'makes' : 'make'} the change with Edit or Write${form === 'you' ? ' instead' : ''}, which the area check can judge`
 }
 
@@ -995,7 +1005,7 @@ export const decideProblem = (input: { decision?: unknown; reason?: unknown; iss
   // A command whose files cannot be named folds only into an issue its hold listed (#2706), and the
   // refusal names that fold whenever the hold listed one.
   if (h.unread && !(d === 'fold' && h.shown.length)) {
-    const lead = h.unread.handed ? 'Whether this command writes a file cannot be read' : 'This command writes a file whose name cannot be read'
+    const lead = h.unread.handed ? 'Whether a file is written cannot be read' : 'This command writes a file whose name cannot be read'
     return h.shown.length
       ? `${lead}, so there is no file to restructure: proceed with a reason, ${foldWay(h)}, or ${otherWay(h, 'decide')}.`
       : `${lead}, so there is no file to fold a fix into or restructure: proceed with a reason, or ${otherWay(h, 'decide')}.`
@@ -1039,7 +1049,7 @@ const cardFacts = (h: Held): { reason: string; safeWay: string; note?: string } 
     const handed = h.unread.handed
     return {
       reason: handed
-        ? `This command hands ${h.rel} to ${handed.to}. Whether anything is written there cannot be read before it runs (${handed.why}), and ${h.repo} has files the area check would hold.`
+        ? `${handed.to} handed ${h.rel}, and whether anything is written there cannot be read (${handed.why}), and ${h.repo} has files the area check would hold.`
         : `This command writes a file whose name cannot be read before it runs (${h.unread.why}), and ${h.repo} has files the area check would hold.`,
       safeWay: `Claude proceeds with a reason, ${h.shown.length ? `${foldWay(h, 'folds')}, ` : ''}or ${otherWay(h, 'card')}.`,
     }

@@ -48,6 +48,8 @@ import {
   heldUnder,
   shellKey,
   shellTargets,
+  handedTo,
+  HANDED_BUILT,
   SPOOL_KEY_COMMANDS,
   scriptProgram,
   scriptReach,
@@ -683,18 +685,18 @@ test('the card for a command whose file cannot be read names the fold into a lis
 
 // #3550: a word the command only hands to a script. Every sentence about it says it was handed on and
 // that whether anything is written there cannot be read, never that the command writes it, and names
-// the way through that fits: one file by a path typed in full. A hold kept from before the change,
+// the way through that fits: one file by its full path. A hold kept from before the change,
 // with no such mark, reads as it did.
-const HANDED: Held = { ...UNREAD, rel: '$PWD/hooks', unread: { why: 'a bash script file is handed $PWD/hooks, built as the command runs', key: 'shell:2', handed: { to: 'a bash script file', why: 'a word built as the command runs' } } }
+const HANDED: Held = { ...UNREAD, rel: '$PWD/hooks', unread: { why: 'a bash script file is handed $PWD/hooks, built as the command runs', key: 'shell:2', handed: { to: 'A bash script file is', why: HANDED_BUILT } } }
 
 test('a hold on a word only handed to a script says so in the refusal, the card and the refused decision, and one without the mark reads as before (#3550)', () => {
-  const lead = 'This command hands $PWD/hooks to a bash script file. Whether anything is written there cannot be read before it runs (a word built as the command runs), and dan/app has files the area check would hold.'
-  expect(holdCard(HANDED)).toEqual({ reason: lead, safeWay: 'Claude proceeds with a reason, or hands the script one file by a path typed in full, which the area check can judge.' })
-  expect(holdRefusal(HANDED)).toBe(`The area check held this Bash command. ${lead} Decide: call ${DECIDE_TOOL} with {"call": "${HANDED.id}", "decision": "proceed", "reason": "<why this change does not add to the problem>"} when it does not, or hand it one file by a path typed in full, which the area check can judge. Then send the Bash command again, unchanged.`)
-  expect(decideProblem({ decision: 'restructure' }, HANDED)).toBe('Whether this command writes a file cannot be read, so there is no file to fold a fix into or restructure: proceed with a reason, or hand the script one file by a path typed in full, which the area check can judge.')
+  const lead = 'A bash script file is handed $PWD/hooks, and whether anything is written there cannot be read (the word is built as the command runs), and dan/app has files the area check would hold.'
+  expect(holdCard(HANDED)).toEqual({ reason: lead, safeWay: 'Claude proceeds with a reason, or hands it one file by its full path, which the area check can judge.' })
+  expect(holdRefusal(HANDED)).toBe(`The area check held this Bash command. ${lead} Decide: call ${DECIDE_TOOL} with {"call": "${HANDED.id}", "decision": "proceed", "reason": "<why this change does not add to the problem>"} when it does not, or hand it one file by its full path, which the area check can judge. Then send the Bash command again, unchanged.`)
+  expect(decideProblem({ decision: 'restructure' }, HANDED)).toBe('Whether a file is written cannot be read, so there is no file to fold a fix into or restructure: proceed with a reason, or hand the script one file by its full path, which the area check can judge.')
   const listed: Held = { ...HANDED, shown: LISTED.shown }
-  expect(holdCard(listed).safeWay).toBe('Claude proceeds with a reason, folds the structural fix for one of #41, #57 into this work, or hands the script one file by a path typed in full, which the area check can judge.')
-  expect(decideProblem({ decision: 'restructure' }, listed)).toBe('Whether this command writes a file cannot be read, so there is no file to restructure: proceed with a reason, fold the structural fix for one of #41, #57 into this work, or hand the script one file by a path typed in full, which the area check can judge.')
+  expect(holdCard(listed).safeWay).toBe('Claude proceeds with a reason, folds the structural fix for one of #41, #57 into this work, or hands it one file by its full path, which the area check can judge.')
+  expect(decideProblem({ decision: 'restructure' }, listed)).toBe('Whether a file is written cannot be read, so there is no file to restructure: proceed with a reason, fold the structural fix for one of #41, #57 into this work, or hand the script one file by its full path, which the area check can judge.')
   // What may be decided is what it was: proceed with a reason, a fold into a listed issue, nothing else.
   for (const h of [HANDED, listed]) {
     const same: Held = { ...h, unread: { why: h.unread?.why ?? '', key: 'shell:2' } }
@@ -703,6 +705,44 @@ test('a hold on a word only handed to a script says so in the refusal, the card 
     }
   }
   expect(holdRefusal({ ...HANDED, unread: { why: HANDED.unread?.why ?? '', key: 'shell:2' } })).toContain('The area check held this Bash command, which writes $PWD/hooks. This command writes a file whose name cannot be read before it runs (a bash script file is handed $PWD/hooks, built as the command runs)')
+})
+
+test("the hold's sentence opens with the one script as mod-kit names its kind, or with however many scripts there are (#3550)", () => {
+  expect(handedTo([{ what: 'a bash script file', path: '/w/app/a.sh' }])).toBe('A bash script file is')
+  expect(handedTo([{ what: 'a bash script file', path: '/w/app/a.sh' }, { what: 'a bash script file', path: '/w/app/b.sh' }])).toBe('2 scripts are')
+  expect(handedTo([{ what: 'a bash script file', path: '/w/app/a.sh' }, { what: 'a python3 script file', path: '/w/app/b.py' }, { what: 'a script file run directly', path: '/w/app/c' }])).toBe('3 scripts are')
+})
+
+// The words that replace the misleading ones are never longer than they were (#3550): for every way a
+// handed word is held, the shortest words a command can hold (`.`, `$X`), and every kind of script
+// mod-kit names, the longest it names included. Each pair is the hold as it is now and the same hold
+// without the mark, carrying the reason the hook gave it before, as origin/main worded it.
+test('the hold on a handed word is never longer than the hold it replaces, for the shortest words and every kind of script (#3550)', () => {
+  const under = '26 files under it could be held, more than the 25 the area check judges one by one (among them a.ts, b.ts, c.ts)'
+  const stat = "EACCES: permission denied, stat '/w/app/x'"
+  const longer: string[] = []
+  for (const kind of ['a bash script file', 'a python3 script file', 'a node script file', 'a script file run directly', 2, 12]) {
+    for (const word of ['.', 'x', '$X', '$PWD/payload/hooks', '/w/app']) {
+      // A word handed to several scripts was said, before, to be handed to the first of them.
+      const first = typeof kind === 'number' ? 'a bash script file' : kind
+      const to = handedTo(typeof kind === 'number' ? Array.from({ length: kind }, (_, i) => ({ what: first, path: `/w/app/s${i}.sh` })) : [{ what: kind, path: '/w/app/s.sh' }])
+      const pairs: [string, string][] = [
+        [`${first} is handed ${word}, built as the command runs`, HANDED_BUILT],
+        [`${word} reaches every file under it, and ${under}`, under],
+        [`${word} reaches every file under it, and the files under it cannot be listed (git timed out)`, 'the files under it cannot be listed (git timed out)'],
+        [`${word} may be a folder whose files it writes, and what it is cannot be read (${stat})`, `it may be a folder that cannot be read (${stat})`],
+      ]
+      for (const shown of [[], LISTED.shown]) {
+        for (const [was, now] of pairs) {
+          const before: Held = { ...UNREAD, rel: word, shown, unread: { why: was, key: 'shell:3' } }
+          const after: Held = { ...before, unread: { why: was, key: 'shell:3', handed: { to, why: now } } }
+          const grew = (a: string, b: string) => a.length > b.length
+          if (grew(holdRefusal(after), holdRefusal(before)) || grew(holdCard(after).reason, holdCard(before).reason) || grew(holdCard(after).safeWay, holdCard(before).safeWay) || grew(decideProblem({ decision: 'restructure' }, after) ?? '', decideProblem({ decision: 'restructure' }, before) ?? '')) longer.push(`${to} | ${word} | ${now.slice(0, 30)} | listed=${shown.length}`)
+        }
+      }
+    }
+  }
+  expect(longer).toEqual([])
 })
 
 test('the issues a command whose files cannot be named may fold into are the open structural ones naming a file, the session\'s own included (#2706)', () => {

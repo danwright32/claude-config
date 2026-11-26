@@ -1155,7 +1155,7 @@ test('a script handed a folder whose files cannot be listed is held as unread, s
   const p = $.tool.call({ tool: 'Bash', tool_use_id: 'b1', command: SCRIPT_SRC } as never)
   await w.clock.advance(DEADLINE_MS + 1000)
   const why = refusal((await p) as R)
-  expect(why).toContain('This command hands src/ to a python3 script file. Whether anything is written there cannot be read before it runs (the files under it cannot be listed')
+  expect(why).toContain('A python3 script file is handed src/, and whether anything is written there cannot be read (the files under it cannot be listed')
   expect(w.records().find(x => x.kind === 'unread')).toMatchObject({ word: 'src/', decision: 'held' })
 })
 
@@ -1163,7 +1163,7 @@ test('a script handed a path whose kind cannot be read is held as unread, since 
   const w = world($, on)
   w.ctl.statFails.push(`${APP}/src/locked`)
   const why = refusal(await bash($ as never, w, 'python3 rewrite.py src/locked'))
-  expect(why).toContain('src/locked may be a folder')
+  expect(why).toContain('A python3 script file is handed src/locked, and whether anything is written there cannot be read (it may be a folder that cannot be read (')
   expect(why).toContain('permission denied')
   expect(w.records().find(x => x.kind === 'unread')).toMatchObject({ word: 'src/locked', decision: 'held' })
 })
@@ -1180,7 +1180,7 @@ test('a script handed a path whose existence cannot be asked about is held as un
   const w = world($, on)
   w.ctl.existsFails.push(`${APP}/src/locked`)
   const why = refusal(await bash($ as never, w, 'python3 rewrite.py src/locked'))
-  expect(why).toContain('src/locked may be a folder')
+  expect(why).toContain('A python3 script file is handed src/locked, and whether anything is written there cannot be read (it may be a folder that cannot be read (')
   expect(why).toContain('permission denied')
 })
 
@@ -1193,7 +1193,7 @@ test('a folder holding 25 files that could be held has each judged one by one, n
 test('a folder holding 26 files that could be held is held whole as unread, judging none one by one, and runs once decided (#2321)', KIT, async ($, on) => {
   const w = genWorld($, on, 26)
   const why = refusal(await bash($ as never, w, 'python3 rewrite.py gen'))
-  expect(why).toContain('This command hands gen to a python3 script file. Whether anything is written there cannot be read before it runs (26 files under it could be held, more than the 25 the area check judges one by one')
+  expect(why).toContain('A python3 script file is handed gen, and whether anything is written there cannot be read (26 files under it could be held, more than the 25 the area check judges one by one')
   expect(why).toContain('gen/f1.ts')
   expect(w.judged().length).toBe(0)
   expect(w.records().find(x => x.kind === 'unread')).toMatchObject({ word: 'gen', decision: 'held' })
@@ -1228,14 +1228,14 @@ const AMONG = '(among them payload/hooks/h1.ts, payload/hooks/h2.ts, payload/hoo
 test('a folder only handed to a script is held as before, and the hold says it was handed on, not written (#3550)', KIT, async ($, on) => {
   const w = hooksWorld($, on)
   const why = refusal(await bash($ as never, w, HANDED_FOLDER))
-  expect(why).toContain(`The area check held this Bash command. This command hands ${APP}/payload/hooks to a bash script file. Whether anything is written there cannot be read before it runs (26 files under it could be held, more than the 25 the area check judges one by one ${AMONG}), and dan/app has files the area check would hold.`)
+  expect(why).toContain(`The area check held this Bash command. A bash script file is handed ${APP}/payload/hooks, and whether anything is written there cannot be read (26 files under it could be held, more than the 25 the area check judges one by one ${AMONG}), and dan/app has files the area check would hold.`)
   expect(why).not.toContain('which writes')
   expect(why).not.toContain('writes a file whose name cannot be read')
   expect(why).not.toContain('Edit or Write')
-  expect(why).toContain('or hand it one file by a path typed in full, which the area check can judge. Then send the Bash command again, unchanged.')
+  expect(why).toContain('or hand it one file by its full path, which the area check can judge. Then send the Bash command again, unchanged.')
   expect(why.length).toBeLessThanOrEqual(BEFORE_3550('b1', `${APP}/payload/hooks`, `${APP}/payload/hooks reaches every file under it, and 26 files under it could be held, more than the 25 the area check judges one by one ${AMONG}`).length)
-  expect(String(w.cards[0]?.reason)).toContain(`This command hands ${APP}/payload/hooks to a bash script file.`)
-  expect(String(w.cards[0]?.safeWay)).toContain('or hands the script one file by a path typed in full, which the area check can judge.')
+  expect(String(w.cards[0]?.reason)).toContain(`A bash script file is handed ${APP}/payload/hooks, and whether anything is written there cannot be read (`)
+  expect(String(w.cards[0]?.safeWay)).toContain('or hands it one file by its full path, which the area check can judge.')
   // The decision is the one it was: one hold for the whole command, no file judged, and one proceed runs it.
   expect(w.judged().length).toBe(0)
   expect(w.records().filter(x => x.kind === 'unread')).toEqual([expect.objectContaining({ word: `${APP}/payload/hooks`, decision: 'held', why: `${APP}/payload/hooks reaches every file under it, and 26 files under it could be held, more than the 25 the area check judges one by one ${AMONG}` })])
@@ -1247,10 +1247,12 @@ test('a folder only handed to a script is held as before, and the hold says it w
 test('a path built from a variable the command does not set, only handed to a script, is held as before, and the hold says so (#3550)', KIT, async ($, on) => {
   const w = hooksWorld($, on)
   const why = refusal(await bash($ as never, w, HANDED_BUILT))
-  expect(why).toContain('The area check held this Bash command. This command hands $PWD/payload/hooks to a bash script file. Whether anything is written there cannot be read before it runs (a word built as the command runs), and dan/app has files the area check would hold.')
+  expect(why).toContain('The area check held this Bash command. A bash script file is handed $PWD/payload/hooks, and whether anything is written there cannot be read (the word is built as the command runs), and dan/app has files the area check would hold.')
   expect(why).not.toContain('which writes')
   expect(why).not.toContain('writes a file whose name cannot be read')
-  expect(why).toContain('or hand it one file by a path typed in full, which the area check can judge.')
+  expect(why).toContain('or hand it one file by its full path, which the area check can judge.')
+  // The hold kept for the call carries the mark, so a decision it cannot take is refused in the same words.
+  expect(refusal(await decide($ as never, { call: 'b1', decision: 'restructure' }))).toContain('Whether a file is written cannot be read, so there is no file to restructure: proceed with a reason, fold the structural fix for one of #41, #51 into this work, or hand the script one file by its full path, which the area check can judge.')
   expect(why.length).toBeLessThanOrEqual(BEFORE_3550('b1', '$PWD/payload/hooks', 'a bash script file is handed $PWD/payload/hooks, built as the command runs').length)
   expect(w.judged().length).toBe(0)
   expect(w.records().filter(x => x.kind === 'unread')).toEqual([expect.objectContaining({ word: '$PWD/payload/hooks', decision: 'held', why: 'a bash script file is handed $PWD/payload/hooks, built as the command runs' })])
@@ -1263,7 +1265,7 @@ test("a script under the home folder's hooks library handed the checkout is held
   const w = hooksWorld($, on)
   const why = refusal(await bash($ as never, w, HANDED_CHECKOUT))
   const under = '28 files under it could be held, more than the 25 the area check judges one by one (among them src/big.ts, src/lib/slack.ts, payload/hooks/h1.ts)'
-  expect(why).toContain(`The area check held this Bash command. This command hands ${APP} to a bash script file. Whether anything is written there cannot be read before it runs (${under}), and dan/app has files the area check would hold.`)
+  expect(why).toContain(`The area check held this Bash command. A bash script file is handed ${APP}, and whether anything is written there cannot be read (${under}), and dan/app has files the area check would hold.`)
   expect(why).not.toContain('which writes')
   expect(why.length).toBeLessThanOrEqual(BEFORE_3550('b1', APP, `${APP} reaches every file under it, and ${under}`).length)
   expect(w.judged().length).toBe(0)
@@ -1272,7 +1274,15 @@ test("a script under the home folder's hooks library handed the checkout is held
   expect((await bash($ as never, w, HANDED_CHECKOUT, {}, 'b2')).result).toBe('done')
 })
 
-test('the other way the hold names is real: handed one file by a path typed in full, the script is judged by that file (#3550, L111)', KIT, async ($, on) => {
+test('a word handed to two scripts is said to be handed to 2 scripts, and is held as one handed to one is (#3550)', KIT, async ($, on) => {
+  const w = hooksWorld($, on)
+  const both = 'bash tests/harness.sh "$PWD/payload/hooks" && python3 tests/scan.py "$PWD/payload/hooks"'
+  const why = refusal(await bash($ as never, w, both))
+  expect(why).toContain('2 scripts are handed $PWD/payload/hooks, and whether anything is written there cannot be read (the word is built as the command runs), and dan/app has files the area check would hold.')
+  expect(w.records().filter(x => x.kind === 'unread')).toEqual([expect.objectContaining({ word: '$PWD/payload/hooks', decision: 'held' })])
+})
+
+test('the other way the hold names is real: handed one file by its full path, the script is judged by that file (#3550, L111)', KIT, async ($, on) => {
   const w = hooksWorld($, on)
   // A source file that is there, that no issue names and that is not growing fast: the command runs, undecided.
   expect((await bash($ as never, w, `bash tests/harness.sh ${APP}/src/pay/stripe.ts`)).result).toBe('done')

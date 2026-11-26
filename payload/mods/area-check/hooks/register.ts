@@ -838,7 +838,7 @@ const gatePath = async ($: EngineInterface, id: string, t: Extract<ShellTarget, 
       return PASS
     }
     if (kind === false) return PASS
-    if ('unread' in kind) return { word: t.word, unread: `${t.word} may be a folder whose files it writes, and what it is cannot be read (${kind.unread})`, folder: at, ...handedIf(t.runs, `${t.word} may be a folder, and what it is cannot be read (${kind.unread})`) }
+    if ('unread' in kind) return { word: t.word, unread: `${t.word} may be a folder whose files it writes, and what it is cannot be read (${kind.unread})`, folder: at, ...handedIf(t.runs, `it may be a folder that cannot be read (${kind.unread})`) }
     at = kind.dir
     // A folder handed only to scripts each of whose writes is placed is judged only where those writes
     // land (#2407, #2565): every one of them is read, and any one with a write that cannot be placed, or
