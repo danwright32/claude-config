@@ -1435,6 +1435,24 @@ def bare(s):
 CRUDE_EDGE = re.compile(r"\$\(|[<>=]\(|\(|\)|`")
 
 
+def after_a_name(text, at):
+    """Whether the `(` at text[at] is written straight after a name that is no reserved word.
+
+    Such a parenthesis starts no command in any shell. Measured 2026-11-26, each text run by bash,
+    zsh, dash and sh in an empty folder: `open(touch x)`, `f(touch x)`, `x=1(touch x)`,
+    `$x(touch x)` and `cat = open(touch x).read()` made no file in any of them. After a word that
+    only opens or continues a compound command it does: bash, dash and sh ran
+    `if(touch x); then :; fi`, and the same glued to then, else, elif, do, while and until, and bash
+    and sh after time. Those are RESERVED's words, the list the reader already looks past to reach a
+    command, so that one list answers here too. A name is letters, digits and underscores, the only
+    shapes measured: after a quote, a brace or a bracket the parenthesis is still taken to open.
+    """
+    i = at
+    while i > 0 and text[i - 1].isascii() and (text[i - 1].isalnum() or text[i - 1] == "_"):
+        i -= 1
+    return i < at and text[i:at] not in RESERVED
+
+
 def crude_inner(text):
     """The stretches of one piece of the crude cut that may be commands of their own
     (claude-config#3473): what follows each opener, closer or backquote, and what stands before a
@@ -1451,9 +1469,17 @@ def crude_inner(text):
     it is then a command. So the start of a piece up to a backquote is listed even where that
     backquote opens, `git push origin main `date``, and that command is given twice, once whole
     and once without the words from the backquote on. Twice is the safe side of not at all.
+
+    A `(` written straight after a name is no edge (after_a_name): no shell starts a command there,
+    and listing what follows it handed a gate `"$1"` out of a heredoc's `open("$1")` as a command
+    the script runs, which it does not (L11). Only that `(` is passed over. Every `)` stays an
+    edge, the one that closes it too, because the parenthesis may be glued to a name inside a quoted
+    word, `x=$(git push origin "a(b")`, and the `)` after it then closes the substitution.
     """
     out, at, first = [], 0, True
     for m in CRUDE_EDGE.finditer(text):
+        if m.group() == "(" and after_a_name(text, m.start()):
+            continue
         part = text[at:m.start()]
         if part.strip() and (not first or m.group() in (")", "`")):
             out.append(part)

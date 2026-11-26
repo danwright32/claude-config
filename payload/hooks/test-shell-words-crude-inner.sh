@@ -186,6 +186,65 @@ dirs = [r[0] for r in sw._records(text, "", 0)[0] if r[5].startswith("git\x1dpus
 row("a cd inside a substitution leaves the directory of the commands after it alone",
     "" if dirs == ["/tmp/a"] else "the push was read in %r" % (dirs,))
 
+
+# ---- a parenthesis written straight after a name starts no command -------------------------------
+# No shell runs what stands in a parenthesis glued to a name. Measured 2026-11-26, each text run by
+# bash, zsh, dash and sh in an empty folder: `open(touch x)`, `f(touch x)`, `x=1(touch x)`,
+# `$x(touch x)` and `cat = open(touch x).read()` made no file in any of them. The words that only
+# open or continue a compound command are the exception (RESERVED): bash, dash and sh ran
+# `if(touch x); then :; fi`, and the same glued to then, else, elif, do, while and until, and bash
+# and sh after time.
+#
+# Listing what follows such a parenthesis made a gate say what nothing measured (L11). The pull
+# request's checks found it: a script feeding python3 a heredoc holding `cat = open("$1").read()`,
+# with a quote left open after it, had `"$1"` listed as a command of its own, and the Slack drafts
+# gate refused it as a script that "runs a command named by its arguments ($1)". It runs none.
+def texts(text):
+    """Each command the crude reader hands on for a text the reader cannot read, as it is written."""
+    if not unreadable(text):
+        return None
+    return [t.strip() for _, t, _, _, _ in sw.every_command(text)]
+
+
+text = 'python3 <<EOF\necho = 1\ncat = open("$1").read()\nEOF' + OPEN
+got = texts(text)
+row("a heredoc's Python calling open(\"$1\"): no command named by $1 is listed",
+    "" if got is not None and '"$1"' not in got else "commands handed on: %r" % (got,))
+for what, line in (("a name", "open(touch x)"), ("an assignment", "x=1(touch x)"),
+                   ("a variable", "$x(touch x)"), ("a dotted name", "os.path.join(touch x)")):
+    got = texts(line + OPEN)
+    row("a parenthesis glued to %s, `%s`: what follows it is no command" % (what, line),
+        "" if got is not None and "touch x" not in got else "commands handed on: %r" % (got,))
+
+# The other side, so the rule above cannot be widened to every glued parenthesis without a row
+# failing: after a reserved word, after a function's `()`, and with no name before it, the
+# parenthesis opens a subshell and its command is listed.
+for what, line in (
+    ("if", "if(git push origin main); then :; fi"),
+    ("then", "if true; then(git push origin main); fi"),
+    ("else", "if false; then :; else(git push origin main); fi"),
+    ("elif", "if false; then :; elif(git push origin main); then :; fi"),
+    ("do", "for i in 1; do(git push origin main); done"),
+    ("while", "while(git push origin main); do :; done"),
+    ("until", "until(git push origin main); do :; done"),
+    ("time", "time(git push origin main)"),
+    ("a function's ()", "deploy()(git push origin main)"),
+):
+    text = line + OPEN
+    got = pushes(sw._records(text, "", 0)[0]) if unreadable(text) else None
+    row("a parenthesis glued to %s, `%s`: the push in it is listed with its own words" % (what, line),
+        "" if got is not None and PUSH in got else "git commands read: %r" % (got,))
+for line in ('( "$1" )', '("$1")', 'if("$1"); then :; fi'):
+    got = texts(line + OPEN)
+    row("a subshell that runs the first argument, `%s`: a command named by $1 is listed" % line,
+        "" if got is not None and '"$1"' in got else "commands handed on: %r" % (got,))
+# A closing parenthesis ends a command whatever opened it: the parenthesis glued to a name inside
+# a quoted word does not take the `)` that closes the substitution around it.
+text = 'x=$(git push origin "a(b")' + OPEN
+got = pushes(sw._records(text, "", 0)[0]) if unreadable(text) else None
+row("a $( ) whose last word holds a parenthesis glued to a name: the push is listed, its last word whole",
+    "" if got is not None and ("push", "origin\x1fa(b") in got else "git commands read: %r" % (got,))
+
 # ---- R3: a text the reader can read never reaches the crude reader -------------------------------
 asked = []
 real = sw.crude_commands
