@@ -1514,6 +1514,137 @@ if (POSTED) {
   check(r5.code !== 0 && /no such read/.test(r5.err), 'a read file that is not there is refused by name', r5.all);
 }
 
+// ---------------------------------------------------------------- Draft it now (claude-config#3667)
+//
+// Dan's fourth answer for an announcement that is live and was never drafted (2026-11-25: "Draft it
+// now"). The wording comes from the gathered file into a file the session passes on, it is drafted
+// only when it is the wording the pull request merged on (the hooks' one check, claimedNow), and it
+// is recorded as drafted only when Slack's answer holds a draft_id (the hooks' one judgement,
+// judgeDraft). The record of approvals here is a scratch one inside the case's own folder.
+const KEPT_ANSWER = '{"result":"Draft created","draft_id":"Dr0123ABC","channel_link":"https://example.slack.com/archives/' + ANN_CHANNEL + '"}';
+const NOT_KEPT_ANSWER = '{"result":"Draft created","channel_link":"https://example.slack.com/archives/' + ANN_CHANNEL + '"}';
+// A case whose record of approvals holds what `lines` gives; `claims` maps a pull request to the wording it merged on.
+function draftCase(claims) {
+  const c = annCase(CARRIED);
+  c.approvals = path.join(c.ws.dir, 'approvals');
+  c.drafts = path.join(c.ws.dir, 'drafts for Dan' + APOS + 's posts');
+  c.extra = { ANNOUNCE_APPROVALS_DIR: c.approvals };
+  const lines = [];
+  Object.keys(claims || {}).forEach(function (n) {
+    const hash = ENTRY.announcementHash(claims[n]);
+    lines.push(JSON.stringify({ kind: 'approved', repo: PET, hash: hash, at: '2026-10-01T10:00:00Z', session: 's1', picker: 'toolu_' + n }));
+    lines.push(JSON.stringify({ kind: 'used', repo: PET, hash: hash, pr: Number(n), claim: true, closes: null, unread: null, at: '2026-10-01T10:05:00Z' }));
+  });
+  if (claims) { fs.mkdirSync(c.approvals); fs.writeFileSync(path.join(c.approvals, 'record.jsonl'), lines.join('\n') + '\n'); }
+  c.files = function (n) { return { message: path.join(c.drafts, 'announce-' + n + '-message.txt'), answer: path.join(c.drafts, 'announce-' + n + '-answer.txt') }; };
+  c.ask = function (command, n, more) {
+    const r = run(GATHER, [command, '--gathered', c.ws.out, '--repo', PET, '--number', String(n), '--drafts', c.drafts].concat(more || []), c.ws, c.extra);
+    try { r.json = JSON.parse(r.out); } catch (e) { r.json = null; }
+    return r;
+  };
+  return c;
+}
+{
+  // Before the picker: may "Draft it now" be offered for this one?
+  const c = draftCase({ 70: ANNOUNCE_POST });
+  const r = c.ask('draftable', 70);
+  check(r.code === 0 && r.json && r.json.draftable === true && r.json.channel === ANN_CHANNEL && r.json.messageFile === c.files(70).message && r.json.answerFile === c.files(70).answer,
+    'an announcement that is live, has its channel and wording, and merged on that wording may be drafted now', r.all);
+  check(fs.existsSync(c.files(70).message) && fs.readFileSync(c.files(70).message, 'utf8') === ANNOUNCE_POST,
+    'and its wording is written to a file exactly as gathered, every line and blank line, for the session to pass on unretyped', fs.existsSync(c.files(70).message) && JSON.stringify(fs.readFileSync(c.files(70).message, 'utf8')));
+  check(r.json && /slack_send_message_draft/.test(r.json.said) && /no thread_ts/.test(r.json.said), 'and it says the one call that drafts it: the channel, no thread, that file', r.all);
+
+  // The record names no approval this pull request merged on (merged on the other Mac, or in GitHub's page).
+  const r51 = c.ask('draftable', 51);
+  check(r51.code === 0 && r51.json && r51.json.draftable === false && /approval of #51's announcement could not be read/.test(r51.json.said) && /asked again/.test(r51.json.said),
+    'an announcement whose approval cannot be read is not offered a draft, and says he must be asked again (R8)', r51.all);
+  check(!fs.existsSync(c.files(51).message), 'and its wording is written nowhere for a session to draft', '');
+  const r71 = c.ask('draftable', 71);
+  check(r71.code === 0 && r71.json && r71.json.draftable === false && /not confirmed live/.test(r71.json.said), 'one not live yet is not offered a draft, in its own words', r71.all);
+  const r72 = c.ask('draftable', 72);
+  check(r72.code !== 0 && /#72/.test(r72.err), 'a number that is not a gathered announcement is refused', r72.all);
+  const r0 = run(GATHER, ['draftable', '--gathered', c.ws.out, '--repo', PET, '--number', '70'], c.ws, c.extra);
+  check(r0.code !== 0 && /Usage/.test(r0.err), 'with no folder for the draft files it is refused with the usage', r0.all);
+}
+{
+  // The description was edited after the merge: the gathered wording is not what the pull request merged on.
+  const c = draftCase({ 70: ANNOUNCE_POST.replace('Pick a reason', 'Pick any reason') });
+  const r = c.ask('draftable', 70);
+  check(r.code === 0 && r.json && r.json.draftable === false && /#70's announcement was changed in its pull request after Dan approved it/.test(r.json.said) && /asked again/.test(r.json.said),
+    'wording changed after Dan approved it is never offered a draft, and says he must be asked again (R8)', r.all);
+  check(!fs.existsSync(c.files(70).message), 'and the changed wording is written nowhere for a session to draft', '');
+  // Nor can it be recorded as drafted, whatever Slack answered.
+  fs.mkdirSync(c.drafts, { recursive: true });
+  fs.writeFileSync(c.files(70).message, ANNOUNCE_POST);
+  fs.writeFileSync(c.files(70).answer, KEPT_ANSWER);
+  const d = c.ask('drafted', 70);
+  check(d.code === 0 && d.json && d.json.state === 'not-draftable' && d.json.outcome === null && /changed in its pull request after Dan approved it/.test(d.json.said),
+    'and a draft of it is not recorded as drafted, whatever Slack answered (R8)', d.all);
+}
+{
+  // No record at all, and one that cannot be read: each said as that, never as nothing approved.
+  const none = draftCase(null);
+  const r = none.ask('draftable', 70);
+  check(r.code === 0 && r.json && r.json.draftable === false && /could not be read/.test(r.json.said) && /names no approval/.test(r.json.said), 'with no record of approvals nothing is offered a draft', r.all);
+  check(!fs.existsSync(none.approvals), 'and asking made no record', '');
+  const broken = draftCase(null);
+  fs.mkdirSync(path.join(broken.approvals, 'record.jsonl'), { recursive: true });
+  const r2 = broken.ask('draftable', 70);
+  check(r2.code === 0 && r2.json && r2.json.draftable === false && /could not be read/.test(r2.json.said) && !/names no approval/.test(r2.json.said),
+    'a record that cannot be read is said as that, never as a record naming nothing', r2.all);
+}
+{
+  // After the call: is it recorded as drafted? Only when Slack's answer holds a draft_id.
+  const c = draftCase({ 70: ANNOUNCE_POST, 50: ANNOUNCE_POST });
+  c.ask('draftable', 70);
+  const none = c.ask('drafted', 70);
+  check(none.code !== 0 && /answer/.test(none.err), 'with no answer from the draft tool written down, nothing is judged', none.all);
+  fs.writeFileSync(c.files(70).answer, '  \n');
+  const empty = c.ask('drafted', 70);
+  check(empty.code !== 0 && /empty/.test(empty.err), 'an empty answer is refused, never read as a draft that was not kept', empty.all);
+
+  fs.writeFileSync(c.files(70).answer, KEPT_ANSWER);
+  const saved = c.ask('drafted', 70);
+  check(saved.code === 0 && saved.json && saved.json.state === 'saved' && saved.json.outcome === 'drafted' && saved.json.draftId === 'Dr0123ABC',
+    'an answer holding a draft_id records the announcement as drafted', saved.all);
+  fs.writeFileSync(c.files(70).answer, NOT_KEPT_ANSWER);
+  const notKept = c.ask('drafted', 70);
+  check(notKept.code === 0 && notKept.json && notKept.json.state === 'not-kept' && notKept.json.outcome === null && /already waiting/.test(notKept.json.said) && /without "Draft it now"/.test(notKept.json.said),
+    'an answer holding no draft_id is not recorded as drafted, and says a draft is already waiting in that channel', notKept.all);
+  fs.writeFileSync(c.files(70).answer, '{"ok":false,"error":"not_in_channel"}');
+  const refused = c.ask('drafted', 70);
+  check(refused.code === 0 && refused.json && refused.json.state === 'error' && refused.json.outcome === null && /not_in_channel/.test(refused.json.said), 'an error Slack named is not recorded as drafted, with its name', refused.all);
+  fs.writeFileSync(c.files(70).answer, 'The tool call failed.');
+  const failed = c.ask('drafted', 70, ['--tool-error', 'yes']);
+  check(failed.code === 0 && failed.json && failed.json.state === 'error' && failed.json.outcome === null, 'a tool call that failed with no error named is not recorded as drafted', failed.all);
+  fs.writeFileSync(c.files(70).answer, KEPT_ANSWER);
+  fs.writeFileSync(c.files(70).message, ANNOUNCE_POST.replace('Pick a reason', 'Choose a reason'));
+  const differs = c.ask('drafted', 70);
+  check(differs.code === 0 && differs.json && differs.json.state === 'differs' && differs.json.outcome === null && /differs from the wording Dan approved/.test(differs.json.said),
+    'a message file that no longer holds the approved wording is not recorded as drafted', differs.all);
+
+  // The record step judges it again, so a run is never recorded as drafted on the session's word.
+  const before = fs.readFileSync(c.ws.state, 'utf8');
+  const others = '50=drafted,51=not-announcing';
+  const noDir = run(GATHER, ['commit-state', '--gathered', c.ws.out, '--state', c.ws.state, '--draft', c.ws.draft, '--repo', PET, '--listed', '70,72', '--headings', 'CALLS', '--outcomes', others + ',70=drafted-now'], c.ws, c.extra);
+  check(noDir.code !== 0 && /--drafts/.test(noDir.err) && fs.readFileSync(c.ws.state, 'utf8') === before, 'drafted-now with no folder of draft files is refused', noDir.all);
+  const commit = function () {
+    return run(GATHER, ['commit-state', '--gathered', c.ws.out, '--state', c.ws.state, '--draft', c.ws.draft, '--repo', PET, '--listed', '70,72', '--headings', 'CALLS', '--outcomes', others + ',70=drafted-now', '--drafts', c.drafts], c.ws, c.extra);
+  };
+  const bad = commit();
+  check(bad.code !== 0 && /#70/.test(bad.err) && /not recorded as drafted/.test(bad.err) && fs.readFileSync(c.ws.state, 'utf8') === before,
+    'commit-state refuses drafted-now for a draft that was not judged saved, and leaves the state byte for byte as it was', bad.all);
+  fs.writeFileSync(c.files(70).message, ANNOUNCE_POST);
+  fs.writeFileSync(c.files(70).answer, NOT_KEPT_ANSWER);
+  const bad2 = commit();
+  check(bad2.code !== 0 && /#70/.test(bad2.err) && fs.readFileSync(c.ws.state, 'utf8') === before, 'and for an answer holding no draft_id', bad2.all);
+  fs.writeFileSync(c.files(70).answer, KEPT_ANSWER);
+  const good = commit();
+  const st = committed(c.ws)[PET];
+  const kept = ((st && st.announcements) || []).map(function (a) { return a.number + '=' + a.outcome; });
+  check(good.code === 0 && kept.indexOf('70=drafted') !== -1, 'with a draft Slack kept, drafted-now records the announcement as drafted, so the next run lists it again', good.all + JSON.stringify(kept));
+}
+
 fs.rmSync(SCRATCH, { recursive: true, force: true });
 console.log('passed: ' + passed + ', failed: ' + failed);
 console.log('SUITE-RESULT passed=' + passed + ' failed=' + failed);
