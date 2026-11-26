@@ -23,10 +23,13 @@
 # command he typed himself.
 #
 # WHY A HOOK AND NOT A permissions.ask RULE, which is what the issue's text names. The sync carries
-# no permission rule to either Mac: a rule in settings.shared.json makes the pull refuse that whole
-# file, and one in settings.hooks.json is dropped without a word (measured 2026-11-26 for
-# claude-config#3618). Carrying one means a new entry on the sync's list of shared settings, which
-# is Dan's to sign off. A hook already reaches both Macs, and needs no list of server names.
+# no ask rule to either Mac. The one permission setting it shares is permissions.deny, for a fixed
+# list of rules (claude-config#3686). An ask rule in settings.shared.json makes the pull refuse
+# that whole file, saying such a rule stays each Mac's own (read in claude-sync on 2026-11-26), and
+# one in settings.hooks.json is dropped without a word (measured 2026-11-26 for claude-config#3618,
+# before the deny rules were shared). Carrying an ask rule means a new entry on the sync's list of
+# shared settings, which is Dan's to sign off. A hook already reaches both Macs, and needs no list
+# of server names.
 #
 # WHILE DAN IS ASLEEP the call is refused, with the reason, and never asked about; and when whether
 # he is asleep cannot be told it is refused too. That rule is lib/ask-awake.sh's.

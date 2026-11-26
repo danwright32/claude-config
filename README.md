@@ -6226,8 +6226,12 @@ refused with the reason, and it is refused when the hook cannot tell whether Dan
 rule is `hooks/lib/ask-awake.sh`.
 
 It is a hook and not the `permissions.ask` rule the documentation gives (`Skill(mcp__docs__*)`),
-because the sync carries no permission rule to either Mac (see the section above). A hook also
-needs no list of server names, so a server connected later is covered the day it is connected.
+because the sync carries no ask rule to either Mac. The one permission setting it shares is
+`permissions.deny`, for a fixed list of rules (#3686), and an ask rule in `settings.shared.json`
+makes the pull refuse that whole file, saying such a rule stays each Mac's own (read in
+`claude-sync` on 2026-11-26; the section above holds the measurement, taken before the deny rules
+were shared). A hook also needs no list of server names, so a server connected later is covered the
+day it is connected.
 
 Which skill is a server's is `hooks/lib/server-skills.py`'s rule. The documentation names a
 server's skill `<server>:<skill>`, with `claude_ai_<name>:` for a claude.ai connector and
