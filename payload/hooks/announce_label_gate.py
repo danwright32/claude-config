@@ -33,12 +33,23 @@ And the record of what he approved, whatever the command names:
   Edit, Write, MultiEdit, NotebookEdit of a file under the record's folder
   a Bash command naming that folder that is not one only reading it (lib/db-apply-approval.py's
     reading of "only reads", the one the record of approved test project lines is held by)
+  a Bash command that runs lib/announce-approval.py, the library that writes the record, in any
+    form but the two that only read: `list`, and `check` without --claim and with every value
+    written out (claude-config#3703). Refused: `check --claim` and `used`, which are the merge
+    gate's and write; a command or flag the shell fills in at run time; the file run through
+    `python -m` or named in a program handed to `python -c`; and the file named in a heredoc
+    body. A command that names the file and runs none of it (git, grep, a suite, a compile) passes.
+    A review found the library's check command writing an approval from a made up transcript, and
+    that command names neither the label nor the record's folder.
 
 Every refusal is a deny. Commands are read by the shared gh reader (gh_issue_scan.py). No override.
 
 What it cannot see: a label named through a variable, a file or a script, a gh alias, a label id in
 a GraphQL call that does not spell the name. Those reach the merge gate, which reads the pull
-request itself.
+request itself. And the library reached without its file being named in the command: a script file
+that runs it, a path built at run time, a copy under another name, a hook run by hand. The library
+holds its own line there (a picker counts only from a transcript kept where Claude Code keeps them),
+and a session that forges one in that folder is not stopped by anything on the same Mac.
 """
 
 import importlib.util
@@ -447,7 +458,103 @@ def judge_record(command, cwd):
     return None
 
 
+LIBRARY_FILE = "announce-approval.py"
+PYTHON = re.compile(r"(?:python|pypy)[0-9.]*")
+# Programs that run the command given after them, so python behind one is still python being run.
+RUNNERS = frozenset(("env", "xargs", "time", "nohup", "command", "exec", "builtin", "sudo", "nice", "caffeinate",
+                     "timeout", "gtimeout", "stdbuf", "arch", "rtk", "proxy", "uv", "run"))
+# python's own options that take the next word as their value.
+PYTHON_VALUE_FLAGS = ("-X", "-W")
+# Modules that read a file handed to `python -m` and run none of it.
+COMPILES = ("py_compile", "compileall")
+
+
+def _library_verb(args):
+    """None when the words after the library's file are one of its two forms that only read, else
+    what stands in the way."""
+    verb = args[0] if args else ""
+    if verb == "list":
+        return None
+    if verb != "check":
+        return "runs it with " + ("`" + verb + "`" if verb else "no command") + ", and only `list` and `check` read"
+    if any(a.startswith("--claim") for a in args[1:]):
+        return "runs its check with --claim, which is the merge gate's question and writes"
+    if any("$" in a or "`" in a for a in args[1:]):
+        return ("runs its check with a word the shell fills in at run time, so whether it carries --claim cannot be "
+                "read here; write each value out")
+    return None
+
+
+def _runs_library(text, unread, sw):
+    """None, or how one command naming the library's file runs it in a form that may write."""
+    if unread:
+        return "names it inside a wrapper whose string could not be read (" + unread + ")"
+    try:
+        words = sw.command_words(sw.command_rest(text)[0])
+    except Exception:  # noqa: BLE001  a command nobody can read is not one known only to read
+        return "names it and could not be read as words"
+    names = [os.path.basename(w).lower() == LIBRARY_FILE for w in words]
+    if names and names[0]:
+        return _library_verb(words[1:])
+    at = next((i for i, w in enumerate(words) if PYTHON.fullmatch(os.path.basename(w).lower())), None)
+    # python is being run only when everything before it is a program that runs what follows it, an
+    # option, an assignment or a number: `grep -n python3 <the file>` runs nothing.
+    if at is None or not all(os.path.basename(w) in RUNNERS or w.startswith("-") or "=" in w or w.isdigit()
+                             for w in words[:at]):
+        return None
+    rest, i = words[at + 1:], 0
+    while i < len(rest):
+        word = rest[i]
+        if word == "-c":
+            if any(LIBRARY_FILE in w.lower() for w in rest[i + 1:]):
+                return "hands python a program that names it, and what that program does cannot be read here"
+            return None
+        if word == "-m":
+            module = rest[i + 1] if i + 1 < len(rest) else ""
+            if module in COMPILES or not any(LIBRARY_FILE in w.lower() for w in rest[i + 1:]):
+                return None
+            return "runs it through python -m " + module + ", and what that does with it cannot be read here"
+        if word in PYTHON_VALUE_FLAGS:
+            i += 2
+            continue
+        if word.startswith("-") and word != "-":
+            i += 1
+            continue
+        # The script python runs. Another script handed the file's name is not this library run.
+        if os.path.basename(word).lower() == LIBRARY_FILE:
+            return _library_verb(rest[i + 1:])
+        return None
+    return None
+
+
+def judge_library(command, cwd):
+    """None, or why a Bash command naming the library that writes the record may run it to write
+    (claude-config#3703). Its two forms that only read pass, and so does a command that names the
+    file without running it."""
+    if LIBRARY_FILE not in command.lower():
+        return None
+    ap = _load("db_apply_approval_shared", "lib", "db-apply-approval.py")
+    sw = _load("shell_words_shared", "lib", "shell-words.py")
+    here = cwd if isinstance(cwd, str) and cwd.startswith("/") else ""
+    rest = command
+    for _, text, _, why, _ in sw.every_command(command, here):
+        if LIBRARY_FILE in text.lower():
+            held = _runs_library(text, why, sw)
+            if held:
+                return "the command `" + ap._shown(text) + "` " + held
+            rest = rest.replace(text, "", 1)
+    if LIBRARY_FILE in rest.lower():
+        return ("it is named where no command of this call could be read naming it (a heredoc body, a string), so "
+                "whether a program there runs it could not be told; put that text in a file with Write")
+    return None
+
+
 RECORD_IS = "the record of the announcement wording Dan approved (state/" + approval.RECORD_NAME + ")"
+LIBRARY_RULE = ("It is not a session's to run that way: only a hook writes his approval there, when it reads his "
+                "answer in this session's own picker, as the label goes on or at the merge. A session may read the "
+                "record with `python3 ~/.claude/hooks/lib/" + LIBRARY_FILE + " list`, or ask whether a wording is on "
+                "it with `python3 ~/.claude/hooks/lib/" + LIBRARY_FILE + " check --repo <owner/name> --hash <sha256>`, "
+                "without --claim and with each value written out. " + approval.HOW_TO_ASK)
 RECORD_RULE = ("It is not a session's to write: only his own answer in the picker adds to it, when a hook reads that "
                "answer and writes his approval there. Read it with `python3 ~/.claude/hooks/lib/announce-approval.py "
                "list`. " + approval.HOW_TO_ASK)
@@ -477,6 +584,10 @@ def main():
     held = judge_record(command, cwd)
     if held:
         return deny("this command may write " + RECORD_IS + ": " + held + ". " + RECORD_RULE)
+    held = judge_library(command, cwd)
+    if held:
+        return deny("this command runs lib/" + LIBRARY_FILE + ", or may, in a form that can write " + RECORD_IS + ": "
+                    + held + ". " + LIBRARY_RULE)
     notes = []
     why = judge_label(command, cwd, data, notes)
     if why:

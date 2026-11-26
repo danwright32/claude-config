@@ -25,6 +25,9 @@
 #   aaf_shown <folder> <transcript> <wording>
 #                                    <folder>/announcement.md holding the wording, written by the
 #                                    session and then opened in front of Dan; prints the file's path.
+#   aaf_hook_check <library> <repo> <hash> [pull request number]
+#                                    the library's answer, as JSON, to a hook asking without a claim
+#                                    (the hook payload on standard input), asked in process
 #   AAF_BBEDIT                       the helper a session opens a file in BBEdit with
 
 AAF_BBEDIT=/Applications/BBEdit.app/Contents/Helpers/bbedit_tool
@@ -85,6 +88,23 @@ elif action == "ask":
 else:
     sys.exit("aaf_talk: no action called " + action)
 PY
+}
+
+# aaf_hook_check <library> <repo> <hash> [pull request number]: the library's answer to a hook that
+# asks without claiming, as JSON, with the hook payload on standard input. It is asked in process,
+# as announce-label-ask.sh asks it, because the library's own command line reads the record only
+# unless it is the merge gate's claim (claude-config#3703).
+aaf_hook_check() {
+  python3 -B -c 'import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("announce_approval", sys.argv[1])
+lib = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(lib)
+try:
+    payload = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
+except ValueError:
+    payload = {}
+pr = sys.argv[4] if len(sys.argv) > 4 else ""
+json.dump(lib.check(sys.argv[2], sys.argv[3], payload, int(pr) if pr.isdigit() else None), sys.stdout)' "$@"
 }
 
 aaf_shown() {  # <folder> <transcript> <wording>

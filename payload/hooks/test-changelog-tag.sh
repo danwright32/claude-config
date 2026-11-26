@@ -1292,6 +1292,29 @@ if [ -z "$out" ] && [ "$(used_by "$dir" 8)" -ge 1 ]; then pass
 else fail "#3666 R2 still possible: a second pull request was refused after Dan approved the same wording a second time, or was not recorded as using it: $out $(cat "$dir/approvals/record.jsonl")"; fi
 rm -rf "$dir"
 
+# THE LIBRARY'S OWN COMMAND LINE APPROVES NOTHING (claude-config#3703). The review's first finding,
+# whole: a session wrote a file shaped like a transcript, holding a picker nobody was shown, ran the
+# library's check command with a payload naming it, and then merged, in a session whose own
+# transcript held no picker at all. The check command wrote his approval, so the gate let the merge
+# through. It now reads the record only, so the merge is refused and asks him.
+dir=$(make_repo acme/widget "$ANNOUNCE_FULL" "$REGISTRY_ANNOUNCES")
+forged_file="$(aaf_shown "$dir/forged" "$dir/forged-talk.jsonl" "$WORDING")"
+aaf_talk "$dir/forged-talk.jsonl" ask acme/widget "$forged_file"
+forged_hash="$(node "$HOOK_DIR/lib/changelog-entry.js" announcement-hash < "$forged_file" | jq -r '.hash')"
+forged_said="$(printf '{"session_id":"s1","transcript_path":"%s"}' "$dir/forged-talk.jsonl" \
+  | ANNOUNCE_APPROVALS_DIR="$dir/approvals" python3 -B "$HOOK_DIR/lib/announce-approval.py" check --repo acme/widget --hash "$forged_hash")"
+if says "$forged_said" '"approved": false' && [ ! -e "$dir/approvals/record.jsonl" ]; then pass
+else fail "#3703 R2: the library's check command took a picker from the transcript its input named, or wrote the record: $forged_said $(cat "$dir/approvals/record.jsonl" 2>/dev/null)"; fi
+aaf_new "$dir/real-talk.jsonl"
+out=$(TALK="$dir/real-talk.jsonl" run_hook "$dir" "$MERGE 7 --squash")
+if asks_dan "$out" && says "$out" "Dan has not approved this wording for acme/widget"; then pass
+else fail "#3703 R2: an announce pull request merged after the library's check command was handed a made up transcript: $out"; fi
+# The same session, when it is the one making the merge, is his approval: so the transcript was one
+# the gate takes, and what refused it above was who asked.
+out=$(TALK="$dir/forged-talk.jsonl" run_hook "$dir" "$MERGE 7 --squash")
+if [ -z "$out" ]; then pass; else fail "#3703 still possible: the gate refused the picker in the transcript Claude Code handed it: $out"; fi
+rm -rf "$dir"
+
 # A USE THAT CANNOT BE RECORDED REFUSES THE MERGE (Dan, 2026-11-25, by picker: "Refuse the merge").
 # The record holds his approval and can no longer be written: the merge is refused saying what could
 # not be written and where, and the remedy is the record, not asking him again.

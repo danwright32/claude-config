@@ -3040,6 +3040,28 @@ for the review by picker, 2026-11-25: "Yes, attack it first"). The choices are t
   carries no count (L98). Only a run with wording below it counts: blank lines after the last line
   hide nothing, and refusing them would send a session back to Dan over a file he may have left
   that way himself. The limit of two is chosen, not measured.
+- **Reading an approval and writing one are separate, and a picker counts only from a transcript
+  Claude Code keeps.** The library's `check` command read pickers from whatever transcript its
+  standard input named and wrote what it found. Nothing a process is handed can prove its caller is
+  a hook: a hook and a session's command are both started by Claude Code, as the same user, with
+  input the caller chooses. So the line is drawn in three places that each hold something. The
+  command line a session has a use for (`list`, `check` without `--claim`) reads the record and
+  nothing else. The label hook refuses a Bash command running the library in any other form,
+  which stops the route the review took and every accident. And whoever asks, by whatever route,
+  a picker is read only from a `.jsonl` transcript under the projects folder beside the record's
+  state folder, so a file shaped like a transcript and kept anywhere else approves nothing; this
+  one also covers the library reached without being named, and a hook run by hand. The merge gate's
+  own call (`check --claim`) is unchanged, since it must write and was left as it is for the phase
+  being built beside this one. Ruled out: refusing to write when `CLAUDECODE` is set, which
+  Claude Code sets in a Bash tool's shell (seen set to 1 there on 2026-11-25) and is understood
+  not to set in a hook's, which was not measured. A session started from inside another session's
+  shell would hand that variable to its own hooks, which would then never save an approval, and
+  Dan would be asked again for wording he had approved; and one word in the command clears it.
+  Ruled out too: a transcript root the tests could name through a variable of its own, which a
+  session's command could name as well. The tests' record variable waives the folder rule only for
+  a record that is not this user's own, with "own" read from the account database. What is left
+  open is said in the README: a transcript forged inside that folder, and the library reached
+  without its name. Both are writes to files on a Mac the session can write.
 
 `hooks/test-announce-approval.sh`, `hooks/test-announce-label-ask.sh` and the #3666 section of
 `hooks/test-changelog-tag.sh` hold it.
