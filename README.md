@@ -7435,6 +7435,20 @@ readings (120 days kept), so the share can be recalibrated from both Macs' recor
 re-argued. Then the macOS symbol cache, which only an administrator can size, so it is named as a
 suspect with the commands for Dan to size and clear it.
 
+Last, a process left running with no parent (claude-config#3561). On 2026-11-24 19 shells a builder
+agent's commands had started ran on for about 90 minutes after the agent ended and took 42 GB,
+through the file event log and swap, while no folder grew. The warning reads the process table once
+(`ps -axS`, bounded by `FREE_SPACE_PS_SECONDS`, 1, through `hooks/lib/bounded-run.sh`; 0 turns it
+off) and names, by program name and process id, each process whose parent is 1 and whose process
+group's leader is gone, that has run at least `FREE_SPACE_MIN_SPAN_MIN` (10) minutes, and that has
+used at least 1 in 1,000 of the time it has been alive on the processor. Parent 1 alone would name
+every app and daemon (905 of 967 processes on 2026-11-26); a launchd job leads its own group, and a
+child a Bash tool shell left behind keeps that shell's gone group. It calls them suspects, hands
+over a `ps` that only reads, and says whether to stop one is Dan's decision; it never stops
+anything. A table it cannot read is said to be unread, never as nothing found. A process that left
+its shell's group (setsid, a time limit runner with a group of its own) is not seen. The rule's
+measurements are in `check-free-space.sh` beside it.
+
 Before those, one line from disk-clean's last scan (claude-config#1809): when
 `~/.claude/state/disk-clean/last-scan.json` (`FREE_SPACE_SCAN_RECORD`) is under 7 days old, the
 warning says how much that scan offered that has not been removed yet, how long ago it was taken,

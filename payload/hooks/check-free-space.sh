@@ -884,6 +884,119 @@ symbol_cache_note(){
   echo '```'
 }
 
+# ---------- a process left running with no parent, named only when the verdict is low or falling ----------
+# On 2026-11-24 a builder agent's harness started generated command texts with `bash -c` and no time
+# limit. 19 never ended, and after the agent ended they ran on with no parent for about 90 minutes,
+# churning here document temp files: free space fell from 68.7 GB to 26.3 GB at up to 24 GB an hour,
+# through the file event log and swap. Nothing under the home folder grew, so no folder size pointed
+# at them (claude-config#3561). This names a process of that shape; it never stops one, and says
+# that whether to is Dan's decision (the issue's second open question).
+#
+# THE RULE, each term measured on this Mac's process table on 2026-11-26 (the personal MacBook, 967
+# processes, load average 34 to 385; the numbers are in the pull request for #3561):
+#   - NO PARENT is parent 1 AND a process group whose leader is gone. Parent 1 alone is nothing on
+#     macOS: launchd is the parent of 905 of the 967, every app and daemon. A launchd job leads its
+#     own group (pgid = pid: 889 of the 905), and 12 more had a living leader (9 of them Backblaze's
+#     bztransmit, beside the bzserv that leads it). A process a Bash tool shell started keeps that
+#     shell's group after the shell ends (5 of 5, measured for agent-leftovers.py on 2026-11-25, and
+#     again here on two stand in shells), so its leader is the one thing gone. 4 of the 905 matched,
+#     every one a crashpad handler.
+#   - A LONG TIME is the check's own FREE_SPACE_MIN_SPAN_MIN (10 minutes), the shortest span a fall
+#     is stated over: a process younger than that cannot have been running across the fall the
+#     warning measured. The 11-24 shells were 90 minutes old.
+#   - STEADY PROCESSOR USE is processor time (ps -S, which adds the time of children it has reaped)
+#     of at least ORPHAN_SHARE_PERMILLE thousandths of the time it has been alive. The 4 crashpad
+#     handlers had used 0 seconds in about 30 hours. Two stand in shells started the 11-24 way used
+#     28% (writing their here string files themselves) and 0.43% (running cat for each, where most
+#     of the cost is in the children). 1 in 1,000 sits between them, and it is a setting chosen from
+#     those, not a measurement of a boundary (L172). Of the 881 parent 1 processes 10 minutes old,
+#     the 90th percentile was 0.08%, so the group rule, not this one, is what keeps daemons out.
+#   Tonight's hit count for the whole rule was 0 (the crashpad handlers fail the processor term).
+#
+# NOT SEEN: a process that left its shell's group (setsid, a time limit runner that makes a group of
+# its own) leads its group and looks like a launchd job, the limit agent-leftovers.py records too;
+# and a group id taken again by an unrelated process makes the leader look alive.
+#
+# COST: nothing on a disk with room, where this is never called. On a warning, one ps of the whole
+# table, 40 to 70 ms in 7 runs at a load average of 306 on 2026-11-26, bounded by
+# FREE_SPACE_PS_SECONDS (default 1) with its process group killed, so the prompt hook stays inside its
+# 10 second timeout beside top's 2 and the Xcode step's 6.
+#
+# Environment (seams, so the suite never reads this machine's table, L2):
+#   FREE_SPACE_PS_CMD      an executable printing `ps -axS -o pid=,ppid=,pgid=,etime=,time=,comm=`
+#   FREE_SPACE_PS_SECONDS  the bound on it (default 1; 0 turns the reading off)
+# The ages are read by lib/suite-pile.sh's etime_secs and said by its etime_units, the one copy of
+# ps's time formats (claude-config#3033); the bound is lib/bounded-run.sh's.
+ORPHAN_SHARE_PERMILLE=1
+orphan_note(){
+  local seconds="${FREE_SPACE_PS_SECONDS:-1}" why="" found="" said="" pids="" shown
+  # Zero written any way (0, 00) is off; anything else not a whole number is bounded_run's to refuse.
+  if [ -n "$seconds" ] && [ -z "${seconds//0/}" ]; then
+    echo ""
+    echo "Looking for a process left running with no parent is turned off here (FREE_SPACE_PS_SECONDS=0)."
+    return 0
+  fi
+  # The folder the check found its own library in at the top (_fs_here), never derived again.
+  . "$_fs_here/lib/bounded-run.sh" 2>/dev/null || bounded_run() { BOUNDED_OUT="lib/bounded-run.sh is missing, so ps was not run"; BOUNDED_RC=127; }
+  . "$_fs_here/lib/suite-pile.sh" 2>/dev/null
+  if [ -z "${SUITE_PILE_AWK_ETIME:-}" ]; then
+    why="lib/suite-pile.sh, which reads ps's times, is missing"
+  else
+    if [ -n "${FREE_SPACE_PS_CMD:-}" ]; then
+      bounded_run "$seconds" "$FREE_SPACE_PS_CMD"
+    else
+      bounded_run "$seconds" env LC_ALL=C ps -axS -o pid=,ppid=,pgid=,etime=,time=,comm=
+    fi
+    case "$BOUNDED_RC" in
+      0) ;;
+      124) why="ps did not answer within ${seconds}s" ;;
+      125) why="FREE_SPACE_PS_SECONDS is '$seconds', not a whole number of seconds, so ps was not run" ;;
+      *) said="${BOUNDED_OUT:-<nothing>}"; said="${said//$'\n'/ }"; why="ps exited $BOUNDED_RC and said '${said:0:120}'" ;;
+    esac
+  fi
+  if [ -z "$why" ]; then
+    # pid ppid pgid etime time comm, the program's path last because it can hold spaces. ps writes
+    # processor time as minutes:seconds.hundredths, so the hundredths go before etime_secs reads it.
+    found="$(awk -v minage=$((MIN_SPAN_MIN * 60)) -v permille="$ORPHAN_SHARE_PERMILLE" "$SUITE_PILE_AWK_ETIME"'
+      NF >= 6 && $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ {
+        n++; alive[$1] = 1; pid[n] = $1; ppid[n] = $2; pgid[n] = $3; et[n] = $4
+        t = $5; sub(/\.[0-9]+$/, "", t); cpu[n] = etime_secs(t)
+        cmd = $6; for (i = 7; i <= NF; i++) cmd = cmd " " $i
+        k = split(cmd, part, "/"); name[n] = part[k]
+      }
+      END {
+        if (!n) { print "NOROWS"; exit }
+        for (i = 1; i <= n; i++) {
+          if (ppid[i] != 1 || pgid[i] == pid[i] || (pgid[i] in alive)) continue
+          age = etime_secs(et[i])
+          if (age <= 0 || age < minage || cpu[i] < 0 || cpu[i] * 1000 < age * permille) continue
+          printf "%s\t%s\t%s\t%.1f\n", pid[i], name[i], etime_units(et[i]), cpu[i] * 100 / age
+        }
+      }' <<< "$BOUNDED_OUT" 2>/dev/null)" || why="its table could not be read"
+    [ "$found" = NOROWS ] && why="ps printed no row that could be read"
+  fi
+  if [ -n "$why" ]; then
+    echo ""
+    echo "Could not read the process table ($why), so whether a process left running with no parent is behind this is not known. No folder size shows one."
+    return 0
+  fi
+  [ -n "$found" ] || return 0
+  echo ""
+  echo "Nothing measured what these write, so each is a suspect, not a measured cause. Each has no parent (its parent and the shell that led its group are gone), has run at least $MIN_SPAN_MIN minute(s), and is still using the processor: the shape that filled the disk on Daniels-MacBook-Pro-2 on 2026-11-24, when shells a builder agent's commands had started ran on for 90 minutes and no folder size showed them."
+  shown=0
+  while IFS=$'\t' read -r _pid _name _age _share; do
+    [ -n "$_pid" ] || continue
+    pids="${pids:+$pids,}$_pid"
+    shown=$((shown + 1))
+    [ "$shown" -le 10 ] && echo "  $_name (pid $_pid): running $_age, $_share% of one processor on average"
+  done <<< "$found"
+  [ "$shown" -gt 10 ] && echo "  and $((shown - 10)) more, listed by the command below."
+  echo "Whether to stop any of them is Dan's decision, and nothing here stops anything. To see what each one is (this only reads):"
+  echo '```'
+  echo "ps -o pid,ppid,etime,time,command -p $pids"
+  echo '```'
+}
+
 # ---------- what the last disk-clean scan found that is still there to remove (claude-config#1809) ----------
 # A warning that the disk is nearly full, while a scan from two days ago already found 14 GB that
 # could go, leaves Dan to find that out again. So a low or falling verdict adds ONE line: the total
@@ -1011,6 +1124,7 @@ if [ "$free_gb" -lt "$FLOOR_GB" ]; then
   scan_note
   swap_note
   symbol_cache_note
+  orphan_note
   exit 3
 fi
 
@@ -1021,6 +1135,7 @@ if [ "$falling_fast" -eq 1 ]; then
   scan_note
   swap_note
   symbol_cache_note
+  orphan_note
   exit 4
 fi
 

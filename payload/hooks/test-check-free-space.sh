@@ -73,6 +73,12 @@ TOP_SILENT="$TMPROOT/top-silent"
 printf '#!/bin/sh\n: >> "%s"\n' "$TOP_CALLED" > "$TOP_SILENT"; chmod +x "$TOP_SILENT"
 export FREE_SPACE_TOP_CMD="$TOP_SILENT"
 export FREE_SPACE_DISK_BYTES=$((926 * 1024 * 1024 * 1024))
+# The process table a low or falling warning reads for a process left running with no parent
+# (claude-config#3561) is the machine's by default, so every run hands the check a table of the
+# suite's own holding only launchd; the cases about such processes hand it tables of their own (L2).
+PS_QUIET="$TMPROOT/ps-quiet"
+printf '#!/bin/sh\necho "    1     0     1 1-05:48:00   625:26.22 /sbin/launchd"\n' > "$PS_QUIET"; chmod +x "$PS_QUIET"
+export FREE_SPACE_PS_CMD="$PS_QUIET"
 # The disk-clean scan record a low or falling warning reads (claude-config#1809) is per Mac, under
 # ~/.claude/state, so every run points the check at one of the suite's own that does not exist,
 # unless a case writes one and names it (L2).
@@ -1517,6 +1523,135 @@ scan_probe "$TMPROOT/no-scan-here/last-scan.json" "$((500 * 1024 * 1024))"
 check "under a GB the free space is worded in MB by the same rule, never as 0 GB" \
   "$([ "$PROBE_RC" -eq 3 ] && grep -qF "only $(dcu_human $((500 * 1024))) free on /fixture" <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
 
+# ---- a process left running with no parent, named on a low or falling verdict (#3561) ----
+# On 2026-11-24 19 shells a builder agent's commands had started ran on with no parent for about 90
+# minutes and filled the disk at up to 24 GB an hour, and no folder size showed them. No process
+# table from that day survives, so these tables are NOT copies of it. Each row is shaped from a
+# reading of this Mac's own table on 2026-11-26 (the personal MacBook, load average 34 to 385):
+#   - the long runner from two self ending stand in shells started the way the 11-24 harness was
+#     (bash -c from a Bash tool shell that then ended): parent 1, the group of the shell that had
+#     gone, 28% of one processor for one that wrote its here string files itself and 0.43% for one
+#     that ran cat for each, both read 37 seconds after they started;
+#   - the idle one from that table's four processes whose group leader had gone, every one a
+#     crashpad handler at 0 seconds of processor time after about 30 hours;
+#   - the daemon from launchd's jobs, which lead their own group (fseventsd at 35%);
+#   - the service from Backblaze's bztransmit, parent 1 but its group's leader bzserv alive (38%).
+# The columns are the ones the check asks ps for: pid, ppid, pgid, etime, time, comm (L48).
+ps_table(){   # ps_table <name> <rows...> -> prints the path of an executable printing those rows
+  local f="$TMPROOT/ps-table-$1" exe="$TMPROOT/ps-cmd-$1"
+  shift
+  printf '%s\n' "    1     0     1 1-05:48:00   625:26.22 /sbin/launchd" "$@" > "$f"
+  printf '#!/bin/sh\n: >> "%s.called"\ncat "%s"\n' "$exe" "$f" > "$exe"; chmod +x "$exe"
+  printf '%s' "$exe"
+}
+ps_probe(){   # ps_probe <ps command> <free bytes> [VAR=value...] -> sets PROBE_RC and PROBE_MSG
+  local cmd="$1" free="$2" out="$TMPROOT/ps-probe-out" state="$TMPROOT/state-ps-$RANDOM"
+  shift 2; mkdir -p "$state"
+  env FREE_SPACE_BYTES="$free" FREE_SPACE_NOW="$T0" FREE_SPACE_STATE_DIR="$state" FREE_SPACE_PATH=/fixture \
+    FREE_SPACE_PS_CMD="$cmd" "$@" bash "$CHECK" > "$out" 2>&1
+  PROBE_RC=$?
+  PROBE_MSG="$(cat "$out" 2>/dev/null || true)"
+}
+ROW_RUNNER=" 7001     1  6990    01:30:00    25:12.00 /bin/bash"
+ROW_RUNNER_CHILDREN=" 7002     1  6990    01:30:00     0:23.22 /bin/zsh"
+ROW_IDLE=" 5001     1  4990 1-05:47:55     0:00.00 /Applications/Google Chrome.app/Contents/Frameworks/Helpers/chrome_crashpad_handler"
+ROW_DAEMON="  401     1   401 1-05:48:45   625:30.11 /System/Library/Frameworks/CoreServices.framework/Versions/A/Support/fseventsd"
+ROW_SERVICE_LEAD=" 3001     1  3001    01:05:00    10:00.00 /Library/Backblaze.bzpkg/bzserv"
+ROW_SERVICE=" 3002     1  3001    01:04:46    24:40.00 /Library/Backblaze.bzpkg/bztransmit"
+ROW_PARENT=" 8000     1  8000    02:00:00     0:01.00 /bin/zsh"
+ROW_PARENTED=" 8001  8000  8000    01:30:00    25:12.00 /bin/bash"
+ROW_YOUNG=" 9001     1  8990       05:00     1:30.00 /bin/bash"
+ORPHAN_HEAD='no parent'
+
+PS_RUNNER="$(ps_table runner "$ROW_RUNNER")"
+ps_probe "$PS_RUNNER" "$((1 * GB))"; runner_msg="$PROBE_MSG"
+check "a low disk with a parentless long runner still exits 3" "$([ "$PROBE_RC" -eq 3 ] && echo ok || echo "exit $PROBE_RC, said: $runner_msg")"
+check "and the warning names it, by program and process id" \
+  "$(grep -qF 'bash (pid 7001)' <<< "$runner_msg" && grep -qF "$ORPHAN_HEAD" <<< "$runner_msg" && echo ok || echo "said: $runner_msg")"
+check "and says how long it has run, with its units, and its share of one processor" \
+  "$(grep -F 'bash (pid 7001)' <<< "$runner_msg" | grep -qF '1h 30m' && grep -F 'bash (pid 7001)' <<< "$runner_msg" | grep -qF '28.0% of one processor' && echo ok || echo "said: $runner_msg")"
+check "and hands over a command that only reads, naming the process ids it found" \
+  "$(grep -qxF 'ps -o pid,ppid,etime,time,command -p 7001' <<< "$runner_msg" && echo ok || echo "said: $runner_msg")"
+# The warning names; whether to stop a process is Dan's decision, so no stopping command is handed
+# over and no sentence tells anybody to stop one (#3561's second open question).
+check "and hands over no command that stops or signals a process" \
+  "$(! grep -qE '(^|[^a-z])(kill|pkill|killall)([^a-z]|$)' <<< "$runner_msg" && echo ok || echo "said: $runner_msg")"
+check "and calls it a suspect, never a measured cause" \
+  "$(grep -qF 'suspect' <<< "$runner_msg" && echo ok || echo "said: $runner_msg")"
+
+PS_IDLE="$(ps_table idle "$ROW_IDLE")"
+ps_probe "$PS_IDLE" "$((1 * GB))"
+check "a parentless process idle at zero processor is not named (control)" \
+  "$([ "$PROBE_RC" -eq 3 ] && ! grep -qF "$ORPHAN_HEAD" <<< "$PROBE_MSG" && ! grep -qF '5001' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+
+PS_PARENTED="$(ps_table parented "$ROW_PARENT" "$ROW_PARENTED")"
+ps_probe "$PS_PARENTED" "$((1 * GB))"
+check "a long runner whose parent is alive is not named (control)" \
+  "$([ "$PROBE_RC" -eq 3 ] && ! grep -qF "$ORPHAN_HEAD" <<< "$PROBE_MSG" && ! grep -qF '8001' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+# The case the parent term alone decides: a busy child of the parentless runner is in the same gone
+# group, but its parent is alive (the runner), so only the runner is named. A rule without the
+# parent term passed every other case here and failed only this one (seen on 2026-11-26).
+ROW_ORPHAN_CHILD=" 7003  7001  6990    01:30:00    25:12.00 /usr/bin/python3"
+PS_ORPHAN_CHILD="$(ps_table orphan-child "$ROW_RUNNER" "$ROW_ORPHAN_CHILD")"
+ps_probe "$PS_ORPHAN_CHILD" "$((1 * GB))"
+check "a long runner whose parent is alive is not named even when its group's leader is gone (control)" \
+  "$([ "$PROBE_RC" -eq 3 ] && grep -qF 'bash (pid 7001)' <<< "$PROBE_MSG" && ! grep -qF '7003' <<< "$PROBE_MSG" && ! grep -qF 'python3' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+
+PS_DAEMONS="$(ps_table daemons "$ROW_DAEMON" "$ROW_SERVICE_LEAD" "$ROW_SERVICE")"
+ps_probe "$PS_DAEMONS" "$((1 * GB))"
+check "busy launchd jobs and a service whose group leader lives are not named (control)" \
+  "$([ "$PROBE_RC" -eq 3 ] && ! grep -qF "$ORPHAN_HEAD" <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+
+PS_YOUNG="$(ps_table young "$ROW_YOUNG")"
+ps_probe "$PS_YOUNG" "$((1 * GB))"
+check "a busy parentless process younger than the shortest span a fall is judged over is not named (control)" \
+  "$([ "$PROBE_RC" -eq 3 ] && ! grep -qF "$ORPHAN_HEAD" <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+
+PS_MIXED="$(ps_table mixed "$ROW_DAEMON" "$ROW_SERVICE_LEAD" "$ROW_SERVICE" "$ROW_IDLE" "$ROW_RUNNER" "$ROW_RUNNER_CHILDREN" "$ROW_PARENT" "$ROW_PARENTED" "$ROW_YOUNG")"
+ps_probe "$PS_MIXED" "$((1 * GB))"; mixed_msg="$PROBE_MSG"
+check "in a whole table only the two parentless long runners are named, the slow one at its own share" \
+  "$([ "$(grep -cE '^  [^ ].* \(pid [0-9]+\): ' <<< "$mixed_msg")" -eq 2 ] && grep -qF 'zsh (pid 7002)' <<< "$mixed_msg" && grep -F 'zsh (pid 7002)' <<< "$mixed_msg" | grep -qF '0.4% of one processor' && echo ok || echo "said: $mixed_msg")"
+check "and a program path holding a space is not split into a name" \
+  "$(! grep -qF 'Chrome' <<< "$mixed_msg" && echo ok || echo "said: $mixed_msg")"
+
+# A falling verdict names it too: that is the warning the 11-24 disk would have raised first.
+S_PS_FALL="$TMPROOT/state-ps-fall"; mkdir -p "$S_PS_FALL"
+FREE_SPACE_PS_CMD="$PS_RUNNER" probe "$((300 * GB))" "$((T0 - 10800))" "$S_PS_FALL"
+FREE_SPACE_PS_CMD="$PS_RUNNER" probe "$((60 * GB))" "$T0" "$S_PS_FALL"
+check "a falling verdict names a parentless long runner as well" \
+  "$([ "$PROBE_RC" -eq 4 ] && grep -qF 'bash (pid 7001)' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+
+# A disk with room says nothing and does not even read the table, so an ordinary prompt pays nothing.
+rm -f "$PS_RUNNER.called"
+ps_probe "$PS_RUNNER" "$((200 * GB))"
+check "a disk with room says nothing about it and never reads the process table" \
+  "$([ "$PROBE_RC" -eq 0 ] && [ -z "$PROBE_MSG" ] && [ ! -e "$PS_RUNNER.called" ] && echo ok || echo "exit $PROBE_RC, read: $([ -e "$PS_RUNNER.called" ] && echo yes || echo no), said: $PROBE_MSG")"
+
+# A table that cannot be read is said as not looked, never as nothing found (L11, L98).
+PS_FAIL="$TMPROOT/ps-fail"
+printf '#!/bin/sh\necho "ps: not permitted" >&2\nexit 1\n' > "$PS_FAIL"; chmod +x "$PS_FAIL"
+ps_probe "$PS_FAIL" "$((1 * GB))"
+check "a process table that cannot be read is said, with what ps said, and the verdict still stands" \
+  "$([ "$PROBE_RC" -eq 3 ] && grep -qF 'Could not read the process table' <<< "$PROBE_MSG" && ! grep -qF 'bash (pid' <<< "$PROBE_MSG" && grep -qF 'not permitted' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+PS_JUNK="$TMPROOT/ps-junk"
+printf '#!/bin/sh\necho "nothing like a table"\n' > "$PS_JUNK"; chmod +x "$PS_JUNK"
+ps_probe "$PS_JUNK" "$((1 * GB))"
+check "a table with no row that can be read is said as not read, never as nothing found" \
+  "$([ "$PROBE_RC" -eq 3 ] && grep -qF 'Could not read the process table (ps printed no row' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+PS_HANG="$TMPROOT/ps-hang"
+printf '#!/bin/sh\nsleep 5\n' > "$PS_HANG"; chmod +x "$PS_HANG"
+# The words come only from bounded_run's 124, the bound running out, so no wall clock is judged here
+# (a loaded Mac reaches any few seconds ceiling with nothing broken, L290).
+ps_probe "$PS_HANG" "$((1 * GB))" FREE_SPACE_PS_SECONDS=1
+check "a process table that does not answer is given up on at its bound and said" \
+  "$([ "$PROBE_RC" -eq 3 ] && grep -qF 'did not answer within 1s' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+ps_probe "$PS_RUNNER" "$((1 * GB))" FREE_SPACE_PS_SECONDS=soon
+check "a bound that is not a whole number is said, and the table is not read unbounded" \
+  "$([ "$PROBE_RC" -eq 3 ] && grep -qF 'FREE_SPACE_PS_SECONDS' <<< "$PROBE_MSG" && ! grep -qF 'bash (pid 7001)' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+ps_probe "$PS_RUNNER" "$((1 * GB))" FREE_SPACE_PS_SECONDS=0
+check "a bound of 0 turns the reading off and says so" \
+  "$([ "$PROBE_RC" -eq 3 ] && grep -qF 'FREE_SPACE_PS_SECONDS=0' <<< "$PROBE_MSG" && ! grep -qF 'bash (pid 7001)' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+
 # ================== the nudge: WHEN the answer is spoken ==================
 # The check answers the question; the nudge decides when to say it. Same split as
 # project-list-nudge.sh, so there is one implementation of the question (L107).
@@ -1869,6 +2004,12 @@ check "and its clearing command is the very one the warning prints" \
 swap_top="$(grep -F 'top -l 1 ' <<< "$swap_big")"
 check "and the skill's swap step runs the very top command the warning prints" \
   "$([ -n "$swap_top" ] && grep -qxF "$swap_top" "$SKILL" 2>/dev/null && echo ok || echo "warning prints '$swap_top', not found as a line in $SKILL")"
+
+# And the skill names a process left running with no parent, with the same read only ps the warning
+# hands over, read from the warning's own output with its process ids taken off (claude-config#3561).
+orphan_ps="$(grep -F 'ps -o pid,ppid,etime,time,command -p ' <<< "$runner_msg" | sed 's/ -p .*/ -p/')"
+check "and the skill's step for a process with no parent reads it with the very ps the warning prints" \
+  "$([ -n "$orphan_ps" ] && grep -qF "$orphan_ps" "$SKILL" 2>/dev/null && echo ok || echo "warning prints '$orphan_ps', not found in $SKILL")"
 
 echo ""
 echo "passed: $pass, failed: $fail"
