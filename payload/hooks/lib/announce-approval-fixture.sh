@@ -20,8 +20,9 @@
 #                                    the approval picker, answered `Approve the wording` unless
 #                                    another answer is given. The shapes are the ways a picker is
 #                                    NOT his answer (timeout, prefilled, two, error, othersource,
-#                                    unread) and one way it carries what must be ignored
-#                                    (claimedhash:<hash>, a hash written into its metadata).
+#                                    unread, and plain, an ordinary picker with no metadata) and
+#                                    one way it carries what must be ignored (claimedhash:<hash>, a
+#                                    hash written into its metadata).
 #       put <repo> <file> [shape] [session]
 #                                    the same picker put and not yet answered: only the assistant
 #                                    entry holding its tool_use. Prints the picker's id.
@@ -36,7 +37,10 @@
 #                                    claude-config#3742: the transcript of a session read at the
 #                                    moment a PostToolUse hook of its own call ran ended at that
 #                                    call's tool_use). So a case about that hook is `put`, the hook on
-#                                    `payload`, then `answer`.
+#                                    `payload`, then `answer`. AAF_PAYLOAD_FORM (answers,
+#                                    nometadata, or both words) makes the payload's copy of the
+#                                    picker's input differ from the transcript's in the ways the
+#                                    dialog may change it, since no real payload has been printed.
 #   aaf_shown <folder> <transcript> <wording>
 #                                    <folder>/announcement.md holding the wording, written by the
 #                                    session and then opened in front of Dan; prints the file's path.
@@ -51,7 +55,7 @@ aaf_new() { printf '{"type": "user", "sessionId": "s1", "message": {"role": "use
 
 aaf_talk() {
   python3 - "$@" <<'PY'
-import datetime, json, sys, time
+import datetime, json, os, sys, time
 path, action, rest = sys.argv[1], sys.argv[2], sys.argv[3:]
 def stamp():
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
@@ -89,6 +93,8 @@ def picker(repo, file, answer, shape):
         ask["questions"] = ask["questions"] * 2
     if shape == "othersource":
         ask["metadata"]["source"] = "db-apply"
+    if shape == "plain":
+        del ask["metadata"]
     if shape.startswith("claimedhash:"):
         ask["metadata"]["sha256"] = shape.split(":", 1)[1]
     return ask, result
@@ -115,6 +121,15 @@ elif action == "answer":
     back(rest[0], arg(4) == "error", result, arg(5) or None)
 elif action == "payload":
     ask, result = picker(rest[1], rest[2], arg(3) or "Approve the wording", arg(4))
+    # What the dialog did to the input before the hook saw it has not been measured, so a case can
+    # ask for either way it may differ from what the transcript holds: AAF_PAYLOAD_FORM names
+    # `answers` (his answers merged into the input, which is how the dialog hands them to the
+    # tool), `nometadata` (keys the tool's own schema does not name dropped), or both.
+    form = os.environ.get("AAF_PAYLOAD_FORM", "")
+    if "answers" in form:
+        ask = dict(ask, answers=result["answers"])
+    if "nometadata" in form:
+        ask = {k: v for k, v in ask.items() if k != "metadata"}
     d = {"session_id": arg(5) or "s1", "transcript_path": path, "cwd": "/", "permission_mode": "default",
          "hook_event_name": "PostToolUse", "tool_name": "AskUserQuestion", "tool_input": ask,
          "tool_response": result, "tool_use_id": rest[0]}

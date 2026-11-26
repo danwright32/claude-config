@@ -140,8 +140,9 @@ is not stopped here. And an approval given on one Mac is unknown to the other, w
   check(repo, digest, payload, pr=None, claim=False)
       {"approved": bool, "state": str, "why": str, "how": str, "notes": [str]}: whether digest, an
       announcementHash, is wording Dan approved for repo that pull request pr may use. payload is
-      the hook payload (session_id, transcript_path, agent_id): this session's pickers are read
-      and an approval found is written. payload None is the question that only reads the record:
+      the hook payload (session_id, transcript_path, agent_id): this session's pickers are read,
+      and so are the answers the record notes for repo in other sessions, the newest NOTED_SESSIONS
+      of them, each from its own session's transcript, and an approval found is written. payload None is the question that only reads the record:
       no picker is read and nothing is written. state says which answer it is, so a caller words its own first sentence truly:
       "approved"; "unapproved" (he approved no such wording; how says how to ask him); "used" (he
       did, and other pull requests used every approval; how says how to ask him again);
@@ -580,25 +581,59 @@ def _file_events(transcript_path, session_id, targets, sw):
 def note_answer(payload, deadline=None):
     """What announce-answer-note.sh asks once a picker is answered (HIS ANSWER IS NOTED WHEN HE GIVES
     IT, module docstring): (True, None) once the record holds the note, (False, None) for a call that
-    is no picker of this source put to him, and (False, why) for one that is and could not be noted.
+    is no picker of this source put to him, and (False, why) for one that is and could not be noted,
+    or one whose source could not be told at all.
 
-    payload is what Claude Code hands a PostToolUse hook. Of it, only which picker this is and where
-    its session's transcript is are read (session_id, transcript_path, tool_use_id, and the picker's
-    metadata for the repository and the file). What he answered is NOT read from it, here or later:
-    a payload is whatever the caller hands over, and his answer is read from the transcript."""
-    if not isinstance(payload, dict) or payload.get("tool_name") != "AskUserQuestion":
+    payload is what Claude Code hands a PostToolUse hook. Of it, which picker this is and where its
+    session's transcript is are read (session_id, transcript_path, tool_use_id). The picker itself,
+    for its source, repository and file, is read from the transcript, by that id: the transcript
+    holds it as the session sent it, while the hook's copy of the input is the dialog's (the
+    tool's schema has it write his answers into that input, and what else it changes there has not
+    been printed). Only when the transcript does not hold the picker is the hook's copy read. What
+    he answered is NOT read from the payload, here or later: a payload is whatever the caller hands
+    over, and his answer is read from the transcript.
+
+    A picker NEITHER copy says the source of (the transcript does not hold it and the hook's copy
+    carries no metadata) may be this one in a form nobody has seen, so it is never left in silence:
+    the answer says that what it asked could not be told, and why. A subagent's is the exception,
+    since its picker is never noted whatever it asked."""
+    untold = ("Whether the picker Dan just answered asked him about an announcement's wording could not be told, so "
+              "if it did, his answer was not noted on this Mac's record: ")
+    if not isinstance(payload, dict):
+        return False, untold + "what Claude Code handed the hook was not a JSON object"
+    if payload.get("tool_name") != "AskUserQuestion":
         return False, None
-    ask = payload.get("tool_input")
+    session, transcript, picker = (_text(payload.get(k)) for k in ("session_id", "transcript_path", "tool_use_id"))
+    handed = payload.get("tool_input")
+    ask, misplaced, absent = None, None, None
+    if session is None or transcript is None or picker is None:
+        absent = "the hook was not told the session, its transcript and the picker's id"
+    else:
+        absent = misplaced = _misplaced(transcript)
+        if misplaced is None:
+            try:
+                ask = _ask_of(transcript, session, picker)
+                absent = "this session's transcript, " + transcript + ", does not hold the picker " + picker
+            except OSError as e:
+                absent = "this session's transcript, " + transcript + ", could not be read (" + type(e).__name__ + ")"
+    sent = ask is not None
+    if not sent:
+        ask = handed
     meta = ask.get("metadata") if isinstance(ask, dict) else None
-    if not isinstance(meta, dict) or meta.get("source") != SOURCE or ask.get("answers"):
+    if not sent and not isinstance(meta, dict):
+        if payload.get("agent_id"):
+            return False, None
+        return False, untold + absent + ", and the hook's own copy of the picker carries no metadata naming what it asked"
+    if not isinstance(meta, dict) or meta.get("source") != SOURCE:
+        return False, None
+    if sent and ask.get("answers"):
+        # The session sent it with its answers filled in, so it was never put to him.
         return False, None
     said = "Dan's answer about the announcement's wording was not noted on this Mac's record: "
     if payload.get("agent_id"):
         return False, said + "the picker was a subagent's, and only one the main session put to him is noted"
-    session, transcript, picker = (_text(payload.get(k)) for k in ("session_id", "transcript_path", "tool_use_id"))
     if session is None or transcript is None or picker is None:
         return False, said + "the hook was not told the session, its transcript and the picker's id"
-    misplaced = _misplaced(transcript)
     if misplaced is not None:
         return False, said + misplaced
     repo, file = repo_key(meta.get("repo")), meta.get("file")
@@ -634,6 +669,18 @@ def note_answer(payload, deadline=None):
     if failed:
         return False, said + failed
     return True, None
+
+
+def _ask_of(transcript_path, session_id, picker):
+    """The input of the AskUserQuestion call picker names, as the session's transcript holds it, or
+    None when it holds no such call."""
+    uid = picker.encode("utf-8", "surrogatepass")
+    for _, e in _entries(transcript_path, session_id, lambda raw: uid in raw):
+        for item in _items(e):
+            if (item.get("type") == "tool_use" and item.get("id") == picker and item.get("name") == "AskUserQuestion"
+                    and isinstance(item.get("input"), dict)):
+                return item["input"]
+    return None
 
 
 def _noted(entries):
@@ -1064,6 +1111,7 @@ def main(argv):
         try:
             payload = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
         except ValueError:
+            # Not a JSON object, which note_answer says in its own words: it is never left in silence.
             payload = None
         noted, why = note_answer(payload, time.monotonic() + NOTE_SECONDS)
         json.dump({"noted": noted, "why": why or ""}, sys.stdout)

@@ -1961,18 +1961,26 @@ GitHub's page) the merge through the helper was refused, told to ask him, and as
 changed nothing. `hooks/announce-answer-note.sh` now runs after every picker (PostToolUse on
 AskUserQuestion) and, for one of this source, has the library write an `answered` line: the
 session, its transcript, the picker's id, the repository, the file, and the file's hash and status
-change time as they stood then. A note is not an approval and is not his answer. When that hook
+change time as they stood then. Which picker it is, is read from the session's transcript by the
+id the hook was handed, where the picker stands as the session sent it, and not from the hook's
+own copy of it: what Claude Code hands that hook has never been printed, and the question tool's
+schema has the dialog write his answers into the call's input. So the library is asked about every
+picker, an ordinary one says nothing, and one that neither copy says the source of (the transcript
+does not hold it and the hook's copy carries no metadata) is never left in silence: the hook says
+that what it asked could not be told. A note is not an approval and is not his answer. When that hook
 runs, the transcript holds the picker and not yet what he answered: Claude Code writes a call's
 result to the transcript after the call's PostToolUse hooks have run (measured 2026-11-26: a
 session's transcript, read at the moment a PostToolUse hook of its own call ran, ended at that
 call's `tool_use`). His answer is in the payload the hook is handed, and it is deliberately not
 read from there, since a payload is whatever the caller hands over. Whichever hook next asks the
-library reads each noted session's transcript back, for the repository asked about, and judges the
+library reads the noted sessions' transcripts back, for the repository asked about (the newest
+five sessions whose noted answer is not yet an approval on the record), and judges the
 noted picker by every rule above, read from that transcript. The hash and the change time come
 from the note, so the wording approved is what the file held when he answered: a write to the file
 afterwards neither loses his approval nor rides on it, and a note taken later than his answer, over
-a file changed since, approves nothing. When the note cannot be taken the hook says so to the
-session (exit 2, the picker being already answered) with the command that reads his answer into
+a file changed since, approves nothing. When the note cannot be taken the hook says so, to Dan and
+to the session in the same words (one notice through `hooks/lib/hook-notice.sh`, on exit 0, the
+picker being already answered), with the command that reads his answer into
 the record. `hooks/test-announce-answer-note.sh` holds it, and `hooks/test-merge-when-ready.sh`
 merges an announcement through the helper, with the real gate and the real hook, on an approval
 that was only ever in the session.

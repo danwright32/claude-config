@@ -3278,6 +3278,13 @@ for the review by picker, 2026-11-25: "Yes, attack it first"). The choices are t
   note's hash and change time replace the file as it stands, which also ends an approval being
   lost to a write of the file before the first hook read it. A run of the hook by hand can only
   write a note, and a note over a file changed after his answer is refused by its change time.
+  What the hook is handed was never printed (it runs only once installed), and the question
+  tool's schema has the dialog write his answers into the call's input, so the hook's copy of the
+  picker is not what decides anything: the picker is read from the transcript by its id, the
+  library is asked about every picker rather than those whose copy names the source, and a picker
+  neither copy says the source of draws a line to Dan and the session instead of silence. Ruled
+  out: a first test on the payload's text, which would have dropped every real picker without a
+  word if the dialog strips the metadata from the hook's copy.
 
 `hooks/test-announce-approval.sh`, `hooks/test-announce-label-ask.sh`,
 `hooks/test-announce-answer-note.sh` and the #3666 section of `hooks/test-changelog-tag.sh` hold it.

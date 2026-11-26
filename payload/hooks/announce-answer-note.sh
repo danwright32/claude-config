@@ -22,10 +22,21 @@
 # approves nothing. His answer is read from the transcript when a hook next asks the library, and a
 # note of a picker he answered Not yet, or never answered, stays a note.
 #
-# It never blocks: the picker is already answered. When the note could not be taken it says so on
-# standard error and exits 2, which Claude Code shows the session, because a missing note is what
-# sends a merge through the helper back to "ask him" for wording he approved. A picker that is not
-# this one leaves at the first test, before anything is loaded or run.
+# EVERY PICKER IS ASKED ABOUT, AND NONE IS LEFT IN SILENCE. What this hook is handed has never been
+# printed. The question tool's own schema has the dialog write his answers into the call's input,
+# and whether the metadata naming the source is still in the hook's copy of it is not known. So no
+# test of that copy's text decides whether a picker is this one: the library is asked about every
+# picker (they are rare), and it reads the picker from the session's transcript, by the id this hook
+# was handed, where it stands as the session sent it. An ordinary picker costs one python3 start and
+# says nothing. One that neither copy says the source of (the transcript does not hold it and the
+# hook's copy carries no metadata) may be an announcement's in a form nobody has seen, so the hook
+# says that what it asked could not be told, and what to do if it was one.
+#
+# It never blocks: the picker is already answered. Whatever it has to say goes through
+# lib/hook-notice.sh as one JSON object on exit 0, with the same words for Dan (systemMessage) and
+# for the session (the additionalContext of PostToolUse), because a missing note is what sends a
+# merge through the helper back to "ask him" for wording he approved, and both of them can act on
+# it. The words are on standard error too, for the debug log.
 #
 # Seam, for the tests: ANNOUNCE_APPROVALS_DIR (read by lib/announce-approval.py) names another record.
 
@@ -34,31 +45,32 @@ set -uo pipefail
 payload="$(cat)"
 
 # Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130). Found
-# before the first test, which costs one subshell after a picker and lets test-lib-self-locate.sh
-# see it found on any input.
+# before anything else, which lets test-lib-self-locate.sh see it found on any input.
 case "${BASH_SOURCE[0]}" in */*) HERE="${BASH_SOURCE[0]%/*}" ;; *) HERE=. ;; esac
 HERE="$(cd "${HERE:-/}" && pwd)"
 
-# Every picker reaches this hook. Only one whose input names the source is noted.
-case "$payload" in
-  *changelog-announce*) ;;
-  *) exit 0 ;;
-esac
+. "$HERE/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
+  printf '%s\n' "$1" >&2
+  printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
 
-SAYS="Dan's answer about an announcement's wording was not noted on this Mac's record"
-THEN="A merge of that pull request through lib/merge-when-ready.sh will not find his approval until a hook reads this session's transcript, which a command putting the label on does: \`gh pr edit <number> --add-label changelog/announce\`, run in this session. He does not need to be asked again."
+# How a failure below, one that stops the library being asked at all, is worded. The hook's own copy
+# of the picker decides only this, never whether the picker is noted: a copy naming the source is an
+# announcement's picker whose note was not taken, and any other is one nobody could tell.
+case "$payload" in
+  *changelog-announce*) SAYS="Dan's answer about an announcement's wording was not noted on this Mac's record" ;;
+  *) SAYS="Whether the picker Dan just answered asked him about an announcement's wording could not be told, so if it did, his answer was not noted on this Mac's record" ;;
+esac
+THEN="A merge of the announcement's pull request through lib/merge-when-ready.sh will not find his approval until a hook reads this session's transcript, which a command putting the label on does: \`gh pr edit <number> --add-label changelog/announce\`, run in this session. He does not need to be asked again."
+say() { hook_allow_notice "ANNOUNCE ANSWER: $1 $THEN" PostToolUse; }
 
 # The shared reader cleans the payload before python3 parses it (claude-config#1944), and holds the
-# one question of whether a reader is installed (ps_reader_missing). Past the test above this is a
-# picker about an announcement, so a library that will not load is said, naming the file (#1900).
+# one question of whether a reader is installed (ps_reader_missing). A library that will not load is
+# said, naming the file (#1900).
 # shellcheck source=lib/push-scope.sh
-. "$HERE/lib/push-scope.sh" 2>/dev/null || {
-  echo "ANNOUNCE ANSWER: $SAYS: announce-answer-note.sh could not load $HERE/lib/push-scope.sh, which cleans this hook's input before it is read. Reinstall the hooks with claude-sync pull. $THEN" >&2
-  exit 2
-}
+. "$HERE/lib/push-scope.sh" 2>/dev/null \
+  || say "$SAYS: announce-answer-note.sh could not load $HERE/lib/push-scope.sh, which cleans this hook's input before it is read. Reinstall the hooks with claude-sync pull."
 if ps_reader_missing python3; then
-  echo "ANNOUNCE ANSWER: $SAYS: python3 is not on PATH, and lib/announce-approval.py, which keeps that record, runs under it. $THEN" >&2
-  exit 2
+  say "$SAYS: python3 is not on PATH, and lib/announce-approval.py, which reads the picker and keeps that record, runs under it."
 fi
 payload="$(ps_clean_payload "$payload")"
 
@@ -80,12 +92,10 @@ except ValueError:
     d = None
 print(d.get("why", "") if isinstance(d, dict) and d.get("noted") is False else "unread", end="")' 2>/dev/null)"
 
-# Not a picker of this source put to him after all (the word was somewhere else in the call).
+# The library read the picker and it is not one of this source put to him: nothing to note or say.
 [ "$rc" -eq 0 ] && [ -z "$why" ] && exit 0
 
 if [ "$rc" -ne 0 ] || [ "$why" = unread ] || [ -z "$why" ]; then
-  echo "ANNOUNCE ANSWER: $SAYS: lib/announce-approval.py gave no answer that could be read (rc=$rc). $(tr '\n' ' ' <"$err" 2>/dev/null | cut -c1-600) $THEN" >&2
-  exit 2
+  say "$SAYS: lib/announce-approval.py gave no answer that could be read (rc=$rc). $(tr '\n' ' ' <"$err" 2>/dev/null | cut -c1-600)"
 fi
-echo "ANNOUNCE ANSWER: $why. $THEN" >&2
-exit 2
+say "$why."
