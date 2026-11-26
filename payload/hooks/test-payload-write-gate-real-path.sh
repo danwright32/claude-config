@@ -149,8 +149,15 @@ refused "#3537 an inline script copying onto such a link is refused"
 runbash "echo x > $FIX/links/hard.md" "$FIX/elsewhere"
 refused "#3537 a redirect to a second name of a payload file is refused"
 says "#3537 saying the file has more than one name" "more than one name"
+unsaid "#3537 and not that its path could not be read, which was not what happened" "could not read where"
 edit "$FIX/links/hard.md" "$FIX/elsewhere"
 refused "#3537 and so is an Edit of that second name"
+# A script that writes and quotes that second name may be writing to it: which of its quoted
+# words it writes to cannot be read, so it is judged as the write it may be, as a quoted payload
+# path always was.
+runbash "python3 -c \"import shutil; shutil.copy('$FIX/elsewhere/a.txt', '$FIX/links/hard.md')\"" "$FIX/elsewhere"
+refused "#3537 an inline script that writes and quotes a second name of a payload file is refused"
+says "#3537 saying the file has more than one name" "more than one name"
 
 echo "real path: a different letter case of the folder name"
 
@@ -173,8 +180,12 @@ runbash "echo x > $FIX/links/loop" "$FIX/elsewhere"
 refused "#3537 a destination whose links never end is refused"
 says "#3537 saying its real path could not be read" "could not read where"
 says "#3537 and naming the destination" "$FIX/links/loop"
+unsaid "#3537 and not that the file has more than one name, which nothing measured" "more than one name"
 edit "$FIX/links/loop" "$FIX/elsewhere"
 refused "#3537 and so is an Edit of it"
+runbash "python3 -c \"import shutil; shutil.copy('$FIX/elsewhere/a.txt', '$FIX/links/loop')\"" "$FIX/elsewhere"
+refused "#3537 and an inline script that writes and quotes it, since that may be where it writes"
+says "#3537 saying its real path could not be read" "could not read where"
 # The reading itself failing: a python3 that runs everything but the real path step.
 STUB="$FIX/stub"; mkdir -p "$STUB"
 REALPY="$(command -v python3)"

@@ -2296,7 +2296,10 @@ link or only the later write through it. Both: the later write through a symboli
 seen by its real path, but a hard link's is seen only as a file with more than one name, so the
 making is the one place the gate can say which payload file is involved. In a script that writes,
 every quoted word that may be a path is asked for its real path too, never judged by its words, so
-a script naming a payload file only by a link or by number is seen.
+a script naming a payload file only by a link or by number is seen. Such a word is refused on the
+same three answers as any destination (really under `payload/`, unreadable, more than one name),
+because the script may be writing there, which is how a quoted payload path was always read; a
+word that names nothing is an answer and refuses nothing.
 
 The step is one more `python3` process, run only for a call that writes somewhere other than a
 device while a watcher may be live. Measured 2026-11-25 on a Mac at a load of about 70 to 100:

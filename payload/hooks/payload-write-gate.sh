@@ -606,8 +606,10 @@ def add(tok, base):
 # A quoted word in a script that writes, which may be a path and does not name payload: judged
 # only by where it REALLY is, never by its words, so a link into payload or a file named by disk
 # and file number is still seen (claude-config#3537). Behind this mark the step after this reading
-# drops any that is not really under a payload folder, so text that only looks like a path
-# ("text/plain", a web address) costs nothing and refuses nothing.
+# asks where it really is and drops it unless that is under a payload folder, cannot be read, or is
+# a file with more than one name: the script may be writing there, as a quoted payload path is
+# taken for a write. Text that only looks like a path ("text/plain", a web address) names nothing,
+# which is an answer, so it refuses nothing.
 MAYBE = "\x03"
 def add_maybe(tok, base):
     p, known = place(tok, base)
@@ -1156,14 +1158,14 @@ for line in sys.stdin.buffer.read().decode("utf-8", "replace").split("\n"):
     try:
         r, st = real(a)
     except Unread as e:
-        if not maybe:
-            out.append(UNREAD + a + "\t" + str(e))
+        # For a word that only may be a path too: a script that writes may be writing there, and
+        # a word that names nothing never ends here, since nothing being there is an answer.
+        out.append(UNREAD + a + "\t" + str(e))
         continue
     except Exception as e:
         # Anything else that stops one destination being read is that destination unread, never
         # the whole step and never an answer.
-        if not maybe:
-            out.append(UNREAD + a + "\t" + (type(e).__name__ if not isinstance(e, RecursionError) else "its links never end"))
+        out.append(UNREAD + a + "\t" + (type(e).__name__ if not isinstance(e, RecursionError) else "its links never end"))
         continue
     if r is None:
         continue
