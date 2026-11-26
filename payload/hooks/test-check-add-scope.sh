@@ -153,6 +153,23 @@ run "git add -A"
 refused "a file changed outside every one of this session's Bash calls is still foreign"
 says "and it is the one named" "later.txt"
 silentabout "and the scripted file is not accused" "  generated.txt"
+# The same add written across a line a backslash joins to the next is the same add
+# (claude-config#3470): the shell removes the backslash and its line break before it reads words,
+# and the segmented form this gate reads wrote the line break as a separator the backslash then
+# escaped, so git, the pair and add -A was no add to it and exited 0 on this tree. PAIR is that
+# pair, a backslash and then a line break.
+PAIR=$'\\\n'
+run "git ${PAIR}add -A"
+refused "#3470 git, the pair, add -A is refused as git add -A is"
+says "#3470 and it is the same file named" "later.txt"
+run "git ad${PAIR}d -A"
+refused "#3470 add written across the pair is refused"
+run "git add -${PAIR}A"
+refused "#3470 the option written across the pair is refused"
+run "git ${PAIR}add seed.txt"
+allowed "#3470 control: git, the pair, an add of one named file is allowed"
+run "git ${PAIR}status"
+allowed "#3470 control: git, the pair, status is no add"
 # Only a Bash call writes files by script: a Read running over the same moment does not credit it.
 rm -f "$REPO/later.txt"
 read_call t585b "$((now - 200))" "$((now - 190))"
