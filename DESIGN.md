@@ -1413,6 +1413,67 @@ written where a cap on agents is said, in any payload document; text in double q
 because a dated quotation is the record of a decision, not a restatement of the rule, and the lessons
 and dated audits are not read, because they record history (L613, L564).
 
+## The builder agent type: a rendered prompt, and no copy in the repository (#3389)
+
+Trials on 2026-11-25 (personal MacBook, three runs an arm) measured two trims of what a builder
+loads before its brief: withholding 48 connected servers saved 13,026 tokens of about 82,760, and
+loading the lessons core in the agent's prompt in place of every rule file saved 20,398. Dan chose
+both ("Servers and rule files (Recommended)"), with the rules a builder must still follow written
+into the type.
+
+Those rules are a copy of text whose home is `CLAUDE.md` and the lessons files, loaded into every
+builder and believed without checking (L244). So nothing in the type is a hand kept copy of a rule:
+`render-builder-type.py` walks `CLAUDE.md`, writes out each file it imports, and carries or leaves
+each section by a table of choices with a reason per row. Three shapes were weighed for where the
+rendered file lives:
+
+- **Committed in `payload/agents/` with a test that fails when it is stale.** Refused. The sources
+  changed in 103 commits in the 30 days to 2026-11-25 and 76 of those were the sync's own, from
+  either Mac, with no pull request: the suite would go red on main after most of them, and two
+  Macs that each changed a rule would conflict on the rendered file at the rebase, which the
+  sync's recovery does not know and hands to a person (L554). The table of contents the core
+  imports carries a count per section, so even an added lesson outside the core would move it.
+- **Committed, and taught to the sync as a derived file** like `LESSONS-CORE-*.md`. That means
+  `is_derived_rule_file` answering for a path inside a mirrored folder, which the conflict keeper,
+  the unsent edit report and the rebase recovery all consult. It works, and it widens three
+  exemptions for one file.
+- **Rendered on each Mac and never carried**, which is the one built toward: the repository holds
+  the renderer, the head and the table, and each Mac's copy is a function of its own installed
+  rules. It needs one thing from the sync, the file named in the mirror's exclusions so a send does
+  not publish it and an apply does not delete it. Dan chose this shape on 2026-11-25 ("Each Mac
+  writes its own (Recommended)"). The sync step is not in this change and comes to him before it
+  merges, so today the type is rendered by hand where it is wanted and nothing installs it.
+
+Every doubt in the table is settled by carrying (a section with no row, a row that matches
+nothing), because the failure this change can cause is a rule silently missing from every builder.
+The cost of that default is said rather than hidden: an item left out because it contradicts a
+builder's own rules (wait for approval, merge the pull request yourself, open a file on Dan's
+screen) comes back if its opening words are reworded. `--strict` makes each such case a failure,
+and the suite renders the payload strictly, so main says so. The rendered prompt holds no date,
+count or hash of its own, so a change to one rule changes that rule's lines and nothing else.
+
+The table's test for leaving something out has a fourth case: a section that governs only work on
+a screen. Dan chose on 2026-11-25 ("Cut the UI sections first") to leave out "Progress & Feedback
+(UI)" and "Building UI", about 5,900 characters that every builder read again on every request
+while few items touch a screen. They are named rather than dropped silently: the head tells a
+builder whose item builds or changes anything a person sees on a screen to read them in
+`~/.claude/CLAUDE.md` first, and the brief for such an item says so. That too is a rule in a
+prompt, and the cost of it failing is a screen built without its rules, which the review of the
+screen, not the type, has to catch.
+
+Two things the trial did not surface are true of the type. `omitClaudeMd` is all or nothing, so the
+project's own `CLAUDE.md` and the memory index are left out with the global rules; the head tells
+the builder to read the project's file, and that is a rule in a prompt (L27), so Dan chose on
+2026-11-25 a check that holds a builder's first edit until it has read that file ("Add a guard
+(Recommended)"), built with the install step so the type never runs without it. And a `CLAUDE.md` in
+a subfolder still loads when an agent reads a file under it: in this repository `payload/CLAUDE.md`
+is the global rules file with all its imports, so a builder of this type working under `payload/`
+loads the whole of what the type left out (seen once, 2026-11-25, in the run that built this).
+
+The tool list is an allow list because a deny list has to name each server and the two Macs
+connect different ones. The trial measured the deny form; that the allow form also takes the
+names out of the deferred tool list is not yet measured.
+
 ## A fixture home touches nothing that belongs to the Mac (#1453, #1470, #1486)
 
 rtk's config is one of several things `claude-sync` reaches that belong to the Mac rather than to
@@ -1751,7 +1812,12 @@ its arguments at run time), so the rule moved to where every gh call passes: `ho
 named gh, which `gh-guard-path.sh` puts first on PATH at SessionStart by writing an export to
 `CLAUDE_ENV_FILE`. Measured on Claude Code 2.1.318 before building: that export is first on PATH for
 every Bash command, inside a subagent's too, while a mod's bin folder is appended last and so can
-never shadow gh. The guard runs the same module (`--gh <real> -- <args>`), so the rule has one
+never shadow gh. The hook runs at every SessionStart of a session (a start, a resume, a clear, a
+compaction) against the same env file, so it writes the export only when the file does not already
+hold that exact line; before that, one shell read on 2026-11-25 carried it 33 times (one sample,
+#3619). A file it cannot read
+gets the line as before, so the check never leaves a session without the guard, and an older line
+naming another guard folder is kept, with the newer one written after it. The guard runs the same module (`--gh <real> -- <args>`), so the rule has one
 implementation; it refuses with exit 1, withholding the name it matched because a script's error
 output can land in a log, and otherwise execs the real gh, its exit code and its standard input
 unchanged (a body piped in is copied to a temporary file, judged, and handed on). Any exception
@@ -2959,6 +3025,90 @@ nothing that passes main's run.
 
 `tests/test-claude-sync.sh` (the section "a send carrying a file that fails the home path check
 is held whole") and `hooks/test-check-home-paths.sh` (the `--files0-from` cases) hold it.
+
+## An announcement's approval is a record a hook writes from Dan's answer (#3666)
+
+A pull request labelled `changelog/announce` carries a post that is drafted for agents once the
+change is live, and Dan's words for the label were "it should ask me before applying the label".
+The README says how he is asked and what counts. These are the choices behind it. Those marked as
+the builder's were made by the sessions that built it, not by Dan, and are his to change.
+
+- **The rule is held at the merge, and the label hook is only the early refusal.** Every session
+  route to a merge passes `require-changelog-tag.sh`, which reads the pull request itself. A label
+  can be put on by routes no hook can read (a name built at run time, a script, GitHub's own page),
+  so guarding only the commands that add it was ruled out before anything was built.
+  `announce-label-ask.sh` exists so the ordinary command is refused early, with the remedy, and the
+  label is not left sitting on wording nobody asked him about.
+- **A deny, never an ask.** A permission prompt shows the command and not the wording, and sleep
+  mode can answer one with Dan asleep, which is the reason `db-write-ask.sh` records for the same
+  choice. The only thing that clears either refusal is his answer in the picker.
+- **The file is hashed, never a hash the session gives.** A hash in the picker's metadata is not
+  read at all. The library hashes the file he was shown, through `changelog-entry.js`'s one
+  normalised form, and the merge gate hashes the block GitHub holds through the same function, so
+  there is one normaliser and the two sides cannot drift (L370).
+- **"Opened in front of him" is read from the transcript.** The approval counts only when a Bash
+  call that is nothing but a BBEdit open of the file finished before his answer, and nothing of the
+  session's touched the file between the two. Any Bash command naming the file's name in that
+  window voids the approval, a plain `cat` included, because a read cannot be told from a write
+  cheaply and the remedy (open it again, ask again) is always there (the builder's).
+  `open -a BBEdit` counts beside the helper with `--front-window`; the helper without the flag does
+  not, since it opens the file behind everything (the builder's).
+- **"He answered it himself" is one rule, called and not copied.** `lib/announce-approval.py` loads
+  `lib/db-apply-approval.py` by its path and calls its checks, so a picker that was prefilled,
+  timed out, carried two questions or could not be read as written is refused by the same code that
+  refuses it for a database change.
+- **The record is guarded by the hook that reads it.** An approval is a line in a file under
+  `~/.claude/state`, so a session that could append a line could approve its own wording. The label
+  hook is therefore registered for the edit tools as well as Bash (the issue says Bash), and
+  refuses an edit under the record's folder and a shell command naming it that is not one only
+  reading it (the builder's). A script that builds the path at run time is not seen.
+- **`used` is written when the gate lets the merge through.** No hook here sees a merge land, so
+  the line says the gate allowed it, never that GitHub merged it, and a reader that needs "merged"
+  asks GitHub (the builder's). It carries each closed issue's milestone, which the later check
+  that a feature Dan said yes to announcing does not finish under another label reads. Issues that
+  cannot be read are recorded as unread with why, never as an empty list, and block nothing.
+- **One approval covers one pull request** (Dan, 2026-11-25, by picker: "One approval, one pull
+  request"). Ruled out: wording that stays approved for any later pull request, which would merge a
+  second one unasked and draft the same post for agents twice. How it is counted is the builders':
+  an approval is one picker of his, keyed by its session and its tool use id, so a line written
+  twice is one approval and the same wording approved twice is two; the pull requests `used` lines
+  name, in order, take them one each. So a `used` line with no approval behind it covers nothing,
+  and a use recorded by hand can only refuse more. The count is read where it is judged and never
+  stored, so nothing can drift from the lines (L559).
+- **The use is claimed under a lock, at the merge gate only.** The gate's question names the pull
+  request and claims: holding the kernel's lock on the record file (`flock`, which a holder that
+  dies releases, L409), the library reads the record again, decides, and writes the claim in the
+  same hold. Without the lock two pull requests reaching the gate together both read "unused" and
+  both merge; the suite's case for it was seen to fail with the lock taken out. The label hook asks
+  the same question without claiming, so an approval given before the pull request exists is still
+  unused when the pull request reaches the merge. The claim is the last thing in the gate that can
+  refuse, so a pull request refused for anything else has claimed nothing.
+- **A claim that cannot be written refuses the merge** (Dan, 2026-11-25, by picker: "Refuse the
+  merge"). Ruled out: letting the merge through with a sentence saying the use was not recorded,
+  which would leave the approval open to the next pull request carrying the same wording. This
+  differs on purpose from a failed save of the approval itself, where his picker still counts for
+  the call (Dan, 2026-11-16): there the session holds his answer, and here nothing would hold the
+  use. The refusal names the record and says to run the same merge again once it can be written;
+  it does not send the session back to him.
+- **Several merges in one command are refused with the override typed too** (Dan, 2026-11-25, by
+  picker: "Refuse it"). The gate reads one pull request per command, and the override over several
+  merges let one through unread. One merge per command is always open, which is what separates
+  this from the pull request that cannot be read, where the merge still goes through and says so.
+- **Making the label needs no approval** (Dan, 2026-11-25, by picker: "Always allow it"). A command
+  that only creates the label puts it on no pull request, so there is no wording to read, and the
+  merge gate still holds what merges. Renaming another label onto it stays refused, since that puts
+  it on every pull request carrying the other one. Ruled out: refusing creation until an approval
+  exists, and Dan creating the label by hand.
+- **Each wait is the hook's own.** The label hook's read of GitHub runs in a process group of its
+  own, killed whole at a bound the hook sets, and its bounds together are shorter than the time it
+  is registered with, so a slow GitHub is refused in the hook's words and never by the harness
+  cutting it short. That sum holds because one call may put the label on in one command only: the
+  lessons review of this branch found that each further command brought reads of its own, so a
+  second is refused and told to use a command of its own (the builder's). The bounds are chosen,
+  not measured.
+
+`hooks/test-announce-approval.sh`, `hooks/test-announce-label-ask.sh` and the #3666 section of
+`hooks/test-changelog-tag.sh` hold it.
 
 ## Things known to be wrong and left that way
 
