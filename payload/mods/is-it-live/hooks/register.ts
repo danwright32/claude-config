@@ -1,6 +1,8 @@
 import type { EngineInterface, Register } from 'claude-code'
 import { cutOwn, watchesOnly } from './mod-kit/hold.ts'
 import type { IsItLive, IsItLiveCard, IsItLiveOwed } from '../types/index.d.ts'
+import { type Asked, unreadOf } from './announce.ts'
+import { announcementUnread, noteAnnouncement } from './announcing.ts'
 import { type CardInput, MOD, buttonId, cardOf, cardText, draftKeyOf, draftLineOf, isOut, liveList, messageRow, pinnable, reasonToRefuse, stateOf, titleOf } from './card.ts'
 import { draftHold, markLanded, noteCard, recordedThreads, registerDrafts, registerUnrelated, relateCard } from './drafts.ts'
 import { type MergeCall, type Proof, TOOL, VIEW_FIELDS, WAIT_MS, isNotAPr, letGoOf, mergeCallOf, nudgeOf, owedFrom, proofOf, refusalOf } from './merges.ts'
@@ -223,6 +225,22 @@ const textsOf = async ($: EngineInterface, repo: string, pr: number): Promise<{ 
   return Number.isNaN(opened) ? { texts } : { texts, opened }
 }
 
+// #3667: what a merged pull request owes agents, kept in the store under a key of its own
+// (announce.ts says why). GitHub is asked for its labels and description as each account, and only
+// while nothing that reads is kept for it; announcing.ts runs the merge gate's reader on the answer.
+// Asked when the merge lands and again when its card is made, so a merge this session did not see
+// land (another session's, or one made before this mod knew of announcements) is still kept.
+const announcementOf = async ($: EngineInterface, repo: string, pr: number): Promise<Asked | undefined> => {
+  try {
+    if (!(await announcementUnread($, repo, pr))) return undefined
+    return await noteAnnouncement($, repo, pr, await readGitHub($, ['pr', 'view', String(pr), '--repo', repo, '--json', 'labels,body']))
+  } catch (err) {
+    const why = `what is kept for it could not be read or written: ${msg(err)}`
+    $.ui.toast(unreadOf({ repo, pr }, why))
+    return { kind: 'unread', why }
+  }
+}
+
 // #2436: a merge landed. Said to Dan when it cannot be kept, since the draft reply it owes would
 // otherwise never be asked for. #2578: it is for a thread pasted mid session only when its PR, or an
 // issue it closes, links that thread. #2849: in a session started from a thread, one linking no
@@ -231,6 +249,8 @@ const textsOf = async ($: EngineInterface, repo: string, pr: number): Promise<{ 
 // between; a read it refuses is said once the landing is kept, and links no thread, so the merge owes
 // the latest thread recorded by the time it landed.
 const landed = async ($: EngineInterface, merged: { repo?: string; pr: number }[]) => {
+  // #3667: first, what each owes agents is kept, whatever becomes of the thread's reply below.
+  for (const m of merged) if (m.repo) await announcementOf($, m.repo, m.pr)
   try {
     const threads = await recordedThreads($)
     const ask = threads.some(t => t.mid)
