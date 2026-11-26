@@ -79,6 +79,11 @@ out="$(python3 "$TMPROOT/badlib/web-guidance-pin.py" pin 2>&1)"; rc=$?
 # 1. The scan, on fixture trees.
 # ---------------------------------------------------------------------------
 fixture(){   # $1 = name, then lines for a file a.md in a fresh repository
+  # A name that is not one plain word is a line glued onto it (a missing space), which would leave
+  # that line out of the fixture and let the case pass on less than it claims.
+  # Written to a file, since a fixture runs in a subshell, and counted before the result line.
+  case "$1" in ''|*[!a-z0-9-]*) printf "fixture name '%s' is not one plain word, so a line was glued onto it; " "$1" >> "$TMPROOT/fixture-faults" ;; esac
+  [ "$#" -ge 2 ] || printf "fixture '%s' was given no lines; " "$1" >> "$TMPROOT/fixture-faults"
   local d="$TMPROOT/tree-$1"; shift
   mkdir -p "$d"; git -C "$d" init -q
   printf '%s\n' "$@" > "$d/a.md"
@@ -104,7 +109,7 @@ out="$(python3 "$LIB" scan "$d")"; rc=$?
 [ "$rc" -eq 1 ] && [ "$(grep -c 'runs it with no version' <<< "$out")" -eq 3 ] && check "scan: a run with flags before the subcommand, by any runner, is a finding" ok \
   || check "scan: a run with flags before the subcommand, by any runner, is a finding" "exit $rc: $out"
 
-d="$(fixture prose"Run DISABLE_TELEMETRY=1 npx -y $NAME@$PIN search \"x\"" \
+d="$(fixture prose "Run DISABLE_TELEMETRY=1 npx -y $NAME@$PIN search \"x\"" \
   "published as the \`$NAME\` plugin, source \`GoogleChrome/$NAME-src\`" \
   "the skill $NAME:$NAME in ~/.claude/plugins/cache/googlechrome/$NAME/1.0.2/skills" \
   "the pin lives in payload/hooks/lib/$NAME-version")"
@@ -260,6 +265,9 @@ if [ -f "$WF" ]; then
     || check "workflow: it runs the report" "tools/report-web-guidance-pin.sh is not run"
   grep -q 'issues: write' <<< "$code" && check "workflow: it may write issues" ok || check "workflow: it may write issues" "no issues: write"
 fi
+
+[ -s "$TMPROOT/fixture-faults" ] && check "every scan fixture was built as written" "$(cat "$TMPROOT/fixture-faults")" \
+  || check "every scan fixture was built as written" ok
 
 printf 'SUITE-RESULT passed=%d failed=%d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
