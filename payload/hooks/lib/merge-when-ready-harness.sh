@@ -519,6 +519,7 @@ export AI_REVIEW_STATE_DIR="$WORKDIR/ai-review"
 STUBS="$WORKDIR/stubs"; mkdir -p "$STUBS"
 cp "$DIR/merge-when-ready-fixtures/stub-gates/"*.sh "$STUBS/"
 chmod +x "$STUBS"/*.sh
+export MWR_LESSONS_GATE="$STUBS/lessons-gate.sh"
 export MWR_RED_GATE="$STUBS/red-gate.sh" MWR_REVIEW_GATE="$STUBS/review-gate.sh" MWR_REVIEW_LIB="$STUBS/pr-review.sh"
 export MWR_CHANGELOG_GATE="$STUBS/changelog-gate.sh" MWR_DESIGN_GATE="$STUBS/design-gate.sh"
 export MWR_VERIFY_GATE="$STUBS/verify-gate.sh" MWR_CLOSING_GATE="$STUBS/closing-gate.sh"
@@ -624,6 +625,7 @@ installed design-score-gate.sh "$STUBS/design-gate.sh"
 installed require-verification-run.sh "$STUBS/verify-gate.sh"
 installed check-closing-merge.sh "$STUBS/closing-gate.sh"
 installed check-work-names-merge.sh "$STUBS/work-names-gate.sh"
+installed lessons-merge-gate.sh "$STUBS/lessons-gate.sh"
 installed lib/pr-review.sh "$STUBS/pr-review.sh"
 # The worktree check hands to the real one, so a removal it allows really happens.
 installed check-stale-worktrees.sh "$DIR/check-stale-worktrees.sh"
@@ -649,6 +651,6 @@ fake_in(){
   (cd "$d" && env HOOK_TESTS_RUNNING= MWR_RED_GATE="$DECOY" MWR_REVIEW_GATE="$DECOY" MWR_CHANGELOG_GATE="$DECOY" \
     MWR_DESIGN_GATE="$DECOY" MWR_VERIFY_GATE="$DECOY" MWR_CLOSING_GATE="$DECOY" MWR_WORK_NAMES_GATE="$DECOY" \
     MWR_REVIEW_LIB="$DECOY" MWR_WORKTREE_CHECK="$DECOY" MWR_SLEEP="$DECOY_SLEEP" MWR_NOW="$DECOY_NOW" \
-    PATH="$CLOCKBIN:$PATH" "$@" 2>&1)
+    MWR_LESSONS_GATE="$DECOY" PATH="$CLOCKBIN:$PATH" "$@" 2>&1)
 }
 }

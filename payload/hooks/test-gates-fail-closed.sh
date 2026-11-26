@@ -191,6 +191,7 @@ declare_gate(){ printf '%s\t%s\t%s\n' "$1" "$2" "$3"; }
   declare_gate block-red-merge.sh          "gh pr merge 5 --squash"         ALLOW_RED_MERGE
   declare_gate check-closing-merge.sh      "gh pr merge 5 --squash"         SKIP_CLOSING_CHECK
   declare_gate check-work-names-merge.sh   "gh pr merge 5 --squash"         -
+  declare_gate lessons-merge-gate.sh       "gh pr merge 5 --squash"         -
   declare_gate check-work-names-publish.sh "gh pr create --title T --body B" -
   declare_gate require-changelog-tag.sh    "gh pr merge 5 --squash"         ALLOW_UNTAGGED_MERGE
   declare_gate require-verification-run.sh "gh pr merge 5 --squash"         ALLOW_UNVERIFIED_MERGE
@@ -734,6 +735,7 @@ bash_call(){ python3 -c 'import json, sys; print(json.dumps({"command": sys.argv
   judged require-changelog-tag.sh     Bash "$(bash_call 'gh pr merge 5 --squash')" '{}' refuse
   judged check-closing-merge.sh       Bash "$(bash_call 'gh pr merge 5 --squash')" '{}' refuse
   judged check-work-names-merge.sh    Bash "$(bash_call 'gh pr merge 5 --squash')" '{}' refuse
+  judged lessons-merge-gate.sh        Bash "$(bash_call 'gh pr merge 5 --squash')" '{}' refuse
   judged check-work-names-publish.sh  Bash "$(bash_call 'gh pr create --title T --body B')" '{}' refuse
   judged require-verification-run.sh  Bash "$(bash_call 'gh pr merge 5 --squash')" '{}' refuse
   judged require-issue-fields.sh      Bash "$(bash_call "gh issue create --title 'x' --body 'y'")" '{}' refuse
