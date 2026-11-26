@@ -886,7 +886,12 @@ WRITE_CALLS += (r"\.(?:sym|hard)?link(?:Sync|_to)?\(",
                 r"(?<![A-Za-z0-9_.])(?:sym)?link(?:Sync)?\(",
                 r"File\.(?:sym)?link\b|FileUtils\.(?:ln|link|symlink)",
                 r"(?:^|[\s;&|(])(?:perl|ruby|php)\b[^\n]*?(?<![A-Za-z0-9_.])(?:sym)?link\s+[\"\x27$@]",
-                r"[\"\x27]ln(?:[\"\x27]|\s+-?)")
+                r"[\[(,]\s*[\"\x27]ln[\"\x27]\s*[,\])]")
+# A script that runs ln as one string (os.system, subprocess, perl and ruby system, with or
+# without brackets): the words of that string are what ln is given, so each is judged as a
+# destination below, as the arguments of ln itself are. Only after a call that runs a command,
+# never any quoted text starting with ln: a search of a payload file for those letters reads.
+LN_STRING = r"(?:system|popen|Popen|exec[a-z]*|spawn[A-Za-z]*|run|call|check_call|check_output|getoutput)\s*\(?\s*[\"\x27](ln\s[^\"\x27]*)[\"\x27]"
 WRITE_SCRIPT = any(re.search(p, shell_text) for p in WRITE_CALLS)
 # payload in any letter case: a volume that does not tell case apart opens the same folder.
 SCRIPT_PATH = r"[\"\x27]([^\"\x27\s]*(?i:payload)/[^\"\x27\s]*)[\"\x27]"
@@ -910,6 +915,10 @@ for seg in segments:
     for m in (re.finditer(MAYBE_PATH, seg) if WRITE_SCRIPT else ()):
         if m.group(1) not in placed:
             add_maybe(m.group(1), base)
+    for m in re.finditer(LN_STRING, seg):
+        for w in m.group(1).split()[1:]:
+            if not w.startswith("-"):
+                add(w, base)
     for m in re.finditer(OPENED_PATH, seg):
         add(m.group(1), base)
         placed.add(m.group(1))

@@ -250,6 +250,8 @@ link_refused "ruby FileUtils.ln_s" "ruby -rfileutils -e 'FileUtils.ln_s \"payloa
 link_refused "node symlinkSync" "node -e 'require(\"fs\").symlinkSync(\"payload/hooks\", \"$FIX/elsewhere/l6\")'"
 link_refused "node linkSync" "node -e 'require(\"fs\").linkSync(\"payload/LESSONS.md\", \"$FIX/elsewhere/h6\")'"
 link_refused "a script that runs ln itself" "python3 -c \"import subprocess; subprocess.run(['ln', '-s', 'payload/hooks', '$FIX/elsewhere/l7'])\""
+link_refused "a script that runs ln as one string" "python3 -c \"import os; os.system('ln -s payload/hooks $FIX/elsewhere/l8')\""
+link_refused "a perl script that runs ln" "perl -e 'system \"ln -s payload/hooks $FIX/elsewhere/l8b\"'"
 link_refused "the link command" "link payload/LESSONS.md $FIX/elsewhere/h8"
 link_refused "a heredoc script making the link" "python3 - <<'PY'
 import os
@@ -264,6 +266,8 @@ runbash "grep -n hyperlink 'payload/LESSONS.md'" "$FIX/dev"
 allowed "#3537 control: searching a payload file for a word holding link is not a write"
 runbash "perl -ne 'print if /link /' 'payload/LESSONS.md'" "$FIX/dev"
 allowed "#3537 control: nor is a perl search for the word"
+runbash "grep -n 'ln -s' \"payload/hooks/x.sh\"" "$FIX/dev"
+allowed "#3537 control: nor a search of a payload file for the ln command"
 runbash "grep -n 'see the link (below)' 'payload/LESSONS.md'" "$FIX/dev"
 allowed "#3537 control: nor a search for prose that has the word before a bracket"
 runbash "python3 -c \"import os; os.symlink('$FIX/elsewhere/a.txt', '$FIX/elsewhere/l11')\"" "$FIX/elsewhere"
