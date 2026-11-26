@@ -299,6 +299,11 @@ def review_rules(repo_dir, base, head):
         elif change == "changes":
             note = (f"Review rules: this change edits {RULES_FILE}. The base commit {short} holds it empty, so this "
                     f"review ran under no repository review rules, and the edit {later}.")
+        else:
+            # Deletes a file the base holds empty: the reviewer was told of the change, so the
+            # answer says it too, as every other change to the file is said.
+            note = (f"Review rules: this change deletes {RULES_FILE}. The base commit {short} holds it empty, so this "
+                    "review ran under no repository review rules.")
     block = ""
     if text:
         block = (f"===== THIS REPOSITORY'S REVIEW RULES ({RULES_FILE}, read from the base commit {short} this change "

@@ -370,6 +370,15 @@ run_rules empty "$EMPTYBASE" "$EMPTYHEAD" "$SREPO"
 check_not "7 an empty base file is not replaced by the branch's text" "FILLED-RULE-KAPPA" "$(msg)"
 check "7 and the answer says the edit was not applied" "Review rules: this change edits REVIEW.md" "$(body empty)"
 check_eq "7 the record says empty" "empty" "$(meta empty review_rules)"
+# And when the branch deletes the empty file: the reviewer is told, so the answer says it too.
+S checkout -q -b drop-empty "$EMPTYBASE"
+S rm -q REVIEW.md
+S commit -q -m "drop the empty file"
+DROPHEAD="$(S rev-parse HEAD)"
+run_rules dropempty "$EMPTYBASE" "$DROPHEAD" "$SREPO"
+check "7 the reviewer is told the branch deletes the empty file" "this branch itself deletes REVIEW.md" "$(msg)"
+check "7 and the answer says so, and that none was in force" "Review rules: this change deletes REVIEW.md. The base commit ${EMPTYBASE:0:7} holds it empty" "$(body dropempty)"
+check_eq "7 the record still says empty" "empty" "$(meta dropempty review_rules)"
 
 # ===== 8. A push review, which is given no base, reads no REVIEW.md and records nothing =====
 rm -rf "$FAKE_LOG"; mkdir -p "$FAKE_LOG"
