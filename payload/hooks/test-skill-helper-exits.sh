@@ -400,6 +400,56 @@ PY
 scan
 [ "$rc" -eq 0 ] && has "$out" "$FILE:6: U1" && has "$out" "findings=0 unjudged=1" && ok \
   || bad "#3650 a helper the check could only partly judge passes and says so (rc=$rc)" "$out"
+
+# A local process whose status is read once at its start and then waited on with what that returns
+# dropped, or with communicate(), which only sets a returncode, has had only its start read: the
+# same process with no start read is refused, so the start read must not excuse it (PR #3659 review).
+cat > "$S/monitor.py" <<'PY'
+import subprocess
+
+
+def polled_then_waited_dropped():
+    p = subprocess.Popen(["sleep", "1"])
+    if p.poll():
+        return 1
+    p.wait()
+    return 0
+
+
+def polled_then_communicated():
+    p = subprocess.Popen(["cat"], stdin=subprocess.PIPE)
+    if p.poll():
+        return 1
+    out, err = p.communicate(b"x")
+    return out
+
+
+def polled_then_waited_and_read():
+    p = subprocess.Popen(["sleep", "1"])
+    if p.poll():
+        return 1
+    p.wait()
+    return p.returncode
+
+
+def polled_then_communicated_and_read():
+    p = subprocess.Popen(["cat"], stdin=subprocess.PIPE)
+    if p.poll():
+        return 1
+    p.communicate(b"x")
+    return p.returncode
+PY
+scan
+[ "$rc" -eq 1 ] && ok || bad "#3650 a process waited on after its start read with nothing reading the end fails (rc=$rc)" "$out"
+fires P1 5 "#3650 a wait() whose result is dropped after a start read is no read of the end"
+has "$out" "$FILE:5:" && has "$out" "p.wait() at line 8 waits for its end" && ok \
+  || bad "#3650 the finding names the dropped wait() and its line" "$out"
+fires P1 13 "#3650 a communicate() after a start read, with no returncode read, is no read of the end"
+has "$out" "$FILE:13:" && has "$out" "p.communicate() at line 16 waits for its end" && ok \
+  || bad "#3650 the finding names the communicate() and its line" "$out"
+has "$out" "$FILE:21:" && bad "#3650 a returncode read after a dropped wait() passes" "$out" || ok
+has "$out" "$FILE:29:" && bad "#3650 a returncode read after communicate() passes" "$out" || ok
+has "$out" "findings=2 unjudged=0" && ok || bad "#3650 exactly the two waits with nothing reading the end" "$out"
 rm -f "$S/monitor.py"
 
 # --- S1: a script filing an issue the field gate never sees -------------------------------------

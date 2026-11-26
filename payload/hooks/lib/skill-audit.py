@@ -661,6 +661,14 @@ def judge_ending(mod, call, what, scope, name, holder, uses, rel):
     # was made once, and a use after the last of them comes after the only look at the process.
     last = reads[-1]
     later = [(ln, n) for ln, w, n, _ in uses if ln > last and w in ("use", "ends")]
+    # A wait() whose result is dropped, or a communicate(), waits for the end and reads none of it: a
+    # returncode or a used wait() after it would have counted as the ending above (PR #3659 review).
+    waits = [(ln, d) for ln, w, _, d in uses if ln > last and w == "asked" and d in ("wait", "communicate")]
+    if waits and not later:
+        return "finding", (f"{rel}:{call.lineno}: P1 {name} = {what}(...) has its status read only at line {last}, "
+                           f"while it is still running, and {name}.{waits[0][1]}() at line {waits[0][0]} waits for "
+                           f"its end but nothing reads how it ended, so a failure reads as success. Read "
+                           f"{name}.returncode after it.")
     if later:
         return "finding", (f"{rel}:{call.lineno}: P1 {name} = {what}(...) has its status read only at line {last}, "
                            f"while it is still running, and is used again at line {later[0][0]} with nothing after "
