@@ -1445,6 +1445,12 @@ def crude_inner(text):
     it. The one stretch left out is the piece's start up to an opener: that is the head of the
     command the piece itself is, which its own record already hands on, and listing it would give a
     caller that counts commands the same one twice. Nothing blank is listed.
+
+    A backquote is not told as opening or closing: the cut splits `` `cd x; git push` `` in two, so
+    in a piece the first backquote may close what an earlier piece opened, and what stands before
+    it is then a command. So the start of a piece up to a backquote is listed even where that
+    backquote opens, `git push origin main `date``, and that command is given twice, once whole
+    and once without the words from the backquote on. Twice is the safe side of not at all.
     """
     out, at, first = [], 0, True
     for m in CRUDE_EDGE.finditer(text):

@@ -153,6 +153,20 @@ got = pushes(sw._records(text, "", 0)[0]) if unreadable(text) else None
 row("a command holding a substitution is listed once, not once more for its head",
     "" if got is not None and len([g for g in got if g[0] == "push"]) == 1 else "git commands read: %r" % (got,))
 
+# A backquote is not told as opening or closing: the cut splits a pair of them that holds a
+# separator, and then the first backquote of a piece closes. So what stands before a backquote is
+# always listed, and a command holding a pair of them is given twice. Both halves are held here, so
+# neither is traded for the other without a row failing.
+text = "x=`cd /tmp/x; git push origin main`" + OPEN
+got = pushes(sw._records(text, "", 0)[0]) if unreadable(text) else None
+row("the last command inside backquotes, cut from its opener by a separator, is listed with its own words",
+    "" if got is not None and PUSH in got else "git commands read: %r" % (got,))
+text = "git push origin main `date`" + OPEN
+got = pushes(sw._records(text, "", 0)[0]) if unreadable(text) else None
+row("a command holding backquotes is given whole and once more up to the first backquote",
+    "" if got is not None and sorted(got) == sorted([PUSH, ("push", "origin\x1fmain\x1f`date`")])
+    else "git commands read: %r" % (got,))
+
 # A text holding no parenthesis and no backquote is cut exactly as it always was.
 text = "cd /tmp/a && git status; echo b | cat" + OPEN
 want = [("", "cd /tmp/a "), ("/tmp/a", " git status"), ("/tmp/a", " echo b "), ("/tmp/a", " cat"),
