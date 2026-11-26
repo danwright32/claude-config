@@ -1,4 +1,5 @@
 import type { EngineInterface, Register } from 'claude-code'
+import { cutCall } from './mod-kit/hold.ts'
 import type { ModKitGh, ModKitWrites } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import { ghApiOf, judgeAdminMerge } from './adminmerge.ts'
 import { gateOf, judgeRequiredLabel, openedFrom } from './requiredlabel.ts'
@@ -6108,7 +6109,12 @@ export const register: Register = on => {
     }
     if (verdict && 'deny' in verdict) return verdict
     return go(verdict?.cleanups ?? [], verdict?.notes ?? [])
-  })
+    // #3655: a hook cut for time, or one that throws outside the try above, is refused here. A
+    // TaskStop is the one call this catch does not refuse (`mine`): by the same decision (#1495,
+    // "when scope modes' own check of a TaskStop errors, the stop is let through") the catch answers
+    // nothing for it, which Claude Code reads as the hook absent, so the stop goes on as it did
+    // before this catch existed. It is this mod's only tool.call hook, so no other catch is asked.
+  }).catch(($, e, next) => cutCall('scope modes', e, next, { mine: () => e.tool !== 'TaskStop' }))
 
   // A held row's button: asks Claude to do that one thing, now that Dan is here and chose it. Pressed
   // by a click or by /press (#939): mod-kit raises both as modkit.press.

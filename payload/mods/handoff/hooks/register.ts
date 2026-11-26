@@ -1,4 +1,5 @@
 import type { EngineInterface, Register } from 'claude-code'
+import { cutOwn } from './mod-kit/hold.ts'
 import { errorText } from './mod-kit/skew.ts'
 import { HOLD_MAX_MS, whileHeld, type Held } from './mod-kit/held.ts'
 import type { HandoffShown } from '../types/index.d.ts'
@@ -216,7 +217,7 @@ export const register: Register = on => {
     // A band showing the handoff this one replaced would offer a handoff that is no longer saved.
     if ((await $.state.get(shownRef)).value) await clearBand($)
     return { result: `Saved. The next session started in this repository offers it above the prompt.\n\n${prompt}` }
-  })
+  }).catch(($, e, next) => cutOwn('the handoff mod', next))
 
   // Use and Dismiss, pressed by a click or by /press (#939): mod-kit raises both as modkit.press.
   on('modkit.press', ($, e, next) => {

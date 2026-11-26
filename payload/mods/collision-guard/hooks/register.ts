@@ -1,6 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 import { errorText } from './mod-kit/skew.ts'
-import { neverThrows } from './mod-kit/hold.ts'
+import { cutCheck, watchesOnly } from './mod-kit/hold.ts'
 import { editedUnder, foldWrite, followedFolders, insideRoot, isScratch, judgedWrites, latestRequest, othersEditing, othersInRepo, parseVerdict, quoteNames, wantedFiles, watchedGit, whereGit, type Rec, type ShellWrite, type Verdict } from './collide.ts'
 
 // Collision guard (claude-config#605): two sessions in one checkout must not edit the same file or
@@ -443,14 +443,14 @@ export const register: Register = on => {
     // a plan.
     if (c) toNote.set(planKey(e), c)
     return decided
-  }).catch(($, e, next) => neverThrows(
+  }).catch(($, e, next) => cutCheck('the collision guard', next, {
     // A hook that fails is skipped and the verdict beneath stands, which would let the edit through
     // unjudged, so a failure here refuses (L42, lessons review of #878). Nothing has run yet. Should
     // naming the failure fail too, the refusal says unknown failure, so the catch never throws (#2039).
-    () => cannotCheck(next.error ? errorText(next.error, 'collision-guard') : 'unknown failure'),
-    () => HELD,
-    HELD,
-  ))
+    work: () => cannotCheck(next.error ? errorText(next.error, 'collision-guard') : 'unknown failure'),
+    held: () => HELD,
+    last: HELD,
+  }))
 
   on('tool.call', async ($, e, next) => {
     if (!watches(String(e.tool))) return next(e)
@@ -491,7 +491,7 @@ export const register: Register = on => {
     if (toldUnnoted || result.isError) return result
     toldUnnoted = true
     return { ...result, context: [...(result.context ?? []), unnoted] }
-  })
+  }).catch(watchesOnly)
 
   // The session that was working first: the message reached its conversation (the standard incoming
   // message, collision round 1), and Dan gets a toast.
