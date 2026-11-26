@@ -220,9 +220,12 @@ export const gitFolder = (p: GitPlace): string | null => (p.apart ? null : p.run
  * one found from it. `untold` where the command names its repository apart, which no folder
  * answers for; `none` where the folder is not written in full (a relative one, a value the shell
  * fills in, a chain mod-kit cannot work out), as a relative -C always was. Asked of the command
- * that commits or pushes itself, never of another git command in the call.
+ * that commits or pushes itself, never of another git command in the call. `cwd` is the session's
+ * folder, which only a command naming no folder of its own (no -C) runs in: the caller reads it
+ * for that command alone and hands null for any other (the review of #3532), and null where it
+ * was needed names `none`, never a folder made up from nothing.
  */
-export const branchFolder = (g: GitRead, cwd: string, envNamed: boolean): { path: string } | { untold: string } | 'none' => {
+export const branchFolder = (g: GitRead, cwd: string | null, envNamed: boolean): { path: string } | { untold: string } | 'none' => {
   // A command naming no folder runs in the session's.
   const p = gitPlace(g, cwd, w => (w.startsWith('/') ? w : null), envNamed)
   if (p.apart?.repository) return { untold: p.apart.said }

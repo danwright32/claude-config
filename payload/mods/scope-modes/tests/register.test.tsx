@@ -8032,6 +8032,38 @@ test('a mod-kit loaded before it said which repository a command names costs eve
   expect(said[0]).toContain('Until then no call that commits, pushes or starts a branch has its branch noted')
 })
 
+// The review of #3532: the session's folder is read only for a commit or a push naming no branch
+// that also names no folder of its own, as it was before #3398. From #3398 until that review the
+// note read it on every call it ran for with no cd before it, so a folder that could not be read
+// cost the note of a branch the call names itself, or commits to in a folder written in full, and
+// said so on each such call.
+for (const line of ['git checkout -b fix-700', 'git push -u origin fix-700', 'git -C /repo commit -m wip', 'git -C /repo push'])
+  test(`a branch told without the session's folder is noted when that folder cannot be read: ${line} (the review of #3532)`, withDeps, async ($, on) => {
+    const { w, clock } = world(on, { branch: 'fix-700' })
+    await start($ as never, clock)
+    w.o.cwdThrows = true
+    expect(await call($ as never, bash(line))).toBe('ran')
+    expect(w.toasts.filter(t => t.includes('could not note which branch'))).toEqual([])
+    w.o.cwdThrows = false
+    await command($ as never, 'winddown')
+    expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: there is no PR for fix-700 yet\./)
+  })
+
+for (const line of ['git commit -m wip', 'git push'])
+  test(`a commit or push naming no folder is of the branch checked out in the session's, so a folder that cannot be read is said: ${line} (the review of #3532)`, withDeps, async ($, on) => {
+    const { w, clock } = world(on, { branch: 'fix-700' })
+    await start($ as never, clock)
+    w.o.cwdThrows = true
+    expect(await call($ as never, bash(line))).toBe('ran')
+    const said = w.toasts.filter(t => t.includes('could not note which branch'))
+    expect(said.length).toBe(1)
+    // The reason is whatever the read threw, as the engine passes it on.
+    expect(said[0]).toContain('session.cwd')
+    w.o.cwdThrows = false
+    await command($ as never, 'winddown')
+    expect((await stop($ as never)).block).toBeUndefined()
+  })
+
 for (const line of ['git -C / -C repo commit -m wip', 'git -C /repo -C "" commit -m wip', 'git -C / -C repo push'])
   test(`a commit through more than one -C written in full is of the branch checked out where they lead: ${line} (#3398)`, withDeps, async ($, on) => {
     const { w, clock } = world(on, { branch: 'fix-700' })

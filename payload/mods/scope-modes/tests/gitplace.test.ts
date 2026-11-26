@@ -226,6 +226,28 @@ describe('the folders the notes kept for winding down read', () => {
     expect(branch('git -C a -C b commit -m x')).toBe('none')
     expect(branch('git -C "$A" -C b commit -m x')).toBe('none')
   })
+  // The review of #3532: the note reads the session folder only for a command naming no folder of
+  // its own, and hands null for every other, so the answer for a command with a -C must never
+  // depend on it.
+  test('the session folder decides the answer only for a command that names no folder of its own', () => {
+    const unread = (command: string) => branchFolder(gitOf(command), null, gitEnvNamed(command, readCommands(command)))
+    for (const command of [
+      'git -C /other commit -m x',
+      'git -C sub commit -m x',
+      'git -C "$W" commit -m x',
+      'git -C /a -C b commit -m x',
+      'git -C /a -C "" commit -m x',
+      'git -C a -C b commit -m x',
+      'git -C /other --git-dir=/o/.git commit -m x',
+      'git -C /other --work-tree=/o commit -m x',
+    ]) {
+      expect(gitOf(command).dir).not.toBeUndefined()
+      expect(unread(command)).toEqual(branch(command))
+    }
+    // With no folder named and none read there is none to name, never one made up.
+    expect(gitOf('git commit -m x').dir).toBeUndefined()
+    expect(unread('git commit -m x')).toBe('none')
+  })
   test('a repository named apart has no folder that answers for its branch, and that is said', () => {
     const said = 'it names its repository apart from the folder it runs in (--git-dir or GIT_DIR)'
     expect(branch('git --git-dir=/o/.git commit -m x')).toEqual({ untold: said })
