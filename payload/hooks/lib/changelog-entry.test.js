@@ -660,6 +660,43 @@ if (typeof entry.carriesAnnounce === 'function') {
     'a pull request with no changelog label, or a label that only looks like it, read as carrying the announce label');
 }
 
+// ---- announcementHash and its command line (claude-config#3666): the one hash of an announcement.
+// The wording Dan approves is a file and the wording that merges is a block in a pull request, read
+// by a python library and a bash gate. Both hash through here, so no second normaliser exists.
+check(typeof entry.announcementHash === 'function', 'the library does not export announcementHash, so every reader would hash an announcement its own way');
+const announcementHash = typeof entry.announcementHash === 'function' ? entry.announcementHash : function () { return undefined; };
+const HASH_OF_NORMAL = require('crypto').createHash('sha256').update(NORMAL, 'utf8').digest('hex');
+check(announcementHash(NORMAL) === HASH_OF_NORMAL, 'the hash is not the sha256 of the one normalised form: ' + announcementHash(NORMAL));
+check(announcementHash('\r\n@here  \r\nA line.\r\n\r\n  - indented stays\r\nAnother.\r\n\r\n') === HASH_OF_NORMAL,
+  'the same wording with the line endings GitHub gives, spaces at the ends of lines and other blank lines did not hash alike');
+check(announcementHash('@here\nA line!\n  - indented stays\nAnother.') !== HASH_OF_NORMAL, 'one changed character did not change the hash');
+check(announcementHash('') === '' && announcementHash(' \n\n') === '' && announcementHash(null) === '',
+  'wording that says nothing was given a hash, so an empty file could be approved');
+// announcement-hash: the wording itself on standard input (the file Dan was shown).
+c = cliIn(['announcement-hash'], POST.replace(/\n/g, '\r\n') + '\r\n\r\n');
+check(c.status === 0 && c.json && c.json.found === true && c.json.hash === announcementHash(POST) && c.json.lines === normalizeAnnouncement(POST).split('\n').length,
+  'the command line did not hash a file of wording as the library does: ' + JSON.stringify(c));
+c = cliIn(['announcement-hash'], ' \n\n');
+check(c.status === 0 && c.json && c.json.found === true && c.json.hash === '' && c.json.lines === 0, 'a file holding no wording was given a hash: ' + JSON.stringify(c));
+// announcement-hash --body: a pull request description on standard input, hashed by its block.
+c = cliIn(['announcement-hash', '--body'], ANNOUNCE_BODY.replace(/\n/g, '\r\n'));
+check(c.status === 0 && c.json && c.json.found === true && c.json.hash === announcementHash(POST),
+  'the block of a description did not hash to the same value as the file it was written from: ' + JSON.stringify(c));
+c = cliIn(['announcement-hash', '--body'], ANNOUNCE_BODY.replace('ran it', 'ran it twice, and reworded the summary'));
+check(c.json && c.json.hash === announcementHash(POST), 'an edit elsewhere in the description changed the hash of the announcement');
+c = cliIn(['announcement-hash', '--body'], ANNOUNCE_BODY.replace('Pick a reason', 'Pick any reason'));
+check(c.json && c.json.hash !== announcementHash(POST) && /^[0-9a-f]{64}$/.test(c.json.hash), 'an edit to the wording did not change the hash of the announcement: ' + JSON.stringify(c));
+c = cliIn(['announcement-hash', '--body'], SENTENCE);
+check(c.status === 0 && c.json && c.json.found === false && c.json.hash === '', 'a description with no Announcement block did not read as having none: ' + JSON.stringify(c));
+c = cliIn(['announcement-hash', '--something-else'], POST);
+check(c.status === 2 && c.json === null, 'a flag nobody defined did not exit 2 for announcement-hash: ' + JSON.stringify(c));
+// A command named as something every object inherits is still no command: the usage and exit 2,
+// never a crash, which a gate would read as a command that failed.
+['constructor', 'toString', '__proto__'].forEach(function (name) {
+  c = cliIn([name, '--body'], POST);
+  check(c.status === 2 && c.json === null && /Usage/.test(c.stderr || ''), 'a command named ' + name + ' with a flag did not print the usage and exit 2: ' + JSON.stringify(c).slice(0, 300));
+});
+
 console.log('  ' + passed + ' passed, ' + failed + ' failed');
 console.log('SUITE-RESULT passed=' + passed + ' failed=' + failed);
 process.exit(failed === 0 ? 0 : 1);
