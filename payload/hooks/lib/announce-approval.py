@@ -94,8 +94,8 @@ or the merge gate, on a typed merge. The merge helper (lib/merge-when-ready.sh) 
 payload naming no transcript and a session id that is no session's, so on any flow where neither
 followed his answer (the wording revised after the label went on, the label put on in GitHub's
 page) the merge was refused, told to ask him, and asking him again changed nothing. So
-announce-answer-note.sh runs once a picker of this source is answered and asks note_answer() here,
-which writes
+announce-answer-note.sh runs after every picker is answered and asks note_answer() here, which
+says whether the picker is of this source and, for one that is, writes
     {"kind": "answered", "session": "<id>", "transcript": "<its path>", "picker": "<tool_use id>",
      "repo": "<owner/name>", "file": "<the wording file>", "hash": "<sha256, or null>", "why": "<why
      there is no hash, or null>", "changed": <the file's status change time then, in ns>, "at": "<when>"}

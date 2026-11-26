@@ -239,6 +239,19 @@ check "and his approval is written to the record" "$(grep -q "\"hash\": \"$H\"" 
 r="$(run "$EDIT")"
 check "so a later session's command goes through on the record" "$(passed "$r" && echo ok || echo "$r")"
 forget
+# The picker's question must tell him to save the file (#3742 item 7): an edit he left unsaved in
+# the window is not in the wording that is hashed, so his Approve in a picker that does not say so
+# puts the label on nothing.
+F="$(aaf_shown "$WORK/nosave" "$WORK/nosave.jsonl" "$POST")"
+aaf_talk "$WORK/nosave.jsonl" ask acme/widget "$F" "" nosave
+r="$(TALK="$WORK/nosave.jsonl" run "$EDIT")"
+check "R10 his Approve in a picker whose question does not tell him to save the file puts no label on" "$(asks_dan "$r" && [[ "$r" == *"did not tell him to save the file"* ]] && echo ok || echo "$r")"
+check "and nothing is written to the record for it" "$(! grep -q '"kind": "approved"' "$STORE/record.jsonl" 2>/dev/null && echo ok || cat "$STORE/record.jsonl")"
+aaf_talk "$WORK/nosave.jsonl" bash "$AAF_BBEDIT --front-window $F"
+aaf_talk "$WORK/nosave.jsonl" ask acme/widget "$F"
+r="$(TALK="$WORK/nosave.jsonl" run "$EDIT")"
+check "R10 still possible: asked again with the sentence, the command goes through" "$(passed "$r" && echo ok || echo "$r")"
+forget
 
 echo "one approval covers one pull request (Dan, 2026-11-25: \"One approval, one pull request\")"
 # Pull request 7 merged on his one approval of this wording: the merge gate recorded it as the one
