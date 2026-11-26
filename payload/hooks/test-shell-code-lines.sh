@@ -574,6 +574,21 @@ PLAIN = "\n".join(["cat <<-EOF", T + "body", "# c", T + "EOF", "echo after", ""]
 say(scl.unsure_heredocs(PLAIN) == [] and [n for n, _ in scl.code_lines(PLAIN)] == [1, 2, 5, 6],
     "#3592 the control: <<- with no backslash is not named, and a # line of its body is left out as before",
     "named %r, code %r" % (scl.unsure_heredocs(PLAIN), [n for n, _ in scl.code_lines(PLAIN)]))
+
+# A marker that holds a line break, written as a dollar quote. No line is that marker, so bash, sh,
+# dash and zsh read the rest as the body, and ksh ends the heredoc at the two lines that spell it
+# (measured 2026-11-26 on macOS, bash 3.2, bash --posix, sh, dash, zsh, zsh emulating sh and ksh,
+# as a -c text and as a file). heredoc_close's plain reading ends it at those lines too, and the
+# reader must not: it reads on as bash does, names the heredoc and leaves out nothing after.
+SPELLED = "\n".join(["cat <<$'E" + B + "nx'", "body", "E", "x", "# c", "echo after", ""])
+say([m[0] for m in scl.unsure_heredocs(SPELLED)] == [1] and kinds(SPELLED) == "code heredoc heredoc heredoc heredoc heredoc heredoc"
+    and [n for n, _ in scl.code_lines(SPELLED)] == [1, 2, 3, 4, 5, 6, 7],
+    "#3592 a marker that holds a line break is not ended at the lines that spell it: read on as bash reads it, named, nothing after left out",
+    "named %r, kinds %s, code %r" % (scl.unsure_heredocs(SPELLED), kinds(SPELLED), [n for n, _ in scl.code_lines(SPELLED)]))
+UNSPELLED = "\n".join(["cat <<$'E" + B + "nx'", "body", "# c", "echo after", ""])
+say(scl.unsure_heredocs(UNSPELLED) == [] and kinds(UNSPELLED) == "code heredoc heredoc heredoc heredoc",
+    "#3592 the control: with no lines that spell it every shell reads on, and it is not named",
+    "named %r, kinds %s" % (scl.unsure_heredocs(UNSPELLED), kinds(UNSPELLED)))
 PY
 eq "#3592 the checks of the one reading ran to their end" "0" "$?"
 one_checks=0
@@ -584,7 +599,7 @@ while IFS="$TAB" read -r verdict what why; do
     *) fail=$((fail + 1)); echo "FAIL: #3592 a row of the one reading's checks is one this suite reads (got: $verdict)" ;;
   esac
 done < "$W/one-reading.tsv"
-eq "#3592 every check of the one reading was made" "9" "$one_checks"
+eq "#3592 every check of the one reading was made" "11" "$one_checks"
 
 # ---- the mods' copy of the list (claude-config#3592) ----
 # The mods' reader is held to the same list, through a copy: a mod's tests can import only the

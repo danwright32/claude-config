@@ -236,7 +236,9 @@ def _read(text, marks=None):
     emulating sh and ksh:
       * an opener joined to the next line before the end of its marker (OPENER_JOINED);
       * a heredoc the shells do not end alike (SHELLS_DIFFER), named at the first closing line
-        heredoc_close gives as its `doubt`. It is read as bash reads it;
+        heredoc_close gives as its `doubt`. It is read as bash reads it, so one whose marker
+        holds a line break (a dollar quote with a line break in it) is read on past the lines
+        that spell it, where ksh ends it (measured 2026-11-26, the same seven shells);
       * a marker joined to the line before with no marker after it (NEVER_ENDS, #3492): no shell
         closes it and heredoc_close's plain reading does.
     A heredoc the reader ends where every shell does is not named, however many of its lines a
@@ -269,10 +271,9 @@ def _read(text, marks=None):
         the line that closes it or None, the index of the line it is first in doubt at or None,
         whether no shell closes it where the reader does)."""
         strip, word, quoted, _ = pending[0]
-        plain, _, _, bash, doubt = _sw.heredoc_close(text, starts[i] - 1, word, strip, quoted)
-        close = bash or plain
-        return (at(close.end()) if close else None, None if doubt is None else at(doubt),
-                bash is None and plain is not None)
+        plain, _, _, bash, doubt, stray = _sw.heredoc_close(text, starts[i] - 1, word, strip, quoted)
+        close = bash or (plain if stray else None)
+        return at(close.end()) if close else None, None if doubt is None else at(doubt), stray
 
     for i, line in enumerate(lines):
         if pending:

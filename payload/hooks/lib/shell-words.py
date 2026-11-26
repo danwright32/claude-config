@@ -655,7 +655,7 @@ def uncommented(s, spaced=False):
 
 def heredoc_close(s, j, word, strip_tabs, quoted, line_break="\n"):
     """Where the heredoc whose body starts at the line break at j closes, as (plain, shells, sure,
-    bash, doubt): the one reading of it, for the command reader (commands) and for the reader the
+    bash, doubt, stray): the one reading of it, for the command reader (commands) and for the reader the
     tree scans read shell files through (lib/shell_code_lines.py), which kept a close rule of its
     own until claude-config#3592. plain, shells and bash are each the match of a closing line, from
     the line break before it to its end, or None for a heredoc that never closes (claude-config#3492).
@@ -719,18 +719,20 @@ def heredoc_close(s, j, word, strip_tabs, quoted, line_break="\n"):
     of a whole file ends the heredoc at, since the lines after are then read as code, and it is
     looked for past the first closing line the shells do not read alike. doubt is where the first
     such closing line ends in s, or None where there is none before bash: the two cases under
-    "the shells differ" above. A heredoc with bash None and plain not None is one no shell closes
-    and plain does, at a marker joined to the line before."""
+    "the shells differ" above, and the end of the lines that spell a marker holding a line break,
+    which bash never closes at (bash is None there) and dash or ksh do. stray, the sixth item, is
+    whether no shell closes the heredoc and plain does, at a marker joined to the line before: the
+    one heredoc a reader of a whole file ends at plain, taking both safe sides."""
     n = len(s)
     line_end = r"(?=\n|$)" if line_break == "\n" else r"(?=;|$)"
     tabs = "\t*" if strip_tabs else ""
     first = re.compile(re.escape(line_break) + tabs + re.escape(word) + line_end).search(s, j)
     if line_break != "\n":
-        return first, first, first is None, first, None
+        return first, first, first is None, first, None, False
     if line_break in word:
-        return first, first, first is None, first, None
+        return first, first, first is None, None, first.end() if first else None, False
     if quoted:
-        return first, first, True, first, None
+        return first, first, True, first, None, False
 
     def never():
         if first is None and s.find("$", j) < 0 and s.find("`", j) < 0:
@@ -739,7 +741,7 @@ def heredoc_close(s, j, word, strip_tabs, quoted, line_break="\n"):
 
     if s.find("\\" + line_break, j, first.end() if first else n) < 0:
         # No line of the body is joined to the next, which is nearly every heredoc there is.
-        return ((first, first, True) if first else never()) + (first, None)
+        return ((first, first, True) if first else never()) + (first, None, False)
     # Every place a shell might close it: the marker, with any count of backslash line breaks
     # (and the tabs a <<- strips) before it, between its characters and after it.
     lb = re.escape(line_break)
@@ -752,7 +754,7 @@ def heredoc_close(s, j, word, strip_tabs, quoted, line_break="\n"):
     while True:
         m = chain.search(s, pos)
         if not m:
-            return (read or never()) + (None, doubt)
+            return (read or never()) + (None, doubt, first is not None)
         k = m.start() - 1
         while k >= j + width and s[k] == "\\":
             k -= 1
@@ -764,7 +766,7 @@ def heredoc_close(s, j, word, strip_tabs, quoted, line_break="\n"):
                 doubt = m.end() if doubt is None else doubt
                 whole = s[m.start() + width:m.end()].replace("\\" + line_break, "")
                 if (whole.lstrip("\t") if strip_tabs else whole) == word:
-                    return read + (m, doubt)
+                    return read + (m, doubt, False)
         else:
             if slashes:
                 before = s[s.rfind(line_break, j, m.start()) + width:m.start()]
@@ -776,7 +778,7 @@ def heredoc_close(s, j, word, strip_tabs, quoted, line_break="\n"):
                 if read is None:
                     same = first is not None and first.start() == m.start()
                     read = (first, first, True) if same else (first, m, False)
-                return read + (m, doubt)
+                return read + (m, doubt, False)
         pos = m.end()
 
 
