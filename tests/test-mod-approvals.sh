@@ -9,8 +9,9 @@
 #
 # Each route the mod API offers is built as a stand in mod and seen to fail (L1), by the state
 # reached and never one spelling of it (L247): quotes of every kind, a quoted key, a value computed
-# from the word, a helper in a mod-kit copy, a data file, test code a module imports. A mod that
-# only refuses or holds must pass. Then the real payload is read, and must find the two statements
+# from the word, a helper in a mod-kit copy, a data file, test code a module imports, and the word
+# ask in each place a decision could be computed from it (4b). A mod that only refuses or holds must
+# pass, and so must one holding the word ask only where it cannot become a value. Then the real payload is read, and must find the two statements
 # known on 2026-11-25, so a reader that reads nothing cannot pass as nothing found (L98).
 set -u
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -370,6 +371,44 @@ export const register = (on: any) => {
   on('tool.check', () => ({ [key]: 'ask' }))
 }
 TS
+# A template whose placeholder holds the word alone hands the word on. The word touches the
+# placeholder's own braces there, which the shared reader marks as part of the template, so a
+# reader of whole strings sees one longer string. The same holds for allow.
+route_case asktemplate holds-ask hooks/register.ts:2 <<'TS'
+export const register = (on: any) => {
+  on('tool.check', () => ({ decision: `${'ask'}` }))
+}
+TS
+route_case asknested holds-ask hooks/register.ts:2 <<'TS'
+export const register = (on: any) => {
+  on('tool.check', ($: any, e: any) => ({ decision: `${e.ok ? "deny" : `${`ask`}`}` }))
+}
+TS
+route_case allowtemplate holds-allow hooks/register.ts:2 <<'TS'
+export const register = (on: any) => {
+  on('tool.check', () => ({ decision: `${'allow'}` }))
+}
+TS
+route_case allowtail holds-allow hooks/register.ts:2 <<'TS'
+export const register = (on: any) => {
+  on('tool.check', ($: any, e: any) => ({ decision: `${e.ok && 'allow'}` }))
+}
+TS
+# After the word as a quoted word is a cast's type. A template there is a call of a function named
+# as, with the word as its argument.
+route_case asktagged holds-ask hooks/register.ts:3 <<'TS'
+const as = (parts: TemplateStringsArray) => parts[0]
+export const register = (on: any) => {
+  on('tool.check', () => ({ decision: as`ask` }))
+}
+TS
+# A decision key stays a decision key when it is marked optional.
+route_case askoptional holds-ask hooks/register.ts:1 <<'TS'
+const answer = (v: { decision?: 'ask' }) => v
+export const register = (on: any) => {
+  on('tool.check', () => answer({}))
+}
+TS
 # An assertion written before the value is still the value.
 route_case askasserted holds-ask hooks/register.ts:3 <<'TS'
 type Decision = string
@@ -426,6 +465,8 @@ const sole = { id: `ask` }
 const quoted = { 'id': "ask" }
 const typed = (h: { id?: 'ask' }, id: 'ask') => h
 const alone = (id: 'ask') => id
+const prose = `to 'ask' or to "allow" is the person's, ${held.what}, never ${sole.id + '.'}this mod's`
+const plain = "a message may show ${'ask'} and ${'allow'} as text"
 export const register = (on: any) => {
   on('tool.check', async ($: EngineInterface, e: any, next: any) => {
     const beneath = await next(e)

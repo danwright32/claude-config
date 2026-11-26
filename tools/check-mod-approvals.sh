@@ -17,6 +17,10 @@
 #                         allow: true, the PreToolUse result's own spelling.
 #   [answers-ask]         the value 'ask' given to one of those keys: over a refusal beneath it, a
 #                         question is a loosening, and a permission prompt is what a mod can approve.
+#   [holds-ask]           the word ask as a whole string anywhere else, in the mod's code or in a
+#                         .json file beside it, since a decision can be computed from it
+#                         (ok ? 'ask' : 'deny') or read from the file. Unlike allow, the word has
+#                         harmless uses, so it passes in the positions below and nowhere else.
 #   [holds-allow]         the word allow as a whole string anywhere else in the mod's code or in a
 #                         .json file beside it, since a decision can be computed from it or read
 #                         from the file. The approving value has to come from somewhere.
@@ -31,6 +35,26 @@
 #                         reached by a computed name ($['tool']), so a call through it cannot be read.
 #   [reads-unread-code]   an import from a tests folder, node_modules or outside the mods folder, or
 #                         a hooks module listed from a folder this check does not read.
+# Where the word ask passes, each by the shape of the code around it and never by a list of files:
+#   as a property's value, when the key is not one of the three decision keys: `key: 'ask'` or
+#     `key?: 'ask'` with the key a plain or quoted name that follows a {, a comma or a (. That
+#     shape is a property of an object, a member of a type, a parameter's type, or a label whose
+#     value is thrown away. A conditional's second arm (ok ? x : 'ask') is not that shape: its x
+#     follows a question mark. The word then lives in that property and nowhere else, and reading
+#     it back out (held.id) is the one thing left that this check cannot follow.
+#   where an operator takes it and cannot hand it back: beside ===, !==, == or != (the answer is
+#     true or false), beside a single | or & (a number in code, a union in a type), straight after
+#     a single <, or straight before a > when a comma or a < stands before it (a comparison in
+#     code, the first or last argument of a type such as Pick<Io, 'ask'>), and after the word case.
+#   after the word as, in plain quotes: the type of a cast, whose value comes from what is cast.
+# Everything else is a finding: either arm of a conditional, what follows || or ??, a variable's
+# value, a default, a return, an arrow's body, an argument, a list's element, the value of a
+# computed key, an element's attribute, and every type position not named above (a type alias of
+# the word alone, a variable's or a function's declared type), which is stricter than it need be.
+# approve stays read only beside a decision key: the mod API's types hold no such value (the pinned
+# build's, which tests/test-mod-approvals.sh reads, and 2.1.332's read on 2026-11-25), so a
+# decision computed from it approves nothing, and scope-modes holds the word in a list of verbs.
+#
 # The value is read whatever quotes it, with the key quoted or not, in every source file that is a
 # mod's own code (mod_code in lib/ts_source.py: mod-kit, and each mod's own copy of mod-kit under
 # hooks/mod-kit, are read like any other code). Comments and longer strings are never matched.
@@ -76,6 +100,7 @@ WHAT = {
     "answers-allow": "answers allow for a tool call or a permission prompt",
     "answers-ask": "answers ask, which turns a refusal beneath it into a question",
     "holds-allow": "holds the word allow as a value a decision could be computed or read from",
+    "holds-ask": "holds the word ask where a decision could be computed or read from it (it passes only as the value of a property that is no decision key, in a comparison, or in a type's union or first or last argument)",
     "changes-permissions": "changes the permission rules or the permission mode",
     "rewrites-settings": "hooks settings.read, which answers what the session's permission rules are",
     "own-tool-call": "makes a tool call of its own, which no permission rule covers",
@@ -88,6 +113,11 @@ LOOSE = {"allow": "answers-allow", "approve": "answers-allow", "ask": "answers-a
 KEYS = ("decision", "permissionDecision", "behavior")
 WORDS = {"allow": "holds-allow", "updatedPermissions": "changes-permissions", "setMode": "changes-permissions",
          "bypassPermissions": "changes-permissions", "permissionMode": "changes-permissions"}
+# The word that is a finding wherever it stands but where taken() below says it cannot become a
+# value, the comparisons whose answer is true or false, and the characters operators are made of.
+APART = "ask"
+SAME = ("===", "!==", "==", "!=")
+SIGNS = frozenset("=!<>|&?:+-*/%^~")
 LITERAL = re.compile(r"(['\"`])([A-Za-z_$][\w$]*)\1\Z")
 MEMBER = r"\s*(?:\?\.|\.)\s*"
 IN_CODE = (
@@ -101,6 +131,8 @@ IN_CODE = (
 )
 IMPORT = re.compile(r"(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)(['\"`])([^'\"`\n]+)\1")
 IN_DATA = re.compile(r"\"(allow|updatedPermissions|setMode|bypassPermissions|permissionMode)\"")
+APART_IN_DATA = re.compile(r"\"" + APART + r"\"")
+KEY_IN_DATA = re.compile(r"\"([^\"\\\n]*)\"\s*:\s*\Z")
 ROW = ("mod", "file", "route", "statement", "issue", "reason")
 unread = 0
 
@@ -161,7 +193,101 @@ def read_source(text, jsx, path, mod_folder, add):
         m = re.search(r"[A-Za-z_$][\w$]*\Z", text[max(0, j - 80) : j + 1])
         return m.group(0) if m and kind[j] == CODE else None
 
-    # Each whole string: a run of string characters that is one quoted word and nothing else.
+    def skip_on(j):
+        while j < n and (kind[j] == COMMENT or (kind[j] == CODE and text[j].isspace())):
+            j += 1
+        return j
+
+    def name_ending(j):
+        """The whole plain name whose last character is at j, and where it starts; or None."""
+        if j < 0 or kind[j] != CODE or not (text[j].isalnum() or text[j] in "_$"):
+            return None
+        s = j
+        while s > 0 and kind[s - 1] == CODE and (text[s - 1].isalnum() or text[s - 1] in "_$"):
+            s -= 1
+        return text[s : j + 1], s
+
+    def own_key(a):
+        """The key the value starting at a is given to, where the code around it can only be a
+        property, a type's member, a parameter's type or a label: `key: value` or `key?: value`,
+        the key a plain or quoted name that follows a {, a comma or a (. None for everything else,
+        above all a conditional's second arm (ok ? x : value), whose x follows a question mark."""
+        j = skip_back(a - 1)
+        if j < 0 or kind[j] != CODE or text[j] != ":":
+            return None
+        j = skip_back(j - 1)
+        if j >= 0 and kind[j] == CODE and text[j] == "?":
+            j = skip_back(j - 1)
+        if j < 0:
+            return None
+        if kind[j] == STRING:
+            s = j
+            while s > 0 and kind[s - 1] == STRING:
+                s -= 1
+            m = LITERAL.match(text, s, j + 1)
+            name = m.group(2) if m else None
+        else:
+            got = name_ending(j)
+            name, s = got if got else (None, 0)
+        if name is None:
+            return None
+        j = skip_back(s - 1)
+        return name if j >= 0 and kind[j] == CODE and text[j] in "{,(" else None
+
+    def taken(a, b):
+        """Whether the string text[a:b] stands where it cannot become a value a decision is made
+        from, other than by being read back out of the property it was given to. The positions,
+        and why each is safe whether the code is read as JavaScript or as a type, are in this
+        script's header. Anything not recognised here is not taken, so it is a finding."""
+        key = own_key(a)
+        if key is not None:
+            return key not in KEYS
+        j = skip_back(a - 1)
+        before = ""
+        if j >= 0 and kind[j] == CODE:
+            s = j
+            while s >= 0 and kind[s] == CODE and text[s] in SIGNS:
+                s -= 1
+            before = text[s + 1 : j + 1]
+        k = e = skip_on(b)
+        while e < n and kind[e] == CODE and text[e] in SIGNS:
+            e += 1
+        after = text[k:e]
+        if before in SAME or after in SAME or before in ("|", "&", "<") or after in ("|", "&"):
+            return True
+        if after[:1] == ">" and (before == "<" or (j >= 0 and kind[j] == CODE and text[j] == ",")):
+            return True
+        got = name_ending(j)
+        return bool(got) and (got[0] == "case" or (got[0] == "as" and text[a] != "`"))
+
+    def strings(a, b):
+        """Each quoted string within the run of string characters text[a:b], as (start, end). A
+        run is one string except around a template's placeholder: the shared reader marks the
+        placeholder's own ${ and } as the template's, so a string that touches them (`${'allow'}`)
+        is in one run with the template around it, and read whole it is no word at all."""
+        i = a
+        while i < b:
+            q, j = text[i], i + 1
+            if q in "'\"":
+                while j < b and text[j] != q:
+                    j += 2 if text[j] == "\\" else 1
+                yield i, min(j + 1, b)
+                i = j + 1
+            elif q in "`}":
+                # A template's text, from its opening or from the } that ends a placeholder, to
+                # its closing backtick or to the ${ that opens the next placeholder.
+                while j < b and text[j] != "`" and not text.startswith("${", j):
+                    j += 2 if text[j] == "\\" else 1
+                if j < b and text[j] == "`":
+                    if q == "`":
+                        yield i, j + 1
+                    i = j + 1
+                else:
+                    i = j + 2
+            else:
+                i += 1
+
+    # Each whole string that is one quoted word and nothing else.
     i, n = 0, len(text)
     while i < n:
         if kind[i] != STRING:
@@ -170,14 +296,17 @@ def read_source(text, jsx, path, mod_folder, add):
         a = i
         while i < n and kind[i] == STRING:
             i += 1
-        m = LITERAL.match(text, a, i)
-        if not m:
-            continue
-        word = m.group(2)
-        if word in LOOSE and key_before(a) in KEYS:
-            add(a, LOOSE[word])
-        elif word in WORDS:
-            add(a, WORDS[word])
+        for s, e in strings(a, i):
+            m = LITERAL.match(text, s, e)
+            if not m:
+                continue
+            word = m.group(2)
+            if word in LOOSE and key_before(s) in KEYS:
+                add(s, LOOSE[word])
+            elif word in WORDS:
+                add(s, WORDS[word])
+            elif word == APART and not taken(s, e):
+                add(s, "holds-" + APART)
     for pattern, route in IN_CODE:
         for m in pattern.finditer(code):
             add(m.start(), route)
@@ -325,6 +454,14 @@ def main():
                 files += 1
                 for m in IN_DATA.finditer(text):
                     add_at(path, text, m.start(), WORDS[m.group(1)])
+                # The word ask in a data file passes only as the value of a key that is no
+                # decision key, as it does in code: a list's element, or a key of that name, is found.
+                for m in APART_IN_DATA.finditer(text):
+                    key = KEY_IN_DATA.search(text, max(0, m.start() - 400), m.start())
+                    if key is None:
+                        add_at(path, text, m.start(), "holds-" + APART)
+                    elif key.group(1) in KEYS:
+                        add_at(path, text, m.start(), LOOSE[APART])
         read_modules(mod, folder, add_at)
 
     found = allowed = 0
@@ -344,6 +481,7 @@ def main():
         print(f"{P}Claude Code's built in guard is off on both Macs (#876, #3681), so nothing but this check stops a mod's approval beating a deny rule. Take the statement out, or have Dan decide on an issue whether it is allowed by name in {list_path}.")
     print(f"{P}{len(mods)} mods checked in {root}, {files} files read; {found} found, {allowed} allowed by name, {len(gone)} listed but gone ({list_path}). "
           "Not read: a decision built while running from pieces of a word or read from outside the mod's folder (a file elsewhere, the network, a setting), "
+          "the word ask read back out of a property it was given to (held.id, or by taking the object apart), an allow: given anything but the word true, "
           "a call made through a renamed copy of the engine's tool object, a hook that passes on the engine's verdict for a different call than the one asked about, "
           "what a mod does itself with $.process.run, $.fs or $.http (no tool call, and no permission rule covers it), a package a mod imports by name, "
           "each mod's tests folder, and any plugin that is not under this folder.")

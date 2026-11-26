@@ -11121,6 +11121,13 @@ and each mod's copy of mod-kit included, and each `.json` file beside it, and fa
   `allow: true`, which is how a `tool.check`, `tool.judge`, `classic.PermissionRequest` or
   `classic.PreToolUse` hook approves a call or turns a refusal into a question;
 - holds the word `allow` as a whole string anywhere else, since a decision can be computed from it;
+- holds the word `ask` as a whole string anywhere else (`ok ? 'ask' : 'deny'`, a variable, a
+  return, an argument, a list's element), except where the code around it shows it cannot become a
+  value: as the value of a property that is not one of those three keys (`id: 'ask'`), beside a
+  comparison or a type's `|` or `&`, as the first or last argument of a type
+  (`Pick<Io, 'ask'>`), and after `as` or `case`. The script's header gives each position and why
+  it is safe. `approve` is read only beside one of the three keys: the mod API's types hold no
+  such value, and the suite fails on the day the pinned types gain one;
 - changes the permission rules or mode (`updatedPermissions`, `setMode`, `bypassPermissions`, a
   `permissionMode` handed to an agent, `$.config.set`), or hooks `settings.read`;
 - calls `tool.call` or `mcp.call` on any object, which runs a tool with no permission rule
@@ -11137,8 +11144,10 @@ on Dan's answer in #3681, so until a row is added the check itself exits 1 on `p
 the suite prints one `SUITE-PART-UNMEASURED` line for each and checks the rest against a copy of
 the list with the rows added.
 The check's last line says what it cannot see: a decision built while running from pieces of a
-word or read from outside the mod's folder, a call through a renamed copy of the engine's tool
-object, a hook that passes on the verdict of a different call, what a mod does itself with
+word or read from outside the mod's folder, the word `ask` read back out of a property it was
+given to (`held.id`), an `allow:` given anything but the word `true`, a call through a renamed copy
+of the engine's tool object, a hook that passes on the verdict of a different call, what a mod does
+itself with
 `$.process.run`, `$.fs` or `$.http` (no tool call, and no permission rule covers it), a package
 imported by name, and any plugin that is not under the folder. `tests/test-mod-approvals.sh` runs
 it in every full suite run, on a stand in mod for each route and on `payload/mods`.
