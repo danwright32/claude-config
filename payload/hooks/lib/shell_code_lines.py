@@ -97,6 +97,9 @@ OPENER_JOINED = ("its opener is joined to the next line by a backslash before th
                  "marker is not the word on that line; no heredoc is read there and the lines after are read as code")
 SHELLS_DIFFER = ("the shells do not end it at the same line: a backslash ends the line before its closing line, "
                  "and bash and zsh join the two where dash or ksh do not, or the reverse")
+MARKER_BREAK = ("the shells do not end it at the same line: its marker holds a line break, so no line is the marker. "
+                "bash and zsh read the rest of the file as its body, where ksh ends it at the lines that spell "
+                "the marker")
 NEVER_ENDS = ("its marker is joined by a backslash to the line before and no line after is the marker, so no shell "
               "ends it; the reader ends it there and reads the rest as code")
 
@@ -238,7 +241,8 @@ def _read(text, marks=None):
       * a heredoc the shells do not end alike (SHELLS_DIFFER), named at the first closing line
         heredoc_close gives as its `doubt`. It is read as bash reads it, so one whose marker
         holds a line break (a dollar quote with a line break in it) is read on past the lines
-        that spell it, where ksh ends it (measured 2026-11-26, the same seven shells);
+        that spell it, where ksh ends it (measured 2026-11-26, the same seven shells), and is
+        named in words of its own (MARKER_BREAK);
       * a marker joined to the line before with no marker after it (NEVER_ENDS, #3492): no shell
         closes it and heredoc_close's plain reading does.
     A heredoc the reader ends where every shell does is not named, however many of its lines a
@@ -282,7 +286,9 @@ def _read(text, marks=None):
             close, doubt, never = ending
             opened = pending[0][3]
             if doubt == i:
-                name(opened, SHELLS_DIFFER)
+                # Two causes, each with its own words (L11): a closing line a backslash joined, and
+                # a marker no line can be.
+                name(opened, MARKER_BREAK if "\n" in pending[0][1] else SHELLS_DIFFER)
                 rest = True
             closes = close == i
             if closes and never:

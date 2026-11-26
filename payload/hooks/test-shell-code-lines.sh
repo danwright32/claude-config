@@ -585,6 +585,11 @@ say([m[0] for m in scl.unsure_heredocs(SPELLED)] == [1] and kinds(SPELLED) == "c
     and [n for n, _ in scl.code_lines(SPELLED)] == [1, 2, 3, 4, 5, 6, 7],
     "#3592 a marker that holds a line break is not ended at the lines that spell it: read on as bash reads it, named, nothing after left out",
     "named %r, kinds %s, code %r" % (scl.unsure_heredocs(SPELLED), kinds(SPELLED), [n for n, _ in scl.code_lines(SPELLED)]))
+whys = [why for text in (SPELLED, TABBED) for _, why in scl.unsure_heredocs(text)]
+say(len(whys) == 2 and "marker holds a line break" in whys[0] and "backslash" not in whys[0]
+    and "backslash" in whys[1] and "line break" not in whys[1],
+    "#3592 and it is named in words of its own, apart from a closing line a backslash joined",
+    "the two reasons: %r" % (whys,))
 UNSPELLED = "\n".join(["cat <<$'E" + B + "nx'", "body", "# c", "echo after", ""])
 say(scl.unsure_heredocs(UNSPELLED) == [] and kinds(UNSPELLED) == "code heredoc heredoc heredoc heredoc",
     "#3592 the control: with no lines that spell it every shell reads on, and it is not named",
@@ -599,7 +604,7 @@ while IFS="$TAB" read -r verdict what why; do
     *) fail=$((fail + 1)); echo "FAIL: #3592 a row of the one reading's checks is one this suite reads (got: $verdict)" ;;
   esac
 done < "$W/one-reading.tsv"
-eq "#3592 every check of the one reading was made" "11" "$one_checks"
+eq "#3592 every check of the one reading was made" "12" "$one_checks"
 
 # ---- the mods' copy of the list (claude-config#3592) ----
 # The mods' reader is held to the same list, through a copy: a mod's tests can import only the
