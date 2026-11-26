@@ -1827,7 +1827,101 @@ repository, `check-add-scope.sh` one adding in more than one, and `block-red-mer
 remedy each gives is to run them as separate commands. `ai-review-on-pr.sh`, which only starts
 reviews, starts one in every repository a command commits, pushes or opens a pull request in. The
 changelog gate refuses a command merging several pull requests only when one of them is in a
-repository its registry gates.
+repository its registry gates, and since claude-config#3666 `ALLOW_UNTAGGED_MERGE=1` does not clear
+that refusal (Dan, 2026-11-25, by picker: "Refuse it"). The gate reads one pull request per command,
+so the override typed over several merges let one of them through unread, an announcement
+included, and one merge per command is always open. A pull request that cannot be read at all is
+still let through under the override, saying so.
+
+#### An announcement merges only on wording Dan approved (#3666)
+
+A pull request labelled `changelog/announce` carries the post for agents under `## Announcement`,
+and Dan's words for the label were "it should ask me before applying the label". So the session
+writes the post to a file, runs `/no-ai-tells` on it, opens it in BBEdit with the front window flag,
+and asks ONE picker of one question (`Approve the wording` or `Not yet`) naming the pull request or
+feature and the channel, with this metadata:
+
+```json
+{"source": "changelog-announce", "repo": "<owner/name>", "file": "<absolute path>"}
+```
+
+He may edit the file before he answers, and the pull request's Announcement block is then that
+file's text. `hooks/lib/announce-approval.py` says whether a given wording is one he approved. His
+answer counts by the rules `hooks/lib/db-apply-approval.py` already holds for "he answered it
+himself" (one question, no answer filled in by the caller, not closed by its timeout, read from the
+session's own transcript, readable as written), which it calls and does not copy, and then only
+when all of these hold, each failure said in its own words:
+
+- the transcript holds a Bash call that is nothing but a BBEdit open of that file (the helper with
+  `--front-window`, or `open -a BBEdit`), finished without error before he answered;
+- between that open and his answer the session did not write the file, run a command naming it, or
+  send an agent a prompt naming it, so what he had in front of him is what he answered about;
+- the file has not changed since he answered (its status change time is before his answer);
+- no later picker about the same file ended any other way.
+
+What is hashed is the FILE as it stands, never a hash the session supplies, by
+`hooks/lib/changelog-entry.js`'s `announcementHash`: the sha256 of the one normalised form (line
+endings, spaces at the ends of lines, outer blank lines) every comparison uses, so the file on this
+Mac and the block GitHub returns are hashed by one function. A hook run that reads his Approve
+writes `{"kind": "approved", "repo", "hash", "at", "session", "picker"}` to
+`~/.claude/state/announce-approvals/record.jsonl`, on this Mac only and never synced, so wording he
+approved merges unchanged in a later session or overnight. A subagent's call counts his picker for
+that call and writes nothing.
+
+One approval covers one pull request (Dan, 2026-11-25, by picker: "One approval, one pull request").
+An approval is one answer of his in one picker, counted once by the session and the picker it came
+from. An approval nobody has used covers whichever pull request reaches the merge gate first, so he
+can approve the wording before the pull request exists. The pull request that used it may try a
+failed merge again without asking him. A different pull request carrying the same wording is
+refused, named the pull request that used the approval, and told to ask him again; his second
+approval of the same wording covers it.
+
+Two hooks ask the library, and both DENY, never ask: a permission prompt shows the command and not
+the wording, and sleep mode can answer one with Dan asleep.
+
+- `require-changelog-tag.sh`, at the merge. For an announce pull request it hashes the Announcement
+  block as GitHub holds it and refuses unless that hash is approved for the repository, saying how
+  to ask him. An edit to the wording after his approval, by any route including GitHub's own page,
+  changes the hash and is refused the same way; an edit elsewhere in the description is not. Its
+  question names the pull request and claims the approval: holding a lock on the record, the
+  library decides and writes a `used` line marked `"claim": true` for that pull request in one
+  step, so of two pull requests reaching the gate at once on one approval, the first is let through
+  and the second is refused. When that claim cannot be written (the record's folder or file cannot
+  take a line, or its lock is held for 3 seconds), the merge is refused, saying what could not be
+  written and where (Dan, 2026-11-25, by picker: "Refuse the merge"); the remedy is the record, and
+  he is not asked again. After the claim it adds a `used` line naming, for each issue the pull
+  request closes, its milestone (read in one GraphQL call; issues that cannot be read are recorded
+  as unread with why, and block nothing). These lines say the gate let the merge go ahead, never
+  that GitHub merged it, and a `used` line approves nothing by itself.
+- `announce-label-ask.sh`, before the label goes on. It reads every Bash call naming the label:
+  `gh pr create --label`, `gh pr edit --add-label`, `gh issue edit --add-label` and a `gh api`
+  write to a pull request's labels are refused unless the wording the command would leave is
+  approved, read from its `--body`, from the file its `--body-file` names, or from GitHub for an
+  edit that gives neither. It asks for the pull request the command names by number or link (or
+  GitHub's answer names) and records nothing: the pull request that used an approval keeps it, and
+  any other, or a command naming none (a create), goes through only while an approval of that
+  wording is unused. A form the wording cannot be read from (`--fill`, a template, a body on
+  standard input, a body file the same command writes, an empty body, more than one pull request,
+  another GitHub write in the same call) is refused with the form to use. So is a call that puts
+  the label on in more than one command: each is judged by reads of its own, and one per call is
+  what keeps the hook inside the time it is registered with. Renaming another label onto it is
+  always refused. Making the label (`gh label create`, `gh label clone`, the API form) always goes
+  through, with no approval (Dan, 2026-11-25: "Always allow it"): it puts the label on no pull
+  request, so there is no wording to read, and the merge gate still holds what merges.
+  Taking the label off, reading it and naming it in text pass. This is the early refusal for the
+  ordinary routes; the merge gate is what holds the rule.
+
+The same hook guards the record, which is why it is registered for the edit tools as well as Bash:
+an Edit, Write, MultiEdit or NotebookEdit under `state/announce-approvals` is refused, and so is a
+Bash command naming that folder that is not one only reading it. Read the record with `python3
+~/.claude/hooks/lib/announce-approval.py list`.
+
+What none of this sees: a merge made in GitHub's own page; a write to the wording file, between the
+open and his answer, by something the transcript does not name it in (a script building the name at
+run time, a subagent's own tools); whether the picker's question named the right channel; a record
+line written by a script that builds the path at run time; a label put on by a route the hook cannot
+read (a variable, a file, a script, an alias, a wrapped `gh api`), which still cannot merge; and an
+approval given on one Mac, which the other does not know and asks for again.
 
 `push-scope-notice.sh` also refuses a push from a repository whose `core.hooksPath` names a folder
 that does not exist (claude-config#2070), because git then runs none of the repository's own hooks
@@ -2944,7 +3038,7 @@ Reading an old checkout is the other half, and that one is said rather than refu
 
 ### What a push actually waits on
 
-Forty-two PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
+Forty-three PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
 which the settings SET and are not measurements of anything. `bash tools/time-push-gates.sh --list`
 names them from the installed settings, and `tools/test-time-push-gates.sh` reads the same list from
 `payload/settings.hooks.json` and fails until this sentence carries its count and its timeouts
@@ -3460,6 +3554,18 @@ before python3 starts
 2026-11-11: 0.015 to 0.047 seconds, five readings of the hook alone on a plain `git push` at load
 averages of 24 to 28, so mostly the machine; it reads every Bash call since #2763, and one that never
 names supabase leaves after reading its input, before loading anything
+
+</td></tr>
+<tr><td>
+
+`announce-label-ask.sh` (#3666)
+
+</td><td>
+
+2026-11-25: 0.004 to 0.005 seconds, five readings of the hook alone on a plain `git push` at load
+average 5 to 7; it reads every Bash call and every file edit, and one naming neither the
+`changelog/announce` label nor the record of approved wording leaves after reading its input, before
+loading anything
 
 </td></tr>
 </tbody>
@@ -6518,19 +6624,26 @@ suite that refused to run or crashed at its top writes nothing without that prov
 could not be checked or was not measured. It is not run on every full run: doing so costs about
 one full run again, and the runner already hands every suite the list.
 
-The main suite on its own, which is two suites, each half of its sections (claude-config#3594):
+The main suite on its own, which is five suites, each a part of its sections (claude-config#3594,
+#3680):
 
 ```bash
 bash tests/test-claude-sync.sh
 bash tests/test-claude-sync-part2.sh
+bash tests/test-claude-sync-part3.sh
+bash tests/test-claude-sync-part4.sh
+bash tests/test-claude-sync-part5.sh
 ```
 
-The second runs the same file with `SUITE_PART=2`, which deals the sections from the heading
-`SUITE_PART2_FROM` names to the end; the first deals the ones before it. One file keeps the
-harness, the prelude and every helper in one place, and two suites let each be budgeted and dealt
-by its own cost: on 2026-11-25 the whole file had grown to its section time budget on CI, which is
-judged per run and undivided by shards. `SECTION_ONLY` and `SECTION_UNTIL` reach any section from
-either.
+Each later part runs the same file with `SUITE_PART` set to its number, which deals the sections
+from the heading `SUITE_PARTS_FROM` names for that part up to the next part's; the first deals the
+ones before them all. The part files are one file under four names, each reading its number from
+its own name. One file keeps the harness, the prelude and every helper in one place, and separate
+suites let each be budgeted and dealt by its own cost: on 2026-11-25 the whole file had grown to
+its section time budget on CI (#3594), and then its first half read 453 seconds on a runner
+against the 600 second line every suite is held to there (#3680). The cuts were put by measured
+section time, never by count, and adding a part is a heading in `SUITE_PARTS_FROM` and a copy of
+the part file. `SECTION_ONLY` and `SECTION_UNTIL` reach any section from any part.
 
 It fans its sections out across four processes. Measured on 2026-08-21, 87 sections taking 82
 seconds that way and 243 in a single process, with no single section dominating (the slowest five

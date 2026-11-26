@@ -572,9 +572,10 @@ jobs:
           slots="$(sed -n 's/.* \([0-9][0-9]*\) slot(s) each.*/\1/p' "$log" | awk 'NR<=1')"
           case "${slots:-}" in ''|*[!0-9]*) slots=0 ;; esac
           if [ -z "$div" ]; then
-            # Only the sync suite divides its own work, and it runs in one part (#2463).
-            if ! awk -F'\t' -v p="$HOOK_TESTS_PART" '$1 == p && $2 == "tests/test-claude-sync.sh" { f = 1 } END { exit !f }' "$RUNNER_TEMP/deal.tsv"; then
-              echo "The sync suite, the one suite that divides its own work, was dealt to another part, so there was nothing here to divide."
+            # Only the sync suite divides its own work (#2463), and it is several suite files, its
+            # parts, each of which may be dealt to any of this job's parts (#3594, #3680).
+            if ! awk -F'\t' -v p="$HOOK_TESTS_PART" '$1 == p && $2 ~ /^tests\/test-claude-sync(-part[0-9]+)?\.sh$/ { f = 1 } END { exit !f }' "$RUNNER_TEMP/deal.tsv"; then
+              echo "No part of the sync suite, the one suite that divides its own work, was dealt here, so there was nothing here to divide."
               exit 0
             fi
             if [ "$slots" -le 1 ]; then
