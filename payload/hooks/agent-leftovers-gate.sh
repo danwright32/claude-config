@@ -34,6 +34,12 @@
 # WHAT IT CANNOT TELL is said, never passed over: the process table could not be read, this
 # session's shells are not recorded, or the agent's transcript could not be read. Each lets the
 # hand back through with a systemMessage (lib/hook-notice.sh), the first two once a session.
+#
+# WHILE DAN IS ASLEEP (lib/sleep.sh's sleep_active; Dan's choice on 2026-11-25, held by
+# tests/test-sleep-silence.sh) nothing is shown to him: a hand back naming nothing is still refused,
+# since the refusal goes to the agent, and every notice is spooled for the orchestrating session's
+# review in place of its systemMessage. A notice that cannot be spooled is shown anyway, since it
+# would otherwise be lost. Awake, nothing differs.
 
 set -uo pipefail
 case "${BASH_SOURCE[0]}" in */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) HOOK_DIR=. ;; esac
@@ -55,16 +61,34 @@ payload_match() { [[ $1 =~ $2 ]] && return 0; local LC_ALL=C; [[ $1 =~ $2 ]]; }
   printf '%s\n' "$1" >&2
   printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
 
+cwd=""; parent=""
+if payload_match "$payload" '"cwd"[[:space:]]*:[[:space:]]*"([^"\]*)"'; then cwd="${BASH_REMATCH[1]}"; fi
+if payload_match "$payload" '"transcript_path"[[:space:]]*:[[:space:]]*"([^"\]*)"'; then parent="${BASH_REMATCH[1]}"; fi
+say() {   # say <notice> [<what to spool>]: shown as a systemMessage awake; asleep, spooled instead
+  local text="$1" keep="${2-}" asleep=0
+  # Asked only here, when there is something to say, so the common silent stop costs nothing more.
+  . "$HOOK_DIR/lib/sleep.sh" 2>/dev/null && sleep_active && asleep=1
+  [ "$asleep" -eq 1 ] && keep="$text"
+  if [ -n "$keep" ]; then
+    if bash "$HOOK_DIR/lib/issue-spool.sh" note "${cwd:-.}" "$keep" "agent-leftovers-gate.sh" "$parent" >/dev/null 2>&1; then
+      [ "$asleep" -eq 1 ] && exit 0
+    else
+      text="$text (This could not be spooled for the orchestrating session's review, so this notice is its only copy.)"
+    fi
+  fi
+  hook_allow_notice "$text"
+}
+
 command -v python3 >/dev/null 2>&1 \
-  || hook_allow_notice "LEFTOVER PROCESS CHECK DID NOT RUN: python3 is not on PATH, so agent-leftovers-gate.sh could not tell what this agent left running (claude-config#3561)."
+  || say "LEFTOVER PROCESS CHECK DID NOT RUN: python3 is not on PATH, so agent-leftovers-gate.sh could not tell what this agent left running (claude-config#3561)."
 
 # The reader answers on stdout alone; exit 3 is a payload it could not read as a hook payload, and
 # any other failure is the reader's own.
 out="$(printf '%s' "$payload" | python3 "$HOOK_DIR/lib/agent-leftovers.py" gate 2>/dev/null)"; rc=$?
 if [ "$rc" -eq 3 ]; then
-  hook_allow_notice "LEFTOVER PROCESS CHECK DID NOT RUN: lib/agent-leftovers.py could not read this hook payload, so what this agent left running could not be told (claude-config#3561)."
+  say "LEFTOVER PROCESS CHECK DID NOT RUN: lib/agent-leftovers.py could not read this hook payload, so what this agent left running could not be told (claude-config#3561)."
 elif [ "$rc" -ne 0 ]; then
-  hook_allow_notice "LEFTOVER PROCESS CHECK DID NOT RUN: lib/agent-leftovers.py exited $rc, so what this agent left running could not be told; run python3 $HOOK_DIR/lib/agent-leftovers.py gate on a hook payload to see why (claude-config#3561)."
+  say "LEFTOVER PROCESS CHECK DID NOT RUN: lib/agent-leftovers.py exited $rc, so what this agent left running could not be told; run python3 $HOOK_DIR/lib/agent-leftovers.py gate on a hook payload to see why (claude-config#3561)."
 fi
 
 IFS=$'\x1f' read -r -d '' action text note <<< "$out" || true
@@ -75,14 +99,7 @@ case "$action" in
     printf '%s\n' "$text" >&2
     exit 2 ;;
   notice)
-    if [ -n "$note" ]; then
-      cwd=""; parent=""
-      if payload_match "$payload" '"cwd"[[:space:]]*:[[:space:]]*"([^"\]*)"'; then cwd="${BASH_REMATCH[1]}"; fi
-      if payload_match "$payload" '"transcript_path"[[:space:]]*:[[:space:]]*"([^"\]*)"'; then parent="${BASH_REMATCH[1]}"; fi
-      bash "$HOOK_DIR/lib/issue-spool.sh" note "${cwd:-.}" "$note" "agent-leftovers-gate.sh" "$parent" >/dev/null 2>&1 \
-        || text="$text (This could not be spooled for the orchestrating session's review, so this notice is its only copy.)"
-    fi
-    hook_allow_notice "$text" ;;
+    say "$text" "$note" ;;
   *)
-    hook_allow_notice "LEFTOVER PROCESS CHECK DID NOT RUN: lib/agent-leftovers.py answered in a shape agent-leftovers-gate.sh does not read, so what this agent left running could not be told (claude-config#3561)." ;;
+    say "LEFTOVER PROCESS CHECK DID NOT RUN: lib/agent-leftovers.py answered in a shape agent-leftovers-gate.sh does not read, so what this agent left running could not be told (claude-config#3561)." ;;
 esac

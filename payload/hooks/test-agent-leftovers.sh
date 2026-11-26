@@ -103,7 +103,8 @@ if event == "PreToolUse":
     p["tool_name"] = "SubagentHandback"; p["tool_input"] = {"message": report}
 print(json.dumps(p))' "$name" "$event" "$agent" "$report" "${GATE_SESSION:-$SESSION}" "$WORK")"
   OUT="$(printf '%s' "$payload" | env HOME="$WORK/home" AGENT_LEFTOVERS_ROOT="$ROOT" AGENT_LEFTOVERS_PS="${GATE_PS-$WORK/$name/ps.txt}" \
-    AGENT_LEFTOVERS_NOW="$((NOW + 600))" CLAUDE_ISSUE_SPOOL_DIR="$SPOOL" bash "$GATE" 2>"$WORK/err")"; RC=$?
+    AGENT_LEFTOVERS_NOW="$((NOW + 600))" CLAUDE_ISSUE_SPOOL_DIR="$SPOOL" \
+    CLAUDE_SLEEP_RECORD="${GATE_SLEEP-$WORK/no-sleep-record.json}" bash "$GATE" 2>"$WORK/err")"; RC=$?
   ERR="$(cat "$WORK/err")"
 }
 spooled() { cat "$SPOOL"/*.jsonl 2>/dev/null || true; }
@@ -357,6 +358,55 @@ chmod 000 "$WORK/big/i1.jsonl"
 gate big PreToolUse i1 "Done."
 chmod 600 "$WORK/big/i1.jsonl"
 [ -f "$GATE" ] && silent "with nothing tied to the session, an unreadable transcript is never even opened" "$OUT$ERR" || check "with nothing tied to the session, an unreadable transcript is never even opened" "no gate"
+
+echo "while Dan is asleep: a refusal still goes to the agent, and a notice is spooled, never shown"
+# Dan's choice on 2026-11-25 (tests/test-sleep-silence.sh): asleep, nothing is said to him, but what
+# an agent left is still kept for the orchestrating session's review, and a hand back naming nothing
+# is still refused. Asleep and awake are each a real sleep record judged by lib/sleep.sh's
+# sleep_active, never a stand in flag; awake is a record that is not there.
+BOOT="$(bash -c '. "$1" && sleep_boot_of "$(sysctl -n kern.boottime 2>/dev/null)"' _ "$DIR/lib/sleep.sh")"
+[ -n "$BOOT" ] || BOOT=1   # no sysctl (Linux CI): sleep.sh skips the boot check, so any boot will do
+NOW_MS="$(( $(date +%s) * 1000 ))"
+ASLEEP="$WORK/asleep-record.json"
+printf '{"v":1,"generation":"g-test","since":%s,"until":%s,"night":"2026-11-25","bootTime":%s,"report":"%s/r.md","startedBy":{"sessionId":"s0","cwd":"/"},"workers":[],"placeBefore":"home"}\n' \
+  "$((NOW_MS - 60000))" "$((NOW_MS + 3600000))" "$BOOT" "$WORK" > "$ASLEEP"
+CLAUDE_SLEEP_RECORD="$ASLEEP" bash -c '. "$1" && sleep_active' _ "$DIR/lib/sleep.sh" >/dev/null 2>&1 \
+  && check "the asleep record reads as asleep to lib/sleep.sh (the control)" ok \
+  || check "the asleep record reads as asleep to lib/sleep.sh (the control)" "sleep_active says awake, so the cases below prove nothing"
+fixture sleepy <<'EOF'
+proc 7522 1 7518 -99 sleep 241
+proc 7622 1 7618 -59 sleep 242
+proc 7722 1 7718 -29 sleep 243
+proc 7822 1 7818 -9 sleep 244
+mark sess-one 7518 -99.6
+mark sess-one 7618 -59.6
+mark sess-one 7718 -29.6
+mark sess-one 7818 -9.6
+bash z1.jsonl t1 -100 -90 python3 night-harness.py
+bash z2.jsonl t1 -60 -50 python3 day-harness.py
+bash z3.jsonl t1 -30 -20 python3 night-stop.py
+bash z4.jsonl t1 -10 -5 python3 day-stop.py
+EOF
+GATE_SLEEP="$ASLEEP" gate sleepy PreToolUse z1 "Done."; r1=$RC; e1="$ERR"
+GATE_SLEEP="$ASLEEP" gate sleepy PreToolUse z1 "Done."; r2=$RC
+GATE_SLEEP="$ASLEEP" gate sleepy PreToolUse z1 "Done."; r3=$RC
+[ "$r1/$r2/$r3" = "2/2/0" ] && check "asleep, a hand back naming nothing is still refused twice and let through on the third" ok \
+  || check "asleep, a hand back naming nothing is still refused twice and let through on the third" "$r1/$r2/$r3"
+has "and the refusal still names the process to the agent" "$e1" 'pid 7522'
+silent "asleep, the third shows Dan nothing" "$OUT$ERR"
+has "and what the agent left is still spooled for the orchestrating session's review" "$(spooled)" '7522'
+GATE_SLEEP="$ASLEEP" gate sleepy SubagentStop z3
+[ "$RC" -eq 0 ] && check "asleep, an agent's stop still goes ahead" ok || check "asleep, an agent's stop still goes ahead" "rc=$RC err=$ERR"
+silent "and shows Dan nothing" "$OUT$ERR"
+has "and what it left is spooled" "$(spooled)" '7722'
+GATE_SLEEP="$ASLEEP" GATE_SESSION="sess-night-unrecorded" gate norec PreToolUse g9 "Done."
+silent "asleep, a session whose shells are not recorded shows Dan nothing" "$OUT$ERR"
+has "and that the check could not tell is spooled instead, so it is not lost" "$(spooled)" 'agent g9 left running: this session'
+# The awake control, same fixture: what is silent asleep is said awake.
+gate sleepy PreToolUse z2 "Done."; gate sleepy PreToolUse z2 "Done."; gate sleepy PreToolUse z2 "Done."
+said "awake, the third hand back says to Dan what the agent left (the control)" "$OUT" 'pid 7622'
+gate sleepy SubagentStop z4
+said "awake, an agent's stop says what it left (the control)" "$OUT" 'pid 7822'
 
 echo "registration"
 . "$DIR/lib/settings-file.sh"

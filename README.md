@@ -2838,6 +2838,10 @@ What a session now sees:
   not recorded (it started before `bash-shell-mark.sh` was installed, so every session open at the
   install says this once and a new session does not), or the agent's transcript could not be read
   (a nested agent's is never written). The first two are said once a session.
+- While Dan is asleep (`lib/sleep.sh`'s `sleep_active`, his choice on 2026-11-25) nothing is shown
+  to him: a hand back naming nothing is still refused, since that goes to the agent, and each
+  notice is spooled for the orchestrating session's review in place of its message. One that
+  cannot be spooled is shown anyway. `tests/test-sleep-silence.sh` runs the hook asleep and awake.
 - Nothing left running is silence.
 
 What it costs, at every hand back and every agent stop: one narrow read of the process table and
