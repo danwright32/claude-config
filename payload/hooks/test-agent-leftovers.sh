@@ -450,7 +450,7 @@ for line in sys.stdin:
         texts += json.loads(line).get("findings") or []
     except (ValueError, AttributeError):
         pass
-print("ok" if os.environ["HARD"] in texts else "no spooled record holds the notice whole: %r" % texts[:6])' < <(cat "$WORK/say-spool"/*.jsonl 2>/dev/null))"
+print("ok" if os.environ["HARD"] in texts else "no spooled record holds the notice whole: %r" % texts[:6])' <<< "$(cat "$WORK/say-spool"/*.jsonl 2>/dev/null)")"
 check "and it is spooled whole for the orchestrating session's review" "$got"
 
 echo "registration"
