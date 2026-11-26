@@ -14145,6 +14145,12 @@ check "#3465 a file whose name holds a backslash is read by the check, and the s
 rm -f "$HPH/hooks/runq/back\\slash.json"
 printf '{"cwd":"%s/projects/site"}\n' "$HP_BAD" > "$HPH/hooks/runq/new
 line.json"
+# Since claude-config#3540 the send never stages a name holding a line break, so such a file reaches a
+# send only as a staged copy an older version of the tool left in the clone, which the send commits.
+# Made here by hand, as that version made it, so the check still meets one.
+mkdir -p "$HPC/payload/hooks/runq"
+cp "$HPH/hooks/runq/new
+line.json" "$HPC/payload/hooks/runq/"
 if out_hpq3="$(_hp bash "$SCRIPT" send)"; then rc_hpq3=0; else rc_hpq3=$?; fi
 dbg "send carrying a file whose name holds a newline: rc=$rc_hpq3 $out_hpq3"
 # The check prints that name across two lines, so reading its output line by line found no file and
@@ -14159,7 +14165,7 @@ out_hpq3_st="$(_hp bash "$SCRIPT" stuck)"
 check "#3499 and stuck names the same file on its one line" \
   "line_has \"\$out_hpq3_st\" 'send-refused' 'did not pass that check' 'runq/new.nline\.json:1'"
 check "#3465 and none of the three reached the shared repo" "[ \"\$(git -C '$HPB' rev-parse main)\" = '$hp_head_q' ]"
-rm -rf "$HPH/hooks/runq"
+rm -rf "$HPH/hooks/runq" "$HPC/payload/hooks/runq"
 if out_hpq4="$(_hp bash "$SCRIPT" send)"; then rc_hpq4=0; else rc_hpq4=$?; fi
 check "#3465 control: with those files gone the send goes through" "[ '$rc_hpq4' -eq 0 ]"
 # A commit the shared repo lacks is read even when the clone has no upstream set, as a commit made by
@@ -14664,6 +14670,11 @@ printf 'echo backslash\n' > "$HPH/hooks/back\\slash.sh"
 printf 'echo tab\n' > "$HPH/hooks/tab$(printf '\t')name.sh"
 printf 'echo two lines\n' > "$HPH/hooks/two
 lines.sh"
+# Since claude-config#3540 a send never stages a name holding a line break, so the only staged copy
+# of one a clone can hold is a copy an older version of the tool left there. Made here by hand, as
+# that version made it, so the set aside still meets one.
+printf 'echo two lines\n' > "$HPC/payload/hooks/two
+lines.sh"
 _hp_held_kept(){   # every file held with the failing one is still in this Mac's config, as written
   grep -q 'projects/site' "$HPH/hooks/run/k.json" && grep -qx 'echo quoted' "$HPH/hooks/quo\"ted.sh" \
     && grep -qx 'echo backslash' "$HPH/hooks/back\\slash.sh" && grep -qx 'echo tab' "$HPH/hooks/tab$(printf '\t')name.sh" \
@@ -14679,9 +14690,11 @@ check "#3499 and receives what the other Mac sent, into the clone and into this 
 check "#3499 and the held files are all still in this Mac's config, whatever their names hold" "_hp_held_kept"
 hp_left14="$(git -C "$HPC" status --porcelain --untracked-files=all -- payload 2>/dev/null || true)"
 dbg "what the held sync left uncommitted in the clone: $hp_left14"
-# A name holding a line break is the one kind left in the clone, on purpose and said: the apply that
-# follows reads its lists a line at a time, and with that staged copy set aside it removed the file
-# from this Mac's config (measured here on 2026-11-23, which is why it is left).
+# A name holding a line break is the one kind left in the clone, on purpose and said: a copy set
+# aside under such a name would be reported through lists read one name to a line (claude-config#3540,
+# see set_aside_payload_edits).
+check "#3540 and no comparison in the held sync fails on a name holding a line break" \
+  "out_lacks \"\$out_hp14\" 'newline in string'"
 check "#3499 and no staged copy with a quote, a backslash or a tab in its name is left behind in the clone" \
   "out_lacks \"\$hp_left14\" 'quo|slash|tab|k\.json'"
 # Each is a whole status line, as git spells the name in quotes, so a match is that one file in the
@@ -14738,6 +14751,105 @@ check "#3499 and this Mac's own copy, and the staged one, are as they were" \
 rm -f "$HPH/hooks/quo\"ted.sh" "$HPH/hooks/back\\slash.sh" "$HPH/hooks/tab$(printf '\t')name.sh" "$HPH/hooks/two
 lines.sh" "$HPH/hooks/other.sh"
 rm -f "$HPH"/hooks/*.conflict-* 2>/dev/null || true
+# THIS MAC'S UNSENT FILE WHOSE NAME HOLDS A LINE BREAK, THROUGH AN APPLY (claude-config#3540). The
+# apply holds back this Mac's unsent files by reading rsync's itemized lines, and rsync prints a line
+# break in a name as \#012, so the name it printed matched no file, nothing was held back, and the
+# mirror's --delete removed the file. A plain pull did it, with no refused send before it. Such a
+# name is now never carried: never staged, never sent, never received, and never removed or replaced
+# on this Mac, and every run that meets one says so, the character written as an escape. Every odd
+# name is written here as an escape, and held in a variable the checks expand, so a failure prints
+# on one line (test-fail-margin.sh).
+LBB="$WORK/linebreak-bare.git"; git init -q --bare -b main "$LBB"
+LBC="$WORK/linebreak-clone"; git clone -q "$LBB" "$LBC" 2>/dev/null
+LBH="$WORK/linebreak-home"; mkdir -p "$LBH/hooks"; echo '{"hooks":{}}' > "$LBH/settings.json"
+printf 'echo base\n' > "$LBH/hooks/base.sh"
+LBO="$WORK/linebreak-other"
+_lb(){ env HOME="$HPE" HOOK_TESTS_RUNNING=1 SYNC_LOG_FILE="$WORK/linebreak-sync.log" SYNC_NO_HOOK_TESTS=1 SYNC_NO_SEND_TESTS=1 SYNC_NO_NOTIFY=1 SYNC_HOSTNAME=lbmac CLAUDE_HOME="$LBH" SYNC_REPO="$LBC" "$@" 2>&1; }
+_lb_other_sends(){   # $1 = a name under payload/hooks  $2 = its one line: the other Mac sends it
+  [ -d "$LBO" ] || git clone -q "$LBB" "$LBO" 2>/dev/null
+  git -C "$LBO" pull -q origin main 2>/dev/null
+  printf '%s\n' "$2" > "$LBO/payload/hooks/$1"
+  git -C "$LBO" add payload/hooks
+  git -C "$LBO" -c user.email=t@example.com -c user.name=t commit -q -m "the other Mac sends a hook"
+  git -C "$LBO" push -q origin HEAD:main
+}
+_lb bash "$SCRIPT" sync >/dev/null || true
+check "#3540 control: the line break fixture's first sync sends" "git -C '$LBB' rev-parse -q --verify main >/dev/null"
+lb_nl=$'two\nlines.sh'; lb_cr=$'car\rret.sh'; lb_ctl=$'bell\007.sh'
+lb_tab=$'tab\tname.sh'; lb_dash='-dash.sh'; lb_trail='trail.sh '; lb_bs='back\slash.sh'
+printf 'echo two lines\n' > "$LBH/hooks/$lb_nl"
+printf 'echo cr\n' > "$LBH/hooks/$lb_cr"
+printf 'echo bell\n' > "$LBH/hooks/$lb_ctl"
+printf 'echo tab\n' > "$LBH/hooks/$lb_tab"
+printf 'echo dash\n' > "$LBH/hooks/$lb_dash"
+printf 'echo trail\n' > "$LBH/hooks/$lb_trail"
+printf 'echo backslash\n' > "$LBH/hooks/$lb_bs"
+printf 'echo plain\n' > "$LBH/hooks/plain.sh"
+_lb_other_sends other1.sh 'echo from the other Mac'
+if out_lb1="$(_lb bash "$SCRIPT" pull)"; then rc_lb1=0; else rc_lb1=$?; fi
+dbg "plain pull over unsent files with awkward names: rc=$rc_lb1 $out_lb1"
+check "#3540 control: a plain pull receives, and keeps an unsent file with an ordinary name" \
+  "[ '$rc_lb1' -eq 0 ] && grep -qx 'echo from the other Mac' '$LBH/hooks/other1.sh' && grep -qx 'echo plain' '$LBH/hooks/plain.sh'"
+check "#3540 a plain pull keeps this Mac's unsent file whose name holds a line break" \
+  "grep -qx 'echo two lines' \"$LBH/hooks/\$lb_nl\""
+check "#3540 and one whose name holds a carriage return or another control character" \
+  "grep -qx 'echo cr' \"$LBH/hooks/\$lb_cr\" && grep -qx 'echo bell' \"$LBH/hooks/\$lb_ctl\""
+check "#3540 and says they are not carried, naming each on one line with the character written as an escape" \
+  "line_has \"\$out_lb1\" 'NOT carried' 'left exactly where' 'hooks/two.nlines\.sh' 'hooks/car.rret\.sh' 'hooks/bell.007\.sh' 'Rename each'"
+check "#3540 control: names with a tab, a leading dash, a trailing space or a backslash are kept, and held back as unsent edits" \
+  "grep -qx 'echo tab' \"$LBH/hooks/\$lb_tab\" && grep -qx 'echo dash' \"$LBH/hooks/\$lb_dash\" && grep -qx 'echo trail' \"$LBH/hooks/\$lb_trail\" && grep -qx 'echo backslash' \"$LBH/hooks/\$lb_bs\" && line_has \"\$out_lb1\" 'left them alone' 'hooks/-dash\.sh' 'hooks/back.slash\.sh'"
+check "#3540 and none of those four is named as not carried" \
+  "! printf '%s\n' \"\$out_lb1\" | grep 'NOT carried' | grep -qE 'hooks/(tab|-dash|trail|back)'"
+# The issue's own sequence: a refused send leaves its staged copies in the clone, and they are set
+# aside before an apply, as a held sync sets them aside. A name the sync does not carry was never
+# staged, so this Mac's copy is the only one, and the apply that follows still keeps it.
+mkdir -p "$LBH/hooks/run"; printf '{"cwd":"%s/projects/site"}\n' "$HP_BAD" > "$LBH/hooks/run/k.json"
+if out_lb2="$(_lb bash "$SCRIPT" send)"; then rc_lb2=0; else rc_lb2=$?; fi
+dbg "send held by the home path check: rc=$rc_lb2 $out_lb2"
+lb_left2="$(git -C "$LBC" status --porcelain --untracked-files=all -- payload 2>/dev/null || true)"
+dbg "what the held send staged: $lb_left2"
+check "#3540 control: the send is held, and leaves the files it staged in the clone" \
+  "[ '$rc_lb2' -ne 0 ] && grep -qE '^\?\? payload/hooks/plain\.sh$' <<< \"\$lb_left2\""
+check "#3540 and the send never staged a name holding a line break" \
+  "[ ! -e \"$LBC/payload/hooks/\$lb_nl\" ]"
+git -C "$LBC" checkout -q HEAD -- payload 2>/dev/null || true
+git -C "$LBC" clean -q -f -- payload 2>/dev/null || true
+rm -rf "$LBH/hooks/run"
+_lb_other_sends other2.sh 'echo from the other Mac again'
+if out_lb3="$(_lb bash "$SCRIPT" pull)"; then rc_lb3=0; else rc_lb3=$?; fi
+dbg "pull after the staged copies were set aside: rc=$rc_lb3 $out_lb3"
+check "#3540 with the staged copies set aside after a held send, the pull still keeps it" \
+  "[ '$rc_lb3' -eq 0 ] && grep -qx 'echo from the other Mac again' '$LBH/hooks/other2.sh' && grep -qx 'echo two lines' \"$LBH/hooks/\$lb_nl\""
+check "#3540 and no comparison fails on its name" "out_lacks \"\$out_lb3\" 'newline in string'"
+# A send that goes out carries everything else and never the name it cannot carry.
+if out_lb4="$(_lb bash "$SCRIPT" sync)"; then rc_lb4=0; else rc_lb4=$?; fi
+dbg "a sync that sends: rc=$rc_lb4 $out_lb4"
+lb_tree4="$(git -C "$LBB" ls-tree -r --name-only main -- payload/hooks 2>/dev/null || true)"
+check "#3540 a sync sends the ordinary files and never the one whose name holds a line break" \
+  "[ '$rc_lb4' -eq 0 ] && grep -qx 'payload/hooks/plain\.sh' <<< \"\$lb_tree4\" && ! grep -q 'lines\.sh' <<< \"\$lb_tree4\""
+check "#3540 and it is still on this Mac afterwards" "grep -qx 'echo two lines' \"$LBH/hooks/\$lb_nl\""
+# A copy the shared repo holds under such a name, put there by an older version, is never received,
+# so it can neither replace this Mac's copy nor be removed again by the next apply, and it is said.
+lb_in=$'in\ncoming.sh'
+_lb_other_sends "$lb_in" 'echo from an older version'
+if out_lb5="$(_lb bash "$SCRIPT" pull)"; then rc_lb5=0; else rc_lb5=$?; fi
+dbg "pull with such a name arriving: rc=$rc_lb5 $out_lb5"
+check "#3540 a name the shared repo holds with a line break in it is not received, and the pull says so" \
+  "[ '$rc_lb5' -eq 0 ] && [ ! -e \"$LBH/hooks/\$lb_in\" ] && line_has \"\$out_lb5\" 'NOT received' 'hooks/in.ncoming\.sh'"
+# The comparison that decides whether a set aside copy still holds anything, given a live file whose
+# name holds a backslash (claude-config#3540). It took that name as awk -v, which reads a backslash as
+# an escape (and refuses a line break outright, "newline in string"), so it read no live file and
+# counted every line of the copy as only there. A copy that is the live file re-wrapped holds nothing.
+lb_bsw='wrap\name.md'
+mkdir -p "$LBH/agents"; printf 'the same words wrapped again\n' > "$LBH/agents/$lb_bsw"
+printf 'the same words\nwrapped again\n' > "$LBH/agents/$lb_bsw.conflict-lbmac"
+out_lb6="$(_lb bash "$SCRIPT" status)"
+dbg "status with uncarried names and a re-wrapped conflict copy: $out_lb6"
+check "#3540 status names both, under its own heading" \
+  "line_has \"\$out_lb6\" 'never sent and never removed' 'hooks/two.nlines\.sh' && line_has \"\$out_lb6\" 'never received' 'hooks/in.ncoming\.sh'"
+check "#3540 a conflict copy beside a live file whose name holds a backslash is compared with that file" \
+  "line_has \"\$out_lb6\" 'wrap.name\.md\.conflict-lbmac' 'nothing in it is missing from the live file' && out_lacks \"\$out_lb6\" 'wrap.name\.md\.conflict-lbmac.*STILL only here'"
+rm -f "$LBH/agents/$lb_bsw" "$LBH/agents/$lb_bsw.conflict-lbmac"
 rm -rf "$HPH/hooks/run"
 # A check that could not run judged nothing, so the send is refused and says so, never passed
 # (L98): a copy of the tool with no check beside it, without git, where every file is being sent.
