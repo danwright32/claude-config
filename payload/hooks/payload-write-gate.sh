@@ -29,6 +29,13 @@
 # session editing the clone the watcher itself runs from is editing the source of the mirror and is
 # not at risk, and neither is one holding the watcher off.
 #
+# A watcher it could NOT READ counts as one that may be live (claude-config#3547): the pid file
+# names a process that is running, or that the shell may not even test, and ps could not say what
+# it is. That is refused in its own words, which
+# name the command that failed, and the clone the watcher runs from cannot be told apart then, so
+# only a hold, an own worktree and a plain copy are let through. No watcher is a settled answer: no
+# pid file, or one naming a process that is not running or is something else.
+#
 # The hold has to be the WRITING session's own, or one taken from a terminal, which records no
 # session and covers anyone (claude-config#1886). Any session's hold used to do: session B wrote on
 # session A's hold, and B's half written files were sent the moment A released. The refusal then
@@ -45,6 +52,12 @@
 # is its own checkout, one inside another work tree, and one git cannot answer for are refused as
 # before (lib/sync-clone.sh, sc_is_plain_copy). A call this gate cannot READ is refused there too:
 # where it writes is unknown, so the copy it was made from decides nothing.
+#
+# A destination is judged by its text AND by where it really is (claude-config#3537): the kernel is
+# asked for the real path of each one, which sees through a path by disk and file number, a link
+# that lives outside payload/ and another letter case of the folder name. A real path that cannot
+# be read, and a file with more than one name, are refused in their own words, never let through.
+# Making a link is a write, by ln, by the link command or by an inline script.
 #
 # The questions come from lib/sync-clone.sh, shared with the warning hook, so the two cannot come
 # to two different answers about whether a hold is in force (L370).
@@ -97,7 +110,7 @@ MSG
   exit 2
 }
 # shellcheck source=lib/sync-clone.sh
-{ . "$HOOK_DIR/lib/sync-clone.sh" 2>/dev/null && declare -F sc_hold_covers >/dev/null; } || unloaded sync-clone.sh
+{ . "$HOOK_DIR/lib/sync-clone.sh" 2>/dev/null && declare -F sc_hold_covers >/dev/null && declare -F sc_watcher_possible >/dev/null; } || unloaded sync-clone.sh
 # shellcheck source=lib/push-scope.sh
 { . "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null && declare -F ps_parse_payload >/dev/null; } || unloaded push-scope.sh
 # Taken raw above, for the refusal a missing library gives, and cleaned now, before anything parses
@@ -130,6 +143,56 @@ others_note(){   # $1 = where the command is in this message
 "
 }
 
+# A WATCHER THIS GATE COULD NOT READ IS NOT ONE THAT IS ABSENT (claude-config#3547, L10).
+#
+# Whether a watch daemon is live, and which clone it runs from, is read from the process itself with
+# ps, in lib/sync-clone.sh. That reading's failure was discarded, so a ps that could not run (refused
+# by a wrapper, missing from PATH) gave an empty answer, every question below read it as no watcher,
+# and the write was allowed with nothing said. Found on 2026-11-24, when five cases of
+# test-gates-fail-closed.sh about this gate passed a call through under a wrapper that forbade ps.
+#
+# So every place below asks sc_watcher_possible, which says no only when it is SETTLED that none is
+# running. For a watcher that could not be read, the pass for the clone it runs from is not given,
+# since that is read from the same command line (sc_is_this_clone is handed an empty one, which
+# matches no clone). The passes that do not depend on the watcher stand: a linked worktree on its
+# own branch, a plain copy, and a hold of this session's, which is read from its own record and is
+# the way on that the refusal names (L111).
+#
+# The refusal is its own message, never the live watcher's with a word changed, because a message
+# may claim only what its check measured (L11) and nothing here saw a watcher. It reads the state
+# sc_watcher_possible left, so it is called straight after the reading that refused, with no other
+# reading between them.
+watcher_seen(){ [ "${SC_WATCHER_STATE:-}" = live ]; }
+# The words a refusal of a call it could not read carries about the watcher, in place of @WATCHER@.
+WATCHER_SEEN_CLAUSE="a watch daemon is live on this Mac running from another clone"
+WATCHER_UNREAD_CLAUSE="whether a watch daemon is live on this Mac could not be read either"
+refuse_watcher_unread(){   # $1 = what is refused, as the first line names it; $2 = a paragraph about the call itself, or nothing
+  local about=""
+  [ -z "${2:-}" ] || about="$2
+
+"
+  others_note "the second way below"
+  cat >&2 <<MSG
+claude-sync: REFUSED $1: this gate could not read whether a watch daemon is live on this Mac.
+
+${about}$(sc_watcher_unread_sentence) A watcher this gate cannot read is not one it can rule out, so the write is refused rather than allowed (claude-config#3547). A live one mirrors ~/.claude up over payload/ and pushes, so an edit made to payload/ in a development checkout is not merged with the config, it is overwritten by it, silently and with no conflict to notice. On 2026-09-03 that reverted 84 files of a day's work in one commit. Which clone a watcher runs from is read the same way, so the clone it runs from is refused with every other until this can be read.
+
+${OTHERS_NOTE}Three ways on, and the first needs nothing:
+
+  1. Edit ~/.claude directly. That is the copy the daemon mirrors FROM, so nothing can revert it.
+  2. Take a hold first, then edit here. A hold is read from its own record, so it counts while the watcher cannot be read:
+
+     claude-sync hold 120 "why you are editing the checkout"
+
+  3. See why it could not be read. Run this in a terminal and fix what it reports:
+
+     $SC_WATCHER_PROBE
+
+A hold expires. When it does, make ~/.claude match what is in the checkout, or a live watcher's next send reverts it.
+MSG
+  exit 2
+}
+
 # THE READER THIS GATE SEES THE TOOL CALL THROUGH, asked before its answer is believed
 # (claude-config#480, L490).
 #
@@ -150,7 +213,9 @@ others_note(){   # $1 = where the command is in this message
 # #1900): before it read its stdin in text mode, a byte that is not UTF-8 anywhere in the payload
 # raised, the tool name came back as a dash, and the write was allowed. The readers now decode as jq
 # does, so that byte is read, and whatever is left that they cannot read is refused here, never
-# allowed (L1033). $1 is the paragraph saying why the call could not be read.
+# allowed (L1033). $1 is the paragraph saying why the call could not be read, with @WATCHER@ where
+# it speaks of the watcher: which words go there is known only once the watcher has been read, a
+# live one seen or one that could not be read either (claude-config#3547).
 refuse_unread(){
   case "$payload" in *SKIP_PAYLOAD_WRITE_CHECK=1*) exit 0 ;; esac
   # After a call there is nothing left to refuse, and the check made then needs the note this
@@ -158,18 +223,18 @@ refuse_unread(){
   after_call && exit 0
   case "$payload" in *payload/*) ;; *) exit 0 ;; esac
   unreadable_root="$(sc_clone_root_of "$PWD" 2>/dev/null || true)"
-  unreadable_watcher="$(sc_watcher_cmd || true)"
-  [ -n "$unreadable_watcher" ] || exit 0
+  sc_watcher_possible || exit 0
   if [ -n "$unreadable_root" ]; then
-    sc_is_this_clone "$unreadable_root" "$unreadable_watcher" && exit 0
+    sc_is_this_clone "$unreadable_root" "$SC_WATCHER_CMD" && exit 0
     sc_is_own_worktree "$unreadable_root" && exit 0
   fi
   sc_hold_covers "$sid" && exit 0
+  watcher_seen || refuse_watcher_unread "a write that may be under a development checkout's payload/" "${1//@WATCHER@/$WATCHER_UNREAD_CLAUSE}"
   others_note "the second way below"
   cat >&2 <<MSG
 claude-sync: REFUSED a write that may be under a development checkout's payload/.
 
-$1
+${1//@WATCHER@/$WATCHER_SEEN_CLAUSE}
 
 ${OTHERS_NOTE}A watch daemon mirrors ~/.claude up over payload/ and pushes, so an edit made to payload/ in a development checkout is not merged with the config, it is overwritten by it, silently and with no conflict to notice. On 2026-09-03 it reverted 84 files of a day's work in one commit.
 
@@ -183,9 +248,9 @@ MSG
   exit 2
 }
 if ps_reader_missing python3; then
-  refuse_unread "$(ps_reader_absent_why "python3 is not on PATH" "payload-write-gate.sh reads which tool is being called and which files it would write with it, so with python3 absent it cannot tell a write under payload/ from any other write, and a watch daemon is live on this Mac running from another clone." "python3")"
+  refuse_unread "$(ps_reader_absent_why "python3 is not on PATH" "payload-write-gate.sh reads which tool is being called and which files it would write with it, so with python3 absent it cannot tell a write under payload/ from any other write, and @WATCHER@." "python3")"
 fi
-UNREAD="payload-write-gate.sh could not read this tool call: the hook payload could not be read as JSON, so which tool is being called and which files it would write are unknown, and a watch daemon is live on this Mac running from another clone. A payload this gate cannot read is not one with nothing in it, so the call is refused rather than allowed (claude-config#1900)."
+UNREAD="payload-write-gate.sh could not read this tool call: the hook payload could not be read as JSON, so which tool is being called and which files it would write are unknown, and @WATCHER@. A payload this gate cannot read is not one with nothing in it, so the call is refused rather than allowed (claude-config#1900)."
 
 # Read as jq reads it: a byte that is not UTF-8 becomes U+FFFD rather than raising, on the way in
 # and on the way out (claude-config#1900).
@@ -323,10 +388,25 @@ MSG
   }
   [ -n "$changed" ] || say_lost 0
   # Protected since it ran: a hold of this session's own taken meanwhile, or the watcher gone, is
-  # what makes it safe now. Another session's hold is not (claude-config#1886).
-  wcmd="$(sc_watcher_cmd || true)"
-  [ -n "$wcmd" ] || say_lost 0
+  # what makes it safe now. Another session's hold is not (claude-config#1886), and nor is a
+  # watcher that could not be read just now, which is not one that has gone (claude-config#3547).
+  # What the report says of the watcher is settled here, straight after the reading, so it claims a
+  # live one only when one was seen (L11).
+  sc_watcher_possible || say_lost 0
   sc_hold_covers "$sid" && say_lost 0
+  if watcher_seen; then
+    post_state="with a watch daemon live from another clone and no hold of this session's in force"
+    post_daemon="The daemon mirrors ~/.claude up over payload/ and pushes, so these edits can be reverted silently, as 84 files were on 2026-09-03."
+    post_probe=""
+  else
+    post_state="with no hold of this session's in force, and this gate could not read whether a watch daemon is live on this Mac"
+    post_daemon="$(sc_watcher_unread_sentence) A live one mirrors ~/.claude up over payload/ and pushes, so these edits can be reverted silently, as 84 files were on 2026-09-03."
+    post_probe="
+
+To see why the watcher could not be read, run this in a terminal and fix what it reports:
+
+     $SC_WATCHER_PROBE"
+  fi
   # Left out: a file that already matches the installed config, which the daemon mirrors FROM, so
   # it has nothing to revert there (claude-config#1211). On 2026-10-15 a fast forward pull of the
   # checkout right after the same commit was installed listed 27 files, every one identical to its
@@ -365,15 +445,15 @@ LOOP_INPUT
   $matched more already matched the installed config at $installed, so the daemon has nothing to revert there, and are left out."
   others_note "the command below"
   cat >&2 <<MSG
-claude-sync: $n file(s) changed under a development checkout's payload/ while that command ran, with a watch daemon live from another clone and no hold of this session's in force. What was measured is what changed while it ran, so another session or a parallel command writing there at the same moment would show here too:
+claude-sync: $n file(s) changed under a development checkout's payload/ while that command ran, $post_state. What was measured is what changed while it ran, so another session or a parallel command writing there at the same moment would show here too:
 
 $shown
 
-${OTHERS_NOTE}Nothing in the command's words showed those writes, so they could not be refused before it ran. The daemon mirrors ~/.claude up over payload/ and pushes, so these edits can be reverted silently, as 84 files were on 2026-09-03. Protect them now, before anything else:
+${OTHERS_NOTE}Nothing in the command's words showed those writes, so they could not be refused before it ran. $post_daemon Protect them now, before anything else:
 
      claude-sync hold 120 "why you are editing the checkout"
 
-Then make ~/.claude match the checkout before the hold expires, or the next send reverts them.
+Then make ~/.claude match the checkout before the hold expires, or the next send reverts them.$post_probe
 MSG
   say_lost 2
 fi
@@ -412,7 +492,8 @@ for v in seen:
     # message can get past it for one command.
     case "$cmd" in *SKIP_PAYLOAD_WRITE_CHECK=1*) exit 0 ;; esac
     # Nothing can revert anything with no watcher, so none of the reading below is paid for then.
-    [ -n "$(sc_watcher_cmd || true)" ] || exit 0
+    # Only when that is settled: a watcher that could not be read is read on (claude-config#3547).
+    sc_watcher_possible || exit 0
     # Only the paths in a WRITE POSITION, never every payload path in a command that happens to
     # contain a redirect somewhere. The command cat payload/x 2>/dev/null holds both and writes nothing, and
     # reading is the overwhelming majority of what a session does in a checkout: a gate that refused
@@ -484,7 +565,9 @@ def resolve(tok, base):
         return p
     # A value only the shell knows. Counted only when its words name payload, as before, and then
     # judged as the payload write it may be, marked with a leading ? (claude-config#2128).
-    return "?" + p if re.search(r"(^|/)payload(/|$)", p) else None
+    # In any letter case: on a volume that does not tell case apart, PAYLOAD is the same folder
+    # (claude-config#3537).
+    return "?" + p if re.search(r"(^|/)payload(/|$)", p, re.I) else None
 
 def move(dest, base):
     """Where a cd to dest leaves the commands after it: a path, or the words behind UNKNOWN."""
@@ -495,10 +578,44 @@ def move(dest, base):
         return base
     return p if known else UNKNOWN + p.lstrip(UNKNOWN)
 
+def unfolded(tok, base):
+    """tok from base with its .. steps kept, when it has any and its place is known, or None. The
+    reading above folds a/b/.. into a by its words; where b is a link to a folder elsewhere the
+    system climbs out of THAT folder, so the path is also judged as written (claude-config#3537)."""
+    if ".." not in re.split(r"/+", tok.strip().strip("\"\x27")):
+        return None
+    p, known = place(tok, base)
+    if not p or not known:
+        return None
+    raw = tok.strip().strip("\"\x27")
+    if raw.startswith("~"):
+        raw = os.path.expanduser(raw)
+    if HOME:
+        raw = re.sub(r"\$(?:HOME|\{HOME\})(?![A-Za-z0-9_])", lambda m: HOME, raw)
+    raw = re.sub(r"\$(?:PWD|\{PWD\})(?![A-Za-z0-9_])", lambda m: base, raw)
+    return raw if raw.startswith("/") else os.path.join(base, raw)
+
 def add(tok, base):
     p = resolve(tok, base)
     if p:
         targets.append(p)
+        raw = unfolded(tok, base)
+        if raw and raw != p:
+            targets.append(raw)
+
+# A quoted word in a script that writes, which may be a path and does not name payload: judged
+# only by where it REALLY is, never by its words, so a link into payload or a file named by disk
+# and file number is still seen (claude-config#3537). Behind this mark the step after this reading
+# asks where it really is and drops it unless that is under a payload folder, cannot be read, or is
+# a file with more than one name: the script may be writing there, as a quoted payload path is
+# taken for a write. Text that only looks like a path ("text/plain", a web address) names nothing,
+# which is an answer, so it refuses nothing.
+MAYBE = "\x03"
+def add_maybe(tok, base):
+    p, known = place(tok, base)
+    if p and known:
+        raw = unfolded(tok, base)
+        targets.append(MAYBE + (raw or p))
 
 # Every line is read as shell, a heredoc body line included (Dan, 2026-11-02, "Also read heredoc
 # text", claude-config#2080). A body is data the shell never runs, so the text a > b in one can be refused
@@ -714,7 +831,7 @@ except Exception:
 # Commands whose arguments ARE what they write. Scanned per segment, in order, so a read in one
 # segment is not blamed on a write in the next, and a cd moves where the rest resolve.
 WRITERS = ("tee", "cp", "mv", "rm", "touch", "mkdir", "patch", "install", "rsync", "truncate",
-           "ln", "ditto", "unlink", "rmdir")
+           "ln", "link", "ditto", "unlink", "rmdir")
 base = cwd
 CD_TO = object()  # marks a segment that is a directory the commands after it run in
 segments = re.split(r"&&|\|\||;|\||\n", shell_text)
@@ -748,7 +865,7 @@ except Exception:
         for m in re.finditer(r"(?:^|[\s;&|(])(?:cd|pushd)\s+([^\s;&|<>()]+)", cmd):
             last = move(m.group(1), last)
             bases += [move(m.group(1), cwd), last]
-        for m in re.finditer(r"[^\s\"\x27;&|<>()]*payload/[^\s\"\x27;&|<>()]*", cmd):
+        for m in re.finditer(r"[^\s\"\x27;&|<>()]*(?i:payload)/[^\s\"\x27;&|<>()]*", cmd):
             for b in bases:
                 add(m.group(0), b)
 # An inline script that can write, and names a payload path. Most of this repo own payload edits
@@ -758,8 +875,28 @@ WRITE_CALLS = (r"open\([^)]*,\s*[\"\x27][^\"\x27]*[wax+]", r"\.write_(text|bytes
                r"shutil\.(copy|copy2|copyfile|copytree|move|rmtree)\(",
                r"os\.(replace|rename|remove|unlink|makedirs|mkdir|rmdir)\(", r"\.unlink\(",
                r"\.rename\(", r"\.touch\(", r"writeFileSync|appendFileSync|File\.write")
+# MAKING A LINK IS A WRITE (claude-config#3537). A hard link or a symbolic link is a second name
+# for a payload file, and a write through that name names no payload folder. So the call that makes
+# one is refused where its script names a payload path, as ln is among the commands below: os.link,
+# os.symlink, a path object linking to or from another, the Sync forms node has, File and FileUtils
+# in ruby, link and symlink called bare as perl and php call them, with or without brackets, and a
+# script that runs ln itself. Never readlink or unlink, which hold the same letters: the first
+# reads, and the second is in the list above.
+WRITE_CALLS += (r"\.(?:sym|hard)?link(?:Sync|_to)?\(",
+                r"(?<![A-Za-z0-9_.])(?:sym)?link(?:Sync)?\(",
+                r"File\.(?:sym)?link\b|FileUtils\.(?:ln|link|symlink)",
+                r"(?:^|[\s;&|(])(?:perl|ruby|php)\b[^\n]*?(?<![A-Za-z0-9_.])(?:sym)?link\s+[\"\x27$@]",
+                r"[\[(,]\s*[\"\x27]ln[\"\x27]\s*[,\])]")
+# A script that runs ln as one string (os.system, subprocess, perl and ruby system, with or
+# without brackets): the words of that string are what ln is given, so each is judged as a
+# destination below, as the arguments of ln itself are. Only after a call that runs a command,
+# never any quoted text starting with ln: a search of a payload file for those letters reads.
+LN_STRING = r"(?:system|popen|Popen|exec[a-z]*|spawn[A-Za-z]*|run|call|check_call|check_output|getoutput)\s*\(?\s*[\"\x27](ln\s[^\"\x27]*)[\"\x27]"
 WRITE_SCRIPT = any(re.search(p, shell_text) for p in WRITE_CALLS)
-SCRIPT_PATH = r"[\"\x27]([^\"\x27\s]*payload/[^\"\x27\s]*)[\"\x27]"
+# payload in any letter case: a volume that does not tell case apart opens the same folder.
+SCRIPT_PATH = r"[\"\x27]([^\"\x27\s]*(?i:payload)/[^\"\x27\s]*)[\"\x27]"
+# Any other quoted word holding a slash, or starting at the home folder: it may be a path.
+MAYBE_PATH = r"[\"\x27]((?:~|[^\"\x27\s]*/)[^\"\x27\s]*)[\"\x27]"
 # The original single line form, kept: a literal opened for writing in place.
 OPENED_PATH = r"open\(\s*([\"\x27][^\"\x27]+[\"\x27])\s*,\s*[\"\x27][wa]"
 placed = set()
@@ -775,6 +912,13 @@ for seg in segments:
     for m in (re.finditer(SCRIPT_PATH, seg) if WRITE_SCRIPT else ()):
         add(m.group(1), base)
         placed.add(m.group(1))
+    for m in (re.finditer(MAYBE_PATH, seg) if WRITE_SCRIPT else ()):
+        if m.group(1) not in placed:
+            add_maybe(m.group(1), base)
+    for m in re.finditer(LN_STRING, seg):
+        for w in m.group(1).split()[1:]:
+            if not w.startswith("-"):
+                add(w, base)
     for m in re.finditer(OPENED_PATH, seg):
         add(m.group(1), base)
         placed.add(m.group(1))
@@ -865,16 +1009,193 @@ for t in targets:
     if t not in seen:
         seen.append(t)
 print("\n".join(seen))
-' 2>/dev/null)" || refuse_unread "payload-write-gate.sh read this command and then could not work out which files it writes: the reading of where a shell command writes failed partway, and a watch daemon is live on this Mac running from another clone. A reading that failed is not one that found nothing, so the call is refused rather than allowed (claude-config#1900)."
+' 2>/dev/null)" || refuse_unread "payload-write-gate.sh read this command and then could not work out which files it writes: the reading of where a shell command writes failed partway, and @WATCHER@. A reading that failed is not one that found nothing, so the call is refused rather than allowed (claude-config#1900)."
     ;;
   *) exit 0 ;;
 esac
+
+# WHERE EACH DESTINATION REALLY IS (claude-config#3537).
+#
+# Everything below judged a destination by its text, and three kinds of text reach a payload file
+# with no part of them under payload/: the volume folder with a disk number and a file number
+# (/.vol/<disk>/<file>, which macOS resolves to the file itself), a symbolic link that lives
+# elsewhere, and a hard link, a second name for the same file. So does the folder name in another
+# letter case on a volume that does not tell case apart. Resolving the text the usual way leaves
+# the first and the last exactly as written.
+#
+# So the system is asked: the destination is opened for nothing but its path (O_EVTONLY, which
+# reads and writes nothing) and the kernel names the file it holds (fcntl F_GETPATH). That sees
+# through the numbers, every link on the way, and the letter case. A destination not made yet is
+# its nearest folder that exists, asked the same way, plus the rest; a link to a file not made yet
+# is followed by hand. On a system without that call the links are followed by the usual resolving.
+#
+# Each destination is STILL judged by its text below, exactly as before, and its real path is
+# judged as well, so this step can only add a refusal (L42). A real path is passed on only when it
+# holds a folder named payload, the one thing the judging below can refuse, so a write anywhere
+# else costs it nothing.
+#
+# Two answers are refused in their own words, while a watcher could revert the write and no hold
+# covers this session: a real path that COULD NOT BE READ (links that never end, a folder this
+# account may not look into, a numbered path it may not open), and a file with MORE THAN ONE NAME,
+# since the kernel names only one of them and where the others are cannot be read. Neither is let
+# through for want of an answer. A device, a pipe or a socket is none of these and is left to its
+# text.
+#
+# Run only when there is something to resolve: never for a command that writes nothing, nor for
+# one whose only destinations are the devices every command writes to, and never once it is
+# settled that no watcher is live.
+real_path_wanted(){
+  local line
+  while IFS= read -r line; do
+    case "$line" in
+      ""|"?"*|/dev/null|/dev/stdout|/dev/stderr|/dev/tty|/dev/fd/[0-9]*) ;;
+      *) return 0 ;;
+    esac
+  done <<WANTED
+$targets
+WANTED
+  return 1
+}
+refuse_real_step(){
+  sc_hold_covers "$sid" && return 0
+  local what="a write whose destination this gate could not read" about="payload-write-gate.sh could not read where this call's destinations really are: the step that asks the system for the real path of each one failed before it answered, so whether one of them is a file under a development checkout's payload/ by another name is unknown. A reading that failed is not one that found nothing, so the call is refused rather than allowed (claude-config#3537)."
+  watcher_seen || refuse_watcher_unread "$what" "$about"
+  others_note "the second way below"
+  cat >&2 <<MSG
+claude-sync: REFUSED $what.
+
+$about A watch daemon is live on this Mac running from another clone. It mirrors ~/.claude up over payload/ and pushes, so an edit made to a development checkout's payload/ is overwritten by it, silently.
+
+${OTHERS_NOTE}Two ways on:
+
+  1. Edit ~/.claude directly. That is the copy the daemon mirrors FROM, so nothing can revert it.
+  2. Take a hold first, then run this again:
+
+     claude-sync hold 120 "why you are editing the checkout"
+MSG
+  exit 2
+}
+if real_path_wanted && sc_watcher_possible; then
+  targets="$(printf '%s\n' "$targets" | GATE_CWD="$cwd" python3 -B -S -c '
+import errno, fcntl, os, stat, sys
+
+sys.stdout.reconfigure(errors="replace")
+cwd = os.environ.get("GATE_CWD") or os.getcwd()
+ASK =sys.platform == "darwin"
+F_GETPATH = getattr(fcntl, "F_GETPATH", 50)
+O_EVTONLY = getattr(os, "O_EVTONLY", 0x8000)
+UNREAD, NAMES, MAYBE = "\x01", "\x02", "\x03"
+
+class Unread(Exception):
+    pass
+
+def asked(p):
+    """The path the kernel gives for what p names, which exists."""
+    if not ASK:
+        return os.path.realpath(p)
+    fd = os.open(p, O_EVTONLY | os.O_NONBLOCK)
+    try:
+        return os.fsdecode(fcntl.fcntl(fd, F_GETPATH, b"\0" * 1024).split(b"\0", 1)[0])
+    finally:
+        os.close(fd)
+
+def real(p, depth=0):
+    """(the real path of p, its stat or None when nothing is there yet), or (None, None) for a
+    device, pipe or socket. Raises Unread with the reason when it cannot be read."""
+    if depth > 40:
+        raise Unread("its links never end")
+    try:
+        st = os.stat(p)
+    except (FileNotFoundError, NotADirectoryError):
+        st = None
+    except OSError as e:
+        # A name longer than any file can have names nothing, as text read for a redirect often
+        # does: that is a settled answer, and its folder is asked instead.
+        if e.errno != errno.ENAMETOOLONG:
+            raise Unread(e.strerror or "it could not be looked at")
+        st = None
+    why = None
+    if st is not None:
+        if not (stat.S_ISREG(st.st_mode) or stat.S_ISDIR(st.st_mode)):
+            return None, None
+        try:
+            return asked(p), st
+        except OSError as e:
+            why = e.strerror or "it could not be opened"
+    # Nothing there yet, or something this account may not open: its folder, plus its name.
+    p = p.rstrip("/") or "/"
+    if p == "/":
+        return "/", st
+    head, leaf = os.path.split(p)
+    try:
+        lst = os.lstat(p)
+    except (FileNotFoundError, NotADirectoryError):
+        lst = None
+    except OSError as e:
+        if e.errno != errno.ENAMETOOLONG:
+            raise Unread(e.strerror or "it could not be looked at")
+        lst = None
+    if lst is not None and stat.S_ISLNK(lst.st_mode):
+        try:
+            to = os.readlink(p)
+        except OSError as e:
+            raise Unread(e.strerror or "its link could not be read")
+        parent, _ = real(head, depth + 1)
+        if parent is None:
+            return None, None
+        return real(os.path.join(parent, to), depth + 1)
+    parent, _ = real(head, depth + 1)
+    if parent is None:
+        return None, None
+    out = os.path.normpath(os.path.join(parent, leaf))
+    # A numbered path that exists and could not be opened has no folder to go by.
+    if st is not None and (out == "/.vol" or out.startswith("/.vol/")):
+        raise Unread(why or "it could not be opened")
+    return out, st
+
+out = []
+for line in sys.stdin.buffer.read().decode("utf-8", "replace").split("\n"):
+    if not line:
+        continue
+    maybe = line.startswith(MAYBE)
+    if not maybe:
+        out.append(line)
+    if line.startswith("?") or line.startswith("/dev/"):
+        continue
+    t = line[1:] if maybe else line
+    a = t if t.startswith("/") else os.path.join(cwd, t)
+    try:
+        r, st = real(a)
+    except Unread as e:
+        # For a word that only may be a path too: a script that writes may be writing there, and
+        # a word that names nothing never ends here, since nothing being there is an answer.
+        out.append(UNREAD + a + "\t" + str(e))
+        continue
+    except Exception as e:
+        # Anything else that stops one destination being read is that destination unread, never
+        # the whole step and never an answer.
+        out.append(UNREAD + a + "\t" + (type(e).__name__ if not isinstance(e, RecursionError) else "its links never end"))
+        continue
+    if r is None:
+        continue
+    if "/payload/" in r + "/" and r != line:
+        out.append(r)
+    if st is not None and stat.S_ISREG(st.st_mode) and st.st_nlink > 1:
+        out.append(NAMES + a + "\t" + str(st.st_nlink))
+seen = []
+for t in out:
+    if t not in seen:
+        seen.append(t)
+print("\n".join(seen))
+' 2>/dev/null)" || refuse_real_step
+fi
 
 # Which clone each target is in, and whether that clone is at risk. Asked per target, because one
 # command can name paths in two checkouts.
 refuse_root=""
 refuse_path=""
 refuse_unplaced=""
+refuse_real=""
 while IFS= read -r t; do
   [ -n "$t" ] || continue
   case "$t" in
@@ -883,9 +1204,18 @@ while IFS= read -r t; do
     # while a watcher could revert it, unless this session holds the watcher off. Never let through
     # for want of a place to judge it, which is what every such path was before.
     "?"*)
-      [ -n "$(sc_watcher_cmd || true)" ] || continue
+      sc_watcher_possible || continue
       sc_hold_covers "$sid" && continue
       refuse_unplaced="${t#?}"; break ;;
+    # A destination whose real path could not be read, or a file with more than one name
+    # (claude-config#3537): where it lands is unknown, so it is refused on the same terms.
+    $'\x01'*|$'\x02'*)
+      sc_watcher_possible || continue
+      sc_hold_covers "$sid" && continue
+      refuse_real="$t"; break ;;
+    # A word that only may be a path, left unresolved because the watcher went between two
+    # readings of it: with no watcher nothing below would refuse it either.
+    $'\x03'*) continue ;;
     /*) ;;
     *)  t="$cwd/$t" ;;
   esac
@@ -900,9 +1230,10 @@ while IFS= read -r t; do
   # work and the daemon never touches it. The part of the path below that directory is kept, so a
   # target that IS payload/, or a folder in it not made yet, is still read as under payload/.
   case "$(cd "$d" 2>/dev/null && pwd -P)${t#"$d"}/" in "$root/payload/"*) ;; *) continue ;; esac
-  wcmd="$(sc_watcher_cmd || true)"
-  [ -n "$wcmd" ] || continue                       # no watcher: nothing can revert anything
-  sc_is_this_clone "$root" "$wcmd" && continue     # the watcher runs from HERE: this is its source
+  # The reading that refuses is the LAST one made: the loop leaves on the first refusal, so what
+  # the refusal below says of the watcher is this target's (claude-config#3547).
+  sc_watcher_possible || continue                  # settled that no watcher is live: nothing can revert anything
+  sc_is_this_clone "$root" "$SC_WATCHER_CMD" && continue   # a watcher seen running from HERE: this is its source
   sc_is_own_worktree "$root" && continue          # a linked worktree on its own branch (#800)
   sc_is_plain_copy "$root" && continue            # a copy with no repository around it (#2705)
   sc_hold_covers "$sid" && continue                # held off by THIS session, or a terminal (#1886)
@@ -913,21 +1244,23 @@ TARGETS
 
 # BEFORE a Bash call it let through: a note of what each at risk payload/ holds, for the check after
 # it to compare against (claude-config#647). Taken only in the state that loses work, a live watcher
-# from another clone and no hold covering this session (the same question the refusal asks, so a
+# from another clone, or one that could not be read and so has no clone passed as its source
+# (claude-config#3547), and no hold covering this session (the same question the refusal asks, so a
 # call let through on another session's hold still has its note, claude-config#1886), and only for
 # the checkouts this command could reach: the one it runs in, and any its words name. Two finds
 # over a few hundred files, never one process per file.
 note_payload_before(){
-  local wcmd roots="" dir root
+  local roots="" dir root
   [ "$tool" = "Bash" ] && [ "$use_id" != "-" ] || return 0
-  wcmd="$(sc_watcher_cmd || true)"
-  [ -n "$wcmd" ] || return 0
+  # Taken for a watcher that could not be read as for a live one, with no clone passed as its
+  # source, so the check after the call still has its note (claude-config#3547).
+  sc_watcher_possible || return 0
   sc_hold_covers "$sid" && return 0
   while IFS= read -r dir; do
     [ -n "$dir" ] || continue
     root="$(sc_clone_root_of "$dir" 2>/dev/null)" || continue
     [ -n "$root" ] || continue
-    sc_is_this_clone "$root" "$wcmd" && continue
+    sc_is_this_clone "$root" "$SC_WATCHER_CMD" && continue
     sc_is_own_worktree "$root" && continue    # nothing mirrors into it, so nothing to report (#800)
     sc_is_plain_copy "$root" && continue      # nor into a copy with no repository (#2705)
     case "
@@ -995,7 +1328,37 @@ note_worktrees_before(){
   return 0
 }
 
+if [ -n "$refuse_real" ]; then
+  real_body="${refuse_real#?}"
+  real_dest="${real_body%%$'\t'*}"
+  real_detail="${real_body#*$'\t'}"
+  case "$refuse_real" in
+    $'\x01'*)
+      real_what="a write to $real_dest: this gate could not read where it really is"
+      real_about="The system was asked for the real path of that destination and gave none ($real_detail), so whether it is a file under a development checkout's payload/ by another name (a link, or a path by disk and file number) is unknown. A destination that cannot be read is judged as the payload write it may be, never let through (claude-config#3537)." ;;
+    *)
+      real_what="a write to $real_dest, a file with more than one name"
+      real_about="That file has $real_detail names (hard links) and the system gives only the one written here, so whether another of them is under a development checkout's payload/ cannot be read. A write through one name changes the file under all of them, so it is judged as the payload write it may be, never let through (claude-config#3537)." ;;
+  esac
+  watcher_seen || refuse_watcher_unread "$real_what" "$real_about"
+  others_note "the second way below"
+  cat >&2 <<MSG
+claude-sync: REFUSED $real_what.
+
+$real_about A watch daemon is live on this Mac running from another clone. It mirrors ~/.claude up over payload/ and pushes, so an edit made to a development checkout's payload/ is overwritten by it, silently.
+
+${OTHERS_NOTE}Two ways on:
+
+  1. Edit ~/.claude directly. That is the copy the daemon mirrors FROM, so nothing can revert it.
+  2. Take a hold first, then run this again:
+
+     claude-sync hold 120 "why you are editing the checkout"
+MSG
+  exit 2
+fi
+
 if [ -n "$refuse_unplaced" ]; then
+  watcher_seen || refuse_watcher_unread "a write to $refuse_unplaced, a path only the shell can work out" "Its words name payload/, but they hold a value this gate cannot read (a variable, a command's output, or a cd to one of those), so which checkout it lands in is unknown. A path that cannot be placed is judged as the payload write it may be, never let through (claude-config#2128). Writing the path out in full lets it be judged where it really lands."
   others_note "the third way below"
   cat >&2 <<MSG
 claude-sync: REFUSED a write to $refuse_unplaced, a path only the shell can work out.
@@ -1018,6 +1381,7 @@ if [ -z "$refuse_root" ]; then
   exit 0
 fi
 
+watcher_seen || refuse_watcher_unread "a write to $refuse_path" "This is a development checkout at $refuse_root."
 others_note "the second way below"
 cat >&2 <<MSG
 claude-sync: REFUSED a write to $refuse_path.

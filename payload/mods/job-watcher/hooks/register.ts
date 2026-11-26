@@ -1,4 +1,5 @@
 import type { EngineInterface, Register } from 'claude-code'
+import { cutOwn, watchesOnly } from './mod-kit/hold.ts'
 import { errorCode, errorText } from './mod-kit/skew.ts'
 import { HOLD_MAX_MS, whileHeld } from './mod-kit/held.ts'
 import type { AgentSeen, Jobs, JobsEntry, JobWatch, WatchedJob, WatchedJobKept, WatcherNotice } from '../types/index.d.ts'
@@ -1591,7 +1592,7 @@ export const register: Register = on => {
     }
     const quietly = kept.quiet ? ' It is quiet by design, so it will not be reported for printing nothing.' : ''
     return { result: `Kept ${id} (${name}): ${clause(reason)}. It shows on the status bar by its name, state and run time, like "${name} running ${runFor(kept.at - current.startedAt)}".${quietly}`, ...(said.length ? { context: said } : {}) }
-  })
+  }).catch(($, e, next) => cutOwn('the job watcher', next))
 
   on('tool.call', async ($, e, next) => {
     if (e.tool === KEEP_CALL) return next(e)
@@ -1668,7 +1669,7 @@ export const register: Register = on => {
       noteReminded(input.tool_use_id)
     }
     return said.length ? { ...result, context: [...(result.context ?? []), ...said] } : result
-  })
+  }).catch(watchesOnly)
 
   // #1765: a dispatched agent's command that waits on a prompt nobody can answer. A worktree
   // subagent's `git commit -F /dev/stdin` raised a Claude Code permission prompt a background agent

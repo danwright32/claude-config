@@ -294,6 +294,9 @@ $rl"
 # lib/shell-words.py's heredoc_opener reads it. Read by a regex of its own, <<'E'OF and <<E"OF" ended
 # at a line E and <<END-OF at a line END, so the body ran on past bash's end and every site after it
 # went unread; and a line that is only part of the marker ended the body early, reading text as code.
+# These four shapes check that the scan reads the marker through that reader. The markers the reader
+# itself is held to, these four among them, are lib/heredoc-markers.json, which
+# test-shell-words-heredoc.sh runs against the shells and the reader (claude-config#3566).
 mk_marker() { # <file> <opener> <closing line> <line inside the body>
   {
     printf 'cat %s\n' "$2"

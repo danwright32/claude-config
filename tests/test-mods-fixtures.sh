@@ -2127,6 +2127,144 @@ for t in "$CHECK" "$SHARED" "$DEPS" "$WAITS"; do
   [ -x "$t" ] && check "${t#"$ROOT"/} is executable" ok || check "${t#"$ROOT"/} is executable" "not executable"
 done
 
+# 15. The real tree is checked in parts (#3622): one run of check-mods.sh over every mod read 490 and
+#     667 s on a runner on 2026-11-25, so each part suite hands it the names of the mods dealt to it. Named mods
+#     are checked as every mod is, and no other; the record of the build the mods last passed on is
+#     written only when one run's parts, together, passed every mod in the folder on one build.
+M15="$TMPROOT/m15"; mkmod "$M15" alpha; mkmod "$M15" beta; mkmod "$M15" gamma
+printf 'x\n' > "$M15/alpha/hooks/a.test.ts"; printf 'x\n' > "$M15/gamma/hooks/a.test.ts"
+REC15="$TMPROOT/last-passed-15/mods-last-passed.tsv"
+runpart(){   # env words, then --, then check-mods.sh's arguments -> sets out and code, record in REC15
+  local e=()
+  while [ "$#" -gt 0 ] && [ "$1" != -- ]; do e+=("$1"); shift; done
+  shift
+  : > "$LOG"
+  out="$(env CHECK_MODS_LAST_PASSED="$REC15" STUB_LOG="$LOG" CLAUDE_BIN="$FAKE" TSC_BIN="$TSC_PASS" ${e[@]+"${e[@]}"} bash "$CHECK" "$@" 2>&1)"; code=$?
+}
+rec15(){ cut -f1 "$REC15" 2>/dev/null; }
+runpart FAKE_CC_VERSION=2.1.400 -- "$M15" alpha gamma
+[ "$code" -eq 0 ] && grep -q "plugin validate $M15/alpha" "$LOG" && grep -q "plugin test $M15/alpha" "$LOG" \
+  && grep -q "plugin validate $M15/gamma" "$LOG" && grep -q "plugin test $M15/gamma" "$LOG" \
+  && ! grep -q "$M15/beta" "$LOG" \
+  && check "#3622 mods named after the folder are validated and tested, and no other mod is" ok \
+  || check "#3622 mods named after the folder are validated and tested, and no other mod is" "exit=$code calls: $(tr '\n' ';' < "$LOG") out=$out"
+printf '%s\n' "$out" | grep -q '^check-mods: 2 of 3 mods checked in .*: alpha, gamma$' \
+  && check "#3622 and the run says how many of the folder's mods it checked, by name" ok \
+  || check "#3622 and the run says how many of the folder's mods it checked, by name" "$out"
+[ ! -e "$REC15" ] && check "#3622 named mods passing, with no round, record nothing" ok \
+  || check "#3622 named mods passing, with no round, record nothing" "record: $(cat "$REC15" 2>&1)"
+runpart FAKE_CC_VERSION=2.1.400 -- "$M15" alpha delta
+[ "$code" -eq 2 ] && printf '%s\n' "$out" | grep -q "delta" && ! grep -q 'plugin' "$LOG" \
+  && check "#3622 a name that is not a mod in the folder is refused, exit 2, naming it, and nothing is checked" ok \
+  || check "#3622 a name that is not a mod in the folder is refused, exit 2, naming it, and nothing is checked" "exit=$code calls: $(tr '\n' ';' < "$LOG") out=$out"
+runpart FAKE_CC_VERSION=2.1.400 -- "$M15" alpha alpha
+[ "$code" -eq 2 ] && ! grep -q 'plugin' "$LOG" \
+  && check "#3622 a mod named twice is refused, exit 2" ok \
+  || check "#3622 a mod named twice is refused, exit 2" "exit=$code out=$out"
+runpart FAKE_CC_VERSION=2.1.400 CHECK_MODS_ROUND=r1 -- "$M15"
+[ "$code" -eq 2 ] && ! grep -q 'plugin' "$LOG" \
+  && check "#3622 a round given with no mods named is refused, exit 2: a whole folder records by itself" ok \
+  || check "#3622 a round given with no mods named is refused, exit 2: a whole folder records by itself" "exit=$code out=$out"
+runpart FAKE_CC_VERSION=2.1.400 CHECK_MODS_ROUND=../r1 -- "$M15" alpha
+[ "$code" -eq 2 ] && ! grep -q 'plugin' "$LOG" \
+  && check "#3622 a round whose name could leave its folder is refused, exit 2" ok \
+  || check "#3622 a round whose name could leave its folder is refused, exit 2" "exit=$code out=$out"
+# A round: the first part's pass records nothing, the last one's records the build.
+runpart FAKE_CC_VERSION=2.1.400 CHECK_MODS_ROUND=r1 -- "$M15" alpha gamma
+[ "$code" -eq 0 ] && [ ! -e "$REC15" ] \
+  && check "#3622 the first part of a round passing records nothing" ok \
+  || check "#3622 the first part of a round passing records nothing" "exit=$code record: $(cat "$REC15" 2>&1) out=$out"
+runpart FAKE_CC_VERSION=2.1.400 CHECK_MODS_ROUND=r1 -- "$M15" beta
+[ "$code" -eq 0 ] && [ "$(rec15)" = 2.1.400 ] && grep -qE '^2\.1\.400	[0-9]{4}-[0-9]{2}-[0-9]{2}$' "$REC15" \
+  && check "#3622 the part completing the round records the build, as a whole folder's pass does" ok \
+  || check "#3622 the part completing the round records the build, as a whole folder's pass does" "exit=$code record: $(cat "$REC15" 2>&1) out=$out"
+[ ! -e "$REC15.rounds/r1" ] && check "#3622 and the round is removed once it has recorded" ok \
+  || check "#3622 and the round is removed once it has recorded" "$(ls -la "$REC15.rounds/r1" 2>&1)"
+# A failing part leaves the round short, however the others pass.
+runpart FAKE_CC_VERSION=2.1.401 CHECK_MODS_ROUND=r2 -- "$M15" alpha
+M15F="$TMPROOT/m15f"; mkmod "$M15F" alpha; mkmod "$M15F" broken-beta
+runpart FAKE_CC_VERSION=2.1.401 CHECK_MODS_ROUND=r3 -- "$M15F" broken-beta
+runpart FAKE_CC_VERSION=2.1.401 CHECK_MODS_ROUND=r3 -- "$M15F" alpha
+[ "$code" -eq 0 ] && [ "$(rec15)" = 2.1.400 ] \
+  && check "#3622 a round with a failing part records nothing, though every other part passed" ok \
+  || check "#3622 a round with a failing part records nothing, though every other part passed" "exit=$code record: $(cat "$REC15" 2>&1)"
+# Parts of one round on two builds are not one pass.
+runpart FAKE_CC_VERSION=2.1.402 CHECK_MODS_ROUND=r4 -- "$M15" alpha gamma
+runpart FAKE_CC_VERSION=2.1.403 CHECK_MODS_ROUND=r4 -- "$M15" beta
+[ "$(rec15)" = 2.1.400 ] && check "#3622 a round whose parts passed on two builds records nothing" ok \
+  || check "#3622 a round whose parts passed on two builds records nothing" "record: $(cat "$REC15" 2>&1)"
+# A part killed while writing leaves a file not yet moved into place, which counts for nothing.
+mkdir -p "$REC15.rounds/r5"
+printf '2.1.404\tbeta\n' > "$REC15.rounds/r5/part.XXXXXX.tmp"
+runpart FAKE_CC_VERSION=2.1.404 CHECK_MODS_ROUND=r5 -- "$M15" alpha gamma
+[ "$code" -eq 0 ] && [ "$(rec15)" = 2.1.400 ] \
+  && check "#3622 a part killed before its file was in place counts for nothing" ok \
+  || check "#3622 a part killed before its file was in place counts for nothing" "exit=$code record: $(cat "$REC15" 2>&1)"
+# Two parts finishing at the same moment: whichever reads last sees both, so the round records. Run
+# five times, each a round of its own.
+race_bad=""
+for i in 1 2 3 4 5; do
+  rm -f "$REC15"
+  env CHECK_MODS_LAST_PASSED="$REC15" STUB_LOG="$LOG" CLAUDE_BIN="$FAKE" TSC_BIN="$TSC_PASS" FAKE_CC_VERSION=2.1.405 CHECK_MODS_ROUND="race$i" bash "$CHECK" "$M15" alpha gamma > /dev/null 2>&1 &
+  ra=$!
+  env CHECK_MODS_LAST_PASSED="$REC15" STUB_LOG="$LOG" CLAUDE_BIN="$FAKE" TSC_BIN="$TSC_PASS" FAKE_CC_VERSION=2.1.405 CHECK_MODS_ROUND="race$i" bash "$CHECK" "$M15" beta > /dev/null 2>&1 &
+  rb=$!
+  wait "$ra"; wait "$rb"
+  [ "$(rec15)" = 2.1.405 ] || race_bad="$race_bad race$i: $(cat "$REC15" 2>&1)"
+done
+[ -z "$race_bad" ] && check "#3622 two parts of a round finishing together record it, five times out of five" ok \
+  || check "#3622 two parts of a round finishing together record it, five times out of five" "$race_bad"
+# A round left by a run that never finished is removed after a day by the next part to write one.
+mkdir -p "$REC15.rounds/old"; touch -t 202001010000 "$REC15.rounds/old"
+runpart FAKE_CC_VERSION=2.1.406 CHECK_MODS_ROUND=r6 -- "$M15" alpha
+[ ! -e "$REC15.rounds/old" ] && [ -e "$REC15.rounds/r6" ] \
+  && check "#3622 a round older than a day is removed by the next part to write one, and the new one kept" ok \
+  || check "#3622 a round older than a day is removed by the next part to write one, and the new one kept" "$(ls "$REC15.rounds" 2>&1)"
+# With the record off, a round writes nothing anywhere.
+runpart FAKE_CC_VERSION=2.1.407 CHECK_MODS_ROUND=r7 CHECK_MODS_LAST_PASSED= -- "$M15" alpha gamma
+[ "$code" -eq 0 ] && [ ! -e "$REC15.rounds/r7" ] \
+  && check "#3622 with the record set empty a round writes nothing" ok \
+  || check "#3622 with the record set empty a round writes nothing" "exit=$code $(ls -a "$REC15.rounds" 2>&1)"
+
+# The deal (mods_real_deal, tests/mods-harness.sh): every mod read from disk, in exactly one part,
+# longest first to the part with least so far, a mod the seconds file does not name counting as 5.
+DEAL_T="$TMPROOT/deal-seconds.tsv"
+printf '# mod\tseconds\nalpha\t50\nbeta\t20\ngamma\t18\n' > "$DEAL_T"
+M15D="$TMPROOT/m15d"; mkmod "$M15D" alpha; mkmod "$M15D" beta; mkmod "$M15D" gamma; mkmod "$M15D" newcomer
+mkdir -p "$M15D/not-a-mod"
+deal="$(mods_real_deal 3 "$M15D" "$DEAL_T" 2>&1)"; deal_rc=$?
+want="$(printf '1\talpha\n2\tbeta\n3\tgamma\n3\tnewcomer')"
+[ "$deal_rc" -eq 0 ] && [ "$deal" = "$want" ] \
+  && check "#3622 the deal puts every mod in one part, by its seconds, a mod with none at 5" ok \
+  || check "#3622 the deal puts every mod in one part, by its seconds, a mod with none at 5" "exit=$deal_rc got: $(printf '%s' "$deal" | tr '\n\t' ';,')"
+[ "$(mods_real_deal 3 "$M15D" "$DEAL_T")" = "$deal" ] \
+  && check "#3622 and it deals the same way every time" ok || check "#3622 and it deals the same way every time" "differs"
+deal="$(mods_real_deal 3 "$M15D" "$TMPROOT/no-such-seconds.tsv" 2>&1)"; deal_rc=$?
+[ "$deal_rc" -ne 0 ] && printf '%s\n' "$deal" | grep -q 'no-such-seconds.tsv' \
+  && check "#3622 a missing seconds file is refused, naming it, rather than dealt by guess" ok \
+  || check "#3622 a missing seconds file is refused, naming it, rather than dealt by guess" "exit=$deal_rc out=$deal"
+# The real seconds file names no mod that is gone, so every figure in it is one a part pays.
+stale="$(awk -F'\t' '!/^#/ && NF >= 2 { print $1 }' "$DIR/mods-real-tree-seconds.tsv" 2>/dev/null | while IFS= read -r m; do
+    [ -f "$ROOT/payload/mods/$m/.claude-plugin/plugin.json" ] || printf '%s ' "$m"; done)"
+[ -f "$DIR/mods-real-tree-seconds.tsv" ] && [ -z "$stale" ] \
+  && check "#3622 tests/mods-real-tree-seconds.tsv names only mods in payload/mods" ok \
+  || check "#3622 tests/mods-real-tree-seconds.tsv names only mods in payload/mods" "missing or naming gone mods: ${stale:-(file missing)}"
+# A part dealt no mod says so, UNMEASURED, and never hands check-mods.sh no names, which would check
+# the whole folder as a pass of this part. mods_real_part_names (the harness) is what a real tree part
+# asks for its names, and refuses when the deal gave it none. A part of the fixture folder dealt into
+# more parts than it has mods is empty.
+ep_out="$(mods_real_part_names 5 5 "$M15D" "$DEAL_T" 2>&1)"; ep_rc=$?
+[ "$ep_rc" -ne 0 ] && [ "$ep_out" = "SUITE-PART-UNMEASURED the real mods of part 5 of 5, because the deal gave this part no mod, so it has nothing to check" ] \
+  && check "#3622 a part dealt no mod says UNMEASURED and names no mod" ok \
+  || check "#3622 a part dealt no mod says UNMEASURED and names no mod" "exit=$ep_rc out=$ep_out"
+ep_out="$(mods_real_part_names 3 3 "$M15D" "$DEAL_T" 2>&1)"; ep_rc=$?
+[ "$ep_rc" -eq 0 ] && [ "$ep_out" = "$(printf 'gamma\nnewcomer')" ] \
+  && check "#3622 and a part dealt mods names each of them" ok \
+  || check "#3622 and a part dealt mods names each of them" "exit=$ep_rc out=$ep_out"
+grep -v '^[[:space:]]*#' "$DIR/mods-real-tree.sh" 2>/dev/null | grep -q 'mods_real_part_names ' \
+  && check "#3622 the real tree part takes its names from mods_real_part_names" ok \
+  || check "#3622 the real tree part takes its names from mods_real_part_names" "not found in tests/mods-real-tree.sh"
+
 # 14. The suites tests/test-mods.sh was cut into are still the checks of one suite (#3622). A piece
 #     is known by its code sourcing tests/mods-harness.sh, never by a list kept here (L96), so a piece
 #     added later is held to all of this the day it is written.
@@ -2172,24 +2310,36 @@ done <<< "$pieces"
 [ -n "$pieces" ] && [ -z "$nh_bad" ] \
   && check "#3622 each piece refuses to run, SUITE-RESULT failed=1, when tests/mods-harness.sh is missing" ok \
   || check "#3622 each piece refuses to run, SUITE-RESULT failed=1, when tests/mods-harness.sh is missing" "${nh_bad:- no piece found}"
-# Only tests/test-mods.sh can reach the real claude (L2). The variable holding it is found there and
-# named in no other piece's code, nor the harness's, and every check-mods.sh run anywhere else names
-# its claude in CLAUDE_BIN, so none falls back to the claude on PATH. The name is built here, so this
-# check's own code does not hold it.
+# Only tests/mods-real-tree.sh, which the real tree parts source, can reach the real claude (L2). The
+# variable holding it is found there and named in no piece's code, nor the harness's, and every
+# check-mods.sh run in them names its claude in CLAUDE_BIN, so none falls back to the claude on PATH.
+# The name is built here, so this check's own code does not hold it.
 rbn="REAL""_BIN"; rb_bad=""; cb_bad=""
 while IFS= read -r p; do
   [ -n "$p" ] || continue
-  [ "$p" = "$ROOT/tests/test-mods.sh" ] && continue
   grep -v '^[[:space:]]*#' "$p" | grep -q -w "$rbn" && rb_bad="$rb_bad ${p#"$ROOT"/}"
   cb="$(grep -n -E 'bash[[:space:]]+"?(\$CHECK|\$\{CHECK\}|[^[:space:]]*check-mods\.sh)' "$p" | grep -v -E '^[0-9]+:[[:space:]]*#' | grep -v 'CLAUDE_BIN=')"
   [ -z "$cb" ] || cb_bad="$cb_bad ${p#"$ROOT"/}: $cb"
 done <<< "$(printf '%s\n%s\n' "$DIR/mods-harness.sh" "$pieces")"
+grep -v '^[[:space:]]*#' "$DIR/mods-real-tree.sh" 2>/dev/null | grep -q -w "$rbn" || rb_bad="$rb_bad (and tests/mods-real-tree.sh, its one home, does not hold it)"
 [ -n "$pieces" ] && [ -z "$rb_bad" ] \
-  && check "#3622 only tests/test-mods.sh holds the claude the real tree is checked with" ok \
-  || check "#3622 only tests/test-mods.sh holds the claude the real tree is checked with" "its name is in the code of:${rb_bad:- no piece found}"
+  && check "#3622 only tests/mods-real-tree.sh holds the claude the real tree is checked with" ok \
+  || check "#3622 only tests/mods-real-tree.sh holds the claude the real tree is checked with" "its name is in the code of:${rb_bad:- no piece found}"
 [ -n "$pieces" ] && [ -z "$cb_bad" ] \
-  && check "#3622 every check-mods.sh run outside tests/test-mods.sh names its claude in CLAUDE_BIN" ok \
-  || check "#3622 every check-mods.sh run outside tests/test-mods.sh names its claude in CLAUDE_BIN" "${cb_bad:- no piece found}"
+  && check "#3622 every check-mods.sh run in a piece or the harness names its claude in CLAUDE_BIN" ok \
+  || check "#3622 every check-mods.sh run in a piece or the harness names its claude in CLAUDE_BIN" "${cb_bad:- no piece found}"
+# The real tree parts are known by their code sourcing tests/mods-real-tree.sh, and between them they
+# are parts 1 to MODS_REAL_TREE_PARTS, each once: a part missing would leave its mods unchecked with
+# nothing red, and the round it belongs to would never record.
+real_parts="$(grep -l -E '^[[:space:]]*(\.|source)[[:space:]].*mods-real-tree\.sh' "$ROOT"/tests/test-*.sh 2>/dev/null | LC_ALL=C sort)"
+rp_n="$(sed -n 's/^MODS_REAL_TREE_PARTS=\([0-9][0-9]*\)$/\1/p' "$DIR/mods-real-tree.sh" 2>/dev/null)"
+rp_got="$(while IFS= read -r p; do [ -n "$p" ] || continue
+    sed -n 's/^[[:space:]]*mods_real_tree_part \([0-9][0-9]*\) "\$MODS_REAL_TREE_PARTS"$/\1/p' "$p"; done <<< "$real_parts" | LC_ALL=C sort -n | paste -sd' ' -)"
+rp_want="$( [ -n "$rp_n" ] && seq 1 "$rp_n" | paste -sd' ' -)"
+[ -n "$rp_n" ] && [ "$rp_got" = "$rp_want" ] && [ "$(printf '%s\n' "$real_parts" | grep -c .)" -eq "$rp_n" ] \
+  && printf '%s\n' "$real_parts" | grep -qxF "$ROOT/tests/test-mods.sh" \
+  && check "#3622 the real tree parts are parts 1 to MODS_REAL_TREE_PARTS, each in one suite, test-mods.sh among them" ok \
+  || check "#3622 the real tree parts are parts 1 to MODS_REAL_TREE_PARTS, each in one suite, test-mods.sh among them" "parts: ${rp_n:-not found}; suites: $(printf '%s\n' "$real_parts" | sed "s|^$ROOT/||" | tr '\n' ' '); parts they run: $rp_got"
 # With no claude anywhere, the real tree piece says so, UNMEASURED, and never records the mods
 # passing (L411): a machine without Claude Code must never read as one where every mod passed. Run
 # with no claude on PATH, none promised and a home with none, its records kept in this run's scratch.
@@ -2210,15 +2360,22 @@ if [ -d "$ROOT/payload/mods" ]; then
     fi
     nc_path="${nc_path:+$nc_path:}$d"
   done
-  mkdir -p "$TMPROOT/no-claude-home"; : > "$TMPROOT/no-claude-names"
-  nc_out="$(env -u MODS_CLAUDE -u CHECK_MODS_REQUIRE_CLAUDE PATH="$nc_path" HOME="$TMPROOT/no-claude-home" \
-    CHECK_MODS_FAILURE_OUTPUT="$TMPROOT/no-claude-kept" CHECK_MODS_LAST_PASSED="" MODS_HARNESS_NAMES="$TMPROOT/no-claude-names" \
-    bash "$ROOT/tests/test-mods.sh" 2>&1)"; nc_rc=$?
-  nc_other="$(grep -v -x -F "but every real mod's types were checked, with no claude" "$TMPROOT/no-claude-names")"
-  [ "$nc_rc" -eq 0 ] && printf '%s\n' "$nc_out" | grep -q "^SUITE-PART-UNMEASURED the real mods against Claude Code's own checks" \
-    && [ -z "$nc_other" ] \
-    && check "#3622 with no claude anywhere the real tree piece says UNMEASURED and never records the mods passing" ok \
-    || check "#3622 with no claude anywhere the real tree piece says UNMEASURED and never records the mods passing" "exit=$nc_rc checks recorded: $(tr '\n' ';' < "$TMPROOT/no-claude-names") out=$nc_out"
+  mkdir -p "$TMPROOT/no-claude-home"
+  nc_bad=""
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    : > "$TMPROOT/no-claude-names"
+    nc_out="$(env -u MODS_CLAUDE -u CHECK_MODS_REQUIRE_CLAUDE PATH="$nc_path" HOME="$TMPROOT/no-claude-home" \
+      CHECK_MODS_FAILURE_OUTPUT="$TMPROOT/no-claude-kept" CHECK_MODS_LAST_PASSED="" MODS_HARNESS_NAMES="$TMPROOT/no-claude-names" \
+      bash "$p" 2>&1)"; nc_rc=$?
+    nc_other="$(grep -v -x -F "but every real mod's types were checked, with no claude" "$TMPROOT/no-claude-names")"
+    { [ "$nc_rc" -eq 0 ] && printf '%s\n' "$nc_out" | grep -q "^SUITE-PART-UNMEASURED the real mods .*against Claude Code's own checks" \
+        && [ -z "$nc_other" ]; } \
+      || nc_bad="$nc_bad ${p#"$ROOT"/}: exit=$nc_rc checks recorded: $(tr '\n' ';' < "$TMPROOT/no-claude-names") out=$nc_out"
+  done <<< "$real_parts"
+  [ -n "$real_parts" ] && [ -z "$nc_bad" ] \
+    && check "#3622 with no claude anywhere each real tree part says UNMEASURED and never records the mods passing" ok \
+    || check "#3622 with no claude anywhere each real tree part says UNMEASURED and never records the mods passing" "${nc_bad:- no real tree part found}"
 fi
 
 mods_harness_result
