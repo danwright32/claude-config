@@ -116,6 +116,10 @@ on_line "quotes Dan's choice" "$fable_line" 'Narrow to what a guard decides'
 check "the Fable bullet no longer ties the model to the item whatever the change" \
   "$(grep -q -i -F 'even when it is also one of the kinds above' <<< "$fable_line" && echo "on: $fable_line" || echo ok)"
 on_line "says what the change does decides the tier, not its kind" "$fable_line" 'what the change does decides the tier'
+# A guard that posts its message to Slack fitted both this example and the Slack sentence below, so
+# Dan scoped the example to messages shown outside Slack (2026-11-26, claude-config#3757: "Add
+# 'outside Slack' to the guard line"). Rewording a guard's Slack message runs on Opus.
+on_line "keeps a guard's message on Fable only outside Slack" "$fable_line" 'the message a guard shows a person outside Slack runs on Fable'
 # The classes the sample used, fixed before it was read, so every orchestrator classes alike.
 has "defines security by who or what may act" 'who or what may act'
 has "counts secrets and private data as security" 'secrets or private data'
