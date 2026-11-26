@@ -678,6 +678,29 @@ check(c.status === 0 && c.json && c.json.found === true && c.json.hash === annou
   'the command line did not hash a file of wording as the library does: ' + JSON.stringify(c));
 c = cliIn(['announcement-hash'], ' \n\n');
 check(c.status === 0 && c.json && c.json.found === true && c.json.hash === '' && c.json.lines === 0, 'a file holding no wording was given a hash: ' + JSON.stringify(c));
+// The longest run of blank lines with wording after it (claude-config#3703). Every blank line is
+// dropped before the hash, so a file padded with a long run hashes the same as its lines written
+// together, and the answer has to say the run is there: the reader of the file Dan was shown refuses
+// one that hides wording below the first screen. Blank is isBlank's, the one the hash drops by.
+const PADDED = '@here\n**A heading**\n\nOne line.\n' + new Array(301).join('\n') + 'A line he never saw.\n';
+c = cliIn(['announcement-hash'], PADDED);
+check(c.status === 0 && c.json && c.json.hash === announcementHash('@here\n**A heading**\nOne line.\nA line he never saw.'),
+  'padding with blank lines changed the hash, which this case depends on being unchanged: ' + JSON.stringify(c));
+check(c.json && c.json.blankRun === 300 && c.json.blankRunAt === 5,
+  '#3703 a run of 300 blank lines before more wording was not reported with its length and the line it starts at: ' + JSON.stringify(c));
+c = cliIn(['announcement-hash'], '@here\n\nOne line.\n\n\nTwo.\n');
+check(c.json && c.json.blankRun === 2 && c.json.blankRunAt === 4, '#3703 the longest run was not the one reported: ' + JSON.stringify(c));
+// Blank as the hash reads it: a line holding a space, a tab or a no-break space (the third blank
+// line below, written as its escape, u00a0), each ended as GitHub ends a line.
+c = cliIn(['announcement-hash'], '@here\r\n \r\n\t\r\n \r\nOne line.\r\n');
+check(c.json && c.json.blankRun === 3 && c.json.blankRunAt === 2, '#3703 lines holding only white space, ended as GitHub ends them, were not counted as blank: ' + JSON.stringify(c));
+// Blank lines after the last line of wording hide nothing, and neither does wording with none.
+c = cliIn(['announcement-hash'], '@here\nOne line.\n\n\n\n\n\n');
+check(c.json && c.json.blankRun === 0 && c.json.blankRunAt === 0, '#3703 blank lines after the last line of wording were counted as hiding something: ' + JSON.stringify(c));
+c = cliIn(['announcement-hash'], '\n\n\n\n@here\nOne line.\n');
+check(c.json && c.json.blankRun === 4 && c.json.blankRunAt === 1, '#3703 blank lines before the first line of wording were not counted: ' + JSON.stringify(c));
+c = cliIn(['announcement-hash'], ' \n\n');
+check(c.json && c.json.blankRun === 0, '#3703 a file holding no wording was given a run of blank lines before wording: ' + JSON.stringify(c));
 // announcement-hash --body: a pull request description on standard input, hashed by its block.
 c = cliIn(['announcement-hash', '--body'], ANNOUNCE_BODY.replace(/\n/g, '\r\n'));
 check(c.status === 0 && c.json && c.json.found === true && c.json.hash === announcementHash(POST),
