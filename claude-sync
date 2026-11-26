@@ -10589,8 +10589,9 @@ report_set_aside(){   # $1 = why they were set aside, a clause
     echo "claude-sync: ${cause}. $1, so they were set aside rather than be stopped by them: $(printf '%s%s%s' "$SET_ASIDE_HELD" "$SET_ASIDE_REBUILT" "$SET_ASIDE_KEPT" | sed 's/ $//')." >&2
   fi
   if ! is_blank "$SET_ASIDE_LEFT"; then
-    # Said as what it is and with the way out (L11, L111): nothing was done to these, and renaming
-    # the file in the config is what lets a later send carry it and a later receive pass it.
+    # Said as what it is and with the way out (L11, L111): nothing was done to these. Moving the
+    # staged copy out of the clone is what lets a later receive pass it, and renaming the file in the
+    # config is what lets a later send carry it (claude-config#3540).
     echo "claude-sync: ${cause}. These were NOT set aside and are left in $SYNC_REPO as they were, because each name holds a line break or another control character (written here as \\n, \\r or a backslash and three digits), which the sync does not carry, and a copy set aside under such a name could not be reported safely: ${SET_ASIDE_LEFT% }. Nothing of them is lost, and the apply leaves this Mac's own copy of each alone. Where the shared repo changes the same file, git refuses to receive over it, and no send or receive changes such a staged copy: move it out of $SYNC_REPO, keeping anything in it this Mac's own file lacks, and rename the file in this Mac's config so its name holds no line break or control character, and the next send carries it." >&2
   fi
   if ! is_blank "$SET_ASIDE_REBUILT"; then
@@ -10719,7 +10720,8 @@ pull_from_repo_or_die(){
     [ -z "${in_both:-}" ] || rm -f "$in_both"
     if [ "${#clash_list[@]}" -gt 0 ] && [ -z "$outside" ]; then
       set_aside_payload_edits "${clash_list[@]}"
-      # Only when something was: a path whose name holds a line break is left where it is.
+      # Only when something was: a path whose name holds a line break or another character the sync
+      # does not carry is left where it is.
       is_blank "$SET_ASIDE_HELD$SET_ASIDE_REBUILT$SET_ASIDE_KEPT" || set_aside=1
       left_in_way="${SET_ASIDE_LEFT% }"
       report_set_aside "The shared repo has changed the same files, and this pull receives them"
