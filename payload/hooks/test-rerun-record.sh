@@ -15,6 +15,10 @@ set -uo pipefail
   exit 1
 }
 suite_deadline_arm || exit $?
+# The one ceiling a wait on a condition gives up at, shared by every suite (claude-config#1620).
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/hang-wait.sh" || {
+  echo "FAIL: $(basename "$0"): lib/hang-wait.sh is missing"; printf 'SUITE-RESULT passed=0 failed=1\n'; exit 1
+}
 
 DIR="${RERUN_HOOKS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 HOOK="$DIR/rerun-record.sh"
@@ -151,7 +155,10 @@ for a in "$@"; do
   esac
 done
 [ -f "$FIX/$id.sleep" ] && sleep "$(cat "$FIX/$id.sleep")"
-if [ -f "$FIX/$id.rc" ]; then echo "HTTP 404: Not Found" >&2; exit "$(cat "$FIX/$id.rc")"; fi
+if [ -f "$FIX/$id.rc" ]; then
+  if [ -f "$FIX/$id.err" ]; then cat "$FIX/$id.err" >&2; else echo "HTTP 404: Not Found" >&2; fi
+  exit "$(cat "$FIX/$id.rc")"
+fi
 cat "$FIX/$id.out"
 STUB
 chmod +x "$WORK/bin/gh"
@@ -363,6 +370,22 @@ out="$(printf '{"transcript_path":"%s","stop_hook_active":false}' "$TR" | CLAUDE
 case "$out" in *'"decision"'*"run 106"*"dropped unread after 7 days"*) e=ok ;; *) e="out=[$out]" ;; esac
 check "a review that drops a rerun speaks, inside its cooldown, and names it" "$e"
 
+# Even when the review's reason cannot be built (its helper fails), the static reason it falls back
+# to still carries the drop line, as valid JSON. A python3 stand in fails only for that helper.
+REAL_PY="$(command -v python3)"
+mkdir -p "$WORK/bin-noreason"
+printf '#!/bin/bash\ncase "$*" in *review-reason.py*) exit 1 ;; esac\nexec "%s" "$@"\n' "$REAL_PY" > "$WORK/bin-noreason/python3"
+chmod +x "$WORK/bin-noreason/python3"
+reset_spool; record_at "$T0" 106
+mkdir -p "$RDIR"
+printf '{"ts": "2026-01-01T00:00:00Z", "repo": "own/rep", "run": "111", "cwd": "%s"}\n' "$PROJ" >> "$WAIT"
+echo 1 > "$FIX/run-111.rc"
+printf '%s\n' 'could not read "own\rep"	at all' > "$FIX/run-111.err"
+out="$(printf '{"transcript_path":"%s","stop_hook_active":false}' "$TR" | PATH="$WORK/bin-noreason:$PATH" CLAUDE_RERUN_NOW="$((T0 + 8 * DAY))" CLAUDE_PROJECT_DIR="$PROJ" bash "$REVIEW" 2>/dev/null)"
+said="$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("reason",""))' 2>/dev/null)"
+case "$said" in *"run 106"*"dropped unread after 7 days"*"run 111"*"dropped unread"*|*"run 111"*"dropped unread"*"run 106"*"dropped unread after 7 days"*) e=ok ;; *) e="out=[$out]" ;; esac
+check "a review whose reason cannot be built still says each dropped rerun, as valid JSON" "$e"
+
 # The flake history keeps 90 days: an older line no longer counts and is removed.
 reset_spool; mkdir -p "$RDIR"
 NOW1=$((T0 + 200 * DAY))
@@ -373,9 +396,12 @@ check "a flake older than 90 days does not count toward a repeat" "$e"
 grep -q '"run": "50"' "$FLAKES" && e="flakes=[$(cat "$FLAKES")]" || e=ok
 check "a flake older than 90 days is removed from the history" "$e"
 grep -q '"run": "101"' "$FLAKES" && check "the new flake is kept when the old one is trimmed" ok || check "the new flake is kept when the old one is trimmed" "flakes=[$(cat "$FLAKES")]"
-ls "$RDIR" | grep -v -e '^flakes.jsonl$' -e "^$KEY.jsonl\$" -e '^flakes.jsonl.lock$' | grep -q . \
-  && check "the trim leaves no temporary file beside the history" "left: [$(ls "$RDIR")]" \
-  || check "the trim leaves no temporary file beside the history" ok
+leftover=""
+for f in "$RDIR"/*; do
+  case "${f##*/}" in flakes.jsonl|flakes.jsonl.lock|"$KEY.jsonl") ;; *) leftover="$leftover ${f##*/}" ;; esac
+done
+[ -z "$leftover" ] && check "the trim leaves no temporary file beside the history" ok \
+  || check "the trim leaves no temporary file beside the history" "left:$leftover"
 
 reset_spool; mkdir -p "$RDIR"
 flake_line "$((NOW1 - 89 * DAY))" 50 > "$FLAKES"
@@ -418,12 +444,12 @@ fcntl.flock(fh, fcntl.LOCK_EX)
 with open(sys.argv[3], "a") as f:
     f.write(sys.argv[4] + "\n")
 open(sys.argv[2], "w").close()
-deadline = time.monotonic() + 20
+deadline = time.monotonic() + float(sys.argv[6])
 while not os.path.exists(sys.argv[5]) and time.monotonic() < deadline:
     time.sleep(0.05)
-' "$FLAKES.lock" "$WORK/held" "$FLAKES" "$(flake_line "$NOW1" 77)" "$WORK/release" &
+' "$FLAKES.lock" "$WORK/held" "$FLAKES" "$(flake_line "$NOW1" 77)" "$WORK/release" "$HANG_S" &
 holder=$!
-n=0; while [ ! -f "$WORK/held" ] && [ "$n" -lt 200 ]; do sleep 0.05; n=$((n + 1)); done
+hang_wait '[ -f "$WORK/held" ]' 0.05 || check "the lock holder took the lock" "it did not within $HANG_S seconds"
 record_at "$NOW1" 101
 CLAUDE_RERUN_LOCK_WAIT=0.3 CLAUDE_RERUN_NOW="$NOW1" bash "$LIB" resolve-reruns "$PROJ" "$TR" >/dev/null 2>"$WORK/res-err"
 RES_ERR="$(cat "$WORK/res-err")"

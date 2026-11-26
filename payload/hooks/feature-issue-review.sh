@@ -457,7 +457,22 @@ else
   # names the file relatively, because the one thing this branch cannot do is work
   # out an absolute path. Nothing is settled here: this review carried no counts,
   # so it reported nothing that could be filed away.
-  cat <<'JSON'
+  #
+  # Except a hand rerun dropped this turn (#3613): its record is already gone, so its line is added
+  # inside the reason here, escaped in bash, since the helper that failed is the JSON writer.
+  static_payload() {
+    cat <<'JSON'
 {"decision":"block","reason":"END OF TURN ISSUE REVIEW. Read review/issue-review.md next to the Stop hooks in your Claude config directory (normally ~/.claude/hooks) and follow it exactly. The pointer that normally names its exact path could not be built, so find the file yourself rather than inventing a review from this line. Any subagent findings for this project are still in the spool: `bash ~/.claude/hooks/lib/issue-spool.sh pending \"$PWD\"` reads them without consuming them."}
 JSON
+  }
+  if [ -z "$reruns_dropped" ]; then
+    static_payload
+  else
+    _dropped_json="${reruns_dropped//\\/\\\\}"
+    _dropped_json="${_dropped_json//\"/\\\"}"
+    _dropped_json="$(printf '%s' "$_dropped_json" | tr '\000-\037' ' ')"
+    _static="$(static_payload)"
+    _tail='"}'
+    printf '%s HAND RERUNS DROPPED: %s"}\n' "${_static%"$_tail"}" "$_dropped_json"
+  fi
 fi
