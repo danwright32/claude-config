@@ -6613,15 +6613,13 @@ SHARED_SETTINGS_FILE="settings.shared.json"
 # #3635), so the shared file cannot be used to stop any other rules file. The list is written
 # whole, as every shared value is.
 #
-# THE READ DENY RULES (#3563) ARE BUILT AND NOT YET CARRIED. Measured on both Macs (2026-11-24 and
-# 2026-11-25), neither settings.json held one deny rule, so a session's file tools could open an SSH
-# private key or a stored Cloudflare or Salesforce CLI login. Everything below this line that
-# speaks of permissions is ready for the shared file to hold permissions.deny, and none of it runs
-# yet: permissions is NOT on SHARED_SETTINGS_ALLOWED, so a shared file holding it is still refused
-# whole, as any unlisted key is. Adding that one name makes the sync write a permission setting
-# for the first time, which is Dan's decision to make and is not made by this change.
+# THE READ DENY RULES ARE SHARED (#3563, on Dan's sign off, recorded on that issue's pull request).
+# Measured on both Macs (2026-11-24 and 2026-11-25), neither settings.json held one deny rule, so a
+# session's file tools could open an SSH private key or a stored Cloudflare or Salesforce CLI
+# login. permissions is the one name on SHARED_SETTINGS_ALLOWED whose setting is not written as
+# the shared file holds it.
 #
-# How it lands once the name is there. permissions is otherwise each Mac's own, so nothing under
+# How it lands. permissions is otherwise each Mac's own, so nothing under
 # it is ever written whole: the pull ADDS each shared rule a Mac's permissions.deny lacks, after
 # the rules already there, and leaves its allow and ask rules, its mode, its extra folders and its
 # own deny rules exactly as they were. A rule a Mac already holds is not added twice, so a second
@@ -6633,8 +6631,8 @@ SHARED_SETTINGS_FILE="settings.shared.json"
 # any other rule is refused whole: Read(~/**) would stop every session on both Macs reading its
 # own project, and would stay until removed by hand on each.
 SHARED_DENY_RULES="Read(~/.ssh/**) Read(~/.sfdx/**) Read(~/Library/Preferences/.wrangler/config/**)"
-SHARED_SETTINGS_ALLOWED="ultracode modelSettings skillListingMaxDescChars outputStyle env claudeMdExcludes"
-SHARED_SETTINGS_DESC="ultracode, modelSettings.<model>.effortLevel, skillListingMaxDescChars, outputStyle, env.CLAUDE_CODE_SUBAGENT_MODEL, claudeMdExcludes"
+SHARED_SETTINGS_ALLOWED="ultracode modelSettings skillListingMaxDescChars outputStyle env claudeMdExcludes permissions"
+SHARED_SETTINGS_DESC="ultracode, modelSettings.<model>.effortLevel, skillListingMaxDescChars, outputStyle, env.CLAUDE_CODE_SUBAGENT_MODEL, claudeMdExcludes, permissions.deny"
 SHARED_OUTPUT_STYLES="default Explanatory Learning"
 SHARED_ENV_ALLOWED="CLAUDE_CODE_SUBAGENT_MODEL"
 SHARED_MODEL_ALIASES="opus sonnet haiku fable"

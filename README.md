@@ -50,15 +50,22 @@ back.
   cost) and names it when this file has no effort for it, with the entry to add, so a newer model
   behind the alias is noticed rather than quietly running at its own default (#828). When the
   claude command cannot answer, status says it could not check, never that the model is fine.
-  Built and not yet carried: three Read deny rules for the folders of stored logins (#3563),
-  `Read(~/.ssh/**)`, `Read(~/.sfdx/**)` and `Read(~/Library/Preferences/.wrangler/config/**)`.
-  `claude-sync` holds the code to add them to each Mac's `permissions.deny` (adding only a rule
-  that Mac lacks, never rewriting or removing a rule of its own, and refusing any other key under
-  `permissions` and any other rule), and `claude-sync status` can name a rule a Mac lacks. None of
-  it runs: `permissions` is not on the sync's list of shared settings, so this file does not hold
-  the rules, a file that did would be refused whole, and neither Mac is given them. Putting that
-  name on the list makes the sync write a permission setting for the first time, which is Dan's
-  decision; the pull request for #3563 holds the proof that the rules work and what they leave open.
+  And `permissions.deny` (#3563, added to the sync's list on Dan's sign off, recorded on that
+  issue's pull request): three Read deny rules, one per folder of stored logins,
+  `Read(~/.ssh/**)` (SSH keys), `Read(~/.sfdx/**)` (the Salesforce CLI's logins) and
+  `Read(~/Library/Preferences/.wrangler/config/**)` (the Cloudflare CLI's login). `~/` is the home
+  folder of whoever runs Claude Code, so the same text holds on both Macs. With them Claude Code
+  refuses its file tools (Read, Edit, Write) on anything inside those folders, and a shell command
+  it recognises as reading them (`cat`, or `grep` naming the folder). Measured 2026-11-25 on Claude
+  Code 2.1.332 with stand in files: refused in 3 of 3 runs per rule, read in 3 of 3 without. They
+  do not stop a program that opens the file itself (`git`, `ssh`, the CLIs, a script), nor a
+  recursive search started from the home folder: both read the stand in with the rules in force.
+  Unlike every other shared setting this one is ADDED, never written whole: a pull adds each rule
+  a Mac's `permissions.deny` lacks and leaves that Mac's own allow, ask and deny rules, its mode
+  and the rest of `permissions` exactly as they were. A rule is never removed, so taking one out
+  of this file leaves it on each Mac. Only `deny` may sit under `permissions` here, and only these
+  three rules: anything else is refused whole, since a wider rule would stop sessions on both Macs
+  reading their own files. `claude-sync status` names a rule a Mac's `settings.json` lacks.
 - `payload/rtk-exclude-commands.txt`: the commands rtk leaves alone on every Mac, one per line
   (claude-config#1427). rtk keeps that list in its own config outside `~/.claude`
   (`~/Library/Application Support/rtk/config.toml`, the path `rtk config` prints), so every pull

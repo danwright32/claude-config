@@ -444,7 +444,7 @@ live_store_regenerated_with_lessons(){ # <path> -> 0 when that is the change it 
 # so it is typed here and test-live-settings-edit.sh fails when claude-sync writes a setting it does
 # not name: hooks (the hooks block), env (CLAUDE_CODE_PLUGIN_DIRS, the mods), statusLine (#772), and
 # every setting SHARED_SETTINGS_ALLOWED lets payload/settings.shared.json carry (#695).
-LIVE_SETTINGS_CONFIG_KEYS="hooks env statusLine ultracode modelSettings skillListingMaxDescChars outputStyle claudeMdExcludes"
+LIVE_SETTINGS_CONFIG_KEYS="hooks env statusLine ultracode modelSettings skillListingMaxDescChars outputStyle claudeMdExcludes permissions"
 live_settings_changed_by_hand(){ # <path> -> 0, printing the settings that changed, when that is the change
   local path="$1" copy changed
   [ "$path" = "${CLAUDE_HOME:-$HOME/.claude}/settings.json" ] || return 1

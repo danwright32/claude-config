@@ -98,33 +98,11 @@ SETTINGS="$ROOT/payload/settings.shared.json"
 # The shared file a pull is handed in the checks below: this repository's own.
 SHARED_JSON="$(cat "$SETTINGS")"
 
-# HELD-BEGIN (claude-config#3563). The sync writes a shared setting only when its name is on
-# claude-sync's SHARED_SETTINGS_ALLOWED, and adding permissions to that list is Dan's decision,
-# not yet made. Until it is, the shared file cannot hold the rules (an unlisted key makes a pull
-# refuse the whole file), so neither Mac is given them, and this suite says so on every run
-# instead of failing on it. What it can still prove, it proves: that the hold is in force, and
-# that the code waiting behind it is right, by running every pull, status and refusal check below
-# against a copy of claude-sync that differs by that one name, handed this repository's shared
-# file with the three rules added. The change that puts the name on the list deletes this block
-# and the one further down, and the same checks then run against claude-sync and the shared file
-# as they are.
-HELD=""
-if ! grep -q '^SHARED_SETTINGS_ALLOWED="[^"]* permissions"$' "$SCRIPT"; then
-  HELD=1
-  echo "SUITE-PART-UNMEASURED the three Read deny rules reaching either Mac, because claude-sync's SHARED_SETTINGS_ALLOWED does not name permissions (Dan's sign off for claude-config#3563 is pending), so payload/settings.shared.json cannot hold them and no pull installs them; the pull, status and refusal checks ran against a copy of claude-sync with that one name added"
-  if [ "$(jq -r 'has("permissions")' "$SETTINGS" 2>/dev/null)" = false ]; then ok
-  else bad "payload/settings.shared.json holds permissions while claude-sync's SHARED_SETTINGS_ALLOWED does not name it, so every pull refuses the whole shared file and no shared setting is written on either Mac"; fi
-  SHARED_JSON="$(jq -c --argjson d "$THREE" '. + {permissions: {deny: $d}}' "$SETTINGS")"
-fi
-# HELD-END
-
-if [ -z "$HELD" ]; then
-  rules="$(jq -r '.permissions.deny // [] | if type == "array" then .[] else error("not an array") end' "$SETTINGS" 2>/dev/null)"
-  if [ "$rules" = "$WANT_RULES" ]; then ok
-  else bad "payload/settings.shared.json does not carry exactly the three Read deny rules under permissions.deny (it carries: ${rules:-none}), so neither Mac is given them and a session's file tools can open SSH keys and the stored Cloudflare and Salesforce logins"; fi
-  if [ "$(jq -c '.permissions // {} | keys' "$SETTINGS" 2>/dev/null)" = '["deny"]' ]; then ok
-  else bad "payload/settings.shared.json holds $(jq -c '.permissions // {} | keys' "$SETTINGS" 2>/dev/null) under permissions; it may hold deny and nothing else, since every other permission setting stays each Mac's own"; fi
-fi
+rules="$(jq -r '.permissions.deny // [] | if type == "array" then .[] else error("not an array") end' "$SETTINGS" 2>/dev/null)"
+if [ "$rules" = "$WANT_RULES" ]; then ok
+else bad "payload/settings.shared.json does not carry exactly the three Read deny rules under permissions.deny (it carries: ${rules:-none}), so neither Mac is given them and a session's file tools can open SSH keys and the stored Cloudflare and Salesforce logins"; fi
+if [ "$(jq -c '.permissions // {} | keys' "$SETTINGS" 2>/dev/null)" = '["deny"]' ]; then ok
+else bad "payload/settings.shared.json holds $(jq -c '.permissions // {} | keys' "$SETTINGS" 2>/dev/null) under permissions; it may hold deny and nothing else, since every other permission setting stays each Mac's own"; fi
 
 # The rules as written here are what the checks below judge, so a shared file that drops one fails
 # above and the path checks still say what each rule covers.
@@ -234,28 +212,6 @@ count_rule(){ jq -r --arg r "$1" '[(.permissions.deny // [])[] | select(. == $r)
 # into grep -q, which under pipefail fails a check whose words are there (the first grep is cut off).
 line_has(){ awk -v a="$2" -v b="$3" 'index($0, a) && index($0, b) { found = 1 } END { exit !found }' <<< "$1"; }
 printf '%s\n' "$SHARED_JSON" > "$WORK/shared.json"
-
-# HELD-BEGIN (claude-config#3563), the second of the two blocks: see the first.
-if [ -n "$HELD" ]; then
-  # The hold itself, on claude-sync as it is: a shared file carrying the rules is refused whole,
-  # naming permissions, and nothing is written, the other shared settings included.
-  fixture held "$SHARED_JSON" "$OWN"
-  sum="$(cksum < "$H/settings.json")"
-  out="$(pull)"
-  [ "$(cksum < "$H/settings.json")" = "$sum" ] && ok || bad "claude-sync wrote settings.json from a shared file holding permissions, though SHARED_SETTINGS_ALLOWED does not name it"
-  if line_has "$out" 'settings.shared.json' 'carries permissions'; then ok
-  else bad "claude-sync's refusal of a shared file holding permissions does not name permissions as the key it does not share"; fi
-  # The copy every check below runs: claude-sync with the one name added and nothing else, beside
-  # a link to this repository's payload so it finds its own files where claude-sync does.
-  mkdir -p "$WORK/withname"
-  sed 's/^\(SHARED_SETTINGS_ALLOWED="[^"]*\)"$/\1 permissions"/' "$ROOT/claude-sync" > "$WORK/withname/claude-sync"
-  ln -s "$ROOT/payload" "$WORK/withname/payload"
-  sed 's/^\(SHARED_SETTINGS_ALLOWED="[^"]*\) permissions"$/\1"/' "$WORK/withname/claude-sync" > "$WORK/withname/back"
-  if grep -q '^SHARED_SETTINGS_ALLOWED="[^"]* permissions"$' "$WORK/withname/claude-sync" && cmp -s "$WORK/withname/back" "$ROOT/claude-sync"; then ok
-  else bad "fixture: the copy of claude-sync does not differ from it by exactly the name permissions on SHARED_SETTINGS_ALLOWED, so the checks below prove nothing about it"; fi
-  SCRIPT="$WORK/withname/claude-sync"
-fi
-# HELD-END
 
 # This repository's own shared file, pulled onto a Mac with rules of its own.
 fixture real "$SHARED_JSON" "$OWN"
