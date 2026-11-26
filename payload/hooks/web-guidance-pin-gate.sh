@@ -7,7 +7,10 @@
 # at all, means whichever release is newest that minute, on Dan's Mac, under his login, with no
 # prompt. Its version is pinned in hooks/lib/<package>-version, and the rule file names that version.
 # But the plugin's own skill text, which updates itself, tells sessions to run @latest, and a session
-# can ignore a line in a rule file. It cannot get past a gate.
+# can ignore a line in a rule file. This gate refuses, for the main session and every subagent alike,
+# each Bash command it can read as a run of the package at another version. It cannot see a run it
+# cannot read: a package named only through a variable, or a run inside a script file the command
+# starts, whose lines are not in the command.
 #
 # WHAT IT DOES. Refuses (exit 2) any command that RUNS the package (npx, bunx, npm exec, npm x, npm
 # install, pnpm dlx or yarn dlx naming it) with any version but the pin, or with none, and names the
