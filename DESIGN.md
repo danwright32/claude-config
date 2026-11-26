@@ -1494,12 +1494,28 @@ this config writes. claude-sync is the only writer of that file in the repositor
 it writes (the hooks block, `env` for the mods, `statusLine`, and every key `SHARED_SETTINGS_ALLOWED`
 admits) are listed in `LIVE_SETTINGS_CONFIG_KEYS` and stay counted whoever changed them;
 `test-live-settings-edit.sh` fails when claude-sync writes a setting the list does not name. That
-list holds `permissions` since #3563, because the sync adds three deny rules under it, so a change
-under `permissions` during a run (a permission granted for good, or a rule added by hand) is counted
-too, as a person's /effort pick on a shared model already was. The name
+list holds `permissions` since #3563, because the sync adds three deny rules under it, and as #3563
+shipped that counted every change under `permissions` during a run, a permission granted for good
+and a rule added by hand included, at the cost of a rerun. The deny rules on `SHARED_DENY_RULES` are the only
+thing the sync writes there, so since #3692 a change under `permissions` is counted only when it
+touches one of them, and is a person's edit otherwise, as it was before #3563. Excusing it takes
+three things the runner must be able to read, and a change stays counted whenever any one cannot be
+established. First, the rules themselves, read from claude-sync's own `SHARED_DENY_RULES` line and
+typed nowhere else: from the checkout the runner sits in, or, for the installed copy, from the
+checkout whoever started the run named in `RUN_ALL_TESTS_CHECKOUT`, as a pull does. A line that is
+missing, written twice, written any other way or empty means the rules are unknown, never that
+there are none. Second, a shape the sync itself could add a rule to, in both copies: `permissions`
+absent or an object, its `deny` absent or a list of rule text. Third, every shared rule in the same
+places under `permissions`, the same number of times, before and after, so a shared rule added (the
+sync's own write), removed, reworded, moved from `deny` into `allow` or `ask`, or copied into
+another list is counted, and an allow rule, an ask rule, a mode or a person's own deny rule beside
+them is not. An installed run that names no checkout has nothing to read the rules from, so there
+every change under `permissions` is still counted. A person's /effort pick on a shared model stays
+counted as before. The name
 of a setting alone would excuse a suite that writes that name, so it is never the only test. What the
 rule lets through, and the verdict says so: a suite that edits the real file in place, keeping every
-other setting, and changes only a setting this config never writes. No suite here writes it that way;
+other setting, and changes only a setting this config never writes, or, since #3692, only something
+under `permissions` other than a shared deny rule. No suite here writes it that way;
 they write whole fixture files, or edit the hooks block, and both are still caught.
 
 ## An absence is a deletion only where something was there before (#627, #781)

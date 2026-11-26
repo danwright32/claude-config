@@ -411,7 +411,7 @@ live_store_regenerated_with_lessons(){ # <path> -> 0 when that is the change it 
 #
 # settings.json has a writer that is neither the sync nor a suite: whoever is at the keyboard.
 # Claude Code saves it on /model, on a plugin toggle and on a permission granted for good, and Dan
-# edits it by hand (a change under permissions is not one this guard excuses, see 3 below). On
+# edits it by hand (a change under permissions is excused on one more condition, see 3 below). On
 # 2026-10-30 one hand edit at 6:41 PM ET was enough to fail a full run as
 # live-store-pollution (#1964 traced it). live_store_only_gained cannot excuse that: a key added at
 # the end puts a comma on the line before it, and Claude Code rewrites the whole file in its own
@@ -433,22 +433,82 @@ live_store_regenerated_with_lessons(){ # <path> -> 0 when that is the change it 
 #      so a suite bound to the real path, writing it through the code it tests, changes one of the
 #      settings below. Those stay counted whoever changed them, a person's /effort pick on a shared
 #      model included, because the two are indistinguishable there and a suite is the costlier
-#      mistake to excuse. Since the sync adds three deny rules under permissions (#3563), that
-#      covers any change under permissions too: a permission granted for good during a run, or a
-#      rule added by hand, is counted and no longer excused. A real apply is excused already, by
-#      the sync's own record.
+#      mistake to excuse. A real apply is excused already, by the sync's own record.
+#
+#      permissions is the one setting on the list judged more finely (#3692). The sync writes
+#      exactly one thing under it, the deny rules on SHARED_DENY_RULES (#3563), added to
+#      permissions.deny and nothing else there touched. As #3563 shipped, every change under
+#      permissions was counted, a permission granted for good during a run and a rule added by
+#      hand included. Now a change under permissions is the sync's only when it touches one of
+#      those rules, and it is excused only when that can be READ not to have happened:
+#        a. the rules themselves can be read from claude-sync, where they are defined, and there
+#           is at least one (live_settings_shared_deny_rules, below);
+#        b. in both copies permissions is absent or an object, and its deny list is absent or a
+#           list of rule text, which is the shape the sync itself can add a rule to;
+#        c. every shared rule sits in the same places under permissions, the same number of times,
+#           before and after. So a shared rule added (the sync's own write), removed, reworded,
+#           moved from deny to allow or ask, or copied into another list is counted, and an allow
+#           rule, an ask rule, a mode or a person's own deny rule beside them is not.
+#      Whenever any of the three cannot be established the change is counted, as it was.
 #
 # The name of a setting alone would excuse a suite that writes that name; it is the three together
 # that do the work. What still gets through, and is said in the verdict rather than hidden: a suite
 # that edits the real file in place, keeping every other setting, and changes only a setting this
-# config never writes. No suite in this repository writes settings.json that way (they write whole
+# config never writes, or only something under permissions that is not a shared deny rule (#3692).
+# No suite in this repository writes settings.json that way (they write whole
 # fixture files, or edit the hooks block), and test-live-settings-edit.sh holds every other shape.
 #
 # The list cannot be read from claude-sync at run time, because this file is installed without it,
 # so it is typed here and test-live-settings-edit.sh fails when claude-sync writes a setting it does
 # not name: hooks (the hooks block), env (CLAUDE_CODE_PLUGIN_DIRS, the mods), statusLine (#772), and
 # every setting SHARED_SETTINGS_ALLOWED lets payload/settings.shared.json carry (#695).
+#
+# The shared deny rules are NOT typed here a second time (#3692). They are read from claude-sync's
+# own SHARED_DENY_RULES line when a change under permissions has to be judged: from the checkout
+# this file sits in, or, for the installed copy, from the checkout whoever started the run named
+# in RUN_ALL_TESTS_CHECKOUT, as a pull does. An installed run that names none has nothing to read
+# them from, and there a change under permissions stays counted.
 LIVE_SETTINGS_CONFIG_KEYS="hooks env statusLine ultracode modelSettings skillListingMaxDescChars outputStyle claudeMdExcludes permissions"
+# The deny rules the sync shares, one per line, or 1 when they cannot be read. The definition must
+# be the one plain line claude-sync holds today: SHARED_DENY_RULES="rule rule rule", written once,
+# with nothing a shell would expand. Missing, written twice, written another way or empty all mean
+# the rules are unknown, never that there are none to protect.
+live_settings_shared_deny_rules(){
+  local top sync line
+  top="$(bash "$SELF_DIR/lib/checkout-root.sh" "$SELF_DIR/.." 2>/dev/null)" || top=""
+  [ -n "$top" ] || top="${RUN_ALL_TESTS_CHECKOUT:-}"
+  [ -n "$top" ] || return 1
+  sync="${top%/}/claude-sync"
+  [ -f "$sync" ] || return 1
+  [ "$(grep -c '^SHARED_DENY_RULES=' "$sync" 2>/dev/null)" = 1 ] || return 1
+  line="$(grep -E '^SHARED_DENY_RULES="[^"$`\\]*"[[:space:]]*$' "$sync" 2>/dev/null)" || return 1
+  line="${line#SHARED_DENY_RULES=\"}"
+  line="${line%\"*}"
+  line="$(printf '%s\n' "$line" | tr ' ' '\n' | sed '/^$/d')"
+  [ -n "$line" ] || return 1
+  printf '%s\n' "$line"
+}
+# Did a change under permissions leave every shared deny rule where it was? 0 only when that was
+# read, from both copies, in a shape the sync itself could add a rule to (see 3 above).
+live_settings_permissions_spared_shared_rules(){ # <copy before the run> <the file now>
+  local rules
+  rules="$(live_settings_shared_deny_rules)" || return 1
+  jq -n -e --slurpfile was "$1" --slurpfile now "$2" --arg rules "$rules" '
+    def readable: (has("permissions") | not)
+      or ((.permissions | type) == "object"
+          and ((.permissions | has("deny") | not)
+               or ((.permissions.deny | type) == "array" and all(.permissions.deny[]; type == "string"))));
+    # Where the rule sits under permissions, one entry per place, by the names on the way to it
+    # and never its position in a list, so a rule added in front of it moves nothing.
+    def held($r): [ (.permissions // {}) | paths(. == $r) | map(select(type == "string")) | join("/") ] | sort;
+    ($rules | split("\n") | map(select(length > 0))) as $shared
+    | if ($was | length) != 1 or ($now | length) != 1 then error("not one document") else . end
+    | $was[0] as $a | $now[0] as $b
+    | ($shared | length) > 0
+      and ($a | type) == "object" and ($b | type) == "object"
+      and ($a | readable) and ($b | readable)
+      and all($shared[]; . as $r | ($a | held($r)) == ($b | held($r)))' >/dev/null 2>&1
+}
 live_settings_changed_by_hand(){ # <path> -> 0, printing the settings that changed, when that is the change
   local path="$1" copy changed
   [ "$path" = "${CLAUDE_HOME:-$HOME/.claude}/settings.json" ] || return 1
@@ -470,7 +530,13 @@ live_settings_changed_by_hand(){ # <path> -> 0, printing the settings that chang
   [ -n "$changed" ] || return 1                     # rewritten with every value the same
   local k
   while IFS= read -r k; do
-    case " $LIVE_SETTINGS_CONFIG_KEYS " in *" $k "*) return 1 ;; esac
+    case " $LIVE_SETTINGS_CONFIG_KEYS " in
+      *" $k "*)
+        # A setting this config writes: counted, unless it is permissions and every deny rule the
+        # sync shares can be read to sit where it did (#3692).
+        [ "$k" = permissions ] || return 1
+        live_settings_permissions_spared_shared_rules "$copy" "$path" < /dev/null || return 1 ;;
+    esac
   done <<CHANGEDSETTINGS
 $changed
 CHANGEDSETTINGS
@@ -2582,7 +2648,13 @@ if [ -n "${_live_before:-}" ] && [ "$_live_before" != "$_live_after" ]; then
       continue
     fi
     if _lc_settings="$(live_settings_changed_by_hand "$_lc_path")"; then
-      _lc_noted="$_lc_noted  $_lc_path: only $_lc_settings changed, none of them a setting this config writes, with the rest of the file carried over as it was, which is a person's own settings edit (Claude Code's /model, a plugin toggle, or by hand). A suite editing the real file in place that way would read the same, and none here does (claude-config#1969).
+      # Said as what was measured (L11): permissions IS a setting this config writes, so where it
+      # is among them the line says what was read about it instead of claiming otherwise.
+      _lc_spared=""
+      case ", $_lc_settings, " in
+        *", permissions, "*) _lc_spared=" apart from permissions, where none of the deny rules the sync shares was added, removed or moved (claude-config#3692)" ;;
+      esac
+      _lc_noted="$_lc_noted  $_lc_path: only $_lc_settings changed, none of them a setting this config writes$_lc_spared, with the rest of the file carried over as it was, which is a person's own settings edit (Claude Code's /model, a plugin toggle, a permission granted for good, or by hand). A suite editing the real file in place that way would read the same, and none here does (claude-config#1969).
 "
       continue
     fi
