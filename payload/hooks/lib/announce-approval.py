@@ -171,8 +171,11 @@ def is_record_path(path):
     """Whether path is the record's folder or anything under it, however it is spelled."""
     if not isinstance(path, str) or not path:
         return False
-    folder = os.path.realpath(record_dir())
-    real = os.path.realpath(path)
+    # Compared without letter case: a Mac's disk reads STATE/Announce-Approvals as this folder, and
+    # realpath keeps the capitals it was given. On a disk that tells the two apart this also refuses
+    # a folder that is not the record, which costs a rename and risks nothing.
+    folder = os.path.realpath(record_dir()).casefold()
+    real = os.path.realpath(path).casefold()
     return real == folder or real.startswith(folder + os.sep)
 
 

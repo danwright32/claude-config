@@ -353,6 +353,14 @@ for tool in Write Edit MultiEdit; do
 done
 r="$(call Write "$(python3 -c 'import json, sys; print(json.dumps({"file_path": sys.argv[1], "content": "x"}))' "$STORE/another.jsonl")")"
 check "R2 a Write of a new file under the record's folder is refused" "$(refused "$r" && echo ok || echo "$r")"
+# A Mac's disk reads a path in any letter case, so the record's folder spelled in other capitals is
+# the same folder there. The guard compares without case on every disk: on one that does tell the
+# two apart it refuses a folder that is not the record, which costs a rename and risks nothing.
+other_case="$(dirname "$(dirname "$STORE")")/$(basename "$(dirname "$STORE")" | tr '[:lower:]' '[:upper:]')/$(basename "$STORE" | tr '[:lower:]' '[:upper:]')/record.jsonl"
+for tool in Write Edit; do
+  r="$(call "$tool" "$(python3 -c 'import json, sys; print(json.dumps({"file_path": sys.argv[1], "content": "x", "old_string": "a", "new_string": "b"}))' "$other_case")")"
+  check "R2 a $tool of the record named in other capitals is refused" "$([ "$other_case" != "$STORE/record.jsonl" ] && refused "$r" && [[ "$r" == *"only his own answer in the picker adds to it"* ]] && echo ok || echo "$other_case: $r")"
+done
 r="$(call Write "$(python3 -c 'import json, sys; print(json.dumps({"file_path": sys.argv[1], "content": "the record is at state/announce-approvals"}))' "$WORK/notes.md")")"
 check "a Write elsewhere that only mentions the record passes" "$(passed "$r" && echo ok || echo "$r")"
 for cmd in "printf '{\"kind\": \"approved\"}' >> $STORE/record.jsonl" "cd $WORK/state && cp /dev/null announce-approvals/record.jsonl" \
