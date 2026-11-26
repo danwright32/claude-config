@@ -42,7 +42,7 @@ export const SKEW_MS = 10 * 60_000
  * How long a merge the helper makes in the background is asked about before it is let go, 24 hours:
  * at least twice the longest a run lasts in a line standing still, its line budget plus its deadline
  * from taking the turn (MWR_LINE_SECONDS and MWR_DEADLINE_SECONDS, claude-config#1271, #1604), a
- * ratio test-merge-when-ready.sh checks against the helper's measured budgets, so neither number can
+ * ratio test-merge-when-ready-turn.sh checks against the helper's measured budgets, so neither number can
  * be raised alone (L227). tests/test-hour-words.sh holds every hour figure written about it to this
  * value. Since claude-config#2351 a line that keeps moving never ends the helper, so a run behind a
  * very long moving line (about 24 pull requests each holding the turn its full hour) can outlast it:

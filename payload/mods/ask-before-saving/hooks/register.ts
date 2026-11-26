@@ -1,7 +1,7 @@
 import { update } from 'claude-code'
 import type { EngineInterface, Hook, MatchedHook, Register } from 'claude-code'
 import { errorText } from './mod-kit/skew.ts'
-import { neverThrows } from './mod-kit/hold.ts'
+import { cutCall, cutCheck } from './mod-kit/hold.ts'
 import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
 import { toolArgs } from './mod-kit/toolargs.ts'
 // The one check of text Dan approves in a picker (#3321), read from mod-kit's copy by name, which
@@ -592,7 +592,14 @@ const removalsRead = async ($: EngineInterface, home: string, candidates: readon
       const { replaces, ...rest } = landed
       const said = replaces && c.keeps ? { ...rest, stays: true as const } : landed
       out.push({ ...shape, how: 'move', ...(c.to !== undefined ? { to: c.to } : {}), ...said })
-    } else out.push({ ...shape, how: c.how, ...(c.path !== undefined ? await gitHolds($, c.path) : { back: 'unknown' as const, why: 'its path could not be read from the command' }) })
+    } else
+      out.push({
+        ...shape,
+        how: c.how,
+        // A deletion that is a move onto a name another source of the command may take says where it was sent (#3505).
+        ...(c.how === 'delete' && c.sharedAt !== undefined ? { sharedAt: c.sharedAt } : {}),
+        ...(c.path !== undefined ? await gitHolds($, c.path) : { back: 'unknown' as const, why: 'its path could not be read from the command' }),
+      })
   }
   return out
 }
@@ -968,9 +975,27 @@ const indexLineOf = async ($: EngineInterface, tool: string, input: Record<strin
   return appended === undefined ? NOT_AN_APPEND : indexLineAdded(old, (old ?? '') + appended)
 }
 
+// Whether a line of the index already links `name`, read as the guard reads the line it covers
+// (linksOnlyTo), inside the time the hook gives its looks (#3478). Undefined when that cannot be
+// told: no ordinary file, a read that fails, or a disk that does not answer in time. Nothing is then
+// said of the line either way (#3506): whether the index already links the file is unknown, and the
+// guard covers no line written to an index it cannot read (indexLineOf).
+const indexLinks = async ($: EngineInterface, index: string, name: string): Promise<boolean | undefined> => {
+  try {
+    const now = await dueIn($, LOOKS_MS).within(() => textNow($, index))
+    if ('unreadable' in now) return undefined
+    return 'text' in now && now.text.split('\n').some(line => linksOnlyTo(line, name))
+  } catch {
+    return undefined
+  }
+}
+
 // A For good on one memory file, once its save lands, also covers the one line in its folder's index
 // linking to it (#1794), until the approval itself would lapse. Answers what Claude is told of it, or
-// nothing when the save was no memory file's, or more than one file's, which covers no line.
+// nothing when the save was no memory file's, or more than one file's, which covers no line. The
+// cover is made as before in every case; only what Claude reads of it follows the index as it is
+// (#3506): an index already linking the file is told so, with a change to that line asked about,
+// since a session told a line "may be added" read it as leave to rewrite the one already there.
 const coverFor = async ($: EngineInterface, used: AskBeforeSavingApproval): Promise<string | undefined> => {
   if (used.files.length !== 1) return undefined
   const { home } = await whereOf($)
@@ -978,6 +1003,9 @@ const coverFor = async ($: EngineInterface, used: AskBeforeSavingApproval): Prom
   if (!file) return undefined
   const made: AskBeforeSavingIndexCover = { ...file, files: used.files, until: used.until }
   await update($, coversRef, a => [...(a ?? []), made])
+  const linked = await indexLinks($, file.index, file.name)
+  if (linked === undefined) return undefined
+  if (linked) return `${display(file.index, home)} already links to ${file.name}, and this For good does not cover changing that line: a change to it is asked about.`
   return `The one line in ${display(file.index, home)} that links to ${file.name} may be added without asking him again until this For good lapses; any other change to that index is asked about.`
 }
 
@@ -1443,11 +1471,11 @@ export const register: Register = on => {
   // replay runs OUTSIDE neverThrows: the call already ran beneath, so a refusal saying it did not run
   // would be untrue and could make Claude run it twice, and the tool's own failure reaches Claude
   // instead. Every catch before next stays inside neverThrows (#2039).
-  on('tool.call', { tool: TOOL_NAMES }, saveCall).catch(($, e, next) => next.called ? next(e) : neverThrows(() => rerunInGrace(next.budget, () => saveCall($, e, next), reason => ({ deny: reason })),() => ({ deny: cannotCheck(next.error) }), heldCall))
+  on('tool.call', { tool: TOOL_NAMES }, saveCall).catch(($, e, next) => cutCall('Ask before saving', e, next, { work: () => rerunInGrace(next.budget, () => saveCall($, e, next), reason => ({ deny: reason })), held: () => ({ deny: cannotCheck(next.error) }), last: heldCall }))
 
   // At tool.check `next` only reads the verdict beneath and runs nothing, so a failed check is judged
   // once more whether or not it had read it (#2026).
-  on('tool.check', saveCheck).catch(($, e, next) => neverThrows(() => rerunInGrace(next.budget, () => saveCheck($, e, next), reason => ({ decision: 'deny' as const, reason })),() => ({ decision: 'deny' as const, reason: cannotCheck(next.error) }), heldCheck))
+  on('tool.check', saveCheck).catch(($, e, next) => cutCheck('Ask before saving', next, { work: () => rerunInGrace(next.budget, () => saveCheck($, e, next), reason => ({ decision: 'deny' as const, reason })), held: () => ({ decision: 'deny' as const, reason: cannotCheck(next.error) }), last: heldCheck }))
 
   // Claude asks in Claude Code's own dialog (#777). A question tied to a waiting save is checked and
   // given the mod's own answers, and Dan's answer is read from the dialog's result.
@@ -1621,7 +1649,10 @@ export const register: Register = on => {
       if (missing.length) return { deny: `The question must name what would go (${missing.join(', ')}) and say why in one plain sentence, such as ${example}.` }
       const full = `${question} ${removalSaid(removes)}`
       const shown = { ...e, questions: [{ ...questions[0], question: full, header: REMOVAL_HEADER, options: removalOptions(removes), multiSelect: false }] } as typeof e
-      const unread = askFault(shown as unknown as Record<string, unknown>, removes.flatMap(r => [r.file, ...(r.to !== undefined ? [r.to] : []), ...(r.holds ?? [])]))
+      // The mod's own text in the question, set aside before it is judged: what goes, where a move
+      // puts it, what a folder holds, and the place a file is sent to where another may land on its
+      // name (#3505), which ends in the file's own name and so in whatever that name holds.
+      const unread = askFault(shown as unknown as Record<string, unknown>, removes.flatMap(r => [r.file, ...(r.to !== undefined ? [r.to] : []), ...(r.sharedAt !== undefined ? [r.sharedAt] : []), ...(r.holds ?? [])]))
       if (unread !== undefined) return { deny: `${unread.what} would not reach Dan as written: ${unread.fault}. He decides on the words he can read whole, so reword it and ask again, with the same metadata. If it is too long, remove fewer files in one command.` }
       if (ask.answers !== undefined && (typeof ask.answers !== 'object' || ask.answers === null || Object.keys(ask.answers).length > 0))
         return { deny: 'Ask Dan without answers already filled in: only his choice in the dialog decides this removal.' }
@@ -1740,7 +1771,7 @@ export const register: Register = on => {
     } catch (err) {
       return { deny: `Not saved: Ask before saving could not read Dan's answer (${message(err)}). Ask him again.` }
     }
-  })
+  }).catch(($, e, next) => cutCall('Ask before saving', e, next))
 
   // A reload drops the module's timers, never its approvals: each one waiting is timed again.
   on('session.start', async ($, e, next) => {

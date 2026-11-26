@@ -1678,9 +1678,10 @@ def remember_readings(mod):
     reader cannot read raises as it did, every time it is asked for. So is one asking where the
     comments are (claude-config#3464).
 
-    Every reading asks the reader which # it took for a comment without being sure the shell does
-    (its `unsure`), and one that names any is not used: UnsureComment, which main() refuses as a
-    check it could not make. It is never kept, in this run or between runs."""
+    Every reading asks the reader which # it took for a comment without being sure the shell does,
+    and which heredoc it cannot find the end of (its `unsure`, claude-config#3492), and one that
+    names any is not used: UnsureComment, which main() refuses as a check it could not make. It is
+    never kept, in this run or between runs."""
     plain, memo = mod.commands, {}
 
     def sure(s, cwd, **asked):
@@ -1691,7 +1692,11 @@ def remember_readings(mod):
             # Whether the reading ended or gave up (Unreadable, which a # read as a comment can
             # cause by itself: it hides the ) or the quote that closes something).
             if marks:
-                raise UnsureComment(s, marks[0][0])
+                # Which kind of heredoc was named, for the reason alone: one whose opener line
+                # ends in a backslash ("joined"), or one whose marker holds a line break ("split").
+                at, joins = marks[0][0], []
+                opener = mod.heredoc_opener(s, at, joins=joins) if s.startswith("<<", at) else None
+                raise UnsureComment(s, at, "joined" if joins else "split" if opener and "\n" in opener[0] else "")
 
     def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None):
         if heredocs is not None or spans is not None or comments is not None:
@@ -1888,13 +1893,28 @@ class UnsureComment(BaseException):
     and names nothing, unless that reading then cannot be read to its end, when the # is named and
     this is raised all the same (claude-config#3481). A BaseException, as NulPath is, so nothing in
     the walk reads it as a text that merely could not be read; main() refuses the call as one it
-    could not check."""
+    could not check.
 
-    def __init__(self, text, at):
+    Raised too for a heredoc the reader names there, by its <<, as one whose end it cannot vouch
+    for (claude-config#3492): an unquoted one the shells do not close at the first line that is
+    its marker, because a backslash joins that line to the one before, or close in different
+    places, or never close, where every shell runs the substitutions in the rest of the text as
+    its body and the reading took that rest for commands. heredoc says which of the two, a # or a
+    heredoc, was named. opener says what about the heredoc's opener had it named, for the reason
+    given: "joined" where its line ends in a backslash, which every shell joins to the next line,
+    so that the end marker is not the word that line shows, "split" where its quoted marker holds
+    a line break, which no line of a body can be, and "" otherwise (review of #3495)."""
+
+    def __init__(self, text, at, opener=""):
         super().__init__(at)
         start = text.rfind("\n", 0, at) + 1
         end = text.find("\n", at)
         self.line = text[start:len(text) if end < 0 else end].strip()[:120]
+        self.heredoc = text.startswith("<<", at)
+        self.opener = opener
+        # A text with no line break: the reader names a heredoc there for the one line, quoted or
+        # not, since no shell gives it a body (claude-config#3492), so the reason says that.
+        self.one_line = "\n" not in text
 
 
 def comment_why(line):
@@ -1902,6 +1922,37 @@ def comment_why(line):
             "inside a word where a closing parenthesis or a backslash stands right before it, or inside "
             "backquotes, and then runs the rest of that line, which the gate could not read for certain. "
             "Write that # in quotes, or put the comment on a line of its own (claude-config#3464)" % line)
+
+
+def heredoc_why(line, one_line=False, opener=""):
+    if one_line:
+        return ("it opens a heredoc on the one line `%s`, and the gate cannot tell whether the commands "
+                "after it on that line are its body or commands: typed on one line, no shell gives the "
+                "heredoc a body and every one of them runs. Put the heredoc's body and its end marker on "
+                "lines of their own after the line that opens it (claude-config#3492)" % line)
+    # What a shell that keeps an unquoted heredoc open does with the rest of the text.
+    keeps = ("A shell that keeps the heredoc open takes the rest of the text for its body: it runs every "
+             "$( ) there, in single quotes or not, and feeds the rest to the heredoc's command, which the "
+             "gate could not read for certain.")
+    if opener == "joined":
+        return ("it opens a heredoc the gate cannot find the end of, in the line `%s`: that line ends in a "
+                "backslash before the heredoc's end marker is whole, and a shell joins it to the next "
+                "line, so the end marker is the word the two lines make, which that backslash does not "
+                "quote. %s Write the << and its whole end marker on one line (claude-config#3492)"
+                % (line, keeps))
+    if opener == "split":
+        return ("it opens a heredoc the gate cannot find the end of, in the line `%s`: its end marker is "
+                "quoted and holds a line break, and no line of the text can be that marker, so some shells "
+                "never end the heredoc where others end it at the lines that spell the marker. A shell "
+                "that keeps the heredoc open feeds the rest of the text to the heredoc's command, which "
+                "the gate could not read for certain. Write the end marker as one word on the line that "
+                "opens the heredoc (claude-config#3492)" % line)
+    return ("it opens a heredoc the gate cannot find the end of, in the line `%s`: the end marker is not "
+            "quoted, and it either never stands on a line of its own or stands right after a line that "
+            "ends in a backslash, which a shell joins to the marker's line, so that the heredoc does not "
+            "end there or ends there in some shells only. %s End the heredoc with its marker alone on a "
+            "line that follows no backslash, or quote the marker (<<'EOF') where nothing in the body is "
+            "to be expanded (claude-config#3492)" % (line, keeps))
 
 
 def budget_clock():
@@ -3930,7 +3981,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
     def sh_keeps_positional(self, text, d):
         """Whether a command of a `bash -c` string certainly leaves its positional parameters as they
         were: not shift or a set that can set them, and not a sourced file (which shares them, and
-        may do either) unless that file is one whose text holds neither."""
+        may do either) unless that file is one sh_file_keeps_positional finds to keep them."""
         words = self.sw.command_words(self.sw.command_rest(text)[0])
         if not words:
             return True
@@ -3942,11 +3993,49 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                        for j, w in enumerate(words[1:], 1))
         if words[0] not in (".", "source"):
             return True
-        v, bad = self.sh_source_word(text, self.sh_cwd(d), self.sh_source_var, self.shell["script"])
+        wd = self.sh_cwd(d)
+        v, bad = self.sh_source_word(text, wd, self.sh_source_var, self.shell["script"])
         if bad or v is None:
             return False
+        return self.sh_file_keeps_positional(self.resolve(v, d), d, wd != SH_UNKNOWN_DIR, v, 0, set())
+
+    # What can move a sourced file's caller's positional parameters with no shift or set in the
+    # file's own text (claude-config#3474): eval, whose text is read nowhere here, and a dot command
+    # or source, whose file is another text. A dot is one standing as a word of its own with a word
+    # after it, in quotes or behind a backslash too, so `find . -name x` is one as well: each is
+    # only a place to look at, and sh_file_keeps_positional says what the command there is.
+    SH_POS_UNSEEN = re.compile(
+        r"""(?<![\w-])(?:eval|source)(?![\w-])|(?<![^\s;&|()`])[\\'"$]*\.['"]*[ \t]+(?![;&|)])\S""")
+
+    def sh_file_keeps_positional(self, path, cwd, cwd_known, word, depth, seen):
+        """Whether a file read in with . or source certainly leaves its caller's positional
+        parameters as they were: its text holds no shift and no set that can set them, and every
+        eval and every read of another file in it is accounted for (claude-config#3474). An eval's
+        text is not read here, and a second file is another text, so a file whose own words moved
+        nothing was taken to keep them while the shell had moved on: `eval "$PREPARE"`, and
+        `. lib/mover.sh` whose file is the one line shift, each read in before `. "$1/lib/x.sh"`,
+        had the gate read one x.sh while bash and zsh read in another (measured 2026-11-24).
+
+        One is accounted for inside a function's body, a subshell or a substitution, which have
+        positional parameters of their own, or where it is a read of a file whose path is worked
+        out from this file's own variables (sh_known; word is its BASH_SOURCE, cwd the directory
+        it runs in) and which, followed the same way to its end, keeps them too. Anything else is
+        not: an eval at the file's top level, a read behind `command` or in quotes, one whose path
+        is not certain or names no file, a file past MAX_DEPTH, and a word the reader places in no
+        command. A file read already from the same directory under the same name, further up or
+        before, answered there for its own text; from another directory it is read again, as a
+        relative path in it names another file there."""
+        real = os.path.realpath(path)
+        once = (real, cwd, cwd_known, word)
+        if once in seen:
+            return True
+        if depth > MAX_DEPTH:
+            return False
+        seen.add(once)
+        if depth:
+            self.tick(path)
         try:
-            body = self.content(os.path.realpath(self.resolve(v, d))).decode("utf-8", "replace")
+            text = self.content(real).decode("utf-8", "replace")
         except OSError:
             return False
         # Comments, which say "set" in prose, are left out: the ones the reader itself reads as
@@ -3955,11 +4044,50 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         # its line hid the shift, and the string's $1 stayed where the shell had moved on
         # (claude-config#3464). A file the reader cannot read is not known to keep them.
         try:
-            body = self.sw.uncommented(body, spaced=True)
+            body = self.sw.uncommented(text, spaced=True)
         except self.sw.Unreadable:
             return False
         # shift, or a set with an operand or -- after any options (set -e -- x sets them too).
-        return not re.search(r"(?<![\w-])(shift|set(?:\s+[-+][A-Za-z]+)*\s+(?:--|[^-+\s]))", body)
+        if re.search(r"(?<![\w-])(shift|set(?:\s+[-+][A-Za-z]+)*\s+(?:--|[^-+\s]))", body):
+            return False
+        places = [m.start() for m in self.SH_POS_UNSEEN.finditer(body)]
+        if not places:
+            return True  # most files: nothing more is read or worked out for them
+        if text == self.shell["text"]:
+            return False  # the text being read, whose walk takes up that text's own $1 (#3395)
+        try:
+            cmds, parts = self.parsed(text, cwd)
+        except self.sw.Unreadable:
+            return False
+        items = list(zip(cmds, parts))
+        struct = self.sh_struct_of(text, cwd, items)
+        known, followed = None, set()
+        for at in places:
+            # The command the word is in: the innermost, as a substitution's is inside another's.
+            k = max((j for j, p in enumerate(parts) if p["start"] <= at < p["end"]),
+                    key=lambda j: parts[j]["start"], default=None)
+            if k is None:
+                return False
+            (d, t), p = items[k]
+            if len(p["scope"]) > 1 or k in followed:
+                continue
+            if struct and struct[0][k] and any(struct[1][b]["kind"] == "func" for b in struct[0][k][0]):
+                continue
+            head = SH_CASE_PATTERN.sub("", self.sh_strip_openers(t), count=1)
+            if self.sh_source_target(head) is None:
+                return False
+            if known is None:
+                known = self.sh_known(text, cwd, word, cwd_known, depth)
+            wd = self.sh_dir(d) if cwd_known and self.sh_cwd_at(known, p["start"]) else SH_UNKNOWN_DIR
+            # Only what this file's own text makes certain: its $1 is the caller's, and its HOME may be.
+            v, bad = self.sh_source_word(head, wd, lambda n, at=p["start"]: None if n[:1].isdigit() else
+                                         self.sh_at(known, n, at), word)
+            if bad or v is None or not self.is_file(self.resolve(v, d)):
+                return False
+            if not self.sh_file_keeps_positional(self.resolve(v, d), d, wd != SH_UNKNOWN_DIR, v, depth + 1, seen):
+                return False
+            followed.add(k)
+        return True
 
     def sh_home(self, name, text, v):
         """v, or for HOME unknown in a text that never binds it, the session's HOME: the command runs
@@ -6282,6 +6410,13 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             if lang == "py":
                 # What sys.argv and os.environ hold, for a sys.path change built from them (#2449).
                 self.py_cmd["argv"], self.py_cmd["env"] = self.py_args(text, name, d)
+                # And the command as python3 itself reads its options, where the table above places
+                # what runs otherwise (py_own_reading in lib/py-file-runs.py, claude-config#3539):
+                # judged first, and then as the table reads it below, so this can only refuse more.
+                reason = self.py_own_reading(name, words, text, here, lambda again: self.judge_written(
+                    d, again, wrapper, why, depth, whole, fed_by))
+                if reason:
+                    return reason
             if inline:
                 before, code, after = inline
                 label = f"the code given to {name}"
@@ -6333,7 +6468,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             if module:
                 return self.py_module_run(words[0], name, module, d, depth, here)
             fed, is_body = self.fed(fed_by, whole) if operand == "-" else (None, False)
-            if is_body and "-m" not in words[1:]:
+            # A module python3 runs with -m is judged above. The word -m anywhere else is an argument
+            # of the script or the code, or another option's value, and the files are read all the
+            # same: read for no command holding the word, `python3 posts.py -m x` and `node post.js
+            # -m x` ran a script nothing had read (claude-config#3539).
+            if is_body:
                 # Code fed in a heredoc (python3 - a.md b.md <<'EOF'): the files after - are its
                 # arguments, judged as those of code given by -c are, against what that code can do
                 # with them (claude-config#2786); the files before it are read as code, as before.
@@ -6344,7 +6483,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                                              held_code=True))
                 if reason:
                     return reason
-            elif "-m" not in words[1:]:
+            else:
                 reason = self.every_file(words, d, depth, False, lang)
                 if reason:
                     return reason
@@ -6633,6 +6772,18 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             if more != words:
                 rest = (d, depth, shell_hint, lang, inline, held_code, actor, True)
                 return self.every_file(words, *rest) or self.every_file(more, *rest)
+        if lang == "py":
+            # A folder Python is handed is the __main__.py in it, and an archive it runs is one the
+            # gate does not open (py_run_words in lib/py-file-runs.py, claude-config#3441): the
+            # words are read with each such folder replaced by that file, and then as written
+            # below, as before, so this reading can only refuse more.
+            swapped, unread = self.py_run_words(words, d, not (inline or actor))
+            if unread:
+                return unread
+            if swapped != words:
+                reason = self.every_file(swapped, d, depth, shell_hint, lang, inline, held_code, actor, expanded)
+                if reason:
+                    return reason
         code, data = [], []
         names_before = len(self.held_names())
         on_disk = {}  # each script read from a file, by its label: what it writes is not otherwise noted
@@ -8142,7 +8293,7 @@ def main():
         except NulPath:
             reason = judge.unfollow(NUL_WHY)  # never kept: only an allowed judgement is
         except UnsureComment as e:
-            reason = judge.unfollow(comment_why(e.line))
+            reason = judge.unfollow(heredoc_why(e.line, e.one_line, e.opener) if e.heredoc else comment_why(e.line))
         finally:
             judge.unwatch()
         if judge.overran:

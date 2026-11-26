@@ -328,6 +328,12 @@
             "command": "__CLAUDE_HOME__/hooks/handback-claims-gate.sh",
             "timeout": 90,
             "onFailure": "block"
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/agent-leftovers-gate.sh",
+            "timeout": 30,
+            "onFailure": "block"
           }
         ]
       },
@@ -405,6 +411,18 @@
             "timeout": 15,
             "onFailure": "block",
             "statusMessage": "Checking the comment carries no Claude session link"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/announce-label-ask.sh",
+            "timeout": 45,
+            "onFailure": "block",
+            "statusMessage": "Checking Dan approved the announcement wording"
           }
         ]
       },
@@ -642,6 +660,11 @@
           },
           {
             "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/bash-shell-mark.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
             "command": "__CLAUDE_HOME__/hooks/session-notes-folder.sh",
             "timeout": 10
           },
@@ -649,6 +672,11 @@
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/checkout-behind-notice.sh",
             "timeout": 15
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/repo-visibility-notice.sh",
+            "timeout": 10
           }
         ]
       }
@@ -728,6 +756,29 @@
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/subagent-issue-harvest.sh",
             "timeout": 180,
+            "async": true
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/agent-leftovers-gate.sh",
+            "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "python3 __CLAUDE_HOME__/hooks/limit-messages.py record",
+            "timeout": 60,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 __CLAUDE_HOME__/hooks/limit-messages.py record",
+            "timeout": 60,
             "async": true
           }
         ]

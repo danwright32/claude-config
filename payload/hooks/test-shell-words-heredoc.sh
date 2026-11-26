@@ -412,6 +412,691 @@ else
   check "#3213 a cd inside one moves only the commands inside it" "reading was [$proc_dir]"
 fi
 
+# ---- an unquoted heredoc the shells keep open (claude-config#3492) ----
+# A backslash at the end of a line of an UNQUOTED heredoc's body joins that line to the next, so an
+# end marker on the next line is the tail of a longer line and closes nothing. The heredoc stays
+# open, the rest of the text is its body, and every $( ) in that rest runs, single quotes or not.
+# The reader closed the heredoc at any line that was the marker, read the rest as commands, and so
+# read a substitution in single quotes there as a word that never runs: less than the shell runs,
+# with nothing named. An unquoted heredoc whose marker never comes was read the same way.
+#
+# Measured 2026-11-23 with texts that only echo, in bash 3.2.57, bash --posix, sh, dash, zsh 5.9,
+# zsh emulating sh and ksh 93u+, each as a -c text, a file and an eval:
+#   * one or three backslashes before the marker line, with <<- and tabs too: open in all seven
+#   * two or four: closed in all seven; a quoted marker, in any form: closed, a backslash joins nothing
+#   * a joined marker and then the marker on a line of its own: closed there in all seven
+#   * a line that is only a backslash and then the marker, a marker split over two lines by a
+#     backslash, a marker line ending in a backslash and then an empty line: bash, sh and zsh close
+#     (the joined line IS the marker) where dash or ksh do not
+#   * a line that starts as the marker does and ends in backslashes, then the marker: ksh keeps the
+#     first of those backslashes as text, so it joins where the others do not and the reverse
+# Where the shells do not close an unquoted heredoc at the first line that is its marker (they
+# close it later, or differ, or never close it while a $ or a backquote stands in the rest), the
+# reader names the heredoc's << in `unsure` for a caller that asks, as it names a # it cannot tell
+# from a comment, and gives that caller the shells' closing line where they agree on one. A caller
+# that does not ask is given the reading it always was.
+#
+# Each row is run here by the shells this machine has, with `touch ran` for the marker.
+echo "the command reader: an unquoted heredoc closes only where the shells close it (claude-config#3492)"
+OPEN_T="$(mktemp -d "${TMPDIR:-/tmp}/sw-heredoc-open.XXXXXXXX")" || exit 1
+case "${OPEN_T%/}" in ''|/|"${HOME%/}") echo "refusing to run: throwaway directory came back as '$OPEN_T'" >&2; exit 2 ;; esac
+# One line for each check: "ok<TAB>description" or "FAIL<TAB>description<TAB>why".
+python3 -B - "$SW" "$OPEN_T" > "$OPEN_T/rows.tsv" <<'PY'
+import importlib.util
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+
+sw_path, scratch = sys.argv[1], sys.argv[2]
+spec = importlib.util.spec_from_file_location("shell_words", sw_path)
+sw = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(sw)
+
+B = "\\"
+RAN = "echo '$(touch ran)'"
+T = RAN + "\necho end\n"
+# (description, text, what the reader must say when asked which lines it is unsure of):
+# "not listed" where every shell closes the heredoc at the first line that is its marker, as the
+# reader always read it, and "unsure" where they close it anywhere else, differ, or never close it.
+ROWS = [
+    ("the control: no backslash", "cat <<E\na\nE\n" + T, "not listed"),
+    ("one backslash before the marker line", "cat <<E\na" + B + "\nE\n" + T, "unsure"),
+    ("two backslashes before the marker line", "cat <<E\na" + B * 2 + "\nE\n" + T, "not listed"),
+    ("three backslashes before the marker line", "cat <<E\na" + B * 3 + "\nE\n" + T, "unsure"),
+    ("four backslashes before the marker line", "cat <<E\na" + B * 4 + "\nE\n" + T, "not listed"),
+    ("a space and a backslash before the marker line", "cat <<E\na " + B + "\nE\n" + T, "unsure"),
+    ("a backslash after a substitution, before the marker line", "cat <<E\n$(echo a)" + B + "\nE\n" + T, "unsure"),
+    ("two backslashes, then one, before the marker line", "cat <<E\na" + B * 2 + "\nb" + B + "\nE\n" + T, "unsure"),
+    ("in a pipeline", "cat <<E | cat\na" + B + "\nE\n" + T, "unsure"),
+    ("the tail with no line break after it", "cat <<E\na" + B + "\nE\n" + RAN, "unsure"),
+    ("a backslash and a carriage return before the marker line", "cat <<E\na" + B + "\r\nE\n" + T, "not listed"),
+    ("a backslash and a space before the marker line", "cat <<E\na" + B + " \nE\n" + T, "not listed"),
+    ("<<- the control", "cat <<-E\n\ta\n\tE\n" + T, "not listed"),
+    ("<<- one backslash before the marker line", "cat <<-E\n\ta" + B + "\n\tE\n" + T, "unsure"),
+    ("<<- two backslashes before the marker line", "cat <<-E\n\ta" + B * 2 + "\n\tE\n" + T, "not listed"),
+    ("<<- a backslash in the middle of the body", "cat <<-E\n\ta" + B + "\n\tb\n\tE\n" + T, "not listed"),
+    ("a single quoted marker", "cat <<'E'\na" + B + "\nE\n" + T, "not listed"),
+    ("a double quoted marker", "cat <<\"E\"\na" + B + "\nE\n" + T, "not listed"),
+    ("a marker quoted by a backslash", "cat <<" + B + "E\na" + B + "\nE\n" + T, "not listed"),
+    ("a marker quoted in part", "cat <<E''\na" + B + "\nE\n" + T, "not listed"),
+    ("<<- a quoted marker", "cat <<-'E'\n\ta" + B + "\n\tE\n" + T, "not listed"),
+    ("a quoted marker, a line that is only a backslash", "cat <<'E'\n" + B + "\nE\n" + T, "not listed"),
+    ("a backslash in the middle of the body", "cat <<E\na" + B + "\nb\nE\n" + T, "not listed"),
+    ("two backslashes in the middle of the body", "cat <<E\na" + B + "\nb" + B + "\nc\nE\n" + T, "not listed"),
+    ("a joined marker, then the marker on its own line", "cat <<E\na" + B + "\nE\nE\n" + T, "unsure"),
+    ("a joined marker that ends in a backslash itself, then the marker", "cat <<E\na" + B + "\nE" + B + "\nb\nE\n" + T, "not listed"),
+    ("a joined marker, an indented one, then the marker", "cat <<E\na" + B + "\n E\nE\n" + T, "not listed"),
+    ("a joined marker, a substitution, then the marker", "cat <<E\na" + B + "\nE\n$(touch ran)\nE\n", "unsure"),
+    ("a joined marker inside a substitution in the body", "cat <<E\n$(echo a" + B + "\nE\n)\nE\n" + T, "unsure"),
+    ("a marker line that ends in a backslash", "cat <<E\nbody\nE" + B + "\n" + T, "unsure"),
+    ("a marker line that ends in two backslashes", "cat <<E\nbody\nE" + B * 2 + "\n" + T, "unsure"),
+    ("a marker that never comes", "cat <<E\nbody\n" + T, "unsure"),
+    ("two heredocs, the first left open", "cat <<A <<B\na" + B + "\nA\nb\nB\n" + T, "unsure"),
+    ("two heredocs, the second left open", "cat <<A <<B\na\nA\nb" + B + "\nB\n" + T, "unsure"),
+    ("two heredocs, a quoted one and then one left open", "cat <<'A' <<B\na" + B + "\nA\nb" + B + "\nB\n" + T, "unsure"),
+    ("two heredocs, the second quoted", "cat <<A <<'B'\na\nA\nb" + B + "\nB\n" + T, "not listed"),
+    ("two heredocs, the first joined and then closed", "cat <<A <<B\na" + B + "\nA\nA\nb\nB\n" + T, "unsure"),
+    ("in a $( ), the tail inside it", "x=$(cat <<E\na" + B + "\nE\n" + RAN + "\n)\necho end\n", "unsure"),
+    ("in a $( ), closed later", "x=$(cat <<E\na" + B + "\nE\nE\n)\n" + T, "unsure"),
+    # Where the shells differ.
+    ("a line that is only a backslash, then the marker", "cat <<E\n" + B + "\nE\n" + T, "unsure"),
+    ("a body line, a line that is only a backslash, then the marker", "cat <<E\na\n" + B + "\nE\n" + T, "unsure"),
+    ("a marker split over two lines by a backslash", "cat <<EOF\na\nE" + B + "\nOF\n" + T, "unsure"),
+    ("a marker line ending in a backslash, then an empty line", "cat <<E\nbody\nE" + B + "\n\n" + T, "unsure"),
+    ("a marker line ending in a backslash, then the marker", "cat <<E\nbody\nE" + B + "\nE\n" + T, "unsure"),
+    ("the start of the marker and a backslash, then the marker", "cat <<EOF\nEO" + B + "\nEOF\n" + T, "unsure"),
+    ("the start of the marker and two backslashes, then the marker", "cat <<EOF\nEO" + B * 2 + "\nEOF\n" + T, "unsure"),
+    ("<<- a line that is only a backslash, then the marker", "cat <<-E\n" + B + "\n\tE\n" + T, "unsure"),
+    ("<<- a tab and a backslash, then the marker", "cat <<-E\n\t" + B + "\n\tE\n" + T, "unsure"),
+    ("<<- the start of the marker and a backslash, then the marker", "cat <<-EOF\n\tEO" + B + "\n\tEOF\n" + T, "unsure"),
+    # A heredoc on ONE line, no line break anywhere in the text. No shell gives it a body: the line
+    # ends with the text, so it reads an empty body to the end and runs every command after the <<
+    # on that line (bash 3.2 and zsh, measured 2026-11-23: `cat <<E; echo RAN; E` printed RAN, then
+    # "command not found" for E). The reader takes such a text for the flattened form the push hooks
+    # make, a "; " standing for each line break, and so took the command for the body.
+    ("one line: a command, then the marker", "cat <<E; touch ran; E", "unsure"),
+    ("one line: a quoted marker, a command, then the marker", "cat <<'E'; touch ran; E", "unsure"),
+    ("one line: a command, then the marker, then more", "cat <<E; touch ran; E; echo end", "unsure"),
+    ("one line, the control: a command and no marker after it", "cat <<E; touch ran", "listed"),
+    # The OPENER's own line ends in a backslash (review of #3495). Every shell reads a backslash
+    # and a line break before or inside the marker word as joining the two lines, so the marker is
+    # the word that results, unquoted: `cat <<E\` and then `x` waits for a line that is Ex, the
+    # line that is E closes nothing, and the rest is a body whose $( ) runs. Inside double quotes
+    # the two lines are joined the same way. The reader took the backslash for one quoting the
+    # line break, so the marker was quoted, never came, and the rest was read as commands, with
+    # nothing named. Measured 2026-11-23 in bash 3.2.57, bash --posix, sh, dash, zsh 5.9 and ksh
+    # 93u+, which agree on every row here but two: with `<<` and then a backslash and -E on the
+    # next line, bash, sh and dash strip tabs and zsh and ksh do not, and a heredoc in a $( ) so
+    # opened is a syntax error in dash, zsh and ksh. The reader names every opener that holds
+    # such a join, whether or not it can follow it, so nothing it read as a command before is
+    # dropped on the strength of the join.
+    ("the opener line ends in a backslash, a line, then the marker", "cat <<E" + B + "\nx\nE\n" + T, "unsure"),
+    ("the opener line ends in a backslash, then the marker", "cat <<E" + B + "\nE\n" + T, "unsure"),
+    ("the opener line ends in a backslash, a word, a body, then the marker", "cat <<E" + B + "\nF\nbody\nE\n" + T, "unsure"),
+    ("<< and a backslash, the marker on the next line, a joined marker later", "cat <<" + B + "\nE\nbody" + B + "\nE\n" + T, "unsure"),
+    ("<<-E and a backslash, a line, then the marker after a tab", "cat <<-E" + B + "\nx\n\tE\n" + T, "unsure"),
+    ("the opener line ends in a backslash, a $( ) in the body, then the joined marker", "cat <<E" + B + "\nx\n" + RAN + "\nEx\necho end\n", "unsure"),
+    ("the opener line ends in a backslash, then an empty line", "cat <<E" + B + "\n\n" + RAN + "\nE\necho end\n", "unsure"),
+    ("<< and a backslash, the marker on the next line", "cat <<" + B + "\nE\n" + RAN + "\nE\necho end\n", "unsure"),
+    ("<<, a blank and a backslash, the marker on the next line", "cat << " + B + "\nE\n" + RAN + "\nE\necho end\n", "unsure"),
+    ("<<- and a backslash, the marker on the next line", "cat <<-" + B + "\nE\n\t" + RAN + "\n\tE\necho end\n", "unsure"),
+    ("<< and a backslash, -E on the next line", "cat <<" + B + "\n-E\n\t" + RAN + "\n\tE\necho end\n", "unsure"),
+    ("the opener line ends in a backslash, and the joined marker closes it", "cat <<E" + B + "\nx\nbody\nEx\n" + T, "unsure"),
+    ("a double quoted marker joined over two lines", "cat <<\"E" + B + "\nx\"\n" + RAN + "\nEx\necho end\n", "unsure"),
+    ("a marker quoted by a backslash, then joined to the next line", "cat <<" + B + "E" + B + "\nx\n" + RAN + "\nEx\necho end\n", "unsure"),
+    ("the opener line ends in three backslashes", "cat <<E" + B * 3 + "\nx\n" + RAN + "\nE" + B + "x\necho end\n", "unsure"),
+    ("the opener line ends in a backslash, then a ; and a command", "cat <<E" + B + "\n; " + RAN + "\necho end\n", "unsure"),
+    ("two heredocs, the second's opener line ends in a backslash", "cat <<A <<E" + B + "\nx\na\nA\nE\n" + T, "unsure"),
+    ("two heredocs, the first's opener joined to the second's", "cat <<A" + B + "\n<<E\na\nA\nb\nE\n" + T, "unsure"),
+    ("in a $( ), the opener line ends in a backslash", "y=$(cat <<E" + B + "\nx\nE\n" + RAN + "\n)\necho end\n", "unsure"),
+    # A quoted marker that holds a line break itself (single quotes keep the backslash and the
+    # line break; double quotes keep a bare line break): no line is that marker, so bash, sh and
+    # zsh never close the heredoc, while dash and ksh close it at those two lines, where the
+    # reader did. Named where the reader closes it.
+    ("a single quoted marker that holds a backslash and a line break, those two lines later", "cat <<'E" + B + "\nx'\nbody\nE" + B + "\nx\n" + T, "unsure"),
+    ("a double quoted marker that holds a line break, those two lines later", "cat <<\"E\nx\"\nbody\nE\nx\n" + T, "unsure"),
+    # The controls. Two backslashes are one quoted backslash and join nothing. A backslash after
+    # a blank joins the next line to the COMMAND, not to the marker, which the reader always read
+    # as the shells do.
+    ("the control: the opener line ends in two backslashes", "cat <<E" + B * 2 + "\nx\nE\n" + T, "not listed"),
+    ("the control: a backslash after a blank on the opener line", "cat <<E " + B + "\nx\n" + RAN + "\nE\necho end\n", "listed"),
+]
+# Rows every one of the seven kept the heredoc open in, so one shell here must run the marker, or the
+# row measures nothing.
+OPEN = {"one backslash before the marker line", "three backslashes before the marker line",
+        "a space and a backslash before the marker line", "<<- one backslash before the marker line",
+        "a marker line that ends in a backslash", "a marker that never comes",
+        "two heredocs, the second left open", "the tail with no line break after it",
+        "one line: a command, then the marker", "one line: a quoted marker, a command, then the marker",
+        "one line: a command, then the marker, then more", "one line, the control: a command and no marker after it",
+        "the opener line ends in a backslash, a line, then the marker", "the opener line ends in a backslash, then the marker",
+        "the opener line ends in a backslash, a word, a body, then the marker",
+        "<< and a backslash, the marker on the next line, a joined marker later",
+        "<<-E and a backslash, a line, then the marker after a tab",
+        "the opener line ends in a backslash, a $( ) in the body, then the joined marker",
+        "the opener line ends in a backslash, then an empty line", "<< and a backslash, the marker on the next line",
+        "the control: a backslash after a blank on the opener line"}
+SHELLS = {"bash": ["bash", "--noprofile", "--norc", "-c"], "bash --posix": ["bash", "--posix", "--noprofile", "--norc", "-c"],
+          "sh": ["sh", "-c"], "dash": ["dash", "-c"], "zsh": ["zsh", "-f", "-c"], "ksh": ["ksh", "-c"]}
+HAVE = [name for name in SHELLS if shutil.which(SHELLS[name][0])]
+# ksh 93u+ never returns from this one (measured 2026-11-23, 5 seconds, three times).
+SKIP = {("ksh", "two heredocs, the first left open")}
+
+
+def runs(shell, text):
+    d = tempfile.mkdtemp(prefix="run-", dir=scratch)
+    try:
+        subprocess.run(SHELLS[shell] + [text], cwd=d, stdin=subprocess.DEVNULL,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20,
+                       env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": d})
+        return os.path.exists(os.path.join(d, "ran"))
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def asked(text):
+    """(the commands, the lines named, whether the reading gave up)."""
+    marks = []
+    try:
+        cut = [t.strip() for _, t in sw.commands(text, unsure=marks)]
+    except sw.Unreadable:
+        return [], marks, True
+    except TypeError as e:
+        return [], [("no unsure", str(e))], True
+    return cut, marks, False
+
+
+def reading(text):
+    cut, marks, gave_up = asked(text)
+    if marks:
+        return "unsure"
+    if gave_up:
+        return "unreadable"
+    return "listed" if "touch ran" in cut else "not listed"
+
+
+def say(ok, what, why=""):
+    print("ok\t" + what if ok else "FAIL\t" + what + "\t" + why)
+
+
+print("shells\t" + " ".join(HAVE))
+for name, text, want in ROWS:
+    got = reading(text)
+    ran = [shell for shell in HAVE if (shell, name) not in SKIP and runs(shell, text)]
+    shown = text.replace("\\", "\\\\").replace("\n", "\\n").replace("\t", "\\t").replace("\r", "\\r")
+    say(not (ran and got == "not listed"),
+        "#3492 a substitution a shell runs after a heredoc it keeps open is never left out: %s" % name,
+        "%s ran the marker and the reader left it out: [%s]" % (" and ".join(ran), shown))
+    say(got == want, "#3492 the reader says %s: %s" % (want, name),
+        "the reader said %s, wanted %s: [%s]" % (got, want, shown))
+    if name in OPEN:
+        say(bool(ran), "#3492 the row is a real one, a shell here runs the marker: %s" % name,
+            "none of %s ran it: [%s]" % (", ".join(HAVE), shown))
+
+def unasked(text, bodies=None):
+    try:
+        return [t.strip() for _, t in sw.commands(text, heredocs=bodies)]
+    except sw.Unreadable:
+        return ["unreadable"]
+
+
+# What is named is the heredoc's own <<, to the end of the line it is on, and the caller that asks
+# is given the rest as commands, as a heredoc that never closes always was read.
+OPEN_TEXT = "cat <<E\na" + B + "\nE\n" + T
+cut, marks, gave_up = asked(OPEN_TEXT)
+say(marks == [(4, 7)] and not gave_up, "#3492 a heredoc left open is named by its << and the line it opens on",
+    "named %r, gave up: %s" % (marks, gave_up))
+say(cut == ["cat <<E", "a" + B + "\nE", RAN, "echo end"],
+    "#3492 a caller that asks is given the rest of a heredoc left open as commands", "commands gave %r" % (cut,))
+# A heredoc joined and then closed: the caller that asks is given the shells' reading, the joined
+# marker part of the body and the body ending at the marker on a line of its own, and its name.
+LATER_TEXT = "cat <<E\na" + B + "\nE\nE\n" + T
+marks, bodies = [], []
+try:
+    cut = [t.strip() for _, t in sw.commands(LATER_TEXT, heredocs=bodies, unsure=marks)]
+except sw.Unreadable:
+    cut = ["unreadable"]
+say(cut == ["cat <<E", RAN, "echo end"] and bodies == [(False, "cat ", "a" + B + "\nE")] and marks == [(4, 7)],
+    "#3492 a caller that asks is given a joined marker as part of the body, and the heredoc's name",
+    "commands gave %r, the bodies %r, named %r" % (cut, bodies, marks))
+# A caller that does not ask is given the reading it always was, in each of the three: other gates
+# read through the reader, and what such a heredoc means to each is that gate's to decide.
+DIFFER_TEXT = "cat <<E\n" + B + "\nE\n" + T
+bodies = []
+got = (unasked(OPEN_TEXT), unasked(LATER_TEXT, bodies), unasked(DIFFER_TEXT))
+say(got == (["cat <<E", RAN, "echo end"], ["cat <<E", "E", RAN, "echo end"], ["cat <<E", RAN, "echo end"])
+    and bodies == [(False, "cat ", "a" + B)],
+    "#3492 a caller that does not ask is given the reading it always was",
+    "commands gave %r and the bodies %r" % (got, bodies))
+# A marker that never comes at all, with no $ and no backquote after it: no shell runs anything
+# from the rest as a substitution, the reading goes on to the rest as commands as it always did,
+# and nothing is named. (What the heredoc's command is fed is then the whole rest, in the reader
+# and the shells alike.)
+text, want = "cat <<E\nbody\necho end\n", ["cat <<E", "body", "echo end"]
+cut, marks, gave_up = asked(text)
+say(cut == want and not marks and not gave_up and unasked(text) == want,
+    "#3492 with no $ or backquote after it, nothing is named and the reading is as it was: a marker that never comes",
+    "commands gave %r, named %r" % (cut, marks))
+# A JOINED marker with no $ and no backquote after it was read the same way until the review of
+# #3495: closed at the marker, nothing named, on the ground that no shell runs a substitution from
+# the rest. But the rest is still the heredoc's body, and the shells feed it to the heredoc's
+# command, while the reading took it for commands of its own. Where the reading closes a heredoc
+# that no shell closes, it is named whatever follows, and the caller that asks is given the rest
+# as commands, as for a heredoc that never closes.
+text = "cat <<E\na" + B + "\nE\necho end\n"
+cut, marks, gave_up = asked(text)
+say(cut == ["cat <<E", "a" + B + "\nE", "echo end"] and marks == [(4, 7)] and not gave_up
+    and unasked(text) == ["cat <<E", "echo end"],
+    "#3492 a joined marker with no $ or backquote after it is named too, and a caller that does not ask reads as before",
+    "commands gave %r, named %r, unasked %r" % (cut, marks, unasked(text)))
+# What that hid, measured 2026-11-23 in bash 3.2.57, bash --posix, sh, dash, zsh 5.9 and ksh 93u+
+# with an interpreter and a module that only creates a file: fed by a heredoc whose marker is
+# joined to a comment line, it was given the next line too, an import, and ran it, in all six,
+# while the reader gave that line as a shell command and the body as the comment alone
+# (test-slack-drafts-comment-start.sh holds that case, through the gate). Here the heredoc's
+# command is a grep that looks for the line after the marker, and `touch ran` follows only where
+# it finds it: where a shell fed that line to grep as part of the body. A quoted marker that holds
+# a line break is never closed by bash, sh and zsh (dash and ksh close it at those two lines, as
+# the reader did), with the same result. (description, text, whether the reader must name the
+# heredoc, whether a shell here must feed the line after the marker to grep)
+FED = [
+    ("the control: a heredoc every shell closes", "grep -q fed <<E && touch ran\nnote\nE\nfed\n", False, False),
+    ("a marker joined to the line before", "grep -q fed <<E && touch ran\nnote" + B + "\nE\nfed\n", True, True),
+    ("in a pipeline", "cat <<E | grep -q fed && touch ran\nnote" + B + "\nE\nfed\n", True, True),
+    ("<<- and tabs", "grep -q fed <<-E && touch ran\n\tnote" + B + "\n\tE\nfed\n", True, True),
+    ("three backslashes", "grep -q fed <<E && touch ran\nnote" + B * 3 + "\nE\nfed\n", True, True),
+    ("the control: two backslashes", "grep -q fed <<E && touch ran\nnote" + B * 2 + "\nE\nfed\n", False, False),
+    ("the control: a quoted marker", "grep -q fed <<'E' && touch ran\nnote" + B + "\nE\nfed\n", False, False),
+    # Not held to be a real row on every machine: the shells differ, and only those named above
+    # were measured.
+    ("a single quoted marker that holds a backslash and a line break, those two lines later",
+     "grep -q fed <<'E" + B + "\nx' && touch ran\nnote\nE" + B + "\nx\nfed\n", True, False),
+    ("a double quoted marker joined over two lines, those two lines later",
+     "grep -q fed <<\"E" + B + "\nx\" && touch ran\nnote\nE" + B + "\nx\nfed\n", True, True),
+]
+for name, text, named, real in FED:
+    fed = [shell for shell in HAVE if runs(shell, text)]
+    cut, marks, gave_up = asked(text)
+    shown = text.replace("\\", "\\\\").replace("\n", "\\n").replace("\t", "\\t")
+    say(not fed or bool(marks),
+        "#3492 a heredoc a shell keeps open and feeds to its command is never read as closed with nothing named: %s" % name,
+        "%s fed the line after the marker to the heredoc's command and the reader named nothing: [%s]" % (" and ".join(fed), shown))
+    say(bool(marks) == named, "#3492 the reader %s the heredoc that feeds its command: %s" % ("names" if named else "does not name", name),
+        "named %r, commands %r: [%s]" % (marks, cut, shown))
+    if real:
+        say(bool(fed), "#3492 the row is a real one, a shell here feeds the line after the marker to the heredoc's command: %s" % name,
+            "none of %s did: [%s]" % (", ".join(HAVE), shown))
+# An opener whose line ends in a backslash is named by its << to the end of its marker word, past
+# the line break the shells join, and the caller that asks is given the shells' reading of it: the
+# marker is the joined word, unquoted, so a body it closes is read for its substitutions and one
+# it never closes is read on as commands. A caller that does not ask is given the reading it
+# always was, the backslash quoting the line break.
+JOIN_TEXT = "cat <<E" + B + "\nx\nE\n" + T
+cut, marks, gave_up = asked(JOIN_TEXT)
+say(cut == ["cat <<E" + B + "\nx", "E", RAN, "echo end"] and marks == [(4, 10)] and not gave_up,
+    "#3492 an opener joined to the next line is named once, by its << to the end of its marker word",
+    "commands gave %r, named %r, gave up: %s" % (cut, marks, gave_up))
+JOIN_CLOSED = "cat <<E" + B + "\nx\n" + RAN + "\nEx\necho end\n"
+marks, bodies = [], []
+try:
+    cut = [t.strip() for _, t in sw.commands(JOIN_CLOSED, heredocs=bodies, unsure=marks)]
+except sw.Unreadable:
+    cut = ["unreadable"]
+say(cut == ["cat <<E" + B + "\nx", "touch ran", "echo end"] and bodies == [(False, "cat ", RAN)] and marks == [(4, 10)],
+    "#3492 a caller that asks is given the joined marker, unquoted, and the substitutions of the body it closes",
+    "commands gave %r, the bodies %r, named %r" % (cut, bodies, marks))
+bodies = []
+got = (unasked(JOIN_TEXT), unasked(JOIN_CLOSED, bodies))
+say(got == (["cat <<E" + B + "\nx", "E", RAN, "echo end"], ["cat <<E" + B + "\nx", RAN, "Ex", "echo end"]) and bodies == [],
+    "#3492 a caller that does not ask is given the reading it always was of an opener joined to the next line",
+    "commands gave %r and the bodies %r" % (got, bodies))
+# The opener helper itself: asked for joins, it reads the marker as the shells do and says where
+# each join is; not asked, it reads as it always did, for every other caller of it.
+joins = []
+got = (sw.heredoc_opener(JOIN_TEXT, 4, joins=joins), joins, sw.heredoc_opener(JOIN_TEXT, 4))
+say(got == (("Ex", False, False, 10), [7], ("E\nx", False, True, 10)),
+    "#3492 heredoc_opener reads a join in the marker as the shells do only where it is asked to",
+    "gave %r" % (got,))
+joins = []
+got = (sw.heredoc_opener('cat <<"E' + B + '\nx" y', 4, joins=joins), joins,
+       sw.heredoc_opener("cat <<- " + B + "\n E", 4, joins=[]), sw.heredoc_opener("cat <<" + B + "\n", 4, joins=[]))
+say(got == (("Ex", False, True, 12), [8], ("E", True, False, 12), None),
+    "#3492 heredoc_opener reads a join in double quotes and before the marker word, and no marker where none follows",
+    "gave %r" % (got,))
+# A quoted marker's body is read as written, so a marker that never comes names nothing: no shell
+# runs anything in it, and the rest is read as commands, as it was.
+cut, marks, gave_up = asked("cat <<'E'\nbody\n" + T)
+say(cut == ["cat <<'E'", "body", RAN, "echo end"] and not marks and not gave_up,
+    "#3492 the control: a quoted heredoc that never closes names nothing and is read as it was",
+    "commands gave %r, named %r" % (cut, marks))
+# A text with no line break at all is read as it was, the "; " taken for the line break the push
+# hooks made it from. Which "; " was a line break cannot be told, and as typed no shell gives the
+# heredoc a body there and every shell runs what the reading took for one, so a heredoc the reading
+# closed in such a text is named for a caller that asks, by its << and the "; " after it. A caller
+# that does not ask is given the reading it always was.
+for text, want in (("cat <<E; a" + B + "; E; " + RAN, ["cat <<E", RAN]),
+                   ("cat <<E; a; E; echo x", ["cat <<E", "echo x"])):
+    cut, marks, gave_up = asked(text)
+    say(cut == want and marks == [(4, 7)] and not gave_up and unasked(text) == want,
+        "#3492 a text with no line break is read as it was, and the heredoc it closes is named: %s" % text,
+        "commands gave %r, named %r, unasked %r" % (cut, marks, unasked(text)))
+# The control: one the reading never closes is read on as commands, as the shells run them, and
+# nothing is named.
+cut, marks, gave_up = asked("cat <<E; a; echo x")
+say(cut == ["cat <<E", "a", "echo x"] and not marks and not gave_up,
+    "#3492 the control: a heredoc with no line break that never closes names nothing and is read on",
+    "commands gave %r, named %r" % (cut, marks))
+PY
+rc=$?
+[ "$rc" -eq 0 ] || check "#3492 the comparison ran to its end" "python3 exited $rc"
+# rows_checked <rows file> <issue>: counts each "ok" or "FAIL" line of a comparison as a check, and
+# leaves the shells the comparison ran in ROWS_SHELLS and how many checks it made in ROWS_COUNT.
+rows_checked() {
+  local verdict what why
+  ROWS_SHELLS=""
+  ROWS_COUNT=0
+  while IFS=$'\t' read -r verdict what why; do
+    case "$verdict" in
+      ok) check "$what" ok; ROWS_COUNT=$((ROWS_COUNT + 1)) ;;
+      FAIL) check "$what" "$why"; ROWS_COUNT=$((ROWS_COUNT + 1)) ;;
+      shells) ROWS_SHELLS="$what" ;;
+      *) check "$2 a row of the comparison is one this suite reads" "got: $verdict" ;;
+    esac
+  done < "$1"
+}
+rows_checked "$OPEN_T/rows.tsv" "#3492"
+OPEN_SHELLS="$ROWS_SHELLS"
+OPEN_ROWS="$ROWS_COUNT"
+rm -rf "$OPEN_T"
+case " $OPEN_SHELLS " in
+  *" bash "*) check "#3492 the texts were run by this machine's bash" ok ;;
+  *) check "#3492 the texts were run by this machine's bash" "no bash was found, so no row was measured against a shell" ;;
+esac
+for shell in zsh dash ksh; do
+  case " $OPEN_SHELLS " in
+    *" $shell "*) ;;
+    *) echo "SUITE-PART-UNMEASURED what $shell does with each text of #3492, because there is no $shell on this machine" ;;
+  esac
+done
+# A run that compared nothing must not read as a pass.
+[ "$OPEN_ROWS" -ge 100 ] || check "#3492 the comparison checked its rows" "only $OPEN_ROWS checks were made, where the table makes two for each row and more, well over 100"
+
+# ---- an end marker written as a dollar quote (claude-config#3566) ----
+# The reader took the text between the quotes of <<$'...' for the marker as written, and the next
+# quote for its end. The shells that know a dollar quote read its escapes first: after <<$'E\\F'
+# (two backslashes) the body ends at the line E\F (one), and the reader ended it at the line with
+# two, so every command between those two lines was body text to a gate and a command to the shell.
+# After <<$'p\'6' the reader found no marker at all. And dash knows no dollar quote: to it the $ is a
+# character of the marker, so no heredoc whose marker holds one ends at the same line in every shell.
+#
+# The markers are lib/heredoc-markers.json, the one list of markers for this reader and for mod-kit's
+# (hooks/commands.ts readDelimiter), in place of a list in each reader's suite that the other never
+# ran. This suite runs it; mod-kit's does not read the file, which claude-config#3566 is left open
+# for. It says, for each, the line each of seven shells ends the body at (measured 2026-11-24 with texts
+# that only print: bash 3.2.57, bash --posix, sh, dash, zsh 5.9, zsh emulating sh and ksh 93u+, each
+# as a -c text, a file and an eval). Every row is run here again by each of those shells this
+# machine has, so the list cannot say what they do not do; a shell of the same name that is not the
+# one measured (sh that is dash, a newer bash) is said to be unmeasured and held to nothing. Then
+# every row is asked of the reader, on any machine:
+#   * where all seven share a line, the reader gives that marker and names nothing
+#   * where they do not, the reader names the heredoc in `unsure` for a caller that asks, and
+#     where bash and zsh share a line, which is every dollar quote whose escapes they read alike,
+#     its marker is that line for every caller
+#   * a command after the line bash and zsh end the body at is a command to the reader too, whatever
+#     other line the list names comes after it
+echo "the command reader: an end marker written as a dollar quote (claude-config#3566)"
+MARK_T="$(mktemp -d "${TMPDIR:-/tmp}/sw-heredoc-marker.XXXXXXXX")" || exit 1
+case "${MARK_T%/}" in ''|/|"${HOME%/}") echo "refusing to run: throwaway directory came back as '$MARK_T'" >&2; exit 2 ;; esac
+python3 -B - "$SW" "$MARK_T" "$DIR/lib/heredoc-markers.json" > "$MARK_T/rows.tsv" <<'PY'
+import importlib.util
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+
+sw_path, scratch, rows_path = sys.argv[1], sys.argv[2], sys.argv[3]
+spec = importlib.util.spec_from_file_location("shell_words", sw_path)
+sw = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(sw)
+with open(rows_path) as f:
+    data = json.load(f)
+
+B = "\\"
+SHELLS, GROUPS, ROWS = data["shells"], data["groups"], data["rows"]
+EVERY = set(GROUPS["all"])
+
+
+def members(v):
+    return set(GROUPS[v] if isinstance(v, str) else v)
+
+
+def output_of(argv, text):
+    """The lines a shell prints for a text that only prints."""
+    d = tempfile.mkdtemp(prefix="run-", dir=scratch)
+    try:
+        p = subprocess.run(argv + [text], cwd=d, stdin=subprocess.DEVNULL,
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=20,
+                           env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": d})
+        return p.stdout.decode("utf-8", "replace").split("\n")
+    except subprocess.TimeoutExpired:
+        return NO_ANSWER
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+# What output_of gives for a shell that did not finish: never read as "printed nothing".
+NO_ANSWER = ["(no answer in 20 seconds)"]
+
+
+def printed(shell, text):
+    return output_of(SHELLS[shell]["run"], text)
+
+
+# The list says what seven named shells did, on macOS. A machine's bash, sh or dash can be another
+# shell altogether (on Linux sh is often dash, and bash is newer than 3.2), so a shell here is held
+# to the list only where its probe prints what the measured one's did. The rest is said to be
+# unmeasured, by name, and is no failure: what the reader must give is read from the list alone,
+# on any machine.
+HAVE = []
+for name in SHELLS:
+    probe, want = SHELLS[name]["probe"], SHELLS[name]["prints"]
+    if not shutil.which(probe[0]):
+        print("unmeasured\twhat %s does with each marker of #3566, because there is no %s on this machine" % (name, probe[0]))
+        continue
+    said = output_of(probe[:-1], probe[-1])[0].strip()
+    if said.startswith(want):
+        HAVE.append(name)
+    else:
+        print("unmeasured\twhat %s does with each marker of #3566, because the list was measured on one that says '%s' and this machine's says '%s'"
+              % (name, want, said))
+
+
+def shown(t):
+    t = t.replace(B, B * 2).replace("\n", B + "n").replace("\t", B + "t")
+    return "".join(c if " " <= c <= "~" else "<%02x>" % ord(c) for c in t)
+
+
+READER = [0]  # how many checks were of the reader alone, which no machine's shells decide
+
+
+def say(ok, what, why="", shells=False):
+    print("ok\t" + what if ok else "FAIL\t" + what + "\t" + why)
+    READER[0] += 0 if shells else 1
+
+
+def opener(text, at):
+    """(what heredoc_opener gives, where it says a dollar quote opens), the second None for a
+    reader that cannot be asked."""
+    doubts = []
+    try:
+        return sw.heredoc_opener(text, at, doubts=doubts), doubts
+    except TypeError:
+        return sw.heredoc_opener(text, at), None
+
+
+def read(text, ask):
+    """(the commands, the bodies, the lines named) as a caller that asks, or does not, is given them."""
+    bodies, marks = [], []
+    try:
+        if ask:
+            cut = [t.strip() for _, t in sw.commands(text, heredocs=bodies, unsure=marks)]
+        else:
+            cut = [t.strip() for _, t in sw.commands(text, heredocs=bodies)]
+    except sw.Unreadable:
+        return ["unreadable"], bodies, marks
+    return cut, bodies, marks
+
+
+BODY = "v=$((1+1))"
+for row in ROWS:
+    name, word, quoted, closes = row["name"], row["word"], row["quoted"], row["closes"]
+    lines = list(closes) + row.get("never", [])
+    head = "cat <<" + word
+    named = (4, len(head))
+    where = "%s, <<%s" % (name, shown(word))
+
+    # The list against the measured shells this machine has: each ends the body at the lines the
+    # list says it does and at no other line the list names, and expands the body or not as it says.
+    for line in lines if HAVE else []:
+        text = head + "\n" + BODY + "\n" + line + "\necho RAN\n"
+        want = members(closes.get(line, []))
+        wrong, kept = [], []
+        for shell in HAVE:
+            got = printed(shell, text)
+            if got == NO_ANSWER:
+                wrong.append("%s gave no answer, so what it does was not seen" % shell)
+            elif ("RAN" in got) != (shell in want):
+                wrong.append("%s %s" % (shell, "ended it there" if "RAN" in got else "did not end it there"))
+            elif "RAN" in got and ("v=2" in got) == quoted:
+                kept.append(shell)
+        say(not wrong, "#3566 the list says what each shell here does at the line %s: %s" % (shown(line), where),
+            "; ".join(wrong), shells=True)
+        say(not kept, "#3566 the list says whether the body is expanded, ended at the line %s: %s" % (shown(line), where),
+            "%s %s it" % (" and ".join(kept), "expanded" if quoted else "did not expand"), shells=True)
+
+    seven = [line for line in closes if members(closes[line]) == EVERY]
+    both = [line for line in closes if {"bash", "zsh"} <= members(closes[line])]
+    got, doubts = opener(head, 4)
+    if seven:
+        say(got == (seven[0], False, quoted, len(head)) and doubts == [],
+            "#3566 a marker all seven shells read alike is read as they read it, and no dollar quote is named: " + where,
+            "heredoc_opener gave %r and named %r" % (got, doubts))
+    else:
+        say(bool(doubts), "#3566 heredoc_opener says where the dollar quote the shells read differently opens: " + where,
+            "it named %r" % (doubts,))
+    if both and not seven:
+        say(got == (both[0], False, True, len(head)),
+            "#3566 a marker bash and zsh read alike is read as they read it: " + where, "heredoc_opener gave %r" % (got,))
+        say(sw.heredoc_opener(head, 4) == got, "#3566 a caller that does not ask is given the same marker: " + where,
+            "heredoc_opener gave %r" % (sw.heredoc_opener(head, 4),))
+
+    # Through commands(), ended at the line bash and zsh share: the body is the one line, the
+    # command after it is a command, and the heredoc is named unless all seven shells share the line.
+    for line in both:
+        text = head + "\n" + BODY + "\n" + line + "\necho RAN\n"
+        want = ([head, "echo RAN"], [(quoted, "cat ", BODY)])
+        cut, bodies, marks = read(text, False)
+        say((cut, bodies) == want, "#3566 a caller that does not ask is given the body bash and zsh end: " + where,
+            "commands gave %r and the bodies %r" % (cut, bodies))
+        cut, bodies, marks = read(text, True)
+        say((cut, bodies) == want and marks == ([] if seven else [named]),
+            "#3566 a caller that asks is given it too, %s: %s" % ("and nothing is named" if seven else "and the heredoc's name", where),
+            "commands gave %r, the bodies %r, named %r" % (cut, bodies, marks))
+        # A command between that line and any other line the list names is never body text.
+        for other in lines:
+            if other == line:
+                continue
+            text = head + "\n" + BODY + "\n" + line + "\necho BETWEEN\n" + other + "\necho RAN\n"
+            can = [shell for shell in HAVE if shell in members(closes[line])]
+            ran = [shell for shell in can if "BETWEEN" in printed(shell, text)]
+            cut, bodies, marks = read(text, False)
+            say("echo BETWEEN" in cut,
+                "#3566 a command after the line %s is a command, with the line %s after it: %s" % (shown(line), shown(other), where),
+                "%s ran it and the reader gave %r" % (" and ".join(ran) or "no shell here", cut))
+            if can:
+                say(bool(ran), "#3566 the row is a real one, a shell here runs the command after the line %s: %s" % (shown(line), where),
+                    "none of %s ran it" % ", ".join(can), shells=True)
+    if not both:
+        # The shells share no line, so no reading is theirs: every one of them is named, and a
+        # caller that asks is told, whichever line the text ends the body at.
+        for line in lines:
+            text = head + "\n" + BODY + "\n" + line + "\necho RAN\n"
+            cut, bodies, marks = read(text, True)
+            say(marks[:1] == [named], "#3566 a heredoc bash and zsh end at different lines is named, ended at the line %s: %s" % (shown(line), where),
+                "named %r" % (marks,))
+
+# What the reader gives where bash and zsh share no line: the reading it always was of a dollar
+# double quote (bash's), a line break for \n as the two read it (no line can be that marker), and
+# any other escape as written.
+PINS = [("$'E" + B + "nF'", "E\nF"), ("$'E" + B + "qF'", "E" + B + "qF"), ("$'E" + B + "$F'", "E" + B + "$F"),
+        ("$'E" + B + "u0041'", "E" + B + "u0041"), ("$'E" + B + "x'", "E" + B + "x"), ("$'E" + B + "1'", "E" + B + "1"),
+        ("$'E" + B + "177'", "E" + B + "177"), ("$'E" + B + "cAF'", "E" + B + "cAF"), ("$'E" + B + "0F'", "E" + B + "0F"),
+        ("$'E" + B + "x00F'", "E" + B + "x00F"), ("$'E" + B + "x7f'", "E" + B + "x7f"), ("$'E" + B + "x80'", "E" + B + "x80"),
+        ("$'E" + B + "777'", "E" + B + "777"), ('$"EOF"', "EOF"), ('$"E' + B * 2 + 'F"', "E" + B + "F"), ("$$'EOF'", "$EOF")]
+listed = {row["word"] for row in ROWS}
+for word, marker in PINS:
+    head = "cat <<" + word
+    got, doubts = opener(head, 4)
+    say(got == (marker, False, True, len(head)) and bool(doubts),
+        "#3566 a marker bash and zsh read differently is given as %s, and named: <<%s" % (shown(marker), shown(word)),
+        "heredoc_opener gave %r and named %r" % (got, doubts))
+# Every character from 2 to 126 written as two hex digits and as three octal ones is that
+# character to bash and zsh alike (measured 2026-11-24, 250 markers), so the reader gives it.
+wrong = []
+for v in range(2, 127):
+    for esc in ("x%02x" % v, "%03o" % v):
+        head = "cat <<$'E" + B + esc + "G'"
+        got, doubts = opener(head, 4)
+        if got != ("E" + chr(v) + "G", False, True, len(head)) or not doubts:
+            wrong.append(esc)
+say(not wrong, "#3566 a hex or octal escape for a character from 2 to 126 is read as that character",
+    "%d of 250 were not, the first: %s" % (len(wrong), " ".join(wrong[:6])))
+# Where the dollar quotes open, for the caller that names them; and none where a $ before a quote
+# is no dollar quote's.
+got = [opener("cat <<" + word, 4)[1] for word in ("E$'O'F", "$'a'$'b'", 'E$"O"F', B + "$'EOF'", '"$"' + "'EOF'", "'EOF'", "EOF")]
+say(got == [[7], [6, 10], [7], [], [], [], []],
+    "#3566 heredoc_opener names each dollar quote by where its $ stands, and nothing else", "named %r" % (got,))
+# A dollar quote ends at the first quote no backslash escapes, so one whose last quote is escaped
+# never closes and opens no heredoc, where the reader ended it at that escaped quote.
+got = (opener("cat <<$'E" + B + "'", 4)[0], opener("cat <<$'E" + B * 2 + "'", 4)[0], opener("cat <<'E" + B + "'", 4)[0])
+say(got == (None, ("E" + B, False, True, 12), ("E" + B, False, True, 10)),
+    "#3566 a dollar quote ends at the first quote no backslash escapes, and a plain quote at the first quote",
+    "heredoc_opener gave %r" % (got,))
+# The issue's own text, whole: both shells run the command between the two lines.
+text = "cat <<$'E" + B * 2 + "F'\nbody\nE" + B + "F\necho BETWEEN\nE" + B * 2 + "F\necho end\n"
+cut, bodies, marks = read(text, False)
+say(cut[:2] == ["cat <<$'E" + B * 2 + "F'", "echo BETWEEN"] and bodies == [(True, "cat ", "body")],
+    "#3566 the lines between the marker the shells end the body at and the marker as written are commands",
+    "commands gave %r and the bodies %r" % (cut, bodies))
+# The marker printing mode the line at a time scans read: a marker holding a tab is printed whole
+# after the first tab, and one holding a line break, which no line of a body can be, gets no row,
+# so such a scan reads the lines after it as code.
+p = subprocess.run([sys.executable, "-B", sw_path, "heredoc-markers"], stdout=subprocess.PIPE, timeout=20,
+                   input=("cat <<$'E" + B + "tF'\ncat <<$'E" + B + "nF' <<$'p" + B + "x36'\n").encode())
+say(p.stdout.decode() == "1\tE\tF\n2\tp6\n", "#3566 heredoc-markers prints a translated marker, and no row for one that holds a line break",
+    "printed %r" % (p.stdout.decode(),))
+print("listed\t%d" % len(ROWS))
+print("reader\t%d" % READER[0])
+PY
+rc=$?
+[ "$rc" -eq 0 ] || check "#3566 the comparison ran to its end" "python3 exited $rc"
+MARK_LISTED="$(awk -F'\t' '$1 == "listed" { print $2 }' "$MARK_T/rows.tsv")"
+MARK_READER="$(awk -F'\t' '$1 == "reader" { print $2 }' "$MARK_T/rows.tsv")"
+# A shell this machine lacks, or one that is not the shell the list was measured on, is a part
+# not measured, said by name; the checks of the reader do not need it.
+awk -F'\t' '$1 == "unmeasured" { print "SUITE-PART-UNMEASURED " $2 }' "$MARK_T/rows.tsv"
+grep -v -E '^(listed|reader|unmeasured)	' "$MARK_T/rows.tsv" > "$MARK_T/checks.tsv"
+rows_checked "$MARK_T/checks.tsv" "#3566"
+rm -rf "$MARK_T"
+# A run that compared nothing, or a list cut short, must not read as a pass. The floor is on the
+# checks of the reader, which are made on every machine, whatever shells it has.
+[ "${MARK_LISTED:-0}" -ge 42 ] || check "#3566 the list holds its markers" "only ${MARK_LISTED:-0} markers were read from lib/heredoc-markers.json, where it holds 42"
+[ "${MARK_READER:-0}" -ge 200 ] || check "#3566 the comparison checked the reader" "only ${MARK_READER:-0} checks of the reader were made, where the list makes over 200"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

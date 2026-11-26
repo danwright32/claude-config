@@ -86,7 +86,7 @@
 # costs one fresh check run, not one per merge. There is no count of updates: the deadline, three
 # hours by default from taking the repository's turn (claude-config#1604, see out_of_time), and the
 # poll count bound the run, and is-it-live's window for a background merge (WAIT_MS, 24 hours) is held
-# at least twice its line budget plus that deadline, by test-merge-when-ready.sh (L227); since
+# at least twice its line budget plus that deadline, by test-merge-when-ready-turn.sh (L227); since
 # claude-config#2351 a line that keeps moving never ends a run, so one behind a very long moving line
 # can outlast that window, and past it is-it-live goes on asking only while the run still holds a
 # place in line (lib/merge-in-line.sh, claude-config#2403). Waiting changes only
@@ -122,6 +122,23 @@
 # like), which would widen this into a bypass (L448). There is no override here: a merge that needs
 # one is typed, visibly.
 #
+# WHY IT MAY SEND --admin WHEN A CALLER MAY NOT PASS IT (claude-config#3534). A caller's --admin would
+# reach gh before anything here had judged the pull request, and would skip whatever the account may
+# bypass, which is why it stays refused as an argument, as --auto does. The helper sends it itself in
+# one case only: every gate has passed on this head, gh has refused the plain merge for the base
+# branch policy, and GitHub's own answers, read at that moment, say an approving review is the one
+# thing missing and that the account merging may bypass the ruleset asking for it, for a pull request
+# that account opened itself (claude-config#3571, see bypass_author): anyone else's waits for the
+# approval the ruleset is there to ask for. It is sent pinned
+# to the head the gates judged, so it merges that commit or nothing. --admin is one flag that skips
+# every rule the account may bypass, not only the review (L448), so everything it would skip is read
+# first, and anything else it would skip, or any answer that cannot be read, stops the run with
+# nothing sent (see bypass_judge). Sleep mode outranks all of it (Dan, 2026-11-24: "Respect sleep
+# mode first"): while this Mac is asleep the bypass merge is sent only in a repository where sleep
+# mode would allow an admin merge tonight, judged by the scope modes mod's own function at the
+# moment of the bypass, since a run started before bedtime can still be running after it (see
+# bypass_sleep).
+#
 # STOPS, each in its own words and none of them a merge:
 #   0  merged (or found already merged), confirmed by reading the pull request back
 #   1  needs a person: a gate refused, the review has findings to read (they are printed, with how to
@@ -138,7 +155,12 @@
 #      confirmed (claude-config#2629, see resolve_merger), or a pull request based on a branch other
 #      than the default one that nothing will move onto it: no pull request for that branch, one
 #      closed without merging, or one merged while this stayed on its branch (claude-config#3118,
-#      see wait_for_base), or a default branch GitHub did not name
+#      see wait_for_base), or a default branch GitHub did not name, or an approving review the base
+#      branch's rules require that the account merging may not bypass, or whose bypass could not be
+#      read, or that is not all a bypass would skip (claude-config#3534, see bypass_judge), or that
+#      sleep mode does not allow a merge past in this repository tonight (see bypass_sleep), or that
+#      is missing from a pull request someone other than the account merging opened, or whose opener
+#      or merging account could not be read (claude-config#3571, see bypass_author)
 #   3  still waiting (on checks, the review, a base still moving, the repository's turn, or the
 #      pull request of the branch it is based on, claude-config#3118) when the
 #      deadline, the time in line (the line standing still for MWR_LINE_SECONDS, claude-config#1697;
@@ -276,6 +298,12 @@ LINE="$(num_or "${MWR_LINE_SECONDS:-}" 10800)"
 MAX_POLLS="$(num_or "${MWR_MAX_POLLS:-}" $(( (LINE + DEADLINE) / POLL + 10 )))"
 SETTLE="$(num_or "${MWR_SETTLE_SECONDS:-}" 300)"
 NOW_CMD="$(mwr_script "${MWR_NOW:-}" "")"
+# This Mac's sleep record (claude-config#3534, see bypass_sleep). CLAUDE_SLEEP_RECORD is what the test
+# runner hands every suite so that none reads the real one (lib/sleep.sh); here it moves the record
+# only under the test marker, as every other setting naming something this runs or reads does, since
+# a record named somewhere empty would read as sleep mode being off. With no HOME there is no place
+# to look, which is said and refuses, never read as no record.
+SLEEP_RECORD="$(mwr_script "${CLAUDE_SLEEP_RECORD:-}" "${HOME:+$HOME/.claude/state/sleep/current.json}")"
 GRACE="$(num_or "${MWR_NO_CHECKS_GRACE_SECONDS:-}" 600)"
 LIST_WAIT="$(num_or "${MWR_CHECKS_LIST_SECONDS:-}" 300)"
 HEARTBEAT="$(num_or "${MWR_HEARTBEAT_SECONDS:-}" 120)"; [ "$HEARTBEAT" -ge 1 ] || HEARTBEAT=1
@@ -509,7 +537,9 @@ merge_argv=(pr merge "$pr" --repo "$slug")
 for f in ${flags[@]+"${flags[@]}"}; do
   case "$f" in --delete-branch|-d) want_delete=1 ;; *) merge_argv+=("$f"); method="$f" ;; esac
 done
-merge_text(){ printf 'gh'; printf ' %s' "${merge_argv[@]}" --match-head-commit "$1"; }
+# $2 is --admin for the one bypass merge this sends itself (claude-config#3534, see bypass_judge),
+# and nothing for every other merge.
+merge_text(){ printf 'gh'; printf ' %s' "${merge_argv[@]}" ${2:+"$2"} --match-head-commit "$1"; }
 
 # Hand one gate a PreToolUse payload for the merge command; prints its reason when it refuses.
 # MWR_DELETE_BRANCH tells block-red-merge.sh this run was asked for --delete-branch, which the merge
@@ -530,7 +560,7 @@ GATE_BUDGET="$(num_or "${MWR_GATE_READ_BUDGET_SECONDS:-}" 90)"
 # up to MWR_GATE_TIMEOUT_TRIES (4) times in all, MWR_GATE_TIMEOUT_RETRY_SECONDS (30) apart through the
 # injected sleep (L524), each retry said in this run's log; both are settings, not measurements. A
 # gate that still has no time after that stops the run as before, saying how many asks it had. Any
-# other refusal is a decision and stops it at once, unasked again. test-merge-when-ready.sh reads
+# other refusal is a decision and stops it at once, unasked again. test-merge-when-ready-turn.sh reads
 # the sentence from each gate's own source, so a gate that rewords it fails the suite.
 GATE_TRIES="$(num_or "${MWR_GATE_TIMEOUT_TRIES:-}" 4)"; [ "$GATE_TRIES" -ge 1 ] || GATE_TRIES=1
 GATE_WAIT="$(num_or "${MWR_GATE_TIMEOUT_RETRY_SECONDS:-}" 30)"
@@ -1592,12 +1622,327 @@ choose_method(){
 }
 read_back(){   # sets after
   local env
-  env="$(mt_pr_view "$pr" "state,headRefOid" "$slug" "$slug")"
+  # reviewDecision is read for bypass_judge (claude-config#3534), and author for bypass_author
+  # (claude-config#3571), in the one read that already says whether the merge landed and whether
+  # the head moved, so neither reading is older than those.
+  env="$(mt_pr_view "$pr" "state,headRefOid,reviewDecision,author" "$slug" "$slug")"
   after="$(printf '%s' "$env" | jq -c '.view // {}' 2>/dev/null)"
   [ "$(printf '%s' "$env" | jq -r '.found // false' 2>/dev/null)" = "true" ] && return 0
   read_err="$(printf '%s' "$env" | jq -r '.error // ""' 2>/dev/null)"
   ghp_rate_limited "$read_err" && return 5
   mt_gh_read_class "$read_err" "$(printf '%s' "$env" | jq -r '.errorAccount // ""' 2>/dev/null)"
+}
+
+# THE ONE BYPASS MERGE IT SENDS ITSELF (claude-config#3534). On 2026-11-24, in a repository whose
+# ruleset asks for one code owner approval and lets a team bypass it for pull requests, every gate
+# here passed and gh then answered "the base branch policy prohibits the merge": gh refuses a pull
+# request GitHub reads as BLOCKED by itself, before it asks GitHub to merge anything, unless --admin
+# is passed, and --admin is refused here as an argument. So every merge there needed a second
+# command sent by hand. Now, when the plain merge is refused in those words and the pull request reads
+# back still open at the head the gates judged, bypass_judge asks GitHub, at that moment and as the
+# account the merge is made as, whether the review is the only thing a bypass would skip:
+#   1  GitHub reads the pull request's review as REVIEW_REQUIRED, read in the read back above. A
+#     reviewer asking for changes is not a review still to come, and is never bypassed.
+#   2  Every rule in force on the base branch that asks for a review (a pull_request rule wanting an
+#     approval, a code owner's review or a named reviewer's) belongs to a ruleset GitHub says this
+#     account may bypass (current_user_can_bypass: pull_requests_only or always), and at least one
+#     such rule was found, so the review GitHub asks for is one a ruleset answers for.
+#   3  A ruleset the account may bypass is bypassed whole, whether it asks for a review or not. So
+#     each of its rules in force on the branch must be the review itself or one no pull request merge
+#     can break (deletion, non_fast_forward, creation), its review rule must not also ask for every
+#     conversation resolved, and must allow the merge method. A rule of any other kind there
+#     (required checks, deployments, signatures, linear history, code scanning) would be skipped
+#     unjudged, so it refuses, naming the rule. Rules in a ruleset the account may NOT bypass need
+#     no reading here: GitHub goes on enforcing them, whatever gh is passed.
+#   4  The base branch has no merge queue, which a bypass merge would jump.
+#   5  The base branch has no classic branch protection, which an administrator's merge can skip and
+#     no ruleset answers for. GitHub shows anyone who can read the repository whether a branch has
+#     it (protection.enabled, false on 2026-11-24 for a branch only rulesets protect and true for
+#     three branches with classic protection). Where that reads true, the protection itself is
+#     read, which GitHub shows only to an account that administers the repository: "Branch not
+#     protected" means none, any protection it shows refuses, and so does an answer that shows nothing.
+# Between 1 and 2, before any rule is read, the pull request must be one the merging account opened
+# itself (claude-config#3571, see bypass_author).
+# Every one of those is read from GitHub, and an answer that could not be read, was cut short or was
+# not the shape expected is never taken as permission (L42): it stops, saying an approving review is
+# missing and what could not be read. There is deliberately no per repository opt in list (Dan,
+# 2026-11-24: "Bypass list is enough"): the ruleset's own bypass list is the permission.
+# The reads are ut_api_read's, asked again as every read here is. Not built, and the first thing to
+# add when a repository needs it: vouching for required checks held in a ruleset the account may
+# bypass, by reading each required one as passed on the head.
+BY_UNREAD="an answer that cannot be read is never taken as permission"
+# The rules as this reads them, or an error when the answer is not a list of rules, each naming its
+# kind and its ruleset, and each pull_request rule saying what review it asks for.
+BY_RULES_JQ='if type != "array" then error("not a list") else
+  map(if type == "object" and (.type | type) == "string" and (.ruleset_id | type) == "number"
+        and (.type != "pull_request" or ((.parameters | type) == "object"
+          and (.parameters.required_approving_review_count | type) == "number"
+          and (.parameters.require_code_owner_review | type) == "boolean"))
+      then {type: (.type | gsub("[^a-z_]"; "?")), ruleset_id, parameters: (.parameters // {})}
+      else error("not a rule") end) end'
+# One line, tab separated: the verdict, then what its sentence names. $rules is the list above,
+# $sets each ruleset by id as {name, can}, $method the merge method.
+BY_VERDICT_JQ='
+def set: $sets[.ruleset_id | tostring];
+def may: set.can == "pull_requests_only" or set.can == "always";
+def asks: .type == "pull_request" and (.parameters.required_approving_review_count > 0
+  or .parameters.require_code_owner_review or ((.parameters.required_reviewers // []) | length) > 0);
+first(
+  ($rules[] | select(.type == "merge_queue") | ["queue", "-", "-"]),
+  ($sets[] | select(.can as $c | ["never", "pull_requests_only", "always"] | index($c) | not)
+    | ["unsaid", .name, (if .can == "" then "nothing" else .can end)]),
+  (if any($rules[]; asks) then empty else ["unasked", "-", "-"] end),
+  ($rules[] | select(asks and (may | not)) | ["never", set.name, set.can]),
+  ($rules[] | select(may)
+    | if .type == "pull_request" then
+        (if .parameters.required_review_thread_resolution == true then ["threads", set.name, "-"]
+         elif (.parameters.allowed_merge_methods | type) == "array" and (.parameters.allowed_merge_methods | index($method) | not)
+         then ["method", set.name, "-"] else empty end)
+      elif .type == "deletion" or .type == "non_fast_forward" or .type == "creation" then empty
+      else ["also", set.name, .type] end),
+  ([$rules[] | select(asks) | set] | unique
+    | ["ok", (if length == 1 then "the ruleset \"\(.[0].name)\" requires" else "the rulesets \"\(map(.name) | join("\" and \""))\" require" end),
+       (map(.can) | unique | join(", "))])
+) | @tsv'
+# Every refusal to send the bypass says the same first thing: an approving review is missing.
+# $2 is what to do, when it is not simply to have the pull request approved.
+bypass_refuse(){ stop 1 "Stopped: GitHub refused the merge of #$pr at ${head:0:7} for $base's branch policy: it lacks an approving review GitHub requires, and $1. No bypass merge was sent and nothing was merged.${2:- Have it approved, then run the same command again.}"; }
+BY_AGAIN=" Run the same command again once GitHub answers, or have it approved first."
+# bypass_read <what is read> <API path>: 0 with GitHub's answer in ut_ans, 5 to look again (GitHub
+# paused this session's reads); a read that fails stops, as a refusal to send the bypass.
+bypass_read(){
+  local rrc
+  ut_q="$2"
+  with_retries "$1" ut_api_read; rrc=$?
+  [ "$rrc" -eq 5 ] && return 5
+  [ "$rrc" -eq 0 ] || bypass_refuse "$(signin_or_unread "$1" "$rrc"), so whether $(who_is "$account") may bypass that review is not known, and $BY_UNREAD" "$BY_AGAIN"
+  return 0
+}
+policy_refused(){ case "$1" in *"the base branch policy prohibits the merge"*) return 0 ;; esac; return 1; }
+# SLEEP MODE OUTRANKS THE BYPASS (Dan, 2026-11-24: "Respect sleep mode first"). Overnight, sleep
+# mode allows a typed `gh pr merge --admin` only in a repository whose entry in its lists, as
+# settled at bedtime, is merge only, says a merge there does not deploy, and says adminMerge
+# green-pinned (mods/scope-modes/hooks/adminmerge.ts), and refuses it everywhere else. The bypass
+# merge here is sent inside this run, where no hook sees it, so it asks the same question itself,
+# twice, because a run started before bedtime can still be running after it. First as the last
+# thing bypass_judge does, so a night that refuses stops before the checks gate is asked for
+# nothing. Then again (`bypass_sleep again`) as the very last thing before the merge is sent, after
+# the checks gate: that gate reads GitHub under a budget of its own (MWR_GATE_READ_BUDGET_SECONDS),
+# so a sleep that began while it was asked would otherwise go unseen. The second ask is the one the
+# merge rests on, and says nothing when it allows, the first having said it.
+# Sleep mode is one record for the whole Mac and holds every session on it, so "on" here means
+# what it means there: this Mac's record reads as asleep now.
+# Nothing of the judgement is written here. lib/sleep-admin-merge.mjs, under node, hands the record
+# to the mod's own readSleep and adminMergeNightRefusal, the function the mod's judge of a typed
+# admin merge asks first, so the two cannot drift apart (L370). What this adds is only what to do
+# with each answer: `awake` (no record, one that has ended, one from another boot) and `allowed`
+# send the bypass merge; `refused` stops in sleep mode's words; a record that cannot be read, a
+# node that is missing or cannot run the mod's files, and any answer that is none of those stop
+# too, since none is permission and none is sleep mode being off (L42). No record at all is the
+# mod's first answer and is settled before node is started, so a Mac that is awake runs nothing new.
+# What the mod's judge also holds a typed admin merge to, and this does not ask of it: a squash, and
+# a base branch that requires at least one check. Here the merge method is the caller's, judged
+# against the ruleset above, and the checks are block-red-merge.sh's to judge, as for every merge.
+SLEEP_ENTRY="$MWR_LIB/sleep-admin-merge.mjs"
+BY_SLEEP_AGAIN=" Run the same command again once that can be read or sleep mode is off, or have it approved first."
+bypass_sleep(){   # bypass_sleep [again]: returns 0 when the bypass merge may be sent; every other outcome stops
+  local out rc verdict="" why="" flat
+  [ -n "$SLEEP_RECORD" ] \
+    || bypass_refuse "this run has no HOME folder to look for sleep mode's record under, so whether sleep mode allows a merge past that review in $slug tonight is not known, and $BY_UNREAD" "$BY_SLEEP_AGAIN"
+  [ -e "$SLEEP_RECORD" ] || return 0
+  out="$(node --experimental-strip-types --no-warnings "$SLEEP_ENTRY" "$SLEEP_RECORD" "$slug" "$(now)000" \
+    "$(sysctl -n kern.boottime 2>/dev/null)" "$(sysctl -n kern.bootsessionuuid 2>/dev/null)" 2>&1 </dev/null)"; rc=$?
+  if [ "$rc" -eq 0 ]; then
+    verdict="$(printf '%s' "$out" | jq -r 'if type == "object" then .verdict // "" | tostring else "" end' 2>/dev/null)" || verdict=""
+    why="$(printf '%s' "$out" | jq -r '.why // "" | tostring | gsub("[[:cntrl:]]"; " ") | .[0:400]' 2>/dev/null)" || why=""
+  fi
+  case "$verdict" in
+    awake) return 0 ;;
+    allowed)
+      [ "${1:-}" = again ] || say "Sleep mode is on, and it allows a merge past an approving review in $slug tonight (adminMerge on its entry in sleep mode's lists, as settled at bedtime)."
+      return 0 ;;
+    refused) bypass_refuse "sleep mode is on and does not allow a merge past that review in $slug tonight (sleep mode will not ${why:-say why})" " Have it approved, or run the same command again once sleep mode is off." ;;
+    unreadable) bypass_refuse "sleep mode's record on this Mac could not be read (${why:-it did not say why}), so whether it allows a merge past that review in $slug tonight is not known, and $BY_UNREAD" "$BY_SLEEP_AGAIN" ;;
+  esac
+  flat="${out//$'\n'/ }"
+  bypass_refuse "what sleep mode allows in $slug tonight could not be asked of the scope modes mod (node exited $rc: ${flat:0:300}), and $BY_UNREAD" "$BY_SLEEP_AGAIN"
+}
+# ONLY ITS OWN PULL REQUEST (claude-config#3571). A ruleset that asks for an approval and lets its
+# owner bypass it exists so that other people's pull requests wait for the owner's approval. Until
+# this, nothing here read who opened the pull request, so the bypass was sent for whatever pull
+# request the helper was run on, a teammate's or a bot's included, and the only thing keeping those
+# waiting was a session not running the helper on them (L27). A pull request from anyone else never
+# needs the bypass: the owner can approve it, and the plain merge then goes through.
+# WHO OPENED IT is read in the read back (after), with the state, head and review it is judged
+# beside. gh prints a person as {id, is_bot: false, login, name} and a bot as {is_bot: true, login:
+# "app/<name>"} (measured with gh 2.89 on 2026-11-25, on two pull requests a person opened and one
+# a bot opened). A bot is someone else whatever its login, and an author that is not that shape,
+# with a login and a true or false is_bot, was not read: it refuses, never matches (L42).
+# WHO MERGES is GitHub's own answer, `gh api user`, for the token the merge is sent with. It is a
+# call of its own, made only here, because nothing the helper already holds says it: `account` is
+# empty when the active account merges, the common case, and is otherwise the name gh holds for the
+# account, which is what it was called when it signed in; read_back is asked as the account that
+# can READ the pull request (mt_pr_view), which need not be the one that merges; and none of the
+# rules, ruleset and branch reads below names the account asking.
+# THE TOKEN IS TAKEN ONCE (by_tok): GitHub is asked whose it is, and the bypass merge is sent with
+# that same token and no other (see the send). gh_as asks gh for a token on every call, and with no
+# account named sends as whichever account is active at that moment, so a `gh auth switch` in
+# another session while the checks gate is asked would otherwise merge as an account nobody
+# compared with the author. With no token to take there is nobody to ask about, and it refuses
+# rather than fall back to the active account as gh_as does.
+# The logins are compared exactly as GitHub gave them, both being GitHub's own spelling.
+by_tok=""; by_login=""
+bypass_token(){ if [ -n "$account" ]; then gh auth token -u "$account"; else gh auth token; fi 2>/dev/null </dev/null; }
+# GitHub's record of the account by_tok belongs to, into ut_ans, classed as ut_api_read classes.
+bypass_user_read(){
+  local rc
+  ut_ans="$(GH_TOKEN="$by_tok" gh api user 2>&1 </dev/null)"; rc=$?
+  [ "$rc" -eq 0 ] && return 0
+  read_err="${ut_ans:0:300}"
+  ghp_rate_limited "$read_err" && return 5
+  mt_gh_read_class "$ut_ans" "$account"
+}
+BY_SHOWN_JQ='tostring | gsub("[[:cntrl:]]"; " ") | .[0:60]'
+# bypass_author <who, as a sentence names the merging account>: 0 when the pull request was opened
+# by the account by_tok belongs to, with by_login its login; 5 to look again; anything else stops.
+bypass_author(){
+  local who="$1" au kind opened shown rrc what
+  by_tok=""; by_login=""
+  au="$(printf '%s' "$after" | jq -c '.author' 2>/dev/null)" || au=""
+  kind="$(printf '%s' "$after" | jq -r '.author | if type == "object" and (.login | type) == "string" and .login != "" and (.is_bot | type) == "boolean"
+    then (if .is_bot then "bot" else "person" end) else "unsaid" end' 2>/dev/null)" || kind=""
+  opened="$(printf '%s' "$after" | jq -r '.author.login' 2>/dev/null)" || opened=""
+  shown="$(printf '%s' "$after" | jq -r ".author.login | $BY_SHOWN_JQ" 2>/dev/null)" || shown=""
+  case "$kind" in
+    person) ;;
+    bot) bypass_refuse "#$pr was opened by someone else ($shown, a bot), so it waits for that review" ;;
+    *) bypass_refuse "GitHub's answer did not say who opened #$pr (author: ${au:0:120}), so whether $who opened it is not known, and $BY_UNREAD" "$BY_AGAIN" ;;
+  esac
+  by_tok="$(bypass_token)" || by_tok=""
+  [ -n "$by_tok" ] \
+    || bypass_refuse "gh gave no token for $who, so which account the merge would be made as could not be asked of GitHub, and $BY_UNREAD" " Sign gh in again (gh auth login) and run the same command again, or have it approved first."
+  what="GitHub's login for $who"
+  with_retries "$what" bypass_user_read; rrc=$?
+  [ "$rrc" -eq 5 ] && return 5
+  [ "$rrc" -eq 0 ] || bypass_refuse "$(signin_or_unread "$what" "$rrc"), so whether it opened #$pr is not known, and $BY_UNREAD" "$BY_AGAIN"
+  by_login="$(printf '%s' "$ut_ans" | jq -r 'if type == "object" and (.login | type) == "string" and .login != "" then .login else error("no login") end' 2>/dev/null)" || by_login=""
+  [ -n "$by_login" ] \
+    || bypass_refuse "GitHub's answer for $who named no login (${ut_ans:0:200}), so whether it opened #$pr is not known, and $BY_UNREAD" "$BY_AGAIN"
+  [ "$by_login" = "$opened" ] \
+    || bypass_refuse "#$pr was opened by someone else ($shown, where this merge would be made as $(jq -rn --arg l "$by_login" "\$l | $BY_SHOWN_JQ")), so it waits for that review"
+  return 0
+}
+# Called with the plain merge refused for the base branch policy and read back open at $head (after).
+# Returns 0 when the bypass merge may be sent, with by_as saying what it bypasses, by_tok the token
+# to send it with and by_login whose that is; 1 when GitHub does not read the review as still to
+# come, so nothing about a bypass was read; 5 to look again. Every other outcome stops.
+by_as=""
+bypass_judge(){
+  local who b rules ids id one sets='{}' m verdict kind a1 a2 rrc said
+  by_as=""; by_tok=""; by_login=""
+  [ "$(printf '%s' "$after" | jq -r '.reviewDecision // ""' 2>/dev/null)" = "REVIEW_REQUIRED" ] || return 1
+  who="$(who_is "$account")"
+  # Whose pull request it is comes first: the read back already says who opened it, so someone
+  # else's stops here, before any rule is read (L667).
+  bypass_author "$who" || return 5
+  b="$(jq -rn --arg b "$base" '$b | @uri')"
+  bypass_read "the rules in force on $base in $slug" "repos/$slug/rules/branches/$b?per_page=100" || return 5
+  rules="$(printf '%s' "$ut_ans" | jq -c "$BY_RULES_JQ" 2>/dev/null)" \
+    || bypass_refuse "GitHub's answer for the rules in force on $base was not a list of rules this can read (${ut_ans:0:200}), and $BY_UNREAD" "$BY_AGAIN"
+  # One page holds 100, so a full page may be a list cut short.
+  [ "$(printf '%s' "$rules" | jq 'length')" -lt 100 ] \
+    || bypass_refuse "GitHub listed 100 rules or more in force on $base, one page of them and so possibly cut short, and $BY_UNREAD"
+  ids="$(printf '%s' "$rules" | jq -r '[.[].ruleset_id] | unique | .[]')"
+  for id in $ids; do
+    bypass_read "ruleset $id of $slug" "repos/$slug/rulesets/$id" || return 5
+    one="$(printf '%s' "$ut_ans" | jq -c --arg id "$id" 'if type == "object" and (.id | tostring) == $id
+      then {name: ((.name // "" | tostring | gsub("[[:cntrl:]]"; " ") | .[0:80]) | if . == "" then $id else . end), can: (.current_user_can_bypass // "" | tostring | .[0:40])}
+      else error("not that ruleset") end' 2>/dev/null)" \
+      || bypass_refuse "GitHub's answer for ruleset $id of $slug was not that ruleset (${ut_ans:0:200}), so whether $who may bypass it is not known, and $BY_UNREAD" "$BY_AGAIN"
+    sets="$(printf '%s' "$sets" | jq -c --arg id "$id" --argjson one "$one" '.[$id] = $one')"
+  done
+  m="${method#--}"; case "$m" in -s) m=squash ;; -m) m=merge ;; -r) m=rebase ;; esac
+  verdict="$(jq -rn --argjson rules "$rules" --argjson sets "$sets" --arg method "$m" "$BY_VERDICT_JQ" 2>/dev/null)" || verdict=""
+  IFS=$'\t' read -r kind a1 a2 <<<"$verdict"
+  case "$kind" in
+    ok) ;;
+    queue) bypass_refuse "$base has a merge queue, which a bypass merge would jump" ;;
+    unsaid) bypass_refuse "GitHub did not say whether $who may bypass the ruleset \"$a1\" (current_user_can_bypass: $a2), and $BY_UNREAD" ;;
+    unasked) bypass_refuse "no ruleset in force on $base asks for that review, so nothing GitHub answered says $who may bypass it" ;;
+    never) bypass_refuse "$who may not bypass the ruleset \"$a1\" that requires it (GitHub answers current_user_can_bypass: $a2)" ;;
+    threads) bypass_refuse "the ruleset \"$a1\" also requires every review conversation resolved, which a bypass merge would skip unjudged" ;;
+    method) bypass_refuse "the ruleset \"$a1\" does not allow merging by $(method_name "$m"), which a bypass merge would skip" ;;
+    also) bypass_refuse "the ruleset \"$a1\", which $who may bypass, also holds a $a2 rule that a bypass merge would skip unjudged" ;;
+    *) bypass_refuse "the rules in force on $base could not be judged (${verdict:0:200}), and $BY_UNREAD" ;;
+  esac
+  said="whether $base also has classic branch protection could not be read"
+  bypass_read "branch $base of $slug" "repos/$slug/branches/$b" || return 5
+  case "$(printf '%s' "$ut_ans" | jq -r 'if type == "object" and (.protection | type) == "object" and (.protection.enabled | type) == "boolean" then .protection.enabled else "unsaid" end' 2>/dev/null)" in
+    false) ;;
+    true)
+      ut_q="repos/$slug/branches/$b/protection"
+      with_retries "the classic protection of $base in $slug" ut_api_read; rrc=$?
+      [ "$rrc" -eq 5 ] && return 5
+      [ "$rrc" -ne 0 ] || bypass_refuse "$base also has classic branch protection, which a bypass merge can skip and no ruleset answers for"
+      # GitHub's own words for a branch with none, shown only to an account that administers the
+      # repository; any other account is answered a bare Not Found, which says nothing either way.
+      case "$rrc:$ut_ans" in
+        1:*"Branch not protected"*) ;;
+        *) bypass_refuse "$said: $(signin_or_unread "its classic protection" "$rrc"), which GitHub shows only to an account that administers $slug, and $BY_UNREAD" ;;
+      esac ;;
+    *) bypass_refuse "$said (GitHub's answer for the branch did not say: ${ut_ans:0:200}), and $BY_UNREAD" "$BY_AGAIN" ;;
+  esac
+  # Sleep mode, which stops unless this Mac is awake or tonight's lists allow an admin merge in this
+  # repository. Asked here so a night that refuses stops before the checks gate is asked, and asked
+  # again just before the merge is sent (see bypass_sleep).
+  bypass_sleep
+  by_as="as a bypass of the approving review $a1"
+  say "GitHub refused the merge of #$pr at ${head:0:7} for $base's branch policy, and the only thing it lacks is the approving review $a1, which $who may bypass (current_user_can_bypass: $a2). #$pr was opened by $(jq -rn --arg l "$by_login" "\$l | $BY_SHOWN_JQ"), the account this merge is made as."
+  return 0
+}
+# WHAT A MERGE COMMAND LEFT, judged once for the plain merge and for the bypass merge
+# (claude-config#3534), so neither is handled by a copy of the other's judgement. It reads merge_out
+# and merge_rc, what gh printed and exited with, and judges by the state the command left, never by
+# those: gh can fail after the merge has landed. Merged finishes the run. It returns 0 when the loop
+# should go round again, where the read at its top and every gate judge afresh: the pull request
+# could not be read back, the head moved, GitHub refused for its rate limit, or GitHub failed to run
+# the merge and a try is left. It returns 1 when the pull request is still open at this head and
+# none of those explains it, which is the caller's to name.
+merge_settle(){
+  local rrc note
+  with_retries "#$pr back after the merge" read_back; rrc=$?
+  if [ "$rrc" -ne 0 ]; then
+    # Unreadable is not "the head moved": say what is known and look again, where the read at the
+    # top of the loop either finds it merged or stops naming GitHub's error.
+    say "After the merge command (gh exited $merge_rc: ${merge_out:0:200}), $(signin_or_unread "#$pr back" "$rrc"); looking again."
+    return 0
+  fi
+  if [ "$(printf '%s' "$after" | jq -r '.state // ""')" = "MERGED" ]; then
+    note=""; [ "$merge_rc" -ne 0 ] && note=" (gh exited $merge_rc after merging: ${merge_out:0:200})"
+    finish_branch "Merged #$pr in $slug at ${head:0:7}${by_as:+ $by_as}$note"
+  fi
+  if [ "$(printf '%s' "$after" | jq -r '.headRefOid // ""')" != "$head" ]; then
+    say "The head moved while it was being merged (GitHub refused the pin on ${head:0:7}); judging the new head."
+    return 0
+  fi
+  # Refused for the rate limit, which merges nothing: paused, and judged again at a later look
+  # (claude-config#1482).
+  if ghp_rate_limited "$merge_out"; then rate_pause "the merge of #$pr" "$merge_out"; return 0; fi
+  # GitHub failing to run the merge (claude-config#2289): read back above as still open at this head,
+  # so nothing merged. It goes round again after MERGE_WAIT, where every gate is asked again and the
+  # merge is pinned to whatever head they allow, so only a head the gates allowed is ever merged.
+  if mt_gh_went_wrong "$merge_out"; then
+    [ "$wrong_head" = "$head" ] || { wrong_head="$head"; wrong_tries=0; }
+    wrong_tries=$((wrong_tries + 1))
+    wrong_said="GitHub answered the merge of #$pr at ${head:0:7} with Something went wrong"
+    if [ "$wrong_tries" -lt "$MERGE_TRIES" ]; then
+      say "$wrong_said (try $wrong_tries of $MERGE_TRIES: ${merge_out:0:300}), and reading it back shows it still open at that head, so nothing merged. Asking every gate again and trying the merge, pinned to the head they allow, in $(span "$MERGE_WAIT")."
+      last_status="waiting to try the merge of #$pr again"; rest "$MERGE_WAIT"; last_status=""
+      return 0
+    fi
+    stop 1 "Stopped: $wrong_said $MERGE_TRIES times, $(span "$MERGE_WAIT") apart, and reading it back shows it still open at that head, so nothing merged: ${merge_out:0:500}. That is GitHub failing to run the merge, not a gate refusing it: run the same command again in a few minutes."
+  fi
+  return 1
 }
 
 # THE BRANCH IS DELETED HERE, NEVER BY gh (claude-config#1337). On 2026-10-19 this merged
@@ -1871,7 +2216,7 @@ updated_from=""; updated_at=0; catching_up=""
 # three hours. So the deadline, MWR_DEADLINE_SECONDS, now counts from the moment this run first took
 # the turn (taken_at), and the time before it, in line or before the first look took a place, has a
 # budget of its own, MWR_LINE_SECONDS. That budget and the deadline added together are what
-# is-it-live's window is held to (test-merge-when-ready.sh); since #1697 the line budget restarts
+# is-it-live's window is held to (test-merge-when-ready-turn.sh); since #1697 the line budget restarts
 # whenever the line moves, and since #2351 nothing else ends a moving line (below). A run passed over and back in line
 # keeps the deadline it has not yet held, which no longer runs while it waits (#1975, below).
 # A run that could take no turn at all goes on as before #1515, on its deadline from its start.
@@ -2755,39 +3100,37 @@ EOF_VIEW
   [ -z "$ut_ran" ] || continue
   say_untested
   say "Head ${head:0:7} is green, up to date with $base and reviewed, and every merge gate allows it. Merging, pinned to that head."
+  by_as=""
   merge_out="$(gh_as "${merge_argv[@]}" --match-head-commit "$head" 2>&1)"; merge_rc=$?
-  # Judged by the state it leaves, never by what gh printed: gh can fail after the merge has landed.
-  with_retries "#$pr back after the merge" read_back; rrc=$?
-  if [ "$rrc" -ne 0 ]; then
-    # Unreadable is not "the head moved": say what is known and look again, where the read at the
-    # top of the loop either finds it merged or stops naming GitHub's error.
-    say "After the merge command (gh exited $merge_rc: ${merge_out:0:200}), $(signin_or_unread "#$pr back" "$rrc"); looking again."
-    continue
-  fi
-  if [ "$(printf '%s' "$after" | jq -r '.state // ""')" = "MERGED" ]; then
-    note=""; [ "$merge_rc" -ne 0 ] && note=" (gh exited $merge_rc after merging: ${merge_out:0:200})"
-    finish_branch "Merged #$pr in $slug at ${head:0:7}$note"
-  fi
-  if [ "$(printf '%s' "$after" | jq -r '.headRefOid // ""')" != "$head" ]; then
-    say "The head moved while it was being merged (GitHub refused the pin on ${head:0:7}); judging the new head."
-    continue
-  fi
-  # Refused for the rate limit, which merges nothing: paused, and judged again at a later look
-  # (claude-config#1482).
-  if ghp_rate_limited "$merge_out"; then rate_pause "the merge of #$pr" "$merge_out"; continue; fi
-  # GitHub failing to run the merge (claude-config#2289): read back above as still open at this head,
-  # so nothing merged. It goes round again after MERGE_WAIT, where every gate is asked again and the
-  # merge is pinned to whatever head they allow, so only a head the gates allowed is ever merged.
-  if mt_gh_went_wrong "$merge_out"; then
-    [ "$wrong_head" = "$head" ] || { wrong_head="$head"; wrong_tries=0; }
-    wrong_tries=$((wrong_tries + 1))
-    wrong_said="GitHub answered the merge of #$pr at ${head:0:7} with Something went wrong"
-    if [ "$wrong_tries" -lt "$MERGE_TRIES" ]; then
-      say "$wrong_said (try $wrong_tries of $MERGE_TRIES: ${merge_out:0:300}), and reading it back shows it still open at that head, so nothing merged. Asking every gate again and trying the merge, pinned to the head they allow, in $(span "$MERGE_WAIT")."
-      last_status="waiting to try the merge of #$pr again"; rest "$MERGE_WAIT"; last_status=""
-      continue
+  merge_settle && continue
+  # Still open at this head, and refused by gh for the base branch policy: the one merge this sends
+  # with --admin, and only when GitHub's own answers, read now, say the review is all a bypass would
+  # skip and that this account may bypass it (claude-config#3534, see bypass_judge).
+  if policy_refused "$merge_out"; then
+    bypass_judge; brc=$?
+    [ "$brc" -eq 5 ] && continue
+    if [ "$brc" -eq 0 ]; then
+      # The checks gate judges the exact command that runs, as it judged the plain one: the same
+      # pull request, pinned to the same head, read green again at this moment. The other gates
+      # judged this head a moment ago and read nothing that --admin changes.
+      cmd="$(merge_text "$head" --admin)"
+      if ! why="$(ask_gate "$RED_GATE" "$cmd")"; then
+        stop 1 "Stopped: block-red-merge.sh refused the bypass merge of #$pr at ${head:0:7}: $why"
+      fi
+      # Sleep mode once more, the last thing before the send: the gate just asked read GitHub under
+      # its own budget, and this Mac can have gone to sleep meanwhile (see bypass_sleep).
+      bypass_sleep again
+      # Sent with the token GitHub was asked about (bypass_author), never one fetched again now:
+      # the account compared with who opened the pull request is the account this merges as
+      # (claude-config#3571). bypass_judge returns 0 only with that token in hand: bypass_author
+      # stops when gh gives none.
+      say "Sending the same merge $by_as, pinned to that head."
+      merge_out="$(GH_TOKEN="$by_tok" gh "${merge_argv[@]}" --admin --match-head-commit "$head" 2>&1)"; merge_rc=$?
+      merge_settle && continue
+      stop 1 "Stopped: GitHub did not merge #$pr at ${head:0:7} $by_as: ${merge_out:0:500} Nothing was merged."
     fi
-    stop 1 "Stopped: $wrong_said $MERGE_TRIES times, $(span "$MERGE_WAIT") apart, and reading it back shows it still open at that head, so nothing merged: ${merge_out:0:500}. That is GitHub failing to run the merge, not a gate refusing it: run the same command again in a few minutes."
+    rv="$(printf '%s' "$after" | jq -r '.reviewDecision // ""' 2>/dev/null)"
+    stop 1 "Stopped: gh pr merge did not merge #$pr at ${head:0:7}: ${merge_out:0:500} GitHub reads its review as ${rv:-not required}, not as an approving review still to come, so no bypass merge was considered. Nothing was merged."
   fi
   stop 1 "Stopped: gh pr merge did not merge #$pr at ${head:0:7}: ${merge_out:0:500}"
 done

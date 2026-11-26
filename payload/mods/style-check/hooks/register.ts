@@ -1,4 +1,5 @@
 import type { EngineInterface, Register } from 'claude-code'
+import { cutCall } from './mod-kit/hold.ts'
 import { inputTexts } from './mod-kit/inputs.ts'
 
 // Style check at write time (claude-config#609). One rule, not two: the verdict is always the push
@@ -209,7 +210,7 @@ export const register: Register = on => {
       unchecked($, v.why)
     }
     return next(e)
-  })
+  }).catch(($, e, next) => cutCall('the style check', e, next))
 
   // A chat reply cannot be refused once written: count it and say so.
   on('session.append', { door: 'response' }, async ($, e, next) => {

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Tests for lib/judgement-cache.py, the Slack drafts gate's cache of the calls it allowed
 # (claude-config#2918). The judgements themselves (a changed sourced file, a changed disk answer and a
-# corrupt entry each judged afresh) are in test-slack-drafts-only-gate.sh; this suite checks the
-# cache's own parts:
+# corrupt entry each judged afresh) are in test-slack-drafts-only-gate-tools-cache.sh; this suite
+# checks the cache's own parts:
 #   - the one route to the disk: every module the gate and its libraries import is classified, none
 #     is reached around install()'s stand ins, and every environment variable read by name is in the
 #     key (L621: a new direct disk call fails here, not in a review);
@@ -517,6 +517,64 @@ case "${got[2]}" in hit\|*|*"|hit|"*) check "and answers it from the cache the s
   *) check "and answers it from the cache the second time" "the cache traced: ${got[2]}" ;; esac
 
 echo
+echo "judgement cache: a cache folder that is not an absolute path is not used (#3466)"
+# On 2026-11-22 a relative SLACK_GATE_CACHE_DIR put a cache in the working folder of each command the
+# gate judged, so two folders made two caches, and the ones under ~/.claude were synced to main. Such
+# a setting is ignored: the call is judged with no cache, and the gate says why once on stderr, after
+# its verdict, since the wrapper reads the two together and takes the first line as the verdict.
+mkdir -p "$T/rel/one" "$T/rel/two/exists" "$T/rel/userdir"
+printf '%s\n' 'echo hi' > "$T/rel/run.sh"
+# rel_judge <folder it runs from> <setting> <command>: what the wrapper printed, then rc=<its exit code>.
+rel_judge() {
+  local p
+  p="$(python3 -c 'import json, sys; print(json.dumps({"session_id": "s", "hook_event_name": "PreToolUse", "tool_name": "Bash", "cwd": sys.argv[2], "tool_input": {"command": sys.argv[1], "description": "d"}}))' "$3" "$1")"
+  : > "$T/rel/trace"
+  ( cd "$1" && printf '%s' "$p" | env -u PYTHONHASHSEED -u HOOK_TESTS_RUNNING HOME="$T/rel/userdir" SLACK_GATE_CACHE_DIR="$2" SLACK_GATE_CACHE_TRACE="$T/rel/trace" bash "$DIR/slack-drafts-only-gate.sh" 2>&1; echo "rc=$?" )
+}
+# made <what> <path that must not exist>
+made() { if [ -e "$2" ]; then check "$1" "it was made: $(cd "$T/rel" && find . -newer "$T/rel/run.sh" | sort | tr '\n' ' ')"; else check "$1" ok; fi; }
+for w in one two; do
+  out="$(rel_judge "$T/rel/$w" run/cache-base "bash $T/rel/run.sh")"
+  if [ "$out" = "rc=0" ]; then check "with a relative cache folder, the harmless call judged from $w is allowed" ok
+  else check "with a relative cache folder, the harmless call judged from $w is allowed" "the wrapper said: ${out//$'\n'/ | }"; fi
+  made "and no cache is made inside $w" "$T/rel/$w/run"
+done
+case "$(cat "$T/rel/trace")" in *"off: "*"not an absolute path"*) check "the trace says why the cache was off" ok ;;
+  *) check "the trace says why the cache was off" "the cache traced: $(tr '\n' '|' < "$T/rel/trace")" ;; esac
+out="$(rel_judge "$T/rel/one" "~/gate-cache" "bash $T/rel/run.sh")"
+[ "$out" = "rc=0" ] && check "with a tilde cache folder the call is allowed" ok || check "with a tilde cache folder the call is allowed" "the wrapper said: $out"
+made "and no folder named ~ is made in the working folder" "$T/rel/one/~"
+made "nor one under HOME" "$T/rel/userdir/gate-cache"
+out="$(rel_judge "$T/rel/one" "" "bash $T/rel/run.sh")"
+[ "$out" = "rc=0" ] && check "with an empty cache folder the call is allowed" ok || check "with an empty cache folder the call is allowed" "the wrapper said: $out"
+made "and the cache under HOME is not used in its place" "$T/rel/userdir/.claude"
+out="$(rel_judge "$T/rel/one" "$T/rel/one/../dotdot-cache" "bash $T/rel/run.sh")"
+[ "$out" = "rc=0" ] && check "with a cache folder holding .. the call is allowed" ok || check "with a cache folder holding .. the call is allowed" "the wrapper said: $out"
+made "and no cache is made where the .. leads" "$T/rel/dotdot-cache"
+out="$(rel_judge "$T/rel/two" exists "bash $T/rel/run.sh")"
+[ "$out" = "rc=0" ] && check "with a relative cache folder that exists the call is allowed" ok || check "with a relative cache folder that exists the call is allowed" "the wrapper said: $out"
+if [ -z "$(ls -A "$T/rel/two/exists")" ] && [ ! -e "$T/rel/two/exists.key" ]; then check "and nothing is written in it or beside it" ok
+else check "and nothing is written in it or beside it" "it holds: $(ls -A "$T/rel/two/exists") $(ls "$T/rel/two")"; fi
+# The posting call is refused as it always was, and the reason why the cache was off follows the refusal.
+out="$(rel_judge "$T/rel/one" run/cache-base 'curl -d x https://slack.com/api/chat.postMessage')"
+case "$out" in "REFUSED: this command posts to Slack"*"rc=2") check "with a relative cache folder, a posting call is still refused" ok ;;
+  *) check "with a relative cache folder, a posting call is still refused" "the wrapper said: ${out//$'\n'/ | }" ;; esac
+n="$(grep -c "SLACK_GATE_CACHE_DIR" <<< "$out")"
+[ "$n" = 1 ] && check "and the refusal says once that the cache folder was ignored" ok || check "and the refusal says once that the cache folder was ignored" "it said so $n times: ${out//$'\n'/ | }"
+# The gate on its own: the verdict alone on stdout, the notice alone on stderr, one line.
+p="$(python3 -c 'import json, sys; print(json.dumps({"session_id": "s", "hook_event_name": "PreToolUse", "tool_name": "Bash", "cwd": sys.argv[2], "tool_input": {"command": sys.argv[1], "description": "d"}}))' "bash $T/rel/run.sh" "$T/rel/one")"
+( cd "$T/rel/one" && printf '%s' "$p" | env -u HOOK_TESTS_RUNNING HOME="$T/rel/userdir" GATE_DIR="$DIR" PYTHONHASHSEED=0 SLACK_GATE_CACHE_DIR=run/cache-base python3 "$DIR/slack_drafts_only_gate.py" > "$T/rel/stdout" 2> "$T/rel/stderr" )
+[ "$(cat "$T/rel/stdout")" = allow ] && check "the gate's stdout is its verdict alone" ok || check "the gate's stdout is its verdict alone" "it was: $(cat "$T/rel/stdout")"
+case "$(wc -l < "$T/rel/stderr" | tr -d ' '):$(cat "$T/rel/stderr")" in
+  "1:"*"SLACK_GATE_CACHE_DIR"*"'run/cache-base'"*"not an absolute path"*"no cache"*) check "and its stderr is one line saying the setting was ignored and why" ok ;;
+  *) check "and its stderr is one line saying the setting was ignored and why" "it was: $(cat "$T/rel/stderr")" ;; esac
+long="$(printf 'x%.0s' {1..5000})"
+( cd "$T/rel/one" && printf '%s' "$p" | env -u HOOK_TESTS_RUNNING HOME="$T/rel/userdir" GATE_DIR="$DIR" PYTHONHASHSEED=0 SLACK_GATE_CACHE_DIR="$long" python3 "$DIR/slack_drafts_only_gate.py" > "$T/rel/stdout" 2> "$T/rel/stderr" )
+n="$(wc -c < "$T/rel/stderr" | tr -d ' ')"
+case "$(cat "$T/rel/stderr")" in *"cut at 200 characters"*) [ "$n" -lt 600 ] && check "a long setting is cut short in the notice" ok || check "a long setting is cut short in the notice" "the notice is $n bytes" ;;
+  *) check "a long setting is cut short in the notice" "it was $n bytes and does not say it was cut" ;; esac
+
+echo
 echo "judgement cache: the reader's parses of large texts, kept between runs (#2918)"
 # Dan's decision of 2026-11-15: for heavy load, a parse of a large unchanged file is kept between gate
 # calls, keyed on the text's whole contents (never a path or a time), the reader's code, the directory
@@ -697,7 +755,8 @@ echo "judgement cache: a standard library module the script reading asks is foun
 # gate loads its own libraries. So both are recorded, and a kept judgement is not used once either
 # has changed. Run against the library as it stood at 055ac70, which imported the module with
 # importlib.import_module: the first check failed, the import's own read of the file having marked
-# the record, so nothing was kept (the through the gate cases are in test-slack-drafts-code-loaders.sh).
+# the record, so nothing was kept (the through the gate cases are in
+# test-slack-drafts-code-loaders-python.sh).
 # A test cannot change a real standard library module's file, so the folder taken for the standard
 # library's is a throwaway one, on the path behind an empty folder. Each look is a new process, as
 # each run of the gate is: a module the asking process has loaded is found in memory, not on the disk.

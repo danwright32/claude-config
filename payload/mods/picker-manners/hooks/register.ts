@@ -1,4 +1,5 @@
 import type { EngineCreateResult, EngineInterface, Register } from 'claude-code'
+import { cutCall } from './mod-kit/hold.ts'
 import { errorText } from './mod-kit/skew.ts'
 import type {} from '../types/index.d.ts'
 import { asksQuiet, issuesNamedIn, refusal, unreadRefusal, writtenOnIssue } from './pickers.ts'
@@ -189,11 +190,14 @@ export const register: Register = on => {
     //
     // A question a mod raises itself through its own dialog (/sleep's before bed round, the
     // keystroke guard's Ready) arrives here like any other, and Dan's answer for those is another
-    // one (2026-11-21: "Record, then decide": their sizes are recorded and none is refused). Until
-    // he settles how the two meet, the coordinating session's rule (2026-11-21) is that such a
-    // dialog is asked, and when he could not have read it as written, written onto no issue, as
-    // every such picker was before the refusal. It is told apart by the asking mod's own word and
-    // nothing a session can set: see ownDialog.
+    // one (2026-11-21: "Record, then decide": their sizes are recorded and none is refused). How
+    // the two meet is Dan's rule (5:46 PM ET on 2026-11-21, from a picker: "Yes, as built
+    // (Recommended)"): a question a mod asks through its own dialog that breaks the limits is
+    // still asked, its length is recorded, and its answer is written onto no issue, with one dim
+    // line telling him. A picker from a session that breaks the limits is refused. The two week
+    // reading of the recorded lengths (recording began with #3407, merged 2026-11-22) decides
+    // whether the mods' own questions are held too. A mod's dialog is told apart by the asking
+    // mod's own word and nothing a session can set: see ownDialog.
     let ownUnread = false
     if (writtenOnIssue(question, (e.metadata as { source?: unknown } | undefined)?.source)) {
       const unread = askFault(e as unknown as Record<string, unknown>)
@@ -239,7 +243,7 @@ export const register: Register = on => {
     }
     offTheDialog($, () => recordOnIssues($, question, answer, choices))
     return r
-  })
+  }).catch(($, e, next) => cutCall('picker manners', e, next))
 
   // #2261: the design round guard has written down Dan's answer to its own picker, so the question
   // goes onto its issue checked off with that answer, off the dialog's path as every other one is.

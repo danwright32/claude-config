@@ -58,7 +58,14 @@ const WRITES: Record<string, unknown> = {
   'python3 probe.py "^foo.*bar$"': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'probe.py', path: '/w/app/probe.py', args: [{ word: '^foo.*bar$', unexpanded: true }] }] },
   'python3 probe.py "$OUT/big.ts"': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'probe.py', path: '/w/app/probe.py', args: [{ word: '$OUT/big.ts' }] }] },
   "python3 probe.py x$'y'": { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'probe.py', path: '/w/app/probe.py', args: [{ word: 'x$y' }] }] },
-  'python3 probe.py "$(': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'probe.py', path: '/w/app/probe.py', args: [{ word: '$(' }] }] },
+  // Since #3491 a command the text ends in inside a quote that never closes is given as unread too.
+  'python3 probe.py "$(': {
+    files: [],
+    changes: [],
+    unnamed: [],
+    runs: [{ what: 'a python3 script file', script: 'probe.py', path: '/w/app/probe.py', args: [{ word: '$(' }] }],
+    unread: [{ words: ['python3', 'probe.py', '$('], why: 'holding a quote that never closes, so what the shell runs from there on cannot be read', folder: '/w/app' }],
+  },
   // #2402: a word whose every dollar sign the shell leaves as text names the file it spells.
   'python3 probe.py "src/big$.ts"': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'probe.py', path: '/w/app/probe.py', args: [{ word: 'src/big$.ts', path: '/w/app/src/big$.ts', unexpanded: true }] }] },
   'python3 probe.py "src/big.ts$"': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'probe.py', path: '/w/app/probe.py', args: [{ word: 'src/big.ts$', path: '/w/app/src/big.ts$', unexpanded: true }] }] },
