@@ -986,7 +986,7 @@ orphan_note(){
   fi
   [ -n "$found" ] || return 0
   echo ""
-  echo "Nothing measured what these write, so each is a suspect, not a measured cause. Each has no parent (its parent and the shell that led its group are gone), has run at least $MIN_SPAN_MIN minute(s), and is still using the processor: the shape that filled the disk on Daniels-MacBook-Pro-2 on 2026-11-24, when shells a builder agent's commands had started ran on for 90 minutes and no folder size showed them."
+  echo "Nothing measured what these write, so each is a suspect, not a measured cause. Each has no parent (its parent and the shell that led its group are gone), has run at least $MIN_SPAN_MIN minute(s), and has used the processor over that time (each share below is an average since it started, not a reading of now): the shape that filled the disk on Daniels-MacBook-Pro-2 on 2026-11-24, when shells a builder agent's commands had started ran on for 90 minutes and no folder size showed them."
   shown=0
   while IFS=$'\t' read -r _pid _name _age _share; do
     [ -n "$_pid" ] || continue
