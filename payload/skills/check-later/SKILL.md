@@ -39,7 +39,7 @@ typed it.
 ## Started by the end of turn hook
 
 `check-later-nudge.sh` ends a turn that left a check waiting on a later day (a one shot reminder,
-a project memory naming a coming date, or a promise to check again on a later day) with a CHECK
+a project memory edit adding a coming date it did not hold before, or a promise to check again on a later day) with a CHECK
 LATER pointer to this file, so Dan no longer has to remember to type the command. Do this before
 any SESSION REFLECTION or ISSUE REVIEW in the same stop, so these questions come first. Then:
 

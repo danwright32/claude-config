@@ -18,7 +18,8 @@ THE THREE SIGNALS, and only these (decided for #2079):
      schedule this cannot read counts as a later day, because missing a dated check costs more than
      one needless look (L648).
   2. a Write, Edit or MultiEdit to a project memory file (.../projects/<project>/memory/...) whose
-     new text names a date after today. A past date (when a fact was learned) is not a signal.
+     new text names a date after today that the text it replaced did not (#3645). A past date
+     (when a fact was learned) is not a signal, and neither is a date an edit carries along.
   3. the assistant's OWN text promising to check again on a later day ("check again tomorrow",
      "re-check on Nov 5"). Tool results are never read, and text inside quotation marks, a code span
      or a quoted block is removed first, so a quoted "tomorrow" is not a promise.
@@ -277,20 +278,54 @@ def dates_in(text, today):
 MEMORY_PATH = re.compile(r"/projects/[^/]+/memory/[^/]+$")
 
 
-def memory_signal(use, when):
+def replaced_text(use, record):
+    """The text this write replaced, as far as the call and its result record it (#3645).
+
+    An Edit or MultiEdit names it in its old_string(s); a MultiEdit's are taken together, so a
+    date moved from one line to another in the same call is not new. A Write's call holds only the
+    new content, but the result line Claude Code writes beside it records, for an update, the file
+    as it was (originalFile). A new file, or a Write with no such record (refused, or shaped
+    otherwise), replaced nothing this can read, so every future date in it counts, as before."""
+    inp = use.get("input") or {}
+    olds = [inp.get("old_string")]
+    olds += [e.get("old_string") for e in (inp.get("edits") or []) if isinstance(e, dict)]
+    if use.get("name") == "Write" and isinstance(record, dict) and record.get("type") == "update":
+        olds.append(record.get("originalFile"))
+    return [t for t in olds if isinstance(t, str)]
+
+
+def memory_signal(use, when, record=None):
     if use.get("name") not in ("Write", "Edit", "MultiEdit"):
         return None
     inp = use.get("input") or {}
     path = inp.get("file_path") if isinstance(inp.get("file_path"), str) else ""
     if not MEMORY_PATH.search(path):
         return None
+    today = when.date()
     texts = [inp.get("content"), inp.get("new_string")]
     texts += [e.get("new_string") for e in (inp.get("edits") or []) if isinstance(e, dict)]
-    ahead = sorted(d for t in texts if isinstance(t, str) for _, _, d in dates_in(t, when.date())
-                   if d > when.date())
+    # Only a date the write ADDS is a check left waiting (#3645): one already in the text it
+    # replaced was left there by an earlier turn. Dates are compared by the day they name, after
+    # the one reading that finds them, so "2026-11-05" and "Nov 5th" are the same date.
+    before = {d for t in replaced_text(use, record) for _, _, d in dates_in(t, today)}
+    ahead = sorted({d for t in texts if isinstance(t, str) for _, _, d in dates_in(t, today)
+                    if d > today and d not in before})
     if not ahead:
         return None
     return "a memory note (%s) naming %s" % (os.path.basename(path), day_label(ahead[0]))
+
+
+def result_records(turn):
+    """tool_use id -> the structured record on its tool result line, for every result this turn."""
+    out = {}
+    for obj in turn:
+        content = (obj.get("message") or {}).get("content") if obj.get("type") == "user" else None
+        if not isinstance(content, list):
+            continue
+        for it in content:
+            if isinstance(it, dict) and it.get("type") == "tool_result" and it.get("tool_use_id"):
+                out[it["tool_use_id"]] = obj.get("toolUseResult")
+    return out
 
 
 # ---- 3. a promise in the assistant's own words ----
@@ -370,10 +405,12 @@ def already_ran(turn, opener, skill):
 
 def signals(turn, opener):
     out = []
+    records = result_records(turn)
     for obj in turn:
         when = local_time(obj)
         for use in tool_uses(obj):
-            s = cron_signal(use, when) if use.get("name") == "CronCreate" else memory_signal(use, when)
+            s = (cron_signal(use, when) if use.get("name") == "CronCreate"
+                 else memory_signal(use, when, records.get(use.get("id"))))
             if s and s not in out:
                 out.append(s)
         text = own_text(obj)
