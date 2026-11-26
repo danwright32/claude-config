@@ -20,6 +20,10 @@
 #      CLAUDE.md (handed in by the WORK_NAMES_PROJECT_LIST seam), and an organisation's name without
 #      its hyphen written as a web or email domain, while the ordinary word sharing those letters
 #      passes. A project list that cannot be read, or holds no work MacBook projects, is refused.
+#   7. A repository that is not public and declares itself public in its .github/expected-visibility
+#      is judged as a public one is (claude-config#3582); one with no such file, or one saying
+#      private or internal, passes as before; and a declaration that is there and cannot be read or
+#      understood is refused. The declaration read is the one of the repository the text goes to.
 #
 # Every name here is invented. This repository is public, and no work organisation or repository name
 # belongs in this file.
@@ -57,6 +61,9 @@ HOMEDIR="$WORK/home"; mkdir -p "$HOMEDIR"
 CALLS="$WORK/gh-calls"
 LIST="$WORK/list.json"
 VIS="$WORK/visibility"   # lines: <owner/name> <PUBLIC|PRIVATE> [<the only token that can see it>]
+# What each repository's default branch holds at .github/expected-visibility on the fake GitHub, one
+# entry per repository named owner__name (claude-config#3582). None there: no such file.
+DECL="$WORK/declared"; mkdir -p "$DECL"
 CO="$WORK/checkout"; mkdir -p "$CO"
 # The folder of shell snapshots the gate reads (WN_SHELL_SNAPSHOTS, claude-config#3020): none until the
 # checks of the shell profile write one, so no check reads this Mac's own.
@@ -92,6 +99,29 @@ case "$1 $2" in
       [ -f "$FAKE_LIST" ] || { echo "HTTP 404: Not Found" >&2; exit 1; }
       cat "$FAKE_LIST"; exit 0 ;;
     esac ;;
+  "api graphql")
+    # What a repository's default branch holds at .github/expected-visibility, in the shapes GitHub's
+    # GraphQL API gave on 2026-11-26 (claude-config#3582): a Blob with its text, a Tree for a folder,
+    # null for no such path, and a null repository with an error for one the account cannot see. The
+    # folder FAKE_DECL holds one entry per repository, named owner__name: a file is the declaration,
+    # a folder is a folder at that path, <entry>.fail is gh failing with those words, and <entry>.raw
+    # is printed as the whole answer.
+    o=""; n=""
+    for a in "$@"; do case "$a" in owner=*) o="${a#owner=}" ;; name=*) n="${a#name=}" ;; esac; done
+    want="$(tr '[:upper:]' '[:lower:]' <<<"$o/$n")"
+    while read -r s v only; do
+      [ "$(tr '[:upper:]' '[:lower:]' <<<"$s")" = "$want" ] || continue
+      if [ -n "$only" ] && [ "${GH_TOKEN:-}" != "$only" ]; then break; fi
+      entry="$FAKE_DECL/${s%%/*}__${s#*/}"
+      if [ -f "$entry.fail" ]; then cat "$entry.fail" >&2; exit 1; fi
+      if [ -f "$entry.raw" ]; then cat "$entry.raw"; exit 0; fi
+      if [ -d "$entry" ]; then object='{"__typename":"Tree"}'
+      elif [ -f "$entry" ]; then object="$(jq -Rs '{__typename:"Blob",text:.,isBinary:false,isTruncated:false}' "$entry")"
+      else object=null; fi
+      printf '{"data":{"repository":{"nameWithOwner":"%s","object":%s}}}\n' "$s" "$object"; exit 0
+    done < "$FAKE_VIS"
+    printf '{"data":{"repository":null},"errors":[{"type":"NOT_FOUND","path":["repository"]}]}\n'
+    echo "gh: Could not resolve to a Repository with the name '$o/$n'." >&2; exit 1 ;;
 esac
 echo "fake gh: unexpected call: $*" >&2
 exit 1
@@ -143,7 +173,7 @@ run(){   # $1 = the command; output in out, exit code in rc, the decision in dec
   payload="$(jq -nc --arg c "$1" --arg d "$dir" '{hook_event_name:"PreToolUse",tool_name:"Bash",tool_input:{command:$c},cwd:$d}')"
   : > "$CALLS"
   out="$(cd "$dir" && printf '%s' "$payload" | PATH="$BIN:$PATH" HOME="$HOMEDIR" FAKE_CALLS="$CALLS" FAKE_LIST="$LIST" \
-    FAKE_VIS="$VIS" WORK_NAMES_EXTRA_HASHES="$FAKE_HASH,$WORD_HASH" WORK_NAMES_PROJECT_LIST="$PROJECTS" \
+    FAKE_VIS="$VIS" FAKE_DECL="$DECL" WORK_NAMES_EXTRA_HASHES="$FAKE_HASH,$WORD_HASH" WORK_NAMES_PROJECT_LIST="$PROJECTS" \
     HOOK_TESTS_RUNNING=1 WORK_NAMES_PROJECT_HASHES="$PROJ_HASHES" WN_SHELL_SNAPSHOTS="$SNAPS" bash "$GATE" 2>&1)"; rc=$?
   decision="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)"
 }
@@ -1059,6 +1089,236 @@ printf '%s\n' 'git () {' '  echo elsewhere' '}' > "$SNAPS/snapshot-zsh-179400000
 RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title \"\$(git rev-parse --show-toplevel)\" --body x"
 check "#3020 and the snapshots after it are still read: one redefining git is refused: $out" refused
 rm -rf "$SNAPS"
+
+# ---------------------------------------------------------------- a repository that declares itself public (claude-config#3582)
+# On 2026-11-24 this repository was private for some hours, the gate let every text posted to it
+# through unread, and it turned public again with work names in two issues. A repository whose
+# .github/expected-visibility says public is judged whatever GitHub says it is today (Dan, by picker
+# on 2026-11-25). One with no such file passes as before, and a declaration that is there and cannot
+# be read or understood is refused, never taken as no declaration.
+#
+# The declaration is the repository's own. A checkout whose origin is the repository the text goes to
+# is read on disk, as the session start notice reads it; any other repository is asked of GitHub.
+cat >> "$VIS" <<'EOF'
+danwright-test/meant-public PRIVATE
+danwright-test/meant-private PRIVATE
+danwright-test/meant-internal PRIVATE
+danwright-test/odd-word PRIVATE
+danwright-test/empty-file PRIVATE
+danwright-test/only-comments PRIVATE
+danwright-test/loud-word PRIVATE
+danwright-test/a-folder PRIVATE
+danwright-test/unreachable PRIVATE
+danwright-test/odd-answer PRIVATE
+danwright-test/other-answer PRIVATE
+danwright-test/cut-short PRIVATE
+danwright-test/inside-only INTERNAL
+danwright-test/bob-meant-public PRIVATE tok-bob
+danwright-test/on-disk PRIVATE
+danwright-test/on-disk-private PRIVATE
+danwright-test/on-disk-none PRIVATE
+danwright-test/on-disk-odd PRIVATE
+danwright-test/on-disk-empty PRIVATE
+danwright-test/on-disk-locked PRIVATE
+danwright-test/on-disk-folder PRIVATE
+danwright-test/behind PRIVATE
+Acme-Corp/meant-public PRIVATE
+EOF
+declares(){ printf '%s' "$2" > "$DECL/${1%%/*}__${1#*/}"; }   # $1 = owner/name, $2 = the file's whole text
+asked_github(){ grep -c 'api graphql' "$CALLS" || true; }
+declares danwright-test/meant-public '# what this repository is meant to be
+public
+'
+declares danwright-test/meant-private 'private
+'
+declares danwright-test/meant-internal 'internal
+'
+declares danwright-test/odd-word 'sometimes
+'
+declares danwright-test/empty-file ''
+declares danwright-test/only-comments '# nothing but this line
+'
+declares danwright-test/loud-word '
+   PUBLIC   as of this week
+'
+mkdir "$DECL/danwright-test__a-folder"
+echo "gh: HTTP 502: Bad Gateway (https://api.github.com/graphql)" > "$DECL/danwright-test__unreachable.fail"
+printf 'not an answer\n' > "$DECL/danwright-test__odd-answer.raw"
+printf '{"data":{"repository":{"nameWithOwner":"danwright-test/some-other","object":null}}}\n' > "$DECL/danwright-test__other-answer.raw"
+printf '{"data":{"repository":{"nameWithOwner":"danwright-test/cut-short","object":{"__typename":"Blob","text":"public\\n","isBinary":false,"isTruncated":true}}}}\n' > "$DECL/danwright-test__cut-short.raw"
+declares danwright-test/inside-only 'public
+'
+declares danwright-test/bob-meant-public 'public
+'
+declares Acme-Corp/meant-public 'public
+'
+could_not_tell(){ refused && has "$out" "could not tell" && has "$out" "expected-visibility"; }
+
+# (a) declared public, private today.
+run 'gh pr create --repo danwright-test/meant-public --title "Fix it" --body "copied from the acme-widgets issue"'
+check "#3582 a private repository that declares itself public is judged, and text naming a work repository is refused: $out" refused
+check "#3582 and names the name it matched: $out" has "$out" "acme-widgets"
+check "#3582 and says the repository is private today: $out" has "$out" "PRIVATE"
+check "#3582 and says its declaration is why it is judged: $out" has "$out" "expected-visibility"
+check "#3582 and does not call it a public repository: $out" lacks "$out" "a public repository"
+check "#3582 the declaration was asked of GitHub once, for a repository this folder is no checkout of: $(asked_github)" [ "$(asked_github)" = "1" ]
+run 'gh pr create --repo danwright-test/meant-public --title "Tidy the reader" --body "nothing to see"'
+check "#3582 (control) clean text posted to it passes: $out" passed
+run 'gh issue comment 5 --repo danwright-test/meant-public --body "the acme-corp board"'
+check "#3582 a comment naming a listed owner is refused there too: $out" refused
+run 'gh api repos/danwright-test/meant-public/issues/5/comments -f body="seen in zephyr"'
+check "#3582 and the same text sent by gh api: $out" refused
+run 'gh repo edit danwright-test/meant-public --description "the acme-widgets mirror"'
+check "#3582 and its description: $out" refused
+run 'gh release create v1 --repo danwright-test/meant-public --notes "as zephyr does"'
+check "#3582 and release notes: $out" refused
+run 'gh repo sync danwright-test/meant-public --source danwright-test/private-notes'
+check "#3582 and commits copied into it from a repository that is not public, which cannot be read here: $out" refused
+rm -f "$LIST"
+run 'gh pr create --repo danwright-test/meant-public --title "Tidy" --body "nothing to see"'
+check "#3582 it needs the list as a public repository does, so an unreadable list refuses: $out" refused
+write_list "$GOOD_LIST"
+run 'gh pr create --repo danwright-test/inside-only --title "zephyr" --body x'
+check "#3582 an internal repository that declares itself public is judged the same: $out" refused
+check "#3582 and says it is internal today: $out" has "$out" "INTERNAL"
+run 'gh pr create --repo danwright-test/bob-meant-public --title "zephyr" --body x'
+check "#3582 one only the second signed in account can see has its declaration read through that account: $out" refused
+check "#3582 and is refused for the name, not for a declaration it could not read: $out" has "$out" "zephyr"
+run 'gh issue create --repo Acme-Corp/meant-public --title "zephyr" --body "acme-widgets" --milestone M'
+check "#3582 a work owner's repository that declares itself public may still name its own work, as a public one may: $out" passed
+
+# (b) no declaration, or one that says private or internal: as before.
+run 'gh pr create --repo danwright-test/private-notes --title "zephyr" --body "acme-widgets"'
+check "#3582 a private repository with no declaration passes as before: $out" passed
+check "#3582 after its declaration was looked for: $(asked_github)" [ "$(asked_github)" = "1" ]
+check "#3582 and the list is still never read for it" lacks "$(cat "$CALLS")" "contents/repos.json"
+run 'gh pr create --repo danwright-test/meant-private --title "zephyr" --body "acme-widgets"'
+check "#3582 one that declares itself private passes: $out" passed
+run 'gh pr create --repo danwright-test/meant-internal --title "zephyr" --body "acme-widgets"'
+check "#3582 one that declares itself internal passes: $out" passed
+run 'gh pr create --repo danwright-test/public-notes --title "Tidy the reader" --body "nothing to see"'
+check "#3582 (control) a public repository is judged as before: $out" passed
+check "#3582 and its declaration is never asked for, since GitHub already says it is public: $(asked_github)" [ "$(asked_github)" = "0" ]
+
+# (c) a declaration that is there and cannot be read or understood is refused, whatever the text.
+run 'gh pr create --repo danwright-test/odd-word --title "Tidy" --body "nothing to see"'
+check "#3582 a declaration holding a word that is none of the three is refused as cannot tell: $out" could_not_tell
+check "#3582 and says what the file must hold: $out" has "$out" "public, private or internal"
+run 'gh pr create --repo danwright-test/empty-file --title "Tidy" --body "nothing to see"'
+check "#3582 an empty declaration is refused, never read as no declaration: $out" could_not_tell
+run 'gh pr create --repo danwright-test/only-comments --title "Tidy" --body "nothing to see"'
+check "#3582 and so is one holding only comments: $out" could_not_tell
+run 'gh pr create --repo danwright-test/a-folder --title "Tidy" --body "nothing to see"'
+check "#3582 a folder where the declaration should be is refused: $out" could_not_tell
+run 'gh pr create --repo danwright-test/unreachable --title "Tidy" --body "nothing to see"'
+check "#3582 GitHub failing to hand over the declaration is refused: $out" could_not_tell
+check "#3582 with gh's own reason: $out" has "$out" "502"
+run 'gh pr create --repo danwright-test/odd-answer --title "Tidy" --body "nothing to see"'
+check "#3582 an answer that is not GitHub's JSON is refused: $out" could_not_tell
+run 'gh pr create --repo danwright-test/other-answer --title "Tidy" --body "nothing to see"'
+check "#3582 an answer about another repository is refused, never read as this one having no file: $out" could_not_tell
+run 'gh pr create --repo danwright-test/cut-short --title "Tidy" --body "nothing to see"'
+check "#3582 a declaration GitHub cut short is refused: $out" could_not_tell
+# Blank lines, spaces around the word, capitals and words after it are read as the session start
+# notice reads them: the first word of the first line that is not a comment, in any letter case.
+run 'gh pr create --repo danwright-test/loud-word --title "zephyr" --body x'
+check "#3582 PUBLIC in capitals, indented, after a blank line and with words after it is a declaration of public: $out" refused
+check "#3582 refused for the name: $out" has "$out" "zephyr"
+run 'gh pr create --repo danwright-test/loud-word --title "Tidy" --body "nothing to see"'
+check "#3582 (control) and clean text passes there: $out" passed
+
+# (d) a checkout of the repository the text goes to is read on disk, from its root.
+on_disk(){   # $1 = folder name, $2 = owner/name of its origin, $3 = the file's text, or "" for no file
+  D="$WORK/$1"; mkdir -p "$D/sub/folder"
+  git -C "$D" init -q
+  git -C "$D" remote add origin "https://github.com/$2.git"
+  printf '%s' "$2" > "$D/.fake-default"
+  if [ -n "$3" ]; then mkdir -p "$D/.github"; printf '%s\n' "$3" > "$D/.github/expected-visibility"; fi
+}
+co_commit(){ git -C "$D" -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false -c core.hooksPath=/dev/null commit -q "$@"; }
+on_disk on-disk danwright-test/on-disk "# what it is meant to be
+public"
+# GitHub would fail if asked, so a refusal for the name can only have come from the file on disk.
+echo "gh: HTTP 502: Bad Gateway" > "$DECL/danwright-test__on-disk.fail"
+RUN_DIR="$D" run 'gh issue comment 5 --body "seen in zephyr"'
+check "#3582 in a checkout that declares itself public, text posted to its private repository is refused: $out" refused
+check "#3582 for the name: $out" has "$out" "zephyr"
+check "#3582 read from the checkout, GitHub is not asked for the declaration: $(asked_github)" [ "$(asked_github)" = "0" ]
+RUN_DIR="$D" run 'gh issue comment 5 --body "nothing to see"'
+check "#3582 (control) clean text passes there: $out" passed
+RUN_DIR="$D/sub/folder" run 'gh issue comment 5 --repo danwright-test/on-disk --body "seen in zephyr"'
+check "#3582 from a folder inside the checkout the file at its root is read: $out" refused
+check "#3582 for the name: $out" has "$out" "zephyr"
+RUN_DIR="$D" run 'cd sub/folder && gh issue comment 5 --repo danwright-test/on-disk --body "seen in zephyr"'
+check "#3582 and after a cd into one: $out" refused
+RUN_DIR="$D" run 'gh issue comment 5 --repo DanWright-Test/On-Disk --body "seen in zephyr"'
+check "#3582 the repository named in other letter case is the same repository: $out" refused
+check "#3582 for the name: $out" has "$out" "zephyr"
+# A worktree has its own root and its own copy of the file.
+git -C "$D" add .github/expected-visibility
+co_commit -m "state what it is meant to be"
+git -C "$D" worktree add -q "$WORK/on-disk-wt" -b topic >/dev/null 2>&1
+printf 'danwright-test/on-disk' > "$WORK/on-disk-wt/.fake-default"
+RUN_DIR="$WORK/on-disk-wt" run 'gh issue comment 5 --body "seen in zephyr"'
+check "#3582 from a worktree of that checkout the worktree's own copy is read: $out" refused
+check "#3582 for the name: $out" has "$out" "zephyr"
+check "#3582 without asking GitHub: $(asked_github)" [ "$(asked_github)" = "0" ]
+# A checkout behind its origin may not hold the file yet; the copy on origin's default branch, as
+# last fetched, is read then, as the notice does.
+on_disk behind danwright-test/behind ""
+echo "gh: HTTP 502: Bad Gateway" > "$DECL/danwright-test__behind.fail"
+co_commit --allow-empty -m "before the file"
+mkdir -p "$D/.github"; printf 'public\n' > "$D/.github/expected-visibility"
+git -C "$D" add .github/expected-visibility
+co_commit -m "state what it is meant to be"
+git -C "$D" update-ref refs/remotes/origin/main HEAD
+git -C "$D" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+git -C "$D" reset -q --hard HEAD~1
+check "#3582 (the fixture) the checkout behind its origin does not hold the file" [ ! -e "$D/.github/expected-visibility" ]
+RUN_DIR="$D" run 'gh issue comment 5 --body "seen in zephyr"'
+check "#3582 a checkout that does not hold the file yet is judged by origin's copy of it: $out" refused
+check "#3582 for the name: $out" has "$out" "zephyr"
+on_disk on-disk-private danwright-test/on-disk-private "private"
+RUN_DIR="$D" run 'gh issue comment 5 --body "seen in zephyr"'
+check "#3582 a checkout that declares itself private passes as before: $out" passed
+on_disk on-disk-none danwright-test/on-disk-none ""
+echo "gh: HTTP 502: Bad Gateway" > "$DECL/danwright-test__on-disk-none.fail"
+RUN_DIR="$D" run 'gh issue comment 5 --body "seen in zephyr"'
+check "#3582 a checkout with no declaration, in its files or on its origin, passes as before: $out" passed
+check "#3582 and GitHub is not asked for one: $(asked_github)" [ "$(asked_github)" = "0" ]
+on_disk on-disk-odd danwright-test/on-disk-odd "sometimes"
+RUN_DIR="$D" run 'gh issue comment 5 --body "nothing to see"'
+check "#3582 a checkout whose declaration is none of the three is refused: $out" could_not_tell
+on_disk on-disk-empty danwright-test/on-disk-empty ""
+mkdir -p "$D/.github"; : > "$D/.github/expected-visibility"
+RUN_DIR="$D" run 'gh issue comment 5 --body "nothing to see"'
+check "#3582 a checkout whose declaration is empty is refused: $out" could_not_tell
+on_disk on-disk-folder danwright-test/on-disk-folder ""
+mkdir -p "$D/.github/expected-visibility"
+RUN_DIR="$D" run 'gh issue comment 5 --body "nothing to see"'
+check "#3582 a folder where the checkout's declaration should be is refused: $out" could_not_tell
+# A user who can read any file (root) cannot set this state up, and says so instead of failing.
+on_disk on-disk-locked danwright-test/on-disk-locked "public"
+chmod 000 "$D/.github/expected-visibility"
+if cat "$D/.github/expected-visibility" >/dev/null 2>&1; then
+  echo "note: this user can read a file with no read permission, so the unreadable declaration case was not measured here."
+else
+  RUN_DIR="$D" run 'gh issue comment 5 --body "nothing to see"'
+  check "#3582 a declaration that is there and cannot be read is refused: $out" could_not_tell
+  check "#3582 and said as a file that could not be read: $out" has "$out" "could not be read"
+fi
+chmod 644 "$D/.github/expected-visibility"
+
+# (e) the declaration read is the one of the repository the text goes to, never the folder's own.
+RUN_DIR="$WORK/on-disk-private" run 'gh issue comment 5 --repo danwright-test/meant-public --body "seen in zephyr"'
+check "#3582 from a checkout that declares itself private, text for another repository that declares itself public is refused: $out" refused
+check "#3582 for the name: $out" has "$out" "zephyr"
+check "#3582 that repository's declaration was asked of GitHub: $(asked_github)" [ "$(asked_github)" = "1" ]
+RUN_DIR="$WORK/on-disk" run 'gh issue comment 5 --repo danwright-test/private-notes --body "seen in zephyr"'
+check "#3582 from a checkout that declares itself public, text for a private repository with no declaration passes: $out" passed
+check "#3582 after GitHub was asked for that repository's own: $(asked_github)" [ "$(asked_github)" = "1" ]
+RUN_DIR="$WORK/on-disk" run 'GH_REPO=danwright-test/odd-word gh issue comment 5 --body "nothing to see"'
+check "#3582 and a repository named by GH_REPO is judged by its own declaration, here one that cannot be understood: $out" could_not_tell
 
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

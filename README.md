@@ -282,7 +282,9 @@ merge. The file scan is unchanged and still leaves repository names out.
 Pull request and issue text goes further (#2105). `check-work-names-publish.sh` judges every
 `gh pr create`, `pr edit`, `pr comment`, `pr review`, `issue create`, `issue edit` and
 `issue comment`, and every `gh api` write to a repository's issues, pulls or comments endpoints, in
-any repository GitHub reports as public; a private one passes without the list being read, and so
+any repository GitHub reports as public, and since #3582 in one that declares itself public while
+GitHub reports it private (see "A repository that declares itself public is judged while it is
+private" below); any other private one passes without the list being read, and so
 does a public repository a work owner holds. It reads the whole command, a heredoc body included,
 and every body file it names, and refuses text naming a work organisation OR a work repository,
 showing the name it matched so the text can be rewritten. The names are read live on each judged
@@ -354,9 +356,47 @@ shell feeds that stage only the last; the issue field gate still reads such a fi
 command, as before. Still not covered: gh run by
 its absolute path, a script that rewrites PATH, and curl or an API library.
 
-**Text posted while a repository was private (#3582).** The publish gate judges text posted to a
-public repository and lets a private one through without reading its lists, so nothing judges text
-posted while a repository is private, and it is still unjudged when the repository turns public.
+**A repository that declares itself public is judged while it is private (#3582).** A repository
+whose `.github/expected-visibility` says `public` is judged by the publish gate exactly as a public
+one is, whatever GitHub says its visibility is today (Dan, by picker on 2026-11-25: "Yes, check it
+anyway (Recommended)"). A repository that is not public and has no such file, or whose file says
+`private` or `internal`, passes as before, without the lists being read. This only ever makes the
+gate judge and refuse more.
+
+- **Whose declaration is read**: the one of the repository the text goes to. When the command runs
+  in a checkout whose `origin` is that repository, it is the checkout's own file, read through
+  `hooks/lib/expected-visibility.py`, the reader the session start notice uses, so the two cannot
+  read the file differently: the working tree's copy from the checkout's root (a worktree's own,
+  from any folder inside it), and with nothing at that path the copy on origin's default branch as
+  last fetched. For any other repository (`--repo`, `GH_REPO` or a `gh api` path naming one the
+  folder is no checkout of, a folder in no checkout, an origin that is not a GitHub address) the
+  folder's own file says nothing about it, so GitHub is asked for the copy on that repository's
+  default branch, in one GraphQL read that names the repository back.
+- **What the file may hold**: its first line that is not a comment or blank, that line's first
+  word, in any letter case: `public`, `private` or `internal`.
+- **Cannot tell is refused**, whatever the text: a file that is there and cannot be read, an empty
+  one, one of comments alone, a word that is none of the three, a folder at that path, GitHub
+  failing to hand it over, or an answer about another repository. The refusal says which, and says
+  the repository is judged because of its own declaration.
+- **A work owner's repository** that declares itself public may still name its own work, as a
+  public one may.
+- **What it costs**, measured on the personal MacBook on 2026-11-26 over five runs each at a load
+  average near 40: 0.020 to 0.023 seconds to read a checkout's own declaration, with no call, and
+  0.39 to 0.50 seconds for the one call to GitHub about a repository the folder is no checkout
+  of. A public repository is never asked for its declaration.
+- **What it does not close**: text that reaches the repository without a `gh` command a session
+  runs (the website, another program) is still judged by nothing, so the scan below is still the
+  check to run before a repository turns public again. A checkout is read as it stands: one that
+  holds no file and has not fetched since its origin gained one reads as stating nothing, and a
+  branch whose working tree changes the file is read as changed.
+
+Tests: `hooks/test-work-names-publish.sh` (the command hook), `hooks/test-work-names-scripts.sh`
+(the guard on `gh`) and `hooks/test-repo-visibility-notice.sh` (the reader).
+
+**Text posted while a repository was private (#3582).** Until that rule the publish gate let every
+private repository through without reading its lists, and it still does for one that does not
+declare itself public, and for text no `gh` command posts. So text posted while a repository is
+private can be unjudged when the repository turns public.
 On 2026-11-24 this repository was private for some hours and 8 lines naming a work organisation or
 repository were posted to it meanwhile. One command rechecks such a window, and the gate's refusal
 of `gh repo edit --visibility public` names it:
@@ -3230,15 +3270,21 @@ Reading an old checkout is the other half, and that one is said rather than refu
   and the account's minutes ran out, and the publish gate judged none of the text posted meanwhile.
   The expectation has one home, the first line of `.github/expected-visibility` that is not a
   comment (`public`, `private` or `internal`), which this repository carries and
-  `.github/workflows/tests.yml` points at. A checkout that does not hold the file yet, being behind
+  `.github/workflows/tests.yml` points at, and one reader, `hooks/lib/expected-visibility.py`,
+  which the publish gate reads it through as well (it judges a repository whose file says public
+  even while GitHub says private, see "A repository that declares itself public is judged while it
+  is private"). A checkout that does not hold the file yet, being behind
   its origin, is judged by the copy on origin's default branch as last fetched, and a repository
-  with no such file in either place is never asked about.
+  with no such file in either place is never asked about. Something at that path that is not a
+  file, and an empty copy on origin's default branch, are said as a file that could not be read or
+  understood, never taken as no file.
   When GitHub agrees the hook says nothing; when it does not, one notice names the repository, what
   it is, what that costs and the command to run before it turns public again; when it cannot tell
   (gh failed, answered something else or outlasted its 4 second bound, the file or the origin could
   not be read) it says it could not tell, never that all is well. It costs one `gh repo view` per
-  session start in a repository that carries the file, measured on 2026-11-25 at 0.51 to 0.80
-  seconds over five runs, against 0.10 in a repository with no file and 0.05 to 0.06 outside one.
+  session start in a repository that carries the file, measured on the personal MacBook on
+  2026-11-26 at 0.52 to 0.56 seconds over five runs, against 0.13 to 0.24 over five in a repository
+  with no file and 0.05 over three outside one, at a load average near 40.
   It is wired to SessionStart only, never to a prompt.
   Tests: `hooks/test-repo-visibility-notice.sh`.
 

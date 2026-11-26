@@ -111,7 +111,9 @@ check "it says it is private: $out" has "$out" "PRIVATE"
 check "it says what it is meant to be: $out" has "$out" "says public"
 check "it says the runners are 2 core: $out" has "$out" "2 core"
 check "it says their minutes are billed: $out" has "$out" "bills"
-check "it says the publish gate does not judge text posted to it: $out" has "$out" "publish gate"
+check "it says the publish gate goes on judging the gh commands a session runs: $out" has "$out" "publish gate goes on judging the gh commands a session runs"
+check "and that nothing judges text that reaches it any other way: $out" has "$out" "nothing judges text that reaches it any other way"
+check "it no longer says the gate does not judge text posted to it, which stopped being true: $out" lacks "$out" "does not judge text posted to it"
 check "it names the command to run before it turns public again: $out" has "$out" "lib/posted-text-scan.py danwright-test/notes --since"
 check "the command it names is shipped beside the hook" [ -f "$HERE/lib/posted-text-scan.py" ]
 check "it says to tell Dan: $out" has "$out" "Tell Dan"
@@ -206,6 +208,55 @@ cannot "an origin that is not GitHub"
 repo noremote "" "public"
 start "$R"
 cannot "no origin at all"
+# Something at the file's path that is not a file is a declaration that cannot be read, never a
+# repository that states nothing: the publish gate reads the same file through the same reader and
+# refuses there (claude-config#3582).
+repo afolder "https://github.com/danwright-test/afolder.git" ""
+mkdir -p "$R/.github/expected-visibility"
+start "$R"
+cannot "a folder where the expectation file should be"
+check "a folder where the expectation file should be: GitHub is not asked: $(asked)" [ "$(asked)" = "0" ]
+# An empty copy on origin's default branch is judged as an empty file in the checkout is. Read by
+# the hook's own lines it was taken as no file at all, and nothing was said.
+repo emptybehind "https://github.com/danwright-test/emptybehind.git" ""
+commit --allow-empty -m "before the file"
+mkdir -p "$R/.github"; : > "$R/.github/expected-visibility"
+git -C "$R" add .github/expected-visibility
+commit -m "an expectation file holding nothing"
+git -C "$R" update-ref refs/remotes/origin/main HEAD
+git -C "$R" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+git -C "$R" reset -q --hard HEAD~1
+check "(the fixture) the checkout itself does not hold the empty file" [ ! -e "$R/.github/expected-visibility" ]
+start "$R"
+cannot "an empty expectation file on origin's default branch"
+# One reader for the notice and the publish gate, so the two cannot come to read the file
+# differently: neither holds a reading of its own.
+check "the notice reads the expectation through lib/expected-visibility.py" grep -q 'lib/expected-visibility.py' "$HOOK"
+check "and holds no awk reading of its own" bash -c '! grep -q "awk" "$1"' _ "$HOOK"
+check "the publish gate reads it through the same file" grep -q '"expected-visibility.py"' "$HERE/work_names_publish_gate.py"
+agree(){   # $1 = the file's text; the reader's own answer for it, run as the notice runs it
+  local d="$WORK/agree"; rm -rf "$d"; mkdir -p "$d/.github"; git -C "$d" init -q
+  printf '%s' "$1" > "$d/.github/expected-visibility"
+  python3 -B "$HERE/lib/expected-visibility.py" "$d" | sed -n '1,2p' | tr '\n' ' '
+}
+check "the reader: a plain word is stated: $(agree 'public
+')" [ "$(agree 'public
+')" = "stated public " ]
+check "the reader: capitals, an indent, a blank line and words after it are still that word: $(agree '
+   PRIVATE   for now
+')" [ "$(agree '
+   PRIVATE   for now
+')" = "stated private " ]
+check "the reader: a word that is none of the three is unknown: $(agree 'sometimes
+')" [ "$(agree 'sometimes
+')" = "unknown  " ]
+check "the reader: an empty file is unknown, never no file: $(agree '')" [ "$(agree '')" = "unknown  " ]
+check "the reader: a commented out word is not read: $(agree '# public
+')" [ "$(agree '# public
+')" = "unknown  " ]
+check "the reader: a word ending in a carriage return is not one of the three: $(agree "$(printf 'public\r')
+")" [ "$(agree "$(printf 'public\r')
+")" = "unknown  " ]
 # The longer bound is a test setting: a real session's environment cannot hold the hook past its timeout.
 answer PUBLIC
 : > "$CALLS"
@@ -232,7 +283,7 @@ check "a payload that cannot be read still judges the folder the hook runs in: $
 if ROOT="$(bash "$HERE/lib/checkout-root.sh" "$HERE/.." 2>/dev/null)" && [ -n "$ROOT" ]; then
   EXPECT="$ROOT/.github/expected-visibility"
   check "this repository states what it is meant to be" [ -f "$EXPECT" ]
-  check "and it is meant to be public" [ "$(awk '!/^[[:space:]]*#/ && NF && !seen { seen = 1; print $1 }' "$EXPECT" 2>/dev/null)" = "public" ]
+  check "and it is meant to be public, by the one reader" [ "$(python3 -B "$HERE/lib/expected-visibility.py" "$ROOT" 2>/dev/null | sed -n '1,2p' | tr '\n' ' ')" = "stated public " ]
   check "the workflow's comment about free runners points at that file, the assumption's one home" \
     grep -q "expected-visibility" "$ROOT/.github/workflows/tests.yml"
 else
