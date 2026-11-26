@@ -6074,11 +6074,14 @@ call, as `db-write-ask.sh` does for database writes. The rule is `hooks/lib/conn
   missing: a question is the one answer sleep mode can say yes to at night.
 
 It is a hook and not the `permissions.ask` rule the issue's text names, because the sync carries no
-permission rule to either Mac. Measured on the personal MacBook on 2026-11-26, one run each, in a
-throwaway folder: an ask rule added to `settings.shared.json` made the pull refuse that whole file,
+ask rule to either Mac. The one permission setting it shares is `permissions.deny`, for a fixed
+list of rules (#3686), and an ask rule in `settings.shared.json` makes the pull refuse that whole
+file, saying such a rule stays each Mac's own (read in `claude-sync` on 2026-11-26). Measured on the
+personal MacBook on 2026-11-26, one run each, in a throwaway folder, before the deny rules were
+shared: an ask rule added to `settings.shared.json` made the pull refuse that whole file,
 so none of the other shared settings were applied either, and a `permissions` key in
-`settings.hooks.json` was dropped with nothing said. Carrying one means a new entry on the sync's
-list of shared settings, which is Dan's to sign off and has not been made. A hook already reaches
+`settings.hooks.json` was dropped with nothing said. Carrying an ask rule means a new entry on the
+sync's list of shared settings, which is Dan's to sign off and has not been made. A hook already reaches
 both Macs, can match a server by a part of its name, and its matching can be run by handing it a
 call.
 
