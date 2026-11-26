@@ -53,6 +53,12 @@
 # before (lib/sync-clone.sh, sc_is_plain_copy). A call this gate cannot READ is refused there too:
 # where it writes is unknown, so the copy it was made from decides nothing.
 #
+# A destination is judged by its text AND by where it really is (claude-config#3537): the kernel is
+# asked for the real path of each one, which sees through a path by disk and file number, a link
+# that lives outside payload/ and another letter case of the folder name. A real path that cannot
+# be read, and a file with more than one name, are refused in their own words, never let through.
+# Making a link is a write, by ln, by the link command or by an inline script.
+#
 # The questions come from lib/sync-clone.sh, shared with the warning hook, so the two cannot come
 # to two different answers about whether a hold is in force (L370).
 #
@@ -874,8 +880,8 @@ WRITE_CALLS = (r"open\([^)]*,\s*[\"\x27][^\"\x27]*[wax+]", r"\.write_(text|bytes
 # in ruby, link and symlink called bare as perl and php call them, with or without brackets, and a
 # script that runs ln itself. Never readlink or unlink, which hold the same letters: the first
 # reads, and the second is in the list above.
-WRITE_CALLS += (r"\.(?:sym|hard)?link(?:Sync|_to)?\s*\(",
-                r"(?<![A-Za-z0-9_.])(?:sym)?link(?:Sync)?\s*\(",
+WRITE_CALLS += (r"\.(?:sym|hard)?link(?:Sync|_to)?\(",
+                r"(?<![A-Za-z0-9_.])(?:sym)?link(?:Sync)?\(",
                 r"File\.(?:sym)?link\b|FileUtils\.(?:ln|link|symlink)",
                 r"(?:^|[\s;&|(])(?:perl|ruby|php)\b[^\n]*?(?<![A-Za-z0-9_.])(?:sym)?link\s+[\"\x27$@]",
                 r"[\"\x27]ln(?:[\"\x27]|\s+-?)")

@@ -251,6 +251,8 @@ runbash "grep -n hyperlink 'payload/LESSONS.md'" "$FIX/dev"
 allowed "#3537 control: searching a payload file for a word holding link is not a write"
 runbash "perl -ne 'print if /link /' 'payload/LESSONS.md'" "$FIX/dev"
 allowed "#3537 control: nor is a perl search for the word"
+runbash "grep -n 'see the link (below)' 'payload/LESSONS.md'" "$FIX/dev"
+allowed "#3537 control: nor a search for prose that has the word before a bracket"
 runbash "python3 -c \"import os; os.symlink('$FIX/elsewhere/a.txt', '$FIX/elsewhere/l11')\"" "$FIX/elsewhere"
 allowed "#3537 control: a link between two files outside any checkout is let through"
 
