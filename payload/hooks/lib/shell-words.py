@@ -62,7 +62,6 @@ hook that slow is killed and the command goes unscreened.
 The context stack: " ' ` quotes, $( and ${ substitutions, and plain ( inside a substitution.
 Inside a substitution quotes open afresh, so X="$(a "b c")" is one word.
 """
-import collections
 import functools
 import os
 import re
@@ -2857,17 +2856,26 @@ def _named(text):
     records, crude = _records(text, "", 0)
     if crude:
         return None
-    named = collections.Counter()
+    named = {}
     for d, _, _, rest, _, field, _ in records:
         word = first_word(rest)[0]
-        if word and not word.endswith(";"):
-            named[(d, word)] += 1
+        keys = [(d, word)] if word and not word.endswith(";") else []
         tool, sub, act = (field.split("\x1d") + ["", ""])[:3] if field else ("", "", "")
         if sub and not sub.endswith(";"):
-            named[(d, tool, sub)] += 1
+            keys.append((d, tool, sub))
             if act and not act.endswith(";"):
-                named[(d, tool, sub, act)] += 1
+                keys.append((d, tool, sub, act))
+        for key in keys:
+            named[key] = named.get(key, 0) + 1
     return named
+
+
+def _named_more(a, b):
+    """The names counted more times in a than in b (_named), each with how many more. A plain
+    dict and not collections.Counter: this file is loaded by the gate whose judgements
+    lib/judgement-cache.py keeps, which lists every module the gate's libraries import, and a
+    count of names is no reason to add one to that list."""
+    return {k: n - b.get(k, 0) for k, n in a.items() if n > b.get(k, 0)}
 
 
 def flattened(s):
@@ -2906,13 +2914,14 @@ def flattened(s):
     was, now = _named(plain), _named(joint)
     if was is None or now is None:
         return plain
-    if not was - now:
+    if not _named_more(was, now):
         return joint
-    if not now - was:
+    if not _named_more(now, was):
         return plain
     both = joint + FLAT_BREAK + plain
     held = _named(both)
-    return both if held is not None and not (was | now) - held else plain
+    either = {k: max(was.get(k, 0), now.get(k, 0)) for k in set(was) | set(now)}
+    return both if held is not None and not _named_more(either, held) else plain
 
 
 def flattened_payload(text):
