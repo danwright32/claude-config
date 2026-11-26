@@ -835,7 +835,7 @@ braces) is judged as each file it matches at that moment. And each script file t
 is read from disk for the links it makes, a shell script by `lib/shell-words.py` and a python,
 perl, ruby, node or php script by the calls that make a link. What the gate cannot tell is refused
 in its own words, which say to run the command directly: a command string whose program is a value
-(`os.system(cmd)`), a command string longer than the gate reads or whose quote never closes, and
+(`os.system(cmd)`), a command string that goes on past what the gate reads, and
 a script file it could not read, each only when the call names a `payload/` path besides or runs
 inside a payload folder, and a pattern with more than 512 files or a `**` in a checkout at risk.
 From a script file only a link is read, and only one whose path can be placed. Each loop is held to

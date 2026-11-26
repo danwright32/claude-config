@@ -323,6 +323,10 @@ runbash "python3 -c \"import os; os.system('ls payload/hooks; cat payload/hooks/
 allowed "#3689 control: a string holding a separator, which the cut into commands splits, is not taken for one that never closes"
 runbash "echo \"we run 'em all\"; ls payload/hooks" "$FIX/dev"
 allowed "#3689 control: the word run before a quote that never closes, in prose, is not taken for a string"
+runbash "grep -n \"system\" payload/hooks/x.sh" "$FIX/dev"
+allowed "#3689 control: a search for the word system, whose closing quote follows it, is not taken for a string"
+runbash "grep -n \"os.system(\" payload/hooks/x.sh" "$FIX/dev"
+allowed "#3689 control: nor is a search for a call with its bracket"
 
 # And the loop over the script files of one command.
 for k in 1 2 3 4 5 6 7 8 9; do printf 'print(%s)\n' "$k" > "$FIX/scripts/n$k.py"; done
