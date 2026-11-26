@@ -294,8 +294,20 @@ sys.exit(1 if v is None or isinstance(v, str) else 0)' 2>/dev/null
 #   raw        the command is left exactly as typed, for a caller that searches the whole text
 #              rather than splitting it, and would otherwise be shown something the person did
 #              not write.
+#
+# A LINE A BACKSLASH JOINS TO THE NEXT IS JOINED FIRST (claude-config#3470). A backslash and the
+# line break after it are gone before the shell reads words. Flattened like any other line break,
+# the pair became an escaped ; and a space, so the two lines were one command with a ; among its
+# words: `echo ok &&`, the pair, `git push` was no push to any hook reading the segmented form, and
+# neither was `git`, the pair, `push`, nor an add, a commit or a gh pr create written the same way.
+# So a segmented command holding the pair is flattened by lib/shell-words.py (its flatten mode),
+# which takes out each pair the shell removes, leaves one inside single quotes, a comment or a
+# heredoc's body as it was, and never hands back a text naming fewer commands than the plain
+# flattening does. That needs python3 and the reader's file; with either missing, or a command
+# that reader cannot vouch for, the text is flattened as it always was. The pair is found in the
+# raw payload first, by every way JSON can spell it, so a command holding none starts nothing more.
 ps_parse_payload() {   # $1 = payload JSON  $2 = segmented (default) | raw
-  local payload mode="${2:-segmented}" sep
+  local payload mode="${2:-segmented}" sep out
   case "$mode" in
     segmented) sep="; " ;;
     raw)       sep="" ;;
@@ -305,6 +317,18 @@ ps_parse_payload() {   # $1 = payload JSON  $2 = segmented (default) | raw
   esac
   # A caller that captured the payload some other way still gets it cleaned (#1944).
   payload="$(ps_clean_payload "${1:-}")"
+  if [ "$mode" = segmented ]; then
+    case "$payload" in
+      *'\\\n'*|*'\\\u000'[aA]*|*'\u005'[cC]*)
+        # Printed only once the reader has finished, the x keeping a line break that ends the text.
+        if command -v python3 >/dev/null 2>&1 && [ -f "${PS_SHELL_WORDS:-}" ]; then
+          if out="$(printf '%s' "$payload" | python3 "$PS_SHELL_WORDS" flatten 2>/dev/null && printf x)" \
+            && [ "${out: -1}" = x ]; then
+            printf '%s' "${out%x}"; return 0
+          fi
+        fi ;;
+    esac
+  fi
   if command -v jq >/dev/null 2>&1; then
     printf '%s' "$payload" | jq -j --arg sep "$sep" '
       ((.tool_input.command // "") | if $sep == "" then . else gsub("\n"; $sep) end
