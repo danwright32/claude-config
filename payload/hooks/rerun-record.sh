@@ -10,13 +10,15 @@
 set -uo pipefail
 
 payload="$(cat)"
-# The cheap test first, in bash, before anything is sourced or started: this runs after every Bash
+# Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130), and found
+# before the quick exit below, so test-lib-self-locate.sh sees every hook locate itself.
+case "${BASH_SOURCE[0]}" in */*) HERE="${BASH_SOURCE[0]%/*}" ;; *) HERE=. ;; esac
+HERE="$(cd "${HERE:-/}" && pwd)"
+# The cheap test next, in bash, before anything is sourced or started: this runs after every Bash
 # call and almost none is a rerun. The payload's text holds the command, so a payload without the
 # word cannot hold a rerun. Every imprecision here runs the Python half rather than skipping it.
 case "$payload" in *rerun*) ;; *) exit 0 ;; esac
 
-case "${BASH_SOURCE[0]}" in */*) HERE="${BASH_SOURCE[0]%/*}" ;; *) HERE=. ;; esac
-HERE="$(cd "${HERE:-/}" && pwd)"
 # Cleaned by the shared reader when it loads, as check-filed-issue-session.sh does (#1944).
 . "$HERE/lib/push-scope.sh" 2>/dev/null && payload="$(ps_clean_payload "$payload")"
 # shellcheck source=lib/hook-notice.sh
