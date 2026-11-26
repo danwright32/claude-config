@@ -1,4 +1,5 @@
 import type { EngineInterface, Hook, On } from 'claude-code'
+import { watchesOnly } from './mod-kit/hold.ts'
 import type { StepsPages } from '../types/index.d.ts'
 import { nextStep } from './card.ts'
 import { isStepsPage, pageRefusal, signsOf } from './page.ts'
@@ -97,7 +98,7 @@ export function registerPages(on: On, isInteractive: () => boolean): void {
     if (action !== 'publish' || input.asset === true || typeof input.file_path !== 'string' || !PAGE_FILE.test(input.file_path)) return done
     await judgePage($, input.file_path)
     return done
-  })
+  }).catch(watchesOnly)
 }
 
 type Stop = Hook<'classic.Stop'>
