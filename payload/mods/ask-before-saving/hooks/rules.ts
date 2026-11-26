@@ -2273,6 +2273,30 @@ export const removalSaid = (removes: readonly Removal[]): string => {
     .join(' ')
 }
 
+/**
+ * The paths that are the mod's own text in a removal's question and its answers, which are set
+ * aside before the question is judged for what the dialog would not show: Claude cannot reword
+ * them, so a file whose name holds such a character could otherwise never be asked about at all
+ * (L665). Kept beside the sentences above, which put them there: what goes (`file`), where a move
+ * puts it (`to`), the place a file is sent to where another may land on its name (`sharedAt`,
+ * #3505), what a folder holds (`holds`), and the path a moved file has inside the folder `to`
+ * wherever the sentence says that path (landsAt, #3637). Until then that last one was missed, so a
+ * file with such a name, moved onto a name the disk says is a folder, had its question refused for
+ * the mod's own "It goes to". Nothing else is here: the names a find is limited to and what git
+ * says are in the question too, and are judged as Claude's words are.
+ *
+ * The paths inside a folder come first. Each path is set aside wherever it stands, one after
+ * another, and such a path starts with its folder: with the folder taken first, one whose own name
+ * holds such a character took its half of the path with it and left the file's name to be judged.
+ */
+export const removalPaths = (removes: readonly Removal[]): string[] => [
+  ...removes.flatMap(r => {
+    const at = r.how === 'move' ? landsAt(r) : undefined
+    return at !== undefined && at !== r.to ? [at] : []
+  }),
+  ...removes.flatMap(r => [r.file, ...(r.to !== undefined ? [r.to] : []), ...(r.sharedAt !== undefined ? [r.sharedAt] : []), ...(r.holds ?? [])]),
+]
+
 const sameList = (a: readonly string[] | undefined, b: readonly string[] | undefined): boolean => (a ?? []).join('\n') === (b ?? []).join('\n')
 // One removal as Dan was told it against one the call makes now: every word the question said.
 const sameRemoval = (y: Removal, r: Removal): boolean =>

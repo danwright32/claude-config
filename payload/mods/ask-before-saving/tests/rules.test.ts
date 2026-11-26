@@ -1952,7 +1952,7 @@ test('a heading Dan could not read as written cannot be named, so its save is re
 })
 
 // ---- #3402: the lasting memory a command's words would remove, and how a removal is said ----
-import { MAX_BRACE_NAMES, braceAlternatives, braceNames, coversRemoval, patternMayMatch, removalCandidates, removalInstruction, removalNote, removalOptions, removalSaid, removalWords, removesWhat, replacedBy, splitBy, splitRefusal, approvedFor, pressed } from '../hooks/rules.ts'
+import { MAX_BRACE_NAMES, braceAlternatives, braceNames, coversRemoval, patternMayMatch, removalCandidates, removalInstruction, removalNote, removalOptions, removalPaths, removalSaid, removalWords, removesWhat, replacedBy, splitBy, splitRefusal, approvedFor, pressed } from '../hooks/rules.ts'
 import type { AskBeforeSavingRemoval } from '../types/index.d.ts'
 
 const SLATE = `${HOME}/Apps/slate`
@@ -2080,6 +2080,52 @@ test('a move into a folder is said with where it goes: a named file by its new p
     `That is every file the pattern matches in a folder of lasting memory. Each file ${MEM}/{a,b}.md matches goes into the folder ${MEM}/archive, and can be moved back. ${MEM}/note.md goes to ${MEM}/archive/note.md, and can be moved back.`,
   )
   expect(removalNote([pattern], 'mv x y')).toContain(`a Bash command would move ${MEM}/{a,b}.md, into ${MEM}/archive. ${first} Each goes into the folder`)
+})
+
+// #3637. The paths the mod's own sentences and answers are built from, each holding a character
+// the dialog would not show (a zero width space): the list names every one, the path a file has
+// inside a folder first, and with each set aside in that order, as askFault does it, nothing Dan
+// cannot see is left in what the mod wrote. Until this the path inside a folder was not listed.
+test("every path a removal's question and answers are built from is listed as the mod's own, a path inside a folder before the folder (#3637)", () => {
+  const z = String.fromCodePoint(0x200b)
+  const file = `${MEM}/od${z}d.md`
+  const other = `${MEM}/tw${z}o.md`
+  const folder = `~/Desktop/arch${z}ive`
+  const project = `~/.claude/projects/q${z}r`
+  const cases: [string, AskBeforeSavingRemoval[], string[]][] = [
+    ['a file moved into a folder', [{ file, how: 'move', to: folder, into: true }], [`${folder}/od${z}d.md`, file, folder]],
+    ['the same, where a file of its name is and mv -n keeps it', [{ file, how: 'move', to: folder, into: true, stays: true }], [`${folder}/od${z}d.md`, file, folder]],
+    ['a folder said with a slash after it', [{ file, how: 'move', to: `${folder}/`, into: true }], [`${folder}/od${z}d.md`, file, `${folder}/`]],
+    ['a file moved onto a new name', [{ file, how: 'move', to: `${folder}/re${z}named.md` }], [file, `${folder}/re${z}named.md`]],
+    // Said by the folder, so no path inside it is built.
+    ['a pattern moved into a folder', [{ file: `${MEM}/{a,b}${z}.md`, how: 'move', to: folder, into: true, pattern: true }], [`${MEM}/{a,b}${z}.md`, folder]],
+    ['a guess moved into a folder', [{ file, how: 'move', to: folder, into: true, guessed: true, unseen: true }], [file, folder]],
+    ['a move whose place the words do not give', [{ file, how: 'move' }], [file]],
+    ['a file sent onto a name another may take', [{ file, how: 'delete', sharedAt: `${folder}/od${z}d.md`, back: 'none' }], [file, `${folder}/od${z}d.md`]],
+    ['a folder that holds lasting memory, deleted', [{ file: project, how: 'delete', holds: [`${project}/memory`], back: 'none' }], [project, `${project}/memory`]],
+    ['such a folder moved into a folder', [{ file: project, how: 'move', to: folder, into: true, holds: [`${project}/memory`] }], [`${folder}/q${z}r`, project, folder, `${project}/memory`]],
+    [
+      'two files moved into one folder',
+      [
+        { file, how: 'move', to: folder, into: true },
+        { file: other, how: 'move', to: folder, into: true },
+      ],
+      [`${folder}/od${z}d.md`, `${folder}/tw${z}o.md`, file, folder, other, folder],
+    ],
+  ]
+  for (const [what, removes, paths] of cases) {
+    expect([what, removalPaths(removes)]).toEqual([what, paths])
+    const aside = (text: string) => removalPaths(removes).reduce((t, f) => t.split(f).join('x'.repeat(f.length)), text)
+    const texts = [removalSaid(removes), ...removalOptions(removes).map(o => o.description)]
+    // The character is in what the mod wrote, so finding none once the paths are set aside says something.
+    expect([what, unseenIn(texts.join('\n'))?.code]).toEqual([what, 'U+200B'])
+    for (const text of texts) expect([what, text, unseenIn(aside(text))]).toEqual([what, text, undefined])
+  }
+  // The names a find is limited to are the command's own words, short and free to stand anywhere,
+  // so they are not set aside: a question that says one is judged for it.
+  const limited: AskBeforeSavingRemoval[] = [{ file: '~/.claude/projects/p', how: 'delete', names: [`od${z}d.md`], holds: ['~/.claude/projects/p/memory'], back: 'none' }]
+  expect(removalPaths(limited)).toEqual(['~/.claude/projects/p', '~/.claude/projects/p/memory'])
+  expect(unseenIn(removalSaid(limited))?.code).toBe('U+200B')
 })
 
 test('what a pattern moved into a folder replaces there is each name it can match that both folders hold (#3478)', () => {

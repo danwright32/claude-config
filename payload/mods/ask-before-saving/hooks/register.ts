@@ -109,6 +109,7 @@ import {
   removalInstruction,
   removalNote,
   removalOptions,
+  removalPaths,
   removalSaid,
   removalUnread,
   removalWords,
@@ -1679,9 +1680,11 @@ export const register: Register = on => {
       const full = `${question} ${removalSaid(removes)}`
       const shown = { ...e, questions: [{ ...questions[0], question: full, header: REMOVAL_HEADER, options: removalOptions(removes), multiSelect: false }] } as typeof e
       // The mod's own text in the question, set aside before it is judged: what goes, where a move
-      // puts it, what a folder holds, and the place a file is sent to where another may land on its
-      // name (#3505), which ends in the file's own name and so in whatever that name holds.
-      const unread = askFault(shown as unknown as Record<string, unknown>, removes.flatMap(r => [r.file, ...(r.to !== undefined ? [r.to] : []), ...(r.sharedAt !== undefined ? [r.sharedAt] : []), ...(r.holds ?? [])]))
+      // puts it, what a folder holds, the place a file is sent to where another may land on its
+      // name (#3505), and the path a moved file has inside a folder (#3637), each of the last two
+      // ending in the file's own name and so in whatever that name holds. Listed where the
+      // sentences are worded (removalPaths), so a path one of them comes to build is seen there.
+      const unread = askFault(shown as unknown as Record<string, unknown>, removalPaths(removes))
       if (unread !== undefined) return { deny: `${unread.what} would not reach Dan as written: ${unread.fault}. He decides on the words he can read whole, so reword it and ask again, with the same metadata. If it is too long, remove fewer files in one command.` }
       if (ask.answers !== undefined && (typeof ask.answers !== 'object' || ask.answers === null || Object.keys(ask.answers).length > 0))
         return { deny: 'Ask Dan without answers already filled in: only his choice in the dialog decides this removal.' }
