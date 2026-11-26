@@ -178,6 +178,15 @@ check "and GitHub is never asked about a number with no status word" "$([ -z "$C
 check "and 'opened' or 'reopened' is not the word 'open'" "$(lacks "$OUT" "line 4")"
 check "and the run says it found no pair rather than passing silently" "$(has "$OUT" "no line")"
 
+# A status word inside a reference's own name is not a status: an organisation or repository named
+# with "open" or "pending" in it says nothing about the pull request (the lessons review of d253aa3).
+d="$(mem inref "- https://github.com/open-fixture/pending-repo/pull/32 merged last week
+- open-fixture/awaiting-repo#33 merged")"
+run "$d" "repos/open-fixture/pending-repo/issues/32|0|$OPEN_PR
+repos/open-fixture/awaiting-repo/issues/33|0|$OPEN_PR"
+check "a status word inside a reference's name is not read as a status" "$([ "$RC" -eq 0 ] && echo ok || echo "rc $RC: $OUT")"
+check "and costs no call" "$([ -z "$CALLS" ] && echo ok || echo "calls: $CALLS")"
+
 # ---------------------------------------------------------------------------
 # SKIPPED: a number with no repository is never guessed. Its lines are counted and named, gh is not
 # asked, and the run does not exit clean.

@@ -124,12 +124,8 @@ for f in "${FILES[@]}"; do
   ln=0; file_skips=""
   while IFS= read -r line || [ -n "$line" ]; do
     ln=$((ln + 1))
-    words=""
-    for w in "${STATUS_WORDS[@]}"; do
-      [ "$w" = open ] && [[ "$words" == *"still open"* ]] && continue
-      [[ "$line" =~ $B$w$E ]] && words="${words:+$words, }$w"
-    done
-    [ -n "$words" ] || continue
+    # The references come out of the line first, so a status word inside one's own name (an
+    # organisation called open-something) is never read as a status of it.
     rest="$line"; refs=""
     while [[ "$rest" =~ $URL_RE ]]; do
       refs="$refs ${BASH_REMATCH[1]}/${BASH_REMATCH[2]}#${BASH_REMATCH[4]}"
@@ -139,6 +135,12 @@ for f in "${FILES[@]}"; do
       refs="$refs ${BASH_REMATCH[1]}/${BASH_REMATCH[2]}#${BASH_REMATCH[3]}"
       rest="${rest/"${BASH_REMATCH[0]}"/ }"
     done
+    words=""
+    for w in "${STATUS_WORDS[@]}"; do
+      [ "$w" = open ] && [[ "$words" == *"still open"* ]] && continue
+      [[ "$rest" =~ $B$w$E ]] && words="${words:+$words, }$w"
+    done
+    [ -n "$words" ] || continue
     bare=0; [[ "$rest" =~ $BARE_RE ]] && bare=1
     [ -n "$refs" ] || [ "$bare" -eq 1 ] || continue
     status_lines=$((status_lines + 1))
