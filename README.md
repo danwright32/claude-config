@@ -5868,6 +5868,29 @@ the case can be counted from saved logs. The suite sees each of those verdicts o
 replayed through the check's own code (`SLACK_GATE_COST_REPLAY`, which runs no gate), and once per
 run on a real folder, where a copy of the gate with a budget of 0.2 s ran out.
 
+The cold check of `bash tests/test-claude-sync.sh` is unmeasured, not failed, where EVERY sample it
+took ran out of the gate's 11 seconds and was read on the step clock past its limit (#3406, Dan's
+decision of 2026-11-26 from a picker, "3.60.1 Read it as unmeasured"). On the pull request runs of
+that day every red on this check began with a first judgement that ran out; first judgements that
+finished inside the seconds read 66.8 to 88.5. Of the 8 reds whose logs were read, every sample ran
+out in 2 (runs 45817817409 and 45838830923); in the other 6 the later samples finished inside the
+seconds and read past 91 as well, and those still fail. The rule: one sample that finished inside
+the seconds and is past the limit fails the check as before, any sample at or under the limit
+passes as before, and the limits of 67 and 91 did not move. The cold check asks for this with
+`SLACK_GATE_COST_RAN_OUT_UNMEASURED=1`; no other cost check does, and each still fails on step clock
+readings. Its line is `SUITE-PART-UNMEASURED #3406: bash tests/test-claude-sync.sh is judged
+within ...`, printed by the same `cost_case` as the cached checks' `#3170` lines, with the processor
+seconds and unit of each sample that ran out and the step clock readings.
+
+So that a real slowdown cannot hide there, `tools/ci-cold-cost-streak.sh` runs in the deal job on
+every push to main and turns the run's `suite` check red when that line was printed on each of
+main's last 5 readable trees (its `STREAK` setting). It reads each tree's proving run through the
+`green-tree-<tree>` record a reuse stands on, so a main push that reused a pull request run is read
+through that run, and that run's `part-unmeasured-<n>` records, whose retention went from 1 day to
+7 for this. A tree with no live green record, or whose run handed back fewer records than it had
+parts, is skipped and never read as measured; fewer than 5 readable trees in main's newest 20 is a
+warning that the streak was not measured, never a pass. Suite: `tools/test-ci-cold-cost-streak.sh`.
+
 Some CI runners still read a few cost cases over their limits with the gate unchanged (#3170: 4 of
 127 runs from 2026-11-20 to 2026-11-21), and the logs could not say why: they held each case's
 reading in units, but the yardstick and the seconds only for one case, and only the least yardstick
