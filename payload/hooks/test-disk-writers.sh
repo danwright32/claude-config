@@ -125,7 +125,28 @@ shape "readings with a lifetime of minus Infinity" "$TMP/inf-lifetime.json" '"li
 sed -e 's/"start": 1764000000, "lifetime": 88000000000/"start": 1e20, "lifetime": 88000000000/' "$GOOD" > "$TMP/far-start.json"
 shape "readings with a start far past any date" "$TMP/far-start.json" '"start"'
 
-# ---- 4. a name that cannot be printed as it stands is printed replaced, never a traceback ----
+# ---- 4. a live reading it cannot make ends in one line and exit 2, never a report of nothing ----
+# Free space is read before the process table, so a volume that is not there fails on any machine.
+out="$(env -u DISK_WRITERS_SAMPLES DISK_WRITERS_PATH="$TMP/no-such-volume" python3 "$SCRIPT" --seconds 1 2>&1)"; rc=$?
+check "a volume whose free space cannot be read: exit 2 naming it, no traceback" \
+  "$([ "$rc" -eq 2 ] && no_trace "$out" && grep -qF "could not read free space on $TMP/no-such-volume" <<< "$out" && echo ok || echo "exit $rc, said: $out")"
+# The process table: the script is loaded with its reader replaced by one that fails as libproc does
+# where it is missing (OSError), and its own main() is run, so the handler under test is the shipped one.
+out="$(env -u DISK_WRITERS_SAMPLES DISK_WRITERS_PATH="$TMP" python3 -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("disk_writers", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+def refuse(self):
+    raise OSError("libproc is not here")
+m.Proc.__init__ = refuse
+sys.argv = ["disk-writers.py", "--seconds", "1"]
+sys.exit(m.main())
+' "$SCRIPT" 2>&1)"; rc=$?
+check "a process table that cannot be read: exit 2 naming it, no traceback" \
+  "$([ "$rc" -eq 2 ] && no_trace "$out" && grep -qF 'could not read the process table: libproc is not here' <<< "$out" && echo ok || echo "exit $rc, said: $out")"
+
+# ---- 5. a name that cannot be printed as it stands is printed replaced, never a traceback ----
 # A lone surrogate, which json.loads makes of an escape such as \ud800, cannot be written to a
 # UTF-8 stdout; a byte that is not UTF-8 cannot be decoded from the file. Either one in a single
 # program's name must not cost the whole report.
