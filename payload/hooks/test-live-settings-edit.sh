@@ -10,7 +10,9 @@
 # without root, so the runner cannot ask WHO wrote it; what it can read is WHAT changed. The rule
 # under test: a change is a person's own settings edit when the file is still a JSON object, at
 # least one setting was carried over untouched, and every setting that changed is one no code in
-# this config ever writes. Every case below that must still fail is the half that keeps the guard's
+# this config ever writes. The sync adds three deny rules under permissions (#3563), so a change
+# under permissions, a permission granted for good included, is one of those that stay counted.
+# Every case below that must still fail is the half that keeps the guard's
 # teeth, and each one was seen to fail against a runner with its leg of the rule broken (L1).
 set -uo pipefail
 
@@ -76,8 +78,8 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 0
 fi
 
-# A settings.json shaped like a real Mac's: settings a person picks (model, permissions) beside the
-# ones the sync installs (the hooks block, the mods in env, a shared setting).
+# A settings.json shaped like a real Mac's: settings a person picks (model, their own permission
+# rules) beside the ones the sync installs (the hooks block, the mods in env, a shared setting).
 seed(){
   cat > "$SETTINGS" <<'JSON'
 {
