@@ -11,7 +11,8 @@
 # real answers of `gh pr list --author @me --state open` in danwright32/claude-config, measured on
 # 2026-11-26 about a minute apart (41 rows each after one fresh row was left out; each check trimmed
 # to the four fields the helper reads). The first read is what GitHub gives before it has worked out
-# mergeability (UNKNOWN on every old row); the second is after. Cases needing a shape no open pull
+# mergeability (UNKNOWN on 37 of the 41 rows, two of the three old ones among them); the second is
+# after, with none UNKNOWN. Cases needing a shape no open pull
 # request had that day (draft, approved, changes requested, a commit status, a cancelled check) are
 # that measured #3487 row with the one field changed, and say so.
 set -uo pipefail
@@ -207,8 +208,8 @@ has "a raised limit is passed to gh" "--limit 300" "$(cat "$CALLS")"
 # Asserted with grep, so a failure names the missing text rather than printing the whole skill (L445).
 in_skill(){ if grep -qF -- "$2" "$SKILL"; then check "$1" ok; else check "$1" "no [$2] in SKILL.md"; fi; }
 in_skill "the skill runs the helper" "old-pull-requests.py"
-helper_at="$(grep -n 'old-pull-requests.py' "$SKILL" | head -1 | cut -d: -f1)"
-rank_at="$(grep -n 'rank-next-issues.py --limit' "$SKILL" | head -1 | cut -d: -f1)"
+helper_at="$(grep -n -m 1 'old-pull-requests.py' "$SKILL" | cut -d: -f1)"
+rank_at="$(grep -n -m 1 'rank-next-issues.py --limit' "$SKILL" | cut -d: -f1)"
 if [ -n "$helper_at" ] && [ -n "$rank_at" ] && [ "$helper_at" -lt "$rank_at" ]; then
   check "the skill runs the helper before it ranks the issues" ok
 else

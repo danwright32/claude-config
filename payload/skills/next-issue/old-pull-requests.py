@@ -16,7 +16,7 @@ test depends on the calendar day. Older than 3 days means more than exactly 3 da
 STATE. Derived from the fields gh returns, in this order, joined by commas: draft (isDraft),
 conflicting (mergeable CONFLICTING), not yet checked for conflicts (mergeable UNKNOWN: GitHub works
 mergeability out lazily, and measured on 2026-11-26 in claude-config the first read gave UNKNOWN on
-40 of 42 open pull requests and a read a minute later on none, so UNKNOWN is said, never read as no
+37 of 42 open pull requests and a read about a minute later on none, so UNKNOWN is said, never read as no
 conflict), checks red (a completed check run whose conclusion is a failure, or a commit status in
 failure or error), changes requested, then approved and waiting (approved with nothing above in its
 way) or approved. With none of these it is waiting.
@@ -208,7 +208,7 @@ def main(argv):
     for r in old:
         print(f"OLD PR #{r['number']} [{age(r, opts['now'])}, {state(r)}] {r['title']}")
     print(f"OLD PRS {len(old)} of {len(rows)} open pull requests you opened here are older than {DAYS} days; "
-          "offer Finish this for each, ahead of the ranked issues")
+          "offer Finish this for them, oldest first, ahead of the ranked issues")
     return 0
 
 
