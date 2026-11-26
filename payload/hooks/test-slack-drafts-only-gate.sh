@@ -1523,6 +1523,23 @@ if filled_here and ratio <= ceiling:
              "the %d after it %s answered from the cache, at %s units" % (len(later), "was" if len(later) == 1 else "were", ", ".join("%.1f" % r[0] for r in later))
              if later else "no sample was taken after it")))
     sys.exit()
+# A case asked for it (SLACK_GATE_COST_RAN_OUT_UNMEASURED=1, the cold suite case alone) is not
+# failed on step clock readings only (#3406, Dan's decision of 2026-11-26, "3.60.1 Read it as
+# unmeasured"). Over the 2026-11-26 pull request runs every red on that case began with a first
+# judgement that ran out of the gate's seconds; a first judgement that finished inside them read
+# 66.8 to 88.5, with the gate's work the same count on each. In 2 of the 8 reds whose logs were read
+# every sample ran out; in the other 6 samples 2 and 3 finished inside the seconds and read past the
+# limit as well (92.0 to 98.1), so those stay red under this rule. The rule: a reading
+# past the ceiling is unmeasured only where EVERY sample taken ran out and was read on the step
+# clock. One sample that finished inside the seconds and is past the ceiling fails the case as ever,
+# since it is the reading this limit is for; any sample at or under the ceiling passes as ever. The
+# limit does not move, and tools/ci-cold-cost-streak.sh turns main red when this has been the
+# answer on main several trees in a row, so a real slowdown cannot hide here.
+if (ratio > ceiling and ran_out and len(ran_out) == len(ratios)
+        and os.environ.get("SLACK_GATE_COST_RAN_OUT_UNMEASURED") == "1"):
+    print("unmeasured: every judgement of this case ran out of the gate's seconds on this machine, after %s, so each was read on the step clock instead, at %s units against the limit of %s, and a reading taken only on the step clock is not held to the limit (#3406); a sample that finishes inside the seconds is"
+          % (" and ".join(ran_out), ", ".join("%.1f" % r[0] for r in ratios), ceiling))
+    sys.exit()
 print("ok" if ratio <= ceiling else "judging it took at least %.1f s of processor time, %.1f units of the fixed yardstick (%.3f s each), past %s, in each of %d samples (%s)"
       % (spent, ratio, unit, ceiling, len(ratios), ", ".join("%.1f" % r[0] for r in ratios)))
 PY
@@ -1611,11 +1628,34 @@ fi
 # the gate since took the readings to within 2 percent of both (#3406: 55 to 56 on the personal
 # MacBook, 77.7 to 81.4 on Linux), #3486 took 3 to 6 units back out, and what was left still crossed
 # them from run to run on unchanged code: 57.3 and 58.3 on the work MacBook, 78.9 on Linux.
+#
+# WHERE EVERY SAMPLE RAN OUT OF THE GATE'S SECONDS, THE CASE IS UNMEASURED (#3406, Dan's decision of
+# 2026-11-26, "3.60.1 Read it as unmeasured"). Over about 50 pull request runs on 2026-11-26 every red
+# here began with a judgement that ran out of the gate's 11 seconds on the runner and was then read
+# on the step clock; first judgements that finished inside them read 66.8 to 88.5 and none failed,
+# with the gate's work the same count on every run. So cost.py, asked with SLACK_GATE_COST_RAN_OUT_UNMEASURED=1,
+# answers unmeasured where all its samples were read on the step clock and the least is past the
+# limit, and this suite prints that as a SUITE-PART-UNMEASURED line, as the cached twin below does.
+# A sample that finished inside the seconds still fails it past the limit, and
+# tools/ci-cold-cost-streak.sh turns main red when its last trees were all unmeasured here.
 cold_ceiling="$(cost_limit suite-cold)"
+# A cost case's answer from cost.py, counted: ok or a failure as every check is, and where cost.py
+# answered unmeasured, a part this machine could not measure, in the one shape run-all-tests reads
+# for that (L411, #3170, #3406, Dan's decisions of 2026-11-21, "Build it", and 2026-11-26). The line
+# is printed on every run it happens in, under the suite's own line and in the run's summary, so a
+# runner where this is unmeasured every time is seen as that, never as a pass (L557).
+cost_case() {  # <the check's name> <cost.py's answer> [<the issue the line is filed under>]
+  case "$2" in
+    "unmeasured: "*) echo "SUITE-PART-UNMEASURED ${3:-#3170}: $1: ${2#unmeasured: }" ;;
+    *) check "$1" "$2" ;;
+  esac
+}
 if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; then
   warm="$(mktemp -d "$T/warm.XXXXXX")"
-  cost="$(SLACK_GATE_COST_LABEL=suite-cold SLACK_GATE_PHASE_LOG="$T/phases.log" SLACK_GATE_CACHE_DIR="$warm" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" "$cold_ceiling" --line "bash $REPO/tests/test-claude-sync.sh" 2>&1)"
-  check "bash tests/test-claude-sync.sh is judged within $cold_ceiling units of the yardstick on $(uname -s) (#2918, #3167)" "$cost"
+  cost="$(SLACK_GATE_COST_LABEL=suite-cold SLACK_GATE_COST_RAN_OUT_UNMEASURED=1 SLACK_GATE_PHASE_LOG="$T/phases.log" SLACK_GATE_CACHE_DIR="$warm" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" "$cold_ceiling" --line "bash $REPO/tests/test-claude-sync.sh" 2>&1)"
+  # tools/ci-cold-cost-streak.sh finds this case's unmeasured line by its start, "#3406: bash
+  # tests/test-claude-sync.sh is judged within", and its suite holds the two equal.
+  cost_case "bash tests/test-claude-sync.sh is judged within $cold_ceiling units of the yardstick on $(uname -s) (#2918, #3167)" "$cost" "#3406"
   # The reading, on a passing run too (#3167). run-all-tests prints a suite's output only when it
   # fails, so until 2026-11-17 CI's log held this measurement only for runs past the ceiling, and the
   # runner's own distribution, the premise of the ceiling (L316), could not be read from any log. A
@@ -1665,21 +1705,12 @@ if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; t
     # With a claude-sync to judge the copy is always made above, so its absence is a fault, not a skip.
     check "a gate whose reader is eleven times as slow is past the $cold_ceiling unit limit for bash tests/test-claude-sync.sh on $(uname -s) (#3167)" "the slowed copy of the gate was not made at $T/slow-gate, so this limit was not seen to fail"
   fi
-  # A cached case's answer from cost.py, counted: ok or a failure as every check is, and where the
-  # cache it was handed was never filled, a part this machine could not measure, in the one shape
-  # run-all-tests reads for that (L411, #3170, Dan's decision of 2026-11-21: "Build it"). The line is
-  # printed on every run it happens in, under the suite's own line and in the run's summary, so a
-  # runner where this is unmeasured every time is seen as that, never as a pass (L557).
-  cached_case() {  # <the check's name> <cost.py's answer>
-    case "$2" in
-      "unmeasured: "*) echo "SUITE-PART-UNMEASURED #3170: $1: ${2#unmeasured: }" ;;
-      *) check "$1" "$2" ;;
-    esac
-  }
+  # A cached case's answer goes through cost_case above: where the cache it was handed was never
+  # filled, it is unmeasured.
   # Judged again with nothing changed, it is answered from the judgement cache: every file it read
   # and every disk test it answered is checked again, and nothing is walked.
   cost="$(SLACK_GATE_COST_LABEL=suite-warm SLACK_GATE_PHASE_LOG="$T/phases.log" SLACK_GATE_CACHE_DIR="$warm" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" 6 --line "bash $REPO/tests/test-claude-sync.sh" 2>&1)"
-  cached_case "judged a second time, bash tests/test-claude-sync.sh takes at most 6 units of the yardstick, from the cache (#2918)" "$cost"
+  cost_case "judged a second time, bash tests/test-claude-sync.sh takes at most 6 units of the yardstick, from the cache (#2918)" "$cost"
   # What a cached case answers, on doctored records in place of the gate (#3170, L1): cost.py's own
   # loop and verdict, replayed (SLACK_GATE_COST_REPLAY), so no gate runs and each takes a fraction of
   # a second. The first is run 44965167694's own record (2026-11-21, a Linux runner at 0.151 s a
@@ -1742,6 +1773,57 @@ if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; t
   replayed "a cache the first sample filled that then answers past 6 units still fails where the filling judgement ran out (#3170)" \
     "judging it took*past 6*52.0, 8.1, 8.3*" \
     "$(replay_cached ran-out parse "[$rp_fill, $(rp_hit 8.1), $(rp_hit 8.3)]")"
+  # The cold case's own verdict where the gate's seconds run out (#3406, L1), replayed the same way
+  # at the Linux limit of 91, with SLACK_GATE_COST_RAN_OUT_UNMEASURED as the cold case sets it. A
+  # record that ran out carries the processor seconds it had run; the step clock judgement after it
+  # carries its units. The first is run 45838830923's own record (2026-11-26, pull request 3531):
+  # every sample ran out (after 7.3, 11.5 and 11.6 s) and read 106.2, 93.4 and 91.4 on the step
+  # clock. The second is run 45850402488's (the same day): only its first sample ran out, after 7.6
+  # s, and samples 2 and 3 FINISHED inside the seconds at 92.4 and 92.0, so it still fails: a sample
+  # that finished in time past the limit is the reading the limit is for. Then each other mix of a
+  # sample that ran out and one that did not, and the same records without the setting, as every
+  # other cost case is run, failing as before.
+  replay_cold() {  # <1 or 0, the setting> <the judgements, a JSON list>: cost.py's answer and its log line
+    local d
+    d="$(mktemp -d "$T/replay.XXXXXX")" && mkdir "$d/cache" || { echo "no folder to replay in"; return; }
+    printf '%s\n' "$2" > "$d/judgements.json"
+    env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING -u SLACK_GATE_COST_SAMPLES -u SLACK_GATE_COST_ATTEMPTS \
+      SLACK_GATE_COST_RAN_OUT_UNMEASURED="$1" SLACK_GATE_COST_LABEL=replay-cold SLACK_GATE_COST_LOG="$d/cost.log" \
+      SLACK_GATE_COST_REPLAY="$d/judgements.json" SLACK_GATE_CACHE_DIR="$d/cache" \
+      python3 -B "$T/cost.py" "$HOOK" "$CS" 91 --line "bash tests/test-claude-sync.sh" 2>&1
+    sed 's/^/logged: /' "$d/cost.log" 2>/dev/null
+  }
+  rc_out() { printf '{"exit": 2, "stderr": "BLOCKED: slack-drafts-only-gate.sh ran out of time judging this call: it stopped after 11 seconds", "units": %s, "said": ["qos: not raised: not macOS", "miss: no signing key"]}' "$1"; }
+  rc_in() { printf '{"units": %s, "said": ["qos: not raised: not macOS", "miss: no signing key", "stored"]}' "$1"; }
+  replayed "run 45838830923's cold record, every sample run out of the gate's seconds and past 91 on the step clock, is unmeasured and says why with the figures (#3406)" \
+    "unmeasured: every judgement of this case ran out of the gate's seconds on this machine, after 7.3 s at 1.000 s a unit and 11.5 s at 1.000 s a unit and 11.6 s at 1.000 s a unit, so each was read on the step clock instead, at 106.2, 93.4, 91.4 units against the limit of 91.0*(#3406)*logged: replay-cold *: 91.4 (*the gate's 11 s ran out on this machine*" \
+    "$(replay_cold 1 "[$(rc_out 7.3), $(rc_in 106.2), $(rc_out 11.5), $(rc_in 93.4), $(rc_out 11.6), $(rc_in 91.4)]")"
+  replayed "run 45850402488's cold record, its first sample run out and samples 2 and 3 finished inside the seconds past 91, still fails (#3406)" \
+    "judging it took at least*past 91.0, in each of 3 samples (93.1, 92.4, 92.0)*" \
+    "$(replay_cold 1 "[$(rc_out 7.6), $(rc_in 93.1), $(rc_in 92.4), $(rc_in 92.0)]")"
+  replayed "a cold case whose first sample finished inside the seconds past 91 and whose others ran out still fails (#3406)" \
+    "judging it took at least*past 91.0, in each of 3 samples (93.0, 92.4, 92.0)*" \
+    "$(replay_cold 1 "[$(rc_in 93.0), $(rc_out 7.0), $(rc_in 92.4), $(rc_out 7.0), $(rc_in 92.0)]")"
+  replayed "a cold case whose middle sample finished inside the seconds past 91 still fails (#3406)" \
+    "judging it took at least*past 91.0, in each of 3 samples (93.0, 95.0, 92.0)*" \
+    "$(replay_cold 1 "[$(rc_out 7.0), $(rc_in 93.0), $(rc_in 95.0), $(rc_out 7.0), $(rc_in 92.0)]")"
+  replayed "a cold case none of whose samples ran out still fails past 91 (#3406)" \
+    "judging it took at least*past 91.0, in each of 3 samples (93.0, 94.0, 95.0)*" \
+    "$(replay_cold 1 "[$(rc_in 93.0), $(rc_in 94.0), $(rc_in 95.0)]")"
+  replayed "a cold case whose samples ran out passes where one reads at or under 91 on the step clock, as before (#3406)" \
+    "ok*logged: replay-cold *: 88.0 (*samples 95.0, 88.0;*ran out on this machine*" \
+    "$(replay_cold 1 "[$(rc_out 7.0), $(rc_in 95.0), $(rc_out 7.0), $(rc_in 88.0)]")"
+  replayed "without the setting, as every other cost case runs, every sample run out and past 91 still fails (#3406)" \
+    "judging it took at least*past 91.0, in each of 3 samples (106.2, 93.4, 91.4)*" \
+    "$(replay_cold 0 "[$(rc_out 7.3), $(rc_in 106.2), $(rc_out 11.5), $(rc_in 93.4), $(rc_out 11.6), $(rc_in 91.4)]")"
+  # cost_case turns that answer into the suite's unmeasured line, under #3406 and with the start
+  # tools/ci-cold-cost-streak.sh finds it by, and never into a pass or a failure.
+  cold_line="$(pass=0; fail=0; cost_case "bash tests/test-claude-sync.sh is judged within 91 units of the yardstick on Linux (#2918, #3167)" "unmeasured: every judgement of this case ran out" "#3406"; echo "counted $pass $fail")"
+  case "$cold_line" in
+    "SUITE-PART-UNMEASURED #3406: bash tests/test-claude-sync.sh is judged within 91 units of the yardstick on Linux (#2918, #3167): every judgement of this case ran out"$'\n'"counted 0 0") cold_line=ok ;;
+    *) cold_line="cost_case printed: $cold_line" ;;
+  esac
+  check "an unmeasured cold answer is printed as one SUITE-PART-UNMEASURED #3406 line and counted as neither a pass nor a failure (#3406)" "$cold_line"
   # A machine too slow for the gate's budget, stood in for by a copy of the gate whose budget is a
   # fifth of a second, judging the one lesson line (#3170, L411): the seconds run out, cost.py reads
   # the same line on the step clock and holds those units to the ceiling it was given. So such a
@@ -1842,7 +1924,7 @@ if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; t
   # Measured that day on the personal MacBook with a unit at 0.097 s, one cache for every reading:
   # 19.4 to 20.1 units each time before (5 readings), and 20.2 then 1.8, 1.8, 1.8, 1.8 after.
   cost="$(SLACK_GATE_COST_LABEL=own-suite-warm SLACK_GATE_CACHE_DIR="$own_warm" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" 6 --line "bash $DIR/test-slack-drafts-only-gate.sh" 2>&1)"
-  cached_case "judged a second time, the command that starts this suite takes at most 6 units of the yardstick, from the cache (#3255)" "$cost"
+  cost_case "judged a second time, the command that starts this suite takes at most 6 units of the yardstick, from the cache (#3255)" "$cost"
   # Its readings are printed with every other cost case's, in the one note at the end of this part
   # (#3170), which took the place of a note of its own when the note cap was full.
   if [ -f "$unheld_made/slack-drafts-only-gate.sh" ]; then
