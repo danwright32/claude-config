@@ -134,11 +134,11 @@ expect "a server skill called with arguments is asked about" ask "$(skill docs:p
 r="$(run "$HOOK" "$(skill claude_ai_Docs:pdf)")"
 says "the question names the skill" "$r" 'the skill pdf'
 says "the question names the connector" "$r" 'claude\.ai connector Docs'
-says "the question says the text is the server'"'"'s and can change at any time" "$r" 'can change it at any time'
+says "the question says the text is the server's and can change at any time" "$r" 'can change it at any time'
 says "the question says whose decision it is, and when" "$r" 'Dan decided on 2026-11-25'
 says "the question names the issue" "$r" '#3615'
 r="$(run "$HOOK" "$(skill plugin_my-plugin_docs:pdf)")"
-says "a plugin'"'"'s server is named as one" "$r" 'server shipped by a plugin \(my-plugin_docs\)'
+says "a plugin's server is named as one" "$r" 'server shipped by a plugin \(my-plugin_docs\)'
 r="$(run "$HOOK" "$(skill docs:pdf)")"
 says "a server added by hand is named" "$r" 'MCP server docs'
 r="$(run "$HOOK" "$(skill mcp__docs__pdf)")"
@@ -162,11 +162,11 @@ for n in next-issue db-apply no-ai-tells code-review init plugin-authoring plann
 done
 expect "a local skill with arguments passes" none "$(skill next-issue 'see mcp__docs__pdf and docs:pdf')"
 expect "a skill synced from claude.ai passes (anthropic-skills is reserved for them)" none "$(skill anthropic-skills:docx)"
-expect "an installed plugin'"'"'s skill, on disk in its skills folder, passes" none "$(skill kit:brainstorming)"
-expect "an installed plugin'"'"'s skill named apart from its folder passes" none "$(skill kit:fancy)"
-expect "an installed plugin'"'"'s command passes" none "$(skill kit:build)"
-expect "an installed plugin'"'"'s nested command passes" none "$(skill kit:deep:dive)"
-expect "a directory'"'"'s own skill, on disk under the working directory, passes" none "$(skill apps/web:deploy)"
+expect "an installed plugin's skill, on disk in its skills folder, passes" none "$(skill kit:brainstorming)"
+expect "an installed plugin's skill named apart from its folder passes" none "$(skill kit:fancy)"
+expect "an installed plugin's command passes" none "$(skill kit:build)"
+expect "an installed plugin's nested command passes" none "$(skill kit:deep:dive)"
+expect "a directory's own skill, on disk under the working directory, passes" none "$(skill apps/web:deploy)"
 expect "a directory form with no such skill on disk is asked about" ask "$(skill apps/api:deploy)"
 # The same plugin skill under a home holding no record of installed plugins: nothing says it is on
 # this Mac, so it is asked about.
@@ -197,7 +197,7 @@ says "the refusal says Dan is asleep" "$r" 'Dan is asleep'
 says "the refusal names the skill and the server" "$r" 'the skill pdf.*claude\.ai connector Docs'
 says "the refusal says not to reach the same end another way" "$r" 'another way'
 expect "asleep, a local skill passes untouched" none "$(skill next-issue)" "$ASLEEP"
-expect "asleep, an installed plugin'"'"'s skill passes untouched" none "$(skill kit:brainstorming)" "$ASLEEP"
+expect "asleep, an installed plugin's skill passes untouched" none "$(skill kit:brainstorming)" "$ASLEEP"
 
 # --- 4. what it cannot read ---------------------------------------------------------------------------
 echo "a Skill call it cannot read is asked about, and a call that is not a Skill call is not its business"
@@ -213,7 +213,7 @@ expect "a Skill call inside a list is asked about" ask "[$whole]"
 expect "a Skill call cut short inside its name is asked about" ask "${whole%%:pdf*}"
 expect "text that is no JSON and names no tool is asked about" ask 'not json at all'
 expect "a local Skill call holding a second skill key is read by its own skill, not the first found" none "$(python3 -c 'import json; print(json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Skill", "tool_input": {"skill": "next-issue", "args": "x"}, "note": {"skill": "also"}}))')"
-expect "a Skill call whose own skill is a server'"'"'s, behind another skill key, is asked about" ask "$(python3 -c 'import json; print(json.dumps({"note": {"skill": "next-issue"}, "hook_event_name": "PreToolUse", "tool_name": "Skill", "tool_input": {"skill": "docs:pdf"}}))')"
+expect "a Skill call whose own skill is a server's, behind another skill key, is asked about" ask "$(python3 -c 'import json; print(json.dumps({"note": {"skill": "next-issue"}, "hook_event_name": "PreToolUse", "tool_name": "Skill", "tool_input": {"skill": "docs:pdf"}}))')"
 expect "a Skill call carrying a field this hook does not know that names a server is asked about" ask "$(payload Skill '{"skill": "pdf", "source": "mcp__docs__pdf"}')"
 expect "a Skill call whose arguments alone name a server passes" none "$(payload Skill '{"skill": "next-issue", "args": "mcp__docs__pdf"}')"
 expect "an empty payload passes, as any call naming nothing does (#1922)" none ""
