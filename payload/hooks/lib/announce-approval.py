@@ -9,8 +9,8 @@ asks it before the label goes on one.
 
 HOW DAN IS ASKED. The session writes the post to a file, runs /no-ai-tells on it, opens it in BBEdit
 with the front window flag, and asks ONE AskUserQuestion picker of one question, naming the pull
-request or feature and the channel, with the options `Approve the wording` and `Not yet`, and this
-metadata:
+request or feature and the channel and ending `Save the file before you answer.`, with the options
+`Approve the wording` and `Not yet`, and this metadata:
 
     {"source": "changelog-announce", "repo": "<owner/name>", "file": "<absolute path>"}
 
@@ -33,6 +33,12 @@ _read_by_dan). Then, all of these, each failure said in its own words:
     him no file name, so with two wording files open his answer about the first was given with the
     second in front. Any call between may have opened another window, and none is read to find
     out. The refusal names the call and says to open the file again and ask in the next call.
+  - THE QUESTION TELLS HIM TO SAVE (claude-config#3742): the question he was shown holds the
+    sentence `Save the file before you answer.` (SAVE_FIRST), word for word. He may edit the file in
+    the window before he answers, and an edit he does not save is not in the file, so it is not in
+    the wording that is hashed: he would approve one text and another would merge. Nothing here can
+    ask BBEdit whether a window holds unsaved changes, so the question says it, and a picker whose
+    question does not approves nothing. The refusal gives the sentence to add.
   - the file has not changed since he answered: its status change time (st_ctime, which a write, a
     rename or a replacement sets and no command sets back) is before the moment his answer was
     recorded. Between the open and the answer the file may change, because that is Dan editing it.
@@ -107,8 +113,9 @@ are then taken from the note and not from the file as it stands: the hash, and t
 time, which must be before his answer. So the wording approved is what the file held when he
 answered, and a write to the file afterwards neither loses his approval nor rides on it; and a note
 taken later than his answer, over a file changed since, approves nothing. A picker's first note is
-the one kept. A subagent's picker is not noted. A session's notes are read back only until its
-approval is on the record, the newest NOTED_SESSIONS sessions for one call.
+the one kept. A subagent's picker is not noted. A noted picker is read back only until the record
+holds its outcome (an `approved`, `withdrawn` or `settled` line), the newest NOTED_SESSIONS sessions
+for one call.
 
 READING AND WRITING ARE SEPARATE (claude-config#3703). A review found that the check command read a
 session's pickers from whatever transcript its standard input named and wrote what it found, so a
@@ -229,11 +236,16 @@ _sleep = time.sleep
 _clock = time.monotonic
 HERE =os.path.dirname(os.path.abspath(__file__))
 
+# The sentence the picker's question must hold, word for word (THE QUESTION TELLS HIM TO SAVE, module
+# docstring). One constant, so the rule, the refusal and the how to ask text cannot drift apart.
+SAVE_FIRST = "Save the file before you answer."
+
 HOW_TO_ASK = (
     "To ask him: write the post to a file, run /no-ai-tells on it, open it in a command of its own with "
     "`/Applications/BBEdit.app/Contents/Helpers/bbedit_tool --front-window <file>`, then, as the very next tool call "
     "(with any other call between the two his answer does not count), ask ONE AskUserQuestion "
-    "picker of one question naming the pull request or feature and the channel, with the options `" + APPROVE
+    "picker of one question naming the pull request or feature and the channel, and ending with the sentence `"
+    + SAVE_FIRST + "` (without it his answer does not count), with the options `" + APPROVE
     + "` and `Not yet` and the metadata {\"source\": \"" + SOURCE + "\", \"repo\": \"<owner/name>\", \"file\": "
     "\"<absolute path>\"}. Leave the file alone once it is open (he may edit it before he answers), and make the "
     "pull request's Announcement block that file's text.")
@@ -903,6 +915,15 @@ def approvals(session_id, transcript_path, deadline=None, noted=None, settled=()
                                      + "), so whether the wording was opened in front of him could not be told")
     approved = []
     for p in readable:
+        if SAVE_FIRST not in _question_shown(p):
+            # THE QUESTION TELLS HIM TO SAVE (module docstring): an edit of his left unsaved in the
+            # window is not in the file, so it would not be in the wording that is hashed.
+            untaken.append({"repo": p["repo"], "file": p["file"],
+                            "why": "the picker's question did not tell him to save the file, so an edit he made in "
+                                   "the window and left unsaved would not be in the wording that is hashed. Open the "
+                                   "file for him again and, as the very next tool call, ask again with a question "
+                                   "that ends with the sentence `" + SAVE_FIRST + "`"})
+            continue
         note = _note_for(p, noted)
         why = _not_shown(p, events[p["file"]], ap, note,
                          lambda first, last: _calls_on(transcript_path, session_id, first, last))
@@ -920,6 +941,18 @@ def approvals(session_id, transcript_path, deadline=None, noted=None, settled=()
             approved.append({"kind": "approved", "repo": p["repo"], "hash": digest, "file": p["file"],
                              "picker": p["picker"], "session": session_id, "answered": _text(p["stamp"])})
     return approved, untaken, closed, None
+
+
+def _question_shown(p):
+    """The one question of picker p as the dialog showed it to him: the result's copy when it holds
+    one, else the call's. Empty when neither holds a question in words."""
+    for holder in (p["result"], p["ask"]):
+        questions = holder.get("questions") if isinstance(holder, dict) else None
+        if isinstance(questions, list) and questions and isinstance(questions[0], dict):
+            text = questions[0].get("question")
+            if isinstance(text, str) and text:
+                return text
+    return ""
 
 
 def _not_shown(p, events, ap, note=None, calls_on=None):

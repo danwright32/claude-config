@@ -844,7 +844,8 @@ talk "$T" bash "$BBEDIT --front-window $F"
 talk "$T" ask acme/two-reopened "$F"
 r="$(asked "$T" acme/two-reopened "$(hash_file "$F")")"
 check "R2 still possible: a file opened again after other work, and asked about next, is approved" "$([[ "$r" == "yes||" ]] && echo ok || echo "$r")"
-check "how to ask says the picker is the very next call after the open" "$(printf '{"session_id": "s1", "transcript_path": "%s"}' "$T" | ANNOUNCE_APPROVALS_DIR="$STORE" python3 -B "$LIB" check --repo acme/none --hash "$H" | grep -q "very next tool call" && echo ok || echo "the how to ask text does not say so")"
+# $how is the library's own how to ask text, read from its answer at the top of this suite.
+check "how to ask says the picker is the very next call after the open" "$([[ "$how" == *"very next tool call"* ]] && echo ok || echo "the how to ask text does not say so: $how")"
 
 echo "his last answer on a wording decides, on the record as in the session (#3742 item 3)"
 # He approves and the approval is recorded. Asked again about the same unchanged file, he answers
@@ -949,6 +950,24 @@ check "R2 a noted Not yet in another session takes the approval back for a merge
 check "by the hash noted when he answered" "$(grep '"kind": "withdrawn"' "$STORE_USED/record.jsonl" 2>/dev/null | grep "\"picker\": \"$P\"" | grep -q "\"hash\": \"$H3\"" && echo ok || cat "$STORE_USED/record.jsonl")"
 helper_asks acme/widget "$H3" 72 >/dev/null
 check "and that session's note is settled: it is not read back a second time" "$([ "$(kinds withdrawn)" = 1 ] && echo ok || echo "$(kinds withdrawn) lines")"
+
+echo "the picker's question tells him to save the file before he answers (#3742 item 7)"
+# An edit he makes in the window and does not save is not in the file, so it is not in the wording
+# that is hashed. Nothing here can ask BBEdit whether the window holds unsaved changes, so the
+# question he is shown must tell him to save, and one that does not approves nothing.
+STORE_USED="$WORK/store-nosave"
+F="$(shown nosave)"; T="$WORK/nosave.jsonl"
+talk "$T" ask acme/widget "$F" "" nosave
+r="$(asked "$T" acme/widget "$(hash_file "$F")")"
+check "R2 his Approve in a picker whose question does not tell him to save the file approves nothing" "$([[ "$r" == "no|"* ]] && echo ok || echo "$r")"
+check "the refusal says what the question must say, in the words to use" "$([[ "$r" == *"did not tell him to save the file"* && "$r" == *"Save the file before you answer."* ]] && echo ok || echo "$r")"
+check "and no approval is written for it" "$([ "$(recorded)" = 0 ] && echo ok || echo "$(recorded) lines")"
+# Still possible: asked again with the sentence in the question.
+talk "$T" bash "$BBEDIT --front-window $F"
+talk "$T" ask acme/widget "$F"
+r="$(asked "$T" acme/widget "$(hash_file "$F")")"
+check "R2 still possible: asked again with the sentence, his Approve counts" "$([[ "$r" == "yes||" ]] && echo ok || echo "$r")"
+check "how to ask gives the sentence the question must hold" "$([[ "$how" == *"Save the file before you answer."* ]] && echo ok || echo "the how to ask text does not hold it: $how")"
 
 echo "the record is this suite's own"
 check "no case wrote to this Mac's real record" "$([ "$(ls -la "$REAL_STORE" 2>/dev/null | cksum)" = "$real_before" ] && echo ok || echo "$REAL_STORE changed during the run")"

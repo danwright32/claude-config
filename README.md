@@ -1916,7 +1916,7 @@ A pull request labelled `changelog/announce` carries the post for agents under `
 and Dan's words for the label were "it should ask me before applying the label". So the session
 writes the post to a file, runs `/no-ai-tells` on it, opens it in BBEdit with the front window flag,
 and asks ONE picker of one question (`Approve the wording` or `Not yet`) naming the pull request or
-feature and the channel, with this metadata:
+feature and the channel and ending `Save the file before you answer.`, with this metadata:
 
 ```json
 {"source": "changelog-announce", "repo": "<owner/name>", "file": "<absolute path>"}
@@ -1937,6 +1937,10 @@ when all of these hold, each failure said in its own words:
   between the two. The picker shows him no file name, so with two wording files open his answer
   about the first was given with the second in front. The refusal names the call that came
   between and says to open the file again and ask in the very next call;
+- the question he was shown holds the sentence `Save the file before you answer.`, word for word
+  (#3742). An edit he makes in the window and does not save is not in the file, so it is not in the
+  wording that is hashed, and nothing here can ask BBEdit whether a window holds unsaved changes. A
+  picker whose question does not say it approves nothing, and the refusal gives the sentence to add;
 - the file has not changed since he answered (its status change time is before his answer);
 - no later picker about the same file ended any other way;
 - the file holds no run of more than two blank lines with wording below it (#3703). Blank lines are
@@ -1952,7 +1956,7 @@ What is hashed is the FILE as it stands, never a hash the session supplies, by
 `hooks/lib/changelog-entry.js`'s `announcementHash`: the sha256 of the one normalised form (line
 endings, spaces at the ends of lines, every blank line) every comparison uses, so the file on this
 Mac and the block GitHub returns are hashed by one function. A hook run that reads his Approve
-writes `{"kind": "approved", "repo", "hash", "at", "session", "picker"}` to
+writes `{"kind": "approved", "repo", "hash", "at", "session", "picker", "file", "answered"}` to
 `~/.claude/state/announce-approvals/record.jsonl`, on this Mac only and never synced, so wording he
 approved merges unchanged in a later session or overnight. A subagent's call counts his picker for
 that call and writes nothing.
@@ -1978,7 +1982,8 @@ session's transcript, read at the moment a PostToolUse hook of its own call ran,
 call's `tool_use`). His answer is in the payload the hook is handed, and it is deliberately not
 read from there, since a payload is whatever the caller hands over. Whichever hook next asks the
 library reads the noted sessions' transcripts back, for the repository asked about (the newest
-five sessions whose noted answer is not yet an approval on the record), and judges the
+five sessions holding a noted picker the record has no outcome for yet: no `approved`, `withdrawn`
+or `settled` line), and judges the
 noted picker by every rule above, read from that transcript. The hash and the change time come
 from the note, so the wording approved is what the file held when he answered: a write to the file
 afterwards neither loses his approval nor rides on it, and a note taken later than his answer, over

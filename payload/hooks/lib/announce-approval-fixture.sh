@@ -20,7 +20,8 @@
 #                                    the approval picker, answered `Approve the wording` unless
 #                                    another answer is given. The shapes are the ways a picker is
 #                                    NOT his answer (timeout, prefilled, two, error, othersource,
-#                                    unread, and plain, an ordinary picker with no metadata) and
+#                                    unread, nosave, whose question does not tell him to save the
+#                                    file, and plain, an ordinary picker with no metadata) and
 #                                    one way it carries what must be ignored (claimedhash:<hash>, a
 #                                    hash written into its metadata).
 #       put <repo> <file> [shape] [session]
@@ -77,6 +78,9 @@ def call(name, tool_input, error=False, result=None, session=None):
     back(uid, error, result, session)
 def picker(repo, file, answer, shape):
     q = "Approve the announcement for acme/widget#7, to go to the announcements channel?"
+    if shape != "nosave":
+        # The sentence the library requires in the question he is shown (claude-config#3742).
+        q += " Save the file before you answer."
     if shape == "unread":
         # A zero width space, made from its code point and never written here.
         q = q.replace(" for", chr(0x200b) + " for")
