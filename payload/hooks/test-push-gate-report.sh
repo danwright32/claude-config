@@ -36,6 +36,11 @@ row "$((t + 100))" simplify override c5x id9 "" "" "" "" "" "$((t + 100))" "" tr
 for i in 1 2 3 4; do row "$((t + 30))" tests pass "c$i" "id$i" sonnet 30 29000 0.05 9000 "$t" ""; done
 row "$((t + 200))" tests block c5 id5 sonnet 30 29000 0.05 9000 "$((t + 170))" "the x change"
 row "$((t + 30))" tests pass c10 id10 sonnet 30 29000 0.05 9000 "$t" ""
+# Readings lines (claude-config#3339): the test gate writes one just before the verdict line of a
+# push a reader judged. They are not pushes, not judge calls and not unreadable, so every figure
+# below is what it was before they existed; old lines with none beside them are read as before.
+row "$((t + 30))" tests reads c1 id1 "" "" "" "" "" "$((t + 30))" "outcome pass; first 2 read tmp.a tmp.b"
+row "$((t + 200))" tests reads c5 id5 "" "" "" "" "" "$((t + 200))" "outcome block; first 1 read tmp.c; rest1 3 unread tmp.d tmp.e tmp.f; stop unreadable"
 # Outside a 30 day window, and a line nothing can read.
 row "$((NOW - 40 * 86400))" simplify block old idold haiku 10 9000 0.01 5000 "$((NOW - 40 * 86400))" "old"
 printf 'garbage line\n' >> "$L"
@@ -52,6 +57,8 @@ want "judge wall time: median 10s, slowest 90s, over 7 calls" "simplify judge ti
 want "judge cost: \$0.06 in all, \$0.0100 a call, from the 6 calls that reported one" "simplify cost"
 want "could not decide 1 times: judge timed out after 90s" "fail open reasons"
 want "tests gate (require-tests-before-push.sh), judge: sonnet" "the test gate"
+want "reached 6 pushes: judge called on 6," "#3339 the test gate's readings lines are not counted as pushes"
+want "of the 6 judged: passed 5, blocked 1 (" "#3339 nor as verdicts"
 want "both judges on one push: 5 of the 8 pushes either judge was called on (62%); their calls overlapped in time on 4 of those 5" "co-firing and overlap"
 
 # No ledger yet: said plainly, exit 0, never an empty report that reads as a quiet gate.

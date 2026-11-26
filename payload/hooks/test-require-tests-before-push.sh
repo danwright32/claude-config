@@ -223,6 +223,9 @@ STUB_DIR="$(mktemp -d)"
 cat > "$STUB_DIR/claude" <<'STUB'
 #!/usr/bin/env bash
 input="$(cat)"
+# STUB_CLAUDE_CWD, a file: each call appends the name of the folder it was run from, one per line, so
+# a case can check the gate's record names the folders its judges really ran in (#3339).
+[ -n "${STUB_CLAUDE_CWD:-}" ] && printf '%s\n' "${PWD##*/}" >> "$STUB_CLAUDE_CWD"
 # STUB_CLAUDE_VANISH: the stand in removes itself once it has read its input, so every later call
 # finds no claude on the path and fails before it launches (#2153).
 [ -n "${STUB_CLAUDE_VANISH:-}" ] && rm -f "$0"
@@ -1724,6 +1727,100 @@ W="$(mk_repo)"; seed_source_and_test "$W"
 STUB_CLAUDE_OUT="$UNREADABLE" run_hook "$W" "git push"
 want_allowed_notice "#3327 a first reading never readable"
 want_stderr "asked 3 times" "#3327 the notice says how many times the first reading was asked"
+
+# --- claude-config#3339: the record says how many times each reading was asked, and where it ran ----
+# A reading cleared by a second or third ask used to leave the same line as a first time pass, and no
+# line named the folder a judge ran from, so its transcript could be found only by time. Now a push a
+# reader judged gets a companion line, outcome column "reads", written in the same append just before
+# its verdict line: the verdict, then each reading with how many times it was asked, how it ended and
+# the folder each ask ran from. Counts, fixed words and folder names only. The verdict line, the exit
+# and the message are what they were, checked here on every case.
+# reads_case <ledger lines before> <label> <expected exit> <expected verdict outcome> <expected
+# companion detail, with C1 C2 ... standing for the folders the stand in judge recorded, in call order>
+READS_CWDS="$TMPROOT/reads-cwds"
+reads_case() {
+  local before="$1" label="$2" code="$3" outcome="$4" want="$5" new n got
+  new="$(tail -n +"$((before + 1))" "$LEDGER" 2>/dev/null)"
+  n="$(printf '%s\n' "$new" | awk 'NF { c++ } END { print c + 0 }')"
+  if [ "$CODE" = "$code" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #3339 $label: exit $CODE, expected $code (the verdict must not change)"; fi
+  if [ "$n" = 2 ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #3339 $label: the push added $n ledger lines, expected 2 (the readings, then the verdict)"; fi
+  if [ "$(printf '%s\n' "$new" | sed -n 1p | cut -f 3,4)" = "tests	reads" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #3339 $label: the first new line is not the test gate's readings line: [$(printf '%s\n' "$new" | sed -n 1p | cut -f 1-7)]"; fi
+  if [ "$(ledger_last 4)" = "$outcome" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #3339 $label: the last line's outcome is $(ledger_last 4), expected $outcome"; fi
+  if [ "$(printf '%s\n' "$new" | awk -F '\t' '{ print NF }' | sort -u)" = 15 ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #3339 $label: a new line does not have 15 columns"; fi
+  # Each Cn becomes the nth folder the stand in judge recorded; a missing one leaves it blank.
+  want="$(awk -v w="$want" 'NF { d[++n] = $0 }
+    END { k = split(w, t, " "); out = ""
+      for (i = 1; i <= k; i++) { s = t[i]; semi = ""
+        if (s ~ /;$/) { semi = ";"; s = substr(s, 1, length(s) - 1) }
+        if (s ~ /^C[0-9]+$/) s = d[substr(s, 2) + 0]
+        out = out (i > 1 ? " " : "") s semi }
+      print out }' "$READS_CWDS")"
+  got="$(printf '%s\n' "$new" | sed -n 1p | cut -f 14)"
+  if [ "$got" = "$want" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #3339 $label: the readings line says [$got], expected [$want]"; fi
+}
+ledger_lines() { awk 'END { print NR }' "$LEDGER" 2>/dev/null; }
+
+# A first time pass: one ask.
+: > "$READS_CWDS"; before="$(ledger_lines)"
+W="$(mk_repo)"; seed_source_and_test "$W"
+STUB_CLAUDE_CWD="$READS_CWDS" STUB_CLAUDE_OUT="$PASS_JSON" run_hook "$W" "git push"
+reads_case "$before" "a first time pass" 0 pass "outcome pass; first 1 read C1"
+# The folder recorded is the folder the judge ran in, a temporary one of its own, named alone.
+case "$(head -n 1 "$READS_CWDS")" in ''|*/*|feat-3339|"${W##*/}") fail=$((fail+1)); echo "FAIL: #3339 the judge's folder name is [$(head -n 1 "$READS_CWDS")], not a temporary folder of its own" ;; *) pass=$((pass+1)) ;; esac
+
+# The first reading unreadable once, then read: two asks, and its verdict stands.
+: > "$READS_CWDS"; before="$(ledger_lines)"
+printf 'calc.test.js\t%s\n' "$UNREADABLE" > "$TMPROOT/once-3339b"
+W="$(mk_repo)"; seed_source_and_test "$W"
+STUB_CLAUDE_CWD="$READS_CWDS" STUB_CLAUDE_ONCE="$TMPROOT/once-3339b" \
+  STUB_CLAUDE_OUT='{"result":"{\"verdict\":\"block\",\"changes\":[],\"missing\":[\"the add() fix\"]}"}' run_hook "$W" "git push"
+reads_case "$before" "a first reading cleared on its second ask" 2 block "outcome block; first 2 read C1 C2"
+want_stderr "have no test covering them" "#3339 the second answer's refusal is unchanged"
+
+# The first reading never readable: three asks, and the fail open it always was.
+: > "$READS_CWDS"; before="$(ledger_lines)"
+W="$(mk_repo)"; seed_source_and_test "$W"
+STUB_CLAUDE_CWD="$READS_CWDS" STUB_CLAUDE_OUT="$UNREADABLE" run_hook "$W" "git push"
+reads_case "$before" "a first reading never readable" 0 failopen "outcome failopen; first 3 unread C1 C2 C3"
+want_allowed_notice "#3339 a first reading never readable still fails open"
+want_stderr "asked 3 times" "#3339 and still says how many times it asked"
+
+# A further reading unreadable once, then read: the push allowed, the reading asked twice.
+: > "$READS_CWDS"; before="$(ledger_lines)"
+printf 'NEW_FIELD_MARKER\t%s\n' "$COVERED_ONE" > "$RULES"
+printf '%s\t%s\n' "$LATER_CALL" "$UNREADABLE" > "$TMPROOT/once-3339d"
+W="$(mk_repo)"; seed_issue_push "$W"
+STUB_CLAUDE_CWD="$READS_CWDS" STUB_CLAUDE_ONCE="$TMPROOT/once-3339d" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" \
+  run_hook "$W" "git push"
+reads_case "$before" "a further reading cleared on its second ask" 0 pass "outcome pass; first 1 read C1; rest1 2 read C2 C3"
+
+# A further reading never readable: three asks, and the could not judge refusal it always was.
+: > "$READS_CWDS"; before="$(ledger_lines)"
+printf '%s\t%s\n' "$LATER_CALL" "$UNREADABLE" > "$RULES"
+W="$(mk_repo)"; seed_issue_push "$W"
+STUB_CLAUDE_CWD="$READS_CWDS" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" run_hook "$W" "git push"
+reads_case "$before" "a further reading never readable" 2 cantjudge "outcome cantjudge; first 1 read C1; rest1 3 unread C2 C3 C4; stop unreadable"
+want_stderr "could not judge" "#3339 still refused as could not judge"
+want_stderr "asked 3 times" "#3339 still saying how many times it asked"
+case "$(ledger_last 14)" in *'asked 3 times'*) pass=$((pass+1)) ;; *) fail=$((fail+1)); echo "FAIL: #3339 the verdict line's detail changed: [$(ledger_last 14)]" ;; esac
+
+# A push no reader judged gets no readings line: here, a push with no source.
+before="$(ledger_lines)"
+W="$(mk_repo)"
+( cd "$W" && printf 'nothing but words\n' > notes.md && git add notes.md && git commit -qm docs ) >/dev/null 2>&1
+run_hook "$W" "git push"
+if [ "$(tail -n +"$((before + 1))" "$LEDGER" | awk -F '\t' '$4 == "reads"' | wc -l | tr -d ' ')" = 0 ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #3339 a push no reader judged got a readings line"; fi
+
+# A record that cannot be written: the verdict is unchanged and it is said once. A fail open used to
+# say nothing at all when its record could not be written.
+W="$(mk_repo)"; seed_source_and_test "$W"
+PUSH_GATE_LEDGER_DIR="$TMPROOT/ledger-file" STUB_CLAUDE_OUT="$UNREADABLE" run_hook "$W" "git push"
+want_allowed_notice "#3339 a fail open with an unwritable record still fails open" "DID NOT RUN.*record could not be written"
+if [ "$(printf '%s\n' "$ERR" | grep -c 'could not be written')" = 1 ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #3339 an unwritable record was said $(printf '%s\n' "$ERR" | grep -c 'could not be written') times on stderr, expected once: [$ERR]"; fi
+W="$(mk_repo)"; seed_source_and_test "$W"
+PUSH_GATE_LEDGER_DIR="$TMPROOT/ledger-file" STUB_CLAUDE_OUT='{"result":"{\"verdict\":\"block\",\"changes\":[],\"missing\":[\"the add() fix\"]}"}' run_hook "$W" "git push"
+want_code 2 "#3339 a refusal with an unwritable record still refuses"
+if [ "$(printf '%s\n' "$ERR" | grep -c 'could not be written')" = 1 ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #3339 a refusal's unwritable record was said $(printf '%s\n' "$ERR" | grep -c 'could not be written') times, expected once"; fi
 
 echo
 echo "passed: $pass, failed: $fail"
