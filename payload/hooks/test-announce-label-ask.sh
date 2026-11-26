@@ -406,6 +406,8 @@ for cmd in "$FORGED | python3 $LIBRARY check --repo acme/widget --hash $H --pr 7
            "cd $DIR && /usr/bin/python3 -B -I lib/announce-approval.py used --repo acme/widget --hash $H --pr 7 --unread x" \
            "env ANNOUNCE_APPROVALS_DIR=/tmp/other python3 $LIBRARY used --repo acme/widget --hash $H --pr 7" \
            "$FORGED | xargs -0 python3 $LIBRARY check --claim" \
+           "find $WORK/forged -name post.md -exec python3 $LIBRARY used --repo acme/widget --hash $H --pr 7 \\;" \
+           "nice -n 5 caffeinate -i python3 $LIBRARY used --repo acme/widget --hash $H --pr 7" \
            "bash -c 'python3 $LIBRARY used --repo acme/widget --hash $H --pr 7'" \
            "chmod +x $LIBRARY && $LIBRARY used --repo acme/widget --hash $H --pr 7" \
            "python3 $LIBRARY \"\$VERB\" --repo acme/widget --hash $H" \
@@ -432,6 +434,8 @@ for cmd in "python3 ~/.claude/hooks/lib/announce-approval.py list" \
            "git add payload/hooks/lib/announce-approval.py" \
            "git diff HEAD -- payload/hooks/lib/announce-approval.py" \
            "grep -n 'def check' $LIBRARY" \
+           "grep -n python3 $LIBRARY" \
+           "rg -n python3 payload/hooks/lib/announce-approval.py payload/hooks/require-changelog-tag.sh" \
            "wc -l $LIBRARY && sed -n 1,20p $LIBRARY" \
            "python3 -m py_compile $LIBRARY" \
            "bash $DIR/test-announce-approval.sh" \
