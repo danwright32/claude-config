@@ -693,7 +693,8 @@ _sc_changed_list="$(bash "$REPO_FILES" --changed . 2>/dev/null)" || { _sc_change
 # runs them only in CI, as before. Recognised by both facts, never one: of the suites the marker
 # misses, 24 find the checkout (the whole repository suite, test-run-all-tests.sh, among them) and
 # 16 walk something, often a scratch home of their own, against 5 that do both (measured
-# 2026-11-17). Only code lines count.
+# 2026-11-17). Only code lines count, and since claude-config#3662 finding the checkout means the
+# suite's code RUNS that helper, never that it names it (at _sc_runs_root_helper below).
 #
 # A walk is a walk however it is spelled (L247): os.walk or pathlib's rglob, or a find that prunes
 # .git, which only a find over a checkout needs to. test-bad-byte-locale.sh reads every suite with
@@ -706,11 +707,42 @@ _sc_walks_tree(){   # $1 = code lines -> 0 when they walk a tree
   case "$1" in *'os.walk('*|*'.rglob('*) return 0 ;; esac
   grep -qE '(^|[^[:alnum:]_-])find[[:space:]].*-name[[:space:]]+["'\'']?[.]git([^[:alnum:]_]|$)' <<< "$1"
 }
-_sc_walks_checkout(){   # $1 = a suite -> 0 when it finds its checkout and walks a tree
+# FINDING THE CHECKOUT IS RUNNING THE HELPER, NEVER NAMING IT (claude-config#3662). Any code line
+# naming lib/checkout-root.sh used to count, and on 2026-11-25 that had put
+# test-slack-drafts-only-gate-runners.sh among the walkers on two mentions that are both text: a
+# command it hands the Slack gate as a fixture names the helper, and a heredoc names a lib program
+# holding that gate's own walk of a folder a command names. It walks nothing of the checkout, and it
+# was the slowest suite this gate ran (85 to 89 seconds of processor time alone, 3 runs on
+# 2026-11-25). So the first fact is that the suite's own code RUNS the helper, in one of these shapes:
+#   inside a command substitution, the dollar and parenthesis form or backticks, which is how every
+#     real walker here takes the root the helper prints;
+#   as a command of its own: first on its line or straight after ; & | or !, behind if, then, do,
+#     else, elif, while or until, with or without bash, sh, source or a dot in front of it;
+#   as the whole value of a variable, for a suite that calls it through one.
+# The helper's name anywhere else on a code line is text: a word inside a longer string, one of
+# several file names handed to another command, a pattern, a message.
+# Measured 2026-11-25 on main: 68 suites name the helper on a code line, 66 of them run it inside a
+# command substitution, and the 2 that never run it are that suite and the sync suite, which copies
+# the helper into a scratch lib by name and was not selected before either.
+# It still leans toward running a suite. A substitution opened ANYWHERE earlier on the line counts,
+# and so does text inside a string that begins a command with the helper after ; or &&. A walker
+# that is missed says nothing, which is why the floor below names every one selected: one that
+# stops being recognised blocks the push by name.
+# What this rule does NOT read: a helper run by a file the suite sources. The runners suite gets its
+# checkout that way, through lib/slack-drafts-gate-harness.sh, and reads two named files of it
+# (claude-sync and the sync suite) as lines to compare two readings over. That is reading named
+# files, which many suites outside this gate do, and not a walk of the tree.
+_SC_ROOT_IN_SUBST='([$][(]|`).*checkout-root[.]sh'
+_SC_ROOT_AS_COMMAND='(^|[;&|!])[[:space:]]*((if|then|do|else|elif|while|until)[[:space:]]+)?((bash|sh|source|[.])[[:space:]]+(-[^[:space:]]+[[:space:]]+)*)?["'\'']?[^[:space:]"'\'';&|]*checkout-root[.]sh'
+_SC_ROOT_HELD='(^|[[:space:];])[A-Za-z_][A-Za-z0-9_]*=["'\'']?[^[:space:]"'\'']*checkout-root[.]sh["'\'']?([[:space:];]|$)'
+_sc_runs_root_helper(){   # $1 = code lines -> 0 when a line of them runs lib/checkout-root.sh
+  LC_ALL=C grep -a -qE -e "$_SC_ROOT_IN_SUBST" -e "$_SC_ROOT_AS_COMMAND" -e "$_SC_ROOT_HELD" <<< "$1"
+}
+_sc_walks_checkout(){   # $1 = a suite -> 0 when its code runs the helper that finds its checkout and walks a tree
   local code d p b c progs
   grep -q 'checkout-root[.]sh' "$1" 2>/dev/null || return 1
   code="$(_sc_code_lines "$1")"
-  case "$code" in *checkout-root.sh*) ;; *) return 1 ;; esac
+  _sc_runs_root_helper "$code" || return 1
   _sc_walks_tree "$code" && return 0
   case "$1" in */*) d="${1%/*}" ;; *) d=. ;; esac
   progs="$(printf '%s\n' "$code" | grep -oE '[A-Za-z0-9_.-]+[.]py' | sort -u)"
@@ -859,11 +891,13 @@ NAMED
       echo "over a smaller set, which is how two defects reached main on 2026-09-21 after a change"
       echo "moved two scanners off the text this gate recognised them by. A suite is selected when"
       echo "it lists the repository's files (git ls-files or lib/repo-files.sh) in its code, or when"
-      echo "it finds its checkout through lib/checkout-root.sh and walks it (os.walk, rglob, or a find"
-      echo "that prunes .git), itself or through a program beside it that its code names."
+      echo "its own code runs lib/checkout-root.sh to find its checkout and walks it (os.walk, rglob, or"
+      echo "a find that prunes .git), itself or through a program beside it that its code names. The"
+      echo "helper's name inside text the suite hands to something else is not a run (#3662)."
       echo ""
       echo "If one was removed on purpose, take its line out of $_sc_floor_file in the same change."
-      echo "If not, find why it stopped being recognised."
+      echo "If main has stopped selecting it since this branch was cut, bring main into this branch,"
+      echo "which takes the line out. If neither, find why it stopped being recognised."
       echo ""
       echo "OVERRIDE, this one push: SKIP_SCANNERS_CHECK=1 <your original git push command>"
     } >&2
