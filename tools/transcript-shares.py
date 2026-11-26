@@ -25,6 +25,21 @@ November 2026) both used, so figures from this tool are comparable with them:
   `<agent-message>` an agent sends back, and the Agent tool's own result (the launch receipt).
 - A transcript is a subagent when it lives under `subagents/` or says `isSidechain: true`; otherwise
   it is interactive (`entrypoint` cli), headless (sdk-cli) or other.
+- An attachment is sized by its `rendered` text, what the model was sent. One with no `rendered`
+  (a deferred tools record, most hook successes) is never sent and is not counted; NOT_SENT counts
+  them by type (claude-config#3646).
+- The one exception is the prompt snapshot. It has no `rendered` text but records the system prompt
+  and tool list every request is sent, so each request carries the newest snapshot's size once (a
+  later snapshot replaces it, never adds to it), reported on SNAPSHOT. The issue's wording left it
+  out; that took the interactive estimate on PostRoll from 0.93 to 0.68 (#3646).
+- Thinking a transcript stores empty (a signature only) is inferred from that reply's
+  `output_tokens` less the characters it shows, and reported on its own INFERRED line, never inside
+  the KIND line's estimate, because nothing in the transcript measured it (L11).
+- HOOK lines list the hooks whose output was carried most. A hook Claude Code recorded only as
+  "command hook N" is named from `--settings` (default ~/.claude/settings.json) as the Nth command
+  hook of its event across every matcher, a repeated identical command counted once: a rule fitted
+  to refusals on claude-config#3690 and #3646, not read from Claude Code. It is labelled as inferred
+  from today's settings, since adding a hook renumbers the ones after it.
 
 Reads item sizes and kinds only and prints no transcript text (L222). A window holding no
 transcripts or no requests exits 1 rather than report an empty measurement (L98). Faults are
@@ -36,8 +51,9 @@ counted and named, and END then says `complete=no`:
   fails part way. For the last, NOTHING from that file is counted (a partial transcript would carry
   a wrong context into every share), and the line says after which line it failed.
 
-Output is tab separated: WINDOW, INPUT, UNREADABLE, MALFORMED, TOTAL, then KIND,
-SHARE, READS and WORDS per kind, SESSION for the largest main sessions, COMPACTIONS, END.
+Output is tab separated: WINDOW, INPUT, UNREADABLE, MALFORMED, TOTAL, HOOKNUMBERS, then KIND,
+INFERRED, SNAPSHOT, NOT_SENT, HOOK, SHARE, READS and WORDS per kind, SESSION for the largest main sessions,
+COMPACTIONS, END.
 """
 import argparse
 import collections
@@ -123,7 +139,83 @@ def notice_words(s, rk):
 
 def new_agg():
     return {"measured": 0, "requests": 0, "carried": collections.Counter(), "first": [],
-            "code_reads": [], "reports_bg": [], "reports_fg": [], "reports_am": []}
+            "code_reads": [], "reports_bg": [], "reports_fg": [], "reports_am": [],
+            "inferred_replies": 0, "not_sent": collections.Counter(), "not_sent_chars": 0, "snapshots": 0}
+
+
+# The one attachment with no `rendered` text that is counted: a prompt snapshot records the system
+# prompt and tool list every request is sent, so each request carries the NEWEST snapshot's size
+# once (a later snapshot replaces it; they are never added up). The issue's wording left it out;
+# measured on #3646, snapshot plus the items before a first request came to 1.03 of its size.
+SNAPSHOT_KEY = "system_prompt_and_tools"
+SNAPSHOT_NOTE = ("the one attachment with no rendered text that is counted: it records the system prompt and "
+                 "tool list every request carries, so the newest one's size is carried once per request")
+
+
+def snapshot_size(a):
+    return sum(len(json.dumps(a[k])) for k in ("systemPrompt", "tools") if a.get(k) is not None)
+
+
+# Carried keys that are estimates of something the transcript does not hold, kept out of the
+# estimate on the KIND line (L11) and reported on their own line.
+INFERRED_THINKING = "thinking_inferred"
+HOOK_KEY = "hook\t"   # an attachment whose type starts with hook_ is one hook's output
+SCRIPT = re.compile(r"([A-Za-z0-9_.-]+\.(?:sh|py|js|mjs|ts))\b")
+HOOK_NUMBER = re.compile(r"^command hook (\d+)$")
+
+
+def rendered_size(o):
+    """Characters (and images) of what an attachment line rendered for the model, or None when it has
+    no `rendered` text: such an attachment is a record Claude Code keeps and never sends."""
+    r = o.get("rendered")
+    if not isinstance(r, list) or not r:
+        return None
+    chars = images = 0
+    for x in r:
+        if isinstance(x, dict):
+            c, _t, i = text_of(x.get("content", x.get("text")))
+            chars += c
+            images += i
+    return chars + images * IMAGE_CHARS
+
+
+def hook_identity(a):
+    """The hook an attachment came from: its script's file name, its 'command hook N' label when
+    Claude Code recorded only that, or '(inline)'. Never the command's own text."""
+    cmd = a.get("command")
+    be = a.get("blockingError")
+    if not isinstance(cmd, str) and isinstance(be, dict):
+        cmd = be.get("command")
+    if not isinstance(cmd, str):
+        return "(not recorded)"
+    if HOOK_NUMBER.match(cmd.strip()):
+        return cmd.strip()
+    m = SCRIPT.findall(cmd)
+    return m[-1] if m else "(inline)"
+
+
+def hook_numbers(path):
+    """{event: [script name of the Nth command hook]} from a settings file, or None when it cannot
+    be read. The rule, fitted on claude-config#3690 and not taken from Claude Code's source: a hook
+    recorded as 'command hook N' is the Nth command hook of its event across every matcher in
+    settings order, a repeated identical command counted once."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            hooks = json.load(fh).get("hooks")
+    except (OSError, ValueError, AttributeError):
+        return None
+    if not isinstance(hooks, dict):
+        return None
+    table = {}
+    for event, groups in hooks.items():
+        seen = []
+        for g in groups if isinstance(groups, list) else ():
+            for h in g.get("hooks", []) if isinstance(g, dict) else ():
+                if isinstance(h, dict) and h.get("type") == "command" and isinstance(h.get("command"), str) \
+                        and h["command"] not in seen:
+                    seen.append(h["command"])
+        table[event] = [(SCRIPT.findall(c) or ["(inline)"])[-1] for c in seen]
+    return table
 
 
 def has_bad_id(o):
@@ -182,12 +274,26 @@ def read_transcript(job, out):
     compactions = 0
     first_ts = last_ts = None
     agg = None
+    # The newest reply, for thinking stored empty: [message id, output_tokens (the largest any of its
+    # lines gives), visible characters, a thinking block stored empty, inside the window].
+    reply = None
+    snapshot = 0   # characters of the newest prompt snapshot; a compaction does not clear it
 
     def get_agg():
         nonlocal agg
         if agg is None:
             agg = new_agg()
         return agg
+
+    def settle_reply():
+        """Thinking a transcript stores empty (a signature only) was still written and is carried by
+        later requests: infer its size as the reply's output_tokens less what the reply shows."""
+        nonlocal reply
+        if reply is not None and reply[3]:
+            ctx[INFERRED_THINKING] += max(0.0, reply[1] * CPT - reply[2])
+            if reply[4]:
+                get_agg()["inferred_replies"] += 1
+        reply = None
 
     def notice(s, size, rk, nk, inw):
         h = hashlib.sha1(s.encode("utf-8", "replace")).hexdigest()
@@ -224,6 +330,7 @@ def read_transcript(job, out):
             inw = d is not None and since <= d < until
             if t == "system" and o.get("subtype") == "compact_boundary":
                 ctx = collections.Counter()
+                reply = None   # a compaction drops it with everything else
                 if inw:
                     compactions += 1
                 continue
@@ -233,6 +340,8 @@ def read_transcript(job, out):
                 u = msg.get("usage")
                 if mid and mid not in seen and msg.get("model") != "<synthetic>" and isinstance(u, dict):
                     seen.add(mid)
+                    settle_reply()
+                    reply = [mid, 0, 0, False, inw]
                     tok = context_size.context_of(u)
                     if d is None:
                         out["untimed"] += 1
@@ -241,26 +350,37 @@ def read_transcript(job, out):
                         a["measured"] += tok
                         a["requests"] += 1
                         a["carried"].update(ctx)
+                        a["carried"][SNAPSHOT_KEY] += snapshot
                         first_ts = first_ts or d
                         last_ts = d
                     if not first_done:
                         first_done = True
                         if inw:
                             get_agg()["first"].append(tok)
+                # A reply is written a block a line, each line carrying the message's usage so far.
+                cur = reply if reply is not None and mid and mid == reply[0] else None
+                if cur is not None and isinstance(u, dict) and isinstance(u.get("output_tokens"), int):
+                    cur[1] = max(cur[1], u["output_tokens"])
                 cont = msg.get("content")
                 if isinstance(cont, list):
                     for b in cont:
                         if not isinstance(b, dict):
                             continue
                         bt = b.get("type")
+                        shown = 0
                         if bt == "text":
-                            ctx["assistant_text"] += len(b.get("text") or "")
+                            shown = len(b.get("text") or "")
+                            ctx["assistant_text"] += shown
                         elif bt == "thinking":
-                            ctx["thinking"] += len(b.get("thinking") or "")
+                            shown = len(b.get("thinking") or "")
+                            ctx["thinking"] += shown
+                            if not shown and cur is not None:
+                                cur[3] = True
                         elif bt == "tool_use":
                             name = b.get("name")
                             inp = b.get("input") if isinstance(b.get("input"), dict) else {}
-                            ctx["tool_call"] += len(json.dumps(inp))
+                            shown = len(json.dumps(inp))
+                            ctx["tool_call"] += shown
                             if name in ("Read", "Grep") or (name == "Bash" and bash_is_code_read(inp.get("command"))):
                                 cat = "code_read"
                             elif name in ("Agent", "Task"):
@@ -268,6 +388,8 @@ def read_transcript(job, out):
                             else:
                                 cat = "tool_output_other"
                             tools[b.get("id")] = cat
+                        if cur is not None:
+                            cur[2] += shown
                 continue
             if t == "user":
                 cont = msg.get("content")
@@ -306,13 +428,31 @@ def read_transcript(job, out):
                 continue
             if t == "attachment":
                 a = o.get("attachment") if isinstance(o.get("attachment"), dict) else {}
-                at = a.get("type")
+                at = a.get("type") if isinstance(a.get("type"), str) else "?"
+                if at == "prompt_snapshot":
+                    snapshot = snapshot_size(a)
+                    if inw:
+                        get_agg()["snapshots"] += 1
+                    continue
+                size = rendered_size(o)
+                if size is None:
+                    # No rendered text: a record kept beside the conversation (a prompt snapshot, a
+                    # deferred tools record, most hook successes), never sent, so never carried.
+                    if inw:
+                        g = get_agg()
+                        g["not_sent"][at] += 1
+                        g["not_sent_chars"] += len(json.dumps(a))
+                    continue
                 p = a.get("prompt")
                 nk, rk = notice_kind(p.lstrip()) if (at == "queued_command" and isinstance(p, str)) else (None, None)
                 if nk:
-                    notice(p.lstrip(), len(p), rk, nk, inw)
+                    notice(p.lstrip(), size, rk, nk, inw)
+                elif at.startswith("hook_"):
+                    name = a.get("hookName") if isinstance(a.get("hookName"), str) else a.get("hookEvent")
+                    name = name.replace("\t", " ") if isinstance(name, str) else "?"
+                    ctx["%s%s\t%s" % (HOOK_KEY, name, hook_identity(a))] += size
                 else:
-                    ctx["att:%s" % at] += len(json.dumps(a))
+                    ctx["att:%s" % at] += size
     if kind is None:
         kind = {"cli": "interactive", "sdk-cli": "headless"}.get(entry, "other:%s" % entry)
     out["kind"] = kind
@@ -392,6 +532,8 @@ def main(argv):
     ap.add_argument("--compactions", default="3,5", help="compaction counts to report sessions at or past")
     ap.add_argument("--top", type=int, default=5, help="how many of the largest main sessions to list")
     ap.add_argument("--jobs", type=int, default=1, help="worker processes")
+    ap.add_argument("--settings", default=os.path.expanduser("~/.claude/settings.json"),
+                    help="the settings a 'command hook N' is named from, as they are today")
     a = ap.parse_args(argv)
 
     if zoneinfo is None:
@@ -466,14 +608,45 @@ def main(argv):
                 g["agg"][k] += v   # a list extends, a count adds
     total = sum(g["agg"]["measured"] for g in groups.values())
     out.append("TOTAL\ttokens=%d" % total)
+    numbers = hook_numbers(a.settings)
+    out.append("HOOKNUMBERS\tsettings=%s\tread=%s\tnote=a hook recorded as command hook N is named as the Nth "
+               "command hook of its event in these settings as they are today, a repeated command counted once; "
+               "adding a hook renumbers those after it, so a name for an older transcript can be wrong"
+               % (a.settings, "yes" if numbers is not None else "no"))
     for kind, g in sorted(groups.items(), key=lambda x: (-x[1]["agg"]["measured"], x[0])):
         s = g["agg"]
         m, c = s["measured"], s["carried"]
-        est = sum(c.values()) / CPT
+        inferred = c.get(INFERRED_THINKING, 0) / CPT
+        est = sum(v for k, v in c.items() if k != INFERRED_THINKING) / CPT
         rep = c.get("agent_report_bg", 0) + c.get("agent_message", 0) + c.get("agent_report_fg", 0)
         out.append("KIND\t%s\tfiles=%d\trequests=%d\ttokens=%d\tshare_of_all=%s\testimated_over_measured=%s"
                    "\tfirst_request_median=%s" % (kind, g["files"], s["requests"], m, pct(m, total),
                                                   "%.2f" % (est / m) if m else "n/a", num(med(s["first"]))))
+        # Inferred, not read from the transcript: on its own line, never inside the figure above.
+        out.append("INFERRED\t%s\tthinking_stored_empty_from_output_tokens\treplies=%d\tcarried_tokens=%d"
+                   "\tshare_of_measured=%s\testimated_over_measured_with_it=%s"
+                   % (kind, s["inferred_replies"], round(inferred), pct(inferred, m),
+                      "%.2f" % ((est + inferred) / m) if m else "n/a"))
+        if s["snapshots"] or c.get(SNAPSHOT_KEY):
+            sp = c.get(SNAPSHOT_KEY, 0) / CPT
+            out.append("SNAPSHOT\t%s\tsnapshots=%d\tcarried_tokens=%d\tshare_of_measured=%s\tnote=%s"
+                       % (kind, s["snapshots"], round(sp), pct(sp, m), SNAPSHOT_NOTE))
+        ns = s["not_sent"]
+        if ns:
+            out.append("NOT_SENT\t%s\tattachments=%d\tjson_chars=%d\ttypes=%s"
+                       % (kind, sum(ns.values()), s["not_sent_chars"],
+                          ",".join("%s:%d" % (t, n) for t, n in sorted(ns.items(), key=lambda x: (-x[1], x[0])))))
+        hooks = sorted(((v, k) for k, v in c.items() if k.startswith(HOOK_KEY)), key=lambda x: (-x[0], x[1]))
+        for v, k in hooks[:a.top]:
+            _h, name, ident = k.split("\t", 2)
+            hn = HOOK_NUMBER.match(ident)
+            if hn:
+                event = name.split(":", 1)[0]
+                lst = numbers.get(event, []) if numbers is not None else []
+                n = int(hn.group(1))
+                ident += "\tname_inferred_from_todays_settings=%s" % (lst[n - 1] if 0 < n <= len(lst) else "unknown")
+            out.append("HOOK\t%s\t%s\t%s\tcarried_tokens=%d\tshare_of_measured=%s"
+                       % (kind, name, ident, round(v / CPT), pct(v / CPT, m)))
         out.append("SHARE\t%s\tcode_reading=%s\tagent_reports=%s\ttask_notifications=%s\tagent_messages=%s"
                    "\tagent_launches=%s" % (kind, pct(c.get("code_read", 0) / CPT, m), pct(rep / CPT, m),
                                             pct(c.get("agent_report_bg", 0) / CPT, m),
