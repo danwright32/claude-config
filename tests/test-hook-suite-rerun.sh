@@ -83,6 +83,9 @@ cat > "$RRR/payload/hooks/run-all-tests.sh" <<RRRUN
 echo run >> "$RRT/runs"
 case "\$(cat "$RRT/mode" 2>/dev/null)" in
   hang) while :; do sleep 3600 & wait "\$!" || true; done ;;
+  # A suite that does not end on TERM, bounded by its own count so a run that never KILLs it
+  # still ends, and saying so in a file only a suite that was never KILLed writes (#3601).
+  stubborn) trap '' TERM; n=0; while [ "\$n" -lt 150 ]; do sleep 0.1; n=\$(( n + 1 )); done; echo outlived >> "$RRT/outlived" ;;
   fail) echo "1 suite failed"; exit 1 ;;
   *) echo "ALL 1 SUITES PASSED"; exit 0 ;;
 esac
@@ -330,6 +333,22 @@ else
   st8q="$(rr_status)"
   check "#3584 (control) and is no run's claim once ps says what that process is" \
     "! line_has \"\$st8q\" 'could not be read' && line_has \"\$st8q\" 'owed a second run'" "$st8q"
+  # And through a pull, which takes the claim with lib/pid-lock.sh. That lock tested the pid with
+  # kill -0 alone and took a refusal for a holder that had gone, so the claim was taken before
+  # anything read it (claude-config#3601).
+  rr8p_runs="$(rr_runs)"
+  out8p="$(rr_pull 1 PATH="$RR_BADPS")"
+  check "#3601 a pull whose ps fails does not take a claim naming a process the shell may not signal" \
+    "[ \"\$(rr_runs)\" = $rr8p_runs ] && [ \"\$(cat '$RRR/.hook-tests-rerun' 2>/dev/null)\" = 1 ]" "$out8p"
+  check "#3601 and says what holds it could not be read, never that no run does" \
+    "line_has \"\$out8p\" 'not run again here' 'could not be read' 'kill -0'" "$out8p"
+  # The control: with ps answering, pid 1 is settled as something else, and the claim is taken over
+  # though the shell still may not signal it.
+  out8r="$(rr_pull 1)"
+  check "#3601 (control) with ps answering, the same claim is taken over and the suite runs again" \
+    "[ \"\$(rr_runs)\" = $(( rr8p_runs + 1 )) ] && [ \"\$(cat '$RRR/.hook-tests-rerun' 2>/dev/null)\" != 1 ]" "$out8r"
+  # The cases below count runs from the one this control added.
+  rr_forge "$(date +%s)"; rr8_runs="$(rr_runs)"
 fi
 # A claim that is there and cannot be read is the same discarded failure one step earlier. Read
 # through status for the same reason.
@@ -356,6 +375,23 @@ rr_forge "$(date +%s)"; printf '%s\n' "$rr8_dead" > "$RRR/.hook-tests-rerun"
 out8e="$(rr_pull 1 PATH="$RR_BADPS")"
 check "#3584 (control) a claim left by a run that has gone is still taken over when ps cannot run" \
   "[ \"\$(rr_runs)\" = $(( rr8_runs + 2 )) ] && grep -q '^outcome=passed' '$RRR/.hook-tests'" "$out8e"
+
+# ---- 9. a suite being stopped whose state ps cannot read is not taken as ended (claude-config#3601) ----
+# stop_suite_tree read the suite with `ps -o stat=` and took an empty answer for a suite that had
+# ended, so a ps that could not run ended the grace at its first look, skipped the KILL, and then
+# waited on the suite with a bare `wait`, the unbounded wait that function exists to remove. The
+# stand in suite ignores TERM and ends by itself after about fifteen seconds, writing a line only a
+# suite that was never KILLed writes, so the bare wait is seen by what it left rather than timed.
+rm -f "$RRR/.hook-tests-rerun" "$RRT/outlived"; rr_forge "$(date +%s)"; echo stubborn > "$RRT/mode"
+rr9_runs="$(rr_runs)"
+out9="$(rr_pull 1 PATH="$RR_BADPS")"
+check "(fixture) the pull ran the stubborn stand in suite and stopped it at its deadline" \
+  "[ \"\$(rr_runs)\" = $(( rr9_runs + 1 )) ] && line_has \"\$out9\" 'still running after 1800s'" "$out9"
+check "#3601 a suite whose state ps cannot read is KILLed after its grace, never waited on until it ends by itself" \
+  "[ ! -e '$RRT/outlived' ]" "$out9"
+check "#3601 and the stop says it could not read whether the suite had ended, naming the command" \
+  "line_has \"\$out9\" 'could not be read' 'ps -o stat= -p'" "$out9"
+echo pass > "$RRT/mode"
 
 # ---- where the writes landed (L322): the fixture, and nothing of this Mac's ----
 check "every record and claim this suite caused is inside the fixture clone" \

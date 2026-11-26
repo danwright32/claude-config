@@ -1990,7 +1990,8 @@ something else: a second watcher started beside a live one, and the claim was ta
 still held it. It was reproduced on 2026-11-24 with a stand in `ps` that exits 1 and with none on
 PATH; `ps` fails for real under the no network wrapper (#3482) and in any sandbox that refuses
 setuid programs. It is the fault #3547 found in `hooks/lib/sync-clone.sh`, and this follows the
-shape and words of that fix. One reader, `process_read`, gives three answers kept as a state the caller has to
+shape and words of that fix. One reader, `process_read` (in `hooks/lib/pid-lock.sh` since #3601,
+shared with `hooks/lib/sync-clone.sh`), gives three answers kept as a state the caller has to
 branch on, never a printed answer an error can hide behind: the command line, gone, or unread with
 what failed and the command that shows it. A `ps` that fails is followed by a second test of the
 pid, since `ps` exits non zero both when it cannot run and when the process ended a moment after it
@@ -2001,8 +2002,25 @@ never replaces that record. The claim is left alone and the suite is not run. A 
 loop sends nothing on that wake and looks again at the next, rather than stepping down: a watcher
 that stepped down on a failed read would be started again by launchd and refused at its start,
 every ten seconds. Status and retire say that it could not be read rather than "not running" or
-nothing. `claude-sync` and `lib/sync-clone.sh` each hold a copy of this reading: #3547's change to
-the library had not merged when this was written, so the two were not made one here.
+nothing. The reading has one home since #3601: `hooks/lib/pid-lock.sh`, which `claude-sync` and
+`lib/sync-clone.sh` both source.
+
+The same "could not tell" reached the locks (#3601). `take_pid_lock` and the sync lock's
+`lock_owner_alive` tested a holder with `kill -0` alone, so a live holder the shell could not signal
+read as dead and its lock was taken: pid 1 as a holder, and this account's own live holder under
+`sandbox-exec` with signals denied, both had their locks taken (reproduced 2026-11-26). Now only
+"gone" lets a lock go. A holder that could not be tested keeps its lock, the take ends at its own
+deadline, and the refusal says that whether that process is running could not be told. The cost is
+a holder that really has gone on a Mac where its pid now belongs to a process this shell may not
+signal: `lib/pid-lock.sh` has no age rule, so its lock waits for a person (each caller's refusal
+names the file), and the sync lock from another Mac is still broken by its one hour age rule.
+A pid nobody holds is still said to be gone even under that sandbox, so an ordinary crash is
+recovered as before. `stop_suite_tree` read the suite with `ps -o stat=` and took an empty answer
+for an ended suite, so a `ps` that could not run skipped the KILL and left a bare `wait`. It now
+reads the suite with `suite_state`, three answers again: the grace runs its whole bounded time, the
+KILL is sent (the pid is this run's own child, not yet waited on, so it cannot belong to anything
+else), and the reap waits only on a suite seen to have ended. Status says when the process table
+itself could not be read, rather than reporting nothing left running.
 
 ## A watcher older than the claude-sync on disk restarts itself (#420, #1569)
 
@@ -2339,7 +2357,8 @@ error to hide behind, and both hooks ask one question of it, `sc_watcher_possibl
 only when none is settled. A `ps` that fails is followed by a second test of the pid, because `ps`
 exits non zero both when it cannot run and when the process ended a moment after it was seen: gone
 is none, and still running with nothing learned about it is unread. Whether the pid is running has
-three answers too (`sc_pid_running`): `kill -0` exits 1 for a process the shell may not signal
+three answers too (`pid_running`, which with `process_read` lives in `hooks/lib/pid-lock.sh` and is
+the one reading claude-sync uses as well, #3601): `kill -0` exits 1 for a process the shell may not signal
 exactly as for one that is gone, which under a sandbox that refuses signals settled a live watcher
 as none, so gone is said only on the shell's own words that there is no such process, and every
 other failure leaves the question to `ps`. For an unread watcher the pass

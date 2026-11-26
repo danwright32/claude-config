@@ -12,7 +12,6 @@
 #   sc_watcher_read    is a watch daemon live, is none, or could that not be read (three answers)
 #   sc_watcher_possible could a watcher revert a write: yes unless it is settled that none is live
 #   sc_watcher_unread_sentence what every hook says of a watcher that could not be read
-#   sc_pid_running     is a pid running, is it gone, or could the shell not tell
 #   sc_is_this_clone   does that watcher run from the clone in question
 #   sc_hold_covers     is a hold in force that protects THIS session's writes: its own, or a terminal's
 #   sc_hold_others     the short names of the other sessions holding the watcher
@@ -43,6 +42,14 @@ SC_HOLD_READER=""
 # shellcheck source=hold-record.sh
 if . "$SC_LIB_DIR/hold-record.sh" 2>/dev/null && declare -F hold_record_rows >/dev/null 2>&1; then
   SC_HOLD_READER=1
+fi
+# The one reading of a pid, shared with claude-sync's locks and its own watcher rule
+# (claude-config#3601, L370). Missing, this file still loads, and every watcher with a pid file
+# reads as unread (sc_watcher_read below), which refuses rather than allows.
+SC_PID_READER=""
+# shellcheck source=pid-lock.sh
+if . "$SC_LIB_DIR/pid-lock.sh" 2>/dev/null && declare -F process_read >/dev/null 2>&1; then
+  SC_PID_READER=1
 fi
 
 # Is this a clone of the tool at all, and where is its root? Found by walking up for a directory
@@ -91,9 +98,10 @@ sc_clone_root_of(){ # sc_clone_root_of <dir> -> the clone root, or nothing
 # process ended a moment after it was seen running, so the pid is tested again afterwards: gone is
 # none, and anything else with nothing learned about it is unread. A ps that exits 0 and prints
 # nothing about a running process has not answered either. Whether the pid is running has three
-# answers of its own (sc_pid_running below), and only "gone" settles anything without ps.
+# answers of its own, and only "gone" settles anything without ps. Both readings are
+# lib/pid-lock.sh's process_read and pid_running, which claude-sync uses too (claude-config#3601).
 sc_watcher_read(){ # -> SC_WATCHER_STATE, SC_WATCHER_CMD, SC_WATCHER_WHY, SC_WATCHER_PROBE
-  local pid="" cmd="" rc=0 alive=0 seen=""
+  local pid=""
   SC_WATCHER_STATE=none; SC_WATCHER_CMD=""; SC_WATCHER_WHY=""; SC_WATCHER_PROBE=""
   [ -f "$SYNC_WATCH_PID_FILE" ] || return 1
   if [ ! -r "$SYNC_WATCH_PID_FILE" ]; then
@@ -107,45 +115,24 @@ sc_watcher_read(){ # -> SC_WATCHER_STATE, SC_WATCHER_CMD, SC_WATCHER_WHY, SC_WAT
   # Zero is no process's pid, and to kill it names this shell's own process group, which is
   # always there.
   case "$pid" in *[!0]*) ;; *) return 1 ;; esac
-  sc_pid_running "$pid" || alive=$?
-  [ "$alive" -ne 1 ] || return 1                    # gone
-  cmd="$(ps -o command= -p "$pid" 2>/dev/null)" || rc=$?
-  if [ "$rc" -eq 0 ] && [ -n "$cmd" ]; then
-    case "$cmd" in
-      *claude-sync*watch*) SC_WATCHER_STATE=live; SC_WATCHER_CMD="$cmd"; return 0 ;;
-    esac
-    return 1
+  if [ -z "$SC_PID_READER" ]; then
+    SC_WATCHER_STATE=unread
+    SC_WATCHER_WHY="the watcher's pid file names process $pid, and lib/pid-lock.sh, which reads a process, could not be loaded from $SC_LIB_DIR"
+    SC_WATCHER_PROBE="ls -l $SC_LIB_DIR/pid-lock.sh"
+    return 2
   fi
-  alive=0
-  sc_pid_running "$pid" || alive=$?
-  [ "$alive" -ne 1 ] || return 1                    # gone since the first look
+  process_read "$pid" || true
+  case "$PROC_STATE" in
+    gone) return 1 ;;
+    named)
+      case "$PROC_CMD" in
+        *claude-sync*watch*) SC_WATCHER_STATE=live; SC_WATCHER_CMD="$PROC_CMD"; return 0 ;;
+      esac
+      return 1 ;;
+  esac
   SC_WATCHER_STATE=unread
-  SC_WATCHER_PROBE="ps -o command= -p $pid"
-  # Said to be running only when the shell saw that it is (L11).
-  if [ "$alive" -eq 0 ]; then seen="which is running"
-  else seen="which the shell could not test, its kill -0 of that pid being refused"; fi
-  if [ "$rc" -eq 0 ]; then
-    SC_WATCHER_WHY="the watcher's pid file names process $pid, $seen, and $SC_WATCHER_PROBE printed nothing about it"
-  else
-    SC_WATCHER_WHY="the watcher's pid file names process $pid, $seen, and $SC_WATCHER_PROBE exited $rc without saying what it is"
-  fi
-  return 2
-}
-
-# Is this pid running? Three answers as well: 0 it is, 1 it is gone, 2 the shell could not tell.
-# kill -0 exits 1 both for a pid that is not there and for a process this shell may not signal,
-# another account's or any at all under a sandbox that refuses signals, and only its words tell
-# the two apart. A refusal was read as a dead pid, so under such a sandbox a live watcher was
-# settled as none (measured on 2026-11-24 with sandbox-exec and signals denied, where ps was
-# refused as well). So gone is said only on the shell's own words that there is no such process,
-# read in the C locale so they are the words bash writes whatever language the Mac is in, and
-# every other failure is "could not tell", which leaves the question to ps.
-sc_pid_running(){ # sc_pid_running <pid>
-  local err
-  kill -0 "$1" 2>/dev/null && return 0
-  # A subshell, so the locale is this one command's and nobody else's.
-  err="$( (LC_ALL=C; kill -0 "$1") 2>&1 )" && return 0
-  case "$err" in *"No such process"*) return 1 ;; esac
+  SC_WATCHER_PROBE="$PROC_PROBE"
+  SC_WATCHER_WHY="the watcher's pid file names $PROC_WHY"
   return 2
 }
 

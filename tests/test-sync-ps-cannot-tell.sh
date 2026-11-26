@@ -296,6 +296,91 @@ check "and does not say it is not running, which nothing measured" \
   "! line_has \"\$st_bad\" 'likely cause' 'installed but not running'" "$st_bad"
 end_process "$M_PID"
 
+# ---- 6. the sync lock: a run whose pid could not be tested keeps its lock (claude-config#3601) ----
+# kill -0 exits 1 for a process this shell may not signal exactly as for one that has gone, and
+# lock_owner_alive read that 1 alone, so the lock of a run it could not signal was broken and a
+# second run went in beside it. Pid 1 is running on every machine and belongs to another account.
+SL="$WR/.sync-lock"
+sync_lock_as(){ # sync_lock_as <pid> <host> -> a lock as a run on that host leaves it
+  rm -rf "$SL"; mkdir -p "$SL"
+  printf '%s\n' "$1" > "$SL/pid"; printf '%s\n' "$2" > "$SL/host"; printf 'a claude-sync send\n' > "$SL/command"
+}
+send_once(){ # send_once [env assignments...] -> what a send said; no wait for the lock
+  env CLAUDE_HOME="$WH" SYNC_REPO="$WR" SYNC_NO_GIT=1 SYNC_HOSTNAME=fixturehost SYNC_LOCK_WAIT=0 \
+    SYNC_POLL_INTERVAL=0.05 "$@" bash "$SCRIPT" send 2>&1 || true
+}
+if kill -0 1 2>/dev/null; then
+  echo "SUITE-PART-UNMEASURED a sync lock held by a process this shell may not signal: this account may signal pid 1"
+else
+  sync_lock_as 1 fixturehost
+  out_sl="$(send_once)"
+  check "#3601 a sync lock from this Mac whose run may not be signalled is not broken" \
+    "[ \"\$(cat '$SL/pid' 2>/dev/null)\" = 1 ]" "$out_sl"
+  check "#3601 and the refusal says whether that run is still running could not be told, and why" \
+    "line_has \"\$out_sl\" 'still holds' 'Whether process 1 is still running could not be told' 'kill -0 1 was refused' 'not the same as it having gone'" "$out_sl"
+  # From elsewhere the pid means nothing here, and the age rule is what recovers it, unchanged.
+  sync_lock_as 1 elsewherehost
+  out_se="$(send_once)"
+  check "#3601 a fresh lock from another Mac whose pid could not be tested is not broken either" \
+    "[ \"\$(cat '$SL/pid' 2>/dev/null)\" = 1 ]" "$out_se"
+  sync_lock_as 1 elsewherehost; touch -t 202001010000 "$SL/pid"
+  out_so="$(send_once SYNC_LOCK_MAX_AGE=60)"
+  check "#3601 (recovery) and one older than SYNC_LOCK_MAX_AGE is broken by the age rule, as before" \
+    "[ \"\$(cat '$SL/pid' 2>/dev/null)\" != 1 ] && line_has \"\$out_so\" 'broke a stale lock'" "$out_so"
+fi
+# The recovery the safe side keeps: a run that HAS gone is said to be gone, and its lock is broken.
+perl -e 'exit 0' & SL_DEAD=$!; wait "$SL_DEAD"
+sync_lock_as "$SL_DEAD" fixturehost
+out_sd="$(send_once)"
+check "#3601 (recovery) a sync lock from this Mac whose run has gone is still broken, and the send goes ahead" \
+  "[ \"\$(cat '$SL/pid' 2>/dev/null)\" != '$SL_DEAD' ] && ! line_has \"\$out_sd\" 'still holds'" "$out_sd"
+rm -rf "$SL"
+
+# ---- 7. status, when the process table cannot be read (claude-config#3601) ----
+# status reads the process table once per family of leftover processes, and the reader's failure was
+# discarded (`|| true`), so a ps that could not run gave an empty table and status said nothing
+# about leftover watchers or suites, which reads as a quiet Mac. Run with no fixture table, so the
+# stand in ps is what is asked, and it answers nothing about this Mac.
+st_pt="$(env -u SYNC_PS_FIXTURE PATH="$BADPS" CLAUDE_HOME="$WH" SYNC_REPO="$WR" SYNC_NO_GIT=1 bash "$SCRIPT" status 2>&1 || true)"
+check "#3601 status with a ps that cannot run says the process table could not be read, naming the command" \
+  "line_has \"\$st_pt\" 'process table could not be read' 'ps -eo pid=,ppid=,etime=,command=' 'exited 1' 'not the same as'" "$st_pt"
+st_pf="$(env SYNC_PS_FIXTURE="$WORK/no-such-table" CLAUDE_HOME="$WH" SYNC_REPO="$WR" SYNC_NO_GIT=1 bash "$SCRIPT" status 2>&1 || true)"
+check "#3601 and so does a fixture table that cannot be read, naming the file" \
+  "line_has \"\$st_pf\" 'process table could not be read' '$WORK/no-such-table'" "$st_pf"
+st_pk="$(env CLAUDE_HOME="$WH" SYNC_REPO="$WR" SYNC_NO_GIT=1 bash "$SCRIPT" status 2>&1 || true)"
+check "#3601 (control) a table that was read, and is empty, says nothing of the kind" \
+  "! line_has \"\$st_pk\" 'process table could not be read'" "$st_pk"
+
+# ---- 8. a restarting watcher that cannot confirm fswatch is its own says so (claude-config#3601) ----
+# watch_end_fswatch confirms with `ps -o ppid=` that fswatch is still this watcher's child before it
+# signals it, and sends nothing when that read fails. That is the safe side, and it said nothing, so
+# the watcher was logged as restarting while its fswatch stayed up until its next write. The stand
+# in ps fails only for that one question and passes every other to the real ps, so the case reaches
+# the restart exactly as #1569's own does (tests/test-claude-sync.sh).
+mkdir -p "$WORK/ppidps"
+printf '#!/bin/sh\ncase "$*" in *ppid=*) echo "ps: operation not permitted" >&2; exit 1 ;; esac\nexec /bin/ps "$@"\n' > "$WORK/ppidps/ps"
+chmod +x "$WORK/ppidps/ps"
+RS="$WORK/restart"; mkdir -p "$RS/home/hooks" "$RS/clone"; echo '{"hooks":{}}' > "$RS/home/settings.json"
+cp "$SCRIPT" "$RS/clone/claude-sync"; chmod +x "$RS/clone/claude-sync"
+# fswatch's stand in: records its pid, moves a newer copy of the tool into place as a pull does,
+# reports one change, and lingers as the real one does, bounded by its own sleep.
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'echo "$$" > "%s"\n' "$RS/fs.pid"
+  printf "cp '%s' '%s'; printf '\\\\n# a later version of the tool\\\\n' >> '%s'; mv '%s' '%s'\n" \
+    "$RS/clone/claude-sync" "$RS/next" "$RS/next" "$RS/next" "$RS/clone/claude-sync"
+  printf 'echo one\nexec sleep 8\n'
+} > "$RS/fswatch"; chmod +x "$RS/fswatch"
+out_rs="$(env PATH="$WORK/ppidps:$PATH" SYNC_FSWATCH="$RS/fswatch" SYNC_WATCH_SEND="printf 'x\n' >> '$RS/hits'" \
+  CLAUDE_HOME="$RS/home" SYNC_REPO="$RS/clone" SYNC_HOSTNAME=rs-mac SYNC_WATCH_PID_FILE="$RS/watch.pid" \
+  SYNC_HOLD_FILE="$RS/hold" bash "$RS/clone/claude-sync" watch 2>&1 </dev/null)"
+RS_FS="$(cat "$RS/fs.pid" 2>/dev/null)"; [ -n "$RS_FS" ] && LIVE_PIDS="$LIVE_PIDS $RS_FS"
+check "(fixture) the watcher took the newer copy and restarted onto it" \
+  "line_has \"\$out_rs\" 'claude-sync watch: restarting'" "$out_rs"
+check "#3601 a restarting watcher that could not confirm fswatch is its own says so, naming the command" \
+  "line_has \"\$out_rs\" 'could not confirm' 'fswatch' \"ps -o ppid= -p $RS_FS\" 'not signalled'" "$out_rs"
+[ -n "$RS_FS" ] && kill "$RS_FS" 2>/dev/null
+
 # ---- where the writes landed (L322): the fixture, and nothing of this Mac's ----
 check "the record of each watcher start this suite caused is inside the fixture clone" \
   "[ -s '$WR/.watch-starts' ] && [ ! -e '$HERE/../.watch-starts' ]"

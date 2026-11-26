@@ -124,6 +124,15 @@ else
     echo "claude-sync: lib/pid-lock.sh is missing from both $SYNC_SELF_PAYLOAD/hooks and $CLAUDE_HOME/hooks, so no lock can be taken." >&2
     return 2
   }
+  pid_lock_unread_sentence(){ return 0; }
+  # The one reading of a pid lives there too (claude-config#3601). Without it nothing is settled
+  # about any process, so every one is could not tell, which takes no lock and ends no wait.
+  pid_running(){ return 2; }
+  process_read(){
+    PROC_STATE=unread; PROC_CMD=""; PROC_PROBE="ls $PID_LOCK_LIB"
+    PROC_WHY="process ${1:-}, which could not be read at all because lib/pid-lock.sh, which holds the reading, is missing from both $SYNC_SELF_PAYLOAD/hooks and $CLAUDE_HOME/hooks"
+    return 2
+  }
 fi
 # The one test of a setting or a reading that must be a whole number above zero, 00 included as
 # zero (claude-config#1948), shared with the hooks. Resolved the same way as the five above. NOT a
@@ -790,7 +799,15 @@ have_git(){ [ "${SYNC_NO_GIT:-0}" != "1" ]; }
 # routinely push several sends inside a minute. Read-only commands (status, next-lesson,
 # check-lessons, help) are deliberately NOT locked, because status is what a refusal tells
 # you to run and a diagnosis that hangs on the condition it diagnoses is worse than none.
-lock_owner_alive(){ [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
+# Is the run recorded in a lock still there? Three answers, lib/pid-lock.sh's (claude-config#3601):
+# 0 it is running, 1 it has gone (or no pid is recorded), 2 the shell could not tell, its kill -0
+# refused rather than answered. Only 1 lets a lock go: before #3601 a refusal read as gone, so under
+# a sandbox that refuses signals a live run's lock was broken and a second run went in beside it.
+lock_owner_alive(){ [ -n "${1:-}" ] || return 1; pid_running "$1"; }
+# What a refusal says of a run whose pid could not be tested, appended to the refusal's own words.
+lock_owner_unread_words(){   # $1 = the pid
+  printf ' Whether process %s is still running could not be told: kill -0 %s was refused rather than answered, so the lock was left with it. That is not the same as it having gone; a lock from this Mac is never broken on a test that could not be made, and one from elsewhere is broken once it is older than %ss (SYNC_LOCK_MAX_AGE).' "$1" "$1" "${SYNC_LOCK_MAX_AGE:-3600}"
+}
 
 # The identity every git command that can WRITE a commit runs under, including the rebase inside
 # `pull --rebase`, which is not obvious: the tool already passed this to its own two commits so it
@@ -962,7 +979,7 @@ acquire_lock(){
   # refuses at that named deadline in its own words (L110). And it takes the place at the front
   # while it waits: a mkdir lock has no queue, so a run that only retried would lose the free lock to
   # every watcher tick that happened to start in between, for as long as edits kept coming (L1012).
-  local broke=0 max="${SYNC_LOCK_WAIT:-90}" pid lock_host="" lock_t0 ahead
+  local broke=0 max="${SYNC_LOCK_WAIT:-90}" pid lock_host="" lock_t0 ahead owner=0 unread_pid=""
   local patient="${LOCK_PATIENT:-0}" said_wait=0 last_report report_every="${SYNC_LOCK_WAIT_REPORT:-30}"
   LOCK_REFUSAL=""
   if [ "$patient" = 1 ]; then
@@ -988,11 +1005,17 @@ acquire_lock(){
     if [ -z "$LOCK_REFUSAL" ] && [ "$patient" = 1 ]; then
       LOCK_REFUSAL="waited $(wait_in_words "$_lg_waited") for $(lock_holder_words "$(cat "$SYNC_LOCK/pid" 2>/dev/null || true)") to finish, and it still holds $SYNC_LOCK, so this ${cmd:-run} stopped at its deadline (SYNC_PULL_LOCK_WAIT=${max}s) without changing anything. Run 'claude-sync status' to see where things stand, and run it again once that has finished."
     fi
+    # A holder whose pid could not be tested is said to be that, never said to be running (L11).
+    if [ -n "${unread_pid:-}" ]; then
+      [ -n "$LOCK_REFUSAL" ] || LOCK_REFUSAL="$(lock_busy_words)"
+      LOCK_REFUSAL="$LOCK_REFUSAL$(lock_owner_unread_words "$unread_pid")"
+    fi
     # 0, and the caller returns 1: it is called as the last part of an && list, where a failing
     # status inside the braces would end the whole script under set -e before with_lock could speak.
     return 0
   }
   while :; do
+    unread_pid=""
     # A place at the front held by ANOTHER live waiter is honoured even when the lock is free: the
     # free lock is theirs, and taking it is exactly the queue jump the place exists to stop.
     if ahead="$(lock_place_ahead)"; then
@@ -1039,7 +1062,13 @@ acquire_lock(){
     # a successful sync; a silent collision would never surface, so this is the safe
     # direction. A lock with no machine recorded predates this and falls back to age. (#29)
     lock_host="$(cat "$SYNC_LOCK/host" 2>/dev/null || true)"
-    if [ -n "$lock_host" ] && [ "$lock_host" = "$(sync_hostname)" ] && lock_owner_alive "$pid"; then
+    # Read once, three answers (claude-config#3601). A run whose pid could not be tested is waited
+    # on exactly as a live one is: from this Mac its pid is authoritative, and a test that could not
+    # be made says nothing about it, so its lock is never broken here and the wait ends at its
+    # deadline in words that say so. From elsewhere the age rule below still breaks it.
+    owner=0; lock_owner_alive "$pid" || owner=$?
+    unread_pid=""; [ "$owner" -ne 2 ] || unread_pid="$pid"
+    if [ -n "$lock_host" ] && [ "$lock_host" = "$(sync_hostname)" ] && [ "$owner" -ne 1 ]; then
       lock_wait_expired && { lock_give_up; return 1; }
       sleep "$SYNC_POLL_INTERVAL"
       continue
@@ -1050,7 +1079,7 @@ acquire_lock(){
       broke=$((broke+1))
       [ "$broke" -le 5 ] && continue
     fi
-    if ! lock_owner_alive "$pid"; then
+    if [ "$owner" -eq 1 ]; then
       # A crashed run must not wedge syncing for good, so a lock whose owner is gone has
       # to be breakable. This reading deliberately does NOT decide who takes over: two
       # runs can reach here together and both judge the same dead pid. The mkdir at the
@@ -1137,7 +1166,7 @@ drop_lock_place(){
 # honoured, or one pull killed mid wait would stop every later run for good. Age covers a pid the
 # system has since given to something unrelated, which would otherwise look alive for ever.
 lock_place_ahead(){
-  local f="$SYNC_LOCK.next" p m now limit
+  local f="$SYNC_LOCK.next" p m now limit owner
   [ -f "$f" ] || return 1
   p="$(cat "$f" 2>/dev/null || true)"
   [ "$p" = "$$" ] && return 1
@@ -1145,7 +1174,10 @@ lock_place_ahead(){
   case "$limit" in ''|*[!0-9]*) limit="$PULL_LOCK_WAIT_DEFAULT" ;; esac
   m="$(file_mtime "$f")"; now="$(date +%s)"
   case "$m" in ''|*[!0-9]*) m="$now" ;; esac
-  if [ -n "$p" ] && lock_owner_alive "$p" && [ "$(( now - m ))" -le "$(( limit + 60 ))" ]; then
+  # A waiter whose pid could not be tested keeps its place as a live one does (#3601): the age is
+  # what ends a place that is never given up.
+  owner=0; [ -n "$p" ] && { lock_owner_alive "$p" || owner=$?; }
+  if [ -n "$p" ] && [ "$owner" -ne 1 ] && [ "$(( now - m ))" -le "$(( limit + 60 ))" ]; then
     printf '%s' "$p"
     return 0
   fi
@@ -1297,6 +1329,11 @@ retired_since_words(){   # " on <date>" from the record, or nothing when it hold
   return 0
 }
 
+# The refusal of a run that met a held lock and was not one waiting its turn, in one wording for
+# with_lock and for acquire_lock, which adds to it when the holder could not be read (#3601).
+lock_busy_words(){
+  printf "another claude-sync run is already running and still holds %s, so this one stopped instead of working on the same files at the same time. Nothing was changed. Run 'claude-sync status' to see where things stand." "$SYNC_LOCK"
+}
 with_lock(){   # $@ = the command to run while holding the lock
   local rc=0
   # Re-entrant within one run: do_send falls through to do_sync, and a second acquire
@@ -1305,7 +1342,7 @@ with_lock(){   # $@ = the command to run while holding the lock
   refuse_when_retired
   # Before the lock, so a run that cannot read the skills list stops holding nothing (#415).
   require_unmanaged_skill_list
-  acquire_lock || die "${LOCK_REFUSAL:-another claude-sync run is already running and still holds $SYNC_LOCK, so this one stopped instead of working on the same files at the same time. Nothing was changed. Run 'claude-sync status' to see where things stand.}"
+  acquire_lock || die "${LOCK_REFUSAL:-$(lock_busy_words)}"
   LOCK_HELD=1
   # Here rather than in each command, and here rather than in a read-only one: a clone that has
   # taken the lock is a clone that can leave a record behind, and status changes nothing by design.
@@ -10842,8 +10879,16 @@ suite_clock_stop_run(){   # $1 = pid of the suite already started, or nothing
 # even after KILL, rather than waiting on it without end. With "noclock", or when a read of the suite
 # clock fails during the grace, there is no grace: the suite is stopped outright, and a failed read
 # then ends the run once the suite is gone (claude-config#2778), as every other failed read does.
+#
+# Whether the suite has ended has three answers (claude-config#3601, suite_state below). It was read
+# with `ps -o stat=` alone and an empty answer taken for an ended suite, so a ps that could not run
+# ended the grace at its first look, skipped the KILL, and left the bare wait this exists to remove.
+# Now a suite that could not be read is never taken as ended: the grace runs its whole bounded time,
+# the KILL is sent, and the reap waits only on a suite seen to have ended. Signalling on "could not
+# tell" is safe here and only here, because the pid is this run's own child and has not been waited
+# on, so the number cannot yet belong to any other process.
 stop_suite_tree(){   # $1 = pid of the suite  [$2 = noclock: the clock has already failed]
-  local pid="$1" t0="" now n stat rc=1 clock_failed=0
+  local pid="$1" t0="" now n st=0 rc=1 clock_failed=0
   case "$pid" in ''|*[!0-9]*) return 1 ;; esac
   if [ -f "$KILL_TREE_LIB" ]; then
     kill -STOP "$pid" 2>/dev/null
@@ -10854,20 +10899,20 @@ stop_suite_tree(){   # $1 = pid of the suite  [$2 = noclock: the clock has alrea
     # its child first, and a clock moved on by that child would then never seem to move (#1842).
     if [ "${2:-}" != "noclock" ]; then t0="$(suite_clock_now)" || clock_failed=1; fi
     kill -CONT "$pid" 2>/dev/null
-    while [ -n "$t0" ] && kill -0 "$pid" 2>/dev/null; do
-      stat="$(ps -o stat= -p "$pid" 2>/dev/null)"
-      case "$stat" in Z*|'') break ;; esac
+    while [ -n "$t0" ]; do
+      st=0; suite_state "$pid" || st=$?
+      [ "$st" -ne 1 ] || break                        # ended
       now="$(suite_clock_now)" || { clock_failed=1; break; }
       [ "$(( now - t0 ))" -lt "$SYNC_SUITE_STOP_GRACE" ] || break
       sleep "$SYNC_POLL_INTERVAL"
     done
-    stat="$(ps -o stat= -p "$pid" 2>/dev/null)"
-    case "$stat" in
-      Z*|'') ;;
-      *) kill -STOP "$pid" 2>/dev/null
-         bash "$KILL_TREE_LIB" "$pid" 2>/dev/null
-         kill -KILL "$pid" 2>/dev/null ;;
-    esac
+    st=0; suite_state "$pid" || st=$?
+    if [ "$st" -ne 1 ]; then
+      [ "$st" -eq 0 ] || echo "claude-sync: whether suite $pid had ended could not be read ($SUITE_STATE_WHY), so it was KILLed at the end of its grace rather than taken as ended." >&2
+      kill -STOP "$pid" 2>/dev/null
+      bash "$KILL_TREE_LIB" "$pid" 2>/dev/null
+      kill -KILL "$pid" 2>/dev/null
+    fi
   else
     # Said rather than passed over: without the tree kill the suite can only be killed alone, and
     # what it started may be left running (L11).
@@ -10878,13 +10923,40 @@ stop_suite_tree(){   # $1 = pid of the suite  [$2 = noclock: the clock has alrea
   # and a bare wait on one it is holding is the unbounded wait this exists to remove.
   n=0
   while [ "$n" -lt 50 ]; do
-    stat="$(ps -o stat= -p "$pid" 2>/dev/null)"
-    case "$stat" in Z*|'') wait "$pid" 2>/dev/null || true; rc=0; break ;; esac
+    st=0; suite_state "$pid" || st=$?
+    if [ "$st" -eq 1 ]; then wait "$pid" 2>/dev/null || true; rc=0; break; fi
     sleep "$SYNC_POLL_INTERVAL"; n=$(( n + 1 ))
   done
-  [ "$rc" -eq 0 ] || echo "claude-sync: suite $pid was killed but had still not ended, so this run went on without waiting for it." >&2
+  if [ "$rc" -ne 0 ]; then
+    if [ "$st" -eq 2 ]; then
+      echo "claude-sync: suite $pid was killed, and whether it has ended could not be read ($SUITE_STATE_WHY), so this run went on without waiting for it. That is not the same as it having ended." >&2
+    else
+      echo "claude-sync: suite $pid was killed but had still not ended, so this run went on without waiting for it." >&2
+    fi
+  fi
   [ "$clock_failed" -eq 0 ] || exit 1
   return "$rc"
+}
+
+# Has a suite this run started ended? Three answers: 0 it is running, 1 it has ended (a zombie, or
+# gone), 2 that could not be read, with SUITE_STATE_WHY saying what failed (claude-config#3601). ps
+# is asked first, because only ps tells a zombie from a running suite. When ps does not answer, the
+# shell's own word that the pid has gone settles it, since this run has not waited on it and so
+# nothing else can hold the number; anything else is could not tell, never ended.
+suite_state(){   # $1 = the suite's pid
+  local stat rc=0 alive=0
+  SUITE_STATE_WHY=""
+  stat="$(ps -o stat= -p "$1" 2>/dev/null)" || rc=$?
+  case "$stat" in
+    Z*) return 1 ;;
+    ?*) [ "$rc" -ne 0 ] || return 0 ;;
+  esac
+  pid_running "$1" || alive=$?
+  [ "$alive" -ne 1 ] || return 1
+  if [ "$rc" -eq 0 ]; then SUITE_STATE_WHY="ps -o stat= -p $1 printed nothing about it"
+  else SUITE_STATE_WHY="ps -o stat= -p $1 exited $rc"; fi
+  [ "$alive" -eq 0 ] || SUITE_STATE_WHY="$SUITE_STATE_WHY, and kill -0 $1 was refused rather than answered"
+  return 2
 }
 
 # Is the last verdict a run the full suite slot kept from running (claude-config#2758)? Then the
@@ -10982,66 +11054,9 @@ HOOK_RERUN_CLAIM="$SYNC_REPO/.hook-tests-rerun"
 # 2026-11-24 with a stand in ps that exits 1 and with none on PATH; ps fails for real under the no
 # network wrapper (#3482) and in any sandbox that refuses setuid programs. It is the fault #3547
 # found in lib/sync-clone.sh, and this follows the shape and words of that fix so the two read
-# alike. The reading is kept as a STATE the caller has to branch on, with no printed answer for an
-# error to hide behind:
-#
-#   PROC_STATE  named   the process is running, and PROC_CMD is its command line
-#               gone    it is settled that there is no such process
-#               unread  it is running, or the shell could not test whether it is, and what it is
-#                       could not be read
-#   PROC_WHY    when unread, what failed, as a clause a sentence can carry
-#   PROC_PROBE  when unread, the command a person can run to see the failure for themselves
-#
-# Returns 0, 1 and 2 in that order. Call it in the caller's own shell, never in a command
-# substitution, whose subshell would keep the state to itself.
-#
-# A ps that fails is asked about twice. It exits non zero both when it could not run and when the
-# process ended a moment after it was seen running, so the pid is tested again afterwards: gone is
-# gone, and anything else with nothing learned about it is unread. A ps that exits 0 and prints
-# nothing about a running process has not answered either. Whether a ps is on PATH at all is asked
-# of the shell, so a missing one is said to be missing rather than inferred from an exit code (L11).
-process_read(){   # $1 = a pid, a whole number above zero -> PROC_STATE, PROC_CMD, PROC_WHY, PROC_PROBE
-  local pid="$1" cmd="" rc=0 alive=0 seen=""
-  PROC_STATE=gone; PROC_CMD=""; PROC_WHY=""; PROC_PROBE=""
-  pid_running "$pid" || alive=$?
-  [ "$alive" -ne 1 ] || return 1                    # gone
-  cmd="$(ps -o command= -p "$pid" 2>/dev/null)" || rc=$?
-  if [ "$rc" -eq 0 ] && [ -n "$cmd" ]; then
-    PROC_STATE=named; PROC_CMD="$cmd"
-    return 0
-  fi
-  alive=0
-  pid_running "$pid" || alive=$?
-  [ "$alive" -ne 1 ] || return 1                    # gone since the first look
-  PROC_STATE=unread
-  PROC_PROBE="ps -o command= -p $pid"
-  # Said to be running only when the shell saw that it is (L11).
-  if [ "$alive" -eq 0 ]; then seen="which is running"
-  else seen="which the shell could not test, its kill -0 of that pid being refused"; fi
-  if ! command -v ps >/dev/null 2>&1; then
-    PROC_WHY="process $pid, $seen, and no ps is on this run's PATH to say what it is ($PROC_PROBE exited $rc)"
-  elif [ "$rc" -eq 0 ]; then
-    PROC_WHY="process $pid, $seen, and $PROC_PROBE printed nothing about it"
-  else
-    PROC_WHY="process $pid, $seen, and $PROC_PROBE exited $rc without saying what it is"
-  fi
-  return 2
-}
-
-# Is this pid running? Three answers as well: 0 it is, 1 it is gone, 2 the shell could not tell.
-# kill -0 exits 1 both for a pid that is not there and for a process this shell may not signal,
-# another account's or any at all under a sandbox that refuses signals, and only its words tell the
-# two apart. So gone is said only on the shell's own words that there is no such process, read in
-# the C locale so they are the words bash writes whatever language the Mac is in, and every other
-# failure is "could not tell", which leaves the question to ps.
-pid_running(){   # $1 = a pid
-  local err
-  kill -0 "$1" 2>/dev/null && return 0
-  # A subshell, so the locale is this one command's and nobody else's.
-  err="$( (LC_ALL=C; kill -0 "$1") 2>&1 )" && return 0
-  case "$err" in *"No such process"*) return 1 ;; esac
-  return 2
-}
+# alike. The reading (process_read, and pid_running under it) is lib/pid-lock.sh's, sourced above,
+# which lib/sync-clone.sh takes as well, so the rule has one home (claude-config#3601, L370). Its
+# answers are PROC_STATE named, gone or unread, with PROC_CMD, PROC_WHY and PROC_PROBE.
 
 # Who holds the rerun's claim. Three answers, kept as a state for the same reason (#3584):
 #
@@ -11101,7 +11116,10 @@ hook_rerun_claim(){
     p="$(cat "$HOOK_RERUN_CLAIM" 2>/dev/null || true)"
     case "$p" in
       ''|*[!0-9]*) : ;;
-      *) if kill -0 "$p" 2>/dev/null && mkdir "$HOOK_RERUN_CLAIM.break" 2>/dev/null; then
+      # Settled as none and not gone: a running process that is something else, which lib/pid-lock.sh
+      # would leave alone when the shell may not signal it, so the takeover is made here, still
+      # under the lib's own break lock (#3601). A pid that has gone is the lib's to take over.
+      *) if ! { pid_running "$p"; [ "$?" -eq 1 ]; } && mkdir "$HOOK_RERUN_CLAIM.break" 2>/dev/null; then
            if [ "$(cat "$HOOK_RERUN_CLAIM" 2>/dev/null || true)" = "$p" ]; then
              hook_rerun_holder || true
              [ "$HOOK_RERUN_HOLDER_STATE" != none ] || rm -f "$HOOK_RERUN_CLAIM"
@@ -16494,6 +16512,19 @@ report_leftovers_job(){   # $1 = the agents folder
 }
 
 report_stray_processes(){
+  local rc=0 probe
+  # A table that could not be read is said to be that, once, and nothing is judged from it
+  # (claude-config#3601). Each family below reads it through sync_process_list, whose `|| true`
+  # turned a ps that could not run into an empty table, and an empty table reads as a quiet Mac.
+  if declare -F suite_pile_table >/dev/null; then
+    suite_pile_table >/dev/null 2>&1 || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      if [ -n "${SYNC_PS_FIXTURE:-}" ]; then probe="cat $SYNC_PS_FIXTURE"; else probe="ps -eo pid=,ppid=,etime=,command="; fi
+      echo "--- processes left running ---"
+      echo "  Could not be checked: the process table could not be read ($probe exited $rc), so nothing here says whether watcher or test processes have been left running. That is not the same as none being left."
+      return 0
+    fi
+  fi
   # One watcher is one ROOT. At rest that root has one child, the subshell it forks around fswatch
   # (pid 13658 with 13702, measured on this Mac 2026-08-17), and the first version of this rule,
   # which allowed no nesting at all, reported every healthy machine.
@@ -17071,10 +17102,12 @@ watch_idle_record(){   # $1 = now  $2 = verdict  $3 = main's head or -  $4 = the
 # tick is a subshell, and $$ is the watcher's), and the next tick takes that as its own, so it is not
 # a reason to wait.
 watch_idle_lock_holder(){
-  local pid
+  local pid owner
   if [ -d "$SYNC_LOCK" ]; then
     pid="$(cat "$SYNC_LOCK/pid" 2>/dev/null || true)"
-    if [ -n "$pid" ] && [ "$pid" != "$$" ] && lock_owner_alive "$pid"; then printf '%s' "$pid"; return 0; fi
+    # A holder whose pid could not be tested is waited on as a live one is (#3601).
+    owner=0; [ -n "$pid" ] && { lock_owner_alive "$pid" || owner=$?; }
+    if [ -n "$pid" ] && [ "$pid" != "$$" ] && [ "$owner" -ne 1 ]; then printf '%s' "$pid"; return 0; fi
   fi
   lock_place_ahead && return 0
   return 1
@@ -17178,12 +17211,23 @@ watch_idle_check(){
 # Ends the fswatch a restarting watcher started, by the pid it traced, and only after confirming that
 # pid is still a child of this watcher: an fswatch that already exited has had its number freed, and
 # a signal sent to the number alone could reach whatever was given it next (L1011).
+#
+# A parent that could not be read is not signalled, which is the safe side, and is said rather than
+# passed over (claude-config#3601): until then the log said only that the watcher was restarting,
+# while its fswatch stayed up until its next write. A pid the shell says has gone needs nothing.
 watch_end_fswatch(){   # $1 = fswatch's pid, as its own first line said
-  local p="${1:-}" parent
+  local p="${1:-}" parent rc=0 alive=0
   case "$p" in ''|*[!0-9]*) return 0 ;; esac
-  parent="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ' || true)"
-  [ "$parent" = "$$" ] || return 0
-  kill "$p" 2>/dev/null || true
+  parent="$(ps -o ppid= -p "$p" 2>/dev/null)" || rc=$?
+  parent="${parent//[[:space:]]/}"
+  if [ "$rc" -eq 0 ] && [ -n "$parent" ]; then
+    [ "$parent" = "$$" ] || return 0
+    kill "$p" 2>/dev/null || true
+    return 0
+  fi
+  pid_running "$p" || alive=$?
+  [ "$alive" -ne 1 ] || return 0
+  echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: could not confirm that fswatch (process $p) is still this watcher's own, because ps -o ppid= -p $p exited $rc without saying, so it was not signalled. It ends at its next write, and until then it is still running though this watcher has exited."
   return 0
 }
 
