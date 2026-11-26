@@ -28,11 +28,15 @@
 # once on a busy Mac, each holding the lock for a second or two, left the last ones refused at ten
 # seconds with a lock that had never once been held for ten, saying it had (L11). A lock passing
 # from holder to holder is a queue that is moving; a holder that keeps it is what the deadline is for.
+# A holder is told apart by its pid, so one process that lets the lock go and takes it again in
+# between two reads counts as one holder: the wait then gives up as early as it always did, never
+# later.
 #
-#   take_pid_lock <lock file> <seconds to wait>
+#   take_pid_lock <lock file> <seconds one holder may keep it>
 #     Returns 0 once held, 1 at the deadline, and 2 when the pid file it links from cannot be
 #     written at all, so each caller gives its refusal in its own words. Released by removing the
-#     lock file.
+#     lock file. A test clock that cannot be read (below) also returns 1, after a line of its own
+#     on stderr naming the clock, which only a test ever sees.
 take_pid_lock(){   # $1 = lock file  $2 = seconds one holder may keep it before this gives up
   local lock="$1" max="$2" t0 now holder seen="" mine="$1.$$"
   { printf '%s\n' "$$" > "$mine"; } 2>/dev/null || { rm -f "$mine" 2>/dev/null || true; return 2; }
