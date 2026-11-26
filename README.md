@@ -9495,7 +9495,12 @@ after `;`, `&&` or a new line: `tail` or `head` with at most a line count, `cat`
 `wc` with at most one of `-l -w -c -m`, naming the index by its absolute path or a bare `~/`
 (rules.ts `readBack`); any other or further command, a read with a redirect, pipe, substitution,
 glob, variable, here doc, `..` or another file, a reader led by anything, `||` or `&`, and a read
-before the append are still asked about. Another mod asks
+before the append are still asked about. What Claude is told with the save follows the index as it
+is then (#3506): one that already links the file is said to, with a change to that line asked about;
+one that does not is offered the line, with its form given with a colon after the link,
+`- [Title](<the file>): one line hook` (#3654), because Claude Code's own form for an index line has
+a dash there and the style check refuses it. Only the words follow the index: what is let through
+does not. Another mod asks
 `$.askBeforeSaving.isApproved({ tool, input })` whether a call
 carries a live, unspent approval for exactly what it writes, matched as a call sent again is (#1483:
 no build asks it before letting that one lessons Edit through); it only looks, and the approval is
@@ -9510,7 +9515,7 @@ writes is said whole, with why its new lines could not be told.
 </td><td>
 
 #618, #705, #707, #726, #743, #738, #867, #1241, #1483, #1592, #1794, #1765, #1814, #1883, #2216,
-#3245, #3295
+#3245, #3295, #3506, #3654
 
 </td></tr>
 <tr><td>
