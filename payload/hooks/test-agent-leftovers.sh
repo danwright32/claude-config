@@ -408,6 +408,51 @@ said "awake, the third hand back says to Dan what the agent left (the control)" 
 gate sleepy SubagentStop z4
 said "awake, an agent's stop says what it left (the control)" "$OUT" 'pid 7822'
 
+echo "a notice holding a line break, a tab, a double quote or a backslash reaches Dan whole, as valid JSON"
+# The gate's own say(), run as installed, beside a stand in reader that answers with that notice:
+# a systemMessage built by hand breaks on each of these (claude-config#1906). Every other library is
+# the real one, so the sleep record and the spool are judged as they are above.
+SAY_DIR="$WORK/say-hooks"
+mkdir -p "$SAY_DIR/lib"
+cp "$GATE" "$SAY_DIR/agent-leftovers-gate.sh"
+for f in "$DIR"/lib/*; do [ "${f##*/}" = agent-leftovers.py ] || ln -s "$f" "$SAY_DIR/lib/${f##*/}"; done
+HARD="$(printf 'LEFTOVER PROCESS CHECK: agent q1 left\tpid 7900: sh -c "echo \\\\ done"\nsecond line')"
+printf 'import sys\nsys.stdin.read()\nsys.stdout.write("notice\\x1f" + %s + "\\x1f" + %s)\n' \
+  "$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$HARD")" \
+  "$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$HARD")" > "$SAY_DIR/lib/agent-leftovers.py"
+saygate() { # saygate [<sleep record>]: the copied gate on a stand in payload; sets OUT, ERR, RC
+  OUT="$(printf '{"session_id":"sess-say","hook_event_name":"SubagentStop","agent_id":"q1","cwd":"%s","transcript_path":"%s/parent.jsonl"}' "$WORK" "$WORK" \
+    | env HOME="$WORK/home" CLAUDE_ISSUE_SPOOL_DIR="$WORK/say-spool" CLAUDE_SLEEP_RECORD="${1:-$WORK/no-sleep-record.json}" \
+      bash "$SAY_DIR/agent-leftovers-gate.sh" 2>"$WORK/err")"; RC=$?
+  ERR="$(cat "$WORK/err")"
+}
+saygate
+[ "$RC" -eq 0 ] && check "awake, the stop with that notice goes ahead" ok || check "awake, the stop with that notice goes ahead" "rc=$RC err=$ERR"
+got="$(HARD="$HARD" python3 -c '
+import json, os, sys
+raw = sys.stdin.read()
+try:
+    d = json.loads(raw)
+except ValueError as e:
+    print("not valid JSON (%s): %r" % (e, raw[:300])); sys.exit()
+if not isinstance(d, dict) or d.get("systemMessage") != os.environ["HARD"]:
+    print("the systemMessage was not the notice whole: %r" % (d,))
+else:
+    print("ok")' <<< "$OUT")"
+check "awake, it is one valid JSON object whose systemMessage is the notice, line break, tab, quote and backslash intact" "$got"
+saygate "$ASLEEP"
+silent "asleep, that notice shows Dan nothing" "$OUT$ERR"
+got="$(HARD="$HARD" python3 -c '
+import json, os, sys
+texts = []
+for line in sys.stdin:
+    try:
+        texts += json.loads(line).get("findings") or []
+    except (ValueError, AttributeError):
+        pass
+print("ok" if os.environ["HARD"] in texts else "no spooled record holds the notice whole: %r" % texts[:6])' < <(cat "$WORK/say-spool"/*.jsonl 2>/dev/null))"
+check "and it is spooled whole for the orchestrating session's review" "$got"
+
 echo "registration"
 . "$DIR/lib/settings-file.sh"
 SETTINGS="$(hook_settings_file "$DIR/..")"

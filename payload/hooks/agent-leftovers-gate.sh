@@ -64,7 +64,11 @@ payload_match() { [[ $1 =~ $2 ]] && return 0; local LC_ALL=C; [[ $1 =~ $2 ]]; }
 cwd=""; parent=""
 if payload_match "$payload" '"cwd"[[:space:]]*:[[:space:]]*"([^"\]*)"'; then cwd="${BASH_REMATCH[1]}"; fi
 if payload_match "$payload" '"transcript_path"[[:space:]]*:[[:space:]]*"([^"\]*)"'; then parent="${BASH_REMATCH[1]}"; fi
-say() {   # say <notice> [<what to spool>]: shown as a systemMessage awake; asleep, spooled instead
+# say <notice> [<what to spool>]: awake, <notice> is shown through hook_allow_notice, which builds
+# the JSON (so a line break, tab or quote in it cannot break the object), and <what to spool> is
+# also spooled when given. Asleep, <notice> is spooled instead and nothing is shown, unless the spool
+# fails, when it is shown with a line saying so. Either way the hook then exits 0.
+say() {
   local text="$1" keep="${2-}" asleep=0
   # Asked only here, when there is something to say, so the common silent stop costs nothing more.
   . "$HOOK_DIR/lib/sleep.sh" 2>/dev/null && sleep_active && asleep=1
