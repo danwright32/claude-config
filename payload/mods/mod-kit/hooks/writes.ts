@@ -60,11 +60,11 @@ const isPipe = (word: string) => /^[<>]\(/.test(word)
 // A variable the command set before a write is read as its value, as the shell reads it, so the
 // write names its file (#743: `F=<memory folder>/MEMORY.md; printf ... >> "$F"` was given as $F,
 // with no path, and ask before saving let it through). The word is still given as written. Only
-// from a setting that is sure to have run (#3468): one in the run of settings its line opens with
-// (Command.certain, the command reader's one reading of that, openingRun). Any other may have been
-// skipped or have run in another shell: behind an `&&` or `||`, in a branch, a loop, a function, a
-// group or a subshell, after any command, made by export or declare, or in a script a shell is
-// given. It leaves a variable the reader holds no value for not known, and one it holds a value for
+// from a setting that is sure to have run (#3468): a statement of the line itself, first in it or
+// right after a `;` or a new line (Command.certain, the command reader's one reading of that,
+// sureSettings). Any other may have been skipped or have run in another shell: behind an `&&` or
+// `||`, in a branch, a loop, a function, a group or a subshell, made by export or declare, or in a
+// script a shell is given. It leaves a variable the reader holds no value for not known, and one it holds a value for
 // with either. And only a
 // value the reader can be sure of: one holding a command's output or anything else it cannot name;
 // one a loop other than a for over plain words (below), read, mapfile, getopts or printf -v sets,
@@ -1331,11 +1331,13 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, sessionHo
     if (begun) out.push(word)
     return out
   }
-  const unknown = (name: string) => {
-    each.delete(name)
-    vars.set(name, null)
-    setBy.set(name, null)
-    if (name === 'HOME') home = ''
+  // The parameter is a variable's name, and is called so: tests/test-read-only-programs.sh reads
+  // every `name === '...'` in this file as a program a command is compared against.
+  const unknown = (variable: string) => {
+    each.delete(variable)
+    vars.set(variable, null)
+    setBy.set(variable, null)
+    if (variable === 'HOME') home = ''
   }
   // A word read once for each word of every loop variable in it (#1953), or as it is past MAX_EACH.
   // A value holding a space is read whole, as a quoted use hands it on, and as each piece a shell
@@ -1363,8 +1365,8 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, sessionHo
     }
     return out
   }
-  // `sure` says the setting is sure to have run (#3468, Command.certain: it stands in the run of
-  // settings its line opens with). Any other may have been skipped (behind an `&&` after a command
+  // `sure` says the setting is sure to have run (#3468, Command.certain: a statement of the line
+  // itself, first in it or right after a `;` or a new line). Any other may have been skipped (behind an `&&` after a command
   // that fails, inside an `if` whose test is false) or have run in another shell, and the shell
   // then leaves the variable as it was. Where the reader holds a value for it already, that is
   // what the lines below always made of a second setting: the one value if both are the same, not

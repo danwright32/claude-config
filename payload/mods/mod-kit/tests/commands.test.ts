@@ -2572,8 +2572,9 @@ describe('four shapes the reader misread (#3442)', () => {
 })
 
 // #3468: a command that only sets variables says whether it is sure to have run (`certain`), by the
-// one reading of that the reader has: the run of settings its line opens with (openingRun), which
-// the following of a variable alone (fixedWords, #3398) is built on too.
+// one reading of that the reader has (sureSettings): a statement of the line itself, after a `;` or
+// a new line, inside nothing that may not run. The run of settings a line opens with (openingRun),
+// which the following of a variable alone (fixedWords, #3398) is built on, is the start of it.
 describe('a setting that is sure to have run (#3468)', () => {
   const sure = (cmd: string) => pipeline(cmd, { assignments: true }).filter(c => c.words.every(w => /^[A-Za-z_][A-Za-z0-9_]*=/.test(w))).map(c => [c.words.join(' '), c.certain === true])
   test('the run of settings a line opens with, each ended by a ; or a new line', () => {
@@ -2585,18 +2586,51 @@ describe('a setting that is sure to have run (#3468)', () => {
     expect(sure('F=/a')).toEqual([['F=/a', true]])
     expect(sure('F=/a; G=/b')).toEqual([['F=/a', true], ['G=/b', true]])
   })
-  test('none once anything else has stood before it, or where anything but a ; or a new line ends it', () => {
+  test('a later statement of the line itself, after a ; or a new line, whatever ran before it', () => {
+    expect(sure('make; F=/a; echo x')).toEqual([['F=/a', true]])
+    expect(sure('make\nF=/a\necho x')).toEqual([['F=/a', true]])
+    expect(sure('make && lint; F=/a; echo x')).toEqual([['F=/a', true]])
+    expect(sure("cat > /tmp/x <<'EOF'\nbody\nEOF\nP=/a\necho x")).toEqual([['P=/a', true]])
+    // After a branch, a loop, a case or a subshell that has closed, the line is its own again.
+    expect(sure('if true; then echo a; fi; F=/a; echo x')).toEqual([['F=/a', true]])
+    expect(sure('for x in a b; do echo a; done; F=/a; echo x')).toEqual([['F=/a', true]])
+    expect(sure('case x in x) echo a; G=/b;; esac; F=/a; echo x')).toEqual([['G=/b', false], ['F=/a', true]])
+    expect(sure('(cd /x; make); F=/a; echo x')).toEqual([['F=/a', true]])
+    // The one before an && or || ran in this shell, whatever the joiner then skips.
+    expect(sure('F=/a && echo x')).toEqual([['F=/a', true]])
+    expect(sure('make; F=/a && echo x')).toEqual([['F=/a', true]])
+    expect(sure('F=/a; G=/b && echo x')).toEqual([['F=/a', true], ['G=/b', true]])
+    expect(sure('F=/a || G=/b; echo x')).toEqual([['F=/a', true], ['G=/b', false]])
+  })
+  test('none behind a joiner that may skip it, inside anything that may not run, or in a shell of its own', () => {
     expect(sure('false && F=/a; echo x')).toEqual([['F=/a', false]])
     expect(sure('true || F=/a; echo x')).toEqual([['F=/a', false]])
-    expect(sure('make; F=/a; echo x')).toEqual([['F=/a', false]])
+    expect(sure('make; false && F=/a; echo x')).toEqual([['F=/a', false]])
+    expect(sure('make | F=/a; echo x')).toEqual([['F=/a', false]])
+    expect(sure('make & F=/a; echo x')).toEqual([['F=/a', false]])
+    expect(sure('make; F=/a | cat; echo x')).toEqual([['F=/a', false]])
+    expect(sure('make; F=/a &\necho x')).toEqual([['F=/a', false]])
     expect(sure('if false; then F=/a; fi')).toEqual([['F=/a', false]])
+    expect(sure('if false; then echo a; F=/a; fi; echo x')).toEqual([['F=/a', false]])
+    expect(sure('if true; then echo a; else echo b; F=/a; fi; G=/b; echo x')).toEqual([['F=/a', false], ['G=/b', true]])
+    expect(sure('while false; do echo a; F=/a; done; echo x')).toEqual([['F=/a', false]])
+    expect(sure('for x in a b; do echo a; F=/a; done; echo x')).toEqual([['F=/a', false]])
+    expect(sure('repeat 3; do echo a; F=/a; done; G=/b; echo x')).toEqual([['F=/a', false], ['G=/b', true]])
+    // A word that belongs inside a compound command, standing where none is open, loses the place.
+    expect(sure('make; do echo a; F=/a; done; G=/b; echo x')).toEqual([['F=/a', false], ['G=/b', false]])
+    expect(sure('make; }; F=/a; echo x')).toEqual([['F=/a', false]])
     expect(sure('f() { F=/a; }')).toEqual([['F=/a', false]])
     expect(sure('(F=/a; echo x)')).toEqual([['F=/a', false]])
+    expect(sure('make; (echo a; F=/a; echo x)')).toEqual([['F=/a', false]])
     expect(sure('{ F=/a; echo x; }')).toEqual([['F=/a', false]])
-    // The one before an && or || ran, but the reading takes a ; or a new line as the one end.
-    expect(sure('F=/a && echo x')).toEqual([['F=/a', false]])
-    expect(sure('F=/a; G=/b && echo x')).toEqual([['F=/a', true], ['G=/b', false]])
-    expect(sure('F=/a || G=/b; echo x')).toEqual([['F=/a', false], ['G=/b', false]])
+    expect(sure('make && { echo a; F=/a; echo x; }')).toEqual([['F=/a', false]])
+    expect(sure('make && { case x in x) echo a;; esac; F=/a; echo x; }')).toEqual([['F=/a', false]])
+    // Once a function is defined the reading stops: zsh takes the command after `name()` as its body.
+    expect(sure('f() { echo a; }; F=/a; echo x')).toEqual([['F=/a', false]])
+    expect(sure('f() echo a; F=/a; echo x')).toEqual([['F=/a', false]])
+    expect(sure('function f { echo a; }; F=/a; echo x')).toEqual([['F=/a', false]])
+    // A comment between the statement before and the setting is not read.
+    expect(sure('make # note\nF=/a; echo x')).toEqual([['F=/a', false]])
     // Before a | or a & it ran in a shell of its own.
     expect(sure('F=/a | cat; echo x')).toEqual([['F=/a', false]])
     expect(sure('F=/a & echo x')).toEqual([['F=/a', false]])

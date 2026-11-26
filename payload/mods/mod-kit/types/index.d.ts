@@ -490,10 +490,11 @@ export type ModKitCommand = {
   followed?: (string | null)[]
   /**
    * On a command that only sets variables (given with `assignments: true`): it is sure to have run
-   * before everything after it in its line, in that line's own shell (#3468). It stands in the run
-   * of settings the line opens with, each ended by a `;` or a new line. Absent on every other one:
-   * a setting behind an `&&` or `||`, in a branch, a loop, a function, a group or a subshell, before
-   * a `|` or a `&`, after any command, or in a script a shell is given or a trap's text. `writes`
+   * before everything after it in its line, in that line's own shell (#3468). It is a statement of
+   * the line itself, first in it or right after a `;` or a new line, ended by a `;`, a new line, an
+   * `&&` or an `||`. Absent on every other one: a setting behind an `&&` or `||`, in a branch, a
+   * loop, a function, a group or a subshell, before or after a `|` or a `&`, after a function is
+   * defined, or in a script a shell is given or a trap's text. `writes`
    * and `folder` follow a variable to its value only from a setting marked so.
    */
   certain?: true
