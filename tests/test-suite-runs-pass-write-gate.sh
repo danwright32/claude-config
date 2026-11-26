@@ -122,6 +122,30 @@ $EXPECTED_REFUSED_A
 LIST
 }
 bad_in(){ printf '%s\n' "$1" | grep -c '^BAD	' || true; }
+# bad_line_has <findings> <text> [<text later on the same line>]
+# Whether one BAD finding holds the text, and the second text after it when one is given. The
+# findings are read a line at a time from a here document and matched with `case`, never piped into
+# a reader that leaves on its first match: under pipefail that kills the writer and the pipeline
+# reports a failure that never happened (L183, payload/hooks/test-pipefail-shortcircuit.sh).
+bad_line_has(){
+  local line
+  while IFS= read -r line; do
+    case "$line" in $'BAD\t'*"$2"*"${3:-}"*) return 0 ;; esac
+  done <<FINDINGS
+$1
+FINDINGS
+  return 1
+}
+# first_bad <findings> -> the first BAD finding, at most 200 characters of it, or nothing
+first_bad(){
+  local line
+  while IFS= read -r line; do
+    case "$line" in $'BAD\t'*) printf '%s\n' "${line:0:200}"; return 0 ;; esac
+  done <<FINDINGS
+$1
+FINDINGS
+  return 0
+}
 
 echo "the judging, on made up answers"
 
@@ -138,25 +162,25 @@ answers(){ # answers <file> <verdict for the real path suite> <verdict for the s
 answers "$FIX/self/two.txt" REFUSED REFUSED
 J="$(judge A "made up" "$FIX/self/two.txt")"
 if [ "$(bad_in "$J")" -eq 0 ] && [ "$(printf '%s\n' "$J" | grep -c '^EXPECTED	' || true)" -eq 2 ]; then check "judging: the two listed suites refused from a primary checkout are expected, and nothing fails" ok
-else check "judging: the two listed suites refused from a primary checkout are expected, and nothing fails" "$(bad_in "$J") failures: $(printf '%s' "$J" | grep '^BAD	' | head -1 | cut -c1-200)"; fi
+else check "judging: the two listed suites refused from a primary checkout are expected, and nothing fails" "$(bad_in "$J") failures: $(first_bad "$J")"; fi
 case "$J" in *"is refused, as listed: its test text holds"*) check "judging: each expected refusal is printed with its reason" ok ;;
   *) check "judging: each expected refusal is printed with its reason" "no line gave a reason" ;; esac
 answers "$FIX/self/third.txt" REFUSED REFUSED
 printf 'REFUSED\tbash tests/test-third.sh\t%s\n' "$SAID_WRITE" >> "$FIX/self/third.txt"
 J="$(judge A "made up" "$FIX/self/third.txt")"
-if [ "$(bad_in "$J")" -eq 1 ] && printf '%s\n' "$J" | grep -q '^BAD	.*bash tests/test-third.sh is let through'; then check "judging: a third suite refused fails the check" ok
+if [ "$(bad_in "$J")" -eq 1 ] && bad_line_has "$J" "bash tests/test-third.sh is let through"; then check "judging: a third suite refused fails the check" ok
 else check "judging: a third suite refused fails the check" "$(bad_in "$J") failures, where 1 naming tests/test-third.sh was expected"; fi
 answers "$FIX/self/allowed.txt" ALLOWED REFUSED
 J="$(judge A "made up" "$FIX/self/allowed.txt")"
-if [ "$(bad_in "$J")" -eq 1 ] && printf '%s\n' "$J" | grep -q "^BAD	.*bash $REAL_PATH is still refused.*take it off the list"; then check "judging: a listed suite that is let through fails the check" ok
+if [ "$(bad_in "$J")" -eq 1 ] && bad_line_has "$J" "bash $REAL_PATH is still refused" "take it off the list"; then check "judging: a listed suite that is let through fails the check" ok
 else check "judging: a listed suite that is let through fails the check" "$(bad_in "$J") failures, where 1 saying to take it off the list was expected"; fi
 answers "$FIX/self/words.txt" REFUSED REFUSED "$SAID_COUNT"
 J="$(judge A "made up" "$FIX/self/words.txt")"
-if [ "$(bad_in "$J")" -eq 1 ] && printf '%s\n' "$J" | grep -q "^BAD	.*bash $REAL_PATH .*in other words"; then check "judging: a listed suite refused in other words than a write to a payload path fails the check" ok
+if [ "$(bad_in "$J")" -eq 1 ] && bad_line_has "$J" "bash $REAL_PATH " "in other words"; then check "judging: a listed suite refused in other words than a write to a payload path fails the check" ok
 else check "judging: a listed suite refused in other words than a write to a payload path fails the check" "$(bad_in "$J") failures, where 1 was expected"; fi
 answers "$FIX/self/gone.txt" none REFUSED
 J="$(judge A "made up" "$FIX/self/gone.txt")"
-if [ "$(bad_in "$J")" -eq 1 ] && printf '%s\n' "$J" | grep -q "^BAD	.*bash $REAL_PATH, a listed refusal.*take it off the list"; then check "judging: a listed suite that was never asked about fails the check" ok
+if [ "$(bad_in "$J")" -eq 1 ] && bad_line_has "$J" "bash $REAL_PATH, a listed refusal" "take it off the list"; then check "judging: a listed suite that was never asked about fails the check" ok
 else check "judging: a listed suite that was never asked about fails the check" "$(bad_in "$J") failures, where 1 was expected"; fi
 answers "$FIX/self/worktree.txt" REFUSED REFUSED
 J="$(judge B "made up" "$FIX/self/worktree.txt")"
@@ -165,7 +189,7 @@ else check "judging: the list is for a primary checkout only, so both fail when 
 answers "$FIX/self/unasked.txt" REFUSED REFUSED
 printf 'UNASKED\tbash tests/test-slow.sh\tthe gate gave no answer in 240 seconds\n' >> "$FIX/self/unasked.txt"
 J="$(judge A "made up" "$FIX/self/unasked.txt")"
-if [ "$(bad_in "$J")" -eq 1 ] && printf '%s\n' "$J" | grep -q '^BAD	.*could not be asked'; then check "judging: an ask the gate did not answer fails the check" ok
+if [ "$(bad_in "$J")" -eq 1 ] && bad_line_has "$J" "could not be asked"; then check "judging: an ask the gate did not answer fails the check" ok
 else check "judging: an ask the gate did not answer fails the check" "$(bad_in "$J") failures, where 1 was expected"; fi
 
 [ -f "$HOOK" ] || not_run "needs payload/hooks/payload-write-gate.sh in the checkout it is in"
