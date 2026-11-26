@@ -2038,6 +2038,53 @@ record and the transcripts are files on a Mac the session can write; a label put
 hook cannot read (a variable, a file, a script, an alias, a wrapped `gh api`), which still cannot
 merge; and an approval given on one Mac, which the other does not know and asks for again.
 
+#### An approved announcement is owed as a Slack draft until it is settled (#3667)
+
+Once an announce pull request merges, its approved wording is owed to agents as a Slack draft Dan
+sends himself. The is it live mod keeps that owed, asks for the draft, and says it until it is
+settled:
+
+- When a merge lands, the mod asks GitHub for the pull request's labels and description and runs
+  the merge gate's own reader on them (`hooks/lib/changelog-entry.js announcement`). What the
+  change owes is kept in the mod's store, which every session shares, one key per pull request and
+  per fact (`announce:`, `announce-out:` and `announce-done:`, each followed by `<owner/name>#<pr>`
+  and written whole), outside the list of cards that keeps only the newest 50. A reader answer of
+  `unknown` is kept as owed with its why. GitHub or the reader failing outright is said to Dan and
+  asked again at the next card, never kept on a guess.
+- A card saying the change is live tells the session to save the announcement as a Slack draft in
+  its channel, with no thread, word for word and without rewording it. A deploying card, or one
+  that could not confirm live, asks for nothing and settles nothing.
+- A draft counts only when Slack's answer holds a `draft_id` and the draft's words are the approved
+  wording's, judged by the one comparison in `hooks/lib/announce-compare.js` (the dev update skill
+  loads the same copy). A draft that differs, an answer with no `draft_id`, each error Slack names,
+  and a judgement that could not be made each have a sentence of their own and leave it owed. Once
+  drafted it is never asked for again.
+- Only the wording the pull request merged on is drafted, counted or copied, since a description
+  can be edited after the merge by a command no hook judges. The same library's `claimed` check
+  holds the wording's hash to the hash of that pull request's latest claim line in the record of
+  approvals, read through `announce-approval.py list`, which writes nothing. The mod asks it before
+  a card asks for a draft, before a draft is counted and before Copy hands the wording over. Wording
+  that fails it is kept as an entry that cannot be drafted, with the reason. A pull request that
+  went back to wording it claimed earlier reads as changed, which refuses a draft: the harmless side.
+- While one is owed it is said in four places. A row pinned in the band, "Announcement for agents"
+  in violet, one line saying where the draft stands, then Copy, Mark sent and Not announcing; the
+  row never draws the wording, and Copy copies nothing for wording that failed the claimed check,
+  saying why. Mark sent and Not announcing settle it for every session, and only a press of the
+  row's own button does. `/live` lists it. Every session started in that project says it in one
+  line, to Dan and with the session's first prompt. And the turn end of the session whose card found
+  it live is refused once per chain of turn ends.
+- The merge gate's allow for an announce merge (`require-changelog-tag.sh`) always carries one line
+  of context: the merge owes agents a draft, and a session whose card says nothing about it is
+  running an old copy of the mod and should run `/reload-plugins`. Nothing the gate decides changes.
+- The dev update skill's picker for an unsettled announcement gains a fourth answer, "Draft it now"
+  (Dan, 2026-11-25, by picker), offered only where `gather.js draftable` says the announcement may
+  be drafted, which asks the same claimed check. `gather.js drafted` reads Slack's answer, and the
+  state commit judges the draft again before it records the announcement drafted.
+
+What none of this sees: whether and when Dan sends a draft; a merge made in GitHub's own page, which
+no session cards and which has no claim line, so it is never drafted from here; and an announcement
+settled or approved on one Mac, which the other does not know.
+
 `push-scope-notice.sh` also refuses a push from a repository whose `core.hooksPath` names a folder
 that does not exist (claude-config#2070), because git then runs none of the repository's own hooks
 for the push and says nothing. A work project sets it to `.husky/_`, which only `pnpm install` creates,
@@ -9493,10 +9540,15 @@ tool, that its merges have nothing to do with the threads (#2653); since #2849 t
 merges already landed as well as later ones. It never clears a reply owed to a thread pasted mid
 session that a PR links, nor a card's message; a PR's link to a thread the session started from is
 cleared, as before.
+A merge labelled `changelog/announce` also owes agents a Slack draft of the wording Dan approved
+(#3667). The mod keeps it in its store outside the cards, the live card asks for the draft, and a
+band row with Copy, Mark sent and Not announcing, `/live`, each session start in that project and
+one refused turn end say it until it is drafted on the claimed wording or Dan settles it. The rules
+are in "An approved announcement is owed as a Slack draft until it is settled (#3667)" above.
 
 </td><td>
 
-#617, #663, #707, #771, #1244, #1271, #2435, #2436, #2515, #2578, #2630, #2653, #2849
+#617, #663, #707, #771, #1244, #1271, #2435, #2436, #2515, #2578, #2630, #2653, #2849, #3667
 
 </td></tr>
 <tr><td>
