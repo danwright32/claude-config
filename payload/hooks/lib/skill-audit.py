@@ -32,7 +32,8 @@ exits  A helper must not report success when it failed. Three shapes are refused
            starts is refused too (#3650): one held on an attribute of self must have how it ended
            read in another method of its class (and in the method that ends it, when one does), or
            waited for where it starts; a local one read only by `poll()` must not be used again
-           after that read.
+           after that read, nor waited on after it (a `wait()` whose result is dropped, or
+           `communicate()`) unless a `returncode` read or a `wait()` whose result is used follows.
        U1  not a finding: a process handed to something the check cannot follow, so whether its
            ending is read was not judged. Printed and counted, and it does not fail the check.
        P2  an `except` that catches everything (bare, Exception, BaseException) and then does
@@ -377,8 +378,10 @@ def status_reads(mod, scope, name, kind):
 # method of its class: directly, through a local taken from the attribute (`proc = self.x`, or
 # `proc, self.x = self.x, None`), and into a method or a top level function of the same file it is
 # handed to. In the method that starts it only a read that waits for the end counts. A local process
-# whose status is read only while it runs, and which is used again after that read, has had only its
-# start checked. A hand off the check cannot follow is said (U1), never passed in silence.
+# whose status is read only while it runs, and which is used again after that read, or waited on
+# after it by a wait() whose result is dropped or by communicate() with no returncode read after
+# that, has had only its start checked. A hand off the check cannot follow is said (U1), never
+# passed in silence.
 ASKS = ("wait", "poll", "communicate")
 IDENTITY = ("pid", "args")  # reading these asks nothing of the process, running or ended
 
