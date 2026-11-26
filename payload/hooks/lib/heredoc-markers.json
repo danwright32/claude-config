@@ -3,8 +3,9 @@
     "Heredoc end markers as written after <<, and the line each shell ends the body at (claude-config#3566).",
     "The one list of markers for both shell readers. lib/shell-words.py's heredoc_opener is held to it:",
     "test-shell-words-heredoc.sh runs every row against the shells of its machine and then the reader.",
-    "mod-kit's readDelimiter (hooks/commands.ts) is not: its suite does not read this file, which is what",
-    "claude-config#3566 is left open for.",
+    "mod-kit's readDelimiter (mods/mod-kit/hooks/commands.ts) is held to it too: a mod's tests can",
+    "import only the mod's own files, so mods/mod-kit/tests/commands.test.ts reads the copy beside it,",
+    "heredoc-markers.ts, and test-shell-words-heredoc.sh fails when that copy is not this file's text.",
     "Each row was measured by running the text  cat <<WORD / v=$((1+1)) / LINE / echo RAN  (one piece",
     "per line) in each shell, as a -c text, a file and an eval: the shell ends the body at LINE when",
     "it prints a line RAN, and expands the body when it prints v=2. closes maps each LINE to the shells",
@@ -17,9 +18,12 @@
     "prints that, and says the rest is unmeasured.",
     "A reader that vouches for its reading must give the LINE all seven shells share. Where they do",
     "not share one it must say so (shell-words.py names the heredoc in unsure), and where bash and",
-    "zsh share one its marker must be that LINE."
+    "zsh share one its marker must be that LINE. mod-kit's reader reads for bash and zsh alone, the",
+    "two a Bash call runs in: where they share a LINE it ends the body there, and where they do not",
+    "it marks the command fed the heredoc unread. A word that starts with an escaped $ or with two or",
+    "more $ opens no heredoc in it at all, and every line after is read as a command."
   ],
-  "measured": "2026-11-24 on macOS: bash 3.2.57 (as bash, as bash --posix and as sh), dash, zsh 5.9 (as zsh and emulating sh) and ksh 93u+",
+  "measured": "2026-11-24 on macOS: bash 3.2.57 (as bash, as bash --posix and as sh), dash, zsh 5.9 (as zsh and emulating sh) and ksh 93u+. The rows that mix a dollar quote with other quoting, the backslash before 8, the octal escape for character 0, three dollars, and two dollars inside a word were added on 2026-11-26, measured on the same seven as a -c text",
   "shells": {
     "bash": {"run": ["bash", "--noprofile", "--norc", "-c"], "prints": "3.2.", "probe": ["bash", "--noprofile", "--norc", "-c", "echo \"$BASH_VERSION\""]},
     "bash --posix": {"run": ["bash", "--posix", "--noprofile", "--norc", "-c"], "prints": "3.2.", "probe": ["bash", "--posix", "--noprofile", "--norc", "-c", "echo \"$BASH_VERSION\""]},
@@ -81,8 +85,20 @@
     {"name": "a dollar quote holding the octal escape for character 1", "word": "$'E\\1'", "quoted": true, "closes": {"E\u0001": "zsh and ksh", "$E\\1": "dash"}},
     {"name": "a dollar quote holding the octal escape for character 127", "word": "$'E\\177'", "quoted": true, "closes": {"E\u007f": "zsh and ksh", "$E\\177": "dash"}},
     {"name": "a dollar quote holding a control escape", "word": "$'E\\cAF'", "quoted": true, "closes": {"E\u0001F": "ksh", "$E\\cAF": "dash"}, "never": ["E\\cAF"]},
+    {"name": "a dollar quote beside a double quoted part", "word": "$'E'\"O\"F", "quoted": true, "closes": {"EOF": "dollar", "$EOF": "dash"}, "never": ["$E\"O\"F"]},
+    {"name": "a dollar quote holding a hex escape, after a single quoted part", "word": "'E'$'O\\x46'", "quoted": true, "closes": {"EOF": "dollar", "E$O\\x46": "dash"}, "never": ["EO\\x46"]},
+    {"name": "a dollar quote holding an escaped backslash, after a double quoted part", "word": "\"E\"$'\\\\'F", "quoted": true, "closes": {"E\\F": "dollar", "E$\\\\F": "dash"}, "never": ["E\\\\F"]},
+    {"name": "a dollar quote ending in an escaped backslash, with a letter after it", "word": "$'E\\\\'F", "quoted": true, "closes": {"E\\F": "dollar", "$E\\\\F": "dash"}, "never": ["E\\\\F"]},
+    {"name": "a dollar quote before an escaped letter", "word": "$'E'\\F", "quoted": true, "closes": {"EF": "dollar", "$EF": "dash"}},
+    {"name": "a dollar quote holding a space", "word": "$'a b'", "quoted": true, "closes": {"a b": "dollar", "$a b": "dash"}, "never": ["a"]},
+    {"name": "a dollar quote holding a backslash before a digit that is no octal one", "word": "$'E\\8F'", "quoted": true, "closes": {"E\\8F": "bash", "E8F": "zsh and ksh", "$E\\8F": "dash"}},
+    {"name": "a dollar quote holding the octal escape for character 0", "word": "$'E\\0F'", "quoted": true, "closes": {"E": ["bash", "bash --posix", "sh", "zsh as sh", "ksh"], "$E\\0F": "dash"}, "never": ["E\\0F", "EF"]},
     {"name": "a dollar double quote", "word": "$\"EOF\"", "quoted": true, "closes": {"EOF": "bash", "$EOF": "zsh and dash"}},
     {"name": "a dollar double quote holding an escaped backslash", "word": "$\"E\\\\F\"", "quoted": true, "closes": {"E\\F": "bash", "$E\\F": "zsh and dash"}, "never": ["E\\\\F"]},
-    {"name": "two dollars before a single quote", "word": "$$'EOF'", "quoted": true, "closes": {"$$EOF": "bash and dash", "$EOF": "zsh"}}
+    {"name": "a dollar double quote inside a word", "word": "E$\"O\"F", "quoted": true, "closes": {"EOF": "bash", "E$OF": "zsh and dash"}},
+    {"name": "two dollars before a single quote", "word": "$$'EOF'", "quoted": true, "closes": {"$$EOF": "bash and dash", "$EOF": "zsh"}},
+    {"name": "the control: a dollar and a single quote inside double quotes are text", "word": "\"$'EOF'\"", "quoted": true, "closes": {"$'EOF'": "all"}, "never": ["EOF", "$EOF"]},
+    {"name": "three dollars before a single quote", "word": "$$$'EOF'", "quoted": true, "closes": {"$$EOF": "bash and zsh", "$$$EOF": "dash"}, "never": ["$EOF"]},
+    {"name": "two dollars before a single quote inside a word", "word": "E$$'O'F", "quoted": true, "closes": {"E$$OF": "bash and dash", "E$OF": "zsh"}, "never": ["EOF"]}
   ]
 }

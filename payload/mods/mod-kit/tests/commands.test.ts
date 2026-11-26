@@ -1,6 +1,7 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './hang-ceiling.ts'
 import HEREDOC_CLOSES from './heredoc-closes.ts'
+import HEREDOC_MARKERS from './heredoc-markers.ts'
 import { READ_STOPPED, commands, git, pipeline } from '../hooks/commands.ts'
 
 // The one reader of shell commands every guard uses (L613): the secret guard, the keystroke guard
@@ -2568,5 +2569,188 @@ describe('four shapes the reader misread (#3442)', () => {
       expect(commands(`${shell} -c 'time [[ -z a || p1 b ]]'`)).toEqual([['[[', '-z', 'a'], ['p1', 'b', ']]']])
       expect(commands(`${shell} -c '[[ -z a || p1 b ]]>out'`)).toEqual([['[[', '-z', 'a'], ['p1', 'b', ']]', '>', 'out']])
     }
+  })
+})
+
+// #3566: a heredoc's end marker written as a dollar quote (`<<$'...'`). bash and zsh read its
+// escapes before they compare it with a line, so after `<<$'p\x36'` the body ends at the line p6.
+// The reader translated only an escaped backslash, quote and double quote and kept every other
+// escape as written: it ended that body at the line `p\x36`, which neither shell ends it at, so the
+// commands between the two lines were body text to every guard and commands to the shell. And where
+// the two shells read an escape differently (`\q`, `\$`, a `\u`, a `\c`, an x with no digit, the
+// characters 0, 1 and 127 and past it) it gave bash's reading with nothing said.
+//
+// The markers are hooks/lib/heredoc-markers.json, the one list this suite and the python reader's
+// (test-shell-words-heredoc.sh, which also runs every row through the shells of its machine) both
+// run, each row measured in bash 3.2, bash --posix, sh, dash, zsh, zsh emulating sh and ksh. A
+// mod's tests import only the mod's own files, so the list is read from its copy,
+// heredoc-markers.ts, which that suite holds to the list's text. A Bash call runs in bash or zsh,
+// so this reader is held to those two: where they end the body at one line it ends it there and
+// marks nothing, and where they do not it marks the command the heredoc feeds unread.
+describe("a heredoc's end marker written as a dollar quote (#3566)", () => {
+  type Shells = string | string[]
+  type Row = { name: string; word: string; quoted: boolean; closes: Record<string, Shells>; never?: string[] }
+  const list = HEREDOC_MARKERS as unknown as { groups: Record<string, string[]>; rows: Row[] }
+  const BS = '\\'
+  const MARKER = 'fed a heredoc whose end marker bash and zsh do not read alike, so where its body stops cannot be read'
+  const NEVER = 'fed a heredoc that never ends, so where its body stops cannot be read'
+  const members = (v: Shells | undefined): Set<string> => new Set(v === undefined ? [] : typeof v === 'string' ? (list.groups[v] ?? []) : v)
+  // The line bash and zsh both end the body at, undefined where they share none.
+  const shared = (r: Row) => Object.keys(r.closes).find(line => members(r.closes[line]).has('bash') && members(r.closes[line]).has('zsh'))
+  const named = (r: Row) => [...Object.keys(r.closes), ...(r.never ?? [])]
+  // A word that starts with an escaped $, or with two or more $, opens no heredoc in this reader
+  // (OPENING takes a marker only where it starts as one is usually written, #2080). bash and zsh
+  // read these two alike; `$$'EOF'`, which they do not, is held to the rule for every other row.
+  const UNOPENED = [`${BS}$'EOF'`, "$$$'EOF'"]
+  const rows = list.rows.filter(r => !UNOPENED.includes(r.word))
+  // What the reader makes of `cat <<WORD`, one body line, then `rest`: the body it feeds cat, the
+  // mark on cat, and each echo it lists as a command.
+  const read = (word: string, rest: string, opener = '<<') => {
+    const cmds = pipeline(`cat ${opener}${word}\necho BODY\n${rest}`)
+    const cat = cmds.find(c => c.words[0] === 'cat')
+    const fed = cat?.heredocs?.[0]
+    return { body: fed?.body, quoted: fed?.quoted, unread: cat?.unread, listed: cmds.filter(c => c.words[0] === 'echo').map(c => c.words[1]) }
+  }
+
+  test('the list is read, the three markers of the issue among it', () => {
+    expect(list.rows.length).toBeGreaterThanOrEqual(54)
+    const words = list.rows.map(r => r.word)
+    for (const word of [`$'E${BS}${BS}F'`, `$'p${BS}'6'`, `$'p${BS}x36'`, "$$'EOF'", ...UNOPENED]) expect([word, words.includes(word)]).toEqual([word, true])
+    expect(rows.filter(r => shared(r) !== undefined).length).toBeGreaterThanOrEqual(35)
+    expect(rows.filter(r => shared(r) === undefined).length).toBeGreaterThanOrEqual(15)
+  })
+
+  test('where bash and zsh end the body at one line, the reader ends it there and marks nothing', () => {
+    const wrong: unknown[] = []
+    for (const r of rows) {
+      const line = shared(r)
+      if (line === undefined) continue
+      const got = read(r.word, `${line}\necho RAN`)
+      const want = { body: 'echo BODY', quoted: r.quoted, unread: undefined, listed: ['RAN'] }
+      if (JSON.stringify(got) !== JSON.stringify(want)) wrong.push([r.name, got])
+    }
+    expect(wrong).toEqual([])
+  })
+
+  test('a command after that line is a command, whatever other line the list names comes after it', () => {
+    const wrong: unknown[] = []
+    for (const r of rows) {
+      const line = shared(r)
+      if (line === undefined) continue
+      for (const other of named(r)) {
+        if (other === line) continue
+        const got = read(r.word, `${line}\necho BETWEEN\n${other}\necho RAN`)
+        if (!got.listed.includes('BETWEEN') || got.body !== 'echo BODY') wrong.push([r.name, other, got])
+      }
+    }
+    expect(wrong).toEqual([])
+  })
+
+  test('no other line the list names ends it: the heredoc never ends, and says so', () => {
+    const wrong: unknown[] = []
+    for (const r of rows) {
+      const line = shared(r)
+      if (line === undefined) continue
+      for (const other of named(r)) {
+        if (other === line) continue
+        const got = read(r.word, `${other}\necho RAN`)
+        if (got.body !== undefined || got.unread !== NEVER) wrong.push([r.name, other, got])
+      }
+    }
+    expect(wrong).toEqual([])
+  })
+
+  test('where bash and zsh share no line, the command is unread whichever line the text ends the body at', () => {
+    const wrong: unknown[] = []
+    for (const r of rows) {
+      if (shared(r) !== undefined) continue
+      for (const line of [...named(r), 'NO_SUCH_LINE']) {
+        const got = read(r.word, `${line}\necho RAN`)
+        if (got.unread === undefined || !READ_STOPPED.has(got.unread)) wrong.push([r.name, line, got])
+      }
+    }
+    expect(wrong).toEqual([])
+  })
+
+  test('a word that starts with an escaped $ or with two or more $ opens no heredoc, so every line is read as a command', () => {
+    for (const r of list.rows.filter(row => UNOPENED.includes(row.word)))
+      for (const line of named(r)) expect([r.word, line, read(r.word, `${line}\necho RAN`)]).toEqual([r.word, line, { body: undefined, quoted: undefined, unread: undefined, listed: ['BODY', 'RAN'] }])
+    // After an even run of $ bash and zsh end the heredoc at different lines ($$EOF and $EOF), so
+    // the command says so as well, whichever line the text holds. After four $ they are $$$$EOF
+    // and $$$EOF (measured 2026-11-26). A << in a comment opens nothing and marks nothing.
+    for (const line of ['$$EOF', '$EOF']) expect([line, read("$$'EOF'", `${line}\necho RAN`)]).toEqual([line, { body: undefined, quoted: undefined, unread: MARKER, listed: ['BODY', 'RAN'] }])
+    expect(read("$$$$'EOF'", '$$$EOF\necho RAN').unread).toBe(MARKER)
+    expect(pipeline("cat f # <<$$'EOF'\ngit log").some(c => c.unread !== undefined)).toBe(false)
+  })
+
+  test('the texts of the issue: the commands between the two lines are commands', () => {
+    expect(commands(`cat <<$'E${BS}${BS}F'\nbody\nE${BS}F\ngit push\nE${BS}${BS}F\ngit log`).slice(1, 2)).toEqual([['git', 'push']])
+    expect(commands(`cat <<$'p${BS}'6'\nbody\np'6\ngit push`).slice(1)).toEqual([['git', 'push']])
+    expect(commands(`cat <<$'p${BS}x36'\nbody\np6\ngit push\np${BS}x36\ngit log`).slice(1, 2)).toEqual([['git', 'push']])
+    // The body is the one line, and nothing is marked: both shells read these markers alike.
+    expect(pipeline(`cat <<$'p${BS}x36'\nbody\np6\ngit push`).map(c => [c.words, c.heredocs?.[0]?.body, c.unread])).toEqual([[['cat', `<<$p${BS}x36`], 'body', undefined], [['git', 'push'], undefined, undefined]])
+  })
+
+  test('every character from 2 to 126 written as two hex digits or three octal ones is that character', () => {
+    // Measured 2026-11-24 and again 2026-11-26 in bash 3.2 and zsh 5.9: both end the body at the
+    // line holding the character. Character 10 is a line break, which no line of a body can hold.
+    const wrong: unknown[] = []
+    let tried = 0
+    for (let v = 2; v <= 126; v++) {
+      for (const esc of [`x${v.toString(16).padStart(2, '0')}`, v.toString(8).padStart(3, '0')]) {
+        tried++
+        const got = read(`$'E${BS}${esc}G'`, `E${String.fromCharCode(v)}G\necho RAN`)
+        const want = v === 10 ? { unread: NEVER } : { body: 'echo BODY', quoted: true, unread: undefined, listed: ['RAN'] }
+        if (v === 10 ? got.unread !== NEVER || got.body !== undefined : JSON.stringify(got) !== JSON.stringify(want)) wrong.push([esc, got])
+      }
+    }
+    expect(tried).toBe(250)
+    expect(wrong).toEqual([])
+  })
+
+  test('an escape bash and zsh read differently stays as written, and the command says why it is unread', () => {
+    expect(READ_STOPPED.has(MARKER)).toBe(true)
+    // bash keeps the backslash before a letter that is no escape, a $ or an 8 and zsh drops it;
+    // bash ends at no line for character 1 or 127 and cuts the marker at character 0; zsh reads
+    // `\u` and neither reads `\c` as ksh does.
+    for (const inner of ['qF', '$F', 'u0041', 'x', '1', '177', 'cAF', '0F', 'x00F', 'x7f', 'x80', '777', '8F', 'UF'])
+      expect([inner, read(`$'E${BS}${inner}'`, `E${BS}${inner}\necho RAN`)]).toEqual([inner, { body: 'echo BODY', quoted: true, unread: MARKER, listed: ['RAN'] }])
+    // Two $ before a quote inside the word: bash reads its own number and a plain quote, zsh a $ and
+    // a dollar quote. The reading is zsh's, as it was.
+    expect(read("E$$'O'F", 'E$OF\necho RAN')).toEqual({ body: 'echo BODY', quoted: true, unread: MARKER, listed: ['RAN'] })
+    // One escape read differently marks a marker whose other escapes are read alike.
+    expect(read(`$'E${BS}tF${BS}q'`, `E\tF${BS}q\necho RAN`)).toEqual({ body: 'echo BODY', quoted: true, unread: MARKER, listed: ['RAN'] })
+  })
+
+  test('a dollar double quote is bash\'s reading, and the command keeps the mark its word gave it', () => {
+    const WORD = 'holding a word bash and zsh do not hand on alike, so what it names cannot be read'
+    expect(read('$"EOF"', 'EOF\necho RAN')).toEqual({ body: 'echo BODY', quoted: true, unread: WORD, listed: ['RAN'] })
+    expect(read('E$"O"F', 'EOF\necho RAN')).toEqual({ body: 'echo BODY', quoted: true, unread: WORD, listed: ['RAN'] })
+    expect(read('$"EOF"', '$EOF\necho RAN').unread).toBe(NEVER)
+  })
+
+  test('mixed with other quoting, under <<- and after a blank, the marker is the whole word', () => {
+    const ended = { body: 'echo BODY', quoted: true, unread: undefined, listed: ['RAN'] }
+    expect(read(`$'E${BS}x4fF'`, '\t\tEOF\necho RAN', '<<-')).toEqual(ended)
+    expect(read(`$'E${BS}x4fF'`, 'EOF\necho RAN', '<< ')).toEqual(ended)
+    expect(read(`$'E${BS}'F'"G"`, "E'FG\necho RAN")).toEqual(ended)
+    expect(read(`'E'$'${BS}x4f'"F"`, 'EOF\necho RAN')).toEqual(ended)
+    expect(read(`$'E${BS}tF'"G"`, 'E\tFG\necho RAN')).toEqual(ended)
+  })
+
+  test('a marker the escapes give a blank at either end is unread, since the reader takes blanks off a line', () => {
+    // Measured 2026-11-26: bash and zsh end `<<$'E\t'` at the line E and a tab, and `<<$' E'` at a
+    // space and E. Under `<<-` a marker that starts with a tab ends at one tab in bash and at any
+    // count in zsh. The reader ends none of them, so each is a heredoc that never ends.
+    expect(read(`$'E${BS}t'`, 'E\t\necho RAN').unread).toBe(NEVER)
+    expect(read("$' E'", ' E\necho RAN').unread).toBe(NEVER)
+    expect(read(`$'${BS}tE'`, '\tE\necho RAN', '<<-').unread).toBe(NEVER)
+  })
+
+  test('inside a substitution the mark is on the command the heredoc feeds there, and on the one the substitution stands in', () => {
+    // As for a heredoc the shells do not end where it is read to end (#3592): the line holding the
+    // substitution opens the heredoc too, so its command cannot say where the substitution stops.
+    expect(pipeline(`echo "$(cat <<$'E${BS}qF'\nbody\nE${BS}qF\n)"\ngit log`).map(c => [c.words[0], c.unread])).toEqual([['cat', MARKER], ['echo', MARKER], ['git', undefined]])
+    expect(pipeline(`echo "$(cat <<$'E${BS}tF'\nbody\nE\tF\n)"\ngit log`).some(c => c.unread !== undefined)).toBe(false)
   })
 })

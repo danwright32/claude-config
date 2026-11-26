@@ -393,6 +393,30 @@ quoted body is read as written. And a substitution is one word with the word it 
 quotes and redirects included, where before `x=$(npm publish)` also gave a command named `publish)`
 and `$(echo > a.md)` a file named `a.md)`.
 
+Since #3566 a heredoc's end marker written as a dollar quote (`<<$'...'`) is read as bash and zsh
+read it. Both translate the escapes before they compare the marker with a line, so after
+`<<$'p\x36'` the body ends at the line `p6`. The reader translated only an escaped backslash, quote
+and double quote, so it ended that body at the line `p\x36`, where neither shell does, and every
+command between the two lines was body text to the guards and a command to the shell. It now
+translates each escape the two read alike: the named ones (`\\ \' \" \? \a \b \e \E \f \n \r \t
+\v`) and a character from 2 to 126 written as one or two hex digits or one to three octal ones.
+Where the two do not read a marker alike, the body is read to end where one of them ends it and the
+command fed the heredoc is marked unread, saying its end marker is not read alike: a dollar quote
+holding any other escape (`\q`, `\$`, `\8`, a `\u` or `\c`, an x with no digit, the characters 0, 1
+and 127 and past it), a `$"..."`, and a quote after two or more `$` inside the word. The markers
+are `payload/hooks/lib/heredoc-markers.json`, one list both shell readers' suites run, each row
+measured in seven shells (2026-11-24, with the rows mixing a dollar quote with other quoting added
+and measured on 2026-11-26); the mods' suite reads a copy the python reader's suite holds to the
+list's text. Three things are left as they were. A marker word that starts with an escaped `$` or
+with two or more `$` opens no heredoc in this reader, so every line after it is read as a command;
+after an even run of `$` and a single quote (`<<$$'EOF'`), where bash and zsh end the heredoc at
+different lines, the command standing there is now marked unread as well.
+What `sh -c` or `dash -c` runs is read as bash reads it, though dash knows no dollar quote. And a
+marker the escapes give a blank at either end never ends here, so its command is marked unread as
+fed a heredoc that never ends. The count over the personal MacBook's recorded calls of the 30 days
+to 2026-11-26 (84,773 shell calls, 75,248 distinct commands) is none: no command is read
+differently.
+
 Since #974 the substitutions are read once, by the command reader, and both readers build on that
 one reading (L613). `readLine` (mod-kit `hooks/commands.ts`) gives a command line as its commands
 with, in the place of the command each sits in, the commands of each substitution the shell runs
