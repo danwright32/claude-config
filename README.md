@@ -2883,6 +2883,98 @@ improvement with a second run (`--repeat 2` pools two reviews per case). Exit 0 
 not worse, 1 worse, 2 unmeasured (no case set, or no review succeeded), 3 no baseline covering
 these cases.
 
+### What an agent's commands leave running
+
+On 2026-11-24 a builder agent's harness started several thousand generated commands with no time
+limit. 19 never ended. The agent handed back and ended, and the 19 shells ran on with no parent for
+about 90 minutes, costing about 40 GB of disk through their temporary files, and nothing said so
+(claude-config#3561, L1040). The job watcher holds an agent's stop for background work it knows of;
+these were children of a foreground command that had already returned, which it never sees.
+
+Three files close that, and none of them stops a process: stopping stays with whoever started it,
+by the process id traced to it (L1011).
+
+- `hooks/bash-shell-mark.sh` (SessionStart) writes one line into the session's env file, which
+  Claude Code sources before every Bash command. The line makes an empty file named for the shell's
+  process id in the session's own marker folder, under `TMPDIR` (which macOS empties of what nobody
+  has touched for about three and a half days, so nothing sweeps it). It is one builtin
+  redirection: no process is started, nothing is printed, and with the folder gone it fails in
+  silence and the command still runs (measured in bash 3.2.57 and zsh 5.9 on 2026-11-25).
+- `hooks/lib/agent-leftovers.py` reads the process table and that record.
+- `hooks/agent-leftovers-gate.sh` (PreToolUse on SubagentHandback, and SubagentStop) says what the
+  reader finds.
+
+How a process is tied to the agent that started it, measured on the personal MacBook on
+2026-11-25 in a subagent's own Bash calls (5 children of 2 calls):
+
+- The Bash tool starts each command in a shell that leads its own process group and is a child of
+  the Claude Code process. A child that outlives the command keeps that group and is handed to
+  launchd, a plain `cmd &`, a `nohup` and a `( cmd & )` alike. So the tie is the process group,
+  whose number is the dead shell's process id, and the marker says which session's shell that was.
+  A process is this session's leftover when its group's leader has gone, a marker for the group is
+  in this session's folder, and nothing in the group started before the marker was made. Another
+  session's shell left its marker in another folder, so a process another session started is never
+  listed, whatever second it started in.
+- The environment was ruled out: a Bash call's environment carries the session id, but `ps` cannot
+  read the environment of the programs macOS ships (0 of 5 readable: sleep, bash and zsh, the very
+  shells of 2026-11-24; a Homebrew python was readable). So was the working folder, which is the
+  project's for every session in the repository, and the command's output file, which only a child
+  that redirects nothing inherits.
+- Nothing in a Bash call's environment names the agent, so which agent's command it was comes from
+  the agent's own transcript: the marker was made while one of its Bash calls was running (2 of 2
+  calls checked began in the second their shell started), and the group's oldest process started
+  before that call ended. The second half is what stops a process id used again from being taken
+  for the shell that had it before.
+
+What a session now sees:
+
+- At a hand back, while a process the agent's commands started is alive and the report does not
+  name its process id, the hand back is refused, naming each process's id, start time (ET) and
+  command, and the agent's command that started it. The agent stops it, or keeps it and names its
+  process id in the report with why it stays; a report that names every one goes through in
+  silence, since the report is what tells the orchestrating session. When other commands of the
+  session began in the same span the refusal says so, and that a process another agent started is
+  not the agent's to stop.
+- An agent that does neither is let through on the third attempt, and what it left is said to Dan
+  and spooled for the orchestrating session's end of turn review.
+- At a stop the hook never refuses: a refusal there would let the findings harvest, which runs at
+  the same event, read an agent that then carries on (#898). An agent that ends without the hand
+  back tool is asked nothing; what it left is said to Dan and spooled, once.
+- When it cannot tell, it says so and never says nothing was left: the process table could not be
+  read (`ps` failed, or did not answer inside the reader's own time limit, as inside a sandbox), the session's shells are
+  not recorded (it started before `bash-shell-mark.sh` was installed, so every session open at the
+  install says this once and a new session does not), or the agent's transcript could not be read
+  (a nested agent's is never written). The first two are said once a session.
+- While Dan is asleep (`lib/sleep.sh`'s `sleep_active`, his choice on 2026-11-25) nothing is shown
+  to him: a hand back naming nothing is still refused, since that goes to the agent, and each
+  notice is spooled for the orchestrating session's review in place of its message. One that
+  cannot be spooled is shown anyway. `tests/test-sleep-silence.sh` runs the hook asleep and awake.
+- Nothing left running is silence.
+
+What it costs, at every hand back and every agent stop: one narrow read of the process table and
+one stat per process group whose leader has gone. On 2026-11-25 the table held 1,017 rows and 8
+such groups (3 of them app helpers from login), and the whole hook took 100 to 119 ms (median
+107 ms, 7 runs, load average 71) when nothing was left. Start times, commands and the transcript
+are read only once a group is tied to the session; with one process left and a 3.1 MB transcript
+it took 174 to 273 ms (3 runs).
+
+What it does not cover:
+
+- A process that left its shell's group (`setsid`, a job control shell, a runner that puts what it
+  starts in a group of its own) is not tied. The time limit runner of claude-config#3578 is to
+  record the group it makes the same way: an empty file named for the group's id in the folder
+  `python3 hooks/lib/agent-leftovers.py dir "$CLAUDE_CODE_SESSION_ID"` prints.
+- A group whose oldest process started after the agent's command ended (each generation started
+  the next and ended) is said as one that could not be told, never as the agent's.
+- The hand back is where an agent can still act, so an agent that ends by plain text is not asked
+  to stop anything. A refusal of the stop itself would belong in the job watcher, above the
+  settings hooks, and is not built.
+- The agent rules' own sentence about a time limit, and the low free space warning naming a long
+  running process with no parent, are the other parts of claude-config#3561.
+
+Tests: `hooks/test-agent-leftovers.sh`, with stand in process tables (a suite never leaves a real
+stray process); the marker line alone is run for real, in bash and in zsh.
+
 ### An agent getting past the checks, and a report that says it did not
 
 On 2026-10-23 a builder agent in a work project committed twice with `git commit --no-verify` because the
