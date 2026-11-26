@@ -826,6 +826,24 @@ busy Mac on 2026-11-25. `hooks/test-payload-write-gate-real-path.sh` holds the c
 files; its numbered path and letter case cases report themselves unmeasured on a system that has
 neither.
 
+Three more routes are read (#3689), each only ever adding a refusal. A command string an inline
+script hands to a shell (`os.system`, `subprocess` given one string or a list of words, perl, ruby,
+php and awk `system`, node `execSync`, a command in backquotes) is read the way that command typed
+directly is: cut into commands by `lib/shell-words.py` and judged by the same loop, in the
+directory the script runs in. A destination written as a pattern (`rm pay*/hooks/x.sh`, a list in
+braces) is judged as each file it matches at that moment. And each script file the command runs
+is read from disk for the links it makes, a shell script by `lib/shell-words.py` and a python,
+perl, ruby, node or php script by the calls that make a link. What the gate cannot tell is refused
+in its own words, which say to run the command directly: a command string whose program is a value
+(`os.system(cmd)`), a command string that goes on past what the gate reads, and
+a script file it could not read, each only when the call names a `payload/` path besides or runs
+inside a payload folder, and a pattern with more than 512 files or a `**` in a checkout at risk.
+From a script file only a link is read, and only one whose path can be placed. Each loop is held to
+a count, a limit set in the gate and not a measurement (256 command strings, 4,000 characters of
+one string, 512 files of a pattern, 8 script files, 256 quoted paths of one script file that makes
+a link).
+`hooks/test-payload-write-gate-script-string.sh` holds the cases, on stand in files.
+
 Before a Bash call the write gate also notes what an at risk `payload/` holds, in
 `~/.claude-payload-write-gate`, so that after the call it can name anything written there that the
 command's words could not show (#647). The note goes when the call ends, however it ends (#3253):
