@@ -3838,6 +3838,26 @@ after its process did, and exits 2. The budget is 140 seconds (150 until #3357),
 left of Claude Code's 180 cover the time before the gate's clock starts, which Claude Code's limit
 counts and the gate cannot, and the stop itself, which is builtins only.
 
+Pushes on one Mac take turns at the scan (#3536). Every push started every scanner at once and
+nothing spaced two pushes apart, so on the night of 2026-11-23 to 24, at load averages past 190,
+seven pushes from five agents were stopped at the hard stop, and two more on 2026-11-25; their
+refusals named every phase of the run, listing the suites, deciding about the runs, waiting on the
+scanners and reading their verdicts, which is a starved run rather than one slow step. So the run
+now takes this Mac's one turn at the scan before any of that work and gives it back as it ends; the
+two checks before it (the commit messages, and each new suite's deadline) run no suite and do not
+wait, and a listing of the scanners (`SCANNERS_LIST=1`) takes no turn. The
+queue is `hooks/lib/merge-turn.sh`, the one the full suite runs, the merge helper and the load
+window already use, kept in the gate's own state folder (`~/.claude/state/scanners-passed/turn/`),
+so a push never waits behind a full run or a merge. The wait is spent out of the same 140 second
+budget, never added to it: a push whose budget runs out while it waits starts no scanner and is
+refused, saying it waited behind another push's scan, whose checkout it names, and that the same
+push can be sent again. A holder whose run has gone (the hard stop kills it, so nothing gives the
+turn back) is passed over at once by the next push, and so is a live one that has held the turn for
+160 seconds or more, longer than any run of the gate lives; a push that waited or passed a holder
+over says so when it goes through. A queue that cannot be joined is said and the push is scanned
+without a turn, as before. What it does not space: a scanner left running past the budget goes on
+after its push gives the turn back, and nothing else on the Mac takes this turn.
+
 The stop does not rest on one signal finding the supervisor at the right moment (#3333). A signal
 bash handles before its `wait` has begun does not end that wait, and a kill of the run's process
 group fails while the run has not made the group yet; both were measured on 2026-11-21, and either
