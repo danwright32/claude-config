@@ -101,8 +101,8 @@ esac
 out_c="$(run_fixture "$FX" "$ST")"
 order_c="$(order_of "$out_c")"
 [ -n "$order_b" ] && [ "$(promised "$order_c")" = "$(promised "$order_b")" ] \
-  && check "#3388 and two runs back to back of an unchanged tree launch in the same order" ok \
-  || check "#3388 and two runs back to back of an unchanged tree launch in the same order" "'$order_b' then '$order_c'"
+  && check "#3388 and two runs back to back of an unchanged tree launch every suite with real cost in the same place" ok \
+  || check "#3388 and two runs back to back of an unchanged tree launch every suite with real cost in the same place" "'$order_b' then '$order_c'"
 
 # The record keeps the share its figure was measured at, so a lane 1 time is never read as one from
 # an ordinary lane. Five seconds at one slot (seeded above, not measured), then under a second at
