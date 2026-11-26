@@ -869,30 +869,40 @@ test('a write the reader cannot follow is held when the command names a look cha
 test('#2171: a write to a bare mktemp file runs beside a screen file read, and every other unfollowed write is held', withKit, async ($, on) => {
   world($, on)
   for (const command of [
+    'T=$(mktemp); cd /w/slate && git show HEAD:app/page.tsx > "$T"; diff "$T" app/page.tsx',
+    'T=$(mktemp); cd /w/slate && wc -l $(ls app/page.tsx) > "$T"',
+    'T="$(mktemp)"; cd /w/slate && cat app/page.tsx > ${T}',
+    'D=$(mktemp -d); cd /w/slate && git show HEAD:app/page.tsx > "$D"',
+  ])
+    expect([command, refusalOf(await call($, { tool: 'Bash', command }))]).toEqual([command, ''])
+  // #3468 (Dan, 2026-11-26, accept the hold): with the setting behind the `&&` it runs only if the
+  // cd works, so the variable may hold anything and the same write is held as one not followed.
+  for (const command of [
     'cd /w/slate && T=$(mktemp); git show HEAD:app/page.tsx > "$T"; diff "$T" app/page.tsx',
     'cd /w/slate && T=$(mktemp); wc -l $(ls app/page.tsx) > "$T"',
     'cd /w/slate && T="$(mktemp)"; cat app/page.tsx > ${T}',
     'cd /w/slate && D=$(mktemp -d); git show HEAD:app/page.tsx > "$D"',
   ])
-    expect([command, refusalOf(await call($, { tool: 'Bash', command }))]).toEqual([command, ''])
+    expect([command, refusalOf(await call($, { tool: 'Bash', command })).includes('could not be followed')]).toEqual([command, true])
+  // Each setting below stands as a statement of its own, so each is held for its own reason.
   const passed: string[] = []
   for (const command of [
     'cd /w/slate && ls app/*.tsx > list; T=$(head -1 list); echo x > "$T"',
-    'cd /w/slate && OUT=$(ls app/*.tsx | head -1); echo x > "$OUT"',
-    'cd /w/slate && T=$(mktemp -t x); cat app/page.tsx > "$T"',
-    'cd /w/slate && T=$(mktemp app/x.XXXX); cat app/page.tsx > "$T"',
-    'cd /w/slate && T=$(mktemp -p app); cat app/page.tsx > "$T"',
-    'cd /w/slate && T=$(mktemp); T=$(head -1 list); cat app/page.tsx > "$T"',
-    'cd /w/slate && TMPDIR=app T=$(mktemp); cat app/page.tsx > "$T"',
+    'cd /w/slate; OUT=$(ls app/*.tsx | head -1); echo x > "$OUT"',
+    'cd /w/slate; T=$(mktemp -t x); cat app/page.tsx > "$T"',
+    'cd /w/slate; T=$(mktemp app/x.XXXX); cat app/page.tsx > "$T"',
+    'cd /w/slate; T=$(mktemp -p app); cat app/page.tsx > "$T"',
+    'cd /w/slate; T=$(mktemp); T=$(head -1 list); cat app/page.tsx > "$T"',
+    'cd /w/slate; TMPDIR=app T=$(mktemp); cat app/page.tsx > "$T"',
     'cd /w/slate && PATH=./bin:$PATH; T=$(mktemp); cat app/page.tsx > "$T"',
     'cd /w/slate && path=(./bin $path); T=$(mktemp); cat app/page.tsx > "$T"',
     'cd /w/slate && path+=(./bin); T=$(mktemp); cat app/page.tsx > "$T"',
     'cd /w/slate && typeset path; T=$(mktemp); cat app/page.tsx > "$T"',
     'cd /w/slate && mktemp(){ echo app/page.tsx; }; T=$(mktemp); cat app/page.tsx > "$T"',
-    'cd /w/slate && T=$(mktemp); T=app/page.tsx : ; cat app/page.tsx > "$T"',
+    'cd /w/slate; T=$(mktemp); T=app/page.tsx : ; cat app/page.tsx > "$T"',
     'cd /w/slate && wc -l $(ls app/page.tsx) > "$(mktemp)"',
-    'cd /w/slate && T=`mktemp`; cat app/page.tsx > "$T"',
-    'cd /w/slate && T=$(mktemp); read T < list; cat app/page.tsx > "$T"',
+    'cd /w/slate; T=`mktemp`; cat app/page.tsx > "$T"',
+    'cd /w/slate; T=$(mktemp); read T < list; cat app/page.tsx > "$T"',
     'cd /w/slate && cat app/page.tsx > "$T"',
   ])
     if (!refusalOf(await call($, { tool: 'Bash', command }))) passed.push(command)
@@ -2067,7 +2077,7 @@ test('#2934: a removal of a name a shell variable or a command\'s output fills i
     ['cd /w/slate && git rm $(cat list.txt)', '$(cat list.txt)', "a command's output"],
     ['cd /w/slate && git mv "$FROM" docs/kept', '$FROM', "a shell variable's value"],
     // A temp variable given another value as well may hold any name.
-    ['cd /w/slate && D=$(mktemp -d); D=$OTHER; rm -rf "$D"', '$D', "a shell variable's value"],
+    ['cd /w/slate; D=$(mktemp -d); D=$OTHER; rm -rf "$D"', '$D', "a shell variable's value"],
   ] as [string, string, string][]) {
     const why = refusalOf(await call($, { tool: 'Bash', command }))
     expect({ command, held: why.includes(`where the command takes away ${word} could not be followed`) && why.includes(kind) }).toEqual({ command, held: true })
@@ -2081,10 +2091,13 @@ test('#2934: a removal of a name a shell variable or a command\'s output fills i
   for (const command of [
     'TARGET=notes; cd /w/slate && rm -rf "$TARGET"',
     'D=$(mktemp -d); cd /w/slate && rm -rf "$D"',
-    'cd /w/slate && T=$(mktemp); git show HEAD:app/page.tsx > "$T"; rm -f "$T"',
+    'T=$(mktemp); cd /w/slate && git show HEAD:app/page.tsx > "$T"; rm -f "$T"',
     // A folder variable names a folder outside every screen path here, as #1953 reads it.
     'rm -rf "$TMPDIR"',
   ]) expect([command, refusalOf(await call($, { tool: 'Bash', command }))]).toEqual([command, ''])
+  // #3468 (Dan, 2026-11-26, accept the hold): with the setting behind the `&&` it runs only if the
+  // cd works, so the removal is held as one the guard cannot follow.
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'cd /w/slate && T=$(mktemp); git show HEAD:app/page.tsx > "$T"; rm -f "$T"' }))).toContain('could not be followed')
   expect(w.ran.length).toBe(4)
 })
 
@@ -2137,7 +2150,7 @@ test("#2960: a removal under a folder a shell variable or a command's output fil
     // A temp folder's name that climbs out of it, or one given another value too, may be anywhere.
     ['D=$(mktemp -d); cd /w/slate && rm -rf "$D/../app"', '$D/../app', "a shell variable's value"],
     ['cd /w/slate && rm -rf "$TMPDIR/../../w/slate/app"', '$TMPDIR/../../w/slate/app', "a shell variable's value"],
-    ['cd /w/slate && D=$(mktemp -d); D=$OTHER; rm -rf "$D/sub"', '$D/sub', "a shell variable's value"],
+    ['cd /w/slate; D=$(mktemp -d); D=$OTHER; rm -rf "$D/sub"', '$D/sub', "a shell variable's value"],
   ] as [string, string, string][]) {
     const why = refusalOf(await call($, { tool: 'Bash', command }))
     expect({ command, held: why.includes(`where the command takes away ${word} could not be followed`) && why.includes(kind) }).toEqual({ command, held: true })
@@ -2146,13 +2159,16 @@ test("#2960: a removal under a folder a shell variable or a command's output fil
   for (const command of [
     'D=$(mktemp -d); cd /w/slate && rm -rf "$D/sub"',
     // A screen file's name in it too, since the folder is new (until #2960 held as one not followed).
-    'cd /w/slate && D=$(mktemp -d); rm -f "${D}/page.tsx"',
+    'D=$(mktemp -d); cd /w/slate && rm -f "${D}/page.tsx"',
     'cd /w/slate && rm -rf "$TMPDIR/build-cache"',
     // A variable set to a plain name has a path, judged by it, outside every screen path here.
     'R=/w/slate/notes; rm -rf "$R/old"',
     // Every $ in single quotes is text: the folder is named `$ROOT`, in no screen path.
     "cd /w/slate && rm -rf '$ROOT/old'",
   ]) expect([command, refusalOf(await call($, { tool: 'Bash', command }))]).toEqual([command, ''])
+  // #3468 (Dan, 2026-11-26, accept the hold): with the setting behind the `&&` it runs only if the
+  // cd works, so the folder may be any, and the removal is held as one the guard cannot follow.
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'cd /w/slate && D=$(mktemp -d); rm -f "${D}/page.tsx"' }))).toContain('could not be followed')
   expect(w.ran.length).toBe(5)
 })
 
