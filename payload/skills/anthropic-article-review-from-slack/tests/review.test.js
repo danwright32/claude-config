@@ -214,9 +214,13 @@ function logAdd(home, e, extra) {
   const noIssue = logAdd(home, entry(TS_NEW, 1, { kind: 'how-to', outcome: 'changed',
     proposals: [{ summary: 'x', decision: 'accepted' }] }));
   check(noIssue.code !== 0 && /issue/.test(noIssue.err), 'an accepted change with no issue and no draft note is refused', noIssue.err);
+  // The refusal says what each kind of system needs, so it never offers a draft alone for a system
+  // that has a repository, where the issue is filed with no second question (#3562).
+  check(noIssue.code !== 0 && /no repository/.test(noIssue.err) && !/File the issue or save the draft/.test(noIssue.err),
+    'the refusal says a draft alone is only for a system with no repository', noIssue.err);
   const draft = logAdd(home, entry(TS_NEW, 1, { kind: 'how-to', outcome: 'changed',
     proposals: [{ summary: 'x', decision: 'accepted', draftNote: true }] }));
-  check(draft.code === 0, 'an accepted change for someone else\'s system may carry a draft note in place of an issue', draft.err);
+  check(draft.code === 0, 'an accepted change for someone else\'s system with no repository may carry a draft note in place of an issue', draft.err);
   const hollow = logAdd(home, entry(TS_OLD, 2, { kind: 'how-to', outcome: 'changed', proposals: [] }));
   check(hollow.code !== 0 && /accepted/.test(hollow.err), 'an outcome of changed with nothing accepted is refused', hollow.err);
   const sneaky = logAdd(home, entry(TS_OLD, 2, { kind: 'how-to', outcome: 'no-change',
@@ -226,6 +230,17 @@ function logAdd(home, e, extra) {
   check(noReason.code !== 0 && /reason/.test(noReason.err), 'an entry with no reason is refused', noReason.err);
   check(fs.existsSync(localPath(home, 'log.local.json')) && readLocal(home, 'log.local.json').articles.length === 1,
     'only the one good entry reached the log', '');
+})();
+
+// A proposal accepted for a system Dan does not own that has a repository ends with an issue filed
+// there and a draft for its owner linking it, so its log entry carries both (#3562).
+(function acceptedElsewhereKeepsIssueAndDraft() {
+  const home = newHome();
+  const both = logAdd(home, entry(TS_NEW, 1, { kind: 'how-to', outcome: 'changed', reason: 'One change accepted.',
+    proposals: [{ summary: 'x', decision: 'accepted', issue: 'https://example.com/issues/3', draftNote: true }] }));
+  const kept = both.code === 0 ? readLocal(home, 'log.local.json').articles[0].proposals[0] : {};
+  check(both.code === 0 && both.json && both.json.emoji === HANDS && kept.issue === 'https://example.com/issues/3' && kept.draftNote === true,
+    'an accepted proposal carrying both an issue link and a draft note is logged with both kept', both.out + both.err + JSON.stringify(kept));
 })();
 
 (function logRefusesASecondEntryUnlessReplacing() {
@@ -647,6 +662,33 @@ guarded('updating an app', function appsSetUpdatesInPlace() {
     'the audit step names Opus for its agents, Fable for a security or compliance article, and points at the builder rule for the split', audit.join('\n'));
   check(checker.length === 1 && /checker agent/.test(checker[0]) && checker[0].indexOf('`model: "opus"`') !== -1,
     'the checker step names Opus for its agent', checker.join('\n'));
+})();
+
+// Dan's accepting a proposal for a system he does not own is the approval to file its issue: "we
+// never have to ask to file one. As long as I approve it, we can file" (2026-11-24, #3562). The old
+// step saved the owner's draft and then asked before filing, so the draft asked a question Dan had
+// already answered and stayed stale once the issue was filed (a saved draft cannot be changed).
+// The session follows the skill's text, so the text is what is held here: every line about a system
+// Dan does not own, read for a second ask, and the order of filing and drafting.
+(function acceptedElsewhereIsFiledThenDrafted() {
+  const text = fs.readFileSync(path.resolve(__dirname, '..', 'SKILL.md'), 'utf8');
+  const lines = text.split('\n');
+  const notMine = lines.filter(function (l) { return l.indexOf('`mine: false`') !== -1; });
+  check(notMine.length >= 2, 'the skill says what happens for a system Dan does not own, with a repository and without one', notMine.join('\n'));
+  const asks = notMine.filter(function (l) { return /\bask/i.test(l); });
+  check(asks.length === 0, 'no line about a system Dan does not own asks him anything before filing', asks.join('\n'));
+  check(!/ask(s|ing)? (him |Dan )?before filing/i.test(text) && !/before filing any issue/i.test(text),
+    'nowhere in the skill is there a second ask before filing', '');
+  const withRepo = notMine.filter(function (l) { return /`repo`/.test(l) && !/no `repo`/.test(l); });
+  const fileAt = withRepo.length === 1 ? withRepo[0].search(/\bfile the issue\b/i) : -1;
+  const draftAt = withRepo.length === 1 ? withRepo[0].search(/\bdraft\b/i) : -1;
+  check(withRepo.length === 1 && fileAt !== -1 && draftAt !== -1 && fileAt < draftAt && /links? the issue/.test(withRepo[0]),
+    'for a system Dan does not own that has a repository, the issue is filed first and the owner\'s draft then links it', withRepo.join('\n'));
+  const noRepo = notMine.filter(function (l) { return /no `repo`/.test(l); });
+  check(noRepo.length === 1 && /draft/.test(noRepo[0]) && !/\bfile\b/i.test(noRepo[0]),
+    'a system Dan does not own with no repository gets the draft alone', noRepo.join('\n'));
+  check(/"issue": "https:\/\/github\.com\/[^"]*", "draftNote": true/.test(text),
+    'the log example shows an accepted proposal carrying both the issue link and the draft note', '');
 })();
 
 fs.rmSync(SCRATCH, { recursive: true, force: true });
