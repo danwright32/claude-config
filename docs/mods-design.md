@@ -1586,7 +1586,14 @@ the ban list knowing that an action it does not name is approved.
   `toolUseId`, `what` it was and `read` when it only reads (`hooks/refusals.ts`), and the same call
   (tool and input, rtk in front of a command aside) run later without an error writes a `redone`
   line naming those refusals, so the morning report folds the refusals with no verdict into one
-  counted line and lists on its own each one it cannot show was done.
+  counted line and lists on its own each one it cannot show was done. `read` decides nothing but
+  that: no guard reads it, and the call was already refused. Its list of programs that only read
+  widens only from rows a real night listed on their own (#3192): measured 2026-11-26 on the
+  personal MacBook over the seven nights with refusals of that kind (17 to 25 Nov, 379 refusals),
+  the report listed two, `gh pr view` with `--json` and `--repo`, and `git -C <folder> config
+  --get`. Each is a read only in that form: `gh pr view` with `--json` and nothing but `--repo` or
+  `-R` beside it, and `git config` with `--get` as its only option and one or two words after it.
+  `gh issue view`, `sed -n` and `awk` stay off: no night listed one.
 - The ban list (`hooks/overnight.ts`), judged by effect through mod-kit's readers and by the
   repository a call reaches, and refused at `tool.call` in every session while asleep: issue,
   label and milestone writes by gh or gh api. Every other gh call is judged by two short lists,
@@ -2677,9 +2684,12 @@ known. A member renamed on the way out is not read.
   rule that running programs is allowed, so such a program handed a file still runs there; it does
   refuse an unpack that lands outside the notes. The morning report's judgement of whether a refused
   call only read keeps its own list of programs (`READ_PROGRAMS` in `refusals.ts`). Neither list
-  holds all of the other: that one has `basename`, `dirname`, `pwd`, `nl`, `md5` and others the
-  reader does not list, and the reader's has `cksum`, `ps`, `lsof`, `mdls` and others that one
-  lacks. So a program on that list which the reader does not know still only reads there, and a
+  holds all of the other: that one has `basename`, `dirname`, `realpath`, `pwd`, `printf`, `nl`,
+  `egrep`, `fgrep`, `md5`, `column`, `find`, `sort`, `cd`, `true`, `false` and, since #3192, one
+  form of `gh` (`gh pr view` with `--json`), none of which is on the reader's list of 32, and that has
+  `cksum`, `pgrep`, `strings`, `paste`, `lsof`, `mdls`, `mdfind`, `pdfinfo` and `ps`, which that one
+  lacks. Whether the report should read the reader's list instead is Dan's question (#3192); the
+  reader's list is his alone to add to. So a program on that list which the reader does not know still only reads there, and a
   program only the reader lists is no read there, because the judgement checks every command
   against its own list alone. A form of a listed program that the reader says writes a file or runs
   a program (`file -C`, `rg --hostname-bin`) is no read.
