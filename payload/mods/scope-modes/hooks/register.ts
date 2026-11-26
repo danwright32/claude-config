@@ -116,7 +116,7 @@ import {
 import { claimEntry, closeMatchIn, declinedEntry, declinedIn, filedEntry, issueLinkIn, judgeProposal, proposalPath, type ProposalState } from './proposals.ts'
 import { answeredIn, distinctQuestions, judgeNamed, linkNumber, linksIn as questionLinks, namedItems, settledKey, type ItemState, type Named } from './settled.ts'
 import { ENDED_SAID, MORNING_HEADING, morningStep, pickerAnswered, reviewsIn, stalePending, withDone, withPending, type MorningReview } from './morning.ts'
-import { notePicked, placePicked, type PickedIo, type PlaceIo } from './closedecision.ts'
+import { changeLeft, notePicked, placePicked, type PickedIo, type PlaceIo } from './closedecision.ts'
 import { alreadyPut, ASLEEP_DELIVERY, deliveryOf, heldAsleep, heldUntilWake, type HeldDelivery, type HeldMerge, type PutMorning } from './nightheld.ts'
 import { reportBase, reportTitle } from './reportname.ts'
 import { scopesAskedOffIn, triggersIn, type Trigger } from './triggers.ts'
@@ -4539,7 +4539,6 @@ const keepFound = async ($: EngineInterface, t: ScopeModesTarget, found: Found |
   return kept
 }
 
-const leftOpenOf = async ($: EngineInterface) => (await $.state.get(leftOpenRef)).value ?? []
 // Dan's own pick to close a PR unmerged (#3779), whose rules are closedecision.ts's: this mod's
 // record of his answers, its repository and link reader and its one way of asking GitHub whether a
 // number is a PR (namedPr, budgeted as every such read is, #1777), each spelled here. gh starts in
@@ -4552,8 +4551,8 @@ const pickedIo = ($: EngineInterface, o: Lookup = {}): PickedIo & PlaceIo => {
   return {
     slug: () => sessionSlug($),
     linkRepo: link => $.modkit.linkRepo({ link }),
-    left: () => leftOpenOf($),
-    setLeft: all => $.state.set(leftOpenRef, all),
+    left: () => $.state.get(leftOpenRef),
+    setLeft: (all, ifVersion) => $.state.set(leftOpenRef, all, { ifVersion }),
     log: line => $.ui.log(`scope-modes: ${line}`, { to: 'debug' }),
     named: (repo, refs, where) => namedPr($, gh, repo, refs, where, o),
   }
@@ -4823,14 +4822,15 @@ const leavePrOpen = async ($: EngineInterface, input: Record<string, unknown>): 
   } catch (err) {
     return `Dan was not asked (${msg(err)}), so nothing was recorded: winding down still waits on ${pr}.`
   }
-  // One answer per PR: a new one, open or closed, replaces whatever he said about it before.
-  const others = (await leftOpenOf($)).filter(d => !(d.number === number && d.repo.toLowerCase() === repo.toLowerCase()))
+  // One answer per PR: a new one, open or closed, replaces whatever he said about it before, on the
+  // record as it stands when written, so an answer of his recorded since is never written over (#3779).
+  const others = (all: readonly ScopeModesLeftAsIs[]) => all.filter(d => !(d.number === number && d.repo.toLowerCase() === repo.toLowerCase()))
   if (answer === asIs.keep) {
-    await $.state.set(leftOpenRef, [...others, asIs.record(repo, number, why, head)])
+    await changeLeft(pickedIo($), all => [...others(all), asIs.record(repo, number, why, head)])
     return asIs.keptSaid(pr, head)
   }
   // Only his keep answer leaves it as it is: the other choice or anything typed withdraws an earlier one.
-  await $.state.set(leftOpenRef, others)
+  await changeLeft(pickedIo($), others)
   if (answer === asIs.other) return asIs.otherSaid(pr)
   return `Dan did not choose to leave ${pr} ${asIs.as}, so winding down still waits on it. He wrote: ${answer}`
 }

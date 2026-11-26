@@ -195,4 +195,49 @@ export const closeDecisionEngine = (h: CloseDecisionHarness): void => {
     expect(placed).toContain(h.REOPEN(3752))
     expect(w.toasts).toEqual([])
   })
+
+  // The lessons review of this change: the finish check read the record of his answers, waited on
+  // GitHub, then wrote the whole record back, so an answer of his recorded during that wait was
+  // written over and its PR sent back to be reopened. The record is now changed as it stands at the
+  // moment of writing, so both answers are kept.
+  test('an answer of his recorded while the finish check waits on GitHub is kept, with the one that check was placing (#3779)', h.withDeps, async ($, on) => {
+    const answers = [{ label: 'Close it unmerged' }, { label: 'Merge it' }]
+    // The world answers every process as it does for the tests above; its answer to the one read
+    // `gh pr view 3692` is held until `during` has run, as GitHub's is while that read waits on it.
+    let during: (() => Promise<void>) | undefined
+    type Answer = ($: unknown, e: { argv: readonly string[] }) => unknown
+    const onHeld = (name: string, answer: Answer) =>
+      (on as unknown as (name: string, answer: Answer) => unknown)(name, ($, e) => {
+        const run = name === 'process.run' && e.argv.join(' ').startsWith('gh pr view 3692 ') ? during : undefined
+        if (!run) return answer($, e)
+        during = undefined
+        return run().then(() => answer($, e))
+      })
+    const { w, clock } = h.world(onHeld as never, { ...live, created: 'https://github.com/o/r/pull/3749\n', ask: CLOSE_IT } as never)
+    w.o.gh = { ...h.merged(), others: [h.closedPr(3749 as never, 'aaa1111' as never, note as never), h.closedPr(3751 as never, 'bbb2222' as never, [] as never)], notPrs: [3692] }
+    await h.start($ as never, clock as never)
+    await create($, 'settings', 'g1')
+    w.o.created = 'https://github.com/o/r/pull/3751\n'
+    await create($, 'second', 'g2')
+    // His first answer, about PR 3749, waits for GitHub to say #3692 is no pull request.
+    await h.call($ as never, signOff() as never)
+    // While GitHub is asked that, he answers a second picker, about PR 3751.
+    const second = 'Pull request 3751 is not needed either. What should happen to it?'
+    let answeredMeanwhile = 0
+    during = async () => {
+      w.o.ask = 'Close it unmerged'
+      await h.call($ as never, signOff(second, answers, {}, 'q2') as never)
+      answeredMeanwhile++
+    }
+    await h.command($ as never, 'winddown' as never)
+    const block = (await h.stop($ as never)).block
+    // The second answer was given during the read, never before or after it.
+    expect(answeredMeanwhile).toBe(1)
+    expect(w.asked).toEqual([SIGN_OFF, second])
+    // Both are left closed by his choice: neither is sent back to be reopened, and nothing is left.
+    expect(block).toBeUndefined()
+    expect(w.toasts.length).toBe(1)
+    expect(w.toasts[0]).toContain(`PR #3749 in o/r (${PICKED_WHY})`)
+    expect(w.toasts[0]).toContain('PR #3751 in o/r (Dan answered "Close it unmerged" in a picker naming it)')
+  })
 }

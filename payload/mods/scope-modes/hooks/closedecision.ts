@@ -129,9 +129,32 @@ export type PickedIo = {
   slug: () => Promise<string | undefined>
   /** mod-kit's reader of a github.com link ($.modkit.linkRepo). */
   linkRepo: (link: string) => Promise<string | null>
-  left: () => Promise<readonly ScopeModesLeftAsIs[]>
-  setLeft: (all: ScopeModesLeftAsIs[]) => Promise<unknown>
+  /** The record of his answers with the version it is at, and a write that lands only on that version. */
+  left: () => Promise<{ value?: ScopeModesLeftAsIs[] | null; version: number }>
+  setLeft: (all: ScopeModesLeftAsIs[], ifVersion: number) => Promise<{ isSet: boolean }>
   log: (line: string) => void
+}
+
+/**
+ * Changes the record of his answers as it stands at the moment of writing, and answers with it as
+ * it stands after. Never a list read earlier written back whole: an answer of his recorded in
+ * between, by another picker or by leave_pr_open, would be written over (the lessons review of
+ * #3779). The write lands only on the version that was read, and is made again on a newer one
+ * otherwise, so `change` can run more than once and decides only from the list it is handed;
+ * undefined writes nothing.
+ */
+export const changeLeft = async (
+  io: Pick<PickedIo, 'left' | 'setLeft'>,
+  change: (all: readonly ScopeModesLeftAsIs[]) => ScopeModesLeftAsIs[] | undefined,
+): Promise<readonly ScopeModesLeftAsIs[]> => {
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const held = await io.left()
+    const now = held.value ?? []
+    const next = change(now)
+    if (!next) return now
+    if ((await io.setLeft(next, held.version)).isSet) return next
+  }
+  throw new Error('the record of his answers changed under every one of 10 attempts to write it')
 }
 
 /**
@@ -149,18 +172,17 @@ export const notePicked = async (io: PickedIo, input: Record<string, unknown>, r
     for (const text of texts) for (const { link } of prLinks(text)) if (!linked.has(link)) linked.set(link, await io.linkRepo(link))
     const found = closeDecisions(input, r, linked)
     if (!found.length) return
-    let all = [...(await io.left())]
-    let kept = 0
+    // Each record is made before the list is touched, so nothing is waited on between reading it and writing it.
+    const records: ScopeModesLeftClosed[] = []
     for (const d of found) {
       const repo = d.pr.repo ?? (await io.slug())
       if (!repo) {
         io.log(`Dan's answer "${quoteOf(d.answer)}" about PR ${refSaid(d.pr)} could not be recorded: this session's repository could not be read, so which repository it is in is not known. Winding down asks about that PR as if he had not answered`)
         continue
       }
-      all = [...all.filter(x => !samePr(x, repo, d.pr.number)), pickedClosed(repo, d)]
-      kept++
+      records.push(pickedClosed(repo, d))
     }
-    if (kept) await io.setLeft(all)
+    if (records.length) await changeLeft(io, all =>records.reduce<ScopeModesLeftAsIs[]>((kept, rec) => [...kept.filter(x => !samePr(x, rec.repo, rec.number)), rec], [...all]))
   } catch (err) {
     io.log(`Dan's answer to close a PR unmerged could not be recorded (${msg(err)}), so winding down asks about that PR as if he had not answered`)
   }
@@ -171,39 +193,74 @@ export type PlaceIo = Pick<PickedIo, 'left' | 'setLeft' | 'log'> & {
   named: (repo: string, refs: readonly PrRef[], where: string) => Promise<PrRef | undefined | { unreadable: string }>
 }
 
+const sameRef = (a: PrRef, b: PrRef | undefined) => !!b && a.number === b.number && (a.repo ?? '').toLowerCase() === (b.repo ?? '').toLowerCase()
+/**
+ * Whether a record is still the answer GitHub was asked about: about that PR, naming the same
+ * other numbers, which is all GitHub's answer was about. An answer recorded since that names other
+ * numbers, or none, or is about another PR, is not, and what GitHub said is never applied to it.
+ */
+const sameWaiting = (x: ScopeModesLeftAsIs, was: ScopeModesLeftClosed): boolean => {
+  if (!isLeftClosed(x) || !samePr(x, was.repo, was.number)) return false
+  const [now, then] = [x.unless ?? [], was.unless ?? []]
+  return now.length === then.length && now.every((ref, i) => sameRef(ref, then[i]))
+}
+
 /**
  * His answers with each picked one placed: one whose picker named another number stands once
  * GitHub has said that number is no pull request, and is then kept without it; it is dropped, and
  * logged, where that number is a pull request, since which he meant is not on record; and it waits,
- * unchanged, with why in `unread`, while GitHub cannot say. `only` narrows which are placed. What
- * changed is written back once.
+ * unchanged, with why in `unread`, while GitHub cannot say. `only` narrows which are placed.
+ *
+ * GitHub is asked first, and what it said is then applied to the record as it stands at the moment
+ * of writing (changeLeft), only to an answer that is still the one GitHub was asked about. So
+ * an answer of his recorded while GitHub was being asked is kept as he gave it: it is in `choices`,
+ * and one of those naming another number waits for the next placing, with `unread` saying GitHub
+ * has not been asked about it yet.
  */
 export const placePicked = async (
   io: PlaceIo,
   only: (d: ScopeModesLeftClosed) => boolean = () => true,
 ): Promise<{ choices: ScopeModesLeftAsIs[]; unread: Map<ScopeModesLeftAsIs, string> }> => {
-  const all = await io.left()
-  const choices: ScopeModesLeftAsIs[] = []
-  const unread = new Map<ScopeModesLeftAsIs, string>()
-  let changed = false
+  const all: readonly ScopeModesLeftAsIs[] = (await io.left()).value ?? []
+  // What GitHub said of each waiting answer, by the answer as it was read.
+  const stands: ScopeModesLeftClosed[] = []
+  const dropped: { was: ScopeModesLeftClosed; other: PrRef }[] = []
+  const unreadable: { was: ScopeModesLeftClosed; why: string }[] = []
   for (const d of all) {
-    if (!isLeftClosed(d) || !d.unless?.length || !only(d)) {
-      choices.push(d)
-      continue
-    }
+    if (!isLeftClosed(d) || !d.unless?.length || !only(d)) continue
     const other = await io.named(d.repo, d.unless, `the picker Dan answered about PR #${d.number}`)
-    if (other && 'unreadable' in other) {
-      choices.push(d)
-      unread.set(d, other.unreadable)
-      continue
-    }
-    changed = true
-    if (other) {
-      io.log(`Dan's answer about PR #${d.number} in ${d.repo} is not kept: its picker also named ${refSaid(other)}, which is a PR too, so which one he chose to close is not on record`)
-      continue
-    }
-    choices.push({ repo: d.repo, number: d.number, closed: true, why: d.why, ...(d.picked ? { picked: true as const } : {}) })
+    if (other && 'unreadable' in other) unreadable.push({ was: d, why: other.unreadable })
+    else if (other) dropped.push({ was: d, other })
+    else stands.push(d)
   }
-  if (changed) await io.setLeft(choices)
-  return { choices, unread }
+  let gone: typeof dropped = []
+  const choices =
+    stands.length || dropped.length
+      ? await changeLeft(io, fresh => {
+          gone = []
+          let changed = false
+          const next = fresh.flatMap((x): ScopeModesLeftAsIs[] => {
+            if (isLeftClosed(x) && stands.some(was => sameWaiting(x, was))) {
+              changed = true
+              return [{ repo: x.repo, number: x.number, closed: true, why: x.why, ...(x.picked ? { picked: true as const } : {}) }]
+            }
+            const drop = dropped.find(({ was }) => sameWaiting(x, was))
+            if (!drop) return [x]
+            changed = true
+            gone.push(drop)
+            return []
+          })
+          return changed ? next : undefined
+        })
+      : all
+  // Said once, of what the write that landed took out, however many times it was tried.
+  for (const { was, other } of gone) io.log(`Dan's answer about PR #${was.number} in ${was.repo} is not kept: its picker also named ${refSaid(other)}, which is a PR too, so which one he chose to close is not on record`)
+  const unread = new Map<ScopeModesLeftAsIs, string>()
+  for (const x of choices) {
+    if (!isLeftClosed(x) || !x.unless?.length || !only(x)) continue
+    // One recorded while GitHub was being asked has not been asked about, and is said to be so.
+    const notAsked = `whether ${x.unless.map(refSaid).join(' and ')}, named in the picker Dan answered about PR #${x.number}, is a PR: GitHub has not been asked yet, as that answer was recorded while it was being asked about an earlier one`
+    unread.set(x, unreadable.find(({ was }) => sameWaiting(x, was))?.why ?? notAsked)
+  }
+  return { choices: [...choices], unread }
 }

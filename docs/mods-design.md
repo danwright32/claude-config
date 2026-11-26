@@ -1188,8 +1188,10 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
   outstanding ("has new commits since Dan chose to leave it open"), so his answer never covers
   commits he was not asked about; a head GitHub did not give is outstanding and says so. With no
   record, #856's default holds. Any answer but Leave it open withdraws an earlier one. A picker
-  Claude asks itself through AskUserQuestion is never read as his choice, since which PR it was
-  about and what the answer meant would be inferred. Nothing is asked about a PR that cannot be
+  Claude asks itself through AskUserQuestion is never read as his choice to leave a PR open or
+  closed, since which PR it was about and what the answer meant would be inferred (the one answer
+  read from such a picker since, his pick to close a PR unmerged, is the next entry, #3779).
+  Nothing is asked about a PR that cannot be
   read or is not open, and while Dan is asleep the question is noted for his morning report.
 - A PR Dan himself chose to close unmerged (#3779). On 2026-11-26 Dan picked "Close it unmerged"
   in a session's picker about a pull request, the session closed it, and an hour later winding down
@@ -1205,7 +1207,13 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
   reopened) while GitHub cannot say, and is dropped where it is one. It is kept as the same
   `leftOpen` record a "Leave it closed" answer makes, marked `picked`, so one rule decides what is
   left as it is. "Leave it open" and "Leave it closed" in a session's picker are still never read.
-  The rules are `hooks/closedecision.ts`.
+  That record now has three writers (his pick, `leave_pr_open`, and the finish check placing a
+  pick's other number), and the finish check waits on GitHub between reading it and writing it. So
+  every one of them changes the record as it stands at the moment of writing (`changeLeft`: a
+  write that lands only on the version read, made again on a newer one), and what GitHub said is
+  applied only to an answer that is still the one it was asked about. A list read earlier is never
+  written back whole: the first build did that, and an answer of his recorded during the wait was
+  written over (the lessons review of this change). The rules are `hooks/closedecision.ts`.
 - Whose branch it is (#1074). On 2026-10-11 winding down refused every stop of a Slate session on a
   branch whose PR had merged a month before, because the shared primary checkout sat on it, and
   Dan's "leave it as is", given twice, had nowhere to be recorded. A branch is the session's own only

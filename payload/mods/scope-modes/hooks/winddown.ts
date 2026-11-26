@@ -6,10 +6,11 @@ import { EDITORS, type Cmd } from './nobuild.ts'
 // or no deploy step recorded (#687), the worktree and branch cleaned, and the issue closed. Until then the turn end is refused. Fixing
 // what blocks this issue's merge or deploy is allowed; starting new work is denied. Asking Dan
 // (AskUserQuestion) is never new work: winding down finalizes everything the session has open, so a
-// PR needing his sign off is asked about and merged, never parked waiting on him (#856). The one
-// exception is Dan's own answer to leave_pr_open: a PR he chose to leave open (#917), recorded
-// against the commit the PR was on, is settled until it is pushed to again, and a PR closed without
-// merging that he chose to leave closed (#1033) is settled while it stays closed.
+// PR needing his sign off is asked about and merged, never parked waiting on him (#856). The
+// exceptions are Dan's own answers. One is his answer to leave_pr_open: a PR he chose to leave open
+// (#917), recorded against the commit the PR was on, is settled until it is pushed to again, and a
+// PR closed without merging that he chose to leave closed (#1033) is settled while it stays closed.
+// The other is his own pick, in a session's picker, to close a PR unmerged (#3779, below).
 //
 // A closed PR is never settled without his answer, even where its work plainly merged in another PR
 // (ovation#711, whose work merged as #716): GitHub records no link from a closed PR to the one that

@@ -147,14 +147,23 @@ test('a PR he chose to close is settled while it stays closed, never while anoth
 // The caller's state, repository, link reader and GitHub reads are handed in, so they are faked here.
 type Left = Parameters<PickedIo['setLeft']>[0]
 const io = (over: Partial<PickedIo & PlaceIo> = {}, start: Left = []) => {
-  const seen = { left: start, writes: 0, logs: [] as string[], asked: [] as string[] }
+  // `between` is what another writer does between one read of the record and the write that follows it.
+  const seen = { left: start, version: 1, writes: 0, missed: 0, between: [] as (() => void)[], logs: [] as string[], asked: [] as string[] }
   const made: PickedIo & PlaceIo = {
     slug: async () => 'o/r',
     linkRepo: async () => 'o/r',
-    left: async () => seen.left,
-    setLeft: async all => {
+    left: async () => ({ value: seen.left, version: seen.version }),
+    // A write lands only on the version it read, as the engine's state does with ifVersion.
+    setLeft: async (all, ifVersion) => {
+      seen.between.shift()?.()
+      if (ifVersion !== seen.version) {
+        seen.missed++
+        return { isSet: false }
+      }
       seen.left = all
+      seen.version++
       seen.writes++
+      return { isSet: true }
     },
     log: line => void seen.logs.push(line),
     named: async (_repo, refs) => {
@@ -163,9 +172,14 @@ const io = (over: Partial<PickedIo & PlaceIo> = {}, start: Left = []) => {
     },
     ...over,
   }
-  return { made, seen }
+  // Another writer's whole write, as leave_pr_open or another picker's answer lands it.
+  const lands = (all: Left) => {
+    seen.left = all
+    seen.version++
+  }
+  return { made, seen, lands }
 }
-const PICKED_3749 = { repo: 'o/r', number: 3749, closed: true as const, why: 'Dan answered "3.79.1 Close it unmerged (Recommended)" in a picker naming it', picked: true as const }
+const PICKED_3749 ={ repo: 'o/r', number: 3749, closed: true as const, why: 'Dan answered "3.79.1 Close it unmerged (Recommended)" in a picker naming it', picked: true as const }
 
 test('his pick is recorded against the PR in the repository it is in, one answer per PR, the newest kept', async () => {
   const earlier: Left = [
@@ -242,4 +256,81 @@ test('a pick whose picker named another number stands once GitHub says it is no 
   const one = await placePicked(narrow.made, d => d.number === 3751)
   expect(one.choices).toEqual([waits, { ...PICKED_3749, number: 3751 }])
   expect(narrow.seen.asked).toEqual(['#3692'])
+})
+
+// The lessons review of #3779: placing read the record, waited on GitHub, then wrote the list it
+// had read back whole, so an answer of his recorded during that wait was written over. GitHub is
+// still asked first; what it said is then applied to the record as it stands when written.
+const WAITS = { ...PICKED_3749, unless: [{ number: 3692 }] }
+const OPEN_31: Left[number] = { repo: 'o/r', number: 31, head: 'bbb2222', why: 'for a reviewer' }
+const NOT_ASKED = (other: number) => `whether #${other}, named in the picker Dan answered about PR #3749, is a PR: GitHub has not been asked yet, as that answer was recorded while it was being asked about an earlier one`
+
+test('an answer of his recorded while GitHub is being asked about an earlier one is kept, and so is the earlier one (#3779)', async () => {
+  // While GitHub is asked whether #3692 is a PR, he answers a second picker, about PR 3751.
+  const second = 'Pull request 3751 is not needed either. What should happen to it?'
+  const both = io({}, [OPEN_31, WAITS])
+  both.made.named = async () => {
+    await notePicked(both.made, picker(second, labels('Close it unmerged', 'Merge it')), answered(second, 'Close it unmerged'))
+    return undefined
+  }
+  const PICKED_3751 = { repo: 'o/r', number: 3751, closed: true as const, why: 'Dan answered "Close it unmerged" in a picker naming it', picked: true as const }
+  const placed = await placePicked(both.made)
+  expect(both.seen.left).toEqual([OPEN_31, PICKED_3749, PICKED_3751])
+  expect(placed.choices).toEqual([OPEN_31, PICKED_3749, PICKED_3751])
+  expect(placed.unread.size).toBe(0)
+  expect(both.seen).toMatchObject({ writes: 2, missed: 0, logs: [] })
+  // The same where the earlier answer is dropped: GitHub says #3692 is a PR too.
+  const dropped = io({}, [OPEN_31, WAITS])
+  dropped.made.named = async (_repo, refs) => {
+    await notePicked(dropped.made, picker(second, labels('Close it unmerged', 'Merge it')), answered(second, 'Close it unmerged'))
+    return refs[0]
+  }
+  expect((await placePicked(dropped.made)).choices).toEqual([OPEN_31, PICKED_3751])
+  expect(dropped.seen.left).toEqual([OPEN_31, PICKED_3751])
+})
+
+test('what GitHub said is applied only to the answer it was asked about, never to one that replaced it or to one withdrawn meanwhile (#3779)', async () => {
+  // He answers about PR 3749 again while GitHub is asked, in a picker naming another number, #3700.
+  const again = { ...PICKED_3749, unless: [{ number: 3700 }] }
+  const replaced = io({}, [OPEN_31, WAITS])
+  replaced.made.named = async () => (replaced.lands([OPEN_31, again]), undefined)
+  const placed = await placePicked(replaced.made)
+  // #3692 is no PR, which says nothing of #3700: his newer answer waits, and is said not to be asked about yet.
+  expect(replaced.seen).toMatchObject({ left: [OPEN_31, again], writes: 0 })
+  expect(placed.choices).toEqual([OPEN_31, again])
+  expect([...placed.unread]).toEqual([[placed.choices[1], NOT_ASKED(3700)]])
+  // #3692 is a PR, so the answer naming it would be dropped: his answer to leave_pr_open since is not.
+  const leftClosed: Left[number] = { repo: 'o/r', number: 3749, closed: true, why: 'PR #716 superseded it' }
+  const answeredSince = io({}, [OPEN_31, WAITS])
+  answeredSince.made.named = async (_repo, refs) => (answeredSince.lands([OPEN_31, leftClosed]), refs[0])
+  expect((await placePicked(answeredSince.made)).choices).toEqual([OPEN_31, leftClosed])
+  expect(answeredSince.seen).toMatchObject({ left: [OPEN_31, leftClosed], writes: 0, logs: [] })
+  // Withdrawn meanwhile (he chose to merge it after all), it is not put back by GitHub's answer.
+  const withdrawn = io({}, [OPEN_31, WAITS])
+  withdrawn.made.named = async () => (withdrawn.lands([OPEN_31]), undefined)
+  expect((await placePicked(withdrawn.made)).choices).toEqual([OPEN_31])
+  expect(withdrawn.seen).toMatchObject({ left: [OPEN_31], writes: 0 })
+})
+
+test('a write the record changed under is made again on the newer record, said once, and one that never lands is an error (#3779)', async () => {
+  // Another answer lands between the read the write was made from and the write itself.
+  const other: Left[number] = { repo: 'o/r', number: 40, head: 'ccc3333', why: 'awaiting review' }
+  const raced = io({ named: async (_repo, refs) => refs[0] }, [OPEN_31, WAITS])
+  raced.seen.between.push(() => raced.lands([OPEN_31, WAITS, other]))
+  const placed = await placePicked(raced.made)
+  expect(placed.choices).toEqual([OPEN_31, other])
+  expect(raced.seen).toMatchObject({ left: [OPEN_31, other], writes: 1, missed: 1 })
+  expect(raced.seen.logs).toEqual(["Dan's answer about PR #3749 in o/r is not kept: its picker also named #3692, which is a PR too, so which one he chose to close is not on record"])
+  // His pick is recorded on the newer record the same way.
+  const noted = io({}, [OPEN_31])
+  noted.seen.between.push(() => noted.lands([OPEN_31, other]))
+  await notePicked(noted.made, picker(), answered(SIGN_OFF, CLOSE_IT))
+  expect(noted.seen).toMatchObject({ left: [OPEN_31, other, WAITS], writes: 1, missed: 1, logs: [] })
+  // A record that changes under every attempt: placing throws, so the turn end is refused, and a pick is logged as not recorded.
+  const never = io({}, [OPEN_31, WAITS])
+  never.made.setLeft = async () => ({ isSet: false })
+  await expect(placePicked(never.made)).rejects.toThrow('the record of his answers changed under every one of 10 attempts to write it')
+  await notePicked(never.made, picker(), answered(SIGN_OFF, CLOSE_IT))
+  expect(never.seen.left).toEqual([OPEN_31, WAITS])
+  expect(never.seen.logs).toEqual(["Dan's answer to close a PR unmerged could not be recorded (the record of his answers changed under every one of 10 attempts to write it), so winding down asks about that PR as if he had not answered"])
 })
