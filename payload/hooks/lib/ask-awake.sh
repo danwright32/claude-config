@@ -11,8 +11,9 @@
 # python3. With either gone nothing here can tell, and a question is the wrong answer to that, so
 # the call is refused, saying which is missing.
 #
-# Its callers are connector-change-ask.sh and server-skill-ask.sh. The rule lives here once, so
-# changing what a hook does when it cannot tell night from day is one edit, not one per hook (L613).
+# Its caller is server-skill-ask.sh. connector-change-ask.sh, written first, holds the same rule in
+# its own decide function, with the same words: it is not converted to call this yet, so until it
+# is, a change to the rule is made in both.
 #
 #   ask_awake_or_refuse <hook's name> <kind of call> <what it is, and why it waits>
 #       prints one PreToolUse decision and returns 0: "ask" while Dan is awake, "deny" while he is

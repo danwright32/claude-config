@@ -121,8 +121,8 @@ expect() {  # expect <label> <want decision> <payload> [<sleep record>] [<hook>]
   [ "$got" = "$2 rc=0" ] && check "$1" ok || check "$1" "wanted $2 rc=0, got $got"
 }
 says() {  # says <label> <run output> <ERE the reason must match>
-  local why; why="$(reason "$2")"
-  printf '%s' "$why" | grep -Eq -- "$3" && check "$1" ok || check "$1" "the reason was: ${why:0:300}"
+  local r; r="$(reason "$2")"
+  [[ $r =~ $3 ]] && check "$1" ok || check "$1" "the reason does not say /$3/: ${r:0:300}"
 }
 
 # --- 1. a skill from a server is asked about ------------------------------------------------------
@@ -149,9 +149,10 @@ says "a name under an installed plugin that holds no such skill says so" "$r" 'n
 echo "a name written to look local is read as Claude Code compares names"
 # A fullwidth colon, a space after the colon and a zero width space: the documentation says names
 # are compared ignoring spacing and invisible characters, with fullwidth forms as their plain ones.
-for n in $'docs\xef\xbc\x9apdf' 'docs: pdf' $'docs\xe2\x80\x8b:pdf' $'claude_ai_Docs\xef\xb9\x95pdf'; do
-  expect "the name $(printf '%s' "$n" | od -An -c | tr -s ' ' | head -c 60) is asked about" ask "$(skill "$n")"
-done
+expect "docs and pdf joined by a fullwidth colon is asked about" ask "$(skill $'docs\xef\xbc\x9apdf')"
+expect "docs: pdf, with a space after the colon, is asked about" ask "$(skill 'docs: pdf')"
+expect "docs:pdf with a zero width space before the colon is asked about" ask "$(skill $'docs\xe2\x80\x8b:pdf')"
+expect "a connector's name joined to pdf by a small colon is asked about" ask "$(skill $'claude_ai_Docs\xef\xb9\x95pdf')"
 expect "a name holding punctuation this hook cannot place is asked about" ask "$(skill $'docs\xea\x9e\x89pdf')"
 
 # --- 2. a skill kept on this Mac passes in silence ------------------------------------------------
@@ -167,9 +168,12 @@ expect "an installed plugin'"'"'s command passes" none "$(skill kit:build)"
 expect "an installed plugin'"'"'s nested command passes" none "$(skill kit:deep:dive)"
 expect "a directory'"'"'s own skill, on disk under the working directory, passes" none "$(skill apps/web:deploy)"
 expect "a directory form with no such skill on disk is asked about" ask "$(skill apps/api:deploy)"
-expect "with no record of installed plugins, a plugin form is asked about" ask "$(payload Skill '{"skill": "kit:brainstorming"}')" "$AWAKE" "$(
-  mkdir -p "$WORK/bare/lib"; cp "$HOOK" "$WORK/bare/hook.sh"; cp "$DIR"/lib/hook-notice.sh "$DIR"/lib/push-scope.sh "$DIR"/lib/sleep.sh "$DIR"/lib/ask-awake.sh "$DIR"/lib/server-skills.py "$WORK/bare/lib/" 2>/dev/null
-  printf '#!/usr/bin/env bash\nexport HOME=%q\nexec bash %q\n' "$WORK/empty-home" "$WORK/bare/hook.sh" > "$WORK/bare/run.sh"; mkdir -p "$WORK/empty-home"; printf '%s' "$WORK/bare/run.sh")"
+# The same plugin skill under a home holding no record of installed plugins: nothing says it is on
+# this Mac, so it is asked about.
+EMPTY_HOME="$WORK/empty-home"
+mkdir -p "$EMPTY_HOME"
+r="$(cd "$WORK" && printf '%s' "$(skill kit:brainstorming)" | env -u CLAUDE_HOME HOME="$EMPTY_HOME" CLAUDE_SLEEP_RECORD="$AWAKE" bash "$HOOK" 2>/dev/null; printf '\nrc=%s\n' "$?")"
+[ "$(decision "$r")" = "ask rc=0" ] && check "with no record of installed plugins, a plugin form is asked about" ok || check "with no record of installed plugins, a plugin form is asked about" "$(decision "$r")"
 
 # --- 3. asleep --------------------------------------------------------------------------------------
 echo "while Dan is asleep a server's skill is refused, with the reason, and a local skill still passes"
@@ -293,7 +297,7 @@ PY
   [ -z "$wired" ] && check "settings register server-skill-ask.sh for the Skill tool with onFailure block" ok || check "settings register server-skill-ask.sh for the Skill tool with onFailure block" "$wired"
 fi
 
-echo ""
-echo "$pass passed, $fail failed"
+echo
+echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
-[ "$fail" -eq 0 ]
+[[ "$fail" -eq 0 ]]

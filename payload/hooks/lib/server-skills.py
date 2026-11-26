@@ -72,7 +72,7 @@ def installed_plugins(home):
     """Each installed plugin's name, lower case, with its install folders."""
     found = {}
     try:
-        with open(os.path.join(home, ".claude", "plugins", "installed_plugins.json"), encoding="utf-8") as f:
+        with open(os.path.join(home, ".claude", "plugins", "installed_plugins.json"), encoding="utf-8", errors="replace") as f:
             data = json.load(f)
     except Exception:
         return found
