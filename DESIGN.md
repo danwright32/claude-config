@@ -1441,8 +1441,39 @@ rendered file lives:
   the renderer, the head and the table, and each Mac's copy is a function of its own installed
   rules. It needs one thing from the sync, the file named in the mirror's exclusions so a send does
   not publish it and an apply does not delete it. Dan chose this shape on 2026-11-25 ("Each Mac
-  writes its own (Recommended)"). The sync step is not in this change and comes to him before it
-  merges, so today the type is rendered by hand where it is wanted and nothing installs it.
+  writes its own (Recommended)").
+
+The sync step writes the type at every apply and every send, rather than as an install somebody
+runs, because an installed copy goes on being believed after its source has moved (L423): the
+watcher sends on each change to a rule file, so the type follows the rules within one send. It
+reads the renderer and the rules installed on that Mac, never the payload's, so two Macs whose
+rules differ hold types that differ. It writes only when the result differs and through a
+temporary file outside the mirrored trees, since the watcher sends on any change under `agents/`
+and a rewrite on every send would never settle.
+
+The exclusion is one path in `WRITTEN_HERE`, and three things about it were chosen. It holds on
+the receiving side: the mirror deletes on a Mac whatever the payload lacks, so the protection is
+the list read where the apply runs, never something derived from what the payload carries (the
+suite pulls twice, because the second pull is the one that exposes a protection derived that way).
+It names its tree, where an anchored entry of `COMMON_EXCLUDES` is written once for every mirrored
+tree and would also leave out a file of the same name in `hooks/` or `commands/`. And the file is
+not content in the test for whether a tree holds anything (`tree_holds_files`): otherwise a fresh
+Mac whose agents folder held only the written type would read as holding agents, and its send
+would mirror that folder over the shared one and clear every agent there (#627). The sync's own
+`.gitignore`, the second line the other per Mac files have, does not name the file; that is left
+to Dan.
+
+The guard (`hooks/builder-project-rules-gate.sh`) ships in the same change, so the type never
+runs without it. It holds on the edit tools, where the decision said "first edit", and judges
+each edit by the checkout that edit lands in, so a builder that read the main checkout's file and
+then edits in a worktree is sent to the worktree's own copy: the main checkout can be far behind
+the branch the worktree was cut from. What counts as a read is the agent's own transcript holding
+a Read tool call on that file with a result that is not an error, through the one reader of an
+agent's calls (`lib/agent-overrides.py`), which the hand back check also asks. Where it cannot
+tell whether a builder read the file it refuses; where it cannot tell that a builder is calling
+at all (a payload it cannot read, a subagent with no type in the payload or beside its
+transcript) it lets the call through and says so, because holding every agent on no evidence
+would stop the session's other work.
 
 Every doubt in the table is settled by carrying (a section with no row, a row that matches
 nothing), because the failure this change can cause is a rule silently missing from every builder.

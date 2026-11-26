@@ -8170,12 +8170,25 @@ files: its own prompt carries the lessons core and the builder's share of the gl
   `--check` exits 1 and names the first line that differs when a written copy is stale. `--decisions`
   prints, for each section of `CLAUDE.md`, whether a builder carries it, how much, and why.
   `--rules <folder>` reads another copy of the rules, `~/.claude` for the ones a Mac has installed.
-- **No rendered copy is in the repository, and the sync does not install one yet.** The sources
-  changed in 103 commits in the 30 days to 2026-11-25, 76 of them made by the sync with no pull
-  request, so a committed copy would be stale within hours and two Macs would collide over it
-  (L554). The type exists on a Mac only where it has been rendered into an agents folder. Dan
-  chose on 2026-11-25 that the sync writes it on each Mac from that Mac's rules and never carries
-  it ("Each Mac writes its own (Recommended)"); that step is not built yet (#3389).
+- **No rendered copy is in the repository: each Mac writes its own.** The sources changed in 103
+  commits in the 30 days to 2026-11-25, 76 of them made by the sync with no pull request, so a
+  committed copy would be stale within hours and two Macs would collide over it (L554). Dan chose
+  on 2026-11-25 that the sync writes it on each Mac from that Mac's rules and never carries it
+  ("Each Mac writes its own (Recommended)"). So at every apply and every send, `claude-sync` runs
+  the renderer installed on that Mac against the rules installed on that Mac and writes
+  `~/.claude/agents/builder.md`, only when the result differs from the copy there
+  (`write_builder_type`). A pull lists the file among what it changed. A Mac with no renderer
+  installed is left alone. A render that fails is said on stderr and in the sync log, fails
+  nothing else, and leaves the earlier copy as it was.
+- **That one file is kept out of the sync, both ways.** `agents/` is mirrored with `--delete` in
+  both directions, so without an exclusion a send would publish one Mac's copy (which holds
+  whatever that Mac's rules import, a list of its own projects included) and an apply would
+  delete the copy from a Mac because the payload does not hold it. `WRITTEN_HERE` in `claude-sync`
+  holds the one path, `agents/builder.md`, and every reading of the mirrored trees leaves it out:
+  the send, the apply, the comparisons either makes first, `status`, and the test for whether a
+  tree holds anything to carry, so an agents folder holding only this file still reads as a fresh
+  Mac's empty one. The entry names its tree, so it reaches no other file. A session lists agent
+  types when it starts, so a newly written type is used from the next session on.
 - **What a builder carries is one table.** `builder-type-rules.tsv` has a row for every section of
   `CLAUDE.md`: `carry`, `leave`, and `drop` or `keep` for one item named by its opening words. A
   section with no row is carried, a `drop` row that matches nothing drops nothing, and a `keep`
@@ -8185,9 +8198,19 @@ files: its own prompt carries the lessons core and the builder's share of the gl
 - **What the type does not load, beyond the rule files.** The project's own `CLAUDE.md` or
   `AGENTS.md` and its memory index go with the rule files, because Claude Code leaves them out
   together. The head tells a builder to read the project's file first, and the orchestrate skill
-  tells the session to name any memory file in the brief. Nothing enforces either yet: Dan chose
-  on 2026-11-25 a check that holds a builder's first edit until it has read the project's file
-  ("Add a guard (Recommended)"), to be built with the install step.
+  tells the session to name any memory file in the brief. Nothing enforces the memory half.
+- **A builder's edit is held until it has read the project's file.** Dan chose this on 2026-11-25
+  ("Add a guard (Recommended)"). `hooks/builder-project-rules-gate.sh` (PreToolUse, Edit, Write,
+  MultiEdit and NotebookEdit) holds only an agent of the builder type, read from the hook
+  payload's `agent_type` or, where a subagent's payload has none, from the record Claude Code
+  writes beside the agent's transcript. The file is the `CLAUDE.md` at the root of the checkout
+  the edited file is in (the worktree's own copy in a worktree), or its `AGENTS.md` where it has
+  no `CLAUDE.md`; an edit in a project with neither, or outside any repository, passes. It counts
+  as read once the agent's own transcript holds a Read tool call on that file whose result came
+  back without an error, a read of part of it included. A read through the shell does not count.
+  The refusal names the file. Where the gate cannot tell (no transcript, no file path on the
+  call, a reader that fails) it refuses, naming the file. It does not see a file written by a
+  shell command.
 - **The two UI sections are left out and named instead.** "Progress & Feedback (UI)" and "Building
   UI" are rules only screen work needs, about 5,900 characters every builder read again on each
   request (Dan, 2026-11-25: "Cut the UI sections first"). The head tells a builder whose item
@@ -8205,8 +8228,11 @@ files: its own prompt carries the lessons core and the builder's share of the gl
   before where it does not.
 - Tests: `skills/orchestrate/test-builder-type.sh` (the renderer on a fixture, its failures, the
   stale copy check, the payload's table, tool list and size budget of 92,000 bytes, against 88,281
-  rendered on 2026-11-25 once the UI sections were left out) and
-  `hooks/test-builder-model-gate.sh`.
+  rendered on 2026-11-25 once the UI sections were left out),
+  `hooks/test-builder-model-gate.sh`, `tests/test-builder-type-install.sh` (two fixture Macs and
+  a fixture shared repository: the written file is never sent and never deleted across two sends
+  and two pulls, a fresh Mac holding only it clears nothing, and the write follows each Mac's own
+  rules) and `hooks/test-builder-project-rules-gate.sh`.
 
 ## The context line and the long session nudge
 

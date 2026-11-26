@@ -768,9 +768,12 @@ def claims(report):
     return nv, gen
 
 
-def ran_commands(transcript):
-    """The Bash and Monitor commands the agent's transcript shows it RAN: a call a hook or the
-    platform refused never ran, and its result is an error that does not open with "Exit code"."""
+def tool_calls(transcript, names):
+    """Every call of the tools named that the agent's transcript holds, in order, each with the
+    result the transcript recorded for it: (input, result), where result is (is an error, its
+    text) or None while no result has been written. The ONE reading of a transcript's calls, so a
+    question about what an agent ran and a question about what it read cannot parse the file two
+    ways (L263): ran_commands and files_read below both ask it."""
     uses, results = [], {}
     with open(transcript, errors="replace") as f:
         for line in f:
@@ -784,21 +787,43 @@ def ran_commands(transcript):
             for b in msg["content"]:
                 if not isinstance(b, dict):
                     continue
-                if b.get("type") == "tool_use" and b.get("name") in ("Bash", "Monitor"):
-                    cmd = (b.get("input") or {}).get("command") if isinstance(b.get("input"), dict) else None
-                    if isinstance(cmd, str):
-                        uses.append((b.get("id"), cmd))
+                if b.get("type") == "tool_use" and b.get("name") in names:
+                    if isinstance(b.get("input"), dict):
+                        uses.append((b.get("id"), b["input"]))
                 elif b.get("type") == "tool_result":
                     c = b.get("content")
                     if isinstance(c, list):
                         c = " ".join(x.get("text", "") for x in c if isinstance(x, dict))
                     results[b.get("tool_use_id")] = (bool(b.get("is_error")), str(c or ""))
+    return [(inp, results.get(tid)) for tid, inp in uses]
+
+
+def ran_commands(transcript):
+    """The Bash and Monitor commands the agent's transcript shows it RAN: a call a hook or the
+    platform refused never ran, and its result is an error that does not open with "Exit code"."""
     out = []
-    for tid, cmd in uses:
-        err, text = results.get(tid, (False, ""))
+    for inp, result in tool_calls(transcript, ("Bash", "Monitor")):
+        cmd = inp.get("command")
+        if not isinstance(cmd, str):
+            continue
+        err, text = result or (False, "")
         if err and not text.lstrip().startswith("Exit code"):
             continue
         out.append(cmd)
+    return out
+
+
+def files_read(transcript):
+    """The file paths the agent's transcript shows the Read tool RETURNED, in order
+    (claude-config#3389). Stricter than ran_commands, on purpose: a read counts only once its
+    result is in the transcript and is not an error, so a read that was refused, that named a file
+    that is not there, or whose result has not been written yet is not a read. A caller holding
+    work until a file has been read then errs toward holding."""
+    out = []
+    for inp, result in tool_calls(transcript, ("Read",)):
+        path = inp.get("file_path")
+        if isinstance(path, str) and path and result is not None and not result[0]:
+            out.append(path)
     return out
 
 
