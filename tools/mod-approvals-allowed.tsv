@@ -1,0 +1,5 @@
+# The statements in payload/mods that tools/check-mod-approvals.sh allows by name (#3681).
+# One row per statement, tab separated: mod, file, route, statement, issue, reason.
+# A row allows one statement, follows it by its text and not its line, and fails the check once
+# the statement has gone. Adding a row is a decision for Dan, made on the issue the row names.
+# mod	file	route	statement	issue	reason
