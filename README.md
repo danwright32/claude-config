@@ -236,7 +236,11 @@ and `claude-sync sync` is the way on. A clone that is not on top of that commit 
 all and says the push was not tried.
 The work names scan, the secret scan's list of files outside the payload and the list of staged
 copies a sync or a pull sets aside read file names NUL separated too (#3499), so a name git would
-quote is scanned and set aside like any other.
+quote is scanned and set aside like any other. Measured on 2026-11-22 against a clone of main with
+1,446 payload files, at a load average between 104 and 178 on 12 cores, 10 samples a case: the
+check adds 53 to 72 ms to a send with nothing in the payload to read, 85 to 149 ms to a send of one
+edited hook and one new file, and 4.1 to 4.3 seconds to a replay of the 2026-11-22 send, nearly all
+of it the check's own handling of lines a megabyte long (#3479).
 
 A file whose name holds a line break or another control character (a carriage return, a bell; a
 tab is not one) is not carried by the sync at all (#3540). The steps that decide what an apply may
@@ -250,13 +254,9 @@ exactly where they are on this Mac", or "NOT received onto this Mac"), naming ea
 character written as `\n`, `\r` or a backslash and three digits, and `claude-sync status` lists
 them under "files the sync does not carry". Rename the file so its name holds no such character
 and the next send carries it. A staged copy of one that an older version of the tool left in the
-clone is left there and said, and no send or receive changes it; where the shared repo changes the
-same file the receive refuses and says to move that copy out of the clone, which lets the next
-pull receive. Measured on 2026-11-22 against a clone of main with
-1,446 payload files, at a load average between 104 and 178 on 12 cores, 10 samples a case: the
-check adds 53 to 72 ms to a send with nothing in the payload to read, 85 to 149 ms to a send of one
-edited hook and one new file, and 4.1 to 4.3 seconds to a replay of the 2026-11-22 send, nearly all
-of it the check's own handling of lines a megabyte long (#3479).
+clone is left there and said: no receive changes it, and a send that goes out commits it as it
+stands. Where the shared repo changes the same file the receive refuses and says to move that copy
+out of the clone, which lets the next pull receive.
 
 Text that is never a file is held to the same rule (#1995), because this repository squash merges
 with the commit messages as the body: a name in a message lands in main. The scanner reads labelled

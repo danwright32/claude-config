@@ -14748,8 +14748,8 @@ check "#3499 and never calls it an edit outside the payload to commit or discard
 hp_nl_name=$'two\nlines.sh'
 check "#3499 and this Mac's own copy, and the staged one, are as they were" \
   "grep -qx 'echo two lines' \"$HPH/hooks/\$hp_nl_name\" && grep -qx 'echo two lines' \"$HPC/payload/hooks/\$hp_nl_name\""
-# What the refusal says clears it does (L111): since claude-config#3540 no send or receive changes such
-# a staged copy, so renaming this Mac's file alone left it standing in the way. Moved out of the
+# What the refusal says clears it does (L111): since claude-config#3540 no receive changes such a
+# staged copy, so renaming this Mac's file alone left it standing in the way. Moved out of the
 # clone, the next pull receives, and this Mac's own copy is not touched.
 mv "$HPC/payload/hooks/$hp_nl_name" "$WORK/homepath-legacy-staged.aside"
 if out_hp18="$(_hp bash "$SCRIPT" pull)"; then rc_hp18=0; else rc_hp18=$?; fi

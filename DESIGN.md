@@ -2918,7 +2918,7 @@ These choices were made by the session that built the fix, not by Dan, and are h
   set aside, it was measured on 2026-11-25 to keep this Mac's file, but where it held lines this
   Mac's copy lacks it becomes a conflict copy whose name holds the same character, and the reports
   of conflict copies read their lists one name to a line. The cost: a receive over the same file
-  is refused by git, and since no send or receive changes such a copy any more, renaming this
+  is refused by git, and since no receive changes such a copy any more and a send only commits it as it stands, renaming this
   Mac's file no longer clears it, so the refusal says to move the copy out of the clone.
 - **A name holding a control character is not carried, both ways (#3540).** The apply's steps pass
   lists of files one name to a line: rsync's itemized lines (`locally_ahead_paths`,
