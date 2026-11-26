@@ -42,6 +42,12 @@ if [ ! -f "$HOOK" ]; then
   printf 'SUITE-RESULT passed=0 failed=1\n'
   exit 1
 fi
+# The reading this suite holds is lib/function-values.py's, which the gate loads at its start.
+if [ ! -f "$DIR/lib/function-values.py" ]; then
+  echo "FAIL: there is no lib/function-values.py beside this suite at $DIR, so the gate cannot read a function's values."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+fi
 
 T="$(mktemp -d "${TMPDIR:-/tmp}/slack-gate.XXXXXXXX")" || exit 1
 case "${T%/}" in ''|/|"${HOME%/}") echo "refusing to run: throwaway directory came back as '$T'" >&2; exit 2 ;; esac

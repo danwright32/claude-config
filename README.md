@@ -5358,11 +5358,12 @@ where the shells feed more. Where it cannot tell where they end the body, the ca
 check the gate could not make: a marker that a backslash joins to the line before (which the
 shared reader refuses too, but not in a text it gives up on before it reaches that heredoc), more
 than one `<<` in the command, a marker whose first letters it reads and whose rest it does not, an
-opener line that ends in a backslash, and a heredoc opened earlier on that line that cannot be read
-or never ends. It reads a plain word, bare or in quotes (`word()` in that file is the whole rule);
-among those it does not read are a marker that holds a dollar sign or a backquote, one with a
-character outside quotes that is not a letter, a digit or one of `_ . , : / @ % + = ^ -`, and one
-whose quote never closes. The refusal says how to write the marker so that it is read.
+opener line that ends in a backslash, a heredoc opened earlier on that line that cannot be read or
+never ends, and an unquoted body that no line ends and that holds a dollar sign or a backquote,
+which the shells expand. It reads a plain word, bare or in quotes (`word()` in that file is the
+whole rule); among those it does not read are a marker that holds a dollar sign or a backquote, one
+with a character outside quotes that is not a letter, a digit or one of `_ . , : / @ % + = ^ -`,
+and one whose quote never closes. The refusal says how to write the marker so that it is read.
 
 A marker that reading never took for an opener at all is not refused: one written with a
 backslash (`<<\EOF`), or in quotes with a character that is no letter, digit or underscore. `cat

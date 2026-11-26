@@ -50,6 +50,12 @@ if [ ! -f "$HOOK" ]; then
   printf 'SUITE-RESULT passed=0 failed=1\n'
   exit 1
 fi
+# The reading this suite holds is lib/heredoc-fed.py's, which the gate loads at its start.
+if [ ! -f "$DIR/lib/heredoc-fed.py" ]; then
+  echo "FAIL: there is no lib/heredoc-fed.py beside this suite at $DIR, so the gate cannot tell what a heredoc feeds a program."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+fi
 
 T="$(mktemp -d "${TMPDIR:-/tmp}/slack-gate.XXXXXXXX")" || exit 1
 case "${T%/}" in ''|/|"${HOME%/}") echo "refusing to run: throwaway directory came back as '$T'" >&2; exit 2 ;; esac
