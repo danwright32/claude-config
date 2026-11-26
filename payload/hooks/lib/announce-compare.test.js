@@ -91,7 +91,7 @@ if (typeof judge === 'function') {
   });
 }
 
-// The command line the is it live mod and the dev update both ask: `draft`, the input as JSON on
+// The command line the is it live mod asks: `draft`, the input as JSON on
 // standard input. Every judgement exits 0; an input that cannot be judged exits 2 with why.
 function cli(args, input) {
   const r = childProcess.spawnSync(process.execPath, [LIB].concat(args), { input: input, encoding: 'utf8' });

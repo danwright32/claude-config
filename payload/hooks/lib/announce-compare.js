@@ -7,7 +7,7 @@
 // change merged, and where the post is there it says "found posted" and asks Dan nothing
 // (foundPosted, whose command line is `gather.js posted`). And once a change is live its post is
 // saved as a Slack draft, which counts as saved only when it is the approved wording (judgeDraft,
-// whose command line is `draft` below, asked by the is it live mod and by the dev update).
+// whose command line is `draft` below, asked by the is it live mod).
 //
 // Slack's copy and the wording never match as text: measured 2026-11-25 (claude-config#3664), a post
 // read back from Slack has *bold* where the draft had **bold**, <url|label> where it had
@@ -147,8 +147,7 @@ function judgeDraft(input) {
 
 module.exports = { words: words, foundPosted: foundPosted, judgeDraft: judgeDraft };
 
-// The command line, for the is it live mod, which cannot load this file, and for gather.js's
-// `drafted`, so both ask the one judgement (claude-config#3667).
+// The command line, for the is it live mod, which cannot load this file (claude-config#3667).
 //   draft
 //       reads {text, message, answer: {text, isError}} as JSON on standard input and prints
 //       judgeDraft's answer as JSON: {state: saved | differs | not-kept | error, draftId, error, why}.

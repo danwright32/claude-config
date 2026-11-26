@@ -119,8 +119,10 @@ export type IsItLiveAnnouncement = {
 /**
  * #3667: how an announcement stopped being owed, under a key of its own
  * (`announce-done:<owner/name>#<pr>`) written once and never taken back: a Slack draft of the
- * approved wording was saved (`drafted`, with the id Slack gave it), Dan pressed Mark sent (`sent`),
- * or Dan pressed Not announcing (`not-announcing`).
+ * approved wording was saved (`drafted`, with the id Slack gave it), Dan marked it sent (`sent`), or
+ * Dan said it is not being announced (`not-announcing`). Only `drafted` is written yet: the band
+ * row whose buttons write the other two waits on a design round, and every reader already takes all
+ * three as settled.
  */
 export type IsItLiveAnnounceDone = { how: 'drafted' | 'sent' | 'not-announcing'; at: number; draftId?: string }
 

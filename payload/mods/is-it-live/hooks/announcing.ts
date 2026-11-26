@@ -83,7 +83,8 @@ export async function announcementUnread($: EngineInterface, repo: string, pr: n
  * (`read`, which register.ts asks as each account): the merge gate's reader is run on it, and an
  * answer of owed or unknown is written whole under the pull request's own key. Safe to run twice and
  * from two sessions at once: the same answer writes the same entry, first kept time aside, an entry
- * that reads is never replaced by one that does not, and that it was settled is another key, which
+ * that reads is not replaced by one that does not (but for the instant said below, which the next
+ * card mends), and that it was settled is another key, which
  * this never writes. What could not be told at all is said to Dan and handed back, never kept as
  * owed on a guess: the card asks again.
  */
@@ -102,12 +103,16 @@ export async function noteAnnouncement($: EngineInterface, repo: string, pr: num
   }
   if (asked.kind === 'unread') $.ui.toast(unreadOf({ repo, pr }, asked.why))
   if (asked.kind !== 'owed' && asked.kind !== 'unknown') return asked
+  // Read once the reader has answered, as near the write as the store allows (it has no way to
+  // refuse a write made on a stale read): a whole entry another session kept while the reader ran is
+  // kept. One written in the instant between this read and the write below can still be replaced by
+  // an entry with a why, which the next card asks about again and mends.
+  const at = await $.clock.now()
   const before = await announcementKept($, repo, pr)
-  // Read again just before the write, so a session that kept a whole entry meanwhile keeps it.
   if (before.entry && before.entry.why === undefined) return asked
   // Nor is one written once it is settled: settled is never taken back, here or by any reader.
   if (before.done) return asked
-  await $.store.set(owedKey(idOf(repo, pr)), entryFrom(repo, pr, asked, before.entry?.at ?? (await $.clock.now())))
+  await $.store.set(owedKey(idOf(repo, pr)), entryFrom(repo, pr, asked, before.entry?.at ?? at))
   return asked
 }
 
