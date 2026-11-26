@@ -10486,7 +10486,22 @@ it may be offered through (or none); the summaries are told the night's notes ar
 before bed questions are not framed: Claude Code's own dialog shows them to Dan, and Claude never
 reads them as an instruction. The files a patch git applies from a device or a fifo are not read,
 through mod-kit's `inputTexts` (#1765), so the call's result comes back; the files it wrote by other
-routes still count as the session's.
+routes still count as the session's. Awake or asleep, a call auto mode's safety check refuses with a
+verdict is written to a ledger kept for the session and every agent it dispatches (#3560,
+`hooks/ledger.ts`): one small file for each refusal under `state/safety-refusals/<session id>/`, on
+this Mac only, holding the agent refused (or none, for the session itself), the tool, the check's
+own reason, the time in ET and a SHA-256 hash of the call, never the command or the file's text. The
+same call (the same tool and arguments, by that hash, with the rtk rewrite's prefix set aside as
+`callKey` does) sent again by that agent, another agent or the session itself is held before it
+runs and before the check is asked again, and is told who was refused, when and why, and that the
+way on is to report it: a subagent hands back, the session tells Dan, or leaves it for his morning
+while asleep. The session is told once of each refusal of one of its agents, with its next tool
+result or its next prompt. A refusal the check gave no verdict on is never written (the one
+predicate the morning report folds by, `gaveNoVerdict`), so the resend "One unchanged resend after
+no verdict" allows is never held. A session nothing was refused in has no folder and nothing held;
+a ledger that is there and cannot be read holds every call but Read, Grep, Glob and TaskStop until
+it can be, and is read afresh at each call. Nothing clears an entry yet, and nothing removes a
+session's folder.
 
 </td><td>
 

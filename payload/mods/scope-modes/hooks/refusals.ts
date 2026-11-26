@@ -121,15 +121,21 @@ export const whatOf = (args: Record<string, unknown>): string => {
 export type RefusalNote = { tool: string; text: string; reason: string; noVerdict?: true; toolUseId: string; what: string; read?: true }
 
 /**
+ * Whether a refusal's reason says auto mode's check gave no verdict (driver.ts startFailKind, the one
+ * reader of those words). The one answer for the morning report's fold (#3158) and for the ledger of
+ * refusals (#3560, ledger.ts), which writes every refusal but these: anything else is a verdict.
+ */
+export const gaveNoVerdict = (reason: string): boolean => startFailKind(reason) === 'no-verdict'
+
+/**
  * The fields of a `failed` note for a refusal by auto mode's check. `noVerdict` only when its reason
- * says the check gave none (driver.ts startFailKind, the one reader of those words); `read` only when
- * readsOnly said so.
+ * says the check gave none (gaveNoVerdict); `read` only when readsOnly said so.
  */
 export const refusalNote = (tool: string, args: Record<string, unknown>, toolUseId: string, reason: string, read: boolean): RefusalNote => ({
   tool,
   text: `the auto mode classifier refused ${tool}: ${reason}`,
   reason,
-  ...(startFailKind(reason) === 'no-verdict' ? { noVerdict: true as const } : {}),
+  ...(gaveNoVerdict(reason) ? { noVerdict: true as const } : {}),
   toolUseId,
   what: whatOf(args),
   ...(read ? { read: true as const } : {}),
