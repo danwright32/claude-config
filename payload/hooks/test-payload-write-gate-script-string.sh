@@ -56,7 +56,11 @@ ln "$FIX/elsewhere/twice.txt" "$FIX/links/twice-again.txt"
 
 HOLD="$FIX/hold"
 PIDF="$FIX/watch.pid"
-( bash -c 'exec -a "'"$FIX"'/src/claude-sync watch" sleep 300' </dev/null >/dev/null 2>&1 &
+# It sleeps longer than this suite is allowed to run (SUITE_WALL_DEFAULT is 1200 seconds). At 300
+# it died partway through a run that took six minutes on a loaded Mac (2026-11-26, load about
+# 250), and every refusal expected after that came back allowed, 53 failures with one cause
+# (claude-config#3775). The last check of the suite says so if it ever goes again.
+( bash -c 'exec -a "'"$FIX"'/src/claude-sync watch" sleep 1500' </dev/null >/dev/null 2>&1 &
   printf '%s\n' "$!" > "$PIDF" ) </dev/null >/dev/null 2>&1
 WPID="$(cat "$PIDF" 2>/dev/null)"
 for _ in $(seq 1 200); do
@@ -339,6 +343,81 @@ runbash "$(many_files 9)" "$FIX/dev"
 refused "#3689 one running 9 is refused, so the loop stops at its count"
 says "#3689 in words that name the count" "more than 8 script files"
 
+echo "what counts toward the 8 script files"
+
+# WHAT THE COUNT COUNTS (claude-config#3775). The case above types 9 different files that are all
+# there, directly in the command, and that was the only shape tested. The count went up for every
+# OCCURRENCE of a script being run, before the gate knew whether there was a file it could open: a
+# name holding a value, which it never opens, and the same file again. So a plain run of a test
+# suite was refused at its ninth `bash "$HOOK"`, having opened nothing: 84 of this repository's 410
+# suites and the whole run, measured on 2026-11-26. Only a file the gate goes on to open counts
+# now, once for each directory it is run in, and the limit is still 8.
+same_file(){ local k out=""; for k in $(seq 1 "$1"); do out="$out python3 $FIX/scripts/n1.py;"; done; printf '%s : payload/' "$out"; }
+runbash "$(same_file 9)" "$FIX/dev"
+allowed "#3775 the same script file run 9 times is one file read"
+lines(){ local k; for k in $(seq 1 "$1"); do printf '%s\n' "$2"; done; }
+# shellcheck disable=SC2016  # the names are meant to reach the file with their values unfilled
+{ lines 9 'bash "$HOOK" x'; lines 9 'python3 "$LIB" x'; lines 9 '. "$DIR/lib/x.sh"'
+  lines 9 '"$DIR/hook.sh" x'; lines 9 'out="$(printf x | bash "$HOOK" 2>&1)"'; } > "$FIX/scripts/values.sh"
+runbash "bash $FIX/scripts/values.sh; : payload/" "$FIX/dev"
+allowed "#3775 a script file running names that hold a value, 45 times, opens no file and is let through"
+lines 9 "python3 $FIX/scripts/gone.py" > "$FIX/scripts/gone9.sh"
+runbash "bash $FIX/scripts/gone9.sh; : payload/" "$FIX/dev"
+allowed "#3775 nor does a file that is not there count, run 9 times from inside a script file"
+for k in 1 2 3 4 5 6 7 8; do printf 'python3 %s/n%s.py\npython3 %s/n1.py\n' "$FIX/scripts" "$k" "$FIX/scripts"; done > "$FIX/scripts/inner8.sh"
+runbash "bash $FIX/scripts/inner8.sh; : payload/" "$FIX/dev"
+allowed "#3775 a script file running 8 different files, each more than once, has each read"
+# What is read on past the old stopping point is judged: a link after the ninth occurrence.
+{ lines 9 "python3 $FIX/scripts/n1.py"; printf 'ln -s %s %s\n' "$FIX/dev/payload/hooks" "$FIX/elsewhere/l9"; } > "$FIX/scripts/same9link.sh"
+runbash "bash $FIX/scripts/same9link.sh" "$FIX/elsewhere"
+refused "#3775 a link into payload after the same file run 9 times is refused"
+says "#3775 as the write it is, naming the folder" "a write to $FIX/dev/payload/hooks"
+# shellcheck disable=SC2016
+{ lines 9 'bash "$HOOK" x'; printf 'ln -s %s %s\n' "$FIX/dev/payload/hooks" "$FIX/elsewhere/l10"; } > "$FIX/scripts/values9link.sh"
+runbash "bash $FIX/scripts/values9link.sh" "$FIX/elsewhere"
+refused "#3775 a link into payload after 9 names holding a value is refused"
+says "#3775 as the write it is, naming the folder" "a write to $FIX/dev/payload/hooks"
+# The limit, a number the gate sets and not a measurement, is still 8 files opened, wherever the
+# ninth is run from.
+for k in 1 2 3 4 5 6 7 8 9; do printf 'python3 %s/n%s.py\n' "$FIX/scripts" "$k"; done > "$FIX/scripts/inner9.sh"
+runbash "bash $FIX/scripts/inner9.sh; : payload/" "$FIX/dev"
+refused "#3775 a script file running 9 different files that can be opened is still refused"
+says "#3775 in the same words" "claude-sync: REFUSED a command that runs more than 8 script files."
+printf 'bash %s\n' "$FIX/scripts/inner9.sh" > "$FIX/scripts/outer9.sh"
+runbash "bash $FIX/scripts/outer9.sh; : payload/" "$FIX/dev"
+refused "#3775 and so is one that runs that script file"
+says "#3775 in the same words" "more than 8 script files"
+{ lines 30 "python3 $FIX/scripts/n1.py"; for k in 2 3 4 5 6 7 8 9; do printf 'python3 %s/n%s.py\n' "$FIX/scripts" "$k"; done; } > "$FIX/scripts/late9.sh"
+runbash "bash $FIX/scripts/late9.sh; : payload/" "$FIX/dev"
+refused "#3775 a ninth different file after 30 runs of the first is still refused"
+says "#3775 in the same words" "more than 8 script files"
+runbash "bash $FIX/scripts/inner9.sh" "$FIX/elsewhere"
+allowed "#3775 control: 9 different files in a call naming no payload path is let through, as before"
+# The same file run in another directory is read again there, since a relative path in it lands
+# somewhere else, and that reading counts.
+printf 'import os\nos.symlink("payload/hooks/x.sh", "%s")\n' "$FIX/elsewhere/l11" > "$FIX/scripts/rel.py"
+runbash "cd $FIX/elsewhere && python3 $FIX/scripts/rel.py; cd $FIX/dev && python3 $FIX/scripts/rel.py" "$FIX/elsewhere"
+refused "#3775 a file read once is read again where it is run from another directory"
+says "#3775 and its relative link is judged there" "a write to $FIX/dev/payload/hooks/x.sh"
+mkdir -p "$FIX/elsewhere/d1" "$FIX/elsewhere/d2" "$FIX/elsewhere/d3" "$FIX/elsewhere/d4" "$FIX/elsewhere/d5" "$FIX/elsewhere/d6" "$FIX/elsewhere/d7" "$FIX/elsewhere/d8" "$FIX/elsewhere/d9"
+many_dirs(){ local k out=""; for k in $(seq 1 "$1"); do out="$out cd $FIX/elsewhere/d$k && python3 $FIX/scripts/n1.py;"; done; printf '%s : payload/' "$out"; }
+runbash "$(many_dirs 8)" "$FIX/dev"
+allowed "#3775 one file run from 8 directories is 8 readings"
+runbash "$(many_dirs 9)" "$FIX/dev"
+refused "#3775 and from 9 it is refused for the count"
+says "#3775 in the same words" "more than 8 script files"
+# The run that was refused on 2026-11-26: the Slack drafts gate's own suite, as it is beside this
+# one, run plainly from a checkout at risk and in the form a builder is told to use.
+if [ -f "$DIR/test-slack-drafts-only-gate.sh" ]; then
+  cp "$DIR/test-slack-drafts-only-gate.sh" "$FIX/dev/payload/hooks/test-slack-drafts-only-gate.sh"
+  runbash "bash payload/hooks/test-slack-drafts-only-gate.sh" "$FIX/dev"
+  allowed "#3775 a plain run of the Slack drafts gate's suite is let through"
+  runbash "bash $FIX/dev/payload/hooks/test-slack-drafts-only-gate.sh > $FIX/elsewhere/out.txt 2>&1" "$FIX/elsewhere"
+  allowed "#3775 and so is its run by its full path with the output kept in a file"
+else
+  check "#3775 a plain run of the Slack drafts gate's suite is let through" "test-slack-drafts-only-gate.sh is not beside this suite, so the run was not asked about"
+fi
+
 echo "a link made by a script file"
 
 printf '#!/bin/bash\nln -s %s %s\n' "$FIX/dev/payload/hooks" "$FIX/elsewhere/l1" > "$FIX/scripts/mk.sh"
@@ -420,6 +499,11 @@ echo made
 EOF
 bash $FIX/scripts/made.sh $FIX/dev/payload/hooks/x.sh" "$FIX/elsewhere"
 allowed "#3689 control: a script the command writes from its own text, and then runs, is read from that text"
+
+case "$(ps -o command= -p "$WPID" 2>/dev/null || true)" in
+  *claude-sync*watch*) check "the stand in watcher lived to the end of the suite" ok ;;
+  *) check "the stand in watcher lived to the end of the suite" "it had gone, so every answer after that was given with no watcher and proves nothing" ;;
+esac
 
 echo
 echo "passed: $pass, failed: $fail"

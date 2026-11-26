@@ -844,6 +844,16 @@ one string, 512 files of a pattern, 8 script files, 256 quoted paths of one scri
 a link).
 `hooks/test-payload-write-gate-script-string.sh` holds the cases, on stand in files.
 
+What counts toward the limit of 8 script files is a file the gate goes on to open, once for each
+directory it is run in (#3775). A name holding a value (`bash "$HOOK"`), which the gate never
+opens, a file that is not there and the same file run again in the same directory do not count
+and do not stop the reading. As first shipped the count went up for every occurrence, so a plain
+run of a test suite was refused at its ninth: measured on 2026-11-26 on the personal MacBook, 84
+of the 410 suites here and `run-all-tests.sh` itself, with no file opened for any of them.
+`tests/test-suite-runs-pass-write-gate.sh` now asks the gate about the plain run command of every
+suite found on disk, from a stand in primary checkout a watcher could overwrite and from a stand
+in worktree of a builder, and fails on a refusal. It runs the gate and never a suite.
+
 Before a Bash call the write gate also notes what an at risk `payload/` holds, in
 `~/.claude-payload-write-gate`, so that after the call it can name anything written there that the
 command's words could not show (#647). The note goes when the call ends, however it ends (#3253):

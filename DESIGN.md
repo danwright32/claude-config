@@ -2489,6 +2489,31 @@ too large) is refused in its own words when the call names a `payload/` path bes
 and only for a script the command itself runs. One the command writes from its own heredoc is
 read from that text.
 
+The reading of script files is held to 8, and what counts toward the 8 is a file the gate goes on
+to open (#3775). As first shipped the count went up for every occurrence of a script being run,
+before anything was known about the file, and the loop stopped at the ninth. A test suite runs
+its hook by a name holding a value (`bash "$HOOK"`) dozens of times, and the gate opens none of
+those, so the stop refused the run for want of reading files it would never have read. Measured
+on 2026-11-26 on the personal MacBook by asking the installed gate about each suite's plain run
+command, one ask each: 85 of 411 refused (84 of the 410 suites, and `run-all-tests.sh`), 1,937
+occurrences counted in them, 1,935 of those a name holding a value, and no file the loop would
+have opened had it gone on. It went live at 12:43 PM ET and was reverted the same afternoon
+(pull request 3776). Three things let it through, and each is now closed. The one test of the
+count typed 9 different files that exist, directly in the command, so the limit fired on the
+shape chosen for it (L48, L147): the suite now holds a name with a value, the same file again, a
+file that is not there, and files run from inside a script file. The count over a month of
+recorded commands ran with the reading of script files switched off, so the loop under test
+never ran in it. And the suites were run under the gate installed at the time, which was the old
+one: `tests/test-suite-runs-pass-write-gate.sh` now asks the gate in the checkout about every
+suite's run command, so a change that refuses one fails before it merges.
+
+Counting only what is opened leaves the limit at 8 and the refusal past it in the same words. A
+file is counted once for each directory it is run in, never once in all: a relative path in it
+lands somewhere else when it is run from somewhere else, so it is read again there. Carrying the
+loop on past the names it cannot open also reads the link commands written after them, which the
+stop had left unread and, in a call naming no payload path, let through with nothing said: a
+script that ran nine scripts and then linked a payload folder was allowed.
+
 Measured 2026-11-26 on the personal MacBook at a load of about 8 to 10, two rounds of 15 samples
 an arm: a command with no interpreter went from a median of 127 to 128 ms to 133 to 134 ms; a
 copy typed directly from 197 to about 210 ms (the real path step now loads two more modules); an

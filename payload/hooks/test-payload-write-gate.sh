@@ -71,8 +71,10 @@ NOPIDF="$FIX/nosuchpidfile"
 
 # Started by a subshell that ends at once and writes nowhere, its pid recorded, so it is never this
 # suite's child: one that ran out while a check was printing would cut the line short on bash 3.2
-# (L1035, #2040).
-( bash -c 'exec -a "'"$FIX"'/src/claude-sync watch" sleep 300' </dev/null >/dev/null 2>&1 &
+# (L1035, #2040). It sleeps longer than the suite may run (SUITE_WALL_DEFAULT is 1200 seconds): at
+# 300 a run slowed past five minutes by a loaded Mac lost its watcher partway, and every refusal
+# expected after that came back allowed (seen in the sibling suite on 2026-11-26, #3775).
+( bash -c 'exec -a "'"$FIX"'/src/claude-sync watch" sleep 1500' </dev/null >/dev/null 2>&1 &
   printf '%s\n' "$!" > "$PIDF" ) </dev/null >/dev/null 2>&1
 WPID="$(cat "$PIDF" 2>/dev/null)"
 # Waited on the CONDITION rather than for a fixed time, so this is not timing the machine (L290).

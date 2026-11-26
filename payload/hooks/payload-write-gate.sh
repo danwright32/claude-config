@@ -1225,6 +1225,20 @@ for m in re.finditer(OPENED_PATH, shell_text):
 # that text, which is in the command. A compiled program is no script and is left as it was.
 #
 # Held to a count: at most FILES_MAX script files are read here from one command.
+#
+# WHAT COUNTS IS A FILE THIS GATE GOES ON TO OPEN (claude-config#3775). The count went up for every
+# occurrence of a script being run, before anything was known about the file: a name holding a
+# value, which is never opened, a file that is not there, and the same file again. So a plain run
+# of a test suite was refused at its ninth `bash "$HOOK"`, with no file opened for any of them. On
+# 2026-11-26 on the personal MacBook that was 84 of the 410 suites of this repository and the
+# whole run: 1,937 occurrences counted in them, 1,935 a name holding a value, and no file this
+# loop would have opened had it gone on. Now a file is found first (file_found), and only one that
+# is there to open is counted, once for each directory it is run in: a relative path in it lands
+# somewhere else when it is run from somewhere else, so it is read again there, and that reading
+# counts. What is not counted is treated as it was inside the first FILES_MAX: nothing is read
+# from it, and a script the command itself runs that cannot be read keeps its refusal below.
+# Carrying the loop on past those occurrences also reads the link commands after them, which the
+# stop left unread.
 FILE_MAX = 4 * 1024 * 1024
 FILES_MAX = 8
 MAYBE_MAX = 256
@@ -1304,21 +1318,29 @@ def interpreter_file(text):
         return head, w
     return None
 
-def file_text(tok, base):
-    """(its full path, its text, "") for a script file as it is on disk now, or (its path as far
-    as it can be told, None, why it could not be read)."""
+def file_found(tok, base):
+    """(its full path, "") for a script file that is there to open now, or (its path as far as it
+    can be told, why it cannot be read). Nothing is opened here."""
     p, known = place(tok, base)
     if not p or not known:
-        return tok, None, "its name holds a value only the shell can work out"
+        return tok, "its name holds a value only the shell can work out"
     try:
         if not os.path.isfile(p):
-            return p, None, "no file is there now"
+            return p, "no file is there now"
         if os.path.getsize(p) > FILE_MAX:
-            return p, None, "it is larger than %d MB" % (FILE_MAX // (1024 * 1024))
-        with open(p, "rb") as f:
-            return p, f.read(FILE_MAX).decode("utf-8", "replace"), ""
+            return p, "it is larger than %d MB" % (FILE_MAX // (1024 * 1024))
     except OSError as e:
-        return p, None, e.strerror or "it could not be opened"
+        return p, e.strerror or "it could not be opened"
+    return p, ""
+
+def file_text(p):
+    """(its text, "") for the script file at a full path file_found gave, as it is on disk now, or
+    (None, why it could not be read)."""
+    try:
+        with open(p, "rb") as f:
+            return f.read(FILE_MAX).decode("utf-8", "replace"), ""
+    except OSError as e:
+        return None, e.strerror or "it could not be opened"
 
 def script_links(text, base, bare):
     """The links a python, perl, ruby, node or php script makes, from its text: each quoted payload
@@ -1384,6 +1406,7 @@ try:
     for d, text, _, _, depth in own:
         left[(d, text, depth)] = left.get((d, text, depth), 0) + 1
     files_read, unread, own_scripts = 0, [], []
+    readings = set()
     for d, text, wrapper, why, depth in every:
         b = move(d, cwd) if d else cwd
         is_own = left.get((d, text, depth), 0) > 0
@@ -1408,13 +1431,21 @@ try:
             continue
         if is_own:
             own_scripts.append(path)
-        files_read += 1
-        if files_read > FILES_MAX:
-            untold("a command that runs more than %d script files" % FILES_MAX,
-                   "payload-write-gate.sh could not tell what all of them do: it reads at most %d script files "
-                   "of a command for the links they make." % FILES_MAX, b)
-            break
-        full, body, why_not = file_text(path, b)
+        full, why_not = file_found(path, b)
+        body = None
+        if not why_not:
+            # Read once for each directory it is run in, and counted only now that it is there to
+            # open (claude-config#3775).
+            if (full, b) in readings:
+                continue
+            files_read += 1
+            if files_read > FILES_MAX:
+                untold("a command that runs more than %d script files" % FILES_MAX,
+                       "payload-write-gate.sh could not tell what all of them do: it reads at most %d script files "
+                       "of a command for the links they make." % FILES_MAX, b)
+                break
+            readings.add((full, b))
+            body, why_not = file_text(full)
         if body is None:
             if is_own:
                 unread.append((path, full, why_not, b))
