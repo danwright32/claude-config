@@ -273,5 +273,172 @@ check "awake, the review speaks with the resolved flake pending" "$e"
 case "$(pending_text)" in *"2nd time (runs 101, 102)"*) e=ok ;; *) e="pending=[$(pending_text)]" ;; esac
 check "awake, the repeat flake is in the spool the picker is built from" "$e"
 
+# ---------------------------------------------------------------------------
+# 4. Retention (Dan, 2026-11-26): a rerun unreadable for 7 days is dropped with one line saying so,
+#    and the flake history keeps 90 days. Time is SET with CLAUDE_RERUN_NOW, never waited for.
+# ---------------------------------------------------------------------------
+DAY=86400
+T0=1790000000
+resolve_at() { # resolve_at <epoch> -> sets RES_OUT (what the review is told), RES_ERR, RES_RC
+  RES_OUT="$(CLAUDE_RERUN_NOW="$1" bash "$LIB" resolve-reruns "$PROJ" "$TR" 2>"$WORK/res-err")"; RES_RC=$?
+  RES_ERR="$(cat "$WORK/res-err")"
+}
+record_at() { CLAUDE_RERUN_NOW="$1" bash "$LIB" rerun "$PROJ" own/rep "$2" "" "$TR"; }
+flake_line() { # flake_line <epoch or empty> <run> -> a history line for job test in workflow ci
+  python3 -c '
+import json, sys, datetime
+r = {"repo": "own/rep", "run": sys.argv[2], "workflow": "ci", "job": "test", "sha": "old"}
+if sys.argv[1]:
+    r["ts"] = datetime.datetime.fromtimestamp(int(sys.argv[1]), datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+print(json.dumps(r))' "$1" "$2"
+}
+
+# An unreadable rerun is kept for 6 days and dropped at 7, counted from when it was first recorded.
+reset_spool; record_at "$T0" 106
+resolve_at "$((T0 + 6 * DAY))"
+[ "$(waiting_runs)" = 106 ] && [ -z "$RES_OUT" ] && check "an unreadable rerun 6 days old still waits" ok \
+  || check "an unreadable rerun 6 days old still waits" "waiting=[$(waiting_runs)] out=[$RES_OUT] err=[$RES_ERR]"
+resolve_at "$((T0 + 7 * DAY))"
+[ ! -s "$WAIT" ] && check "an unreadable rerun 7 days old is dropped" ok || check "an unreadable rerun 7 days old is dropped" "waiting=[$(waiting_runs)] err=[$RES_ERR]"
+case "$RES_OUT" in *own/rep*"run 106"*"dropped unread after 7 days"*) e=ok ;; *) e="out=[$RES_OUT] err=[$RES_ERR]" ;; esac
+check "the drop is said in one line naming the repository and the run" "$e"
+[ "$(printf '%s\n' "$RES_OUT" | grep -c .)" = 1 ] && check "one dropped run is one line" ok || check "one dropped run is one line" "out=[$RES_OUT]"
+
+# Counted from the FIRST record of the run, not the newest.
+reset_spool; record_at "$T0" 106; record_at "$((T0 + 5 * DAY))" 106
+resolve_at "$((T0 + 7 * DAY))"
+[ ! -s "$WAIT" ] && case "$RES_OUT" in *"run 106"*) true ;; *) false ;; esac \
+  && check "the 7 days count from the first time the run was recorded" ok \
+  || check "the 7 days count from the first time the run was recorded" "waiting=[$(waiting_runs)] out=[$RES_OUT]"
+
+# A record with no usable time is never aged: kept, and said.
+reset_spool; mkdir -p "$RDIR"
+printf '{"repo": "own/rep", "run": "106", "job": null, "cwd": "%s", "session": "sess-a"}\n' "$PROJ" > "$WAIT"
+resolve_at "$((T0 + 400 * DAY))"
+[ "$(waiting_runs)" = 106 ] && [ -z "$RES_OUT" ] && check "an unreadable rerun with no date is kept" ok \
+  || check "an unreadable rerun with no date is kept" "waiting=[$(waiting_runs)] out=[$RES_OUT]"
+case "$RES_ERR" in *own/rep*"run 106"*"no readable date"*) e=ok ;; *) e="err=[$RES_ERR]" ;; esac
+check "an unreadable rerun with no date says it has none" "$e"
+reset_spool; mkdir -p "$RDIR"
+printf '{"ts": "last tuesday", "repo": "own/rep", "run": "106", "cwd": "%s"}\n' "$PROJ" > "$WAIT"
+resolve_at "$((T0 + 400 * DAY))"
+[ "$(waiting_runs)" = 106 ] && case "$RES_ERR" in *"no readable date"*) true ;; *) false ;; esac \
+  && check "an unreadable rerun whose date cannot be read is kept and said" ok \
+  || check "an unreadable rerun whose date cannot be read is kept and said" "waiting=[$(waiting_runs)] out=[$RES_OUT] err=[$RES_ERR]"
+
+# A rerun the review had no time to read this turn is not dropped unread.
+reset_spool; record_at "$T0" 106
+RES_OUT="$(CLAUDE_RERUN_RESOLVE_BUDGET=0.1 CLAUDE_RERUN_NOW="$((T0 + 30 * DAY))" bash "$LIB" resolve-reruns "$PROJ" "$TR" 2>/dev/null)"
+[ "$(waiting_runs)" = 106 ] && [ -z "$RES_OUT" ] && [ "$(lines "$GH_LOG")" = 0 ] \
+  && check "a rerun not read this turn for lack of time is not dropped" ok \
+  || check "a rerun not read this turn for lack of time is not dropped" "waiting=[$(waiting_runs)] out=[$RES_OUT] calls=$(lines "$GH_LOG")"
+
+# A rerun whose run CAN be read is judged, however old.
+reset_spool; record_at "$T0" 101
+resolve_at "$((T0 + 30 * DAY))"
+[ "$(lines "$FLAKES")" = 1 ] && [ -z "$RES_OUT" ] && check "a readable rerun 30 days old is judged, not dropped" ok \
+  || check "a readable rerun 30 days old is judged, not dropped" "flakes=$(lines "$FLAKES") out=[$RES_OUT]"
+
+# The setting, and a setting that is not a whole number above zero.
+reset_spool; record_at "$T0" 106
+RES_OUT="$(CLAUDE_RERUN_UNREAD_KEEP_DAYS=2 CLAUDE_RERUN_NOW="$((T0 + 2 * DAY))" bash "$LIB" resolve-reruns "$PROJ" "$TR" 2>/dev/null)"
+case "$RES_OUT" in *"run 106"*"dropped unread after 2 days"*) e=ok ;; *) e="out=[$RES_OUT] waiting=[$(waiting_runs)]" ;; esac
+check "CLAUDE_RERUN_UNREAD_KEEP_DAYS sets the days" "$e"
+for bad in 0 -3 abc 1.5 000; do
+  reset_spool; record_at "$T0" 106
+  RES_OUT="$(CLAUDE_RERUN_UNREAD_KEEP_DAYS="$bad" CLAUDE_RERUN_NOW="$((T0 + 1 * DAY))" bash "$LIB" resolve-reruns "$PROJ" "$TR" 2>"$WORK/res-err")"
+  RES_ERR="$(cat "$WORK/res-err")"
+  [ "$(waiting_runs)" = 106 ] && [ -z "$RES_OUT" ] && case "$RES_ERR" in *CLAUDE_RERUN_UNREAD_KEEP_DAYS*"default of 7 days"*) true ;; *) false ;; esac \
+    && check "CLAUDE_RERUN_UNREAD_KEEP_DAYS=$bad falls back to 7 days and says so" ok \
+    || check "CLAUDE_RERUN_UNREAD_KEEP_DAYS=$bad falls back to 7 days and says so" "waiting=[$(waiting_runs)] out=[$RES_OUT] err=[$RES_ERR]"
+done
+
+# The drop makes a review speak, inside its cooldown, and the line is in what it says.
+reset_spool
+out="$(review)"
+[ -z "$out" ] && check "precondition: inside the cooldown a review with nothing pending is quiet" ok \
+  || check "precondition: inside the cooldown a review with nothing pending is quiet" "out=[$out]"
+record_at "$T0" 106
+out="$(printf '{"transcript_path":"%s","stop_hook_active":false}' "$TR" | CLAUDE_RERUN_NOW="$((T0 + 8 * DAY))" CLAUDE_PROJECT_DIR="$PROJ" bash "$REVIEW" 2>/dev/null)"
+case "$out" in *'"decision"'*"run 106"*"dropped unread after 7 days"*) e=ok ;; *) e="out=[$out]" ;; esac
+check "a review that drops a rerun speaks, inside its cooldown, and names it" "$e"
+
+# The flake history keeps 90 days: an older line no longer counts and is removed.
+reset_spool; mkdir -p "$RDIR"
+NOW1=$((T0 + 200 * DAY))
+flake_line "$((NOW1 - 91 * DAY))" 50 > "$FLAKES"
+record_at "$NOW1" 101; resolve_at "$NOW1"
+if bash "$LIB" has-findings "$PROJ" "$TR" >/dev/null 2>&1; then e="a flake older than 90 days was counted: [$(pending_text)]"; else e=ok; fi
+check "a flake older than 90 days does not count toward a repeat" "$e"
+grep -q '"run": "50"' "$FLAKES" && e="flakes=[$(cat "$FLAKES")]" || e=ok
+check "a flake older than 90 days is removed from the history" "$e"
+grep -q '"run": "101"' "$FLAKES" && check "the new flake is kept when the old one is trimmed" ok || check "the new flake is kept when the old one is trimmed" "flakes=[$(cat "$FLAKES")]"
+ls "$RDIR" | grep -v -e '^flakes.jsonl$' -e "^$KEY.jsonl\$" -e '^flakes.jsonl.lock$' | grep -q . \
+  && check "the trim leaves no temporary file beside the history" "left: [$(ls "$RDIR")]" \
+  || check "the trim leaves no temporary file beside the history" ok
+
+reset_spool; mkdir -p "$RDIR"
+flake_line "$((NOW1 - 89 * DAY))" 50 > "$FLAKES"
+record_at "$NOW1" 101; resolve_at "$NOW1"
+case "$(pending_text)" in *"2nd time"*) e=ok ;; *) e="pending=[$(pending_text)] err=[$RES_ERR]" ;; esac
+check "a flake 89 days old still counts toward a repeat" "$e"
+
+reset_spool; mkdir -p "$RDIR"
+flake_line "" 50 > "$FLAKES"
+record_at "$NOW1" 101; resolve_at "$NOW1"
+case "$(pending_text)" in *"2nd time"*) e=ok ;; *) e="pending=[$(pending_text)] err=[$RES_ERR]" ;; esac
+check "a flake line with no date still counts" "$e"
+grep -q '"sha": "old"' "$FLAKES" && check "a flake line with no date is kept" ok || check "a flake line with no date is kept" "flakes=[$(cat "$FLAKES")]"
+
+reset_spool; mkdir -p "$RDIR"
+flake_line "$((NOW1 - 11 * DAY))" 50 > "$FLAKES"
+record_at "$NOW1" 101
+RES_OUT="$(CLAUDE_RERUN_FLAKE_KEEP_DAYS=10 CLAUDE_RERUN_NOW="$NOW1" bash "$LIB" resolve-reruns "$PROJ" "$TR" 2>/dev/null)"
+grep -q '"run": "50"' "$FLAKES" && e="flakes=[$(cat "$FLAKES")]" || e=ok
+check "CLAUDE_RERUN_FLAKE_KEEP_DAYS sets the days" "$e"
+for bad in 0 -1 ninety; do
+  reset_spool; mkdir -p "$RDIR"
+  flake_line "$((NOW1 - 30 * DAY))" 50 > "$FLAKES"
+  record_at "$NOW1" 106
+  CLAUDE_RERUN_FLAKE_KEEP_DAYS="$bad" CLAUDE_RERUN_NOW="$NOW1" bash "$LIB" resolve-reruns "$PROJ" "$TR" >/dev/null 2>"$WORK/res-err"
+  RES_ERR="$(cat "$WORK/res-err")"
+  grep -q '"run": "50"' "$FLAKES" && case "$RES_ERR" in *CLAUDE_RERUN_FLAKE_KEEP_DAYS*"default of 90 days"*) true ;; *) false ;; esac \
+    && check "CLAUDE_RERUN_FLAKE_KEEP_DAYS=$bad keeps 90 days and says so" ok \
+    || check "CLAUDE_RERUN_FLAKE_KEEP_DAYS=$bad keeps 90 days and says so" "flakes=[$(cat "$FLAKES" 2>/dev/null)] err=[$RES_ERR]"
+done
+
+# Two reviews at once: the trim takes the history's lock, so while another review holds it (to add
+# its own lines) the trim does not rewrite the file under it, and says so.
+reset_spool; mkdir -p "$RDIR"
+flake_line "$((NOW1 - 200 * DAY))" 50 > "$FLAKES"
+python3 -c '
+import fcntl, os, sys, time
+fh = open(sys.argv[1], "a")
+fcntl.flock(fh, fcntl.LOCK_EX)
+with open(sys.argv[3], "a") as f:
+    f.write(sys.argv[4] + "\n")
+open(sys.argv[2], "w").close()
+deadline = time.monotonic() + 20
+while not os.path.exists(sys.argv[5]) and time.monotonic() < deadline:
+    time.sleep(0.05)
+' "$FLAKES.lock" "$WORK/held" "$FLAKES" "$(flake_line "$NOW1" 77)" "$WORK/release" &
+holder=$!
+n=0; while [ ! -f "$WORK/held" ] && [ "$n" -lt 200 ]; do sleep 0.05; n=$((n + 1)); done
+record_at "$NOW1" 101
+CLAUDE_RERUN_LOCK_WAIT=0.3 CLAUDE_RERUN_NOW="$NOW1" bash "$LIB" resolve-reruns "$PROJ" "$TR" >/dev/null 2>"$WORK/res-err"
+RES_ERR="$(cat "$WORK/res-err")"
+: > "$WORK/release"; wait "$holder" 2>/dev/null
+grep -q '"run": "50"' "$FLAKES" && grep -q '"run": "77"' "$FLAKES" \
+  && check "while another review holds the history, the trim does not rewrite it" ok \
+  || check "while another review holds the history, the trim does not rewrite it" "flakes=[$(cat "$FLAKES")]"
+case "$RES_ERR" in *"flake history"*"could not"*) e=ok ;; *) e="err=[$RES_ERR]" ;; esac
+check "a history the trim could not lock is said" "$e"
+record_at "$NOW1" 106
+CLAUDE_RERUN_NOW="$NOW1" bash "$LIB" resolve-reruns "$PROJ" "$TR" >/dev/null 2>&1
+grep -q '"run": "77"' "$FLAKES" && ! grep -q '"run": "50"' "$FLAKES" \
+  && check "once released, the trim keeps the other review's newer line and drops the old one" ok \
+  || check "once released, the trim keeps the other review's newer line and drops the old one" "flakes=[$(cat "$FLAKES")]"
+rm -f "$WORK/held" "$WORK/release"
+
 printf 'SUITE-RESULT passed=%d failed=%d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

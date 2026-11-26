@@ -2095,10 +2095,36 @@ PY_SPLIT
 # every session. Under `<spool root>/reruns/`:
 #   <project key>.jsonl   reruns waiting for their run's final result, keyed as the pending files
 #   flakes.jsonl          one line per job that failed and then went green on a rerun, per run,
-#                         across every project, kept with no expiry (nothing removes it yet)
+#                         across every project, kept for 90 days (see below)
 # Only the review turns them into findings, through issue_spool_append, so what it offers goes
 # through the same pending, picker and clear as every other finding.
 issue_spool_reruns_dir() { printf '%s/reruns' "$(issue_spool_root)"; }
+
+# HOW LONG EACH IS KEPT, Dan's decision on 2026-11-26: a waiting rerun whose result has not been
+# readable for 7 days (CLAUDE_RERUN_UNREAD_KEEP_DAYS) is dropped, with one line saying so, and the
+# flake history keeps 90 days (CLAUDE_RERUN_FLAKE_KEEP_DAYS). Read here and nowhere else. A value
+# that is not a whole number above zero is said and the default used, so a typo can never become
+# "keep nothing" or "delete everything". The clock is a seam (CLAUDE_RERUN_NOW, seconds since the
+# epoch) so the limits are tested by SETTING it, never by waiting (L290, L524).
+_issue_spool_rerun_days() { # <setting name> <default> -> the days to use; says a refused value on stderr
+  local name="$1" def="$2" v
+  v="${!name:-}"
+  case "$v" in
+    '') printf '%s' "$def"; return 0 ;;
+    *[!0-9]*) ;;
+    *[1-9]*) printf '%s' "$v"; return 0 ;;
+  esac
+  echo "issue-spool: $name is '$v', which is not a whole number of days above zero, so the default of $def days is used." >&2
+  printf '%s' "$def"
+}
+_issue_spool_rerun_now() { # -> seconds since the epoch, from CLAUDE_RERUN_NOW when it is set to one
+  case "${CLAUDE_RERUN_NOW:-}" in ''|*[!0-9]*) date +%s ;; *) printf '%s' "$CLAUDE_RERUN_NOW" ;; esac
+}
+issue_spool_rerun_limits() { # sets _rr_unread_days, _rr_flake_days and _rr_now for the caller
+  _rr_unread_days="$(_issue_spool_rerun_days CLAUDE_RERUN_UNREAD_KEEP_DAYS 7)"
+  _rr_flake_days="$(_issue_spool_rerun_days CLAUDE_RERUN_FLAKE_KEEP_DAYS 90)"
+  _rr_now="$(_issue_spool_rerun_now)"
+}
 
 issue_spool_rerun() { # rerun <dir> <repo> <run id> <job id> [session-transcript]
   local dir="${1:-$PWD}" repo="${2:-}" run="${3:-}" job="${4:-}" transcript="${5:-}" key file record sid
@@ -2121,11 +2147,11 @@ issue_spool_rerun() { # rerun <dir> <repo> <run id> <job id> [session-transcript
   sid="$(issue_spool_session_id "$transcript")"
   record="$(python3 -c '
 import json, sys, datetime
-r = {"ts": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+r = {"ts": datetime.datetime.fromtimestamp(int(sys.argv[6]), datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
      "repo": sys.argv[1], "run": sys.argv[2] or None, "job": sys.argv[3] or None, "cwd": sys.argv[4]}
 if sys.argv[5]:
     r["session"] = sys.argv[5]
-print(json.dumps(r))' "$repo" "$run" "$job" "$dir" "$sid" 2>/dev/null)"
+print(json.dumps(r))' "$repo" "$run" "$job" "$dir" "$sid" "$(_issue_spool_rerun_now)" 2>/dev/null)"
   [ -n "$record" ] || { echo "issue-spool: could not build the rerun record (python3 failed). Nothing was recorded." >&2; return 1; }
   file="$(issue_spool_reruns_dir)/$key.jsonl"
   if ! mkdir -p "$(issue_spool_reruns_dir)" 2>/dev/null || ! printf '%s\n' "$record" >> "$file" 2>/dev/null; then
@@ -2139,17 +2165,22 @@ print(json.dumps(r))' "$repo" "$run" "$job" "$dir" "$sid" 2>/dev/null)"
 # its job takes one more, once, to learn its run), inside a time budget the Stop hook's own limit
 # leaves room for. A run still going, one not yet showing the rerun's attempt, and one whose result
 # cannot be read (no answer in time, a repository this Mac's gh cannot read, output that is not the
-# jobs list) are put back to wait for the next review: never dropped, never offered. Newest first,
-# so one that can never be read does not hold up the rest.
+# jobs list) are put back to wait for the next review, never offered. Newest first, so one that can
+# never be read does not hold up the rest. One this review tried and could not read, first recorded
+# CLAUDE_RERUN_UNREAD_KEEP_DAYS (7) or more days ago, is dropped instead, and one line per dropped run
+# goes to STDOUT, which the review always says (it makes the review speak); one never tried this turn
+# for lack of time is not dropped, and one with no readable date is never aged, kept and said.
 #
 # Claimed by RENAME before it is read, as a clear does, so a rerun recorded meanwhile lands in a new
 # file, and two reviews cannot both resolve one run. A claim whose process died is taken back first.
 issue_spool_resolve_reruns() { # resolve-reruns <dir> [session-transcript]
   local dir="${1:-$PWD}" transcript="${2:-}" key wait claim c pid out rc failed="" line
+  local _rr_unread_days _rr_flake_days _rr_now
   if [ -n "${CLAUDE_SUITE_RUN_ID:-}" ] && [ "$(issue_spool_root)" = "${HOME%/}/.claude-issue-spool" ]; then
     echo "issue-spool: refusing to resolve reruns in the real spool at $(issue_spool_root): this is running under a test suite (CLAUDE_SUITE_RUN_ID=$CLAUDE_SUITE_RUN_ID)." >&2
     return 3
   fi
+  issue_spool_rerun_limits
   key="$(issue_spool_key "$dir" "$transcript")" || return
   wait="$(issue_spool_reruns_dir)/$key.jsonl"
   for c in "$wait".resolving.*; do
@@ -2167,10 +2198,158 @@ issue_spool_resolve_reruns() { # resolve-reruns <dir> [session-transcript]
     return 1
   fi
   out="$(mktemp -d "${TMPDIR:-/tmp}/claude-reruns.XXXXXX")" || { cat "$claim" >> "$wait" 2>/dev/null && rm -f "$claim"; return 1; }
-  python3 - "$claim" "$(issue_spool_reruns_dir)/flakes.jsonl" "$out" <<'PY_RERUNS'
-import datetime, json, os, signal, subprocess, sys, time
+  _issue_spool_reruns_py | python3 - resolve "$claim" "$(issue_spool_reruns_dir)/flakes.jsonl" "$out" "$_rr_now" "$_rr_unread_days" "$_rr_flake_days"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    cat "$claim" >> "$wait" 2>/dev/null && rm -f "$claim"
+    rm -rf "$out"
+    echo "issue-spool: reading the waiting hand reruns failed (python3 exit $rc); they wait for the next review." >&2
+    return 1
+  fi
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    issue_spool_append "$dir" "$line" "$transcript" || { failed=yes; break; }
+  done < "$out/findings.jsonl"
+  if [ -n "$failed" ]; then
+    # Nothing is counted as seen and nothing is dropped: every rerun goes back to wait, so the next
+    # review offers or drops it, and says so then.
+    cat "$out/resolved.jsonl" "$out/keep.jsonl" "$out/dropped.jsonl" >> "$wait" 2>/dev/null && rm -f "$claim"
+    rm -rf "$out"
+    echo "issue-spool: a finding from a resolved hand rerun could not be written to the spool, so the reruns wait for the next review." >&2
+    return 1
+  fi
+  # The new flakes are added and lines past the flake window removed in one step, under the
+  # history's lock (see commit in the Python below).
+  _issue_spool_reruns_py | python3 - commit "$(issue_spool_reruns_dir)/flakes.jsonl" "$out/history.jsonl" "$_rr_now" "$_rr_flake_days" || failed=yes
+  if [ -s "$out/keep.jsonl" ] && ! cat "$out/keep.jsonl" >> "$wait" 2>/dev/null; then
+    echo "issue-spool: the hand reruns still waiting could not be put back in $wait; they are left in $claim." >&2
+    rm -rf "$out"
+    return 1
+  fi
+  # Each dropped run, one line, on stdout: the review says these, and speaks because of them.
+  cat "$out/dropped.txt" 2>/dev/null
+  rm -f "$claim"
+  rm -rf "$out"
+  [ -z "$failed" ]
+}
 
-claim, history_path, out = sys.argv[1:4]
+# The resolver's Python, one program for both of its modes, so the date reading and the windows are
+# written once: `resolve <claim> <history> <out dir> <now> <unread days> <flake days>` judges the
+# waiting reruns into files in <out dir>; `commit <history> <new lines> <now> <flake days>` adds the
+# new flake lines and removes those past the flake window.
+_issue_spool_reruns_py() {
+  cat <<'PY_RERUNS'
+import datetime, errno, fcntl, json, os, signal, subprocess, sys, time
+
+NO_TIME = "no time left this turn"
+
+
+def epoch(ts):
+    """Seconds since the epoch of a record's ts, or None when it has none that can be read."""
+    if not isinstance(ts, str) or not ts.strip():
+        return None
+    s = ts.strip()
+    try:
+        return int(datetime.datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc).timestamp())
+    except ValueError:
+        pass
+    try:
+        d = datetime.datetime.fromisoformat(s[:-1] + "+00:00" if s.endswith("Z") else s)
+    except ValueError:
+        return None
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=datetime.timezone.utc)
+    return int(d.timestamp())
+
+
+def line_epoch(raw):
+    try:
+        h = json.loads(raw.decode("utf-8", "replace"))
+    except ValueError:
+        return None
+    return epoch(h.get("ts")) if isinstance(h, dict) else None
+
+
+def commit(path, new_path, now, days):
+    """Add the new flake lines and remove every line older than the window, never losing a line
+    another review adds meanwhile. Every writer of the history takes its lock, an flock on a file
+    beside it that the kernel releases if the holder dies, and the trim reads, writes a temporary
+    file beside it and renames it over the history all while holding it, so a line another review
+    appends lands either before the read or after the rename. A line with no readable date, or that
+    is not JSON, is kept."""
+    cutoff = int(now) - int(days) * 86400
+    wait = float(os.environ.get("CLAUDE_RERUN_LOCK_WAIT") or 3)
+    try:
+        with open(new_path, "rb") as fh:
+            new = fh.read()
+    except FileNotFoundError:
+        new = b""
+    if new and not new.endswith(b"\n"):
+        new += b"\n"
+    lost = (", so the flakes resolved this turn will not count toward a later one" if new else "")
+    try:
+        lock = open(path + ".lock", "a")
+    except OSError as e:
+        print("issue-spool: the flake history at %s could not be locked (%s)%s." % (path, e, lost), file=sys.stderr)
+        return 1
+    deadline = time.monotonic() + wait
+    while True:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except OSError as e:
+            if e.errno not in (errno.EAGAIN, errno.EACCES) or time.monotonic() >= deadline:
+                print("issue-spool: the flake history at %s could not be locked: another review held it for "
+                      "%.1f seconds%s, and nothing older was removed." % (path, wait, lost), file=sys.stderr)
+                return 1
+            time.sleep(0.05)
+    rc = 0
+    try:
+        try:
+            with open(path, "rb") as fh:
+                lines = fh.read().splitlines(True)
+        except FileNotFoundError:
+            lines = []
+        kept = [r if r.endswith(b"\n") else r + b"\n" for r in lines
+                if not (line_epoch(r) is not None and line_epoch(r) < cutoff)]
+        if len(kept) < len(lines):
+            tmp = "%s.trim.%d" % (path, os.getpid())
+            try:
+                with open(tmp, "wb") as fh:
+                    fh.write(b"".join(kept) + new)
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                os.replace(tmp, path)
+                return 0
+            except OSError as e:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                print("issue-spool: the flake history at %s could not be trimmed (%s); lines older than %s days "
+                      "are kept until a later review can." % (path, e, days), file=sys.stderr)
+                rc = 1
+        if new:
+            try:
+                with open(path, "ab") as fh:
+                    fh.write(new)
+            except OSError as e:
+                print("issue-spool: the flake history at %s could not be written (%s)%s." % (path, e, lost), file=sys.stderr)
+                return 1
+        return rc
+    finally:
+        lock.close()
+
+
+MODE = sys.argv[1]
+if MODE == "commit":
+    sys.exit(commit(*sys.argv[2:6]))
+claim, history_path, out = sys.argv[2:5]
+NOW = int(sys.argv[5])
+UNREAD_DAYS = int(sys.argv[6])
+UNREAD_CUTOFF = NOW - UNREAD_DAYS * 86400
+FLAKE_CUTOFF = NOW - int(sys.argv[7]) * 86400
+
 BUDGET = float(os.environ.get("CLAUDE_RERUN_RESOLVE_BUDGET") or 5)
 PER_CALL = float(os.environ.get("CLAUDE_RERUN_CALL_TIMEOUT") or 4)
 GH = os.environ.get("CLAUDE_RERUN_GH") or "gh"
@@ -2187,7 +2366,7 @@ def gh_values(args):
     """Every JSON value gh printed, or (None, why) when it could not be read in time."""
     t = min(PER_CALL, left())
     if t < 0.5:
-        return None, "no time left this turn"
+        return None, NO_TIME
     try:
         p = subprocess.Popen([GH] + args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                              stderr=subprocess.PIPE, start_new_session=True)
@@ -2248,8 +2427,12 @@ try:
             h = json.loads(line)
         except ValueError:
             continue
+        # Older than the flake window it no longer counts (the commit below also removes it); a line
+        # with no readable date is kept and counts, as every line did before the window existed.
         if isinstance(h, dict):
-            history.append(h)
+            t = epoch(h.get("ts"))
+            if t is None or t >= FLAKE_CUTOFF:
+                history.append(h)
 except FileNotFoundError:
     pass
 seen = {(h.get("repo"), str(h.get("run")), h.get("workflow"), h.get("job")) for h in history}
@@ -2261,11 +2444,26 @@ for r in recs:
     groups.setdefault(k, []).append(r)
 order = sorted(groups, key=lambda k: max(x.get("ts") or "" for x in groups[k]), reverse=True)
 
-keep, resolved, findings, new_hist = [], [], [], []
-now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+keep, resolved, findings, new_hist, dropped, said = [], [], [], [], [], []
+now = datetime.datetime.fromtimestamp(NOW, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def put_back(rs, why):
+    """Back to wait, or, tried this turn and unreadable since it was FIRST recorded the keep days
+    ago or more, dropped with one line. A run with no readable date is never aged, and is said."""
+    r0 = rs[0]
+    name = "%s run %s" % (r0["repo"], r0["run"]) if r0.get("run") else "%s job %s" % (r0["repo"], r0.get("job"))
+    if why != NO_TIME:
+        times = [t for t in (epoch(r.get("ts")) for r in rs) if t is not None]
+        if not times:
+            print("issue-spool: the waiting hand rerun of %s has no readable date, so it cannot be aged "
+                  "and is kept (%s)." % (name, why), file=sys.stderr)
+        elif min(times) <= UNREAD_CUTOFF:
+            first = datetime.datetime.fromtimestamp(min(times), datetime.timezone.utc).strftime("%Y-%m-%d")
+            said.append("Hand rerun of %s dropped unread after %d days: its result could not be read since "
+                        "it was recorded on %s (last: %s)." % (name, UNREAD_DAYS, first, " ".join(why.split())))
+            dropped.extend(rs)
+            return
     for r in rs:
         r["tries"] = r.get("tries", 0) + 1
         r["last_unread"] = why
@@ -2355,37 +2553,11 @@ dump("keep.jsonl", keep)
 dump("resolved.jsonl", resolved)
 dump("findings.jsonl", findings)
 dump("history.jsonl", new_hist)
+dump("dropped.jsonl", dropped)
+with open(os.path.join(out, "dropped.txt"), "w", encoding="utf-8") as fh:
+    for s in said:
+        fh.write(s + "\n")
 PY_RERUNS
-  rc=$?
-  if [ "$rc" -ne 0 ]; then
-    cat "$claim" >> "$wait" 2>/dev/null && rm -f "$claim"
-    rm -rf "$out"
-    echo "issue-spool: reading the waiting hand reruns failed (python3 exit $rc); they wait for the next review." >&2
-    return 1
-  fi
-  while IFS= read -r line; do
-    [ -n "$line" ] || continue
-    issue_spool_append "$dir" "$line" "$transcript" || { failed=yes; break; }
-  done < "$out/findings.jsonl"
-  if [ -n "$failed" ]; then
-    # Nothing is counted as seen: the resolved reruns go back to wait, so the next review offers them.
-    cat "$out/resolved.jsonl" "$out/keep.jsonl" >> "$wait" 2>/dev/null && rm -f "$claim"
-    rm -rf "$out"
-    echo "issue-spool: a finding from a resolved hand rerun could not be written to the spool, so the reruns wait for the next review." >&2
-    return 1
-  fi
-  if [ -s "$out/history.jsonl" ] && ! cat "$out/history.jsonl" >> "$(issue_spool_reruns_dir)/flakes.jsonl" 2>/dev/null; then
-    echo "issue-spool: the flake history at $(issue_spool_reruns_dir)/flakes.jsonl could not be written, so the flakes resolved this turn will not count toward a later one." >&2
-    failed=yes
-  fi
-  if [ -s "$out/keep.jsonl" ] && ! cat "$out/keep.jsonl" >> "$wait" 2>/dev/null; then
-    echo "issue-spool: the hand reruns still waiting could not be put back in $wait; they are left in $claim." >&2
-    rm -rf "$out"
-    return 1
-  fi
-  rm -f "$claim"
-  rm -rf "$out"
-  [ -z "$failed" ]
 }
 
 # Direct invocation dispatch. Sourcing the file defines the functions and runs

@@ -186,12 +186,23 @@ fi
 # any other. A run still going, or one that cannot be read, waits for the next review. Below the
 # sleep check at the top, so asleep nothing is read or offered and every record waits. Only when a
 # rerun is waiting, so an ordinary turn starts nothing. A failure to read or write rides in the reason.
+# A rerun DROPPED unread after its keep days (Dan, 2026-11-26) comes back on stdout, one line a run;
+# that line has been dropped from the only record of it, so it makes this review speak (urgent, below)
+# rather than wait for whichever review speaks next.
 reruns_said=""
+reruns_dropped=""
 if [ -f "$SPOOL_LIB" ]; then
   _rr_key="$(bash "$SPOOL_LIB" key "$proj" "$transcript" 2>/dev/null)" || _rr_key=""
   _rr_dir="$(bash "$SPOOL_LIB" reruns-dir 2>/dev/null)" || _rr_dir=""
   if [ -n "$_rr_key" ] && [ -n "$_rr_dir" ] && compgen -G "$_rr_dir/$_rr_key.jsonl*" >/dev/null; then
-    reruns_said="$(bash "$SPOOL_LIB" resolve-reruns "$proj" "$transcript" 2>&1 >/dev/null)" || true
+    _rr_err="$(mktemp "${TMPDIR:-/tmp}/claude-reruns-said.XXXXXX" 2>/dev/null)" || _rr_err=""
+    if [ -n "$_rr_err" ]; then
+      reruns_dropped="$(bash "$SPOOL_LIB" resolve-reruns "$proj" "$transcript" 2>"$_rr_err")" || true
+      reruns_said="$(cat "$_rr_err" 2>/dev/null)" || true
+      rm -f "$_rr_err"
+    else
+      reruns_said="$(bash "$SPOOL_LIB" resolve-reruns "$proj" "$transcript" 2>&1)" || true
+    fi
   fi
 fi
 
@@ -219,6 +230,7 @@ if [ -f "$SPOOL_LIB" ]; then
   # render will not show it again, so it must not make a review fire either.
   if bash "$SPOOL_LIB" has-findings "$proj" "$transcript" "$seen_ledger" >/dev/null 2>&1; then urgent="yes"; fi
 fi
+if [ -n "$reruns_dropped" ]; then urgent="yes"; fi
 
 # One failure reason has no remedy at all: an agent spawned by another agent
 # names a transcript that is never written, so the harvest can never read it.
@@ -396,6 +408,7 @@ if [ -n "$muted_line" ]; then reason_args+=(--extra "$muted_line"); fi
 # which test-review-reason.sh asserts with two of them.
 if [ -n "$kept_said" ]; then reason_args+=(--extra "$kept_said"); fi
 # What the hand rerun reader could not read or write (#3613), the same way.
+if [ -n "$reruns_dropped" ]; then reason_args+=(--extra "HAND RERUNS DROPPED: $reruns_dropped"); fi
 if [ -n "$reruns_said" ]; then reason_args+=(--extra "HAND RERUNS: $reruns_said"); fi
 # A spool no key could be made for rides the same way, with whichever review speaks next, and does not
 # make one speak: it is the same fault at every turn until the digest is back (claude-config#2639).
