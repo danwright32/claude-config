@@ -7,7 +7,8 @@
 # "timeout" of hooks/subagent-issue-harvest.sh in payload/settings.hooks.json, has finished first.
 # A mod cannot read a file outside its own folder, so the period is a literal there; this suite is
 # what holds the two together, and fails when the harvest's limit grows past the period less its
-# 30 second margin, or when either value can no longer be read. Seen to fail on fixtures (L1).
+# margin (a number this suite sets, not measured), or when either value can no longer be read. Seen
+# to fail on fixtures (L1).
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
@@ -50,7 +51,7 @@ fixture margin 210_000 180
 fixture short 209_000 180
 check() {   # $1 = fixture, $2 = expected pattern, $3 = what it shows
   got="$(judge "$tmp/$1.ts" "$tmp/$1.json")"
-  if printf '%s' "$got" | grep -q -- "$2"; then
+  if [[ "$got" =~ $2 ]]; then
     pass=$((pass + 1)); echo "PASS: $3"
   else
     fail=$((fail + 1)); echo "FAIL: $3 (got: $got)"
