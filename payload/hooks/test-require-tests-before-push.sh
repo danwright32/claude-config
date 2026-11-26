@@ -1804,6 +1804,30 @@ want_stderr "could not judge" "#3339 still refused as could not judge"
 want_stderr "asked 3 times" "#3339 still saying how many times it asked"
 case "$(ledger_last 14)" in *'asked 3 times'*) pass=$((pass+1)) ;; *) fail=$((fail+1)); echo "FAIL: #3339 the verdict line's detail changed: [$(ledger_last 14)]" ;; esac
 
+# A further reading that cannot start: failed, asked once, no folder, and the refusal it always was.
+: > "$READS_CWDS"; before="$(ledger_lines)"
+printf '%s\t%s\n' "$LATER_CALL" "$COVERED_NONE" > "$RULES"
+W="$(mk_repo)"; seed_issue_push "$W"
+cp "$STUB_DIR/claude" "$STUB_DIR/claude.keep"
+STUB_CLAUDE_CWD="$READS_CWDS" STUB_CLAUDE_VANISH=1 STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" run_hook "$W" "git push"
+cp "$STUB_DIR/claude.keep" "$STUB_DIR/claude"; chmod +x "$STUB_DIR/claude"
+reads_case "$before" "a further reading that cannot start" 2 cantjudge "outcome cantjudge; first 1 read C1; rest1 1 failed -; stop failed"
+
+# An unreadable further reading not asked again because the other readings of its wave already
+# found every change tested: unneeded, asked once, and the push allowed as before.
+: > "$READS_CWDS"; before="$(ledger_lines)"
+printf '%s\t%s\n' "$LATER_CALL" "$COVERED_ONE" > "$RULES"
+printf '%s\t%s\n' "$LATER_CALL" "$UNREADABLE" > "$TMPROOT/once-3339u"
+W="$(mk_repo)"; seed_big_tests "$W" 260
+STUB_CLAUDE_CWD="$READS_CWDS" STUB_CLAUDE_ONCE="$TMPROOT/once-3339u" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" \
+  run_hook "$W" "git push"
+want_code 0 "#3339 a push whose other readings found every change tested is allowed as before"
+got="$(tail -n +"$((before + 1))" "$LEDGER" | sed -n 1p | cut -f 14)"
+if printf '%s\n' "$got" | grep -Eq '^outcome pass; first 1 read [^ ;]+(; rest[0-9]+ 1 (read|unneeded) [^ ;]+)+$' \
+  && [ "$(printf '%s\n' "$got" | grep -o ' unneeded ' | wc -l | tr -d ' ')" = 1 ]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #3339 the readings line should name one unneeded reading, asked once: [$got]"; fi
+if [ ! -e "$TMPROOT/once-3339u" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #3339 the unreadable answer was never given, so the unneeded case did not run"; fi
+
 # A push no reader judged gets no readings line: here, a push with no source.
 before="$(ledger_lines)"
 W="$(mk_repo)"
