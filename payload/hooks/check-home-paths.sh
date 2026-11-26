@@ -405,8 +405,10 @@ ALLOW_MARKER="claude-sync-allow-home-path"
 #
 # So one awk program reads the lines the search matched, straight off the pipe, puts each to the
 # three rules, and hands the shell one short record per finding: the rule's number, a tab, and the
-# line as it is reported. A line of HP_CUT bytes or fewer is reported whole, and when it is valid
-# text, byte for byte as it always was. A longer one is reported as HP_CUT bytes of it, starting
+# line as it is reported. A line that carries the marker and is judged all the same is handed over
+# once instead, as a record of a fourth kind naming everything found on it (claude-config#3586).
+# A line of HP_CUT bytes or fewer is reported whole, and when it is valid text, byte for byte as
+# it always was. A longer one is reported as HP_CUT bytes of it, starting
 # HP_LEAD bytes before what the rule found, so the part shown is the part to act on, followed by a
 # note of which bytes are shown and how long the line is; an edge of that cut that falls inside a
 # character moves inward to the nearest whole one, so a cut shows up to three bytes fewer at each
@@ -789,10 +791,13 @@ judged="$(
 )"
 judge_rc=$?
 
-# One short record per finding, sorted into the three rules. Nothing read here is longer than a
-# file's path, HP_CUT bytes of one of its lines as they are reported, and the notes after them. A
-# byte that is not valid text is reported as four characters, so at the very worst (HP_CUT such
-# bytes in a row) a record is four times HP_CUT and its path: still nothing like a whole line.
+# One short record per finding, sorted by its kind: one kind for each of the three rules, a fourth
+# for a marked line whose marker does not count (one record naming everything any rule found on
+# it, claude-config#3586), and the record that says the judge read every line. Nothing read here
+# is longer than a file's path, HP_CUT bytes of one of its lines as they are reported, and the
+# notes after them. A byte that is not valid text is reported as four characters, so at the very
+# worst (HP_CUT such bytes in a row) a record is four times HP_CUT and its path: still nothing
+# like a whole line.
 _tab=$'\t'
 judge_ended=0
 while IFS= read -r _rec; do
