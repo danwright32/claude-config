@@ -256,4 +256,4 @@ the Trash in Finder, which asks for his password itself. Once he says he ran it,
 gone with `ls -d` and read `df -m /System/Volumes/Data` again for the gain.
 
 The macOS symbol cache, which can reach hundreds of gigabytes, is root only and not part of the
-scan; when the totals do not explain a full disk, the disk-full skill's step 6 has its commands.
+scan; when the totals do not explain a full disk, the disk-full skill's step 7 has its commands.

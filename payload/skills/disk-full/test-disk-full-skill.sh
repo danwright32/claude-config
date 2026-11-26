@@ -143,7 +143,7 @@ check "the command that deletes them is introduced as Dan's decision" \
   "$([ -z "$unhanded_delete" ] && grep -qF 'derived-data-sweep.sh --delete' <<< "$CODE" && echo ok || echo "not handed to Dan, or missing: $unhanded_delete")"
 # Since Dan's decision of 2026-10-20 the low space warning clears them on its own, so the skill has
 # to say so, hand over the command that reads what the last sweep did (run as written, L442), and
-# name the switch that turns it off on one Mac, or a reader takes step 7 for the only way they go.
+# name the switch that turns it off on one Mac, or a reader takes step 8 for the only way they go.
 check "the skill says the low space warning clears them on its own, naming the off switch" \
   "$(grep -qF 'FREE_SPACE_DERIVED_DATA_AUTO_DELETE=0' "$SKILL" && grep -qi 'on its own' "$SKILL" && echo ok || echo "no paragraph names the automatic sweep and its off switch")"
 last_line="$(grep -m 1 -xF 'bash ~/.claude/hooks/derived-data-sweep.sh --last' <<< "$CODE")"
@@ -205,6 +205,94 @@ if . "$HOOKS/lib/disk-clean-harness.sh" && dc_setup; then
     "$([ "$propose_rc" -eq 0 ] && grep -qF 'Plan: ' <<< "$propose_out" && [ -f "$DC_HOME/Downloads/old-installer.dmg" ] && echo ok || echo "exit $propose_rc, said: $propose_out")"
 else
   check "the disk-clean harness sets up to run the propose command" "it could not"
+fi
+
+# ---- 9. a step names which program is writing, before any folder is ranked (claude-config#3589) ----
+# On 2026-11-24 free space fell 21 GB in 34 minutes in bursts and every folder step came back clean;
+# on 2026-11-25 it fell 88 GB in 23 minutes and the writer, a photo editor's export holding its temp
+# files open in a per user temp folder no `du` of the home folder reaches, was named only by an lsof
+# nobody had written down. The step must come after swap and before the folder rankings, every
+# command in it must be one line Claude can run, and the ones that can be run here are RUN (L442).
+writer_heading="$(grep -n -m 1 -E '^### [0-9]+\. Which program is writing' "$SKILL" | cut -d: -f1)"
+check "a step naming which program is writing comes after swap and before the folder rankings" \
+  "$([ -n "$writer_heading" ] && [ -n "$swap_heading" ] && [ -n "$weight_heading" ] && [ "$swap_heading" -lt "$writer_heading" ] && [ "$writer_heading" -lt "$weight_heading" ] && echo ok || echo "writer step at line '${writer_heading}', swap at '${swap_heading}', folder rankings at '${weight_heading}'")"
+writer_section="$(awk -v s="${writer_heading:-0}" 's > 0 && NR > s && /^### / { exit } s > 0 && NR > s' "$SKILL")"
+writer_code="$(awk '/^```/ { inside = !inside; next } inside' <<< "$writer_section")"
+# One line per fenced block: a command Claude copies is the whole block, and a second line in it is
+# either run blind or dropped.
+long_blocks="$(awk '/^```/ { if (inside) { if (n != 1) bad++ } else n = 0; inside = !inside; next } inside { n++ } END { print bad + 0 }' <<< "$writer_section")"
+n_blocks="$(grep -c '^```' <<< "$writer_section")"
+check "and every fenced command in it is one line" \
+  "$([ "${n_blocks:-0}" -ge 10 ] && [ "${long_blocks:-1}" -eq 0 ] && echo ok || echo "$((n_blocks / 2)) block(s), $long_blocks of them not exactly one line")"
+writers_line="$(grep -m 1 -xF 'python3 ~/.claude/hooks/lib/disk-writers.py' <<< "$writer_code")"
+held_line="$(grep -m 1 -F 'lsof +c 0 -n -P +L1' <<< "$writer_code")"
+for want in 'python3 ~/.claude/hooks/lib/disk-writers.py' 'lsof +c 0 -n -P +L1' 'lsof -a -n -P -p <pid> +L1' \
+    'memory_pressure | tail -1'; do
+  check "the writer step runs: $want" \
+    "$(grep -qF -- "$want" <<< "$writer_code" && echo ok || echo "not in a block of the writer step")"
+done
+# The file event log's entry count, read from its folder's size and link count (the folder itself
+# cannot be listed without a password).
+fsevents_line="$(grep -m 1 -F '/System/Volumes/Data/.fseventsd' <<< "$writer_code")"
+check "the writer step reads the file event log's size and link count" \
+  "$(case "$fsevents_line" in (*'%z'*'%l'*) echo ok ;; (*) echo "the line is: $fsevents_line" ;; esac)"
+check "and says the programs it could not read are unknown, never zero" \
+  "$(grep -qi 'never as zero\|not zero\|never zero' <<< "$writer_section" && echo ok || echo "the step does not say so")"
+check "and says a file deleted while held open still takes space, and how it shows" \
+  "$(grep -qi 'no name' <<< "$writer_section" && grep -qF 'NLINK' <<< "$writer_section" && echo ok || echo "the step does not say how a deleted open file shows")"
+check "and says a whole disk walk while memory is full is not known to be safe" \
+  "$(grep -qi 'memory is full' <<< "$writer_section" && grep -qi 'not yet known\|not known' <<< "$writer_section" && echo ok || echo "the step does not carry the caution")"
+check "and names no cause from one number" \
+  "$(grep -qi 'one number\|single number\|one reading' <<< "$writer_section" && echo ok || echo "the step does not keep the rule")"
+
+# The writer reading, run as written on readings the suite supplies, so it answers the same on any
+# machine: the unread programs are counted by who they run as, and the writers are named.
+WF="$TMP/writers.json"
+printf '%s\n' '{"seconds": 10.2, "free": [60000000000, 59100000000], "total": 900, "read": 3,' \
+  ' "unread": {"root": 160, "other": 95, "gone": 7},' \
+  ' "rows": [{"pid": 41, "name": "Photo Editor", "start": 1764000000, "lifetime": 88000000000, "window": 880000000},' \
+  '          {"pid": 42, "name": "quiet", "start": 1764000000, "lifetime": 1000, "window": 0},' \
+  '          {"pid": 43, "name": "sync client", "start": 1763000000, "lifetime": 30000000000, "window": 5000000}]}' > "$WF"
+w_out="$(DISK_WRITERS_SAMPLES="$WF" bash -c "${writers_line//\~\/.claude\/hooks\//$HOOKS/}" 2>&1)"; w_rc=$?
+check "the writer reading, run as written, sets the window's writes against free space" \
+  "$([ "$w_rc" -eq 0 ] && grep -qF 'fell 900 MB' <<< "$w_out" && grep -qF '885 MB in all' <<< "$w_out" && echo ok || echo "exit $w_rc, said: $w_out")"
+check "and counts the programs it could not read by who runs them, as unknown" \
+  "$(grep -qF '255 could not be read without a password (160 run as root, 95 as other system users)' <<< "$w_out" && grep -qF 'unknown, not zero' <<< "$w_out" && echo ok || echo "said: $w_out")"
+# Each list read into a variable first: a grep -q at the end of a pipeline can stop its producer
+# early, which pipefail reports as a failure that never happened.
+w_first="$(grep -A1 'Written in those' <<< "$w_out")"
+w_life="$(grep -A2 'since each started' <<< "$w_out")"
+check "and names the writer in the window first, and the lifetime writers" \
+  "$(grep -qF 'Photo Editor' <<< "$w_first" && grep -qF 'sync client' <<< "$w_life" && echo ok || echo "said: $w_out")"
+printf '%s\n' '{"seconds": 10, "free": [1, 1], "total": 900, "read": 0, "unread": {"root": 900, "other": 0, "gone": 0}, "rows": []}' > "$WF"
+w_out="$(DISK_WRITERS_SAMPLES="$WF" bash -c "${writers_line//\~\/.claude\/hooks\//$HOOKS/}" 2>&1)"; w_rc=$?
+check "and fails loudly, exit 2, when it could read no program at all, never reporting nothing as no writer" \
+  "$([ "$w_rc" -eq 2 ] && grep -qF 'no program could be read' <<< "$w_out" && echo ok || echo "exit $w_rc, said: $w_out")"
+
+# On a Mac, the reading of this Mac's own process table is run too (read only), as the positive
+# control that the libproc fields are where the script reads them. Elsewhere it cannot be measured,
+# and says so rather than passing (L411).
+if [ "$(uname -s)" = Darwin ]; then
+  w_out="$(bash -c "${writers_line//\~\/.claude\/hooks\//$HOOKS/} --seconds 1 --top 3" 2>&1)"; w_rc=$?
+  read_n="$(sed -n 's/^Read \([0-9][0-9]*\) of \([0-9][0-9]*\) programs.*/\1/p' <<< "$w_out")"
+  check "on this Mac the writer reading reads its own process table and states the unread count" \
+    "$([ "$w_rc" -eq 0 ] && [ "${read_n:-0}" -gt 0 ] && grep -qF 'could not be read without a password' <<< "$w_out" && echo ok || echo "exit $w_rc, said: $w_out")"
+else
+  echo "SUITE-PART-UNMEASURED the writer reading of a live process table, which needs macOS's libproc and so was not run on $(uname -s)"
+fi
+
+# The held open files command, run as written: this shell opens a file, deletes it and keeps it
+# open, which is the 2026-11-25 shape, and the command must charge its size to this shell.
+if command -v lsof >/dev/null 2>&1 && [ -n "$held_line" ]; then
+  exec 7>"$TMP/held.tmp"; head -c 4000000 /dev/zero >&7; rm -f "$TMP/held.tmp"
+  # Without its last `| head`, since this Mac's own programs may hold more than these 4 MB.
+  h_out="$(bash -c "${held_line% | head *}" 2>&1)"
+  exec 7>&-
+  h_mine="$(grep -E "pid $$\$" <<< "$h_out")"
+  check "the held files command, run as written, charges a deleted file held open to the program holding it" \
+    "$(grep -qE '^ +4 MB in 1 files' <<< "$h_mine" && echo ok || echo "said: $h_out")"
+else
+  echo "SUITE-PART-UNMEASURED the held files command, because lsof is not installed here or the step has no such command"
 fi
 
 echo ""
