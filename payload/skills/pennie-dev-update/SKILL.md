@@ -809,8 +809,11 @@ files in the session scratchpad.
    ```
 
    Leave out `--listed` for a first appearance and for a repo the post listed nothing from, and
-   `--outcomes` where no announcement asks for one (`needsOutcome`). It runs under the no network
-   wrapper with every path written out in full, never with a tilde (section 2).
+   `--outcomes` where no announcement asks for one (`needsOutcome`). An announcement this run
+   drafted on Dan's "Draft it now" is passed as `<n>=drafted-now`, with `--drafts <the folder
+   holding its draft's files>` (section 11): the commit judges that draft again and refuses
+   the run unless Slack kept it. It runs under the no network wrapper with every path written out
+   in full, never with a tilde (section 2).
 
    This records the post as checked, before Dan edits it, and does not wait for him. Waiting
    would keep the run going after the editor opens, and a post that goes out with no later turn
@@ -856,9 +859,10 @@ files in the session scratchpad.
 
 A change labelled `changelog/announce` also owes agents a post, written in its pull request under
 `## Announcement` and approved word for word by Dan at merge. Once the change is live the post is
-saved as a Slack draft in the repo's announcements channel and Dan sends it; this skill saves no
-draft and sends nothing. What it does is the safety net Dan chose on 2026-11-25: every run lists
-each announcement not yet settled, so an unsent one is seen.
+saved as a Slack draft in the repo's announcements channel and Dan sends it; this skill sends
+nothing, and saves a draft only when Dan picks "Draft it now" below. What it does is the safety net
+Dan chose on 2026-11-25: every run lists each announcement not yet settled, so an unsent one is
+seen.
 
 `gather.js` lists them per `ok` repo under `announcements`: each announce change in the window or
 in `heldBack`, plus every one an earlier run kept in the state file because it was only drafted or
@@ -898,9 +902,58 @@ The picker: one picker per announcement still unsettled, never one for several, 
 number, its title, when it merged (ET) and what the read showed. The options are "Sent" (outcome
 `sent`: it is not listed again), "Drafted, not sent yet" (`drafted`: the next run lists it again)
 and "Not announcing" (`not-announcing`: it is not listed again). Pass each outcome to the state
-commit with `--outcomes` (section 10, step 7). An answer that is none of the three leaves the
+commit with `--outcomes` (section 10, step 7). An answer that is none of the options leaves the
 announcement unsettled, and the state commit refuses the run until it is settled: say so, and do
 not record the run.
+
+### Draft it now
+
+An announcement that is live and was never drafted has none of those three answers, so Dan chose a
+fourth on 2026-11-25: "Draft it now". Before the picker, for each unsettled announcement whose
+`live` is true, whose `state` is `owed` and which was not found posted, ask whether it may be
+drafted:
+
+```bash
+__CLAUDE_HOME__/hooks/no-network-run.sh node __CLAUDE_HOME__/skills/pennie-dev-update/gather.js draftable --gathered <scratchpad>/gathered.json --repo <owner>/<name> --number <n> --drafts <scratchpad>/announce-drafts
+```
+
+Where it answers `draftable` true, add "Draft it now" to that announcement's picker as a fourth
+option, and it has written the wording, exactly as gathered, to `messageFile`. Where it answers
+false, the picker keeps its three options and what the read showed is followed by its `said`, word
+for word: an announcement whose wording was changed in its pull request after Dan approved it, or
+whose approval cannot be read on this Mac, is never drafted, and Dan must be asked again about it.
+The check is the one the is it live card makes (`hooks/lib/announce-compare.js`): the wording's
+hash against the hash its pull request merged on.
+
+When Dan picks "Draft it now":
+
+1. Call `slack_send_message_draft` with `channel_id` the announcement's `channel`, no `thread_ts`,
+   and `message` set to exactly the contents of `messageFile`, every line and blank line as
+   written. Read the file for it; never retype the post from the gathered output or the picker.
+   Do not run `/no-ai-tells` or `lint-post.js` on it and do not change a word: the wording is
+   already approved. Never send or schedule it: the draft tool is the only Slack call made here.
+   This is the one call that drafts an announcement, the same one the is it live card asks for.
+2. Write the tool's answer, exactly as it returned it, to `answerFile`, then ask what it left:
+
+   ```bash
+   __CLAUDE_HOME__/hooks/no-network-run.sh node __CLAUDE_HOME__/skills/pennie-dev-update/gather.js drafted --gathered <scratchpad>/gathered.json --repo <owner>/<name> --number <n> --drafts <scratchpad>/announce-drafts
+   ```
+
+   Add `--tool-error yes` when the tool call itself failed: the state commit then judges that
+   answer as a failed call too, without being told again. Running `draftable` again for the same
+   announcement removes the earlier answer, so write the answer after it. A draft counts only when Slack's answer
+   holds a `draft_id`: with a draft already waiting in the channel the tool answers "Draft created"
+   with none and keeps nothing (measured 2026-11-25, claude-config#3664).
+3. `state` `saved`: tell Dan it is a draft waiting in that channel for him to send and that
+   nothing was sent, and pass `<n>=drafted-now` with `--drafts <scratchpad>/announce-drafts` to the
+   state commit, which judges the draft again and records it as drafted. Any other `state`: say its
+   `said` to Dan, word for word, record nothing for it, and ask its picker again with the three
+   options and no "Draft it now". Never pass `drafted` or `drafted-now` for a draft that was not
+   judged `saved`.
+
+With the is it live mod loaded, its own hook judges the same draft call and says so in the tool's
+answer. If that answer says the draft differs from the approved wording or was not kept, tell Dan
+that too.
 
 The announcement never goes through `lint-post.js`, which refuses @here for the managers' post:
 the post for agents opens with @here on purpose and its wording is already Dan's. It is never

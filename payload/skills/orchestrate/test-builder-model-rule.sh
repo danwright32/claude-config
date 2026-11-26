@@ -8,7 +8,8 @@
 # 2026-11-19 he narrowed Sonnet to work that needs no judgement (claude-config#3290). On
 # 2026-11-24 he narrowed Fable to a change to what a design, security or compliance control decides
 # or shows, and reviews of one, after a sample of 50 Fable briefs found 16% were follow on work that
-# changed neither (claude-config#3393). The
+# changed neither (claude-config#3393). On 2026-11-26 he took writing or rewording a message that
+# code posts to Slack out of design and put it on Opus (claude-config#3757). The
 # running agent cap is held by test-agent-cap.sh since #2546. The rule has ONE home, the "Which
 # model a builder runs on" section of the orchestrate skill, beside the dispatch board whose Model column it fills (L83).
 # Everything else that dispatches builders points at that section by name rather than restating the
@@ -115,6 +116,10 @@ on_line "quotes Dan's choice" "$fable_line" 'Narrow to what a guard decides'
 check "the Fable bullet no longer ties the model to the item whatever the change" \
   "$(grep -q -i -F 'even when it is also one of the kinds above' <<< "$fable_line" && echo "on: $fable_line" || echo ok)"
 on_line "says what the change does decides the tier, not its kind" "$fable_line" 'what the change does decides the tier'
+# A guard that posts its message to Slack fitted both this example and the Slack sentence below, so
+# Dan scoped the example to messages shown outside Slack (2026-11-26, claude-config#3757: "Add
+# 'outside Slack' to the guard line"). Rewording a guard's Slack message runs on Opus.
+on_line "keeps a guard's message on Fable only outside Slack" "$fable_line" 'the message a guard shows a person outside Slack runs on Fable'
 # The classes the sample used, fixed before it was read, so every orchestrator classes alike.
 has "defines security by who or what may act" 'who or what may act'
 has "counts secrets and private data as security" 'secrets or private data'
@@ -122,6 +127,25 @@ has "leaves a gate's speed, timing or test runs out of security" "speed, timing 
 has "defines compliance as an obligation set outside the codebase" 'obligation set outside the codebase'
 has "defines design by how a person uses it" 'how a person uses it'
 has "classes a brief by its main task" 'by its main task'
+# Wording on a screen stays design, and so on Fable when it is the main task: Dan chose the narrow
+# sentence below over sending all wording to Opus (2026-11-26, claude-config#3757).
+has "keeps wording a person reads as design when it is the main task" 'wording a person reads included when that wording is the main task'
+# Slack message wording runs on Opus (Dan, 2026-11-26, claude-config#3757): an alert rewording job
+# went to Fable under the design definition above, and two of its agents each used about 460,000
+# tokens, while the slack-alerts skill and its checker already hold the standard. Dan approved this
+# sentence word for word, so it is held whole, and inside the paragraph that defines the classes,
+# where a reader classing a brief looks.
+SLACK_SENTENCE='Writing or rewording a message that code posts to Slack (an alert, an all clear, a reminder, a report) is not design under this rule and runs on Opus: the `slack-alerts` skill and its checker hold the standard (Dan, 2026-11-26).'
+classes_line="$(awk 'index($0, "What counts as each") == 1 { print; exit }' <<< "$section")"
+check "the rule sends Slack message wording to Opus, in Dan's approved sentence, in the paragraph defining the classes" \
+  "$(grep -q -F -- "$SLACK_SENTENCE" <<< "$classes_line" && echo ok || echo "the approved sentence is not on: ${classes_line:-the missing What counts as each paragraph}")"
+# The sentence hands the standard to a skill and its checker, so both must be there to hand it to.
+if [ -n "$PAYLOAD" ]; then
+  check "the slack-alerts skill the sentence names exists, with its checker" \
+    "$([ -f "$PAYLOAD/skills/slack-alerts/SKILL.md" ] && [ -f "$PAYLOAD/skills/slack-alerts/check_alert.py" ] && echo ok || echo "no skills/slack-alerts/SKILL.md and check_alert.py under $PAYLOAD")"
+else
+  echo "SUITE-PART-UNMEASURED $DIR/../.. is not the payload of a claude-config checkout, so the slack-alerts skill the rule names was not looked for"
+fi
 on_line "makes Opus the default for anything not listed" "$opus_line" 'everything else'
 check "the Opus bullet no longer claims design, security or compliance" \
   "$(grep -q -i -E 'design|security|compliance' <<< "$opus_line" && echo "on: $opus_line" || echo ok)"

@@ -163,6 +163,16 @@ redirected "behind an output redirection" "> /dev/null gh run watch 123456"
 redirected "behind input and an assignment" "</dev/null A=1 gh pr checks 12 --watch -i 5"
 allowed "#2235 control: a minute interval behind a redirection" "2>/dev/null gh pr checks 12 --watch --interval 60"
 
+# The same watcher written across a line a backslash joins to the next is the same watcher
+# (claude-config#3470): the shell removes the backslash and its line break before it reads words,
+# and the form this gate reads wrote the line break as a separator the backslash then escaped, so
+# each of these exited 0. PAIR is that pair, a backslash and then a line break.
+PAIR=$'\\\n'
+refused "#3470 gh run, the pair, watch" "gh run ${PAIR}watch 123456"
+refused "#3470 after && and the pair, gh pr checks --watch" "echo ok && ${PAIR}gh pr checks 12 --watch"
+allowed "#3470 control: gh run, the pair, view" "gh run ${PAIR}view 123456"
+allowed "#3470 control: a minute interval after the pair" "gh pr checks 12 --watch ${PAIR}--interval 60"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
