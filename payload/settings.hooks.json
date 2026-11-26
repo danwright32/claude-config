@@ -291,6 +291,12 @@
             "timeout": 30,
             "onFailure": "block",
             "statusMessage": "Checking a fresh worktree is not behind origin main"
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/lessons-merge-gate.sh",
+            "timeout": 15,
+            "onFailure": "block"
           }
         ]
       },

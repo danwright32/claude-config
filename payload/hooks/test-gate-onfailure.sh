@@ -299,6 +299,7 @@ done <<< "$ROWS"
 # each gate is expected to receive from the main session. A gate not listed must get only Bash.
 EXPECTED_SAMPLES="payload-write-gate.sh Bash,Edit,Write,MultiEdit,NotebookEdit
 no-verify-gate.sh Bash,Edit,Write,MultiEdit,NotebookEdit
+lessons-merge-gate.sh Bash,Edit,Write,MultiEdit,NotebookEdit
 scratchpad-subagent-gate.sh Write,Bash
 temp-worktree-gate.sh Bash,EnterWorktree
 fresh-worktree-base-gate.sh Edit,Write,MultiEdit,NotebookEdit

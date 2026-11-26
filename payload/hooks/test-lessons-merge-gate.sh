@@ -69,6 +69,16 @@ case "$*" in
     ref="$*"; ref="${ref##*ref=}"
     if [ -f "$FAKE_DIR/err-$ref" ]; then cat "$FAKE_DIR/err-$ref" >&2; exit 1; fi
     if [ -f "$FAKE_DIR/blob-$ref" ]; then cat "$FAKE_DIR/blob-$ref"; else printf 'gh: Not Found (HTTP 404)\n' >&2; exit 1; fi ;;
+  api*"/git/trees/"*)
+    # Every file at a commit, from $FAKE_DIR/tree-<sha> (with none, a tree holding no file), put
+    # through the --jq filter the caller sent, as gh does.
+    ref="$*"; ref="${ref##*/git/trees/}"; ref="${ref%%\?*}"
+    if [ -f "$FAKE_DIR/err-tree-$ref" ]; then cat "$FAKE_DIR/err-tree-$ref" >&2; exit 1; fi
+    filter="."; prev=""
+    for a in "$@"; do [ "$prev" = "--jq" ] && filter="$a"; prev="$a"; done
+    if [ -f "$FAKE_DIR/tree-$ref" ]; then jq -r "$filter" "$FAKE_DIR/tree-$ref"; else printf '{"tree":[],"truncated":false}\n' | jq -r "$filter"; fi ;;
+  api*graphql*)
+    if [ -f "$FAKE_DIR/node.json" ]; then cat "$FAKE_DIR/node.json"; else printf 'gh: Could not resolve to a node (HTTP 200)\n' >&2; exit 1; fi ;;
   *) printf 'fake gh: unexpected call: %s\n' "$*" >&2; exit 1 ;;
 esac
 SH
@@ -102,6 +112,8 @@ for op in ops:
         sections[1][1].append(entry(int(arg), rule="Rule with a [link](x) in it that a picker would draw as less than its text."))
     elif kind == "change":
         s, i = find(int(arg)); s[1][i][0] = s[1][i][0].replace("must be seen", "has to be seen")
+    elif kind == "short":
+        s, i = find(int(arg)); s[1][i][3] = "  SHORT: Rule %d in one line, reworded for the index." % int(arg)
     elif kind == "changeall":
         for n in range(1, int(arg) + 1):
             s, i = find(n); s[1][i][1] = "  It was found on a day somebody trusted a green run, twice."
@@ -225,7 +237,7 @@ expect_deny "the refusal states the count and the number" "Pull request #7 in ac
 expect_deny "the refusal gives the rule to show him, after its number" "L900: Rule 900 says a guard must be seen to fail before anybody trusts what it reports."
 expect_deny "the refusal gives the SHORT line to show him" "SHORT: Rule 900 in one line for the index."
 expect_deny "the refusal names the picker's source and the change's sha256" '"source": "lesson-merge", "repo": "acme/widget", "pr": 7, "sha256": "'
-expect_calls "a pull request that touches the file costs the view, the merge base and the file twice" 4
+expect_calls "a pull request that touches the file costs the view, the merge base, the files at both commits (#3583) and the file twice" 6
 one_added="$reason"; said one-entry-added
 
 answer "$one_added"
@@ -332,7 +344,7 @@ expect_allow "and his answer naming them covers the merge"
 fresh; pull preamble blank reorder swapsections
 run_hook "$MERGE 7 --squash"
 expect_allow "text above the first section, blank lines and the order of entries and sections change no entry"
-expect_calls "which is known only by reading the file at both commits" 4
+expect_calls "which is known only by reading the file at both commits, after the files at both for another spelling (#3583)" 6
 fresh; pull rewrap:4
 run_hook "$MERGE 7 --squash"
 expect_deny "a rule wrapped onto other lines is a changed entry" "1 entry changed (L4)."
@@ -439,6 +451,418 @@ printf '{}\n' > "$WORK/bytecode-transcript.jsonl"
 env -u PYTHONDONTWRITEBYTECODE python3 "$LIBCOPY/lesson-merge.py" harvest --record-dir "$WORK/bytecode-record" \
   --transcript "$WORK/bytecode-transcript.jsonl" --session s >/dev/null 2>&1
 if [ -e "$LIBCOPY/__pycache__" ]; then fail "reading a transcript leaves a __pycache__ beside the lib files (#2600)"; else pass; fi
+
+# ======================================================================================================================
+# The ways round (claude-config#3583). Everything above is #3343's and is left as it was, but for
+# two counts of GitHub reads, four made six: a merge that changes the lessons file now has the files
+# at both commits read too, whatever its file list named.
+# ======================================================================================================================
+json() { printf '%s' "$1" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))'; }
+# run_tool <tool> <its input, as JSON> [VAR=value ...]: a call of a tool that writes a file.
+run_tool() {
+  local tool="$1" input="$2"; shift 2
+  : > "$WORK/gh.log"
+  hook_out="$(printf '{"hook_event_name":"PreToolUse","tool_name":"%s","tool_input":%s,"cwd":%s,%s}' \
+      "$tool" "$input" "$(json "$WORK/repo")" "$PAYLOAD_EXTRA" \
+    | ( cd "$WORK/repo" && env PATH="$WORK/bin:$PATH" FAKE_DIR="$WORK/gh" FAKE_GH_LOG="$WORK/gh.log" \
+          LM_MERGE_RECORD_DIR="$RECORD" LM_MERGE_SLEEP=true CLAUDE_SLEEP_RECORD="$WORK/no-sleep-record" "$@" bash "$HOOK" 2>&1 ))"
+  hook_rc=$?
+  reason="$(printf '%s' "$hook_out" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty' 2>/dev/null)"
+}
+write_to() { run_tool Write "{\"file_path\":$(json "$1"),\"content\":\"{}\"}" "${@:2}"; }
+# The helper's ask: no transcript, the pull request pinned to its head.
+helper_ask() { PAYLOAD_EXTRA='"session_id":"me''rge-when-ready"' run_hook "$MERGE 7 --repo acme/widget --squash --match-head-commit $HEAD_SHA"; }
+# hand_line <a refusal's reason> [transcript] [session] [pull request]: the line a hand would put on
+# the record for the change the refusal names: its repository, number and sha256, and a question
+# holding every line the gate asks for.
+hand_line() {
+  python3 - "$1" "${2:-}" "${3:-}" "${4:-}" <<'PY'
+import json, re, sys, time
+reason, transcript, session, pr = sys.argv[1:5]
+meta = json.loads(re.search(r'metadata (\{.*?\})\.', reason).group(1))
+block = reason.split("on a line of its own:\n\n", 1)[1].split("\n\n", 1)[0]
+line = {"repo": meta["repo"], "pr": int(pr) if pr else meta["pr"], "sha256": meta["sha256"],
+        "question": block + "\nMay it merge?", "at": int(time.time())}
+if transcript:
+    line["transcript"] = transcript
+if session:
+    line["session"] = session
+print(json.dumps(line))
+PY
+}
+RECORD_NAME_WORDS="lesson-me""rges"
+
+# --- item 1: the record is the gate's to write, whatever tool names it ---------------------------------------------
+fresh; pull add:900
+mkdir -p "$RECORD"
+write_to "$RECORD/answers.jsonl"
+expect_deny "#3583 a Write to the record of his answers is refused" "the record of Dan's answers about lesson entries"
+expect_deny "#3583 and the refusal says why" "an approval he never gave"
+said write-to-the-record
+run_tool Edit "{\"file_path\":$(json "$RECORD/answers.jsonl"),\"old_string\":\"a\",\"new_string\":\"b\"}"
+expect_deny "#3583 an Edit of the record is refused" "the record of Dan's answers about lesson entries"
+run_tool MultiEdit "{\"file_path\":$(json "$RECORD/answers.jsonl"),\"edits\":[{\"old_string\":\"a\",\"new_string\":\"b\"}]}"
+expect_deny "#3583 a MultiEdit of the record is refused" "the record of Dan's answers about lesson entries"
+run_tool NotebookEdit "{\"notebook_path\":$(json "$RECORD/answers.jsonl"),\"new_source\":\"x\"}"
+expect_deny "#3583 a NotebookEdit naming the record is refused" "the record of Dan's answers about lesson entries"
+write_to "$RECORD/another-file"
+expect_deny "#3583 any file in the record's folder is the record" "the record of Dan's answers about lesson entries"
+write_to "$(printf '%s' "$RECORD" | tr 'a-z' 'A-Z')/ANSWERS.JSONL"
+expect_deny "#3583 the record spelled in another case is the same file on a Mac" "the record of Dan's answers about lesson entries"
+write_to "$WORK/repo/..//record/./answers.jsonl"
+expect_deny "#3583 the record reached through .., a doubled slash and a dot is the record" "the record of Dan's answers about lesson entries"
+write_to "../record/answers.jsonl"
+expect_deny "#3583 the record named from the session's own folder is the record" "the record of Dan's answers about lesson entries"
+ln -s "$RECORD" "$WORK/a-door"
+write_to "$WORK/a-door/answers.jsonl"
+expect_deny "#3583 the record reached through a linked folder is the record" "the record of Dan's answers about lesson entries"
+: > "$RECORD/answers.jsonl"; ln -s "$RECORD/answers.jsonl" "$WORK/an-alias-for-the-me""rge.jsonl"
+write_to "$WORK/an-alias-for-the-me""rge.jsonl"
+expect_deny "#3583 the record reached through a linked file is the record" "the record of Dan's answers about lesson entries"
+PAYLOAD_EXTRA="$PAYLOAD_EXTRA"',"agent_id":"a1b2c3d4"' write_to "$RECORD/answers.jsonl"
+expect_deny "#3583 a subagent's Write to the record is refused alike" "the record of Dan's answers about lesson entries"
+# Outside a test run the record is the one under the home folder, here a folder of the run's own.
+write_to "$WORK/home/.claude/state/$RECORD_NAME_WORDS/answers.jsonl" HOOK_TESTS_RUNNING= CLAUDE_HOME= HOME="$WORK/home"
+expect_deny "#3583 outside a test run the record under the home folder is the one guarded" "the record of Dan's answers about lesson entries"
+# What is not the record is not refused.
+mkdir -p "$WORK/notes-on-the-me""rge"
+write_to "$WORK/notes-on-the-me""rge/answers.jsonl"
+expect_allow "#3583 a Write to a file of the same name elsewhere is let through"
+run_tool Write "{\"file_path\":$(json "$WORK/repo/notes.md"),\"content\":$(json "the record is $RECORD/answers.jsonl, read at the me""rge")}"
+expect_allow "#3583 a Write whose text names the record, to another file, is let through"
+run_tool Edit "{\"file_path\":$(json "$WORK/repo/README.md"),\"old_string\":\"a\",\"new_string\":\"about a me""rge\"}"
+expect_allow "#3583 an Edit that only holds the word is let through"
+expect_calls "#3583 and a tool that writes a file reads nothing from GitHub" 0
+
+# The shell: the folder named in another case, or with a dot or a doubled slash, is the same folder.
+run_hook "echo '{}' >> ~/.claude/STATE/LESSON-ME""RGES/answers.jsonl"
+expect_deny "#3583 a shell command naming the record in capitals is refused" "is written only by lessons-me""rge-gate.sh"
+run_hook "echo '{}' >> ~/.claude/State/Lesson-Me""rges/answers.jsonl"
+expect_deny "#3583 a shell command naming the record in mixed case is refused" "is written only by lessons-me""rge-gate.sh"
+run_hook "echo '{}' >> ~/.claude/state//$RECORD_NAME_WORDS/answers.jsonl"
+expect_deny "#3583 a shell command naming the record with a doubled slash is refused" "is written only by lessons-me""rge-gate.sh"
+run_hook "echo '{}' >> ~/.claude/state/./$RECORD_NAME_WORDS/answers.jsonl"
+expect_deny "#3583 a shell command naming the record with a dot is refused" "is written only by lessons-me""rge-gate.sh"
+
+# --- item 1, by the state reached: the record holds a line Dan did not answer -------------------------------------
+# Whatever put the line there, it covers nothing: a line is believed only when the transcript it
+# names holds the picker he answered. Each route below really writes the line, then the helper asks.
+fresh; pull add:900
+run_hook "$MERGE 7 --squash"; unanswered="$reason"
+mkdir -p "$RECORD"
+hand_line "$unanswered" > "$RECORD/answers.jsonl"
+helper_ask
+expect_deny "#3583 a line written on the record by hand, naming no transcript, covers nothing" "Dan has not answered the lesson picker"
+expect_deny "#3583 and the refusal says the line is not his answer" "holds a line for this change that is not his answer"
+said hand-written-line
+run_hook "$MERGE 7 --squash"
+expect_deny "#3583 nor does it cover a typed merge from a session he never answered in" "Dan has not answered the lesson picker"
+
+# A script run by its path, which builds the folder's name as it runs: the line names this
+# session's transcript, where nothing was answered.
+fresh; mkdir -p "$RECORD"
+hand_line "$unanswered" "$TRANSCRIPT" sess-1 > "$WORK/line.json"
+printf '#!/usr/bin/env bash\nd="%s"; cat "%s" >> "${d}ord/answers.jsonl"\n' "$WORK/rec" "$WORK/line.json" > "$WORK/a-script.sh"
+bash "$WORK/a-script.sh"
+helper_ask
+expect_deny "#3583 a line a script wrote, naming a transcript with no answer in it, covers nothing" "the transcript it names holds no such answer"
+
+# An interpreter: the line names a transcript that is not there.
+fresh; mkdir -p "$RECORD"
+hand_line "$unanswered" "$WORK/no-such-transcript.jsonl" sess-1 > "$WORK/line.json"
+python3 -c 'import sys; open(sys.argv[2], "a").write(open(sys.argv[1]).read())' "$WORK/line.json" "$RECORD/answers.jsonl"
+helper_ask
+expect_deny "#3583 a line an interpreter wrote, naming a transcript that is not there, covers nothing" "the transcript it names could not be read"
+
+# A prepared file moved onto the record: the line names the transcript where he answered Do not merge.
+fresh; answer "$unanswered" "" "Do not merge"
+hand_line "$unanswered" "$TRANSCRIPT" sess-1 > "$WORK/prepared.jsonl"
+mkdir -p "$RECORD"; mv "$WORK/prepared.jsonl" "$RECORD/answers.jsonl"
+helper_ask
+expect_deny "#3583 a prepared file moved onto the record, where he answered Do not merge, covers nothing" "the transcript it names holds no such answer"
+
+# The record's folder swapped for a link to a prepared one: he answered for one change, and the
+# line claims that answer for another.
+fresh; answer "$unanswered"
+pull add:900 change:5
+run_hook "$MERGE 7 --squash" LM_MERGE_RECORD_DIR="$WORK/unused-record"; other="$reason"
+mkdir -p "$WORK/prepared-folder"; hand_line "$other" "$TRANSCRIPT" sess-1 > "$WORK/prepared-folder/answers.jsonl"
+rm -rf "$RECORD"; ln -s "$WORK/prepared-folder" "$RECORD"
+helper_ask
+expect_deny "#3583 a prepared folder linked in as the record, claiming his answer for another change, covers nothing" "the transcript it names holds no such answer"
+rm -f "$RECORD"
+
+# His answer for pull request 7, copied onto a line for pull request 8 carrying the same entries.
+fresh; pull add:900; answer "$unanswered"
+pr_json 8 2 "payload/LESSONS.md:MODIFIED" "README.md:MODIFIED"
+PAYLOAD_EXTRA='"session_id":"me''rge-when-ready"' run_hook "$MERGE 8 --repo acme/widget --squash --match-head-commit $HEAD_SHA"; eight="$reason"
+mkdir -p "$RECORD"; hand_line "$eight" "$TRANSCRIPT" sess-1 8 > "$RECORD/answers.jsonl"
+PAYLOAD_EXTRA='"session_id":"me''rge-when-ready"' run_hook "$MERGE 8 --repo acme/widget --squash --match-head-commit $HEAD_SHA"
+expect_deny "#3583 his answer for one pull request, copied onto a line for another, covers nothing" "Refusing to merge PR #8"
+
+# The line the gate itself writes names the transcript and the session it read his answer in, and
+# is believed for as long as that transcript holds the answer.
+fresh; pull add:900
+run_hook "$MERGE 7 --squash"; answer "$reason"; run_hook "$MERGE 7 --squash"
+if python3 -c 'import json,os,sys; e=json.loads(open(sys.argv[1]).readline()); sys.exit(0 if e.get("transcript")==os.path.abspath(sys.argv[2]) and e.get("session")=="sess-1" else 1)' "$RECORD/answers.jsonl" "$TRANSCRIPT" 2>/dev/null; then pass; else fail "#3583 the gate's own line names the transcript and the session of his answer: $(cat "$RECORD/answers.jsonl" 2>&1)"; fi
+helper_ask
+expect_allow "#3583 the gate's own line, whose transcript holds his answer, covers the helper's ask"
+mv "$TRANSCRIPT" "$WORK/transcript-set-aside.jsonl"
+helper_ask
+expect_deny "#3583 once that transcript is gone the line covers nothing, and he is asked again" "the transcript it names could not be read"
+mv "$WORK/transcript-set-aside.jsonl" "$TRANSCRIPT"
+
+# --- item 2: another spelling of the lessons file in the file list ---------------------------------------------------
+for spelling in "payload/lessons.md:ADDED" "payload/Lessons.md:MODIFIED" "Payload/LESSONS.md:MODIFIED" "PAYLOAD/LESSONS.MD:ADDED" \
+                "./payload/LESSONS.md:MODIFIED" "payload//LESSONS.md:MODIFIED" "payload/./LESSONS.md:MODIFIED" \
+                "payload/hooks/../LESSONS.md:MODIFIED" "/payload/LESSONS.md:MODIFIED"; do
+  fresh; pull
+  pr_json 7 2 "$spelling" "README.md:MODIFIED"
+  run_hook "$MERGE 7 --squash"
+  expect_deny "#3583 ${spelling%:*} in the file list is the lessons file under another spelling" "another spelling of payload/LESSONS.md"
+done
+said another-spelling
+fresh; pull add:900
+pr_json 7 3 "payload/LESSONS.md:MODIFIED" "payload/lessons.md:ADDED" "README.md:MODIFIED"
+run_hook "$MERGE 7 --squash"
+expect_deny "#3583 another spelling beside the lessons file itself is refused, and no picker covers it" "another spelling of payload/LESSONS.md"
+if says "AskUserQuestion"; then fail "#3583 no picker is named for another spelling: $reason"; else pass; fi
+# A path through a link: the folder the lessons file is in, listed as a file itself.
+fresh; pull
+pr_json 7 2 "payload:ADDED" "README.md:MODIFIED"
+run_hook "$MERGE 7 --squash"
+expect_deny "#3583 the lessons file's own folder listed as a file (a link put in its place) is refused" "the folder payload/LESSONS.md is in"
+pr_json 7 2 "Payload:ADDED" "README.md:MODIFIED"
+run_hook "$MERGE 7 --squash"
+expect_deny "#3583 and so is that folder under another spelling" "the folder payload/LESSONS.md is in"
+# What only looks like it is another file, and costs the one read.
+for other in "payload/LESSONS.md.bak:ADDED" "docs/payload/lessons.md:ADDED" "payload/hooks/lessons.md:ADDED" \
+             "payload/LESSONS-INDEX-proof-over-green.md:MODIFIED" "payload/lessons.markdown:ADDED" "payloads:ADDED"; do
+  fresh; pull
+  pr_json 7 2 "$other" "README.md:MODIFIED"
+  run_hook "$MERGE 7 --squash"
+  expect_allow "#3583 ${other%:*} is not the lessons file"
+  expect_calls "#3583 and costs the one read" 1
+done
+
+# --- item 2, where the file list cannot say: every file GitHub holds is read for another spelling ---------------------
+# tree <commit> [<path>:<one hex digit> ...] [truncated]: the files GitHub holds at a commit, as its
+# git trees endpoint answers; the digit, repeated, is the file's own sha.
+tree() {
+  python3 - "$WORK/gh/tree-$1" "${@:2}" <<'PY'
+import json, sys
+out, rows = sys.argv[1], sys.argv[2:]
+held = [{"path": "README.md", "type": "blob", "sha": "1" * 40}, {"path": "payload", "type": "tree", "sha": "2" * 40},
+        {"path": "payload/LESSONS.md", "type": "blob", "sha": "3" * 40}, {"path": "payload/hooks/lessons.md", "type": "blob", "sha": "9" * 40}]
+cut = False
+for row in rows:
+    if row == "truncated":
+        cut = True
+        continue
+    path, _, digit = row.rpartition(":")
+    held.append({"path": path, "type": "blob", "sha": digit * 40})
+json.dump({"sha": "0" * 40, "tree": held, "truncated": cut}, open(out, "w"))
+PY
+}
+fresh; pull; pr_json 7 150 "README.md:MODIFIED"
+tree "$MB_SHA"; tree "$HEAD_SHA" "payload/lessons.md:4"
+run_hook "$MERGE 7 --squash"
+expect_deny "#3583 a file list cut short does not hide another spelling added at the head" "payload/lessons.md, another spelling of payload/LESSONS.md"
+said another-spelling-in-the-tree
+tree "$MB_SHA" "payload/Lessons.md:4"; tree "$HEAD_SHA" "payload/Lessons.md:5"
+run_hook "$MERGE 7 --squash"
+expect_deny "#3583 nor another spelling whose text changes" "payload/Lessons.md, another spelling of payload/LESSONS.md"
+tree "$MB_SHA" "Payload/LESSONS.md:4"; tree "$HEAD_SHA"
+run_hook "$MERGE 7 --squash"
+expect_deny "#3583 nor another spelling removed at the head" "Payload/LESSONS.md, another spelling of payload/LESSONS.md"
+tree "$MB_SHA" "payload/lessons.md:4"; tree "$HEAD_SHA" "payload/lessons.md:4"
+run_hook "$MERGE 7 --squash"
+expect_allow "#3583 another spelling the pull request leaves as it was is not its change"
+expect_calls "#3583 which costs the view, the merge base, the files at both commits and the lessons file twice" 6
+tree "$MB_SHA"; tree "$HEAD_SHA" truncated
+run_hook "$MERGE 7 --squash"
+expect_deny "#3583 a tree GitHub cuts short cannot say, and is refused" "more files than GitHub lists in one answer"
+tree "$MB_SHA"; rm -f "$WORK/gh/tree-$HEAD_SHA"; printf 'gh: Bad Gateway (HTTP 502)\n' > "$WORK/gh/err-tree-$HEAD_SHA"
+run_hook "$MERGE 7 --squash"
+expect_deny "#3583 the files unreadable at the head: refused with what GitHub said" "HTTP 502"
+rm -f "$WORK/gh/err-tree-$HEAD_SHA"
+pr_json 7 2 "payload/OLD.md:RENAMED" "README.md:MODIFIED"
+tree "$MB_SHA"; tree "$HEAD_SHA" "payload:4"
+run_hook "$MERGE 7 --squash"
+expect_deny "#3583 a list holding a rename has the tree read, and the folder turned into a file is refused" "the folder payload/LESSONS.md is in"
+# A pinned commit that is not the head: the head's file list says nothing of it, so its tree is read.
+pr_json 7 2 "README.md:MODIFIED" "docs/x.md:MODIFIED"
+lessons "$WORK/gh/blob-$PIN_SHA"
+tree "$MB_SHA"; tree "$PIN_SHA" "payload/lessons.md:4"
+run_hook "$MERGE 7 --squash --match-head-commit $PIN_SHA"
+expect_deny "#3583 a pinned commit holding another spelling is refused" "payload/lessons.md, another spelling of payload/LESSONS.md"
+
+# --- item 2: a file list that names the lessons file is still not the whole answer ----------------------------------
+# A list naming payload/LESSONS.md says that file changes, never that no other spelling does. A
+# gate that takes the name as its answer reads no tree, so another spelling past the list's first
+# page, or renamed away, merges unseen beside it (these cases were red against such a gate). Every
+# file GitHub holds is read at both commits whenever the gate goes past the file list, whatever the
+# list named.
+fresh; pull; pr_json 7 150 "payload/LESSONS.md:MODIFIED" "README.md:MODIFIED"
+tree "$MB_SHA"; tree "$HEAD_SHA" "payload/lessons.md:4"
+run_hook "$MERGE 7 --squash"
+expect_deny "#3583 a list that names the lessons file and is cut short does not hide another spelling past its page" "payload/lessons.md, another spelling of payload/LESSONS.md"
+# His answer for the lessons file's own change covers no other spelling.
+fresh; pull add:900; tree "$MB_SHA"; tree "$HEAD_SHA"
+run_hook "$MERGE 7 --squash"; answer "$reason"
+pr_json 7 150 "payload/LESSONS.md:MODIFIED" "README.md:MODIFIED"
+tree "$HEAD_SHA" "payload/lessons.md:4"
+run_hook "$MERGE 7 --squash"
+expect_deny "#3583 nor does his answer for the lessons file itself cover the other spelling" "payload/lessons.md, another spelling of payload/LESSONS.md"
+if says "AskUserQuestion"; then fail "#3583 no picker is named for it: $reason"; else pass; fi
+# A rename lists the new name only, so the spelling renamed away is in no list.
+fresh; pull; pr_json 7 2 "payload/LESSONS.md:MODIFIED" "docs/old-lessons.md:RENAMED"
+tree "$MB_SHA" "payload/lessons.md:4"; tree "$HEAD_SHA" "docs/old-lessons.md:4"
+run_hook "$MERGE 7 --squash"
+expect_deny "#3583 a list that names the lessons file and holds a rename does not hide another spelling renamed away" "payload/lessons.md, another spelling of payload/LESSONS.md"
+pr_json 7 2 "payload/LESSONS.md:MODIFIED" "docs/x.md:COPIED"
+tree "$MB_SHA" "Payload/LESSONS.md:4"; tree "$HEAD_SHA" "Payload/LESSONS.md:5"
+run_hook "$MERGE 7 --squash"
+expect_deny "#3583 nor does one holding a change type this gate does not know" "Payload/LESSONS.md, another spelling of payload/LESSONS.md"
+pr_json 7 150 "payload/LESSONS.md:MODIFIED"
+tree "$MB_SHA"; tree "$HEAD_SHA" "PAYLOAD:4"
+run_hook "$MERGE 7 --squash"
+expect_deny "#3583 nor the folder turned into a file past the page" "the folder payload/LESSONS.md is in"
+# Where the files cannot be read the merge is refused in words that say what was not read: never
+# passed on as if nothing else changed.
+tree "$MB_SHA"; tree "$HEAD_SHA" truncated
+run_hook "$MERGE 7 --squash"
+expect_deny "#3583 a list naming the lessons file and cut short, over a tree GitHub cuts short: refused" "more files than GitHub lists in one answer"
+expect_deny "#3583 and the refusal says what could not be compared" "could not be compared"
+tree "$MB_SHA" truncated; tree "$HEAD_SHA"
+run_hook "$MERGE 7 --squash"
+expect_deny "#3583 and so is a tree cut short at the merge base" "more files than GitHub lists in one answer"
+tree "$MB_SHA"; rm -f "$WORK/gh/tree-$HEAD_SHA"; printf 'gh: Bad Gateway (HTTP 502)\n' > "$WORK/gh/err-tree-$HEAD_SHA"
+run_hook "$MERGE 7 --squash"
+expect_deny "#3583 a list naming the lessons file and cut short, with the files unreadable: refused with what GitHub said" "HTTP 502"
+expect_deny "#3583 and the refusal names the files as what was not read" "the files of acme/widget at the head"
+rm -f "$WORK/gh/err-tree-$HEAD_SHA"
+# A whole list naming the lessons file: the files are read all the same, so the list and the files
+# disagreeing is refused, and so are files that cannot be read.
+fresh; pull
+tree "$MB_SHA"; tree "$HEAD_SHA" "payload/lessons.md:4"
+run_hook "$MERGE 7 --squash"
+expect_deny "#3583 a whole list naming the lessons file is not taken as every file: another spelling GitHub holds changed is refused" "payload/lessons.md, another spelling of payload/LESSONS.md"
+tree "$MB_SHA"; tree "$HEAD_SHA" truncated
+run_hook "$MERGE 7 --squash"
+expect_deny "#3583 a whole list naming the lessons file, over a tree GitHub cuts short: refused" "more files than GitHub lists in one answer"
+tree "$MB_SHA"; rm -f "$WORK/gh/tree-$HEAD_SHA"; printf 'gh: Bad Gateway (HTTP 502)\n' > "$WORK/gh/err-tree-$HEAD_SHA"
+run_hook "$MERGE 7 --squash"
+expect_deny "#3583 a whole list naming the lessons file, with the files unreadable: refused with what GitHub said" "HTTP 502"
+rm -f "$WORK/gh/err-tree-$HEAD_SHA"
+# A list this gate cannot read at all (no count of changed files) names nothing and ends nothing.
+fresh; pull
+python3 - "$WORK/gh/pr.json" <<'PY'
+import json, sys
+view = json.load(open(sys.argv[1])); del view["changedFiles"]
+json.dump(view, open(sys.argv[1], "w"))
+PY
+tree "$MB_SHA"; tree "$HEAD_SHA" "payload/lessons.md:4"
+run_hook "$MERGE 7 --squash"
+expect_deny "#3583 a list naming the lessons file with no count of changed files has the files read too" "payload/lessons.md, another spelling of payload/LESSONS.md"
+# What is not the pull request's change stays unasked: another spelling left as it was, beside a
+# lessons file he has answered for.
+fresh; pull add:900; tree "$MB_SHA" "payload/lessons.md:4"; tree "$HEAD_SHA" "payload/lessons.md:4"
+pr_json 7 150 "payload/LESSONS.md:MODIFIED" "README.md:MODIFIED"
+run_hook "$MERGE 7 --squash"
+expect_deny "#3583 beside another spelling left as it was, the lessons file's own change is still asked about" "1 entry added (L900)."
+answer "$reason"; run_hook "$MERGE 7 --squash"
+expect_allow "#3583 and his answer covers the merge, the other spelling not being the pull request's change"
+expect_calls "#3583 which costs the view, the merge base, the files at both commits and the lessons file twice" 6
+# Held as #3343 left it, not decided here: the list is about the head, so with another commit
+# pinned and the lessons file at neither commit judged, the head's list naming the file is not
+# GitHub disagreeing with itself. Reading the list's two facts apart must not change that.
+fresh; pull; rm -f "$WORK/gh/blob-$MB_SHA" "$WORK/gh/blob-$HEAD_SHA" "$WORK/gh/blob-$PIN_SHA"
+tree "$MB_SHA"; tree "$PIN_SHA"
+run_hook "$MERGE 7 --squash --match-head-commit $PIN_SHA"
+expect_allow "#3583 the head's list naming the lessons file is still not held against another commit pinned"
+rm -f "$WORK/gh"/tree-*
+
+# --- item 3: a change that fits the picker shows its rules and SHORT lines -------------------------------------------
+# Five changed entries: seventeen rows of rules and SHORT lines, which #3343 asked about as a count.
+fresh; pull change:1 change:2 change:3 change:4 change:5
+run_hook "$MERGE 7 --squash"
+expect_deny "#3583 five changed entries are refused, naming the count" "5 entries changed (L1, L2, L3, L4, L5)."
+expect_deny "#3583 and each rule is shown, the first" "L1: Rule 1 says a guard has to be seen to fail before anybody trusts what it reports."
+expect_deny "#3583 the last" "L5: Rule 5 says a guard has to be seen to fail before anybody trusts what it reports."
+expect_deny "#3583 with its SHORT line" "SHORT: Rule 5 in one line for the index."
+if says 'a line starting "The change: "'; then fail "#3583 a change that fits is not asked about as a sweep: $reason"; else pass; fi
+expect_deny "#3583 the refusal says how much of the picker the lines take" "rows of the 20 a question may take"
+five="$reason"; said five-entries-shown
+# An answer to the count alone, as the sweep form asked, no longer covers it.
+python3 - "$TRANSCRIPT" "$five" <<'PY'
+import json, re, sys, time
+path, reason = sys.argv[1:3]
+meta = json.loads(re.search(r'metadata (\{.*?\})\.', reason).group(1))
+facts = reason.split("on a line of its own:\n\n", 1)[1].split("\n", 1)[0]
+question = facts + "\nThe change: rewords must be seen as has to be seen in five entries.\nMay it merge?"
+ask = {"questions": [{"question": question, "header": "Lessons", "multiSelect": False,
+                      "options": [{"label": "Merge these lessons", "description": "The pull request may merge."},
+                                  {"label": "Do not merge", "description": "The pull request stays open."}]}],
+       "metadata": meta}
+uid = "toolu_%d" % time.time_ns()
+with open(path, "a") as f:
+    f.write(json.dumps({"type": "assistant", "sessionId": "sess-1", "message": {"role": "assistant", "content": [
+        {"type": "tool_use", "id": uid, "name": "AskUserQuestion", "input": ask}]}}) + "\n")
+    f.write(json.dumps({"type": "user", "sessionId": "sess-1", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": uid, "content": "answered"}]},
+        "toolUseResult": {"questions": ask["questions"], "answers": {question: "Merge these lessons"}}}) + "\n")
+PY
+run_hook "$MERGE 7 --squash"
+expect_deny "#3583 an answer to the count and one line about the change does not cover entries he was not shown" "the question he read did not hold"
+answer "$five"
+run_hook "$MERGE 7 --squash"
+expect_allow "#3583 an answer to the question that showed all five covers the merge"
+# Six of the same entries take one row more than the picker's limit: the sweep form is kept for it.
+fresh; pull change:1 change:2 change:3 change:4 change:5 change:6
+run_hook "$MERGE 7 --squash"
+expect_deny "#3583 a change one row too tall for the picker keeps the sweep form" 'a line starting "The change: "'
+case "$nl$reason" in *"${nl}L1: "*) fail "#3583 and the sweep form lists no rule: $reason" ;; *) pass ;; esac
+# Whether it fits is the shared check's answer. Where that check cannot be run, no picker is named.
+mkdir -p "$WORK/no-check"; printf '#!/usr/bin/env bash\necho "node: cannot run" >&2\nexit 1\n' > "$WORK/no-check/node"; chmod +x "$WORK/no-check/node"
+fresh; pull change:1 change:2 change:3 change:4 change:5
+run_hook "$MERGE 7 --squash" PATH="$WORK/no-check:$WORK/bin:$PATH"
+expect_deny "#3583 with the shared picker check failing, a change that would fit names no picker" "could not be checked"
+if says "AskUserQuestion"; then fail "#3583 no picker is named while the check cannot run: $reason"; else pass; fi
+fresh; pull changeall:30
+run_hook "$MERGE 7 --squash" PATH="$WORK/no-check:$WORK/bin:$PATH"
+expect_deny "#3583 with the shared picker check failing, a sweep names no picker either" "could not be checked"
+if says "AskUserQuestion"; then fail "#3583 no sweep picker is named while the check cannot run: $reason"; else pass; fi
+
+# --- item 4: the API routes, a SHORT line alone ------------------------------------------------------------------------
+fresh; pull add:900
+run_hook "gh api -X PUT repos/acme/widget/pulls/7/me""rge -f merge_method=squash"
+expect_deny "#3583 a merge through the REST endpoint is refused like a typed one" "Refusing to merge PR #7"
+expect_deny "#3583 naming the entry" "1 entry added (L900)."
+run_hook "gh api --method PUT /repos/acme/widget/pulls/7/me""rge"
+expect_deny "#3583 the REST endpoint spelled with --method and a leading slash is refused" "Refusing to merge PR #7"
+rm -f "$WORK/gh/node.json"
+run_hook "gh api graphql -f query='mutation { me""rgePullRequest(input: {pullRequestId: \"PR_kwDOAAAA\"}) { clientMutationId } }'"
+expect_deny "#3583 a GraphQL merge whose pull request GitHub cannot name is refused" "Cannot judge whether this me""rge changes a lesson entry"
+printf '{"data":{"node":{"__typename":"PullRequest","repository":{"nameWithOwner":"acme/widget"},"number":7}}}\n' > "$WORK/gh/node.json"
+run_hook "gh api graphql -f query='mutation { me""rgePullRequest(input: {pullRequestId: \"PR_kwDOAAAA\"}) { clientMutationId } }'"
+expect_deny "#3583 a GraphQL merge of a pull request GitHub names is refused for its entries" "Refusing to merge PR #7"
+run_hook "gh api graphql -f query='mutation { enqueuePullRequest(input: {pullRequestId: \"PR_kwDOAAAA\"}) { clientMutationId } }'"
+expect_deny "#3583 a GraphQL add to the merge queue is refused for its entries" "Refusing to merge PR #7"
+run_hook "$MERGE 7 --squash"; answer "$reason"
+run_hook "gh api -X PUT repos/acme/widget/pulls/7/me""rge -f merge_method=squash"
+expect_allow "#3583 with his answer the REST merge goes through"
+run_hook "gh api graphql -f query='mutation { me""rgePullRequest(input: {pullRequestId: \"PR_kwDOAAAA\"}) { clientMutationId } }'"
+expect_allow "#3583 and so does the GraphQL one"
+rm -f "$WORK/gh/node.json"
+
+fresh; pull short:5
+run_hook "$MERGE 7 --squash"
+expect_deny "#3583 a change to a SHORT line alone is a changed entry" "1 entry changed (L5)."
+expect_deny "#3583 and the refusal shows the new SHORT line" "SHORT: Rule 5 in one line, reworded for the index."
+answer "${reason/SHORT: Rule 5 in one line, reworded for the index./SHORT: Rule 5 in one line for the index.}"
+run_hook "$MERGE 7 --squash"
+expect_deny "#3583 an answer that showed him the old SHORT line covers nothing" 'the line "SHORT: Rule 5 in one line, reworded for the index."'
 
 echo
 echo "passed: $passed   failed: $failed"
