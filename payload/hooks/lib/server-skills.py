@@ -69,16 +69,21 @@ def normal(name):
 
 
 def installed_plugins(home):
-    """Each installed plugin's name, lower case, with its install folders."""
+    """Each installed plugin's name, lower case, with its install folders, and why the record of
+    them could not be used, or None when it could. An unread record is never an empty one: the
+    question says which it was (L11)."""
     found = {}
+    path = os.path.join(home, ".claude", "plugins", "installed_plugins.json")
+    if not os.path.exists(path):
+        return found, "this Mac has no record of installed plugins (~/.claude/plugins/installed_plugins.json is not there)"
     try:
-        with open(os.path.join(home, ".claude", "plugins", "installed_plugins.json"), encoding="utf-8", errors="replace") as f:
+        with open(path, encoding="utf-8", errors="replace") as f:
             data = json.load(f)
     except Exception:
-        return found
+        return found, "this Mac's record of installed plugins (~/.claude/plugins/installed_plugins.json) could not be read"
     plugins = data.get("plugins") if isinstance(data, dict) else None
     if not isinstance(plugins, dict):
-        return found
+        return found, "this Mac's record of installed plugins (~/.claude/plugins/installed_plugins.json) holds no list of plugins this hook could read"
     for key, entries in plugins.items():
         if not isinstance(key, str) or not isinstance(entries, list):
             continue
@@ -87,7 +92,7 @@ def installed_plugins(home):
             path = e.get("installPath") if isinstance(e, dict) else None
             if isinstance(path, str) and path:
                 found.setdefault(name, []).append(path)
-    return found
+    return found, None
 
 
 def own_name(skill_file):
@@ -166,11 +171,14 @@ def judge(raw_name, cwd, home):
             return None
         return (text_of(skill, server_words(prefix))
                 + " No skill " + shown(skill) + " is on disk under " + shown(prefix) + " in the working directory.")
-    for folder in installed_plugins(home).get(prefix.lower(), []):
+    plugins, unread = installed_plugins(home)
+    for folder in plugins.get(prefix.lower(), []):
         if plugin_holds(folder, skill):
             return None
-    return (text_of(skill, server_words(prefix))
-            + " " + shown(prefix) + ":" + shown(skill) + " is also the form a plugin's skill takes, and no installed plugin named "
+    also = " " + shown(prefix) + ":" + shown(skill) + " is also the form a plugin's skill takes, and "
+    if unread:
+        return text_of(skill, server_words(prefix)) + also + unread + ", so whether a plugin holds it could not be told."
+    return (text_of(skill, server_words(prefix)) + also + "no installed plugin named "
             + shown(prefix) + " holds a skill " + shown(skill) + " on this Mac.")
 
 

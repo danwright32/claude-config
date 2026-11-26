@@ -174,6 +174,14 @@ EMPTY_HOME="$WORK/empty-home"
 mkdir -p "$EMPTY_HOME"
 r="$(cd "$WORK" && printf '%s' "$(skill kit:brainstorming)" | env -u CLAUDE_HOME HOME="$EMPTY_HOME" CLAUDE_SLEEP_RECORD="$AWAKE" bash "$HOOK" 2>/dev/null; printf '\nrc=%s\n' "$?")"
 [ "$(decision "$r")" = "ask rc=0" ] && check "with no record of installed plugins, a plugin form is asked about" ok || check "with no record of installed plugins, a plugin form is asked about" "$(decision "$r")"
+says "and the question says the record is not there, never that no plugin holds the skill" "$r" 'no record of installed plugins'
+# A record that is there and cannot be read is said to be that, too (L11).
+BAD_HOME="$WORK/bad-home"
+mkdir -p "$BAD_HOME/.claude/plugins"
+printf 'not json' > "$BAD_HOME/.claude/plugins/installed_plugins.json"
+r="$(cd "$WORK" && printf '%s' "$(skill kit:brainstorming)" | env -u CLAUDE_HOME HOME="$BAD_HOME" CLAUDE_SLEEP_RECORD="$AWAKE" bash "$HOOK" 2>/dev/null; printf '\nrc=%s\n' "$?")"
+[ "$(decision "$r")" = "ask rc=0" ] && check "with a record of installed plugins that cannot be read, a plugin form is asked about" ok || check "with a record of installed plugins that cannot be read, a plugin form is asked about" "$(decision "$r")"
+says "and the question says the record could not be read" "$r" 'installed plugins .*could not be read'
 
 # --- 3. asleep --------------------------------------------------------------------------------------
 echo "while Dan is asleep a server's skill is refused, with the reason, and a local skill still passes"
