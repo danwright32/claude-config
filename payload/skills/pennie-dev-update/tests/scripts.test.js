@@ -1667,6 +1667,21 @@ function draftCase(claims) {
   const kept = ((st && st.announcements) || []).map(function (a) { return a.number + '=' + a.outcome; });
   check(good.code === 0 && kept.indexOf('70=drafted') !== -1, 'with a draft Slack kept, drafted-now records the announcement as drafted, so the next run lists it again', good.all + JSON.stringify(kept));
 }
+{
+  // What an earlier attempt left and cannot be removed is said as that, and a tool error flag that is not yes or no is refused.
+  const c = draftCase({ 70: ANNOUNCE_POST });
+  fs.mkdirSync(c.files(70).answer, { recursive: true });
+  const stuck = c.ask('draftable', 70);
+  check(stuck.code !== 0 && /could not be removed/.test(stuck.err) && !/could not be written/.test(stuck.err) && !fs.existsSync(c.files(70).message),
+    'an earlier answer that cannot be removed refuses the new attempt in its own words, and writes no wording', stuck.all);
+  fs.rmSync(c.files(70).answer, { recursive: true });
+  c.ask('draftable', 70);
+  fs.writeFileSync(c.files(70).answer, KEPT_ANSWER);
+  const odd = c.ask('drafted', 70, ['--tool-error', 'true']);
+  check(odd.code !== 0 && /--tool-error/.test(odd.err) && /yes/.test(odd.err), 'a tool error flag that is neither yes nor no is refused, never read as a call that did not fail', odd.all);
+  const no = c.ask('drafted', 70, ['--tool-error', 'no']);
+  check(no.code === 0 && no.json && no.json.state === 'saved', 'a tool error flag of no judges the call as one that did not fail', no.all);
+}
 
 fs.rmSync(SCRATCH, { recursive: true, force: true });
 console.log('passed: ' + passed + ', failed: ' + failed);

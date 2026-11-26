@@ -1031,17 +1031,18 @@ function draftableNow(repo, ann) {
 // not, nothing is written, so no session holds a file of wording that must not be drafted.
 function cmdDraftable(args) {
   if (!args.gathered || !args.repo || !args.number || !args.drafts) {
-    refuse('Usage: gather.js draftable --gathered P --repo owner/name --number N --drafts DIR (a folder in the scratchpad for the draft\'s two files).');
+    refuse('Usage: gather.js draftable --gathered P --repo owner/name --number N --drafts DIR (a folder in the scratchpad for the draft\'s files).');
   }
   const one = gatheredAnnouncement(args);
   const files = draftFiles(args.drafts, one.n);
   const verdict = draftableNow(one.repo, one.ann);
   const out = { repo: one.repo.repo, number: one.n, draftable: verdict.draftable, channel: one.ann.channel || '', messageFile: null, answerFile: null, said: verdict.said };
   if (verdict.draftable) {
+    // Outside the try below, so one that cannot be removed is refused in its own words (L11).
+    removeDraftFile(files.answer, one.n);
+    removeDraftFile(files.failed, one.n);
     try {
       fs.mkdirSync(args.drafts, { recursive: true });
-      removeDraftFile(files.answer, one.n);
-      removeDraftFile(files.failed, one.n);
       fs.writeFileSync(files.message, one.ann.text);
     } catch (e) { refuse('The wording of #' + one.n + ' could not be written to ' + files.message + ' (' + e.code + '), so there is nothing to draft from.'); }
     out.messageFile = files.message;
@@ -1099,7 +1100,11 @@ function cmdDrafted(args) {
   // What the session says of the call is kept beside its answer, written or removed on every run, so
   // the state commit, which is told nothing of it, judges this answer as it is judged here.
   const failed = draftFiles(args.drafts, one.n).failed;
-  if (args['tool-error'] === 'yes') {
+  const flag = args['tool-error'];
+  if (flag !== undefined && flag !== 'yes' && flag !== 'no') {
+    refuse('--tool-error takes yes or no, not ' + JSON.stringify(flag) + ': a failed call written any other way would be judged as one that did not fail. Nothing was judged.');
+  }
+  if (flag === 'yes') {
     try { fs.writeFileSync(failed, 'gather.js drafted was told the draft call for #' + one.n + ' failed.\n'); }
     catch (e) { refuse('That the draft call for #' + one.n + ' failed could not be written to ' + failed + ' (' + e.code + '), so the state commit would judge its answer as one that did not fail. Nothing was judged.'); }
   } else {
