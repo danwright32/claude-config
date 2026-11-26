@@ -412,7 +412,7 @@ for cmd in "$FORGED | python3 $LIBRARY check --repo acme/widget --hash $H --pr 7
            "chmod +x $LIBRARY && $LIBRARY used --repo acme/widget --hash $H --pr 7" \
            "python3 $LIBRARY \"\$VERB\" --repo acme/widget --hash $H" \
            "python3 $LIBRARY" \
-           "python3 -c 'import runpy, sys; sys.argv = [\"x\", \"used\"]; runpy.run_path(\"$LIBRARY\", run_name=\"__main__\")'" \
+           "python3 -B -c 'import runpy, sys; sys.argv = [\"x\", \"used\"]; runpy.run_path(\"$LIBRARY\", run_name=\"__main__\")'" \
            "python3 -m runpy $LIBRARY used"; do
   r="$(run "$cmd")"
   check "R2 a command that runs the library to write, or in a form that cannot be told from one, is refused: ${cmd:0:150}" "$(refused "$r" && [[ "$r" == *"runs lib/announce-approval.py"* ]] && echo ok || echo "$r")"
