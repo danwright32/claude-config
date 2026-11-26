@@ -195,10 +195,12 @@ pair "a library RUBYOPT names with .rb written out" RUBYOPT "RUBYLIB=rlib RUBYOP
 pair "a library RUBYOPT names, with RUBYLIB exported first" RUBYOPT "export RUBYLIB=rlib; RUBYOPT=-rlibmod ruby quiet.rb" "export RUBYLIB=rcalm; RUBYOPT=-rlibmod ruby quiet.rb"
 pair "a library an exported RUBYOPT names, found by a later RUBYLIB" RUBYOPT "export RUBYOPT=-rlibmod; RUBYLIB=rlib ruby quiet.rb" "export RUBYOPT=-rlibmod; RUBYLIB=rcalm ruby quiet.rb"
 pair "the rubygems.rb in a RUBYLIB folder" RUBYLIB "RUBYLIB=rgems ruby quiet.rb" "RUBYLIB=rgemscalm ruby quiet.rb"
-for runs in "RUBYOPT=-W0 ruby quiet.rb" "RUBYOPT=-rjson ruby quiet.rb" "RUBYOPT='-w -rset' ruby quiet.rb"; do
-  run_g "$runs"
-  allowed "#3675 a RUBYOPT that names no file of the command's own passes: $runs"
-done
+run_g "RUBYOPT=-W0 ruby quiet.rb"
+allowed "#3675 a RUBYOPT that names no library passes"
+run_g "RUBYOPT=-rjson ruby quiet.rb"
+allowed "#3675 a RUBYOPT that names a library of ruby's own passes"
+run_g "RUBYOPT='-w -rset' ruby quiet.rb"
+allowed "#3675 a RUBYOPT of two options that names a library of ruby's own passes"
 run_g 'RUBYOPT="-r$UNSET_3675/mod" ruby quiet.rb'
 read_refused "#3675 a RUBYOPT the gate cannot work out is refused"
 says "#3675 and the refusal names RUBYOPT" "RUBYOPT"
