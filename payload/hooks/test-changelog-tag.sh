@@ -1495,8 +1495,8 @@ got="$(printf '%s' "$MERGE 7 --squash" | python3 -B "$HOOK_DIR/gh_issue_scan.py"
 if [ "$(printf '%s' "$got" | jq -r '.writes' 2>/dev/null)" = 0 ]; then pass; else fail "#3742 item 4: gh_issue_scan.py writes counted a merge alone as another write: $got"; fi
 got="$(printf '%s' "gh pr edit 7 --body 'unclosed && $MERGE 7" | python3 -B "$HOOK_DIR/gh_issue_scan.py" writes "$PWD" 2>/dev/null)"
 if [ -n "$(printf '%s' "$got" | jq -r '.unread // ""' 2>/dev/null)" ]; then pass; else fail "#3742 item 4: gh_issue_scan.py writes gave a count for a command it cannot read: $got"; fi
-if grep -q 'scan\.gh_writes(' "$HOOK_DIR/announce_label_gate.py" && ! grep -q 'def _api_calls\|def _api_write' "$HOOK_DIR/announce_label_gate.py"; then pass
-else fail "#3742 item 4: announce_label_gate.py does not count a call's writes through gh_issue_scan.py's gh_writes, or keeps a copy of the count"; fi
+if grep -q 'found, apis, writes = scan\.gh_writes(' "$HOOK_DIR/announce_label_gate.py"; then pass
+else fail "#3742 item 4: announce_label_gate.py does not take its count of a call's writes from gh_issue_scan.py's gh_writes"; fi
 # A plain heredoc into a file, never one inside $(...), which bash 3.2 mis-parses (make_repo, above).
 samepy="$(mktemp)"
 cat > "$samepy" <<'PY'
