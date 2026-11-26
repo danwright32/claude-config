@@ -1536,7 +1536,8 @@ test('each main request restarts the hour; a subagent request and the turn endin
 // stream, so a hook that only relays it is a risk to every call of every agent for nothing.
 test('status-bar registers no turn.step hook, so no model stream passes through the hooks worker for it (#2726)', async () => {
   const events: string[] = []
-  register(((event: string) => { events.push(event) }) as never, {} as never)
+  // The stand in answers what on() answers, a registration that takes a catch (#3655).
+  register(((event: string) => (events.push(event), { catch: () => undefined })) as never, {} as never)
   expect(events).toContain('turn.start')
   expect(events).not.toContain('turn.step')
 })

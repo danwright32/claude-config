@@ -383,7 +383,7 @@ class _Verdict:
         if verdict in (None, "unmeasured"):
             self.add("egress-unmeasured", name, "receipt %s records egress as unmeasured (%s), so the run cannot show"
                      " the served app reached nothing outside the project's egress.allow. Run the area again on a Mac"
-                     " where the egress monitor starts" % (rid, why))
+                     " where the egress monitor can measure the whole run" % (rid, why))
         elif verdict != "clean":
             self.add("egress-not-clean", name, "receipt %s records egress as %s, not clean: %s" % (rid, verdict, why))
         stamp, source = r.get("build_stamp"), r.get("build_stamp_source")

@@ -197,9 +197,10 @@ run "a detached headless run"        skip 'gh pr merge 42' 'CLAUDE_DETACHED_RUN=
 # declined five times, every one correctly judged internal. He was offered turning it
 # off and chose to narrow it instead.
 #
-# changelog/visible means exactly what the quiz's own user facing gate means, it is set
-# by a person at pull request time, and PET and Slate already enforce it at merge. So
-# the label narrows what reaches Claude. It does NOT replace the judgement: a mixed
+# A label of a kind a manager would notice (changelog/visible, and since claude-config#3665
+# changelog/announce, further down) means exactly what the quiz's own user facing gate
+# means, it is set by a person at pull request time, and PET and Slate already enforce it
+# at merge. So the label narrows what reaches Claude. It does NOT replace the judgement: a mixed
 # pull request can carry changelog/technical while touching something visible, so the
 # instruction keeps its own gate and the cases further down still pin it.
 record '[{"name":"changelog/technical"}]'
@@ -208,13 +209,25 @@ record '[{"name":"changelog/none"}]'
 run "a none record does not quiz"       skip 'gh pr merge 42'
 record '[{"name":"changelog/visible"}]'
 run "a visible record quizzes"          fire 'gh pr merge 42'
-# Mixed labels: visible wins, because the quiz is owed wherever any part of it shows.
+# Mixed labels: a kind a manager would notice wins over a quiet one beside it, because the
+# quiz is owed wherever any part of it shows.
 record '[{"name":"changelog/technical"},{"name":"changelog/visible"}]'
 run "visible beside technical quizzes"  fire 'gh pr merge 42'
 # Case and stray whitespace are the label reader's business, not this hook's, and the
 # reader is the same module the merge gate enforces with, so this proves the two agree.
 record '[{"name":"  Changelog/Technical  "}]'
 run "a label is read case blind"        skip 'gh pr merge 42'
+# An announce record is a change managers notice as well as one agents are told about, so it is
+# quizzed like a visible one (claude-config#3665). The hook asked "is it visible?" by that one name,
+# so any other kind, this one included, read as quiet. Now it asks the library's own map of the
+# kinds, which changelog-entry.test.js holds to an answer for every kind.
+record '[{"name":"changelog/announce"}]'
+run "an announce record quizzes"        fire 'gh pr merge 42'
+record '[{"name":"changelog/technical"},{"name":"changelog/announce"}]'
+run "announce beside technical quizzes" fire 'gh pr merge 42'
+# A label that is not one of the kinds is still not one a manager notices.
+record '[{"name":"changelog/goals"}]'
+run "a label outside the kinds does not quiz" skip 'gh pr merge 42'
 
 # THE FALLBACK, and it is the one that matters most: a repo that does not use the
 # convention has to keep working exactly as before, with Claude doing the judging. It
@@ -401,7 +414,7 @@ no_record
 # marker is a file at the checkout root, the same shape as the repo relative paths
 # lib/merge-target.sh reads to learn a repo carries its own merge tool.
 #
-# Every case uses a VISIBLE record, the strongest form: the one record that would
+# Every case uses a VISIBLE record, the strongest form: a record that would
 # otherwise always quiz, so a skip here can only be the marker's doing (L159).
 opted_out_line() {  # $1 = command, $2 = session cwd ; prints the hook's whole output
   python3 -c '

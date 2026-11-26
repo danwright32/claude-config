@@ -103,6 +103,10 @@ const runs = (words: string[], at: number, r: Runner): { next: number; sets: num
 // never ends, and an apostrophe in a real heredoc's body further on would then open a quote that
 // hides every command after it.
 const OPENING = /(?<!<)<<(?!<)(-?)[ \t]*(?=\\?[A-Za-z_]|\$?['"])/g
+// A << with nothing after it but blanks, and how a marker's word starts (OPENING's own rule), for an
+// opener a backslash joins to the next line before the end of its marker (dropHeredocs, #3592).
+const JOINED_OPENING = /(?<!<)<<(?!<)-?[ \t]*/g
+const MARKER_STARTS = /^(?:\\?[A-Za-z_]|\$?['"])/
 // What ends the delimiter word, as the shell reads a word.
 const DELIMITER_END = new Set([' ', '\t', '\n', ';', '&', '|', '<', '>', '(', ')'])
 
@@ -380,13 +384,32 @@ const plainCommand = (text: string): boolean => {
 // quote (`git commit -m "$(cat <<'EOF'`) is not one: its body does start on the next line.
 // `quotes` is whether `cmd` is a text read from its first character as a line of its own, whose
 // quotes can be read across its lines (quotedText); not a substitution's text (readLine).
-export const dropHeredocs = (cmd: string, quotes = true): { text: string; heredocs: Heredoc[]; unended?: Heredoc; removed: { at: number; lines: string[] }[] } => {
+// `unsure` is where each << stands, in the text left, whose heredoc the reader is not sure it ends
+// where the shells do (#3592), and readLine marks the command each feeds unread. The reading itself
+// is the one it always was: a body ends at the first line that is its marker once the blanks beside
+// it are taken off. Beside it each body line is read as bash and zsh read it, a line of an unquoted
+// body that ends in an odd count of backslashes joined to the next before anything is compared, and
+// only tabs let go of, before the marker, under <<-. A heredoc is unsure where the two readings end
+// it at different lines (a marker joined to the line before, a marker with a space or a tab beside
+// it, a marker split over two lines), where both end it at a line a backslash joined to the one
+// before (bash and zsh compare the joined line whole where dash or ksh do not), where its marker
+// stands right after a line that starts as the marker does and ends in backslashes (ksh keeps the
+// first of those as text, so it joins where the others do not and the reverse), and where its
+// opener is joined to the next line before the end of its marker word, so the marker is not the
+// word on that line. Each is a row of hooks/lib/heredoc-closes.json, measured 2026-11-25 in bash
+// 3.2, bash --posix, sh, dash, zsh, zsh emulating sh and ksh.
+export const dropHeredocs = (cmd: string, quotes = true): { text: string; heredocs: Heredoc[]; unended?: Heredoc; removed: { at: number; lines: string[] }[]; unsure: number[] } => {
   const out: string[] = []
   const heredocs: Heredoc[] = []
   const removed: { at: number; lines: string[] }[] = []
   // `whole` is where its << stands in `cmd` itself, known while no line has been taken out; -1 after.
   // `alone` is whether its line, read alone, ends inside a quote opened after it (`sure`, below).
-  const open: { end: string; tabs: boolean; at: number; quoted: boolean; torn: boolean; alone: boolean; inText: boolean; whole: number }[] = []
+  // `carry`, `carrying`, `last`, `gone` and `unsure` follow the shells' reading of its body beside
+  // this one's: what the lines before carried on to this line, whether the line before is joined to
+  // it, that line as written, whether the shells have ended the heredoc, and whether the two
+  // readings have parted.
+  const open: { end: string; tabs: boolean; at: number; quoted: boolean; torn: boolean; alone: boolean; inText: boolean; whole: number; carry: string; carrying: boolean; last: string; gone: boolean; unsure: boolean }[] = []
+  const unsure: number[] = []
   let body: string[] = []
   // The lines of the heredoc being read, as written, put back as commands if it never ends.
   let unended: string[] = []
@@ -415,12 +438,26 @@ export const dropHeredocs = (cmd: string, quotes = true): { text: string; heredo
     const h = open[0]
     if (h && !joined) {
       remove(line)
+      if (!h.gone) {
+        const bare = (t: string) => (h.tabs ? t.replace(/^\t+/, '') : t)
+        const whole = h.carry + line
+        const ends = bare(whole) === h.end
+        const start = bare(h.last).replace(/\\+$/, '')
+        if (ends !== (line.trim() === h.end) || (ends && h.carrying)) h.unsure = true
+        if (!h.quoted && bare(line) === h.end && h.last.endsWith('\\') && start !== '' && h.end.startsWith(start)) h.unsure = true
+        const joins = !h.quoted && /(?<!\\)(?:\\\\)*\\$/.test(line)
+        h.gone = ends
+        h.carry = joins && !ends ? whole.slice(0, -1) : ''
+        h.carrying = joins && !ends
+        h.last = line
+      }
       if (line.trim() === h.end) {
         // A shell ends a heredoc only at a line that is its marker and nothing more, a <<- one's
         // leading tabs aside, and reads on past this one (#3496).
         if ((h.tabs ? line.replace(/^\t+/, '') : line) !== h.end) sure = false
         // One not read alike from its << to its marker keeps the mark its line read alone gave it.
         heredocs.push({ at: h.at, body: body.join('\n'), quoted: h.quoted, ...(h.torn || (h.alone && !sure) ? { torn: true as const } : {}) })
+        if (h.unsure) unsure.push(h.at)
         open.shift()
         body = []
         unended = []
@@ -475,7 +512,18 @@ export const dropHeredocs = (cmd: string, quotes = true): { text: string; heredo
     }
     for (const f of found) {
       const torn = (read: { quotes: LineQuote[] }) => read.quotes.some(q => q.to === undefined && q.from > f.at)
-      open.push({ end: f.end, tabs: f.tabs, at: offset + f.at, quoted: f.quoted, torn: torn(facts), alone: torn(alone), inText: standsInText(line, facts.quotes, f.at), whole: quotes && !removed.length ? offset + f.at : -1 })
+      open.push({ end: f.end, tabs: f.tabs, at: offset + f.at, quoted: f.quoted, torn: torn(facts), alone: torn(alone), inText: standsInText(line, facts.quotes, f.at), whole: quotes && !removed.length ? offset + f.at : -1, carry: '', carrying: false, last: '', gone: false, unsure: false })
+    }
+    // An opener joined to the next line between its << and the end of its marker word: `cat <<E`,
+    // a backslash, then `x` waits for the line Ex in every shell, and `cat <<`, a backslash, then
+    // `E` for the line E, where this reader takes the word on the line, or opens no heredoc.
+    if (facts.joins) {
+      for (const m of line.matchAll(JOINED_OPENING)) {
+        const at = m.index ?? 0
+        if (at >= facts.comment) break
+        const rest = line.slice(at + m[0].length)
+        if (rest === '\\' || (MARKER_STARTS.test(rest) && ![...rest].some(c => DELIMITER_END.has(c)))) unsure.push(offset + at)
+      }
     }
     offset += line.length + 1
     joined = facts.joins
@@ -494,7 +542,8 @@ export const dropHeredocs = (cmd: string, quotes = true): { text: string; heredo
   // quote opened on an earlier line, or a backtick or `$(` a backslash escapes, which the line alone
   // cannot say. Asked only of a << with every line before it still in place.
   const inText = h !== undefined && (h.inText || (h.whole >= 0 && inQuotedText(quotedText(cmd), h.whole)))
-  return { text: [...out, ...unended].join('\n'), heredocs, removed, ...(h ? { unended: { at: h.at, body: body.join('\n'), quoted: h.quoted, ...(inText ? { inText: true as const } : {}) } } : {}) }
+  if (h?.unsure) unsure.push(h.at)
+  return { text: [...out, ...unended].join('\n'), heredocs, removed, unsure, ...(h ? { unended: { at: h.at, body: body.join('\n'), quoted: h.quoted, ...(inText ? { inText: true as const } : {}) } } : {}) }
 }
 
 // Whether the substitution from `from` to `to` in what dropHeredocs left holds a run of heredoc lines
@@ -1190,6 +1239,10 @@ const SSH_UNREAD = 'run by ssh on another machine, so what it does cannot be rea
 const QUOTE_UNREAD = 'holding a quote that never closes, so what the shell runs from there on cannot be read'
 const HEREDOC_UNREAD = 'fed a heredoc that never ends, so where its body stops cannot be read'
 const TORN_UNREAD = 'fed a heredoc opened on a line that ends inside a quote, so where its body starts cannot be read'
+// #3592: a heredoc the reader ends at one line and a shell at another, or at none (dropHeredocs,
+// `unsure`). What is read after it may be its body to that shell, where a substitution runs in
+// single quotes too, or commands the reader took for its body.
+const ENDS_UNREAD = 'fed a heredoc the shells do not end where it is read to end, so where its body stops cannot be read'
 // A quote bash and zsh do not read alike (shellsDiffer): the command it stands in, and every one
 // read after it, since the reader took one shell's reading and the other shell runs the call too.
 const SHELLS_UNREAD = 'read past a quote bash and zsh do not read alike, so what the shell runs from that quote on cannot be read'
@@ -1198,7 +1251,7 @@ const SHELLS_UNREAD = 'read past a quote bash and zsh do not read alike, so what
  * it is. Its words are read as they always were, so a reader of what a command does still reads
  * them: the mark is added to that reading and never stands in its place.
  */
-export const READ_STOPPED: ReadonlySet<string> = new Set([QUOTE_UNREAD, HEREDOC_UNREAD, TORN_UNREAD, SHELLS_UNREAD])
+export const READ_STOPPED: ReadonlySet<string> = new Set([QUOTE_UNREAD, HEREDOC_UNREAD, TORN_UNREAD, ENDS_UNREAD, SHELLS_UNREAD])
 const SETS_PART = /^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=/
 const PLAIN_NAME = /^[A-Za-z0-9._+@%,:-]+$/
 type Places = { unexpanded?: boolean[]; bare?: number[][]; arithmetic?: boolean }
@@ -2145,7 +2198,7 @@ export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
   // What is asked of the text this line holds within it (a substitution, a shell's script, a trap's
   // text): everything asked of the line but `follow`, which is for the call's own text alone.
   const nested: ReadOptions = opts.follow ? { ...opts, follow: false } : opts
-  const { text, heredocs, unended, removed } = dropHeredocs(cmd, !outer.within)
+  const { text, heredocs, unended, removed, unsure } = dropHeredocs(cmd, !outer.within)
   const heredocAt = new Map(heredocs.map(h => [h.at, h]))
   // Each word's expansions outside quotes, by its place in the text (#1834).
   const bare = new Map<number, number[]>()
@@ -2319,6 +2372,7 @@ export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
   }
   if (unended && !unended.inText) stopsAt(unended.at, HEREDOC_UNREAD)
   for (const h of heredocs) if (h.torn) stopsAt(h.at, TORN_UNREAD)
+  for (const at of unsure) stopsAt(at, ENDS_UNREAD)
   read.forEach((r, k) => {
     if (r.unclosed && !stops.has(k)) stops.set(k, QUOTE_UNREAD)
   })
