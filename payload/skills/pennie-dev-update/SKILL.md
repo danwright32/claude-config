@@ -168,7 +168,8 @@ state, not config.
 { "acme/widget": {
     "lastEnd": "2026-09-08T14:22:00Z",
     "heldBack": [1187, 1190],
-    "headings": ["COMMISSION AND FIRST PAY", "GOALS"] } }
+    "headings": ["COMMISSION AND FIRST PAY", "GOALS"],
+    "announcements": [{ "number": 1180, "mergedAt": "2026-09-05T15:10:00Z", "outcome": "drafted" }] } }
 ```
 
 - **Start** = `lastEnd` for that repo, exclusive. **End** = now. That is the whole rule.
@@ -178,6 +179,8 @@ state, not config.
   could not be confirmed live (section 4). Add them to this run's candidate set regardless of
   the window.
 - **`headings`** is the previous run's section names. See section 6.
+- **`announcements`** carries each announcement for agents not yet settled (only drafted, or with
+  no outcome), and a settled one only while it could come back into the window. See section 11.
 
 ### First appearance
 
