@@ -1,8 +1,9 @@
 import { expect, mock } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
+import { pipeline } from './mod-kit/hooks/commands.ts'
 import type { On, Register } from 'claude-code'
 import DESIGN_FIXTURE from './1563-goal-box.fixture.ts'
-import { CLOSE_HEADING, CLOSE_TITLE, QUIET_MS } from '../hooks/close.ts'
+import { CLOSE_HEADING, CLOSE_TITLE, PROCESS_TIMEOUT_MS, QUIET_MS } from '../hooks/close.ts'
 
 // The Goal accomplished box (claude-config#1563) in a session: shown once when a /goal is met (the
 // session is sent a prompt of its own asking for it once the turn has ended, since the met record
@@ -222,21 +223,40 @@ type World = {
   jobsFail: string
   /** What the look for a process carrying this session's id answers. */
   procs: Gh
+  /** The look runs until its time limit passes on the engine's clock, then throws or exits killed. */
+  procsTimeout?: 'throws' | 'exits'
   /** What mod-kit's reader reads a command as, or why it throws. */
   reader: (command: string) => unknown[] | { fails: string }
   /** The cards pinned through manual steps' noun, and the titles withdrawn, in order. */
   pinned: { heading: string; step: Record<string, unknown> }[]
-  /** Why manual steps' noun throws on a pin, or '' when it pins. */
-  pinFails: string
+  /**
+   * How manual steps' noun answers a pin, one of everything its add can do (manual-steps
+   * hooks/register.tsx addStep and its noun): shown; not shown, with one of its four reasons;
+   * refused (its deny); threw (its own method, when its hook did not answer); an answer that says
+   * nothing; or no answer yet, until `releasePin` is called.
+   */
+  pinAnswer: PinAnswer
+  pinCalls: number
+  releasePin: () => void
+  /** Why manual steps' noun throws on a withdraw, or '' when it withdraws. */
+  withdrawFails: string
   withdrawn: string[]
   /** Each file written, by path: its last text. */
   written: Record<string, string>
 }
+// manual steps' four reasons for not showing a step it was handed (addStep, word for word).
+const NOT_SHOWN = {
+  'not shown: nobody at the prompt': 'this session has nobody at its prompt',
+  'not shown: carried steps held': 'the steps carried from an earlier session are held until Claude checks them again',
+  'not shown: taken away': 'the card was taken away as it was added',
+  'not shown: not drawn': 'the card could not be shown (no pane)',
+} as const
+type PinAnswer = 'shown' | keyof typeof NOT_SHOWN | 'refused' | 'threw' | 'says nothing' | 'null' | 'no answer yet'
 const link = (repo: string, pr: number, at = '2026-10-24T18:00:00.000Z') =>
   JSON.stringify({ type: 'pr-link', sessionId: 's1', prNumber: pr, prUrl: `https://github.com/${repo}/pull/${pr}`, prRepository: repo, timestamp: at })
 
 const world = (on: On, init: Partial<World> = {}) => {
-  const w: World = { goal: { state: 'none' }, cardFails: '', cards: [], transcript: T, registry: 'open', disk: {}, here: '/repo', owed: [], verdicts: {}, links: [], open: {}, agents: [], agentsFail: '', submitFails: [], held: [], holdFails: '', view: () => ({ exitCode: 1, stdout: '', stderr: 'unexpected' }), stepsCard: null, compactQueued: false, compactFollowUp: null, holds: [], jobs: [], jobsFail: '', procs: { exitCode: 0, stdout: '{"found":[]}' }, reader: () => [], pinned: [], pinFails: '', withdrawn: [], written: {}, ...init }
+  const w: World = { goal: { state: 'none' }, cardFails: '', cards: [], transcript: T, registry: 'open', disk: {}, here: '/repo', owed: [], verdicts: {}, links: [], open: {}, agents: [], agentsFail: '', submitFails: [], held: [], holdFails: '', view: () => ({ exitCode: 1, stdout: '', stderr: 'unexpected' }), stepsCard: null, compactQueued: false, compactFollowUp: null, holds: [], jobs: [], jobsFail: '', procs: { exitCode: 0, stdout: '{"found":[]}' }, reader: () => [], pinned: [], pinAnswer: 'shown', pinCalls: 0, releasePin: () => undefined, withdrawFails: '', withdrawn: [], written: {}, ...init }
   const runs: string[][] = []
   const views: { pr: string; repo?: string; cwd?: string; token?: string; fields?: string }[] = []
   const submitted: { text: string; origin: unknown }[] = []
@@ -266,10 +286,18 @@ const world = (on: On, init: Partial<World> = {}) => {
     if (e.argv[0] === '__steps') {
       const input = JSON.parse(e.argv[2] as string) as { heading: string; step: Record<string, unknown>; title: string }
       if (e.argv[1] === 'add') {
-        if (w.pinFails) return ok('', 1, w.pinFails)
+        w.pinCalls++
+        const a = w.pinAnswer
+        if (a === 'refused') return ok('', 1, 'Refused: a step needs its direct link or a location Dan can find')
+        if (a === 'threw') return ok('', 1, "the manual steps mod's own hook did not answer")
+        if (a === 'says nothing') return ok('{}')
+        if (a === 'null') return ok('null')
+        if (a === 'no answer yet') return new Promise(res => (w.releasePin = () => res(ok(JSON.stringify({ isShown: true }))))) as never
+        if (a !== 'shown') return ok(JSON.stringify({ isShown: false, reason: NOT_SHOWN[a] }))
         w.pinned.push({ heading: input.heading, step: input.step })
         return ok(JSON.stringify({ isShown: true }))
       }
+      if (w.withdrawFails) return ok('', 1, w.withdrawFails)
       w.withdrawn.push(input.title)
       return ok(JSON.stringify({ isWithdrawn: true }))
     }
@@ -284,6 +312,9 @@ const world = (on: On, init: Partial<World> = {}) => {
       // The look is handed the process list on its standard input and a time limit of its own.
       const init = (e as { init?: { stdin?: string; timeoutMs?: number } }).init
       if (init?.stdin !== '4321 1 node\n' || !init.timeoutMs) return ok('', 1, 'the look was not handed the process list and a time limit')
+      const limit = init.timeoutMs
+      if (w.procsTimeout === 'throws') return clock.sleep(limit).then(() => Promise.reject(new Error('the look ran past its time limit'))) as never
+      if (w.procsTimeout === 'exits') return clock.sleep(limit).then(() => ok('', 143, 'killed: ran past its time limit')) as never
       return ok(w.procs.stdout, w.procs.exitCode, w.procs.stderr ?? '')
     }
     if (e.argv[0] === '__sessions') {
@@ -1119,19 +1150,71 @@ test('a session Dan only chatted with, with no box, never gets the card, and say
   expect(reasonsOf(w)).toMatchObject({ pinned: false, reasons: [expect.stringMatching(/no Goal accomplished box/)] })
 })
 
-test('a card that could not be pinned says why, and the next quiet end under the same request tries again (#3770)', withAll, async ($, on) => {
-  const { w, clock } = world(on, { pinFails: 'the steps store is busy' })
+// The card is this request's only once its pin came back shown. Three review findings were each one
+// outcome that kept the claim without a card (#3770), so every outcome manual steps' noun can have is
+// a row: whether a later quiet end under the same request tries again, and what the reasons file says.
+const PIN_ROWS: [PinAnswer, RegExp | undefined][] = [
+  ['shown', undefined],
+  ['not shown: nobody at the prompt', /the card could not be shown \(this session has nobody at its prompt\)/],
+  ['not shown: carried steps held', /the card could not be shown \(the steps carried from an earlier session are held/],
+  ['not shown: taken away', /the card could not be shown \(the card was taken away as it was added\)/],
+  ['not shown: not drawn', /the card could not be shown \(the card could not be shown \(no pane\)\)/],
+  ['refused', /the card could not be pinned \(.*Refused: a step needs its direct link/],
+  ['threw', /the card could not be pinned \(.*the manual steps mod's own hook did not answer/],
+  ['says nothing', /the card could not be shown \(its answer did not say it was shown\)/],
+  ['null', /the card could not be shown \(its answer did not say it was shown\)/],
+  ['no answer yet', undefined],
+]
+for (const [answer, why] of PIN_ROWS) {
+  test(`a pin that comes back ${answer}: ${answer === 'shown' ? 'the request has its card, and no later quiet end pins again' : 'nothing is claimed, and the next quiet end under the same request tries again'} (#3770)`, withAll, async ($, on) => {
+    const { w, clock } = world(on, { pinAnswer: answer })
+    await start($)
+    await says($, 'Add the goal box')
+    await workedAndQuiet($, clock)
+    expect(w.pinCalls).toBe(1)
+    if (why) expect(reasonsOf(w)).toMatchObject({ pinned: false, reasons: [expect.stringMatching(why)] })
+    w.pinAnswer = 'shown'
+    const quietEnd = async () => {
+      await stopped($)
+      await turnEnds($)
+      await clock.advance(QUIET_MS)
+    }
+    await quietEnd()
+    expect({ answer, tries: w.pinCalls, pinned: w.pinned.length }).toEqual({ answer, tries: answer === 'shown' ? 1 : 2, pinned: 1 })
+    expect(reasonsOf(w)).toMatchObject({ pinned: true, reasons: [] })
+    // Shown now, so the claim holds: no further quiet end under this request pins again.
+    w.releasePin()
+    await quietEnd()
+    expect({ answer, tries: w.pinCalls }).toEqual({ answer, tries: answer === 'shown' ? 1 : 2 })
+  })
+}
+
+test('a pin still out when a new turn starts is taken down as soon as it comes back shown (#3770)', withAll, async ($, on) => {
+  const { w, clock } = world(on, { pinAnswer: 'no answer yet' })
   await start($)
   await says($, 'Add the goal box')
   await workedAndQuiet($, clock)
-  expect(w.pinned).toEqual([])
-  expect(reasonsOf(w)).toMatchObject({ pinned: false, reasons: [expect.stringMatching(/the card could not be pinned \(.*the steps store is busy/)] })
-  w.pinFails = ''
-  await stopped($)
-  await turnEnds($)
-  await clock.advance(QUIET_MS)
+  await turnStarts($)
+  expect(w.withdrawn).toEqual([])
+  w.releasePin()
+  await clock.settle()
+  expect(w.withdrawn).toEqual([CLOSE_TITLE])
+})
+
+test('a card that could not be taken down at a new turn is tried again at the next one (#3770)', withAll, async ($, on) => {
+  const { w, clock } = world(on, { withdrawFails: "the manual steps mod's own hook did not answer" })
+  await start($)
+  await says($, 'Add the goal box')
+  await workedAndQuiet($, clock)
   expect(w.pinned).toHaveLength(1)
-  expect(reasonsOf(w)).toMatchObject({ pinned: true, reasons: [] })
+  await turnStarts($)
+  expect(w.withdrawn).toEqual([])
+  w.withdrawFails = ''
+  await turnStarts($, 't3')
+  expect(w.withdrawn).toEqual([CLOSE_TITLE])
+  // Taken down, so the turn after has nothing to take down.
+  await turnStarts($, 't4')
+  expect(w.withdrawn).toEqual([CLOSE_TITLE])
 })
 
 test('a headless session never gets the card (#3770)', withAll, async ($, on) => {
@@ -1168,7 +1251,7 @@ test('a new turn withdraws the card; a second idle end under the same request pi
   expect(w.withdrawn).toEqual([CLOSE_TITLE, CLOSE_TITLE])
 })
 
-test('a process carrying this session\'s id withholds the card; a look that fails or runs out of time neither withholds nor pins (#3770)', withAll, async ($, on) => {
+test('a process carrying this session\'s id withholds the card; a look that fails or runs past its time limit says nothing either way, so the other readings decide (#3770)', withAll, async ($, on) => {
   const { w, clock, runs } = world(on, { procs: { exitCode: 0, stdout: JSON.stringify({ found: [{ pid: 4321, name: 'node' }] }) } })
   await start($)
   await says($, 'Add the goal box')
@@ -1184,6 +1267,18 @@ test('a process carrying this session\'s id withholds the card; a look that fail
   await turnEnds($)
   await clock.advance(QUIET_MS)
   expect(w.pinned).toHaveLength(1)
+  // A look that runs past its time limit, on the engine's clock, says nothing either way too, whether
+  // the run then throws or answers as a killed process: the card waits for the limit, then the other
+  // readings decide. Each under a new request of Dan's, since the card goes up once per request.
+  for (const [i, how] of (['throws', 'exits'] as const).entries()) {
+    w.procsTimeout = how
+    await says($, `And one more thing ${i}`)
+    await workedAndQuiet($, clock, { id: `b${i + 2}` })
+    expect({ how, pinned: w.pinned.length }).toEqual({ how, pinned: 1 + i })
+    await clock.advance(PROCESS_TIMEOUT_MS)
+    expect({ how, pinned: w.pinned.length }).toEqual({ how, pinned: 2 + i })
+    expect(reasonsOf(w)?.reasons).toEqual([])
+  }
 })
 
 test('a look that answers garbled output withholds nothing, so the other readings decide and the card is pinned (#3770)', withAll, async ($, on) => {
@@ -1213,46 +1308,42 @@ test('a command that put something in the background withholds the card for the 
   expect(reasonsOf(w)?.reasons.join(' ')).toMatch(/put a process in the background/)
 })
 
-test('nohup, setsid and disown trip it too; a Bash call run in the background, which the job watcher tracks, does not; a subagent\'s does not (#3770)', withAll, async ($, on) => {
-  const reads: Record<string, unknown[]> = {
-    'nohup x': [{ words: ['x'], behind: ['nohup'] }],
-    'setsid x': [{ words: ['x'], behind: ['setsid'] }],
-    'disown': [{ words: ['disown'] }],
-    'bg run': [{ words: ['sleep', '1'], background: true }],
-  }
-  const { w, clock } = world(on, { reader: c => reads[c] ?? [{ words: ['ls'] }] })
+// Through mod-kit's own reader (a byte copy in tests/mod-kit, held to its source by the shared parts
+// check), so each row is a real command text read as the session's would be, never a reading made up.
+const realReader = (c: string) => pipeline(c) as unknown[]
+
+test('a Bash call run in the background, which the job watcher tracks, does not trip it; nor does a subagent\'s (#3770)', withAll, async ($, on) => {
+  const { w, clock } = world(on, { reader: realReader })
   await start($)
   await says($, 'Add the goal box')
-  await bash($, 'bg run', { run_in_background: true })
-  await bash($, 'bg run', { agentId: 'agent-1' })
+  await bash($, 'sleep 600 &', { run_in_background: true })
+  await bash($, 'nohup sleep 600 &', { agentId: 'agent-1' })
   await workedAndQuiet($, clock)
   expect(w.pinned).toHaveLength(1)
-  await says($, 'More')
-  await bash($, 'nohup x')
-  await workedAndQuiet($, clock, { id: 'b2' })
-  expect(w.pinned).toHaveLength(1)
-  expect(reasonsOf(w)?.reasons.join(' ')).toMatch(/nohup/)
 })
 
-test('setsid trips it (#3770)', withAll, async ($, on) => {
-  const { w, clock } = world(on, { reader: () => [{ words: ['x'], behind: ['setsid'] }] })
-  await start($)
-  await says($, 'Add the goal box')
-  await bash($, 'setsid x')
-  await workedAndQuiet($, clock)
-  expect(w.pinned).toEqual([])
-  expect(reasonsOf(w)?.reasons.join(' ')).toMatch(/setsid/)
-})
-
-test('disown trips it (#3770)', withAll, async ($, on) => {
-  const { w, clock } = world(on, { reader: () => [{ words: ['disown', '-a'] }] })
-  await start($)
-  await says($, 'Add the goal box')
-  await bash($, 'disown -a')
-  await workedAndQuiet($, clock)
-  expect(w.pinned).toEqual([])
-  expect(reasonsOf(w)?.reasons.join(' ')).toMatch(/disown/)
-})
+// Each detacher in a session of its own, since one trip keeps the card down for the rest of a session.
+const DETACH_ROWS: [string, RegExp | undefined][] = [
+  ['nohup sleep 600 > /dev/null 2>&1', /ran a command under nohup/],
+  ['setsid sleep 600', /ran a command under setsid/],
+  ['setsid -f sleep 600', /ran a command under setsid/],
+  ['disown -a', /ran disown/],
+  ['sleep 600 & disown', /put a process in the background with &/],
+  // A redirect's & and a && mark nothing.
+  ['ls > out.txt 2>&1 && pwd', undefined],
+]
+for (const [command, why] of DETACH_ROWS) {
+  test(`${why ? 'trips it' : 'does not trip it'}: ${command} (#3770)`, withAll, async ($, on) => {
+    const { w, clock } = world(on, { reader: realReader })
+    await start($)
+    await says($, 'Add the goal box')
+    await bash($, command)
+    await workedAndQuiet($, clock)
+    if (!why) return expect({ command, pinned: w.pinned.length, reasons: reasonsOf(w)?.reasons }).toEqual({ command, pinned: 1, reasons: [] })
+    expect({ command, pinned: w.pinned.length }).toEqual({ command, pinned: 0 })
+    expect(reasonsOf(w)?.reasons.join(' ')).toMatch(why)
+  })
+}
 
 test('a command the reader is unsure of, or cannot read at all, counts as one that may have left something behind (#3770)', withAll, async ($, on) => {
   const { w, clock } = world(on, { reader: c => (c === 'eval x' ? [{ words: ['eval', 'x'], unread: 'eval runs text the shell builds' }] : { fails: 'the reader threw' }) })

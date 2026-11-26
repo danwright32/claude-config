@@ -439,31 +439,54 @@ const closeCheck = async ($: EngineInterface, seq: number): Promise<void> => {
   if ((await $.state.get(closeSeqRef)).value !== seq) return
   if (reasons.length) return writeReasons($, false, reasons)
   const prompts = (await $.state.get(promptsRef)).value ?? 0
-  const held = await $.state.get(closedRef)
-  if (held.value !== undefined && held.value.prompts >= prompts) return
-  if (!(await $.state.set(closedRef, { prompts, pinned: true }, { ifVersion: held.version })).isSet) return
   const folder = (startCwd ?? (await $.session.cwd().catch(() => ''))).split('/').filter(Boolean).pop() ?? ''
+  let why: string
   try {
-    const r = (await ($ as unknown as WithSteps).manualSteps.add({ heading: CLOSE_HEADING, step: closeStep(folder) })) as { isShown?: boolean; reason?: string }
-    if (r.isShown === false) return writeReasons($, false, [`the card could not be shown (${r.reason ?? 'no reason given'})`])
-    await writeReasons($, true, [])
+    const r = (await ($ as unknown as WithSteps).manualSteps.add({ heading: CLOSE_HEADING, step: closeStep(folder) })) as { isShown?: unknown; reason?: unknown } | null | undefined
+    if (r?.isShown === true) {
+      await cardShown($, prompts)
+      // A turn that began while the pin was out finds no card to take down, so this takes it down.
+      if ((await $.state.get(closeSeqRef)).value !== seq) await withdrawClose($)
+      return
+    }
+    why = `the card could not be shown (${typeof r?.reason === 'string' && r.reason ? r.reason : 'its answer did not say it was shown'})`
   } catch (err) {
-    // Not pinned, so the claim is let go and the next quiet end under this request tries again.
-    await $.state.set(closedRef, { prompts: held.value?.prompts ?? -1, pinned: false })
-    await writeReasons($, false, [`the card could not be pinned (${errorText(err, MOD)})`])
+    why = `the card could not be pinned (${errorText(err, MOD)})`
   }
+  await writeReasons($, false, [why])
 }
 
-/** Takes the card down at a new turn, as withdrawn: a session working again is not one to close. */
+/**
+ * The one place this request's card is claimed, and only once the pin came back shown. Every other
+ * outcome (not shown, refused, threw, an answer that says nothing, no answer yet) claims nothing, so a
+ * later quiet end under the same request tries again. Three lessons reviews found the claim taken
+ * before the outcome was known, each keeping it for one outcome without a card (#3770). Two checks
+ * pinning at once is harmless: manual steps' add keeps one unfinished step per title.
+ */
+const cardShown = async ($: EngineInterface, prompts: number): Promise<void> => {
+  for (let i = 0; i < 10; i++) {
+    const held = await $.state.get(closedRef)
+    // A later request's card already holds the claim: this one is not to take it back.
+    if (held.value !== undefined && held.value.prompts > prompts) break
+    if ((await $.state.set(closedRef, { prompts, pinned: true }, { ifVersion: held.version })).isSet) break
+  }
+  await writeReasons($, true, [])
+}
+
+/**
+ * Takes the card down at a new turn, as withdrawn: a session working again is not one to close. Marked
+ * down only once the withdraw has answered, so a withdraw that failed is tried again at the next turn.
+ */
 const withdrawClose = async ($: EngineInterface): Promise<void> => {
-  const closed = (await $.state.get(closedRef)).value
-  if (!closed?.pinned) return
-  await $.state.set(closedRef, { ...closed, pinned: false })
+  const held = await $.state.get(closedRef)
+  if (!held.value?.pinned) return
   try {
     await ($ as unknown as WithSteps).manualSteps.withdraw({ title: CLOSE_TITLE })
   } catch (err) {
-    debug($, `the close this session card could not be taken down (${errorText(err, MOD)})`)
+    debug($, `the close this session card could not be taken down (${errorText(err, MOD)}); it is tried again at the next turn`)
+    return
   }
+  await $.state.set(closedRef, { ...held.value, pinned: false }, { ifVersion: held.version })
 }
 
 /** Reading B: a main conversation Bash call, not run in the background, that may leave a process behind. */
