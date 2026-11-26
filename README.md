@@ -10491,8 +10491,13 @@ alone; since #3132 so is a created tab that left the group any other way, closed
 to a restart of Chrome, at the first result listing the group without it, and its number listed
 again later does not bring it back), and every Chrome tool reaching past those
 tabs (recordings to disk, local file uploads, saved workflows, another browser), judged in
-`hooks/browser.ts` (#2064), Supabase and psql writes, a branch switch in a primary checkout, force
-pushes, branch deletes, and `claude-sync` send, sync,
+`hooks/browser.ts` (#2064), Supabase and psql writes, a branch switch in a primary checkout (since
+#3398 the checkout every `-C` leads to, each read from the one before it, and refused as one that
+cannot be told where the command names its repository or working folder apart by `--git-dir`,
+`--work-tree`, `GIT_DIR` or `GIT_WORK_TREE`; the merge and deploy rules, the notes winding down
+keeps and its agreed cleanup branch place a git command from the same reading,
+`hooks/gitplace.ts`, set out in docs/mods-design.md under "What #3398 changed"), force pushes,
+branch deletes, and `claude-sync` send, sync,
 apply-only and install, and a pull from anywhere but the live sync clone `~/claude-config-sync` or
 with its environment changed; since #1106 that clone's pull is claude-config's deploy step, so it
 runs overnight exactly when the night lets claude-config deploy (`mayDeploy`) and waits for the
