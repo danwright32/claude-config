@@ -6753,12 +6753,15 @@ write_settings_extras(){
        "$cur" > "$tmp" 2>/dev/null; then
     [ -n "$had" ] || rm -f "$cur"
     rm -f "$tmp"
-    # Its own cause, said as itself (L11): the file parses, and the list the shared deny rules are
-    # added to is not a list (#3563).
+    # Two causes of their own, each said as itself (L11): the file parses, and either permissions
+    # is not an object at all, or the list the shared deny rules are added to is not a list (#3563).
     local why="That usually means it is not valid JSON: check it with 'jq . $settings', fix it, then pull again."
-    if [ -n "$had" ] && jq -e 'has("permissions")' <<< "$shared" >/dev/null 2>&1 \
-       && jq -e '(try (.permissions.deny // []) catch null) | type != "array"' "$settings" >/dev/null 2>&1; then
-      why="Its permissions.deny is not a list of rules, so the shared deny rules could not be added to it: make it a list in $settings (or remove it), then pull again."
+    if [ -n "$had" ] && jq -e 'has("permissions")' <<< "$shared" >/dev/null 2>&1; then
+      if jq -e 'has("permissions") and (.permissions | type | . != "object" and . != "null")' "$settings" >/dev/null 2>&1; then
+        why="Its permissions is not an object, so there is no deny list to add the shared deny rules to: make it an object in $settings (or remove it), then pull again."
+      elif jq -e '(.permissions.deny // []) | type != "array"' "$settings" >/dev/null 2>&1; then
+        why="Its permissions.deny is not a list of rules, so the shared deny rules could not be added to it: make it a list in $settings (or remove it), then pull again."
+      fi
     fi
     echo "claude-sync: could not write the status line or the shared settings (${names:-$SHARED_SETTINGS_DESC}) into settings.json, so it was left exactly as it was. $why" >&2
     # Said, not notified: an unreadable settings.json already raises the hooks block's notification on
@@ -6801,7 +6804,7 @@ report_shared_deny_rules(){
   fi
   if [ "$rc" -ne 0 ]; then
     echo "--- the deny rules both Macs share ---"
-    echo "  claude-sync could not check whether $settings holds the deny rules $SHARED_SETTINGS_FILE lists: it is not valid JSON, or its permissions.deny is not a list (jq exit $rc). Until it is fixed no pull can add them, so Claude Code's file tools may open the stored logins they cover."
+    echo "  claude-sync could not check whether $settings holds the deny rules $SHARED_SETTINGS_FILE lists: it is not valid JSON, or its permissions is not an object holding a list of deny rules (jq exit $rc). Until it is fixed no pull can add them, so Claude Code's file tools may open the stored logins they cover."
     return 0
   fi
   [ -n "$missing" ] || return 0
