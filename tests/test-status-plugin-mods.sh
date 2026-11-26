@@ -21,6 +21,9 @@ pass=0; fail=0
 check(){   # $1 = name  $2 = "ok" or the evidence of failure
   if [ "$2" = ok ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1: $2"; fi
 }
+# Whether text holds a phrase, matched in the shell: a grep -q at the end of a pipeline stops
+# reading at the first match, which fails the pipeline under pipefail on a long output.
+says(){ case "$1" in *"$2"*) return 0 ;; esac; return 1; }
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/status-plugin-mods.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 WORK="$(cd "$WORK" && pwd -P)"
@@ -76,7 +79,7 @@ out="$(status "$H")"
 sec="$(section "$out")"
 on_line="$(printf '%s\n' "$sec" | grep -F 'enabled everywhere on this Mac:' || true)"
 off_line="$(printf '%s\n' "$sec" | grep -F 'off at user scope' || true)"
-printf '%s\n' "$out" | grep -qF -- '--- plugins (per Mac, never synced) ---' \
+says "$out" '--- plugins (per Mac, never synced) ---' \
   && check "fixture: this is a real status run (the plugins report beside it is there)" ok \
   || check "fixture: this is a real status run (the plugins report beside it is there)" "$out"
 case "$on_line" in *"carries (its hooks modules: ./register.ts)"*) check "an enabled plugin with a hooks module is named, with the module" ok ;;
@@ -108,8 +111,8 @@ plugin "$H" settingshooks "$SETTINGS_HOOKS"
 record "$H"
 printf '%s\n' '{"hooks": {}, "enabledPlugins": {"settingshooks@market": true}}' > "$H/settings.json"
 out="$(status "$H")"
-printf '%s\n' "$out" | grep -qF 'that carry a mod' && check "no plugin with a mod says nothing" "$(section "$out")" || check "no plugin with a mod says nothing" ok
-printf '%s\n' "$out" | grep -qF -- 'enabled everywhere on this Mac: settingshooks' \
+says "$out" 'that carry a mod' && check "no plugin with a mod says nothing" "$(section "$out")" || check "no plugin with a mod says nothing" ok
+says "$out" 'enabled everywhere on this Mac: settingshooks' \
   && check "and that quiet run is a real status run that read the plugins" ok || check "and that quiet run is a real status run that read the plugins" "$out"
 
 # ---- 4. what cannot be read is said, never passed over ----
@@ -138,7 +141,7 @@ printf '%s\n' "$MODS" > "$H/mods/ours/hooks/hooks.json"
 printf '{"version": 2, "plugins": {"ours@inline": [{"scope": "user", "installPath": "%s"}]}}\n' "$H/mods/ours" > "$H/plugins/installed_plugins.json"
 printf '%s\n' '{"hooks": {}}' > "$H/settings.json"
 out="$(status "$H")"
-printf '%s\n' "$out" | grep -qF 'that carry a mod' && check "a mod in this home's own mods folder is not named" "$(section "$out")" || check "a mod in this home's own mods folder is not named" ok
+says "$out" 'that carry a mod' && check "a mod in this home's own mods folder is not named" "$(section "$out")" || check "a mod in this home's own mods folder is not named" ok
 
 # ---- 6. it reads only ----
 H="$WORK/h1"
