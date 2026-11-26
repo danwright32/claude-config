@@ -388,7 +388,7 @@ while IFS=$'\t' read -r verdict what why; do
 done < "$T/rows.tsv"
 
 # A run that compared nothing must not read as a pass.
-[ "$pass" -ge 60 ] || check "the comparison checked its rows" "only $pass checks passed, of the 70 or so the table makes"
+[ "$pass" -ge 80 ] || check "the comparison checked its rows" "only $pass checks passed, of the 90 or so the table makes"
 
 echo
 
