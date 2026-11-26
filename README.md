@@ -1982,36 +1982,68 @@ writes `{"kind": "approved", "repo", "hash", "at", "session", "picker", "file", 
 approved merges unchanged in a later session or overnight. A subagent's call counts his picker for
 that call and writes nothing.
 
-His answer is noted when he gives it (#3742). A hook run reads a session's pickers only from the
+Every picker is noted when he answers it (#3742, #3789). A hook run reads a session's pickers only from the
 transcript its payload names, and `hooks/lib/merge-when-ready.sh` hands the gates a payload naming
 none, so an approval reached the record only when a label command or a typed merge followed his
 answer. On any other flow (the wording revised after the label went on, the label put on in
 GitHub's page) the merge through the helper was refused, told to ask him, and asking him again
-changed nothing. `hooks/announce-answer-note.sh` now runs after every picker (PostToolUse on
-AskUserQuestion) and, for one of this source, has the library write an `answered` line: the
-session, its transcript, the picker's id, the repository, the file, and the file's hash and status
-change time as they stood then. Which picker it is, is read from the session's transcript by the
-id the hook was handed, where the picker stands as the session sent it, and not from the hook's
-own copy of it: what Claude Code hands that hook has never been printed, and the question tool's
-schema has the dialog write his answers into the call's input. So the library is asked about every
-picker, an ordinary one says nothing, and one that neither copy says the source of (the transcript
-does not hold it and the hook's copy carries no metadata) is never left in silence: the hook says
-that what it asked could not be told. A note is not an approval and is not his answer. When that hook
-runs, the transcript holds the picker and not yet what he answered: Claude Code writes a call's
-result to the transcript after the call's PostToolUse hooks have run (measured 2026-11-26: a
-session's transcript, read at the moment a PostToolUse hook of its own call ran, ended at that
-call's `tool_use`). His answer is in the payload the hook is handed, and it is deliberately not
-read from there, since a payload is whatever the caller hands over. Whichever hook next asks the
-library reads the noted sessions' transcripts back, for the repository asked about (the newest
-five sessions holding a noted picker the record has no outcome for yet: no `approved`, `withdrawn`
-or `settled` line), and judges the
-noted picker by every rule above, read from that transcript. The hash and the change time come
-from the note, so the wording approved is what the file held when he answered: a write to the file
-afterwards neither loses his approval nor rides on it, and a note taken later than his answer, over
-a file changed since, approves nothing. When the note cannot be taken the hook says so, to Dan and
-to the session in the same words (one notice through `hooks/lib/hook-notice.sh`, on exit 0, the
-picker being already answered), with the command that reads his answer into
-the record. `hooks/test-announce-answer-note.sh` holds it, and `hooks/test-merge-when-ready.sh`
+changed nothing. `hooks/announce-answer-note.sh` runs after every picker (PostToolUse on
+AskUserQuestion) and has the library write an `answered` line for every picker a main session put,
+whatever it asked: the session, its transcript, the picker's id, and `held`, whether the transcript
+held the picker's line when the hook ran. The hook says nothing.
+
+It notes them all because it cannot tell what a picker asked. As first built (#3780) it noted only
+a picker it could tell was an announcement's and said a notice for one it could not tell. Measured
+on the installed hook on 2026-11-26, for two pickers, one sent with metadata naming a source: no
+line of the session's transcript held the picker's id when the hook ran, and the hook's own copy of
+the picker carried no metadata, while the transcript read afterwards held both. So it told nothing,
+said its notice after every picker in every session, and noted none, an approval picker included
+(#3789). An earlier reading of another session (#3742) had found the transcript ending at the
+call's `tool_use` when its PostToolUse hook ran, so the line may be there or not, and `held` on
+each note says which; it decides nothing. The transcript's size is not the cause: the suite builds
+one of the measured size (20 MB, 10,000 lines) and the hook finds a picker in it in 0.11 seconds,
+one pass of the reader alone taking 0.009.
+
+When the hook can already tell the picker is an announcement's, with a repository and a file (the
+transcript holds it, or failing that the hook's own copy carries the metadata), the note also
+carries the repository, the file, and the file's hash and status change time as they stood then.
+
+A note is not an approval and is not his answer: it names no answer. His answer is in the payload
+the hook is handed, and it is deliberately not read from there, since a payload is whatever the
+caller hands over. Whichever hook next asks the library (the label hook, the merge gate typed or
+through the helper) reads each noted session's transcript back, in one pass for all of the
+session's noted pickers the record has no outcome for (no `approved`, `withdrawn` or `settled`
+line), and judges each from the transcript. An announcement's picker is judged by every rule above,
+unchanged. A picker that names no source the record reads gets a `settled` line naming no
+repository, so it is read once and never again: it approves nothing and takes nothing back,
+whatever he answered it. One the transcript does not hold yet is left and looked for again, and one
+noted by its ids alone whose transcript is gone is settled, since what it asked can never be read.
+One call reads back five sessions, the ones whose newest unjudged note is newest.
+
+The wording he answered about comes from the note only when the note holds a hash for the same
+repository and file as the transcript's picker: then a write to the file afterwards neither loses
+his approval nor rides on it, and a note taken later than his answer, over a file changed since,
+approves nothing. A note that holds no hash gives no wording: the picker is judged exactly as one
+with no note is, by the file as it stands, unchanged since his answer. Where the file has changed,
+his Approve does not count and the refusal says to open the file and ask him again. So a note by
+ids alone lets nothing through that the same picker, read from its own session's transcript, would
+not.
+
+A subagent's picker writes nothing and says nothing. The hook speaks only when the note itself
+could not be written (the record cannot be read or appended to, the hook was not handed the
+session, its transcript and the picker's id, or the library could not be asked): the one case where
+an approval would be lost. It says so to Dan and to the session in the same words (one notice
+through `hooks/lib/hook-notice.sh`, on exit 0, the picker being already answered), with the command
+that reads his answer into the record if the picker was an announcement's, and that nothing is lost
+if it was not.
+
+What bounds it: one call reads back at most five sessions' transcripts, one pass each. Nothing
+shortens the record itself, which is only ever added to: a picker costs it one `answered` line
+(about 280 bytes) and, once judged, one line more (about 350). Measured on invented lines of those
+shapes on 2026-11-26, a record of 10,000 judged pickers is 6.3 MB and reads in 0.04 to 0.25
+seconds, and one of 100,000 is 63 MB and reads in 1.3 to 3.8.
+
+`hooks/test-announce-answer-note.sh` holds the hook, and `hooks/test-merge-when-ready.sh`
 merges an announcement through the helper, with the real gate and the real hook, on an approval
 that was only ever in the session.
 

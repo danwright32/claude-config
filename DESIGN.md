@@ -3314,6 +3314,32 @@ for the review by picker, 2026-11-25: "Yes, attack it first"). The choices are t
   out: a first test on the payload's text, which would have dropped every real picker without a
   word if the dialog strips the metadata from the hook's copy.
 
+- **Every picker is noted by its ids alone, in silence, and judged later (#3789).** The hook above
+  was built on one reading, that the transcript holds a call's `tool_use` when its PostToolUse hook
+  runs, and on a guess about the hook's copy of the picker. Installed, it met the other case on
+  2026-11-26: for two pickers, one sent with metadata naming a source, no transcript line held the
+  picker's id when the hook ran and the hook's copy carried no metadata, and the transcript read
+  afterwards held both. So the hook could tell nothing, said its "could not be told" notice after
+  every picker in every session, and noted none, an approval picker included. The two readings
+  disagree and only an installed hook sees the real moment, so the fix does not depend on which is
+  true: every note now carries `held`, whether the transcript held the picker's line then, and the
+  first real pickers after an install answer it. A long transcript is ruled out as the cause in the
+  suite: one of the measured size (20 MB, 10,000 lines) is read in 0.009 seconds. Chosen: the hook
+  decides nothing. It notes every main session picker by session, transcript and picker id, says
+  nothing, and whichever hook next reads the transcript judges each noted picker in one pass: an
+  announcement's by the rules already there, any other settled so it is read once. A note that
+  holds no hash gives no wording, so such a picker is judged exactly as one with no note is, by
+  the file unchanged since his answer, and a note by ids alone lets nothing through that the same
+  picker read from its own session would not. Where the hook can already tell the picker is an
+  announcement's it still notes the file's hash, as before. Ruled out: keeping the notice for a
+  picker nobody can tell the source of, which is every picker on the measured path; a hook that
+  waits for the transcript to hold the line, whose wait holds up every picker Dan answers; and
+  reading the source from the payload alone, which the measurement shows is not there. The notice
+  that remains is for a note that could not be written, the one case where an approval is lost.
+  Sessions are read back by their newest unjudged note and not their first, since a session's first
+  note is now its first picker of any kind. What it costs: the record gains a line for every
+  picker and one more once judged, and nothing shortens it (README, "What bounds it").
+
 `hooks/test-announce-approval.sh`, `hooks/test-announce-label-ask.sh`,
 `hooks/test-announce-answer-note.sh` and the #3666 section of `hooks/test-changelog-tag.sh` hold it.
 
