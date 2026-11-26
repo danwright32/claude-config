@@ -6366,7 +6366,7 @@ line, in a sentence true of the mark the reader named it with (`UNSURE` in
 `lib/db-write-calls.py`), and how to write the command so that it can be read.
 `read-only-query-allow.sh` approves no such command either. A reader that cannot be asked at all is
 still asked about, since no rewriting helps, and so is a push whose earlier dry run held such a
-line. Over 105,467 Bash calls recorded on the personal MacBook (85,895 distinct commands, 2026-11-26)
+line. Over 105,627 Bash calls recorded on the personal MacBook (86,010 distinct commands, 2026-11-26)
 the change refuses none, asks about none more and lets through none more: the reader names a line
 in none of them. Suite: `test-db-write-ask-unsure-line.sh`.
 
