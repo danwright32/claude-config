@@ -598,7 +598,7 @@ check "#3557 the merge gate's header names the stop" "the merge waits for Dan's 
 META4="$(python3 -c 'import re, sys
 m = re.search(r"metadata (\{.*?\}) \. The question", sys.argv[1], re.S)
 print(m.group(1) if m else "")' "$out4")"
-FACTS4="$(grep -E '^Round [0-9]+ of lessons review findings on ' <<<"$out4" | head -n 1)"
+FACTS4="$(grep -m 1 -E '^Round [0-9]+ of lessons review findings on ' <<<"$out4")"
 [ -n "$META4" ] && [ -n "$FACTS4" ] && ok || bad "#3557 (produced: the picker's metadata and facts line can be read out of the gate's refusal)"
 TR="$WORKDIR/transcript.jsonl"
 python3 - "$TR" "$META4" "$FACTS4" <<'PY'
@@ -617,7 +617,7 @@ with open(path, "w") as f:
                         "toolUseResult": {"questions": [q], "answers": {question: "Go on with these findings"}}}) + "\n")
 PY
 if ! command -v node >/dev/null 2>&1; then
-  echo "UNMEASURED: #3557 Dan's answer read through the push gate (node is not on PATH, and it runs the shared check of a picker he could read)"
+  echo "SUITE-PART-UNMEASURED #3557 Dan's answer read through the push gate: node is not on PATH, and it runs the shared check of a picker he could read"
 else
   out="$(as_payload "git push -u origin feat/sync" "{\"session_id\": \"s-other\", \"transcript_path\": \"$TR\"}" | bash "$PUSH_GATE" 2>&1)"
   check "#3557 an answer in another session's transcript lifts nothing" "Stopped for Dan" "$out"

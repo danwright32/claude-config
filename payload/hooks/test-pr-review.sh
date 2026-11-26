@@ -3341,7 +3341,7 @@ check_not "#3557 and is not told it is a subagent" "You are a subagent" "$out7"
 rs_meta(){ python3 -c 'import re, sys
 m = re.search(r"metadata (\{.*?\}) \. The question", sys.argv[1], re.S)
 print(m.group(1) if m else "")' "$1"; }
-rs_facts(){ grep -E '^Round [0-9]+ of lessons review findings on ' <<<"$1" | head -n 1; }
+rs_facts(){ grep -m 1 -E '^Round [0-9]+ of lessons review findings on ' <<<"$1"; }
 META7="$(rs_meta "$out7")"; FACTS7="$(rs_facts "$out7")"
 [ -n "$META7" ] && ok || bad "#3557 (produced: the stop's picker metadata can be read out of the refusal)"
 check "#3557 the facts line names the round, the branch and the head" "Round 4 of lessons review findings on feat/rounds in repo, at ${R7:0:7}" "$FACTS7"
@@ -3434,7 +3434,7 @@ out="$(CLAUDE_SLEEP_RECORD="$SLEEPDIR/current.json" rd_check "$R7")"; rc=$?
 chmod 700 "$SLEEPDIR/notes"; chmod 600 "$SLEEPDIR/notes/g3557.jsonl"
 check_eq "#3557 asleep: a note that cannot be written still refuses" "1" "$rc"
 if [ "$(id -u)" = 0 ]; then
-  echo "UNMEASURED: #3557 a note that could not be written is said (root writes a folder it may not, so the case cannot be made)"
+  echo "SUITE-PART-UNMEASURED #3557 a note that could not be written is said: root writes a folder it may not, so the case cannot be made"
 else
   check "#3557 asleep: and says the note could NOT be written" "could NOT be written" "$out"
   check_eq "#3557 asleep: and no second note is there" "1" "$(night_notes "round 4")"
@@ -3443,7 +3443,7 @@ fi
 
 # Nor does a comment that answers the stopped review's findings: before the stop, a review whose
 # every finding a comment answers lets the push through with no key at all (#1338, #1340).
-SHOWN7="$(grep -F 'the eighteenth line copies the twelfth' <<<"$out7" | head -n 1)"
+SHOWN7="$(grep -m 1 -F 'the eighteenth line copies the twelfth' <<<"$out7")"
 rd_pr 91 "${ANS_R1/HEADR1/${R1:0:7}}" "OWNER|2099-01-01T12:00:00Z|Lessons review at ${R7:0:7}:"$'\n\n'"> $SHOWN7"$'\n\n'"Not a defect: the two lines differ by design."
 out="$(rd_check "$R7")"; rc=$?
 check_eq "#3557 a comment answering the stopped review's findings does not let the push through" "1" "$rc"
@@ -3473,7 +3473,7 @@ SAID="The findings: the eighteenth line repeats the twelfth, as two of the three
 Q7="A lessons review has stopped this branch."$'\n'"$FACTS7"$'\n'"$SAID"
 stopped(){ rd_check "$R7" --transcript "$1" --session "${2:-s1}"; }
 if ! command -v node >/dev/null 2>&1; then
-  echo "UNMEASURED: #3557 Dan's answer lifting the stop (node is not on PATH, and it runs the shared check of a picker he could read)"
+  echo "SUITE-PART-UNMEASURED #3557 Dan's answer lifting the stop: node is not on PATH, and it runs the shared check of a picker he could read"
 else
   T="$WORKDIR/tr-narrow.jsonl"; tr_answer "$T" s1 "$META7" "$Q7" "Narrow the change"
   out="$(stopped "$T")"
