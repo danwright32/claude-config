@@ -85,6 +85,19 @@ before every push each suite with a line of code that lists the repository's fil
 `hooks/lib/repo-files.sh` or git itself. A string or a heredoc holding either name counts as code,
 and a comment naming one selects nothing (#3409).
 
+A push that adds or changes a test suite also runs the suites that walk the checkout without
+listing it through git (#3183). A suite is one of those when its own code runs
+`hooks/lib/checkout-root.sh` to find the checkout and walks a tree (`os.walk`, `rglob`, or a `find`
+that prunes `.git`), itself or through a program beside it that its code names. Running the helper
+means a command substitution holding it, a command of its own, or its path kept in a variable; the
+helper's name inside text the suite hands to something else, a fixture command for another gate or
+a list of files to copy, is not a run (#3662). Until 2026-11-25 any code line naming the helper
+counted, which put `test-slack-drafts-only-gate-runners.sh` in the gate on a fixture command and on
+the Slack gate's own walk, at 85 to 89 seconds of processor time (3 runs, 2026-11-25); CI still runs
+it on every pull request. `.claude/scanners-floor.txt` names every suite the gate selects, and
+`test-scanners-before-push.sh` holds the two equal and keeps one stand in per way a suite reads the
+tree, so a change to the rule that drops a real kind fails by name.
+
 A file stored that way never equals its payload copy byte for byte, so every comparison between the
 two sides goes through one view of the payload as it should look on THIS Mac. `claude-sync status`
 did not, and reported three files as differing on every single run when nothing had moved, which
