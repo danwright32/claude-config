@@ -65,9 +65,9 @@
 #   FREE_SPACE_PERSIST_MIN    only a fall that has lasted this long is projected (default 30, #1754)
 #   FREE_SPACE_STOPPED_MIN    a fast fall stands down once this many minutes on their own no longer
 #                             reach zero within the horizon (default FREE_SPACE_PERSIST_MIN, 0 off, #3608)
-#   FREE_SPACE_GIVEBACK_MIN   a rise that free space falls back below within this many minutes is no
-#                             recovery, so the trend runs on across it (default FREE_SPACE_PERSIST_MIN,
-#                             0 off, #3636)
+#   FREE_SPACE_GIVEBACK_MIN   a rise after which free space falls to the level it rose from, or lower,
+#                             within this many minutes is no recovery, so the trend runs on across it
+#                             (default FREE_SPACE_PERSIST_MIN, 0 off, #3636)
 #   FREE_SPACE_STATE_DIR      where the readings are kept
 #   FREE_SPACE_WARNINGS_DIR   where each warning's copy of its readings is kept (claude-config#3157;
 #                             default beside the readings when FREE_SPACE_STATE_DIR moves them, else

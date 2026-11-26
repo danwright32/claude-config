@@ -58,8 +58,8 @@ that has not yet lasted 30 minutes, free space having gone back up, or not falli
 projects only space that has stayed gone for 30 minutes, because a build or pre push check takes a
 few GB and gives it back within minutes (#1754), and after free space goes back up it measures from
 the level the rise held for 30 minutes, so a short spike up is never read as a fall (#3153). A rise
-that free space falls back below within 30 minutes is not counted as going back up at all, so a fall
-broken by small give backs is still projected across them (#3636). A fast
+is not counted as going back up at all when free space falls to the level it rose from, or lower,
+within 30 minutes, so a fall broken by small give backs is still projected across them (#3636). A fast
 fall stands down once the last 30 minutes on their own would not reach zero within six hours, and
 says when it stopped and how much went, so a drop that happened once and stopped is not projected
 for the rest of the six hours (#3608). Judge it by the exit code, not the wording:
