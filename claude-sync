@@ -1381,6 +1381,86 @@ report_user_scope_plugins(){
   return 0
 }
 
+# ---- a plugin from elsewhere that carries a mod (#3681) ----
+# Claude Code's built-in security default is off on both Macs (#876, kept on 2026-11-25 in #3681),
+# and without it a mod's approval of a tool call can beat some refusals a deny rule makes, skip an
+# ask rule's prompt and skip auto mode's review. tools/check-mod-approvals.sh fails the build when
+# a mod under payload/mods could do that, and it reads nothing else. So an installed plugin that
+# carries a mod of its own (a hooks module, listed as `modules` in its hooks/hooks.json or in what
+# its manifest's `hooks` names) is code no check of this repository has read, and status names it.
+# Derived from the plugin install record, so a plugin installed later is covered (L96). It reads
+# files only: it never runs claude, and never disables or changes anything.
+plugin_mod_modules(){   # $1 = a plugin's folder; prints the hooks modules it lists. 1 = none, 2 = unread
+  local ip="$1" f named kind out="" got
+  [ -d "$ip" ] || return 2
+  for f in "$ip/hooks/hooks.json" "$ip/.claude-plugin/plugin.json"; do
+    [ -f "$f" ] || continue
+    jq -e . "$f" >/dev/null 2>&1 || return 2
+  done
+  if [ -f "$ip/.claude-plugin/plugin.json" ]; then
+    kind="$(jq -r '.hooks | type' "$ip/.claude-plugin/plugin.json" 2>/dev/null || true)"
+    if [ "$kind" = object ]; then
+      got="$(jq -r '.hooks.modules // [] | if type == "array" then .[] | tostring else empty end' "$ip/.claude-plugin/plugin.json" 2>/dev/null || true)"
+      [ -z "$got" ] || out+="$got"$'\n'
+    elif [ "$kind" = string ]; then
+      named="$ip/$(jq -r '.hooks' "$ip/.claude-plugin/plugin.json" 2>/dev/null || true)"
+      if [ -f "$named" ] && [ "$named" != "$ip/hooks/hooks.json" ]; then
+        jq -e . "$named" >/dev/null 2>&1 || return 2
+        got="$(jq -r '.modules // [] | if type == "array" then .[] | tostring else empty end' "$named" 2>/dev/null || true)"
+        [ -z "$got" ] || out+="$got"$'\n'
+      fi
+    fi
+  fi
+  if [ -f "$ip/hooks/hooks.json" ]; then
+    got="$(jq -r '.modules // [] | if type == "array" then .[] | tostring else empty end' "$ip/hooks/hooks.json" 2>/dev/null || true)"
+    [ -z "$got" ] || out+="$got"$'\n'
+  fi
+  [ -n "$out" ] || return 1
+  printf '%s' "$out" | paste -sd, - | sed 's/,/, /g'
+  return 0
+}
+report_plugin_mods(){
+  local reg settings paths ip plug name modules rc state on="" off="" unread=""
+  local head="--- plugins from elsewhere that carry a mod (per Mac, never synced) ---"
+  reg="$CLAUDE_HOME/plugins/installed_plugins.json"
+  settings="$CLAUDE_HOME/settings.json"
+  [ -f "$reg" ] || return 0
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "$head"
+    echo "  $reg could not be checked, because jq is not installed, so this says nothing about whether an installed plugin carries a mod."
+    return 0
+  fi
+  if ! paths="$(jq -r '.plugins // {} | to_entries[] | .key as $k | .value[]? | select(.installPath) | "\(.installPath)\t\($k)"' "$reg" 2>/dev/null)"; then
+    echo "$head"
+    echo "  $reg could not be read as JSON, so which installed plugins carry a mod is not known."
+    return 0
+  fi
+  while IFS="$(printf '\t')" read -r ip plug; do
+    [ -n "${ip:-}" ] || continue
+    # Our own mods load from the mods folder, and the build check reads those.
+    case "$ip/" in "$CLAUDE_HOME/mods/"*) continue ;; esac
+    name="${plug%%@*}"
+    rc=0; modules="$(plugin_mod_modules "$ip")" || rc=$?
+    if [ "$rc" -eq 2 ]; then
+      unread+="${unread:+, }$name ($ip)"
+      continue
+    fi
+    [ "$rc" -eq 0 ] || continue
+    # With no enablement recorded at all, every installed plugin loads in every project.
+    state="$(jq -r --arg k "$plug" 'if has("enabledPlugins") | not then "true" else (.enabledPlugins[$k] | tostring) end' "$settings" 2>/dev/null || echo unknown)"
+    if [ "$state" = true ]; then on+="${on:+; }$name (its hooks modules: $modules)"
+    else off+="${off:+; }$name (its hooks modules: $modules)"; fi
+  done <<PLUGINPATHS
+$paths
+PLUGINPATHS
+  [ -n "$on$off$unread" ] || return 0
+  echo "$head"
+  [ -z "$on" ] || echo "  enabled everywhere on this Mac: $on. Claude Code's built-in security default is off on this Mac (#876), and the check that stands in for it (tools/check-mod-approvals.sh) reads only the mods under payload/mods, so nothing has read whether this code approves a tool call a deny rule refuses, or makes one of its own (#3681)."
+  [ -z "$off" ] || echo "  off at user scope, so only where a project turns it on: $off. The same holds in those projects (#3681)."
+  [ -z "$unread" ] || echo "  could not be read, so whether it carries a mod is not known: $unread"
+  return 0
+}
+
 # ---- the managed settings file that keeps the security default out of first place (#876) ----
 # On a Team or Enterprise account, or any Mac with managed settings, Claude Code's built-in security
 # default seats itself ahead of every plugin and routes each classic.* and prompt.* hook past the
@@ -15591,6 +15671,7 @@ payload/$rel
     echo "$text"
   done <<< "$RECORDS"
   report_user_scope_plugins
+  report_plugin_mods
   report_managed_settings
   report_settings_extras
   report_rtk_exclusions
