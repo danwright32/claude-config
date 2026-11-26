@@ -931,8 +931,8 @@ When Dan picks "Draft it now":
    and `message` set to exactly the contents of `messageFile`, every line and blank line as
    written. Read the file for it; never retype the post from the gathered output or the picker.
    Do not run `/no-ai-tells` or `lint-post.js` on it and do not change a word: the wording is
-   already approved. Never call `slack_send_message` or `slack_schedule_message`. This is the one
-   call that drafts an announcement, the same one the is it live card asks for.
+   already approved. Never send or schedule it: the draft tool is the only Slack call made here.
+   This is the one call that drafts an announcement, the same one the is it live card asks for.
 2. Write the tool's answer, exactly as it returned it, to `answerFile`, then ask what it left:
 
    ```bash
