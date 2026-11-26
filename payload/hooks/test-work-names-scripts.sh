@@ -459,12 +459,21 @@ check "a guard whose judge cannot run refuses the write rather than passing it: 
 check "and never posted" not_posted
 
 # ================================================================ 2. the SessionStart hook
+# Every case here starts the hook through a link to this hooks folder, so the folder is reached by a
+# spelling that is not the one it resolves to, wherever this checkout sits. The hook names the folder
+# it resolves to (pwd -P), so the line expected is derived from that, never from a spelling: a suite
+# that expected the spelling it was started by failed 7 checks from a checkout under /var, which is a
+# link to /private/var, and passed from a checkout on a real path (claude-config#3619, PR 3630).
+LINKED="$WORK/linked-hooks"; ln -s "$HERE" "$LINKED"
+START="$LINKED/gh-guard-path.sh"
+REAL_BIN="$(cd "$LINKED/bin" && pwd -P)"
 SID="11111111-2222-3333-4444-555555555555"
 mkdir -p "$ENVDIR/$SID"
 : > "$ENVDIR/$SID/sessionstart-hook-0.sh"
 out="$(printf '{"session_id":"%s","hook_event_name":"SessionStart"}' "$SID" | CLAUDE_ENV_FILE="$ENVDIR/$SID/sessionstart-hook-0.sh" bash "$START" 2>&1)"; rc=$?
 check "the SessionStart hook exits cleanly: rc=$rc $out" [ "$rc" -eq 0 ]
-env_line="export PATH=\"$GUARD_BIN:\$PATH\""
+env_line="export PATH=\"$REAL_BIN:\$PATH\""
+check "the link reaches this hooks folder by another spelling, so the cases below measure the hook's own resolving: $LINKED/bin and $REAL_BIN" [ "$LINKED/bin" != "$REAL_BIN" ]
 check "and puts the guard first on PATH in the session's env file" grep -q -F "$env_line" "$ENVDIR/$SID/sessionstart-hook-0.sh"
 # A shell that sources that file must run the guard as gh. The file is one the hook writes while
 # this suite runs, so the Slack drafts gate cannot read it before the suite starts, and a shell that
@@ -475,7 +484,7 @@ check "and puts the guard first on PATH in the session's env file" grep -q -F "$
 env_file="$(cat "$ENVDIR/$SID/sessionstart-hook-0.sh")"
 check "and that line is the whole of the file, so nothing else in it can undo the line: $env_file" [ "$env_file" = "$env_line" ]
 got_path="$(env -i HOME="$HOMEDIR" PATH="/usr/bin:/bin" bash -c "$env_line; command -v gh")"
-check "and a shell that runs that line, as one that sources the file does, runs the guard as gh: $got_path" [ "$got_path" = "$GUARD" ]
+check "and a shell that runs that line, as one that sources the file does, runs the guard as gh: $got_path" [ "$got_path" = "$REAL_BIN/gh" ]
 
 # The hook runs at every SessionStart of one session (a start, a resume, a clear, a compaction)
 # against the same env file, and one shell was seen carrying the line 33 times (claude-config#3619).
@@ -490,6 +499,13 @@ n="$(line_count "$ONCE")"
 check "the hook run twice against one env file leaves the line there once, not $n times: $(cat "$ONCE")" [ "$n" = 1 ]
 check "and the second run exits cleanly: rc=$rc $out" [ "$rc" -eq 0 ]
 check "and says nothing: $out" [ -z "$out" ]
+# One folder reached by two spellings is one line: started by the link and then by the folder's own
+# path against one env file, the hook leaves its line there once.
+SPELLED="$ENVDIR/spelled.sh"; : > "$SPELLED"
+start_hook "$SPELLED"
+out="$(printf '{"session_id":"%s","hook_event_name":"SessionStart"}' "$SID" | CLAUDE_ENV_FILE="$SPELLED" bash "$(cd "$LINKED" && pwd -P)/gh-guard-path.sh" 2>&1)"; rc=$?
+check "the hook started by a link and then by its own path leaves the line there once: $(cat "$SPELLED")" [ "$(cat "$SPELLED")" = "$env_line" ]
+check "and that second run exits cleanly and says nothing: rc=$rc $out" [ "$rc" -eq 0 -a -z "$out" ]
 
 OLDER="$ENVDIR/older.sh"
 printf '%s\n' "export SOMETHING_ELSE=1" "$env_line" > "$OLDER"
