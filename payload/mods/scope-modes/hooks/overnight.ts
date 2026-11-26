@@ -22,6 +22,8 @@ import { browserRefusal, type Browser } from './browser.ts'
 // - LESSONS.md written by any route in command position, a script file handed it as its argument
 //   included (#1592);
 // - every write tool under mcp__claude_ai_* and mcp__posthog__*, and Supabase and psql writes;
+// - on every other MCP server too, any tool whose own name says it deletes, removes or pauses
+//   (#3740); every other tool on a server those two families do not hold is on no list;
 // - any Chrome tool (mcp__claude-in-chrome__*) outside a tab this session created or off a test
 //   host, readers included, and anything reaching past the session's tabs (browser.ts, #2064),
 //   except closing a tab first listed in its tab group after its own click, typing, form fill
@@ -878,6 +880,31 @@ const mcpWrites = (tool: string): boolean => {
   const words = own.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)
   return !words.some(w => READS.has(w)) || words.some(w => WRITES.has(w))
 }
+// A tool that deletes, removes or pauses is refused on EVERY server, whichever family it is in
+// (#3740). LISTED names two families, so such a tool on any other server (a plugin's own, one added
+// by hand) was on no list: a worker's prompt for it was answered yes, and the call ran. That was
+// read from this file and then reproduced in the tests on 2026-11-26, never seen on a real night.
+// What is judged is the tool's own name, everything after the first `__` that follows the server,
+// so each reading of a server whose name holds a double underscore is covered, and the whole name
+// when no tool follows the server at all. The part of a word is matched, in any case, never the
+// whole word: a name written with no separator (deletePage, bulkremovepages) and another form of
+// the word (deletion, unpause) are refused too. The cost is a read whose name holds one of them (a
+// list of deleted pages), refused where its name let it through before, which is the harmless side
+// to be wrong on (L648). Every other tool on a server LISTED does not name still goes ahead: whether
+// the list should refuse those too is Dan's to settle (#3740, its first open question).
+const TAKES_AWAY = ['delet', 'remov', 'paus']
+/**
+ * The tools let past that rule by their whole names. None yet: naming one makes sleep mode approve
+ * more, so each name here is Dan's decision, recorded with its date beside it (#3740).
+ */
+export const SAFE_BY_NAME: ReadonlySet<string> = new Set<string>()
+const takesAway = (tool: string): boolean => {
+  if (!tool.startsWith('mcp__') || SAFE_BY_NAME.has(tool)) return false
+  const rest = tool.slice('mcp__'.length)
+  const at = rest.indexOf('__')
+  const own = (at < 0 ? rest : rest.slice(at + 2)).toLowerCase()
+  return TAKES_AWAY.some(part => own.includes(part))
+}
 
 // The commands that name a program without running it: printing its name, or finding where it is.
 const NAMES_ONLY: ReadonlySet<string> = new Set(['echo', 'printf', 'which', 'type', 'whereis', 'man', 'brew'])
@@ -965,6 +992,7 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
   if (db && db !== 'reads') return db.what
   if (db === 'reads') return undefined
   if (tool.startsWith('mcp__claude-in-chrome__')) return browserRefusal(tool, input, call.browser)
+  if (takesAway(tool)) return `use ${tool}`
   if (LISTED.some(p => tool.startsWith(p))) return mcpWrites(tool) ? `use ${tool}` : undefined
   if (tool !== 'Bash') return undefined
   // A Bash call whose command cannot be read is refused, never approved as an empty one.

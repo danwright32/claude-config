@@ -10470,7 +10470,12 @@ command itself with nothing built or loaded as it runs, never a file run by name
 opens, while everything else on the list keeps "Do not look for another way", and a write through
 `&>`, which was cut off before the write check and ran, and a line running gh that way
 writing files only into the session notes folder or the scratchpad (#2937), LESSONS.md (a script
-file handed it as its argument included, #1592), write tools under claude.ai and PostHog, any
+file handed it as its argument included, #1592), write tools under claude.ai and PostHog, since
+#3740 a tool on any other MCP server (a plugin's own, one added by hand) whose own name holds
+delet, remov or paus in any case, since the list named only those two families and a worker's
+prompt for a delete on any other server was answered yes (reproduced in the mod's tests on
+2026-11-26, never seen on a real night; a read whose name holds one of the three is refused too,
+on every server, and every other tool on a server outside the two families still goes ahead), any
 Chrome call outside a tab the session created (recorded from its tabs_create_mcp result; since
 #3099 it may also close, and only close, a tab first listed in its tab group after its own click,
 typing, form fill or script in a tab it created, since a clicked link can open one, and never a tab
@@ -11631,7 +11636,8 @@ overnight with a changelog sentence you have not read, as you chose on 2026-11-2
 merge or deploy anywhere the list below says wait, or anywhere it has no
 answer for; push straight to a default branch; force push or delete branches; switch branches in
 your main checkout; write to a database (Supabase, psql); use claude.ai, Chrome or PostHog tools that
-write; run `claude-sync` pull or install; retry anything Claude Code's own safety check refused; or
+write; use a tool on any other connector whose name says it deletes, removes or pauses (#3740);
+run `claude-sync` pull or install; retry anything Claude Code's own safety check refused; or
 work an issue someone else opened. Nor does any session hand you a result while you sleep, a
 worker or not: a page published or opened for you (the Artifact tool) or a Claude doc is held in
 that session, and when sleep mode ends, by any route, the noon end included, every session that

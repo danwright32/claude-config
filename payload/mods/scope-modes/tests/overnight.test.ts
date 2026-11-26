@@ -1,6 +1,6 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
-import { NEVER_ASKED, overnightRefusal, primaryFrom, readableWay, repoFromRemotes, type Look, type OvernightCall } from '../hooks/overnight.ts'
+import { NEVER_ASKED, SAFE_BY_NAME, overnightRefusal, primaryFrom, readableWay, repoFromRemotes, type Look, type OvernightCall } from '../hooks/overnight.ts'
 import { gateAnswerOf, judgeRequiredLabel, type Gate, type Opened } from '../hooks/requiredlabel.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { ghRepo, githubRepo, linkRepo } from './mod-kit/hooks/repo.ts'
@@ -718,6 +718,54 @@ describe('outward tools: every write under claude.ai and PostHog, Chrome by its 
     expect(await tool('mcp__posthog__exec', { command: 'x' })).toBe('use mcp__posthog__exec')
     // A name that says neither is refused: only a name that reads is let through.
     expect(await tool('mcp__claude_ai_Google_Calendar__suggest_time', {})).toBe('use mcp__claude_ai_Google_Calendar__suggest_time')
+  })
+  // #3740: the list named two families of server, so a tool that deletes, removes or pauses on any
+  // other one (a plugin's own server, one added by hand) was approved overnight. Now a tool whose
+  // own name holds delet, remov or paus is refused on every server.
+  test('a tool that deletes, removes or pauses is refused on any server (#3740)', async () => {
+    const names = [
+      // A plugin's own server, and one added by hand: neither family the list named.
+      'mcp__plugin_uptime_monitors__delete_monitor',
+      'mcp__plugin_uptime_monitors__pause_monitor',
+      'mcp__notes__remove_page',
+      // The part of a word is matched, so a name with no separator, or another form of the word, is
+      // refused too.
+      'mcp__notes__deletePage',
+      'mcp__notes__bulkremovepages',
+      'mcp__notes__page_deletion',
+      'mcp__plugin_uptime_monitors__unpause-monitor',
+      'mcp__notes__REMOVE_PAGE',
+      // A server whose own name holds a double underscore: every reading of where the tool begins.
+      'mcp__notes__v2__delete_page',
+      'mcp__notes__delete__list',
+      // A name with no tool after the server cannot be read as a tool, so the whole of it is judged.
+      'mcp__page_remover',
+    ]
+    // Every name judged before the one comparison, so a failure shows each tool that went ahead.
+    const got: Record<string, string> = {}
+    for (const name of names) got[name] = (await tool(name, {})) ?? 'goes ahead'
+    expect(got).toEqual(Object.fromEntries(names.map(name => [name, `use ${name}`])))
+  })
+  test('on a server the list names, a read whose name holds one of those words is refused too (#3740)', async () => {
+    // The harmless side to be wrong on (L648): before, its name reading was enough to let it through.
+    expect(await tool('mcp__claude_ai_Notes__list_deleted_pages', {})).toBe('use mcp__claude_ai_Notes__list_deleted_pages')
+    expect(await tool('mcp__posthog__get_paused_flags', {})).toBe('use mcp__posthog__get_paused_flags')
+    // A read with none of them still goes ahead.
+    expect(await tool('mcp__claude_ai_Notes__list_pages', {})).toBeUndefined()
+  })
+  test('what #3740 leaves as it was: any other tool on a server the list does not name', async () => {
+    // Whether the list should refuse every tool on a server it does not know is Dan's to settle
+    // (#3740, its first open question), so these still go ahead, a create among them.
+    for (const name of ['mcp__notes__list_pages', 'mcp__notes__create_page', 'mcp__plugin_uptime_monitors__get_monitor', 'mcp__playwright__browser_click'])
+      expect({ name, r: await tool(name, {}) }).toEqual({ name, r: undefined })
+    // The word in the server's name alone says nothing about the tool.
+    expect(await tool('mcp__page_remover__list_pages', {})).toBeUndefined()
+    expect(await tool('mcp__plugin_pause_kit__get_status', {})).toBeUndefined()
+  })
+  // Naming a tool there makes sleep mode approve more, so a name added without this line changing
+  // with it fails here, where a review sees it.
+  test("no tool is named safe from that rule yet: naming one is Dan's decision (#3740)", () => {
+    expect([...SAFE_BY_NAME]).toEqual([])
   })
   // #2064: Chrome is judged by the tab a call acts in and the host its page is on (browser.ts), so a
   // session can check its own work on a test host; anything else in Chrome is still refused,
