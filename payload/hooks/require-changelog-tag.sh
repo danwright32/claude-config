@@ -59,7 +59,9 @@
 # all (gh gives no answer, the registry cannot say whether the repository is gated, a tool is
 # missing) the override still lets the merge through, since it is the remedy this gate names for
 # exactly that, and the allow says in one sentence that an announcement could not be ruled out.
-# The two exits that come before the command can even be parsed keep the override as it was.
+# The exits that come before the command can even be read (the library that reads it is missing,
+# neither jq nor python3 is installed, the payload is not a call any reader takes) let it through
+# the same way, saying the same of a command that could not be read at all (claude-config#3742).
 # A command merging more than one pull request is not such a case and is refused with the override
 # typed too (Dan, 2026-11-25, claude-config#3666): its remedy, one pull request per command, is
 # always open. Nor is a command written so that the pull request it merges cannot be told (Dan,
@@ -88,11 +90,40 @@ payload=$(cat)
 # words every merge route names (mt__might_merge in lib/merge-target.sh).
 case "$payload" in *merge*|*Merge*|*enqueuePullRequest*) ;; *) exit 0 ;; esac
 
+# How this gate says something beside a call it lets through (lib/hook-notice.sh). Loaded here, ahead
+# of every exit the override can take, so each one can say its sentence (claude-config#3742, low 10):
+# it used to be loaded after the three that come before the command is read, which therefore let the
+# command through with nothing said.
+. "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
+  printf '%s\n' "$1" >&2
+  printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
+
+# LET THROUGH, SAID OUT LOUD (Dan, 2026-11-25). With the override typed and the labels unread, the
+# merge goes ahead, as the override always meant. But an unread pull request may be an announcement,
+# and an allow that says nothing would read as "it was not one" (L98). So the person is shown one
+# sentence and the session is handed the same one. `unread` is what is standing between the gate and
+# the labels at each step below, in words for the notice. Given `command`, it is said of a command
+# of which not even "does it merge a pull request" could be read, since a sentence may claim only
+# what was measured (L11): the three exits ahead of the command's reading.
+unread="this Mac's dev update registry could not be read"
+override_allows() {  # $1 = `command` where the command itself could not be read
+  local what="this merge" whether="whether it carries changelog/announce"
+  if [ "${1:-}" = command ]; then
+    what="this command"; whether="whether it merges a pull request carrying changelog/announce"
+  fi
+  hook_allow_notice "ALLOW_UNTAGGED_MERGE=1 let $what through, but $unread, so $whether was never read and an announcement, which the override does not cover, could not be ruled out." PreToolUse
+}
+
 # shellcheck source=lib/merge-target.sh
 { . "$HOOK_DIR/lib/merge-target.sh" 2>/dev/null && declare -F mt_runs_merge >/dev/null; } || {
   # A library this gate cannot load is not a merge with nothing to check (claude-config#1900,
-  # L10). Past the words above this may be a merge, so it is refused, naming the file.
-  case "$payload" in *ALLOW_UNTAGGED_MERGE=1*) exit 0 ;; esac
+  # L10). Past the words above this may be a merge, so it is refused, naming the file. The override,
+  # read off the payload's text, still lets it through, and says so.
+  case "$payload" in
+    *ALLOW_UNTAGGED_MERGE=1*)
+      unread="require-changelog-tag.sh could not load lib/merge-target.sh, which reads whether a command merges a pull request and which one"
+      override_allows command ;;
+  esac
   echo "Cannot tell whether this repo needs a changelog record: require-changelog-tag.sh could not load $HOOK_DIR/lib/merge-target.sh, or lib/push-scope.sh beneath it, which reads whether this command merges a pull request and which one, so whether the change carries a changelog record could not be checked. A library this gate cannot load is not a merge with nothing to check. Reinstall the hooks with claude-sync pull. Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>." >&2
   exit 2
 }
@@ -128,7 +159,10 @@ refuse_no_reader() {  # $1 = the absence clause, $2 = what it costs, $3 = what t
 # missing one is refused in its own words once the command can be read.
 if ps_reader_missing jq python3; then
   case "$payload" in
-    *ALLOW_UNTAGGED_MERGE=1*) exit 0 ;;
+    *ALLOW_UNTAGGED_MERGE=1*)
+      # The override still clears it, and says so (claude-config#3742, low 10), written by bash alone.
+      unread="neither jq nor python3 is installed, so this command could not be read out of the hook payload"
+      override_allows command ;;
     *)
       refuse_no_reader "neither jq nor python3 is on PATH" \
         "require-changelog-tag.sh reads this command out of the hook payload, which is JSON, with one of them, so with neither installed it cannot tell whether this command merges a pull request at all, let alone which one." \
@@ -141,8 +175,21 @@ fi
 # anything parses it: a lone surrogate escape made jq read nothing, and this gate let the merge
 # through (claude-config#1944). A payload still unreadable is judged by its words (#1922).
 payload="$(ps_clean_payload "$payload")"
-parsed=$(ps_parse_payload "$payload" raw) \
-  || ps_unparsed_refuse "$payload" require-changelog-tag.sh ALLOW_UNTAGGED_MERGE "a merge of a pull request" '*merge*' '*Merge*' '*enqueuePullRequest*'
+parsed=$(ps_parse_payload "$payload" raw) || {
+  # The shared refusal leaves with nothing said when the payload's words hold the override. So where
+  # they do, and they name a merge, the sentence is said here first (claude-config#3742, low 10).
+  # Asked of the same text the shared refusal reads, so the two agree on what the payload holds.
+  unparsed_text="$(ps_payload_text "$payload")"
+  case "$unparsed_text" in
+    *ALLOW_UNTAGGED_MERGE=1*)
+      case "$unparsed_text" in
+        *merge*|*Merge*|*enqueuePullRequest*)
+          unread="this hook's payload could not be read as a call"
+          override_allows command ;;
+      esac ;;
+  esac
+  ps_unparsed_refuse "$payload" require-changelog-tag.sh ALLOW_UNTAGGED_MERGE "a merge of a pull request" '*merge*' '*Merge*' '*enqueuePullRequest*'
+}
 command="${parsed%%$'\x1f'*}"
 cwd="${parsed#*$'\x1f'}"
 
@@ -160,29 +207,15 @@ cwd="${parsed#*$'\x1f'}"
 # is taken, so it asks about the merge itself.
 mt_runs_merge "$command" || exit 0
 
-# How this gate says something beside a merge it lets through (lib/hook-notice.sh).
-. "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
-  printf '%s\n' "$1" >&2
-  printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
-
 # THE OVERRIDE, read once (claude-config#3665; the head of this file). It used to leave here, before
 # anything was read. `overridden` stays true until the pull request has been read and found to carry
 # the announce label, which the override does not cover: from then on this merge is judged as if the
-# override had not been typed. `unread` is what is standing between the gate and the labels at each
-# step below, in words for the notice.
+# override had not been typed. What it says when it lets a merge through unread is override_allows,
+# near the top of this file, with `unread` set at each step below.
 overridden=false
 case "$command" in
   *ALLOW_UNTAGGED_MERGE=1*) overridden=true ;;
 esac
-unread="this Mac's dev update registry could not be read"
-
-# Let through, said out loud (Dan, 2026-11-25). With the override typed and the labels unread, the
-# merge goes ahead, as the override always meant. But an unread pull request may be an announcement,
-# and an allow that says nothing would read as "it was not one" (L98). So the person is shown one
-# sentence and the session is handed the same one.
-override_allows() {
-  hook_allow_notice "ALLOW_UNTAGGED_MERGE=1 let this merge through, but $unread, so whether it carries changelog/announce was never read and an announcement, which the override does not cover, could not be ruled out." PreToolUse
-}
 
 # Every refusal below goes through here. While the override stands, a refusal is not given: each one
 # ahead of the label reading is a way the labels could not be read, so it becomes the allow above.

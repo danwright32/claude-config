@@ -1934,7 +1934,10 @@ them too"): naming the pull request plainly is always open, and the refusal says
 offering the override. Of these only a pull request GitHub gives no answer about still goes through
 under the override. With node missing the changelog gate refuses a merge by name, as it does with
 jq missing, where it used to let every merge through with nothing said (claude-config#3742); under
-the override that merge goes through with the same sentence.
+the override that merge goes through with the same sentence. And the three exits the override can
+take before the command is even read (the library that reads it cannot be loaded, neither jq nor
+python3 is installed, the payload is not a call any reader takes) say it too, where they said
+nothing: of a command, since not even whether it merges a pull request was read.
 
 #### An announcement merges only on wording Dan approved (#3666)
 

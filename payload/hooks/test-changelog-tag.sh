@@ -605,10 +605,14 @@ if [ "$NOREAD_RC" -eq 0 ] && [ -z "$NOREAD_OUT" ]; then pass; else
   fail "an ordinary command was refused because the payload could not be read (rc=$NOREAD_RC): $NOREAD_OUT"; fi
 
 # The documented override still clears it, read off the payload text because the command itself
-# cannot be parsed here. A refusal nothing in the session can clear is a dead end (L109).
+# cannot be parsed here. A refusal nothing in the session can clear is a dead end (L109). It used to
+# clear it with nothing said; since claude-config#3742 (low 10) the allow says the sentence, in the
+# words for a command of which not even "is it a merge" could be read, written with neither reader.
 run_hook_on "$dir" "$noread" "ALLOW_UNTAGGED_MERGE=1 $MERGE 7 --repo acme/widget --squash"
-if [ "$NOREAD_RC" -eq 0 ] && [ -z "$NOREAD_OUT" ]; then pass; else
+if [ "$NOREAD_RC" -eq 0 ]; then pass; else
   fail "the visible override did not clear the unreadable payload refusal (rc=$NOREAD_RC): $NOREAD_OUT"; fi
+if says "$NOREAD_OUT" '"systemMessage"' && says "$NOREAD_OUT" "neither jq nor python3 is installed" && says "$NOREAD_OUT" "let this command through" && says "$NOREAD_OUT" "an announcement" && says "$NOREAD_OUT" "could not be ruled out"; then pass; else
+  fail "#3742 low 10: with the override typed and no payload reader, the command went through with nothing said about an announcement (rc=$NOREAD_RC): $NOREAD_OUT"; fi
 
 # jq alone missing, python3 present: the command IS readable, so the gate knows this is a merge,
 # and it must still refuse, because the record it is looking for arrives inside gh's JSON answer
@@ -669,6 +673,40 @@ if [ "$NOREAD_RC" -eq 0 ] && [ -z "$NOREAD_OUT" ]; then pass; else
 run_hook_on "$dir" "$nonode:$(dirname "$(command -v node)")" "$MERGE 7 --repo acme/widget --squash"
 if [ "$NOREAD_RC" -eq 0 ] && [ -z "$NOREAD_OUT" ]; then pass; else
   fail "#3742 item 5: with node present an ordinary labelled merge was refused, or drew a notice (rc=$NOREAD_RC): $NOREAD_OUT"; fi
+
+# THE OTHER EXITS AHEAD OF THE COMMAND (claude-config#3742, low 10). Two more states leave the gate
+# before the command is read: the library that reads it cannot be loaded, and the payload is not a
+# call any reader takes. Each is refused, and with the override in the payload each let the command
+# through with nothing said, where Dan's decision is that an unread pull request goes through with
+# the sentence. Each now says it.
+NOLIB="$(mktemp -d)"
+cp "$HOOK" "$NOLIB/"
+cp -R "$HOOK_DIR/lib" "$NOLIB/lib"
+rm -f "$NOLIB/lib/merge-target.sh"
+out=$(HOOK="$NOLIB/require-changelog-tag.sh" run_hook "$dir" "$MERGE 7 --repo acme/widget --squash" 2>&1); rc=$?
+if [ "$rc" -eq 2 ] && says "$out" "could not load"; then pass; else
+  fail "with the library that reads the command missing, the merge was not refused by name (rc=$rc): $out"; fi
+out=$(HOOK="$NOLIB/require-changelog-tag.sh" run_hook "$dir" "ALLOW_UNTAGGED_MERGE=1 $MERGE 7 --repo acme/widget --squash" 2>&1); rc=$?
+if [ "$rc" -eq 0 ] && says "$out" '"systemMessage"' && says "$out" "lib/merge-target.sh" && says "$out" "let this command through" && says "$out" "an announcement" && says "$out" "could not be ruled out"; then pass; else
+  fail "#3742 low 10: with the override typed and the library that reads the command missing, the command was refused, or went through with nothing said about an announcement (rc=$rc): $out"; fi
+rm -rf "$NOLIB"
+# A payload no reader takes as a call: the command sent as a list of its words.
+AS_WORDS='{"tool_input":{"command":["gh","pr","merge","7","--squash"]}}'
+AS_WORDS_OVERRIDDEN='{"tool_input":{"command":["ALLOW_UNTAGGED_MERGE=1","gh","pr","merge","7","--squash"]}}'
+out=$(printf '%s' "$AS_WORDS" | bash "$HOOK" 2>&1); rc=$?
+if [ "$rc" -eq 2 ] && says "$out" "could not read its hook payload"; then pass; else
+  fail "a payload no reader takes as a call, naming a merge, was not refused (rc=$rc): $out"; fi
+out=$(printf '%s' "$AS_WORDS_OVERRIDDEN" | bash "$HOOK" 2>&1); rc=$?
+if [ "$rc" -eq 0 ] && says "$out" '"systemMessage"' && says "$out" "could not be read as a call" && says "$out" "let this command through" && says "$out" "an announcement" && says "$out" "could not be ruled out"; then pass; else
+  fail "#3742 low 10: with the override in a payload no reader takes as a call, the command was refused, or went through with nothing said about an announcement (rc=$rc): $out"; fi
+# Still possible: with every reader and library in place, the same override on an ordinary labelled
+# merge goes through with nothing said, and so does the merge without it.
+out=$(run_hook "$dir" "ALLOW_UNTAGGED_MERGE=1 $MERGE 7 --repo acme/widget --squash" 2>&1); rc=$?
+if [ "$rc" -eq 0 ] && [ -z "$out" ]; then pass; else
+  fail "#3742 low 10: an ordinary labelled merge under the override drew a notice or a refusal (rc=$rc): $out"; fi
+out=$(run_hook "$dir" "$MERGE 7 --repo acme/widget --squash" 2>&1); rc=$?
+if [ "$rc" -eq 0 ] && [ -z "$out" ]; then pass; else
+  fail "#3742 low 10: an ordinary labelled merge drew a notice or a refusal (rc=$rc): $out"; fi
 rm -rf "$dir"
 
 # A missing registry is no longer a stand down (claude-config#1526), so with no payload reader the
