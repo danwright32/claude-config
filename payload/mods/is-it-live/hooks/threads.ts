@@ -57,10 +57,66 @@ const DRAFT_ERROR = /"ok"\s*:\s*false|\b(?:attached_draft_exists|channel_not_fou
 type Answer = { text?: unknown; result?: unknown; isError?: unknown; deny?: unknown }
 const answerText = (o: Answer): string => (typeof o.text === 'string' ? o.text : typeof o.result === 'string' ? o.result : JSON.stringify(o.result ?? ''))
 
-/** Whether a draft call's answer says Slack saved it: not refused, not an error, and naming none of Slack's errors. */
+// #3617: what Slack's draft tool answers a saved draft with (its description says it returns
+// channel_link, "a Slack web client URL"). Any https link counts: which host a workspace answers
+// with was never measured, and an answer that is not a saved draft carries no such field at all.
+const HTTPS_LINK = /^https:\/\/[^\s/?#]+\.[^\s/?#]+(?:[/?#]\S*)?$/
+const linkOf = (v: unknown): string | undefined => {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return undefined
+  const link = (v as { channel_link?: unknown }).channel_link
+  return typeof link === 'string' && HTTPS_LINK.test(link) ? link : undefined
+}
+// The JSON a text holds, or undefined: Slack's answer is one JSON object, and a text that is not
+// JSON (a sentence, an answer cut short) has no field to read.
+const parsed = (s: string): unknown => {
+  try {
+    return JSON.parse(s) as unknown
+  } catch {
+    return undefined
+  }
+}
+const blocksLink = (v: unknown): string | undefined => {
+  if (!Array.isArray(v)) return undefined
+  for (const b of v as unknown[]) {
+    const text = typeof b === 'object' && b !== null && (b as { type?: unknown }).type === 'text' ? (b as { text?: unknown }).text : undefined
+    const link = typeof text === 'string' ? linkOf(parsed(text)) : undefined
+    if (link !== undefined) return link
+  }
+  return undefined
+}
+
+/**
+ * #3617: the saved draft's link, read as the VALUE of the answer's channel_link field, or undefined.
+ * The field is looked for only where the hook is handed an answer: the text the model reads (the
+ * answer's text blocks joined, one JSON object), and the tool's own record, which is that JSON as a
+ * string, the answer's content blocks, or an MCP result holding them or its structured content. The
+ * words channel_link anywhere else (a sentence, another field's text) are a mention, not the field.
+ */
+const draftLink = (o: Answer): string | undefined => {
+  const r = o.result
+  const mcp = typeof r === 'object' && r !== null && !Array.isArray(r) ? (r as { content?: unknown; structuredContent?: unknown }) : undefined
+  return (
+    (typeof o.text === 'string' ? linkOf(parsed(o.text)) : undefined) ??
+    (typeof r === 'string' ? linkOf(parsed(r)) : undefined) ??
+    blocksLink(r) ??
+    linkOf(r) ??
+    linkOf(mcp?.structuredContent) ??
+    blocksLink(mcp?.content)
+  )
+}
+
+/**
+ * Whether a draft call's answer says Slack saved it: not refused, not an error, naming none of
+ * Slack's errors, and carrying the draft's link (#3617). Until 2026-11-26 the link was not asked
+ * for, so every answer that was none of the first three counted as saved: an empty one, and one that
+ * only says the call was accepted and gives a task id, as an MCP call handed to the background
+ * answers. The check holds when it cannot tell: an answer it cannot read leaves the thread owed, and
+ * the turn end asks for the draft again.
+ */
 export const draftSaved = (o: Answer): boolean => {
   if (o.deny !== undefined || o.isError === true) return false
-  return !DRAFT_ERROR.test(answerText(o))
+  if (DRAFT_ERROR.test(answerText(o))) return false
+  return draftLink(o) !== undefined
 }
 
 /** #2787: the errors Slack answers a draft (invalid_thread_ts) or a read (thread_not_found) with when the thread no longer exists. */
