@@ -565,10 +565,25 @@ class ReadInAFinallyAfterItsEnd:
             return 0
         finally:
             self.status = self.w.wait(timeout=5)
+
+
+class ReadInAFinallyOnABreak:
+    def start(self):
+        self.x = subprocess.Popen(["sleep", "9"])
+
+    def stop(self):
+        for _ in range(3):
+            try:
+                self.x.terminate()
+                break
+            finally:
+                self.status = self.x.wait(timeout=5)
+        return 0
 PY
 scan
 [ "$rc" -eq 1 ] && ok || bad "#3663 a helper with the three blind spots fails the scan (rc=$rc)" "$out"
 has "$out" "$FILE:145:" && bad "#3663 (b) a read in a finally runs before the method returns, so it passes" "$out" || ok
+has "$out" "$FILE:157:" && bad "#3663 (b) a read in a finally runs before a break leaves the loop, so it passes" "$out" || ok
 fires P1 6 "#3663 (a) a loop asking only whether the process still runs never reads how it ended"
 fires P1 13 "#3663 (a) a poll() result held in a name only compared with None is no read"
 fires P1 22 "#3663 (a) None compared with poll() the other way round is no read"

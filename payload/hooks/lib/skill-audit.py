@@ -640,7 +640,8 @@ def exit_states(fn, events, start):
     """The states the process can be in wherever fn returns, raises or runs off its end, following
     both branches of every if, every handler of a try, and a loop run any number of times. events maps
     a node inside fn to what it does (see step). Exceptions are followed only into the handlers of a
-    try that holds them, and a return or raise inside a try runs its finally before it leaves."""
+    try that holds them, and a return, raise, break or continue inside a try runs its finally before
+    it leaves."""
     sinks = [set()]  # where a return or raise lands: the innermost try's finally, else out of fn
 
     def at(node, states):
@@ -680,8 +681,11 @@ def exit_states(fn, events, start):
                 states = at(item.context_expr, states)
             return block(s.body, states, loop)
         if isinstance(s, ast.Try) or type(s).__name__ == "TryStar":
+            outer = loop
             if s.finalbody:
                 sinks.append(set())
+                if loop is not None:  # a break or continue runs the finally before it leaves too
+                    loop = {"break": set(), "continue": set()}
             raised, current = set(states), states
             for b in s.body:
                 if not current:
@@ -694,8 +698,11 @@ def exit_states(fn, events, start):
             if not s.finalbody:
                 return out
             leaving = sinks.pop()
-            sinks[-1].update(block(s.finalbody, leaving, loop))
-            return block(s.finalbody, out, loop)
+            sinks[-1].update(block(s.finalbody, leaving, outer))
+            if loop is not outer:
+                for way in ("break", "continue"):
+                    outer[way].update(block(s.finalbody, loop[way], outer))
+            return block(s.finalbody, out, outer)
         if type(s).__name__ == "Match":
             states = at(s.subject, states)
             out = set(states)
