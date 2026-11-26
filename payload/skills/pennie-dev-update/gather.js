@@ -659,7 +659,12 @@ const NOT_OUT = ['held', 'unconfirmed'];
 
 function announcementsOf(ctx, repoCfg, out, prior, byNumber, deployOf) {
   const kept = new Map();
-  (Array.isArray(prior.announcements) ? prior.announcements : []).forEach(function (a) {
+  // Absent is a repo no run has kept one for. Present and not a list is a state file somebody broke,
+  // and reading it as "none kept" would drop every unsent announcement in it, so it refuses (L11).
+  if (prior.announcements !== undefined && !Array.isArray(prior.announcements)) {
+    refuse('announcements in the state file for ' + repoCfg.repo + ' is not a list, so which announcements for agents are still unsent cannot be told. Nothing was changed.');
+  }
+  (prior.announcements || []).forEach(function (a) {
     if (!a || !Number.isInteger(a.number)) refuse('announcements in the state file for ' + repoCfg.repo + ' holds an entry with no pull request number: ' + JSON.stringify(a) + '.');
     kept.set(a.number, a);
   });
@@ -679,6 +684,8 @@ function announcementsOf(ctx, repoCfg, out, prior, byNumber, deployOf) {
       out.notes.push('#' + n + ' was kept as an announcement for agents and no longer carries changelog/announce, so it is dropped from the announcements.');
       return;
     }
+    const mergedMs = Date.parse(pr.merged_at);
+    if (Number.isNaN(mergedMs)) refuse('#' + n + ' has a merge time GitHub gave as ' + JSON.stringify(pr.merged_at) + ', which does not parse, so the channel cannot be read from it.');
     const inPost = listed.get(n);
     const deploy = inPost ? inPost.deploy : deployOf(pr);
     const before = kept.has(n) ? (kept.get(n).outcome || null) : null;
@@ -686,7 +693,7 @@ function announcementsOf(ctx, repoCfg, out, prior, byNumber, deployOf) {
       number: n, title: pr.title, mergedAt: pr.merged_at,
       // The Slack timestamp of the merge, for slack_read_channel's `oldest`: nothing posted before
       // the change merged can be its announcement.
-      oldest: String(Math.floor(Date.parse(pr.merged_at) / 1000)),
+      oldest: String(Math.floor(mergedMs / 1000)),
       deploy: deploy, live: deploy === 'live', carried: !inPost,
       state: owed.state, channel: owed.channel, text: owed.text, why: owed.why,
       previousOutcome: before,
@@ -810,6 +817,8 @@ function keptAnnouncements(repo, outcomes, updated) {
   repo.announcements.forEach(function (a) {
     const outcome = outcomes.get(a.number) || a.previousOutcome || null;
     const settled = SETTLED.indexOf(outcome) !== -1;
+    // Dropped only when its merge time is known to sit at or below the boundary: a time that does
+    // not parse compares false, and the entry is kept, the side that asks again rather than loses it.
     if (settled && Date.parse(a.mergedAt) <= boundary && !held.has(a.number)) return;
     kept.push({ number: a.number, mergedAt: a.mergedAt, outcome: outcome });
   });
@@ -921,7 +930,10 @@ function cmdPosted(args) {
   const repo = (gathered.repos || []).filter(function (r) { return r.repo.toLowerCase() === args.repo.toLowerCase(); })[0];
   if (!repo) refuse(args.repo + ' is not in ' + args.gathered + '.');
   const n = Number(args.number);
-  const ann = (Array.isArray(repo.announcements) ? repo.announcements : []).filter(function (a) { return a.number === n; })[0];
+  if (!Array.isArray(repo.announcements)) {
+    refuse(repo.repo + '\'s announcements were not read when gathered (' + repo.status + (repo.reason ? ': ' + repo.reason : '') + '), so there is nothing to look for.');
+  }
+  const ann = repo.announcements.filter(function (a) { return a.number === n; })[0];
   if (!ann) refuse('#' + args.number + ' is not among the announcements gathered for ' + repo.repo + '.');
   if (!ann.text) refuse('#' + n + ' has no announcement text that could be read (' + (ann.why || 'no reason given') + '), so it cannot be looked for.');
   const text = args.read.split(',').map(function (file) {

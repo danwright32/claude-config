@@ -241,9 +241,11 @@ The window simply grows until there is something to report.
 **Write `lastEnd` only after the draft file exists.** If the run dies partway the boundary must
 not move, or that period is skipped forever. `commit-state` takes `--draft` and refuses when the
 file is missing or empty, when a `--headings` entry is not a line of it, when a `--listed` PR was
-not gathered or was held back, and when the state moved since the gather (so running it twice
-changes nothing). It takes `lastEnd` from the gathered `merged_at` of the newest listed PR,
-`heldBack` from what gather found not yet live, and keeps every other field.
+not gathered or was held back, when an announcement for agents that is out has no outcome in
+`--outcomes` (section 11), and when the state moved since the gather (so running it twice changes
+nothing). It takes `lastEnd` from the gathered `merged_at` of the newest listed PR, `heldBack` from
+what gather found not yet live, `announcements` from what section 11 settled (every one only
+drafted or with no outcome is kept), and keeps every other field.
 
 **`commit-state` runs under the no network wrapper** (claude-config#3503), as step 7 of section 10
 gives it:

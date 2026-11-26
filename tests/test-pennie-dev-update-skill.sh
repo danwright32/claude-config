@@ -252,7 +252,12 @@ announcing=""; [ -n "$announcing_raw" ] && announcing="$(flat "$announcing_raw")
 said_in "the label table has a row for changelog/announce" "$gathering" '| `changelog/announce` |'
 said_in "the label table is sorted by record.managerVisible" "$gathering" '`record.managerVisible`'
 said_in "section 5 sorts by record.managerVisible" "$classifying" 'decides by `record.managerVisible`'
-gone "section 5 no longer sorts by the label's name" '`changelog/visible` is manager-visible, `changelog/technical` is behind the scenes'
+# Matched against the section with its whitespace collapsed: the old sentence was wrapped across two
+# lines, so a line by line grep never saw it, even in the text it was written to catch.
+OLD_SORT='`changelog/visible` is manager-visible, `changelog/technical` is behind the scenes'
+case "$classifying" in
+  *"$OLD_SORT"*) check "section 5 no longer sorts by the label's name" "it still says: $OLD_SORT" ;;
+  *) check "section 5 no longer sorts by the label's name" ok ;; esac
 if [ -z "$announcing" ]; then check "the skill has a section 11 for announcements for agents" "no '## 11.' section"
 else
   check "the skill has a section 11 for announcements for agents" ok

@@ -1419,6 +1419,13 @@ const CARRIED = { announcements: [
   check(r.code !== 0 && /announcements/.test(r.err), 'a gathered file with no announcements list is refused, never read as having none', r.all);
 }
 {
+  // A state file whose announcements is not a list is broken, never read as "none kept", which would
+  // drop every unsent announcement it held.
+  const c = annCase({ announcements: { number: 50, outcome: 'drafted' } });
+  check(c.p && c.p.status === 'refused' && /not a list/.test(c.p.reason) && c.p.announcements === null,
+    'an announcements entry in the state that is not a list refuses the repo, never reads as none kept', c.p && JSON.stringify(c.p));
+}
+{
   const c = annCase({ announcements: [{ number: 999, mergedAt: '2026-09-01T00:00:00Z', outcome: null }] });
   check(c.p && c.p.status === 'refused' && /#999/.test(c.p.reason) && c.p.announcements === null,
     'a carried announcement GitHub does not show as merged refuses the repo, its announcements unknown rather than empty', c.p && JSON.stringify(c.p));
