@@ -2969,7 +2969,15 @@ alone). With the lock free the whole gate took 38 to 43 seconds, three readings 
 to 35 on 2026-11-01, the slowest scanner `test-suite-scratch-isolation.sh` at 35 to 41 seconds, and
 41 again during another builder's full run at 44 to 51. After the move, with the lock held for the
 whole run, it passed in 60 seconds at load average 160, the slowest scanner 51 seconds and the moved
-scan 7, so the 150 second budget stayed (140 since #3357, which put a hard stop over the whole run)
+scan 7, so the 150 second budget stayed (140 since #3357, which put a hard stop over the whole run).
+On 2026-11-25 (#3662) `test-suite-scratch-isolation.sh`, then the gate's largest scanner on a push
+that changes no suite (60 to 66 seconds alone, 50 to 53 of processor time, three readings at load
+average 18 to 117), was
+cut to 7 to 14 seconds alone (6 to 8 of processor time, four readings at load average 53 to 113)
+by classifying each file's names in one perl pass. The largest left is
+`test-slack-drafts-only-gate-runners.sh`, 85 to 89 seconds of processor time alone (three
+readings), run only when a push changes a suite, and the only scanner unfinished at the budget in
+a gate run at load average 99 to 265 the same evening
 
 </td></tr>
 <tr><td>
