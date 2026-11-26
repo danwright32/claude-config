@@ -1569,7 +1569,7 @@ check "a low disk with a parentless long runner still exits 3" "$([ "$PROBE_RC" 
 check "and the warning names it, by program and process id" \
   "$(grep -qF 'bash (pid 7001)' <<< "$runner_msg" && grep -qF "$ORPHAN_HEAD" <<< "$runner_msg" && echo ok || echo "said: $runner_msg")"
 check "and says how long it has run, with its units, and its share of one processor" \
-  "$(grep -F 'bash (pid 7001)' <<< "$runner_msg" | grep -qF '1h 30m' && grep -F 'bash (pid 7001)' <<< "$runner_msg" | grep -qF '28.0% of one processor' && echo ok || echo "said: $runner_msg")"
+  "$(grep -qxF '  bash (pid 7001): running 1h 30m, 28.0% of one processor on average' <<< "$runner_msg" && echo ok || echo "said: $runner_msg")"
 check "and hands over a command that only reads, naming the process ids it found" \
   "$(grep -qxF 'ps -o pid,ppid,etime,time,command -p 7001' <<< "$runner_msg" && echo ok || echo "said: $runner_msg")"
 # The warning names; whether to stop a process is Dan's decision, so no stopping command is handed
@@ -1610,7 +1610,7 @@ check "a busy parentless process younger than the shortest span a fall is judged
 PS_MIXED="$(ps_table mixed "$ROW_DAEMON" "$ROW_SERVICE_LEAD" "$ROW_SERVICE" "$ROW_IDLE" "$ROW_RUNNER" "$ROW_RUNNER_CHILDREN" "$ROW_PARENT" "$ROW_PARENTED" "$ROW_YOUNG")"
 ps_probe "$PS_MIXED" "$((1 * GB))"; mixed_msg="$PROBE_MSG"
 check "in a whole table only the two parentless long runners are named, the slow one at its own share" \
-  "$([ "$(grep -cE '^  [^ ].* \(pid [0-9]+\): ' <<< "$mixed_msg")" -eq 2 ] && grep -qF 'zsh (pid 7002)' <<< "$mixed_msg" && grep -F 'zsh (pid 7002)' <<< "$mixed_msg" | grep -qF '0.4% of one processor' && echo ok || echo "said: $mixed_msg")"
+  "$([ "$(grep -cE '^  [^ ].* \(pid [0-9]+\): ' <<< "$mixed_msg")" -eq 2 ] && grep -qxF '  zsh (pid 7002): running 1h 30m, 0.4% of one processor on average' <<< "$mixed_msg" && echo ok || echo "said: $mixed_msg")"
 # A runner whose program path holds a space, so the name is read from the whole path, not a field.
 PS_SPACED="$(ps_table spaced " 7004     1  6990    01:30:00    25:12.00 /opt/My Tools/churn")"
 ps_probe "$PS_SPACED" "$((1 * GB))"
