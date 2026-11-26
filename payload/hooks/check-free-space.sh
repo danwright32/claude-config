@@ -35,7 +35,7 @@
 # is eating the disk is the skill's job, from measurements taken at the time (L11: a message may
 # claim only what its check measured).
 #
-# ONE SUSPECT IS NAMED, AND SAID TO BE UNMEASURED. This does not contradict the paragraph above:
+# SUSPECTS ARE NAMED, AND SAID TO BE UNMEASURED. This does not contradict the paragraph above:
 # the message still says nothing measured a cause, and names the folder as somewhere to look, never
 # as what is using the disk. Measured 2026-10-04 on
 # Daniels-MacBook-Pro-2: the disk fell from 25 GB to 8 GB free more than once while Overture agents
@@ -51,7 +51,8 @@
 # flag (ls -lO shows none), so sudo can empty it. `find -mindepth 1 -delete` rather than `rm -rf
 # dir/*`: it takes hidden files too, and needs no glob, which Dan's zsh would refuse before sudo ran
 # because his user cannot list the folder. Emptying rather than removing the folder keeps its root
-# only permissions in place.
+# only permissions in place. The second suspect is a process left running with no parent, named the
+# same way and never stopped (orphan_note, claude-config#3561).
 #
 # Environment, all of it a seam so the suite measures this code rather than the machine (L2, L504):
 #   FREE_SPACE_PATH           the volume to measure (default the data volume, else /)
@@ -76,6 +77,8 @@
 #   FREE_SPACE_TOP_SECONDS    the bound on `top` when it names them (default 2, 0 turns it off)
 #   FREE_SPACE_SWAP_CMD, FREE_SPACE_TOP_CMD, FREE_SPACE_DISK_BYTES  the swap, top and disk size
 #                             readers, described where swap is read (claude-config#1770)
+#   FREE_SPACE_PS_CMD, FREE_SPACE_PS_SECONDS  the process table reader and its bound (default 1, 0
+#                             off), described at orphan_note (claude-config#3561)
 #
 # ONE CAUSE IS MEASURED: SWAP (claude-config#1770). Swap lives on a volume of its own that shares
 # the disk and that no folder size reaches, so when it is over its share of the disk the verdict says
@@ -931,11 +934,12 @@ ORPHAN_SHARE_PERMILLE=1
 orphan_note(){
   local seconds="${FREE_SPACE_PS_SECONDS:-1}" why="" found="" said="" pids="" shown
   # Zero written any way (0, 00) is off; anything else not a whole number is bounded_run's to refuse.
-  if [ -n "$seconds" ] && [ -z "${seconds//0/}" ]; then
-    echo ""
-    echo "Looking for a process left running with no parent is turned off here (FREE_SPACE_PS_SECONDS=0)."
-    return 0
-  fi
+  case "$seconds" in
+    ''|*[!0]*) ;;
+    *) echo ""
+       echo "Looking for a process left running with no parent is turned off here (FREE_SPACE_PS_SECONDS=0)."
+       return 0 ;;
+  esac
   # The folder the check found its own library in at the top (_fs_here), never derived again.
   . "$_fs_here/lib/bounded-run.sh" 2>/dev/null || bounded_run() { BOUNDED_OUT="lib/bounded-run.sh is missing, so ps was not run"; BOUNDED_RC=127; }
   . "$_fs_here/lib/suite-pile.sh" 2>/dev/null

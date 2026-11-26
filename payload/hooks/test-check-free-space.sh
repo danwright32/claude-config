@@ -1611,8 +1611,11 @@ PS_MIXED="$(ps_table mixed "$ROW_DAEMON" "$ROW_SERVICE_LEAD" "$ROW_SERVICE" "$RO
 ps_probe "$PS_MIXED" "$((1 * GB))"; mixed_msg="$PROBE_MSG"
 check "in a whole table only the two parentless long runners are named, the slow one at its own share" \
   "$([ "$(grep -cE '^  [^ ].* \(pid [0-9]+\): ' <<< "$mixed_msg")" -eq 2 ] && grep -qF 'zsh (pid 7002)' <<< "$mixed_msg" && grep -F 'zsh (pid 7002)' <<< "$mixed_msg" | grep -qF '0.4% of one processor' && echo ok || echo "said: $mixed_msg")"
-check "and a program path holding a space is not split into a name" \
-  "$(! grep -qF 'Chrome' <<< "$mixed_msg" && echo ok || echo "said: $mixed_msg")"
+# A runner whose program path holds a space, so the name is read from the whole path, not a field.
+PS_SPACED="$(ps_table spaced " 7004     1  6990    01:30:00    25:12.00 /opt/My Tools/churn")"
+ps_probe "$PS_SPACED" "$((1 * GB))"
+check "a parentless runner whose program path holds a space is named by its program, not a piece of the path" \
+  "$(grep -qF '  churn (pid 7004): running 1h 30m' <<< "$PROBE_MSG" && ! grep -qF 'Tools' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
 
 # A falling verdict names it too: that is the warning the 11-24 disk would have raised first.
 S_PS_FALL="$TMPROOT/state-ps-fall"; mkdir -p "$S_PS_FALL"
