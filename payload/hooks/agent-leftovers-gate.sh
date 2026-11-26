@@ -45,6 +45,10 @@ case "$payload" in *'"agent_id"'*) ;; *) exit 0 ;; esac
 # escape survives the parse and raises when the text is written back out. Without the library the
 # payload is read as it came, so its absence takes nothing away from this hook.
 . "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null && payload="$(ps_clean_payload "$payload")"
+# Matched through payload_match, as every hook reading its raw payload is (#1885): a byte that is not
+# UTF-8 earlier in the payload hides every word after it from =~ under a UTF-8 locale, so the C
+# locale is tried as well.
+payload_match() { [[ $1 =~ $2 ]] && return 0; local LC_ALL=C; [[ $1 =~ $2 ]]; }
 
 # shellcheck source=lib/hook-notice.sh
 . "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
@@ -73,8 +77,8 @@ case "$action" in
   notice)
     if [ -n "$note" ]; then
       cwd=""; parent=""
-      if [[ "$payload" =~ \"cwd\"[[:space:]]*:[[:space:]]*\"([^\"\\]*)\" ]]; then cwd="${BASH_REMATCH[1]}"; fi
-      if [[ "$payload" =~ \"transcript_path\"[[:space:]]*:[[:space:]]*\"([^\"\\]*)\" ]]; then parent="${BASH_REMATCH[1]}"; fi
+      if payload_match "$payload" '"cwd"[[:space:]]*:[[:space:]]*"([^"\]*)"'; then cwd="${BASH_REMATCH[1]}"; fi
+      if payload_match "$payload" '"transcript_path"[[:space:]]*:[[:space:]]*"([^"\]*)"'; then parent="${BASH_REMATCH[1]}"; fi
       bash "$HOOK_DIR/lib/issue-spool.sh" note "${cwd:-.}" "$note" "agent-leftovers-gate.sh" "$parent" >/dev/null 2>&1 \
         || text="$text (This could not be spooled for the orchestrating session's review, so this notice is its only copy.)"
     fi

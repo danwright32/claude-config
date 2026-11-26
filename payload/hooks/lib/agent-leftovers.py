@@ -84,8 +84,10 @@ class Unread(Exception):
 
 def run_ps(args, none_is_empty=False):
     try:
-        r = subprocess.run(['ps'] + args, capture_output=True, text=True, timeout=PS_SECONDS,
-                           env=dict(os.environ, LC_ALL='C'))
+        # A command line can hold any byte, so one that is not UTF-8 is replaced rather than
+        # raising, which would turn a readable process table into "could not be read".
+        r = subprocess.run(['ps'] + args, capture_output=True, text=True, errors='replace',
+                           timeout=PS_SECONDS, env=dict(os.environ, LC_ALL='C'))
     except subprocess.TimeoutExpired:
         raise Unread('ps did not answer within %d seconds' % PS_SECONDS)
     except OSError as e:
@@ -275,7 +277,9 @@ def key(p):
 
 def load_state(path):
     try:
-        with open(path, encoding='utf-8') as f:
+        # Strict: a state file holding a byte that is not UTF-8 is not this reader's, and the
+        # UnicodeDecodeError it raises is a ValueError, so it reads as no state at all.
+        with open(path, encoding='utf-8', errors='strict') as f:
             s = json.load(f)
         if isinstance(s, dict):
             return {'refusals': int(s.get('refusals') or 0), 'settled': [str(x) for x in s.get('settled') or []]}
@@ -289,7 +293,8 @@ def save_state(path, state):
     try:
         os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
         tmp = '%s.%d' % (path, os.getpid())
-        with open(tmp, 'w', encoding='utf-8') as f:
+        # Strict: json.dump escapes everything outside ASCII, so nothing here can fail to encode.
+        with open(tmp, 'w', encoding='utf-8', errors='strict') as f:
             json.dump(state, f)
         os.replace(tmp, path)
         return True
@@ -403,6 +408,9 @@ def gate(payload):
 
 
 def main(argv):
+    # A payload can carry an escaped lone surrogate that survives the parse into the answer's
+    # text, and writing it out strictly would raise and lose the whole answer.
+    sys.stdout.reconfigure(errors='replace')
     if len(argv) == 3 and argv[1] == 'dir' and PLAIN.match(argv[2]):
         print(os.path.join(marks_root(), argv[2]))
         return 0

@@ -47,8 +47,13 @@ payload="$(cat 2>/dev/null || true)"
 # Cleaned by the shared reader (claude-config#1944); without the library it is read as it came.
 . "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null && payload="$(ps_clean_payload "$payload")"
 
+# Matched through payload_match, as every hook reading its raw payload is (#1885): a byte that is not
+# UTF-8 earlier in the payload hides every word after it from =~ under a UTF-8 locale, so the C
+# locale is tried as well.
+payload_match() { [[ $1 =~ $2 ]] && return 0; local LC_ALL=C; [[ $1 =~ $2 ]]; }
+
 session=""
-if [[ "$payload" =~ \"session_id\"[[:space:]]*:[[:space:]]*\"([^\"]*)\" ]]; then session="${BASH_REMATCH[1]}"; fi
+if payload_match "$payload" '"session_id"[[:space:]]*:[[:space:]]*"([^"]*)"'; then session="${BASH_REMATCH[1]}"; fi
 [ -n "$session" ] || session="${CLAUDE_CODE_SESSION_ID:-}"
 
 # The folder holding every session's marker folder: lib/agent-leftovers.py derives the same path
