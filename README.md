@@ -11348,6 +11348,23 @@ at a permission prompt): none lets a tool call run unjudged, and they are left t
 rule, with what a hook that never yields does to its mod and to the mods beside it, is standing
 rule 7 in `docs/mods-design.md`.
 
+## Hand reruns of a failed check are counted
+
+A session that reruns a failed check with `gh run rerun` and sees it pass used to leave no trace that
+the check failed first, so a flaky job was never counted (L293, claude-config#3613).
+`hooks/rerun-record.sh`, a PostToolUse hook on Bash, records each hand rerun (the repository and
+the run, or the job for `--job`) in `~/.claude-issue-spool/reruns/<project key>.jsonl`. It posts
+nothing. The end of turn issue review reads each waiting run's final result from GitHub, one call a
+run inside a few seconds, and keeps anything still running or unreadable for the next review. A job
+that failed and then went green on a rerun, in a run that ended green, is added to
+`~/.claude-issue-spool/reruns/flakes.jsonl`, which is kept across sessions with no expiry; from its
+second such run the review offers it as a finding (add it to that job's flake issue, or open one).
+A job that failed again on its rerun is offered as that, so nobody reruns it a third time. Asleep,
+the review reads nothing and the records wait. Not covered: a rerun started from GitHub's web page,
+the merge helper's own rerun of a run that never started, and a rerun whose repository the command
+does not name and the directory's git remotes cannot tell. The design is in
+`hooks/review/subagent-harvest.md`.
+
 ## Sleep mode
 
 Sleep mode lets the Claude Code sessions you leave open keep working toward the goal you set each

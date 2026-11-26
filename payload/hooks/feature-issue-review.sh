@@ -179,6 +179,22 @@ if [ $(( now - last )) -ge "$COOLDOWN_SECONDS" ] \
   fi
 fi
 
+# HAND RERUNS (claude-config#3613). Each `gh run rerun` a session ran was recorded by rerun-record.sh
+# beside the spool; here each one's run is read from GitHub (one call a run, inside a few seconds of
+# this hook's 15), and a job that failed and then went green on a rerun for the second time, or one
+# that failed again on its rerun, becomes a finding in the spool, so `pending` below offers it like
+# any other. A run still going, or one that cannot be read, waits for the next review. Below the
+# sleep check at the top, so asleep nothing is read or offered and every record waits. Only when a
+# rerun is waiting, so an ordinary turn starts nothing. A failure to read or write rides in the reason.
+reruns_said=""
+if [ -f "$SPOOL_LIB" ]; then
+  _rr_key="$(bash "$SPOOL_LIB" key "$proj" "$transcript" 2>/dev/null)" || _rr_key=""
+  _rr_dir="$(bash "$SPOOL_LIB" reruns-dir 2>/dev/null)" || _rr_dir=""
+  if [ -n "$_rr_key" ] && [ -n "$_rr_dir" ] && compgen -G "$_rr_dir/$_rr_key.jsonl*" >/dev/null; then
+    reruns_said="$(bash "$SPOOL_LIB" resolve-reruns "$proj" "$transcript" 2>&1 >/dev/null)" || true
+  fi
+fi
+
 seen_ledger=""
 kept_said=""
 if [ -f "$SPOOL_LIB" ]; then
@@ -379,6 +395,8 @@ if [ -n "$muted_line" ]; then reason_args+=(--extra "$muted_line"); fi
 # the held back count, and both go out: lib/review-reason.py collects --extra with action="append",
 # which test-review-reason.sh asserts with two of them.
 if [ -n "$kept_said" ]; then reason_args+=(--extra "$kept_said"); fi
+# What the hand rerun reader could not read or write (#3613), the same way.
+if [ -n "$reruns_said" ]; then reason_args+=(--extra "HAND RERUNS: $reruns_said"); fi
 # A spool no key could be made for rides the same way, with whichever review speaks next, and does not
 # make one speak: it is the same fault at every turn until the digest is back (claude-config#2639).
 if [ -n "$spool_refused" ]; then reason_args+=(--extra "$spool_refused"); fi

@@ -58,6 +58,12 @@
 #                                              last went out, beside the spool (#2296)
 #   issue-spool.sh muted-sent   <dir>          record that it went out now
 #   issue-spool.sh reach-report                which pending keys no session can open
+#   issue-spool.sh rerun <dir> <repo> <run> <job> [transcript]
+#                                              record a hand rerun of a failed check (#3613)
+#   issue-spool.sh resolve-reruns <dir> [transcript]
+#                                              read each waiting rerun's run and spool a finding
+#                                              for a repeat flake or a job that failed again
+#   issue-spool.sh reruns-dir                  where the waiting reruns and the flake history live
 #
 # `raw` and `archive` exit 0 on an empty spool. They used to exit non-zero,
 # which kills any caller running under errexit on the ordinary empty case, and
@@ -2077,6 +2083,311 @@ PY_SPLIT
   return 0
 }
 
+# HAND RERUNS OF A FAILED CHECK (claude-config#3613). A session that reruns a failed check with
+# `gh run rerun` and sees it pass merges, and nothing recorded that the check failed first, so a
+# flaky job was never counted (L293). hooks/rerun-record.sh records each hand rerun here; the end of
+# turn review resolves them once the run has finished and offers a job that has failed and then gone
+# green on a rerun for the second time, and a job that failed again on its rerun.
+#
+# Beside the pending files, never in them, because those are drained by every `clear` after a picker
+# is answered and trimmed by compaction past PENDING_MAX_RECORDS, while a rerun has to wait, through
+# any number of clears, until its run has finished, and the record of earlier flakes has to outlive
+# every session. Under `<spool root>/reruns/`:
+#   <project key>.jsonl   reruns waiting for their run's final result, keyed as the pending files
+#   flakes.jsonl          one line per job that failed and then went green on a rerun, per run,
+#                         across every project, kept with no expiry (nothing removes it yet)
+# Only the review turns them into findings, through issue_spool_append, so what it offers goes
+# through the same pending, picker and clear as every other finding.
+issue_spool_reruns_dir() { printf '%s/reruns' "$(issue_spool_root)"; }
+
+issue_spool_rerun() { # rerun <dir> <repo> <run id> <job id> [session-transcript]
+  local dir="${1:-$PWD}" repo="${2:-}" run="${3:-}" job="${4:-}" transcript="${5:-}" key file record sid
+  if [ -n "${CLAUDE_SUITE_RUN_ID:-}" ] && [ "$(issue_spool_root)" = "${HOME%/}/.claude-issue-spool" ]; then
+    echo "issue-spool: refusing to record a rerun in the real spool at $(issue_spool_root): this is running under a test suite (CLAUDE_SUITE_RUN_ID=$CLAUDE_SUITE_RUN_ID)." >&2
+    return 3
+  fi
+  case "$repo" in
+    ''|*[!A-Za-z0-9._/-]*|/*|*/) echo "issue-spool: rerun needs a repository as owner/name; got '$repo'. Nothing was recorded." >&2; return 2 ;;
+    */*) ;;
+    *) echo "issue-spool: rerun needs a repository as owner/name; got '$repo'. Nothing was recorded." >&2; return 2 ;;
+  esac
+  case "$run" in *[!0-9]*) echo "issue-spool: rerun needs a run id of digits; got '$run'. Nothing was recorded." >&2; return 2 ;; esac
+  case "$job" in *[!0-9]*) echo "issue-spool: rerun needs a job id of digits; got '$job'. Nothing was recorded." >&2; return 2 ;; esac
+  if [ -z "$run" ] && [ -z "$job" ]; then
+    echo "issue-spool: rerun needs a run id or a job id. Nothing was recorded." >&2
+    return 2
+  fi
+  key="$(issue_spool_key "$dir" "$transcript")" || return
+  sid="$(issue_spool_session_id "$transcript")"
+  record="$(python3 -c '
+import json, sys, datetime
+r = {"ts": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+     "repo": sys.argv[1], "run": sys.argv[2] or None, "job": sys.argv[3] or None, "cwd": sys.argv[4]}
+if sys.argv[5]:
+    r["session"] = sys.argv[5]
+print(json.dumps(r))' "$repo" "$run" "$job" "$dir" "$sid" 2>/dev/null)"
+  [ -n "$record" ] || { echo "issue-spool: could not build the rerun record (python3 failed). Nothing was recorded." >&2; return 1; }
+  file="$(issue_spool_reruns_dir)/$key.jsonl"
+  if ! mkdir -p "$(issue_spool_reruns_dir)" 2>/dev/null || ! printf '%s\n' "$record" >> "$file" 2>/dev/null; then
+    echo "issue-spool: could not write the rerun of $repo run ${run:-?} job ${job:-?} to $file, so this hand rerun is not recorded and will not count toward a flake." >&2
+    return 1
+  fi
+  return 0
+}
+
+# The review's half: read each waiting rerun's run from GitHub, one call a run (a rerun named only by
+# its job takes one more, once, to learn its run), inside a time budget the Stop hook's own limit
+# leaves room for. A run still going, one not yet showing the rerun's attempt, and one whose result
+# cannot be read (no answer in time, a repository this Mac's gh cannot read, output that is not the
+# jobs list) are put back to wait for the next review: never dropped, never offered. Newest first,
+# so one that can never be read does not hold up the rest.
+#
+# Claimed by RENAME before it is read, as a clear does, so a rerun recorded meanwhile lands in a new
+# file, and two reviews cannot both resolve one run. A claim whose process died is taken back first.
+issue_spool_resolve_reruns() { # resolve-reruns <dir> [session-transcript]
+  local dir="${1:-$PWD}" transcript="${2:-}" key wait claim c pid out rc failed="" line
+  if [ -n "${CLAUDE_SUITE_RUN_ID:-}" ] && [ "$(issue_spool_root)" = "${HOME%/}/.claude-issue-spool" ]; then
+    echo "issue-spool: refusing to resolve reruns in the real spool at $(issue_spool_root): this is running under a test suite (CLAUDE_SUITE_RUN_ID=$CLAUDE_SUITE_RUN_ID)." >&2
+    return 3
+  fi
+  key="$(issue_spool_key "$dir" "$transcript")" || return
+  wait="$(issue_spool_reruns_dir)/$key.jsonl"
+  for c in "$wait".resolving.*; do
+    [ -f "$c" ] || continue
+    pid="${c##*.}"
+    case "$pid" in ''|*[!0-9]*) continue ;; esac
+    kill -0 "$pid" 2>/dev/null && continue
+    cat "$c" >> "$wait" 2>/dev/null && rm -f "$c"
+  done
+  [ -s "$wait" ] || return 0
+  claim="$wait.resolving.$$"
+  if ! mv "$wait" "$claim" 2>/dev/null; then
+    [ -e "$wait" ] || return 0   # another review took it in the instant between
+    echo "issue-spool: could not move $wait aside to resolve it, so no hand rerun was read this turn; they wait for the next." >&2
+    return 1
+  fi
+  out="$(mktemp -d "${TMPDIR:-/tmp}/claude-reruns.XXXXXX")" || { cat "$claim" >> "$wait" 2>/dev/null && rm -f "$claim"; return 1; }
+  python3 - "$claim" "$(issue_spool_reruns_dir)/flakes.jsonl" "$out" <<'PY_RERUNS'
+import datetime, json, os, signal, subprocess, sys, time
+
+claim, history_path, out = sys.argv[1:4]
+BUDGET = float(os.environ.get("CLAUDE_RERUN_RESOLVE_BUDGET") or 5)
+PER_CALL = float(os.environ.get("CLAUDE_RERUN_CALL_TIMEOUT") or 4)
+GH = os.environ.get("CLAUDE_RERUN_GH") or "gh"
+FAILED = {"failure", "timed_out"}
+GREEN = {"success", "skipped", "neutral"}
+start = time.monotonic()
+
+
+def left():
+    return BUDGET - (time.monotonic() - start)
+
+
+def gh_values(args):
+    """Every JSON value gh printed, or (None, why) when it could not be read in time."""
+    t = min(PER_CALL, left())
+    if t < 0.5:
+        return None, "no time left this turn"
+    try:
+        p = subprocess.Popen([GH] + args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, start_new_session=True)
+    except OSError as e:
+        return None, "gh could not start: %s" % e
+    try:
+        so, se = p.communicate(timeout=t)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        p.communicate()
+        return None, "gh gave no answer in %.0f seconds" % t
+    if p.returncode != 0:
+        return None, "gh exited %d: %s" % (p.returncode, se.decode("utf-8", "replace").strip()[:200])
+    text, vals, i, dec = so.decode("utf-8", "replace"), [], 0, json.JSONDecoder()
+    while True:
+        while i < len(text) and text[i].isspace():
+            i += 1
+        if i >= len(text):
+            break
+        try:
+            v, i = dec.raw_decode(text, i)
+        except ValueError:
+            return None, "gh printed something that is not JSON"
+        vals.append(v)
+    return vals, None
+
+
+def host_args(repo):
+    parts = repo.split("/")
+    return (["--hostname", parts[0]], "/".join(parts[1:])) if len(parts) == 3 else ([], repo)
+
+
+recs, bad = [], 0
+for line in open(claim, encoding="utf-8", errors="replace"):
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        r = json.loads(line)
+    except ValueError:
+        bad += 1
+        continue
+    if isinstance(r, dict) and r.get("repo") and (r.get("run") or r.get("job")):
+        recs.append(r)
+    else:
+        bad += 1
+if bad:
+    print("issue-spool: %d line(s) in the waiting reruns were not rerun records and were dropped." % bad,
+          file=sys.stderr)
+
+history = []
+try:
+    for line in open(history_path, encoding="utf-8", errors="replace"):
+        try:
+            h = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(h, dict):
+            history.append(h)
+except FileNotFoundError:
+    pass
+seen = {(h.get("repo"), str(h.get("run")), h.get("workflow"), h.get("job")) for h in history}
+
+# One group per run (or per job, while its run is unknown), newest first.
+groups = {}
+for r in recs:
+    k = (r["repo"], ("run", str(r["run"])) if r.get("run") else ("job", str(r["job"])))
+    groups.setdefault(k, []).append(r)
+order = sorted(groups, key=lambda k: max(x.get("ts") or "" for x in groups[k]), reverse=True)
+
+keep, resolved, findings, new_hist = [], [], [], []
+now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def put_back(rs, why):
+    for r in rs:
+        r["tries"] = r.get("tries", 0) + 1
+        r["last_unread"] = why
+        keep.append(r)
+
+
+def finding(first, text):
+    rec = {"ts": now, "status": "found", "agent": "rerun record", "cwd": first.get("cwd") or "",
+           "findings": [text], "rerun": {"repo": first["repo"], "run": first.get("run")}}
+    if first.get("session"):
+        rec["session"] = first["session"]
+    findings.append(rec)
+
+
+def ordinal(n):
+    return "%d%s" % (n, "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th"))
+
+
+for k in order:
+    rs = groups[k]
+    repo, (kind, ident) = k
+    hargs, path_repo = host_args(repo)
+    if kind == "job":
+        vals, why = gh_values(["api"] + hargs + ["repos/%s/actions/jobs/%s" % (path_repo, ident)])
+        run = vals[0].get("run_id") if vals and isinstance(vals[0], dict) else None
+        if not run:
+            put_back(rs, why or "the job's run could not be read")
+            continue
+        for r in rs:
+            r["run"] = str(run)
+        ident = str(run)
+    vals, why = gh_values(["api"] + hargs + ["--paginate",
+                          "repos/%s/actions/runs/%s/jobs?filter=all&per_page=100" % (path_repo, ident),
+                          "--jq", ".jobs[]"])
+    jobs = [j for j in (vals or []) if isinstance(j, dict) and j.get("name") is not None]
+    if not jobs:
+        put_back(rs, why or "the run listed no jobs")
+        continue
+    attempts = [int(j.get("run_attempt") or 1) for j in jobs]
+    if max(attempts) < 2:
+        put_back(rs, "the rerun's attempt has not appeared yet")
+        continue
+    by_job = {}
+    for j in jobs:
+        by_job.setdefault((j.get("workflow_name") or "", j["name"]), []).append(j)
+    finals = {}
+    for jk, entries in by_job.items():
+        entries.sort(key=lambda j: int(j.get("run_attempt") or 1))
+        finals[jk] = entries
+    if any(e[-1].get("status") != "completed" for e in finals.values()):
+        put_back(rs, "the run is still in progress")
+        continue
+    green = all(e[-1].get("conclusion") in GREEN for e in finals.values())
+    first = rs[0]
+    for (wf, name), entries in sorted(finals.items()):
+        last = entries[-1]
+        earlier_failed = any(e.get("conclusion") in FAILED and int(e.get("run_attempt") or 1) < int(last.get("run_attempt") or 1)
+                             for e in entries[:-1])
+        if not earlier_failed:
+            continue
+        label = "'%s'%s in %s" % (name, (" (workflow '%s')" % wf) if wf else "", repo)
+        if last.get("conclusion") in FAILED:
+            finding(first, "Job %s failed again on its hand rerun (run %s, attempt %s). Rerunning it a third time "
+                    "will not help: look for the cause, or file an issue for it." % (label, ident, last.get("run_attempt")))
+        elif green and last.get("conclusion") == "success":
+            ev = (repo, ident, wf, name)
+            if ev in seen:
+                continue
+            seen.add(ev)
+            new_hist.append({"ts": now, "repo": repo, "run": ident, "workflow": wf, "job": name,
+                             "sha": last.get("head_sha")})
+            runs = sorted({str(h.get("run")) for h in history + new_hist
+                           if h.get("repo") == repo and h.get("workflow") == wf and h.get("job") == name})
+            if len(runs) >= 2:
+                finding(first, "Job %s failed and then passed on a hand rerun for the %s time (runs %s). A repeat "
+                        "flake: add this run to that job's flake issue, or open one." % (label, ordinal(len(runs)), ", ".join(runs)))
+    resolved.extend(rs)
+
+
+def dump(name, rows):
+    with open(os.path.join(out, name), "w", encoding="utf-8") as fh:
+        for r in rows:
+            fh.write(json.dumps(r) + "\n")
+
+
+dump("keep.jsonl", keep)
+dump("resolved.jsonl", resolved)
+dump("findings.jsonl", findings)
+dump("history.jsonl", new_hist)
+PY_RERUNS
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    cat "$claim" >> "$wait" 2>/dev/null && rm -f "$claim"
+    rm -rf "$out"
+    echo "issue-spool: reading the waiting hand reruns failed (python3 exit $rc); they wait for the next review." >&2
+    return 1
+  fi
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    issue_spool_append "$dir" "$line" "$transcript" || { failed=yes; break; }
+  done < "$out/findings.jsonl"
+  if [ -n "$failed" ]; then
+    # Nothing is counted as seen: the resolved reruns go back to wait, so the next review offers them.
+    cat "$out/resolved.jsonl" "$out/keep.jsonl" >> "$wait" 2>/dev/null && rm -f "$claim"
+    rm -rf "$out"
+    echo "issue-spool: a finding from a resolved hand rerun could not be written to the spool, so the reruns wait for the next review." >&2
+    return 1
+  fi
+  if [ -s "$out/history.jsonl" ] && ! cat "$out/history.jsonl" >> "$(issue_spool_reruns_dir)/flakes.jsonl" 2>/dev/null; then
+    echo "issue-spool: the flake history at $(issue_spool_reruns_dir)/flakes.jsonl could not be written, so the flakes resolved this turn will not count toward a later one." >&2
+    failed=yes
+  fi
+  if [ -s "$out/keep.jsonl" ] && ! cat "$out/keep.jsonl" >> "$wait" 2>/dev/null; then
+    echo "issue-spool: the hand reruns still waiting could not be put back in $wait; they are left in $claim." >&2
+    rm -rf "$out"
+    return 1
+  fi
+  rm -f "$claim"
+  rm -rf "$out"
+  [ -z "$failed" ]
+}
+
 # Direct invocation dispatch. Sourcing the file defines the functions and runs
 # nothing, so the hooks can source it or shell out to it.
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
@@ -2091,6 +2402,9 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     append)       issue_spool_append "${1:-$PWD}" "${2:-}" "${3:-}" ;;
     note)         issue_spool_note "${1:-$PWD}" "${2:-}" "${3:-}" "${4:-}" ;;
     mark-ended)   issue_spool_mark_ended "${1:-}" ;;
+    rerun)        issue_spool_rerun "${1:-$PWD}" "${2:-}" "${3:-}" "${4:-}" "${5:-}" ;;
+    resolve-reruns) issue_spool_resolve_reruns "${1:-$PWD}" "${2:-}" ;;
+    reruns-dir)   issue_spool_reruns_dir ;;
     raw)          f="$(issue_spool_collect "${1:-$PWD}" "${2:-}")" || exit; [ -s "$f" ] && cat "$f"; issue_spool_collect_done "$f"; exit 0 ;;
     pending)      issue_spool_pending "${1:-$PWD}" "${2:-}" "${3:-}" "${4:-}" ;;
     has-findings) issue_spool_has_findings "${1:-$PWD}" "${2:-}" "${3:-}" ;;
