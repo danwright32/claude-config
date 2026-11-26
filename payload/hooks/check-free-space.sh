@@ -65,6 +65,9 @@
 #   FREE_SPACE_PERSIST_MIN    only a fall that has lasted this long is projected (default 30, #1754)
 #   FREE_SPACE_STOPPED_MIN    a fast fall stands down once this many minutes on their own no longer
 #                             reach zero within the horizon (default FREE_SPACE_PERSIST_MIN, 0 off, #3608)
+#   FREE_SPACE_GIVEBACK_MIN   a rise that free space falls back below within this many minutes is no
+#                             recovery, so the trend runs on across it (default FREE_SPACE_PERSIST_MIN,
+#                             0 off, #3636)
 #   FREE_SPACE_STATE_DIR      where the readings are kept
 #   FREE_SPACE_WARNINGS_DIR   where each warning's copy of its readings is kept (claude-config#3157;
 #                             default beside the readings when FREE_SPACE_STATE_DIR moves them, else
@@ -125,6 +128,7 @@ MIN_SPAN_MIN="${FREE_SPACE_MIN_SPAN_MIN:-10}"
 WINDOW_HOURS="${FREE_SPACE_WINDOW_HOURS:-6}"
 PERSIST_MIN="${FREE_SPACE_PERSIST_MIN:-30}"
 STOPPED_MIN="${FREE_SPACE_STOPPED_MIN:-$PERSIST_MIN}"
+GIVEBACK_MIN="${FREE_SPACE_GIVEBACK_MIN:-$PERSIST_MIN}"
 SWAP_SHARE_PCT="${FREE_SPACE_SWAP_SHARE_PCT:-2}"
 SWAP_FULL_PCT="${FREE_SPACE_SWAP_FULL_PCT:-90}"
 TOP_SECONDS="${FREE_SPACE_TOP_SECONDS:-2}"
@@ -149,7 +153,8 @@ is_number(){ case "${1:-}" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
 # because a message that does not say which of the four is wrong cannot be acted on (L11, L80).
 for _setting in FREE_SPACE_FLOOR_GB:"$FLOOR_GB" FREE_SPACE_HORIZON_HOURS:"$HORIZON_HOURS" \
                 FREE_SPACE_MIN_SPAN_MIN:"$MIN_SPAN_MIN" FREE_SPACE_WINDOW_HOURS:"$WINDOW_HOURS" FREE_SPACE_RECOVERY_GB:"$RECOVERY_GB" \
-                FREE_SPACE_PERSIST_MIN:"$PERSIST_MIN" FREE_SPACE_STOPPED_MIN:"$STOPPED_MIN" FREE_SPACE_SWAP_SHARE_PCT:"$SWAP_SHARE_PCT" \
+                FREE_SPACE_PERSIST_MIN:"$PERSIST_MIN" FREE_SPACE_STOPPED_MIN:"$STOPPED_MIN" FREE_SPACE_GIVEBACK_MIN:"$GIVEBACK_MIN" \
+                FREE_SPACE_SWAP_SHARE_PCT:"$SWAP_SHARE_PCT" \
                 FREE_SPACE_SWAP_FULL_PCT:"$SWAP_FULL_PCT" FREE_SPACE_TOP_SECONDS:"$TOP_SECONDS" \
                 FREE_SPACE_WARNING_KEEP_DAYS:"$KEEP_DAYS"; do
   is_number "${_setting#*:}" || cannot "${_setting%%:*} is set to '${_setting#*:}', which is not a number"
@@ -378,7 +383,7 @@ EOF
          echo "# exit $rc"
          echo "# volume: $VOLUME"
          echo "# at: $now${at:+ ($at)}"
-         echo "# settings: FREE_SPACE_FLOOR_GB=$FLOOR_GB FREE_SPACE_HORIZON_HOURS=$HORIZON_HOURS FREE_SPACE_MIN_SPAN_MIN=$MIN_SPAN_MIN FREE_SPACE_WINDOW_HOURS=$WINDOW_HOURS FREE_SPACE_RECOVERY_GB=$RECOVERY_GB FREE_SPACE_PERSIST_MIN=$PERSIST_MIN FREE_SPACE_STOPPED_MIN=$STOPPED_MIN"
+         echo "# settings: FREE_SPACE_FLOOR_GB=$FLOOR_GB FREE_SPACE_HORIZON_HOURS=$HORIZON_HOURS FREE_SPACE_MIN_SPAN_MIN=$MIN_SPAN_MIN FREE_SPACE_WINDOW_HOURS=$WINDOW_HOURS FREE_SPACE_RECOVERY_GB=$RECOVERY_GB FREE_SPACE_GIVEBACK_MIN=$GIVEBACK_MIN FREE_SPACE_PERSIST_MIN=$PERSIST_MIN FREE_SPACE_STOPPED_MIN=$STOPPED_MIN"
          echo "# To replay it, run the check once per line below, oldest first, with FREE_SPACE_NOW and FREE_SPACE_BYTES set to that line's two numbers, the settings above and a FREE_SPACE_STATE_DIR of its own."
          printf '%s\n' "$series"
        } 2>/dev/null > "$tmp" && mv -f "$tmp" "$name" 2>/dev/null; then
@@ -432,10 +437,54 @@ seg_lines=""   # every reading of the current segment, oldest first, for the per
 _prev_b=""
 # Kept whole, because a warning's copy of its readings is this same series (claude-config#3157).
 series="$(printf '%s%s %s\n' "$kept" "$now" "$free_bytes" | sort -n -k1,1)"
+
+# A GIVE BACK THAT IS TAKEN AGAIN IS NOT A RECOVERY (claude-config#3636). The rule above restarted
+# the trend at every rise of more than FREE_SPACE_RECOVERY_GB, however briefly it lasted. Measured on
+# 2026-11-25 on Daniels-MacBook-Pro-2 (the fixture check-free-space-fixtures/2026-11-25-drop-then-flat
+# .readings): free space fell from 67.1 GB at 10:25 AM ET to 55.7 GB at 11:10, about 15 GB an hour,
+# which reaches zero in under four hours, and gave back 1 to 3 GB three times on the way (60.4 to
+# 63.2 GB at 10:58, 58.3 to 59.5 GB at 11:05, 55.7 to 58.0 GB at 11:15). Each rise restarted the
+# trend, no stretch lasted the 30 minutes a fall needs before it is projected, and the check exited 0
+# at every reading from 10:58 on.
+#
+# So a rise is a recovery only while it is not taken back: if, within FREE_SPACE_GIVEBACK_MIN minutes
+# of it (default the persistence window, 30), free space falls to the level it rose FROM or lower,
+# the give back did not last, and the trend runs on across it. The 10:58 and 11:05 rises were taken
+# back within minutes and no longer restart it; the 11:15 one held, and still does.
+#
+# WHY "TO THE LEVEL IT ROSE FROM", NOT "TO WITHIN FREE_SPACE_RECOVERY_GB OF IT". Both were replayed
+# on 2026-11-26, with every warning kept on Daniels-MacBook-Pro-2 (nine files, 696 readings) and the
+# fixture above (97). The margin also counted as taken back a 1.1 GB rise at 2:13 AM ET on
+# 2026-11-22 that held 0.6 to 1.1 GB above where it rose from: the trend then ran back to midnight,
+# and seven readings between 3:25 and 3:35 AM, 24.6 to 25.8 GB free and falling about 9 GB an hour,
+# went from exit 4 to 0 (with one more on 2026-11-21). Falling back to the level it rose from turned
+# no warning silent, and warned at five readings of the 2026-11-25 fall, 11:01 to 11:10 AM.
+#
+# A RISE NOT YET TAKEN BACK IS STILL A RECOVERY, at the reading it happens and after. Treating a
+# rise as no recovery until it had held for the whole window warned on the 2026-11-25 fall from
+# 10:58, but went on warning after the fall had stopped at 11:15 (to 11:29), warned at 17 readings
+# on 2026-11-18 and 11-19 where the old rule was silent, free space rising 27.5 to 32.8 GB, and broke the
+# suite's case that --report after a recovery names the recovery.
+# What this costs (L93): a fall broken by give backs is reported only once a give back has been
+# taken back, at the first reading at or under the level it rose from: on 2026-11-25 the first
+# warning came at 11:01:51 AM, 4 minutes after the 10:58 give back. 0 turns this off, which is the
+# rule of #436 as it was: every rise restarts the trend.
+# The undone list is every rise's epoch that was taken back, between spaces, for the loop below.
+undone=" "
+if [ "$GIVEBACK_MIN" -gt 0 ]; then
+  undone=" $(printf '%s\n' "$series" | awk -v r="$((RECOVERY_GB * GIB))" -v h="$((GIVEBACK_MIN * 60))" '
+    $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ { n++; t[n] = $1 + 0; b[n] = $2 + 0 }
+    END {
+      for (i = 2; i <= n; i++) {
+        if (b[i] - b[i - 1] <= r) continue
+        for (j = i + 1; j <= n && t[j] <= t[i] + h; j++) if (b[j] <= b[i - 1]) { printf "%d ", t[i]; break }
+      }
+    }') "
+fi
 while IFS=' ' read -r _t _b; do
   is_number "${_t:-}" || continue
   is_number "${_b:-}" || continue
-  if [ -n "$_prev_b" ] && [ $((_b - _prev_b)) -gt $((RECOVERY_GB * GIB)) ]; then
+  if [ -n "$_prev_b" ] && [ $((_b - _prev_b)) -gt $((RECOVERY_GB * GIB)) ] && [ "${undone#* $_t }" = "$undone" ]; then
     recovered=1; seg_t="$_t"; seg_b="$_b"; seg_n=1; seg_lines=""
   elif [ -z "$seg_t" ]; then
     seg_t="$_t"; seg_b="$_b"; seg_n=1
