@@ -43,8 +43,7 @@ test('each kind false in turn holds by its own kind and words', async () => {
   ]
   for (const [change, kind, words] of cases) {
     const holds = inflightHolds({ ...CLEAN, ...change }, INFLIGHT_KINDS)
-    expect(holds.map(h => h.kind)).toEqual([kind as never, ...(holds.length > 1 ? holds.slice(1).map(h => h.kind) : [])])
-    expect(holds.length).toBeGreaterThan(0)
+    expect({ kind, kinds: holds.map(h => h.kind) }).toEqual({ kind, kinds: [kind as never] })
     expect(holds[0]?.text).toMatch(words)
     expect(holds[0]?.unread).toBeUndefined()
   }
@@ -73,6 +72,7 @@ test('a fact not handed over, or that could not be read, is an unread hold of it
   const broken: [Partial<InflightFacts>, RegExp][] = [
     [{ agents: { unread: 'the list threw' } }, /agents could not be listed \(the list threw\)/],
     [{ agents: { value: 'nope' } }, /not a list/],
+    [{ agents: { value: [null, { id: 'a1', status: 'running' }] } }, /an entry of the agent list is not an agent/],
     [{ tasks: { value: undefined } }, /background work in flight .* could not be read \(it is missing or is not a list\)/],
     [{ crons: { value: { c1: 1 } } }, /scheduled wake ups .* could not be read/],
     [{ jobs: { unread: 'job watcher not loaded' } }, /job watcher's list of background jobs could not be read \(job watcher not loaded\)/],

@@ -19,8 +19,9 @@ import { CLOSE_HEADING, CLOSE_TITLE, NO_BOX, PROCESS_LIST, PROCESS_LOOK, PROCESS
 //    in a headless session: a verdict of not met is the Stop chain's own block, and the record of a
 //    verdict of met lands AFTER the Stop chain has returned and before turn.complete. So
 //    turn.complete finds it, read through mod-kit's one goal reader, and sends the session one
-//    prompt to show the box, once per met goal. No classic hook is used: Claude Code's built-in
-//    security default sends every classic event past the tier mods load in (#875, #876).
+//    prompt to show the box, once per met goal. This path uses no classic hook; the close this
+//    session card (#3770, below) records the stop's lists at classic.Stop, which runs only while
+//    the managed settings file keeps Claude Code's security default out of first place (#875, #876).
 // 2. No /goal: the session's own judgement that the work Dan asked for is finished. A judgement can
 //    only be the model's, so it calls this mod's tool (a rule in a prompt alone is a hope, L27), and
 //    the tool enforces what can be read: no box while an agent the session started is running, a
@@ -447,7 +448,8 @@ const closeCheck = async ($: EngineInterface, seq: number): Promise<void> => {
     if (r.isShown === false) return writeReasons($, false, [`the card could not be shown (${r.reason ?? 'no reason given'})`])
     await writeReasons($, true, [])
   } catch (err) {
-    await $.state.set(closedRef, { prompts, pinned: false })
+    // Not pinned, so the claim is let go and the next quiet end under this request tries again.
+    await $.state.set(closedRef, { prompts: held.value?.prompts ?? -1, pinned: false })
     await writeReasons($, false, [`the card could not be pinned (${errorText(err, MOD)})`])
   }
 }

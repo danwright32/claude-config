@@ -152,6 +152,7 @@ const judgeAgents: Judge = value => {
   if (!Array.isArray(value)) return { unread: 'the agent list is not a list' }
   const out: InflightHold[] = []
   for (const raw of value) {
+    if (!isObj(raw) || typeof raw.status !== 'string') return { unread: 'an entry of the agent list is not an agent' }
     const a = raw as InflightAgent
     const mine = a.spawnedBy === undefined
     if (mine && ACTIVE.has(a.status)) out.push({ kind: 'agent', text: `the agent "${agentName(a)}" is still ${a.status}` })

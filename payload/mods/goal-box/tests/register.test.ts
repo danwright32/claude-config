@@ -1161,7 +1161,7 @@ test('a process carrying this session\'s id withholds the card; a look that fail
   expect(w.pinned).toHaveLength(1)
 })
 
-test('a look that runs out of time, or answers what is not a list, neither withholds nor pins (#3770)', withAll, async ($, on) => {
+test('a look that answers garbled output withholds nothing, so the other readings decide and the card is pinned (#3770)', withAll, async ($, on) => {
   const { w, clock } = world(on, { procs: { exitCode: 0, stdout: 'garbled' } })
   await start($)
   await says($, 'Add the goal box')
