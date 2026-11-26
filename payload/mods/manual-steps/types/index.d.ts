@@ -40,6 +40,13 @@ export type StepsStep = {
    */
   isAdded?: boolean
   /**
+   * For this session alone (#3770): never kept in the project's store, so it is not carried into the
+   * next session, where the session it is about is gone.
+   */
+  isSessionOnly?: boolean
+  /** Drawn with no Done (#3770): the step is done by an act that ends the session, so a press could only start a turn. */
+  isNoDone?: boolean
+  /**
    * Done was pressed and "step N done" sent; Claude has not yet said whether it took. Never kept
    * in the store: the turn that would answer it does not reach another session.
    */
@@ -74,7 +81,18 @@ export type StepsCard = {
 }
 
 /** A step another mod hands the card (#1107): the steps tool's own fields, a link or a location required. */
-export type ManualStepsAdded = { title: string; url?: string; location?: string; clicks?: string | string[]; value?: string; needs?: string }
+export type ManualStepsAdded = {
+  title: string
+  url?: string
+  location?: string
+  clicks?: string | string[]
+  value?: string
+  needs?: string
+  /** For this session alone, never kept for the next (#3770). */
+  sessionOnly?: boolean
+  /** Drawn with no Done (#3770). */
+  noDone?: boolean
+}
 
 /**
  * This mod's noun, for other mods (#1107). Each method is answered by this mod's own hook on its
@@ -91,6 +109,11 @@ export type ManualSteps = {
   add: (input: { heading: string; step: ManualStepsAdded }) => Promise<{ isShown: boolean; reason?: string }>
   /** Finishes the unfinished step titled `title` as checked, whichever step is open; false when there is none. */
   finish: (input: { title: string }) => Promise<{ isFinished: boolean }>
+  /**
+   * Takes the unfinished step titled `title` off as withdrawn (#3770), drawn "taken off, not done",
+   * never as done; the card goes when nothing is left on it. False when there is none.
+   */
+  withdraw: (input: { title: string }) => Promise<{ isWithdrawn: boolean }>
 }
 
 /**
