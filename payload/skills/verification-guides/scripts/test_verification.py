@@ -531,6 +531,16 @@ class GuideStaleTests(unittest.TestCase):
         self.assertIn("src/sync/send.ts", r.stderr)
         self.assertEqual(json.loads(r.stdout)["changed"], ["src/sync/send.ts"])
 
+    def test_a_file_moved_out_of_the_area_makes_it_stale(self):
+        """git reads a move as a rename by default and names only the new path, which the area does
+        not own; the old path, which it does, must still be listed (lessons review of 3806771)."""
+        os.makedirs(os.path.join(self.repo, "lib"), exist_ok=True)
+        self.git("mv", "src/sync/send.ts", "lib/send.ts")
+        self.git("commit", "-q", "-m", "moved out")
+        r = self.stale()
+        self.assertEqual(r.returncode, 9, r.stderr)
+        self.assertEqual(json.loads(r.stdout)["changed"], ["src/sync/send.ts"])
+
     def test_never_checked_is_stale(self):
         self.write(".claude/verification/guides/sync-retries.md", MODEL_GUIDE.replace(SHA, "never"))
         self.git("commit", "-q", "-a", "-m", "reset")

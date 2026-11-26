@@ -105,6 +105,23 @@ class ModelToolsCheckTests(unittest.TestCase):
         r, out = self.check()
         self.assert_cannot_run(r, out, "model-tools-unverified", 4)
 
+    def test_an_unreadable_checksum_record_is_could_not_run_not_a_crash(self):
+        self.java()
+        self.put_jar(recorded=False)
+        os.makedirs(self.jar + ".sha256")
+        r, out = self.check()
+        self.assert_cannot_run(r, out, "model-tools-unverified", 4)
+        self.assertNotIn("Traceback", r.stderr)
+
+    def test_a_checksum_record_that_is_not_text_is_could_not_run_not_a_crash(self):
+        self.java()
+        self.put_jar(recorded=False)
+        with open(self.jar + ".sha256", "wb") as f:
+            f.write(b"\xff\xfe\x00 not text")
+        r, out = self.check()
+        self.assert_cannot_run(r, out, "model-tools-unverified", 4)
+        self.assertNotIn("Traceback", r.stderr)
+
     def test_a_jar_that_differs_from_its_checksum_is_could_not_run(self):
         self.java()
         self.put_jar(recorded="0" * 64)

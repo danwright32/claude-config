@@ -76,7 +76,6 @@ GUIDE_SECTIONS = ("Roles", "Reach", "State setup", "Checks", "Known traps")
 MODEL_GUIDE_SECTIONS = ("Rules", "Not covered", "Model", "Last checked", "Checks", "Known traps")
 BY_HAND_ONLY = tuple(s for s in GUIDE_SECTIONS if s not in MODEL_GUIDE_SECTIONS)
 MODEL_ONLY = tuple(s for s in MODEL_GUIDE_SECTIONS if s not in GUIDE_SECTIONS)
-GUIDE_KINDS = ("by-hand", "model-check")
 CHECKS_MIN, CHECKS_MAX = 3, 6
 NOTE_MAX = 300
 
@@ -697,13 +696,17 @@ def guide_stale(areas_path, area_name, repo):
     commit = guide["last_checked"]["commit"]
     if commit is None:
         fail("guide-stale", "%s has never been checked (Last checked says never): run its model check" % area["guide"])
-    known = subprocess.run(["git", "-C", repo, "cat-file", "-e", commit + "^{commit}"],
-                           capture_output=True, text=True, timeout=60)
-    if known.returncode != 0:
-        fail("commit-missing", "%s was last checked against %s, which this checkout does not hold: fetch it,"
-             " or run the model check again" % (area["guide"], commit))
-    diff = subprocess.run(["git", "-C", repo, "diff", "--name-only", "-z", commit, "HEAD", "--"],
-                          capture_output=True, timeout=120)
+    try:
+        known = subprocess.run(["git", "-C", repo, "cat-file", "-e", commit + "^{commit}"],
+                               capture_output=True, text=True, timeout=60)
+        if known.returncode != 0:
+            fail("commit-missing", "%s was last checked against %s, which this checkout does not hold: fetch it,"
+                 " or run the model check again" % (area["guide"], commit))
+        # --no-renames: a file moved out of the area is listed by its old path, which the area owns.
+        diff = subprocess.run(["git", "-C", repo, "diff", "--no-renames", "--name-only", "-z", commit, "HEAD", "--"],
+                              capture_output=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        fail("git-failed", "git could not be run in %s to compare against %s: %s" % (repo, commit[:7], e))
     if diff.returncode != 0:
         fail("git-failed", "git diff %s HEAD failed in %s: %s"
              % (commit[:7], repo, first_line(diff.stderr.decode("utf-8", "replace"))))

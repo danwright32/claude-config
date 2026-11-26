@@ -21,8 +21,8 @@ prints {"ready": false, "problems": [...]} and one `verification: <kind>: the mo
 run: ...` line per problem on stderr, every problem at once:
 
   3  model-tools-missing     no java, no jar, or no recorded checksum
-  4  model-tools-broken      a java that does not start
-     model-tools-unverified  a checksum record that is not 64 hex characters
+  4  model-tools-broken      a java that does not start, or a jar that cannot be read
+     model-tools-unverified  a checksum record that cannot be read or is not 64 hex characters
      model-tools-mismatch    a jar whose bytes differ from its recorded checksum
   2  usage
 
@@ -78,23 +78,28 @@ def check_tools():
         problems.append(_problem("model-tools-missing", "%s is not there: the TLA+ tools jar is needed" % jar))
     else:
         record = jar + ".sha256"
+        expected = None
         try:
-            with open(record) as f:
+            with open(record, encoding="ascii", errors="strict") as f:
                 expected = f.read().strip().lower()
         except FileNotFoundError:
-            expected = None
             problems.append(_problem("model-tools-missing", "no published checksum is recorded at %s, so the jar"
                                      " cannot be trusted" % record))
+        except (OSError, UnicodeDecodeError) as e:
+            problems.append(_problem("model-tools-unverified", "%s could not be read as a checksum: %s" % (record, e)))
         if expected is not None:
             if not SHA256_RE.match(expected):
                 problems.append(_problem("model-tools-unverified", "%s does not hold a SHA-256 (64 hex characters)" % record))
             else:
                 h = hashlib.sha256()
-                with open(jar, "rb") as f:
-                    for chunk in iter(lambda: f.read(1 << 20), b""):
-                        h.update(chunk)
-                out["sha256"] = h.hexdigest()
-                if out["sha256"] != expected:
+                try:
+                    with open(jar, "rb") as f:
+                        for chunk in iter(lambda: f.read(1 << 20), b""):
+                            h.update(chunk)
+                    out["sha256"] = h.hexdigest()
+                except OSError as e:
+                    problems.append(_problem("model-tools-broken", "%s could not be read: %s" % (jar, e)))
+                if "sha256" in out and out["sha256"] != expected:
                     problems.append(_problem("model-tools-mismatch", "%s has SHA-256 %s, not the published %s"
                                              % (jar, out["sha256"], expected)))
     return out, problems
