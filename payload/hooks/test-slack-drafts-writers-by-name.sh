@@ -9,7 +9,7 @@
 # and 2 refused, the reason on stderr.
 #
 # Nothing a case names is ever run by a shell: the gate only reads. The programs this suite runs
-# itself are this Mac's own tar, zip, gzip and git, by their bare names, to make the fixtures. The
+# itself are this Mac's own tar, zip and git, by their bare names, to make the fixtures. The
 # fixtures name Slack's public API address and hold no token, webhook address or channel.
 #
 # Every command below marked NEW was ALLOWED on this change's base (6c4cee7247, 2026-11-26): the

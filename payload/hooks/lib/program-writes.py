@@ -36,6 +36,12 @@ followed: `python3 -c "open('run.sh','w')..." && bash run.sh`, `sed -i ... run.s
     only Claude Code's settings (CLAUDE_MCP_SETTINGS, #2865), the files handed to a
     script on disk (whose writes the gate leaves alone, as it does a shell script's), or a sed or
     awk program's input files unless it edits them in place.
+  * All of the above is what the SYSTEM's program of that name writes, so it is believed only where
+    the program the shell would run is that one for certain (named_certain, claude-config#3440).
+    Where it is not, by a path outside the system's folders or with PATH named in the command, the
+    program is read as any other on top of what its name says: every file it names may be
+    written, NON_WRITERS and GIT_READS included (`./chmod +x run.sh`), and what it unpacks, checks
+    out, edits or builds holds something the gate could not read (note_program).
 
 A file noted here is "maybe" written, so a refusal says it may be written, never that it was (L11).
 Only in text this call wrote itself: a script on disk is read by the gate before it runs, and its

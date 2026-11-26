@@ -549,7 +549,8 @@ def make(unknown_dir, system_bin):
             as worked out and name its last part, is for certain the system's own of that name
             (module docstring, "The program"). The one judgement of that for the whole gate
             (claude-config#3440): every reading of what a program prints, copies or writes by its
-            name asks it, here (exact_output, believed, copy_believed), so the forms it takes and
+            name asks it, here (exact_output, believed, copy_believed) and in
+            lib/program-writes.py (named_certain, for note_program), so the forms it takes and
             the forms it leaves have one home. By a path, only in a folder the gate takes for the
             system's. By its bare name, only where nothing says the shell may find another: the
             session's PATH, PATH named in a text that runs the command, a word in front that runs
@@ -560,8 +561,9 @@ def make(unknown_dir, system_bin):
             all, so for those only the function and the alias are asked.
 
             scripts False leaves out one thing: PATH named in the text of a script on DISK. It
-            is passed for the readings of printf, echo, cat, tee and the copiers, and only for
-            them. 160 of this repository's 315 suites name PATH somewhere, most of them make a
+            is passed for the readings of printf, echo, cat, tee and the copiers, and for the
+            programs lib/program-writes.py reads by name (named_certain), which marks no file
+            in a script on disk, and only for them. 160 of this repository's 315 suites name PATH somewhere, most of them make a
             file with cat or cp and then run it, and with that text counted the gate refused the
             run of its own suite, of tests/test-mods.sh and of test-scanners-before-push.sh (8
             cases of test-slack-drafts-only-gate.sh, 2026-11-22). A script on disk is read by the
