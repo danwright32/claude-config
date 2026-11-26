@@ -411,7 +411,8 @@ def status_reads(mod, scope, name, kind, asks=False):
 # outlives the function that started it, held on an attribute of self, is followed through every
 # method of its class: directly, through a local taken from the attribute (`proc = self.x`, or
 # `proc, self.x = self.x, None`), and into a method or a top level function of the same file it is
-# handed to. In the method that starts it only a read that waits for the end counts. A local process
+# handed to. In the method that starts it only a read that waits for the end counts, and it settles the
+# process alone only when every path out of that method waits (#3663). A local process
 # whose status is read only while it runs, and which is used again after that read, has had only its
 # start checked. A hand off the check cannot follow is said (U1), never passed in silence.
 ASKS = ("wait", "poll", "communicate")

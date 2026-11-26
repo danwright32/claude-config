@@ -177,7 +177,8 @@ rm -f "$S/helper.py"
 # A process held on an attribute outlives the method that started it, so a poll() made right after
 # it starts says nothing about how it ended. The check follows the attribute through every method of
 # the class (directly, through a local taken from it, and into a method or function of the same file
-# it is handed to), and a read in the starting method counts only when it waits for the end. A local
+# it is handed to), and a read in the starting method counts only when it waits for the end, on every
+# path out of that method since #3663 (the blind.py block below). A local
 # process checked only by poll() and then used again has had only its start checked. Where the
 # process is handed to something the check cannot follow, it says so (U1) rather than passing quietly.
 FILE="fixture/monitor.py"
