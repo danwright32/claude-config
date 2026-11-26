@@ -1459,25 +1459,29 @@ def crude_inner(text):
 
 def crude_commands(s, cwd=""):
     """The reading used when commands() cannot be trusted: a cut at every separator, quotes and all,
-    and before each piece of it the commands that may be written inside that piece (crude_inner).
+    and after the pieces of that cut the commands that may be written inside one (crude_inner).
 
     It can only see MORE commands than are there, which is the direction a gate that must not miss a
     push needs (L42), and it keeps the cds in order, so the last one before a push still governs it.
-    The pieces are the ones it always gave, each with the text and the directory it always had: the
-    commands found inside one are added in that piece's directory, and a cd among them moves
-    nothing, so no caller is handed less, or anything in another place, than before
-    (claude-config#3473). A substitution's commands come before the command that holds it, as
-    commands() gives them.
+    The pieces are the ones it always gave, each with the text and the directory it always had, and
+    they come first, in the order they always had: a caller that reads the records in order and
+    stops at the first one that settles its question reaches every piece it reached before, and
+    reaches a command found inside one only where the pieces settled nothing. Put before the piece
+    that holds them, as commands() gives a substitution's, they would be the first command of a
+    text for a caller that asks how a text begins (lib/unknown-program.py's holds_command), and
+    could turn its answer either way. Each is given in its piece's directory, and a cd among them
+    moves nothing, so no caller is handed less, or anything in another place, than before
+    (claude-config#3473).
     """
-    out, old = [], None
+    out, found, old = [], [], None
     for text in re.split(r"&&|\|\||;|\||\n", s):
         if text.strip():
-            out.extend((cwd, inner) for inner in crude_inner(text))
+            found.extend((cwd, inner) for inner in crude_inner(text))
             out.append((cwd, text))
             target = cd_target(text)
             if target is not None:
                 cwd, old = moved(cwd, old, target)
-    return out
+    return out + found
 
 
 def alone(text):

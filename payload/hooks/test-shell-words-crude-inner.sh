@@ -13,7 +13,8 @@
 # What this suite holds (the pull request's "Must always be true"):
 #   R1  a command inside any of those is handed on as a command of its own, with its own words;
 #   R2  every record the crude cut gave before it still gives, same text, same directory, same
-#       order, so no gate is handed less than it was;
+#       order, and before anything it adds, so no gate is handed less than it was and a gate that
+#       reads the records in order reaches the old ones first;
 #   R3  a text the reader can read never reaches the crude reader.
 # Each R1 row first proves the reader cannot read its text: a row the reader could read would pass
 # without the crude reader ever being asked (L246).
@@ -203,13 +204,19 @@ def cut_before(s, cwd=""):
     return out
 
 
-def kept_in_order(before, after):
-    """Whether before is after with some entries taken out: the same records in the same order."""
-    at = 0
-    for rec in after:
-        if at < len(before) and rec == before[at]:
-            at += 1
-    return at == len(before)
+def kept_first(before, after):
+    """Whether after starts with before: the same records, in the same order, ahead of anything
+    added. A caller that reads the records in order and stops at the first one that settles its
+    question then reaches every old record before a new one."""
+    return after[:len(before)] == before
+
+
+# How a text begins is asked of its first command (lib/unknown-program.py's holds_command), so the
+# command found inside the first piece must not come before that piece.
+got = sw.crude_commands("x=$(mytool y); node x.js" + OPEN)
+row("the commands found inside a piece come after every piece of the cut",
+    "" if [t for _, t in got] == ["x=$(mytool y)", " node x.js", "echo 'never closed", "mytool y"]
+    else "got %r" % (got,))
 
 
 rng = random.Random(3473)
@@ -221,7 +228,7 @@ TEXTS = 3000
 for _ in range(TEXTS):
     text = "".join(rng.choice(BITS) for _ in range(rng.randint(1, 14)))
     before, after = cut_before(text), sw.crude_commands(text)
-    if not kept_in_order(before, after):
+    if not kept_first(before, after):
         lost += 1
         first_lost = first_lost or repr(text)
     if any(t not in text for _, t in after):
@@ -229,8 +236,8 @@ for _ in range(TEXTS):
         first_stranger = first_stranger or repr(text)
     if len(after) > len(before):
         more += 1
-row("over %d made up texts, every record of the old cut is still given, in its directory and order" % TEXTS,
-    "" if not lost else "%d texts lost a record, the first: %s" % (lost, first_lost))
+row("over %d made up texts, the old cut is given first and whole, each record in its directory and order" % TEXTS,
+    "" if not lost else "%d texts lost a record or gave a new one ahead of an old one, the first: %s" % (lost, first_lost))
 row("over the same texts, every record's text is written in the text it was cut from",
     "" if not strangers else "%d texts gave a text not written in them, the first: %s" % (strangers, first_stranger))
 # Without this the two rows above would pass on a reader that lists nothing new.
