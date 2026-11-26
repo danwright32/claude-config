@@ -416,7 +416,8 @@ ALLOW_MARKER="claude-sync-allow-home-path"
 # on the whole line: a line cut first would pass everything that sat below the cut. Last, each
 # byte of what is reported that belongs to no well formed UTF-8 character is written as a
 # backslash and its octal value and counted in a note, so the report is valid text whatever the
-# file held.
+# file held, and so is every byte of a control character but the tab, counted in a note of its
+# own, so the report draws nothing over where the line was found (claude-config#3586, as_text).
 #
 # What each rule refuses is what it refused in the shell. Each is asked the way the shell asked it,
 # with plain string comparison wherever the rule has no variable part, so the answer does not turn
