@@ -823,6 +823,41 @@ if denied "$out" && says "$out" "changelog/visible"; then pass; else fail "#1181
 out=$(FAKE_NODE_FAIL="gh: Could not resolve to a node with the global id of 'PR_x'" run_hook "$dir" "$GQL_MERGE")
 if denied "$out" && says "$out" "GitHub could not say which pull request that is" && says "$out" "ALLOW_UNTAGGED_MERGE=1"; then pass
 else fail "#1181 a GraphQL merge whose node cannot be resolved was not refused by name: $out"; fi
+# With the override typed, that one still goes through with the sentence: GitHub gave no answer about
+# the pull request, and the override is the only way on (Dan, 2026-11-25: "Let it through, said out
+# loud").
+out=$(FAKE_NODE_FAIL="gh: Could not resolve to a node with the global id of 'PR_x'" run_hook "$dir" "ALLOW_UNTAGGED_MERGE=1 $GQL_MERGE" 2>/dev/null)
+if ! denied "$out" && says "$out" '"systemMessage"' && says "$out" "an announcement" && says "$out" "could not be ruled out"; then pass
+else fail "#3742 item 6: with the override typed, a merge GitHub gave no answer about was refused, or let through with nothing said: $out"; fi
+
+# WRITTEN SO ITS PULL REQUEST CANNOT BE TOLD (claude-config#3742, item 6; Dan, 2026-11-26, by picker:
+# "Refuse them too"). A command that hides which pull request it merges (one mutation merging
+# several, a document kept in a file, an id passed nowhere, an endpoint or a repository flag that
+# names no repository) was let through under the override with the sentence, where several merges
+# in one command are refused. Its remedy is as open as theirs: name the pull request plainly. So it
+# is refused with or without the override, and the refusal no longer offers it (L111).
+GQL_TWO="gh api graphql -f query='mutation { a: mergePullRequest(input: {pullRequestId: \"PR_1\"}) { clientMutationId } b: mergePullRequest(input: {pullRequestId: \"PR_2\"}) { clientMutationId } }'"
+GQL_NO_ID="gh api graphql -f query='mutation { mergePullRequest(input: {pullRequestId: \$id}) { clientMutationId } }'"
+for c in "$GQL_TWO" "$GQL_NO_ID" "gh api graphql -F query=@merge.graphql" \
+         "gh api -X PUT 'repos/{owner}/widget/pulls/7/merge'" "gh -R nonsense pr merge 7"; do
+  out=$(run_hook "$dir" "ALLOW_UNTAGGED_MERGE=1 $c" 2>/dev/null)
+  if denied "$out" && says "$out" "ALLOW_UNTAGGED_MERGE=1 does not clear this" && says "$out" "Name the pull request plainly"; then pass
+  else fail "#3742 item 6: with the override typed, a merge written so its pull request cannot be told was let through, or its refusal does not say the override does not clear it [$c]: $out"; fi
+  out=$(run_hook "$dir" "$c")
+  if denied "$out" && ! says "$out" "Deliberate override" && says "$out" "Name the pull request plainly"; then pass
+  else fail "#3742 item 6: the refusal of a merge whose pull request cannot be told still offers an override that no longer clears it [$c]: $out"; fi
+done
+# Each still says what about it could not be read, in its own words.
+out=$(run_hook "$dir" "ALLOW_UNTAGGED_MERGE=1 $GQL_TWO" 2>/dev/null)
+if says "$out" "merges more than one pull request"; then pass
+else fail "#3742 item 6: the refusal of one mutation merging several pull requests does not say so: $out"; fi
+# Still possible: the same merges written plainly, in the same repository, are judged as ever. The
+# untagged one is refused over its record with the override offered, and takes it.
+out=$(run_hook "$dir" "$MERGE 7 --repo acme/widget --squash")
+if denied "$out" && says "$out" "Deliberate override: ALLOW_UNTAGGED_MERGE=1"; then pass
+else fail "#3742 item 6: a merge naming its pull request plainly lost the override its refusal offers: $out"; fi
+out=$(run_hook "$dir" "ALLOW_UNTAGGED_MERGE=1 $MERGE 7 --repo acme/widget --squash")
+if [ -z "$out" ]; then pass; else fail "#3742 item 6: the override no longer lets a plainly named merge that is no announcement through in silence: $out"; fi
 # Calls that merge nothing pass untouched.
 for c in "gh api repos/acme/widget/pulls/7/merge" "gh api -X PUT repos/acme/widget/pulls/7 -f title=merge"; do
   out=$(run_hook "$dir" "$c")
@@ -854,7 +889,7 @@ for c in "gh -R acme/widget pr merge 7 --squash" "gh --repo=acme/widget api -X P
 done
 # The failure path: a repository flag gh cannot read is refused by name.
 out=$(run_hook "$dir" "gh -R nonsense pr merge 7")
-if denied "$out" && says "$out" 'as \"nonsense\"' && says "$out" "ALLOW_UNTAGGED_MERGE=1"; then pass
+if denied "$out" && says "$out" 'as \"nonsense\"' && says "$out" "Name the repository as owner/name"; then pass
 else fail "#1186 a merge naming an unreadable repository was not refused by name: $out"; fi
 rm -rf "$dir"
 dir=$(make_repo acme/widget "$TAGGED" "$REGISTRY")

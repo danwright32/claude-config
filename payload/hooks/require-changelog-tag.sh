@@ -62,7 +62,8 @@
 # The two exits that come before the command can even be parsed keep the override as it was.
 # A command merging more than one pull request is not such a case and is refused with the override
 # typed too (Dan, 2026-11-25, claude-config#3666): its remedy, one pull request per command, is
-# always open.
+# always open. Nor is a command written so that the pull request it merges cannot be told (Dan,
+# 2026-11-26, claude-config#3742): its remedy, naming the pull request plainly, is always open too.
 #
 # An announce pull request also merges only on wording Dan approved (claude-config#3666): the
 # Announcement block as GitHub holds it at the merge must hash to an approval lib/announce-approval.py
@@ -314,8 +315,23 @@ fi
 # here can then say which repository it is in either, so whether the registry gates it cannot be
 # told, and cannot tell is never "not gated" (L490). Asked in this shell, so a GraphQL merge's node is
 # resolved once and the repository and number read below take that answer.
+#
+# TWO KINDS, and the override clears only one (claude-config#3742, item 6). A pull request GitHub
+# gave no answer about (the node of a GraphQL merge that no logged-in account can resolve) is one
+# nothing here can read however the command is written, so the override is the only way on and the
+# merge goes through with the sentence (Dan, 2026-11-25: "Let it through, said out loud"). A command
+# WRITTEN so its pull request cannot be told (one mutation merging several, a document kept in a
+# file, an id passed nowhere, an endpoint or a repository flag naming no repository) is refused with
+# or without the override (Dan, 2026-11-26, by picker: "Refuse them too"): like several merges in one
+# command above, its remedy is always open, which is to name the pull request plainly. It was let
+# through with the sentence, so an announcement merged unjudged behind an unusual spelling. The
+# refusal does not offer an override that no longer clears it (L111).
 if mt_api_merge_untold "$command"; then
-  unread="which pull request this command merges could not be told"
+  if [ "$MT_API_ROUTE" != graphql ]; then
+    overridden=false
+    deny "Cannot judge this merge's changelog record: $MT_API_WHY ALLOW_UNTAGGED_MERGE=1 does not clear this: the override does not cover a pull request carrying changelog/announce, and a command written so that its pull request cannot be told may be merging one. Name the pull request plainly, one per command: gh pr merge <number> --repo <owner>/<name>."
+  fi
+  unread="GitHub gave no answer about which pull request this command merges"
   deny "Cannot judge this merge's changelog record: $MT_API_WHY Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>."
 fi
 

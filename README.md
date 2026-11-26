@@ -1926,7 +1926,15 @@ repository its registry gates, and since claude-config#3666 `ALLOW_UNTAGGED_MERG
 that refusal (Dan, 2026-11-25, by picker: "Refuse it"). The gate reads one pull request per command,
 so the override typed over several merges let one of them through unread, an announcement
 included, and one merge per command is always open. A pull request that cannot be read at all is
-still let through under the override, saying so.
+still let through under the override, saying so. A merge command written so that its pull request
+cannot be told (one mutation merging several, a GraphQL document kept in a file, an id passed
+nowhere, an endpoint or a repository flag that names no repository) is not such a case, and since
+claude-config#3742 it is refused with the override typed too (Dan, 2026-11-26, by picker: "Refuse
+them too"): naming the pull request plainly is always open, and the refusal says so in place of
+offering the override. Of these only a pull request GitHub gives no answer about still goes through
+under the override. With node missing the changelog gate refuses a merge by name, as it does with
+jq missing, where it used to let every merge through with nothing said (claude-config#3742); under
+the override that merge goes through with the same sentence.
 
 #### An announcement merges only on wording Dan approved (#3666)
 
