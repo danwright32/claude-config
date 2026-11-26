@@ -1140,6 +1140,67 @@ several=""
 notes_n=0
 phase_notes=""
 suite_note() { notes_n=$((notes_n + 1)); printf 'SUITE-NOTE %s\n' "$1"; }
+# The limit each cost case is held to, in units of the yardstick, for a platform (uname -s; this
+# machine's when none is given). The one place these numbers live (#3170). The fallback case, where
+# the gate's seconds run out (short-budget), takes the one lesson limit through here by design.
+#
+# ONE LESSON: 36 ON macOS AND 46 OFF IT (#3170, Dan's choice of 2026-11-25: "1.1 Limit 46 on Linux
+# (Recommended)", the option reading "Your 11-23 rule, top reading plus 15%: 40.3 times 1.15. macOS
+# stays 36."). The rule is the one suite-cold's limit took on 2026-11-23 (#3406): the highest
+# reading that platform gave, times 1.15, to the nearest unit. Linux: 77 attempts of the tests
+# workflow on 2026-11-25 printed readings; one lesson read a median of 33.0, 90 percent at or under
+# 35.6, and at most 40.3 (run 45733139735 attempt 1, a Xeon 6975P-C), so 46. The fallback case read
+# at most 39.3 that day, under the same 46. 5 of those 77 attempts failed the old limit of 36, every
+# one on these two cases only and every one passing on the runner's own second try. The reading
+# moves with the runner's processor model: the one lesson median that day ran from 35.5 on the
+# fastest (EPYC 9V45) down to 29.7 on the slowest (EPYC 7763) for the same gate code. macOS keeps
+# 36, set from the personal MacBook on 2026-11-15 (see the ceilings of 36 and 66 above).
+# What 46 no longer catches, from the 2026-11-25 medians: a gate up to about 29 percent dearer
+# passes on the fastest runner model and up to about 55 percent on the slowest; 36 already let 21
+# percent through on the slowest and caught about 1 percent on the fastest. The counted work and the
+# slow reader check below (1.25 times the run's own one lesson reading) are unaffected.
+cost_limit() {
+  local platform="${2:-$(uname -s)}"
+  case "$1" in
+    one-lesson) case "$platform" in Darwin) echo 36 ;; *) echo 46 ;; esac ;;
+    short-budget) cost_limit one-lesson "$platform" ;;
+    suite-cold) case "$platform" in Darwin) echo 67 ;; *) echo 91 ;; esac ;;
+    own-suite) case "$platform" in Darwin) echo 17 ;; *) echo 18 ;; esac ;;
+    *) echo "no cost limit is set for $1" >&2; return 1 ;;
+  esac
+}
+# Each platform's limits, asked for by platform name, so a Mac run holds the Linux numbers too
+# (#3170): only this machine's branch is ever judged against a reading.
+limit_pair() { printf '%s/%s' "$(cost_limit "$1" Darwin 2>&1)" "$(cost_limit "$1" Linux 2>&1)"; }
+limit_is() { if [ "$(limit_pair "$1")" = "$2" ]; then echo ok; else echo "$1 has $(limit_pair "$1") on Darwin/Linux, not $2"; fi; }
+# Two limits that must be the same number on each platform. Both sides failing alike is no pass
+# (L98): the first has to be a pair of numbers before it is compared. Functions, since macOS's bash
+# 3.2 cannot read a case statement inside a command substitution (seen 2026-11-25).
+limit_tied() {
+  local a b
+  a="$(limit_pair "$1")"; b="$(limit_pair "$2")"
+  case "$a" in
+    [0-9]*/[0-9]*) if [ "$a" = "$b" ]; then echo ok; else echo "$1 has $a on Darwin/Linux, $2 $b"; fi ;;
+    *) echo "$1 has no limit to compare: '$a'" ;;
+  esac
+}
+limit_default() {
+  local here mine
+  here="$(cost_limit "$1" 2>&1)"; mine="$(cost_limit "$1" "$(uname -s)" 2>&1)"
+  case "$here" in
+    ''|*[!0-9]*) echo "with no platform it gave '$here', which is no number" ;;
+    *) if [ "$here" = "$mine" ]; then echo ok; else echo "with no platform it gave $here, for $(uname -s) $mine"; fi ;;
+  esac
+}
+check "one claude-sync lesson is held to 36 units on macOS and 46 on Linux (#3170)" "$(limit_is one-lesson 36/46)"
+check "where the gate's seconds run out it is held to the one lesson limit on each platform (#3170)" \
+  "$(limit_tied short-budget one-lesson)"
+check "bash tests/test-claude-sync.sh is held to 67 units on macOS and 91 on Linux (#3406)" "$(limit_is suite-cold 67/91)"
+check "the command that starts this suite is held to 17 units on macOS and 18 on Linux (#3255)" "$(limit_is own-suite 17/18)"
+check "a cost case's limit, asked for with no platform, is this machine's (#3170)" \
+  "$(limit_default one-lesson)"
+check "a cost case with no limit of its own is refused rather than given one (#3170)" \
+  "$(if got="$(cost_limit no-such-case Linux 2>/dev/null)"; then echo "it was given '$got'"; else echo ok; fi)"
 if [ -z "$CS" ]; then
   # L411: with no claude-sync on this Mac there is nothing to measure, and a red would read as the gate.
   echo "SUITE-PART-UNMEASURED #2784: no claude-sync in this checkout or at ~/claude-config-sync, so the time to judge a claude-sync line was not measured"
@@ -1464,8 +1525,9 @@ print("ok" if ratio <= ceiling else "judging it took at least %.1f s of processo
 PY
   export SLACK_GATE_COST_LOG="$T/cost.log"
   several="one-lesson"
-  cost="$(SLACK_GATE_COST_LABEL=one-lesson SLACK_GATE_COST_SAMPLES=3 SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" 36 L174 2>&1)"
-  check "one claude-sync lesson is judged within 36 units of the yardstick (#2784)" "$cost"
+  lesson_ceiling="$(cost_limit one-lesson)"
+  cost="$(SLACK_GATE_COST_LABEL=one-lesson SLACK_GATE_COST_SAMPLES=3 SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" "$lesson_ceiling" L174 2>&1)"
+  check "one claude-sync lesson is judged within $lesson_ceiling units of the yardstick on $(uname -s) (#2784, #3170)" "$cost"
   cost="$(SLACK_GATE_COST_LABEL=three-lessons SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" 66 L174 L290 L656 2>&1)"
   check "three claude-sync lessons in one line are judged within 66 units of the yardstick (#2784)" "$cost"
   # The yardstick must not move with the gate (#2918, Dan's decision of 2026-11-15). Measured by the
@@ -1546,10 +1608,7 @@ fi
 # the gate since took the readings to within 2 percent of both (#3406: 55 to 56 on the personal
 # MacBook, 77.7 to 81.4 on Linux), #3486 took 3 to 6 units back out, and what was left still crossed
 # them from run to run on unchanged code: 57.3 and 58.3 on the work MacBook, 78.9 on Linux.
-case "$(uname -s)" in
-  Darwin) cold_ceiling=67 ;;
-  *) cold_ceiling=91 ;;
-esac
+cold_ceiling="$(cost_limit suite-cold)"
 if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; then
   warm="$(mktemp -d "$T/warm.XXXXXX")"
   cost="$(SLACK_GATE_COST_LABEL=suite-cold SLACK_GATE_PHASE_LOG="$T/phases.log" SLACK_GATE_CACHE_DIR="$warm" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" "$cold_ceiling" --line "bash $REPO/tests/test-claude-sync.sh" 2>&1)"
@@ -1684,17 +1743,18 @@ if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; t
   # fifth of a second, judging the one lesson line (#3170, L411): the seconds run out, cost.py reads
   # the same line on the step clock and holds those units to the ceiling it was given. So such a
   # machine neither fails a gate inside its ceiling nor passes one past it: with the one lesson
-  # ceiling of 36 it is inside, and with a ceiling of 1 unit, which no gate meets, it must fail.
+  # ceiling (cost_limit, 36 on macOS and 46 off it) it is inside, and with a ceiling of 1 unit,
+  # which no gate meets, it must fail.
   short="$T/short-gate"
   mkdir -p "$short" && cp "$HOOK" "$short/" && cp -R "$DIR/lib" "$short/lib" \
     && sed 's/^BUDGET_SECONDS = 11$/BUDGET_SECONDS = 0.2/' "$DIR/slack_drafts_only_gate.py" > "$short/slack_drafts_only_gate.py"
   if grep -q '^BUDGET_SECONDS = 0\.2$' "$short/slack_drafts_only_gate.py" 2>/dev/null; then
     short_cold="$(mktemp -d "$T/cold.XXXXXX")"
-    cost="$(SLACK_GATE_COST_LABEL=short-budget SLACK_GATE_COST_SAMPLES=3 SLACK_GATE_CACHE_DIR="$short_cold" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$short/slack-drafts-only-gate.sh" "$CS" 36 L174 2>&1)"
+    cost="$(SLACK_GATE_COST_LABEL=short-budget SLACK_GATE_COST_SAMPLES=3 SLACK_GATE_CACHE_DIR="$short_cold" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$short/slack-drafts-only-gate.sh" "$CS" "$(cost_limit short-budget)" L174 2>&1)"
     if [ "$cost" = ok ] && ! grep -q '^short-budget .*ran out on this machine' "$T/cost.log"; then
       cost="the copy with a budget of 0.2 s did not run out of it, so the step clock reading was never taken: $(grep '^short-budget' "$T/cost.log")"
     fi
-    check "where the gate's seconds run out, its work is read on the step clock and held to the same 36 units (#3170)" "$cost"
+    check "where the gate's seconds run out, its work is read on the step clock and held to the same $(cost_limit short-budget) units on $(uname -s) (#3170)" "$cost"
     # Judged from several readings, never one (L656, L395): on 2026-11-20 this check turned a pull
     # request's run red from a single reading, 42.6 units against 36 (run 44850974680, part 2), and
     # one reading of a duration cannot be told from noise. Every one of them is a reading where the
@@ -1761,10 +1821,7 @@ if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; t
   # 27 to 33. The Linux limit is 18, the geometric midpoint of 12 and 27: 2.2 times of room above
   # the 8.1 read and 1.69 below the 30.4, and 1.5 each way against that estimated spread. One
   # Linux run is thin, so each run still prints its readings, and the limit is set again from them.
-  case "$(uname -s)" in
-    Darwin) own_ceiling=17 ;;
-    *) own_ceiling=18 ;;
-  esac
+  own_ceiling="$(cost_limit own-suite)"
   several="$several own-suite"
   # Only the first of the three cold judgements is made in this folder, empty until then, and it is
   # the one the warm check below asks for again. cost.py gives each later sample an empty folder of
@@ -1801,9 +1858,10 @@ else
 fi
 if [ -f "$T/cost.log" ]; then
   sed 's/^/cost measured (#2918): /' "$T/cost.log"
-  # The one lesson case (36 units) and the command that starts this suite (17 on macOS, 18 off it)
-  # take several readings whether or not the first passes (#3170), so one run's log gives the spread
-  # a limit is placed from, not a lone reading (L172). The fallback case, also held to 36, takes them
+  # The one lesson case (36 units on macOS, 46 off it) and the command that starts this suite (17
+  # on macOS, 18 off it) take several readings whether or not the first passes (#3170), so one run's
+  # log gives the spread a limit is placed from, not a lone reading (L172). The fallback case, held
+  # to the one lesson limit, takes them
   # too and is checked above, where it also has to show each reading was taken on the step clock.
   for lbl in $several; do
     l="$(grep "^$lbl " "$T/cost.log" | sed -n 1p)"
