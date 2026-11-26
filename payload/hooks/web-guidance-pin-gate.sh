@@ -8,13 +8,13 @@
 # prompt. Its version is pinned in hooks/lib/<package>-version, and the rule file names that version.
 # But the plugin's own skill text, which updates itself, tells sessions to run @latest, and a session
 # can ignore a line in a rule file. This gate refuses, for the main session and every subagent alike,
-# each Bash command it can read as a run of the package at another version. It cannot see a run it
-# cannot read: a package named only through a variable, or a run inside a script file the command
-# starts, whose lines are not in the command.
+# each Bash command it can read as a run of the package at another version (what it cannot read is
+# under "Not covered" below).
 #
-# WHAT IT DOES. Refuses (exit 2) any command that RUNS the package (npx, bunx, npm exec, npm x, npm
-# install, pnpm dlx or yarn dlx naming it) with any version but the pin, or with none, and names the
-# pinned command to run instead. The judgement is lib/web-guidance-pin.py's `judge`, over
+# WHAT IT DOES. Refuses (exit 2) any command that RUNS the package, by the one list of runners in
+# lib/web-guidance-pin.py (RUNNERS: npx, bunx, and npm, pnpm, yarn and bun with a subcommand that
+# fetches), with any version but the pin, or with none, and names the pinned command to run instead.
+# The judgement is lib/web-guidance-pin.py's `judge`, over
 # lib/shell-words.py, the one reading every gate uses: so behind env, rtk, timeout, sudo, a cd, in a
 # chain or inside a `bash -c` string all count, while a grep, a quoted echo, a commit message or
 # `npm view` only mention it and pass.
@@ -24,8 +24,9 @@
 # unread release, and a reader that is missing must not read as a command that is safe (L42, L98). A
 # command holding no runner passes before anything is loaded.
 #
-# Not covered: a package named only through a variable (`npx -y "$PKG"`), whose value the shell
-# fills in after every hook has run.
+# Not covered, the only list of what it cannot see: a package named only through a variable
+# (`npx -y "$PKG"`), whose value the shell fills in after every hook has run; and a run inside a
+# script file the command starts, whose lines are not in the command.
 #
 # No override. Moving to a newer version is a pull request that changes the pin file, after reading
 # npm diff between the two versions.
@@ -35,11 +36,13 @@ payload="$(cat)"
 # test is on the runner, never on the package's name, because the shell joins quoted pieces into one
 # word, so a name written in pieces (modern-web-"" then the rest) runs the package while its text
 # holds no copy of the name to find.
-case "$payload" in *npx*|*bunx*|*npm*|*pnpm*|*yarn*) ;; *) exit 0 ;; esac
+# The texts are lib/web-guidance-pin.py's RUNNER_TEXT, and test-web-guidance-pin-gate.sh fails when
+# this pattern misses one.
+case "$payload" in *npx*|*bun*|*npm*|*pnpm*|*yarn*) ;; *) exit 0 ;; esac
 
 # Refuse, saying the command could not be read rather than that it runs an unpinned version.
 not_judged() {   # $1 = what went wrong, as a clause
-  echo "BLOCKED (web-guidance-pin-gate.sh): this command runs a package runner (npx, bunx, npm, pnpm or yarn), and whether it runs the web guidance tool at a version other than the pinned one could not be read: $1. Only the pinned version, written in ~/.claude/hooks/lib/, is run (claude-config#3565), so it is refused rather than guessed at." >&2
+  echo "BLOCKED (web-guidance-pin-gate.sh): this command holds a package runner (npx, bun, npm, pnpm or yarn), and whether it runs the web guidance tool at a version other than the pinned one could not be read: $1. Only the pinned version, written in ~/.claude/hooks/lib/, is run (claude-config#3565), so it is refused rather than guessed at." >&2
   exit 2
 }
 

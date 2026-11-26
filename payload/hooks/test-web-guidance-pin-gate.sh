@@ -74,6 +74,11 @@ refused "behind time -p" "time -p npx -y $NAME@latest search x"
 refused "npm with a flag before exec" "npm --yes exec $NAME@latest -- search x"
 refused "npm -y x" "npm -y x $NAME@latest search x"
 refused "npm -g install" "npm -g install $NAME"
+refused "pnpm add -g" "pnpm add -g $NAME@latest"
+refused "pnpm install -g" "pnpm install -g $NAME"
+refused "yarn global add" "yarn global add $NAME@latest"
+refused "yarn add" "yarn add $NAME"
+refused "bun x" "bun x $NAME@latest search x"
 refused "the name written in quoted pieces" "npx -y modern-web-\"\"guidance@latest search x"
 refused "the pinned one beside an unpinned one" "npx -y $NAME@$PIN search x && npx -y $NAME@latest retrieve y"
 
@@ -88,6 +93,18 @@ allowed "npm diff, which runs nothing" "npm diff --diff=$NAME@$PIN --diff=$NAME@
 allowed "another package by npx" "npx -y prettier@3.3.3 --check ."
 allowed "another package by npm install" "npm install --save-dev prettier@3.3.3"
 allowed "a command not naming it" "ls -la"
+
+# The gate's first look, a case pattern on the raw payload, must hold every runner's text from the
+# one list, or a runner added there would pass before it is judged.
+texts="$(python3 "$DIR/lib/web-guidance-pin.py" runner-text 2>&1)"
+pattern="$(grep -E '^case "\$payload" in \*' "$HOOK")"
+missing=""
+while IFS= read -r t; do
+  [ -n "$t" ] || continue
+  case "$pattern" in *"*$t*"*) ;; *) missing="$missing $t" ;; esac
+done <<< "$texts"
+[ -n "$texts" ] && [ -n "$pattern" ] && [ -z "$missing" ] && ok \
+  || bad "the gate's first look misses runner text:${missing:- (texts '$texts', pattern '$pattern')}"
 
 # 3. A gate that cannot read the command refuses, saying so, only when the package is named.
 mkdir -p "$WORKDIR/hooks/lib"

@@ -99,7 +99,12 @@ out="$(python3 "$LIB" scan "$d")"; rc=$?
 [ "$rc" -eq 1 ] && [[ "$out" == "a.md:2: runs it with no version"* ]] && check "scan: a run with no version is a finding" ok \
   || check "scan: a run with no version is a finding" "exit $rc: $out"
 
-d="$(fixture prose "Run DISABLE_TELEMETRY=1 npx -y $NAME@$PIN search \"x\"" \
+d="$(fixture flags "npm --yes exec $NAME -- search x" "npm -g install $NAME" "pnpm add -g $NAME")"
+out="$(python3 "$LIB" scan "$d")"; rc=$?
+[ "$rc" -eq 1 ] && [ "$(grep -c 'runs it with no version' <<< "$out")" -eq 3 ] && check "scan: a run with flags before the subcommand, by any runner, is a finding" ok \
+  || check "scan: a run with flags before the subcommand, by any runner, is a finding" "exit $rc: $out"
+
+d="$(fixture prose"Run DISABLE_TELEMETRY=1 npx -y $NAME@$PIN search \"x\"" \
   "published as the \`$NAME\` plugin, source \`GoogleChrome/$NAME-src\`" \
   "the skill $NAME:$NAME in ~/.claude/plugins/cache/googlechrome/$NAME/1.0.2/skills" \
   "the pin lives in payload/hooks/lib/$NAME-version")"

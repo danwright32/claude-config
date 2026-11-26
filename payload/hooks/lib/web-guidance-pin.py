@@ -11,6 +11,9 @@ takes it from here.
   web-guidance-pin.py pin
       the pinned version, exit 0; exit 1 with the reason when the file is missing or its version
       line is not a plain x.y.z.
+  web-guidance-pin.py runner-text
+      the texts the gate's first look must find in a payload, one per line: every runner in
+      RUNNERS holds one, and test-web-guidance-pin-gate.sh holds the gate's pattern to them.
   web-guidance-pin.py scan <root>
       every place in the files git sees under <root> (tracked, and untracked but not ignored) that
       names the package with @latest, with no version on a command that runs it, or with a version
@@ -69,9 +72,11 @@ def key(v):
 # The package as a word of its own: not inside a longer name (the -src repository, the -version
 # file) and not a folder in a path (a plugin cache), then an optional @ and what follows it.
 MENTION = re.compile(r"(?<![\w/.-])" + re.escape(NAME) + r"(?![\w-])(@[^\s\"'`)*,;\]]*)?")
-# What, written in front of a bare mention on the same line, runs it: so `npx -y <name>` with no
-# version is a finding, while the plugin's name in a sentence is not.
-RUNNER = re.compile(r"(?:\bnpx|\bbunx|\bpnpm\s+dlx|\byarn\s+dlx|\bnpm\s+(?:exec|x|i|install|add))(?:\s+-\S+)*\s+$")
+# A line's words, cut at spaces, quotes, backquotes and brackets, for asking runner_at (below)
+# whether a runner stands before a bare mention: so `npx -y <name>` with no version is a finding,
+# while the plugin's name in a sentence is not. The same list as the gate's, so the scan and the
+# gate cannot disagree about what runs the package.
+LINE_WORDS = re.compile(r"[\s`\"'()\[\]{};|&]+")
 
 
 def scan_text(path, text, pin):
@@ -80,7 +85,7 @@ def scan_text(path, text, pin):
         for m in MENTION.finditer(line):
             at = m.group(1)
             if at is None:
-                if RUNNER.search(line[:m.start()]):
+                if runner_at([w for w in LINE_WORDS.split(line[:m.start()]) if w]) is not None:
                     out.append("%s:%d: runs it with no version, so npx takes the newest release" % (path, n))
                 continue
             got = at[1:]
@@ -127,25 +132,36 @@ def load_shell_words():
     return mod
 
 
-NPM_RUNS = ("exec", "x", "i", "install", "add")
+# THE ONE LIST of what fetches a package to run it, read by the scan and the gate alike: each
+# runner, with None when the runner alone fetches and runs (npx, bunx), else the subcommands that
+# fetch (an install or add puts the release on the Mac to run later, so it counts too).
+RUNNERS = {
+    "npx": None,
+    "bunx": None,
+    "npm": ("exec", "x", "i", "install", "add"),
+    "pnpm": ("dlx", "add", "install", "i"),
+    "yarn": ("dlx", "add", "global"),
+    "bun": ("x", "add", "install", "i"),
+}
+# What the gate's first look checks the raw payload for: every runner's name holds one of these.
+RUNNER_TEXT = ("npx", "bun", "npm", "pnpm", "yarn")
 
 
 def runner_at(w):
-    """Where in a command's words a run of a package starts, or None.
+    """Where in a list of words a run of a package starts, or None.
 
     Read from ANY word, not only the first: what stands in front of a runner (timeout 60, sudo -u
     root, env -u X, time -p, rtk proxy, xargs) takes options and arguments of its own, and a list of
-    them would always miss one. A word is a runner when it is npx or bunx, or npm with exec, x,
-    install or add after it (past any flags, so `npm --yes exec` counts), or pnpm or yarn with dlx
-    after it. This errs toward refusing: an unquoted `echo npx <package>@latest` reads as a run, while
-    the same text quoted is one word and only mentions it."""
+    them would always miss one. A runner with subcommands counts when one of them stands anywhere
+    after it, past any flags, so `npm --yes exec` and `npm -g install` count. This errs toward
+    refusing: an unquoted `echo npx <package>@latest` reads as a run, while the same text quoted is
+    one word and only mentions it."""
     for i, word in enumerate(w):
         name = os.path.basename(word)
-        if name in ("npx", "bunx"):
-            return i
-        if name == "npm" and any(x in NPM_RUNS for x in w[i + 1:]):
-            return i
-        if name in ("pnpm", "yarn") and "dlx" in w[i + 1:]:
+        if name not in RUNNERS:
+            continue
+        subs = RUNNERS[name]
+        if subs is None or any(x in subs for x in w[i + 1:]):
             return i
     return None
 
@@ -235,6 +251,9 @@ def main(argv):
     pin = read_pin()
     if verb == "pin":
         print(pin)
+        return 0
+    if verb == "runner-text":
+        print("\n".join(RUNNER_TEXT))
         return 0
     if verb == "scan" and len(argv) == 3:
         return scan(argv[2], pin)
