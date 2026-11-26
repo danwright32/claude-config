@@ -215,12 +215,14 @@ async function claimed($: EngineInterface, a: IsItLiveAnnouncement): Promise<Cla
 
 // The same check, asked from a press. Claude Code cuts a press off at 10 seconds whatever it is
 // waiting on (#744), so the check gets 6 of them here, leaving the rest for the store reads before
-// it and the copy after. One that does not answer in time is unchecked: Copy then copies nothing and
-// says why, writes nothing, and the next press asks again. The check reads one file on this Mac, so
-// it answers in well under a second unless the Mac is starved.
+// it and the copy after, and is itself told to wait no more than 4 on the record, so a slow one
+// answers with its own reason before this limit ends it (L842). One that does not answer in time is
+// unread or unchecked: Copy then copies nothing and says why, writes nothing, and the next press
+// asks again. The check reads one file on this Mac, so it answers in well under a second unless the
+// Mac is starved.
 async function claimedAtPress($: EngineInterface, a: IsItLiveAnnouncement): Promise<Claimed> {
   try {
-    return claimedOf(await $.process.run(claimArgv((await $.env.get('HOME')) ?? '', a.repo, a.pr), { stdin: a.text, timeoutMs: 6_000 }))
+    return claimedOf(await $.process.run(claimArgv((await $.env.get('HOME')) ?? '', a.repo, a.pr, 4_000), { stdin: a.text, timeoutMs: 6_000 }))
   } catch (err) {
     return { state: 'unchecked', why: `the check could not be run: ${msg(err)}` }
   }

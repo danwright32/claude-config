@@ -171,8 +171,21 @@ export const cardUnreadOf = (a: { repo: string; pr: number }, why: string): stri
 // `claimed`), which reads the record of approvals and never writes it; the dev update's "Draft it
 // now" asks the same one. Anything but its word that the wording is approved drafts nothing.
 
-/** How that check is asked: its command line, the wording about to be drafted on standard input. */
-export const claimArgv = (home: string, repo: string, pr: number): string[] => ['node', `${home}/.claude/hooks/lib/announce-compare.js`, 'claimed', '--repo', repo, '--pr', String(pr)]
+/**
+ * How that check is asked: its command line, the wording about to be drafted on standard input.
+ * `withinMs` is for a caller cut off sooner than the check's own wait on the record (a press): how
+ * long the check may wait, less than the caller's own limit, so the check answers first (L842).
+ */
+export const claimArgv = (home: string, repo: string, pr: number, withinMs?: number): string[] => [
+  'node',
+  `${home}/.claude/hooks/lib/announce-compare.js`,
+  'claimed',
+  '--repo',
+  repo,
+  '--pr',
+  String(pr),
+  ...(withinMs === undefined ? [] : ['--within-ms', String(withinMs)]),
+]
 
 /**
  * The check's answer: `approved`, `changed` (the pull request claimed other wording at the merge),

@@ -227,6 +227,29 @@ if (typeof claimed === 'function') {
     check(k.status === 2 && k.json === null && /Usage/.test(k.stderr), 'the command answered with no pull request named', JSON.stringify(k));
     k = claimedCli(['--repo', 'acme/widget', '--pr', '7'], '  \n');
     check(k.status === 2 && k.json === null && /wording/.test(k.stderr), 'the command answered for wording that says nothing', JSON.stringify(k));
+
+    // A caller with less time than the listing's own 15 seconds says how long it has (a press of a
+    // button is cut off at 10), so the listing gives up first and the answer is its own: unread, with why (L842).
+    fs.rmSync(RECORD, { recursive: true });
+    fs.writeFileSync(RECORD, lines);
+    k = claimedCli(['--repo', 'acme/widget', '--pr', '7', '--within-ms', '4000'], POST);
+    check(k.status === 0 && k.json && k.json.state === 'approved', 'the command given a time to answer within did not judge the claimed wording approved', JSON.stringify(k));
+    ['abc', '0', '99', '15001', ''].forEach(function (ms) {
+      k = claimedCli(['--repo', 'acme/widget', '--pr', '7', '--within-ms', ms], POST);
+      check(k.status === 2 && k.json === null && /Usage/.test(k.stderr), 'the command answered with a time to answer within that is not 100 to 15000 ms', ms + ' ' + JSON.stringify(k));
+    });
+    // A listing that does not answer: a python3 that only waits, first on PATH.
+    const slow = path.join(T, 'slow bin');
+    fs.mkdirSync(slow);
+    fs.writeFileSync(path.join(slow, 'python3'), '#!/bin/sh\nexec sleep 30\n', { mode: 0o755 });
+    const slowEnv = Object.assign({}, env, { PATH: slow + path.delimiter + process.env.PATH });
+    const began = Date.now();
+    const r = childProcess.spawnSync(process.execPath, [LIB, 'claimed', '--repo', 'acme/widget', '--pr', '7', '--within-ms', '300'], { input: POST, encoding: 'utf8', env: slowEnv });
+    const took = Date.now() - began;
+    let slowJson = null;
+    try { slowJson = JSON.parse(r.stdout); } catch (e) { slowJson = null; }
+    check(r.status === 0 && slowJson && slowJson.state === 'unread' && /did not answer within 300 ms/.test(slowJson.why), 'a listing that did not answer in the time given was not answered unread, saying so', JSON.stringify({ status: r.status, out: r.stdout, err: r.stderr }));
+    check(took < 12000, 'the listing was waited on past the time given, as long as its own 15 seconds', took + ' ms');
   } finally {
     fs.rmSync(T, { recursive: true, force: true });
   }

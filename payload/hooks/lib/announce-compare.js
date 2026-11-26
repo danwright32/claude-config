@@ -198,10 +198,17 @@ function claimedWording(input) {
 
 // The record, as lib/announce-approval.py's `list` prints it: the one command line of that library
 // that only reads, whatever it finds. A listing that could not be made is handed on as one that
-// could not be read, with why, so claimedWording answers unread.
-function listApprovals() {
-  const r = require('child_process').spawnSync('python3', ['-B', require('path').join(__dirname, 'announce-approval.py'), 'list'], { encoding: 'utf8', timeout: 15000 });
+// could not be read, with why, so claimedWording answers unread. The listing gets LIST_MS to answer,
+// or the shorter time a caller says it has: a caller that is itself cut off sooner (a press of a
+// button, at 10 seconds) passes less, so this wait ends first and the answer is this one, with its
+// reason, in place of a command that was killed part way (L842).
+const LIST_MS = 15000;
+const LIST_MS_LEAST = 100;
+function listApprovals(withinMs) {
+  const within = withinMs === undefined ? LIST_MS : withinMs;
+  const r = require('child_process').spawnSync('python3', ['-B', require('path').join(__dirname, 'announce-approval.py'), 'list'], { encoding: 'utf8', timeout: within });
   const failed = function (why) { return { entries: null, why: 'this Mac\'s record of the announcements Dan approved could not be listed (' + why + ')' }; };
+  if (r.error && r.error.code === 'ETIMEDOUT') return failed('announce-approval.py list did not answer within ' + within + ' ms');
   if (r.error) return failed(r.error.code === 'ENOENT' ? 'python3 is not on PATH' : String(r.error.message || r.error));
   if (r.status !== 0) return failed('announce-approval.py list exited ' + r.status);
   try {
@@ -212,9 +219,10 @@ function listApprovals() {
   }
 }
 
-// claimedWording against the record as it reads now: what both callers ask.
-function claimedNow(repo, pr, text) {
-  return claimedWording({ repo: repo, pr: pr, text: text, listed: listApprovals() });
+// claimedWording against the record as it reads now: what both callers ask. `withinMs` is how long
+// the listing may take, for a caller with less time than LIST_MS.
+function claimedNow(repo, pr, text, withinMs) {
+  return claimedWording({ repo: repo, pr: pr, text: text, listed: listApprovals(withinMs) });
 }
 
 module.exports = { words: words, foundPosted: foundPosted, judgeDraft: judgeDraft, claimedWording: claimedWording, claimedNow: claimedNow };
@@ -223,29 +231,35 @@ module.exports = { words: words, foundPosted: foundPosted, judgeDraft: judgeDraf
 //   draft
 //       reads {text, message, answer: {text, isError}} as JSON on standard input and prints
 //       judgeDraft's answer as JSON: {state: saved | differs | not-kept | error, draftId, error, why}.
-//   claimed --repo <owner/name> --pr <number>
+//   claimed --repo <owner/name> --pr <number> [--within-ms <100 to 15000>]
 //       reads the wording about to be drafted on standard input and prints claimedNow's answer as
 //       JSON: {state: approved | changed | unread, why}. It reads the record and writes nothing.
+//       --within-ms is how long the record's listing may take, for a caller cut off sooner than
+//       the 15 seconds it otherwise gets.
 // Every judgement exits 0, so a reader tells a draft that was not kept, or wording that was changed,
 // from a command that failed. An input that cannot be judged prints why on standard error and exits
 // 2, as does any other command.
 if (require.main === module) {
   const usage = function (why) {
     // One line, since a reader of a failed run quotes the last line it printed.
-    process.stderr.write((why ? why + '. ' : '') + 'Usage: announce-compare.js draft, with {text, message, answer: {text, isError}} as JSON on standard input | claimed --repo <owner/name> --pr <number>, with the wording on standard input\n');
+    process.stderr.write((why ? why + '. ' : '') + 'Usage: announce-compare.js draft, with {text, message, answer: {text, isError}} as JSON on standard input | claimed --repo <owner/name> --pr <number> [--within-ms <100 to 15000>], with the wording on standard input\n');
     process.exit(2);
   };
   const args = process.argv.slice(3);
   const command = process.argv[2];
   const flag = function (name) { const i = args.indexOf(name); return i >= 0 && i + 1 < args.length ? args[i + 1] : null; };
-  if (command === 'draft' ? args.length !== 0 : command !== 'claimed' || args.length !== 4 || flag('--repo') === null || !/^[0-9]+$/.test(flag('--pr') || '')) usage('');
+  // The time a caller gives the listing: a whole number of milliseconds, LIST_MS_LEAST to LIST_MS.
+  const timed = args.indexOf('--within-ms') >= 0;
+  const withinMs = timed && /^[0-9]{1,5}$/.test(flag('--within-ms') || '') ? Number(flag('--within-ms')) : undefined;
+  const timedWrong = timed && (withinMs === undefined || withinMs < LIST_MS_LEAST || withinMs > LIST_MS);
+  if (command === 'draft' ? args.length !== 0 : command !== 'claimed' || args.length !== (timed ? 6 : 4) || timedWrong || flag('--repo') === null || !/^[0-9]+$/.test(flag('--pr') || '')) usage('');
   let raw = '';
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', function (d) { raw += d; });
   process.stdin.on('end', function () {
     if (command === 'claimed') {
       let answer;
-      try { answer = claimedNow(flag('--repo'), Number(flag('--pr')), raw); } catch (e) { return usage('The wording could not be checked: ' + e.message); }
+      try { answer = claimedNow(flag('--repo'), Number(flag('--pr')), raw, withinMs); } catch (e) { return usage('The wording could not be checked: ' + e.message); }
       return process.stdout.write(JSON.stringify(answer) + '\n');
     }
     let input;

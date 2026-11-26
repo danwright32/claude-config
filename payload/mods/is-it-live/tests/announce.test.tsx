@@ -217,7 +217,7 @@ const world = (on: On, init: Partial<World> = {}) => {
     else if (a.startsWith('gh repo view')) g = { exitCode: 0, stdout: `${e.argv[3]}\n` }
     else if (e.argv[0] === 'node' && e.argv[1] === `${HOME}/.claude/hooks/lib/changelog-entry.js` && e.argv[2] === 'announcement') g = w.reader(e.argv[3] as string, JSON.parse(stdin ?? 'null'))
     else if (e.argv.join(' ') === `node ${HOME}/.claude/hooks/lib/announce-compare.js draft`) g = w.judge(JSON.parse(stdin ?? 'null'))
-    else if (e.argv.length === 7 && e.argv.slice(0, 4).join(' ') === `node ${HOME}/.claude/hooks/lib/announce-compare.js claimed --repo` && e.argv[5] === '--pr') g = w.claim(e.argv[4] as string, e.argv[6] as string, stdin ?? '')
+    else if ((e.argv.length === 7 || (e.argv.length === 9 && e.argv[7] === '--within-ms')) && e.argv.slice(0, 4).join(' ') === `node ${HOME}/.claude/hooks/lib/announce-compare.js claimed --repo` && e.argv[5] === '--pr') g = w.claim(e.argv[4] as string, e.argv[6] as string, stdin ?? '')
     return { value: { exitCode: g.exitCode, stdout: g.stdout, stderr: g.stderr ?? '', isStdoutTruncated: false, isStderrTruncated: false } } as never
   })
   on('session.repo', () => ({ value: { root: FOLDER, remote: w.remote, isOwn: false } }) as never)
@@ -931,9 +931,13 @@ test('a press of Copy gives its check of the wording less than the 10 seconds Cl
   toasts.length = 0
   await press($, `${BUTTON}copy-${ID}`)
   expect(copies).toEqual([POST])
-  const given = limits.filter(l => l.argv[2] === 'claimed').map(l => l.ms)
+  const asked = limits.filter(l => l.argv[2] === 'claimed')
+  const given = asked.map(l => l.ms)
   expect(given.length).toBe(1)
   expect(given[0]).toBeLessThan(10_000)
+  // And the check is told to give up before the press's own limit does, so a slow one answers with its reason (L842).
+  expect(asked[0]?.argv.slice(7)).toEqual(['--within-ms', '4000'])
+  expect(Number(asked[0]?.argv[8])).toBeLessThan(given[0] ?? 0)
   // A check that did not answer in that time copies nothing, says why, and leaves what is kept as it was.
   const kept = JSON.stringify(store.get(`announce:${REPO}#7`))
   copies.length = 0
