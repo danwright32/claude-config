@@ -199,7 +199,7 @@ out_fail="$(FAKE_NPM_MODE=fail FAKE_NPM_LOG="$NPM_LOG" PINNED_TS_NPM="$NPM" bash
   && check "npm failing offline is named with npm's own words" ok || check "npm failing offline is named with npm's own words" "exit=$code out=$out_fail"
 [ ! -e "$R5/tools/typescript/node_modules" ] && [ -z "$(ls -A "$R5/.git/pinned-typescript" 2>/dev/null)" ] \
   && check "and a failed install leaves nothing behind" ok || check "and a failed install leaves nothing behind" "$(ls -A "$R5/.git/pinned-typescript" 2>&1)"
-# Offline only, as a test suite asks (test-mods.sh sets it, so no suite run reaches the registry):
+# Offline only, as a test suite asks (tests/mods-harness.sh sets it, so no suite run reaches the registry):
 # npm is told --offline, never --prefer-offline, and a package missing from the cache says so.
 : > "$NPM_LOG"
 out="$(PINNED_TS_OFFLINE=1 FAKE_NPM_MODE=fail FAKE_NPM_LOG="$NPM_LOG" PINNED_TS_NPM="$NPM" bash "$LIB" "$R5/tools/typescript" 2>&1)"; code=$?

@@ -1,4 +1,5 @@
 import type { EngineInterface, Register } from 'claude-code'
+import { cutOwn } from './mod-kit/hold.ts'
 import type { ModKitGoal } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import type { GoalBoxShown } from '../types/index.d.ts'
 import { DESCRIPTION, MOD, NAME, SCHEMA, TOOL, askDoneText, askText, boxText, cardOf, cardedSince, decide, linkedIn, mergeFactsOf, mergeHolds, readInput, waitKey, type Confirmed, type Holds, type Linked } from './box.ts'
@@ -384,7 +385,7 @@ export const register: Register = on => {
       debug($, `the card could not be drawn (${errorText(err, MOD)}), so the box is shown as text`)
     }
     return { result: text, text, context: ['The Goal accomplished box is shown to Dan above. Do not repeat it in your reply.'] }
-  })
+  }).catch(($, e, next) => cutOwn('the goal box', next))
 
   // The met record lands after the Stop hooks, so once the turn has ended the session is sent one
   // prompt of its own to show the box. The main loop's own end only, never an interrupt.
