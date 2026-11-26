@@ -683,7 +683,7 @@ def compare(run, base, cases, window):
              f"  measured only in the baseline: {', '.join(only_base) if only_base else 'none'}",
              f"  measured only in this run: {', '.join(only_run) if only_run else 'none'}"]
     if unscored:
-        lines.append(f"  measured in both but not compared (gone from the case set, or failing its check):{', '.join(unscored)}")
+        lines.append(f"  measured in both but not compared (gone from the case set, or failing its check): {', '.join(unscored)}")
     c_up, c_down, c_same = paired(now, then, common, real=True)
     w_up, w_down, w_same = paired(now, then, common, real=False)
     c_total, w_total = len(c_up) + len(c_down) + c_same, len(w_up) + len(w_down) + w_same

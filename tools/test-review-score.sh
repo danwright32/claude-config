@@ -458,6 +458,9 @@ check "#3556 and nothing is measured only in this run" "measured only in this ru
 R12b="$WORK/r12b"; mkdir -p "$R12b"; cp "$R12/c.json" "$R12b/baseline.json"
 out="$(score rescore "$R11/a.json" --cases "$C11" --results-dir "$R12b")"
 check "#3556 a case measured only in this run is named too" "measured only in this run: invented-retry" "$out"
+C12g="$WORK/c12g"; cp -R "$C11" "$C12g"; rm -rf "$C12g/invented-retry"
+out="$(score rescore "$R11/a.json" --cases "$C12g" --results-dir "$R12")"
+check "#3556 a case both runs measured but the case set no longer holds is named" "measured in both but not compared (gone from the case set, or failing its check): invented-retry" "$out"
 mkrun "$R12/rep.json" "$C11" '{"invented-paginate": [["p.d1", "p.d2", "p.w1", "p.x"], ["p.d1", "p.w1", "p.x"]], "invented-retry": [["r.d1", "r.w1"], ["r.d1", "r.w1"]]}'
 out="$(score rescore "$R12/rep.json" --cases "$C11" --results-dir "$R12")"
 check "#3556 a defect caught in fewer of its repeats counts as a flip down, with both sides' counts" "newly missed: invented-paginate d2 (1 in 1 then, 1 in 2 now)" "$out"
