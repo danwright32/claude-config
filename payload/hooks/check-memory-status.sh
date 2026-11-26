@@ -147,6 +147,12 @@ for f in "${FILES[@]}"; do
     if [ "$bare" -eq 1 ]; then
       skipped_n=$((skipped_n + 1)); file_skips="${file_skips:+$file_skips, }$ln"
     fi
+    # Every status word on the line is held against every reference on it. On a line naming two,
+    # "a#1 merged, b#2 still open" therefore reports a#1 as stale when it is not. Splitting the line
+    # between references was weighed and not built: "a#1 and b#2 are both still open" would then
+    # give a#1 no status at all, and a stale a#1 would go unsaid. A false line costs a look at a
+    # print only report; a missed one is the fault this check exists for (L648), so the line is
+    # read whole and the output names the reference, which is enough to tell the two apart.
     for r in $refs; do
       # Owner and repository are case blind on GitHub, so one reference written two ways is still
       # one call.
