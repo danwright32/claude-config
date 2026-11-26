@@ -1,4 +1,5 @@
 import type { EngineInterface, On } from 'claude-code'
+import { cutOwn, watchesOnly } from './mod-kit/hold.ts'
 import type { IsItLiveOwed, IsItLiveThread } from '../types/index.d.ts'
 import { MOD } from './card.ts'
 import { errorText } from './mod-kit/skew.ts'
@@ -243,7 +244,7 @@ export async function draftHold($: EngineInterface, e: { stop_hook_active?: bool
 export function registerDrafts(on: On): void {
   // #2653: the tool a session says its merges are unrelated with (registered by
   // registerUnrelated from register.ts's session.start, the one an event may have), answered here.
-  on('tool.call', { tool: UNRELATED_TOOL }, async ($, e) => declareUnrelated($, e.agentId))
+  on('tool.call', { tool: UNRELATED_TOOL }, async ($, e) => declareUnrelated($, e.agentId)).catch(($, e, next) => cutOwn('the is it live mod', next))
 
   // A thread Dan links to in his own words is where the session started (mod-kit's isDans: only
   // what he types, never a notification or another plugin's prompt), when in his first prompt and
@@ -307,5 +308,5 @@ export function registerDrafts(on: On): void {
       $.ui.log(`is-it-live: could not record a Slack thread call: ${msg(err)}`, { to: 'debug' })
     }
     return done
-  })
+  }).catch(watchesOnly)
 }

@@ -1,4 +1,5 @@
 import type { EngineInterface, Hook, Register } from 'claude-code'
+import { cutOwn, watchesOnly } from './mod-kit/hold.ts'
 import type { ManualSteps, StepsCard, StepsPaneId } from '../types/index.d.ts'
 import { cardFrom, cardLines, carriedNote, donePrompt, DROPPED_AFTER_MS, finish, fold, held as heldFor, heldNote, heldSteps, keepAdded, keepFinished, nextStep, paneColumns, pressed, sent, unheld, untoldSteps, VERDICTS } from './card.ts'
 import type { DrawnAt, StepsVerdict } from './card.ts'
@@ -742,7 +743,7 @@ export const register: Register = on => {
     if (!notes.length) return r
     await refresh($)
     return { ...r, context: [...(r.context ?? []), ...notes] }
-  })
+  }).catch(watchesOnly)
 
   on('tool.call', { tool: TOOL }, async ($, e) => {
     const refused = await $.modkit.screen(e)
@@ -775,7 +776,7 @@ export const register: Register = on => {
     if (failed) return { result: `The steps card could not be shown: ${failed}. Give Dan the steps in your reply instead.` }
     const unsent = await tellDan($, card)
     return { result: `Pinned "${card.heading}": ${left(card)}.${unsent ? ` Dan was not notified: ${unsent}.` : ''}` }
-  })
+  }).catch(($, e, next) => cutOwn('the manual steps mod', next))
 
   on('tool.call', { tool: VERDICT_TOOL }, async ($, e) => {
     const refused = await $.modkit.screen(e)
@@ -792,7 +793,7 @@ export const register: Register = on => {
     if (done) await change($, () => ({ card: null, out: undefined }))
     await refresh($)
     return { result: done ? 'Every step is finished, so the card is gone.' : `Step ${String(input.step)} recorded; ${left(out.card)}.` }
-  })
+  }).catch(($, e, next) => cutOwn('the manual steps mod', next))
 
   // The card's buttons, pressed by a click or by /press (#939): mod-kit raises both as modkit.press.
   // Copy link takes the whole address where the terminal draws no hyperlinks (#708). Where a click

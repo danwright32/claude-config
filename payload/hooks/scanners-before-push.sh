@@ -858,7 +858,8 @@ _sc_changed_list="$(bash "$REPO_FILES" --changed . 2>/dev/null)" || { _sc_change
 # runs them only in CI, as before. Recognised by both facts, never one: of the suites the marker
 # misses, 24 find the checkout (the whole repository suite, test-run-all-tests.sh, among them) and
 # 16 walk something, often a scratch home of their own, against 5 that do both (measured
-# 2026-11-17). Only code lines count.
+# 2026-11-17). Only code lines count, and since claude-config#3662 finding the checkout means the
+# suite's code RUNS that helper, never that it names it (at _sc_runs_root_helper below).
 #
 # A walk is a walk however it is spelled (L247): os.walk or pathlib's rglob, or a find that prunes
 # .git, which only a find over a checkout needs to. test-bad-byte-locale.sh reads every suite with
@@ -871,11 +872,42 @@ _sc_walks_tree(){   # $1 = code lines -> 0 when they walk a tree
   case "$1" in *'os.walk('*|*'.rglob('*) return 0 ;; esac
   grep -qE '(^|[^[:alnum:]_-])find[[:space:]].*-name[[:space:]]+["'\'']?[.]git([^[:alnum:]_]|$)' <<< "$1"
 }
-_sc_walks_checkout(){   # $1 = a suite -> 0 when it finds its checkout and walks a tree
+# FINDING THE CHECKOUT IS RUNNING THE HELPER, NEVER NAMING IT (claude-config#3662). Any code line
+# naming lib/checkout-root.sh used to count, and on 2026-11-25 that had put
+# test-slack-drafts-only-gate-runners.sh among the walkers on two mentions that are both text: a
+# command it hands the Slack gate as a fixture names the helper, and a heredoc names a lib program
+# holding that gate's own walk of a folder a command names. It walks nothing of the checkout, and it
+# was the slowest suite this gate ran (85 to 89 seconds of processor time alone, 3 runs on
+# 2026-11-25). So the first fact is that the suite's own code RUNS the helper, in one of these shapes:
+#   inside a command substitution, the dollar and parenthesis form or backticks, which is how every
+#     real walker here takes the root the helper prints;
+#   as a command of its own: first on its line or straight after ; & | or !, behind if, then, do,
+#     else, elif, while or until, with or without bash, sh, source or a dot in front of it;
+#   as the whole value of a variable, for a suite that calls it through one.
+# The helper's name anywhere else on a code line is text: a word inside a longer string, one of
+# several file names handed to another command, a pattern, a message.
+# Measured 2026-11-25 on main: 68 suites name the helper on a code line, 66 of them run it inside a
+# command substitution, and the 2 that never run it are that suite and the sync suite, which copies
+# the helper into a scratch lib by name and was not selected before either.
+# It still leans toward running a suite. A substitution opened ANYWHERE earlier on the line counts,
+# and so does text inside a string that begins a command with the helper after ; or &&. A walker
+# that is missed says nothing, which is why the floor below names every one selected: one that
+# stops being recognised blocks the push by name.
+# What this rule does NOT read: a helper run by a file the suite sources. The runners suite gets its
+# checkout that way, through lib/slack-drafts-gate-harness.sh, and reads two named files of it
+# (claude-sync and the sync suite) as lines to compare two readings over. That is reading named
+# files, which many suites outside this gate do, and not a walk of the tree.
+_SC_ROOT_IN_SUBST='([$][(]|`).*checkout-root[.]sh'
+_SC_ROOT_AS_COMMAND='(^|[;&|!])[[:space:]]*((if|then|do|else|elif|while|until)[[:space:]]+)?((bash|sh|source|[.])[[:space:]]+(-[^[:space:]]+[[:space:]]+)*)?["'\'']?[^[:space:]"'\'';&|]*checkout-root[.]sh'
+_SC_ROOT_HELD='(^|[[:space:];])[A-Za-z_][A-Za-z0-9_]*=["'\'']?[^[:space:]"'\'']*checkout-root[.]sh["'\'']?([[:space:];]|$)'
+_sc_runs_root_helper(){   # $1 = code lines -> 0 when a line of them runs lib/checkout-root.sh
+  LC_ALL=C grep -a -qE -e "$_SC_ROOT_IN_SUBST" -e "$_SC_ROOT_AS_COMMAND" -e "$_SC_ROOT_HELD" <<< "$1"
+}
+_sc_walks_checkout(){   # $1 = a suite -> 0 when its code runs the helper that finds its checkout and walks a tree
   local code d p b c progs
   grep -q 'checkout-root[.]sh' "$1" 2>/dev/null || return 1
   code="$(_sc_code_lines "$1")"
-  case "$code" in *checkout-root.sh*) ;; *) return 1 ;; esac
+  _sc_runs_root_helper "$code" || return 1
   _sc_walks_tree "$code" && return 0
   case "$1" in */*) d="${1%/*}" ;; *) d=. ;; esac
   progs="$(printf '%s\n' "$code" | grep -oE '[A-Za-z0-9_.-]+[.]py' | sort -u)"
@@ -1024,11 +1056,13 @@ NAMED
       echo "over a smaller set, which is how two defects reached main on 2026-09-21 after a change"
       echo "moved two scanners off the text this gate recognised them by. A suite is selected when"
       echo "it lists the repository's files (git ls-files or lib/repo-files.sh) in its code, or when"
-      echo "it finds its checkout through lib/checkout-root.sh and walks it (os.walk, rglob, or a find"
-      echo "that prunes .git), itself or through a program beside it that its code names."
+      echo "its own code runs lib/checkout-root.sh to find its checkout and walks it (os.walk, rglob, or"
+      echo "a find that prunes .git), itself or through a program beside it that its code names. The"
+      echo "helper's name inside text the suite hands to something else is not a run (#3662)."
       echo ""
       echo "If one was removed on purpose, take its line out of $_sc_floor_file in the same change."
-      echo "If not, find why it stopped being recognised."
+      echo "If main has stopped selecting it since this branch was cut, bring main into this branch,"
+      echo "which takes the line out. If neither, find why it stopped being recognised."
       echo ""
       echo "OVERRIDE, this one push: SKIP_SCANNERS_CHECK=1 <your original git push command>"
     } >&2
@@ -1644,30 +1678,42 @@ done
 # a scanner too slow for the budget, and the fix was first aimed at the budget. Whether that last
 # try would have got the lock is not known, and the refusal says so rather than guessing.
 #
-# Both lists are made again here in ONE pass, each run judged once: a retry can write its exit code
-# in the instant after the watchdog stops the wait, so a list made inside the loop and a look made
-# after it could each miss it, and a refusal would then reach the read back below as a failure. A
-# run with no exit code yet is judged by whether it is a retry; one with an exit code by whether it
-# refused on the lock.
-_sc_phase "reading back what the scanners found and writing its verdict, which takes the record's lock and each finished scanner's for up to 5 seconds each"
-_sc_locked=""
+# A RETRY STILL IN FLIGHT AT THE BUDGET is judged HERE, as the budget ends, and refuses the push
+# whatever it reports afterwards: a pass landing a moment later is not counted, so this can never
+# let through a push it would have refused at the budget (#3541).
+#
+# A LOCK REFUSAL LANDING AFTER THAT is said as one, in the read back below (claude-config#3541). The
+# lock refusals were once all listed here, in a pass of their own, and every exit code was then read
+# again in the read back, so a first try still starting when the budget ran out, whose refusal
+# landed between the two, was read by the second as a failing scanner, "it exited 5 with no FAIL
+# line", over the refusal line itself (2 of 8 tries of the suite's case in a load window on
+# 2026-11-25). The read back now sorts a refusal on the lock (exit 5 and the suite's refusal line,
+# the same test as _sc_lock_refused) from its one read of that run's exit code, and every other run
+# exactly as before. Both ways refuse the push; only the reason given moves.
+#
+# The refusal for the lock is said once every run has been read, and it says beside it what FAILED,
+# what measured nothing and what did not finish (#3541): said alone, the reader retried for the lock
+# only to be refused next time for a failure this push already knew of.
 _sc_lock_inflight=""
-_sc_i=1
-while [ "$_sc_i" -le "$_sc_n" ]; do
-  if [ ! -f "$(_sc_rd "$_sc_i")/rc" ]; then
-    [ -n "$_sc_out_of_time" ] && [ -f "$_sc_work/$_sc_i.lockline" ] && _sc_lock_inflight="$_sc_lock_inflight$_sc_i"$'\n'
-  elif _sc_lock_refused "$_sc_i"; then
-    _sc_locked="$_sc_locked$_sc_i"$'\n'
-  fi
-  _sc_i=$(( _sc_i + 1 ))
-done
-if [ -n "$_sc_locked" ] || [ -n "$_sc_lock_inflight" ]; then
+if [ -n "$_sc_out_of_time" ]; then
+  _sc_i=1
+  while [ "$_sc_i" -le "$_sc_n" ]; do
+    if [ -f "$_sc_work/$_sc_i.lockline" ] && [ ! -f "$(_sc_rd "$_sc_i")/rc" ]; then
+      _sc_lock_inflight="$_sc_lock_inflight$_sc_i"$'\n'
+      : > "$_sc_work/$_sc_i.inflight"
+    fi
+    _sc_i=$(( _sc_i + 1 ))
+  done
+fi
+_sc_lock_refusal(){   # at the read back, once every run is sorted: refuses the push when a run never got the lock
+  [ -n "$_sc_locked" ] || [ -n "$_sc_lock_inflight" ] || return 0
   {
     echo "PUSH BLOCKED: a whole tree scanner could not run, because another test run is going."
     echo ""
     echo "These never ran, so they neither passed nor failed: each refused to start while another"
     if [ -n "$_sc_out_of_time" ]; then
-      echo "suite run held its lock, and was tried again until this gate's own budget of ${_sc_budget}s ran out:"
+      # Not "tried again": a first try whose refusal came after the budget never was (#3541, L11).
+      echo "suite run held its lock, and had not got it when this gate's own budget of ${_sc_budget}s ran out:"
     else
       echo "suite run held its lock, and the lock was still held after waiting for it (up to ${_sc_lock_wait}s,"
       echo "inside this gate's own budget of ${_sc_budget}s):"
@@ -1690,6 +1736,26 @@ LOCKED
     done <<INFLIGHT
 $_sc_lock_inflight
 INFLIGHT
+    # What else this push already knows, so a retry for the lock is not the first anyone hears of it.
+    if [ -n "$failed" ]; then
+      echo ""
+      echo "Beside them, these scanners ran and FAILED, which waiting for the lock will not change:"
+      printf '%s' "$failed"
+    fi
+    if [ -n "$unmeasured" ]; then
+      echo ""
+      echo "Beside them, these scanners ran and measured nothing, each saying why:"
+      printf '%s' "$unmeasured"
+    fi
+    if [ -n "$unfinished" ]; then
+      echo ""
+      echo "Beside them, these scanners had not finished when this gate's own budget of ${_sc_budget}s ran out:"
+      printf '%s' "$unfinished"
+      if [ -n "$unfinished_cmds" ]; then
+        echo "  Each can be run directly:"
+        printf '%s' "$unfinished_cmds"
+      fi
+    fi
     echo ""
     echo "Retry the push when that run finishes. The line above names the process holding the lock"
     echo "and, when it is an orphan of a run that was killed, the command that ends it."
@@ -1698,7 +1764,7 @@ INFLIGHT
     echo "Explain to the user first why skipping is legitimate. Never override silently."
   } >&2
   exit 2
-fi
+}
 
 # Read every result back. A run whose exit code was never written did not finish saying anything,
 # and that is not a pass: it is a scanner whose verdict is missing, which must not read as a clean
@@ -1732,12 +1798,22 @@ ran=0
 # Of those that ran, how many finished in the background after an earlier push had gone, said in
 # the summary so a verdict this push did not watch being made is never passed off as one it did.
 _sc_bg_done=0
+# The runs that refused on the suite lock, sorted from the read of each exit code below; the retries
+# in flight at the budget were listed above, as the budget ended, and are not read again.
+_sc_locked=""
+_sc_phase "reading back what the scanners found and writing its verdict, which takes the record's lock and each finished scanner's for up to 5 seconds each"
 _sc_i=1
 while [ "$_sc_i" -le "$_sc_n" ]; do
+  if [ -f "$_sc_work/$_sc_i.inflight" ]; then _sc_i=$(( _sc_i + 1 )); continue; fi
   _sc_what="$(head -2 "$_sc_work/$_sc_i.what" 2>/dev/null | tr '\n' ' ')"
   _sc_rdir="$(_sc_rd "$_sc_i")"
   ran=$(( ran + 1 ))
   _sc_rc_now="$(cat "$_sc_rdir/rc" 2>/dev/null || printf 'missing')"
+  # A refusal on the lock, from this same read: never a failing scanner (#3541).
+  if [ "$_sc_rc_now" = "5" ] && grep -q '^test suite: another run is already going' "$_sc_rdir/out" 2>/dev/null; then
+    _sc_locked="$_sc_locked$_sc_i"$'\n'
+    _sc_i=$(( _sc_i + 1 )); continue
+  fi
   if [ "$_sc_rc_now" = "0" ] && [ -n "$_sc_key" ]; then
     # Only a PASS is remembered, and it is remembered against the key it passed on.
     _sc_passed_now="$_sc_passed_now$_sc_key $(head -1 "$_sc_work/$_sc_i.what" 2>/dev/null) $(sed -n 2p "$_sc_work/$_sc_i.what" 2>/dev/null)
@@ -1800,6 +1876,9 @@ $_sc_fails
   fi
   _sc_i=$(( _sc_i + 1 ))
 done
+# A run that never got the lock refuses the push here, saying so, before anything below writes a
+# verdict or a record of passes, as it did when it was judged in a pass of its own.
+_sc_lock_refusal
 
 # What passed on this key, written only when nothing failed or went unmeasured, so a run with
 # either in it never lets a sibling be skipped on the strength of a push that was blocked.

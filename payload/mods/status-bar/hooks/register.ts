@@ -1,4 +1,5 @@
 import type { EngineInterface, Register } from 'claude-code'
+import { cutOwn } from './mod-kit/hold.ts'
 import type { StatusBar, StatusBarAccount, StatusBarFacts, StatusBarFollowUp, StatusBarMode } from '../types/index.d.ts'
 import { CACHE_WARN_MS, checksOf, compactLines, lookParts, unpushedOf } from './facts.ts'
 import type { Job, PrReading, QuietAgent, RollupEntry, UnpushedReading } from './facts.ts'
@@ -1007,7 +1008,7 @@ export const register: Register = on => {
         `End this reply now; the conversation after it starts from the summary, and ${note} holds what you decided${from ? ` (copied from ${from}, which a restart clears)` : ''}. ` +
         'In a /goal run the turn goes on until the goal is met or stopped, so the Compact waits until then.',
     }
-  })
+  }).catch(($, e, next) => cutOwn('the status bar', next))
 
   on('session.end', async ($, e, next) => {
     // A login landing after this would write the facts file of a session that has ended. A /clear

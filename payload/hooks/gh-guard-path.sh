@@ -29,6 +29,13 @@ if [ -z "${CLAUDE_ENV_FILE:-}" ]; then
 fi
 
 line="export PATH=\"$BIN:\$PATH\""
+# The hook runs at every SessionStart of one session (a start, a resume, a clear, a compaction)
+# against the same env file, so the line goes in only when the file does not already hold it, whole,
+# as check-work-names-publish.sh matches it (claude-config#3619). grep exits 0 only on a match: a
+# file it cannot read (exit 2) gets the line as before, so the check never leaves a session without
+# it. A line naming another guard folder is a different line, so the newer one goes in after it, to
+# be first on PATH, and the older one stays.
+grep -q -x -F -e "$line" -- "$CLAUDE_ENV_FILE" 2>/dev/null && exit 0
 if ! printf '%s\n' "$line" >> "$CLAUDE_ENV_FILE"; then
   echo "Work names guard: could not write to this session's env file, so the guard on gh is not on PATH, and gh writes made inside scripts are not checked for work names this session."
 fi
