@@ -125,8 +125,10 @@ def end(lines, k, marker, strip, quoted):
 def fed(text, whole, lines_of, unsure):
     """(what the command text is fed in whole, whether that is a heredoc's body), as Judge.fed gives
     it. lines_of(whole) is whole's lines and where each starts; unsure(at, kind) makes what is
-    raised for a heredoc opened at offset at of whole whose end cannot be told, kind "marker" for
-    an opener this does not read and "" for a body it cannot find the end of."""
+    raised for a heredoc opened at offset at of whole whose end cannot be told. kind is "marker"
+    where the opener is the doubt (more than one << in the command, a marker word() does not
+    read, an opener line that goes on over the next, an earlier heredoc on that line that cannot
+    be read or never ends) and "" where the body is (body_at)."""
     lines, starts = lines_of(whole)
     key = text.strip()
     # The lines holding key, found by searching whole for it rather than each line in turn; one
