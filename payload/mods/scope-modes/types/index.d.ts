@@ -100,8 +100,11 @@ declare module 'claude-code' {
       opened: ScopeModesOpened[]
       /**
        * The PRs Dan chose to leave as they are: open (#917), settled at that head, or closed without
-       * merging (#1033), settled while closed. The key keeps its first name, so an answer recorded
-       * before #1033 still reads.
+       * merging, settled while closed, either by his answer to leave_pr_open (#1033) or by his own
+       * pick, in a session's picker naming the PR, to close it unmerged (#3779, marked `picked`). The
+       * key keeps its first name, so an answer recorded before #1033 still reads. While the
+       * session lasts every writer changes the list as it stands when written, with ifVersion, never a
+       * copy read earlier (#3779); the session's end empties it.
        */
       leftOpen: ScopeModesLeftAsIs[]
       /**
