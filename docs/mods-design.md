@@ -2864,8 +2864,9 @@ mod-kit's reader gives such a word as the one name it spells and marks it `unexp
 `handedToUnknown` dropped the mark, so the guard read the parenthesis and its bar as a group and
 the `$(` as a command's output, and held the word as a name that may be any screen file. The mark
 is now kept, and `patternMayBeLook(word, asWritten)` reads such a word as the characters it spells,
-its groups as each name they can spell, as any other word is. Only a word inside a script's own
-text is read so: the same word typed whole on a command line is judged as before, and a word that
+its groups as each name they can spell, as any other word is. That change read only a word inside
+a script's own text so (the same word typed whole on a command line is read by the mark since
+#3620, below), and a word that
 spells a screen file, one handed over beside it, or a suite that writes a stylesheet, is still
 held. This makes the guard hold less. Counted the same day over the personal MacBook's records
 (one run, 2026-11-25: 70,279 shell calls from 2026-10-24 to 2026-11-25, 63,186 distinct; 9,052
@@ -2879,6 +2880,36 @@ guard reads the same with the change and passed before too. No call passed befor
 now. Still held: a suite whose helper is handed a fixture file's name and writes it under the
 suite's own work folder (test-lessons-advisory.sh, test-pr-review.sh), 4 calls, which needs the
 shared rule for a temporary folder to vouch for that folder, and it does not on the real suites.
+
+**The same word typed whole on a command line (#3620), built 2026-11-26 for the design round
+guard.** #3602 left one case held on purpose: the same marked word typed whole, as in
+`mystery "x \$(a | b) y"`, which the guard still read as a group and a command's output. The
+target a command line gives a run already carried the reader's mark; `judged` now reads it there
+too, whichever run is handed the word (a program the reader does not know, a script file, a tool).
+Two things are stricter typed whole than in a script's text. A word that names a look changing
+file anywhere in its text (`mentionedLookFiles`) is judged as before and so held: a program that
+runs what it is handed as a command (a remote shell, a helper that evaluates its argument) would
+write that file, and `mystery "cp x app/page.css; echo y/\$(a|b)"` was held only by the old
+reading. And only the reader's own `true` is the mark, here and in `handedToUnknown`: a word with
+no mark, or with any other value in its place, is judged as one the shell may fill in. Still held,
+each with a test: a word whose last part spells a screen file, a screen file beside the word, and
+a script file or tool handed a substitution that really runs. Not changed, and passed before as
+now: a program the reader does not know handed a substitution that really runs, which the reader
+cannot place. This makes the guard hold less. What it newly passes is a text that names no screen
+file; the same text with no bar inside its parenthesis (`mystery "x \$(a) y"`) passed before.
+Counted on the personal MacBook (one run of each stage, 2026-11-26: 8,381 record files, 76,866
+shell calls from 2026-10-26 to 2026-11-26, 68,898 distinct by folder and command), every rule
+asked of the guard's own modules. 96 distinct calls hand a run a marked word, 33 of them one
+holding a `$(` or a backtick, and 3 (3 calls, all agents', 2026-11-14 and 2026-11-25) hold a word
+the change reads differently: each hands a script file a finding or a command as text, none a
+program the reader does not know and none a tool. No word read as no screen file before is held
+now, and no recorded word is kept held only by the rule for a name anywhere in the text. The 33
+were then judged whole by the guard at the base and with the change, in the test file's stand-in
+world: none changes verdict (30 pass both ways, the 3 with a moved word among them; 3 are held
+both ways as could not check). Twelve planted controls went through the same judging and read as
+required: three that must move (held, then passed), four that change or sit beside a screen file
+(held both ways), a script file handed a live substitution (held both ways), and four that pass
+both ways. Not established: the work MacBook's records, and any call older than 2026-10-26.
 
 **The count behind #3323, the rule for a command as typed** (the personal MacBook's records, 35 days
 to 2026-11-21, 51,590 shell calls when it was taken): with the built rule 16 past calls are newly held by the two guards it was
