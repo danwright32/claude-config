@@ -199,6 +199,17 @@ function normalizeAnnouncement(text) {
     .join('\n');
 }
 
+// The ONE hash of an announcement (claude-config#3666): the sha256 of its normalised form, in hex, or
+// the empty string for wording that says nothing, so an empty file or an empty block is never a hash
+// anything could be approved under. The wording Dan approves is a file and the wording that merges
+// is a block in a pull request, read by lib/announce-approval.py and by the merge gate, and both
+// come here (the announcement-hash command line below), so no reader normalises for itself.
+function announcementHash(text) {
+  const normal = normalizeAnnouncement(text);
+  if (!normal) return '';
+  return require('crypto').createHash('sha256').update(normal, 'utf8').digest('hex');
+}
+
 // `labelKind` is the one changelog label the pull request carries, where it carries exactly one,
 // known kind or not: the merge gate needs it on a refusal too, to say that a label is not in use in
 // a repository before it says what is missing from the writing under it.
@@ -655,6 +666,7 @@ module.exports = {
   extractBlock: extractBlock,
   extractAnnouncement: extractAnnouncement,
   normalizeAnnouncement: normalizeAnnouncement,
+  announcementHash: announcementHash,
   changelogLabels: changelogLabels,
   carriesAnnounce: carriesAnnounce,
   repoScope: repoScope,
@@ -683,9 +695,14 @@ module.exports = {
 //       reads one pull request as JSON on standard input ({labels, body}, as gh or the API gives it)
 //       and prints announcementOwed's answer: {state: owed | none | unknown, channel, text,
 //       normalized, why}.
+//   announcement-hash [--body]
+//       reads wording on standard input and prints {found, hash, lines}: announcementHash's answer and
+//       how many lines the normalised wording has. Without the flag the input IS the wording (the
+//       file Dan was shown). With --body it is a pull request description, hashed by the block under
+//       its Announcement heading, and `found` is false, with no hash, when it has no such heading.
 // Every answer either can give exits 0, "unknown" included, so the reader tells a gate that cannot
-// tell from a command that failed. A call naming no repository, a flag nobody defined, or any other
-// command, prints the usage and exits 2.
+// tell from a command that failed. A call naming no repository where one is needed, a flag nobody
+// defined, or any other command, prints the usage and exits 2.
 if (require.main === module) {
   const cmd = process.argv[2];
   const rest = process.argv.slice(3);
@@ -693,24 +710,35 @@ if (require.main === module) {
   const plain = rest.filter(function (a) { return a.indexOf('--') !== 0; });
   const slug = plain[0];
   const named = typeof slug === 'string' && slug.trim();
-  const known = cmd === 'required-labels' ? ['--needs-dan'] : [];
+  const known = { 'required-labels': ['--needs-dan'], 'announcement-hash': ['--body'] }[cmd] || [];
   const flagsKnown = flags.every(function (f) { return known.indexOf(f) !== -1; });
   const readNow = function () { return registryReader.readRegistry(plain[1] || registryReader.registryPath()); };
-  if (cmd === 'required-labels' && named && flagsKnown) {
-    process.stdout.write(JSON.stringify(requiredLabels(readNow(), slug, undefined, { needsDan: flags.indexOf('--needs-dan') !== -1 })) + '\n');
-  } else if (cmd === 'announcement' && named && flagsKnown) {
+  // Standard input, whole, handed to `then` as text.
+  const withInput = function (then) {
     let raw = '';
     process.stdin.setEncoding('utf8');
     process.stdin.on('data', function (d) { raw += d; });
-    process.stdin.on('end', function () {
+    process.stdin.on('end', function () { then(raw); });
+  };
+  if (cmd === 'required-labels' && named && flagsKnown) {
+    process.stdout.write(JSON.stringify(requiredLabels(readNow(), slug, undefined, { needsDan: flags.indexOf('--needs-dan') !== -1 })) + '\n');
+  } else if (cmd === 'announcement' && named && flagsKnown) {
+    withInput(function (raw) {
       let pr = null;
       try { pr = JSON.parse(raw); } catch (e) { pr = null; }
       process.stdout.write(JSON.stringify(announcementOwed(pr, readNow(), slug)) + '\n');
     });
+  } else if (cmd === 'announcement-hash' && flagsKnown && plain.length === 0) {
+    withInput(function (raw) {
+      const text = flags.indexOf('--body') !== -1 ? extractAnnouncement(raw) : raw;
+      const normal = normalizeAnnouncement(text);
+      process.stdout.write(JSON.stringify({ found: text !== null, hash: announcementHash(text), lines: normal ? normal.split('\n').length : 0 }) + '\n');
+    });
   } else {
     // One line, since a reader of a failed run quotes the last line it printed.
     process.stderr.write('Usage: changelog-entry.js required-labels <owner/name> [registry file] [--needs-dan] | '
-      + 'announcement <owner/name> [registry file], with the pull request as JSON on standard input\n');
+      + 'announcement <owner/name> [registry file], with the pull request as JSON on standard input | '
+      + 'announcement-hash [--body], with the wording, or with --body a description, on standard input\n');
     process.exit(2);
   }
 }
