@@ -132,8 +132,9 @@ check "a volume whose free space cannot be read: exit 2 naming it, no traceback"
   "$([ "$rc" -eq 2 ] && no_trace "$out" && grep -qF "could not read free space on $TMP/no-such-volume" <<< "$out" && echo ok || echo "exit $rc, said: $out")"
 # The process table: the script is loaded with its reader replaced by one that fails as libproc does
 # where it is missing (OSError), and its own main() is run, so the handler under test is the shipped one.
-out="$(env -u DISK_WRITERS_SAMPLES DISK_WRITERS_PATH="$TMP" python3 -c '
+out="$(env -u DISK_WRITERS_SAMPLES DISK_WRITERS_PATH="$TMP" python3 -B -c '
 import importlib.util, sys
+sys.dont_write_bytecode = True
 spec = importlib.util.spec_from_file_location("disk_writers", sys.argv[1])
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
