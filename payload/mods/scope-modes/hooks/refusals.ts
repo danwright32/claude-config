@@ -41,7 +41,39 @@ const READ_PROGRAMS: ReadonlyMap<string, (args: readonly string[]) => boolean> =
   ['rg', (args: readonly string[]) => !args.some(a => a.startsWith('--pre') || a.startsWith('--hostname-bin'))],
   ['find', noneOf(['-exec', '-execdir', '-ok', '-okdir', '-delete', '-fprint', '-fprint0', '-fprintf', '-fls'])],
   ['sort', (args: readonly string[]) => !args.some(a => a.startsWith('--output') || /^-[A-Za-z]*o/.test(a))],
+  // #3192: widened only from rows a real night's report listed on their own, each in the form seen.
+  ['gh', (args: readonly string[]) => ghPrViewJson(args)],
 ])
+
+// A pull request view printing JSON (#3192, the night of 18 Nov 2026): `gh pr view [number] --json
+// fields`, with nothing beside it but --repo or -R. Every other option is no read here, --web
+// (which opens a browser) and those no night has shown alike, and so is every other subcommand.
+const GH_VALUE_OPTIONS: ReadonlySet<string> = new Set(['--json', '--repo', '-R'])
+const ghPrViewJson = (args: readonly string[]): boolean => {
+  if (args[0] !== 'pr' || args[1] !== 'view') return false
+  let json = false
+  let positional = 0
+  for (let i = 2; i < args.length; i++) {
+    const a = args[i] as string
+    const name = a.split('=')[0] as string
+    if (GH_VALUE_OPTIONS.has(name) && a.startsWith('--') && a.includes('=')) json ||= name === '--json'
+    else if (GH_VALUE_OPTIONS.has(a) && i + 1 < args.length) {
+      json ||= a === '--json'
+      i++
+    } else if (a.startsWith('-')) return false
+    else if (++positional > 1) return false
+  }
+  return json
+}
+
+// A git config that only gets one value (#3192, the night of 22 Nov 2026): `git config --get key
+// [value-pattern]`, --get its only option. Setting, unsetting, adding, editing and every option no
+// night has shown are no read.
+const gitConfigGets = (args: readonly string[]): boolean => {
+  const options = args.filter(a => a.startsWith('-'))
+  const words = args.length - options.length
+  return options.length === 1 && options[0] === '--get' && words >= 1 && words <= 2
+}
 // What may stand before a git subcommand that reads: a folder to run in, or an option that only quiets git.
 const GIT_QUIET: ReadonlySet<string> = new Set(['--no-pager', '-P', '--no-optional-locks'])
 const GIT_READS: ReadonlySet<string> = new Set([...GIT_LOCAL_READS, 'status'])
@@ -49,7 +81,7 @@ const base = (w: string | undefined) => (w ?? '').split('/').pop() ?? ''
 
 const gitReads = (c: Cmd): boolean => {
   const g = c.git
-  if (!g?.sub || !GIT_READS.has(g.sub) || base(c.words[0]) !== 'git') return false
+  if (!g?.sub || !(GIT_READS.has(g.sub) || (g.sub === 'config' && gitConfigGets(g.args))) || base(c.words[0]) !== 'git') return false
   // git takes any unambiguous start of a long option, so --outp and --out are --output too.
   if (g.args.some(a => {
     const name = a.split('=')[0] as string

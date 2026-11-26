@@ -105,6 +105,42 @@ describe('which refused calls only read', () => {
     // A program on neither list that the commands read here do not show is no read.
     expect(withRun('cat a.txt', { what: NOT_KNOWN, script: 'mystery' })).toBe(false)
   })
+  // #3192: the list widens only from the rows a real night's report listed on their own. Across the
+  // seven nights with no verdict refusals on the personal MacBook (17 to 25 Nov 2026, 379 refusals),
+  // the report listed two: a pull request view with --json and --repo (night of 18 Nov), and a git
+  // config --get under -C (night of 22 Nov). Each is added in exactly the form seen, and every other
+  // form of the same program, a writing one above all, stays no read.
+  test('a pull request view with --json and --repo only reads (#3192)', () => {
+    for (const c of ['gh pr view 3197 --repo owner/repo --json title,body,state,mergedAt,comments', 'gh pr view 12 --json state', 'gh pr view --json title', 'gh pr view 12 -R owner/repo --json state', 'gh pr view 12 --json=state --repo=owner/repo', 'rtk gh pr view 12 --json state'])
+      expect([c, bashReads(c)]).toEqual([c, true])
+  })
+  test('every other form of gh, a writing one above all, is still no read (#3192)', () => {
+    for (const c of [
+      'gh pr create --title x --body y', 'gh pr edit 12 --title x', 'gh pr comment 12 --body x', 'gh pr close 12', 'gh pr merge 12 --squash', 'gh pr review 12 --approve',
+      'gh issue create --title x', 'gh issue edit 3 --add-label x', 'gh issue comment 3 --body x', 'gh issue close 3',
+      'gh api repos/o/r/issues -X POST -f title=x', 'gh api repos/o/r/issues --method PATCH', 'gh api repos/o/r/pulls/1',
+      // A view that opens a browser, or a form no night has shown, is not counted either.
+      'gh pr view 12 --web', 'gh pr view 12 -w', 'gh pr view 12 --comments', 'gh pr view 12 --json state --jq .state', 'gh pr view 12 --json state -t x',
+      'gh pr view 12', 'gh pr list', 'gh issue view 3', 'gh issue view 3 --json title', 'gh pr checkout 12', 'gh pr diff 12',
+      'gh pr view 12 --json state > out.json', 'gh pr view 12 --json state | tee out.json', 'gh pr view 12 --json $(make-list)',
+    ])
+      expect([c, bashReads(c)]).toEqual([c, false])
+  })
+  test('git config --get under -C only reads (#3192)', () => {
+    for (const c of ['git config --get remote.origin.url', 'git -C /r/repo config --get remote.origin.url', 'rtk git -C /r/repo config --get user.email', 'git config --get core.hooksPath'])
+      expect([c, bashReads(c)]).toEqual([c, true])
+  })
+  test('every other form of git config, a writing one above all, is still no read (#3192)', () => {
+    for (const c of [
+      'git config user.name x', 'git -C /r/repo config core.hooksPath hooks', 'git config --unset user.name', 'git config --unset-all x', 'git config --add x y',
+      'git config --replace-all x y', 'git config --edit', 'git config -e', 'git config --rename-section a b', 'git config --remove-section a',
+      'git config --global user.name x', 'git config --get x --unset', 'git config --get x --add y', 'git config --get x --edit',
+      // A form no night has shown is not counted either.
+      'git config --list', 'git config -l', 'git config --get-all x', 'git config --get-regexp x', 'git config get x', 'git config x',
+      'git -c core.pager=x config --get x', 'git config --get x > out.txt',
+    ])
+      expect([c, bashReads(c)]).toEqual([c, false])
+  })
   test('a tool that only reads by its name is a read; a writer or an unknown tool is not', () => {
     expect(readsOnly('Read', [], { files: [], changes: [], unnamed: [] })).toBe(true)
     expect(readsOnly('Grep', [], { files: [], changes: [], unnamed: [] })).toBe(true)

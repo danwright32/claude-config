@@ -11559,7 +11559,10 @@ usage). Its header says which sessions had no goal, and so did no work, and each
 end gives its goal. Three or more calls auto mode's check refused with no verdict for one reason
 (the check unavailable, a call not reviewed) are one line in Parked and failed, with the count, the
 time window in ET, the issues being worked while they fell and the kinds of call (#3158, #3223).
-Listed after it on its own is each of them that stopped work: one that did more than read, was
+Listed after it on its own is each of them that stopped work: one that did more than read (judged
+by the mod's own short list of programs and forms that only read, widened only from rows a real
+night listed, #3192: since then a `gh pr view` with `--json` and a `git config --get` count as
+reads, and `gh issue view`, `sed -n` and `awk` still do not), was
 never sent again unchanged and run, and after which its session did not finish the work it held
 (#3223). That work counts as finished when every issue the session had claimed by then, and not yet
 ended, was noted done afterwards; a session holding no claim finished its work when it later noted
