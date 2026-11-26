@@ -6261,9 +6261,11 @@ through `hooks/lib/skill-python-tests.py`, found from disk. To run one skill's a
 a file shaped like a test that nothing runs, and `test-skill-helper-exits.sh` on a skill helper that
 can report success when it failed (claude-config#676, #677). That includes a long running process
 whose status is checked only as it starts: one held on an attribute is followed through the methods
-of its class, and a method that ends it must read how it ended. A process handed to something the
-check cannot follow is printed as a `U1` line and counted as `unjudged=` in the summary, without
-failing the check (#3650).
+of its class, and a method that ends it must read how it ended. A local process whose status was
+read while it ran and which is then handed to something the check cannot follow is printed as a
+`U1` line and counted as `unjudged=` in the summary, without failing the check. One held on an
+attribute whose ending no method reads is refused even when it is handed to something the check
+cannot follow, and the finding names that hand off (#3650).
 
 The pull request checks install Claude Code for the mods' own tests (#3297), at the one version
 written in `.github/claude-code-version` and read by `tools/install-claude-code.sh` alone, so every

@@ -34,8 +34,11 @@ exits  A helper must not report success when it failed. Three shapes are refused
            waited for where it starts; a local one read only by `poll()` must not be used again
            after that read, nor waited on after it (a `wait()` whose result is dropped, or
            `communicate()`) unless a `returncode` read or a `wait()` whose result is used follows.
-       U1  not a finding: a process handed to something the check cannot follow, so whether its
-           ending is read was not judged. Printed and counted, and it does not fail the check.
+       U1  not a finding: a local process whose status was read while it ran, then handed to
+           something the check cannot follow, so whether its ending is read was not judged.
+           Printed and counted, and it does not fail the check. A process held on an attribute
+           whose ending no method reads is a P1 even when it is handed to something the check
+           cannot follow, and the finding names that hand off.
        P2  an `except` that catches everything (bare, Exception, BaseException) and then does
            nothing (`pass`, `continue`, `...`, a bare return).
        S1  a `gh issue create` in a helper with no `--milestone` or no label: the issue field gate
