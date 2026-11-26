@@ -57,7 +57,7 @@ case "${BASH_SOURCE[0]}" in */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) HOOK_DIR=
 HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
 SC_LOADED=0
 # shellcheck source=lib/sync-clone.sh
-{ . "$HOOK_DIR/lib/sync-clone.sh" 2>/dev/null && declare -F sc_hold_covers >/dev/null; } && SC_LOADED=1
+{ . "$HOOK_DIR/lib/sync-clone.sh" 2>/dev/null && declare -F sc_hold_covers >/dev/null && declare -F sc_watcher_possible >/dev/null; } && SC_LOADED=1
 
 input="$(cat 2>/dev/null || true)"
 # Cleaned by the shared reader when it loads: a lone surrogate escape anywhere in the payload
@@ -123,7 +123,13 @@ root="$(sc_clone_root_of "$cwd")" || exit 0
 # stale pid is reused by the system constantly, and a number alone cannot tell a live watcher from
 # whatever inherited it (L237). This is deliberately the same test claude-sync's own
 # watch_already_running applies, for the same reason.
-wcmd="$(sc_watcher_cmd || true)"
+#
+# Three answers, never two (claude-config#3547): live, none, or could not be read. The reading's
+# failure was discarded here too, so a ps that could not run left this hook saying nothing, which
+# reads exactly as a checkout nothing can revert (L678). Read in this shell, never in a command
+# substitution, so the state it leaves is still here to branch on.
+sc_watcher_possible || true
+wcmd="$SC_WATCHER_CMD"
 
 # WHETHER it is this checkout is answered by substring against the whole command line, not by
 # parsing a path out of it. A command line cannot be tokenised unambiguously when a path holds a
@@ -162,9 +168,9 @@ hold_live(){ sc_hold_covers "$sid"; }
 # The state this prompt is in, in one line. Everything that would change what the person needs to
 # be told is in it, so a change in any of them speaks again and a repeat of the same state does not.
 clone=""
-if [ -z "$wcmd" ]; then
+if [ "$SC_WATCHER_STATE" = none ]; then
   state="no-watcher"
-elif is_this_checkout; then
+elif [ "$SC_WATCHER_STATE" = live ] && is_this_checkout; then
   state="editing-the-source $root"
 elif sc_is_own_worktree "$root"; then
   # An agent's linked worktree on its own branch: nothing mirrors into it, the same answer the
@@ -174,6 +180,12 @@ elif sc_is_plain_copy "$root"; then
   # A copy of the tree with no repository around it: the daemon reaches a checkout through the
   # repository, so nothing it does arrives here, and the gate answers the same (claude-config#2705).
   state="plain-copy $root"
+elif [ "$SC_WATCHER_STATE" != live ]; then
+  # A watcher that could not be read (claude-config#3547). Which clone it runs from is read from
+  # the same command line, so this checkout cannot be told from the source, and only what does not
+  # depend on the watcher is quiet: the worktree and the copy above, and a hold here. The reason is
+  # part of the state, so a different failure speaks again and a repeat of the same one does not.
+  if hold_live; then state="held-unread $root"; else state="unread $root $SC_WATCHER_WHY"; fi
 else
   clone="$(watcher_clone_name)"
   # Whose hold is in force is part of the state, so a hold another session takes or lifts while this
@@ -188,8 +200,16 @@ previous="$(cat "$STATE" 2>/dev/null || true)"
 printf '%s\n' "$state" > "$STATE" 2>/dev/null || true
 
 [ "$state" = "$previous" ] && exit 0
-case "$state" in warn' '*) ;; *) exit 0 ;; esac
 others_sentence="$(sc_hold_others_sentence "$sid")"
+case "$state" in
+  warn' '*) ;;
+  unread' '*)
+    # Could not check, said the way a library it cannot load is: to the person as a systemMessage
+    # and to the session as the prompt's context (#1924). It claims no live watcher, since none was
+    # seen (L11), and names the one step that protects the work whatever the answer is.
+    hook_allow_notice "claude-sync: this is a development checkout at $root, and payload-revert-warning.sh could not check whether a watch daemon could overwrite edits to payload/ here. $(sc_watcher_unread_sentence) A live one running from another clone mirrors ~/.claude up over payload/ and pushes, so edits made to payload/ here are not merged with the config, they are overwritten by it, silently. The payload write gate refuses a write under payload/ here for the same reason until the watcher can be read. Either edit ~/.claude directly, which needs no hold, or take a hold before editing here, which is read from its own record and so still counts: claude-sync hold 120 \"why\". To see why the watcher could not be read, run in a terminal: $SC_WATCHER_PROBE${others_sentence:+ $others_sentence}" UserPromptSubmit ;;
+  *) exit 0 ;;
+esac
 
 echo "claude-sync: this is a development checkout at $root, and a watch daemon is live on this Mac running from $clone. That daemon mirrors ~/.claude up over payload/ and pushes, so edits made to payload/ here are not merged with the config, they are overwritten by it, silently and with no conflict to notice. On 2026-09-03 it reverted 84 files of a day's work in one commit and deleted a file that existed only in the repo. Either edit ~/.claude directly, which needs no hold, or take a hold before editing here: claude-sync hold 120 \"why\". A hold expires, so afterwards make ~/.claude match what is in the checkout, or the next send reverts it again.${others_sentence:+ $others_sentence}"
 exit 0

@@ -5,6 +5,7 @@ clause saying what the failure looks like. Read the whole entry before a rule de
 anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.claude/LESSONS.md,
 which is NOT loaded into the session.
 
+- L1041. A liveness proof retried until it passes hides each unseen attempt, a moment the monitor was blind: count them and call the run unmeasured.
 - L1039. After breaking then restoring a Python file, clear __pycache__ before each test run, or a same size same second edit tests the old code.
 - L865. A query API that may answer from a sample must be checked on every answer: a control passes on an estimate while a rare needle reads zero.
 - L827. A retried operation's recorded duration spans every attempt, so size a per attempt timeout only from per attempt timings.

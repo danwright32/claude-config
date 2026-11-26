@@ -1678,9 +1678,10 @@ def remember_readings(mod):
     reader cannot read raises as it did, every time it is asked for. So is one asking where the
     comments are (claude-config#3464).
 
-    Every reading asks the reader which # it took for a comment without being sure the shell does
-    (its `unsure`), and one that names any is not used: UnsureComment, which main() refuses as a
-    check it could not make. It is never kept, in this run or between runs."""
+    Every reading asks the reader which # it took for a comment without being sure the shell does,
+    and which heredoc it cannot find the end of (its `unsure`, claude-config#3492), and one that
+    names any is not used: UnsureComment, which main() refuses as a check it could not make. It is
+    never kept, in this run or between runs."""
     plain, memo = mod.commands, {}
 
     def sure(s, cwd, **asked):
@@ -1691,7 +1692,11 @@ def remember_readings(mod):
             # Whether the reading ended or gave up (Unreadable, which a # read as a comment can
             # cause by itself: it hides the ) or the quote that closes something).
             if marks:
-                raise UnsureComment(s, marks[0][0])
+                # Which kind of heredoc was named, for the reason alone: one whose opener line
+                # ends in a backslash ("joined"), or one whose marker holds a line break ("split").
+                at, joins = marks[0][0], []
+                opener = mod.heredoc_opener(s, at, joins=joins) if s.startswith("<<", at) else None
+                raise UnsureComment(s, at, "joined" if joins else "split" if opener and "\n" in opener[0] else "")
 
     def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None):
         if heredocs is not None or spans is not None or comments is not None:
@@ -1888,13 +1893,28 @@ class UnsureComment(BaseException):
     and names nothing, unless that reading then cannot be read to its end, when the # is named and
     this is raised all the same (claude-config#3481). A BaseException, as NulPath is, so nothing in
     the walk reads it as a text that merely could not be read; main() refuses the call as one it
-    could not check."""
+    could not check.
 
-    def __init__(self, text, at):
+    Raised too for a heredoc the reader names there, by its <<, as one whose end it cannot vouch
+    for (claude-config#3492): an unquoted one the shells do not close at the first line that is
+    its marker, because a backslash joins that line to the one before, or close in different
+    places, or never close, where every shell runs the substitutions in the rest of the text as
+    its body and the reading took that rest for commands. heredoc says which of the two, a # or a
+    heredoc, was named. opener says what about the heredoc's opener had it named, for the reason
+    given: "joined" where its line ends in a backslash, which every shell joins to the next line,
+    so that the end marker is not the word that line shows, "split" where its quoted marker holds
+    a line break, which no line of a body can be, and "" otherwise (review of #3495)."""
+
+    def __init__(self, text, at, opener=""):
         super().__init__(at)
         start = text.rfind("\n", 0, at) + 1
         end = text.find("\n", at)
         self.line = text[start:len(text) if end < 0 else end].strip()[:120]
+        self.heredoc = text.startswith("<<", at)
+        self.opener = opener
+        # A text with no line break: the reader names a heredoc there for the one line, quoted or
+        # not, since no shell gives it a body (claude-config#3492), so the reason says that.
+        self.one_line = "\n" not in text
 
 
 def comment_why(line):
@@ -1902,6 +1922,37 @@ def comment_why(line):
             "inside a word where a closing parenthesis or a backslash stands right before it, or inside "
             "backquotes, and then runs the rest of that line, which the gate could not read for certain. "
             "Write that # in quotes, or put the comment on a line of its own (claude-config#3464)" % line)
+
+
+def heredoc_why(line, one_line=False, opener=""):
+    if one_line:
+        return ("it opens a heredoc on the one line `%s`, and the gate cannot tell whether the commands "
+                "after it on that line are its body or commands: typed on one line, no shell gives the "
+                "heredoc a body and every one of them runs. Put the heredoc's body and its end marker on "
+                "lines of their own after the line that opens it (claude-config#3492)" % line)
+    # What a shell that keeps an unquoted heredoc open does with the rest of the text.
+    keeps = ("A shell that keeps the heredoc open takes the rest of the text for its body: it runs every "
+             "$( ) there, in single quotes or not, and feeds the rest to the heredoc's command, which the "
+             "gate could not read for certain.")
+    if opener == "joined":
+        return ("it opens a heredoc the gate cannot find the end of, in the line `%s`: that line ends in a "
+                "backslash before the heredoc's end marker is whole, and a shell joins it to the next "
+                "line, so the end marker is the word the two lines make, which that backslash does not "
+                "quote. %s Write the << and its whole end marker on one line (claude-config#3492)"
+                % (line, keeps))
+    if opener == "split":
+        return ("it opens a heredoc the gate cannot find the end of, in the line `%s`: its end marker is "
+                "quoted and holds a line break, and no line of the text can be that marker, so some shells "
+                "never end the heredoc where others end it at the lines that spell the marker. A shell "
+                "that keeps the heredoc open feeds the rest of the text to the heredoc's command, which "
+                "the gate could not read for certain. Write the end marker as one word on the line that "
+                "opens the heredoc (claude-config#3492)" % line)
+    return ("it opens a heredoc the gate cannot find the end of, in the line `%s`: the end marker is not "
+            "quoted, and it either never stands on a line of its own or stands right after a line that "
+            "ends in a backslash, which a shell joins to the marker's line, so that the heredoc does not "
+            "end there or ends there in some shells only. %s End the heredoc with its marker alone on a "
+            "line that follows no backslash, or quote the marker (<<'EOF') where nothing in the body is "
+            "to be expanded (claude-config#3492)" % (line, keeps))
 
 
 def budget_clock():
@@ -6359,6 +6410,13 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             if lang == "py":
                 # What sys.argv and os.environ hold, for a sys.path change built from them (#2449).
                 self.py_cmd["argv"], self.py_cmd["env"] = self.py_args(text, name, d)
+                # And the command as python3 itself reads its options, where the table above places
+                # what runs otherwise (py_own_reading in lib/py-file-runs.py, claude-config#3539):
+                # judged first, and then as the table reads it below, so this can only refuse more.
+                reason = self.py_own_reading(name, words, text, here, lambda again: self.judge_written(
+                    d, again, wrapper, why, depth, whole, fed_by))
+                if reason:
+                    return reason
             if inline:
                 before, code, after = inline
                 label = f"the code given to {name}"
@@ -6410,7 +6468,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             if module:
                 return self.py_module_run(words[0], name, module, d, depth, here)
             fed, is_body = self.fed(fed_by, whole) if operand == "-" else (None, False)
-            if is_body and "-m" not in words[1:]:
+            # A module python3 runs with -m is judged above. The word -m anywhere else is an argument
+            # of the script or the code, or another option's value, and the files are read all the
+            # same: read for no command holding the word, `python3 posts.py -m x` and `node post.js
+            # -m x` ran a script nothing had read (claude-config#3539).
+            if is_body:
                 # Code fed in a heredoc (python3 - a.md b.md <<'EOF'): the files after - are its
                 # arguments, judged as those of code given by -c are, against what that code can do
                 # with them (claude-config#2786); the files before it are read as code, as before.
@@ -6421,7 +6483,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                                              held_code=True))
                 if reason:
                     return reason
-            elif "-m" not in words[1:]:
+            else:
                 reason = self.every_file(words, d, depth, False, lang)
                 if reason:
                     return reason
@@ -8231,7 +8293,7 @@ def main():
         except NulPath:
             reason = judge.unfollow(NUL_WHY)  # never kept: only an allowed judgement is
         except UnsureComment as e:
-            reason = judge.unfollow(comment_why(e.line))
+            reason = judge.unfollow(heredoc_why(e.line, e.one_line, e.opener) if e.heredoc else comment_why(e.line))
         finally:
             judge.unwatch()
         if judge.overran:

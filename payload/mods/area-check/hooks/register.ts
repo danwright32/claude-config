@@ -2,7 +2,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
 import { askAnyAccount, type GhRun } from './mod-kit/ghaccounts.ts'
 import { errorText, missingOf } from './mod-kit/skew.ts'
-import { neverThrows } from './mod-kit/hold.ts'
+import { cutCall, cutCheck, cutOwn } from './mod-kit/hold.ts'
 import type { ModKitCommand, ModKitGh } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import {
   DIR_SHOWN,
@@ -1331,7 +1331,9 @@ export const register: Register = on => {
     } finally {
       fromAgent.delete(id)
     }
-  })
+    // This hook judges a subagent's call alone, and is the first asked when any tool.call hook
+    // here fails (hold.ts), so for the main session's call it leaves the answer to the catch below.
+  }).catch(($, e, next) => cutCall('the area check', e, next, { mine: () => e.agentId !== undefined }))
 
   // A pull request command, the main session's or a subagent's (#1510): refused while its
   // description lacks an area check line for a file decided on its branch. Its own failure holds a
@@ -1377,7 +1379,7 @@ export const register: Register = on => {
       await failed($, cwd, new Error(why), 'command')
     }
     return next(e)
-  }).catch(($, e, next) => next.called ? next(e) : neverThrows(() => prCaught(e, next.error), () => ({ deny: PR_HELD }), { deny: PR_HELD }))
+  }).catch(($, e, next) => cutCall('the area check', e, next, { work: () => prCaught(e, next.error), held: () => ({ deny: PR_HELD }), last: { deny: PR_HELD } }))
 
   // The main session's edit, judged beneath every mod's tool.call hook, after the settings hooks: an
   // edit one of them refuses is refused in its words, and never held, judged or claimed. A query
@@ -1394,7 +1396,7 @@ export const register: Register = on => {
     if (decided.decision === 'deny') return decided
     const v = path ? await gate($, e.tool, id, path, null) : await gateShell($, id, command as string, null)
     return 'deny' in v ? { decision: 'deny', reason: v.deny } : decided
-  })
+  }).catch(($, e, next) => cutCheck('the area check', next))
 
   // The decision, under the held call's id, by the session or agent it was held for. Answered here
   // and never passed down, so the guards beneath are asked through mod-kit's screen first (#707).
@@ -1419,7 +1421,7 @@ export const register: Register = on => {
     }
     await release($, h, { decision: 'proceed', reason: input.reason as string })
     return { result: `Recorded: this work goes ahead on ${heldNames(h)}. ${again(h, agent)}` }
-  }).catch(($, e, next) => neverThrows(() => undecided(msg(next.error)), () => HELD, HELD))
+  }).catch(($, e, next) => cutOwn('the area check', next, { work: () => undecided(msg(next.error)), held: () => HELD, last: HELD }))
 
   // Dan's restructure question, asked in Claude Code's own dialog: the hook words the question and
   // its answers, and reads his choice from the dialog's own result, the one place it comes from him.
@@ -1476,7 +1478,7 @@ export const register: Register = on => {
     }
     await release($, h, { decision: 'proceed', by: 'dan' })
     return say(`Dan chose Proceed anyway: this work goes ahead on ${heldNames(h)}. ${again(h, null)}`)
-  })
+  }).catch(($, e, next) => cutCall('the area check', e, next))
 
   // The questions waiting on Dan, said beside each prompt of the main session until he answers.
   on('prompt.submit', async ($, e, next) => {
