@@ -7790,7 +7790,10 @@ between, and what each has written since it started. It reads only programs runn
 and counts the rest by who they run as (root, other system users), as unknown, never as zero; it
 exits 2 when it could read no program at all. It is read only. `DISK_WRITERS_SAMPLES` hands it a
 JSON file of readings in place of this Mac's, which is how `skills/disk-full/test-disk-full-skill.sh`
-runs it on a machine without macOS's libproc. The same step totals the space held by files deleted
+runs it on a machine without macOS's libproc. Readings it cannot use (not there, not JSON, or
+missing or mistyping a field) end in one line naming what is wrong and exit 2, never a traceback,
+and a name it cannot print as it stands is shown with the bad part replaced.
+`hooks/test-disk-writers.sh` runs those paths, and the options it refuses. The same step totals the space held by files deleted
 while still open, which only `lsof` sees, and reads the file event log's entry count from its
 folder's size.
 

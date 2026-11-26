@@ -143,6 +143,59 @@ def sample_this_mac(seconds, path):
             "read": len(rows), "unread": unread, "rows": rows}
 
 
+def _number(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _count(v):
+    return isinstance(v, int) and not isinstance(v, bool) and v >= 0
+
+
+def shape_fault(s):
+    """What makes a set of readings unusable, or None. Readings handed in through
+    DISK_WRITERS_SAMPLES are checked whole before any line is printed, so a file missing a field ends
+    in one line naming it, never a traceback and never a report built from the half that was there."""
+    if not isinstance(s, dict):
+        return "the top level is a %s, not an object" % type(s).__name__
+    for key in ("seconds", "free", "total", "read", "unread", "rows"):
+        if key not in s:
+            return 'no "%s"' % key
+    if not _number(s["seconds"]) or s["seconds"] < 0:
+        return '"seconds" is not a number of seconds'
+    if not (isinstance(s["free"], list) and len(s["free"]) == 2 and all(_number(v) for v in s["free"])):
+        return '"free" is not two numbers of bytes'
+    for key in ("total", "read"):
+        if not _count(s[key]):
+            return '"%s" is not a count' % key
+    u = s["unread"]
+    if not isinstance(u, dict):
+        return '"unread" is not an object'
+    for key in ("root", "other", "gone"):
+        if key not in u:
+            return 'no "%s" in "unread"' % key
+    for key in ("root", "other", "gone", "refused"):
+        if key in u and not _count(u[key]):
+            return '"%s" in "unread" is not a count' % key
+    if not isinstance(s["rows"], list):
+        return '"rows" is not a list'
+    for i, r in enumerate(s["rows"]):
+        if not isinstance(r, dict):
+            return "row %d is not an object" % (i + 1)
+        for key in ("pid", "name", "lifetime", "window"):
+            if key not in r:
+                return 'no "%s" in row %d' % (key, i + 1)
+        if not _count(r["pid"]):
+            return '"pid" in row %d is not a process id' % (i + 1)
+        if not isinstance(r["name"], str):
+            return '"name" in row %d is not text' % (i + 1)
+        for key in ("lifetime", "window"):
+            if not _number(r[key]):
+                return '"%s" in row %d is not a number of bytes' % (key, i + 1)
+        if r.get("start") is not None and not _number(r["start"]):
+            return '"start" in row %d is not a time' % (i + 1)
+    return None
+
+
 def gb(n):
     return "%.1f GB" % (n / 1e9)
 
@@ -189,6 +242,9 @@ def report(s, top):
 
 
 def main():
+    # A name holding a lone surrogate, which json.load makes of an escape such as \ud800 in the
+    # readings, cannot be written to a UTF-8 stdout; it is shown replaced instead of ending the report.
+    sys.stdout.reconfigure(errors="replace")
     ap = argparse.ArgumentParser(description="Which programs are writing to the disk.")
     ap.add_argument("--seconds", type=float, default=10.0)
     ap.add_argument("--top", type=int, default=10)
@@ -202,11 +258,18 @@ def main():
     fixture = os.environ.get("DISK_WRITERS_SAMPLES")
     path = os.environ.get("DISK_WRITERS_PATH", "/System/Volumes/Data")
     if fixture:
+        # A byte that is not UTF-8, in a program's name, is shown replaced rather than costing the
+        # whole report.
         try:
-            with open(fixture) as f:
+            with open(fixture, encoding="utf-8", errors="replace") as f:
                 s = json.load(f)
         except (OSError, ValueError) as e:
             print("disk-writers: could not read the readings in DISK_WRITERS_SAMPLES (%s): %s" % (fixture, e), file=sys.stderr)
+            return 2
+        fault = shape_fault(s)
+        if fault:
+            print("disk-writers: the readings in DISK_WRITERS_SAMPLES (%s) are not in the shape this reads: %s"
+                  % (fixture, fault), file=sys.stderr)
             return 2
     else:
         try:
