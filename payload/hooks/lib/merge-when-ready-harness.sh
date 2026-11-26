@@ -108,12 +108,26 @@ case "$*" in
     exit 0 ;;
   # The token read made after a refused sign in (claude-config#1615): token-empty makes the keyring
   # read come back empty. A stand in, never a token shape. With accounts listed, each account's
-  # token names it, so a call scoped to it is answered as that account (claude-config#2629).
+  # token names it, so a call scoped to it is answered as that account (claude-config#2629), and
+  # the token asked for with no account named is the active account's, the first one listed
+  # (claude-config#3571).
   "auth token"*)
     [ -e "$ST/token-empty" ] && exit 0
-    if [ -s "$ST/accounts" ]; then printf 'token-for-%s\n' "$(printf '%s\n' "$*" | sed -nE 's/.*-u ([^ ]+).*/\1/p')"
+    if [ -s "$ST/accounts" ]; then
+      u="$(printf '%s\n' "$*" | sed -nE 's/.*-u ([^ ]+).*/\1/p')"
+      printf 'token-for-%s\n' "${u:-$(head -1 "$ST/accounts")}"
     else echo stand-in; fi
     exit 0 ;;
+  # GitHub's own record of the account asking (claude-config#3571), which is the account whose token
+  # the call carries. Its login is the name gh holds for the account, as it is until an account is
+  # renamed, unless login-<account> holds another; user-answer holds a whole answer in its place,
+  # user-fails and user-down make the read fail, and user-asked records which account asked.
+  "api user")
+    w="$(who)"; printf '%s\n' "$w" >> "$ST/user-asked"
+    fail_read user
+    if [ -s "$ST/user-answer" ]; then cat "$ST/user-answer"
+    else l="$(rd "login-$w")"; jq -nc --arg l "${l:-$w}" '{login: $l, id: 1001, type: "User"}'; fi
+    ;;
   # The permission the account asking has on the repository (claude-config#2629): perm-<account>
   # holds it, WRITE when unset, and perm-<account>-fails or -down make that account's read fail.
   "repo view acme/widget --json viewerPermission"*)
@@ -147,8 +161,18 @@ case "$*" in
     br="$(rd base-ref)"
     # review-decision holds what GitHub reads the pull request's reviews as (claude-config#3534):
     # empty when unset, as GitHub answers where no rule asks for a review.
+    # author holds who opened the pull request, as gh prints it (claude-config#3571): a person as
+    # {id, is_bot: false, login, name} and a bot as {is_bot: true, login: "app/<name>"}, measured
+    # with gh 2.89 on 2026-11-25 on two pull requests a person opened and one a bot opened. Unset,
+    # it is the one account of a world with no accounts file, named active. gh prints a field only when it is asked for, so the author is left out
+    # of an answer whose --json list does not name it.
+    au="$(rd author)"; asked=false
+    [ -n "$au" ] || au='{"id":"U_kgDOinvented","is_bot":false,"login":"active","name":""}'
+    case "$*" in *"--json "*author*) asked=true ;; esac
     jq -nc --arg h "$(rd head)" --arg s "$state" --arg ms "$ms" --argjson r "$(rd rollup)" --argjson l "${lb:-[]}" --argjson x "${cx:-false}" --arg fo "${fo:-acme}" --arg br "${br:-main}" --arg rv "$(rd review-decision)" \
-      '{number:7,state:$s,headRefOid:$h,headRefName:"feat/x",baseRefName:$br,isCrossRepository:$x,headRepositoryOwner:{login:$fo},headRepository:{name:"widget"},statusCheckRollup:$r,mergeStateStatus:$ms,mergeable:"MERGEABLE",reviewDecision:$rv,url:"https://github.com/acme/widget/pull/7",author:{login:"dwright-pennie"},labels:$l,body:""}'
+      --argjson au "$au" --argjson asked "$asked" \
+      '{number:7,state:$s,headRefOid:$h,headRefName:"feat/x",baseRefName:$br,isCrossRepository:$x,headRepositoryOwner:{login:$fo},headRepository:{name:"widget"},statusCheckRollup:$r,mergeStateStatus:$ms,mergeable:"MERGEABLE",reviewDecision:$rv,url:"https://github.com/acme/widget/pull/7",labels:$l,body:""}
+       + (if $asked then {author:$au} else {} end)'
     ;;
   # A fork's branch, read from the fork (claude-config#1458): fork-tip, or the head when unset.
   "api repos/someone/widget/git/ref/heads/feat/x"*)

@@ -1142,6 +1142,9 @@ if [ -n "${HOOK_TESTS_DEAL:-}" ]; then
     }'
   exit $?
 fi
+# Which part of a deal this run is, or empty for a run that is not one. Read again at the end, where
+# a dealt part holds each suite's cost to a fraction of the wall limit (claude-config#3575).
+dealt_part=""
 if [ -n "${HOOK_TESTS_DEALT:-}${HOOK_TESTS_PART:-}${HOOK_TESTS_PARTS:-}" ]; then
   _part="${HOOK_TESTS_PART:-}"; _parts="${HOOK_TESTS_PARTS:-}"; _deal="${HOOK_TESTS_DEALT:-}"
   # This run's alone, never its suites': a suite that starts the runner on a fixture tree would
@@ -1190,6 +1193,7 @@ if [ -n "${HOOK_TESTS_DEALT:-}${HOOK_TESTS_PART:-}${HOOK_TESTS_PARTS:-}" ]; then
   fi
   echo "run-all-tests: part $_part of $_parts: ${#_kept[@]} of ${#suites[@]} suite(s), as dealt in $_deal"
   suites=("${_kept[@]}")
+  dealt_part="$_part"
 fi
 
 ran="${#suites[@]}"
@@ -1835,7 +1839,11 @@ LAUNCH
   # figure its record already holds for one that does not. Worked out whether or not the store is
   # on, because the check further down that names a wrong lead asks the same question the launch
   # order does and must get the same answer (L261).
-  now_checks=(); prev_checks=(); rank_now=(); rank_share=()
+  # wall_now is the wall clock THIS run read for the suite, and nothing else: the only figure the
+  # cost ceiling below may judge (claude-config#3575). Not rank_now, which rank_figure may keep
+  # above the reading when the record names a smaller share: right for the launch order, and not
+  # what the suite took. Empty where this run read no time.
+  now_checks=(); prev_checks=(); rank_now=(); rank_share=(); wall_now=()
   _ci=0
   for suite in ${suites[@]+"${suites[@]}"}; do
     now_checks[$_ci]="$(suite_result_checks "$(cat "$WORK/$_ci.out" 2>/dev/null)")"
@@ -1850,7 +1858,7 @@ LAUNCH
       *[!0-9:]*|:*|*:) ;;
       *)
         _rn_fig="$(rank_figure "$_rec_sec" "$_rec_share" "$_rn_sec" "${share_of[$_ci]:-}")"
-        rank_now[$_ci]="${_rn_fig%% *}"; rank_share[$_ci]="${_rn_fig#* }" ;;
+        rank_now[$_ci]="${_rn_fig%% *}"; rank_share[$_ci]="${_rn_fig#* }"; wall_now[$_ci]="$_rn_sec" ;;
     esac
     _ci=$((_ci + 1))
   done
@@ -2599,6 +2607,78 @@ LIVEAFTER
     echo "A live store changed while this ran, and not because of these tests:"
     printf '%s' "$_lc_noted"
     [ -n "$_lc_applied" ] && echo "  The sync applied config into this Mac while these ran ($_lc_applied), and these stores are what an apply writes."
+  fi
+fi
+# THE COST CEILING (claude-config#3575, L315). Every suite is stopped at its wall limit, and on
+# 2026-11-24 two suites that each took most of it on an ordinary runner were stopped there on a slow
+# one, failing main with no check failing first. So a dealt part, which is CI's run, fails when a
+# suite it ran cost more than half the limit, naming the suite, so the next suite to grow goes red
+# on its own pull request rather than as a timeout on main a week later.
+#
+# Half, measured: across seven runs on GitHub's runners on 2026-11-25 the same suite took up to 1.7
+# times as long from one run to the next (tests/test-mods.sh 498 to 777 seconds,
+# test-slack-drafts-code-loaders.sh 279 to 485), and the unsplit Slack gate suite went from 552 to
+# past 1,200 on 2026-11-24. A suite under half the limit has room for a runner twice as slow before it is stopped;
+# one over it is a slow runner away from the limit. tests/test-ci-workflow.sh holds the behaviour.
+#
+# What is judged is the wall clock this run read for the suite (wall_now), because the wall limit
+# stops a suite on its wall clock and on nothing else, and only where this run read one. Not the
+# figure written for the next deal: rank_figure keeps that above the reading when the record names
+# a smaller share than this run granted, so a suite that took no time could be judged at eight
+# seconds. And never the store the deal was made from: a pull request restores the newest record
+# its own branch or main saved, a pull request's cost reaches main's store only once a run of main
+# executes the suites, and a run of main whose tree a pull request already proved does not (#2690).
+# On 2026-11-25 the deal of run 45648140157 came from a run of the night before, made before two
+# suite splits merged, and put the sync suite at 777 seconds while the same run measured it at 328.
+#
+# The limit is read from lib/suite-deadline.sh, its one home, never copied here. Every real suite
+# arms that default or a longer limit of its own (the sync suite's halves), so a suite under half
+# the default is under half its own. A run on a Mac is never judged: it deals nothing, and its
+# figures move with the machine's load (L294), so a red there would only stop the sync.
+if [ -n "$dealt_part" ] && [ "$ran" -gt 0 ]; then
+  SUITE_COST_PERCENT=50
+  _cl_lib="$SELF_DIR/lib/suite-deadline.sh"
+  _cl_limit="$(sed -n 's/^SUITE_WALL_DEFAULT=\([0-9][0-9]*\)$/\1/p' "$_cl_lib" 2>/dev/null)"
+  if ! _cl_limit="$(whole_above_zero "$_cl_limit")"; then
+    echo "SUITE COST NOT JUDGED: the wall limit could not be read from $_cl_lib (no SUITE_WALL_DEFAULT=<seconds> line), so no suite of this part was held to $SUITE_COST_PERCENT percent of it."
+    failed=$((failed + 1))
+    failed_names="$failed_names suite-cost-ceiling"
+  else
+    _cl_ceil=$(( _cl_limit * SUITE_COST_PERCENT / 100 ))
+    # Said in words from the one number, so the sentence cannot drift from what is enforced.
+    if [ "$SUITE_COST_PERCENT" -eq 50 ]; then _cl_of="half the"; else _cl_of="$SUITE_COST_PERCENT percent of the"; fi
+    _cl_over=""; _cl_none=""; _cl_n=0; _cl_top=-1; _cl_topname=""
+    _ci=0
+    for suite in ${suites[@]+"${suites[@]}"}; do
+      _part_rel "$suite"
+      _cl_sec="${wall_now[$_ci]:-}"
+      if [ -z "$_cl_sec" ]; then
+        _cl_none="$_cl_none $_rel"
+      else
+        _cl_n=$((_cl_n + 1))
+        if [ "$_cl_sec" -gt "$_cl_top" ]; then _cl_top="$_cl_sec"; _cl_topname="$_rel"; fi
+        if [ "$_cl_sec" -gt "$_cl_ceil" ]; then
+          _cl_over="$_cl_over  $_rel took ${_cl_sec}s, over the ${_cl_ceil}s ceiling
+"
+        fi
+      fi
+      _ci=$((_ci + 1))
+    done
+    if [ "$_cl_n" -gt 0 ]; then
+      echo "run-all-tests: cost ceiling ${_cl_ceil}s ($_cl_of ${_cl_limit}s wall limit): $_cl_n of $ran suite(s) of this part measured, the slowest $_cl_topname at ${_cl_top}s."
+    else
+      echo "run-all-tests: cost ceiling ${_cl_ceil}s ($_cl_of ${_cl_limit}s wall limit): 0 of $ran suite(s) of this part measured, so none was judged."
+    fi
+    # Named, never passed as zero and never failed: a suite that left no result line, or no time, has
+    # no cost this run can vouch for, and its own verdict above already says why (L90, L411).
+    [ -z "$_cl_none" ] || echo "run-all-tests: cost NOT MEASURED this run, so not judged against the ${_cl_ceil}s ceiling:$_cl_none"
+    if [ -n "$_cl_over" ]; then
+      echo "SUITES TOO SLOW FOR THE WALL LIMIT: each took more than ${_cl_ceil}s, $_cl_of ${_cl_limit}s at which every suite is stopped, so a slower runner would stop it with no check failing first (claude-config#3575):"
+      printf '%s' "$_cl_over"
+      echo "  Split each into suites that share one harness, as claude-config#3581 and #3588 did, until every piece is well under ${_cl_ceil}s."
+      failed=$((failed + 1))
+      failed_names="$failed_names suite-cost-ceiling"
+    fi
   fi
 fi
 if [ -n "$unmeasured_names" ]; then
