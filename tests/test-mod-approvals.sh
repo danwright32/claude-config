@@ -295,6 +295,175 @@ run "$K"
   && check "a hooks module listed from a folder that is not read is found" ok \
   || check "a hooks module listed from a folder that is not read is found" "exit $code: $out"
 
+# ---- 4b. the word ask apart from a decision key ----
+# `decision: 'ask'` beside its key is section 2's. A decision can as well be computed from the word
+# (the lessons review's own example: ok ? 'ask' : 'deny'), so the string is a finding wherever it
+# stands in a mod's code, and passes only where it cannot become a value a decision is made from:
+# as the value of a property that is not a decision key, and where an operator or a type takes it.
+route_case askternary holds-ask hooks/register.ts:2 <<'TS'
+export const register = (on: any) => {
+  on('tool.check', ($: any, e: any) => ({ decision: e.ok ? 'ask' : 'deny' }))
+}
+TS
+# The other arm: what stands before the colon is a string, which a reader of `key: value` alone
+# takes for a quoted key.
+route_case askelse holds-ask hooks/register.ts:2 <<'TS'
+export const register = (on: any) => {
+  on('tool.check', ($: any, e: any) => ({ decision: e.ok ? 'deny' : 'ask' }))
+}
+TS
+route_case askelsename holds-ask hooks/register.ts:3 <<'TS'
+const refused = 'deny'
+export const register = (on: any) => {
+  on('tool.check', ($: any, e: any) => ({ reason: 'r', decision: e.ok ? refused : "ask" }))
+}
+TS
+route_case askfallback holds-ask hooks/register.ts:2 <<'TS'
+export const register = (on: any) => {
+  on('tool.check', async ($: any, e: any, next: any) => ({ decision: (await next(e)).decision || 'ask' }))
+}
+TS
+route_case asknullish holds-ask hooks/register.ts:2 <<'TS'
+export const register = (on: any) => {
+  on('tool.check', async ($: any, e: any, next: any) => ({ decision: (await next(e)).decision ?? `ask` }))
+}
+TS
+route_case askvariable holds-ask hooks/register.ts:1 <<'TS'
+const v = 'ask' as const
+export const register = (on: any) => {
+  on('tool.check', () => ({ decision: v }))
+}
+TS
+route_case askreturn holds-ask hooks/register.ts:1 <<'TS'
+const verdict = () => { return 'ask' }
+export const register = (on: any) => {
+  on('tool.check', () => ({ decision: verdict() }))
+}
+TS
+route_case askarrow holds-ask hooks/register.ts:1 <<'TS'
+const verdict = () => 'ask'
+export const register = (on: any) => {
+  on('tool.check', () => ({ decision: verdict() }))
+}
+TS
+route_case askargument holds-ask hooks/register.ts:3 <<'TS'
+const answer = (d: string) => ({ decision: d })
+export const register = (on: any) => {
+  on('tool.check', () => answer('ask'))
+}
+TS
+route_case askarray holds-ask hooks/register.ts:1 <<'TS'
+const order = ['deny', 'ask']
+export const register = (on: any) => {
+  on('tool.check', ($: any, e: any) => ({ decision: order[e.ok ? 1 : 0] }))
+}
+TS
+route_case askdefault holds-ask hooks/register.ts:1 <<'TS'
+const answer = (d = 'ask') => ({ decision: d })
+export const register = (on: any) => {
+  on('tool.check', () => answer())
+}
+TS
+route_case askcomputedkey holds-ask hooks/register.ts:3 <<'TS'
+const key = 'decision'
+export const register = (on: any) => {
+  on('tool.check', () => ({ [key]: 'ask' }))
+}
+TS
+# An assertion written before the value is still the value.
+route_case askasserted holds-ask hooks/register.ts:3 <<'TS'
+type Decision = string
+export const register = (on: any) => {
+  on('tool.check', () => ({ decision: <Decision>'ask' }))
+}
+TS
+# A function argument between two comparisons, which only looks like a type argument.
+route_case askmiddle holds-ask hooks/register.ts:3 <<'TS'
+const answer = (x: boolean, d: string, y: boolean) => ({ decision: d })
+export const register = (on: any) => {
+  on('tool.check', ($: any, e: any) => answer(e.a < e.b, 'ask', e.c > e.d))
+}
+TS
+# An element's attribute is a property of what the element is given, and ends at a >.
+K="$TMP/case-askattribute"
+mkmod "$K" askattribute <<'TS'
+export const register = (on: any) => { on('session.start', async () => undefined) }
+TS
+printf '%s\n' "export const Row = () => <Verdict mode='ask'>" "  held" "</Verdict>" > "$K/askattribute/hooks/panel.tsx"
+run "$K"
+[ "$code" -eq 1 ] && has "FOUND askattribute hooks/panel.tsx:1 [holds-ask]" \
+  && check "the word as an element's attribute is found" ok \
+  || check "the word as an element's attribute is found" "exit $code: $out"
+# A data file the code could read the word from: as a list's element, and beside a decision key.
+K="$TMP/case-askdata"
+mkmod "$K" askdata <<'TS'
+import verdicts from './verdicts.json'
+export const register = (on: any) => { on('tool.check', ($: any, e: any) => ({ decision: verdicts.order[e.ok ? 1 : 0] })) }
+TS
+printf '{\n  "order": ["deny", "ask"],\n  "then": { "decision": "ask" },\n  "picker": { "id": "ask" }\n}\n' > "$K/askdata/hooks/verdicts.json"
+run "$K"
+[ "$code" -eq 1 ] && has "FOUND askdata hooks/verdicts.json:2 [holds-ask]" \
+  && check "the word as a list's element in a data file is found" ok \
+  || check "the word as a list's element in a data file is found" "exit $code: $out"
+has "FOUND askdata hooks/verdicts.json:3 [answers-ask]" \
+  && check "and beside a decision key in a data file" ok \
+  || check "and beside a decision key in a data file" "exit $code: $out"
+[ "$(found)" -eq 2 ] && check "and not as the value of a key that is no decision key (2 found)" ok \
+  || check "and not as the value of a key that is no decision key (2 found)" "$(found) found: $out"
+# Where the word passes. Each line below is one position; none of them can hand the word on as a
+# value except through the property it was given to, which the check says it cannot follow.
+K="$TMP/case-askless"
+mkmod "$K" askless <<'TS'
+import type { EngineInterface } from 'claude-code'
+type AskedIo = { ask: (q: string) => Promise<string>; tell: (s: string) => void }
+type Choice = 'ask' | 'deny'
+type Other =
+  | 'deny'
+  | 'ask'
+const askDan = (dialog: Pick<AskedIo, 'ask'>, first: Extract<'ask', Choice>): Promise<string> => dialog.ask('?')
+const held = { mod: 'm', id: 'ask', what: 'the prompt' }
+const sole = { id: `ask` }
+const quoted = { 'id': "ask" }
+const typed = (h: { id?: 'ask' }, id: 'ask') => h
+const alone = (id: 'ask') => id
+export const register = (on: any) => {
+  on('tool.check', async ($: EngineInterface, e: any, next: any) => {
+    const beneath = await next(e)
+    if (beneath.decision === 'ask' || 'ask' != beneath.was) return { decision: 'deny', reason: 'r' }
+    switch (beneath.decision) {
+      case 'ask': return { decision: 'deny', reason: 'r' }
+    }
+    return { ...beneath, id: beneath.id as 'ask' }
+  })
+}
+TS
+run "$K"
+[ "$code" -eq 0 ] && has "0 found, 0 allowed by name" \
+  && check "the word passes as the value of a key that is no decision key, in a comparison, and in a type" ok \
+  || check "the word passes as the value of a key that is no decision key, in a comparison, and in a type" "exit $code: $out"
+
+# ---- 4c. approve, which is read only beside a decision key ----
+# Claude Code's types for the mod API hold no 'approve' value (the pinned build, and 2.1.332 read by
+# hand on 2026-11-25), so a decision computed from that word approves nothing and the word alone is
+# no finding. This is what fails when a build's types gain it: the day the pin is moved to such a
+# build, the word needs the rule `ask` has.
+TYPES="$ROOT/tools/typescript/claude-code-types/claude-code/index.d.ts"
+approve_values(){ grep -n -E "['\"]approve['\"]" "$1"; }
+if [ ! -r "$TYPES" ]; then
+  check "the pinned mod API types can be read for an approve value" "$TYPES is missing or unreadable"
+else
+  grep -q -E "type ToolCheckDecision = .*'ask'" "$TYPES" \
+    && check "the pinned types hold the decision values this suite reads (ToolCheckDecision with ask)" ok \
+    || check "the pinned types hold the decision values this suite reads (ToolCheckDecision with ask)" "no ToolCheckDecision holding 'ask' in $TYPES, so reading it for approve would tell nothing"
+  got="$(approve_values "$TYPES")"
+  [ -z "$got" ] && check "the pinned mod API types hold no approve value" ok \
+    || check "the pinned mod API types hold no approve value" "they do, so a decision computed from the word approve may now approve; give the word the rule ask has in tools/check-mod-approvals.sh: $got"
+  sed "s/type ToolCheckDecision = 'allow'/type ToolCheckDecision = 'approve' | 'allow'/" "$TYPES" > "$TMP/types-with-approve.d.ts"
+  got="$(approve_values "$TMP/types-with-approve.d.ts")"
+  [ -n "$got" ] && check "and a copy of them given an approve value is seen to hold one" ok \
+    || check "and a copy of them given an approve value is seen to hold one" "the reader found nothing in a copy that holds it"
+fi
+
 # ---- 5. every finding is printed, not the first alone ----
 M="$TMP/many"
 mkmod "$M" one <<'TS'
