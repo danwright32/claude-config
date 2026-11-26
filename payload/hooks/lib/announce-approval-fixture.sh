@@ -46,7 +46,7 @@ def call(name, tool_input, error=False, result=None, session=None):
         {"type": "tool_result", "tool_use_id": uid, "content": "done", "is_error": error}]}}
     if result is not None:
         back["toolUseResult"] = result
-    with open(path, "a") as f:
+    with open(path, "a", encoding="utf-8", errors="replace") as f:
         f.write(json.dumps(sent) + "\n")
         f.write(json.dumps(back) + "\n")
 if action == "write":

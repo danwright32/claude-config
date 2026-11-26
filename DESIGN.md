@@ -2941,6 +2941,59 @@ nothing that passes main's run.
 `tests/test-claude-sync.sh` (the section "a send carrying a file that fails the home path check
 is held whole") and `hooks/test-check-home-paths.sh` (the `--files0-from` cases) hold it.
 
+## An announcement's approval is a record a hook writes from Dan's answer (#3666)
+
+A pull request labelled `changelog/announce` carries a post that is drafted for agents once the
+change is live, and Dan's words for the label were "it should ask me before applying the label".
+The README says how he is asked and what counts. These are the choices behind it. Those marked as
+the builder's were made by the sessions that built it, not by Dan, and are his to change.
+
+- **The rule is held at the merge, and the label hook is only the early refusal.** Every session
+  route to a merge passes `require-changelog-tag.sh`, which reads the pull request itself. A label
+  can be put on by routes no hook can read (a name built at run time, a script, GitHub's own page),
+  so guarding only the commands that add it was ruled out before anything was built.
+  `announce-label-ask.sh` exists so the ordinary command is refused early, with the remedy, and the
+  label is not left sitting on wording nobody asked him about.
+- **A deny, never an ask.** A permission prompt shows the command and not the wording, and sleep
+  mode can answer one with Dan asleep, which is the reason `db-write-ask.sh` records for the same
+  choice. The only thing that clears either refusal is his answer in the picker.
+- **The file is hashed, never a hash the session gives.** A hash in the picker's metadata is not
+  read at all. The library hashes the file he was shown, through `changelog-entry.js`'s one
+  normalised form, and the merge gate hashes the block GitHub holds through the same function, so
+  there is one normaliser and the two sides cannot drift (L370).
+- **"Opened in front of him" is read from the transcript.** The approval counts only when a Bash
+  call that is nothing but a BBEdit open of the file finished before his answer, and nothing of the
+  session's touched the file between the two. Any Bash command naming the file's name in that
+  window voids the approval, a plain `cat` included, because a read cannot be told from a write
+  cheaply and the remedy (open it again, ask again) is always there (the builder's).
+  `open -a BBEdit` counts beside the helper with `--front-window`; the helper without the flag does
+  not, since it opens the file behind everything (the builder's).
+- **"He answered it himself" is one rule, called and not copied.** `lib/announce-approval.py` loads
+  `lib/db-apply-approval.py` by its path and calls its checks, so a picker that was prefilled,
+  timed out, carried two questions or could not be read as written is refused by the same code that
+  refuses it for a database change.
+- **The record is guarded by the hook that reads it.** An approval is a line in a file under
+  `~/.claude/state`, so a session that could append a line could approve its own wording. The label
+  hook is therefore registered for the edit tools as well as Bash (the issue says Bash), and
+  refuses an edit under the record's folder and a shell command naming it that is not one only
+  reading it (the builder's). A script that builds the path at run time is not seen.
+- **`used` is written when the gate lets the merge through.** No hook here sees a merge land, so
+  the line says the gate allowed it, never that GitHub merged it, and a reader that needs "merged"
+  asks GitHub (the builder's). It carries each closed issue's milestone, which the later check
+  that a feature Dan said yes to announcing does not finish under another label reads. Issues that
+  cannot be read are recorded as unread with why, never as an empty list, and block nothing.
+- **Several merges in one command are refused with the override typed too** (Dan, 2026-11-25, by
+  picker: "Refuse it"). The gate reads one pull request per command, and the override over several
+  merges let one through unread. One merge per command is always open, which is what separates
+  this from the pull request that cannot be read, where the merge still goes through and says so.
+- **Each wait is the hook's own.** The label hook's read of GitHub runs in a process group of its
+  own, killed whole at a bound the hook sets, and its bounds together are shorter than the time it
+  is registered with, so a slow GitHub is refused in the hook's words and never by the harness
+  cutting it short. The bounds are chosen, not measured.
+
+`hooks/test-announce-approval.sh`, `hooks/test-announce-label-ask.sh` and the #3666 section of
+`hooks/test-changelog-tag.sh` hold it.
+
 ## Things known to be wrong and left that way
 
 Markers are keyed on hostname, which is a mutable string. Renaming or reinstalling a Mac abandons

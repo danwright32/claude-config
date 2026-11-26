@@ -409,6 +409,18 @@
         ]
       },
       {
+        "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/announce-label-ask.sh",
+            "timeout": 45,
+            "onFailure": "block",
+            "statusMessage": "Checking Dan approved the announcement wording"
+          }
+        ]
+      },
+      {
         "matcher": "Bash|mcp__.*slack.*|mcp__.*Slack.*",
         "hooks": [
           {

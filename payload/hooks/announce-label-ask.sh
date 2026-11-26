@@ -17,7 +17,8 @@
 # wording, and sleep mode can answer one with Dan asleep (db-write-ask.sh). No override: the remedy
 # is always open, ask him with the picker the refusal describes.
 #
-# Seam, for the tests: ANNOUNCE_APPROVALS_DIR (read by lib/announce-approval.py) names another record.
+# Seams, for the tests: ANNOUNCE_APPROVALS_DIR (read by lib/announce-approval.py) names another
+# record, and ANNOUNCE_LABEL_GITHUB_SECONDS shortens the wait on GitHub (it can only shorten it).
 
 set -uo pipefail
 

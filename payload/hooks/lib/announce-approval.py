@@ -70,12 +70,16 @@ approval given on one Mac is unknown to the other, which asks again.
       {"approved": bool, "why": str, "how": HOW_TO_ASK, "notes": [str]}: whether digest, an
       announcementHash, is wording Dan approved for repo, after reading this session's pickers.
       payload is the hook payload (session_id, transcript_path, agent_id).
+  repo_approved(repo, payload)
+      The same answer for "has Dan approved any announcement for repo at all", which is what making
+      the label in a repository waits on (it sits on no pull request, so there is no wording to hash).
   mark_used(repo, digest, pr, closes, unread)   None, or why the line could not be written.
   hash_of(data, body=False)                     (announcement-hash's answer, None) or (None, why).
   is_record_path(path)                          whether a path is the record or under it.
 
 Command lines, each printing JSON and exiting 0 when it could answer:
   announce-approval.py check --repo <owner/name> --hash <sha256>     the hook payload on standard input
+  announce-approval.py repo --repo <owner/name>                      the hook payload on standard input
   announce-approval.py used --repo <owner/name> --hash <sha256> --pr <number> [--closes <json>] [--unread <why>]
   announce-approval.py list                                          the record, as it reads
 """
@@ -185,7 +189,7 @@ def _append(entries):
     folder, path = record_dir(), record_path()
     # The leading newline ends any fragment an earlier short write left, so the first line here is
     # never fused onto it; a blank line costs the reader nothing.
-    data = ("\n" + "\n".join(json.dumps(e, sort_keys=True) for e in entries) + "\n").encode("utf-8")
+    data = ("\n" + "\n".join(json.dumps(e, sort_keys=True) for e in entries) + "\n").encode("utf-8", "replace")
     try:
         os.makedirs(folder, mode=0o700, exist_ok=True)
         fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
@@ -306,7 +310,7 @@ def _asked(transcript_path, session_id):
     waiting, out = {}, []
 
     def wanted(raw):
-        if b"AskUserQuestion" in raw and SOURCE.encode() in raw:
+        if b"AskUserQuestion" in raw and SOURCE.encode("utf-8", "replace") in raw:
             return True
         return bool(waiting) and b"tool_result" in raw and any(k in raw for k in waiting)
 
@@ -333,7 +337,7 @@ def _file_events(transcript_path, session_id, targets, sw):
     """What the session did with each wording file, {its path: (opens, touches)}: opens as (line
     sent, line it finished without error), touches as the line of each call that wrote the file or
     may have (module docstring). targets is {a file's real path: its file name}."""
-    names = {name.encode(): path for path, name in targets.items()}
+    names = {name.encode("utf-8", "replace"): path for path, name in targets.items()}
     opening = {}
     found = {path: ([], []) for path in targets}
 
@@ -495,6 +499,41 @@ def _file_hash(path, deadline):
     return answer["hash"], None
 
 
+def _harvest(payload, notes):
+    """This session's pickers and the record, read once for one call: (found, untaken, unlooked,
+    entries, unreadable), as approvals() and read_record() give them. Each approval of his found in
+    the session and not yet on the record is written to it here, unless the call is a subagent's; a
+    failed save is added to notes (module docstring)."""
+    deadline = time.monotonic() + CHECK_SECONDS
+    found, untaken, unlooked = approvals(payload.get("session_id"), payload.get("transcript_path"), deadline)
+    entries, unreadable = read_record()
+    if found and not payload.get("agent_id"):
+        fresh = [f for f in found if entries is None or not _on_record(entries, f["repo"], f["hash"])]
+        if fresh:
+            failed = _append([{"kind": "approved", "repo": f["repo"], "hash": f["hash"], "at": _now(),
+                               "session": payload.get("session_id")} for f in fresh])
+            if failed:
+                notes.append(
+                    "Dan approved the wording in " + ", ".join(sorted({f["file"] for f in fresh})) + " in a picker in "
+                    "this session, but that approval could not be saved: " + failed + ". His picker still counts for "
+                    "this call, but a later session will ask him again until that record can be written.")
+    return found, untaken, unlooked, entries, unreadable
+
+
+def _said(why, key, untaken, unreadable, unlooked):
+    """One refusal's reasons as a sentence each: the first, then what could not be read, then each
+    Approve of his for this repository that does not count."""
+    why = list(why)
+    if unreadable:
+        why.append(unreadable)
+    if unlooked:
+        why.append(unlooked)
+    for u in untaken:
+        if u["repo"] in (key, ""):
+            why.append("his Approve for " + (u["file"] or "a file it did not name") + " does not count: " + u["why"])
+    return ". ".join(w.rstrip(".") for w in why) + "."
+
+
 def check(repo, digest, payload):
     """Whether digest is wording Dan approved for repo (module docstring)."""
     out = {"approved": False, "why": "", "how": HOW_TO_ASK, "notes": []}
@@ -505,38 +544,37 @@ def check(repo, digest, payload):
     if not isinstance(digest, str) or not SHA.fullmatch(digest):
         out["why"] = "the announcement gave no hash, so there is no wording to look an approval up for"
         return out
-    payload = payload if isinstance(payload, dict) else {}
-    deadline = time.monotonic() + CHECK_SECONDS
-    found, untaken, unlooked = approvals(payload.get("session_id"), payload.get("transcript_path"), deadline)
-    entries, unreadable = read_record()
-    agent = bool(payload.get("agent_id"))
-    if found and not agent:
-        fresh = [f for f in found if entries is None or not _on_record(entries, f["repo"], f["hash"])]
-        if fresh:
-            failed = _append([{"kind": "approved", "repo": f["repo"], "hash": f["hash"], "at": _now(),
-                               "session": payload.get("session_id")} for f in fresh])
-            if failed:
-                out["notes"].append(
-                    "Dan approved the wording in " + ", ".join(sorted({f["file"] for f in fresh})) + " in a picker in "
-                    "this session, but that approval could not be saved: " + failed + ". His picker still counts for "
-                    "this call, but a later session will ask him again until that record can be written.")
+    found, untaken, unlooked, entries, unreadable = _harvest(payload if isinstance(payload, dict) else {}, out["notes"])
     if any(f["repo"] == key and f["hash"] == digest for f in found) or (entries and _on_record(entries, key, digest)):
         out["approved"] = True
         return out
     why = ["Dan has not approved this wording for " + key + ": no approval on this Mac's record, and none in this "
            "session, is of the announcement as it reads here"]
-    if unreadable:
-        why.append(unreadable)
-    if unlooked:
-        why.append(unlooked)
     for f in found:
         if f["repo"] == key:
             why.append("the wording he approved in " + f["file"] + " is not this wording (they differ once "
                        "normalised), so make the Announcement block that file's text, or ask him again")
-    for u in untaken:
-        if u["repo"] in (key, ""):
-            why.append("his Approve for " + (u["file"] or "a file it did not name") + " does not count: " + u["why"])
-    out["why"] = ". ".join(w.rstrip(".") for w in why) + "."
+    out["why"] = _said(why, key, untaken, unreadable, unlooked)
+    return out
+
+
+def repo_approved(repo, payload):
+    """Whether Dan has approved ANY announcement for repo: an approved line on the record, or an
+    Approve of his in this session that counts. The same answer shape as check, and the same reading
+    of the session, so an approval found here is kept as one found there is."""
+    out = {"approved": False, "why": "", "how": HOW_TO_ASK, "notes": []}
+    key = repo_key(repo)
+    if key is None:
+        out["why"] = "the repository could not be told as owner/name, so no approval of Dan's could be looked up for it"
+        return out
+    found, untaken, unlooked, entries, unreadable = _harvest(payload if isinstance(payload, dict) else {}, out["notes"])
+    if any(f["repo"] == key for f in found) or any(
+            e.get("kind") == "approved" and e.get("repo") == key and isinstance(e.get("hash"), str)
+            and SHA.fullmatch(e["hash"]) for e in entries or []):
+        out["approved"] = True
+        return out
+    out["why"] = _said(["Dan has approved no announcement for " + key + ": no approval on this Mac's record, and none "
+                        "in this session, is for that repository"], key, untaken, unreadable, unlooked)
     return out
 
 
@@ -570,6 +608,13 @@ def main(argv):
             payload = {}
         json.dump(check(_flag(args, "--repo"), _flag(args, "--hash"), payload), sys.stdout)
         return 0
+    if command == "repo":
+        try:
+            payload = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
+        except ValueError:
+            payload = {}
+        json.dump(repo_approved(_flag(args, "--repo"), payload), sys.stdout)
+        return 0
     if command == "used":
         pr, closes = _flag(args, "--pr"), _flag(args, "--closes")
         try:
@@ -585,7 +630,7 @@ def main(argv):
         json.dump({"record": record_path(), "entries": entries, "why": why or ""}, sys.stdout)
         return 0
     sys.stderr.write("Usage: announce-approval.py check --repo <owner/name> --hash <sha256>, with the hook payload on "
-                     "standard input | used --repo <owner/name> --hash <sha256> --pr <number> [--closes <json>] "
+                     "standard input | repo --repo <owner/name>, the same | used --repo <owner/name> --hash <sha256> --pr <number> [--closes <json>] "
                      "[--unread <why>] | list\n")
     return 2
 

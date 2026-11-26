@@ -300,6 +300,53 @@ check "R2 a used line approves nothing" "$([[ "$r" == "no|"* ]] && echo ok || ec
 r="$(used --repo acme/widget --hash nothex --pr 9)"
 check "a used line naming no hash is refused, and said" "$([[ "$r" == *'"written": false'* ]] && echo ok || echo "$r")"
 
+echo "whether Dan has approved any announcement for a repository"
+# any <transcript> <repo> [session]: the library's answer, as "<yes|no>|<why>|<notes>".
+any() {
+  python3 -c 'import json, os, sys
+d = {"session_id": sys.argv[2], "transcript_path": sys.argv[1], "hook_event_name": "PreToolUse", "tool_name": "Bash"}
+if os.environ.get("AGENT") == "1":
+    d["agent_id"] = "a9bba4c0ffee"
+print(json.dumps(d))' "$1" "${3:-s1}" \
+    | ANNOUNCE_APPROVALS_DIR="${STORE_USED:-$STORE}" python3 -B "$LIB" repo --repo "$2" \
+    | python3 -c 'import json, sys
+d = json.load(sys.stdin)
+print(("yes" if d["approved"] is True else "no") + "|" + d["why"] + "|" + " ".join(d["notes"]), end="")'
+}
+STORE_USED="$WORK/store-any"
+T="$WORK/any-none.jsonl"; new_talk "$T"
+r="$(any "$T" acme/widget)"
+check "a repository he has approved nothing for has no approval" "$([[ "$r" == "no|"*"has approved no announcement for acme/widget"* ]] && echo ok || echo "$r")"
+r="$(any "$T" widget)"
+check "a repository that is no owner/name has no approval, and says so" "$([[ "$r" == "no|"*"owner/name"* ]] && echo ok || echo "$r")"
+# His Approve in this session counts, and is kept, as it is for a wording.
+F="$(shown anyrepo)"; T="$WORK/anyrepo.jsonl"
+r="$(any "$T" acme/widget)"
+check "wording opened in front of him and not yet approved is no approval for its repository" "$([[ "$r" == "no|"* ]] && echo ok || echo "$r")"
+talk "$T" ask acme/widget "$F"
+r="$(AGENT=1 any "$T" acme/widget)"
+check "a subagent's call counts his picker for the repository" "$([[ "$r" == "yes||" ]] && echo ok || echo "$r")"
+check "and writes nothing to the record" "$([ "$(recorded)" = 0 ] && echo ok || echo "$(recorded) lines")"
+r="$(any "$T" acme/widget)"
+check "his approval of any wording there is an approval for the repository" "$([[ "$r" == "yes||" ]] && echo ok || echo "$r")"
+check "and it is written to the record" "$([ "$(recorded)" = 1 ] && echo ok || echo "$(recorded) lines")"
+T2="$WORK/any-later.jsonl"; new_talk "$T2"
+r="$(any "$T2" Acme/Widget s2)"
+check "a later session finds it on the record, in any letter case" "$([[ "$r" == "yes||" ]] && echo ok || echo "$r")"
+r="$(any "$T2" acme/other s2)"
+check "his approval for one repository is none for another" "$([[ "$r" == "no|"*"has approved no announcement for acme/other"* ]] && echo ok || echo "$r")"
+# A used line, and an Approve that does not count, are no approval for the repository.
+STORE_USED="$WORK/store-any-used"
+used --repo acme/widget --hash "$H" --pr 7 >/dev/null
+r="$(any "$T2" acme/widget s2)"
+check "a used line is no approval for its repository" "$([[ "$r" == "no|"* ]] && echo ok || echo "$r")"
+F="$(shown anytouched)"; T="$WORK/anytouched.jsonl"
+talk "$T" edit "$F"
+talk "$T" ask acme/widget "$F"
+r="$(any "$T" acme/widget)"
+check "an Approve of his that does not count is no approval for the repository, and says why" "$([[ "$r" == "no|"*"does not count"* ]] && echo ok || echo "$r")"
+unset STORE_USED
+
 echo "the record is this suite's own"
 check "no case wrote to this Mac's real record" "$([ "$(ls -la "$REAL_STORE" 2>/dev/null | cksum)" = "$real_before" ] && echo ok || echo "$REAL_STORE changed during the run")"
 

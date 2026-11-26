@@ -3,6 +3,9 @@
 # request is refused until Dan has approved the wording (claude-config#3666, R10), and the record of
 # what he approved is not a session's to write.
 #
+# The hook is a wrapper around announce_label_gate.py, which holds the rule, the commands it reads and
+# its messages, so every case here drives that file through the wrapper, as Claude Code does.
+#
 # Every case runs the REAL hook with a fake gh first on PATH, in a repository of its own with a
 # GitHub remote, and with the record in a folder of the suite's own (ANNOUNCE_APPROVALS_DIR), never
 # this Mac's real one. Every repository here is invented.
@@ -69,6 +72,7 @@ case "$*" in
   *"auth status"*) printf 'Logged in to github.com account someone (keyring)\n' ;;
   *"auth token -u "*) printf 'tok\n' ;;
   *"pr view"*)
+    [ -z "${FAKE_SLOW:-}" ] || sleep "$FAKE_SLOW"
     [ -n "${FAKE_BODY:-}" ] || { printf 'no pull requests found\n' >&2; exit 1; }
     python3 -c 'import json, sys; print(json.dumps({"number": 7, "url": "https://github.com/acme/widget/pull/7", "body": open(sys.argv[1]).read()}))' "$FAKE_BODY" ;;
   *) printf 'the fake gh was asked something this suite never answers: %s\n' "$*" >&2; exit 1 ;;
@@ -130,6 +134,12 @@ check "the label on a description with no Announcement block is refused, saying 
 # GitHub gives no answer: the wording it would leave cannot be read.
 r="$(FAKE_BODY="" run "$EDIT")"
 check "the label where the description cannot be read from GitHub is refused, saying so" "$(refused "$r" && [[ "$r" == *"could not be read from GitHub"* && "$r" == *"--body-file"* ]] && echo ok || echo "$r")"
+# A GitHub that does not answer is refused in the hook's own words at its own bound (shortened here
+# so no case waits on a clock), and the gh left running does not hold the hook open.
+began=$SECONDS
+r="$(FAKE_SLOW=30 ANNOUNCE_LABEL_GITHUB_SECONDS=1 run "$EDIT")"
+check "a GitHub that does not answer is refused at the hook's own bound, saying so" "$(refused "$r" && [[ "$r" == *"did not answer in 1 seconds"* && "$r" == *"--body-file"* ]] && echo ok || echo "$r")"
+check "and the hook does not wait on the gh it left behind" "$([ $((SECONDS - began)) -lt 12 ] && echo ok || echo "took $((SECONDS - began)) seconds")"
 forget
 
 # Every ordinary spelling of the same thing.
@@ -137,7 +147,8 @@ for cmd in "gh pr edit 7 --add-label=$LABEL" "gh pr edit 7 --add-label bug,$LABE
            "gh pr edit --add-label $LABEL" "gh pr edit https://github.com/acme/widget/pull/7 --add-label $LABEL" \
            "gh pr edit 7 -R acme/widget --add-label $LABEL" "gh issue edit 7 --add-label $LABEL" \
            "cd $REPO && gh pr edit 7 --add-label $LABEL" "bash -c 'gh pr edit 7 --add-label $LABEL'" \
-           "gh api repos/acme/widget/issues/7/labels -f 'labels[]=$LABEL'" "gh api --method POST /repos/{owner}/{repo}/issues/7/labels -f labels[]=$LABEL"; do
+           "gh api repos/acme/widget/issues/7/labels -f 'labels[]=$LABEL'" "gh api --method POST /repos/{owner}/{repo}/issues/7/labels -f labels[]=$LABEL" \
+           "gh api repos/acme/widget/issues/7/labels --input - <<< '{\"labels\": [\"$LABEL\"]}'"; do
   r="$(run "$cmd")"
   check "R10 refused until he approves: $cmd" "$(asks_dan "$r" && echo ok || echo "$r")"
   approve
@@ -149,6 +160,7 @@ done
 echo "the wording a create or an edit would leave is read from the command"
 CREATE="gh pr create --title T --label $LABEL"
 for cmd in "$CREATE --body-file body.md" "$CREATE --body-file $REPO/body.md" "$CREATE -F body.md" "gh pr new -t T -l $LABEL -F body.md" \
+           "gh pr create -t T -dl $LABEL -F body.md" \
            "gh pr edit 7 --add-label $LABEL --body-file body.md"; do
   r="$(FAKE_BODY="$WORK/edited-body.md" run "$cmd")"
   check "R10 refused until he approves: $cmd" "$(asks_dan "$r" && echo ok || echo "$r")"
@@ -158,10 +170,11 @@ for cmd in "$CREATE --body-file body.md" "$CREATE --body-file $REPO/body.md" "$C
   forget
 done
 approve
-r="$(call Bash "$(python3 -c 'import json, sys; print(json.dumps({"command": "gh pr create --title T --label changelog/announce --body " + json.dumps(sys.argv[1])}))' "$BODY")")"
+# The description in single quotes, its lines as they are: a shell reads no \n inside any quotes.
+r="$(run "$CREATE --body '$BODY'")"
 check "still possible: a description given with --body whose wording he approved" "$(passed "$r" && echo ok || echo "$r")"
-r="$(call Bash "$(python3 -c 'import json, sys; print(json.dumps({"command": "gh pr create --title T --label changelog/announce --body " + json.dumps(sys.argv[1])}))' "${BODY/Pick a reason/Pick any reason}")")"
-check "R10 a description given with --body whose wording he has not approved is refused" "$(asks_dan "$r" && echo ok || echo "$r")"
+r="$(run "$CREATE --body '${BODY/Pick a reason/Pick any reason}'")"
+check "R10 a description given with --body whose wording he has not approved is refused" "$(asks_dan "$r" && [[ "$r" == *"Dan has not approved this wording for acme/widget"* ]] && echo ok || echo "$r")"
 # A form the wording cannot be read from is refused with the form to use, approved or not.
 for cmd in "$CREATE --fill" "$CREATE" "$CREATE --body-file -" "cat body.md | $CREATE -F -" "$CREATE --template bug.md" \
            "printf 'x' > body.md && $CREATE --body-file body.md" "$CREATE --body-file \$BODY_FILE_NOBODY_SET" \
@@ -169,6 +182,22 @@ for cmd in "$CREATE --fill" "$CREATE" "$CREATE --body-file -" "cat body.md | $CR
   r="$(run "$cmd")"
   check "a form the wording cannot be read from is refused with the form to use: $cmd" "$(refused "$r" && [[ "$r" == *"--body-file <file>"* || "$r" == *"one pull request"* ]] && echo ok || echo "$r")"
 done
+# An edit whose own description cannot be read (empty, or opening with a dash, which reads as a flag)
+# is never judged by what GitHub holds now, since the command replaces that.
+for cmd in "gh pr edit 7 --add-label $LABEL --body ''" "gh pr edit 7 --add-label $LABEL --body '- one
+## Announcement
+other wording'" "gh pr edit 7 --add-label $LABEL -b ''" "gh pr edit 7 --add-label $LABEL --body-file ''"; do
+  r="$(run "$cmd")"
+  check "an edit whose own description cannot be read is refused, approved wording on GitHub or not: ${cmd:0:60}" "$(refused "$r" && [[ "$r" == *"--body-file <file>"* && "$r" != *"has no \`## Announcement\`"* ]] && echo ok || echo "$r")"
+done
+# The label added after another write in the same call: what GitHub holds now is not what it would sit on.
+for cmd in "gh pr edit 7 --body-file body.md && gh pr edit 7 --add-label $LABEL" "gh api -X PATCH repos/acme/widget/pulls/7 -f body=x; gh pr edit 7 --add-label $LABEL" \
+           "gh pr edit 7 --add-label $LABEL && gh issue edit 7 --body other"; do
+  r="$(run "$cmd")"
+  check "the label added beside another GitHub write in one call is refused, saying to give it a command of its own: $cmd" "$(refused "$r" && [[ "$r" == *"a command of its own"* ]] && echo ok || echo "$r")"
+done
+r="$(run "gh pr view 7 --json labels && gh pr edit 7 --add-label $LABEL")"
+check "still possible: the label added after a command that only reads" "$(passed "$r" && echo ok || echo "$r")"
 # A repository that cannot be told is no place to look an approval up for.
 mkdir -p "$WORK/norepo"; cp "$REPO/body.md" "$WORK/norepo/body.md"
 r="$(run "$CREATE --body-file body.md" "$WORK/norepo")"
@@ -238,6 +267,17 @@ r="$(cut_payload '{"tool_name": "Bash", "tool_input": {"command": "gh pr edit 7 
 check "a payload it cannot parse that names the label is refused, naming the payload" "$([[ "$r" == *"payload"*" rc=2" ]] && echo ok || echo "$r")"
 r="$(cut_payload '{"tool_name": "Bash", "tool_input": {"command": "ls -la"}')"
 check "a payload it cannot parse that names nothing it judges passes" "$([[ "$r" == " rc=0" ]] && echo ok || echo "$r")"
+
+# The wrapper with its rule file gone: a gate that did not run is not one that found nothing (L98).
+mkdir -p "$WORK/broken"
+cp "$HOOK" "$WORK/broken/announce-label-ask.sh"
+ln -s "$DIR/lib" "$WORK/broken/lib"
+broken() { python3 -c 'import json, sys; print(json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": sys.argv[1]}, "cwd": sys.argv[2], "session_id": "s1"}))' "$1" "$REPO" \
+  | ( cd "$REPO" && PATH="$WORK/bin:$PATH" ANNOUNCE_APPROVALS_DIR="$STORE" bash "$WORK/broken/announce-label-ask.sh" 2>&1 ); printf ' rc=%s' "$?"; }
+r="$(broken "$EDIT")"
+check "with its rule file gone, a command naming the label is refused, saying the gate did not run" "$([[ "$r" == *"announce-label-ask.sh failed"*"could not be checked"*" rc=2" ]] && echo ok || echo "$r")"
+r="$(broken "ls -la")"
+check "and a command naming neither the label nor the record still passes" "$([[ "$r" == " rc=0" ]] && echo ok || echo "$r")"
 
 echo "the record of what he approved is not a session's to write"
 mkdir -p "$STORE"; printf '' > "$STORE/record.jsonl"

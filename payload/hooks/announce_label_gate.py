@@ -79,8 +79,17 @@ API_VALUE_FLAGS = {"-f", "-F", "--field", "--raw-field", "-H", "--header", "--in
                    "-t", "--template", "--hostname", "--cache", "-p", "--preview"}
 # The forms of a create that take the description from somewhere this hook cannot read.
 UNREAD_BODY_FLAGS = {"--fill", "-f", "--fill-first", "--fill-verbose", "--template", "-T", "--editor", "-e", "--recover"}
+BODY_FLAGS = ("--body", "-b", "--body-file", "-F")
 BODY_BYTES = 1024 * 1024
-GITHUB_SECONDS = 20
+# Each bound is this hook's own, and their sum (a read of GitHub or of the remote, the hash, the
+# library's check at 12) stays inside the 45 seconds the hook is registered with, so a slow GitHub
+# is refused in words and never by the harness cutting the hook short.
+GITHUB_SECONDS = 15
+REMOTE_SECONDS = 5
+# Seam, for the tests: a shorter bound on the read of GitHub, so no case waits on a clock (L524). It
+# can only shorten the wait, and a read cut short is refused.
+if (os.environ.get("ANNOUNCE_LABEL_GITHUB_SECONDS") or "").isdigit():
+    GITHUB_SECONDS = max(1, min(GITHUB_SECONDS, int(os.environ["ANNOUNCE_LABEL_GITHUB_SECONDS"])))
 EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 PULL_URL = re.compile(r"https://github\.com/([^/\s]+)/([^/\s]+)/(?:pull|issues)/(\d+)")
 ISSUE_LABELS = re.compile(r"repos/([^/]+)/([^/]+)/issues/(\d+)/labels")
@@ -119,6 +128,28 @@ def _run_dir(place, cwd):
     return place.cwd if place is not None and isinstance(place.cwd, str) else cwd
 
 
+def _bounded(args, folder, seconds):
+    """(exit code, standard output) of a command run in folder, or None when it did not finish in
+    seconds. It runs in a process group of its own, which is killed whole at the limit: a gh it
+    started would otherwise hold the pipe open and this hook with it, past the harness's own limit."""
+    import signal
+    p = subprocess.Popen(args, cwd=folder, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                         stdin=subprocess.DEVNULL, start_new_session=True)
+    try:
+        out, _ = p.communicate(timeout=seconds)
+        return p.returncode, out.decode("utf-8", "replace")
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        try:
+            p.communicate(timeout=2)
+        except subprocess.TimeoutExpired:
+            pass
+        return None
+
+
 def _github(selector, repo_flag, folder):
     """What GitHub holds for one pull request, through lib/merge-target.sh's reader (each logged in
     account, an answer about another repository refused): (owner/name, its description), or Refuse.
@@ -130,19 +161,17 @@ def _github(selector, repo_flag, folder):
     if not isinstance(folder, str) or not os.path.isdir(folder):
         raise Refuse("the directory this command runs in could not be told, so which pull request it names could not "
                      "be read from GitHub. " + USE_BODY_FILE)
-    try:
-        r = subprocess.run(["bash", "-c", script, "_", _HERE, selector or "", repo_flag or ""], cwd=folder,
-                           capture_output=True, timeout=GITHUB_SECONDS)
-    except subprocess.TimeoutExpired:
+    ran = _bounded(["bash", "-c", script, "_", _HERE, selector or "", repo_flag or ""], folder, GITHUB_SECONDS)
+    if ran is None:
         raise Refuse("GitHub did not answer in %d seconds, so the wording this pull request carries could not be "
                      "read from GitHub. %s" % (GITHUB_SECONDS, USE_BODY_FILE))
-    out = r.stdout.decode("utf-8", "replace")
+    code, out = ran
     slug, _, rest = out.partition("\n")
     try:
         envelope = json.loads(rest)
     except ValueError:
         envelope = None
-    if r.returncode == 3 or not isinstance(envelope, dict):
+    if code == 3 or not isinstance(envelope, dict):
         raise Refuse("lib/merge-target.sh, which reads a pull request from GitHub, could not be loaded or gave no "
                      "answer, so the wording this pull request carries could not be read from GitHub. Reinstall the "
                      "hooks with claude-sync pull.")
@@ -170,11 +199,11 @@ def _repo(args, envs, place, cwd):
     folder = _run_dir(place, cwd)
     if isinstance(folder, str) and os.path.isdir(folder):
         try:
-            r = subprocess.run(["bash", "-c", '. "$1/lib/merge-target.sh" 2>/dev/null && mt_remote_slug', "_", _HERE],
-                               cwd=folder, capture_output=True, timeout=10)
-            slug = r.stdout.decode("utf-8", "replace").strip()
-        except (subprocess.TimeoutExpired, OSError):
-            slug = ""
+            ran = _bounded(["bash", "-c", '. "$1/lib/merge-target.sh" 2>/dev/null && mt_remote_slug', "_", _HERE],
+                           folder, REMOTE_SECONDS)
+        except OSError:
+            ran = None
+        slug = ran[1].strip() if ran else ""
         if approval.repo_key(slug):
             return slug
     raise Refuse("the repository this command posts to could not be told (no --repo, and the directory it runs in "
@@ -211,6 +240,11 @@ def _given_body(kind, args, command, place, cwd, environ):
         if len(data) > BODY_BYTES:
             raise Refuse("its body file " + path + " is larger than 1 MB, which is no pull request description.")
         return data
+    if any(a in BODY_FLAGS for a in args):
+        # The shared reader takes no value that is empty or opens with a dash, so the flag is there
+        # and its value is not. The description GitHub holds now is the one this command replaces.
+        raise Refuse("it gives a description that could not be read from the command (one that is empty, or opens "
+                     "with a dash, which reads as another flag). " + USE_BODY_FILE)
     if kind == ("pr", "create"):
         if any(a in UNREAD_BODY_FLAGS or a.split("=", 1)[0] in UNREAD_BODY_FLAGS for a in args):
             raise Refuse("it takes the description from the commits, a template or an editor, which cannot be read "
@@ -247,9 +281,11 @@ def _label_made(repo, payload, notes):
                      "made once he has approved the first announcement there. " + verdict["how"])
 
 
-def _judge_put(kind, args, envs, place, command, cwd, payload, notes):
+def _judge_put(kind, args, envs, place, command, cwd, payload, notes, writes):
     long_flag, short_flag = PUTS[kind]
-    if LABEL not in _labels(scan.flag_values(args, long_flag, short_flag)):
+    # The one letter form is read after other one letter flags too (`-dl`): a label found there that
+    # gh would read otherwise can only refuse more.
+    if LABEL not in _labels(scan.flag_values(args, long_flag, short_flag, clustered=bool(short_flag))):
         return
     environ = dict(os.environ)
     body = _given_body(kind, args, command, place, cwd, environ)
@@ -265,6 +301,11 @@ def _judge_put(kind, args, envs, place, command, cwd, payload, notes):
     if m and not repo_flag:
         repo_flag = "%s/%s" % (m.group(1), m.group(2))
     if body is None:
+        if writes > 1:
+            raise Refuse("the same call makes another GitHub write (a create, an edit or a gh api write), so the "
+                         "description GitHub holds now may not be the one the label would sit on. Put the label on "
+                         "in a command of its own, once the other has run: `gh pr edit <number> --add-label " + LABEL
+                         + "`.")
         repo, held = _github(selector, repo_flag, _run_dir(place, cwd))
         return _wording_approved(repo, held.encode("utf-8", "replace"), payload, notes)
     _wording_approved(repo_flag or _repo(args, envs, place, cwd), body, payload, notes)
@@ -282,11 +323,29 @@ def _judge_label(kind, args, envs, place, cwd, payload, notes):
     _label_made(_repo(args, envs, place, cwd), payload, notes)
 
 
+def _api_write(args):
+    return "DELETE" not in {v.upper() for v in scan.flag_values(args, "--method", "-X")} and scan.api_writes(args)
+
+
+def _api_calls(command):
+    """The arguments of each gh api call the command makes, as the session link gate finds them."""
+    out = []
+    pipelines, _bodies = scan._stages(command)
+    for stages in pipelines:
+        if not isinstance(stages, list):
+            continue
+        for words, _redirects, _heredocs in stages:
+            found = scan.gh_command(words)
+            if found and found[0] == "api":
+                out.append(list(found[2]) + list(found[3]))
+    return out
+
+
 def _judge_api(args, cwd, payload, notes):
-    if LABEL not in " ".join(args).lower():
-        return
-    if "DELETE" in {v.upper() for v in scan.flag_values(args, "--method", "-X")} or not scan.api_writes(args):
-        return
+    """One gh api write, in a command that names the label somewhere."""
+    names = LABEL in " ".join(args).lower()
+    # A body it reads from a file or standard input names its labels where the words here cannot.
+    unseen = any(a == "--input" or a.startswith("--input=") for a in args)
     named = _positionals(args, API_VALUE_FLAGS)
     endpoint = (named[0] if named else "").split("?")[0]
     for prefix in ("https://api.github.com/", "/"):
@@ -299,12 +358,14 @@ def _judge_api(args, cwd, payload, notes):
         return "%s/%s" % (m.group(1), m.group(2))
 
     m = ISSUE_LABELS.fullmatch(endpoint)
-    if m:
+    if m and (names or unseen):
         repo, held = _github(m.group(3), repo_of(m), cwd)
         return _wording_approved(repo, held.encode("utf-8", "replace"), payload, notes)
     m = REPO_LABELS.fullmatch(endpoint)
-    if m:
+    if m and (names or unseen):
         return _label_made(repo_of(m), payload, notes)
+    if not names:
+        return
     raise Refuse("it writes the label through the GitHub API in a form whose pull request and wording cannot be "
                  "read here. " + USE_PR_EDIT)
 
@@ -314,19 +375,18 @@ def judge_label(command, cwd, payload, notes):
     if LABEL not in command.lower() or not re.search(r"\bgh\b", command):
         return None
     try:
-        for kind, args, envs, place in scan.scan_gh_in_context(command, cwd, dict(os.environ), KINDS):
+        found = scan.scan_gh_in_context(command, cwd, dict(os.environ), KINDS)
+        apis = [args for args in _api_calls(command) if _api_write(args)]
+        # How many commands of this call write to GitHub: an edit that leaves the description to
+        # GitHub is judged by what GitHub holds now, which holds only when it is the one write.
+        writes = sum(1 for kind, _, _, _ in found if kind in PUTS) + len(apis)
+        for kind, args, envs, place in found:
             if kind in PUTS:
-                _judge_put(kind, args, envs, place, command, cwd, payload, notes)
+                _judge_put(kind, args, envs, place, command, cwd, payload, notes, writes)
             else:
                 _judge_label(kind, args, envs, place, cwd, payload, notes)
-        pipelines, _bodies = scan._stages(command)
-        for stages in pipelines:
-            if not isinstance(stages, list):
-                continue
-            for words, _redirects, _heredocs in stages:
-                found = scan.gh_command(words)
-                if found and found[0] == "api":
-                    _judge_api(list(found[2]) + list(found[3]), cwd, payload, notes)
+        for args in apis:
+            _judge_api(args, cwd, payload, notes)
     except Refuse as e:
         return str(e)
     except scan.ReaderMissing as e:
@@ -361,9 +421,10 @@ def judge_record(command, cwd):
     return None
 
 
-RECORD_WHY = ("the record of the announcement wording Dan approved (state/" + approval.RECORD_NAME + "), and only his "
-              "own answer in the picker adds to it: a hook writes his approval there when it reads that answer. "
-              "Read it with `python3 ~/.claude/hooks/lib/announce-approval.py list`. " + approval.HOW_TO_ASK)
+RECORD_IS = "the record of the announcement wording Dan approved (state/" + approval.RECORD_NAME + ")"
+RECORD_RULE = ("It is not a session's to write: only his own answer in the picker adds to it, when a hook reads that "
+               "answer and writes his approval there. Read it with `python3 ~/.claude/hooks/lib/announce-approval.py "
+               "list`. " + approval.HOW_TO_ASK)
 
 
 def deny(reason):
@@ -380,7 +441,7 @@ def main():
         if isinstance(path, str) and path and not os.path.isabs(path) and cwd:
             path = os.path.join(cwd, path)
         if approval.is_record_path(path):
-            return deny("this " + tool + " writes " + RECORD_WHY)
+            return deny("this " + tool + " writes " + RECORD_IS + ". " + RECORD_RULE)
         return 0
     if tool != "Bash":
         return 0
@@ -389,7 +450,7 @@ def main():
         raise TypeError("the command is not text")
     held = judge_record(command, cwd)
     if held:
-        return deny("this command may write " + RECORD_WHY.replace("), and only", "): " + held + ". Only", 1))
+        return deny("this command may write " + RECORD_IS + ": " + held + ". " + RECORD_RULE)
     notes = []
     why = judge_label(command, cwd, data, notes)
     if why:
