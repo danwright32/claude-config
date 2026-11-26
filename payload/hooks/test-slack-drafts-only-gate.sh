@@ -1408,7 +1408,9 @@ if os.environ.get("SLACK_GATE_COST_REPLAY"):
 # judgement each reading so far is divided again by the median of every sample taken so far, and
 # whether to take another reading is decided on those figures. The case stops only once one of them
 # is at or under the ceiling, and no sample is taken after it stops, so the figures it stopped on are
-# the final ones the record prints and the verdict reads: no provisional figure is ever kept. Any
+# the final ones the record prints and the verdict reads. The side texts are worded at the end from
+# the final figures too, but for one: the note the cold case writes for the cached case the moment
+# its first judgement runs out, before the last sample, which says its unit is provisional. Any
 # other word is refused rather than read as one.
 UNIT_KIND = os.environ.get("SLACK_GATE_COST_UNIT", "least")
 if UNIT_KIND not in ("least", "median"):
@@ -1509,12 +1511,17 @@ for attempt in range(max(need, int(os.environ.get("SLACK_GATE_COST_ATTEMPTS", "3
         # judged again from an empty cache on the step clock, which no speed can end, and those
         # units are held to the same ceiling: a gate that does more work still fails here, on any
         # machine (L411). That the seconds ran out is recorded beside the reading.
-        ran_out.append("%.1f s at %.3f s a unit" % (spent, unit))
+        # The seconds it ran and the unit at this moment; the record words it at the end (#3406).
+        ran_out.append((spent, unit))
         if not attempt:
             # The one judgement made in the folder this measurement was handed, so the folder holds
-            # no judgement: written down for the cached case that is handed the folder next.
+            # no judgement: written down for the cached case that is handed the folder next. It is
+            # written now, before the case has taken its last sample, so by the whole run's median
+            # the unit here is the median so far and says so (#3406); the least is as it was.
             with open(unfilled_log, "a") as f:
-                f.write("%s\t%s\t%s\n" % (os.path.basename(cache.rstrip("/")), os.environ.get("SLACK_GATE_COST_LABEL", "?"), ran_out[-1]))
+                f.write("%s\t%s\t%s\n" % (os.path.basename(cache.rstrip("/")), os.environ.get("SLACK_GATE_COST_LABEL", "?"),
+                        "%.1f s at %.3f s a unit" % (spent, unit)
+                        + (", provisional: the median of the %d yardstick samples taken by then" % len(samples) if UNIT_KIND == "median" else "")))
         env.update(HOOK_TESTS_RUNNING="1", SLACK_GATE_TICK_BUDGET="1000000000",
                    SLACK_GATE_CACHE_DIR=tempfile.mkdtemp(dir=os.path.dirname(cache.rstrip("/"))))
         p, spent, said = judge(env)
@@ -1541,13 +1548,21 @@ for attempt in range(max(need, int(os.environ.get("SLACK_GATE_COST_ATTEMPTS", "3
     if empty:
         # It did the whole work and, where its trace says "stored", filled the cache itself. It is
         # not a sample of the cache answering and not a defect; every sample after it is held as ever.
-        filled_here = "%.1f units, where the cache traced %s" % (spent / unit, " | ".join(s[:80] for s in said))
+        filled_here = " | ".join(s[:80] for s in said)
     elif (cold and not afresh) or (warm and "hit" not in said):
-        unfit.append("sample %d, %.1f units, where the cache traced %s"
-                     % (len(ratios), spent / unit, " | ".join(s[:80] for s in said) or "nothing"))
+        # Its figure is worded at the end, from the final readings (#3406).
+        unfit.append((len(ratios) - 1, " | ".join(s[:80] for s in said) or "nothing"))
     if len(ratios) >= need and min(ratios)[0] <= ceiling:
         break
 ratio, spent, unit = min(ratios)
+# The side texts, worded now that the readings are final: a judgement that ran out with the unit
+# it was read at, which by the whole run's median is the final unit (#3406, picker 3.71) and by the
+# least is the least of the samples taken by then, as ever; a sample the cache misread, and the
+# sample that filled the cache, by their final readings.
+ran_out_text = ["%.1f s at %.3f s a unit" % (s, unit if UNIT_KIND == "median" else u) for s, u in ran_out]
+unfit = ["sample %d, %.1f units, where the cache traced %s" % (i + 1, ratios[i][0], t) for i, t in unfit]
+if filled_here:
+    filled_here = "%.1f units, where the cache traced %s" % (ratios[0][0], filled_here)
 # Every measurement is recorded where the suite prints it, passing or not, so the ceiling's premise
 # can be measured again from any run's log, a CI runner's included (L316).
 # PRINTED ONLY, never judged (#3170, Dan's decision of 2026-11-21, "Measure more first"): after the
@@ -1570,7 +1585,7 @@ if log:
                 % (os.environ.get("SLACK_GATE_COST_LABEL", "?"), line[-40:], ratio, spent, unit, ceiling,
                    ", ".join("%.1f" % r[0] for r in ratios),
                    "; the gate's 11 s ran out on this machine, after %s, so those were read on the step clock"
-                   % " and ".join(ran_out) if ran_out else "",
+                   % " and ".join(ran_out_text) if ran_out else "",
                    # Read by tools/gate-cost-rows.py for its last column, so the words are held there
                    # too; no bar and no bracket, which separate the entries of the note this goes in.
                    "; the cache was never filled, the judgement that fills it having run out of the gate's seconds after %s, so the first reading here filled it"
@@ -1608,7 +1623,7 @@ if filled_here and ratio <= ceiling:
 if (ratio > ceiling and ran_out and len(ran_out) == len(ratios)
         and os.environ.get("SLACK_GATE_COST_RAN_OUT_UNMEASURED") == "1"):
     print("unmeasured: every judgement of this case ran out of the gate's seconds on this machine, after %s, so each was read on the step clock instead, at %s units against the limit of %s, and a reading taken only on the step clock is not held to the limit, while a sample that finishes inside the seconds is held to it as ever (#3406)"
-          % (" and ".join(ran_out), ", ".join("%.1f" % r[0] for r in ratios), ceiling))
+          % (" and ".join(ran_out_text), ", ".join("%.1f" % r[0] for r in ratios), ceiling))
     sys.exit()
 print("ok" if ratio <= ceiling else "judging it took at least %.1f s of processor time, %.1f units of the fixed yardstick (%.3f s each), past %s, in each of %d samples (%s)"
       % (spent, ratio, unit, ceiling, len(ratios), ", ".join("%.1f" % r[0] for r in ratios)))
@@ -1910,14 +1925,16 @@ if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; t
   # by the median of the samples taken by its own time; by the whole run's median its second reading
   # is 81.0), and greens must stay green, each with the readings the whole run's median gives, and
   # each record must pass tools/gate-cost-rows.py check. The last line is made up, and says so: the
-  # samples of run 45805317401 with seconds 20 percent above the median green reading (70.6) of the
-  # median of the samples taken by each judgement, which must fail. Each record is replayed by the
+  # samples of run 45805317401 with made up seconds, each 84.7 units (1.2 times 70.6, the median
+  # green reading by the whole run's median) of the median of the samples taken by its own judgement,
+  # so the gate costs 20 percent more at the runner's speed of that moment. By the whole run's
+  # median it reads 89.4, 85.4 and 84.7, and must fail. Each record is replayed by the
   # least sample and 91 too, the rule CI judged it by, and must give CI's own verdict and readings,
   # so the replay is seen to be the run it stands for.
   ci_records="$DIR/slack-drafts-cost-fixtures/ci-cold-records.jsonl"
   # shellcheck disable=SC2016
   ci_replayed="$(python3 -B - "$ci_records" "$T/cost.py" "$HOOK" "$CS" "$T" "$(cost_unit suite-cold Linux)" "$(cost_limit suite-cold Linux)" "${REPO:+$REPO/tools/gate-cost-rows.py}" 2>&1 <<'PY'
-import collections, json, os, subprocess, sys, tempfile
+import collections, json, os, re, subprocess, sys, tempfile
 records, cost, hook, cs, tmp, unit, limit, rows_tool = sys.argv[1:9]
 def run(rec, unit, limit):
     d = tempfile.mkdtemp(dir=tmp)
@@ -1950,6 +1967,10 @@ for line in open(records):
     # The record holds the final figures, each reading over the median of every sample taken, and
     # tools/gate-cost-rows.py reproduces each from the printed seconds and unit.
     good = good and ", samples %s;" % readings in logged and logged.endswith("\nrows check: ok")
+    # A judgement that ran out is noted with the unit it was read at, and by the whole run's median
+    # that is the final unit, the record's own, never the median of the samples so far (#3406).
+    final = re.search(r"unit ([0-9.]+) s,", logged)
+    good = good and bool(final) and all(u == final.group(1) for u in re.findall(r" s at ([0-9.]+) s a unit", logged))
     print("%s\t%s\t%s" % (rec["kind"], name, "ok" if good else "cost.py answered %r, logged %r" % (said[:300], logged[-300:])))
     if rec["run"] != "constructed":
         said, logged = run(rec, "least", "91")
@@ -1958,6 +1979,31 @@ for line in open(records):
         good = ((said.startswith("judging it took") and "(%s)" % least in said)
                 or (said.startswith("unmeasured: every judgement") and "at %s units" % least in said)) if rec["kind"].startswith("red") else said == "ok"
         print("control\trun %s %s\t%s" % (rec["run"], rec["attempt"], "ok" if good else "by the least sample and 91, cost.py answered %r" % said[:300]))
+    if rec["run"] == "45784485146":
+        # The message naming a sample the cache did not show judged afresh prints its figure at the
+        # end, by the whole run's median: constructed from this real record by making its first
+        # reading's trace say "hit", that sample reads 98.0 by the median so far and 90.4 at the end.
+        bent = dict(rec, judgements=[dict(j) for j in rec["judgements"]])
+        bent["judgements"][1]["said"] = ["qos: not raised: not macOS", "hit"]
+        said, _ = run(bent, unit, limit)
+        good = said.startswith("1 of the 2 samples") and "sample 1, 90.4 units" in said
+        print("side-unfit\tthe record of run %s %s with its first reading's trace made a hit\t%s" % (rec["run"], rec["attempt"], "ok" if good else "cost.py answered %r" % said[:400]))
+    if rec["run"] == "45838830923":
+        # What the cold case writes down for the cached case the moment its first judgement runs
+        # out, when only the samples so far are known: by the whole run's median it says that unit
+        # is provisional, since the final one is not yet known.
+        d = tempfile.mkdtemp(dir=tmp)
+        os.mkdir(os.path.join(d, "cache"))
+        with open(os.path.join(d, "r.json"), "w") as f:
+            json.dump({"yard": rec["yard"], "judgements": rec["judgements"]}, f)
+        env = {k: v for k, v in os.environ.items() if k not in ("SLACK_GATE_TICK_BUDGET", "HOOK_TESTS_RUNNING", "SLACK_GATE_COST_SAMPLES", "SLACK_GATE_COST_ATTEMPTS", "SLACK_GATE_COST_LOG")}
+        env.update(SLACK_GATE_COST_UNIT=unit, SLACK_GATE_COST_RAN_OUT_UNMEASURED="1", SLACK_GATE_COST_LABEL="replay-ci",
+                   SLACK_GATE_COST_REPLAY=os.path.join(d, "r.json"), SLACK_GATE_CACHE_DIR=os.path.join(d, "cache"))
+        subprocess.run(["python3", "-B", cost, hook, cs, limit, "--line", "bash tests/test-claude-sync.sh"], capture_output=True, text=True, env=env)
+        p = os.path.join(d, "cost-cache-unfilled.log")
+        wrote = open(p).read().strip() if os.path.exists(p) else ""
+        good = wrote.endswith("7.3 s at 0.158 s a unit, provisional: the median of the 7 yardstick samples taken by then")
+        print("side-unfilled\tthe ran out note run %s %s leaves for the cached case\t%s" % (rec["run"], rec["attempt"], "ok" if good else "it wrote %r" % wrote[:300]))
 short = [k for k, n in (("red-now-green", 7), ("green-stays-green", 5), ("constructed-20-percent-dearer", 1)) if kinds[k] < n]
 print("count\tthe records\t%s" % ("ok" if not short else "too few records of %s in %s: %s" % (", ".join(short), records, dict(kinds))))
 PY
@@ -1972,10 +2018,12 @@ PY
       constructed-20-percent-dearer) check "$name, a gate 20 percent dearer than the median green reading, fails by the whole run's median sample and $(cost_limit suite-cold Linux) (#3406)" "$verdict" ;;
       control) check "$name replayed by the least sample and 91 gives CI's own verdict and readings (#3406)" "$verdict" ;;
       count) check "the CI records replayed for the Linux unit hold enough of each kind (#3406)" "$verdict" ;;
+      side-unfit) check "$name names that sample by its final figure, by the whole run's median (#3406)" "$verdict" ;;
+      side-unfilled) check "$name says its unit is provisional, by the whole run's median (#3406)" "$verdict" ;;
       *) check "a CI record replayed for the Linux unit says what it is (#3406)" "$kind $name $verdict" ;;
     esac
   done <<< "$ci_replayed"
-  [ "$ci_seen" -ge 26 ] && ci_seen=ok || ci_seen="only $ci_seen answers came back from replaying $ci_records: $ci_replayed"
+  [ "$ci_seen" -ge 28 ] && ci_seen=ok || ci_seen="only $ci_seen answers came back from replaying $ci_records: $ci_replayed"
   check "every CI record for the Linux unit was replayed (#3406)" "$ci_seen"
   # A machine too slow for the gate's budget, stood in for by a copy of the gate whose budget is a
   # fifth of a second, judging the one lesson line (#3170, L411): the seconds run out, cost.py reads
@@ -2140,7 +2188,9 @@ if [ -f "$T/cost.log" ]; then
     [ "$rows_got" = "$rows_want" ] && rows=ok || rows="the reader found ${rows_got:-0} cases with seconds and yardstick in the notes, of the cost log's ${rows_want:-0}: $rows"
     check "tools/gate-cost-rows.py reads every case's seconds and yardstick from the notes a passing run shows (#3170)" "$rows"
     # The verdict never reads a printed only figure (#3170): every reading must be its seconds over
-    # the least yardstick sample taken by then, and the judged reading the least of them, so a
+    # the yardstick sample its record names, the least of those taken by then or, for the cold case
+    # off macOS, the median of every sample the case took (#3406), and the judged reading the least
+    # of them, so a
     # verdict taken from a median, a greatest or any other figure printed beside it fails here.
     held="$(python3 -B "$REPO/tools/gate-cost-rows.py" check "$T/cost.log" 2>&1)"
     check "every cost case is judged by its least reading, each its seconds over the yardstick sample its record names, the least or the median of those taken by then, never a figure printed beside it (#3170, #3406)" "$held"
