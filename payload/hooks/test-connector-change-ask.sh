@@ -201,6 +201,15 @@ r="$(run "$HOOK" '{"session_id": "s1", "hook_event_name": "PreToolUse", "tool_na
 says "saying the name could not be read whole" "$r" 'could not be read whole'
 expect "a payload cut short inside a Cal tool's name is asked about" ask '{"session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "mcp__claude_ai_Cal__can'
 expect "a payload cut short inside another server's tool name is passed" none '{"session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "mcp__lightroom__del'
+# A whole name that asks nothing does not vouch for the rest of a text that cannot be read: the
+# call's own name may be the one cut short after it (an input can hold a tool_name key of its own,
+# written first).
+r="$(run "$HOOK" '{"session_id": "s1", "hook_event_name": "PreToolUse", "tool_input": {"tool_name": "mcp__lightroom__list_folders"}, "tool_name": "mcp__claude_ai_Regal_MCP__del')"
+[ "$(decision "$r")" = "ask rc=0" ] && check "a payload holding another server's name whole, then cut short inside a Regal tool's name, is asked about" ok || check "a payload holding another server's name whole, then cut short inside a Regal tool's name, is asked about" "$(decision "$r")"
+says "saying the Regal name could not be read whole" "$r" 'mcp__claude_ai_Regal_MCP__del, a name that could not be read whole'
+expect "a payload holding Bash as a whole name, then cut short inside a Cal tool's name, is asked about" ask '{"session_id": "s1", "hook_event_name": "PreToolUse", "tool_input": {"tool_name": "Bash"}, "tool_name": "mcp__claude_ai_Cal__can'
+expect "a payload holding a Regal read whole, then cut short inside a Regal tool's name, is asked about" ask '{"session_id": "s1", "hook_event_name": "PreToolUse", "tool_input": {"tool_name": "mcp__claude_ai_Regal_MCP__fetch-journey"}, "tool_name": "mcp__claude_ai_Regal_MCP__del'
+expect "a payload holding a Regal read whole, then cut short inside another server's tool name, is passed" none '{"session_id": "s1", "hook_event_name": "PreToolUse", "tool_input": {"tool_name": "mcp__claude_ai_Regal_MCP__fetch-journey"}, "tool_name": "mcp__lightroom__del'
 expect "an empty payload is passed" none ""
 expect "a Bash call naming a Regal delete in its text is not this hook's" none "$(python3 -c 'import json; print(json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "echo mcp__claude_ai_Regal_MCP__delete-team"}}))')"
 tricky="$(python3 -c 'import json; print(json.dumps({"note": "he said \"no\" \\ then\nline two\tand a tab", "ids": [1, 2], "deep": {"a": None}}))')"

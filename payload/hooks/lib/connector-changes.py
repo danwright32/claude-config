@@ -33,8 +33,9 @@ THE RULE, which is the whole of what is asked about:
 
 WHAT IT CANNOT READ IS ASKED ABOUT, never passed: a name on one of these servers with no tool
 after it; a payload that is not a tool call whose text names a tool the rule above asks about; and
-such a payload holding no tool name whole (cut short inside it) whose text names any of the three
-connectors, since a part of a name cannot be judged by its verb.
+such a payload whose text names any of the three connectors anywhere but in a tool name it holds
+whole, since that name may be cut short and a part of a name cannot be judged by its verb. A whole
+name that asks nothing does not vouch for a name cut short after it.
 
 MEASURED. Regal's 115 tools and Cal's 92, as this Mac's session records listed them up to
 2026-11-25, are in connector-change-ask-fixtures/ beside the hooks, and test-connector-change-ask.sh
@@ -174,20 +175,20 @@ def verdict(raw):
     # A payload that is not a tool call is judged by its text. Every tool it names whole, between
     # quotes, is judged, never the first alone, since an input can hold a tool_name key of its own
     # ahead of the call's: one the rule asks about is asked about, saying why.
-    whole = re.findall(r"\"tool_name\"\s*:\s*\"([^\"\\]*)\"", raw)
-    if whole:
-        for n in whole:
-            found = judge(n)
-            if found:
-                connector, tool, what = found
-                return ("this " + connector + " call",
-                        "the payload could not be read as a tool call, and its text names " + n
-                        + (", which " + what if what else "") + ".")
-        return None
-    # No name it holds whole: any MCP name in the text may be cut short, and a part of a name
-    # cannot be judged by its verb ("del" reads as no delete). So one on any of the three
-    # connectors is asked about, whatever it seems to do.
-    for n in re.findall(r"mcp__[A-Za-z0-9_.-]+", raw):
+    whole_key = r"\"tool_name\"\s*:\s*\"([^\"\\]*)\""
+    for n in re.findall(whole_key, raw):
+        found = judge(n)
+        if found:
+            connector, tool, what = found
+            return ("this " + connector + " call",
+                    "the payload could not be read as a tool call, and its text names " + n
+                    + (", which " + what if what else "") + ".")
+    # None of the names it holds whole is asked about, which says nothing for the rest of the
+    # text: the call's own name may be one cut short after them. So with those names taken out,
+    # since each was read whole and judged, any MCP name left in the text may be cut short, and a
+    # part of a name cannot be judged by its verb ("del" reads as no delete). One on any of the
+    # three connectors is asked about, whatever it seems to do.
+    for n in re.findall(r"mcp__[A-Za-z0-9_.-]+", re.sub(whole_key, " ", raw)):
         for connector, on in CONNECTORS:
             if on(n[len("mcp__"):]):
                 return ("this " + connector + " call",

@@ -19,11 +19,13 @@
 # passed in silence: reads, creates and ordinary updates stay with auto mode's check.
 #
 # WHY A HOOK AND NOT A permissions.ask RULE, which is what the issue's text names. The sync carries
-# no permission rule to either Mac: a rule in settings.shared.json makes the pull refuse that whole
-# file, and one in settings.hooks.json is dropped without a word (measured 2026-11-26). Carrying one
-# means a new entry on the sync's list of shared settings, which is Dan's to sign off. A hook
-# already reaches both Macs, asks the same question, can match a server by a part of its name, and
-# its matching can be run by handing it a call, which a rule's cannot.
+# no ask rule to either Mac. The one permission setting it shares is permissions.deny, for a fixed
+# list of rules (claude-config#3686). An ask rule in settings.shared.json makes the pull refuse
+# that whole file, saying such a rule stays each Mac's own (read in claude-sync on 2026-11-26), and
+# one in settings.hooks.json is dropped without a word (measured 2026-11-26, before the deny rules
+# were shared). Carrying an ask rule means a new entry on the sync's list of shared settings, which
+# is Dan's to sign off. A hook already reaches both Macs, asks the same question, can match a server
+# by a part of its name, and its matching can be run by handing it a call, which a rule's cannot.
 #
 # WHILE DAN IS ASLEEP (lib/sleep.sh's sleep_active) the call is refused, with the reason, and never
 # asked about (permissionDecision "deny"). A question is not put to Dan at night, and an ask alone
@@ -34,10 +36,10 @@
 #
 # FAIL CLOSED. What cannot be read is stopped, never passed: asked about while Dan is awake and
 # refused while he is asleep. That is a name on one of these servers with no tool after it; a
-# payload that is not a tool call whose text names a tool the rule asks about, or holds no tool
-# name whole and names one of the three connectors (a name cut short cannot be judged by its
-# verb); and, with lib/connector-changes.py missing or failing, every call to a server whose name
-# holds regal, better or cal, a read included, naming what is missing. Without lib/sleep.sh, or
+# payload that is not a tool call whose text names a tool the rule asks about, or names one of the
+# three connectors anywhere but in a tool name it holds whole (a name cut short cannot be judged by
+# its verb); and, with lib/connector-changes.py missing or failing, every call to a server whose
+# name holds regal, better or cal, a read included, naming what is missing. Without lib/sleep.sh, or
 # without python3 (which reads both the rule and the sleep record), whether Dan is asleep cannot
 # be told, and every such call is refused and never asked about, saying which is missing: a
 # question would be the one answer sleep mode can say yes to at night. The registration carries
