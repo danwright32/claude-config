@@ -283,7 +283,15 @@ fi
 
 # The held open files command, run as written: this shell opens a file, deletes it and keeps it
 # open, which is the 2026-11-25 shape, and the command must charge its size to this shell.
-if command -v lsof >/dev/null 2>&1 && [ -n "$held_line" ]; then
+# A step whose command is missing, or altered so it no longer reads files with no name left, FAILS
+# here: only a machine without lsof cannot measure it. Until #3648 both reported themselves
+# unmeasured and passed, so this check had never been seen to fail (L1).
+if [ -z "$held_line" ]; then
+  check "the held files command, run as written, charges a deleted file held open to the program holding it" \
+    "the writer step has no command reading lsof +c 0 -n -P +L1, so there is nothing to run"
+elif ! command -v lsof >/dev/null 2>&1; then
+  echo "SUITE-PART-UNMEASURED the held files command, because lsof is not installed here"
+else
   exec 7>"$TMP/held.tmp"; head -c 4000000 /dev/zero >&7; rm -f "$TMP/held.tmp"
   # Without its last `| head`, since this Mac's own programs may hold more than these 4 MB.
   h_out="$(bash -c "${held_line% | head *}" 2>&1)"
@@ -291,8 +299,6 @@ if command -v lsof >/dev/null 2>&1 && [ -n "$held_line" ]; then
   h_mine="$(grep -E "pid $$\$" <<< "$h_out")"
   check "the held files command, run as written, charges a deleted file held open to the program holding it" \
     "$(grep -qE '^ +4 MB in 1 files' <<< "$h_mine" && echo ok || echo "said: $h_out")"
-else
-  echo "SUITE-PART-UNMEASURED the held files command, because lsof is not installed here or the step has no such command"
 fi
 
 echo ""
