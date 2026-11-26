@@ -10,8 +10,15 @@
 # through with that line riding along; and a commit of an unapproved line onto a test project list
 # was not asked about. The reader now reads on where every shell does, and names the # it cannot
 # tell from a comment, but only for a caller that asks. So: a write on such a line is asked about as
-# any other, a # that cannot be told is asked about saying so, nothing is let through unless both
-# readings find the same one run, and what the hook did with an ordinary command it still does.
+# any other, nothing is let through unless both readings find the same one run, and what the hook
+# did with an ordinary command it still does.
+#
+# A line the reader names is refused, as a command the hook could not check, in a sentence true of
+# the mark it was named with (section 6). The reader names more than a #: a heredoc it cannot find
+# the end of, which holds none. The hook asked the reader only about a command holding a #, so a
+# write or a commit the shell runs out of such a heredoc was not asked about, each kind reproduced
+# here against the unchanged hook, and where it did ask it said of every mark that the command
+# held a # the reader could not tell from a comment.
 #
 # Every command here is only ever text in a payload handed to the hook: nothing a case names runs.
 # The only programs started are the hook, python3 and, for the commit cases, git in a checkout this
@@ -43,7 +50,7 @@ WORK="$(cd "$(mktemp -d)" && pwd -P)"
 trap 'rm -rf "$WORK"' EXIT
 
 cat > "$WORK/cases.py" <<'PY'
-import datetime, hashlib, importlib.util, json, os, subprocess, sys, types
+import datetime, hashlib, importlib.util, json, os, shutil, subprocess, sys, types
 
 hook, work = sys.argv[1], sys.argv[2]
 home = os.path.join(work, "home")
@@ -70,12 +77,12 @@ READ_ON = (("an escaped space", "\\ "), ("an escaped tab", "\\\t"),
 UNSURE = "cannot tell from a comment"
 
 
-def decided(command, cwd, transcript=None):
+def decided(command, cwd, transcript=None, by=None):
     d = {"session_id": "s1", "hook_event_name": "PreToolUse", "cwd": cwd, "tool_name": "Bash",
          "tool_input": {"command": command, "description": "d"}}
     if transcript is not None:
         d["transcript_path"] = transcript
-    p = subprocess.run(["bash", hook], input=json.dumps(d).encode(), stdout=subprocess.PIPE,
+    p = subprocess.run(["bash", by or hook], input=json.dumps(d).encode(), stdout=subprocess.PIPE,
                        stderr=subprocess.DEVNULL, env=env, cwd=work)
     out = p.stdout.decode("utf-8", "replace").strip()
     if not out:
@@ -167,24 +174,25 @@ for what, hidden, names in WRITES:
                      front + before + "# c; " + hidden + "\n", work, None, names, None))
     rows.append(("ask", "%s on the line of a # after two lines joined mid word is asked about" % what,
                  R + " -o js\\\non\\\n# c; " + hidden + "\n", work, None, names, None))
-    # Where the reader cannot tell which the shell does, and names the line.
+    # Where the reader cannot tell which the shell does, and names the line: refused, as a command
+    # the hook could not check (the choice made for the issue's second open question).
     rows += [
-        ("ask", "%s on the line of a # after a word that ends in a parenthesis is asked about" % what,
+        ("deny", "%s on the line of a # after a word that ends in a parenthesis is refused" % what,
          R + " -o a(b)# c; " + hidden + "\n", work, None, UNSURE, None),
-        ("ask", "%s on the line of a # after a cd to a folder that ends in a parenthesis is asked about" % what,
+        ("deny", "%s on the line of a # after a cd to a folder that ends in a parenthesis is refused" % what,
          "cd /tmp/a(b)# c; " + hidden + "\n" + R + "\n", work, None, UNSURE, None),
-        ("ask", "%s on the line of a # after a cd and a stray ) is asked about" % what,
+        ("deny", "%s on the line of a # after a cd and a stray ) is refused" % what,
          "cd /tmp/x)# c; " + hidden + "\n" + R + "\n", work, None, UNSURE, None),
-        ("ask", "%s on a # line after an unsure comment that ends in a backslash is asked about" % what,
+        ("deny", "%s on a # line after an unsure comment that ends in a backslash is refused" % what,
          R + " -o a(b)# c\\\n# d; " + hidden + "\n", work, None, UNSURE, None),
     ]
 # The line in front need not name a database at all.
 rows += [
     ("ask", "a delete on the line of a # after an escaped space in a command that reads no database is asked about",
      "printf done\\ # c; " + WRITES[0][1] + "\n", work, None, WRITES[0][2], None),
-    ("ask", "a delete on the line of a # after a word ending in a parenthesis in a command that reads no database is asked about",
+    ("deny", "a delete on the line of a # after a word ending in a parenthesis in a command that reads no database is refused",
      "printf a(b)# c; " + WRITES[0][1] + "\n", work, None, UNSURE, None),
-    ("ask", "the question about a # that cannot be told names this issue",
+    ("deny", "the refusal of a # that cannot be told names this issue",
      R + " -o a(b)# c; " + WRITES[0][1] + "\n", work, None, "claude-config#3472", None),
 ]
 
@@ -197,18 +205,18 @@ for what, hidden in RIDERS:
     rows += [
         ("ask", "an applied push with %s on the line of a # after two lines joined mid word is asked about, not let through" % what,
          "supabase db push --linked --y\\\nes\\\n# c; " + hidden + "\n", proj, GOOD_T, None, None),
-        ("ask", "an applied push with %s on the line of a # after a word that ends in a parenthesis is asked about, not let through" % what,
+        ("deny", "an applied push with %s on the line of a # after a word that ends in a parenthesis is refused, not let through" % what,
          PUSH + " a(b)# c; " + hidden + "\n", proj, GOOD_T, UNSURE, None),
-        ("ask", "an applied push after a cd to a folder that ends in a parenthesis, a # and %s is asked about, not let through" % what,
+        ("deny", "an applied push after a cd to a folder that ends in a parenthesis, a # and %s is refused, not let through" % what,
          "cd /tmp/a(b)# c; " + hidden + "\n" + PUSH + " --workdir " + proj + "\n", elsewhere, GOOD_T, UNSURE, None),
-        ("ask", "an applied push after a cd, a stray ), a # and %s is asked about, not let through" % what,
+        ("deny", "an applied push after a cd, a stray ), a # and %s is refused, not let through" % what,
          "cd /tmp/x)# c; " + hidden + "\n" + PUSH + " --workdir " + proj + "\n", elsewhere, GOOD_T, UNSURE, None),
-        ("ask", "an applied push with %s on a # line after an unsure comment that ends in a backslash is asked about, not let through" % what,
+        ("deny", "an applied push with %s on a # line after an unsure comment that ends in a backslash is refused, not let through" % what,
          PUSH + " a(b)# c\\\n# d; " + hidden + "\n", proj, GOOD_T, UNSURE, None),
         # The write from a file Dan applied, the skill's other run.
         ("ask", "an applied write from a file with %s on the line of a # after a line joined mid word is asked about, not let through" % what,
          WRITE_Q + "\\\n# c; " + hidden + "\n", proj, CHANGE_T, None, None),
-        ("ask", "an applied write from a file after a cd to a folder that ends in a parenthesis, a # and %s is asked about, not let through" % what,
+        ("deny", "an applied write from a file after a cd to a folder that ends in a parenthesis, a # and %s is refused, not let through" % what,
          "cd /tmp/a(b)# c; " + hidden + "\ncd " + proj + " && " + WRITE_Q + "\n", elsewhere, CHANGE_T, UNSURE, None),
     ]
 rows.append(("ask", "the question about an applied push with a line riding along says the push is not the whole command",
@@ -309,12 +317,16 @@ for shape, before in READ_ON:
 rows += [
     ("ask", "a commit of an unapproved list line on the line of a # after two lines joined mid word is asked about",
      "printf do\\\nne\\\n# c; " + COMMIT + "\n", listed, NONE_T, "unapprovedref00001", None),
-    ("ask", "a commit on the line of a # after a word that ends in a parenthesis is asked about",
+    ("deny", "a commit on the line of a # after a word that ends in a parenthesis is refused",
      "printf a(b)# c; " + COMMIT + "\n", listed, NONE_T, UNSURE, None),
-    ("ask", "a commit on the line of a # after a cd to a folder that ends in a parenthesis is asked about",
+    ("deny", "a commit on the line of a # after a cd to a folder that ends in a parenthesis is refused",
      "cd /tmp/a(b)# c; " + COMMIT + "\nprintf done\n", listed, NONE_T, UNSURE, None),
-    ("ask", "a commit on a # line after an unsure comment that ends in a backslash is asked about",
+    ("deny", "a commit on a # line after an unsure comment that ends in a backslash is refused",
      "printf a(b)# c\\\n# d; " + COMMIT + "\n", listed, NONE_T, UNSURE, None),
+    # A commit in plain sight beside such a line is refused too: his answer to the question about
+    # the commit would have let whatever the line hides run with it.
+    ("deny", "a commit of an unapproved list line in plain sight beside a # that cannot be told is refused",
+     COMMIT + "\nprintf a(b)# c; printf done\n", listed, NONE_T, UNSURE, None),
     ("ask", "(control) a commit of an unapproved list line in plain sight is asked about",
      COMMIT, listed, NONE_T, "would commit the line unapprovedref00001", None),
     ("ask", "(control) the same commit with a comment after it is asked about",
@@ -326,6 +338,85 @@ rows += [
      COMMIT + " # c\n", clean, NONE_T, None, None),
     ("none", "(control) a commit on the line of a # after an escaped space, in a checkout with no list, is not asked about",
      "printf done\\ # c; " + COMMIT + "\n", clean, NONE_T, None, None),
+]
+
+# ---- 6. every mark the reader names is refused, in a sentence true of that mark -------------------
+# The reader names more than a #: a heredoc it cannot find the end of, which needs no # at all
+# (claude-config#3492, #3566). The hook asked the reader only about a command holding a #, so a
+# write behind any of these heredocs was not asked about (each reproduced against the unchanged
+# hook), and where it did ask it gave the # sentence for every mark, which is untrue of a heredoc.
+# What each mark's refusal says that no other mark's does:
+SAYS = {
+    "comment": "holds a # the shared reader cannot tell from a comment",
+    "unread": "past which the shared reader could not read the text to its end",
+    "close": "opens a heredoc the shared reader cannot find the end of",
+    "joined": "on a line that ends in a backslash before the heredoc's end marker is whole",
+    "split": "whose end marker is quoted and holds a line break",
+    "dollar": "whose end marker holds a dollar quote",
+    "one line": "opens a heredoc in a text with no line break",
+}
+# How each says to write the command so that it can be read.
+HOW = {
+    "comment": "Write that # inside quotes, or put the comment on a line of its own",
+    "unread": "Write that # inside quotes, or put the comment on a line of its own",
+    "close": "End the heredoc with its marker alone on a line that follows no backslash",
+    "joined": "Write the << and its whole end marker on one line",
+    "split": "Write the end marker as one word on the line that opens the heredoc",
+    "dollar": "Write the end marker as a plain word",
+    "one line": "Put the heredoc's body and its end marker on lines of their own",
+}
+
+
+def behind(hidden):
+    """(the mark, the shape, a command) for every mark the reader names: in each, some shell runs
+    hidden, and the reader's own reading shows no such command."""
+    quoted = "echo '$(" + hidden + ")'"
+    return (
+        ("comment", "a # after a word that ends in a parenthesis", "printf a(b)# c; " + hidden + "\n"),
+        # Every shell joins `x\` to the marker's line, keeps the heredoc open and runs the $( ).
+        ("close", "a heredoc whose marker stands right after a body line that ends in a backslash",
+         "cat <<E\nx\\\nE\n" + quoted + "\nE\n"),
+        ("close", "a heredoc that no line ends, with a $( ) after it", "cat <<E\nx\n" + quoted + "\n"),
+        # The marker is EOF, so the E line ends nothing and the $( ) is in the body.
+        ("joined", "a heredoc whose opener line ends in a backslash", "cat <<E\\\nOF\nx\nE\n" + quoted + "\nEOF\n"),
+        # bash and zsh never end it, so sh is fed every line: the quote its first line opens is
+        # closed by the one that, to the reader, opens a string around the hidden command.
+        ("split", "a heredoc whose quoted marker holds a line break", "sh <<'E\nF'\n: '\nE\nF\n' ; " + hidden + "\n: '\n"),
+        # dash ends it at the line $E, and runs the next.
+        ("dollar", "a heredoc whose marker holds a dollar quote", "cat <<$'E'\nx\n$E\n" + hidden + "\nE\n"),
+        ("one line", "a heredoc typed on one line", "cat <<E; " + hidden + "; E"),
+    )
+
+
+marked = []
+for what, hidden, cwd, t in (("a delete", WRITES[0][1], work, None),
+                             ("a commit of an unapproved list line", COMMIT, listed, NONE_T)):
+    for kind, shape, command in behind(hidden):
+        marked.append(("%s behind %s is refused, in the words for that mark" % (what, shape), kind, command, cwd, t))
+marked += [
+    ("an applied push with a folder removal behind a heredoc the reader cannot find the end of is refused, not let through",
+     "close", PUSH + "\n" + behind("rm -rf supabase/migrations")[1][2], proj, GOOD_T),
+    # The unchanged hook asked about this one, since it holds a #, and said the # was the trouble.
+    ("a delete behind a heredoc the reader cannot find the end of, under a line that is all comment, is refused in the heredoc's words",
+     "close", "# the runs of last night\n" + behind(WRITES[0][1])[1][2], work, None),
+    # Every shell reads this # inside its word, so the reader reads on past it, and the quote that
+    # opens after it never closes. The reader can tell this # from a comment, so the refusal does
+    # not say it cannot.
+    ("a read with a # the reader reads on past and then cannot read to the end is refused, in the words for that",
+     "unread", R + " -o json\\ # it's a note\n", work, None),
+]
+# What the hook did with an ordinary heredoc it still does.
+PLAIN_DOC = "cat <<'EOF' >/dev/null\nnote\nEOF\n"
+rows += [
+    ("none", "(control) a read after an ordinary heredoc is not asked about", PLAIN_DOC + R + "\n", work, None, None, None),
+    ("none", "(control) a read after a heredoc whose body holds a backslash line and a substitution is not asked about",
+     "cat <<EOF >/dev/null\na \\\nb $(date)\nEOF\n" + R + "\n", work, None, None, None),
+    ("ask", "(control) a delete in plain sight after an ordinary heredoc is asked about",
+     PLAIN_DOC + WRITES[0][1] + "\n", work, None, WRITES[0][2], None),
+    ("none", "(control) a commit whose message is an ordinary heredoc, in a checkout with no list, is not asked about",
+     "git commit -q -F - <<'EOF'\nlist\nEOF\n", clean, NONE_T, None, None),
+    ("ask", "(control) a commit of an unapproved list line whose message is an ordinary heredoc is asked about",
+     "git commit -q -F - <<'EOF'\nlist\nEOF\n", listed, NONE_T, "unapprovedref00001", None),
 ]
 
 # The whole reason of each ordinary question, as the unchanged hook gave it.
@@ -353,6 +444,40 @@ for want, label, command, cwd, t, holds, exact in rows:
     else:
         verdict = "ok"
     print("%s\t%s" % (verdict, label))
+
+
+def of_another(kind, text):
+    """What text says that is true of a mark other than kind."""
+    return [SAYS[k] for k in SAYS if k != kind and SAYS[k] in text]
+
+
+for label, kind, command, cwd, t in marked:
+    got, reason = decided(command, cwd, t)
+    if got != "deny rc=0":
+        verdict = "wanted deny rc=0, got %s: %s" % (got, reason[:400])
+    elif SAYS[kind] not in reason:
+        verdict = "the refusal does not say [%s]: %s" % (SAYS[kind], reason[:500])
+    elif of_another(kind, reason):
+        verdict = "the refusal says what is true of another mark %s: %s" % (of_another(kind, reason), reason[:500])
+    elif HOW[kind] not in reason:
+        verdict = "the refusal does not say how to write it [%s]: %s" % (HOW[kind], reason[:700])
+    elif "could not check" not in reason or "claude-config#3472" not in reason:
+        verdict = "the refusal does not say it could not check, or names no issue: %s" % reason[:500]
+    else:
+        verdict = "ok"
+    print("%s\t%s" % (verdict, label))
+
+# A copy of the hook with no lib/hook-notice.sh beside it still refuses, in the characters that
+# need no escaping, and says the library is missing.
+bare = os.path.join(work, "bare")
+os.makedirs(bare)
+shutil.copy(hook, bare)
+shutil.copytree(os.path.join(os.path.dirname(hook), "lib"), os.path.join(bare, "lib"),
+                ignore=lambda folder, names: [n for n in names if n in ("hook-notice.sh", "__pycache__")])
+got, reason = decided(behind(WRITES[0][1])[1][2], work, None, os.path.join(bare, os.path.basename(hook)))
+print("%s\t%s" % ("ok" if got == "deny rc=0" and SAYS["close"] in reason and "lib/hook-notice.sh is missing" in reason
+                  else "got %s: %s" % (got, reason[:400]),
+                  "a hook with no lib/hook-notice.sh beside it still refuses a heredoc the reader cannot find the end of"))
 
 # ---- 5. the library's own answers ----------------------------------------------------------------
 
@@ -411,9 +536,61 @@ older.commands = lambda s, cwd="", heredocs=None, parts=None, spans=None, commen
 got = findings(R + " # c\n", work, older)
 fact("a reader that cannot be asked gives a read with a # a finding saying so",
      isinstance(got, list) and len(got) == 1 and unsure_one(got[0]) and "unsure" in got[0][0], got)
-fact("(control) a reader that cannot be asked still reads a read with no # as a read", findings(R, work, older) == [], findings(R, work, older))
+# A heredoc the reader cannot find the end of needs no #, so a command holding none cannot be
+# vouched for by such a reader either. It is asked about, never refused: no rewriting of the
+# command would let that reader be asked.
+unsure_fix = getattr(calls, "unsure_fix", lambda f: None)
+got = findings(R, work, older)
+fact("a reader that cannot be asked gives a read with no # a finding saying so too",
+     isinstance(got, list) and len(got) == 1 and unsure_one(got[0]) and "unsure" in got[0][0]
+     and unsure_fix(got[0]) is None, got)
 got = findings(W, work, older)
-fact("(control) a reader that cannot be asked still finds a delete with no #", got == plain_delete, got)
+fact("a reader that cannot be asked still finds a delete with no #, after the finding saying so",
+     isinstance(got, list) and len(got) == 2 and unsure_one(got[0]) and unsure_fix(got[0]) is None
+     and got[1:] == plain_delete, got)
+
+# Every mark the reader names, as the library answers for it.
+asked_reading = getattr(calls, "asked_reading", lambda reader, read: (None, None))
+for kind, shape, command in behind(W):
+    got = findings(command)
+    fact("the first finding for a delete behind %s is that mark's, and says how to write it" % shape,
+         isinstance(got, list) and bool(got) and unsure_one(got[0]) and SAYS[kind] in got[0][0]
+         and not of_another(kind, got[0][0]) and HOW[kind] in (unsure_fix(got[0]) or "")
+         and not any(calls.is_applicable(f) for f in got), got)
+    got = asked_reading(sw, lambda: sw.commands(command))
+    fact("the reading that asks says of %s what is true of it and of no other mark" % shape,
+         got[0] is None and isinstance(got[1], str) and SAYS[kind] in got[1] and not of_another(kind, got[1])
+         and HOW[kind] in (unsure_fix(got[1]) or ""), got)
+got = calls.second_reading(behind(COMMIT)[1][2], sw, listed, None, lambda: "read again")
+fact("a costly read is told of a heredoc the reader cannot find the end of in a command holding no #",
+     got[0] is None and isinstance(got[1], str) and SAYS["close"] in got[1], got)
+fact("the reader reads as it did after the readings of every mark", sw.commands is reads_as, sw.commands)
+
+
+# A reader that names a line by a mark this library has no words for (neither a # nor a <<), in a
+# command holding no #: the command is not vouched for, and is told nothing untrue about it.
+def naming(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, unsure=None, joined=None):
+    if unsure is not None:
+        unsure.append((0, len(s)))
+    return reads_as(s, cwd, heredocs=heredocs, parts=parts, spans=spans, comments=comments, joined=joined)
+
+
+# The reader's own functions read through its commands(), so the stand in is put in its place for
+# these two readings and taken out again.
+sw.commands = naming
+try:
+    got = findings(R, work)
+    try:
+        dry = calls.dry_push_dir("supabase db push --dry-run", sw, proj)
+    except Exception as e:
+        dry = "raised " + type(e).__name__
+finally:
+    sw.commands = reads_as
+fact("a line named by a mark with no words of its own is a finding that claims neither a # nor a heredoc",
+     isinstance(got, list) and len(got) == 1 and unsure_one(got[0]) and "is unsure of" in got[0][0]
+     and not of_another("", got[0][0]) and bool(unsure_fix(got[0])), got)
+fact("a dry run holding no # that the reader names a line of is reported as unread, never as a dry run",
+     dry == "raised UnsureLine", dry)
 
 
 def dry_dir(command, cwd):
@@ -434,7 +611,7 @@ fact("the reader reads as it did after the dry run readings", sw.commands is rea
 
 for label, ok, got in facts:
     print("%s\t%s" % ("ok" if ok else "got %s" % (str(got)[:400],), label))
-print("ran\t%d" % (len(rows) + len(facts)))
+print("ran\t%d" % (len(rows) + len(marked) + 1 + len(facts)))
 PY
 rows="$(python3 -B "$WORK/cases.py" "$HOOK" "$WORK" 2>&1)"
 ran=""
@@ -443,7 +620,7 @@ while IFS=$'\t' read -r verdict label; do
   if [ -n "$label" ]; then check "#3472 $label" "$verdict"; elif [ -n "$verdict" ]; then check "#3472 the cases program said something that is not a case" "${verdict:0:300}"; fi
 done <<< "$rows"
 # A program that stopped early checks nothing and would read as a pass (L288).
-WANT_RAN=166
+WANT_RAN=208
 [ "$ran" = "$WANT_RAN" ] && check "#3472 all $WANT_RAN cases ran" ok || check "#3472 all $WANT_RAN cases ran" "ran: ${ran:-none}; ${rows: -300}"
 
 echo "passed: $pass, failed: $fail"

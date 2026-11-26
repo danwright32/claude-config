@@ -6344,6 +6344,31 @@ line he approved passes, and says so when the record could not take one (below).
   largest: the libraries are compiled on every run (about 19 ms), because `-B` keeps python3 from
   writing bytecode into the synced hooks folder, and a cache elsewhere would be a file no hook asks
   about that the hook then runs. Nothing was added: the hook is not started after a call.
+  Since #3472 the database call library loads for every commit again, because the command is read
+  a second time whatever it holds (below): 60 runs a side taken turn about on 2026-11-26, at a load
+  average of 35 to 36, gave a median of 127.5 ms before and 139.8 after, least 101.3 and 118.6.
+
+What it refuses (`deny`), the one thing, since #3472: a Bash command holding a line the shared
+reader (`lib/shell-words.py`) names as one it cannot vouch for. The reader takes a `#` for a comment
+by a rule the shell does not always follow, and closes a heredoc at a line where some shells do
+not, so a command the shell runs there was in nothing the hook judged. Asked which lines it is
+unsure of, the reader reads on where every shell does and names the rest: a `#` it cannot tell from
+a comment, a `#` it read on past and then could not read to the end, and a heredoc it cannot find
+the end of (its marker follows a body line ending in a backslash, or no line ends it; its opener
+line ends in a backslash; its quoted marker holds a line break; its marker holds a dollar quote; or
+it is typed on one line). The hook asks the reader about every command naming a database client and
+every command holding `commit` or the test project list's name, whatever else the command holds. It
+used to ask only about one holding a `#`, and a heredoc holds none, so a write or a commit run out
+of such a heredoc was not asked about (each kind reproduced at the hook). A command with a named
+line is refused as one the hook could not check, where one holding a `#` used to be asked about: an
+answer to a question about the part that was read lets the rest run with it. The refusal says which
+line, in a sentence true of the mark the reader named it with (`UNSURE` in
+`lib/db-write-calls.py`), and how to write the command so that it can be read.
+`read-only-query-allow.sh` approves no such command either. A reader that cannot be asked at all is
+still asked about, since no rewriting helps, and so is a push whose earlier dry run held such a
+line. Over 105,467 Bash calls recorded on the personal MacBook (85,895 distinct commands, 2026-11-26)
+the change refuses none, asks about none more and lets through none more: the reader names a line
+in none of them. Suite: `test-db-write-ask-unsure-line.sh`.
 
 What it does not cover: the commands inside a script file (`bash change.sh`); a client run by a name
 held in a variable; a program that opens a database itself (python, node, an ORM's own CLI such as
