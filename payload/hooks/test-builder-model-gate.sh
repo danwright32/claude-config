@@ -137,6 +137,7 @@ says "and keeps sonnet to work that needs no judgement (#3290)" "\"sonnet\" only
 says "and sends a review fix that changes logic or behaviour to opus" "\"opus\" for everything else, a review fix that changes logic or behaviour included"
 says "and names opus" "opus"
 says "and names fable" "fable"
+says "and keeps fable to a change to what a control decides or shows (#3393)" "\"fable\" for a change to what a design, security or compliance control decides or shows"
 says "and points at the rule's home" "Which model a builder runs on"
 run Agent "" worktree "" "build the thing"
 refused "a worktree builder with no type and no model"

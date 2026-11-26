@@ -1,5 +1,6 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './hang-ceiling.ts'
+import HEREDOC_CLOSES from './heredoc-closes.ts'
 import { READ_STOPPED, commands, git, pipeline } from '../hooks/commands.ts'
 
 // The one reader of shell commands every guard uses (L613): the secret guard, the keystroke guard
@@ -1826,7 +1827,8 @@ describe("$'...' and a script not read to its end (#3491)", () => {
     // open, one it ends too soon, and a comment inside a substitution. An apostrophe in each would
     // put the << inside a quote that no shell reads.
     expect(marked(`cat <<1\nit's\n1\ncat <<NEVER\n${NEXT} # it's`).map(r => r[1])).toEqual([HEREDOC])
-    expect(marked(`cat <<EOF\n  EOF\nit's body\nEOF\ncat <<NEVER\nx # '`).map(r => r[1])).toEqual([HEREDOC])
+    // The one it ends too soon is marked for that as well (#3592); the mark this test holds stays.
+    expect(marked(`cat <<EOF\n  EOF\nit's body\nEOF\ncat <<NEVER\nx # '`).map(r => r[1])).toEqual(['fed a heredoc the shells do not end where it is read to end, so where its body stops cannot be read', HEREDOC])
     expect(marked(`p3 $(p1 # it's\n); cat <<NEVER\n${NEXT} # '`)).toEqual([['cat', HEREDOC]])
     // A # inside a word starts no comment: after a substitution, and on a line a backslash joins to
     // a word. The apostrophe after it opens a quote that the next line's quote closes, so the << two
@@ -2195,5 +2197,84 @@ describe("$'...' and a script not read to its end (#3491)", () => {
       `(( x = 1 << n ))\n${NEXT}`,
     ]
     expect(whole.filter(cmd => pipeline(cmd).some(c => c.unread !== undefined))).toEqual([])
+  })
+})
+
+// #3592: the reader ended a heredoc at any line that is its marker once the blanks beside it are
+// taken off, and at a marker a backslash joins to the line before. No shell ends one at either: a
+// marker with a space or a tab beside it is a line of the body (only a <<- lets go of tabs, and
+// only before it), and a line of an unquoted body that ends in a backslash is joined to the next
+// before anything is compared, so the marker is the tail of a longer line. The shells read on, the
+// lines after are the body, and a `$( )` in them runs, in single quotes or not, where the reader
+// took them for commands and read such a substitution as a word that runs nothing. The reverse
+// too: a marker split over two lines by a backslash ends the heredoc in bash and zsh, and the
+// reader read on, taking the commands after it for the body.
+//
+// The reading stays as it was. The command fed such a heredoc is marked unread, as one fed a
+// heredoc that never ends is (#3491), so every guard holds or asks. The shapes are
+// hooks/lib/heredoc-closes.json, each measured 2026-11-25 in bash 3.2, bash --posix, sh, dash, zsh,
+// zsh emulating sh and ksh, the one list this suite and the script scanner's suite both run
+// (test-shell-code-lines.sh, which also runs every row through the shells). A mod's tests import
+// only the mod's own files, so the list is read from its copy, heredoc-closes.ts, which that
+// suite holds to the list's text.
+describe('a heredoc the shells do not end where the reader ends it (#3592)', () => {
+  type Answer = string | Record<string, string[]>
+  type Row = { name: string; text: string; lines: Record<string, Answer>; named: { scanner: boolean; mods: boolean } }
+  const rows = (HEREDOC_CLOSES as unknown as { rows: Row[] }).rows
+  const ENDS = 'fed a heredoc the shells do not end where it is read to end, so where its body stops cannot be read'
+  const BS = '\\'
+  // Each probe line the reader lists as a command, and each reason it stopped for.
+  const read = (text: string) => {
+    const cmds = pipeline(text)
+    const listed = new Set(cmds.filter(c => c.words[0] === 'echo' && /^P\d\d/.test(c.words[1] ?? '')).map(c => (c.words[1] as string).slice(0, 3)))
+    const stopped = [...new Set(cmds.map(c => c.unread).filter((u): u is string => u !== undefined && READ_STOPPED.has(u)))]
+    return { listed, stopped }
+  }
+  const tag = (n: string) => `P${n.padStart(2, '0')}`
+
+  test('the list is read, its controls among it', () => {
+    expect(rows.length).toBeGreaterThanOrEqual(38)
+    expect(rows.filter(r => !r.named.mods).length).toBeGreaterThanOrEqual(7)
+  })
+
+  test('the command fed a heredoc the reader is not sure of is marked unread, and no control is', () => {
+    expect(rows.filter(r => read(r.text).stopped.length > 0 !== r.named.mods).map(r => r.name)).toEqual([])
+  })
+
+  test('where nothing is marked, a line is a command exactly where every shell runs it', () => {
+    const wrong: string[] = []
+    for (const r of rows) {
+      const { listed, stopped } = read(r.text)
+      if (stopped.length) continue
+      for (const [n, answer] of Object.entries(r.lines)) if (listed.has(tag(n)) !== (answer === 'code')) wrong.push(`${r.name}, line ${n}`)
+    }
+    expect(wrong).toEqual([])
+  })
+
+  test('the mark is on the command the heredoc feeds, with its own reason, and the words are read as before', () => {
+    const marks = (cmd: string) => pipeline(cmd).map(c => [c.words, c.unread])
+    expect(READ_STOPPED.has(ENDS)).toBe(true)
+    // A marker joined to the line before: every shell reads on to the end.
+    expect(marks(`cat <<E\na${BS}\nE\ngit status`)).toEqual([[['cat', '<<E'], ENDS], [['git', 'status'], undefined]])
+    // A marker after spaces: every shell reads on to the marker itself.
+    expect(marks(`cat <<E\nbody\n  E\ngit status\nE\ngit log`)).toEqual([[['cat', '<<E'], ENDS], [['git', 'status'], undefined], [['E'], undefined], [['git', 'log'], undefined]])
+    // A marker split over two lines: bash and zsh end the heredoc there and run the next line.
+    expect(pipeline(`cat <<EOF\nbody\nE${BS}\nOF\ngit status\nEOF\ngit log`).map(c => c.unread)).toContain(ENDS)
+    // An opener joined to the next line before its marker: the marker is not the word on that line.
+    expect(pipeline(`cat <<${BS}\nE\nbody\nE\ngit log`).some(c => c.unread === ENDS)).toBe(true)
+    expect(pipeline(`cat <<E${BS}\nx\nbody\nEx\ngit status\nE${BS}\ngit log`).some(c => c.unread !== undefined && READ_STOPPED.has(c.unread))).toBe(true)
+    // Inside a substitution the mark is on the command the heredoc feeds there.
+    expect(pipeline(`echo "$(cat <<E\nbody\n E\nmore\nE\n)"\ngit log`).some(c => c.unread === ENDS)).toBe(true)
+  })
+
+  test('the controls: a backslash that joins nothing at the marker, and tabs a <<- lets go of, mark nothing', () => {
+    const quiet = [
+      `cat <<E\na${BS}\nb\nE\ngit status`,
+      `cat <<E\na${BS}${BS}\nE\ngit status`,
+      `cat <<'E'\na${BS}\nE\ngit status`,
+      `cat <<-E\n\tbody\n\t\tE\ngit status`,
+      `cat <<E | sort ${BS}\n  -u\nbody\nE\ngit status`,
+    ]
+    expect(quiet.filter(cmd => pipeline(cmd).some(c => c.unread !== undefined))).toEqual([])
   })
 })

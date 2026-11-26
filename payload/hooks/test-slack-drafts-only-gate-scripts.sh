@@ -917,7 +917,8 @@ says "a could not follow refusal for a command naming an endpoint still says to 
 
 echo "slack drafts only: a sys.path entry handed to python through a shell variable is placed (claude-config#2449)"
 
-# tests/test-mods.sh runs `python3 - "$ROOT/tools/lib" <<'PY'` and imports ts_source after
+# tests/test-mods.sh ran, and since #3622 tests/test-mods-fixtures.sh runs,
+# `python3 - "$ROOT/tools/lib" <<'PY'` and imports ts_source after
 # sys.path.insert(0, sys.argv[1]), ROOT set at the top of the script. The #2358 gate could not place
 # that entry, so it refused the whole suite (exit 2, measured 2026-11-07). The same script, one tree
 # whose helper only saves a draft and one whose helper posts: each shape is allowed in the first and
@@ -1029,6 +1030,21 @@ MODS_REPO="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
 if [ -n "$MODS_REPO" ] && [ -f "$MODS_REPO/tests/test-mods.sh" ] && [ -f "$MODS_REPO/tools/lib/ts_source.py" ]; then
   run_bash "cd $MODS_REPO && bash tests/test-mods.sh"
   allowed "the repository's own mods suite, bash tests/test-mods.sh, is not refused (claude-config#2654)"
+  # Since claude-config#3622 the mods suite is three suites sharing tests/mods-harness.sh, and its
+  # ts_source step is in test-mods-fixtures.sh, so each is judged as a session runs it, found by its
+  # code sourcing the harness, never named here. test-mods.sh is among those found, or the finding
+  # read nothing (L98).
+  mods_pieces="$(grep -l -E '^[[:space:]]*(\.|source)[[:space:]].*mods-harness\.sh' "$MODS_REPO"/tests/test-*.sh 2>/dev/null)"
+  case $'\n'"$mods_pieces"$'\n' in *$'\n'"$MODS_REPO/tests/test-mods.sh"$'\n'*) mods_found=1 ;; *) mods_found=0 ;; esac
+  if [ "$mods_found" = 1 ]; then
+    while IFS= read -r piece; do
+      { [ -n "$piece" ] && [ "$piece" != "$MODS_REPO/tests/test-mods.sh" ]; } || continue
+      run_bash "cd $MODS_REPO && bash tests/${piece##*/}"
+      allowed "the repository's mods suite piece, bash tests/${piece##*/}, is not refused (claude-config#3622)"
+    done <<< "$mods_pieces"
+  else
+    check "the mods suites are found by their sourcing tests/mods-harness.sh (claude-config#3622)" "tests/test-mods.sh is not among: $mods_pieces"
+  fi
 else
   echo "SUITE-PART-UNMEASURED #2654 the gate allows bash tests/test-mods.sh: $DIR is not in a claude-config checkout holding tests/test-mods.sh (the installed copy of the hooks is not), so the repository's mods suite was not judged here"
 fi

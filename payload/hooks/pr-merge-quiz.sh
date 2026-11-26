@@ -526,10 +526,11 @@ valid_session_id "$session_id" || session_id=""
 # was offered turning the quiz off and chose to narrow it instead (claude-config#348).
 #
 # The signal did not exist when this hook was written and does now: PET and Slate
-# enforce exactly one of changelog/visible, changelog/technical or changelog/none on
-# every merged pull request, through require-changelog-tag.sh. changelog/visible means
-# precisely what this hook's own user facing gate means, it is chosen by a person while
-# they still hold the change, and it is already enforced at merge.
+# enforce exactly one changelog label on every merged pull request, through
+# require-changelog-tag.sh. A label of a kind a manager would notice (changelog/visible,
+# and changelog/announce where a repository uses it) means precisely what this hook's
+# own user facing gate means, it is chosen by a person while they still hold the change,
+# and it is already enforced at merge. The other kinds (technical, none) are quiet.
 #
 # So this file now owns TWO decisions rather than one, and the division of labour above
 # is written that way rather than carrying an exception bolted beside it. The second is
@@ -538,8 +539,13 @@ valid_session_id "$session_id" || session_id=""
 # mixed pull request can carry changelog/technical while touching something visible.
 #
 # Read through lib/changelog-entry.js, the same module the merge gate enforces with, so
-# there is one definition of the vocabulary rather than a copy of the three label names
+# there is one definition of the vocabulary rather than a copy of the label names
 # in shell that would drift from the one being enforced (L370, L611).
+#
+# WHICH kinds a manager would notice is that module's answer too (isManagerVisible), never a
+# kind named here. This asked for changelog/visible by name, so every other kind read as
+# quiet, and a fourth one, changelog/announce, which managers notice and agents are told
+# about, would have been quiet without anybody deciding it (claude-config#3665, L96).
 #
 # FAILS OPEN, on every route: gh missing, node missing, no answer, an unreadable answer,
 # an answer about another repo, or no changelog label at all. A hook that silently stops
@@ -634,7 +640,7 @@ quiz_owed_for() {  # $1 = the directory the merge runs in, $2 = the repository i
       try { labels = JSON.parse(raw); } catch (e) { process.stdout.write("unreadable"); return; }
       var kinds = entry.changelogLabels(labels);
       if (!kinds.length) { process.stdout.write("no-label"); return; }
-      process.stdout.write(kinds.indexOf(entry.VISIBLE) === -1 ? "quiet" : "visible");
+      process.stdout.write(kinds.some(entry.isManagerVisible) ? "visible" : "quiet");
     });
   ' 2>/dev/null)"
   case "$QUIZ_VERDICT" in

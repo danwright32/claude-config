@@ -1,4 +1,5 @@
 import type { EngineCreateResult, EngineInterface, Register } from 'claude-code'
+import { cutCall } from './mod-kit/hold.ts'
 import { errorText } from './mod-kit/skew.ts'
 import type {} from '../types/index.d.ts'
 import { asksQuiet, issuesNamedIn, refusal, unreadRefusal, writtenOnIssue } from './pickers.ts'
@@ -242,7 +243,7 @@ export const register: Register = on => {
     }
     offTheDialog($, () => recordOnIssues($, question, answer, choices))
     return r
-  })
+  }).catch(($, e, next) => cutCall('picker manners', e, next))
 
   // #2261: the design round guard has written down Dan's answer to its own picker, so the question
   // goes onto its issue checked off with that answer, off the dialog's path as every other one is.

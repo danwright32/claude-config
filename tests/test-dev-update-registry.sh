@@ -194,6 +194,35 @@ ch_ok="$(HOME="$H4" node "$READER" channel 2>&1)"
 check "a recorded channel id is given back: $ch_ok" has "$ch_ok" '"channel":"C0000TEST01"'
 check "and the state is ok" has "$ch_ok" '"state":"ok"'
 
+# claude-config#3665: the channel a repository's announcements for agents are drafted in is its own
+# entry's announceChannel, read by the same reader. One repository at a time, since only an app
+# whose entry names one uses the changelog/announce label. Every id and repository is invented.
+H5="$WORK/home five"
+mkdir -p "$H5/.claude/$REL_SKILL"
+an_none="$(HOME="$H5" node "$READER" announce-channel acme/widget 2>&1)"
+check "with no registry, announce-channel reports it missing: $an_none" has "$an_none" '"state":"missing"'
+check "and gives no channel" has "$an_none" '"channel":""'
+printf '%s\n' '{"repos":[{"name":"Widget","repo":"acme/widget","changelogFrom":"2026-01-01","announceChannel":"C0000TEST02"},{"name":"Quiet","repo":"acme/quiet","changelogFrom":"2026-01-01"},{"name":"Typo","repo":"acme/typo","announceChannel":"#announcements"}],"slackChannel":"C0000TEST01"}' > "$H5/.claude/$REL_NEW"
+an_ok="$(HOME="$H5" node "$READER" announce-channel Acme/Widget 2>&1)"
+check "an entry's announcements channel is given back, whatever the case of the name asked: $an_ok" has "$an_ok" '"channel":"C0000TEST02"'
+check "and the state is ok, with nothing to explain" has "$an_ok" '"state":"ok"'
+check "and it is the entry's own channel, never the managers' one" lacks "$an_ok" 'C0000TEST01'
+an_unset="$(HOME="$H5" node "$READER" announce-channel acme/quiet 2>&1)"
+check "an entry naming none gives none: $an_unset" has "$an_unset" '"channel":""'
+check "and says the entry names no announceChannel" has "$an_unset" 'names no announceChannel'
+check "and names the file to add it to" has "$an_unset" "$H5/.claude/$REL_NEW"
+an_name="$(HOME="$H5" node "$READER" announce-channel acme/typo 2>&1)"
+check "a channel name rather than an id is refused, never passed on: $an_name" has "$an_name" '"channel":""'
+check "and the refusal says it is not a channel id" has "$an_name" 'not a Slack channel id'
+an_else="$(HOME="$H5" node "$READER" announce-channel acme/elsewhere 2>&1)"
+check "a repository the registry does not list gives none: $an_else" has "$an_else" '"channel":""'
+check "and says it is not listed" has "$an_else" 'is not listed'
+an_file="$(node "$READER" announce-channel acme/widget "$H5/.claude/$REL_NEW" 2>&1)"
+check "the registry file can be named, as for the other commands: $an_file" has "$an_file" '"channel":"C0000TEST02"'
+an_usage="$(HOME="$H5" node "$READER" announce-channel 2>&1)"; an_rc=$?
+check "with no repository named it prints its usage and exits 2 (got $an_rc): $an_usage" [ "$an_rc" = 2 ]
+check "and the usage names the command" has "$an_usage" 'announce-channel <owner/name>'
+
 # ---------------------------------------------------------------- 3. the move loses nothing
 # Two Macs and the shared repository, as the #1009 cases in test-claude-sync.sh build them. Both
 # hold the skill with the registry under its OLD tracked name, as every Mac does before this change.
