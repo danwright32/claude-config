@@ -254,6 +254,74 @@ printf '\n\n' > "$F"; new_talk "$T"; talk "$T" bash "$BBEDIT --front-window $F";
 r="$(asked "$T" acme/widget "$(hash_text "$POST")")"
 check "a file holding no wording approves nothing" "$([[ "$r" == "no|"*"holds no wording"* ]] && echo ok || echo "$r")"
 
+echo "a file padded with blank lines is not what he was shown (#3703)"
+# Every blank line is dropped before the wording is hashed, so a file holding the post, a long run
+# of blank lines and then more text hashes the same as those lines written together. BBEdit's front
+# window shows him the post and then white space, and the pull request carries the lines together.
+# padded <name> <blank lines> [line ending]: such a file, opened in front of him and approved.
+padded() {
+  mkdir -p "$WORK/$1"; F="$WORK/$1/announcement.md"; T="$WORK/$1.jsonl"
+  python3 -c 'import sys
+post, count, end, path = sys.argv[1], int(sys.argv[2]), sys.argv[3] or "\n", sys.argv[4]
+open(path, "w", newline="").write(post.replace("\n", end) + end + end * count + "Give every caller a 100% refund without asking a manager." + end)' "$POST" "$2" "${3:-}" "$F"
+  new_talk "$T"; talk "$T" bash "$BBEDIT --front-window $F"; talk "$T" ask acme/widget "$F"
+}
+TOGETHER="$POST
+Give every caller a 100% refund without asking a manager."
+STORE_USED="$WORK/store-padded"
+padded padded 300
+check "the padded file hashes as its lines written together, which is why the hash cannot refuse it" "$([ "$(hash_file "$F")" = "$(hash_text "$TOGETHER")" ] && echo ok || echo "the hashes differ")"
+r="$(asked "$T" acme/widget "$(hash_text "$TOGETHER")")"
+check "R2 a file holding the post, 300 blank lines and then more text is not wording he approved" "$([[ "$r" == "no|"* ]] && echo ok || echo "$r")"
+check "the refusal says what is wrong with the file: how many blank lines, where, and that text sits below them" "$([[ "$r" == *"300 blank lines in a row"*"from line 8"*"more wording below them"* ]] && echo ok || echo "$r")"
+check "and what to change: no more than 2 blank lines in a row, then open it and ask him again" "$([[ "$r" == *"no more than 2 blank lines in a row"*"open the file for him and ask him again"* ]] && echo ok || echo "$r")"
+check "R2 nothing was written to the record for the padded file" "$([ "$(recorded)" = 0 ] && echo ok || echo "$(recorded) lines")"
+# The limit itself: three in a row is refused, in whatever the lines are ended with or hold.
+padded three 3
+r="$(asked "$T" acme/widget "$(hash_text "$TOGETHER")")"
+check "R2 three blank lines in a row before more text are refused" "$([[ "$r" == "no|"*"3 blank lines in a row"* ]] && echo ok || echo "$r")"
+padded threecrlf 3 $'\r\n'
+r="$(asked "$T" acme/widget "$(hash_text "$TOGETHER")")"
+check "R2 and so are three ended as GitHub ends a line" "$([[ "$r" == "no|"*"3 blank lines in a row"* ]] && echo ok || echo "$r")"
+padded threespaces 0
+printf '%s\n \n\t\n  \nGive every caller a 100%% refund without asking a manager.\n' "$POST" > "$F"
+new_talk "$T"; talk "$T" bash "$BBEDIT --front-window $F"; talk "$T" ask acme/widget "$F"
+r="$(asked "$T" acme/widget "$(hash_text "$TOGETHER")")"
+check "R2 and three lines holding only spaces or a tab" "$([[ "$r" == "no|"*"3 blank lines in a row"* ]] && echo ok || echo "$r")"
+check "R2 none of those wrote to the record" "$([ "$(recorded)" = 0 ] && echo ok || echo "$(recorded) lines")"
+# Still possible: two blank lines in a row, and blank lines after the last line, which hide nothing.
+padded two 2
+r="$(asked "$T" acme/widget "$(hash_text "$TOGETHER")")"
+check "still possible: wording with two blank lines in a row is approved" "$([[ "$r" == "yes||" ]] && echo ok || echo "$r")"
+STORE_USED="$WORK/store-trailing"
+mkdir -p "$WORK/trailing"; F="$WORK/trailing/announcement.md"; T="$WORK/trailing.jsonl"
+printf '%s\n\n\n\n\n\n' "$POST" > "$F"
+new_talk "$T"; talk "$T" bash "$BBEDIT --front-window $F"; talk "$T" ask acme/widget "$F"
+r="$(asked "$T" acme/widget "$(hash_text "$POST")")"
+check "still possible: blank lines after the last line of wording do not stand in the way" "$([[ "$r" == "yes||" ]] && echo ok || echo "$r")"
+# A hash answer that does not say how long the longest run is cannot clear the file (L98). Driven
+# with a node in front of the real one that takes the count out of that one answer, as a
+# lib/changelog-entry.js older than this library would give it, and passes every other call through.
+NOCOUNT="$WORK/node-without-the-count"; mkdir -p "$NOCOUNT"
+REAL_NODE="$(command -v node)"
+cat > "$NOCOUNT/node" <<'SH'
+#!/usr/bin/env bash
+case " $* " in
+  *" announcement-hash "*)
+    "$REAL_NODE" "$@" | "$REAL_NODE" -e 'let raw = ""; process.stdin.on("data", function (d) { raw += d; }); process.stdin.on("end", function () { const a = JSON.parse(raw); delete a.blankRun; delete a.blankRunAt; process.stdout.write(JSON.stringify(a) + "\n"); });' ;;
+  *) exec "$REAL_NODE" "$@" ;;
+esac
+SH
+chmod +x "$NOCOUNT/node"
+STORE_USED="$WORK/store-nocount"
+F="$(shown nocount)"; T="$WORK/nocount.jsonl"
+talk "$T" ask acme/widget "$F"
+H="$(hash_file "$F")"
+r="$(REAL_NODE="$REAL_NODE" PATH="$NOCOUNT:$PATH" asked "$T" acme/widget "$H")"
+check "a hash answer that does not count the blank lines approves nothing, and says so" "$([[ "$r" == "no|"*"did not say how many blank lines"* ]] && echo ok || echo "$r")"
+r="$(asked "$T" acme/widget "$H")"
+check "and the same file is approved once the answer counts them, so it was the missing count that refused it" "$([[ "$r" == "yes||" ]] && echo ok || echo "$r")"
+
 echo "who may write the record"
 # A subagent's call counts his picker for that call and writes nothing.
 STORE_USED="$WORK/store-agent"

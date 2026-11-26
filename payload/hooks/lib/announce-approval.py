@@ -34,6 +34,11 @@ _read_by_dan). Then, all of these, each failure said in its own words:
   - no later picker about the same file ended any other way (`Not yet`, a timeout): the last word
     on a file is the one that counts.
   - the file holds wording, and it can be hashed.
+  - the file holds no run of more than two blank lines with wording below it (claude-config#3703).
+    Blank lines are dropped before the hash, so a file holding the post, a long run of blank lines
+    and then more text hashes the same as those lines written together, while the window it was
+    opened in showed him the post and then white space. The refusal says how long the run is, the
+    line it starts at, and what to change. Blank lines after the last line hide nothing and pass.
 
 WHAT IS HASHED. The FILE as it stands, never a hash the session supplies: a hash in the metadata
 is not read at all. The hash is lib/changelog-entry.js's announcementHash, the sha256 of its one
@@ -125,6 +130,10 @@ SHA = re.compile(r"[0-9a-f]{64}")
 # is written: a name holding a character JSON escapes would never be found.
 PLAIN_NAME = re.compile(r"[A-Za-z0-9._-]+")
 WORDING_BYTES = 256 * 1024
+# The most blank lines in a row a wording file may hold above its last line of wording. A post
+# separates its paragraphs with one, and two leaves room for a habit; a longer run pushes whatever
+# follows it down the window the file was opened in. Chosen (claude-config#3703), not measured.
+BLANK_RUN = 2
 EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 # A tool that hands the file's name to something that may write it.
 SENDING_TOOLS = ("Agent", "Task")
@@ -562,6 +571,20 @@ def _file_hash(path, deadline):
         return None, why
     if not answer["hash"]:
         return None, "the file holds no wording"
+    # Every blank line is dropped before the hash, so the hash cannot tell a padded file from its
+    # lines written together (claude-config#3703). lib/changelog-entry.js counts the longest run
+    # that has wording after it, by its own reading of a blank line, and an answer that does not
+    # say is no clearance (L98).
+    run, at = answer.get("blankRun"), answer.get("blankRunAt")
+    if not isinstance(run, int) or isinstance(run, bool) or not isinstance(at, int) or isinstance(at, bool):
+        return None, ("lib/changelog-entry.js did not say how many blank lines in a row the file holds, so whether "
+                      "wording sat below the screen he was shown could not be told (claude-sync pull reinstalls it)")
+    if run > BLANK_RUN:
+        return None, ("the file holds " + str(run) + " blank lines in a row, from line " + str(at) + ", with more "
+                      "wording below them, so the window it was opened in showed him the lines above and then white "
+                      "space, and he may never have seen the rest. Take the blank lines out, leaving no more than "
+                      + str(BLANK_RUN) + " blank lines in a row anywhere above the last line of wording, then open the "
+                      "file for him and ask him again")
     return answer["hash"], None
 
 
