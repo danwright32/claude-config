@@ -74,6 +74,16 @@ REWRITTEN=$(rtk rewrite "$CMD" 2>/dev/null) || exit 0
 # way of running something nobody wrote (L266). Compound commands with no refused destination in
 # them are still rewritten, so git, gh and the rest keep saving tokens.
 rtk_help_text="$(rtk --help 2>/dev/null)"
+# rtk's own excluded list, as `rtk config` prints it, space separated with a space at each end. Its
+# one home is payload/rtk-exclude-commands.txt, which every pull writes into rtk's config, so this
+# reads that list where it is installed rather than keeping a second copy here (claude-config#3639).
+rtk_excluded=" $(rtk config 2>/dev/null | awk '
+  /^\[/ { hooks = ($0 == "[hooks]"); grab = 0; next }
+  hooks && /^[[:space:]]*exclude_commands[[:space:]]*=/ { grab = 1 }
+  grab { s = $0
+         while (match(s, /"[^"]*"/)) { printf "%s ", substr(s, RSTART + 1, RLENGTH - 2); s = substr(s, RSTART + RLENGTH) }
+         if (index(s, "]")) grab = 0 }
+') "
 
 rtk_refused_destination() { # rtk_refused_destination <subcommand> <first argument>  -> 0 to refuse
 local rtk_dest_sub="$1" rtk_dest_verb="$2"
@@ -97,6 +107,15 @@ local rtk_dest_sub="$1" rtk_dest_verb="$2"
 # Everything else still goes through rtk, which is the point: git, gh and the
 # rest keep saving tokens. Only file reads pass through untouched.
 if [ "$rtk_dest_sub" = "read" ]; then return 0; fi
+
+# NEVER rewrite into an rtk subcommand that rtk's own excluded list names (claude-config#3639).
+# rtk 0.31.0 checks that list against the command's first word only, so with something in front
+# (`FOO=1`, `VAR=1 OTHER=2`, `env`, `env FOO=1` or `sudo` before grep or rg) it still answers `rtk grep`, whose
+# `-h` is its help, printed with exit 0, the matches lost. Measured 2026-11-25 on 357 asks: grep and
+# rg behind each of those five prefixes reached `rtk grep` in all 3 argument sets (30 asks); `time`, `nice`, `command`, `timeout`, `xargs`,
+# a full path and grep after `&&`, `;` or a pipe did not. An empty list refuses nothing here, so
+# an rtk with no config keeps the rewrites it chooses (Dan's #1419 decision for a lone grep).
+case "$rtk_excluded" in *" $rtk_dest_sub "*) return 0 ;; esac
 
 # NEVER rewrite a TEST RUN into an rtk summariser (claude-config#259).
 #
@@ -545,7 +564,7 @@ rtk_output_read_by_program() { # rtk_output_read_by_program <command>  -> 0 to r
         if (c == "(") { flushword(); push("paren"); i++; continue }
         if (c == ")") {
           flushword()
-          # A `)` that closes nothing it can name (a case pattern, a stray) is not guessed at.
+          # A closing parenthesis that closes nothing it can name, a case pattern or a stray one, is not guessed at.
           if (depth == 0 || ctx[depth] == "brace" || ctx[depth] == "bt" || ctx[depth] == "kw") { bad = 1; break }
           popgroup(); i++; continue
         }
