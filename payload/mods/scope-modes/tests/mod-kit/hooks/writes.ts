@@ -1,5 +1,5 @@
 import type { ModKitChange, ModKitWrite, ModKitWrites } from '../types/index.d.ts'
-import { git, pipeline, placed, readLine, type Command, type Line, type ReadOptions } from './commands.ts'
+import { git, pipeline, placed, READ_STOPPED, readLine, type Command, type Line, type ReadOptions } from './commands.ts'
 import { codeOnly, codeTargets, codeVerdict } from './code.ts'
 import { kindOf, readProgram, splitsWords } from './program.ts'
 import { isDevice } from './inputs.ts'
@@ -1872,8 +1872,11 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     // standard input and one handed over by xargs are not, since none was counted before Dan decided
     // (the count is in docs/mods-design.md). A program on the list of those that only read
     // (READ_ONLY) writes nothing, but in a form of it that writes a file or runs a program.
-    // A command pipeline marks `unread` is already given as one, which every guard holds.
-    if (onNoList && kind === undefined && !scriptFile && !tool && name && !c.unread && !READ_BY_RULE.has(name)) {
+    // A command pipeline marks `unread` is already given as one, which every guard holds. One it
+    // marks only because the reader stopped in it (#3491, READ_STOPPED) is still read by its words
+    // here, as it was before it was marked: the count for #3491 found six recorded calls where the
+    // mark alone would have taken this run away from the guards that judge it.
+    if (onNoList && kind === undefined && !scriptFile && !tool && name && (!c.unread || READ_STOPPED.has(c.unread)) && !READ_BY_RULE.has(name)) {
       const reader = own(READ_ONLY, name)
       const writing = reader?.writes?.find(w => w.when(rest))
       if (!reader || writing) {

@@ -500,8 +500,8 @@ check_eq "8 and as a Stop hook with --stop, where the long session question is a
 # lib/ is spelt from BASH_SOURCE here and in 10, never "$DIR/lib": this suite sources hang-wait.sh,
 # whose waits run their condition in this shell, where it can set any name, so past that line the
 # Slack drafts gate is sure of no variable. It could not find context_size through $DIR and refused
-# the whole suite when a session ran it (claude-config#2668). test-slack-drafts-only-gate.sh judges
-# this suite, so putting the variable back fails there.
+# the whole suite when a session ran it (claude-config#2668). test-slack-drafts-only-gate-scripts.sh
+# judges this suite, so putting the variable back fails there.
 out="$(python3 -B -c '
 import sys
 sys.path.insert(0, sys.argv[1])

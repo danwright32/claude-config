@@ -5,7 +5,10 @@
 # and that the orchestrator may suggest an override for one brief saying why. On 2026-11-09, with
 # Fable his default model, he split it into three tiers (claude-config#2547): Sonnet for a few
 # mechanical kinds, Fable for design, security and compliance work, Opus for everything else. On
-# 2026-11-19 he narrowed Sonnet to work that needs no judgement (claude-config#3290). The
+# 2026-11-19 he narrowed Sonnet to work that needs no judgement (claude-config#3290). On
+# 2026-11-24 he narrowed Fable to a change to what a design, security or compliance control decides
+# or shows, and reviews of one, after a sample of 50 Fable briefs found 16% were follow on work that
+# changed neither (claude-config#3393). The
 # running agent cap is held by test-agent-cap.sh since #2546. The rule has ONE home, the "Which
 # model a builder runs on" section of the orchestrate skill, beside the dispatch board whose Model column it fills (L83).
 # Everything else that dispatches builders points at that section by name rather than restating the
@@ -77,7 +80,7 @@ has "carries Dan's no judgement decision date" '2026-11-19'
 has "carries the no judgement decision's issue" '#3290'
 has "quotes Dan's words on what Sonnet is fine for" 'any idiot could do'
 # Three tiers, each on its own bullet (Dan, 2026-11-09, claude-config#2547): Fable for design,
-# security and compliance work even when it is also a mechanical kind, Opus for everything else.
+# security and compliance work, Opus for everything else.
 # Judged per bullet, so a word sitting on the wrong tier's line fails rather than passing because
 # it appears somewhere in the section.
 bullet() { awk -v t="$1" '/^- / && index(tolower($0), tolower(t)) { print; exit }' <<< "$section"; }
@@ -90,7 +93,35 @@ on_line() { # on_line <description> <line> <fixed text>
 on_line "puts design work on Fable" "$fable_line" 'design'
 on_line "puts security work on Fable" "$fable_line" 'security'
 on_line "puts compliance work on Fable" "$fable_line" 'compliance'
-on_line "keeps Fable for them even when they are one of the mechanical kinds" "$fable_line" 'even when'
+# Narrowed to what a control decides or shows (Dan, 2026-11-24, claude-config#3393): of 50 Fable
+# briefs sampled, 8 were follow on work on a security item that changed neither, sent to Fable
+# because the bullet tied the model to the item, "even when it is also one of the kinds above".
+on_line "narrows Fable to a change to what a control decides or shows" "$fable_line" 'changes what a design, security or compliance control decides or shows'
+on_line "keeps reviews of such a change on Fable" "$fable_line" 'reviews of such a change'
+on_line "sends follow on work that changes neither to Opus or Sonnet" "$fable_line" 'changes neither'
+on_line "names Opus for that follow on work" "$fable_line" 'runs on Opus, or on Sonnet where it needs no judgement'
+on_line "gives a red check as follow on work" "$fable_line" 'a red check'
+on_line "gives a test flake as follow on work" "$fable_line" 'a test flake'
+on_line "gives finishing a merge or a push as follow on work" "$fable_line" 'finishing a merge or a push'
+on_line "counts a guard that enforces process or quality as a security control" "$fable_line" 'enforces process or quality'
+on_line "names the design round guard as one" "$fable_line" 'design round guard'
+on_line "names the area check as one" "$fable_line" 'area check'
+on_line "carries Dan's narrowing decision date" "$fable_line" '2026-11-24'
+on_line "carries the narrowing decision's issue" "$fable_line" '#3393'
+on_line "quotes Dan's choice" "$fable_line" 'Narrow to what a guard decides'
+# The old sentence tied the model to the item, which contradicts the follow on clause, so it is
+# gone. What survives of it: a Sonnet kind that does change what a control shows (a wording fix to
+# a guard's message) still runs on Fable, because what the change does decides the tier.
+check "the Fable bullet no longer ties the model to the item whatever the change" \
+  "$(grep -q -i -F 'even when it is also one of the kinds above' <<< "$fable_line" && echo "on: $fable_line" || echo ok)"
+on_line "says what the change does decides the tier, not its kind" "$fable_line" 'what the change does decides the tier'
+# The classes the sample used, fixed before it was read, so every orchestrator classes alike.
+has "defines security by who or what may act" 'who or what may act'
+has "counts secrets and private data as security" 'secrets or private data'
+has "leaves a gate's speed, timing or test runs out of security" "speed, timing or test runs"
+has "defines compliance as an obligation set outside the codebase" 'obligation set outside the codebase'
+has "defines design by how a person uses it" 'how a person uses it'
+has "classes a brief by its main task" 'by its main task'
 on_line "makes Opus the default for anything not listed" "$opus_line" 'everything else'
 check "the Opus bullet no longer claims design, security or compliance" \
   "$(grep -q -i -E 'design|security|compliance' <<< "$opus_line" && echo "on: $opus_line" || echo ok)"
@@ -99,7 +130,7 @@ on_line "lists comment and wording fixes on Sonnet" "$sonnet_line" 'comment or w
 on_line "lists renames on Sonnet" "$sonnet_line" 'rename or move that changes no behaviour'
 on_line "lists filling in tests on Sonnet" "$sonnet_line" 'filling in tests for code that already exists'
 on_line "sends a review fix that changes logic or behaviour to Opus" "$sonnet_line" 'review finding that changes logic or behaviour runs on Opus'
-on_line "or to Fable where it is design, security or compliance work" "$sonnet_line" 'Fable where it is design, security or compliance work'
+on_line "or to Fable where it changes what a control decides or shows" "$sonnet_line" 'Fable where it changes what a design, security or compliance control decides or shows'
 check "the Sonnet bullet no longer offers any fix for a review comment" \
   "$(grep -q -i -F 'fix for a review comment' <<< "$sonnet_line" && echo "on: $sonnet_line" || echo ok)"
 has "says a fork ignores the model" 'fork ignores'
@@ -127,6 +158,10 @@ if [ -n "$CLAUDE_MD" ]; then
   # that design work runs on Opus (#2547).
   check "the pointer's summary names all three models" \
     "$(grep -q -F 'Sonnet' <<< "$pointer_lines" && grep -q -F 'Fable' <<< "$pointer_lines" && grep -q -F 'Opus' <<< "$pointer_lines" && echo ok || echo "the pointer line does not name Sonnet, Fable and Opus")"
+  # And its Fable summary is the narrowed one, so a reader who stops there does not send a red
+  # check on a security item to Fable (#3393).
+  check "the pointer's summary narrows Fable to what a control decides or shows" \
+    "$(grep -q -F 'what a design, security or compliance control decides or shows' <<< "$pointer_lines" && echo ok || echo "the pointer line still sends all design, security and compliance work to Fable")"
 else
   echo "SUITE-PART-UNMEASURED $DIR/../.. is not the payload of a claude-config checkout, so the pointer in its CLAUDE.md was not read"
 fi
