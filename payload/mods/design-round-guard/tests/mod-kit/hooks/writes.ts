@@ -59,7 +59,13 @@ const isPipe = (word: string) => /^[<>]\(/.test(word)
 
 // A variable the command set before a write is read as its value, as the shell reads it, so the
 // write names its file (#743: `F=<memory folder>/MEMORY.md; printf ... >> "$F"` was given as $F,
-// with no path, and ask before saving let it through). The word is still given as written. Only a
+// with no path, and ask before saving let it through). The word is still given as written. Only
+// from a setting that is sure to have run (#3468): one in the run of settings its line opens with
+// (Command.certain, the command reader's one reading of that, openingRun). Any other may have been
+// skipped or have run in another shell: behind an `&&` or `||`, in a branch, a loop, a function, a
+// group or a subshell, after any command, made by export or declare, or in a script a shell is
+// given. It leaves a variable the reader holds no value for not known, and one it holds a value for
+// with either. And only a
 // value the reader can be sure of: one holding a command's output or anything else it cannot name;
 // one a loop other than a for over plain words (below), read, mapfile, getopts or printf -v sets,
 // appended to or unset; one given a second,
@@ -1136,7 +1142,11 @@ const firstAt = <T>(at: Firsts<T>, path: string | undefined, word: string, entry
 
 // The writes, and the folder each command runs in, by its place in `cmds` (#2000): where a cd before
 // it leaves the shell, followed as a relative path is, undefined where that cannot be followed.
-const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: string): { writes: ModKitWrites; folders: (string | undefined)[] } => {
+const readWrites = (cmds: readonly Command[], cwd: string | undefined, sessionHome: string): { writes: ModKitWrites; folders: (string | undefined)[] } => {
+  // The home a `~` or a `$HOME` stands for: the session's, until the command gives HOME a value the
+  // reader does not know (#3468: a setting of it that may not have run, a read, an eval). From then
+  // on no word through home names a file, since the session's home would be a guess.
+  let home = sessionHome
   const folders: (string | undefined)[] = []
   const files: ModKitWrite[] = []
   const changes: ModKitChange[] = []
@@ -1325,6 +1335,7 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     each.delete(name)
     vars.set(name, null)
     setBy.set(name, null)
+    if (name === 'HOME') home = ''
   }
   // A word read once for each word of every loop variable in it (#1953), or as it is past MAX_EACH.
   // A value holding a space is read whole, as a quoted use hands it on, and as each piece a shell
@@ -1352,12 +1363,21 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     }
     return out
   }
-  const assign = (word: string) => {
+  // `sure` says the setting is sure to have run (#3468, Command.certain: it stands in the run of
+  // settings its line opens with). Any other may have been skipped (behind an `&&` after a command
+  // that fails, inside an `if` whose test is false) or have run in another shell, and the shell
+  // then leaves the variable as it was. Where the reader holds a value for it already, that is
+  // what the lines below always made of a second setting: the one value if both are the same, not
+  // known otherwise, with each value given to a guard (#2171). Where it holds none, the variable
+  // may be unset or hold whatever the environment gave it, so it is not known and no value is
+  // given for it: followed, the write was read as landing in a folder the command never touches.
+  const assign = (word: string, sure: boolean) => {
     const m = SETS.exec(word)
     if (!m) return
     const name = m[1] as string
     // A loop's variable given a value as well: which stands is unknown.
     if (each.has(name)) return unknown(name)
+    if (!sure && !vars.has(name)) return unknown(name)
     // Home is spelled out where a value starts with it, as the shell expands ~ in an assignment.
     let value = expand(m[2] as string)
     if (home) value = value.replace(HOME_VAR, home).replace(/^~(?=\/|$)/, home)
@@ -1372,6 +1392,7 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
   const outside: (string | undefined)[] = []
   const varsOutside: Vars[] = []
   const eachOutside: Map<string, string[]>[] = []
+  const homeOutside: string[] = []
   for (const c of cmds) {
     folders.push(dir)
     now = c
@@ -1381,9 +1402,10 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     // no program, its `<` and `>` compare two numbers, and no word of it names a file, so it is no
     // write, no input and no run. Read as a command, `(( n > 3 ))` was a write of a file named 3.
     // A name it gives a value is one whose value the reader no longer knows, but for a whole number
-    // written out (`((F=3))`), which is the value the shell gives it.
+    // written out (`((F=3))`), which is the value the shell gives it. No `(( ))` stands in the run
+    // of settings a line opens with, so it is read as a setting that may not have run (#3468).
     if (c.arithmetic) {
-      if (written.length === 1 && ARITHMETIC_NUMBER.test(written[0] as string)) assign(written[0] as string)
+      if (written.length === 1 && ARITHMETIC_NUMBER.test(written[0] as string)) assign(written[0] as string, false)
       else for (const m of written.join(' ').matchAll(ARITHMETIC_SETS)) unknown((m[1] ?? m[2]) as string)
       continue
     }
@@ -1391,15 +1413,17 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
       outside.push(dir)
       varsOutside.push(new Map(vars))
       eachOutside.push(new Map(each))
+      homeOutside.push(home)
       continue
     }
     if (written[0] === ')') {
       if (outside.length) dir = outside.pop()
+      if (homeOutside.length) home = homeOutside.pop() as string
       if (varsOutside.length) vars = varsOutside.pop() as Vars
       if (eachOutside.length) each = eachOutside.pop() as Map<string, string[]>
     }
     if (written.length && written.every(w => SETS.test(w))) {
-      written.forEach(assign)
+      for (const w of written) assign(w, c.certain === true)
       continue
     }
     asWritten.clear()
@@ -1494,11 +1518,12 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     const rest = args.slice(1)
     if (DECLARES.has(name)) {
       // export F=path, declare -x F=path. Any option beyond export, read only and global (an array,
-      // a name reference, a case change) gives a value the reader cannot read.
+      // a name reference, a case change) gives a value the reader cannot read. It is a command, so
+      // it stands in no run of settings a line opens with: never sure to have run (#3468).
       const plain = rest.every(a => !a.startsWith('-') || /^-[xrg]+$/.test(a))
       for (const a of rest) {
         const m = SETS.exec(a)
-        if (m && plain) assign(a)
+        if (m && plain) assign(a, false)
         else if (m) unknown(m[1] as string)
       }
       continue
@@ -2318,7 +2343,7 @@ const lineFolders = (line: Line, cwd: string | undefined, home: string, inSubsti
 /**
  * The commands `pipeline` gives a Bash call, each with `folder`, the absolute folder it runs in
  * (#2000): `cwd`, or where a cd or pushd before it leaves the shell, followed by the write reader's
- * own reading of one (a relative or home folder, a variable the command set, a subshell's cd ending
+ * own reading of one (a relative or home folder, a variable the command opens by setting, a subshell's cd ending
  * with it); null where that cannot be followed (a variable the command did not set, cd -, a popd).
  * A reader asking about the folder a command acts on (is it live's question to GitHub about a merge)
  * asks this, so a `cd <other checkout> && ...` is never asked about in the session's folder (L237).

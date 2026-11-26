@@ -800,3 +800,28 @@ describe('no build: a write in a shell script or a process substitution (#975)',
     expect(run("bash <<'EOF'\necho \\$(rm /repo/app.ts)\nEOF")).toBeUndefined()
   })
 })
+
+// #3468: the write reader followed a variable to the value any setting in the command gave it, sure
+// to run or not. A setting behind `&&` after a command that fails, or inside an `if` whose test is
+// false, never runs: the shell leaves the variable as it was, and the write lands wherever that
+// points. No build read each of these as a note in the scratchpad and let it through.
+describe('no build: a write through a variable whose setting may never run (#3468)', () => {
+  const what = (r: { what: string } | undefined) => r?.what
+  test('a setting that may be skipped names no scratchpad note, so the write is refused as one that cannot be placed', () => {
+    const unplaced = what(run('echo x > "$F"'))
+    expect(unplaced).toBe('write to $F')
+    for (const command of [
+      `false && F=${SCRATCH}/n.md; echo x > "$F"`,
+      `if false; then F=${SCRATCH}/n.md; fi; echo x > "$F"`,
+      `true || F=${SCRATCH}/n.md; echo x > "$F"`,
+      `false && export F=${SCRATCH}/n.md; echo x > "$F"`,
+    ])
+      expect([command, what(run(command))]).toEqual([command, unplaced])
+    // The folder a cd goes to through such a variable is not known either.
+    expect(what(run(`false && D=${SCRATCH}; cd "$D" && echo x > n.md`))).toBe('write to n.md')
+  })
+  test('a setting the line opens with is sure to have run, and is followed as before', () => {
+    expect(run(`F=${SCRATCH}/n.md; echo x > "$F"`)).toBeUndefined()
+    expect(run(`D=${SCRATCH}\ncd "$D" && echo x > n.md`)).toBeUndefined()
+  })
+})

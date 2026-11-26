@@ -287,6 +287,30 @@ exception any more. Since #743 it reads a variable the command set before a writ
 (`pipeline(cmd, { assignments: true })`, through `commandWrites`, off for every other caller); what
 it cannot be sure of stays as written (Ask before saving, below).
 
+Since #3468 it follows a variable only from a setting that is sure to have run. Before, it followed
+every setting it met, because the commands it reads have lost the difference between a `;` and an
+`&&`, `||`, `|` or `&`, and the reserved words: `false && F=/a; echo x > "$F"` and
+`if false; then F=/a; fi; echo x > "$F"` were both read as a write of `/a`, a file the command
+never touches, and no build let such a write through as a note in the scratchpad. The command
+reader now marks each command that only sets variables as `certain` where it stands in the run of
+settings its line opens with, each ended by a `;` or a new line (`openingRun`, the one reading of
+"is this setting sure to have run", which the following of a variable alone, `fixedWords` of #3398,
+is built on too; the two differ only in which values they take, since `fixedWords` hands the value
+on and so wants it typed in plain characters). A setting not marked so (behind an `&&` or `||`, in
+a branch, a loop, a function, a group or a subshell, before a `|` or a `&`, after any command, made
+by `export` or `declare`, inside `(( ))`, or in a script a shell is given, a trap's text or what
+`source` reads) leaves a variable the reader holds no value for not known: its words are given as
+written, with no path and no `values`, and the folder a `cd` through it goes to is not known. Where
+the reader already holds a value for it, a setting that may not have run reads as any second
+setting always did: the same value changes nothing, another leaves it not known, with both given
+as `values`. A setting of `HOME` that may not have run leaves home itself not known, so a word
+through `$HOME` or `~` names no file after it. The reading gives up on forms the shell does set
+(`F=/a && ...`, `make; F=/a; ...`, `export F=/a; ...`, a setting a subshell opens with, a script's
+own settings); each is a question for Dan with its count in the pull request for #3468. Counted on
+the personal MacBook on 2026-11-26 over 81,845 recorded Bash calls of 30 days: 386 read
+differently, every one toward a path or a folder no longer named, and in 50 of them a file handed
+to a run is no longer given at all, since a run is only handed a word that spells a path.
+
 Since #3415 the `>` of an arithmetic test and of a `[[ ]]` comparison is no redirect. Before,
 `(( n > 3 ))` was read as a write of a file named 3 and `[[ a > b ]]` as a write of b, so every
 guard on the reader could judge, hold or record a write that never happens. The command reader now

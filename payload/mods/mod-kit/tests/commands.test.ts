@@ -1402,7 +1402,7 @@ describe('pipeline: a variable the call itself sets, read as its value (#3398)',
   test('it is given only when asked for, and no word of the command is changed', () => {
     followedAsWritten()
     expect(pipeline(PLAIN)).toEqual([{ words: ['git', '-C', '$W', 'checkout', 'main'] }])
-    expect(pipeline(PLAIN, { assignments: true })).toEqual([{ words: ['W=/other'] }, { words: ['git', '-C', '$W', 'checkout', 'main'] }])
+    expect(pipeline(PLAIN, { assignments: true })).toEqual([{ words: ['W=/other'], certain: true }, { words: ['git', '-C', '$W', 'checkout', 'main'] }])
     expect(pipeline(PLAIN, { follow: true }).map(c => c.words)).toEqual(pipeline(PLAIN).map(c => c.words))
     // A command with no such word carries none.
     expect(pipeline('W=/other; git status; git -C "$W" checkout main', { follow: true }).map(c => 'followed' in c)).toEqual([false, true])
@@ -2568,5 +2568,57 @@ describe('four shapes the reader misread (#3442)', () => {
       expect(commands(`${shell} -c 'time [[ -z a || p1 b ]]'`)).toEqual([['[[', '-z', 'a'], ['p1', 'b', ']]']])
       expect(commands(`${shell} -c '[[ -z a || p1 b ]]>out'`)).toEqual([['[[', '-z', 'a'], ['p1', 'b', ']]', '>', 'out']])
     }
+  })
+})
+
+// #3468: a command that only sets variables says whether it is sure to have run (`certain`), by the
+// one reading of that the reader has: the run of settings its line opens with (openingRun), which
+// the following of a variable alone (fixedWords, #3398) is built on too.
+describe('a setting that is sure to have run (#3468)', () => {
+  const sure = (cmd: string) => pipeline(cmd, { assignments: true }).filter(c => c.words.every(w => /^[A-Za-z_][A-Za-z0-9_]*=/.test(w))).map(c => [c.words.join(' '), c.certain === true])
+  test('the run of settings a line opens with, each ended by a ; or a new line', () => {
+    expect(sure('F=/a; G=/b\nH=/c; echo x')).toEqual([['F=/a', true], ['G=/b', true], ['H=/c', true]])
+    expect(sure('  A=1 B=2 ; echo x')).toEqual([['A=1 B=2', true]])
+    // Whatever the value: quoted, under home, a command's output.
+    expect(sure(`F=~/a; G="$HOME/b c"; H='x;y'; T=$(mktemp -d); K=/k; echo x`)).toEqual([['F=~/a', true], ['G=$HOME/b c', true], ['H=x;y', true], ['T=$(mktemp -d)', true], ['K=/k', true]])
+    // Settings and nothing after them.
+    expect(sure('F=/a')).toEqual([['F=/a', true]])
+    expect(sure('F=/a; G=/b')).toEqual([['F=/a', true], ['G=/b', true]])
+  })
+  test('none once anything else has stood before it, or where anything but a ; or a new line ends it', () => {
+    expect(sure('false && F=/a; echo x')).toEqual([['F=/a', false]])
+    expect(sure('true || F=/a; echo x')).toEqual([['F=/a', false]])
+    expect(sure('make; F=/a; echo x')).toEqual([['F=/a', false]])
+    expect(sure('if false; then F=/a; fi')).toEqual([['F=/a', false]])
+    expect(sure('f() { F=/a; }')).toEqual([['F=/a', false]])
+    expect(sure('(F=/a; echo x)')).toEqual([['F=/a', false]])
+    expect(sure('{ F=/a; echo x; }')).toEqual([['F=/a', false]])
+    // The one before an && or || ran, but the reading takes a ; or a new line as the one end.
+    expect(sure('F=/a && echo x')).toEqual([['F=/a', false]])
+    expect(sure('F=/a; G=/b && echo x')).toEqual([['F=/a', true], ['G=/b', false]])
+    expect(sure('F=/a || G=/b; echo x')).toEqual([['F=/a', false], ['G=/b', false]])
+    // Before a | or a & it ran in a shell of its own.
+    expect(sure('F=/a | cat; echo x')).toEqual([['F=/a', false]])
+    expect(sure('F=/a & echo x')).toEqual([['F=/a', false]])
+    expect(sure('F=/a; G=/b &\necho x')).toEqual([['F=/a', true], ['G=/b', false]])
+    // A comment between the setting and its end, and two lines joined by a backslash, are not read.
+    expect(sure('F=/a \\\nG=/b; echo x')).toEqual([['F=/a G=/b', false]])
+  })
+  test('never in text a line holds and runs among its own commands: a script, a trap', () => {
+    expect(sure(`bash -c 'F=/a; echo x'`)).toEqual([['F=/a', false]])
+    expect(sure(`trap 'F=/a' EXIT; echo x`)).toEqual([['F=/a', false]])
+    // A substitution's text is a line of its own, with a run of its own.
+    expect(sure('echo "$(F=/a; echo x)"')).toEqual([['F=/a', true]])
+  })
+  test('a heredoc or a (( )) after the run takes nothing from it: the setting still ran', () => {
+    // fixedWords follows no variable in such a line, for what else may change one, which is another
+    // question than whether the setting ran.
+    expect(sure("F=/a; cat > \"$F\" <<'EOF'\nx\nEOF")).toEqual([['F=/a', true]])
+    expect(sure('F=/a; (( n > 3 ))')).toEqual([['F=/a', true]])
+    expect(pipeline("W=/other; git -C \"$W\" status <<'EOF'\nx\nEOF", { follow: true }).some(c => c.followed !== undefined)).toBe(false)
+  })
+  test('it is given only to a reader that asks for the settings', () => {
+    expect(pipeline('F=/a; echo x')).toEqual([{ words: ['echo', 'x'] }])
+    expect(pipeline('F=/a; echo x', { assignments: true })).toEqual([{ words: ['F=/a'], certain: true }, { words: ['echo', 'x'] }])
   })
 })
