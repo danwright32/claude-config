@@ -35,7 +35,10 @@
 #   findings not yet read                                 refused with the findings and their read
 #                                                         key, until a push presents it as
 #                                                         PR_REVIEW_READ=<key> <the push command>
-#   still running when the wait ends                      refused, with the time waited
+#   findings, in their fourth round or later              refused as a stop for Dan, with no read key
+#                                                         issued and none taken, until he has answered
+#                                                         for that review (claude-config#3557)
+#   still running when the wait ends                     refused, with the time waited
 #   could not run, failed, timed out, too large, ...      refused (L42), naming the restart command
 #                                                         and the one command override
 # And three this gate decides itself:

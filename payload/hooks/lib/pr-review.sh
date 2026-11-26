@@ -1036,7 +1036,9 @@ round_stop_asleep() {
 # why, so the session reports the wait itself: never a silent nothing (L10).
 round_stop_note() {
   local night line err text
-  night="$(cksum < "${CLAUDE_SLEEP_RECORD:-$HOME/.claude/state/sleep/current.json}" 2>/dev/null | tr -d '[:space:]')"
+  # The night is named by its record's generation, read by lib/sleep.sh, the one reader of that
+  # record: the record is written again in the night (a worker joining), and is still that night.
+  night="$(sleep_generation 2>/dev/null)"
   if [ -n "$night" ] && [ "$(cat "$stop_noted" 2>/dev/null)" = "finished=$1"$'\n'"night=$night" ]; then
     rs_note="The note for the morning about this review was written earlier tonight."
     return 0

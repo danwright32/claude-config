@@ -5,7 +5,9 @@
 #
 # Refuse a merge until the lessons review of that pull request's head has FINISHED and its findings
 # have been READ by the session merging (claude-config#560, #788): the merge presents the findings'
-# read key as PR_REVIEW_READ=<key>, which only the messages carrying them hold. The review itself, and every outcome it can have, is
+# read key as PR_REVIEW_READ=<key>, which only the messages carrying them hold. From the fourth round
+# of findings on one pull request the merge waits for Dan's answer for that review, and no read key
+# carries it (claude-config#3557). The review itself, and every outcome it can have, is
 # lib/pr-review.sh; this hook only decides whether a command merges and which head it merges.
 #
 # EVERY MERGE ROUTE this hook can see: `gh pr merge`, the GitHub API's merge endpoint and GraphQL

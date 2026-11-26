@@ -590,6 +590,10 @@ check "#3557 and the merge gate hands the subagent on as well" "You are a subage
 out="$(fire_merge "PR_REVIEW_READ=$SK gh pr merge 7 --squash")"; rc=$?
 check_eq "#3557 nor does the key carry the merge" "2" "$rc"
 rm -f "$FAKE_LOG/pr-view.json"
+# Each gate's own account of its outcomes names the stop, so a reader of the gate is not told that
+# a read key always carries a push or merge (lessons review of 74a18e7).
+check "#3557 the push gate's list of outcomes names the stop" "refused as a stop for Dan, with no read key" "$(sed -n '1,60p' "$DIR/pr-review-push-gate.sh")"
+check "#3557 the merge gate's header names the stop" "the merge waits for Dan's answer for that review" "$(sed -n '1,20p' "$MERGE_GATE")"
 # Dan's answer in the session's transcript, which the payload names.
 META4="$(python3 -c 'import re, sys
 m = re.search(r"metadata (\{.*?\}) \. The question", sys.argv[1], re.S)
