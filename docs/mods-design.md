@@ -1095,7 +1095,11 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
   (#3442, measured on bash 3.2, zsh 5.9, macOS sh, dash and ksh93): `bash -n x.sh` and
   `bash -o noexec x.sh`. It is still read as a run where the check is taken back (`+n`,
   `+o noexec`), where another option names exec (zsh and ksh run the script for `-n -o exec`), and
-  under `-i`, since bash says an interactive shell ignores `-n`. Text given with `-c` or on standard
+  under `-i`, since bash says an interactive shell ignores `-n`. The long spelling `--interactive`,
+  which only zsh and ksh take, keeps the check: measured 2026-11-26 on the same five shells, with no
+  terminal, zsh and ksh ran neither the script nor a start up file for `-n --interactive x.sh`
+  (zsh's manual says `-n` given at startup holds in an interactive shell), and bash, sh and dash
+  refuse the option and run nothing. Text given with `-c` or on standard
   input is read as the commands it holds even with `-n`, which judges more than runs and hides
   nothing.
   The code is then judged per language by what it can

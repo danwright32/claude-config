@@ -269,6 +269,25 @@ describe('a shell told only to check its script runs none of it (#3442)', () => 
     // An -n after the script file is the script's own argument.
     expect(scripts('bash x.sh -n')).toEqual([{ files: ['x.sh'] }])
   })
+  test('the long spelling --interactive keeps the check, as the shells that take it do', () => {
+    // Raised at a push: `zsh -n --interactive x.sh` is read as a check that runs nothing while `-i`
+    // is read as a run, so is the long spelling read wrongly? Measured 2026-11-26 on the personal
+    // MacBook (zsh 5.9, ksh 93u+ 2012-08-01, bash 3.2.57, macOS sh, dash), two runs of each form with
+    // a script and start up files that each only make a file, a clean environment, no terminal and
+    // standard input from /dev/null. zsh and ksh, the two that take the option, make no file for any
+    // form below, the start up files' included; zsh's manual says -n given at startup holds in an
+    // interactive shell. bash, sh and dash refuse `--interactive` and run nothing. So the reading is
+    // right for every shell measured, and this pins it. (Each of the five also made no file for
+    // `-n -i`, which stays read as a run for the builds not measured.)
+    for (const shell of ALL) expect([shell, scripts(`${shell} -n --interactive x.sh`)]).toEqual([shell, [undefined]])
+    for (const shell of ['zsh', 'bash', 'ksh']) expect([shell, scripts(`${shell} --interactive -n x.sh`)]).toEqual([shell, [undefined]])
+    for (const options of ['-n --interactive --', '-o noexec --interactive', '-n -f --interactive'])
+      expect([options, scripts(`zsh ${options} x.sh`)]).toEqual([options, [undefined]])
+    // The control: with the check taken back zsh and ksh made the script's file and the interactive
+    // start up file's, so the option is taken and those forms are a run.
+    for (const command of ['zsh -n --interactive +n x.sh', 'zsh -n --interactive --exec x.sh', 'ksh -n --interactive +n x.sh'])
+      expect([command, scripts(command)]).toEqual([command, [{ files: ['x.sh'] }]])
+  })
   test('text given inline or on standard input is read as it was', () => {
     // Every shell measured runs none of it. Reading it as run judges more than is there and misses
     // nothing, and the issue names only the script file.
