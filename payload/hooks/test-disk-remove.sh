@@ -1281,4 +1281,106 @@ check "each item is measured, then judged, then checked for being open, and the 
   "$(eq "$order" "du judge lsof trash du judge lsof")"
 check "and both items were removed (exit $RC)" "$([ "$RC" -eq 0 ] && [ ! -e "$H/w/f1" ] && [ ! -e "$H/w/d2" ] && echo ok || echo "$OUT_TEXT")"
 
+# ================================================================================================
+# 19. Progress (claude-config#3590): a plan of 1,145 items took 17 minutes on 2026-11-24, so the
+#     skill starts it in the background and reads how far it has got from one small status file the
+#     run rewrites as each item starts, through --status. Started, advancing, finished, stopped by a
+#     signal and killed outright are each a different answer, and a killed run never reads as alive.
+# ================================================================================================
+has_all() { # <text> <needle>...: ok when every needle is in the text
+  local text="$1" n; shift
+  for n in "$@"; do grep -qF -- "$n" <<< "$text" || { echo "'$n' not in: $text"; return; }; done
+  echo ok
+}
+stf() { awk -v k="$1" '$1 == k { sub(/^[^ ]+ ?/, ""); print; f = 1; exit } END { if (!f) print "(no " k " line)" }' "$STATE/removals/${2:-s1}.status" 2>/dev/null || echo "(no status file)"; }
+status_of() { runenv "$@" bash "$DR" --status "$H/plan"; } # env assignments, if any
+fresh
+printf 'x\n' > "$H/w/f1"; mkdir -p "$H/w/d2"; printf 'y\n' > "$H/w/d2/f"; printf 'z\n' > "$H/w/k3"
+echo "not offerable: kept for this test" > "$VERDICTS/k3"
+item i1 fixture trash "$H/w/f1"; item i2 fixture delete "$H/w/d2"; item i3 fixture delete "$H/w/k3"
+record s1 10; plan "$H/plan" s1 i1 i2 i3
+status_of
+check "--status before any run says none has started, exit 13" "$([ "$RC" -eq 13 ] && echo ok || echo "exit $RC: $OUT_TEXT")"
+check "and starts with the word none" "$(eq "${OUT_TEXT%% *}" "none:")"
+run --plan "$H/plan"
+final="$OUT_TEXT"; final_rc="$RC"
+check "a plan with one item judged not offerable still exits 5" "$(eq "$final_rc" 5)"
+check "the run says first how to follow it" "$(has "$final" "Progress: bash ~/.claude/hooks/lib/disk-remove.sh --status $H/plan")"
+check "the run leaves a status file for its scan" "$([ -f "$STATE/removals/s1.status" ] && echo ok || echo "no $STATE/removals/s1.status")"
+check "which says finished, with the run's exit" "$(eq "$(stf state) $(stf exit)" "finished 5")"
+check "and counts every item done of the plan's total" "$(eq "$(stf done) of $(stf total)" "3 of 3")"
+check "and the same counts the report gives" "$(eq "$(stf removed) $(stf trashed) $(stf skipped) $(stf failed)" "1 1 1 0")"
+check "the status's verified total is the one the report prints" \
+  "$(has "$final" "removed 1 item(s), freeing $(dcu_human "$(stf kib_removed)")")"
+check "and the trashed total too" "$(has "$final" "moved 1 item(s) to the Trash, $(dcu_human "$(stf kib_trashed)")")"
+check "and they are each item's own measured size, summed (12 KB each from the du stub)" "$(eq "$(stf kib_removed) $(stf kib_trashed)" "12 12")"
+check "no temporary status file is left beside it" "$(eq "$(find "$STATE/removals" -name '*.tmp*' | wc -l | tr -d ' ')" 0)"
+status_of
+check "--status reads a finished run, exit 0" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $OUT_TEXT")"
+check "and says finished, with the counts and the verified total" \
+  "$(has_all "$OUT_TEXT" "finished: 3 of 3 item(s)" "exit 5" "1 removed" "1 moved to the Trash" "1 skipped" "verified 12 KB freed and 12 KB moved to the Trash")"
+
+# A scan over an hour old is still refused (exit 3) and starts nothing, so it writes no status.
+fresh
+printf 'x\n' > "$H/w/f1"; item i1 fixture trash "$H/w/f1"; record s1 3700; plan "$H/plan" s1 i1
+run --plan "$H/plan"
+check "a stale scan is still refused with exit 3" "$(eq "$RC" 3)"
+check "and writes no status, so nothing reads it as started" "$([ ! -e "$STATE/removals/s1.status" ] && echo ok || echo "status: $(cat "$STATE/removals/s1.status")")"
+# An item that changed after the plan is still judged again and refused.
+fresh
+printf 'x\n' > "$H/w/f1"; echo "not offerable: it changed since the scan" > "$VERDICTS/f1"
+item i1 fixture delete "$H/w/f1"; record s1 10; plan "$H/plan" s1 i1
+run --plan "$H/plan"
+check "an item whose judge now says not offerable is still skipped, exit 5" "$([ "$RC" -eq 5 ] && [ -e "$H/w/f1" ] && echo ok || echo "exit $RC")"
+check "and the status counts it skipped, nothing removed" "$(eq "$(stf removed) $(stf skipped) $(stf kib_removed)" "0 1 0")"
+
+# In progress, then stalled, then killed outright: the trash stub waits on the third item, as in 14.
+fresh
+for n in 1 2 3 4 5; do printf 'x\n' > "$H/w/k$n"; item "k$n" fixture trash "$H/w/k$n"; done
+record s1 10; plan "$H/plan" s1 k1 k2 k3 k4 k5
+PIDF="$DC_ROOT/dr.pid"; REL="$DC_ROOT/release"; rm -f "$PIDF" "$REL"
+dc_stub trash "for a in \"\$@\"; do case \"\$a\" in -*) ;; */k3) echo reached > $(printf %q "$PIDF"); n=0; while [ ! -e $(printf %q "$REL") ] && [ \$n -lt $((HANG_S * 10)) ]; do sleep 0.1; n=\$((n + 1)); done; /bin/rm -f \"\$a\" ;; *) /bin/rm -f \"\$a\" ;; esac; done"
+( dc_run bash "$DR" --plan "$H/plan" > "$DC_ROOT/killed.out" 2>&1 ) &
+bg=$!
+hang_wait "[ -s \"\$PIDF\" ]"
+drpid="$(readlink "$STATE/remove.lock" 2>/dev/null)"
+status_of
+check "--status while the run is working says running, exit 10" "$([ "$RC" -eq 10 ] && echo ok || echo "exit $RC: $OUT_TEXT")"
+check "and how far it has got" "$(has "$OUT_TEXT" "running: 2 of 5 item(s) done")"
+check "and the item in hand" "$(has "$OUT_TEXT" "now on $H/w/k3")"
+check "the status file names the run's own pid" "$(eq "$(stf pid)" "$drpid")"
+check "and its verified total so far is the two items done" "$(eq "$(stf kib_trashed)" 24)"
+status_of DISK_CLEAN_NOW="$(( $(date +%s) + 3600 ))"
+check "an hour with no item finished reads as stalled, exit 11, never as running" "$([ "$RC" -eq 11 ] && echo ok || echo "exit $RC: $OUT_TEXT")"
+check "and names the item it is stuck on" "$(has_all "$OUT_TEXT" "stalled:" "is still on $H/w/k3")"
+case "$drpid" in ''|*[!0-9]*) drpid="" ;; *) kill -9 "$drpid" 2>/dev/null ;; esac
+: > "$REL"
+wait "$bg" 2>/dev/null
+check "the run was killed on the third item" "$([ -n "$drpid" ] && echo ok || echo "the third item was never reached")"
+check "a killed run's status file still says running, as it was left" "$(eq "$(stf state)" running)"
+status_of
+check "but --status reads it as stopped, exit 12, never as running" "$([ "$RC" -eq 12 ] && echo ok || echo "exit $RC: $OUT_TEXT")"
+check "and says how far it got, what was in hand, and how many were never reached" \
+  "$(has_all "$OUT_TEXT" "stopped:" "killed or crashed" "after 2 of 5 item(s): 2 trashed" "$H/w/k3 was in hand; 2 never reached")"
+default_stubs
+run --plan "$H/plan"
+check "the next run says what the stopped one did and did not do" \
+  "$(has "$OUT_TEXT" "An earlier run (pid $drpid) stopped partway after 2 of 5 item(s): 2 trashed, 0 removed, 0 skipped, 0 failed; $H/w/k3 was in hand; 2 never reached")"
+check "and finishes the rest" "$([ ! -e "$H/w/k4" ] && [ ! -e "$H/w/k5" ] && eq "$(stf state)" finished | grep -qx ok && echo ok || echo "exit $RC: $OUT_TEXT")"
+
+# Stopped by a signal it can catch: the status says failed, with the signal, before it exits.
+fresh
+for n in 1 2 3; do printf 'x\n' > "$H/w/t$n"; item "t$n" fixture delete "$H/w/t$n"; done
+record s1 10; plan "$H/plan" s1 t1 t2 t3
+dc_stub judge "case \"\${2##*/}\" in t2) kill -TERM \"\$(readlink $(printf %q "$STATE/remove.lock"))\" ;; esac; echo offerable"
+run --plan "$H/plan"
+check "a run sent TERM exits 143" "$(eq "$RC" 143)"
+check "its status says failed, with the signal" "$(eq "$(stf state) $(stf exit)" "failed 143")"
+status_of
+check "--status reads it as stopped, exit 12" "$([ "$RC" -eq 12 ] && echo ok || echo "exit $RC: $OUT_TEXT")"
+check "and says it was stopped by a signal" "$(has "$OUT_TEXT" "stopped by signal TERM")"
+check "the lock was released" "$(gone "$STATE/remove.lock")"
+run --status
+check "--status with no plan file is refused with exit 2" "$(eq "$RC" 2)"
+
 finish

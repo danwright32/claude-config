@@ -279,6 +279,12 @@ check "and lists its entries only on request, from the plan" \
 remove_sec="$(awk -v a="$s_remove" '/^## / { sec++; next } sec >= a' "$SKILL")"; remove_code="$(code_of <<< "$remove_sec")"
 check "disk-remove runs the plan the checker wrote" \
   "$(grep -qxF 'bash ~/.claude/hooks/lib/disk-remove.sh --plan <folder>/plan.txt' <<< "$remove_code" && echo ok || echo "no block line is exactly: bash ~/.claude/hooks/lib/disk-remove.sh --plan <folder>/plan.txt")"
+check "the removal is started in the background, said first, with an estimate from the plan's size (#3590)" \
+  "$(grep -qF 'run_in_background' <<< "$remove_sec" && grep -qi 'tell Dan .*started' <<< "$remove_sec" && grep -qi 'a second an item' <<< "$remove_sec" && echo ok || echo "the step does not start it in the background, say so first, and give the per item estimate")"
+check "and its progress is read with --status, never a bare wait" \
+  "$(grep -qxF 'bash ~/.claude/hooks/lib/disk-remove.sh --status <folder>/plan.txt' <<< "$remove_code" && grep -qi 'never a bare wait' <<< "$remove_sec" && echo ok || echo "no block line is exactly: bash ~/.claude/hooks/lib/disk-remove.sh --status <folder>/plan.txt")"
+check "and each --status state has its own instruction" \
+  "$(for w in '**running**' '**stalled**' '**stopped**' '**none**' '**finished**'; do grep -qF -- "$w" <<< "$remove_sec" || { echo "no instruction for $w"; exit; }; done; echo ok)"
 check "free space is read by df -m before and after" \
   "$(grep -qxF 'df -m /System/Volumes/Data' <<< "$remove_code" && grep -qi 'before' <<< "$remove_sec" && grep -qi 'after' <<< "$remove_sec" && echo ok || echo "no df -m reading around the removal")"
 check "and the result is never du alone" "$(grep -qi 'never .*du' <<< "$remove_sec" && echo ok || echo "the step does not say so")"

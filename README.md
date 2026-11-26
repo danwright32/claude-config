@@ -7770,11 +7770,28 @@ failed, 2 refused, 75 another run holds `remove.lock`. The record is marked from
 exits, so the low space warning never quotes a removed item, and a run killed midway leaves an
 INTENT with no OUTCOME that the next run for that scan reports and settles.
 
+Progress (#3590). A plan of 1,145 items took about 17 minutes on 2026-11-24, longer than a
+foreground call is allowed, so disk-clean starts the removal in the background and follows it with
+`--status <plan file>`. A `--plan` run rewrites one small file, `removals/<scan_id>.status`, as each
+item starts (written to a temporary file and renamed over it, so a reader never sees half of one):
+how many of the plan's items are done, the counts by result, the verified totals so far, the item in
+hand, its pid and when it started. `--status` reads it and answers in one line starting with its
+state: `running` (exit 10), `stalled` (exit 11: alive, but no new item for five minutes), `stopped`
+(exit 12: killed, crashed, or stopped by a signal, which the run itself records as failed on the way
+out), `finished` (exit 0, with the run's own exit) or `none` (exit 13). A run is alive only while its
+pid is running and is the one `remove.lock` names, so a status left behind by a killed run never
+reads as working. The next run for that scan says, from the log, what the stopped one removed, what
+it had in hand and how many it never reached. Measured on the personal MacBook on 2026-11-26 (three
+samples, load average 50 to 130): an item costs 0.45 to 1.3 seconds, nearly all of it two checks of
+whether something holds it open, the gh cache judge's listing of every open file and the open check
+after it; the INTENT line, the removal and the check that it went are a few milliseconds together.
+
 The scan record layout is owned by `hooks/lib/disk-clean-record.sh`, and the rules for what a test
 root is by `hooks/lib/disk-clean-predicates.sh`, which the test harness sources too. Its suite,
 `hooks/test-disk-remove.sh`, runs it only through the harness's `dc_run`, with `/usr/bin/trash`,
 the judge and the sweep behind the seams `DISK_CLEAN_TRASH`, `DISK_CLEAN_JUDGE` and
-`DISK_CLEAN_DERIVED_DATA_SWEEP`, which `disk-remove.sh` honours only in test mode.
+`DISK_CLEAN_DERIVED_DATA_SWEEP`, and the clock `--status` judges a stall by behind `DISK_CLEAN_NOW`,
+which `disk-remove.sh` honours only in test mode.
 
 ## Branches and agent worktrees that already shipped
 
