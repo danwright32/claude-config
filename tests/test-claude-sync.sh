@@ -530,6 +530,44 @@ section_title(){   # $1 = a `section "..."` line -> the heading text
 
 SUITE_PRELUDE_END="sync (two-way) over a local fake remote"
 
+# ---- parts (claude-config#3594, #3680) ----
+# The sections after the prelude are several suites to the runner: part 1 is this file, and part
+# k, from the heading SUITE_PARTS_FROM names for it up to the next one named, is
+# tests/test-claude-sync-part<k>.sh, which runs this file with SUITE_PART=<k>. One file, so the
+# harness, the prelude and every helper stay in one place; several suites, so each is budgeted,
+# timed and dealt by its own cost. The section time budget further down holds the work of ONE run.
+#
+# #3594 made it two halves, when the whole suite sat at that budget on CI. #3680 made it five,
+# when on 2026-11-25 the first half read 453s on a runner against the 600s line run-all-tests.sh
+# holds every suite to on CI (#3575), and the same half had read 240s that day. The cuts were put by
+# measured seconds, never by count: the median of each section's CI readings (the timing records
+# of run 45730080306, up to ten readings a section), dealt so the parts carry as near equal
+# section time as contiguous runs of sections allow, about 265s each of 1320s. That run read its
+# first half at 1.34 times those medians, and a part runs as two shards there, so a part of 270s
+# reads about 190s of wall clock on a run that slow. A section that declares it needs another stays
+# in that one's part.
+#
+# Named by heading TEXT, like the prelude's boundary, so inserting a section cannot move a cut,
+# and each is asserted to match exactly one heading, in this order, wherever it is used. A section
+# added anywhere lands in the part whose range it falls in, so none is ever left out of every part.
+# Only a run that deals shards reads these, and every top level run does (the fan out below), so
+# no part's sections run in another.
+SUITE_PARTS_FROM=(
+  "a brief outage is logged, a sustained one alerts (#22)"
+  "a set-aside copy is judged by its words, not its line breaks (#212)"
+  "status sees a verdict the other clone on this Mac recorded (#187)"
+  "a fixed failure can be cleared, by the command the message names (claude-config#305)"
+)
+SUITE_PART_COUNT=$(( ${#SUITE_PARTS_FROM[@]} + 1 ))
+SUITE_PART="${SUITE_PART:-1}"
+case "$SUITE_PART" in
+  [1-9]|[1-9][0-9]) [ "$SUITE_PART" -le "$SUITE_PART_COUNT" ] ;;
+  *) false ;;
+esac || {
+  echo "test suite: SUITE_PART='$SUITE_PART' names no part of this suite. It is a whole number from 1 (the default, this file) to $SUITE_PART_COUNT (tests/test-claude-sync-part<n>.sh). Refusing rather than running a set nobody chose." >&2
+  exit 2
+}
+
 # Both at once is a refusal, never a precedence rule: whichever won, the run would be doing
 # something other than what the other knob asked for and nothing would say so.
 if [ -n "${SECTION_ONLY:-}" ] && [ -n "${SECTION_UNTIL:-}" ]; then
@@ -763,6 +801,45 @@ if [ -n "${SUITE_SHARD:-}" ] && [ -z "${SUITE_FILTERED:-}" ]; then
     exit 2
   fi
   _so_pend="$_so_idx"
+  # The part this run deals (claude-config#3594, #3680): sections _sh_first to _sh_last, and every
+  # loop below runs over those alone, so the other parts are neither dealt nor reported as missing.
+  # Part k starts at the heading SUITE_PARTS_FROM names for it and ends before the next part's
+  # heading that is in this file, or at the last section. A copy of this file holding other
+  # sections (the probe shards below build them) has no cuts, and all of it is part 1; a later part
+  # whose heading is not in the file is refused as empty, so a heading renamed in the real file
+  # fails that part's suite, while the part before it takes its sections and none goes unrun.
+  _sh_start=(); _sh_start[1]=$(( _so_pend + 1 ))
+  _sh_k=2
+  while [ "$_sh_k" -le "$SUITE_PART_COUNT" ]; do
+    _sh_from="${SUITE_PARTS_FROM[$(( _sh_k - 2 ))]}"
+    _sec_match "$_sh_from"
+    if [ "$_so_hits" -eq 0 ]; then
+      _sh_start[$_sh_k]=""
+      if [ "$SUITE_PART" = "$_sh_k" ]; then
+        echo "test suite: SUITE_PART=$_sh_k asks for part $_sh_k, but its first heading '$_sh_from' is not in this file, so it holds no sections. Refusing rather than reporting a pass over nothing." >&2
+        exit 2
+      fi
+    else
+      # Each present cut after the one before it, so no part is empty and none runs backwards.
+      _sh_before=1; _sh_j=$(( _sh_k - 1 ))
+      while [ "$_sh_j" -ge 1 ]; do
+        if [ -n "${_sh_start[$_sh_j]}" ]; then _sh_before="${_sh_start[$_sh_j]}"; break; fi
+        _sh_j=$(( _sh_j - 1 ))
+      done
+      if [ "$_so_hits" -ne 1 ] || [ "$_so_idx" -le "$_sh_before" ]; then
+        echo "test suite: part $_sh_k's first heading '$_sh_from' matches $_so_hits headings, or is not after the first section of the part before it, so where the parts divide is not decided." >&2
+        exit 2
+      fi
+      _sh_start[$_sh_k]="$_so_idx"
+    fi
+    _sh_k=$(( _sh_k + 1 ))
+  done
+  _sh_first="${_sh_start[$SUITE_PART]}"; _sh_last="$_so_i"
+  _sh_k=$(( SUITE_PART + 1 ))
+  while [ "$_sh_k" -le "$SUITE_PART_COUNT" ]; do
+    if [ -n "${_sh_start[$_sh_k]}" ]; then _sh_last=$(( ${_sh_start[$_sh_k]} - 1 )); break; fi
+    _sh_k=$(( _sh_k + 1 ))
+  done
 
   # Every section after the prelude that falls in this shard.
   #
@@ -783,8 +860,8 @@ if [ -n "${SUITE_SHARD:-}" ] && [ -z "${SUITE_FILTERED:-}" ]; then
   # declarations at all every group is one section and this deals out exactly as the plain round
   # robin it replaces did.
   _sh_grp=(); _sh_size=(); _sh_load=(); _sh_of=(); _sh_weight=()
-  _sh_k=$(( _so_pend + 1 ))
-  while [ "$_sh_k" -le "$_so_i" ]; do _sh_grp[$_sh_k]=$_sh_k; _sh_k=$(( _sh_k + 1 )); done
+  _sh_k=$_sh_first
+  while [ "$_sh_k" -le "$_sh_last" ]; do _sh_grp[$_sh_k]=$_sh_k; _sh_k=$(( _sh_k + 1 )); done
   # Answers in a VARIABLE rather than on stdout, because every caller here read it through `$(...)`
   # and each of those forks a subshell (claude-config#204). Three loops over the sections plus one
   # over the declarations called it several hundred times per launch, and a coverage launch was
@@ -801,8 +878,8 @@ if [ -n "${SUITE_SHARD:-}" ] && [ -z "${SUITE_FILTERED:-}" ]; then
   # ever borrowed, so an empty borrowed= field is equally what a working derivation and a
   # derivation that reports nothing at all would print, and the check would read as protection
   # while protecting nothing (L1, L159). Nothing sets it but that check.
-  _sh_k=$(( _so_pend + 1 ))
-  while [ "$_sh_k" -le "$_so_i" ] && [ -z "${SUITE_SHARD_NO_GROUPING:-}" ]; do
+  _sh_k=$_sh_first
+  while [ "$_sh_k" -le "$_sh_last" ] && [ -z "${SUITE_SHARD_NO_GROUPING:-}" ]; do
     # Sections with NO declaration are skipped before the loop below rather than fed an empty
     # string (claude-config#204). The heredoc that loop reads from is written to a temporary FILE,
     # once per turn, and this ran once per section whether that section declared anything or not:
@@ -822,6 +899,12 @@ if [ -n "${SUITE_SHARD:-}" ] && [ -z "${SUITE_FILTERED:-}" ]; then
       # nothing is ever borrowed to satisfy it.
       [ "$_so_idx" -gt "$_so_pend" ] || continue
       [ "$_so_idx" -lt "$_sh_k" ] || continue
+      # A prerequisite in ANOTHER part would run in two suites, once as its own and once
+      # borrowed, so the cut has to move or the declaration go (claude-config#3594).
+      if [ "$_so_idx" -lt "$_sh_first" ]; then
+        echo "test suite: ${_so_titles[$_sh_k]} declares '# needs: $_sh_nd', a section in another part of this suite, which would then run in both. Move SUITE_PARTS_FROM so the two sections share a part." >&2
+        exit 2
+      fi
       _sh_root "$_sh_k"; _sh_a="$_sh_root_out"; _sh_root "$_so_idx"; _sh_b="$_sh_root_out"
       if [ "$_sh_a" -ne "$_sh_b" ]; then
         if [ "$_sh_a" -lt "$_sh_b" ]; then _sh_grp[$_sh_b]=$_sh_a; else _sh_grp[$_sh_a]=$_sh_b; fi
@@ -849,8 +932,8 @@ SHNEEDS
   # numbers its answers, so a section is matched to its own figure by that number and never by
   # counting lines.
   _sh_rec=(); _sh_titles_in=""
-  _sh_k=$(( _so_pend + 1 ))
-  while [ "$_sh_k" -le "$_so_i" ]; do
+  _sh_k=$_sh_first
+  while [ "$_sh_k" -le "$_sh_last" ]; do
     suite_section_title "${_so_titles[$_sh_k]:-}" >/dev/null
     _sh_titles_in="$_sh_titles_in$_st_out
 "
@@ -859,12 +942,12 @@ SHNEEDS
   _sh_tab="$(printf '\t')"
   while IFS="$_sh_tab" read -r _sh_n_in _sh_v_in; do
     case "$_sh_n_in" in ''|*[!0-9]*) continue ;; esac
-    _sh_rec[$(( _so_pend + _sh_n_in ))]="$_sh_v_in"
+    _sh_rec[$(( _sh_first - 1 + _sh_n_in ))]="$_sh_v_in"
   done <<SHRECORDS
 $(printf '%s' "$_sh_titles_in" | suite_section_seconds_each 2>/dev/null)
 SHRECORDS
-  _sh_k=$(( _so_pend + 1 ))
-  while [ "$_sh_k" -le "$_so_i" ]; do
+  _sh_k=$_sh_first
+  while [ "$_sh_k" -le "$_sh_last" ]; do
     _sh_root "$_sh_k"; _sh_r="$_sh_root_out"
     _sh_size[$_sh_r]=$(( ${_sh_size[$_sh_r]:-0} + 1 ))
     _sh_total=$(( _sh_total + 1 ))
@@ -903,8 +986,8 @@ SHRECORDS
   # The weight a group is dealt on. With nothing measured this is exactly the section count the
   # deal used before #203, so the fallback is not a second scheme to keep working, it is this one
   # with every term equal (L263).
-  _sh_k=$(( _so_pend + 1 ))
-  while [ "$_sh_k" -le "$_so_i" ]; do
+  _sh_k=$_sh_first
+  while [ "$_sh_k" -le "$_sh_last" ]; do
     _sh_root "$_sh_k"; _sh_r="$_sh_root_out"
     if [ "$_sh_by_time" -eq 1 ]; then
       _sh_weight[$_sh_r]=$(( ${_sh_secs[$_sh_r]:-0} + ${_sh_unk[$_sh_r]:-0} * _sh_median ))
@@ -931,8 +1014,8 @@ SHRECORDS
   # here for every shard whether one of them is asked for or all of them are.
   _sh_targets_for(){   # _sh_targets_for <shard number> -> its sections, space separated
     local _sf_i="$1" _sf_k _sf_r _sf_out=""
-    _sf_k=$(( _so_pend + 1 ))
-    while [ "$_sf_k" -le "$_so_i" ]; do
+    _sf_k=$_sh_first
+    while [ "$_sf_k" -le "$_sh_last" ]; do
       _sh_root "$_sf_k"; _sf_r="$_sh_root_out"
       if [ "${_sh_of[$_sf_r]}" -eq "$_sf_i" ]; then _sf_out="$_sf_out $_sf_k"; fi
       _sf_k=$(( _sf_k + 1 ))
@@ -950,8 +1033,8 @@ SHRECORDS
   # same tree can produce different partitions, which nothing downstream could tell from a real
   # change (L228).
   _sh_order="$(
-    _sh_k=$(( _so_pend + 1 ))
-    while [ "$_sh_k" -le "$_so_i" ]; do
+    _sh_k=$_sh_first
+    while [ "$_sh_k" -le "$_sh_last" ]; do
       _sh_root "$_sh_k"; _sh_r="$_sh_root_out"
       [ "$_sh_r" -eq "$_sh_k" ] && printf '%s\t%s\n' "${_sh_weight[$_sh_r]}" "$_sh_r"
       _sh_k=$(( _sh_k + 1 ))
@@ -974,7 +1057,7 @@ SHORDER
   # nothing and exits 0 is indistinguishable from one where everything passed (L98).
   case "$_sh_targets" in
     *[![:space:]]*) ;;
-    *) echo "test suite: shard $_sh_i of $_sh_n holds no sections at all, so nothing would be run. Use fewer shards than the $(( _so_i - _so_pend )) sections there are." >&2; exit 2 ;;
+    *) echo "test suite: shard $_sh_i of $_sh_n holds no sections at all, so nothing would be run. Use fewer shards than the $(( _sh_last - _sh_first + 1 )) sections this part has." >&2; exit 2 ;;
   esac
   # What this shard SELECTED, in the selector's own terms, so the parent can put the shards back
   # together and ask whether every section was somebody's target (#137). Without it each shard
@@ -1005,9 +1088,9 @@ SHORDER
     # Reported for the shard whatever rule dealt it: when nothing was measured this is the section
     # count, which is exactly what the load was, so the field never lies about what it is a total
     # of and the sentence printed above says which.
-    printf 'SUITE-SHARD-COVERAGE shard=%s first=%s last=%s sections=%s seconds=%s borrowed=%s\n' \
-      "$_cl_i" "$(( _so_pend + 1 ))" "$_so_i" "$(printf '%s' "${_cl_targets# }" | tr ' ' ',')" \
-      "${_sh_load[$_cl_i]:-0}" "${_cl_borrowed#,}"
+    printf 'SUITE-SHARD-COVERAGE shard=%s first=%s last=%s sections=%s seconds=%s borrowed=%s part=%s\n' \
+      "$_cl_i" "$_sh_first" "$_sh_last" "$(printf '%s' "${_cl_targets# }" | tr ' ' ',')" \
+      "${_sh_load[$_cl_i]:-0}" "${_cl_borrowed#,}" "$SUITE_PART"
   }
   # EVERY shard's line, from this one launch (claude-config#204). The deal above decides the whole
   # partition, so the second and the eighth shard's answers are already sitting in _sh_of by the
@@ -1200,7 +1283,7 @@ fi
 # with the flag leaking through, the child took no lock, ran happily, and the checks that prove the
 # lock works failed. Which means that before this, anybody running the suite with SUITE_NO_LOCK=1
 # was running #32 against a lock nothing was testing (L169).
-export -n SUITE_FILTERED SECTION_ONLY SECTION_LIST SUITE_FROM_COPY SUITE_SHARD SUITE_NO_LOCK SUITE_SHARD_NO_GROUPING 2>/dev/null || true
+export -n SUITE_FILTERED SECTION_ONLY SECTION_LIST SUITE_FROM_COPY SUITE_SHARD SUITE_NO_LOCK SUITE_SHARD_NO_GROUPING SUITE_PART 2>/dev/null || true
 
 # SUITE_SPAWN_UNTIL=<text> starts ONE child with that section limit, says what a child of this run
 # inherits, and exits with the child's status. It is the seam that makes the paragraph above
@@ -1495,7 +1578,10 @@ fi
 # Only a top-level run locks. #27 runs the suite as a subprocess, and a nested run meeting its own
 # parent's lock would refuse, so every one of those checks would fail. Depth is what tells a
 # nested run from a competing one, which is why #34 had to land first.
-SUITE_LOCK="${SUITE_LOCK:-${TMPDIR:-/tmp}/claude-sync-suite.lock}"
+# Each part has a lock of its own (claude-config#3594, #3680): the runner starts the parts as
+# separate suites, side by side like any others, and one copy of each is still all this keeps out.
+_lk_half=""; [ "$SUITE_PART" = 1 ] || _lk_half="-part$SUITE_PART"
+SUITE_LOCK="${SUITE_LOCK:-${TMPDIR:-/tmp}/claude-sync-suite$_lk_half.lock}"
 SUITE_LOCK_HELD=""
 
 # ---- how long a run ASKED to wait for the lock waits (claude-config#1297) ----
@@ -2698,12 +2784,16 @@ suite_cpu_read(){   # sets SUITE_CPU_SECONDS to whole seconds, or to nothing
   SUITE_CPU_SECONDS="$_cs_tot"
 }
 
-if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_FILTERED:-}" ] && [ -z "${SUITE_SHARD:-}" ] && [ "$SUITE_JOBS" -gt 1 ]; then
+# A top level run fans out even to ONE shard (claude-config#3594): the shard selector is the only
+# thing that knows which part a section is in, so a run reading the file top to bottom would run
+# every part, and each of them is also its own suite. A fixture run replaces the sections and has
+# no parts, so it still runs in one process unless it asks for shards.
+if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_FILTERED:-}" ] && [ -z "${SUITE_SHARD:-}" ] && { [ "$SUITE_JOBS" -gt 1 ] || [ -z "${SUITE_FIXTURE_SECTIONS:-}" ]; }; then
   _fan_dir="$(mktemp -d "$SUITE_SCRATCH_HOME/claude-sync-suite-work.XXXXXXXX")"
   _fan_pids=""
   _fan_i=1
   while [ "$_fan_i" -le "$SUITE_JOBS" ]; do
-    SUITE_SHARD="$_fan_i/$SUITE_JOBS" SUITE_NO_LOCK=1 SUITE_DEPTH="$SUITE_DEPTH"       SCRIPT_SELF="$SCRIPT_SELF" SUITE_SECTION_MARK_SHARED="$SUITE_SECTION_MARK"       bash "$SCRIPT_SELF" > "$_fan_dir/$_fan_i.out" 2>&1 &
+    SUITE_SHARD="$_fan_i/$SUITE_JOBS" SUITE_PART="$SUITE_PART" SUITE_NO_LOCK=1 SUITE_DEPTH="$SUITE_DEPTH"       SCRIPT_SELF="$SCRIPT_SELF" SUITE_SECTION_MARK_SHARED="$SUITE_SECTION_MARK"       bash "$SCRIPT_SELF" > "$_fan_dir/$_fan_i.out" 2>&1 &
     _fan_pids="$_fan_pids $!"
     _fan_i=$((_fan_i + 1))
   done
@@ -2765,6 +2855,14 @@ if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_FILTERED:-}" ] && [ -z "${SUITE_SHA
     echo "test suite: $_fan_cov_say" >&2
     _fan_rc=1
   }
+  # And whether they covered THIS run's part (claude-config#3594). Shards that all dealt another
+  # part agree with each other perfectly, so the check above cannot see it, and one part's suite
+  # would pass while running another part's sections a second time.
+  _fan_other="$(cat "$_fan_dir"/*.out 2>/dev/null | grep '^SUITE-SHARD-COVERAGE ' | grep -v -c " part=$SUITE_PART\$")"
+  if [ "${_fan_other:-0}" -ne 0 ]; then
+    echo "FAIL: test suite: $_fan_other shard(s) dealt a part other than SUITE_PART=$SUITE_PART, so this run did not run the sections it reports on (claude-config#3594)." >&2
+    _fan_rc=1
+  fi
   # And how their checks divide up, so every section is counted once (#146). Read here, from the
   # same directory, before it goes.
   _fan_tot="$(fan_totals_over_dir "$_fan_dir" "$SUITE_JOBS")"; _fan_tot_rc=$?
@@ -12175,8 +12273,19 @@ check "#203 the fixture store was written for every section in the file ($(ls "$
 # At several shard counts, not one. The balance depends on how the biggest sections happen to fall
 # against the number of shards, so a count that happens to divide them evenly proves nothing about
 # the ones that do not (L147). These are the counts #151 already exercises.
+#
+# Dealt over EVERY section, from a copy of this file with no parts (claude-config#3680). What is
+# under test is the deal's arithmetic, and the real file deals one part, which since #3680 is a
+# fifth of the sections: at eight shards that is seven sections a shard, with two or three of the
+# fixture's 40 second ones among them, and no deal can balance that to a quarter of the mean (the
+# first run after the split, on 2026-11-25, read a spread of 20s against 7s allowed). The bound
+# was calibrated on the whole suite, so the whole suite is what it is held to (L220).
+ST_WHOLE="$WORK/claude-sync-one-part.sh"
+awk '/^SUITE_PARTS_FROM=\(/ { print "SUITE_PARTS_FROM=("; skip = 1; next } skip && /^\)/ { skip = 0 } !skip' "$SCRIPT_SELF" > "$ST_WHOLE"
+check "#3680 the copy the balance is dealt over has every section past the prelude in its one part" \
+  "SUITE_SHARD=1/1 SUITE_SHARD_COVERAGE_ONLY=1 SUITE_NO_LOCK=1 SUITE_SECTION_TIMINGS= SUITE_DEPTH=\"\$SUITE_CHILD_DEPTH\" SCRIPT_SELF=\"\$ST_WHOLE\" bash \"\$ST_WHOLE\" 2>&1 | grep -q \"^SUITE-SHARD-COVERAGE .* last=\$(grep -c '^section \"' \"\$SCRIPT_SELF\") \""
 for st_n in 2 4 8; do
-  st_out="$(SUITE_SHARD="1/$st_n" SUITE_SHARD_COVERAGE_ALL=1 SUITE_NO_LOCK=1 SUITE_SECTION_TIMINGS="$ST_FIX" SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)"
+  st_out="$(SUITE_SHARD="1/$st_n" SUITE_SHARD_COVERAGE_ALL=1 SUITE_NO_LOCK=1 SUITE_SECTION_TIMINGS="$ST_FIX" SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT_SELF="$ST_WHOLE" bash "$ST_WHOLE" 2>&1)"
   st_s="$(st_seconds "$st_out")"
   st_total=0
   for st_x in $st_s; do st_total=$(( st_total + st_x )); done
@@ -12224,6 +12333,190 @@ check "#203 an empty SUITE_SECTION_TIMINGS turns the record off and says so" \
   "case \"\$st_off\" in *'dealt by section count'*) true ;; *) false ;; esac"
 st_off_n="$(ls "$ST_OFF" 2>/dev/null | grep -c . | tr -d ' ')"
 check "#203 and with it off nothing is written anywhere" "[ \"\${st_off_n:-0}\" -eq 0 ]"
+
+section "== the suite is several parts, and between them they run every section once (claude-config#3594, #3680) =="
+# The parts are separate suites to the runner, this file and tests/test-claude-sync-part<k>.sh, each
+# of which runs this file with SUITE_PART=<k>. Each is budgeted, timed and dealt by its own cost, and
+# the harness, the prelude and every helper stay here, in one place. These checks read the real
+# selector through the coverage seam, which decides and runs nothing.
+_pt_cov(){   # _pt_cov <part> [suite file] -> the coverage line of one shard holding that whole part
+  SUITE_PART="$1" SUITE_SHARD=1/1 SUITE_SHARD_COVERAGE_ONLY=1 SUITE_NO_LOCK=1 SUITE_SECTION_TIMINGS= \
+    SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT_SELF="${2:-$SCRIPT_SELF}" bash "${2:-$SCRIPT_SELF}" 2>&1
+}
+_pt_field(){   # _pt_field <coverage output> <field> -> that field of its coverage line
+  printf '%s\n' "$1" | awk '/^SUITE-SHARD-COVERAGE / && !n++' | tr ' ' '\n' | sed -n "s/^$2=//p"
+}
+_pt_range(){ seq "$1" "$2" | tr '\n' ',' | sed 's/,$//'; }   # first last -> "first,...,last"
+_pt_list="$(SECTION_LIST=1 SUITE_NO_LOCK=1 SUITE_DEPTH="$SUITE_CHILD_DEPTH" bash "$SCRIPT_SELF" 2>/dev/null | grep -E '^[0-9]+[[:space:]]')"
+_pt_total="$(printf '%s\n' "$_pt_list" | grep -c .)"
+_pt_pend="$(printf '%s\n' "$_pt_list" | grep -n -F -- "$SUITE_PRELUDE_END" | cut -d: -f1)"
+_pt_dir="$(dirname "$SCRIPT_SELF")"
+# Every part's coverage, from the real file and from the runner's own copy of each part, which is
+# the one CI and every pull run.
+_pt_n="${SUITE_PART_COUNT:-0}"
+# The cut headings, read so that a file without them yields none rather than stopping the run.
+_pt_froms=(); [ -z "${SUITE_PARTS_FROM+x}" ] || _pt_froms=("${SUITE_PARTS_FROM[@]}")
+_pt_from(){   # _pt_from <part> -> the heading SUITE_PARTS_FROM names for that later part, or nothing
+  local _pf_i=$(( $1 - 2 ))
+  if [ "$_pf_i" -ge 0 ] && [ "$_pf_i" -lt "${#_pt_froms[@]}" ]; then printf '%s' "${_pt_froms[$_pf_i]}"; fi
+}
+_pt_first=(); _pt_last=(); _pt_secs=(); _pt_named=(); _pt_wfirst=(); _pt_wlast=(); _pt_wnamed=()
+_pt_k=1
+while [ "$_pt_k" -le "$_pt_n" ]; do
+  _pt_c="$(_pt_cov "$_pt_k")"
+  _pt_first[$_pt_k]="$(_pt_field "$_pt_c" first)"; _pt_last[$_pt_k]="$(_pt_field "$_pt_c" last)"
+  _pt_secs[$_pt_k]="$(_pt_field "$_pt_c" sections)"; _pt_named[$_pt_k]="$(_pt_field "$_pt_c" part)"
+  if [ "$_pt_k" -eq 1 ]; then _pt_wf="$SCRIPT_SELF"; else _pt_wf="$_pt_dir/test-claude-sync-part$_pt_k.sh"; fi
+  _pt_c="$(_pt_cov '' "$_pt_wf")"
+  _pt_wfirst[$_pt_k]="$(_pt_field "$_pt_c" first)"; _pt_wlast[$_pt_k]="$(_pt_field "$_pt_c" last)"
+  _pt_wnamed[$_pt_k]="$(_pt_field "$_pt_c" part)"
+  _pt_k=$(( _pt_k + 1 ))
+done
+check "#3680 the suite is more than two parts" "[ \"\$_pt_n\" -gt 2 ]"
+check "#3594 the first part starts after the prelude" "[ -n \"\$_pt_pend\" ] && [ \"\${_pt_first[1]:-}\" = \"\$(( _pt_pend + 1 ))\" ]"
+# Each verdict below is gathered over every part into one variable, so one check covers every
+# part whatever the count, and the parts that broke it are printed on the line above it. Each also
+# asks for more than one part, so a file with no parts cannot pass them over nothing.
+_pt_bad_start=""; _pt_bad_empty=""; _pt_bad_all=""; _pt_bad_name=""; _pt_bad_head=""; _pt_bad_wrap=""
+_pt_union=""
+_pt_k=1
+while [ "$_pt_k" -le "$_pt_n" ]; do
+  _pt_f="${_pt_first[$_pt_k]:-}"; _pt_l="${_pt_last[$_pt_k]:-}"
+  if [ "$_pt_k" -gt 1 ] && [ "$_pt_f" != "$(( ${_pt_last[$(( _pt_k - 1 ))]:-0} + 1 ))" ]; then _pt_bad_start="$_pt_bad_start $_pt_k"; fi
+  if [ -z "$_pt_f" ] || [ -z "$_pt_l" ] || [ "$_pt_l" -lt "$_pt_f" ]; then
+    _pt_bad_empty="$_pt_bad_empty $_pt_k"
+  elif [ "${_pt_secs[$_pt_k]:-}" != "$(_pt_range "$_pt_f" "$_pt_l")" ]; then
+    _pt_bad_all="$_pt_bad_all $_pt_k"
+  fi
+  [ "${_pt_named[$_pt_k]:-}" = "$_pt_k" ] || _pt_bad_name="$_pt_bad_name $_pt_k"
+  if [ "$_pt_k" -gt 1 ]; then
+    _pt_h="$(awk -v n="${_pt_f:-0}" 'NR == n' <<< "$_pt_list")"
+    _pt_want="$(_pt_from "$_pt_k")"
+    case "$_pt_h" in *"$_pt_want"*) [ -n "$_pt_want" ] || _pt_bad_head="$_pt_bad_head $_pt_k" ;; *) _pt_bad_head="$_pt_bad_head $_pt_k" ;; esac
+  fi
+  if [ "${_pt_wfirst[$_pt_k]:-}" != "$_pt_f" ] || [ "${_pt_wlast[$_pt_k]:-}" != "$_pt_l" ] || [ "${_pt_wnamed[$_pt_k]:-}" != "$_pt_k" ]; then
+    _pt_bad_wrap="$_pt_bad_wrap $_pt_k"
+  fi
+  _pt_union="$_pt_union,${_pt_secs[$_pt_k]:-}"
+  _pt_k=$(( _pt_k + 1 ))
+done
+[ -z "$_pt_bad_start" ] || echo "  parts or files that broke the next check:$_pt_bad_start"
+check "#3594 each part starts where the one before it ends" "[ \"\$_pt_n\" -gt 1 ] && [ -z \"\$_pt_bad_start\" ]"
+[ -z "$_pt_bad_empty" ] || echo "  parts or files that broke the next check:$_pt_bad_empty"
+check "#3594 and no part is empty" "[ \"\$_pt_n\" -gt 1 ] && [ -z \"\$_pt_bad_empty\" ]"
+check "#3594 the last part ends at the last section" "[ \"\${_pt_last[\$_pt_n]:-}\" = \"\$_pt_total\" ]"
+[ -z "$_pt_bad_all" ] || echo "  parts or files that broke the next check:$_pt_bad_all"
+check "#3594 each part's one shard runs every section of it" "[ \"\$_pt_n\" -gt 1 ] && [ -z \"\$_pt_bad_all\" ]"
+[ -z "$_pt_bad_name" ] || echo "  parts or files that broke the next check:$_pt_bad_name"
+check "#3594 each part's coverage line names its part" "[ \"\$_pt_n\" -gt 1 ] && [ -z \"\$_pt_bad_name\" ]"
+[ -z "$_pt_bad_head" ] || echo "  parts or files that broke the next check:$_pt_bad_head"
+check "#3594 each later part starts at the heading SUITE_PARTS_FROM names for it" "[ \"\$_pt_n\" -gt 1 ] && [ -z \"\$_pt_bad_head\" ]"
+# The whole question in one comparison: every section past the prelude, in exactly one part. A
+# section in no part, or in two, changes this list however the checks above were satisfied.
+check "#3680 between them the parts run every section past the prelude exactly once" \
+  "[ \"\${_pt_union#,}\" = \"\$(_pt_range \"\$(( _pt_pend + 1 ))\" \"\$_pt_total\")\" ]"
+[ -z "$_pt_bad_wrap" ] || echo "  parts or files that broke the next check:$_pt_bad_wrap"
+check "#3680 each part's own suite file runs that part" "[ \"\$_pt_n\" -gt 1 ] && [ -z \"\$_pt_bad_wrap\" ]"
+# And by its bare name from its own folder, which is how somebody standing in tests/ starts it: the
+# part file reads its number from its own name, and a name with no folder in front of it is the
+# shape a careless cut of that name gets wrong.
+_pt_bare="$(cd "$_pt_dir" && SUITE_SHARD=1/1 SUITE_SHARD_COVERAGE_ONLY=1 SUITE_NO_LOCK=1 SUITE_SECTION_TIMINGS= \
+  SUITE_DEPTH="$SUITE_CHILD_DEPTH" bash "test-claude-sync-part$_pt_n.sh" 2>&1)"
+check "#3680 the last part's file run by its bare name from its own folder runs that part" \
+  "[ \"\$_pt_n\" -gt 1 ] && [ \"\$(_pt_field \"\$_pt_bare\" part)\" = \"\$_pt_n\" ] && [ \"\$(_pt_field \"\$_pt_bare\" first)\" = \"\${_pt_first[\$_pt_n]:-}\" ]"
+# A suite file for a part that does not exist would fail by itself, but one MISSING is silent: its
+# sections would simply never run anywhere. So the files on disk are counted against the parts.
+_pt_files="$(cd "$_pt_dir" && ls test-claude-sync-part*.sh 2>/dev/null | sort | tr '\n' ' ')"
+_pt_want_files="$(_pt_k=2; while [ "$_pt_k" -le "$_pt_n" ]; do printf 'test-claude-sync-part%s.sh\n' "$_pt_k"; _pt_k=$(( _pt_k + 1 )); done | sort | tr '\n' ' ')"
+check "#3680 there is one suite file for each later part, and none for a part that does not exist" \
+  "[ -n \"\$_pt_want_files\" ] && [ \"\$_pt_files\" = \"\$_pt_want_files\" ]"
+# One implementation: the part files differ only in their names, which is where each reads its
+# number from, so a fix made to one cannot be missed in the others.
+_pt_diff=""
+for _pt_wf in "$_pt_dir"/test-claude-sync-part*.sh; do
+  cmp -s "$_pt_wf" "$_pt_dir/test-claude-sync-part2.sh" || _pt_diff="$_pt_diff ${_pt_wf##*/}"
+done
+[ -z "$_pt_diff" ] || echo "  parts or files that broke the next check:$_pt_diff"
+check "#3680 every part's suite file is the same file" "[ \"\$_pt_n\" -gt 1 ] && [ -z \"\$_pt_diff\" ]"
+# The CI step that checks the sync suite divided its own work looks for it in the deal by FILE
+# NAME (.github/workflows/tests.yml). Naming only the first part's file, it would pass a CI part
+# holding only a later part as having nothing to divide, so every part's file is put through that
+# step's own match here (#3680).
+_pt_ci="$(grep -F 'test-claude-sync' "$(dirname "$_pt_dir")/.github/workflows/tests.yml" 2>/dev/null | grep -m1 -F 'deal.tsv' | sed -n "s/.*-v p=\"\$HOOK_TESTS_PART\" '\([^']*\)'.*/\1/p")"
+_pt_ci_miss=""
+_pt_k=1
+while [ "$_pt_k" -le "$_pt_n" ]; do
+  if [ "$_pt_k" -eq 1 ]; then _pt_wf="tests/test-claude-sync.sh"; else _pt_wf="tests/test-claude-sync-part$_pt_k.sh"; fi
+  printf '%s\t%s\t1\tmeasured\n' "$_pt_k" "$_pt_wf" > "$WORK/claude-sync-ci-deal.tsv"
+  awk -F'\t' -v p="$_pt_k" "$_pt_ci" "$WORK/claude-sync-ci-deal.tsv" 2>/dev/null || _pt_ci_miss="$_pt_ci_miss $_pt_k"
+  _pt_k=$(( _pt_k + 1 ))
+done
+rm -f "$WORK/claude-sync-ci-deal.tsv"
+[ -z "$_pt_ci_miss" ] || echo "  parts or files that broke the next check:$_pt_ci_miss"
+check "#3680 the CI step that checks the sync suite divided its work recognises every part's file" \
+  "[ -n \"\$_pt_ci\" ] && [ \"\$_pt_n\" -gt 1 ] && [ -z \"\$_pt_ci_miss\" ]"
+_pt_none="$(SUITE_PART= SUITE_SHARD=1/1 SUITE_SHARD_COVERAGE_ONLY=1 SUITE_NO_LOCK=1 SUITE_SECTION_TIMINGS= \
+  SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)"
+check "#3594 a run naming no part is the first part" "[ \"\$(_pt_field \"\$_pt_none\" first)\" = \"\${_pt_first[1]:-}\" ] && [ \"\$(_pt_field \"\$_pt_none\" last)\" = \"\${_pt_last[1]:-}\" ]"
+_pt_bad="$(_pt_cov "$(( _pt_n + 1 ))")"; _pt_bad_rc=$?
+check "#3594 a part that does not exist is refused" "[ \"\$_pt_bad_rc\" -eq 2 ] && grep -q \"SUITE_PART='\$(( _pt_n + 1 ))'\" <<< \"\$_pt_bad\""
+check "#3594 and the refusal decides nothing" "! grep -q '^SUITE-SHARD-COVERAGE ' <<< \"\$_pt_bad\""
+_pt_zero="$(_pt_cov 0)"; _pt_zero_rc=$?
+_pt_word="$(_pt_cov two)"; _pt_word_rc=$?
+check "#3680 part 0 and a part named by a word are refused too" \
+  "[ \"\$_pt_zero_rc\" -eq 2 ] && [ \"\$_pt_word_rc\" -eq 2 ] && ! grep -q '^SUITE-SHARD-COVERAGE ' <<< \"\$_pt_zero\$_pt_word\""
+# A section in a later part that needs one in an earlier part would run that one twice, once in
+# each suite, so the selector refuses it rather than borrowing across the cut. The last part's
+# first section is made to need the first part's first section.
+_pt_cross="$WORK/claude-sync-cross-part.sh"
+_pt_needed="$(awk -v n="$(( _pt_pend + 1 ))" -F'\t' 'NR == n { print $2 }' <<< "$_pt_list")"
+_pt_needed="${_pt_needed#== }"; _pt_needed="${_pt_needed% ==}"
+awk -v from="$(_pt_from "$_pt_n")" -v need="$_pt_needed" '{ print } index($0, "section \"") == 1 && index($0, from) { print "# needs: " need }' \
+  "$SCRIPT_SELF" > "$_pt_cross"
+_pt_xout="$(_pt_cov "$_pt_n" "$_pt_cross")"; _pt_xrc=$?
+check "#3594 a later part's section needing an earlier part's one is refused" \
+  "[ \"\$_pt_xrc\" -eq 2 ] && grep -q 'another part' <<< \"\$_pt_xout\""
+check "#3594 and the copy it was refused in did carry that declaration" "[ -n \"\$_pt_needed\" ] && [ \"\$(grep -c -F -x -- \"# needs: \$_pt_needed\" \"\$_pt_cross\")\" = 1 ]"
+rm -f "$_pt_cross"
+# A copy without any cut, which is what the probe shards build: all of it is the first part, and
+# every later part refuses rather than passing over nothing.
+_pt_nocut="$WORK/claude-sync-no-cut.sh"
+cp "$SCRIPT_SELF" "$_pt_nocut"
+for _pt_cut in ${_pt_froms[@]+"${_pt_froms[@]}"}; do
+  awk -v from="$_pt_cut" '!(index($0, "section \"") == 1 && index($0, from))' "$_pt_nocut" > "$_pt_nocut.next" && mv "$_pt_nocut.next" "$_pt_nocut"
+done
+_pt_nc1="$(_pt_cov 1 "$_pt_nocut")"
+_pt_nc_refused=0
+_pt_k=2
+while [ "$_pt_k" -le "$_pt_n" ]; do
+  _pt_c="$(_pt_cov "$_pt_k" "$_pt_nocut")"; _pt_crc=$?
+  if [ "$_pt_crc" -eq 2 ] && grep -q 'holds no sections' <<< "$_pt_c" && ! grep -q '^SUITE-SHARD-COVERAGE ' <<< "$_pt_c"; then
+    _pt_nc_refused=$(( _pt_nc_refused + 1 ))
+  fi
+  _pt_k=$(( _pt_k + 1 ))
+done
+check "#3594 a copy with no cut is all first part" "[ \"\$(_pt_field \"\$_pt_nc1\" last)\" = \"\$(( _pt_total - _pt_n + 1 ))\" ]"
+check "#3594 and every later part of it is refused as empty" "[ \"\$_pt_nc_refused\" -eq \"\$(( _pt_n - 1 ))\" ]"
+rm -f "$_pt_nocut"
+# A heading renamed in the real file, which is a cut going missing: that part is refused, and the
+# part before it takes its sections, so between them the parts still run every one of them.
+_pt_gone="$WORK/claude-sync-cut-gone.sh"
+awk -v from="$(_pt_from 2)" 'index($0, "section \"") == 1 && (i = index($0, from)) { $0 = substr($0, 1, i - 1) "a heading renamed since (#3680)" substr($0, i + length(from)) } { print }' "$SCRIPT_SELF" > "$_pt_gone"
+_pt_g1="$(_pt_cov 1 "$_pt_gone")"
+_pt_g2="$(_pt_cov 2 "$_pt_gone")"; _pt_g2rc=$?
+_pt_g3="$(_pt_cov 3 "$_pt_gone")"
+check "#3680 a later part whose heading went is refused, never passed over nothing" \
+  "[ \"\$_pt_g2rc\" -eq 2 ] && grep -q 'holds no sections' <<< \"\$_pt_g2\""
+check "#3680 and the part before it runs that part's sections, so none is left out" \
+  "[ \"\$(_pt_field \"\$_pt_g1\" first)\" = \"\${_pt_first[1]:-}\" ] && [ \"\$(_pt_field \"\$_pt_g1\" last)\" = \"\${_pt_last[2]:-}\" ] && [ \"\$(_pt_field \"\$_pt_g3\" first)\" = \"\${_pt_first[3]:-}\" ]"
+rm -f "$_pt_gone"
+# A section added later lands in the part whose range it falls in, and in no other.
+_pt_added="$WORK/claude-sync-section-added.sh"
+awk -v from="$(_pt_from 3)" 'index($0, "section \"") == 1 && index($0, from) && !d { print "section \"== zzz a section added later (#3680) ==\""; print "check \"zzz the added section ran\" \"true\""; d = 1 } { print }' "$SCRIPT_SELF" > "$_pt_added"
+_pt_a2="$(_pt_cov 2 "$_pt_added")"; _pt_a3="$(_pt_cov 3 "$_pt_added")"
+check "#3680 a section added later lands in the part it falls in" \
+  "[ \"\$(_pt_field \"\$_pt_a2\" last)\" = \"\$(( \${_pt_last[2]:-0} + 1 ))\" ] && [ \"\$(_pt_field \"\$_pt_a3\" first)\" = \"\$(( \${_pt_first[3]:-0} + 1 ))\" ]"
+rm -f "$_pt_added"
 
 section "== the runner says how much of the machine this suite may take (#136) =="
 # The runner starts several suites at once and this one splits itself into shards, and the two

@@ -27,6 +27,12 @@
 # Plan, claude-code-guide, statusline-setup, plan-*). A fork is never refused: it ignores `model`
 # and runs on the session's own model, so asking it for one cannot be satisfied.
 #
+# THE BUILDER AGENT TYPE (claude-config#3389). A dispatch of the agent type named builder is a
+# builder by its type alone, with or without a worktree or a session line, and counts toward the
+# session being an orchestrating one. The type sets no model of its own (test-builder-type.sh holds
+# it to that), so a builder typed dispatch naming none would run on the session default exactly as
+# a general-purpose one does. This only adds refusals: nothing refused before is let through.
+#
 # Fails OPEN on a payload it cannot read, loudly, through a systemMessage (lib/hook-notice.sh):
 # Claude Code discards a PreToolUse hook's stderr on exit 0 (#1906).
 
@@ -45,6 +51,7 @@ import json, sys
 sys.stdout.reconfigure(errors="replace")
 ORCHESTRATING = 2  # earlier builder dispatches in this session that make it an orchestrating one
 RO = ("Explore", "Plan", "claude-code-guide", "statusline-setup")
+BUILDER_TYPE = "builder"  # the agent type skills/orchestrate/render-builder-type.py renders
 def is_builder(inp):
     t = inp.get("subagent_type") or ""
     p = inp.get("prompt") or ""
@@ -52,6 +59,8 @@ def is_builder(inp):
         return False
     if t == "fork" or t in RO or t.startswith("plan-"):
         return False
+    if t == BUILDER_TYPE:
+        return True
     return inp.get("isolation") == "worktree" or "Claude-Session:" in p
 try:
     d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
@@ -119,7 +128,7 @@ print("refuse" if earlier >= ORCHESTRATING else "allow")
 case "$verdict" in
   allow) exit 0 ;;
   refuse)
-    echo "REFUSED: this builder dispatch names no model, so it would run on the session default with nothing said (claude-config#2027). Set model on the Agent call by the kind of task: \"sonnet\" only for work that needs no judgement (a rename or move that changes no behaviour, a comment or wording fix, tests for code that already exists); \"fable\" for design, security and compliance work; \"opus\" for everything else, a review fix that changes logic or behaviour included. The rule is in \"Which model a builder runs on\" in ~/.claude/skills/orchestrate/SKILL.md. To use another model for one brief, suggest it to Dan with the reason first." >&2
+    echo "REFUSED: this builder dispatch names no model, so it would run on the session default with nothing said (claude-config#2027). Set model on the Agent call by the kind of task: \"sonnet\" only for work that needs no judgement (a rename or move that changes no behaviour, a comment or wording fix, tests for code that already exists); \"fable\" for a change to what a design, security or compliance control decides or shows, and reviews of one; \"opus\" for everything else, a review fix that changes logic or behaviour included, and follow on work on such an item that changes neither (a red check, a flake, finishing a merge). The rule is in \"Which model a builder runs on\" in ~/.claude/skills/orchestrate/SKILL.md. To use another model for one brief, suggest it to Dan with the reason first." >&2
     exit 2
     ;;
   unreadable$'\t'*)
