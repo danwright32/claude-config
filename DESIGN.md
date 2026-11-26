@@ -1793,7 +1793,12 @@ its arguments at run time), so the rule moved to where every gh call passes: `ho
 named gh, which `gh-guard-path.sh` puts first on PATH at SessionStart by writing an export to
 `CLAUDE_ENV_FILE`. Measured on Claude Code 2.1.318 before building: that export is first on PATH for
 every Bash command, inside a subagent's too, while a mod's bin folder is appended last and so can
-never shadow gh. The guard runs the same module (`--gh <real> -- <args>`), so the rule has one
+never shadow gh. The hook runs at every SessionStart of a session (a start, a resume, a clear, a
+compaction) against the same env file, so it writes the export only when the file does not already
+hold that exact line; before that, one shell read on 2026-11-25 carried it 33 times (one sample,
+#3619). A file it cannot read
+gets the line as before, so the check never leaves a session without the guard, and an older line
+naming another guard folder is kept, with the newer one written after it. The guard runs the same module (`--gh <real> -- <args>`), so the rule has one
 implementation; it refuses with exit 1, withholding the name it matched because a script's error
 output can land in a log, and otherwise execs the real gh, its exit code and its standard input
 unchanged (a body piped in is copied to a temporary file, judged, and handed on). Any exception
