@@ -916,8 +916,8 @@ has "a refused commit never sent again, by a session that finished nothing after
   "Refused with no verdict at 11:52 PM ET and not sent again unchanged, and its session finished no work after it: Bash: git commit -F msg.txt" "$pf"
 has "and so is a refused file write (#3158, #3223)" \
   "Refused with no verdict at 11:55 PM ET and not sent again unchanged, and its session finished no work after it: Write: /r/repo/notes.txt" "$pf"
-check_eq "a real refusal by the check is listed on its own as before, however many share its reason (#3158)" 3 \
-  "$(printf '%s\n' "$pf" | grep -c -x -F 'Failed a repo not named: the auto mode classifier refused Bash: [Git Destructive]')"
+check_eq "a real refusal by the check is listed on its own as before, however many share its reason, naming the command (#3158, #3210)" 3 \
+  "$(printf '%s\n' "$pf" | grep -c -x -F "Refused by auto mode's safety check at 11:47 PM ET ([Git Destructive]), the issue it was for not recorded (its session held no claim then): Bash: git reset --hard")"
 check_eq "the section is the folded line, the two not done and the three real refusals, nothing else (#3158)" 6 "$(printf '%s\n' "$pf" | grep -c .)"
 lacks "a read is never listed on its own (#3158)" "git status" "$pf"
 lacks "a call sent again unchanged that ran is never listed on its own (#3158)" "git add a.txt" "$pf"
@@ -935,8 +935,8 @@ record g32 '["aaaa1111"]' "$SLEEPDIR/ended/g32.json"
 } > "$SLEEPDIR/notes/g32.jsonl"
 NOW=$(fold_at 30) py render --record "$SLEEPDIR/ended/g32.json" >/dev/null 2>&1
 pf="$(section_rows "$(report_of g32)" 'Parked and failed')"
-check_eq "two refusals with no verdict are two rows, as before (#3158)" 2 \
-  "$(printf '%s\n' "$pf" | grep -c -x -F 'Failed a repo not named: the auto mode classifier refused Bash: Classifier unavailable')"
+check_eq "two refusals with no verdict are two rows, as before, each naming its command (#3158, #3210)" 2 \
+  "$(printf '%s\n' "$pf" | grep -c -E "^Refused by auto mode's safety check at 11:4[34] PM ET \(Classifier unavailable\), the issue it was for not recorded \(its session held no claim then\): Bash: git (status|commit -F msg.txt)$")"
 check_eq "and nothing else (#3158)" 2 "$(printf '%s\n' "$pf" | grep -c .)"
 
 # A note written before the mod recorded the reason (no noVerdict) is never folded, however many (#3158).
@@ -946,8 +946,8 @@ for m in 1 2 3 4; do
   printf '{"v":1,"kind":"failed","at":%s,"by":"aaaa1111","cwd":"/r/repo","tool":"Bash","text":"the auto mode classifier refused Bash: Classifier unavailable","generation":"g33"}\n' "$(fold_at "$m")"
 done > "$SLEEPDIR/notes/g33.jsonl"
 NOW=$(fold_at 30) py render --record "$SLEEPDIR/ended/g33.json" >/dev/null 2>&1
-check_eq "older refusal notes, with nothing to say whether each was done, are each still listed (#3158)" 4 \
-  "$(section_rows "$(report_of g33)" 'Parked and failed' | grep -c 'Failed a repo not named: the auto mode classifier refused Bash: Classifier unavailable')"
+check_eq "older refusal notes, with nothing to say whether each was done, are each still listed, the reason read from their text and the command said not recorded (#3158, #3210)" 4 \
+  "$(section_rows "$(report_of g33)" 'Parked and failed' | grep -c -E "^Refused by auto mode's safety check at 11:4[3-6] PM ET \(Classifier unavailable\), the issue it was for not recorded \(its session held no claim then\): Bash: what it was not recorded$")"
 
 # ---- an outage is one entry naming the work it fell on; a refusal is listed only when it stopped work (#3223) ----
 # On the night of 17 Nov 2026 one overnight session's report listed 157 "Classifier unavailable"
@@ -998,8 +998,8 @@ has "a refusal whose issue was parked after it stopped work, so it is listed on 
   "Refused with no verdict at 11:50 PM ET and not sent again unchanged, while o/r#12 was being worked and not finished after it: Bash: git push origin fix/12" "$pf"
 has "a refusal by a session holding two issues, one of them not finished after it, is listed on its own (#3223)" \
   "Refused with no verdict at 11:45 PM ET and not sent again unchanged, while o/r#13 and #14 were being worked, not all finished after it: Bash: git add b.txt" "$pf"
-check_eq "an ordinary single refusal that stopped work is still its own row (#3223)" 1 \
-  "$(printf '%s\n' "$pf" | grep -c -x -F 'Failed a repo not named: the auto mode classifier refused Bash: Auto mode classifier gave no verdict for this command')"
+check_eq "an ordinary single refusal that stopped work is still its own row, naming its command and the issue its session held (#3223, #3210)" 1 \
+  "$(printf '%s\n' "$pf" | grep -c -x -F "Refused by auto mode's safety check at 11:51 PM ET (Auto mode classifier gave no verdict for this command), while o/r#12 was being worked: Bash: gh pr create --fill")"
 check_eq "the section is the outage, the two that stopped work, the single refusal and the two parks, nothing else (#3223)" 6 "$(printf '%s\n' "$pf" | grep -c .)"
 check_eq "the morning picker gets the same rows (#3223)" "$pf" \
   "$(needs_rows "$SLEEPDIR/notes/g34.needs.json" | sed -n 's/^parked|[^|]*|[^|]*|//p')"
@@ -1022,8 +1022,63 @@ NOW=$(fold_at 30) py render --record "$SLEEPDIR/ended/g37.json" >/dev/null 2>&1
 pf="$(section_rows "$(report_of g37)" 'Parked and failed')"
 has "control: the refusal naming no session is in the report (#3280)" "git add e.txt" "$pf"
 lacks "a refusal naming no session is never said to have held another unnamed note's claim (#3280)" "o/r#41" "$pf"
-has "and is said to belong to work that did not carry on (#3280)" \
-  "and its session finished no work after it: Bash: git add e.txt" "$pf"
+has "and its session is said not recorded, never said to have finished no work, which nothing measured (#3280, #3210)" \
+  "and not sent again unchanged, by a session not recorded, so whether its work went on is not known: Bash: git add e.txt" "$pf"
+
+# ---- every listed refusal names its command and the work it fell on; nothing is dropped by the fold (#3210) ----
+# On 2026-11-18 a wake message listed 45 rows reading "Failed a repo not named: the auto mode
+# classifier refused Bash: Classifier unavailable": no command, no issue, and a repository the
+# refusal note never records (the scope modes mod's refusalNote writes tool, reason, what, by and
+# cwd, never repo or issue). A refusal listed on its own now names its time, its reason, the call
+# and the issues its session held, and says "not recorded" for each of those the record lacks.
+# dddd4444 holds o/r#51; eeee5555 claims nothing and notes progress; one refusal names no session.
+G=g38
+record g38 '["dddd4444","eeee5555"]' "$SLEEPDIR/ended/g38.json"
+NV='Auto mode classifier gave no verdict for this command'
+{
+  work claim dddd4444 0 51 ',"attempts":1'
+  printf '{"v":1,"kind":"failed","at":%s,"by":"dddd4444","cwd":"/r/repo","tool":"Bash","text":"the auto mode classifier refused Bash: [Git Destructive]","reason":"[Git Destructive]","toolUseId":"x1","what":"git reset --hard origin/main","generation":"g38"}\n' "$(fold_at 1)"
+  printf '{"v":1,"kind":"failed","at":%s,"by":"eeee5555","cwd":"/r/repo","tool":"Bash","text":"the auto mode classifier refused Bash: [Data Exfiltration]","reason":"[Data Exfiltration]","toolUseId":"x2","what":"","generation":"g38"}\n' "$(fold_at 2)"
+  nvs dddd4444 3 x3 Bash 'git push origin fix/51' "$NV" ''
+  nvs eeee5555 4 x4 Bash 'npm test' "$NV" ''
+  nvs dddd4444 5 x5 Bash 'git status' "$CU" ',"read":true'
+  nvs dddd4444 6 x6 Bash 'git diff' "$CU" ',"read":true'
+  nvs dddd4444 7 x7 Bash 'git add f.txt' "$CU" ''
+  printf '{"v":1,"kind":"redone","at":%s,"by":"dddd4444","tool":"Bash","redoes":["x7"],"text":"Bash ran after its refusal: git add f.txt","generation":"g38"}\n' "$(fold_at 8)"
+  nvs eeee5555 9 x9 Bash 'mkdir out' "$CU" ''
+  nvs dddd4444 10 x10 Bash 'git commit -F m.txt' "$CU" ''
+  printf '{"v":1,"kind":"failed","at":%s,"cwd":"/r/repo","tool":"Bash","text":"the auto mode classifier refused Bash: %s","reason":"%s","noVerdict":true,"toolUseId":"x11","what":"git add g.txt","generation":"g38"}\n' "$(fold_at 11)" "$CU" "$CU"
+  nvs dddd4444 12 x12 Write '' "$CU" ''
+  work parked dddd4444 15 51 ',"text":"two attempts"'
+  printf '{"v":1,"kind":"progress","at":%s,"by":"eeee5555","text":"the suite passes","generation":"g38"}\n' "$(fold_at 20)"
+} > "$SLEEPDIR/notes/g38.jsonl"
+NOW=$(fold_at 30) py render --record "$SLEEPDIR/ended/g38.json" >/dev/null 2>&1
+pf="$(section_rows "$(report_of g38)" 'Parked and failed')"
+has "a refusal with a verdict names its time, reason, command and the issue its session held (#3210)" \
+  "Refused by auto mode's safety check at 11:43 PM ET ([Git Destructive]), while o/r#51 was being worked: Bash: git reset --hard origin/main" "$pf"
+has "a refusal whose command and issue the record lacks says each is not recorded (#3210)" \
+  "Refused by auto mode's safety check at 11:44 PM ET ([Data Exfiltration]), the issue it was for not recorded (its session held no claim then): Bash: what it was not recorded" "$pf"
+has "a refusal with no verdict in a group too small to fold names its command and issue (#3210)" \
+  "Refused by auto mode's safety check at 11:45 PM ET ($NV), while o/r#51 was being worked: Bash: git push origin fix/51" "$pf"
+has "a refusal inside a fold whose call the record lacks says so (#3210)" \
+  "Refused with no verdict at 11:54 PM ET and not sent again unchanged, while o/r#51 was being worked and not finished after it: Write: what it was not recorded" "$pf"
+lacks "no refusal row says a repository is not named: a refusal note never records one (#3210)" "a repo not named" "$pf"
+lacks "no refusal row is the classifier's bare text (#3210)" "the auto mode classifier refused" "$pf"
+lacks "no line claims no work was dropped, which no note measures (#3210)" "no work was dropped" "$pf"
+# The sum: the folded line's count plus every refusal listed outside a fold is every refusal in the
+# record, and the folded line's parts plus the refusals listed under it are its count.
+total="$(grep -c '"kind":"failed"' "$SLEEPDIR/notes/g38.jsonl")"
+fline="$(printf '%s\n' "$pf" | grep -E '^[0-9]+ calls were refused because')"
+fn="$(printf '%s\n' "$fline" | sed -n -E 's/^([0-9]+) calls were refused.*/\1/p')"
+part(){ local v; v="$(printf '%s\n' "$fline" | sed -n -E "s/.*[^0-9]([0-9]+) $1.*/\\1/p")"; echo "${v:-0}"; }
+alone="$(printf '%s\n' "$pf" | grep -c "^Refused by auto mode's safety check at ")"
+under="$(printf '%s\n' "$pf" | grep -c '^Refused with no verdict at ')"
+check_eq "control: the record holds eleven refusals (#3210)" 11 "$total"
+check_eq "the folded line's count plus the refusals listed outside it is every refusal in the record (#3210)" "$total" "$(( ${fn:-0} + alone ))"
+check_eq "the folded line's parts plus the refusals listed under it are its count (#3210)" "${fn:-none}" \
+  "$(( $(part 'only read') + $(part '(was|were) sent again') + $(part '(was|were) followed by') + under ))"
+check_eq "the morning picker gets the same rows (#3210)" "$pf" \
+  "$(needs_rows "$SLEEPDIR/notes/g38.needs.json" | sed -n 's/^parked|[^|]*|[^|]*|//p')"
 
 # ---- a park on the clock does not outlast a done note (#3276) ----
 # On the night of 2026-11-18 one session held up to five claims at once and noted each finished
@@ -1119,11 +1174,11 @@ check_eq "every row the wake check writes leads with a kind it decided on (#3273
 # ---- where the writes landed ----
 # The stamp is proved present in what this suite wrote before its absence from the real Downloads is
 # read as evidence (L375): a stamp that had stopped reaching the report would pass the check below.
-check_eq "every report this suite wrote carries its stamp" 20 "$(grep -l -F -- "$STAMP" "$DL"/* 2>/dev/null | wc -l | tr -d ' ')"
+check_eq "every report this suite wrote carries its stamp" 21 "$(grep -l -F -- "$STAMP" "$DL"/* 2>/dev/null | wc -l | tr -d ' ')"
 leaked="$(find "$REAL_DOWNLOADS" -maxdepth 1 -type f -newer "$WORK/began" -size -1024k -exec grep -l -F -- "$STAMP" {} + 2>/dev/null)"
 check_eq "the real Downloads gained nothing this suite wrote" "" "$leaked"
 # Named "Sleep report <night>.md" (Dan, decision 4), a space in the name, so listed one a line.
-check_eq "every report landed in the suite's own Downloads" "Sleep report g1.md|Sleep report g11.md|Sleep report g12.md|Sleep report g13.md|Sleep report g14.md|Sleep report g15.md|Sleep report g2.md|Sleep report g3.md|Sleep report g31.md|Sleep report g32.md|Sleep report g33.md|Sleep report g34.md|Sleep report g35.md|Sleep report g36.md|Sleep report g37.md|Sleep report g5.md|Sleep report g6.md|Sleep report g7.md|Sleep report g8.md|Sleep report g9.md" "$(ls "$DL" | tr '\n' '|' | sed 's/|$//')"
+check_eq "every report landed in the suite's own Downloads" "Sleep report g1.md|Sleep report g11.md|Sleep report g12.md|Sleep report g13.md|Sleep report g14.md|Sleep report g15.md|Sleep report g2.md|Sleep report g3.md|Sleep report g31.md|Sleep report g32.md|Sleep report g33.md|Sleep report g34.md|Sleep report g35.md|Sleep report g36.md|Sleep report g37.md|Sleep report g38.md|Sleep report g5.md|Sleep report g6.md|Sleep report g7.md|Sleep report g8.md|Sleep report g9.md" "$(ls "$DL" | tr '\n' '|' | sed 's/|$//')"
 
 echo
 echo "passed: $pass, failed: $fail"
