@@ -238,24 +238,35 @@ REAL_GIT="$(command -v git)"
 mkdir -p "$WORK/gitbin"
 cat > "$WORK/gitbin/git" <<'SH'
 #!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FAKE_GIT_CALLS"
 if [ -n "${FAKE_GIT_SILENT:-}" ]; then
   for a in "$@"; do [ "$a" = "$FAKE_GIT_SILENT" ] && exec sleep 8; done
 fi
 exec "$FAKE_REAL_GIT" "$@"
 SH
 chmod +x "$WORK/gitbin/git"
+GITCALLS="$WORK/git-calls"
 silent(){   # $1 = the word of the git call that does not answer, $2 = the folder the session starts in
-  FAKE_GIT_SILENT="$1" FAKE_REAL_GIT="$REAL_GIT" EXPECTED_VISIBILITY_GIT_SECONDS=1 BIN="$BIN:$WORK/gitbin" start "$2"
+  : > "$GITCALLS"
+  FAKE_GIT_SILENT="$1" FAKE_REAL_GIT="$REAL_GIT" FAKE_GIT_CALLS="$GITCALLS" EXPECTED_VISIBILITY_GIT_SECONDS=1 BIN="$BIN:$WORK/gitbin" start "$2"
 }
 answer PRIVATE
 silent no-such-word "$WORK/notes"
 check "(control) through the stand in git, with every call answered, the notice is given: $out" has "$out" "danwright-test/notes is PRIVATE"
+check "(control) and the origin was asked for" grep -q 'get-url' "$GITCALLS"
 silent get-url "$WORK/notes"
 cannot "git not answering for the origin"
 check "git not answering for the origin: it says git did not answer, not that there is no origin: $out" has "$out" "git did not answer"
 silent show "$WORK/behind"
 cannot "git not answering for origin's copy of the file"
 check "git not answering for origin's copy of the file: it says git did not answer: $out" has "$out" "git did not answer"
+# One bound covers every git read of one start, so two calls that do not answer cannot together
+# outlast the hook's own timeout and leave a session with no line at all, which reads as checked
+# and as expected (the lessons review of cce2f6f). Judged by the calls made, never by the clock:
+# once the read of origin's copy has used the whole bound, the origin is not asked for.
+check "(control) the read that did not answer was made" grep -q 'show' "$GITCALLS"
+check "one bound covers every read: after origin's copy used it all, git is not asked for the origin" \
+  bash -c '! grep -q "get-url" "$1"' _ "$GITCALLS"
 # One reader for the notice and the publish gate, so the two cannot come to read the file
 # differently: neither holds a reading of its own.
 check "the notice reads the expectation through lib/expected-visibility.py" grep -q 'lib/expected-visibility.py' "$HOOK"

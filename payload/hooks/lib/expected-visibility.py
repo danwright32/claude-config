@@ -41,6 +41,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 sys.dont_write_bytecode = True
 
@@ -50,13 +51,17 @@ NONE, STATED, UNREADABLE, UNKNOWN, SILENT = "none", "stated", "unreadable", "unk
 ORIGIN_OK, ORIGIN_NONE, ORIGIN_UNREAD, ORIGIN_SILENT = "ok", "none", "unread", "silent"
 REFS = ("refs/remotes/origin/HEAD", "refs/remotes/origin/main", "refs/remotes/origin/master")
 NOT_ONE_OF = "the first line of its %s that is not a comment is not public, private or internal" % PATH
-# Each git read's bound, a setting, not a measurement: the reads took 0.020 to 0.023 seconds together
-# over five runs on the personal MacBook on 2026-11-26, at a load average near 40. A read that
-# outlasts it, or a git that cannot be run, is SILENT, never no checkout, no origin or no file: each
-# of those would send the publish gate to GitHub's copy in the place of this checkout's own, which
-# can say what GitHub's does not (the lessons review of 3a7131c). EXPECTED_VISIBILITY_GIT_SECONDS
-# replaces the bound for the suites, and is read only under HOOK_TESTS_RUNNING=1.
-GIT_SECONDS = 5
+# One bound for every git read of one checkout() call together, a setting, not a measurement: the
+# reads took 0.020 to 0.023 seconds together over five runs on the personal MacBook on 2026-11-26,
+# at a load average near 40. It is one bound and not one per read so that the notice, whose hook
+# has a 10 second timeout and then asks GitHub for up to 4, still gets to say it could not tell: cut
+# off by that timeout it would say nothing, which reads as checked and as expected (the lessons
+# review of cce2f6f). A read that outlasts it, one not made because the time had passed, and a git
+# that cannot be run are SILENT, never no checkout, no origin or no file: each of those would send
+# the publish gate to GitHub's copy in the place of this checkout's own, which can say what
+# GitHub's does not (the lessons review of 3a7131c). EXPECTED_VISIBILITY_GIT_SECONDS replaces the
+# bound for the suites, and is read only under HOOK_TESTS_RUNNING=1.
+GIT_SECONDS = 4
 
 _COMMENT = re.compile(r"[ \t\r\f\v]*#")
 _FIELDS = re.compile(r"[ \t]+")
@@ -112,10 +117,14 @@ def _bound():
     return GIT_SECONDS
 
 
-def _git(top, *args):
-    """-> (exit code, stdout as text), or (None, "") when git could not be run or did not answer."""
+def _git(top, ends, *args):
+    """-> (exit code, stdout as text), or (None, "") when git could not be run, did not answer
+    before ends (a time.monotonic() reading), or was not asked because that time had passed."""
+    left = ends - time.monotonic()
+    if left <= 0:
+        return None, ""
     try:
-        p = subprocess.run(["git", "-C", top] + list(args), capture_output=True, timeout=_bound())
+        p = subprocess.run(["git", "-C", top] + list(args), capture_output=True, timeout=left)
     except (OSError, subprocess.SubprocessError):
         return None, ""
     return p.returncode, p.stdout.decode("utf-8", "replace")
@@ -132,7 +141,8 @@ def _stated(co, text):
 def checkout(folder):
     """The declaration and the origin of the git checkout folder is in, or None when git says it is
     in none. When git does not answer that first question the Checkout has no top and is SILENT."""
-    rc, out = _git(folder or os.getcwd(), "rev-parse", "--show-toplevel")
+    ends = time.monotonic() + _bound()
+    rc, out = _git(folder or os.getcwd(), ends, "rev-parse", "--show-toplevel")
     if rc is None:
         co = Checkout(None)
         co.state, co.origin_state = SILENT, ORIGIN_SILENT
@@ -155,7 +165,7 @@ def checkout(folder):
                 co.why = "its %s is there but could not be read (%s)" % (PATH, e.strerror or type(e).__name__)
     else:
         for ref in REFS:
-            rc, out = _git(top, "show", "%s:%s" % (ref, PATH))
+            rc, out = _git(top, ends, "show", "%s:%s" % (ref, PATH))
             if rc is None:
                 co.state = SILENT
                 co.why = "git did not answer when asked for the copy of %s on origin's default branch" % PATH
@@ -163,7 +173,7 @@ def checkout(folder):
             if rc == 0:
                 _stated(co, out)
                 break
-    rc, out = _git(top, "remote", "get-url", "origin")
+    rc, out = _git(top, ends, "remote", "get-url", "origin")
     if rc is None:
         co.origin_state = ORIGIN_SILENT
     elif rc == 0:

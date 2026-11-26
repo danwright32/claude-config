@@ -112,7 +112,7 @@ esac
 case "$origin_state" in
   ok) ;;
   none) cannot_tell "this repository is still $expected, as its .github/expected-visibility says" "it has no origin remote to ask GitHub about" ;;
-  silent) cannot_tell "this repository is still $expected, as its .github/expected-visibility says" "git did not answer when asked for its origin remote" ;;
+  silent) cannot_tell "this repository is still $expected, as its .github/expected-visibility says" "git did not answer in time for its origin remote to be read" ;;
   *) cannot_tell "this repository is still $expected, as its .github/expected-visibility says" "its origin remote is not a GitHub repository address this can read" ;;
 esac
 [ -n "$slug" ] \

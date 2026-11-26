@@ -354,8 +354,8 @@ def declared(full, vis, cwd):
     if co is not None and (co.top is None or co.origin_state == ev.ORIGIN_SILENT):
         raise _undeclared(full, vis, "%s, so whether the command runs in a checkout of %s, whose own %s "
                           "would be the one to read, could not be told"
-                          % (co.why if co.top is None else "git did not answer when asked for the origin "
-                             "of the checkout the command runs in", full, ev.PATH))
+                          % (co.why if co.top is None else "git did not answer in time for the origin of "
+                             "the checkout the command runs in to be read", full, ev.PATH))
     here = co is not None and co.slug is not None and co.slug.lower() == full.lower()
     key = (full.lower(), co.top if here else None)
     if key in _DECLARED:
