@@ -3047,14 +3047,22 @@ for the review by picker, 2026-11-25: "Yes, attack it first"). The choices are t
   input the caller chooses. So the line is drawn in three places that each hold something. The
   command line a session has a use for (`list`, `check` without `--claim`) reads the record and
   nothing else. The label hook refuses a Bash command running the library in any other form,
-  which stops the route the review took and every accident. And whoever asks, by whatever route,
-  a picker is read only from a `.jsonl` transcript under the projects folder beside the record's
-  state folder, so a file shaped like a transcript and kept anywhere else approves nothing; this
-  one also covers the library reached without being named, and a hook run by hand. The merge gate's
-  own call (`check --claim`) is unchanged, since it must write and was left as it is for the phase
-  being built beside this one. Ruled out: refusing to write when `CLAUDECODE` is set, which
-  Claude Code sets in a Bash tool's shell (seen set to 1 there on 2026-11-25) and is understood
-  not to set in a hook's, which was not measured. A session started from inside another session's
+  which stops the route the review took and every accident. It judges python wherever it is named
+  in a command, with python's options read as python reads them, and asks nothing of the words in
+  front of it. It keeps no list of other programs that could run the file: the file carries no
+  interpreter line, so run by its own path the shell reads it and python never does (measured
+  2026-11-25, directly and behind `env` and `nohup`; the library's suite holds the missing line),
+  and a list of launchers is only ever short of one (L96). Ruled out: refusing every command that
+  names the file and is not known only to read, which refuses `git add` of it. A program that is
+  not python by name and is handed the file (`uv run`, `ipython`) is not seen. And whoever asks,
+  by whatever route, a picker is read only from a `.jsonl` transcript under the projects folder
+  beside the record's state folder, so a file shaped like a transcript and kept anywhere else
+  approves nothing; this one also covers the library reached without being named, and a hook run
+  by hand. The merge gate's own call (`check --claim`) is unchanged, since it must write and was
+  left as it is for the phase being built beside this one. Ruled out: refusing to write when
+  `CLAUDECODE` is set, which Claude Code sets in a Bash tool's shell (seen set to 1 there on
+  2026-11-25) and is understood not to set in a hook's, which was not measured.
+  A session started from inside another session's
   shell would hand that variable to its own hooks, which would then never save an approval, and
   Dan would be asked again for wording he had approved; and one word in the command clears it.
   Ruled out too: a transcript root the tests could name through a variable of its own, which a

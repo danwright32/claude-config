@@ -351,6 +351,13 @@ r="$(ANNOUNCE_APPROVALS_DIR="$STORE_USED" python3 -B "$LIB" check --repo acme/wi
 check "still possible: the command line says wording on the record is approved" "$([[ "$r" == "yes|approved|" ]] && echo ok || echo "$r")"
 check "and reading it added nothing to the record" "$([ "$(grep -c '"kind"' "$STORE_USED/record.jsonl")" = 1 ] && echo ok || cat "$STORE_USED/record.jsonl")"
 
+# The label hook refuses a session's command that runs this library under python in a form that
+# writes. It keeps no list of the other programs that could run the file by its own path, because
+# the file cannot be run that way: it carries no interpreter line, so the shell reads it and python
+# never does (measured 2026-11-25 with a file of the same shape, directly and behind env and nohup).
+# That rests on the first two bytes of the file, so they are held here.
+check "the library carries no interpreter line, so it cannot be run by its own path" "$([ "$(head -c 2 "$LIB")" != '#!' ] && [ -s "$LIB" ] && echo ok || echo "it begins with an interpreter line")"
+
 echo "a picker counts only from a transcript kept where Claude Code keeps them (#3703)"
 # The merge gate's own question (check with --claim) has to write, so its command line cannot be
 # read only. What it reads a picker from is held instead: a session transcript under the projects

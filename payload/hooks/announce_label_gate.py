@@ -46,8 +46,11 @@ Every refusal is a deny. Commands are read by the shared gh reader (gh_issue_sca
 
 What it cannot see: a label named through a variable, a file or a script, a gh alias, a label id in
 a GraphQL call that does not spell the name. Those reach the merge gate, which reads the pull
-request itself. And the library reached without its file being named in the command: a script file
-that runs it, a path built at run time, a copy under another name, a hook run by hand. The library
+request itself. And the library run by a program that is not python by name and is handed the file
+(uv run, ipython, coverage run), or reached without its file being named in the command: a script
+file that runs it, a path built at run time, a copy under another name, a hook run by hand. No list
+of the programs that can run a python file is kept, because such a list is only ever short of one;
+the hook judges python where it is named, and the library
 holds its own line there (a picker counts only from a transcript kept where Claude Code keeps them),
 and a session that forges one in that folder is not stopped by anything on the same Mac.
 """
@@ -460,10 +463,6 @@ def judge_record(command, cwd):
 
 LIBRARY_FILE = "announce-approval.py"
 PYTHON = re.compile(r"(?:python|pypy)[0-9.]*")
-# Programs whose whole job is to run the command given after them, so the library's file behind one,
-# with no interpreter named, is the file being run.
-RUNNERS = frozenset(("env", "xargs", "time", "nohup", "command", "exec", "builtin", "sudo", "nice", "caffeinate",
-                     "timeout", "gtimeout", "stdbuf", "arch", "rtk", "uv"))
 # python's one letter options that take a value: the rest of their word, or else the next word.
 PYTHON_VALUE_LETTERS = "cmXW"
 # Modules that read a file handed to `python -m` and run none of it.
@@ -539,20 +538,22 @@ def _runs_library(text, unread, sw, only_reads):
         return "names it and could not be read as words"
     if not words:
         return None
-    program = os.path.basename(words[0]).lower()
     pythons = [i for i, w in enumerate(words) if PYTHON.fullmatch(os.path.basename(w).lower())]
     if pythons:
-        if pythons[0] != 0 and program not in RUNNERS and only_reads(text):
+        if pythons[0] != 0 and only_reads(text):
             return None
         for at in pythons:
             held = _python_runs(words[at + 1:])
             if held:
                 return held
         return None
-    # No interpreter: the file run by its own path, first or behind a program that runs what follows.
-    at = next((i for i, w in enumerate(words) if os.path.basename(w).lower() == LIBRARY_FILE), None)
-    if at is not None and (at == 0 or program in RUNNERS):
-        return _library_verb(words[at + 1:])
+    # No python named. The file carries no interpreter line, so run by its own path it is read by
+    # the shell and never by python, in front of a command or behind a program that runs what
+    # follows it (measured 2026-11-25, and test-announce-approval.sh holds that it carries none).
+    # So no list of such programs is kept here, which could only ever be short of one. The file as
+    # a command of its own is still refused, since nothing good comes of the shell reading it.
+    if os.path.basename(words[0]).lower() == LIBRARY_FILE:
+        return _library_verb(words[1:])
     return None
 
 

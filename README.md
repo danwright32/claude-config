@@ -1948,16 +1948,18 @@ wording he never saw. Three things now hold that:
   `announce-label-ask.sh`, whose first test knows the library's file name: `check --claim`,
   `used`, a verb it cannot read, a program handed to python that names the file, and a heredoc
   body naming it. Commands that name the file without running it (git, grep, a test suite) pass.
+  It judges python wherever a command names it and keeps no list of other programs that could
+  run the file, which has no interpreter line and so cannot be run by its own path.
 
 What none of this sees: a merge made in GitHub's own page; a write to the wording file, between the
 open and his answer, by something the transcript does not name it in (a script building the name at
 run time, a subagent's own tools); whether the picker's question named the right channel; a record
 line written by a script that builds the path at run time; a transcript forged in the folder Claude
 Code keeps them in, or the library reached without naming it (a script file, a path built at run
-time, a hook run by hand), since the record and the transcripts are files on a Mac the session can
-write; a label put on by a route the hook cannot read (a variable, a file, a script, an alias, a
-wrapped `gh api`), which still cannot merge; and an approval given on one Mac, which the other does
-not know and asks for again.
+time, a hook run by hand) or run by a program that is not python by name (`uv run`), since the
+record and the transcripts are files on a Mac the session can write; a label put on by a route the
+hook cannot read (a variable, a file, a script, an alias, a wrapped `gh api`), which still cannot
+merge; and an approval given on one Mac, which the other does not know and asks for again.
 
 `push-scope-notice.sh` also refuses a push from a repository whose `core.hooksPath` names a folder
 that does not exist (claude-config#2070), because git then runs none of the repository's own hooks
