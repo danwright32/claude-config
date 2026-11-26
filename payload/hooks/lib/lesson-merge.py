@@ -152,7 +152,11 @@ def digest(repo, pr, c):
         "moved": [[k, b[k][0], h[k][0]] for k in c["moved"]],
     }
     text = json.dumps(body, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
-    return hashlib.sha256(text.encode("ascii")).hexdigest()
+    # ensure_ascii writes every character, a lone surrogate included, as ASCII, so two different
+    # changes are two different texts. "strict" because the digest must be over exactly that text:
+    # a character replaced on the way would let two changes share one answer, so it raises instead,
+    # and the gate refuses on the exit that follows.
+    return hashlib.sha256(text.encode("ascii", "strict")).hexdigest()
 
 
 def _numbers(keys):
@@ -279,7 +283,9 @@ def keep(folder, answers):
                               ensure_ascii=True) + "\n" for r, p, s, q in dict.fromkeys(new))
     fd = os.open(os.path.join(folder, RECORD_NAME), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
     try:
-        os.write(fd, text.encode("ascii"))
+        # "strict": the record holds the question Dan read, and the next judge compares it word for
+        # word, so nothing written there may be replaced. ensure_ascii above makes it ASCII already.
+        os.write(fd, text.encode("ascii", "strict"))
     finally:
         os.close(fd)
     return len(new)
@@ -398,6 +404,10 @@ def main(argv):
 
 if __name__ == "__main__":
     try:
+        # stdout carries only the verdict, json.dumps with ensure_ascii, so it is ASCII. "strict"
+        # because the gate acts on it: a character that could not be written raises into the exit 2
+        # below, which the gate refuses on, rather than a verdict printed with a character changed.
+        sys.stdout.reconfigure(errors="strict")
         sys.exit(main(sys.argv))
     except Exception as e:  # never a silent pass: the gate refuses on any exit but 0
         sys.stderr.write("lesson-merge.py could not judge: %s: %s\n" % (type(e).__name__, e))
