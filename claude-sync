@@ -10438,9 +10438,9 @@ uncarried_names(){   # $1 = a root, the config or the payload -> each such path 
       -o -name "$UNCARRIED_NAME_GLOB" ! -name '*.conflict-*' -print0 -prune 2>/dev/null || true
   done
 }
-uncarried_names_shown(){   # $1 = a root -> each name on one line of text, space separated, or nothing
+uncarried_names_shown(){   # $1 = a root -> each name on one line of text, space separated, or nothing; fails when it could not look
   local list n shown=""
-  list="$(scratch_file)" || { printf 'the files there (they could not be listed)'; return 0; }
+  list="$(scratch_file)" || return 1
   uncarried_names "$1" > "$list"
   while IFS= read -r -d '' n; do shown+="$(name_on_one_line "${n#"$1"/}") "; done < "$list"
   rm -f "$list"
@@ -10451,16 +10451,22 @@ uncarried_names_shown(){   # $1 = a root -> each name on one line of text, space
 UNCARRIED_TOLD=0
 report_uncarried_names(){
   [ "$UNCARRIED_TOLD" = 0 ] || return 0
-  local here there why
-  here="$(uncarried_names_shown "$CLAUDE_HOME")"
-  there=""; [ -d "$PAYLOAD" ] && there="$(uncarried_names_shown "$PAYLOAD")"
+  local here there why unlooked=0
+  here="$(uncarried_names_shown "$CLAUDE_HOME")" || unlooked=1
+  there=""; if [ -d "$PAYLOAD" ]; then there="$(uncarried_names_shown "$PAYLOAD")" || unlooked=1; fi
+  # Could not look is its own sentence, never a finding and never silence (L11). Every mirror still
+  # leaves such names alone; only the naming of them is missing.
+  if [ "$unlooked" = 1 ]; then
+    UNCARRIED_TOLD=1
+    echo "claude-sync: could not make a scratch file to look for names the sync does not carry, so this run does not say whether any are here. Every mirror still leaves such a name alone." >&2
+  fi
   [ -n "$here$there" ] || return 0
   UNCARRIED_TOLD=1
   why="each name holds a line break or another control character (written here as \\n, \\r or a backslash and three digits), and the sync passes its lists of files between its steps one name to a line, so it cannot carry such a file safely"
   if [ "${1:-stderr}" = status ]; then
     echo "--- files the sync does not carry ---"
     [ -z "$here" ] || echo "  On this Mac, never sent and never removed or replaced by a receive: $here. Rename each so its name holds no such character, and the next send carries it."
-    [ -z "$there" ] || echo "  In this clone's payload, never received onto this Mac and never changed by a send: $there. Each was put there by an older version of this tool. Rename each on the Mac whose config holds it, then remove the old name from the payload with git rm in this clone, commit, and send."
+    [ -z "$there" ] || echo "  In this clone's payload, never received onto this Mac: $there. Each was put there by an older version of this tool, and a send that goes out commits and publishes it as it stands, though no Mac receives it. Rename each on the Mac whose config holds it, then remove the old name from the payload with git rm in this clone, commit, and send."
     echo "  Why: $why."
     return 0
   fi
