@@ -35,7 +35,7 @@
 # and removes nothing (claude-sync status reads it).
 #
 # PINNED_TS_NPM names the npm to run (tests); PINNED_TS_INSTALL_DEADLINE bounds it, in seconds;
-# PINNED_TS_OFFLINE=1 reads the npm cache only, never the registry, which tests/test-mods.sh sets
+# PINNED_TS_OFFLINE=1 reads the npm cache only, never the registry, which tests/mods-harness.sh sets
 # so that no suite run reaches the network. PINNED_TS_TEST_BEFORE_LINK and
 # PINNED_TS_TEST_BEFORE_REMOVE name a command run at the two moments a prune and a link can cross,
 # for the tests of them; nothing else sets them.
