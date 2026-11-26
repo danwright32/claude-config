@@ -332,6 +332,49 @@ sys.stdout.write(cmd + "\x1f" + (d.get("cwd") or ""))
 ' 2>/dev/null
 }
 
+# WHO SENT THE CALL (claude-config#3557): `agent` when the payload carries an agent_id, which only a
+# subagent's call does, then the session's id and its transcript's path, each after a unit
+# separator. For a gate that must tell a subagent, which cannot ask Dan anything, from the session
+# that can, and that reads his answer from the session's own transcript (lib/pr-review.sh, the stop
+# at the fourth round of findings). An agent_id of any value counts, a present one that is no text
+# included, since reading a subagent as the main session would tell it to put a picker it does not
+# have. Read by the tool ps_parse_payload reads with; returns 1 when the payload cannot be read.
+ps_payload_asker() {   # $1 = payload JSON
+  local payload
+  payload="$(ps_clean_payload "${1:-}")"
+  if command -v jq >/dev/null 2>&1; then
+    printf '%s' "$payload" | jq -j '
+      (if (.agent_id // null) == null or .agent_id == "" or .agent_id == false then "" else "agent" end)
+      + "\u001f" + ((.session_id // "") | if type == "string" then . else "" end | split("\u001f") | join(""))
+      + "\u001f" + ((.transcript_path // "") | if type == "string" then . else "" end | split("\u001f") | join(""))
+    ' 2>/dev/null && return 0
+  fi
+  printf '%s' "$payload" | python3 -c '
+import sys, json
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+try:
+    d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
+except Exception:
+    sys.exit(1)
+if not isinstance(d, dict):
+    sys.exit(1)
+def text(v):
+    return v.replace("\x1f", "") if isinstance(v, str) else ""
+a = d.get("agent_id")
+sys.stdout.write(("" if a is None or a == "" or a is False else "agent") + "\x1f" + text(d.get("session_id")) + "\x1f" + text(d.get("transcript_path")))
+' 2>/dev/null
+}
+
+# The arguments ps_payload_asker's answer gives lib/pr-review.sh check, one per line, or nothing.
+ps_asker_args() {   # $1 = payload JSON
+  local got who session transcript
+  got="$(ps_payload_asker "${1:-}")" || return 0
+  IFS=$'\x1f' read -r who session transcript <<<"$got"
+  [ "$who" = agent ] && printf '%s\n%s\n' --asker agent
+  [ -n "$session" ] && [ -n "$transcript" ] && printf '%s\n%s\n%s\n%s\n' --transcript "$transcript" --session "$session"
+  return 0
+}
+
 # WHETHER the machine holds a reader at all, and the sentence a gate refuses with when it does not
 # (claude-config#480, L490).
 #

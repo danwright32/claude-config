@@ -2968,6 +2968,14 @@ EOF_VIEW
        # the start of a line, where the review prints them: a finding line begins with its file, so
        # one quoting the words is not a request to step back.
        [ -n "${AR_STEP_BACK_LEAD:-}" ] || . "$MWR_LIB/ai-review-common.sh" 2>/dev/null
+       # From the fourth round the review stops for Dan and gives no read key (claude-config#3557),
+       # so this line must not ask for one. Its words are AR_ROUND_STOP_LEAD, read as the step
+       # back's are. This helper has no session to read his answer from, so it says which command
+       # does.
+       case $'\n'"$rev_out" in
+         *$'\n'"${AR_ROUND_STOP_LEAD:-Stopped for Dan:}"*)
+           stop 1 "Stopped: the lessons review of #$pr at ${head:0:7} refused (above) and stops this pull request for Dan, in its fourth round of findings or later. Fix nothing more on the branch and do what that refusal says: ask Dan, or hand back to the session that can. No read key carries this merge. This helper reads no session, so once Dan has answered, send the merge once as a typed gh pr merge from the session he answered in, which keeps his answer on this Mac, then run: $SELF $pr --repo $slug${flags[*]:+ ${flags[*]}}${want_first:+ --first} . Nothing was merged." ;;
+       esac
        case $'\n'"$rev_out" in
          *$'\n'"${AR_STEP_BACK_LEAD:-Step back:}"*)
            stop 1 "Stopped: the lessons review of #$pr at ${head:0:7} refused (above), and asks to step back and reconsider the approach: read this round's findings with the earlier rounds' as one group before changing anything, rather than fixing one finding at a time. Then run: PR_REVIEW_READ=<key> $SELF $pr --repo $slug${flags[*]:+ ${flags[*]}}${want_first:+ --first} . Nothing was merged." ;;

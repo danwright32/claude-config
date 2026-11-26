@@ -210,6 +210,11 @@ args=(check --dir "$review_dir" --sha "$head")
 # the pull request by branch or link still passes a number.
 pr_number="$(printf '%s' "$envelope" | jq -r 'if .found then .view.number // "" else "" end' 2>/dev/null)"
 case "$pr_number" in ''|*[!0-9]*) ;; *) args+=(--pr "$pr_number") ;; esac
+# Who sent the merge, which only a stop at the fourth round of findings reads (claude-config#3557),
+# as pr-review-push-gate.sh hands it on.
+if declare -F ps_asker_args >/dev/null; then
+  while IFS= read -r asker_arg; do [ -n "$asker_arg" ] && args+=("$asker_arg"); done <<<"$(ps_asker_args "$payload")"
+fi
 # The read key the findings' refusal carries, if this merge presents it (claude-config#788). The
 # hook does not inherit the command's own assignments, so it is read from the command text and
 # handed on; anything else in the environment is cleared, so only THIS command can present one.

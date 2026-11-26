@@ -27,6 +27,7 @@ You are one of several agents, each working one item while the orchestrator sess
 - Write the commit message to a file and commit with `git commit -F <file>`. End it with the `Claude-Session:` line from your brief. Nothing may say or suggest Claude wrote the work.
 - No dashes as punctuation and no emoji in new lines. Never use `SKIP_TEST_CHECK`, `SKIP_STYLE_CHECK` or any other override; if a hook blocks you, fix the cause.
 - Push your branch. Do not open or merge a pull request. Write the PR description to `pr-body.md` in your working folder, ending with the session link line from your brief.
+- When the lessons review refuses your push with a line starting `Stopped for Dan:`, the pull request is in its fourth round of findings or later, and the decision is Dan's, not the next fix (claude-config#3557). Stop fixing, and send the push no other way: no read key carries it. You cannot ask Dan yourself, so hand back, with that round's findings, the earlier rounds' files the refusal names, and the picker it gives for your session to put to him. When the refusal says he is asleep, hand back saying the branch waits for him.
 
 ## Never do these yourself
 

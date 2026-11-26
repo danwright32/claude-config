@@ -159,6 +159,12 @@ fi
 args=(check --gate push --dir "$top" --sha "$head")
 [ -n "$branch" ] && args+=(--branch "$branch")
 [ -n "$review_base" ] && args+=(--base-ref "$review_base")
+# Who sent the push, which only a stop at the fourth round of findings reads (claude-config#3557):
+# a subagent cannot ask Dan and is told to hand back, and his answer is read from the session's
+# transcript. With the library's reader absent nothing is added, and the stop words both cases.
+if declare -F ps_asker_args >/dev/null; then
+  while IFS= read -r asker_arg; do [ -n "$asker_arg" ] && args+=("$asker_arg"); done <<<"$(ps_asker_args "$payload")"
+fi
 t0="$(now_s)"
 while :; do
   out="$(PR_REVIEW_READ="$read_key" bash "$HOOK_DIR/lib/pr-review.sh" "${args[@]}" 2>&1)"; rc=$?
