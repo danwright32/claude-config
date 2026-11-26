@@ -10,8 +10,19 @@
 
 Run it BY HAND when the review's prompt, its runner or its model changes, never per pull request.
 It reports two numbers: CATCH RATE, the real defects in the cases that the review found, and WRONG
-FINDING RATE, the review's findings that match one already judged wrong. A change is kept only if
-neither gets worse than the saved baseline.
+FINDING RATE, the review's CHECKED findings (those matching a judged item) that match one judged
+wrong. A finding matching no judged item is UNCHECKED: it is neither right nor wrong here, so it is
+counted on a line of its own and never in the wrong rate's denominator, where it once made the rate
+look about ten times better than what had been checked (claude-config#3556). Every rate carries its
+count and its 95% Wilson range. With several reviews per case the range is as wide as one review
+per case would give, since repeats of a case are not independent samples.
+
+A COMPARISON with the baseline is CASE BY CASE (paired): each real defect is newly caught, newly
+missed or the same, and each item judged wrong is raised more often, less often or the same, and an
+exact two sided sign test over the items that changed (McNemar's exact test when each case had one
+review per run) says whether the change holds at the 95% level the ranges use. Six changes all one
+way is the fewest that can. Inside that the runs CANNOT be told apart, and the tool says so rather
+than calling luck a regression or an improvement.
 
 WHERE THE CASES LIVE. --cases, else $REVIEW_SCORE_CASES, else ~/.claude-review-cases. The real
 judged set quotes private code from other repositories and this repository is public, so it lives
@@ -37,8 +48,8 @@ otherwise two of them, or one plus the quoted line or a restatement of the item'
 finding near a defect that makes some other claim does not count as catching it, even when it
 shares a word with it (claude-config#1367). A finding takes the closest
 matching item. A real item matched by any finding is caught, once however many findings hit it.
-A finding matching no item is UNJUDGED: it counts in the denominator of the wrong rate but is not
-wrong, and its text is kept in the results file for a person to judge and add to the case.
+A finding matching no item is UNCHECKED: it is outside the wrong rate, and its text is kept in the
+results file for a person to judge and add to the case.
 
 WHAT A RUN COSTS. Each case is one review by the real runner (payload/hooks/lib/ai-review-run.py,
 the prompt and scope beside it, the lessons index under payload/), so one review per case per
@@ -55,8 +66,9 @@ it is now, over only the cases both measured, so a judgement added after the bas
 applies to both sides, and a subset run is compared like for like. The terminal shows ids and
 counts only, never a finding's text, which can quote private code (L222).
 
-EXIT: 0 compared and not worse, 1 worse than the baseline, 2 unmeasured (no case set, no claude,
-or no case could be reviewed), 3 scored with no baseline covering these cases.
+EXIT: 0 compared and no different or better, 1 worse than the baseline, 2 unmeasured (no case set,
+no claude, or no case could be reviewed), 3 scored with no baseline covering these cases, 4 compared
+and the runs cannot be told apart (something changed, inside the noise).
 """
 import argparse
 import concurrent.futures
@@ -64,6 +76,7 @@ import datetime
 import hashlib
 import importlib.util
 import json
+import math
 import os
 import re
 import shutil
@@ -84,7 +97,23 @@ DEFAULT_SAMPLE = 3
 DEFAULT_WINDOW = 20
 VERDICTS = ("real", "trivial", "wrong", "unsure")
 
-EXIT_OK, EXIT_WORSE, EXIT_UNMEASURED, EXIT_NO_BASELINE = 0, 1, 2, 3
+EXIT_OK, EXIT_WORSE, EXIT_UNMEASURED, EXIT_NO_BASELINE, EXIT_CANNOT_TELL = 0, 1, 2, 3, 4
+
+# The 95% the ranges and the paired test use: the level claude-config#3556 names. One level for
+# both, so a range and a verdict printed side by side never disagree about what counts as noise.
+LEVEL = 0.05
+Z95 = 1.959963984540054
+
+
+def _fewest_flips():
+    """The fewest changes, all one way, an exact two sided sign test can call significant at LEVEL."""
+    n = 1
+    while 2 * 0.5 ** n >= LEVEL:
+        n += 1
+    return n
+
+
+FEWEST_FLIPS = _fewest_flips()
 
 
 class Unmeasured(Exception):
@@ -157,6 +186,7 @@ def load_case(root, cid):
             problems.append(f"item {i + 1} is not an object")
             continue
         iid = it.get("id") or f"#{i + 1}"
+        it["id"] = iid  # scoring keys every item by its id, so one with none keys by its position
         if iid in seen:
             problems.append(f"item id {iid} is used twice")
         seen.add(iid)
@@ -262,12 +292,17 @@ def match_item(finding, items, window):
 
 
 def score_case(case, reviews, window):
-    """Counts for one case over its measured reviews."""
+    """Counts for one case over its measured reviews. "items" holds, per judged item, its verdict
+    and how often the reviews met it: for a real defect the number of reviews that caught it, for
+    any other the number of findings matching it, so two runs can be compared item by item
+    (claude-config#3556). "caught_each" is how many defects each review caught, the spread between
+    repeats. "missed" is the defects no review caught; "partly" those only some reviews caught."""
     items = case["items"]
     real = [it for it in items if it.get("verdict") == "real"]
     s = {"reviews": 0, "real": 0, "caught": 0, "findings": 0,
          "real_findings": 0, "trivial": 0, "wrong": 0, "unsure": 0, "unjudged": 0,
-         "missed": [], "unjudged_text": []}
+         "missed": [], "partly": [], "caught_each": [], "n_real": len(real),
+         "items": {it["id"]: [it["verdict"], 0] for it in items}, "unjudged_text": []}
     for rv in reviews:
         if rv.get("status") != "ok":
             continue
@@ -287,10 +322,17 @@ def score_case(case, reviews, window):
                 hit.add(it["id"])
             else:
                 s[v] += 1
+                s["items"][it["id"]][1] += 1
         s["caught"] += len(hit)
-        for it in real:
-            if it["id"] not in hit and it["id"] not in s["missed"]:
-                s["missed"].append(it["id"])
+        s["caught_each"].append(len(hit))
+        for iid in hit:
+            s["items"][iid][1] += 1
+    for it in real:
+        n = s["items"][it["id"]][1]
+        if s["reviews"] and n == 0:
+            s["missed"].append(it["id"])
+        elif n < s["reviews"]:
+            s["partly"].append(it["id"])
     return s
 
 
@@ -300,6 +342,11 @@ def totals(per_case):
     for s in per_case.values():
         for k in keys:
             t[k] += s[k]
+    # A finding is CHECKED when it matched a judged item, whatever that item's verdict: only those
+    # can be wrong, so the wrong rate is over them (claude-config#3556).
+    t["checked"] = t["findings"] - t["unjudged"]
+    # Reviews per measured case, which widens every range back to one review per case.
+    t["per_case"] = (t["reviews"] / len(per_case)) if per_case else 1.0
     return t
 
 
@@ -307,9 +354,42 @@ def pct(n, d):
     return round(100.0 * n / d) if d else None
 
 
-def rates(t):
-    return {"catch": (t["caught"] / t["real"]) if t["real"] else None,
-            "wrong": (t["wrong"] / t["findings"]) if t["findings"] else None}
+def wilson(k, n, z=Z95):
+    """The Wilson score interval for k of n, as (low, high) fractions; None when n is 0. k may be
+    fractional, which a range over repeats needs. Wilson rather than the normal approximation
+    because it stays inside 0 to 1 and is honest at the small counts and the 0 and 100% ends this
+    tool sees."""
+    if n <= 0:
+        return None
+    p = k / n
+    d = 1 + z * z / n
+    c = (p + z * z / (2 * n)) / d
+    h = z * math.sqrt(max(0.0, p * (1 - p) / n + z * z / (4 * n * n))) / d
+    return max(0.0, c - h), min(1.0, c + h)
+
+
+def rate_text(k, n, per_case=1.0):
+    """"46%, 95% range 28% to 65%", or None when n is 0, so no caller can print 0% over nothing.
+    With more than one review per case the range is taken over n / per_case, as wide as one review
+    per case would give: two reviews of one diff are not two independent samples."""
+    if not n:
+        return None
+    eff = n / per_case if per_case > 1 else n
+    lo, hi = wilson(k / n * eff, eff)
+    return f"{pct(k, n)}%, 95% range {round(100 * lo)}% to {round(100 * hi)}%"
+
+
+def sign_test(good, bad):
+    """The exact two sided sign test's p for `good` changes one way and `bad` the other, ties left
+    out; None when nothing changed. For one yes or no outcome per item per run this is McNemar's
+    exact test. Exact rather than the normal approximation, which is wrong at the handful of
+    changes a run of a few dozen cases gives."""
+    n = good + bad
+    if n == 0:
+        return None
+    k = min(good, bad)
+    tail = sum(math.comb(n, i) for i in range(k + 1)) / 2 ** n
+    return min(1.0, 2 * tail)
 
 
 def score_run(run, cases, window):
@@ -439,21 +519,65 @@ def file_hash(path):
 # ---------------------------------------------------------------------------------------------
 # Reporting
 
-def fmt_rate(n, d):
-    p = pct(n, d)
-    return "unmeasured" if p is None else f"{p}%"
+def plural(n, word, words=None):
+    return f"{n} {word if n == 1 else (words or word + 's')}"
+
+
+def catch_text(t):
+    """The catch rate with its count and range, or what stops there being one."""
+    if not t["real"]:
+        return "unmeasured (these cases hold no real defect)"
+    return (f"{t['caught']} of {t['real']} real defects caught "
+            f"({rate_text(t['caught'], t['real'], t['per_case'])})")
+
+
+def wrong_text(t):
+    """The wrong finding rate over CHECKED findings, or what stops there being one, in words."""
+    if not t["findings"]:
+        return "none, the review raised no finding"
+    if not t["checked"]:
+        return f"no rate, none of the {plural(t['findings'], 'finding')} matched a judged item"
+    return (f"{t['wrong']} of {t['checked']} checked findings judged wrong "
+            f"({rate_text(t['wrong'], t['checked'], t['per_case'])})")
 
 
 def print_scores(t, per, unmeasured, cost):
-    print(f"  catch rate: {t['caught']} of {t['real']} real defects caught ({fmt_rate(t['caught'], t['real'])})"
-          if t["real"] else "  catch rate: unmeasured (these cases hold no real defect)")
-    print(f"  wrong findings: {t['wrong']} of {t['findings']} findings judged wrong ({fmt_rate(t['wrong'], t['findings'])})"
-          if t["findings"] else "  wrong findings: none, the review raised no finding")
-    print(f"  also: trivial {t['trivial']}, unsure {t['unsure']}, unjudged {t['unjudged']}")
+    many = t["per_case"] > 1
+    note = "; with several reviews per case each range counts each case's reviews as one" if many else ""
+    print(f"  catch rate: {catch_text(t)}{note if t['real'] else ''}")
+    print(f"  wrong findings: {wrong_text(t)}{note if t['checked'] else ''}")
+    if t["findings"]:
+        # The figure this tool printed before claude-config#3556, kept and labelled for what it is:
+        # the wrong rate only if every unchecked finding were right, so a floor (L11).
+        floor = (f"; if every unchecked finding were right, the wrong rate over all {t['findings']} "
+                 f"would be {pct(t['wrong'], t['findings'])}% ({t['wrong']} of {t['findings']}), "
+                 "the figure this tool printed before, a floor") if t["unjudged"] else ""
+        print(f"  unchecked: {t['unjudged']} of {plural(t['findings'], 'finding')} matched no judged item, "
+              f"so they are neither right nor wrong here{floor}")
+    print(f"  also: trivial {t['trivial']}, unsure {t['unsure']}")
+    if any(len(s["caught_each"]) > 1 for s in per.values()):
+        print_repeats(per)
     missed = [f"{cid} {m}" for cid in sorted(per) for m in per[cid]["missed"]]
     print(f"  missed: {', '.join(missed) if missed else 'none'}")
     print(f"  unmeasured: {', '.join(unmeasured) if unmeasured else 'none'}")
     print(cost)
+
+
+def print_repeats(per):
+    """The spread between the repeats of each case (claude-config#3556): how many defects each
+    review caught, and which defects only some reviews caught. Ids and counts only."""
+    counts = sorted({len(s["caught_each"]) for s in per.values()})
+    each = "/".join(str(c) for c in counts)
+    with_real = [cid for cid in sorted(per) if per[cid]["n_real"]]
+    differ = [cid for cid in with_real if per[cid]["partly"]]
+    print(f"  repeats: {each} reviews per case; the reviews of {len(differ)} of "
+          f"{plural(len(with_real), 'case')} caught different defects")
+    spread = "; ".join(f"{cid} {', '.join(str(n) for n in per[cid]['caught_each'])} of {per[cid]['n_real']}"
+                       for cid in with_real)
+    print(f"  caught in each review: {spread if spread else 'no case holds a real defect'}")
+    partly = [f"{cid} {iid} ({per[cid]['items'][iid][1]} of {per[cid]['reviews']})"
+              for cid in differ for iid in per[cid]["partly"]]
+    print(f"  caught by only some reviews: {', '.join(partly) if partly else 'none'}")
 
 
 def cost_line(run):
@@ -477,8 +601,67 @@ def cost_line(run):
             f"({tin:,} input tokens, {tout:,} output tokens, about ${usd / n:.2f} a review){gap}")
 
 
+def measured_ids(run):
+    """The cases a stored run reviewed successfully at least once, from the file itself."""
+    return {cid for cid, e in run.get("cases", {}).items()
+            if any(rv.get("status") == "ok" for rv in e.get("reviews", []))}
+
+
+def side_text(t):
+    """One run's two rates for a comparison line, each with its count and range."""
+    catch = (f"catch {t['caught']} of {t['real']} ({rate_text(t['caught'], t['real'], t['per_case'])})"
+             if t["real"] else "catch unmeasured (no real defect)")
+    if not t["findings"]:
+        wrong = "wrong: no finding raised"
+    elif not t["checked"]:
+        wrong = f"wrong: no rate, none of {plural(t['findings'], 'finding')} checked"
+    else:
+        wrong = (f"wrong {t['wrong']} of {t['checked']} checked findings "
+                 f"({rate_text(t['wrong'], t['checked'], t['per_case'])})")
+    return f"{catch}; {wrong}, {t['unjudged']} unchecked"
+
+
+def paired(now, then, common, real):
+    """Item by item over the cases both runs measured: (up, down, same) for the real defects when
+    `real`, else for every item judged wrong. An item's figure is how often it was met per review
+    (caught, for a defect; matched by a finding, for a wrong item), so repeats compare as averages
+    and a run of one review per case compares as yes or no. Compared by cross multiplying, never by
+    dividing, so equal averages are equal."""
+    up, down, same = [], [], 0
+    for cid in common:
+        for iid, (verdict, b_hits) in then[cid]["items"].items():
+            if (verdict == "real") != real or (not real and verdict != "wrong"):
+                continue
+            n_hits = now[cid]["items"].get(iid, [verdict, 0])[1]
+            rb, rn = then[cid]["reviews"], now[cid]["reviews"]
+            a, b = n_hits * rb, b_hits * rn
+            # With repeats a change can be partial, so it carries both sides' counts.
+            name = f"{cid} {iid}" + (f" ({b_hits} in {rb} then, {n_hits} in {rn} now)" if rb > 1 or rn > 1 else "")
+            if a > b:
+                up.append(name)
+            elif a < b:
+                down.append(name)
+            else:
+                same += 1
+    return up, down, same
+
+
+def judge(good, bad, total):
+    """'unmeasured', 'same', 'better', 'worse' or 'unclear', with the sign test's p."""
+    if not total:
+        return "unmeasured", None
+    if not good and not bad:
+        return "same", None
+    p = sign_test(len(good), len(bad))
+    if p < LEVEL:
+        return ("better" if len(good) > len(bad) else "worse"), p
+    return "unclear", p
+
+
 def compare(run, base, cases, window):
-    """(exit code, lines). Both runs judged by the cases as they are now, over the cases both measured."""
+    """(exit code, lines). Both runs judged by the cases as they are now, over the cases both
+    measured, and compared CASE BY CASE (claude-config#3556): a verdict either way only when an
+    exact sign test over the items that changed clears the 95% level; otherwise CANNOT TELL."""
     now = score_run(run, cases, window)
     then = score_run(base, cases, window)
     common = sorted(set(now) & set(then))
@@ -486,22 +669,68 @@ def compare(run, base, cases, window):
         return EXIT_NO_BASELINE, ["Baseline: none of these cases was measured in the baseline, so nothing is compared."]
     tn = totals({c: now[c] for c in common})
     tb = totals({c: then[c] for c in common})
-    rn, rb = rates(tn), rates(tb)
-    lines = [f"Baseline {base.get('name', '')} (model {base.get('model', '?')}), same {len(common)} case{'s' if len(common) != 1 else ''}: "
-             f"catch {tb['caught']} of {tb['real']} ({fmt_rate(tb['caught'], tb['real'])}), "
-             f"wrong {tb['wrong']} of {tb['findings']} ({fmt_rate(tb['wrong'], tb['findings'])})"]
-    worse = []
-    if rn["catch"] is not None and rb["catch"] is not None and rn["catch"] < rb["catch"]:
-        worse.append(f"catch rate fell from {fmt_rate(tb['caught'], tb['real'])} to {fmt_rate(tn['caught'], tn['real'])}")
-    if rn["wrong"] is not None and rb["wrong"] is not None and rn["wrong"] > rb["wrong"]:
-        worse.append(f"wrong finding rate rose from {fmt_rate(tb['wrong'], tb['findings'])} to {fmt_rate(tn['wrong'], tn['findings'])}")
-    elif rn["wrong"] is not None and rb["wrong"] is None and tn["wrong"]:
-        worse.append(f"wrong finding rate rose from none to {fmt_rate(tn['wrong'], tn['findings'])}")
+    # Read from the files, not the scores: only the cases a run names are loaded, so a baseline case
+    # this run did not review is not in `then` at all, and would otherwise vanish without a word.
+    in_base, in_run = measured_ids(base), measured_ids(run)
+    only_base = sorted(in_base - in_run)
+    only_run = sorted(in_run - in_base)
+    unscored = sorted((in_base & in_run) - set(common))
+    lines = [f"Baseline {base.get('name', '')} (model {base.get('model', '?')}), same {plural(len(common), 'case')}, "
+             "compared case by case:",
+             f"  baseline: {side_text(tb)}",
+             f"  this run: {side_text(tn)}",
+             f"  measured only in the baseline: {', '.join(only_base) if only_base else 'none'}",
+             f"  measured only in this run: {', '.join(only_run) if only_run else 'none'}"]
+    if unscored:
+        lines.append(f"  measured in both but not compared (gone from the case set, or failing its check):{', '.join(unscored)}")
+    c_up, c_down, c_same = paired(now, then, common, real=True)
+    w_up, w_down, w_same = paired(now, then, common, real=False)
+    c_total, w_total = len(c_up) + len(c_down) + c_same, len(w_up) + len(w_down) + w_same
+    lines.append(f"  catch: {len(c_up)} newly caught, {len(c_down)} newly missed, {c_same} the same, "
+                 f"of {plural(c_total, 'defect')} in both runs")
+    if c_up:
+        lines.append(f"  newly caught: {', '.join(c_up)}")
+    if c_down:
+        lines.append(f"  newly missed: {', '.join(c_down)}")
+    lines.append(f"  known wrong findings: {len(w_up)} raised more often, {len(w_down)} less often, "
+                 f"{w_same} the same, of {plural(w_total, 'judged wrong item')}")
+    if w_up:
+        lines.append(f"  raised more often: {', '.join(w_up)}")
+    if w_down:
+        lines.append(f"  raised less often: {', '.join(w_down)}")
+    lines.append("  Test: an exact two sided sign test over the items that changed, ties left out (McNemar's "
+                 "exact test when each case has one review per run), at the 95% level the ranges use; "
+                 f"{FEWEST_FLIPS} changes all one way is the fewest that can clear it.")
+    catch = judge(c_up, c_down, c_total)
+    wrong = judge(w_down, w_up, w_total)  # fewer known wrong findings is the good direction
+    say = {
+        "catch": lambda p: f"catch {len(c_up)} newly caught, {len(c_down)} newly missed (p = {p:.3f})",
+        "wrong": lambda p: f"known wrong findings raised {len(w_up)} more often, {len(w_down)} less often (p = {p:.3f})",
+    }
+    verdicts = {"catch": catch, "wrong": wrong}
+    worse = [say[k](p) for k, (v, p) in verdicts.items() if v == "worse"]
+    unclear = [say[k](p) for k, (v, p) in verdicts.items() if v == "unclear"]
+    better = [say[k](p) for k, (v, p) in verdicts.items() if v == "better"]
     if worse:
         lines.append("REGRESSION: " + "; ".join(worse) + ". Keep the change only if this holds up on a second run.")
         return EXIT_WORSE, lines
-    lines.append(f"NOT WORSE: catch {fmt_rate(tb['caught'], tb['real'])} then, {fmt_rate(tn['caught'], tn['real'])} now; "
-                 f"wrong {fmt_rate(tb['wrong'], tb['findings'])} then, {fmt_rate(tn['wrong'], tn['findings'])} now.")
+    if unclear:
+        n_changed = max(len(c_up) + len(c_down), len(w_up) + len(w_down))
+        why = (f"{n_changed} {'change is' if n_changed == 1 else 'changes are'} too few for the exact test to reach the 95% level, which needs "
+               f"at least {FEWEST_FLIPS} all one way" if n_changed < FEWEST_FLIPS
+               else "the changes are too evenly split to tell from runs that came out differently by chance")
+        lines.append("CANNOT TELL: " + "; ".join(unclear) + f"; {why}. "
+                     + (f"Also better: {'; '.join(better)}. " if better else "")
+                     + "Read the ranges above, or score more cases or more repeats.")
+        return EXIT_CANNOT_TELL, lines
+    if better:
+        lines.append("IMPROVEMENT: " + "; ".join(better) + ".")
+        return EXIT_OK, lines
+    if catch[0] == "unmeasured" and wrong[0] == "unmeasured":
+        lines.append("UNMEASURED: these cases hold no real defect and no item judged wrong, so nothing could be compared.")
+        return EXIT_UNMEASURED, lines
+    lines.append("NO DIFFERENCE: no defect was caught or missed differently, and no finding judged wrong was "
+                 "raised more or less often.")
     return EXIT_OK, lines
 
 
@@ -648,10 +877,12 @@ def _run_jobs(run, jobs, cases, cfg, width):
 
 
 def save_baseline_if_safe(run, path, code, results_dir):
-    """Replace the baseline only with a run that is not worse AND measured every case the baseline
-    did, or when there is none yet. A regressed run saved would make the next comparison measure
-    against the regression, and a subset run saved would drop every other case from all later
-    comparisons (L5). Accepting either on purpose is the baseline command, named in the refusal."""
+    """Replace the baseline only with a run that is no different or better AND measured every case
+    the baseline did, or when there is none yet. A regressed run saved would make the next
+    comparison measure against the regression, a run that cannot be told apart from it would let
+    the yardstick drift down one change inside the noise at a time (claude-config#3556), and a
+    subset run saved would drop every other case from all later comparisons (L5). Accepting any of
+    them on purpose is the baseline command, named in the refusal."""
     base_path = os.path.join(results_dir, "baseline.json")
     accept = f"To accept it anyway: review-score.py baseline {path} --results-dir {results_dir}"
     if code == EXIT_UNMEASURED:
@@ -664,17 +895,15 @@ def save_baseline_if_safe(run, path, code, results_dir):
     if code == EXIT_WORSE:
         print(f"This run is worse than the baseline, so it was not saved as the baseline. {accept}")
         return
+    if code == EXIT_CANNOT_TELL:
+        print(f"This run cannot be told apart from the baseline, so it was not saved as the baseline. {accept}")
+        return
     with open(base_path, encoding="utf-8") as f:
         base = json.load(f)
-
-    def measured(r):
-        return {cid for cid, e in r.get("cases", {}).items()
-                if any(rv.get("status") == "ok" for rv in e.get("reviews", []))}
-
-    left_out = sorted(measured(base) - measured(run))
+    left_out = sorted(measured_ids(base) - measured_ids(run))
     if left_out:
         print(f"This run covers only some of the baseline's cases ({len(left_out)} of the baseline's "
-              f"{len(measured(base))} not measured here), so it was not saved as the baseline. {accept}")
+              f"{len(measured_ids(base))} not measured here), so it was not saved as the baseline. {accept}")
         return
     shutil.copyfile(path, base_path)
     print(f"Saved as the baseline in {results_dir}.")
