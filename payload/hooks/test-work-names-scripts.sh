@@ -24,7 +24,6 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GATE="$HERE/check-work-names-publish.sh"
 GUARD="$HERE/bin/gh"
 GUARD_BIN="$HERE/bin"
-START="$HERE/gh-guard-path.sh"
 . "$HERE/lib/suite-deadline.sh" || {
   echo "FAIL: $(basename "$0"): lib/suite-deadline.sh is missing, so this suite cannot bound its own wall clock. Refusing to run unbounded."
   printf 'SUITE-RESULT passed=0 failed=1\n'
@@ -463,7 +462,8 @@ check "and never posted" not_posted
 # spelling that is not the one it resolves to, wherever this checkout sits. The hook names the folder
 # it resolves to (pwd -P), so the line expected is derived from that, never from a spelling: a suite
 # that expected the spelling it was started by failed 7 checks from a checkout under /var, which is a
-# link to /private/var, and passed from a checkout on a real path (claude-config#3619, PR 3630).
+# link to /private/var, and passed from a checkout on a real path (measured 2026-11-26, one run each;
+# claude-config#3619, PR 3630).
 LINKED="$WORK/linked-hooks"; ln -s "$HERE" "$LINKED"
 START="$LINKED/gh-guard-path.sh"
 REAL_BIN="$(cd "$LINKED/bin" && pwd -P)"
@@ -473,7 +473,7 @@ mkdir -p "$ENVDIR/$SID"
 out="$(printf '{"session_id":"%s","hook_event_name":"SessionStart"}' "$SID" | CLAUDE_ENV_FILE="$ENVDIR/$SID/sessionstart-hook-0.sh" bash "$START" 2>&1)"; rc=$?
 check "the SessionStart hook exits cleanly: rc=$rc $out" [ "$rc" -eq 0 ]
 env_line="export PATH=\"$REAL_BIN:\$PATH\""
-check "the link reaches this hooks folder by another spelling, so the cases below measure the hook's own resolving: $LINKED/bin and $REAL_BIN" [ "$LINKED/bin" != "$REAL_BIN" ]
+check "the link reaches this hooks folder by another spelling, so the cases below measure the hook's own resolving: $LINKED/bin and $REAL_BIN" [ "$REAL_BIN" = "$(cd "$HERE/bin" && pwd -P)" -a -x "$REAL_BIN/gh" -a "$LINKED/bin" != "$REAL_BIN" ]
 check "and puts the guard first on PATH in the session's env file" grep -q -F "$env_line" "$ENVDIR/$SID/sessionstart-hook-0.sh"
 # A shell that sources that file must run the guard as gh. The file is one the hook writes while
 # this suite runs, so the Slack drafts gate cannot read it before the suite starts, and a shell that
