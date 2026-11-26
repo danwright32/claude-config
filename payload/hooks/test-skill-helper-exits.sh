@@ -685,8 +685,9 @@ rm -f "$S/monitor.py"
 # (b) Inside a method, both branches are followed: a method that ends a held process must read how
 #     it ended on every path after the end, and the method that starts one settles it only when
 #     every path out of it has waited for the end.
-# (c) A hand off deeper than one level is not followed, and it is said: in a finding's words, or as
-#     a U1 counted in the summary line when nothing else is found.
+# (c) A hand off that goes on to a further function of the file is followed to any depth (the rule
+#     #3650 merged with), never dropped in silence; the deeper.py block below runs such a helper
+#     along the paths of the method that hands it on.
 FILE="fixture/blind.py"
 cat > "$S/blind.py" <<'PY'
 import subprocess
@@ -877,14 +878,62 @@ fires P1 67 "#3663 (b) a read made before the end, on another branch, is no read
 fires P1 77 "#3663 (b) a process waited on only on one branch of the method that starts it"
 has "$out" "$FILE:88:" && bad "#3663 (b) a method reading the end on every branch, its except included, passes" "$out" || ok
 has "$out" "$FILE:105:" && bad "#3663 (b) a start method that waits on every path after the start passes" "$out" || ok
-fires P1 113 "#3663 (c) a process ended and handed two levels down is not taken as read"
-has "$out" "$FILE:113:" && has "$out" "which hands it on to self._reap(...) at line 120" && ok \
-  || bad "#3663 (c) the finding says the hand off goes deeper than the check follows" "$out"
-fires U1 127 "#3663 (c) a local process handed two levels down is counted as not judged"
-has "$out" "$FILE:127:" && has "$out" "which hands it on to _write(...) at line 135" && ok \
-  || bad "#3663 (c) the U1 names both hand offs" "$out"
-has "$out" "findings=8 unjudged=1" && ok || bad "#3663 exactly the eight findings and the one not judged" "$out"
+# (c) Since #3650 merged, a hand off is followed to any depth: _reap() waits on the process after
+# stop() ends it, on every path, so that class is read; and the write two helpers down after the only
+# read at its start is a use with nothing reading the end after it.
+has "$out" "$FILE:113:" && bad "#3663 (c) a process ended and reaped two helpers down, on every path, passes" "$out" || ok
+fires P1 127 "#3663 (c) a write two helpers down after the only read at the start is a use after the read"
+has "$out" "$FILE:127:" && has "$out" "used again at line 131" && ok \
+  || bad "#3663 (c) the finding names the hand off the write is made through" "$out"
+has "$out" "findings=8 unjudged=0" && ok || bad "#3663 exactly the eight findings and none not judged" "$out"
 rm -f "$S/blind.py"
+
+# A helper the process is handed to is run along the paths of the method that hands it on, from the
+# state at the hand off: a helper two levels down that waits on one branch only leaves the other
+# path unread, and a dropped wait() there reads nothing (#3663, after the merge with #3650).
+FILE="fixture/deeper.py"
+cat > "$S/deeper.py" <<'PY'
+import subprocess
+
+
+class ReapedOnOneBranchTwoHelpersDown:
+    def start(self):
+        self.v = subprocess.Popen(["sleep", "9"])
+
+    def stop(self):
+        self.v.terminate()
+        return self._settle(self.v)
+
+    def _settle(self, proc):
+        if proc.pid:
+            return self._reap(proc)
+        return 0
+
+    def _reap(self, proc):
+        return proc.wait(timeout=5)
+
+
+class WaitDroppedTwoHelpersDown:
+    def start(self):
+        self.w = subprocess.Popen(["sleep", "9"])
+
+    def stop(self):
+        self.w.terminate()
+        return self._settle(self.w)
+
+    def _settle(self, proc):
+        return self._reap(proc)
+
+    def _reap(self, proc):
+        proc.wait(timeout=5)
+        return 0
+PY
+scan
+[ "$rc" -eq 1 ] && ok || bad "#3663 a helper two levels down that leaves the end unread fails the scan (rc=$rc)" "$out"
+fires P1 6 "#3663 a helper two levels down that waits on one branch only leaves the other path unread"
+fires P1 23 "#3663 a dropped wait() two helpers down is no read of the end"
+has "$out" "findings=2 unjudged=0" && ok || bad "#3663 exactly the two helpers that leave the end unread" "$out"
+rm -f "$S/deeper.py"
 
 # --- S1: a script filing an issue the field gate never sees -------------------------------------
 rm -f "$S/helper.py"
