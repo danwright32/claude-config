@@ -1119,8 +1119,6 @@ const testRunner = (name: string, args: readonly string[], script: string | unde
  */
 export const writes = (cmds: readonly Command[], cwd: string | undefined, home: string): ModKitWrites => settleMoves(readWrites(cmds, cwd, home).writes)
 
-// The writes, and the folder each command runs in, by its place in `cmds` (#2000): where a cd before
-// it leaves the shell, followed as a relative path is, undefined where that cannot be followed.
 // A file name as a disk that ignores letter case and the Unicode form of an accent compares it, in
 // small letters and in capitals (#3505). The one fold of this reader: two sources of one command
 // are compared by it (sharesName, whose comment says what was measured), and so are the places two
@@ -1135,7 +1133,9 @@ const foldedPlaces = (path: string): string[] => {
   return foldedName(path.slice(cut + 1)).map(f => `${path.slice(0, cut)}/${f}`)
 }
 
-const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: string): { writes: ModKitWrites; folders: (string | undefined)[] } => {
+// The writes, and the folder each command runs in, by its place in `cmds` (#2000): where a cd before
+// it leaves the shell, followed as a relative path is, undefined where that cannot be followed.
+const readWrites =(cmds: readonly Command[], cwd: string | undefined, home: string): { writes: ModKitWrites; folders: (string | undefined)[] } => {
   const folders: (string | undefined)[] = []
   const files: ModKitWrite[] = []
   const changes: ModKitChange[] = []
