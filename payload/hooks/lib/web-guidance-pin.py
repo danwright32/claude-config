@@ -133,9 +133,10 @@ ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 def runs_package(words):
     """The package words of a command that runs one, or [] when the command runs nothing."""
     w = list(words)
-    # Past what only stands in front of a command: rtk, env with its assignments, sudo, command.
+    # Past what only stands in front of a command: rtk (and its proxy), env with its assignments,
+    # sudo, command, exec.
     while w and (w[0] in ("rtk", "sudo", "command", "env", "exec", "nohup", "time") or ASSIGN.match(w[0])):
-        w = w[1:]
+        w = w[2:] if w[0] == "rtk" and len(w) > 1 and w[1] == "proxy" else w[1:]
     if not w:
         return []
     name = os.path.basename(w[0])

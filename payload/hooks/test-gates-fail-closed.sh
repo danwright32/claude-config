@@ -196,6 +196,7 @@ declare_gate(){ printf '%s\t%s\t%s\n' "$1" "$2" "$3"; }
   declare_gate require-verification-run.sh "gh pr merge 5 --squash"         ALLOW_UNVERIFIED_MERGE
   declare_gate design-score-gate.sh        "gh pr merge 5 --squash"         -
   declare_gate check-rtk-init.sh           "rtk init -g"                    -
+  declare_gate web-guidance-pin-gate.sh    "npx -y modern-web-""guidance@0.0.1 search x" -
   declare_gate temp-worktree-gate.sh       "git worktree add /tmp/wt-2528"  ALLOW_TEMP_WORKTREE
   declare_gate stacked-branch-delete-gate.sh "git push origin :feat/x"      -
   declare_gate check-wrapped-commands.sh   "eval \$CMD && git status"       -
@@ -745,6 +746,7 @@ bash_call(){ python3 -c 'import json, sys; print(json.dumps({"command": sys.argv
   judged check-gh-watch-interval.sh   Bash "$(bash_call 'gh run watch 5')" '{}' "notice #1912"
   judged check-gh-view-comments.sh    Bash "$(bash_call 'gh issue view 5 --comments')" '{}' "notice #1912"
   judged check-rtk-init.sh            Bash "$(bash_call 'rtk init -g')" '{}' refuse
+  judged web-guidance-pin-gate.sh     Bash "$(bash_call 'npx -y modern-web-''guidance@0.0.1 search x')" '{}' refuse
   # In zsh -c, so it is refused whatever shell runs this suite (bash on the Linux runner).
   judged check-zsh-builtins.sh        Bash "$(bash_call "zsh -c 'log show --last 1m'")" '{}' refuse
   judged check-screenshot-window.sh   Bash "$(bash_call 'screencapture -x /tmp/shot.png')" '{}' refuse

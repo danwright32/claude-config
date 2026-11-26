@@ -226,6 +226,12 @@
           },
           {
             "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/web-guidance-pin-gate.sh",
+            "timeout": 10,
+            "onFailure": "block"
+          },
+          {
+            "type": "command",
             "command": "__CLAUDE_HOME__/hooks/check-zsh-builtins.sh",
             "timeout": 10,
             "onFailure": "block"

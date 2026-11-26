@@ -11111,6 +11111,34 @@ at a permission prompt): none lets a tool call run unjudged, and they are left t
 rule, with what a hook that never yields does to its mod and to the mods beside it, is standing
 rule 7 in `docs/mods-design.md`.
 
+## The pinned web guidance tool
+
+The rule file tells every session to search Google Chrome's Modern Web Guidance before designing
+for the web, with a command that downloads its npm package through npx and runs it. That command
+names one version, and the version has one home: `payload/hooks/lib/modern-web-guidance-version`,
+read through `payload/hooks/lib/web-guidance-pin.py` by everything below (#3565). It was set on
+2026-11-25 to the newest release that had been out at least two weeks.
+
+- `tests/test-web-guidance-pin.sh` fails when any file in the repository names the package with
+  `@latest`, with no version on a command that runs it, or with a version other than the pin. The
+  rule file's own sentence is lasting memory that only Dan changes, so while it still has its
+  2026-11-25 wording (which says `@latest`) the suite reports it as SUITE-PART-UNMEASURED and judges
+  everything else; once it changes, the rule file must name the pinned command.
+- `payload/hooks/web-guidance-pin-gate.sh` refuses any Bash command that runs the package (npx,
+  bunx, npm exec, npm install, pnpm dlx, yarn dlx) at another version or none, and names the pinned
+  command instead, so the plugin's own skill text, which says `@latest` and updates itself, cannot
+  run a release nobody read. A grep, an echo, `npm view` or `npm diff` only mention it and pass.
+- Once a day (6:41 AM ET in winter), `.github/workflows/web-guidance-pin.yml` asks the npm registry
+  for every release's publish time. When a release newer than the pin has been out 14 days, it
+  opens one issue (labels `priority-p2`, `security`, `tooling`, milestone Ungrouped) naming both
+  versions and the `npm diff` command to read first, or comments on that issue while it is open
+  (`tools/report-web-guidance-pin.sh`). A current pin posts nothing. A registry it cannot reach, or
+  an answer it cannot read, fails the run, which is red in the Actions tab, so an unknown is never
+  read as current.
+
+Moving the pin is one pull request that changes the version line in the pin file and the version in
+the rule file's command together, after reading `npm diff` between the two versions.
+
 ## Sleep mode
 
 Sleep mode lets the Claude Code sessions you leave open keep working toward the goal you set each
