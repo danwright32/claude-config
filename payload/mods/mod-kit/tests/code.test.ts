@@ -1,7 +1,7 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './hang-ceiling.ts'
 import type { Register } from 'claude-code'
-import { codeOnly, codeVerdict, lookedBack, pythonText } from '../hooks/code.ts'
+import { awkRead, codeOnly, codeVerdict, lookedBack, pythonText } from '../hooks/code.ts'
 
 // The per language judge of inline code (#712: moved here from scope-modes, so $.modkit.writes and
 // no build read code the same way). Its rules are pinned end to end through no build's own tests;
@@ -279,6 +279,16 @@ describe("codeVerdict reads node's vm however it is reached (#2925)", () => {
 
 // #2974: mod-kit's awk reader, raised by the lessons review of PR #2972 at e3edeee.
 describe("mod-kit's awk reader (#2974)", () => {
+  // A name is kept only to one character past the longest keyword (#3549), and that one character is
+  // what tells printfx or returnx from printf or return. Kept one shorter, a / after such a name was
+  // read as a regex, which paired with the string's / and left the string's > read as a redirect.
+  test('a name one character longer than a keyword is no keyword, so a / after it divides', () => {
+    expect(codeVerdict('awk', '{ n = printfx / 2; print "a/b > c" }')).toBeUndefined()
+  })
+  test('the same with the name directly before the slash, for every keyword', () => {
+    const verdicts = ['print', 'printf', 'return'].map(k => ({ name: `${k}a`, verdict: codeVerdict('awk', `{ n = ${k}a/2; print "a/b > c" }`) }))
+    expect(verdicts).toEqual(verdicts.map(v => ({ ...v, verdict: undefined })))
+  })
   // A line continued by a backslash runs on, and so does what came last: the backslash itself set it
   // to expect an operand, so a / after a continued name was read as a regex, which paired with a
   // string's / and left the string's -> read as a redirect.
@@ -310,52 +320,41 @@ describe("mod-kit's awk reader (#2974)", () => {
   // 1.5 s for 92,000 characters, against 0.1 s for 23,000 (four times the text, about fifteen times as
   // long).
   //
-  // This test first timed one reading of a program against one of a program a quarter its length,
-  // and wanted the median of seven rounds of that ratio under 6. With nothing broken it failed in 12
-  // of the 18 mod-kit failures kept from 2026-11-14 to 16, once at 11.5 at load 17 on 12 cores
-  // (claude-config#2857, L290, L656): the short reading fits in one turn on a core, and the long one
-  // is the one a busy Mac interrupts, so the ratio measured the Mac. Its readings cannot be counted
-  // from here instead: Claude Code's test runner freezes RegExp.prototype, so nothing can spy on what
-  // the reader hands its regular expressions, and a counter in code.ts would change the copies kept
-  // in mods outside this change. So the two sides are made the SAME work when the reader is linear:
-  // one reading of a program against sixteen readings of one a sixteenth its length. Read linearly
-  // they take about as long as each other; read in time growing with the length squared, as before
-  // #2974, the one reading takes several times as long. Each side is timed nine times, the order
-  // alternating, and judged by its FASTEST time: a busy Mac only ever adds time, so the fastest of
-  // nine is the one it interrupted least, and the long side's fastest must be under three times the
-  // short side's (only that way round: a reader slow on long programs is the fault). A ratio per round does not do: measured on 2026-11-16 at load 13 to 18 on 12 cores, one
-  // round's ratio ran from 0.12 to 10 with nothing broken, and the median of nine reached 1.81,
-  // while the fastest times gave 0.87 to 1.07 in four runs. With the check of the whole output put
-  // back they gave 7.0 and 7.15 (not sixteen, since the rest of codeVerdict reads in linear time).
-  test('one reading of a program takes about as long as sixteen readings of one a sixteenth its length', () => {
-    const program = (n: number) => `{ ${'total = total + value; '.repeat(n)}print "a -> b" }`
-    const short = program(250)
-    const long = program(4000)
-    expect([codeVerdict('awk', short), codeVerdict('awk', long)]).toEqual([undefined, undefined])
-    const timed = (read: () => void) => {
-      const start = performance.now()
-      read()
-      return performance.now() - start
+  // This was held by the clock, one reading of a program timed against sixteen readings of one a
+  // sixteenth its length, and that failed with nothing broken at load 80 on 2026-11-24 (#3549, L290,
+  // L656): two times taken in one run measure the Mac. It is held by counting instead. The reader
+  // sums in awkRead every character it reads, each one a regular expression is handed included, so
+  // a reader asking of the whole output at every name, as before #2974, reads the output again for
+  // each name and the count grows with the length squared. Each program below is read at two
+  // lengths, sixteen times apart, and at both the reader may read at most READ_PER_CHARACTER
+  // characters for each character of the program. Linear, the count per character is the same at
+  // both lengths; quadratic, it grows sixteen fold from one to the other and passes the bound.
+  //
+  // One shape is a single long name: the run of name characters was kept whole and handed to the
+  // keyword test at each of its characters, so one name of 200,000 characters took about 2 s against
+  // 0.18 s for 100,000 (2026-11-25, fastest of 5 each, load 21 on 12 cores). A name longer than every
+  // keyword is now kept to as many characters as say it is none.
+  test('the awk reader reads a bounded number of characters for each character of the program', () => {
+    // A count, so the same at every load. Measured on 2026-11-25 once the long name was fixed: one
+    // long name reads the most, 12.00 characters for each, then many statements, 6.39.
+    const READ_PER_CHARACTER = 16
+    const shapes: Record<string, (n: number) => string> = {
+      'many statements': n => `{ ${'total = total + value; '.repeat(n)}print "a -> b" }`,
+      'one long name': n => `{ x${'a'.repeat(24 * n)} = 1; print "a -> b" }`,
+      'strings, regexes, comments and continued lines': n => `${'/a\\/[/]b/ { print "x > y" \\\n n++ } # a note \\\n'.repeat(n)}END { print 1 }`,
+      // A string never closed: the program is read again as written.
+      'a string never closed': n => `{ print "${'x'.repeat(24 * n)}`,
     }
-    const sixteenShort = () => {
-      for (let k = 0; k < 16; k++) codeVerdict('awk', short)
-    }
-    const oneLong = () => {
-      codeVerdict('awk', long)
-    }
-    const longs: number[] = []
-    const shorts: number[] = []
-    for (let round = 0; round < 9; round++) {
-      if (round % 2) {
-        longs.push(timed(oneLong))
-        shorts.push(timed(sixteenShort))
-      } else {
-        shorts.push(timed(sixteenShort))
-        longs.push(timed(oneLong))
-      }
-    }
-    const ratio = Math.min(...longs) / Math.max(Math.min(...shorts), 0.05)
-    expect({ ratio: Math.round(ratio * 100) / 100, under: ratio < 3 }).toEqual({ ratio: expect.any(Number), under: true })
+    const reads = Object.entries(shapes).flatMap(([shape, program]) =>
+      [250, 4000].map(n => {
+        const code = program(n)
+        awkRead.chars = 0
+        const verdict = codeVerdict('awk', code)
+        const perCharacter = Math.round((awkRead.chars / code.length) * 100) / 100
+        return { shape, length: code.length, verdict, perCharacter, bounded: perCharacter <= READ_PER_CHARACTER }
+      }),
+    )
+    expect(reads).toEqual(reads.map(r => ({ ...r, verdict: undefined, bounded: true })))
   })
 })
 
