@@ -5539,7 +5539,7 @@ const AS_MAIN_ASKS: [string, string, string][] = [
   // The first open question, the other order: a copy or a redirect that writes the name BEFORE the move is replaced by the note, which is kept.
   ['a copy onto the name before the move', `cp ~/Desktop/exact/a.md ~/Desktop/archive/ && mv ${NOTE_A} ~/Desktop/archive/`, `Delete ${NOTE_A}: why? Git does not hold it, so once deleted it cannot be got back from git.`],
   ['a redirect that writes the name before the move', `echo x > ~/Desktop/archive/a.md; mv ${NOTE_A} ~/Desktop/archive/`, `Delete ${NOTE_A}: why? Git does not hold it, so once deleted it cannot be got back from git.`],
-  // Nothing replaces the note: another name, a folder both land inside, a folder the command may make first, an append, an edit in place.
+  // Nothing replaces the note: another name, a folder both land inside, a folder the command may make first, an append.
   ['a later move of a file of another name into the folder', `mv ${NOTE_A} ~/Desktop/archive/ && mv ~/Desktop/exact/other.md ~/Desktop/archive/`, `Move ${NOTE_A}: why? It goes to ~/Desktop/archive/a.md, and can be moved back.`],
   ['a file of another name onto the same name, which is a folder', `mv ${NOTE_A} ~/Desktop/archive && mv ~/Desktop/exact/other.md ~/Desktop/archive`, `Move ${NOTE_A}: why? It goes to ~/Desktop/archive, and can be moved back.`],
   ['a file of another name onto the same name, which the command may make a folder first', `mkdir -p ~/Desktop/new && mv ${NOTE_A} ~/Desktop/new && mv ~/Desktop/exact/other.md ~/Desktop/new`, `Move ${NOTE_A}: why? It goes to ~/Desktop/new, and can be moved back.`],
