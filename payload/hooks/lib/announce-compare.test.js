@@ -8,7 +8,9 @@
 const path = require('path');
 const childProcess = require('child_process');
 const LIB = path.join(__dirname, 'announce-compare.js');
-const compare = require(LIB);
+// Spelled out in the require, as changelog-entry.test.js spells its own, so the installer that
+// copies a helper with the files it requires (lib/install-hook-libs.py) can read which file this is.
+const compare = require(path.join(__dirname, 'announce-compare.js'));
 
 let passed = 0;
 let failed = 0;
