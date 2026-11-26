@@ -6597,19 +6597,26 @@ suite that refused to run or crashed at its top writes nothing without that prov
 could not be checked or was not measured. It is not run on every full run: doing so costs about
 one full run again, and the runner already hands every suite the list.
 
-The main suite on its own, which is two suites, each half of its sections (claude-config#3594):
+The main suite on its own, which is five suites, each a part of its sections (claude-config#3594,
+#3680):
 
 ```bash
 bash tests/test-claude-sync.sh
 bash tests/test-claude-sync-part2.sh
+bash tests/test-claude-sync-part3.sh
+bash tests/test-claude-sync-part4.sh
+bash tests/test-claude-sync-part5.sh
 ```
 
-The second runs the same file with `SUITE_PART=2`, which deals the sections from the heading
-`SUITE_PART2_FROM` names to the end; the first deals the ones before it. One file keeps the
-harness, the prelude and every helper in one place, and two suites let each be budgeted and dealt
-by its own cost: on 2026-11-25 the whole file had grown to its section time budget on CI, which is
-judged per run and undivided by shards. `SECTION_ONLY` and `SECTION_UNTIL` reach any section from
-either.
+Each later part runs the same file with `SUITE_PART` set to its number, which deals the sections
+from the heading `SUITE_PARTS_FROM` names for that part up to the next part's; the first deals the
+ones before them all. The part files are one file under four names, each reading its number from
+its own name. One file keeps the harness, the prelude and every helper in one place, and separate
+suites let each be budgeted and dealt by its own cost: on 2026-11-25 the whole file had grown to
+its section time budget on CI (#3594), and then its first half read 453 seconds on a runner
+against the 600 second line every suite is held to there (#3680). The cuts were put by measured
+section time, never by count, and adding a part is a heading in `SUITE_PARTS_FROM` and a copy of
+the part file. `SECTION_ONLY` and `SECTION_UNTIL` reach any section from any part.
 
 It fans its sections out across four processes. Measured on 2026-08-21, 87 sections taking 82
 seconds that way and 243 in a single process, with no single section dominating (the slowest five
@@ -6721,6 +6728,16 @@ each `parts` job runs one part (`HOOK_TESTS_DEALT`, `HOOK_TESTS_PART`, `HOOK_TES
 each part's timings into the cache the next deal reads. A part refuses outright when the deal does
 not cover exactly the suites the tree holds, so a new suite can never be run by no job.
 `gh workflow run tests.yml --ref <branch>` runs a branch with no pull request open.
+
+Each part also fails when a suite it ran took more than half the 1,200 second wall limit every suite
+is stopped at (claude-config#3575), naming the suite, its seconds and the ceiling, so the next suite
+to grow is caught on its own pull request rather than stopped on main by a slow runner. It judges
+the wall clock this run read for each suite, which is what the wall limit stops a suite on: never
+the figure written for the next deal, which can sit above the reading when a record names a smaller
+share, and never the cache the deal was made from, which a pull request restores from an earlier
+run and can be several splits old. A suite
+that left no time is named as not measured. A run on a Mac is never judged. The remedy is to split
+the suite into suites sharing one harness, as #3581 and #3588 did.
 
 A pull request run whose exact tree already passed does not run the suites again (claude-config#2690,
 the cheap run after `gh pr update-branch`). Every full green run records its tree as an artifact
