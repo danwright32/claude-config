@@ -47,7 +47,8 @@ file posts, since it read only the quiet script the command names.
     line names bash; not sh, bash --posix or bash -p). `ENV=file` does for sh, dash and ksh given
     -i. `ZDOTDIR=dir zsh quiet.sh` runs dir/.zshenv (and .zprofile, .zshrc, .zlogin given -l or
     -i; not with -f), and `HOME=dir` the same files, bash's .bashrc and .bash_profile, .profile
-    and .kshrc for a shell given -i or -l.
+    and .kshrc for a shell given -i or -l. (.bash_login is read from HOME too, as the file bash
+    -l runs where there is no .bash_profile; that one was not measured.)
   * `BUN_OPTIONS='--preload ./mod.js' bun quiet.js` loads mod.js, and
     `NODE_REPL_EXTERNAL_MODULE=./mod.js node -i` runs it.
   * `node -- -x.js`: node looks for a main file named with a leading dash in the folders NODE_PATH

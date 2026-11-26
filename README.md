@@ -5297,7 +5297,8 @@ line, and the `rubygems.rb` a `RUBYLIB` folder puts in front of ruby's own; a mo
 names with `-M`, `-m` or `-d:`, found through `PERL5LIB` or an `-I`, and the `perl5db.pl` a
 `PERL5LIB` folder puts in front of perl's own debugger; the file `BASH_ENV` names; the file
 `ENV` names, which sh, dash and ksh run when given `-i`; `.zshenv`, `.zprofile`, `.zshrc` and
-`.zlogin` in the folder `ZDOTDIR` names, and those, `.bashrc`, `.bash_profile`, `.profile` and
+`.zlogin` in the folder `ZDOTDIR` names, and those, `.bashrc`, `.bash_profile`, `.bash_login`
+(not measured: the file `bash -l` runs where there is no `.bash_profile`), `.profile` and
 `.kshrc` in the folder `HOME` names; each file `BUN_OPTIONS` names; and the file
 `NODE_REPL_EXTERNAL_MODULE` names. Each is read wherever a command sets the variable (its own
 prefix, `export`, `env`, a plain assignment), whatever program it runs, since any of them can

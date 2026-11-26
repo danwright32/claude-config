@@ -10,9 +10,10 @@
 # Every route was measured first with stand in scripts that only wrote a marker file (2026-11-25,
 # one run of each shape; python 3.14.4 and 3.9.6, ruby 2.6.10, perl 5.34.1, bash 3.2.57, zsh 5.9,
 # dash, ksh, node 22.22.2, bun), and each case below was seen to pass the gate before the change.
-# Each has two quiet twins, which must stay allowed, so a fix that refused every command setting
-# one of these variables would fail here too: the same command with the variable naming a file
-# that does not post, and the same command without the variable.
+# Each has a quiet twin, which must stay allowed, so a fix that refused every command setting one
+# of these variables would fail here too: the same command with the variable naming a file that
+# does not post (every pair and trio). The first case of each route (a trio) has a second twin,
+# the same command without the variable.
 #
 # The world they run in (the gate under test, the throwaway folder and its judgement cache, POST)
 # is lib/slack-drafts-gate-harness.sh. The helper functions are copied as they are from the other
@@ -79,8 +80,9 @@ read_refused() {
   esac
 }
 
-# The fixtures: every file a case names, in one folder the commands are judged in. PYPOST, RBPOST
-# and PLPOST are a Python, a ruby and a perl file that post; POST is the harness's curl line.
+# The fixtures: every file a case names, in one folder the commands are judged in. pypost, rbpost,
+# plpost and jspost each write a Python, a ruby, a perl or a JavaScript file that posts; POST is
+# the harness's curl line.
 G="$T/g3675"
 mkdir -p "$G"
 run_g() { run_raw "$(payload Bash "$(bash_input "$1")" "$G")"; }
