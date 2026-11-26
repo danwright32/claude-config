@@ -138,6 +138,10 @@ answered "#3406 fewer than $STREAK readable trees is unmeasured, not green" unme
 make_case incomplete "I$(rep U $((STREAK - 1)))"
 answered "#3406 a run with fewer records than parts is skipped, so the streak is unmeasured" unmeasured "only $((STREAK - 1)) of main's newest * commits had a readable record (1 skipped)*" "incomplete"
 
+make_case same-tree "$(rep U "$STREAK")"
+sed -i.bak "s/$(printf 't%039d' 2)/$(printf 't%039d' 1)/" "$TMPROOT/same-tree/commits.json"
+answered "#3406 two commits holding one tree are one tree, counted once" unmeasured "only $((STREAK - 1)) of main's newest * commits had a readable record (1 skipped)*" "same-tree"
+
 make_case warm-only "$(rep W "$STREAK")"
 answered "#3406 the cached twin's unmeasured line is not this case, so it is green" green "main's commit c000000001, run 1001, measured it*" "warm-only"
 
@@ -159,8 +163,8 @@ suite_name="$(sed -n 's/^SUITE="\(.*\)"$/\1/p' "$TOOL")"
 miss=""
 [ "$marker" = "#3406: bash tests/test-claude-sync.sh is judged within" ] || miss="$miss the tool's MARKER is '$marker';"
 [ "$suite_name" = "$(basename "$GATE_SUITE")" ] || miss="$miss the tool's SUITE is '$suite_name';"
-grep -qF 'cost_case "bash tests/test-claude-sync.sh is judged within $cold_ceiling units' "$GATE_SUITE" \
-  && grep -F 'cost_case "bash tests/test-claude-sync.sh is judged within $cold_ceiling units' "$GATE_SUITE" | grep -qF '"$cost" "#3406"' \
+cold_call="$(grep -F 'cost_case "bash tests/test-claude-sync.sh is judged within $cold_ceiling units' "$GATE_SUITE" || true)"
+grep -qF '"$cost" "#3406"' <<< "$cold_call" \
   || miss="$miss the drafts suite's cold case is not reported through cost_case under #3406;"
 # shellcheck disable=SC2016
 grep -qF '"unmeasured: "*) echo "SUITE-PART-UNMEASURED ${3:-#3170}: $1: ${2#unmeasured: }"' "$GATE_SUITE" \

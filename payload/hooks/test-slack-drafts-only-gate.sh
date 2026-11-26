@@ -1537,7 +1537,7 @@ if filled_here and ratio <= ceiling:
 # answer on main several trees in a row, so a real slowdown cannot hide here.
 if (ratio > ceiling and ran_out and len(ran_out) == len(ratios)
         and os.environ.get("SLACK_GATE_COST_RAN_OUT_UNMEASURED") == "1"):
-    print("unmeasured: every judgement of this case ran out of the gate's seconds on this machine, after %s, so each was read on the step clock instead, at %s units against the limit of %s, and a reading taken only on the step clock is not held to the limit (#3406); a sample that finishes inside the seconds is"
+    print("unmeasured: every judgement of this case ran out of the gate's seconds on this machine, after %s, so each was read on the step clock instead, at %s units against the limit of %s, and a reading taken only on the step clock is not held to the limit, while a sample that finishes inside the seconds is held to it as ever (#3406)"
           % (" and ".join(ran_out), ", ".join("%.1f" % r[0] for r in ratios), ceiling))
     sys.exit()
 print("ok" if ratio <= ceiling else "judging it took at least %.1f s of processor time, %.1f units of the fixed yardstick (%.3f s each), past %s, in each of %d samples (%s)"

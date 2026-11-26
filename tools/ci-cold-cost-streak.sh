@@ -65,10 +65,14 @@ pairs="$(jq -r '.[] | "\(.sha) \(.commit.tree.sha)"' <<< "$commits" 2> /dev/null
 dl_root="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/cold-streak.XXXXXXXX")" || answer unmeasured "could not make a folder to download records into."
 trap 'rm -rf "$dl_root"' EXIT
 
-read_n=0; skipped=0; seen=""
+read_n=0; skipped=0; seen=""; trees=" "
 while read -r sha tree; do
   [ -n "$sha" ] || continue
   short="${sha:0:10}"
+  # Two commits holding one tree (a revert and its reapply, an empty commit) were proved by one run,
+  # so the tree is read once: counted twice it would stand for two trees of the streak.
+  case "$trees" in *" $tree "*) echo "  $short: skipped, its tree was read already for a newer commit." >&2; skipped=$((skipped + 1)); continue ;; esac
+  trees="$trees$tree "
   arts="$("$gh" api "repos/$repo/actions/artifacts?name=green-tree-$tree&per_page=20" 2> /dev/null)" \
     || { echo "  $short: skipped, the search for its tree's green record failed." >&2; skipped=$((skipped + 1)); continue; }
   run_id="$(jq -r '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | reverse | .[0].workflow_run.id // empty' <<< "$arts" 2> /dev/null)"
