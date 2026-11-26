@@ -1202,7 +1202,8 @@ pr_number() {  # $1 = fixture dir, $2 = the number its pull request now carries
   jq -c --argjson n "$2" '.number = $n | .url = "https://github.com/acme/widget/pull/\($n)"' "$1/pr.json" > "$1/pr.json.new" && mv "$1/pr.json.new" "$1/pr.json"
 }
 used_by() { grep -c "\"kind\": \"used\".*\"pr\": $2[,}]" "$1/approvals/record.jsonl" 2>/dev/null || true; }
-if grep '"kind": "used"' "$dir/approvals/record.jsonl" | head -1 | grep -q '"claim": true.*"pr": 7'; then pass
+first_used="$(grep -m 1 '"kind": "used"' "$dir/approvals/record.jsonl" 2>/dev/null)"
+if says "$first_used" '"claim": true' && says "$first_used" '"pr": 7'; then pass
 else fail "#3666 the first line recording pull request 7's use of the approval is not its claim: $(cat "$dir/approvals/record.jsonl")"; fi
 pr_number "$dir" 8
 for talk in "" "$dir/talk.jsonl"; do
