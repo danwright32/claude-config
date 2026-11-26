@@ -898,7 +898,9 @@ test('#2171: a write to a bare mktemp file runs beside a screen file read, and e
     'cd /w/slate && path=(./bin $path); T=$(mktemp); cat app/page.tsx > "$T"',
     'cd /w/slate && path+=(./bin); T=$(mktemp); cat app/page.tsx > "$T"',
     'cd /w/slate && typeset path; T=$(mktemp); cat app/page.tsx > "$T"',
-    'cd /w/slate && mktemp(){ echo app/page.tsx; }; T=$(mktemp); cat app/page.tsx > "$T"',
+    // The first setting is sure to have run and the second gives the same value again, so the
+    // variable is followed and only the function named mktemp holds the write (#3468 review).
+    'cd /w/slate; T=$(mktemp); mktemp(){ echo app/page.tsx; }; T=$(mktemp); cat app/page.tsx > "$T"',
     'cd /w/slate; T=$(mktemp); T=app/page.tsx : ; cat app/page.tsx > "$T"',
     'cd /w/slate && wc -l $(ls app/page.tsx) > "$(mktemp)"',
     'cd /w/slate; T=`mktemp`; cat app/page.tsx > "$T"',
@@ -907,6 +909,10 @@ test('#2171: a write to a bare mktemp file runs beside a screen file read, and e
   ])
     if (!refusalOf(await call($, { tool: 'Bash', command }))) passed.push(command)
   expect(passed).toEqual([])
+  // #3468: no setting after a function is defined is sure to have run (zsh takes the command after
+  // `name()` as its body), so the one setting here is not followed and the write is held for that,
+  // whatever the function is named.
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'cd /w/slate; mktemp(){ echo app/page.tsx; }; T=$(mktemp); cat app/page.tsx > "$T"' }))).toContain('could not be followed')
 })
 
 test('shell writes to a look changing file are caught: redirects, sed in place, copies, removals and inline scripts', withKit, async ($, on) => {

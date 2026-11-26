@@ -64,13 +64,13 @@ const isPipe = (word: string) => /^[<>]\(/.test(word)
 // right after a `;` or a new line (Command.certain, the command reader's one reading of that,
 // sureSettings). Any other may have been skipped or have run in another shell: behind an `&&` or
 // `||`, in a branch, a loop, a function, a group or a subshell, made by export or declare, or in a
-// script a shell is given. It leaves a variable the reader holds no value for not known, and one it holds a value for
-// with either. And only a
-// value the reader can be sure of: one holding a command's output or anything else it cannot name;
-// one a loop other than a for over plain words (below), read, mapfile, getopts or printf -v sets,
-// appended to or unset; one given a second,
-// different value (the reader cannot tell a ; from an && or ||, so which stands is unknown); and
-// every value once an eval or a sourced file may have changed it, is left as written. A value set
+// script a shell is given. It leaves a variable the reader holds no value for not known, and one it
+// holds a value for with either. And only a value the reader can be sure of: one holding a
+// command's output or anything else it cannot name; one a loop other than a for over plain words
+// (below), read, mapfile, getopts or printf -v sets, appended to or unset; one given a second,
+// different value (the reader does not model which setting wins: a loop or a function may run the
+// later one first, so which stands is unknown); and every value once an eval or a sourced file may
+// have changed it, is left as written. A value set
 // inside a subshell ends with it. An unquoted value is split into words where the shell running the
 // command splits it (#1834: bash, sh, dash and ksh do, zsh does not), and a quoted one is kept whole.
 // A for loop over plain words (#1953) gives its variable each of them: a word naming it is read once
