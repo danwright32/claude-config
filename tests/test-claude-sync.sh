@@ -12417,6 +12417,13 @@ check "#3680 between them the parts run every section past the prelude exactly o
   "[ \"\${_pt_union#,}\" = \"\$(_pt_range \"\$(( _pt_pend + 1 ))\" \"\$_pt_total\")\" ]"
 [ -z "$_pt_bad_wrap" ] || echo "  parts or files that broke the next check:$_pt_bad_wrap"
 check "#3680 each part's own suite file runs that part" "[ \"\$_pt_n\" -gt 1 ] && [ -z \"\$_pt_bad_wrap\" ]"
+# And by its bare name from its own folder, which is how somebody standing in tests/ starts it: the
+# part file reads its number from its own name, and a name with no folder in front of it is the
+# shape a careless cut of that name gets wrong.
+_pt_bare="$(cd "$_pt_dir" && SUITE_SHARD=1/1 SUITE_SHARD_COVERAGE_ONLY=1 SUITE_NO_LOCK=1 SUITE_SECTION_TIMINGS= \
+  SUITE_DEPTH="$SUITE_CHILD_DEPTH" bash "test-claude-sync-part$_pt_n.sh" 2>&1)"
+check "#3680 the last part's file run by its bare name from its own folder runs that part" \
+  "[ \"\$_pt_n\" -gt 1 ] && [ \"\$(_pt_field \"\$_pt_bare\" part)\" = \"\$_pt_n\" ] && [ \"\$(_pt_field \"\$_pt_bare\" first)\" = \"\${_pt_first[\$_pt_n]:-}\" ]"
 # A suite file for a part that does not exist would fail by itself, but one MISSING is silent: its
 # sections would simply never run anywhere. So the files on disk are counted against the parts.
 _pt_files="$(cd "$_pt_dir" && ls test-claude-sync-part*.sh 2>/dev/null | sort | tr '\n' ' ')"

@@ -12,7 +12,9 @@
 # Every knob that file takes works here too, except SUITE_PART, which this sets.
 set -uo pipefail
 _p2_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-_p2_part="${BASH_SOURCE[0]##*/test-claude-sync-part}"; _p2_part="${_p2_part%.sh}"
+# Its own file name with any folder taken off first, so a bare name (run from inside tests/) is
+# read the same as a path.
+_p2_part="${BASH_SOURCE[0]##*/}"; _p2_part="${_p2_part#test-claude-sync-part}"; _p2_part="${_p2_part%.sh}"
 case "$_p2_part" in
   [2-9]|[1-9][0-9]) ;;
   *) echo "FAIL: $(basename "$0"): its name does not end in -part<n>.sh with n of 2 or more, so which part of the suite it runs is not decided. Refusing to run a set nobody chose."
