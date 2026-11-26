@@ -127,7 +127,9 @@
 # bypass, which is why it stays refused as an argument, as --auto does. The helper sends it itself in
 # one case only: every gate has passed on this head, gh has refused the plain merge for the base
 # branch policy, and GitHub's own answers, read at that moment, say an approving review is the one
-# thing missing and that the account merging may bypass the ruleset asking for it. It is sent pinned
+# thing missing and that the account merging may bypass the ruleset asking for it, for a pull request
+# that account opened itself (claude-config#3571, see bypass_author): anyone else's waits for the
+# approval the ruleset is there to ask for. It is sent pinned
 # to the head the gates judged, so it merges that commit or nothing. --admin is one flag that skips
 # every rule the account may bypass, not only the review (L448), so everything it would skip is read
 # first, and anything else it would skip, or any answer that cannot be read, stops the run with
@@ -156,7 +158,9 @@
 #      see wait_for_base), or a default branch GitHub did not name, or an approving review the base
 #      branch's rules require that the account merging may not bypass, or whose bypass could not be
 #      read, or that is not all a bypass would skip (claude-config#3534, see bypass_judge), or that
-#      sleep mode does not allow a merge past in this repository tonight (see bypass_sleep)
+#      sleep mode does not allow a merge past in this repository tonight (see bypass_sleep), or that
+#      is missing from a pull request someone other than the account merging opened, or whose opener
+#      or merging account could not be read (claude-config#3571, see bypass_author)
 #   3  still waiting (on checks, the review, a base still moving, the repository's turn, or the
 #      pull request of the branch it is based on, claude-config#3118) when the
 #      deadline, the time in line (the line standing still for MWR_LINE_SECONDS, claude-config#1697;
@@ -1619,9 +1623,10 @@ choose_method(){
 }
 read_back(){   # sets after
   local env
-  # reviewDecision is read for bypass_judge (claude-config#3534), in the one read that already says
-  # whether the merge landed and whether the head moved, so that reading is no older than those.
-  env="$(mt_pr_view "$pr" "state,headRefOid,reviewDecision" "$slug" "$slug")"
+  # reviewDecision is read for bypass_judge (claude-config#3534), and author for bypass_author
+  # (claude-config#3571), in the one read that already says whether the merge landed and whether
+  # the head moved, so neither reading is older than those.
+  env="$(mt_pr_view "$pr" "state,headRefOid,reviewDecision,author" "$slug" "$slug")"
   after="$(printf '%s' "$env" | jq -c '.view // {}' 2>/dev/null)"
   [ "$(printf '%s' "$env" | jq -r '.found // false' 2>/dev/null)" = "true" ] && return 0
   read_err="$(printf '%s' "$env" | jq -r '.error // ""' 2>/dev/null)"
@@ -1657,6 +1662,8 @@ read_back(){   # sets after
 #     three branches with classic protection). Where that reads true, the protection itself is
 #     read, which GitHub shows only to an account that administers the repository: "Branch not
 #     protected" means none, any protection it shows refuses, and so does an answer that shows nothing.
+# Between 1 and 2, before any rule is read, the pull request must be one the merging account opened
+# itself (claude-config#3571, see bypass_author).
 # Every one of those is read from GitHub, and an answer that could not be read, was cut short or was
 # not the shape expected is never taken as permission (L42): it stops, saying an approving review is
 # missing and what could not be read. There is deliberately no per repository opt in list (Dan,
@@ -1761,16 +1768,84 @@ bypass_sleep(){   # bypass_sleep [again]: returns 0 when the bypass merge may be
   flat="${out//$'\n'/ }"
   bypass_refuse "what sleep mode allows in $slug tonight could not be asked of the scope modes mod (node exited $rc: ${flat:0:300}), and $BY_UNREAD" "$BY_SLEEP_AGAIN"
 }
+# ONLY ITS OWN PULL REQUEST (claude-config#3571). A ruleset that asks for an approval and lets its
+# owner bypass it exists so that other people's pull requests wait for the owner's approval. Until
+# this, nothing here read who opened the pull request, so the bypass was sent for whatever pull
+# request the helper was run on, a teammate's or a bot's included, and the only thing keeping those
+# waiting was a session not running the helper on them (L27). A pull request from anyone else never
+# needs the bypass: the owner can approve it, and the plain merge then goes through.
+# WHO OPENED IT is read in the read back (after), with the state, head and review it is judged
+# beside. gh prints a person as {id, is_bot: false, login, name} and a bot as {is_bot: true, login:
+# "app/<name>"} (measured with gh 2.89 on 2026-11-25, on two pull requests a person opened and one
+# a bot opened). A bot is someone else whatever its login, and an author that is not that shape,
+# with a login and a true or false is_bot, was not read: it refuses, never matches (L42).
+# WHO MERGES is GitHub's own answer, `gh api user`, for the token the merge is sent with. It is a
+# call of its own, made only here, because nothing the helper already holds says it: `account` is
+# empty when the active account merges, the common case, and is otherwise the name gh holds for the
+# account, which is what it was called when it signed in; read_back is asked as the account that
+# can READ the pull request (mt_pr_view), which need not be the one that merges; and none of the
+# rules, ruleset and branch reads below names the account asking.
+# THE TOKEN IS TAKEN ONCE (by_tok): GitHub is asked whose it is, and the bypass merge is sent with
+# that same token and no other (see the send). gh_as asks gh for a token on every call, and with no
+# account named sends as whichever account is active at that moment, so a `gh auth switch` in
+# another session while the checks gate is asked would otherwise merge as an account nobody
+# compared with the author. With no token to take there is nobody to ask about, and it refuses
+# rather than fall back to the active account as gh_as does.
+# The logins are compared exactly as GitHub gave them, both being GitHub's own spelling.
+by_tok=""; by_login=""
+bypass_token(){ if [ -n "$account" ]; then gh auth token -u "$account"; else gh auth token; fi 2>/dev/null </dev/null; }
+# GitHub's record of the account by_tok belongs to, into ut_ans, classed as ut_api_read classes.
+bypass_user_read(){
+  local rc
+  ut_ans="$(GH_TOKEN="$by_tok" gh api user 2>&1 </dev/null)"; rc=$?
+  [ "$rc" -eq 0 ] && return 0
+  read_err="${ut_ans:0:300}"
+  ghp_rate_limited "$read_err" && return 5
+  mt_gh_read_class "$ut_ans" "$account"
+}
+BY_SHOWN_JQ='tostring | gsub("[[:cntrl:]]"; " ") | .[0:60]'
+# bypass_author <who, as a sentence names the merging account>: 0 when the pull request was opened
+# by the account by_tok belongs to, with by_login its login; 5 to look again; anything else stops.
+bypass_author(){
+  local who="$1" au kind opened shown rrc what
+  by_tok=""; by_login=""
+  au="$(printf '%s' "$after" | jq -c '.author' 2>/dev/null)" || au=""
+  kind="$(printf '%s' "$after" | jq -r '.author | if type == "object" and (.login | type) == "string" and .login != "" and (.is_bot | type) == "boolean"
+    then (if .is_bot then "bot" else "person" end) else "unsaid" end' 2>/dev/null)" || kind=""
+  opened="$(printf '%s' "$after" | jq -r '.author.login' 2>/dev/null)" || opened=""
+  shown="$(printf '%s' "$after" | jq -r ".author.login | $BY_SHOWN_JQ" 2>/dev/null)" || shown=""
+  case "$kind" in
+    person) ;;
+    bot) bypass_refuse "#$pr was opened by someone else ($shown, a bot), so it waits for that review" ;;
+    *) bypass_refuse "GitHub's answer did not say who opened #$pr (author: ${au:0:120}), so whether $who opened it is not known, and $BY_UNREAD" "$BY_AGAIN" ;;
+  esac
+  by_tok="$(bypass_token)" || by_tok=""
+  [ -n "$by_tok" ] \
+    || bypass_refuse "gh gave no token for $who, so which account the merge would be made as could not be asked of GitHub, and $BY_UNREAD" " Sign gh in again (gh auth login) and run the same command again, or have it approved first."
+  what="GitHub's login for $who"
+  with_retries "$what" bypass_user_read; rrc=$?
+  [ "$rrc" -eq 5 ] && return 5
+  [ "$rrc" -eq 0 ] || bypass_refuse "$(signin_or_unread "$what" "$rrc"), so whether it opened #$pr is not known, and $BY_UNREAD" "$BY_AGAIN"
+  by_login="$(printf '%s' "$ut_ans" | jq -r 'if type == "object" and (.login | type) == "string" and .login != "" then .login else error("no login") end' 2>/dev/null)" || by_login=""
+  [ -n "$by_login" ] \
+    || bypass_refuse "GitHub's answer for $who named no login (${ut_ans:0:200}), so whether it opened #$pr is not known, and $BY_UNREAD" "$BY_AGAIN"
+  [ "$by_login" = "$opened" ] \
+    || bypass_refuse "#$pr was opened by someone else ($shown, where this merge would be made as $(jq -rn --arg l "$by_login" "\$l | $BY_SHOWN_JQ")), so it waits for that review"
+  return 0
+}
 # Called with the plain merge refused for the base branch policy and read back open at $head (after).
-# Returns 0 when the bypass merge may be sent, with by_as saying what it bypasses; 1 when GitHub
-# does not read the review as still to come, so nothing about a bypass was read; 5 to look again.
-# Every other outcome stops.
+# Returns 0 when the bypass merge may be sent, with by_as saying what it bypasses, by_tok the token
+# to send it with and by_login whose that is; 1 when GitHub does not read the review as still to
+# come, so nothing about a bypass was read; 5 to look again. Every other outcome stops.
 by_as=""
 bypass_judge(){
   local who b rules ids id one sets='{}' m verdict kind a1 a2 rrc said
-  by_as=""
+  by_as=""; by_tok=""; by_login=""
   [ "$(printf '%s' "$after" | jq -r '.reviewDecision // ""' 2>/dev/null)" = "REVIEW_REQUIRED" ] || return 1
   who="$(who_is "$account")"
+  # Whose pull request it is comes first: the read back already says who opened it, so someone
+  # else's stops here, before any rule is read (L667).
+  bypass_author "$who" || return 5
   b="$(jq -rn --arg b "$base" '$b | @uri')"
   bypass_read "the rules in force on $base in $slug" "repos/$slug/rules/branches/$b?per_page=100" || return 5
   rules="$(printf '%s' "$ut_ans" | jq -c "$BY_RULES_JQ" 2>/dev/null)" \
@@ -1823,7 +1898,7 @@ bypass_judge(){
   # again just before the merge is sent (see bypass_sleep).
   bypass_sleep
   by_as="as a bypass of the approving review $a1"
-  say "GitHub refused the merge of #$pr at ${head:0:7} for $base's branch policy, and the only thing it lacks is the approving review $a1, which $who may bypass (current_user_can_bypass: $a2)."
+  say "GitHub refused the merge of #$pr at ${head:0:7} for $base's branch policy, and the only thing it lacks is the approving review $a1, which $who may bypass (current_user_can_bypass: $a2). #$pr was opened by $(jq -rn --arg l "$by_login" "\$l | $BY_SHOWN_JQ"), the account this merge is made as."
   return 0
 }
 # WHAT A MERGE COMMAND LEFT, judged once for the plain merge and for the bypass merge
@@ -3056,8 +3131,12 @@ EOF_VIEW
       # Sleep mode once more, the last thing before the send: the gate just asked read GitHub under
       # its own budget, and this Mac can have gone to sleep meanwhile (see bypass_sleep).
       bypass_sleep again
+      # Sent with the token GitHub was asked about (bypass_author), never one fetched again now:
+      # the account compared with who opened the pull request is the account this merges as
+      # (claude-config#3571). bypass_judge returns 0 only with that token in hand: bypass_author
+      # stops when gh gives none.
       say "Sending the same merge $by_as, pinned to that head."
-      merge_out="$(gh_as "${merge_argv[@]}" --admin --match-head-commit "$head" 2>&1)"; merge_rc=$?
+      merge_out="$(GH_TOKEN="$by_tok" gh "${merge_argv[@]}" --admin --match-head-commit "$head" 2>&1)"; merge_rc=$?
       merge_settle && continue
       stop 1 "Stopped: GitHub did not merge #$pr at ${head:0:7} $by_as: ${merge_out:0:500} Nothing was merged."
     fi

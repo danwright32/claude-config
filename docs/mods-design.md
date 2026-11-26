@@ -2856,6 +2856,30 @@ pipe stands in no group. The same suite takes 0.67 to 0.80 seconds (five reading
 `ownBudget` caps the text one script's calls may hand the readers (eight times the script and
 200,000 characters more); past it the runs not yet read stay judged. No real suite was timed alone.
 
+**A word a script hands on as written (#3602), built 2026-11-25 for the design round guard.** Four
+of this repository's suites hand their own helper a command as text, for the gate under test to
+judge and never to run, and the text holds a `$(` the shell hands on as written (after a backslash,
+or in single quotes) with a bar inside it: `run_here 'bash -c "echo \$(sort ok.sh | bash)"'`.
+mod-kit's reader gives such a word as the one name it spells and marks it `unexpanded`.
+`handedToUnknown` dropped the mark, so the guard read the parenthesis and its bar as a group and
+the `$(` as a command's output, and held the word as a name that may be any screen file. The mark
+is now kept, and `patternMayBeLook(word, asWritten)` reads such a word as the characters it spells,
+its groups as each name they can spell, as any other word is. Only a word inside a script's own
+text is read so: the same word typed whole on a command line is judged as before, and a word that
+spells a screen file, one handed over beside it, or a suite that writes a stylesheet, is still
+held. This makes the guard hold less. Counted the same day over the personal MacBook's records
+(one run, 2026-11-25: 70,279 shell calls from 2026-10-24 to 2026-11-25, 63,186 distinct; 9,052
+distinct calls run a shell script the guard reads), each call judged whole by the guard at the
+base and with the change, in the test file's stand-in world with today's suites: 470 calls, 415
+distinct, held before pass now, 439 of them agents'. Every one runs one of the four suites
+(test-slack-drafts-code-loaders.sh 223 distinct, test-slack-drafts-unread-shapes.sh 78,
+test-work-names-publish.sh 70, test-db-write-ask.sh 49); in 30 distinct calls the suite run sits
+beside other commands (an edit to a suite or a gate by python3 or sed, git, cp, mkdir), which the
+guard reads the same with the change and passed before too. No call passed before and is held
+now. Still held: a suite whose helper is handed a fixture file's name and writes it under the
+suite's own work folder (test-lessons-advisory.sh, test-pr-review.sh), 4 calls, which needs the
+shared rule for a temporary folder to vouch for that folder, and it does not on the real suites.
+
 **The count behind #3323, the rule for a command as typed** (the personal MacBook's records, 35 days
 to 2026-11-21, 51,590 shell calls when it was taken): with the built rule 16 past calls are newly held by the two guards it was
 decided on, the design round guard 13 and ask before saving 3 (swiftc 8, gh 3, chk 2, swift 1, set
@@ -3812,8 +3836,22 @@ lasting memory file, or moved one away, ran with no question. Measured in the mo
   another source of the same command may land on the same name: another folder holding a name
   alike but for letter case and the Unicode form of an accent, a pattern, or a word no path names.
   `removalCandidates` in `rules.ts` takes no `shared` write as where a file goes, so the removal
-  is main's Delete question, with no new sentence; a `mv -n` is worded the same, the harmless side
-  to be wrong on. The mark is on the write rather than the removal, so `cp a b <folder>/ && rm a`
+  is main's Delete question; a `mv -n` is worded the same, the harmless side to be wrong on. Until
+  2026-11-25 that question had no sentence of its own, so a command that says `mv` was asked about
+  as "Delete" with no word of why. It now names the loss: the candidate keeps the shared place
+  (`sharedAt`, only for a file a path names, and only where no other write stands as the place it
+  goes), and the question says "The command sends it to <the place>, and another file the same
+  command names may land on that name too. Only one of the two would be kept there, so this file
+  may be lost.", before what git holds. The sentence says "may" because that is all that holds in
+  every state that produces it (measured on macOS on 2026-11-25, 7 commands each run once in a
+  scratch folder: the source named last is the one kept, so the note named last survives; `mv -n`
+  keeps both; a pattern may match no such name). Claude's refusal says the same after its opening
+  words, and Dan's Delete for a question that did not say it never covers a call that now does
+  (`sameRemoval`). The place is the mod's own text, so it is set aside before the question is
+  judged for text the dialog would not show (`askFault`), as the file's own name is: it ends in
+  that name, and a note whose name holds a zero width space could otherwise never be asked about
+  (the lessons review of 1e11889382, seen red first). Not said: the note named last of two sources of exactly one name, which the
+  reader gives no write of its own, so that question is the Delete question with no such sentence. The mark is on the write rather than the removal, so `cp a b <folder>/ && rm a`
   is covered too. Names are compared in small letters and in capitals, as `foldedName` does: the
   same disk keeps `straße.md` and `STRASSE.md`, a long s and s, a final sigma and a capital one,
   and the ff ligature and FF each as one file, which small letters alone kept apart. Measured over

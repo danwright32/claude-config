@@ -54,12 +54,15 @@ by_state(){   # a green, up to date pull request the base branch's rules block f
 }
 by_edit(){ jq -c "$2" "$ST/$1" > "$ST/$1.tmp" && mv "$ST/$1.tmp" "$ST/$1"; }   # by_edit <state file> <jq filter>
 by_admin(){ count gh-calls 'pr merge .* --admin '; }
+# BY_N is the issue a refusal's checks are named for: 3534 everywhere but the section on who opened
+# the pull request (claude-config#3571), which sets it and puts it back.
+BY_N=3534
 by_refused(){   # by_refused <the case> <exit> <output>: a refusal sends no bypass merge and names the review
-  check_eq "#3534 $1: it stops for a person" "1" "$2"
-  check_eq "#3534 $1: no bypass merge is sent" "0" "$(by_admin)"
-  check_eq "#3534 $1: nothing merged" "no" "$( [ -e "$ST/merged" ] && echo yes || echo no)"
-  check "#3534 $1: it says an approving review is missing" "GitHub refused the merge of #7 at ${OLD:0:7} for main's branch policy: it lacks an approving review GitHub requires" "$3"
-  check "#3534 $1: and that no bypass merge was sent" "No bypass merge was sent and nothing was merged." "$3"
+  check_eq "#$BY_N $1: it stops for a person" "1" "$2"
+  check_eq "#$BY_N $1: no bypass merge is sent" "0" "$(by_admin)"
+  check_eq "#$BY_N $1: nothing merged" "no" "$( [ -e "$ST/merged" ] && echo yes || echo no)"
+  check "#$BY_N $1: it says an approving review is missing" "GitHub refused the merge of #7 at ${OLD:0:7} for main's branch policy: it lacks an approving review GitHub requires" "$3"
+  check "#$BY_N $1: and that no bypass merge was sent" "No bypass merge was sent and nothing was merged." "$3"
 }
 
 # The review is the one thing missing and the account may bypass its ruleset: merged, as a bypass.
@@ -285,12 +288,132 @@ check_eq "#3534 and nothing merged" "no" "$( [ -e "$ST/merged" ] && echo yes || 
 
 # Whether an account may bypass is GitHub's answer about the account ASKING, so every ruleset is
 # read as the account the merge is made as, never the one that happened to read the pull request.
-by_state; printf 'reader\nwriter\n' > "$ST/accounts"; printf READ > "$ST/perm-reader"
+by_person(){ jq -nc --arg l "$1" '{id: "U_kgDOinvented", is_bot: false, login: $l, name: ""}'; }   # a person, as gh prints an author
+by_author(){ printf '%s' "$1" > "$ST/author"; }   # by_author <who opened the pull request, as JSON>
+by_state; printf 'reader\nwriter\n' > "$ST/accounts"; printf READ > "$ST/perm-reader"; by_author "$(by_person writer)"
 out="$(run 7 --squash)"; rc=$?
 check_eq "#3534 a merge made as a second account merges as a bypass" "0" "$rc"
 check_eq "#3534 every ruleset was read as the account that merges" "writer" "$(sort -u "$ST/ruleset-asked" | tr '\n' ' ' | sed 's/ $//')"
 check_eq "#3534 and the bypass merge was made as it" "writer" "$(tail -n 1 "$ST/merge-as")"
 check "#3534 which the line names" "which writer may bypass" "$out"
+
+# =================================================================================================
+# The bypass merge is sent only for a pull request the merging account opened (claude-config#3571).
+#     Until this the helper never read who opened the pull request, so it sent the bypass for
+#     whatever pull request it was run on: in a repository whose ruleset exists so that other
+#     people's pull requests wait for the owner's approval, a run on a teammate's or a bot's pull
+#     request merged it with no approval, and the only thing in the way was a session not running
+#     the helper there (L27). A pull request from anyone else never needs the bypass: the owner can
+#     approve it, and the plain merge then goes through.
+#     Who opened it is read in the read back that says its state, head and review. Who merges is
+#     GitHub's own answer for the token the merge is sent with, since that is the account GitHub
+#     will record as merging: the name gh holds for an account is what was true when it signed in,
+#     and with no account named the merge goes out as whichever account is active at that moment.
+#     So the token is taken once, GitHub is asked whose it is, and the bypass merge is sent with
+#     that same token. An author or a login that cannot be read is never taken as a match (L42).
+# =================================================================================================
+BY_N=3571
+BY_ELSE="Have it approved, then run the same command again."
+by_users(){ count gh-calls '^api user$'; }   # how often GitHub was asked whose token it is
+
+# Its own pull request: the bypass is sent as before, and the line says who opened it.
+by_state
+out="$(run 7 --squash)"; rc=$?
+check_eq "#3571 a pull request the merging account opened merges as a bypass, as before" "0" "$rc"
+check "#3571 its own pull request: as a bypass" "Merged #7 in acme/widget at ${OLD:0:7} $BY_AS" "$out"
+check_eq "#3571 its own pull request: who opened it is read in the read back that says its state, head and review" "yes" "$(grep -qx 'pr view 7 --repo acme/widget --json state,headRefOid,reviewDecision,author' "$ST/gh-calls" && echo yes || echo no)"
+check_eq "#3571 its own pull request: GitHub is asked once whose token the merge is sent with" "1" "$(by_users)"
+check "#3571 its own pull request: the line says who opened it" "#7 was opened by active, the account this merge is made as." "$out"
+
+# Someone else's: it waits for the review, and nothing about the rules is read.
+by_state; by_author "$(by_person teammate)"
+out="$(run 7 --squash)"; rc=$?
+by_refused "a pull request someone else opened" "$rc" "$out"
+check "#3571 a pull request someone else opened: it says who opened it and who would merge it" "#7 was opened by someone else (teammate, where this merge would be made as active), so it waits for that review" "$out"
+check "#3571 a pull request someone else opened: and what to do" "$BY_ELSE" "$out"
+check_eq "#3571 a pull request someone else opened: it is refused before the rules are read" "0" "$(count gh-calls 'rules/branches')"
+
+# A bot is someone else, whatever it is called.
+by_state; by_author '{"is_bot":true,"login":"app/dependabot"}'
+out="$(run 7 --squash)"; rc=$?
+by_refused "a pull request a bot opened" "$rc" "$out"
+check "#3571 a pull request a bot opened: it says a bot opened it" "#7 was opened by someone else (app/dependabot, a bot), so it waits for that review" "$out"
+check "#3571 a pull request a bot opened: and what to do" "$BY_ELSE" "$out"
+by_state; by_author '{"is_bot":true,"login":"active"}'
+out="$(run 7 --squash)"; rc=$?
+by_refused "a bot carrying the merging account's own name" "$rc" "$out"
+check "#3571 a bot carrying the merging account's own name: it is still a bot" "(active, a bot)" "$out"
+
+# An author GitHub's answer does not name is never taken as a match: none at all, one with no
+# login, one that does not say whether it is a bot, and an answer of another shape.
+for au in 'null' '{"id":"","is_bot":false,"login":"","name":""}' '{"login":"active"}' '{"is_bot":"false","login":"active"}' '"active"'; do
+  by_state; by_author "$au"
+  out="$(run 7 --squash)"; rc=$?
+  by_refused "an author GitHub does not name, $au" "$rc" "$out"
+  check "#3571 an author GitHub does not name, $au: it says so" "GitHub's answer did not say who opened #7 (author: ${au:0:120}), so whether the active gh account opened it is not known, and an answer that cannot be read is never taken as permission" "$out"
+  check "#3571 an author GitHub does not name, $au: and what to do" "Run the same command again once GitHub answers, or have it approved first." "$out"
+  check_eq "#3571 an author GitHub does not name, $au: nothing more is asked of GitHub about a bypass" "0 0" "$(by_users) $(count gh-calls 'rules/branches')"
+done
+
+# Nor is a login that cannot be read: GitHub not answering, an answer naming none, and no token.
+by_state; printf 'gh: Server Error (HTTP 502)\n' > "$ST/user-down"
+out="$(run 7 --squash)"; rc=$?
+by_refused "a login GitHub would not give" "$rc" "$out"
+check "#3571 a login GitHub would not give: it names the read that failed, and that it was asked again" "could not read GitHub's login for the active gh account (gh: Server Error (HTTP 502), still failing after 4 tries" "$out"
+check "#3571 a login GitHub would not give: and that an unread answer is not permission" "so whether it opened #7 is not known, and an answer that cannot be read is never taken as permission" "$out"
+for ans in '{"message":"Requires authentication","status":"401"}' '{"login":""}' '{"login":17}' '[]'; do
+  by_state; printf '%s' "$ans" > "$ST/user-answer"
+  out="$(run 7 --squash)"; rc=$?
+  by_refused "an answer naming no login, $ans" "$rc" "$out"
+  check "#3571 an answer naming no login, $ans: it says so" "GitHub's answer for the active gh account named no login (${ans:0:200}), so whether it opened #7 is not known" "$out"
+done
+by_state; : > "$ST/token-empty"
+out="$(run 7 --squash)"; rc=$?
+by_refused "no token to ask GitHub with" "$rc" "$out"
+check "#3571 no token to ask GitHub with: it says so" "gh gave no token for the active gh account, so which account the merge would be made as could not be asked of GitHub" "$out"
+check_eq "#3571 no token to ask GitHub with: so GitHub is not asked as some other account" "0" "$(by_users)"
+# A read made again after GitHub failed once is still believed, and a rate limit is waited out.
+by_state; printf 'gh: Server Error (HTTP 502)\n' > "$ST/user-fails"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#3571 a login read GitHub fails once is asked again, and it merges" "0" "$rc"
+check "#3571 a login read GitHub fails once: as a bypass" "$BY_AS" "$out"
+by_state; printf '%s\n' "$LIMITED" > "$ST/user-fails"
+printf 'HTTP/2.0 200 OK\r\n\r\n{"resources":{"core":{"limit":5000,"remaining":4989,"reset":1003600},"graphql":{"limit":5000,"remaining":4900,"reset":1003600}}}\n' > "$ST/probe"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#3571 a login read refused for the rate limit is made again after the pause, and it merges" "0" "$rc"
+check "#3571 a login read refused for the rate limit: said as a rate limit on that read" "GitHub refused reading GitHub's login for the active gh account for its rate limit" "$out"
+check_eq "#3571 a login read refused for the rate limit: with one bypass merge" "1" "$(by_admin)"
+
+# The account compared is the one the merge is MADE as, never the one that read the pull request.
+# Here reader, the active account, can only read the repository and opened the pull request, and
+# writer is the account every write is made as.
+by_state; printf 'reader\nwriter\n' > "$ST/accounts"; printf READ > "$ST/perm-reader"; by_author "$(by_person reader)"
+out="$(run 7 --squash)"; rc=$?
+by_refused "a pull request the account that only read it opened" "$rc" "$out"
+check "#3571 a pull request the account that only read it opened: it names both accounts" "#7 was opened by someone else (reader, where this merge would be made as writer), so it waits for that review" "$out"
+check_eq "#3571 a pull request the account that only read it opened: GitHub was asked as the account that merges" "writer" "$(cat "$ST/user-asked")"
+# And it is GitHub's login for that account's token, not the name gh holds for the account, which
+# is only what it was called when it signed in.
+by_state; printf 'reader\nwriter\n' > "$ST/accounts"; printf READ > "$ST/perm-reader"; by_author "$(by_person writer)"; printf 'writer-renamed' > "$ST/login-writer"
+out="$(run 7 --squash)"; rc=$?
+by_refused "an account GitHub now calls something else" "$rc" "$out"
+check "#3571 an account GitHub now calls something else: it names GitHub's login for it" "#7 was opened by someone else (writer, where this merge would be made as writer-renamed), so it waits for that review" "$out"
+by_state; printf 'reader\nwriter\n' > "$ST/accounts"; printf READ > "$ST/perm-reader"; by_author "$(by_person writer-renamed)"; printf 'writer-renamed' > "$ST/login-writer"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#3571 a pull request opened under the login GitHub now gives the account merges" "0" "$rc"
+check_eq "#3571 a pull request opened under the login GitHub now gives the account: made as that account" "writer" "$(tail -n 1 "$ST/merge-as")"
+
+# The bypass merge is sent with the very token GitHub was asked about. Here alice is active and
+# opened the pull request, and another session switches gh to bob while the checks gate is asked
+# about the bypass command: the merge still goes out as alice, never as whoever is active by then.
+by_state; printf 'alice\nbob\n' > "$ST/accounts"; by_author "$(by_person alice)"
+printf '%s' "printf 'bob\\nalice\\n' > \"\$ST/accounts\"" > "$ST/on-red-gate-admin"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#3571 gh's active account switched before the send: it merges" "0" "$rc"
+check_eq "#3571 gh's active account switched before the send: the switch happened, so bob is active by then" "bob" "$(head -1 "$ST/accounts")"
+check_eq "#3571 gh's active account switched before the send: the bypass merge is made as the account whose login was compared" "alice" "$(tail -n 1 "$ST/merge-as")"
+check_eq "#3571 gh's active account switched before the send: which is the one GitHub was asked about" "alice" "$(cat "$ST/user-asked")"
+BY_N=3534
 
 # SLEEP MODE OUTRANKS THE BYPASS (Dan, 2026-11-24: "Respect sleep mode first"). The bypass merge is made
 # inside the helper, where no hook sees it, so while this Mac is asleep the helper asks sleep mode's

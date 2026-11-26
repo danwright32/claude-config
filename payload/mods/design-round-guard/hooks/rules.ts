@@ -1028,14 +1028,20 @@ export const inScriptTemp = (text: string, name: string, program: string, words:
  * a command substitution, nameFromOutput, or a brace expansion or groups past MAX_SPELLINGS spellings). Only the
  * last part of a path is read: a pattern in a folder is followed by the caller, or not at all. Since
  * #1010 only a pattern in the extension was judged, so a pattern in the rest of the name passed.
+ * `asWritten` (#3602) is mod-kit's `unexpanded` for the word: every `$` and backtick in it is one
+ * the shell hands on as written (in single quotes, or after a backslash), so it holds no command
+ * substitution and no command's output fills it in. Its `$(` is then text, and the word is read as
+ * the characters it spells, its groups as each name they can spell, as any other word is. Before,
+ * a command a test suite hands its own helper as text (`run 'bash -c "echo \$(sort ok.sh | bash)"'`)
+ * was read as a name a command's output fills in, and held as one that may be any screen file.
  */
-export const patternMayBeLook = (word: string): 'look' | 'not' | 'unread' => {
+export const patternMayBeLook = (word: string, asWritten = false): 'look' | 'not' | 'unread' => {
   const base = word.split('/').pop() ?? ''
   // A name ending inside a command substitution (`$(git ls-files 'src/*.tsx')`) is its output, not
   // its own text, and is read by no rule, as before #1773, when its parenthesis alone made it
   // unreadable. One after a substitution has closed (`$(cat id)/events/?x`) is read as any name.
   // So is one a command's output fills in holding no pattern at all (#1815: `$(git ls-files src)`).
-  if ((word.includes('$(') && /[()]/.test(base)) || nameFromOutput(word)) return 'unread'
+  if (!asWritten && ((word.includes('$(') && /[()]/.test(base)) || nameFromOutput(word))) return 'unread'
   const braced = spellings(base)
   if (!braced) return 'unread'
   const all: string[] = []
@@ -2274,7 +2280,7 @@ export const argumentUnreached = (reading: ScriptReading, commands: readonly Run
 }
 
 /** A run as mod-kit's write reader gives it, as handedToUnknown reads it (#3416). */
-export type HandedRun = { script: string; what: string; unknown?: true; why?: string; remedy?: string; args: readonly { word: string; path?: string }[] }
+export type HandedRun = { script: string; what: string; unknown?: true; why?: string; remedy?: string; args: readonly { word: string; path?: string; unexpanded?: boolean }[] }
 
 /**
  * Each file a shell script's own text hands a program mod-kit's write reader does not know (#3416),
@@ -2290,11 +2296,19 @@ export type HandedRun = { script: string; what: string; unknown?: true; why?: st
  * value, what the script itself was handed, a pattern, a command's output), so none is given here;
  * argumentUnreached says what that leaves open. A script file, a module and a tool run through
  * npx are runs of another kind, read by the rules that were there before.
+ * `unexpanded` is the reader's own mark on the word, kept since #3602: every `$` and backtick in
+ * it is one the shell hands on as written, so the caller reads it as the name it spells
+ * (patternMayBeLook's `asWritten`). It was dropped here before, so a `$(` in such a word was read
+ * as a command substitution.
  */
-export const handedToUnknown = (runs: readonly HandedRun[] | undefined): { word: string; path: string; program: string; why: string; remedy: string }[] =>
+export const handedToUnknown = (runs: readonly HandedRun[] | undefined): { word: string; path: string; program: string; why: string; remedy: string; unexpanded?: true }[] =>
   (runs ?? [])
     .filter(r => r.unknown)
-    .flatMap(r => r.args.flatMap(a => (a.path === undefined ? [] : [{ word: a.word, path: a.path, program: r.script, why: r.why ?? `${r.script} is ${r.what}`, remedy: r.remedy ?? '' }])))
+    .flatMap(r =>
+      r.args.flatMap(a =>
+        a.path === undefined ? [] : [{ word: a.word, path: a.path, program: r.script, why: r.why ?? `${r.script} is ${r.what}`, remedy: r.remedy ?? '', ...(a.unexpanded ? { unexpanded: true as const } : {}) }],
+      ),
+    )
 
 /** What withoutOwnCalls asks of mod-kit's readers, and of the files a script reads in (#3416). */
 export type OwnCallIo = {
