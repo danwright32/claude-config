@@ -314,18 +314,18 @@ SKIP=(--exclude-dir=.git --exclude-dir=__pycache__ --exclude-dir=node_modules \
       --exclude=*.pyc --exclude=*.conflict-*)
 
 # -I so a binary that happens to hold the bytes is skipped rather than reported
-# as a line nobody can read. The allow marker is dropped line by line, so one
-# excused line never excuses the rest of its file.
-# The name must START with a letter or digit, which is what a real account is
-# shaped like. An elided example (a Users path written with dots for the name) is
-# how documentation refers to the idea rather than to a machine, and one of those
-# already lives in a vendored skill here, so a class that accepted it would open
-# with a false alarm nobody could act on (L104, L147).
-# A path under a home directory root, whose account name starts with a letter or digit, which is
-# what a real account looks like. Both roots by default: a /home path is as wrong in a synced file
-# as a /Users one, and the suite runs on both kinds of machine.
+# as a line nobody can read. The allow marker is honoured line by line, by the
+# judge below, so one excused line never excuses the rest of its file.
+# The name must START the way a real account's does, with a letter or a digit,
+# and never with a mark. An elided example (a Users path written with dots for
+# the name) is how documentation refers to the idea rather than to a machine, and
+# one of those already lives in a vendored skill here, so a class that accepted it
+# would open with a false alarm nobody could act on (L104, L147).
+# A path under a home directory root, whose account name starts as a real account's does. Both
+# roots by default: a /home path is as wrong in a synced file as a /Users one, and the suite runs
+# on both kinds of machine.
 #
-# A letter, in any script (claude-config#3586). The class used to be the ASCII letters and digits,
+# A letter in any script, that is (claude-config#3586). The class used to be the ASCII letters and digits,
 # so a home whose name starts with an accented or a fullwidth letter passed, in every locale. The
 # search and the judge both run under C, where there is no asking whether a character is a letter,
 # so the name may now start with an ASCII letter or digit or with ANY byte from 128 up, which is
