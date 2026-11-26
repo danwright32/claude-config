@@ -7,7 +7,8 @@
 # the tool_use shape were read from real transcripts on 2026-11-02; CronCreate's input is the shape
 # tools/typescript/claude-code-types declares, since no real CronCreate call was on this Mac):
 #   1. a one shot CronCreate this turn that fires on a later day
-#   2. a Write or Edit to a project memory file naming a date after today
+#   2. a Write or Edit to a project memory file adding a date after today that the text it
+#      replaced did not hold (#3645)
 #   3. the assistant's own text this turn promising to check again on a later day
 # and the controls that must stay silent: a recurring cron, a one shot later today, a memory naming
 # only a past date, "tomorrow" inside a tool result or a quotation, a promise in an EARLIER turn,
@@ -255,6 +256,13 @@ t="$WORK/mem-multiedit-added.jsonl"; start "$t"
 { L tool m1 MultiEdit "{\"file_path\":\"$MEM\",\"edits\":[{\"old_string\":\"due 2026-11-05\",\"new_string\":\"due 2026-11-05 (bureau)\"},{\"old_string\":\"Notes:\",\"new_string\":\"Notes, recheck 2026-11-09:\"}]}"
   L result m1 "Applied 2 edits" ; } >> "$t"
 fires_not "control: a MultiEdit to a memory adding a future date names only that date" "$t" "Mon Nov 9" "Thu Nov 5"
+
+# A MultiEdit applies its edits in order, so a later edit's old text can hold a date an earlier
+# edit of the same call just wrote. That date was not in the file before the call.
+t="$WORK/mem-multiedit-chained.jsonl"; start "$t"
+{ L tool m1 MultiEdit "{\"file_path\":\"$MEM\",\"edits\":[{\"old_string\":\"Recheck soon.\",\"new_string\":\"Recheck on 2026-11-09.\"},{\"old_string\":\"Recheck on 2026-11-09.\",\"new_string\":\"Recheck on 2026-11-09, after the bureau refreshes.\"}]}"
+  L result m1 "Applied 2 edits" ; } >> "$t"
+fires "a MultiEdit whose later edit reworks a date its earlier edit added still names that date" "$t" "Mon Nov 9"
 
 t="$WORK/mem-edit-twice-to-once.jsonl"; start "$t"
 { L tool e1 Edit "{\"file_path\":\"$MEM\",\"old_string\":\"Repull 2026-11-05. Compare tradelines 2026-11-05.\",\"new_string\":\"Repull and compare tradelines on 2026-11-05.\"}"

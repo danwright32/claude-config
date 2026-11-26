@@ -278,20 +278,29 @@ def dates_in(text, today):
 MEMORY_PATH = re.compile(r"/projects/[^/]+/memory/[^/]+$")
 
 
-def replaced_text(use, record):
-    """The text this write replaced, as far as the call and its result record it (#3645).
+def dates_before(use, record, today):
+    """The dates in the text this write replaced, as far as the call and its result record it (#3645).
 
-    An Edit or MultiEdit names it in its old_string(s); a MultiEdit's are taken together, so a
-    date moved from one line to another in the same call is not new. A Write's call holds only the
-    new content, but the result line Claude Code writes beside it records, for an update, the file
-    as it was (originalFile). A new file, or a Write with no such record (refused, or shaped
-    otherwise), replaced nothing this can read, so every future date in it counts, as before."""
+    An Edit names that text in its old_string. A MultiEdit's old strings are taken together, so a
+    date moved from one line to another in the same call is not new; but its edits apply in order,
+    so a date in a later edit's old text that an earlier edit of the call wrote was not there
+    before. A Write's call holds only the new content, but the result line Claude Code writes
+    beside it records, for an update, the file as it was (originalFile). A new file, or a Write
+    with no such record (refused, or shaped otherwise), replaced nothing this can read, so every
+    future date in it counts, as before."""
+    def found(t):
+        return {d for _, _, d in dates_in(t, today)} if isinstance(t, str) else set()
+
     inp = use.get("input") or {}
-    olds = [inp.get("old_string")]
-    olds += [e.get("old_string") for e in (inp.get("edits") or []) if isinstance(e, dict)]
+    before = found(inp.get("old_string"))
+    written = set()
+    for e in inp.get("edits") or []:
+        if isinstance(e, dict):
+            before |= found(e.get("old_string")) - written
+            written |= found(e.get("new_string"))
     if use.get("name") == "Write" and isinstance(record, dict) and record.get("type") == "update":
-        olds.append(record.get("originalFile"))
-    return [t for t in olds if isinstance(t, str)]
+        before |= found(record.get("originalFile"))
+    return before
 
 
 def memory_signal(use, when, record=None):
@@ -307,7 +316,7 @@ def memory_signal(use, when, record=None):
     # Only a date the write ADDS is a check left waiting (#3645): one already in the text it
     # replaced was left there by an earlier turn. Dates are compared by the day they name, after
     # the one reading that finds them, so "2026-11-05" and "Nov 5th" are the same date.
-    before = {d for t in replaced_text(use, record) for _, _, d in dates_in(t, today)}
+    before = dates_before(use, record, today)
     ahead = sorted({d for t in texts if isinstance(t, str) for _, _, d in dates_in(t, today)
                     if d > today and d not in before})
     if not ahead:
