@@ -528,8 +528,8 @@ fact("a push beside a # that cannot be told is not one an Apply can cover",
      isinstance(got, list) and bool(got) and not any(calls.is_applicable(f) for f in got), got)
 fact("(control) a read with a comment after it has no finding", findings(R + " # c\n") == [], findings(R + " # c\n"))
 fact("the reader it was handed reads as it did afterwards", sw.commands is reads_as, sw.commands)
-# A reader with no `unsure` to ask for: what holds a # cannot be vouched for, what holds none is read
-# as it always was.
+# A reader with no `unsure` to ask for: nothing it reads can be vouched for, whether or not the
+# command holds a #.
 older = types.SimpleNamespace(**{k: getattr(sw, k) for k in dir(sw) if not k.startswith("__")})
 older.commands = lambda s, cwd="", heredocs=None, parts=None, spans=None, comments=None: reads_as(
     s, cwd, heredocs=heredocs, parts=parts, spans=spans, comments=comments)
