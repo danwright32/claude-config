@@ -522,15 +522,29 @@ def handed_to_a_communicator():
 def _talk(proc):
     proc.communicate()
     return proc.returncode
+
+
+def handed_to_a_feeder():
+    p = subprocess.Popen(["cat"], stdin=subprocess.PIPE)
+    if p.poll() is not None:
+        return 1
+    _feed(p, b"x")
+    return 0
+
+
+def _feed(proc, data):
+    proc.stdin.write(data)
+    proc.stdin.close()
 PY
 scan
 [ "$rc" -eq 1 ] && ok || bad "#3650 a process handed only to a function that polls it once fails (rc=$rc)" "$out"
+fires P1 71 "#3650 a local process polled, then handed to a function that feeds and ends it and reads nothing"
 fires P1 6 "#3650 a held process whose starting method hands it to a poll-only method is checked only at its start"
 fires P1 18 "#3650 a local process handed to a poll-only function and then ended has had only its start read"
 has "$out" "$FILE:32:" && bad "#3650 a local process handed to a function that waits on it passes" "$out" || ok
 has "$out" "$FILE:44:" && bad "#3650 a local process handed to a function whose loop polls it passes" "$out" || ok
 has "$out" "$FILE:58:" && bad "#3650 a local process handed to a function that reads returncode after communicate() passes" "$out" || ok
-has "$out" "findings=2 unjudged=0" && ok || bad "#3650 exactly the two processes handed only to a poll" "$out"
+has "$out" "findings=3 unjudged=0" && ok || bad "#3650 exactly the three processes whose helpers never read the end" "$out"
 rm -f "$S/monitor.py"
 
 # --- S1: a script filing an issue the field gate never sees -------------------------------------

@@ -515,27 +515,38 @@ def handed_to(mod, call, node, scope, cls):
     return None
 
 
-def with_aliases(mod, scope, uses):
-    """uses, plus what scope does through every local it binds the handle to."""
+def with_aliases(mod, scope, uses, seen=frozenset()):
+    """uses, plus what scope does through every local it binds the handle to, with each hand off to a
+    function of this file replaced by everything that function does with it, placed at the line of
+    the hand off. So every rule judges a helper's wait, poll, write or kill exactly as if the caller
+    had made it there (the lessons reviews of PR #3659). seen holds the (function, parameter) pairs
+    already being followed, so a handle passed round a cycle is followed once."""
     out = list(uses)
     for u in uses:
         if u[1] == "alias":
             later = [ln for ln in bindings(scope, u[3]) if ln > u[0]]
             out += handle_uses(mod, scope, name_is(u[3]), u[0], later[0] if later else float("inf"))
-    return sorted(out, key=lambda u: u[0])
+    cls, followed = class_of(mod, scope), []
+    for u in sorted(out, key=lambda u: u[0]):
+        target = handed_to(mod, u[3], u[2], scope, cls) if u[1] == "handed" and u[3] is not None else None
+        if target is None:
+            followed.append(u)
+        elif target not in seen:
+            fn, param = target
+            inner = with_aliases(mod, fn, handle_uses(mod, fn, name_is(param)), seen | {target})
+            followed += [(u[0], w, n, d) for _, w, n, d in inner]
+    return followed
 
 
-def classify(mod, scope, uses, cls, seen=frozenset()):
-    """Sort a function's uses of a handle into reads of how it ended.
+def classify(mod, scope, uses, cls):
+    """Sort a function's uses of a handle into reads of how it ended. A hand off to a function of this
+    file has already been replaced by what that function does (with_aliases).
 
     Returns (ending, reads, unfollowed): ending holds the lines that read the status once the process
-    is done (a wait() whose result is used, a returncode after a wait() or communicate(), a poll() a
-    loop repeats, or a hand off to a function of this file that does one of these); reads holds every
-    line that reads the status at all (any of those, a poll() whose result is used, a returncode after
-    anything asked for it, or a hand off to a function of this file that reads it at all); unfollowed
-    holds the hand offs that could not be followed, as (line, words), including those made by a
-    function of this file the handle was handed to that reads nothing itself. seen holds the
-    (function, parameter) pairs already being followed, so a handle passed in a cycle ends."""
+    is done (a wait() whose result is used, a returncode after a wait() or communicate(), or a poll()
+    a loop repeats); reads holds every line that reads the status at all (any of those, a poll()
+    whose result is used, or a returncode after anything asked for it); unfollowed holds the hand
+    offs that could not be followed, as (line, words)."""
     ending, reads, unfollowed, asked, waited = [], [], [], False, False
     for line, what, node, detail in uses:
         if what == "wait":
@@ -557,19 +568,7 @@ def classify(mod, scope, uses, cls, seen=frozenset()):
                 ending.append(line)
         elif what == "handed":
             target = handed_to(mod, detail, node, scope, cls) if detail is not None else None
-            if target is not None and target not in seen:
-                # The function handed it is judged by these same rules: only its reading of the end
-                # counts as the ending, and a poll() it makes once is a read at its start (PR #3659).
-                fn, param = target
-                end, got, lost = classify(mod, fn, with_aliases(mod, fn, handle_uses(mod, fn, name_is(param))),
-                                          class_of(mod, fn), seen | {target})
-                if end:
-                    ending.append(line)
-                if end or got:
-                    reads.append(line)
-                else:
-                    unfollowed += lost
-            elif target is None:
+            if target is None:
                 words = (f"{ast.unparse(detail.func)}(...)" if detail is not None
                          else "something outside this function")
                 unfollowed.append((line, words))
