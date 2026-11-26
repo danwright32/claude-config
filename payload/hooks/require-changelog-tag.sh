@@ -593,6 +593,10 @@ used=$(python3 -B "$HOOK_DIR/lib/announce-approval.py" used --repo "$slug" --has
 if [ "$(printf '%s' "$used" | jq -r '.written // false' 2>/dev/null)" != "true" ]; then
   said="${said:+$said }PR #$number is recorded as the one using Dan's approval, but the issues it closes could not be added to this Mac's record of approved announcements ($(printf '%s' "$used" | jq -r '.why // ""' 2>/dev/null)), so the check that a feature Dan said yes to announcing does not finish under another label will not find them there."
 fi
-[ -n "$said" ] && hook_allow_notice "$said" PreToolUse
+# THIS MERGE OWES A DRAFT (claude-config#3667). Only an announcement the gate lets through reaches
+# here, so its allow always says one line, to Dan and to the session, after anything said above:
+# what the is it live card asks for once the change is live, and that a card silent about it is an
+# old copy of the mod. Nothing the gate decides depends on it.
+hook_allow_notice "${said:+$said }PR #$number owes agents its announcement: once its change is live, the is it live card for it tells the session to save the approved wording as a Slack draft for Dan to send. A session whose card for it says nothing about an announcement is running an old copy of the is it live mod: run /reload-plugins, then make the card again." PreToolUse
 
 exit 0
