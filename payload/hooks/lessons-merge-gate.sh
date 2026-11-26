@@ -146,6 +146,17 @@ esac
 
 mt_runs_merge "$command" || exit 0
 
+# Asleep, Dan is not asked: the refusal says the merge waits (lib/sleep.sh, the one reader of the
+# night's record). Loaded here, before anything is read from GitHub, and refused on stderr with exit
+# 2 as a library that cannot be loaded is above: loaded where it was first used, after the reads, a
+# missing one was only reached by a merge GitHub answered for, and any other was refused in other
+# words that named no library (test-gates-fail-closed.sh, found for claude-config#3583).
+# shellcheck source=lib/sleep.sh
+{ . "$HOOK_DIR/lib/sleep.sh" 2>/dev/null && declare -F sleep_active >/dev/null; } || {
+  echo "$WHAT: lessons-merge-gate.sh could not load $HOOK_DIR/lib/sleep.sh, which says whether Dan is asleep, and what a refused merge is told to do depends on it. A library this gate cannot load is not a merge with nothing to check. Reinstall the hooks with claude-sync pull." >&2
+  exit 2
+}
+
 ps_reader_missing jq && refuse_no_reader "jq is not on PATH" \
   "lessons-merge-gate.sh reads GitHub's answer about this pull request with it, so with jq absent nothing here can read which files it changes." \
   "jq"
@@ -323,13 +334,6 @@ fi
 
 command -v python3 >/dev/null 2>&1 || deny "$WHAT: $(ps_detector_absent_why "python3 is not on PATH" "lessons-merge-gate.sh reads the entries through lib/lesson-merge.py, so with it absent nothing here can tell a changed entry from a blank line." "python3")"
 [ -f "$RULE" ] || deny "$WHAT: $RULE is missing, and it is the rule this gate applies. Restore it with claude-sync pull."
-
-# Asleep, Dan is not asked: the refusal says the merge waits (lib/sleep.sh, the one reader of the
-# night's record). A reader that cannot be loaded refuses, since what the session is told to do
-# depends on it.
-# shellcheck source=lib/sleep.sh
-{ . "$HOOK_DIR/lib/sleep.sh" 2>/dev/null && declare -F sleep_active >/dev/null; } \
-  || deny "$WHAT: lessons-merge-gate.sh could not load $HOOK_DIR/lib/sleep.sh, which says whether Dan is asleep, and what a refused merge is told to do depends on it. Reinstall the hooks with claude-sync pull."
 
 rule_args=(judge --repo "$api_slug" --pr "$number" --base "$SCRATCH/base.md" --head "$SCRATCH/head.md" --record-dir "$RECORD_DIR")
 [ -n "$transcript" ] && [ -n "$session_id" ] && rule_args+=(--transcript "$transcript" --session "$session_id")
