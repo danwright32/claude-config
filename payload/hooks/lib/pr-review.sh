@@ -835,6 +835,9 @@ ROWS
     [ "$(git rev-parse -q --verify "$ob:$p" 2>/dev/null)" = "$(git rev-parse -q --verify "$mb:$p" 2>/dev/null)" ] || return 1
     [ "$(git rev-parse -q --verify "$s:$p" 2>/dev/null)" = "$(git rev-parse -q --verify "$full_sha:$p" 2>/dev/null)" ] || return 1
   done <<<"$names"
+  # And the repository's own REVIEW.md, which a review reads from its base (claude-config#3558): an
+  # update that changed it brought rules the earlier review was not read under.
+  [ "$(git rev-parse -q --verify "$ob:REVIEW.md" 2>/dev/null)" = "$(git rev-parse -q --verify "$mb:REVIEW.md" 2>/dev/null)" ] || return 1
   # The earlier review as this head's, its own start and finish kept, so whether its findings were
   # read (an acknowledgement names the review by its finish) carries with it. This head's base, so
   # check finds the range it is asked about covered. No ledger row: no reviewer ran.
@@ -1927,6 +1930,12 @@ do_check() {
     scope_words="the changes since ${since_from:0:7} on $repo_label $branch"
     echo "(This review read only the changes since ${since_from:0:7}, the last reviewed head: the earlier reviews of this pull request read the branch up to it, claude-config#1358.)"
   fi
+  # What the runner said of the repository's own REVIEW.md (claude-config#3558): a line of the
+  # review beginning "Review rules: " whenever that file was not applied as this change has it (the
+  # change edits, adds or deletes it, or the base's copy could not be used). Said here whatever the
+  # outcome, because a clean review prints nothing else of its body, and rules that silently did
+  # not apply would read as applied. Each line once: every group of a review in groups carries it.
+  awk 'found && index($0, "Review rules: ") == 1 && !seen[$0]++ { print "(" $0 ")" } /^$/ && !found { found = 1 }' "$final" 2>/dev/null
   case "$status" in
     ok)
       case "$findings" in ''|*[!0-9]*) findings="$(awk 'found && /^[^ :]+:[0-9]+: / { n++ } /^$/ { found = 1 } END { print n + 0 }' "$final")" ;; esac

@@ -1728,6 +1728,25 @@ with no review gets one started by the gate. A repo whose own script merges insi
 checker, `lib/pr-review.sh check`, before merging: Overture's `merge_pr` does. `check` exits 0 to
 allow, 1 to refuse on a verdict, and 3 to refuse because the review has not finished yet.
 
+Beside the lessons, the review reads the repository's own review rules, a `REVIEW.md` at its top,
+from the BASE commit of the change and never from the change itself (claude-config#3558), so a pull
+request cannot rewrite the rules it is judged by. The base is the one `lib/pr-review.sh` settles and
+records as `base=`, the merge base with the pull request's target, or with the branch under it for
+a stacked push; `review_rules` in `lib/ai-review-run.py` reads the file there by object id and puts
+its text in the per change message, never in the cached system prompt with the lessons. A branch
+that edits or deletes the file is reviewed under the base's text, a branch that adds one is reviewed
+under none, and a base whose copy cannot be used (the commit or the object unreadable, a symbolic
+link, a folder, not text, over 16,384 bytes) applies none: never the branch's copy as a fallback,
+and, like a missing lessons index, none of these stops the review. Each is said on a line of the
+review beginning `Review rules: `, which `check` prints in parentheses whatever the outcome, since
+rules that silently did not apply would read as applied; a file the change leaves alone adds no
+line, and every review given a base records `review_rules=` in its header (applied, none, empty,
+new-not-applied, unreadable, symlink, not-a-file, not-text, too-large). The change to `REVIEW.md`
+is still in the diff the reviewer reads, and the reviewer is told its new text is not in force. A
+review is no longer carried to a later head (claude-config#1280) across an update from the base
+that changed `REVIEW.md`. The advisory review of one push is given no base and reads no
+`REVIEW.md`. No project instruction file (`CLAUDE.md`, `AGENTS.md`) is read by either review.
+
 The merge helper, `lib/merge-when-ready.sh`, merges inside itself and takes the key from its
 environment, so the key has to reach it TYPED (claude-config#1673). Before it, a Bash call that ran
 the helper, grepped the key out of its refusal and ran it again with `PR_REVIEW_READ="$key"` merged
