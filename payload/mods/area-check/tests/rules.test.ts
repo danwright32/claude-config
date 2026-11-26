@@ -820,12 +820,14 @@ test("a program the write reader does not know, in a script's own text, is no sc
 // area check out for now (Recommended)": gh is handed an option's value that names a folder too
 // often, so it gets its own reading first, #3412). Each command below gives the targets it gave over the
 // reader as it stood on main before #3323 (measured at commit 3cf551888f), which marked no such run.
+// The gh command is one gh's own reading (#3412) leaves as it was, a download into a folder; its
+// targets over that same commit's reader were measured on 2026-11-26.
 test('a path handed to a program the write reader does not know is no target, and what else the command writes is judged as before (#3323)', () => {
   const read = (c: string) => commandWrites(c, '/w/app', '/h')
   const SCAN = { what: 'a bash script file', path: '/w/app/scan.sh' }
   const cases: [string, unknown[]][] = [
     ['prettier --write src/big.ts && mystery src/big.ts', []],
-    ['gh pr view 5 --json state', []],
+    ['gh release download v1 --dir state', []],
     ['claude plugin test payload/mods/area-check', []],
     ['swiftc -o x y.swift', []],
     ['rg --pre ./tool x src/big.ts', []],

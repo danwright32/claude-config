@@ -1,7 +1,7 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './hang-ceiling.ts'
 import { pipeline } from '../hooks/commands.ts'
-import { callShell, commandWrites, comparisonsSoFar, pipelineIn, READ_ONLY } from '../hooks/writes.ts'
+import { callShell, commandWrites, comparisonsSoFar, ghWordsSoFar, pipelineIn, READ_ONLY } from '../hooks/writes.ts'
 
 // The one reader of which files a Bash call writes (#705, L613): ask before saving kept its own and
 // missed inline scripts, rsync, install, ln, dd, a patch, every file but the last of a sed -i, and a
@@ -2422,7 +2422,9 @@ describe('writes: a program the reader does not know is read as writing what it 
     // Every word that spells a path is handed, an option's value written with = too; an option, an
     // address and standard input are none.
     expect(unknown('swiftc -o build/out --module-cache=build/cache app/main.swift')).toEqual([['swiftc', [`${CWD}/build/out`, `${CWD}/build/cache`, `${CWD}/app/main.swift`]]])
-    expect(unknown('gh pr create --body-file notes/pr.md')).toEqual([['gh', [`${CWD}/pr`, `${CWD}/create`, `${CWD}/notes/pr.md`]]])
+    expect(unknown('glab mr create --description-file notes/mr.md')).toEqual([['glab', [`${CWD}/mr`, `${CWD}/create`, `${CWD}/notes/mr.md`]]])
+    // gh has a reading of its own grammar since #3412 (below): its subcommand's name is no path.
+    expect(unknown('gh pr create --body-file notes/pr.md')).toEqual([['gh', [`${CWD}/notes/pr.md`]]])
     expect(unknown('open https://example.com/page.html')).toEqual([])
     // A cd before it and a variable the command set are followed, as for every other write.
     expect(unknown('cd app && prettier --write globals.css')).toEqual([['prettier', [F]]])
@@ -2832,5 +2834,165 @@ describe('writes: a command with many sources is read in steps that grow in step
         if (steps > 10 * n) over.push(`${what}: ${steps} for ${n} sources`)
       }
     expect(over).toEqual([])
+  })
+})
+
+// claude-config#3412. gh is on none of the reader's lists, so since #3323 every word of a gh command
+// that spells a path was handed on as a file it may write: `state` in `--json state`, in a checkout
+// that holds a folder named state, in 598 recorded calls on the personal MacBook (35 days, counted
+// 2026-11-21), and a label named after a folder in 116. gh now has a reading of its own grammar
+// (GH in writes.ts, from gh 2.89.0's manual pages): a word is no path only where that grammar proves
+// it (a subcommand's name, the value of an option that takes a field list, a state, a number, a
+// repository, a label, a search and the like, an operand that is a number, an address or a branch).
+// A word gh reads or writes a file by, any option or subcommand the reading does not hold, and any
+// command it cannot follow word for word, is read exactly as before. gh is NOT on the list of
+// programs that only read (READ_ONLY): it writes files in some forms.
+describe('writes: gh is read by its own grammar (#3412)', () => {
+  const S = `${CWD}/state`
+  const T = `${CWD}/tests`
+  // The paths gh is handed as files it may write, and whether it is still called a program the
+  // reader does not know.
+  const handed = (command: string) => (read(command).runs ?? []).filter(r => r.unknown && r.script === 'gh').flatMap(r => r.args.map(a => a.path))
+  // What the reader gave before this reading: every word that spells a path.
+  const words = (...w: string[]) => w.map(x => `${CWD}/${x}`)
+
+  test('the value of an option that takes no path is no file, whatever folder the command runs in holds', () => {
+    for (const command of [
+      'gh pr view 5 --json state',
+      'gh pr view 5 --json=state',
+      'gh issue view 3412 --repo danwright32/claude-config --json state,title --jq .state',
+      'gh issue view 3412 -R danwright32/claude-config --json state -q .state',
+      "gh pr view 5 --json state --jq '.state | ascii_downcase'",
+      "gh pr list --state open --json number,state --jq '.[] | select(.state == \"OPEN\") | .number' --limit 5",
+      'gh issue list --label tests --state open --json number',
+      'gh issue list -l tests -s all -L5 --json number',
+      'gh pr ls --json state',
+      'gh pr checks 12 --repo danwright32/claude-config --watch --interval 30',
+      'gh run view 123 --log-failed',
+      'gh run list --branch tests --workflow tests --json status -L 5',
+      'gh label list --search tests --json name',
+      'gh search issues tests --repo danwright32/claude-config --json state --limit 3',
+      'gh api repos/danwright32/claude-config/pulls/5 --jq .state',
+      'gh api graphql -f query=state -H accept:state --method GET',
+      'gh issue close 5 --comment state --reason completed',
+      'gh run watch 123 --interval 30 --exit-status',
+      'gh pr view 5 --json',
+      'gh pr view -- state',
+    ])
+      expect([command, handed(command)]).toEqual([command, []])
+  })
+  test('an operand gh takes as a number, an address or a branch is no file', () => {
+    expect(handed('gh pr view tests --json state')).toEqual([])
+    expect(handed('gh issue view state')).toEqual([])
+    expect(handed('gh pr diff tests --name-only')).toEqual([])
+    expect(handed('gh repo view danwright32/state --json name')).toEqual([])
+  })
+  test('a word the shell fills in leaves a command that takes no file anywhere read the same way', () => {
+    expect(handed('gh pr view "$PR" --json state')).toEqual([])
+    expect(handed('gh issue view $N --repo "$REPO" --json state --jq ".[$i]"')).toEqual([])
+    expect(handed('for n in 1 2; do gh pr view $n --json state; done')).toEqual([])
+  })
+
+  // The dangerous direction: every form of gh that writes a file or a folder here is still a write.
+  test('a file or folder gh writes is still read as written', () => {
+    // A redirect is the shell's write, read before gh is.
+    expect(paths('gh pr view 5 --json state > state')).toEqual([S])
+    expect(paths('gh api repos/danwright32/claude-config/tarball > tests/x.tgz')).toEqual([`${T}/x.tgz`])
+    expect(paths('gh pr diff 5 | tee state')).toEqual([S])
+    // A download, a clone, a checkout, an install: none is in the reading, so each is read as before.
+    expect(handed('gh release download v1 --dir state')).toEqual(words('release', 'download', 'v1', 'state'))
+    expect(handed('gh release download v1 -D state --pattern tests')).toEqual(words('release', 'download', 'v1', 'state', 'tests'))
+    expect(handed('gh release download v1 --output state')).toEqual(words('release', 'download', 'v1', 'state'))
+    expect(handed('gh release download v1 --dir=state')).toEqual(words('release', 'download', 'v1', 'state'))
+    expect(handed('gh run download 123 -D tests')).toEqual(words('run', 'download', '123', 'tests'))
+    expect(handed('gh run download 123 --dir tests --name state')).toEqual(words('run', 'download', '123', 'tests', 'state'))
+    expect(handed('gh repo clone danwright32/claude-config state')).toEqual(words('repo', 'clone', 'danwright32/claude-config', 'state'))
+    expect(handed('gh gist clone abc123 state')).toEqual(words('gist', 'clone', 'abc123', 'state'))
+    expect(handed('gh repo fork danwright32/claude-config --clone')).toEqual(words('repo', 'fork', 'danwright32/claude-config'))
+    expect(handed('gh pr checkout 5')).toEqual(words('pr', 'checkout', '5'))
+    expect(handed('gh pr merge 5 --squash --delete-branch')).toEqual(words('pr', 'merge', '5'))
+    expect(handed('gh pr close 5 --delete-branch')).toEqual(words('pr', 'close', '5'))
+    expect(handed('gh repo sync')).toEqual(words('repo', 'sync'))
+    expect(handed('gh extension install state')).toEqual(words('extension', 'install', 'state'))
+    expect(handed('gh extension upgrade state')).toEqual(words('extension', 'upgrade', 'state'))
+    expect(handed('gh attestation download state --owner danwright32')).toEqual(words('attestation', 'download', 'state', 'danwright32'))
+    expect(handed('gh codespace cp remote:file state')).toEqual(words('codespace', 'cp', 'state'))
+    expect(handed('gh alias import state')).toEqual(words('alias', 'import', 'state'))
+    expect(handed('gh config set editor state')).toEqual(words('config', 'set', 'editor', 'state'))
+    expect(handed('gh workflow view state --yaml')).toEqual(words('workflow', 'view', 'state'))
+    expect(handed('gh release create v1 state tests')).toEqual(words('release', 'create', 'v1', 'state', 'tests'))
+  })
+  test('a file gh reads is still handed on, by the option that names it', () => {
+    expect(handed('gh pr create --title T --head tests --base main --body-file tests/body.md')).toEqual([`${T}/body.md`])
+    expect(handed('gh pr create --title T --body-file=state')).toEqual([S])
+    expect(handed('gh pr create -t T -F state')).toEqual([S])
+    expect(handed('gh pr new --title T --body-file state')).toEqual([S])
+    expect(handed('gh pr create --title T --template state')).toEqual([S])
+    expect(handed('gh pr create --recover state')).toEqual([S])
+    expect(handed('gh issue create --title T --label tests --milestone state --body-file tests/body.md')).toEqual([`${T}/body.md`])
+    expect(handed('gh issue create --recover state')).toEqual([S])
+    expect(handed('gh issue comment 5 --body-file state')).toEqual([S])
+    expect(handed('gh pr comment 5 --body-file state')).toEqual([S])
+    expect(handed('gh pr edit 5 --body-file state --add-label tests')).toEqual([S])
+    expect(handed('gh issue edit 5 --title T --body-file state')).toEqual([S])
+    expect(handed('gh api repos/danwright32/claude-config/issues --input state')).toEqual([S])
+    expect(handed('gh api repos/danwright32/claude-config/issues --input=state')).toEqual([S])
+    expect(handed('gh api repos/danwright32/claude-config/issues -F body=@state')).toEqual([`${CWD}/body=@state`])
+    expect(handed('gh pr diff 5 --exclude state')).toEqual([S])
+  })
+  test('an option or a subcommand the reading does not hold leaves the whole command read as before', () => {
+    expect(handed('gh pr view 5 --json state --output state')).toEqual(words('pr', 'view', '5', 'state', 'state'))
+    expect(handed('gh pr view 5 --json state -o tests')).toEqual(words('pr', 'view', '5', 'state', 'tests'))
+    expect(handed('gh pr view 5 --json state -cX tests')).toEqual(words('pr', 'view', '5', 'state', 'tests'))
+    expect(handed('gh pr view 5 --web=state')).toEqual(words('pr', 'view', '5', 'state'))
+    expect(handed('gh mystery view 5 --json state')).toEqual(words('mystery', 'view', '5', 'state'))
+    expect(handed('gh pr mystery 5 --json state')).toEqual(words('pr', 'mystery', '5', 'state'))
+    expect(handed('gh state')).toEqual(words('state'))
+    // The subcommand's name must come first: an option before it is not followed.
+    expect(handed('gh -R danwright32/claude-config pr view 5 --json state')).toEqual(words('danwright32/claude-config', 'pr', 'view', '5', 'state'))
+    // gh's manual gives pr list no operand, so a word in that place is not proved to be no path.
+    expect(handed('gh pr list state')).toEqual([S])
+    // An option's value that starts with a dash is that value, and the word after it an operand.
+    expect(handed('gh issue list --search --json state')).toEqual([S])
+  })
+  test('a command the reader cannot follow word for word is read as before wherever a word of it may name a file', () => {
+    // A word the shell fills in, in a command with an option that names a file: it may hold that option.
+    expect(handed('gh pr create --title "$T" --body-file state')).toEqual(words('pr', 'create', 'state'))
+    expect(handed('gh issue comment $N state')).toEqual(words('issue', 'comment', 'state'))
+    expect(handed('gh api "$ENDPOINT" --jq .state')).toEqual(words('api', '.state'))
+    // The same in a command that takes no file anywhere, beside a word that may be an option the
+    // reading does not hold.
+    expect(handed('gh pr view $X --newflag state')).toEqual(words('pr', 'view', 'state'))
+    // A pattern the shell may match against files gives words the reader cannot see.
+    expect(handed('gh pr create --title T --label te* --body-file state')).toEqual(words('pr', 'create', 'T', 'state'))
+  })
+  // The reading takes words away from what gh is handed and changes nothing else: a mv on the same
+  // line was read as one whose file may be gone (no `to`) while gh was handed its words, and is still.
+  test('a move on the same line as a gh command is settled as it was before', () => {
+    const to = (command: string) => read(command).changes.map(c => c.to?.path)
+    expect(to('mv notes/a.md archive/a.md')).toEqual([`${CWD}/archive/a.md`])
+    expect(to('mv notes/a.md archive/a.md && gh pr view 5 --json state')).toEqual([undefined])
+    expect(to('gh issue view 5 --json body > notes/a.md && mv notes/a.md archive/a.md')).toEqual([undefined])
+    expect(to('mv notes/a.md archive/a.md && gh pr create --title T --body-file state')).toEqual([undefined])
+    expect(to('mv notes/a.md archive/a.md && gh pr checkout 5')).toEqual([undefined])
+  })
+  test('gh is still a program the reader does not know, and says so of what it is handed', () => {
+    expect(read('gh pr create --title T --body-file state').runs).toEqual([{ ...notKnown('gh'), args: [{ word: 'state', path: S }] }])
+    expect(Object.prototype.hasOwnProperty.call(READ_ONLY, 'gh')).toBe(false)
+  })
+
+  // The cost is held by counting, never by the clock (L290), as #3626's is: the words of gh commands
+  // the reading looks at. A line with no gh in it looks at none.
+  test('a line with no gh in it costs the reading nothing, and a gh command a few steps for each word', () => {
+    const before = ghWordsSoFar()
+    read('git status; ls | wc -l; prettier --write app/globals.css; mystery state; cat .github/workflows/ci.yml | grep gh')
+    read(`mv ${Array.from({ length: 500 }, (_, i) => `notes/n${i}.md`).join(' ')} archive/`)
+    expect(ghWordsSoFar() - before).toBe(0)
+    for (const n of [1000, 2000]) {
+      const start = ghWordsSoFar()
+      expect(handed(`gh issue create --title T ${Array.from({ length: n }, (_, i) => `--label l${i}`).join(' ')} --body-file state`)).toEqual([S])
+      const steps = ghWordsSoFar() - start
+      expect([n, steps <= 3 * (2 * n + 4) + 10, steps > 0]).toEqual([n, true, true])
+    }
   })
 })

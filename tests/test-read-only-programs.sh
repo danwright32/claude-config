@@ -16,6 +16,10 @@
 #     asked with the name, a member of a set asked with it) is read as known, so a branch added
 #     without the reader counting it as read turns red. The names are scanned from the file's text,
 #     and the scan finding too few is itself a failure (L100).
+#   - gh is the one name compared against that is not read as known (claude-config#3412): it has a
+#     reading of its own grammar that takes away only the words gh's manual proves are no path. It
+#     is held here to staying a program the reader does not know, handed the file, in every form
+#     that grammar does not prove, and to being on no list.
 # Each docs check is then run against a table made wrong on purpose, and must fail there (L1).
 #
 # What this cannot catch, said so it is never claimed (L460): a reason that is false, a sign off
@@ -44,7 +48,7 @@ fi
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/test-read-only-programs.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
-EXPECTED=21
+EXPECTED=24
 
 cat >"$TMP/read.mjs" <<'JS'
 import { readFileSync } from 'node:fs'
@@ -154,8 +158,22 @@ for (const id of asked) {
 say('the scan of writes.ts finds the names it compares against', names.size >= 87 && unparsed.length === 0 && ['tee', 'dd', 'cp', 'gzip', 'rm', 'vim', 'grep', 'printf', 'export'].every(x => names.has(x)), `${names.size} names found; tables it could not read: ${unparsed.join(', ') || 'none'}`)
 // The three that unpack are known in the form that unpacks, and by design not in any other.
 const UNPACKS = { tar: 'tar -xf src/a.tgz', bsdtar: 'bsdtar -xf src/a.tgz', gtar: 'gtar -xf src/a.tgz', cpio: 'cpio -i -F src/a.cpio', unzip: 'unzip src/a.zip' }
-const unread = [...names].filter(x => unknownIn(UNPACKS[x] ?? handed(x)).length)
+// gh (#3412) is compared against by name and is NOT read as known: it is on no list, least of all
+// the 32, and stays a program the reader does not know. Its own grammar only takes away the words
+// that grammar proves are no path, so it is asked here in a form where every word is one, and the
+// two checks after this one hold it to being a stranger in every form the grammar does not cover.
+const GH_ALL_PROVED = 'gh pr view 5 --json src/a.txt'
+const unread = [...names].filter(x => unknownIn(x === 'gh' ? GH_ALL_PROVED : (UNPACKS[x] ?? handed(x))).length)
 say('every name writes.ts compares a command against is read as known', unread.length === 0, `read as a program the reader does not know: ${unread.join(', ')}`)
+say('writes.ts compares a command against gh, so the checks on it below are not vacuous', names.has('gh'), 'gh is not among the names scanned out of writes.ts')
+const handedTo = c => unknownIn(c).filter(r => r.what === 'a program the write reader does not know' && r.script === 'gh').flatMap(r => r.args.map(a => a.path))
+const ghStranger = [
+  'gh src/a.txt', 'gh mystery src/a.txt', 'gh pr mystery src/a.txt', 'gh release download v1 --dir src/a.txt', 'gh run download 5 -D src/a.txt', 'gh repo clone o/r src/a.txt',
+  'gh gist clone abc src/a.txt', 'gh extension install src/a.txt', 'gh pr view 5 --output src/a.txt', 'gh pr view 5 --json state -o src/a.txt', 'gh pr list src/a.txt',
+  'gh pr create --title T --body-file src/a.txt', 'gh issue comment 5 -F src/a.txt', 'gh api repos/o/r/issues --input src/a.txt', 'gh pr create --title "$T" --json src/a.txt',
+].filter(c => !handedTo(c).includes('/w/app/src/a.txt'))
+say('gh handed a file in any form its grammar does not prove is no path is read as a program the reader does not know, handed that file', ghStranger.length === 0, `not handed the file: ${ghStranger.join(' | ')}`)
+say('gh is not on the list of programs that only read', !listed.includes('gh'), 'gh is listed in READ_ONLY')
 const listing = ['tar -tf src/a.tgz', 'cpio -o -F src/a.cpio', 'unzip -l src/a.zip'].filter(c => unknownIn(c).length !== 1)
 say('a form of tar, cpio or unzip that unpacks nothing is read as a program the reader does not know', listing.length === 0, `not marked: ${listing.join(' | ')}`)
 const unpacked = Object.values(UNPACKS).filter(c => !read(c).unnamed.some(u => /^an archive \S+ unpacks$/.test(u.what)))

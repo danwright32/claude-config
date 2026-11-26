@@ -97,7 +97,10 @@ const leftOut = (name, c, want) => {
   const got = targets(c)
   say(name, marked.length > 0 && canon(got) === canon(want), `${c}: the reader marked ${JSON.stringify(marked)} unknown, and the targets were ${canon(got)}`)
 }
-leftOut("gh handed an option's value that names a folder is judged as before #3323", 'gh pr view 5 --json state', [])
+// gh has a reading of its own since #3412, so `gh pr view 5 --json state`, which stood here, is handed
+// nothing and marked no more. The gh command below is one that reading leaves as it was, a download
+// into a folder (its `want` measured over the reader at that same commit on 2026-11-26).
+leftOut('gh handed a folder it may write into is judged as before #3323', 'gh release download v1 --dir state', [])
 leftOut("claude plugin test handed a mod's folder is judged as before #3323", 'claude plugin test payload/mods/area-check', [])
 leftOut('a compiler handed a source file is judged as before #3323', 'swiftc -o x y.swift', [])
 leftOut('a program on no list handed a source file is judged as before #3323', 'prettier --write src/big.ts', [])

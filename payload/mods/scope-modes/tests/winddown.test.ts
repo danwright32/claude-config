@@ -581,7 +581,8 @@ describe('whose uncommitted files they are (#1108)', () => {
     expect(filesWritten({ tool: 'Bash', input: {}, writes: commandWrites('tar -xzf /tmp/a.tgz src/a.ts', '/repo', home) })).toEqual(['/repo/src/a.ts'])
   })
   // #3323: every word such a program is handed that spells a path goes on the list, and most name
-  // no file (`gh pr view 5 --json state` hands pr, view, 5 and state). None of those becomes work to
+  // no file (`glab mr view 5 --output state` hands mr, view, 5 and state; gh's own words were the
+  // commonest until gh got a reading of its own grammar, #3412). None of those becomes work to
   // finish: only an uncommitted file is ever asked about, and it is this session's only when the
   // list names that very file, so a word naming nothing matches none, and one naming a folder
   // claims no file under it. Measured over 35 days of the personal MacBook's records (2026-11-21):
@@ -589,8 +590,12 @@ describe('whose uncommitted files they are (#1108)', () => {
   test("the words a program the write reader does not know is handed make no uncommitted file this session's but one they name (#3323)", () => {
     const home = `${'/Users'}/x`
     const written = (c: string) => filesWritten({ tool: 'Bash', input: {}, writes: commandWrites(c, '/repo', home) })
-    const gh = written('gh pr view 5 --json state')
-    expect(gh).toEqual(['/repo/pr', '/repo/view', '/repo/5', '/repo/state'])
+    const gh = written('glab mr view 5 --output state')
+    expect(gh).toEqual(['/repo/mr', '/repo/view', '/repo/5', '/repo/state'])
+    // #3412: gh is handed none of the words its grammar proves are no path, and still the file an
+    // option of it reads.
+    expect(written('gh pr view 5 --json state')).toEqual([])
+    expect(written('gh pr create --title T --body-file state/pr')).toEqual(['/repo/state/pr'])
     // Uncommitted files beside and under what it was handed, a `state` folder's among them: none is
     // this session's, as none was before the rule.
     const dirty = ['state/store.ts', 'state/pr', 'README.md', 'src/view.ts']

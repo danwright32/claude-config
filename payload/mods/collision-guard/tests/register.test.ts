@@ -282,9 +282,9 @@ const KIT = new Map<string, unknown>([
   ["commands {\"command\":\"prettier --write notes.txt\"}",[["prettier","--write","notes.txt"]]],
   ["git {\"words\":[\"prettier\",\"--write\",\"notes.txt\"]}",null],
   ["writes {\"command\":\"prettier --write notes.txt\",\"cwd\":\"/repo\",\"home\":\"\"}",{"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a program the write reader does not know","script":"prettier","tool":true,"unknown":true,"why":"prettier is a program the mods do not know, so what it does with a file it is handed cannot be read before it runs","remedy":"To only read a file, use a program the mods know only reads (cat, grep, head, tail, wc, diff and the others listed under \"The programs that only read\" in claude-config's docs/mods-design.md). If prettier only reads too, ask Dan to add it to that list: only he may.","args":[{"word":"notes.txt","path":"/repo/notes.txt"}]}]}],
-  ["commands {\"command\":\"gh pr view 5\"}",[["gh","pr","view","5"]]],
-  ["git {\"words\":[\"gh\",\"pr\",\"view\",\"5\"]}",null],
-  ["writes {\"command\":\"gh pr view 5\",\"cwd\":\"/repo\",\"home\":\"\"}",{"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a program the write reader does not know","script":"gh","tool":true,"unknown":true,"why":"gh is a program the mods do not know, so what it does with a file it is handed cannot be read before it runs","remedy":"To only read a file, use a program the mods know only reads (cat, grep, head, tail, wc, diff and the others listed under \"The programs that only read\" in claude-config's docs/mods-design.md). If gh only reads too, ask Dan to add it to that list: only he may.","args":[{"word":"pr","path":"/repo/pr"},{"word":"view","path":"/repo/view"},{"word":"5","path":"/repo/5"}]}]}],
+  ["commands {\"command\":\"gh pr checkout 5\"}",[["gh","pr","checkout","5"]]],
+  ["git {\"words\":[\"gh\",\"pr\",\"checkout\",\"5\"]}",null],
+  ["writes {\"command\":\"gh pr checkout 5\",\"cwd\":\"/repo\",\"home\":\"\"}",{"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a program the write reader does not know","script":"gh","tool":true,"unknown":true,"why":"gh is a program the mods do not know, so what it does with a file it is handed cannot be read before it runs","remedy":"To only read a file, use a program the mods know only reads (cat, grep, head, tail, wc, diff and the others listed under \"The programs that only read\" in claude-config's docs/mods-design.md). If gh only reads too, ask Dan to add it to that list: only he may.","args":[{"word":"pr","path":"/repo/pr"},{"word":"checkout","path":"/repo/checkout"},{"word":"5","path":"/repo/5"}]}]}],
   ["commands {\"command\":\"prettier --check other.txt && ./tidy.sh other.txt\"}",[["prettier","--check","other.txt"],["./tidy.sh","other.txt"]]],
   ["git {\"words\":[\"prettier\",\"--check\",\"other.txt\"]}",null],
   ["git {\"words\":[\"./tidy.sh\",\"other.txt\"]}",null],
@@ -1379,7 +1379,7 @@ test('a program the write reader does not know, handed a file another open sessi
 })
 
 // What such a program is handed is judged and never noted as this session's edit. Most words it is
-// handed spell a path without being a file it writes (`gh pr view 5` hands pr, view and 5 in the
+// handed spell a path without being a file it writes (`gh pr checkout 5` hands pr, checkout and 5 in the
 // checkout), a session's edits are capped at twenty, and each one noted is a file another session
 // would be asked about. So a real write by such a program is still not recorded as an edit, as it
 // was not before. A script handed the file is noted, as it was.
@@ -1390,7 +1390,7 @@ test("such a program judged Proceed runs, and what it was handed is not noted as
   expect(w.toasts).toContain('Checked with the other session: safe to edit notes.txt.')
   expect(w.prompts.length).toBe(1)
   expect(w.edits).toEqual([])
-  await $.tool.call(bash('gh pr view 5', 'un3'))
+  await $.tool.call(bash('gh pr checkout 5', 'un3'))
   await $.tool.call(bash('cat notes.txt', 'un4'))
   expect(w.reached).toEqual(['Bash', 'Bash', 'Bash'])
   expect(w.prompts.length).toBe(1)

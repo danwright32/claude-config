@@ -39,7 +39,10 @@ describe('which refused calls only read', () => {
     const marked = (c: string) => commandWrites(c, CWD, HOME).runs?.some(r => r.unknown) ?? false
     for (const c of ['basename src/a.txt', 'dirname src/a.txt', 'realpath a.txt', 'nl a.txt', 'egrep -n x a.txt', 'fgrep x a.txt', 'md5 a.txt', 'column -t a.txt'])
       expect([c, marked(c), bashReads(c)]).toEqual([c, true, true])
-    for (const c of ['mystery a.txt', 'prettier --check a.txt', 'gh issue view 3', 'npm test']) expect([c, marked(c), bashReads(c)]).toEqual([c, true, false])
+    for (const c of ['mystery a.txt', 'prettier --check a.txt', 'gh pr checkout 3', 'gh issue view 3 --output a.txt', 'npm test']) expect([c, marked(c), bashReads(c)]).toEqual([c, true, false])
+    // #3412: gh's own grammar proves no word of this one is a path, so the reader gives no run for
+    // it. It is still no read here, by this list, as gh is on neither.
+    expect(['gh issue view 3', marked('gh issue view 3'), bashReads('gh issue view 3')]).toEqual(['gh issue view 3', false, false])
     // A run that is not one of those (a script, a tool) is no read, as before.
     for (const c of ['python3 x.py a.txt', 'npx prettier a.txt']) expect([c, marked(c), bashReads(c)]).toEqual([c, false, false])
   })

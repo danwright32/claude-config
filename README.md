@@ -8626,8 +8626,12 @@ lists that is handed a word that spells a path, read as a writer of that file an
 was and the `remedy`, unless it is one of the 32 programs Dan signed off by name as only reading
 (`READ_ONLY`, an exemption list nothing joins without his sign off; the five forms of them that
 write a file or run a program, `rg --pre` and `file -C` among them, are read as writers), which the
-same guards judge as they do a script's arguments, while the area check leaves those runs out until
-gh has a reading of its own (#3412), and unpacking an archive (`tar -x`, `unzip`, `cpio -i`) as a
+same guards judge as they do a script's arguments (gh, on none of those lists, is handed only the
+words its own grammar does not prove are no path since #3412: nothing in `gh pr view 5 --json
+state`, the one file in `gh pr create --body-file notes.md`, and every word as before in a
+subcommand or with an option the reading does not hold, such as `gh release download --dir out`),
+while the area check leaves those runs out until Dan decides it joins (#3412), and unpacking an
+archive (`tar -x`, `unzip`, `cpio -i`) as a
 write the words do not name into the folder it unpacks into, with each member it names as a file
 (the list, Dan's decisions and the limits are in docs/mods-design.md, "The programs that only
 read"); and, apart in `byGit`, what git mv, git rm, a checkout of a path and git restore change
@@ -10865,8 +10869,9 @@ naming a file. Removals, `touch`, `mkdir` and mode changes are not judged, and a
 program that builds its own file names (`node gen.js`) reads as writing nothing, so it is not held.
 Nor is what a program the write reader does not know is handed (`prettier --write src/big.ts` typed
 without `npx`), which the reader marks as a run since #3323: the area check leaves those runs out
-until gh has a reading of its own (#3412; Dan, 2026-11-21, after a count found gh handed an option's
-value that names a folder in 633 past calls in 35 days), so it judges such a command as it did
+until Dan decides it joins (#3412; Dan, 2026-11-21, after a count found gh handed an option's
+value that names a folder in 633 past calls in 35 days; gh has had a reading of its own grammar
+since 2026-11-26, and `claude plugin test <folder>` has none), so it judges such a command as it did
 before, while an archive unpacked (`tar -x`, `unzip`, `cpio -i`) is judged as a write whose files
 cannot be named, in the checkout of the folder it unpacks into, and a member it names as that file.
 A command reaching a whole folder (a `find -exec` over it, a folder handed to a script) is held once

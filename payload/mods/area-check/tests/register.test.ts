@@ -125,7 +125,9 @@ const WRITES: Record<string, unknown> = {
   "grep -n x src/big.ts": {"files":[],"changes":[],"unnamed":[]},
   "wc -l src/big.ts": {"files":[],"changes":[],"unnamed":[]},
   "[ -f src/big.ts ]": {"files":[],"changes":[],"unnamed":[]},
-  "gh pr view 5": {"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a program the write reader does not know","script":"gh","tool":true,"unknown":true,"why":"gh is a program the mods do not know, so what it does with a file it is handed cannot be read before it runs","remedy":"To only read a file, use a program the mods know only reads (cat, grep, head, tail, wc, diff and the others listed under \"The programs that only read\" in claude-config's docs/mods-design.md). If gh only reads too, ask Dan to add it to that list: only he may.","args":[{"word":"pr","path":"/w/app/pr"},{"word":"view","path":"/w/app/view"},{"word":"5","path":"/w/app/5"}]}]},
+  // #3412: gh has a reading of its own, so `gh pr view 5` is read as handed nothing. The gh command here is one that
+  // reading does not cover (a checkout writes the working tree). Measured from the reader on 2026-11-26.
+  "gh pr checkout 5": {"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a program the write reader does not know","script":"gh","tool":true,"unknown":true,"why":"gh is a program the mods do not know, so what it does with a file it is handed cannot be read before it runs","remedy":"To only read a file, use a program the mods know only reads (cat, grep, head, tail, wc, diff and the others listed under \"The programs that only read\" in claude-config's docs/mods-design.md). If gh only reads too, ask Dan to add it to that list: only he may.","args":[{"word":"pr","path":"/w/app/pr"},{"word":"checkout","path":"/w/app/checkout"},{"word":"5","path":"/w/app/5"}]}]},
   "sleep 2": {"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a program the write reader does not know","script":"sleep","tool":true,"unknown":true,"why":"sleep is a program the mods do not know, so what it does with a file it is handed cannot be read before it runs","remedy":"To only read a file, use a program the mods know only reads (cat, grep, head, tail, wc, diff and the others listed under \"The programs that only read\" in claude-config's docs/mods-design.md). If sleep only reads too, ask Dan to add it to that list: only he may.","args":[{"word":"2","path":"/w/app/2"}]}]},
   "mystery notes.md": {"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a program the write reader does not know","script":"mystery","tool":true,"unknown":true,"why":"mystery is a program the mods do not know, so what it does with a file it is handed cannot be read before it runs","remedy":"To only read a file, use a program the mods know only reads (cat, grep, head, tail, wc, diff and the others listed under \"The programs that only read\" in claude-config's docs/mods-design.md). If mystery only reads too, ask Dan to add it to that list: only he may.","args":[{"word":"notes.md","path":"/w/app/notes.md"}]}]},
   "tar -xzf /tmp/a.tgz -C src": {"files":[],"changes":[],"unnamed":[{"what":"an archive tar unpacks","words":["tar","-xzf","/tmp/a.tgz","-C","src"],"inputs":[],"into":"/w/app/src","folder":"/w/app/src"}]},
@@ -133,7 +135,9 @@ const WRITES: Record<string, unknown> = {
   "tar -tzf /tmp/a.tgz": {"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a program the write reader does not know","script":"tar","tool":true,"unknown":true,"why":"tar is a program the mods do not know, so what it does with a file it is handed cannot be read before it runs","remedy":"To only read a file, use a program the mods know only reads (cat, grep, head, tail, wc, diff and the others listed under \"The programs that only read\" in claude-config's docs/mods-design.md). If tar only reads too, ask Dan to add it to that list: only he may.","args":[{"word":"/tmp/a.tgz","path":"/tmp/a.tgz"}]}]},
   // #3323, the area check left out: commands whose program the reader marks unknown, in a checkout where what they are
   // handed could be held, and a write beside one. Measured from the reader on 2026-11-21.
-  "gh pr view 5 --json state": {"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a program the write reader does not know","script":"gh","tool":true,"unknown":true,"why":"gh is a program the mods do not know, so what it does with a file it is handed cannot be read before it runs","remedy":"To only read a file, use a program the mods know only reads (cat, grep, head, tail, wc, diff and the others listed under \"The programs that only read\" in claude-config's docs/mods-design.md). If gh only reads too, ask Dan to add it to that list: only he may.","args":[{"word":"pr","path":"/w/app/pr"},{"word":"view","path":"/w/app/view"},{"word":"5","path":"/w/app/5"},{"word":"state","path":"/w/app/state"}]}]},
+  // #3412: the gh command here is one gh's own reading does not cover (a download into a folder), so the reader still
+  // marks it; `gh pr view 5 --json state`, which stood here, is now read as handed nothing. Measured on 2026-11-26.
+  "gh release download v1 --dir state": {"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a program the write reader does not know","script":"gh","tool":true,"unknown":true,"why":"gh is a program the mods do not know, so what it does with a file it is handed cannot be read before it runs","remedy":"To only read a file, use a program the mods know only reads (cat, grep, head, tail, wc, diff and the others listed under \"The programs that only read\" in claude-config's docs/mods-design.md). If gh only reads too, ask Dan to add it to that list: only he may.","args":[{"word":"release","path":"/w/app/release"},{"word":"download","path":"/w/app/download"},{"word":"v1","path":"/w/app/v1"},{"word":"state","path":"/w/app/state"}]}]},
   "claude plugin test src": {"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a program the write reader does not know","script":"claude","tool":true,"unknown":true,"why":"claude is a program the mods do not know, so what it does with a file it is handed cannot be read before it runs","remedy":"To only read a file, use a program the mods know only reads (cat, grep, head, tail, wc, diff and the others listed under \"The programs that only read\" in claude-config's docs/mods-design.md). If claude only reads too, ask Dan to add it to that list: only he may.","args":[{"word":"plugin","path":"/w/app/plugin"},{"word":"test","path":"/w/app/test"},{"word":"src","path":"/w/app/src"}]}]},
   "swiftc -o out App/Main.swift": {"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a program the write reader does not know","script":"swiftc","tool":true,"unknown":true,"why":"swiftc is a program the mods do not know, so what it does with a file it is handed cannot be read before it runs","remedy":"To only read a file, use a program the mods know only reads (cat, grep, head, tail, wc, diff and the others listed under \"The programs that only read\" in claude-config's docs/mods-design.md). If swiftc only reads too, ask Dan to add it to that list: only he may.","args":[{"word":"out","path":"/w/app/out"},{"word":"App/Main.swift","path":"/w/app/App/Main.swift"}]}]},
   "prettier --write src/big.ts && sed -i '' 's/a/b/' src/lib/slack.ts": {"files":[{"word":"src/lib/slack.ts","path":"/w/app/src/lib/slack.ts","edits":true}],"changes":[],"unnamed":[],"runs":[{"what":"a program the write reader does not know","script":"prettier","tool":true,"unknown":true,"why":"prettier is a program the mods do not know, so what it does with a file it is handed cannot be read before it runs","remedy":"To only read a file, use a program the mods know only reads (cat, grep, head, tail, wc, diff and the others listed under \"The programs that only read\" in claude-config's docs/mods-design.md). If prettier only reads too, ask Dan to add it to that list: only he may.","args":[{"word":"src/big.ts","path":"/w/app/src/big.ts"}]}]},
@@ -689,10 +693,13 @@ test('a shell command writing no file, a new file or only files that are no sour
 // as a write that cannot be named. So gh gets its own reading first (#3412). Until then each such command
 // gets the verdict it got with the reader as it stood on main before #3323, which MAIN_WRITES
 // records for the commands below (measured from the reader at commit 3cf551888f on 2026-11-21).
+// With gh's own reading (#3412) `gh pr view 5 --json state` is handed nothing and is no such command
+// any more, so the gh command below is one that reading leaves as it was, a download into the `state`
+// folder (its entry measured from the reader at that same commit on 2026-11-26).
 const MAIN_NOTHING = { files: [], changes: [], unnamed: [] }
 const MAIN_SLACK = { files: [{ word: 'src/lib/slack.ts', path: '/w/app/src/lib/slack.ts', edits: true }], changes: [], unnamed: [] }
 const MAIN_WRITES: Record<string, unknown> = {
-  'gh pr view 5 --json state': MAIN_NOTHING,
+  'gh release download v1 --dir state': MAIN_NOTHING,
   'claude plugin test src': MAIN_NOTHING,
   'swiftc -o out App/Main.swift': MAIN_NOTHING,
   'prettier --write src/big.ts': MAIN_NOTHING,
@@ -725,7 +732,7 @@ test('a command with a program the write reader does not know gets the verdict i
       errors: w.records(ERRORS).length - from.errors,
     }
   }
-  const unknown = ['gh pr view 5 --json state', 'claude plugin test src', 'swiftc -o out App/Main.swift', 'prettier --write src/big.ts', 'mystery src/', '[[ -f src/big.ts ]]', 'rg --pre ./tool x src/big.ts']
+  const unknown = ['gh release download v1 --dir state', 'claude plugin test src', 'swiftc -o out App/Main.swift', 'prettier --write src/big.ts', 'mystery src/', '[[ -f src/big.ts ]]', 'rg --pre ./tool x src/big.ts']
   // Controls, so the comparison is seen to carry a hold: a write the reader named before #3323 is
   // held with either reader, alone and beside a program the reader does not know.
   const writes = ["sed -i '' 's/a/b/' src/lib/slack.ts", "prettier --write src/big.ts && sed -i '' 's/a/b/' src/lib/slack.ts"]
@@ -748,7 +755,7 @@ test('a command with a program the write reader does not know gets the verdict i
 test('a program the write reader does not know, or one that only reads, costs no look at git whatever it is handed (#3323)', KIT, async ($, on) => {
   const w = world($, on)
   w.ctl.branchThrows = true
-  const commands = ['cat src/big.ts', 'grep -n x src/big.ts', 'wc -l src/big.ts', '[ -f src/big.ts ]', 'gh pr view 5', 'sleep 2', 'npm test', 'mystery notes.md', 'prettier --write src/big.ts', 'mystery src/']
+  const commands = ['cat src/big.ts', 'grep -n x src/big.ts', 'wc -l src/big.ts', '[ -f src/big.ts ]', 'gh pr checkout 5', 'sleep 2', 'npm test', 'mystery notes.md', 'prettier --write src/big.ts', 'mystery src/']
   for (const [i, c] of commands.entries()) expect({ c, result: (await bash($ as never, w, c, {}, `w${i}`)).result }).toEqual({ c, result: 'done' })
   expect(w.judged().length).toBe(0)
   expect(w.records(ERRORS)).toEqual([])
