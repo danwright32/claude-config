@@ -1,8 +1,8 @@
 import type { EngineInterface, Register } from 'claude-code'
 import { cutOwn, watchesOnly } from './mod-kit/hold.ts'
 import type { IsItLive, IsItLiveCard, IsItLiveOwed } from '../types/index.d.ts'
-import { type Asked, unreadOf } from './announce.ts'
-import { announcementAtCard, announcementHold, announcementList, announcementUnread, announcementsAtStart, noteAnnouncement } from './announcing.ts'
+import { type Asked, pressedOf, unreadOf } from './announce.ts'
+import { announcementAtCard, announcementHold, announcementList, announcementPressed, announcementUnread, announcementsAtStart, noteAnnouncement } from './announcing.ts'
 import { type CardInput, MOD, buttonId, cardOf, cardText, draftKeyOf, draftLineOf, isOut, liveList, messageRow, pinnable, reasonToRefuse, stateOf, titleOf } from './card.ts'
 import { draftHold, markLanded, noteCard, recordedThreads, registerDrafts, registerUnrelated, relateCard } from './drafts.ts'
 import { type MergeCall, type Proof, TOOL, VIEW_FIELDS, WAIT_MS, isNotAPr, letGoOf, mergeCallOf, nudgeOf, owedFrom, proofOf, refusalOf } from './merges.ts'
@@ -734,8 +734,15 @@ export const register: Register = on => {
 
   // Copy and Mark sent, on any message this mod pinned, pressed by a click or by /press (#939):
   // mod-kit raises both as modkit.press. One hook for all of them: the buttons are named after their
-  // card, so they cannot be listed when the module loads.
+  // card, so they cannot be listed when the module loads. #3667: the buttons of an announcement's
+  // row (named announce-, which the message row's never are) are answered here too, since the
+  // engine takes one hook on this event from a mod.
   on('modkit.press', async ($, e, next) => {
+    const announced = pressedOf(MOD, String(e.element ?? ''))
+    if (announced) {
+      await announcementPressed($, announced, e.surface)
+      return { value: { isAnswered: true } }
+    }
     const m = new RegExp(`^${MOD}:(copy|sent)-(.+)$`).exec(String(e.element ?? ''))
     if (!m) return next(e)
     // A copy, or a card saved and its row cleared: well inside a noun's 10 s (#744), so the press is

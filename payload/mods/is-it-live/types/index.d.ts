@@ -91,6 +91,12 @@ declare module 'claude-code' {
       announceRefused: { keys: string[]; told: string[] }
       /** #3667: the one line about announcements still owed that this session's first prompt carries, until it has. */
       announceLine: string
+      /**
+       * #3667: the announcements whose row this session pinned in its band, by their id, so the row
+       * of one settled since (by a draft, a press, or another session) is taken down at the next
+       * turn end or /live.
+       */
+      announcePinned: string[]
     }
   }
 }
@@ -120,9 +126,8 @@ export type IsItLiveAnnouncement = {
  * #3667: how an announcement stopped being owed, under a key of its own
  * (`announce-done:<owner/name>#<pr>`) written once and never taken back: a Slack draft of the
  * approved wording was saved (`drafted`, with the id Slack gave it), Dan marked it sent (`sent`), or
- * Dan said it is not being announced (`not-announcing`). Only `drafted` is written yet: the band
- * row whose buttons write the other two waits on a design round, and every reader already takes all
- * three as settled.
+ * Dan said it is not being announced (`not-announcing`). The last two are written only by a press
+ * of its row's Mark sent or Not announcing in the band, and every reader takes all three as settled.
  */
 export type IsItLiveAnnounceDone = { how: 'drafted' | 'sent' | 'not-announcing'; at: number; draftId?: string }
 

@@ -13,7 +13,7 @@ import { pipelineIn } from './mod-kit/hooks/writes.ts'
 // calls a real Slack tool: Slack's draft tool, GitHub, and the hooks' two command lines (the merge
 // gate's reader and the one comparison of a draft with its wording) are the world beneath the mod.
 
-type Part = { text?: string; color?: string; button?: string; label?: string }
+type Part = { text?: string; color?: string; bold?: boolean; button?: string; label?: string }
 type Row = { mod: string; id: string; slot: string; lines: Part[][] }
 // mod-kit, standing in (a mod cannot import another mod's files): it keeps published rows and draws
 // their text and buttons, and reads a command, a gh call and a link with copies of its own readers.
@@ -31,6 +31,9 @@ const modKit: { name: string; register: Register } = {
       }
       const modkit = {
         bandRow: async (row: ModKitBandRow) => {
+          // Why the band refuses a row, when a test's world makes it (asked of the world, which this module cannot read).
+          const fault = (await kit('bandFault', {})) as string
+          if (fault) throw new Error(fault)
           await built.state.set(ref, [...(await rows()).filter(r => !(r.mod === row.mod && r.id === row.id)), row] as never)
         },
         clearBandRow: async ({ mod, id }: { mod: string; id: string }) => {
@@ -50,6 +53,16 @@ const modKit: { name: string; register: Register } = {
       // Only the members this mod calls on these paths: the rest of the kit is never reached here.
       return { ...built, modkit: modkit as never }
     })
+    // For these tests only: raises modkit.press with whatever element a test names, so the mod's
+    // own answer to a press of a button that is not drawn can be read. mod-kit's /press presses
+    // only a button showing now.
+    on('command.run', { command: 'raise-press' }, async ($, e) => ({ text: JSON.stringify(await $.modkit.press({ element: e.args, surface: 'terminal', how: 'typed' })) }))
+    // As mod-kit does since Claude Code 2.1.323 (#2903): while it draws a row, every other row is
+    // left out of the stacked band.
+    on('ui.render', { component: 'AbovePromptList' } as never, (async (_$: unknown, e: { props: { rows: readonly { plugin: string }[] } }, next: (e: unknown) => Promise<unknown>) => {
+      const ours = e.props.rows.filter(r => r.plugin === 'mod-kit')
+      return next(ours.length === 0 || ours.length === e.props.rows.length ? e : { ...e, props: { ...e.props, rows: ours } })
+    }) as never)
     on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
       const rows = ((await $.state.get({ plugin: 'mod-kit', key: 'band' } as never)) as { value?: Row[] }).value ?? []
       if (!rows.length) return next(e)
@@ -63,7 +76,7 @@ const modKit: { name: string; register: Register } = {
                   p.button ? (
                     <Button key={`${r.mod}:${p.button}`} label={p.label as string} onPress={press => void $.modkit.press({ element: press.element, surface: String(press.surface), how: 'click' })} />
                   ) : (
-                    <Text key={String(i)} color={p.color}>
+                    <Text key={String(i)} color={p.color} bold={p.bold}>
                       {p.text}
                     </Text>
                   ),
@@ -105,6 +118,10 @@ type World = {
   stored?: Record<string, unknown>
   /** When set, every read of the store fails with these words. */
   storeFails?: string
+  /** When set, every write to the store fails with these words. */
+  storeWriteFails?: string
+  /** When set, the band refuses every row with these words. */
+  bandFails?: string
   /** What Slack's draft tool answers, or the refusal of a gate beneath the mod. */
   slackDraft: { text: string; isError?: true; deny?: string }
 }
@@ -143,6 +160,7 @@ const world = (on: On, init: Partial<World> = {}) => {
   const w: World = { prs: {}, reader: reads, judge: judges, remote: `git@github.com:${REPO}.git`, slackDraft: { text: '{"result":"Draft created","draft_id":"Dr0123ABC"}' }, ...init }
   const toasts: string[] = []
   const copies: string[] = []
+  const tools: string[] = []
   const runs: string[][] = []
   const clock = mock.clock(on, { now: T0 })
   // The store every session shares, held where a test can read it and write under the mod.
@@ -152,6 +170,7 @@ const world = (on: On, init: Partial<World> = {}) => {
     return { value: store.get(e.key) } as never
   })
   on('store.set', ($, e) => {
+    if (w.storeWriteFails) throw new Error(w.storeWriteFails)
     store.set(e.key, JSON.parse(JSON.stringify(e.value)))
     return { value: undefined } as never
   })
@@ -165,6 +184,7 @@ const world = (on: On, init: Partial<World> = {}) => {
     if (e.argv[0] === '__modkit') {
       const input = JSON.parse(e.argv[2] as string) as { words: string[]; command: string; cwd: string; home?: string; link: string; root?: string | null; remote: string | null }
       const what = e.argv[1]
+      if (what === 'bandFault') return ok(JSON.stringify(w.bandFails ?? ''))
       const read =
         what === 'gh' ? ghArgs(input.words) : what === 'mergeHelper' ? mergeHelperArgs(input as unknown as Command) : what === 'pipeline' ? pipelineIn(input.command, input.cwd, input.home ?? '') : what === 'linkRepo' ? linkRepo(input.link) : { github: githubRepo(input.remote), name: repoName(input) }
       return ok(read === undefined ? '' : JSON.stringify(read))
@@ -199,7 +219,10 @@ const world = (on: On, init: Partial<World> = {}) => {
   on('prompt.submit', ($, e) => ({ text: e.text, context: [] }) as never)
   on('tool.call', { tool: [DRAFT, DRAFT_OTHER] }, () => (w.slackDraft.deny ? { deny: w.slackDraft.deny } : w.slackDraft.isError ? { isError: true, result: w.slackDraft.text, text: w.slackDraft.text } : { result: w.slackDraft.text, text: w.slackDraft.text }) as never)
   on('ui.log', () => ({ value: undefined }) as never)
-  on('tool.register', () => ({ value: undefined }) as never)
+  on('tool.register', ($, e) => {
+    tools.push(String((e as { name?: string }).name))
+    return { value: undefined } as never
+  })
   on('command.register', () => ({ value: undefined }) as never)
   on('ui.copy', ($, e) => {
     copies.push(String((e as { text?: string }).text))
@@ -213,7 +236,7 @@ const world = (on: On, init: Partial<World> = {}) => {
     const { Text } = $.ui.resolve(e)
     return <Text>engine band</Text>
   })
-  return { w, toasts, copies, runs, clock, store, keys: () => [...store.keys()].sort() }
+  return { w, toasts, copies, tools, runs, clock, store, keys: () => [...store.keys()].sort() }
 }
 
 const DRAFT = 'mcp__plugin_slack_slack__slack_send_message_draft'
@@ -227,6 +250,28 @@ const start = async ($: unknown) => {
   await ($ as { session: { start: (x: never) => Promise<unknown> } }).session.start({ cwd: FOLDER, surface: 'terminal', isInteractive: true } as never)
 }
 const readerRuns = (runs: string[][]) => runs.filter(r => r[0] === 'node' && r[2] === 'announcement')
+// The band above the prompt, as mod-kit draws it: its lines of text, and a press of one of its buttons.
+const band = () => ({ plugin: 'mod-kit', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 40, bodyColumns: 100, scroll: { offset: 0, bodyRows: 40 }, view: {} } }) as never
+type Found = { text: string; children: unknown[]; props?: { label?: string; color?: string; bold?: boolean } }
+type Mounted = { findAll: (q: { type: string }) => Promise<Found[]>; press: (t: object) => Promise<unknown>; unmount: () => Promise<void> }
+const mount = async ($: unknown) => (await ($ as { ui: { mount: (x: never) => Promise<unknown> } }).ui.mount(band())) as Mounted
+const shown = async ($: unknown) => {
+  const ui = await mount($)
+  const t = (await ui.findAll({ type: 'Text' })).filter(x => x.children.every(c => typeof c === 'string')).map(x => x.text)
+  await ui.unmount()
+  return t
+}
+const buttons = async ($: unknown) => {
+  const ui = await mount($)
+  const b = (await ui.findAll({ type: 'Button' })).map(x => x.props?.label)
+  await ui.unmount()
+  return b
+}
+const press = async ($: unknown, key: string) => {
+  const ui = await mount($)
+  await ui.press({ key })
+  await ui.unmount()
+}
 
 const ANNOUNCED: Pr = { labels: [LABEL], body: POST }
 const ENTRY = { repo: REPO, pr: 7, channel: CH, text: POST, normalized: normal(POST), hash: hashOf(POST), at: T0 }
@@ -366,6 +411,7 @@ test('a card finds the announcement of a merge this session never saw land, and 
   const told = said(await card($, { pr: 8 }))
   expect(told).toContain(`${REPO} pull request 8 owes an announcement for agents that cannot be drafted from this Mac: ${why}.`)
   expect(told).not.toContain('slack_send_message_draft')
+  expect(told).toContain('It stays listed in the band and in /live until he marks it sent or says it is not being announced.')
   expect(store.get(`announce-out:${REPO}#8`)).toEqual({ at: T0 })
 })
 
@@ -410,6 +456,7 @@ test('a draft that differs from the approved wording is said as that, to Dan and
   expect(said(r)).toContain(`The draft in Slack differs from the approved wording of the announcement for agents for ${NAME}`)
   expect(said(r)).toContain('they first differ at word 20')
   expect(said(r)).toContain('It is not counted as its draft, and the announcement is still owed.')
+  expect(said(r)).toContain('he can put the approved wording in its place (Copy on the "Announcement for agents" row in the band copies it) or delete it')
   expect(said(r)).not.toContain('is saved as a Slack draft')
   expect(toasts.length).toBe(1)
   expect(toasts[0]).toContain(`The draft in Slack differs from the approved wording of the announcement for agents for ${NAME}`)
@@ -427,6 +474,7 @@ test('an answer holding no draft_id keeps the announcement owed and says a draft
   expect(store.get(DONE_KEY)).toBeUndefined()
   expect(said(r)).toContain(`No draft of the announcement for agents for ${NAME} was saved: ${NOT_KEPT}.`)
   expect(said(r)).toContain(`a draft is already waiting in channel ${CH}`)
+  expect(said(r)).toContain('if it is, he can send it and press Mark sent on the "Announcement for agents" row in the band, and if it is something else')
   expect(said(r)).toContain('Do not tell him to delete it')
   expect(toasts).toEqual([`No Slack draft was saved for the announcement for agents for ${NAME}: a draft is already waiting in that channel. It is still owed.`])
 })
@@ -486,11 +534,16 @@ const turnEnd = async ($: unknown, isActive = false) =>
 // What another session left in the store: the entry, and that a card said its change is out.
 const OWED_AND_OUT = { [`announce:${REPO}#7`]: ENTRY, [OUT_KEY]: { at: T0 } }
 
-test('every session started in that project says it in one line, to Dan and in its first prompt, though no card is kept for it (R4)', withKit, async ($, on) => {
+const ROW = ['Announcement for agents', `${NAME}: not yet a Slack draft in channel ${CH}.`]
+const ALL_THREE = ['Copy', 'Mark sent', 'Not announcing']
+
+test('every session started in that project says it in one line, to Dan and in its first prompt, and pins its row, though no card is kept for it (R4)', withKit, async ($, on) => {
   const { toasts } = world(on, { stored: OWED_AND_OUT })
   await start($)
-  const LINE = `An announcement for agents is still owed in this project: ${NAME} is live and not yet a Slack draft. /live lists it.`
+  const LINE = `An announcement for agents is still owed in this project: ${NAME} is live and not yet a Slack draft. /live lists it, and its row in the band has Copy, Mark sent and Not announcing.`
   expect(toasts).toEqual([LINE])
+  expect(await shown($)).toEqual(ROW)
+  expect(await buttons($)).toEqual(ALL_THREE)
   const first = (await says($, 'Morning')).context ?? []
   expect(first.length).toBe(1)
   expect(first[0]).toContain(LINE)
@@ -506,6 +559,7 @@ test('a session in another project is told nothing, and one settled or owed by n
   expect(toasts).toEqual([])
   expect((await says($, 'Morning')).context ?? []).toEqual([])
   expect(await live($)).not.toContain('nnouncement')
+  expect(await shown($)).toEqual(['engine band'])
 })
 
 test('an announcement settled in any of the three ways is not said at start, in the first prompt or in /live', withKit, async ($, on) => {
@@ -516,10 +570,12 @@ test('an announcement settled in any of the three ways is not said at start, in 
     expect(toasts).toEqual([])
     expect((await says($, 'Morning')).context ?? []).toEqual([])
     expect(await live($)).not.toContain('nnouncement')
+    expect(await shown($)).toEqual(['engine band'])
   }
   // A record under that key that does not read settles nothing.
   store.set(DONE_KEY, { how: 'maybe', at: T0 })
   expect(await live($)).toContain(`- ${NAME}: not yet a Slack draft in channel ${CH}.`)
+  expect(await shown($)).toEqual(ROW)
 })
 
 test('one merged that no card has found out yet, one that cannot be drafted here, and several at once are each said as what they are', withKit, async ($, on) => {
@@ -534,7 +590,11 @@ test('one merged that no card has found out yet, one that cannot be drafted here
     },
   })
   await start($)
-  expect(toasts).toEqual([`3 announcements for agents are still owed in this project: ${REPO} pull requests 7, 9 and 12. /live says where each stands.`])
+  expect(toasts).toEqual([`3 announcements for agents are still owed in this project: ${REPO} pull requests 7, 9 and 12. /live says where each stands, and each one that is live has its row in the band.`])
+  // A row for each one a card found live, oldest first, and none for the one no card has found live.
+  const ROWS = ['Announcement for agents', `${REPO} pull request 9: cannot be drafted from this Mac (${why}).`, 'Announcement for agents', `${REPO} pull request 12: not yet a Slack draft in channel ${CH}.`]
+  expect(await shown($)).toEqual(ROWS)
+  expect(await buttons($)).toEqual([...ALL_THREE, ...ALL_THREE])
   expect(await live($)).toContain(
     [
       'Announcements for agents still owed:',
@@ -578,7 +638,7 @@ test('the turn end of the session that carded it live is refused once, then let 
   expect(held).toContain(`call slack_send_message_draft with channel_id "${CH}", no thread_ts`)
   expect(held).toContain(`\n-----\n${POST}\n-----`)
   expect((await turnEnd($, true)).block).toBeUndefined()
-  expect(toasts).toEqual([`Is it live let the turn end with the announcement for agents for ${NAME} not yet a Slack draft. It is still owed, and /live lists it.`])
+  expect(toasts).toEqual([`Is it live let the turn end with the announcement for agents for ${NAME} not yet a Slack draft. It is still owed, and stays in the band and in /live.`])
   // A new chain of turn ends holds it once more, and a saved draft ends that.
   expect((await turnEnd($)).block ?? '').toContain('is not yet a Slack draft')
   await draft($)
@@ -592,4 +652,177 @@ test('another session settling it ends this session\'s hold, and a session that 
   await card($)
   store.set(DONE_KEY, { how: 'sent', at: T0 })
   expect((await turnEnd($)).block).toBeUndefined()
+})
+
+// ---- R4: the row in the band, whose buttons are how Dan settles one without a draft ----
+
+const BUTTON = 'is-it-live:announce-'
+const ID = 'acme-widget-7'
+// A press raised with any element, drawn or not, through the stand-in's own command.
+const typed = async ($: unknown, element: string) =>
+  JSON.parse(String(((await ($ as { command: { run: (x: never) => Promise<unknown> } }).command.run({ command: 'raise-press', args: element, origin: { kind: 'human' }, presentation: {} } as never)) as { text?: string }).text)) as { isAnswered: boolean }
+
+test('the live card pins an Announcement for agents row with Copy, Mark sent and Not announcing, and the saved draft takes it down', withKit, async ($, on) => {
+  const { copies } = world(on, { prs: { [`${REPO}#7`]: ANNOUNCED } })
+  await start($)
+  await bash($, 'gh pr merge 7 --squash')
+  // A change that is not out yet has no row: nothing can be sent about it.
+  await card($, { deploy: 'deploying' })
+  expect(await shown($)).toEqual(['engine band'])
+  await card($)
+  expect(await shown($)).toEqual(ROW)
+  // The heading is drawn in the violet of the message row beside it, in bold.
+  const ui = await mount($)
+  const heading = (await ui.findAll({ type: 'Text' })).find(t => t.text === 'Announcement for agents')
+  await ui.unmount()
+  expect(heading?.props?.color).toBe('magenta')
+  expect(heading?.props?.bold).toBe(true)
+  expect(await buttons($)).toEqual(ALL_THREE)
+  // Copy copies the wording Dan approved, exactly, and leaves the announcement owed and its row up.
+  await press($, `${BUTTON}copy-${ID}`)
+  expect(copies).toEqual([POST])
+  expect(await shown($)).toEqual(ROW)
+  await draft($)
+  expect(await shown($)).toEqual(['engine band'])
+})
+
+test('Mark sent and Not announcing each settle it for every session, take the row down, and say what was recorded (R4)', withKit, async ($, on) => {
+  const { store, toasts, clock } = world(on, { prs: { [`${REPO}#7`]: ANNOUNCED, [`${REPO}#8`]: ANNOUNCED } })
+  await start($)
+  await card($)
+  await card($, { pr: 8 })
+  toasts.length = 0
+  await clock.advance(1_000)
+  await press($, `${BUTTON}sent-${ID}`)
+  expect(store.get(DONE_KEY)).toEqual({ how: 'sent', at: T0 + 1_000 })
+  expect(toasts).toEqual([`Marked sent: the announcement for agents for ${NAME}. It is no longer asked for.`])
+  expect(await shown($)).toEqual(['Announcement for agents', `${REPO} pull request 8: not yet a Slack draft in channel ${CH}.`])
+  toasts.length = 0
+  await press($, `${BUTTON}none-acme-widget-8`)
+  expect(store.get(`announce-done:${REPO}#8`)).toEqual({ how: 'not-announcing', at: T0 + 1_000 })
+  expect(toasts).toEqual([`Not announcing: the announcement for agents for ${REPO} pull request 8 is no longer asked for.`])
+  expect(await shown($)).toEqual(['engine band'])
+  // Settled is settled in every session: no card, turn end, /live or session start asks again.
+  expect(said(await card($))).not.toContain('nnouncement')
+  expect((await turnEnd($)).block ?? '').not.toContain('nnouncement')
+  expect(await live($)).not.toContain('nnouncement')
+  toasts.length = 0
+  await start($)
+  expect(toasts).toEqual([])
+  expect(await shown($)).toEqual(['engine band'])
+})
+
+test('only a press of the row\'s own button marks one sent or not being announced: nothing a session can call does, and a press naming another row settles nothing (R4)', withKit, async ($, on) => {
+  const { store, tools, toasts } = world(on, { prs: { [`${REPO}#7`]: ANNOUNCED } })
+  await start($)
+  // The two tools this mod gives a session: neither takes a settlement.
+  expect(tools).toEqual(['card', 'unrelated_merges'])
+  await bash($, 'gh pr merge 7 --squash')
+  await card($, { deploy: 'deploying' })
+  await card($)
+  await card($)
+  await draft($, { message: POST.replace('Pick a reason', 'Choose a reason') })
+  await turnEnd($)
+  await turnEnd($, true)
+  await live($)
+  await says($, 'Mark the announcement sent')
+  await start($)
+  expect(store.get(DONE_KEY)).toBeUndefined()
+  expect(await shown($)).toEqual(ROW)
+  // A press that names a row no announcement is kept for, or no button of these rows, settles nothing.
+  toasts.length = 0
+  expect(await typed($, `${BUTTON}sent-acme-widget-8`)).toEqual({ isAnswered: true })
+  expect(toasts).toEqual(['No announcement for agents is kept for that row, so it was taken down and nothing was recorded.'])
+  expect(await typed($, `${BUTTON}drafted-${ID}`)).toEqual({ isAnswered: false })
+  expect(store.get(DONE_KEY)).toBeUndefined()
+  expect([...store.keys()].filter(k => k.startsWith('announce-done:'))).toEqual([])
+  expect(await shown($)).toEqual(ROW)
+  // His press of the row's own button is what settles it.
+  await press($, `${BUTTON}none-${ID}`)
+  expect(store.get(DONE_KEY)).toEqual({ how: 'not-announcing', at: T0 })
+})
+
+test('a row whose announcement another session settled says so when pressed, and comes down at the next turn end or /live', withKit, async ($, on) => {
+  const { store, toasts, copies } = world(on, { prs: { [`${REPO}#7`]: ANNOUNCED, [`${REPO}#8`]: ANNOUNCED, [`${REPO}#9`]: ANNOUNCED } })
+  await start($)
+  await card($)
+  store.set(DONE_KEY, { how: 'drafted', at: T0, draftId: 'Dr1' })
+  toasts.length = 0
+  await press($, `${BUTTON}copy-${ID}`)
+  expect(copies).toEqual([])
+  expect(toasts).toEqual(['That announcement for agents is already settled, so its row was taken down.'])
+  expect(await shown($)).toEqual(['engine band'])
+  // Settled is never taken back by a press that arrives late.
+  expect(store.get(DONE_KEY)).toEqual({ how: 'drafted', at: T0, draftId: 'Dr1' })
+  await card($, { pr: 8 })
+  expect((await shown($)).length).toBe(2)
+  store.set(`announce-done:${REPO}#8`, { how: 'sent', at: T0 })
+  expect((await turnEnd($)).block).toBeUndefined()
+  expect(await shown($)).toEqual(['engine band'])
+  await card($, { pr: 9 })
+  expect((await shown($)).length).toBe(2)
+  store.set(`announce-done:${REPO}#9`, { how: 'not-announcing', at: T0 })
+  expect(await live($)).not.toContain('nnouncement')
+  expect(await shown($)).toEqual(['engine band'])
+})
+
+test('an announcement whose wording was not read has no Copy, and its session start line names only the buttons its row has', withKit, async ($, on) => {
+  const why = 'the description holds no post under its heading'
+  const { toasts } = world(on, { stored: { [`announce:${REPO}#7`]: { ...ENTRY, text: '', normalized: '', hash: '', channel: '', why }, [OUT_KEY]: { at: T0 } } })
+  await start($)
+  expect(toasts).toEqual([`An announcement for agents is still owed in this project: ${NAME} is live and cannot be drafted from this Mac (${why}). /live lists it, and its row in the band has Mark sent and Not announcing.`])
+  expect(await shown($)).toEqual(['Announcement for agents', `${NAME}: cannot be drafted from this Mac (${why}).`])
+  expect(await buttons($)).toEqual(['Mark sent', 'Not announcing'])
+  // Typed, the button that is not drawn copies nothing and says why.
+  toasts.length = 0
+  await typed($, `${BUTTON}copy-${ID}`)
+  expect(toasts).toEqual(['Not copied: no wording was read for that announcement for agents.'])
+})
+
+test('a band that refuses the row is said where it happened, and no sentence then names a row', withKit, async ($, on) => {
+  const { toasts, w } = world(on, { stored: OWED_AND_OUT, prs: { [`${REPO}#7`]: ANNOUNCED }, bandFails: 'the band is full' })
+  await start($)
+  const UNPINNED = `The announcement for agents for ${NAME} could not be pinned in the band (the band is full)`
+  expect(toasts).toEqual([`${UNPINNED}; /live lists it and tries to pin it again.`, `An announcement for agents is still owed in this project: ${NAME} is live and not yet a Slack draft. /live lists it.`])
+  expect(said(await card($))).toContain(`${UNPINNED}; /live lists it and tries to pin it again.`)
+  expect(await live($)).toContain(`\n\n${UNPINNED}.`)
+  toasts.length = 0
+  await turnEnd($)
+  await turnEnd($, true)
+  expect(toasts).toEqual([`Is it live let the turn end with the announcement for agents for ${NAME} not yet a Slack draft. It is still owed, and /live lists it.`])
+  const r = await draft($, { message: POST.replace('Pick a reason', 'Choose a reason') })
+  expect(said(r)).toContain('he can put the approved wording in its place or delete it')
+  expect(said(r)).not.toContain('row in the band')
+  // Once the band takes rows again, /live pins it.
+  w.bandFails = undefined
+  expect(await live($)).not.toContain('could not be pinned')
+  expect(await shown($)).toEqual(ROW)
+})
+
+test('a draft judged before any card said the change is live names no row, since none is pinned', withKit, async ($, on) => {
+  const { store } = world(on, { stored: { [`announce:${REPO}#7`]: ENTRY }, slackDraft: { text: '{"result":"Draft created"}' } })
+  await start($)
+  expect(await shown($)).toEqual(['engine band'])
+  const r = await draft($)
+  expect(store.get(DONE_KEY)).toBeUndefined()
+  expect(said(r)).toContain('if it is, he can send it, and if it is something else')
+  expect(said(r)).not.toContain('row in the band')
+  expect(await shown($)).toEqual(['engine band'])
+})
+
+test('a press whose record cannot be written is said, and the row stays for another press', withKit, async ($, on) => {
+  const { store, toasts, w } = world(on, { stored: OWED_AND_OUT })
+  await start($)
+  toasts.length = 0
+  w.storeWriteFails = 'the store is read only'
+  await press($, `${BUTTON}sent-${ID}`)
+  expect(store.get(DONE_KEY)).toBeUndefined()
+  expect(toasts.length).toBe(1)
+  expect(toasts[0]).toContain(`Is it live could not record that for the announcement for agents for ${NAME} (`)
+  expect(toasts[0]).toContain('It is still listed in /live, and its row stays in the band.')
+  expect(await shown($)).toEqual(ROW)
+  w.storeWriteFails = undefined
+  await press($, `${BUTTON}sent-${ID}`)
+  expect(store.get(DONE_KEY)).toEqual({ how: 'sent', at: T0 })
+  expect(await shown($)).toEqual(['engine band'])
 })

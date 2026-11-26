@@ -7,13 +7,16 @@ import type { IsItLiveAnnounceDone, IsItLiveAnnouncement } from '../types/index.
 // (payload/CLAUDE.md, "Slack: drafts only"), and this mod never calls a Slack tool at all.
 //
 // What is owed is kept where every session finds it, the store, and outside the list of cards, which
-// keeps the newest 50: one key per pull request and per fact, each written whole and never read,
-// changed and written back, since the store has no way to refuse a write made on a stale read.
+// keeps the newest 50: one key per pull request and per fact, each written whole, since the store
+// has no way to refuse a write made on a stale read.
 //   announce:<owner/name>#<pr>       what is owed (IsItLiveAnnouncement)
 //   announce-out:<owner/name>#<pr>   a card said its change is out, so it can be drafted now
 //   announce-done:<owner/name>#<pr>  it was settled (IsItLiveAnnounceDone), never taken back
 // So two sessions writing at once, or one writing twice, leave the same keys: an entry written again
-// is the same entry, and nothing that writes what is owed can undo that it was settled.
+// is the same entry, and nothing that writes what is owed can undo that it was settled. The one
+// write that follows a read is the entry's own (announcing.ts, noteAnnouncement): it checks what is
+// kept, then writes, and an entry another session wrote in the instant between the two can be
+// replaced by one with a why, which the next card asks about again and mends.
 //
 // Which changes owe one, where it goes and its exact wording are the merge gate's answer
 // (hooks/lib/changelog-entry.js, `announcement <owner/name>`), never worked out here. Pure:
@@ -148,9 +151,11 @@ export const cardDraftOf = (a: IsItLiveAnnouncement, said: Said): string => `${n
 export const cardWaitsOf = (a: { repo: string; pr: number }): string =>
   `${nameOf(a)} owes an announcement for agents, which is drafted only once its change is live: nothing is drafted now. Once you have confirmed it is live, call this again with deploy "live".`
 
-/** What the card's answer says of an announcement the gate's reader could not tell enough about to draft. */
-export const cardUndraftableOf = (a: IsItLiveAnnouncement): string =>
-  `${nameOf(a)} owes an announcement for agents that cannot be drafted from this Mac: ${a.why ?? 'its channel or its wording was not read'}. Nothing is drafted. Tell Dan that, with the reason. It stays listed in /live until it is settled.`
+/** What the card's answer says of an announcement the gate's reader could not tell enough about to draft; `row` is whether its row is pinned in the band. */
+export const cardUndraftableOf = (a: IsItLiveAnnouncement, row: boolean): string =>
+  `${nameOf(a)} owes an announcement for agents that cannot be drafted from this Mac: ${a.why ?? 'its channel or its wording was not read'}. Nothing is drafted. Tell Dan that, with the reason. ${
+    row ? 'It stays listed in the band and in /live until he marks it sent or says it is not being announced.' : 'It stays listed in /live until it is settled.'
+  }`
 
 /** What the card's answer says when whether the change owes an announcement could not be told at all. */
 export const cardUnreadOf = (a: { repo: string; pr: number }, why: string): string =>
@@ -190,8 +195,12 @@ export const judgedOf = (r: Ran): Judged => {
   return { state: 'unjudged', why: SHAPE }
 }
 
-/** What the draft call's answer carries for the session, and what Dan is toasted, for one judgement of one announcement. */
-export const draftOutcomeOf = (a: IsItLiveAnnouncement, j: Judged, never: string): { context: string; toast: string } => {
+/**
+ * What the draft call's answer carries for the session, and what Dan is toasted, for one judgement
+ * of one announcement. `row` is whether its row is pinned in this session's band, so a button is
+ * named only where it is there to press.
+ */
+export const draftOutcomeOf = (a: IsItLiveAnnouncement, j: Judged, never: string, row: boolean): { context: string; toast: string } => {
   const name = nameOf(a)
   const where = `channel ${a.channel}`
   if (j.state === 'saved')
@@ -201,12 +210,12 @@ export const draftOutcomeOf = (a: IsItLiveAnnouncement, j: Judged, never: string
     }
   if (j.state === 'differs')
     return {
-      context: `The draft in Slack differs from the approved wording of the announcement for agents for ${name}: ${j.why}. It is not counted as its draft, and the announcement is still owed. Tell Dan exactly that: the draft Slack now holds for ${where} is not the wording he approved, and he can put the approved wording in its place or delete it so the approved wording can be drafted. Save no other draft there now: Slack keeps one per channel and would keep nothing. ${never}`,
+      context: `The draft in Slack differs from the approved wording of the announcement for agents for ${name}: ${j.why}. It is not counted as its draft, and the announcement is still owed. Tell Dan exactly that: the draft Slack now holds for ${where} is not the wording he approved, and he can put the approved wording in its place${row && a.text.trim() ? ` (Copy on ${THE_ROW} copies it)` : ''} or delete it so the approved wording can be drafted. Save no other draft there now: Slack keeps one per channel and would keep nothing. ${never}`,
       toast: `The draft in Slack differs from the approved wording of the announcement for agents for ${name}: ${j.why}. It is still owed.`,
     }
   if (j.state === 'not-kept')
     return {
-      context: `No draft of the announcement for agents for ${name} was saved: ${j.why}. It is still owed. Tell Dan a draft is already waiting in ${where}, which Slack did not show, so whether it is this announcement is not known: if it is, he can send it, and if it is something else, this one can be drafted once that one is sent. Do not tell him to delete it, and never save the announcement to another channel instead. ${never}`,
+      context: `No draft of the announcement for agents for ${name} was saved: ${j.why}. It is still owed. Tell Dan a draft is already waiting in ${where}, which Slack did not show, so whether it is this announcement is not known: if it is, he can send it${row ? ` and press Mark sent on ${THE_ROW}` : ''}, and if it is something else, this one can be drafted once that one is sent. Do not tell him to delete it, and never save the announcement to another channel instead. ${never}`,
       toast: `No Slack draft was saved for the announcement for agents for ${name}: a draft is already waiting in that channel. It is still owed.`,
     }
   if (j.state === 'error')
@@ -242,17 +251,21 @@ const and = (xs: string[]): string => (xs.length <= 1 ? (xs[0] ?? '') : `${xs.sl
 /** /live: the announcements still owed, each with where it stands, or nothing when none is. */
 export const listOf = (all: Standing[]): string => (all.length ? ['', '', 'Announcements for agents still owed:', ...all.map(s => `- ${nameOf(s.a)}: ${standingOf(s)}.`)].join('\n') : '')
 
-/** The one line a session start says of the announcements still owed in its project, or undefined when none is. */
-export const startLineOf = (all: Standing[]): string | undefined => {
+/**
+ * The one line a session start says of the announcements still owed in its project, or undefined
+ * when none is. `rows` is whether every one that is live was pinned in the band just now, so the
+ * line names a row and its buttons only where they are there.
+ */
+export const startLineOf = (all: Standing[], rows: boolean): string | undefined => {
   if (!all.length) return undefined
   const [one] = all
   if (all.length === 1 && one) {
     const where = !one.out ? 'is merged, and no card has said it is live yet' : draftable(one.a) ? 'is live and not yet a Slack draft' : `is live and ${standingOf(one)}`
-    return `An announcement for agents is still owed in this project: ${nameOf(one.a)} ${where}. /live lists it.`
+    return `An announcement for agents is still owed in this project: ${nameOf(one.a)} ${where}. /live lists it${one.out && rows ? `, and its row in the band has ${buttonsOf(one.a)}` : ''}.`
   }
   const repos = [...new Set(all.map(s => s.a.repo))]
   const names = repos.length === 1 ? `${repos[0]} pull requests ${and(all.map(s => String(s.a.pr)))}` : and(all.map(s => nameOf(s.a)))
-  return `${all.length} announcements for agents are still owed in this project: ${names}. /live says where each stands.`
+  return `${all.length} announcements for agents are still owed in this project: ${names}. /live says where each stands${all.some(s => s.out) && rows ? ', and each one that is live has its row in the band' : ''}.`
 }
 
 /** What the session's first prompt carries beside that line: how one is drafted, and that Dan is told. */
@@ -262,9 +275,86 @@ export const firstPromptOf = (line: string): string =>
 /** The turn end's refusal for the announcements this session's card found live and that are still not drafted. */
 export const holdOf = (due: IsItLiveAnnouncement[], said: Said): string => due.map(a => `The announcement for agents for ${nameOf(a)} is not yet a Slack draft. ${saveOf(a, said)}`).join('\n\n')
 
-/** What Dan is told, once, when a turn ends with them still not drafted. */
-export const announceLetGoOf = (due: IsItLiveAnnouncement[]): string =>
-  `Is it live let the turn end with the announcement for agents for ${and(due.map(nameOf))} not yet a Slack draft. It is still owed, and /live lists it.`
+/** What Dan is told, once, when a turn ends with them still not drafted; `rows` is whether each one's row is pinned in the band. */
+export const announceLetGoOf = (due: IsItLiveAnnouncement[], rows: boolean): string =>
+  `Is it live let the turn end with the announcement for agents for ${and(due.map(nameOf))} not yet a Slack draft. It is still owed, and ${rows ? 'stays in the band and in /live' : '/live lists it'}.`
+
+// ---- the row in the band: how Dan settles one that needs no draft from here ----
+// While an announcement is owed and a card has said its change is live, a row is pinned in the band
+// above the prompt, with Copy, Mark sent and Not announcing. A press reaches this mod only as
+// mod-kit's modkit.press, raised by a click on the button or by /press typed at the prompt: no tool
+// a session can call marks one sent or not being announced.
+
+/** The band row's id for an announcement, from its id alone, so the session that did not pin it can still name it. */
+export const rowIdOf = (id: string): string => `announce-${id.replace(/[^a-z0-9]+/g, '-')}`
+
+type Part = { text: string; color?: string; bold?: boolean } | { button: string; label: string }
+export type AnnounceRow = { mod: string; id: string; slot: 'message'; lines: Part[][] }
+export const BUTTONS = ['copy', 'sent', 'none'] as const
+export type Pressed = (typeof BUTTONS)[number]
+
+// A button is named announce-<verb>-<the row's id past its own "announce-">, which the press hook
+// for the message row's Copy and Mark sent (register.ts, `copy-` and `sent-`) never matches.
+const buttonOf = (verb: Pressed, row: string): string => `announce-${verb}-${row.slice('announce-'.length)}`
+
+/**
+ * The row pinned in the band while an announcement is owed and its change is live: its heading in
+ * the violet of the message row beside it, where it stands, then the three buttons. The wording
+ * itself is not drawn, since Dan approved it already and a whole post would fill the band in every
+ * session: Copy copies it, and is left out where no wording was read.
+ */
+export const announceRow = (mod: string, a: IsItLiveAnnouncement): AnnounceRow => {
+  const id = rowIdOf(idOf(a.repo, a.pr))
+  return {
+    mod,
+    id,
+    slot: 'message',
+    lines: [
+      [{ text: 'Announcement for agents', color: 'magenta', bold: true }],
+      [{ text: `${nameOf(a)}: ${standingOf({ a, out: true })}.` }],
+      [...(a.text.trim() ? [{ button: buttonOf('copy', id), label: 'Copy' }] : []), { button: buttonOf('sent', id), label: 'Mark sent' }, { button: buttonOf('none', id), label: 'Not announcing' }],
+    ],
+  }
+}
+
+/** The button a press names and its row's id, or undefined for a press that is not one of these rows'. */
+export const pressedOf = (mod: string, element: string): { verb: Pressed; row: string } | undefined => {
+  const m = new RegExp(`^${mod}:announce-(${BUTTONS.join('|')})-(.+)$`).exec(element)
+  return m ? { verb: m[1] as Pressed, row: `announce-${m[2]}` } : undefined
+}
+
+/** The buttons an announcement's row has, as the session start line names them. */
+const buttonsOf = (a: IsItLiveAnnouncement): string => (a.text.trim() ? 'Copy, Mark sent and Not announcing' : 'Mark sent and Not announcing')
+
+const THE_ROW = 'the "Announcement for agents" row in the band'
+
+// Each sentence a press is answered with takes `stuck`: why the row could not be taken down, absent
+// when it was, so none says a row came down that is still there.
+const stuckOf = (stuck: string): string => `Its row could not be taken down (${stuck}).`
+
+/** What Dan is told once a press settled an announcement. */
+export const settledOf = (a: { repo: string; pr: number }, how: 'sent' | 'not-announcing', stuck?: string): string =>
+  `${how === 'sent' ? `Marked sent: the announcement for agents for ${nameOf(a)}. It is no longer asked for.` : `Not announcing: the announcement for agents for ${nameOf(a)} is no longer asked for.`}${stuck === undefined ? '' : ` ${stuckOf(stuck)}`}`
+
+/** A press on a row whose announcement was settled since it was pinned, by a draft or in another session. */
+export const alreadySettledOf = (stuck?: string): string => `That announcement for agents is already settled${stuck === undefined ? ', so its row was taken down.' : `. ${stuckOf(stuck)}`}`
+
+/** A press on a row no entry is kept for. */
+export const notKeptOf = (stuck?: string): string =>
+  stuck === undefined ? 'No announcement for agents is kept for that row, so it was taken down and nothing was recorded.' : `No announcement for agents is kept for that row, so nothing was recorded. ${stuckOf(stuck)}`
+/** Copy pressed for an announcement whose wording was never read: its row draws no Copy, and a typed press is answered with this. */
+export const NO_WORDING = 'Not copied: no wording was read for that announcement for agents.'
+
+/** A press this mod could not look up at all. */
+export const pressUnreadOf = (why: string): string => `Is it live could not read which announcement for agents that button is for (${why}), so nothing was recorded.`
+
+/** A press whose record could not be written: `owed` is what reading it back gave, undefined when that could not be read either. */
+export const unsettledOf = (a: { repo: string; pr: number }, why: string, owed: boolean | undefined): string =>
+  `Is it live could not record that for the announcement for agents for ${nameOf(a)} (${why}). ${owed ? 'It is still listed in /live, and its row stays in the band.' : 'Whether it is still owed could not be read back: /live says.'}`
+
+/** A row the band would not take: said where it happened. /live tries the pin again, so everywhere but in /live the sentence says so. */
+export const unpinnedOf = (a: { repo: string; pr: number }, why: string, inLive = false): string =>
+  `The announcement for agents for ${nameOf(a)} could not be pinned in the band (${why})${inLive ? '.' : '; /live lists it and tries to pin it again.'}`
 
 /** What Dan is told when whether a merged change owes an announcement could not be told at all. */
 export const unreadOf = (a: { repo: string; pr: number }, why: string): string =>

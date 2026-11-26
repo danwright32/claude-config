@@ -3,10 +3,14 @@ import type { IsItLiveAnnounceDone, IsItLiveAnnouncement } from '../types/index.
 import {
   type Asked,
   type Judged,
+  NO_WORDING,
   OWED,
+  type Pressed,
   type Said,
   type Standing,
+  alreadySettledOf,
   announceLetGoOf,
+  announceRow,
   askedOf,
   firstPromptOf,
   holdOf,
@@ -26,10 +30,16 @@ import {
   judgeArgv,
   judgedOf,
   labelsOf,
+  notKeptOf,
   outKey,
   owedKey,
+  pressUnreadOf,
   readerArgv,
+  rowIdOf,
+  settledOf,
+  unpinnedOf,
   unreadOf,
+  unsettledOf,
 } from './announce.ts'
 import { MOD, type State, isOut } from './card.ts'
 import { errorText } from './mod-kit/skew.ts'
@@ -46,10 +56,12 @@ const msg = (err: unknown) => errorText(err, MOD)
 const SAID: Said = { never: NEVER, unasked: UNASKED }
 
 // Per session, in $.state: which announcements this session's own card asked a draft of, the holds
-// already refused in this chain of turn ends, and the line its first prompt still has to carry.
+// already refused in this chain of turn ends, the line its first prompt still has to carry, and the
+// announcements whose row this session pinned in its band.
 const askedRef = { plugin: 'is-it-live', key: 'announceAsked' } as const
 const refusedRef = { plugin: 'is-it-live', key: 'announceRefused' } as const
 const lineRef = { plugin: 'is-it-live', key: 'announceLine' } as const
+const pinnedRef = { plugin: 'is-it-live', key: 'announcePinned' } as const
 
 // Every change to what this session asked for goes through here, so two at once both land.
 async function changeAsked($: EngineInterface, change: (ids: string[]) => string[]): Promise<void> {
@@ -58,6 +70,56 @@ async function changeAsked($: EngineInterface, change: (ids: string[]) => string
     if ((await $.state.set(askedRef, change(held.value ?? []), { ifVersion: held.version })).isSet) return
   }
   throw new Error('the list of announcements this session asked a draft of kept changing under it')
+}
+// And every change to the rows it pinned. Its own copy of the loop above, not one function taking
+// the reference: the engine reads a state reference where it is written, and refuses to load a
+// module that hands $.state one it cannot read there.
+async function changePinned($: EngineInterface, change: (ids: string[]) => string[]): Promise<void> {
+  for (let i = 0; i < 10; i++) {
+    const held = await $.state.get(pinnedRef)
+    if ((await $.state.set(pinnedRef, change(held.value ?? []), { ifVersion: held.version })).isSet) return
+  }
+  throw new Error('the list of announcements this session pinned a row for kept changing under it')
+}
+
+// ---- the row in the band (announce.ts says what it holds) ----
+
+// Pins one announcement's row in this session's band and notes that it did, or answers why it could
+// not. Pinning again replaces the row, so every caller may pin what is already there.
+async function pinAnnouncement($: EngineInterface, a: IsItLiveAnnouncement): Promise<string | undefined> {
+  try {
+    await $.modkit.bandRow(announceRow(MOD, a) as never)
+    const id = idOf(a.repo, a.pr)
+    await changePinned($, ids => (ids.includes(id) ? ids : [...ids, id]))
+    return undefined
+  } catch (err) {
+    return msg(err)
+  }
+}
+
+// Takes a row down by its id, or answers why it could not. The row is forgotten only once it is down.
+async function takeDown($: EngineInterface, row: string): Promise<string | undefined> {
+  try {
+    await $.modkit.clearBandRow({ mod: MOD, id: row })
+    await changePinned($, ids => ids.filter(id => rowIdOf(id) !== row))
+    return undefined
+  } catch (err) {
+    return msg(err)
+  }
+}
+
+// The rows this session pinned whose announcement is no longer owed (a draft was saved, Dan pressed
+// Mark sent or Not announcing, here or in another session) are taken down. One that will not come
+// down stays noted and is tried again at the next turn end or /live; a press on it says it is settled.
+async function sweepRows($: EngineInterface): Promise<void> {
+  const pinned = (await $.state.get(pinnedRef)).value ?? []
+  if (!pinned.length) return
+  const owed = (await announcementsOwed($)).map(a => idOf(a.repo, a.pr))
+  for (const id of pinned) {
+    if (owed.includes(id)) continue
+    const why = await takeDown($, rowIdOf(id))
+    if (why !== undefined) $.ui.log(`is-it-live: the row of a settled announcement for agents (${id}) could not be taken down: ${why}`, { to: 'debug' })
+  }
 }
 
 /** What is kept for one pull request: its entry, and how it was settled, each absent where none reads. */
@@ -152,10 +214,13 @@ export async function announcementAtCard($: EngineInterface, repo: string, pr: n
     if (!entry) return asked?.kind === 'unread' ? [cardUnreadOf({ repo, pr }, asked.why)] : []
     if (!isOut(state)) return [cardWaitsOf(entry)]
     if (!(await announcementOut($, entry))) await $.store.set(outKey(idOf(repo, pr)), { at: await $.clock.now() })
-    if (!draftable(entry)) return [cardUndraftableOf(entry)]
+    // Owed and out: its row is pinned, so Mark sent and Not announcing are at hand from now on.
+    const unpinned = await pinAnnouncement($, entry)
+    const notes = unpinned === undefined ? [] : [unpinnedOf(entry, unpinned)]
+    if (!draftable(entry)) return [cardUndraftableOf(entry, unpinned === undefined), ...notes]
     // This session's card asked for the draft, so its turn end is held for it once (announcementHold).
     await changeAsked($, ids => (ids.includes(idOf(repo, pr)) ? ids : [...ids, idOf(repo, pr)]))
-    return [cardDraftOf(entry, SAID)]
+    return [cardDraftOf(entry, SAID), ...notes]
   } catch (err) {
     return [cardUnreadOf({ repo, pr }, `what is kept for it could not be read or written: ${msg(err)}`)]
   }
@@ -191,8 +256,19 @@ export async function announcementDrafted<T extends Called>($: EngineInterface, 
     for (const a of owed) judged.push({ a, j: await judge($, a, call.message, done) })
     // The draft is one message, so it is at most one announcement's: the first whose wording it holds.
     const saved = judged.find(x => x.j.state === 'saved')
-    if (saved && saved.j.state === 'saved') await settle($, saved.a, 'drafted', saved.j.draftId)
-    const said = (saved ? [saved] : judged).map(x => draftOutcomeOf(x.a, x.j, NEVER))
+    const said: { context: string; toast: string }[] = []
+    if (saved && saved.j.state === 'saved') {
+      await settle($, saved.a, 'drafted', saved.j.draftId)
+      // Drafted, so its row comes down. One that will not is tried again at the next turn end or /live.
+      const stuck = await takeDown($, rowIdOf(idOf(saved.a.repo, saved.a.pr)))
+      if (stuck !== undefined) $.ui.log(`is-it-live: the row of the announcement for agents just drafted could not be taken down: ${stuck}`, { to: 'debug' })
+      said.push(draftOutcomeOf(saved.a, saved.j, NEVER, false))
+    } else {
+      // Still owed: what Dan is told names its row's buttons only where the row is in this session's
+      // band, which is where its change is out and the band took the row (pinned again here, so a
+      // session that never carded it has it too).
+      for (const x of judged) said.push(draftOutcomeOf(x.a, x.j, NEVER, (await announcementOut($, x.a)) && (await pinAnnouncement($, x.a)) === undefined))
+    }
     for (const s of said) $.ui.toast(s.toast)
     return { ...done, context: [...(done.context ?? []), ...said.map(s => s.context)] }
   } catch (err) {
@@ -215,10 +291,23 @@ async function standings($: EngineInterface, names?: readonly string[]): Promise
   return out
 }
 
-/** /live: what the repository, under each name it is kept by, still owes agents, to follow its cards. A list that cannot be read is said as that, never as nothing owed. */
+/**
+ * /live: what the repository, under each name it is kept by, still owes agents, to follow its cards.
+ * A list that cannot be read is said as that, never as nothing owed. Each one whose change is out is
+ * pinned in the band again, as /live pins each message not yet sent, and the rows of those settled
+ * since come down.
+ */
 export async function announcementList($: EngineInterface, names: readonly string[]): Promise<string> {
   try {
-    return listOf(await standings($, names))
+    const all = await standings($, names)
+    const unpinned: string[] = []
+    for (const s of all) {
+      if (!s.out) continue
+      const why = await pinAnnouncement($, s.a)
+      if (why !== undefined) unpinned.push(unpinnedOf(s.a, why, true))
+    }
+    await sweepRows($)
+    return listOf(all) + unpinned.map(u => `\n\n${u}`).join('')
   } catch (err) {
     return `\n\nThe announcements for agents this project still owes could not be read (${msg(err)}).`
   }
@@ -235,7 +324,17 @@ export async function announcementsAtStart($: EngineInterface): Promise<void> {
     const here = await $.session.repo()
     const repo = here ? (await $.modkit.repo({ root: here.root, remote: here.remote })).github : null
     if (!repo) return
-    const line = startLineOf(await standings($, [repo]))
+    const all = await standings($, [repo])
+    // Each one whose change is out gets its row, so the line below names a row only where one is.
+    let rows = true
+    for (const s of all) {
+      if (!s.out) continue
+      const why = await pinAnnouncement($, s.a)
+      if (why === undefined) continue
+      rows = false
+      $.ui.toast(unpinnedOf(s.a, why))
+    }
+    const line = startLineOf(all, rows)
     if (!line) return
     await $.state.set(lineRef, firstPromptOf(line))
     $.ui.toast(line)
@@ -251,6 +350,8 @@ export async function announcementsAtStart($: EngineInterface): Promise<void> {
  * the next end in the chain goes ahead, said. A session that only heard of one holds nothing.
  */
 export async function announcementHold($: EngineInterface, e: { stop_hook_active?: boolean }): Promise<string | undefined> {
+  // First the rows of those settled since the last turn end come down, whoever settled them.
+  await sweepRows($)
   const asked = (await $.state.get(askedRef)).value ?? []
   if (!asked.length) return undefined
   const due = (await announcementsOwed($)).filter(a => draftable(a) && asked.includes(idOf(a.repo, a.pr)))
@@ -264,13 +365,85 @@ export async function announcementHold($: EngineInterface, e: { stop_hook_active
   if (!fresh.length) {
     const untold = due.filter(a => !before.told.includes(keyOf(a)))
     if (untold.length) {
-      $.ui.toast(announceLetGoOf(untold))
+      // Said to stay in the band only where each one's row is there now: pinned again to be sure.
+      let rows = true
+      for (const a of untold) if ((await pinAnnouncement($, a)) !== undefined) rows = false
+      $.ui.toast(announceLetGoOf(untold, rows))
       await $.state.set(refusedRef, { keys: before.keys, told: [...before.told, ...untold.map(keyOf)] })
     }
     return undefined
   }
   await $.state.set(refusedRef, { keys: [...before.keys, ...fresh.map(keyOf)], told: before.told })
   return holdOf(due, SAID)
+}
+
+// The announcement a row is for, with how it was settled when it was: found among every entry kept,
+// settled or not, by the row's id. Two repositories whose names differ only in punctuation share a
+// row id, as they share the message row's (card.ts, buttonId), so one still owed is taken first.
+async function announcementOfRow($: EngineInterface, row: string): Promise<{ entry: IsItLiveAnnouncement; done?: IsItLiveAnnounceDone } | undefined> {
+  let settled: { entry: IsItLiveAnnouncement; done: IsItLiveAnnounceDone } | undefined
+  for (const k of await $.store.keys()) {
+    if (!k.startsWith(OWED)) continue
+    const entry = entryOf(await $.store.get(k))
+    if (!entry || rowIdOf(idOf(entry.repo, entry.pr)) !== row) continue
+    const done = doneOf(await $.store.get(doneKey(idOf(entry.repo, entry.pr))))
+    if (!done) return { entry }
+    settled ??= { entry, done }
+  }
+  return settled
+}
+
+/**
+ * A press of Copy, Mark sent or Not announcing on an announcement's row, as mod-kit raised it: a
+ * click on the button, or /press typed at the prompt. This is the only place `sent` and
+ * `not-announcing` are ever written, so nothing a session can call settles an announcement that way.
+ * Copy copies the approved wording and settles nothing. Every outcome is said to Dan, and a press
+ * that could not be recorded leaves the row up for another.
+ */
+export async function announcementPressed($: EngineInterface, p: { verb: Pressed; row: string }, surface: unknown): Promise<void> {
+  let found: { entry: IsItLiveAnnouncement; done?: IsItLiveAnnounceDone } | undefined
+  try {
+    found = await announcementOfRow($, p.row)
+  } catch (err) {
+    $.ui.toast(pressUnreadOf(msg(err)))
+    return
+  }
+  // Settled since the row was pinned, or no longer kept: nothing is written over what is settled.
+  if (!found || found.done) {
+    const stuck = await takeDown($, p.row)
+    $.ui.toast(found ? alreadySettledOf(stuck) : notKeptOf(stuck))
+    return
+  }
+  const a = found.entry
+  if (p.verb === 'copy') {
+    if (!a.text.trim()) {
+      $.ui.toast(NO_WORDING)
+      return
+    }
+    try {
+      const r = await $.ui.copy({ text: a.text, surface: surface as never })
+      if (!r.isCopied) $.ui.toast(`Not copied: ${r.reason}`)
+    } catch (err) {
+      $.ui.toast(`Not copied: ${msg(err)}`)
+    }
+    return
+  }
+  const how = p.verb === 'sent' ? 'sent' : 'not-announcing'
+  try {
+    await settle($, a, how)
+  } catch (err) {
+    // Read back, so what Dan is told is what the store holds, not what the failed write intended.
+    let owed: boolean | undefined
+    try {
+      owed = (await announcementKept($, a.repo, a.pr)).done === undefined
+    } catch {
+      owed = undefined
+    }
+    // Settled all the same means another write settled it, perhaps another way: said as that.
+    $.ui.toast(owed === false ? alreadySettledOf(await takeDown($, p.row)) : unsettledOf(a, msg(err), owed))
+    return
+  }
+  $.ui.toast(settledOf(a, how, await takeDown($, p.row)))
 }
 
 /**
