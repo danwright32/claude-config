@@ -120,10 +120,15 @@ classify_names(){   # classify_names <file>
   # when a name not per run has a value that opens, after blanks, with FIXED_TMP, read from the
   # environment so the pattern stays the one written above. A name assigned twice is listed twice,
   # as before. Each list comes back on a line of its own, in the order the loop built it.
-  lists="$(SI_ASSIGNS="$assigns" SI_FIXED_TMP="$FIXED_TMP" perl -e '
+  #
+  # The assignments go in on standard input, never in the environment: Linux refuses any one
+  # environment string over 128 KB (MAX_ARG_STRLEN) before perl starts, and the sync suite's are
+  # 260 KB (measured 2026-11-25), so on CI it would have been reported as unclassified.
+  lists="$(SI_FIXED_TMP="$FIXED_TMP" perl -e '
     my $fixed = $ENV{SI_FIXED_TMP};
+    my $in = do { local $/; <STDIN> };
     my @e;
-    for my $entry (split /\n/, $ENV{SI_ASSIGNS}) {
+    for my $entry (split /\n/, defined $in ? $in : "") {
       next if $entry eq "";
       $entry =~ s/^[[:space:]]+//;
       $entry =~ s/^export //;
@@ -147,7 +152,7 @@ classify_names(){   # classify_names <file>
     my $start = qr/^[[:space:]]*(?:$fixed)/;
     my @fixed = map { $_->[0] } grep { !$per{$_->[0]} && $_->[1] =~ $start } @e;
     print join(" ", "", @per, ""), "\n", join(" ", "", @fixed, ""), "\n";
-  ')" || lists=""
+  ' <<< "$assigns")" || lists=""
   PER_RUN_NAMES="${lists%%$'\n'*}"
   FIXED_TMP_NAMES="${lists#*$'\n'}"
   # Two lists or nothing: a perl that did not answer is not a file with no names in it (L10), so
@@ -283,11 +288,13 @@ var_blank="$(shares_a_path "$GOODVAR")"
 # classified here, a throwaway root, 1,500 names under it and 500 plain ones, and the processor time
 # it takes (user and system, the shell's and its children's, never the wall clock, which measures the
 # Mac's load: L290) must stay under 3 seconds. The shell loop took 12.8 on it (one sample, load
-# average 49 to 98), the perl pass 0.13.
+# average 49 to 98), the perl pass 0.13. Each value is padded so the assignments come to about 250
+# KB, as the sync suite's do, past the 128 KB Linux allows one environment string, so a hand off
+# through the environment fails here on CI rather than only on the real tree.
 {
   printf 'ROOT_T="$(mktemp -d)"\n'
   printf 'SHARED="%s/one-fixed-name.txt"\n' "$TD"
-  awk 'BEGIN { for (i = 0; i < 1500; i++) printf "P%d=\"$ROOT_T/p%d\"\n", i, i; for (i = 0; i < 500; i++) printf "V%d=\"plain value %d\"\n", i, i }'
+  awk 'BEGIN { pad = sprintf("%0100d", 0); for (i = 0; i < 1500; i++) printf "P%d=\"$ROOT_T/p%d/%s\"\n", i, i, pad; for (i = 0; i < 500; i++) printf "V%d=\"plain value %d %s\"\n", i, i, pad }'
   printf 'D1="$ROOT_T/a"\nD2="$D1/b"\nD3="$D2/c"\n'
   printf 'printf x %s "$SHARED"\n' "$GT$GT"
 } > "$TMPROOT/many-assigns.sh"
@@ -308,6 +315,13 @@ case "$PER_RUN_NAMES" in *" V0 "*|*" SHARED "*) _ci_missing="$_ci_missing (and a
 [ "$(shares_a_path "$TMPROOT/many-assigns.sh" | grep -c .)" = 1 ] \
   && check "and the one write through the fixed name is reported" ok \
   || check "and the one write through the fixed name is reported" "it reported: $(shares_a_path "$TMPROOT/many-assigns.sh")"
+# A perl that gives no answer is not a file with nothing to report: the file is reported, so the
+# tree check fails naming it rather than passing a file nobody classified (L10).
+_ci_nop="$(perl() { return 1; }; shares_a_path "$BADVAR")"
+case "$_ci_nop" in
+  *"could not be classified"*) check "a classification that gives no answer reports the file instead of passing it" ok ;;
+  *) check "a classification that gives no answer reports the file instead of passing it" "it reported: ${_ci_nop:-nothing}" ;;
+esac
 awk -v c="${_ci_cpu:-x}" 'BEGIN { exit !(c ~ /^[0-9.]+$/ && c + 0 < 3) }' \
   && check "and classifying it takes under 3 seconds of processor time ($_ci_cpu)" ok \
   || check "and classifying it takes under 3 seconds of processor time" "it took '${_ci_cpu:-unread}' (the time keyword printed '$_ci_t'), so the names are being worked out a shell step at a time again"
