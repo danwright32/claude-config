@@ -1465,7 +1465,8 @@ PLUGINPATHS
 # On a Team or Enterprise account, or any Mac with managed settings, Claude Code's built-in security
 # default seats itself ahead of every plugin and routes each classic.* and prompt.* hook past the
 # user tier our mods load in, so those hooks never run and only a debug log says so (#875). A
-# managed prependPlugins list that leaves it out moves it to last, and both Macs hold one:
+# managed prependPlugins list that leaves it out stops it loading at all (not "moves it to last",
+# as this said until #3681: README "What the empty list costs"), and both Macs hold one:
 # {"prependPlugins": []}, measured on both on 2026-10-07 ("not seated: managed prependPlugins does
 # not list it"). The file lives outside ~/.claude, so the sync cannot carry it and a new Mac needs it
 # made by hand; this says when it is missing or wrong. It reads the file only, never runs claude.
