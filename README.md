@@ -749,6 +749,23 @@ gate the scans find and a table lacks fails, and so does a gate a table names th
 longer find, its registration removed or its refusal moved where they cannot see it, until the
 same change takes its row out (#3414). `--list-found` prints what the scans find in the tree.
 
+The write gate judges each destination twice (#3537): by its text, and by where it really is. The
+real path is asked of the kernel (the destination opened for its path alone, then `fcntl`
+`F_GETPATH`), which sees through a path by disk and file number (`/.vol/<disk>/<file>`), a
+symbolic link that lives outside `payload/`, and the folder name in another letter case; the
+usual way of resolving a path leaves the first and the last as written. The refusal names the
+real file. Two answers are refused in their own words while a watcher may be live and no hold
+covers the session: a destination whose real path could not be read (the message gives the
+system's reason), and a file with more than one name (a hard link), since the system names only
+one of them. A hold of the session's own is the way on for both, as the messages say. Making a
+link counts as a write: `ln` and `link`, and a hard link or symbolic link made by an inline script
+(python, perl, ruby, node), are refused when they name a payload path. The real path step runs
+only for a call that writes somewhere other than a device (`/dev/null` and the like) while a
+watcher may be live, and costs one more `python3` process then, about 30 to 60 ms measured on a
+busy Mac on 2026-11-25. `hooks/test-payload-write-gate-real-path.sh` holds the cases, on stand in
+files; its numbered path and letter case cases report themselves unmeasured on a system that has
+neither.
+
 Before a Bash call the write gate also notes what an at risk `payload/` holds, in
 `~/.claude-payload-write-gate`, so that after the call it can name anything written there that the
 command's words could not show (#647). The note goes when the call ends, however it ends (#3253):
