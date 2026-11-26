@@ -3836,8 +3836,22 @@ lasting memory file, or moved one away, ran with no question. Measured in the mo
   another source of the same command may land on the same name: another folder holding a name
   alike but for letter case and the Unicode form of an accent, a pattern, or a word no path names.
   `removalCandidates` in `rules.ts` takes no `shared` write as where a file goes, so the removal
-  is main's Delete question, with no new sentence; a `mv -n` is worded the same, the harmless side
-  to be wrong on. The mark is on the write rather than the removal, so `cp a b <folder>/ && rm a`
+  is main's Delete question; a `mv -n` is worded the same, the harmless side to be wrong on. Until
+  2026-11-25 that question had no sentence of its own, so a command that says `mv` was asked about
+  as "Delete" with no word of why. It now names the loss: the candidate keeps the shared place
+  (`sharedAt`, only for a file a path names, and only where no other write stands as the place it
+  goes), and the question says "The command sends it to <the place>, and another file the same
+  command names may land on that name too. Only one of the two would be kept there, so this file
+  may be lost.", before what git holds. The sentence says "may" because that is all that holds in
+  every state that produces it (measured on macOS on 2026-11-25, 7 commands each run once in a
+  scratch folder: the source named last is the one kept, so the note named last survives; `mv -n`
+  keeps both; a pattern may match no such name). Claude's refusal says the same after its opening
+  words, and Dan's Delete for a question that did not say it never covers a call that now does
+  (`sameRemoval`). The place is the mod's own text, so it is set aside before the question is
+  judged for text the dialog would not show (`askFault`), as the file's own name is: it ends in
+  that name, and a note whose name holds a zero width space could otherwise never be asked about
+  (the lessons review of 1e11889382, seen red first). Not said: the note named last of two sources of exactly one name, which the
+  reader gives no write of its own, so that question is the Delete question with no such sentence. The mark is on the write rather than the removal, so `cp a b <folder>/ && rm a`
   is covered too. Names are compared in small letters and in capitals, as `foldedName` does: the
   same disk keeps `straße.md` and `STRASSE.md`, a long s and s, a final sigma and a capital one,
   and the ff ligature and FF each as one file, which small letters alone kept apart. Measured over
