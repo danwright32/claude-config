@@ -68,11 +68,14 @@ do_scan() {
     dcs_status "unmeasured: the user temp folder could not be listed ($(awk 'NR == 1' "$DCS_WORK/tl.err"))"
     return 0
   fi
-  local e
+  # The scan's own working folder is made in this same folder by mktemp (dcs_init), and is no leftover.
+  local e own
+  own="$(CDPATH= cd -P "$DCS_WORK" 2>/dev/null && pwd -P)" || own=""
   : > "$DCS_WORK/tl.paths"
   while IFS= read -r e; do
     [ -n "$e" ] || continue
     tl_not_ours "$e" && continue
+    [ "$DCS_UT/$e" = "$own" ] && continue
     printf '%s/%s\n' "$DCS_UT" "$e" >> "$DCS_WORK/tl.paths"
   done < "$DCS_WORK/tl.names"
   [ -s "$DCS_WORK/tl.paths" ] || return 0

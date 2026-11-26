@@ -1857,6 +1857,9 @@ for n in com.apple.FileProvider.big TemporaryItems claude-add-scope-big "claude-
 done
 check "temp leftovers: an entry under 1 MB is not a row" "$(eq "$(item_of "$UT/tmp.small1")" "")"
 check "temp leftovers: the note counts the smaller entries and their size" "$(has "$(note_of temp-leftovers)" "smaller entries")"
+# Exactly the two tmp.* folders: the scan's own working folder, which mktemp makes in this same
+# folder, is not a leftover, so counting it would make this three.
+check "temp leftovers: the scan's own working folder is not counted" "$(has "$(note_of temp-leftovers)" "2 smaller entries")"
 check "temp leftovers: the scan removed nothing" "$([ -f "$UT/pytest-of-dan/run-1/a.txt" ] && [ -f "$UT/loose-big-file.bin" ] && [ -f "$UT/tmp.small1/f" ] && echo ok || echo "a fixture went")"
 judge temp-leftovers "$UT/pytest-of-dan"
 check "temp leftovers judge: an idle entry is offerable" "$(eq "$JUDGED" offerable)"

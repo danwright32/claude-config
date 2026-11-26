@@ -12,7 +12,8 @@
 # made since the restart of 2026-11-17, which emptied the folder. So the kind lists no rows (a
 # thousand greyed rows for 2 MB would bury the page) and says the count and size in its note.
 # Claude Code's own temp folder, claude-<uid>, is the claude-temp kind's and is not counted here, and
-# every entry under another name is the temp-leftovers kind's. Which folder is the user temp folder
+# entries under other names are the temp-leftovers kind's, apart from macOS's own (com.apple.* and
+# TemporaryItems), which no kind counts. Which folder is the user temp folder
 # is dcs_user_temp's answer (scan-lib.sh); when it is not known, the kind is unmeasured.
 set -uo pipefail
 HERE="${BASH_SOURCE[0]%/*}"; [ "$HERE" != "${BASH_SOURCE[0]}" ] || HERE=.
