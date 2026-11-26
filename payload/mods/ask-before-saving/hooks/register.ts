@@ -592,7 +592,14 @@ const removalsRead = async ($: EngineInterface, home: string, candidates: readon
       const { replaces, ...rest } = landed
       const said = replaces && c.keeps ? { ...rest, stays: true as const } : landed
       out.push({ ...shape, how: 'move', ...(c.to !== undefined ? { to: c.to } : {}), ...said })
-    } else out.push({ ...shape, how: c.how, ...(c.path !== undefined ? await gitHolds($, c.path) : { back: 'unknown' as const, why: 'its path could not be read from the command' }) })
+    } else
+      out.push({
+        ...shape,
+        how: c.how,
+        // A deletion that is a move onto a name another source of the command may take says where it was sent (#3505).
+        ...(c.how === 'delete' && c.sharedAt !== undefined ? { sharedAt: c.sharedAt } : {}),
+        ...(c.path !== undefined ? await gitHolds($, c.path) : { back: 'unknown' as const, why: 'its path could not be read from the command' }),
+      })
   }
   return out
 }
@@ -1642,7 +1649,10 @@ export const register: Register = on => {
       if (missing.length) return { deny: `The question must name what would go (${missing.join(', ')}) and say why in one plain sentence, such as ${example}.` }
       const full = `${question} ${removalSaid(removes)}`
       const shown = { ...e, questions: [{ ...questions[0], question: full, header: REMOVAL_HEADER, options: removalOptions(removes), multiSelect: false }] } as typeof e
-      const unread = askFault(shown as unknown as Record<string, unknown>, removes.flatMap(r => [r.file, ...(r.to !== undefined ? [r.to] : []), ...(r.holds ?? [])]))
+      // The mod's own text in the question, set aside before it is judged: what goes, where a move
+      // puts it, what a folder holds, and the place a file is sent to where another may land on its
+      // name (#3505), which ends in the file's own name and so in whatever that name holds.
+      const unread = askFault(shown as unknown as Record<string, unknown>, removes.flatMap(r => [r.file, ...(r.to !== undefined ? [r.to] : []), ...(r.sharedAt !== undefined ? [r.sharedAt] : []), ...(r.holds ?? [])]))
       if (unread !== undefined) return { deny: `${unread.what} would not reach Dan as written: ${unread.fault}. He decides on the words he can read whole, so reword it and ask again, with the same metadata. If it is too long, remove fewer files in one command.` }
       if (ask.answers !== undefined && (typeof ask.answers !== 'object' || ask.answers === null || Object.keys(ask.answers).length > 0))
         return { deny: 'Ask Dan without answers already filled in: only his choice in the dialog decides this removal.' }

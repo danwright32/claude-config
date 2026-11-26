@@ -49,6 +49,48 @@ and settles its own surfaces in rounds of its own before it is built.
    10 s (none given waits up to Claude Code's 30 s default) and a `$.model.complete` with none under
    10 s (a completion can take a minute), unless the noun races it against a shorter timer. Its first run found two in session-registry's
    engine.create code (a save's `mv` and the repository root lookup), now bounded at 5 s.
+
+   A hook's 10 s on `tool.call` and `tool.check`, measured live (#3627) on 2026-11-25 on Claude Code
+   2.1.332: headless sessions with a probe mod and the scripted stand in model, one Bash call each,
+   at least 3 samples per case, on a Mac at a load average of 83 to 96 on 12 cores.
+   - **It is 10 s for each hook, not for the call.** A call through a `tool.call` hook that waited
+     7 s and a `tool.check` hook that waited 7 s was refused by the second hook every time (3 of 3 in
+     the main session, 3 of 3 in a subagent), 14.6 s in all; the `tool.check` hook started with
+     9,999 to 10,000 ms left. The `tool.call` hook's own clock stops while its `next(e)` runs, and
+     `tool.check` runs inside that `next(e)`. One hook waiting 9.5 s was refused by it 3 of 3; one
+     waiting 11 s was cut at 10.000 to 10.002 s, 6 of 6.
+   - **A wait on a child process does not count; a `$.clock.sleep` and plain code do.** A hook
+     whose wait was `$.process.run(['/bin/sleep', '11'])` still had 9,998 to 10,000 ms left after it
+     and its refusal stood: 3 of 3 on `tool.call`, 3 of 3 on `tool.check`, 3 of 3 in a subagent, and
+     6 s plus 6 s across the two hooks 3 of 3. Synchronous code that never yields has a shorter
+     limit than the budget: a busy loop of 4 s and of 5.5 s finished (3 of 3 each), but one of 11 s
+     was stopped at about 6.0 s, every time, with "no answer to a heartbeat within 5000ms: the
+     hooks worker is wedged (a hook spinning without yielding)".
+   - **A hook cut with no `.catch` lets the call run unjudged.** The debug log says
+     "hook failed: probe-nocatch: errorKind=HooksError errorChars=23 (tool.call; skipped; what is
+     below it ran in its place)" and "probe-nocatch: tool.call hook skipped: ran past its 10s budget"
+     (`tool.check` the same), the model is told nothing, and the Bash call ran: 6 of 6 in the main
+     session, 6 of 6 in a subagent. A busy loop past the heartbeat is worse: "probe-nocatch was
+     unloaded: it crashed the hooks worker", and the call ran 3 of 3. With a `.catch` that refuses,
+     the cut asks it (`next.error.kind` `timeout`, or `throw` for the heartbeat) and its refusal
+     stands, 9 of 9. A busy loop in a `tool.check` hook that has a `.catch` is not asked ("no .catch
+     is asked after the hooks worker ended during tool.check: its caller is gone"), and the call
+     ends as an error, "Error calling tool (Bash): no answer to a heartbeat within 5000ms: ...", and
+     does not run, 3 of 3.
+   - **A subagent's call is treated the same** in each case measured for one (3 samples each): a
+     refusal at once, 7 s plus 7 s, an 11 s wait on a child process, and an 11 s cut with no
+     `.catch` on either hook. The busy loop and the `.catch` cases were measured in the main
+     session only.
+
+   So every `tool.call` or `tool.check` hook that can refuse carries a `.catch` that refuses, and
+   its own synchronous work stays well under 5 s. For a call that passes two judging hooks, as a
+   Bash call covered by Dan's permanent words passes ask before saving's `tool.call` and then its
+   `tool.check`, each 7 s constant is measured against that hook's own 10 s, so the two together
+   may take up to 14 s of wall clock with neither cut, and the 11.3 s the fifth review of #3485 timed
+   across both on the test clock would not be cut live. Time either hook spends waiting in a `$`
+   call such as `$.process.run` costs it nothing, and both hooks have a `.catch` that refuses. Not measured: what an interactive session shows for a cut,
+   whether a mod unloaded for wedging the worker stays unloaded for the rest of the session or takes
+   other mods on the same worker with it, and a busy loop between 5.5 and 6 s.
 5. **A mod that changes with a mod it depends on is loaded again after that one reloads (#960,
    #966).** Measured on
    2026-10-08 (2.1.294) with throwaway mods in a session of their own: when one pull changes mod-kit
@@ -326,7 +368,10 @@ substitution never closed is read to the end of its text, the side that asks. A 
 before the change or after; and a variable the command sets is not followed into a substitution,
 so a path through one stays as written. Since #975 a process substitution (`<(...)`, `>(...)`) is
 read the same way, outside double quotes and heredoc bodies, where it is text; given as an operand
-(`tee >(cmd)`) it is a pipe, never a file. A program fed an unquoted heredoc (`bash <<EOF`) reads the
+(`tee >(cmd)`) it is a pipe, never a file. Since #3496 the commands inside zsh's `=(...)`, where a
+word begins, are read as run too, and the command it stands in keeps the words it was always given
+(`diff =(git fetch) a` is still read with the words `=(git` and `fetch)`), so that reading only
+grows. A program fed an unquoted heredoc (`bash <<EOF`) reads the
 body as the shell expanded it, the backslash taken off an escaped `$`, backtick or backslash and an
 escaped line end joined, so `\$(rm x)` there reaches a shell as `$(rm x)` and is read as run; a
 quoted body is read as written. And a substitution is one word with the word it sits in, its spaces,
@@ -2856,6 +2901,30 @@ pipe stands in no group. The same suite takes 0.67 to 0.80 seconds (five reading
 `ownBudget` caps the text one script's calls may hand the readers (eight times the script and
 200,000 characters more); past it the runs not yet read stay judged. No real suite was timed alone.
 
+**A word a script hands on as written (#3602), built 2026-11-25 for the design round guard.** Four
+of this repository's suites hand their own helper a command as text, for the gate under test to
+judge and never to run, and the text holds a `$(` the shell hands on as written (after a backslash,
+or in single quotes) with a bar inside it: `run_here 'bash -c "echo \$(sort ok.sh | bash)"'`.
+mod-kit's reader gives such a word as the one name it spells and marks it `unexpanded`.
+`handedToUnknown` dropped the mark, so the guard read the parenthesis and its bar as a group and
+the `$(` as a command's output, and held the word as a name that may be any screen file. The mark
+is now kept, and `patternMayBeLook(word, asWritten)` reads such a word as the characters it spells,
+its groups as each name they can spell, as any other word is. Only a word inside a script's own
+text is read so: the same word typed whole on a command line is judged as before, and a word that
+spells a screen file, one handed over beside it, or a suite that writes a stylesheet, is still
+held. This makes the guard hold less. Counted the same day over the personal MacBook's records
+(one run, 2026-11-25: 70,279 shell calls from 2026-10-24 to 2026-11-25, 63,186 distinct; 9,052
+distinct calls run a shell script the guard reads), each call judged whole by the guard at the
+base and with the change, in the test file's stand-in world with today's suites: 470 calls, 415
+distinct, held before pass now, 439 of them agents'. Every one runs one of the four suites
+(test-slack-drafts-code-loaders.sh 223 distinct, test-slack-drafts-unread-shapes.sh 78,
+test-work-names-publish.sh 70, test-db-write-ask.sh 49); in 30 distinct calls the suite run sits
+beside other commands (an edit to a suite or a gate by python3 or sed, git, cp, mkdir), which the
+guard reads the same with the change and passed before too. No call passed before and is held
+now. Still held: a suite whose helper is handed a fixture file's name and writes it under the
+suite's own work folder (test-lessons-advisory.sh, test-pr-review.sh), 4 calls, which needs the
+shared rule for a temporary folder to vouch for that folder, and it does not on the real suites.
+
 **The count behind #3323, the rule for a command as typed** (the personal MacBook's records, 35 days
 to 2026-11-21, 51,590 shell calls when it was taken): with the built rule 16 past calls are newly held by the two guards it was
 decided on, the design round guard 13 and ask before saving 3 (swiftc 8, gh 3, chk 2, swift 1, set
@@ -3036,7 +3105,8 @@ and the band question is removed rather than kept beside it (L29). Three defects
 
 - **The write is refused at once, never held open.** A tool call hook that waits on Dan is cut at
   its 10 second budget and the engine then runs the write as if the hook were absent (measured with
-  `claude plugin test` on 2026-10-04), so holding the call would fail open. A hook that cannot
+  `claude plugin test` on 2026-10-04, and live for a hook with no `.catch` on 2026-11-25 on 2.1.332,
+  #3627, standing rule 4), so holding the call would fail open. A hook that cannot
   finish refuses the write, and so does one that cannot read Dan's answer.
 - **For good asks Claude to send the call again** (#738, built 2026-10-05). Until then For good
   replayed the call itself, and in auto mode, Dan's `defaultMode`, it never saved: the classifier
@@ -3812,8 +3882,22 @@ lasting memory file, or moved one away, ran with no question. Measured in the mo
   another source of the same command may land on the same name: another folder holding a name
   alike but for letter case and the Unicode form of an accent, a pattern, or a word no path names.
   `removalCandidates` in `rules.ts` takes no `shared` write as where a file goes, so the removal
-  is main's Delete question, with no new sentence; a `mv -n` is worded the same, the harmless side
-  to be wrong on. The mark is on the write rather than the removal, so `cp a b <folder>/ && rm a`
+  is main's Delete question; a `mv -n` is worded the same, the harmless side to be wrong on. Until
+  2026-11-25 that question had no sentence of its own, so a command that says `mv` was asked about
+  as "Delete" with no word of why. It now names the loss: the candidate keeps the shared place
+  (`sharedAt`, only for a file a path names, and only where no other write stands as the place it
+  goes), and the question says "The command sends it to <the place>, and another file the same
+  command names may land on that name too. Only one of the two would be kept there, so this file
+  may be lost.", before what git holds. The sentence says "may" because that is all that holds in
+  every state that produces it (measured on macOS on 2026-11-25, 7 commands each run once in a
+  scratch folder: the source named last is the one kept, so the note named last survives; `mv -n`
+  keeps both; a pattern may match no such name). Claude's refusal says the same after its opening
+  words, and Dan's Delete for a question that did not say it never covers a call that now does
+  (`sameRemoval`). The place is the mod's own text, so it is set aside before the question is
+  judged for text the dialog would not show (`askFault`), as the file's own name is: it ends in
+  that name, and a note whose name holds a zero width space could otherwise never be asked about
+  (the lessons review of 1e11889382, seen red first). Not said: the note named last of two sources of exactly one name, which the
+  reader gives no write of its own, so that question is the Delete question with no such sentence. The mark is on the write rather than the removal, so `cp a b <folder>/ && rm a`
   is covered too. Names are compared in small letters and in capitals, as `foldedName` does: the
   same disk keeps `straße.md` and `STRASSE.md`, a long s and s, a final sigma and a capital one,
   and the ff ligature and FF each as one file, which small letters alone kept apart. Measured over

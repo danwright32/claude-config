@@ -694,6 +694,11 @@
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/checkout-behind-notice.sh",
             "timeout": 15
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/repo-visibility-notice.sh",
+            "timeout": 10
           }
         ]
       }
