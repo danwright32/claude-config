@@ -21,9 +21,13 @@
 #                                    another answer is given. The shapes are the ways a picker is
 #                                    NOT his answer (timeout, prefilled, two, error, othersource,
 #                                    unread, nosave, whose question does not tell him to save the
-#                                    file, and plain, an ordinary picker with no metadata) and
-#                                    one way it carries what must be ignored (claimedhash:<hash>, a
-#                                    hash written into its metadata).
+#                                    file, typed:<words>, where he typed those words beside the
+#                                    option he chose, typedform, where what came back beside his
+#                                    answer is in a form nobody has seen, and plain, an ordinary
+#                                    picker with no metadata) and two ways it carries what must be ignored
+#                                    (claimedhash:<hash>, a hash written into its metadata, and
+#                                    preview, an annotation holding the chosen option's preview and
+#                                    no words of his).
 #       put <repo> <file> [shape] [session]
 #                                    the same picker put and not yet answered: only the assistant
 #                                    entry holding its tool_use. Prints the picker's id.
@@ -101,6 +105,17 @@ def picker(repo, file, answer, shape):
         del ask["metadata"]
     if shape.startswith("claimedhash:"):
         ask["metadata"]["sha256"] = shape.split(":", 1)[1]
+    # What he types beside the option he chose comes back in the result's annotations, keyed by the
+    # question, as {"notes": "<his words>"}, with the chosen option's "preview" before it when the
+    # option has one (read from pickers Dan answered with a note, in real session transcripts,
+    # 2026-11-26, claude-config#3742).
+    if shape.startswith("typed:"):
+        result["annotations"] = {q: {"notes": shape.split(":", 1)[1]}}
+    if shape == "preview":
+        result["annotations"] = {q: {"preview": "Use it as it reads now"}}
+    if shape == "typedform":
+        # Not a form any transcript holds: his words as a list, which a reader of text would skip.
+        result["annotations"] = {q: {"notes": ["approve, but fix line 2"]}}
     return ask, result
 def arg(n):
     return rest[n] if len(rest) > n and rest[n] else ""

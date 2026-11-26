@@ -252,6 +252,18 @@ aaf_talk "$WORK/nosave.jsonl" ask acme/widget "$F"
 r="$(TALK="$WORK/nosave.jsonl" run "$EDIT")"
 check "R10 still possible: asked again with the sentence, the command goes through" "$(passed "$r" && echo ok || echo "$r")"
 forget
+# An Approve with words typed beside it approves nothing (#3742 low 20; Dan, 2026-11-26): what he
+# typed is a change he wants, so the label goes on nothing and the refusal gives his words.
+F="$(aaf_shown "$WORK/typed" "$WORK/typed.jsonl" "$POST")"
+aaf_talk "$WORK/typed.jsonl" ask acme/widget "$F" "" "typed:approve, but fix line 2"
+r="$(TALK="$WORK/typed.jsonl" run "$EDIT")"
+check "R10 his Approve with words typed beside it puts no label on, and the refusal gives his words" "$(asks_dan "$r" && [[ "$r" == *"approve, but fix line 2"* && "$r" == *"approves nothing"* ]] && echo ok || echo "$r")"
+check "and no approval is written to the record for it" "$(! grep -q '"kind": "approved"' "$STORE/record.jsonl" 2>/dev/null && echo ok || cat "$STORE/record.jsonl")"
+aaf_talk "$WORK/typed.jsonl" bash "$AAF_BBEDIT --front-window $F"
+aaf_talk "$WORK/typed.jsonl" ask acme/widget "$F"
+r="$(TALK="$WORK/typed.jsonl" run "$EDIT")"
+check "R10 still possible: asked again and approved with nothing typed, the command goes through" "$(passed "$r" && echo ok || echo "$r")"
+forget
 
 echo "one approval covers one pull request (Dan, 2026-11-25: \"One approval, one pull request\")"
 # Pull request 7 merged on his one approval of this wording: the merge gate recorded it as the one

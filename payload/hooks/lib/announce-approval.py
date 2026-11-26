@@ -42,6 +42,18 @@ _read_by_dan). Then, all of these, each failure said in its own words:
   - the file has not changed since he answered: its status change time (st_ctime, which a write, a
     rename or a replacement sets and no command sets back) is before the moment his answer was
     recorded. Between the open and the answer the file may change, because that is Dan editing it.
+  - HE TYPED NOTHING BESIDE IT (claude-config#3742): the picker lets him type words beside the
+    option he chooses, and hands them back beside his answer (toolUseResult.annotations, keyed by
+    the question, as {"notes": "<his words>"}; read from pickers he answered that way, in real
+    transcripts, 2026-11-26). "approve, but fix line 2" used to count as his approval of the
+    wording as it stood, and the words were read by nothing. Dan, by picker on 2026-11-26, asked
+    what should happen then: "Refuse and ask again". So an Approve that comes with words of his
+    approves nothing: it is an answer of his that is no approval, exactly as `Not yet` is (it
+    takes back an earlier approval of that wording, below), and the refusal gives his words, says
+    they approve nothing, and says to fix the wording and ask him again. White space is no words,
+    and neither is the chosen option's own preview, which the dialog hands back in the same
+    place. Anything there in a form this file does not read is taken as words of his. An answer
+    he typed in place of choosing an option was never an Approve, and is `words of his own` below.
   - no later picker about the same file ended any other way (`Not yet`, a timeout): the last word
     on a file is the one that counts.
   - the file holds wording, and it can be hashed.
@@ -77,7 +89,8 @@ HIS LAST ANSWER ON A WORDING DECIDES, on the record as in the session (claude-co
 approval on the record used never to be taken back: he approved, the approval was recorded, the
 session asked again about the same unchanged file, he answered `Not yet`, and the merge still went
 through on the recorded approval. So a hook run that reads a picker of this source he answered
-with anything but Approve (`Not yet`, or words of his own) writes a `withdrawn` line: the
+with anything but Approve alone (`Not yet`, words of his own, or an Approve with words typed
+beside it) writes a `withdrawn` line: the
 repository, when he answered, and the hash of the wording he answered about, which is the hash
 noted when he answered, else the file's while it has not changed since. An approval of that
 repository and wording that he gave BEFORE that answer no longer counts, whichever session or file
@@ -239,6 +252,10 @@ HERE =os.path.dirname(os.path.abspath(__file__))
 # The sentence the picker's question must hold, word for word (THE QUESTION TELLS HIM TO SAVE, module
 # docstring). One constant, so the rule, the refusal and the how to ask text cannot drift apart.
 SAVE_FIRST = "Save the file before you answer."
+# What a refusal gives in place of words typed beside an answer that came back in no form this file
+# reads, and how many characters of his words one refusal carries.
+TYPED_UNREAD = "(something came back beside his answer in a form that could not be read)"
+TYPED_SHOWN = 600
 
 HOW_TO_ASK = (
     "To ask him: write the post to a file, run /no-ai-tells on it, open it in a command of its own with "
@@ -628,6 +645,38 @@ def _not_his_approve(p):
     return None
 
 
+def _typed_beside(result):
+    """The words Dan typed beside the option he chose, as one line, or None when he typed none (HE
+    TYPED NOTHING BESIDE IT, module docstring). The dialog hands them back in the result's
+    annotations, keyed by the question: {"<question>": {"notes": "<his words>"}}, with the chosen
+    option's "preview" beside them when it has one, which is none of his words. Anything there in a
+    form that cannot be read as his words or as their absence is taken as words of his, so a form
+    nobody has seen never passes as nothing typed."""
+    notes = result.get("annotations") if isinstance(result, dict) else None
+    if not notes:
+        return None
+    if not isinstance(notes, dict):
+        return TYPED_UNREAD
+    words = []
+    for about in notes.values():
+        typed = about.get("notes") if isinstance(about, dict) else about
+        if isinstance(typed, str):
+            words.append(" ".join(typed.split()))
+        elif typed:
+            words.append(TYPED_UNREAD)
+    words = " / ".join(w for w in words if w)
+    if len(words) > TYPED_SHOWN:
+        words = words[:TYPED_SHOWN] + " (cut here: the rest is in the picker's result)"
+    return words or None
+
+
+def _typed_why(words):
+    """Why his Approve with those words typed beside it does not count, with the words."""
+    return ("he chose `" + APPROVE + "` and typed words beside it, and an Approve that comes with words of his "
+            "approves nothing: the words are a change he wants. What he typed: \"" + words
+            + "\". Read it, fix the wording, then open the file for him again and ask him again")
+
+
 def _file_events(transcript_path, session_id, targets, sw):
     """What the session did with each wording file, {its path: (opens, touches)}: opens as (line
     sent, line it finished without error, the call's id), touches as the line of each call that
@@ -826,13 +875,16 @@ def _note_for(p, noted):
 
 
 def _his_other(result, is_error):
-    """Whether a picker came back with an answer of Dan's that is not APPROVE: `Not yet`, or words of
-    his own. One that came back in error, or closed on its own timeout, is no answer of his."""
+    """Whether a picker came back with an answer of Dan's that is not APPROVE alone: `Not yet`, words
+    of his own, or an Approve with words typed beside it. One that came back in error, or closed on its own timeout, is no answer of his."""
     if is_error or not isinstance(result, dict) or "afkTimeoutMs" in result:
         return False
     answers = result.get("answers")
     if not isinstance(answers, dict) or not answers:
         return False
+    if _typed_beside(result) is not None:
+        # An Approve with words of his typed beside it is an answer of his, and no approval.
+        return True
     return any(not (isinstance(chosen, str) and chosen.strip() == APPROVE) for chosen in answers.values())
 
 
@@ -898,7 +950,11 @@ def approvals(session_id, transcript_path, deadline=None, noted=None, settled=()
         meta = p["ask"]["metadata"]
         repo, file = repo_key(meta.get("repo")), meta.get("file")
         mine = p["ask"] if isinstance(p["ask"], dict) else {}
-        said = not p["prefilled"] and ap._answered(mine, p["result"], p["is_error"], APPROVE)
+        chose = not p["prefilled"] and ap._answered(mine, p["result"], p["is_error"], APPROVE)
+        # HE TYPED NOTHING BESIDE IT (module docstring): his Approve with words typed beside it is
+        # an answer of his that is no approval, so it ends the picker as his `Not yet` does.
+        typed = _typed_beside(p["result"]) if chose else None
+        said = chose and typed is None
         if said and (repo is None or not isinstance(file, str) or not file.startswith("/")):
             untaken.append({"repo": repo or "", "file": file if isinstance(file, str) else "",
                             "why": "its metadata does not name the repository as owner/name and the wording file by "
@@ -907,7 +963,7 @@ def approvals(session_id, transcript_path, deadline=None, noted=None, settled=()
         if repo is None or not isinstance(file, str) or not file.startswith("/"):
             continue
         where = (repo, os.path.realpath(file))
-        not_his = None if said else _not_his_approve(p)
+        not_his = None if said else _typed_why(typed) if typed is not None else _not_his_approve(p)
         if not_his is None:
             nothis.pop(where, None)
         else:
@@ -1248,7 +1304,8 @@ def check(repo, digest, payload, pr=None, claim=False):
         # He did approve it, and his later answer took that back: said as what happened, so the
         # session is not told he never approved wording it watched him approve.
         out["why"] = _said(["Dan approved this wording for " + key + " and then, asked about it again, answered "
-                            "something other than `" + APPROVE + "` (`Not yet`, or words of his own), which took that "
+                            "something other than `" + APPROVE + "` alone (`Not yet`, words of his own, or an Approve "
+                            "with words typed beside it), which took that "
                             "approval back: his last answer on a wording decides, on this Mac's record as in the "
                             "session. Change what he wanted changed, then ask him again"],
                            key, untaken, unreadable, unlooked)

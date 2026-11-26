@@ -1941,6 +1941,13 @@ when all of these hold, each failure said in its own words:
   (#3742). An edit he makes in the window and does not save is not in the file, so it is not in the
   wording that is hashed, and nothing here can ask BBEdit whether a window holds unsaved changes. A
   picker whose question does not say it approves nothing, and the refusal gives the sentence to add;
+- he typed nothing beside the option he chose (#3742). The picker lets him type words beside his
+  choice and hands them back beside his answer, and "approve, but fix line 2" used to count as his
+  approval of the wording as it stood. An Approve that comes with words of his approves nothing
+  (Dan, by picker, 2026-11-26: "Refuse and ask again"): it is an answer of his that is no approval,
+  as `Not yet` is, and the refusal gives his words and says to fix the wording and ask him again.
+  White space is no words, and neither is the chosen option's own preview. Anything that comes
+  back there in a form the library does not read is taken as words of his;
 - the file has not changed since he answered (its status change time is before his answer);
 - no later picker about the same file ended any other way;
 - the file holds no run of more than two blank lines with wording below it (#3703). Blank lines are
@@ -1998,7 +2005,7 @@ His last answer on a wording decides, on the record as in the session (#3742). A
 record used never to be taken back: he approved, it was recorded, the session asked again about
 the same unchanged file, he answered `Not yet`, and the merge went through on the recorded
 approval. A hook run that reads a picker of this source he answered with anything but Approve
-(`Not yet`, or words of his own) now writes a `withdrawn` line with when he answered and the hash
+alone (`Not yet`, words of his own, or an Approve with words typed beside it) now writes a `withdrawn` line with when he answered and the hash
 of the wording he answered about (the hash noted when he answered, else the file's while it has
 not changed since). An approval of that repository and wording given before that answer no longer
 counts, whichever session or file it came from, one given after it does, and the refusal says he

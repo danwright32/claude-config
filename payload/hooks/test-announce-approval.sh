@@ -1037,6 +1037,94 @@ r="$(asked "$T" acme/widget "$(hash_file "$F")")"
 check "R2 still possible: asked again with the sentence, his Approve counts" "$([[ "$r" == "yes||" ]] && echo ok || echo "$r")"
 check "how to ask gives the sentence the question must hold" "$([[ "$how" == *"Save the file before you answer."* ]] && echo ok || echo "the how to ask text does not hold it: $how")"
 
+echo "an Approve with words typed beside it approves nothing (#3742 low 20)"
+# The picker lets him type words beside the option he chooses, and hands them back beside his answer
+# (the fixture's `typed` shape says where). "approve, but fix line 2" used to count as his approval
+# of the wording as it stood, and what he typed was read by nothing.
+STORE_USED="$WORK/store-typed"
+F="$(shown typed)"; T="$WORK/typed.jsonl"
+HT="$(hash_file "$F")"
+talk "$T" ask acme/widget "$F" "" "typed:approve, but fix line 2"
+r="$(asked "$T" acme/widget "$HT")"
+check "R2 his Approve with words typed beside it approves nothing" "$([[ "$r" == "no|"* ]] && echo ok || echo "$r")"
+check "the refusal gives what he typed in his own words, says it approves nothing, and to fix the wording and ask again" "$([[ "$r" == *"approve, but fix line 2"* && "$r" == *"approves nothing"* && "$r" == *"fix the wording"* && "$r" == *"ask him again"* ]] && echo ok || echo "$r")"
+check "and no approval is written for it" "$([ "$(recorded)" = 0 ] && echo ok || echo "$(recorded) lines")"
+check "the record holds it as an answer of his that was no approval, naming the wording" "$(grep '"kind": "withdrawn"' "$STORE_USED/record.jsonl" 2>/dev/null | grep -q "\"hash\": \"$HT\"" && echo ok || cat "$STORE_USED/record.jsonl" 2>&1)"
+T2="$WORK/typed-later.jsonl"; new_talk "$T2"
+r="$(asked "$T2" acme/widget "$HT" s2)"
+check "R2 a later session is refused on the record too" "$([[ "$r" == "no|"* ]] && echo ok || echo "$r")"
+r="$(helper_asks acme/widget "$HT" 81)"
+check "R2 and so is a merge that names no session" "$([[ "$r" == "no|unapproved|"* ]] && echo ok || echo "$r")"
+# Still possible: the wording fixed and asked again, he approves and types nothing.
+talk "$T" bash "$BBEDIT --front-window $F"
+talk "$T" ask acme/widget "$F"
+r="$(asked "$T" acme/widget "$HT")"
+check "R2 still possible: asked again, his Approve with nothing typed beside it counts" "$([[ "$r" == "yes||" ]] && echo ok || echo "$r")"
+# He approved, and the approval is on the record. Asked again about the same unchanged file, he
+# chooses Approve and types a change he wants: that is his last answer on the wording.
+STORE_USED="$WORK/store-typed-back"
+F="$(shown typed-back)"; T="$WORK/typed-back.jsonl"
+talk "$T" ask acme/widget "$F"
+r="$(asked "$T" acme/widget "$HT")"
+check "his approval is recorded before he is asked again" "$([[ "$r" == "yes||" ]] && [ "$(recorded)" = 1 ] && echo ok || echo "$r")"
+talk "$T" bash "$BBEDIT --front-window $F"
+talk "$T" ask acme/widget "$F" "" "typed:the second line reads wrong"
+r="$(asked "$T" acme/widget "$HT")"
+check "R2 a later Approve with words typed beside it takes the recorded approval back" "$([[ "$r" == "no|"*"took that approval back"* ]] && echo ok || echo "$r")"
+check "and the refusal still gives what he typed" "$([[ "$r" == *"the second line reads wrong"* ]] && echo ok || echo "$r")"
+T2="$WORK/typed-back-later.jsonl"; new_talk "$T2"
+r="$(asked "$T2" acme/widget "$HT" s2)"
+check "R2 a later session is refused on the record alone" "$([[ "$r" == "no|"*"took that approval back"* ]] && echo ok || echo "$r")"
+# A subagent's call is refused the same way, and writes nothing, as with his Not yet.
+STORE_USED="$WORK/store-typed-agent"
+F="$(shown typed-agent)"; T="$WORK/typed-agent.jsonl"
+talk "$T" ask acme/widget "$F" "" "typed:approve, but fix line 2"
+r="$(AGENT=1 asked "$T" acme/widget "$HT")"
+check "R2 a subagent's call is refused on his Approve with words typed beside it" "$([[ "$r" == "no|"*"approve, but fix line 2"* ]] && echo ok || echo "$r")"
+check "and writes nothing to the record" "$([ "$(kinds withdrawn)" = 0 ] && [ "$(kinds approved)" = 0 ] && echo ok || echo "$(kinds withdrawn) withdrawn, $(kinds approved) approved")"
+# His answer noted when he gave it, in a session the asker is not in, is read back from that
+# session's transcript with what he typed beside it.
+STORE_USED="$WORK/store-typed-noted"
+F="$(shown typed-noted)"; T="$WORK/typed-noted.jsonl"
+P="$(talk "$T" put acme/widget "$F")"
+r="$(note "$T" payload "$P" acme/widget "$F")"
+talk "$T" answer "$P" acme/widget "$F" "" "typed:approve, but fix line 2"
+r="$(helper_asks acme/widget "$HT" 82)"
+check "R2 a noted Approve with words typed beside it approves no merge that names no session" "$([[ "$r" == "no|unapproved|"* ]] && [ "$(kinds approved)" = 0 ] && echo ok || echo "$r")"
+check "and that merge's refusal gives what he typed" "$([[ "$r" == *"approve, but fix line 2"* ]] && echo ok || echo "$r")"
+# Still possible: what the dialog hands back beside an answer when he typed nothing. An annotation
+# holding only the chosen option's preview is none of his words, and neither is one of white space.
+STORE_USED="$WORK/store-typed-preview"
+F="$(shown typed-preview)"; T="$WORK/typed-preview.jsonl"
+talk "$T" ask acme/widget "$F" "" preview
+r="$(asked "$T" acme/widget "$HT")"
+check "R2 still possible: an annotation holding only the option's preview is no words of his, and his Approve counts" "$([[ "$r" == "yes||" ]] && echo ok || echo "$r")"
+STORE_USED="$WORK/store-typed-blank"
+F="$(shown typed-blank)"; T="$WORK/typed-blank.jsonl"
+talk "$T" ask acme/widget "$F" "" "typed:   "
+r="$(asked "$T" acme/widget "$HT")"
+check "R2 still possible: white space typed beside his Approve is nothing typed, and it counts" "$([[ "$r" == "yes||" ]] && echo ok || echo "$r")"
+# What came back beside his answer in a form nobody has seen is taken as words of his, never as
+# nothing typed, and the refusal says it could not be read.
+STORE_USED="$WORK/store-typed-form"
+F="$(shown typed-form)"; T="$WORK/typed-form.jsonl"
+talk "$T" ask acme/widget "$F" "" typedform
+r="$(asked "$T" acme/widget "$HT")"
+check "R2 words beside his Approve in a form that cannot be read approve nothing, and the refusal says so" "$([[ "$r" == "no|"*"could not be read"* ]] && [ "$(recorded)" = 0 ] && echo ok || echo "$r")"
+# What he typed is given whole up to a length, and a longer run is cut and says so.
+STORE_USED="$WORK/store-typed-long"
+F="$(shown typed-long)"; T="$WORK/typed-long.jsonl"
+talk "$T" ask acme/widget "$F" "" "typed:start of it $(printf 'word %.0s' $(seq 1 200)) the very end"
+r="$(asked "$T" acme/widget "$HT")"
+check "a long run of his words is cut in the refusal, which says where the rest is" "$([[ "$r" == "no|"*"start of it"*"cut here"* && "$r" != *"the very end"* ]] && echo ok || echo "$r")"
+# An answer he typed in place of choosing an option was never an Approve, and stays as it was: it
+# approves nothing, and the refusal does not call it an Approve of his.
+STORE_USED="$WORK/store-typed-own"
+F="$(shown typed-own)"; T="$WORK/typed-own.jsonl"
+talk "$T" ask acme/widget "$F" "fix line 2 first"
+r="$(asked "$T" acme/widget "$HT")"
+check "words of his own in place of an option approve nothing, as before" "$([[ "$r" == "no|"* && "$r" != *"his Approve for"* ]] && echo ok || echo "$r")"
+
 echo "the record is this suite's own"
 check "no case wrote to this Mac's real record" "$([ "$(ls -la "$REAL_STORE" 2>/dev/null | cksum)" = "$real_before" ] && echo ok || echo "$REAL_STORE changed during the run")"
 
