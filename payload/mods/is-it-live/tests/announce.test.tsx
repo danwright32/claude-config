@@ -99,9 +99,12 @@ type World = {
   reader: (repo: string, pr: { labels: { name: string }[]; body: string }) => Gh
   /** When given, answers a `gh pr view` asking for labels and body first. */
   labelsRead?: (argv: string[]) => Gh | undefined
+  /** The one judgement of a draft (hooks/lib/announce-compare.js, `draft`), as its command line prints it. */
+  judge: (input: Judged) => Gh
   remote: string | null
   stored?: Record<string, unknown>
-  slackDraft: { text: string; isError?: true }
+  /** What Slack's draft tool answers, or the refusal of a gate beneath the mod. */
+  slackDraft: { text: string; isError?: true; deny?: string }
 }
 
 const answer = (o: Partial<Owed> & { state: Owed['state'] }): Gh => {
@@ -112,8 +115,30 @@ const answer = (o: Partial<Owed> & { state: Owed['state'] }): Gh => {
 const reads = (repo: string, pr: { labels: { name: string }[]; body: string }): Gh =>
   pr.labels.some(l => l.name === LABEL) ? answer({ state: 'owed', channel: CH, text: pr.body }) : answer({ state: 'none' })
 
+/**
+ * The judgement, standing in for the hooks' command line, whose own suite
+ * (hooks/test-announce-compare.sh) proves the real one: an error is an error, no draft_id is a draft
+ * not kept, and a kept draft is the approved wording when its words are, markup and spacing aside.
+ */
+type Judged = { text: string; message: string; answer: { text: string; isError?: boolean } }
+const wordsOf = (s: string) => (s.toLowerCase().match(/[a-z0-9]+/g) ?? []).join(' ')
+const NOT_KEPT = "Slack's answer holds no draft_id, which is what it answers when a draft is already waiting in that channel, and it keeps nothing then"
+const judges = (i: Judged): Gh => {
+  const named = /"error":"([a-z_]+)"/.exec(i.answer.text)?.[1]
+  const id = /"draft_id":"([^"]+)"/.exec(i.answer.text)?.[1]
+  const out =
+    i.answer.isError || named
+      ? { state: 'error', error: named ?? '', why: `Slack answered ${named}: the Slack account is not a member of that channel, so nothing was kept` }
+      : !id
+        ? { state: 'not-kept', why: NOT_KEPT }
+        : wordsOf(i.message) !== wordsOf(i.text)
+          ? { state: 'differs', draftId: id, why: 'the approved wording has 21 words and the draft 21, and they first differ at word 20, where the approved wording has "pick" and the draft has "choose"' }
+          : { state: 'saved', draftId: id }
+  return { exitCode: 0, stdout: JSON.stringify(out) + '\n' }
+}
+
 const world = (on: On, init: Partial<World> = {}) => {
-  const w: World = { prs: {}, reader: reads, remote: `git@github.com:${REPO}.git`, slackDraft: { text: '{"result":"Draft created","draft_id":"Dr0123ABC"}' }, ...init }
+  const w: World = { prs: {}, reader: reads, judge: judges, remote: `git@github.com:${REPO}.git`, slackDraft: { text: '{"result":"Draft created","draft_id":"Dr0123ABC"}' }, ...init }
   const toasts: string[] = []
   const copies: string[] = []
   const runs: string[][] = []
@@ -157,6 +182,7 @@ const world = (on: On, init: Partial<World> = {}) => {
     } else if (a === 'gh auth status') g = { exitCode: 0, stdout: '', stderr: '  Logged in to github.com account dan (keyring)' }
     else if (a.startsWith('gh repo view')) g = { exitCode: 0, stdout: `${REPO}\n` }
     else if (e.argv[0] === 'node' && e.argv[1] === `${HOME}/.claude/hooks/lib/changelog-entry.js` && e.argv[2] === 'announcement') g = w.reader(e.argv[3] as string, JSON.parse(stdin ?? 'null'))
+    else if (e.argv.join(' ') === `node ${HOME}/.claude/hooks/lib/announce-compare.js draft`) g = w.judge(JSON.parse(stdin ?? 'null'))
     return { value: { exitCode: g.exitCode, stdout: g.stdout, stderr: g.stderr ?? '', isStdoutTruncated: false, isStderrTruncated: false } } as never
   })
   on('session.repo', () => ({ value: { root: FOLDER, remote: w.remote, isOwn: false } }) as never)
@@ -166,7 +192,7 @@ const world = (on: On, init: Partial<World> = {}) => {
   on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: '', stderr: '', interrupted: false }, text: '' }) as never)
   on('classic.Stop', () => ({}) as never)
   on('prompt.submit', ($, e) => ({ text: e.text, context: [] }) as never)
-  on('tool.call', { tool: [DRAFT, SEND] }, () => (w.slackDraft.isError ? { isError: true, result: w.slackDraft.text, text: w.slackDraft.text } : { result: w.slackDraft.text, text: w.slackDraft.text }) as never)
+  on('tool.call', { tool: [DRAFT, DRAFT_OTHER] }, () => (w.slackDraft.deny ? { deny: w.slackDraft.deny } : w.slackDraft.isError ? { isError: true, result: w.slackDraft.text, text: w.slackDraft.text } : { result: w.slackDraft.text, text: w.slackDraft.text }) as never)
   on('ui.log', () => ({ value: undefined }) as never)
   on('tool.register', () => ({ value: undefined }) as never)
   on('command.register', () => ({ value: undefined }) as never)
@@ -186,7 +212,7 @@ const world = (on: On, init: Partial<World> = {}) => {
 }
 
 const DRAFT = 'mcp__plugin_slack_slack__slack_send_message_draft'
-const SEND = 'mcp__plugin_slack_slack__slack_send_message'
+const DRAFT_OTHER = 'mcp__claude_ai_Slack__slack_send_message_draft'
 type Out = { deny?: string; result?: unknown; text?: string; context?: readonly string[]; isError?: boolean }
 const call = async ($: unknown, tool: string, input: Record<string, unknown>) =>
   (await ($ as { tool: { call: (e: never) => Promise<unknown> } }).tool.call({ tool, tool_use_id: 't1', ...input } as never)) as Out
@@ -273,4 +299,174 @@ test('a reader or a GitHub that cannot be asked is said to Dan with why, and not
   await bash($, 'gh pr merge 7 --squash')
   expect(keys()).toEqual([])
   expect(toasts.join(' ')).toContain('its answer was not one this reader knows')
+})
+
+// ---- the card's answer: the session saves the draft, once the change is out ----
+
+const CARD = {
+  repo: REPO,
+  pr: 7,
+  deploy: 'live',
+  checked: 'Opened a call and saw Hand back.',
+  changed: 'Agents can hand a call back to the queue. They pick a reason first.',
+  see: { link: 'https://widget.example.com/calls', clicks: ['Open a call', 'Press Hand back'] },
+}
+const card = ($: unknown, more: Record<string, unknown> = {}) => call($, 'mcp__is-it-live__card', { ...CARD, ...more })
+const draft = ($: unknown, input: Record<string, unknown> = {}, tool = DRAFT) => call($, tool, { channel_id: CH, message: POST, ...input })
+const NAME = `${REPO} pull request 7`
+const DONE_KEY = `announce-done:${REPO}#7`
+const OUT_KEY = `announce-out:${REPO}#7`
+
+test('a card saying the change is live tells the session to save the approved wording as a draft in the channel, no thread, word for word', withKit, async ($, on) => {
+  const { store } = world(on, { prs: { [`${REPO}#7`]: ANNOUNCED } })
+  await start($)
+  await bash($, 'gh pr merge 7 --squash')
+  const r = await card($)
+  expect(r.deny).toBeUndefined()
+  const told = said(r)
+  expect(told).toContain(`${NAME} owes an announcement for agents`)
+  expect(told).toContain(`call slack_send_message_draft with channel_id "${CH}", no thread_ts`)
+  // The wording itself, every line and blank line of it, between two marker lines.
+  expect(told).toContain(`\n-----\n${POST}\n-----`)
+  // The wording is approved already, so nothing may reword it, and it is never sent.
+  expect(told).toContain('Do not run /no-ai-tells on it')
+  expect(told).toContain('Never call slack_send_message or slack_schedule_message.')
+  expect(told).toContain('Never ask him with AskUserQuestion whether to save it')
+  expect(store.get(OUT_KEY)).toEqual({ at: T0 })
+  expect(store.get(DONE_KEY)).toBeUndefined()
+})
+
+test('a deploying card, or one that could not confirm live, drafts nothing and settles nothing: the live card still asks for the draft', withKit, async ($, on) => {
+  const { store } = world(on, { prs: { [`${REPO}#7`]: ANNOUNCED } })
+  await start($)
+  await bash($, 'gh pr merge 7 --squash')
+  for (const more of [{ deploy: 'deploying' }, { deploy: 'unreachable', checked: 'The site timed out.' }]) {
+    const told = said(await card($, more))
+    expect(told).toContain(`${NAME} owes an announcement for agents, which is drafted only once its change is live: nothing is drafted now.`)
+    expect(told).not.toContain('slack_send_message_draft')
+    expect(store.get(OUT_KEY)).toBeUndefined()
+    expect(store.get(DONE_KEY)).toBeUndefined()
+    expect(store.get(`announce:${REPO}#7`)).toEqual(ENTRY)
+  }
+  expect(said(await card($))).toContain(`call slack_send_message_draft with channel_id "${CH}"`)
+})
+
+test('a card finds the announcement of a merge this session never saw land, and one whose reader could not tell says why and asks for no draft', withKit, async ($, on) => {
+  const why = `the entry for ${REPO} in this Mac's dev update registry names no announcements channel`
+  const { w, store } = world(on, { prs: { [`${REPO}#7`]: ANNOUNCED, [`${REPO}#8`]: ANNOUNCED } })
+  await start($)
+  expect(said(await card($))).toContain(`call slack_send_message_draft with channel_id "${CH}"`)
+  expect(store.get(`announce:${REPO}#7`)).toEqual(ENTRY)
+  w.reader = (_r, pr) => answer({ state: 'unknown', text: pr.body, why })
+  const told = said(await card($, { pr: 8 }))
+  expect(told).toContain(`${REPO} pull request 8 owes an announcement for agents that cannot be drafted from this Mac: ${why}.`)
+  expect(told).not.toContain('slack_send_message_draft')
+  expect(store.get(`announce-out:${REPO}#8`)).toEqual({ at: T0 })
+})
+
+test('a card for a change that owes none says nothing of one, and one whose labels could not be read says so', withKit, async ($, on) => {
+  const { w, keys } = world(on, { prs: { [`${REPO}#7`]: { labels: ['changelog/technical'], body: 'x' } } })
+  await start($)
+  expect(said(await card($))).not.toContain('nnouncement')
+  expect(keys().filter(k => k.startsWith('announce'))).toEqual([])
+  w.labelsRead = () => ({ exitCode: 1, stdout: '', stderr: 'HTTP 502' })
+  expect(said(await card($))).toContain(`Whether ${NAME} owes an announcement for agents could not be told (GitHub could not be asked for its labels: HTTP 502).`)
+})
+
+// ---- R8: the draft counts only when Slack kept it and it is the approved wording ----
+
+test('a draft Slack kept, holding the approved wording, moves the announcement to drafted, and no later card asks for it again (R8)', withKit, async ($, on) => {
+  const { store, toasts, clock } = world(on, { prs: { [`${REPO}#7`]: ANNOUNCED } })
+  await start($)
+  await bash($, 'gh pr merge 7 --squash')
+  await card($)
+  toasts.length = 0
+  await clock.advance(5_000)
+  const r = await draft($)
+  expect(store.get(DONE_KEY)).toEqual({ how: 'drafted', at: T0 + 5_000, draftId: 'Dr0123ABC' })
+  expect(said(r)).toContain(`The announcement for agents for ${NAME} is saved as a Slack draft in channel ${CH}, word for word the wording Dan approved`)
+  expect(said(r)).toContain('nothing was sent')
+  expect(toasts).toEqual([`Announcement for agents drafted in Slack: ${NAME}. It waits in your Drafts for you to send.`])
+  // Drafted is never asked for again, so a second card cannot make a duplicate.
+  expect(said(await card($))).not.toContain('nnouncement')
+  toasts.length = 0
+  expect((await draft($)).context ?? []).toEqual([])
+  expect(toasts).toEqual([])
+})
+
+test('a draft that differs from the approved wording is said as that, to Dan and the session, and the announcement stays owed (R8)', withKit, async ($, on) => {
+  const { store, toasts } = world(on, { prs: { [`${REPO}#7`]: ANNOUNCED } })
+  await start($)
+  await bash($, 'gh pr merge 7 --squash')
+  await card($)
+  toasts.length = 0
+  const r = await draft($, { message: POST.replace('Pick a reason', 'Choose a reason') })
+  expect(store.get(DONE_KEY)).toBeUndefined()
+  expect(said(r)).toContain(`The draft in Slack differs from the approved wording of the announcement for agents for ${NAME}`)
+  expect(said(r)).toContain('they first differ at word 20')
+  expect(said(r)).toContain('It is not counted as its draft, and the announcement is still owed.')
+  expect(said(r)).not.toContain('is saved as a Slack draft')
+  expect(toasts.length).toBe(1)
+  expect(toasts[0]).toContain(`The draft in Slack differs from the approved wording of the announcement for agents for ${NAME}`)
+  // Still owed: the next card asks for it again.
+  expect(said(await card($))).toContain(`call slack_send_message_draft with channel_id "${CH}"`)
+})
+
+test('an answer holding no draft_id keeps the announcement owed and says a draft is already waiting in that channel, never to delete it (R8)', withKit, async ($, on) => {
+  const { store, toasts } = world(on, { prs: { [`${REPO}#7`]: ANNOUNCED }, slackDraft: { text: '{"result":"Draft created"}' } })
+  await start($)
+  await bash($, 'gh pr merge 7 --squash')
+  await card($)
+  toasts.length = 0
+  const r = await draft($)
+  expect(store.get(DONE_KEY)).toBeUndefined()
+  expect(said(r)).toContain(`No draft of the announcement for agents for ${NAME} was saved: ${NOT_KEPT}.`)
+  expect(said(r)).toContain(`a draft is already waiting in channel ${CH}`)
+  expect(said(r)).toContain('Do not tell him to delete it')
+  expect(toasts).toEqual([`No Slack draft was saved for the announcement for agents for ${NAME}: a draft is already waiting in that channel. It is still owed.`])
+})
+
+test('an error from Slack, or a judgement that cannot be made, each has its own sentence and keeps the announcement owed', withKit, async ($, on) => {
+  const { w, store, toasts } = world(on, { prs: { [`${REPO}#7`]: ANNOUNCED }, slackDraft: { text: '{"ok":false,"error":"not_in_channel"}', isError: true } })
+  await start($)
+  await bash($, 'gh pr merge 7 --squash')
+  await card($)
+  toasts.length = 0
+  let r = await draft($)
+  expect(store.get(DONE_KEY)).toBeUndefined()
+  expect(said(r)).toContain(`No draft of the announcement for agents for ${NAME} was saved: Slack answered not_in_channel: the Slack account is not a member of that channel, so nothing was kept.`)
+  expect(toasts[0]).toContain('Slack answered not_in_channel')
+  toasts.length = 0
+  w.slackDraft = { text: '{"result":"Draft created","draft_id":"Dr0123ABC"}' }
+  w.judge = () => ({ exitCode: 2, stdout: '', stderr: 'The draft could not be judged: the approved wording has no words. Usage: announce-compare.js draft' })
+  r = await draft($)
+  expect(store.get(DONE_KEY)).toBeUndefined()
+  expect(said(r)).toContain(`Whether the draft just made in channel ${CH} is the announcement for agents for ${NAME} could not be checked`)
+  expect(toasts[0]).toContain('could not be checked')
+  toasts.length = 0
+  w.judge = () => ({ exitCode: 0, stdout: '{"state":"saved"}' })
+  r = await draft($)
+  expect(store.get(DONE_KEY)).toBeUndefined()
+  expect(said(r)).toContain('its answer was not one this reader knows')
+})
+
+test('a draft that is not the announcement is left alone: another channel, a thread reply, a refused call, or nothing owed', withKit, async ($, on) => {
+  const { w, store, toasts, runs } = world(on, { prs: { [`${REPO}#7`]: ANNOUNCED } })
+  await start($)
+  expect((await draft($)).context ?? []).toEqual([])
+  await bash($, 'gh pr merge 7 --squash')
+  await card($)
+  toasts.length = 0
+  runs.length = 0
+  expect((await draft($, { channel_id: 'C0999999999' })).context ?? []).toEqual([])
+  expect((await draft($, { thread_ts: '1730900000.123456' })).context ?? []).toEqual([])
+  w.slackDraft = { text: '', deny: 'Blocked by a gate beneath.' }
+  expect((await draft($)).context ?? []).toEqual([])
+  expect(runs.filter(r => r.join(' ').includes('announce-compare.js'))).toEqual([])
+  expect(store.get(DONE_KEY)).toBeUndefined()
+  expect(toasts).toEqual([])
+  // The other connector's draft tool is the same tool.
+  w.slackDraft = { text: '{"result":"Draft created","draft_id":"Dr9"}' }
+  await draft($, {}, DRAFT_OTHER)
+  expect(store.get(DONE_KEY)).toEqual({ how: 'drafted', at: T0, draftId: 'Dr9' })
 })

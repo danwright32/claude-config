@@ -2,7 +2,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import { cutOwn, watchesOnly } from './mod-kit/hold.ts'
 import type { IsItLive, IsItLiveCard, IsItLiveOwed } from '../types/index.d.ts'
 import { type Asked, unreadOf } from './announce.ts'
-import { announcementUnread, noteAnnouncement } from './announcing.ts'
+import { announcementAtCard, announcementUnread, noteAnnouncement } from './announcing.ts'
 import { type CardInput, MOD, buttonId, cardOf, cardText, draftKeyOf, draftLineOf, isOut, liveList, messageRow, pinnable, reasonToRefuse, stateOf, titleOf } from './card.ts'
 import { draftHold, markLanded, noteCard, recordedThreads, registerDrafts, registerUnrelated, relateCard } from './drafts.ts'
 import { type MergeCall, type Proof, TOOL, VIEW_FIELDS, WAIT_MS, isNotAPr, letGoOf, mergeCallOf, nudgeOf, owedFrom, proofOf, refusalOf } from './merges.ts'
@@ -637,8 +637,13 @@ export const register: Register = on => {
     if (waiting)
       notes.push(`The message for ${waiting.name} is held, not shown to Dan, until a card for #${input.pr} says live: once you confirm it is live, call this again with deploy "live"${kept.message ? '' : ' and the message'}.`)
 
+    // #3667: the announcement for agents this pull request owes. GitHub is asked here too, so a
+    // merge this session never saw land is kept; only a card saying the change is out asks for its
+    // draft, and a deploying card settles nothing (announcing.ts).
+    notes.push(...(await announcementAtCard($, repo, input.pr, state, await announcementOf($, repo, input.pr))))
+
     const { requester: _r, message: _m, slack: _s, ...rest } = input
-    const shown = { ...rest, ...(waiting ? { requester: waiting } : {}), state, title, url: kept.url }
+    const shown ={ ...rest, ...(waiting ? { requester: waiting } : {}), state, title, url: kept.url }
     try {
       await $.modkit.card({ toolUseId: String(toolUseId ?? ''), ...cardOf(shown) })
     } catch (err) {

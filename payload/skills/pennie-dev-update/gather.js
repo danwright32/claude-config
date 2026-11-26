@@ -47,6 +47,9 @@ const ENTRY_PATH = path.join(__dirname, '..', '..', 'hooks', 'lib', 'changelog-e
 // The one reader of the registry, shared with the same gate (claude-config#1526): where this Mac
 // keeps it (never the shared config, because it names work repositories) and how it is read.
 const REGISTRY_PATH = path.join(__dirname, '..', '..', 'hooks', 'lib', 'dev-update-registry.js');
+// The one comparison of an announcement with what Slack holds, words only (claude-config#3668),
+// shared since #3667 with the is it live mod, which judges a draft of one through its command line.
+const COMPARE_PATH = path.join(__dirname, '..', '..', 'hooks', 'lib', 'announce-compare.js');
 
 const PER_PAGE = 100;
 const MAX_PAGES = 200;             // 20,000 PRs, far past any repo here; a guard against a loop
@@ -918,8 +921,8 @@ function cmdCommitState(args) {
 
 // Is a gathered announcement already in the channel? `--read` is a file holding what
 // slack_read_channel returned, word for word, once per page read (SKILL.md section 11). The
-// announcement comes from the gathered file, never retyped, and the comparison is posted.js's, of
-// words only. Not found says only that: whether the read reached every message since the merge is
+// announcement comes from the gathered file, never retyped, and the comparison is
+// hooks/lib/announce-compare.js's, of words only. Not found says only that: whether the read reached every message since the merge is
 // the session's to say, and a read that failed or was cut short is never handed here.
 function cmdPosted(args) {
   if (!args.gathered || !args.repo || !args.number || !args.read) {
@@ -944,7 +947,7 @@ function cmdPosted(args) {
     return t;
   }).join('\n');
   let got;
-  try { got = require(path.join(__dirname, 'posted.js')).foundPosted(ann.text, text); }
+  try { got = require(COMPARE_PATH).foundPosted(ann.text, text); }
   catch (e) { refuse('#' + n + ' could not be compared: ' + e.message + '.'); }
   const said = got.found
     ? 'found posted: every word of #' + n + '\'s announcement is in the channel read, in order. The read just before it: ' + JSON.stringify(got.before)

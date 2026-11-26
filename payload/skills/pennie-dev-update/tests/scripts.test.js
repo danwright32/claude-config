@@ -1465,7 +1465,11 @@ const CARRIED = { announcements: [
 // posted" compares the words only.
 
 let POSTED = null;
-try { POSTED = require(path.join(SKILL, 'posted.js')); } catch (e) { check(false, 'the found posted comparison loads from posted.js beside gather.js', e.message); }
+// Since #3667 the comparison is the hooks library's, beside the changelog record's parser, where the
+// is it live mod's command line reaches it too.
+const COMPARE = path.join(SKILL, '..', '..', 'hooks', 'lib', 'announce-compare.js');
+try { POSTED = require(COMPARE); } catch (e) { check(false, 'the found posted comparison loads from the hooks library, hooks/lib/announce-compare.js', e.message); }
+check(!fs.existsSync(path.join(SKILL, 'posted.js')), 'a second copy of the comparison is back beside gather.js, as posted.js');
 const DRAFTED = '@here\n**Handing a call back**\n\nYou can now hand a call back to the queue & pick a reason.\n\n'
   + HY + ' Press Hand back\n' + HY + ' Read [the guide](https://example.com/guide?a=1)\n\n1. Open a call\n2. Press it';
 const READ_BACK = 'Messages in channel:\n[2026-10-02 09:14:03 EDT] Dan: Morning all\n'
