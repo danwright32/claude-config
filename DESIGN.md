@@ -2451,6 +2451,51 @@ of about 35 ms either way in the cases where both arms run the same code. The le
 asking from inside the two readers that already run would add no process, at the price of the
 same code in two inline scripts or a library the gate must refuse without.
 
+**A command string an inline script hands to a shell, a pattern, and a script file's links
+(#3689).** Three routes were let through, each staged on stand in files first. The words of
+`os.system('cp x payload/y')` sit in a quoted string with spaces in it, which the match for a
+quoted payload path never read; #3537 read such a string for `ln` alone. `rm pay*/hooks/x.sh`
+names no payload folder and the shell writes it out as one. And `bash mk.sh` or `python3 mk.py`
+made a link that nothing read, since only an inline script was.
+
+The string is read by the readers a typed command already has and no third. It is found after a
+call that runs a command (the names #3537 chose, plus php's and AppleScript's), cut into commands
+by `lib/shell-words.py`, and each is judged by the gate's own loop over segments, which grows as
+strings are found, so a `cd` inside the string, a shell it runs and a string inside a string are
+all read as typed. The shared reader could not do the first step alone: it reads shell, and which
+quoted text a python or perl call hands to a shell is not shell. Nothing read before is skipped,
+so no verdict can turn from refused to allowed, and the two suites that existed pass with the same
+counts. A value the script fills in (an f string, a `+`, a `%`) is read as a shell variable would
+be, so a path holding one is judged as a typed path holding `$X` is. Where the program itself is a
+value, nothing can be told, and that is refused in words that say so, narrowed as an unreadable
+call always was: only when the call names a `payload/` path or runs inside a payload folder, so a
+script in another project that runs a value is not refused for a config it never touches.
+
+A pattern is written out in the real path step, as the files it matches at that moment and each
+word of a list in braces, and each is judged as that file typed directly is, a file with more
+than one name included. At most 512 are read. More than that, or a `**`, is refused as untold
+only where the pattern's fixed part is in a checkout at risk, since a refusal for every large
+pattern anywhere on the disk would be one nobody keeps.
+
+A script file is read as it is on disk when the gate runs, which was the open question: read it,
+or refuse what was not read. Both, on the safe side. A shell script is read by the reading
+`lib/shell-words.py` already has for the other gates (#2301), one it runs included; one too large
+for that reader, up to 4 MB, is searched for its link commands as text; a python, perl, ruby,
+node or php script is searched for the calls that make a link. Only a link, and only one whose
+path can be placed: this repository's suites make links in temporary folders named by a variable,
+in at least eleven files, and judging each as the payload write it may be would refuse running
+them from a session with no hold. A script file that cannot be read (not there, named by a value,
+too large) is refused in its own words when the call names a `payload/` path besides the script,
+and only for a script the command itself runs. One the command writes from its own heredoc is
+read from that text.
+
+Measured 2026-11-26 on the personal MacBook at a load of about 8 to 10, two rounds of 15 samples
+an arm: a command with no interpreter went from a median of 127 to 128 ms to 133 to 134 ms; a
+copy typed directly from 197 to about 210 ms (the real path step now loads two more modules); an
+inline script running a copy from about 130 ms to 208 to 237 ms, because its string now has
+destinations and so pays for the real path step as the typed copy always did; a command running a
+script file was the same within noise.
+
 The recovery, if it happens again: find the sync commit (`git log --author=claude-config-sync`),
 take the file list it touched, and check those paths out of the commit BEFORE it, keeping
 `LESSONS.md` and its index, which carry the other Mac's real additions.
@@ -3211,6 +3256,55 @@ the builder's were made by the sessions that built it, not by Dan, and are his t
   lessons review of this branch found that each further command brought reads of its own, so a
   second is refused and told to use a command of its own (the builder's). The bounds are chosen,
   not measured.
+
+Three gaps a review of the control found, each reproduced before it was closed (#3703; Dan asked
+for the review by picker, 2026-11-25: "Yes, attack it first"). The choices are the builder's.
+
+- **The dependency bot's exit stands after the label is read.** The merge gate left for a pull
+  request the bot opened before it asked about the announce label, so one relabelled and given an
+  Announcement block merged unapproved and unrecorded. The exit is now taken only when the label was
+  read and is not the announce label. Ruled out: leaving on a label that could not be read, since
+  that pull request is not known to be free of it; it is refused like any other the judge could not
+  read, with the override it always offered.
+- **A long run of blank lines in the wording file is refused, and the hash is left alone.** Blank
+  lines are dropped before the hash because Slack moves them (#3664), so the hash cannot tell a
+  padded file from its lines written together. Ruled out: hashing with blank lines kept, which
+  would make every comparison with what Slack holds fail on spacing. The run is counted where
+  "blank" is already defined (`changelog-entry.js`, beside the normaliser), so the count and the
+  hash cannot disagree about what a blank line is (L370), and the library refuses an answer that
+  carries no count (L98). Only a run with wording below it counts: blank lines after the last line
+  hide nothing, and refusing them would send a session back to Dan over a file he may have left
+  that way himself. The limit of two is chosen, not measured.
+- **Reading an approval and writing one are separate, and a picker counts only from a transcript
+  Claude Code keeps.** The library's `check` command read pickers from whatever transcript its
+  standard input named and wrote what it found. Nothing a process is handed can prove its caller is
+  a hook: a hook and a session's command are both started by Claude Code, as the same user, with
+  input the caller chooses. So the line is drawn in three places that each hold something. The
+  command line a session has a use for (`list`, `check` without `--claim`) reads the record and
+  nothing else. The label hook refuses a Bash command running the library in any other form,
+  which stops the route the review took and every accident. It judges python wherever it is named
+  in a command, with python's options read as python reads them, and asks nothing of the words in
+  front of it. It keeps no list of other programs that could run the file: the file carries no
+  interpreter line, so run by its own path the shell reads it and python never does (measured
+  2026-11-25, directly and behind `env` and `nohup`; the library's suite holds the missing line),
+  and a list of launchers is only ever short of one (L96). Ruled out: refusing every command that
+  names the file and is not known only to read, which refuses `git add` of it. A program that is
+  not python by name and is handed the file (`uv run`, `ipython`) is not seen. And whoever asks,
+  by whatever route, a picker is read only from a `.jsonl` transcript under the projects folder
+  beside the record's state folder, so a file shaped like a transcript and kept anywhere else
+  approves nothing; this one also covers the library reached without being named, and a hook run
+  by hand. The merge gate's own call (`check --claim`) is unchanged, since it must write and was
+  left as it is for the phase being built beside this one. Ruled out: refusing to write when
+  `CLAUDECODE` is set, which Claude Code sets in a Bash tool's shell (seen set to 1 there on
+  2026-11-25) and is understood not to set in a hook's, which was not measured.
+  A session started from inside another session's
+  shell would hand that variable to its own hooks, which would then never save an approval, and
+  Dan would be asked again for wording he had approved; and one word in the command clears it.
+  Ruled out too: a transcript root the tests could name through a variable of its own, which a
+  session's command could name as well. The tests' record variable waives the folder rule only for
+  a record that is not this user's own, with "own" read from the account database. What is left
+  open is said in the README: a transcript forged inside that folder, and the library reached
+  without its name. Both are writes to files on a Mac the session can write.
 
 `hooks/test-announce-approval.sh`, `hooks/test-announce-label-ask.sh` and the #3666 section of
 `hooks/test-changelog-tag.sh` hold it.
