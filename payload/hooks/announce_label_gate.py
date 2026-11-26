@@ -81,9 +81,11 @@ API_VALUE_FLAGS = {"-f", "-F", "--field", "--raw-field", "-H", "--header", "--in
 UNREAD_BODY_FLAGS = {"--fill", "-f", "--fill-first", "--fill-verbose", "--template", "-T", "--editor", "-e", "--recover"}
 BODY_FLAGS = ("--body", "-b", "--body-file", "-F")
 BODY_BYTES = 1024 * 1024
-# Each bound is this hook's own, and their sum (a read of GitHub or of the remote, the hash, the
-# library's check at 12) stays inside the 45 seconds the hook is registered with, so a slow GitHub
-# is refused in words and never by the harness cutting the hook short.
+# Each bound is this hook's own. ONE command of a call is judged (_one_judgment refuses a second),
+# so the most one run can wait is one read of the remote, one of GitHub, one hash (the library's 5)
+# and the library's check (12): 37 seconds, inside the 45 the hook is registered with. So a slow
+# GitHub is refused in words and never by the harness cutting the hook short. Without the limit of
+# one, each further command in a call brought reads of its own and the sum had no ceiling.
 GITHUB_SECONDS = 15
 REMOTE_SECONDS = 5
 # Seam, for the tests: a shorter bound on the read of GitHub, so no case waits on a clock (L524). It
@@ -281,12 +283,28 @@ def _label_made(repo, payload, notes):
                      "made once he has approved the first announcement there. " + verdict["how"])
 
 
+_judged = 0
+
+
+def _one_judgment():
+    """Refuse the second command of one call that puts the label on or makes it. Each is judged by
+    reads of its own (the remote, GitHub, the hash, the session), so one per call is what keeps this
+    hook's time inside the bound it is registered with, and one per command is always open."""
+    global _judged
+    _judged += 1
+    if _judged > 1:
+        raise Refuse("this call puts the label on, or makes it, in more than one command, and each is judged by "
+                     "reads of its own. Put the label on one pull request per command: `gh pr edit <number> "
+                     "--add-label " + LABEL + "`.")
+
+
 def _judge_put(kind, args, envs, place, command, cwd, payload, notes, writes):
     long_flag, short_flag = PUTS[kind]
     # The one letter form is read after other one letter flags too (`-dl`): a label found there that
     # gh would read otherwise can only refuse more.
     if LABEL not in _labels(scan.flag_values(args, long_flag, short_flag, clustered=bool(short_flag))):
         return
+    _one_judgment()
     environ = dict(os.environ)
     body = _given_body(kind, args, command, place, cwd, environ)
     if kind == ("pr", "create"):
@@ -320,6 +338,7 @@ def _judge_label(kind, args, envs, place, cwd, payload, notes):
         return
     if kind == ("label", "create") and LABEL not in lowered:
         return
+    _one_judgment()
     _label_made(_repo(args, envs, place, cwd), payload, notes)
 
 
@@ -359,10 +378,12 @@ def _judge_api(args, cwd, payload, notes):
 
     m = ISSUE_LABELS.fullmatch(endpoint)
     if m and (names or unseen):
+        _one_judgment()
         repo, held = _github(m.group(3), repo_of(m), cwd)
         return _wording_approved(repo, held.encode("utf-8", "replace"), payload, notes)
     m = REPO_LABELS.fullmatch(endpoint)
     if m and (names or unseen):
+        _one_judgment()
         return _label_made(repo_of(m), payload, notes)
     if not names:
         return

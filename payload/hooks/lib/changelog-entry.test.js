@@ -690,6 +690,12 @@ c = cliIn(['announcement-hash', '--body'], SENTENCE);
 check(c.status === 0 && c.json && c.json.found === false && c.json.hash === '', 'a description with no Announcement block did not read as having none: ' + JSON.stringify(c));
 c = cliIn(['announcement-hash', '--something-else'], POST);
 check(c.status === 2 && c.json === null, 'a flag nobody defined did not exit 2 for announcement-hash: ' + JSON.stringify(c));
+// A command named as something every object inherits is still no command: the usage and exit 2,
+// never a crash, which a gate would read as a command that failed.
+['constructor', 'toString', '__proto__'].forEach(function (name) {
+  c = cliIn([name, '--body'], POST);
+  check(c.status === 2 && c.json === null && /Usage/.test(c.stderr || ''), 'a command named ' + name + ' with a flag did not print the usage and exit 2: ' + JSON.stringify(c).slice(0, 300));
+});
 
 console.log('  ' + passed + ' passed, ' + failed + ' failed');
 console.log('SUITE-RESULT passed=' + passed + ' failed=' + failed);

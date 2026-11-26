@@ -196,6 +196,14 @@ for cmd in "gh pr edit 7 --body-file body.md && gh pr edit 7 --add-label $LABEL"
   r="$(run "$cmd")"
   check "the label added beside another GitHub write in one call is refused, saying to give it a command of its own: $cmd" "$(refused "$r" && [[ "$r" == *"a command of its own"* ]] && echo ok || echo "$r")"
 done
+# Each command putting the label on is judged by reads of its own, so one call holds one of them:
+# the hook's time is then bounded whatever the call holds.
+for cmd in "$CREATE --body-file body.md && gh pr create --title U --label $LABEL --body-file body.md" \
+           "$CREATE --body-file body.md; gh label create $LABEL" \
+           "gh api repos/acme/widget/issues/7/labels -f 'labels[]=$LABEL' && gh api repos/acme/widget/issues/8/labels -f 'labels[]=$LABEL'"; do
+  r="$(run "$cmd")"
+  check "a call putting the label on in more than one command is refused, saying one per command: ${cmd:0:70}" "$(refused "$r" && [[ "$r" == *"in more than one command"* && "$r" == *"gh pr edit <number> --add-label $LABEL"* ]] && echo ok || echo "$r")"
+done
 r="$(run "gh pr view 7 --json labels && gh pr edit 7 --add-label $LABEL")"
 check "still possible: the label added after a command that only reads" "$(passed "$r" && echo ok || echo "$r")"
 # A repository that cannot be told is no place to look an approval up for.

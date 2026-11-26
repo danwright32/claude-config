@@ -78,7 +78,11 @@ echo "an announcement's wording is approved only by Dan's own answer, about the 
 T="$WORK/none.jsonl"; new_talk "$T"
 r="$(asked "$T" acme/widget "$(hash_text "$POST")")"
 check "R2 wording nobody asked Dan about is not approved" "$([[ "$r" == "no|"* ]] && echo ok || echo "$r")"
-check "R2 the refusal says how to ask him" "$([[ "$r" == *"has not approved this wording for acme/widget"* ]] && echo ok || echo "$r")"
+check "R2 the refusal names the repository and that he has not approved this wording" "$([[ "$r" == *"has not approved this wording for acme/widget"* ]] && echo ok || echo "$r")"
+# How to ask him is its own field of the answer, which each hook prints after the reason.
+how="$(printf '{"session_id": "s1", "transcript_path": "%s"}' "$T" | ANNOUNCE_APPROVALS_DIR="$STORE" python3 -B "$LIB" check --repo acme/widget --hash "$(hash_text "$POST")" \
+  | python3 -c 'import json, sys; print(json.load(sys.stdin)["how"], end="")')"
+check "R2 the refusal says how to ask him: the open in BBEdit, the picker, its options and its metadata" "$([[ "$how" == *"--front-window"* && "$how" == *"AskUserQuestion"* && "$how" == *"Approve the wording"* && "$how" == *"Not yet"* && "$how" == *'"source": "changelog-announce"'* ]] && echo ok || echo "$how")"
 check "nothing was written to the record for it" "$([ "$(recorded)" = 0 ] && echo ok || echo "$(recorded) lines")"
 
 # Still possible: the file written, opened in front of him, and his Approve.
@@ -293,6 +297,13 @@ check "the same pull request and wording are marked once" "$([ "$(grep -c '"kind
 # Issues that could not be read are kept as unread with why, never as an empty list.
 r="$(used --repo acme/widget --hash "$H" --pr 8 --unread 'gh gave no answer')"
 check "issues that could not be read are recorded as unread, with why" "$(grep -q '"closes": null' "$STORE_USED/record.jsonl" && grep -q '"unread": "gh gave no answer"' "$STORE_USED/record.jsonl" && echo ok || cat "$STORE_USED/record.jsonl")"
+# A merge tried again while GitHub still gives no issues adds no second unread line, and once the
+# issues can be read the line naming them is added, once.
+used --repo acme/widget --hash "$H" --pr 8 --unread 'gh gave no answer again' >/dev/null
+check "a pull request whose issues stay unread is marked unread once" "$([ "$(grep -c '"pr": 8' "$STORE_USED/record.jsonl")" = 1 ] && echo ok || grep '"pr": 8' "$STORE_USED/record.jsonl")"
+used --repo acme/widget --hash "$H" --pr 8 --closes '[{"issue": 14, "milestone": null}]' >/dev/null
+used --repo acme/widget --hash "$H" --pr 8 --unread 'gh gave no answer a third time' >/dev/null
+check "and once they can be read, the line naming them is added, and nothing after it" "$([ "$(grep -c '"pr": 8' "$STORE_USED/record.jsonl")" = 2 ] && grep '"pr": 8' "$STORE_USED/record.jsonl" | tail -n 1 | grep -q '"issue": 14' && echo ok || grep '"pr": 8' "$STORE_USED/record.jsonl")"
 # A used line grants nothing: wording marked used and never approved is still not approved.
 T="$WORK/usedonly.jsonl"; new_talk "$T"
 r="$(asked "$T" acme/widget "$H")"

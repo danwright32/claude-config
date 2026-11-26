@@ -710,7 +710,10 @@ if (require.main === module) {
   const plain = rest.filter(function (a) { return a.indexOf('--') !== 0; });
   const slug = plain[0];
   const named = typeof slug === 'string' && slug.trim();
-  const known = { 'required-labels': ['--needs-dan'], 'announcement-hash': ['--body'] }[cmd] || [];
+  // Asked of the table's own names only: a command named `constructor` would otherwise find what
+  // every object inherits, and the line below would throw where the usage is owed.
+  const flagTable = { 'required-labels': ['--needs-dan'], 'announcement-hash': ['--body'] };
+  const known = Object.prototype.hasOwnProperty.call(flagTable, cmd) ? flagTable[cmd] : [];
   const flagsKnown = flags.every(function (f) { return known.indexOf(f) !== -1; });
   const readNow = function () { return registryReader.readRegistry(plain[1] || registryReader.registryPath()); };
   // Standard input, whole, handed to `then` as text.

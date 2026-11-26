@@ -1872,7 +1872,9 @@ the wording, and sleep mode can answer one with Dan asleep.
   approved, read from its `--body`, from the file its `--body-file` names, or from GitHub for an
   edit that gives neither. A form the wording cannot be read from (`--fill`, a template, a body on
   standard input, a body file the same command writes, an empty body, more than one pull request,
-  another GitHub write in the same call) is refused with the form to use. Making the label
+  another GitHub write in the same call) is refused with the form to use. So is a call that puts
+  the label on in more than one command: each is judged by reads of its own, and one per call is
+  what keeps the hook inside the time it is registered with. Making the label
   (`gh label create`, `gh label clone`, the API form) is refused until he has approved an
   announcement for that repository at all, and renaming another label onto it is always refused.
   Taking the label off, reading it and naming it in text pass. This is the early refusal for the

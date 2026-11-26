@@ -581,15 +581,18 @@ def repo_approved(repo, payload):
 def mark_used(repo, digest, pr, closes=None, unread=None):
     """Record that the merge gate let pull request pr of repo through on digest: None, or why the
     line could not be written. closes is [{issue, milestone}] for the issues it closes, or None with
-    unread saying why they could not be read. Written once for one pull request and one wording."""
+    unread saying why they could not be read. One pull request and one wording get at most two
+    lines: one saying its issues could not be read, when that came first, and one naming them. A
+    merge tried again adds nothing it already said, and an unread line never follows a read one."""
     key = repo_key(repo)
     if key is None or not isinstance(digest, str) or not SHA.fullmatch(digest) or not isinstance(pr, int):
         return "the used line names no repository as owner/name, no hash or no pull request number"
     entries, why = read_record()
     if entries is None:
         return why
-    if any(e.get("kind") == "used" and e.get("repo") == key and e.get("hash") == digest and e.get("pr") == pr
-           and e.get("closes") is not None for e in entries):
+    mine = [e for e in entries
+            if e.get("kind") == "used" and e.get("repo") == key and e.get("hash") == digest and e.get("pr") == pr]
+    if any(e.get("closes") is not None for e in mine) or (closes is None and mine):
         return None
     return _append([{"kind": "used", "repo": key, "hash": digest, "pr": pr, "closes": closes,
                      "unread": unread or None, "at": _now()}])

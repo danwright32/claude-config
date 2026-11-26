@@ -2989,7 +2989,10 @@ the builder's were made by the sessions that built it, not by Dan, and are his t
 - **Each wait is the hook's own.** The label hook's read of GitHub runs in a process group of its
   own, killed whole at a bound the hook sets, and its bounds together are shorter than the time it
   is registered with, so a slow GitHub is refused in the hook's words and never by the harness
-  cutting it short. The bounds are chosen, not measured.
+  cutting it short. That sum holds because one call may put the label on in one command only: the
+  lessons review of this branch found that each further command brought reads of its own, so a
+  second is refused and told to use a command of its own (the builder's). The bounds are chosen,
+  not measured.
 
 `hooks/test-announce-approval.sh`, `hooks/test-announce-label-ask.sh` and the #3666 section of
 `hooks/test-changelog-tag.sh` hold it.
