@@ -1188,10 +1188,11 @@ if denied "$out" && says "$out" "is not in use here"; then pass
 else fail "#3703 an announce pull request the dependency bot opened merged where the label is not in use: $out"; fi
 rm -rf "$dir"
 # Still possible: wording Dan approved merges whoever opened the pull request, and its use is recorded.
+# Since #3667 the allow for an announce merge says the one line about the draft it owes.
 dir=$(make_repo acme/widget "$(by_bot "$ANNOUNCE_FULL" "app/dependabot")" "$REGISTRY_ANNOUNCES")
 approved_on_record "$dir"
 out=$(run_hook "$dir" "$MERGE 7 --squash")
-if [ -z "$out" ] && grep -q '"kind": "used".*"pr": 7' "$dir/approvals/record.jsonl"; then pass
+if owes_draft "$out" 7 && grep -q '"kind": "used".*"pr": 7' "$dir/approvals/record.jsonl"; then pass
 else fail "#3703 R2 still possible: the dependency bot's pull request carrying wording Dan approved was refused, or its use was not recorded: $out $(cat "$dir/approvals/record.jsonl" 2>/dev/null)"; fi
 rm -rf "$dir"
 # Still possible: the bot's own pull requests, which carry no label and no block, merge in silence
@@ -1321,7 +1322,7 @@ else fail "#3703 R2: an announce pull request merged after the library's check c
 # The same session, when it is the one making the merge, is his approval: so the transcript was one
 # the gate takes, and what refused it above was who asked.
 out=$(TALK="$dir/forged-talk.jsonl" run_hook "$dir" "$MERGE 7 --squash")
-if [ -z "$out" ]; then pass; else fail "#3703 still possible: the gate refused the picker in the transcript Claude Code handed it: $out"; fi
+if owes_draft "$out" 7; then pass; else fail "#3703 still possible: the gate refused the picker in the transcript Claude Code handed it, or its allow did not say the one line about the draft it owes: $out"; fi
 rm -rf "$dir"
 
 # A USE THAT CANNOT BE RECORDED REFUSES THE MERGE (Dan, 2026-11-25, by picker: "Refuse the merge").
