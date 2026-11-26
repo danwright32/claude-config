@@ -58,5 +58,4 @@ WHEN-A-SUITE-CHANGES payload/hooks/test-scan-subshell-globals.sh
 WHEN-A-SUITE-CHANGES payload/hooks/test-skill-helper-exits.sh
 WHEN-A-SUITE-CHANGES payload/hooks/test-skill-integrity.sh
 WHEN-A-SUITE-CHANGES payload/hooks/test-skill-python-tests.sh
-WHEN-A-SUITE-CHANGES payload/hooks/test-slack-drafts-only-gate-runners.sh
 WHEN-A-SUITE-CHANGES payload/skills/design-rounds/test-headless-chrome.sh
