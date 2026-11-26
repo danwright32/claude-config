@@ -1554,7 +1554,10 @@ setting was carried over with its value untouched, and every setting that change
 this config writes. claude-sync is the only writer of that file in the repository, and the settings
 it writes (the hooks block, `env` for the mods, `statusLine`, and every key `SHARED_SETTINGS_ALLOWED`
 admits) are listed in `LIVE_SETTINGS_CONFIG_KEYS` and stay counted whoever changed them;
-`test-live-settings-edit.sh` fails when claude-sync writes a setting the list does not name. The name
+`test-live-settings-edit.sh` fails when claude-sync writes a setting the list does not name. That
+list holds `permissions` since #3563, because the sync adds three deny rules under it, so a change
+under `permissions` during a run (a permission granted for good, or a rule added by hand) is counted
+too, as a person's /effort pick on a shared model already was. The name
 of a setting alone would excuse a suite that writes that name, so it is never the only test. What the
 rule lets through, and the verdict says so: a suite that edits the real file in place, keeping every
 other setting, and changes only a setting this config never writes. No suite here writes it that way;
