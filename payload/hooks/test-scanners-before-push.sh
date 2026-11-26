@@ -2894,6 +2894,114 @@ out="$(wn_fire "$RG" "git push -u origin stale")"; rc=$?
   || check "#3160 a push carrying a file in the retired guard's folder runs no guard suite and is judged by the scanners alone" "exit=$rc out=$out"
 git -C "$RG" checkout -q main
 
+# --- PUSHES TAKE TURNS AT THE SCAN (claude-config#3536). Every push started every scanner at once,
+#     and nothing spaced two pushes apart, so several agents pushing on a loaded Mac each ran the
+#     whole selection beside the others' and every one of them was starved: on the night of
+#     2026-11-23 seven pushes from five agents were stopped at the hard stop of 160 seconds, and two
+#     more on 2026-11-25. Now one push at a time on this Mac scans, through the queue the full suite
+#     runs already take turns in (lib/merge-turn.sh), and a push waits its turn inside the time the
+#     gate has. Proved by condition, never a stopwatch (L290): the first push's scanner holds until
+#     this suite releases it, and the second push's budget is made to end, by the file this suite
+#     writes, while the first still holds the turn. Today the second push starts its own scanner at
+#     once beside the first's; it must instead start nothing and refuse, saying it waited.
+TURNSTATE="$TMPROOT/turn-state"
+RTA="$(mkrepo turn-first)"; HOLDTA="$TMPROOT/hold-3536a"; : > "$HOLDTA"
+add_held_scanner "$RTA" lambda "$HOLDTA" 0; commit_all "$RTA"
+RTB="$(mkrepo turn-second)"; MU_COUNT="$TMPROOT/mu-3536.count"
+add_counting_scanner "$RTB" mu "$MU_COUNT"; commit_all "$RTB"
+TURN_B_ENDS="$TMPROOT/turn-b-ends"; : > "$TURN_B_ENDS"
+turnfire_b(){ SCANNERS_STATE_DIR="$TURNSTATE" SCANNERS_BUDGET_SECONDS=20 SCANNERS_BUDGET_ENDS_WHEN="$TURN_B_ENDS" SCANNERS_BUDGET_ENDS_NOT_BEFORE=2 fire "$@"; }
+# A push that must go through gets the gate's own budget, as every passing case here does, never an
+# early end: that would fail a slow machine as out of time (L290).
+turnfire_ok(){ SCANNERS_STATE_DIR="$TURNSTATE" fire "$@"; }
+( SCANNERS_STATE_DIR="$TURNSTATE" SCANNERS_BUDGET_SECONDS=50 fire "$RTA" "git push" > "$TMPROOT/turn-a.out"; echo $? > "$TMPROOT/turn-a.rc" ) &
+_turn_a=$!
+if hang_wait '[ -s "$TMPROOT/lambda.pid" ]'; then
+  note_held lambda
+  o3536b="$(turnfire_b "$RTB" "git push")"; c3536b=$?
+  # A scanner that never ran wrote no count file at all, which counted reads as nothing.
+  _mu="$(counted "$MU_COUNT")"
+  [ "$c3536b" -eq 2 ] && [ "${_mu:-0}" = "0" ] \
+    && check "#3536 a push while another push's scan holds the turn starts no scanner of its own and is refused" ok \
+    || check "#3536 a push while another push's scan holds the turn starts no scanner of its own and is refused" "exit=$c3536b mu runs=$(counted "$MU_COUNT") out=$o3536b"
+  grep -q 'waited .* for its turn behind another push' <<< "$o3536b" && grep -q 'turn-first' <<< "$o3536b" \
+    && grep -q 'Send the same push again' <<< "$o3536b" && ! grep -q 'did not finish in' <<< "$o3536b" \
+    && check "#3536 and says it waited its turn behind the named checkout's push, and that the push can be sent again" ok \
+    || check "#3536 and says it waited its turn behind the named checkout's push, and that the push can be sent again" "out=$o3536b"
+  # A listing runs no scanner, so it takes no turn: with the turn held and the same early end, a
+  # listing that waited would be refused at it.
+  o3536l="$(SCANNERS_LIST=1 turnfire_b "$RTB" "git push")"; c3536l=$?
+  [ "$c3536l" -eq 0 ] && grep -q '^SUITE .*test-mu.sh' <<< "$o3536l" \
+    && check "#3536 a listing of the scanners takes no turn and answers while another push scans" ok \
+    || check "#3536 a listing of the scanners takes no turn and answers while another push scans" "exit=$c3536l out=$o3536l"
+else
+  check "#3536 the first push's scanner started" "it never recorded its process id; first push: $(cat "$TMPROOT/turn-a.out" 2>/dev/null)"
+fi
+rm -f "$HOLDTA"
+wait "$_turn_a"
+[ "$(cat "$TMPROOT/turn-a.rc" 2>/dev/null)" = "0" ] \
+  && check "#3536 the push holding the turn goes through once its scan finishes" ok \
+  || check "#3536 the push holding the turn goes through once its scan finishes" "exit=$(cat "$TMPROOT/turn-a.rc" 2>/dev/null) out=$(cat "$TMPROOT/turn-a.out" 2>/dev/null)"
+# Once the turn is free the same push takes it and is scanned.
+rm -f "$TURN_B_ENDS"
+o3536b2="$(turnfire_ok "$RTB" "git push")"; c3536b2=$?
+[ "$c3536b2" -eq 0 ] && [ "$(counted "$MU_COUNT")" = "1" ] \
+  && check "#3536 once the turn is free the waiting push takes it and is scanned" ok \
+  || check "#3536 once the turn is free the waiting push takes it and is scanned" "exit=$c3536b2 mu runs=$(counted "$MU_COUNT") out=$o3536b2"
+
+# A HOLDER THAT DIED NEVER BLOCKS THE NEXT (L409, L617). Proved by killing a real holder rather
+# than by a ticket written by hand: a push holding the turn has its whole run killed, as the hard stop
+# does, and leaves its ticket behind; the next push passes over it and is scanned.
+RTC="$(mkrepo turn-killed)"; HOLDTC="$TMPROOT/hold-3536c"; : > "$HOLDTC"
+add_held_scanner "$RTC" nu "$HOLDTC" 0; commit_all "$RTC"
+( SCANNERS_STATE_DIR="$TURNSTATE" SCANNERS_BUDGET_SECONDS=50 fire "$RTC" "git push" > /dev/null; echo $? > "$TMPROOT/turn-c.rc" ) &
+_turn_c=$!
+_tc_pid=""
+if hang_wait '[ -s "$TMPROOT/nu.pid" ]'; then
+  note_held nu
+  for _tf in "$TURNSTATE"/turn/*/[0-9]*; do
+    case "$_tf" in *.head) continue ;; esac
+    _tc_pid="$(awk '$1 == "pid" { print $2; exit }' "$_tf" 2>/dev/null)"
+  done
+fi
+if [ -n "$_tc_pid" ] && kill -0 "$_tc_pid" 2>/dev/null; then
+  kill -KILL -- "-$_tc_pid" 2>/dev/null || kill -KILL "$_tc_pid" 2>/dev/null
+  wait "$_turn_c"
+  printf 'changed\n' > "$RTB/payload/hooks/changed-3536.sh"; commit_all "$RTB"
+  o3536d="$(turnfire_ok "$RTB" "git push")"; c3536d=$?
+  [ "$c3536d" -eq 0 ] && [ "$(counted "$MU_COUNT")" = "2" ] \
+    && check "#3536 a push whose holder was killed mid scan is not blocked by the ticket it left" ok \
+    || check "#3536 a push whose holder was killed mid scan is not blocked by the ticket it left" "exit=$c3536d mu runs=$(counted "$MU_COUNT") out=$o3536d"
+else
+  check "#3536 a push holding the turn left a ticket naming its run" "no live pid found in $(ls -R "$TURNSTATE/turn" 2>/dev/null | tr '\n' ' ')"
+  wait "$_turn_c"
+fi
+rm -f "$HOLDTC"
+
+# A LIVE HOLDER STUCK PAST THE HARD STOP is passed over (L523): no gate run lives past the hard
+# stop's cap from its start (a setting the gate sets, not a measurement), so a ticket that has held
+# the turn longer is not a push being scanned. Staged with a live process this suite owns and a mark
+# saying it took the turn long before.
+sleep 300 </dev/null >/dev/null 2>&1 &
+_stuck=$!
+_stuck_dir=""
+for _sd in "$TURNSTATE"/turn/*/; do [ -d "$_sd" ] && { _stuck_dir="$_sd"; break; }; done
+if [ -n "$_stuck_dir" ]; then
+  printf 'pr %s\npid %s\nstart %s\njoined %s\norder 2\n' "stuck-checkout" "$_stuck" "$(ps -o lstart= -p "$_stuck" | sed -e 's/^ *//' -e 's/ *$//')" "$(( $(date +%s) - 1000 ))" > "${_stuck_dir}999"
+  printf '%s %s\n' "$(( $(date +%s) - 1000 ))" "$_stuck" > "${_stuck_dir}999.head"
+  printf 'changed again\n' > "$RTB/payload/hooks/changed-3536.sh"; commit_all "$RTB"
+  o3536s="$(turnfire_ok "$RTB" "git push")"; c3536s=$?
+  [ "$c3536s" -eq 0 ] && [ "$(counted "$MU_COUNT")" = "3" ] && [ ! -e "${_stuck_dir}999" ] \
+    && check "#3536 a live holder that has held the turn past the hard stop is passed over, and its ticket removed" ok \
+    || check "#3536 a live holder that has held the turn past the hard stop is passed over, and its ticket removed" "exit=$c3536s mu runs=$(counted "$MU_COUNT") ticket left=$([ -e "${_stuck_dir}999" ] && echo yes || echo no) out=$o3536s"
+  grep -q 'stuck-checkout' <<< "$o3536s" \
+    && check "#3536 and the push says which holder it passed over" ok \
+    || check "#3536 and the push says which holder it passed over" "out=$o3536s"
+else
+  check "#3536 the gate keeps its turn in a folder under its state folder" "found none under $TURNSTATE/turn"
+fi
+kill -9 "$_stuck" 2>/dev/null; wait "$_stuck" 2>/dev/null
+
 # --- no fixture reached the REAL pass cache (claude-config#789). The gate keys its record of passed
 #     scans by the repository's origin, or its path when it has none, as the fixtures do, so a
 #     fixture's record in the real folder would be a test result a later real push trusts (L2).

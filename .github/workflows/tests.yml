@@ -64,8 +64,12 @@ jobs:
   #          merges what each part measured into the one store the next run deals from.
   #
   # The number of parts is the one setting below (HOOK_TESTS_DEAL) and the matrix is read from what
-  # the deal job made of it, never written twice. This repository is public, so its runners cost
-  # nothing; the price of a part is a runner slot held for its length (L307).
+  # the deal job made of it, never written twice. This repository is meant to be public
+  # (.github/expected-visibility), and while it is its runners cost nothing; the price of a part is
+  # a runner slot held for its length (L307). Private, it gets 2 core runners in place of 4 and is
+  # billed for their minutes, which these limits are not sized for: on 2026-11-24 it was private for
+  # some hours, suites ran past their limits and the minutes ran out (#3582).
+  # hooks/repo-visibility-notice.sh says so at session start.
   deal:
     runs-on: ubuntu-26.04
     # Every job here exceeds the suite's own thirty minute ceiling, which test-claude-sync.sh holds

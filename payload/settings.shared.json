@@ -20,5 +20,12 @@
     "**/claude-config/payload/CLAUDE.md",
     "**/claude-config/.claude/worktrees/*/payload/CLAUDE.md",
     "**/claude-config-sync/payload/CLAUDE.md"
-  ]
+  ],
+  "permissions": {
+    "deny": [
+      "Read(~/.ssh/**)",
+      "Read(~/.sfdx/**)",
+      "Read(~/Library/Preferences/.wrangler/config/**)"
+    ]
+  }
 }

@@ -1554,7 +1554,10 @@ setting was carried over with its value untouched, and every setting that change
 this config writes. claude-sync is the only writer of that file in the repository, and the settings
 it writes (the hooks block, `env` for the mods, `statusLine`, and every key `SHARED_SETTINGS_ALLOWED`
 admits) are listed in `LIVE_SETTINGS_CONFIG_KEYS` and stay counted whoever changed them;
-`test-live-settings-edit.sh` fails when claude-sync writes a setting the list does not name. The name
+`test-live-settings-edit.sh` fails when claude-sync writes a setting the list does not name. That
+list holds `permissions` since #3563, because the sync adds three deny rules under it, so a change
+under `permissions` during a run (a permission granted for good, or a rule added by hand) is counted
+too, as a person's /effort pick on a shared model already was. The name
 of a setting alone would excuse a suite that writes that name, so it is never the only test. What the
 rule lets through, and the verdict says so: a suite that edits the real file in place, keeping every
 other setting, and changes only a setting this config never writes. No suite here writes it that way;
@@ -1932,7 +1935,9 @@ a gist is public from `gh api gists/<id>` (refused when no account can read it) 
 edit` on a public one as it does `gh gist create`, refusing an editor's text (no file named for the
 new text, and no `--add` or `--remove`, `--desc` alone counted as not ruling the editor out) and
 standard input. `gh repo edit --visibility public` on a repository not yet public that no work owner
-owns is refused outright, since it publishes every file, commit and issue unread. A body or notes
+owns is refused outright, since it publishes every file, commit and issue unread; since #3582 the
+refusal names `lib/posted-text-scan.py` with the repository in it, the command that reads what was
+posted there (see "Text posted while a repository was private" below). A body or notes
 file inside clustered short flags is read through `flag_values(..., clustered=True)`, asked for only
 by the work names gate, where another file can only refuse more; the issue field gate, which a value
 can satisfy, keeps the plain reading.
@@ -1970,6 +1975,77 @@ with more than one such redirection (a heredoc, `<`, `<<<`, `<&` or `<>` on any 
 redirection aimed at descriptor 0), and the work names gate refuses a notes, body or gist file among
 them in a public repository, saying why. Counting a read on another descriptor (`3<`) is the reading
 that refuses more.
+
+### Text posted while a repository was private (#3582)
+
+The publish gate's rule is that a private repository is passed without its lists being read. That
+leaves a hole in time, not in the rule: text posted while a repository is private is judged by
+nothing, and turning the repository public publishes it unjudged. On 2026-11-24 this repository
+was private for some hours, 83 texts were posted, and a scan written by hand that night found 8
+lines in two issues naming a work organisation or repository. Three things were missing, and each
+is now a tested part.
+
+**The scan is one shipped command, `lib/posted-text-scan.py`.** It gathers through `gh api` reads
+and judges with `work_repo_names` and `scan_text` from `lib/work-names.py`, loaded by path: one
+reader of the lists and one line scan, never a second copy of the rule (L370). Decisions:
+
+- **Edit history is read, not listed as out of reach.** The issue that asked for this took it that
+  an earlier revision could not be reached. Measured 2026-11-24: GraphQL's `userContentEdits` hands
+  over every revision of an issue, pull request, comment or review body, its `diff` field holding
+  that revision's whole text and the oldest being the text as first posted; a deleted revision
+  comes back with `deletedAt` set and no text, and is counted. The first real run found all 8 of
+  that day's lines there, in the first revisions of two issues whose bodies had been rewritten,
+  and one older line in a third. A claim that something cannot be read has to come from trying
+  (L460).
+- **Whether a list was cut short is read from `pageInfo.hasNextPage`, never `totalCount`.** A
+  timeline's `totalCount` counts every item whatever `itemTypes` asked for (measured 2026-11-24,
+  when the first real run called 14 whole title histories cut short). The suite's recorded answer
+  carries that shape, so comparing against `totalCount` again fails there.
+- **The control is planted from the lists at run time**, since this file may not hold a work name.
+  It proves the lists were read, are not empty, and that a name is reported at its line; a second
+  text with no name proves the scan is not reporting everything (L497). It cannot prove the lists
+  are complete, which is `work-names.py`'s own question.
+- **Over reading is the harmless side** (L648). Commit comments and releases have no filter by
+  time, a review has no edit time, and an item updated in the window may have been edited in it, so
+  every revision of every text updated in the window is read, every review and commit of every
+  pull request updated in it, and every release.
+- **It also finds text the gate never saw.** The gate reads the commands a session runs; the scan
+  reads what GitHub holds, whatever posted it. Run over the week before 2026-11-24 it found lines
+  in earlier revisions, and one earlier title, from days the repository was public and the gate
+  was on. So it is worth running over a window with no private spell in it.
+- **Commits are chosen by their own date**, because GitHub does not say when one was pushed. A
+  commit written before the window and pushed inside it is read only when a pull request updated
+  in the window holds it. The run says so and says to give an earlier `--since`.
+- **It is handed no file.** The scan written by hand handed a file of gathered text to a script
+  that can run programs, which the Slack drafts gate reads for an endpoint, and one gathered text
+  named one. Texts held in memory give the gate nothing gathered to read, and no gate was changed.
+  The suite runs both gates on the command, with the refused shape beside it as the control.
+- **Not built**: deleting a revision (no API, measured that day), and reading discussions, the
+  wiki, labels, milestones, projects, tags, gists and files, each said at the end of every run.
+
+**The refusal of `gh repo edit --visibility public` names that command.** Its words changed and
+what it refuses did not: `test-gh-write-aliases.sh` holds the seven forms' decisions in one line.
+
+**A session is told when the repository is not as visible as it is meant to be**, by
+`hooks/repo-visibility-notice.sh` at SessionStart. Alternatives weighed:
+
+- A line in `claude-sync status` (not built). It is read when somebody asks for it, and the
+  sessions that need this are the ones about to wait on a pull request's checks or post text.
+- A step in the workflow reading `github.event.repository.private` (not built here). It costs no
+  call and speaks exactly where the minutes are spent, but only in a run's log, after the cost.
+  Worth adding beside this, as its own change to the workflow.
+- **A SessionStart hook reading `.github/expected-visibility` (chosen).** The workflow's comment
+  said "This repository is public" as a fact; it is now an expectation with one home, a file the
+  hook and the comment both point at, so any repository can state one and a repository that
+  states none is never asked about. A checkout behind its origin, which may not hold the file
+  yet, is judged by origin's copy as last fetched, since a session started in a stale checkout
+  is the one that most needs telling. Silence means checked and as expected, so every way of not knowing
+  is said as not knowing (L98). One `gh repo view` per session start, bounded at 4 seconds inside
+  the hook's 10 second timeout, both settings, not measured.
+
+Still open, and Dan's to decide (#3582): whether the publish gate should judge text posted to this
+repository even while it is private, since it is meant to be public. The scan is the remedy after
+the fact; that rule would be the prevention.
 
 ## One watcher, and a leftover loop stops itself (#604)
 
@@ -2326,6 +2402,54 @@ for the clone it runs from is not given, since that is read from the same comman
 passes that do not depend on the watcher stand (a hold, an own worktree, a plain copy). The
 refusal and the warning say that the watcher could not be read and name the command that failed,
 never that a watcher is live, which nothing measured.
+
+**A destination is judged by where it really is, as well as by its text (#3537).** The gate read
+each destination's text and asked whether that text sat under a checkout's `payload/`. Four kinds
+of text reach a payload file with no part of them there: the volume folder with a disk number and
+a file number (`/.vol/<disk>/<file>`, which macOS resolves to the file itself), a symbolic link
+that lives elsewhere, a hard link, and the folder name in another letter case on a volume that
+does not tell case apart. Resolving the text the usual way (following links one at a time) leaves
+the numbered form and the letter case exactly as written, which was measured on 2026-11-25. So the
+kernel is asked instead: the destination is opened for its path alone (`O_EVTONLY`, which reads
+and writes nothing) and `fcntl` with `F_GETPATH` names the file it holds. One step asks for every
+destination of a call, Edit and Bash alike, after the reading of the command and before the
+judging. A destination not made yet is its nearest folder that exists plus the rest, and a link to
+a file not made yet is followed by hand. The text is still judged exactly as before and the real
+path is judged in addition, so the step can only add a refusal; a real path is passed on only when
+it holds a folder named `payload`, the one thing the judging can refuse, so writes elsewhere cost
+the judging nothing more.
+
+Two answers have no path to judge, and both are refused in their own words while a watcher could
+revert the write and no hold covers the session, never let through. A real path that could not be
+read: links that never end, a folder the account may not look into, a numbered path it may not
+open, or the step itself failing. And a file with more than one name: the kernel gives one name
+for a hard linked file, the one it was opened by, so where the others are cannot be read. Dan's
+five working trees held no such file on 2026-11-25, so refusing every one costs nothing measured,
+where searching known checkouts for the other name would have left a link into an unknown checkout
+let through. A device, a pipe or a socket is left to its text, and a name too long to be any file
+is a settled nothing rather than an unread path.
+
+The second name is also refused where it is made. `ln` was already a write; a hard link or
+symbolic link made by an inline script (`os.link`, `os.symlink`, a path object's `symlink_to` and
+`hardlink_to`, node's `linkSync` and `symlinkSync`, ruby's `File` and `FileUtils`, `link` and
+`symlink` called bare as perl calls them, a script that runs `ln`) and the `link` command were
+not, so the name could be made unseen and written through. The issue asked whether to refuse the
+link or only the later write through it. Both: the later write through a symbolic link is always
+seen by its real path, but a hard link's is seen only as a file with more than one name, so the
+making is the one place the gate can say which payload file is involved. In a script that writes,
+every quoted word that may be a path is asked for its real path too, never judged by its words, so
+a script naming a payload file only by a link or by number is seen. Such a word is refused on the
+same three answers as any destination (really under `payload/`, unreadable, more than one name),
+because the script may be writing there, which is how a quoted payload path was always read; a
+word that names nothing is an answer and refuses nothing.
+
+The step is one more `python3` process, run only for a call that writes somewhere other than a
+device while a watcher may be live. Measured 2026-11-25 on a Mac at a load of about 70 to 100:
+that process alone took a median of 30 to 47 ms over two rounds of 30 samples, and whole gate
+calls were 27 to 62 ms slower at the median over 20 interleaved samples per arm, against a noise
+of about 35 ms either way in the cases where both arms run the same code. The lever not pulled:
+asking from inside the two readers that already run would add no process, at the price of the
+same code in two inline scripts or a library the gate must refuse without.
 
 The recovery, if it happens again: find the sync commit (`git log --author=claude-config-sync`),
 take the file list it touched, and check those paths out of the commit BEFORE it, keeping
