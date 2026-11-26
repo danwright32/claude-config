@@ -191,6 +191,28 @@ out="$(python3 "$AUDIT" unrun "$SKILLS" "$ROOT" 2>&1)"; rc=$?
 if [ "$rc" -eq 0 ]; then ok; else bad "every test file under payload/skills is run by something (rc=$rc)" "$out"; fi
 grep '^UNRUN ' <<< "$out"
 
+# =============================================================================================
+# effort word
+# =============================================================================================
+# A line holding only the effort keyword, inside a skill body, is not typed by anybody, so it raises
+# no effort: it reads as a plain "think hard" line, which the vendor's guidance says to delete, and
+# it teaches the next author to copy a switch that is not one (claude-config#3553). A skill sets its
+# effort in its frontmatter. The word is assembled from two parts so this file never holds the bare
+# line itself.
+WORD="ultra""think"
+bare_word_lines() { grep -rniE --include='*.md' "^[[:space:]]*${WORD}[[:space:]]*$" "$1" 2>/dev/null; }
+E="$TMP/effort/skills"
+mkdir -p "$E/alpha" "$E/beta"
+printf -- '---\nname: alpha\n---\n\n# Alpha\n\n%s\n\nBody.\n' "$WORD" > "$E/alpha/SKILL.md"
+printf -- '---\nname: beta\neffort: high\n---\n\nA sentence that mentions %s in passing is not a bare line.\n' "$WORD" > "$E/beta/SKILL.md"
+out="$(bare_word_lines "$E")"
+has "$out" "alpha/SKILL.md" && ok || bad "a skill with a line holding only the effort word is found" "$out"
+has "$out" "beta/SKILL.md" && bad "a sentence that merely mentions the word is not flagged" "$out" || ok
+
+# The real skills.
+out="$(bare_word_lines "$SKILLS")"
+if [ -z "$out" ]; then ok; else bad "no skill under payload/skills holds a line that is only the effort word" "$out"; fi
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
