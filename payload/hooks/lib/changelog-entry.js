@@ -199,6 +199,28 @@ function normalizeAnnouncement(text) {
     .join('\n');
 }
 
+// The longest run of blank lines that has wording AFTER it, as {count, at}: how many lines, and the
+// number of the run's first line counting from 1; {0, 0} where no blank line stands before wording
+// (claude-config#3703). normalizeAnnouncement drops every blank line, so a file holding a post, three
+// hundred blank lines and then more text hashes the same as those lines written together, and the
+// hash cannot say the padding is there. The reader of the file Dan was shown asks here and refuses
+// a long run (lib/announce-approval.py), because the window it was opened in showed him the post and
+// then white space. Lines and blankness are read exactly as normalizeAnnouncement reads them, so
+// what counts as blank here is what the hash drops. Blank lines after the last line of wording have
+// nothing below them to hide and are not counted.
+function blankRunBeforeWording(text) {
+  const longest = { count: 0, at: 0 };
+  if (typeof text !== 'string') return longest;
+  const lines = text.split(/\r\n?|\n/);
+  let run = 0;
+  for (let i = 0; i < lines.length; i += 1) {
+    if (isBlank(lines[i])) { run += 1; continue; }
+    if (run > longest.count) { longest.count = run; longest.at = i - run + 1; }
+    run = 0;
+  }
+  return longest;
+}
+
 // The ONE hash of an announcement (claude-config#3666): the sha256 of its normalised form, in hex, or
 // the empty string for wording that says nothing, so an empty file or an empty block is never a hash
 // anything could be approved under. The wording Dan approves is a file and the wording that merges
@@ -666,6 +688,7 @@ module.exports = {
   extractBlock: extractBlock,
   extractAnnouncement: extractAnnouncement,
   normalizeAnnouncement: normalizeAnnouncement,
+  blankRunBeforeWording: blankRunBeforeWording,
   announcementHash: announcementHash,
   changelogLabels: changelogLabels,
   carriesAnnounce: carriesAnnounce,
@@ -696,8 +719,9 @@ module.exports = {
 //       and prints announcementOwed's answer: {state: owed | none | unknown, channel, text,
 //       normalized, why}.
 //   announcement-hash [--body]
-//       reads wording on standard input and prints {found, hash, lines}: announcementHash's answer and
-//       how many lines the normalised wording has. Without the flag the input IS the wording (the
+//       reads wording on standard input and prints {found, hash, lines, blankRun, blankRunAt}:
+//       announcementHash's answer, how many lines the normalised wording has, and
+//       blankRunBeforeWording's answer about the wording as given. Without the flag the input IS the wording (the
 //       file Dan was shown). With --body it is a pull request description, hashed by the block under
 //       its Announcement heading, and `found` is false, with no hash, when it has no such heading.
 // Every answer either can give exits 0, "unknown" included, so the reader tells a gate that cannot
@@ -735,7 +759,8 @@ if (require.main === module) {
     withInput(function (raw) {
       const text = flags.indexOf('--body') !== -1 ? extractAnnouncement(raw) : raw;
       const normal = normalizeAnnouncement(text);
-      process.stdout.write(JSON.stringify({ found: text !== null, hash: announcementHash(text), lines: normal ? normal.split('\n').length : 0 }) + '\n');
+      const run = blankRunBeforeWording(text);
+      process.stdout.write(JSON.stringify({ found: text !== null, hash: announcementHash(text), lines: normal ? normal.split('\n').length : 0, blankRun: run.count, blankRunAt: run.at }) + '\n');
     });
   } else {
     // One line, since a reader of a failed run quotes the last line it printed.
