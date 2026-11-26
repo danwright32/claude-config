@@ -405,17 +405,16 @@ TS
 fi
 
 # ---- 8. the real payload ----
+# HELD-BEGIN (removed by the change that adds the two rows to tools/mod-approvals-allowed.tsv)
 # The two statements known on 2026-11-25 (#3681). Each is Dan's to allow by name, one by one, so
 # until its row is on the list the check finds it, this suite says so in one SUITE-PART-UNMEASURED
 # line, and the checks below run against a copy of the list with the missing rows added.
-# HELD-BEGIN (removed by the change that adds the two rows to tools/mod-approvals-allowed.tsv)
 HELD_ROWS="$TMP/held-rows.tsv"
 row scope-modes hooks/register.ts answers-allow "return { ...beneath, decision: { behavior: 'allow' } }" '#3681' 'approves the permission prompt for an enrolled overnight worker while Dan is asleep' > "$HELD_ROWS"
 row job-watcher hooks/register.ts own-tool-call "const r = await \$.tool.call({ tool: 'TaskStop', task_id: id } as never)" '#3681' 'stops a background task by the id Claude Code gave it' >> "$HELD_ROWS"
 # HELD-END
 REAL="$ROOT/payload/mods"
 run "$REAL" "$LIST"
-real_out="$out"; real_code="$code"
 mods_there="$(find "$REAL" -mindepth 3 -maxdepth 3 -path '*/.claude-plugin/plugin.json' | wc -l | tr -d ' ')"
 has "$mods_there mods checked in $REAL" && check "every mod under payload/mods is read ($mods_there)" ok \
   || check "every mod under payload/mods is read ($mods_there)" "$out"
@@ -423,6 +422,7 @@ files_read="$(printf '%s\n' "$out" | sed -n 's/.* mods checked in .*, \([0-9][0-
 [ "${files_read:-0}" -ge "$mods_there" ] && check "and at least one file of each (${files_read:-0} read)" ok \
   || check "and at least one file of each (${files_read:-0} read)" "$out"
 # HELD-BEGIN
+real_out="$out"; real_code="$code"
 LIST_USED="$TMP/list-with-held.tsv"
 cp "$LIST" "$LIST_USED" 2>/dev/null || : > "$LIST_USED"
 held=0
