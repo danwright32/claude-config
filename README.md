@@ -8209,8 +8209,9 @@ files: its own prompt carries the lessons core and the builder's share of the gl
   as read once the agent's own transcript holds a Read tool call on that file whose result came
   back without an error, a read of part of it included. A read through the shell does not count.
   The refusal names the file. Where the gate cannot tell (no transcript, no file path on the
-  call, a reader that fails) it refuses, naming the file. It does not see a file written by a
-  shell command.
+  call, a reader that fails) it refuses, naming the file, and it refuses a payload it cannot
+  parse whose text names an agent. A subagent whose type neither source gives is let through
+  with a notice. It does not see a file written by a shell command.
 - **The two UI sections are left out and named instead.** "Progress & Feedback (UI)" and "Building
   UI" are rules only screen work needs, about 5,900 characters every builder read again on each
   request (Dan, 2026-11-25: "Cut the UI sections first"). The head tells a builder whose item

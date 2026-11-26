@@ -170,13 +170,27 @@ held "a builder whose transcript cannot be found is refused, naming the file" \
   "$(payload tool_name=Edit agent_id=a9 agent_type=builder "agent_transcript_path=$T/no-such.jsonl" "in.file_path=$P/src/x.sh" "cwd=$P")" "$P/CLAUDE.md" "could not tell"
 held "a builder's edit naming no file is refused" \
   "$(payload tool_name=Edit agent_id=a1 agent_type=builder "agent_transcript_path=$T/read.jsonl" "cwd=$P")" "could not tell"
-mkdir -p "$WORK/nolib/lib"; cp "$HOOK" "$WORK/nolib/"; cp "$DIR/lib/hook-notice.sh" "$WORK/nolib/lib/" 2>/dev/null
+# The gate in a folder holding every library it sources and NOT its transcript reader, which is
+# loaded by path and so is installed only when named (lib/install-hook-libs.py).
+mkdir -p "$WORK/nolib/lib"; cp "$HOOK" "$WORK/nolib/"
+python3 -I -B "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$WORK/nolib/lib" hook-notice.sh push-scope.sh > "$WORK/install.txt" 2>&1 \
+  && [ ! -e "$WORK/nolib/lib/agent-overrides.py" ] && ok || bad "(setup) the gate's sourced libraries were installed without its transcript reader: $(cat "$WORK/install.txt")"
 SAID="$(builder "$T/read.jsonl" "in.file_path=$P/src/x.sh" | bash "$WORK/nolib/builder-project-rules-gate.sh" 2> "$WORK/err.txt")"; RC=$?
 if [ "$RC" -eq 2 ] && grep -q "could not tell" "$WORK/err.txt" && grep -qF "$P/CLAUDE.md" "$WORK/err.txt"; then ok
 else bad "with its transcript reader missing a builder is refused, never passed (exit $RC: $(cat "$WORK/err.txt"))"; fi
-run 'not json at all "agent_id" "agent_type"'
-if [ "$RC" -eq 0 ] && [[ "$SAID" == *systemMessage* ]] && [[ "$SAID" == *"DID NOT RUN"* ]]; then ok
-else bad "a payload it cannot read is let through SAYING SO, never in silence (exit $RC, said: $SAID $ERR)"; fi
+# A payload it cannot parse, whose text names an agent: it cannot know that no builder is calling,
+# so it refuses, naming the payload as the reason. Cut short, inside a list, and not JSON at all.
+whole="$(builder "$T/none.jsonl" "in.file_path=$P/src/x.sh")"
+held "a builder's payload cut short is refused, naming the payload" "${whole%?}" "payload"
+held "a payload that is a list is refused, naming the payload" "[$whole]" "payload"
+held "text that is not JSON but names an agent is refused, naming the payload" 'not json at all "agent_id" "agent_type"' "payload"
+# The main session's payload names no agent, so one cut short still passes at the first line.
+main_call="$(payload tool_name=Edit "in.file_path=$P/src/x.sh" "transcript_path=$T/none.jsonl" "cwd=$P")"
+passes_silently "a payload cut short that names no agent passes, as the main session's does" "${main_call%?}"
+passes_silently "an empty payload passes" ""
+# The gate leaves no bytecode cache beside the reader it loads.
+if [ ! -e "$DIR/lib/__pycache__/agent-overrides.cpython-$(python3 -c 'import sys; print("%d%d" % sys.version_info[:2])').pyc" ]; then ok
+else bad "the gate left a bytecode cache of its transcript reader in lib/"; fi
 
 # ---------------------------------------------------------------- 5. registered, failing closed
 reg="$(python3 -I - "$DIR/../settings.hooks.json" <<'PY'

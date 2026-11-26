@@ -1470,10 +1470,12 @@ then edits in a worktree is sent to the worktree's own copy: the main checkout c
 the branch the worktree was cut from. What counts as a read is the agent's own transcript holding
 a Read tool call on that file with a result that is not an error, through the one reader of an
 agent's calls (`lib/agent-overrides.py`), which the hand back check also asks. Where it cannot
-tell whether a builder read the file it refuses; where it cannot tell that a builder is calling
-at all (a payload it cannot read, a subagent with no type in the payload or beside its
-transcript) it lets the call through and says so, because holding every agent on no evidence
-would stop the session's other work.
+tell whether a builder read the file it refuses. A payload it cannot parse is refused too when
+its text names an agent, because it cannot know that no builder is calling and the stricter
+answer needs no exemption from failing closed; a payload naming no agent is the main session's
+and passes at the first line. The one case let through with a notice is a subagent whose payload
+parses and whose type neither the payload nor the record beside its transcript gives, because
+holding every such agent on no evidence would stop the session's other work.
 
 Every doubt in the table is settled by carrying (a section with no row, a row that matches
 nothing), because the failure this change can cause is a rule silently missing from every builder.

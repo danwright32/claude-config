@@ -7368,8 +7368,6 @@ rtk_exclusions_sentence(){
   esac
 }
 
-# The apply's half: write the payload's list into rtk's config when it differs. Never fails the
-# apply: every refusal is said and the rest of the config still lands.
 # ---------- the builder agent type, written on each Mac from its own rules (claude-config#3389) ----------
 # The builder type starts without the rule files, so its prompt carries a copy of them, rendered by
 # skills/orchestrate/render-builder-type.py. Dan chose on 2026-11-25 that each Mac writes its own
@@ -7421,6 +7419,8 @@ write_builder_type(){
   return 0
 }
 
+# The apply's half: write the payload's list into rtk's config when it differs. Never fails the
+# apply: every refusal is said and the rest of the config still lands.
 write_rtk_exclusions(){
   rtk_exclusions_state
   case "$RTKX_STATE" in

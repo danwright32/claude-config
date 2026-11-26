@@ -43,9 +43,12 @@
 # has no agent_id, and its own transcript is transcript_path.
 #
 # IT REFUSES WHEN IT CANNOT TELL, for a builder: no transcript it can read, no file path on the
-# call, a reader that fails. Never a silent pass (L98). The refusal names the file to read. What it
-# cannot read at all is the payload itself, and then it cannot know a builder is calling: that is
-# let through saying so, in a systemMessage (lib/hook-notice.sh), as the other gates do.
+# call, a reader that fails. Never a silent pass (L98). The refusal names the file to read. A
+# payload it cannot parse at all is refused too, when its text names an agent (agent_id or
+# agent_type): it cannot know that no builder is calling, and the stricter answer needs no
+# exemption from failing closed. A payload naming no agent is the main session's and passes at
+# the first line, parsed or not. The one thing let through with a notice (lib/hook-notice.sh) is
+# a subagent whose payload parses and whose type neither source gives.
 #
 # COST. The main session never reaches python3: a payload naming neither agent_id nor agent_type
 # leaves at the first line. Another agent type costs one parse. Only a builder's edit reads a
@@ -53,10 +56,10 @@
 
 set -uo pipefail
 payload="$(cat 2>/dev/null || true)"
-case "$payload" in *'"agent_id"'*|*'"agent_type"'*) ;; *) exit 0 ;; esac
 # Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
 case "${BASH_SOURCE[0]}" in */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) HOOK_DIR=. ;; esac
 HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
+case "$payload" in *'"agent_id"'*|*'"agent_type"'*) ;; *) exit 0 ;; esac
 # shellcheck source=lib/hook-notice.sh
 . "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
   printf '%s\n' "$1" >&2
@@ -65,6 +68,8 @@ HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
 
 verdict="$(printf '%s' "$payload" | BUILDER_RULES_GATE_LIB="$HOOK_DIR/lib/agent-overrides.py" python3 -c '
 import importlib.util, json, os, sys
+# Before the reader is loaded from lib/, so loading it leaves no bytecode cache there (#2600).
+sys.dont_write_bytecode = True
 sys.stdout.reconfigure(errors="replace")
 BUILDER_TYPE = "builder"  # the agent type skills/orchestrate/render-builder-type.py renders
 EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
@@ -184,9 +189,11 @@ case "$what" in
     hook_allow_notice "BUILDER PROJECT RULES CHECK DID NOT RUN: builder-project-rules-gate.sh could not tell which agent type agent $a is (the hook payload carries no agent_type, and the record beside its transcript gave none), so this edit was let through without checking that a builder had read the project's CLAUDE.md."
     ;;
   unreadable)
-    hook_allow_notice "BUILDER PROJECT RULES CHECK DID NOT RUN: builder-project-rules-gate.sh could not read the hook payload ($a), so this edit was let through without checking that a builder had read the project's CLAUDE.md."
+    echo "HELD (builder-project-rules-gate.sh): this check could not read the hook payload of this call ($a), and the payload's text names an agent, so whether a builder is editing before reading the project's own CLAUDE.md could not be told. It holds an edit it cannot check. Send the call again exactly as it was; if it is held again with these same words, stop editing and say so in your hand back, quoting this message (claude-config#3389)." >&2
+    exit 2
     ;;
   *)
-    hook_allow_notice "BUILDER PROJECT RULES CHECK DID NOT RUN: builder-project-rules-gate.sh failed (${verdict//$'\n'/ }), so this edit was let through without checking that a builder had read the project's CLAUDE.md."
+    echo "HELD (builder-project-rules-gate.sh): this check failed before it could read the hook payload of this call (${verdict//$'\n'/ }), and the payload's text names an agent, so whether a builder is editing before reading the project's own CLAUDE.md could not be told. It holds an edit it cannot check. If python3 is missing on this Mac, that is the cause. Stop editing and say so in your hand back, quoting this message (claude-config#3389)." >&2
+    exit 2
     ;;
 esac

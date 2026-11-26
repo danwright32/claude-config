@@ -63,7 +63,7 @@ eval "$(grep -E '^WRITTEN_HERE=\(' "$SCRIPT")"
 check "the script's WRITTEN_HERE could be read" [ "${#WRITTEN_HERE[@]}" -gt 0 ]
 check "it holds exactly one path (${WRITTEN_HERE[*]:-none})" [ "${#WRITTEN_HERE[@]}" -eq 1 ]
 check "and that path is agents/builder.md" [ "${WRITTEN_HERE[0]:-}" = "agents/builder.md" ]
-check "no rendered copy is tracked in this repository" [ -z "$(git -C "$ROOT" ls-files --cached -- payload/agents/builder.md)" ]
+check "no rendered copy is tracked in this repository, or waiting untracked to be" [ -z "$(git -C "$ROOT" ls-files --cached --others --exclude-standard -- payload/agents/builder.md)" ]
 check "nor sitting in this checkout's payload" absent "$ROOT/payload/agents/builder.md"
 
 # ---------------------------------------------------------------- the fixture
