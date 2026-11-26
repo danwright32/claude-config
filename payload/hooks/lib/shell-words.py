@@ -3171,6 +3171,11 @@ def main(argv):
         flat = flattened_payload(data)
         if flat is None:
             return 4
+        # This is the one mode that decodes JSON, and an escape in a payload can make a character
+        # no encoding writes. Its bytes are made with "replace" just below, and stdout is told the
+        # same, so nothing a later edit prints here by its text can raise on one
+        # (test-python-bad-bytes.sh). No other mode's stdout is touched: this runs only here.
+        sys.stdout.reconfigure(errors="replace")
         sys.stdout.flush()
         sys.stdout.buffer.write(flat.encode("utf-8", "replace"))
     elif mode == "commands":
