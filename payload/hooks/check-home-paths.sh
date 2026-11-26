@@ -66,8 +66,21 @@
 # Exit 2 as well when the lines the search matched could not be put to the rules.
 #
 # A reported line is the file, the line number and the line itself. A line longer
-# than 300 bytes is reported as 300 bytes of it around what was found, with a note
-# of which bytes those are and how long the line is (claude-config#3479).
+# than 300 bytes is reported as at most 300 bytes of it around what was found, cut
+# at whole characters, with a note of which bytes those are and how long the line
+# is (claude-config#3479).
+#
+# A line holding a byte that is not valid UTF-8 is searched and judged like any
+# other (claude-config#3538: under a UTF-8 locale the search used to lose most of
+# them, silently). In the report each such byte is shown as a backslash and its
+# octal value, with a note of how many there are, so the report is always valid
+# text and the path beside the byte can still be read. A file the search takes
+# for a binary is still skipped, and under C that takes a NUL (near the start of
+# the file, in the grep macOS ships: see the note above ALL_PAT). One thing
+# about such a line is left as it was found: whether the allow marker on it is
+# honoured depends on the locale and on where the byte sits (see the note above
+# the search, below).
+#
 # One thing this file must never do: write the sync's placeholder out in full. The
 # apply expands that placeholder in EVERY mirrored file, and it cannot tell a line
 # that means the placeholder from a line that means a path, so a file discussing it
@@ -334,7 +347,10 @@ ANGLE_TOKEN="<""HOME>"
 #
 # The marker is dropped line by line, here, once: one excused line never excuses the rest of its
 # file, and no rule can forget to honour it. -I so a binary that happens to hold the bytes is
-# skipped rather than reported as a line nobody can read.
+# skipped rather than reported as a line nobody can read. The search runs under LC_ALL=C, where
+# the only thing that makes a file a binary is a NUL (claude-config#3538). The grep macOS ships
+# looks for one near the start of the file only: measured on 2026-11-24, a file whose NUL sat
+# 310,000 bytes in was read like any text file, in either locale.
 ALL_PAT="${MACHINE_PATH}|${CS_TOKEN}|${ANGLE_TOKEN}"
 
 # Is the tree being scanned this machine's own config directory? Compared as resolved physical
@@ -360,20 +376,26 @@ angbad=""    # rule 3: the hand substituted placeholder
 #
 # So one awk program reads the lines the search matched, straight off the pipe, puts each to the
 # three rules, and hands the shell one short record per finding: the rule's number, a tab, and the
-# line as it is reported. A line of HP_CUT bytes or fewer is reported whole, byte for byte as it
-# always was. A longer one is reported as HP_CUT bytes of it, starting HP_LEAD bytes before what
-# the rule found, so the part shown is the part to act on, followed by a note of which bytes are
-# shown and how long the line is. The cut is made AFTER the line is judged, on the whole line: a
-# line cut first would pass everything that sat below the cut.
+# line as it is reported. A line of HP_CUT bytes or fewer is reported whole, and when it is valid
+# text, byte for byte as it always was. A longer one is reported as HP_CUT bytes of it, starting
+# HP_LEAD bytes before what the rule found, so the part shown is the part to act on, followed by a
+# note of which bytes are shown and how long the line is; an edge of that cut that falls inside a
+# character moves inward to the nearest whole one, so a cut shows up to three bytes fewer at each
+# end and never half a character (claude-config#3538). The cut is made AFTER the line is judged,
+# on the whole line: a line cut first would pass everything that sat below the cut. Last, each
+# byte of what is reported that belongs to no well formed UTF-8 character is written as a
+# backslash and its octal value and counted in a note, so the report is valid text whatever the
+# file held.
 #
 # What each rule refuses is what it refused in the shell. Each is asked the way the shell asked it,
 # with plain string comparison wherever the rule has no variable part, so the answer does not turn
 # on one regex engine agreeing with another. Three things are matched as patterns, each as simple
 # as a pattern gets: the home path itself, the placeholder followed by one character that is not a
 # slash, and this Mac's own config path where the allowance removes it. It runs with LC_ALL=C, so
-# a byte is a byte whatever the line holds and a cut is counted in bytes. The search and the
-# marker filter in front of it are the ones this file always ran, in the locale it always ran
-# them in, so which lines reach the rules has not moved either.
+# a byte is a byte whatever the line holds and a cut is counted in bytes. The search in front of
+# it runs under C too, since claude-config#3538, and the marker filter between them keeps the
+# locale it always ran in: the note above the search says what each did with a byte that is not
+# valid text, and why.
 #
 # Measured on those 126 files on 2026-11-23, eight rounds at a load average near 175: 3.8 to 4.3
 # seconds before, 0.4 to 0.8 after, with the bare search at 0.05 to 0.12 and the same run over
@@ -431,12 +453,92 @@ function foreign_pos(s,    n, i, off, parts) {
   }
   return 1
 }
-function report(rule, pos,    start) {
-  if (len <= CUT) { print rule "\t" line; return }
-  start = pos - LEAD
-  if (start > len - CUT + 1) start = len - CUT + 1
-  if (start < 1) start = 1
-  print rule "\t" prefix substr(content, start, CUT) " [line cut: bytes " start " to " (start + CUT - 1) " of " len " shown]"
+# The value of one byte, or -1 for anything that is not a single byte of the table built in BEGIN
+# (an awk that hands back whole characters gives a valid one here, which is shown as it is).
+function byte_of(c) { return (c in ORD) ? ORD[c] : -1 }
+# Bytes as they are shown when they are not valid text: a backslash and three octal digits each.
+function escaped(q,    j, r) {
+  r = ""
+  for (j = 1; j <= length(q); j++) { r = r sprintf("\\%03o", byte_of(substr(q, j, 1))); NBAD++ }
+  return r
+}
+# A reported line as valid text (claude-config#3538). Every well formed UTF-8 character and every
+# ASCII byte is kept exactly as it is, so a line of valid text is still reported byte for byte.
+# A byte that belongs to no well formed character is replaced by its octal value, and counted in
+# NBAD, so the report can be read, searched and passed on whatever the file held. Only ever asked
+# of the few hundred bytes a report carries, never of a whole line.
+function as_text(s,    n, i, c, b, out, seq, need, lo, hi) {
+  n = length(s); out = ""; seq = ""; need = 0; lo = 128; hi = 191
+  for (i = 1; i <= n; i++) {
+    c = substr(s, i, 1)
+    b = byte_of(c)
+    if (need > 0) {
+      if (b >= lo && b <= hi) {
+        seq = seq c; need--; lo = 128; hi = 191
+        if (need == 0) { out = out seq; seq = "" }
+        continue
+      }
+      # The character broke off here, so what was held of it is not text. This byte starts afresh.
+      out = out escaped(seq); seq = ""; need = 0
+    }
+    if (b < 128) { out = out c; continue }
+    lo = 128; hi = 191
+    if (b >= 194 && b <= 223) need = 1
+    else if (b == 224) { need = 2; lo = 160 }
+    else if ((b >= 225 && b <= 236) || b == 238 || b == 239) need = 2
+    else if (b == 237) { need = 2; hi = 159 }
+    else if (b == 240) { need = 3; lo = 144 }
+    else if (b >= 241 && b <= 243) need = 3
+    else if (b == 244) { need = 3; hi = 143 }
+    else { out = out escaped(c); continue }
+    seq = c
+  }
+  if (need > 0) out = out escaped(seq)
+  return out
+}
+# The last byte to show of a cut that would otherwise end at `end`: moved back to the end of the
+# character before, when the cut falls inside one whose remaining bytes lie past it.
+function whole_end(start, end,    j, b, need) {
+  for (j = end; j >= start && j > end - 4; j--) {
+    b = byte_of(substr(content, j, 1))
+    if (b >= 128 && b <= 191) continue
+    need = 1
+    if (b >= 194 && b <= 223) need = 2
+    else if (b >= 224 && b <= 239) need = 3
+    else if (b >= 240 && b <= 244) need = 4
+    if (j + need - 1 > end) return j - 1
+    return end
+  }
+  return end
+}
+function report(rule, pos,    start, end, k, b, text, note) {
+  note = ""
+  if (len <= CUT) text = line
+  else {
+    start = pos - LEAD
+    if (start > len - CUT + 1) start = len - CUT + 1
+    if (start < 1) start = 1
+    end = start + CUT - 1
+    # The cut is counted in bytes, and a character can be up to four of them. A cut that began or
+    # ended inside one would put part of a character at the edge of the report, which is not valid
+    # text even when the file is, so each edge moves inward to the nearest whole character. What
+    # was found is never among the bytes given up: it starts on an ASCII character, LEAD bytes in.
+    if (start > 1) {
+      for (k = 0; k < 3 && start < end; k++) {
+        b = byte_of(substr(content, start, 1))
+        if (b < 128 || b > 191) break
+        start++
+      }
+    }
+    if (end < len) end = whole_end(start, end)
+    text = prefix substr(content, start, end - start + 1)
+    note = " [line cut: bytes " start " to " end " of " len " shown]"
+  }
+  NBAD = 0
+  text = as_text(text)
+  if (NBAD == 1) note = note " [1 byte that is not valid text, shown as a backslash and its octal value]"
+  else if (NBAD > 1) note = note " [" NBAD " bytes that are not valid text, each shown as a backslash and its octal value]"
+  print rule "\t" text note
 }
 BEGIN {
   TOK = ENVIRON["HP_TOKEN"]; ANG = ENVIRON["HP_ANGLE"]; MACH = ENVIRON["HP_MACHINE"]
@@ -448,6 +550,8 @@ BEGIN {
   # own pattern; the end of the line, the other half of that rule, is compared as a string.
   TOKLOOSE = TOK "[^/]"
   if (ALLOW) SELFRE = literal_re(SELF)
+  # Each byte's value, looked up by the byte itself, for showing a reported line as valid text.
+  for (i = 1; i < 256; i++) ORD[sprintf("%c", i)] = i
 }
 $0 == "" { next }
 {
@@ -534,17 +638,42 @@ for d in ${MIRRORED_DIRS[@]+"${MIRRORED_DIRS[@]}"}; do _mirrored_nl="$_mirrored_
 #
 # The searches end in `true` and the marker filter in `|| true`, as they always did (a search that
 # matches nothing is not a failure), so under pipefail the status left is the judge's own.
+#
+# Every search runs with LC_ALL=C (claude-config#3538). In a UTF-8 locale the grep macOS ships
+# gives up on a line at the first byte that is not valid UTF-8: measured on 2026-11-24 under
+# en_US.UTF-8, it left out 17 of 23 matching lines that held such a byte (whenever the byte came
+# before what the pattern matches, or touched the end of it), with exit 0, nothing on stderr and
+# no "Binary file matches" in its output, so a home path on such a line passed. Under C a byte is
+# a byte and it found all 23. GNU grep, by its manual, calls the whole FILE binary over one such
+# byte in a UTF-8 locale, and -I then skips the file, while under C only a NUL makes a file
+# binary. That is read, not measured: no GNU grep was to hand on 2026-11-24, so the suite's
+# cases for it (a home path on another line of such a file) have only ever run on macOS. Nothing
+# valid text matched before is lost by this: the pattern is ASCII, and the judge below was
+# already asking it under C, so a line only a UTF-8 reading of the pattern could match was never
+# reported anyway (14 kinds of valid line, accents in and around the path included, gave the
+# same report byte for byte before and after, in both locales).
+#
+# The marker filter gets -a and keeps the locale it always ran in. -a because it reads the
+# search's output from a pipe, and GNU grep, on meeting a byte it calls binary there, prints
+# "Binary file (standard input) matches" in place of every line from that one on (L329, and again
+# read from its manual rather than measured); the searches above can now send it such a line. In
+# the grep macOS ships -a changed nothing that was measured. Its locale is left alone on purpose. Under a UTF-8
+# locale the grep macOS ships cannot see the marker on a line whose odd byte comes before the
+# marker or touches its end, so that line is reported though it is marked (measured the same day),
+# while under C the marker is seen wherever the byte is. Running the filter under C would make
+# that uniform by EXCUSING lines that are reported today, and a change that makes this guard pass
+# more is not one to make in passing.
 judged="$(
   { _i=0
     while [ "$_i" -lt "${#list_files[@]}" ]; do
-      grep -InHE "$ALL_PAT" "${list_files[@]:_i:400}" 2>/dev/null
+      LC_ALL=C grep -InHE "$ALL_PAT" "${list_files[@]:_i:400}" 2>/dev/null
       _i=$((_i + 400))
     done
-    [ "${#targets[@]}" -eq 0 ] || grep -rInE "${SKIP[@]}" "$ALL_PAT" "${targets[@]}" 2>/dev/null
-    [ "${#skill_targets[@]}" -eq 0 ] || grep -rInE "${SKIP[@]}" ${skill_grep_skip[@]+"${skill_grep_skip[@]}"} \
+    [ "${#targets[@]}" -eq 0 ] || LC_ALL=C grep -rInE "${SKIP[@]}" "$ALL_PAT" "${targets[@]}" 2>/dev/null
+    [ "${#skill_targets[@]}" -eq 0 ] || LC_ALL=C grep -rInE "${SKIP[@]}" ${skill_grep_skip[@]+"${skill_grep_skip[@]}"} \
       "$ALL_PAT" "${skill_targets[@]}" 2>/dev/null
     true
-  } | { grep -v 'claude-sync-allow-home-path' || true; } \
+  } | { grep -a -v 'claude-sync-allow-home-path' || true; } \
     | LC_ALL=C HP_TOKEN="$CS_TOKEN" HP_ANGLE="$ANGLE_TOKEN" HP_MACHINE="$MACHINE_PATH" \
       HP_ALLOW_SELF="$allow_self" HP_ROOT="$ROOT" HP_SELF_HOME="$SELF_HOME" HP_MIRRORED="$_mirrored_nl" \
       HP_CUT="$HP_CUT" HP_LEAD="$HP_LEAD" awk "$_HP_JUDGE"
@@ -552,7 +681,9 @@ judged="$(
 judge_rc=$?
 
 # One short record per finding, sorted into the three rules. Nothing read here is longer than a
-# file's path and HP_CUT bytes of one of its lines.
+# file's path, HP_CUT bytes of one of its lines as they are reported, and the notes after them. A
+# byte that is not valid text is reported as four characters, so at the very worst (HP_CUT such
+# bytes in a row) a record is four times HP_CUT and its path: still nothing like a whole line.
 _tab=$'\t'
 judge_ended=0
 while IFS= read -r _rec; do
