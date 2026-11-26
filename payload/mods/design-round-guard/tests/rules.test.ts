@@ -3230,6 +3230,24 @@ test('#2855: scriptsRunIn reads each route, says which script brought a file in,
   expect(wide.length).toBe(1 + MODULES_MAX)
 })
 
+// #3442: `bash -n x.sh` checks the script's syntax and runs none of it (measured 2026-11-26 on the
+// personal MacBook, in bash 3.2, zsh 5.9, macOS sh, dash and ksh93). mod-kit's reader gave it as a
+// run of the script, so every write the script's text names was judged for a command that writes none.
+test('#3442: scriptsRunIn reads no script a shell is told only to check', async () => {
+  const disk: Record<string, string> = { '/n/edit.sh': 'sed -i "" s/a/b/ /w/app/x.css\n' }
+  const io: ScriptIo = {
+    pipeline: async (command, cwd) => pipelineIn(command, cwd, '/h'),
+    writes: async (command, cwd) => commandWrites(command, cwd, '/h'),
+    stat: async p => (p in disk ? { kind: 'file', size: (disk[p] ?? '').length } : undefined),
+    read: async p => disk[p] as string,
+  }
+  const read = async (command: string) => (await scriptsRunIn(io, command, '/n', '/h')).map(r => r.word)
+  for (const command of ['bash -n /n/edit.sh', 'sh -n edit.sh', 'zsh -n ./edit.sh', 'bash -o noexec /n/edit.sh']) expect([command, await read(command)]).toEqual([command, []])
+  // The run after the check is read, and so is a check taken back.
+  expect(await read('bash -n /n/edit.sh && bash /n/edit.sh')).toEqual(['/n/edit.sh'])
+  expect(await read('bash -n +n /n/edit.sh')).toEqual(['/n/edit.sh'])
+})
+
 test('#2847: mentionedModHookFiles names only a mod hook TypeScript file, never a declaration or other .ts', () => {
   expect(mentionedModHookFiles("p = '/w/r/payload/mods/demo/hooks/rules.ts'; q = 'src/app.ts'; d = 'mods/x/hooks/t.d.ts'; m = \"mods/y/hooks/a.mts\"")).toEqual(['/w/r/payload/mods/demo/hooks/rules.ts', 'mods/y/hooks/a.mts'])
 })

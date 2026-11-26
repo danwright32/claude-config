@@ -129,6 +129,19 @@ export const readProgram = (words: readonly string[], stdin: Stdin | undefined):
   let operand: string | undefined
   let fromStdin = false
   let shellC = false
+  // A shell told only to check its script (#3442): `-n`, or `-o noexec`, reads the script for its
+  // syntax and runs none of it. Measured 2026-11-26 on the personal MacBook (bash 3.2.57, zsh 5.9,
+  // macOS sh, dash and ksh93), one run of each form in an empty folder with a script that only makes
+  // a file: none of the five makes the file for `-n x.sh`, `-vn x.sh`, `-n -- x.sh` or
+  // `-o noexec x.sh`, and all five make it for `+n x.sh`, `-n +n x.sh` and `-n +o noexec x.sh`.
+  // `checks` is the last of those said; `mayRun` is anything that may take the check back, or that
+  // a shell may not keep it under, read as a run, the reading that judges more: another option
+  // naming exec (zsh and ksh run the script for `-n -o exec` and `-n --exec`), and `-i`, since bash
+  // says an interactive shell ignores -n (the shells here ran nothing for it; no other build was
+  // measured).
+  let checks = false
+  let mayRun = false
+  const optionName = (w: string | undefined) => (w ?? '').toLowerCase().replace(/[_-]/g, '')
   // The files holding the program (awk -f, sed -f), which cannot be read here.
   const programFiles: string[] = []
   const inline: string[] = []
@@ -160,6 +173,7 @@ export const readProgram = (words: readonly string[], stdin: Stdin | undefined):
       const eq = a.indexOf('=')
       const name = eq < 0 ? a : a.slice(0, eq)
       const attached = eq < 0 ? undefined : a.slice(eq + 1)
+      if (kind === 'shell' && optionName(name).includes('exec')) mayRun = true
       if (long.inline?.includes(name)) {
         const code = attached ?? words[++i] ?? ''
         if (firstOnly) return { program: { text: code } }
@@ -180,7 +194,14 @@ export const readProgram = (words: readonly string[], stdin: Stdin | undefined):
         if (kind === 'shell') {
           if (letter === 'c') shellC = true
           else if (letter === 's') fromStdin = true
+          else if (letter === 'n') checks = a.startsWith('-')
+          else if (letter === 'i') mayRun = true
           else if (g.value.includes(letter)) {
+            // `-o noexec` is `-n` and `+o noexec` is `+n`, spelled so; any other option naming exec
+            // or an interactive shell may run the script.
+            const named = letter === 'o' ? rest || (words[i + 1] ?? '') : ''
+            if (named === 'noexec') checks = a.startsWith('-')
+            else if (/exec|interactive/.test(optionName(named))) mayRun = true
             if (!rest) i++
             break
           }
@@ -228,7 +249,10 @@ export const readProgram = (words: readonly string[], stdin: Stdin | undefined):
   const splits = emulated ? { splits: true as const } : {}
   if (kind === 'shell' && shellC) return operand !== undefined ? { program: { text: operand }, ...splits } : {}
   if (programWord) return operand !== undefined ? { program: { text: operand } } : {}
-  if (operand !== undefined && operand !== '-' && !fromStdin) return { script: { files: [operand] } }
+  // A shell told only to check a script file runs no script (#3442). Text given with -c or on
+  // standard input is read as before, as the commands it holds: no shell measured runs those
+  // either, and reading them judges more than is there and hides nothing.
+  if (operand !== undefined && operand !== '-' && !fromStdin) return kind === 'shell' && checks && !mayRun ? {} : { script: { files: [operand] } }
   // What standard input holds is the program: a heredoc's body, text, a file, or what cannot be read.
   if (!stdin) return {}
   if ('text' in stdin) return { program: { text: stdin.text, stdin: true }, ...splits }

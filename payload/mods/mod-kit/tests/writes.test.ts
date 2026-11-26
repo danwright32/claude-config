@@ -2851,3 +2851,32 @@ describe('writes: a command with many sources is read in steps that grow in step
     expect(over).toEqual([])
   })
 })
+
+// claude-config#3442, through the entry point the mods are given. The measurements are with the
+// reader's own tests of these shapes (commands.test.ts, program.test.ts).
+describe('writes: the shapes of #3442 as the mods are given them', () => {
+  const NAMED = 'named by a value the shell expands, so what it runs cannot be read'
+  const runs = (command: string) => (read(command).runs ?? []).filter(r => !r.unknown).map(r => [r.what, r.script, r.args.map(a => a.word)])
+  test('a command named by a value inside (( )) that dash or sh runs is given as unread', () => {
+    for (const shell of ['dash', 'sh']) expect((read(`${shell} -c '(( $x > 3 ))'`).unread ?? []).map(u => [u.words.join(' '), u.why])).toEqual([['$x > 3', NAMED]])
+    for (const command of ['(( $x > 3 ))', `bash -c '(( $x > 3 ))'`]) expect([command, read(command).unread]).toEqual([command, undefined])
+  })
+  test('time before a test, and a redirect right after its ]], write only what a redirect names', () => {
+    expect(paths('time [[ a > b ]]')).toEqual([])
+    expect(paths('true && time [[ a > b ]]')).toEqual([])
+    expect(paths('[[ a > b ]]>out')).toEqual([`${CWD}/out`])
+    expect(paths('time [[ a > b ]]>out')).toEqual([`${CWD}/out`])
+    expect(paths('if [[ a > b ]]>out; then echo x; fi')).toEqual([`${CWD}/out`])
+  })
+  test('where time is the program, or [[ is one, the > is the redirect it always was', () => {
+    for (const command of ['true | time [[ a > b ]]', 'if time [[ a > b ]]; then echo x; fi', '! time [[ a > b ]]', 'command time [[ a > b ]]', 'time -p [[ a > b ]]', 'dash -c "time [[ a > b ]]"', 'sh -c "time [[ a > b ]]"']) {
+      expect([command, paths(command)]).toEqual([command, [`${CWD}/b`]])
+    }
+    expect(paths('dash -c "[[ a > b ]]>out"')).toEqual([`${CWD}/b`, `${CWD}/out`])
+  })
+  test('a shell told only to check a script file is no run of it', () => {
+    expect(runs('bash -n x.sh a b')).toEqual([])
+    expect(runs('bash x.sh a b')).toEqual([['a bash script file', 'x.sh', ['a', 'b']]])
+    expect(runs('bash -n +n x.sh a b')).toEqual([['a bash script file', 'x.sh', ['a', 'b']]])
+  })
+})

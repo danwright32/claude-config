@@ -2480,3 +2480,93 @@ describe('the commands the reader missed (#3496)', () => {
     expect(pipeline(`p1 $(( \${#a} + 1 )) "b"`).some(c => c.unread !== undefined)).toBe(false)
   })
 })
+
+// claude-config#3442: four shapes the reader misread, each measured 2026-11-26 on the personal
+// MacBook (bash 3.2.57, zsh 5.9, macOS sh, dash and ksh93), one run of each form in an empty folder
+// with programs that only make a file, the folder listed afterwards. The third, a shell told only to
+// check its script, is in program.test.ts.
+describe('four shapes the reader misread (#3442)', () => {
+  const NAMED = 'named by a value the shell expands, so what it runs cannot be read'
+  const marked = (cmd: string) => pipeline(cmd).map(c => [c.words.join(' '), c.unread])
+  const tests = (cmd: string) => pipeline(cmd).map(c => [c.words.join(' '), c.compares?.flatMap((is, n) => (is ? [n] : [])), c.behind])
+
+  // 1. dash reads `((` as two subshells, so `dash -c '(( $x > 3 ))'` runs the program `$x` names
+  // (measured: with x holding a program that makes a file, the file is there, and so is one named
+  // 3). The reader dropped the command's unread mark as if every shell worked the text out as
+  // arithmetic. sh is read as dash is, as it is everywhere else (#3415, worksTests).
+  test('a command named by a value inside (( )) is unread where the shell reads (( as two subshells', () => {
+    for (const shell of ['dash', 'sh']) {
+      expect(marked(`${shell} -c '(( $x > 3 ))'`)).toEqual([['(', undefined], ['(', undefined], ['$x > 3', NAMED], [')', undefined], [')', undefined]])
+      expect(marked(`${shell} -c '(( $# < 2 )) && exit 1'`).filter(c => c[1] !== undefined)).toEqual([['$# < 2', NAMED]])
+    }
+  })
+  test('where the shell works (( )) out as arithmetic, a value in it still names no command', () => {
+    // Measured: bash, zsh and ksh make no file for it.
+    for (const cmd of ['(( $x > 3 ))', `bash -c '(( $x > 3 ))'`, `zsh -c '(( $x > 3 ))'`, `ksh -c '(( $x > 3 ))'`, '(( $# < 2 )) && exit 1']) {
+      expect([cmd, pipeline(cmd).some(c => c.unread !== undefined)]).toEqual([cmd, false])
+    }
+  })
+
+  // 2. `echo $'\' x' | (cat; echo ran) #'`: the reader took the `\'` to end the string, so the pipe
+  // and the group stood inside a quote and one echo was read. Fixed by pull request #3493 (the
+  // $'...' reading, opensAnsi); kept here as a pin on the exact shape the issue names.
+  test("an escaped quote inside $'...' does not hide the pipe and the group after it", () => {
+    const BS = '\\'
+    expect(commands(`echo $'${BS}' x' | (cat; echo ran) #'`)).toEqual([['echo', `$${BS}' x`], ['('], ['cat'], ['echo', 'ran'], [')']])
+    expect(pipeline(`echo $'${BS}' x' | (cat; echo ran) #'`).some(c => c.unread !== undefined)).toBe(false)
+  })
+
+  // 4. `time` before a test and a redirect written right after its `]]`. Measured: bash, zsh and ksh
+  // make no file b for `time [[ a > b ]]`, and only out for `[[ a > b ]]>out`. Neither was read as a
+  // test, so its `>` was a redirect and its `||` ended the command.
+  test('time before a test leaves it a test', () => {
+    expect(tests('time [[ a > b ]]')).toEqual([['[[ a > b ]]', [2], ['time']]])
+    expect(tests('true && time [[ a > b ]]; ( time [[ a < b ]] )').filter(c => c[1])).toEqual([['[[ a > b ]]', [2], ['time']], ['[[ a < b ]]', [2], ['time']]])
+    expect(tests('time [[ a > b ]] > out')).toEqual([['[[ a > b ]] > out', [2], ['time']]])
+    // Its || and && are words of the test, so a value in it names no command.
+    expect(commands('time [[ -z "$r" || "$r" == x ]]')).toEqual([['[[', '-z', '$r', '||', '$r', '==', 'x', ']]']])
+    expect(pipeline('time [[ -z "$r" || "$r" == x ]]').some(c => c.unread !== undefined)).toBe(false)
+  })
+  test('time is no reserved word of the shell in these places, so what follows is read as it was', () => {
+    // Each measured as making the file b in bash 3.2: after a pipe, an `if`, a `!` or a case's
+    // pattern `time` is the program, and so is one quoted, escaped, named by its path, run through
+    // `command`, set a value in front of, given `--`, or written twice. `time -p [[ a > b ]]` makes
+    // b in ksh.
+    for (const cmd of [
+      'true | time [[ a > b ]]',
+      'if time [[ a > b ]]; then p1; fi',
+      '! time [[ a > b ]]',
+      'case x in x) time [[ a > b ]];; esac',
+      '"time" [[ a > b ]]',
+      '\\time [[ a > b ]]',
+      '/usr/bin/time [[ a > b ]]',
+      'command time [[ a > b ]]',
+      'X=1 time [[ a > b ]]',
+      'time -p [[ a > b ]]',
+      'time -- [[ a > b ]]',
+      'time time [[ a > b ]]',
+    ])
+      expect([cmd, pipeline(cmd).some(c => c.compares !== undefined)]).toEqual([cmd, false])
+  })
+  test('a redirect written right after ]] leaves the test a test', () => {
+    expect(tests('[[ a > b ]]>out')).toEqual([['[[ a > b ]] > out', [2], undefined]])
+    expect(tests('[[ a > b ]]>>out')).toEqual([['[[ a > b ]] >> out', [2], undefined]])
+    // An input redirect is given with its file in the one word, as it is anywhere else.
+    expect(tests('[[ a < b ]]<in')).toEqual([['[[ a < b ]] <in', [2], undefined]])
+    expect(tests('if [[ a > b ]]>out; then p1; fi').slice(0, 1)).toEqual([['[[ a > b ]] > out', [2], undefined]])
+    expect(tests('time [[ a > b ]]>out')).toEqual([['[[ a > b ]] > out', [2], ['time']]])
+    expect(commands('[[ -z "$r" || "$r" == x ]]>out')).toEqual([['[[', '-z', '$r', '||', '$r', '==', 'x', ']]', '>', 'out']])
+  })
+  test('a ]] with a word joined to it closes no test', () => {
+    // Measured: bash, zsh and ksh refuse `[[ a > b ]]2>err` and `[[ a > b]]>out` and make no file.
+    for (const cmd of ['[[ a > b ]]2>err', '[[ a > b]]>out', '[[ a > b ]]x']) expect([cmd, pipeline(cmd).some(c => c.compares !== undefined)]).toEqual([cmd, false])
+  })
+  test('sh and dash, where [[ is a program, read both forms as they did', () => {
+    // Measured: dash makes b for each, and it runs what follows a || there, so nothing is joined.
+    for (const shell of ['dash', 'sh']) {
+      for (const text of ['time [[ a > b ]]', '[[ a > b ]]>out']) expect([shell, text, pipeline(`${shell} -c '${text}'`).some(c => c.compares !== undefined)]).toEqual([shell, text, false])
+      expect(commands(`${shell} -c 'time [[ -z a || p1 b ]]'`)).toEqual([['[[', '-z', 'a'], ['p1', 'b', ']]']])
+      expect(commands(`${shell} -c '[[ -z a || p1 b ]]>out'`)).toEqual([['[[', '-z', 'a'], ['p1', 'b', ']]', '>', 'out']])
+    }
+  })
+})
