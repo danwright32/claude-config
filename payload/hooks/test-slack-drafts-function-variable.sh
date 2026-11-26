@@ -182,6 +182,71 @@ script 'run() {' '  kept=posts.sh' '  read -r kept' '  bash "$kept"' '}' 'run'
 judge_script
 allowed "a name the function reads in after setting it is not followed, as before"
 
+echo "slack drafts only: the values a function's bodies set are worked out once for a script (claude-config#3497)"
+
+# The work, counted, which no load can move (L290). The first build of this change worked each
+# name out afresh, over every command of the text, for every command that used it: one
+# claude-sync lesson, judged in 2.7 seconds of processor time on main, ran out of the gate's 11
+# seconds and was refused (measured 2026-11-26 at 90a4992cba, through the gate's wrapper). With
+# that mended it still asked what else in the text binds a name whose value it had not worked out,
+# the dearer question, whose answer changes nothing there: 0.45 seconds more for the same lesson.
+# The script below has 200 functions, each running a file through a name its body sets from $1,
+# which no reading can work out, and two commands the wider reading does change. Counted beneath
+# the gate: how often a command is read as an assignment, and how often what else binds one of
+# those 200 names is asked.
+cat > "$T/counted.py" <<'PY'
+import importlib.util, os, sys
+
+gate_path, folder = sys.argv[1], sys.argv[2]
+spec = importlib.util.spec_from_file_location("gate", gate_path)
+gate = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gate)
+spec = importlib.util.spec_from_file_location("shell_words", os.path.join(os.path.dirname(gate_path), "lib", "shell-words.py"))
+sw = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(sw)
+gate.remember_readings(sw)
+
+N = 200
+lines = []
+for i in range(N):
+    lines += ["f%d() {" % i, '  local dir%d="$1"' % i, "  local n%d=quiet.sh" % i, "  echo start",
+              '  bash "$dir%d/quiet.sh"' % i, "}"]
+lines += ["g() {", "  kept=quiet.sh", '  bash "$kept"', "}", "h() { later=quiet.sh; }", "h", 'bash "$later"']
+text = "\n".join(lines) + "\n"
+counts = {"assignment": 0, "binds": 0}
+plain_assignment, plain_binds = gate.Judge.sh_assignment, gate.Judge.sh_binds
+def sh_assignment(self, head):
+    counts["assignment"] += 1
+    return plain_assignment(self, head)
+def sh_binds(name, text, allowed=0):
+    counts["binds"] += name.startswith("dir")
+    return plain_binds(name, text, allowed)
+gate.Judge.sh_assignment, gate.Judge.sh_binds = sh_assignment, staticmethod(sh_binds)
+judge = gate.Judge(sw)
+wrong = []
+try:
+    got = judge.line(text, folder, 0, text)
+except BaseException as e:  # the gate's own time running out among them, which is the finding
+    got = None
+    wrong.append("judging it ended in %s: %s" % (type(e).__name__, str(e)[:200]))
+if got is not None:
+    wrong.append("a script that runs only quiet files was refused: %s" % got[:200])
+# 1,008 readings as an assignment with the fix, about five for each function, and no asking what
+# else binds one of the 200 names; at 90a4992cba it was 241,806 readings, every command of every
+# body once more for each name, and 200 askings (both measured 2026-11-26).
+if counts["assignment"] > 10 * N:
+    wrong.append("a command was read as an assignment %d times for %d functions, more than %d"
+                 % (counts["assignment"], N, 10 * N))
+if counts["binds"]:
+    wrong.append("what else binds a name was asked %d times of the %d names whose value is not worked out"
+                 % (counts["binds"], N))
+print("; ".join(wrong) or "ok")
+print("counted assignment=%d binds=%d" % (counts["assignment"], counts["binds"]))
+PY
+counted="$(python3 -B "$T/counted.py" "$DIR/slack_drafts_only_gate.py" "$FV" 2>&1)"
+check "reading a function's values does not grow with the square of a script's functions" "$(printf '%s\n' "$counted" | head -n 1)"
+echo "  $(printf '%s\n' "$counted" | grep '^counted ' || echo 'no count was printed')"
+
 echo
 
 echo "passed: $pass, failed: $fail"
