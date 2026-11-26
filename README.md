@@ -5892,9 +5892,13 @@ through that run, and that run's `part-unmeasured-<n>` records, whose retention 
 parts, is skipped and never read as measured; fewer than 5 readable trees in main's newest 20 is a
 warning that the streak was not measured, never a pass. Suite: `tools/test-ci-cold-cost-streak.sh`.
 
-On Linux the cold check divides by the MEDIAN of the yardstick samples taken by each reading, not
-the least, and its limit is 83.2 units (#3406, Dan's choice of 2026-11-26 from a picker, "3.65.1
-Median, limit 83.2, Linux only (Recommended)"). Read from 139 pull request run attempts of
+On Linux the cold check divides every reading by the MEDIAN of all the yardstick samples the case
+took, not the least, and its limit is 83.2 units (#3406, Dan's choices of 2026-11-26 from pickers,
+"3.65.1 Median, limit 83.2, Linux only (Recommended)" and "3.71.1 Whole run median
+(Recommended)"). After each judgement every reading so far is divided again by the median of every
+sample taken so far, and the check stops only when one of those figures is at or under the limit;
+no sample is taken after it stops, so the figures it stopped on are the ones the record prints and
+the verdict reads. Read from 139 pull request run attempts of
 2026-11-25 and 2026-11-26: by the least sample 16 read past 91 on the same gate work, each with a
 first judgement that ran out of the gate's seconds. A judgement takes 7 to 15 s and spans the
 runner's slow and fast spells alike, while the least of the 0.1 s yardstick samples catches only
@@ -5902,12 +5906,14 @@ its fastest moment. 83.2 keeps the room 91 had above the median passing reading 
 70.6 by the median). macOS keeps the least sample and 67, since nothing was read on a Mac, and every
 other cost check keeps the least sample. Where the unit is set is `cost_unit` in the gate's suite,
 beside `cost_limit`; `cost.py` takes it as `SLACK_GATE_COST_UNIT`, and the record says `median of N`
-for each reading in place of `from N`. The suite replays CI's own records of that day through
-`cost.py` (`payload/hooks/slack-drafts-cost-fixtures/ci-cold-records.jsonl`): reds by the least
-sample now pass, greens stay green, one red stays red (run 45797239494 attempt 1, 83.9 by the
-median of the samples taken by its third reading), and a made up record 20 percent dearer than the
-median passing reading fails. Each is replayed by the least sample and 91 too, and must give CI's own
-verdict. The unmeasured rule above and the streak are unchanged.
+for each reading in place of `from N`, N being every sample the case took. Judged this way, those
+139 run attempts give 137 green, none red, and 2 that cannot be told: runs 45752799634 and
+45825401342 read 85.1 and 84.0 on their one reading, and the check would now take readings CI never
+took. The suite replays CI's own records of that day through `cost.py`
+(`payload/hooks/slack-drafts-cost-fixtures/ci-cold-records.jsonl`): reds by the least sample now
+pass, greens stay green, and a made up record 20 percent dearer than the median passing reading
+fails. Each is replayed by the least sample and 91 too, and must give CI's own verdict. The
+unmeasured rule above and the streak are unchanged.
 
 Some CI runners still read a few cost cases over their limits with the gate unchanged (#3170: 4 of
 127 runs from 2026-11-20 to 2026-11-21), and the logs could not say why: they held each case's
@@ -5915,13 +5921,13 @@ reading in units, but the yardstick and the seconds only for one case, and only 
 sample. Dan's decision on 2026-11-21, from a picker, was "Measure more first": no limit, sample count
 or yardstick changes until a few days of runs can be read. So since then every cost case records,
 on every run, the gate's processor seconds for each reading, the yardstick each reading was divided
-by (the least of the samples taken by then, or their median for the cold check on Linux since
-#3406, and how many), every yardstick sample the case took, and
+by (the least of the samples taken by then, or the median of all of them for the cold check on
+Linux since #3406, and how many), every yardstick sample the case took, and
 their least, median and greatest. They are on each `cost measured (#2918)` line, and a passing run
 shows them in the suite's two notes. Nothing is judged by them: a case is still judged by its least
 reading against its limit, and the suite checks, with `tools/gate-cost-rows.py check`, that each
-reading is its seconds over the sample its record names (the least or the median of those taken by
-then), and that each case names the sample `cost_unit` gives it, so a verdict taken from any figure
+reading is its seconds over the sample its record names (the least of those taken by then, or the
+median of all the case took), and that each case names the sample `cost_unit` gives it, so a verdict taken from any figure
 printed beside it fails. No extra yardstick is timed for this; the figures are the ones each case
 already took. `python3 tools/gate-cost-rows.py rows <saved logs>` prints one row per case per run
 from any of the three shapes. And a suite that fails and then passes its recheck now has its first

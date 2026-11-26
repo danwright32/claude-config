@@ -156,26 +156,32 @@ has "and quotes it" "line 2 is not a cost record this check reads: three-lessons
 out="$(python3 -B "$TOOL" check "$WORK/none.log" 2>&1)"; rc=$?
 check "check on a log holding no record fails rather than passing nothing" "$([ "$rc" = 1 ] && echo ok || echo "exit $rc: $out")"
 
-# 7b. A case divided by the median yardstick sample (#3406: suite-cold on Linux, Dan's choice of
-# 2026-11-26) says so per reading, "median of N", and check holds each such reading to the median of
-# the samples taken by then. The same eleven invented samples: the median of the first 7 and 9 is
-# 0.0841 and of the first 11 0.0839, so 2.560 / 0.0841 is 30.4, 2.541 / 0.0841 is 30.2 and
-# 2.600 / 0.0839 is 31.0.
-MED="suite-cold LINE: 30.2 (2.54 s of processor time, unit 0.084 s, ceiling 83.2, samples 30.4, 30.2, 31.0; seconds per reading 2.560, 2.541, 2.600; yardstick per reading 0.0841 median of 7, 0.0841 median of 9, 0.0839 median of 11; yardstick 11 samples $Y; yardstick least 0.0829, median 0.0839, greatest 0.0851)"
+# 7b. A case divided by the median yardstick sample (#3406: suite-cold on Linux, Dan's choices of
+# 2026-11-26, "3.65.1" and "3.71.1 Whole run median") says so per reading, "median of N", and check
+# holds every such reading to the median of ALL the samples the case took, N being all of them. The
+# same eleven invented samples, whose median is 0.0839: 2.560 / 0.0839 is 30.5, 2.541 / 0.0839 is
+# 30.3 and 2.600 / 0.0839 is 31.0.
+MED="suite-cold LINE: 30.3 (2.54 s of processor time, unit 0.084 s, ceiling 83.2, samples 30.5, 30.3, 31.0; seconds per reading 2.560, 2.541, 2.600; yardstick per reading 0.0839 median of 11, 0.0839 median of 11, 0.0839 median of 11; yardstick 11 samples $Y; yardstick least 0.0829, median 0.0839, greatest 0.0851)"
 printf '%s\n' "$MED" > "$WORK/med.log"
 out="$(python3 -B "$TOOL" check "$WORK/med.log" 2>&1)"; rc=$?
-check "check passes a record whose readings are each divided by the median of the samples taken by then" "$([ "$rc" = 0 ] && [ "$out" = ok ] && echo ok || echo "exit $rc: $out")"
-printf '%s\n' "$MED" | sed 's/0\.0839 median of 11/0.0829 median of 11/; s/samples 30\.4, 30\.2, 31\.0/samples 30.4, 30.2, 31.4/' > "$WORK/med-least.log"
+check "check passes a record whose readings are each divided by the median of every sample the case took" "$([ "$rc" = 0 ] && [ "$out" = ok ] && echo ok || echo "exit $rc: $out")"
+printf '%s\n' "$MED" | sed 's/0\.0839 median of 11, 0\.0839 median of 11, 0\.0839 median of 11/0.0839 median of 11, 0.0839 median of 11, 0.0829 median of 11/; s/samples 30\.5, 30\.3, 31\.0/samples 30.5, 30.3, 31.4/' > "$WORK/med-least.log"
 out="$(python3 -B "$TOOL" check "$WORK/med-least.log" 2>&1)"; rc=$?
 check "check refuses a reading said to be divided by the median that was divided by the least" "$([ "$rc" = 1 ] && echo ok || echo "exit $rc: $out")"
-has "and says which reading" "reading 3 was divided by 0.0829, but the median of the first 11 yardstick samples is 0.0839" "$out"
-printf '%s\n' "$MED" | sed 's/0\.0841 median of 9/0.0829 from 9/; s/samples 30\.4, 30\.2, 31\.0/samples 30.4, 30.7, 31.0/' > "$WORK/med-mixed.log"
+has "and says which reading" "reading 3 was divided by 0.0829, but the median of the 11 yardstick samples the case took is 0.0839" "$out"
+# A reading left divided by the median of the samples taken by its own time, 0.0841 of the first 7,
+# is a provisional figure: the record must hold the final one.
+printf '%s\n' "$MED" | sed 's/yardstick per reading 0\.0839 median of 11, /yardstick per reading 0.0841 median of 7, /; s/samples 30\.5, 30\.3, 31\.0/samples 30.4, 30.3, 31.0/' > "$WORK/med-provisional.log"
+out="$(python3 -B "$TOOL" check "$WORK/med-provisional.log" 2>&1)"; rc=$?
+check "check refuses a median reading divided by fewer than all the samples the case took" "$([ "$rc" = 1 ] && echo ok || echo "exit $rc: $out")"
+has "and says so" "reading 1 was divided by the median of 7 samples, and a median unit is of all 11 the case took" "$out"
+printf '%s\n' "$MED" | sed 's/yardstick per reading 0\.0839 median of 11, 0\.0839 median of 11, /yardstick per reading 0.0839 median of 11, 0.0829 from 9, /; s/samples 30\.5, 30\.3, 31\.0/samples 30.5, 30.7, 31.0/' > "$WORK/med-mixed.log"
 out="$(python3 -B "$TOOL" check "$WORK/med-mixed.log" 2>&1)"; rc=$?
 check "check refuses a record whose readings are divided by the least and the median both" "$([ "$rc" = 1 ] && echo ok || echo "exit $rc: $out")"
 has "and says so" "suite-cold: its readings are divided by the least sample and by the median both" "$out"
 printf 'cost measured (#2918): %s\n' "$MED" > "$WORK/med-rows.txt"
 out="$(python3 -B "$TOOL" rows "$WORK/med-rows.txt" 2>&1)"
-has "rows marks each yardstick a median where the record says so" "$(printf '\t0.084\t0.0841 median, 0.0841 median, 0.0839 median\t11\t')" "$out"
+has "rows marks each yardstick a median where the record says so" "$(printf '\t0.084\t0.0839 median, 0.0839 median, 0.0839 median\t11\t')" "$out"
 
 # 8. It reads files and calls nothing: only these modules, so no network library can creep in.
 imports="$(python3 -B -c 'import ast, sys

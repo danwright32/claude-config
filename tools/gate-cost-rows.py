@@ -34,10 +34,12 @@ it"), and this column is how often that happened, counted from saved logs.
 check reads a cost log the suite wrote (the lines without the "cost measured" prefix, or with it)
 and fails unless every record's verdict figures follow from its printed ones: each reading is its
 seconds over the yardstick it names, that yardstick is the least of the samples taken by then (5
-before the first judgement and 2 after each, 2 more where the seconds ran out), or their median
-where the record says "median of" (the cold case off macOS since 2026-11-26, #3406), and the judged
-reading is the least reading. So a verdict taken from any figure printed beside it fails here, and
-a record mixing the two, or naming one and dividing by the other, fails too. Which cases may name
+before the first judgement and 2 after each, 2 more where the seconds ran out), or, where the record
+says "median of", the median of EVERY sample the case took (the cold case off macOS since
+2026-11-26, #3406, Dan's pick "3.71.1 Whole run median"), and the judged reading is the least
+reading. So a verdict taken from any figure printed beside it fails here, and a record mixing the
+two, naming one and dividing by the other, or holding a median of fewer samples than were taken
+(a provisional figure), fails too. Which cases may name
 the median is held by the drafts gate suite, from its cost_unit.
 
 Reads only the files named; opens no connection.
@@ -179,23 +181,31 @@ def faults(r):
     if len(kinds) > 1:
         return ["%s: its readings are divided by the least sample and by the median both" % name]
     median = kinds == {"median of"}
-    which = "median" if median else "least"
-    pick = statistics.median if median else min
     if count != len(ys):
         out.append("%s: says %d yardstick samples and lists %d" % (name, count, len(ys)))
     # The schedule cost.py keeps: 5 samples, then 2 after each judgement, and 2 more where the
     # seconds ran out and the line was judged again on the step clock.
-    if per[0][1] not in (7, 9):
-        out.append("%s: the first reading was divided by the %s of %d samples, not of 7 (or 9 where the seconds ran out)" % (name, which, per[0][1]))
-    for i in range(1, len(per)):
-        if per[i][1] - per[i - 1][1] not in (2, 4):
-            out.append("%s: reading %d was divided by the %s of %d samples, %d after reading %d, not 2 (or 4)" % (name, i + 1, which, per[i][1], per[i][1] - per[i - 1][1], i))
-    if per[-1][1] != len(ys):
-        out.append("%s: the last reading used %d samples, and %d were taken" % (name, per[-1][1], len(ys)))
+    if median:
+        # The whole run's median (#3406, picker 3.71): every reading over the median of every sample
+        # the case took, so a figure divided by fewer is a provisional one the record must not hold.
+        for i, (_, n) in enumerate(per):
+            if n != len(ys):
+                out.append("%s: reading %d was divided by the median of %d samples, and a median unit is of all %d the case took" % (name, i + 1, n, len(ys)))
+    else:
+        if per[0][1] not in (7, 9):
+            out.append("%s: the first reading was divided by the least of %d samples, not of 7 (or 9 where the seconds ran out)" % (name, per[0][1]))
+        for i in range(1, len(per)):
+            if per[i][1] - per[i - 1][1] not in (2, 4):
+                out.append("%s: reading %d was divided by the least of %d samples, %d after reading %d, not 2 (or 4)" % (name, i + 1, per[i][1], per[i][1] - per[i - 1][1], i))
+        if per[-1][1] != len(ys):
+            out.append("%s: the last reading used %d samples, and %d were taken" % (name, per[-1][1], len(ys)))
     for i, ((u, n), s, got) in enumerate(zip(per, secs, readings)):
-        want = "%.4f" % pick(ys_f[:n]) if 0 < n <= len(ys_f) else "none"
+        if median:
+            want, of = "%.4f" % statistics.median(ys_f), "the median of the %d yardstick samples the case took" % len(ys_f)
+        else:
+            want, of = ("%.4f" % min(ys_f[:n]) if 0 < n <= len(ys_f) else "none"), "the least of the first %d yardstick samples" % n
         if "%.4f" % u != want:
-            out.append("%s: reading %d was divided by %.4f, but the %s of the first %d yardstick samples is %s" % (name, i + 1, u, which, n, want))
+            out.append("%s: reading %d was divided by %.4f, but %s is %s" % (name, i + 1, u, of, want))
         if u > 0 and abs(got - s / u) > 0.06 + 0.002 * got:
             out.append("%s: reading %d is %.1f units, but %.3f s over %.4f s is %.1f" % (name, i + 1, got, s, u, s / u))
     judged = float(r["least"])

@@ -1184,10 +1184,14 @@ cost_limit() {
 # catches the runner's fastest moment, while a judgement of 7 to 15 s spans its slow and fast
 # spells alike. The limit, 83.2, keeps the headroom 91 had: 91 over the median green first
 # reading by the least sample (77.2) is 1.178, times the median green first reading by the median
-# sample of the whole run (70.6). Replayed here on CI's own records (slack-drafts-cost-fixtures),
-# with the median of the samples taken by each reading: the reds pass but one (run 45797239494
-# attempt 1, 83.9 by its third reading), and a gate 20 percent dearer than that median green
-# fails. macOS keeps the least and 67: nothing was read on a Mac.
+# sample of the whole run (70.6). The median is the WHOLE run's (Dan's choice of 2026-11-26, picker
+# 3.71: "3.71.1 Whole run median (Recommended)"), the rule 83.2 was measured with: cost.py divides
+# every reading by the median of every sample the case took. Judged that way, all 139 of those run
+# attempts give 137 green, none red, and 2 that cannot be told (runs 45752799634 and 45825401342,
+# whose one reading, 85.1 and 84.0, would now be followed by readings CI never took). Replayed here
+# on CI's own records (slack-drafts-cost-fixtures): the reds pass, the greens stay green, and a
+# gate 20 percent dearer than that median green fails. macOS keeps the least and 67: nothing was
+# read on a Mac.
 cost_unit() {
   local platform="${2:-$(uname -s)}"
   case "$1" in
@@ -1398,8 +1402,14 @@ if os.environ.get("SLACK_GATE_COST_REPLAY"):
 # Several samples, and the least is the unit (L656): load only ever adds to a sample.
 # SLACK_GATE_COST_UNIT=median divides by their median instead, which the suite's cost_unit gives
 # the cold case off macOS (#3406, Dan's choice of 2026-11-26): a judgement of 7 to 15 s spans a
-# runner's slow and fast spells alike, and the least sample catches only its fastest moment. Either
-# way it is of the samples taken by then, and any other word is refused rather than read as one.
+# runner's slow and fast spells alike, and the least sample catches only its fastest moment. The
+# least is of the samples taken by each reading's time, as ever. The median is of the WHOLE run
+# (Dan's choice of 2026-11-26, picker 3.71: "3.71.1 Whole run median (Recommended)"): after every
+# judgement each reading so far is divided again by the median of every sample taken so far, and
+# whether to take another reading is decided on those figures. The case stops only once one of them
+# is at or under the ceiling, and no sample is taken after it stops, so the figures it stopped on are
+# the final ones the record prints and the verdict reads: no provisional figure is ever kept. Any
+# other word is refused rather than read as one.
 UNIT_KIND = os.environ.get("SLACK_GATE_COST_UNIT", "least")
 if UNIT_KIND not in ("least", "median"):
     print("SLACK_GATE_COST_UNIT is %r, and the unit is the least or the median yardstick sample" % UNIT_KIND); sys.exit()
@@ -1519,6 +1529,10 @@ for attempt in range(max(need, int(os.environ.get("SLACK_GATE_COST_ATTEMPTS", "3
         print("the line was refused (exit %d) after %.1f s of processor time: %s" % (p.returncode, spent, p.stderr[:200])); sys.exit()
     ratios.append((spent / unit, spent, unit))
     taken.append(len(samples))
+    if UNIT_KIND == "median":
+        # The whole run's median so far (#3406, picker 3.71): every reading divided again by it.
+        ratios = [(s / unit, s, unit) for _, s, _ in ratios]
+        taken = [len(samples)] * len(ratios)
     # A trace that says neither is no evidence the sample was cold, so it fails too (L98). A
     # measurement handed a cache that already holds something is one of the cache answering (the
     # warm cases), and there every sample must be a "hit": the same reading of the trace, required
@@ -1539,7 +1553,7 @@ ratio, spent, unit = min(ratios)
 # PRINTED ONLY, never judged (#3170, Dan's decision of 2026-11-21, "Measure more first"): after the
 # readings, each one's processor seconds ("seconds per reading"), the unit it was divided by and how
 # many yardstick samples that unit was the least of ("yardstick per reading", "0.0841 from 7", or
-# "0.0841 median of 7" where the unit is their median, #3406; 5 before the first
+# "0.0841 median of 13" where the unit is the median of all 13 the case took, #3406; 5 before the first
 # judgement and 2 after each, 2 more where the seconds ran out), every yardstick sample in the order
 # taken ("yardstick N samples"), and their least, median and greatest. Some CI runners read a case
 # over its limit with the gate unchanged, and the logs held the seconds and the unit for one case
@@ -1547,8 +1561,8 @@ ratio, spent, unit = min(ratios)
 # could not be read. These are the figures the case already took; no extra sample is timed for
 # them, and the verdict below reads none of them. The suite holds that with
 # tools/gate-cost-rows.py check, which fails unless each reading is its seconds over the sample its
-# record names (the least, or the median) of those taken by then and the judged reading is the least
-# of them.
+# record names (the least of those taken by then, or the median of all the case took) and the judged
+# reading is the least of them.
 log = os.environ.get("SLACK_GATE_COST_LOG")
 if log:
     with open(log, "a") as f:
@@ -1892,16 +1906,19 @@ if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; t
   # pull request runs of 2026-11-25 and 2026-11-26, each with its yardstick samples in the order
   # taken and its seconds as the log printed them, replayed through cost.py's own loop at Linux's
   # unit and limit as the cold case is run. Reds of that day under the least sample and 91 must
-  # pass, greens must stay green, and run 45797239494 attempt 1 stays red, because the median of
-  # the samples taken by its third reading still gives 83.9. The last line is made up, and says so:
-  # those samples with seconds 20 percent above the median green reading (70.6), which must fail.
-  # Each record is replayed by the least sample and 91 too, the rule CI judged it by, and must give
-  # CI's own verdict and readings, so the replay is seen to be the run it stands for.
+  # pass, run 45797239494 attempt 1 among them (it stayed red at 83.9 when each reading was divided
+  # by the median of the samples taken by its own time; by the whole run's median its second reading
+  # is 81.0), and greens must stay green, each with the readings the whole run's median gives, and
+  # each record must pass tools/gate-cost-rows.py check. The last line is made up, and says so: the
+  # samples of run 45805317401 with seconds 20 percent above the median green reading (70.6) of the
+  # median of the samples taken by each judgement, which must fail. Each record is replayed by the
+  # least sample and 91 too, the rule CI judged it by, and must give CI's own verdict and readings,
+  # so the replay is seen to be the run it stands for.
   ci_records="$DIR/slack-drafts-cost-fixtures/ci-cold-records.jsonl"
   # shellcheck disable=SC2016
-  ci_replayed="$(python3 -B - "$ci_records" "$T/cost.py" "$HOOK" "$CS" "$T" "$(cost_unit suite-cold Linux)" "$(cost_limit suite-cold Linux)" 2>&1 <<'PY'
+  ci_replayed="$(python3 -B - "$ci_records" "$T/cost.py" "$HOOK" "$CS" "$T" "$(cost_unit suite-cold Linux)" "$(cost_limit suite-cold Linux)" "${REPO:+$REPO/tools/gate-cost-rows.py}" 2>&1 <<'PY'
 import collections, json, os, subprocess, sys, tempfile
-records, cost, hook, cs, tmp, unit, limit = sys.argv[1:8]
+records, cost, hook, cs, tmp, unit, limit, rows_tool = sys.argv[1:9]
 def run(rec, unit, limit):
     d = tempfile.mkdtemp(dir=tmp)
     os.mkdir(os.path.join(d, "cache"))
@@ -1913,19 +1930,26 @@ def run(rec, unit, limit):
                SLACK_GATE_CACHE_DIR=os.path.join(d, "cache"))
     p = subprocess.run(["python3", "-B", cost, hook, cs, limit, "--line", "bash tests/test-claude-sync.sh"], capture_output=True, text=True, env=env)
     logged = open(os.path.join(d, "cost.log")).read() if os.path.exists(os.path.join(d, "cost.log")) else ""
-    return (p.stdout + p.stderr).strip(), logged
+    held = "no tools/gate-cost-rows.py beside this suite"
+    if rows_tool and os.path.isfile(rows_tool) and logged:
+        q = subprocess.run(["python3", "-B", rows_tool, "check", os.path.join(d, "cost.log")], capture_output=True, text=True)
+        held = (q.stdout + q.stderr).strip()
+    return (p.stdout + p.stderr).strip(), logged + "\nrows check: " + held
 kinds = collections.Counter()
 for line in open(records):
     rec = json.loads(line)
     kinds[rec["kind"]] += 1
     name = "run %s %s" % (rec["run"], rec["attempt"]) if rec["run"] != "constructed" else "the made up record"
     said, logged = run(rec, unit, limit)
-    want_fail = rec["kind"] in ("red-stays-red", "constructed-20-percent-dearer")
+    want_fail = rec["kind"] == "constructed-20-percent-dearer"
     readings = ", ".join(rec["median_readings"])
     if want_fail:
         good = said.startswith("judging it took") and ("past %s, in each of 3 samples (%s)" % (float(limit), readings)) in said
     else:
         good = said == "ok" and " median of " in logged and " from " not in logged.split("yardstick per reading", 1)[-1].split(";", 1)[0]
+    # The record holds the final figures, each reading over the median of every sample taken, and
+    # tools/gate-cost-rows.py reproduces each from the printed seconds and unit.
+    good = good and ", samples %s;" % readings in logged and logged.endswith("\nrows check: ok")
     print("%s\t%s\t%s" % (rec["kind"], name, "ok" if good else "cost.py answered %r, logged %r" % (said[:300], logged[-300:])))
     if rec["run"] != "constructed":
         said, logged = run(rec, "least", "91")
@@ -1934,7 +1958,7 @@ for line in open(records):
         good = ((said.startswith("judging it took") and "(%s)" % least in said)
                 or (said.startswith("unmeasured: every judgement") and "at %s units" % least in said)) if rec["kind"].startswith("red") else said == "ok"
         print("control\trun %s %s\t%s" % (rec["run"], rec["attempt"], "ok" if good else "by the least sample and 91, cost.py answered %r" % said[:300]))
-short = [k for k, n in (("red-now-green", 6), ("red-stays-red", 1), ("green-stays-green", 5), ("constructed-20-percent-dearer", 1)) if kinds[k] < n]
+short = [k for k, n in (("red-now-green", 7), ("green-stays-green", 5), ("constructed-20-percent-dearer", 1)) if kinds[k] < n]
 print("count\tthe records\t%s" % ("ok" if not short else "too few records of %s in %s: %s" % (", ".join(short), records, dict(kinds))))
 PY
 )"
@@ -1943,10 +1967,9 @@ PY
     [ -n "$kind" ] || continue
     ci_seen=$((ci_seen + 1))
     case "$kind" in
-      red-now-green) check "$name, red by the least sample and 91, passes by the median sample and $(cost_limit suite-cold Linux) (#3406)" "$verdict" ;;
-      red-stays-red) check "$name, red by the least sample and 91, is still past $(cost_limit suite-cold Linux) by the median of the samples taken by then (#3406)" "$verdict" ;;
-      green-stays-green) check "$name, green by the least sample and 91, stays green by the median sample and $(cost_limit suite-cold Linux) (#3406)" "$verdict" ;;
-      constructed-20-percent-dearer) check "$name, a gate 20 percent dearer than the median green reading, fails by the median sample and $(cost_limit suite-cold Linux) (#3406)" "$verdict" ;;
+      red-now-green) check "$name, red by the least sample and 91, passes by the whole run's median sample and $(cost_limit suite-cold Linux) (#3406)" "$verdict" ;;
+      green-stays-green) check "$name, green by the least sample and 91, stays green by the whole run's median sample and $(cost_limit suite-cold Linux) (#3406)" "$verdict" ;;
+      constructed-20-percent-dearer) check "$name, a gate 20 percent dearer than the median green reading, fails by the whole run's median sample and $(cost_limit suite-cold Linux) (#3406)" "$verdict" ;;
       control) check "$name replayed by the least sample and 91 gives CI's own verdict and readings (#3406)" "$verdict" ;;
       count) check "the CI records replayed for the Linux unit hold enough of each kind (#3406)" "$verdict" ;;
       *) check "a CI record replayed for the Linux unit says what it is (#3406)" "$kind $name $verdict" ;;
