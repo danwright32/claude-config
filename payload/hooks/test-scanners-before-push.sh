@@ -2671,7 +2671,8 @@ kind(){   # $1 = name, then the suite's lines, one per argument
 }
 K_RUN='REPO="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"'
 K_WALK='python3 -c "import os, sys; list(os.walk(sys.argv[1]))" "$REPO"'
-# Every way a walk is spelled, with the helper run the way those 66 suites run it.
+# Every way a walk is spelled, with the helper run inside a command substitution, as the real
+# walkers run it.
 kind oswalk "$K_RUN" "$K_WALK"
 kind rglob "$K_RUN" 'python3 -c "import pathlib, sys; list(pathlib.Path(sys.argv[1]).rglob(sys.argv[2]))" "$REPO" "*.sh"'
 kind find "$K_RUN" 'find "$REPO" \( -name .git -o -name worktrees \) -prune -o -type f -print >/dev/null'
