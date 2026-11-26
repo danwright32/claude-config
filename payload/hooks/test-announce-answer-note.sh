@@ -224,6 +224,24 @@ else
   check "the hooks block beside this suite can be found, so the registration can be read" "lib/settings-file.sh found no settings file in $DIR/.."
 fi
 
+echo "his answer about whether a feature is announced is noted the same way (#3669)"
+STORE="$WORK/store-deciding"
+T="$WORK/deciding.jsonl"; aaf_new "$T"
+id="$(aaf_talk "$T" decide-put acme/widget "Hand back")"
+run "$(aaf_talk "$T" decide-payload "$id" acme/widget "Hand back" "Not announcing")"
+check "the picker that asks whether a feature is announced is noted, in silence" "$([[ "$HRC" == 0 && -z "$HOUT" ]] && grep -q '"kind": "answered".*' "$STORE/record.jsonl" 2>/dev/null && grep -q '"source": "announce-discovery"' "$STORE/record.jsonl" && echo ok || echo "rc=$HRC out=$HOUT $(cat "$STORE/record.jsonl" 2>/dev/null)")"
+check "the note holds the feature and nothing he answered" "$(grep -q '"feature": "Hand back"' "$STORE/record.jsonl" && ! grep -q "Not announcing" "$STORE/record.jsonl" && echo ok || cat "$STORE/record.jsonl")"
+# A note that cannot be taken is said in words about this picker, with what reads his answer in.
+STORE="$WORK/store-deciding-blocked/inner"
+mkdir -p "$WORK/store-deciding-blocked"; chmod 500 "$WORK/store-deciding-blocked"
+id="$(aaf_talk "$T" decide-put acme/widget "Hand over")"
+run "$(aaf_talk "$T" decide-payload "$id" acme/widget "Hand over" "Not announcing")"
+said="$(told "$HOUT")"
+check "a note of it that cannot be written is said, to Dan and the session, as an answer about announcing a feature" "$([[ "$HRC" == 0 && "$said" == *"whether a feature is announced to agents was not noted"* ]] && echo ok || echo "rc=$HRC $said")"
+check "and it says what reads his answer into the record: a Bash call that runs create-milestone.sh, or the merge" "$([[ "$said" == *"create-milestone.sh"* && "$said" != *"--add-label"* ]] && echo ok || echo "$said")"
+chmod 700 "$WORK/store-deciding-blocked"
+STORE="$WORK/store"
+
 echo "the record is this suite's own"
 check "no case wrote to this Mac's real record" "$([ "$(ls -la "$REAL_STORE" 2>/dev/null | cksum)" = "$real_before" ] && echo ok || echo "$REAL_STORE changed during the run")"
 

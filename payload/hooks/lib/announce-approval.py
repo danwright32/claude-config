@@ -181,6 +181,57 @@ file, a path built at run time, a hook run by hand with a payload of the caller'
 the transcripts are files on a Mac the session can write, so a session that sets out to forge them
 is not stopped here. And an approval given on one Mac is unknown to the other, which asks again.
 
+WHETHER A FEATURE IS ANNOUNCED AT ALL (claude-config#3669; Dan, 2026-11-25: "also, it should ask me
+before applying the label. It can be part of the new feature discovery"). A second picker, of the
+source announce-discovery, asks him whether a feature is announced to agents when it ships. Feature
+discovery asks it, with this metadata:
+
+    {"source": "announce-discovery", "repo": "<owner/name>", "feature": "<the feature's name>"}
+
+and the merge gate has it asked again, about a milestone, with "milestone": <its number> added and
+"feature" the milestone's title, when a pull request finishes a feature he said yes to under
+another label. Its options are `Announce it` and `Not announcing`. His answer is read by the same
+path as an approval: noted when he gives it (an `answered` line carrying "source", the feature and
+the milestone, and nothing he answered), and read from the session's transcript when a hook next
+asks, which writes one line for the picker:
+    {"kind": "decided", "source", "repo", "feature", "milestone", "answer": "yes" | "no" | "other",
+     "said": "<the option he chose>", "why": "<why an other decides nothing>", "session", "picker",
+     "answered", "at"}
+or a `settled` line for a picker that was no answer of his. The hooks that ask are the merge gate
+(`finishes --hook`) and the label hook, before a Bash call that runs create-milestone.sh
+(read_answers), since the helper's own question reads the record only. What counts as his yes or
+his no is every rule of his approval that has a meaning without a file: one question, no answer
+filled in by the caller, not closed by its own timeout or in error, read from the session's own
+transcript under the folder Claude Code keeps them in, a picker he could read as written, the
+option ALONE with nothing typed beside it, and a subagent's call writes nothing. Two rules are this
+picker's own: the question he was shown must hold the words `agents must or can act differently`
+(THE_TEST, the test he is deciding by), and must name the feature in the very words of the
+metadata's "feature", so an answer is never recorded about a feature the question did not name. An
+answer of his that breaks one of these, or is words of his own, is recorded as "other": it decides
+nothing, and, being his last answer, it stands in front of an earlier yes or no. HIS LAST ANSWER
+ABOUT A FEATURE DECIDES, by repository and the feature's name in any letter case and spacing.
+
+The milestone's description carries the decision as one line, written by create-milestone.sh
+through milestone_line and read by the merge gate through milestone_says, the one writer and the
+one reader:
+    Announce to agents: yes (Dan answered "Announce it" on 2026-11-26)
+    Announce to agents: no (Dan answered "Not announcing" on 2026-11-26)
+    Announce to agents: not asked yet
+The day is his answer's, in US Eastern time. The line holds no name: nothing in it but the answer,
+his option's words and the date.
+
+  decision(repo, feature, milestone=None, payload=None)
+      {"answer": "yes" | "no" | "none", "said", "answered", "day", "why", "how", "notes"}: what he
+      last answered about announcing feature. With milestone, only a picker naming that number.
+  milestone_line(repo, feature, answer, description)
+      {"ok", "line", "description", "why", "how"}: the line for a plan's "announce" value, taken
+      for yes and no only when the record holds it as his last answer. Reads the record only.
+  milestone_says(description)   "yes", "no", "unasked" or "": what a description's line says.
+  finishes(repo, pr, answer, payload=None)
+      {"state": "clear" | "owed" | "unread", "why", "how", "notes", "announced"}: whether a pull
+      request that does not carry the label finishes a feature he said yes to announcing (R9).
+  read_answers(payload)         his answers read into the record, and what stood in the way.
+
   check(repo, digest, payload, pr=None, claim=False)
       {"approved": bool, "state": str, "why": str, "how": str, "notes": [str]}: whether digest, an
       announcementHash, is wording Dan approved for repo that pull request pr may use. payload is
@@ -207,6 +258,16 @@ notes his answer:
                                                                      the hook payload on standard input
   announce-approval.py used --repo <owner/name> --hash <sha256> --pr <number> [--closes <json>] [--unread <why>]
   announce-approval.py answered                                      the PostToolUse payload on standard input
+And three about whether a feature is announced (claude-config#3669), each reading the record only:
+standard input is not read. They are create-milestone.sh's and the merge gate's to run, from inside
+those scripts: announce-label-ask.sh knows only `list` and `check` as forms that read, so a
+session's own Bash command running one of these is refused like any other verb. With --hook, which
+is the merge gate's, the hook payload is on standard input, his pickers are read, and what they
+hold is written:
+  announce-approval.py decision --repo <owner/name> --feature <name> [--milestone <number>]
+  announce-approval.py milestone-line --repo <owner/name> --feature <name> --answer <yes|no|unasked>
+                                      [--description-file <file>]    create-milestone.sh's question
+  announce-approval.py finishes --repo <owner/name> --pr <number> --answer-file <GitHub's answer>
 """
 import importlib.util
 import json
@@ -267,6 +328,35 @@ HOW_TO_ASK = (
     + "` and `Not yet` and the metadata {\"source\": \"" + SOURCE + "\", \"repo\": \"<owner/name>\", \"file\": "
     "\"<absolute path>\"}. Leave the file alone once it is open (he may edit it before he answers), and make the "
     "pull request's Announcement block that file's text.")
+# WHETHER A FEATURE IS ANNOUNCED (claude-config#3669; module docstring). The picker's source, its
+# two options, the words its question must hold, and the line a milestone's description carries.
+# Each is one constant, so the rule, the refusals, the how to ask text, the line's writer and the
+# line's reader cannot drift apart.
+DISCOVERY = "announce-discovery"
+ANNOUNCE_IT = "Announce it"
+NOT_ANNOUNCING = "Not announcing"
+THE_TEST = "agents must or can act differently"
+FEATURE_CHARS = 200
+LINE_HEAD = "Announce to agents:"
+UNASKED = "not asked yet"
+# The line, wherever it stands in a description: its answer is the first word group after the head.
+LINE = re.compile(r"^[ \t]*" + re.escape(LINE_HEAD) + r"[ \t]*(yes|no|" + re.escape(UNASKED) + r")\b.*$",
+                  re.IGNORECASE | re.MULTILINE)
+PLAN_VALUES = ("yes", "no", "unasked")
+
+
+def how_to_ask_feature(repo, feature, milestone=None):
+    """How to ask him whether a feature is announced, with the metadata written out."""
+    meta = {"source": DISCOVERY, "repo": repo or "<owner/name>", "feature": feature or "<the feature's name>"}
+    if milestone is not None:
+        meta["milestone"] = milestone
+    return ("To ask him: ONE AskUserQuestion picker of one question that names the feature in the very words of the "
+            "metadata's \"feature\" and holds the words `" + THE_TEST + "` (without both his answer does not count), "
+            "with the options `" + ANNOUNCE_IT + "` and `" + NOT_ANNOUNCING + "` and the metadata "
+            + json.dumps(meta, sort_keys=True) + ". His answer counts only as the option alone, with nothing typed "
+            "beside it.")
+
+
 # What the command line without --claim says beside "not approved", so a session that has just asked
 # him is not told his answer does not exist.
 RECORD_ONLY = ("this command reads the record only: a picker of his in this session is read, and written to the "
@@ -592,15 +682,15 @@ def _items(entry):
     return [i for i in content if isinstance(i, dict)] if isinstance(content, list) else []
 
 
-def _asked(transcript_path, session_id):
-    """Every picker of SOURCE the session put that came back, oldest first, as a dict: ask (its
+def _asked(transcript_path, session_id, source=SOURCE):
+    """Every picker of source the session put that came back, oldest first, as a dict: ask (its
     input), result, is_error, sent and answered (line numbers), stamp (when the answer was
     recorded, as written) and prefilled (the session sent it with its answers filled in, so it is
     no picker at all, and is kept only so a refusal can say so)."""
     waiting, out = {}, []
 
     def wanted(raw):
-        if b"AskUserQuestion" in raw and SOURCE.encode("utf-8", "replace") in raw:
+        if b"AskUserQuestion" in raw and source.encode("utf-8", "replace") in raw:
             return True
         return bool(waiting) and b"tool_result" in raw and any(k in raw for k in waiting)
 
@@ -613,7 +703,7 @@ def _asked(transcript_path, session_id):
                 # One that came with its answers filled in was never put to him: the dialog returns
                 # them without asking (lib/db-apply-approval.py's rule), so it is no picker at all.
                 # It is marked, and approvals() takes nothing from it but the reason to give.
-                if isinstance(uid, str) and uid and isinstance(meta, dict) and meta.get("source") == SOURCE:
+                if isinstance(uid, str) and uid and isinstance(meta, dict) and meta.get("source") == source:
                     waiting[uid.encode("utf-8", "surrogatepass")] = (ask, n)
             elif item.get("type") == "tool_result" and isinstance(item.get("tool_use_id"), str):
                 pair = waiting.pop(item["tool_use_id"].encode("utf-8", "surrogatepass"), None)
@@ -799,18 +889,35 @@ def note_answer(payload, deadline=None):
         if payload.get("agent_id"):
             return False, None
         return False, untold + absent + ", and the hook's own copy of the picker carries no metadata naming what it asked"
-    if not isinstance(meta, dict) or meta.get("source") != SOURCE:
+    if not isinstance(meta, dict) or meta.get("source") not in (SOURCE, DISCOVERY):
         return False, None
     if sent and ask.get("answers"):
         # The session sent it with its answers filled in, so it was never put to him.
         return False, None
-    said = "Dan's answer about the announcement's wording was not noted on this Mac's record: "
+    deciding = meta.get("source") == DISCOVERY
+    said = ("Dan's answer about " + ("whether a feature is announced to agents" if deciding else "the announcement's wording")
+            + " was not noted on this Mac's record: ")
     if payload.get("agent_id"):
         return False, said + "the picker was a subagent's, and only one the main session put to him is noted"
     if session is None or transcript is None or picker is None:
         return False, said + "the hook was not told the session, its transcript and the picker's id"
     if misplaced is not None:
         return False, said + misplaced
+    if deciding:
+        # The picker that asks whether a feature is announced (claude-config#3669) has no file: its
+        # note says which picker, in which session, about which feature, and nothing he answered.
+        repo = repo_key(meta.get("repo"))
+        feature, milestone, bad = _feature_of(meta)
+        if repo is None or bad is not None:
+            return False, said + (bad or "the picker's metadata does not name the repository as owner/name")
+        entries, unreadable = read_record()
+        if entries is None:
+            return False, said + unreadable
+        if any(e.get("kind") == "answered" and e.get("picker") == picker for e in entries):
+            return True, None
+        failed = _append([{"kind": "answered", "source": DISCOVERY, "session": session, "transcript": transcript,
+                           "picker": picker, "repo": repo, "feature": feature, "milestone": milestone, "at": _now()}])
+        return (False, said + failed) if failed else (True, None)
     repo, file = repo_key(meta.get("repo")), meta.get("file")
     if repo is None or not isinstance(file, str) or not file.startswith("/"):
         return False, (said + "the picker's metadata does not name the repository as owner/name and the wording file "
@@ -858,13 +965,16 @@ def _ask_of(transcript_path, session_id, picker):
     return None
 
 
-def _noted(entries):
-    """The answers the record notes, {session: (its transcript, {picker: the note})}, each picker's
-    first note only."""
+def _noted(entries, source=SOURCE):
+    """The answers the record notes for pickers of source, {session: (its transcript, {picker: the
+    note})}, each picker's first note only. A note naming no source is an approval picker's, which
+    is all there was before the other picker was noted (claude-config#3669)."""
     out = {}
     for e in entries or []:
         session, transcript, picker = _text(e.get("session")), _text(e.get("transcript")), _text(e.get("picker"))
         if e.get("kind") != "answered" or session is None or transcript is None or picker is None:
+            continue
+        if (_text(e.get("source")) or SOURCE) != source:
             continue
         out.setdefault(session, (transcript, {}))[1].setdefault(picker, e)
     return out
@@ -1386,8 +1496,479 @@ def mark_used(repo, digest, pr, closes=None, unread=None):
                      "unread": unread or None, "at": _now()}])
 
 
+# ---- whether a feature is announced to agents (claude-config#3669; module docstring) ----
+
+DECISION_RECORD_ONLY = ("this command reads the record only: his answer in a picker is read, and written to the record, "
+                        "when a hook asks, which is when a Bash call runs create-milestone.sh by name in the session "
+                        "that asked him, or at a merge")
+
+
+def _feature_key(text):
+    """A feature's name as it is compared: its words, in any letter case and spacing."""
+    return " ".join(text.split()).casefold() if isinstance(text, str) and text.strip() else None
+
+
+def _feature_of(meta):
+    """(feature, milestone, None) as a picker's metadata names them, or (None, None, why not)."""
+    feature, milestone = meta.get("feature"), meta.get("milestone")
+    if (not isinstance(feature, str) or not feature.strip() or len(feature) > FEATURE_CHARS
+            or "\n" in feature or "\r" in feature):
+        return None, None, ("the picker's metadata does not name the feature (\"feature\": its name, on one line of at "
+                            "most " + str(FEATURE_CHARS) + " characters)")
+    if milestone is not None and (not isinstance(milestone, int) or isinstance(milestone, bool) or milestone <= 0):
+        return None, None, "the picker's metadata names a milestone by something other than its number"
+    return feature, milestone, None
+
+
+def _day(stamp):
+    """The day an answer was given, in US Eastern time, as YYYY-MM-DD, or "" when it cannot be told.
+    Without the time zone database it is the day in UTC, and says so."""
+    ns = _part("db_apply_approval_shared", "db-apply-approval.py")._stamp_ns(stamp)
+    if ns is None:
+        return ""
+    import datetime
+    at = datetime.datetime.fromtimestamp(ns // 1_000_000_000, datetime.timezone.utc)
+    try:
+        import zoneinfo
+        return at.astimezone(zoneinfo.ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+    except Exception:  # noqa: BLE001  no time zone database on this Mac
+        return at.strftime("%Y-%m-%d") + " UTC"
+
+
+def decisions(session_id, transcript_path, deadline=None, done=()):
+    """(lines, untaken, None) for the session's pickers of DISCOVERY, or ([], [], why they could
+    not be looked for). lines is the record's line for each picker that came back and that done,
+    the pickers the record already holds an outcome for, does not name, oldest first:
+        {"kind": "decided", "source", "repo", "feature", "milestone", "answer", "said", "why",
+         "session", "picker", "answered"}
+    for an answer of his, where answer is "yes" (ANNOUNCE_IT alone), "no" (NOT_ANNOUNCING alone)
+    or "other" with why it decides nothing; and kind "settled" for a picker that was no answer of
+    his or names no repository and feature. untaken is [{repo, feature, why}] for what a caller
+    should say and the lines do not: a picker sent with its answer filled in, one whose metadata
+    cannot be read, and one whose reading by him could not be checked just now, which gets no line
+    and is read again."""
+    if not isinstance(transcript_path, str) or not transcript_path or not isinstance(session_id, str) or not session_id:
+        return [], [], "the call named no session transcript, so a picker of his in this session could not be looked for"
+    misplaced = _misplaced(transcript_path)
+    if misplaced is not None:
+        return [], [], misplaced
+    try:
+        asked = _asked(transcript_path, session_id, DISCOVERY)
+    except OSError as e:
+        return [], [], ("this session's transcript could not be read (" + type(e).__name__
+                        + "), so a picker of his in this session could not be looked for")
+    lines, untaken, judged = [], [], []
+    for p in asked:
+        if p["picker"] in done:
+            continue
+        meta = p["ask"]["metadata"]
+        repo = repo_key(meta.get("repo"))
+        feature, milestone, bad = _feature_of(meta)
+        about = {"repo": repo or "", "feature": feature or ""}
+        if p["prefilled"]:
+            # No picker at all: it was never put to him, and it gets no line.
+            untaken.append(dict(about, why="the session sent a picker about it with its answer already filled in, so "
+                                           "it was never put to him. Ask it with no answers of its own"))
+            continue
+        result = p["result"] if isinstance(p["result"], dict) else {}
+        line = {"kind": "settled", "source": DISCOVERY, "repo": repo or "", "feature": feature, "milestone": milestone,
+                "session": session_id, "picker": p["picker"], "answered": _text(p["stamp"]), "why": None}
+        if p["is_error"] or not isinstance(p["result"], dict) or "afkTimeoutMs" in result:
+            lines.append((p["answered"], dict(line, why="the picker came back with no answer of his: in error, or "
+                                                        "closed by its own timeout")))
+            continue
+        questions, answers = p["ask"].get("questions"), result.get("answers")
+        if not isinstance(questions, list) or len(questions) != 1 or not isinstance(answers, dict) or len(answers) != 1:
+            why = "a picker about it did not ask one question with one answer. Ask ONE picker of one question"
+            lines.append((p["answered"], dict(line, why=why)))
+            untaken.append(dict(about, why=why))
+            continue
+        if repo is None or bad is not None:
+            why = bad or "the picker's metadata does not name the repository as owner/name"
+            lines.append((p["answered"], dict(line, why=why)))
+            untaken.append(dict(about, why=why))
+            continue
+        chosen = next(iter(answers.values()))
+        chosen = chosen.strip() if isinstance(chosen, str) else ""
+        line = dict(line, kind="decided", answer="other", said=None)
+        if chosen not in (ANNOUNCE_IT, NOT_ANNOUNCING):
+            lines.append((p["answered"], dict(line, why="he answered in words of his own, in place of choosing `"
+                          + ANNOUNCE_IT + "` or `" + NOT_ANNOUNCING + "`. They are in that picker's result, in the "
+                          "session's transcript: read them, then ask him again")))
+            continue
+        line["said"] = chosen
+        shown = _question_shown(p)
+        if _typed_beside(result) is not None:
+            # His words are not written to the record: they are in the picker's result.
+            why = ("he chose `" + chosen + "` and typed words beside it, and an answer that comes with words of his "
+                   "decides nothing. They are in that picker's result, in the session's transcript: read them, then "
+                   "ask him again")
+        elif THE_TEST not in shown:
+            why = ("the picker's question did not state the test, so what he was deciding was not in front of him. "
+                   "Ask again with a question that holds the words `" + THE_TEST + "`")
+        elif feature not in shown:
+            why = ("the picker's question did not name the feature its metadata names (" + json.dumps(feature) + "), so "
+                   "his answer cannot be taken as being about it. Ask again with that name in the question, word for word")
+        else:
+            judged.append((p, line, chosen))
+            continue
+        lines.append((p["answered"], dict(line, why=why)))
+    if judged:
+        # Read by Dan as written, by the one check of text a person answers in a picker. A check
+        # that could not run is not a verdict: the picker gets no line and is read again.
+        ap = _part("db_apply_approval_shared", "db-apply-approval.py")
+        asks = []
+        for p, _, _ in judged:
+            got = p["result"].get("questions")
+            asks.append(dict(p["ask"], questions=got) if isinstance(got, list) and got else p["ask"])
+        try:
+            faults = ap._picker_faults(asks, deadline)
+        except ap.PickerCheckFailed as e:
+            faults = None
+            for _, line, chosen in judged:
+                untaken.append({"repo": line["repo"], "feature": line["feature"],
+                                "why": "whether Dan could read the picker he answered `" + chosen + "` in could not be "
+                                       "checked (" + str(e) + "), so his answer is not taken until it can be"})
+        for (p, line, chosen), fault in zip(judged, faults or []):
+            if fault is None:
+                lines.append((p["answered"], dict(line, answer="yes" if chosen == ANNOUNCE_IT else "no")))
+            else:
+                lines.append((p["answered"], dict(line, why="the picker Dan answered `" + chosen + "` in would not have "
+                              "reached him as written (" + fault + "), so that answer is not taken: ask it again in "
+                              "plain words without what is at fault")))
+    return [line for _, line in sorted(lines, key=lambda pair: pair[0])], untaken, None
+
+
+def _harvest_decisions(payload, notes, key=None):
+    """This session's pickers of DISCOVERY, the answers the record notes in other sessions (for
+    repository key, or any when it is None), and the record, read once for one call: (found,
+    untaken, unlooked, entries, unreadable). found is every line decisions() gave, each written to
+    the record here unless the call is a subagent's; a failed save is added to notes. This is the
+    one place his answer about announcing a feature is written, and only a hook reaches it."""
+    deadline = time.monotonic() + CHECK_SECONDS
+    entries, unreadable = read_record()
+    noted = _noted(entries, DISCOVERY)
+    # A picker is one answer whichever session id its lines are found under (_approval_keys).
+    done = {e.get("picker") for e in entries or [] if e.get("kind") in ("decided", "settled")}
+    own = _text(payload.get("session_id"))
+    found, untaken, unlooked = decisions(payload.get("session_id"), payload.get("transcript_path"), deadline, done)
+    looked = own if _text(payload.get("transcript_path")) else None
+    waiting = [s for s, (_, pickers) in noted.items() if s != looked and any(
+        (key is None or n.get("repo") == key) and p not in done for p, n in pickers.items())]
+    unlooked = [unlooked] if unlooked else []
+    for session in waiting[-NOTED_SESSIONS:]:
+        transcript = noted[session][0]
+        more, less, why = decisions(session, transcript, deadline, done | {f["picker"] for f in found})
+        found += more
+        untaken += less
+        if why:
+            unlooked.append("an answer of his the record notes, in the session whose transcript is " + transcript
+                            + ", could not be read back: " + why)
+    if found and not payload.get("agent_id"):
+        failed = _append([dict(f, at=_now()) for f in found])
+        if failed:
+            notes.append("Dan's answer about whether a feature is announced to agents was read from his picker, but it "
+                         "could not be saved: " + failed + ". It counts for this call, but a call that cannot read this "
+                         "session's transcript will not know of it until that record can be written.")
+    return found, untaken, ". ".join(w.rstrip(".") for w in unlooked) or None, entries, unreadable
+
+
+def read_answers(payload):
+    """What the label hook asks before a Bash call that runs create-milestone.sh: his answers about
+    announcing a feature, read from this session's pickers and the noted ones into the record, where
+    the helper's own record-only question finds them. Returns what there is to say: a save that
+    failed, a transcript that could not be read, an answer that could not be checked."""
+    notes = []
+    _, untaken, unlooked, _, unreadable = _harvest_decisions(payload if isinstance(payload, dict) else {}, notes)
+    if unreadable:
+        notes.append(unreadable)
+    if unlooked:
+        notes.append("Dan's answer about whether a feature is announced to agents may not be on this Mac's record: "
+                     + unlooked + ".")
+    for u in untaken:
+        notes.append("About announcing " + (json.dumps(u["feature"]) if u["feature"] else "a feature it did not name")
+                     + ": " + u["why"].rstrip(".") + ".")
+    return notes
+
+
+def _last_decided(entries, found, key, fkey, milestone=None):
+    """Dan's last answer about announcing the feature fkey of repository key, as the record's line,
+    or None: with milestone, only an answer in a picker naming that milestone's number."""
+    best = None
+    for e in list(entries or []) + list(found):
+        if e.get("kind") != "decided" or e.get("repo") != key or _feature_key(e.get("feature")) != fkey:
+            continue
+        if milestone is not None and (e.get("milestone") != milestone or isinstance(e.get("milestone"), bool)):
+            continue
+        when = _when(e)
+        if best is None or when >= best[0]:
+            best = (when, e)
+    return best[1] if best else None
+
+
+def decision(repo, feature, milestone=None, payload=None):
+    """What Dan last answered about announcing feature of repo to agents:
+        {"answer": "yes" | "no" | "none", "said", "answered", "day", "why", "how", "notes"}
+    said is the option he chose, answered when, and day that moment's date in US Eastern time. With
+    milestone, only an answer in a picker naming that milestone's number counts (the question the
+    merge gate asks). payload is the hook payload: his pickers are read and written to the record
+    (_harvest_decisions). payload None is the question that only reads the record, which is all the
+    command line a session can run asks."""
+    out = {"answer": "none", "said": "", "answered": "", "day": "", "why": "", "how": "", "notes": []}
+    key, fkey = repo_key(repo), _feature_key(feature)
+    if key is None or fkey is None:
+        out["why"] = ("the repository could not be told as owner/name, or no feature was named, so no answer of Dan's "
+                      "could be looked up")
+        return out
+    out["how"] = how_to_ask_feature(key, " ".join(feature.split()), milestone)
+    if payload is None:
+        found, untaken, unlooked = [], [], DECISION_RECORD_ONLY
+        entries, unreadable = read_record()
+    else:
+        found, untaken, unlooked, entries, unreadable = _harvest_decisions(
+            payload if isinstance(payload, dict) else {}, out["notes"], key)
+    last = _last_decided(entries, found, key, fkey, milestone)
+    if last is not None and last.get("answer") in ("yes", "no"):
+        out.update(answer=last["answer"], said=_text(last.get("said")) or "", answered=_text(last.get("answered")) or "",
+                   day=_day(last.get("answered")))
+        return out
+    about = json.dumps(" ".join(feature.split())) + " in " + key + (
+        ", in a picker naming milestone " + str(milestone) if milestone is not None else "")
+    if last is not None:
+        why = ["Dan's last answer about announcing " + about + " decides nothing: "
+               + (_text(last.get("why")) or "it was neither option alone")]
+    else:
+        why = ["this Mac's record holds no answer of Dan's about announcing " + about
+               + ("" if payload is None else ", and none was found in this session")]
+    for more in (unreadable, unlooked):
+        if more:
+            why.append(more)
+    for u in untaken:
+        if u["repo"] in (key, "") and _feature_key(u["feature"]) in (fkey, None):
+            why.append(u["why"])
+    out["why"] = ". ".join(w.rstrip(".") for w in why) + "."
+    return out
+
+
+def milestone_says(description):
+    """What a milestone's description says about announcing it: "yes", "no", "unasked", or "" when
+    it carries no such line. The one reader of the line milestone_line writes. A description
+    carrying more than one line that disagree is read as its yes, then its no: the answer that
+    asks most of the merge."""
+    said = [m.group(1).lower() for m in LINE.finditer(description if isinstance(description, str) else "")]
+    for answer in ("yes", "no"):
+        if answer in said:
+            return answer
+    return "unasked" if said else ""
+
+
+def _with_line(description, line):
+    """description carrying line as its one line about announcing: in place of the first it
+    already carries, with any other taken out, or as a paragraph of its own at the end."""
+    if not LINE.search(description):
+        return (description.rstrip() + "\n\n" if description.strip() else "") + line
+    first = []
+
+    def swap(m):
+        first.append(m)
+        return line if len(first) == 1 else ""
+
+    return LINE.sub(swap, description)
+
+
+def milestone_line(repo, feature, answer, description):
+    """What create-milestone.sh asks for a repository that announces: the line a milestone's
+    description carries for the plan's "announce" value, and the description carrying it.
+        {"ok": bool, "line", "description", "why", "how"}
+    "yes" and "no" are taken only when the record holds that as Dan's last answer about the
+    feature, and the line quotes the option he chose and the day. "unasked" needs nothing, writes
+    that he was not asked yet, never replaces a yes or a no the description already carries, and is
+    refused where the record holds his answer: a milestone never says he was not asked when he
+    was. This reads the record only. The line holds nothing but the answer, his option's words and
+    a date, so it never writes a name the milestone did not already carry."""
+    out = {"ok": False, "line": "", "description": "", "why": "", "how": ""}
+    description = description if isinstance(description, str) else ""
+    if answer not in PLAN_VALUES:
+        out["why"] = ("the plan's \"announce\" is " + json.dumps(answer) + ", and it must be \"yes\", \"no\" or \"unasked\"")
+        return out
+    got = decision(repo, feature)
+    key = repo_key(repo)
+    if key is None or _feature_key(feature) is None:
+        out["why"] = got["why"]
+        return out
+    about = json.dumps(" ".join(feature.split())) + " in " + key
+    his = ("he answered `" + got["said"] + "`" + (" on " + got["day"] if got["day"] else ""))
+    if answer == "unasked":
+        if got["answer"] in ("yes", "no"):
+            out["why"] = ("this Mac's record holds Dan's answer about announcing " + about + ": " + his + ". A milestone "
+                          "for it cannot say he was not asked: put \"announce\": \"" + got["answer"] + "\" in the plan.")
+            return out
+        standing = [m for m in LINE.finditer(description) if m.group(1).lower() in ("yes", "no")]
+        if standing:
+            # An answer the description already carries (given on another Mac, or before this plan) stays.
+            out.update(ok=True, line=standing[0].group(0).strip(), description=description)
+            return out
+        line = LINE_HEAD + " " + UNASKED
+    elif got["answer"] == answer:
+        line = LINE_HEAD + " " + answer + " (Dan answered \"" + got["said"] + "\"" + (" on " + got["day"] if got["day"] else "") + ")"
+    elif got["answer"] in ("yes", "no"):
+        out["why"] = ("Dan's last answer about announcing " + about + " is on this Mac's record: " + his + ". So the "
+                      "plan's \"announce\" cannot be \"" + answer + "\": it is \"" + got["answer"] + "\", unless he is asked "
+                      "again and answers otherwise.")
+        out["how"] = got["how"]
+        return out
+    else:
+        out["why"] = ("The plan's \"announce\" is \"" + answer + "\", and that is taken only as Dan's own answer: "
+                      + got["why"])
+        out["how"] = got["how"]
+        return out
+    out.update(ok=True, line=line, description=_with_line(description, line))
+    return out
+
+
+def _announced(entries, key, number, title):
+    """The pull requests the record holds as let through with an announcement for a milestone: a
+    `used` line whose closes names an issue of it, by the milestone's number where the line carries
+    one and else by its title."""
+    out = []
+    for e in entries or []:
+        closes, pr = e.get("closes"), e.get("pr")
+        if e.get("kind") != "used" or e.get("repo") != key or not isinstance(closes, list) or not isinstance(pr, int):
+            continue
+        for c in closes:
+            if not isinstance(c, dict) or (c.get("repo") is not None and repo_key(c.get("repo")) != key):
+                continue
+            named = c.get("milestone_number")
+            if (named == number and not isinstance(named, bool)) or (named is None and c.get("milestone") == title):
+                if pr not in out:
+                    out.append(pr)
+    return out
+
+
+def finishes(repo, pr, answer, payload=None):
+    """The merge gate's question about a pull request that does not carry changelog/announce, in a
+    repository that announces (claude-config#3669, R9): does it finish a feature Dan said yes to
+    announcing, with no announcement let through for it and no decline of his?
+        {"state": "clear" | "owed" | "unread", "why", "how", "notes", "announced": [pull requests]}
+    answer is GitHub's own answer to the gate's one read of the issues the pull request closes,
+    each with its milestone's number, title, description and open issues. A milestone of this
+    repository is FINISHED by the pull request when every issue still open in it is one the pull
+    request closes, which is also so when none is open. It is owed an announcement when its
+    description says yes (milestone_says), unless the record holds an announcement let through
+    for it (a `used` line naming the milestone: the pull requests are given back in `announced`,
+    because that line says the gate let one through and never that GitHub merged it, so the gate
+    asks GitHub), or Dan's last answer in a picker naming that milestone is NOT_ANNOUNCING.
+    Anything GitHub's answer or the record does not say is "unread", never "clear" (L98). payload
+    is the hook payload, and None reads the record only."""
+    out = {"state": "clear", "why": "", "how": "", "notes": [], "announced": []}
+    key = repo_key(repo)
+
+    def unread(why):
+        out.update(state="unread", why=why)
+        return out
+
+    if key is None:
+        return unread("the repository could not be told as owner/name")
+    short = "GitHub's answer did not hold the issues this pull request closes, each with its milestone and that milestone's open issues"
+    try:
+        refs = answer["data"]["repository"]["pullRequest"]["closingIssuesReferences"]
+        nodes, total = refs["nodes"], refs["totalCount"]
+    except (KeyError, TypeError):
+        return unread(short)
+    if not isinstance(nodes, list) or not isinstance(total, int) or isinstance(total, bool):
+        return unread(short)
+    if total > len(nodes):
+        return unread("this pull request closes " + str(total) + " issues and GitHub's answer holds " + str(len(nodes))
+                      + " of them, so whether one of the others is a milestone's last could not be told")
+    stones = {}
+    for n in nodes:
+        try:
+            issue, where, m = n["number"], n["repository"]["nameWithOwner"], n["milestone"]
+            if repo_key(where) != key or m is None:
+                continue
+            number, title, said = m["number"], m["title"], m["description"]
+            count, still = m["issues"]["totalCount"], {o["number"] for o in m["issues"]["nodes"]}
+        except (KeyError, TypeError):
+            return unread(short)
+        if (not all(isinstance(v, int) and not isinstance(v, bool) for v in [issue, number, count] + sorted(still, key=str))
+                or not isinstance(title, str) or not title or not (said is None or isinstance(said, str))):
+            return unread(short)
+        stone = stones.setdefault(number, {"number": number, "title": title, "says": milestone_says(said),
+                                           "count": count, "open": still, "closes": set()})
+        stone["closes"].add(issue)
+    # More open issues than the answer lists cannot all be ones this pull request closes.
+    owed = [s for s in stones.values()
+            if s["says"] == "yes" and s["count"] <= len(s["open"]) and s["open"] <= s["closes"]]
+    if not owed:
+        return out
+    if payload is None:
+        found, untaken, unlooked = [], [], None
+        entries, unreadable = read_record()
+    else:
+        found, untaken, unlooked, entries, unreadable = _harvest_decisions(
+            payload if isinstance(payload, dict) else {}, out["notes"], key)
+    if entries is None:
+        return unread(unreadable + ", so whether an announcement was let through for the milestone this pull request "
+                      "finishes, or Dan declined one, could not be told")
+    why, how = [], []
+    for s in sorted(owed, key=lambda s: s["number"]):
+        last = _last_decided(entries, found, key, _feature_key(s["title"]), s["number"])
+        if last is not None and last.get("answer") == "no":
+            continue
+        announced = _announced(entries, key, s["number"], s["title"])
+        if announced:
+            out["announced"] += [n for n in announced if n not in out["announced"]]
+            continue
+        said = ("it closes the last open issue of the milestone " + json.dumps(s["title"]) + " (number " + str(s["number"])
+                + "), whose description says Dan said yes to announcing it to agents, and this Mac's record holds no "
+                "announcement let through for that milestone and no answer of his declining it")
+        if last is not None and last.get("answer") == "yes":
+            said += (": asked whether it is still being announced, he answered `" + (_text(last.get("said")) or ANNOUNCE_IT)
+                     + "`" + (" on " + _day(last.get("answered")) if _day(last.get("answered")) else ""))
+        elif last is not None:
+            said += ": his last answer about it decides nothing (" + (_text(last.get("why")) or "it was neither option alone") + ")"
+        why.append(said)
+        how.append("ask Dan whether " + json.dumps(s["title"]) + " is still being announced. "
+                   + how_to_ask_feature(key, s["title"], s["number"]) + " His `" + NOT_ANNOUNCING
+                   + "` lets this merge through under its own label; his `" + ANNOUNCE_IT + "` means it merges under "
+                   "changelog/announce")
+    if not why:
+        return out
+    if unlooked:
+        why.append(unlooked)
+    for u in untaken:
+        if u["repo"] in (key, ""):
+            why.append("about " + (json.dumps(u["feature"]) if u["feature"] else "a feature it did not name") + ": " + u["why"])
+    out["state"] = "owed"
+    out["why"] = ". ".join(w.rstrip(".") for w in why) + "."
+    out["how"] = ("Either label this pull request changelog/announce, with its post under `## Announcement` in wording "
+                  "he approved, or " + ". Or ".join(h.rstrip(".") for h in how) + ".")
+    return out
+
+
 def _flag(args, name):
     return args[args.index(name) + 1] if name in args and args.index(name) + 1 < len(args) else None
+
+
+def _hook_payload(args):
+    """The hook payload on standard input, for a command carrying --hook, else None: without it
+    standard input is not read at all, and the command reads the record only."""
+    if "--hook" not in args:
+        return None
+    try:
+        payload = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
+    except ValueError:
+        payload = {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _read_text(path):
+    """A small file's text, or "" when it names none or cannot be read."""
+    try:
+        with open(path, "rb") as f:
+            return f.read(WORDING_BYTES * 8).decode("utf-8", "replace")
+    except (OSError, TypeError):
+        return ""
 
 
 def main(argv):
@@ -1426,6 +2007,25 @@ def main(argv):
         noted, why = note_answer(payload, time.monotonic() + NOTE_SECONDS)
         json.dump({"noted": noted, "why": why or ""}, sys.stdout)
         return 0
+    if command == "decision":
+        number = _flag(args, "--milestone")
+        json.dump(decision(_flag(args, "--repo"), _flag(args, "--feature"),
+                           int(number) if number and number.isdigit() else None, _hook_payload(args)), sys.stdout)
+        return 0
+    if command == "milestone-line":
+        named = _flag(args, "--description-file")
+        json.dump(milestone_line(_flag(args, "--repo"), _flag(args, "--feature"), _flag(args, "--answer"),
+                                 _read_text(named) if named else ""), sys.stdout)
+        return 0
+    if command == "finishes":
+        pr = _flag(args, "--pr")
+        try:
+            answer = json.loads(_read_text(_flag(args, "--answer-file")))
+        except ValueError:
+            answer = None
+        json.dump(finishes(_flag(args, "--repo"), int(pr) if pr and pr.isdigit() else None, answer,
+                           _hook_payload(args)), sys.stdout)
+        return 0
     if command == "list":
         entries, why = read_record()
         json.dump({"record": record_path(), "entries": entries, "why": why or ""}, sys.stdout)
@@ -1433,7 +2033,11 @@ def main(argv):
     sys.stderr.write("Usage: announce-approval.py list | check --repo <owner/name> --hash <sha256> [--pr <number>], which reads "
                      "the record only | check --repo <owner/name> --hash <sha256> --pr <number> --claim, with the hook payload "
                      "on standard input | used --repo <owner/name> --hash <sha256> --pr <number> [--closes <json>] "
-                     "[--unread <why>] | answered, with the PostToolUse payload on standard input\n")
+                     "[--unread <why>] | answered, with the PostToolUse payload on standard input | decision --repo "
+                     "<owner/name> --feature <name> [--milestone <number>] | milestone-line --repo <owner/name> --feature "
+                     "<name> --answer <yes|no|unasked> [--description-file <file>] | finishes --repo <owner/name> --pr "
+                     "<number> --answer-file <file>, each reading the record only unless it carries --hook, with the "
+                     "hook payload on standard input\n")
     return 2
 
 

@@ -1133,6 +1133,271 @@ talk "$T" ask acme/widget "$F" "fix line 2 first"
 r="$(asked "$T" acme/widget "$HT")"
 check "words of his own in place of an option approve nothing, as before" "$([[ "$r" == "no|"* && "$r" != *"his Approve for"* ]] && echo ok || echo "$r")"
 
+echo "whether a feature is announced to agents is Dan's own answer in a picker (#3669)"
+# decided <transcript> <repo> <feature> [milestone] [session]: what a hook is told Dan last answered,
+# as "<answer>|<said>|<why>|<notes>". AGENT=1 makes the call a subagent's.
+decided() {
+  python3 -c 'import json, os, sys
+d = {"session_id": sys.argv[2], "transcript_path": sys.argv[1], "hook_event_name": "PreToolUse", "tool_name": "Bash"}
+if os.environ.get("AGENT") == "1":
+    d["agent_id"] = "a9bba4c0ffee"
+print(json.dumps(d))' "$1" "${5:-s1}" \
+    | ANNOUNCE_APPROVALS_DIR="${STORE_USED:-$STORE}" aaf_hook_decision "$LIB" "$2" "$3" "${4:-}" \
+    | python3 -c 'import json, sys
+d = json.load(sys.stdin)
+print(d["answer"] + "|" + d["said"] + "|" + d["why"] + " " + d["how"] + "|" + " ".join(d["notes"]), end="")'
+}
+# on_record <repo> <feature>: the record's own answer, by the command line a session can run, as
+# "<answer>|<said>|<day>|<why>". Its standard input is a payload naming $T, which it must not read.
+on_record() {
+  printf '{"session_id": "s1", "transcript_path": "%s"}' "$T" \
+    | ANNOUNCE_APPROVALS_DIR="${STORE_USED:-$STORE}" python3 -B "$LIB" decision --repo "$1" --feature "$2" \
+    | python3 -c 'import json, sys
+d = json.load(sys.stdin)
+print(d["answer"] + "|" + d["said"] + "|" + d["day"] + "|" + d["why"], end="")'
+}
+lines_of() { local n; n="$(grep -c "\"kind\": \"$1\"" "${STORE_USED:-$STORE}/record.jsonl" 2>/dev/null)"; printf '%s' "${n:-0}"; }
+TODAY_ET="$(TZ=America/New_York date +%F)"
+
+STORE_USED="$WORK/store-d-none"
+T="$WORK/d-none.jsonl"; new_talk "$T"
+r="$(decided "$T" acme/widget "Hand back")"
+check "R9 a feature nobody asked Dan about has no answer of his" "$([[ "$r" == "none||"* ]] && echo ok || echo "$r")"
+check "and the answer says how to ask him: one picker, its two options, the test and its metadata" "$([[ "$r" == *"AskUserQuestion"* && "$r" == *'`Announce it`'* && "$r" == *'`Not announcing`'* && "$r" == *"agents must or can act differently"* && "$r" == *'"source": "announce-discovery"'* ]] && echo ok || echo "$r")"
+
+STORE_USED="$WORK/store-d-yes"
+T="$WORK/d-yes.jsonl"; new_talk "$T"
+talk "$T" decide acme/widget "Hand back"
+check "nothing is on the record until a hook asks" "$([[ "$(on_record acme/widget "Hand back")" == "none|"* ]] && echo ok || on_record acme/widget "Hand back")"
+r="$(decided "$T" acme/widget "Hand back")"
+check "his Announce it, in a picker naming the feature and stating the test, is a yes" "$([[ "$r" == "yes|Announce it|"* ]] && echo ok || echo "$r")"
+check "and the hook that read it wrote it to the record" "$([ "$(lines_of decided)" = 1 ] && echo ok || echo "$(lines_of decided) lines")"
+check "which the command line a session can run then reads, with the day he answered in ET" "$([[ "$(on_record acme/widget "Hand back")" == "yes|Announce it|$TODAY_ET|" ]] && echo ok || on_record acme/widget "Hand back")"
+check "the feature is matched whatever its letter case and spacing" "$([[ "$(on_record ACME/Widget "hand  back")" == "yes|"* ]] && echo ok || on_record ACME/Widget "hand  back")"
+check "another feature of that repository has no answer" "$([[ "$(on_record acme/widget "Hand over")" == "none|"* ]] && echo ok || on_record acme/widget "Hand over")"
+check "and neither has that feature in another repository" "$([[ "$(on_record acme/other "Hand back")" == "none|"* ]] && echo ok || on_record acme/other "Hand back")"
+r="$(decided "$T" acme/widget "Hand back")"
+check "asked again, the same picker is one line on the record" "$([[ "$r" == "yes|"* && "$(lines_of decided)" = 1 ]] && echo ok || echo "$r $(lines_of decided) lines")"
+# His last answer decides.
+talk "$T" decide acme/widget "Hand back" "Not announcing"
+r="$(decided "$T" acme/widget "Hand back")"
+check "R9 his later Not announcing is a no: his last answer decides" "$([[ "$r" == "no|Not announcing|"* ]] && echo ok || echo "$r")"
+talk "$T" decide acme/widget "Hand back" "Announce it"
+check "and a yes after that is a yes again" "$([[ "$(decided "$T" acme/widget "Hand back")" == "yes|"* ]] && echo ok || decided "$T" acme/widget "Hand back")"
+
+# The ways a picker is not his answer: nothing is decided, and the record-only command agrees.
+for shape in timeout error prefilled two; do
+  STORE_USED="$WORK/store-d-$shape"
+  T="$WORK/d-$shape.jsonl"; new_talk "$T"
+  talk "$T" decide acme/widget "Hand back" "Not announcing" "$shape"
+  r="$(decided "$T" acme/widget "Hand back")"
+  check "R9 a Not announcing that is not his answer ($shape) declines nothing" "$([[ "$r" == "none|"* && "$(on_record acme/widget "Hand back")" == "none|"* ]] && echo ok || echo "$r")"
+done
+# An earlier yes stands when a later picker was no answer of his.
+STORE_USED="$WORK/store-d-stands"
+T="$WORK/d-stands.jsonl"; new_talk "$T"
+talk "$T" decide acme/widget "Hand back"
+talk "$T" decide acme/widget "Hand back" "Not announcing" timeout
+check "R9 a picker closed by its own timeout takes no earlier yes back" "$([[ "$(decided "$T" acme/widget "Hand back")" == "yes|"* ]] && echo ok || decided "$T" acme/widget "Hand back")"
+# An answer of his that is neither option alone decides nothing, and takes an earlier answer back.
+STORE_USED="$WORK/store-d-typed"
+T="$WORK/d-typed.jsonl"; new_talk "$T"
+talk "$T" decide acme/widget "Hand back" "Not announcing"
+talk "$T" decide acme/widget "Hand back" "Not announcing" "typed:but tell the managers"
+r="$(decided "$T" acme/widget "Hand back")"
+check "R9 a Not announcing with words typed beside it declines nothing" "$([[ "$r" == "none|"* && "$r" == *"typed words beside"* ]] && echo ok || echo "$r")"
+check "and the record says his last answer decided nothing" "$([[ "$(on_record acme/widget "Hand back")" == "none|"*"decides nothing"* ]] && echo ok || on_record acme/widget "Hand back")"
+check "and his words are not written to the record" "$(grep -q "tell the managers" "$STORE_USED/record.jsonl" && echo "his words are on the record" || echo ok)"
+STORE_USED="$WORK/store-d-own"
+T="$WORK/d-own.jsonl"; new_talk "$T"
+talk "$T" decide acme/widget "Hand back" "only the second half"
+check "words of his own in place of an option decide nothing" "$([[ "$(decided "$T" acme/widget "Hand back")" == "none|"*"words of his own"* ]] && echo ok || decided "$T" acme/widget "Hand back")"
+# What the question must hold: the feature the metadata names, and the test.
+STORE_USED="$WORK/store-d-notest"
+T="$WORK/d-notest.jsonl"; new_talk "$T"
+talk "$T" decide acme/widget "Hand back" "Not announcing" notest
+r="$(decided "$T" acme/widget "Hand back")"
+check "R9 a picker whose question does not state the test decides nothing, and the answer gives the words" "$([[ "$r" == "none|"* && "$r" == *"did not state the test"* && "$r" == *"agents must or can act differently"* ]] && echo ok || echo "$r")"
+STORE_USED="$WORK/store-d-nofeature"
+T="$WORK/d-nofeature.jsonl"; new_talk "$T"
+talk "$T" decide acme/widget "Hand back" "Not announcing" nofeature
+r="$(decided "$T" acme/widget "Hand back")"
+check "R9 a picker whose question does not name the feature its metadata names decides nothing" "$([[ "$r" == "none|"* && "$r" == *"did not name the feature"* ]] && echo ok || echo "$r")"
+STORE_USED="$WORK/store-d-unread"
+T="$WORK/d-unread.jsonl"; new_talk "$T"
+talk "$T" decide acme/widget "Hand back" "Not announcing" unread
+r="$(decided "$T" acme/widget "Hand back")"
+check "R9 a picker he could not read as written decides nothing" "$([[ "$r" == "none|"* && "$r" == *"would not have reached him as written"* ]] && echo ok || echo "$r")"
+STORE_USED="$WORK/store-d-nometa"
+T="$WORK/d-nometa.jsonl"; new_talk "$T"
+talk "$T" decide acme/widget "Hand back" "Not announcing" nometa
+r="$(decided "$T" acme/widget "Hand back")"
+check "a picker whose metadata names no feature decides nothing, and the answer says so" "$([[ "$r" == "none|"* && "$r" == *"does not name"* ]] && echo ok || echo "$r")"
+
+# A subagent's call counts his picker for that call and writes nothing.
+STORE_USED="$WORK/store-d-agent"
+T="$WORK/d-agent.jsonl"; new_talk "$T"
+talk "$T" decide acme/widget "Hand back"
+r="$(AGENT=1 decided "$T" acme/widget "Hand back")"
+check "a subagent's call counts his answer for that call" "$([[ "$r" == "yes|"* ]] && echo ok || echo "$r")"
+check "and writes nothing to the record" "$([ "$(lines_of decided)" = 0 ] && echo ok || echo "$(lines_of decided) lines")"
+
+# The command line a session can run reads the record only: a transcript handed to it is not read.
+STORE_USED="$WORK/store-d-recordonly"
+T="$WORK/d-recordonly.jsonl"; new_talk "$T"
+talk "$T" decide acme/widget "Hand back"
+r="$(on_record acme/widget "Hand back")"
+check "R9 the record-only command takes no answer from a transcript handed to it" "$([[ "$r" == "none|"* && ! -e "$STORE_USED/record.jsonl" ]] && echo ok || echo "$r")"
+check "and says a hook reads his answer into the record" "$([[ "$r" == *"reads the record only"* ]] && echo ok || echo "$r")"
+
+# His answer is noted when he gives it, and read back by a caller that names no session (the merge helper).
+STORE_USED="$WORK/store-d-noted"
+T="$WORK/d-noted.jsonl"; new_talk "$T"
+id="$(talk "$T" decide-put acme/widget "Hand back" "" "" 28)"
+noted="$(talk "$T" decide-payload "$id" acme/widget "Hand back" "Not announcing" "" "" "" 28 | ANNOUNCE_APPROVALS_DIR="$STORE_USED" python3 -B "$LIB" answered)"
+check "the picker is noted when he answers it" "$([[ "$noted" == *'"noted": true'* && "$(lines_of answered)" = 1 ]] && echo ok || echo "$noted")"
+check "a note is not his answer" "$([[ "$(on_record acme/widget "Hand back")" == "none|"* ]] && echo ok || on_record acme/widget "Hand back")"
+talk "$T" decide-answer "$id" acme/widget "Hand back" "Not announcing" "" "" 28
+r="$(printf '{"session_id": "merge-when-ready", "hook_event_name": "PreToolUse", "tool_name": "Bash"}' | ANNOUNCE_APPROVALS_DIR="$STORE_USED" aaf_hook_decision "$LIB" acme/widget "Hand back" 28 | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d["answer"] + "|" + d["why"], end="")')"
+check "R9 still possible: a call naming no session reads his noted Not announcing back from the session that asked" "$([[ "$r" == "no|"* ]] && echo ok || echo "$r")"
+# A note of this picker never holds up the reading back of an approval's notes.
+check "the note names its source, so the approval reader passes it over" "$(grep '"kind": "answered"' "$STORE_USED/record.jsonl" | grep -q '"source": "announce-discovery"' && echo ok || cat "$STORE_USED/record.jsonl")"
+# A prefilled picker and a subagent's are not noted.
+id="$(talk "$T" decide-put acme/widget "Hand over" prefilled)"
+noted="$(talk "$T" decide-payload "$id" acme/widget "Hand over" "Not announcing" prefilled | ANNOUNCE_APPROVALS_DIR="$STORE_USED" python3 -B "$LIB" answered)"
+check "a picker sent with its answer filled in is not noted" "$([[ "$noted" == *'"noted": false'* && "$(lines_of answered)" = 1 ]] && echo ok || echo "$noted")"
+
+# A milestone's own question: only a picker naming that milestone's number answers it.
+STORE_USED="$WORK/store-d-milestone"
+T="$WORK/d-milestone.jsonl"; new_talk "$T"
+talk "$T" decide acme/widget "Hand back" "Not announcing"
+check "R9 a Not announcing that names no milestone does not answer the milestone's question" "$([[ "$(decided "$T" acme/widget "Hand back" 28)" == "none|"* ]] && echo ok || decided "$T" acme/widget "Hand back" 28)"
+talk "$T" decide acme/widget "Hand back" "Not announcing" "" "" 29
+check "R9 nor does one naming another milestone" "$([[ "$(decided "$T" acme/widget "Hand back" 28)" == "none|"* ]] && echo ok || decided "$T" acme/widget "Hand back" 28)"
+talk "$T" decide acme/widget "Hand back" "Not announcing" "" "" 28
+check "still possible: one naming that milestone does" "$([[ "$(decided "$T" acme/widget "Hand back" 28)" == "no|"* ]] && echo ok || decided "$T" acme/widget "Hand back" 28)"
+
+echo "the line a milestone's description carries, written and read by one function (#3669)"
+# milestone_line <store> <answer> <feature> [description]: the helper's question, as "<ok>|<line>|<description>|<why>".
+milestone_line() {
+  local d="$WORK/description.txt"; printf '%s' "${4:-}" > "$d"
+  ANNOUNCE_APPROVALS_DIR="$1" python3 -B "$LIB" milestone-line --repo acme/widget --feature "$3" --answer "$2" --description-file "$d" </dev/null \
+    | python3 -c 'import json, sys
+d = json.load(sys.stdin)
+print(("yes" if d["ok"] is True else "no") + "|" + d["line"] + "|" + d["description"] + "|" + d["why"] + (" " + d["how"] if d["how"] else ""), end="")'
+}
+YES_LINE="Announce to agents: yes (Dan answered \"Announce it\" on $TODAY_ET)"
+NO_LINE="Announce to agents: no (Dan answered \"Not announcing\" on $TODAY_ET)"
+r="$(milestone_line "$WORK/store-d-none" unasked "Hand back" "Rework the hand back.")"
+check "unasked needs nothing and writes that he was not asked yet" "$([[ "$r" == "yes|Announce to agents: not asked yet|Rework the hand back.
+
+Announce to agents: not asked yet|" ]] && echo ok || echo "$r")"
+r="$(milestone_line "$WORK/store-d-none" yes "Hand back" "")"
+check "R9 a yes the record does not hold is refused, saying how to ask him" "$([[ "$r" == "no|||"*"holds no answer"*"AskUserQuestion"* ]] && echo ok || echo "$r")"
+r="$(milestone_line "$WORK/store-d-none" no "Hand back" "")"
+check "R9 and so is a no the record does not hold" "$([[ "$r" == "no|||"*"holds no answer"* ]] && echo ok || echo "$r")"
+r="$(milestone_line "$WORK/store-d-yes" yes "Hand back" "Rework the hand back.")"
+check "a yes the record holds is written quoting his answer and its date" "$([[ "$r" == "yes|$YES_LINE|Rework the hand back.
+
+$YES_LINE|" ]] && echo ok || echo "$r")"
+r="$(milestone_line "$WORK/store-d-yes" no "Hand back" "")"
+check "R9 a no where his last answer was Announce it is refused, quoting him" "$([[ "$r" == "no|||"*'`Announce it`'* ]] && echo ok || echo "$r")"
+r="$(milestone_line "$WORK/store-d-yes" unasked "Hand back" "")"
+check "R9 unasked is refused where the record holds his answer about that feature" "$([[ "$r" == "no|||"*'"announce": "yes"'* ]] && echo ok || echo "$r")"
+r="$(milestone_line "$WORK/store-d-typed" no "Hand back" "")"
+check "R9 a no where his last answer decided nothing is refused" "$([[ "$r" == "no|||"*"decides nothing"* ]] && echo ok || echo "$r")"
+r="$(milestone_line "$WORK/store-d-yes" yes "Hand back" "Rework.
+
+Announce to agents: not asked yet
+
+More.")"
+check "the line replaces one the description already carries, where it stood" "$([[ "$r" == "yes|$YES_LINE|Rework.
+
+$YES_LINE
+
+More.|" ]] && echo ok || echo "$r")"
+r="$(milestone_line "$WORK/store-d-none" unasked "Hand over" "Rework.
+
+$NO_LINE")"
+check "unasked never replaces an answer the description already carries" "$([[ "$r" == "yes|$NO_LINE|Rework.
+
+$NO_LINE|" ]] && echo ok || echo "$r")"
+r="$(milestone_line "$WORK/store-d-none" maybe "Hand back" "")"
+check "any other value is refused, naming the three" "$([[ "$r" == "no|||"*'"yes", "no" or "unasked"'* ]] && echo ok || echo "$r")"
+
+echo "the pull request that finishes a feature Dan said yes to announcing (#3669)"
+# finishes <store> <GitHub's answer> [transcript]: the merge gate's question about pull request 7, as
+# "<state>|<why> <how>". With a transcript it is asked as a hook asks, in session s1.
+finishes() {
+  local a="$WORK/answer.json"; printf '%s' "$2" > "$a"
+  if [ -n "${3:-}" ]; then
+    printf '{"session_id": "s1", "transcript_path": "%s"}' "$3" | ANNOUNCE_APPROVALS_DIR="$1" python3 -B "$LIB" finishes --repo acme/widget --pr 7 --answer-file "$a" --hook
+  else
+    ANNOUNCE_APPROVALS_DIR="$1" python3 -B "$LIB" finishes --repo acme/widget --pr 7 --answer-file "$a" </dev/null
+  fi | python3 -c 'import json, sys
+d = json.load(sys.stdin)
+print(d["state"] + "|" + d["why"] + " " + d["how"], end="")'
+}
+# closing <description> <open issues> <closed by this pull request>: GitHub's answer for a pull request
+# closing those issues of milestone 28, "Hand back", which has those issues open.
+closing() {
+  python3 -c 'import json, sys
+desc, still, closes = sys.argv[1], [int(n) for n in sys.argv[2].split()], [int(n) for n in sys.argv[3].split()]
+m = {"number": 28, "title": "Hand back", "description": desc, "issues": {"totalCount": len(still), "nodes": [{"number": n} for n in still]}}
+nodes = [{"number": n, "repository": {"nameWithOwner": "acme/widget"}, "milestone": m} for n in closes]
+print(json.dumps({"data": {"repository": {"pullRequest": {"closingIssuesReferences": {"totalCount": len(nodes), "nodes": nodes}}}}}), end="")' "$@"
+}
+SAYS_YES="Rework the hand back.
+
+Announce to agents: yes (Dan answered \"Announce it\" on 2026-11-20)"
+EMPTY="$WORK/store-f-empty"
+r="$(finishes "$EMPTY" "$(closing "$SAYS_YES" "12" "12")")"
+check "R9 a pull request closing the last open issue of a milestone that says yes is owed an announcement" "$([[ "$r" == "owed|"* ]] && echo ok || echo "$r")"
+check "the refusal names the milestone and both ways on: the label with approved wording, or his answer in a picker" "$([[ "$r" == *'"Hand back"'* && "$r" == *"changelog/announce"* && "$r" == *'`Not announcing`'* && "$r" == *'"milestone": 28'* && "$r" == *'"feature": "Hand back"'* ]] && echo ok || echo "$r")"
+check "still possible: one that leaves an issue of it open is not" "$([[ "$(finishes "$EMPTY" "$(closing "$SAYS_YES" "12 13" "12")")" == "clear|"* ]] && echo ok || echo no)"
+check "still possible: one that closes nothing is not" "$([[ "$(finishes "$EMPTY" "$(closing "$SAYS_YES" "12" "")")" == "clear|"* ]] && echo ok || echo no)"
+check "R9 one closing the two last open issues is" "$([[ "$(finishes "$EMPTY" "$(closing "$SAYS_YES" "12 13" "13 12")")" == "owed|"* ]] && echo ok || echo no)"
+check "R9 one closing an issue of a milestone with none left open is" "$([[ "$(finishes "$EMPTY" "$(closing "$SAYS_YES" "" "12")")" == "owed|"* ]] && echo ok || echo no)"
+for said in "Rework.
+
+Announce to agents: no (Dan answered \"Not announcing\" on 2026-11-20)" "Rework.
+
+Announce to agents: not asked yet" "Rework the hand back." ""; do
+  check "still possible: a milestone that does not say yes finishes under any label [${said##*$'\n'}]" "$([[ "$(finishes "$EMPTY" "$(closing "$said" "12" "12")")" == "clear|"* ]] && echo ok || echo no)"
+done
+# An announcement the gate let through for that milestone.
+ANNOUNCED="$WORK/store-f-announced"; mkdir -p "$ANNOUNCED"
+printf '{"kind": "used", "repo": "acme/widget", "hash": "%064d", "pr": 5, "closes": [{"issue": 11, "repo": "acme/widget", "milestone": "Hand back", "milestone_number": 28}], "at": "2026-11-21T00:00:00Z"}\n' 0 > "$ANNOUNCED/record.jsonl"
+check "still possible: once an announcement merged for that milestone, its last issue closes under any label" "$([[ "$(finishes "$ANNOUNCED" "$(closing "$SAYS_YES" "12" "12")")" == "clear|"* ]] && echo ok || echo no)"
+OTHERM="$WORK/store-f-otherm"; mkdir -p "$OTHERM"
+printf '{"kind": "used", "repo": "acme/widget", "hash": "%064d", "pr": 5, "closes": [{"issue": 11, "repo": "acme/widget", "milestone": "Hand over", "milestone_number": 29}], "at": "2026-11-21T00:00:00Z"}\n' 0 > "$OTHERM/record.jsonl"
+check "R9 an announcement merged for another milestone does not cover this one" "$([[ "$(finishes "$OTHERM" "$(closing "$SAYS_YES" "12" "12")")" == "owed|"* ]] && echo ok || echo no)"
+# His answer at the merge: only a Not announcing naming this milestone clears it.
+check "still possible: his Not announcing, naming the milestone, lets it finish under any label" "$([[ "$(finishes "$WORK/store-d-milestone" "$(closing "$SAYS_YES" "12" "12")")" == "clear|"* ]] && echo ok || echo no)"
+check "R9 a Not announcing that names no milestone does not" "$([[ "$(finishes "$WORK/store-d-typed" "$(closing "$SAYS_YES" "12" "12")")" == "owed|"* ]] && echo ok || echo no)"
+STORE_USED="$WORK/store-f-still"
+T="$WORK/f-still.jsonl"; new_talk "$T"
+talk "$T" decide acme/widget "Hand back" "Not announcing" "" "" 28
+talk "$T" decide acme/widget "Hand back" "Announce it" "" "" 28
+r="$(finishes "$STORE_USED" "$(closing "$SAYS_YES" "12" "12")" "$T")"
+check "R9 his later Announce it takes the decline back, and the refusal says what he answered" "$([[ "$r" == "owed|"*'`Announce it`'* ]] && echo ok || echo "$r")"
+STORE_USED="$WORK/store-f-hook"
+T="$WORK/f-hook.jsonl"; new_talk "$T"
+talk "$T" decide acme/widget "Hand back" "Not announcing" "" "" 28
+check "the record-only question does not read his picker" "$([[ "$(finishes "$STORE_USED" "$(closing "$SAYS_YES" "12" "12")")" == "owed|"* ]] && echo ok || echo no)"
+check "still possible: asked as a hook asks, his Not announcing in this session clears it" "$([[ "$(finishes "$STORE_USED" "$(closing "$SAYS_YES" "12" "12")" "$T")" == "clear|"* ]] && echo ok || echo no)"
+# What GitHub does not answer is never read as "not the last".
+for bad in '' '{}' '{"data":{"repository":{"pullRequest":null}}}' \
+  '{"data":{"repository":{"pullRequest":{"closingIssuesReferences":{"totalCount":60,"nodes":[]}}}}}' \
+  '{"data":{"repository":{"pullRequest":{"closingIssuesReferences":{"totalCount":1,"nodes":[{"number":12,"repository":{"nameWithOwner":"acme/widget"},"milestone":{"number":28,"title":"Hand back","description":"Announce to agents: yes"}}]}}}}}' \
+  '{"data":{"repository":{"pullRequest":{"closingIssuesReferences":{"nodes":[]}}}}}'; do
+  r="$(finishes "$EMPTY" "$bad")"
+  check "R9 an answer of GitHub's that cannot be read is unread, never clear [${bad:0:60}]" "$([[ "$r" == "unread|"* ]] && echo ok || echo "$r")"
+done
+check "an issue in another repository is not this repository's milestone" "$([[ "$(finishes "$EMPTY" "$(closing "$SAYS_YES" "12" "12" | sed 's#acme/widget#acme/other#')")" == "clear|"* ]] && echo ok || echo no)"
+JUNK="$WORK/store-f-junk"; mkdir -p "$JUNK/record.jsonl"
+check "R9 a record that cannot be read is unread, never clear" "$([[ "$(finishes "$JUNK" "$(closing "$SAYS_YES" "12" "12")")" == "unread|"* ]] && echo ok || echo no)"
+
 echo "the record is this suite's own"
 check "no case wrote to this Mac's real record" "$([ "$(ls -la "$REAL_STORE" 2>/dev/null | cksum)" = "$real_before" ] && echo ok || echo "$REAL_STORE changed during the run")"
 

@@ -443,6 +443,9 @@ def judge_record(command, cwd):
 
 
 LIBRARY_FILE = "announce-approval.py"
+# The script that files a milestone and its issues, by its file name: the call that runs it is
+# where Dan's answer about announcing the feature is read into the record (main, below).
+MILESTONE_HELPER = "create-milestone.sh"
 PYTHON = re.compile(r"(?:python|pypy)[0-9.]*")
 # python's one letter options that take a value: the rest of their word, or else the next word.
 PYTHON_VALUE_LETTERS = "cmXW"
@@ -605,6 +608,13 @@ def main():
         return deny("this command runs lib/" + LIBRARY_FILE + ", or may, in a form that can write " + RECORD_IS + ": "
                     + held + ". " + LIBRARY_RULE)
     notes = []
+    if MILESTONE_HELPER in command.lower():
+        # The milestone helper is about to run (claude-config#3669). It takes a plan's "announce":
+        # "yes" or "no" only from the record, which only a hook writes his answer to, so his pickers
+        # about announcing a feature are read in here, from the session making the call and from
+        # the sessions the record notes. Nothing about the call is judged: what could not be read
+        # in is said beside it, and the helper then refuses in its own words.
+        notes += approval.read_answers(data)
     why = judge_label(command, cwd, data, notes)
     if why:
         # True of every refusal below it: wording he never approved, an approval another pull

@@ -9,6 +9,11 @@
 # wrapper: leave at once on a call naming neither the label nor the record, run the gate, and refuse
 # when the gate itself fails, since a gate that did not run is not one that found nothing (L98).
 #
+# One more call is read, and never refused for what it is (claude-config#3669): a Bash call that runs
+# the milestone helper, create-milestone.sh. Before it runs, Dan's answers about whether a feature is
+# announced to agents are read from this session's pickers into the record, where the helper's own
+# question, which reads the record only, finds them.
+#
 # This is the EARLY refusal, for the ordinary routes. A label put on by a route it cannot read (a
 # name built at run time, a script, GitHub's own page) is not seen here and still cannot merge: the
 # merge gate, require-changelog-tag.sh, is what holds that an announcement merges only on wording
@@ -39,6 +44,11 @@ judged_call() {
   shopt -s nocasematch
   case "$1" in
     *changelog/announce*|*'changelog\/announce'*|*announce-approvals*|*announce-approval.py*) found=0 ;;
+    # The milestone helper (claude-config#3669). Its plan may carry Dan's answer about announcing
+    # the feature, which the helper takes only from the record, and only a hook writes his answer
+    # there: so the call that runs the helper is where this hook reads his picker in. It is judged
+    # for nothing else, and it is refused only when this hook itself cannot run.
+    *create-milestone.sh*) found=0 ;;
   esac
   shopt -u nocasematch
   return "$found"
@@ -49,7 +59,7 @@ judged_call "$payload" || exit 0
 case "${BASH_SOURCE[0]}" in */*) HERE="${BASH_SOURCE[0]%/*}" ;; *) HERE=. ;; esac
 HERE="$(cd "${HERE:-/}" && pwd)"
 
-JUDGES="one that puts the changelog/announce label on a pull request, or writes the record of the announcement wording Dan approved, or runs the library that writes it"
+JUDGES="one that puts the changelog/announce label on a pull request, or writes the record of the announcement wording Dan approved, or runs the library that writes it, or runs the milestone helper, before which Dan's answer about announcing the feature is read into that record"
 
 # The shared reader cleans the payload before python3 parses it (claude-config#1944). Past the test
 # above this may be a call it judges, so a library that will not load is refused, naming the file

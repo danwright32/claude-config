@@ -4,7 +4,9 @@
 # PostToolUse on AskUserQuestion. When the picker just answered is the one that asks him to approve
 # an announcement's wording (its metadata names the source changelog-announce), this asks
 # lib/announce-approval.py to note it on this Mac's record: which session and picker, and the hash
-# of the wording file as it stood then. That library says what a note is and what it is not.
+# of the wording file as it stood then. That library says what a note is and what it is not. The
+# picker that asks whether a feature is announced to agents at all (source announce-discovery,
+# claude-config#3669) is noted the same way, with the feature it names in place of a file.
 #
 # WHY IT EXISTS. An approval used to reach the record only when a later hook read the session's
 # transcript: the label hook, on a command putting the label on, or the merge gate, on a typed
@@ -58,10 +60,20 @@ HERE="$(cd "${HERE:-/}" && pwd)"
 # announcement's picker whose note was not taken, and any other is one nobody could tell.
 case "$payload" in
   *changelog-announce*) SAYS="Dan's answer about an announcement's wording was not noted on this Mac's record" ;;
+  *announce-discovery*) SAYS="Dan's answer about whether a feature is announced to agents was not noted on this Mac's record" ;;
   *) SAYS="Whether the picker Dan just answered asked him about an announcement's wording could not be told, so if it did, his answer was not noted on this Mac's record" ;;
 esac
 THEN="A merge of the announcement's pull request through lib/merge-when-ready.sh will not find his approval until a hook reads this session's transcript, which a command putting the label on does: \`gh pr edit <number> --add-label changelog/announce\`, run in this session. He does not need to be asked again."
-say() { hook_allow_notice "ANNOUNCE ANSWER: $1 $THEN" PostToolUse; }
+# The other picker this hook notes asks whether a feature is announced at all (claude-config#3669).
+# What a missing note of it costs, and what reads his answer in, are its own: chosen by what is being
+# said, so a picker the library read from the transcript is spoken of as what it was.
+THEN_FEATURE="A session that names no transcript of its own (a merge through lib/merge-when-ready.sh) will not find his answer until a hook reads this session's transcript, which a Bash call that runs create-milestone.sh by name does, and so does a merge typed in this session. He does not need to be asked again."
+say() {
+  case "$1" in
+    *"whether a feature is announced"*) hook_allow_notice "ANNOUNCE ANSWER: $1 $THEN_FEATURE" PostToolUse ;;
+  esac
+  hook_allow_notice "ANNOUNCE ANSWER: $1 $THEN" PostToolUse
+}
 
 # The shared reader cleans the payload before python3 parses it (claude-config#1944), and holds the
 # one question of whether a reader is installed (ps_reader_missing). A library that will not load is

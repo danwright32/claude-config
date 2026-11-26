@@ -48,6 +48,23 @@
 #                                    nometadata, or both words) makes the payload's copy of the
 #                                    picker's input differ from the transcript's in the ways the
 #                                    dialog may change it, since no real payload has been printed.
+#       decide <repo> <feature> [answer] [shape] [session] [milestone]
+#                                    the picker that asks whether a feature is announced to agents
+#                                    (claude-config#3669), answered `Announce it` unless another answer
+#                                    is given, and naming a milestone's number in its metadata when
+#                                    one is given. The shapes: timeout, prefilled, two, error, unread,
+#                                    typed:<words>, notest (its question does not state the test),
+#                                    nofeature (its question does not name the feature) and nometa
+#                                    (its metadata names no feature).
+#       decide-put <repo> <feature> [shape] [session] [milestone]
+#       decide-answer <id> <repo> <feature> [answer] [shape] [session] [milestone]
+#       decide-payload <id> <repo> <feature> [answer] [shape] [session] [agent id] [milestone]
+#                                    that picker put, answered, and handed to a PostToolUse hook, as
+#                                    put, answer and payload are for the approval picker.
+#   aaf_hook_decision <library> <repo> <feature> [milestone]
+#                                    the library's answer, as JSON, to a hook asking what Dan last
+#                                    answered about announcing a feature (the hook payload on
+#                                    standard input), asked in process
 #   aaf_shown <folder> <transcript> <wording>
 #                                    <folder>/announcement.md holding the wording, written by the
 #                                    session and then opened in front of Dan; prints the file's path.
@@ -122,9 +139,56 @@ def picker(repo, file, answer, shape):
         # Nor is this one: his words under a key that is neither notes nor the option's preview.
         result["annotations"] = {q: {"preview": "Use it as it reads now", "comment": "approve, but fix line 2"}}
     return ask, result
+def deciding(repo, feature, answer, shape, milestone):
+    # The picker that asks whether a feature is announced to agents (claude-config#3669): at feature
+    # discovery, or, with a milestone's number in its metadata, at the merge that finishes one.
+    q = 'Will "%s" be announced to agents when it ships?' % feature
+    if shape == "nofeature":
+        q = "Will this feature be announced to agents when it ships?"
+    if shape != "notest":
+        q += " The test: agents must or can act differently."
+    if shape == "unread":
+        q = q.replace(" be", chr(0x200b) + " be")
+    ask = {"questions": [{"question": q, "header": "Announce", "multiSelect": False,
+                          "options": [{"label": "Announce it", "description": "Its last pull request carries the post"},
+                                      {"label": "Not announcing", "description": "It ships with no post for agents"}]}],
+           "metadata": {"source": "announce-discovery", "repo": repo, "feature": feature}}
+    if milestone:
+        ask["metadata"]["milestone"] = int(milestone) if milestone.isdigit() else milestone
+    result = {"questions": ask["questions"], "answers": {q: answer}, "annotations": {}}
+    if shape == "timeout":
+        result["afkTimeoutMs"] = 60000
+    if shape == "prefilled":
+        ask["answers"] = {q: answer}
+    if shape == "two":
+        ask["questions"] = ask["questions"] * 2
+    if shape == "nometa":
+        del ask["metadata"]["feature"]
+    if shape.startswith("typed:"):
+        result["annotations"] = {q: {"notes": shape.split(":", 1)[1]}}
+    return ask, result
 def arg(n):
     return rest[n] if len(rest) > n and rest[n] else ""
-if action == "write":
+if action == "decide":
+    ask, result = deciding(rest[0], rest[1], arg(2) or "Announce it", arg(3), arg(5))
+    call("AskUserQuestion", ask, error=arg(3) == "error", result=result, session=arg(4) or None)
+elif action == "decide-put":
+    ask, _ = deciding(rest[0], rest[1], "", arg(2), arg(4))
+    uid = "toolu_ask%d" % time.time_ns()
+    send(uid, "AskUserQuestion", ask, arg(3) or None)
+    print(uid, end="")
+elif action == "decide-answer":
+    _, result = deciding(rest[1], rest[2], arg(3) or "Announce it", arg(4), arg(6))
+    back(rest[0], arg(4) == "error", result, arg(5) or None)
+elif action == "decide-payload":
+    ask, result = deciding(rest[1], rest[2], arg(3) or "Announce it", arg(4), arg(7))
+    d = {"session_id": arg(5) or "s1", "transcript_path": path, "cwd": "/", "permission_mode": "default",
+         "hook_event_name": "PostToolUse", "tool_name": "AskUserQuestion", "tool_input": ask,
+         "tool_response": result, "tool_use_id": rest[0]}
+    if arg(6):
+        d["agent_id"] = arg(6)
+    print(json.dumps(d), end="")
+elif action == "write":
     call("Write", {"file_path": rest[0], "content": "x"})
 elif action == "edit":
     call("Edit", {"file_path": rest[0], "old_string": "a", "new_string": "b"})
@@ -181,6 +245,23 @@ except ValueError:
 pr = sys.argv[4] if len(sys.argv) > 4 else ""
 sys.stdout.reconfigure(errors="replace")
 json.dump(lib.check(sys.argv[2], sys.argv[3], payload, int(pr) if pr.isdigit() else None), sys.stdout)' "$@"
+}
+
+# aaf_hook_decision <library> <repo> <feature> [milestone]: what Dan last answered about announcing a
+# feature, as a hook asks it (the payload on standard input), in process: the library's own command
+# line reads the record only (claude-config#3669).
+aaf_hook_decision() {
+  python3 -B -c 'import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("announce_approval", sys.argv[1])
+lib = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(lib)
+try:
+    payload = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
+except ValueError:
+    payload = {}
+number = sys.argv[4] if len(sys.argv) > 4 else ""
+sys.stdout.reconfigure(errors="replace")
+json.dump(lib.decision(sys.argv[2], sys.argv[3], int(number) if number.isdigit() else None, payload), sys.stdout)' "$@"
 }
 
 aaf_shown() {  # <folder> <transcript> <wording>

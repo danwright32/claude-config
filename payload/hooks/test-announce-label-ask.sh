@@ -490,6 +490,30 @@ check "a command naming neither the label nor the record passes" "$(passed "$r" 
 r="$(call Write "$(python3 -c 'import json, sys; print(json.dumps({"file_path": sys.argv[1], "content": "x"}))' "$WORK/plain.md")")"
 check "a Write naming neither passes" "$(passed "$r" && echo ok || echo "$r")"
 
+echo "his answer about announcing a feature is read into the record before the milestone helper runs (#3669)"
+# The helper reads the record only, so the hook that sees the call running it reads his picker in.
+HELPER_CALL="bash ~/.claude/skills/milestone/create-milestone.sh acme/widget /tmp/plan.json"
+decided_lines() { local n; n="$(grep -c '"kind": "decided"' "$STORE/record.jsonl" 2>/dev/null)"; printf '%s' "${n:-0}"; }
+forget
+D="$WORK/deciding.jsonl"; aaf_new "$D"
+aaf_talk "$D" decide acme/widget "Hand back"
+r="$(TALK="$D" run "ls -la")"
+check "a call that does not run the helper reads nothing in" "$(passed "$r" && [ "$(decided_lines)" = 0 ] && echo ok || echo "$r $(decided_lines) lines")"
+r="$(TALK="$D" AGENT=1 run "$HELPER_CALL")"
+check "a subagent's call running the helper passes and writes nothing" "$(passed "$r" && [ "$(decided_lines)" = 0 ] && echo ok || echo "$r $(decided_lines) lines")"
+r="$(TALK="$D" run "$HELPER_CALL")"
+check "a call running the helper passes, with nothing said" "$(passed "$r" && echo ok || echo "$r")"
+check "and his answer in this session's picker is on the record before it runs" "$([ "$(decided_lines)" = 1 ] && grep -q '"answer": "yes"' "$STORE/record.jsonl" && echo ok || cat "$STORE/record.jsonl" 2>/dev/null)"
+r="$(TALK="$D" run "$HELPER_CALL")"
+check "run again, it writes no second line" "$(passed "$r" && [ "$(decided_lines)" = 1 ] && echo ok || echo "$r $(decided_lines) lines")"
+# What stands between his answer and the record is said beside the call, which still runs.
+aaf_talk "$D" decide acme/widget "Hand over" "Not announcing" prefilled
+r="$(TALK="$D" run "$HELPER_CALL")"
+check "a picker that was never put to him is said beside the call, to Dan and the session" "$([[ "$r" == "none rc=0||"*"Hand over"*"already filled in"* ]] && echo ok || echo "$r")"
+forget
+r="$(broken "$HELPER_CALL")"
+check "with its rule file gone, a call running the helper is refused, saying the hook did not run" "$([[ "$r" == *"announce-label-ask.sh failed"*" rc=2" ]] && echo ok || echo "$r")"
+
 echo "the record is this suite's own"
 check "no case wrote to this Mac's real record" "$([ "$(ls -la "$REAL_STORE" 2>/dev/null | cksum)" = "$real_before" ] && echo ok || echo "$REAL_STORE changed during the run")"
 
