@@ -137,7 +137,7 @@ says "the question names the tool" "$r" 'delete-team'
 says "the question says what it does in plain words" "$r" 'deletes something live \(team\)'
 says "the question shows what it was called with" "$r" 'teamId=team-123'
 says "the question names the connector and the issue that decided it" "$r" 'Regal call.*claude-config#3618'
-for t in update-journey update-campaign save-agent-live update-routing-rule-set update_journey; do
+for t in update-journey update-campaign save-agent-live update-routing-rule-set update_journey updateJourney updatejourney updatecampaign saveagentlive UPDATEROUTINGRULESET; do
   expect "Regal's $t is asked about" ask "$(payload "$REGAL$t" '{"id": "j1"}')"
 done
 says "update-journey's question says what it does" "$(run "$HOOK" "$(payload "${REGAL}update-journey" '{"id": "j1"}')")" 'changes a journey that may be live'
@@ -184,6 +184,19 @@ says "naming the payload as what could not be read" "$r" 'payload could not be r
 expect "a delete whose payload came inside a list is asked about" ask "[$whole]"
 read_cut="$(payload "${REGAL}fetch-journey" '{"id": "j1"}')"
 expect "a read whose payload is cut short is passed" none "${read_cut%?}"
+# The call's own name is the top level one. An input holding a tool_name key of its own, written
+# ahead of the call's, must not be taken for the call's tool by the screen that runs before python3.
+nested_first() {  # nested_first <the call's tool> <the tool its input names>
+  python3 -c 'import json, sys; print(json.dumps({"session_id": "s1", "hook_event_name": "PreToolUse", "tool_input": {"tool_name": sys.argv[2]}, "tool_name": sys.argv[1]}))' "$1" "$2"
+}
+expect "a delete whose input, written ahead of its name, holds a tool_name key naming another server's tool is asked about" ask "$(nested_first "${REGAL}delete-team" mcp__lightroom__list_folders)"
+expect "a call on another server whose input names a Regal delete under a tool_name key is passed" none "$(nested_first mcp__lightroom__list_folders "${REGAL}delete-team")"
+# A name the text holds only a part of cannot be judged by its verb: "del" reads as no delete.
+r="$(run "$HOOK" '{"session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "mcp__claude_ai_Regal_MCP__del')"
+[ "$(decision "$r")" = "ask rc=0" ] && check "a payload cut short inside a Regal tool's name is asked about" ok || check "a payload cut short inside a Regal tool's name is asked about" "$(decision "$r")"
+says "saying the name could not be read whole" "$r" 'could not be read whole'
+expect "a payload cut short inside a Cal tool's name is asked about" ask '{"session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "mcp__claude_ai_Cal__can'
+expect "a payload cut short inside another server's tool name is passed" none '{"session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "mcp__lightroom__del'
 expect "an empty payload is passed" none ""
 expect "a Bash call naming a Regal delete in its text is not this hook's" none "$(python3 -c 'import json; print(json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "echo mcp__claude_ai_Regal_MCP__delete-team"}}))')"
 tricky="$(python3 -c 'import json; print(json.dumps({"note": "he said \"no\" \\ then\nline two\tand a tab", "ids": [1, 2], "deep": {"a": None}}))')"

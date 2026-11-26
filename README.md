@@ -6042,6 +6042,60 @@ names were measured on the personal MacBook only. Suites: `test-db-write-ask.sh`
 The auto mode settings themselves (`autoMode` in `settings.json`, with its `soft_deny` and
 `environment` lists) are per Mac: the sync carries neither, so each Mac's copy is corrected on that Mac.
 
+## Connector deletes and live changes ask Dan first
+
+Dan decided on 2026-11-25 that a connector tool that deletes something or changes a live setting in
+Regal, Better Stack or Cal waits for his yes ("Ask before live deletes and changes"), and that the
+other writes on those connectors stay with auto mode's check ("Keep it to deletes (Recommended)").
+`hooks/connector-change-ask.sh` (#3618) answers "ask" from a PreToolUse hook that runs on every MCP
+call, as `db-write-ask.sh` does for database writes. The rule is `hooks/lib/connector-changes.py`:
+
+- Which server: matched by a part of its name, since one connector is reached under more than
+  one server name: the name holds `regal`; or it holds `betterstack` once everything but letters and
+  digits is taken out; or one whole word of it is `cal` or `calcom`, so Google Calendar is not Cal.
+- Which tool: one whose own name holds `delet`, `remov`, `cancel`, `reset` or `paus`, anywhere
+  in it, and on Regal also `update-journey`, `update-campaign`, `save-agent-live` and
+  `update-routing-rule-set`, however their words are joined. A read whose name holds one of the five
+  (a list of presets, say) asks too, which is the harmless side to be wrong on. Every other tool of
+  those servers, and every other server, passes in silence: reads, creates and ordinary updates.
+- The question names the connector, the tool, what it does by its name, and what it was called
+  with (the first 300 characters).
+- While sleep mode is on the call is refused, with the reason, and nothing is asked. An ask
+  alone would not hold at night: sleep mode refuses a claude.ai connector's write tools itself, but
+  answers an enrolled session's own permission prompt yes for any other server, which is where a
+  plugin's server sits (read in `mods/scope-modes/hooks` on 2026-11-26).
+- What it cannot read it asks about, or refuses at night: a name on one of these servers with no
+  tool after it; a payload that is not a tool call whose text names a tool the rule asks about, or
+  holds no tool name whole and names one of the three connectors; and, with python3 or one of its
+  libraries missing or failing, every call to a server whose name holds regal, better or cal, a read
+  included, saying what is missing. Its registration carries `onFailure` block.
+
+It is a hook and not the `permissions.ask` rule the issue's text names, because the sync carries no
+permission rule to either Mac. Measured on the personal MacBook on 2026-11-26, one run each, in a
+throwaway folder: an ask rule added to `settings.shared.json` made the pull refuse that whole file,
+so none of the other shared settings were applied either, and a `permissions` key in
+`settings.hooks.json` was dropped with nothing said. Carrying one means a new entry on the sync's
+list of shared settings, which is Dan's to sign off and has not been made. A hook already reaches
+both Macs, can match a server by a part of its name, and its matching can be run by handing it a
+call.
+
+What it costs, since it runs on every MCP call (personal MacBook, 2026-11-26, 30 samples a case, one
+process per call as Claude Code runs it, load averages 10, 20 and 29): a call on any other server
+takes 8.4 ms at the median (7.5 to 11.0), against 6.8 ms for a bash that only reads its input, and
+python3 never starts. A call whose tool name holds regal, better or cal in any case starts python3:
+38 ms at the median when it passes (36 to 41), which every Google Calendar tool pays too, and 63 ms
+when it asks (59 to 66). A call on another server with a 1 MB input takes 106 ms (103 to 121).
+
+Regal's 115 tool names and Cal's 92, as the personal MacBook's session records listed them up to
+2026-11-25, are in `hooks/connector-change-ask-fixtures/`, and `test-connector-change-ask.sh` runs
+every one through the hook: 14 of Regal's ask and 7 of Cal's, and no other. The suite reads a name
+more widely than the hook does (purge, destroy, archive and a dozen more words), so a delete under
+another word fails it. Nothing refreshes the fixtures: when a connector's list changes, replace the
+names and the date and run the suite. Not established: Better Stack's tool names and the second
+server name Regal is reached under, which are on the work MacBook only, so for them the hook rests
+on the name parts and the verbs; and no live question has been exercised, since no connector was
+called.
+
 ## A trusted path that has gone is said
 
 Entries in `autoMode.environment` can name a trusted checkout by absolute path, and on the work

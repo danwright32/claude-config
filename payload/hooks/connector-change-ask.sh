@@ -34,10 +34,11 @@
 #
 # FAIL CLOSED. What cannot be read is asked about, never passed: a name on one of these servers
 # with no tool after it; a payload that is not a tool call whose text names a tool the rule asks
-# about; and, with python3 or lib/connector-changes.py missing or failing, every call to a server
-# whose name holds regal, better or cal, a read included, naming what is missing. Without
-# lib/sleep.sh it asks, saying that whether Dan is asleep could not be told. The registration
-# carries onFailure block, so a crash or a timeout stops the call.
+# about, or holds no tool name whole and names one of the three connectors (a name cut short
+# cannot be judged by its verb); and, with python3 or lib/connector-changes.py missing or failing,
+# every call to a server whose name holds regal, better or cal, a read included, naming what is
+# missing. Without lib/sleep.sh it asks, saying that whether Dan is asleep could not be told. The
+# registration carries onFailure block, so a crash or a timeout stops the call.
 #
 # THE SCREEN. It runs on every MCP call, so it leaves before python3 starts unless the tool's name
 # holds regal, better or cal in any case, which every name the rule can ask about holds.
@@ -61,6 +62,10 @@ case "$payload" in *mcp__*) ;; *) exit 0 ;; esac
 # is screened, so a payload this cannot read is never passed on the strength of a field it guessed.
 tool=""
 if payload_match "$payload" '"tool_name"[[:space:]]*:[[:space:]]*"(mcp__[^"\]*)"'; then tool="${BASH_REMATCH[1]}"; fi
+# A text holding that key twice (a call whose input has a tool_name of its own) does not say which
+# is the call's: the first found may be the input's, so the whole text is screened and python3,
+# which reads the top level one, decides.
+case "$payload" in *'"tool_name"'*'"tool_name"'*) tool="" ;; esac
 seen="${tool:-$payload}"
 shopt -s nocasematch
 case "$seen" in *regal*|*better*|*cal*) screened=1 ;; *) screened=0 ;; esac

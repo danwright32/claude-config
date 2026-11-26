@@ -32,7 +32,9 @@ THE RULE, which is the whole of what is asked about:
   with auto mode's check, by Dan's second answer.
 
 WHAT IT CANNOT READ IS ASKED ABOUT, never passed: a name on one of these servers with no tool
-after it, and a payload that is not a tool call whose text names a tool the rule above asks about.
+after it; a payload that is not a tool call whose text names a tool the rule above asks about; and
+such a payload holding no tool name whole (cut short inside it) whose text names any of the three
+connectors, since a part of a name cannot be judged by its verb.
 
 MEASURED. Regal's 115 tools and Cal's 92, as this Mac's session records listed them up to
 2026-11-25, are in connector-change-ask-fixtures/ beside the hooks, and test-connector-change-ask.sh
@@ -65,6 +67,7 @@ REGAL_LIVE = {
     "save-agent-live": "saves an agent as its live version",
     "update-routing-rule-set": "changes a routing rule set that may be live",
 }
+REGAL_LIVE_JOINED = {name.replace("-", ""): what for name, what in REGAL_LIVE.items()}
 
 
 def words_of(text):
@@ -105,9 +108,10 @@ def does(connector, tool):
     """What a tool does, by its name, when the rule asks about it; else None."""
     low = tool.lower()
     if connector == "Regal":
-        key = "-".join(words_of(tool))
-        if key in REGAL_LIVE:
-            return REGAL_LIVE[key]
+        # Compared with every separator taken out, so updatejourney is update-journey too.
+        key = "".join(words_of(tool))
+        if key in REGAL_LIVE_JOINED:
+            return REGAL_LIVE_JOINED[key]
     for stem, verb in VERBS:
         if stem in low:
             rest = " ".join(w for w in words_of(tool) if stem not in w)
@@ -167,17 +171,27 @@ def verdict(raw):
                     "something live could not be told.")
         return ("this " + connector + " call",
                 tool + ", which " + what + ". It was called with " + shown(d.get("tool_input")) + ".")
-    # A payload that is not a tool call is judged by its text: the tool it names when it names one,
-    # else every MCP tool name in it. One the rule asks about is asked about, saying why.
+    # A payload that is not a tool call is judged by its text. The tool it names, when it names one
+    # whole, between its quotes: one the rule asks about is asked about, saying why.
     m = re.search(r"\"tool_name\"\s*:\s*\"([^\"\\]*)\"", raw)
-    names = [m.group(1)] if m else re.findall(r"mcp__[A-Za-z0-9_.-]+", raw)
-    for n in names:
-        found = judge(n)
+    if m:
+        found = judge(m.group(1))
         if found:
             connector, tool, what = found
             return ("this " + connector + " call",
-                    "the payload could not be read as a tool call, and its text names " + n
+                    "the payload could not be read as a tool call, and its text names " + m.group(1)
                     + (", which " + what if what else "") + ".")
+        return None
+    # No name it holds whole: any MCP name in the text may be cut short, and a part of a name
+    # cannot be judged by its verb ("del" reads as no delete). So one on any of the three
+    # connectors is asked about, whatever it seems to do.
+    for n in re.findall(r"mcp__[A-Za-z0-9_.-]+", raw):
+        for connector, on in CONNECTORS:
+            if on(n[len("mcp__"):]):
+                return ("this " + connector + " call",
+                        "the payload could not be read as a tool call, and its text names " + n
+                        + ", a name that could not be read whole, so whether it deletes or changes "
+                        "something live could not be told.")
     return None
 
 
