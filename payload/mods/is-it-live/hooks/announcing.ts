@@ -4,7 +4,14 @@ import {
   type Asked,
   type Judged,
   OWED,
+  type Said,
+  type Standing,
+  announceLetGoOf,
   askedOf,
+  firstPromptOf,
+  holdOf,
+  listOf,
+  startLineOf,
   cardDraftOf,
   cardUndraftableOf,
   cardUnreadOf,
@@ -36,6 +43,22 @@ import { NEVER, UNASKED } from './threads.ts'
 // $ into past an import.
 
 const msg = (err: unknown) => errorText(err, MOD)
+const SAID: Said = { never: NEVER, unasked: UNASKED }
+
+// Per session, in $.state: which announcements this session's own card asked a draft of, the holds
+// already refused in this chain of turn ends, and the line its first prompt still has to carry.
+const askedRef = { plugin: 'is-it-live', key: 'announceAsked' } as const
+const refusedRef = { plugin: 'is-it-live', key: 'announceRefused' } as const
+const lineRef = { plugin: 'is-it-live', key: 'announceLine' } as const
+
+// Every change to what this session asked for goes through here, so two at once both land.
+async function changeAsked($: EngineInterface, change: (ids: string[]) => string[]): Promise<void> {
+  for (let i = 0; i < 10; i++) {
+    const held = await $.state.get(askedRef)
+    if ((await $.state.set(askedRef, change(held.value ?? []), { ifVersion: held.version })).isSet) return
+  }
+  throw new Error('the list of announcements this session asked a draft of kept changing under it')
+}
 
 /** What is kept for one pull request: its entry, and how it was settled, each absent where none reads. */
 export async function announcementKept($: EngineInterface, repo: string, pr: number): Promise<{ entry?: IsItLiveAnnouncement; done?: IsItLiveAnnounceDone }> {
@@ -82,6 +105,8 @@ export async function noteAnnouncement($: EngineInterface, repo: string, pr: num
   const before = await announcementKept($, repo, pr)
   // Read again just before the write, so a session that kept a whole entry meanwhile keeps it.
   if (before.entry && before.entry.why === undefined) return asked
+  // Nor is one written once it is settled: settled is never taken back, here or by any reader.
+  if (before.done) return asked
   await $.store.set(owedKey(idOf(repo, pr)), entryFrom(repo, pr, asked, before.entry?.at ?? (await $.clock.now())))
   return asked
 }
@@ -122,7 +147,10 @@ export async function announcementAtCard($: EngineInterface, repo: string, pr: n
     if (!entry) return asked?.kind === 'unread' ? [cardUnreadOf({ repo, pr }, asked.why)] : []
     if (!isOut(state)) return [cardWaitsOf(entry)]
     if (!(await announcementOut($, entry))) await $.store.set(outKey(idOf(repo, pr)), { at: await $.clock.now() })
-    return [draftable(entry) ? cardDraftOf(entry, { never: NEVER, unasked: UNASKED }) : cardUndraftableOf(entry)]
+    if (!draftable(entry)) return [cardUndraftableOf(entry)]
+    // This session's card asked for the draft, so its turn end is held for it once (announcementHold).
+    await changeAsked($, ids => (ids.includes(idOf(repo, pr)) ? ids : [...ids, idOf(repo, pr)]))
+    return [cardDraftOf(entry, SAID)]
   } catch (err) {
     return [cardUnreadOf({ repo, pr }, `what is kept for it could not be read or written: ${msg(err)}`)]
   }
@@ -167,5 +195,92 @@ export async function announcementDrafted<T extends Called>($: EngineInterface, 
     const why = `Is it live could not check the Slack draft in channel ${call.channel} against the announcements for agents still owed (${msg(err)}), so none was settled by it.`
     $.ui.toast(why)
     return { ...done, context: [...(done.context ?? []), `${why} Tell Dan that.`] }
+  }
+}
+
+// Where each owed announcement stands, oldest first; given repository names, only theirs (GitHub's
+// names are one name in any case).
+async function standings($: EngineInterface, names?: readonly string[]): Promise<Standing[]> {
+  const wanted = names?.map(n => n.toLowerCase())
+  const out: Standing[] = []
+  for (const a of await announcementsOwed($)) {
+    if (wanted && !wanted.includes(a.repo.toLowerCase())) continue
+    out.push({ a, out: await announcementOut($, a) })
+  }
+  return out
+}
+
+/** /live: what the repository, under each name it is kept by, still owes agents, to follow its cards. A list that cannot be read is said as that, never as nothing owed. */
+export async function announcementList($: EngineInterface, names: readonly string[]): Promise<string> {
+  try {
+    return listOf(await standings($, names))
+  } catch (err) {
+    return `\n\nThe announcements for agents this project still owes could not be read (${msg(err)}).`
+  }
+}
+
+// A session start in a project that still owes an announcement says it in one line: to Dan now, and
+// to the session with its first prompt, since a session start carries nothing to the model. Asked
+// of the store first, so a session in a project owing nothing reads no repository at all. The
+// project is the session folder's GitHub repository by its remote's name, as mod-kit reads it.
+// Called from register.ts's session.start, the one hook this mod may register on that event.
+export async function announcementsAtStart($: EngineInterface): Promise<void> {
+  try {
+    if (!(await announcementsOwed($)).length) return
+    const here = await $.session.repo()
+    const repo = here ? (await $.modkit.repo({ root: here.root, remote: here.remote })).github : null
+    if (!repo) return
+    const line = startLineOf(await standings($, [repo]))
+    if (!line) return
+    await $.state.set(lineRef, firstPromptOf(line))
+    $.ui.toast(line)
+  } catch (err) {
+    $.ui.toast(`Is it live could not read whether this project still owes an announcement for agents: ${msg(err)}`)
+  }
+}
+
+/**
+ * The hold a turn end carries for the announcements this session's own card found live and asked a
+ * draft of, while they are still not drafted, or undefined. Held once per announcement in a chain
+ * of turn ends, as the thread reply's hold is, so a draft that cannot be saved never traps the turn:
+ * the next end in the chain goes ahead, said. A session that only heard of one holds nothing.
+ */
+export async function announcementHold($: EngineInterface, e: { stop_hook_active?: boolean }): Promise<string | undefined> {
+  const asked = (await $.state.get(askedRef)).value ?? []
+  if (!asked.length) return undefined
+  const due = (await announcementsOwed($)).filter(a => draftable(a) && asked.includes(idOf(a.repo, a.pr)))
+  // One settled since, by a draft or by Dan, is asked of no later turn end.
+  if (due.length !== asked.length) await changeAsked($, ids => ids.filter(id => due.some(a => idOf(a.repo, a.pr) === id)))
+  if (!due.length) return undefined
+  const keyOf = (a: IsItLiveAnnouncement) => idOf(a.repo, a.pr)
+  const held = (await $.state.get(refusedRef)).value
+  const before = e.stop_hook_active && held ? held : { keys: [], told: [] }
+  const fresh = due.filter(a => !before.keys.includes(keyOf(a)))
+  if (!fresh.length) {
+    const untold = due.filter(a => !before.told.includes(keyOf(a)))
+    if (untold.length) {
+      $.ui.toast(announceLetGoOf(untold))
+      await $.state.set(refusedRef, { keys: before.keys, told: [...before.told, ...untold.map(keyOf)] })
+    }
+    return undefined
+  }
+  await $.state.set(refusedRef, { keys: [...before.keys, ...fresh.map(keyOf)], told: before.told })
+  return holdOf(due, SAID)
+}
+
+/**
+ * The session's first prompt carries the line its start said to Dan, once: `r` is what the prompt
+ * came to beneath, handed back with the line added to its context. Called from the one
+ * prompt.submit hook this mod may register (drafts.ts), since the engine takes one per event.
+ */
+export async function withAnnouncementLine<T extends { context?: readonly string[] }>($: EngineInterface, r: T): Promise<T> {
+  try {
+    const line = (await $.state.get(lineRef)).value
+    if (!line) return r
+    await $.state.set(lineRef, '')
+    return { ...r, context: [...(r.context ?? []), line] }
+  } catch (err) {
+    $.ui.log(`is-it-live: could not hand the session the line about announcements still owed: ${msg(err)}`, { to: 'debug' })
+    return r
   }
 }

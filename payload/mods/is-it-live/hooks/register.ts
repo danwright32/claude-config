@@ -2,7 +2,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import { cutOwn, watchesOnly } from './mod-kit/hold.ts'
 import type { IsItLive, IsItLiveCard, IsItLiveOwed } from '../types/index.d.ts'
 import { type Asked, unreadOf } from './announce.ts'
-import { announcementAtCard, announcementUnread, noteAnnouncement } from './announcing.ts'
+import { announcementAtCard, announcementHold, announcementList, announcementUnread, announcementsAtStart, noteAnnouncement } from './announcing.ts'
 import { type CardInput, MOD, buttonId, cardOf, cardText, draftKeyOf, draftLineOf, isOut, liveList, messageRow, pinnable, reasonToRefuse, stateOf, titleOf } from './card.ts'
 import { draftHold, markLanded, noteCard, recordedThreads, registerDrafts, registerUnrelated, relateCard } from './drafts.ts'
 import { type MergeCall, type Proof, TOOL, VIEW_FIELDS, WAIT_MS, isNotAPr, letGoOf, mergeCallOf, nudgeOf, owedFrom, proofOf, refusalOf } from './merges.ts'
@@ -487,7 +487,10 @@ export const register: Register = on => {
     await $.tool.register({ name: 'card', description: DESCRIPTION, inputSchema: SCHEMA })
     await registerUnrelated($)
     await $.command.register({ name: 'live', description: "This project's recent change cards, and the messages not yet sent." })
-    return next(e)
+    const started = await next(e)
+    // #3667: a session started in a project that still owes an announcement for agents says so.
+    await announcementsAtStart($)
+    return started
   })
 
   // Answered here and never passed down, so the guards beneath (the secret guard) are asked through
@@ -706,6 +709,12 @@ export const register: Register = on => {
     } catch (err) {
       $.ui.toast(`Is it live could not check whether a Slack thread is owed a draft reply: ${msg(err)}`)
     }
+    // #3667: and the announcement for agents this session's own card found live and asked a draft of.
+    try {
+      ours.push(await announcementHold($, e))
+    } catch (err) {
+      $.ui.toast(`Is it live could not check whether an announcement for agents is still owed its draft: ${msg(err)}`)
+    }
     const block = [r.block, ...ours].filter((s): s is string => typeof s === 'string' && s !== '').join('\n\n')
     return block ? { ...r, block } : r
   })
@@ -792,6 +801,7 @@ export const register: Register = on => {
     for (const { c, owing } of shown) if (owing) await pin($, { ...owing, state: c.state })
     const cards = shown.map(({ c, owing }) => (owing && owing !== c ? { ...c, requester: owing.requester, message: owing.message, sentAt: undefined } : c))
     const unasked = now.error !== undefined ? `\n\nGitHub could not be asked for the name this repository has now (${now.error}), so any cards kept under another name for it may be missing.` : ''
-    return { text: liveList(cards) + unasked }
+    // #3667: then the announcements for agents the project still owes, which outlive their cards.
+    return { text: liveList(cards) + (await announcementList($, names)) + unasked }
   })
 }

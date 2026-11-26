@@ -133,9 +133,16 @@ export const entryFrom = (repo: string, pr: number, a: Extract<Asked, { kind: 'o
 /** The marker line either side of the wording in the card's answer, so its first and last lines are not in doubt. */
 export const MARK = '-----'
 
-/** What the card's answer tells the session of an announcement that can be drafted now. `never` and `unasked` are threads.ts's own sentences. */
-export const cardDraftOf = (a: IsItLiveAnnouncement, said: { never: string; unasked: string }): string =>
-  `${nameOf(a)} owes an announcement for agents, whose wording Dan approved before it merged. Save it as a Slack draft for him to send himself, now, in the same step as this card, without asking Dan first: call slack_send_message_draft with channel_id "${a.channel}", no thread_ts, and message set to exactly the wording between the two ${MARK} lines below, every line and blank line as written. Do not run /no-ai-tells on it and do not change a word: the wording is already approved, and a draft that differs from it is not counted. ${said.unasked} ${said.never} The answer to that call says whether Slack kept the draft, and what to tell Dan.\n${MARK}\n${a.text}\n${MARK}`
+/** `never` and `unasked` are threads.ts's own sentences, said with every instruction to save a Slack draft. */
+export type Said = { never: string; unasked: string }
+
+// The one instruction to save the draft, said by the card that finds the change out and again by the
+// turn end's hold, so the two can never ask for different calls.
+const saveOf = (a: IsItLiveAnnouncement, said: Said): string =>
+  `Save it as a Slack draft for him to send himself, now, without asking Dan first: call slack_send_message_draft with channel_id "${a.channel}", no thread_ts, and message set to exactly the wording between the two ${MARK} lines below, every line and blank line as written. Do not run /no-ai-tells on it and do not change a word: the wording is already approved, and a draft that differs from it is not counted. ${said.unasked} ${said.never} The answer to that call says whether Slack kept the draft, and what to tell Dan.\n${MARK}\n${a.text}\n${MARK}`
+
+/** What the card's answer tells the session of an announcement that can be drafted now. */
+export const cardDraftOf = (a: IsItLiveAnnouncement, said: Said): string => `${nameOf(a)} owes an announcement for agents, whose wording Dan approved before it merged. ${saveOf(a, said)}`
 
 /** What the card's answer says while the change is not out yet. */
 export const cardWaitsOf = (a: { repo: string; pr: number }): string =>
@@ -143,7 +150,7 @@ export const cardWaitsOf = (a: { repo: string; pr: number }): string =>
 
 /** What the card's answer says of an announcement the gate's reader could not tell enough about to draft. */
 export const cardUndraftableOf = (a: IsItLiveAnnouncement): string =>
-  `${nameOf(a)} owes an announcement for agents that cannot be drafted from this Mac: ${a.why ?? 'its channel or its wording was not read'}. Nothing is drafted. Tell Dan that, with the reason. It stays listed in the band and in /live until he marks it sent or says it is not being announced.`
+  `${nameOf(a)} owes an announcement for agents that cannot be drafted from this Mac: ${a.why ?? 'its channel or its wording was not read'}. Nothing is drafted. Tell Dan that, with the reason. It stays listed in /live until it is settled.`
 
 /** What the card's answer says when whether the change owes an announcement could not be told at all. */
 export const cardUnreadOf = (a: { repo: string; pr: number }, why: string): string =>
@@ -183,8 +190,6 @@ export const judgedOf = (r: Ran): Judged => {
   return { state: 'unjudged', why: SHAPE }
 }
 
-const BAND = 'the "Announcement for agents" row in the band'
-
 /** What the draft call's answer carries for the session, and what Dan is toasted, for one judgement of one announcement. */
 export const draftOutcomeOf = (a: IsItLiveAnnouncement, j: Judged, never: string): { context: string; toast: string } => {
   const name = nameOf(a)
@@ -196,12 +201,12 @@ export const draftOutcomeOf = (a: IsItLiveAnnouncement, j: Judged, never: string
     }
   if (j.state === 'differs')
     return {
-      context: `The draft in Slack differs from the approved wording of the announcement for agents for ${name}: ${j.why}. It is not counted as its draft, and the announcement is still owed. Tell Dan exactly that: the draft Slack now holds for ${where} is not the wording he approved, and he can put the approved wording in its place (Copy on ${BAND} copies it) or delete it so the approved wording can be drafted. Save no other draft there now: Slack keeps one per channel and would keep nothing. ${never}`,
+      context: `The draft in Slack differs from the approved wording of the announcement for agents for ${name}: ${j.why}. It is not counted as its draft, and the announcement is still owed. Tell Dan exactly that: the draft Slack now holds for ${where} is not the wording he approved, and he can put the approved wording in its place or delete it so the approved wording can be drafted. Save no other draft there now: Slack keeps one per channel and would keep nothing. ${never}`,
       toast: `The draft in Slack differs from the approved wording of the announcement for agents for ${name}: ${j.why}. It is still owed.`,
     }
   if (j.state === 'not-kept')
     return {
-      context: `No draft of the announcement for agents for ${name} was saved: ${j.why}. It is still owed. Tell Dan a draft is already waiting in ${where}, which Slack did not show, so whether it is this announcement is not known: if it is, he can send it and press Mark sent on ${BAND}, and if it is something else, this one can be drafted once that one is sent. Do not tell him to delete it, and never save the announcement to another channel instead. ${never}`,
+      context: `No draft of the announcement for agents for ${name} was saved: ${j.why}. It is still owed. Tell Dan a draft is already waiting in ${where}, which Slack did not show, so whether it is this announcement is not known: if it is, he can send it, and if it is something else, this one can be drafted once that one is sent. Do not tell him to delete it, and never save the announcement to another channel instead. ${never}`,
       toast: `No Slack draft was saved for the announcement for agents for ${name}: a draft is already waiting in that channel. It is still owed.`,
     }
   if (j.state === 'error')
@@ -214,6 +219,52 @@ export const draftOutcomeOf = (a: IsItLiveAnnouncement, j: Judged, never: string
     toast: `A Slack draft in ${where} could not be checked against the approved announcement for agents for ${name} (${j.why}). It is still owed.`,
   }
 }
+
+// ---- said in every session until it is settled ----
+// While an announcement is owed, /live lists it, every session started in that project says it in
+// one line, and the turn end of the session whose card found it live is refused once, as the thread
+// reply's hold is. One merged that no card has found live yet is listed and said too, as waiting,
+// since the session that merged it may be gone.
+
+/** Where one owed announcement stands: whether a card has said its change is live. */
+export type Standing = { a: IsItLiveAnnouncement; out: boolean }
+
+/** Where an owed announcement stands, as one clause after its pull request's name. */
+export const standingOf = (s: Standing): string =>
+  !s.out
+    ? 'merged, and no card has said it is live yet, so nothing is drafted'
+    : draftable(s.a)
+      ? `not yet a Slack draft in channel ${s.a.channel}`
+      : `cannot be drafted from this Mac (${s.a.why ?? 'its channel or its wording was not read'})`
+
+const and = (xs: string[]): string => (xs.length <= 1 ? (xs[0] ?? '') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`)
+
+/** /live: the announcements still owed, each with where it stands, or nothing when none is. */
+export const listOf = (all: Standing[]): string => (all.length ? ['', '', 'Announcements for agents still owed:', ...all.map(s => `- ${nameOf(s.a)}: ${standingOf(s)}.`)].join('\n') : '')
+
+/** The one line a session start says of the announcements still owed in its project, or undefined when none is. */
+export const startLineOf = (all: Standing[]): string | undefined => {
+  if (!all.length) return undefined
+  const [one] = all
+  if (all.length === 1 && one) {
+    const where = !one.out ? 'is merged, and no card has said it is live yet' : draftable(one.a) ? 'is live and not yet a Slack draft' : `is live and ${standingOf(one)}`
+    return `An announcement for agents is still owed in this project: ${nameOf(one.a)} ${where}. /live lists it.`
+  }
+  const repos = [...new Set(all.map(s => s.a.repo))]
+  const names = repos.length === 1 ? `${repos[0]} pull requests ${and(all.map(s => String(s.a.pr)))}` : and(all.map(s => nameOf(s.a)))
+  return `${all.length} announcements for agents are still owed in this project: ${names}. /live says where each stands.`
+}
+
+/** What the session's first prompt carries beside that line: how one is drafted, and that Dan is told. */
+export const firstPromptOf = (line: string): string =>
+  `${line} Tell Dan this in one line. If he asks for one to be drafted, call the is it live card for that pull request with deploy "live", once you have confirmed its change is live: the card's answer gives the channel and the exact wording.`
+
+/** The turn end's refusal for the announcements this session's card found live and that are still not drafted. */
+export const holdOf = (due: IsItLiveAnnouncement[], said: Said): string => due.map(a => `The announcement for agents for ${nameOf(a)} is not yet a Slack draft. ${saveOf(a, said)}`).join('\n\n')
+
+/** What Dan is told, once, when a turn ends with them still not drafted. */
+export const announceLetGoOf = (due: IsItLiveAnnouncement[]): string =>
+  `Is it live let the turn end with the announcement for agents for ${and(due.map(nameOf))} not yet a Slack draft. It is still owed, and /live lists it.`
 
 /** What Dan is told when whether a merged change owes an announcement could not be told at all. */
 export const unreadOf = (a: { repo: string; pr: number }, why: string): string =>

@@ -1,7 +1,7 @@
 import type { EngineInterface, On } from 'claude-code'
 import { cutOwn, watchesOnly } from './mod-kit/hold.ts'
 import type { IsItLiveOwed, IsItLiveThread } from '../types/index.d.ts'
-import { announcementDrafted } from './announcing.ts'
+import { announcementDrafted, withAnnouncementLine } from './announcing.ts'
 import { MOD } from './card.ts'
 import { errorText } from './mod-kit/skew.ts'
 import {
@@ -252,8 +252,10 @@ export function registerDrafts(on: On): void {
   // before any merge; one linked later is recorded as pasted mid session (#2578). His prompts are
   // counted as far as the second, so isDans is asked of no later prompt without a link.
   on('prompt.submit', async ($, e, next) => {
-    const r = await next(e)
-    if (r.drop !== undefined) return r
+    const beneath = await next(e)
+    if (beneath.drop !== undefined) return beneath
+    // #3667: the session's first prompt also carries the line about announcements still owed.
+    const r = await withAnnouncementLine($, beneath)
     try {
       const found = threadsIn(String(e.text ?? ''))
       const typed = (await $.state.get(promptsRef)).value ?? 0

@@ -103,6 +103,8 @@ type World = {
   judge: (input: Judged) => Gh
   remote: string | null
   stored?: Record<string, unknown>
+  /** When set, every read of the store fails with these words. */
+  storeFails?: string
   /** What Slack's draft tool answers, or the refusal of a gate beneath the mod. */
   slackDraft: { text: string; isError?: true; deny?: string }
 }
@@ -145,7 +147,10 @@ const world = (on: On, init: Partial<World> = {}) => {
   const clock = mock.clock(on, { now: T0 })
   // The store every session shares, held where a test can read it and write under the mod.
   const store = new Map<string, unknown>(Object.entries(w.stored ?? {}))
-  on('store.get', ($, e) => ({ value: store.get(e.key) }) as never)
+  on('store.get', ($, e) => {
+    if (w.storeFails) throw new Error(w.storeFails)
+    return { value: store.get(e.key) } as never
+  })
   on('store.set', ($, e) => {
     store.set(e.key, JSON.parse(JSON.stringify(e.value)))
     return { value: undefined } as never
@@ -180,7 +185,7 @@ const world = (on: On, init: Partial<World> = {}) => {
       else if (fields === 'labels,body') g = { exitCode: 0, stdout: JSON.stringify({ labels: (p.labels ?? []).map(name => ({ name })), body: p.body ?? '' }) }
       else g = { exitCode: 0, stdout: JSON.stringify({ number: Number(n), state: p.state ?? 'MERGED', mergedAt: new Date(T0 + 30_000).toISOString(), title: 'Hand a call back', url: `https://github.com/${repo}/pull/${n}` }) }
     } else if (a === 'gh auth status') g = { exitCode: 0, stdout: '', stderr: '  Logged in to github.com account dan (keyring)' }
-    else if (a.startsWith('gh repo view')) g = { exitCode: 0, stdout: `${REPO}\n` }
+    else if (a.startsWith('gh repo view')) g = { exitCode: 0, stdout: `${e.argv[3]}\n` }
     else if (e.argv[0] === 'node' && e.argv[1] === `${HOME}/.claude/hooks/lib/changelog-entry.js` && e.argv[2] === 'announcement') g = w.reader(e.argv[3] as string, JSON.parse(stdin ?? 'null'))
     else if (e.argv.join(' ') === `node ${HOME}/.claude/hooks/lib/announce-compare.js draft`) g = w.judge(JSON.parse(stdin ?? 'null'))
     return { value: { exitCode: g.exitCode, stdout: g.stdout, stderr: g.stderr ?? '', isStdoutTruncated: false, isStderrTruncated: false } } as never
@@ -469,4 +474,122 @@ test('a draft that is not the announcement is left alone: another channel, a thr
   w.slackDraft = { text: '{"result":"Draft created","draft_id":"Dr9"}' }
   await draft($, {}, DRAFT_OTHER)
   expect(store.get(DONE_KEY)).toEqual({ how: 'drafted', at: T0, draftId: 'Dr9' })
+})
+
+// ---- R4: said in every session until it is settled ----
+
+const live =async ($: unknown) =>
+  String(((await ($ as { command: { run: (x: never) => Promise<unknown> } }).command.run({ command: 'live', args: '', origin: { kind: 'human' }, presentation: {} } as never)) as { text?: string }).text)
+const says = async ($: unknown, text: string) => (await ($ as { prompt: { submit: (e: never) => Promise<unknown> } }).prompt.submit({ text, origin: { kind: 'composer' }, wait: false } as never)) as { context?: string[] }
+const turnEnd = async ($: unknown, isActive = false) =>
+  (await ($ as { classic: { Stop: (e: object) => Promise<unknown> } }).classic.Stop({ hook_event_name: 'Stop', session_id: 's1', transcript_path: '/t', cwd: FOLDER, stop_hook_active: isActive, last_assistant_message: 'Done.' })) as { block?: string }
+// What another session left in the store: the entry, and that a card said its change is out.
+const OWED_AND_OUT = { [`announce:${REPO}#7`]: ENTRY, [OUT_KEY]: { at: T0 } }
+
+test('every session started in that project says it in one line, to Dan and in its first prompt, though no card is kept for it (R4)', withKit, async ($, on) => {
+  const { toasts } = world(on, { stored: OWED_AND_OUT })
+  await start($)
+  const LINE = `An announcement for agents is still owed in this project: ${NAME} is live and not yet a Slack draft. /live lists it.`
+  expect(toasts).toEqual([LINE])
+  const first = (await says($, 'Morning')).context ?? []
+  expect(first.length).toBe(1)
+  expect(first[0]).toContain(LINE)
+  expect(first[0]).toContain('call the is it live card for that pull request with deploy "live"')
+  expect((await says($, 'And then?')).context ?? []).toEqual([])
+  // A session that only heard of it holds no turn end for it: the session that carded it live does.
+  expect((await turnEnd($)).block).toBeUndefined()
+})
+
+test('a session in another project is told nothing, and one settled or owed by no change says nothing at start', withKit, async ($, on) => {
+  const { toasts } = world(on, { stored: OWED_AND_OUT, remote: 'git@github.com:acme/other.git' })
+  await start($)
+  expect(toasts).toEqual([])
+  expect((await says($, 'Morning')).context ?? []).toEqual([])
+  expect(await live($)).not.toContain('nnouncement')
+})
+
+test('an announcement settled in any of the three ways is not said at start, in the first prompt or in /live', withKit, async ($, on) => {
+  const { toasts, store } = world(on, { stored: OWED_AND_OUT })
+  for (const done of [{ how: 'drafted', at: T0, draftId: 'Dr1' }, { how: 'sent', at: T0 }, { how: 'not-announcing', at: T0 }]) {
+    store.set(DONE_KEY, done)
+    await start($)
+    expect(toasts).toEqual([])
+    expect((await says($, 'Morning')).context ?? []).toEqual([])
+    expect(await live($)).not.toContain('nnouncement')
+  }
+  // A record under that key that does not read settles nothing.
+  store.set(DONE_KEY, { how: 'maybe', at: T0 })
+  expect(await live($)).toContain(`- ${NAME}: not yet a Slack draft in channel ${CH}.`)
+})
+
+test('one merged that no card has found out yet, one that cannot be drafted here, and several at once are each said as what they are', withKit, async ($, on) => {
+  const why = 'this Mac names no announcements channel for it'
+  const { toasts } = world(on, {
+    stored: {
+      [`announce:${REPO}#7`]: ENTRY,
+      [`announce:${REPO}#9`]: { ...ENTRY, pr: 9, channel: '', why, at: T0 + 1 },
+      [`announce-out:${REPO}#9`]: { at: T0 + 1 },
+      [`announce:${REPO}#12`]: { ...ENTRY, pr: 12, at: T0 + 2 },
+      [`announce-out:${REPO}#12`]: { at: T0 + 2 },
+    },
+  })
+  await start($)
+  expect(toasts).toEqual([`3 announcements for agents are still owed in this project: ${REPO} pull requests 7, 9 and 12. /live says where each stands.`])
+  expect(await live($)).toContain(
+    [
+      'Announcements for agents still owed:',
+      `- ${REPO} pull request 7: merged, and no card has said it is live yet, so nothing is drafted.`,
+      `- ${REPO} pull request 9: cannot be drafted from this Mac (${why}).`,
+      `- ${REPO} pull request 12: not yet a Slack draft in channel ${CH}.`,
+    ].join('\n'),
+  )
+})
+
+test('/live says nothing of announcements when none is owed, lists one after its card, and stops once another session settled it', withKit, async ($, on) => {
+  const { store } = world(on, { prs: { [`${REPO}#7`]: ANNOUNCED } })
+  await start($)
+  expect(await live($)).not.toContain('nnouncement')
+  await card($)
+  // After the cards, under a heading of its own.
+  expect(await live($)).toBe(`- Live: Hand a call back (#7)\n\nAnnouncements for agents still owed:\n- ${NAME}: not yet a Slack draft in channel ${CH}.`)
+  store.set(DONE_KEY, { how: 'sent', at: T0 })
+  expect(await live($)).not.toContain('nnouncement')
+})
+
+test('a store that cannot be read is said as that at a session start, never as nothing owed', withKit, async ($, on) => {
+  const { toasts } = world(on, { stored: OWED_AND_OUT, storeFails: 'the store is locked' })
+  await start($)
+  expect(toasts.length).toBe(1)
+  // The engine's own words for a read nothing answered follow the colon.
+  expect(toasts[0]).toContain('Is it live could not read whether this project still owes an announcement for agents: ')
+})
+
+test('the turn end of the session that carded it live is refused once, then let go and said, and never once the draft is saved', withKit, async ($, on) => {
+  const { toasts } = world(on, { prs: { [`${REPO}#7`]: ANNOUNCED } })
+  await start($)
+  await bash($, 'gh pr merge 7 --squash')
+  // A deploying card settles the card's own hold and asks no draft, so nothing is held for one yet.
+  await card($, { deploy: 'deploying' })
+  expect((await turnEnd($)).block).toBeUndefined()
+  await card($)
+  toasts.length = 0
+  const held = (await turnEnd($)).block ?? ''
+  expect(held).toContain(`The announcement for agents for ${NAME} is not yet a Slack draft.`)
+  expect(held).toContain(`call slack_send_message_draft with channel_id "${CH}", no thread_ts`)
+  expect(held).toContain(`\n-----\n${POST}\n-----`)
+  expect((await turnEnd($, true)).block).toBeUndefined()
+  expect(toasts).toEqual([`Is it live let the turn end with the announcement for agents for ${NAME} not yet a Slack draft. It is still owed, and /live lists it.`])
+  // A new chain of turn ends holds it once more, and a saved draft ends that.
+  expect((await turnEnd($)).block ?? '').toContain('is not yet a Slack draft')
+  await draft($)
+  expect((await turnEnd($)).block).toBeUndefined()
+})
+
+test('another session settling it ends this session\'s hold, and a session that asked for no draft holds nothing', withKit, async ($, on) => {
+  const { store } = world(on, { prs: { [`${REPO}#7`]: ANNOUNCED } })
+  await start($)
+  expect((await turnEnd($)).block).toBeUndefined()
+  await card($)
+  store.set(DONE_KEY, { how: 'sent', at: T0 })
+  expect((await turnEnd($)).block).toBeUndefined()
 })
