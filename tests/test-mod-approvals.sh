@@ -370,6 +370,14 @@ L4="$TMP/list-noissue.tsv"
 run "$M" "$L4"
 [ "$code" -eq 4 ] && has "row 2" && has "issue" && check "a row whose issue is not a number is refused, exit 4" ok \
   || check "a row whose issue is not a number is refused, exit 4" "exit $code: $out"
+# A row whose statement is nowhere fails a run that found nothing else, so a row cannot outlive
+# what it allowed and wait there for the next statement of the same text.
+L5="$TMP/list-stale.tsv"
+{ cat "$EMPTY"; row guard hooks/register.ts own-tool-call "await \$.tool.call({ tool: 'Bash' })" '#3681' 'a statement since removed'; } > "$L5"
+run "$G" "$L5"
+[ "$code" -eq 1 ] && [ "$(found)" -eq 0 ] && has "LISTED BUT GONE guard hooks/register.ts [own-tool-call]" \
+  && check "a row whose statement has gone fails the run by itself, with nothing else found" ok \
+  || check "a row whose statement has gone fails the run by itself, with nothing else found" "exit $code: $out"
 run "$M" "$TMP/no-such-list.tsv"
 [ "$code" -eq 4 ] && has "no-such-list.tsv" && check "a list that is not there is exit 4 and never read as an empty one" ok \
   || check "a list that is not there is exit 4 and never read as an empty one" "exit $code: $out"
