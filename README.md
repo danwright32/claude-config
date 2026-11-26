@@ -3637,8 +3637,8 @@ MacBook, 7,604 (5.9%) reach the judge and 31 are refused
 
 </td><td>
 
-2026-11-26: not timed. Over the 81,135 Bash calls recorded on the personal MacBook in the 30 days to
-that date, 472 (0.6%) name grep and an h flag and so reach the judge, and 175 are refused: grep with
+2026-11-26: not timed. Over the 81,232 Bash calls recorded on the personal MacBook in the 30 days to
+that date, 475 (0.6%) name grep and an h flag and so reach the judge, and 178 are refused: grep with
 -h over more than one file, whose lines Claude Code's ugrep prints in whichever order the files
 finish. A command naming no grep, or no h flag, leaves before python starts
 

@@ -32,11 +32,14 @@ STILL_FUNCTION = {"noglob", "nocorrect", "exec", "time", "-"}
 # ugrep's short options that take a value, glued (-m1) or as the next word (-m 1). Every other letter
 # in a cluster is a flag on its own.
 SHORT_VALUED = set("efABCmdDJKNMOtg")
-# Long options that take a value as the next word when written without "=".
+# Long options that take a value as the next word when written without "=". --color and --colour
+# take theirs only after "=" (measured 2026-11-26: -h after --color still dropped the names), so
+# they are not here. --jobs and --max-count written with a space make ugrep stop with "missing
+# argument", so reading the next word as theirs changes nothing that runs.
 LONG_VALUED = {"regexp", "file", "after-context", "before-context", "context", "max-count",
                "directories", "devices", "jobs", "range", "neg-regexp", "file-magic", "file-extension",
                "file-type", "glob", "include", "exclude", "include-dir", "exclude-dir", "label",
-               "encoding", "color", "colour"}
+               "encoding"}
 # Options that name the pattern, so every positional word after them is a file.
 PATTERN_SHORT = set("ef")
 PATTERN_LONG = {"regexp", "file"}

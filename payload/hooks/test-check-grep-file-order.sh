@@ -93,6 +93,10 @@ allowed "control: -e names the pattern, so one file is one file" "grep -h -e res
 refused "a glob that names several files" "grep -h result *.txt"
 refused "brace expansion" "grep -h result {a,b}.txt"
 allowed "control: a value taking flag does not count as a file" "grep -h -m 1 result a.txt"
+# --color takes its value only after "=", so the next word stays a word of its own (measured: -h
+# after it still dropped the names).
+refused "-h after --color, whose value needs =" "grep --color -h result a.txt b.txt"
+allowed "control: --context takes the next word as its value (measured)" "grep -h --context 1 result a.txt"
 allowed "control: a glued value taking flag does not count as a file" "grep -hA2 result a.txt"
 
 # 2. In a pipeline: the grep's own order reaches the next command (measured in a pipe into tr).
