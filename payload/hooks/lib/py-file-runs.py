@@ -81,10 +81,98 @@ comes from a file, since the code names no file. A way to open a file that
 OPENERS does not hold, by a path built at run time, is not seen. Code handed to a module python3
 runs with -m (`python3 -m timeit "..."`) is not read as code. A Python file on disk that runs a
 file it names (`python3 runner.py`, `import runner`, `python3 - < runner.py`) is read as it was:
-this reading is of code the command itself carries. `python3 <folder holding __main__.py>` and
-`python3 <archive>` typed as a command are not this reading's either. In a script on disk only a
-finding that something posts stands, and a path or code that cannot be worked out is left as it
-was there, as an unread feed is.
+this reading is of code the command itself carries. In a script on disk only a finding that
+something posts stands, and a path or code that cannot be worked out is left as it was there, as
+an unread feed is.
+
+A FOLDER OR AN ARCHIVE IN PLACE OF A SCRIPT (py_run_words, claude-config#3441). Measured on main at
+bfc43f1b53 on 2026-11-24: `python3 pkg`, where pkg/__main__.py posts, and `python3 app.zip`, where
+the archive holds one, passed in every spelling tried. A word naming a folder names no file, so
+nothing was read for it, and an archive was read as the text it is not. The gate's every_file now
+asks py_run_words about the words of every Python command before it reads them:
+
+  * A word naming a folder that holds a __main__.py is replaced by that file, and the words are
+    read again as the gate reads any words. So a folder python3 runs is read as its script, and a
+    folder handed to code is read as a file handed to it is. A pattern the shell fills in with
+    such folders (`python3 pk*`) is replaced by each one's __main__.py.
+  * The word python3 runs as its script is refused as unread, where typed, when py_handed says it
+    is something the gate cannot read: an archive, a path under one, a folder whose __main__ is
+    compiled, an extension module or a package (WHAT A PATH RUNS below).
+  * An archive that is an argument, after the script or after code given by -c, is data far more
+    often than code and is judged as it was.
+
+WHAT A PATH RUNS WHEN IT IS NOT A SCRIPT'S TEXT (py_handed, claude-config#3441). A call that runs
+the file at a path (PATH_SINKS) was refused as unread only for a file with a NUL in its first line.
+Measured on main at bfc43f1b53 on 2026-11-24, each of these passed, handed to runpy.run_path in
+code given by -c: an archive zipapp wrote with a #! line in front, an archive with a Python file's
+text in front, a path under an archive, a folder whose only __main__ is compiled, and a folder
+holding a package named __main__. What Python does with each was measured the same day with files
+that only print (Python 3.14.4), and py_handed answers by it:
+
+  * Handed a folder, python3 and runpy.run_path run the __main__.py in it (read as that file
+    since #3397).
+  * Handed a file whose last 65,557 bytes hold a zip end record, they run the __main__.py inside
+    it, whatever the file is called and whatever text stands in front: py_archive, which looks
+    exactly as far back as zipimport does. Handed a path under such a file (app.zip/inner), they
+    run the __main__.py under that path inside it. The gate does not open an archive: what is
+    inside imports from inside it, which none of the gate's readers follow, so reading one file of
+    it would pass an archive whose other files post. It is refused as unread where it is typed,
+    whatever it holds.
+  * Handed a folder with no __main__.py and a compiled __main__.pyc, they run that. One holding an
+    extension module named __main__, or a package named __main__ (which this Python refuses to run
+    and another may not), is not a __main__.py the gate can read either. Each is refused as unread
+    where it is typed.
+
+  Only a path handed to a call that runs the file at it is judged this way. An archive the code
+  names any other way is data far more often than code (a spreadsheet, a wheel and a document are
+  all zip files), and is judged as it was. A folder holding no __main__ at all runs nothing and
+  passes.
+
+PYTHON'S OWN OPTIONS (py_own_reading, claude-config#3539). Which word of a command python3 runs
+was decided by the gate's table of options (operands), and that table is not Python's reader.
+Measured on main at 35f85db5cd on 2026-11-24, against what python3 3.14.4 and 3.9.6 themselves
+ran for 110 shapes of command line with scripts that only print (one run of each on each, the two
+agreeing on all but -P, which 3.9 does not know): each of these ran something that posts and
+passed.
+
+  * `python3 posts.py -m x` runs posts.py, -m being the script's own argument. No file of a
+    command holding the word -m anywhere was read, for python3 or any other interpreter.
+  * `python3 -c'import posts'` and `-Bc'import posts'` run the code glued to -c. The table took
+    the word for an option with no value and the next file for the script. `python3 -bBEsuc CODE`
+    runs CODE; the table knew a run of at most four letters before the c.
+  * `python3 -Wc posts.py` and `-Xc posts.py` run posts.py: -W and -X take the rest of their word
+    as their value. The table took the word for -c and posts.py for code.
+  * `python3 -BW quiet.py posts.py` runs posts.py: -W or -X ending a word takes the next word.
+    The table took quiet.py for the script and posts.py for a file it is handed.
+  * `python3 -mdoc` runs the module doc. The table took `-m` and up to three letters before a c
+    for -c, and the module was never read.
+  * `python3 -- -post.py` runs the file named -post.py, and `python3 -- -` the code on its input.
+    A script whose name starts with a dash was never read, nor that code.
+  * `PYTHONPATH=onpath python3 -W error::warnmod.Loud quiet.py` imports warnmod before anything
+    else runs: a -W value whose third field names a class by its module has Python import that
+    module, from PYTHONPATH and the standard places (not from the folder of the script).
+
+py_cmdline reads the words as CPython's own reader does (Python/getopt.c and the loop over it in
+Python/initconfig.c): a word that is `-` or starts with no dash ends the options and is the code
+on the input or the script; `--` ends them and the next word is the script whatever it starts
+with, or `-`; in a run of letters, c, m, W and X take the rest of the word, or the next word where
+the run ends there, and c and m end the options; `--check-hash-based-pycs` takes the next word;
+every other letter or long option takes none. A letter or long option Python does not know stops
+it with an error, as do -h, -V and their long forms without one, and is read on past here, so more
+is read than runs and never less.
+
+py_own_reading is one more reading, made before the table's and never in its place, so it can
+refuse a command the table lets through and never the reverse:
+
+  * The module each -W value names is read as one imported by code given to python3 is.
+  * Where the table's answer (operands, py_module) is not Python's, the command is spelled again so
+    the table reads it as Python does (py_respell: the script as the first word after python3, with
+    ./ in front of a name starting with a dash; `-c` and the code as two words; `-m` and the module
+    as two words; `-` alone), with its words as they were written, quotes and all, and that text
+    is judged as the command itself is. The options left out load nothing but the -W module above.
+  * A spelling is used only once the gate's own reader gives back the words it was built for. Where
+    neither the words as written nor those words quoted afresh read back so, what python3 runs is
+    refused as unread where the command is typed, and left as it was in a script on disk.
 """
 import ast
 import os
@@ -132,6 +220,21 @@ INPUT_FROM = re.compile(r"0?<(?![<>&])(.*)\Z", re.S)
 MAX_PATH = 1024
 MAX_PASSES = 5
 MAX_LINES = 12
+# The record that ends a zip archive, and how far from the end of a file zipimport looks for it:
+# the record's own 22 bytes behind the longest comment it can carry (claude-config#3441).
+ZIP_END = b"PK\x05\x06"
+ZIP_TAIL = 22 + 65535
+# A name in a folder that python3 runs as its __main__ and the gate cannot read: compiled code, or
+# an extension module under any build tag.
+MAIN_NOT_TEXT = re.compile(r"__main__(?:\.[^/]*)?\.(?:pyc|so|pyd)\Z")
+# How many folders up from a path that names nothing an archive holding it is looked for.
+MAX_UP = 64
+# What makes a word a pattern the shell replaces with its matches.
+FOLDER_PATTERN = re.compile(r"[*?\[{]")
+# Python's short options that take a value, the rest of their word or the next word, and its one
+# long option that takes the next word (PYTHON'S OWN OPTIONS above, claude-config#3539).
+PY_VALUE_LETTERS = "cmWX"
+PY_VALUE_LONG = "--check-hash-based-pycs"
 
 
 def make(py_nodes, unknown_dir):
@@ -467,6 +570,302 @@ def make(py_nodes, unknown_dir):
                         texts.append(got)
             return texts, folders, rows, mods, unworked, ran
 
+        def py_archive(self, path):
+            """Whether python3 would run the file at path as an archive, by the __main__.py inside
+            it: a zip end record within the last ZIP_TAIL bytes, which is where zipimport looks for
+            one, whatever the file is called and whatever stands in front of the archive. A file an
+            earlier command of this call made is read by what it was made from as well. A file
+            that cannot be opened is one Python cannot open either."""
+            sources = [path]
+            for kind, value, _ in self.made_from(path) or ():
+                if kind == "file":
+                    sources.append(value)
+                elif kind == "text" and ZIP_END.decode("latin-1", "strict") in value:
+                    return True
+            for source in sources:
+                try:
+                    # Through the gate's own open, so the judgement cache records the read
+                    # (lib/judgement-cache.py); 2 is io.SEEK_END, written out because the cache's
+                    # stand in for os knows only the names it lists.
+                    with open(source, "rb") as f:
+                        f.seek(0, 2)
+                        f.seek(max(f.tell() - ZIP_TAIL, 0))
+                        if ZIP_END in f.read(ZIP_TAIL):
+                            return True
+                except OSError:
+                    continue
+            return False
+
+        def py_handed(self, path):
+            """What python3, or a call that runs the file at a path, runs when handed path, where
+            that is something the gate cannot read, as words for a refusal: an archive, a path
+            under one, or a folder whose __main__ is compiled, an extension module or a package.
+            None for a file of text, for a folder whose __main__.py is one (read as that file
+            where it is named), and for a path that runs nothing (WHAT A PATH RUNS above). A folder
+            an earlier command of this call copies is read by the folder it was copied from as
+            well."""
+            if self.is_file(path):
+                if self.py_archive(path):
+                    return "an archive, which Python runs by the __main__.py inside it"
+                return None
+            has_main = self.is_file(os.path.join(path, "__main__.py"))
+            for folder in (path, (self.made_dirs.get(os.path.realpath(path)) or (None,))[0]):
+                try:
+                    names = sorted(os.listdir(folder)) if folder else []
+                except OSError:
+                    names = []  # no folder there, or one Python cannot list either
+                for name in names:
+                    if name == "__main__" and os.path.isdir(os.path.join(folder, name)):
+                        return "a folder holding a package named __main__, which is not a __main__.py"
+                    if MAIN_NOT_TEXT.match(name) and not (has_main and name.endswith(".pyc")):
+                        return f"a folder Python runs by its {name}, which is not text"
+            if has_main:
+                return None
+            # A path that names nothing on disk can lie inside an archive: the nearest thing above
+            # it that is there says which.
+            head = path.rstrip("/") or path
+            for _ in range(MAX_UP):
+                if os.path.lexists(head) or self.is_file(head):
+                    if self.is_file(head) and self.py_archive(head):
+                        return (f"a path under the archive {os.path.basename(head)}, which Python "
+                                "runs by the __main__.py inside it")
+                    break
+                parent = os.path.dirname(head)
+                if parent == head:
+                    break
+                head = parent
+            return None
+
+        def py_run_words(self, words, d, runs_slot):
+            """(the words with each folder Python runs replaced by the __main__.py in it, the
+            reason what python3 runs cannot be read or None) (A FOLDER OR AN ARCHIVE above). The
+            caller reads the first as it reads any words, and the words as they were written as
+            well, so this can only refuse more.
+
+            runs_slot says python3 runs one of these words as its script (it was given no code by
+            -c, no module by -m and none on its input). That word is the one in the script's place
+            by the gate's table of options (operands) and, where that table is wrong, the first
+            word that is no option and names something on disk; a command the table places
+            otherwise than Python does is also read spelled as Python reads it (py_own_reading,
+            claude-config#3539), where the table's word is Python's. Either is refused as unread,
+            where it is typed, when it is an archive, a path under one, or a folder whose __main__ is not
+            text (py_handed). Every word naming a folder that holds a __main__.py is replaced by
+            that file, wherever it stands: its place decides how it is read (the script, or a file
+            handed to code that may run it), and that is the caller's to say, as it is for a file.
+            So is a pattern the shell fills in with such folders. A word a redirection names is the
+            shell's and is left as it is."""
+            slot = self.operands(words)[0] if runs_slot else None
+            out, first, target = list(words[:1]), runs_slot, False
+            for w in words[1:]:
+                redirect = self.sw.REDIRECT_WORD.match(w)
+                if target or redirect or not w or w[:1] in "-+" or len(w) > MAX_PATH or "\0" in w or "\n" in w:
+                    target = bool(redirect) and not redirect.group(1)
+                    out.append(w)
+                    continue
+                path = self.resolve(w, d)
+                in_slot = runs_slot and w == slot
+                if first and (in_slot or self.is_file(path) or os.path.lexists(path)):
+                    in_slot, first = True, False
+                what = self.py_handed(path) if in_slot else None
+                if what:
+                    why = self.unread_typed(
+                        f"Python is handed {w}, {what}, so what it runs is not read and whether it posts "
+                        "cannot be checked (claude-config#3441). Run the script itself by its path")
+                    if why:
+                        return words, why
+                if not self.is_file(path) and self.is_file(os.path.join(path, "__main__.py")):
+                    out.append(os.path.join(w, "__main__.py"))
+                    continue
+                if FOLDER_PATTERN.search(w) and not re.search(r"[$`<>\s()]", w) and not self.is_file(path) \
+                        and not os.path.lexists(path) and self.pattern_bare(w):
+                    # A pattern the shell fills in with folders before Python starts (`python3 pk*`):
+                    # the __main__.py of each folder it matches, found as the gate finds the files a
+                    # pattern matches (pattern_matches in lib/program-runs.py, with its limits).
+                    mains = self.pattern_matches(os.path.join(w, "__main__.py"), d)
+                    if mains is None:
+                        why = self.unread_typed(
+                            f"the pattern {w} may hand Python a folder to run, and it matches more than the "
+                            "gate reads, so the __main__.py of each folder was not read and whether one posts "
+                            "cannot be checked (claude-config#3441). Name the folder")
+                        if why:
+                            return words, why
+                    elif mains:
+                        out.extend(mains)
+                        continue
+                out.append(w)
+            return out, None
+
+        def py_cmdline(self, words):
+            """What python3 itself runs for a command's words, read as its own option reader reads
+            them (PYTHON'S OWN OPTIONS above): (kind, at, cut, end, warns, theirs).
+
+            kind is "script" (the word at index at), "code" or "module" (given by -c or -m: the
+            word at index at from its character cut on, which is the option's own word where the
+            value is glued to it and the next word, with cut 0, where it is not), "input" (the
+            code on its input: the word `-` at index at, or at None where no word is left), or
+            None where Python stops with an error for want of a value. end is the index of the
+            first word after the one that names what runs, warns the value of each -W, and
+            theirs the indexes of the words that are the shell's (a redirection, its target
+            glued or the next word), never Python's."""
+            mine, theirs, k = [], [], 1
+            while k < len(words):
+                m = self.sw.REDIRECT_WORD.match(words[k])
+                if m:
+                    theirs.extend(range(k, min(len(words), k + (1 if m.group(1) else 2))))
+                    k += 1 if m.group(1) else 2
+                    continue
+                mine.append(k)
+                k += 1
+            warns, p = [], 0
+            while p < len(mine):
+                at = mine[p]
+                w = words[at]
+                p += 1
+                if w == "--":
+                    if p == len(mine):
+                        return "input", None, 0, at + 1, warns, theirs
+                    at = mine[p]
+                    w = words[at]
+                    return ("input" if w == "-" else "script"), at, 0, at + 1, warns, theirs
+                if w == "-" or not w.startswith("-"):
+                    return ("input" if w == "-" else "script"), at, 0, at + 1, warns, theirs
+                if w.startswith("--"):
+                    p += w == PY_VALUE_LONG
+                    continue
+                for cut, ch in enumerate(w[1:], 2):
+                    if ch not in PY_VALUE_LETTERS:
+                        continue
+                    if not w[cut:]:
+                        if p == len(mine):
+                            return None, None, 0, len(words), warns, theirs
+                        at, cut = mine[p], 0
+                        p += 1
+                    if ch == "W":
+                        warns.append(words[at][cut:])
+                    if ch in "cm":
+                        return ("code" if ch == "c" else "module"), at, cut, at + 1, warns, theirs
+                    break
+            return "input", None, 0, len(words), warns, theirs
+
+        @staticmethod
+        def py_respell(words, read):
+            """words spelled so the gate's option table reads them as Python does (read, from
+            py_cmdline of the same words), or None where Python runs nothing: python3, the
+            redirections written before what it runs, then the script (with ./ in front of a
+            name starting with a dash), or -c and the code, or -m and the module, or - for the
+            code on its input, then every word after as it was. The options left out load
+            nothing the gate reads but a -W value's module, which py_own_reading reads."""
+            kind, at, cut, end, _, theirs = read
+            if kind == "script":
+                core = [("./" if words[at].startswith("-") else "") + words[at]]
+            elif kind in ("code", "module"):
+                core = ["-c" if kind == "code" else "-m", words[at][cut:]]
+            elif kind == "input":
+                core = [] if at is None else ["-"]
+            else:
+                return None
+            return words[:1] + [words[j] for j in theirs if j < end] + core + words[end:]
+
+        def py_respelled(self, text, want):
+            """One command's text spelled so its words read as want (py_respell of its words), or
+            None where no spelling the gate can build reads back so. Tried first with the words
+            as the command wrote them, quotes and expansions kept, so a path or code the shell
+            fills in is still worked out, or refused, as it would be; then with each word of
+            want quoted afresh, which is not tried where a word holds something the shell would
+            fill in, since quoting it would make it text. What stands before the program
+            (assignments, a runner) is kept as written."""
+            split = self.py_redirects_split
+            rest, assigns = self.rest_of(text)
+            if rest and text.endswith(rest):
+                head = text[:len(text) - len(rest)]
+            else:
+                head = "".join(a + " " for a in assigns.split("\n") if a)
+            raw = self.raw_words(text)
+            tries = [self.py_respell(raw, self.py_cmdline(raw))] if raw else []
+            if not any(SHELL_FILLS.search(w) for w in want):
+                quoted = []
+                for w in want:
+                    m = self.sw.REDIRECT_WORD.match(w)
+                    if not m:
+                        quoted.append(shlex.quote(w))
+                    elif m.group(1):
+                        quoted.append(w[:m.start(1)] + shlex.quote(m.group(1)))
+                    else:
+                        quoted.append(w)
+                tries.append(quoted)
+            for spelled in tries:
+                if not spelled:
+                    continue
+                again = head + " ".join(spelled)
+                if split(self.words_of(self.rest_of(again)[0])) == split(want):
+                    return again
+            return None
+
+        def py_redirects_split(self, words):
+            """words with each redirection glued to its target as two words, so the same command
+            written both ways compares equal."""
+            out = []
+            for w in words:
+                m = self.sw.REDIRECT_WORD.match(w)
+                if m and m.group(1):
+                    out.extend([w[:m.start(1)], m.group(1)])
+                else:
+                    out.append(w)
+            return out
+
+        def py_own_reading(self, name, words, text, here, judge):
+            """The reason a Python command posts when it is read as python3 itself reads its
+            options, or None (PYTHON'S OWN OPTIONS above, claude-config#3539). words are the
+            command's words and text the command, name the program, here the folder it runs in,
+            and judge the gate's judging of one command's text.
+
+            The module a -W value has Python import is read as an import. And where the gate's
+            option table places what runs otherwise than Python does, the command is spelled
+            again so the table reads it as Python does, and judged so. The caller goes on to
+            judge the command as the table reads it, as before, so this can only refuse more."""
+            read = self.py_cmdline(words)
+            kind, at, cut, end, warns, theirs = read
+            for warn in warns:
+                # action:message:category:module:lineno, and a category with a dot in it is a
+                # class Python imports the module of (warnings._getcategory).
+                fields = warn.split(":")
+                mod = fields[2].strip().rpartition(".")[0] if len(fields) > 2 else ""
+                if MODULE_NAME.fullmatch(mod):
+                    reason = self.imports(f"the -W option given to {name}", None, here, f"import {mod}", "py")
+                    if reason:
+                        return reason
+            if kind is None:
+                return None
+            value = words[at][cut:] if at is not None else None
+            operand, inline, stdin = self.operands(words)
+            module = None if inline else self.py_module(words)
+            if kind == "script":
+                same = not inline and not module and operand == value and not value.startswith("-")
+            elif kind == "code":
+                after = [words[j] for j in range(end, len(words)) if j not in theirs]
+                same = bool(inline) and inline[1] == value and inline[2] == after
+            elif kind == "module":
+                same = bool(module) and module[0] == value and len(module[1]) == len(words) - end
+            else:
+                same = not inline and not module and stdin
+            want = None if same else self.py_respell(words, read)
+            if not want or want == words:
+                return None
+            again = self.py_respelled(text, want)
+            if again is None:
+                return self.unread_typed(
+                    f"{name} reads the options of this command another way than the gate can spell out, so "
+                    "what it runs is not read and whether it posts cannot be checked (claude-config#3539). "
+                    "Write the script, -c and its code, or -m and its module as words of their own, right "
+                    f"after {name}")
+            # The judging sets what the command's sys.argv holds for itself; the caller's is put back.
+            keep = dict(self.py_cmd)
+            try:
+                return judge(again)
+            finally:
+                self.py_cmd.clear()
+                self.py_cmd.update(keep)
+
         def py_file_runs(self, label, code, here, d, depth, filled=False, fed=None):
             """The reason code given to python3 posts through a file, a module or a command it names
             in its own text, or that it runs a file the gate cannot read, or None (THE RULE above).
@@ -520,8 +919,10 @@ def make(py_nodes, unknown_dir):
                         named.append((os.path.join(text if k == 0 else path, "__main__.py"),
                                       os.path.join(path, "__main__.py")))
             # A file the code runs by its path that is not text (an archive holding __main__.py,
-            # compiled code) is one the gate cannot read.
-            opaque = []
+            # compiled code) is one the gate cannot read. So is an archive with text in front of it,
+            # a path under an archive, and a folder whose __main__ is compiled or a package
+            # (py_handed, claude-config#3441): each passed on main at bfc43f1b53, 2026-11-24.
+            opaque, handed = [], []
             for name, text in ran:
                 if not text or len(text) > MAX_PATH or "\0" in text or "\n" in text:
                     continue
@@ -533,6 +934,10 @@ def make(py_nodes, unknown_dir):
                         binary = False  # unreadable to us is unreadable to Python
                     if binary:
                         opaque.append(f"{name}({text[:80]!r})")
+                        break
+                    what = self.py_handed(path)
+                    if what:
+                        handed.append(f"{name}({text[:80]!r}), {what}")
                         break
             lines, spelled = [], set()
             for text in texts:
@@ -547,7 +952,7 @@ def make(py_nodes, unknown_dir):
                 if line not in spelled:
                     spelled.add(line)
                     lines.append(line)
-            if not (named or lines or mods or unworked or unparsed or opaque):
+            if not (named or lines or mods or unworked or unparsed or opaque or handed):
                 return None
             runs = self.acts_inline(code, here, "py", runs_only=True)
             if not runs:
@@ -601,6 +1006,12 @@ def make(py_nodes, unknown_dir):
                 return self.unread_typed(
                     f"{label} runs a file that is not text, {opaque[0]}, an archive or compiled code the gate "
                     "cannot read, so whether it posts cannot be checked (claude-config#3397)")
+            if handed:
+                why = self.unread_typed(
+                    f"{label} runs {handed[0]}, so what it runs is not read and whether it posts cannot be "
+                    "checked (claude-config#3441)")
+                if why:
+                    return why
             if unworked:
                 return self.unread_typed(
                     f"{label} runs a file by a path the gate cannot work out, {unworked[0]}, so that file is "

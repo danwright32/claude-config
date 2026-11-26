@@ -2971,6 +2971,67 @@ test('For good on a memory file also lets the one index line linking it through,
   quietOnMain(w)
 })
 
+// #3506: after a For good on a memory file the index already linked, Claude was told the one line
+// linking it "may be added without asking him again", read that as leave to bring the existing line
+// up to date (2026-11-23), and was refused with a second question. The note now says what holds for
+// the index as it is when the save lands; what the guard lets through is unchanged.
+const ALLOWANCE = (name: string) => `The one line in ${INDEX_SHOWN} that links to ${name} may be added without asking him again until this For good lapses; any other change to that index is asked about.`
+const ALREADY_LINKED = (name: string) => `${INDEX_SHOWN} already links to ${name}, and this For good does not cover changing that line: a change to it is asked about.`
+const SAVED_ALONE = (name: string) => `Saved to ${MEMDIR_SHOWN}/${name}, as Dan answered For good.`
+
+test('For good on a memory file the index already links offers no line to add, and says a change to that line is asked about (#3506)', withKit, async ($, on) => {
+  // Linked by its name, and by ./ before it, as the guard reads a line linking a file.
+  const lines = { 'rule.md': indexLine('rule.md'), 'next.md': indexLine('next.md', './next.md') }
+  const w = world($, on, { auto: true, files: { [INDEX]: `${INDEX_TEXT}${lines['rule.md']}\n${lines['next.md']}\n` } })
+  for (const [name, existing] of Object.entries(lines)) {
+    const told = contextOf(await saveMemoryFile($, w, name))
+    expect(`${name}: ${told}`).toBe(`${name}: ${SAVED_ALONE(name)} ${ALREADY_LINKED(name)}`)
+    // The change the session sent on 2026-11-23, bringing that line up to date: still asked about.
+    const update = { tool: 'Edit', file_path: INDEX, old_string: existing, new_string: `${existing}, as it now reads` }
+    expect(refusalOf(await call($, update))).toContain(ASKS)
+  }
+  expect(w.ran.length).toBe(2)
+})
+
+// Every case where no line of the index links the file by the guard's own reading of a line
+// (linksOnlyTo): the allowance is offered as before, and holds.
+test('the note offers the index line wherever no line links the file yet: no index, one naming it only in prose, or a line of two links (#3506)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true })
+  const append = (n: string) => ({ tool: 'Bash', command: `echo '${indexLine(n)}' >> ${INDEX_SHOWN}` })
+  const cases: [string, string, string | undefined, (name: string) => Record<string, unknown>][] = [
+    ['no index yet', 'none.md', undefined, n => ({ tool: 'Write', file_path: INDEX, content: `${indexLine(n)}\n` })],
+    ['named in prose, no link', 'prose.md', `${INDEX_TEXT}See prose.md before merging.\n`, append],
+    ['a line linking it beside another link', 'two.md', `${INDEX_TEXT}- [Rule](two.md) and [Notes](notes.md)\n`, append],
+  ]
+  for (const [what, name, index, line] of cases) {
+    if (index === undefined) delete w.files[INDEX]
+    else w.files[INDEX] = index
+    const told = contextOf(await saveMemoryFile($, w, name))
+    expect(`${what}: ${told}`).toBe(`${what}: ${SAVED_ALONE(name)} ${ALLOWANCE(name)}`)
+    // And the allowance it states holds: the one line goes through, then a second is asked about.
+    expect(`${what}: ${refusalOf(await call($, line(name)))}`).toBe(`${what}: `)
+    expect(refusalOf(await call($, line(name)))).toContain(ASKS)
+  }
+})
+
+test('an index that is a fifo gets no word about its line either way, is never opened, and the save is still told (#3506)', withKit, async ($, on) => {
+  const fifo = world($, on, { auto: true, fifos: [INDEX] })
+  expect(contextOf(await saveMemoryFile($, fifo, 'rule.md'))).toBe(SAVED_ALONE('rule.md'))
+  expect(fifo.opened).toEqual([])
+})
+
+test('an index whose disk does not answer gets no word about its line either way, and the save is told once the looks run out of time (#3506)', withKit, async ($, on) => {
+  const hung = world($, on, { auto: true, unanswered: [INDEX] })
+  const input = { tool: 'Write', file_path: `${MEMDIR}/rule.md`, content: '---\nname: rule.md\n---\nAsk before merging.\n' }
+  await askDan($, hung, refusalOf(await call($, input)), 'For good', `${MEMDIR_SHOWN}/rule.md`)
+  const saving = call($, input)
+  await hung.unansweredAt(1)
+  await hung.clock.advance(LOOKS_MS)
+  const saved = await saving
+  expect(refusalOf(saved)).toBe('')
+  expect(contextOf(saved)).toBe(SAVED_ALONE('rule.md'))
+})
+
 test('the index line an approval covers is the one line linking that file: anything else to MEMORY.md is asked about, and uses nothing up (#1794)', withKit, async ($, on) => {
   const OTHER_INDEX = `${HOME}/.claude/projects/-Users-dan-Apps-other/memory/MEMORY.md`
   const w = world($, on, { auto: true, files: { [INDEX]: INDEX_TEXT, [OTHER_INDEX]: INDEX_TEXT } })
@@ -5159,4 +5220,232 @@ test('a command that removes lasting memory and writes the lessons file by shell
   expect(got).toEqual(commands.map(command => [command, 'Not run, and Dan is not asked For good about it: th', undefined]))
   expect(w.ran).toEqual([])
   expect(w.asked).toEqual([])
+})
+
+// ---- #3505: one mv that puts two files on one name loses one of them, and is never "moved back" ----
+// Measured on this Mac's disk on 2026-11-23, in a scratch folder: `mv mem/a.md full/A.md archive/`
+// left archive/a.md holding the second file's text, the note gone, and `mv mem/a.md exact/a.md
+// archive/` the same; the source named last is the one that is kept. Measured through the whole mod
+// at 1f537cbb67, before any change: each command of the first test below, but for the two marked as
+// asked about as a deletion already, was refused as "Not moved yet", its question ending "It goes to
+// ~/Desktop/archive/a.md, and can be moved back." (the Unicode case by its own name). Which source
+// is lost depends on their order and on the disk, so each one that may share its name where it
+// lands is said as the worse of the two: a deletion, in the words main asks about one.
+// A name with a sharp s: this Mac's disk keeps it and the same name spelled SS as one file (measured
+// on its APFS volume, 2026-11-23: with the one made in a scratch folder, the other answered).
+const SHARP_S = `stra${String.fromCharCode(0xdf)}e.md`
+const SHARED_NAME_FILES: Record<string, string> = {
+  ...ARCHIVED,
+  [`${REMOVAL_MEMDIR}/${ACCENT_COMPOSED}`]: 'the cafe\n',
+  [`${HOME}/Desktop/full/A.md`]: 'another file, its name in capitals\n',
+  [`${HOME}/Desktop/exact/a.md`]: 'another file of the same name\n',
+  [`${HOME}/Desktop/exact/other.md`]: 'another file of another name\n',
+  [`${HOME}/Desktop/keep/x.md`]: 'x\n',
+  [`${REMOVAL_MEMDIR}/${SHARP_S}`]: 'the street\n',
+  [`${HOME}/Desktop/exact/STRASSE.md`]: 'another street\n',
+  [`${HOME}/Desktop/exact/${ACCENT_DECOMPOSED}`]: 'another cafe\n',
+  [`${HOME}/.claude/projects/q/memory/a.md`]: 'another project, the same name\n',
+}
+const NOTE_A = `${REMOVAL_MEM_SHOWN}/a.md`
+const SHARED_NAME: [string, string, string][] = [
+  ['the names differ only by letter case', `mv ${NOTE_A} ~/Desktop/full/A.md ~/Desktop/archive/`, NOTE_A],
+  ['the names are the same', `mv ${NOTE_A} ~/Desktop/exact/a.md ~/Desktop/archive/`, NOTE_A],
+  ['the names differ only by the Unicode form of an accent', `mv ${REMOVAL_MEM_SHOWN}/${ACCENT_COMPOSED} ~/Desktop/exact/${ACCENT_DECOMPOSED} ~/Desktop/archive/`, `${REMOVAL_MEM_SHOWN}/${ACCENT_COMPOSED}`],
+  ['the names differ only as a sharp s does from SS', `mv ${REMOVAL_MEM_SHOWN}/${SHARP_S} ~/Desktop/exact/STRASSE.md ~/Desktop/archive/`, `${REMOVAL_MEM_SHOWN}/${SHARP_S}`],
+  ['the folder given first, with -t', `mv -t ~/Desktop/archive ${NOTE_A} ~/Desktop/full/A.md`, NOTE_A],
+  ['the other source a pattern in another folder, which may match the name', `mv ${NOTE_A} ~/Desktop/exact/*.md ~/Desktop/archive/`, NOTE_A],
+  ['the note named last, where the names differ only by letter case', `mv ~/Desktop/full/A.md ${NOTE_A} ~/Desktop/archive/`, NOTE_A],
+  // These two were asked about as a deletion at 1f537cbb67 already: the reader gives the second of
+  // two files of one path there no write of its own, so nothing said where the note goes.
+  ['the note named last, where the names are the same', `mv ~/Desktop/exact/a.md ${NOTE_A} ~/Desktop/archive/`, NOTE_A],
+  ['three sources, the note between two of its name', `mv ~/Desktop/exact/a.md ${NOTE_A} ~/Desktop/full/A.md ~/Desktop/archive/`, NOTE_A],
+  // The same move spelled as a copy and a removal: cp puts the second source over the first too.
+  ['copied beside a file of the same name, then removed', `cp ${NOTE_A} ~/Desktop/exact/a.md ~/Desktop/archive/ && rm ${NOTE_A}`, NOTE_A],
+  ['copied beside a file whose name differs only by letter case, then removed', `cp ${NOTE_A} ~/Desktop/full/A.md ~/Desktop/archive/ && rm ${NOTE_A}`, NOTE_A],
+]
+test('one mv that puts two files on one name is asked about as a deletion, never as a move that can be moved back (#3505)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: SHARED_NAME_FILES })
+  const got: string[][] = []
+  for (const [what, command, names] of SHARED_NAME) got.push([what, await howAsked($, command, names)])
+  expect(got).toEqual(SHARED_NAME.map(([what]) => [what, AS_A_DELETION]))
+  expect(got.length).toBe(11)
+  // The other source a variable, which may hold the name. The words name no file for it, so the
+  // note is also guessed at as what the mv writes, and the command is refused whole: at 1f537cbb67
+  // in the words "moves lasting memory away (..., to ~/Desktop/archive/a.md)".
+  const byVariable = refusalOf(await call($, { tool: 'Bash', command: `mv ${NOTE_A} "$F" ~/Desktop/archive/` }))
+  expect(byVariable.startsWith(`Not run: this command deletes lasting memory (${NOTE_A}) and also writes lasting memory (`)).toBe(true)
+  expect(byVariable).not.toContain('moves lasting memory')
+  expect(w.ran).toEqual([])
+})
+
+test('the question for a note one mv may replace with another file of its name says it may be lost there and what git holds, in a deletion\'s words, and Delete runs it once (#3505)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: SHARED_NAME_FILES })
+  const command = `mv ${NOTE_A} ~/Desktop/full/A.md ~/Desktop/archive/`
+  const asked = `Delete ${NOTE_A}: it is finished work?`
+  const answered = await askRemoval($, w, refusalOf(await call($, { tool: 'Bash', command })), 'Delete', asked)
+  const q = w.asked[0]?.questions[0]
+  // Until the loss was named (below), this was the git sentence alone: the choice pull request #3522 left open, a sentence saying another file may land on the name.
+  expect(q?.question).toBe(
+    `${asked} The command sends it to ~/Desktop/archive/a.md, and another file the same command names may land on that name too. Only one of the two would be kept there, so this file may be lost. Git does not hold it, so once deleted it cannot be got back from git.`,
+  )
+  expect(q?.question).not.toContain('moved back')
+  expect(q?.options.map(o => [o.label, o.description])).toEqual([
+    ['Keep as is', 'Nothing is deleted'],
+    ['Delete', `Deletes ${NOTE_A}`],
+  ])
+  expect(contextOf(answered)).toContain(`Dan answered Delete to deleting ${NOTE_A}`)
+  expect((await call($, { tool: 'Bash', command })).deny).toBeUndefined()
+  expect(w.ran.map(r => r.input.command)).toEqual([command])
+  // His Delete was for that one run.
+  expect(refusalOf(await call($, { tool: 'Bash', command }))).toContain(NOT_DELETED)
+})
+
+test('two notes of one name from two memory folders, moved by one mv, are one deletion question naming both (#3505)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: SHARED_NAME_FILES })
+  const other = '~/.claude/projects/q/memory/a.md'
+  const why = refusalOf(await call($, { tool: 'Bash', command: `mv ${NOTE_A} ${other} ~/Desktop/archive/` }))
+  // At 1f537cbb67 this was refused whole, the first said as moved "to ~/Desktop/archive/a.md" and the second as deleted.
+  expect(why.startsWith(`${NOT_DELETED}: this deletes lasting memory (${NOTE_A}, ${other}), so Dan decides first.`)).toBe(true)
+  expect(why).not.toContain('moves lasting memory')
+  expect(idIn(why)).not.toBeUndefined()
+  expect(w.ran).toEqual([])
+})
+
+test('a note one mv may replace, moved into a folder of lasting memory, is refused whole in a deletion\'s words, and a subagent the same (#3505)', withKit, async ($, on) => {
+  const w = world($, on, { files: SHARED_NAME_FILES, agents: ['agent-a1'] })
+  // The issue's command, the archive inside the memory folder: what lands there is a save of its own.
+  const whole = refusalOf(await call($, { tool: 'Bash', command: `mv ${NOTE_A} ~/Desktop/full/A.md ${ARCHIVE_SHOWN}/` }))
+  expect(whole.startsWith(`Not run: this command deletes lasting memory (${NOTE_A}) and also writes lasting memory (`)).toBe(true)
+  expect(whole).not.toContain('moves lasting memory')
+  const agent = refusalOf(await call($, { tool: 'Bash', command: `mv ${NOTE_A} ~/Desktop/full/A.md ~/Desktop/archive/`, agentId: 'agent-a1' }))
+  expect(agent.startsWith(`Not deleted: this deletes lasting memory (${NOTE_A}), which only the main session may do`)).toBe(true)
+  expect(w.ran).toEqual([])
+  expect(w.asked).toEqual([])
+})
+
+// The controls: sources that cannot share a name where they land keep the words of a move.
+const APART: [string, string, string][] = [
+  ['two notes of one folder', `mv ${NOTE_A} ${REMOVAL_MEM_SHOWN}/b.md ~/Desktop/archive/`, `Not moved yet: this moves lasting memory away (${NOTE_A}, to ~/Desktop/archive/a.md; ${REMOVAL_MEM_SHOWN}/b.md, to ~/Desktop/archive/b.md), so Dan decides first.`],
+  ['a note and a file of another name from another folder', `mv ${NOTE_A} ~/Desktop/exact/other.md ~/Desktop/archive/`, `Not moved yet: this moves lasting memory away (${NOTE_A}, to ~/Desktop/archive/a.md), so Dan decides first.`],
+  ['a note moved alone', `mv ${NOTE_A} ~/Desktop/archive/`, `Not moved yet: this moves lasting memory away (${NOTE_A}, to ~/Desktop/archive/a.md), so Dan decides first.`],
+  ['a note copied beside a file of another name, then removed', `cp ${NOTE_A} ~/Desktop/exact/other.md ~/Desktop/archive/ && rm ${NOTE_A}`, `Not moved yet: this moves lasting memory away (${NOTE_A}, to ~/Desktop/archive/a.md), so Dan decides first.`],
+  // A copy of its own somewhere else is a place it can be had back from, whatever the shared one holds.
+  ['a note copied beside a file of its name, copied again alone to another folder, then removed', `cp ${NOTE_A} ~/Desktop/exact/a.md ~/Desktop/archive/ && cp ${NOTE_A} ~/Desktop/keep/ && rm ${NOTE_A}`, `Not moved yet: this moves lasting memory away (${NOTE_A}, to ~/Desktop/keep/a.md), so Dan decides first.`],
+]
+test('sources of one mv that cannot land on one name are still asked about as a move (#3505)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: SHARED_NAME_FILES })
+  const got: string[][] = []
+  for (const [what, command, starts] of APART) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    got.push([what, why.startsWith(starts) ? 'asked as a move' : why.slice(0, 240)])
+  }
+  expect(got).toEqual(APART.map(([what]) => [what, 'asked as a move']))
+  await askRemoval($, w, refusalOf(await call($, { tool: 'Bash', command: `mv ${NOTE_A} ~/Desktop/exact/other.md ~/Desktop/archive/` })), 'Keep as is', `Move ${NOTE_A}: tidying?`)
+  expect(w.asked[0]?.questions[0]?.question).toBe(`Move ${NOTE_A}: tidying? It goes to ~/Desktop/archive/a.md, and can be moved back.`)
+  expect(w.ran).toEqual([])
+})
+
+// ---- #3505, the loss named: the question says why a command that moves is asked about as a deletion ----
+// Measured on this Mac's disk on 2026-11-25 with plain files in a scratch folder (each command run
+// once): `mv memory/a.md full/A.md archive/` and `mv memory/a.md exact/a.md archive/` each left
+// archive/a.md holding the other file's text and no file holding the note's, `cp` of the two with
+// `rm` of the note the same, `mv -n` kept both, and with the note named last the note was the one
+// kept. Measured through the whole mod on main at 8cb06dddf4 the same day: the question for each
+// command below was "Delete <the note>: <why>? Git does not hold it, so once deleted it cannot be
+// got back from git.", with no word of why a command that says mv deletes. The sentence added says
+// what is true of all of them: only one of the two is kept at the name, and the note may be the one
+// lost.
+const NAMED_LOSS: [string, string, string, string][] = [
+  ['the two names are the same', `mv ${NOTE_A} ~/Desktop/exact/a.md ~/Desktop/archive/`, NOTE_A, '~/Desktop/archive/a.md'],
+  ['the two names differ only by letter case', `mv ${NOTE_A} ~/Desktop/full/A.md ~/Desktop/archive/`, NOTE_A, '~/Desktop/archive/a.md'],
+  ['the note is named last and the names differ only by letter case', `mv ~/Desktop/full/A.md ${NOTE_A} ~/Desktop/archive/`, NOTE_A, '~/Desktop/archive/a.md'],
+  ['the names differ only as a sharp s does from SS', `mv ${REMOVAL_MEM_SHOWN}/${SHARP_S} ~/Desktop/exact/STRASSE.md ~/Desktop/archive/`, `${REMOVAL_MEM_SHOWN}/${SHARP_S}`, `~/Desktop/archive/${SHARP_S}`],
+  ['the other source is a pattern in another folder', `mv ${NOTE_A} ~/Desktop/exact/*.md ~/Desktop/archive/`, NOTE_A, '~/Desktop/archive/a.md'],
+  ['the folder is given first, with -t', `mv -t ~/Desktop/archive ${NOTE_A} ~/Desktop/full/A.md`, NOTE_A, '~/Desktop/archive/a.md'],
+  ['mv is told to replace nothing', `mv -n ${NOTE_A} ~/Desktop/full/A.md ~/Desktop/archive/`, NOTE_A, '~/Desktop/archive/a.md'],
+  ['the two are copied and the note then removed', `cp ${NOTE_A} ~/Desktop/exact/a.md ~/Desktop/archive/ && rm ${NOTE_A}`, NOTE_A, '~/Desktop/archive/a.md'],
+]
+for (const [what, command, note, at] of NAMED_LOSS)
+  test(`the question for a note the command sends onto a name another of its files may take says it may be lost there, never that it can be moved back: ${what} (#3505)`, withKit, async ($, on) => {
+    const w = world($, on, { auto: true, files: SHARED_NAME_FILES })
+    const refusal = refusalOf(await call($, { tool: 'Bash', command }))
+    // What Claude reads says why, after the words every deletion's refusal opens with.
+    expect(refusal.startsWith(`${NOT_DELETED}: this deletes lasting memory (${note}), so Dan decides first. The command sends ${note} to ${at}, and another file it names may land on that name too, so only one of the two would be kept there. `)).toBe(true)
+    const asked = `Delete ${note}: it is finished work?`
+    await askRemoval($, w, refusal, 'Keep as is', asked)
+    const q = w.asked[0]?.questions[0]
+    expect(q?.question).toBe(
+      `${asked} The command sends it to ${at}, and another file the same command names may land on that name too. Only one of the two would be kept there, so this file may be lost. Git does not hold it, so once deleted it cannot be got back from git.`,
+    )
+    expect(q?.question).not.toContain('moved back')
+    expect(q?.options.map(o => [o.label, o.description])).toEqual([
+      ['Keep as is', 'Nothing is deleted'],
+      ['Delete', `Deletes ${note}`],
+    ])
+    expect(w.ran).toEqual([])
+  })
+
+test('a note deleted outright is asked about with no word of another file landing on its name (#3505)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: SHARED_NAME_FILES })
+  const refusal = refusalOf(await call($, { tool: 'Bash', command: `rm ${NOTE_A}` }))
+  expect(refusal).not.toContain('may land on that name')
+  const asked = `Delete ${NOTE_A}: it is finished work?`
+  await askRemoval($, w, refusal, 'Keep as is', asked)
+  expect(w.asked[0]?.questions[0]?.question).toBe(`${asked} Git does not hold it, so once deleted it cannot be got back from git.`)
+  expect(w.ran).toEqual([])
+})
+
+test("Dan's Delete for a note another file may land on runs that command once, and a second send is asked about again (#3505)", withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: SHARED_NAME_FILES })
+  const command = `mv ${NOTE_A} ~/Desktop/exact/a.md ~/Desktop/archive/`
+  const answered = await askRemoval($, w, refusalOf(await call($, { tool: 'Bash', command })), 'Delete', `Delete ${NOTE_A}: it is finished work?`)
+  expect(contextOf(answered)).toContain(`Dan answered Delete to deleting ${NOTE_A}`)
+  expect((await call($, { tool: 'Bash', command })).deny).toBeUndefined()
+  expect(w.ran.map(r => r.input.command)).toEqual([command])
+  expect(refusalOf(await call($, { tool: 'Bash', command }))).toContain(NOT_DELETED)
+})
+
+// The lessons review of 1e11889382: the place a note is sent to is the mod's own text in the
+// question, so it is set aside before the question is judged, as the note's own name and the place
+// a move goes are. A note whose name holds a character the dialog would not show (a zero width
+// space) is sent to a path ending in that same name. Without the place set aside its question was
+// refused for the mod's own sentence, which Claude cannot reword, so the removal could never be
+// asked about at all (L665).
+test('a note whose name the dialog would not show whole can still be asked about when another file may land on its name (#3505)', withKit, async ($, on) => {
+  const odd = `od${pt(0x200b)}d.md`
+  const note = `${REMOVAL_MEM_SHOWN}/${odd}`
+  const w = world($, on, { auto: true, files: { ...SHARED_NAME_FILES, [`${REMOVAL_MEMDIR}/${odd}`]: 'a note\n', [`${HOME}/Desktop/exact/${odd}`]: 'another file of the same name\n' } })
+  const refusal = refusalOf(await call($, { tool: 'Bash', command: `mv ${note} ~/Desktop/exact/${odd} ~/Desktop/archive/` }))
+  expect(refusal.startsWith(`${NOT_DELETED}: this deletes lasting memory (${note}), so Dan decides first. The command sends ${note} to ~/Desktop/archive/${odd}, `)).toBe(true)
+  const asked = `Delete ${note}: it is finished work?`
+  const answered = await askRemoval($, w, refusal, 'Keep as is', asked)
+  expect(answered.deny).toBeUndefined()
+  expect(w.asked[0]?.questions[0]?.question).toBe(
+    `${asked} The command sends it to ~/Desktop/archive/${odd}, and another file the same command names may land on that name too. Only one of the two would be kept there, so this file may be lost. Git does not hold it, so once deleted it cannot be got back from git.`,
+  )
+  expect(w.ran).toEqual([])
+})
+
+// The note named last of two sources of exactly one name is the one that survives: measured on
+// this Mac's disk on 2026-11-25, `mv full/A.md memory/a.md archive/` left the archive holding the
+// note's text, the source named last being the one kept. Of that note the sentence "this file may
+// be lost" is not said, through the whole mod: the shared reader gives the second of two sources of
+// one path no write of its own, so no write names the note as its source and no place is kept for
+// the question to name. It is still asked about, as a deletion, in the words main used before the
+// loss was named, and nothing runs. Pinned so that a change either way is seen.
+test('the note named last of two sources of exactly one name is asked about as a deletion with no word of it being lost where it lands (#3505)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: SHARED_NAME_FILES })
+  const refusal = refusalOf(await call($, { tool: 'Bash', command: `mv ~/Desktop/exact/a.md ${NOTE_A} ~/Desktop/archive/` }))
+  expect(refusal.startsWith(`${NOT_DELETED}: this deletes lasting memory (${NOTE_A}), so Dan decides first. Ask him now with AskUserQuestion`)).toBe(true)
+  expect(refusal).not.toContain('may land on that name')
+  expect(refusal).not.toContain('moved back')
+  const asked = `Delete ${NOTE_A}: it is finished work?`
+  const answered = await askRemoval($, w, refusal, 'Keep as is', asked)
+  expect(answered.deny).toBeUndefined()
+  const q = w.asked[0]?.questions[0]
+  expect(q?.question).toBe(`${asked} Git does not hold it, so once deleted it cannot be got back from git.`)
+  expect(q?.question).not.toContain('may be lost')
+  expect(q?.question).not.toContain('moved back')
+  expect(q?.options.map(o => o.label)).toEqual(['Keep as is', 'Delete'])
+  expect(w.ran).toEqual([])
 })

@@ -6,6 +6,10 @@ Full provenance per rule: ~/.claude/audits/2026-07-27-issue-audit/. Numbering is
 for reference; L6 was reviewed and deliberately not adopted.
 
 ## Proof over green
+- **L1041. A proof that a monitor is live, retried until it succeeds, proves only that it saw once. Every attempt that went unseen is a moment the monitor was blind, so count them and call the run unmeasured when there is one.**
+  (claude-config#3576, 2026-11-24)
+  NO CHECK: the monitor's own rule is filed as claude-config#3576 and is not built yet
+  SHORT: A liveness proof retried until it passes hides each unseen attempt, a moment the monitor was blind: count them and call the run unmeasured.
 - **L1039. When a check breaks a Python file on purpose and then restores it, clear its __pycache__ before every test run, because Python reuses a compiled copy whose source has the same size and the same second's timestamp, so the run tests the old code and the check reads wrong.**
   (intonation#17, 2026-11-20)
   NO CHECK: ad hoc mutation edits run in a session cannot be detected by a hook or test
@@ -5793,6 +5797,12 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: Judge whether another writer moved a field by that field's own prior value, never the record's last modified time, which any write to any field moves.
 
 ## Security and privacy
+- **L868. A key carried in a page address is read by every script on that page and by any app
+  hosting the browser, so swap a link's key for a cookie and redirect to a clean address before
+  the page renders. Otherwise whoever those scripts report to holds the key.**
+  (trypennie#744, 2026-11-24)
+  NO CHECK: each project needs its own route test
+  SHORT: A key in a page address is read by every script on the page and by an in-app browser, so swap it for a cookie and redirect before rendering.
 - **L864. A filter that removes data by its shape must run on the text in the form it will be
   output in, after every squeeze, join, unescape and normalisation, because reshaping text after
   the filter can rebuild a shape the filter had passed. Prove it with one test over every caller:
@@ -8119,6 +8129,13 @@ for reference; L6 was reviewed and deliberately not adopted.
   same data, offered none. Fixed for all 72 paged reads in slate#3280.)
   SHORT: Order every OFFSET or range paged read by a unique key, or pages silently skip and repeat rows while the total looks right.
 
+- **L867. A read paged by OFFSET or a range over a table that is written or purged while it is
+  read repeats and skips rows even under a unique order, because each insert or delete between
+  two page requests shifts every later row one place. Page such a table by key position (rows
+  after the last key seen) and count each key once.** (bidspoke#4022, 2026-11-24)
+  NO CHECK: no shared helper pages by key position yet, so only a reader holds this rule until one is built
+  SHORT: Page a table that is written during the read by key position, never OFFSET: a row landing between pages repeats or skips one even under a unique order.
+
 - **L753. In a Next.js App Router error boundary, wire Try again to `retry`, never `reset`**,
   because `reset` only re-renders the payload the browser already holds, so a read that failed on
   the server draws the same failure screen again and the button looks dead while reading as wired.
@@ -8138,6 +8155,10 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: Never export or pass as an argument a value of unbounded size (commit message, diff, API body): pipe it or use a file, or every later exec fails.
 
 ## Building with AI
+- **L1042. A model writes a structured record's fields in the order asked and cannot revise one already written, so ask for the evidence and reasoning fields before the verdict field, and give the verdict a value that withdraws the record. Asked for the verdict first, or given no way out, it commits and then argues against itself, or invents a difference to fill a required field.**
+  (PostRoll#1655, 2026-11-25)
+  CHECK: danwright32/PostRoll:tests/test_flag_recommendation.py (partial)
+  SHORT: A model writes record fields in order and cannot go back: ask for evidence before the verdict, and give the verdict a withdrawn value.
 - **L860. When an AI review of a piece of work returns safe with nothing blocking, merge it and file the optional suggestions as issues, because sending them back as a build round brings another review, and a fresh reviewer always finds more: across five pieces 21 of 36 reviews said safe, every one was followed by another round, and the optional items per review never fell.**
   (slate#3007, 2026-11-17)
   SHORT: A review that says safe means merge and file its optional items as issues; a build round for them brings another review that finds more.
@@ -9039,6 +9060,12 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A plan shipped with its own audit unresolved is read as THE plan, so file the correction as a gating issue alongside the phase issues.
 
 ## Cross-system reliability
+- **L1040. A harness that runs generated or untrusted input gives each run a time limit that kills
+  its whole process group, and checks before it ends that no child is alive. One input that never
+  ends otherwise outlives the harness, and its cost shows in no folder size and no test result.**
+  (claude-config#3561, 2026-11-24)
+  NO CHECK: the leftover process check is filed as claude-config#3561 and is not built yet
+  SHORT: A harness running generated input gives each run a time limit that kills its process group, or one endless input outlives it unseen.
 - **L859. A check that reads a platform straight after writing to it must read again for a bounded time before it fails, through an injected sleep, because the platform's read path can lag its write path, and a single read turns that lag into a failed step that leaves the system half updated.**
   (pivot#1591, 2026-11-17)
   SHORT: A check reading a platform straight after writing to it must read again for a bounded time before failing: the read path can lag the write.

@@ -314,6 +314,30 @@ test('a name holding a pattern may be a look changing file exactly where some na
     expect([w, patternMayBeLook(w)]).toEqual([w, 'unread'])
 })
 
+// #3602: a word whose every `$` and backtick the shell hands on as written (mod-kit's `unexpanded`)
+// holds no command substitution, so its `$(` is text. Asked so, it is read as the characters it
+// spells, its groups as each name they can spell, as any other word is. The first words are the
+// ones four of this repository's suites hand their helpers, as mod-kit gives them.
+test('#3602: a word the shell hands on as written is read as the name it spells, its $( ) as no command output', () => {
+  for (const w of [
+    'gh issue create --repo danwright-test/public-notes --title "$(pwd | tr a-z A-Z)" --body x',
+    'bash -c "echo \\$(sort ok.sh | bash)"',
+    'perl -ne print "$(printf \'bash post.sh|\')"',
+    'perl -ne print "$NOPE_2912/$(printf \'bash post.sh|\')"',
+    'eval "$(supabase status -o env | grep API_URL)"',
+    '`git ls-files src`',
+    'src/$(cat name)',
+  ]) {
+    expect([w, patternMayBeLook(w)]).toEqual([w, 'unread'])
+    expect([w, patternMayBeLook(w, true)]).toEqual([w, 'not'])
+  }
+  // One that spells a screen file is still one, whichever way its group is read.
+  for (const w of ['x$(date).css', 'app/$(a|b).css', 'app/(page|site)$.css', 'cat $(a | b) > app/page.tsx', '$(ls)/[t]okens.json'])
+    expect([w, patternMayBeLook(w, true)]).toEqual([w, 'look'])
+  // And what no rule reads is read by none here either.
+  for (const w of ['(#i)$x.css', `${'f(a|b|c)'.repeat(6)}$.md`]) expect([w, patternMayBeLook(w, true)]).toEqual([w, 'unread'])
+})
+
 test('#1815: a name a command substitution fills in is known by its last part, read past the slashes inside one', () => {
   for (const w of ['$(git ls-files src)', '$(git ls-files src/app)', '`git ls-files src/app`', 'src/$(cat name)', 'app/x$(date).css', '$(find . -name "*.tsx"', "$(ls 'app/(shop)')"])
     expect([w, nameFromOutput(w)]).toEqual([w, true])
@@ -3347,9 +3371,6 @@ test('#3401: plainLine reads a quoted or escaped grouping character as text, by 
     `${R_3401}\nbun test | grep "(x)"`,
     `${R_3401} || bun test | grep "(x)"`,
     `cd app && ${R_3401} && CI=1 bun test $FILES | grep "(x)"`,
-    // A quote that never ends: bash and zsh refuse the command it is in and run nothing of it
-    // (measured 2026-11-22, bash 3.2 and zsh 5.9, as -c text and through eval).
-    `${R_3401} && bun test | grep '(x`,
   ])
     expect({ line, plain: plain3401(line) }).toEqual({ line, plain: true })
   // What already was plain still is, with the reading or without.
@@ -3366,6 +3387,12 @@ test('#3401: plainLine still reads as grouping every character the shell, or a s
     `{ ${R_3401}; } | git fetch`,
     `${R_3401} && bun test | grep "(x)" | (cat)`,
     `${R_3401} && { bun test | grep "(x)"`,
+    // A quote that never ends. Bash and zsh refuse the command it is in and run nothing of it
+    // (measured 2026-11-22, bash 3.2 and zsh 5.9, as -c text and through eval), and until #3491 the
+    // line was read as plain on that. But a quote this reader sees no end to is most often one it
+    // has misread (#3491: `x=$'it\'s'` read that way and hid every command after it), so the reader
+    // marks the command it stands in unread, and a line holding one is not plain.
+    `${R_3401} && bun test | grep '(x`,
     // A command the shell runs to fill in a word: double quotes do not stop one.
     `${R_3401} && echo $(git fetch) | tail`,
     `${R_3401} && echo "$(git fetch)" | tail`,
@@ -3586,6 +3613,12 @@ test('#3416: handedToUnknown gives each file a script text hands a program the r
   // A script file, a module and a tool run through npx are runs of another kind, judged by the
   // rules that were there before; none is given here.
   expect(handed('bash /s/other.sh /s/app/page.tsx\npython3 -m json.tool /s/app/page.tsx\nnpx prettier --write /s/app/page.tsx\n')).toEqual([])
+  // #3602: the reader's mark on a word whose every $ the shell hands on as written is kept, and
+  // only on that word.
+  expect(handed("mystery 'x $(a | b) y' /s/app/page.tsx\n").map(h => ({ word: h.word, unexpanded: h.unexpanded === true }))).toEqual([
+    { word: 'x $(a | b) y', unexpanded: true },
+    { word: '/s/app/page.tsx', unexpanded: false },
+  ])
   expect(handedToUnknown(undefined)).toEqual([])
 })
 

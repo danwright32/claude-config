@@ -5,6 +5,7 @@ clause saying what the failure looks like. Read the whole entry before a rule de
 anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.claude/LESSONS.md,
 which is NOT loaded into the session.
 
+- L1042. A model writes record fields in order and cannot go back: ask for evidence before the verdict, and give the verdict a withdrawn value.
 - L860. A review that says safe means merge and file its optional items as issues; a build round for them brings another review that finds more.
 - L861. A review suggestion proposing a new guard, scanner or library is a new piece with its own issue, never a fix round of the piece reviewed.
 - L862. State whether a source reading guard stops honest mistakes or deliberate hiding, and tell every reviewer, or each round hunts a new disguise.

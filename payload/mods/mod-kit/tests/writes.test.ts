@@ -1,7 +1,7 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './hang-ceiling.ts'
 import { pipeline } from '../hooks/commands.ts'
-import { callShell, commandWrites, pipelineIn, READ_ONLY } from '../hooks/writes.ts'
+import { callShell, commandWrites, comparisonsSoFar, pipelineIn, READ_ONLY } from '../hooks/writes.ts'
 
 // The one reader of which files a Bash call writes (#705, L613): ask before saving kept its own and
 // missed inline scripts, rsync, install, ln, dd, a patch, every file but the last of a sed -i, and a
@@ -1344,6 +1344,63 @@ describe('writes: changes that put no content in, carried over from the collisio
     // mv cannot put a file on a device (measured on macOS: "Operation not permitted", the file kept).
     expect(kept('mv notes/a.md /dev/null')).toEqual([])
     expect(kept('mv notes/*.md /dev/null')).toEqual([])
+  })
+  // #3505. Measured on macOS on 2026-11-23, in a scratch folder: `mv mem/a.md full/A.md archive/`
+  // and `mv mem/a.md exact/a.md archive/` each left one file there, holding the second source's
+  // text, and the first source was gone; cp of the same two sources left the same. At 1f537cbb67
+  // the reader only left out where such a mv puts its sources, which is also what it does of a
+  // move nothing is lost by, and the write the first source lands on still named it as its one
+  // source, so ask before saving read that write and said the file "can be moved back".
+  // Sharp s against SS and against ss, long s against s, final sigma against capital sigma, the ff
+  // ligature against FF, the Kelvin sign against k.
+  const SAME_ON_DISK: [string, string][] = [
+    [`stra${String.fromCharCode(0xdf)}e.md`, 'STRASSE.md'],
+    [`stra${String.fromCharCode(0xdf)}e.md`, 'strasse.md'],
+    [`${String.fromCharCode(0x17f)}.md`, 's.md'],
+    [`${String.fromCharCode(0x3c2)}.md`, `${String.fromCharCode(0x3a3)}.md`],
+    [`${String.fromCharCode(0xfb00)}.md`, 'FF.md'],
+    [`${String.fromCharCode(0x212a)}.md`, 'k.md'],
+  ]
+  test('what one source of a move or copy into a folder puts there says when another source may land on the same name (#3505)', () => {
+    const shared = (command: string) =>
+      read(command)
+        .files.filter(f => f.shared)
+        .map(f => f.word)
+    for (const by of ['mv', 'cp', 'mv -n', 'cp -p']) {
+      // Two sources of one path there are one write, the first source's.
+      expect([by, shared(`${by} one/x.md two/x.md ~/archive/`)]).toEqual([by, ['~/archive/x.md']])
+      expect([by, read(`${by} one/x.md two/x.md ~/archive/`).files.map(f => f.sources)]).toEqual([by, [[`${CWD}/one/x.md`]]])
+      expect([by, shared(`${by} one/a.md two/A.md ~/archive/`)]).toEqual([by, ['~/archive/a.md', '~/archive/A.md']])
+      expect([by, shared(`${by} one/a.md two/A.md ~/archive`)]).toEqual([by, ['~/archive/a.md', '~/archive/A.md']])
+      expect([by, shared(`${by} one/${'é'.normalize('NFC')}.md two/${'é'.normalize('NFD')}.md ~/archive/`).length]).toEqual([by, 2])
+      expect([by, shared(`${by} -t ~/archive one/a.md two/A.md`)]).toEqual([by, ['~/archive/a.md', '~/archive/A.md']])
+      // A pattern in another folder may match the name, and a variable may hold it.
+      expect([by, shared(`${by} one/a.md two/*.md ~/archive/`)]).toEqual([by, ['~/archive/a.md', '~/archive/*.md']])
+      expect([by, shared(`${by} one/a.md "$F" ~/archive/`)]).toEqual([by, ['~/archive/a.md', '~/archive/$F']])
+      // Only the sources that may share a name: one of another name beside them does not.
+      expect([by, shared(`${by} one/b.md one/a.md two/A.md ~/archive/`)]).toEqual([by, ['~/archive/a.md', '~/archive/A.md']])
+      // Names this Mac's disk keeps as one file though small letters alone do not show it (measured
+      // on its APFS volume, 2026-11-23, each pair made in a scratch folder: the second name
+      // answered to the first). At 1f537cbb67 these were compared in small letters only and taken
+      // as apart, so the mv said where it put each (`to`), which claims the file is there after.
+      for (const [a, b] of SAME_ON_DISK) {
+        expect([by, a, b, shared(`${by} one/${a} two/${b} ~/archive/`).length]).toEqual([by, a, b, 2])
+        expect([by, a, b, kept(`${by} one/${a} two/${b} ~/archive/`)]).toEqual([by, a, b, []])
+      }
+      // The disk keeps a dotted capital I and i as two names (measured the same way), and so does this.
+      expect([by, shared(`${by} one/${String.fromCharCode(0x130)}.md two/i.md ~/archive/`)]).toEqual([by, []])
+      // It stays said whatever else the command holds, and when the place is written again.
+      expect([by, shared(`${by} one/a.md two/A.md ~/archive/ && ls ~/archive; rm one/a.md`)]).toEqual([by, ['~/archive/a.md', '~/archive/A.md']])
+      expect([by, shared(`cp three/a.md ~/archive/; ${by} one/a.md two/a.md ~/archive/`)]).toEqual([by, ['~/archive/a.md']])
+      // Controls: one folder holds no two files of a name, other names stay apart, one source
+      // shares with nothing, and one source onto one name is a rename.
+      for (const command of [`${by} one/a.md one/b.md ~/archive/`, `${by} one/a.md two/b.md ~/archive/`, `${by} one/*.md one/x.txt ~/archive/`, `${by} one/a.md ~/archive/`, `${by} one/a.md two/a.md`])
+        expect([command, shared(command)]).toEqual([command, []])
+    }
+    // Two commands that each put one file on the name are not one command's two sources, and a
+    // removal that is no move lands nowhere.
+    for (const command of ['mv one/a.md ~/archive/ && mv two/a.md ~/archive/', 'cp one/a.md ~/archive/; cp two/A.md ~/archive/', 'rm one/a.md two/a.md'])
+      expect([command, shared(command)]).toEqual([command, []])
   })
   // mv -n replaces nothing: a source whose name is taken where it goes is left where it was. At
   // 3c7b756211 the reader gave no word of it, and ask before saving said the file there was replaced.
@@ -2708,5 +2765,72 @@ describe('writes: an arithmetic test and a [[ ]] comparison redirect nothing (#3
     expect(pipeline('[[ a > b ]] > out.txt').map(c => c.compares)).toEqual([[false, false, true, false, false, false, false]])
     expect(pipeline('[[ a == b ]] > out.txt').map(c => c.compares)).toEqual([undefined])
     expect(pipeline('dash -c "[[ a > b ]]"').map(c => c.compares)).toEqual([undefined])
+  })
+})
+
+// #3491: through the two entry points the mods are given. A script holding `x=$'it\'s'` gave no
+// commands and no runs, so nothing after the string was judged by any mod.
+describe("$'...' and a script not read to its end, as the mods are given them (#3491)", () => {
+  const BS = '\\'
+  const NEXT = 'prettier --write app/page.tsx'
+  const QUOTE = 'holding a quote that never closes, so what the shell runs from there on cannot be read'
+
+  test("the commands and the runs after a $'...' holding an escaped quote are given", () => {
+    const script = `x=$'it${BS}'s'\n${NEXT}`
+    expect(pipelineIn(script, CWD, HOME).map(c => [c.words, c.folder])).toEqual([[['prettier', '--write', 'app/page.tsx'], CWD]])
+    expect(read(NEXT).runs?.length).toBe(1)
+    expect(read(script)).toEqual(read(NEXT))
+  })
+
+  test('a script that stops in a quote is told apart from one with no commands', () => {
+    expect(read('x=1').unread).toBeUndefined()
+    expect(pipelineIn('x=1', CWD, HOME)).toEqual([])
+    const stopped = `x='abc\n${NEXT}`
+    expect(read(stopped).unread).toEqual([{ words: [`x=abc\n${NEXT}`], why: QUOTE, folder: CWD }])
+    expect(pipelineIn(stopped, CWD, HOME).map(c => c.unread)).toEqual([QUOTE])
+  })
+
+  // The mark is added to what was read, never put in its place: a program the write reader does
+  // not know is still given as a run of one, handed the files its words name, as it was before
+  // the command it stands in was marked. (A command eval or ssh makes unread is still not one.)
+  test('a command the reader stops in is still given as the run it was read as', () => {
+    const runs = (command: string) => read(command).runs?.map(r => [r.what, r.args?.map(a => a.word)])
+    expect(runs(`mystery notes.txt 'abc`)).toEqual([['a program the write reader does not know', ['notes.txt', 'abc']]])
+    expect(runs(`mystery notes.txt <<EOF\nbody`)).toEqual(runs('mystery notes.txt'))
+    expect(read(`mystery notes.txt 'abc`).unread?.map(u => u.why)).toEqual([QUOTE])
+    expect(runs('eval mystery notes.txt')).toBeUndefined()
+  })
+})
+
+// #3626. One mv of 8,000 sources (200 KB) took 4 s to read on 2026-11-25 (median of 5 samples, load
+// 17 on 12 cores), against 0.06 s for a cp of the same sources: each removal was held against every
+// one before it as it was given (`changed`), and each moved source against every change and every
+// write once the command was read (settleMoves), so the time grew with the square of the sources.
+// Ask before saving gives its looks 3 s. The cost is held here by counting, never by the clock
+// (L290): how many times the reader holds one write or change against another, which grew with the
+// square and must grow in step with the sources, at no more than ten for each.
+describe('writes: a command with many sources is read in steps that grow in step with them (#3626)', () => {
+  const sources = (n: number, name: (i: number) => string) => Array.from({ length: n }, (_, i) => name(i)).join(' ')
+  const SHAPES: [string, (n: number) => string][] = [
+    ['a mv of distinct names into a folder', n => `mv ${sources(n, i => `notes/n${i}.md`)} archive/`],
+    ['a mv of one name from many folders', n => `mv ${sources(n, i => `d${i}/same.md`)} archive/`],
+    ['a mv of names alike but for case', n => `mv ${sources(n, i => (i % 2 ? `a/N${i >> 1}.md` : `b/n${i >> 1}.md`))} archive/`],
+    ['a mv onto one name', n => `mv ${sources(n, i => `notes/n${i}.md`)} archive/last.md`],
+    ['a mv then a removal of where it lands', n => `mv ${sources(n, i => `notes/n${i}.md`)} archive/ && rm -rf archive/n1.md`],
+    ['a mv then a write where it lands', n => `mv ${sources(n, i => `notes/n${i}.md`)} archive/ && echo x > archive/n2.md`],
+    ['many one source moves', n => sources(n, i => `mv notes/n${i}.md archive/n${i}.md;`)],
+    ['an rm', n => `rm -rf ${sources(n, i => `notes/n${i}.md`)}`],
+    ['a cp into a folder', n => `cp ${sources(n, i => `notes/n${i}.md`)} archive/`],
+  ]
+  test('one write or change is held against another at most ten times for each source', () => {
+    const over: string[] = []
+    for (const [what, command] of SHAPES)
+      for (const n of [1000, 2000]) {
+        const before = comparisonsSoFar()
+        read(command(n))
+        const steps = comparisonsSoFar() - before
+        if (steps > 10 * n) over.push(`${what}: ${steps} for ${n} sources`)
+      }
+    expect(over).toEqual([])
   })
 })

@@ -123,7 +123,7 @@ else check "every BBEdit open brings its window to the front" "$no_front"; fi
 # tells Claude to run them, so every script it names must exist beside it (L3: built is not wired),
 # and the sequence must run each one.
 SKILL_DIR="$(dirname "$SKILL")"
-named="$(grep -o '~/\.claude/skills/pennie-dev-update/[A-Za-z0-9_.-]*' "$SKILL" | sort -u)"
+named="$(grep -o -E '(~/\.claude|__CLAUDE_HOME__)/skills/pennie-dev-update/[A-Za-z0-9_.-]*' "$SKILL" | sort -u)"
 if [ -z "$named" ]; then check "the skill runs its scripts by path" "it names no script under ~/.claude/skills/pennie-dev-update/"
 else
   while IFS= read -r ref; do
@@ -137,6 +137,35 @@ sequence="$(awk '/^## 10\./ { f = 1; next } f' "$SKILL")"
 for step in 'gather.js gather' 'gather.js commit-state' 'lint-post.js'; do
   case "$sequence" in *"$step"*) check "the sequence runs $step" ok ;; *) check "the sequence runs $step" "section 10 never says $step" ;; esac
 done
+
+# ---- claude-config#3503: on 2026-11-23 a gathered pull request body named a Slack posting method,
+# and from then on the Slack drafts gate refused the skill's own local commands that are handed the
+# gathered file: a node one liner printing counts from it, and gather.js commit-state. Neither needs
+# the network, so both run under the no network wrapper, which the gate lets through only when the
+# wrapper's path is the call's first word, written out absolute, and no word after it is a tilde.
+# __CLAUDE_HOME__ is what the sync turns into this Mac's absolute path. The gather itself reads
+# GitHub, so it must NOT be put under the wrapper. Each claim is held to the code line that makes it.
+WRAP_RUN='__CLAUDE_HOME__/hooks/no-network-run.sh '
+if [ -f "$DIR/../payload/hooks/no-network-run.sh" ]; then check "the wrapper the skill names exists in the payload" ok
+else check "the wrapper the skill names exists in the payload" "no payload/hooks/no-network-run.sh"; fi
+commit_line="$(awk 'index($0, "gather.js commit-state ") { print; exit }' <<< "$sequence")"
+case "${commit_line#"${commit_line%%[![:space:]]*}"}" in
+  "${WRAP_RUN}node __CLAUDE_HOME__/skills/pennie-dev-update/gather.js commit-state "*) check "the sequence runs commit-state under the no network wrapper" ok ;;
+  *) check "the sequence runs commit-state under the no network wrapper" "its line is: ${commit_line:-none}" ;; esac
+case "$commit_line" in
+  *'~'*) check "the commit-state line holds no tilde, which takes it off the wrapper's route" "$commit_line" ;;
+  *) check "the commit-state line holds no tilde, which takes it off the wrapper's route" ok ;; esac
+read_line="$(awk -v w="${WRAP_RUN}node -e " 'index($0, w) && index($0, "gathered.json") { print; exit }' <<< "$sequence")"
+if [ -n "$read_line" ]; then check "the sequence reads the gathered file's counts under the no network wrapper" ok
+else check "the sequence reads the gathered file's counts under the no network wrapper" "section 10 has no '${WRAP_RUN}node -e' line reading gathered.json"; fi
+gather_line="$(awk 'index($0, "gather.js gather ") { print; exit }' <<< "$sequence")"
+case "$gather_line" in
+  *no-network-run*) check "the gather, which reads GitHub, is not put under the wrapper" "$gather_line" ;;
+  '') check "the gather, which reads GitHub, is not put under the wrapper" "section 10 has no gather line" ;;
+  *) check "the gather, which reads GitHub, is not put under the wrapper" ok ;; esac
+window_section="$(awk '/^## 2\./ { f = 1; next } f && /^## / { exit } f' "$SKILL")"
+case "$window_section" in *"${WRAP_RUN}"*) check "section 2 says commit-state runs under the wrapper" ok ;;
+  *) check "section 2 says commit-state runs under the wrapper" "section 2 never names ${WRAP_RUN% }" ;; esac
 
 # ---- claude-config#1182: a bare gh command runs as whichever account gh has active, which on the
 # personal MacBook is danwright32, and GitHub answers it 404 for the work organisation's private repos. So
@@ -207,6 +236,44 @@ else
   else check "the Slack draft is saved only after the editor opens" "section 10 saves the draft on its line $draft_at, before BBEdit on $open_at"; fi
 fi
 gone "section 8 no longer opens the draft as soon as it is checked" "Then open it"
+
+# ---- claude-config#3668: the announce label (R5, R6). Whether managers notice a change is decided in
+# code (gather.js's record.managerVisible), so the label table and section 5 sort by that field and
+# never by a label's name, or a fourth label reads as one nobody handles. And the dev update is the
+# safety net for an announcement nobody sent, so every one is settled before the run is recorded.
+said_in(){   # $1 = what it holds  $2 = the section's text, whitespace collapsed  $3 = the phrase
+  case "$2" in *"$3"*) check "$1" ok ;; *) check "$1" "it does not say: $3" ;; esac
+}
+flat(){ printf '%s\n' "$1" | tr -s '[:space:]' ' '; }
+gathering="$(flat "$(awk '/^## 3\./ { f = 1; next } f && /^## / { exit } f' "$SKILL")")"
+classifying="$(flat "$(awk '/^## 5\./ { f = 1; next } f && /^## / { exit } f' "$SKILL")")"
+announcing_raw="$(awk '/^## 11\./ { f = 1; next } f && /^## / { exit } f' "$SKILL")"
+announcing=""; [ -n "$announcing_raw" ] && announcing="$(flat "$announcing_raw")"
+said_in "the label table has a row for changelog/announce" "$gathering" '| `changelog/announce` |'
+said_in "the label table is sorted by record.managerVisible" "$gathering" '`record.managerVisible`'
+said_in "section 5 sorts by record.managerVisible" "$classifying" 'decides by `record.managerVisible`'
+# Matched against the section with its whitespace collapsed: the old sentence was wrapped across two
+# lines, so a line by line grep never saw it, even in the text it was written to catch.
+OLD_SORT='`changelog/visible` is manager-visible, `changelog/technical` is behind the scenes'
+case "$classifying" in
+  *"$OLD_SORT"*) check "section 5 no longer sorts by the label's name" "it still says: $OLD_SORT" ;;
+  *) check "section 5 no longer sorts by the label's name" ok ;; esac
+if [ -z "$announcing" ]; then check "the skill has a section 11 for announcements for agents" "no '## 11.' section"
+else
+  check "the skill has a section 11 for announcements for agents" ok
+  said_in "section 11 reads the channel with slack_read_channel" "$announcing" 'slack_read_channel'
+  said_in "section 11 says found posted at a time and asks nothing" "$announcing" 'found posted at <time>'
+  said_in "section 11 asks one picker per announcement otherwise" "$announcing" 'one picker per announcement'
+  said_in "section 11 says a failed read as that, never as nothing posted" "$announcing" 'never as "nothing posted"'
+  said_in "section 11 says a cut short read as that" "$announcing" 'cut short'
+  said_in "section 11 keeps the announcement away from lint-post.js" "$announcing" 'never goes through `lint-post.js`'
+  posted_line="$(awk '/^## 11\./ { f = 1; next } f && /^## / { exit } f && index($0, "gather.js posted ") { print; exit }' "$SKILL")"
+  case "${posted_line#"${posted_line%%[![:space:]]*}"}" in
+    "${WRAP_RUN}node __CLAUDE_HOME__/skills/pennie-dev-update/gather.js posted "*) check "section 11 compares under the no network wrapper" ok ;;
+    *) check "section 11 compares under the no network wrapper" "its line is: ${posted_line:-none}" ;; esac
+fi
+case "$commit_line" in *'--outcomes'*) check "the state commit passes each announcement's outcome" ok ;;
+  *) check "the state commit passes each announcement's outcome" "its line is: ${commit_line:-none}" ;; esac
 
 echo "passed: $pass   failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

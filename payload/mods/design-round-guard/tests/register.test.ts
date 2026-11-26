@@ -4602,6 +4602,24 @@ test('#3323: a program the write reader does not know, handed a file an exact re
   w.ctl.shell = {}
 })
 
+// #3491: mod-kit's reader took `$'...'` for a plain single quoted string, so `x=$'it\'s'` left a
+// quote open to the end of the script and the reader gave no command at all: a program handed a
+// screen file on the next line was judged by nothing. Bash, zsh and sh close that string and run the
+// next line. And a script the reader cannot read to its end (a quote that never closes) is held,
+// where it was read as a script with nothing in it to judge.
+test("#3491: a program handed a screen file after a $'...' string holding an escaped quote is judged, and a script that stops in a quote is held", withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate', files: { ...WITH_SCRATCH } })
+  const BS = '\\'
+  const held = async (command: string) => ({ command, held: refusalOf(await call($, { tool: 'Bash', command })) !== '' })
+  // The control: the line typed alone is held, so the lines below are held for it and nothing else.
+  expect(await held('prettier --write app/page.tsx')).toEqual({ command: 'prettier --write app/page.tsx', held: true })
+  for (const command of [`x=$'it${BS}'s'\nprettier --write app/page.tsx`, `echo $'it${BS}'s'\nprettier --write /w/slate/app/page.tsx`, `x='abc\nprettier --write app/page.tsx`, `x="abc\nprettier --write app/page.tsx`])
+    expect(await held(command)).toEqual({ command, held: true })
+  // A string the shell closes holds nothing by itself.
+  for (const command of [`x=$'it${BS}'s'\necho done`, `x=$'it${BS}'s'; echo "it's" 'done'`]) expect(await held(command)).toEqual({ command, held: false })
+  expect(w.ran.length).toBe(2)
+})
+
 // #3280: the way back is not loosened. Once main's copy has served its purpose, putting the changed
 // file back over it is a write like any other: one that changes what the file draws is judged as it
 // was before, whichever way it is put back, and only a change that draws nothing new goes back unasked.
@@ -5513,6 +5531,98 @@ test('#3416: a function of the script that hands on what it was handed, or that 
   w.ctl.shell = { [KEYS]: DRAWN_KEYS }
   expect(refusalOf(await sh(`bash ${NOTES}/hook.sh`))).toContain('was undone')
   expect(w.files[KEYS]).toBe(KEYS_TEXT)
+})
+
+// #3602: on 2026-11-24 and 2026-11-25 the guard refused nine plain runs of four of this
+// repository's suites, each for a command the suite hands one of its own helpers as text, to be
+// judged by the gate under test and never run. Every one holds a `$(` the shell hands on as written
+// (after a backslash, or in single quotes) with a pipe inside it. mod-kit's reader gives such a
+// word as the one name it spells and marks it `unexpanded`; the guard dropped that mark at a
+// script's edge, read the `$(` as a command substitution, and held the word as a name a command's
+// output fills in, which may be any screen file. The lines below are cut from those suites as
+// written on 2026-11-25: the helper each line calls, and the lines the refusals named.
+const PUBLISH_3602 = [
+  "run(){   # $1 = the command; output in out, exit code in rc, the decision in decision",
+  "  # RUN_DIR, when set, is the directory the session runs the command from (the checkout otherwise).",
+  "  local payload dir=\"${RUN_DIR:-$CO}\"",
+  "  payload=\"$(jq -nc --arg c \"$1\" --arg d \"$dir\" '{hook_event_name:\"PreToolUse\",tool_name:\"Bash\",tool_input:{command:$c},cwd:$d}')\"",
+  "  : > \"$CALLS\"",
+  "  out=\"$(cd \"$dir\" && printf '%s' \"$payload\" | PATH=\"$BIN:$PATH\" HOME=\"$HOMEDIR\" FAKE_CALLS=\"$CALLS\" FAKE_LIST=\"$LIST\" \\",
+  "    FAKE_VIS=\"$VIS\" WORK_NAMES_EXTRA_HASHES=\"$FAKE_HASH,$WORD_HASH\" WORK_NAMES_PROJECT_LIST=\"$PROJECTS\" \\",
+  "    HOOK_TESTS_RUNNING=1 WORK_NAMES_PROJECT_HASHES=\"$PROJ_HASHES\" WN_SHELL_SNAPSHOTS=\"$SNAPS\" bash \"$GATE\" 2>&1)\"; rc=$?",
+  "  decision=\"$(printf '%s' \"$out\" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)\"",
+  "}",
+  "run \"gh issue create --repo danwright-test/public-notes --title \\\"\\$(pwd | tr a-z A-Z)\\\" --body x\"",
+].join('\n')
+const SHAPES_3602 = [
+  "RUN_IN=\"$T\"",
+  "run_here() { run_raw \"$(payload Bash \"$(bash_input \"$1\")\" \"$RUN_IN\")\"; }",
+  "run_here 'bash -c \"echo \\$(sort ok.sh | bash)\"'",
+].join('\n')
+const LOADERS_3602 = [
+  "run_pg() { run_raw \"$(payload Bash \"$(bash_input \"$1\")\" \"${2:-$PG}\")\"; }",
+  "run_pg \"perl -ne print \\\"\\$(printf 'bash post.sh|')\\\"\"",
+  "run_pg \"perl -ne print \\\"\\$NOPE_2912\\\" \\\"\\$(printf 'bash post.sh|')\\\"\"",
+  "run_pg \"perl -ne print \\\"\\$NOPE_2912/\\$(printf 'bash post.sh|')\\\"\"",
+  "run_pg \"perl -ae print \\\"\\$(printf 'bash post.sh|')\\\"\"",
+  "run_pg \"perl -F, -e print \\\"\\$(printf 'bash post.sh|')\\\"\"",
+  "run_pg \"perl -0777ne print \\\"\\$(printf 'bash post.sh|')\\\"\"",
+  "run_pg \"perl -00pe print \\\"\\$(printf 'bash post.sh|')\\\"\"",
+  "run_pg \"perl -0x1Fne print \\\"\\$(printf 'bash post.sh|')\\\"\"",
+].join('\n')
+const DBWRITE_3602 = [
+  "expect_bash() { expect \"Bash [$3]: $1\" \"$2\" \"$(bash_payload \"$3\")\"; }  # <label> <want> <command>",
+  "expect_bash \"eval of what a read only client command prints\" none 'eval \"$(supabase status -o env | grep API_URL)\"'",
+].join('\n')
+const HOOKS_3602 = '/w/slate/payload/hooks'
+test('#3602: a suite handing its own helper a command as text, whose $( ) the shell hands on as written, runs unasked', withKit, async ($, on) => {
+  const suites: Record<string, string> = {
+    'test-work-names-publish.sh': `${PUBLISH_3602}\n`,
+    'test-slack-drafts-unread-shapes.sh': `${SHAPES_3602}\n`,
+    'test-slack-drafts-code-loaders.sh': `${LOADERS_3602}\n`,
+    'test-db-write-ask.sh': `${DBWRITE_3602}\n`,
+  }
+  const w = world($, on, { files: { ...WITH_SCRATCH, ...Object.fromEntries(Object.entries(suites).map(([name, text]) => [`${HOOKS_3602}/${name}`, text])) } })
+  const sh = (command: string) => call($, { tool: 'Bash', command })
+  const commands = [
+    ...Object.keys(suites).map(name => `bash payload/hooks/${name}`),
+    `bash ${HOOKS_3602}/test-slack-drafts-unread-shapes.sh > ${SCRATCH}/suite.txt 2>&1; echo "exit $?"`,
+    // The four in one command, in the form the first refused call ran them.
+    `cd /w/slate && ${Object.keys(suites).map(name => `bash payload/hooks/${name} 2>&1 | cut -c1-300 | grep -E "^FAIL|SUITE-RESULT"`).join('; ')}`,
+  ]
+  for (const command of commands) expect({ command, why: refusalOf(await sh(command)) }).toEqual({ command, why: '' })
+  expect(w.ran.length).toBe(commands.length)
+})
+
+// The controls beside it: the same reading still holds every word that spells a screen file, a
+// suite that writes one, and the same words typed whole on a command line, which this change does
+// not reach (pull request for #3602, "What is not established").
+test('#3602: a word a script hands on as written is still held where it spells a screen file, beside one, in a script that writes one, and typed whole', withKit, async ($, on) => {
+  const scripts: Record<string, string> = {
+    // The text the helper is handed ends in a screen file's name.
+    'spells.sh': "run_here 'cat \\$(a | b) > app/page.tsx'\n",
+    // A group, read as each name it can spell, with a `$` the shell hands on as written.
+    'group.sh': "mystery '/w/slate/app/(page|site)$.css'\n",
+    'escaped.sh': 'mystery "/w/slate/app/\\$(a|b).css"\n',
+    // The text is no file, and the screen file handed over beside it is still one.
+    'beside.sh': "mystery 'say $(a | b)' /w/slate/app/page.tsx\n",
+    // The suite's own lines, in a script that also writes a stylesheet.
+    'writes.sh': `${PUBLISH_3602}\nprintf 'a{}' > /w/slate/app/globals.css\n`,
+  }
+  const w = world($, on, { files: { ...WITH_SCRATCH, ...Object.fromEntries(Object.entries(scripts).map(([name, text]) => [`${HOOKS_3602}/${name}`, text])) } })
+  const sh = (command: string) => call($, { tool: 'Bash', command })
+  for (const name of Object.keys(scripts)) {
+    const command = `bash payload/hooks/${name}`
+    expect({ command, held: refusalOf(await sh(command)).includes(SKIP_QUESTION) }).toEqual({ command, held: true })
+  }
+  const beside = refusalOf(await sh('bash payload/hooks/beside.sh'))
+  expect(beside).toContain('app/page.tsx')
+  expect(beside).not.toContain('say $(a | b)')
+  expect(refusalOf(await sh('bash payload/hooks/writes.sh'))).not.toContain('gh issue create')
+  // Typed whole, the words are judged as they were before: the mark is read only for a script's text.
+  for (const command of ['mystery "x \\$(a | b) y"', 'run "gh issue create --repo danwright-test/public-notes --title \\"\\$(pwd | tr a-z A-Z)\\" --body x"'])
+    expect({ command, held: refusalOf(await sh(command)).includes(SKIP_QUESTION) }).toEqual({ command, held: true })
+  expect(w.ran).toEqual([])
 })
 
 test('#2855: a script named through a variable the command sets is read; one a loop names is not', withKit, async ($, on) => {

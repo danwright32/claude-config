@@ -7,7 +7,7 @@ import { ghRepo, githubRepo, linkRepo } from './mod-kit/hooks/repo.ts'
 import { readCommands } from './read.ts'
 import { GH_REPO_FIXTURES } from './mod-kit/tests/gh-fixtures.ts'
 import { REPO_FIXTURES } from './mod-kit/tests/repo-fixtures.ts'
-import { GATE_LABEL_FIXTURES } from './gate-label-fixtures.ts'
+import { ASKED_WITHOUT_THE_FLAG, GATED_AND_ANNOUNCING } from './gate-label-fixtures.ts'
 
 // mod-kit's reader of a remote, as $.modkit.repo answers it: its byte for byte copy (#951).
 const github = async (remote: string) => githubRepo(remote)
@@ -115,8 +115,9 @@ describe('issue, label and milestone writes', () => {
 // holds its answer to (gate-label-fixtures.ts), read by the mod's reader of it.
 describe('the label a merge gate requires, on a PR this session opened (#3439)', () => {
   const LABELS = 'set labels or a milestone on a PR'
-  const gated = GATE_LABEL_FIXTURES[0]
-  if (!gated || gated.answer.state !== 'required') throw new Error('the first shared fixture is no longer the gated repository')
+  // The gated repository as the gate answers this mod about it (#3665): asked with the flag, in a
+  // repository that names an announcements channel, so every label there is, is in the answer.
+  const gated = GATED_AND_ANNOUNCING
   const said = (answer: unknown) => gateAnswerOf({ exitCode: 0, stdout: JSON.stringify(answer), stderr: '', isStdoutTruncated: false })
   // This checkout's repository is gated; nothing else is.
   const gate: Gate = async repo => (repo === 'o/r' ? said({ ...gated.answer, why: '' }) : said({ state: 'not-required', why: `${repo} is not listed`, labels: [] }))
@@ -187,6 +188,30 @@ describe('the label a merge gate requires, on a PR this session opened (#3439)',
     // With no judge handed in, every label on a PR is refused in the words it always was.
     expect(await bash('gh pr create --title x --label changelog/technical')).toBe(LABELS)
     expect(await bash('gh pr edit 12 --add-label changelog/none')).toBe(LABELS)
+  })
+  // #3665: the announce label is one of the gate's labels where the repository names an
+  // announcements channel, and is judged like the others. The session is told, as the label goes on,
+  // both pieces of writing the merge waits on and that the wording is Dan's to approve.
+  test('the announce label may be set where the gate lists it, and the session is told what the merge waits on and that the wording is for Dan', async () => {
+    const NOTE =
+      "The merge gate of o/r refuses the merge of a PR labelled changelog/announce until its description carries the Changelog sentence a manager reads and the post for agents under an Announcement heading, so see that the description has both before merging. The wording under changelog/announce is Dan's to approve before the PR merges."
+    notes.length = 0
+    expect(await night('gh pr create --title x --body-file /tmp/b.md --label changelog/announce')).toBeUndefined()
+    expect(await night('gh pr edit 12 --add-label changelog/announce')).toBeUndefined()
+    expect(notes).toEqual([NOTE, NOTE])
+    // On a PR the session did not open it is refused like any other label, with nothing told.
+    notes.length = 0
+    expect(await night('gh pr edit 13 --add-label changelog/announce')).toBe(`${LABELS} (PR #13 in o/r is not one this session opened)`)
+    expect(notes).toEqual([])
+    // Where the gate does not list it (the repository names no channel), it is not a label the gate requires.
+    const quiet = judgeWith(async () => said({ state: 'required', why: '', labels: gated.answer.labels.filter(l => l.label !== 'changelog/announce') }), opened)
+    expect(await bash('gh pr create --title x --label changelog/announce', { requiredLabel: quiet })).toBe(`${LABELS} (changelog/announce is not a label the merge gate of o/r requires)`)
+    // An answer in the shape a caller without the flag gets does not say whether a label needs Dan,
+    // so it is one that could not be read, and nothing is set on it.
+    const old = ASKED_WITHOUT_THE_FLAG.find(c => c.answer.state === 'required')
+    if (!old) throw new Error('the shared fixtures hold no gated repository asked without the flag')
+    const before = judgeWith(async () => said({ ...old.answer, why: '' }), opened)
+    expect(await bash('gh pr create --title x --label changelog/technical', { requiredLabel: before })).toBe(`${LABELS} (whether the merge gate of o/r requires a label could not be told: its answer was not one this reader knows)`)
   })
   // Dan's decision of 2026-11-22 (picker answer "Also allow changelog/visible"): the label that needs
   // a sentence a manager reads is one of the gate's labels like the others. The merge gate still

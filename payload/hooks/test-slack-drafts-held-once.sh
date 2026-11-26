@@ -8,8 +8,9 @@
 # 8,500 commands, a twentieth of the judgement, part of what took the cold cost case past its limit.
 #
 # A count, never a time: a time measures the Mac's load. The gate's own code runs, with four of its
-# readings counted by a copy that wraps them, as test-slack-drafts-code-loaders.sh wraps one to make
-# it fail. Kept apart from that suite so it does not grow past its wall clock; the helpers are copied
+# readings counted by a copy that wraps them, as test-slack-drafts-code-loaders-shell-input.sh wraps
+# one to make it fail. Kept apart from the code loaders suites (test-slack-drafts-code-loaders.sh and
+# the four cut from it, #3624) so none grows past its wall clock; the helpers are copied
 # from test-slack-drafts-made-lines.sh as they are. Nothing a case names is ever run.
 set -uo pipefail
 

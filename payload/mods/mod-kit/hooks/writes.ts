@@ -1,5 +1,5 @@
 import type { ModKitChange, ModKitWrite, ModKitWrites } from '../types/index.d.ts'
-import { git, pipeline, placed, readLine, type Command, type Line, type ReadOptions } from './commands.ts'
+import { git, pipeline, placed, READ_STOPPED, readLine, type Command, type Line, type ReadOptions } from './commands.ts'
 import { codeOnly, codeTargets, codeVerdict } from './code.ts'
 import { kindOf, readProgram, splitsWords } from './program.ts'
 import { isDevice } from './inputs.ts'
@@ -1119,6 +1119,21 @@ const testRunner = (name: string, args: readonly string[], script: string | unde
  */
 export const writes = (cmds: readonly Command[], cwd: string | undefined, home: string): ModKitWrites => settleMoves(readWrites(cmds, cwd, home).writes)
 
+// #3626: how many times the reader has held one write or change against another, counted where it
+// does so, for its tests to hold its cost to a number of steps rather than a time (L290). One mv
+// of 8,000 sources took 4 s here on 2026-11-25 (median of 5, load 17 on 12 cores), each source held
+// against every other in `changed` and in settleMoves, where ask before saving gives its looks 3 s.
+let compared = 0
+export const comparisonsSoFar = (): number => compared
+// The first entry kept at each path, and of those with no path, at each word (readWrites).
+type Firsts<T> = { path: Map<string, T>; word: Map<string, T> }
+const placesFor = <T>(): Firsts<T> => ({ path: new Map(), word: new Map() })
+const firstAt = <T>(at: Firsts<T>, path: string | undefined, word: string, entry: T) => {
+  const by = path ? at.path : at.word
+  const key = path ? path : word
+  if (!by.has(key)) by.set(key, entry)
+}
+
 // The writes, and the folder each command runs in, by its place in `cmds` (#2000): where a cd before
 // it leaves the shell, followed as a relative path is, undefined where that cannot be followed.
 const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: string): { writes: ModKitWrites; folders: (string | undefined)[] } => {
@@ -1179,8 +1194,14 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
   // For a command a find -exec runs, the folders find starts from: a change at one of them is one
   // its {} stood for, which reaches everything under it (#760); a path it names itself does not.
   let foundRoots: readonly string[] = []
+  // #3626: the first write, and the first change of each kind, at each path, or with no path of
+  // each word, kept as each is given, so one given again is found in one step rather than by
+  // holding it against every one before it. Neither list is ever reordered or shortened, and no
+  // entry's path, word or kind is ever changed, so the first kept is the one a search would find.
+  const fileAt = placesFor<ModKitWrite>()
+  const changeAt = new Map<ModKitChange['does'], Firsts<ModKitChange>>()
   // `shown`, where the caller knows it, is the word as the command spells it (#752).
-  const add = (word: string, path: string | undefined, extra?: { sources?: string[]; edits?: true; mayBeFolder?: true; tree?: true }, shown?: string) => {
+  const add = (word: string, path: string | undefined, extra?: { sources?: string[]; edits?: true; mayBeFolder?: true; tree?: true; shared?: true }, shown?: string) => {
     // Where a find -exec's {} stood, the write reaches every file under that folder (#760), as does
     // a copy of what a folder holds (#2372).
     const tree = foundRoots.includes(word) || !!extra?.tree
@@ -1188,12 +1209,18 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     const key = path ?? `word:${word}`
     // A path written twice is kept once, a tree on either keeping the tree, as a change does.
     if (seen.has(key)) {
-      const had = files.find(f => (path ? f.path === path : !f.path && f.word === (shown ?? asWritten.get(word) ?? word)))
+      // The first write of that path, or with no path the first of that word, as a search of every
+      // write before it finds it, in one step (#3626).
+      compared++
+      const had = path ? fileAt.path.get(path) : fileAt.word.get(shown ?? asWritten.get(word) ?? word)
       // Who wrote it a second time is kept (#3478); a write that cannot be found again is one no
       // move can be checked against.
       if (had) madeBy(had, now)
       else unsure = true
       if (had && tree) had.tree = true
+      // Said by either write of the path, it stays said (#3505): the second of two sources of one
+      // name lands here, on the write the first one made.
+      if (had && extra?.shared) had.shared = true
       if (had && alone.has(had) && aloneIn(had.word) === null) alone.set(had, null)
       return
     }
@@ -1208,8 +1235,10 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
       ...(extra?.edits ? { edits: true as const } : {}),
       ...(extra?.mayBeFolder ? { mayBeFolder: true as const } : {}),
       ...(tree ? { tree: true as const } : {}),
+      ...(extra?.shared ? { shared: true as const } : {}),
     }
     files.push(entry)
+    firstAt(fileAt, entry.path, entry.word, entry)
     madeBy(entry, now)
     const set = path ? undefined : aloneIn(entry.word)
     if (set !== undefined) alone.set(entry, set)
@@ -1235,7 +1264,10 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     // A path changed the same way twice is kept once, a tree on either keeping the tree. It stays
     // limited to names only where both were limited to the same ones, and says where it goes only
     // where both were moves to the same place.
-    const had = changes.find(x => x.does === does && (path ? x.path === path : !x.path && x.word === written))
+    let at = changeAt.get(does)
+    if (!at) changeAt.set(does, (at = placesFor<ModKitChange>()))
+    compared++
+    const had = path ? at.path.get(path) : at.word.get(written)
     if (had) {
       madeBy(had, now)
       if (tree) had.tree = true
@@ -1246,6 +1278,7 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     const folder = path ? undefined : patternFolder(word, dir, home)
     const entry: ModKitChange = { word: written, ...(path ? { path } : {}), ...(folder ? { folder } : {}), does, ...(tree ? { tree: true as const } : {}), ...(tree && names ? { names } : {}), ...(to ? { to } : {}) }
     changes.push(entry)
+    firstAt(at, entry.path, entry.word, entry)
     madeBy(entry, now)
   }
   const abs = (p: string) => pathOf(p, dir)
@@ -1587,11 +1620,66 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
         // disk can say (the collision guard's reading, #654), so the write says so.
         else add(dest, abs(dest), { sources: absAll(sources), mayBeFolder: true })
       }
+      // For each source, whether another source of the same command may land on the name it lands
+      // on in the folder they go into. Two cannot where one folder holds both, or both are named
+      // outright by names that differ by more than letter case and the Unicode form of an accent:
+      // a disk that ignores case, macOS's own, keeps a.md and A.md as one file, so names alike but
+      // for those are taken as one name on every disk, the side that claims less (lessons review
+      // of 9dd4eb16c0). A pattern in another folder may match the name, and a word no path names
+      // may hold it.
+      const sharesName = (among: readonly string[]): boolean[] => {
+        const placeOf = (s: string): { folder: string; name?: string } | undefined => {
+          const p = abs(s)
+          if (p) return { folder: p.slice(0, p.lastIndexOf('/')) || '/', name: baseOf(p) }
+          const folder = patternFolder(s, dir, home)
+          return folder ? { folder } : undefined
+        }
+        const places = among.map(placeOf)
+        // A name as a disk that ignores letter case and the Unicode form of an accent compares it:
+        // decomposed, then in small letters and in capitals, either of which two names may share
+        // (#3505). Small letters alone, as this was until then, keep a sharp s apart from SS, a
+        // long s from s, a final sigma from a capital one and the ff ligature from FF, each of
+        // which this Mac's APFS disk keeps as one file (measured 2026-11-23). It is the rule ask
+        // before saving compares a moved name with the names a folder holds by (its foldedName),
+        // and it can take two names the disk keeps apart as one (a dotless i and I), the side
+        // that claims less.
+        const folded = (n: string): string[] => {
+          const form = n.normalize('NFD')
+          return [form.toLowerCase().normalize('NFD'), form.toUpperCase().normalize('NFD')]
+        }
+        // One pass over the sources, never each against each: a command can name thousands, and
+        // this runs inside the time a guard has to judge the call. A source no path places may
+        // share with any other. Otherwise the folders that hold a pattern, and for each form of a
+        // name the folders that hold one alike, say whether another folder holds a match.
+        if (places.length < 2) return places.map(() => false)
+        if (places.some(p => p === undefined)) return places.map(() => true)
+        const known = places as { folder: string; name?: string }[]
+        const patternIn = new Set<string>()
+        const nameIn = new Map<string, Set<string>>()
+        for (const p of known) {
+          if (p.name === undefined) patternIn.add(p.folder)
+          else
+            for (const f of folded(p.name)) {
+              const at = nameIn.get(f) ?? new Set<string>()
+              at.add(p.folder)
+              nameIn.set(f, at)
+            }
+        }
+        const folders = new Set(known.map(p => p.folder))
+        const elsewhere = (holding: ReadonlySet<string> | undefined, folder: string): boolean => holding !== undefined && (holding.size > 1 || (holding.size === 1 && !holding.has(folder)))
+        return known.map(p => (p.name === undefined ? elsewhere(folders, p.folder) : elsewhere(patternIn, p.folder) || folded(p.name).some(f => elsewhere(nameIn.get(f), p.folder))))
+      }
       if (copied && into !== undefined) {
         const intoPath = abs(into)
         // The word keeps the folder as written, so one reached through a variable still says so (#752).
         const folder = (asWritten.get(into) ?? into).replace(/\/+$/, '')
-        for (const s of sources) add(`${into.replace(/\/+$/, '')}/${baseOf(s)}`, intoPath ? `${intoPath}/${baseOf(s)}` : undefined, { sources: absAll([s]) }, `${folder}/${baseOf(s)}`)
+        // #3505: a write another source of this command may also land on says so. One of the two
+        // replaces the other there (measured on macOS, 2026-11-23: of `mv mem/a.md full/A.md
+        // archive/` and of two sources named a.md, the source named last is the one kept, and cp
+        // does the same), which the write alone, naming its one source, did not say: ask before
+        // saving read it as where the first source "can be moved back" from.
+        const shares = sharesName(sources)
+        sources.forEach((s, i) => add(`${into.replace(/\/+$/, '')}/${baseOf(s)}`, intoPath ? `${intoPath}/${baseOf(s)}` : undefined, { sources: absAll([s]), ...(shares[i] ? { shared: true as const } : {}) }, `${folder}/${baseOf(s)}`))
       }
       // macOS cp (BSD) copies what a source ending in a slash holds into the destination, and makes
       // the destination as that copy where it does not exist, so either way the write reaches every
@@ -1621,23 +1709,12 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
       // It is said only for a mv that can leave each source there: never onto a device, which holds
       // no file (macOS mv refuses, "Operation not permitted", and keeps the source; measured
       // 2026-11-22), and never where two sources may land on one name, the second replacing the
-      // first. Two cannot where one folder holds both, or both are named outright by names that
-      // differ by more than letter case and the Unicode form of an accent: a disk that ignores
-      // case, macOS's own, keeps a.md and A.md as one file, so names alike but for those are taken
-      // as one name on every disk, the side that claims less (lessons review of 9dd4eb16c0). What
+      // first (sharesName above, which the writes of such sources say too, as `shared`). What
       // the rest of the command does to the place is judged once it is all read (settleMoves).
       if (name === 'mv' && copied) {
         const dest = (into ?? ops[ops.length - 1]) as string
         const destPath = abs(dest)
-        const placeOf = (s: string): { folder: string; name?: string } | undefined => {
-          const p = abs(s)
-          if (p) return { folder: p.slice(0, p.lastIndexOf('/')) || '/', name: baseOf(p) }
-          const folder = patternFolder(s, dir, home)
-          return folder ? { folder } : undefined
-        }
-        const places = sources.map(placeOf)
-        const folded = (n: string): string => n.normalize('NFD').toLowerCase()
-        const apart = places.every((a, i) => places.every((b, j) => j <= i || (a !== undefined && b !== undefined && (a.folder === b.folder || (a.name !== undefined && b.name !== undefined && folded(a.name) !== folded(b.name))))))
+        const apart = !sharesName(sources).some(Boolean)
         // mv -n (--no-clobber) replaces nothing: a source whose name is taken there stays where it was.
         // Of -n, -f and -i the last one given wins (`mv -n -f` replaces), so it is said only where
         // neither of the other two is given at all, the side that never calls a replaced file kept.
@@ -1824,8 +1901,11 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     // standard input and one handed over by xargs are not, since none was counted before Dan decided
     // (the count is in docs/mods-design.md). A program on the list of those that only read
     // (READ_ONLY) writes nothing, but in a form of it that writes a file or runs a program.
-    // A command pipeline marks `unread` is already given as one, which every guard holds.
-    if (onNoList && kind === undefined && !scriptFile && !tool && name && !c.unread && !READ_BY_RULE.has(name)) {
+    // A command pipeline marks `unread` is already given as one, which every guard holds. One it
+    // marks only because the reader stopped in it (#3491, READ_STOPPED) is still read by its words
+    // here, as it was before it was marked: the count for #3491 found six recorded calls where the
+    // mark alone would have taken this run away from the guards that judge it.
+    if (onNoList && kind === undefined && !scriptFile && !tool && name && (!c.unread || READ_STOPPED.has(c.unread)) && !READ_BY_RULE.has(name)) {
       const reader = own(READ_ONLY, name)
       const writing = reader?.writes?.find(w => w.when(rest))
       if (!reader || writing) {
@@ -1994,6 +2074,78 @@ const landsOf = (m: ModKitChange): (string | undefined)[] => {
 // whatever is on the disk. Said the /private way. On a system where they are folders of their own
 // this takes two places for one, which only ever takes a mark off.
 const knownPlace = (path: string): string => path.replace(/^\/(tmp|var|etc)(?=\/|$)/, '/private/$1')
+// Whether a write or change is where it may be on one branch with one of `places`: anywhere, for
+// one with no place or a place that is not known.
+const reachesFrom = (x: { path?: string; folder?: string }, places: readonly (string | undefined)[], where: (p: string | undefined) => string | undefined): boolean => {
+  const at = where(placeOfChange(x))
+  return at === undefined || places.some(p => p === undefined || onOneBranch(at, p))
+}
+// Every place a path is under, as isUnder reads it: the text before each slash in it, with and
+// without that slash, but never the path itself. isUnder(a, b) holds exactly where b is one of
+// these for a (#3626), which is what lets settleMoves look a branch up instead of comparing.
+const holders = (a: string): string[] => {
+  const out = new Set<string>()
+  for (let i = a.indexOf('/'); i >= 0; i = a.indexOf('/', i + 1)) {
+    out.add(a.slice(0, i))
+    if (i + 1 < a.length) out.add(a.slice(0, i + 1))
+  }
+  return [...out]
+}
+/**
+ * The writes or changes of a command filed by where they are (#3626), to say in a few steps what
+ * settleMoves once found by holding every move against every entry: whether any entry made by a
+ * command other than the move's own (none of its makers, or one the move was not made by) is
+ * anywhere at all where a place is not known, has no place, or is on one branch with a place: at
+ * it, holding it, or under it. Entries made by the same commands are filed once together, since
+ * only who made them is asked of them, so a mv's thousands of sources are one entry to step over.
+ */
+const branchIndex = <T extends object>(entries: readonly T[], placeOf: (x: T) => string | undefined) => {
+  // Each bucket keeps one entry's makers for each set of makers among its entries, undefined for
+  // none, keyed by that set.
+  type Bucket = Map<string, ReadonlySet<object> | undefined>
+  const ids = new Map<object, number>()
+  const id = (c: object) => {
+    let n = ids.get(c)
+    if (n === undefined) ids.set(c, (n = ids.size))
+    return n
+  }
+  const all: Bucket = new Map()
+  const placeless: Bucket = new Map()
+  const at = new Map<string, Bucket>()
+  const under = new Map<string, Bucket>()
+  const file = (bucket: Bucket, key: string, by: ReadonlySet<object> | undefined) => {
+    if (!bucket.has(key)) bucket.set(key, by)
+  }
+  const fileAt = (buckets: Map<string, Bucket>, place: string, key: string, by: ReadonlySet<object> | undefined) => {
+    let bucket = buckets.get(place)
+    if (!bucket) buckets.set(place, (bucket = new Map()))
+    file(bucket, key, by)
+  }
+  for (const x of entries) {
+    const by = MADE_BY.get(x)
+    const key = by ? [...by].map(id).sort((a, b) => a - b).join(',') : 'none'
+    const place = placeOf(x)
+    file(all, key, by)
+    if (place === undefined) file(placeless, key, by)
+    else {
+      fileAt(at, place, key, by)
+      for (const h of holders(place)) fileAt(under, h, key, by)
+    }
+  }
+  // Whether a bucket holds an entry made by another command than any of `own`.
+  const another = (bucket: Bucket | undefined, own: ReadonlySet<object>): boolean => {
+    if (!bucket) return false
+    for (const by of bucket.values()) {
+      compared++
+      if (!by || [...by].some(c => !own.has(c))) return true
+    }
+    return false
+  }
+  return {
+    reaches: (places: readonly (string | undefined)[], own: ReadonlySet<object>): boolean =>
+      another(placeless, own) || places.some(p => (p === undefined ? another(all, own) : another(at.get(p), own) || another(under.get(p), own) || holders(p).some(h => another(at.get(h), own)))),
+  }
+}
 
 /**
  * Takes `to` off every removal whose file the command, read whole, may not leave where its mv put
@@ -2029,22 +2181,26 @@ const settleMoves = (w: ModKitWrites): ModKitWrites => {
   const moved = w.changes.filter(c => c.to !== undefined)
   if (!moved.length) return w
   const blind = UNSURE.has(w) || w.unnamed.length > 0 || !!w.unread?.length || !!w.runs?.length || !!w.byGit?.length
+  if (blind) {
+    for (const m of moved) delete m.to
+    return w
+  }
   const where = (p: string | undefined): string | undefined => (p === undefined ? undefined : knownPlace(p))
+  // #3626: every removal and every write is filed once by where it is, so each move asks only about
+  // the places on its own branch, never every removal and write in turn, which made one mv of
+  // thousands of sources take seconds.
+  const removals = branchIndex(w.changes.filter(x => x.does === 'remove' || x.does === 'truncate'), x => where(placeOfChange(x)))
+  const written = branchIndex(w.files, f => where(placeOfChange(f)))
   for (const m of moved) {
-    const own = MADE_BY.get(m) ?? new Set<object>()
-    const byAnother = (x: object): boolean => {
-      const by = MADE_BY.get(x)
-      return !by || [...by].some(c => !own.has(c))
-    }
     const source = where(placeOfChange(m))
     const lands = landsOf(m).map(where)
-    const reaches = (x: { path?: string; folder?: string }, places: readonly (string | undefined)[]): boolean => {
-      const at = where(placeOfChange(x))
-      return at === undefined || places.some(p => p === undefined || onOneBranch(at, p))
-    }
-    const taken = w.changes.some(x => x !== m && (x.does === 'remove' || x.does === 'truncate') && byAnother(x) && reaches(x, [source, ...lands]))
-    const writtenOver = w.files.some(f => byAnother(f) && reaches(f, lands))
-    if (blind || taken || writtenOver) delete m.to
+    const own = MADE_BY.get(m)
+    // Every change the reader gives was made by a command (madeBy), so a removal with none is never
+    // met; read as it always was, each other entry held against it in turn.
+    const byAnyone = (x: object) => (MADE_BY.get(x)?.size ?? 1) > 0
+    const taken = own ? removals.reaches([source, ...lands], own) : w.changes.some(x => (compared++, x !== m && (x.does === 'remove' || x.does === 'truncate') && byAnyone(x) && reachesFrom(x, [source, ...lands], where)))
+    const writtenOver = own ? written.reaches(lands, own) : w.files.some(f => (compared++, byAnyone(f) && reachesFrom(f, lands, where)))
+    if (taken || writtenOver) delete m.to
   }
   return w
 }
@@ -2071,6 +2227,7 @@ const merge = (into: ModKitWrites, from: ModKitWrites) => {
     if (f.tree) had.tree = true
     if (f.edits) had.edits = true
     if (f.mayBeFolder) had.mayBeFolder = true
+    if (f.shared) had.shared = true
     if (f.sources?.length) had.sources = [...new Set([...(had.sources ?? []), ...f.sources])]
     // #2171: values hold only where both writes of the word have them; the line's assignments never
     // reach a substitution's write.
@@ -2171,7 +2328,7 @@ const lineFolders = (line: Line, cwd: string | undefined, home: string, inSubsti
  * that only sets a value (`T=x;`) is given too, as its assignments, with the folder it stands in.
  */
 export const pipelineIn = (command: string, cwd: string, home: string, opts: ReadOptions = {}): (Command & { folder: string | null })[] => {
-  const read = lineFolders(readLine(command, { assignments: true }), cwd, home)
+  const read =lineFolders(readLine(command, { assignments: true }), cwd, home)
   const same = (a: Command, b: Command) => a.words.length === b.words.length && a.words.every((w, i) => w === b.words[i])
   let at = 0
   return pipeline(command, opts).map(c => {

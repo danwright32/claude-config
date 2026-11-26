@@ -9,8 +9,9 @@
 # The priority is read from the kernel by the running gate (its trace line), never from what it asked
 # for: asking for user initiated alone is accepted and changes nothing, because XNU squashes it to
 # legacy for a task with no application role (measured: base priority 31 before and after). Every
-# other judgement of the gate is in test-slack-drafts-only-gate.sh, whose helpers are copied here as
-# they are, so a case is driven the same way: a hook payload piped into slack-drafts-only-gate.sh,
+# other judgement of the gate is in test-slack-drafts-only-gate.sh and the five suites split from it
+# (#3575), each holding its own copy of the helpers, which are copied here too as they are, so a
+# case is driven the same way: a hook payload piped into slack-drafts-only-gate.sh,
 # exit 0 allowed and 2 refused, the reason on stderr.
 set -uo pipefail
 
