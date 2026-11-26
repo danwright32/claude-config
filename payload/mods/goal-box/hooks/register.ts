@@ -5,7 +5,7 @@ import type { GoalBoxShown } from '../types/index.d.ts'
 import { DESCRIPTION, MOD, NAME, SCHEMA, TOOL, askDoneText, askText, boxText, cardOf, cardedSince, decide, linkedIn, mergeFactsOf, mergeHolds, readInput, waitKey, type Confirmed, type Holds, type Linked } from './box.ts'
 import { askAnyAccount, type GhRun } from './mod-kit/ghaccounts.ts'
 import { askPr } from './mod-kit/prmerged.ts'
-import { errorText } from './mod-kit/skew.ts'
+import { errorText, missingOf } from './mod-kit/skew.ts'
 import { HOLD_MAX_MS, whileHeld } from './mod-kit/held.ts'
 import { transcriptPlaces } from './mod-kit/projects.ts'
 import { toolArgs } from './mod-kit/toolargs.ts'
@@ -575,9 +575,21 @@ export const register: Register = on => {
   // #3770: what Claude Code lists as in flight, and the wake ups it has scheduled, as the main
   // conversation's stop carries them: no other event names them. Recorded under this turn's count,
   // passing the chain's answer on untouched. Without the managed setting that lets a mod see a classic
-  // event (README, #875) it never runs, and the card is withheld as unread.
+  // event (README, #875) it never runs, and the card is withheld as unread. While Dan is asleep (scope
+  // modes' one sleep predicate, its noun's isAsleep) it records nothing, so the stop's lists read as
+  // unread and no close card is pinned; one can go up after he wakes, once a turn ends and every
+  // reading holds. Scope modes not loaded is awake, as the other mods read it; a predicate that fails
+  // any other way records nothing either, which also only withholds the card.
   on('classic.Stop', async ($, e, next) => {
     const r = await next(e)
+    let asleep: boolean
+    try {
+      asleep = (await ($ as unknown as { scopeModes: { isAsleep: () => Promise<boolean> } }).scopeModes.isAsleep()) === true
+    } catch (err) {
+      if (missingOf(err)?.noun !== 'scopeModes') return r
+      asleep = false
+    }
+    if (asleep) return r
     const x = e as { background_tasks?: unknown; session_crons?: unknown }
     await $.state.set(closeStopRef, { seq: (await $.state.get(closeSeqRef)).value ?? 0, tasks: x.background_tasks, crons: x.session_crons })
     return r

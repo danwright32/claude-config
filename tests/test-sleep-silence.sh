@@ -91,6 +91,7 @@ settings:Stop:pr-merge-quiz.sh
 settings:SubagentStop:agent-leftovers-gate.sh
 settings:SubagentStop:limit-messages.py
 settings:StopFailure:limit-messages.py
+mod:goal-box/hooks/register.ts:classic.Stop
 mod:goal-tracker/hooks/register.tsx:notify:notifier
 mod:scope-modes/hooks/register.ts:leavePrOpen:ask
 mod:scope-modes/hooks/register.ts:leaveBranch:ask

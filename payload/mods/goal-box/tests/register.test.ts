@@ -174,6 +174,17 @@ const watcher: { name: string; register: Register } = {
     })
   },
 }
+// Scope modes, standing in: its noun's one sleep predicate, answered from the world.
+const sleepMod: { name: string; register: Register } = {
+  name: 'scope-modes',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      const isAsleep = async () => JSON.parse((await built.process.run(['__sleep'])).stdout) === true
+      return { ...built, scopeModes: { isAsleep } }
+    })
+  },
+}
 type Owed = { key: string; how: 'merged' | 'unproven' | 'waiting'; pr: number; at: number; cwd: string; repo?: string; named?: string; selector?: string }
 
 type Gh = { exitCode: number; stdout: string; stderr?: string }
@@ -238,6 +249,8 @@ type World = {
   pinAnswer: PinAnswer
   pinCalls: number
   releasePin: () => void
+  /** Scope modes' sleep predicate: true while Dan is asleep (sleep mode). */
+  asleep?: boolean
   /** Why manual steps' noun throws on a withdraw, or '' when it withdraws. */
   withdrawFails: string
   withdrawn: string[]
@@ -306,6 +319,7 @@ const world = (on: On, init: Partial<World> = {}) => {
       if (e.argv[1] === 'compact') return ok(JSON.stringify({ queued: w.compactQueued, followUp: w.compactFollowUp }))
       return ok(JSON.stringify(w.holds))
     }
+    if (e.argv[0] === '__sleep') return ok(JSON.stringify(w.asleep === true))
     if (e.argv[0] === '__jobs') return w.jobsFail ? ok('', 1, w.jobsFail) : ok(JSON.stringify(w.jobs))
     if (e.argv[0] === 'ps') return ok('4321 1 node\n')
     if (e.argv[0] === 'python3') {
@@ -409,7 +423,7 @@ const DESIGN: { goal: string; shipped: string[] } = DESIGN_FIXTURE
 const MET = { state: 'none' as const, met: { condition: 'complete issue 1563', reason: 'Issue #1563 is closed and PR #1700 is merged.', id: 'met-1' } }
 const withKit = { plugins: [kit, registry] }
 const withLive = { plugins: [kit, registry, live] }
-const withAll = { plugins: [kit, registry, live, stepsMod, statusBar, watcher] }
+const withAll = { plugins: [kit, registry, live, stepsMod, statusBar, watcher, sleepMod] }
 
 test('the tool is offered to an interactive session with its rules in the prompt, never to a headless one', withKit, async ($, on) => {
   const { tools, cards } = world(on)
@@ -1232,6 +1246,20 @@ test('a card that could not be taken down at a new turn is tried again at the ne
   // Taken down, so the turn after has nothing to take down.
   await turnStarts($, 't4')
   expect(w.withdrawn).toEqual([CLOSE_TITLE])
+})
+
+test('while Dan is asleep a stop records nothing, so its lists read as unread and no card is pinned; after he wakes it can be (#3770)', withAll, async ($, on) => {
+  const { w, clock } = world(on, { asleep: true })
+  await start($)
+  await says($, 'Add the goal box')
+  await workedAndQuiet($, clock)
+  expect(w.pinned).toEqual([])
+  expect(reasonsOf(w)?.reasons.join(' ')).toMatch(/background work in flight .* could not be read \(this turn's stop was not recorded\)/)
+  w.asleep = false
+  await stopped($)
+  await turnEnds($)
+  await clock.advance(QUIET_MS)
+  expect(w.pinned).toHaveLength(1)
 })
 
 test('a headless session never gets the card (#3770)', withAll, async ($, on) => {
