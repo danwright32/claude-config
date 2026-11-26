@@ -3043,6 +3043,11 @@ ones marked open are the builder's choice, waiting on Dan.
   both names is listed once, as its newest card, still carrying any message an older card under
   the other name owes, pinned from that card so Mark sent finds it (#720). When GitHub cannot be
   asked it lists what is kept under the remote's name and says the rest may be missing.
+- **An announcement owed is kept beside the cards, not among them** (#3667): an announce merge's
+  owed Slack draft is kept in the same store under keys of its own per pull request
+  (`announce:`, `announce-out:`, `announce-done:`), outside the newest 50, so cards piling up
+  never drop it. The README section "An approved announcement is owed as a Slack draft until it is
+  settled (#3667)" holds the rules.
 - **The card is mod-kit's boxed card** (`$.modkit.card`, #663), since only mod-kit draws a result
   row: the state word leads the bold title in its colour (green `success`, grey, amber `warning`),
   then why live could not be confirmed, what changed, "See it:" and the link, and the numbered
