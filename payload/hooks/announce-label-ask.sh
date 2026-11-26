@@ -28,13 +28,16 @@ payload="$(cat)"
 # anything is loaded: only one naming the label, or the record's folder, is judged. Matched in the C
 # locale, so a byte that is not UTF-8 cannot hide the words after it, and in any letter case, since
 # GitHub matches a label's name in either. A slash JSON wrote as an escape is matched too.
+# The match in any letter case is this test's alone: it is switched off again before returning, so
+# the libraries loaded below find the shell matching as it always does.
 judged_call() {
-  local LC_ALL=C
+  local LC_ALL=C found=1
   shopt -s nocasematch
   case "$1" in
-    *changelog/announce*|*'changelog\/announce'*|*announce-approvals*) return 0 ;;
+    *changelog/announce*|*'changelog\/announce'*|*announce-approvals*) found=0 ;;
   esac
-  return 1
+  shopt -u nocasematch
+  return "$found"
 }
 judged_call "$payload" || exit 0
 

@@ -287,6 +287,16 @@ check "with its rule file gone, a command naming the label is refused, saying th
 r="$(broken "ls -la")"
 check "and a command naming neither the label nor the record still passes" "$([[ "$r" == " rc=0" ]] && echo ok || echo "$r")"
 
+# The hook's first test matches in any letter case, and that setting is the test's alone: a library
+# it loads afterwards must find the shell matching as it always does. The stand in library here
+# writes down what it found and then fails to load, which the hook refuses by name.
+mkdir -p "$WORK/leak/lib"
+cp "$HOOK" "$WORK/leak/announce-label-ask.sh"
+printf 'shopt -q nocasematch && printf on > "$LEAK_SEEN"\nprintf loaded >> "$LEAK_SEEN.ran"\nreturn 1\n' > "$WORK/leak/lib/push-scope.sh"
+r="$(printf '%s' '{"tool_name": "Bash", "tool_input": {"command": "gh pr edit 7 --add-label Changelog/Announce"}}' | LEAK_SEEN="$WORK/leak/seen" bash "$WORK/leak/announce-label-ask.sh" 2>&1; printf ' rc=%s' "$?")"
+check "a library that will not load is refused by name" "$([[ "$r" == *"could not load"*"push-scope.sh"*" rc=2" ]] && [ -e "$WORK/leak/seen.ran" ] && echo ok || echo "$r")"
+check "the first test's match in any letter case is not left on for the libraries the hook loads" "$([ ! -e "$WORK/leak/seen" ] && echo ok || echo "nocasematch was still on when lib/push-scope.sh was loaded")"
+
 echo "the record of what he approved is not a session's to write"
 mkdir -p "$STORE"; printf '' > "$STORE/record.jsonl"
 for tool in Write Edit MultiEdit; do
