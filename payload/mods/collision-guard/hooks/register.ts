@@ -52,6 +52,32 @@ const asked = async ($: EngineInterface, what: string, argv: string[]): Promise<
   throw new Unanswered(`git did not say ${what}: ${said}`)
 }
 
+// #3673: Claude Code gives a call to another mod's noun 10 seconds (docs/mods-design.md, standing
+// rule 4) and fails it in the words "<noun>: <mod> did not answer within 10000ms" when no answer
+// came. In a month of the personal MacBook's session records (to 2026-11-26) that was all 12 calls
+// this guard refused as not checked: 11 the session list, 1 mod-kit's git reader, each an ordinary
+// call made while other agents kept the Mac busy, and each of the 11 sent again went through. So a
+// read left unanswered is asked once more, and the call is judged on the second answer exactly as it
+// would have been on the first. Only a read, which changes nothing however often it is asked, and
+// only that failure: any other failure refuses the call at once as before, and a second silence
+// refuses it saying the read was asked twice, so the two can be counted apart.
+const UNANSWERED = /\bdid not answer within \d+ ?ms\b/
+const twice = async <T>(ask: () => Promise<T>): Promise<T> => {
+  try {
+    return await ask()
+  } catch (err) {
+    if (!UNANSWERED.test(errorText(err, 'collision-guard'))) throw err
+  }
+  try {
+    return await ask()
+  } catch (err) {
+    const why = errorText(err, 'collision-guard')
+    throw UNANSWERED.test(why) ? new Error(`${why}, and again when asked a second time`) : err
+  }
+}
+// The session list, the one read every judgement here starts from.
+const sessionsNow = ($: EngineInterface) => twice(() => $.sessions.list())
+
 type Clash = {
   // What this session is about to do, as the judge and the message read it.
   action: string
@@ -149,7 +175,7 @@ type Reading = Awaited<ReturnType<EngineInterface['modkit']['writes']>>
 const readWrites = async ($: EngineInterface, command: string): Promise<Reading> => {
   const cwd = await $.session.cwd()
   const home = (await $.env.get('HOME').catch(() => undefined)) ?? ''
-  return $.modkit.writes({ command, cwd, home })
+  return twice(() => $.modkit.writes({ command, cwd, home }))
 }
 
 // How a toast and a message name a command: its words, cut where they run long.
@@ -232,7 +258,7 @@ const check = async ($: EngineInterface, input: Record<string, unknown>): Promis
   if (WRITERS.has(String(input.tool))) {
     const path = String(input.file_path ?? input.notebook_path ?? '')
     if (!path) return undefined
-    const list = await $.sessions.list()
+    const list = await sessionsNow($)
     if (list.unreadable.length) return unreadableRefusal($, toolUseId, list.unreadable)
     const others = othersEditing(list.open, list.selfId, path)
     if (others.length) {
@@ -244,20 +270,20 @@ const check = async ($: EngineInterface, input: Record<string, unknown>): Promis
   }
 
   const command = String(input.command ?? '')
-  const cmds = await $.modkit.commands({ command })
+  const cmds = await twice(() => $.modkit.commands({ command }))
   // Each command with the settings written in front of it, the folder a cd before it leaves the
   // shell in and what a variable the call itself sets holds (#3398), asked of mod-kit once and only
   // for a call holding a watched git command.
   let placed: { words: string[]; env?: string[]; followed?: (string | null)[]; folder: string | null }[] | undefined
   for (const [i, words] of cmds.entries()) {
-    const g = await $.modkit.git({ words })
+    const g = await twice(() => $.modkit.git({ words }))
     const action = g ? watchedGit(g) : undefined
     if (!g || !action) continue
     const cwd = await $.session.cwd()
     // The folder the guard always asked about: the last -C read from the session's folder, else
     // that folder. It is still asked first, so every command judged before #3398 is judged as it was.
     const root = (await run($, ['git', '-C', g.dir ?? cwd, 'rev-parse', '--show-toplevel']))?.trim() || null
-    const list = await $.sessions.list()
+    const list = await sessionsNow($)
     if (list.unreadable.length) return unreadableRefusal($, toolUseId, list.unreadable)
     const roots: string[] = root ? [root] : []
     let untold: { why: string; way: string } | undefined
@@ -268,7 +294,7 @@ const check = async ($: EngineInterface, input: Record<string, unknown>): Promis
     // nothing more is asked: there is no one for the command to collide with.
     if (list.open.some(r => r.sessionId !== list.selfId)) {
       const home = (await $.env.get('HOME').catch(() => undefined)) ?? ''
-      placed ??= (await $.modkit.pipeline({ command, cwd, home, follow: true })) as NonNullable<typeof placed>
+      placed ??= (await twice(() => $.modkit.pipeline({ command, cwd, home, follow: true }))) as NonNullable<typeof placed>
       // The same command by its place in the line, or none: its folder is then one that cannot be followed.
       const at = placed[i]
       const c = at && at.words.length === words.length && at.words.every((w, k) => w === words[k]) ? at : undefined
@@ -276,7 +302,7 @@ const check = async ($: EngineInterface, input: Record<string, unknown>): Promis
       // 2026-11-22: "Follow the variable first"), or none where mod-kit's reader followed nothing:
       // the command is then read as typed, and a folder the shell fills in is one the guard cannot tell.
       const read = c ? followedFolders(words, c.followed, g) : undefined
-      const named = read || c?.env?.length ? ((await $.modkit.git({ words: read ?? words, ...(c?.env?.length ? { env: [...c.env] } : {}) })) ?? g) : g
+      const named = read || c?.env?.length ? ((await twice(() => $.modkit.git({ words: read ?? words, ...(c?.env?.length ? { env: [...c.env] } : {}) }))) ?? g) : g
       const where = whereGit(named, c ? c.folder : null, cwd, home, command)
       const add = (found: string | undefined) => {
         const top = found?.trim()
@@ -346,7 +372,7 @@ const check = async ($: EngineInterface, input: Record<string, unknown>): Promis
   // it writes is not known, so nothing is noted as this session's edit.
   const unread = read.unread ?? []
   if (unread.length) {
-    const list = await $.sessions.list()
+    const list = await sessionsNow($)
     if (list.unreadable.length) return unreadableRefusal($, toolUseId, list.unreadable)
     const cwd = await $.session.cwd()
     const byRoot = new Map<string, typeof unread>()
@@ -372,7 +398,7 @@ const check = async ($: EngineInterface, input: Record<string, unknown>): Promis
   }
   const written = await writtenFiles($, read)
   if (!written.length) return undefined
-  const list = await $.sessions.list()
+  const list = await sessionsNow($)
   if (list.unreadable.length) return unreadableRefusal($, toolUseId, list.unreadable)
   for (const w of written) {
     const files = w.tree ? editedUnder(list.open, list.selfId, w.path) : [w.path]
