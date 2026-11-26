@@ -947,10 +947,13 @@ RUN_NAME = (r"(?<![A-Za-z0-9_])(?:system|popen|Popen|exec[A-Za-z]*|spawn[A-Za-z]
 # A shell named as the first word of a list, with its -c: the word after is its command string.
 SHELL_LIST = r"[\"\x27](?:[^\"\x27\s]*/)?(?:ba|z|da|k)?sh[\"\x27]\s*,\s*\[?\s*[\"\x27]-[a-z]*c[\"\x27]\s*,\s*"
 # A string of up to STRING_CHARS characters, so that a quote that never closes costs each call that
-# opens one a bounded search, never the rest of a long command.
+# opens one a bounded search, never the rest of a long command. In the string, a backslash is only
+# ever read together with the character after it, and anything else alone: were a backslash also
+# readable alone, a run of them before a quote that never closes could be read in a number of ways
+# that doubles every two characters, and the search would never end.
 STRING_CHARS = 4000
 RUN_STRING = re.compile(r"(?:" + RUN_NAME + r"\s*(\(?)\s*|" + SHELL_LIST + r")([rbuRBUfF]{0,2})" + QUOTE
-                        + r"((?:\\.|(?!\3).){0,%d}?)\3\s*(\.format\b|[+%%.])?" % STRING_CHARS, re.S)
+                        + r"((?:\\.|(?!\3)[^\\]){0,%d}?)\3\s*(\.format\b|[+%%.])?" % STRING_CHARS, re.S)
 # perl, ruby and php run a command written in backquotes, or after qx or %x. Read only in a command
 # that runs one of them on an inline script, never wherever the word appears: a template string in
 # node is written in backquotes too, and so is Markdown.
@@ -1206,7 +1209,20 @@ FILE_MAX = 4 * 1024 * 1024
 FILES_MAX = 8
 MAYBE_MAX = 256
 INTERPRETER = re.compile(r"(?:python[0-9.]*|perl|ruby|node|nodejs|php|deno|bun)\Z")
-INTERPRETER_VALUED = {"-W", "-X", "-I", "-M", "-x", "--require", "--import", "--loader"}
+# The options each interpreter takes before its script file, since they differ: -I takes a folder
+# in perl and ruby and nothing in python, and -c is an inline script in python, a check in node and
+# a settings file in php. For each: the letters that end the options with an inline script or with
+# no script file at all, the letters whose value is the rest of the word or else the next word, the
+# letters whose value is the rest of the word alone, the long options that take the next word, and
+# the long options that mean no script file is run.
+INTERPRETER_OPTIONS = {
+    "python": ("cm", "WX", "", ("--check-hash-based-pycs",), ()),
+    "perl": ("eE", "I", "MmiFCDxV", (), ()),
+    "ruby": ("e", "IrCE", "FixKTW", ("--encoding", "--external-encoding", "--internal-encoding"), ()),
+    "node": ("epic", "r", "", ("--require", "--import", "--loader", "--experimental-loader", "--env-file", "--conditions"),
+             ("--eval", "--print", "--check", "--interactive", "--test")),
+    "php": ("rRBEaS", "dcz", "", ("--define", "--php-ini"), ("--run", "--interactive", "--server")),
+}
 BARE_LINK = r"(?<![A-Za-z0-9_.])(?:sym)?link\s+[\"\x27$@]"
 
 def add_placed(tok, base):
@@ -1229,16 +1245,41 @@ def interpreter_file(text):
     head = words[0].rsplit("/", 1)[-1]
     if not INTERPRETER.match(head):
         return None
+    kind = "python" if head.startswith("python") else "node" if head == "nodejs" else head
+    ends, valued, glued, longs_valued, longs_end = INTERPRETER_OPTIONS.get(kind, ("", "", "", (), ()))
     k = 1
+    if kind in ("deno", "bun"):
+        # Their script follows the word run; any other first word is a command of the tool itself.
+        if len(words) > 1 and not words[1].startswith("-") and "/" not in words[1] and "." not in words[1]:
+            if words[1] != "run":
+                return None
+            k = 2
     while k < len(words):
         w = words[k]
         if _sw.REDIRECT_WORD.match(w):
             return None
+        if w == "-" or w in ("--version", "--help") or w in longs_end:
+            return None
+        if w.startswith("--"):
+            k += 2 if w in longs_valued else 1
+            continue
         if w.startswith("-"):
-            if w in ("-", "-m", "-p", "--eval", "--print") or re.match(r"-[A-Za-z0-9]*[ce]", w) \
-                    or (w.startswith("-r") and head == "php"):
-                return None
-            k += 2 if (w in INTERPRETER_VALUED or (w == "-r" and head != "php")) else 1
+            # A word of one letter options, read a letter at a time as the interpreter reads it: a
+            # letter that ends them with an inline script or no script at all, one whose value is the
+            # rest of the word or the next word, one whose value is the rest of the word alone.
+            step = 1
+            for j, c in enumerate(w[1:], 1):
+                if c == "f" and kind == "php":
+                    rest = w[j + 1:]
+                    return (head, rest) if rest else ((head, words[k + 1]) if k + 1 < len(words) else None)
+                if c in ends:
+                    return None
+                if c in valued:
+                    step = 1 if w[j + 1:] else 2
+                    break
+                if c in glued:
+                    break
+            k += step
             continue
         return head, w
     return None

@@ -278,6 +278,30 @@ runbash "$(many_strings 257)" "$FIX/dev"
 refused "#3689 one holding 257 is refused, so the loop stops at its count"
 says "#3689 in words that name the count" "more than 256 command strings"
 
+# A quote that never closes, after a run of backslashes, is read in a time that does not grow with
+# the run. Each backslash could be read alone or with the character after it, so the search for the
+# closing quote tried every way of reading the run and never ended. The gate is given a time to
+# answer in, and its whole process group is stopped when it does not, so nothing is left running.
+runbash_within(){ # runbash_within <seconds> <command> <cwd>: RC is 124 when the gate gave no answer in that time
+  OUT="$(env SYNC_WATCH_PID_FILE="$PIDF" SYNC_HOLD_FILE="$HOLD" PAYLOAD_WRITE_STATE_DIR="$FIX/state" python3 -c '
+import json, os, signal, subprocess, sys
+p = json.dumps({"tool_name": "Bash", "session_id": "", "cwd": sys.argv[3], "tool_input": {"command": sys.argv[2]}})
+proc = subprocess.Popen(["bash", sys.argv[4]], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
+try:
+    out, _ = proc.communicate(p.encode(), timeout=float(sys.argv[1]))
+    sys.stdout.write(out.decode("utf-8", "replace"))
+    sys.exit(proc.returncode)
+except subprocess.TimeoutExpired:
+    os.killpg(proc.pid, signal.SIGKILL)
+    proc.wait()
+    sys.exit(124)
+' "$1" "$2" "$3" "$HOOK" 2>&1)"; RC=$?
+}
+UNCLOSED="$(python3 -c 'print("python3 -c \"import os; os.system(\x27" + "\\\\" * 64 + " payload/x\"")')"
+runbash_within 60 "$UNCLOSED" "$FIX/dev"
+if [ "$RC" -ne 124 ]; then check "#3689 a quote that never closes after 128 backslashes is answered within 60 seconds" ok
+else check "#3689 a quote that never closes after 128 backslashes is answered within 60 seconds" "no answer in 60 seconds"; fi
+
 # And the loop over the script files of one command.
 for k in 1 2 3 4 5 6 7 8 9; do printf 'print(%s)\n' "$k" > "$FIX/scripts/n$k.py"; done
 many_files(){ local k out=""; for k in $(seq 1 "$1"); do out="$out python3 $FIX/scripts/n$k.py;"; done; printf '%s : payload/' "$out"; }
@@ -319,6 +343,24 @@ runbash "perl $FIX/scripts/mk.pl" "$FIX/elsewhere"
 refused "#3689 a perl script file that links a payload file"
 runbash "node $FIX/scripts/mk.js" "$FIX/elsewhere"
 refused "#3689 a node script file that links a payload file"
+# The options before the script file are read as each interpreter reads them: -I takes nothing in
+# python, and a value glued to its option (-Werror, -Xdev) holds letters that are options elsewhere.
+runbash "python3 -I $FIX/scripts/mk.py" "$FIX/elsewhere"
+refused "#3689 a python script file after an option that takes no value in python"
+runbash "python3 -Werror $FIX/scripts/mk.py" "$FIX/elsewhere"
+refused "#3689 a python script file after an option with its value glued on"
+runbash "python3 -Xdev -u $FIX/scripts/mk.py" "$FIX/elsewhere"
+refused "#3689 and after another such option"
+runbash "python3 -W error -X dev $FIX/scripts/mk.py" "$FIX/elsewhere"
+refused "#3689 and after options whose values are words of their own"
+runbash "perl -I $FIX/scripts -w $FIX/scripts/mk.pl" "$FIX/elsewhere"
+refused "#3689 a perl script file after an option that takes a folder in perl"
+runbash "node --require $FIX/scripts/n1.py $FIX/scripts/mk.js" "$FIX/elsewhere"
+refused "#3689 a node script file after an option that takes a module"
+runbash "python3 -Bc 'print(1)' $FIX/scripts/mk.py" "$FIX/elsewhere"
+allowed "#3689 control: a script file named after an inline script is that script's argument, not run"
+runbash "perl -lne 'print' $FIX/scripts/mk.pl" "$FIX/elsewhere"
+allowed "#3689 control: so is one after a perl inline script"
 runbash "bash $FIX/scripts/plain.sh" "$FIX/elsewhere"
 allowed "#3689 control: a script file linking two files outside any checkout is let through"
 runbash "python3 $FIX/scripts/reads.py" "$FIX/elsewhere"
