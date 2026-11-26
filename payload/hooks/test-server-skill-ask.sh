@@ -35,8 +35,8 @@ set -uo pipefail
 suite_deadline_arm || exit $?
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# SERVER_SKILL_ASK_HOOK names another hook to run the same cases against, which is how the suite was
-# seen to fail against one that passes every call.
+# SERVER_SKILL_ASK_HOOK names another hook to run the same cases against, so a stand in that decides
+# differently can be seen to fail them.
 HOOK="${SERVER_SKILL_ASK_HOOK:-$DIR/server-skill-ask.sh}"
 . "$DIR/lib/settings-file.sh" 2>/dev/null || { echo "FAIL: lib/settings-file.sh is missing beside this suite"; printf 'SUITE-RESULT passed=0 failed=1\n'; exit 1; }
 SETTINGS="$(hook_settings_file "$DIR/..")" || SETTINGS=""
