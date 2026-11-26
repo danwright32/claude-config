@@ -1324,16 +1324,36 @@ check "unasked never replaces an answer the description already carries" "$([[ "
 $NO_LINE|" ]] && echo ok || echo "$r")"
 r="$(milestone_line "$WORK/store-d-none" maybe "Hand back" "")"
 check "any other value is refused, naming the three" "$([[ "$r" == "no|||"*'"yes", "no" or "unasked"'* ]] && echo ok || echo "$r")"
+# The helper writes the description it is handed back into the milestone, so one read short or not
+# at all is refused in its own words, never cut or taken as empty. The library reads 2097152 bytes
+# (WORDING_BYTES * 8) of a file at most.
+# line_for_file <file>: the helper's question about the description in that file, as
+# "<ok>|<how long the description handed back is>|<why>".
+line_for_file() {
+  ANNOUNCE_APPROVALS_DIR="$WORK/store-d-none" python3 -B "$LIB" milestone-line --repo acme/widget --feature "Hand back" --answer unasked --description-file "$1" </dev/null \
+    | python3 -c 'import json, sys
+d = json.load(sys.stdin)
+print(("yes" if d["ok"] is True else "no") + "|" + str(len(d["description"])) + "|" + d["why"], end="")'
+}
+head -c 2097152 /dev/zero | tr '\0' 'a' > "$WORK/description-whole.txt"
+head -c 2097153 /dev/zero | tr '\0' 'a' > "$WORK/description-long.txt"
+r="$(line_for_file "$WORK/description-whole.txt")"
+check "a description as long as the library reads is taken whole, with the line after it" "$([[ "$r" == "yes|2097187|" ]] && echo ok || echo "${r:0:300}")"
+r="$(line_for_file "$WORK/description-long.txt")"
+check "one a byte longer is refused, never cut and handed back short" "$([[ "$r" == "no|0|"*"larger than 2048 KB"* ]] && echo ok || echo "${r:0:300}")"
+r="$(line_for_file "$WORK/no-such-description.txt")"
+check "a description file that cannot be opened is refused, never taken as an empty description" "$([[ "$r" == "no|0|"*"could not be opened"* ]] && echo ok || echo "${r:0:300}")"
 
 echo "the pull request that finishes a feature Dan said yes to announcing (#3669)"
 # finishes <store> <GitHub's answer> [transcript]: the merge gate's question about pull request 7, as
-# "<state>|<why> <how>". With a transcript it is asked as a hook asks, in session s1.
+# "<state>|<why> <how>". With a transcript it is asked as a hook asks, in session s1. UNMERGED is the
+# pull requests the gate names when it asks again, GitHub having said they have not merged.
 finishes() {
   local a="$WORK/answer.json"; printf '%s' "$2" > "$a"
   if [ -n "${3:-}" ]; then
-    printf '{"session_id": "s1", "transcript_path": "%s"}' "$3" | ANNOUNCE_APPROVALS_DIR="$1" python3 -B "$LIB" finishes --repo acme/widget --pr 7 --answer-file "$a" --hook
+    printf '{"session_id": "s1", "transcript_path": "%s"}' "$3" | ANNOUNCE_APPROVALS_DIR="$1" python3 -B "$LIB" finishes --repo acme/widget --pr 7 --answer-file "$a" --hook ${UNMERGED:+--unmerged "$UNMERGED"}
   else
-    ANNOUNCE_APPROVALS_DIR="$1" python3 -B "$LIB" finishes --repo acme/widget --pr 7 --answer-file "$a" </dev/null
+    ANNOUNCE_APPROVALS_DIR="$1" python3 -B "$LIB" finishes --repo acme/widget --pr 7 --answer-file "$a" ${UNMERGED:+--unmerged "$UNMERGED"} </dev/null
   fi | python3 -c 'import json, sys
 d = json.load(sys.stdin)
 print(d["state"] + "|" + d["why"] + " " + d["how"], end="")'
@@ -1372,6 +1392,18 @@ check "still possible: once an announcement merged for that milestone, its last 
 OTHERM="$WORK/store-f-otherm"; mkdir -p "$OTHERM"
 printf '{"kind": "used", "repo": "acme/widget", "hash": "%064d", "pr": 5, "closes": [{"issue": 11, "repo": "acme/widget", "milestone": "Hand over", "milestone_number": 29}], "at": "2026-11-21T00:00:00Z"}\n' 0 > "$OTHERM/record.jsonl"
 check "R9 an announcement merged for another milestone does not cover this one" "$([[ "$(finishes "$OTHERM" "$(closing "$SAYS_YES" "12" "12")")" == "owed|"* ]] && echo ok || echo no)"
+# A `used` line says the gate let a pull request through, never that GitHub merged it. The gate asks
+# GitHub, and asks this again naming the ones that have not merged: their lines cover nothing.
+r="$(UNMERGED=5 finishes "$ANNOUNCED" "$(closing "$SAYS_YES" "12" "12")")"
+check "R9 an announcement let through that GitHub says has not merged covers nothing" "$([[ "$r" == "owed|"* ]] && echo ok || echo "$r")"
+check "R9 and the refusal names that pull request and says it has not merged" "$([[ "$r" == *"holds pull request 5 as let through"*"GitHub says it has not merged"* ]] && echo ok || echo "$r")"
+check "still possible: naming a pull request the record does not hold for that milestone takes nothing away" "$([[ "$(UNMERGED=6 finishes "$ANNOUNCED" "$(closing "$SAYS_YES" "12" "12")")" == "clear|"* ]] && echo ok || echo no)"
+check "R9 what is no number among them is passed over, and the number beside it still counts" "$([[ "$(UNMERGED=x,5 finishes "$ANNOUNCED" "$(closing "$SAYS_YES" "12" "12")")" == "owed|"* ]] && echo ok || echo no)"
+TWICE="$WORK/store-f-twice"; mkdir -p "$TWICE"
+printf '{"kind": "used", "repo": "acme/widget", "hash": "%064d", "pr": 5, "closes": [{"issue": 11, "repo": "acme/widget", "milestone": "Hand back", "milestone_number": 28}], "at": "2026-11-21T00:00:00Z"}\n{"kind": "used", "repo": "acme/widget", "hash": "%064d", "pr": 6, "closes": [{"issue": 10, "repo": "acme/widget", "milestone": "Hand back", "milestone_number": 28}], "at": "2026-11-22T00:00:00Z"}\n' 0 1 > "$TWICE/record.jsonl"
+check "still possible: of two let through, one that merged covers the milestone" "$([[ "$(UNMERGED=5 finishes "$TWICE" "$(closing "$SAYS_YES" "12" "12")")" == "clear|"* ]] && echo ok || echo no)"
+r="$(UNMERGED=5,6 finishes "$TWICE" "$(closing "$SAYS_YES" "12" "12")")"
+check "R9 two let through and neither merged covers nothing, and the refusal names both" "$([[ "$r" == "owed|"*"pull requests 5 and 6 as let through"*"GitHub says none of them has merged, so nothing was announced"* ]] && echo ok || echo "$r")"
 # His answer at the merge: only a Not announcing naming this milestone clears it.
 check "still possible: his Not announcing, naming the milestone, lets it finish under any label" "$([[ "$(finishes "$WORK/store-d-milestone" "$(closing "$SAYS_YES" "12" "12")")" == "clear|"* ]] && echo ok || echo no)"
 check "R9 a Not announcing that names no milestone does not" "$([[ "$(finishes "$WORK/store-d-typed" "$(closing "$SAYS_YES" "12" "12")")" == "owed|"* ]] && echo ok || echo no)"
@@ -1394,6 +1426,16 @@ for bad in '' '{}' '{"data":{"repository":{"pullRequest":null}}}' \
   r="$(finishes "$EMPTY" "$bad")"
   check "R9 an answer of GitHub's that cannot be read is unread, never clear [${bad:0:60}]" "$([[ "$r" == "unread|"* ]] && echo ok || echo "$r")"
 done
+# finishes_file <file>: the same question with GitHub's answer in that file, as "<state>|<why>".
+finishes_file() {
+  ANNOUNCE_APPROVALS_DIR="$EMPTY" python3 -B "$LIB" finishes --repo acme/widget --pr 7 --answer-file "$1" </dev/null | python3 -c 'import json, sys
+d = json.load(sys.stdin)
+print(d["state"] + "|" + d["why"], end="")'
+}
+r="$(finishes_file "$WORK/description-long.txt")"
+check "R9 an answer longer than the library reads is unread, saying so, never cut and judged short" "$([[ "$r" == "unread|"*"larger than 2048 KB"* ]] && echo ok || echo "${r:0:300}")"
+r="$(finishes_file "$WORK/no-such-answer.json")"
+check "R9 an answer file that cannot be opened is unread, saying so" "$([[ "$r" == "unread|"*"could not be opened"* ]] && echo ok || echo "${r:0:300}")"
 check "an issue in another repository is not this repository's milestone" "$([[ "$(finishes "$EMPTY" "$(closing "$SAYS_YES" "12" "12" | sed 's#acme/widget#acme/other#')")" == "clear|"* ]] && echo ok || echo no)"
 JUNK="$WORK/store-f-junk"; mkdir -p "$JUNK/record.jsonl"
 check "R9 a record that cannot be read is unread, never clear" "$([[ "$(finishes "$JUNK" "$(closing "$SAYS_YES" "12" "12")")" == "unread|"* ]] && echo ok || echo no)"

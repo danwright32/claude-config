@@ -79,7 +79,23 @@ make_repo() {  # $1 = owner/name ; $2 = pr view json ; $3 = registry json, or MI
 case "$*" in
   *"auth status"*) printf 'Logged in to github.com account danwright32 (keyring)\n' ;;
   *"auth token -u "*) printf 'tok\n' ;;
+  # Another pull request, which the gate asks GitHub about by number (claude-config#3669): one the
+  # record holds as let through with an announcement. No answer unless a case gives one.
+  *"pr view 5 "*|*"pr view 5")
+    if [ -n "${FAKE_PR5_JSON:-}" ]; then printf '%s\n' "$FAKE_PR5_JSON"; else printf 'HTTP 502: bad gateway\n' >&2; exit 1; fi ;;
   *"pr view"*) cat "$FAKE_PR_JSON" ;;
+  # The issues a pull request closes, each with its milestone (claude-config#3666, #3669). GitHub's
+  # ordinary answer is that it closes none, so that is what a case that says nothing gets:
+  # FAKE_CLOSING_JSON gives another answer (empty for none at all), FAKE_CLOSING_FAIL a failure.
+  *"api graphql"*closingIssuesReferences*)
+    if [ -n "${FAKE_CLOSING_FAIL:-}" ]; then printf '%s\n' "$FAKE_CLOSING_FAIL" >&2; exit 1; fi
+    if [ -n "${FAKE_CLOSING_JSON+set}" ]; then printf '%s\n' "$FAKE_CLOSING_JSON"
+    else
+      case "${FAKE_NODE_JSON:-}" in
+        *closingIssuesReferences*) printf '%s\n' "$FAKE_NODE_JSON" ;;
+        *) printf '%s\n' '{"data":{"repository":{"pullRequest":{"closingIssuesReferences":{"totalCount":0,"nodes":[]}}}}}' ;;
+      esac
+    fi ;;
   # Which pull request a GraphQL merge's node is (claude-config#1181).
   *"api graphql"*)
     if [ -n "${FAKE_NODE_FAIL:-}" ]; then printf '%s\n' "$FAKE_NODE_FAIL" >&2; exit 1; fi
@@ -1364,13 +1380,23 @@ if owes_draft "$out" 7; then pass; else fail "#3666 R2 still possible: a later s
 # A merged announcement's wording is marked used, with each issue it closes and its milestone, for
 # the later check that a feature Dan said yes to announcing does not finish under another label.
 used_line() { grep '"kind": "used"' "$1/approvals/record.jsonl" 2>/dev/null | tail -1; }
-if says "$(used_line "$dir")" '"pr": 7' && says "$(used_line "$dir")" '"closes": null' && says "$(used_line "$dir")" '"unread"'; then pass
-else fail "#3666 a merge whose closing issues GitHub did not give was not marked used with them unread: $(cat "$dir/approvals/record.jsonl" 2>/dev/null)"; fi
-CLOSING='{"data":{"repository":{"pullRequest":{"closingIssuesReferences":{"nodes":[{"number":12,"repository":{"nameWithOwner":"acme/widget"},"milestone":{"title":"Hand back"}},{"number":13,"repository":{"nameWithOwner":"acme/widget"},"milestone":null}]}}}}}'
-out=$(FAKE_NODE_JSON="$CLOSING" run_hook "$dir" "$MERGE 7 --squash" 2>/dev/null)
+# In a fixture of its own (claude-config#3669): the merges above were answered that the pull request
+# closes no issue, which is a reading, and an unread line never follows a read one.
+cdir=$(make_repo acme/widget "$ANNOUNCE_FULL" "$REGISTRY_ANNOUNCES")
+approved_on_record "$cdir"
+out=$(FAKE_CLOSING_JSON="" run_hook "$cdir" "$MERGE 7 --squash" 2>/dev/null)
+if owes_draft "$out" 7 && says "$(used_line "$cdir")" '"pr": 7' && says "$(used_line "$cdir")" '"closes": null' && says "$(used_line "$cdir")" '"unread"'; then pass
+else fail "#3666 a merge whose closing issues GitHub did not give was not marked used with them unread: $out $(cat "$cdir/approvals/record.jsonl" 2>/dev/null)"; fi
+CLOSING='{"data":{"repository":{"pullRequest":{"closingIssuesReferences":{"totalCount":2,"nodes":[{"number":12,"repository":{"nameWithOwner":"acme/widget"},"milestone":{"number":28,"title":"Hand back","description":"","issues":{"totalCount":1,"nodes":[{"number":12}]}}},{"number":13,"repository":{"nameWithOwner":"acme/widget"},"milestone":null}]}}}}}'
+out=$(FAKE_NODE_JSON="$CLOSING" run_hook "$cdir" "$MERGE 7 --squash" 2>/dev/null)
 if owes_draft "$out" 7; then pass; else fail "#3666 the merge was refused, or said something other than the one line about the draft it owes (#3667), once its closing issues could be read: $out"; fi
-if says "$(used_line "$dir")" '"issue": 12' && says "$(used_line "$dir")" '"milestone": "Hand back"' && says "$(used_line "$dir")" '"issue": 13' && says "$(used_line "$dir")" '"milestone": null'; then pass
-else fail "#3666 the used line does not name each issue the pull request closes with its milestone: $(used_line "$dir")"; fi
+if says "$(used_line "$cdir")" '"issue": 12' && says "$(used_line "$cdir")" '"milestone": "Hand back"' && says "$(used_line "$cdir")" '"issue": 13' && says "$(used_line "$cdir")" '"milestone": null'; then pass
+else fail "#3666 the used line does not name each issue the pull request closes with its milestone: $(used_line "$cdir")"; fi
+# The milestone's number goes beside its title (claude-config#3669), which is what the check that a
+# feature Dan said yes to announcing does not finish under another label finds it by.
+if says "$(used_line "$cdir")" '"milestone_number": 28'; then pass
+else fail "#3669 the used line does not carry the milestone's number: $(used_line "$cdir")"; fi
+rm -rf "$cdir"
 
 # ONE APPROVAL COVERS ONE PULL REQUEST (Dan, 2026-11-25, by picker: "One approval, one pull
 # request"). Pull request 7 used his approval above. Pull request 8, carrying the same wording, is
@@ -1558,6 +1584,196 @@ rm -rf "$dir"
 dir=$(make_repo acme/widget "$ANNOUNCE_FULL" "$REGISTRY_ANNOUNCES")
 out=$(run_hook "$dir" "$MERGE 7 --squash" 2>/dev/null)
 if denied "$out" && ! says "$out" "owes agents its announcement"; then pass; else fail "#3667 a refused announce merge was let through, or was told of a draft it owes before it merged: $out"; fi
+rm -rf "$dir"
+
+# ------------------------------------------------- R9: a yes cannot be dropped (claude-config#3669)
+#
+# R9. The pull request that finishes a feature Dan said yes to announcing never merges under another
+# label unless Dan declined in a picker. Still possible: a feature he said no to, or was never asked
+# about, finishes under any label.
+#
+# The gate reads the issues the pull request closes, each with its milestone's description and open
+# issues, in the one GraphQL read the announce path already made. Only a repository whose registry
+# entry names an announcements channel is read at all.
+echo "changelog record: a feature Dan said yes to announcing does not finish under another label (#3669)"
+VISIBLE_OK="$(pr_json changelog/visible "$A_SENTENCE")"
+# closing_json <description> <open issues> <closed by this pull request>: GitHub's answer for a pull
+# request closing those issues of milestone 28, "Hand back", which has those issues open.
+closing_json() {
+  python3 -c 'import json, sys
+desc, still, closes = sys.argv[1], [int(n) for n in sys.argv[2].split()], [int(n) for n in sys.argv[3].split()]
+m = {"number": 28, "title": "Hand back", "description": desc, "issues": {"totalCount": len(still), "nodes": [{"number": n} for n in still]}}
+nodes = [{"number": n, "repository": {"nameWithOwner": "acme/widget"}, "milestone": m} for n in closes]
+print(json.dumps({"data": {"repository": {"pullRequest": {"closingIssuesReferences": {"totalCount": len(nodes), "nodes": nodes}}}}}), end="")' "$@"
+}
+SAYS_YES='Rework the hand back.
+
+Announce to agents: yes (Dan answered "Announce it" on 2026-11-20)'
+FINISHES_YES="$(closing_json "$SAYS_YES" "12" "12")"
+# yes_dropped <hook output>: the refusal of a pull request finishing a feature he said yes to, with
+# both ways on and no override offered.
+yes_dropped() {
+  denied "$1" && says "$1" 'last open issue of the milestone \"Hand back\"' && says "$1" "changelog/announce" \
+    && says "$1" "Not announcing" && says "$1" 'milestone\": 28' && says "$1" "ALLOW_UNTAGGED_MERGE=1 does not clear this" \
+    && ! says "$1" "Deliberate override"
+}
+# untouched <hook output> <fixture dir>: an ordinary allow, with nothing said and nothing recorded.
+untouched() { [ -z "$1" ] && [ ! -e "$2/approvals/record.jsonl" ]; }
+
+# The rule, under each of the other labels, with and without the override.
+for other in "$VISIBLE_OK" "$TECHNICAL" "$NONE_LBL"; do
+  dir=$(make_repo acme/widget "$other" "$REGISTRY_ANNOUNCES")
+  out=$(FAKE_CLOSING_JSON="$FINISHES_YES" run_hook "$dir" "$MERGE 7 --squash" 2>/dev/null)
+  if yes_dropped "$out"; then pass; else fail "#3669 R9: a pull request closing the last open issue of a milestone that says yes merged under another label, or its refusal does not name the milestone and both ways on [$(printf '%s' "$other" | jq -r '.labels[0].name')]: $out"; fi
+  out=$(FAKE_CLOSING_JSON="$FINISHES_YES" run_hook "$dir" "$OVERRIDDEN" 2>/dev/null)
+  if yes_dropped "$out"; then pass; else fail "#3669 R9: the override let a pull request that finishes a feature he said yes to merge under another label [$(printf '%s' "$other" | jq -r '.labels[0].name')]: $out"; fi
+  rm -rf "$dir"
+done
+# No record of its own, and the override typed: the override covers the record, never R9.
+dir=$(make_repo acme/widget "$UNTAGGED" "$REGISTRY_ANNOUNCES")
+out=$(FAKE_CLOSING_JSON="$FINISHES_YES" run_hook "$dir" "$OVERRIDDEN" 2>/dev/null)
+if yes_dropped "$out"; then pass; else fail "#3669 R9: the override let an untagged pull request that finishes a feature he said yes to merge: $out"; fi
+rm -rf "$dir"
+# One the dependency bot opened is no exception.
+dir=$(make_repo acme/widget "$DEPENDABOT" "$REGISTRY_ANNOUNCES")
+out=$(FAKE_CLOSING_JSON="$FINISHES_YES" run_hook "$dir" "$MERGE 7 --squash" 2>/dev/null)
+if yes_dropped "$out"; then pass; else fail "#3669 R9: a pull request the dependency bot opened, finishing a feature he said yes to, merged unjudged: $out"; fi
+rm -rf "$dir"
+
+# Ordinary merges are untouched: each merges exactly as before, with nothing said and nothing recorded.
+dir=$(make_repo acme/widget "$VISIBLE_OK" "$REGISTRY_ANNOUNCES")
+out=$(run_hook "$dir" "$MERGE 7 --squash" 2>&1)
+if untouched "$out" "$dir"; then pass; else fail "#3669 a pull request that closes no issue did not merge as before where the repository announces: $out"; fi
+out=$(FAKE_CLOSING_JSON="$(closing_json "$SAYS_YES" "12 13" "12")" run_hook "$dir" "$MERGE 7 --squash" 2>&1)
+if untouched "$out" "$dir"; then pass; else fail "#3669 a pull request that leaves an issue of the milestone open did not merge as before: $out"; fi
+for said in 'Rework.
+
+Announce to agents: no (Dan answered "Not announcing" on 2026-11-20)' 'Rework.
+
+Announce to agents: not asked yet' 'Rework the hand back.'; do
+  out=$(FAKE_CLOSING_JSON="$(closing_json "$said" "12" "12")" run_hook "$dir" "$MERGE 7 --squash" 2>&1)
+  if untouched "$out" "$dir"; then pass; else fail "#3669 R9 still possible: a pull request finishing a milestone that says no, not asked, or nothing did not merge as before [${said##*$'\n'}]: $out"; fi
+done
+out=$(FAKE_CLOSING_JSON="$(closing_json "$SAYS_YES" "12" "12")" run_hook "$dir" "$OVERRIDDEN" 2>&1)
+if denied "$out"; then pass; else fail "#3669 R9 (the control for the next case): the same answer is refused where the repository announces: $out"; fi
+rm -rf "$dir"
+# A repository that does not announce is not read at all: the same answer changes nothing there.
+for reg in "$REGISTRY" "$REGISTRY_MANAGERS_ONLY"; do
+  dir=$(make_repo acme/widget "$VISIBLE_OK" "$reg")
+  out=$(FAKE_CLOSING_JSON="$FINISHES_YES" run_hook "$dir" "$MERGE 7 --squash" 2>&1)
+  if untouched "$out" "$dir"; then pass; else fail "#3669 a pull request in a repository that does not announce did not merge as before: $out"; fi
+  out=$(FAKE_CLOSING_FAIL="HTTP 502: bad gateway" run_hook "$dir" "$MERGE 7 --squash" 2>&1)
+  if untouched "$out" "$dir"; then pass; else fail "#3669 a repository that does not announce was asked which issues the pull request closes: $out"; fi
+  rm -rf "$dir"
+done
+
+# Unless Dan declined in a picker: his Not announcing, in a picker naming the milestone, clears it.
+dir=$(make_repo acme/widget "$VISIBLE_OK" "$REGISTRY_ANNOUNCES")
+aaf_new "$dir/talk.jsonl"
+aaf_talk "$dir/talk.jsonl" decide acme/widget "Hand back" "Announce it" "" "" 28
+out=$(TALK="$dir/talk.jsonl" FAKE_CLOSING_JSON="$FINISHES_YES" run_hook "$dir" "$MERGE 7 --squash" 2>/dev/null)
+if yes_dropped "$out" && says "$out" "he answered \`Announce it\`"; then pass; else fail "#3669 R9: asked whether it is still being announced, his Announce it let the merge through, or the refusal does not say what he answered: $out"; fi
+aaf_talk "$dir/talk.jsonl" decide acme/widget "Hand back" "Not announcing" timeout "" 28
+out=$(TALK="$dir/talk.jsonl" FAKE_CLOSING_JSON="$FINISHES_YES" run_hook "$dir" "$MERGE 7 --squash" 2>/dev/null)
+if yes_dropped "$out"; then pass; else fail "#3669 R9: a Not announcing closed by the picker's own timeout let the merge through: $out"; fi
+aaf_talk "$dir/talk.jsonl" decide acme/widget "Hand back" "Not announcing"
+out=$(TALK="$dir/talk.jsonl" FAKE_CLOSING_JSON="$FINISHES_YES" run_hook "$dir" "$MERGE 7 --squash" 2>/dev/null)
+if yes_dropped "$out"; then pass; else fail "#3669 R9: a Not announcing in a picker that names no milestone let the merge through: $out"; fi
+aaf_talk "$dir/talk.jsonl" decide acme/widget "Hand back" "Not announcing" "" "" 28
+out=$(TALK="$dir/talk.jsonl" FAKE_CLOSING_JSON="$FINISHES_YES" run_hook "$dir" "$MERGE 7 --squash" 2>&1)
+# A record line is written with its keys sorted, so "answer" stands before "kind".
+if [ -z "$out" ] && grep -q '"answer": "no".*"kind": "decided"' "$dir/approvals/record.jsonl" 2>/dev/null; then pass
+else fail "#3669 R9 still possible: his Not announcing in a picker naming the milestone did not let the merge through with nothing said, or was not written to the record: $out"; fi
+# So a later session, holding no picker, merges it on the record.
+out=$(FAKE_CLOSING_JSON="$FINISHES_YES" run_hook "$dir" "$MERGE 7 --squash" 2>&1)
+if [ -z "$out" ]; then pass; else fail "#3669 R9 still possible: a later session was refused a decline already on the record: $out"; fi
+rm -rf "$dir"
+
+# Or an announcement merged for that milestone: one the record holds as let through, which GitHub
+# says merged. The record's line says the gate let it through, never that it merged.
+let_through() {  # $1 = fixture dir: pull request 5 let through with an announcement for milestone 28
+  mkdir -p "$1/approvals"
+  printf '{"kind": "used", "repo": "acme/widget", "hash": "%064d", "pr": 5, "closes": [{"issue": 11, "repo": "acme/widget", "milestone": "Hand back", "milestone_number": 28}], "at": "2026-11-21T00:00:00Z"}\n' 0 >> "$1/approvals/record.jsonl"
+}
+pr5() { printf '{"number":5,"url":"https://github.com/acme/widget/pull/5","state":"%s"}' "$1"; }
+dir=$(make_repo acme/widget "$VISIBLE_OK" "$REGISTRY_ANNOUNCES")
+let_through "$dir"
+out=$(FAKE_PR5_JSON="$(pr5 MERGED)" FAKE_CLOSING_JSON="$FINISHES_YES" run_hook "$dir" "$MERGE 7 --squash" 2>&1)
+if [ -z "$out" ]; then pass; else fail "#3669 R9 still possible: with an announcement merged for the milestone, its last issue did not close under another label: $out"; fi
+out=$(FAKE_PR5_JSON="$(pr5 OPEN)" FAKE_CLOSING_JSON="$FINISHES_YES" run_hook "$dir" "$MERGE 7 --squash" 2>/dev/null)
+if yes_dropped "$out" && says "$out" "pull request 5" && says "$out" "has not merged"; then pass
+else fail "#3669 R9: an announcement the gate let through and GitHub says never merged covered the milestone, or the refusal does not say so: $out"; fi
+out=$(FAKE_CLOSING_JSON="$FINISHES_YES" run_hook "$dir" "$MERGE 7 --squash" 2>/dev/null)
+if denied "$out" && says "$out" "Cannot tell" && says "$out" "pull request 5" && says "$out" "Deliberate override"; then pass
+else fail "#3669 R9: with no answer from GitHub about the pull request the record holds as the announcement, the merge was not refused in its own words: $out"; fi
+rm -rf "$dir"
+
+# What GitHub does not answer is refused in its own words, never read as "not the last".
+cannot_tell() { denied "$1" && says "$1" "Cannot tell whether PR #7 finishes a feature Dan said yes to announcing" && says "$1" "Deliberate override: ALLOW_UNTAGGED_MERGE=1" && ! says "$1" "last open issue of the milestone"; }
+# let_through_unread <hook output>: with the override typed, the allow that says what was not read.
+let_through_unread() {
+  ! denied "$1" && says "$1" '"systemMessage"' && says "$1" '"additionalContext"' && says "$1" "ALLOW_UNTAGGED_MERGE=1 let this merge through" \
+    && says "$1" "finishes a feature Dan said yes to announcing" && says "$1" "could not be ruled out"
+}
+dir=$(make_repo acme/widget "$VISIBLE_OK" "$REGISTRY_ANNOUNCES")
+out=$(FAKE_CLOSING_FAIL="HTTP 502: bad gateway" run_hook "$dir" "$MERGE 7 --squash" 2>/dev/null)
+if cannot_tell "$out" && says "$out" "HTTP 502"; then pass; else fail "#3669 R9: a read of the closing issues that failed was not refused in its own words, with what GitHub said: $out"; fi
+for bad in '' '{}' '{"data":{"repository":{"pullRequest":{"closingIssuesReferences":{"totalCount":60,"nodes":[]}}}}}' \
+  '{"data":{"repository":{"pullRequest":{"closingIssuesReferences":{"totalCount":1,"nodes":[{"number":12,"repository":{"nameWithOwner":"acme/widget"},"milestone":{"number":28,"title":"Hand back"}}]}}}}}'; do
+  out=$(FAKE_CLOSING_JSON="$bad" run_hook "$dir" "$MERGE 7 --squash" 2>/dev/null)
+  if cannot_tell "$out"; then pass; else fail "#3669 R9: an answer about the closing issues that cannot be read was taken as not the last [${bad:0:70}]: $out"; fi
+done
+# With the override typed, the gate's rule for a pull request it could not read: through, and said.
+out=$(FAKE_CLOSING_FAIL="HTTP 502: bad gateway" run_hook "$dir" "$OVERRIDDEN" 2>/dev/null)
+if let_through_unread "$out"; then pass; else fail "#3669 with the override typed, a pull request whose closing issues could not be read was refused, or went through with nothing said: $out"; fi
+rm -rf "$dir"
+
+# The judge failing is not a pull request that finishes nothing (L98). Driven with a copy of the
+# hooks whose approval library throws. A pull request that closes an issue is refused in its own
+# words, whatever that issue's milestone says, because only the library reads the milestone's line
+# and the record. One that closes no issue is settled by GitHub's answer alone, so it merges as
+# before and the library is not needed for it.
+BROKEN="$(mktemp -d)"
+cp "$HOOK" "$BROKEN/"
+cp -R "$HOOK_DIR/lib" "$BROKEN/lib"
+cp "$HOOK_DIR/gh_issue_scan.py" "$BROKEN/"
+printf 'raise RuntimeError("the approval reader broke")\n' > "$BROKEN/lib/announce-approval.py"
+dir=$(make_repo acme/widget "$VISIBLE_OK" "$REGISTRY_ANNOUNCES")
+out=$(HOOK="$BROKEN/require-changelog-tag.sh" FAKE_CLOSING_JSON="$FINISHES_YES" run_hook "$dir" "$MERGE 7 --squash" 2>/dev/null)
+if cannot_tell "$out" && says "$out" "lib/announce-approval.py gave no verdict"; then pass
+else fail "#3669 R9: with the approval library failing, a pull request closing the last open issue of a milestone that says yes merged, or was refused in other words: $out"; fi
+out=$(HOOK="$BROKEN/require-changelog-tag.sh" FAKE_CLOSING_JSON="$(closing_json "Rework the hand back." "12 13" "12")" run_hook "$dir" "$MERGE 7 --squash" 2>/dev/null)
+if cannot_tell "$out" && says "$out" "lib/announce-approval.py gave no verdict"; then pass
+else fail "#3669 R9: with the approval library failing, a pull request closing an issue was taken as one that finishes nothing: $out"; fi
+out=$(HOOK="$BROKEN/require-changelog-tag.sh" FAKE_CLOSING_JSON="$FINISHES_YES" run_hook "$dir" "$OVERRIDDEN" 2>/dev/null)
+if let_through_unread "$out"; then pass
+else fail "#3669 with the approval library failing and the override typed, a pull request closing an issue was refused, or went through with nothing said: $out"; fi
+out=$(HOOK="$BROKEN/require-changelog-tag.sh" run_hook "$dir" "$MERGE 7 --squash" 2>&1)
+if untouched "$out" "$dir"; then pass
+else fail "#3669 with the approval library failing, a pull request that closes no issue, which GitHub's answer alone settles, did not merge as before: $out"; fi
+# Only an answer that says it closes none is settled there: a count of none beside a list that is
+# not one, or the other way about, still goes to the library.
+for odd in '{"data":{"repository":{"pullRequest":{"closingIssuesReferences":{"totalCount":0}}}}}' \
+  '{"data":{"repository":{"pullRequest":{"closingIssuesReferences":{"totalCount":0,"nodes":null}}}}}' \
+  '{"data":{"repository":{"pullRequest":{"closingIssuesReferences":{"nodes":[]}}}}}' \
+  '{"data":{"repository":{"pullRequest":{"closingIssuesReferences":{"totalCount":"0","nodes":[]}}}}}'; do
+  out=$(HOOK="$BROKEN/require-changelog-tag.sh" FAKE_CLOSING_JSON="$odd" run_hook "$dir" "$MERGE 7 --squash" 2>/dev/null)
+  if cannot_tell "$out"; then pass; else fail "#3669 R9: an answer that does not say the pull request closes no issue was settled without the library [${odd:60:60}]: $out"; fi
+done
+rm -rf "$dir" "$BROKEN"
+
+# An announcement that finishes the feature merges as an announcement does: its one line, and the
+# milestone's number on the record.
+dir=$(make_repo acme/widget "$ANNOUNCE_FULL" "$REGISTRY_ANNOUNCES")
+approved_on_record "$dir"
+out=$(FAKE_CLOSING_JSON="$FINISHES_YES" run_hook "$dir" "$MERGE 7 --squash" 2>/dev/null)
+if owes_draft "$out" 7 && says "$(used_line "$dir")" '"milestone_number": 28'; then pass
+else fail "#3669 an announce merge finishing a feature he said yes to was refused, did not print its one line about the draft it owes, or did not record the milestone: $out $(used_line "$dir")"; fi
+# And once it is on the record, the milestone's leftover issue closes under another label.
+printf '%s' "$VISIBLE_OK" > "$dir/pr.json"; pr_number "$dir" 9
+out=$(FAKE_PR5_JSON="" FAKE_CLOSING_JSON="$FINISHES_YES" run_hook "$dir" "$MERGE 9 --squash" 2>/dev/null)
+if denied "$out" && says "$out" "Cannot tell" && says "$out" "pull request 7"; then pass
+else fail "#3669 the pull request the record holds as the announcement was not asked of GitHub before it covered the milestone: $out"; fi
 rm -rf "$dir"
 
 # No case above wrote this Mac's real record.

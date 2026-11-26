@@ -268,6 +268,10 @@ hold is written:
   announce-approval.py milestone-line --repo <owner/name> --feature <name> --answer <yes|no|unasked>
                                       [--description-file <file>]    create-milestone.sh's question
   announce-approval.py finishes --repo <owner/name> --pr <number> --answer-file <GitHub's answer>
+                                [--unmerged <number>,<number>]    the merge gate's second question,
+                                naming the pull requests of `announced` GitHub says have not merged
+A file named to either is read whole or not at all (_read_text): one that cannot be opened, or is
+larger than TEXT_BYTES, is said in the answer's "why", never cut and never read as empty.
 """
 import importlib.util
 import json
@@ -1845,7 +1849,7 @@ def _announced(entries, key, number, title):
     return out
 
 
-def finishes(repo, pr, answer, payload=None):
+def finishes(repo, pr, answer, payload=None, unmerged=()):
     """The merge gate's question about a pull request that does not carry changelog/announce, in a
     repository that announces (claude-config#3669, R9): does it finish a feature Dan said yes to
     announcing, with no announcement let through for it and no decline of his?
@@ -1859,7 +1863,9 @@ def finishes(repo, pr, answer, payload=None):
     because that line says the gate let one through and never that GitHub merged it, so the gate
     asks GitHub), or Dan's last answer in a picker naming that milestone is NOT_ANNOUNCING.
     Anything GitHub's answer or the record does not say is "unread", never "clear" (L98). payload
-    is the hook payload, and None reads the record only."""
+    is the hook payload, and None reads the record only. unmerged is the pull requests among
+    `announced` that GitHub then said have not merged: asked again with them, their lines cover
+    nothing, and the refusal says so."""
     out = {"state": "clear", "why": "", "how": "", "notes": [], "announced": []}
     key = repo_key(repo)
 
@@ -1915,13 +1921,20 @@ def finishes(repo, pr, answer, payload=None):
         last = _last_decided(entries, found, key, _feature_key(s["title"]), s["number"])
         if last is not None and last.get("answer") == "no":
             continue
-        announced = _announced(entries, key, s["number"], s["title"])
+        let_through = _announced(entries, key, s["number"], s["title"])
+        announced = [n for n in let_through if n not in unmerged]
         if announced:
             out["announced"] += [n for n in announced if n not in out["announced"]]
             continue
         said = ("it closes the last open issue of the milestone " + json.dumps(s["title"]) + " (number " + str(s["number"])
                 + "), whose description says Dan said yes to announcing it to agents, and this Mac's record holds no "
                 "announcement let through for that milestone and no answer of his declining it")
+        if let_through:
+            said = ("it closes the last open issue of the milestone " + json.dumps(s["title"]) + " (number "
+                    + str(s["number"]) + "), whose description says Dan said yes to announcing it to agents. This Mac's "
+                    "record holds " + _pull_requests(let_through) + " as let through with an announcement for that "
+                    "milestone, and GitHub says " + ("it has not merged" if len(let_through) == 1 else "none of them has merged")
+                    + ", so nothing was announced, and the record holds no answer of his declining it")
         if last is not None and last.get("answer") == "yes":
             said += (": asked whether it is still being announced, he answered `" + (_text(last.get("said")) or ANNOUNCE_IT)
                      + "`" + (" on " + _day(last.get("answered")) if _day(last.get("answered")) else ""))
@@ -1962,13 +1975,24 @@ def _hook_payload(args):
     return payload if isinstance(payload, dict) else {}
 
 
+TEXT_BYTES = WORDING_BYTES * 8
+
+
 def _read_text(path):
-    """A small file's text, or "" when it names none or cannot be read."""
+    """(a file's whole text, None), or (None, why it was not had): no file was named, it could not
+    be opened, or it is larger than TEXT_BYTES. A file is never cut to fit and never read as empty
+    when it was not read: a milestone's description cut here would be written back to GitHub short,
+    and one read as empty would be written over."""
     try:
         with open(path, "rb") as f:
-            return f.read(WORDING_BYTES * 8).decode("utf-8", "replace")
-    except (OSError, TypeError):
-        return ""
+            data = f.read(TEXT_BYTES + 1)
+    except TypeError:
+        return None, "no file was named"
+    except OSError:
+        return None, "the file could not be opened"
+    if len(data) > TEXT_BYTES:
+        return None, "the file is larger than " + str(TEXT_BYTES // 1024) + " KB, which is more than is read"
+    return data.decode("utf-8", "replace"), None
 
 
 def main(argv):
@@ -2014,17 +2038,33 @@ def main(argv):
         return 0
     if command == "milestone-line":
         named = _flag(args, "--description-file")
-        json.dump(milestone_line(_flag(args, "--repo"), _flag(args, "--feature"), _flag(args, "--answer"),
-                                 _read_text(named) if named else ""), sys.stdout)
+        held, unhad = _read_text(named) if named else ("", None)
+        if held is None:
+            # No line on a description that was not read whole: create-milestone.sh writes what
+            # comes back into the milestone, over what it holds.
+            json.dump({"ok": False, "line": "", "description": "", "how": "",
+                       "why": "the milestone's description could not be read from the file it was handed in ("
+                              + unhad + "), so no line was written into it"}, sys.stdout)
+            return 0
+        json.dump(milestone_line(_flag(args, "--repo"), _flag(args, "--feature"), _flag(args, "--answer"), held),
+                  sys.stdout)
         return 0
     if command == "finishes":
         pr = _flag(args, "--pr")
+        held, unhad = _read_text(_flag(args, "--answer-file"))
+        if held is None:
+            # Unread in its own words (L11), never judged from a part of GitHub's answer.
+            json.dump({"state": "unread", "how": "", "notes": [], "announced": [],
+                       "why": "GitHub's answer about the issues this pull request closes could not be read from the "
+                              "file it was handed in (" + unhad + ")"}, sys.stdout)
+            return 0
         try:
-            answer = json.loads(_read_text(_flag(args, "--answer-file")))
+            answer = json.loads(held)
         except ValueError:
             answer = None
+        unmerged = [int(n) for n in (_flag(args, "--unmerged") or "").split(",") if n.isdigit()]
         json.dump(finishes(_flag(args, "--repo"), int(pr) if pr and pr.isdigit() else None, answer,
-                           _hook_payload(args)), sys.stdout)
+                           _hook_payload(args), unmerged), sys.stdout)
         return 0
     if command == "list":
         entries, why = read_record()
@@ -2036,7 +2076,8 @@ def main(argv):
                      "[--unread <why>] | answered, with the PostToolUse payload on standard input | decision --repo "
                      "<owner/name> --feature <name> [--milestone <number>] | milestone-line --repo <owner/name> --feature "
                      "<name> --answer <yes|no|unasked> [--description-file <file>] | finishes --repo <owner/name> --pr "
-                     "<number> --answer-file <file>, each reading the record only unless it carries --hook, with the "
+                     "<number> --answer-file <file> [--unmerged <number>,<number>], each reading the record only "
+                     "unless it carries --hook, with the "
                      "hook payload on standard input\n")
     return 2
 

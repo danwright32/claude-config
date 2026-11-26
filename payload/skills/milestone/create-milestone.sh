@@ -486,7 +486,11 @@ if [[ "$announces" -eq 1 ]]; then
   if [[ -n "$dry" ]]; then
     echo "WOULD-WRITE-ANNOUNCE-LINE $announce_line"
   else
+    # ms_err holds what GitHub said on a failed read or write. Each message below has read it
+    # before unwritten is called, so unwritten removes it: no refusal leaves it behind.
+    ms_err=""
     unwritten() {
+      if [[ -n "$ms_err" ]]; then rm -f "$ms_err"; fi
       echo "$1" >&2
       echo "ABORTED: no issues were filed. The milestone exists, so re-running this will reuse it." >&2
       exit 12

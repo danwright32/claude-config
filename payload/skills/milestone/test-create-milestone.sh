@@ -863,14 +863,21 @@ $NO_LINE" arun "$TMP/existing.json" "$ANN/unasked.json")"; rc=$?
 check_eq "#3669 unasked never replaces an answer the milestone already carries" "0 0" "$rc $(grep -c -- '-X PATCH' "$TMP/calls.log")"
 check "#3669 and says the line that stands" "ANNOUNCE-LINE $NO_LINE" "$out"
 # Written is not kept: the line is read back before any issue is filed.
-out="$(STORE="$ANN/yes" WAS="Old words." GH_DROP_DESC=1 arun "$TMP/existing.json" "$ANN/yes.json")"; rc=$?
+# These three refusals run with a temporary folder of their own (LEFT), so what the helper leaves
+# behind on a refusal can be counted: the file holding what GitHub said must not outlive it.
+LEFT="$ANN/left"; mkdir -p "$LEFT"
+probe="$(TMPDIR="$LEFT" mktemp)"
+check_eq "#3669 (the control for the count below) mktemp makes its file in the folder TMPDIR names" "$LEFT" "$(dirname "$probe")"
+rm -f "$probe"
+out="$(TMPDIR="$LEFT" STORE="$ANN/yes" WAS="Old words." GH_DROP_DESC=1 arun "$TMP/existing.json" "$ANN/yes.json")"; rc=$?
 check_eq "#3669 a line GitHub did not keep stops the plan before any issue is filed" "12 0" "$rc $(issues_filed)"
 check "#3669 saying so" "ANNOUNCE-LINE-UNWRITTEN" "$out"
-out="$(STORE="$ANN/yes" GH_DROP_DESC=1 arun "$TMP/none.json" "$ANN/yes.json")"; rc=$?
+out="$(TMPDIR="$LEFT" STORE="$ANN/yes" GH_DROP_DESC=1 arun "$TMP/none.json" "$ANN/yes.json")"; rc=$?
 check_eq "#3669 and the same for a milestone just created" "12 0" "$rc $(issues_filed)"
-out="$(STORE="$ANN/yes" WAS="Old words." GH_ONE_FAILS=1 arun "$TMP/existing.json" "$ANN/yes.json")"; rc=$?
+out="$(TMPDIR="$LEFT" STORE="$ANN/yes" WAS="Old words." GH_ONE_FAILS=1 arun "$TMP/existing.json" "$ANN/yes.json")"; rc=$?
 check_eq "#3669 a description GitHub would not give stops the plan the same way" "12 0" "$rc $(issues_filed)"
 check "#3669 in its own words" "ANNOUNCE-LINE-UNREAD" "$out"
+check_eq "#3669 and none of the three refusals leaves a temporary file behind" "0" "$(ls -A "$LEFT" | wc -l | tr -d ' ')"
 # A dry run says what it would write and writes nothing.
 out="$(STORE="$ANN/yes" DRY_RUN=1 arun "$TMP/none.json" "$ANN/yes.json")"; rc=$?
 check "#3669 a dry run previews the line" "WOULD-WRITE-ANNOUNCE-LINE $YES_LINE" "$out"

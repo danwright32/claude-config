@@ -435,6 +435,15 @@ if [ "$bad_announce" = "true" ] && [ "$overridden" != true ]; then
   deny "Cannot tell whether this repo takes the changelog/announce label: $bad_announce_why. Fix announceChannel in its entry in $REGISTRY, or remove the key if the repo does not announce. Deliberate override, for a pull request that does not carry changelog/announce: ALLOW_UNTAGGED_MERGE=1 <the same command>."
 fi
 
+# Does this repository announce to agents at all? Only where its entry names a channel is a pull
+# request asked whether it finishes a feature Dan said yes to announcing (claude-config#3669, below).
+# A channel that is not a channel id is not a yes: without the override it was refused just above,
+# and with it the merge of a pull request that is no announcement goes through as it always did.
+announces=false
+if [ "$bad_announce" != "true" ] && [ -n "$(printf '%s' "$scope" | jq -r '.announceChannel // ""')" ]; then
+  announces=true
+fi
+
 pr=$(mt_pr_number "$command")
 
 # The repository is passed to gh the same way the merge names it, so the question is about the
@@ -501,6 +510,108 @@ verdict=$(printf '%s' "$view" | HOOK_DIR="$HOOK_DIR" SCOPE="$scope" node -e '
 # Does it carry the announce label? "yes", "no", or nothing when not even that could be told.
 carries=$(printf '%s' "$verdict" | jq -r 'if .announce == true then "yes" elif .announce == false then "no" else "" end' 2>/dev/null)
 
+# THE ISSUES THE PULL REQUEST CLOSES, read once (claude-config#3666, #3669). Each comes with its
+# milestone's number, title, description and open issues. One read serves both readers below: the
+# `used` line an announcement's merge leaves, and the question of whether a pull request under
+# another label finishes a feature Dan said yes to announcing. It sets closing_file to GitHub's
+# answer, or closing_unread to why there is none. Called in this shell, never a subshell, so both
+# reach the caller, who removes the file.
+closing_file=""; closing_unread=""
+read_closing() {
+  local account
+  account=$(printf '%s' "$envelope" | jq -r '.account // ""' 2>/dev/null)
+  closing_unread=""
+  closing_file=$(mktemp "${TMPDIR:-/tmp}/announce-closes.XXXXXX" 2>/dev/null) || closing_file=""
+  if [ -n "$closing_file" ] \
+    && mt_api_read "$closing_file" "$account" graphql \
+         -f query='query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { closingIssuesReferences(first: 50) { totalCount nodes { number repository { nameWithOwner } milestone { number title description issues(states: OPEN, first: 100) { totalCount nodes { number } } } } } } } }' \
+         -f owner="${slug%%/*}" -f name="${slug#*/}" -F number="$number" \
+    && [ "$MT_READ_STATE" = ok ]; then
+    return 0
+  fi
+  closing_unread="the issues this pull request closes could not be read from GitHub (${MT_READ_ERR:-no answer})"
+  [ -n "$closing_file" ] && rm -f "$closing_file"
+  closing_file=""
+  return 1
+}
+
+# A FEATURE DAN SAID YES TO ANNOUNCING DOES NOT FINISH UNDER ANOTHER LABEL (claude-config#3669, R9).
+#
+# Feature discovery asks Dan whether a feature is announced to agents when it ships, and the
+# milestone's description carries his answer as one line (skills/milestone/create-milestone.sh).
+# A pull request that does NOT carry changelog/announce, in a repository that announces, is asked
+# here whether it closes the last open issue of a milestone whose line says yes. When it does, and
+# this Mac's record holds neither an announcement merged for that milestone nor his decline, it is
+# DENIED: label it changelog/announce with wording he approved, or ask him with a picker whether it
+# is still being announced. His `Not announcing` is read into the record by the same path as an
+# approval (lib/announce-approval.py says how), and only that clears it.
+#
+# The judge is lib/announce-approval.py's `finishes`, handed GitHub's own answer: which milestone
+# says yes, which is finished, and what the record holds are all its to say, so this file reads
+# none of it a second way. It gives back `announced`, the pull requests the record holds as let
+# through with an announcement for the milestone. That line says this gate let one through, never
+# that GitHub merged it, so GitHub is asked about each, and one that has not merged covers nothing.
+#
+# A deny, never `ask`, like every refusal about an announcement: only his picker clears it. So the
+# override does not clear it either. What GitHub or the record does not answer is refused in its
+# own words, never read as "not the last" (L98), and there the override is the only way on, as it
+# is for a pull request whose labels could not be read: the merge goes through and the allow says
+# what was not read. Every other pull request leaves here with nothing said: one that closes no
+# issue, one that leaves the milestone open, one whose milestone says no or that nobody was asked
+# about, and any pull request in a repository that does not announce, which is not read at all.
+finishes_announced_feature() {
+  [ "$announces" = true ] || return 0
+  local was_overridden="$overridden" verdict9="" state9="" n other other_state unmerged=""
+  r9_unread() {  # $1 = what could not be read
+    [ -n "$closing_file" ] && rm -f "$closing_file"
+    if [ "$was_overridden" = true ]; then
+      hook_allow_notice "ALLOW_UNTAGGED_MERGE=1 let this merge through, but $1, so whether PR #$number finishes a feature Dan said yes to announcing to agents was never read, and one that does, which the override does not cover, could not be ruled out." PreToolUse
+    fi
+    overridden=false
+    deny "Cannot tell whether PR #$number finishes a feature Dan said yes to announcing to agents: $1. Where a repository announces, the pull request that finishes such a feature merges under changelog/announce unless he declined in a picker, and what could not be read is never taken as a pull request that finishes none. Try the merge again. Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>."
+  }
+  r9_ask() {  # $1 = the pull requests GitHub says have not merged, comma separated, or nothing
+    verdict9=$(printf '%s' "$payload" | python3 -B "$HOOK_DIR/lib/announce-approval.py" finishes --repo "$slug" --pr "$number" --answer-file "$closing_file" ${1:+--unmerged "$1"} --hook 2>/dev/null)
+    state9=$(printf '%s' "$verdict9" | jq -r '.state // ""' 2>/dev/null)
+  }
+  read_closing || r9_unread "$closing_unread"
+  # A pull request that closes no issue finishes no milestone, and GitHub's answer alone says so:
+  # a count of none beside an empty list, and nothing short of both. It leaves here before python3
+  # or the library is needed, so a library that cannot answer refuses only the pull requests whose
+  # verdict is the library's to give (any that closes an issue), never every merge in a repository
+  # that announces. Any other answer, one that cannot be read included, goes on to the library.
+  if jq -e '.data.repository.pullRequest.closingIssuesReferences | (.totalCount == 0) and ((.nodes | type) == "array") and ((.nodes | length) == 0)' "$closing_file" >/dev/null 2>&1; then
+    rm -f "$closing_file"; closing_file=""
+    return 0
+  fi
+  command -v python3 >/dev/null 2>&1 \
+    || r9_unread "python3 is not installed, and lib/announce-approval.py, which reads the milestone's line and Dan's answers, runs under it"
+  r9_ask ""
+  if [ "$state9" = clear ]; then
+    for n in $(printf '%s' "$verdict9" | jq -r '.announced[]?' 2>/dev/null); do
+      other=$(mt_pr_view "$n" "number,url,state" "$slug" "$repo_flag")
+      other_state=$(printf '%s' "$other" | jq -r --argjson n "$n" 'if .found == true and .view.number == $n then (.view.state // "") else "" end' 2>/dev/null)
+      case "$other_state" in
+        MERGED) ;;
+        '') r9_unread "GitHub gave no answer about pull request $n, which this Mac's record holds as let through with an announcement for a milestone this pull request finishes, so whether that announcement merged could not be told" ;;
+        *) unmerged="${unmerged:+$unmerged,}$n" ;;
+      esac
+    done
+    [ -z "$unmerged" ] || r9_ask "$unmerged"
+  fi
+  rm -f "$closing_file"; closing_file=""
+  case "$state9" in
+    clear) return 0 ;;
+    owed)
+      overridden=false
+      deny "PR #$number cannot merge as it stands: it does not carry changelog/announce, and $(printf '%s' "$verdict9" | jq -r '.why // ""') $(printf '%s' "$verdict9" | jq -r '.how // ""')
+
+This is checked at merge time because the pull request that closes a milestone's last open issue is the last one that can carry its announcement: after it, nothing asks again. ALLOW_UNTAGGED_MERGE=1 does not clear this: only Dan's answer in a picker does." ;;
+    unread) r9_unread "$(printf '%s' "$verdict9" | jq -r '.why // ""')" ;;
+    *) r9_unread "lib/announce-approval.py gave no verdict that could be read about the milestone it closes issues of" ;;
+  esac
+}
+
 # Dependabot writes no body block and merges itself through the auto-merge
 # workflow, so gating it would stall that workflow permanently on every bump.
 # Its changes are also not a per-change record in the update: they collapse into
@@ -512,9 +623,12 @@ carries=$(printf '%s' "$verdict" | jq -r 'if .announce == true then "yes" elif .
 # opened, relabelled changelog/announce and given an Announcement block, merged on wording nobody
 # approved and left no line on the record. One that carries the label is judged like any other from
 # here on, and so is one whose labels could not be read, since that is not known to be free of it.
+#
+# It does not leave past the question of whether it finishes a feature Dan said yes to announcing
+# (claude-config#3669, just above): that rule has no exception for who opened the pull request.
 if [ "$carries" = no ]; then
   case "$author" in
-    dependabot|dependabot\[bot\]|app/dependabot) exit 0 ;;
+    dependabot|dependabot\[bot\]|app/dependabot) finishes_announced_feature; exit 0 ;;
   esac
 fi
 
@@ -523,9 +637,12 @@ fi
 # always did, whatever is wrong with its record. One that is an announcement does not, and from this
 # line on it is judged as if the override had not been typed. Where the label could not be told the
 # merge goes through and that is said.
+#
+# One thing the override does not cover for a pull request that is no announcement
+# (claude-config#3669): finishing a feature Dan said yes to announcing. So it is asked that first.
 if [ "$overridden" = true ]; then
   case "$carries" in
-    no) exit 0 ;;
+    no) finishes_announced_feature; exit 0 ;;
     yes) overridden=false ;;
     *) unread="lib/changelog-entry.js failed while reading the pull request's labels"
        override_allows ;;
@@ -576,8 +693,12 @@ This is checked at merge time because a post written under an Announcement headi
 This is checked at merge time because judging it later means re-reading every merged title, which is what assembling the June to August update actually cost. Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>."
 fi
 
-# Every other pull request is done here: its record passed.
-[ "$carries" = yes ] || exit 0
+# Every other pull request is done here, its record passed, once it has been asked whether it
+# finishes a feature Dan said yes to announcing (claude-config#3669, R9).
+if [ "$carries" != yes ]; then
+  finishes_announced_feature
+  exit 0
+fi
 
 # THE MERGE IS THE CALL'S ONE GITHUB WRITE (claude-config#3742, item 4).
 #
@@ -673,20 +794,16 @@ esac
 # that cannot be read are recorded as unread with why, and a line that cannot be written is said
 # beside the merge.
 said=$(printf '%s' "$approval" | jq -r '(.notes // []) | join(" ")' 2>/dev/null)
-account=$(printf '%s' "$envelope" | jq -r '.account // ""' 2>/dev/null)
 closes=""; closes_unread=""
-closes_file=$(mktemp "${TMPDIR:-/tmp}/announce-closes.XXXXXX" 2>/dev/null) || closes_file=""
-if [ -n "$closes_file" ] \
-  && mt_api_read "$closes_file" "$account" graphql \
-       -f query='query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { closingIssuesReferences(first: 50) { nodes { number repository { nameWithOwner } milestone { title } } } } } }' \
-       -f owner="${slug%%/*}" -f name="${slug#*/}" -F number="$number" \
-  && [ "$MT_READ_STATE" = ok ]; then
-  closes=$(jq -c '[.data.repository.pullRequest.closingIssuesReferences.nodes[] | {issue: .number, repo: .repository.nameWithOwner, milestone: (.milestone.title // null)}]' "$closes_file" 2>/dev/null)
+# The one read of the issues it closes (read_closing, above). Each is recorded with its milestone's
+# title and number: the number is what `finishes` finds an announced milestone by (claude-config#3669).
+if read_closing; then
+  closes=$(jq -c '[.data.repository.pullRequest.closingIssuesReferences.nodes[] | {issue: .number, repo: .repository.nameWithOwner, milestone: (.milestone.title // null), milestone_number: (.milestone.number // null)}]' "$closing_file" 2>/dev/null)
   [ -n "$closes" ] || closes_unread="GitHub's answer about the issues this pull request closes could not be read"
+  rm -f "$closing_file"
 else
-  closes_unread="the issues this pull request closes could not be read from GitHub (${MT_READ_ERR:-no answer})"
+  closes_unread="$closing_unread"
 fi
-[ -n "$closes_file" ] && rm -f "$closes_file"
 used=$(python3 -B "$HOOK_DIR/lib/announce-approval.py" used --repo "$slug" --hash "$block_hash" --pr "$number" \
   ${closes:+--closes "$closes"} ${closes_unread:+--unread "$closes_unread"} 2>/dev/null)
 if [ "$(printf '%s' "$used" | jq -r '.written // false' 2>/dev/null)" != "true" ]; then
