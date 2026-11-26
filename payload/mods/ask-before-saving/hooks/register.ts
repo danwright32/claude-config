@@ -1018,6 +1018,10 @@ const indexLinks = async ($: EngineInterface, index: string, name: string): Prom
 // cover is made as before in every case; only what Claude reads of it follows the index as it is
 // (#3506): an index already linking the file is told so, with a change to that line asked about,
 // since a session told a line "may be added" read it as leave to rewrite the one already there.
+// Where the line is offered its form is given too, with a colon after the link (#3654): Claude Code's
+// own form for an index line has a dash there, a session writing a folder's first line follows it,
+// and the style check refuses that write. The form's one link is the file, so written as given it is
+// the line the cover lets through (linksOnlyTo).
 const coverFor = async ($: EngineInterface, used: AskBeforeSavingApproval): Promise<string | undefined> => {
   if (used.files.length !== 1) return undefined
   const { home } = await whereOf($)
@@ -1028,7 +1032,10 @@ const coverFor = async ($: EngineInterface, used: AskBeforeSavingApproval): Prom
   const linked = await indexLinks($, file.index, file.name)
   if (linked === undefined) return undefined
   if (linked) return `${display(file.index, home)} already links to ${file.name}, and this For good does not cover changing that line: a change to it is asked about.`
-  return `The one line in ${display(file.index, home)} that links to ${file.name} may be added without asking him again until this For good lapses; any other change to that index is asked about.`
+  return (
+    `The one line in ${display(file.index, home)} that links to ${file.name} may be added without asking him again until this For good lapses; any other change to that index is asked about. ` +
+    `Write that line with a colon after the link, as "- [Title](${file.name}): one line hook": the style check refuses the dash Claude Code's own form has there.`
+  )
 }
 
 // The cover a saved memory file's For good gives this call (#1794), taken as the call passes: a write

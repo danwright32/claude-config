@@ -2975,7 +2975,13 @@ test('For good on a memory file also lets the one index line linking it through,
 // linking it "may be added without asking him again", read that as leave to bring the existing line
 // up to date (2026-11-23), and was refused with a second question. The note now says what holds for
 // the index as it is when the save lands; what the guard lets through is unchanged.
-const ALLOWANCE = (name: string) => `The one line in ${INDEX_SHOWN} that links to ${name} may be added without asking him again until this For good lapses; any other change to that index is asked about.`
+// #3654: where the line is offered, its form is given with a colon after the link, since a session
+// writing a folder's first index line (2026-11-25) followed Claude Code's own form, which has a dash
+// there, and the style check refused the write.
+const LINE_FORM = (name: string) => `- [Title](${name}): one line hook`
+const ALLOWANCE = (name: string) =>
+  `The one line in ${INDEX_SHOWN} that links to ${name} may be added without asking him again until this For good lapses; any other change to that index is asked about. ` +
+  `Write that line with a colon after the link, as "${LINE_FORM(name)}": the style check refuses the dash Claude Code's own form has there.`
 const ALREADY_LINKED = (name: string) => `${INDEX_SHOWN} already links to ${name}, and this For good does not cover changing that line: a change to it is asked about.`
 const SAVED_ALONE = (name: string) => `Saved to ${MEMDIR_SHOWN}/${name}, as Dan answered For good.`
 
@@ -3012,6 +3018,24 @@ test('the note offers the index line wherever no line links the file yet: no ind
     expect(`${what}: ${refusalOf(await call($, line(name)))}`).toBe(`${what}: `)
     expect(refusalOf(await call($, line(name)))).toContain(ASKS)
   }
+})
+
+// The form is read out of the note itself and written as given, so the example can never be a line
+// the guard would ask about, or one the style check would refuse: that scanner's whole rule is two
+// dash characters and emoji, every one of them outside ASCII.
+test('the offered note gives the index line with a colon after the link, in a form that is plain ASCII and passes under the cover as written (#3654)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true })
+  const told = contextOf(await saveMemoryFile($, w, 'first.md'))
+  const form = /, as "([^"]*)": /.exec(told)?.[1] ?? `no form in: ${told}`
+  expect(form).toBe(LINE_FORM('first.md'))
+  expect(form).toContain('](first.md): ')
+  expect([DASH, String.fromCharCode(0x2013)].filter(dash => told.includes(dash))).toEqual([])
+  expect(/^[\x20-\x7e]*$/.test(told) ? 'plain ASCII' : told).toBe('plain ASCII')
+  // A folder's first index line, written exactly as the note gives it: through, once.
+  const first = { tool: 'Write', file_path: INDEX, content: `${form}\n` }
+  expect(refusalOf(await call($, first))).toBe('')
+  expect(refusalOf(await call($, first))).toContain(ASKS)
+  expect(w.asked.length).toBe(1)
 })
 
 test('an index that is a fifo gets no word about its line either way, is never opened, and the save is still told (#3506)', withKit, async ($, on) => {

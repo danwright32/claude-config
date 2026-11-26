@@ -3492,7 +3492,16 @@ and the band question is removed rather than kept beside it (L29). Three defects
   the line; one that is no ordinary file, fails to read or does not answer in the time the hook gives
   its looks gets no word about the line either way, since whether it already links the file could
   not be told, and the guard covers no line written to an index it cannot read. Only the words
-  changed: the cover is recorded as before in every case. The noun (`isApproved`, #1483) does not answer for a cover: its one caller asks
+  changed: the cover is recorded as before in every case. Where the line is offered, the note also
+  gives its form with a colon after the link, `- [Title](<the file>): one line hook` (#3654, after a
+  session writing a folder's first index line on 2026-11-25 followed Claude Code's own form, which
+  has a dash there, and the style check refused the write, so each new project folder paid one
+  refused write and a retry). The note is the smallest of the three places #3654 names, and the only
+  one built: it arrives at the moment the line is about to be written and names the file. Whether a
+  standing rule line, or a rewrite of that dash by the style check, should join or replace it is
+  Dan's, and open on that issue; the style check is unchanged and rewrites nothing. The form's one
+  link is the file, so written as given it is the line the cover lets through; a line with the dash
+  is judged by this guard exactly as before. The noun (`isApproved`, #1483) does not answer for a cover: its one caller asks
   only about the lessons file.
 - **What Dan reads as the rule:** Claude's own plain sentence and the file (#777). The band showed a
   new file's whole text, the lines a rewrite adds, an Edit's new text, or a Bash command as written,
