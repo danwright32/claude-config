@@ -1831,7 +1831,7 @@ export type RemovalCandidate = {
   onto?: true
   /** The mv was told to replace nothing (-n) and given neither -f nor -i, so a file already where this one goes is kept. */
   keeps?: true
-  /** A deletion only: where the command would put the file, as Dan reads it, when another source of the same mv or cp may land on the same name there (#3505). */
+  /** A deletion only: where the command would put the file, as Dan reads it, when another source of the same mv or cp may land on the same name there (#3505), or a later command of the same call writes that name too (#3649, with `replacedLater`). */
   sharedAt?: string
   /** With `sharedAt`: the other file is put there by a later command of the same call, not by the command that moves this one (#3649). */
   replacedLater?: true

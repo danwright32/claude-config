@@ -569,13 +569,16 @@ const candidatesOf = async ($: EngineInterface, command: string, home: string, w
 // mv exact/b.md archive/old.md` left old.md holding the second file's text, onto a name where
 // nothing was the same, and with a folder of that name made first both files were kept inside it.
 // So a folder there now keeps both, anything else there is replaced, and a name where nothing is
-// becomes a file, unless the command says mkdir anywhere: then it may make that folder first, and
-// the move is said as main says it. A place no path names cannot be looked at, and is said as main
-// says it too.
+// becomes a file, unless a mkdir in the command names it: then the command may make that folder
+// first, and the move is said as main says it. The mkdir is read from the text, up to whatever ends
+// that command, for the last part of the name; one that makes only the folder above (the lessons
+// review of 968ff604cc), or names it through a variable, leaves the file said as replaced, the
+// side that claims less. A place no path names cannot be looked at, and is said as main says it.
 const replacedAsAFile = async (look: Look, c: RemovalCandidate, command: string): Promise<boolean> => {
   if (c.toPath === undefined) return false
   if (await look.exists(c.toPath)) return (await look.kind(c.toPath)) !== 'dir'
-  return !/\bmkdir\b/.test(command)
+  const name = (c.toPath.replace(/\/+$/, '').split('/').pop() ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return name === '' || !new RegExp(`\\bmkdir\\b[^;&|\\n]*[\\s/'"]${name}(?![^\\s/'"])`).test(command)
 }
 const removalsRead = async ($: EngineInterface, home: string, candidates: readonly RemovalCandidate[], look: Look, command: string): Promise<AskBeforeSavingRemoval[]> => {
   const out: AskBeforeSavingRemoval[] = []

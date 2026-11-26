@@ -5477,6 +5477,8 @@ const LOST_LATER: [string, string, string][] = [
   ['into a folder named with no slash, both times', `mv ${NOTE_A} ~/Desktop/archive && mv ~/Desktop/exact/a.md ~/Desktop/archive`, '~/Desktop/archive'],
   ['a file of another name onto the same new file name', `mv ${NOTE_A} ~/Desktop/archive/old.md && mv ~/Desktop/exact/other.md ~/Desktop/archive/old.md`, '~/Desktop/archive/old.md'],
   ['a file of another name onto the same name, where a file is already', `mv ${NOTE_A} ~/Desktop/archive/x.md; mv ~/Desktop/exact/other.md ~/Desktop/archive/x.md`, '~/Desktop/archive/x.md'],
+  // A mkdir of the folder above makes no folder of the name itself (the lessons review of 968ff604cc: any mkdir in the command left this a move).
+  ['a file of another name onto the same new file name, in a folder the command makes first', `mkdir -p ~/Desktop/archive && mv ${NOTE_A} ~/Desktop/archive/old.md && mv ~/Desktop/exact/other.md ~/Desktop/archive/old.md`, '~/Desktop/archive/old.md'],
   // The first open question: a copy or a redirect that writes the name after the move loses the note as a second move does.
   ['a copy onto the name after the move', `mv ${NOTE_A} ~/Desktop/archive/ && cp ~/Desktop/exact/a.md ~/Desktop/archive/`, AT_A],
   ['a redirect that writes the name after the move', `mv ${NOTE_A} ~/Desktop/archive/ && echo x > ~/Desktop/archive/a.md`, AT_A],

@@ -3874,8 +3874,8 @@ lasting memory file, or moved one away, ran with no question. Measured in the mo
   function that says it (`sentWhere`), and Claude's refusal says the same. Two files of different
   names each put onto one name share it only while that name is no folder (`again: 'file'`), which
   the disk says where the removal is read: a folder there keeps both and is said as before,
-  anything else is replaced, and a name where nothing is yet is said as replaced unless the command
-  says `mkdir` anywhere. The decision is held to main's: such a removal carries `replacedLater`, and
+  anything else is replaced, and a name where nothing is yet is said as replaced unless a `mkdir`
+  in the command names it (one that makes only the folder above does not). The decision is held to main's: such a removal carries `replacedLater`, and
   counts as a move as well as a deletion where one question may cover a command (`severalWays`), so
   beside a deletion or an emptying it is refused whole as the move it was said to be, and beside a
   move as the deletion it is asked about as. Its landing place is no longer a move's own, so one
