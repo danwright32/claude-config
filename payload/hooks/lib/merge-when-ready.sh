@@ -809,9 +809,10 @@ rerun_failed_start(){
 # title are printed, so the log of a merge says what its green did not cover. The same reading
 # decides what untested_step runs before the merge, which refuses on a read that fails where the
 # head's tree holds that tool; in a tree without it, or when MWR_UNTESTED_SKIP skips that step, a
-# failed read is just said here and the merge goes on. A head
-# whose checks carry no such notice (another repository's, or a check that is not an Actions job)
-# prints nothing. Once per head; each read is asked again as every other read here is (with_retries).
+# failed read is just said here and the merge goes on. A head whose checks reused an earlier green
+# run of the same tree carries no notice; untested_step follows it to that run's, which is printed
+# too, naming the run. A head whose checks carry no such notice and reused none (another
+# repository's, or a check that is not an Actions job) prints nothing. Once per head; each read is asked again as every other read here is (with_retries).
 UNTESTED_TITLE_PREFIX="Not tested by the checks"
 # Read once per head, for this report and for untested_step below, which acts on it: ut_found holds
 # each notice as {name, run, t, m} (the check's name, its workflow run, the title and the message),
@@ -851,7 +852,7 @@ read_untested(){
 }
 untested_said_for=""
 say_untested(){
-  local n t m name first rest l why
+  local name why
   [ "$untested_said_for" = "$head" ] && return 0
   untested_said_for="$head"
   read_untested
@@ -863,13 +864,25 @@ say_untested(){
     [ -n "$name" ] || continue
     say "$(printf '%s' "${why:0:1}" | tr '[:lower:]' '[:upper:]')${why:1}, so any part check $name left untested is not named here. Merging all the same: this is a report, not a gate."
   done <<< "$ut_failed"
+  ut_say_notices "$ut_found" ""
+  # Checks that reused an earlier green run of the same tree carry no notice of their own, and
+  # untested_step followed them to that run's (ut_follow_reuse). Named here as well, so the log of a
+  # merge standing on a reused run says what its green did not cover, as any other does.
+  [ "$ut_reused_for" != "$head" ] || ut_say_notices "$ut_reused_mains" "reused"
+}
+# ut_say_notices <notices, one per line as read_untested holds them> <"reused" or "">: each notice's
+# first line said, under the check it is on, and the rest of it beneath.
+ut_say_notices(){
+  local n name run t m first rest l
   while IFS= read -r n; do
     [ -n "$n" ] || continue
-    name="$(printf '%s' "$n" | jq -r '.name')"; t="$(printf '%s' "$n" | jq -r '.t')"; m="$(printf '%s' "$n" | jq -r '.m')"
+    name="$(printf '%s' "$n" | jq -r '.name')"; run="$(printf '%s' "$n" | jq -r '.run')"
+    t="$(printf '%s' "$n" | jq -r '.t')"; m="$(printf '%s' "$n" | jq -r '.m')"
     first="$(printf '%s\n' "$m" | sed -n 1p)"; rest="$(printf '%s\n' "$m" | sed -n '2,61p')"
-    say "Check $name, $t: $first"
+    if [ "$2" = reused ]; then say "Check $name of workflow run $run, which the checks at ${head:0:7} reused, $t: $first"
+    else say "Check $name, $t: $first"; fi
     [ -z "$rest" ] || while IFS= read -r l; do emit "    $l"; done <<< "$rest"
-  done <<< "$ut_found"
+  done <<< "$1"
 }
 # WHAT THE CHECKS DID NOT TEST, RUN HERE WHERE THE CHANGE TOUCHES IT (claude-config#3312). Dan, on
 # 2026-11-20 at 6:45 PM ET, asked whether a part the runner did not test must pass on the merging Mac,
@@ -969,7 +982,7 @@ ut_tool_read(){
 # green-tree-<tree>, which tests.yml uploads only at the end of a full green run of exactly that tree
 # (tools/ci-reuse-green-tree.sh), so what it left untested is what these checks left untested. A log,
 # a run or a notice that cannot be found or read refuses the merge, saying which run was looked for.
-ut_q=""; ut_ans=""; ut_via=""; ut_reused_mains=""
+ut_q=""; ut_ans=""; ut_via=""; ut_reused_mains=""; ut_reused_for=""
 UT_REUSED_RE='NOT RUN AGAIN\. Tree ([0-9a-f]{40}) already passed in run https://github\.com/([^[:space:]/]+/[^[:space:]/]+)/actions/runs/([0-9]+) on commit ([0-9a-f]{40})'
 # Reads GitHub's answer to ut_q into ut_ans; 0 answered, 5 rate limited, and any other failure classed
 # by mt_gh_read_class, as ut_tool_read and ut_dl_read are.
@@ -1010,7 +1023,7 @@ ut_dl_read(){
 # outcome refuses the merge.
 ut_follow_reuse(){
   local h7="${head:0:7}" rows id jrun jname tree from_repo from="" sha names jobs out found=""
-  ut_via=""; ut_reused_mains=""
+  ut_via=""; ut_reused_mains=""; ut_reused_for=""
   rows="$(ut_rows)"
   while IFS=$'\t' read -r id jrun jname; do
     [ -n "$id" ] || continue
@@ -1041,7 +1054,7 @@ ut_follow_reuse(){
   done <<< "$jobs"
   [ -n "$found" ] || ut_refuse "No check of workflow run $from, which the checks at $h7 reused, says what it did not test, so which suites to run here is not known."
   say "The checks at $h7 reused workflow run $from, which tested the same tree (${tree:0:12}, on commit ${sha:0:7}), so its list of what it did not test is used."
-  ut_reused_mains="$found"; ut_via=", the run the checks at $h7 reused"
+  ut_reused_mains="$found"; ut_reused_for="$head"; ut_via=", the run the checks at $h7 reused"
   return 0
 }
 # Returns 0 when the merge may go on, 1 to look again (the head moved, or GitHub paused this session's
