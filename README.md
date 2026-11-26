@@ -5336,6 +5336,30 @@ A file sourced through a path it cannot work out is refused too, unread, since c
 the refusal names the script, the line and what it could not follow, so the path can be written
 plainly (a file run through such a path stays unread and allowed, behind the #2683 switch).
 
+Since claude-config#3497 a file run through a variable is read inside a shell function as it is at
+the top level (`payload/hooks/lib/function-values.py`). A function runs wherever it is called from,
+so the gate vouches for no directory inside one, and a value that was a relative path was left
+unread there: `run() { kept=posts.sh; bash "$kept"; }; run` passed where the same two commands at
+the top level were refused. Such a value is now read against the directory the reader follows, as
+the same path written out in the function always was. A variable that only a function sets, used
+after the call or in another function, is read with that one value, and a refusal found that way
+says the check could not be made, since the function may not have run. Each is a further reading,
+made only where the ones before it found nothing, so it can only refuse more. Not read: a name
+several functions set to different values, a name anything else in the text binds, and a function
+called after a cd, whose relative path is read against the directory the reader follows.
+
+The same change holds the gate's own reading of what a heredoc feeds a program (`Judge.fed`,
+`payload/hooks/lib/heredoc-fed.py`) to where bash 3.2 and zsh end the body: only at a line that is
+the marker (a `<<-` lets its leading tabs go and nothing else), with the whole word after the `<<`
+as the marker, and after the body of a heredoc opened earlier on the line. It ended the body at a
+marker with a blank beside it and at the first letters of a longer marker, and the lines the shell
+went on feeding python3 were read as shell commands. It gives every line it gave before, and more
+where the shells feed more. Where it cannot tell where they end the body, the call is refused as a
+check the gate could not make: a marker that a backslash joins to the line before (which the
+shared reader refuses too, but not in a text it gives up on before it reaches that heredoc), a
+marker that starts with a backslash or holds a dollar sign or a backquote, and more than one `<<`
+in the command.
+
 Since claude-config#2844 it also reads what a runner or a compiler runs without the command naming
 it as a script (`payload/hooks/lib/program-runs.py`): the script or module `python3 -m` runpy, pdb,
 cProfile, profile or trace runs, and the test modules `python3 -m unittest` and pytest collect,

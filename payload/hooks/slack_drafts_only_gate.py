@@ -1924,7 +1924,23 @@ def comment_why(line):
             "Write that # in quotes, or put the comment on a line of its own (claude-config#3464)" % line)
 
 
+# A function's commands read with the values its body sets, and which lines a heredoc feeds a
+# program, as bash 3.2 and zsh end it (claude-config#3497). Each is this gate's own reading, in a
+# file of its own so that this one does not grow.
+FunctionValues = load_lib("function_values", "function-values.py")
+FunctionValues.UNKNOWN_DIR = SH_UNKNOWN_DIR
+HeredocFed = load_lib("heredoc_fed", "heredoc-fed.py")
+
+
 def heredoc_why(line, one_line=False, opener=""):
+    if opener == "marker":
+        # Named by Judge.fed, the gate's own reading of what a heredoc feeds a program (#3497).
+        return ("it feeds a program by a heredoc whose end the gate does not read, in the line `%s`: the end "
+                "marker starts with a backslash or holds a dollar sign or a backquote, or more than one << "
+                "stands on that line, or the line ends in a backslash, so the gate cannot tell which lines "
+                "the shell feeds the program. Write one << on the command's last line, with the end marker "
+                "as one plain word, in single quotes where nothing in the body is to be expanded (<<'EOF') "
+                "(claude-config#3497)" % line)
     if one_line:
         return ("it opens a heredoc on the one line `%s`, and the gate cannot tell whether the commands "
                 "after it on that line are its body or commands: typed on one line, no shell gives the "
@@ -6185,12 +6201,14 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         if reason:
             return self.mod_tests_seen(d, text, depth, reason)
         placed = self.sh_placed(text, d)
-        if not placed:
-            return None
         was, self.placing = self.placing, True
         try:
-            return self.mod_tests_seen(d, text, depth,
-                                       self.judge_written(d, placed, wrapper, why, depth, whole, fed_by or text))
+            def again(written):
+                return self.judge_written(d, written, wrapper, why, depth, whole, fed_by or text)
+            # And a third reading, only where the second found nothing too: a function's commands
+            # with the values its body sets written out (lib/function-values.py, claude-config#3497).
+            reason = (again(placed) if placed else None) or FunctionValues.wider_reason(self, text, d, placed, again)
+            return self.mod_tests_seen(d, text, depth, reason)
         finally:
             self.placing = was
 
@@ -6269,12 +6287,14 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 return f"{wrapper} runs a string, one of whose commands posts: {inner}"
         return self.judge_written(d, spaced, wrapper, why, depth, whole, text)
 
-    def sh_placed(self, text, d):
+    def sh_placed(self, text, d, taken=None):
         """One command's text with each word that holds a variable or a substitution written out,
         where its value is certain (sh_word, as a sourced file's path is worked out); None where no
         word is. A word whose value is not certain stays as written, so it names no file and is not
         read, as before: refusing it is the half of claude-config#2678 kept off until what it would
-        refuse in this repository is measured. A source or . command has its own reading (judge)."""
+        refuse in this repository is measured. A source or . command has its own reading (judge).
+        taken, a list, asks for the wider reading of a function's commands, and is given the names
+        that reading took from a function body (lib/function-values.py, claude-config#3497)."""
         if "$" not in text and "`" not in text:
             return None
         rest = self.rest_of(text)[0].lstrip()
@@ -6293,14 +6313,19 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         if not toks or toks[0][0] != "word":
             return None
         wd, script = self.sh_cwd(d), self.shell["script"]
+        any_dir, var = FunctionValues.wider_words(self, taken)
         out, changed = [], False
         for kind, raw in toks:
             if kind == "op" and not SH_REDIRECT.fullmatch(raw):
                 break  # one command's words end at an operator that is not a redirection
             if kind == "word" and re.search(r"[$`]", raw):
-                v, splits = self.sh_word(raw, wd, self.sh_source_var, script, False)
-                if v is not None and not splits and (wd != SH_UNKNOWN_DIR or os.path.isabs(os.path.expanduser(v))):
+                mark = len(taken or ())
+                v, splits = self.sh_word(raw, wd, var, script, False)
+                if v is not None and not splits and (wd != SH_UNKNOWN_DIR or any_dir or len(taken or ()) > mark
+                                                     or os.path.isabs(os.path.expanduser(v))):
                     raw, changed = shlex.quote(v), True
+                elif taken:
+                    del taken[mark:]  # a word left as written took no value
             out.append(raw)
         return " ".join(out) if changed else None
 
@@ -7975,32 +8000,13 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         Worked out once for each (text, whole): it depends on them alone, and judging the claude-sync
         suite asked it 285 times of 190, the repeats 0.08 s of searching the suite's 1.8 MB again
         (claude-config#2918).
+
+        The reading itself is lib/heredoc-fed.py's (claude-config#3497): the lines this always
+        gave, and the lines after them up to where bash 3.2 and zsh end the heredoc, where that is
+        later. Where it cannot tell where they end it, it raises UnsureComment, which main()
+        refuses as a check it could not make, and which is never kept here.
         """
-        lines, starts = lines_of(whole)
-        key = text.strip()
-        # The lines holding key, found by searching whole for it rather than each line in turn; one
-        # holding a line break is in no line.
-        ats, at = [], whole.find(key) if key and "\n" not in key else -1
-        while at >= 0:
-            i = bisect.bisect_right(starts, at) - 1
-            ats.append(i)
-            at = whole.find(key, starts[i + 1]) if i + 1 < len(starts) else -1
-        if not ats:
-            return whole, False
-        m = re.search(r"<<-?\s*(['\"]?)([A-Za-z0-9_]+)\1", text)
-        if not m:
-            return "\n".join(lines[i] for i in ats), False
-        bodies = []
-        for at in ats:
-            body = []
-            for ln in lines[at + 1:]:
-                if ln.strip() == m.group(2):
-                    break
-                body.append(ln)
-            else:
-                return whole, False  # a body never closed: read it all
-            bodies.append("\n".join(body))
-        return "\n".join(bodies), True
+        return HeredocFed.fed(text, whole, lines_of, lambda at, kind: UnsureComment(whole, at, kind))
 
     @staticmethod
     def glued_option(w, any_option=False):

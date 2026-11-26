@@ -1,0 +1,191 @@
+#!/usr/bin/env bash
+# Tests for a file the Slack drafts gate reads through a variable inside a shell function
+# (claude-config#3497).
+#
+# A script that set a variable to the name of a script that posts and ran it through that variable
+# was refused where the two commands stood at its top level, and allowed where they stood in a
+# function the script then called. Measured 2026-11-22 at 8b4e006b0f and again 2026-11-26 on main at
+# 6c4cee7247, through this wrapper: `bash case.sh`, with posts.sh beside it, exit 0.
+#
+# The gate works out the value in both places (sh_locals has followed a NAME=value in a function
+# body since #2683). What differed was the directory: a function runs wherever it is called from,
+# so the walk does not vouch for the directory inside one, and a value that is a relative path was
+# then left as the word the script wrote, which names no file, so nothing was read. The same path
+# written out in the same function was read all along, against the directory the reader follows.
+# A value worked out is now read there too, in a second reading that can only refuse more.
+#
+# Kept apart from test-slack-drafts-only-gate-scripts.sh, which covers a script that posts, so that
+# suite does not grow (the precedent is test-slack-drafts-comment-start.sh); the helpers below are
+# copied from it as they are, so a case here is driven the same way: a hook payload piped into
+# slack-drafts-only-gate.sh, exit 0 allowed and 2 refused, the reason on stderr. Nothing a case names
+# is ever run, and no file here holds a token, a webhook address or a channel.
+set -uo pipefail
+
+# Its own wall clock, and whatever it starts stopped with it however it ends (claude-config#465).
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/suite-deadline.sh" || {
+  echo "FAIL: $(basename "$0"): lib/suite-deadline.sh is missing, so this suite cannot bound its own wall clock. Refusing to run unbounded."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+suite_deadline_arm || exit $?
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HOOK="$DIR/slack-drafts-only-gate.sh"
+unset SLACK_GATE_UNWORKED_PATHS
+
+pass=0
+fail=0
+check() { if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 ($2)"; fi; }
+
+if [ ! -f "$HOOK" ]; then
+  echo "FAIL: there is no slack-drafts-only-gate.sh beside this suite at $DIR, so no Slack send is refused."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+fi
+
+T="$(mktemp -d "${TMPDIR:-/tmp}/slack-gate.XXXXXXXX")" || exit 1
+case "${T%/}" in ''|/|"${HOME%/}") echo "refusing to run: throwaway directory came back as '$T'" >&2; exit 2 ;; esac
+trap 'rm -rf "$T"' EXIT
+# Every case runs with a judgement cache of its own, never this Mac's (claude-config#2918).
+export SLACK_GATE_CACHE_DIR="$T/gate-cache"
+unset SLACK_GATE_CACHE_TRACE
+
+# payload <tool name> <tool_input JSON> [cwd]: one PreToolUse payload in the measured shape.
+payload() {
+  python3 -c '
+import json, sys
+tool, inp, cwd = sys.argv[1], json.loads(sys.argv[2]), sys.argv[3]
+print(json.dumps({"session_id": "f6017250-8f33-47ac-bbb2-b82a7c319d0d",
+                  "transcript_path": "/tmp/transcript.jsonl", "cwd": cwd,
+                  "permission_mode": "auto", "hook_event_name": "PreToolUse", "tool_name": tool,
+                  "tool_input": inp, "tool_use_id": "toolu_01X4Qw7JnfYswF7UVX94Z4Sy"}))
+' "$1" "$2" "${3:-$T}"
+}
+bash_input() { python3 -c 'import json, sys; print(json.dumps({"command": sys.argv[1], "description": "d"}))' "$1"; }
+
+RC=0; OUT=""; ERR=""
+run_raw() { # run_raw <stdin text>
+  local errf; errf="$(mktemp "${TMPDIR:-/tmp}/slack-gate-err.XXXXXXXX")"
+  OUT="$(printf '%s' "$1" | bash "$HOOK" 2>"$errf")"; RC=$?
+  ERR="$(cat "$errf")"; rm -f "$errf"
+}
+run_bash() { run_raw "$(payload Bash "$(bash_input "$1")" "${2:-$T}")"; }
+
+refused() { if [ "$RC" -eq 2 ]; then check "$1" ok; else check "$1" "exit $RC, stdout: ${OUT:0:200}, stderr: ${ERR:0:300}"; fi; }
+allowed() { if [ "$RC" -eq 0 ] && [ -z "$(printf '%s%s' "$OUT" "$ERR" | tr -d '[:space:]')" ]; then check "$1" ok
+            else check "$1" "exit $RC, stdout: ${OUT:0:200}, stderr: ${ERR:0:300}"; fi; }
+says() { case "$ERR" in *"$2"*) check "$1" ok ;; *) check "$1" "stderr did not say '$2': ${ERR:0:400}" ;; esac; }
+
+NL=$'\n'
+shown() { printf '%s' "${1//$NL/ (line break) }"; }
+POSTS="REFUSED: this command posts to Slack"
+
+# The folder every case runs in: a script that posts and one that does not, each as a shell script
+# and a Python one, and the same four a folder down.
+FV="$T/fv"
+mkdir -p "$FV/lib"
+for at in "$FV" "$FV/lib"; do
+  printf '%s\n' 'curl -s -X POST -d text=hi https://slack.com/api/chat.postMessage' > "$at/posts.sh"
+  printf '%s\n' 'echo hi' > "$at/quiet.sh"
+  printf '%s\n' 'import urllib.request' "urllib.request.urlopen('https://slack.com/api/chat.postMessage', b'text=hi')" > "$at/posts.py"
+  printf '%s\n' 'print("hi")' > "$at/quiet.py"
+done
+chmod +x "$FV/posts.sh" "$FV/quiet.sh"
+# script <line>...: the script the next case judges, case.sh, one line for each word.
+script() { printf '%s\n' "$@" > "$FV/case.sh"; }
+judge_script() { run_bash "bash case.sh" "$FV"; }
+
+echo "slack drafts only: a file run through a variable is read inside a function as at the top level (claude-config#3497)"
+
+# The controls, refused before this change: the two commands at the top level, the path written out
+# in the function, and a value that is a whole path, which needs no directory.
+script 'kept=posts.sh' 'bash "$kept"'
+judge_script
+refused "the control: set and run at the top level, a script that posts is refused"
+says "the control: as the post it is" "$POSTS"
+script 'run() {' '  bash posts.sh' '}' 'run'
+judge_script
+refused "the control: written out in a function, a script that posts is refused"
+script 'run() {' "  kept=$FV/posts.sh" '  bash "$kept"' '}' 'run'
+judge_script
+refused "the control: through a variable holding a whole path, in a function, a script that posts is refused"
+
+# The measured shape, and the ways a function body sets and runs it.
+while IFS= read -r body; do
+  [ -n "$body" ] || continue
+  body="${body//@NL@/$NL}"
+  for file in posts quiet; do
+    printf '%s\n' "${body//@F@/$file}" > "$FV/case.sh"
+    judge_script
+    if [ "$file" = posts ]; then
+      refused "a script that posts, run through a variable in a function, is refused: $(shown "$body")"
+      says "as the post it is, the answer the top level gets: $(shown "$body")" "$POSTS"
+    else
+      allowed "the same function running a script that does not post passes: $(shown "$body")"
+    fi
+  done
+done <<'SHAPES'
+run() {@NL@  kept=@F@.sh@NL@  bash "$kept"@NL@}@NL@run
+run() {@NL@  local kept=@F@.sh@NL@  bash "$kept"@NL@}@NL@run
+run() { kept=@F@.sh; bash "$kept"; }@NL@run
+function run {@NL@  kept=@F@.sh@NL@  bash "$kept"@NL@}@NL@run
+run() {@NL@  kept=@F@.sh@NL@  sh "$kept"@NL@}@NL@run
+run() {@NL@  kept=@F@.py@NL@  python3 "$kept"@NL@}@NL@run
+run() {@NL@  kept=lib/@F@.sh@NL@  bash "$kept"@NL@}@NL@run
+run() {@NL@  kept=./@F@.sh@NL@  "$kept"@NL@}@NL@run
+run() {@NL@  kept=@F@.sh@NL@  echo start@NL@  bash "$kept" --flag@NL@}@NL@echo first@NL@run
+kept=@F@.sh@NL@run() {@NL@  bash "$kept"@NL@}@NL@run
+SHAPES
+
+# Typed as the command itself, not a script on disk.
+run_bash 'run() { kept=posts.sh; bash "$kept"; }; run' "$FV"
+refused "typed as a command, a script that posts run through a variable in a function is refused"
+says "typed as a command: as the post it is" "$POSTS"
+run_bash 'run() { kept=quiet.sh; bash "$kept"; }; run' "$FV"
+allowed "typed as a command, the same function running a script that does not post passes"
+
+# Set in a function and run outside it, after the call or in another function. The walk holds no
+# value there (a call leaves every name its body binds unknown), so the file is read with the one
+# value a function body gives the name. The function may not have run by then, so this is no
+# finding of a post: the gate says it could not check, and what it read. The same for a value
+# built from another the body sets, which the walk does not follow inside a body (the last shape).
+while IFS= read -r body; do
+  [ -n "$body" ] || continue
+  body="${body//@NL@/$NL}"
+  for file in posts quiet; do
+    printf '%s\n' "${body//@F@/$file}" > "$FV/case.sh"
+    judge_script
+    if [ "$file" = posts ]; then
+      refused "a script that posts, run through a variable only a function sets, is refused: $(shown "$body")"
+      says "as a check it could not make: $(shown "$body")" "REFUSED: the gate could not check whether this command posts to Slack"
+      says "naming the variable and what was read: $(shown "$body")" "runs a file through \$kept, whose value the gate cannot follow to that command: only a function of the same text sets it"
+    else
+      allowed "the same script running a file that does not post passes: $(shown "$body")"
+    fi
+  done
+done <<'SHAPES'
+run() {@NL@  kept=@F@.sh@NL@}@NL@run@NL@bash "$kept"
+set_it() { kept=@F@.sh; }@NL@run_it() { bash "$kept"; }@NL@set_it@NL@run_it
+set_it() {@NL@  kept=@F@.py@NL@}@NL@set_it@NL@python3 "$kept" --flag
+run() {@NL@  dir=lib@NL@  kept="$dir/@F@.sh"@NL@  bash "$kept"@NL@}@NL@run
+SHAPES
+
+# A file sourced that way was refused before, as a path the gate cannot work out (#2538), and is.
+script 'run() {' '  kept=posts.sh' '  . "$kept"' '}' 'run'
+judge_script
+refused "the control: a script that posts, sourced through a variable in a function, is refused as before"
+
+# A value the function does not hold for certain is not read as though it did: where another
+# command of the script binds the name too, the walk gives no value, and the answer is the one it
+# was (a file run by a path the gate cannot work out is let through until #2683's switch is on).
+script 'run() {' '  kept=posts.sh' '  read -r kept' '  bash "$kept"' '}' 'run'
+judge_script
+allowed "a name the function reads in after setting it is not followed, as before"
+
+echo
+
+echo "passed: $pass, failed: $fail"
+
+printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
+
+[ "$fail" -eq 0 ]
