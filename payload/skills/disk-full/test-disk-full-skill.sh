@@ -236,6 +236,10 @@ done
 fsevents_line="$(grep -m 1 -F '/System/Volumes/Data/.fseventsd' <<< "$writer_code")"
 check "the writer step reads the file event log's size and link count" \
   "$(case "$fsevents_line" in (*'%z'*'%l'*) echo ok ;; (*) echo "the line is: $fsevents_line" ;; esac)"
+# A folder's link count stops at 65,535 (a 16 bit field), and the log's own folder was past it on
+# 2026-11-26 (size 2,568,704, links 65535), so the entry count must come from the size (#3648).
+check "and says the link count stops at 65,535, so the count is read from the size" \
+  "$(grep -qF '65,535' <<< "$writer_section" && echo ok || echo "the step does not say the link count tops out")"
 check "and says the programs it could not read are unknown, never zero" \
   "$(grep -qi 'never as zero\|not zero\|never zero' <<< "$writer_section" && echo ok || echo "the step does not say so")"
 check "and says a file deleted while held open still takes space, and how it shows" \

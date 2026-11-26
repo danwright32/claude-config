@@ -170,8 +170,15 @@ the program; deleting what it holds frees nothing while it holds it.
 
 How many files are being created and changed, by anybody, can also be read without a password,
 from the folder where macOS logs file events. The folder cannot be listed, but its own size can be
-read, and on APFS a folder's size is 32 bytes per entry, the same number as its link count, two of
-them the folder's own (measured on five readable folders on 2026-11-25):
+read, and on APFS a folder's size is 32 bytes per entry, two of them the folder's own, so its entry
+count is the size divided by 32, less 2. On the personal MacBook on 2026-11-26 that held for
+1,153,525 of 1,153,526 folders this account could list, read in a walk from the system volume's
+root (stopped after 80 seconds, unfinished), the applications folder, Homebrew and two working
+folders; the one exception was that root itself, which lists one entry the file system does not
+count. The work MacBook has not been measured. The link count gives the same number only up to
+65,535, where it stops: the log's folder was past that on 2026-11-26 (links 65535, size 2,568,832,
+which is 80,274 entries, the file system's own count of them the same minute). So read the count
+from the size:
 
 ```bash
 stat -f 'size %z, links %l, last changed %Sm' /System/Volumes/Data/.fseventsd
