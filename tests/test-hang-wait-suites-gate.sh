@@ -81,7 +81,7 @@ why_ended(){
   case "$1" in
     ''|*[!0-9]*) printf 'left no exit status (%s)' "${1:-none}" ;;
     127) printf 'was not a child of this suite when waited for (status 127)' ;;
-    *) if [ "$1" -gt 128 ]; then printf 'was ended by signal %s' "$(( $1 - 128 ))"; else printf 'exited %s' "$1"; fi ;;
+    *) if [ "$1" -gt 128 ] && [ "$1" -ne 255 ]; then printf 'was ended by signal %s' "$(( $1 - 128 ))"; else printf 'exited %s' "$1"; fi ;;
   esac
 }
 # ended_outside <wait status> <what it printed>: whether a judge was ended by something outside it,

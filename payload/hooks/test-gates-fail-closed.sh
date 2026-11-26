@@ -866,7 +866,7 @@ decided_as(){
   return 1
 }
 # A group of runs in the background ends by writing its done file, so a group ended from outside
-# before it finished (a signal, a fork refused) leaves none, and its decisions are never read as
+# before it finished leaves none, and its decisions are never read as
 # the gate deciding: on 2026-11-25 the same loss in tests/test-hang-wait-suites-gate.sh, at a load
 # of 263, read as a missing line, and here it read as the gate deciding two ways, both blank (#3656).
 # gfc_wait_all <pids> <done files>: each group waited for by its own pid, never with a bare wait,
@@ -884,14 +884,15 @@ gfc_wait_all(){
 gfc_ended(){
   case "$1" in
     ''|*[!0-9]*) printf 'left no exit status' ;;
-    *) if [ "$1" -gt 128 ]; then printf 'was ended by signal %s' "$(( $1 - 128 ))"; else printf 'exited %s' "$1"; fi ;;
+    *) if [ "$1" -gt 128 ] && [ "$1" -ne 255 ]; then printf 'was ended by signal %s' "$(( $1 - 128 ))"; else printf 'exited %s' "$1"; fi ;;
   esac
 }
 # gfc_finished <done file> <what> <command...>: true once the group behind the done file finished.
 # One that did not is run once more, in the background and waited for by its pid, so every gate is
 # still judged. One that still did not finish was ended from outside on both tries, and the gate
 # was never asked, so it is reported as a part unmeasured (L411), never read, and the caller skips
-# its checks. A group that exited 0 without its done file is a fault of this suite and fails.
+# its checks. A group that exited by itself (any status that is not a signal) without its done
+# file is a fault of this suite and fails.
 gfc_finished(){
   local done="$1" what="$2" st
   shift 2
@@ -901,10 +902,16 @@ gfc_finished(){
   "$@" &
   wait "$!" 2>/dev/null; st="$?"
   [ -e "$done" ] && return 0
+  # Only a signal is something ending them from outside; any exit status of their own is this
+  # suite's fault, since run_judged bounds and records every gate rather than passing its exit on.
   case "$st" in
-    0|1|127) bad "$what did not finish on both tries, and the second $(gfc_ended "$st"), which is a fault of this suite rather than something ending them from outside" ;;
-    *) echo "SUITE-PART-UNMEASURED $what did not finish on both tries (the second $(gfc_ended "$st")), so the gate was never asked and what it decides was not measured" ;;
+    ''|*[!0-9]*) ;;
+    *) if [ "$st" -gt 128 ] && [ "$st" -ne 255 ]; then
+         echo "SUITE-PART-UNMEASURED $what did not finish on both tries (the second $(gfc_ended "$st")), so the gate was never asked and what it decides was not measured"
+         return 1
+       fi ;;
   esac
+  bad "$what did not finish on both tries, and the second $(gfc_ended "$st"), which is a fault of this suite rather than something ending them from outside"
   return 1
 }
 # The control for gfc_finished (#3656, L1): a stand in group ended by SIGKILL before it finishes,
