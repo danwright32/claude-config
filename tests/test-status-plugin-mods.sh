@@ -143,6 +143,35 @@ printf '%s\n' '{"hooks": {}}' > "$H/settings.json"
 out="$(status "$H")"
 says "$out" 'that carry a mod' && check "a mod in this home's own mods folder is not named" "$(section "$out")" || check "a mod in this home's own mods folder is not named" ok
 
+# ---- 5b. enablement that is absent or unreadable is never reported as off ----
+H="$WORK/h7"; mkdir -p "$H/plugins"
+plugin "$H" carries "$MODS"
+record "$H"
+sec="$(section "$(status "$H")")"
+case "$sec" in *"enabled everywhere on this Mac: carries"*) check "with no settings file, a plugin with a mod is named as enabled, since every plugin loads" ok ;;
+  *) check "with no settings file, a plugin with a mod is named as enabled, since every plugin loads" "${sec:-<no section>}" ;; esac
+printf '%s\n' '{"hooks": {}, "enabledPlugins": ' > "$H/settings.json"
+sec="$(section "$(status "$H")")"
+case "$sec" in *"whether it is enabled is not known"*"carries (its hooks modules: ./register.ts)"*) check "with a settings file that is not valid JSON, it is named as not known" ok ;;
+  *) check "with a settings file that is not valid JSON, it is named as not known" "${sec:-<no section>}" ;; esac
+case "$sec" in *"off at user scope"*) check "and never as off at user scope" "$sec" ;; *) check "and never as off at user scope" ok ;; esac
+
+# ---- 5c. the usual manifest spelling is read once, and a shape that is not read is said ----
+H="$WORK/h8"; mkdir -p "$H/plugins"
+plugin "$H" usual "$MODS" '{"name": "usual", "version": "1.0.0", "hooks": "./hooks/hooks.json"}'
+plugin "$H" listshape "" '{"name": "listshape", "version": "1.0.0", "hooks": ["./a.json"]}'
+plugin "$H" oddmodules '{ "modules": "./register.ts" }'
+record "$H"
+printf '%s\n' '{"hooks": {}, "enabledPlugins": {"usual@market": true, "listshape@market": true, "oddmodules@market": true}}' > "$H/settings.json"
+sec="$(section "$(status "$H")")"
+case "$sec" in *"usual (its hooks modules: ./register.ts)"*) check "a manifest naming ./hooks/hooks.json lists its module once" ok ;;
+  *) check "a manifest naming ./hooks/hooks.json lists its module once" "${sec:-<no section>}" ;; esac
+unread_line="$(printf '%s\n' "$sec" | grep -F 'could not be read, so whether it carries a mod is not known' || true)"
+case "$unread_line" in *listshape*) check "a manifest whose hooks is a list is named as unread, never as no mod" ok ;;
+  *) check "a manifest whose hooks is a list is named as unread, never as no mod" "${sec:-<no section>}" ;; esac
+case "$unread_line" in *oddmodules*) check "and a modules that is not a list" ok ;;
+  *) check "and a modules that is not a list" "${sec:-<no section>}" ;; esac
+
 # ---- 6. it reads only ----
 H="$WORK/h1"
 before="$(cd "$H" && find settings.json plugins -type f -exec cksum {} + | sort)"

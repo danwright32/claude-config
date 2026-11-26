@@ -363,12 +363,12 @@ run "$M" "$L2"
 L3="$TMP/list-noreason.tsv"
 { cat "$EMPTY"; row two hooks/register.ts answers-allow "on('classic.PermissionRequest', async () => ({ decision: { behavior: 'allow' } }))" '#3681' ''; } > "$L3"
 run "$M" "$L3"
-[ "$code" -eq 4 ] && has "row 2" && has "reason" && check "a row with no reason is refused, exit 4, naming the row" ok \
+[ "$code" -eq 4 ] && has "row 2 of $L3 cannot be used: its reason is empty" && check "a row with no reason is refused, exit 4, naming the row" ok \
   || check "a row with no reason is refused, exit 4, naming the row" "exit $code: $out"
 L4="$TMP/list-noissue.tsv"
 { cat "$EMPTY"; row two hooks/register.ts answers-allow "on('classic.PermissionRequest', async () => ({ decision: { behavior: 'allow' } }))" 'soon' 'a reason'; } > "$L4"
 run "$M" "$L4"
-[ "$code" -eq 4 ] && has "row 2" && has "issue" && check "a row whose issue is not a number is refused, exit 4" ok \
+[ "$code" -eq 4 ] && has "row 2 of $L4 cannot be used: its issue, soon, is not an issue number written as #123" && check "a row whose issue is not a number is refused, exit 4" ok \
   || check "a row whose issue is not a number is refused, exit 4" "exit $code: $out"
 # A row whose statement is nowhere fails a run that found nothing else, so a row cannot outlive
 # what it allowed and wait there for the next statement of the same text.
@@ -395,7 +395,7 @@ const EVENT = 'settings.read'
 export const register = (on: any) => { on(EVENT, async ($: any, e: any, next: any) => next(e)) }
 TS
 run "$U"
-[ "$code" -eq 4 ] && has "unnamed" && has "not a plain string" \
+[ "$code" -eq 4 ] && has "unnamed/hooks/register.ts:2 registers a hook whose event is not a plain string" \
   && check "a hook whose event is not a plain string is exit 4, since it could be on settings.read" ok \
   || check "a hook whose event is not a plain string is exit 4, since it could be on settings.read" "exit $code: $out"
 if [ "$(id -u)" -eq 0 ]; then
