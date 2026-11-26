@@ -20,6 +20,11 @@
 #      not step down, and sends again once its own record is back.
 #   5. status names "could not be read" as the likely cause of mods lagging, never "installed but
 #      not running", which nothing measured.
+#   6. The sync lock of a run whose pid the shell may not signal is not broken, from this Mac or a
+#      fresh one from elsewhere, and the refusal says so; one that has gone, one holding no pid, and
+#      one from elsewhere older than the age rule are still broken (#3601).
+#   7. status says when the process table itself could not be read (#3601).
+#   8. A restarting watcher that cannot confirm fswatch is its own says it did not signal it (#3601).
 #
 # The claim on a hook suite rerun had the same fault and is covered where its other cases are,
 # tests/test-hook-suite-rerun.sh, and retire's line about a watcher in tests/test-sync-retire.sh.
@@ -334,6 +339,12 @@ sync_lock_as "$SL_DEAD" fixturehost
 out_sd="$(send_once)"
 check "#3601 (recovery) a sync lock from this Mac whose run has gone is still broken, and the send goes ahead" \
   "[ \"\$(cat '$SL/pid' 2>/dev/null)\" != '$SL_DEAD' ] && ! line_has \"\$out_sd\" 'still holds'" "$out_sd"
+# A pid file holding no number names no run at all, and is broken as it always was, never kept as
+# a run whose pid could not be tested.
+sync_lock_as notapid fixturehost
+out_sg="$(send_once)"
+check "#3601 (recovery) a sync lock whose pid file holds no number is still broken, and the send goes ahead" \
+  "[ \"\$(cat '$SL/pid' 2>/dev/null)\" != notapid ] && ! line_has \"\$out_sg\" 'still holds'" "$out_sg"
 rm -rf "$SL"
 
 # ---- 7. status, when the process table cannot be read (claude-config#3601) ----

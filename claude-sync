@@ -803,7 +803,9 @@ have_git(){ [ "${SYNC_NO_GIT:-0}" != "1" ]; }
 # 0 it is running, 1 it has gone (or no pid is recorded), 2 the shell could not tell, its kill -0
 # refused rather than answered. Only 1 lets a lock go: before #3601 a refusal read as gone, so under
 # a sandbox that refuses signals a live run's lock was broken and a second run went in beside it.
-lock_owner_alive(){ [ -n "${1:-}" ] || return 1; pid_running "$1"; }
+# A pid file holding no pid at all names no run, and is broken as it always was: only a number the
+# shell could not test is could not tell.
+lock_owner_alive(){ case "${1:-}" in ''|*[!0-9]*) return 1 ;; esac; pid_running "$1"; }
 # What a refusal says of a run whose pid could not be tested, appended to the refusal's own words.
 lock_owner_unread_words(){   # $1 = the pid
   printf ' Whether process %s is still running could not be told: kill -0 %s was refused rather than answered, so the lock was left with it. That is not the same as it having gone; a lock from this Mac is never broken on a test that could not be made, and one from elsewhere is broken once it is older than %ss (SYNC_LOCK_MAX_AGE).' "$1" "$1" "${SYNC_LOCK_MAX_AGE:-3600}"

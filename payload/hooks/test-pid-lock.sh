@@ -111,11 +111,13 @@ want "a lock with no pid in it is never broken on a guess" "1  " "$(take "$FIX/e
 echo "pid lock: one reading of a pid, in one place (L370)"
 # claude-sync and lib/sync-clone.sh each had their own copy of the three answer reading (#3601 item
 # 6). Both now take it from here.
-if [ -f "$DIR/../../claude-sync" ]; then
-  n="$(cat "$DIR/../../claude-sync" "$DIR/lib/sync-clone.sh" | grep -c -E '^(pid_running|process_read|sc_pid_running)\(\)')"
+# The checkout this copy sits in (lib/checkout-root.sh, #1567); the installed copy is in none.
+PL_CHECKOUT="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
+if [ -n "$PL_CHECKOUT" ] && [ -f "$PL_CHECKOUT/claude-sync" ]; then
+  n="$(cat "$PL_CHECKOUT/claude-sync" "$DIR/lib/sync-clone.sh" | grep -c -E '^(pid_running|process_read|sc_pid_running)\(\)')"
   want "neither claude-sync nor lib/sync-clone.sh defines a pid reading of its own" 0 "$n"
 else
-  echo "SUITE-PART-UNMEASURED whether claude-sync keeps a pid reading of its own: this copy of the hooks has no claude-sync beside it"
+  echo "SUITE-PART-UNMEASURED whether claude-sync keeps a pid reading of its own: this copy of the hooks is in no checkout of the repository"
 fi
 grep -q -E '^pid_running\(\)' "$LIB" && grep -q -E '^process_read\(\)' "$LIB" \
   && check "and lib/pid-lock.sh holds the one reading" ok || check "and lib/pid-lock.sh holds the one reading" "it does not define pid_running and process_read"

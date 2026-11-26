@@ -20,7 +20,10 @@
 #   7. A record owed for longer than a rerun is given ends in one notification even when the load
 #      never allowed a rerun, and  claude-sync recheck, the remedy it names, clears it.
 #   8. A claim whose holder could not be read, because ps failed or is missing, is not taken: the
-#      receive says so and runs nothing, and status says so too (claude-config#3584).
+#      receive says so and runs nothing, and status says so too (claude-config#3584). That holds
+#      through a pull's own take of the claim, for a process the shell may not signal (#3601).
+#   9. A suite being stopped whose state ps cannot read is KILLed after its grace, never left to a
+#      bare wait until it ends by itself, and the stop says so (claude-config#3601).
 #
 # Everything runs as a fixture home: CLAUDE_HOME and SYNC_REPO are throwaways in WORK, so
 # claude-sync touches nothing that belongs to the Mac (README "A fixture home touches nothing that
