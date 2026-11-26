@@ -9,7 +9,9 @@
 # Exit codes, each distinct so a caller can never read one as another (L11, L53):
 #   0  every mod passed (the count is printed)
 #   1  at least one mod failed, each named with the engine's reason
-#   2  the mods folder does not exist
+#   2  the mods folder does not exist, or what was asked cannot be run as given: a name after it that
+#      is not a mod there or is named twice, names after one mod's own folder, or a round
+#      (CHECK_MODS_ROUND) with no names or a name that could leave its folder (#3622). Nothing checked.
 #   3  UNMEASURED: mods are present but there is no claude command to ask (L411, L490)
 #   4  UNMEASURED: claude answered that hooks modules are switched off in this process (its cached
 #      rollout switch, cachedGrowthBookFeatures.tengu_plugin_hooks_modules in the user's
@@ -23,6 +25,11 @@
 # A whole folder passing on a claude records that build as the one the mods last passed on, in this
 # Mac's ~/.claude/state (CHECK_MODS_LAST_PASSED moves it, set empty turns it off), and a whole folder
 # run on another build says so in its first line (#3297, LAST_PASSED below).
+#
+# check-mods.sh <mods dir> <mod> [<mod> ...] checks only the named mods of the folder, each exactly as
+# above (#3622): the real tree's parts. Such a run records nothing by itself; given CHECK_MODS_ROUND,
+# it joins its round, and the part completing a whole pass of the folder records it
+# (round_pass_write below).
 #
 # CLAUDE_BIN names the claude command; left unset it is found on PATH, then at ~/.local/bin/claude.
 # TSC_BIN names a TypeScript compiler for the strict type check; left unset it is the compiler pinned
@@ -80,6 +87,39 @@ if [ -z "$dir" ] || [ ! -d "$dir" ]; then
   exit 2
 fi
 dir="${dir%/}"
+# Names after the folder check those mods of it and no other (#3622): the real tree's parts each hand
+# over the mods dealt to them, since one run over every mod read 490 and 667 s on a runner on
+# 2026-11-25. Each named
+# mod is checked exactly as in a whole folder's run. A name that is not a mod there, or one named
+# twice, is refused before anything is checked, never skipped (L100).
+shift
+named=("$@")
+round="${CHECK_MODS_ROUND:-}"
+if [ "${#named[@]}" -gt 0 ]; then
+  for m in "${named[@]}"; do
+    if [ -z "$m" ] || [ "${m#*/}" != "$m" ] || [ "${m#.}" != "$m" ] || [ ! -f "$dir/$m/.claude-plugin/plugin.json" ]; then
+      echo "check-mods: '$m' is not a mod in $dir (a folder directly inside it holding .claude-plugin/plugin.json), so nothing was checked." >&2
+      exit 2
+    fi
+  done
+  dup="$(printf '%s\n' "${named[@]}" | LC_ALL=C sort | uniq -d | paste -sd' ' -)"
+  if [ -n "$dup" ]; then
+    echo "check-mods: $dup named more than once, so nothing was checked." >&2
+    exit 2
+  fi
+fi
+# CHECK_MODS_ROUND names the run the parts belong to, so their passes can be put together into the
+# record of the build every mod last passed on (LAST_PASSED below). Only parts have a round: a whole
+# folder records by itself.
+if [ -n "$round" ]; then
+  if [ "${#named[@]}" -eq 0 ]; then
+    echo "check-mods: CHECK_MODS_ROUND is for a run of named mods, a part of a round, and this run names none; a whole folder records its own pass. Nothing was checked." >&2
+    exit 2
+  fi
+  case "$round" in
+    *[!A-Za-z0-9._-]*|.*) echo "check-mods: CHECK_MODS_ROUND '$round' may hold only letters, digits, dots, dashes and underscores, and not start with a dot, since it names a folder. Nothing was checked." >&2; exit 2 ;;
+  esac
+fi
 
 mods=()
 # One mod's own folder is checked as that one mod (#3105), its dependencies read from the folder
@@ -87,17 +127,28 @@ mods=()
 # handed as "." still has a name, and logically, so a link to a mod (a folder of links, #2417) reads
 # its dependencies beside the link rather than beside the mod it points at.
 scope=""
-if [ -f "$dir/.claude-plugin/plugin.json" ]; then
+if [ -f "$dir/.claude-plugin/plugin.json" ] && [ "${#named[@]}" -gt 0 ]; then
+  echo "check-mods: $dir is one mod's own folder, so it has no mods to name. Hand the folder holding it, then the names. Nothing was checked." >&2
+  exit 2
+elif [ -f "$dir/.claude-plugin/plugin.json" ]; then
   one="$(cd "$dir" && pwd)"
   dir="$(dirname "$one")"
   mods=("$one")
   scope="1 mod checked: $(basename "$one"), its dependencies read from $dir"
   whole_folder=0
 else
+  # Every mod of the folder is listed, named or not: a round's record needs all of them (#3622).
+  folder_mods=()
   for d in "$dir"/*/; do
-    [ -f "$d.claude-plugin/plugin.json" ] && mods+=("${d%/}")
+    [ -f "$d.claude-plugin/plugin.json" ] || continue
+    folder_mods+=("$(basename "$d")")
+    if [ "${#named[@]}" -eq 0 ] || printf '%s\n' "${named[@]}" | grep -qxF "$(basename "$d")"; then mods+=("${d%/}"); fi
   done
   whole_folder=1
+  if [ "${#named[@]}" -gt 0 ]; then
+    whole_folder=0
+    scope="${#mods[@]} of ${#folder_mods[@]} mods checked in $dir: $(printf '%s\n' "${mods[@]}" | sed 's#.*/##' | paste -sd, - | sed 's/,/, /g')"
+  fi
 fi
 n=${#mods[@]}
 # A run that checks no mod is not a pass (#3105, L98): handed one mod's subfolder, or any folder with
@@ -144,7 +195,45 @@ last_passed_write(){   # $1 = build: written beside the record and moved over it
   echo "check-mods: the pass above could not be recorded in $LAST_PASSED as the build the mods last passed on." >&2
   return 1
 }
-[ "$whole_folder" -eq 0 ] || last_passed_note "$cc_now"
+# A PART'S PASS, PUT TOGETHER WITH THE REST OF ITS ROUND (#3622). The record above still says one
+# thing: every mod in the folder passed on that build on this Mac. A part checks only some, so it never
+# writes the record from its own pass. It leaves the mods it passed and the build in a file of its
+# round (CHECK_MODS_ROUND, the run the parts belong to), written whole and then moved into place, and
+# then reads every file of the round: when they name every mod now in the folder, all on the build
+# installed now, the round is one whole pass and the record is written, by last_passed_write as a
+# whole run writes it. A failing or unmeasured part leaves no file, so its round never records.
+# There is no lock to be left held by a part that dies (L409): each part writes its own file before it
+# reads the others, so of two finishing at once the one reading last sees both, and if both do, both
+# move the same line into place. A part killed before its file is moved in leaves only a file named
+# .writing.*, which is never read. A round that never completed is removed after a day by the next
+# part to write one.
+round_pass_write(){   # $1 = build
+  local rounds="$LAST_PASSED.rounds" rd tmp passed missing m
+  [ -n "$LAST_PASSED" ] && [ -n "${1:-}" ] && [ -n "$round" ] || return 0
+  rd="$rounds/$round"
+  if ! mkdir -p "$rd" 2>/dev/null || ! tmp="$(mktemp "$rd/.writing.XXXXXX" 2>/dev/null)"; then
+    echo "check-mods: the pass above could not be recorded in round $round in $rounds, so this round will not record the build the mods last passed on." >&2
+    return 1
+  fi
+  find "$rounds" -mindepth 1 -maxdepth 1 -type d ! -name "$round" -mtime +0 -exec rm -rf {} + 2>/dev/null
+  if ! { printf '%s\n' "${mods[@]}" | sed 's#.*/##' | awk -v b="$1" '{ print b "\t" $0 }' > "$tmp" && mv -f "$tmp" "$rd/part.${tmp##*.}"; }; then
+    rm -f "$tmp"
+    echo "check-mods: the pass above could not be recorded in round $round in $rounds, so this round will not record the build the mods last passed on." >&2
+    return 1
+  fi
+  passed="$(find "$rd" -mindepth 1 -maxdepth 1 -type f -name 'part.*' 2>/dev/null | grep -E '/part\.[A-Za-z0-9]{6}$' \
+    | while IFS= read -r f; do cat "$f" 2>/dev/null; done | awk -F'\t' -v b="$1" '$1 == b { print $2 }' | LC_ALL=C sort -u)"
+  missing=0
+  for m in "${folder_mods[@]}"; do
+    printf '%s\n' "$passed" | grep -qxF "$m" || { missing=1; break; }
+  done
+  [ "$missing" -eq 0 ] || return 0
+  last_passed_write "$1" || return 1
+  rm -rf "$rd" 2>/dev/null
+  return 0
+}
+# The note is said by a whole folder's run, and by a part of a round, whose round is a whole one.
+{ [ "$whole_folder" -eq 1 ] || [ -n "$round" ]; } && last_passed_note "$cc_now"
 # CHECK_MODS_REQUIRE_CLAUDE=1 is a caller's promise that a working claude is here, made where the pull
 # request checks install one for the mods (#3297). With it, a run that could not check the mods with
 # claude is a failure, exit 6, rather than UNMEASURED: on that runner it means the install broke, and
@@ -704,6 +793,11 @@ if [ "$unmeasured" -eq 1 ]; then
 fi
 # Every mod passed on this build. Recorded as the build the mods last passed on, for the note at the
 # top of the next run (#3297), only when the whole folder was checked: one mod passing says nothing
-# about the rest. A record that cannot be written is said, and the pass stands.
-[ "$whole_folder" -eq 0 ] || last_passed_write "$cc_now" || true
+# about the rest, unless it is a part whose round, with this pass, is a whole one (round_pass_write).
+# A record that cannot be written is said, and the pass stands.
+if [ "$whole_folder" -eq 1 ]; then
+  last_passed_write "$cc_now" || true
+elif [ -n "$round" ]; then
+  round_pass_write "$cc_now" || true
+fi
 exit 0
