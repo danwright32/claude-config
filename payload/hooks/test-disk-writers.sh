@@ -8,8 +8,10 @@
 # traceback and never a report built from half of it. It lives beside the script so the hooks'
 # coverage check, which reads only the test-*.sh installed beside the hooks, sees it named.
 #
-# Nothing here reads this Mac's process table or disk: every run is handed its readings through
-# DISK_WRITERS_SAMPLES, so it answers the same on any machine.
+# Nothing here depends on this Mac's process table or disk, so it answers the same on any machine.
+# Every run but two is handed its readings through DISK_WRITERS_SAMPLES. Those two, in section 4,
+# are live readings made to fail: one names a volume that is not there, whose free space is read
+# before any process is, and one replaces the process reader with one that fails.
 set -uo pipefail
 
 # Its own wall clock, and whatever it starts stopped with it however it ends (claude-config#465).
