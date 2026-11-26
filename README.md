@@ -6438,6 +6438,11 @@ the order the code runs them, never by line: two on one line keep their order, a
 file it is handed to has its uses judged at the hand off in its own order, and a read on the other
 arm of an if from a use never follows it. A read after a use that runs only on some of its paths
 (inside a branch, a handler or a loop the use is not in), or a hand off round a cycle, is a `U1`.
+A `poll()` only compared with None (`while p.poll() is None`) asks whether the process still runs
+and is no read of how it ended. A method that ends a held process must read how it ended after the
+end on every path out of it, and the method that starts one settles it alone only when every path
+out of it waits; a helper it is handed to is run along those paths from the state at the hand off
+(#3663).
 
 The pull request checks install Claude Code for the mods' own tests (#3297), at the one version
 written in `.github/claude-code-version` and read by `tools/install-claude-code.sh` alone, so every
