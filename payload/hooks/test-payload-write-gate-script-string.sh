@@ -303,8 +303,10 @@ if [ "$RC" -ne 124 ]; then check "#3689 a quote that never closes after 128 back
 else check "#3689 a quote that never closes after 128 backslashes is answered within 60 seconds" "no answer in 60 seconds"; fi
 
 # A string is read up to 4000 characters, so a quote that never closes costs a bounded search. A
-# string longer than that, or one that never closes, is one this gate could not read, and is
+# string that goes on past that without its quote closing is one this gate could not read, and is
 # refused as untold in a call naming payload, never let through unread. Exactly the count is read.
+# A quote with 4000 characters or fewer after it that never closes is not refused: it is no string
+# a script runs, and is most often the closing quote of a search, as the last two controls show.
 sized_string(){ python3 -c '
 import sys
 body = "true " + "x" * (int(sys.argv[1]) - 5)
