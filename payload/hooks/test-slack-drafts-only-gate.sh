@@ -1141,8 +1141,11 @@ notes_n=0
 phase_notes=""
 suite_note() { notes_n=$((notes_n + 1)); printf 'SUITE-NOTE %s\n' "$1"; }
 # The limit each cost case is held to, in units of the yardstick, for a platform (uname -s; this
-# machine's when none is given). The one place these numbers live (#3170). The fallback case, where
-# the gate's seconds run out (short-budget), takes the one lesson limit through here by design.
+# machine's when none is given). The one place the limits that differ by platform live (#3170).
+# Two limits are the same on every platform and are set where they are judged, not here: three
+# lessons (66) and the slow reader (1.25 times the run's own one lesson reading). The fallback
+# case, where the gate's seconds run out (short-budget), takes the one lesson limit through here
+# by design.
 #
 # ONE LESSON: 36 ON macOS AND 46 OFF IT (#3170, Dan's choice of 2026-11-25: "1.1 Limit 46 on Linux
 # (Recommended)", the option reading "Your 11-23 rule, top reading plus 15%: 40.3 times 1.15. macOS
