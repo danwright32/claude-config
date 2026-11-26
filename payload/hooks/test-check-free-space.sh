@@ -1210,6 +1210,116 @@ swap_probe "$((200 * GB))" "$S_SWD2" "$SWAP_SMALL"
 check "and the record keeps a bounded number of days" \
   "$([ "$(grep -c . "$S_SWD2/_fixture.swap-days")" -le 120 ] && grep -q "^$swd_day " <<< "$(tail -n 1 "$S_SWD2/_fixture.swap-days")" && echo ok || echo "$(grep -c . "$S_SWD2/_fixture.swap-days") line(s), last: $(tail -n 1 "$S_SWD2/_fixture.swap-days")")"
 
+# ---- the swap record outlives a restart (claude-config#1781) ----
+# The record was kept beside the readings, in the temporary folder macOS empties at every restart,
+# so on 2026-11-26 the personal MacBook held 2 days of it, not the month #1781 waits for. It is now
+# kept per Mac under ~/.claude/state, as the warning copies are. These cases run with nothing moved
+# and HOME and TMPDIR the suite's own, so the default folders are the ones measured and neither real
+# one is touched (L2).
+sd_run(){   # sd_run <home> <tmpdir> <swap reader> <epoch> [VAR=value...] -> sets PROBE_RC and PROBE_MSG
+  local home="$1" tmpd="$2" swap="$3" at="$4" out
+  out="$(mktemp "$TMPROOT/sd-out.XXXXXXXX")" || { PROBE_RC=99; PROBE_MSG="mktemp failed"; return 0; }
+  shift 4
+  mkdir -p "$home" "$tmpd"
+  env -u FREE_SPACE_STATE_DIR -u FREE_SPACE_WARNINGS_DIR -u FREE_SPACE_SWAP_DAYS_DIR HOME="$home" TMPDIR="$tmpd" \
+    FREE_SPACE_BYTES="$((200 * GB))" FREE_SPACE_NOW="$at" FREE_SPACE_PATH=/fixture \
+    FREE_SPACE_SWAP_CMD="$swap" FREE_SPACE_TOP_CMD="$TOP_BUSY" "$@" bash "$CHECK" > "$out" 2>&1
+  PROBE_RC=$?
+  PROBE_MSG="$(cat "$out" 2>/dev/null || true)"
+}
+SMALL_B=142868480   # 136.25M, as SWAP_SMALL prints it
+SD_HOME="$TMPROOT/sd-home"; SD_TMP="$TMPROOT/sd-tmpdir"
+SD_NEW="$SD_HOME/.claude/state/free-space-swap-days/_fixture.swap-days"
+SD_OLD="$SD_TMP/claude-free-space/_fixture.swap-days"
+swd_next="$(date -u -r "$((T0 + 86400))" +%F 2>/dev/null || date -u -d "@$((T0 + 86400))" +%F)"
+sd_run "$SD_HOME" "$SD_TMP" "$SWAP_SMALL" "$T0"
+check "with nothing moved, a Mac with no record starts one per Mac under ~/.claude/state, holding only today" \
+  "$([ "$(cat "$SD_NEW" 2>/dev/null)" = "$swd_day $SMALL_B $FREE_SPACE_DISK_BYTES" ] && [ ! -e "$SD_OLD" ] && echo ok || echo "new: $(cat "$SD_NEW" 2>&1 | tr '\n' ' '); old: $(cat "$SD_OLD" 2>&1 | tr '\n' ' ')")"
+rm -rf "$SD_TMP"   # a restart: macOS empties the temporary folder
+sd_run "$SD_HOME" "$SD_TMP" "$SWAP_SMALL" "$((T0 + 86400))"
+check "and a restart, which empties the temporary folder, does not take the days already recorded" \
+  "$([ "$(cat "$SD_NEW" 2>/dev/null)" = "$swd_day $SMALL_B $FREE_SPACE_DISK_BYTES"$'\n'"$swd_next $SMALL_B $FREE_SPACE_DISK_BYTES" ] && echo ok || echo "record: $(cat "$SD_NEW" 2>&1 | tr '\n' ' ')")"
+
+# A Mac that ran the version before holds its days in the temporary folder. They are carried into
+# the per Mac record, a day both hold keeping the higher reading (each line is that day's highest),
+# and the old record is removed only by a later run that finds every one of its days already there,
+# so a write racing the carry cannot lose them (L5).
+SC_HOME="$TMPROOT/sc-home"; SC_TMP="$TMPROOT/sc-tmpdir"
+SC_NEW="$SC_HOME/.claude/state/free-space-swap-days/_fixture.swap-days"
+SC_OLD="$SC_TMP/claude-free-space/_fixture.swap-days"
+mkdir -p "${SC_NEW%/*}" "${SC_OLD%/*}"
+printf '2025-09-01 500 7\n2025-09-02 700 7\n2025-09-04 800 7\n' > "$SC_OLD"
+printf '2025-09-02 900 8\n2025-09-03 100 8\n2025-09-04 300 8\n' > "$SC_NEW"
+sc_want="2025-09-01 500 7
+2025-09-02 900 8
+2025-09-03 100 8
+2025-09-04 800 7
+$swd_day $SMALL_B $FREE_SPACE_DISK_BYTES"
+sd_run "$SC_HOME" "$SC_TMP" "$SWAP_SMALL" "$T0"
+check "a record the version before left in the temporary folder is carried into the per Mac one, the higher reading kept where both hold a day" \
+  "$([ "$(cat "$SC_NEW" 2>/dev/null)" = "$sc_want" ] && echo ok || echo "record: $(cat "$SC_NEW" 2>&1 | tr '\n' ' ')")"
+sd_run "$SC_HOME" "$SC_TMP" "$SWAP_SMALL" "$((T0 + 60))"
+sd_run "$SC_HOME" "$SC_TMP" "$SWAP_SMALL" "$((T0 + 120))"
+check "and carried once: later runs add no day twice, and the old record goes once the new one holds all of it" \
+  "$([ "$(cat "$SC_NEW" 2>/dev/null)" = "$sc_want" ] && [ ! -e "$SC_OLD" ] && echo ok || echo "record: $(cat "$SC_NEW" 2>&1 | tr '\n' ' '); old: $(cat "$SC_OLD" 2>&1 | tr '\n' ' ')")"
+
+# Assume it runs at once in several sessions: six runs in the same instant, with an old record still
+# to carry, leave every old day once, today once, and nothing else in the file.
+SP_HOME="$TMPROOT/sp-home"; SP_TMP="$TMPROOT/sp-tmpdir"
+SP_NEW="$SP_HOME/.claude/state/free-space-swap-days/_fixture.swap-days"
+mkdir -p "$SP_TMP/claude-free-space"
+printf '2025-09-01 500 7\n2025-09-02 700 7\n' > "$SP_TMP/claude-free-space/_fixture.swap-days"
+sp_pids=()
+for _i in 1 2 3 4 5 6; do sd_run "$SP_HOME" "$SP_TMP" "$SWAP_SMALL" "$T0" & sp_pids+=("$!"); done
+for _p in "${sp_pids[@]}"; do wait "$_p"; done
+check "six sessions writing the same day at once, with a carry pending, leave each day once and nothing torn" \
+  "$([ "$(cat "$SP_NEW" 2>/dev/null)" = "2025-09-01 500 7"$'\n'"2025-09-02 700 7"$'\n'"$swd_day $SMALL_B $FREE_SPACE_DISK_BYTES" ] && echo ok || echo "record: $(cat "$SP_NEW" 2>&1 | tr '\n' ' ')")"
+
+# A record that cannot be kept is said, and never changes the verdict or its exit code. The warning
+# copies go to a folder of each run's own, so the swap record's folder is the only difference.
+: > "$TMPROOT/sd-blocked"   # a file where the folder would be, so the folder cannot be made
+SD_NOTE="could not keep today's swap reading"
+sd_pair(){   # sd_pair <name> <free bytes> <swap reader> -> sets SD_BASE_RC/MSG and PROBE_RC/MSG for the blocked run
+  swap_probe "$2" "$TMPROOT/state-sd-$1-a" "$3" "" FREE_SPACE_SWAP_DAYS_DIR="$TMPROOT/sd-$1-folder" FREE_SPACE_WARNINGS_DIR="$TMPROOT/sd-$1-warn-a"
+  SD_BASE_RC=$PROBE_RC; SD_BASE_MSG="$PROBE_MSG"
+  swap_probe "$2" "$TMPROOT/state-sd-$1-b" "$3" "" FREE_SPACE_SWAP_DAYS_DIR="$TMPROOT/sd-blocked/swap-days" FREE_SPACE_WARNINGS_DIR="$TMPROOT/sd-$1-warn-b"
+}
+sd_same(){   # the blocked run said the base's words, plus one line naming the folder, with the base's exit code
+  [ "$PROBE_RC" -eq "$SD_BASE_RC" ] && [ "$(grep -vF "$SD_NOTE" <<< "$PROBE_MSG")" = "$SD_BASE_MSG" ] \
+    && grep -F "$SD_NOTE" <<< "$PROBE_MSG" | grep -qF "$TMPROOT/sd-blocked/swap-days" && echo ok \
+    || echo "base exit $SD_BASE_RC, blocked exit $PROBE_RC, said: $PROBE_MSG"
+}
+sd_pair low "$((7 * GB))" "$SWAP_SMALL"
+check "a swap record folder that cannot be made is said on a low disk warning, which keeps its exit 3 and its words" \
+  "$([ "$SD_BASE_RC" -eq 3 ] && sd_same || echo "base exit $SD_BASE_RC")"
+sd_pair full "$((200 * GB))" "$SWAP_BIG"
+check "and on a swap nearly full warning, which keeps its exit 5 and its words" \
+  "$([ "$SD_BASE_RC" -eq 5 ] && sd_same || echo "base exit $SD_BASE_RC")"
+sd_pair room "$((200 * GB))" "$SWAP_SMALL"
+check "and a disk with room still exits 0 and prints nothing on a prompt" \
+  "$([ "$PROBE_RC" -eq 0 ] && [ -z "$PROBE_MSG" ] && [ "$SD_BASE_RC" -eq 0 ] && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+sd_report="$(env FREE_SPACE_BYTES="$((200 * GB))" FREE_SPACE_NOW="$T0" FREE_SPACE_STATE_DIR="$TMPROOT/state-sd-report" FREE_SPACE_PATH=/fixture \
+  FREE_SPACE_SWAP_CMD="$SWAP_SMALL" FREE_SPACE_SWAP_DAYS_DIR="$TMPROOT/sd-blocked/swap-days" bash "$CHECK" --report 2>&1)"; sd_report_rc=$?
+check "while --report on a disk with room says it, and still exits 0" \
+  "$([ "$sd_report_rc" -eq 0 ] && grep -F "$SD_NOTE" <<< "$sd_report" | grep -qF 'the folder could not be made' && echo ok || echo "exit $sd_report_rc, said: $sd_report")"
+SU_DIR="$TMPROOT/sd-unreadable"; mkdir -p "$SU_DIR"
+printf '2025-09-01 500 7\n' > "$SU_DIR/_fixture.swap-days"; chmod 000 "$SU_DIR/_fixture.swap-days"
+su_report="$(env FREE_SPACE_BYTES="$((200 * GB))" FREE_SPACE_NOW="$T0" FREE_SPACE_STATE_DIR="$TMPROOT/state-su-report" FREE_SPACE_PATH=/fixture \
+  FREE_SPACE_SWAP_CMD="$SWAP_SMALL" FREE_SPACE_SWAP_DAYS_DIR="$SU_DIR" bash "$CHECK" --report 2>&1)"; su_report_rc=$?
+chmod 600 "$SU_DIR/_fixture.swap-days"
+check "a record that cannot be read is said, exits 0, and is left as it was rather than replaced by today alone" \
+  "$([ "$su_report_rc" -eq 0 ] && grep -F "$SD_NOTE" <<< "$su_report" | grep -qF 'could not be read' && [ "$(cat "$SU_DIR/_fixture.swap-days")" = "2025-09-01 500 7" ] && echo ok || echo "exit $su_report_rc, record: $(cat "$SU_DIR/_fixture.swap-days"), said: $su_report")"
+# An old record that cannot be carried is said and left where it is, today is still kept, and the
+# low disk warning keeps its exit 3.
+SF_HOME="$TMPROOT/sf-home"; SF_TMP="$TMPROOT/sf-tmpdir"
+SF_OLD="$SF_TMP/claude-free-space/_fixture.swap-days"
+SF_NEW="$SF_HOME/.claude/state/free-space-swap-days/_fixture.swap-days"
+mkdir -p "${SF_OLD%/*}"; printf '2025-09-01 500 7\n' > "$SF_OLD"; chmod 000 "$SF_OLD"
+sd_run "$SF_HOME" "$SF_TMP" "$SWAP_SMALL" "$T0" FREE_SPACE_BYTES="$((7 * GB))"
+chmod 600 "$SF_OLD"
+check "an old record that cannot be carried is said and left in place, today is still kept, and the warning keeps exit 3" \
+  "$([ "$PROBE_RC" -eq 3 ] && grep -qF "could not carry the daily swap readings kept in $SF_OLD" <<< "$PROBE_MSG" && [ "$(cat "$SF_OLD")" = "2025-09-01 500 7" ] && [ "$(cat "$SF_NEW" 2>/dev/null)" = "$swd_day $SMALL_B $FREE_SPACE_DISK_BYTES" ] && echo ok || echo "exit $PROBE_RC, new: $(cat "$SF_NEW" 2>&1), said: $PROBE_MSG")"
+
 # ---- the disk-clean scan's remaining total, added to a low or falling warning (#1809) ----
 # A warning that says the disk is nearly full, while a scan from two days ago already found 14 GB
 # that could go, leaves Dan to rediscover it. So on verdict 3 or 4 the warning adds one line: what

@@ -71,6 +71,9 @@
 #                             default beside the readings when FREE_SPACE_STATE_DIR moves them, else
 #                             ~/.claude/state/free-space-warnings)
 #   FREE_SPACE_WARNING_KEEP_DAYS  how long each of those copies is kept (default 14, Dan's decision)
+#   FREE_SPACE_SWAP_DAYS_DIR  where the daily swap record is kept (claude-config#1781; chosen by the
+#                             same rule as the copies: beside the readings when FREE_SPACE_STATE_DIR
+#                             moves them, else ~/.claude/state/free-space-swap-days)
 #   FREE_SPACE_SYMBOL_CACHE   the macOS symbol cache folder to look for (default the real one)
 #   FREE_SPACE_SWAP_SHARE_PCT swap above this share of the disk names the memory holders (default 2)
 #   FREE_SPACE_SWAP_FULL_PCT  swap above this share of its own total is nearly full (default 90, #2559)
@@ -254,10 +257,20 @@ tmp="$STATE.$$"
 # A COPY THAT CANNOT BE WRITTEN NEVER COSTS THE WARNING. A full disk is exactly when this runs: the
 # warning prints and keeps its exit code, the failure is one line, the episode record is removed so
 # the next warning tries again, and nothing the shell says on the way spills into the warning.
-if [ -n "${FREE_SPACE_WARNINGS_DIR:-}" ]; then WARN_DIR="$FREE_SPACE_WARNINGS_DIR"
-elif [ -n "${FREE_SPACE_STATE_DIR:-}" ]; then WARN_DIR="$STATE_DIR/warnings"
-elif [ -n "${HOME:-}" ]; then WARN_DIR="$HOME/.claude/state/free-space-warnings"
-else WARN_DIR=""; fi
+#
+# The one rule for where a record that must outlive a restart is kept, used by these copies and by
+# the daily swap record (claude-config#1781): the folder named outright, else the given place beside
+# the readings when FREE_SPACE_STATE_DIR moved them, else ~/.claude/state/<name>, else none (HOME is
+# not set). Printed for the caller to capture, never set through printf -v into a variable the caller
+# names: the Slack drafts gate cannot follow a name bound that way, and stops following this script's
+# variables at it, so it refuses every command that runs this check (claude-config#2465).
+per_mac_dir(){ # per_mac_dir <folder named outright> <folder when the readings moved> <name under ~/.claude/state>
+  if [ -n "$1" ]; then printf '%s' "$1"
+  elif [ -n "${FREE_SPACE_STATE_DIR:-}" ]; then printf '%s' "$2"
+  elif [ -n "${HOME:-}" ]; then printf '%s' "$HOME/.claude/state/$3"
+  fi
+}
+WARN_DIR="$(per_mac_dir "${FREE_SPACE_WARNINGS_DIR:-}" "$STATE_DIR/warnings" free-space-warnings)"
 EPISODE="$STATE.warning-copy"
 COPY_RE='^free-space-warning-[A-Za-z0-9_]+-([0-9]{1,12})-exit[34]\.readings(\.tmp[0-9]+)?$'
 LATEST_COPY=""   # the newest copy kept for this volume, which --report names
@@ -695,9 +708,9 @@ fi
 # and the nudge says it once per session (see swap_full).
 #
 # THE READINGS ARE RECORDED so the 2% can be recalibrated rather than re-argued: the highest reading
-# of each day (UTC), with the disk's size, one line per day in <state dir>/<volume>.swap-days, the
-# newest 120 days kept. The readings file beside it keeps six hours, too short to show an ordinary
-# day. That is a sysctl and an awk on every prompt; `top`, which takes most of a second (0.6 s
+# of each day (UTC), with the disk's size, one line per day in <volume>.swap-days, kept per Mac (see
+# where it is written, claude-config#1781), the newest 120 days kept. The readings file keeps six
+# hours, too short to show an ordinary day. That is a sysctl and an awk on every prompt; `top`, which takes most of a second (0.6 s
 # measured on 2026-10-26 at a load average of 159), runs only when swap is over the share AND the
 # verdict is low or falling, or swap is nearly full (#2559), and is bounded by FREE_SPACE_TOP_SECONDS (default 2, 0 turns it off),
 # its whole process group killed when the bound runs out, so the prompt hook stays inside its 10
@@ -756,25 +769,94 @@ if [ "$swap_over" -eq 1 ] && [ -n "$swap_total" ] && [ "$swap_total" -gt 0 ] \
 fi
 
 # The day's highest swap reading, kept so the share above can be recalibrated (L172).
+#
+# KEPT PER MAC, NOT IN THE TEMPORARY FOLDER (claude-config#1781). The record needs a month of days,
+# and beside the readings it lived in TMPDIR, which macOS empties at every restart: on 2026-11-26 the
+# personal MacBook held 2 days of it, its state folder made two minutes after the last boot. So it is
+# kept where the warning copies are, by per_mac_dir: ~/.claude/state/free-space-swap-days, which the
+# sync never carries, or FREE_SPACE_SWAP_DAYS_DIR, or beside the readings when FREE_SPACE_STATE_DIR
+# moved them (every suite does), so no suite writes into the real folder.
+#
+# CARRIED ONCE FROM WHERE THE VERSION BEFORE KEPT IT. A record still in the temporary folder is
+# merged in, a day both hold keeping the higher reading, since each line is that day's highest. It is
+# removed only by a later run that finds every one of its days already in the new record, never by
+# the run that merged it: a session writing its own reading in the same instant can replace the
+# merged file with one read just before it, and the old record is then still there to carry again
+# (L5). Two sessions merging at once write the same lines.
+#
+# A RECORD THAT CANNOT BE KEPT NEVER COSTS THE VERDICT. Its reason is said beside a warning and
+# under --report (swap_days_note), never on a prompt with room, which prints nothing; the exit code
+# is the same either way. A record that cannot be read is left as it is rather than replaced by
+# today alone.
+SWAP_DAYS_WHY=""; SWAP_DAYS=""; SWAP_DAYS_CARRY_FAILED=0
+SWAP_DAYS_DIR="$(per_mac_dir "${FREE_SPACE_SWAP_DAYS_DIR:-}" "$STATE_DIR" free-space-swap-days)"
+SWAP_DAYS_OLD="$STATE.swap-days"
+# Prints, per day, the line holding its highest reading from the files given, oldest day first. A
+# line that is not "<YYYY-MM-DD> <bytes> ..." is not a reading and is left out.
+swap_days_merge(){
+  awk 'BEGIN { D = "^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$" }
+    $1 ~ D && $2 ~ /^[0-9]+$/ { if (!($1 in v) || $2 + 0 > v[$1] + 0) { v[$1] = $2; s[$1] = ($3 == "" ? "-" : $3) } }
+    END { for (d in v) print d, v[d], s[d] }' "$@" | sort
+}
+# Succeeds when every day of the old record is in the new one with a reading as high.
+swap_days_carried(){
+  awk 'BEGIN { D = "^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$" }
+    FILENAME == ARGV[1] { if ($1 ~ D && $2 ~ /^[0-9]+$/) have[$1] = $2; next }
+    $1 ~ D && $2 ~ /^[0-9]+$/ && (!($1 in have) || have[$1] + 0 < $2 + 0) { missing = 1 }
+    END { exit missing }' "$SWAP_DAYS" "$SWAP_DAYS_OLD" 2>/dev/null
+}
 swap_day="$(date -u -r "$now" +%F 2>/dev/null || date -u -d "@$now" +%F 2>/dev/null || true)"
 if [ -n "$swap_bytes" ] && [ -n "$swap_day" ]; then
-  SWAP_DAYS="$STATE.swap-days"
-  _days=""; _today_max="$swap_bytes"
-  if [ -f "$SWAP_DAYS" ]; then
-    while IFS=' ' read -r _d _s _rest; do
-      [ -n "${_d:-}" ] || continue
-      if [ "$_d" = "$swap_day" ]; then
-        is_number "${_s:-}" && [ "$_s" -gt "$_today_max" ] && _today_max="$_s"
-        continue
-      fi
-      _days="$_days$_d ${_s:-} ${_rest:-}
-"
-    done < "$SWAP_DAYS"
+  if [ -z "$SWAP_DAYS_DIR" ]; then
+    SWAP_DAYS_WHY="HOME is not set"
+  elif ! { [ -d "$SWAP_DAYS_DIR" ] || mkdir -p "$SWAP_DAYS_DIR" 2>/dev/null; }; then
+    SWAP_DAYS_WHY="the folder could not be made"
+  else
+    SWAP_DAYS="$SWAP_DAYS_DIR/$key.swap-days"
+    if [ -e "$SWAP_DAYS" ] && [ ! -r "$SWAP_DAYS" ]; then
+      SWAP_DAYS_WHY="the record there could not be read, so it was left as it is"
+    fi
   fi
-  _tmp="$SWAP_DAYS.$$"
-  { printf '%s' "$_days"; printf '%s %s %s\n' "$swap_day" "$_today_max" "${disk_bytes:--}"; } | tail -n 120 > "$_tmp" 2>/dev/null \
-    && mv -f "$_tmp" "$SWAP_DAYS" 2>/dev/null || rm -f "$_tmp" 2>/dev/null || true
+  if [ -z "$SWAP_DAYS_WHY" ] && [ "$SWAP_DAYS_OLD" != "$SWAP_DAYS" ] && [ -f "$SWAP_DAYS_OLD" ]; then
+    if [ -f "$SWAP_DAYS" ] && swap_days_carried; then
+      rm -f "$SWAP_DAYS_OLD" 2>/dev/null
+    else
+      _new="$SWAP_DAYS"; [ -f "$_new" ] || _new=/dev/null
+      _tmp="$SWAP_DAYS.carry$$"
+      if ! { swap_days_merge "$_new" "$SWAP_DAYS_OLD" | tail -n 120 > "$_tmp" && mv -f "$_tmp" "$SWAP_DAYS"; } 2>/dev/null; then
+        rm -f "$_tmp" 2>/dev/null
+        SWAP_DAYS_CARRY_FAILED=1
+      fi
+    fi
+  fi
+  if [ -n "$SWAP_DAYS" ] && { [ -r "$SWAP_DAYS" ] || [ ! -e "$SWAP_DAYS" ]; }; then
+    _days=""; _today_max="$swap_bytes"
+    if [ -f "$SWAP_DAYS" ]; then
+      while IFS=' ' read -r _d _s _rest; do
+        [ -n "${_d:-}" ] || continue
+        if [ "$_d" = "$swap_day" ]; then
+          is_number "${_s:-}" && [ "$_s" -gt "$_today_max" ] && _today_max="$_s"
+          continue
+        fi
+        _days="$_days$_d ${_s:-} ${_rest:-}
+"
+      done < "$SWAP_DAYS"
+    fi
+    # Written to a temp file and moved into place, so two sessions writing at once each leave a
+    # whole file and a run cut short leaves the one before (L5).
+    _tmp="$SWAP_DAYS.$$"
+    if ! { { printf '%s' "$_days"; printf '%s %s %s\n' "$swap_day" "$_today_max" "${disk_bytes:--}"; } | tail -n 120 > "$_tmp" \
+           && mv -f "$_tmp" "$SWAP_DAYS"; } 2>/dev/null; then
+      rm -f "$_tmp" 2>/dev/null
+      SWAP_DAYS_WHY="${SWAP_DAYS_WHY:+$SWAP_DAYS_WHY; }writing it failed"
+    fi
+  fi
 fi
+swap_days_note(){
+  [ "$SWAP_DAYS_CARRY_FAILED" -eq 1 ] && echo "claude-sync: could not carry the daily swap readings kept in $SWAP_DAYS_OLD into $SWAP_DAYS, so those days are gone at the next restart, and the month of readings the swap share is to be re-set from (claude-config#1781) is missing them."
+  [ -n "$SWAP_DAYS_WHY" ] && echo "claude-sync: could not keep today's swap reading in ${SWAP_DAYS:-${SWAP_DAYS_DIR:-<no folder>}} ($SWAP_DAYS_WHY), so the month of daily readings the swap share is to be re-set from (claude-config#1781) is missing it."
+  return 0
+}
 
 # How full swap is of its own total, in words, for the swap verdict's first line and the sentence beside the
 # holders, so the two say it one way (L118).
@@ -1127,6 +1209,7 @@ if [ "$free_gb" -lt "$FLOOR_GB" ]; then
   keep_copy 3 "$verdict_line"
   scan_note
   swap_note
+  swap_days_note
   symbol_cache_note
   orphan_note
   exit 3
@@ -1138,6 +1221,7 @@ if [ "$falling_fast" -eq 1 ]; then
   keep_copy 4 "$verdict_line"
   scan_note
   swap_note
+  swap_days_note
   symbol_cache_note
   orphan_note
   exit 4
@@ -1150,11 +1234,13 @@ if [ "$swap_full" -eq 1 ]; then
   # disk that moves while swap stays full is not a new answer about memory.
   echo "claude-sync: swap is nearly full: $(swap_full_words), while $VOLUME has $free_words to spare, so this is memory that processes are holding, not files."
   swap_note full
+  swap_days_note
   [ "$REPORT" -eq 1 ] && echo "claude-sync: $free_words free on $VOLUME, above the $floor_words floor.$rate_clause$no_rate_clause"
   exit 5
 fi
 
 if [ "$REPORT" -eq 1 ]; then
   echo "claude-sync: $free_words free on $VOLUME, above the $floor_words floor.$rate_clause$no_rate_clause"
+  swap_days_note
 fi
 exit 0

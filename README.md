@@ -7430,9 +7430,18 @@ through `hooks/lib/bounded-run.sh`, the bound the Xcode step below uses too), an
 that process or of the Mac gives the space back and deleting files does not. Swap that cannot be
 read is said to be unread. The 2% rests on the readings found in this Mac's transcripts: 0 to 136
 MB on ordinary days, 34.6 to 94.7 GB on the days something leaked, nothing between. Every run
-records the day's highest swap reading and the disk's size in `<volume>.swap-days` beside the
-readings (120 days kept), so the share can be recalibrated from both Macs' records rather than
-re-argued. Then the macOS symbol cache, which only an administrator can size, so it is named as a
+records the day's highest swap reading and the disk's size in `<volume>.swap-days` (120 days kept),
+so the share can be recalibrated from both Macs' records rather than re-argued. The record is kept
+where the warning copies are, by the same rule: `~/.claude/state/free-space-swap-days`
+(`FREE_SPACE_SWAP_DAYS_DIR`; beside the readings when `FREE_SPACE_STATE_DIR` moves them), never
+`$TMPDIR`, where it lived until claude-config#1781 and every restart emptied it, so the month of
+days it needs never built up. A record the version before left in `$TMPDIR` is carried in once, a
+day both hold keeping the higher reading, and removed by a later run that finds all of its days
+there. A record that cannot be made, read or written is said in one line beside a warning and under
+`--report` (never on a prompt with room, which prints nothing), and the verdict and its exit code
+are as they were. The six hours of readings and the small records beside them stay in `$TMPDIR`:
+they are meant to be short lived, and the warning copies already survive a restart for them. Then
+the macOS symbol cache, which only an administrator can size, so it is named as a
 suspect with the commands for Dan to size and clear it.
 
 Last, a process left running with no parent (claude-config#3561). On 2026-11-24 19 shells a builder
