@@ -10,8 +10,9 @@ import { pipelineIn } from './mod-kit/hooks/writes.ts'
 // The announcement for agents a merged change owes (claude-config#3667), in a session: kept in the
 // store under a key of its own when the merge lands, drafted on the card's word once the change is
 // out, judged by the draft's own answer, and said in every session until it is settled. Nothing here
-// calls a real Slack tool: Slack's draft tool, GitHub, and the hooks' two command lines (the merge
-// gate's reader and the one comparison of a draft with its wording) are the world beneath the mod.
+// calls a real Slack tool: Slack's draft tool, GitHub, and the hooks' three command lines (the merge
+// gate's reader, the one comparison of a draft with its wording, and the check that the wording is
+// the one the pull request claimed) are the world beneath the mod.
 
 type Part = { text?: string; color?: string; bold?: boolean; button?: string; label?: string }
 type Row = { mod: string; id: string; slot: string; lines: Part[][] }

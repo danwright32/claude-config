@@ -1,5 +1,7 @@
 'use strict';
-// Cases for announce-compare.js's judgement of a Slack draft of an announcement (claude-config#3667).
+// Cases for announce-compare.js's judgement of a Slack draft of an announcement (claude-config#3667),
+// and for its claimed wording check (claimedWording and the `claimed` command line): only the
+// wording whose hash the pull request claimed in the record of approvals is drafted.
 // The "found posted" half of that file keeps its cases in the dev update skill's suite
 // (skills/pennie-dev-update/tests/scripts.test.js), which is where its command line lives.
 //
@@ -49,16 +51,16 @@ if (typeof judge === 'function') {
   j = judge({ text: POST, message: POST + '\nThanks all', answer: KEPT });
   check(j.state === 'differs' && /goes on/.test(j.why), 'a draft with a line added is not judged as differing', JSON.stringify(j));
   j = judge({ text: POST, message: 'Before that. ' + POST, answer: KEPT });
-  check(j.state === 'differs', 'a draft with words put before the approved wording is judged saved', JSON.stringify(j));
+  check(j.state === 'differs', 'a draft with words put before the approved wording is not judged as differing', JSON.stringify(j));
 
   // No draft_id: Slack kept nothing, whatever its words say, and the wording is not even compared.
   j = judge({ text: POST, message: POST, answer: NOT_KEPT });
   check(j.state === 'not-kept' && /draft_id/.test(j.why) && /already waiting/.test(j.why), 'an answer holding no draft_id is not judged as nothing kept', JSON.stringify(j));
   j = judge({ text: POST, message: 'something else', answer: NOT_KEPT });
-  check(j.state === 'not-kept', 'an answer holding no draft_id is judged by the wording', JSON.stringify(j));
+  check(j.state === 'not-kept', 'an answer holding no draft_id, beside a draft whose words differ, is not judged not kept', JSON.stringify(j));
   ['{"result":"Draft created","draft_id":null}', '{"result":"Draft created","draft_id":""}', 'Draft created'].forEach(function (text) {
     const k = judge({ text: POST, message: POST, answer: { text: text } });
-    check(k.state === 'not-kept', 'an answer with an empty or null draft_id is judged kept (' + text + ')', JSON.stringify(k));
+    check(k.state === 'not-kept', 'an answer with an empty or null draft_id is not judged not kept (' + text + ')', JSON.stringify(k));
   });
   // The id is read wherever the answer carries it: plain words, or JSON inside a JSON string.
   j = judge({ text: POST, message: POST, answer: { text: 'Draft created. draft_id: Dr9' } });
@@ -76,11 +78,11 @@ if (typeof judge === 'function') {
   });
   // An error names itself even beside a draft_id, and one that names nothing is still no saved draft.
   j = judge({ text: POST, message: POST, answer: { text: '{"ok":false,"error":"not_in_channel","draft_id":"Dr1"}' } });
-  check(j.state === 'error' && j.error === 'not_in_channel', 'an answer naming an error beside a draft_id is judged saved', JSON.stringify(j));
+  check(j.state === 'error' && j.error === 'not_in_channel', 'an answer naming an error beside a draft_id is not judged as that error', JSON.stringify(j));
   j = judge({ text: POST, message: POST, answer: { text: 'Something went wrong', isError: true } });
   check(j.state === 'error' && j.error === '' && /Something went wrong/.test(j.why), 'an answer marked as an error that names none is not judged an error, quoting it', JSON.stringify(j));
   j = judge({ text: POST, message: POST, answer: { text: '{"ok":false}' } });
-  check(j.state === 'error', 'an answer saying ok false is judged saved', JSON.stringify(j));
+  check(j.state === 'error', 'an answer saying ok false is not judged an error', JSON.stringify(j));
 
   // What cannot be judged is refused, never judged saved (L98): no wording, no draft text, no answer.
   [{ message: POST, answer: KEPT }, { text: '   ', message: POST, answer: KEPT }, { text: '**', message: POST, answer: KEPT },

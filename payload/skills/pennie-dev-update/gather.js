@@ -930,11 +930,6 @@ function cmdCommitState(args) {
 
 // ---------------------------------------------------------------- posted
 
-// Is a gathered announcement already in the channel? `--read` is a file holding what
-// slack_read_channel returned, word for word, once per page read (SKILL.md section 11). The
-// announcement comes from the gathered file, never retyped, and the comparison is
-// hooks/lib/announce-compare.js's, of words only. Not found says only that: whether the read reached every message since the merge is
-// the session's to say, and a read that failed or was cut short is never handed here.
 // One gathered announcement, by repo and number, for the commands that act on one.
 function gatheredAnnouncement(args) {
   const gathered = readJson(args.gathered, 'The gathered file');
@@ -950,6 +945,12 @@ function gatheredAnnouncement(args) {
   return { repo: repo, ann: ann, n: n };
 }
 
+// Is a gathered announcement already in the channel? `--read` is a file holding what
+// slack_read_channel returned, word for word, once per page read (SKILL.md section 11). The
+// announcement comes from the gathered file, never retyped, and the comparison is
+// hooks/lib/announce-compare.js's, of words only. Not found says only that: whether the read
+// reached every message since the merge is the session's to say, and a read that failed or was
+// cut short is never handed here.
 function cmdPosted(args) {
   if (!args.gathered || !args.repo || !args.number || !args.read) {
     refuse('Usage: gather.js posted --gathered P --repo owner/name --number N --read FILE (one page of the channel read per file; repeat as --read FILE,FILE).');

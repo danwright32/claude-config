@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Suite for lib/announce-compare.js's judgement of a Slack draft of an announcement for agents
-# (claude-config#3667), and for the one rule the drafting rests on: an announcement is only ever
+# (claude-config#3667), for its claimed wording check (only wording whose hash the pull request
+# claimed in the record of approvals is drafted), and for the one rule the drafting rests on: an announcement is only ever
 # saved as a draft, which slack-drafts-only-gate.sh holds and this suite only confirms.
 #
 # Named test-*.sh so run-all-tests.sh discovers it from disk. The judgement's cases are in

@@ -1523,7 +1523,7 @@ if (POSTED) {
 // judgeDraft). The record of approvals here is a scratch one inside the case's own folder.
 const KEPT_ANSWER = '{"result":"Draft created","draft_id":"Dr0123ABC","channel_link":"https://example.slack.com/archives/' + ANN_CHANNEL + '"}';
 const NOT_KEPT_ANSWER = '{"result":"Draft created","channel_link":"https://example.slack.com/archives/' + ANN_CHANNEL + '"}';
-// A case whose record of approvals holds what `lines` gives; `claims` maps a pull request to the wording it merged on.
+// A case whose record of approvals holds what `claims` gives; `claims` maps a pull request to the wording it merged on.
 function draftCase(claims) {
   const c = annCase(CARRIED);
   c.approvals = path.join(c.ws.dir, 'approvals');
