@@ -197,10 +197,22 @@ deny() {
   exit 0
 }
 
-# node reads the changelog entry itself, so with it absent there is no rule this machine can
-# apply at all, and nothing a person here could do about it (L324). It also reads the registry, so
-# it is asked first.
-command -v node >/dev/null 2>&1 || exit 0
+# node reads the registry and the changelog entry itself, labels included, so it is asked first.
+# With it absent this gate used to leave here in silence, as a machine with no rule it could apply
+# (L324). But this is known to be a merge, the pull request may be an announcement, and the same
+# state with jq missing is refused, while announce-label-ask.sh refuses with no node too: so every
+# merge went through unjudged on a launch whose PATH lost node, with nothing said (claude-config#3742,
+# item 5; L98). It is refused by name, as jq's absence is below, and with the override typed the
+# merge goes through with the sentence about an announcement. Both write without jq and without node.
+if ps_reader_missing node; then
+  if [ "$overridden" = true ]; then
+    unread="node is not installed, so neither this Mac's dev update registry nor the pull request's labels could be read"
+    override_allows
+  fi
+  refuse_no_reader "node is not on PATH" \
+    "require-changelog-tag.sh reads this Mac's dev update registry and the pull request's changelog record with it, labels included, so with node absent nothing here can tell whether this repository is gated, a tagged pull request from an untagged one, or an announcement from any other change." \
+    "node"
+fi
 
 # Where this Mac's registry is, from its one reader. A reader that answers nothing cannot say where
 # to look, and cannot tell is never "not gated" (L490).

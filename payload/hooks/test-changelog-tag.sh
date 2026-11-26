@@ -636,6 +636,39 @@ if [ "$NOREAD_RC" -eq 0 ] && says "$NOREAD_OUT" '"systemMessage"' && says "$NORE
 if denied "$(run_hook "$dir" "$MERGE 7 --repo acme/widget --squash")"; then
   fail "the control case refused a tagged merge, so the cases above prove nothing"
 else pass; fi
+
+# node alone missing, jq and python3 present (claude-config#3742, item 5). node reads this Mac's
+# registry and the pull request's record, labels included, and with it absent the gate left before
+# either was read: every merge went through with nothing said, an announcement among them, where
+# the same state with jq missing is refused. So it is refused the same way, by name, and under the
+# override it goes through with the sentence. Only the hook's own run gets the bare PATH: this
+# suite's helpers call node themselves.
+nonode="$(bin_without "$dir" node)"
+if PATH="$nonode" bash -c 'command -v node >/dev/null 2>&1'; then
+  fail "the bare directory still reaches a node, so these cases measure nothing"
+else pass; fi
+if PATH="$nonode" bash -c 'command -v jq >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1'; then pass; else
+  fail "the bare directory lacks jq or python3 too, so these cases cannot say node alone is what is refused"; fi
+run_hook_on "$dir" "$nonode" "$MERGE 7 --repo acme/widget --squash"
+if [ "$NOREAD_RC" -eq 2 ]; then pass; else
+  fail "#3742 item 5: with no node the gate allowed the merge, which may be an announcement (rc=$NOREAD_RC): $NOREAD_OUT"; fi
+if says "$NOREAD_OUT" "node is not on PATH" && says "$NOREAD_OUT" "Install node"; then pass; else
+  fail "#3742 item 5: the refusal does not name node as what is missing and what to install: $NOREAD_OUT"; fi
+if says "$NOREAD_OUT" "Deliberate override: ALLOW_UNTAGGED_MERGE=1"; then pass; else
+  fail "#3742 item 5: the refusal with no node does not offer the override that clears it: $NOREAD_OUT"; fi
+# With the override typed the merge goes through, said out loud, as it does with no jq.
+run_hook_on "$dir" "$nonode" "ALLOW_UNTAGGED_MERGE=1 $MERGE 7 --repo acme/widget --squash"
+if [ "$NOREAD_RC" -eq 0 ] && says "$NOREAD_OUT" '"systemMessage"' && says "$NOREAD_OUT" "node is not installed" && says "$NOREAD_OUT" "an announcement" && says "$NOREAD_OUT" "could not be ruled out"; then pass; else
+  fail "#3742 item 5: with the override typed and no node, the merge was refused, or let through with nothing said about an announcement (rc=$NOREAD_RC): $NOREAD_OUT"; fi
+# A command that merges nothing is not refused for node's absence.
+run_hook_on "$dir" "$nonode" "ls -la"
+if [ "$NOREAD_RC" -eq 0 ] && [ -z "$NOREAD_OUT" ]; then pass; else
+  fail "#3742 item 5: an ordinary command was refused because node is missing (rc=$NOREAD_RC): $NOREAD_OUT"; fi
+# Still possible: the same merge with every reader present goes through with nothing said, so the
+# refusals above are node's absence and an ordinary labelled merge is untouched.
+run_hook_on "$dir" "$nonode:$(dirname "$(command -v node)")" "$MERGE 7 --repo acme/widget --squash"
+if [ "$NOREAD_RC" -eq 0 ] && [ -z "$NOREAD_OUT" ]; then pass; else
+  fail "#3742 item 5: with node present an ordinary labelled merge was refused, or drew a notice (rc=$NOREAD_RC): $NOREAD_OUT"; fi
 rm -rf "$dir"
 
 # A missing registry is no longer a stand down (claude-config#1526), so with no payload reader the
