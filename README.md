@@ -6505,19 +6505,26 @@ suite that refused to run or crashed at its top writes nothing without that prov
 could not be checked or was not measured. It is not run on every full run: doing so costs about
 one full run again, and the runner already hands every suite the list.
 
-The main suite on its own, which is two suites, each half of its sections (claude-config#3594):
+The main suite on its own, which is five suites, each a part of its sections (claude-config#3594,
+#3680):
 
 ```bash
 bash tests/test-claude-sync.sh
 bash tests/test-claude-sync-part2.sh
+bash tests/test-claude-sync-part3.sh
+bash tests/test-claude-sync-part4.sh
+bash tests/test-claude-sync-part5.sh
 ```
 
-The second runs the same file with `SUITE_PART=2`, which deals the sections from the heading
-`SUITE_PART2_FROM` names to the end; the first deals the ones before it. One file keeps the
-harness, the prelude and every helper in one place, and two suites let each be budgeted and dealt
-by its own cost: on 2026-11-25 the whole file had grown to its section time budget on CI, which is
-judged per run and undivided by shards. `SECTION_ONLY` and `SECTION_UNTIL` reach any section from
-either.
+Each later part runs the same file with `SUITE_PART` set to its number, which deals the sections
+from the heading `SUITE_PARTS_FROM` names for that part up to the next part's; the first deals the
+ones before them all. The part files are one file under four names, each reading its number from
+its own name. One file keeps the harness, the prelude and every helper in one place, and separate
+suites let each be budgeted and dealt by its own cost: on 2026-11-25 the whole file had grown to
+its section time budget on CI (#3594), and then its first half read 453 seconds on a runner
+against the 600 second line every suite is held to there (#3680). The cuts were put by measured
+section time, never by count, and adding a part is a heading in `SUITE_PARTS_FROM` and a copy of
+the part file. `SECTION_ONLY` and `SECTION_UNTIL` reach any section from any part.
 
 It fans its sections out across four processes. Measured on 2026-08-21, 87 sections taking 82
 seconds that way and 243 in a single process, with no single section dominating (the slowest five
