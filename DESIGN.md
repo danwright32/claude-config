@@ -2330,6 +2330,54 @@ passes that do not depend on the watcher stand (a hold, an own worktree, a plain
 refusal and the warning say that the watcher could not be read and name the command that failed,
 never that a watcher is live, which nothing measured.
 
+**A destination is judged by where it really is, as well as by its text (#3537).** The gate read
+each destination's text and asked whether that text sat under a checkout's `payload/`. Four kinds
+of text reach a payload file with no part of them there: the volume folder with a disk number and
+a file number (`/.vol/<disk>/<file>`, which macOS resolves to the file itself), a symbolic link
+that lives elsewhere, a hard link, and the folder name in another letter case on a volume that
+does not tell case apart. Resolving the text the usual way (following links one at a time) leaves
+the numbered form and the letter case exactly as written, which was measured on 2026-11-25. So the
+kernel is asked instead: the destination is opened for its path alone (`O_EVTONLY`, which reads
+and writes nothing) and `fcntl` with `F_GETPATH` names the file it holds. One step asks for every
+destination of a call, Edit and Bash alike, after the reading of the command and before the
+judging. A destination not made yet is its nearest folder that exists plus the rest, and a link to
+a file not made yet is followed by hand. The text is still judged exactly as before and the real
+path is judged in addition, so the step can only add a refusal; a real path is passed on only when
+it holds a folder named `payload`, the one thing the judging can refuse, so writes elsewhere cost
+the judging nothing more.
+
+Two answers have no path to judge, and both are refused in their own words while a watcher could
+revert the write and no hold covers the session, never let through. A real path that could not be
+read: links that never end, a folder the account may not look into, a numbered path it may not
+open, or the step itself failing. And a file with more than one name: the kernel gives one name
+for a hard linked file, the one it was opened by, so where the others are cannot be read. Dan's
+five working trees held no such file on 2026-11-25, so refusing every one costs nothing measured,
+where searching known checkouts for the other name would have left a link into an unknown checkout
+let through. A device, a pipe or a socket is left to its text, and a name too long to be any file
+is a settled nothing rather than an unread path.
+
+The second name is also refused where it is made. `ln` was already a write; a hard link or
+symbolic link made by an inline script (`os.link`, `os.symlink`, a path object's `symlink_to` and
+`hardlink_to`, node's `linkSync` and `symlinkSync`, ruby's `File` and `FileUtils`, `link` and
+`symlink` called bare as perl calls them, a script that runs `ln`) and the `link` command were
+not, so the name could be made unseen and written through. The issue asked whether to refuse the
+link or only the later write through it. Both: the later write through a symbolic link is always
+seen by its real path, but a hard link's is seen only as a file with more than one name, so the
+making is the one place the gate can say which payload file is involved. In a script that writes,
+every quoted word that may be a path is asked for its real path too, never judged by its words, so
+a script naming a payload file only by a link or by number is seen. Such a word is refused on the
+same three answers as any destination (really under `payload/`, unreadable, more than one name),
+because the script may be writing there, which is how a quoted payload path was always read; a
+word that names nothing is an answer and refuses nothing.
+
+The step is one more `python3` process, run only for a call that writes somewhere other than a
+device while a watcher may be live. Measured 2026-11-25 on a Mac at a load of about 70 to 100:
+that process alone took a median of 30 to 47 ms over two rounds of 30 samples, and whole gate
+calls were 27 to 62 ms slower at the median over 20 interleaved samples per arm, against a noise
+of about 35 ms either way in the cases where both arms run the same code. The lever not pulled:
+asking from inside the two readers that already run would add no process, at the price of the
+same code in two inline scripts or a library the gate must refuse without.
+
 The recovery, if it happens again: find the sync commit (`git log --author=claude-config-sync`),
 take the file list it touched, and check those paths out of the commit BEFORE it, keeping
 `LESSONS.md` and its index, which carry the other Mac's real additions.
