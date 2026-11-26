@@ -5287,9 +5287,12 @@ for the file, is judged spelled without it. A word starting with a dash where th
 still reads its options stays an option. Not covered, each measured on 2026-11-25 as run and as
 allowed where the file posts: `sitecustomize.py` and `usercustomize.py` in a folder
 `PYTHONPATH` names, `RUBYOPT` (`-r`), `PERL5OPT` (`-M`), `BASH_ENV`, `ENV` for a shell given
-`-i`, and `.zshenv` in the folder `ZDOTDIR` names; a `PYTHONWARNINGS` or `PYTHONSTARTUP` the
-session's own environment holds; and `node -- -post.js`, which node 22 looks for under
-`node_modules` and not in the folder it runs in.
+`-i`, and `.zshenv` in the folder `ZDOTDIR` names (claude-config#3675); and a `PYTHONWARNINGS`
+or `PYTHONSTARTUP` the session's own environment holds. `node -- -post.js` is judged by the
+file of that name in the folder the command runs in, as it is for the other interpreters, and
+is refused where that file posts, although node 22 did not run that file in the measurement:
+it looked for the name under `node_modules`. A file of that name under `node_modules` is not
+read, and whether node runs one there was not measured.
 Not covered, each measured on 2026-11-22 as allowed where the file posts:
 a Python file on disk that runs a file it names
 (`python3 runner.py`, `import runner`); code the shell fills in whole
