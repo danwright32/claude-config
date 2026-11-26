@@ -34,6 +34,11 @@ _read_by_dan). Then, all of these, each failure said in its own words:
   - no later picker about the same file ended any other way (`Not yet`, a timeout): the last word
     on a file is the one that counts.
   - the file holds wording, and it can be hashed.
+  - the file holds no run of more than two blank lines with wording below it (claude-config#3703).
+    Blank lines are dropped before the hash, so a file holding the post, a long run of blank lines
+    and then more text hashes the same as those lines written together, while the window it was
+    opened in showed him the post and then white space. The refusal says how long the run is, the
+    line it starts at, and what to change. Blank lines after the last line hide nothing and pass.
 
 WHAT IS HASHED. The FILE as it stands, never a hash the session supplies: a hash in the metadata
 is not read at all. The hash is lib/changelog-entry.js's announcementHash, the sha256 of its one
@@ -53,6 +58,19 @@ A hook run that reads his Approve writes the approved line, unless the call is a
 payload carries agent_id): a subagent's call counts his picker for that call and writes nothing. When
 the record cannot take a line, the main session's call still counts his picker and the failed save
 is said beside it, as lib/db-apply-approval.py does for a line he approved (Dan, 2026-11-16).
+
+READING AND WRITING ARE SEPARATE (claude-config#3703). A review found that the check command read a
+session's pickers from whatever transcript its standard input named and wrote what it found, so a
+made up transcript left a line saying Dan approved wording he never saw. So:
+  - the command line a session can run, `list` and `check` without --claim, reads the record and
+    nothing else: no standard input, no transcript, no picker, and it writes nothing.
+  - an approval is written only when a hook asks: the merge gate through `check --claim`, with the
+    payload Claude Code handed it, and the label hook in process (check() with a payload).
+  - whoever asks, a picker counts only from a session transcript (.jsonl) under the projects folder
+    Claude Code keeps them in, beside the state folder the record is in (transcripts_dir). A
+    transcript anywhere else is not read, and the answer names it and that folder.
+  - announce-label-ask.sh refuses a session's Bash command that runs this file in any form but
+    the two that only read.
 
 ONE APPROVAL COVERS ONE PULL REQUEST (Dan, 2026-11-25, by picker: "One approval, one pull request").
 An approval is one answer of his in one picker, so it is counted by the session and the picker it
@@ -84,26 +102,34 @@ WHAT IT CANNOT SEE. A write to the file, between the open and his answer, by som
 transcript does not name it in (a script building the name at run time, a subagent's own tools).
 Whether the picker's question named the right channel. A record line written by hand: the record is
 guarded by announce-label-ask.sh, which refuses an edit under it and a shell command naming it that
-is not one only reading it, but a script that builds the path at run time is not seen. And an
-approval given on one Mac is unknown to the other, which asks again.
+is not one only reading it, but a script that builds the path at run time is not seen. A transcript
+forged in the folder Claude Code keeps them in, and this file reached without being named (a script
+file, a path built at run time, a hook run by hand with a payload of the caller's): the record and
+the transcripts are files on a Mac the session can write, so a session that sets out to forge them
+is not stopped here. And an approval given on one Mac is unknown to the other, which asks again.
 
   check(repo, digest, payload, pr=None, claim=False)
       {"approved": bool, "state": str, "why": str, "how": str, "notes": [str]}: whether digest, an
-      announcementHash, is wording Dan approved for repo that pull request pr may use, after
-      reading this session's pickers. payload is the hook payload (session_id, transcript_path,
-      agent_id). state says which answer it is, so a caller words its own first sentence truly:
+      announcementHash, is wording Dan approved for repo that pull request pr may use. payload is
+      the hook payload (session_id, transcript_path, agent_id): this session's pickers are read
+      and an approval found is written. payload None is the question that only reads the record:
+      no picker is read and nothing is written. state says which answer it is, so a caller words its own first sentence truly:
       "approved"; "unapproved" (he approved no such wording; how says how to ask him); "used" (he
       did, and other pull requests used every approval; how says how to ask him again);
       "unrecorded" (he did, and the claim could not be written; how says what to put right).
   mark_used(repo, digest, pr, closes, unread)   None, or why the line could not be written.
   hash_of(data, body=False)                     (announcement-hash's answer, None) or (None, why).
   is_record_path(path)                          whether a path is the record or under it.
+  transcripts_dir()                             the folder a transcript must be under, or None.
 
-Command lines, each printing JSON and exiting 0 when it could answer:
-  announce-approval.py check --repo <owner/name> --hash <sha256> [--pr <number>] [--claim]
+Command lines, each printing JSON and exiting 0 when it could answer. The first two only read, and
+are a session's to run; the last two write, and are the merge gate's:
+  announce-approval.py list                                          the record, as it reads
+  announce-approval.py check --repo <owner/name> --hash <sha256> [--pr <number>]
+                                                                     the record's answer; standard input is not read
+  announce-approval.py check --repo <owner/name> --hash <sha256> --pr <number> --claim
                                                                      the hook payload on standard input
   announce-approval.py used --repo <owner/name> --hash <sha256> --pr <number> [--closes <json>] [--unread <why>]
-  announce-approval.py list                                          the record, as it reads
 """
 import importlib.util
 import json
@@ -125,6 +151,10 @@ SHA = re.compile(r"[0-9a-f]{64}")
 # is written: a name holding a character JSON escapes would never be found.
 PLAIN_NAME = re.compile(r"[A-Za-z0-9._-]+")
 WORDING_BYTES = 256 * 1024
+# The most blank lines in a row a wording file may hold above its last line of wording. A post
+# separates its paragraphs with one, and two leaves room for a habit; a longer run pushes whatever
+# follows it down the window the file was opened in. Chosen (claude-config#3703), not measured.
+BLANK_RUN = 2
 EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 # A tool that hands the file's name to something that may write it.
 SENDING_TOOLS = ("Agent", "Task")
@@ -145,6 +175,10 @@ HOW_TO_ASK = (
     + "` and `Not yet` and the metadata {\"source\": \"" + SOURCE + "\", \"repo\": \"<owner/name>\", \"file\": "
     "\"<absolute path>\"}. Leave the file alone once it is open (he may edit it before he answers), and make the "
     "pull request's Announcement block that file's text.")
+# What the command line without --claim says beside "not approved", so a session that has just asked
+# him is not told his answer does not exist.
+RECORD_ONLY = ("this command reads the record only: a picker of his in this session is read, and written to the "
+               "record, when a hook asks, which is when the label goes on or the merge runs")
 
 
 def _part(name, file):
@@ -155,16 +189,76 @@ def _part(name, file):
     return lib
 
 
+def claude_home():
+    return os.environ.get("CLAUDE_HOME") or os.path.join(os.path.expanduser("~"), ".claude")
+
+
 def record_dir():
     named = os.environ.get("ANNOUNCE_APPROVALS_DIR")
     if named:
         return named
-    home = os.environ.get("CLAUDE_HOME") or os.path.join(os.path.expanduser("~"), ".claude")
-    return os.path.join(home, "state", RECORD_NAME)
+    return os.path.join(claude_home(), "state", RECORD_NAME)
 
 
 def record_path():
     return os.path.join(record_dir(), RECORD_FILE)
+
+
+def _own_claude():
+    """This user's own .claude folder, under the home the account database gives. HOME and
+    CLAUDE_HOME are not asked: a command can set either, and this is the one answer it cannot move."""
+    try:
+        import pwd
+        home = pwd.getpwuid(os.getuid()).pw_dir
+    except (ImportError, KeyError, OSError):
+        home = ""
+    return os.path.join(home or os.path.expanduser("~"), ".claude")
+
+
+def _same_place(folder, own):
+    """Whether folder is the record's folder own, however it is spelled or linked: the same path
+    once links are followed, in any letter case (is_record_path says why), or a folder whose record
+    file is the same file on disk."""
+    if os.path.realpath(folder).casefold() == os.path.realpath(own).casefold():
+        return True
+    try:
+        return os.path.samefile(os.path.join(folder, RECORD_FILE), os.path.join(own, RECORD_FILE))
+    except OSError:
+        return False
+
+
+def transcripts_dir():
+    """The folder a session's transcript must be under for a picker in it to count, or None when a
+    transcript may be anywhere (claude-config#3703).
+
+    Claude Code keeps every session's transcript under the projects folder of its own folder, beside
+    the state folder the record is in. A picker is read only from a transcript there, so a file
+    shaped like a transcript and kept anywhere else approves nothing, whoever hands it over.
+
+    The tests keep their record in a folder ANNOUNCE_APPROVALS_DIR names, and build their transcripts
+    beside it: a record named that way takes a transcript from anywhere. That is safe only while the
+    folder named is not the one this Mac's hooks read, so a variable naming this user's own record
+    changes nothing, and neither does CLAUDE_HOME beside it."""
+    own = _own_claude()
+    if _same_place(record_dir(), os.path.join(own, "state", RECORD_NAME)):
+        return os.path.join(own, "projects")
+    if os.environ.get("ANNOUNCE_APPROVALS_DIR"):
+        return None
+    return os.path.join(claude_home(), "projects")
+
+
+def _misplaced(transcript_path):
+    """None when transcript_path is a session transcript where Claude Code keeps them (or the record
+    is a test's), else why no picker is read from it."""
+    root = transcripts_dir()
+    if root is None:
+        return None
+    real, folder = os.path.realpath(transcript_path), os.path.realpath(root)
+    if real.casefold().startswith(folder.casefold() + os.sep) and real.endswith(".jsonl"):
+        return None
+    return ("the transcript this call named, " + transcript_path + ", is not a session transcript under " + root
+            + ", where Claude Code keeps them, so no picker was read from it: his approval is read only from the "
+            "transcript of the session that asked him")
 
 
 def is_record_path(path):
@@ -453,6 +547,9 @@ def approvals(session_id, transcript_path, deadline=None):
     can say what stood in the way of the very approval the session thinks it holds."""
     if not isinstance(transcript_path, str) or not transcript_path or not isinstance(session_id, str) or not session_id:
         return [], [], "the call named no session transcript, so a picker of his in this session could not be looked for"
+    misplaced = _misplaced(transcript_path)
+    if misplaced is not None:
+        return [], [], misplaced
     try:
         asked = _asked(transcript_path, session_id)
     except OSError as e:
@@ -562,6 +659,20 @@ def _file_hash(path, deadline):
         return None, why
     if not answer["hash"]:
         return None, "the file holds no wording"
+    # Every blank line is dropped before the hash, so the hash cannot tell a padded file from its
+    # lines written together (claude-config#3703). lib/changelog-entry.js counts the longest run
+    # that has wording after it, by its own reading of a blank line, and an answer that does not
+    # say is no clearance (L98).
+    run, at = answer.get("blankRun"), answer.get("blankRunAt")
+    if not isinstance(run, int) or isinstance(run, bool) or not isinstance(at, int) or isinstance(at, bool):
+        return None, ("lib/changelog-entry.js did not say how many blank lines in a row the file holds, so whether "
+                      "wording sat below the screen he was shown could not be told (claude-sync pull reinstalls it)")
+    if run > BLANK_RUN:
+        return None, ("the file holds " + str(run) + " blank lines in a row, from line " + str(at) + ", with more "
+                      "wording below them, so the window it was opened in showed him the lines above and then white "
+                      "space, and he may never have seen the rest. Take the blank lines out, leaving no more than "
+                      + str(BLANK_RUN) + " blank lines in a row anywhere above the last line of wording, then open the "
+                      "file for him and ask him again")
     return answer["hash"], None
 
 
@@ -686,9 +797,17 @@ def check(repo, digest, payload, pr=None, claim=False):
     if not isinstance(digest, str) or not SHA.fullmatch(digest):
         out["why"] = "the announcement gave no hash, so there is no wording to look an approval up for"
         return out
-    payload = payload if isinstance(payload, dict) else {}
     pr = pr if isinstance(pr, int) and not isinstance(pr, bool) else None
-    found, untaken, unlooked, entries, unreadable = _harvest(payload, out["notes"])
+    record_only = payload is None
+    payload = payload if isinstance(payload, dict) else {}
+    if record_only:
+        # The command line a session can run (claude-config#3703): the record, and nothing else. No
+        # transcript is read, so nothing a caller hands over can be taken for his answer, and
+        # nothing is written.
+        found, untaken, unlooked = [], [], RECORD_ONLY
+        entries, unreadable = read_record()
+    else:
+        found, untaken, unlooked, entries, unreadable = _harvest(payload, out["notes"])
 
     def judged(record):
         count = len(_approval_keys(record, found, payload.get("session_id"), key, digest))
@@ -700,8 +819,8 @@ def check(repo, digest, payload, pr=None, claim=False):
     # reads the record again under its lock, is refused there.
     count, users, covered = judged(entries)
     if count == 0:
-        why = ["Dan has not approved this wording for " + key + ": no approval on this Mac's record, and none in this "
-               "session, is of the announcement as it reads here"]
+        why = ["Dan has not approved this wording for " + key + ": no approval on this Mac's record"
+               + ("" if record_only else ", and none in this session,") + " is of the announcement as it reads here"]
         for f in found:
             if f["repo"] == key:
                 why.append("the wording he approved in " + f["file"] + " is not this wording (they differ once "
@@ -764,10 +883,15 @@ def _flag(args, name):
 def main(argv):
     command, args = (argv[1] if len(argv) > 1 else ""), argv[2:]
     if command == "check":
-        try:
-            payload = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
-        except ValueError:
-            payload = {}
+        # Without --claim this is the question a session can ask: the record only, with standard
+        # input not read at all. With it, it is the merge gate's, which carries the payload Claude
+        # Code handed the gate (claude-config#3703).
+        payload = None
+        if "--claim" in args:
+            try:
+                payload = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
+            except ValueError:
+                payload = {}
         pr = _flag(args, "--pr")
         json.dump(check(_flag(args, "--repo"), _flag(args, "--hash"), payload,
                         int(pr) if pr and pr.isdigit() else None, "--claim" in args), sys.stdout)
@@ -786,9 +910,10 @@ def main(argv):
         entries, why = read_record()
         json.dump({"record": record_path(), "entries": entries, "why": why or ""}, sys.stdout)
         return 0
-    sys.stderr.write("Usage: announce-approval.py check --repo <owner/name> --hash <sha256> [--pr <number>] [--claim], with the hook payload on "
-                     "standard input | used --repo <owner/name> --hash <sha256> --pr <number> [--closes <json>] "
-                     "[--unread <why>] | list\n")
+    sys.stderr.write("Usage: announce-approval.py list | check --repo <owner/name> --hash <sha256> [--pr <number>], which reads "
+                     "the record only | check --repo <owner/name> --hash <sha256> --pr <number> --claim, with the hook payload "
+                     "on standard input | used --repo <owner/name> --hash <sha256> --pr <number> [--closes <json>] "
+                     "[--unread <why>]\n")
     return 2
 
 
