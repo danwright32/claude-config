@@ -683,8 +683,9 @@ class StreamEnding(unittest.TestCase):
             m.proc = stream
             with mock.patch.object(m, "_last_beat"), mock.patch.object(m, "_canary_seen", return_value=True), \
                     mock.patch.object(m, "_settle"), mock.patch.object(m, "_stop_beats"), \
-                    mock.patch.object(egress.os, "killpg"):
-                verdicts.append(m.finish())
+                    mock.patch.object(egress.os, "killpg"), \
+                    mock.patch.object(egress.v, "utc_now", return_value="2026-11-26T10:05:00Z"):
+                verdicts.append(m.finish())  # the clock is set, so a second ticking over cannot differ
         self.assertEqual(verdicts[0]["verdict"], "clean")
         self.assertEqual(verdicts[1], verdicts[0])
         self.assertEqual(verdicts[2], verdicts[0])
