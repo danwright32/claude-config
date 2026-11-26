@@ -1,0 +1,13 @@
+# The one version of the web guidance tool (the npm package of Google Chrome's Modern Web Guidance)
+# that sessions run (claude-config#3565). The rule file's command names it, and
+# tests/test-web-guidance-pin.sh fails when that command, or any other file in the repository,
+# names the package with @latest, with no version, or with any version but this one.
+# hooks/web-guidance-pin-gate.sh refuses any other version on the command line.
+#
+# Moving it is one pull request that changes this line and the rule file's command together, raised
+# after reading what changed between the two versions with npm diff. The daily run in
+# .github/workflows/web-guidance-pin.yml opens an issue once a newer release is two weeks old.
+#
+# 1.0.0, published 2026-11-10 03:29 UTC: the newest release at least two weeks old on 2026-11-25,
+# integrity sha512-vafIZwC8AS6QjM2yyoflZbnc7n3/TVOMLbEMRdPTwcFy0f9/Tq8s5rJQ8UIqRt2KPl9ixravyaMR4nTGuUrcmg==
+1.0.0
