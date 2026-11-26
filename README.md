@@ -6066,8 +6066,9 @@ call, as `db-write-ask.sh` does for database writes. The rule is `hooks/lib/conn
   plugin's server sits (read in `mods/scope-modes/hooks` on 2026-11-26).
 - What it cannot read it asks about, or refuses at night: a name on one of these servers with no
   tool after it; a payload that is not a tool call whose text names a tool the rule asks about, or
-  holds no tool name whole and names one of the three connectors; and, with the library that holds
-  the rule missing or failing, every call to a server whose name holds regal, better or cal, a read
+  names one of the three connectors anywhere but in a tool name it holds whole, since a whole name
+  that asks nothing does not vouch for one cut short after it; and, with the library that holds the
+  rule missing or failing, every call to a server whose name holds regal, better or cal, a read
   included, saying what is missing. Its registration carries `onFailure` block.
 - When it cannot tell whether Dan is asleep (`lib/sleep.sh` is missing, or python3, which reads
   both the rule and the sleep record), it refuses every such call and does not ask, saying which is

@@ -36,10 +36,10 @@
 #
 # FAIL CLOSED. What cannot be read is stopped, never passed: asked about while Dan is awake and
 # refused while he is asleep. That is a name on one of these servers with no tool after it; a
-# payload that is not a tool call whose text names a tool the rule asks about, or holds no tool
-# name whole and names one of the three connectors (a name cut short cannot be judged by its
-# verb); and, with lib/connector-changes.py missing or failing, every call to a server whose name
-# holds regal, better or cal, a read included, naming what is missing. Without lib/sleep.sh, or
+# payload that is not a tool call whose text names a tool the rule asks about, or names one of the
+# three connectors anywhere but in a tool name it holds whole (a name cut short cannot be judged by
+# its verb); and, with lib/connector-changes.py missing or failing, every call to a server whose
+# name holds regal, better or cal, a read included, naming what is missing. Without lib/sleep.sh, or
 # without python3 (which reads both the rule and the sleep record), whether Dan is asleep cannot
 # be told, and every such call is refused and never asked about, saying which is missing: a
 # question would be the one answer sleep mode can say yes to at night. The registration carries
