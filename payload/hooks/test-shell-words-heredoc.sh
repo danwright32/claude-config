@@ -833,8 +833,9 @@ done
 #
 # The markers are lib/heredoc-markers.json, the one list of markers for this reader and for mod-kit's
 # (hooks/commands.ts readDelimiter), in place of a list in each reader's suite that the other never
-# ran. This suite runs it; mod-kit's does not read the file, which claude-config#3566 is left open
-# for. It says, for each, the line each of seven shells ends the body at (measured 2026-11-24 with texts
+# ran. This suite runs it, and mod-kit's runs its copy of it (mods/mod-kit/tests/heredoc-markers.ts,
+# held to the list's text at the end of this section). It says, for each, the line each of seven
+# shells ends the body at (measured 2026-11-24 with texts
 # that only print: bash 3.2.57, bash --posix, sh, dash, zsh 5.9, zsh emulating sh and ksh 93u+, each
 # as a -c text, a file and an eval). Every row is run here again by each of those shells this
 # machine has, so the list cannot say what they do not do; a shell of the same name that is not the
@@ -1091,11 +1092,34 @@ MARK_READER="$(awk -F'\t' '$1 == "reader" { print $2 }' "$MARK_T/rows.tsv")"
 awk -F'\t' '$1 == "unmeasured" { print "SUITE-PART-UNMEASURED " $2 }' "$MARK_T/rows.tsv"
 grep -v -E '^(listed|reader|unmeasured)	' "$MARK_T/rows.tsv" > "$MARK_T/checks.tsv"
 rows_checked "$MARK_T/checks.tsv" "#3566"
-rm -rf "$MARK_T"
 # A run that compared nothing, or a list cut short, must not read as a pass. The floor is on the
 # checks of the reader, which are made on every machine, whatever shells it has.
-[ "${MARK_LISTED:-0}" -ge 42 ] || check "#3566 the list holds its markers" "only ${MARK_LISTED:-0} markers were read from lib/heredoc-markers.json, where it holds 42"
+[ "${MARK_LISTED:-0}" -ge 54 ] || check "#3566 the list holds its markers" "only ${MARK_LISTED:-0} markers were read from lib/heredoc-markers.json, where it holds 54"
 [ "${MARK_READER:-0}" -ge 200 ] || check "#3566 the comparison checked the reader" "only ${MARK_READER:-0} checks of the reader were made, where the list makes over 200"
+
+# The mods' reader is held to the same list, through a copy: a mod's tests can import only the
+# mod's own files (the same arrangement as lib/heredoc-closes.json, claude-config#3592). The copy is
+# the list's text after one line, so it cannot come to say otherwise. A copy that is not there and
+# a copy that differs are said apart (L11).
+MARK_ROOT="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
+if [ -z "$MARK_ROOT" ] || [ ! -d "$MARK_ROOT" ]; then
+  echo "SUITE-PART-UNMEASURED whether the mods' suite reads the same heredoc markers as this one, because $DIR/.. is not the payload of a claude-config checkout"
+else
+  MARK_COPY="$MARK_ROOT/payload/mods/mod-kit/tests/heredoc-markers.ts"
+  if [ ! -f "$MARK_COPY" ]; then
+    check "#3566 the mods' suite has the list of markers" "payload/mods/mod-kit/tests/heredoc-markers.ts is not there, so the mods' suite has no list to run: write it again, its header and then the text of payload/hooks/lib/heredoc-markers.json"
+  else
+    # Compared from a file: a pipe into a reader that stops at the first difference can report a
+    # failure of its own under pipefail (test-pipefail-shortcircuit.sh).
+    sed '1,/^export default$/d' "$MARK_COPY" > "$MARK_T/copy-text"
+    if cmp -s "$MARK_T/copy-text" "$DIR/lib/heredoc-markers.json"; then
+      check "#3566 the mods' suite reads the same list of markers" ok
+    else
+      check "#3566 the mods' suite reads the same list of markers" "payload/mods/mod-kit/tests/heredoc-markers.ts no longer holds the text of payload/hooks/lib/heredoc-markers.json after its 'export default' line: put the list's text there again, whole"
+    fi
+  fi
+fi
+rm -rf "$MARK_T"
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

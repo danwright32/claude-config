@@ -106,6 +106,9 @@ const OPENING = /(?<!<)<<(?!<)(-?)[ \t]*(?=\\?[A-Za-z_]|\$?['"])/g
 // A << with nothing after it but blanks, and how a marker's word starts (OPENING's own rule), for an
 // opener a backslash joins to the next line before the end of its marker (dropHeredocs, #3592).
 const JOINED_OPENING = /(?<!<)<<(?!<)-?[ \t]*/g
+// A << whose marker word starts with two or more $ and then a single quote, which OPENING does not
+// take for a heredoc, with the run of $ (dropHeredocs, #3566).
+const DOLLARS_OPENING = /(?<!<)<<(?!<)-?[ \t]*(\$\$+)'/g
 const MARKER_STARTS = /^(?:\\?[A-Za-z_]|\$?['"])/
 // What ends the delimiter word, as the shell reads a word.
 const DELIMITER_END = new Set([' ', '\t', '\n', ';', '&', '|', '<', '>', '(', ')'])
@@ -146,17 +149,64 @@ const ansiEnd = (text: string, i: number): number => {
 // ask opensAnsi and close the string as they go.
 const singleEnd = (text: string, i: number): number => (opensAnsi(text, i) ? ansiEnd(text, i) : text.indexOf("'", i + 1))
 
+// The escapes of a `$'...'` string that bash 3.2 and zsh 5.9 read alike (#3566), and what each
+// stands for: the named ones below, and a character from 2 to 126 written as one or two hex digits
+// after an x or as one to three octal digits (measured 2026-11-24 and again 2026-11-26 with texts
+// that only print, every such character in each length, 374 markers the second time). The two do
+// not agree on any other backslash: before a letter that is no escape, a `$` or an 8 bash keeps
+// the backslash and zsh drops it; zsh reads `\u` and bash 3.2 does not; an x with no digit, and the
+// characters 0, 1 and 127 and past it, each come out differently. The same table as ANSI_ESCAPES
+// in hooks/lib/shell-words.py, and both are held to hooks/lib/heredoc-markers.json by their tests.
+const ANSI_NAMED = new Map<string, string>([['\\', '\\'], ["'", "'"], ['"', '"'], ['?', '?'], ['a', '\x07'], ['b', '\b'], ['e', '\x1b'], ['E', '\x1b'], ['f', '\f'], ['n', '\n'], ['r', '\r'], ['t', '\t'], ['v', '\v']])
+const ANSI_ESCAPE = /\\(?:x([0-9A-Fa-f]{1,2})|([0-7]{1,3})|([\s\S]))/g
+// The text between the quotes of a `$'...'` string as bash and zsh compare it with a line, each
+// escape they read alike translated and any other kept as written, and `alike`, whether it held
+// none of the others.
+const ansiText = (inner: string): { text: string; alike: boolean } => {
+  let alike = true
+  const text = inner.replace(ANSI_ESCAPE, (written: string, hex: string | undefined, octal: string | undefined, other: string | undefined) => {
+    if (other !== undefined) {
+      const named = ANSI_NAMED.get(other)
+      if (named === undefined) alike = false
+      return named ?? written
+    }
+    const value = hex !== undefined ? Number.parseInt(hex, 16) : Number.parseInt(octal as string, 8)
+    if (value >= 2 && value <= 126) return String.fromCharCode(value)
+    alike = false
+    return written
+  })
+  return { text, alike }
+}
+
 // The delimiter word starting at s[j], as the shell compares it with each body line: the whole
 // word with its quotes taken out, and whether ANY part of it was quoted, by quotes or a backslash,
 // whole (`'EOF'`, `"EOF"`, `\EOF`) or in part (`'E'OF`, `E"OF"`, `E\OF`, `$'EOF'`), which stops the
 // shell expanding the body. A hyphen is part of the word (`END-OF`). `next` is the place right after
-// the word. Undefined when there is no word or a quote in it never closes. The same reading as
-// lib/shell-words.py's heredoc_opener, which the python gates use (#2060); this reader is TypeScript
-// and cannot call it, so the two are held to the same markers by their tests (#2073).
-const readDelimiter = (s: string, j: number): { end: string; quoted: boolean; next: number } | undefined => {
+// the word. Undefined when there is no word or a quote in it never closes.
+//
+// A dollar quote in the word (`$'...'`) is read as bash and zsh read it wherever those two agree
+// (#3566, ansiText): after `<<$'p\x36'` the marker is p6 and after `<<$'E\\F'`, two backslashes, it
+// is E, one backslash and F. Only an escaped quote, backslash and double quote were translated
+// before, so the first ended the body at the line `p\x36`, which neither shell ends it at, and
+// every command between the line p6 and that one was body text here and a command to the shell.
+// `differs` says the word is one bash and zsh do not read alike, so no one marker is theirs: a
+// dollar quote holding any other escape (kept as written, bash's reading of most of them), a `$"`
+// (EOF to bash after `<<$"EOF"`, the reading given here as it always was, and $EOF to zsh), and a
+// quote after two or more $ (`E$$'O'F` is E$$OF to bash and E$OF to zsh, the reading given here).
+// The command fed such a heredoc is marked unread (readLine, MARKER_UNREAD).
+//
+// lib/shell-words.py's heredoc_opener, which the python gates use (#2060), reads a dollar quote by
+// the same table. This reader is TypeScript and cannot call it, so the two are held to one list of
+// markers, hooks/lib/heredoc-markers.json, each row measured in seven shells: that reader's suite
+// runs it against the shells and the reader, and this one's runs its copy of it
+// (tests/heredoc-markers.ts). They part in one place, on purpose: that reader names every dollar
+// quote for a caller that asks, because dash knows none, and this one reads for bash and zsh
+// alone, the two a Bash call runs in (opensAnsi).
+const readDelimiter = (s: string, j: number): { end: string; quoted: boolean; differs: boolean; next: number } | undefined => {
   const start = j
   const word: string[] = []
   let quoted = false
+  let differs = false
   while (j < s.length && !DELIMITER_END.has(s[j] as string)) {
     const c = s[j] as string
     if (c === '\\' && j + 1 < s.length) {
@@ -167,12 +217,17 @@ const readDelimiter = (s: string, j: number): { end: string; quoted: boolean; ne
       const open = c === '$' ? j + 1 : j
       const k = singleEnd(s, open)
       if (k < 0) return undefined
-      // In `$'...'` an escaped quote or backslash stands for that character (#3491).
       const inner = s.slice(open + 1, k)
-      word.push(opensAnsi(s, open) ? inner.replace(/\\(['"\\])/g, '$1') : inner)
+      if (dollarsBefore(s, open) >= 2) differs = true
+      if (opensAnsi(s, open)) {
+        const read = ansiText(inner)
+        if (!read.alike) differs = true
+        word.push(read.text)
+      } else word.push(inner)
       quoted = true
       j = k + 1
     } else if (c === '"' || (c === '$' && s.startsWith('$"', j))) {
+      if (c === '$') differs = true
       j += c === '$' ? 2 : 1
       let k = j
       while (k < s.length && s[k] !== '"') k += s[k] === '\\' ? 2 : 1
@@ -185,7 +240,7 @@ const readDelimiter = (s: string, j: number): { end: string; quoted: boolean; ne
       j++
     }
   }
-  return j === start ? undefined : { end: word.join(''), quoted, next: j }
+  return j === start ? undefined : { end: word.join(''), quoted, differs, next: j }
 }
 
 // `quoted` when any of its delimiter was quoted or escaped, which stops the shell expanding $ and
@@ -252,7 +307,7 @@ const standsInText = (line: string, quotes: readonly LineQuote[], at: number): b
 // Each heredoc a line opens, as dropHeredocs has always opened them: every << before the line's
 // comment whose marker can be read, in order, with where the << stands on the line, the marker's
 // word as written, and what readDelimiter reads of it.
-type Opened = { at: number; tabs: boolean; word: string; end: string; quoted: boolean; next: number }
+type Opened = { at: number; tabs: boolean; word: string; end: string; quoted: boolean; differs: boolean; next: number }
 const opensOn = (line: string, facts: { comment: number }): Opened[] => {
   const found: Opened[] = []
   for (const m of line.matchAll(OPENING)) {
@@ -410,8 +465,14 @@ const plainCommand = (text: string): boolean => {
 // after a # the older comment rule took for a comment (readsLine, `was`). Its lines are its body
 // in bash and zsh, and were commands to this reader until then, so readLine reads them as commands
 // as well: what the reader gave for such a text it still gives, with the heredoc beside it.
-export const dropHeredocs = (cmd: string, quotes = true): { text: string; heredocs: Heredoc[]; unended?: Heredoc; removed: { at: number; lines: string[] }[]; unsure: number[]; late: number[] } => {
+// `differ` is where each << stands, in the text left, whose heredoc ends at a marker bash and zsh
+// do not read alike (#3566, readDelimiter's `differs`): the body ends here where one of the two ends
+// it, and readLine marks the command it feeds unread. Only a heredoc that ends is given: one that
+// never ends is said as that, where a shell opens one there at all (`unended`, `inText`). And each
+// << this reader opens no heredoc at though the two shells do, at different lines (DOLLARS_OPENING).
+export const dropHeredocs = (cmd: string, quotes = true): { text: string; heredocs: Heredoc[]; unended?: Heredoc; removed: { at: number; lines: string[] }[]; unsure: number[]; late: number[]; differ: number[] } => {
   const late: number[] = []
+  const differ: number[] = []
   const out: string[] = []
   const heredocs: Heredoc[] = []
   const removed: { at: number; lines: string[] }[] = []
@@ -421,7 +482,7 @@ export const dropHeredocs = (cmd: string, quotes = true): { text: string; heredo
   // this one's: what the lines before carried on to this line, whether the line before is joined to
   // it, that line as written, whether the shells have ended the heredoc, and whether the two
   // readings have parted.
-  const open: { end: string; tabs: boolean; at: number; quoted: boolean; torn: boolean; alone: boolean; inText: boolean; whole: number; carry: string; carrying: boolean; last: string; gone: boolean; unsure: boolean }[] = []
+  const open: { end: string; tabs: boolean; at: number; quoted: boolean; differs: boolean; torn: boolean; alone: boolean; inText: boolean; whole: number; carry: string; carrying: boolean; last: string; gone: boolean; unsure: boolean }[] = []
   const unsure: number[] = []
   let body: string[] = []
   // The lines of the heredoc being read, as written, put back as commands if it never ends.
@@ -471,6 +532,7 @@ export const dropHeredocs = (cmd: string, quotes = true): { text: string; heredo
         // One not read alike from its << to its marker keeps the mark its line read alone gave it.
         heredocs.push({ at: h.at, body: body.join('\n'), quoted: h.quoted, ...(h.torn || (h.alone && !sure) ? { torn: true as const } : {}) })
         if (h.unsure) unsure.push(h.at)
+        if (h.differs) differ.push(h.at)
         open.shift()
         body = []
         unended = []
@@ -526,7 +588,19 @@ export const dropHeredocs = (cmd: string, quotes = true): { text: string; heredo
     for (const f of found) {
       if (f.at >= facts.was) late.push(offset + f.at)
       const torn = (read: { quotes: LineQuote[] }) => read.quotes.some(q => q.to === undefined && q.from > f.at)
-      open.push({ end: f.end, tabs: f.tabs, at: offset + f.at, quoted: f.quoted, torn: torn(facts), alone: torn(alone), inText: standsInText(line, facts.quotes, f.at), whole: quotes && !removed.length ? offset + f.at : -1, carry: '', carrying: false, last: '', gone: false, unsure: false })
+      open.push({ end: f.end, tabs: f.tabs, at: offset + f.at, quoted: f.quoted, differs: f.differs, torn: torn(facts), alone: torn(alone), inText: standsInText(line, facts.quotes, f.at), whole: quotes && !removed.length ? offset + f.at : -1, carry: '', carrying: false, last: '', gone: false, unsure: false })
+    }
+    // A marker word that starts with an even run of $ and a single quote opens no heredoc here
+    // (OPENING), so every line after it is read as a command, which is more than either shell
+    // runs. bash and zsh do open one and end it at different lines: `<<$$'EOF'` ends at the line
+    // $$EOF in bash, which reads its own number and a plain quote, and at $EOF in zsh, which reads
+    // a $ and a dollar quote (measured 2026-11-24 and 2026-11-26). So the command standing there
+    // is marked as fed a heredoc whose marker the two do not read alike (#3566). After an odd run
+    // (`<<$$$'EOF'`) both end it at $$EOF, and nothing is marked.
+    for (const m of line.matchAll(DOLLARS_OPENING)) {
+      const at = m.index ?? 0
+      if (at >= facts.comment) break
+      if ((m[1] as string).length % 2 === 0) differ.push(offset + at)
     }
     // An opener joined to the next line between its << and the end of its marker word: `cat <<E`,
     // a backslash, then `x` waits for the line Ex in every shell, and `cat <<`, a backslash, then
@@ -557,7 +631,7 @@ export const dropHeredocs = (cmd: string, quotes = true): { text: string; heredo
   // cannot say. Asked only of a << with every line before it still in place.
   const inText = h !== undefined && (h.inText || (h.whole >= 0 && inQuotedText(quotedText(cmd), h.whole)))
   if (h?.unsure) unsure.push(h.at)
-  return { text: [...out, ...unended].join('\n'), heredocs, removed, unsure, late, ...(h ? { unended: { at: h.at, body: body.join('\n'), quoted: h.quoted, ...(inText ? { inText: true as const } : {}) } } : {}) }
+  return { text: [...out, ...unended].join('\n'), heredocs, removed, unsure, late, differ, ...(h ? { unended: { at: h.at, body: body.join('\n'), quoted: h.quoted, ...(inText ? { inText: true as const } : {}) } } : {}) }
 }
 
 // Whether the substitution from `from` to `to` in what dropHeredocs left holds a run of heredoc lines
@@ -1322,6 +1396,11 @@ const TORN_UNREAD = 'fed a heredoc opened on a line that ends inside a quote, so
 // `unsure`). What is read after it may be its body to that shell, where a substitution runs in
 // single quotes too, or commands the reader took for its body.
 const ENDS_UNREAD = 'fed a heredoc the shells do not end where it is read to end, so where its body stops cannot be read'
+// #3566: a heredoc whose end marker bash and zsh do not read alike (readDelimiter, `differs`): a
+// dollar quote holding an escape the two read differently, a `$"`, or a quote after two or more $.
+// The body is read to end where one of the two ends it; the other ends it at another line or at
+// none, and a Bash call runs in either.
+const MARKER_UNREAD = 'fed a heredoc whose end marker bash and zsh do not read alike, so where its body stops cannot be read'
 // A quote bash and zsh do not read alike (shellsDiffer): the command it stands in, and every one
 // read after it, since the reader took one shell's reading and the other shell runs the call too.
 const SHELLS_UNREAD = 'read past a quote bash and zsh do not read alike, so what the shell runs from that quote on cannot be read'
@@ -1356,7 +1435,7 @@ const SOURCE_UNREAD = 'run as text by source from its standard input, which cann
  * as they always were, so a reader of what a command does still reads them: the mark is added to
  * that reading and never stands in its place.
  */
-export const READ_STOPPED: ReadonlySet<string> = new Set([QUOTE_UNREAD, HEREDOC_UNREAD, TORN_UNREAD, ENDS_UNREAD, SHELLS_UNREAD, ZSH_UNREAD, WORD_UNREAD, JOINED_UNREAD, INPUTS_UNREAD, UNPLACED_UNREAD, SOURCE_UNREAD])
+export const READ_STOPPED: ReadonlySet<string> = new Set([QUOTE_UNREAD, HEREDOC_UNREAD, TORN_UNREAD, ENDS_UNREAD, MARKER_UNREAD, SHELLS_UNREAD, ZSH_UNREAD, WORD_UNREAD, JOINED_UNREAD, INPUTS_UNREAD, UNPLACED_UNREAD, SOURCE_UNREAD])
 // A name and its = with nothing after, where a ( opens an array's values and no pattern's group.
 const SETS_ARRAY = /^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=$/
 // The names `source` and `.` read their own standard input by.
@@ -2316,7 +2395,7 @@ export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
   // What is asked of the text this line holds within it (a substitution, a shell's script, a trap's
   // text): everything asked of the line but `follow`, which is for the call's own text alone.
   const nested: ReadOptions = opts.follow ? { ...opts, follow: false } : opts
-  const { text, heredocs, unended, removed, unsure, late } = dropHeredocs(cmd, !outer.within)
+  const { text, heredocs, unended, removed, unsure, late, differ } = dropHeredocs(cmd, !outer.within)
   const heredocAt = new Map(heredocs.map(h => [h.at, h]))
   // Each word's expansions outside quotes, by its place in the text (#1834).
   const bare = new Map<number, number[]>()
@@ -2543,6 +2622,9 @@ export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
     }).length
     if ((r.direct ? 1 : 0) + redirects > 1 && !stops.has(k)) stops.set(k, INPUTS_UNREAD)
   })
+  // #3566, after every older reason too: the command fed a heredoc whose end marker bash and zsh
+  // do not read alike.
+  for (const at of differ) stopsAt(at, MARKER_UNREAD)
   read.forEach((r, k) => {
     runSubs(k)
     const b = begun[k] as Begun
