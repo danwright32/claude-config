@@ -531,9 +531,12 @@ No conversation text. `hooks/limit-messages.py` writes it from the StopFailure a
 hooks, and its header holds where a limit message can be seen and why.
 
 A normal run prints nothing, awake or asleep, and records the same either way. A run that fails (a
-payload that is not a JSON object, a record it cannot write, anything else) keeps the failure in
-`failures.jsonl` beside the record, which `days` reports. While Dan is awake it also prints one
-plain line saying what failed and exits 1. While the Mac is asleep it prints nothing and leaves the
+payload that is not a JSON object, a transcript it cannot read, a record it cannot write, anything
+else) keeps the failure in `failures.jsonl` beside the record, which `days` reports. While Dan is
+awake it also prints one plain line saying what failed and exits 1. The line names the step that
+failed: a transcript that cannot be read is named as that transcript, never as the record folder,
+and the transcript is read first, so when both fail the transcript is the one named. A transcript
+not there at all when the hook looks is not a failure: the hook's own wording is recorded instead. While the Mac is asleep it prints nothing and leaves the
 failure as a finding in the morning report instead (Dan's choice, 2026-11-24). Whether the Mac is
 asleep is `lib/sleep.sh`'s `sleep_active`, and one that cannot be asked counts as awake.
 
