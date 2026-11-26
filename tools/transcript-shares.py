@@ -3,6 +3,7 @@
 
     python3 tools/transcript-shares.py --since 2026-11-02 --until 2026-11-16 [--tz America/New_York]
         [--project NAME ...] [--root ~/.claude/projects] [--compactions 3,5] [--top 5] [--jobs 1]
+        [--settings ~/.claude/settings.json]
 
 Measures the three costs #1940 tracks: subagents reading code, agent reports carried in the main
 session, and very long sessions. `--project` matches part of a project folder's name (the folder
@@ -210,7 +211,8 @@ def hook_numbers(path):
     for event, groups in hooks.items():
         seen = []
         for g in groups if isinstance(groups, list) else ():
-            for h in g.get("hooks", []) if isinstance(g, dict) else ():
+            hs = g.get("hooks") if isinstance(g, dict) else None
+            for h in hs if isinstance(hs, list) else ():
                 if isinstance(h, dict) and h.get("type") == "command" and isinstance(h.get("command"), str) \
                         and h["command"] not in seen:
                     seen.append(h["command"])
@@ -436,8 +438,8 @@ def read_transcript(job, out):
                     continue
                 size = rendered_size(o)
                 if size is None:
-                    # No rendered text: a record kept beside the conversation (a prompt snapshot, a
-                    # deferred tools record, most hook successes), never sent, so never carried.
+                    # No rendered text: a record kept beside the conversation (a deferred tools
+                    # record, most hook successes), never sent, so never carried.
                     if inw:
                         g = get_agg()
                         g["not_sent"][at] += 1
@@ -530,7 +532,7 @@ def main(argv):
     ap.add_argument("--until", required=True, help="end of the window (excluded), a date or time in --tz")
     ap.add_argument("--tz", default="America/New_York")
     ap.add_argument("--compactions", default="3,5", help="compaction counts to report sessions at or past")
-    ap.add_argument("--top", type=int, default=5, help="how many of the largest main sessions to list")
+    ap.add_argument("--top", type=int, default=5, help="how many of the largest main sessions to list, and HOOK lines per kind")
     ap.add_argument("--jobs", type=int, default=1, help="worker processes")
     ap.add_argument("--settings", default=os.path.expanduser("~/.claude/settings.json"),
                     help="the settings a 'command hook N' is named from, as they are today")

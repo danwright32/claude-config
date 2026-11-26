@@ -113,7 +113,7 @@ write(os.path.join(alpha, "main1.jsonl"), [
     json.dumps({"type": "user", "timestamp": "2026-03-03T10:00:06Z",
                 "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "u1", "content": FG}]}}),
     json.dumps({"type": "attachment", "timestamp": "2026-03-03T10:03:00Z",
-                "attachment": {"type": "queued_command", "prompt": BG}}),
+                "attachment": {"type": "queued_command", "prompt": BG}, "rendered": [{"content": BG}]}),
     json.dumps({"type": "user", "timestamp": "2026-03-03T10:03:01Z",
                 "message": {"role": "user", "content": [{"type": "text", "text": BG}]}}),
     json.dumps({"type": "user", "timestamp": "2026-03-03T10:04:00Z", "message": {"role": "user", "content": AM}}),
@@ -319,6 +319,13 @@ check "several worker processes add the inferred thinking of two files" \
 check "and the attachments not sent" $'NOT_SENT\tinteractive\tattachments=4\t' "$out"
 check "and the hooks" $'command hook 2\tname_inferred_from_todays_settings=fx-post-two.sh\tcarried_tokens=800\t' "$out"
 rm "$S/-fx-sent/main2.jsonl"
+
+printf '%s\n' '{"hooks": {"PostToolUse": [{"matcher": "Bash", "hooks": null}, {"hooks": [{"type": "command", "command": "bash fx-only.sh"}]}]}}' > "$WORK/odd-settings.json"
+out="$(srun --settings "$WORK/odd-settings.json")"; rc=$?
+exit_is "a settings group whose hooks are not a list does not stop the run" "$rc" 0
+absent "and leaves no traceback" "Traceback" "$out"
+check "and the groups that are lists are still numbered" \
+  $'command hook 2\tname_inferred_from_todays_settings=unknown\t' "$out"
 
 out="$(srun --settings "$WORK/no-such-settings.json")"
 check "settings that cannot be read leave the number unnamed, and say so" \
