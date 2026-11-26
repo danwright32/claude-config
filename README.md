@@ -11331,8 +11331,10 @@ list of what is in flight (`hooks/mod-kit/inflight.ts`, #3770), asked for the bo
 The close this session card (#3770, Dan's answers of 2026-11-26): a manual steps card headed
 "Nothing this session can see is running or waiting", whose one step, "Close this session if you
 have nothing more for it", is for this session alone and has no Done. At the main conversation's
-turn end in an interactive session a quiet period of three minutes starts (`QUIET_MS` in
-`hooks/close.ts`, on the engine's clock); any turn start or message of any origin ends it. At its
+turn end in an interactive session a quiet period of 3 minutes 30 seconds starts (`QUIET_MS` in
+`hooks/close.ts`, on the engine's clock: the subagent harvest's 180 second `timeout` in
+`settings.hooks.json` plus a 30 second margin, held together by
+`tests/test-close-card-quiet-period.sh`); any turn start or message of any origin ends it. At its
 end the card is pinned, once per request of Dan's, only when the box was shown for his latest
 request and every kind in mod-kit's list reads clean: no agent running, waiting or idle (one a mod
 started included), nothing in the stop's `background_tasks` or `session_crons` (recorded at the

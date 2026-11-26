@@ -15,11 +15,15 @@ export const CLOSE_HEADING = 'Nothing this session can see is running or waiting
 export const CLOSE_TITLE = 'Close this session if you have nothing more for it'
 
 /**
- * How long the session must stay quiet after its turn ends before the card goes up: longer than the
- * subagent harvest's 180 second limit, the longest end of turn hook still running after a stop that
- * nothing a mod reads can see. One constant, on the engine's clock, which a test moves.
+ * How long the session must stay quiet after its turn ends before the card goes up: 3 minutes 30
+ * seconds, longer than the subagent harvest's 180 second limit by a margin of 30 seconds, so that
+ * async end of turn hook, still running after a stop where nothing a mod reads can see it, has ended.
+ * That limit is the "timeout" of hooks/subagent-issue-harvest.sh in payload/settings.hooks.json. A mod
+ * cannot read a file outside its own folder, so this stays a plain literal, and
+ * tests/test-close-card-quiet-period.sh fails if the two drift. One constant, on the engine's clock,
+ * which a test moves.
  */
-export const QUIET_MS = 3 * 60_000
+export const QUIET_MS = 210_000
 
 /** The longest the look for a process carrying this session's id may take; past it, it says nothing. */
 export const PROCESS_TIMEOUT_MS = 5_000

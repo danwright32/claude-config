@@ -1116,6 +1116,23 @@ test('a reading that cannot be taken withholds the card as unread: no stop recor
   }
 })
 
+// The quiet period outlasts the subagent harvest's 180 second limit (its async end of turn hook) by 30
+// seconds, so the card cannot go up while that hook may still be running: nothing at 180, the card at 210.
+test('the card waits 3 minutes 30 seconds after a turn ends: nothing at 180 seconds, the card at 210 (#3770)', withAll, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($)
+  await says($, 'Add the goal box')
+  expect((await box($, ASKED)).deny).toBeUndefined()
+  await stopped($)
+  await turnEnds($)
+  await clock.advance(180_000)
+  expect(w.pinned).toEqual([])
+  await clock.advance(29_999)
+  expect(w.pinned).toEqual([])
+  await clock.advance(1)
+  expect(w.pinned).toHaveLength(1)
+})
+
 test('a turn that starts inside the quiet period pins nothing, and nor does its own end until it has been quiet (#3770)', withAll, async ($, on) => {
   const { w, clock } = world(on)
   await start($)
