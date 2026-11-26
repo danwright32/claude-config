@@ -384,7 +384,7 @@ $BYPASSED_SOME_SINCE"
 hook_key(){   # $1 = event  $2 = the hook's matcher pairs, k=v joined by commas
   local fields kept
   fields="$(route_fields "$1" | LC_ALL=C sort -u)"
-  kept="$(printf '%s\n' "$2" | tr ',' '\n' | awk -F= 'NR == FNR { if ($0 != "") f[$0] = 1; next } ($1 in f)' <(printf '%s\n' "$fields") - | LC_ALL=C sort -u | paste -sd, -)"
+  kept="$(printf '%s\n' "$2" | tr ',' '\n' | awk -F= 'FILENAME == ARGV[1] { if ($0 != "") f[$0] = 1; next } ($1 in f)' <(printf '%s\n' "$fields") - | LC_ALL=C sort -u | paste -sd, -)"
   if [ -n "$kept" ]; then printf '%s{%s}\n' "$1" "$kept"; else printf '%s\n' "$1"; fi
 }
 # Every event a mod's own hook files register, one per line: on('<event>' in command position, in
