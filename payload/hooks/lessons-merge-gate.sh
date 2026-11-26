@@ -436,8 +436,15 @@ if [ "$touch" = maybe ]; then
   spellings_at "$merge_base" "$SCRATCH/spell-base" "the merge base"
   spellings_at "$judged_oid" "$SCRATCH/spell-head" "$judged_words"
   if ! cmp -s "$SCRATCH/spell-base" "$SCRATCH/spell-head"; then
-    odd_path="$(LC_ALL=C comm -13 "$SCRATCH/spell-base" "$SCRATCH/spell-head" 2>/dev/null | head -n 1)"
-    [ -n "$odd_path" ] || odd_path="$(LC_ALL=C comm -23 "$SCRATCH/spell-base" "$SCRATCH/spell-head" 2>/dev/null | head -n 1)"
+    # Written to a file and its first line read from there: a pipe into head would leave comm
+    # writing into a closed pipe on a long list, which pipefail reports as a failure
+    # (test-pipefail-shortcircuit.sh).
+    LC_ALL=C comm -13 "$SCRATCH/spell-base" "$SCRATCH/spell-head" > "$SCRATCH/spell-odd" 2>/dev/null
+    odd_path="$(head -n 1 "$SCRATCH/spell-odd" 2>/dev/null)"
+    if [ -z "$odd_path" ]; then
+      LC_ALL=C comm -23 "$SCRATCH/spell-base" "$SCRATCH/spell-head" > "$SCRATCH/spell-odd" 2>/dev/null
+      odd_path="$(head -n 1 "$SCRATCH/spell-odd" 2>/dev/null)"
+    fi
     odd_kind="${odd_path%%$'\t'*}"; odd_path="${odd_path#*$'\t'}"; odd_path="${odd_path%$'\t'*}"
     if [ "$odd_kind" = folder ]; then
       deny "Refusing to merge PR #$number: between the merge base and $judged_words it changes $odd_path, the folder $LESSONS_PATH is in, as a file itself (claude-config#3583). A file or a link put in that folder's place decides what is read as the lessons file on a Mac, and nothing here can show Dan which text that is. No picker covers it: undo that on the branch, or leave the merge to Dan."
