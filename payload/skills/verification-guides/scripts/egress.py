@@ -38,6 +38,23 @@ How, and why this way (measured on macOS 26 without a password, 2026-10-23; see 
     sockets lsof could not read (it failed, timed out or could not run), stays in the receipt as
     unnamed, each saying which of the two it was, and an unnamed connection is never clean (fail
     closed).
+  * A report whose process held, on that port, ONLY a connection to this machine is unnamed too,
+    and never clean, and the record keeps it apart (`this_machine`) from one that had closed. It
+    arises two ways, and nothing a report carries tells them apart. Where this Mac reports a
+    connection to this machine after all (macOS 27.2, under the profile of drive calls, for TCP:
+    measured on 2026-11-25, with the line of profile_text that should keep it unreported in
+    place), it may be that very connection. Everywhere, it may be a connection off this machine
+    that had already closed while the process held another, to this machine, on the same port,
+    and on macOS 26.6.2, which reports no connection to this machine under either profile, that
+    is the only thing it can be. The kernel writes a connection to this machine as
+    `remote:*:<port>` like any other (measured on macOS 26.6.2 under a profile that reports
+    everything), so the line cannot say. Two ways to excuse it were measured and rejected. What
+    lsof shows is what the process holds, not which connection the report was for. A message of
+    its own on the line for this machine does arrive on every such connection, but the kernel
+    folds repeats by process and port whatever their message: 12 connections to this machine and
+    then one off it, on one port, arrived as one line and "12 duplicate reports" all under the
+    local message. The sound fix is a profile under which that Mac reports no connection to this
+    machine again, as serve's does; which text does that is a fact only that Mac has.
   * The stream is proved live by a CANARY, a process under a profile of its own (tagged apart, so a
     reused pid can never pass a real connection off as the canary's) that connects a UDP
     socket to 198.51.100.1 (TEST-NET-2: reserved, and a UDP connect sends no packet at all). The
@@ -259,9 +276,9 @@ def remove_beat_program(rdir):
     return None
 
 
-def remote_addresses(lsof_output, port):
-    """The non-loopback remote addresses on `port` in `lsof -F n` output."""
-    found = set()
+def _remotes(lsof_output, port):
+    """The remote end of every connection on `port` in `lsof -F n` output, as (the host as lsof wrote
+    it, its address or None when the host is not written as an address)."""
     for line in lsof_output.splitlines():
         if not line.startswith("n") or "->" not in line:
             continue
@@ -274,13 +291,23 @@ def remote_addresses(lsof_output, port):
             continue
         host = host.split("%", 1)[0]
         try:
-            ip = ipaddress.ip_address(host)
+            yield host, ipaddress.ip_address(host)
         except ValueError:
-            found.add(host)
-            continue
-        if not ip.is_loopback:
-            found.add(str(ip))
-    return found
+            yield host, None
+
+
+def remote_addresses(lsof_output, port):
+    """The non-loopback remote addresses on `port` in `lsof -F n` output."""
+    return {host if ip is None else str(ip) for host, ip in _remotes(lsof_output, port)
+            if ip is None or not ip.is_loopback}
+
+
+def this_machine_addresses(lsof_output, port):
+    """The loopback remote addresses on `port` in `lsof -F n` output: the connections to this machine
+    itself. Every remote end on the port is in this set or in remote_addresses, by the one test, and
+    never in both. Only an address that IS loopback (127.0.0.0/8, ::1) is here: a LAN address, the
+    unspecified address and a host that is not written as an address are all off this machine."""
+    return {str(ip) for host, ip in _remotes(lsof_output, port) if ip is not None and ip.is_loopback}
 
 
 def resolve(hosts):
@@ -478,9 +505,13 @@ class Monitor:
                         self.refusals.append(rec)
                     self._event(rec)
                     continue
-                rec["addresses"], why = self._name(pid, port)
+                rec["addresses"], why, here = self._name(pid, port)
                 if why:
                     rec["name_error"] = why
+                if here:
+                    # What the process held on that port to this machine itself. It is written into
+                    # the record and excuses nothing (see _judge_reports).
+                    rec["this_machine"] = here
                 with self.cond:
                     self.reports.append(rec)
                 self._event(rec)
@@ -494,17 +525,19 @@ class Monitor:
                 self.cond.notify_all()
 
     def _name(self, pid, port):
-        """The remote addresses `pid` holds open on `port`, read now, while the connection may be open."""
+        """What `pid` holds open on `port`, read now, while the connection may be open: the remote
+        addresses off this machine, why they could not be read (or None), and the loopback addresses,
+        which are connections to this machine itself. A failure to read gives neither list."""
         try:
             r = subprocess.run([LSOF, "-a", "-n", "-P", "-p", str(pid), "-i", "-F", "n"],
                                capture_output=True, text=True, timeout=10, errors="replace")
         except (OSError, subprocess.TimeoutExpired) as e:
-            return [], "lsof could not read the sockets of pid %d: %s" % (pid, e)
+            return [], "lsof could not read the sockets of pid %d: %s" % (pid, e), []
         # lsof exits 1 when the process holds no matching socket any more, which is an answer (the
         # connection closed first); anything else, or 1 with an error said, is a failure to read.
         if r.returncode not in (0, 1) or (r.returncode == 1 and r.stderr.strip()):
-            return [], "lsof exited %d reading pid %d: %s" % (r.returncode, pid, r.stderr.strip()[-200:])
-        return sorted(remote_addresses(r.stdout, port)), None
+            return [], "lsof exited %d reading pid %d: %s" % (r.returncode, pid, r.stderr.strip()[-200:]), []
+        return sorted(remote_addresses(r.stdout, port)), None, sorted(this_machine_addresses(r.stdout, port))
 
     def _event(self, obj):
         fd = os.open(self.events_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
@@ -1077,13 +1110,23 @@ class Monitor:
                 # had already closed, else why lsof could not read it, so a failure to read is never
                 # reported as a connection that closed (L11, #1633).
                 err = r.get("name_error")
-                u = unnamed.setdefault((r["process"], r["port"], err), {"process": r["process"], "port": r["port"],
-                                                                        "reports": 0, "pids": [], "name_error": err})
+                # And apart by what lsof DID see on that port: nothing (the connection had closed),
+                # or only a connection to this machine itself. The second is never excused. A report
+                # names a process and a port and no address, for a connection to this machine too
+                # (measured on macOS 26.6.2, 2026-11-25), so it cannot be told from a report for a
+                # connection off this machine that had already closed while the process held
+                # another, to this machine, on the same port. Where a connection to this machine is
+                # never reported (macOS 26.6.2, both profiles), that is the only thing it can be.
+                here = tuple(r.get("this_machine") or ())
+                u = unnamed.setdefault((r["process"], r["port"], err, here), {
+                    "process": r["process"], "port": r["port"], "reports": 0, "pids": [], "name_error": err,
+                    "this_machine": list(here)})
                 u["reports"] += r["count"]
                 if r["pid"] not in u["pids"]:
                     u["pids"].append(r["pid"])
         dests = sorted(dests.values(), key=lambda d: (d["address"], d["port"]))
-        unnamed = sorted(unnamed.values(), key=lambda u: (u["process"], u["port"], u["name_error"] or ""))
+        unnamed = sorted(unnamed.values(), key=lambda u: (u["process"], u["port"], u["name_error"] or "",
+                                                          u["this_machine"]))
         outside = [d for d in dests if not d["allowed"]]
         let_through = [let_through[k] for k in sorted(let_through)]
         if outside or unnamed or strays or unruled or let_through:
@@ -1113,12 +1156,22 @@ class Monitor:
                 parts.append("serve or the drive helper reached hosts outside egress.allow: " + "; ".join(
                     "%s port %d (%s, %s)" % (d["address"], d["port"], ", ".join(d["processes"]), plural(d["reports"]))
                     for d in outside))
-            if unnamed:
+            unread = [u for u in unnamed if not u["this_machine"]]
+            beside = [u for u in unnamed if u["this_machine"]]
+            if unread:
                 parts.append("connections outside this machine whose address was never read: " + "; ".join(
                     "%s port %d (%s): %s" % (u["process"], u["port"], plural(u["reports"]),
                                              "lsof could not read it: " + u["name_error"] if u["name_error"]
                                              else "closed before it could be read")
-                    for u in unnamed))
+                    for u in unread))
+            if beside:
+                # Said for what it is, and never as a connection that had closed: lsof read one, open.
+                parts.append("reported connections that cannot be shown to have stayed on this machine: " + "; ".join(
+                    "%s port %d (%s): the only connection the process held on that port was to this machine (%s),"
+                    " and a report does not say which connection it was for, so one off this machine that had"
+                    " already closed is not ruled out"
+                    % (u["process"], u["port"], plural(u["reports"]), ", ".join(u["this_machine"]))
+                    for u in beside))
             return self.field("not-clean", ". ".join(parts) + refused_said, dests, unnamed, refused)
         if dests:
             why = "every connection outside this machine went to an allowed host: " + "; ".join(

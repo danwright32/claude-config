@@ -444,6 +444,39 @@ for my $spec (grep { /,/ } @ARGV) {
 '''
 
 
+# A program that holds a TCP connection to this machine on a port it is given by the system and, on
+# the SAME port, makes a UDP connect to 198.51.100.1 (TEST-NET-2: reserved, and a UDP connect sends
+# no packet) which it closes at once. It then goes on holding the first until the monitor has
+# written its report for that port into the record, which the monitor does only after reading this
+# process's sockets, or until 60 s have passed, and says which.
+SAME_PORT_PL = r'''
+use Socket qw(:all);
+$| = 1;
+socket(my $l, PF_INET, SOCK_STREAM, 0) or die "socket: $!";
+bind($l, pack_sockaddr_in(0, INADDR_LOOPBACK)) or die "bind: $!";
+listen($l, 1) or die "listen: $!";
+my ($port) = unpack_sockaddr_in(getsockname($l));
+socket(my $c, PF_INET, SOCK_STREAM, 0) or die "socket: $!";
+connect($c, pack_sockaddr_in($port, INADDR_LOOPBACK)) or die "connect to this machine: $!";
+socket(my $u, PF_INET, SOCK_DGRAM, 0) or die "socket: $!";
+my $left = connect($u, pack_sockaddr_in($port, inet_aton("198.51.100.1"))) ? "connected" : "failed: $!";
+close($u);
+print "$port $left\n";
+my $events = "$ENV{VERIFICATION_RECEIPT_DIR}/egress.jsonl";
+my $seen = "never";
+for (1 .. 1200) {
+  if (open(my $f, "<", $events)) {
+    local $/;
+    my $text = <$f>;
+    close($f);
+    if ($text =~ /"event": "report"[^\n]*"port": $port,/) { $seen = "read"; last; }
+  }
+  select(undef, undef, undef, 0.05);
+}
+print "$seen\n";
+'''
+
+
 def stand_in_unavailable():
     """Why this machine cannot run a program whose executable FILE has a name of our choosing, or
     None when it can. The rule under test names the helper browser by its executable's file name, so
@@ -925,6 +958,47 @@ class EgressTests(RunFixture):
         if self.withheld(egress):
             return self.assert_unmeasured_because_reports_were_withheld(rid, sha, egress)
         self.assertEqual(egress["verdict"], "clean", egress)
+
+    @STAND_IN
+    def test_a_connection_that_closed_is_not_excused_by_one_to_this_machine_on_the_same_port(self):
+        # Why a report is never read as local from what lsof shows (pull request 3570). One program
+        # holds a TCP connection to this machine on a port and, on the same port, makes a UDP connect
+        # off this machine that has closed before lsof runs. The report names the process and the
+        # port, and all lsof can show for them is the connection to this machine. On a Mac that
+        # reports no connection to this machine (macOS 26.6.2) the report is the one that left; on
+        # one that reports them too (macOS 27.2, in a drive call) there are two reports and nothing
+        # says which is which. Either way the run is not clean, and the record says what was seen.
+        self.stand_in("other-program")
+        with open(os.path.join(self.fake, "same-port.pl"), "w") as f:
+            f.write(SAME_PORT_PL)
+        rid, sha, rec = self.run_to_receipt("local", commands={
+            "drive": '"$FAKE_DIR/bin/other-program" "$FAKE_DIR/same-port.pl" > "$FAKE_DIR/drive-out"'})
+        said = self.said()
+        self.assertEqual(len(said), 2, said)
+        port, left = said[0].split(" ", 1)
+        port = int(port)
+        self.assertEqual(left, "connected")
+        egress = rec["egress"]
+        self.assertNotEqual(egress["verdict"], "clean", egress)
+        self.assertEqual((egress["destinations"], egress["refused"]), ([], []), egress)
+        if said[1] != "read":
+            # The report never reached the record, which only a Mac that withheld it may do.
+            self.assertTrue(self.withheld(egress), egress)
+            return self.assert_only_what_was_seen_on_a_mac_that_withheld(rid, sha, egress, [("other-program", port)])
+        self.assertEqual(egress["verdict"], "not-clean", egress)
+        self.assertEqual([(u["process"], u["port"], u["name_error"], u["this_machine"]) for u in egress["unnamed"]],
+                         [("other-program", port, None, ["127.0.0.1"])], egress)
+        self.assertIn("other-program port %d" % port, egress["why"])
+        self.assertIn("was to this machine (127.0.0.1)", egress["why"])
+        self.assertNotIn("closed before it could be read", egress["why"])
+        seen = self.events(rid, "report")
+        self.assertEqual({(e["process"], e["port"], tuple(e["addresses"]), tuple(e["this_machine"])) for e in seen},
+                         {("other-program", port, (), ("127.0.0.1",))}, seen)
+        if self.withheld(egress):  # what was seen is never downgraded, and the gap is said beside it
+            self.assertIn(WITHHELD, egress["why"])
+        out = self.merge_verdict(rid, sha)
+        self.assertEqual(out["decision"], "refuse")
+        self.assertEqual(sorted({p["kind"] for p in out["problems"]}), ["egress-not-clean"])
 
     def with_a_real_browser(self, goes=None):
         path, why = real_browser()

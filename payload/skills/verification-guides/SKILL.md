@@ -128,8 +128,19 @@ connection to an address other than loopback; `log stream` reads the reports (no
 the reserved address 198.51.100.1 that sends no packet, proves the stream live at the start and
 again at the end. The field holds `verdict`, `why`, `allowed_hosts`, `destinations` (each
 `{address, port, reports, processes, allowed}`), `unnamed` (connections whose address was never
-read, each with `name_error`: null when the connection closed before lsof could read it, else why
-lsof could not) and `refused` (below). `clean` means the monitor was proved live for the whole run,
+read, each with `name_error`, why lsof could not read the process or null when it could, and
+`this_machine`, the loopback addresses the process held on that port: empty when it held nothing
+there, so the connection had closed before lsof could read it) and `refused` (below). An entry
+whose `this_machine` is not empty is a report for which the only connection lsof saw on that port
+was one to this machine itself. It is not counted as local and the run is `not-clean`: a report
+names a process and a port and never an address, so it cannot be told from a report for a
+connection to another host that had already closed while the process held one to this machine on
+the same port. macOS 26.6.2 reports no connection to this machine, so there it is always that.
+macOS 27.2 does report one, for TCP in a drive call (measured 2026-11-25), so there a drive helper
+that opens a page served on this machine reads `not-clean` this way until the profile of drive
+calls is changed for it, which is not done yet.
+
+`clean` means the monitor was proved live for the whole run,
 every report it asked for itself arrived, and every destination was allowed; `not-clean` names what
 was reached, and an unnamed connection is never clean; `unmeasured` gives the reason the monitor
 could not see (not a Mac, `sandbox-exec` missing or refused, the canary never reported, a report

@@ -80,7 +80,7 @@ class ReaderAndJudgment(unittest.TestCase):
 
     def read(self, lines, names):
         self.m.proc = FakeStream(lines)
-        with mock.patch.object(self.m, "_name", side_effect=lambda pid, port: (names.get(pid, []), None)):
+        with mock.patch.object(self.m, "_name", side_effect=lambda pid, port: (names.get(pid, []), None, [])):
             self.m._read()
 
     def test_a_reused_canary_pid_never_hides_a_real_connection(self):
@@ -106,7 +106,7 @@ class ReaderAndJudgment(unittest.TestCase):
         out = self.m.judge()
         self.assertEqual(out["verdict"], "not-clean")
         self.assertEqual(out["unnamed"], [{"process": "node", "port": 443, "reports": 5, "pids": [503],
-                                           "name_error": None}])
+                                           "name_error": None, "this_machine": []}])
         self.assertIn("node port 443 (5 reports): closed before it could be read", out["why"])
 
     def test_a_connection_lsof_failed_to_name_is_not_said_to_have_closed(self):
@@ -193,6 +193,179 @@ def reporting_mac(m):
     return m
 
 
+def lsof_answers(by_pid):
+    """A subprocess.run for lsof: each pid's open sockets as `lsof -F n` prints them, written here by
+    hand, or exit 1 saying nothing for a pid that holds none (its connection had closed)."""
+    def run(cmd, **kw):
+        sockets = by_pid.get(int(cmd[cmd.index("-p") + 1]))
+        if not sockets:
+            return egress.subprocess.CompletedProcess(cmd, 1, "", "")
+        out = "p1\n" + "".join("f%d\nn%s\n" % (3 + i, s) for i, s in enumerate(sockets))
+        return egress.subprocess.CompletedProcess(cmd, 0, out, "")
+    return run
+
+
+class ConnectionsToThisMachine(unittest.TestCase):
+    """A report for which lsof showed only a connection to this machine itself (pull request 3570).
+
+    macOS 27.2 reports a TCP connection to 127.0.0.1 or ::1 under the profile of drive calls, where
+    macOS 26.6.2 writes nothing (measured on each, 2026-11-25). The report names a process and a
+    port and never an address, for a connection to this machine too, so the monitor cannot tell it
+    from a report for a connection off this machine that had already closed while the process
+    held another one, to this machine, on the same port. So it is never excused: it stays unnamed
+    and not clean. What changes is that the record says what lsof saw, apart from a connection
+    that had closed before it could be read, which reads exactly as it did. The same rule against
+    a real sandbox is EgressTests in test_run_session.py."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.m = reporting_mac(egress.Monitor(self.tmp.name, RID, list(v.EGRESS_LOCAL_HOSTS), 30))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def read(self, lines, sockets):
+        """Read a report stream through the real _name, with lsof's answers written by hand."""
+        self.m.proc = FakeStream(lines)
+        with mock.patch.object(egress.subprocess, "run", side_effect=lsof_answers(sockets)):
+            self.m._read()
+
+    def reports(self):
+        with open(self.m.events_path) as f:
+            return [e for e in map(json.loads, f) if e.get("event") == "report"]
+
+    def test_only_a_connection_to_this_machine_seen_is_kept_apart_and_is_not_clean(self):
+        # What the work MacBook saw: the helper browser loading the test's own page, with the
+        # connection held open long enough for lsof to read it.
+        self.read([report(800, 59176, self.m.tag, process="chrome-headless-shell")],
+                  {800: ["127.0.0.1:59572->127.0.0.1:59176"]})
+        out = self.m.judge()
+        self.assertEqual(out["verdict"], "not-clean", out)
+        self.assertEqual(out["destinations"], [])
+        self.assertEqual(out["unnamed"], [{"process": "chrome-headless-shell", "port": 59176, "reports": 1,
+                                           "pids": [800], "name_error": None, "this_machine": ["127.0.0.1"]}])
+        self.assertIn("chrome-headless-shell port 59176 (1 report): the only connection the process held on that"
+                      " port was to this machine (127.0.0.1)", out["why"])
+        self.assertIn("does not say which connection", out["why"])
+        self.assertNotIn("closed before it could be read", out["why"])
+        self.assertEqual([(e["addresses"], e["this_machine"]) for e in self.reports()], [([], ["127.0.0.1"])])
+
+    def test_the_same_over_ipv6(self):
+        self.read([report(801, 59176, self.m.tag, process="chrome-headless-shell")],
+                  {801: ["[::1]:59572->[::1]:59176"]})
+        out = self.m.judge()
+        self.assertEqual(out["verdict"], "not-clean", out)
+        self.assertEqual([(u["port"], u["this_machine"]) for u in out["unnamed"]], [(59176, ["::1"])])
+        self.assertIn("was to this machine (::1)", out["why"])
+
+    def test_a_connection_that_closed_before_it_could_be_read_reads_as_it_always_did(self):
+        self.read([report(802, 443, self.m.tag)], {})
+        out = self.m.judge()
+        self.assertEqual(out["verdict"], "not-clean", out)
+        self.assertEqual(out["unnamed"], [{"process": "node", "port": 443, "reports": 1, "pids": [802],
+                                           "name_error": None, "this_machine": []}])
+        self.assertIn("node port 443 (1 report): closed before it could be read", out["why"])
+        self.assertNotIn("to this machine (", out["why"])
+        self.assertNotIn("this_machine", self.reports()[0])
+
+    def test_the_two_are_never_one_entry(self):
+        # The same program and the same port: one process was read holding a connection to this
+        # machine, the other holding nothing. Neither is clean, and neither is told as the other.
+        self.read([report(803, 443, self.m.tag), report(804, 443, self.m.tag)],
+                  {803: ["127.0.0.1:50001->127.0.0.1:443"]})
+        out = self.m.judge()
+        self.assertEqual(out["verdict"], "not-clean", out)
+        self.assertEqual(sorted((u["pids"], u["this_machine"]) for u in out["unnamed"]),
+                         [([803], ["127.0.0.1"]), ([804], [])])
+        self.assertEqual(out["why"].count("closed before it could be read"), 1, out["why"])
+        self.assertEqual(out["why"].count("was to this machine"), 1, out["why"])
+
+    def test_a_process_holding_both_is_judged_by_the_address_off_this_machine(self):
+        # A connection to this machine beside it excuses nothing: the outside address on that port
+        # is named and judged as it always was.
+        self.read([report(805, 443, self.m.tag)],
+                  {805: ["127.0.0.1:50001->127.0.0.1:443", "192.168.4.2:50002->203.0.113.7:443"]})
+        out = self.m.judge()
+        self.assertEqual(out["verdict"], "not-clean", out)
+        self.assertEqual([(d["address"], d["port"], d["allowed"]) for d in out["destinations"]],
+                         [("203.0.113.7", 443, False)])
+        self.assertEqual(out["unnamed"], [])
+        self.assertIn("203.0.113.7 port 443", out["why"])
+        self.assertEqual([(e["addresses"], e["this_machine"]) for e in self.reports()],
+                         [(["203.0.113.7"], ["127.0.0.1"])])
+
+    def test_no_report_with_a_connection_to_this_machine_seen_ever_reads_clean(self):
+        # Every shape of "the process held a connection to this machine on that port": alone, twice,
+        # over both address families, and collapsed by the kernel into a count.
+        for n, (sockets, dupes) in enumerate([
+                (["127.0.0.1:50001->127.0.0.1:8080"], None),
+                (["127.0.0.1:50001->127.0.0.1:8080", "127.0.0.1:50002->127.0.0.1:8080"], None),
+                (["127.0.0.1:50001->127.0.0.1:8080", "[::1]:50002->[::1]:8080"], None),
+                (["127.0.0.1:50001->127.0.0.1:8080"], 6)]):
+            with self.subTest(sockets=sockets, dupes=dupes):
+                m = reporting_mac(egress.Monitor(tempfile.mkdtemp(dir=self.tmp.name), RID,
+                                                 list(v.EGRESS_LOCAL_HOSTS), 30))
+                m.proc = FakeStream([report(810 + n, 8080, m.tag, dupes=dupes)])
+                with mock.patch.object(egress.subprocess, "run", side_effect=lsof_answers({810 + n: sockets})):
+                    m._read()
+                out = m.judge()
+                self.assertEqual(out["verdict"], "not-clean", out)
+                self.assertEqual([u["reports"] for u in out["unnamed"]], [dupes or 1])
+                self.assertTrue(out["unnamed"][0]["this_machine"], out)
+
+    def test_an_address_that_only_looks_local_is_an_address_off_this_machine(self):
+        # A LAN address, a link local one, the unspecified address and a name: none is this machine,
+        # each is named as a destination and judged against the allowed hosts as before.
+        for n, (remote, named) in enumerate([
+                ("192.168.1.20:8080", "192.168.1.20"), ("10.0.0.5:8080", "10.0.0.5"),
+                ("169.254.10.1:8080", "169.254.10.1"), ("0.0.0.0:8080", "0.0.0.0"),
+                ("localhost:8080", "localhost"), ("127.0.0.1.example.com:8080", "127.0.0.1.example.com"),
+                ("[::]:8080", "::"), ("[fe80::1%en0]:8080", "fe80::1"), ("[fd00::1]:8080", "fd00::1")]):
+            with self.subTest(remote=remote):
+                lsof = "p1\nf3\nn192.168.4.2:50000->%s\n" % remote
+                self.assertEqual(egress.this_machine_addresses(lsof, 8080), set())
+                self.assertEqual(egress.remote_addresses(lsof, 8080), {named})
+                m = reporting_mac(egress.Monitor(tempfile.mkdtemp(dir=self.tmp.name), RID,
+                                                 list(v.EGRESS_LOCAL_HOSTS), 30))
+                m.proc = FakeStream([report(820 + n, 8080, m.tag)])
+                with mock.patch.object(egress.subprocess, "run",
+                                       side_effect=lsof_answers({820 + n: ["192.168.4.2:50000->" + remote]})):
+                    m._read()
+                out = m.judge()
+                self.assertEqual(out["verdict"], "not-clean", out)
+                self.assertEqual([(d["address"], d["allowed"]) for d in out["destinations"]], [(named, False)])
+                self.assertEqual(out["unnamed"], [])
+
+    def test_a_connection_to_this_machine_on_another_port_is_not_seen_for_this_one(self):
+        self.read([report(830, 443, self.m.tag)], {830: ["127.0.0.1:50001->127.0.0.1:3000"]})
+        out = self.m.judge()
+        self.assertEqual(out["verdict"], "not-clean", out)
+        self.assertEqual([(u["port"], u["this_machine"]) for u in out["unnamed"]], [(443, [])])
+        self.assertIn("node port 443 (1 report): closed before it could be read", out["why"])
+
+    def test_lsof_output_is_read_for_this_machine_on_the_reported_port_only(self):
+        out = ("p77\nf5\nn192.168.4.2:50000->203.0.113.1:443\nf6\nn127.0.0.1:50001->127.0.0.1:443\n"
+               "f7\nn[::1]:50002->[::1]:443\nf8\nn127.0.0.1:50003->127.0.0.1:80\nf9\nn127.0.0.1:50004->127.9.9.9:443\n"
+               "f10\nn*:443\nf11\nn127.0.0.1:443\n")
+        self.assertEqual(egress.this_machine_addresses(out, 443), {"127.0.0.1", "::1", "127.9.9.9"})
+        self.assertEqual(egress.this_machine_addresses(out, 80), {"127.0.0.1"})
+        self.assertEqual(egress.this_machine_addresses(out, 8080), set())
+        self.assertEqual(egress.remote_addresses(out, 443), {"203.0.113.1"})
+
+    def test_a_failure_to_read_says_nothing_about_this_machine(self):
+        def lsof(cmd, **kw):
+            return egress.subprocess.CompletedProcess(cmd, 2, "p1\nf3\nn127.0.0.1:5->127.0.0.1:443\n",
+                                                      "lsof: illegal option")
+        self.m.proc = FakeStream([report(840, 443, self.m.tag)])
+        with mock.patch.object(egress.subprocess, "run", side_effect=lsof):
+            self.m._read()
+        out = self.m.judge()
+        self.assertEqual(out["verdict"], "not-clean", out)
+        self.assertEqual([(u["name_error"], u["this_machine"]) for u in out["unnamed"]],
+                         [("lsof exited 2 reading pid 840: lsof: illegal option", [])])
+        self.assertIn("lsof could not read it", out["why"])
+
+
 class Refusals(unittest.TestCase):
     """The one connection the sandbox refuses (claude-config#3319): a UDP connect to port 443 off this
     machine by the helper browser a drive call starts. A refusal is written into the record, counted
@@ -212,7 +385,7 @@ class Refusals(unittest.TestCase):
 
     def read(self, lines, names=None):
         self.m.proc = FakeStream(lines)
-        with mock.patch.object(self.m, "_name", side_effect=lambda pid, port: ((names or {}).get(pid, []), None)):
+        with mock.patch.object(self.m, "_name", side_effect=lambda pid, port: ((names or {}).get(pid, []), None, [])):
             self.m._read()
 
     def events(self, kind):
@@ -345,7 +518,7 @@ class Refusals(unittest.TestCase):
                 line = (report(770, 443, tag, process="chrome-headless-shell") if word == "allow"
                         else refusal(770, tag))
                 m.proc = FakeStream([line])
-                with mock.patch.object(m, "_name", return_value=(["192.0.2.1"], None)):
+                with mock.patch.object(m, "_name", return_value=(["192.0.2.1"], None, [])):
                     m._read()
                 out = m.judge()
                 with open(m.events_path) as f:
@@ -505,7 +678,7 @@ class WithheldReports(unittest.TestCase):
 
     def read(self, lines, names=None):
         self.m.proc = FakeStream(lines)
-        with mock.patch.object(self.m, "_name", side_effect=lambda pid, port: ((names or {}).get(pid, []), None)):
+        with mock.patch.object(self.m, "_name", side_effect=lambda pid, port: ((names or {}).get(pid, []), None, [])):
             self.m._read()
 
     def test_a_test_connection_never_reported_is_unmeasured(self):
@@ -860,7 +1033,7 @@ class BeatProgram(unittest.TestCase):
         self.m._beat_reported(egress.BEAT_PORT + 1, 1)
         self.m._stop_beats()
         self.m.proc = FakeStream([report(700, 443, self.m.tag)])
-        with mock.patch.object(self.m, "_name", side_effect=lambda pid, port: (["203.0.113.7"], None)):
+        with mock.patch.object(self.m, "_name", side_effect=lambda pid, port: (["203.0.113.7"], None, [])):
             self.m._read()
         out = self.m.judge()
         self.assertEqual(out["verdict"], "not-clean", out)
@@ -998,16 +1171,21 @@ class ExitStatuses(unittest.TestCase):
             return self.m._name(77, 443)
 
     def test_lsof_finding_the_socket(self):
-        self.assertEqual(self.lsof(0, "p77\nn10.0.0.2:5->203.0.113.1:443\n"), (["203.0.113.1"], None))
+        self.assertEqual(self.lsof(0, "p77\nn10.0.0.2:5->203.0.113.1:443\n"), (["203.0.113.1"], None, []))
+
+    def test_lsof_finding_a_connection_to_this_machine(self):
+        self.assertEqual(self.lsof(0, "p77\nn127.0.0.1:5->127.0.0.1:443\nn[::1]:6->[::1]:443\n"),
+                         ([], None, ["127.0.0.1", "::1"]))
 
     def test_lsof_finding_nothing_is_an_answer(self):
-        self.assertEqual(self.lsof(1), ([], None))
+        self.assertEqual(self.lsof(1), ([], None, []))
 
     def test_lsof_failing_is_a_naming_error(self):
-        names, why = self.lsof(1, err="lsof: WARNING: can't stat() vmhgfs file system")
-        self.assertEqual(names, [])
+        names, why, here = self.lsof(1, err="lsof: WARNING: can't stat() vmhgfs file system")
+        self.assertEqual((names, here), ([], []))
         self.assertIn("lsof exited 1", why)
-        names, why = self.lsof(2, err="lsof: illegal option")
+        names, why, here = self.lsof(2, out="p77\nn127.0.0.1:5->127.0.0.1:443\n", err="lsof: illegal option")
+        self.assertEqual((names, here), ([], []))
         self.assertIn("lsof exited 2", why)
 
     def test_a_stream_that_dies_right_after_the_start_canary_is_unavailable(self):
