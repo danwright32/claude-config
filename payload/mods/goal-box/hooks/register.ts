@@ -9,6 +9,7 @@ import { errorText } from './mod-kit/skew.ts'
 import { HOLD_MAX_MS, whileHeld } from './mod-kit/held.ts'
 import { transcriptPlaces } from './mod-kit/projects.ts'
 import { toolArgs } from './mod-kit/toolargs.ts'
+import { BOX_KINDS, inflightHolds, type Reading } from './mod-kit/inflight.ts'
 
 // The Goal accomplished box (claude-config#1563). Two ways a session's work ends, one box for both:
 //
@@ -192,17 +193,22 @@ const openHolds = async ($: EngineInterface): Promise<Holds> => {
   return out
 }
 
-/** The agents the session started that are still working. One a plugin started is not the request's. */
-const agentHolds = async ($: EngineInterface): Promise<Holds> => {
+/** The session's agents as Claude Code lists them, or why they could not be listed. */
+const agentsNow = async ($: EngineInterface): Promise<Reading<unknown>> => {
   try {
-    const agents = await $.agent.list()
-    return agents
-      .filter(a => (a.status === 'running' || a.status === 'pending' || a.status === 'waiting') && a.spawnedBy === undefined)
-      .map(a => `the agent "${a.description || a.name || a.id}" is still ${a.status}`)
+    return { value: await $.agent.list() }
   } catch (err) {
-    return [`the session's agents could not be listed (${msg(err)}), so whether one is still working is not known`]
+    return { unread: msg(err) }
   }
 }
+
+/**
+ * What holds the box (#1563, #1818): the box's kinds in mod-kit's one list of what is in flight
+ * (hooks/mod-kit/inflight.ts, #3770), so the agents it counts are the ones every other reader
+ * counts: the session's own still working, never one a plugin started.
+ */
+const boxHolds = async ($: EngineInterface): Promise<Holds> =>
+  inflightHolds({ agents: await agentsNow($), merges: { value: await mergeHoldsNow($) }, prs: { value: await openHolds($) } }, BOX_KINDS).map(h => h.text)
 
 /**
  * A background merge, asked of GitHub by the box itself (#1818): is it live asks again only at a turn
@@ -316,7 +322,7 @@ const askIfDone = async ($: EngineInterface): Promise<void> => {
   }
   if (!cardedSince(facts.verdicts, since)) return
   if (((await $.state.get(shownRef)).value ?? []).some(s => s.prompts >= prompts)) return
-  const holds = [...(await agentHolds($)), ...(await mergeHoldsNow($)), ...(await openHolds($))]
+  const holds = await boxHolds($)
   if (holds.length) return
   if (!(await $.state.set(askedDoneRef, prompts, { ifVersion: asked.version })).isSet) return
   const failed = await sendHeld($, 'ask-done', 'the prompt asking whether the work is finished', askDoneText())
@@ -370,7 +376,7 @@ export const register: Register = on => {
     const input = readInput(toolArgs(x))
     if ('refusal' in input) return { deny: `No box: ${input.refusal}.` }
     const goal = await goalNow($)
-    const holds = [...(await agentHolds($)), ...(await mergeHoldsNow($)), ...(await openHolds($))]
+    const holds = await boxHolds($)
     const shown = (await $.state.get(shownRef)).value ?? []
     const prompts = (await $.state.get(promptsRef)).value ?? 0
     const d = decide({ goal, input, shown, prompts, holds })

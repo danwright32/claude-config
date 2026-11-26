@@ -141,6 +141,8 @@ type World = {
   /** What `gh pr list --state open` answers per repository; absent answers an empty list. */
   open: Record<string, Gh>
   agents: { id: string; status: string; spawnedBy?: string; description?: string }[]
+  /** Why `$.agent.list()` throws, or '' when it lists `agents`. */
+  agentsFail: string
   /** How each of the mod's own next prompts fails, in order: thrown, or dropped by a hook beneath. */
   submitFails: ('throw' | 'drop')[]
   /** #2132: each hold, letting go and prompt the mod sent, in order; and why mod-kit refuses a hold, or ''. */
@@ -153,7 +155,7 @@ const link = (repo: string, pr: number, at = '2026-10-24T18:00:00.000Z') =>
   JSON.stringify({ type: 'pr-link', sessionId: 's1', prNumber: pr, prUrl: `https://github.com/${repo}/pull/${pr}`, prRepository: repo, timestamp: at })
 
 const world = (on: On, init: Partial<World> = {}) => {
-  const w: World = { goal: { state: 'none' }, cardFails: '', cards: [], transcript: T, registry: 'open', disk: {}, here: '/repo', owed: [], verdicts: {}, links: [], open: {}, agents: [], submitFails: [], held: [], holdFails: '', view: () => ({ exitCode: 1, stdout: '', stderr: 'unexpected' }), ...init }
+  const w: World = { goal: { state: 'none' }, cardFails: '', cards: [], transcript: T, registry: 'open', disk: {}, here: '/repo', owed: [], verdicts: {}, links: [], open: {}, agents: [], agentsFail: '', submitFails: [], held: [], holdFails: '', view: () => ({ exitCode: 1, stdout: '', stderr: 'unexpected' }), ...init }
   const runs: string[][] = []
   const views: { pr: string; repo?: string; cwd?: string; token?: string; fields?: string }[] = []
   const submitted: { text: string; origin: unknown }[] = []
@@ -208,7 +210,10 @@ const world = (on: On, init: Partial<World> = {}) => {
     if (a.startsWith('gh auth token')) return ok('gho_test_not_a_token\n')
     return ok('', 1, 'unexpected')
   })
-  on('agent.list', () => ({ value: w.agents.map(a => ({ description: 'a task', type: 'general-purpose', ...a })) }) as never)
+  on('agent.list', () => {
+    if (w.agentsFail) return { deny: w.agentsFail } as never
+    return { value: w.agents.map(a => ({ description: 'a task', type: 'general-purpose', ...a })) } as never
+  })
   on('session.id', () => ({ value: 's1' }) as never)
   on('session.cwd', () => ({ value: w.here }) as never)
   on('env.get', ($, e) => ({ value: (e as unknown as { name: string }).name === 'HOME' ? `${'/Users'}/dan` : undefined }) as never)
@@ -618,6 +623,26 @@ test('not while an agent this session started is still running; one a plugin sta
   expect(r.deny).not.toMatch(/a3|auto-session-name/)
   w.agents = [{ id: 'a1', status: 'completed' }]
   expect((await box($, ASKED, 'b2')).deny).toBeUndefined()
+})
+
+// #3770: the box's holds now come from mod-kit's one list of what is in flight (hooks/mod-kit/
+// inflight.ts), asked for the box's three kinds. Written against the box as it was before that
+// change and passing there: the whole refusal, word for word and in order, is what it was.
+test('parity: an agent, a merge and an open pull request refuse in the same words and order as before the shared list (#3770)', withLive, async ($, on) => {
+  const { w } = world(on, {
+    agents: [{ id: 'a1', status: 'running', description: 'Fix issue 1702' }, { id: 'a2', status: 'idle' }, { id: 'a3', status: 'waiting', spawnedBy: 'auto-session-name' }, { id: 'a4', status: 'pending', description: 'Second' }],
+    verdicts: { 'danwright32/claude-config#1699': { state: 'deploying', at: 1 } },
+    links: [link('danwright32/claude-config', 1701)],
+    open: { 'danwright32/claude-config': { exitCode: 0, stdout: JSON.stringify([{ number: 1701 }]) } },
+  })
+  await start($)
+  await says($, 'Add the goal box')
+  expect((await box($, ASKED)).deny).toBe(
+    'No box yet: the agent "Fix issue 1702" is still running; the agent "Second" is still pending; danwright32/claude-config#1699 is still deploying: check it is live and call the is it live card tool again; danwright32/claude-config#1701 is still open: merge it, or close it if it is not part of this work.',
+  )
+  w.agentsFail = 'the agent list is gone'
+  const r = (await box($, ASKED, 'b2')).deny ?? ''
+  expect(r).toMatch(/^No box yet: the session's agents could not be listed \(.*the agent list is gone.*\), so whether one is still working is not known; /)
 })
 
 test('a /goal still set is never shown over, and a goal that cannot be read holds the box', withKit, async ($, on) => {
