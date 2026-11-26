@@ -230,9 +230,26 @@ const pyModule = (m: string) => SAME_MODULE.get(m) ?? m
 // print continued onto the line holding its redirect or pipe is read whole. The keywords are known by
 // the name being read alone, so the reading takes time in step with the program's length (#2974: it
 // asked of the whole output so far at every name, about 1.5 s for 92,000 characters).
-const AWK_TAKES_OPERAND = /^(?:print|printf|return)$/
+const AWK_OPERAND_KEYWORDS = ['print', 'printf', 'return']
+const AWK_TAKES_OPERAND = new RegExp(`^(?:${AWK_OPERAND_KEYWORDS.join('|')})$`)
+const AWK_LONGEST_KEYWORD = Math.max(...AWK_OPERAND_KEYWORDS.map(k => k.length))
+/**
+ * The characters the awk reader has read (#3549), summed from when it was last set to 0: each one
+ * it steps over, each one a scan for a closing quote, slash or line break passes, and each one it
+ * hands a regular expression. A test holds the reading's cost to a number of characters per
+ * character of program by it, rather than by the clock, which under load measured the Mac (L290).
+ * Every regular expression the reader asks goes through `awkSees`, which counts what it is handed.
+ */
+export const awkRead = { chars: 0 }
+const awkSees = (re: RegExp, text: string): boolean => {
+  awkRead.chars += text.length
+  return re.test(text)
+}
 // Each continued line joined to the next, the backslash and its line break made spaces.
-const awkJoined = (text: string): string => text.replace(/\\(\r?\n)/g, (_, nl: string) => ' '.repeat(1 + nl.length))
+const awkJoined = (text: string): string => {
+  awkRead.chars += text.length
+  return text.replace(/\\(\r?\n)/g, (_, nl: string) => ' '.repeat(1 + nl.length))
+}
 const awkCanonical = (code: string): string => {
   // The program as written, its continued lines still joined to the next (lessons review at
   // 4207042). Joining one a comment ends too only lengthens a line, so no rule sees less for it.
@@ -244,6 +261,7 @@ const awkCanonical = (code: string): string => {
   let word = ''
   for (let i = 0; i < code.length; ) {
     const c = code[i] as string
+    awkRead.chars++
     const joined = c === '\\' ? (code[i + 1] === '\n' ? 2 : code[i + 1] === '\r' && code[i + 2] === '\n' ? 3 : 0) : 0
     if (joined > 0) {
       out += ' '.repeat(joined)
@@ -261,6 +279,7 @@ const awkCanonical = (code: string): string => {
         else if (c === '/' && code[j] === ']') bracket = false
         else if (code[j] === c && !bracket) break
       }
+      awkRead.chars += j - i
       if (j >= code.length || code[j] !== c) return asWritten()
       // A regex is kept as written, a continued line in it joined (lessons review at 7c17b96).
       out += c === '"' ? `"${' '.repeat(j - i - 1)}"` : awkJoined(code.slice(i, j + 1))
@@ -272,6 +291,7 @@ const awkCanonical = (code: string): string => {
     // A comment runs to its line break, a backslash before that included: awk continues no comment.
     if (c === '#') {
       const end = code.indexOf('\n', i)
+      awkRead.chars += (end < 0 ? code.length : end) - i
       out += code.slice(i, end < 0 ? code.length : end)
       i = end < 0 ? code.length : end
       word = ''
@@ -279,13 +299,16 @@ const awkCanonical = (code: string): string => {
     }
     out += c
     i++
-    word = /[\w$]/.test(c) ? word + c : ''
+    // A name is kept only to one character past the longest keyword, enough to say it is none
+    // (#3549): kept whole, a name of 200,000 characters was handed whole to the keyword test at each
+    // of its characters, and took about 2 s.
+    word = awkSees(/[\w$]/, c) ? (word + c).slice(0, AWK_LONGEST_KEYWORD + 1) : ''
     // A newline ends a statement, as ; does, so what follows starts afresh and a / there is a regex
     // (lessons review at a08a0f6). A continued one never reaches here: it was joined above.
     if (c === '\n') operand = 'no'
-    if (/\s/.test(c)) continue
+    if (awkSees(/\s/, c)) continue
     if ((c === '+' || c === '-') && code[i - 2] === c) operand = 'unsure'
-    else if (/[\w$)\]]/.test(c)) operand = /\w/.test(c) && AWK_TAKES_OPERAND.test(word) ? 'no' : 'yes'
+    else if (awkSees(/[\w$)\]]/, c)) operand = awkSees(/\w/, c) && awkSees(AWK_TAKES_OPERAND, word) ? 'no' : 'yes'
     else operand = 'no'
   }
   return out
