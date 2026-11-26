@@ -403,6 +403,7 @@ forget
 for cmd in "$FORGED | python3 $LIBRARY check --repo acme/widget --hash $H --pr 7 --claim" \
            "$FORGED | python3 -B ~/.claude/hooks/lib/announce-approval.py check --claim --repo acme/widget --hash $H" \
            "python3 $LIBRARY used --repo acme/widget --hash $H --pr 7" \
+           "printf '{}' | python3 $LIBRARY answered" \
            "cd $DIR && /usr/bin/python3 -B -I lib/announce-approval.py used --repo acme/widget --hash $H --pr 7 --unread x" \
            "env ANNOUNCE_APPROVALS_DIR=/tmp/other python3 $LIBRARY used --repo acme/widget --hash $H --pr 7" \
            "$FORGED | xargs -0 python3 $LIBRARY check --claim" \

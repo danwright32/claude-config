@@ -1953,6 +1953,30 @@ writes `{"kind": "approved", "repo", "hash", "at", "session", "picker"}` to
 approved merges unchanged in a later session or overnight. A subagent's call counts his picker for
 that call and writes nothing.
 
+His answer is noted when he gives it (#3742). A hook run reads a session's pickers only from the
+transcript its payload names, and `hooks/lib/merge-when-ready.sh` hands the gates a payload naming
+none, so an approval reached the record only when a label command or a typed merge followed his
+answer. On any other flow (the wording revised after the label went on, the label put on in
+GitHub's page) the merge through the helper was refused, told to ask him, and asking him again
+changed nothing. `hooks/announce-answer-note.sh` now runs after every picker (PostToolUse on
+AskUserQuestion) and, for one of this source, has the library write an `answered` line: the
+session, its transcript, the picker's id, the repository, the file, and the file's hash and status
+change time as they stood then. A note is not an approval and is not his answer. When that hook
+runs, the transcript holds the picker and not yet what he answered: Claude Code writes a call's
+result to the transcript after the call's PostToolUse hooks have run (measured 2026-11-26: a
+session's transcript, read at the moment a PostToolUse hook of its own call ran, ended at that
+call's `tool_use`). His answer is in the payload the hook is handed, and it is deliberately not
+read from there, since a payload is whatever the caller hands over. Whichever hook next asks the
+library reads each noted session's transcript back, for the repository asked about, and judges the
+noted picker by every rule above, read from that transcript. The hash and the change time come
+from the note, so the wording approved is what the file held when he answered: a write to the file
+afterwards neither loses his approval nor rides on it, and a note taken later than his answer, over
+a file changed since, approves nothing. When the note cannot be taken the hook says so to the
+session (exit 2, the picker being already answered) with the command that reads his answer into
+the record. `hooks/test-announce-answer-note.sh` holds it, and `hooks/test-merge-when-ready.sh`
+merges an announcement through the helper, with the real gate and the real hook, on an approval
+that was only ever in the session.
+
 One approval covers one pull request (Dan, 2026-11-25, by picker: "One approval, one pull request").
 An approval is one answer of his in one picker, counted once by the session and the picker it came
 from. An approval nobody has used covers whichever pull request reaches the merge gate first, so he
@@ -2023,7 +2047,7 @@ wording he never saw. Three things now hold that:
   `CLAUDE_HOME`.
 - **A session's Bash command that runs the library in any other form is refused** by
   `announce-label-ask.sh`, whose first test knows the library's file name: `check --claim`,
-  `used`, a verb it cannot read, a program handed to python that names the file, and a heredoc
+  `used`, `answered` (the form the hook that notes his answer uses, #3742), a verb it cannot read, a program handed to python that names the file, and a heredoc
   body naming it. Commands that name the file without running it (git, grep, a test suite) pass.
   It judges python wherever a command names it and keeps no list of other programs that could
   run the file, which has no interpreter line and so cannot be run by its own path.

@@ -633,6 +633,135 @@ approval_line toolu_a
 r="$(for_pr "$T" acme/widget "$H" "" claim)"
 check "a claim naming no pull request is refused, and records nothing" "$([[ "$r" == "no|unrecorded|"*"no pull request number"* ]] && [ "$(grep -c '"kind": "used"' "$STORE_USED/record.jsonl")" = 0 ] && echo ok || echo "$r")"
 
+echo "his answer is noted when he gives it, and read back from the session's transcript by whoever asks next (#3742 item 1)"
+# announce-answer-note.sh runs once a picker is answered and asks the library to note it. A hook that
+# runs then finds the picker in the transcript and not yet his answer (the fixture's `payload` says
+# how that was measured), so each case is: the picker put, the note, his answer written.
+# note <transcript> <picker id> <repo> <file> [answer] [shape] [session] [agent id]: "<yes|no>|<why>".
+note() {
+  aaf_talk "$@" 2>/dev/null | ANNOUNCE_APPROVALS_DIR="$STORE_USED" python3 -B "$LIB" answered 2>/dev/null \
+    | python3 -c 'import json, sys
+try:
+    d = json.load(sys.stdin)
+except ValueError:
+    d = {"noted": False, "why": "the library gave no answer to `answered`"}
+print(("yes" if d["noted"] is True else "no") + "|" + d["why"], end="")'
+}
+# helper_asks <repo> <hash> <pull request>: the merge gate's claim as lib/merge-when-ready.sh hands it
+# the payload: no transcript, and a session id that is no session's. "<yes|no>|<state>|<why>".
+helper_asks() {
+  printf '%s' '{"session_id":"merge-when-ready","cwd":"/","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"gh pr merge 7 --squash"}}' \
+    | ANNOUNCE_APPROVALS_DIR="$STORE_USED" python3 -B "$LIB" check --repo "$1" --hash "$2" --pr "$3" --claim \
+    | python3 -c 'import json, sys
+d = json.load(sys.stdin)
+print(("yes" if d["approved"] is True else "no") + "|" + str(d.get("state")) + "|" + d["why"], end="")'
+}
+kinds() { local n; n="$(grep -c "\"kind\": \"$1\"" "$STORE_USED/record.jsonl" 2>/dev/null)"; printf '%s' "${n:-0}"; }
+STORE_USED="$WORK/store-noted"
+F="$(shown noted)"; T="$WORK/noted.jsonl"
+HN="$(hash_file "$F")"
+P="$(talk "$T" put acme/widget "$F")"
+r="$(note "$T" payload "$P" acme/widget "$F")"
+check "his answer is noted once the picker is answered, before the transcript holds it" "$([[ "$r" == "yes|" ]] && echo ok || echo "$r")"
+check "the note is on the record, naming the session, the picker and the hash of the file" "$(grep '"kind": "answered"' "$STORE_USED/record.jsonl" 2>/dev/null | grep "\"picker\": \"$P\"" | grep '"session": "s1"' | grep -q "\"hash\": \"$HN\"" && echo ok || cat "$STORE_USED/record.jsonl" 2>&1)"
+check "a note is no approval: nothing says he approved yet" "$([ "$(kinds approved)" = 0 ] && echo ok || cat "$STORE_USED/record.jsonl")"
+r="$(helper_asks acme/widget "$HN" 60)"
+check "R2 a note whose answer the transcript does not hold approves nothing" "$([[ "$r" == "no|unapproved|"* ]] && echo ok || echo "$r")"
+talk "$T" answer "$P" acme/widget "$F"
+r="$(helper_asks acme/widget "$HN" 60)"
+check "R2 still possible: the merge helper, which names no session, merges on an approval that was only ever in the session" "$([[ "$r" == "yes|approved|" ]] && echo ok || echo "$r")"
+check "and his approval is on the record, as the session and the picker it came from" "$(grep '"kind": "approved"' "$STORE_USED/record.jsonl" 2>/dev/null | grep "\"picker\": \"$P\"" | grep -q '"session": "s1"' && echo ok || cat "$STORE_USED/record.jsonl" 2>&1)"
+r="$(helper_asks acme/widget "$HN" 60)"
+check "the same merge tried again is approved, and his approval is not written twice" "$([[ "$r" == "yes|approved|" ]] && [ "$(kinds approved)" = 1 ] && echo ok || echo "$r $(kinds approved) lines")"
+r="$(note "$T" payload "$P" acme/widget "$F")"
+check "a second note of the same picker adds nothing" "$([[ "$r" == "yes|" ]] && [ "$(kinds answered)" = 1 ] && echo ok || echo "$r $(kinds answered) notes")"
+
+# The file touched after he answered and before anything read his answer back: the hash was taken
+# when he answered, so his approval of that wording stands, and what the file holds now is not it.
+STORE_USED="$WORK/store-noted-touched"
+F="$(shown touched)"; T="$WORK/touched.jsonl"
+HT="$(hash_file "$F")"
+P="$(talk "$T" put acme/widget "$F")"
+note "$T" payload "$P" acme/widget "$F" >/dev/null
+talk "$T" answer "$P" acme/widget "$F"
+printf 'A line nobody showed him.\n' >> "$F"
+r="$(helper_asks acme/widget "$HT" 61)"
+check "R2 still possible: wording he approved is approved though the file was written after his answer" "$([[ "$r" == "yes|approved|" ]] && echo ok || echo "$r")"
+r="$(helper_asks acme/widget "$(hash_file "$F")" 62)"
+check "R2 what the file holds after a later write is not wording he approved" "$([[ "$r" == "no|unapproved|"* ]] && echo ok || echo "$r")"
+
+# What he answered is read from the transcript and never from what the hook was handed: a note made
+# with a payload saying Approve, for a picker he answered Not yet, approves nothing.
+STORE_USED="$WORK/store-noted-notyet"
+F="$(shown notyet-noted)"; T="$WORK/notyet-noted.jsonl"
+HY="$(hash_file "$F")"
+P="$(talk "$T" put acme/widget "$F")"
+r="$(note "$T" payload "$P" acme/widget "$F" "Approve the wording")"
+talk "$T" answer "$P" acme/widget "$F" "Not yet"
+check "the made up note is taken, since a note says nothing about his answer" "$([[ "$r" == "yes|" ]] && echo ok || echo "$r")"
+r="$(helper_asks acme/widget "$HY" 63)"
+check "R2 a note handed an Approve he never gave approves nothing: his Not yet is read from the transcript" "$([[ "$r" == "no|unapproved|"* ]] && [ "$(kinds approved)" = 0 ] && echo ok || echo "$r")"
+# The same for a picker that closed by its own timeout.
+P="$(talk "$T" put acme/widget "$F")"
+note "$T" payload "$P" acme/widget "$F" >/dev/null
+talk "$T" answer "$P" acme/widget "$F" "Approve the wording" timeout
+r="$(helper_asks acme/widget "$HY" 63)"
+check "R2 a noted picker that closed by its own timeout approves nothing" "$([[ "$r" == "no|unapproved|"* ]] && echo ok || echo "$r")"
+
+# A note made later, by a run of the hook that is not Claude Code's, after the session rewrote the
+# file: the hash noted is of the rewrite, and the file's change time says it came after his answer.
+STORE_USED="$WORK/store-noted-late"
+F="$(shown late)"; T="$WORK/late.jsonl"
+P="$(talk "$T" put acme/widget "$F")"
+talk "$T" answer "$P" acme/widget "$F"
+printf '@here\nWording he never saw.\n' > "$F"
+HL="$(hash_file "$F")"
+r="$(note "$T" payload "$P" acme/widget "$F")"
+r="$(helper_asks acme/widget "$HL" 64)"
+check "R2 a note taken after the file was rewritten approves nothing" "$([[ "$r" == "no|unapproved|"* ]] && echo ok || echo "$r")"
+check "and the refusal says the file had changed after he answered" "$([[ "$r" == *"had changed after he answered"* ]] && echo ok || echo "$r")"
+
+# The file was never opened in front of him: a note does not stand in for that.
+STORE_USED="$WORK/store-noted-unshown"
+mkdir -p "$WORK/unshown-noted"; F="$WORK/unshown-noted/announcement.md"; printf '%s\n' "$POST" > "$F"
+T="$WORK/unshown-noted.jsonl"; new_talk "$T"
+P="$(talk "$T" put acme/widget "$F")"
+note "$T" payload "$P" acme/widget "$F" >/dev/null
+talk "$T" answer "$P" acme/widget "$F"
+r="$(helper_asks acme/widget "$(hash_file "$F")" 65)"
+check "R2 a noted Approve of a file never opened in front of him approves nothing, and says so" "$([[ "$r" == "no|unapproved|"*"was not opened in front of him"* ]] && echo ok || echo "$r")"
+
+# What is not noted, each said in its own words or, for a picker that is not this one, not at all.
+STORE_USED="$WORK/store-noted-not"
+F="$(shown not-noted)"; T="$WORK/not-noted.jsonl"
+P="$(talk "$T" put acme/widget "$F")"
+r="$(note "$T" payload "$P" acme/widget "$F" "" "" "" a9bba4c0ffee)"
+check "a subagent's picker is not noted, and that is said" "$([[ "$r" == "no|"*"subagent"* ]] && [ "$(kinds answered)" = 0 ] && echo ok || echo "$r")"
+r="$(note "$T" payload "$P" acme/widget "$F" "" othersource)"
+check "a picker of another source is not noted, and nothing is said" "$([[ "$r" == "no|" ]] && [ "$(kinds answered)" = 0 ] && echo ok || echo "$r")"
+r="$(note "$T" payload "$P" acme/widget "$F" "" prefilled)"
+check "a picker that came with its answer filled in was never put to him, and is not noted" "$([[ "$r" == "no|" ]] && [ "$(kinds answered)" = 0 ] && echo ok || echo "$r")"
+r="$(note "$T" payload "$P" "not a repository" "$F")"
+check "a picker whose metadata names no repository is not noted, and that is said" "$([[ "$r" == "no|"*"does not name the repository"* ]] && echo ok || echo "$r")"
+r="$(printf 'not json' | ANNOUNCE_APPROVALS_DIR="$STORE_USED" python3 -B "$LIB" answered 2>&1)"
+check "a payload nothing can read is not noted" "$([[ "$r" == *'"noted": false'* ]] && echo ok || echo "$r")"
+# A wording file that cannot be hashed is noted with why, and that reason is the refusal's.
+mkdir -p "$WORK/nofile"; aaf_new "$WORK/nofile.jsonl"; T="$WORK/nofile.jsonl"
+talk "$T" bash "$BBEDIT --front-window $WORK/nofile/announcement.md"
+P="$(talk "$T" put acme/widget "$WORK/nofile/announcement.md")"
+r="$(note "$T" payload "$P" acme/widget "$WORK/nofile/announcement.md")"
+talk "$T" answer "$P" acme/widget "$WORK/nofile/announcement.md"
+check "an answer about a file that is not there is noted with why" "$([[ "$r" == "yes|" ]] && grep '"kind": "answered"' "$STORE_USED/record.jsonl" | grep -q 'could not be read' && echo ok || echo "$r: $(cat "$STORE_USED/record.jsonl" 2>&1)")"
+r="$(helper_asks acme/widget "$H" 66)"
+check "and approves nothing, in those words" "$([[ "$r" == "no|unapproved|"*"could not be read"* ]] && echo ok || echo "$r")"
+# The record cannot take the note: said, so the hook can say it to the session.
+STORE_USED="$WORK/store-noted-unwritable/inner"
+printf 'not a folder\n' > "$WORK/store-noted-unwritable"
+F="$(shown unwritable-noted)"; T="$WORK/unwritable-noted.jsonl"
+P="$(talk "$T" put acme/widget "$F")"
+r="$(note "$T" payload "$P" acme/widget "$F")"
+check "a note the record cannot take is said, naming the record" "$([[ "$r" == "no|"*"was not noted"*"$STORE_USED/record.jsonl"* ]] && echo ok || echo "$r")"
+
 unset STORE_USED
 
 echo "the record is this suite's own"

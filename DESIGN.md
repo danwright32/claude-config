@@ -3261,8 +3261,26 @@ for the review by picker, 2026-11-25: "Yes, attack it first"). The choices are t
   open is said in the README: a transcript forged inside that folder, and the library reached
   without its name. Both are writes to files on a Mac the session can write.
 
-`hooks/test-announce-approval.sh`, `hooks/test-announce-label-ask.sh` and the #3666 section of
-`hooks/test-changelog-tag.sh` hold it.
+- **His answer is noted when he gives it, and read from the transcript afterwards (#3742, the
+  builder's).** A second review found that an approval given in the session was not found when the
+  merge went through `lib/merge-when-ready.sh`, whose payload names no transcript. The issue's
+  design was a hook after the picker that reads his answer into the record. Measured before it was
+  built: when a PostToolUse hook runs, the transcript holds the call's `tool_use` and not yet its
+  result, which Claude Code writes after those hooks (2026-11-26, read through the offset
+  `context-size-notice.sh` keeps of a session's own transcript). So the hook cannot read his answer
+  from the transcript at that moment. Ruled out: taking the answer from the payload the hook is
+  handed, which would make one run of the hook by hand, with a payload saying Approve for a picker
+  he answered Not yet, an approval with no transcript forged; and a child process left running to
+  wait for the transcript, whose race with the next command nothing would report. Chosen:
+  `announce-answer-note.sh` writes a note (which picker, in which session, the file's hash and
+  change time then) that approves nothing, and whichever hook next asks the library reads that
+  session's transcript back and judges the picker by the same rules as one of its own session. The
+  note's hash and change time replace the file as it stands, which also ends an approval being
+  lost to a write of the file before the first hook read it. A run of the hook by hand can only
+  write a note, and a note over a file changed after his answer is refused by its change time.
+
+`hooks/test-announce-approval.sh`, `hooks/test-announce-label-ask.sh`,
+`hooks/test-announce-answer-note.sh` and the #3666 section of `hooks/test-changelog-tag.sh` hold it.
 
 ## Things known to be wrong and left that way
 

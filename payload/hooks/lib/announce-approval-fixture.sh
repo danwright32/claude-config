@@ -22,6 +22,21 @@
 #                                    NOT his answer (timeout, prefilled, two, error, othersource,
 #                                    unread) and one way it carries what must be ignored
 #                                    (claimedhash:<hash>, a hash written into its metadata).
+#       put <repo> <file> [shape] [session]
+#                                    the same picker put and not yet answered: only the assistant
+#                                    entry holding its tool_use. Prints the picker's id.
+#       answer <id> <repo> <file> [answer] [shape] [session]
+#                                    his answer to a picker `put` wrote: the user entry carrying its
+#                                    tool_result.
+#       payload <id> <repo> <file> [answer] [shape] [session] [agent id]
+#                                    prints, and writes nothing: what Claude Code hands a PostToolUse
+#                                    hook once that picker is answered. A hook that runs then finds
+#                                    the picker's tool_use in the transcript and NOT its tool_result,
+#                                    which is written after the hooks have run (measured 2026-11-26,
+#                                    claude-config#3742: the transcript of a session read at the
+#                                    moment a PostToolUse hook of its own call ran ended at that
+#                                    call's tool_use). So a case about that hook is `put`, the hook on
+#                                    `payload`, then `answer`.
 #   aaf_shown <folder> <transcript> <wording>
 #                                    <folder>/announcement.md holding the wording, written by the
 #                                    session and then opened in front of Dan; prints the file's path.
@@ -40,31 +55,23 @@ import datetime, json, sys, time
 path, action, rest = sys.argv[1], sys.argv[2], sys.argv[3:]
 def stamp():
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-def call(name, tool_input, error=False, result=None, session=None):
-    uid = "toolu_%s%d" % (name[:3].lower(), time.time_ns())
-    who = session or "s1"
-    sent = {"type": "assistant", "sessionId": who, "cwd": "/", "timestamp": stamp(), "message": {"role": "assistant", "content": [
-        {"type": "tool_use", "id": uid, "name": name, "input": tool_input}]}}
-    back = {"type": "user", "sessionId": who, "cwd": "/", "timestamp": stamp(), "message": {"role": "user", "content": [
+def line(entry):
+    with open(path, "a", encoding="utf-8", errors="replace") as f:
+        f.write(json.dumps(entry) + "\n")
+def send(uid, name, tool_input, session=None):
+    line({"type": "assistant", "sessionId": session or "s1", "cwd": "/", "timestamp": stamp(), "message": {"role": "assistant", "content": [
+        {"type": "tool_use", "id": uid, "name": name, "input": tool_input}]}})
+def back(uid, error=False, result=None, session=None):
+    entry = {"type": "user", "sessionId": session or "s1", "cwd": "/", "timestamp": stamp(), "message": {"role": "user", "content": [
         {"type": "tool_result", "tool_use_id": uid, "content": "done", "is_error": error}]}}
     if result is not None:
-        back["toolUseResult"] = result
-    with open(path, "a", encoding="utf-8", errors="replace") as f:
-        f.write(json.dumps(sent) + "\n")
-        f.write(json.dumps(back) + "\n")
-if action == "write":
-    call("Write", {"file_path": rest[0], "content": "x"})
-elif action == "edit":
-    call("Edit", {"file_path": rest[0], "old_string": "a", "new_string": "b"})
-elif action == "bash":
-    call("Bash", {"command": rest[0], "description": "d"}, error=len(rest) > 1 and rest[1] == "error")
-elif action == "agent":
-    call("Agent", {"description": "d", "prompt": rest[0]})
-elif action == "ask":
-    repo, file = rest[0], rest[1]
-    answer = rest[2] if len(rest) > 2 and rest[2] else "Approve the wording"
-    shape = rest[3] if len(rest) > 3 else ""
-    session = rest[4] if len(rest) > 4 else None
+        entry["toolUseResult"] = result
+    line(entry)
+def call(name, tool_input, error=False, result=None, session=None):
+    uid = "toolu_%s%d" % (name[:3].lower(), time.time_ns())
+    send(uid, name, tool_input, session)
+    back(uid, error, result, session)
+def picker(repo, file, answer, shape):
     q = "Approve the announcement for acme/widget#7, to go to the announcements channel?"
     if shape == "unread":
         # A zero width space, made from its code point and never written here.
@@ -84,7 +91,36 @@ elif action == "ask":
         ask["metadata"]["source"] = "db-apply"
     if shape.startswith("claimedhash:"):
         ask["metadata"]["sha256"] = shape.split(":", 1)[1]
-    call("AskUserQuestion", ask, error=shape == "error", result=result, session=session)
+    return ask, result
+def arg(n):
+    return rest[n] if len(rest) > n and rest[n] else ""
+if action == "write":
+    call("Write", {"file_path": rest[0], "content": "x"})
+elif action == "edit":
+    call("Edit", {"file_path": rest[0], "old_string": "a", "new_string": "b"})
+elif action == "bash":
+    call("Bash", {"command": rest[0], "description": "d"}, error=len(rest) > 1 and rest[1] == "error")
+elif action == "agent":
+    call("Agent", {"description": "d", "prompt": rest[0]})
+elif action == "ask":
+    ask, result = picker(rest[0], rest[1], arg(2) or "Approve the wording", arg(3))
+    call("AskUserQuestion", ask, error=arg(3) == "error", result=result, session=arg(4) or None)
+elif action == "put":
+    ask, _ = picker(rest[0], rest[1], "", arg(2))
+    uid = "toolu_ask%d" % time.time_ns()
+    send(uid, "AskUserQuestion", ask, arg(3) or None)
+    print(uid, end="")
+elif action == "answer":
+    _, result = picker(rest[1], rest[2], arg(3) or "Approve the wording", arg(4))
+    back(rest[0], arg(4) == "error", result, arg(5) or None)
+elif action == "payload":
+    ask, result = picker(rest[1], rest[2], arg(3) or "Approve the wording", arg(4))
+    d = {"session_id": arg(5) or "s1", "transcript_path": path, "cwd": "/", "permission_mode": "default",
+         "hook_event_name": "PostToolUse", "tool_name": "AskUserQuestion", "tool_input": ask,
+         "tool_response": result, "tool_use_id": rest[0]}
+    if arg(6):
+        d["agent_id"] = arg(6)
+    print(json.dumps(d), end="")
 else:
     sys.exit("aaf_talk: no action called " + action)
 PY
