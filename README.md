@@ -4246,7 +4246,8 @@ before, and a refusal says the earlier tests were not counted and why. Because e
 read with every push of the branch, a could not judge refusal that holds them says a smaller push
 will not make them fit.
 
-Every push either gate reaches is recorded, overrides included (#1075), one line each in
+Every push either gate reaches is recorded, overrides included (#1075), one verdict line each (and
+the readings line described below before some) in
 `~/.claude/state/push-gates/push-gates.tsv`: never synced, never swept, so it outlives temp
 cleaning (the lessons review keeps its outcome ledger beside it for the same reason). Read it with:
 

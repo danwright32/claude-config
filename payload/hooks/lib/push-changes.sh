@@ -343,7 +343,8 @@ pc_messages() {
 # returned nothing, an error envelope, or an answer that is not a JSON object. Never a verdict: the
 # gate reads its own fields from the object. Also sets PC_JUDGE_MODEL, PC_JUDGE_START and
 # PC_JUDGE_END (epoch seconds around the call), PC_JUDGE_MS and PC_JUDGE_COST (the envelope's own
-# duration_ms and total_cost_usd, empty when it carried none) and PC_JUDGE_BYTES (the input's size).
+# duration_ms and total_cost_usd, empty when it carried none), PC_JUDGE_BYTES (the input's size) and
+# PC_JUDGE_DIR (the name of the folder the judge ran from, empty when none was launched).
 pc_judge() {   # $1 = model  $2 = timeout seconds  $3 = system prompt (the rubric)  $4 = the input
   local tbin jtmp envelope status parsed
   PC_JUDGE_OBJ=""; PC_JUDGE_ERR=""; PC_JUDGE_MS=""; PC_JUDGE_COST=""
@@ -437,7 +438,8 @@ except Exception:
 }
 
 # ---- the record of what each gate did (claude-config#1075) ----
-# One tab separated line per push a gate reaches, appended to
+# One tab separated verdict line per push a gate reaches (and, before it, a readings line for a push
+# the test gate judged with a reader, described below), appended to
 # ${PUSH_GATE_LEDGER_DIR:-~/.claude/state/push-gates}/push-gates.tsv. Under ~/.claude/state, which
 # holds per Mac state that is never synced and that nothing sweeps (the lessons review keeps its
 # outcome ledger there for the same reason), so it outlives every temp clean. About 200 bytes a

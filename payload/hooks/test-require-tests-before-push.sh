@@ -1804,6 +1804,13 @@ want_stderr "could not judge" "#3339 still refused as could not judge"
 want_stderr "asked 3 times" "#3339 still saying how many times it asked"
 case "$(ledger_last 14)" in *'asked 3 times'*) pass=$((pass+1)) ;; *) fail=$((fail+1)); echo "FAIL: #3339 the verdict line's detail changed: [$(ledger_last 14)]" ;; esac
 
+# A first reading that cannot start: failed, asked once, no folder, and the fail open it always was.
+before="$(ledger_lines)"; : > "$READS_CWDS"
+W="$(mk_repo)"; seed_source_and_test "$W"
+run_hook "$W" "git push" "$PATH_NOCLAUDE"
+reads_case "$before" "a first reading that cannot start" 0 failopen "outcome failopen; first 1 failed -"
+want_allowed_notice "#3339 a first reading with no claude to run still fails open"
+
 # A further reading that cannot start: failed, asked once, no folder, and the refusal it always was.
 : > "$READS_CWDS"; before="$(ledger_lines)"
 printf '%s\t%s\n' "$LATER_CALL" "$COVERED_NONE" > "$RULES"
@@ -1823,8 +1830,9 @@ STUB_CLAUDE_CWD="$READS_CWDS" STUB_CLAUDE_ONCE="$TMPROOT/once-3339u" STUB_CLAUDE
   run_hook "$W" "git push"
 want_code 0 "#3339 a push whose other readings found every change tested is allowed as before"
 got="$(tail -n +"$((before + 1))" "$LEDGER" | sed -n 1p | cut -f 14)"
-if printf '%s\n' "$got" | grep -Eq '^outcome pass; first 1 read [^ ;]+(; rest[0-9]+ 1 (read|unneeded) [^ ;]+)+$' \
-  && [ "$(printf '%s\n' "$got" | grep -o ' unneeded ' | wc -l | tr -d ' ')" = 1 ]; then pass=$((pass+1))
+reads_re='^outcome pass; first 1 read [^ ;]+(; rest[0-9]+ 1 (read|unneeded) [^ ;]+)+$'
+only_one="${got#* unneeded }"
+if [[ "$got" =~ $reads_re ]] && [ "$only_one" != "$got" ] && [ "${only_one#* unneeded }" = "$only_one" ]; then pass=$((pass+1))
 else fail=$((fail+1)); echo "FAIL: #3339 the readings line should name one unneeded reading, asked once: [$got]"; fi
 if [ ! -e "$TMPROOT/once-3339u" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #3339 the unreadable answer was never given, so the unneeded case did not run"; fi
 
