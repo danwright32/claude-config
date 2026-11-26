@@ -1967,8 +1967,10 @@ for line in open(records):
     # The record holds the final figures, each reading over the median of every sample taken, and
     # tools/gate-cost-rows.py reproduces each from the printed seconds and unit.
     good = good and ", samples %s;" % readings in logged and logged.endswith("\nrows check: ok")
-    # A judgement that ran out is noted with the unit it was read at, and by the whole run's median
-    # that is the final unit, the record's own, never the median of the samples so far (#3406).
+    # A judgement that ran out is noted with the unit it was read at, and by the median of the whole
+    # run that is the final unit, the one the record names, never the median of the samples so far
+    # (#3406). No apostrophe anywhere in this program: macOS bash 3.2 pairs quotes inside a heredoc
+    # held in a command substitution, so one apostrophe breaks the suite.
     final = re.search(r"unit ([0-9.]+) s,", logged)
     good = good and bool(final) and all(u == final.group(1) for u in re.findall(r" s at ([0-9.]+) s a unit", logged))
     print("%s\t%s\t%s" % (rec["kind"], name, "ok" if good else "cost.py answered %r, logged %r" % (said[:300], logged[-300:])))
@@ -1981,16 +1983,16 @@ for line in open(records):
         print("control\trun %s %s\t%s" % (rec["run"], rec["attempt"], "ok" if good else "by the least sample and 91, cost.py answered %r" % said[:300]))
     if rec["run"] == "45784485146":
         # The message naming a sample the cache did not show judged afresh prints its figure at the
-        # end, by the whole run's median: constructed from this real record by making its first
-        # reading's trace say "hit", that sample reads 98.0 by the median so far and 90.4 at the end.
+        # end, by the median of the whole run: constructed from this real record by making the trace
+        # of its first reading say "hit", that sample reads 98.0 by the median so far and 90.4 at the end.
         bent = dict(rec, judgements=[dict(j) for j in rec["judgements"]])
         bent["judgements"][1]["said"] = ["qos: not raised: not macOS", "hit"]
         said, _ = run(bent, unit, limit)
         good = said.startswith("1 of the 2 samples") and "sample 1, 90.4 units" in said
-        print("side-unfit\tthe record of run %s %s with its first reading's trace made a hit\t%s" % (rec["run"], rec["attempt"], "ok" if good else "cost.py answered %r" % said[:400]))
+        print("side-unfit\tthe record of run %s %s with the trace of its first reading made a hit\t%s" % (rec["run"], rec["attempt"], "ok" if good else "cost.py answered %r" % said[:400]))
     if rec["run"] == "45838830923":
         # What the cold case writes down for the cached case the moment its first judgement runs
-        # out, when only the samples so far are known: by the whole run's median it says that unit
+        # out, when only the samples so far are known: by the median of the whole run it says that unit
         # is provisional, since the final one is not yet known.
         d = tempfile.mkdtemp(dir=tmp)
         os.mkdir(os.path.join(d, "cache"))
