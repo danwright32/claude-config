@@ -757,7 +757,12 @@ def judge_repo_edit(what, args, envs, place, where, command):
         if vis != "PUBLIC" and not _work_owner(full.split("/", 1)[0]):
             return ("%s makes %s public, publishing every file, commit and issue it holds, which this check "
                     "cannot read, so whether any of it names a work organisation or repository cannot be "
-                    "told. Check the repository, then change its visibility yourself." % (what, full))
+                    "told. Check the repository first: `python3 %s %s --since <when it was last public, or "
+                    "when it was made, as an ISO time with its zone>` reads what was posted to it since "
+                    "then (issues, pull requests, comments, reviews, commit messages, releases and the "
+                    "earlier revisions GitHub still holds, not its files) against this check's own lists, "
+                    "and says what it could not reach (claude-config#3582). Then change its visibility "
+                    "yourself." % (what, full, os.path.join(_HERE, "lib", "posted-text-scan.py"), full))
     return judge(what, slug, where, gh_repo, command, [], place=place)
 
 
