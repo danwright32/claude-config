@@ -6,7 +6,8 @@
 # A stand in gh on PATH answers from fixtures/open-issues.json and fixtures/open-prs.json: real
 # entries recorded from danwright32/claude-config with `gh issue list` and `gh pr list` on
 # 2026-11-26 (six open issues and four open pull requests of the 178 and 44 open that night), with
-# only their session link lines taken out. No test reaches GitHub.
+# only their session link lines taken out and local scratch paths replaced by <scratchpad>. No test
+# reaches GitHub.
 set -uo pipefail
 
 # Its own wall clock, and whatever it starts stopped with it however it ends (claude-config#465).
@@ -133,6 +134,20 @@ out="$(printf 'Alert thread: the rtk hook rewrites a prefixed grep into rtk grep
 is "a folder inside a repository: exit 0" 0 "$rc"
 has "a folder inside a repository is matched" "pull request #3653:" "$out"
 lacks "a folder is read through its checkout, not as owner/repo" "--repo" "$(cat "$TMP_CALLS")"
+
+# ---- a matcher that crashes, or is missing, is never read as nothing covering the item ----
+printf 'raise RuntimeError("simulated crash")\n' >"$TMP/crash.py"
+out="$(printf 'the rtk hook rewrites a prefixed grep\n' | PATH="$TMP/bin:$PATH" FIND_EXISTING_MATCHER="$TMP/crash.py" bash "$HELPER" "$REPO" 2>&1)"; rc=$?
+is "a matcher that crashes exits 2" 2 "$rc"
+has "a matcher that crashes says it could not look" "COULD NOT LOOK: the matcher stopped with exit 1" "$out"
+out="$(printf 'the rtk hook rewrites a prefixed grep\n' | PATH="$TMP/bin:$PATH" FIND_EXISTING_MATCHER="$TMP/no-such.py" bash "$HELPER" "$REPO" 2>&1)"; rc=$?
+is "a missing matcher exits 2" 2 "$rc"
+has "a missing matcher says so" "COULD NOT LOOK: the matcher hooks/lib/match-open-issues.py is not beside this skill" "$out"
+# A read limit that is not a number falls back to the default rather than crashing at import, which
+# would take the end of turn review down with it.
+out="$(printf 'FINDING (a, b): widget/cache.py keeps a stale entry\n' | PATH="$TMP/bin:$PATH" CLAUDE_ITEM_MATCH_LIMIT=lots python3 "$DIR/../../hooks/lib/match-open-issues.py" "$TMP/not-a-repo" 2>&1)"; rc=$?
+is "a limit that is not a number leaves the review mode running" 0 "$rc"
+lacks "and the review mode does not crash on it" "Traceback" "$out"
 
 # ---- the call itself ----
 out="$(printf '' | PATH="$TMP/bin:$PATH" bash "$HELPER" "$REPO" 2>&1)"; rc=$?

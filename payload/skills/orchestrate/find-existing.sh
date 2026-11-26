@@ -29,7 +29,8 @@ if [ $# -ne 1 ] || [ -z "${1:-}" ]; then
   exit 2
 fi
 
-MATCHER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../hooks/lib/match-open-issues.py"
+# FIND_EXISTING_MATCHER is a test seam only, so the suite can see a crash and a missing matcher.
+MATCHER="${FIND_EXISTING_MATCHER:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../hooks/lib/match-open-issues.py}"
 if [ ! -f "$MATCHER" ]; then
   echo "COULD NOT LOOK: the matcher hooks/lib/match-open-issues.py is not beside this skill."
   exit 2

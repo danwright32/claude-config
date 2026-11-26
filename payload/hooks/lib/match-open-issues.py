@@ -260,8 +260,19 @@ def match(finding, issues, rare=None, most=2):
 # hundred at a time, so 1000 is ten requests per list; claude-config had 178 and 44 open on
 # 2026-11-26. A list that comes back FULL may have more behind it, and the look says so rather than
 # reading the newest thousand as all of them.
-ITEM_LIMIT = int(os.environ.get("CLAUDE_ITEM_MATCH_LIMIT") or 1000)
-ITEM_TIMEOUT = float(os.environ.get("CLAUDE_ITEM_MATCH_TIMEOUT") or 60)
+def env_number(name, default, kind):
+    """A number from the environment, or the default when unset or not a number. Read here rather
+    than with a bare int() at import, where a bad value would crash the end of turn review too, a
+    mode that must never cost the review."""
+    try:
+        value = kind(os.environ.get(name) or default)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+ITEM_LIMIT = env_number("CLAUDE_ITEM_MATCH_LIMIT", 1000, int)
+ITEM_TIMEOUT = env_number("CLAUDE_ITEM_MATCH_TIMEOUT", 60, float)
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 TITLE_REF_RE = re.compile(r"#(\d+)\b")
 
