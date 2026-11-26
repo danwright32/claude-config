@@ -386,6 +386,16 @@ said="$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.st
 case "$said" in *"run 106"*"dropped unread after 7 days"*"run 111"*"dropped unread"*|*"run 111"*"dropped unread"*"run 106"*"dropped unread after 7 days"*) e=ok ;; *) e="out=[$out]" ;; esac
 check "a review whose reason cannot be built still says each dropped rerun, as valid JSON" "$e"
 
+# With no temporary file for the reader's messages, a drop still makes the review speak.
+REAL_MKTEMP="$(command -v mktemp)"
+mkdir -p "$WORK/bin-nomktemp"
+printf '#!/bin/bash\ncase "$*" in *claude-reruns-said*) exit 1 ;; esac\nexec "%s" "$@"\n' "$REAL_MKTEMP" > "$WORK/bin-nomktemp/mktemp"
+chmod +x "$WORK/bin-nomktemp/mktemp"
+reset_spool; record_at "$T0" 106
+out="$(printf '{"transcript_path":"%s","stop_hook_active":false}' "$TR" | PATH="$WORK/bin-nomktemp:$PATH" CLAUDE_RERUN_NOW="$((T0 + 8 * DAY))" CLAUDE_PROJECT_DIR="$PROJ" bash "$REVIEW" 2>/dev/null)"
+case "$out" in *'"decision"'*"HAND RERUNS DROPPED"*"run 106"*) e=ok ;; *) e="out=[$out]" ;; esac
+check "with no temporary file for its messages, a review that drops a rerun still speaks and names it" "$e"
+
 # The flake history keeps 90 days: an older line no longer counts and is removed.
 reset_spool; mkdir -p "$RDIR"
 NOW1=$((T0 + 200 * DAY))

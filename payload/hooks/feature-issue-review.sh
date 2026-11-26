@@ -201,7 +201,10 @@ if [ -f "$SPOOL_LIB" ]; then
       reruns_said="$(cat "$_rr_err" 2>/dev/null)" || true
       rm -f "$_rr_err"
     else
-      reruns_said="$(bash "$SPOOL_LIB" resolve-reruns "$proj" "$transcript" 2>&1)" || true
+      # No file to keep its messages apart in: the drops, which must make the review speak, still
+      # come back on their own, and the lost messages are said.
+      reruns_dropped="$(bash "$SPOOL_LIB" resolve-reruns "$proj" "$transcript" 2>/dev/null)" || true
+      reruns_said="the hand rerun reader ran, but no temporary file could be made for its messages, so anything it could not read or write this turn is not shown here."
     fi
   fi
 fi
