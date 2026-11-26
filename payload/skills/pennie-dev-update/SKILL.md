@@ -168,7 +168,8 @@ state, not config.
 { "acme/widget": {
     "lastEnd": "2026-09-08T14:22:00Z",
     "heldBack": [1187, 1190],
-    "headings": ["COMMISSION AND FIRST PAY", "GOALS"] } }
+    "headings": ["COMMISSION AND FIRST PAY", "GOALS"],
+    "announcements": [{ "number": 1180, "mergedAt": "2026-09-05T15:10:00Z", "outcome": "drafted" }] } }
 ```
 
 - **Start** = `lastEnd` for that repo, exclusive. **End** = now. That is the whole rule.
@@ -178,6 +179,8 @@ state, not config.
   could not be confirmed live (section 4). Add them to this run's candidate set regardless of
   the window.
 - **`headings`** is the previous run's section names. See section 6.
+- **`announcements`** carries each announcement for agents not yet settled (only drafted, or with
+  no outcome), and a settled one only while it could come back into the window. See section 11.
 
 ### First appearance
 
@@ -241,9 +244,11 @@ The window simply grows until there is something to report.
 **Write `lastEnd` only after the draft file exists.** If the run dies partway the boundary must
 not move, or that period is skipped forever. `commit-state` takes `--draft` and refuses when the
 file is missing or empty, when a `--headings` entry is not a line of it, when a `--listed` PR was
-not gathered or was held back, and when the state moved since the gather (so running it twice
-changes nothing). It takes `lastEnd` from the gathered `merged_at` of the newest listed PR,
-`heldBack` from what gather found not yet live, and keeps every other field.
+not gathered or was held back, when an announcement for agents that is out has no outcome in
+`--outcomes` (section 11), and when the state moved since the gather (so running it twice changes
+nothing). It takes `lastEnd` from the gathered `merged_at` of the newest listed PR, `heldBack` from
+what gather found not yet live, `announcements` from what section 11 settled (every one only
+drafted or with no outcome is kept), and keeps every other field.
 
 **`commit-state` runs under the no network wrapper** (claude-config#3503), as step 7 of section 10
 gives it:
@@ -295,18 +300,26 @@ From a repo's `changelogFrom` date in the registry, every merged pull request ca
 judgment already, made at merge time by the person who made the change and enforced by
 `~/.claude/hooks/require-changelog-tag.sh`:
 
-| Label | Means | Body |
-|---|---|---|
-| `changelog/visible` | A manager would notice this | A `## Changelog` heading with the manager-facing sentence under it, required |
-| `changelog/technical` | Plumbing worth a roll-up line | Optional |
-| `changelog/none` | Not in the update at all | Must not carry a block |
+| Label | Means | `record.managerVisible` | Body |
+|---|---|---|---|
+| `changelog/visible` | A manager would notice this | true | A `## Changelog` heading with the manager-facing sentence under it, required |
+| `changelog/announce` | Agents must or can act differently, and they are told | true | The `## Changelog` sentence, and the post for agents under `## Announcement` |
+| `changelog/technical` | Plumbing worth a roll-up line | false | Optional |
+| `changelog/none` | Not in the update at all | false | Must not carry a block |
+
+The third column is the one that sorts: every recorded PR carries `record.managerVisible`, set
+in code from the parser's own map of the kinds, and the post reads that field, never the label's
+name, so a kind this table has never heard of still arrives sorted (claude-config#3668).
 
 `gather.js` reads each record through `hooks/lib/changelog-entry.js`, the same parser the merge
 gate uses, so the two cannot disagree about what a record is. A PR's `record.kind` is
-`visible` (with `record.line`, the block's sentence), `technical`, `none`, `gap` (merged on or
+`visible` or `announce` (each with `record.line`, the block's sentence; an announce record also
+carries `record.announcement`, the post for agents), `technical`, `none`, `gap` (merged on or
 after the cutover with no valid record; `record.code` and `record.reason` say what is wrong),
 `unrecorded` (merged before the cutover, judged by hand) or `dependency` (Dependabot). The
-cutover day is the local day the merge fell on, as the gate judged it.
+cutover day is the local day the merge fell on, as the gate judged it. An announce change is a
+change managers notice like any other in the post; what agents are told is section 11's, and the
+post for agents never goes in the managers' post.
 
 So for anything merged on or after that date: **read the label, and take the sentence from the
 block verbatim as the starting point.** Do not re-derive the judgment from the title. That
@@ -412,8 +425,11 @@ run for it. No repo is like this today.
 
 Every PR is **manager-visible** or **behind the scenes**.
 
-**Where a record exists (section 3), it decides.** `changelog/visible` is manager-visible,
-`changelog/technical` is behind the scenes, `changelog/none` is neither and does not appear.
+**Where a record exists (section 3), it decides by `record.managerVisible`.** True is
+manager-visible (`changelog/visible` and `changelog/announce` today), false is behind the scenes
+(`changelog/technical`), and a `none` record is neither and does not appear. Never sort by the
+label's name: the field is set in code, so a fourth label added since this was written is
+already sorted, and a sort by name would drop it.
 Overrule a record only when it is plainly wrong, and when you do, say so in the terminal and
 fix the label on the pull request, so the next run does not make the same correction again.
 A judgment corrected only in a draft is a judgment nobody recorded.
@@ -783,15 +799,18 @@ files in the session scratchpad.
    Do not open it yet: the editor opens at step 8, once nothing is left to run.
 6. Run the issue check (section 9), every gh command through `gather.js gh` so it runs as the
    repo's account, and print what it changed.
-7. Commit the state, once per repo that was `ok` or `first_appearance`, naming the PRs the post
-   listed and the headings it used:
+7. Settle the announcements for agents (section 11) of every `ok` repo first: the state commit
+   refuses while one that is out has no outcome. Then commit the state, once per repo that was
+   `ok` or `first_appearance`, naming the PRs the post listed, the headings it used and each
+   announcement's outcome:
 
    ```bash
-   __CLAUDE_HOME__/hooks/no-network-run.sh node __CLAUDE_HOME__/skills/pennie-dev-update/gather.js commit-state --gathered <scratchpad>/gathered.json --draft <file> --repo <owner>/<name> --listed <n,n,...> --headings 'HEADING ONE|HEADING TWO'
+   __CLAUDE_HOME__/hooks/no-network-run.sh node __CLAUDE_HOME__/skills/pennie-dev-update/gather.js commit-state --gathered <scratchpad>/gathered.json --draft <file> --repo <owner>/<name> --listed <n,n,...> --headings 'HEADING ONE|HEADING TWO' --outcomes <n>=sent,<n>=drafted,<n>=not-announcing
    ```
 
-   Leave out `--listed` for a first appearance and for a repo the post listed nothing from. It runs
-   under the no network wrapper with every path written out in full, never with a tilde (section 2).
+   Leave out `--listed` for a first appearance and for a repo the post listed nothing from, and
+   `--outcomes` where no announcement asks for one (`needsOutcome`). It runs under the no network
+   wrapper with every path written out in full, never with a tilde (section 2).
 
    This records the post as checked, before Dan edits it, and does not wait for him. Waiting
    would keep the run going after the editor opens, and a post that goes out with no later turn
@@ -804,8 +823,8 @@ files in the session scratchpad.
    tells him the post is ready to post.
 9. Tell Dan the run is finished, and: the window covered, how many changes, how many held back
    and why, how many could not be confirmed live and why (never folded into the held count), and
-   what the issue check changed. Add that anything he deletes from the post now is not offered by
-   a later run (step 7).
+   what the issue check changed, and each announcement for agents with its outcome (section 11).
+   Add that anything he deletes from the post now is not offered by a later run (step 7).
 10. In the same reply, offer the Slack draft as one picker: "Save as a Slack draft" (choose it once
     your edits in the editor are done) or "Leave it in the editor". Offer it even when Dan already
     asked for it in Slack: choosing it is how he says his edits are done, and a draft saved before
@@ -830,3 +849,60 @@ files in the session scratchpad.
     where to split it: the opener and the product line go out as the post (the opener alone on a
     one product post), and everything below them belongs in the thread, as a reply to it. The full
     text is still in the editor.
+
+---
+
+## 11. Announcements for agents
+
+A change labelled `changelog/announce` also owes agents a post, written in its pull request under
+`## Announcement` and approved word for word by Dan at merge. Once the change is live the post is
+saved as a Slack draft in the repo's announcements channel and Dan sends it; this skill saves no
+draft and sends nothing. What it does is the safety net Dan chose on 2026-11-25: every run lists
+each announcement not yet settled, so an unsent one is seen.
+
+`gather.js` lists them per `ok` repo under `announcements`: each announce change in the window or
+in `heldBack`, plus every one an earlier run kept in the state file because it was only drafted or
+had no outcome, whatever its merge date. Each carries `number`, `title`, `mergedAt`, `oldest` (the
+merge as a Slack timestamp), `deploy` and `live`, `carried`, `state` (`owed`, or `unknown` with
+`why`), `channel`, `text` (the post) and `previousOutcome`, and `needsOutcome` says whether this
+run must settle it. A repo whose `announcements` is null was not read (refused, unreachable or a
+first appearance): say its announcements could not be read, never that it has none.
+
+For each announcement:
+
+- `needsOutcome` false: say it in one line, "not live yet" or "already sent" or "not being
+  announced" as `deploy` and `previousOutcome` give, and ask nothing.
+- `state` `unknown`: there is no channel on this Mac to read. Give its `why` word for word, then
+  ask the picker below.
+- Otherwise read the channel since the merge with `slack_read_channel`: `channel_id` its
+  `channel`, `oldest` its `oldest`, `limit` 100, and again with each `next_cursor` the answer
+  holds until one holds none. Write each answer, exactly as the tool returned it, to its own file
+  in the scratchpad, then compare:
+
+  ```bash
+  __CLAUDE_HOME__/hooks/no-network-run.sh node __CLAUDE_HOME__/skills/pennie-dev-update/gather.js posted --gathered <scratchpad>/gathered.json --repo <owner>/<name> --number <n> --read <scratchpad>/announce-<n>-1.txt,<scratchpad>/announce-<n>-2.txt
+  ```
+
+  It takes the post from the gathered file, never retyped, and compares words only, because a post
+  read back from Slack has its markup, links, bullets and blank lines changed and opens `<!here>`
+  (measured 2026-11-25, claude-config#3664). Where it says `found`, say "#<n> found posted at
+  <time>", the time of the message it is in, which the read shows just before it (`before`),
+  given in ET; its outcome is `sent` and nothing is asked. Where it says not found, ask the picker.
+
+A read that failed, or one cut short (a `next_cursor` left unread, or pages the scratchpad does not
+hold), is said as that, with the tool's own error or how far back the read reached, and never as
+"nothing posted": then ask the picker. `gather.js posted` refuses an empty read for the same
+reason.
+
+The picker: one picker per announcement still unsettled, never one for several, naming the PR
+number, its title, when it merged (ET) and what the read showed. The options are "Sent" (outcome
+`sent`: it is not listed again), "Drafted, not sent yet" (`drafted`: the next run lists it again)
+and "Not announcing" (`not-announcing`: it is not listed again). Pass each outcome to the state
+commit with `--outcomes` (section 10, step 7). An answer that is none of the three leaves the
+announcement unsettled, and the state commit refuses the run until it is settled: say so, and do
+not record the run.
+
+The announcement never goes through `lint-post.js`, which refuses @here for the managers' post:
+the post for agents opens with @here on purpose and its wording is already Dan's. It is never
+pasted into the managers' post either; the change appears there as its `## Changelog` sentence,
+like any change managers notice (section 5).

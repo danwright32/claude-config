@@ -7,7 +7,8 @@ imported (glob.os, os.path.os), so py_acts refuses an attribute chain that names
 but it read chains only from a name an import binds. `q = pathlib` and then q.os.system(...) was
 read as unable to act, so the data file such a script was handed went unchecked for a Slack posting
 address. Measured through the gate on 2026-11-16: every renamed form in
-test-slack-drafts-code-loaders.sh passed.
+test-slack-drafts-code-loaders.sh passed (they are in test-slack-drafts-code-loaders-python.sh since
+claude-config#3624).
 
 follow() reads three things from a script's syntax tree, the third being the names sys goes by
 beyond its own, so that sys.path is read under each of them (claude-config#3151, said at follow).

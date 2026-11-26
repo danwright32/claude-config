@@ -634,6 +634,21 @@ guarded('updating an app', function appsSetUpdatesInPlace() {
   check(none.code !== 0 && /worklist/.test(none.err), 'an unknown command is refused and the commands are listed', none.err);
 })();
 
+// An Agent call that names no model runs on the session's model, so a step that dispatches agents
+// and names none sends them to whatever Dan is chatting on (claude-config#3604). The script never
+// dispatches, the session does, from the skill's text: so the text is what is held here.
+(function agentStepsNameTheirModel() {
+  const skill = fs.readFileSync(path.resolve(__dirname, '..', 'SKILL.md'), 'utf8').split('\n');
+  const step = function (n) { return skill.filter(function (l) { return l.indexOf(n + '. **') === 0; }); };
+  const audit = step(9), checker = step(10);
+  check(audit.length === 1 && /audit agent/.test(audit[0]) && audit[0].indexOf('`model: "opus"`') !== -1
+    && audit[0].indexOf('`model: "fable"`') !== -1 && /security or compliance/.test(audit[0])
+    && audit[0].indexOf('Which model a builder runs on') !== -1,
+    'the audit step names Opus for its agents, Fable for a security or compliance article, and points at the builder rule for the split', audit.join('\n'));
+  check(checker.length === 1 && /checker agent/.test(checker[0]) && checker[0].indexOf('`model: "opus"`') !== -1,
+    'the checker step names Opus for its agent', checker.join('\n'));
+})();
+
 fs.rmSync(SCRATCH, { recursive: true, force: true });
 console.log('SUITE-RESULT passed=' + passed + ' failed=' + failed);
 process.exit(failed === 0 ? 0 : 1);

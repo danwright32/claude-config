@@ -183,6 +183,10 @@
 # the grace lets the call run, so a rerun straight inside neverThrows, `neverThrows(() => hook($, e,
 # next), ...)`, fails: it starts through withinGrace from the same hold.ts, which holds the call when
 # too little of the grace is left (ask before saving's rerunInGrace in its rules.ts, tested there).
+# Since #3655 a catch may instead answer straight through cutCall, cutCheck or cutOwn, which that
+# hold.ts builds on neverThrows, where its file imports the name from ./mod-kit/hold.ts; a rerun
+# handed to one as `work: () => hook($, e, next)` fails as the bare one does. Whether every tool
+# hook HAS such a catch is tools/check-mod-guard-catch.sh's question, not this tool's.
 #
 # And one shared part every mod must USE rather than must not copy (#707):
 #   screen    a mod that answers a tool call itself (returns     ask $.modkit.screen(e) first, and answer with
@@ -467,23 +471,38 @@ for d in "$dir"/*/; do
   # `next.called ? next(e) : neverThrows(...)`: that call has already run, so the tool's own failure
   # must reach Claude rather than a refusal saying it did not run. Every catch before next goes
   # through neverThrows. A promise's own catch takes an error, never `$`, and is not matched.
+  #
+  # Since #3655 the same file builds the whole catch of a tool hook, and a catch may answer straight
+  # through one of those instead, `.catch(($, e, next) => cutCall(...))`, cutCheck or cutOwn, which
+  # run whatever the guard hands them inside neverThrows. That spelling is the kit's only where the
+  # name is the kit's, so the file must import it, under its own name, from ./mod-kit/hold.ts: a
+  # function of the mod's own called cutCall, or another import renamed to it, is a mod's own catch.
   while IFS= read -r h; do
     [ -n "$h" ] || continue
     failed=1
-    echo "check-mod-shared-parts: $name keeps its own catch at ${h#"$sd"}: a guard's catch that throws holds nothing, so answer straight through neverThrows(work, fallback, last), with only a replay after next() allowed outside it as next.called ? next(e) : neverThrows(...), from the copy of hooks/hold.ts kept at hooks/mod-kit/hold.ts, on the catch's own line."
-  done <<< "$(grep -rnE --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' --exclude-dir=mod-kit '\.catch\((async )?\(\$' "$sd/hooks" 2>/dev/null | grep -vE '\.catch\((async )?\(\$[^)]*\) *=> *(next\.called \? next\(e\) : )?neverThrows\(')"
+    echo "check-mod-shared-parts: $name keeps its own catch at ${h#"$sd"}: a guard's catch that throws holds nothing, so answer straight through neverThrows(work, fallback, last), with only a replay after next() allowed outside it as next.called ? next(e) : neverThrows(...), or straight through cutCall, cutCheck or cutOwn, from the copy of hooks/hold.ts kept at hooks/mod-kit/hold.ts, on the catch's own line."
+  done <<< "$(grep -rnE --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' --exclude-dir=mod-kit '\.catch\((async )?\(\$' "$sd/hooks" 2>/dev/null | grep -vE '\.catch\((async )?\(\$[^)]*\) *=> *((next\.called \? next\(e\) : )?neverThrows|cut(Call|Check|Own))\(')"
+  while IFS= read -r h; do
+    [ -n "$h" ] || continue
+    kit="$(printf '%s\n' "$h" | sed -E 's/.*\.catch\((async )?\(\$[^)]*\) *=> *(cut(Call|Check|Own))\(.*/\2/')"
+    tr '\n' ' ' < "${h%%:*}" | grep -qE "import *\{([^}]*,)? *$kit *(,[^}]*)?\} *from *['\"]\./mod-kit/hold(\.ts)?['\"]" && continue
+    failed=1
+    echo "check-mod-shared-parts: $name keeps its own catch at ${h#"$sd"}: it answers through a $kit that its file does not import, under that name, from ./mod-kit/hold.ts, so it is not the shared catch: import { $kit } from './mod-kit/hold.ts', the copy of hooks/hold.ts kept at hooks/mod-kit/hold.ts."
+  done <<< "$(grep -rnE --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' --exclude-dir=mod-kit '\.catch\((async )?\(\$[^)]*\) *=> *cut(Call|Check|Own)\(' "$sd/hooks" 2>/dev/null)"
   # grace (#2039): a catch that judges the call once more, `neverThrows(() => hook($, e, next), ...)`,
   # runs the hook's whole judgement inside the 1,000 ms the engine gives a catch (its next.budget,
   # read 2026-11-05), and a catch cut at
   # that grace lets the call RUN. So such a rerun starts only through withinGrace from the same copy
   # of hold.ts, which holds the call when too little of the grace is left, or through a function of
   # the guard's own built on it (ask before saving's rerunInGrace). A catch answering only a refusal
-  # does no slow work and is not matched.
+  # does no slow work and is not matched. The shared catches of #3655 take the same rerun as the
+  # `work` they are handed, `cutCall(mod, e, next, { work: () => hook($, e, next) })`, and run it
+  # inside neverThrows, so that spelling is held to the same rule.
   while IFS= read -r h; do
     [ -n "$h" ] || continue
     failed=1
     echo "check-mod-shared-parts: $name reruns its hook in a catch at ${h#"$sd"} with no check of the time left: a catch cut at its 1,000 ms grace lets the call run, so start the rerun through withinGrace(next.budget, () => hook(\$, e, next), outOfTime) from the copy of hooks/hold.ts kept at hooks/mod-kit/hold.ts, with outOfTime refusing in the guard's own could not check words."
-  done <<< "$(grep -rnE --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' --exclude-dir=mod-kit 'neverThrows\((async )?\(\) *=> *[A-Za-z_][A-Za-z0-9_]*\(\$, *e, *next\)' "$sd/hooks" 2>/dev/null)"
+  done <<< "$(grep -rnE --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' --exclude-dir=mod-kit '(neverThrows\(|\bwork *: *)(async )?\(\) *=> *[A-Za-z_][A-Za-z0-9_]*\(\$, *e, *next\)' "$sd/hooks" 2>/dev/null)"
   # press (#939): a file naming the ui.press event and mod-kit anywhere in its code, however the hook
   # is laid out: its call or its filter across lines, or the filter held in a constant (lessons review
   # of #957). A click alone reaches such a hook; mod-kit's typed /press raises modkit.press, which it
