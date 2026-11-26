@@ -69,6 +69,15 @@ NON_WRITERS = frozenset({
     "for", "select", "case", "esac", "in", "while", "until", "if", "then", "elif", "else", "fi", "do",
     "done", "function", "{", "}", "!", "]]", "let", "read", "getopts", "alias", "builtin", "command",
     "exec", "eval", "trap", "ulimit", "umask", "shopt", "setopt"})
+# The NON_WRITERS that bash and zsh each run themselves where the name is written bare, a reserved
+# word or a builtin of both, whatever PATH holds (named_certain). shopt is bash's alone and setopt
+# zsh's alone, so neither is here: the other shell looks for it on PATH.
+SHELL_OWN = frozenset({
+    "cd", "pushd", "popd", "test", "[", "[[", "]]", "type", "hash", "true", "false", ":", "export", "unset",
+    "set", "local", "declare", "typeset", "readonly", "kill", "wait", "source", ".", "exit", "return",
+    "shift", "echo", "printf", "for", "select", "case", "esac", "in", "while", "until", "if", "then",
+    "elif", "else", "fi", "do", "done", "function", "{", "}", "!", "let", "read", "getopts", "alias",
+    "builtin", "command", "exec", "eval", "trap", "ulimit", "umask", "time"})
 # NON_WRITERS that can still change a module a script wrote before it imports it (raw_unchanged):
 # one that removes files, so Python finds the module somewhere else, and the shell's own words that
 # change directory, read a file as commands, run text given to them or run another program.
@@ -355,20 +364,77 @@ def make(interpreter, shells, awks, senders):
                     return False
             return True
 
-        def note_program(self, name, args, vals, d, stdin):
+        def note_program(self, name, args, vals, d, stdin, text=None):
             """note_writes for a program that is not a copier, printf, echo, cat or tee: the files it
-            may write. Returns what it prints, as pieces, or None where that is not known.
+            may write. Returns what it prints, as pieces, or None where that is not known. text is the
+            command as written. The gate's note_writes does not hand it over yet, so it is put back
+            together from the command's words as written, which is the same command without its
+            redirections and, where note_writes took one off the front, without the word `command`
+            or `builtin`: so `command dd ...` is still read as dd is (not held; the suite's header
+            says what closes it).
 
             In a script on disk only a build is followed (#2852): what it builds is read as its
             sources where a later command runs it (`npm run build && node dist/x.js`), and nothing it
-            names is marked, as nothing else a script on disk writes is (note_unreadable)."""
+            names is marked, as nothing else a script on disk writes is (note_unreadable).
+
+            Everything read here from the program's NAME is believed only where the program the shell
+            would run is for certain the system's own of that name (named_certain, claude-config#3440).
+            Where it is not, the program is read as one the gate does not know, on top of what its name
+            says it may write: every file it names may have been written, the code it is given is not
+            followed, and each file its name says it unpacks, checks out, edits or copies into holds
+            something the gate could not read beside what the system's program would have left, so a
+            post in that is still found. With a script named tar in the folder, `./tar -xf a.tar; bash
+            a.sh` was read as the archive's a.sh and allowed, and so were a script named dd, sed (with
+            -i), awk, python3 (given code), git (a checkout), esbuild and chmod, by a path or by the
+            bare name with PATH set in the command (seen on 6c4cee7247, 2026-11-26)."""
             if self.shell.get("on_disk"):
                 if name not in NON_WRITERS and name not in senders:
                     self.note_build(name, vals, d)
                 return None
-            if name in NON_WRITERS or name in senders:
+            if text is None:
+                text = " ".join(args)
+            if self.named_certain(vals[0], name, text):
+                return self.note_by_name(name, args, vals, d, stdin, True)
+            label = self.not_the_systems(name)
+            code_at, git_at, built_at = len(self.made_code), len(self.made_git), len(self.made_built)
+            self.note_by_name(name, args, vals, d, stdin, False)
+            self.made_code[code_at:] = [(c[0], label, c[2], False) + c[4:] for c in self.made_code[code_at:]]
+            for e in self.made_git[git_at:] + self.made_built[built_at:]:
+                e["unsure"] = label
+            if len(self.made_built) > built_at:
+                # made_from asks program_guesses only where a program's write is noted, and a
+                # build names no file it writes (`./tsc`), so one is noted that no path matches.
+                self.made_maybe.append(("\0", label))
+            for a, v in zip(args[1:], vals[1:]):
+                self.note_named(a, v, d, label)
+            return None
+
+        def named_certain(self, word, name, text):
+            """Whether what this library reads a program as writing by its name may be believed of
+            the command whose first word, worked out, is word and whose last part is name: the
+            gate's one judgement of that (system_program in lib/exact-output.py, with PATH named in
+            the text of a script on disk left out, as for cat and cp, since nothing here marks a file
+            in a script on disk). A word the shell runs itself whatever PATH holds (SHELL_OWN),
+            written bare, is not looked for on PATH, so of those only a function or an alias of the
+            name is asked."""
+            if "/" not in word and name in SHELL_OWN:
+                ctx = self.shell
+                while ctx is not None:
+                    if self.exact_shadowed(ctx["text"], name):
+                        return False
+                    ctx = ctx.get("parent")
+                return True
+            return self.system_program(word, name, text, scripts=False)
+
+        def note_by_name(self, name, args, vals, d, stdin, believe):
+            """note_program's reading of a program by its name. believe is whether the program is for
+            certain the system's own (named_certain). Where it is not, nothing the name says the
+            program leaves alone is taken from it: a program named for one that writes nothing, a
+            git subcommand that leaves the working tree as it is and a build whose outputs are all
+            known are read on, and an archive's members are not read as what is unpacked."""
+            if believe and (name in NON_WRITERS or name in senders):
                 return None
-            if name == "claude" and vals[1:2] == ["mcp"] and vals[2:3] and vals[2] in CLAUDE_MCP_SETTINGS:
+            if believe and name == "claude" and vals[1:2] == ["mcp"] and vals[2:3] and vals[2] in CLAUDE_MCP_SETTINGS:
                 return None
             if name == "dd":
                 return self.note_dd(args, vals, d, stdin)
@@ -376,7 +442,7 @@ def make(interpreter, shells, awks, senders):
             found = self.sw.git_read([v if v is not None else a for a, v in zip(args, vals)])
             if found and found[0] == "fetch":
                 self.note_fetch([v if v is not None else "\0" for v in vals[1:]])
-            if found and found[0] in GIT_READS:
+            if believe and found and found[0] in GIT_READS:
                 return None
             if found and found[0] in GIT_TREE_WRITERS:
                 # A revision bash leaves as written (GIT_REV_WORD) is read as written.
@@ -385,11 +451,14 @@ def make(interpreter, shells, awks, senders):
             # A compiler's outputs, read as their sources when run (lib/program-runs.py, #2844). A build
             # whose outputs are all known writes nothing else a command runs, so the files it names
             # are not marked as ones it may write (Dan chose this on 2026-11-12, #2844: an esbuild
-            # --outfile= and a bun build were refused however quiet what they built).
-            if self.note_build(name, vals, d):
+            # --outfile= and a bun build were refused however quiet what they built). Only of a
+            # compiler that is for certain the system's own: another program of its name may build
+            # anything, so the build is still noted, and a post in a source still found, but the
+            # files it names are marked and what it builds is unreadable (note_program).
+            if self.note_build(name, vals, d) and believe:
                 return None
             if name in TARS or name == "unzip":
-                self.note_unpack(name, args, vals, d)
+                self.note_unpack(name, args, vals, d, believe)
             elif name in UNPACKERS:
                 self.note_tree(".", ".", d, name)
             elif name in DIR_COPIERS:
@@ -408,7 +477,7 @@ def make(interpreter, shells, awks, senders):
                 self.note_sed(args, vals, d)
             elif name in awks:
                 self.note_awk(args, vals, d)
-            else:
+            elif believe:  # where it is not believed, note_program marks every file it names
                 for a, v in zip(args[1:], vals[1:]):
                     self.note_named(a, v, d, name)
             return None
@@ -417,10 +486,22 @@ def make(interpreter, shells, awks, senders):
             """For made_from: what the programs of this call may have written path with, as pieces:
             the code that names it and the files that code names where the code is followed, and an
             unreadable ("maybe") piece for a folder unpacked or copied into, or code not followed."""
+            # What a compiler not certain to be the system's own builds (note_program): the file is
+            # still read as its sources, and holds something the gate could not read beside them.
+            # Asked before the shape of the name is, since a tool a native compiler builds has no
+            # ending and is not there yet.
+            unsure, keep = [], self.made_built
+            try:
+                for e in [e for e in keep if e.get("unsure")]:
+                    self.made_built = [e]
+                    if self.built_from(real):
+                        unsure.append(("maybe", None, e["unsure"]))
+            finally:
+                self.made_built = keep
             if not file_shaped(real):
-                return []
-            out = [("maybe", None, label) for pat, label in self.made_maybe
-                   if fnmatch.fnmatchcase(real, pat) or fnmatch.fnmatchcase(path, pat)]
+                return unsure
+            out = unsure + [("maybe", None, label) for pat, label in self.made_maybe
+                            if fnmatch.fnmatchcase(real, pat) or fnmatch.fnmatchcase(path, pat)]
             bases = {os.path.basename(path), os.path.basename(real)}
             for text, label, d, follow, inputs, writes in self.made_code:
                 if any(names_file(writes, b) for b in bases):
@@ -835,6 +916,11 @@ def make(interpreter, shells, awks, senders):
                 obj = e["names"].get(rel)
                 if obj is None:
                     continue
+                if e.get("unsure"):
+                    # Noted for a program not certain to be the system's git (note_program): the
+                    # file it would write holds something the gate could not read, beside what
+                    # the system's git would leave there.
+                    out.append(("maybe", None, e["unsure"]))
                 if rel not in e["blobs"]:
                     blob = self.git_out(e["git"], ["cat-file", "blob", obj])
                     try:
@@ -1072,9 +1158,12 @@ def make(interpreter, shells, awks, senders):
                 for k in files:
                     self.note_edited(args[k], vals[k], d, "awk", [] if given else self.made_code[start:])
 
-        def note_unpack(self, name, args, vals, d):
+        def note_unpack(self, name, args, vals, d, believe=True):
             """tar or unzip unpacking an archive: each member by what it holds where the archive can be
-            read, else every file under the folder it unpacks into."""
+            read, else every file under the folder it unpacks into. Where the program is not for
+            certain the system's own (believe False), each member's file also holds something the
+            gate could not read: what the system's program would unpack is kept, so a post in the
+            archive is still found."""
             if name == "unzip":
                 found = self.unzip_words(args, vals)
             else:
@@ -1097,6 +1186,8 @@ def make(interpreter, shells, awks, senders):
                     self.note_file(target, d, [("maybe", None, f"{name}, which unpacks it")], append=True)
                 else:
                     self.note_file(target, d, [("text", data, f"{member} in {archive}")], append=True)
+                    if not believe:
+                        self.note_file(target, d, [("maybe", None, self.not_the_systems(name))], append=True)
 
         @staticmethod
         def read_members(path, name):

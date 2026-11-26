@@ -71,11 +71,13 @@ allowed, and so were a bare cat after PATH was set and a script called cp (seen 
 what tee writes, through believed, which keeps the pieces and adds one the gate could not read;
 and what cp, mv, ln, install and link copy, through copy_believed. echo and printf by their
 bare names are the shell's builtins, which PATH does not move. For these readings PATH named in
-the text of a script on disk is not counted (system_program says why). Still believed by its
-name alone:
-what dd, tar, unzip, sed -i, awk, a git checkout and a compiler write (lib/program-writes.py
-note_program), a program taken to write or do nothing (NON_WRITERS there, the gate's SH_INERT),
-and $(dirname X).
+the text of a script on disk is not counted (system_program says why). What dd, tar, unzip, sed
+-i, awk, an interpreter given code, a git checkout and a compiler write, and a program taken to
+write nothing (NON_WRITERS), ask it too, in lib/program-writes.py (note_program, named_certain).
+Still believed by its name alone: any of those behind the word `command`, which the gate's
+note_writes takes off before note_program is called; a program the gate's own walk takes to do
+nothing or to be a shell or an interpreter (its SH_INERT and GIT_INERT, `./bash -c ...`);
+PIPE_SAFE in lib/data-names.py and DATA_FILTERS in lib/shell-words.py; and $(dirname X).
 
 slack_drafts_only_gate.py loads this file and gives its Judge the class make() returns as a base, so
 the methods use the Judge's own state (shell) and readers (made_from, resolve, sh_cwd, sh_funcs,
