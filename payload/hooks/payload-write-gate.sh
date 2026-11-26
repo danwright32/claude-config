@@ -559,7 +559,9 @@ def resolve(tok, base):
         return p
     # A value only the shell knows. Counted only when its words name payload, as before, and then
     # judged as the payload write it may be, marked with a leading ? (claude-config#2128).
-    return "?" + p if re.search(r"(^|/)payload(/|$)", p) else None
+    # In any letter case: on a volume that does not tell case apart, PAYLOAD is the same folder
+    # (claude-config#3537).
+    return "?" + p if re.search(r"(^|/)payload(/|$)", p, re.I) else None
 
 def move(dest, base):
     """Where a cd to dest leaves the commands after it: a path, or the words behind UNKNOWN."""
@@ -570,10 +572,42 @@ def move(dest, base):
         return base
     return p if known else UNKNOWN + p.lstrip(UNKNOWN)
 
+def unfolded(tok, base):
+    """tok from base with its .. steps kept, when it has any and its place is known, or None. The
+    reading above folds a/b/.. into a by its words; where b is a link to a folder elsewhere the
+    system climbs out of THAT folder, so the path is also judged as written (claude-config#3537)."""
+    if ".." not in re.split(r"/+", tok.strip().strip("\"\x27")):
+        return None
+    p, known = place(tok, base)
+    if not p or not known:
+        return None
+    raw = tok.strip().strip("\"\x27")
+    if raw.startswith("~"):
+        raw = os.path.expanduser(raw)
+    if HOME:
+        raw = re.sub(r"\$(?:HOME|\{HOME\})(?![A-Za-z0-9_])", lambda m: HOME, raw)
+    raw = re.sub(r"\$(?:PWD|\{PWD\})(?![A-Za-z0-9_])", lambda m: base, raw)
+    return raw if raw.startswith("/") else os.path.join(base, raw)
+
 def add(tok, base):
     p = resolve(tok, base)
     if p:
         targets.append(p)
+        raw = unfolded(tok, base)
+        if raw and raw != p:
+            targets.append(raw)
+
+# A quoted word in a script that writes, which may be a path and does not name payload: judged
+# only by where it REALLY is, never by its words, so a link into payload or a file named by disk
+# and file number is still seen (claude-config#3537). Behind this mark the step after this reading
+# drops any that is not really under a payload folder, so text that only looks like a path
+# ("text/plain", a web address) costs nothing and refuses nothing.
+MAYBE = "\x03"
+def add_maybe(tok, base):
+    p, known = place(tok, base)
+    if p and known:
+        raw = unfolded(tok, base)
+        targets.append(MAYBE + (raw or p))
 
 # Every line is read as shell, a heredoc body line included (Dan, 2026-11-02, "Also read heredoc
 # text", claude-config#2080). A body is data the shell never runs, so the text a > b in one can be refused
@@ -789,7 +823,7 @@ except Exception:
 # Commands whose arguments ARE what they write. Scanned per segment, in order, so a read in one
 # segment is not blamed on a write in the next, and a cd moves where the rest resolve.
 WRITERS = ("tee", "cp", "mv", "rm", "touch", "mkdir", "patch", "install", "rsync", "truncate",
-           "ln", "ditto", "unlink", "rmdir")
+           "ln", "link", "ditto", "unlink", "rmdir")
 base = cwd
 CD_TO = object()  # marks a segment that is a directory the commands after it run in
 segments = re.split(r"&&|\|\||;|\||\n", shell_text)
@@ -823,7 +857,7 @@ except Exception:
         for m in re.finditer(r"(?:^|[\s;&|(])(?:cd|pushd)\s+([^\s;&|<>()]+)", cmd):
             last = move(m.group(1), last)
             bases += [move(m.group(1), cwd), last]
-        for m in re.finditer(r"[^\s\"\x27;&|<>()]*payload/[^\s\"\x27;&|<>()]*", cmd):
+        for m in re.finditer(r"[^\s\"\x27;&|<>()]*(?i:payload)/[^\s\"\x27;&|<>()]*", cmd):
             for b in bases:
                 add(m.group(0), b)
 # An inline script that can write, and names a payload path. Most of this repo own payload edits
@@ -833,8 +867,23 @@ WRITE_CALLS = (r"open\([^)]*,\s*[\"\x27][^\"\x27]*[wax+]", r"\.write_(text|bytes
                r"shutil\.(copy|copy2|copyfile|copytree|move|rmtree)\(",
                r"os\.(replace|rename|remove|unlink|makedirs|mkdir|rmdir)\(", r"\.unlink\(",
                r"\.rename\(", r"\.touch\(", r"writeFileSync|appendFileSync|File\.write")
+# MAKING A LINK IS A WRITE (claude-config#3537). A hard link or a symbolic link is a second name
+# for a payload file, and a write through that name names no payload folder. So the call that makes
+# one is refused where its script names a payload path, as ln is among the commands below: os.link,
+# os.symlink, a path object linking to or from another, the Sync forms node has, File and FileUtils
+# in ruby, link and symlink called bare as perl and php call them, with or without brackets, and a
+# script that runs ln itself. Never readlink or unlink, which hold the same letters: the first
+# reads, and the second is in the list above.
+WRITE_CALLS += (r"\.(?:sym|hard)?link(?:Sync|_to)?\s*\(",
+                r"(?<![A-Za-z0-9_.])(?:sym)?link(?:Sync)?\s*\(",
+                r"File\.(?:sym)?link\b|FileUtils\.(?:ln|link|symlink)",
+                r"(?:^|[\s;&|(])(?:perl|ruby|php)\b[^\n]*?(?<![A-Za-z0-9_.])(?:sym)?link\s+[\"\x27$@]",
+                r"[\"\x27]ln(?:[\"\x27]|\s+-?)")
 WRITE_SCRIPT = any(re.search(p, shell_text) for p in WRITE_CALLS)
-SCRIPT_PATH = r"[\"\x27]([^\"\x27\s]*payload/[^\"\x27\s]*)[\"\x27]"
+# payload in any letter case: a volume that does not tell case apart opens the same folder.
+SCRIPT_PATH = r"[\"\x27]([^\"\x27\s]*(?i:payload)/[^\"\x27\s]*)[\"\x27]"
+# Any other quoted word holding a slash, or starting at the home folder: it may be a path.
+MAYBE_PATH = r"[\"\x27]((?:~|[^\"\x27\s]*/)[^\"\x27\s]*)[\"\x27]"
 # The original single line form, kept: a literal opened for writing in place.
 OPENED_PATH = r"open\(\s*([\"\x27][^\"\x27]+[\"\x27])\s*,\s*[\"\x27][wa]"
 placed = set()
@@ -850,6 +899,9 @@ for seg in segments:
     for m in (re.finditer(SCRIPT_PATH, seg) if WRITE_SCRIPT else ()):
         add(m.group(1), base)
         placed.add(m.group(1))
+    for m in (re.finditer(MAYBE_PATH, seg) if WRITE_SCRIPT else ()):
+        if m.group(1) not in placed:
+            add_maybe(m.group(1), base)
     for m in re.finditer(OPENED_PATH, seg):
         add(m.group(1), base)
         placed.add(m.group(1))
@@ -945,11 +997,188 @@ print("\n".join(seen))
   *) exit 0 ;;
 esac
 
+# WHERE EACH DESTINATION REALLY IS (claude-config#3537).
+#
+# Everything below judged a destination by its text, and three kinds of text reach a payload file
+# with no part of them under payload/: the volume folder with a disk number and a file number
+# (/.vol/<disk>/<file>, which macOS resolves to the file itself), a symbolic link that lives
+# elsewhere, and a hard link, a second name for the same file. So does the folder name in another
+# letter case on a volume that does not tell case apart. Resolving the text the usual way leaves
+# the first and the last exactly as written.
+#
+# So the system is asked: the destination is opened for nothing but its path (O_EVTONLY, which
+# reads and writes nothing) and the kernel names the file it holds (fcntl F_GETPATH). That sees
+# through the numbers, every link on the way, and the letter case. A destination not made yet is
+# its nearest folder that exists, asked the same way, plus the rest; a link to a file not made yet
+# is followed by hand. On a system without that call the links are followed by the usual resolving.
+#
+# Each destination is STILL judged by its text below, exactly as before, and its real path is
+# judged as well, so this step can only add a refusal (L42). A real path is passed on only when it
+# holds a folder named payload, the one thing the judging below can refuse, so a write anywhere
+# else costs it nothing.
+#
+# Two answers are refused in their own words, while a watcher could revert the write and no hold
+# covers this session: a real path that COULD NOT BE READ (links that never end, a folder this
+# account may not look into, a numbered path it may not open), and a file with MORE THAN ONE NAME,
+# since the kernel names only one of them and where the others are cannot be read. Neither is let
+# through for want of an answer. A device, a pipe or a socket is none of these and is left to its
+# text.
+#
+# Run only when there is something to resolve: never for a command that writes nothing, nor for
+# one whose only destinations are the devices every command writes to, and never once it is
+# settled that no watcher is live.
+real_path_wanted(){
+  local line
+  while IFS= read -r line; do
+    case "$line" in
+      ""|"?"*|/dev/null|/dev/stdout|/dev/stderr|/dev/tty|/dev/fd/[0-9]*) ;;
+      *) return 0 ;;
+    esac
+  done <<WANTED
+$targets
+WANTED
+  return 1
+}
+refuse_real_step(){
+  sc_hold_covers "$sid" && return 0
+  local what="a write whose destination this gate could not read" about="payload-write-gate.sh could not read where this call's destinations really are: the step that asks the system for the real path of each one failed before it answered, so whether one of them is a file under a development checkout's payload/ by another name is unknown. A reading that failed is not one that found nothing, so the call is refused rather than allowed (claude-config#3537)."
+  watcher_seen || refuse_watcher_unread "$what" "$about"
+  others_note "the second way below"
+  cat >&2 <<MSG
+claude-sync: REFUSED $what.
+
+$about A watch daemon is live on this Mac running from another clone. It mirrors ~/.claude up over payload/ and pushes, so an edit made to a development checkout's payload/ is overwritten by it, silently.
+
+${OTHERS_NOTE}Two ways on:
+
+  1. Edit ~/.claude directly. That is the copy the daemon mirrors FROM, so nothing can revert it.
+  2. Take a hold first, then run this again:
+
+     claude-sync hold 120 "why you are editing the checkout"
+MSG
+  exit 2
+}
+if real_path_wanted && sc_watcher_possible; then
+  targets="$(printf '%s\n' "$targets" | GATE_CWD="$cwd" python3 -B -S -c '
+import errno, fcntl, os, stat, sys
+
+sys.stdout.reconfigure(errors="replace")
+cwd = os.environ.get("GATE_CWD") or os.getcwd()
+ASK =sys.platform == "darwin"
+F_GETPATH = getattr(fcntl, "F_GETPATH", 50)
+O_EVTONLY = getattr(os, "O_EVTONLY", 0x8000)
+UNREAD, NAMES, MAYBE = "\x01", "\x02", "\x03"
+
+class Unread(Exception):
+    pass
+
+def asked(p):
+    """The path the kernel gives for what p names, which exists."""
+    if not ASK:
+        return os.path.realpath(p)
+    fd = os.open(p, O_EVTONLY | os.O_NONBLOCK)
+    try:
+        return os.fsdecode(fcntl.fcntl(fd, F_GETPATH, b"\0" * 1024).split(b"\0", 1)[0])
+    finally:
+        os.close(fd)
+
+def real(p, depth=0):
+    """(the real path of p, its stat or None when nothing is there yet), or (None, None) for a
+    device, pipe or socket. Raises Unread with the reason when it cannot be read."""
+    if depth > 40:
+        raise Unread("its links never end")
+    try:
+        st = os.stat(p)
+    except (FileNotFoundError, NotADirectoryError):
+        st = None
+    except OSError as e:
+        # A name longer than any file can have names nothing, as text read for a redirect often
+        # does: that is a settled answer, and its folder is asked instead.
+        if e.errno != errno.ENAMETOOLONG:
+            raise Unread(e.strerror or "it could not be looked at")
+        st = None
+    why = None
+    if st is not None:
+        if not (stat.S_ISREG(st.st_mode) or stat.S_ISDIR(st.st_mode)):
+            return None, None
+        try:
+            return asked(p), st
+        except OSError as e:
+            why = e.strerror or "it could not be opened"
+    # Nothing there yet, or something this account may not open: its folder, plus its name.
+    p = p.rstrip("/") or "/"
+    if p == "/":
+        return "/", st
+    head, leaf = os.path.split(p)
+    try:
+        lst = os.lstat(p)
+    except (FileNotFoundError, NotADirectoryError):
+        lst = None
+    except OSError as e:
+        if e.errno != errno.ENAMETOOLONG:
+            raise Unread(e.strerror or "it could not be looked at")
+        lst = None
+    if lst is not None and stat.S_ISLNK(lst.st_mode):
+        try:
+            to = os.readlink(p)
+        except OSError as e:
+            raise Unread(e.strerror or "its link could not be read")
+        parent, _ = real(head, depth + 1)
+        if parent is None:
+            return None, None
+        return real(os.path.join(parent, to), depth + 1)
+    parent, _ = real(head, depth + 1)
+    if parent is None:
+        return None, None
+    out = os.path.normpath(os.path.join(parent, leaf))
+    # A numbered path that exists and could not be opened has no folder to go by.
+    if st is not None and (out == "/.vol" or out.startswith("/.vol/")):
+        raise Unread(why or "it could not be opened")
+    return out, st
+
+out = []
+for line in sys.stdin.buffer.read().decode("utf-8", "replace").split("\n"):
+    if not line:
+        continue
+    maybe = line.startswith(MAYBE)
+    if not maybe:
+        out.append(line)
+    if line.startswith("?") or line.startswith("/dev/"):
+        continue
+    t = line[1:] if maybe else line
+    a = t if t.startswith("/") else os.path.join(cwd, t)
+    try:
+        r, st = real(a)
+    except Unread as e:
+        if not maybe:
+            out.append(UNREAD + a + "\t" + str(e))
+        continue
+    except Exception as e:
+        # Anything else that stops one destination being read is that destination unread, never
+        # the whole step and never an answer.
+        if not maybe:
+            out.append(UNREAD + a + "\t" + (type(e).__name__ if not isinstance(e, RecursionError) else "its links never end"))
+        continue
+    if r is None:
+        continue
+    if "/payload/" in r + "/" and r != line:
+        out.append(r)
+    if st is not None and stat.S_ISREG(st.st_mode) and st.st_nlink > 1:
+        out.append(NAMES + a + "\t" + str(st.st_nlink))
+seen = []
+for t in out:
+    if t not in seen:
+        seen.append(t)
+print("\n".join(seen))
+' 2>/dev/null)" || refuse_real_step
+fi
+
 # Which clone each target is in, and whether that clone is at risk. Asked per target, because one
 # command can name paths in two checkouts.
 refuse_root=""
 refuse_path=""
 refuse_unplaced=""
+refuse_real=""
 while IFS= read -r t; do
   [ -n "$t" ] || continue
   case "$t" in
@@ -961,6 +1190,15 @@ while IFS= read -r t; do
       sc_watcher_possible || continue
       sc_hold_covers "$sid" && continue
       refuse_unplaced="${t#?}"; break ;;
+    # A destination whose real path could not be read, or a file with more than one name
+    # (claude-config#3537): where it lands is unknown, so it is refused on the same terms.
+    $'\x01'*|$'\x02'*)
+      sc_watcher_possible || continue
+      sc_hold_covers "$sid" && continue
+      refuse_real="$t"; break ;;
+    # A word that only may be a path, left unresolved because the watcher went between two
+    # readings of it: with no watcher nothing below would refuse it either.
+    $'\x03'*) continue ;;
     /*) ;;
     *)  t="$cwd/$t" ;;
   esac
@@ -1072,6 +1310,35 @@ note_worktrees_before(){
   rm -f "$STATE_DIR/$state_key.st"
   return 0
 }
+
+if [ -n "$refuse_real" ]; then
+  real_body="${refuse_real#?}"
+  real_dest="${real_body%%$'\t'*}"
+  real_detail="${real_body#*$'\t'}"
+  case "$refuse_real" in
+    $'\x01'*)
+      real_what="a write to $real_dest: this gate could not read where it really is"
+      real_about="The system was asked for the real path of that destination and gave none ($real_detail), so whether it is a file under a development checkout's payload/ by another name (a link, or a path by disk and file number) is unknown. A destination that cannot be read is judged as the payload write it may be, never let through (claude-config#3537)." ;;
+    *)
+      real_what="a write to $real_dest, a file with more than one name"
+      real_about="That file has $real_detail names (hard links) and the system gives only the one written here, so whether another of them is under a development checkout's payload/ cannot be read. A write through one name changes the file under all of them, so it is judged as the payload write it may be, never let through (claude-config#3537)." ;;
+  esac
+  watcher_seen || refuse_watcher_unread "$real_what" "$real_about"
+  others_note "the second way below"
+  cat >&2 <<MSG
+claude-sync: REFUSED $real_what.
+
+$real_about A watch daemon is live on this Mac running from another clone. It mirrors ~/.claude up over payload/ and pushes, so an edit made to a development checkout's payload/ is overwritten by it, silently.
+
+${OTHERS_NOTE}Two ways on:
+
+  1. Edit ~/.claude directly. That is the copy the daemon mirrors FROM, so nothing can revert it.
+  2. Take a hold first, then run this again:
+
+     claude-sync hold 120 "why you are editing the checkout"
+MSG
+  exit 2
+fi
 
 if [ -n "$refuse_unplaced" ]; then
   watcher_seen || refuse_watcher_unread "a write to $refuse_unplaced, a path only the shell can work out" "Its words name payload/, but they hold a value this gate cannot read (a variable, a command's output, or a cd to one of those), so which checkout it lands in is unknown. A path that cannot be placed is judged as the payload write it may be, never let through (claude-config#2128). Writing the path out in full lets it be judged where it really lands."
