@@ -200,7 +200,8 @@ type World = {
   links: string[]
   /** What `gh pr list --state open` answers per repository; absent answers an empty list. */
   open: Record<string, Gh>
-  agents: { id: string; status: string; spawnedBy?: string; description?: string }[]
+  /** null stands for an entry of the list that is not an agent at all, handed over as it is. */
+  agents: ({ id: string; status: string; spawnedBy?: string; description?: string } | null)[]
   /** Why `$.agent.list()` throws, or '' when it lists `agents`. */
   agentsFail: string
   /** How each of the mod's own next prompts fails, in order: thrown, or dropped by a hook beneath. */
@@ -225,6 +226,8 @@ type World = {
   reader: (command: string) => unknown[] | { fails: string }
   /** The cards pinned through manual steps' noun, and the titles withdrawn, in order. */
   pinned: { heading: string; step: Record<string, unknown> }[]
+  /** Why manual steps' noun throws on a pin, or '' when it pins. */
+  pinFails: string
   withdrawn: string[]
   /** Each file written, by path: its last text. */
   written: Record<string, string>
@@ -233,7 +236,7 @@ const link = (repo: string, pr: number, at = '2026-10-24T18:00:00.000Z') =>
   JSON.stringify({ type: 'pr-link', sessionId: 's1', prNumber: pr, prUrl: `https://github.com/${repo}/pull/${pr}`, prRepository: repo, timestamp: at })
 
 const world = (on: On, init: Partial<World> = {}) => {
-  const w: World = { goal: { state: 'none' }, cardFails: '', cards: [], transcript: T, registry: 'open', disk: {}, here: '/repo', owed: [], verdicts: {}, links: [], open: {}, agents: [], agentsFail: '', submitFails: [], held: [], holdFails: '', view: () => ({ exitCode: 1, stdout: '', stderr: 'unexpected' }), stepsCard: null, compactQueued: false, compactFollowUp: null, holds: [], jobs: [], jobsFail: '', procs: { exitCode: 0, stdout: '{"found":[]}' }, reader: () => [], pinned: [], withdrawn: [], written: {}, ...init }
+  const w: World = { goal: { state: 'none' }, cardFails: '', cards: [], transcript: T, registry: 'open', disk: {}, here: '/repo', owed: [], verdicts: {}, links: [], open: {}, agents: [], agentsFail: '', submitFails: [], held: [], holdFails: '', view: () => ({ exitCode: 1, stdout: '', stderr: 'unexpected' }), stepsCard: null, compactQueued: false, compactFollowUp: null, holds: [], jobs: [], jobsFail: '', procs: { exitCode: 0, stdout: '{"found":[]}' }, reader: () => [], pinned: [], pinFails: '', withdrawn: [], written: {}, ...init }
   const runs: string[][] = []
   const views: { pr: string; repo?: string; cwd?: string; token?: string; fields?: string }[] = []
   const submitted: { text: string; origin: unknown }[] = []
@@ -263,6 +266,7 @@ const world = (on: On, init: Partial<World> = {}) => {
     if (e.argv[0] === '__steps') {
       const input = JSON.parse(e.argv[2] as string) as { heading: string; step: Record<string, unknown>; title: string }
       if (e.argv[1] === 'add') {
+        if (w.pinFails) return ok('', 1, w.pinFails)
         w.pinned.push({ heading: input.heading, step: input.step })
         return ok(JSON.stringify({ isShown: true }))
       }
@@ -316,7 +320,7 @@ const world = (on: On, init: Partial<World> = {}) => {
   })
   on('agent.list', () => {
     if (w.agentsFail) return { deny: w.agentsFail } as never
-    return { value: w.agents.map(a => ({ description: 'a task', type: 'general-purpose', ...a })) } as never
+    return { value: w.agents.map(a => (a === null ? a : { description: 'a task', type: 'general-purpose', ...a })) } as never
   })
   on('session.id', () => ({ value: 's1' }) as never)
   on('session.cwd', () => ({ value: w.here }) as never)
@@ -756,6 +760,10 @@ test('parity: an agent, a merge and an open pull request refuse in the same word
   w.agentsFail = 'the agent list is gone'
   const r = (await box($, ASKED, 'b2')).deny ?? ''
   expect(r).toMatch(/^No box yet: the session's agents could not be listed \(.*the agent list is gone.*\), so whether one is still working is not known; /)
+  // An entry of the list that is not an agent holds the box as unread, rather than throwing out of it.
+  w.agentsFail = ''
+  w.agents = [null, { id: 'a1', status: 'running', description: 'Fix issue 1702' }]
+  expect((await box($, ASKED, 'b3')).deny ?? '').toMatch(/^No box yet: .*an entry of the agent list is not an agent/)
 })
 
 test('a /goal still set is never shown over, and a goal that cannot be read holds the box', withKit, async ($, on) => {
@@ -1062,6 +1070,7 @@ test('a reading that cannot be taken withholds the card as unread: no stop recor
     [() => undefined, () => undefined, { session_crons: 'x' }, /scheduled wake ups .* could not be read/],
     [() => (w.jobsFail = 'the job record could not be read'), () => (w.jobsFail = ''), undefined, /job watcher's list of background jobs could not be read \(.*the job record could not be read/],
     [() => (w.agentsFail = 'agents gone'), () => (w.agentsFail = ''), undefined, /agents could not be listed/],
+    [() => (w.agents = [null]), () => (w.agents = []), undefined, /an entry of the agent list is not an agent/],
     [() => (w.goal = { state: 'unreadable', why: 'grep failed' }), () => (w.goal = { state: 'none' }), undefined, /\/goal could not be read \(grep failed\)/],
     [() => (w.stepsCard = { steps: 'x' }), () => (w.stepsCard = null), undefined, /manual steps card could not be read/],
   ]
@@ -1108,6 +1117,21 @@ test('a session Dan only chatted with, with no box, never gets the card, and say
   await clock.advance(QUIET_MS * 3)
   expect(w.pinned).toEqual([])
   expect(reasonsOf(w)).toMatchObject({ pinned: false, reasons: [expect.stringMatching(/no Goal accomplished box/)] })
+})
+
+test('a card that could not be pinned says why, and the next quiet end under the same request tries again (#3770)', withAll, async ($, on) => {
+  const { w, clock } = world(on, { pinFails: 'the steps store is busy' })
+  await start($)
+  await says($, 'Add the goal box')
+  await workedAndQuiet($, clock)
+  expect(w.pinned).toEqual([])
+  expect(reasonsOf(w)).toMatchObject({ pinned: false, reasons: [expect.stringMatching(/the card could not be pinned \(.*the steps store is busy/)] })
+  w.pinFails = ''
+  await stopped($)
+  await turnEnds($)
+  await clock.advance(QUIET_MS)
+  expect(w.pinned).toHaveLength(1)
+  expect(reasonsOf(w)).toMatchObject({ pinned: true, reasons: [] })
 })
 
 test('a headless session never gets the card (#3770)', withAll, async ($, on) => {
