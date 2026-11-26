@@ -1276,6 +1276,157 @@ test('#3279: a move the guard cannot read before it runs is held, saying how to 
   expect(refusalOf(await call($, { tool: 'Bash', command: 'git fetch origin && git merge origin/main', agentId: 'a1' }))).toContain('Nothing is asked of Dan for this.')
 })
 
+// #3651: mod-kit's command reader keeps a command's redirects among its words, and its git reader
+// hands on every word after the subcommand, so a move's words were sorted with `2>&1`, `>` and the
+// file after it among them, each taken for a commit. On 2026-11-25 a fast forward that brought in no
+// look changing file, `git merge --ff-only origin/main 2>&1 | tail -2`, was refused with "git does
+// not know 2>&1 as a commit in this checkout". The shell takes a redirect and its file away before
+// git runs, so a move is read without them (rules.ts withoutRedirects).
+test('#3651: a redirect, a pipe or another shell operator after the words of a move is not read as a commit', withKit, async ($, on) => {
+  const w = world($, on, { files: { '/w/slate/app/globals.css': 'a{}\n' } })
+  for (const name of ['origin/main', '@{upstream}', 'HEAD']) knows(w, name, C1)
+  knows(w, 'stash@{0}', C2)
+  const NOTES = 'M\0docs/notes.md\0'
+  w.gitSays[`/w/slate ${DIFF} HEAD...${C1}`] = NOTES
+  w.gitSays[`/w/slate ${DIFF} -R ${C1}`] = NOTES
+  w.gitSays[`/w/slate ${DIFF} ${C2}^1 ${C2}`] = NOTES
+  w.gitSays[`/w/slate ${PICKS} abc1234 --`] = `\u0001${C1}\0\n${NOTES}`
+  const commands = [
+    // The three of the issue.
+    'git merge --ff-only origin/main 2>&1',
+    'git merge --ff-only origin/main 2>&1 | tail -2',
+    'git merge --ff-only origin/main > merge.log',
+    // A pipe and the operators that end a command were never words of it.
+    'git merge --ff-only origin/main | tail -2',
+    'git merge --ff-only origin/main && echo merged',
+    'git merge --ff-only origin/main || echo failed',
+    'git merge --ff-only origin/main; echo done',
+    // Every way an output redirect is written, and standard input from a file.
+    'git merge --ff-only origin/main >merge.log 2>&1',
+    'git merge --ff-only origin/main >> merge.log',
+    'git merge --ff-only origin/main 2> /dev/null',
+    'git merge --ff-only origin/main 2>/dev/null',
+    'git merge --ff-only origin/main &> merge.log',
+    'git merge --ff-only origin/main >| merge.log',
+    'git merge --ff-only origin/main >&2',
+    'git merge --ff-only origin/main 2>&1 >/dev/null',
+    'git merge --ff-only origin/main < /dev/null',
+    'git merge 2>&1 --ff-only origin/main',
+    // Every move is read the same way, and one that names no commit is read as naming none.
+    'git merge 2>&1',
+    'git rebase origin/main 2>&1 | tail -3',
+    'git rebase --show-current-patch 2>&1',
+    'git cherry-pick abc1234 2>&1',
+    'git reset --hard 2>&1',
+    'git stash pop 2>&1',
+    'git switch -c new-branch 2>&1',
+    'git checkout -b new-branch > branch.log',
+  ]
+  const refused: string[] = []
+  for (const command of commands) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    if (why) refused.push(`${command}: ${why.slice(0, 200)}`)
+  }
+  expect(refused).toEqual([])
+  expect(w.ran.length).toBe(commands.length)
+  // git was asked about no redirect and about no file one names.
+  expect(w.gitRuns.filter(g => /[<>&]|merge\.log|branch\.log|\/dev\/null/.test(g.replace('--format=%x01%H', '')))).toEqual([])
+})
+
+// #3651: leaving a redirect out takes nothing from what is judged. Every commit the move names is
+// read exactly as the same move typed with no redirect is, by the same questions to git, and a file
+// the redirect writes is still read as the write it is.
+test('#3651: a move with a redirect after it is judged as the same move with none: each commit it names, and the file the redirect writes', withKit, async ($, on) => {
+  const w = world($, on, { files: { '/w/slate/app/globals.css': 'a{}\n' } })
+  knows(w, 'origin/main', C1)
+  knows(w, 'other-branch', C2)
+  w.gitSays[`/w/slate ${DIFF} HEAD...${C1}`] = 'M\0docs/notes.md\0'
+  w.gitSays[`/w/slate ${DIFF} HEAD...${C2}`] = CSS
+  const questions = () => w.gitRuns.filter(g => / (rev-parse|diff|merge-base|log|for-each-ref) /.test(g))
+  const judge = async (command: string) => {
+    w.gitRuns.length = 0
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    return { held: why.includes('app/globals.css changes how the screen looks') && why.includes('issue #978 in slate') && why.includes('names no file'), unknown: why.includes('git does not know'), asked: questions() }
+  }
+  await judge('git merge origin/main other-branch')
+  const plain = await judge('git merge origin/main other-branch')
+  expect(plain.held).toBe(true)
+  expect(plain.asked.length).toBeGreaterThan(3)
+  const differs: string[] = []
+  for (const tail of ['2>&1', '2>&1 | tail -2', '> merge.log', '>/dev/null 2>&1', '2> /dev/null', '&> merge.log', '< /dev/null']) {
+    const got = await judge(`git merge origin/main other-branch ${tail}`)
+    if (!got.held || got.unknown || JSON.stringify(got.asked) !== JSON.stringify(plain.asked)) differs.push(`${tail}: held ${got.held}, unknown ${got.unknown}, asked ${JSON.stringify(got.asked)}`)
+  }
+  // A commit named after the redirect is one of the move's words too.
+  for (const command of ['git merge origin/main 2>&1 other-branch', 'git merge > merge.log origin/main other-branch']) {
+    const got = await judge(command)
+    if (!got.held || got.unknown || JSON.stringify(got.asked) !== JSON.stringify(plain.asked)) differs.push(`${command}: held ${got.held}, unknown ${got.unknown}, asked ${JSON.stringify(got.asked)}`)
+  }
+  expect(differs).toEqual([])
+  expect(w.ran).toEqual([])
+  // The merge brings in nothing that changes the look, and its output is sent into a screen file:
+  // that write is held as any write of the file is.
+  for (const command of ['git merge origin/main > app/globals.css', 'git merge origin/main 2>&1 | tee app/globals.css']) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect({ command, held: why.includes('app/globals.css changes how the screen looks'), unknown: why.includes('git does not know') }).toEqual({ command, held: true, unknown: false })
+  }
+  expect(w.ran).toEqual([])
+})
+
+// #3651: with a redirect after it, a checkout of one name was read as naming two words, which is a
+// restore of paths the write reader gives, and the write reader, which takes the redirect out, saw
+// one name and gave nothing. So the switch ran with nothing asked whatever it brought in, and so did
+// a look changing file put back from the index. Read without the redirect it is the move it is.
+test('#3651: a checkout of one name with a redirect after it is judged as the same checkout with none', withKit, async ($, on) => {
+  const w = world($, on, { files: { '/w/slate/app/globals.css': 'a{}\n' } })
+  knows(w, 'other-branch', C1)
+  w.gitSays[`/w/slate ${DIFF} HEAD ${C1}`] = CSS
+  w.blobs['/w/slate :app/globals.css'] = 'a{color:red}\n'
+  const notHeld: string[] = []
+  for (const command of [
+    'git checkout other-branch',
+    'git checkout other-branch 2>&1',
+    'git checkout other-branch > switch.log',
+    'git checkout other-branch 2>&1 | tail -2',
+    'git checkout other-branch -- 2>&1',
+    'git checkout app/globals.css',
+    'git checkout app/globals.css 2>&1',
+    'git checkout app/globals.css 2>/dev/null',
+  ]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    if (!why.includes('app/globals.css changes how the screen looks') || !why.includes('issue #978 in slate')) notHeld.push(`${command}: ${why.slice(0, 200) || 'ran'}`)
+  }
+  expect(notHeld).toEqual([])
+  expect(w.ran).toEqual([])
+})
+
+// #3651: a word typed in quotes, or after a backslash, is an argument whatever it spells: `-m '>'`
+// gives the merge a message, and the word after it is still the commit it merges. The reader hands
+// such a word on with its quotes taken off, spelled as a redirect is, so a call whose text may hold
+// one is read as it was before, every word after the subcommand a word of the move.
+test('#3651: a word spelled like a redirect but typed in quotes is still a word of the move, so the commit after it is judged', withKit, async ($, on) => {
+  const w = world($, on, { files: { '/w/slate/app/globals.css': 'a{}\n' } })
+  for (const name of ['origin/main', '@{upstream}', '>', '2>&1']) knows(w, name, C1)
+  knows(w, 'other-branch', C2)
+  w.gitSays[`/w/slate ${DIFF} HEAD...${C1}`] = 'M\0docs/notes.md\0'
+  w.gitSays[`/w/slate ${DIFF} HEAD...${C2}`] = CSS
+  const notHeld: string[] = []
+  for (const command of [
+    "git merge -m '>' other-branch",
+    'git merge -m ">" other-branch',
+    'git merge -m \\> other-branch',
+    "git merge '>' other-branch",
+    "git merge '2>&1' other-branch",
+    'git merge "2>"\'&1\' other-branch',
+    "git merge -m $'\\x3e' other-branch",
+  ]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    if (!why.includes('app/globals.css changes how the screen looks') || !why.includes('names no file')) notHeld.push(`${command}: ${why.slice(0, 200) || 'ran'}`)
+  }
+  expect(notHeld).toEqual([])
+  expect(w.ran).toEqual([])
+})
+
 // #3333: a cherry-pick or revert whose commits git could not read exited 128 and was always told to
 // fetch first, nothing asked of Dan. 128 is git's code for any fatal error, so a corrupt object or a
 // folder that is no repository got a remedy that does not help. The fetch is named only where git's

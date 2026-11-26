@@ -9695,6 +9695,15 @@ ahead of the remote's, is still asked about everything it holds beyond the defau
 skip is written to the guard's log; a cherry-pick, a revert, a switch, a checkout, a hard reset and
 a stash are asked as before whatever commit they name, and so is a merge where the checkout records
 no default branch, never fetched it, stands on a detached head, or git cannot answer;
+since #3651 a move's words are read without the redirects typed among them (`2>&1`, `> file`,
+`2>/dev/null`, `< file`), which the shell takes away before git runs and which were each read as a
+commit until then (`git merge --ff-only origin/main 2>&1 | tail -2` was refused with "git does not
+know 2>&1 as a commit in this checkout"), so a move typed with one is judged exactly as the same
+move typed with none: every commit it names on either side of the redirect, a file the redirect
+writes as the write it is, and a checkout of one name, which with a redirect after it had run
+unread; a call whose text may hold a `<` or `>` typed in quotes or after a backslash, where it is
+an argument and no redirect (`-m '>'`), is read as before, every word after the subcommand a word
+of the move;
 `--abort`, `--continue`, `--skip`, `--quit`, a branch made with no start point, a reset that leaves
 the working tree alone and `git stash` putting work away bring nothing in and are not read; a move
 the guard cannot read before it runs is held with how to run it so it can, asking nothing of Dan:

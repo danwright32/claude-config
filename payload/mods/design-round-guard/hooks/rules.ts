@@ -5100,6 +5100,40 @@ const moveWords = (args: readonly string[], valued: ReadonlySet<string>): { ops:
   return { ops, flags, values, paths: after > 0, ended: dashes && after === 0 }
 }
 
+// #3651: mod-kit's command reader keeps a command's redirects among its words, and its git reader
+// hands on every word after the subcommand, so a move's words were sorted with the redirects among
+// them and each was taken for a commit: `git merge --ff-only origin/main 2>&1 | tail -2` was refused
+// on 2026-11-25 with "git does not know 2>&1 as a commit in this checkout", and `> file` named two
+// more. The shell takes a redirect and its file away before git runs, so they are no words of the
+// move. The reader gives an output redirect as a word of its own however it is typed: `2>&1` and
+// `>&2` whole, and `>`, `>>`, `>|`, `2>`, `&>` and `>&` with the file as the next word. A `<` alone,
+// with its file the next word, is taken out the same way. A word that only begins as a redirect
+// does (`>>merged`, `<wip>`) is never the reader's word for one, so it stays a word of the move.
+const REDIRECT_WITH_FILE = /^(?:\d*>>?|\d*>\||&>>?|\d*>&|\d*<)$/
+const REDIRECT_ALONE = /^\d*>&(?:\d+|-)$/
+const withoutRedirects = (args: readonly string[]): string[] => {
+  const out: string[] = []
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] as string
+    if (REDIRECT_WITH_FILE.test(a)) i++
+    else if (!REDIRECT_ALONE.test(a)) out.push(a)
+  }
+  return out
+}
+
+/**
+ * Whether a call's text may hold a `<` or a `>` that is a character of a word, never a redirect
+ * (#3651): one typed in quotes or after a backslash. The reader hands such a word on with its quotes
+ * taken off, so `-m '>'`, a message, reads exactly as a redirect does, and taking it out with the
+ * word after it would leave the commit a merge names unread. A word spelled as a redirect holds
+ * nothing but digits, `&`, `|`, `-`, `<` and `>`, so typed that way its `<` or `>` stands in one run
+ * of those characters with the quote or backslash that makes it a word, which is what this finds,
+ * wherever in the text it is. `$'` and `$"` count too, since a `>` can be spelled there with no `>`
+ * typed (`$'\x3e'`). It answers for the whole call and errs one way only: a redirect typed against a
+ * quote (`>"$LOG"`) is found as well, and such a call is read as it was before #3651.
+ */
+export const mayQuoteRedirect = (typed: string): boolean => /['"\\][0-9&<>|'"\\-]*[<>]|[<>][0-9&<>|'"\\-]*['"\\]|\$['"]/.test(typed)
+
 // #3337 (Dan, 2026-11-20, added to the issue): the mainline number of a cherry-pick or revert, which
 // names the parent each commit is read against (`git cherry-pick -m 2 <merge>` brings in what the
 // merge holds against its second parent). Until then its value was taken as an option's and dropped,
@@ -5173,15 +5207,20 @@ export const commitsUnread = (asked: string, stderr: string): string => {
  * reader already gives. `unread` where its words cannot say: a pull, which fetches first; a rebase
  * that replays onto another base, interactively or running commands; a commit named through a value
  * the shell fills in.
+ * `typed` is the whole text of the call the command stands in (#3651). Given it, the move's words
+ * are read without the redirects typed among them (withoutRedirects), which are no words of the
+ * move. Without it, or where that text may hold a `<` or `>` typed as a character of a word
+ * (mayQuoteRedirect), every word after the subcommand is read as a word of the move, as all were
+ * before. What a refusal quotes (`said`) is the words as typed either way.
  */
-export const gitMove = (git: { sub: string | undefined; args: readonly string[] } | undefined): GitMove | undefined => {
+export const gitMove = (git: { sub: string | undefined; args: readonly string[] } | undefined, typed?: string): GitMove | undefined => {
   const sub = git?.sub
   if (git === undefined || sub === undefined) return undefined
   const said = moveSaid(sub, git.args)
   // Its own keys only: a subcommand spelled like a member every object inherits (`constructor`)
   // finds no set here, never that member, which would throw where its options are read.
   const valued: ReadonlySet<string> = Object.prototype.hasOwnProperty.call(MOVE_VALUED, sub) ? (MOVE_VALUED[sub] as ReadonlySet<string>) : new Set<string>()
-  const { ops, flags, values, paths, ended } = moveWords(git.args, valued)
+  const { ops, flags, values, paths, ended } = moveWords(typed === undefined || mayQuoteRedirect(typed) ? git.args : withoutRedirects(git.args), valued)
   const has = (...names: string[]) => names.some(n => flags.has(n))
   const asking = (ask: MoveAsk, refs: readonly string[]): GitMove => {
     const bad = refs.find(r => !namesCommit(r))

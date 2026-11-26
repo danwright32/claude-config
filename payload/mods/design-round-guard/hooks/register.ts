@@ -803,7 +803,8 @@ const movedTargets = async ($: EngineInterface, command: string, at: Where): Pro
         else if (named !== undefined && named.tree !== worded) misplaced = `git says its files land in ${named.tree}, the working folder the repository it names keeps, not in ${worded}`
       }
     }
-    const move = gitMove(g ?? undefined)
+    // Read without the redirects typed among its words, which the shell takes away before git runs (#3651).
+    const move = gitMove(g ?? undefined, command)
     if (!g || !move) continue
     const held = (unread: string, remedy?: string) => targets.push({ word: move.said, unread, move: { said: move.said, ...(remedy === undefined ? {} : { remedy }) } })
     if ('unread' in move) {
