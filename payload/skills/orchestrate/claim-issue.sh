@@ -13,7 +13,9 @@
 #
 # claim does three reads, and refuses when any of them shows another session holds the issue:
 #   1. the claims on the issue: a live claim posted by this script from another Mac or branch;
-#   2. open pull requests naming it (#<issue> in the title or body, or a branch that names it);
+#   2. open pull requests built for it: a branch or a title that names it, or a body that names it
+#      straight after a closing keyword, "Part of" or "Refs". A pull request that only mentions the
+#      number is printed as a note and holds nothing (claude-config#3788);
 #   3. remote branches that name it.
 # Which issues a branch names is read by hooks/lib/branch-issues.mjs, the one shared reader.
 # When none does, it posts a claim naming the Mac (as Dan names them), the time in ET and the
@@ -214,12 +216,34 @@ if ! node --experimental-strip-types --no-warnings "$BRANCH_READER" <"$tmp/names
 fi
 names_it() { grep -q -x -F -- "$1" "$tmp/naming"; }
 
+# A pull request holds the issue only when it is built for it (claude-config#3788): its branch or
+# its title names the issue, or its body names it straight after one of the words in built_re. Any
+# other mention of the number is printed as a note and holds nothing. Until 2026-11-26 every mention
+# held, and three priority p1 issues could not be started because pull requests built for other
+# issues named them as related or left over work.
+# The words were measured on 2026-11-26 from the repository's 68 open and 300 most recently merged
+# pull requests: "Closes" (258 lines), "Part of" (132) and "Refs" (9, the word used here for a pull
+# request built for an issue it will not close) were the only ones that named what a pull request
+# was built for. GitHub's other closing keywords are held as well. The issue may be written #N,
+# owner/repo#N or repo#N; another repository's issue of the same number is a mention.
 ref_re="#${issue}([^0-9]|$)"
+this_repo="${repo//./[.]}"
+built_re="(^|[^a-z0-9_])(close[sd]?|fix(e[sd])?|resolve[sd]?|part of|refs):? (${this_repo}|${this_repo#*/})?#${issue}([^0-9]|$)"
+built_for() { # built_for <body>: does the body say its pull request is built for the issue?
+  local found=1
+  shopt -s nocasematch
+  [[ "$1" =~ $built_re ]] && found=0
+  shopt -u nocasematch
+  return "$found"
+}
+notes=()
 while IFS=$'\t' read -r n head title body; do
   [ -n "$n" ] || continue
   [ "$head" = "$branch" ] && continue
-  if names_it "$head" || [[ "$title" =~ $ref_re ]] || [[ "$body" =~ $ref_re ]]; then
+  if names_it "$head" || [[ "$title" =~ $ref_re ]] || built_for "$body"; then
     blocking+=("pull request: #$n ($head) $title")
+  elif [[ "$body" =~ $ref_re ]]; then
+    notes+=("mentioned, not held: pull request #$n ($head) names #$issue without being built for it: $title")
   fi
 done <"$tmp/prs"
 while IFS= read -r b; do
@@ -229,23 +253,29 @@ while IFS= read -r b; do
 done <"$tmp/branches"
 
 print_list() { local l; for l in "$@"; do echo "  $l"; done; }
+# What was seen and does not hold the issue, printed under every outcome: stale claims, and the
+# pull requests that only mention it.
+print_unheld() {
+  print_list "${stale[@]+"${stale[@]}"}"
+  print_list "${notes[@]+"${notes[@]}"}"
+}
 
 if [ "${#blocking[@]}" -gt 0 ]; then
   echo "HELD: $repo#$issue is held by another session, so do not start it."
   print_list "${blocking[@]}"
-  print_list "${stale[@]+"${stale[@]}"}"
+  print_unheld
   exit 1
 fi
 
 if [ "$first_holder" = ours ]; then
   echo "ALREADY CLAIMED: $repo#$issue already carries this Mac's claim on branch $branch. Nothing posted."
-  print_list "${stale[@]+"${stale[@]}"}"
+  print_unheld
   exit 0
 fi
 
 if [ "$mode" = check ]; then
   echo "FREE: nothing holds $repo#$issue. Nothing posted."
-  print_list "${stale[@]+"${stale[@]}"}"
+  print_unheld
   exit 0
 fi
 
@@ -275,13 +305,14 @@ release_cmd="claim-issue.sh release $repo $issue $branch \"<reason>\""
 case "$first_holder" in
   ours)
     echo "CLAIMED: $repo#$issue for branch $branch, from $(mac_name "$host") at $(et_time "$now"). Start the builder."
-    print_list "${stale[@]+"${stale[@]}"}"
+    print_unheld
     exit 0 ;;
   other)
     release_body "another session claimed it first" "$tmp/release"
     post "$tmp/release" || echo "  (the release of this session's claim could not be posted either; post it with the release command)"
     echo "HELD: another session claimed $repo#$issue a moment before this one, so this claim was released. Do not start it."
     print_list "${blocking[@]}"
+    print_unheld
     exit 1 ;;
   *)
     if [ "$posted" = no ]; then
