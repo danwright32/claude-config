@@ -10392,8 +10392,22 @@ merged. One answer is kept per PR, so a later one replaces it, and none settles 
 PR whose work merged in another PR is never settled without his answer, since GitHub records no link
 from it to the PR that carried its work and a squash merge leaves its commits out of the base
 branch's history; a closing comment naming that PR is what lets him be asked. Any other answer
-withdraws an earlier one, a picker Claude asks itself is never read as his choice, and nothing is
-asked while he is asleep. A branch is the session's own only once it or one of its agents created
+withdraws an earlier one, a picker Claude asks itself is never read as his choice to leave a PR
+open or closed, and nothing is asked while he is asleep. One answer in a session's own picker is
+read (#3779, after Dan chose on 2026-11-26 to close a PR unmerged and winding down sent it back to
+be reopened an hour later, so he was asked twice): his pick of an answer to close a PR unmerged.
+It counts only as the dialog hands it back to the mod, which no session can write: an answer the
+picker offered and he picked alone, in the session's own picker and in words he could read whole,
+that begins "Close" and says unmerged, where the words he read name exactly one pull request as a
+pull request ("pull request 3749", "PR #31", its link), the answer if it names one and otherwise
+the question. A closing comment, words passed as `dan_said`, an answer the call carries itself, a
+subagent's picker and words he typed never count. It is recorded as the same left closed answer,
+so the PR is listed as left closed by his choice, quoting his answer, `leave_pr_open` asks nothing
+more about it, and reopened it is outstanding until merged. Where the question also names another
+number with a #, his answer counts once GitHub has said that number is no pull request; until then
+the PR is neither settled nor sent back to be reopened, and where it is a pull request nothing is
+kept, since which one he meant is not on record. The rules are in `hooks/closedecision.ts`. A
+branch is the session's own only once it or one of its agents created
 it, committed to it or pushed it (#1074); a branch the checkout merely sat on (a shared primary
 checkout, say) has no PR or cleanup of the session's to finish, and only its uncommitted work
 counts, as on the default branch. The `leave_branch` tool asks Dan "Leave the branch X in owner/name

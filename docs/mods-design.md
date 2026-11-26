@@ -1191,6 +1191,21 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
   Claude asks itself through AskUserQuestion is never read as his choice, since which PR it was
   about and what the answer meant would be inferred. Nothing is asked about a PR that cannot be
   read or is not open, and while Dan is asleep the question is noted for his morning report.
+- A PR Dan himself chose to close unmerged (#3779). On 2026-11-26 Dan picked "Close it unmerged"
+  in a session's picker about a pull request, the session closed it, and an hour later winding down
+  sent it back to be reopened and finished: `leave_pr_open` found no recorded reason in his exact
+  answer, and he was asked again. This is the one answer read from a session's own picker, and it
+  keeps what #917 was guarding, that nothing is inferred. It is read only from the dialog's result
+  as the mod's hook on AskUserQuestion receives it, which no session can write (a closing comment,
+  `dan_said` and an answer the call carries itself never count); it must be an answer the picker
+  offered and he picked alone, in words he could read whole, that begins "Close" and says unmerged;
+  and the words he read must name exactly one pull request as a pull request, the answer if it
+  names one and otherwise the question. Another number the question names with a # may be a pull
+  request too, so his answer counts once GitHub has said it is none, waits (never sent back to be
+  reopened) while GitHub cannot say, and is dropped where it is one. It is kept as the same
+  `leftOpen` record a "Leave it closed" answer makes, marked `picked`, so one rule decides what is
+  left as it is. "Leave it open" and "Leave it closed" in a session's picker are still never read.
+  The rules are `hooks/closedecision.ts`.
 - Whose branch it is (#1074). On 2026-10-11 winding down refused every stop of a Slate session on a
   branch whose PR had merged a month before, because the shared primary checkout sat on it, and
   Dan's "leave it as is", given twice, had nowhere to be recorded. A branch is the session's own only

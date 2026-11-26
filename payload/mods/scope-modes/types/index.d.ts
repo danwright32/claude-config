@@ -24,8 +24,12 @@ export type ScopeModesLeftOpen = { repo: string; number: number; head: string; w
  * A PR closed without merging that Dan himself chose to leave closed (#1033), from his answer to
  * leave_pr_open: the repository and number, and why, as asked. It carries no head: a closed PR
  * merges nothing until it is reopened, and reopened it is open, which this answer never covers.
+ * `picked` marks his own pick, in a session's picker naming this PR, of an answer to close it
+ * unmerged (#3779), read from the dialog's result. `unless` are the other numbers that picker's
+ * question named with a #: his answer counts once GitHub has said each is no pull request, and the
+ * field is then gone.
  */
-export type ScopeModesLeftClosed = { repo: string; number: number; closed: true; why: string }
+export type ScopeModesLeftClosed = { repo: string; number: number; closed: true; why: string; picked?: true; unless?: { repo?: string; number: number }[] }
 /** Dan's own answer about one PR, open or closed, found by its repository and number; one per PR. */
 export type ScopeModesLeftAsIs = ScopeModesLeftOpen | ScopeModesLeftClosed
 /**

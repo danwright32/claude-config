@@ -21,7 +21,9 @@ import { EDITORS, type Cmd } from './nobuild.ts'
 // merge it", about #1716). So a closed PR is reopened and finished by default, and he is asked about
 // leaving it closed only on a recorded reason it will never merge: its closing comment, or his own
 // earlier answer, naming a PR GitHub confirms is one (the PR that superseded it), quoted to him. A
-// comment naming only an issue, as #1716's did, is no such reason.
+// comment naming only an issue, as #1716's did, is no such reason. A PR he himself chose to close
+// unmerged, by picking that answer in a picker that named it (#3779, closedecision.ts), is left
+// closed on that answer with nothing more asked.
 
 export type Refusal = { what: string }
 
@@ -240,6 +242,11 @@ export type Reading = {
   inHand?: string
   /** Dan's choice to leave this PR open (#917) or closed (#1033), when he made one; never inferred. */
   choice?: LeftAsIs
+  /**
+   * Why GitHub could not say whether another number named in the picker he answered about this PR
+   * is a PR (#3779). Set only beside a choice still waiting on that answer.
+   */
+  choiceUnread?: string
   /**
    * The checkout was on this branch, which this session neither created, committed to nor pushed
    * (#1074): it is not the session's, so it has no PR or cleanup of the session's to finish.
@@ -461,6 +468,13 @@ export const outstanding = (r: Reading): string[] => {
   }
   if (r.pr.state === 'CLOSED') {
     if (settledByDan(r)) return []
+    // His own pick to close it (#3779), in a picker that named another number too: it settles this
+    // PR once GitHub has said that number is no PR. Until then it is never sent back to be reopened.
+    const also = r.choice && isLeftClosed(r.choice) ? (r.choice.unless ?? []).map(refSaid) : []
+    if (r.choice && also.length)
+      return [
+        `PR #${r.pr.number} was closed without merging, and ${r.choice.why}, which settles it once GitHub says ${also.join(' and ')}, which that picker also named, ${also.length === 1 ? 'is' : 'are'} no pull request. That could not be read${r.choiceUnread ? ` (${r.choiceUnread})` : ''}, so leave it closed until GitHub answers`,
+      ]
     // His answer to leave it open was about an open PR, so it settles nothing once closed. Dan would
     // rather merge it (#1767), so he is asked only on a recorded reason it will never merge.
     const n = r.pr.neverMerge
@@ -513,7 +527,9 @@ export function settledByDan(r: Reading): boolean {
  */
 export const leftByChoice = (pr: { state: string; head?: string }, d: LeftAsIs | undefined): boolean => {
   if (!d) return false
-  if (isLeftClosed(d)) return pr.state === 'CLOSED'
+  // Left closed on a pick of his whose picker named another number (#3779) only once GitHub has
+  // said that number is no PR, which takes it off the record.
+  if (isLeftClosed(d)) return pr.state === 'CLOSED' && !d.unless?.length
   return pr.state === 'OPEN' && !!pr.head && pr.head === d.head
 }
 

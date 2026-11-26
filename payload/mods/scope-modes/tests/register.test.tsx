@@ -2041,9 +2041,8 @@ const FINALIZE = [
   /When a decision or sign off is needed, ask Dan right then with an AskUserQuestion picker, one question at a time, and merge once he answers/,
   // #917: the one way a PR stays open, and only on his answer.
   /A PR stays open only on Dan's own answer to mcp__scope-modes__leave_pr_open/,
-  // #1033 and #1767: a PR closed without merging is finished, left closed only on his answer to the
-  // same tool, asked only on a recorded reason it will never merge.
-  /A PR closed without merging is reopened and finished, as Dan would rather merge it, and left closed only on his answer to the same tool, asked only when its closing comment or his own earlier answer names the PR that superseded it/,
+  // #1033, #1767 and #3779: a PR closed without merging is finished, and left closed only on his own answer.
+  /A PR closed without merging is reopened and finished, as Dan would rather merge it, and left closed only on his own answer: his pick of an answer to close it unmerged in a picker that named it, with nothing more asked, or his answer to the same tool, asked only when its closing comment or his own earlier answer names the PR that superseded it/,
   // #1812: every issue the session worked is finished, its owed verification included, and no way
   // out is offered; only new work is refused.
   /Every issue this session worked is finished, the verification its fix still owes included \(a live check, a measurement, a follow up PR the fix needs\)/,
@@ -2643,6 +2642,10 @@ test('the session ending turns every mode off: nothing carries into a new sessio
   expect(await call($ as never, edit('/repo/app.ts'))).toBe('ran')
   expect(await call($ as never, bash(DIALOG))).toBe('ran')
 })
+
+// #3779: a PR Dan himself chose to close unmerged. Its engine tests are in a file of their own, handed this file's harness.
+import { closeDecisionEngine } from './closedecision-engine.ts'
+closeDecisionEngine({ withDeps, world, start, command, call, stop, merged, cleaned, openPr, closedPr, leave, REOPEN, NO_REASON, CLOSED_AT, pr716, T0, MIN })
 
 // ---- Away and home (#621) ----
 
