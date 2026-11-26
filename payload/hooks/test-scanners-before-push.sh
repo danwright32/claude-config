@@ -141,6 +141,13 @@ checkout_parts(){
   grep -q -x 'WHEN-A-SUITE-CHANGES payload/hooks/test-scan-absence-needles.sh' <<< "$_sel" \
     && check "#3183 the real repo's absence needle scan is run when a push changes a suite" ok \
     || check "#3183 the real repo's absence needle scan is run when a push changes a suite" "got=$_sel"
+  # The Slack gate's runners suite walks nothing of the checkout: it names the helper only in a
+  # command it hands that gate, and the walk the old rule saw is that gate's own, in a lib program
+  # the suite names in a heredoc (claude-config#3662, Dan's decision of 2026-11-25). If it ever does
+  # walk the checkout, with the helper run in its own code, this check is the one to change.
+  grep -q 'test-slack-drafts-only-gate-runners[.]sh' <<< "$_sel" \
+    && check "#3662 the real repo's Slack gate runners suite, which walks nothing of the checkout, is not selected" "got=$_sel" \
+    || check "#3662 the real repo's Slack gate runners suite, which walks nothing of the checkout, is not selected" ok
   _real_floor="$(awk '/^[[:space:]]*#/ { next } $1 ~ /[.]sh$/ { print $1 } $1 == "WHEN-A-SUITE-CHANGES" { print $1 " " $2 }' "$REAL/.claude/scanners-floor.txt" 2>/dev/null | sort -u)"
   _real_n="$(grep -c . <<< "$_real_sel")"
   [ "$_real_n" -ge 21 ] && [ "$_real_sel" = "$_real_floor" ] \
@@ -2747,6 +2754,15 @@ out="$(fire "$RFW" "git push")"; rc=$?
 [ "$rc" -eq 2 ] && grep -q -F "payload/hooks/test-pwalk.sh" <<< "$out" \
   && check "#3183 a named walker that stops walking the checkout blocks the push, naming it" ok \
   || check "#3183 a named walker that stops walking the checkout blocks the push, naming it" "exit=$rc out=$out"
+# The refusal says how a walker is recognised in the words the rule now has (claude-config#3662), and
+# names the one way out a branch has when main stopped selecting the suite after the branch was cut:
+# its floor still names the suite, and taking main in removes the line.
+grep -q -F "its own code runs lib/checkout-root.sh" <<< "$out" \
+  && check "#3662 the refusal says a walker is a suite whose own code runs the helper" ok \
+  || check "#3662 the refusal says a walker is a suite whose own code runs the helper" "exit=$rc out=$out"
+grep -q -F "bring main into this branch" <<< "$out" \
+  && check "#3662 and tells a branch cut before main stopped selecting a suite to bring main in" ok \
+  || check "#3662 and tells a branch cut before main stopped selecting a suite to bring main in" "exit=$rc out=$out"
 # A walker that already passed on this exact tree is skipped like a scanner, and the line saying what
 # ran counts only the walkers that ran: a retry that ran none must not say it included them.
 RWP="$(pub_repo walkpass)"
@@ -2764,6 +2780,104 @@ out="$(SCANNERS_STATE_DIR="$WPSTATE" wn_fire "$RWP" "git push -u origin add-suit
   && check "#3183 and a retry that skipped it, having passed on this tree, does not say it was included" ok \
   || check "#3183 and a retry that skipped it, having passed on this tree, does not say it was included" "exit=$rc out=$out"
 git -C "$RWP" checkout -q main
+
+# --- claude-config#3662: a suite FINDS its checkout only when its own code RUNS lib/checkout-root.sh.
+#     The helper's name inside text the suite hands to something else is not a run. Until
+#     2026-11-25 any code line naming the helper counted, and the gate took
+#     test-slack-drafts-only-gate-runners.sh for a walker on two mentions that are both text: a
+#     fixture command it hands the Slack gate names the helper, and a heredoc names a lib program
+#     holding that gate's own walk of a folder a command names. It walks nothing of the checkout,
+#     and it was the slowest suite the gate ran (85 to 89 seconds of processor time alone, 3 runs
+#     on 2026-11-25).
+#     Measured 2026-11-25 on main: of the 68 suites whose code names the helper, 66 run it inside a
+#     command substitution, and the 2 that never run it are that suite and the sync suite, which
+#     copies the helper into a scratch lib by name.
+#     One stand in per way the recogniser knows a suite reads the whole tree, so a tightening that
+#     drops a real kind fails here by name (L247), beside the shapes that are only text.
+RK="$(mkrepo kinds)"; mkdir -p "$RK/payload/hooks/lib"
+printf 'import os\nfor b, d, n in os.walk("."):\n    pass\n' > "$RK/payload/hooks/kwalk-beside.py"
+printf 'import pathlib\nfor p in pathlib.Path(".").rglob("*.sh"):\n    pass\n' > "$RK/payload/hooks/lib/kwalk-inlib.py"
+kind(){   # $1 = name, then the suite's lines, one per argument
+  local f="$RK/payload/hooks/test-k-$1.sh"; shift
+  { printf '#!/usr/bin/env bash\n'; printf '%s\n' "$@"; printf 'exit 0\n'; } > "$f"; chmod +x "$f"
+}
+K_RUN='REPO="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"'
+K_WALK='python3 -c "import os, sys; list(os.walk(sys.argv[1]))" "$REPO"'
+# Every way a walk is spelled, with the helper run inside a command substitution, as the real
+# walkers run it.
+kind oswalk "$K_RUN" "$K_WALK"
+kind rglob "$K_RUN" 'python3 -c "import pathlib, sys; list(pathlib.Path(sys.argv[1]).rglob(sys.argv[2]))" "$REPO" "*.sh"'
+kind find "$K_RUN" 'find "$REPO" \( -name .git -o -name worktrees \) -prune -o -type f -print >/dev/null'
+kind beside "$K_RUN" 'SCAN="$DIR/kwalk-beside.py"' 'python3 "$SCAN" "$REPO" >/dev/null'
+kind inlib "$K_RUN" 'AUDIT="$DIR/lib/kwalk-inlib.py"' 'python3 "$AUDIT" "$REPO" >/dev/null'
+# Every way the helper is run: behind a default, in backticks, inside another substitution, as a
+# command of its own (alone, after another command, as a condition, on the line after the
+# substitution opens), sourced, and through a variable holding its path.
+kind default 'REPO="${KIND_ROOT:-$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)}"' "$K_WALK"
+kind backtick 'REPO=`bash "$DIR/lib/checkout-root.sh" "$DIR/.."`' "$K_WALK"
+kind nested 'REPO="$(bash "$(dirname "$HOOK")/lib/checkout-root.sh" "$(dirname "$HOOK")")"' "$K_WALK"
+kind ownline 'bash "$DIR/lib/checkout-root.sh" "$DIR/.." > "$T/root" 2>/dev/null' 'read -r REPO < "$T/root"' "$K_WALK"
+kind chained 'cd "$DIR" && bash lib/checkout-root.sh "$DIR/.." > "$T/root"' 'read -r REPO < "$T/root"' "$K_WALK"
+kind tested 'if ! bash "$DIR/lib/checkout-root.sh" "$DIR/.." > "$T/root" 2>/dev/null; then exit 0; fi' 'read -r REPO < "$T/root"' "$K_WALK"
+kind split 'REPO="$(' '  bash "$DIR/lib/checkout-root.sh" "$DIR/.."' ')"' "$K_WALK"
+kind sourced '. "$DIR/lib/checkout-root.sh"' "$K_WALK"
+kind heldvar 'HELPER="$DIR/lib/checkout-root.sh"' 'REPO="$(bash "$HELPER" "$DIR/..")"' "$K_WALK"
+# The two ways a suite lists the repository's files, which every push runs.
+kind lsfiles 'git ls-files "*.sh" >/dev/null'
+kind repofiles 'bash "$DIR/lib/repo-files.sh" . "*.sh" >/dev/null'
+# Text only. The first is the runners suite's own shape, its line naming the helper copied from
+# that suite: commands in a list handed to another gate, and a lib program that walks named in a
+# heredoc. The second names the helper every other way that is not a run: among the lib files it
+# copies to a scratch folder, in a pattern, and in two messages, and it walks that scratch folder.
+kind fixturetext \
+  'for c in "bash $T/plain.sh" \' \
+  "         \"cat > \$T/h.py <<'EOF'" \
+  'print(2)' \
+  'EOF' \
+  'python3 $T/h.py" "bash $DIR/lib/checkout-root.sh $DIR/.." "source $DIR/lib/checkout-root.sh; ls" \' \
+  '         "curl -s https://example.invalid/x"; do' \
+  '  run_bash "$c"' \
+  'done' \
+  "cat > \"\$T/where.py\" <<'PY'" \
+  'print("ok" if where == {"kwalk-inlib.py"} else "no")' \
+  'PY'
+kind nametext \
+  'python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$T/lib" kill-tree.sh whole-number.sh \' \
+  '  load-average.sh checkout-root.sh >/dev/null' \
+  'cp "$DIR/lib/checkout-root.sh" "$T/lib/"' \
+  'case "$body" in *"lib/checkout-root.sh"*) uses=yes ;; *) uses=no ;; esac' \
+  'no_checkout="this suite is not in a checkout (lib/checkout-root.sh found none above $DIR)"' \
+  'check_eq "each suite asks lib/checkout-root.sh" \' \
+  '  "yes" "$uses"' \
+  'python3 -c "import os, sys; list(os.walk(sys.argv[1]))" "$T/lib"'
+commit_all "$RK"
+_kl="$(printf '{"tool_name":"Bash","tool_input":{"command":"git push"},"cwd":"%s"}' "$RK" | SCANNERS_LIST=1 bash "$H" 2>&1)"
+for _k in oswalk rglob find beside inlib; do
+  grep -q -x "WHEN-A-SUITE-CHANGES payload/hooks/test-k-$_k.sh" <<< "$_kl" \
+    && check "#3662 a suite that runs the helper and walks the tree ($_k) is still a walker" ok \
+    || check "#3662 a suite that runs the helper and walks the tree ($_k) is still a walker" "got=$_kl"
+done
+for _k in default backtick nested ownline chained tested split sourced heldvar; do
+  grep -q -x "WHEN-A-SUITE-CHANGES payload/hooks/test-k-$_k.sh" <<< "$_kl" \
+    && check "#3662 a suite that runs the helper another way ($_k) and walks is still a walker" ok \
+    || check "#3662 a suite that runs the helper another way ($_k) and walks is still a walker" "got=$_kl"
+done
+for _k in lsfiles repofiles; do
+  grep -q -x "SUITE payload/hooks/test-k-$_k.sh" <<< "$_kl" \
+    && check "#3662 a suite that lists the repository's files ($_k) is still a scanner every push runs" ok \
+    || check "#3662 a suite that lists the repository's files ($_k) is still a scanner every push runs" "got=$_kl"
+done
+grep -q 'test-k-fixturetext[.]sh' <<< "$_kl" \
+  && check "#3662 a suite naming the helper only in a command it hands another gate is not taken for a walker" "got=$_kl" \
+  || check "#3662 a suite naming the helper only in a command it hands another gate is not taken for a walker" ok
+grep -q 'test-k-nametext[.]sh' <<< "$_kl" \
+  && check "#3662 nor one naming it only as a file to copy, in a pattern and in messages, while walking a scratch folder" "got=$_kl" \
+  || check "#3662 nor one naming it only as a file to copy, in a pattern and in messages, while walking a scratch folder" ok
+# The stand ins are 16 selected and 2 not, so a listing that came back empty or refused cannot pass
+# the two absence checks above unseen (L98).
+[ "$(grep -c 'test-k-' <<< "$_kl")" -eq 16 ] \
+  && check "#3662 and the listing those were read from names all 16 stand ins that read the tree" ok \
+  || check "#3662 and the listing those were read from names all 16 stand ins that read the tree" "got=$_kl"
 
 # --- claude-config#3160: the Slack alert guard is retired, and with it the step that ran its suite
 #     before any push changing a file in its folder (#2834). A branch cut before the retirement can

@@ -200,6 +200,7 @@ declare_gate(){ printf '%s\t%s\t%s\n' "$1" "$2" "$3"; }
   declare_gate stacked-branch-delete-gate.sh "git push origin :feat/x"      -
   declare_gate check-wrapped-commands.sh   "eval \$CMD && git status"       -
   declare_gate pr-review-gate.sh           "cat x/helper-key"               -
+  declare_gate announce-label-ask.sh       "gh pr edit 5 --add-label changelog/announce" -
   # It judges a file edit, never a shell command: @fresh-worktree is the edit fixture_payload builds.
   declare_gate fresh-worktree-base-gate.sh "@fresh-worktree"                -
   declare_gate require-tests-before-push.sh  "git push origin feature"      "allow0 #1912"
@@ -769,6 +770,7 @@ bash_call(){ python3 -c 'import json, sys; print(json.dumps({"command": sys.argv
   judged builder-model-gate.sh        Agent '{"prompt": "build it cut @@", "isolation": "worktree", "description": "cut @@"}' "{\"transcript_path\": \"$WORK/hb/orchestrating.jsonl\"}" "notice builder-model-gate.sh header"
   judged chrome-loopback-post-gate.sh mcp__claude-in-chrome__javascript_tool '{"text": "fetch(\"http://127.0.0.1:8765/@@\", {method: \"POST\", body: \"cut @@\"})", "action": "javascript_exec", "tabId": 7}' '{}' "notice chrome-loopback-post-gate.sh header"
   judged no-session-link-in-comments.sh Bash "$(bash_call "gh pr comment 5 --body 'see https://claude.ai/code/session_01abc'")" '{}' refuse
+  judged announce-label-ask.sh        Bash "$(bash_call 'gh pr edit 5 --add-label changelog/announce')" '{}' refuse
   judged slack-drafts-only-gate.sh    Bash "$(bash_call 'curl -d x https://slack.com/api/chat.postMessage')" '{}' refuse
   # It never refuses: it ASKS Dan about a database call it cannot classify, by Dan's decision on
   # 2026-11-09 (#2521), so a call it cannot parse is asked about, naming the payload.
