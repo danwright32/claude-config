@@ -48,6 +48,9 @@ const deps: { name: string; register: Register } = {
           branch: async (input: { path: string }) => (await kit('branch', input)) ?? null,
           // A folder with no .git entry the world names is none; one the world cannot read refuses.
           workingTree: async ({ path }: { path: string }) => {
+            // #3673: the world may leave this read unanswered too, as it may the kit's other readers.
+            const asked = await built.process.run(['__modkit', 'workingTree', JSON.stringify({ path })])
+            if (asked.exitCode !== 0) throw new Error(asked.stderr)
             let dir = path.replace(/\/+$/, '') || '/'
             for (let looked = 0; looked < 64; looked++) {
               const s = (await built.fs.stat(`${dir === '/' ? '' : dir}/.git`).catch(() => undefined)) as { kind?: string } | undefined
@@ -512,8 +515,9 @@ type Send = true | { refused: string } | 'throws'
 type Ran = 'ok' | 'error' | { deny: string }
 // `unanswered` (#3673): how many of the first asks of a read get no answer in time, by the read: the
 // session list ('list'), or one of mod-kit's readers by its name ('git', 'writes'). Each such ask
-// fails in Claude Code's own words for a noun it cut at 10 seconds, copied from the refusals in
-// this Mac's session records (2026-11-20 to 2026-11-25): 11 named the list, 1 mod-kit's git reader.
+// fails in Claude Code's own words for a noun it cut at 10 seconds, copied from the 12 refusals in
+// the personal MacBook's session records (read 2026-10-26 to 2026-11-26; the 12 fall on 2026-11-20
+// to 2026-11-25): 11 named the list, 1 mod-kit's git reader.
 type Opts = { self?: Record<string, unknown>; open?: unknown[]; unreadable?: string[]; judge?: Judge; repo?: string; branch?: string | { fails: string }; branchReaderFails?: string; sends?: Send[]; tail?: 'fails' | 'no-request'; ran?: Ran; gits?: Record<string, 'dir' | 'file'>; locked?: string; tmpdir?: string; listBreaks?: boolean; tops?: Record<string, string | null | { says: string }>; unanswered?: Record<string, number>; readFails?: Record<string, string> }
 
 const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
@@ -541,6 +545,8 @@ const world = (engine: Engine, on: On, o: Opts = {}) => {
     // A reader of mod-kit's that fails in words of its own, which is no read left unanswered.
     const fails = cmd === '__modkit' ? o.readFails?.[String(args[0])] : undefined
     if (fails !== undefined) return { value: { exitCode: 1, stdout: '', stderr: fails, isStdoutTruncated: false, isStderrTruncated: false } }
+    // The walk for a checkout answers from the disk in the stand-in above; here it is only asked.
+    if (cmd === '__modkit' && args[0] === 'workingTree') return ok('')
     // mod-kit's readers, answered from the table; a request it has no answer for fails the test by
     // name rather than being read some other way. Not one of the runs a test watches.
     if (cmd === '__modkit' && args[0] === 'branch') {
@@ -1974,6 +1980,29 @@ test("mod-kit's git reader asked with the settings in front of a command and lef
   expect(w.prompts[0]?.prompt).toContain('The checkout: /other, on branch')
   // Asked plainly once, then with the settings twice.
   expect(w.asks.filter(a => a === 'git').length).toBe(3)
+})
+
+// The lessons review of #3673: mod-kit's walk for the checkout around a repository a command names
+// is a read cut at the same 10 seconds, and was refused at once as a checkout that could not be told.
+test("mod-kit's walk for a checkout left unanswered is asked once more, and the switch is judged (#3673)", withDeps, async ($, on) => {
+  const named = '-C /repo --git-dir=/other/.git --work-tree=/other rev-parse'
+  const w = world($, on, { unanswered: { workingTree: 1 }, open: inOther(), judge: stopped, tops: { [`${named} --show-toplevel`]: '/other', '-C /other rev-parse --show-toplevel': '/other', [`${named} --absolute-git-dir`]: '/other/.git' } })
+  const r = await $.tool.call(bash('git --git-dir=/other/.git --work-tree=/other checkout main', 'u14'))
+  expect(refusal(r)).toBe('Blocked: Another session is working in this checkout. They have uncommitted work. Leave it to the other session, or ask Dan.')
+  expect(w.reached).toEqual([])
+  expect(w.asks.filter(a => a === 'workingTree').length).toBe(2)
+})
+
+test("mod-kit's walk for a checkout left unanswered twice stops the command, saying it was asked twice (#3673)", withDeps, async ($, on) => {
+  const named = '-C /repo --git-dir=/other/.git --work-tree=/other rev-parse'
+  const w = world($, on, { unanswered: { workingTree: 2 }, open: inOther(), judge: stopped, tops: { [`${named} --show-toplevel`]: '/other', '-C /other rev-parse --show-toplevel': '/other', [`${named} --absolute-git-dir`]: '/other/.git' } })
+  const r = await $.tool.call(bash('git --git-dir=/other/.git --work-tree=/other checkout main', 'u15'))
+  expect(refusal(r)).toBe(
+    "Blocked: Couldn't tell which checkout git checkout main acts on (the checkout around /other/.git could not be looked for: $.modkit.workingTree: mod-kit did not answer within 10000ms, and again when asked a second time), and another session is open, so this was stopped. Try again, or ask Dan.",
+  )
+  expect(w.reached).toEqual([])
+  expect(w.prompts).toEqual([])
+  expect(w.asks.filter(a => a === 'workingTree').length).toBe(2)
 })
 
 // What the second ask must not change: a failure in any other words is a failure of the read, never

@@ -330,7 +330,7 @@ const check = async ($: EngineInterface, input: Record<string, unknown>): Promis
             // it could not look.
             const repository = (await asked($, 'which repository it names', ['git', ...where.at, ...where.apart, 'rev-parse', '--absolute-git-dir']))?.trim()
             if (repository) {
-              const around = await $.modkit.workingTree({ path: repository }).catch(err => {
+              const around = await twice(() => $.modkit.workingTree({ path: repository })).catch(err => {
                 throw new Unanswered(`the checkout around ${repository} could not be looked for: ${errorText(err, 'collision-guard')}`)
               })
               add(around ?? undefined)
