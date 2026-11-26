@@ -145,8 +145,9 @@ made up transcript left a line saying Dan approved wording he never saw. So:
     the two that only read.
 
 ONE APPROVAL COVERS ONE PULL REQUEST (Dan, 2026-11-25, by picker: "One approval, one pull request").
-An approval is one answer of his in one picker, so it is counted by the session and the picker it
-came from, once however many lines say it (two hook runs at once can each write it). A `used` line
+An approval is one answer of his in one picker, so it is counted by the picker it came from, under
+whichever session id its lines are found (_approval_keys; claude-config#3742), once however many
+lines say it (two hook runs at once can each write it). A `used` line
 names a pull request that used one. For a wording and a repository, the first pull requests to use
 it, as many as there are approvals, are the ones covered. So:
   - an approval nobody has used covers whichever pull request reaches the merge gate first, which
