@@ -195,6 +195,12 @@ check_eq "1 and how large they were" "$(git -C "$REPO" cat-file -s "$MAIN1:REVIE
 check_not "1 an unchanged file adds no line to the answer" "Review rules:" "$(body same)"
 check_not "1 and no line about a change to it for the reviewer" "this branch itself" "$(msg)"
 
+# Named from a folder inside the repository, the file is still the one at the repository's top: a
+# listing relative to that folder would find none and quietly apply none.
+run_rules inside "$MAIN1" "$SAME" "$REPO/App"
+check "1 from a folder inside the repository the top level file is still read" "BASE-RULE-ALPHA" "$(msg)"
+check_eq "1 and recorded as applied" "applied" "$(meta inside review_rules)"
+
 # ===== 2. (a) A branch that EDITS REVIEW.md is reviewed under the base's text =====
 run_rules edit "$MAIN1" "$EDIT"
 check_eq "2 the review ran" "ok" "$(meta edit status)"
@@ -451,6 +457,25 @@ check_eq "10 the updated head's base is the target's new tip" "$MAIN2" "$(fmeta 
 check "10 and it is read under the rules the update brought" "LATER-RULE-EPSILON" "$(msg)"
 check_not "10 not the ones it was first read under" "BASE-RULE-ALPHA" "$(msg)"
 runners_done || bad "10 a runner was still going at the end"
+
+# ===== 11. (f) A shallow clone: the review stops before any rules are read =====
+# A clone holding only the branch's tip has no merge base with the target, so lib/pr-review.sh's own
+# rule for a base it cannot find applies: the review could not run, and the gate refuses. This case
+# pins that rule for this change (it holds on the code before it too): no reviewer is started, so
+# the branch's REVIEW.md, the only copy such a clone has checked out, governs nothing.
+reset_state
+SHALLOW="$WORKDIR/shallow"
+git clone -q --depth 1 --branch feat/edit "file://$ORIGIN" "$SHALLOW" 2>/dev/null
+check_eq "11 the clone is shallow" "true" "$(git -C "$SHALLOW" rev-parse --is-shallow-repository 2>/dev/null)"
+check "11 and its checked out REVIEW.md is the branch's" "BRANCH-RULE-BETA" "$(cat "$SHALLOW/REVIEW.md" 2>/dev/null)"
+out="$(prr start --dir "$SHALLOW" --sha "$EDIT" --base-ref origin/main --branch feat/edit)"
+check "11 (f) the review says it could not run" "could not run" "$out"
+check_eq "11 (f) no reviewer was started" "" "$(msg)"
+sf=""; for sf in "$AI_REVIEW_STATE_DIR"/*-pr-"$EDIT".txt; do break; done
+check_eq "11 (f) and the review is recorded as could not run" "could-not-run" "$(fmeta "$sf" status)"
+out="$(prr check --dir "$SHALLOW" --sha "$EDIT" --base-ref origin/main --branch feat/edit)"; rc=$?
+check_eq "11 (f) which the gate refuses" "1" "$rc"
+runners_done || bad "11 a runner was still going at the end"
 
 echo
 echo "passed: $pass, failed: $fail"

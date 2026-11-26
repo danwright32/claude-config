@@ -210,7 +210,9 @@ def _rules_entry(repo_dir, commit):
         full = _git_out(repo_dir, "rev-parse", "--verify", "-q", commit + "^{commit}").decode().strip()
     except OSError as e:
         raise OSError(f"{commit[:7]} is not a commit this checkout holds") from e
-    out = _git_out(repo_dir, "ls-tree", "-z", full, "--", RULES_FILE).decode("utf-8", errors="replace")
+    # --full-tree: the name is read from the repository's top wherever repo_dir is inside it. Without
+    # it the listing is relative to that folder, finds no entry, and reads as a repository with none.
+    out = _git_out(repo_dir, "ls-tree", "-z", "--full-tree", full, "--", RULES_FILE).decode("utf-8", errors="replace")
     for row in out.split("\0"):
         head, _, path = row.partition("\t")
         parts = head.split()
