@@ -301,8 +301,21 @@ triggers="$(sed -n 's/^  \([a-z_]*\):.*$/\1/p' <<< "$on" | LC_ALL=C sort | paste
 dtests="$(job_of "$DAILY_WF" tests)"; dreport="$(job_of "$DAILY_WF" report)"
 grep -q 'bash tools/install-claude-code\.sh .* --newest)"$' <<< "$dtests" && grep -q 'bash tests/test-mods\.sh' <<< "$dtests" \
   && grep -q 'bash tests/test-mods-load-engine\.sh' <<< "$dtests" \
-  && check "#3297 the daily run installs the newest release and runs both mods suites on it" ok \
-  || check "#3297 the daily run installs the newest release and runs both mods suites on it" "not found in its tests job"
+  && check "#3297 the daily run installs the newest release and runs the real tree and the load test on it" ok \
+  || check "#3297 the daily run installs the newest release and runs the real tree and the load test on it" "not found in its tests job"
+# The real tree is checked in parts (#3622): each suite sourcing tests/mods-real-tree.sh is a part, and
+# a part the daily run left out would leave its mods untried on the newest release with nothing red.
+# Each writes into the one test-mods.log the report reads: test-mods.sh starts it, and every other part
+# adds to it, so no part's lines are written over.
+rt_missing=""
+while IFS= read -r p; do
+  [ -n "$p" ] || continue
+  rt_to='>>'; [ "${p##*/}" = test-mods.sh ] && rt_to='>'
+  grep -qF "bash tests/${p##*/} $rt_to \"\$RUNNER_TEMP/mods-logs/test-mods.log\" 2>&1" <<< "$dtests" || rt_missing="$rt_missing tests/${p##*/}"
+done <<< "$(grep -l -E '^[[:space:]]*(\.|source)[[:space:]].*mods-real-tree\.sh' "$ROOT"/tests/test-*.sh 2>/dev/null)"
+[ -n "$(grep -l -E '^[[:space:]]*(\.|source)[[:space:]].*mods-real-tree\.sh' "$ROOT"/tests/test-*.sh 2>/dev/null)" ] && [ -z "$rt_missing" ] \
+  && check "#3622 the daily run runs every part of the real tree into test-mods.log" ok \
+  || check "#3622 the daily run runs every part of the real tree into test-mods.log" "not run into test-mods.log:${rt_missing:- no part found}"
 top_perm="$(printf '%s\n' "$dw" | awk '/^permissions:/ { on = 1; next } on && /^[A-Za-z]/ { on = 0 } on')"
 ! grep -qE ':[[:space:]]*write' <<< "$top_perm
 $dtests" &&grep -qE '^      issues:[[:space:]]*write' <<< "$dreport" \

@@ -164,7 +164,7 @@ import {
   unsure,
 } from './rules.ts'
 import { errorText } from './mod-kit/skew.ts'
-import { neverThrows } from './mod-kit/hold.ts'
+import { cutCall, cutCheck, cutWhy } from './mod-kit/hold.ts'
 import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
 import { toolArgs } from './mod-kit/toolargs.ts'
 import { patchedPaths, readPatch } from './mod-kit/patch.ts'
@@ -2963,7 +2963,9 @@ export const register: Register = on => {
   // long command ran) replays what the call settled to, outside neverThrows: it already ran, so a
   // refusal saying it was stopped would be untrue and could have Claude run it twice (#2726, #2039).
   // One before is answered as the hook would answer it where that needs no reading (caughtCall).
-  }).catch(($, e, next) => next.called ? next(e) : neverThrows(() => caughtCall(e, toolArgs(e as unknown as Record<string, unknown>), message(next.error), () => next(e)), () => ({ deny: HELD }), { deny: HELD }))
+    // This hook judges a subagent's call alone, never its question, and is the first asked when any
+    // tool.call hook here fails (hold.ts), so any other call is left to the catches below (#3655).
+  }).catch(($, e, next) => cutCall('the design round guard', e, next, { mine: () => e.agentId !== undefined && e.tool !== 'AskUserQuestion', work: () => caughtCall(e, toolArgs(e as unknown as Record<string, unknown>), message(next.error), () => next(e)), held: () => ({ deny: HELD }), last: { deny: HELD } }))
 
   // The main session's shell call, around the tool.check judgement beneath: one that passed with mod
   // .ts hook files to read again (watching) is judged by what it left once it ran (#1296). The check
@@ -2985,7 +2987,21 @@ export const register: Register = on => {
     } catch (err) {
       return r.deny !== undefined ? r : { ...r, context: [...(r.context ?? []), shellUnchecked(message(err))] }
     }
-  })
+    // #3655: this hook judges what the command CHANGED, after it ran. Cut there, the result is
+    // replayed with the note a look that failed gives, since the files went unjudged; cut before the
+    // command ran, the call is refused. The hook is registered for Bash alone, and a catch is asked
+    // only about calls its hook's tool filter matches (hold.ts), so a question whose hook failed
+    // never reaches this catch. `mine` says the same inside the catch, a second hold on the same
+    // line should the filter ever change: a question would be left to its own catch, with no shell note.
+    // The note names the failure by its kind only (cutWhy), never its own words, which can quote
+    // the input the look could not read (the lessons review of this change).
+  }).catch(($, e, next) => cutCall('the design round guard', e, next, {
+    mine: () => e.tool === 'Bash',
+    after: async () => {
+      const r = await next(e)
+      return r.deny !== undefined ? r : { ...r, context: [...(r.context ?? []), shellUnchecked(cutWhy(next.error))] }
+    },
+  }))
 
   // The main session's call, judged beneath every mod's tool.call hook. A call that passes goes on
   // untouched; one that is refused goes to the settings hooks first, so a call one of them refuses is
@@ -3013,7 +3029,7 @@ export const register: Register = on => {
     return { decision: 'deny', reason: await refuse($, v, { id: e.tool_use_id, tool: e.tool, agent: false, called: await keyOf($, e.tool, input) }) }
   // A call passing by its shape is answered as above, by the verdicts beneath (#2726); every other is
   // refused, `next` there running nothing whether or not the hook had read it.
-  }).catch(($, e, next) => neverThrows(() => caughtCheck(e.tool, (e.input ?? {}) as Record<string, unknown>, message(next.error), () => next(e)), () => ({ decision: 'deny' as const, reason: HELD }), { decision: 'deny' as const, reason: HELD }))
+  }).catch(($, e, next) => cutCheck('the design round guard', next, { work: () => caughtCheck(e.tool, (e.input ?? {}) as Record<string, unknown>, message(next.error), () => next(e)), held: () => ({ decision: 'deny' as const, reason: HELD }), last: { decision: 'deny' as const, reason: HELD } }))
 
   // Dan's two questions, asked in Claude Code's own dialog. The guard words each question and its
   // answers, and reads his choice from the dialog's own result, the one place it comes from him.
@@ -3217,7 +3233,7 @@ export const register: Register = on => {
     } catch (err) {
       return { deny: `The design round guard could not read Dan's answer (${message(err)}), so nothing is recorded. Ask him again.` }
     }
-  })
+  }).catch(($, e, next) => cutCall('the design round guard', e, next))
 
   // Dropped at session end, a /clear included: a refused call waits on Dan only in its own session.
   on('session.end', async ($, e, next) => {

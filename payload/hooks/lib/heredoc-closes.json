@@ -1,0 +1,681 @@
+{
+ "about": "Where a heredoc ends, shape by shape, as seven shells read it (claude-config#3592). One list, run by the suites of both readers that had the fault: lib/shell_code_lines.py, which the tree scans read shell files through (test-shell-code-lines.sh), and the mods' reader, mods/mod-kit/hooks/commands.ts (mods/mod-kit/tests/commands.test.ts). A row's text only prints. Each probe line is `echo Pnn`, nn its line number: run as a command it prints Pnn at the start of a line, and kept as a heredoc's body cat prints it with its echo in front. `lines` says which of the two every shell did with each probe line, or, where they differ, which shells did which. `named` says whether each reader must name the heredoc as one it is not sure of: it must wherever its own reading is not what every shell does, and it must not on the controls, so naming every heredoc passes nothing. test-shell-code-lines.sh runs every row through each shell here that prints what `prints` records for its `probe`, on the system `os` names, so the list cannot say what those shells do not do. Any other shell is a part that suite prints as not measured.",
+ "measured": "2026-11-25 on macOS, each text as a -c text and as a file, which agreed in every row",
+ "os": "Darwin",
+ "shells": {
+  "bash": {
+   "run": [
+    "bash",
+    "--noprofile",
+    "--norc"
+   ],
+   "probe": "echo \"$BASH_VERSION\"",
+   "prints": "3.2.57(1)-release"
+  },
+  "bash --posix": {
+   "run": [
+    "bash",
+    "--posix",
+    "--noprofile",
+    "--norc"
+   ],
+   "probe": "echo \"$BASH_VERSION\"",
+   "prints": "3.2.57(1)-release"
+  },
+  "sh": {
+   "run": [
+    "sh"
+   ],
+   "probe": "echo \"$BASH_VERSION\"",
+   "prints": "3.2.57(1)-release"
+  },
+  "dash": {
+   "run": [
+    "dash"
+   ],
+   "probe": "echo \"${BASH_VERSION-}${ZSH_VERSION-}${KSH_VERSION-}dash\"",
+   "prints": "dash"
+  },
+  "zsh": {
+   "run": [
+    "zsh",
+    "-f"
+   ],
+   "probe": "echo \"$ZSH_VERSION\"",
+   "prints": "5.9"
+  },
+  "zsh emulating sh": {
+   "run": [
+    "zsh",
+    "--emulate",
+    "sh",
+    "-f"
+   ],
+   "probe": "echo \"$ZSH_VERSION\"",
+   "prints": "5.9"
+  },
+  "ksh": {
+   "run": [
+    "ksh"
+   ],
+   "probe": "echo \"${.sh.version}\"",
+   "prints": "Version AJM 93u+ 2012-08-01"
+  }
+ },
+ "rows": [
+  {
+   "name": "the control: a body and its marker",
+   "text": "cat <<E\necho P02\nE\necho P04\necho P05\n",
+   "lines": {
+    "2": "body",
+    "4": "code",
+    "5": "code"
+   },
+   "named": {
+    "scanner": false,
+    "mods": false
+   }
+  },
+  {
+   "name": "one backslash before the marker line, no marker after",
+   "text": "cat <<E\necho P02\\\nE\necho P04\necho P05\n",
+   "lines": {
+    "2": "body",
+    "4": "body",
+    "5": "body"
+   },
+   "named": {
+    "scanner": true,
+    "mods": true
+   }
+  },
+  {
+   "name": "the control: two backslashes before the marker line",
+   "text": "cat <<E\necho P02\\\\\nE\necho P04\necho P05\n",
+   "lines": {
+    "2": "body",
+    "4": "code",
+    "5": "code"
+   },
+   "named": {
+    "scanner": false,
+    "mods": false
+   }
+  },
+  {
+   "name": "three backslashes before the marker line, no marker after",
+   "text": "cat <<E\necho P02\\\\\\\nE\necho P04\necho P05\n",
+   "lines": {
+    "2": "body",
+    "4": "body",
+    "5": "body"
+   },
+   "named": {
+    "scanner": true,
+    "mods": true
+   }
+  },
+  {
+   "name": "a joined marker, then the marker on a line of its own",
+   "text": "cat <<E\necho P02\\\nE\necho P04\nE\necho P06\n",
+   "lines": {
+    "2": "body",
+    "4": "body",
+    "6": "code"
+   },
+   "named": {
+    "scanner": false,
+    "mods": true
+   }
+  },
+  {
+   "name": "a joined marker, an apostrophe after it, then the marker",
+   "text": "cat <<E\necho P02\\\nE\nit's echo P04\nE\necho P06\necho P07\n",
+   "lines": {
+    "2": "body",
+    "4": "body",
+    "6": "code",
+    "7": "code"
+   },
+   "named": {
+    "scanner": false,
+    "mods": true
+   }
+  },
+  {
+   "name": "a joined marker, a substitution in single quotes after it, no marker after",
+   "text": "cat <<E\necho P02\\\nE\necho '$(echo SUB)'\necho P05\n",
+   "lines": {
+    "2": "body",
+    "5": "body"
+   },
+   "named": {
+    "scanner": true,
+    "mods": true
+   }
+  },
+  {
+   "name": "<<- one backslash before the marker line, no marker after",
+   "text": "cat <<-E\n\techo P02\\\n\tE\necho P04\necho P05\n",
+   "lines": {
+    "2": "body",
+    "4": "body",
+    "5": "body"
+   },
+   "named": {
+    "scanner": true,
+    "mods": true
+   }
+  },
+  {
+   "name": "<<- a joined marker, then the marker",
+   "text": "cat <<-E\n\techo P02\\\n\tE\necho P04\n\tE\necho P06\n",
+   "lines": {
+    "2": "body",
+    "4": "body",
+    "6": "code"
+   },
+   "named": {
+    "scanner": false,
+    "mods": true
+   }
+  },
+  {
+   "name": "the control: a quoted marker, a backslash before the marker line",
+   "text": "cat <<'E'\necho P02\\\nE\necho P04\necho P05\n",
+   "lines": {
+    "2": "body",
+    "4": "code",
+    "5": "code"
+   },
+   "named": {
+    "scanner": false,
+    "mods": false
+   }
+  },
+  {
+   "name": "the control: a backslash in the middle of the body",
+   "text": "cat <<E\necho P02\\\necho P03\nE\necho P05\necho P06\n",
+   "lines": {
+    "2": "body",
+    "3": "body",
+    "5": "code",
+    "6": "code"
+   },
+   "named": {
+    "scanner": false,
+    "mods": false
+   }
+  },
+  {
+   "name": "a line that is only a backslash, then the marker",
+   "text": "cat <<E\necho P02\n\\\nE\necho P05\necho P06\n",
+   "lines": {
+    "2": "body",
+    "5": {
+     "code": [
+      "bash",
+      "bash --posix",
+      "sh",
+      "dash",
+      "zsh",
+      "zsh emulating sh"
+     ],
+     "body": [
+      "ksh"
+     ]
+    },
+    "6": {
+     "code": [
+      "bash",
+      "bash --posix",
+      "sh",
+      "dash",
+      "zsh",
+      "zsh emulating sh"
+     ],
+     "body": [
+      "ksh"
+     ]
+    }
+   },
+   "named": {
+    "scanner": true,
+    "mods": true
+   }
+  },
+  {
+   "name": "a marker split over two lines by a backslash",
+   "text": "cat <<EOF\necho P02\nE\\\nOF\necho P05\necho P06\n",
+   "lines": {
+    "2": "body",
+    "5": {
+     "code": [
+      "bash",
+      "bash --posix",
+      "sh",
+      "zsh",
+      "zsh emulating sh"
+     ],
+     "body": [
+      "dash",
+      "ksh"
+     ]
+    },
+    "6": {
+     "code": [
+      "bash",
+      "bash --posix",
+      "sh",
+      "zsh",
+      "zsh emulating sh"
+     ],
+     "body": [
+      "dash",
+      "ksh"
+     ]
+    }
+   },
+   "named": {
+    "scanner": true,
+    "mods": true
+   }
+  },
+  {
+   "name": "a marker split over two lines, then the marker on a line of its own",
+   "text": "cat <<EOF\necho P02\nE\\\nOF\necho P05\nEOF\necho P07\n",
+   "lines": {
+    "2": "body",
+    "5": {
+     "code": [
+      "bash",
+      "bash --posix",
+      "sh",
+      "zsh",
+      "zsh emulating sh"
+     ],
+     "body": [
+      "dash",
+      "ksh"
+     ]
+    },
+    "7": "code"
+   },
+   "named": {
+    "scanner": true,
+    "mods": true
+   }
+  },
+  {
+   "name": "a marker line that ends in a backslash",
+   "text": "cat <<E\necho P02\nE\\\necho P04\necho P05\n",
+   "lines": {
+    "2": "body",
+    "4": "body",
+    "5": "body"
+   },
+   "named": {
+    "scanner": false,
+    "mods": true
+   }
+  },
+  {
+   "name": "a marker line that ends in a backslash, then an empty line",
+   "text": "cat <<E\necho P02\nE\\\n\necho P05\necho P06\n",
+   "lines": {
+    "2": "body",
+    "5": {
+     "code": [
+      "bash",
+      "bash --posix",
+      "sh",
+      "zsh",
+      "zsh emulating sh"
+     ],
+     "body": [
+      "dash",
+      "ksh"
+     ]
+    },
+    "6": {
+     "code": [
+      "bash",
+      "bash --posix",
+      "sh",
+      "zsh",
+      "zsh emulating sh"
+     ],
+     "body": [
+      "dash",
+      "ksh"
+     ]
+    }
+   },
+   "named": {
+    "scanner": true,
+    "mods": true
+   }
+  },
+  {
+   "name": "a marker that never comes",
+   "text": "cat <<E\necho P02\necho P03\n",
+   "lines": {
+    "2": "body",
+    "3": "body"
+   },
+   "named": {
+    "scanner": false,
+    "mods": true
+   }
+  },
+  {
+   "name": "the start of the marker and a backslash, then the marker twice",
+   "text": "cat <<EOF\necho P02\nEO\\\nEOF\necho P05\nEOF\necho P07\n",
+   "lines": {
+    "2": "body",
+    "5": {
+     "body": [
+      "bash",
+      "bash --posix",
+      "sh",
+      "dash",
+      "zsh",
+      "zsh emulating sh"
+     ],
+     "code": [
+      "ksh"
+     ]
+    },
+    "7": "code"
+   },
+   "named": {
+    "scanner": true,
+    "mods": true
+   }
+  },
+  {
+   "name": "the start of the marker and two backslashes, then the marker",
+   "text": "cat <<EOF\necho P02\nEO\\\\\nEOF\necho P05\necho P06\n",
+   "lines": {
+    "2": "body",
+    "5": {
+     "code": [
+      "bash",
+      "bash --posix",
+      "sh",
+      "dash",
+      "zsh",
+      "zsh emulating sh"
+     ],
+     "body": [
+      "ksh"
+     ]
+    },
+    "6": {
+     "code": [
+      "bash",
+      "bash --posix",
+      "sh",
+      "dash",
+      "zsh",
+      "zsh emulating sh"
+     ],
+     "body": [
+      "ksh"
+     ]
+    }
+   },
+   "named": {
+    "scanner": true,
+    "mods": true
+   }
+  },
+  {
+   "name": "a marker after one space, then the marker",
+   "text": "cat <<E\necho P02\n E\necho P04\nE\necho P06\n",
+   "lines": {
+    "2": "body",
+    "4": "body",
+    "6": "code"
+   },
+   "named": {
+    "scanner": false,
+    "mods": true
+   }
+  },
+  {
+   "name": "a marker after one space, no marker after",
+   "text": "cat <<E\necho P02\n E\necho P04\necho P05\n",
+   "lines": {
+    "2": "body",
+    "4": "body",
+    "5": "body"
+   },
+   "named": {
+    "scanner": false,
+    "mods": true
+   }
+  },
+  {
+   "name": "a marker after a tab, then the marker",
+   "text": "cat <<E\necho P02\n\tE\necho P04\nE\necho P06\n",
+   "lines": {
+    "2": "body",
+    "4": "body",
+    "6": "code"
+   },
+   "named": {
+    "scanner": false,
+    "mods": true
+   }
+  },
+  {
+   "name": "a marker before a space, then the marker",
+   "text": "cat <<E\necho P02\nE \necho P04\nE\necho P06\n",
+   "lines": {
+    "2": "body",
+    "4": "body",
+    "6": "code"
+   },
+   "named": {
+    "scanner": false,
+    "mods": true
+   }
+  },
+  {
+   "name": "the control: <<- a marker after a tab",
+   "text": "cat <<-E\n\techo P02\n\tE\necho P04\necho P05\n",
+   "lines": {
+    "2": "body",
+    "4": "code",
+    "5": "code"
+   },
+   "named": {
+    "scanner": false,
+    "mods": false
+   }
+  },
+  {
+   "name": "<<- a marker after spaces, then after a tab",
+   "text": "cat <<-E\n\techo P02\n  E\necho P04\n\tE\necho P06\n",
+   "lines": {
+    "2": "body",
+    "4": "body",
+    "6": "code"
+   },
+   "named": {
+    "scanner": false,
+    "mods": true
+   }
+  },
+  {
+   "name": "<<- a marker after a tab and a space, then the marker",
+   "text": "cat <<-E\n\techo P02\n\t E\necho P04\nE\necho P06\n",
+   "lines": {
+    "2": "body",
+    "4": "body",
+    "6": "code"
+   },
+   "named": {
+    "scanner": false,
+    "mods": true
+   }
+  },
+  {
+   "name": "<<- a marker after a space and a tab, then the marker",
+   "text": "cat <<-E\n\techo P02\n \tE\necho P04\nE\necho P06\n",
+   "lines": {
+    "2": "body",
+    "4": "body",
+    "6": "code"
+   },
+   "named": {
+    "scanner": false,
+    "mods": true
+   }
+  },
+  {
+   "name": "a quoted marker after a space, then the marker",
+   "text": "cat <<'E'\necho P02\n E\necho P04\nE\necho P06\n",
+   "lines": {
+    "2": "body",
+    "4": "body",
+    "6": "code"
+   },
+   "named": {
+    "scanner": false,
+    "mods": true
+   }
+  },
+  {
+   "name": "a marker after spaces, a substitution in single quotes after it, no marker after",
+   "text": "cat <<E\necho P02\n  E\necho '$(echo SUB)'\necho P05\n",
+   "lines": {
+    "2": "body",
+    "5": "body"
+   },
+   "named": {
+    "scanner": false,
+    "mods": true
+   }
+  },
+  {
+   "name": "the opener line ends in a backslash, a line, then the marker",
+   "text": "cat <<E\\\nx\nE\necho P04\necho P05\n",
+   "lines": {
+    "4": "body",
+    "5": "body"
+   },
+   "named": {
+    "scanner": true,
+    "mods": true
+   }
+  },
+  {
+   "name": "the opener line ends in a backslash, and the joined marker closes it",
+   "text": "cat <<E\\\nx\necho P03\nEx\necho P05\necho P06\n",
+   "lines": {
+    "3": "body",
+    "5": "code",
+    "6": "code"
+   },
+   "named": {
+    "scanner": true,
+    "mods": true
+   }
+  },
+  {
+   "name": "<< and a backslash, the marker on the next line",
+   "text": "cat <<\\\nE\necho P03\nE\necho P05\n",
+   "lines": {
+    "3": "body",
+    "5": "code"
+   },
+   "named": {
+    "scanner": true,
+    "mods": true
+   }
+  },
+  {
+   "name": "the control: the opener line ends in two backslashes",
+   "text": "cat <<E\\\\\necho P02\nE\\\necho P04\necho P05\n",
+   "lines": {
+    "2": "body",
+    "4": "code",
+    "5": "code"
+   },
+   "named": {
+    "scanner": false,
+    "mods": false
+   }
+  },
+  {
+   "name": "the control: a backslash after a blank on the opener line",
+   "text": "cat <<E \\\n-\necho P03\nE\necho P05\n",
+   "lines": {
+    "3": "body",
+    "5": "code"
+   },
+   "named": {
+    "scanner": false,
+    "mods": false
+   }
+  },
+  {
+   "name": "in a $( ), a joined marker, closed later",
+   "text": "echo \"$(cat <<E\necho P02\\\nE\necho P04\nE\n)\"\necho P07\necho P08\n",
+   "lines": {
+    "2": "body",
+    "4": "body",
+    "7": "code",
+    "8": "code"
+   },
+   "named": {
+    "scanner": false,
+    "mods": true
+   }
+  },
+  {
+   "name": "in a $( ), a marker after a space, closed later",
+   "text": "echo \"$(cat <<E\necho P02\n E\necho P04\nE\n)\"\necho P07\necho P08\n",
+   "lines": {
+    "2": "body",
+    "4": "body",
+    "7": "code",
+    "8": "code"
+   },
+   "named": {
+    "scanner": false,
+    "mods": true
+   }
+  },
+  {
+   "name": "two heredocs, the first's marker joined and then on a line of its own",
+   "text": "cat /dev/fd/3 - 3<<A <<B\necho P02\\\nA\necho P04\nA\necho P06\nB\necho P08\n",
+   "lines": {
+    "2": "body",
+    "4": "body",
+    "6": "body",
+    "8": "code"
+   },
+   "named": {
+    "scanner": false,
+    "mods": true
+   }
+  },
+  {
+   "name": "two heredocs, the first's marker after a space, then the marker",
+   "text": "cat /dev/fd/3 - 3<<A <<B\necho P02\n A\necho P04\nA\necho P06\nB\necho P08\n",
+   "lines": {
+    "2": "body",
+    "4": "body",
+    "6": "body",
+    "8": "code"
+   },
+   "named": {
+    "scanner": false,
+    "mods": true
+   }
+  }
+ ]
+}

@@ -310,6 +310,21 @@ HEREDOC_WORD_END = set(" \t\n;&|<>()")
 # either one after a backslash, or a quote, $' and $" included. The limit mod-kit's hooks/commands.ts
 # keeps for the same reason (claude-config#2073), so `$((1<<2))` opens no heredoc there or here.
 MARKER_START = re.compile(r"""\\?[A-Za-z_]|\$?['"]""")
+# What a backslash and the character after it stand for in a dollar quote ($'...') that is an end
+# marker, where bash 3.2 and zsh 5.9, the shells a Bash call runs in, read it alike
+# (claude-config#3566): the escapes named here, and a character from 2 to 126 written as one or two
+# hex digits after an x or as one to three octal digits. Measured 2026-11-24 with texts that only
+# print, each as a -c text, a file and an eval: every escape named here, and all 250 markers that
+# spell a character from 2 to 126 as two hex digits or three octal ones. ksh 93u+ read the named
+# escapes and the octal ones the same way but for the line break (it ends the body at the two lines
+# the marker spells, the others at no line), and reads a third hex digit where the other two stop
+# at two. Any other backslash stays as written, because the two do not agree on it: a letter that
+# is no escape (bash keeps the backslash, zsh drops it), a u or a c, a $, an x with no digit, and
+# the characters 0, 1 and 127 and those past it. lib/heredoc-markers.json holds one marker of each
+# kind with the line every shell ends the body at.
+ANSI_ESCAPES = {"\\": "\\", "'": "'", '"': '"', "?": "?", "a": "\a", "b": "\b", "e": "\x1b", "E": "\x1b",
+                "f": "\f", "n": "\n", "r": "\r", "t": "\t", "v": "\v"}
+ANSI_ESCAPE = re.compile(r"\\(?:x([0-9A-Fa-f]{1,2})|([0-7]{1,3})|(.))", re.S)
 ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 # A case command's head up to its `in`, past any reserved words before it, and an esac ending one
 # (claude-config#2074): a pattern after the `in`, or after a `;;` or `;&`, ends at a `)` that closes
@@ -338,7 +353,15 @@ class Unreadable(Exception):
         self.at = at
 
 
-def heredoc_opener(s, i, marker_start=False, joins=None):
+def _ansi_escape(m):
+    """What one backslash escape in a dollar quote stands for (ANSI_ESCAPES), or the escape as written."""
+    if m.group(3) is not None:
+        return ANSI_ESCAPES.get(m.group(3), m.group())
+    value = int(m.group(1), 16) if m.group(1) else int(m.group(2), 8)
+    return chr(value) if 2 <= value <= 126 else m.group()
+
+
+def heredoc_opener(s, i, marker_start=False, joins=None, doubts=None):
     """The heredoc opened at s[i] ("<<"), as (marker, strip_tabs, quoted, end), or None.
 
     The marker is the word after the opener with its quotes removed, as the shell compares it with
@@ -347,6 +370,24 @@ def heredoc_opener(s, i, marker_start=False, joins=None):
     expands nothing in the body, and otherwise it expands it and runs every substitution in it
     (claude-config#2053). Measured on this Mac's bash and zsh, 2026-11-01. None when there is no word,
     or a quote in it never closes.
+
+    A dollar quote in the word (`$'...'`) ends at the first quote no backslash escapes, and its
+    escapes are read where bash and zsh read them alike (ANSI_ESCAPES, claude-config#3566): after
+    `<<$'E\\\\F'`, two backslashes, the marker is E, one backslash and F, the line both end the
+    body at, and after `<<$'p\\'6'` it is p'6. The text between the quotes was taken as written
+    and the next quote for its end, so the first ended the body at the line with two backslashes,
+    every command between those two lines read as body text while both shells ran it, and the
+    second was no heredoc at all. That is one reading, for every caller, and it is not every
+    shell's. dash knows no dollar quote: the $ is a character of its marker and the quote a plain
+    one, so no marker that holds a dollar quote ends the body at the same line in all of bash 3.2,
+    bash --posix, sh, dash, zsh, zsh emulating sh and ksh (measured 2026-11-24, each as a -c text,
+    a file and an eval; lib/heredoc-markers.json holds the lines, and test-shell-words-heredoc.sh
+    runs them against the shells of the machine it is on). bash and zsh differ too on an escape
+    that is not in ANSI_ESCAPES, on a dollar double quote (`$"EOF"` is EOF to bash, the reading
+    given here as it always was, and $EOF to zsh and dash) and on `$$'EOF'`. So doubts, a list, is
+    given where the $ of each dollar quote in the word stands, single or double, and a caller that
+    must not take one shell's reading for another's refuses on it: commands() names such a
+    heredoc in `unsure` for the caller that asks.
 
     With marker_start, also None when the word does not start as a marker is written (MARKER_START),
     for a reader that follows neither arithmetic nor, in some, quotes (claude-config#2080).
@@ -368,7 +409,7 @@ def heredoc_opener(s, i, marker_start=False, joins=None):
     if marker_start and not MARKER_START.match(s, m.end()):
         return None
     j, n = m.end(), len(s)
-    found = []
+    found, dollars = [], []
     if joins is not None:
         # The joins and blanks between the << and its word.
         while j < n and (s.startswith("\\\n", j) or s[j] in " \t"):
@@ -387,8 +428,19 @@ def heredoc_opener(s, i, marker_start=False, joins=None):
             word.append(s[j + 1])
             quoted = True
             j += 2
-        elif c == "'" or (c == "$" and s.startswith("$'", j)):
-            j += 2 if c == "$" else 1
+        elif c == "$" and s.startswith("$'", j):
+            dollars.append(j)
+            j += 2
+            k = j
+            while k < n and s[k] != "'":
+                k += 2 if s[k] == "\\" else 1
+            if k >= n:
+                return None
+            word.append(ANSI_ESCAPE.sub(_ansi_escape, s[j:k]))
+            quoted = True
+            j = k + 1
+        elif c == "'":
+            j += 1
             k = s.find("'", j)
             if k < 0:
                 return None
@@ -396,6 +448,8 @@ def heredoc_opener(s, i, marker_start=False, joins=None):
             quoted = True
             j = k + 1
         elif c == '"' or (c == "$" and s.startswith('$"', j)):
+            if c == "$":
+                dollars.append(j)
             j += 2 if c == "$" else 1
             k = j
             while k < n and s[k] != '"':
@@ -420,6 +474,8 @@ def heredoc_opener(s, i, marker_start=False, joins=None):
         return None
     if joins is not None:
         joins.extend(found)
+    if doubts is not None:
+        doubts.extend(dollars)
     return "".join(word), m.group(1) == "-", quoted, j
 
 
@@ -638,6 +694,12 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, un
     a backslash joins to the next line, which is named by its << to the end of its marker word
     (heredoc_opener). A caller that asks is given the shells' closing line where they agree on
     one; a caller that does not is given the reading it always was.
+
+    Named the same way, by its << to the end of its marker word, is a heredoc whose marker holds a
+    dollar quote, `$'...'` or `$"..."` (claude-config#3566, heredoc_opener's doubts): dash reads the
+    $ as a character of the marker, and bash and zsh differ on some of what the quotes hold, so no
+    such heredoc ends at one line in every shell. Its marker is read as bash and zsh read it where
+    those two agree, for a caller that asks and one that does not alike.
 
     The text is the command as written, quotes and all, and a command substitution's text stays
     inside the command that holds it as well as being read as commands of its own, which come first.
@@ -1088,16 +1150,21 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, un
             # that word: what follows was read as commands until now, and nothing read so is
             # dropped on the strength of the join (heredoc_opener, claude-config#3492). A caller
             # that does not ask is given the reading it always was.
+            # The same caller is given the heredoc's name where its marker holds a dollar quote,
+            # after which the seven shells never all end the body at one line (heredoc_opener's
+            # doubts, claude-config#3566): the marker read here is bash's and zsh's wherever those
+            # two agree, for every caller, and dash's nowhere.
             joins = None if unsure is None else []
-            opener = heredoc_opener(s, i, joins=joins)
+            doubts = None if unsure is None else []
+            opener = heredoc_opener(s, i, joins=joins, doubts=doubts)
             if opener:
                 before = s[f["start"]:i]
                 f["openers"].append((i, opener[3]))
                 at = i
                 word, strip_tabs, quoted, i = opener
-                if joins:
+                if joins or doubts:
                     unsure.append((at, i))
-                pending.append((word, strip_tabs, quoted, before, at, bool(joins)))
+                pending.append((word, strip_tabs, quoted, before, at, bool(joins or doubts)))
             else:
                 i += 2
             continue
@@ -2983,10 +3050,14 @@ def main(argv):
     elif mode == "heredoc-markers":
         # Each heredoc the text opens, read a line at a time as heredoc_openers reads one, printed as
         # <line number>TAB<marker>, so a scan written in awk reads markers as this file does
-        # (claude-config#2080).
+        # (claude-config#2080). The marker is everything after the first tab, so one that holds a
+        # tab (`$'E\tF'`) is whole. One that holds a line break (`$'E\nF'`) is given no row: no
+        # line of a body can be it, a row for it would be cut in two, and with no row such a scan
+        # reads the lines after it as code, never as a body with no end (claude-config#3566).
         for n, line in enumerate(data.split("\n"), 1):
             for op in heredoc_openers(line):
-                sys.stdout.write("%d\t%s\n" % (n, op[1]))
+                if "\n" not in op[1]:
+                    sys.stdout.write("%d\t%s\n" % (n, op[1]))
     elif mode == "split":
         if data.endswith("\n"):
             data = data[:-1]
