@@ -32,14 +32,15 @@
 # lists only mcp__claude_ai_ and mcp__posthog__, read 2026-11-26), which is where a plugin's server,
 # Better Stack's on the work MacBook, sits. Awake, nothing differs.
 #
-# FAIL CLOSED. What cannot be read is asked about, never passed: a name on one of these servers
-# with no tool after it; a payload that is not a tool call whose text names a tool the rule asks
-# about, or holds no tool name whole and names one of the three connectors (a name cut short
-# cannot be judged by its verb); and, with python3 or lib/connector-changes.py missing or failing,
-# every call to a server whose name holds regal, better or cal, a read included, naming what is
-# missing. Without lib/sleep.sh, or the python3 it reads the sleep record with, whether Dan is
-# asleep cannot be told, and the call is refused and never asked about, saying which is missing:
-# a question would be the one answer sleep mode can say yes to at night. The registration carries
+# FAIL CLOSED. What cannot be read is stopped, never passed: asked about while Dan is awake and
+# refused while he is asleep. That is a name on one of these servers with no tool after it; a
+# payload that is not a tool call whose text names a tool the rule asks about, or holds no tool
+# name whole and names one of the three connectors (a name cut short cannot be judged by its
+# verb); and, with lib/connector-changes.py missing or failing, every call to a server whose name
+# holds regal, better or cal, a read included, naming what is missing. Without lib/sleep.sh, or
+# without python3 (which reads both the rule and the sleep record), whether Dan is asleep cannot
+# be told, and every such call is refused and never asked about, saying which is missing: a
+# question would be the one answer sleep mode can say yes to at night. The registration carries
 # onFailure block, so a crash or a timeout stops the call.
 #
 # THE SCREEN. It runs on every MCP call, so it leaves before python3 starts unless the tool's name
@@ -121,7 +122,9 @@ decide() {
 }
 
 # The classifier is python3. Without it no name can be read against the rule, so every call the
-# screen let through is asked about, a read included, naming what is missing.
+# screen let through is stopped, a read included, naming what is missing: refused, since decide
+# cannot read the sleep record without python3 either. Without the library that holds the rule it
+# is asked about, or refused while Dan is asleep.
 named="${tool:-a tool this hook could not name}"
 if ps_reader_missing python3; then
   decide "this call" "$named could not be read against the rule, because python3 is not on PATH and it is what tells which Regal, Better Stack and Cal tools delete or change something live. Install python3."
