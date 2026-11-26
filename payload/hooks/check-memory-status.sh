@@ -87,11 +87,13 @@ done
 # The one bound every caller here shares, which kills the whole process group (lib/bounded-run.sh).
 . "$DIR/lib/bounded-run.sh" 2>/dev/null || refuse "$DIR/lib/bounded-run.sh is missing, so gh could not be called with a time limit. Refusing rather than calling it unbounded."
 
-is_number() { case "${1:-}" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
-CALL_SECONDS="${MEMORY_STATUS_CALL_SECONDS:-15}"
-TOTAL_SECONDS="${MEMORY_STATUS_TOTAL_SECONDS:-120}"
-is_number "$CALL_SECONDS" && [ "$CALL_SECONDS" -gt 0 ] || refuse "MEMORY_STATUS_CALL_SECONDS is '$CALL_SECONDS', which is not a number above zero."
-is_number "$TOTAL_SECONDS" && [ "$TOTAL_SECONDS" -gt 0 ] || refuse "MEMORY_STATUS_TOTAL_SECONDS is '$TOTAL_SECONDS', which is not a number above zero."
+# Read through lib/whole-number.sh (sourced by bounded-run.sh), which refuses anything but a number
+# above zero and cuts leading zeros, so 08 is 8 rather than an octal error in the arithmetic below
+# (L50).
+raw="${MEMORY_STATUS_CALL_SECONDS:-15}"
+CALL_SECONDS="$(whole_above_zero "$raw")" || refuse "MEMORY_STATUS_CALL_SECONDS is '$raw', which is not a number above zero."
+raw="${MEMORY_STATUS_TOTAL_SECONDS:-120}"
+TOTAL_SECONDS="$(whole_above_zero "$raw")" || refuse "MEMORY_STATUS_TOTAL_SECONDS is '$raw', which is not a number above zero."
 
 # The index first, then each entry file beside it, in name order.
 FILES=()

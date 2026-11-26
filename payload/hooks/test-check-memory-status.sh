@@ -254,6 +254,19 @@ check "the overall limit stops further calls" "$([ "$(printf '%s\n' "$CALLS" | g
 check "and the references never asked are said to be unchecked for that reason" "$(has "$OUT" "overall limit")"
 check "and the run exits 3" "$([ "$RC" -eq 3 ] && echo ok || echo "rc $RC: $OUT")"
 
+# The limits are read as numbers above zero with leading zeros cut: 08 is eight seconds, not an
+# octal error that leaves the remaining time empty (the lessons review of 523d52e), and a value that
+# is not a number above zero is refused rather than run unbounded or not at all.
+run "$d" "repos/fixture-org/eta/issues/60|0|$OPEN_PR" MEMORY_STATUS_TOTAL_SECONDS=08 MEMORY_STATUS_CALL_SECONDS=09
+check "limits written with a leading zero are read as decimal" "$([ "$RC" -eq 0 ] && echo ok || echo "rc $RC: $OUT")"
+check "and the reference is still asked about" "$([ "$(calls_to repos/fixture-org/eta/issues/60)" -eq 1 ] && echo ok || echo "calls: $CALLS")"
+for bad in 0 00 abc -5; do
+  run "$d" "" MEMORY_STATUS_TOTAL_SECONDS="$bad"
+  check "an overall limit of '$bad' is refused with exit 2" "$([ "$RC" -eq 2 ] && echo ok || echo "rc $RC: $OUT")"
+  run "$d" "" MEMORY_STATUS_CALL_SECONDS="$bad"
+  check "a per call limit of '$bad' is refused with exit 2" "$([ "$RC" -eq 2 ] && echo ok || echo "rc $RC: $OUT")"
+done
+
 # Precedence: a disagreement outranks a reference that could not be checked, which outranks a
 # skipped line, and each is still printed.
 d="$(mem mixed "- fixture-org/theta#70 open
@@ -287,7 +300,7 @@ check "an argument it does not know exits 2, rather than running as if it were n
 d="$(mem unreadable "- nothing here" locked.md "- fixture-org/iota#80 open")"
 chmod 000 "$d/locked.md"
 if [ -r "$d/locked.md" ]; then
-  echo "UNMEASURED: an unreadable memory file, because this user can read a file with no permissions"
+  echo "SUITE-PART-UNMEASURED an unreadable memory file, because this user can read a file with no permissions"
 else
   run "$d" ""
   check "a memory file it cannot read exits 3" "$([ "$RC" -eq 3 ] && echo ok || echo "rc $RC: $OUT")"
