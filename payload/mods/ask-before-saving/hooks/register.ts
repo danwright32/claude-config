@@ -1,7 +1,7 @@
 import { update } from 'claude-code'
 import type { EngineInterface, Hook, MatchedHook, Register } from 'claude-code'
 import { errorText } from './mod-kit/skew.ts'
-import { neverThrows } from './mod-kit/hold.ts'
+import { cutCall, cutCheck } from './mod-kit/hold.ts'
 import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
 import { toolArgs } from './mod-kit/toolargs.ts'
 // The one check of text Dan approves in a picker (#3321), read from mod-kit's copy by name, which
@@ -592,7 +592,14 @@ const removalsRead = async ($: EngineInterface, home: string, candidates: readon
       const { replaces, ...rest } = landed
       const said = replaces && c.keeps ? { ...rest, stays: true as const } : landed
       out.push({ ...shape, how: 'move', ...(c.to !== undefined ? { to: c.to } : {}), ...said })
-    } else out.push({ ...shape, how: c.how, ...(c.path !== undefined ? await gitHolds($, c.path) : { back: 'unknown' as const, why: 'its path could not be read from the command' }) })
+    } else
+      out.push({
+        ...shape,
+        how: c.how,
+        // A deletion that is a move onto a name another source of the command may take says where it was sent (#3505).
+        ...(c.how === 'delete' && c.sharedAt !== undefined ? { sharedAt: c.sharedAt } : {}),
+        ...(c.path !== undefined ? await gitHolds($, c.path) : { back: 'unknown' as const, why: 'its path could not be read from the command' }),
+      })
   }
   return out
 }
@@ -1464,11 +1471,11 @@ export const register: Register = on => {
   // replay runs OUTSIDE neverThrows: the call already ran beneath, so a refusal saying it did not run
   // would be untrue and could make Claude run it twice, and the tool's own failure reaches Claude
   // instead. Every catch before next stays inside neverThrows (#2039).
-  on('tool.call', { tool: TOOL_NAMES }, saveCall).catch(($, e, next) => next.called ? next(e) : neverThrows(() => rerunInGrace(next.budget, () => saveCall($, e, next), reason => ({ deny: reason })),() => ({ deny: cannotCheck(next.error) }), heldCall))
+  on('tool.call', { tool: TOOL_NAMES }, saveCall).catch(($, e, next) => cutCall('Ask before saving', e, next, { work: () => rerunInGrace(next.budget, () => saveCall($, e, next), reason => ({ deny: reason })), held: () => ({ deny: cannotCheck(next.error) }), last: heldCall }))
 
   // At tool.check `next` only reads the verdict beneath and runs nothing, so a failed check is judged
   // once more whether or not it had read it (#2026).
-  on('tool.check', saveCheck).catch(($, e, next) => neverThrows(() => rerunInGrace(next.budget, () => saveCheck($, e, next), reason => ({ decision: 'deny' as const, reason })),() => ({ decision: 'deny' as const, reason: cannotCheck(next.error) }), heldCheck))
+  on('tool.check', saveCheck).catch(($, e, next) => cutCheck('Ask before saving', next, { work: () => rerunInGrace(next.budget, () => saveCheck($, e, next), reason => ({ decision: 'deny' as const, reason })), held: () => ({ decision: 'deny' as const, reason: cannotCheck(next.error) }), last: heldCheck }))
 
   // Claude asks in Claude Code's own dialog (#777). A question tied to a waiting save is checked and
   // given the mod's own answers, and Dan's answer is read from the dialog's result.
@@ -1642,7 +1649,10 @@ export const register: Register = on => {
       if (missing.length) return { deny: `The question must name what would go (${missing.join(', ')}) and say why in one plain sentence, such as ${example}.` }
       const full = `${question} ${removalSaid(removes)}`
       const shown = { ...e, questions: [{ ...questions[0], question: full, header: REMOVAL_HEADER, options: removalOptions(removes), multiSelect: false }] } as typeof e
-      const unread = askFault(shown as unknown as Record<string, unknown>, removes.flatMap(r => [r.file, ...(r.to !== undefined ? [r.to] : []), ...(r.holds ?? [])]))
+      // The mod's own text in the question, set aside before it is judged: what goes, where a move
+      // puts it, what a folder holds, and the place a file is sent to where another may land on its
+      // name (#3505), which ends in the file's own name and so in whatever that name holds.
+      const unread = askFault(shown as unknown as Record<string, unknown>, removes.flatMap(r => [r.file, ...(r.to !== undefined ? [r.to] : []), ...(r.sharedAt !== undefined ? [r.sharedAt] : []), ...(r.holds ?? [])]))
       if (unread !== undefined) return { deny: `${unread.what} would not reach Dan as written: ${unread.fault}. He decides on the words he can read whole, so reword it and ask again, with the same metadata. If it is too long, remove fewer files in one command.` }
       if (ask.answers !== undefined && (typeof ask.answers !== 'object' || ask.answers === null || Object.keys(ask.answers).length > 0))
         return { deny: 'Ask Dan without answers already filled in: only his choice in the dialog decides this removal.' }
@@ -1761,7 +1771,7 @@ export const register: Register = on => {
     } catch (err) {
       return { deny: `Not saved: Ask before saving could not read Dan's answer (${message(err)}). Ask him again.` }
     }
-  })
+  }).catch(($, e, next) => cutCall('Ask before saving', e, next))
 
   // A reload drops the module's timers, never its approvals: each one waiting is timed again.
   on('session.start', async ($, e, next) => {

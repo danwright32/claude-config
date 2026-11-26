@@ -849,6 +849,45 @@ for m in grace-rerun grace-rerun-async; do
   printf '%s\n' "$out" | grep "$m reruns its hook" | grep -q 'withinGrace(next.budget' && check "#2039: and names $m, pointing it at withinGrace" ok \
     || check "#2039: and names $m, pointing it at withinGrace" "$out"
 done
+# #3655: hold.ts now builds the whole catch of a tool hook (cutCall, cutCheck, cutOwn, each on
+# neverThrows), and a catch answering straight through one of them passes, but only where the name
+# IS the kit's: imported under its own name from ./mod-kit/hold.ts. A function of the mod's own
+# with that name, another import renamed to it, or the name from another file is a mod's own catch
+# and fails as one. A rerun handed over as `work` with no check of the grace fails as the bare
+# rerun does.
+M9CUT="$TMPROOT/m9-cut"
+mkmodsrc "$M9CUT" clean-cuts "import { cutCall, cutCheck, cutOwn, withinGrace } from './mod-kit/hold.ts'
+const h = async (\$, e, next) => next(e)
+on('tool.call', h).catch((\$, e, next) => cutCall('the mod', e, next))
+on('tool.check', h).catch((\$, e, next) => cutCheck('the mod', next, { work: () => withinGrace(next.budget, () => h(\$, e, next), () => ({ decision: 'deny', reason: 'late' })) }))
+on('tool.call', { tool: 'mine' }, h).catch(async (\$, e, next) => cutOwn('the mod', next, {
+  held: () => ({ deny: 'x' }),
+}))"
+mkmodsrc "$M9CUT" cut-local "const cutCall = () => undefined
+const h = async (\$, e, next) => next(e); on('tool.call', h).catch((\$, e, next) => cutCall('the mod', e, next))"
+mkmodsrc "$M9CUT" cut-renamed "import { withinGrace as cutCheck } from './mod-kit/hold.ts'
+const h = async (\$, e, next) => next(e); on('tool.check', h).catch((\$, e, next) => cutCheck('the mod', next))"
+mkmodsrc "$M9CUT" cut-elsewhere "import { cutOwn } from './mine.ts'
+const h = async (\$, e, next) => next(e); on('tool.call', h).catch((\$, e, next) => cutOwn('the mod', next))"
+mkmodsrc "$M9CUT" cut-rerun "import { cutCall } from './mod-kit/hold.ts'
+const h = async (\$, e, next) => next(e); on('tool.call', h).catch((\$, e, next) => cutCall('the mod', e, next, { work: () => h(\$, e, next) }))"
+mkmodsrc "$M9CUT" cut-rerun-async "import { cutCheck } from './mod-kit/hold.ts'
+const h = async (\$, e, next) => next(e); on('tool.check', h).catch((\$, e, next) => cutCheck('the mod', next, {
+  work: async () => h(\$, e, next),
+}))"
+out="$(bash "$SHARED" "$M9CUT" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "#3655: a catch through a cut name that is not the kit's fails the run" ok || check "#3655: a catch through a cut name that is not the kit's fails the run" "exit=$code out=$out"
+for m in cut-local cut-renamed cut-elsewhere; do
+  printf '%s\n' "$out" | grep "$m keeps its own catch" | grep -q "does not import, under that name, from ./mod-kit/hold.ts" && check "#3655: and names $m, saying the name is not imported from the kit's copy" ok \
+    || check "#3655: and names $m, saying the name is not imported from the kit's copy" "$out"
+done
+for m in cut-rerun cut-rerun-async; do
+  printf '%s\n' "$out" | grep "$m reruns its hook" | grep -q 'withinGrace(next.budget' && check "#3655: a rerun handed to a shared catch as work fails in $m, pointed at withinGrace" ok \
+    || check "#3655: a rerun handed to a shared catch as work fails in $m, pointed at withinGrace" "$out"
+  printf '%s\n' "$out" | grep -q "$m keeps its own catch" && check "#3655: and $m's catch itself, the kit's, is not called its own" "$out" \
+    || check "#3655: and $m's catch itself, the kit's, is not called its own" ok
+done
+case "$out" in *clean-cuts*) check "#3655: catches answering through the kit's cutCall, cutCheck and cutOwn pass" "$out" ;; *) check "#3655: catches answering through the kit's cutCall, cutCheck and cutOwn pass" ok ;; esac
 # #1205: the status bar and the account room each followed a /login with their own copy of the
 # reading and its half minute wait. A mod hooking the login command itself fails the run, pointed at
 # modkit.login; a mod hooking the event mod-kit raises passes.
