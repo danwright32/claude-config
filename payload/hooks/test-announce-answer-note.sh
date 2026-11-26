@@ -232,14 +232,22 @@ run "$(aaf_talk "$T" decide-payload "$id" acme/widget "Hand back" "Not announcin
 check "the picker that asks whether a feature is announced is noted, in silence" "$([[ "$HRC" == 0 && -z "$HOUT" ]] && grep -q '"kind": "answered".*' "$STORE/record.jsonl" 2>/dev/null && grep -q '"source": "announce-discovery"' "$STORE/record.jsonl" && echo ok || echo "rc=$HRC out=$HOUT $(cat "$STORE/record.jsonl" 2>/dev/null)")"
 check "the note holds the feature and nothing he answered" "$(grep -q '"feature": "Hand back"' "$STORE/record.jsonl" && ! grep -q "Not announcing" "$STORE/record.jsonl" && echo ok || cat "$STORE/record.jsonl")"
 # A note that cannot be taken is said in words about this picker, with what reads his answer in.
+# The record's folder is under a FILE, which nothing can make a folder in, whoever runs the suite.
 STORE="$WORK/store-deciding-blocked/inner"
-mkdir -p "$WORK/store-deciding-blocked"; chmod 500 "$WORK/store-deciding-blocked"
+: > "$WORK/store-deciding-blocked"
 id="$(aaf_talk "$T" decide-put acme/widget "Hand over")"
 run "$(aaf_talk "$T" decide-payload "$id" acme/widget "Hand over" "Not announcing")"
 said="$(told "$HOUT")"
 check "a note of it that cannot be written is said, to Dan and the session, as an answer about announcing a feature" "$([[ "$HRC" == 0 && "$said" == *"whether a feature is announced to agents was not noted"* ]] && echo ok || echo "rc=$HRC $said")"
 check "and it says what reads his answer into the record: a Bash call that runs create-milestone.sh, or the merge" "$([[ "$said" == *"create-milestone.sh"* && "$said" != *"--add-label"* ]] && echo ok || echo "$said")"
-chmod 700 "$WORK/store-deciding-blocked"
+# One notice and no second: the words for an approval's missing note are not said after it.
+check "and it is the hook's one notice, with nothing about an approval of wording after it" "$([[ "$said" != NOT-A-NOTICE* && "$said" != *"will not find his approval"* && "$(printf '%s' "$HOUT" | grep -c .)" == 1 ]] && echo ok || echo "$HOUT")"
+# An approval's missing note still says its own remedy, and nothing about the milestone helper.
+F="$WORK/deciding-wording.md"; printf '%s\n' "$POST" > "$F"
+id="$(aaf_talk "$T" put acme/widget "$F")"
+run "$(aaf_talk "$T" payload "$id" acme/widget "$F")"
+said="$(told "$HOUT")"
+check "an approval's note that cannot be written still says the label command reads his answer in" "$([[ "$said" == *"--add-label"* && "$said" != *"create-milestone.sh"* ]] && echo ok || echo "$said")"
 STORE="$WORK/store"
 
 echo "the record is this suite's own"

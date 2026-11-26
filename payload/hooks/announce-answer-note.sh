@@ -68,11 +68,12 @@ THEN="A merge of the announcement's pull request through lib/merge-when-ready.sh
 # What a missing note of it costs, and what reads his answer in, are its own: chosen by what is being
 # said, so a picker the library read from the transcript is spoken of as what it was.
 THEN_FEATURE="A session that names no transcript of its own (a merge through lib/merge-when-ready.sh) will not find his answer until a hook reads this session's transcript, which a Bash call that runs create-milestone.sh by name does, and so does a merge typed in this session. He does not need to be asked again."
-say() {
+say() {  # one notice, then the hook is done: hook_allow_notice leaves
+  local then="$THEN"
   case "$1" in
-    *"whether a feature is announced"*) hook_allow_notice "ANNOUNCE ANSWER: $1 $THEN_FEATURE" PostToolUse ;;
+    *"whether a feature is announced"*) then="$THEN_FEATURE" ;;
   esac
-  hook_allow_notice "ANNOUNCE ANSWER: $1 $THEN" PostToolUse
+  hook_allow_notice "ANNOUNCE ANSWER: $1 $then" PostToolUse
 }
 
 # The shared reader cleans the payload before python3 parses it (claude-config#1944), and holds the

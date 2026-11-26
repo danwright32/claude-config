@@ -510,7 +510,11 @@ check "run again, it writes no second line" "$(passed "$r" && [ "$(decided_lines
 aaf_talk "$D" decide acme/widget "Hand over" "Not announcing" prefilled
 r="$(TALK="$D" run "$HELPER_CALL")"
 check "a picker that was never put to him is said beside the call, to Dan and the session" "$([[ "$r" == "none rc=0||"*"Hand over"*"already filled in"* ]] && echo ok || echo "$r")"
+# One job per call: a call that also names the label is judged for the label alone, inside the time
+# the hook is registered with, and reads no answer in.
 forget
+r="$(TALK="$D" run "$HELPER_CALL; echo $LABEL")"
+check "a call running the helper that also names the label reads nothing in" "$([ "$(decided_lines)" = 0 ] && echo ok || echo "$r $(decided_lines) lines")"
 r="$(broken "$HELPER_CALL")"
 check "with its rule file gone, a call running the helper is refused, saying the hook did not run" "$([[ "$r" == *"announce-label-ask.sh failed"*" rc=2" ]] && echo ok || echo "$r")"
 

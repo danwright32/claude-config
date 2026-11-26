@@ -72,7 +72,10 @@ JUDGES="one that puts the changelog/announce label on a pull request, or writes 
 payload="$(ps_clean_payload "$payload")"
 # A payload nothing can read as a call is judged by its words (#1922, #2057): refused when it names
 # the label, the record or the library, naming the payload, and passed otherwise. It looks for the
-# same four spellings judged_call above does, in any letter case: GitHub reads a label's name so, and a Mac's
+# four spellings judged_call above knows those three by, and not for the milestone helper's name,
+# which is read for and never refused over (claude-config#3669): a call running the helper whose
+# payload cannot be read goes ahead, and the helper refuses in its own words when the record holds
+# no answer of Dan's. They are matched in any letter case: GitHub reads a label's name so, and a Mac's
 # disk reads the record's folder so. The words are looked for in a lower case copy of the payload,
 # so the refusal names what it found as a person writes it and never as a pattern.
 ps_parse_payload "$payload" raw >/dev/null \

@@ -608,12 +608,20 @@ def main():
         return deny("this command runs lib/" + LIBRARY_FILE + ", or may, in a form that can write " + RECORD_IS + ": "
                     + held + ". " + LIBRARY_RULE)
     notes = []
-    if MILESTONE_HELPER in command.lower():
+    if MILESTONE_HELPER in command.lower() and LABEL not in command.lower():
         # The milestone helper is about to run (claude-config#3669). It takes a plan's "announce":
         # "yes" or "no" only from the record, which only a hook writes his answer to, so his pickers
         # about announcing a feature are read in here, from the session making the call and from
         # the sessions the record notes. Nothing about the call is judged: what could not be read
         # in is said beside it, and the helper then refuses in its own words.
+        #
+        # The helper is found by its file name anywhere in the call, so a call that only names it
+        # (a search, a commit message) reads his answers in too. That is the same reading a merge
+        # does, of the session's own pickers, and it writes nothing he did not answer.
+        #
+        # ONE JOB PER CALL: a call that also names the label is judged for the label alone, whose
+        # reads already fill the time this hook is registered with (GITHUB_SECONDS, above). His
+        # answers are then not read in, and the helper says so in its own refusal: run it apart.
         notes += approval.read_answers(data)
     why = judge_label(command, cwd, data, notes)
     if why:
