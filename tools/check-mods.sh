@@ -268,18 +268,67 @@ done
 # uses EVERY route whatever build is installed, so a hook that is dead on the newest build fails on
 # every Mac and on CI; only the comparison with an installed build further down holds that build to
 # the routes listed for it.
+#
+# A route can carry a matcher, written as Claude Code writes it (session.append{door=attachment}):
+# the guard's handler then hears only the calls whose fields match, and so does a mod's hook with
+# one. A hook hears a route's calls unless the two name one field with different values, so a hook on
+# session.append with no door is passed over on these doors and runs on the others (#3697). Read
+# from the builds installed on the personal MacBook on 2026-11-25, 2.1.330 to 2.1.332, each of which
+# routes every route below that has no build of its own; earlier builds were never read for the
+# routes #3697 added (the session.append doors, telemetry.log and session.identity), so they are held
+# from the list's earliest build, which reports more, never less. The documentation says
+# telemetry.log is passed over from 2.1.328; no build before 2.1.330 was read to confirm it.
+# session.identity's handler refuses a user tier caller and routes every other, so no call of it
+# reaches a user tier hook.
 BYPASSED_ROUTES_SINCE="attribution.text	0
 classic.*	0
 prompt.attachment	2.1.299
 prompt.compose	0
 prompt.context	0
 prompt.section	0
+session.append{door=attachment}	0
+session.append{door=compaction}	0
+session.append{door=hook-context}	0
 session.compact	2.1.299
+session.identity	0
 session.info	2.1.331
 session.redact	2.1.331
 settings.read	0
-skill.prompt	0"
-BYPASSED_ROUTES="$(printf '%s\n' "$BYPASSED_ROUTES_SINCE" | cut -f1)"
+skill.prompt	0
+telemetry.log{to=collector}	0"
+# The routes the security default sends past the user tier for SOME of their calls (#3697): its
+# handler routes on a condition (a call from the Skill tool, a caller in the prepend or append tier,
+# its own reads) and hands every other call to the tier beneath. A hook on one runs, but not for
+# those calls. Read from the same builds, 2.1.330 to 2.1.332, each routing all of them.
+BYPASSED_SOME_SINCE="env.get	0
+fs.list	0
+fs.stat{resolve=true}	0
+session.append{door=note}	0
+session.append{door=tool-message}	0
+ui.log	0
+wasm.compile	0"
+# What the documentation names as passed over, so a route it names that the reading of a build cannot
+# find is said on a line of its own (#3697): either the reading misses a shape the route is written
+# in, or the build does not route it. From the table "Know which hooks of a user's mod don't run" on
+# code.claude.com/docs/en/plugins/mods/admin, read on 2026-11-25, each held from the build the page
+# gives or else the one the lists above hold it from, and from the guard's own readme for session.info, session.redact and session.identity. A route
+# named without a matcher is found when the build routes the event with any matcher.
+DOCUMENTED_ROUTES_SINCE="attribution.text	0
+classic.*	0
+prompt.attachment	2.1.299
+prompt.compose	0
+prompt.context	0
+prompt.section	0
+session.append{door=attachment}	0
+session.append{door=compaction}	0
+session.append{door=hook-context}	0
+session.compact	2.1.299
+session.identity	0
+session.info	2.1.331
+session.redact	2.1.331
+settings.read	0
+skill.prompt	0
+telemetry.log	2.1.328"
 BYPASS_KNOWN="${CHECK_MODS_BYPASS_KNOWN:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sec-default-bypassed-hooks.tsv}"
 # Whether build $1 is at least build $2, compared number by number (2.1.40 is before 2.1.299).
 build_at_least(){   # $1 = build  $2 = first build
@@ -289,28 +338,64 @@ build_at_least(){   # $1 = build  $2 = first build
     exit 0 }'
 }
 # The routes build $1 is held to: those first routed at or before it, or every one when $1 is empty.
-routes_for_build(){   # $1 = build, or empty when it could not be read
+routes_for_build(){   # $1 = build, or empty when it could not be read  $2 = a list above (default: every call)
   local r since
   while IFS=$'\t' read -r r since; do
     [ -n "$r" ] || continue
     if [ -z "$1" ] || build_at_least "$1" "$since"; then printf '%s\n' "$r"; fi
-  done <<< "$BYPASSED_ROUTES_SINCE"
+  done <<< "${2-$BYPASSED_ROUTES_SINCE}"
 }
-is_bypassed(){   # $1 = event name
-  local r
+# The event of a route or hook key, and its matcher pairs (k=v joined by commas, empty for none).
+key_event(){ printf '%s' "${1%%\{*}"; }
+key_pairs(){ case "$1" in *\{*\}) local p="${1#*\{}"; printf '%s\n' "${p%\}}" ;; esac; }
+# The routes of list $2 a hook keyed $1 hears: its event matches the route's (classic.* is a
+# pattern), and no field both match on has two different values.
+routes_heard(){   # $1 = hook key  $2 = a list above
+  local r since rev rp hp p k
+  hp=",$(key_pairs "$1"),"
   # Read line by line, never word split, where classic.* would be expanded as a file pattern.
-  while IFS= read -r r; do
+  while IFS=$'\t' read -r r since; do
+    [ -n "$r" ] || continue
+    rev="$(key_event "$r")"
     # Unquoted on purpose: classic.* is a pattern, and a dot in the others is a dot.
     # shellcheck disable=SC2254
-    case "$1" in $r) return 0 ;; esac
-  done <<< "$BYPASSED_ROUTES"
-  return 1
+    case "$(key_event "$1")" in $rev) ;; *) continue ;; esac
+    rp="$(key_pairs "$r")"
+    while IFS= read -r p; do
+      [ -n "$p" ] || continue
+      k="${p%%=*}"
+      case "$hp" in *",$k="*) case "$hp" in *",$p,"*) ;; *) continue 2 ;; esac ;; esac
+    done <<< "$(printf '%s\n' "$rp" | tr ',' '\n')"
+    printf '%s\n' "$r"
+  done <<< "$2"
+}
+# The fields any route of a hook's event matches on, the only ones of a hook's matcher its key keeps,
+# so a hook's key changes only where a route reads its matcher.
+route_fields(){   # $1 = event
+  local r since rev
+  while IFS=$'\t' read -r r since; do
+    [ -n "$r" ] || continue
+    rev="$(key_event "$r")"
+    # shellcheck disable=SC2254
+    case "$1" in $rev) key_pairs "$r" | tr ',' '\n' | sed -n 's/=.*//p' ;; esac
+  done <<< "$BYPASSED_ROUTES_SINCE
+$BYPASSED_SOME_SINCE"
+}
+hook_key(){   # $1 = event  $2 = the hook's matcher pairs, k=v joined by commas
+  local fields kept
+  fields="$(route_fields "$1" | LC_ALL=C sort -u)"
+  kept="$(printf '%s\n' "$2" | tr ',' '\n' | awk -F= 'NR == FNR { if ($0 != "") f[$0] = 1; next } ($1 in f)' <(printf '%s\n' "$fields") - | LC_ALL=C sort -u | paste -sd, -)"
+  if [ -n "$kept" ]; then printf '%s{%s}\n' "$1" "$kept"; else printf '%s\n' "$1"; fi
 }
 # Every event a mod's own hook files register, one per line: on('<event>' in command position, in
 # hooks/ outside its tests, with whole comment lines taken out first so a comment naming one is not
 # one. Only a line that IS a comment is taken out: a // later in a line may be inside a string (a
 # URL), and cutting there would hide a hook after it (lessons review of #879). A trailing comment
 # naming an event is read as a hook, which fails loudly rather than passing a dead one.
+# Each line: the event, a tab, and the hook's matcher where it is an object literal written before
+# the handler, as k=v pairs joined by commas (#3697). Only a field whose value is a string, true or
+# false is kept: one the reading cannot see is left out, so the hook is read as hearing more calls,
+# and a hook it cannot place is reported rather than passed.
 events_of(){   # $1 = mod dir
   perl -MFile::Find -e '
     my @f;
@@ -319,7 +404,15 @@ events_of(){   # $1 = mod dir
       open(my $h, "<", $f) or die "cannot read $f: $!\n";
       local $/; my $s = <$h>; close $h;
       $s =~ s{^[ \t]*//[^\n]*}{}mg;
-      while ($s =~ /(?<![\w.\$])on\(\s*[\x27"]([A-Za-z][\w.*]*)[\x27"]/g) { print "$1\n" }
+      while ($s =~ /(?<![\w.\$])on\(\s*[\x27"]([A-Za-z][\w.*]*)[\x27"](?:\s*,\s*\{([^{}]*)\})?/g) {
+        my ($ev, $m) = ($1, $2 // "");
+        my @p;
+        for my $kv (split /,/, $m) {
+          next unless $kv =~ /^\s*[\x27"]?(\w+)[\x27"]?\s*:\s*(?:\x27([^\x27]*)\x27|"([^"]*)"|(true|false))\s*$/;
+          push @p, "$1=" . ($2 // $3 // $4);
+        }
+        print "$ev\t" . join(",", sort @p) . "\n";
+      }
     }' "$1/hooks"
 }
 known_bypass=""
@@ -339,18 +432,33 @@ for d in "${mods[@]}"; do
     failed=1
     continue
   fi
+  # Each hook by its key: the event, with the part of its matcher a route reads (#3697).
+  keys=""
+  while IFS=$'\t' read -r ev pairs; do
+    [ -n "$ev" ] || continue
+    keys="$keys$(hook_key "$ev" "$pairs")
+"
+  done <<< "$evs"
+  keys="$(printf '%s' "$keys" | LC_ALL=C sort -u)"
   # Read line by line, never word split: classic.* would be expanded as a file pattern.
   while IFS= read -r ev; do
     [ -n "$ev" ] || continue
-    is_bypassed "$ev" || continue
+    every="$(routes_heard "$ev" "$BYPASSED_ROUTES_SINCE")"
+    some="$(routes_heard "$ev" "$BYPASSED_SOME_SINCE")"
+    [ -n "$every$some" ] || continue
     if printf '%s\n' "$known_bypass" | grep -qxF "$name	$ev"; then continue; fi
-    echo "check-mods: $name hooks $ev, which Claude Code's built-in security default sends past the user tier mods load in wherever it sits first (#875), so it runs only while /Library/Application Support/ClaudeCode/managed-settings.json keeps it out of first place (#876). Move it to an event that reaches a mod (tool.check for a PreToolUse check, turn.complete, command.run, session.end), or list it in $BYPASS_KNOWN with the issue deciding it."
+    how="sends past the user tier mods load in"
+    [ -n "$every" ] || how="sends past the user tier mods load in for some of its calls"
+    heard="$(printf '%s\n%s\n' "$every" "$some" | grep -v '^$' | paste -sd' ' -)"
+    as=""
+    case "$heard" in *\{*) as=" (as it routes $heard)" ;; esac
+    echo "check-mods: $name hooks $ev, which Claude Code's built-in security default $how$as wherever it sits first (#875), so it runs only while /Library/Application Support/ClaudeCode/managed-settings.json keeps it out of first place (#876). Move it to an event that reaches a mod (tool.check for a PreToolUse check, turn.complete, command.run, session.end), or list it in $BYPASS_KNOWN with the issue deciding it."
     failed=1
-  done <<< "$(printf '%s\n' "$evs" | LC_ALL=C sort -u)"
+  done <<< "$keys"
   # A listed hook this mod no longer registers: the line comes down, or it would excuse the next one.
   while IFS= read -r ev; do
     [ -n "$ev" ] || continue
-    if ! printf '%s\n' "$evs" | grep -qxF "$ev"; then
+    if ! printf '%s\n' "$keys" | grep -qxF "$ev"; then
       echo "check-mods: $name no longer hooks $ev, so its line in $BYPASS_KNOWN must come down."
       failed=1
     fi
@@ -680,29 +788,75 @@ if [ -z "$bin" ] || [ ! -x "$bin" ]; then
   exit 3
 fi
 
-# The list of bypassed events above, against the routes this build's security default really has
-# (#875, L41): each is the literal e("<event>",(n,o,t)=>t.to(o,"append")) in its code, whatever the
-# minifier names its variables. A build that adds one would leave a new dead hook unflagged, and one
-# that drops one would flag a hook that now runs, so either difference fails. Read from the file the
-# command resolves to; a file holding no route at all (a stub, another build layout) is said, not
-# passed.
+# The lists of bypassed events above, against the routes this build's security default really has
+# (#875, L41, #3697), whatever the minifier names its variables. Each is one registration in its
+# code, in one of three shapes, with or without a matcher before the handler:
+#   e("classic.*",(n,o,t)=>t.to(o,"append"))                              routes every call
+#   e("session.append",{door:"attachment"},(n,o,t)=>t.to(o,"append"))     the same, with a matcher
+#   e("session.identity",(n,o,t)=>C?se(t.origin.plugin):t.to(o,"append")) refuses or routes: every call
+#   e("ui.log",(n,o,t)=>C?t.to(o,"append"):t(o))                          routes or passes on: some calls
+# A conditional handler whose other branch calls the tier beneath, or hands it on, routes some calls;
+# one whose other branch does neither routes every call. A handler with a body in braces, or async,
+# is not read (2.1.332's tool.check, tool.register and the like, which run the tier beneath too).
+# A build that adds a route would leave a new dead hook unflagged, and one that drops one would flag
+# a hook that now runs, so either difference fails, for each list. Read from the file the command
+# resolves to; a file holding no route at all (a stub, another build layout) is said, not passed.
 bin_file="$(readlink -f "$bin" 2>/dev/null || printf '%s' "$bin")"
 # Which build this is decides which routes it is held to (#1185); cc_now was read once, at the top.
-routes_now="$(grep -a -o -E '[A-Za-z_$]\("[A-Za-z.*]+",\([A-Za-z_$]+,[A-Za-z_$]+,[A-Za-z_$]+\)=>[A-Za-z_$]+\.to\([A-Za-z_$]+,"append"\)\)' "$bin_file" 2>/dev/null \
-  | sed -E 's/^.\("([^"]+)".*/\1/' | LC_ALL=C sort -u || true)"
-if [ -z "$routes_now" ]; then
+rid='[A-Za-z_$][A-Za-z0-9_$]*'
+rval='("[A-Za-z0-9_.-]*"|![01])'
+rhead="[A-Za-z_\$]\\(\"[A-Za-z.*]+\",(\\{[A-Za-z]+:$rval(,[A-Za-z]+:$rval)*\\},)?\\($rid,$rid,$rid\\)=>"
+rto="$rid\\.to\\($rid,\"append\"\\)"
+rcall="$rid\\([^();{}?:]*\\)"
+rcond='[^?,;{}]*\?'
+# Each route found, a tab, and every or some.
+routes_read="$(LC_ALL=C grep -a -o -E "$rhead($rto\\)|$rcond$rto:$rcall\\)|$rcond$rcall:$rto\\))" "$bin_file" 2>/dev/null \
+  | perl -ne '
+      next unless /^.\("([^"]+)",(?:\{([^{}]*)\},)?\(([\w\$]+),([\w\$]+),([\w\$]+)\)=>(.*)\)$/;
+      my ($ev, $m, $b, $c, $body) = ($1, $2 // "", $4, $5, $6);
+      my @p;
+      for (split /,/, $m) { push @p, "$1=" . (defined $2 ? $2 : ($3 eq "0" ? "true" : "false")) if /^(\w+):(?:"([^"]*)"|!([01]))$/ }
+      my $key = $ev . (@p ? "{" . join(",", sort @p) . "}" : "");
+      my $to = "$c.to($b,\"append\")";
+      my $how;
+      if ($body eq $to) { $how = "every" }
+      elsif ($body =~ /^[^?]*\?([^:]*):(.*)$/) {
+        my $other = $1 eq $to ? $2 : $1;
+        my ($f, $args) = $other =~ /^([\w\$]+)\((.*)\)$/ or next;
+        $how = ($f eq $c || grep { $_ eq $c } split /,/, $args) ? "some" : "every";
+      } else { next }
+      print "$key\t$how\n";
+    ' | LC_ALL=C sort -u || true)"
+if [ -z "$routes_read" ]; then
   echo "check-mods: UNMEASURED: no security default route was found in $bin_file, so the list of bypassed events was not compared with this build. The list in tools/check-mods.sh still applies." >&2
 else
   if [ -z "$cc_now" ]; then
     echo "check-mods: could not read which Claude Code build $bin is (from $bin --version), so its security default routes were compared with every route listed in tools/check-mods.sh, as the newest build's are." >&2
   fi
-  routes_list="$(routes_for_build "$cc_now" | LC_ALL=C sort -u)"
-  added="$(LC_ALL=C comm -13 <(printf '%s\n' "$routes_list") <(printf '%s\n' "$routes_now") | paste -sd' ' -)"
-  dropped="$(LC_ALL=C comm -23 <(printf '%s\n' "$routes_list") <(printf '%s\n' "$routes_now") | paste -sd' ' -)"
-  if [ -n "$added$dropped" ]; then
-    echo "check-mods: this Claude Code build (${cc_now:-version unread})'s security default routes past the user tier: $(printf '%s\n' "$routes_now" | paste -sd' ' -). The list in tools/check-mods.sh for this build differs${added:+ (not listed: $added)}${dropped:+ (listed, no longer routed: $dropped)}. Update BYPASSED_ROUTES_SINCE (each route with the first build that routes it), then check every mod hook on the events that changed."
+  # $1 = how (every or some)  $2 = the list  $3 = its name  $4 = what the routes are said as
+  compare_routes(){
+    local now list added dropped
+    now="$(printf '%s\n' "$routes_read" | awk -F'\t' -v h="$1" '$2 == h { print $1 }')"
+    list="$(routes_for_build "$cc_now" "$2" | LC_ALL=C sort -u)"
+    added="$(LC_ALL=C comm -13 <(printf '%s\n' "$list" | grep -v '^$') <(printf '%s\n' "$now" | grep -v '^$') | paste -sd' ' -)"
+    dropped="$(LC_ALL=C comm -23 <(printf '%s\n' "$list" | grep -v '^$') <(printf '%s\n' "$now" | grep -v '^$') | paste -sd' ' -)"
+    if [ -n "$added$dropped" ]; then
+      echo "check-mods: this Claude Code build (${cc_now:-version unread})'s security default routes past the user tier$4: $(printf '%s\n' "$now" | paste -sd' ' -). The list in tools/check-mods.sh for this build differs${added:+ (not listed: $added)}${dropped:+ (listed, no longer routed: $dropped)}. Update $3 (each route with the first build that routes it), then check every mod hook on the events that changed."
+      failed=1
+    fi
+  }
+  compare_routes every "$BYPASSED_ROUTES_SINCE" BYPASSED_ROUTES_SINCE ""
+  compare_routes some "$BYPASSED_SOME_SINCE" BYPASSED_SOME_SINCE " for some of their calls"
+  # A route the documentation names that this reading did not find, in any shape or either list, is
+  # said on a line of its own (#3697): the reading may be missing a shape, which nothing else shows.
+  found="$(printf '%s\n' "$routes_read" | cut -f1)"
+  while IFS= read -r doc; do
+    [ -n "$doc" ] || continue
+    if printf '%s\n' "$found" | grep -qxF "$doc"; then continue; fi
+    case "$doc" in *\{*) ;; *) printf '%s\n' "$found" | awk -v d="$doc{" 'index($0, d) == 1 { f = 1 } END { exit !f }' && continue ;; esac
+    echo "check-mods: the documentation names $doc as a route Claude Code's built-in security default sends past the user tier on this build (${cc_now:-version unread}), and the reading of $bin_file did not find it in any shape it reads. Either it is written in a shape the reading does not know, so a mod's hook on it is not checked, or this build does not route it. Find which before changing a list in tools/check-mods.sh."
     failed=1
-  fi
+  done <<< "$(routes_for_build "$cc_now" "$DOCUMENTED_ROUTES_SINCE")"
 fi
 
 # The engine's verdict lines: the item marks and the failure summary, a few at most. When there is
