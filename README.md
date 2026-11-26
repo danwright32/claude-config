@@ -1989,6 +1989,19 @@ the record. `hooks/test-announce-answer-note.sh` holds it, and `hooks/test-merge
 merges an announcement through the helper, with the real gate and the real hook, on an approval
 that was only ever in the session.
 
+His last answer on a wording decides, on the record as in the session (#3742). An approval on the
+record used never to be taken back: he approved, it was recorded, the session asked again about
+the same unchanged file, he answered `Not yet`, and the merge went through on the recorded
+approval. A hook run that reads a picker of this source he answered with anything but Approve
+(`Not yet`, or words of his own) now writes a `withdrawn` line with when he answered and the hash
+of the wording he answered about (the hash noted when he answered, else the file's while it has
+not changed since). An approval of that repository and wording given before that answer no longer
+counts, whichever session or file it came from, one given after it does, and the refusal says he
+approved it and then answered otherwise. When the wording can no longer be hashed the line names
+the file and takes back his earlier approvals naming that file. A picker that came back in error
+or closed on its own timeout is no answer of his and takes nothing back from the record; it gets
+a `settled` line, so a noted session whose pickers all have an outcome is not read back again.
+
 One approval covers one pull request (Dan, 2026-11-25, by picker: "One approval, one pull request").
 An approval is one answer of his in one picker, counted once by the session and the picker it came
 from. An approval nobody has used covers whichever pull request reaches the merge gate first, so he

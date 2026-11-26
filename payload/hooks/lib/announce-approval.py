@@ -56,13 +56,31 @@ $ANNOUNCE_APPROVALS_DIR when set (the tests) and else $CLAUDE_HOME/state/announc
 Mac only (the state folder is never synced, as the record of approved test project lines is kept).
 One JSON object a line, each carrying its repository:
     {"kind": "approved", "repo": "<owner/name>", "hash": "<sha256>", "at": "<when>", "session": "<id>",
-     "picker": "<the picker's tool_use id>"}
+     "picker": "<the picker's tool_use id>", "file": "<the wording file>", "answered": "<when he answered>"}
+    {"kind": "withdrawn", "repo": ..., "hash": "<sha256, or null>", "file": ..., "session": ..., "picker": ...,
+     "answered": ..., "why": "<why there is no hash, or null>", "at": ...}
+    {"kind": "settled", ...the same fields, for a picker that came back with no answer of his}
     {"kind": "used", "repo": ..., "hash": ..., "pr": <number>, "claim": true, "closes": null, ...}
     {"kind": "used", "repo": ..., "hash": ..., "pr": <number>, "closes": [...], "unread": ..., "at": ...}
 A hook run that reads his Approve writes the approved line, unless the call is a subagent's (the
 payload carries agent_id): a subagent's call counts his picker for that call and writes nothing. When
 the record cannot take a line, the main session's call still counts his picker and the failed save
 is said beside it, as lib/db-apply-approval.py does for a line he approved (Dan, 2026-11-16).
+
+HIS LAST ANSWER ON A WORDING DECIDES, on the record as in the session (claude-config#3742). An
+approval on the record used never to be taken back: he approved, the approval was recorded, the
+session asked again about the same unchanged file, he answered `Not yet`, and the merge still went
+through on the recorded approval. So a hook run that reads a picker of this source he answered
+with anything but Approve (`Not yet`, or words of his own) writes a `withdrawn` line: the
+repository, when he answered, and the hash of the wording he answered about, which is the hash
+noted when he answered, else the file's while it has not changed since. An approval of that
+repository and wording that he gave BEFORE that answer no longer counts, whichever session or file
+it came from, and one he gives after it does. When the wording he answered about cannot be hashed
+any more (no note, and the file changed since), the line names the file alone and takes back his
+earlier approvals that name that file. A picker that came back with no answer of his (in error, or
+closed by its own timeout) takes nothing back from the record: it gets a `settled` line, so that a
+noted session whose pickers all have an outcome on the record is not read back again. A subagent's
+call counts these for that call and writes nothing, as with his Approve.
 
 HIS ANSWER IS NOTED WHEN HE GIVES IT (claude-config#3742). An approval used to reach the record only
 when a later hook read the session's transcript: the label hook, on a command putting the label on,
@@ -225,12 +243,17 @@ RECORD_ONLY = ("this command reads the record only: a picker of his in this sess
                "record, when a hook asks, which is when the label goes on or the merge runs")
 
 
+_PARTS = {}
+
+
 def _part(name, file):
-    """A library beside this file, loaded by its path, never by name."""
-    spec = importlib.util.spec_from_file_location(name, os.path.join(HERE, file))
-    lib = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(lib)
-    return lib
+    """A library beside this file, loaded by its path, never by name, once for one run."""
+    if name not in _PARTS:
+        spec = importlib.util.spec_from_file_location(name, os.path.join(HERE, file))
+        lib = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(lib)
+        _PARTS[name] = lib
+    return _PARTS[name]
 
 
 def claude_home():
@@ -353,14 +376,43 @@ def _text(value):
     return value if isinstance(value, str) and value else None
 
 
-def _approval_keys(entries, found, repo, digest):
-    """Each approval of digest for repo, once: the (session, picker) it came from, on the record or
-    found in a session's transcript and not yet on it. A line naming neither is one approval with
-    every other such line, so a line repeated is never a second approval."""
-    keys = {(_text(e.get("session")), _text(e.get("picker"))) for e in entries or []
-            if e.get("kind") == "approved" and e.get("repo") == repo and e.get("hash") == digest}
-    keys.update((_text(f["session"]), f["picker"]) for f in found if f["repo"] == repo and f["hash"] == digest)
-    return keys
+def _when(line):
+    """When the answer a line records was given, in nanoseconds: his answer's own time where the line
+    carries it (answered), else when the line was written (at), else 0, the oldest there is."""
+    stamp_ns = _part("db_apply_approval_shared", "db-apply-approval.py")._stamp_ns
+    return stamp_ns(line.get("answered")) or stamp_ns(line.get("at")) or 0
+
+
+def _approval_keys(entries, found, repo, digest, closed=()):
+    """(keys, back). keys is each approval of digest for repo that stands, once: the (session,
+    picker) it came from, on the record or found in a session's transcript and not yet on it. A
+    line naming neither is one approval with every other such line, so a line repeated is never a
+    second approval.
+
+    HIS LAST ANSWER ON A WORDING DECIDES (module docstring): an approval older than a `withdrawn`
+    line of the same repository and wording does not stand. A withdrawal that could not be hashed
+    names the file instead, and takes back the older approvals that name that file. closed is the
+    withdrawals found in a session's transcript and not yet on the record. back is the newest
+    withdrawal that took an approval of this wording back, or None."""
+    given = {}
+    for e in list(entries or []) + list(found):
+        if e.get("kind") == "approved" and e.get("repo") == repo and e.get("hash") == digest:
+            key = (_text(e.get("session")), _text(e.get("picker")))
+            if key not in given or _when(e) > given[key][0]:
+                given[key] = (_when(e), _text(e.get("file")))
+    backs = [(_when(w), w) for w in list(entries or []) + list(closed)
+             if w.get("kind") == "withdrawn" and w.get("repo") == repo]
+    keys, back = set(), None
+    for key, (when, file) in given.items():
+        took = [(at, w) for at, w in backs if at > when and (
+            w.get("hash") == digest or (w.get("hash") is None and file is not None and w.get("file") == file))]
+        if not took:
+            keys.add(key)
+            continue
+        newest = max(took, key=lambda pair: pair[0])
+        if back is None or newest[0] > back[0]:
+            back = newest
+    return keys, (back[1] if back else None)
 
 
 def _users(entries, repo, digest):
@@ -734,31 +786,73 @@ def _note_for(p, noted):
     return None
 
 
-def approvals(session_id, transcript_path, deadline=None, noted=None):
-    """(approved, untaken, None) for this session's pickers, or ([], [], why they could not be looked
-    for). approved is [{repo, hash, file, picker, session}] for each wording Dan approved that counts
-    (module docstring); untaken is [{repo, file, why}] for each Approve of his that does not, so a
-    refusal can say what stood in the way of the very approval the session thinks it holds. noted is
-    {picker: the note taken when he answered it} (note_answer): a picker with one is judged by the
-    hash and the change time noted then, and any other by the file as it stands."""
+def _his_other(result, is_error):
+    """Whether a picker came back with an answer of Dan's that is not APPROVE: `Not yet`, or words of
+    his own. One that came back in error, or closed on its own timeout, is no answer of his."""
+    if is_error or not isinstance(result, dict) or "afkTimeoutMs" in result:
+        return False
+    answers = result.get("answers")
+    if not isinstance(answers, dict) or not answers:
+        return False
+    return any(not (isinstance(chosen, str) and chosen.strip() == APPROVE) for chosen in answers.values())
+
+
+def _closed(p, session_id, ap, noted, deadline):
+    """The record's line for a picker that came back as anything but his Approve (HIS LAST ANSWER ON
+    A WORDING DECIDES, module docstring): `withdrawn` for an answer of his, with the hash of the
+    wording he answered about, and `settled` for one that was no answer of his."""
+    line = {"repo": p["repo"], "file": p["file"], "session": session_id, "picker": p["picker"],
+            "answered": _text(p["stamp"]), "hash": None, "why": None}
+    if not _his_other(p["result"], p["is_error"]):
+        return dict(line, kind="settled", why="the picker came back with no answer of his: in error, closed by its "
+                                              "own timeout, or not one question with one answer")
+    # The wording he answered about: the hash noted when he answered, else the file's while it has
+    # not changed since. Neither, and the line names the file alone.
+    note = _note_for(p, noted)
+    digest = note.get("hash") if note is not None else None
+    if not (isinstance(digest, str) and SHA.fullmatch(digest)):
+        digest, answered = None, ap._stamp_ns(p["stamp"])
+        try:
+            unchanged = answered is not None and os.stat(p["file"]).st_ctime_ns < answered
+        except OSError:
+            unchanged = False
+        if unchanged:
+            digest = _file_hash(p["file"], deadline)[0]
+    if digest is None:
+        line["why"] = ("the wording he answered about could not be hashed (no note of his answer holds it, and the "
+                       "file has changed since or cannot be hashed), so this takes back his earlier approvals of "
+                       "that file")
+    return dict(line, kind="withdrawn", hash=digest)
+
+
+def approvals(session_id, transcript_path, deadline=None, noted=None, settled=()):
+    """(approved, untaken, closed, None) for this session's pickers, or ([], [], [], why they could
+    not be looked for). approved is [{kind, repo, hash, file, picker, session, answered}] for each
+    wording Dan approved that counts (module docstring); untaken is [{repo, file, why}] for each
+    Approve of his that does not, so a refusal can say what stood in the way of the very approval
+    the session thinks it holds. closed is the record's line for each picker that came back as
+    anything but his Approve (_closed), leaving out the pickers settled names, which the record
+    already holds one for. noted is {picker: the note taken when he answered it} (note_answer): a
+    picker with one is judged by the hash and the change time noted then, and any other by the
+    file as it stands."""
     if not isinstance(transcript_path, str) or not transcript_path or not isinstance(session_id, str) or not session_id:
-        return [], [], "the call named no session transcript, so a picker of his in this session could not be looked for"
+        return [], [], [], "the call named no session transcript, so a picker of his in this session could not be looked for"
     misplaced = _misplaced(transcript_path)
     if misplaced is not None:
-        return [], [], misplaced
+        return [], [], [], misplaced
     try:
         asked = _asked(transcript_path, session_id)
     except OSError as e:
-        return [], [], ("this session's transcript could not be read (" + type(e).__name__
-                        + "), so a picker of his in this session could not be looked for")
+        return [], [], [], ("this session's transcript could not be read (" + type(e).__name__
+                            + "), so a picker of his in this session could not be looked for")
     if not asked:
-        return [], [], None
+        return [], [], [], None
     ap = _part("db_apply_approval_shared", "db-apply-approval.py")
     sw = _part("shell_words_shared", "shell-words.py")
 
     # The last word on each file: a later picker about it that ended any other way takes an earlier
     # Approve back.
-    last, untaken = {}, []
+    last, untaken, ended = {}, [], []
     for p in asked:
         meta = p["ask"]["metadata"]
         repo, file = repo_key(meta.get("repo")), meta.get("file")
@@ -773,6 +867,9 @@ def approvals(session_id, transcript_path, deadline=None, noted=None):
             continue
         p.update(repo=repo, file=os.path.realpath(file), said=said)
         last[(repo, p["file"])] = p
+        if not said and p["picker"] not in settled:
+            ended.append(p)
+    closed = [_closed(p, session_id, ap, noted, deadline) for p in ended]
     candidates = []
     for p in last.values():
         if not p["said"]:
@@ -784,7 +881,7 @@ def approvals(session_id, transcript_path, deadline=None, noted=None):
             continue
         candidates.append(p)
     if not candidates:
-        return [], untaken, None
+        return [], untaken, closed, None
 
     # Read by Dan as written, by the one check of text a person approves in a picker.
     unread = []
@@ -796,14 +893,14 @@ def approvals(session_id, transcript_path, deadline=None, noted=None):
     for p, why in unread:
         untaken.append({"repo": p["repo"], "file": p["file"], "why": why})
     if not readable:
-        return [], untaken, None
+        return [], untaken, closed, None
 
     try:
         events = _file_events(transcript_path, session_id,
                               {p["file"]: os.path.basename(p["file"]) for p in readable}, sw)
     except OSError as e:
-        return [], untaken, ("this session's transcript could not be read (" + type(e).__name__
-                             + "), so whether the wording was opened in front of him could not be told")
+        return [], untaken, closed, ("this session's transcript could not be read (" + type(e).__name__
+                                     + "), so whether the wording was opened in front of him could not be told")
     approved = []
     for p in readable:
         note = _note_for(p, noted)
@@ -820,9 +917,9 @@ def approvals(session_id, transcript_path, deadline=None, noted=None):
         if why is not None:
             untaken.append({"repo": p["repo"], "file": p["file"], "why": why})
         else:
-            approved.append({"repo": p["repo"], "hash": digest, "file": p["file"], "picker": p["picker"],
-                             "session": session_id})
-    return approved, untaken, None
+            approved.append({"kind": "approved", "repo": p["repo"], "hash": digest, "file": p["file"],
+                             "picker": p["picker"], "session": session_id, "answered": _text(p["stamp"])})
+    return approved, untaken, closed, None
 
 
 def _not_shown(p, events, ap, note=None, calls_on=None):
@@ -906,47 +1003,57 @@ def _file_hash(path, deadline):
 
 def _harvest(payload, notes, key):
     """This session's pickers, the answers the record notes for repository key, and the record, read
-    once for one call: (found, untaken, unlooked, entries, unreadable), as approvals() and
+    once for one call: (found, untaken, closed, unlooked, entries, unreadable), as approvals() and
     read_record() give them. Each approval of his found and not yet on the record is written to it
-    here, unless the call is a subagent's; a failed save is added to notes (module docstring)."""
+    here, and so is the line of each picker that came back any other way, unless the call is a
+    subagent's; a failed save is added to notes (module docstring)."""
     deadline = time.monotonic() + CHECK_SECONDS
     entries, unreadable = read_record()
     noted = _noted(entries)
     own = _text(payload.get("session_id"))
-    found, untaken, unlooked = approvals(payload.get("session_id"), payload.get("transcript_path"), deadline,
-                                         noted.get(own, ("", {}))[1])
-    # An answer of his the record notes, in any session, whose approval is not on the record yet
+    # A picker the record already holds an ending for (withdrawn, settled) is not worked out again.
+    ended = {(e.get("session"), e.get("picker")) for e in entries or [] if e.get("kind") in ("withdrawn", "settled")}
+    found, untaken, closed, unlooked = approvals(payload.get("session_id"), payload.get("transcript_path"), deadline,
+                                                 noted.get(own, ("", {}))[1], {p for s, p in ended if s == own})
+    # An answer of his the record notes, in any session, that the record holds no outcome for yet
     # (HIS ANSWER IS NOTED WHEN HE GIVES IT): read back from that session's own transcript, the
     # newest NOTED_SESSIONS of them. This is what a caller naming no session of its own (the merge
-    # helper) is approved by.
-    on_record = {(e.get("session"), e.get("picker")) for e in entries or [] if e.get("kind") == "approved"}
+    # helper) is approved by, and refused by when what he answered was Not yet.
+    on_record = ended | {(e.get("session"), e.get("picker")) for e in entries or [] if e.get("kind") == "approved"}
     looked = own if _text(payload.get("transcript_path")) else None
     waiting = [s for s, (_, pickers) in noted.items() if s != looked and any(
         n.get("repo") == key and (s, p) not in on_record for p, n in pickers.items())]
     unlooked = [unlooked] if unlooked else []
     for session in waiting[-NOTED_SESSIONS:]:
         transcript, pickers = noted[session]
-        more, less, why = approvals(session, transcript, deadline, pickers)
+        more, less, over, why = approvals(session, transcript, deadline, pickers, {p for s, p in ended if s == session})
         found += more
         untaken += less
+        closed += over
         if why:
             unlooked.append("an answer of his the record notes, in the session whose transcript is " + transcript
                             + ", could not be read back: " + why)
-    if found and not payload.get("agent_id"):
+    if (found or closed) and not payload.get("agent_id"):
         # One line per picker of his: the same wording approved in a second picker is a second
         # approval, which covers a second pull request.
         fresh = [f for f in found if entries is None or not any(
             e.get("kind") == "approved" and e.get("repo") == f["repo"] and e.get("hash") == f["hash"]
             and e.get("session") == f["session"] and e.get("picker") == f["picker"] for e in entries)]
-        if fresh:
-            failed = _append([{"kind": "approved", "repo": f["repo"], "hash": f["hash"], "at": _now(),
-                               "session": f["session"], "picker": f["picker"]} for f in fresh])
-            if failed:
-                notes.append(
-                    "Dan approved the wording in " + ", ".join(sorted({f["file"] for f in fresh})) + " in a picker"
-                    ", but that approval could not be saved: " + failed + ". His picker still counts for "
-                    "this call, but a later session will ask him again until that record can be written.")
-    return found, untaken, ". ".join(w.rstrip(".") for w in unlooked) or None, entries, unreadable
+        lines = [dict(f, at=_now()) for f in fresh + closed]
+        failed = _append(lines) if lines else None
+        if failed and fresh:
+            notes.append(
+                "Dan approved the wording in " + ", ".join(sorted({f["file"] for f in fresh})) + " in a picker"
+                ", but that approval could not be saved: " + failed + ". His picker still counts for "
+                "this call, but a later session will ask him again until that record can be written.")
+        took = sorted({c["file"] for c in closed if c["kind"] == "withdrawn"})
+        if failed and took:
+            notes.append(
+                "Dan answered a picker about the wording in " + ", ".join(took) + " with something other than `"
+                + APPROVE + "`, which takes back his earlier approval of it, but that could not be saved: " + failed
+                + ". It counts for this call, but a call that cannot read this session's transcript will not know "
+                "of it until that record can be written.")
+    return found, untaken, closed, ". ".join(w.rstrip(".") for w in unlooked) or None, entries, unreadable
 
 
 def _said(why, key, untaken, unreadable, unlooked):
@@ -1051,13 +1158,13 @@ def check(repo, digest, payload, pr=None, claim=False):
         # The command line a session can run (claude-config#3703): the record, and nothing else. No
         # transcript is read, so nothing a caller hands over can be taken for his answer, and
         # nothing is written.
-        found, untaken, unlooked = [], [], RECORD_ONLY
+        found, untaken, closed, unlooked = [], [], [], RECORD_ONLY
         entries, unreadable = read_record()
     else:
-        found, untaken, unlooked, entries, unreadable = _harvest(payload, out["notes"], key)
+        found, untaken, closed, unlooked, entries, unreadable = _harvest(payload, out["notes"], key)
 
     def judged(record):
-        count = len(_approval_keys(record, found, key, digest))
+        count = len(_approval_keys(record, found, key, digest, closed)[0])
         users = _users(record, key, digest)
         return count, users, _covers(count, users, pr)
 
@@ -1065,6 +1172,15 @@ def check(repo, digest, payload, pr=None, claim=False):
     # session still counts for a question that claims nothing (Dan, 2026-11-16), and a claim, which
     # reads the record again under its lock, is refused there.
     count, users, covered = judged(entries)
+    if count == 0 and _approval_keys(entries, found, key, digest, closed)[1] is not None:
+        # He did approve it, and his later answer took that back: said as what happened, so the
+        # session is not told he never approved wording it watched him approve.
+        out["why"] = _said(["Dan approved this wording for " + key + " and then, asked about it again, answered "
+                            "something other than `" + APPROVE + "` (`Not yet`, or words of his own), which took that "
+                            "approval back: his last answer on a wording decides, on this Mac's record as in the "
+                            "session. Change what he wanted changed, then ask him again"],
+                           key, untaken, unreadable, unlooked)
+        return out
     if count == 0:
         why = ["Dan has not approved this wording for " + key + ": no approval on this Mac's record"
                + ("" if record_only else ", and none in this session,") + " is of the announcement as it reads here"]

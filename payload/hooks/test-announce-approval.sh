@@ -69,7 +69,9 @@ print(json.dumps(d))' "$1" "${4:-s1}" \
 d = json.load(sys.stdin)
 print(("yes" if d["approved"] is True else "no") + "|" + d["why"] + "|" + " ".join(d["notes"]), end="")'
 }
-recorded() { [ -f "${STORE_USED:-$STORE}/record.jsonl" ] && grep -c '"kind": "approved"' "${STORE_USED:-$STORE}/record.jsonl" || echo 0; }
+# recorded: how many approvals the record holds. A record may hold other lines and no approval (a
+# picker that came back any other way gets a line of its own since #3742), which counts as 0.
+recorded() { local n; n="$(grep -c '"kind": "approved"' "${STORE_USED:-$STORE}/record.jsonl" 2>/dev/null)"; printf '%s' "${n:-0}"; }
 # shown <name>: a wording file in a folder of its own, written, then opened in front of Dan.
 # Prints its path; the transcript is $WORK/<name>.jsonl.
 shown() { aaf_shown "$WORK/$1" "$WORK/$1.jsonl" "$POST"; }
@@ -135,7 +137,7 @@ for shape in timeout prefilled two error othersource; do
   talk "$T" ask acme/widget "$F" "" "$shape"
   r="$(asked "$T" acme/widget "$(hash_file "$F")")"
   check "R2 a picker that is not his answer ($shape) approves nothing" "$([[ "$r" == "no|"* ]] && echo ok || echo "$r")"
-  check "and writes nothing to the record ($shape)" "$([ "$(recorded)" = 0 ] && echo ok || echo "$(recorded) lines")"
+  check "and writes no approval to the record ($shape)" "$([ "$(recorded)" = 0 ] && echo ok || echo "$(recorded) lines")"
 done
 STORE_USED="$WORK/store-notyet"
 F="$(shown notyet)"; T="$WORK/notyet.jsonl"
@@ -804,7 +806,7 @@ echo "the open of the file is the session's last tool call before the picker (#3
 # first, and the picker shows him neither file's name. So an open counts only when nothing else of
 # the session's ran between it and the picker.
 # The two are named apart: a command naming a file's own name already voids its open (above).
-STORE_USED="$WORK/store-two"
+STORE_USED="$WORK/store-two-files"
 mkdir -p "$WORK/two-a" "$WORK/two-b"
 FA="$WORK/two-a/post-a.md"; FB="$WORK/two-b/post-b.md"
 printf '%s\n' "$POST" > "$FA"; printf '%s\nA second post.\n' "$POST" > "$FB"
@@ -825,7 +827,7 @@ talk "$T" bash "ls /tmp"
 talk "$T" ask acme/two "$F"
 r="$(asked "$T" acme/two "$(hash_file "$F")")"
 check "R2 a call that names no wording file, between the open and the picker, voids the open too" "$([[ "$r" == "no|"*"made another tool call (Bash)"* ]] && echo ok || echo "$r")"
-check "and nothing was written to the record for any of them" "$([ "$(recorded)" = 0 ] && echo ok || echo "$(recorded) lines")"
+check "and nothing was written to the record for any of them" "$([ ! -e "$STORE_USED/record.jsonl" ] && echo ok || cut -c1-700 "$STORE_USED/record.jsonl")"
 # Still possible: each file opened and asked about in turn, and a file opened again after other work.
 T="$WORK/two-turns.jsonl"; new_talk "$T"
 talk "$T" bash "$BBEDIT --front-window $FA"
@@ -843,6 +845,110 @@ talk "$T" ask acme/two-reopened "$F"
 r="$(asked "$T" acme/two-reopened "$(hash_file "$F")")"
 check "R2 still possible: a file opened again after other work, and asked about next, is approved" "$([[ "$r" == "yes||" ]] && echo ok || echo "$r")"
 check "how to ask says the picker is the very next call after the open" "$(printf '{"session_id": "s1", "transcript_path": "%s"}' "$T" | ANNOUNCE_APPROVALS_DIR="$STORE" python3 -B "$LIB" check --repo acme/none --hash "$H" | grep -q "very next tool call" && echo ok || echo "the how to ask text does not say so")"
+
+echo "his last answer on a wording decides, on the record as in the session (#3742 item 3)"
+# He approves and the approval is recorded. Asked again about the same unchanged file, he answers
+# Not yet. The recorded approval used to stand, and the merge went through on it.
+STORE_USED="$WORK/store-withdrawn"
+F="$(shown withdrawn)"; T="$WORK/withdrawn.jsonl"
+talk "$T" ask acme/widget "$F"
+H3="$(hash_file "$F")"
+r="$(asked "$T" acme/widget "$H3")"
+check "his approval is recorded" "$([[ "$r" == "yes||" ]] && [ "$(recorded)" = 1 ] && echo ok || echo "$r")"
+talk "$T" bash "$BBEDIT --front-window $F"
+talk "$T" ask acme/widget "$F" "Not yet"
+r="$(asked "$T" acme/widget "$H3")"
+check "R2 a later Not yet about the same unchanged file takes the recorded approval back" "$([[ "$r" == "no|"* ]] && echo ok || echo "$r")"
+check "the refusal says he approved it and then answered otherwise, which took it back" "$([[ "$r" == *"took that approval back"* && "$r" == *"Not yet"* ]] && echo ok || echo "$r")"
+check "the withdrawal is on the record, naming the wording" "$(grep '"kind": "withdrawn"' "$STORE_USED/record.jsonl" 2>/dev/null | grep -q "\"hash\": \"$H3\"" && echo ok || cat "$STORE_USED/record.jsonl")"
+asked "$T" acme/widget "$H3" >/dev/null
+check "and is written once however often it is read" "$([ "$(kinds withdrawn)" = 1 ] && echo ok || echo "$(kinds withdrawn) lines")"
+# A later session with no picker of its own, the merge helper, and the command line that only reads
+# are each answered from the record alone.
+T2="$WORK/withdrawn-later.jsonl"; new_talk "$T2"
+r="$(asked "$T2" acme/widget "$H3" s2)"
+check "R2 a later session is refused on the record alone" "$([[ "$r" == "no|"*"took that approval back"* ]] && echo ok || echo "$r")"
+r="$(helper_asks acme/widget "$H3" 71)"
+check "R2 and so is a merge that names no session" "$([[ "$r" == "no|unapproved|"*"took that approval back"* ]] && echo ok || echo "$r")"
+r="$(ANNOUNCE_APPROVALS_DIR="$STORE_USED" python3 -B "$LIB" check --repo acme/widget --hash "$H3")"
+check "the command line that only reads says the same" "$([[ "$r" == *'"approved": false'* && "$r" == *"took that approval back"* ]] && echo ok || echo "$r")"
+# Still possible: he approves it again, and that later answer is the one that decides.
+talk "$T" bash "$BBEDIT --front-window $F"
+talk "$T" ask acme/widget "$F"
+r="$(asked "$T" acme/widget "$H3")"
+check "R2 still possible: approved again afterwards, the wording is approved" "$([[ "$r" == "yes||" ]] && echo ok || echo "$r")"
+r="$(asked "$T2" acme/widget "$H3" s2)"
+check "R2 still possible: and a later session merges it on the record" "$([[ "$r" == "yes||" ]] && echo ok || echo "$r")"
+# A subagent's call counts his Not yet for that call and writes nothing, as with his Approve.
+STORE_USED="$WORK/store-withdrawn-agent"
+F="$(shown withdrawn-agent)"; T="$WORK/withdrawn-agent.jsonl"
+talk "$T" ask acme/widget "$F"
+asked "$T" acme/widget "$H3" >/dev/null
+talk "$T" bash "$BBEDIT --front-window $F"
+talk "$T" ask acme/widget "$F" "Not yet"
+r="$(AGENT=1 asked "$T" acme/widget "$H3")"
+check "R2 a subagent's call is refused on his Not yet too" "$([[ "$r" == "no|"*"took that approval back"* ]] && echo ok || echo "$r")"
+check "and writes nothing to the record" "$([ "$(kinds withdrawn)" = 0 ] && echo ok || echo "$(kinds withdrawn) lines")"
+# It is the wording he answered about that decides, whichever file held it.
+STORE_USED="$WORK/store-withdrawn-wording"
+F="$(shown wd-one)"; T="$WORK/wd-one.jsonl"
+talk "$T" ask acme/widget "$F"
+asked "$T" acme/widget "$H3" >/dev/null
+F2="$(shown wd-two)"; T2="$WORK/wd-two.jsonl"
+talk "$T2" ask acme/widget "$F2" "Not yet"
+r="$(asked "$T2" acme/widget "$H3")"
+check "R2 his Not yet about the same wording in another file takes the approval back" "$([[ "$r" == "no|"*"took that approval back"* ]] && echo ok || echo "$r")"
+# Other wording is another matter.
+STORE_USED="$WORK/store-withdrawn-other"
+F="$(shown wo-one)"; T="$WORK/wo-one.jsonl"
+talk "$T" ask acme/widget "$F"
+asked "$T" acme/widget "$H3" >/dev/null
+mkdir -p "$WORK/wo-two"; FO="$WORK/wo-two/other-post.md"
+printf '%s\nAnother line.\n' "$POST" > "$FO"
+talk "$T" bash "$BBEDIT --front-window $FO"
+talk "$T" ask acme/widget "$FO" "Not yet"
+r="$(asked "$T" acme/widget "$H3")"
+check "still possible: his Not yet about other wording takes nothing back" "$([[ "$r" == "yes||" ]] && echo ok || echo "$r")"
+# With no note of his answer and the file changed since, the wording he declined cannot be hashed.
+# The withdrawal then names the file, and takes back his earlier approvals of that file.
+STORE_USED="$WORK/store-withdrawn-changed"
+F="$(shown wc)"; T="$WORK/wc.jsonl"
+talk "$T" ask acme/widget "$F"
+asked "$T" acme/widget "$H3" >/dev/null
+talk "$T" bash "$BBEDIT --front-window $F"
+talk "$T" ask acme/widget "$F" "Not yet"
+printf '%s\n- Changed after his Not yet\n' "$POST" > "$F"
+r="$(asked "$T" acme/widget "$H3")"
+check "R2 a Not yet whose wording can no longer be hashed takes back his approvals of that file" "$([[ "$r" == "no|"*"took that approval back"* ]] && echo ok || echo "$r")"
+# A picker that closed on its own timeout is no answer of his. It takes nothing back from the
+# record, and is settled there so it is not read again.
+STORE_USED="$WORK/store-withdrawn-timeout"
+F="$(shown wt)"; T="$WORK/wt.jsonl"
+talk "$T" ask acme/widget "$F"
+asked "$T" acme/widget "$H3" >/dev/null
+talk "$T" bash "$BBEDIT --front-window $F"
+talk "$T" ask acme/widget "$F" "" timeout
+r="$(asked "$T" acme/widget "$H3")"
+check "a picker closed by its own timeout takes nothing back from the record" "$([[ "$r" == "yes||" ]] && [ "$(kinds withdrawn)" = 0 ] && echo ok || echo "$r")"
+asked "$T" acme/widget "$H3" >/dev/null
+check "and is settled on the record, once" "$([ "$(kinds settled)" = 1 ] && echo ok || echo "$(kinds settled) lines")"
+# A noted answer of Not yet, in a session the asker is not in, is read back from that session's
+# transcript: the hash is the note's, taken when he answered, whatever the file holds now.
+STORE_USED="$WORK/store-withdrawn-noted"
+F="$(shown wn)"; T="$WORK/wn.jsonl"
+talk "$T" ask acme/widget "$F"
+asked "$T" acme/widget "$H3" >/dev/null
+T2="$WORK/wn-two.jsonl"; new_talk "$T2"
+talk "$T2" bash "$BBEDIT --front-window $F"
+P="$(talk "$T2" put acme/widget "$F" "" s7)"
+r="$(note "$T2" payload "$P" acme/widget "$F" "" "" s7)"
+talk "$T2" answer "$P" acme/widget "$F" "Not yet" "" s7
+printf '%s\n- Changed after his Not yet\n' "$POST" > "$F"
+r="$(helper_asks acme/widget "$H3" 72)"
+check "R2 a noted Not yet in another session takes the approval back for a merge naming no session" "$([[ "$r" == "no|unapproved|"*"took that approval back"* ]] && echo ok || echo "$r")"
+check "by the hash noted when he answered" "$(grep '"kind": "withdrawn"' "$STORE_USED/record.jsonl" 2>/dev/null | grep "\"picker\": \"$P\"" | grep -q "\"hash\": \"$H3\"" && echo ok || cat "$STORE_USED/record.jsonl")"
+helper_asks acme/widget "$H3" 72 >/dev/null
+check "and that session's note is settled: it is not read back a second time" "$([ "$(kinds withdrawn)" = 1 ] && echo ok || echo "$(kinds withdrawn) lines")"
 
 echo "the record is this suite's own"
 check "no case wrote to this Mac's real record" "$([ "$(ls -la "$REAL_STORE" 2>/dev/null | cksum)" = "$real_before" ] && echo ok || echo "$REAL_STORE changed during the run")"
