@@ -411,7 +411,8 @@ live_store_regenerated_with_lessons(){ # <path> -> 0 when that is the change it 
 #
 # settings.json has a writer that is neither the sync nor a suite: whoever is at the keyboard.
 # Claude Code saves it on /model, on a plugin toggle and on a permission granted for good, and Dan
-# edits it by hand. On 2026-10-30 one hand edit at 6:41 PM ET was enough to fail a full run as
+# edits it by hand (a change under permissions is not one this guard excuses, see 3 below). On
+# 2026-10-30 one hand edit at 6:41 PM ET was enough to fail a full run as
 # live-store-pollution (#1964 traced it). live_store_only_gained cannot excuse that: a key added at
 # the end puts a comma on the line before it, and Claude Code rewrites the whole file in its own
 # layout, so every save reads as lines changed.
@@ -432,7 +433,10 @@ live_store_regenerated_with_lessons(){ # <path> -> 0 when that is the change it 
 #      so a suite bound to the real path, writing it through the code it tests, changes one of the
 #      settings below. Those stay counted whoever changed them, a person's /effort pick on a shared
 #      model included, because the two are indistinguishable there and a suite is the costlier
-#      mistake to excuse. A real apply is excused already, by the sync's own record.
+#      mistake to excuse. Since the sync adds three deny rules under permissions (#3563), that
+#      covers any change under permissions too: a permission granted for good during a run, or a
+#      rule added by hand, is counted and no longer excused. A real apply is excused already, by
+#      the sync's own record.
 #
 # The name of a setting alone would excuse a suite that writes that name; it is the three together
 # that do the work. What still gets through, and is said in the verdict rather than hidden: a suite
@@ -2578,7 +2582,7 @@ if [ -n "${_live_before:-}" ] && [ "$_live_before" != "$_live_after" ]; then
       continue
     fi
     if _lc_settings="$(live_settings_changed_by_hand "$_lc_path")"; then
-      _lc_noted="$_lc_noted  $_lc_path: only $_lc_settings changed, none of them a setting this config writes, with the rest of the file carried over as it was, which is a person's own settings edit (Claude Code's /model, a plugin toggle, a permission, or by hand). A suite editing the real file in place that way would read the same, and none here does (claude-config#1969).
+      _lc_noted="$_lc_noted  $_lc_path: only $_lc_settings changed, none of them a setting this config writes, with the rest of the file carried over as it was, which is a person's own settings edit (Claude Code's /model, a plugin toggle, or by hand). A suite editing the real file in place that way would read the same, and none here does (claude-config#1969).
 "
       continue
     fi
