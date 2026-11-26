@@ -31,25 +31,39 @@ GitHub, gives that same digest. One entry reworded after he answered is another 
 WHAT HE MUST HAVE READ. The question he answered must hold, each on a line of its own:
   - the facts line (facts): the pull request, and how many entries it adds, changes, removes and
     moves, with their numbers;
-  - when every added or changed entry's rule and SHORT line fit in the dialog beside it (ROWS_MAX
-    rows of ROW_COLUMNS, inside the 20 rows of 76 the shared picker check allows): each one's rule
-    after its number, white space folded, and its SHORT line word for word, since the SHORT line is
-    what every session loads;
-  - otherwise, the sweep: a line starting CHANGE_LINE, the session's own account of the change. The
-    count and the numbers are in the facts line.
+  - whenever every added or changed entry's rule and SHORT line fit a picker beside it
+    (claude-config#3583): each one's rule after its number, white space folded, and its SHORT line
+    word for word, since the SHORT line is what every session loads. Whether they fit is the shared
+    picker check's own measure of the question those lines make with CLOSING as its last line
+    (lib/picker-check.mjs, which counts rows as mod-kit does, against mod-kit's limits). No row or
+    column is counted here;
+  - only when that question is past the dialog's size, the sweep: a line starting CHANGE_LINE, the
+    session's own account of the change. The count and the numbers are in the facts line.
 Its two answers are MERGE and REFUSE and nothing else. A question missing any of it covers nothing,
-and the refusal says which lines it lacked.
+and the refusal says which lines it lacked. Where the shared check cannot be run, which form the
+question takes is unknown, so no picker is named and no answer covers the change.
 
 WHERE HIS ANSWER IS READ. As the database apply's is (lib/db-apply-approval.py, answered_asks):
 from the session's transcript, a picker of one question that carried no answers of its own, did
 not close by itself, was answered exactly MERGE, and that he could read as written (the shared
 picker check). merge-when-ready.sh asks the gate with no transcript, so each such answer is also
 kept on a record on this Mac, <record>/answers.jsonl, one JSON line holding the repository, the
-number, the digest and the question he read; the gate writes it whenever it runs with a main
-session's transcript (a subagent's call reads his picker and writes nothing). The record has no
-expiry: an answer is about content, and the same content is the same question.
-WHAT THE RECORD CANNOT SEE: a line written into it by an Edit, a Write or a script that builds its
-path at run time. The gate refuses a shell command that names the folder.
+number, the digest, the question he read, and the transcript and session it was read in; the gate
+writes it whenever it runs with a main session's transcript (a subagent's call reads his picker
+and writes nothing).
+
+A LINE ON THE RECORD IS A POINTER, NEVER THE ANSWER (claude-config#3583). The record is a file, and
+a line can reach a file by an Edit, a Write, a script, an interpreter, a move of a prepared file or
+a link put in the folder's place, most of which no tool watcher sees. So no line is believed on its
+own word: one counts only when the transcript it names, read again by the same reader, holds the
+picker he answered MERGE with that repository, number, digest and question. A line naming no
+transcript, one that cannot be read, or one that holds no such answer covers nothing, and the
+refusal says a line was found and why it did not count. His answer therefore lasts as long as that
+transcript does.
+WHAT THIS DOES NOT CLOSE: a transcript is itself a file. A session that writes a picker and an
+answer into a transcript file in Claude Code's own shape is believed, here as by a typed merge and
+by the database apply. The gate refuses a shell command naming the record's folder and an Edit,
+Write, MultiEdit or NotebookEdit of a file in it, as a tripwire and in words that say why.
 
     lesson-merge.py judge --repo <owner/name> --pr <number> --base <file> --head <file>
                           --record-dir <folder> [--transcript <file> --session <id>] [--agent]
@@ -59,8 +73,8 @@ path at run time. The gate refuses a shell command that names the folder.
         {"verdict": "covered"} when an answer of his covers the change, else
         {"verdict": "refuse", "reason": <what the session is told>}.
     lesson-merge.py harvest --record-dir <folder> --transcript <file> --session <id>
-        Keeps on the record every answer the transcript holds. Exit 3, saying why on stderr, when
-        one could not be written.
+        Keeps on the record every answer the transcript holds, each with that transcript and
+        session. Exit 3, saying why on stderr, when one could not be written.
 Exit 0 when judged; 2 when it could not judge, said on stderr, which a caller must refuse on.
 """
 import hashlib
@@ -79,11 +93,9 @@ RULE = re.compile(r"^- \*\*L[0-9]+\.\s*(.*?)\*\*")
 # The numbers of one kind are written out up to this many; past it the facts line gives the count
 # and the first and last. Chosen, not measured: twelve numbers are about seventy characters.
 IDS_SHOWN = 12
-# The rules and SHORT lines are stated word for word while the required lines take at most this
-# many rows of this many columns. The shared picker check allows a question 20 rows of 76; these
-# leave five rows for the session's own words and four columns for a word that wraps early.
-ROWS_MAX = 15
-ROW_COLUMNS = 72
+# The last line of the question the rules and SHORT lines are measured in: the one line of its own
+# a session needs to make the lines a question. Not a line the question must hold.
+CLOSING = "May this pull request merge with these lesson entries?"
 CHANGE_LINE = "The change: "
 CHANGE_MIN = 20
 RECORD_NAME = "answers.jsonl"
@@ -186,13 +198,18 @@ def shown_lines(c):
 
 
 def required(repo, pr, c):
-    """(the lines the question must hold, whether it is the sweep form)."""
+    """(the lines the question must hold, whether it is the sweep form, why Dan would not read the
+    lines as written or None, the shared check's measure of the question they make). Every rule and
+    SHORT line is required whenever the question they make reaches him as written; the sweep form
+    is kept for one past the dialog's size, and for nothing else (claude-config#3583). Raises when
+    the shared check cannot be run: the form is then unknown."""
     first = [facts(repo, pr, c)]
-    detail = shown_lines(c)
-    rows = sum(max(1, -(-len(l) // ROW_COLUMNS)) for l in first + detail)
-    if detail and rows > ROWS_MAX:
-        return first, True
-    return first + detail, False
+    whole = first + shown_lines(c)
+    sizes = []
+    fault = _approval().picker_faults([_ask(whole + [CLOSING])], sizes=sizes)[0]
+    if fault is not None and len(whole) > 1 and sizes[0]["large"]:
+        return first, True, None, sizes[0]
+    return whole, False, fault, sizes[0]
 
 
 def missing(question, lines, sweep):
@@ -235,22 +252,32 @@ def _picker(asked):
     return (repo.lower(), pr, sha, question)
 
 
+def _answers_in(transcript, session):
+    """(answers, why some were not taken, the error that stopped the read or ''): the merge form's
+    pickers Dan answered MERGE in one session of one transcript, each as _picker gives it."""
+    unread = []
+    try:
+        asks = _approval().answered_asks(transcript, session, SOURCE, MERGE, unread)
+    except Exception as e:  # a transcript or a library that cannot be read covers nothing
+        return [], "", type(e).__name__
+    answers = [p for p in (_picker(a) for a in asks) if p is not None]
+    return answers, "; ".join(sorted(set(w for _, w in unread))), ""
+
+
 def from_transcript(transcript, session):
     """(answers, why not): the merge form's pickers Dan answered MERGE in this session, each as
     _picker gives it, and what could not be read, in words, or ''."""
     if not transcript or not session:
         return [], ""
-    unread = []
-    try:
-        asks = _approval().answered_asks(transcript, session, SOURCE, MERGE, unread)
-    except Exception as e:  # a transcript or a library that cannot be read covers nothing
-        return [], "this session's transcript could not be read for his answer (%s)" % type(e).__name__
-    answers = [p for p in (_picker(a) for a in asks) if p is not None]
-    why = "; ".join(sorted(set(w for _, w in unread)))
+    answers, why, error = _answers_in(transcript, session)
+    if error:
+        return [], "this session's transcript could not be read for his answer (%s)" % error
     return answers, why
 
 
 def on_record(folder):
+    """The record's lines, each (repository, number, digest, question, transcript, session); the
+    last two are '' on a line that names none."""
     out = []
     try:
         with open(os.path.join(folder, RECORD_NAME), "r", encoding="utf-8", errors="replace") as f:
@@ -260,23 +287,50 @@ def on_record(folder):
                 except ValueError:
                     continue
                 if isinstance(e, dict) and isinstance(e.get("repo"), str) and isinstance(e.get("pr"), int) \
+                        and not isinstance(e.get("pr"), bool) \
                         and isinstance(e.get("sha256"), str) and isinstance(e.get("question"), str):
-                    out.append((e["repo"].lower(), e["pr"], e["sha256"], e["question"]))
+                    where = [e.get(k) if isinstance(e.get(k), str) else "" for k in ("transcript", "session")]
+                    out.append((e["repo"].lower(), e["pr"], e["sha256"], e["question"], where[0], where[1]))
     except FileNotFoundError:
         pass
     return out
 
 
-def keep(folder, answers):
-    """Appends to the record each answer it does not hold. Raises OSError when it cannot."""
+def backed(lines):
+    """(the answers among the record's lines that are his, why each other line is not). A line is
+    his answer only when the transcript it names, read again here, holds the picker he answered
+    MERGE with the line's own repository, number, digest and question (A LINE ON THE RECORD IS A
+    POINTER, above). Each transcript is read once."""
+    answers, why, read = [], [], {}
+    for repo, pr, sha, question, transcript, session in lines:
+        if not transcript or not session or not os.path.isabs(transcript):
+            why.append("it names no transcript and session his answer could be read in")
+            continue
+        if (transcript, session) not in read:
+            read[(transcript, session)] = _answers_in(transcript, session)
+        held, _, error = read[(transcript, session)]
+        if (repo, pr, sha, question) in held:
+            answers.append((repo, pr, sha, question))
+        elif error:
+            why.append("the transcript it names could not be read (%s)" % error)
+        else:
+            why.append("the transcript it names holds no such answer of his")
+    return answers, sorted(set(why))
+
+
+def keep(folder, answers, transcript, session):
+    """Appends to the record each answer it does not hold, with the transcript and the session it
+    was read in. Raises OSError when it cannot."""
+    where = (os.path.abspath(transcript), session)
     have = set(on_record(folder))
-    new = [a for a in answers if a not in have]
+    new = [a + where for a in answers if a + where not in have]
     if not new:
         return 0
     os.makedirs(folder, mode=0o700, exist_ok=True)
     import time
-    text = "".join(json.dumps({"repo": r, "pr": p, "sha256": s, "question": q, "at": int(time.time())},
-                              ensure_ascii=True) + "\n" for r, p, s, q in dict.fromkeys(new))
+    text = "".join(json.dumps({"repo": r, "pr": p, "sha256": s, "question": q, "transcript": t, "session": i,
+                               "at": int(time.time())}, ensure_ascii=True) + "\n"
+                   for r, p, s, q, t, i in dict.fromkeys(new))
     fd = os.open(os.path.join(folder, RECORD_NAME), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
     try:
         os.write(fd, text.encode("ascii"))
@@ -285,13 +339,11 @@ def keep(folder, answers):
     return len(new)
 
 
-def _unshown(lines):
-    """Why Dan would not read the required lines as written in a picker, or None. Raises when the
-    shared check cannot be run."""
-    ask = {"questions": [{"question": "\n".join(lines), "header": "Lessons", "multiSelect": False,
-                          "options": [{"label": MERGE, "description": "The pull request may merge."},
-                                      {"label": REFUSE, "description": "The pull request stays open."}]}]}
-    return _approval().picker_faults([ask])[0]
+def _ask(lines):
+    """The picker's input whose question is these lines, as the dialog would get it."""
+    return {"questions": [{"question": "\n".join(lines), "header": "Lessons", "multiSelect": False,
+                           "options": [{"label": MERGE, "description": "The pull request may merge."},
+                                       {"label": REFUSE, "description": "The pull request stays open."}]}]}
 
 
 def _read(path):
@@ -308,39 +360,54 @@ def judge(a):
         return {"verdict": "untouched"}
     repo, pr = a["repo"], int(a["pr"])
     sha = digest(repo, pr, c)
-    lines, sweep = required(repo, pr, c)
     said, unread = from_transcript(a.get("transcript"), a.get("session"))
     unkept = ""
     if said and not a.get("agent"):
         try:
-            keep(a["record"], said)
+            keep(a["record"], said, a["transcript"], a["session"])
         except OSError as e:
             unkept = " (His answer could not be kept on this Mac's record, %s: %s, so the merge helper, which reads the record alone, will not find it.)" % (
                 os.path.join(a["record"], RECORD_NAME), e.strerror or type(e).__name__)
-    answers = [x for x in said + on_record(a["record"]) if x[0] == repo.lower() and x[1] == pr and x[2] == sha]
+    mine = lambda x: x[0] == repo.lower() and x[1] == pr and x[2] == sha
+    kept, unbacked = backed([x for x in on_record(a["record"]) if mine(x)])
+    answers = [x for x in said if mine(x)] + kept
+    # A line that is not his answer is said, so a refusal with a line on the record is not read as
+    # the record being empty (L11).
+    not_his = ""
+    if unbacked:
+        not_his = (" (This Mac's record holds a line for this change that is not his answer: %s. A line counts only when the "
+                   "transcript it names holds the picker he answered, so it covers nothing; claude-config#3583.)" % "; ".join(unbacked))
+    # The form the question takes is the shared check's answer. It is asked only when there is an
+    # answer to hold to it or a picker to name, so a merge that waits for the night needs no check.
+    form = None
+    try:
+        if answers or not a.get("asleep"):
+            form = required(repo, pr, c)
+    except Exception as e:
+        form = e
     lacks = None
-    for answer in answers:
-        lacks = missing(answer[3], lines, sweep)
-        if not lacks:
-            return {"verdict": "covered"}
+    if answers and not isinstance(form, Exception):
+        for answer in answers:
+            lacks = missing(answer[3], form[0], form[1])
+            if not lacks:
+                return {"verdict": "covered"}
     head = ("Refusing to merge PR #%d: it changes lesson entries in %s, which every session on both Macs loads once "
             "this merges, and Dan has not answered the lesson picker for them (claude-config#3343). " % (pr, PATH)) + facts(repo, pr, c)
     if lacks:
         head = ("Refusing to merge PR #%d: Dan answered %s for these lesson entries, but the question he read did not hold %s, "
                 "and his answer covers only what he was shown (claude-config#3343). " % (pr, MERGE, "; ".join(lacks))) + facts(repo, pr, c)
+    head += not_his
     if a.get("asleep"):
         return {"verdict": "refuse", "reason": head + " Dan is asleep (sleep mode), so he is not asked tonight: this merge waits "
                 "for him. Ask nothing, leave the pull request open, and do not merge it another way." + unkept}
-    if not sweep:
-        try:
-            fault = _unshown(lines)
-        except Exception as e:
-            return {"verdict": "refuse", "reason": head + " The picker for it cannot be put yet: whether Dan could read its lines as "
-                    "written could not be checked (%s), and his answer counts only for text he can read. Nothing was merged." % e}
-        if fault is not None:
-            return {"verdict": "refuse", "reason": head + " The lesson picker cannot be put for it: a rule or SHORT line of these "
-                    "entries would not reach Dan as written (%s), and he approves only text he can read. Reword that entry on the "
-                    "branch so it can be shown, or leave the merge to Dan." % fault}
+    if isinstance(form, Exception):
+        return {"verdict": "refuse", "reason": head + " The picker for it cannot be put yet: whether Dan could read its lines as "
+                "written could not be checked (%s), and his answer counts only for text he can read. Nothing was merged." % form}
+    lines, sweep, fault, size = form
+    if fault is not None:
+        return {"verdict": "refuse", "reason": head + " The lesson picker cannot be put for it: a rule or SHORT line of these "
+                "entries would not reach Dan as written (%s), and he approves only text he can read. Reword that entry on the "
+                "branch so it can be shown, or leave the merge to Dan." % fault}
     how = ("\n\nAsk him %s, with AskUserQuestion: one question, the two options \"%s\" and \"%s\", no answers filled in, and "
            "metadata {\"source\": \"%s\", \"repo\": \"%s\", \"pr\": %d, \"sha256\": \"%s\"}. The question must hold each of "
            "these lines, word for word, on a line of its own:\n\n%s\n\n"
@@ -348,6 +415,13 @@ def judge(a):
     if sweep:
         how += ("It must also hold a line starting \"%s\" that says in plain words what the pull request does to those entries "
                 "(at least %d characters). " % (CHANGE_LINE, CHANGE_MIN))
+    else:
+        # The measure counted CLOSING as the question's last line, one row of the session's own.
+        spare = size["maxRows"] - size["rows"] + 1
+        how += ("With one closing line of your own these lines take %d rows of the %d a question may take in a window %d "
+                "columns wide, so add %s of your own: an answer to a taller question is not taken. "
+                % (size["rows"], size["maxRows"], size["columns"],
+                   "no more than that one line" if spare <= 1 else "at most %d rows" % spare))
     how += ("Then send this merge again, or start the merge helper again: his answer is read from this session and kept for the "
             "helper. It covers exactly these entries as they are now, so a push that changes one of them is asked about again. "
             "A subagent cannot ask: hand this back to the main session.")
@@ -380,7 +454,7 @@ def main(argv):
             return 2
         said, _ = from_transcript(a["transcript"], a["session"])
         try:
-            keep(a["record"], said)
+            keep(a["record"], said, a["transcript"], a["session"])
         except OSError as e:
             sys.stderr.write("%s: %s\n" % (os.path.join(a["record"], RECORD_NAME), e.strerror or type(e).__name__))
             return 3

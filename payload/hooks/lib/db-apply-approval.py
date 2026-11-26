@@ -249,14 +249,17 @@ def _stamp_ns(stamp):
     return int(t.timestamp()) * 1_000_000_000 + t.microsecond * 1000
 
 
-def _picker_faults(asks, deadline=None):
+def _picker_faults(asks, deadline=None, sizes=None):
     """For each picker's input in asks, None when Dan would read it as written, else the sentence
     saying what in it he would not (the shared check's own words). Raises PickerCheckFailed, with
     why, when the check could not be run or gave no verdict that could be read for every picker:
     a verdict is never assumed (HIS ANSWER COUNTS ONLY FOR A PICKER HE COULD READ, above).
     deadline, when given, is the time.monotonic() the caller's git runs share (COMMIT_SECONDS): the
     check waits no longer than what is left of it, so the hook ends inside its own limit and asks,
-    with the reason, rather than being cut off."""
+    with the reason, rather than being cut off. sizes, when a list, gets the check's own measure of
+    each picker's question as lib/picker-check.mjs words it (rows, units, large and the limits),
+    for a caller that must know whether the text is past the dialog's size (lib/lesson-merge.py,
+    claude-config#3583); a measure that cannot be read raises as a verdict that cannot."""
     import shutil
     limit = PICKER_CHECK_SECONDS
     if deadline is not None:
@@ -269,9 +272,12 @@ def _picker_faults(asks, deadline=None):
     entry = os.path.join(os.path.dirname(os.path.abspath(__file__)), PICKER_CHECK)
     # json.dumps writes ASCII alone (ensure_ascii), a lone surrogate as its escape, so the encode
     # cannot meet a character it refuses; strict says so rather than hiding one.
+    sent = {"asks": asks}
+    if sizes is not None:
+        sent["sizes"] = True
     try:
         r = subprocess.run([node, "--experimental-strip-types", "--no-warnings", entry],
-                           input=json.dumps({"asks": asks}).encode("utf-8", "strict"), capture_output=True,
+                           input=json.dumps(sent).encode("utf-8", "strict"), capture_output=True,
                            timeout=limit)
     except subprocess.TimeoutExpired:
         raise PickerCheckFailed("the check did not answer in " + ("%.1f" % limit) + " seconds")
@@ -284,11 +290,21 @@ def _picker_faults(asks, deadline=None):
         said = next((l for l in lines if "Error" in l or l.startswith("picker-check:")), lines[0] if lines else "")[:200]
         raise PickerCheckFailed("the check exited " + str(r.returncode) + (": " + said if said else ""))
     try:
-        faults = json.loads(r.stdout.decode("utf-8", "replace")).get("faults")
+        answer = json.loads(r.stdout.decode("utf-8", "replace"))
+        faults = answer.get("faults")
     except (ValueError, AttributeError):
-        faults = None
+        answer, faults = {}, None
     if not isinstance(faults, list) or len(faults) != len(asks):
         raise PickerCheckFailed("the check's answer could not be read")
+    if sizes is not None:
+        measured = answer.get("sizes")
+        whole = ("rows", "units", "maxRows", "maxUnits", "columns")
+        if (not isinstance(measured, list) or len(measured) != len(asks)
+                or not all(isinstance(m, dict) and isinstance(m.get("large"), bool)
+                           and all(isinstance(m.get(k), int) and not isinstance(m.get(k), bool) for k in whole)
+                           for m in measured)):
+            raise PickerCheckFailed("the check's measure of the question could not be read")
+        sizes.extend(measured)
     out = []
     for f in faults:
         if f is None:
@@ -347,10 +363,11 @@ def answered_asks(transcript_path, session_id, source, word, unread=None, deadli
     return _pickers(transcript_path, session_id, source, word, unread, deadline, whole=True)
 
 
-def picker_faults(asks, deadline=None):
+def picker_faults(asks, deadline=None, sizes=None):
     """_picker_faults, for a gate that must know before it names a picker whether Dan could read
-    its text as written (lib/lesson-merge.py, claude-config#3343)."""
-    return _picker_faults(asks, deadline)
+    its text as written (lib/lesson-merge.py, claude-config#3343), and with sizes whether its text
+    is past the dialog's size (claude-config#3583)."""
+    return _picker_faults(asks, deadline, sizes)
 
 
 def _pickers(transcript_path, session_id, source, word, unread=None, deadline=None, whole=False):

@@ -35,6 +35,12 @@
 #
 # NO OVERRIDE. The remedy is always open: Dan's answer.
 #
+# THE WAYS ROUND IT (claude-config#3583). It is also registered for Edit, Write, MultiEdit and
+# NotebookEdit, where it does one thing: refuse a write of a file in the record's folder
+# (lm_write_tool_judged). A file list naming the lessons file under another spelling is refused
+# (ANOTHER SPELLING OF THE LESSONS FILE, below). And the rule believes no line of the record on its
+# own word, and shows every rule and SHORT line whenever the shared picker check says they fit.
+#
 # Where the pull request, the file or the verdict cannot be read the merge is refused: cannot tell
 # is never "nothing changed" (L490). Its GitHub reads are asked again while GitHub fails
 # transiently, inside a budget, as the other merge gates' are (#1061, #1081).
@@ -56,18 +62,15 @@ payload=$(cat)
 # Before every Bash command, so the commonest case leaves here before anything is loaded, by the
 # words every merge route names (mt__might_merge in lib/merge-target.sh). The merge helper's name
 # and the record's folder both hold the word.
-case "$payload" in *merge*|*Merge*|*enqueuePullRequest*) ;; *) exit 0 ;; esac
+# The word in any case (claude-config#3583): on a Mac's file system the record's folder spelled in
+# capitals is the same folder, and a payload naming it that way left here unread. A call of a tool
+# that writes a file names the file it writes, and goes on to be asked where that file lands.
+shopt -s nocasematch
+case "$payload" in *merge*|*enqueuePullRequest*|*'"file_path"'*|*'"notebook_path"'*) ;; *) exit 0 ;; esac
+shopt -u nocasematch
 
 WHAT="Cannot tell whether this merge changes a lesson entry Dan has not approved"
 LESSONS_PATH="payload/LESSONS.md"
-
-# shellcheck source=lib/merge-target.sh
-{ . "$HOOK_DIR/lib/merge-target.sh" 2>/dev/null && declare -F mt_runs_merge >/dev/null; } || {
-  # A library this gate cannot load is not a merge with nothing to check (claude-config#1900, L10).
-  echo "$WHAT: lessons-merge-gate.sh could not load $HOOK_DIR/lib/merge-target.sh, or lib/push-scope.sh beneath it, which reads whether this command merges a pull request and which one, so the lesson entries it changes could not be checked. A library this gate cannot load is not a merge with nothing to check. Reinstall the hooks with claude-sync pull." >&2
-  exit 2
-}
-
 RULE="$HOOK_DIR/lib/lesson-merge.py"
 RECORD_DIR="${CLAUDE_HOME:-$HOME/.claude}/state/lesson-merges"
 MAX_BYTES=20000000
@@ -80,6 +83,72 @@ if [ "${HOOK_TESTS_RUNNING:-}" = 1 ]; then
   case "${LM_MERGE_MAX_BYTES:-}" in ''|*[!0-9]*) ;; *) MAX_BYTES="$LM_MERGE_MAX_BYTES" ;; esac
   case "${LM_MERGE_READ_TRIES:-}" in ''|*[!0-9]*) ;; *) READ_TRIES="$LM_MERGE_READ_TRIES" ;; esac
 fi
+
+deny() {
+  jq -nc --arg reason "$1" '{
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: $reason
+    }
+  }'
+  exit 0
+}
+
+# THE RECORD OF HIS ANSWERS IS THIS GATE'S TO WRITE (claude-config#3583). An Edit, Write, MultiEdit
+# or NotebookEdit of a file in its folder is refused: by where the path lands on disk once .., a
+# doubled slash, another case, a linked folder and a linked file are followed. A line put there any
+# other way is never believed (lib/lesson-merge.py, A LINE ON THE RECORD IS A POINTER), so this is
+# a tripwire that says so at the write, not the thing that keeps a forged line from counting.
+#
+# Returns 0 having judged the call (it exits when it refuses), 1 when the payload is not such a
+# call or could not be read as one; a call it returns 1 for goes on to be read as a command.
+lm_write_tool_judged() {  # $1 = the payload
+  local row tool target folder ran lands
+  command -v jq >/dev/null 2>&1 || return 1
+  row="$(printf '%s' "$1" | jq -r '[(.tool_name // "" | strings), ((.tool_input.file_path // .tool_input.notebook_path // "") | strings), (.cwd // "" | strings), ((.tool_input.command // "") | tostring | length | tostring)] | join("\u001f")' 2>/dev/null)" || return 1
+  tool="${row%%$'\x1f'*}"; row="${row#*$'\x1f'}"
+  target="${row%%$'\x1f'*}"; row="${row#*$'\x1f'}"
+  folder="${row%%$'\x1f'*}"; ran="${row#*$'\x1f'}"
+  case "$tool" in Edit|Write|MultiEdit|NotebookEdit) ;; *) return 1 ;; esac
+  # One that also carries a command is read as a command, never passed here.
+  [ "$ran" = 0 ] || return 1
+  [ -n "$target" ] || return 0
+  lands=""
+  if command -v python3 >/dev/null 2>&1; then
+    lands="$(python3 -c '
+import os, sys
+target, folder, record = sys.argv[1:4]
+real = lambda p: os.path.realpath(p).lower()
+t, r = real(os.path.join(folder or "/", target)), real(record)
+print("inside" if t == r or t.startswith(r.rstrip("/") + "/") else "outside")' "$target" "$folder" "$RECORD_DIR" 2>/dev/null)"
+  fi
+  case "$lands" in
+    outside) return 0 ;;
+    inside) deny "Refusing: this $tool writes $target, which is in $RECORD_DIR, the record of Dan's answers about lesson entries in a pull request (claude-config#3343, #3583). Only lessons-merge-gate.sh writes it, from his own answer in the picker a refused merge names. A line put there any other way would be an approval he never gave, and it would count for nothing: a line is believed only when the session transcript it names holds that answer. To see the record, read it with the Read tool." ;;
+  esac
+  # Where it lands could not be followed: a path that names the folder's own word is held.
+  shopt -s nocasematch
+  case "$target" in
+    *lesson-merges*) shopt -u nocasematch
+      deny "Refusing: this $tool writes $target, and whether that is in $RECORD_DIR, the record of Dan's answers about lesson entries in a pull request, could not be followed on disk (python3 follows it, and is not on PATH or failed). Only lessons-merge-gate.sh writes that record, and a line put there any other way would be an approval he never gave (claude-config#3583)." ;;
+  esac
+  shopt -u nocasematch
+  return 0
+}
+# Before anything is loaded: every Edit and Write passes through here. Whatever is left is read as a
+# command, and leaves at once unless it holds a word a merge route or the record's folder names.
+case "$payload" in *'"file_path"'*|*'"notebook_path"'*) lm_write_tool_judged "$payload" && exit 0 ;; esac
+shopt -s nocasematch
+case "$payload" in *merge*|*enqueuePullRequest*) ;; *) exit 0 ;; esac
+shopt -u nocasematch
+
+# shellcheck source=lib/merge-target.sh
+{ . "$HOOK_DIR/lib/merge-target.sh" 2>/dev/null && declare -F mt_runs_merge >/dev/null; } || {
+  # A library this gate cannot load is not a merge with nothing to check (claude-config#1900, L10).
+  echo "$WHAT: lessons-merge-gate.sh could not load $HOOK_DIR/lib/merge-target.sh, or lib/push-scope.sh beneath it, which reads whether this command merges a pull request and which one, so the lesson entries it changes could not be checked. A library this gate cannot load is not a merge with nothing to check. Reinstall the hooks with claude-sync pull." >&2
+  exit 2
+}
 
 # On stderr with exit 2 rather than through deny(), which builds its JSON with jq, one of the tools
 # that can be missing.
@@ -102,17 +171,6 @@ parsed=$(ps_parse_payload "$payload" raw) \
 command="${parsed%%$'\x1f'*}"
 cwd="${parsed#*$'\x1f'}"
 
-deny() {
-  jq -nc --arg reason "$1" '{
-    hookSpecificOutput: {
-      hookEventName: "PreToolUse",
-      permissionDecision: "deny",
-      permissionDecisionReason: $reason
-    }
-  }'
-  exit 0
-}
-
 # Who is asking, for his answer: the session's transcript, and whether the call is a subagent's.
 # Read with jq when it is here; without it they stay empty, and a merge is refused for jq below.
 session_id=""; transcript=""; agent_id=""
@@ -122,13 +180,34 @@ if command -v jq >/dev/null 2>&1; then
   agent_id="$(printf '%s' "$payload" | jq -r '.agent_id // "" | strings' 2>/dev/null)"
 fi
 
-# The record of his answers is this gate's to write (lib/lesson-merge.py, WHAT THE RECORD CANNOT
-# SEE). A line added there by a command would be an approval nobody gave.
-case "$command" in
-  *"state/lesson-merges"*)
-    command -v jq >/dev/null 2>&1 || { echo "Refusing: this command names the record of Dan's answers about lesson entries in a pull request, which is written only by lessons-merge-gate.sh." >&2; exit 2; }
-    deny "Refusing: this command names $RECORD_DIR, the record of Dan's answers about lesson entries in a pull request (claude-config#3343). It is written only by lessons-merge-gate.sh, from his own answer in the picker a refused merge names, and a line put there any other way would be an approval he never gave. To see it, read the file with the Read tool." ;;
-esac
+# The record of his answers is this gate's to write. A line put there any other way is never
+# believed (lib/lesson-merge.py, A LINE ON THE RECORD IS A POINTER), so what follows is a tripwire
+# that says so at the write, not the thing that keeps a forged line from counting.
+#
+# A shell command naming the folder, in any case and with a doubled slash or a dot between its two
+# names, which on a Mac's file system are all the same folder (claude-config#3583).
+named="$command"
+while :; do case "$named" in *//*) named="${named//\/\///}" ;; */./*) named="${named//\/.\///}" ;; *) break ;; esac; done
+shopt -s nocasematch
+case "$named" in *"state/lesson-merges"*) named=yes ;; *) named="" ;; esac
+shopt -u nocasematch
+if [ -n "$named" ]; then
+  command -v jq >/dev/null 2>&1 || { echo "Refusing: this command names the record of Dan's answers about lesson entries in a pull request, which is written only by lessons-merge-gate.sh." >&2; exit 2; }
+  deny "Refusing: this command names $RECORD_DIR, the record of Dan's answers about lesson entries in a pull request (claude-config#3343). It is written only by lessons-merge-gate.sh, from his own answer in the picker a refused merge names, and a line put there any other way would be an approval he never gave. To see it, read the file with the Read tool."
+fi
+
+# A call of a tool that writes a file, whose payload had to be cleaned before it could be read
+# (lm_write_tool_judged, above, reads the rest before anything is loaded). It runs no command, so
+# one that does not write to the record leaves here.
+if [ -z "$command" ]; then
+  lm_write_tool_judged "$payload" && exit 0
+  # No jq to say which tool this is: a payload that runs no command and names the folder is held.
+  if ! command -v jq >/dev/null 2>&1; then
+    shopt -s nocasematch
+    case "$payload" in *lesson-merges*) echo "Refusing: this call names the record of Dan's answers about lesson entries in a pull request, and without jq on PATH lessons-merge-gate.sh cannot read whether it writes there. Only that gate writes the record (claude-config#3583). Install jq." >&2; exit 2 ;; esac
+    shopt -u nocasematch
+  fi
+fi
 
 # The merge helper being started (claude-config#3343). It merges inside itself and asks this gate
 # with no transcript, so whatever answers this session's transcript holds are put on the record
@@ -145,6 +224,17 @@ case "$command" in
 esac
 
 mt_runs_merge "$command" || exit 0
+
+# Asleep, Dan is not asked: the refusal says the merge waits (lib/sleep.sh, the one reader of the
+# night's record). Loaded here, before anything is read from GitHub, and refused on stderr with exit
+# 2 as a library that cannot be loaded is above: loaded where it was first used, after the reads, a
+# missing one was only reached by a merge GitHub answered for, and any other was refused in other
+# words that named no library (test-gates-fail-closed.sh, found for claude-config#3583).
+# shellcheck source=lib/sleep.sh
+{ . "$HOOK_DIR/lib/sleep.sh" 2>/dev/null && declare -F sleep_active >/dev/null; } || {
+  echo "$WHAT: lessons-merge-gate.sh could not load $HOOK_DIR/lib/sleep.sh, which says whether Dan is asleep, and what a refused merge is told to do depends on it. A library this gate cannot load is not a merge with nothing to check. Reinstall the hooks with claude-sync pull." >&2
+  exit 2
+}
 
 ps_reader_missing jq && refuse_no_reader "jq is not on PATH" \
   "lessons-merge-gate.sh reads GitHub's answer about this pull request with it, so with jq absent nothing here can read which files it changes." \
@@ -234,6 +324,29 @@ if [ -z "$number" ] || [ -z "$base_oid" ] || [ -z "$head_oid" ] || [ -z "$api_sl
   deny "$WHAT: GitHub's answer about the pull request named no number, base commit, head commit or repository, so what it changes cannot be read."
 fi
 
+# ANOTHER SPELLING OF THE LESSONS FILE (claude-config#3583). GitHub keeps payload/lessons.md and
+# payload/LESSONS.md as two files; a Mac's file system keeps one, so after the next pull the text
+# every session loads could be the other file's, which the read of payload/LESSONS.md below never
+# sees. So a path in the file list that is the lessons file by any spelling that reaches it on a
+# Mac, and is not that exact path, is refused, and no picker covers it: another case in either
+# name, a "./", a doubled or leading slash, a ".." (none of which GitHub lists, so one that arrives
+# is never read as untouched), characters outside ASCII dropped (a file system that ignores some),
+# and the folder itself listed as a file, which is what a link put in the folder's place is.
+odd_path=$(printf '%s' "$view" | jq -r --arg p "$LESSONS_PATH" '
+  def folded: ascii_downcase | gsub("[^\\x00-\\x7f]"; "") | gsub("/\\.(?=/)"; "") | gsub("/+"; "/") | sub("^(\\./)+"; "") | sub("^/"; "");
+  ($p | ascii_downcase) as $lp | ($lp | split("/")) as $parts | ($parts[:-1] | join("/")) as $dir
+  | [ (if (.files | type) == "array" then .files[] else empty end) | (.path // "" | tostring) | select(. != $p)
+      | (folded) as $f
+      | if $f == $lp or (test("(^|/)\\.\\.(/|$)") and ($f | endswith($parts | last))) then "file\t\(.)"
+        elif $f == $dir then "folder\t\(.)" else empty end ] | first // ""' 2>/dev/null) \
+  || deny "$WHAT: the file list of PR #$number could not be read for another spelling of $LESSONS_PATH, so whether it changes the lessons file under another name is unknown."
+case "$odd_path" in
+  file$'\t'*)
+    deny "Refusing to merge PR #$number: its file list names ${odd_path#*$'\t'}, another spelling of $LESSONS_PATH (claude-config#3583). GitHub keeps the two as separate files and a Mac's file system keeps one, so after the next pull the text every session loads could be that file's, and nothing here can show Dan which. No picker covers it: remove or rename that file on the branch, or leave the merge to Dan." ;;
+  folder$'\t'*)
+    deny "Refusing to merge PR #$number: its file list names ${odd_path#*$'\t'}, the folder $LESSONS_PATH is in, as a file itself (claude-config#3583). A file or a link put in that folder's place decides what is read as the lessons file on a Mac, and nothing here can show Dan which text that is. No picker covers it: undo that on the branch, or leave the merge to Dan." ;;
+esac
+
 # The entries judged are those at the commit that would merge. A merge pinned to a whole commit
 # merges that commit or nothing (GitHub refuses one whose head is not it), so that commit is judged,
 # whatever head GitHub's view shows: the view can show a pushed head late, and merge-when-ready.sh
@@ -297,6 +410,42 @@ if [ "$MT_READ_STATE" != ok ] || [ "${#merge_base}" != 40 ]; then
   deny "$WHAT: GitHub's comparison of $base_oid and $judged_oid in $api_slug named no merge base (${MT_READ_ERR:-it answered without one}), so what PR #$number changes in $LESSONS_PATH cannot be measured."
 fi
 
+# A file list that cannot say which files change (cut short, holding a rename, or about another
+# commit than the pinned one) cannot say either whether the lessons file changes under another
+# spelling (ANOTHER SPELLING OF THE LESSONS FILE, above). So every file GitHub holds is read at
+# both commits, two reads more, and the other spellings of the path compared by name and sha. A
+# spelling the pull request leaves as it was is not its change. A tree GitHub cuts short, which its
+# answer says of itself, cannot say, and is refused.
+if [ "$touch" = maybe ]; then
+  lessons_lower="$(printf '%s' "$LESSONS_PATH" | tr 'A-Z' 'a-z')"
+  # shellcheck disable=SC2016
+  SPELL_FILTER='def folded: ascii_downcase | gsub("[^\\x00-\\x7f]"; "") | gsub("/+"; "/") | sub("^/"; "");
+    if .truncated == true or (.tree | type) != "array" then "cut short"
+    else [ .tree[] | select(.type != "tree") | (.path // "" | tostring) as $path | select($path != "'"$LESSONS_PATH"'")
+           | ($path | folded) as $f
+           | if $f == "'"$lessons_lower"'" then "file\t\($path)\t\(.sha // "")" elif $f == "'"${lessons_lower%/*}"'" then "folder\t\($path)\t\(.sha // "")" else empty end ]
+         | sort | join("\n") end'
+  spellings_at(){  # $1 = commit, $2 = where to put them, $3 = in words
+    api_out="$2"; api_args=(--jq "$SPELL_FILTER" "repos/$api_slug/git/trees/$1?recursive=1")
+    must_read "the files of $api_slug at $3 $1"
+    [ "$MT_READ_STATE" = ok ] || deny "$WHAT: GitHub listed no files for $3 $1 of $api_slug (${MT_READ_ERR:-it answered without them}), so whether PR #$number changes $LESSONS_PATH under another spelling is unknown."
+    if [ "$(head -n 1 "$2" 2>/dev/null)" = "cut short" ]; then
+      deny "$WHAT: $api_slug at $3 $1 holds more files than GitHub lists in one answer, and the file list of PR #$number cannot say which it changes, so whether it changes $LESSONS_PATH under another spelling is unknown. That is this gate's limit, not a verdict on the pull request."
+    fi
+  }
+  spellings_at "$merge_base" "$SCRATCH/spell-base" "the merge base"
+  spellings_at "$judged_oid" "$SCRATCH/spell-head" "$judged_words"
+  if ! cmp -s "$SCRATCH/spell-base" "$SCRATCH/spell-head"; then
+    odd_path="$(LC_ALL=C comm -13 "$SCRATCH/spell-base" "$SCRATCH/spell-head" 2>/dev/null | head -n 1)"
+    [ -n "$odd_path" ] || odd_path="$(LC_ALL=C comm -23 "$SCRATCH/spell-base" "$SCRATCH/spell-head" 2>/dev/null | head -n 1)"
+    odd_kind="${odd_path%%$'\t'*}"; odd_path="${odd_path#*$'\t'}"; odd_path="${odd_path%$'\t'*}"
+    if [ "$odd_kind" = folder ]; then
+      deny "Refusing to merge PR #$number: between the merge base and $judged_words it changes $odd_path, the folder $LESSONS_PATH is in, as a file itself (claude-config#3583). A file or a link put in that folder's place decides what is read as the lessons file on a Mac, and nothing here can show Dan which text that is. No picker covers it: undo that on the branch, or leave the merge to Dan."
+    fi
+    deny "Refusing to merge PR #$number: between the merge base and $judged_words it adds, changes or removes ${odd_path:-a file}, another spelling of $LESSONS_PATH (claude-config#3583). GitHub keeps the two as separate files and a Mac's file system keeps one, so after the next pull the text every session loads could be that file's, and nothing here can show Dan which. No picker covers it: undo that on the branch, or leave the merge to Dan."
+  fi
+fi
+
 # The lessons file at a commit. gh's own 404 is a file that is not there, which reads as a file
 # with no entries; any other failure refuses. Asked for raw, which GitHub serves up to 100 MB; a
 # file past what this gate reads is refused by its size, never judged by its first part.
@@ -323,13 +472,6 @@ fi
 
 command -v python3 >/dev/null 2>&1 || deny "$WHAT: $(ps_detector_absent_why "python3 is not on PATH" "lessons-merge-gate.sh reads the entries through lib/lesson-merge.py, so with it absent nothing here can tell a changed entry from a blank line." "python3")"
 [ -f "$RULE" ] || deny "$WHAT: $RULE is missing, and it is the rule this gate applies. Restore it with claude-sync pull."
-
-# Asleep, Dan is not asked: the refusal says the merge waits (lib/sleep.sh, the one reader of the
-# night's record). A reader that cannot be loaded refuses, since what the session is told to do
-# depends on it.
-# shellcheck source=lib/sleep.sh
-{ . "$HOOK_DIR/lib/sleep.sh" 2>/dev/null && declare -F sleep_active >/dev/null; } \
-  || deny "$WHAT: lessons-merge-gate.sh could not load $HOOK_DIR/lib/sleep.sh, which says whether Dan is asleep, and what a refused merge is told to do depends on it. Reinstall the hooks with claude-sync pull."
 
 rule_args=(judge --repo "$api_slug" --pr "$number" --base "$SCRATCH/base.md" --head "$SCRATCH/head.md" --record-dir "$RECORD_DIR")
 [ -n "$transcript" ] && [ -n "$session_id" ] && rule_args+=(--transcript "$transcript" --session "$session_id")

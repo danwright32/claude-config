@@ -231,4 +231,62 @@ talk "$WORK/cancel.jsonl" db-apply Cancel plain
 got="$(PATH="$WORK/marker:$PATH" reader "$WORK/cancel.jsonl" applies 2>&1)"
 case "$got" in "taken=[] unread=[]"*) [ ! -e "$WORK/node-ran" ] && check "a picker Dan answered Cancel is never sent to the check" ok || check "a picker Dan answered Cancel is never sent to the check" "node was run" ;; *) check "a picker Dan answered Cancel is never sent to the check" "got: ${got:0:400}" ;; esac
 
+# --- the measure: whether a question is past the dialog's size (claude-config#3583) ----------------
+# A gate that must choose between a question showing every line and a shorter one asks the entry,
+# with "sizes": true, rather than counting rows itself. The measure is held here to the verdict:
+# at mod-kit's own limits a question is large exactly when the check refuses it for its size.
+MAXROWS="$(sed -n 's/^export const MAX_QUESTION_ROWS = \([0-9][0-9]*\)$/\1/p' "$SHOWN")"
+COLUMNS_AT="$(sed -n 's/^export const QUESTION_COLUMNS = \([0-9][0-9]*\)$/\1/p' "$SHOWN")"
+case "$MAXROWS:$COLUMNS_AT" in *[!0-9:]*|:*|*:) check "mod-kit's row limit and width can be read from shown.ts" "got: $MAXROWS:$COLUMNS_AT" ;; *) check "mod-kit's row limit and width can be read from shown.ts" ok ;; esac
+# sized <lines> [units]: one picker whose question is that many one word lines, or one line of
+# that many units, sent with "sizes": true; prints "<fault or none>|large=<..>|rows=<..>|units=<..>|limits=<..>".
+SIZED_PRINT='import json, sys; o = json.load(sys.stdin); f = o["faults"][0]; s = o["sizes"][0]; print("%s|large=%s|rows=%d|units=%d|limits=%d,%d,%d" % ("none" if f is None else f["fault"][:60], str(s["large"]).lower(), s["rows"], s["units"], s["maxRows"], s["maxUnits"], s["columns"]))'
+sized() {
+  python3 - "${1:-0}" "${2:-0}" <<'PY' | entry | python3 -c "$SIZED_PRINT"
+import json, sys
+lines, units = int(sys.argv[1]), int(sys.argv[2])
+q = "\n".join(["word"] * lines) if lines else ("word " * units)[:units - 1] + "?"
+print(json.dumps({"sizes": True, "asks": [{"questions": [{"question": q, "header": "Lessons", "multiSelect": False,
+    "options": [{"label": "Yes", "description": "Go on"}, {"label": "No", "description": "Stop"}]}]}]}))
+PY
+}
+got="$(sized "$MAXROWS")"
+case "$got" in "none|large=false|rows=$MAXROWS|"*"|limits=$MAXROWS,$MAX,$COLUMNS_AT") check "a question exactly at mod-kit's row limit is not large, and the check passes it" ok ;; *) check "a question exactly at mod-kit's row limit is not large, and the check passes it" "got: $got" ;; esac
+got="$(sized "$((MAXROWS + 1))")"
+case "$got" in "it takes $((MAXROWS + 1)) rows"*"|large=true|rows=$((MAXROWS + 1))|"*) check "a question one row over is large, and the check refuses it for its rows" ok ;; *) check "a question one row over is large, and the check refuses it for its rows" "got: $got" ;; esac
+got="$(sized 0 "$MAX")"
+case "$got" in "none|large=false|"*"|units=$MAX|"*) check "a question exactly at mod-kit's length limit is not large" ok ;; *) check "a question exactly at mod-kit's length limit is not large" "got: $got" ;; esac
+got="$(sized 0 "$((MAX + 1))")"
+case "$got" in "it is $((MAX + 1)) UTF-16 code units"*"|large=true|"*"|units=$((MAX + 1))|"*) check "a question one unit over is large, and the check refuses it for its length" ok ;; *) check "a question one unit over is large, and the check refuses it for its length" "got: $got" ;; esac
+out="$(asks hidden | python3 -c 'import json,sys; o=json.load(sys.stdin); o["sizes"]=True; print(json.dumps(o))' | entry)"
+case "$out" in *'"fault":"character '*'"large":false'*) check "a short question the check refuses for a character is not large" ok ;; *) check "a short question the check refuses for a character is not large" "out=${out:0:300}" ;; esac
+if grep -nE "= *[0-9]{2,}|[<>] *[0-9]" "$ENTRY" >"$WORK/numbers" 2>/dev/null; then
+  check "the entry holds no limit of its own" "it spells a number: $(head -n 2 "$WORK/numbers" | cut -c1-160)"
+else
+  check "the entry holds no limit of its own" ok
+fi
+# The reader hands the measure on, and a measure that cannot be read is no verdict.
+measure() {  # measure [a node folder]: picker_faults with sizes, over one plain picker
+  PATH="${1:+$1:}$PATH" python3 - "$DIR/lib/db-apply-approval.py" <<'PY' 2>&1
+import importlib.util, sys
+sys.dont_write_bytecode = True
+spec = importlib.util.spec_from_file_location("a", sys.argv[1]); a = importlib.util.module_from_spec(spec); spec.loader.exec_module(a)
+ask = {"questions": [{"question": "May it go on?", "header": "Lessons", "multiSelect": False,
+                      "options": [{"label": "Yes", "description": "Go on"}, {"label": "No", "description": "Stop"}]}]}
+sizes = []
+try:
+    print("faults=%r large=%r rows=%r" % (a.picker_faults([ask], sizes=sizes), sizes[0]["large"], sizes[0]["rows"]))
+except a.PickerCheckFailed as e:
+    print("failed: %s" % e)
+PY
+}
+got="$(measure)"
+case "$got" in "faults=[None] large=False rows=1") check "the reader hands the entry's measure to a caller that asks for it" ok ;; *) check "the reader hands the entry's measure to a caller that asks for it" "got: ${got:0:300}" ;; esac
+fakenode nosizes 'cat >/dev/null; echo "{\"faults\":[null]}"'
+got="$(measure "$WORK/nosizes")"
+case "$got" in "failed: the check's measure of the question could not be read") check "an answer with no measure is no verdict for a caller that asked for one" ok ;; *) check "an answer with no measure is no verdict for a caller that asked for one" "got: ${got:0:300}" ;; esac
+fakenode oddsizes 'cat >/dev/null; echo "{\"faults\":[null],\"sizes\":[{\"large\":\"no\",\"rows\":1}]}"'
+got="$(measure "$WORK/oddsizes")"
+case "$got" in "failed: the check's measure of the question could not be read") check "a measure in a shape the entry never gives is no verdict" ok ;; *) check "a measure in a shape the entry never gives is no verdict" "got: ${got:0:300}" ;; esac
+
 finish
