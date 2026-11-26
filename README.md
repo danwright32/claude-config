@@ -852,7 +852,13 @@ run of a test suite was refused at its ninth: measured on 2026-11-26 on the pers
 of the 410 suites here and `run-all-tests.sh` itself, with no file opened for any of them.
 `tests/test-suite-runs-pass-write-gate.sh` now asks the gate about the plain run command of every
 suite found on disk, from a stand in primary checkout a watcher could overwrite and from a stand
-in worktree of a builder, and fails on a refusal. It runs the gate and never a suite.
+in worktree of a builder, and fails on a refusal. It runs the gate and never a suite. It holds a
+list of two runs it expects to be refused from a primary checkout, the write gate's own
+`test-payload-write-gate-real-path.sh` and `test-payload-write-gate-script-string.sh`, whose test
+text holds link commands beside a quoted payload path that the gate places against that
+checkout. Dan allowed that list on 2026-11-26; it is in the check only, never in the gate. The
+check prints the two with their reason on every run, and fails when any other suite is refused
+or when a listed one is let through, refused in other words, or gone.
 
 Before a Bash call the write gate also notes what an at risk `payload/` holds, in
 `~/.claude-payload-write-gate`, so that after the call it can name anything written there that the

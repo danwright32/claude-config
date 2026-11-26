@@ -48,13 +48,129 @@ not_run(){ # not_run <why>
   printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
   exit 2
 }
-[ -f "$HOOK" ] || not_run "needs payload/hooks/payload-write-gate.sh in the checkout it is in"
-command -v git >/dev/null 2>&1 || not_run "needs git, to list the files of this checkout"
-command -v python3 >/dev/null 2>&1 || not_run "needs python3"
 
 FIX="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/suite-runs-write-gate.XXXXXXXX")" && pwd -P)"
 trap 'rm -rf "$FIX"; [ -n "${WPID:-}" ] && kill "$WPID" 2>/dev/null; true' EXIT
-mkdir -p "$FIX/primary" "$FIX/src/payload" "$FIX/elsewhere" "$FIX/state"
+mkdir -p "$FIX/primary" "$FIX/src/payload" "$FIX/elsewhere" "$FIX/state" "$FIX/self"
+
+# THE REFUSALS THIS CHECK EXPECTS, from a primary checkout (form A) only. One line each: the suite,
+# a tab, and why the gate refuses its run there.
+#
+# Dan allowed this list on 2026-11-26 (claude-config#3775): "3.93.1 List the two as expected
+# (Recommended)". The gate stays exactly as strict. These two are the write gate's own suites, and
+# they are still run in CI and from a worktree of a builder, where the gate lets them through. A
+# refusal of any suite not listed here fails the check, and so does a listed suite that is let
+# through, refused in other words, or no longer there, so the list cannot go stale. It is an
+# exception list in this check only, never in the gate. Adding a line to it is Dan's to allow.
+EXPECTED_REFUSED_A="payload/hooks/test-payload-write-gate-real-path.sh	its test text holds link commands beside a quoted payload path, which the gate places against the primary checkout
+payload/hooks/test-payload-write-gate-script-string.sh	its test text holds link commands beside a quoted payload path, which the gate places against the primary checkout"
+EXPECTED_WORDS="REFUSED a write to "
+
+expected_reason(){ # expected_reason <form> <command> -> why, when that run is listed for that form
+  local entry
+  [ "$1" = A ] || return 1
+  while IFS= read -r entry; do
+    [ -n "$entry" ] || continue
+    if [ "bash ${entry%%	*}" = "$2" ]; then printf '%s' "${entry#*	}"; return 0; fi
+  done <<LIST
+$EXPECTED_REFUSED_A
+LIST
+  return 1
+}
+
+# judge <form> <what the form is> <file of answers>
+# One line a finding: OK, EXPECTED or BAD, a tab, what was judged, and for BAD a tab and why. It
+# counts nothing itself, so it can be run on made up answers below before it is believed about the
+# gate's (L1).
+judge(){
+  local form="$1" what="$2" answers line verdict rest cmdline said why entry
+  answers="$(cat "$3" 2>/dev/null || true)"
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    verdict="${line%%	*}"; rest="${line#*	}"; cmdline="${rest%%	*}"; said="${rest#*	}"
+    if why="$(expected_reason "$form" "$cmdline")"; then
+      case "$verdict" in
+        REFUSED)
+          case "$said" in
+            *"$EXPECTED_WORDS"*/payload/*) printf 'EXPECTED\tform %s, %s: %s is refused, as listed: %s\n' "$form" "$what" "$cmdline" "$why" ;;
+            *) printf 'BAD\tform %s, %s: %s is refused for the reason it is listed for\tthe gate refused it in other words: %s\n' "$form" "$what" "$cmdline" "$said" ;;
+          esac ;;
+        ALLOWED) printf 'BAD\tform %s, %s: %s is still refused, as the list of expected refusals says\tthe gate lets it through now, so take it off the list\n' "$form" "$what" "$cmdline" ;;
+        *) printf 'BAD\tform %s, %s: %s is asked about\tthe gate could not be asked: %s\n' "$form" "$what" "$cmdline" "$said" ;;
+      esac
+      continue
+    fi
+    case "$verdict" in
+      ALLOWED) printf 'OK\tform %s, %s: %s is let through\n' "$form" "$what" "$cmdline" ;;
+      REFUSED) printf 'BAD\tform %s, %s: %s is let through\tthe gate refused it: %s\n' "$form" "$what" "$cmdline" "$said" ;;
+      *)       printf 'BAD\tform %s, %s: %s is let through\tthe gate could not be asked: %s\n' "$form" "$what" "$cmdline" "$said" ;;
+    esac
+  done <<ANSWERS
+$answers
+ANSWERS
+  [ "$form" = A ] || return 0
+  while IFS= read -r entry; do
+    [ -n "$entry" ] || continue
+    case "
+$answers
+" in
+      *"	bash ${entry%%	*}	"*) ;;
+      *) printf 'BAD\tform %s, %s: bash %s, a listed refusal, is asked about\tno answer came back for it, so the suite is gone or renamed: take it off the list\n' "$form" "$what" "${entry%%	*}" ;;
+    esac
+  done <<LIST
+$EXPECTED_REFUSED_A
+LIST
+}
+bad_in(){ printf '%s\n' "$1" | grep -c '^BAD	' || true; }
+
+echo "the judging, on made up answers"
+
+REAL_PATH=payload/hooks/test-payload-write-gate-real-path.sh
+SCRIPT_STRING=payload/hooks/test-payload-write-gate-script-string.sh
+SAID_WRITE="claude-sync: REFUSED a write to /somewhere/primary/payload/LESSONS.md."
+SAID_COUNT="claude-sync: REFUSED a command that runs more than 8 script files."
+answers(){ # answers <file> <verdict for the real path suite> <verdict for the script string suite> [more lines]
+  { printf 'ALLOWED\tbash tests/test-one.sh\t\n'
+    [ "$2" = none ] || printf '%s\tbash %s\t%s\n' "$2" "$REAL_PATH" "$( [ "$2" = ALLOWED ] || printf '%s' "${4:-$SAID_WRITE}")"
+    [ "$3" = none ] || printf '%s\tbash %s\t%s\n' "$3" "$SCRIPT_STRING" "$( [ "$3" = ALLOWED ] || printf '%s' "$SAID_WRITE")"
+    printf 'ALLOWED\tbash payload/hooks/run-all-tests.sh\t\n'; } > "$1"
+}
+answers "$FIX/self/two.txt" REFUSED REFUSED
+J="$(judge A "made up" "$FIX/self/two.txt")"
+if [ "$(bad_in "$J")" -eq 0 ] && [ "$(printf '%s\n' "$J" | grep -c '^EXPECTED	' || true)" -eq 2 ]; then check "judging: the two listed suites refused from a primary checkout are expected, and nothing fails" ok
+else check "judging: the two listed suites refused from a primary checkout are expected, and nothing fails" "$(bad_in "$J") failures: $(printf '%s' "$J" | grep '^BAD	' | head -1 | cut -c1-200)"; fi
+case "$J" in *"is refused, as listed: its test text holds"*) check "judging: each expected refusal is printed with its reason" ok ;;
+  *) check "judging: each expected refusal is printed with its reason" "no line gave a reason" ;; esac
+answers "$FIX/self/third.txt" REFUSED REFUSED
+printf 'REFUSED\tbash tests/test-third.sh\t%s\n' "$SAID_WRITE" >> "$FIX/self/third.txt"
+J="$(judge A "made up" "$FIX/self/third.txt")"
+if [ "$(bad_in "$J")" -eq 1 ] && printf '%s\n' "$J" | grep -q '^BAD	.*bash tests/test-third.sh is let through'; then check "judging: a third suite refused fails the check" ok
+else check "judging: a third suite refused fails the check" "$(bad_in "$J") failures, where 1 naming tests/test-third.sh was expected"; fi
+answers "$FIX/self/allowed.txt" ALLOWED REFUSED
+J="$(judge A "made up" "$FIX/self/allowed.txt")"
+if [ "$(bad_in "$J")" -eq 1 ] && printf '%s\n' "$J" | grep -q "^BAD	.*bash $REAL_PATH is still refused.*take it off the list"; then check "judging: a listed suite that is let through fails the check" ok
+else check "judging: a listed suite that is let through fails the check" "$(bad_in "$J") failures, where 1 saying to take it off the list was expected"; fi
+answers "$FIX/self/words.txt" REFUSED REFUSED "$SAID_COUNT"
+J="$(judge A "made up" "$FIX/self/words.txt")"
+if [ "$(bad_in "$J")" -eq 1 ] && printf '%s\n' "$J" | grep -q "^BAD	.*bash $REAL_PATH .*in other words"; then check "judging: a listed suite refused in other words than a write to a payload path fails the check" ok
+else check "judging: a listed suite refused in other words than a write to a payload path fails the check" "$(bad_in "$J") failures, where 1 was expected"; fi
+answers "$FIX/self/gone.txt" none REFUSED
+J="$(judge A "made up" "$FIX/self/gone.txt")"
+if [ "$(bad_in "$J")" -eq 1 ] && printf '%s\n' "$J" | grep -q "^BAD	.*bash $REAL_PATH, a listed refusal.*take it off the list"; then check "judging: a listed suite that was never asked about fails the check" ok
+else check "judging: a listed suite that was never asked about fails the check" "$(bad_in "$J") failures, where 1 was expected"; fi
+answers "$FIX/self/worktree.txt" REFUSED REFUSED
+J="$(judge B "made up" "$FIX/self/worktree.txt")"
+if [ "$(bad_in "$J")" -eq 2 ]; then check "judging: the list is for a primary checkout only, so both fail when refused from a worktree" ok
+else check "judging: the list is for a primary checkout only, so both fail when refused from a worktree" "$(bad_in "$J") failures, where 2 were expected"; fi
+answers "$FIX/self/unasked.txt" REFUSED REFUSED
+printf 'UNASKED\tbash tests/test-slow.sh\tthe gate gave no answer in 240 seconds\n' >> "$FIX/self/unasked.txt"
+J="$(judge A "made up" "$FIX/self/unasked.txt")"
+if [ "$(bad_in "$J")" -eq 1 ] && printf '%s\n' "$J" | grep -q '^BAD	.*could not be asked'; then check "judging: an ask the gate did not answer fails the check" ok
+else check "judging: an ask the gate did not answer fails the check" "$(bad_in "$J") failures, where 1 was expected"; fi
+
+[ -f "$HOOK" ] || not_run "needs payload/hooks/payload-write-gate.sh in the checkout it is in"
+command -v git >/dev/null 2>&1 || not_run "needs git, to list the files of this checkout"
+command -v python3 >/dev/null 2>&1 || not_run "needs python3"
 
 # The files of this checkout: what git tracks and what is new and not ignored, so a suite written
 # a minute ago is asked about before it is committed. Nothing under .claude/, where other
@@ -165,25 +281,26 @@ done
 
 # sweep <A or B> <directory> <what it is>
 sweep(){
-  local form="$1" dir="$2" what="$3" out="$FIX/answers-$1.txt" asked allowed refused unasked line not_through
+  local form="$1" dir="$2" what="$3" out="$FIX/answers-$1.txt" asked allowed refused unasked line judged expected
   ask "$dir" "$FIX/commands.txt" "$out"
   asked="$(grep -c '' "$out" 2>/dev/null || true)"; allowed="$(count ALLOWED "$out")"
   refused="$(count REFUSED "$out")"; unasked="$(count UNASKED "$out")"
   if [ "${asked:-0}" -eq "$EXPECTED" ]; then check "form $form: all $EXPECTED run commands were asked about" ok
   else check "form $form: all $EXPECTED run commands were asked about" "${asked:-0} answers came back"; fi
-  pass=$((pass + ${allowed:-0}))
-  # Read into a variable first, so the loop is fed by no child this shell never waits for (#2040).
-  not_through="$(grep -v '^ALLOWED	' "$out" 2>/dev/null || true)"
+  # Judged into a variable first, so the loop is fed by no child this shell never waits for (#2040).
+  judged="$(judge "$form" "$what" "$out")"
+  expected=0
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     case "$line" in
-      REFUSED*) line="${line#*	}"; check "form $form, $what: ${line%%	*} is let through" "the gate refused it: ${line#*	}" ;;
-      *)        line="${line#*	}"; check "form $form, $what: ${line%%	*} is let through" "the gate could not be asked: ${line#*	}" ;;
+      OK*) pass=$((pass + 1)) ;;
+      EXPECTED*) expected=$((expected + 1)); pass=$((pass + 1)); echo "expected refusal: ${line#*	}" ;;
+      *) line="${line#*	}"; check "${line%%	*}" "${line#*	}" ;;
     esac
-  done <<NOT_THROUGH
-$not_through
-NOT_THROUGH
-  echo "form $form ($what): $EXPECTED asked, ${allowed:-0} let through, ${refused:-0} refused, ${unasked:-0} could not be asked"
+  done <<JUDGED
+$judged
+JUDGED
+  echo "form $form ($what): $EXPECTED asked, ${allowed:-0} let through, ${refused:-0} refused ($expected of them expected), ${unasked:-0} could not be asked"
 }
 
 echo "form A: a primary checkout a watcher could overwrite"
