@@ -1428,15 +1428,51 @@ def bare(s):
     return "".join(out)
 
 
+# Where a command written inside another starts or ends, for the crude cut (claude-config#3473): the
+# opener of a command or process substitution or of a subshell, a closing parenthesis, and a
+# backquote, which is both. Quotes and backslashes are not weighed: the cut is asked only where the
+# text could not be read, so which of them is live is exactly what is not known.
+CRUDE_EDGE = re.compile(r"\$\(|[<>=]\(|\(|\)|`")
+
+
+def crude_inner(text):
+    """The stretches of one piece of the crude cut that may be commands of their own
+    (claude-config#3473): what follows each opener, closer or backquote, and what stands before a
+    closer or a backquote. The cut left a `$( )`, a pair of backquotes, a `<( )` and a subshell
+    whole, so `x=$(git push)` named no git command, and `(git push)` named the subcommand `push)`.
+
+    What follows a `)` is listed too, because the `)` of a case pattern has its arm's command after
+    it. The one stretch left out is the piece's start up to an opener: that is the head of the
+    command the piece itself is, which its own record already hands on, and listing it would give a
+    caller that counts commands the same one twice. Nothing blank is listed.
+    """
+    out, at, first = [], 0, True
+    for m in CRUDE_EDGE.finditer(text):
+        part = text[at:m.start()]
+        if part.strip() and (not first or m.group() in (")", "`")):
+            out.append(part)
+        at, first = m.end(), False
+    if not first and text[at:].strip():
+        out.append(text[at:])
+    return out
+
+
 def crude_commands(s, cwd=""):
-    """The reading used when commands() cannot be trusted: a cut at every separator, quotes and all.
+    """The reading used when commands() cannot be trusted: a cut at every separator, quotes and all,
+    and before each piece of it the commands that may be written inside that piece (crude_inner).
 
     It can only see MORE commands than are there, which is the direction a gate that must not miss a
     push needs (L42), and it keeps the cds in order, so the last one before a push still governs it.
+    The pieces are the ones it always gave, each with the text and the directory it always had: the
+    commands found inside one are added in that piece's directory, and a cd among them moves
+    nothing, so no caller is handed less, or anything in another place, than before
+    (claude-config#3473). A substitution's commands come before the command that holds it, as
+    commands() gives them.
     """
     out, old = [], None
     for text in re.split(r"&&|\|\||;|\||\n", s):
         if text.strip():
+            out.extend((cwd, inner) for inner in crude_inner(text))
             out.append((cwd, text))
             target = cd_target(text)
             if target is not None:
