@@ -1,5 +1,5 @@
 import type { EngineInterface, Register } from 'claude-code'
-import { cutOwn } from './mod-kit/hold.ts'
+import { cutOwn, watchesOnly } from './mod-kit/hold.ts'
 import type { ModKitGoal } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import type { GoalBoxShown } from '../types/index.d.ts'
 import { DESCRIPTION, MOD, NAME, SCHEMA, TOOL, askDoneText, askText, boxText, cardOf, cardedSince, decide, linkedIn, mergeFactsOf, mergeHolds, readInput, waitKey, type Confirmed, type Holds, type Linked } from './box.ts'
@@ -9,7 +9,8 @@ import { errorText } from './mod-kit/skew.ts'
 import { HOLD_MAX_MS, whileHeld } from './mod-kit/held.ts'
 import { transcriptPlaces } from './mod-kit/projects.ts'
 import { toolArgs } from './mod-kit/toolargs.ts'
-import { BOX_KINDS, inflightHolds, type Reading } from './mod-kit/inflight.ts'
+import { BOX_KINDS, INFLIGHT_KINDS, inflightHolds, type InflightFacts, type Reading } from './mod-kit/inflight.ts'
+import { CLOSE_HEADING, CLOSE_TITLE, NO_BOX, PROCESS_LIST, PROCESS_LOOK, PROCESS_TIMEOUT_MS, QUIET_MS, closeStep, leftBehindBy, leftBehindReason, processHolds } from './close.ts'
 
 // The Goal accomplished box (claude-config#1563). Two ways a session's work ends, one box for both:
 //
@@ -42,6 +43,17 @@ const shownRef = { plugin: 'goal-box', key: 'shown' } as const
 const askedRef = { plugin: 'goal-box', key: 'asked' } as const
 const requestAtRef = { plugin: 'goal-box', key: 'requestAt' } as const
 const askedDoneRef = { plugin: 'goal-box', key: 'askedDone' } as const
+// #3770, the close this session card's own record.
+const closeSeqRef = { plugin: 'goal-box', key: 'closeSeq' } as const
+const closeStopRef = { plugin: 'goal-box', key: 'closeStop' } as const
+const closeAnswerRef = { plugin: 'goal-box', key: 'closeAnswer' } as const
+const closedRef = { plugin: 'goal-box', key: 'closed' } as const
+const leftBehindRef = { plugin: 'goal-box', key: 'leftBehind' } as const
+// What the card reads of the mods beside it; each may not be loaded.
+const stepsCardRef = { plugin: 'manual-steps', key: 'card' } as const
+const compactQueuedRef = { plugin: 'status-bar', key: 'compactQueued' } as const
+const compactFollowUpRef = { plugin: 'status-bar', key: 'compactFollowUp' } as const
+const modkitHoldsRef = { plugin: 'mod-kit', key: 'holds' } as const
 // The folder the session started in, where Claude Code files its transcript (#2898), kept as
 // scope-modes keeps its own: set at every session start, which fires again at each fresh load of the
 // mod (#1703), so a reload sets it again.
@@ -335,6 +347,136 @@ const askIfDone = async ($: EngineInterface): Promise<void> => {
   $.ui.log(`Work shipped since Dan's last message, but the session could not be asked whether the work is finished (${failed}); it is asked again at the next turn end.`)
 }
 
+// ---- The close this session card (#3770) ----
+// At the main conversation's turn end, once interactive, a quiet period of QUIET_MS starts on the
+// engine's clock. Any turn start or message of any origin since (closeSeq moved) ends it unread. At
+// its end every reading is taken afresh: the box shown for Dan's latest request, then everything in
+// mod-kit's one list of what is in flight (hooks/mod-kit/inflight.ts), every kind, plus the two
+// readings of a process a command left behind, which can only withhold (close.ts). All clear pins the
+// card once per request of Dan's through manual steps' noun; any reason is written to
+// ~/.claude/state/close-session/<session id>.json, the newest replacing the one before.
+
+/** Counts a turn start or a message, so a quiet period armed before it ends with nothing done. */
+const bumpSeq = async ($: EngineInterface): Promise<void> => {
+  for (let i = 0; i < 10; i++) {
+    const held = await $.state.get(closeSeqRef)
+    if ((await $.state.set(closeSeqRef, (held.value ?? 0) + 1, { ifVersion: held.version })).isSet) return
+  }
+}
+
+// Manual steps' noun, as its contract has it; the engine needs it called in place each time.
+type NounCall = (input: unknown) => Promise<unknown>
+type WithSteps = { manualSteps: { add: NounCall; withdraw: NounCall } }
+
+/** The reasons, or none and pinned, written where a later session can read why; a failure is logged. */
+const writeReasons = async ($: EngineInterface, pinned: boolean, reasons: string[]): Promise<void> => {
+  try {
+    const home = await $.env.get('HOME')
+    const id = await $.session.id()
+    if (!home || !SESSION_ID.test(id)) throw new Error('HOME or the session id could not be read')
+    await $.fs.write(`${home}/.claude/state/close-session/${id}.json`, `${JSON.stringify({ at: await $.clock.now(), pinned, reasons }, null, 2)}\n`)
+  } catch (err) {
+    debug($, `why the close this session card is or is not up could not be written (${errorText(err, MOD)})`)
+  }
+}
+
+/** Reading A: any process carrying this session's id; only ever a reason to withhold. */
+const processesNow = async ($: EngineInterface): Promise<string[]> => {
+  try {
+    const listed = await $.process.run(PROCESS_LIST, { timeoutMs: PROCESS_TIMEOUT_MS })
+    if (listed.exitCode !== 0) return []
+    const r = await $.process.run(['python3', '-I', '-c', PROCESS_LOOK, await $.session.id()], { timeoutMs: PROCESS_TIMEOUT_MS, stdin: listed.stdout })
+    return processHolds(r)
+  } catch (err) {
+    debug($, `the look for a process carrying this session's id could not run (${errorText(err, MOD)}), so it says nothing either way`)
+    return []
+  }
+}
+
+const readingOf = async <T,>(read: () => Promise<T>): Promise<Reading<T>> => {
+  try {
+    return { value: await read() }
+  } catch (err) {
+    return { unread: errorText(err, MOD) }
+  }
+}
+
+/** Every reason the card may not go up now, or 'already' when it went up for this request once. */
+const closeReasons = async ($: EngineInterface, seq: number): Promise<string[] | 'already'> => {
+  const prompts = (await $.state.get(promptsRef)).value ?? 0
+  const closed = (await $.state.get(closedRef)).value
+  if (closed !== undefined && closed.prompts >= prompts) return 'already'
+  const shown = (await $.state.get(shownRef)).value ?? []
+  if (!shown.some(s => s.prompts >= prompts)) return [NO_BOX]
+  const stop = (await $.state.get(closeStopRef)).value
+  const answer = (await $.state.get(closeAnswerRef)).value
+  const noStop = "this turn's stop was not recorded"
+  const facts: InflightFacts = {
+    agents: await agentsNow($),
+    tasks: stop?.seq === seq ? { value: stop.tasks } : { unread: noStop },
+    crons: stop?.seq === seq ? { value: stop.crons } : { unread: noStop },
+    jobs: await readingOf(() => ($ as unknown as { jobs: { list: () => Promise<unknown> } }).jobs.list()),
+    merges: { value: await mergeHoldsNow($) },
+    prs: { value: await openHolds($) },
+    goal: { value: await goalNow($) },
+    // Another mod's state, read as unknown (L50: the shared list holds each to its shape).
+    steps: await readingOf(async () => ({ card: (await $.state.get(stepsCardRef as never)).value as unknown, ignore: CLOSE_TITLE })),
+    compact: await readingOf(async () => ({ queued: (await $.state.get(compactQueuedRef as never)).value as unknown, followUp: (await $.state.get(compactFollowUpRef as never)).value as unknown })),
+    prompts: await readingOf(async () => ({ holds: (await $.state.get(modkitHoldsRef)).value, now: await $.clock.now() })),
+    answer: answer?.seq === seq ? { value: answer.text } : { unread: "this turn's answer was not recorded" },
+  }
+  const left = (await $.state.get(leftBehindRef)).value
+  return [...inflightHolds(facts, INFLIGHT_KINDS).map(h => h.text), ...(left ? [leftBehindReason(left)] : []), ...(await processesNow($))]
+}
+
+/** At the end of a quiet period armed under `seq`: pins the card when nothing holds it, or says why not. */
+const closeCheck = async ($: EngineInterface, seq: number): Promise<void> => {
+  if ((await $.state.get(closeSeqRef)).value !== seq) return
+  const reasons = await closeReasons($, seq)
+  if (reasons === 'already') return
+  // A turn that began while the readings were taken makes them stale.
+  if ((await $.state.get(closeSeqRef)).value !== seq) return
+  if (reasons.length) return writeReasons($, false, reasons)
+  const prompts = (await $.state.get(promptsRef)).value ?? 0
+  const held = await $.state.get(closedRef)
+  if (held.value !== undefined && held.value.prompts >= prompts) return
+  if (!(await $.state.set(closedRef, { prompts, pinned: true }, { ifVersion: held.version })).isSet) return
+  const folder = (startCwd ?? (await $.session.cwd().catch(() => ''))).split('/').filter(Boolean).pop() ?? ''
+  try {
+    const r = (await ($ as unknown as WithSteps).manualSteps.add({ heading: CLOSE_HEADING, step: closeStep(folder) })) as { isShown?: boolean; reason?: string }
+    if (r.isShown === false) return writeReasons($, false, [`the card could not be shown (${r.reason ?? 'no reason given'})`])
+    await writeReasons($, true, [])
+  } catch (err) {
+    await $.state.set(closedRef, { prompts, pinned: false })
+    await writeReasons($, false, [`the card could not be pinned (${errorText(err, MOD)})`])
+  }
+}
+
+/** Takes the card down at a new turn, as withdrawn: a session working again is not one to close. */
+const withdrawClose = async ($: EngineInterface): Promise<void> => {
+  const closed = (await $.state.get(closedRef)).value
+  if (!closed?.pinned) return
+  await $.state.set(closedRef, { ...closed, pinned: false })
+  try {
+    await ($ as unknown as WithSteps).manualSteps.withdraw({ title: CLOSE_TITLE })
+  } catch (err) {
+    debug($, `the close this session card could not be taken down (${errorText(err, MOD)})`)
+  }
+}
+
+/** Reading B: a main conversation Bash call, not run in the background, that may leave a process behind. */
+const noteLeftBehind = async ($: EngineInterface, command: string): Promise<void> => {
+  if ((await $.state.get(leftBehindRef)).value) return
+  let read: unknown
+  try {
+    read = await $.modkit.pipeline({ command })
+  } catch (err) {
+    read = [{ words: [], unread: `mod-kit's reader failed: ${errorText(err, MOD)}` }]
+  }
+  const what = leftBehindBy(read)
+  if (what) await $.state.set(leftBehindRef, what)
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.state.set(interactiveRef, e.isInteractive === true)
@@ -349,6 +491,8 @@ export const register: Register = on => {
   on('prompt.submit', async ($, e, next) => {
     const r = await next(e)
     if (r.drop !== undefined) return r
+    // #3770: a message of any origin ends a quiet period armed before it.
+    await bumpSeq($)
     let isDans = false
     try {
       isDans = await $.modkit.isDans({ origin: e.origin })
@@ -393,12 +537,48 @@ export const register: Register = on => {
     return { result: text, text, context: ['The Goal accomplished box is shown to Dan above. Do not repeat it in your reply.'] }
   }).catch(($, e, next) => cutOwn('the goal box', next))
 
+  // #3770: a turn of the main conversation starting, of any origin, takes the close card down and
+  // ends any quiet period. Only the main loop raises turn.start (a later build names a subagent's).
+  on('turn.start', async ($, e, next) => {
+    const r = await next(e)
+    if ('agentId' in e && e.agentId !== undefined) return r
+    await bumpSeq($)
+    await withdrawClose($)
+    return r
+  })
+
+  // #3770: what Claude Code lists as in flight, and the wake ups it has scheduled, as the main
+  // conversation's stop carries them: no other event names them. Recorded under this turn's count,
+  // passing the chain's answer on untouched. Without the managed setting that lets a mod see a classic
+  // event (README, #875) it never runs, and the card is withheld as unread.
+  on('classic.Stop', async ($, e, next) => {
+    const r = await next(e)
+    const x = e as { background_tasks?: unknown; session_crons?: unknown }
+    await $.state.set(closeStopRef, { seq: (await $.state.get(closeSeqRef)).value ?? 0, tasks: x.background_tasks, crons: x.session_crons })
+    return r
+  }).catch(watchesOnly)
+
+  // #3770, reading B: a main conversation Bash call that ran (not one run in the background, which
+  // the job watcher records, and not one a guard refused) is read for what may leave a process behind.
+  on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
+    const r = await next(e)
+    if (e.agentId !== undefined || (r as { deny?: unknown }).deny !== undefined) return r
+    const args = toolArgs(e as unknown as Record<string, unknown>)
+    if (args.run_in_background === true || typeof args.command !== 'string') return r
+    await noteLeftBehind($, args.command)
+    return r
+  }).catch(watchesOnly)
+
   // The met record lands after the Stop hooks, so once the turn has ended the session is sent one
   // prompt of its own to show the box. The main loop's own end only, never an interrupt.
   on('turn.complete', async ($, e, next) => {
     const r = await next(e)
     if (e.agentId !== undefined || e.reason !== 'answer') return r
     if ((await $.state.get(interactiveRef)).value !== true) return r
+    // #3770: the quiet period before the close card, armed under this turn's count.
+    const seq = (await $.state.get(closeSeqRef)).value ?? 0
+    await $.state.set(closeAnswerRef, { seq, text: e.answer })
+    $.clock.after(QUIET_MS, () => void closeCheck($, seq).catch(err => debug($, `the close this session card could not be judged (${errorText(err, MOD)})`)))
     const goal = await goalNow($)
     if (goal.state !== 'none') return r
     if (!goal.met) {

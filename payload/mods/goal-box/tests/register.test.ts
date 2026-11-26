@@ -2,6 +2,7 @@ import { expect, mock } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import type { On, Register } from 'claude-code'
 import DESIGN_FIXTURE from './1563-goal-box.fixture.ts'
+import { CLOSE_HEADING, CLOSE_TITLE, QUIET_MS } from '../hooks/close.ts'
 
 // The Goal accomplished box (claude-config#1563) in a session: shown once when a /goal is met (the
 // session is sent a prompt of its own asking for it once the turn has ended, since the met record
@@ -44,7 +45,12 @@ const kit: { name: string; register: Register } = {
           const parts = link.startsWith('https://github.com/') ? new URL(link).pathname.split('/').filter(Boolean) : []
           return parts.length >= 2 ? `${parts[0]}/${parts[1]}` : null
         },
-        pipeline: async () => { throw new Error("mod-kit's pipeline is not stood in by these tests") },
+        // #3770: the one reader of a shell command, standing in: what the world says it reads.
+        pipeline: async ({ command }: { command: string }) => {
+          const r = await built.process.run(['__modkit', 'pipeline', command])
+          if (r.exitCode !== 0) throw new Error(r.stderr)
+          return JSON.parse(r.stdout)
+        },
         pythonText: async () => { throw new Error("mod-kit's pythonText is not stood in by these tests") },
         login: async () => { throw new Error("mod-kit's login is not stood in by these tests") },
         account: async () => { throw new Error("mod-kit's account is not stood in by these tests") },
@@ -70,6 +76,12 @@ const kit: { name: string; register: Register } = {
         },
       }
       return { ...built, modkit }
+    })
+    // #3770: mod-kit's holds on a mod's reload, as its state keeps them, written from the world's.
+    on('turn.complete', async ($, e, next) => {
+      const holds = JSON.parse((await $.process.run(['__others', 'holds'])).stdout) as unknown
+      if (holds !== null) await $.state.set({ plugin: 'mod-kit', key: 'holds' } as never, holds as never)
+      return next(e)
     })
   },
 }
@@ -113,6 +125,53 @@ const registry: { name: string; register: Register } = {
     })
   },
 }
+// #3770: the mods the close this session card reads, standing in. Each keeps what the world says in
+// its own state at each turn end, as the real one keeps it while a session runs, or answers its noun
+// from the world: manual steps' card and noun, the status bar's queued compact, the job watcher's list.
+const stepsMod: { name: string; register: Register } = {
+  name: 'manual-steps',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      const call = async (what: string, input: unknown) => {
+        const r = await built.process.run(['__steps', what, JSON.stringify(input)])
+        if (r.exitCode !== 0) throw new Error(r.stderr)
+        return JSON.parse(r.stdout)
+      }
+      const manualSteps = { add: (i: unknown) => call('add', i), finish: (i: unknown) => call('finish', i), withdraw: (i: unknown) => call('withdraw', i) }
+      return { ...built, manualSteps }
+    })
+    on('turn.complete', async ($, e, next) => {
+      await $.state.set({ plugin: 'manual-steps', key: 'card' } as never, JSON.parse((await $.process.run(['__others', 'card'])).stdout) as never)
+      return next(e)
+    })
+  },
+}
+const statusBar: { name: string; register: Register } = {
+  name: 'status-bar',
+  register: on => {
+    on('turn.complete', async ($, e, next) => {
+      const c = JSON.parse((await $.process.run(['__others', 'compact'])).stdout) as { queued: unknown; followUp: unknown }
+      await $.state.set({ plugin: 'status-bar', key: 'compactQueued' } as never, c.queued as never)
+      await $.state.set({ plugin: 'status-bar', key: 'compactFollowUp' } as never, c.followUp as never)
+      return next(e)
+    })
+  },
+}
+const watcher: { name: string; register: Register } = {
+  name: 'job-watcher',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      const list = async () => {
+        const r = await built.process.run(['__jobs'])
+        if (r.exitCode !== 0) throw new Error(r.stderr)
+        return JSON.parse(r.stdout)
+      }
+      return { ...built, jobs: { list, agents: async () => [] } }
+    })
+  },
+}
 type Owed = { key: string; how: 'merged' | 'unproven' | 'waiting'; pr: number; at: number; cwd: string; repo?: string; named?: string; selector?: string }
 
 type Gh = { exitCode: number; stdout: string; stderr?: string }
@@ -150,18 +209,36 @@ type World = {
   holdFails: string
   /** What `gh pr view` answers, by the repository it names (or the folder it runs in) and the account's token. */
   view: (q: { pr: string; repo?: string; cwd?: string; token?: string }) => Gh
+  /** #3770: the manual steps card in manual steps' state, null when none is pinned. */
+  stepsCard: unknown
+  compactQueued: unknown
+  compactFollowUp: unknown
+  /** mod-kit's holds in its state (null leaves them unset). */
+  holds: unknown
+  /** The job watcher's list, or why it throws. */
+  jobs: unknown[]
+  jobsFail: string
+  /** What the look for a process carrying this session's id answers. */
+  procs: Gh
+  /** What mod-kit's reader reads a command as, or why it throws. */
+  reader: (command: string) => unknown[] | { fails: string }
+  /** The cards pinned through manual steps' noun, and the titles withdrawn, in order. */
+  pinned: { heading: string; step: Record<string, unknown> }[]
+  withdrawn: string[]
+  /** Each file written, by path: its last text. */
+  written: Record<string, string>
 }
 const link = (repo: string, pr: number, at = '2026-10-24T18:00:00.000Z') =>
   JSON.stringify({ type: 'pr-link', sessionId: 's1', prNumber: pr, prUrl: `https://github.com/${repo}/pull/${pr}`, prRepository: repo, timestamp: at })
 
 const world = (on: On, init: Partial<World> = {}) => {
-  const w: World = { goal: { state: 'none' }, cardFails: '', cards: [], transcript: T, registry: 'open', disk: {}, here: '/repo', owed: [], verdicts: {}, links: [], open: {}, agents: [], agentsFail: '', submitFails: [], held: [], holdFails: '', view: () => ({ exitCode: 1, stdout: '', stderr: 'unexpected' }), ...init }
+  const w: World = { goal: { state: 'none' }, cardFails: '', cards: [], transcript: T, registry: 'open', disk: {}, here: '/repo', owed: [], verdicts: {}, links: [], open: {}, agents: [], agentsFail: '', submitFails: [], held: [], holdFails: '', view: () => ({ exitCode: 1, stdout: '', stderr: 'unexpected' }), stepsCard: null, compactQueued: false, compactFollowUp: null, holds: [], jobs: [], jobsFail: '', procs: { exitCode: 0, stdout: '{"found":[]}' }, reader: () => [], pinned: [], withdrawn: [], written: {}, ...init }
   const runs: string[][] = []
   const views: { pr: string; repo?: string; cwd?: string; token?: string; fields?: string }[] = []
   const submitted: { text: string; origin: unknown }[] = []
   const tools: { name: string; isDeferred?: unknown; description: string }[] = []
   const logs: string[] = []
-  mock.clock(on, { now: 1_800_000_000_000 })
+  const clock = mock.clock(on, { now: 1_800_000_000_000 })
   on('process.run', ($, e) => {
     runs.push([...e.argv])
     const ok = (stdout: string, exitCode = 0, stderr = '') => ({ value: { exitCode, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false } }) as never
@@ -176,7 +253,33 @@ const world = (on: On, init: Partial<World> = {}) => {
         w.held.push(`${e.argv[1]} ${e.argv[2]}`)
         return ok('')
       }
+      if (e.argv[1] === 'pipeline') {
+        const read = w.reader(e.argv[2] as string)
+        return 'fails' in read ? ok('', 1, read.fails) : ok(JSON.stringify(read))
+      }
       return ok(JSON.stringify(w.goal))
+    }
+    if (e.argv[0] === '__steps') {
+      const input = JSON.parse(e.argv[2] as string) as { heading: string; step: Record<string, unknown>; title: string }
+      if (e.argv[1] === 'add') {
+        w.pinned.push({ heading: input.heading, step: input.step })
+        return ok(JSON.stringify({ isShown: true }))
+      }
+      w.withdrawn.push(input.title)
+      return ok(JSON.stringify({ isWithdrawn: true }))
+    }
+    if (e.argv[0] === '__others') {
+      if (e.argv[1] === 'card') return ok(JSON.stringify(w.stepsCard))
+      if (e.argv[1] === 'compact') return ok(JSON.stringify({ queued: w.compactQueued, followUp: w.compactFollowUp }))
+      return ok(JSON.stringify(w.holds))
+    }
+    if (e.argv[0] === '__jobs') return w.jobsFail ? ok('', 1, w.jobsFail) : ok(JSON.stringify(w.jobs))
+    if (e.argv[0] === 'ps') return ok('4321 1 node\n')
+    if (e.argv[0] === 'python3') {
+      // The look is handed the process list on its standard input and a time limit of its own.
+      const init = (e as { init?: { stdin?: string; timeoutMs?: number } }).init
+      if (init?.stdin !== '4321 1 node\n' || !init.timeoutMs) return ok('', 1, 'the look was not handed the process list and a time limit')
+      return ok(w.procs.stdout, w.procs.exitCode, w.procs.stderr ?? '')
     }
     if (e.argv[0] === '__sessions') {
       const me = { sessionId: 's1', transcriptPath: w.transcript || null, ...(w.transcript ? {} : { transcriptUnread: 'the transcript search was cut off' }) }
@@ -223,6 +326,14 @@ const world = (on: On, init: Partial<World> = {}) => {
   })
   on('session.start', ($, e) => ({ cwd: e.cwd }) as never)
   on('turn.complete', ($, e) => ({ text: e.answer }) as never)
+  on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
+  on('classic.Stop', () => ({}) as never)
+  // Every other tool runs and answers nothing of note (#3770: the Bash calls the card reads).
+  on('tool.call', () => ({ result: '', text: '' }) as never)
+  on('fs.write', ($, e) => {
+    w.written[e.path] = e.text
+    return { value: undefined } as never
+  })
   on('tool.register', ($, e) => {
     tools.push({ name: e.name, isDeferred: (e as { isDeferred?: unknown }).isDeferred, description: e.description })
     return { value: { tool: `mcp__goal-box__${e.name}` } } as never
@@ -241,7 +352,7 @@ const world = (on: On, init: Partial<World> = {}) => {
     logs.push(String((e as { text?: string }).text))
     return { value: undefined } as never
   })
-  return { w, cards: async () => w.cards, runs: () => runs.filter(a => !a[0]?.startsWith('__')), submitted, tools, logs, views }
+  return { w, clock, cards: async () => w.cards, runs: () => runs.filter(a => !a[0]?.startsWith('__')), submitted, tools, logs, views }
 }
 
 type Engine = Parameters<Parameters<typeof test>[2]>[0]
@@ -262,6 +373,7 @@ const DESIGN: { goal: string; shipped: string[] } = DESIGN_FIXTURE
 const MET = { state: 'none' as const, met: { condition: 'complete issue 1563', reason: 'Issue #1563 is closed and PR #1700 is merged.', id: 'met-1' } }
 const withKit = { plugins: [kit, registry] }
 const withLive = { plugins: [kit, registry, live] }
+const withAll = { plugins: [kit, registry, live, stepsMod, statusBar, watcher] }
 
 test('the tool is offered to an interactive session with its rules in the prompt, never to a headless one', withKit, async ($, on) => {
   const { tools, cards } = world(on)
@@ -859,4 +971,280 @@ test("mod-kit unable to draw the card still shows the box as text, the goal firs
   expect(r.deny).toBeUndefined()
   expect(textOf(r).split('\n')[0]).toBe('GOAL ACCOMPLISHED: Show a green box when the goal is met')
   expect(logs.join('\n')).toMatch(/goal-box: the card could not be drawn \(a card needs a title/)
+})
+
+// ---- The close this session card (#3770) ----
+// Dan, 2026-11-26: pinned only once the Goal accomplished box was shown for his latest request,
+// every reading is clean and the session has stayed quiet for QUIET_MS; down at any new turn; back
+// only after the next box. A reading that cannot be taken withholds it. The two readings of a
+// process a command left behind (3.76.1) can only withhold it.
+const REASONS = `${'/Users'}/dan/.claude/state/close-session/s1.json`
+type Engine$ = Parameters<Parameters<typeof test>[2]>[0]
+const stopped = ($: Engine$, more: Record<string, unknown> = {}) =>
+  ($ as unknown as { classic: { Stop: (e: unknown) => Promise<unknown> } }).classic.Stop({ session_id: 's1', transcript_path: T, stop_hook_active: false, background_tasks: [], session_crons: [], ...more })
+const turnStarts = ($: Engine$, turnId = 't2') => ($ as unknown as { turn: { start: (e: unknown) => Promise<unknown> } }).turn.start({ text: '', turnId })
+// One turn of work that ends with the box shown, its stop and its end, then the quiet period.
+const workedAndQuiet = async ($: Engine$, clock: { advance: (ms: number) => Promise<void> }, o: { stop?: Record<string, unknown>; answer?: string; box?: boolean; id?: string } = {}) => {
+  if (o.box !== false) expect((await box($, ASKED, o.id ?? 'b1')).deny).toBeUndefined()
+  await stopped($, o.stop)
+  await turnEnds($, { answer: o.answer ?? 'Merged and live.' })
+  await clock.advance(QUIET_MS)
+}
+const reasonsOf = (w: World) => JSON.parse(w.written[REASONS] ?? 'null') as { pinned: boolean; reasons: string[] } | null
+const bash = ($: Engine$, command: string, more: Record<string, unknown> = {}) => $.tool.call({ tool: 'Bash', tool_use_id: 'x1', command, ...more } as never)
+
+test('all clear: once the box is shown and the session stays quiet, exactly one card is pinned, for this session alone and with no Done (#3770)', withAll, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($)
+  await says($, 'Add the goal box')
+  await workedAndQuiet($, clock)
+  expect(w.pinned).toHaveLength(1)
+  expect(w.pinned[0]?.heading).toBe(CLOSE_HEADING)
+  expect(w.pinned[0]?.heading).toBe('Nothing this session can see is running or waiting')
+  expect(w.pinned[0]?.step).toMatchObject({ title: 'Close this session if you have nothing more for it', sessionOnly: true, noDone: true, clicks: ['Type /exit and press Return', 'Or close the tab'] })
+  expect(String(w.pinned[0]?.step.location)).toMatch(/^The Terminal tab showing this session/)
+  expect(reasonsOf(w)).toMatchObject({ pinned: true, reasons: [] })
+  // Nothing more pinned while the session stays quiet.
+  await clock.advance(QUIET_MS * 3)
+  expect(w.pinned).toHaveLength(1)
+})
+
+test('each reading false in turn withholds the card and writes its reason; all clear again pins it (#3770)', withAll, async ($, on) => {
+  const { w, clock } = world(on, { links: [link('danwright32/claude-config', 1701)] })
+  await start($)
+  await says($, 'Add the goal box')
+  expect((await box($, ASKED)).deny).toBeUndefined()
+  const cases: [string, () => void, () => void, Record<string, unknown>?, string?][] = [
+    ['the agent "Mate" is idle', () => (w.agents = [{ id: 'a1', status: 'idle', description: 'Mate' }]), () => (w.agents = [])],
+    ['the agent "Fixer", which a mod started', () => (w.agents = [{ id: 'a1', status: 'running', description: 'Fixer', spawnedBy: 'x' }]), () => (w.agents = [])],
+    ['background shell b1', () => undefined, () => undefined, { background_tasks: [{ id: 'b1', type: 'shell', status: 'running', command: 'npm test' }] }],
+    ['background monitor m1', () => undefined, () => undefined, { background_tasks: [{ id: 'm1', type: 'monitor', status: 'running', description: 'watch CI' }] }],
+    ['scheduled wake up', () => undefined, () => undefined, { session_crons: [{ id: 'c1', schedule: '*/5 * * * *', recurring: true, prompt: '/loop' }] }],
+    ['the background job "dev server", kept', () => (w.jobs = [{ id: 'j1', label: 'dev server', kept: true, state: 'running' }]), () => (w.jobs = [])],
+    ['is still deploying', () => (w.verdicts = { 'danwright32/claude-config#1699': { state: 'deploying', at: 1 } }), () => (w.verdicts = {})],
+    ['danwright32/claude-config#1701 is still open', () => (w.open = { 'danwright32/claude-config': { exitCode: 0, stdout: '[{"number":1701}]' } }), () => (w.open = {})],
+    ['the /goal "ship it" is still set', () => (w.goal = { state: 'set', condition: 'ship it' }), () => (w.goal = { state: 'none' })],
+    ['the manual step "Add the key" is not done', () => (w.stepsCard = { heading: 'h', steps: [{ title: 'Add the key', url: 'https://a.example' }] }), () => (w.stepsCard = null)],
+    ['a compact is queued', () => (w.compactQueued = true), () => (w.compactQueued = false)],
+    ['handoff note', () => (w.compactFollowUp = { note: 'n', ranAt: 1, compacted: true }), () => (w.compactFollowUp = null)],
+    ['is-it-live is waiting to send the prompt for a card', () => (w.holds = [{ mod: 'is-it-live', id: 'p', what: 'the prompt for a card', until: 1_900_000_000_000 }]), () => (w.holds = [])],
+    ["the turn's answer ends on a question", () => undefined, () => undefined, undefined, 'Merged.\n\nShall I close the issue?'],
+  ]
+  for (const [words, bad, good, stop, answer] of cases) {
+    bad()
+    await stopped($, stop)
+    await turnEnds($, { answer: answer ?? 'Merged and live.' })
+    await clock.advance(QUIET_MS)
+    expect({ words, pinned: w.pinned.length }).toEqual({ words, pinned: 0 })
+    expect({ words, reasons: (reasonsOf(w)?.reasons ?? []).join(' | ') }).toEqual({ words, reasons: expect.stringContaining(words) })
+    expect(reasonsOf(w)?.pinned).toBe(false)
+    good()
+  }
+  await stopped($)
+  await turnEnds($)
+  await clock.advance(QUIET_MS)
+  expect(w.pinned).toHaveLength(1)
+})
+
+test('a reading that cannot be taken withholds the card as unread: no stop recorded, a list missing, a noun that throws, a goal unreadable (#3770)', withAll, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($)
+  await says($, 'Add the goal box')
+  expect((await box($, ASKED)).deny).toBeUndefined()
+  // The turn's stop never reached the mod (a missing managed setting, #875).
+  await turnEnds($)
+  await clock.advance(QUIET_MS)
+  expect(w.pinned).toEqual([])
+  expect(reasonsOf(w)?.reasons.join(' ')).toMatch(/background work in flight .* could not be read/)
+  const cases: [() => void, () => void, Record<string, unknown> | undefined, RegExp][] = [
+    [() => undefined, () => undefined, { background_tasks: undefined }, /background work in flight .* could not be read/],
+    [() => undefined, () => undefined, { session_crons: 'x' }, /scheduled wake ups .* could not be read/],
+    [() => (w.jobsFail = 'the job record could not be read'), () => (w.jobsFail = ''), undefined, /job watcher's list of background jobs could not be read \(.*the job record could not be read/],
+    [() => (w.agentsFail = 'agents gone'), () => (w.agentsFail = ''), undefined, /agents could not be listed/],
+    [() => (w.goal = { state: 'unreadable', why: 'grep failed' }), () => (w.goal = { state: 'none' }), undefined, /\/goal could not be read \(grep failed\)/],
+    [() => (w.stepsCard = { steps: 'x' }), () => (w.stepsCard = null), undefined, /manual steps card could not be read/],
+  ]
+  for (const [bad, good, stop, words] of cases) {
+    bad()
+    await stopped($, stop)
+    await turnEnds($)
+    await clock.advance(QUIET_MS)
+    expect(w.pinned).toEqual([])
+    expect(reasonsOf(w)?.reasons.join(' ')).toMatch(words)
+    good()
+  }
+})
+
+test('a turn that starts inside the quiet period pins nothing, and nor does its own end until it has been quiet (#3770)', withAll, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($)
+  await says($, 'Add the goal box')
+  expect((await box($, ASKED)).deny).toBeUndefined()
+  await stopped($)
+  await turnEnds($)
+  await clock.advance(QUIET_MS - 1)
+  await turnStarts($)
+  await clock.advance(QUIET_MS * 2)
+  expect(w.pinned).toEqual([])
+  // A message of any origin inside the quiet period does the same.
+  await stopped($)
+  await turnEnds($)
+  await clock.advance(QUIET_MS - 1)
+  await says($, '<task-notification>done</task-notification>', 'task-notification')
+  await clock.advance(QUIET_MS * 2)
+  expect(w.pinned).toEqual([])
+  await stopped($)
+  await turnEnds($)
+  await clock.advance(QUIET_MS)
+  expect(w.pinned).toHaveLength(1)
+})
+
+test('a session Dan only chatted with, with no box, never gets the card, and says why (#3770)', withAll, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($)
+  await says($, 'What does the job watcher do?')
+  await workedAndQuiet($, clock, { box: false })
+  await clock.advance(QUIET_MS * 3)
+  expect(w.pinned).toEqual([])
+  expect(reasonsOf(w)).toMatchObject({ pinned: false, reasons: [expect.stringMatching(/no Goal accomplished box/)] })
+})
+
+test('a headless session never gets the card (#3770)', withAll, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($, false)
+  await says($, 'Add the goal box')
+  await stopped($)
+  await turnEnds($)
+  await clock.advance(QUIET_MS)
+  expect(w.pinned).toEqual([])
+})
+
+test('a new turn withdraws the card; a second idle end under the same request pins nothing; the next request with its box pins it again, once (#3770)', withAll, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($)
+  await says($, 'Add the goal box')
+  await workedAndQuiet($, clock)
+  expect(w.pinned).toHaveLength(1)
+  // A wake up, a task notification or a mod's prompt starts a turn: the card comes down, withdrawn.
+  await turnStarts($)
+  expect(w.withdrawn).toEqual([CLOSE_TITLE])
+  await stopped($)
+  await turnEnds($)
+  await clock.advance(QUIET_MS)
+  expect(w.pinned).toHaveLength(1)
+  // Dan asks for more: no card until its own box.
+  await says($, 'Now make the status bar quieter')
+  await workedAndQuiet($, clock, { box: false })
+  expect(w.pinned).toHaveLength(1)
+  expect(reasonsOf(w)?.reasons.join(' ')).toMatch(/no Goal accomplished box/)
+  await workedAndQuiet($, clock, { id: 'b2' })
+  expect(w.pinned).toHaveLength(2)
+  await turnStarts($, 't3')
+  expect(w.withdrawn).toEqual([CLOSE_TITLE, CLOSE_TITLE])
+})
+
+test('a process carrying this session\'s id withholds the card; a look that fails or runs out of time neither withholds nor pins (#3770)', withAll, async ($, on) => {
+  const { w, clock, runs } = world(on, { procs: { exitCode: 0, stdout: JSON.stringify({ found: [{ pid: 4321, name: 'node' }] }) } })
+  await start($)
+  await says($, 'Add the goal box')
+  await workedAndQuiet($, clock)
+  expect(w.pinned).toEqual([])
+  expect(reasonsOf(w)?.reasons.join(' ')).toMatch(/process 4321 \(node\).* carries this session's id/)
+  // The look is handed this session's id and a time limit of its own.
+  const look = runs().find(a => a[0] === 'python3')
+  expect(look?.includes('s1')).toBe(true)
+  // A look that fails says nothing either way: the other readings decide.
+  w.procs = { exitCode: 1, stdout: '', stderr: 'python3: not found' }
+  await stopped($)
+  await turnEnds($)
+  await clock.advance(QUIET_MS)
+  expect(w.pinned).toHaveLength(1)
+})
+
+test('a look that runs out of time, or answers what is not a list, neither withholds nor pins (#3770)', withAll, async ($, on) => {
+  const { w, clock } = world(on, { procs: { exitCode: 0, stdout: 'garbled' } })
+  await start($)
+  await says($, 'Add the goal box')
+  await workedAndQuiet($, clock)
+  expect(w.pinned).toHaveLength(1)
+  expect(reasonsOf(w)?.reasons).toEqual([])
+})
+
+test('a command that put something in the background withholds the card for the rest of the session, across later requests and boxes (#3770)', withAll, async ($, on) => {
+  const { w, clock } = world(on, { reader: c => (c.includes('&') ? [{ words: ['sleep', '600'], background: true }] : [{ words: ['ls'] }]) })
+  await start($)
+  await says($, 'Add the goal box')
+  await bash($, 'ls')
+  await bash($, 'sleep 600 &')
+  await workedAndQuiet($, clock)
+  expect(w.pinned).toEqual([])
+  const why = reasonsOf(w)?.reasons.join(' ') ?? ''
+  expect(why).toMatch(/put a process in the background/)
+  // Never the command's own text.
+  expect(why).not.toMatch(/sleep 600/)
+  await says($, 'Now make the status bar quieter')
+  await workedAndQuiet($, clock, { id: 'b2' })
+  expect(w.pinned).toEqual([])
+  expect(reasonsOf(w)?.reasons.join(' ')).toMatch(/put a process in the background/)
+})
+
+test('nohup, setsid and disown trip it too; a Bash call run in the background, which the job watcher tracks, does not; a subagent\'s does not (#3770)', withAll, async ($, on) => {
+  const reads: Record<string, unknown[]> = {
+    'nohup x': [{ words: ['x'], behind: ['nohup'] }],
+    'setsid x': [{ words: ['x'], behind: ['setsid'] }],
+    'disown': [{ words: ['disown'] }],
+    'bg run': [{ words: ['sleep', '1'], background: true }],
+  }
+  const { w, clock } = world(on, { reader: c => reads[c] ?? [{ words: ['ls'] }] })
+  await start($)
+  await says($, 'Add the goal box')
+  await bash($, 'bg run', { run_in_background: true })
+  await bash($, 'bg run', { agentId: 'agent-1' })
+  await workedAndQuiet($, clock)
+  expect(w.pinned).toHaveLength(1)
+  await says($, 'More')
+  await bash($, 'nohup x')
+  await workedAndQuiet($, clock, { id: 'b2' })
+  expect(w.pinned).toHaveLength(1)
+  expect(reasonsOf(w)?.reasons.join(' ')).toMatch(/nohup/)
+})
+
+test('setsid trips it (#3770)', withAll, async ($, on) => {
+  const { w, clock } = world(on, { reader: () => [{ words: ['x'], behind: ['setsid'] }] })
+  await start($)
+  await says($, 'Add the goal box')
+  await bash($, 'setsid x')
+  await workedAndQuiet($, clock)
+  expect(w.pinned).toEqual([])
+  expect(reasonsOf(w)?.reasons.join(' ')).toMatch(/setsid/)
+})
+
+test('disown trips it (#3770)', withAll, async ($, on) => {
+  const { w, clock } = world(on, { reader: () => [{ words: ['disown', '-a'] }] })
+  await start($)
+  await says($, 'Add the goal box')
+  await bash($, 'disown -a')
+  await workedAndQuiet($, clock)
+  expect(w.pinned).toEqual([])
+  expect(reasonsOf(w)?.reasons.join(' ')).toMatch(/disown/)
+})
+
+test('a command the reader is unsure of, or cannot read at all, counts as one that may have left something behind (#3770)', withAll, async ($, on) => {
+  const { w, clock } = world(on, { reader: c => (c === 'eval x' ? [{ words: ['eval', 'x'], unread: 'eval runs text the shell builds' }] : { fails: 'the reader threw' }) })
+  await start($)
+  await says($, 'Add the goal box')
+  await bash($, 'eval x')
+  await workedAndQuiet($, clock)
+  expect(w.pinned).toEqual([])
+  expect(reasonsOf(w)?.reasons.join(' ')).toMatch(/could not be read in full \(eval runs text the shell builds\)/)
+})
+
+test('a command the reader throws on trips it too (#3770)', withAll, async ($, on) => {
+  const { w, clock } = world(on, { reader: () => ({ fails: 'the reader threw' }) })
+  await start($)
+  await says($, 'Add the goal box')
+  await bash($, 'anything')
+  await workedAndQuiet($, clock)
+  expect(w.pinned).toEqual([])
+  expect(reasonsOf(w)?.reasons.join(' ')).toMatch(/could not be read in full/)
 })
