@@ -33,7 +33,10 @@ This file is the one home of that list. The feature interview, `/plan-lite`, `/p
   `database constraint`, `type`, `test`, `property test`, `model check` or `guard`. Anything planned,
   or absent, is `nothing yet`, then a comma and what is planned or why nothing will. A rule about
   every input to a calculation suits a property test; a rule about the order things happen in (a
-  retry, a timeout, two requests at once) suits a model check. `nothing yet` is an honest answer.
+  retry, a timeout, two requests at once) suits a model check. A model check is named by its
+  guide's path; the verification-guides skill's "Model check guides" says how one is written, and
+  for a rule about order that is still `nothing yet` the session offers one, never requires it
+  (claude-config#3471). `nothing yet` is an honest answer.
   A blank, or "careful code", is not.
 - **Not covered.** One line naming what the rules leave out. Dan reads the rules and this line, and
   that is his review: ask him to approve both with AskUserQuestion before anything is built on them.

@@ -11,7 +11,8 @@ the major version it knows and ignores keys it does not, so an additive change n
 (L255); a breaking change takes a new major version, which is refused by name.
 
   verification-areas/1    .claude/verification/areas.json, written by CREATE (see SKILL.md)
-  guide (no version)      .claude/verification/guides/<area>.md, the fixed template
+  guide (no version)      .claude/verification/guides/<area>.md, one of two fixed templates: by hand
+                          (guide-template.md) or model check (model-check-template.md, #3471)
   verification-run/1      one fenced ```verification-run block per area in a PR comment
   verification-receipt/1  <home>/receipts/<id>/receipt.json, written only by run_session.py
                           (and drives.jsonl beside it, one line per drive call)
@@ -29,7 +30,10 @@ CLI (every refusal prints `verification: <kind>: <message>` on stderr, one line 
 
   verification.py areas validate <areas.json> [--root <repo>]
   verification.py bucket <areas.json> [<path> ...]          paths on stdin when none are given
-  verification.py guide check <guide.md>
+  verification.py guide check <guide.md>                    a by hand or a model check guide (#3471)
+  verification.py guide stale <areas.json> <area> [--repo <checkout>]
+                                                            a model check guide's owned files changed
+                                                            since its Last checked commit: exit 9
   verification.py done-when                                 PR body on stdin
   verification.py record parse [--sha <40 hex>]             a comment body on stdin
   verification.py record render --pr-body <file>            a draft on stdin (see SKILL.md)
@@ -41,6 +45,7 @@ CLI (every refusal prints `verification: <kind>: <message>` on stderr, one line 
 Exit codes, one per class of cause:
   0 ok  2 usage  3 not found (areas-missing, record-none, receipt-missing, agent-not-found)
   4 malformed or refused  5 ambiguous  6 record-other-sha  7 bucket-unowned or bucket-ambiguous
+  8 the run itself failed (run_session.py)  9 guide-stale (a model check to run again)
 
 Env: VERIFICATION_HOME (default ~/.claude-verification, outside ~/.claude on purpose: the sync
 mirrors ~/.claude to a public repository, and receipts hold screenshots of private apps), and
@@ -54,6 +59,7 @@ import os
 import re
 import secrets
 import socket
+import subprocess
 import sys
 import time
 
@@ -64,6 +70,13 @@ RENDERED_SCHEMA = "verification-rendered/1"
 AREAS_PATH = ".claude/verification/areas.json"
 
 GUIDE_SECTIONS = ("Roles", "Reach", "State setup", "Checks", "Known traps")
+# A model check guide (claude-config#3471): rules about the order things happen in, checked
+# against a model written from the code. A guide is one kind or the other by its sections, the way
+# a screen is web or native by its keys, and never both.
+MODEL_GUIDE_SECTIONS = ("Rules", "Not covered", "Model", "Last checked", "Checks", "Known traps")
+BY_HAND_ONLY = tuple(s for s in GUIDE_SECTIONS if s not in MODEL_GUIDE_SECTIONS)
+MODEL_ONLY = tuple(s for s in MODEL_GUIDE_SECTIONS if s not in GUIDE_SECTIONS)
+GUIDE_KINDS = ("by-hand", "model-check")
 CHECKS_MIN, CHECKS_MAX = 3, 6
 NOTE_MAX = 300
 
@@ -106,6 +119,8 @@ EXIT_BY_KIND = {
     "agent-ambiguous": 5, "run-busy": 5,
     "record-other-sha": 6,
     "bucket-unowned": 7, "bucket-ambiguous": 7,
+    # a model check guide whose area has changed since it was last checked, or never checked
+    "guide-stale": 9,
     # run_session.py: the run itself failed
     "ready-timeout": 8, "serve-stopped": 8, "serve-survived": 8, "supervisor-failed": 8,
     "supervisor-hung": 8, "drive-failed": 8, "disk-full": 8, "start-error": 8, "start-cleanup-failed": 8,
@@ -132,6 +147,11 @@ def fail(kind, message):
 
 def one_line(s):
     return isinstance(s, str) and s.strip() != "" and "\n" not in s and "\r" not in s
+
+
+def first_line(s):
+    """The first line of a tool's output that holds anything, stripped; "" when none does."""
+    return next((l.strip() for l in (s or "").splitlines() if l.strip()), "")
 
 
 def verification_home():
@@ -546,13 +566,90 @@ def _sections(text):
     return out
 
 
+RULE_LINE = re.compile(r"^[-*]\s+\[(R[0-9]+)\]\s+(\S.*?)\s*\Z")
+RULE_ID_RE = re.compile(r"^R[1-9][0-9]?\Z")
+RULE_FIELD = re.compile(r"^\s+[-*]\s+(Good outcome|Approved by Dan):\s*(.*?)\s*\Z")
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}\Z")
+LAST_FIELD = re.compile(r"^\s*[-*]\s+(Commit|Result):\s*(.*?)\s*\Z")
+
+
+def guide_kind(secs):
+    """'model-check' when the guide has a section only that kind has, else 'by-hand'. A guide holding
+    sections of both kinds is refused, so neither reading is a guess."""
+    by_hand = [s for s in BY_HAND_ONLY if s in secs]
+    model = [s for s in MODEL_ONLY if s in secs]
+    if by_hand and model:
+        fail("guide-mixed-kinds", "the guide has sections of a by hand guide (%s) and of a model check guide (%s): a guide is one kind"
+             % (", ".join(by_hand), ", ".join(model)))
+    return "model-check" if model else "by-hand"
+
+
+def _parse_rules(p, lines):
+    rules, seen, current = [], set(), None
+    for line in lines:
+        if not line.strip():
+            continue
+        m = RULE_LINE.match(line)
+        if m and RULE_ID_RE.match(m.group(1)):
+            current = None
+            if m.group(1) in seen:
+                p.append(("guide-duplicate-rule", "rule %s appears twice" % m.group(1)))
+                continue
+            seen.add(m.group(1))
+            current = {"id": m.group(1), "text": m.group(2), "good_outcome": None, "approved": None}
+            rules.append(current)
+            continue
+        f = RULE_FIELD.match(line)
+        if f and current is not None:
+            key = "good_outcome" if f.group(1) == "Good outcome" else "approved"
+            current[key] = f.group(2) or None
+            continue
+        p.append(("guide-bad-rule-line", "a line under Rules is not '- [R<n>] <one sentence>' or one of its"
+                  " indented 'Good outcome:' and 'Approved by Dan:' lines: %r" % line.strip()))
+    if not rules and not any(k == "guide-bad-rule-line" for k, _ in p):
+        p.append(("guide-no-rules", "the guide has no rule under Rules: a model check holds at least one"))
+    for r in rules:
+        if not r["good_outcome"]:
+            p.append(("guide-rule-no-good-outcome", "%s has no 'Good outcome:' line, so a model where nothing"
+                      " happens would pass it" % r["id"]))
+        if not (r["approved"] and DATE_RE.match(r["approved"])):
+            p.append(("guide-rule-not-approved", "%s has no 'Approved by Dan: <YYYY-MM-DD>' line: a rule is"
+                      " modelled only once Dan has approved its sentence" % r["id"]))
+    return rules
+
+
+def _parse_last_checked(p, lines):
+    got = {}
+    for line in lines:
+        m = LAST_FIELD.match(line)
+        if m:
+            got[m.group(1)] = m.group(2)
+    commit, result = got.get("Commit", ""), got.get("Result", "")
+    if not (commit == "never" or SHA_RE.match(commit)):
+        p.append(("guide-bad-last-checked", "Last checked needs '- Commit: <40 hex>' or '- Commit: never', not %r" % commit))
+    if not result:
+        p.append(("guide-bad-last-checked", "Last checked needs '- Result: <one line>'"))
+    return {"commit": None if commit == "never" else commit, "result": result}
+
+
 def parse_guide(text):
-    """A guide's checks, in order. The template's five sections must all be there."""
+    """A guide's kind and checks, in order. A by hand guide has the template's five sections; a
+    model check guide (claude-config#3471) has model-check-template.md's six, with its rules, each
+    approved by Dan, and the commit it was last checked against."""
     p = []
     secs = _sections(text)
-    for s in GUIDE_SECTIONS:
+    kind = guide_kind(secs)
+    for s in (MODEL_GUIDE_SECTIONS if kind == "model-check" else GUIDE_SECTIONS):
         if s not in secs:
             p.append(("guide-missing-section", "the guide has no '## %s' section" % s))
+    extra = {}
+    if kind == "model-check":
+        extra["rules"] = _parse_rules(p, secs.get("Rules", []))
+        for s in ("Not covered", "Model"):
+            if s in secs and not any(l.strip() for l in secs[s]):
+                p.append(("guide-empty-section", "the guide's '## %s' section is empty" % s))
+        if "Last checked" in secs:
+            extra["last_checked"] = _parse_last_checked(p, secs["Last checked"])
     checks, seen = [], set()
     for line in secs.get("Checks", []):
         if not line.strip():
@@ -573,7 +670,7 @@ def parse_guide(text):
     if p:
         raise VerificationError(p)
     title = next((l[2:].strip() for l in text.splitlines() if l.startswith("# ")), "")
-    return {"title": title, "checks": checks}
+    return dict({"title": title, "kind": kind, "checks": checks}, **extra)
 
 
 def load_guide(path):
@@ -582,6 +679,42 @@ def load_guide(path):
             return parse_guide(f.read())
     except FileNotFoundError:
         fail("guide-missing", "%s does not exist" % path)
+
+
+def guide_stale(areas_path, area_name, repo):
+    """Whether a model check guide must be checked again (claude-config#3471): the files its area
+    owns that changed between the commit the guide was last checked against and HEAD of `repo`.
+    Returns {"area", "last_checked", "changed"}; raises guide-stale when anything changed or the
+    guide was never checked, so a caller cannot read a stale guide as a current one."""
+    doc = load_areas(areas_path)
+    area = next((a for a in doc["areas"] if a["name"] == area_name), None)
+    if area is None:
+        fail("usage", "areas.json has no area named %s (it has %s)" % (area_name, ", ".join(area_names(doc))))
+    guide = load_guide(os.path.join(repo, area["guide"]))
+    if guide["kind"] != "model-check":
+        fail("guide-not-model-check", "%s is a %s guide; only a model check guide records the commit it was"
+             " last checked against" % (area["guide"], guide["kind"]))
+    commit = guide["last_checked"]["commit"]
+    if commit is None:
+        fail("guide-stale", "%s has never been checked (Last checked says never): run its model check" % area["guide"])
+    known = subprocess.run(["git", "-C", repo, "cat-file", "-e", commit + "^{commit}"],
+                           capture_output=True, text=True, timeout=60)
+    if known.returncode != 0:
+        fail("commit-missing", "%s was last checked against %s, which this checkout does not hold: fetch it,"
+             " or run the model check again" % (area["guide"], commit))
+    diff = subprocess.run(["git", "-C", repo, "diff", "--name-only", "-z", commit, "HEAD", "--"],
+                          capture_output=True, timeout=120)
+    if diff.returncode != 0:
+        fail("git-failed", "git diff %s HEAD failed in %s: %s"
+             % (commit[:7], repo, first_line(diff.stderr.decode("utf-8", "replace"))))
+    paths = [x for x in diff.stdout.decode("utf-8", "strict").split("\0") if x]
+    changed = sorted(x for x in paths if any(glob_matches(g, x) for g in area["owns"]))
+    out = {"area": area_name, "last_checked": commit, "changed": changed}
+    if changed:
+        print(json.dumps(out, indent=2))
+        fail("guide-stale", "%s owns files changed since %s, its last check: %s"
+             % (area_name, commit[:7], ", ".join(changed)))
+    return out
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1086,6 +1219,12 @@ def render_comment(draft, home=None, transcripts=None, pr_body=""):
             continue
         seen.add(name)
         guide = load_guide(os.path.join(rdir, "guides", name + ".md"))
+        if guide["kind"] == "model-check":
+            # A served run drove no model checker, so a record here would read as a checked model
+            # and could satisfy the merge check (#3471). Its result lives in the guide's Last checked.
+            p.append(("render-model-check", "area %s has a model check guide, which a served run does not check:"
+                      " leave it out of the run and follow SKILL.md's Model check guides steps" % name))
+            continue
         gtext = {c["id"]: c["text"] for c in guide["checks"]}
         not_lists = [k for k in ("checks", "done_when", "screenshots", "guide_edits")
                      if not isinstance(a.get(k, []), list)]
@@ -1262,6 +1401,12 @@ def _cmd(argv):
     if argv[:2] == ["guide", "check"] and len(argv) == 3:
         g = load_guide(argv[2])
         print(json.dumps(g, indent=2))
+        return 0
+    if argv[:2] == ["guide", "stale"] and len(argv) in (4, 6):
+        if len(argv) == 6 and argv[4] != "--repo":
+            return None
+        repo = argv[5] if len(argv) == 6 else os.getcwd()
+        print(json.dumps(guide_stale(argv[2], argv[3], repo), indent=2))
         return 0
     if argv == ["done-when"]:
         print(json.dumps(done_when_items(_read_stdin()), indent=2))
