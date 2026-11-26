@@ -11127,7 +11127,10 @@ read through `payload/hooks/lib/web-guidance-pin.py` by everything below (#3565)
 - `payload/hooks/web-guidance-pin-gate.sh` refuses any Bash command that runs the package (npx,
   bunx, npm exec, npm install, pnpm dlx, yarn dlx) at another version or none, and names the pinned
   command instead, so the plugin's own skill text, which says `@latest` and updates itself, cannot
-  run a release nobody read. A grep, an echo, `npm view` or `npm diff` only mention it and pass.
+  run a release nobody read. The runner is found anywhere in the command (behind `timeout 60`,
+  `sudo -u`, `npm --yes exec`), and a name written in quoted pieces is read as the shell joins it.
+  A grep, a quoted echo, `npm view` or `npm diff` only mention it and pass. A package named only
+  through a variable is not seen.
 - Once a day (6:41 AM ET in winter), `.github/workflows/web-guidance-pin.yml` asks the npm registry
   for every release's publish time. When a release newer than the pin has been out 14 days, it
   opens one issue (labels `priority-p2`, `security`, `tooling`, milestone Ungrouped) naming both

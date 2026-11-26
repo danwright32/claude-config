@@ -127,26 +127,37 @@ def load_shell_words():
     return mod
 
 
-ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+NPM_RUNS = ("exec", "x", "i", "install", "add")
+
+
+def runner_at(w):
+    """Where in a command's words a run of a package starts, or None.
+
+    Read from ANY word, not only the first: what stands in front of a runner (timeout 60, sudo -u
+    root, env -u X, time -p, rtk proxy, xargs) takes options and arguments of its own, and a list of
+    them would always miss one. A word is a runner when it is npx or bunx, or npm with exec, x,
+    install or add after it (past any flags, so `npm --yes exec` counts), or pnpm or yarn with dlx
+    after it. This errs toward refusing: an unquoted `echo npx <package>@latest` reads as a run, while
+    the same text quoted is one word and only mentions it."""
+    for i, word in enumerate(w):
+        name = os.path.basename(word)
+        if name in ("npx", "bunx"):
+            return i
+        if name == "npm" and any(x in NPM_RUNS for x in w[i + 1:]):
+            return i
+        if name in ("pnpm", "yarn") and "dlx" in w[i + 1:]:
+            return i
+    return None
 
 
 def runs_package(words):
     """The package words of a command that runs one, or [] when the command runs nothing."""
     w = list(words)
-    # Past what only stands in front of a command: rtk (and its proxy), env with its assignments,
-    # sudo, command, exec.
-    while w and (w[0] in ("rtk", "sudo", "command", "env", "exec", "nohup", "time") or ASSIGN.match(w[0])):
-        w = w[2:] if w[0] == "rtk" and len(w) > 1 and w[1] == "proxy" else w[1:]
-    if not w:
-        return []
-    name = os.path.basename(w[0])
-    sub = w[1] if len(w) > 1 else ""
-    if not (name in ("npx", "bunx")
-            or (name == "npm" and sub in ("exec", "x", "i", "install", "add"))
-            or (name in ("pnpm", "yarn") and sub == "dlx")):
+    start = runner_at(w)
+    if start is None:
         return []
     specs = []
-    for i, word in enumerate(w[1:], 1):
+    for word in w[start + 1:]:
         value = word
         for flag in ("--package=", "-p="):
             if word.startswith(flag):
