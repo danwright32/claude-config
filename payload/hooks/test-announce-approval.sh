@@ -139,6 +139,30 @@ for shape in timeout prefilled two error othersource; do
   check "R2 a picker that is not his answer ($shape) approves nothing" "$([[ "$r" == "no|"* ]] && echo ok || echo "$r")"
   check "and writes no approval to the record ($shape)" "$([ "$(recorded)" = 0 ] && echo ok || echo "$(recorded) lines")"
 done
+# The refusal says why (#3742, low 15). The session can see an Approve in its own transcript, so a
+# bare "Dan has not approved this wording" sent it to ask again the same way.
+for each in "timeout|closed by its own timeout" "prefilled|already filled in" "two|did not ask one question" "error|came back in error"; do
+  shape="${each%%|*}"
+  STORE_USED="$WORK/store-why-$shape"
+  F="$(shown "why-$shape")"; T="$WORK/why-$shape.jsonl"
+  talk "$T" ask acme/widget "$F" "" "$shape"
+  r="$(asked "$T" acme/widget "$(hash_file "$F")")"
+  check "an Approve that is not his answer ($shape) is refused with the reason it does not count" "$([[ "$r" == "no|"*"his Approve for $F does not count"*"${each#*|}"* ]] && echo ok || echo "$r")"
+done
+# A picker of another source is not about an announcement, and draws no such sentence.
+STORE_USED="$WORK/store-why-othersource"
+F="$(shown why-othersource)"; T="$WORK/why-othersource.jsonl"
+talk "$T" ask acme/widget "$F" "" othersource
+r="$(asked "$T" acme/widget "$(hash_file "$F")")"
+check "a picker of another source draws no sentence about an Approve" "$([[ "$r" == "no|"* && "$r" != *"does not count"* ]] && echo ok || echo "$r")"
+# Still possible: asked again and answered by him, the earlier one is not held against the file.
+STORE_USED="$WORK/store-why-again"
+F="$(shown why-again)"; T="$WORK/why-again.jsonl"
+talk "$T" ask acme/widget "$F" "" timeout
+talk "$T" bash "$BBEDIT --front-window $F"
+talk "$T" ask acme/widget "$F"
+r="$(asked "$T" acme/widget "$(hash_file "$F")")"
+check "still possible: asked again after a picker that timed out, his own Approve counts" "$([[ "$r" == "yes||" ]] && echo ok || echo "$r")"
 STORE_USED="$WORK/store-notyet"
 F="$(shown notyet)"; T="$WORK/notyet.jsonl"
 talk "$T" ask acme/widget "$F" "Not yet"
@@ -172,6 +196,19 @@ talk "$T" ask acme/widget "announcement.md"
 talk "$T" ask "widget" "$F"
 r="$(asked "$T" acme/widget "$(hash_file "$F")")"
 check "a picker naming no absolute file, or no owner/name, approves nothing" "$([[ "$r" == "no|"*"does not name the repository as owner/name and the wording file by its absolute path"* ]] && echo ok || echo "$r")"
+# Wording he approved for a repository under another name (a fork, an old name) is still refused,
+# and the refusal says that is what was found, where it said he never approved it (#3742, low 16).
+STORE_USED="$WORK/store-otherrepo"
+F="$(shown otherrepo)"; T="$WORK/otherrepo.jsonl"
+talk "$T" ask acme/widget "$F"
+r="$(asked "$T" acme/widget-old "$(hash_file "$F")")"
+check "R2 wording he approved for another repository is not approved for this one" "$([[ "$r" == "no|"* ]] && echo ok || echo "$r")"
+check "and the refusal says the same wording is approved for the other repository" "$([[ "$r" == *"approved this same wording for acme/widget,"* ]] && echo ok || echo "$r")"
+T2="$WORK/otherrepo-later.jsonl"; new_talk "$T2"
+r="$(asked "$T2" acme/widget-old "$(hash_file "$F")")"
+check "and says so from the record alone, in a later session" "$([[ "$r" == "no|"*"approved this same wording for acme/widget,"* ]] && echo ok || echo "$r")"
+r="$(asked "$T2" acme/widget-old "$(hash_text "wording nobody approved anywhere")")"
+check "wording approved for no repository draws no such sentence" "$([[ "$r" == "no|"* && "$r" != *"this same wording for"* ]] && echo ok || echo "$r")"
 
 echo "the wording was opened in front of him, and is what he answered about"
 # Never opened.
@@ -580,6 +617,37 @@ r="$(AGENT=1 for_pr "$T" acme/widget "$HF" 40 claim)"
 check "a subagent's merge on his picker is recorded as the use of it" "$([[ "$r" == "yes|approved|"* ]] && [ "$(used_lines 40)" = 1 ] && ! grep -q '"kind": "approved"' "$STORE_USED/record.jsonl" && echo ok || echo "$r")"
 r="$(for_pr "$T" acme/widget "$HF" 41 claim)"
 check "so the main session's merge of another pull request on the same picker is refused" "$([[ "$r" == "no|used|"*"pull request 40"* ]] && echo ok || echo "$r")"
+# A subagent's call writes the use and no approval. A later session's retry of that same pull
+# request is refused, and used to be told he never approved the wording (#3742, low 13).
+STORE_USED="$WORK/store-agent-only"
+F="$(shown agentonly)"; T="$WORK/agentonly.jsonl"
+talk "$T" ask acme/widget "$F"
+HF="$(hash_file "$F")"
+r="$(AGENT=1 for_pr "$T" acme/widget "$HF" 40 claim)"
+check "control: the subagent's merge is let through and writes the use alone" "$([[ "$r" == "yes|approved|"* ]] && [ "$(used_lines 40)" = 1 ] && [ "$(recorded)" = 0 ] && echo ok || echo "$r")"
+T0="$WORK/agentonly-later.jsonl"; new_talk "$T0"
+r="$(for_pr "$T0" acme/widget "$HF" 40 claim)"
+check "a later retry of the pull request a subagent merged is still refused" "$([[ "$r" == "no|"* ]] && echo ok || echo "$r")"
+check "and the refusal says the record holds its use and no approval behind it" "$([[ "$r" == *"pull request 40 as let through on this wording"*"holds no approval"* ]] && echo ok || echo "$r")"
+r="$(for_pr "$T0" acme/widget "$HF" 41 claim)"
+check "a different pull request there is told he has not approved it, with no word of a use of its own" "$([[ "$r" == "no|"*"has not approved this wording"* && "$r" != *"pull request 41 as let through"* ]] && echo ok || echo "$r")"
+
+# One answer of his is one approval, whatever session id its lines are found under (#3742, low 12).
+# A resumed or forked session may carry the same picker under a new session id, and an approval
+# was keyed by session and picker, so the one answer counted twice and covered a second pull request.
+STORE_USED="$WORK/store-fork"
+F="$(shown fork)"; T="$WORK/fork.jsonl"
+talk "$T" ask acme/widget "$F"
+HF="$(hash_file "$F")"
+r="$(for_pr "$T" acme/widget "$HF" 50 claim)"
+check "control: his picker covers the first pull request" "$([[ "$r" == "yes|approved|"* ]] && echo ok || echo "$r")"
+T2="$WORK/fork-resumed.jsonl"
+sed 's/"sessionId": "s1"/"sessionId": "s2"/' "$T" > "$T2"
+check "control: the copy holds the same picker under another session id" "$(grep -q '"sessionId": "s2"' "$T2" && ! grep -q '"sessionId": "s1"' "$T2" && echo ok || echo "the copy was not rewritten")"
+r="$(for_pr "$T2" acme/widget "$HF" 51 claim s2)"
+check "R2 the same picker under a resumed session's id is no second approval" "$([[ "$r" == "no|used|"*"pull request 50"* ]] && echo ok || echo "$r")"
+r="$(for_pr "$T2" acme/widget "$HF" 50 claim s2)"
+check "R2 still possible: the pull request that used it may try again from the resumed session" "$([[ "$r" == "yes|approved|"* ]] && echo ok || echo "$r")"
 
 echo "two pull requests reaching the merge at once on one approval"
 # Each claim holds the record while it decides and writes (the pause widens the moment between the

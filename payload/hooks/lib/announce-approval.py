@@ -396,10 +396,13 @@ def _when(line):
 
 
 def _approval_keys(entries, found, repo, digest, closed=()):
-    """(keys, back). keys is each approval of digest for repo that stands, once: the (session,
-    picker) it came from, on the record or found in a session's transcript and not yet on it. A
-    line naming neither is one approval with every other such line, so a line repeated is never a
-    second approval.
+    """(keys, back). keys is each approval of digest for repo that stands, once: the picker it came
+    from, on the record or found in a session's transcript and not yet on it. A picker's id is
+    Claude Code's own for the one call and is the same under every session id, so a picker is one
+    approval whichever session its lines are found under (claude-config#3742: a resumed or forked
+    session may carry an earlier session's lines under its own id, and keyed by session and picker
+    the one answer counted twice). A line naming no picker is one approval with every other such
+    line of its session, so a line repeated is never a second approval.
 
     HIS LAST ANSWER ON A WORDING DECIDES (module docstring): an approval older than a `withdrawn`
     line of the same repository and wording does not stand. A withdrawal that could not be hashed
@@ -409,7 +412,8 @@ def _approval_keys(entries, found, repo, digest, closed=()):
     given = {}
     for e in list(entries or []) + list(found):
         if e.get("kind") == "approved" and e.get("repo") == repo and e.get("hash") == digest:
-            key = (_text(e.get("session")), _text(e.get("picker")))
+            picker = _text(e.get("picker"))
+            key = (None, picker) if picker is not None else (_text(e.get("session")), None)
             if key not in given or _when(e) > given[key][0]:
                 given[key] = (_when(e), _text(e.get("file")))
     backs = [(_when(w), w) for w in list(entries or []) + list(closed)
@@ -572,8 +576,9 @@ def _items(entry):
 
 def _asked(transcript_path, session_id):
     """Every picker of SOURCE the session put that came back, oldest first, as a dict: ask (its
-    input), result, is_error, sent and answered (line numbers) and stamp (when the answer was
-    recorded, as written)."""
+    input), result, is_error, sent and answered (line numbers), stamp (when the answer was
+    recorded, as written) and prefilled (the session sent it with its answers filled in, so it is
+    no picker at all, and is kept only so a refusal can say so)."""
     waiting, out = {}, []
 
     def wanted(raw):
@@ -589,16 +594,38 @@ def _asked(transcript_path, session_id):
                 meta = ask.get("metadata") if isinstance(ask, dict) else None
                 # One that came with its answers filled in was never put to him: the dialog returns
                 # them without asking (lib/db-apply-approval.py's rule), so it is no picker at all.
-                if (isinstance(uid, str) and uid and isinstance(meta, dict) and meta.get("source") == SOURCE
-                        and not ask.get("answers")):
+                # It is marked, and approvals() takes nothing from it but the reason to give.
+                if isinstance(uid, str) and uid and isinstance(meta, dict) and meta.get("source") == SOURCE:
                     waiting[uid.encode("utf-8", "surrogatepass")] = (ask, n)
             elif item.get("type") == "tool_result" and isinstance(item.get("tool_use_id"), str):
                 pair = waiting.pop(item["tool_use_id"].encode("utf-8", "surrogatepass"), None)
                 if pair is not None:
                     out.append({"ask": pair[0], "sent": pair[1], "answered": n, "stamp": e.get("timestamp"),
-                                "picker": item["tool_use_id"],
+                                "picker": item["tool_use_id"], "prefilled": bool(pair[0].get("answers")),
                                 "result": e.get("toolUseResult"), "is_error": item.get("is_error")})
     return out
+
+
+def _not_his_approve(p):
+    """Why picker p, which holds APPROVE as its answer, is not an answer of Dan's, or None when it
+    holds no such answer or is one. The session can see that Approve in its own transcript, so a
+    refusal that did not say why it does not count sent it to ask again the same way."""
+    result = p["result"] if isinstance(p["result"], dict) else {}
+    answers = p["ask"].get("answers") if p.get("prefilled") else result.get("answers")
+    if not isinstance(answers, dict) or not any(isinstance(c, str) and c.strip() == APPROVE for c in answers.values()):
+        return None
+    if p.get("prefilled"):
+        return ("the session sent that picker with its answer already filled in, so it was never put to him. Ask it "
+                "with no answers of its own")
+    if p["is_error"]:
+        return "that picker came back in error, so the answer on it is not taken as his. Ask him again"
+    if "afkTimeoutMs" in result:
+        return "that picker was closed by its own timeout, so the answer on it is not his. Ask him again"
+    questions = p["ask"].get("questions")
+    if not isinstance(questions, list) or len(questions) != 1 or len(answers) != 1:
+        return ("that picker did not ask one question with one answer, and his approval is read from a picker that "
+                "asks about the wording alone. Ask ONE picker of one question")
+    return None
 
 
 def _file_events(transcript_path, session_id, targets, sw):
@@ -864,12 +891,14 @@ def approvals(session_id, transcript_path, deadline=None, noted=None, settled=()
 
     # The last word on each file: a later picker about it that ended any other way takes an earlier
     # Approve back.
-    last, untaken, ended = {}, [], []
+    # nothis is, for each file, why the newest picker about it that holds an Approve is not an
+    # answer of his (_not_his_approve), until a later picker about the file ends any other way.
+    last, untaken, ended, nothis = {}, [], [], {}
     for p in asked:
         meta = p["ask"]["metadata"]
         repo, file = repo_key(meta.get("repo")), meta.get("file")
         mine = p["ask"] if isinstance(p["ask"], dict) else {}
-        said = ap._answered(mine, p["result"], p["is_error"], APPROVE)
+        said = not p["prefilled"] and ap._answered(mine, p["result"], p["is_error"], APPROVE)
         if said and (repo is None or not isinstance(file, str) or not file.startswith("/")):
             untaken.append({"repo": repo or "", "file": file if isinstance(file, str) else "",
                             "why": "its metadata does not name the repository as owner/name and the wording file by "
@@ -877,10 +906,20 @@ def approvals(session_id, transcript_path, deadline=None, noted=None, settled=()
             continue
         if repo is None or not isinstance(file, str) or not file.startswith("/"):
             continue
-        p.update(repo=repo, file=os.path.realpath(file), said=said)
-        last[(repo, p["file"])] = p
+        where = (repo, os.path.realpath(file))
+        not_his = None if said else _not_his_approve(p)
+        if not_his is None:
+            nothis.pop(where, None)
+        else:
+            nothis[where] = not_his
+        if p["prefilled"]:
+            # No picker at all: it is the last word on nothing, and takes nothing back.
+            continue
+        p.update(repo=repo, file=where[1], said=said)
+        last[where] = p
         if not said and p["picker"] not in settled:
             ended.append(p)
+    untaken += [{"repo": r, "file": f, "why": why} for (r, f), why in nothis.items()]
     closed = [_closed(p, session_id, ap, noted, deadline) for p in ended]
     candidates = []
     for p in last.values():
@@ -1221,6 +1260,20 @@ def check(repo, digest, payload, pr=None, claim=False):
             if f["repo"] == key:
                 why.append("the wording he approved in " + f["file"] + " is not this wording (they differ once "
                            "normalised), so make the Announcement block that file's text, or ask him again")
+        # What IS on the record about this wording, said so the session is not told he never
+        # approved wording it watched him approve (claude-config#3742).
+        elsewhere = sorted({e.get("repo") for e in list(entries or []) + list(found)
+                            if e.get("kind") == "approved" and e.get("hash") == digest
+                            and isinstance(e.get("repo"), str) and e.get("repo") != key
+                            and _approval_keys(entries, found, e.get("repo"), digest, closed)[0]})
+        if elsewhere:
+            why.append("he approved this same wording for " + " and ".join(elsewhere) + ", which this Mac's record "
+                       "holds as another repository: an approval covers the repository its picker's metadata named. "
+                       "If that is this repository under another name, ask him again with \"repo\": \"" + key + "\"")
+        if pr is not None and pr in users:
+            why.append("this Mac's record holds pull request " + str(pr) + " as let through on this wording before, "
+                       "and holds no approval behind that use: his approval was read in a call that writes none (a "
+                       "subagent's), or its line is gone from the record. So he is asked again")
         out["why"] = _said(why, key, untaken, unreadable, unlooked)
         return out
     if covered and claim:

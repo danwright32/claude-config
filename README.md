@@ -2007,9 +2007,19 @@ the file and takes back his earlier approvals naming that file. A picker that ca
 or closed on its own timeout is no answer of his and takes nothing back from the record; it gets
 a `settled` line, so a noted session whose pickers all have an outcome is not read back again.
 
+A refusal says what was found, where it used to say only that he has not approved the wording
+(#3742). An Approve in the session's transcript that is not an answer of his (the picker timed out,
+came back in error, asked more than one question, or was sent with its answer filled in) is named
+with that reason. Wording he approved for a repository the record holds under another name is said
+to be approved there, with the metadata to ask again with. And a pull request the record holds as
+let through on the wording, with no approval behind that use (a subagent's call writes the use and
+no approval), is told so. None of the three lets anything through.
+
 One approval covers one pull request (Dan, 2026-11-25, by picker: "One approval, one pull request").
-An approval is one answer of his in one picker, counted once by the session and the picker it came
-from. An approval nobody has used covers whichever pull request reaches the merge gate first, so he
+An approval is one answer of his in one picker, counted once by the picker it came from, whichever
+session id its lines are found under (#3742: a resumed or forked session may carry an earlier
+session's lines under its own id, and counted by session and picker the one answer was two
+approvals). An approval nobody has used covers whichever pull request reaches the merge gate first, so he
 can approve the wording before the pull request exists. The pull request that used it may try a
 failed merge again without asking him. A different pull request carrying the same wording is
 refused, named the pull request that used the approval, and told to ask him again; his second
