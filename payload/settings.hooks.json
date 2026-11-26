@@ -328,6 +328,12 @@
             "command": "__CLAUDE_HOME__/hooks/handback-claims-gate.sh",
             "timeout": 90,
             "onFailure": "block"
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/agent-leftovers-gate.sh",
+            "timeout": 30,
+            "onFailure": "block"
           }
         ]
       },
@@ -654,6 +660,11 @@
           },
           {
             "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/bash-shell-mark.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
             "command": "__CLAUDE_HOME__/hooks/session-notes-folder.sh",
             "timeout": 10
           },
@@ -741,6 +752,11 @@
             "command": "__CLAUDE_HOME__/hooks/subagent-issue-harvest.sh",
             "timeout": 180,
             "async": true
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/agent-leftovers-gate.sh",
+            "timeout": 30
           },
           {
             "type": "command",
