@@ -165,23 +165,24 @@ done
 
 # sweep <A or B> <directory> <what it is>
 sweep(){
-  local form="$1" dir="$2" what="$3" out="$FIX/answers-$1.txt" asked allowed refused unasked line
+  local form="$1" dir="$2" what="$3" out="$FIX/answers-$1.txt" asked allowed refused unasked line not_through
   ask "$dir" "$FIX/commands.txt" "$out"
   asked="$(grep -c '' "$out" 2>/dev/null || true)"; allowed="$(count ALLOWED "$out")"
   refused="$(count REFUSED "$out")"; unasked="$(count UNASKED "$out")"
   if [ "${asked:-0}" -eq "$EXPECTED" ]; then check "form $form: all $EXPECTED run commands were asked about" ok
   else check "form $form: all $EXPECTED run commands were asked about" "${asked:-0} answers came back"; fi
   pass=$((pass + ${allowed:-0}))
+  # Read into a variable first, so the loop is fed by no child this shell never waits for (#2040).
+  not_through="$(grep -v '^ALLOWED	' "$out" 2>/dev/null || true)"
   while IFS= read -r line; do
     [ -n "$line" ] || continue
-    line="${line#*	}"
-    check "form $form, $what: ${line%%	*} is let through" "the gate refused it: ${line#*	}"
-  done < <(grep '^REFUSED	' "$out" 2>/dev/null)
-  while IFS= read -r line; do
-    [ -n "$line" ] || continue
-    line="${line#*	}"
-    check "form $form, $what: ${line%%	*} is let through" "the gate could not be asked: ${line#*	}"
-  done < <(grep '^UNASKED	' "$out" 2>/dev/null)
+    case "$line" in
+      REFUSED*) line="${line#*	}"; check "form $form, $what: ${line%%	*} is let through" "the gate refused it: ${line#*	}" ;;
+      *)        line="${line#*	}"; check "form $form, $what: ${line%%	*} is let through" "the gate could not be asked: ${line#*	}" ;;
+    esac
+  done <<NOT_THROUGH
+$not_through
+NOT_THROUGH
   echo "form $form ($what): $EXPECTED asked, ${allowed:-0} let through, ${refused:-0} refused, ${unasked:-0} could not be asked"
 }
 
