@@ -6246,7 +6246,11 @@ can report success when it failed (claude-config#676, #677). That includes a lon
 whose status is checked only as it starts: one held on an attribute is followed through the methods
 of its class, and a method that ends it must read how it ended. A process handed to something the
 check cannot follow is printed as a `U1` line and counted as `unjudged=` in the summary, without
-failing the check (#3650).
+failing the check (#3650). A `poll()` only compared with None (`while p.poll() is None`) asks whether
+the process still runs and is no read of how it ended; a method that ends a held process must read
+how it ended after the end on every branch, and the method that starts one settles it alone only
+when every path out of it waits; and a process handed to a function of the file that hands it on
+again is not followed further but said, in the finding or as a `U1` (#3663).
 
 The pull request checks install Claude Code for the mods' own tests (#3297), at the one version
 written in `.github/claude-code-version` and read by `tools/install-claude-code.sh` alone, so every

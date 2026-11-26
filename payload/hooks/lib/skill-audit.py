@@ -30,11 +30,15 @@ exits  A helper must not report success when it failed. Three shapes are refused
            return the result), `subprocess.call` or `os.system` whose result is dropped, or a
            `Popen` whose status is never asked for. A `Popen` whose status is read only as it
            starts is refused too (#3650): one held on an attribute of self must have how it ended
-           read in another method of its class (and in the method that ends it, when one does), or
-           waited for where it starts; a local one read only by `poll()` must not be used again
-           after that read.
-       U1  not a finding: a process handed to something the check cannot follow, so whether its
-           ending is read was not judged. Printed and counted, and it does not fail the check.
+           read in another method of its class (and in the method that ends it, after the end on
+           every path out of that method, when one does), or waited for on every path out of the
+           method that starts it; a local one read only by `poll()` must not be used again after
+           that read. A `poll()` whose result is only compared with None (`while p.poll() is None`)
+           asks whether the process still runs and is no read of how it ended (#3663).
+       U1  not a finding: a process handed to something the check cannot follow, or handed to a
+           function of the file that hands it on again (one level is followed, no more), so
+           whether its ending is read was not judged. Printed and counted, and it does not fail
+           the check.
        P2  an `except` that catches everything (bare, Exception, BaseException) and then does
            nothing (`pass`, `continue`, `...`, a bare return).
        S1  a `gh issue create` in a helper with no `--milestone` or no label: the issue field gate
@@ -351,8 +355,38 @@ def bindings(scope, name):
     return sorted(set(lines))
 
 
-def status_reads(mod, scope, name, kind):
-    """Line numbers where scope reads the exit status held in `name`."""
+def none_test(mod, node):
+    """Whether node is only compared with None, as in `node is None` or `None is not node`."""
+    up = mod.parent.get(node)
+    if not isinstance(up, ast.Compare) or len(up.ops) != 1:
+        return False
+    other = up.comparators[0] if up.left is node else up.left
+    return (isinstance(up.ops[0], (ast.Is, ast.IsNot, ast.Eq, ast.NotEq))
+            and isinstance(other, ast.Constant) and other.value is None)
+
+
+def only_asks_if_running(mod, call):
+    """Whether a poll() call's result is only ever compared with None, directly or through the one
+    name it is bound to (claude-config#3663). That asks whether the process is still running and
+    says nothing of how it ended: `while p.poll() is None` leaves the loop whatever the status is."""
+    if none_test(mod, call):
+        return True
+    up = mod.parent.get(call)
+    if not (isinstance(up, ast.Assign) and up.value is call and len(up.targets) == 1
+            and isinstance(up.targets[0], ast.Name)):
+        return False
+    name, scope = up.targets[0].id, mod.scope_of(call)
+    later = [ln for ln in bindings(scope, name) if ln > call.lineno]
+    until = later[0] if later else float("inf")
+    loads = [n for n in ast.walk(scope) if isinstance(n, ast.Name) and n.id == name
+             and isinstance(n.ctx, ast.Load) and call.lineno <= n.lineno < until]
+    return bool(loads) and all(none_test(mod, n) for n in loads)
+
+
+def status_reads(mod, scope, name, kind, asks=False):
+    """Line numbers where scope reads the exit status held in `name`. A poll() only compared with
+    None is no read (see only_asks_if_running) unless asks is true, which the first look at a local
+    process sets so that what such a poll() leaves unread is judged, and said, by judge_ending."""
     lines = []
     for node in ast.walk(scope):
         if kind == "int":
@@ -366,7 +400,8 @@ def status_reads(mod, scope, name, kind):
             # returncode somebody still has to read (the PR #936 lessons review).
             elif kind == "popen" and node.attr in ("wait", "poll"):
                 call = mod.parent.get(node)
-                if isinstance(call, ast.Call) and not isinstance(mod.parent.get(call), ast.Expr):
+                if (isinstance(call, ast.Call) and not isinstance(mod.parent.get(call), ast.Expr)
+                        and (asks or node.attr == "wait" or not only_asks_if_running(mod, call))):
                     lines.append(node.lineno)
     return sorted(lines)
 
@@ -434,7 +469,8 @@ def handle_uses(mod, scope, is_handle, start=0, until=float("inf")):
     """Everything scope does with a process handle, as (line, what, node, detail), in line order.
 
     what is one of: wait or poll (a call whose result is used), asked (wait, poll or communicate
-    called with its result dropped, or communicate; detail names which), returncode, ends (the code
+    called with its result dropped, or communicate; detail names which, and is running for a poll()
+    whose result is only compared with None), returncode, ends (the code
     ending the process, see ends_it), use (any other attribute), handed (the handle passed on; detail is the Call, or None when it goes somewhere no
     call names: returned, yielded, stored in a container), alias (bound to a local; detail is its
     name) and store (assigned to an attribute or item; detail is the target)."""
@@ -452,7 +488,9 @@ def handle_uses(mod, scope, is_handle, start=0, until=float("inf")):
             elif a in ASKS:
                 call = mod.parent.get(parent)
                 called = isinstance(call, ast.Call) and call.func is parent
-                if called and a in ("wait", "poll") and not isinstance(mod.parent.get(call), ast.Expr):
+                if called and a == "poll" and only_asks_if_running(mod, call):
+                    uses.append((line, "asked", parent, "running"))
+                elif called and a in ("wait", "poll") and not isinstance(mod.parent.get(call), ast.Expr):
                     uses.append((line, a, call, None))
                 else:
                     uses.append((line, "asked", parent, a))
@@ -527,8 +565,10 @@ def classify(mod, scope, uses, cls):
     loop repeats, or a hand off to a function of this file that reads it); reads holds every line
     that reads the status at all (any of those, a poll() whose result is used, or a returncode after
     anything asked for it); unfollowed holds the hand offs that could not be followed, as
-    (line, words)."""
-    ending, reads, unfollowed, asked, waited = [], [], [], False, False
+    (line, words); deep holds the hand offs to a function of this file that reads nothing itself and
+    hands the process on again, which this check does not follow (claude-config#3663), as
+    (line, words, line handed on, words handed on). A deep hand off is not a read."""
+    ending, reads, unfollowed, deep, asked, waited = [], [], [], [], False, False
     for line, what, node, detail in uses:
         if what == "wait":
             ending.append(line)
@@ -556,7 +596,129 @@ def classify(mod, scope, uses, cls):
                 words = (f"{ast.unparse(detail.func)}(...)" if detail is not None
                          else "something outside this function")
                 unfollowed.append((line, words))
-    return ending, reads, unfollowed
+            else:
+                on = handed_on(mod, target[0], target[1])
+                if on is not None:
+                    deep.append((line, f"{ast.unparse(detail.func)}(...)", on[0], on[1]))
+    return ending, reads, unfollowed, deep
+
+
+def handed_on(mod, fn, param):
+    """Where fn, which reads nothing of the process it takes as param, hands it on, as (line, words),
+    or None when it does not."""
+    for line, what, _, detail in with_aliases(mod, fn, handle_uses(mod, fn, name_is(param))):
+        if what == "handed":
+            return line, (f"{ast.unparse(detail.func)}(...)" if detail is not None else "something outside it")
+    return None
+
+
+def deep_words(hand_off):
+    line, words, on_line, on_words = hand_off
+    return (f"handed to {words} at line {line}, which hands it on to {on_words} at line {on_line}, further "
+            f"than this check follows")
+
+
+# The paths through one method (claude-config#3663). A read of how a held process ended counts for a
+# method that ends it only when it comes after the end on every path out of the method, and the
+# method that starts it settles it alone only when every path out of it has waited for the end.
+NONE, RUNNING, UNREAD, READ = "not started", "running", "ended unread", "read"
+
+
+def step(state, event):
+    if event == "starts":
+        return RUNNING
+    if event == "ends":
+        return UNREAD if state == RUNNING else state
+    if event == "waits":  # waits for the end and reads it, whatever came before
+        return READ if state != NONE else state
+    if event == "looks":  # reads the status, which tells how it ended only once something ended it
+        return READ if state == UNREAD else state
+    return state
+
+
+def exit_states(fn, events, start):
+    """The states the process can be in wherever fn returns, raises or runs off its end, following
+    both branches of every if, every handler of a try, and a loop run any number of times. events maps
+    a node inside fn to what it does (see step). Exceptions are followed only into the handlers of a
+    try that holds them."""
+    exits = set()
+
+    def at(node, states):
+        if node is None:
+            return states
+        hits = sorted((n for n in ast.walk(node) if n in events), key=lambda n: (n.lineno, n.col_offset))
+        for n in hits:
+            states = {step(s, events[n]) for s in states}
+        return states
+
+    def block(stmts, states, loop):
+        for s in stmts:
+            if not states:
+                break
+            states = statement(s, states, loop)
+        return states
+
+    def statement(s, states, loop):
+        if isinstance(s, ast.If):
+            states = at(s.test, states)
+            return block(s.body, states, loop) | block(s.orelse, states, loop)
+        if isinstance(s, (ast.For, ast.AsyncFor, ast.While)):
+            is_while = isinstance(s, ast.While)
+            forever = is_while and isinstance(s.test, ast.Constant) and bool(s.test.value)
+            inner = {"break": set(), "continue": set()}
+            head = set(states if is_while else at(s.iter, states))
+            while True:
+                entered = at(s.test, head) if is_while else head
+                grown = head | block(s.body, entered, inner) | inner["continue"]
+                if grown == head:
+                    break
+                head = grown
+            left = set() if forever else (at(s.test, head) if is_while else head)
+            return block(s.orelse, left, loop) | inner["break"]
+        if isinstance(s, (ast.With, ast.AsyncWith)):
+            for item in s.items:
+                states = at(item.context_expr, states)
+            return block(s.body, states, loop)
+        if isinstance(s, ast.Try) or type(s).__name__ == "TryStar":
+            raised, current = set(states), states
+            for b in s.body:
+                if not current:
+                    break
+                current = statement(b, current, loop)
+                raised |= current
+            out = block(s.orelse, current, loop)
+            for h in s.handlers:
+                out |= block(h.body, raised, loop)
+            return block(s.finalbody, out, loop) if s.finalbody else out
+        if type(s).__name__ == "Match":
+            states = at(s.subject, states)
+            out = set(states)
+            for case in s.cases:
+                out |= block(case.body, states, loop)
+            return out
+        if isinstance(s, (ast.Return, ast.Raise)):
+            exits.update(at(s, states))
+            return set()
+        if isinstance(s, (ast.Break, ast.Continue)) and loop is not None:
+            loop["break" if isinstance(s, ast.Break) else "continue"].update(states)
+            return set()
+        return at(s, states)
+
+    exits.update(block(fn.body, {start}, None))
+    return exits
+
+
+def events_of(uses, ending, reads):
+    """What each use of a handle does to it, for exit_states."""
+    events = {}
+    for line, what, node, _ in uses:
+        if what == "ends":
+            events[node] = "ends"
+        elif what in ("wait", "poll", "returncode", "handed") and line in ending:
+            events[node] = "waits"
+        elif what in ("wait", "poll", "returncode", "handed") and line in reads:
+            events[node] = "looks"
+    return events
 
 
 def ending_in_class(mod, cls, attr, start_fn):
@@ -564,38 +726,43 @@ def ending_in_class(mod, cls, attr, start_fn):
 
     A method that ENDS the process (see ends_it) must read how it ended itself, or call a method of
     cls that does: a read on some other path, such as an error branch, says nothing about the end the
-    code brings about. A process no method ends, which ends by itself, needs a read in any method.
-    Returns (read, enders that read nothing as (line, method name), unfollowed hand offs)."""
-    unfollowed, readers, enders = [], set(), {}
+    code brings about. That read, or the call, must come after the end on every path out of the
+    method (claude-config#3663): a read on one branch, or before the end, leaves the other path
+    unread. A process no method ends, which ends by itself, needs a read in any method.
+    Returns (read, enders that leave it unread as (line, method name), unfollowed hand offs, deep
+    hand offs)."""
+    unfollowed, deep, readers, enders = [], [], set(), {}
     per = {}
     for fn in methods_of(cls).values():
         owner = self_name(fn)
         if fn is start_fn or owner is None:
             continue
         uses = with_aliases(mod, fn, handle_uses(mod, fn, attribute_is(owner, attr)))
-        _, reads, lost = classify(mod, fn, uses, cls)
-        per[fn.name] = (fn, owner)
+        ending, reads, lost, further = classify(mod, fn, uses, cls)
+        per[fn.name] = (fn, owner, uses, ending, reads)
         if reads:
             readers.add(fn.name)
         unfollowed += lost
+        deep += further
         ends = [u[0] for u in uses if u[1] == "ends"]
         if ends:
             enders[fn.name] = ends[0]
     if not enders:
-        return bool(readers), [], unfollowed
+        return bool(readers), [], unfollowed, deep
 
-    def reads_through_a_call(name):
-        fn, owner = per[name]
+    def leaves_it_unread(name):
+        fn, owner, uses, ending, reads = per[name]
+        events = events_of(uses, ending, reads)
         for node in ast.walk(fn):
             if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                     and isinstance(node.func.value, ast.Name) and node.func.value.id == owner
                     and node.func.attr in readers):
-                return True
-        return False
+                events[node] = "looks"
+        return UNREAD in exit_states(fn, events, RUNNING)
 
     silent = [(line, name) for name, line in sorted(enders.items(), key=lambda e: e[1])
-              if name not in readers and not reads_through_a_call(name)]
-    return not silent, silent, unfollowed
+              if leaves_it_unread(name)]
+    return not silent, silent, unfollowed, deep
 
 
 def class_of(mod, scope):
@@ -608,55 +775,82 @@ def class_of(mod, scope):
 
 def judge_ending(mod, call, what, scope, name, holder, uses, rel):
     """Whether the ending of the process call started is read. uses is what scope does with its
-    handle: the local name it is bound to, which the rule above has already seen read at least once,
-    or holder, the attribute of self it is assigned straight to.
+    handle: the local name it is bound to, which the rule above has already seen read or asked at
+    least once (a poll() only compared with None, which is judged here), or holder, the attribute of
+    self it is assigned straight to.
 
     Returns None when the ending is read, else ("finding", text) or ("note", text)."""
     cls = class_of(mod, scope)
     owner = self_name(scope) if cls is not None else None
-    ending, reads, unfollowed = classify(mod, scope, uses, cls)
+    ending, reads, unfollowed, deep = classify(mod, scope, uses, cls)
+    running = [ln for ln, w, _, d in uses if w == "asked" and d == "running"]
     kept = [d for _, w, _, d in uses if w == "store"]
     if holder is not None:
         kept.append(holder)
     held = [t.attr for t in kept if isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name)
             and owner is not None and t.value.id == owner]
+    events = events_of(uses, ending, reads)
     for attr in held:
-        ending += classify(mod, scope, with_aliases(mod, scope, handle_uses(
-            mod, scope, attribute_is(owner, attr), call.lineno)), cls)[0]
-    if ending:
+        on = with_aliases(mod, scope, handle_uses(mod, scope, attribute_is(owner, attr), call.lineno))
+        more, seen, _, _ = classify(mod, scope, on, cls)
+        ending += more
+        events.update(events_of(on, more, seen))
+        running += [ln for ln, w, _, d in on if w == "asked" and d == "running"]
+    if ending and held:
+        # Held past this method, it is settled here only when every path out of it waited (#3663).
+        events[call] = "starts"
+        if exit_states(scope, events, NONE) <= {NONE, READ}:
+            return None
+    elif ending:
         return None
     if held:
         lost, silent = list(unfollowed), []
         for attr in held:
-            found, quiet, more = ending_in_class(mod, cls, attr, scope)
+            found, quiet, more, further = ending_in_class(mod, cls, attr, scope)
             if found:
                 return None
             lost += more
+            deep += further
             silent += quiet
         where = ", ".join(f"{owner}.{a}" for a in held)
         if silent:
             line, method = silent[0]
             text = (f"{rel}:{call.lineno}: P1 {name} = {what}(...) is held on {where}, and {cls.name}.{method}() "
-                    f"ends it at line {line} without reading how it ended (a wait() or poll() whose result is "
-                    f"used, or returncode after one of them), so a failure at its end reads as success.")
+                    f"ends it at line {line} without reading how it ended on every path after that (a wait() or "
+                    f"poll() whose result is used, or returncode after one of them), so a failure at its end reads "
+                    f"as success.")
         else:
             text = (f"{rel}:{call.lineno}: P1 {name} = {what}(...) is held on {where}, which outlives "
-                    f"{scope.name}(), and no method of {cls.name} reads how it ended (a wait() or poll() whose "
-                    f"result is used, or returncode after one of them), so a failure after it started reads as "
-                    f"success.")
+                    f"{scope.name}(), and no method of {cls.name} reads how it ended on every path (a wait() or "
+                    f"poll() whose result is used, or returncode after one of them), so a failure after it started "
+                    f"reads as success.")
         if reads:
             text += f" It is checked only at its start, at line {reads[0]}."
+        elif running:
+            text += (f" It is only asked whether it is still running, at line {running[0]}, which is no read of "
+                     f"how it ended.")
         if lost:
             text += f" It is handed to {lost[0][1]} at line {lost[0][0]}, which this check does not follow."
+        if deep:
+            text += f" It is {deep_words(deep[0])}."
         return "finding", text
     if kept or unfollowed:
         line, words = unfollowed[0] if unfollowed else next(
             (ln, ast.unparse(d)) for ln, w, _, d in uses if w == "store")
         return "note", (f"{rel}:{call.lineno}: U1 {name} = {what}(...) has its status read only while it runs "
-                        f"(line {reads[0] if reads else call.lineno}) and is handed to {words} at line {line}, "
+                        f"(line {(reads or running or [call.lineno])[0]}) and is handed to {words} at line {line}, "
                         f"which this check does not follow, so whether its ending is read was not judged.")
+    unjudged = None
+    if deep:
+        unjudged = "note", (f"{rel}:{call.lineno}: U1 {name} = {what}(...) is {deep_words(deep[0])}, so whether "
+                            f"its ending is read was not judged.")
     if not reads:
-        return None
+        if running and not deep:
+            return "finding", (f"{rel}:{call.lineno}: P1 {name} = {what}(...) is only asked whether it is still "
+                               f"running, at line {running[0]} (a poll() compared with None), and how it ended is "
+                               f"never read, so a failure reads as success. Read returncode once it has ended, or "
+                               f"wait for it.")
+        return unjudged
     # A poll() a loop repeats already counted as reading the end (classify), so every read left here
     # was made once, and a use after the last of them comes after the only look at the process.
     last = reads[-1]
@@ -665,8 +859,8 @@ def judge_ending(mod, call, what, scope, name, holder, uses, rel):
         return "finding", (f"{rel}:{call.lineno}: P1 {name} = {what}(...) has its status read only at line {last}, "
                            f"while it is still running, and is used again at line {later[0][0]} with nothing after "
                            f"that reading how it ended, so a failure after its start reads as success. Wait for "
-                           f"it once it is done with.")
-    return None
+                           f"it once it is done with." + (f" It is {deep_words(deep[0])}." if deep else ""))
+    return unjudged
 
 
 def exits_python(path: str, rel: str, notes=None):
@@ -703,7 +897,7 @@ def exits_python(path: str, rel: str, notes=None):
                 scope = mod.scope_of(call)
                 later = [ln for ln in bindings(scope, name) if ln > call.lineno]
                 until = later[0] if later else float("inf")
-                if not any(call.lineno <= ln < until for ln in status_reads(mod, scope, name, kind)):
+                if not any(call.lineno <= ln < until for ln in status_reads(mod, scope, name, kind, asks=True)):
                     findings.append(f"{rel}:{call.lineno}: P1 {name} = {what}(...) never has its exit status read "
                                     f"before it is replaced or forgotten, so a failure reads as success.")
                 elif kind == "popen":
