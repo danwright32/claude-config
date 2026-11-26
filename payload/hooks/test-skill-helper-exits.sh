@@ -648,6 +648,18 @@ def read_only_on_the_other_branch(flag):
         rc = p.poll()
         return rc
     return 0
+
+
+def closed_then_handed_to_a_poller():
+    p = subprocess.Popen(["cat"], stdin=subprocess.PIPE)
+    if p.poll():
+        return 1
+    p.stdin.close()
+    return _look(p)
+
+
+def _look(proc):
+    return proc.poll()
 PY
 scan
 [ "$rc" -eq 1 ] && ok || bad "#3650 uses judged in the order the code runs them fail where a use follows the last read (rc=$rc)" "$out"
@@ -661,6 +673,7 @@ has "$out" "$FILE:65:" && bad "#3650 a helper handed the process in a loop that 
 has "$out" "$FILE:79: U1" && has "$out" "line 84" && ok \
   || bad "#3650 a read after the use that runs only on some paths is said, naming that read" "$out"
 fires P1 89 "#3650 a read on the other branch of an if does not follow the use"
+has "$out" "$FILE:101:" && bad "#3650 a helper's read runs on every path after the caller's use that hands it on" "$out" || ok
 has "$out" "findings=5 unjudged=1" && ok || bad "#3650 exactly the five uses after the last read and the one not judged" "$out"
 rm -f "$S/monitor.py"
 

@@ -477,7 +477,9 @@ def place(mod, node, scope):
                 0 if value is child else None)
             if index is not None:
                 order.append((f, index))
-                guard = arm_of(parent, field, index)
+                # The function judged runs its own body whenever it runs: only a def, lambda or
+                # comprehension inside it is run later, if at all (the review at fdcf350).
+                guard = arm_of(parent, field, index) if parent is not scope else None
                 if guard is not None:
                     guards.append(guard)
                 break
