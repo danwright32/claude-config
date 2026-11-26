@@ -3120,13 +3120,41 @@ nothing under the payload to read, 85 to 149 ms for one edited hook and one new 
 seconds for a replay of the 2026-11-22 send (refused, naming 100 files), against 1.0 seconds for the
 whole tree walk the send does not run. The replay took 6.5 to 12.4 seconds before the output went to
 a file. What was left was the check reading megabyte lines in the shell, and #3479 took that out:
-the check now puts each matching line to its rules in one awk pass and reports a long line as 300
-bytes of it. Measured on 2026-11-23 on the same 126 files, eight rounds at a load average near 175,
+the check now puts each matching line to its rules in one awk pass and reports a long line as at
+most 300 bytes of it, cut at whole characters (#3538). Measured on 2026-11-23 on the same 126 files, eight rounds at a load average near 175,
 the check alone took 3.8 to 4.3 seconds before and 0.4 to 0.8 after, its report fell from 11.5 MB
 to 70 KB, and it refused the same 100 files for the same 110 lines. Replayed over the
 newest 300 of main's sync commits, the check would have held 2: the incident, and one on 2026-10-04
 carrying a mod's test file from before the check read mods. It could judge every one, and held
 nothing that passes main's run.
+
+Three more things the check does since #3586. None excuses a line it used to report. The first
+two report more lines than before; the third reports the same lines and changes only how they are
+shown:
+
+- **A name that starts with a letter outside ASCII is a name.** The account name in a home path
+  had to start with an ASCII letter or digit, so that an elided example (the root, then dots or a
+  word in angle brackets) is not taken for a machine's path, and a home whose name starts with an
+  accented or a fullwidth letter passed. It may now also start with any byte from 128 up. The line
+  between the two was drawn from the repository: on 2026-11-26, 91 of its lines wrote a home root
+  followed by something that is not a name, 96 times, and what followed the slash was an ASCII
+  mark every time (a dot 70 times, an opening angle bracket 19, five other marks 7) and never a
+  byte from 128 up. A mark outside ASCII standing where a name would, such as an ellipsis
+  character, is reported as a name; written with dots it is not.
+- **The marker does not count on a line holding a byte that is not valid text.** The marker used
+  to be a grep between the search and the judge, in the caller's locale, and the grep macOS ships
+  saw it on such a line under C and often not under a UTF-8 locale, so the verdict turned on the
+  locale and a reported line was followed by advice to add the marker it carried. The judge now
+  looks for the marker itself, under C. A marked line of valid text is excused as before. A marked
+  line holding such a byte is judged like an unmarked one and reported in a group of its own,
+  which says the marker was seen, which byte it is and what was found. That is the stricter of
+  the two answers; excusing a marked line whatever it holds is the other, and is Dan's to choose.
+- **A control character in a reported line is shown, not obeyed.** Each is written as a backslash
+  and its octal value and counted in a note, like a byte that is not valid text: every byte below
+  32 but the tab, the delete character, and the 32 control characters just above ASCII. A carriage
+  return printed as it is drew the rest of the line over the file name and line number, which a
+  file with CRLF line ends did on every line reported from it, and an escape sequence could clear
+  them.
 
 `tests/test-claude-sync.sh` (the section "a send carrying a file that fails the home path check
 is held whole") and `hooks/test-check-home-paths.sh` (the `--files0-from` cases) hold it.
