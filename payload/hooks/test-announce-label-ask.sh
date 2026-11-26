@@ -184,11 +184,19 @@ for cmd in "$CREATE --fill" "$CREATE" "$CREATE --body-file -" "cat body.md | $CR
 done
 # An edit whose own description cannot be read (empty, or opening with a dash, which reads as a flag)
 # is never judged by what GitHub holds now, since the command replaces that.
-for cmd in "gh pr edit 7 --add-label $LABEL --body ''" "gh pr edit 7 --add-label $LABEL --body '- one
+for cmd in "gh pr edit 7 --add-label $LABEL --body-file=" \
+           "gh pr edit 7 --add-label $LABEL --body ''" "gh pr edit 7 --add-label $LABEL --body '- one
 ## Announcement
 other wording'" "gh pr edit 7 --add-label $LABEL -b ''" "gh pr edit 7 --add-label $LABEL --body-file ''"; do
   r="$(run "$cmd")"
   check "an edit whose own description cannot be read is refused, approved wording on GitHub or not: ${cmd:0:60}" "$(refused "$r" && [[ "$r" == *"--body-file <file>"* && "$r" != *"has no \`## Announcement\`"* ]] && echo ok || echo "$r")"
+done
+# An empty description glued to its flag (--body=, -b=) IS read: the command would leave an empty
+# description, so the refusal says what is true of it, that it leaves no Announcement block, and the
+# approved wording GitHub holds now does not carry it through.
+for cmd in "gh pr edit 7 --add-label $LABEL --body=" "gh pr edit 7 --add-label $LABEL -b="; do
+  r="$(run "$cmd")"
+  check "an edit that empties the description is refused, saying it leaves no Announcement block, approved wording on GitHub or not: $cmd" "$(refused "$r" && [[ "$r" == *"the description it would leave has no \`## Announcement\` block"* ]] && echo ok || echo "$r")"
 done
 # The label added after another write in the same call: what GitHub holds now is not what it would sit on.
 for cmd in "gh pr edit 7 --body-file body.md && gh pr edit 7 --add-label $LABEL" "gh api -X PATCH repos/acme/widget/pulls/7 -f body=x; gh pr edit 7 --add-label $LABEL" \
@@ -199,7 +207,7 @@ done
 # Each command putting the label on is judged by reads of its own, so one call holds one of them:
 # the hook's time is then bounded whatever the call holds.
 for cmd in "$CREATE --body-file body.md && gh pr create --title U --label $LABEL --body-file body.md" \
-           "$CREATE --body-file body.md; gh label create $LABEL" \
+           "$CREATE --body-file body.md; gh pr edit 7 --add-label $LABEL --body-file body.md" \
            "gh api repos/acme/widget/issues/7/labels -f 'labels[]=$LABEL' && gh api repos/acme/widget/issues/8/labels -f 'labels[]=$LABEL'"; do
   r="$(run "$cmd")"
   check "a call putting the label on in more than one command is refused, saying one per command: ${cmd:0:70}" "$(refused "$r" && [[ "$r" == *"in more than one command"* && "$r" == *"gh pr edit <number> --add-label $LABEL"* ]] && echo ok || echo "$r")"
@@ -243,15 +251,14 @@ for cmd in "gh pr edit 7 --remove-label $LABEL" "gh pr view 7 --json labels | gr
 done
 
 echo "the label itself"
-# Making the label in a repository puts it on no pull request, so there is no wording to read: it
-# waits until Dan has approved an announcement for that repository.
-for cmd in "gh label create $LABEL --color 82D0FF" "gh label create $LABEL -R acme/widget" "gh api repos/acme/widget/labels -f name=$LABEL -f color=82D0FF"; do
+# Making the label in a repository puts it on no pull request, so there is no wording to read and
+# nothing to approve: it always goes through (Dan, 2026-11-25: "Always allow it"). The merge gate
+# still holds that an announcement merges only on wording he approved.
+for cmd in "gh label create $LABEL --color 82D0FF" "gh label create $LABEL -R acme/widget" "gh api repos/acme/widget/labels -f name=$LABEL -f color=82D0FF" \
+           "gh label clone acme/other --repo acme/widget # brings $LABEL" "gh api repos/acme/widget/labels --input - <<< '{\"name\": \"$LABEL\"}'" \
+           "gh label create $LABEL && gh label create changelog/visible"; do
   r="$(run "$cmd")"
-  check "the label is not made in a repository Dan has approved no announcement for: $cmd" "$(refused "$r" && [[ "$r" == *"has approved no announcement for acme/widget"* ]] && echo ok || echo "$r")"
-  approve
-  r="$(run "$cmd")"
-  check "and is made once he has: $cmd" "$(passed "$r" && echo ok || echo "$r")"
-  forget
+  check "making the label needs no approval: $cmd" "$(passed "$r" && echo ok || echo "$r")"
 done
 # Renaming another label onto it puts it on every pull request carrying that one, with no wording
 # read for any of them, so it is refused whatever is approved. So is a write this hook cannot place.

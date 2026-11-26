@@ -1874,9 +1874,10 @@ the wording, and sleep mode can answer one with Dan asleep.
   standard input, a body file the same command writes, an empty body, more than one pull request,
   another GitHub write in the same call) is refused with the form to use. So is a call that puts
   the label on in more than one command: each is judged by reads of its own, and one per call is
-  what keeps the hook inside the time it is registered with. Making the label
-  (`gh label create`, `gh label clone`, the API form) is refused until he has approved an
-  announcement for that repository at all, and renaming another label onto it is always refused.
+  what keeps the hook inside the time it is registered with. Renaming another label onto it is
+  always refused. Making the label (`gh label create`, `gh label clone`, the API form) always goes
+  through, with no approval (Dan, 2026-11-25: "Always allow it"): it puts the label on no pull
+  request, so there is no wording to read, and the merge gate still holds what merges.
   Taking the label off, reading it and naming it in text pass. This is the early refusal for the
   ordinary routes; the merge gate is what holds the rule.
 

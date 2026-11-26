@@ -2986,6 +2986,11 @@ the builder's were made by the sessions that built it, not by Dan, and are his t
   picker: "Refuse it"). The gate reads one pull request per command, and the override over several
   merges let one through unread. One merge per command is always open, which is what separates
   this from the pull request that cannot be read, where the merge still goes through and says so.
+- **Making the label needs no approval** (Dan, 2026-11-25, by picker: "Always allow it"). A command
+  that only creates the label puts it on no pull request, so there is no wording to read, and the
+  merge gate still holds what merges. Renaming another label onto it stays refused, since that puts
+  it on every pull request carrying the other one. Ruled out: refusing creation until an approval
+  exists, and Dan creating the label by hand.
 - **Each wait is the hook's own.** The label hook's read of GitHub runs in a process group of its
   own, killed whole at a bound the hook sets, and its bounds together are shorter than the time it
   is registered with, so a slow GitHub is refused in the hook's words and never by the harness

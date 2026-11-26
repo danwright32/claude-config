@@ -18,14 +18,13 @@ Judged here, each only when the command names the label:
   gh api writing to repos/<owner>/<name>/issues/<number>/labels
       The same, from the description GitHub holds. Any other gh api write naming the label is
       refused with the form to use, since nothing here can place it.
-  gh label create, gh label clone, gh api writing to repos/<owner>/<name>/labels
-      Making the label puts it on no pull request, so there is no wording to read. It is refused
-      until Dan has approved an announcement for that repository at all, which is when the label
-      has a use there.
   gh label edit --name changelog/announce, and its gh api form
       Renaming another label onto it puts it on every pull request carrying that one, with no
       wording read for any, so it is always refused, with the form to use.
-Taking the label off, reading it and naming it in text put it on nothing and pass.
+Taking the label off, reading it and naming it in text put it on nothing and pass. So does making
+the label (gh label create, gh label clone, gh api writing to repos/<owner>/<name>/labels): it puts
+it on no pull request, so there is no wording to read and nothing to approve, and the merge gate
+still holds what merges (Dan, 2026-11-25: "Always allow it").
 
 And the record of what he approved, whatever the command names:
   Edit, Write, MultiEdit, NotebookEdit of a file under the record's folder
@@ -67,9 +66,8 @@ LABEL = "changelog/announce"
 HEAD = "ANNOUNCE LABEL"
 # Where each command names the labels it puts on: the long flag and its one letter form.
 PUTS = {("pr", "create"): ("--label", "-l"), ("pr", "edit"): ("--add-label", None), ("issue", "edit"): ("--add-label", None)}
-MAKES = {("label", "create"), ("label", "clone")}
 RENAMES = {("label", "edit")}
-KINDS = frozenset(PUTS) | MAKES | RENAMES
+KINDS = frozenset(PUTS) | RENAMES
 # The flags of an edit, and of gh api, that take a value, so the value is not read as the pull
 # request the command names or the endpoint it calls.
 EDIT_VALUE_FLAGS = {"--add-assignee", "--add-label", "--add-project", "--add-reviewer", "--base", "-B", "--body", "-b",
@@ -243,8 +241,10 @@ def _given_body(kind, args, command, place, cwd, environ):
             raise Refuse("its body file " + path + " is larger than 1 MB, which is no pull request description.")
         return data
     if any(a in BODY_FLAGS for a in args):
-        # The shared reader takes no value that is empty or opens with a dash, so the flag is there
-        # and its value is not. The description GitHub holds now is the one this command replaces.
+        # The shared reader takes no value that stands apart from its flag and is empty or opens
+        # with a dash, so the flag is there and its value is not. The description GitHub holds now
+        # is the one this command replaces. (An empty value glued to its flag, `--body=`, IS read,
+        # above: the command leaves an empty description, and is refused as having no block.)
         raise Refuse("it gives a description that could not be read from the command (one that is empty, or opens "
                      "with a dash, which reads as another flag). " + USE_BODY_FILE)
     if kind == ("pr", "create"):
@@ -274,26 +274,17 @@ def _wording_approved(repo, body, payload, notes):
         raise Refuse(verdict["why"] + " " + verdict["how"])
 
 
-def _label_made(repo, payload, notes):
-    """Refuse making the label in repo unless Dan has approved an announcement for it."""
-    verdict = approval.repo_approved(repo, payload)
-    notes.extend(verdict["notes"])
-    if verdict["approved"] is not True:
-        raise Refuse("it makes the label in a repository where it has no use yet: " + verdict["why"] + " The label is "
-                     "made once he has approved the first announcement there. " + verdict["how"])
-
-
 _judged = 0
 
 
 def _one_judgment():
-    """Refuse the second command of one call that puts the label on or makes it. Each is judged by
+    """Refuse the second command of one call that puts the label on. Each is judged by
     reads of its own (the remote, GitHub, the hash, the session), so one per call is what keeps this
     hook's time inside the bound it is registered with, and one per command is always open."""
     global _judged
     _judged += 1
     if _judged > 1:
-        raise Refuse("this call puts the label on, or makes it, in more than one command, and each is judged by "
+        raise Refuse("this call puts the label on in more than one command, and each is judged by "
                      "reads of its own. Put the label on one pull request per command: `gh pr edit <number> "
                      "--add-label " + LABEL + "`.")
 
@@ -329,17 +320,11 @@ def _judge_put(kind, args, envs, place, command, cwd, payload, notes, writes):
     _wording_approved(repo_flag or _repo(args, envs, place, cwd), body, payload, notes)
 
 
-def _judge_label(kind, args, envs, place, cwd, payload, notes):
-    lowered = [a.lower() for a in args]
-    if kind in RENAMES:
-        if LABEL in _labels(scan.flag_values(lowered, "--name", "-n")):
-            raise Refuse("it renames another label to " + LABEL + ", which puts the label on every pull request "
-                         "carrying that one with no wording read for any of them. " + USE_PR_EDIT)
-        return
-    if kind == ("label", "create") and LABEL not in lowered:
-        return
-    _one_judgment()
-    _label_made(_repo(args, envs, place, cwd), payload, notes)
+def _judge_rename(args):
+    """gh label edit: renaming another label onto this one is refused, whatever is approved."""
+    if LABEL in _labels(scan.flag_values([a.lower() for a in args], "--name", "-n")):
+        raise Refuse("it renames another label to " + LABEL + ", which puts the label on every pull request "
+                     "carrying that one with no wording read for any of them. " + USE_PR_EDIT)
 
 
 def _api_write(args):
@@ -381,10 +366,9 @@ def _judge_api(args, cwd, payload, notes):
         _one_judgment()
         repo, held = _github(m.group(3), repo_of(m), cwd)
         return _wording_approved(repo, held.encode("utf-8", "replace"), payload, notes)
-    m = REPO_LABELS.fullmatch(endpoint)
-    if m and (names or unseen):
-        _one_judgment()
-        return _label_made(repo_of(m), payload, notes)
+    if REPO_LABELS.fullmatch(endpoint):
+        # Making the label in a repository: it goes on no pull request, so nothing is judged.
+        return
     if not names:
         return
     raise Refuse("it writes the label through the GitHub API in a form whose pull request and wording cannot be "
@@ -405,7 +389,7 @@ def judge_label(command, cwd, payload, notes):
             if kind in PUTS:
                 _judge_put(kind, args, envs, place, command, cwd, payload, notes, writes)
             else:
-                _judge_label(kind, args, envs, place, cwd, payload, notes)
+                _judge_rename(args)
         for args in apis:
             _judge_api(args, cwd, payload, notes)
     except Refuse as e:

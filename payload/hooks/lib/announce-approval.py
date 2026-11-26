@@ -70,16 +70,12 @@ approval given on one Mac is unknown to the other, which asks again.
       {"approved": bool, "why": str, "how": HOW_TO_ASK, "notes": [str]}: whether digest, an
       announcementHash, is wording Dan approved for repo, after reading this session's pickers.
       payload is the hook payload (session_id, transcript_path, agent_id).
-  repo_approved(repo, payload)
-      The same answer for "has Dan approved any announcement for repo at all", which is what making
-      the label in a repository waits on (it sits on no pull request, so there is no wording to hash).
   mark_used(repo, digest, pr, closes, unread)   None, or why the line could not be written.
   hash_of(data, body=False)                     (announcement-hash's answer, None) or (None, why).
   is_record_path(path)                          whether a path is the record or under it.
 
 Command lines, each printing JSON and exiting 0 when it could answer:
   announce-approval.py check --repo <owner/name> --hash <sha256>     the hook payload on standard input
-  announce-approval.py repo --repo <owner/name>                      the hook payload on standard input
   announce-approval.py used --repo <owner/name> --hash <sha256> --pr <number> [--closes <json>] [--unread <why>]
   announce-approval.py list                                          the record, as it reads
 """
@@ -558,26 +554,6 @@ def check(repo, digest, payload):
     return out
 
 
-def repo_approved(repo, payload):
-    """Whether Dan has approved ANY announcement for repo: an approved line on the record, or an
-    Approve of his in this session that counts. The same answer shape as check, and the same reading
-    of the session, so an approval found here is kept as one found there is."""
-    out = {"approved": False, "why": "", "how": HOW_TO_ASK, "notes": []}
-    key = repo_key(repo)
-    if key is None:
-        out["why"] = "the repository could not be told as owner/name, so no approval of Dan's could be looked up for it"
-        return out
-    found, untaken, unlooked, entries, unreadable = _harvest(payload if isinstance(payload, dict) else {}, out["notes"])
-    if any(f["repo"] == key for f in found) or any(
-            e.get("kind") == "approved" and e.get("repo") == key and isinstance(e.get("hash"), str)
-            and SHA.fullmatch(e["hash"]) for e in entries or []):
-        out["approved"] = True
-        return out
-    out["why"] = _said(["Dan has approved no announcement for " + key + ": no approval on this Mac's record, and none "
-                        "in this session, is for that repository"], key, untaken, unreadable, unlooked)
-    return out
-
-
 def mark_used(repo, digest, pr, closes=None, unread=None):
     """Record that the merge gate let pull request pr of repo through on digest: None, or why the
     line could not be written. closes is [{issue, milestone}] for the issues it closes, or None with
@@ -611,13 +587,6 @@ def main(argv):
             payload = {}
         json.dump(check(_flag(args, "--repo"), _flag(args, "--hash"), payload), sys.stdout)
         return 0
-    if command == "repo":
-        try:
-            payload = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
-        except ValueError:
-            payload = {}
-        json.dump(repo_approved(_flag(args, "--repo"), payload), sys.stdout)
-        return 0
     if command == "used":
         pr, closes = _flag(args, "--pr"), _flag(args, "--closes")
         try:
@@ -633,7 +602,7 @@ def main(argv):
         json.dump({"record": record_path(), "entries": entries, "why": why or ""}, sys.stdout)
         return 0
     sys.stderr.write("Usage: announce-approval.py check --repo <owner/name> --hash <sha256>, with the hook payload on "
-                     "standard input | repo --repo <owner/name>, the same | used --repo <owner/name> --hash <sha256> --pr <number> [--closes <json>] "
+                     "standard input | used --repo <owner/name> --hash <sha256> --pr <number> [--closes <json>] "
                      "[--unread <why>] | list\n")
     return 2
 
