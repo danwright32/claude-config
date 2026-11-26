@@ -6410,6 +6410,13 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             if lang == "py":
                 # What sys.argv and os.environ hold, for a sys.path change built from them (#2449).
                 self.py_cmd["argv"], self.py_cmd["env"] = self.py_args(text, name, d)
+                # And the command as python3 itself reads its options, where the table above places
+                # what runs otherwise (py_own_reading in lib/py-file-runs.py, claude-config#3539):
+                # judged first, and then as the table reads it below, so this can only refuse more.
+                reason = self.py_own_reading(name, words, text, here, lambda again: self.judge_written(
+                    d, again, wrapper, why, depth, whole, fed_by))
+                if reason:
+                    return reason
             if inline:
                 before, code, after = inline
                 label = f"the code given to {name}"
@@ -6461,7 +6468,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             if module:
                 return self.py_module_run(words[0], name, module, d, depth, here)
             fed, is_body = self.fed(fed_by, whole) if operand == "-" else (None, False)
-            if is_body and "-m" not in words[1:]:
+            # A module python3 runs with -m is judged above. The word -m anywhere else is an argument
+            # of the script or the code, or another option's value, and the files are read all the
+            # same: read for no command holding the word, `python3 posts.py -m x` and `node post.js
+            # -m x` ran a script nothing had read (claude-config#3539).
+            if is_body:
                 # Code fed in a heredoc (python3 - a.md b.md <<'EOF'): the files after - are its
                 # arguments, judged as those of code given by -c are, against what that code can do
                 # with them (claude-config#2786); the files before it are read as code, as before.
@@ -6472,7 +6483,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                                              held_code=True))
                 if reason:
                     return reason
-            elif "-m" not in words[1:]:
+            else:
                 reason = self.every_file(words, d, depth, False, lang)
                 if reason:
                     return reason

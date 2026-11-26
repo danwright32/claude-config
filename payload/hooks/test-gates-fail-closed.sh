@@ -200,6 +200,7 @@ declare_gate(){ printf '%s\t%s\t%s\n' "$1" "$2" "$3"; }
   declare_gate stacked-branch-delete-gate.sh "git push origin :feat/x"      -
   declare_gate check-wrapped-commands.sh   "eval \$CMD && git status"       -
   declare_gate pr-review-gate.sh           "cat x/helper-key"               -
+  declare_gate announce-label-ask.sh       "gh pr edit 5 --add-label changelog/announce" -
   # It judges a file edit, never a shell command: @fresh-worktree is the edit fixture_payload builds.
   declare_gate fresh-worktree-base-gate.sh "@fresh-worktree"                -
   declare_gate require-tests-before-push.sh  "git push origin feature"      "allow0 #1912"
@@ -756,6 +757,9 @@ bash_call(){ python3 -c 'import json, sys; print(json.dumps({"command": sys.argv
   judged scratchpad-subagent-gate.sh  Write '{"file_path": "/private/tmp/claude-501/proj/sess/scratchpad/notes.md", "content": "cut @@", "description": "cut @@"}' "$AGENT" "notice scratchpad-subagent-gate.sh header"
   judged monitor-action-gate.sh       Monitor "$(bash_call 'gh pr merge 5 --squash')" '{}' refuse
   judged handback-claims-gate.sh      SubagentHandback '{"message": "Done. No --no-verify, no overrides. cut @@", "description": "cut @@"}' "{\"agent_id\": \"a1b2c3d4\", \"agent_transcript_path\": \"$WORK/hb/agent.jsonl\"}" "notice handback-claims-gate.sh header"
+  # It reports what an agent's commands left running and stops nothing, so a hand back it cannot
+  # read is let through, saying the check did not run, by the decision in its header (#3561).
+  judged agent-leftovers-gate.sh      SubagentHandback '{"message": "Done. cut @@", "description": "cut @@"}' "{\"agent_id\": \"a1b2c3d4\", \"agent_transcript_path\": \"$WORK/hb/agent.jsonl\"}" "notice agent-leftovers-gate.sh header"
   # It only tightens, and a session cannot change a payload Claude Code wrote, so refusing the edit
   # would stop work with no remedy (#2517).
   judged fresh-worktree-base-gate.sh  Edit '{"file_path": "/nonexistent-2517/notes-@@.md", "old_string": "cut @@", "new_string": "b"}' '{}' "notice fresh-worktree-base-gate.sh header"
@@ -766,6 +770,7 @@ bash_call(){ python3 -c 'import json, sys; print(json.dumps({"command": sys.argv
   judged builder-model-gate.sh        Agent '{"prompt": "build it cut @@", "isolation": "worktree", "description": "cut @@"}' "{\"transcript_path\": \"$WORK/hb/orchestrating.jsonl\"}" "notice builder-model-gate.sh header"
   judged chrome-loopback-post-gate.sh mcp__claude-in-chrome__javascript_tool '{"text": "fetch(\"http://127.0.0.1:8765/@@\", {method: \"POST\", body: \"cut @@\"})", "action": "javascript_exec", "tabId": 7}' '{}' "notice chrome-loopback-post-gate.sh header"
   judged no-session-link-in-comments.sh Bash "$(bash_call "gh pr comment 5 --body 'see https://claude.ai/code/session_01abc'")" '{}' refuse
+  judged announce-label-ask.sh        Bash "$(bash_call 'gh pr edit 5 --add-label changelog/announce')" '{}' refuse
   judged slack-drafts-only-gate.sh    Bash "$(bash_call 'curl -d x https://slack.com/api/chat.postMessage')" '{}' refuse
   # It never refuses: it ASKS Dan about a database call it cannot classify, by Dan's decision on
   # 2026-11-09 (#2521), so a call it cannot parse is asked about, naming the payload.

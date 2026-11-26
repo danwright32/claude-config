@@ -10,7 +10,7 @@ import {
   secretsFromEnvList,
   secretsFromEnvText,
 } from './secrets.ts'
-import { neverThrows } from './mod-kit/hold.ts'
+import { cutCall, neverThrows } from './mod-kit/hold.ts'
 
 // Secret echo guard (claude-config#607). The known values are held in this module's memory only,
 // never in $.store or on disk: a copy kept to protect a secret would be one more place to leak it.
@@ -187,7 +187,7 @@ export const register: Register = on => {
       await keepWritten($, path)
     }
     return next(e)
-  }).catch(($, e, next) => next.called ? next(e) : neverThrows(
+  }).catch(($, e, next) => cutCall('the secret guard', e, next, {
     // A hook that fails is skipped and the call runs unscreened, so a check that throws (an older
     // mod-kit with no commands reader, #1281) refuses (#1298, L42). Once next was called the call
     // was judged and passed on, and what it settled to stands, replayed OUTSIDE neverThrows: the
@@ -196,10 +196,10 @@ export const register: Register = on => {
     // Said by the failure's kind only, never the error's own words, which can quote the very input
     // the check could not read, secret and all (lessons review of #1298). Should even reading the
     // kind fail, the refusal without a reason holds the call, so a catch before next never throws.
-    () => ({ deny: cannotCheck(next.error?.kind === 'timeout' ? 'it ran out of time' : 'it failed') }),
-    () => ({ deny: SCREEN_FAILED }),
-    { deny: SCREEN_FAILED },
-  ))
+    work: () => ({ deny: cannotCheck(next.error?.kind === 'timeout' ? 'it ran out of time' : 'it failed') }),
+    held: () => ({ deny: SCREEN_FAILED }),
+    last: { deny: SCREEN_FAILED },
+  }))
 
   on('session.append', async ($, e, next) => {
     if (e.door !== 'tool-result' && e.door !== 'tool-message') return next(e)

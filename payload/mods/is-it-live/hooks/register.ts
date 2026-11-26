@@ -1,4 +1,5 @@
 import type { EngineInterface, Register } from 'claude-code'
+import { cutOwn, watchesOnly } from './mod-kit/hold.ts'
 import type { IsItLive, IsItLiveCard, IsItLiveOwed } from '../types/index.d.ts'
 import { type CardInput, MOD, buttonId, cardOf, cardText, draftKeyOf, draftLineOf, isOut, liveList, messageRow, pinnable, reasonToRefuse, stateOf, titleOf } from './card.ts'
 import { draftHold, markLanded, noteCard, recordedThreads, registerDrafts, registerUnrelated, relateCard } from './drafts.ts'
@@ -628,7 +629,7 @@ export const register: Register = on => {
       result: cardText(shown),
       context: [...notes, SEEN],
     }
-  })
+  }).catch(($, e, next) => cutOwn('the is it live mod', next))
 
   // #1244: a Bash call that merges carries a line saying to show the card, once GitHub says what
   // the merge did. Passed down first and changed only by that line, so every guard beneath still
@@ -662,7 +663,7 @@ export const register: Register = on => {
       $.ui.log(`is-it-live: could not read whether a Bash call merged a PR: ${msg(err)}`, { to: 'debug' })
       return { ...done, context: [...(done.context ?? []), `is it live could not tell whether this command merged a pull request (${msg(err)}). If it did, show Dan its is it live card: load the card tool with ToolSearch with the query "select:${TOOL}".`] }
     }
-  })
+  }).catch(watchesOnly)
 
   // #1244: the turn does not end while a PR merged in this session has no card. Asked after the
   // hooks beneath (wind down, the overnight driver), whose block is kept beside this one. Refused
