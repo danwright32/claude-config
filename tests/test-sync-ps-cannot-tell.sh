@@ -25,6 +25,8 @@
 #      one from elsewhere older than the age rule are still broken (#3601).
 #   7. status says when the process table itself could not be read (#3601).
 #   8. A restarting watcher that cannot confirm fswatch is its own says it did not signal it (#3601).
+#   9. The lesson reservations lock and the hold lock keep a holder this shell may not signal, and
+#      their refusals say that whether it is running could not be told (#3601).
 #
 # The claim on a hook suite rerun had the same fault and is covered where its other cases are,
 # tests/test-hook-suite-rerun.sh, and retire's line about a watcher in tests/test-sync-retire.sh.
@@ -391,6 +393,34 @@ check "(fixture) the watcher took the newer copy and restarted onto it" \
 check "#3601 a restarting watcher that could not confirm fswatch is its own says so, naming the command" \
   "line_has \"\$out_rs\" 'could not confirm' 'fswatch' \"ps -o ppid= -p $RS_FS\" 'not signalled'" "$out_rs"
 [ -n "$RS_FS" ] && kill "$RS_FS" 2>/dev/null
+
+# ---- 9. the two refusals of lib/pid-lock.sh's callers, for a holder that could not be read (claude-config#3601) ----
+# take_pid_lock now keeps a lock whose holder the shell may not signal and stops at its deadline,
+# and its callers said what they say of a live holder: another ask holds it, or a run is taking too
+# long. Each now says that whether the holder is running could not be told. Pid 1 is running on
+# every machine and belongs to another account. Each wait is one second, the shortest each takes.
+if kill -0 1 2>/dev/null; then
+  echo "SUITE-PART-UNMEASURED the reservations and hold refusals for a holder this shell may not signal: this account may signal pid 1"
+else
+  RVR="$WORK/rv-repo"; RVH="$WORK/rv-home"; RVF="$RVH/state/lesson-reservations.tsv"
+  mkdir -p "$RVR/payload" "$RVR/lesson-bands" "$RVH/state"
+  echo 501 > "$RVR/lesson-bands/MacWork"
+  printf '# rules\n@LESSONS.md\n' > "$RVH/CLAUDE.md"; cp "$RVH/CLAUDE.md" "$RVR/payload/CLAUDE.md"
+  printf -- '- **L760. a.** body\n- **L761. b.** body\n' > "$RVH/LESSONS.md"; cp "$RVH/LESSONS.md" "$RVR/payload/LESSONS.md"
+  printf '1\n' > "$RVF.lock"
+  rv_rc=0; rv_out="$(env SYNC_HOSTNAME=MacWork SYNC_NO_GIT=1 CLAUDE_HOME="$RVH" SYNC_REPO="$RVR" SYNC_LESSON_LOCK_WAIT=1 bash "$SCRIPT" next-lesson 2>&1)" || rv_rc=$?
+  check "#3601 a reservations lock whose holder may not be signalled is kept, and no number is minted" \
+    "[ \"\$rv_rc\" -ne 0 ] && [ \"\$(cat '$RVF.lock' 2>/dev/null)\" = 1 ] && ! grep -qE '^L[0-9]+\$' <<< \"\$rv_out\"" "$rv_out"
+  check "#3601 and the refusal says whether process 1 is running could not be told, not that another ask holds it" \
+    "line_has \"\$rv_out\" 'held by process 1' 'could not be told' 'not the same as it having gone' && ! line_has \"\$rv_out\" 'another ask for a lesson number'" "$rv_out"
+  printf '1\n' > "$WORK/hold.lock"
+  hl_out="$(env CLAUDE_HOME="$WH" SYNC_REPO="$WR" SYNC_NO_GIT=1 SYNC_HOLD_LOCK_WAIT=1 bash "$SCRIPT" hold 5 a test 2>&1 || true)"
+  check "#3601 a hold lock whose holder may not be signalled is kept, and no hold is taken" \
+    "[ \"\$(cat '$WORK/hold.lock' 2>/dev/null)\" = 1 ] && line_has \"\$hl_out\" 'no hold was taken'" "$hl_out"
+  check "#3601 and the refusal says whether process 1 is running could not be told, not that it ran too long" \
+    "line_has \"\$hl_out\" 'held by process 1' 'could not be told' 'not the same as it having gone' && ! line_has \"\$hl_out\" 'for too long'" "$hl_out"
+  rm -f "$WORK/hold.lock"
+fi
 
 # ---- where the writes landed (L322): the fixture, and nothing of this Mac's ----
 check "the record of each watcher start this suite caused is inside the fixture clone" \

@@ -4766,7 +4766,9 @@ take_reservations_lock(){
   case "$rc" in
     0) ;;
     2) die "could not write $lock.$$, so no lesson number could be reserved. NOTHING was minted." ;;
-    *) die "another ask for a lesson number has held $lock for $(duration_in_words "$max"), so this one stopped rather than risk handing out the same number. NOTHING was minted. Ask again; if this repeats, delete that file (and $lock.break if it is there)." ;;
+    # A holder whose pid could not be tested is said to be that, never another ask (#3601, L11).
+    *) [ -z "${PID_LOCK_UNREAD:-}" ] || die "$lock is held by process $PID_LOCK_UNREAD, and this ask stopped after $(duration_in_words "$max") rather than take it. $(pid_lock_unread_sentence) NOTHING was minted. Once ps -p $PID_LOCK_UNREAD shows that process has gone, delete that file (and $lock.break if it is there) and ask again."
+       die "another ask for a lesson number has held $lock for $(duration_in_words "$max"), so this one stopped rather than risk handing out the same number. NOTHING was minted. Ask again; if this repeats, delete that file (and $lock.break if it is there)." ;;
   esac
 }
 release_reservations_lock(){ rm -f "$LESSON_RESERVATIONS_FILE.lock"; }
@@ -13247,6 +13249,10 @@ hold_unlock(){ rm -f "$SYNC_HOLD_FILE.lock" 2>/dev/null || true; }
 hold_lock_refusal(){   # $1 = hold_lock's return code
   if [ "$1" = 2 ]; then
     printf 'the lock beside the hold record could not be written at %s.lock' "$SYNC_HOLD_FILE"
+  elif [ -n "${PID_LOCK_UNREAD:-}" ]; then
+    # A holder whose pid could not be tested is said to be that, never a slow run (#3601, L11).
+    printf 'the lock beside the hold record, %s.lock, is held by process %s, and whether that process is still running could not be told (kill -0 %s was refused rather than answered), which is not the same as it having gone; delete that file once ps -p %s shows it has gone' \
+      "$SYNC_HOLD_FILE" "$PID_LOCK_UNREAD" "$PID_LOCK_UNREAD" "$PID_LOCK_UNREAD"
   else
     printf 'another claude-sync has been changing the hold record at %s for too long (its lock is %s.lock; delete that file if no claude-sync is running)' "$SYNC_HOLD_FILE" "$SYNC_HOLD_FILE"
   fi
