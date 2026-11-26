@@ -493,6 +493,133 @@ done < "$W/closes.tsv"
 # not read, or a comparison that stopped early, is caught by its count (L288).
 if [ "$closes_checks" -ge 120 ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: #3592 the comparison checked its rows (only $closes_checks checks, where the list makes well over 120)"; fi
 
+# ---- one Python reading of where a heredoc ends (claude-config#3592) ----
+# The reader kept a close rule of its own (_closes, _ends_later and the naming in _read) beside
+# heredoc_close in lib/shell-words.py, which the command reader asks: two readings of one family,
+# and they had come apart. Under <<-, a marker split by a backslash with a tab after the join is
+# named by the command reader and was read here with nothing said. Now this reader asks
+# heredoc_close where a heredoc ends and which it cannot vouch for, and keeps no rule of its own.
+# Proved by standing another answer in for heredoc_close and seeing the reading follow it.
+python3 -I -B - "$LIB" > "$W/one-reading.tsv" <<'PY'
+import importlib.util
+import os
+import sys
+
+sys.dont_write_bytecode = True
+spec = importlib.util.spec_from_file_location("shell_code_lines", os.path.join(sys.argv[1], "shell_code_lines.py"))
+scl = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(scl)
+sw = scl._sw
+
+
+def say(ok, what, why=""):
+    print("ok\t" + what if ok else "FAIL\t%s\t%s" % (what, why))
+
+
+def kinds(text):
+    return " ".join(r[2] for r in scl.read_lines(text))
+
+
+real = getattr(sw, "heredoc_close", None)
+say(callable(real), "#3592 lib/shell-words.py gives where a heredoc ends as a function any reader can ask",
+    "shell-words has no heredoc_close of its own level")
+own = [name for name in ("_closes", "_ends_later") if hasattr(scl, name)]
+say(not own, "#3592 the reader keeps no close rule of its own", "it still has %s" % ", ".join(own))
+
+TWICE = "cat <<E\na\nE\nb\nE\necho c\n"
+say(kinds(TWICE) == "code heredoc end code code code code", "#3592 the control: a heredoc ends at the first line that is its marker",
+    "read %s" % kinds(TWICE))
+asked = []
+
+
+def counted(s, j, *rest, **more):
+    asked.append(j)
+    return real(s, j, *rest, **more)
+
+
+def later(s, j, *rest, **more):
+    # The real answer for the body that starts after the first marker line: the second one.
+    return real(s, s.index("\nE\n", j) + 2, *rest, **more)
+
+
+try:
+    sw.heredoc_close = counted
+    before = kinds("cat <<A <<'B'\na\nA\nb\nB\necho c\n")
+    say(len(asked) == 2 and before == "code heredoc end heredoc end code code",
+        "#3592 the reader asks shell-words where each heredoc ends, a quoted one too", "asked %d times, read %s" % (len(asked), before))
+    sw.heredoc_close = later
+    say(kinds(TWICE) == "code heredoc heredoc heredoc end code code", "#3592 and ends a heredoc where shell-words says it ends",
+        "with an answer one marker later stood in, read %s" % kinds(TWICE))
+except Exception as e:  # noqa: BLE001  no heredoc_close to stand in for
+    say(False, "#3592 the reader asks shell-words where each heredoc ends, and ends it there", "%s: %s" % (type(e).__name__, e))
+finally:
+    if real is not None:
+        sw.heredoc_close = real
+
+# Where the two readings had come apart. No shell ends the heredoc at the split marker here
+# (bash 3.2, bash --posix, sh, dash, zsh, zsh emulating sh and ksh all read on, measured 2026-11-26
+# on macOS as a -c text and as a file), so the reading itself was right; the one rule names it, as
+# it does for the command reader, and names more than it must.
+T, B = "\t", "\\"
+TABBED = "\n".join(["cat <<-EOF", T + "body", "E" + B, T + "OF", "# c", "EOF", "echo after", ""])
+marks = scl.unsure_heredocs(TABBED)
+say([m[0] for m in marks] == [1], "#3592 <<- a marker split by a backslash, a tab after the join: named, as the command reader names it", "named %r" % (marks,))
+say([n for n, _ in scl.code_lines(TABBED)] == [1, 2, 3, 4, 5, 7, 8] and kinds(TABBED) == "code heredoc heredoc heredoc heredoc end code code",
+    "#3592 and read on to the marker on a line of its own, as every shell does, with no line after the split left out",
+    "code %r, kinds %s" % ([n for n, _ in scl.code_lines(TABBED)], kinds(TABBED)))
+unsure = []
+sw.commands(TABBED, unsure=unsure)
+say(len(unsure) == 1, "#3592 the control: the command reader names that heredoc", "it named %r" % (unsure,))
+PLAIN = "\n".join(["cat <<-EOF", T + "body", "# c", T + "EOF", "echo after", ""])
+say(scl.unsure_heredocs(PLAIN) == [] and [n for n, _ in scl.code_lines(PLAIN)] == [1, 2, 5, 6],
+    "#3592 the control: <<- with no backslash is not named, and a # line of its body is left out as before",
+    "named %r, code %r" % (scl.unsure_heredocs(PLAIN), [n for n, _ in scl.code_lines(PLAIN)]))
+PY
+eq "#3592 the checks of the one reading ran to their end" "0" "$?"
+one_checks=0
+while IFS="$TAB" read -r verdict what why; do
+  case "$verdict" in
+    ok) pass=$((pass + 1)); one_checks=$((one_checks + 1)) ;;
+    FAIL) fail=$((fail + 1)); one_checks=$((one_checks + 1)); echo "FAIL: $what ($why)" ;;
+    *) fail=$((fail + 1)); echo "FAIL: #3592 a row of the one reading's checks is one this suite reads (got: $verdict)" ;;
+  esac
+done < "$W/one-reading.tsv"
+eq "#3592 every check of the one reading was made" "9" "$one_checks"
+
+# ---- the mods' copy of the list (claude-config#3592) ----
+# The mods' reader is held to the same list, through a copy: a mod's tests can import only the
+# mod's own files. The copy is the list's text after one line, so it cannot come to say otherwise.
+# A copy that is not there and a copy that differs are said apart (L11), and each message is seen
+# to fire here on a stand in copy, since on the repository's own copy neither ever does.
+COPY_REL="payload/mods/mod-kit/tests/heredoc-closes.ts"
+closes_copy_verdict() { # closes_copy_verdict <copy> <list>: "same", or "missing: ..." or "differs: ...", what to do after it
+  if [ ! -f "$1" ]; then
+    echo "missing: $COPY_REL is not there, so the mods' suite has no list to run: write it again, its header and then the text of payload/hooks/lib/heredoc-closes.json"
+    return 0
+  fi
+  sed '1,/^export default$/d' "$1" > "$W/copy-text"
+  if cmp -s "$W/copy-text" "$2"; then
+    echo "same"
+  else
+    echo "differs: $COPY_REL no longer holds the text of payload/hooks/lib/heredoc-closes.json after its 'export default' line: put the list's text there again, whole"
+  fi
+}
+mkdir -p "$W/copy"
+printf '{\n "rows": []\n}\n' > "$W/copy/list.json"
+{ printf '// a header\nexport default\n'; cat "$W/copy/list.json"; } > "$W/copy/same.ts"
+{ printf '// a header\nexport default\n'; printf '{\n "rows": [1]\n}\n'; } > "$W/copy/differs.ts"
+cat "$W/copy/list.json" > "$W/copy/headless.ts"
+{ printf '// a header\nexport default\n'; cat "$W/copy/list.json"; printf '\n'; } > "$W/copy/longer.ts"
+eq "#3592 the control: a copy that holds the list's text is the same" "same" "$(closes_copy_verdict "$W/copy/same.ts" "$W/copy/list.json")"
+eq "#3592 a copy that is not there is said to be missing, with what to write" \
+  "missing: $COPY_REL is not there, so the mods' suite has no list to run: write it again, its header and then the text of payload/hooks/lib/heredoc-closes.json" \
+  "$(closes_copy_verdict "$W/copy/none.ts" "$W/copy/list.json")"
+eq "#3592 a copy whose text is not the list's is said to differ, with what to put back" \
+  "differs: $COPY_REL no longer holds the text of payload/hooks/lib/heredoc-closes.json after its 'export default' line: put the list's text there again, whole" \
+  "$(closes_copy_verdict "$W/copy/differs.ts" "$W/copy/list.json")"
+eq "#3592 a copy with no 'export default' line differs" "differs" "$(closes_copy_verdict "$W/copy/headless.ts" "$W/copy/list.json" | sed 's/:.*//')"
+eq "#3592 a copy with a line after the list's text differs" "differs" "$(closes_copy_verdict "$W/copy/longer.ts" "$W/copy/list.json" | sed 's/:.*//')"
+
 # Every scan that reads through this reader reads the repository's own shell files, so one check
 # here stands for them all: no tracked shell file holds a heredoc the reader is not sure of. A file
 # that gains one fails this suite, where each scan alone would have read on (L621).
@@ -529,22 +656,10 @@ PY
   # failure that never happened under pipefail (test-pipefail-shortcircuit.sh).
   grep -v '^read ' "$W/tree-named" > "$W/tree-found" || true
   eq "#3592 no shell file of the repository holds a heredoc the reader is not sure of" "" "$(sed -n '1,20p' "$W/tree-found")"
-  # The mods' reader is held to the same list, through a copy: a mod's tests can import only the
-  # mod's own files. The copy is the list's text after one line, so it cannot come to say otherwise.
-  # A copy that is not there and a copy that differs are said apart (L11).
-  COPY="$TREE_ROOT/payload/mods/mod-kit/tests/heredoc-closes.ts"
-  if [ ! -f "$COPY" ]; then
-    fail=$((fail + 1))
-    echo "FAIL: #3592 payload/mods/mod-kit/tests/heredoc-closes.ts is not there, so the mods' suite has no list to run: write it again, its header and then the text of payload/hooks/lib/heredoc-closes.json"
-  else
-    sed '1,/^export default$/d' "$COPY" > "$W/copy-text"
-    if cmp -s "$W/copy-text" "$LIB/heredoc-closes.json"; then
-      pass=$((pass + 1))
-    else
-      fail=$((fail + 1))
-      echo "FAIL: #3592 payload/mods/mod-kit/tests/heredoc-closes.ts no longer holds the text of payload/hooks/lib/heredoc-closes.json after its 'export default' line: put the list's text there again, whole"
-    fi
-  fi
+  # The repository's own copy of the list, by the check seen to fire above.
+  copy_verdict="$(closes_copy_verdict "$TREE_ROOT/$COPY_REL" "$LIB/heredoc-closes.json")"
+  [ -n "$copy_verdict" ] || copy_verdict="the check of $COPY_REL said nothing"
+  if [ "$copy_verdict" = "same" ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: #3592 $copy_verdict"; fi
 fi
 
 echo "passed: $pass, failed: $fail"
