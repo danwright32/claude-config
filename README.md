@@ -2105,10 +2105,15 @@ list naming the file while GitHub returns it at neither commit, and a shortened 
 start the head, are refused rather than read as untouched. So is a file list naming the lessons
 file under another spelling (`payload/lessons.md`, another case in either name, a `./`, a doubled
 slash, a `..`) or naming its folder as a file: GitHub keeps such a file apart and a Mac's file
-system does not, so no picker covers it. Where the file list cannot say which files change (cut
-short, holding a rename, or about another commit than the pinned one) every file GitHub holds is
-read at both commits, two reads more, and another spelling added, changed or removed between
-them is refused the same way; a tree GitHub itself cuts short is refused as unknown. There is no
+system does not, so no picker covers it. The file list ends the search in one case only: a whole
+list (no more files changed than it lists, no rename or copy, about the commit judged) that names
+no spelling of the file, which leaves after the one read. On every other merge, one whose list
+names the lessons file included, every file GitHub holds is read at both commits, two reads, and
+another spelling added, changed or removed between them is refused the same way. A list that
+names the file says nothing about a spelling past its first page or one renamed away, so the name
+is never taken as the answer: that would let such a spelling merge beside it unseen. Files that
+cannot be read, and a tree GitHub itself cuts short, are refused as unknown, in words that say
+what was not read. There is no
 override. What it cannot see: a merge made on GitHub's own page or app or in a terminal Dan types
 in, a push straight to main, a head pushed after `gh pr merge --auto` was typed, and a picker and
 answer written into a transcript file by hand, which is believed here as it is by a typed merge
@@ -3702,7 +3707,11 @@ seconds on `git push -u origin fix/3343-guard-the-merge-lessons`, whose branch n
 and so loads the shared reader to find no merge. On a merge, through the real gh: about 1 second for
 claude-config #3367, which leaves the lessons file alone (one read, the pull request's file list);
 about 3 seconds for #1598, which changes 51 entries (four reads: the file list, the merge base and
-the file at both commits). Since #3583 it also runs before every Edit, Write, MultiEdit and
+the file at both commits). Since #3583 a merge that goes past the file list makes six reads, not
+four: the two more are every file GitHub holds, at the merge base and at the head. 2026-11-26, on
+the personal MacBook, five reads of that answer for claude-config's main through the real gh, timed
+from outside at a load average of 21: 0.52 to 0.69 seconds each (median 0.60), for 2,107 entries in
+541,095 bytes, not cut short. Since #3583 it also runs before every Edit, Write, MultiEdit and
 NotebookEdit, to follow where the file lands on disk (one jq and one python start, nothing
 loaded). 2026-11-26, on the personal MacBook, seven readings each, timed from outside at a load
 average of 240: 0.064 to 0.112 seconds (median 0.076) on a Write of a file elsewhere, beside 0.013

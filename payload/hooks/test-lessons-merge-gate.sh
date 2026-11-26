@@ -237,7 +237,7 @@ expect_deny "the refusal states the count and the number" "Pull request #7 in ac
 expect_deny "the refusal gives the rule to show him, after its number" "L900: Rule 900 says a guard must be seen to fail before anybody trusts what it reports."
 expect_deny "the refusal gives the SHORT line to show him" "SHORT: Rule 900 in one line for the index."
 expect_deny "the refusal names the picker's source and the change's sha256" '"source": "lesson-merge", "repo": "acme/widget", "pr": 7, "sha256": "'
-expect_calls "a pull request that touches the file costs the view, the merge base and the file twice" 4
+expect_calls "a pull request that touches the file costs the view, the merge base, the files at both commits (#3583) and the file twice" 6
 one_added="$reason"; said one-entry-added
 
 answer "$one_added"
@@ -344,7 +344,7 @@ expect_allow "and his answer naming them covers the merge"
 fresh; pull preamble blank reorder swapsections
 run_hook "$MERGE 7 --squash"
 expect_allow "text above the first section, blank lines and the order of entries and sections change no entry"
-expect_calls "which is known only by reading the file at both commits" 4
+expect_calls "which is known only by reading the file at both commits, after the files at both for another spelling (#3583)" 6
 fresh; pull rewrap:4
 run_hook "$MERGE 7 --squash"
 expect_deny "a rule wrapped onto other lines is a changed entry" "1 entry changed (L4)."
@@ -453,7 +453,9 @@ env -u PYTHONDONTWRITEBYTECODE python3 "$LIBCOPY/lesson-merge.py" harvest --reco
 if [ -e "$LIBCOPY/__pycache__" ]; then fail "reading a transcript leaves a __pycache__ beside the lib files (#2600)"; else pass; fi
 
 # ======================================================================================================================
-# The ways round (claude-config#3583). Everything above is #3343's and is left as it was.
+# The ways round (claude-config#3583). Everything above is #3343's and is left as it was, but for
+# two counts of GitHub reads, four made six: a merge that changes the lessons file now has the files
+# at both commits read too, whatever its file list named.
 # ======================================================================================================================
 json() { printf '%s' "$1" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))'; }
 # run_tool <tool> <its input, as JSON> [VAR=value ...]: a call of a tool that writes a file.
@@ -694,6 +696,91 @@ lessons "$WORK/gh/blob-$PIN_SHA"
 tree "$MB_SHA"; tree "$PIN_SHA" "payload/lessons.md:4"
 run_hook "$MERGE 7 --squash --match-head-commit $PIN_SHA"
 expect_deny "#3583 a pinned commit holding another spelling is refused" "payload/lessons.md, another spelling of payload/LESSONS.md"
+
+# --- item 2: a file list that names the lessons file is still not the whole answer ----------------------------------
+# A list naming payload/LESSONS.md says that file changes, never that no other spelling does. A
+# gate that takes the name as its answer reads no tree, so another spelling past the list's first
+# page, or renamed away, merges unseen beside it (these cases were red against such a gate). Every
+# file GitHub holds is read at both commits whenever the gate goes past the file list, whatever the
+# list named.
+fresh; pull; pr_json 7 150 "payload/LESSONS.md:MODIFIED" "README.md:MODIFIED"
+tree "$MB_SHA"; tree "$HEAD_SHA" "payload/lessons.md:4"
+run_hook "$MERGE 7 --squash"
+expect_deny "#3583 a list that names the lessons file and is cut short does not hide another spelling past its page" "payload/lessons.md, another spelling of payload/LESSONS.md"
+# His answer for the lessons file's own change covers no other spelling.
+fresh; pull add:900; tree "$MB_SHA"; tree "$HEAD_SHA"
+run_hook "$MERGE 7 --squash"; answer "$reason"
+pr_json 7 150 "payload/LESSONS.md:MODIFIED" "README.md:MODIFIED"
+tree "$HEAD_SHA" "payload/lessons.md:4"
+run_hook "$MERGE 7 --squash"
+expect_deny "#3583 nor does his answer for the lessons file itself cover the other spelling" "payload/lessons.md, another spelling of payload/LESSONS.md"
+if says "AskUserQuestion"; then fail "#3583 no picker is named for it: $reason"; else pass; fi
+# A rename lists the new name only, so the spelling renamed away is in no list.
+fresh; pull; pr_json 7 2 "payload/LESSONS.md:MODIFIED" "docs/old-lessons.md:RENAMED"
+tree "$MB_SHA" "payload/lessons.md:4"; tree "$HEAD_SHA" "docs/old-lessons.md:4"
+run_hook "$MERGE 7 --squash"
+expect_deny "#3583 a list that names the lessons file and holds a rename does not hide another spelling renamed away" "payload/lessons.md, another spelling of payload/LESSONS.md"
+pr_json 7 2 "payload/LESSONS.md:MODIFIED" "docs/x.md:COPIED"
+tree "$MB_SHA" "Payload/LESSONS.md:4"; tree "$HEAD_SHA" "Payload/LESSONS.md:5"
+run_hook "$MERGE 7 --squash"
+expect_deny "#3583 nor does one holding a change type this gate does not know" "Payload/LESSONS.md, another spelling of payload/LESSONS.md"
+pr_json 7 150 "payload/LESSONS.md:MODIFIED"
+tree "$MB_SHA"; tree "$HEAD_SHA" "PAYLOAD:4"
+run_hook "$MERGE 7 --squash"
+expect_deny "#3583 nor the folder turned into a file past the page" "the folder payload/LESSONS.md is in"
+# Where the files cannot be read the merge is refused in words that say what was not read: never
+# passed on as if nothing else changed.
+tree "$MB_SHA"; tree "$HEAD_SHA" truncated
+run_hook "$MERGE 7 --squash"
+expect_deny "#3583 a list naming the lessons file and cut short, over a tree GitHub cuts short: refused" "more files than GitHub lists in one answer"
+expect_deny "#3583 and the refusal says what could not be compared" "could not be compared"
+tree "$MB_SHA" truncated; tree "$HEAD_SHA"
+run_hook "$MERGE 7 --squash"
+expect_deny "#3583 and so is a tree cut short at the merge base" "more files than GitHub lists in one answer"
+tree "$MB_SHA"; rm -f "$WORK/gh/tree-$HEAD_SHA"; printf 'gh: Bad Gateway (HTTP 502)\n' > "$WORK/gh/err-tree-$HEAD_SHA"
+run_hook "$MERGE 7 --squash"
+expect_deny "#3583 a list naming the lessons file and cut short, with the files unreadable: refused with what GitHub said" "HTTP 502"
+expect_deny "#3583 and the refusal names the files as what was not read" "the files of acme/widget at the head"
+rm -f "$WORK/gh/err-tree-$HEAD_SHA"
+# A whole list naming the lessons file: the files are read all the same, so the list and the files
+# disagreeing is refused, and so are files that cannot be read.
+fresh; pull
+tree "$MB_SHA"; tree "$HEAD_SHA" "payload/lessons.md:4"
+run_hook "$MERGE 7 --squash"
+expect_deny "#3583 a whole list naming the lessons file is not taken as every file: another spelling GitHub holds changed is refused" "payload/lessons.md, another spelling of payload/LESSONS.md"
+tree "$MB_SHA"; tree "$HEAD_SHA" truncated
+run_hook "$MERGE 7 --squash"
+expect_deny "#3583 a whole list naming the lessons file, over a tree GitHub cuts short: refused" "more files than GitHub lists in one answer"
+tree "$MB_SHA"; rm -f "$WORK/gh/tree-$HEAD_SHA"; printf 'gh: Bad Gateway (HTTP 502)\n' > "$WORK/gh/err-tree-$HEAD_SHA"
+run_hook "$MERGE 7 --squash"
+expect_deny "#3583 a whole list naming the lessons file, with the files unreadable: refused with what GitHub said" "HTTP 502"
+rm -f "$WORK/gh/err-tree-$HEAD_SHA"
+# A list this gate cannot read at all (no count of changed files) names nothing and ends nothing.
+fresh; pull
+python3 - "$WORK/gh/pr.json" <<'PY'
+import json, sys
+view = json.load(open(sys.argv[1])); del view["changedFiles"]
+json.dump(view, open(sys.argv[1], "w"))
+PY
+tree "$MB_SHA"; tree "$HEAD_SHA" "payload/lessons.md:4"
+run_hook "$MERGE 7 --squash"
+expect_deny "#3583 a list naming the lessons file with no count of changed files has the files read too" "payload/lessons.md, another spelling of payload/LESSONS.md"
+# What is not the pull request's change stays unasked: another spelling left as it was, beside a
+# lessons file he has answered for.
+fresh; pull add:900; tree "$MB_SHA" "payload/lessons.md:4"; tree "$HEAD_SHA" "payload/lessons.md:4"
+pr_json 7 150 "payload/LESSONS.md:MODIFIED" "README.md:MODIFIED"
+run_hook "$MERGE 7 --squash"
+expect_deny "#3583 beside another spelling left as it was, the lessons file's own change is still asked about" "1 entry added (L900)."
+answer "$reason"; run_hook "$MERGE 7 --squash"
+expect_allow "#3583 and his answer covers the merge, the other spelling not being the pull request's change"
+expect_calls "#3583 which costs the view, the merge base, the files at both commits and the lessons file twice" 6
+# Held as #3343 left it, not decided here: the list is about the head, so with another commit
+# pinned and the lessons file at neither commit judged, the head's list naming the file is not
+# GitHub disagreeing with itself. Reading the list's two facts apart must not change that.
+fresh; pull; rm -f "$WORK/gh/blob-$MB_SHA" "$WORK/gh/blob-$HEAD_SHA" "$WORK/gh/blob-$PIN_SHA"
+tree "$MB_SHA"; tree "$PIN_SHA"
+run_hook "$MERGE 7 --squash --match-head-commit $PIN_SHA"
+expect_allow "#3583 the head's list naming the lessons file is still not held against another commit pinned"
 rm -f "$WORK/gh"/tree-*
 
 # --- item 3: a change that fits the picker shows its rules and SHORT lines -------------------------------------------

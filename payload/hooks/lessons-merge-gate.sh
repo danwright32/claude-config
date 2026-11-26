@@ -24,8 +24,12 @@
 #
 # SCOPE. Any pull request whose change reaches payload/LESSONS.md, in any repository (only this one
 # holds that path). One that does not leaves after one read, the pull request itself, by its file
-# list. A list that cannot say (cut short, or holding a rename or a change type this cannot read)
-# has the file itself read at both commits instead.
+# list, and only where that list is whole and names no spelling of the file. Every other merge that
+# is not refused on the way has five reads more: the merge base, every file GitHub holds at both
+# commits, read for another spelling of the path (ANOTHER SPELLING OF THE LESSONS FILE and WHAT THE
+# FILE LIST IS TAKEN FOR, below), and the file itself at both commits. That is so whether the list
+# named the file, could not say (cut short, or holding a rename or a change type this cannot
+# read), or both.
 #
 # EVERY ROUTE a session has to a merge (lib/merge-target.sh), one pull request per command.
 # merge-when-ready.sh asks this gate itself, before any wait and again at the pinned merge, with no
@@ -38,7 +42,9 @@
 # THE WAYS ROUND IT (claude-config#3583). It is also registered for Edit, Write, MultiEdit and
 # NotebookEdit, where it does one thing: refuse a write of a file in the record's folder
 # (lm_write_tool_judged). A file list naming the lessons file under another spelling is refused
-# (ANOTHER SPELLING OF THE LESSONS FILE, below). And the rule believes no line of the record on its
+# (ANOTHER SPELLING OF THE LESSONS FILE, below), and so is another spelling the files at the two
+# commits show added, changed or removed, which is read whatever the list named
+# (other_spellings_refused). And the rule believes no line of the record on its
 # own word, and shows every rule and SHORT line whenever the shared picker check says they fit.
 #
 # Where the pull request, the file or the verdict cannot be read the merge is refused: cannot tell
@@ -365,17 +371,34 @@ if [ -n "${MT_PIN_SHA:-}" ]; then
   esac
 fi
 
-# Does its change reach the lessons file? By its own file list, where the list can say. `maybe` is
-# a list that cannot: cut short (gh reads one page of it), holding a renamed or copied file (a file
-# renamed away is listed under its new name only), or a change type this does not know.
-touch=$(printf '%s' "$view" | jq -r --arg p "$LESSONS_PATH" '
-  if (.files | type) != "array" or (.changedFiles | type) != "number" then "maybe"
-  elif any(.files[]; .path == $p) then "yes"
-  elif .changedFiles > (.files | length) then "maybe"
-  elif all(.files[]; (.changeType // "") as $t | ["MODIFIED", "ADDED", "DELETED", "CHANGED"] | index($t)) then "no"
-  else "maybe" end' 2>/dev/null)
-[ "$judged_oid" = "$head_oid" ] || touch=maybe
-[ "$touch" = no ] && exit 0   # the commonest answer: one read, and nothing asked
+# WHAT THE FILE LIST IS TAKEN FOR (claude-config#3583). Two facts, read apart, because one standing
+# in for the other skips a read: were a list that names the lessons file taken as having answered,
+# one that is also cut short or holds a rename would have no tree read, and another spelling past
+# its page would merge beside the file unseen (the lessons review of this change found that).
+#   whole    every file the pull request changes is in it: the count GitHub gives is no more than
+#            the files listed (gh reads one page of them), no file is renamed or copied (a file
+#            renamed away is listed under its new name only), every change type is one this knows,
+#            and the list is about the commit judged, not another than the pinned one.
+#   named    payload/LESSONS.md, by that exact path, is in it.
+# The list ends the search in ONE case: whole, with the lessons file not named, and no other
+# spelling of it named either (refused above). That pull request changes no spelling of the file,
+# by GitHub's own count of what it changes, and leaves here after the one read. In every other case
+# the list is a first signal only: it can add to what is refused, and it ends nothing. A list this
+# cannot read at all is neither whole nor named.
+list_says=$(printf '%s' "$view" | jq -r --arg p "$LESSONS_PATH" '
+  (if (.files | type) == "array" then .files else [] end) as $files
+  | (if (.files | type) == "array" and (.changedFiles | type) == "number" and .changedFiles <= ($files | length)
+        and all($files[]; (.changeType // "") as $t | ["MODIFIED", "ADDED", "DELETED", "CHANGED"] | index($t))
+     then "whole" else "partial" end) as $whole
+  | (if any($files[]; (.path? // "") == $p) then "named" else "unnamed" end) as $named
+  | "\($whole) \($named)"' 2>/dev/null)
+case "$list_says" in
+  "whole unnamed"|"whole named"|"partial named"|"partial unnamed") ;;
+  *) list_says="partial unnamed" ;;
+esac
+[ "$judged_oid" = "$head_oid" ] || list_says="partial ${list_says#* }"
+list_names="${list_says#* }"
+[ "$list_says" = "whole unnamed" ] && exit 0   # the commonest answer: one read, and nothing asked
 
 SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/lessons-gate.XXXXXX") \
   || deny "$WHAT: no temporary folder could be made for the lessons file."
@@ -410,48 +433,52 @@ if [ "$MT_READ_STATE" != ok ] || [ "${#merge_base}" != 40 ]; then
   deny "$WHAT: GitHub's comparison of $base_oid and $judged_oid in $api_slug named no merge base (${MT_READ_ERR:-it answered without one}), so what PR #$number changes in $LESSONS_PATH cannot be measured."
 fi
 
-# A file list that cannot say which files change (cut short, holding a rename, or about another
-# commit than the pinned one) cannot say either whether the lessons file changes under another
-# spelling (ANOTHER SPELLING OF THE LESSONS FILE, above). So every file GitHub holds is read at
-# both commits, two reads more, and the other spellings of the path compared by name and sha. A
-# spelling the pull request leaves as it was is not its change. A tree GitHub cuts short, which its
-# answer says of itself, cannot say, and is refused.
-if [ "$touch" = maybe ]; then
+# WHICH OTHER SPELLINGS OF THE LESSONS FILE THE PULL REQUEST CHANGES, from the files themselves
+# (claude-config#3583; ANOTHER SPELLING OF THE LESSONS FILE, above). Every merge that goes past the
+# file list comes through here, whatever the list named: every file GitHub holds is read at both
+# commits, two reads, and the other spellings of the path compared by name and sha. Nothing the list
+# said skips it, because a list that names the lessons file has said nothing about a spelling past
+# its first page or one renamed away. A spelling the pull request leaves as it was is not its
+# change. It refuses on a spelling added, changed or removed, and wherever the set cannot be
+# established: files that cannot be read, or a tree GitHub cuts short, which its answer says of
+# itself. It never returns as though nothing else changed without both trees read whole.
+other_spellings_refused(){
+  local lessons_lower spell_filter odd odd_kind
   lessons_lower="$(printf '%s' "$LESSONS_PATH" | tr 'A-Z' 'a-z')"
   # shellcheck disable=SC2016
-  SPELL_FILTER='def folded: ascii_downcase | gsub("[^\\x00-\\x7f]"; "") | gsub("/+"; "/") | sub("^/"; "");
+  spell_filter='def folded: ascii_downcase | gsub("[^\\x00-\\x7f]"; "") | gsub("/+"; "/") | sub("^/"; "");
     if .truncated == true or (.tree | type) != "array" then "cut short"
     else [ .tree[] | select(.type != "tree") | (.path // "" | tostring) as $path | select($path != "'"$LESSONS_PATH"'")
            | ($path | folded) as $f
            | if $f == "'"$lessons_lower"'" then "file\t\($path)\t\(.sha // "")" elif $f == "'"${lessons_lower%/*}"'" then "folder\t\($path)\t\(.sha // "")" else empty end ]
          | sort | join("\n") end'
   spellings_at(){  # $1 = commit, $2 = where to put them, $3 = in words
-    api_out="$2"; api_args=(--jq "$SPELL_FILTER" "repos/$api_slug/git/trees/$1?recursive=1")
+    api_out="$2"; api_args=(--jq "$spell_filter" "repos/$api_slug/git/trees/$1?recursive=1")
     must_read "the files of $api_slug at $3 $1"
     [ "$MT_READ_STATE" = ok ] || deny "$WHAT: GitHub listed no files for $3 $1 of $api_slug (${MT_READ_ERR:-it answered without them}), so whether PR #$number changes $LESSONS_PATH under another spelling is unknown."
     if [ "$(head -n 1 "$2" 2>/dev/null)" = "cut short" ]; then
-      deny "$WHAT: $api_slug at $3 $1 holds more files than GitHub lists in one answer, and the file list of PR #$number cannot say which it changes, so whether it changes $LESSONS_PATH under another spelling is unknown. That is this gate's limit, not a verdict on the pull request."
+      deny "$WHAT: $api_slug at $3 $1 holds more files than GitHub lists in one answer, so the files at the merge base and at $judged_words could not be compared, and whether PR #$number changes $LESSONS_PATH under another spelling is unknown. Its file list is not taken as every file it changes. That is this gate's limit, not a verdict on the pull request."
     fi
   }
   spellings_at "$merge_base" "$SCRATCH/spell-base" "the merge base"
   spellings_at "$judged_oid" "$SCRATCH/spell-head" "$judged_words"
-  if ! cmp -s "$SCRATCH/spell-base" "$SCRATCH/spell-head"; then
-    # Written to a file and its first line read from there: a pipe into head would leave comm
-    # writing into a closed pipe on a long list, which pipefail reports as a failure
-    # (test-pipefail-shortcircuit.sh).
-    LC_ALL=C comm -13 "$SCRATCH/spell-base" "$SCRATCH/spell-head" > "$SCRATCH/spell-odd" 2>/dev/null
-    odd_path="$(head -n 1 "$SCRATCH/spell-odd" 2>/dev/null)"
-    if [ -z "$odd_path" ]; then
-      LC_ALL=C comm -23 "$SCRATCH/spell-base" "$SCRATCH/spell-head" > "$SCRATCH/spell-odd" 2>/dev/null
-      odd_path="$(head -n 1 "$SCRATCH/spell-odd" 2>/dev/null)"
-    fi
-    odd_kind="${odd_path%%$'\t'*}"; odd_path="${odd_path#*$'\t'}"; odd_path="${odd_path%$'\t'*}"
-    if [ "$odd_kind" = folder ]; then
-      deny "Refusing to merge PR #$number: between the merge base and $judged_words it changes $odd_path, the folder $LESSONS_PATH is in, as a file itself (claude-config#3583). A file or a link put in that folder's place decides what is read as the lessons file on a Mac, and nothing here can show Dan which text that is. No picker covers it: undo that on the branch, or leave the merge to Dan."
-    fi
-    deny "Refusing to merge PR #$number: between the merge base and $judged_words it adds, changes or removes ${odd_path:-a file}, another spelling of $LESSONS_PATH (claude-config#3583). GitHub keeps the two as separate files and a Mac's file system keeps one, so after the next pull the text every session loads could be that file's, and nothing here can show Dan which. No picker covers it: undo that on the branch, or leave the merge to Dan."
+  cmp -s "$SCRATCH/spell-base" "$SCRATCH/spell-head" && return 0
+  # Written to a file and its first line read from there: a pipe into head would leave comm
+  # writing into a closed pipe on a long list, which pipefail reports as a failure
+  # (test-pipefail-shortcircuit.sh).
+  LC_ALL=C comm -13 "$SCRATCH/spell-base" "$SCRATCH/spell-head" > "$SCRATCH/spell-odd" 2>/dev/null
+  odd="$(head -n 1 "$SCRATCH/spell-odd" 2>/dev/null)"
+  if [ -z "$odd" ]; then
+    LC_ALL=C comm -23 "$SCRATCH/spell-base" "$SCRATCH/spell-head" > "$SCRATCH/spell-odd" 2>/dev/null
+    odd="$(head -n 1 "$SCRATCH/spell-odd" 2>/dev/null)"
   fi
-fi
+  odd_kind="${odd%%$'\t'*}"; odd="${odd#*$'\t'}"; odd="${odd%$'\t'*}"
+  if [ "$odd_kind" = folder ]; then
+    deny "Refusing to merge PR #$number: between the merge base and $judged_words it changes $odd, the folder $LESSONS_PATH is in, as a file itself (claude-config#3583). A file or a link put in that folder's place decides what is read as the lessons file on a Mac, and nothing here can show Dan which text that is. No picker covers it: undo that on the branch, or leave the merge to Dan."
+  fi
+  deny "Refusing to merge PR #$number: between the merge base and $judged_words it adds, changes or removes ${odd:-a file}, another spelling of $LESSONS_PATH (claude-config#3583). GitHub keeps the two as separate files and a Mac's file system keeps one, so after the next pull the text every session loads could be that file's, and nothing here can show Dan which. No picker covers it: undo that on the branch, or leave the merge to Dan."
+}
+other_spellings_refused
 
 # The lessons file at a commit. gh's own 404 is a file that is not there, which reads as a file
 # with no entries; any other failure refuses. Asked for raw, which GitHub serves up to 100 MB; a
@@ -473,7 +500,8 @@ lessons_at "$judged_oid" "$SCRATCH/head.md" "$judged_words"
 if [ -f "$SCRATCH/base.md" ] && [ -f "$SCRATCH/head.md" ]; then
   cmp -s "$SCRATCH/base.md" "$SCRATCH/head.md" && exit 0
 elif [ ! -f "$SCRATCH/base.md" ] && [ ! -f "$SCRATCH/head.md" ]; then
-  [ "$touch" = yes ] && deny "$WHAT: GitHub's file list for PR #$number names $LESSONS_PATH as changed, yet GitHub returned no such file at the merge base $merge_base or at $judged_words $judged_oid, so what changes in it cannot be read."
+  # The list is about the head, so with another commit pinned it says nothing of the one judged.
+  [ "$list_names" = named ] && [ "$judged_oid" = "$head_oid" ] && deny "$WHAT: GitHub's file list for PR #$number names $LESSONS_PATH as changed, yet GitHub returned no such file at the merge base $merge_base or at $judged_words $judged_oid, so what changes in it cannot be read."
   exit 0
 fi
 
