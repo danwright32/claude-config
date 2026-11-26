@@ -64,8 +64,8 @@ PIN="$(python3 "$LIB" pin 2>&1)"; rc=$?
 [ "$rc" -eq 0 ] && [[ "$PIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && check "the pin reads as one version" ok \
   || check "the pin reads as one version" "exit $rc: $PIN"
 
-mkdir -p "$TMPROOT/badlib"
-cp "$LIB" "$TMPROOT/badlib/"
+python3 -B "$ROOT/payload/hooks/lib/install-hook-libs.py" "$ROOT/payload/hooks/lib" "$TMPROOT/badlib" web-guidance-pin.py \
+  || check "lib/install-hook-libs.py installs web-guidance-pin.py" "it could not"
 printf '# a comment\n%s\n' "latest" > "$TMPROOT/badlib/$NAME-version"
 out="$(python3 "$TMPROOT/badlib/web-guidance-pin.py" pin 2>&1)"; rc=$?
 [ "$rc" -eq 1 ] && [[ "$out" == *"exactly one version line"* ]] && check "a pin of latest is refused" ok \
@@ -148,7 +148,7 @@ fi
 # ---------------------------------------------------------------------------
 # The registry answer.
 # ---------------------------------------------------------------------------
-NOW=1795000000   # 2026-11-17 08:26:40 UTC
+NOW=1795000000   # 2026-11-18 11:06:40 UTC
 DAY=86400
 iso(){ python3 -c 'import datetime,sys; print(datetime.datetime.fromtimestamp(int(sys.argv[1]), datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"))' "$1"; }
 answer(){   # $1 = file, then version=age-in-days pairs

@@ -83,14 +83,15 @@ allowed "a command not naming it" "ls -la"
 # 3. A gate that cannot read the command refuses, saying so, only when the package is named.
 mkdir -p "$WORKDIR/hooks/lib"
 cp "$HOOK" "$WORKDIR/hooks/"
-cp "$DIR/lib/push-scope.sh" "$DIR/lib/shell-words.py" "$WORKDIR/hooks/lib/" 2>/dev/null
-for f in "$DIR"/lib/*.sh; do cp "$f" "$WORKDIR/hooks/lib/"; done
+python3 -B "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$WORKDIR/hooks/lib" push-scope.sh shell-words.py \
+  || bad "unread: lib/install-hook-libs.py could not install push-scope.sh and shell-words.py"
 judge "npx -y $NAME@latest search x" "$WORKDIR/hooks/web-guidance-pin-gate.sh"
 check_eq "unread: with lib/web-guidance-pin.py missing it refuses" "2" "$rc"
 check "unread: and says the judge is missing" "web-guidance-pin.py, which holds the pin and judges the command, is missing" "$out"
 judge "npx -y prettier@3.3.3 --check ." "$WORKDIR/hooks/web-guidance-pin-gate.sh"
 check_eq "unread: a command not naming the package still passes" "0" "$rc"
-cp "$DIR/lib/web-guidance-pin.py" "$WORKDIR/hooks/lib/"
+python3 -B "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$WORKDIR/hooks/lib" web-guidance-pin.py \
+  || bad "unread: lib/install-hook-libs.py could not install web-guidance-pin.py"
 judge "npx -y $NAME@latest search x" "$WORKDIR/hooks/web-guidance-pin-gate.sh"
 check "unread: with the pin file missing it refuses, saying the pin could not be read" "could not judge it" "$out"
 check_eq "unread: and exits 2" "2" "$rc"
