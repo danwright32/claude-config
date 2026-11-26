@@ -34,8 +34,11 @@ exits  A helper must not report success when it failed. Three shapes are refused
            waited for where it starts; a local one read only by `poll()` must not be used again
            after that read, nor waited on after it (a `wait()` whose result is dropped, or
            `communicate()`) unless a `returncode` read or a `wait()` whose result is used follows.
+           Its uses are compared in the order the code runs them, never by line, a helper's spliced
+           in at its hand off; a use whose only reads are on other arms of an if is unread.
        U1  not a finding: a local process whose status was read while it ran, then handed to
-           something the check cannot follow, so whether its ending is read was not judged.
+           something the check cannot follow (or round a cycle), or whose only read after a use
+           runs on some of its paths, so whether its ending is read was not judged.
            Printed and counted, and it does not fail the check. A process held on an attribute
            whose ending no method reads is a P1 even when it is handed to something the check
            cannot follow, and the finding names that hand off.
@@ -436,8 +439,70 @@ def ends_it(mod, attribute):
     return False
 
 
+# Where a use runs, in the order the code runs it (PR #3659 review at 1a6083d): never its line, which
+# two uses can share and which a helper's uses do not have in the caller. A place is (order, guards).
+# order is the path from the function down to the node, one (field, index) pair per step, so two
+# places compare as the code runs them: statements in order, the test of an if before its body, a
+# second statement on a line after the first. A helper's uses are spliced in after everything its
+# hand off evaluates (AFTER_CALL). guards names each branch or loop the node sits inside, as
+# (construct, arm), so a read on the other arm of an if from a use is never on its path, and a read
+# inside a branch the use is not inside runs only on some of its paths.
+AFTER_CALL = (99, 0)
+
+
+def arm_of(parent, field, index):
+    """The (construct, arm) that running a child in this field of parent depends on, or None when the
+    child runs whenever parent does."""
+    if isinstance(parent, (ast.If, ast.IfExp)) and field in ("body", "orelse"):
+        return (id(parent), field)
+    if isinstance(parent, (ast.For, ast.AsyncFor, ast.While)) and field in ("body", "orelse"):
+        return ((id(parent), field), "runs")  # a loop's body and its else are not alternatives
+    if (isinstance(parent, ast.Try) or type(parent).__name__ == "TryStar") and field in ("handlers", "orelse"):
+        return (id(parent), (field, index))
+    if type(parent).__name__ == "Match" and field == "cases":
+        return (id(parent), index)
+    if isinstance(parent, ast.BoolOp) and index:
+        return ((id(parent), index), "runs")
+    if isinstance(parent, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp, ast.Lambda,
+                           ast.FunctionDef, ast.AsyncFunctionDef)):
+        return ((id(parent), "later"), "runs")
+    return None
+
+
+def place(mod, node, scope):
+    order, guards, child, parent = [], [], node, mod.parent.get(node)
+    while parent is not None and child is not scope:
+        for f, (field, value) in enumerate(ast.iter_fields(parent)):
+            index = next((i for i, v in enumerate(value) if v is child), None) if isinstance(value, list) else (
+                0 if value is child else None)
+            if index is not None:
+                order.append((f, index))
+                guard = arm_of(parent, field, index)
+                if guard is not None:
+                    guards.append(guard)
+                break
+        child, parent = parent, mod.parent.get(parent)
+    return tuple(reversed(order)), tuple(reversed(guards))
+
+
+def exclusive(a, b):
+    """Whether the places a and b are on different arms of one if, try or match, so no run reaches
+    both."""
+    for x, y in zip(a[1], b[1]):
+        if x != y:
+            return x[0] == y[0]
+    return False
+
+
+def on_every_path_after(read, use):
+    """Whether every run that reaches use goes on to reach read, as far as branches tell: read sits
+    inside no branch or loop that use is not inside too."""
+    return read[0] > use[0] and use[1][:len(read[1])] == read[1]
+
+
 def handle_uses(mod, scope, is_handle, start=0, until=float("inf")):
-    """Everything scope does with a process handle, as (line, what, node, detail), in line order.
+    """Everything scope does with a process handle, as (line, what, node, detail, place), in the order
+    the code runs it (see place; a hand off's place is that of its call).
 
     what is one of: wait or poll (a call whose result is used), asked (wait, poll or communicate
     called with its result dropped, or communicate; detail names which), returncode, ends (the code
@@ -491,7 +556,8 @@ def handle_uses(mod, scope, is_handle, start=0, until=float("inf")):
         if isinstance(parent, (ast.Compare, ast.BoolOp, ast.UnaryOp, ast.If, ast.While, ast.IfExp, ast.Assert)):
             continue  # tested, as in `proc is not None`, which asks nothing of the process
         uses.append((line, "handed", node, None))
-    return sorted(uses, key=lambda u: (u[0], getattr(u[2], "col_offset", 0)))
+    placed = [u + (place(mod, u[3] if u[1] == "handed" and u[3] is not None else u[2], scope),) for u in uses]
+    return sorted(placed, key=lambda u: u[4][0])
 
 
 def handed_to(mod, call, node, scope, cls):
@@ -517,24 +583,32 @@ def handed_to(mod, call, node, scope, cls):
 
 def with_aliases(mod, scope, uses, seen=frozenset()):
     """uses, plus what scope does through every local it binds the handle to, with each hand off to a
-    function of this file replaced by everything that function does with it, placed at the line of
-    the hand off. So every rule judges a helper's wait, poll, write or kill exactly as if the caller
-    had made it there (the lessons reviews of PR #3659). seen holds the (function, parameter) pairs
-    already being followed, so a handle passed round a cycle is followed once."""
+    function of this file replaced by everything that function does with it, at the line of the hand
+    off and in the helper's own order after everything the hand off evaluates (see place). So every
+    rule judges a helper's wait, poll, write or kill exactly as if the caller had made it there (the
+    lessons reviews of PR #3659). seen holds the (function, parameter) pairs already being followed: a
+    handle passed round a cycle comes back as "again", a hand off the check does not follow."""
     out = list(uses)
     for u in uses:
         if u[1] == "alias":
             later = [ln for ln in bindings(scope, u[3]) if ln > u[0]]
             out += handle_uses(mod, scope, name_is(u[3]), u[0], later[0] if later else float("inf"))
     cls, followed = class_of(mod, scope), []
-    for u in sorted(out, key=lambda u: u[0]):
+    for u in sorted(out, key=lambda u: u[4][0]):
         target = handed_to(mod, u[3], u[2], scope, cls) if u[1] == "handed" and u[3] is not None else None
         if target is None:
             followed.append(u)
-        elif target not in seen:
+        elif target in seen:
+            followed.append((u[0], "again") + u[2:])
+        else:
             fn, param = target
             inner = with_aliases(mod, fn, handle_uses(mod, fn, name_is(param)), seen | {target})
-            followed += [(u[0], w, n, d) for _, w, n, d in inner]
+            # The helper's branches are keyed by this hand off, so the same if in a helper reached
+            # from two hand offs is two ifs, never one whose arms exclude each other.
+            (order, guards), call = u[4], id(u[3])
+            followed += [(u[0], w, n, d, (order + (AFTER_CALL,) + at[0],
+                                          guards + tuple(((call, g[0]), g[1]) for g in at[1])))
+                         for _, w, n, d, at in inner]
     return followed
 
 
@@ -545,16 +619,18 @@ def classify(mod, scope, uses, cls):
     Returns (ending, reads, unfollowed): ending holds the lines that read the status once the process
     is done (a wait() whose result is used, a returncode after a wait() or communicate(), or a poll()
     a loop repeats); reads holds every line that reads the status at all (any of those, a poll()
-    whose result is used, or a returncode after anything asked for it); unfollowed holds the hand
-    offs that could not be followed, as (line, words)."""
+    whose result is used, or a returncode after anything asked for it), as the uses themselves, so
+    their places can be compared; unfollowed holds the hand offs that could not be followed, as
+    (line, words)."""
     ending, reads, unfollowed, asked, waited = [], [], [], False, False
-    for line, what, node, detail in uses:
+    for u in uses:
+        line, what, node, detail, _ = u
         if what == "wait":
             ending.append(line)
-            reads.append(line)
+            reads.append(u)
             asked = waited = True
         elif what == "poll":
-            reads.append(line)
+            reads.append(u)
             asked = True
             if loops_around(mod, node, scope):
                 ending.append(line)
@@ -563,7 +639,7 @@ def classify(mod, scope, uses, cls):
             waited = waited or detail in ("wait", "communicate")
         elif what == "returncode":
             if asked:
-                reads.append(line)
+                reads.append(u)
             if waited:
                 ending.append(line)
         elif what == "handed":
@@ -631,7 +707,7 @@ def judge_ending(mod, call, what, scope, name, holder, uses, rel):
     cls = class_of(mod, scope)
     owner = self_name(scope) if cls is not None else None
     ending, reads, unfollowed = classify(mod, scope, uses, cls)
-    kept = [d for _, w, _, d in uses if w == "store"]
+    kept = [d for _, w, _, d, _ in uses if w == "store"]
     if holder is not None:
         kept.append(holder)
     held = [t.attr for t in kept if isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name)
@@ -661,35 +737,65 @@ def judge_ending(mod, call, what, scope, name, holder, uses, rel):
                     f"result is used, or returncode after one of them), so a failure after it started reads as "
                     f"success.")
         if reads:
-            text += f" It is checked only at its start, at line {reads[0]}."
+            text += f" It is checked only at its start, at line {reads[0][0]}."
         if lost:
             text += f" It is handed to {lost[0][1]} at line {lost[0][0]}, which this check does not follow."
         return "finding", text
     if kept or unfollowed:
         line, words = unfollowed[0] if unfollowed else next(
-            (ln, ast.unparse(d)) for ln, w, _, d in uses if w == "store")
+            (ln, ast.unparse(d)) for ln, w, _, d, _ in uses if w == "store")
         return "note", (f"{rel}:{call.lineno}: U1 {name} = {what}(...) has its status read only while it runs "
-                        f"(line {reads[0] if reads else call.lineno}) and is handed to {words} at line {line}, "
+                        f"(line {reads[0][0] if reads else call.lineno}) and is handed to {words} at line {line}, "
                         f"which this check does not follow, so whether its ending is read was not judged.")
     if not reads:
         return None
     # A poll() a loop repeats already counted as reading the end (classify), so every read left here
-    # was made once, and a use after the last of them comes after the only look at the process.
-    last = reads[-1]
-    later = [(ln, n) for ln, w, n, _ in uses if ln > last and w in ("use", "ends")]
-    # A wait() whose result is dropped, or a communicate(), waits for the end and reads none of it: a
-    # returncode or a used wait() after it would have counted as the ending above (PR #3659 review).
-    waits = [(ln, d) for ln, w, _, d in uses if ln > last and w == "asked" and d in ("wait", "communicate")]
+    # was made once. Each use made after a read on its path must have a read after it on that path,
+    # compared by place, never by line (PR #3659 review at 1a6083d). A wait() whose result is dropped,
+    # or a communicate(), waits for the end and reads none of it: a returncode or a used wait() after
+    # it would have counted as the ending above (PR #3659 review).
+    unread, unmeasured = [], []
+    for u in uses:
+        if not (u[1] in ("use", "ends") or (u[1] == "asked" and u[3] in ("wait", "communicate"))):
+            continue
+        before = [r for r in reads if r[4][0] < u[4][0] and not exclusive(r[4], u[4])]
+        after = [r for r in reads if r[4][0] > u[4][0] and not exclusive(r[4], u[4])]
+        # A use with no read on its path at all, the reads all on other arms, is unread too.
+        last = before[-1] if before else None
+        if not after:
+            unread.append((u, last))
+        elif not any(on_every_path_after(r[4], u[4]) for r in after):
+            unmeasured.append((u, last, after[0]))
+    later = [(u, r) for u, r in unread if u[1] in ("use", "ends")]
+    waits = [(u, r) for u, r in unread if u[1] == "asked"]
     if waits and not later:
-        return "finding", (f"{rel}:{call.lineno}: P1 {name} = {what}(...) has its status read only at line {last}, "
-                           f"while it is still running, and {name}.{waits[0][1]}() at line {waits[0][0]} waits for "
+        (ln, _, _, d, _), last = waits[0]
+        return "finding", (f"{rel}:{call.lineno}: P1 {name} = {what}(...) has its status read only at line "
+                           f"{(last or reads[0])[0]}, while it is still running, and {name}.{d}() at line {ln} waits for "
                            f"its end but nothing reads how it ended, so a failure reads as success. Read "
                            f"{name}.returncode after it.")
     if later:
-        return "finding", (f"{rel}:{call.lineno}: P1 {name} = {what}(...) has its status read only at line {last}, "
-                           f"while it is still running, and is used again at line {later[0][0]} with nothing after "
-                           f"that reading how it ended, so a failure after its start reads as success. Wait for "
-                           f"it once it is done with.")
+        u, last = later[0]
+        if last is None:
+            return "finding", (f"{rel}:{call.lineno}: P1 {name} = {what}(...) has its status read only on another "
+                               f"branch (line {reads[0][0]}) from its use at line {u[0]}, so on that path nothing "
+                               f"reads how it ended and a failure reads as success. Wait for it once it is done with.")
+        return "finding", (f"{rel}:{call.lineno}: P1 {name} = {what}(...) has its status read only at line "
+                           f"{last[0]}, while it is still running, and is used again at line {u[0]} with nothing "
+                           f"after that reading how it ended, so a failure after its start reads as success. Wait "
+                           f"for it once it is done with.")
+    if unmeasured:
+        u, last, then = unmeasured[0]
+        return "note", (f"{rel}:{call.lineno}: U1 {name} = {what}(...) is used at line {u[0]}"
+                        + (f", after its status is read at line {last[0]}," if last else "")
+                        + f" and the read after that, at line {then[0]}, runs only on some of the paths from it, "
+                        f"so whether its ending is read was not judged.")
+    cycles = [u for u in uses if u[1] == "again"]
+    if cycles:
+        return "note", (f"{rel}:{call.lineno}: U1 {name} = {what}(...) has its status read only while it runs "
+                        f"(line {reads[0][0]}) and is handed to {ast.unparse(cycles[0][3].func)}(...) at line "
+                        f"{cycles[0][0]} a second time, round a cycle this check does not follow, so whether its "
+                        f"ending is read was not judged.")
     return None
 
 

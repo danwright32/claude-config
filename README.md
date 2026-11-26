@@ -6265,7 +6265,11 @@ of its class, and a method that ends it must read how it ended. A local process 
 read while it ran and which is then handed to something the check cannot follow is printed as a
 `U1` line and counted as `unjudged=` in the summary, without failing the check. One held on an
 attribute whose ending no method reads is refused even when it is handed to something the check
-cannot follow, and the finding names that hand off (#3650).
+cannot follow, and the finding names that hand off (#3650). A local process's uses are compared in
+the order the code runs them, never by line: two on one line keep their order, a helper of the same
+file it is handed to has its uses judged at the hand off in its own order, and a read on the other
+arm of an if from a use never follows it. A read after a use that runs only on some of its paths
+(inside a branch, a handler or a loop the use is not in), or a hand off round a cycle, is a `U1`.
 
 The pull request checks install Claude Code for the mods' own tests (#3297), at the one version
 written in `.github/claude-code-version` and read by `tools/install-claude-code.sh` alone, so every
