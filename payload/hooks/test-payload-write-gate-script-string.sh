@@ -302,6 +302,28 @@ runbash_within 60 "$UNCLOSED" "$FIX/dev"
 if [ "$RC" -ne 124 ]; then check "#3689 a quote that never closes after 128 backslashes is answered within 60 seconds" ok
 else check "#3689 a quote that never closes after 128 backslashes is answered within 60 seconds" "no answer in 60 seconds"; fi
 
+# A string is read up to 4000 characters, so a quote that never closes costs a bounded search. A
+# string longer than that, or one that never closes, is one this gate could not read, and is
+# refused as untold in a call naming payload, never let through unread. Exactly the count is read.
+sized_string(){ python3 -c '
+import sys
+body = "true " + "x" * (int(sys.argv[1]) - 5)
+print("python3 -c \"import os; os.system(\x27" + body + "\x27)\" # payload/")' "$1"; }
+runbash "$(sized_string 4000)" "$FIX/dev"
+allowed "#3689 a string of 4000 characters that writes nothing is read to its end"
+runbash "$(sized_string 4001)" "$FIX/dev"
+refused "#3689 one of 4001 characters, in a call naming payload, is refused as one it could not read"
+says "#3689 in words that say it could not tell" "could not tell"
+LONG_COPY="$(python3 -c 'print("python3 -c \"import os; os.system(\x27cp /etc/hosts" + " " * 4000 + "payload/hooks/new.sh\x27)\"")')"
+runbash "$LONG_COPY" "$FIX/dev"
+refused "#3689 a copy into payload at the end of a string past the count is refused"
+runbash "python3 -c \"import os; os.system('true $(printf 'x%.0s' $(seq 1 4100))')\"" "$FIX/elsewhere"
+allowed "#3689 control: a string past the count in a call naming no payload path is let through"
+runbash "python3 -c \"import os; os.system('ls payload/hooks; cat payload/hooks/x.sh')\"" "$FIX/dev"
+allowed "#3689 control: a string holding a separator, which the cut into commands splits, is not taken for one that never closes"
+runbash "echo \"we run 'em all\"; ls payload/hooks" "$FIX/dev"
+allowed "#3689 control: the word run before a quote that never closes, in prose, is not taken for a string"
+
 # And the loop over the script files of one command.
 for k in 1 2 3 4 5 6 7 8 9; do printf 'print(%s)\n' "$k" > "$FIX/scripts/n$k.py"; done
 many_files(){ local k out=""; for k in $(seq 1 "$1"); do out="$out python3 $FIX/scripts/n$k.py;"; done; printf '%s : payload/' "$out"; }

@@ -954,6 +954,12 @@ SHELL_LIST = r"[\"\x27](?:[^\"\x27\s]*/)?(?:ba|z|da|k)?sh[\"\x27]\s*,\s*\[?\s*[\
 STRING_CHARS = 4000
 RUN_STRING = re.compile(r"(?:" + RUN_NAME + r"\s*(\(?)\s*|" + SHELL_LIST + r")([rbuRBUfF]{0,2})" + QUOTE
                         + r"((?:\\.|(?!\3)[^\\]){0,%d}?)\3\s*(\.format\b|[+%%.])?" % STRING_CHARS, re.S)
+# Where such a string OPENS. One that opens and is not read, longer than STRING_CHARS or never
+# closed, is a string this gate could not read: refused as untold, never let through unread (L42).
+RUN_OPEN = re.compile(r"(?:" + RUN_NAME + r"\s*(\(?)\s*|" + SHELL_LIST + r")([rbuRBUfF]{0,2})" + QUOTE, re.S)
+UNTOLD_LONG = ("payload-write-gate.sh could not tell what that string will run: it reads a command string an "
+               "inline script hands to a shell only up to %d characters, and this one is longer or its quote "
+               "never closes." % STRING_CHARS)
 # perl, ruby and php run a command written in backquotes, or after qx or %x. Read only in a command
 # that runs one of them on an inline script, never wherever the word appears: a template string in
 # node is written in backquotes too, and so is Markdown.
@@ -1043,6 +1049,15 @@ def read_strings(text, bases, cut):
              for m in RUN_STRING.finditer(text)]
     if TICK_LANGUAGE.search(cmd):
         found += [("", m.group(1) or m.group(2), "", m.group(0), False) for m in TICKED.finditer(text)]
+    # A string that opens and is not read. Asked of the whole command only: a segment is cut at
+    # every separator, those inside a string included, so in a segment a string that closes can look open.
+    # And only of a string a call hands over, by the same test as a value above: a word such as run
+    # before a quote is as often prose.
+    if cut:
+        for m in RUN_OPEN.finditer(text):
+            if (m.group(1) != "" or re.match(r"(?:system|exec)\b", m.group(0))) and RUN_STRING.match(text, m.start()) is None:
+                for b in bases:
+                    untold("a command string an inline script hands to a shell: " + m.group(0)[:80], UNTOLD_LONG, b)
     for prefix, body, tail, whole, called in found:
         if bool(re.search(SEP, body)) != cut:
             continue
