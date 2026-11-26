@@ -553,9 +553,22 @@ def _feed(proc):
 def _write(proc):
     proc.stdin.write(b"x")
     return 0
+
+
+class ReadInAFinallyAfterItsEnd:
+    def start(self):
+        self.w = subprocess.Popen(["sleep", "9"])
+
+    def stop(self):
+        try:
+            self.w.terminate()
+            return 0
+        finally:
+            self.status = self.w.wait(timeout=5)
 PY
 scan
 [ "$rc" -eq 1 ] && ok || bad "#3663 a helper with the three blind spots fails the scan (rc=$rc)" "$out"
+has "$out" "$FILE:145:" && bad "#3663 (b) a read in a finally runs before the method returns, so it passes" "$out" || ok
 fires P1 6 "#3663 (a) a loop asking only whether the process still runs never reads how it ended"
 fires P1 13 "#3663 (a) a poll() result held in a name only compared with None is no read"
 fires P1 22 "#3663 (a) None compared with poll() the other way round is no read"

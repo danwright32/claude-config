@@ -560,7 +560,7 @@ def with_aliases(mod, scope, uses):
 def classify(mod, scope, uses, cls):
     """Sort a function's uses of a handle into reads of how it ended.
 
-    Returns (ending, reads, unfollowed): ending holds the lines that read the status once the process
+    Returns (ending, reads, unfollowed, deep): ending holds the lines that read the status once the process
     is done (a wait() whose result is used, a returncode after a wait() or communicate(), a poll() a
     loop repeats, or a hand off to a function of this file that reads it); reads holds every line
     that reads the status at all (any of those, a poll() whose result is used, or a returncode after
@@ -640,8 +640,8 @@ def exit_states(fn, events, start):
     """The states the process can be in wherever fn returns, raises or runs off its end, following
     both branches of every if, every handler of a try, and a loop run any number of times. events maps
     a node inside fn to what it does (see step). Exceptions are followed only into the handlers of a
-    try that holds them."""
-    exits = set()
+    try that holds them, and a return or raise inside a try runs its finally before it leaves."""
+    sinks = [set()]  # where a return or raise lands: the innermost try's finally, else out of fn
 
     def at(node, states):
         if node is None:
@@ -680,6 +680,8 @@ def exit_states(fn, events, start):
                 states = at(item.context_expr, states)
             return block(s.body, states, loop)
         if isinstance(s, ast.Try) or type(s).__name__ == "TryStar":
+            if s.finalbody:
+                sinks.append(set())
             raised, current = set(states), states
             for b in s.body:
                 if not current:
@@ -689,7 +691,11 @@ def exit_states(fn, events, start):
             out = block(s.orelse, current, loop)
             for h in s.handlers:
                 out |= block(h.body, raised, loop)
-            return block(s.finalbody, out, loop) if s.finalbody else out
+            if not s.finalbody:
+                return out
+            leaving = sinks.pop()
+            sinks[-1].update(block(s.finalbody, leaving, loop))
+            return block(s.finalbody, out, loop)
         if type(s).__name__ == "Match":
             states = at(s.subject, states)
             out = set(states)
@@ -697,15 +703,15 @@ def exit_states(fn, events, start):
                 out |= block(case.body, states, loop)
             return out
         if isinstance(s, (ast.Return, ast.Raise)):
-            exits.update(at(s, states))
+            sinks[-1].update(at(s, states))
             return set()
         if isinstance(s, (ast.Break, ast.Continue)) and loop is not None:
             loop["break" if isinstance(s, ast.Break) else "continue"].update(states)
             return set()
         return at(s, states)
 
-    exits.update(block(fn.body, {start}, None))
-    return exits
+    sinks[0].update(block(fn.body, {start}, None))
+    return sinks[0]
 
 
 def events_of(uses, ending, reads):
