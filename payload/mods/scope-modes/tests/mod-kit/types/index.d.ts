@@ -585,8 +585,19 @@ export type ModKitGhApi = { method: string; endpoint: string | undefined; fields
  * first source's, since a path is given once) carries it. A reader that says a file can be had back
  * from where a write put it must take a write marked `shared` as no such place, as ask before
  * saving does.
+ *
+ * `again` (#3649): a later command of the same call, read in the order the commands are written,
+ * writes this place too, or a name there that differs only by letter case or the Unicode form of an
+ * accent, so what this write put there may be replaced (measured on macOS for a second mv, a cp and
+ * a redirect: the later one is what the name holds afterwards). A later command that only may run
+ * (after `||`, inside an if or a loop) counts, since it may. It is `'file'` where the two share the
+ * name only while it is no folder: each put one file onto that one name and the two files' own
+ * names differ, so inside a folder of that name both would be kept, which only the disk can say.
+ * The write keeps the sources of the command that made it first. Never said of one command's own
+ * writes (`shared` says that), nor of what a substitution writes. A reader that says a file can be
+ * had back from where a write put it must take a write marked `again` as no such place.
  */
-export type ModKitWrite = { word: string; path?: string; folder?: string; sources?: string[]; edits?: true; mayBeFolder?: true; tree?: true; values?: string[]; shared?: true }
+export type ModKitWrite = { word: string; path?: string; folder?: string; sources?: string[]; edits?: true; mayBeFolder?: true; tree?: true; values?: string[]; shared?: true; again?: true | 'file' }
 
 /**
  * One change a command makes to a file that puts no content in it: removed, stamped (touch),

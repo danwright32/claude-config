@@ -72,6 +72,14 @@ export type AskBeforeSavingRemoval = {
    * a deletion, and only where the command's words name the file and the place.
    */
   sharedAt?: string
+  /**
+   * On a deletion that says `sharedAt` (#3649): the command moves the file there by a command of
+   * its own, and a later command of the same call writes that name too, so the file may be the one
+   * replaced. Until then such a file was asked about as a move that "can be moved back". For
+   * whether one question can cover a command it counts as a move as well as a deletion, so no
+   * command that was refused whole is now asked about.
+   */
+  replacedLater?: true
 }
 
 /**

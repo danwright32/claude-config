@@ -1121,6 +1121,20 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
 
 // The writes, and the folder each command runs in, by its place in `cmds` (#2000): where a cd before
 // it leaves the shell, followed as a relative path is, undefined where that cannot be followed.
+// A file name as a disk that ignores letter case and the Unicode form of an accent compares it, in
+// small letters and in capitals (#3505). The one fold of this reader: two sources of one command
+// are compared by it (sharesName, whose comment says what was measured), and so are the places two
+// commands write (#3649).
+const foldedName = (n: string): string[] => {
+  const form = n.normalize('NFD')
+  return [form.toLowerCase().normalize('NFD'), form.toUpperCase().normalize('NFD')]
+}
+// A path with its last part folded, each way: the names a write at that path may share on such a disk.
+const foldedPlaces = (path: string): string[] => {
+  const cut = path.lastIndexOf('/')
+  return foldedName(path.slice(cut + 1)).map(f => `${path.slice(0, cut)}/${f}`)
+}
+
 const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: string): { writes: ModKitWrites; folders: (string | undefined)[] } => {
   const folders: (string | undefined)[] = []
   const files: ModKitWrite[] = []
@@ -1179,13 +1193,42 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
   // For a command a find -exec runs, the folders find starts from: a change at one of them is one
   // its {} stood for, which reaches everything under it (#760); a path it names itself does not.
   let foundRoots: readonly string[] = []
+  // #3649: where each write may land, by place, so a later command that writes the same place marks
+  // the earlier write `again`. A write lands at its own path, the name folded as a disk that ignores
+  // letter case folds it; one source put onto one name (`mayBeFolder`) may also land inside that
+  // name, under the source's own name, if it is a folder. A write no path names lands at its word
+  // alone. Looked up by place, never each write against each: a command can write thousands.
+  const landed = new Map<string, { entry: ModKitWrite; own: boolean }[]>()
+  const landsAt = (path: string | undefined, key: string, extra: { sources?: string[]; mayBeFolder?: true } | undefined): { at: string; own: boolean }[] =>
+    path === undefined
+      ? [{ at: key, own: true }]
+      : [
+          ...foldedPlaces(path).map(at => ({ at, own: true })),
+          // Inside the name, as written and with the name itself folded: it is one folder under any of the spellings.
+          ...(extra?.mayBeFolder ? (extra.sources ?? []).flatMap(s => [...new Set([path, ...foldedPlaces(path)])].flatMap(folder => foldedPlaces(`${folder}/${baseOf(s)}`))).map(at => ({ at, own: false })) : []),
+        ]
+  // Marks each earlier write of another command that the write being added may land on. Two writes
+  // that each put one file onto the one name, under different names of their own, meet only at that
+  // name itself: they share it while it is no folder, which the disk says, so that is said as 'file'.
+  const writtenAgain = (places: readonly { at: string; own: boolean }[], ontoOneName: boolean) => {
+    for (const p of places)
+      for (const e of landed.get(p.at) ?? []) {
+        if (MADE_BY.get(e.entry)?.has(now)) continue
+        const unlessFolder = p.own && e.own && ontoOneName && !!e.entry.mayBeFolder && !!e.entry.sources?.length
+        if (!unlessFolder) e.entry.again = true
+        else if (e.entry.again === undefined) e.entry.again = 'file'
+      }
+  }
   // `shown`, where the caller knows it, is the word as the command spells it (#752).
-  const add = (word: string, path: string | undefined, extra?: { sources?: string[]; edits?: true; mayBeFolder?: true; tree?: true; shared?: true }, shown?: string) => {
+  const add = (word: string, path: string | undefined, extra?: { sources?: string[]; edits?: true; mayBeFolder?: true; tree?: true; shared?: true; appends?: true }, shown?: string) => {
     // Where a find -exec's {} stood, the write reaches every file under that folder (#760), as does
     // a copy of what a folder holds (#2372).
     const tree = foundRoots.includes(word) || !!extra?.tree
     if (!word || isPipe(word) || isDevice(path ?? word)) return
     const key = path ?? `word:${word}`
+    const places = landsAt(path, key, extra)
+    // An edit in place and an append change what is there and replace no file, so neither marks it.
+    if (!extra?.edits && !extra?.appends) writtenAgain(places, !!extra?.mayBeFolder && !!extra.sources?.length)
     // A path written twice is kept once, a tree on either keeping the tree, as a change does.
     if (seen.has(key)) {
       const had = files.find(f => (path ? f.path === path : !f.path && f.word === (shown ?? asWritten.get(word) ?? word)))
@@ -1215,6 +1258,7 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     }
     files.push(entry)
     madeBy(entry, now)
+    for (const p of places) landed.set(p.at, [...(landed.get(p.at) ?? []), { entry, own: p.own }])
     const set = path ? undefined : aloneIn(entry.word)
     if (set !== undefined) alone.set(entry, set)
   }
@@ -1447,7 +1491,8 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
         words.push(w)
       } else if (WRITE_REDIRECT.test(w)) {
         const target = raw[++i]
-        if (target !== undefined) named(target, undefined, written[from[i] as number])
+        // `>>` adds to the file, so it replaces nothing an earlier command put there (#3649).
+        if (target !== undefined) add(target, pathOf(target, dir), />>$/.test(w) ? { appends: true } : undefined, written[from[i] as number])
         if (target !== undefined && STDOUT_REDIRECT.test(w)) toStdout(target, written[from[i] as number])
       } else if (/^\d*>&$/.test(w)) {
         const target = raw[++i]
@@ -1614,10 +1659,7 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
         // before saving compares a moved name with the names a folder holds by (its foldedName),
         // and it can take two names the disk keeps apart as one (a dotless i and I), the side
         // that claims less.
-        const folded = (n: string): string[] => {
-          const form = n.normalize('NFD')
-          return [form.toLowerCase().normalize('NFD'), form.toUpperCase().normalize('NFD')]
-        }
+        const folded = foldedName
         // One pass over the sources, never each against each: a command can name thousands, and
         // this runs inside the time a guard has to judge the call. A source no path places may
         // share with any other. Otherwise the folders that hold a pattern, and for each form of a

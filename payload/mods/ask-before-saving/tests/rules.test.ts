@@ -2029,8 +2029,10 @@ test('a move the rest of the command may undo is said as it was before the mv sa
     expect([then, (await movesOf(`mv ${MEM}/{a,b}.md ~/Desktop/archive/ ${then}`))[0]]).toEqual([then, [`${MEM}/{a,b}.md`, 'delete', '', 'pattern']])
   // The same files removed under another spelling of their path.
   expect(await movesOf(`mv ${MEM}/*.md ~/Desktop/nowhere/ ; rm $HOME/.claude/projects/p/memory/*.md`)).toEqual([[`${MEM}/*.md`, 'delete', '', 'pattern']])
-  // A note named outright is still the move its write says it is, with no word of what the folder holds.
-  expect(await movesOf(`mv ${MEM}/note.md ${MEM}/archive && echo x > ${MEM}/archive/note.md`)).toEqual([[`${MEM}/note.md`, 'move', `${MEM}/archive`, '']])
+  // A note named outright, written over where it lands by a later command. Changed with #3649, on
+  // purpose: the later write replaces it, so it is a deletion. Until then this was the move its
+  // write says it is, `[<the note>, 'move', <the folder>, '']`, with no word of what the folder holds.
+  expect(await movesOf(`mv ${MEM}/note.md ${MEM}/archive && echo x > ${MEM}/archive/note.md`)).toEqual([[`${MEM}/note.md`, 'delete', '', '']])
   expect(splitBy([{ file: `${MEM}/note.md`, how: 'move', to: `${MEM}/archive` }], [`${MEM}/archive/note.md`])).toEqual([`${MEM}/archive/note.md`])
   // Onto a device nothing is moved.
   expect(await movesOf(`mv ${MEM}/note.md /dev/null`)).toEqual([[`${MEM}/note.md`, 'delete', '', '']])
@@ -2651,4 +2653,67 @@ test("Dan's Delete for a note said to be deleted outright does not cover the sam
   expect(coversRemoval(approval([lost]), [plain], [])).toBe(false)
   expect(coversRemoval(approval([lost]), [gone(`${MEM}/a.md`, { sharedAt: '~/Desktop/other/a.md' })], [])).toBe(false)
   expect(coversRemoval(approval([lost]), [lost], [])).toBe(true)
+})
+
+// ---- #3649: two commands of one call that put two files on one name ----
+// Measured on this Mac's disk on 2026-11-26 with plain files in a scratch folder (19 commands, each
+// run once): of two commands that each put a file on one name, the later one is what the name
+// holds afterwards, whether it is a second mv, a cp or a redirect and whether `&&` or `;` joins
+// them, so the file the first command moved there is gone. At 2168997b49 that file was a move.
+test('a note a later command of the same call may replace where it was moved is a candidate that says where, as one mv of two sources is (#3649)', async () => {
+  const at = async (command: string) =>
+    (await removalCandidates(commandWrites(command, SLATE, HOME), HOME, checkouts().inCheckout, command, async () => false)).map(c => [c.file, c.how, c.to ?? '', c.sharedAt ?? '', c.replacedLater ?? false, c.replacedIfFile ?? false])
+  const lost = [[`${MEM}/a.md`, 'delete', '', SENT, true, false]]
+  for (const join of [' && ', '; ', ' || ']) {
+    expect([join, await at(`mv ${MEM}/a.md ~/Desktop/archive/${join}mv ~/Desktop/exact/a.md ~/Desktop/archive/`)]).toEqual([join, lost])
+    expect([join, await at(`mv ${MEM}/a.md ~/Desktop/archive/a.md${join}mv ~/Desktop/exact/a.md ~/Desktop/archive/a.md`)]).toEqual([join, lost])
+    expect([join, await at(`mv ${MEM}/a.md ~/Desktop/archive/${join}cp ~/Desktop/exact/a.md ~/Desktop/archive/`)]).toEqual([join, lost])
+    expect([join, await at(`mv ${MEM}/a.md ~/Desktop/archive/${join}echo x > ~/Desktop/archive/a.md`)]).toEqual([join, lost])
+  }
+  expect(await at(`mv ${MEM}/a.md ~/Desktop/archive/ && mv ~/Desktop/full/A.md ~/Desktop/archive/`)).toEqual(lost)
+  expect(await at(`mv ${MEM}/a.md ~/Desktop/archive/; if [ -f ~/Desktop/exact/a.md ]; then mv ~/Desktop/exact/a.md ~/Desktop/archive/; fi`)).toEqual(lost)
+  // The same move spelled as a copy and a removal.
+  expect(await at(`cp ${MEM}/a.md ~/Desktop/archive/ && rm ${MEM}/a.md && mv ~/Desktop/exact/a.md ~/Desktop/archive/`)).toEqual(lost)
+  // A file of another name onto the one name: a move still, marked for the disk to say whether that name is a folder.
+  expect(await at(`mv ${MEM}/a.md ~/Desktop/archive/old.md && mv ~/Desktop/exact/b.md ~/Desktop/archive/old.md`)).toEqual([[`${MEM}/a.md`, 'move', '~/Desktop/archive/old.md', '', false, true]])
+  // The note moved last is as main gives it: a move where the earlier name differs by letter case, and a deletion with no place where the names are the same.
+  expect(await at(`mv ~/Desktop/full/A.md ~/Desktop/archive/ && mv ${MEM}/a.md ~/Desktop/archive/`)).toEqual([[`${MEM}/a.md`, 'move', SENT, '', false, false]])
+  expect(await at(`mv ~/Desktop/exact/a.md ~/Desktop/archive/ && mv ${MEM}/a.md ~/Desktop/archive/`)).toEqual([[`${MEM}/a.md`, 'delete', '', '', false, false]])
+  // The controls: another name, an append, a copy of its own somewhere else, and one mv of two sources, which no later command is behind.
+  expect(await at(`mv ${MEM}/a.md ~/Desktop/archive/ && mv ~/Desktop/exact/b.md ~/Desktop/archive/`)).toEqual([[`${MEM}/a.md`, 'move', SENT, '', false, false]])
+  expect(await at(`mv ${MEM}/a.md ~/Desktop/archive/ && echo done >> ~/Desktop/archive/a.md`)).toEqual([[`${MEM}/a.md`, 'move', SENT, '', false, false]])
+  expect(await at(`cp ${MEM}/a.md ~/Desktop/keep/ && mv ${MEM}/a.md ~/Desktop/archive/ && mv ~/Desktop/exact/a.md ~/Desktop/archive/`)).toEqual([[`${MEM}/a.md`, 'move', '~/Desktop/keep/a.md', '', false, false]])
+  expect(await at(`mv ${MEM}/a.md ~/Desktop/exact/a.md ~/Desktop/archive/`)).toEqual([[`${MEM}/a.md`, 'delete', '', SENT, false, false]])
+})
+
+test('a note a later command may replace is said in the one command case\'s own sentence, and shares a question only where main did (#3649)', async () => {
+  const later = gone(`${MEM}/a.md`, { sharedAt: SENT, replacedLater: true })
+  // The words are those of one mv of two sources, from the one place.
+  expect(removalSaid([later])).toBe(removalSaid([gone(`${MEM}/a.md`, { sharedAt: SENT })]))
+  expect(removalSaid([later])).toBe(`${LOSS_ONE} Git does not hold it, so once deleted it cannot be got back from git.`)
+  expect(removalInstruction('t1', [later])).toBe(removalInstruction('t1', [gone(`${MEM}/a.md`, { sharedAt: SENT })]))
+  expect(removalOptions([later])).toEqual([{ label: 'Keep as is', description: 'Nothing is deleted' }, { label: 'Delete', description: `Deletes ${MEM}/a.md` }])
+  // Alone, and beside another of its kind, one question covers it, as one Move question did on main.
+  expect(splitBy([later], [])).toBeUndefined()
+  expect(splitBy([later, gone(`${MEM}/b.md`, { sharedAt: '~/Desktop/archive/b.md', replacedLater: true })], [])).toBeUndefined()
+  // Beside a deletion or an emptying it was a move on main, refused whole, and still is.
+  expect(splitBy([later, gone(`${MEM}/b.md`)], [])).toEqual([])
+  expect(splitBy([later, gone(`${MEM}/b.md`, { how: 'empty' })], [])).toEqual([])
+  // Beside a move it is the deletion it is asked about as, refused whole.
+  expect(splitBy([later, { file: `${MEM}/b.md`, how: 'move', to: '~/Desktop/held/b.md' }], [])).toEqual([])
+  // One mv of two sources (#3505) shares a question with a deletion, as it did.
+  expect(splitBy([gone(`${MEM}/a.md`, { sharedAt: SENT }), gone(`${MEM}/b.md`)], [])).toBeUndefined()
+  expect(splitRefusal([gone(`${MEM}/b.md`), later], [])).toBe(
+    `Not run: this command deletes lasting memory (${MEM}/b.md) and also moves lasting memory onto a name a later command of it may replace it at (${MEM}/a.md, to ${SENT}). Dan is asked about each by itself, since one answer cannot cover both. Send each as a command of its own.`,
+  )
+  // An approval for one does not cover the other: the two are refused beside different things.
+  const approval = (removes: AskBeforeSavingRemoval[]): AskBeforeSavingApproval => ({ id: 'q1', key: 'k', files: [], until: 1, removes })
+  expect(coversRemoval(approval([later]), [gone(`${MEM}/a.md`, { sharedAt: SENT })], [])).toBe(false)
+  expect(coversRemoval(approval([gone(`${MEM}/a.md`, { sharedAt: SENT })]), [later], [])).toBe(false)
+  expect(coversRemoval(approval([later]), [later], [])).toBe(true)
+  // Read from the words alone, once the disk did not answer: the place is said, and it is the plain deletion main read it as.
+  const command = `mv ${MEM}/a.md ~/Desktop/archive/ && mv ~/Desktop/exact/a.md ~/Desktop/archive/`
+  const w = commandWrites(command, SLATE, HOME)
+  const late = removalsUnseen(await removalCandidates({ ...w, changes: (w.changes ?? []).map(({ to: _to, ...c }) => c) }, HOME, async () => true, command, async () => true), HOME)
+  expect(late).toEqual([{ file: `${MEM}/a.md`, how: 'delete', sharedAt: SENT, back: 'unknown', why: 'the disk did not answer in time' }])
 })

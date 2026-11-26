@@ -1402,6 +1402,66 @@ describe('writes: changes that put no content in, carried over from the collisio
     for (const command of ['mv one/a.md ~/archive/ && mv two/a.md ~/archive/', 'cp one/a.md ~/archive/; cp two/A.md ~/archive/', 'rm one/a.md two/a.md'])
       expect([command, shared(command)]).toEqual([command, []])
   })
+  // #3649. Two commands of one call that each put a file on one name: the later one replaces what
+  // the earlier one put there. Measured on macOS 26.6.2 on 2026-11-26, plain files in a scratch
+  // folder, each command run once: `mv memory/a.md archive/ && mv exact/a.md archive/` left
+  // archive/a.md holding the second file's text and no file holding the first's, joined by `;` the
+  // same, onto one file name the same, with `cp` or a redirect as the later command the same, and
+  // with the later name in capitals the same; in the other order the file moved last was the one
+  // kept. Two files of different names put onto one name both stayed only where that name was a
+  // folder already. At 2168997b49 the reader said none of it: the earlier write was one write
+  // naming its one source, which ask before saving read as where that file "can be moved back" from.
+  test('a write a later command of the same call writes again says so, in the order the commands are written (#3649)', () => {
+    const again = (command: string) =>
+      read(command)
+        .files.filter(f => f.again !== undefined)
+        .map(f => [f.word, f.again, (f.sources ?? []).join(' ')])
+    const first = `${CWD}/one/a.md`
+    for (const join of [' && ', '; ', ' || ', '\n']) {
+      // Into a folder, and onto one file name: the write the first command made carries it, with the first command's source.
+      expect([join, again(`mv one/a.md ~/archive/${join}mv two/a.md ~/archive/`)]).toEqual([join, [['~/archive/a.md', true, first]]])
+      expect([join, again(`mv one/a.md ~/archive/a.md${join}mv two/a.md ~/archive/a.md`)]).toEqual([join, [['~/archive/a.md', true, first]]])
+      // A copy, a redirect and a tee after the move write the name as a move does.
+      expect([join, again(`mv one/a.md ~/archive/${join}cp two/a.md ~/archive/`)]).toEqual([join, [['~/archive/a.md', true, first]]])
+      expect([join, again(`mv one/a.md ~/archive/${join}echo x > ~/archive/a.md`)]).toEqual([join, [['~/archive/a.md', true, first]]])
+      expect([join, again(`mv one/a.md ~/archive/${join}date | tee ~/archive/a.md`)]).toEqual([join, [['~/archive/a.md', true, first]]])
+    }
+    // A later command that only may run, inside an if or a loop, counts: the earlier file may be replaced.
+    expect(again('mv one/a.md ~/archive/; if [ -f two/a.md ]; then mv two/a.md ~/archive/; fi')).toEqual([['~/archive/a.md', true, first]])
+    expect(again('mv one/a.md ~/archive/; for f in two/a.md; do mv two/a.md ~/archive/; done')).toEqual([['~/archive/a.md', true, first]])
+    // Names a disk that ignores letter case keeps as one file are one name, as for two sources of one command (#3505).
+    expect(again('mv one/a.md ~/archive/ && mv two/A.md ~/archive/')).toEqual([['~/archive/a.md', true, first]])
+    expect(again('mv one/a.md ~/archive/a.md && mv two/a.md ~/archive/A.MD')).toEqual([['~/archive/a.md', true, first]])
+    for (const [a, b] of SAME_ON_DISK) expect([a, b, again(`mv one/${a} ~/archive/ && mv two/${b} ~/archive/`).length]).toEqual([a, b, 1])
+    // One command names the folder with a slash and the other does not: the file lands on the same name if that is a folder.
+    expect(again('mv one/a.md ~/archive/ && mv two/a.md ~/archive')).toEqual([['~/archive/a.md', true, first]])
+    expect(again('mv one/a.md ~/archive && mv two/a.md ~/archive/')).toEqual([['~/archive', true, first]])
+    expect(again('mv one/a.md ~/archive && mv two/a.md ~/archive')).toEqual([['~/archive', true, first]])
+    // Two files of different names put onto one name share it only where it is no folder, which the disk says.
+    expect(again('mv one/a.md ~/archive/old.md && mv two/b.md ~/archive/old.md')).toEqual([['~/archive/old.md', 'file', first]])
+    expect(again('mv one/a.md ~/archive && cp two/b.md ~/archive')).toEqual([['~/archive', 'file', first]])
+    // Three commands: each write a later one writes again says so, and the last says nothing.
+    expect(again('mv one/a.md ~/archive/ && mv two/a.md ~/archive/ && mv three/a.md ~/archive/')).toEqual([['~/archive/a.md', true, first]])
+    // A name no path places is one name where it is spelled the same.
+    expect(again('mv one/a.md "$DEST"/ && mv two/a.md "$DEST"/')).toEqual([['$DEST/a.md', true, first]])
+    // Controls. The file moved last is not said to be written again, in either spelling of the name.
+    expect(again('mv two/a.md ~/archive/ && mv one/a.md ~/archive/').map(f => f[2])).toEqual([`${CWD}/two/a.md`])
+    expect(again('mv two/A.md ~/archive/ && mv one/a.md ~/archive/')).toEqual([['~/archive/A.md', true, `${CWD}/two/A.md`]])
+    // Other names, other folders, one command alone, and one command's own two sources (`shared` says that).
+    for (const command of [
+      'mv one/a.md ~/archive/ && mv two/b.md ~/archive/',
+      'mv one/a.md ~/archive/ && mv two/a.md ~/other/',
+      'mv one/a.md ~/archive/',
+      'mv one/a.md ~/archive/ && ls ~/archive && cat ~/archive/a.md',
+      // An append and an edit in place change the file where it landed and replace it with no other.
+      'mv one/a.md ~/archive/ && echo done >> ~/archive/a.md',
+      'mv one/a.md ~/archive/ && sed -i s/a/b/ ~/archive/a.md',
+      'mv one/a.md two/a.md ~/archive/',
+      'cp one/a.md two/A.md ~/archive/',
+      'tee ~/archive/a.md ~/archive/a.md',
+    ])
+      expect([command, again(command)]).toEqual([command, []])
+  })
   // mv -n replaces nothing: a source whose name is taken where it goes is left where it was. At
   // 3c7b756211 the reader gave no word of it, and ask before saving said the file there was replaced.
   test('a mv told to replace nothing says so of where it puts each source (#3478)', () => {

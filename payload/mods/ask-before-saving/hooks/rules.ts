@@ -25,9 +25,10 @@ export const MOD = 'ask-before-saving'
 // is inside it when that name is an existing folder. `to`, on a removal a mv makes (#3478), is
 // where that mv puts it: the folder it lands inside (`into`) or the one name it is moved onto.
 // `shared` (#3505) says another source of the same mv or cp may land on that file's name, so it is
-// no place a moved file can be said to go.
+// no place a moved file can be said to go. `again` (#3649) says a later command of the same call
+// writes that place too, and `'file'` that it does only while the name is no folder.
 export type Writes = {
-  files: { word: string; path?: string; sources?: string[]; mayBeFolder?: true; shared?: true }[]
+  files: { word: string; path?: string; sources?: string[]; mayBeFolder?: true; shared?: true; again?: true | 'file' }[]
   changes?: { word: string; path?: string; folder?: string; does: string; tree?: true; names?: string[]; to?: { word: string; path?: string; into?: true; keeps?: true } }[]
   unnamed: { what: string; words: string[]; inputs: string[]; targets?: string[] }[]
   runs?: { script?: string; unknown?: true; why?: string; remedy?: string; args: { word: string; path?: string }[] }[]
@@ -1832,6 +1833,10 @@ export type RemovalCandidate = {
   keeps?: true
   /** A deletion only: where the command would put the file, as Dan reads it, when another source of the same mv or cp may land on the same name there (#3505). */
   sharedAt?: string
+  /** With `sharedAt`: the other file is put there by a later command of the same call, not by the command that moves this one (#3649). */
+  replacedLater?: true
+  /** A move only: a later command puts a file of another name onto the one name this is moved onto, so this one is replaced there unless that name is a folder, which the disk says (#3649). */
+  replacedIfFile?: true
   tree?: true
   names?: string[]
   pattern?: true
@@ -1978,16 +1983,27 @@ export const removalCandidates = async (w: Writes, home: string, inCheckout: InC
     // be moved back". A mv -n loses neither file and is said the same, the harmless side to be
     // wrong on.
     const lands = (f: Writes['files'][number]): boolean => !!f.sources?.some(s => (c.path ? s === c.path : lastPart(s) === lastPart(c.word)))
-    const dest = emptied ? undefined : w.files.find(f => !f.shared && lands(f))
+    // Nor a write a later command of the same call writes again (#3649, the reader's `again`): the
+    // later one is what the name holds afterwards (measured on macOS on 2026-11-26 for a second mv,
+    // a cp and a redirect, joined by `&&` and by `;`, each run once), so the file this command put
+    // there first is gone. Until then it was asked about as a move that "can be moved back". A later
+    // command that only may run (after `||`, inside an if) counts, since the question says "may".
+    // Only for a file a path names, as the place is said only for one.
+    const replacedAt = (f: Writes['files'][number]): boolean => f.again === true && c.path !== undefined
+    const dest = emptied ? undefined : w.files.find(f => !f.shared && !replacedAt(f) && lands(f))
     // The shared place itself is kept for the question to name (#3505, the loss named): a deletion's
     // words alone gave no reason why a command that says mv deletes. It is said only where no other
     // place stands for the file to be had back from.
-    const shared = emptied || dest !== undefined ? undefined : w.files.find(f => f.shared === true && lands(f))
+    const shared = emptied || dest !== undefined ? undefined : w.files.find(f => (f.shared === true || replacedAt(f)) && lands(f))
+    // The other file comes by a later command where no source of this file's own command shares the name.
+    const later = shared !== undefined && shared.shared !== true
     // A write that names it as a source says where it lands; failing that, its own mv does. Never
     // for a brace pattern of more names than are multiplied out (MAX_BRACE_NAMES): what it would
     // replace where it lands cannot be worked out inside a hook's time, so it is the deletion it
     // was before the reader said where a pattern goes.
-    const moved = emptied || dest !== undefined || (!c.path && braceNames(lastPart(c.word)) > MAX_BRACE_NAMES) ? undefined : c.to
+    // Nor where a later command writes the place again: the reader takes its own mark off only for
+    // the same path, and a name alike but for letter case is replaced as surely.
+    const moved = emptied || dest !== undefined || later || (!c.path && braceNames(lastPart(c.word)) > MAX_BRACE_NAMES) ? undefined : c.to
     const at = dest ?? moved
     const to = at === undefined ? undefined : at.path ? display(at.path, home) : at.word
     const base = {
@@ -2005,7 +2021,8 @@ export const removalCandidates = async (w: Writes, home: string, inCheckout: InC
       // A mv told to replace nothing (-n, with neither -f nor -i): a file already where this one goes is kept, never replaced.
       ...(!emptied && at !== undefined && c.to?.keeps ? { keeps: true as const } : {}),
       // Only for a file a path names: a pattern and a guess have no one place they are sent to.
-      ...(at === undefined && shared !== undefined && c.path !== undefined ? { sharedAt: shared.path ? display(shared.path, home) : shared.word } : {}),
+      ...(at === undefined && shared !== undefined && c.path !== undefined ? { sharedAt: shared.path ? display(shared.path, home) : shared.word, ...(later ? { replacedLater: true as const } : {}) } : {}),
+      ...(dest?.again === 'file' && c.path !== undefined ? { replacedIfFile: true as const } : {}),
     }
     // A pattern, in the folder it lands in: every file it matches in a folder of lasting memory, or
     // the lasting memory files by name that it may match anywhere else.
@@ -2079,6 +2096,7 @@ export const removalsUnseen = (candidates: readonly RemovalCandidate[], home: st
       ...(holds.length ? { holds } : {}),
       ...(c.guessed ? { guessed: true as const } : {}),
       // Read from the words alone, as the rest of this is: where the command sends it, and that another of its files may land there (#3505).
+      // Never `replacedLater` (#3649): read from the words alone, main said every move as a deletion, so here it was one already.
       ...(c.how === 'delete' && c.sharedAt !== undefined ? { sharedAt: c.sharedAt } : {}),
       back: 'unknown' as const,
       why: NO_ANSWER.message,
@@ -2126,7 +2144,8 @@ const withWhere = (r: Removal): string => (r.how === 'move' && r.to !== undefine
 
 /**
  * Whether a removal is a deletion of a file the command sends onto a name another of its sources
- * may also land on (#3505). The one test of it, for what Dan reads and what Claude is told.
+ * may also land on (#3505), or that a later command of the same call writes too (#3649). The one
+ * test of it, for what Dan reads and what Claude is told, so both are said in the one sentence.
  */
 const sentOntoAShared = (r: Removal): r is Removal & { sharedAt: string } => r.how === 'delete' && r.sharedAt !== undefined
 
@@ -2270,6 +2289,7 @@ const sameRemoval = (y: Removal, r: Removal): boolean =>
   y.guessed === r.guessed &&
   y.more === r.more &&
   y.sharedAt === r.sharedAt &&
+  y.replacedLater === r.replacedLater &&
   sameList(y.holds, r.holds) &&
   sameList(y.names, r.names)
 
@@ -2288,11 +2308,15 @@ export const coversRemoval =(x: AskBeforeSavingApproval, removes: readonly Remov
 // Each thing a command one question cannot cover does, in the words of its own kind: what it
 // deletes, what it moves away, what it empties, then the lasting memory it writes.
 const splitSaid = (removes: readonly Removal[], saves: readonly string[]): string => {
-  const deletes = removes.filter(r => r.how === 'delete')
+  // A file a later command may replace where this command moved it (#3649) is said apart from what
+  // the command deletes outright: it is why such a command is refused (severalWays).
+  const replaced = removes.filter(r => r.how === 'delete' && r.replacedLater)
+  const deletes = removes.filter(r => r.how === 'delete' && !r.replacedLater)
   const moves = removes.filter(r => r.how === 'move')
   const empties = removes.filter(r => r.how === 'empty')
   const parts = [
     ...(deletes.length ? [removesWhat(deletes).replace(/^this /, '')] : []),
+    ...(replaced.length ? [`moves lasting memory onto a name a later command of it may replace it at (${replaced.map(r => `${r.file}, to ${r.sharedAt ?? 'a place its words do not name'}`).join('; ')})`] : []),
     ...(moves.length ? [removesWhat(moves).replace(/^this /, '')] : []),
     ...(empties.length ? [removesWhat(empties).replace(/^this /, '')] : []),
     ...(saves.length ? [`writes lasting memory (${saves.join(', ')})`] : []),
@@ -2300,7 +2324,11 @@ const splitSaid = (removes: readonly Removal[], saves: readonly string[]): strin
   return `${parts[0]} and also ${parts.slice(1).join(', and ')}`
 }
 
-const severalWays = (removes: readonly Removal[]): boolean => new Set(removes.map(r => r.how)).size > 1
+// A file a later command may replace where this command moved it (#3649) is a deletion in what Dan
+// is asked, and was a move in what main asked. It counts as both here: beside a move it is refused
+// as a deletion beside a move is, and beside a deletion as the move it was said to be, so every
+// command refused whole before this is refused whole still.
+const severalWays = (removes: readonly Removal[]): boolean => new Set(removes.map(r => r.how)).size > 1 || new Set(removes.map(r => (r.replacedLater ? 'move' : r.how))).size > 1
 
 /**
  * What a command is refused with when one question cannot cover it (#3402): it removes lasting
