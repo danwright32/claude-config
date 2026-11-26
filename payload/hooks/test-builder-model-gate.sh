@@ -41,8 +41,9 @@ trap 'rm -rf "$WORK"' EXIT
 # transcript <file> <kind>...: a session transcript holding one Agent dispatch per kind, in the
 # shape Claude Code writes them (compact JSON, one content block per assistant line). A kind is
 # "builder" (a worktree dispatch), "explore" (read only), "session" (a brief carrying the commit
-# session line, no worktree), "self" (a builder whose id is this call's own, toolu_x) or "junk" (a
-# line that is not JSON). A line of ordinary chat comes first.
+# session line, no worktree), "self" (a builder whose id is this call's own, toolu_x), "typed" (a
+# dispatch of the builder agent type with no worktree and no session line, claude-config#3389) or
+# "junk" (a line that is not JSON). A line of ordinary chat comes first.
 transcript() {
   python3 - "$@" <<'PY'
 import json, sys
@@ -60,6 +61,8 @@ for n, k in enumerate(kinds):
         inp = {"description": "look", "prompt": "find it", "subagent_type": "Explore"}
     elif k == "session":
         inp["prompt"] += " Claude-Session: https://claude.ai/code/session_x"
+    elif k == "typed":
+        inp["subagent_type"] = "builder"
     tid = "toolu_x" if k == "self" else "toolu_%d" % n
     lines.append(json.dumps({"type": "assistant", "timestamp": "2026-11-13T10:00:00Z",
                              "message": {"role": "assistant", "content": [
@@ -252,6 +255,42 @@ PY
 )"
   check "the hook is registered under PreToolUse for Agent calls only, failing closed" "$wiring"
 fi
+
+# THE BUILDER AGENT TYPE (claude-config#3389). Builders may be dispatched as the agent type named
+# builder in place of general-purpose. The model rule must hold for it exactly as it does today, so
+# every case above is asked again of the type. And the type is itself the statement that the
+# dispatch is a builder: where a general-purpose dispatch is only known for one by its worktree or
+# its session line, a builder typed dispatch with neither is still a builder, and still counts
+# toward a session being an orchestrating one. Both only add refusals.
+echo "builder model gate: the builder agent type"
+AGENT_ID=""
+TRANSCRIPT="$ORCH"
+run Agent builder worktree opus "build the thing"
+allowed "a builder typed worktree dispatch naming opus"
+run Agent builder worktree "" "build the thing"
+refused "a builder typed worktree dispatch with no model"
+says "and it names the tiers" "sonnet"
+run Agent builder "" "" "build it. $SESSION_LINE"
+refused "a builder typed dispatch carrying the session line with no model"
+run Agent builder worktree EMPTY "build the thing"
+refused "a builder typed dispatch whose model is an empty string"
+run Agent builder "" "" "build the thing"
+refused "a builder typed dispatch with no model, no worktree and no session line"
+says "and it points at the rule's home" "Which model a builder runs on"
+run Agent builder "" opus "build the thing"
+allowed "the same dispatch once it names a model"
+TYPED="$WORK/typed.jsonl"; transcript "$TYPED" typed typed
+TRANSCRIPT="$TYPED"
+run Agent general-purpose worktree "" "build the thing"
+refused "two earlier builder typed dispatches make the session an orchestrating one"
+TYPEDONE="$WORK/typed-one.jsonl"; transcript "$TYPEDONE" typed
+TRANSCRIPT="$TYPEDONE"
+run Agent builder "" "" "build the thing"
+allowed "a session's second builder typed dispatch is not stopped, as its second builder never is"
+TRANSCRIPT="$ORDINARY"
+run Agent builder "" "" "build the thing"
+allowed "an ordinary session's first builder typed dispatch is not stopped"
+TRANSCRIPT="$ORCH"
 
 echo
 echo "passed: $pass, failed: $fail"

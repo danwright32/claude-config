@@ -1413,6 +1413,67 @@ written where a cap on agents is said, in any payload document; text in double q
 because a dated quotation is the record of a decision, not a restatement of the rule, and the lessons
 and dated audits are not read, because they record history (L613, L564).
 
+## The builder agent type: a rendered prompt, and no copy in the repository (#3389)
+
+Trials on 2026-11-25 (personal MacBook, three runs an arm) measured two trims of what a builder
+loads before its brief: withholding 48 connected servers saved 13,026 tokens of about 82,760, and
+loading the lessons core in the agent's prompt in place of every rule file saved 20,398. Dan chose
+both ("Servers and rule files (Recommended)"), with the rules a builder must still follow written
+into the type.
+
+Those rules are a copy of text whose home is `CLAUDE.md` and the lessons files, loaded into every
+builder and believed without checking (L244). So nothing in the type is a hand kept copy of a rule:
+`render-builder-type.py` walks `CLAUDE.md`, writes out each file it imports, and carries or leaves
+each section by a table of choices with a reason per row. Three shapes were weighed for where the
+rendered file lives:
+
+- **Committed in `payload/agents/` with a test that fails when it is stale.** Refused. The sources
+  changed in 103 commits in the 30 days to 2026-11-25 and 76 of those were the sync's own, from
+  either Mac, with no pull request: the suite would go red on main after most of them, and two
+  Macs that each changed a rule would conflict on the rendered file at the rebase, which the
+  sync's recovery does not know and hands to a person (L554). The table of contents the core
+  imports carries a count per section, so even an added lesson outside the core would move it.
+- **Committed, and taught to the sync as a derived file** like `LESSONS-CORE-*.md`. That means
+  `is_derived_rule_file` answering for a path inside a mirrored folder, which the conflict keeper,
+  the unsent edit report and the rebase recovery all consult. It works, and it widens three
+  exemptions for one file.
+- **Rendered on each Mac and never carried**, which is the one built toward: the repository holds
+  the renderer, the head and the table, and each Mac's copy is a function of its own installed
+  rules. It needs one thing from the sync, the file named in the mirror's exclusions so a send does
+  not publish it and an apply does not delete it. Dan chose this shape on 2026-11-25 ("Each Mac
+  writes its own (Recommended)"). The sync step is not in this change and comes to him before it
+  merges, so today the type is rendered by hand where it is wanted and nothing installs it.
+
+Every doubt in the table is settled by carrying (a section with no row, a row that matches
+nothing), because the failure this change can cause is a rule silently missing from every builder.
+The cost of that default is said rather than hidden: an item left out because it contradicts a
+builder's own rules (wait for approval, merge the pull request yourself, open a file on Dan's
+screen) comes back if its opening words are reworded. `--strict` makes each such case a failure,
+and the suite renders the payload strictly, so main says so. The rendered prompt holds no date,
+count or hash of its own, so a change to one rule changes that rule's lines and nothing else.
+
+The table's test for leaving something out has a fourth case: a section that governs only work on
+a screen. Dan chose on 2026-11-25 ("Cut the UI sections first") to leave out "Progress & Feedback
+(UI)" and "Building UI", about 5,900 characters that every builder read again on every request
+while few items touch a screen. They are named rather than dropped silently: the head tells a
+builder whose item builds or changes anything a person sees on a screen to read them in
+`~/.claude/CLAUDE.md` first, and the brief for such an item says so. That too is a rule in a
+prompt, and the cost of it failing is a screen built without its rules, which the review of the
+screen, not the type, has to catch.
+
+Two things the trial did not surface are true of the type. `omitClaudeMd` is all or nothing, so the
+project's own `CLAUDE.md` and the memory index are left out with the global rules; the head tells
+the builder to read the project's file, and that is a rule in a prompt (L27), so Dan chose on
+2026-11-25 a check that holds a builder's first edit until it has read that file ("Add a guard
+(Recommended)"), built with the install step so the type never runs without it. And a `CLAUDE.md` in
+a subfolder still loads when an agent reads a file under it: in this repository `payload/CLAUDE.md`
+is the global rules file with all its imports, so a builder of this type working under `payload/`
+loads the whole of what the type left out (seen once, 2026-11-25, in the run that built this).
+
+The tool list is an allow list because a deny list has to name each server and the two Macs
+connect different ones. The trial measured the deny form; that the allow form also takes the
+names out of the deferred tool list is not yet measured.
+
 ## A fixture home touches nothing that belongs to the Mac (#1453, #1470, #1486)
 
 rtk's config is one of several things `claude-sync` reaches that belong to the Mac rather than to
@@ -1493,7 +1554,10 @@ setting was carried over with its value untouched, and every setting that change
 this config writes. claude-sync is the only writer of that file in the repository, and the settings
 it writes (the hooks block, `env` for the mods, `statusLine`, and every key `SHARED_SETTINGS_ALLOWED`
 admits) are listed in `LIVE_SETTINGS_CONFIG_KEYS` and stay counted whoever changed them;
-`test-live-settings-edit.sh` fails when claude-sync writes a setting the list does not name. The name
+`test-live-settings-edit.sh` fails when claude-sync writes a setting the list does not name. That
+list holds `permissions` since #3563, because the sync adds three deny rules under it, so a change
+under `permissions` during a run (a permission granted for good, or a rule added by hand) is counted
+too, as a person's /effort pick on a shared model already was. The name
 of a setting alone would excuse a suite that writes that name, so it is never the only test. What the
 rule lets through, and the verdict says so: a suite that edits the real file in place, keeping every
 other setting, and changes only a setting this config never writes. No suite here writes it that way;
@@ -1732,7 +1796,12 @@ its arguments at run time), so the rule moved to where every gh call passes: `ho
 named gh, which `gh-guard-path.sh` puts first on PATH at SessionStart by writing an export to
 `CLAUDE_ENV_FILE`. Measured on Claude Code 2.1.318 before building: that export is first on PATH for
 every Bash command, inside a subagent's too, while a mod's bin folder is appended last and so can
-never shadow gh. The guard runs the same module (`--gh <real> -- <args>`), so the rule has one
+never shadow gh. The hook runs at every SessionStart of a session (a start, a resume, a clear, a
+compaction) against the same env file, so it writes the export only when the file does not already
+hold that exact line; before that, one shell read on 2026-11-25 carried it 33 times (one sample,
+#3619). A file it cannot read
+gets the line as before, so the check never leaves a session without the guard, and an older line
+naming another guard folder is kept, with the newer one written after it. The guard runs the same module (`--gh <real> -- <args>`), so the rule has one
 implementation; it refuses with exit 1, withholding the name it matched because a script's error
 output can land in a log, and otherwise execs the real gh, its exit code and its standard input
 unchanged (a body piped in is copied to a temporary file, judged, and handed on). Any exception
@@ -2260,6 +2329,54 @@ for the clone it runs from is not given, since that is read from the same comman
 passes that do not depend on the watcher stand (a hold, an own worktree, a plain copy). The
 refusal and the warning say that the watcher could not be read and name the command that failed,
 never that a watcher is live, which nothing measured.
+
+**A destination is judged by where it really is, as well as by its text (#3537).** The gate read
+each destination's text and asked whether that text sat under a checkout's `payload/`. Four kinds
+of text reach a payload file with no part of them there: the volume folder with a disk number and
+a file number (`/.vol/<disk>/<file>`, which macOS resolves to the file itself), a symbolic link
+that lives elsewhere, a hard link, and the folder name in another letter case on a volume that
+does not tell case apart. Resolving the text the usual way (following links one at a time) leaves
+the numbered form and the letter case exactly as written, which was measured on 2026-11-25. So the
+kernel is asked instead: the destination is opened for its path alone (`O_EVTONLY`, which reads
+and writes nothing) and `fcntl` with `F_GETPATH` names the file it holds. One step asks for every
+destination of a call, Edit and Bash alike, after the reading of the command and before the
+judging. A destination not made yet is its nearest folder that exists plus the rest, and a link to
+a file not made yet is followed by hand. The text is still judged exactly as before and the real
+path is judged in addition, so the step can only add a refusal; a real path is passed on only when
+it holds a folder named `payload`, the one thing the judging can refuse, so writes elsewhere cost
+the judging nothing more.
+
+Two answers have no path to judge, and both are refused in their own words while a watcher could
+revert the write and no hold covers the session, never let through. A real path that could not be
+read: links that never end, a folder the account may not look into, a numbered path it may not
+open, or the step itself failing. And a file with more than one name: the kernel gives one name
+for a hard linked file, the one it was opened by, so where the others are cannot be read. Dan's
+five working trees held no such file on 2026-11-25, so refusing every one costs nothing measured,
+where searching known checkouts for the other name would have left a link into an unknown checkout
+let through. A device, a pipe or a socket is left to its text, and a name too long to be any file
+is a settled nothing rather than an unread path.
+
+The second name is also refused where it is made. `ln` was already a write; a hard link or
+symbolic link made by an inline script (`os.link`, `os.symlink`, a path object's `symlink_to` and
+`hardlink_to`, node's `linkSync` and `symlinkSync`, ruby's `File` and `FileUtils`, `link` and
+`symlink` called bare as perl calls them, a script that runs `ln`) and the `link` command were
+not, so the name could be made unseen and written through. The issue asked whether to refuse the
+link or only the later write through it. Both: the later write through a symbolic link is always
+seen by its real path, but a hard link's is seen only as a file with more than one name, so the
+making is the one place the gate can say which payload file is involved. In a script that writes,
+every quoted word that may be a path is asked for its real path too, never judged by its words, so
+a script naming a payload file only by a link or by number is seen. Such a word is refused on the
+same three answers as any destination (really under `payload/`, unreadable, more than one name),
+because the script may be writing there, which is how a quoted payload path was always read; a
+word that names nothing is an answer and refuses nothing.
+
+The step is one more `python3` process, run only for a call that writes somewhere other than a
+device while a watcher may be live. Measured 2026-11-25 on a Mac at a load of about 70 to 100:
+that process alone took a median of 30 to 47 ms over two rounds of 30 samples, and whole gate
+calls were 27 to 62 ms slower at the median over 20 interleaved samples per arm, against a noise
+of about 35 ms either way in the cases where both arms run the same code. The lever not pulled:
+asking from inside the two readers that already run would add no process, at the price of the
+same code in two inline scripts or a library the gate must refuse without.
 
 The recovery, if it happens again: find the sync commit (`git log --author=claude-config-sync`),
 take the file list it touched, and check those paths out of the commit BEFORE it, keeping
