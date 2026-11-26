@@ -7648,6 +7648,10 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: Join a time to its AM or PM, and a figure to its unit, with a non-breaking space, or a narrow column wraps the suffix alone.
 
 ## External systems
+- **L870. A macOS launchd service with no ProcessType key runs as a background daemon, throttled onto the efficiency cores, so set ProcessType on any service whose speed matters (a CI runner, a build host) and read its spawn type back with launchctl print.**
+  (slate#5373, 2026-11-26)
+  NO CHECK: none is built yet; slate#5373 asks for one that reads each service's spawn type
+  SHORT: A launchd service with no ProcessType is throttled as a background daemon, so set it on any service whose speed matters and read the spawn type back.
 - **L846. A dependency install that exits 0 is not a working install: npm 11 skips every install script not listed in package.json's allowScripts and only warns, so commit that list and prove a clean install by building or starting the app, never by the unit tests passing.**
   (new-agent-onboarding#903, 2026-11-05)
   SHORT: npm 11 skips install scripts missing from allowScripts and only warns; commit the list and prove a clean install by building, not tests.
@@ -10532,6 +10536,11 @@ Read alongside L524 (an injectable sleep from day one), L284 (every seam set or 
   SHORT: In a JS test, attach a may-reject promise's handler before the next await: a rejection landing during it fails the run though every test passed.
 
 ## Pipeline speed
+
+- **L869. A file uploaded on every CI run is priced before it ships as its size times runs per day times the days it is kept, against the account's storage quota, because a full store refuses the one upload a deploy depends on, with a build that passed.**
+  (slate#5362, 2026-11-26)
+  NO CHECK: the guard that fails an upload step with no stated retention is asked for in slate#5362 and does not exist yet
+  SHORT: Price a per run CI upload as size times runs a day times retention against the storage quota: a full store refuses the upload a deploy needs.
 
 - **L834. Where every pull request must contain main's latest commit before it merges, each merge sends every waiting pull request through the test job again, so merges are capped at one per test run and each extra open pull request adds a full rerun per merge without adding throughput; shorten the test job before adding parallel builders, and size parallel work to that cap.**
   (pivot#415, 2026-10-30)

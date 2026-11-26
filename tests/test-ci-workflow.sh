@@ -548,7 +548,30 @@ else
   [ -z "$bad" ] \
     && check "#2463 a part that failed, was cancelled or never ran, or a failed deal, turns the fan in red" ok \
     || check "#2463 a part that failed, was cancelled or never ran, or a failed deal, turns the fan in red" "${bad# }"
+  # Main's cold cost case (#3406): the deal job's answer turns the fan in red only when it is red,
+  # and an unmeasured, green or absent answer (every pull request run) leaves the verdict as it was.
+  bad=""
+  for cs in red; do
+    COLD_STREAK="$cs" COLD_STREAK_WHY=why DEAL=success PARTS=success bash -c "$verdict" > /dev/null 2>&1 && bad="$bad '$cs' passed;"
+  done
+  for cs in green unmeasured ""; do
+    COLD_STREAK="$cs" COLD_STREAK_WHY=why DEAL=success PARTS=success bash -c "$verdict" > /dev/null 2>&1 || bad="$bad '$cs' failed;"
+  done
+  [ -z "$bad" ] \
+    && check "#3406 the fan in is red when main's cold cost case was unmeasured too long, and only then" ok \
+    || check "#3406 the fan in is red when main's cold cost case was unmeasured too long, and only then" "${bad# }"
 fi
+deal_code="$(wf_job_block "$REAL" deal)"
+miss=""
+for want in 'COLD_STREAK:[[:space:]]*\$\{\{ needs\.deal\.outputs\.cold-streak \}\}' 'COLD_STREAK_WHY:[[:space:]]*\$\{\{ needs\.deal\.outputs\.cold-streak-why \}\}'; do
+  grep -qE "$want" <<< "$venv" || miss="$miss the verdict has no $want;"
+done
+for want in 'cold-streak:[[:space:]]*\$\{\{ steps\.cold-streak\.outputs\.cold-streak \}\}' 'cold-streak-why:[[:space:]]*\$\{\{ steps\.cold-streak\.outputs\.cold-streak-why \}\}' \
+  "if:[[:space:]]*github\.event_name == 'push' && github\.ref == 'refs/heads/main'" 'bash tools/ci-cold-cost-streak\.sh' 'STREAK_REPO:[[:space:]]*\$\{\{ github\.repository \}\}'; do
+  grep -qE "$want" <<< "$deal_code" || miss="$miss the deal job has no $want;"
+done
+[ -z "$miss" ] && check "#3406 the deal job asks tools/ci-cold-cost-streak.sh on a push to main and hands its answer to the fan in" ok \
+  || check "#3406 the deal job asks tools/ci-cold-cost-streak.sh on a push to main and hands its answer to the fan in" "${miss# }"
 
 # The workflow: the parts' matrix comes from the deal job's own count, the part number reaches the
 # runner, and the job named `suite`, the check every merge reads (block-red-merge.sh and

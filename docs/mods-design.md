@@ -49,6 +49,48 @@ and settles its own surfaces in rounds of its own before it is built.
    10 s (none given waits up to Claude Code's 30 s default) and a `$.model.complete` with none under
    10 s (a completion can take a minute), unless the noun races it against a shorter timer. Its first run found two in session-registry's
    engine.create code (a save's `mv` and the repository root lookup), now bounded at 5 s.
+
+   A hook's 10 s on `tool.call` and `tool.check`, measured live (#3627) on 2026-11-25 on Claude Code
+   2.1.332: headless sessions with a probe mod and the scripted stand in model, one Bash call each,
+   at least 3 samples per case, on a Mac at a load average of 83 to 96 on 12 cores.
+   - **It is 10 s for each hook, not for the call.** A call through a `tool.call` hook that waited
+     7 s and a `tool.check` hook that waited 7 s was refused by the second hook every time (3 of 3 in
+     the main session, 3 of 3 in a subagent), 14.6 s in all; the `tool.check` hook started with
+     9,999 to 10,000 ms left. The `tool.call` hook's own clock stops while its `next(e)` runs, and
+     `tool.check` runs inside that `next(e)`. One hook waiting 9.5 s was refused by it 3 of 3; one
+     waiting 11 s was cut at 10.000 to 10.002 s, 6 of 6.
+   - **A wait on a child process does not count; a `$.clock.sleep` and plain code do.** A hook
+     whose wait was `$.process.run(['/bin/sleep', '11'])` still had 9,998 to 10,000 ms left after it
+     and its refusal stood: 3 of 3 on `tool.call`, 3 of 3 on `tool.check`, 3 of 3 in a subagent, and
+     6 s plus 6 s across the two hooks 3 of 3. Synchronous code that never yields has a shorter
+     limit than the budget: a busy loop of 4 s and of 5.5 s finished (3 of 3 each), but one of 11 s
+     was stopped at about 6.0 s, every time, with "no answer to a heartbeat within 5000ms: the
+     hooks worker is wedged (a hook spinning without yielding)".
+   - **A hook cut with no `.catch` lets the call run unjudged.** The debug log says
+     "hook failed: probe-nocatch: errorKind=HooksError errorChars=23 (tool.call; skipped; what is
+     below it ran in its place)" and "probe-nocatch: tool.call hook skipped: ran past its 10s budget"
+     (`tool.check` the same), the model is told nothing, and the Bash call ran: 6 of 6 in the main
+     session, 6 of 6 in a subagent. A busy loop past the heartbeat is worse: "probe-nocatch was
+     unloaded: it crashed the hooks worker", and the call ran 3 of 3. With a `.catch` that refuses,
+     the cut asks it (`next.error.kind` `timeout`, or `throw` for the heartbeat) and its refusal
+     stands, 9 of 9. A busy loop in a `tool.check` hook that has a `.catch` is not asked ("no .catch
+     is asked after the hooks worker ended during tool.check: its caller is gone"), and the call
+     ends as an error, "Error calling tool (Bash): no answer to a heartbeat within 5000ms: ...", and
+     does not run, 3 of 3.
+   - **A subagent's call is treated the same** in each case measured for one (3 samples each): a
+     refusal at once, 7 s plus 7 s, an 11 s wait on a child process, and an 11 s cut with no
+     `.catch` on either hook. The busy loop and the `.catch` cases were measured in the main
+     session only.
+
+   So every `tool.call` or `tool.check` hook that can refuse carries a `.catch` that refuses, and
+   its own synchronous work stays well under 5 s. For a call that passes two judging hooks, as a
+   Bash call covered by Dan's permanent words passes ask before saving's `tool.call` and then its
+   `tool.check`, each 7 s constant is measured against that hook's own 10 s, so the two together
+   may take up to 14 s of wall clock with neither cut, and the 11.3 s the fifth review of #3485 timed
+   across both on the test clock would not be cut live. Time either hook spends waiting in a `$`
+   call such as `$.process.run` costs it nothing, and both hooks have a `.catch` that refuses. Not measured: what an interactive session shows for a cut,
+   whether a mod unloaded for wedging the worker stays unloaded for the rest of the session or takes
+   other mods on the same worker with it, and a busy loop between 5.5 and 6 s.
 5. **A mod that changes with a mod it depends on is loaded again after that one reloads (#960,
    #966).** Measured on
    2026-10-08 (2.1.294) with throwaway mods in a session of their own: when one pull changes mod-kit
@@ -326,7 +368,10 @@ substitution never closed is read to the end of its text, the side that asks. A 
 before the change or after; and a variable the command sets is not followed into a substitution,
 so a path through one stays as written. Since #975 a process substitution (`<(...)`, `>(...)`) is
 read the same way, outside double quotes and heredoc bodies, where it is text; given as an operand
-(`tee >(cmd)`) it is a pipe, never a file. A program fed an unquoted heredoc (`bash <<EOF`) reads the
+(`tee >(cmd)`) it is a pipe, never a file. Since #3496 the commands inside zsh's `=(...)`, where a
+word begins, are read as run too, and the command it stands in keeps the words it was always given
+(`diff =(git fetch) a` is still read with the words `=(git` and `fetch)`), so that reading only
+grows. A program fed an unquoted heredoc (`bash <<EOF`) reads the
 body as the shell expanded it, the backslash taken off an escaped `$`, backtick or backslash and an
 escaped line end joined, so `\$(rm x)` there reaches a shell as `$(rm x)` and is read as run; a
 quoted body is read as written. And a substitution is one word with the word it sits in, its spaces,
@@ -2998,6 +3043,11 @@ ones marked open are the builder's choice, waiting on Dan.
   both names is listed once, as its newest card, still carrying any message an older card under
   the other name owes, pinned from that card so Mark sent finds it (#720). When GitHub cannot be
   asked it lists what is kept under the remote's name and says the rest may be missing.
+- **An announcement owed is kept beside the cards, not among them** (#3667): an announce merge's
+  owed Slack draft is kept in the same store under keys of its own per pull request
+  (`announce:`, `announce-out:`, `announce-done:`), outside the newest 50, so cards piling up
+  never drop it. The README section "An approved announcement is owed as a Slack draft until it is
+  settled (#3667)" holds the rules.
 - **The card is mod-kit's boxed card** (`$.modkit.card`, #663), since only mod-kit draws a result
   row: the state word leads the bold title in its colour (green `success`, grey, amber `warning`),
   then why live could not be confirmed, what changed, "See it:" and the link, and the numbered
@@ -3060,7 +3110,8 @@ and the band question is removed rather than kept beside it (L29). Three defects
 
 - **The write is refused at once, never held open.** A tool call hook that waits on Dan is cut at
   its 10 second budget and the engine then runs the write as if the hook were absent (measured with
-  `claude plugin test` on 2026-10-04), so holding the call would fail open. A hook that cannot
+  `claude plugin test` on 2026-10-04, and live for a hook with no `.catch` on 2026-11-25 on 2.1.332,
+  #3627, standing rule 4), so holding the call would fail open. A hook that cannot
   finish refuses the write, and so does one that cannot read Dan's answer.
 - **For good asks Claude to send the call again** (#738, built 2026-10-05). Until then For good
   replayed the call itself, and in auto mode, Dan's `defaultMode`, it never saved: the classifier
@@ -4981,10 +5032,11 @@ whatever the number said.
   a run of short options) hold the command, with how to write it. A commit with no such parent is
   one git cannot answer for, and is held.
 - Known limits. A session's own environment may already carry `GIT_DIR` or `GIT_WORK_TREE` before
-  any command is typed, which no reader sees. Scope modes places a git command by `-C` alone and
-  is unchanged here. The collision guard did too until #3398 (below), which has it ask about every
-  checkout the command acts on. The shared reader kept only the last `-C`, while git reads each
-  from the one before it, and #3398 added the folder a chain of them leads to.
+  any command is typed, which no reader sees. Scope modes placed a git command by `-C` alone and
+  was unchanged here; since the scope modes part of #3398 (below) it places one by every naming
+  the reader hands on. The collision guard did too until #3398 (below), which has it ask about
+  every checkout the command acts on. The shared reader kept only the last `-C`, while git reads
+  each from the one before it, and #3398 added the folder a chain of them leads to.
 
 ### What #3398 changed: the folder more than one -C leads to, 2026-11-22
 
@@ -5008,9 +5060,9 @@ placed `git -C /a -C b merge y`, which runs in `/a/b`, in `<the folder it runs i
 - `dir` is unchanged: the last `-C` as written. A mod that places a git command by `dir` judges
   exactly the calls it judged before, so nothing held under the old reading passes because the
   reader moved. A mod moves to `chained` in its own change, and decides there whether it goes on
-  judging `dir` too. The collision guard is the first (below). The design round guard, the write
-  reader's placing of what git itself writes, and scope modes still place a chained command by
-  `dir`.
+  judging `dir` too. The collision guard was the first and scope modes the second (both below).
+  The design round guard and the write reader's placing of what git itself writes still place a
+  chained command by `dir`.
 - Where the chain cannot be worked out, `chained` is null, the mark `pipeline` gives the folder of
   a command behind a `cd` it cannot follow, and never a guess. That is a value the shell fills in
   after another `-C` (`-C /a -C "$B"`: absolute or relative, which only the shell knows), a folder
@@ -5131,6 +5183,61 @@ main` each ran unjudged beside a session at work in `/other`.
 - Not covered: the files such a command writes are still placed by the write reader, by `dir`.
   A session's own environment carrying either variable before any command is typed is seen by
   no reader.
+
+Scope modes placed a git command by the last `-C` alone, in seven places, each in its own words:
+the merge and deploy rules, sleep mode's rule for a checkout or a switch, the reading a command
+carries, the three notes kept for winding down (the branch a commit lands on, the files a patch
+changes, the files a stash gives back) and winding down's agreed cleanup branch, which placed
+the start nowhere. So `GIT_DIR=/other/.git git push` was judged by the branch of the folder it
+was typed in, a checkout naming a primary checkout by `--git-dir` ran overnight from a linked
+worktree, and a commit into another repository made this session's branch its own to finish.
+Since the scope modes part of #3398 (2026-11-24):
+
+- One file, `scope-modes/hooks/gitplace.ts`, says where a git command acts, from the reading
+  `$.modkit.git` hands on, and every rule in the mod asks it. `readCommands` hands the reader
+  the settings in front of the command and carries the whole reading (`dir`, `chained`, `gitDir`,
+  `workTree`). It first asks the reader about a line whose answer is known, and a mod-kit loaded
+  before it could say all of that throws, which every rule judging a call refuses on. The patch
+  note, which asks the reader for itself, asks the same line.
+- A repository or working folder named apart (`--git-dir`, `--work-tree`, `GIT_DIR`,
+  `GIT_WORK_TREE`, or one of those variables or `GIT_COMMON_DIR` named anywhere else in the
+  call, by one predicate, `gitEnvNamed`) is one that cannot be told, everywhere in the mod. That
+  predicate reads the words of `echo`, `printf`, `grep` and `rg`, and the value of a commit's
+  `-m`, as plain data: a commit message or a searched pattern quoting `GIT_DIR=` names nothing,
+  but only where nothing in the call could carry the text on (no `$` or backtick, `eval` or
+  `source`, redirect, pipe, `xargs`, function or command the reader cannot read). Anywhere else
+  the text is believed, as before. The merge and deploy rules close on it, and on any word before
+  the subcommand that only spells `--git-dir` or `--work-tree` (`gitSpellsNaming`, kept beside
+  the reading because main's rule closed on those words), sleep mode refuses the checkout, the
+  three notes note nothing and each says so (the branch, patch and stash notes, one line a call)
+  and the cleanup branch is refused. It is not followed by asking
+  git, as the collision guard follows it: a mod shares code only through mod-kit, and
+  `whereGit` and `namedFolder` live in the collision guard.
+- A chain of `-C` is followed by the three notes, to the folder `chained` gives. Sleep mode asks
+  about that folder and about the last `-C` alone, as before, and either refusing refuses, so
+  nothing refused under the old reading passes. The merge and deploy rules still take more than
+  one `-C` for a repository that cannot be told, exactly as before: placing it where the chain
+  leads is the right reading and a loosening, left for Dan in the pull request.
+- The branch note places each commit, and each push naming no branch, by its own reading. Until
+  then the first git command in the call that named a place answered for them all, so a read of
+  this checkout in front of a commit into a repository named apart still made this checkout's
+  branch the session's own.
+- The agreed cleanup branch starts only where `dirsOf` and `$.modkit.workingTree` say the command
+  acts on the checkout Dan agreed to it for. Anywhere else it is refused, with where it would
+  have started, and his answer is kept.
+- Counted on the personal MacBook on 2026-11-24, each rule asked of the mod's own modules from
+  the base and from the change, over 66,149 recorded Bash calls dated 2026-10-25 to 2026-11-24:
+  of 19,293 git commands in 14,867 calls, 19,292 are placed the same, 1 is judged more (a diff
+  in a call naming a git variable, now one that cannot be told, with no verdict moved) and none
+  is judged less. Every call is judged the same by the merge and deploy rules and by sleep
+  mode under each stand in for the disk and the night's lists, and every note reads the same
+  folder. No recorded git command has more than one `-C` or names its repository apart. The
+  count's controls plant one command of each direction, and it stops if one is not reported.
+- Not covered: a working folder named by a configuration key on the command line
+  (`-c core.worktree=`), which the reader does not hand on; a gh command under `GIT_DIR`,
+  still placed by the folder it runs in; `GIT_INDEX_FILE` and `GIT_NAMESPACE`, read by no
+  rule; and a session whose own environment carries one of the variables before any command
+  is typed.
 
 ### What #3280 changed: a file put back exactly as the default branch holds it, 2026-11-21
 

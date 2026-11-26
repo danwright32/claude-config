@@ -1,6 +1,7 @@
 import type { ModKitGh } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import { deployWith, hasFlag, operations, runnerScript, type Cmd } from './nobuild.ts'
 import { resolveDir, syncCall } from './overnight.ts'
+import { gitEnvNamed, gitFolder, gitGlobals, gitPlace, gitSpellsNaming } from './gitplace.ts'
 
 // Sleep mode phase 7 (#843): what may merge and deploy overnight, per repository.
 //
@@ -394,13 +395,17 @@ export type Place = Where & { own: string | undefined }
  * session's folder, moved by each `cd` or `pushd` before it, kept apart inside a subshell, and by a
  * git command's own -C, each through phase 3's one resolver (`resolveDir`); a claude-sync command's
  * is the folder its script lives in, the clone it acts on (#1106). Null where it cannot be
- * followed (a variable, a pattern, `cd -`, `popd`, or --git-dir and --work-tree, which name a
- * repository apart from any folder), which is a repository that cannot be told (L75).
+ * followed (a variable, a pattern, `cd -`, `popd`), and where a git command names its repository
+ * apart from any folder (--git-dir, --work-tree, GIT_DIR, GIT_WORK_TREE), which is a repository
+ * that cannot be told (L75). `raw` is the call's text, read for GIT_DIR, GIT_WORK_TREE or
+ * GIT_COMMON_DIR named anywhere but in front of the git command itself (#3398), and every caller
+ * hands it over: left out, `export GIT_DIR=...` earlier in the call would read as no naming.
  */
-export const dirsOf = (commands: Cmd[], cwd: string, home: string): (string | null)[] => {
+export const dirsOf = (commands: Cmd[], cwd: string, home: string, raw: string): (string | null)[] => {
   let dir: string | null = cwd || null
   const stack: (string | null)[] = []
   const out: (string | null)[] = []
+  const envNamed = gitEnvNamed(raw, commands)
   for (const c of commands) {
     const cmd = name(c.words[0])
     if (cmd === '(') stack.push(dir)
@@ -415,13 +420,21 @@ export const dirsOf = (commands: Cmd[], cwd: string, home: string): (string | nu
       continue
     }
     if (cmd === 'git') {
-      // git's own options, before its subcommand, as mod-kit's git reader reads them (each option
-      // that takes a value, -c included, takes it): its -C moves the folder; --git-dir and
-      // --work-tree name a repository apart from any folder; more than one -C is not followed.
-      const globals = c.git ? c.words.slice(1, c.words.length - c.git.args.length - (c.git.sub === undefined ? 0 : 1)) : c.words.slice(1)
-      let here: string | null = dir
-      if (!c.git || globals.filter(w => w === '-C').length > 1 || globals.some(w => /^--(?:git-dir|work-tree)(?:=|$)/.test(w))) here = null
-      else if (c.git.dir !== undefined) here = here === null ? null : resolveDir(c.git.dir, here, home)
+      // Where the command acts, from mod-kit's one reading of it (gitplace.ts, #3398): its -C moves
+      // the folder, and a repository or a working folder named apart, by an option or by GIT_DIR
+      // or GIT_WORK_TREE, is one no folder answers for. Until #3398 the two options were read from
+      // the words here and the two variables not at all, so `GIT_DIR=/other/.git git push` was
+      // judged by the branch of the folder it was typed in.
+      // More than one -C is still not followed, and neither is any -C behind a cd that cannot be
+      // followed, exactly as before: mod-kit now says where a chain leads (`place.runs`), and
+      // placing it there is the right reading and a loosening, so it waits for Dan (the pull
+      // request of #3398, "For Dan").
+      // A word before the subcommand that only spells --git-dir or --work-tree (the value of the
+      // option in front of it, or one with no value) closed this rule before #3398, which read the
+      // words, and closes it still (`gitSpellsNaming`, the review of #3532).
+      let here: string | null = null
+      if (c.git && dir !== null && gitGlobals(c.words, c.git).filter(w => w === '-C').length <= 1 && !gitSpellsNaming(c.words, c.git))
+        here = gitFolder(gitPlace(c.git, dir, (w, from) => resolveDir(w, from, home), envNamed))
       out.push(here)
       continue
     }
