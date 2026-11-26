@@ -368,6 +368,66 @@ out_nolib2="$(run_nolib snolib)"
   || check "#1900 and says it once per session, not on every prompt" "out=$out_nolib2"
 
 # ---------------------------------------------------------------------------
+# A watcher it cannot read is not one that is absent (claude-config#3547). The command line is read
+# with ps, whose failure was discarded, so a ps that could not run left this saying nothing, which
+# reads exactly as a checkout nothing can revert. Now it says once that it could not check, the way
+# it does of a library it cannot load. ps is taken away for the hook alone, by a stand in first on
+# PATH that fails.
+BADPS="$FIX/badps"; mkdir -p "$BADPS"
+printf '#!/bin/sh\necho "ps: operation not permitted" >&2\nexit 1\n' > "$BADPS/ps"
+chmod +x "$BADPS/ps"
+if PATH="$BADPS:$PATH" ps -o command= -p "$WPID" >/dev/null 2>&1; then
+  check "#3547 the stand in ps really fails" "it answered, so nothing below measures a ps that cannot run"
+else check "#3547 the stand in ps really fails" ok; fi
+rm -f "$HOLD"
+fresh
+out_unread="$(PATH="$BADPS:$PATH" run sunread "$FIX/dev")"
+case "$out_unread" in
+  *"could not be read"*) check "#3547 with a ps that fails it says the watcher could not be read, instead of nothing" ok ;;
+  *)                     check "#3547 with a ps that fails it says the watcher could not be read, instead of nothing" "out=$out_unread" ;;
+esac
+case "$out_unread" in
+  *"ps -o command= -p $WPID"*) check "#3547 naming the command that failed" ok ;;
+  *)                           check "#3547 naming the command that failed" "out=$out_unread" ;;
+esac
+case "$out_unread" in
+  *"$FIX/dev"*"claude-sync hold"*) check "#3547 and the checkout, and the hold that still protects it" ok ;;
+  *)                               check "#3547 and the checkout, and the hold that still protects it" "out=$out_unread" ;;
+esac
+# Nothing here saw a live watcher, so the notice must not say one is live (L11).
+case "$out_unread" in
+  *"a watch daemon is live on this Mac running from"*) check "#3547 without claiming a watcher is live" "out=$out_unread" ;;
+  *)                                                   check "#3547 without claiming a watcher is live" ok ;;
+esac
+why_unread="$(hook_notice_verdict "$out_unread" 'could not be read')"
+[ -z "$why_unread" ] && check "#3547 as a systemMessage the person sees" ok \
+  || check "#3547 as a systemMessage the person sees" "$why_unread"
+out_unread2="$(PATH="$BADPS:$PATH" run sunread "$FIX/dev")"
+[ -z "$out_unread2" ] && check "#3547 once per state, not on every prompt" ok \
+  || check "#3547 once per state, not on every prompt" "out=$out_unread2"
+# ps answering again is a new state, and the watcher it then sees is warned about as ever.
+out_unread3="$(run sunread "$FIX/dev")"
+case "$out_unread3" in
+  *"$FIX/src"*) check "#3547 and once ps answers, the live watcher is warned about as before" ok ;;
+  *)            check "#3547 and once ps answers, the live watcher is warned about as before" "out=$out_unread3" ;;
+esac
+# And nothing else: a hold covers the checkout whatever ps does, and with no pid file ps is never asked.
+fresh
+printf '%s\n' "$(( $(date +%s) + 3600 ))" > "$HOLD"
+out_unread_held="$(PATH="$BADPS:$PATH" run sunread2 "$FIX/dev")"
+[ -z "$out_unread_held" ] && check "#3547 under a hold it stays quiet while ps cannot run" ok \
+  || check "#3547 under a hold it stays quiet while ps cannot run" "out=$out_unread_held"
+rm -f "$HOLD"
+fresh
+out_unread_nopid="$(PATH="$BADPS:$PATH" run sunread3 "$FIX/dev" "$FIX/nosuchpidfile")"
+[ -z "$out_unread_nopid" ] && check "#3547 with no pid file it stays quiet whatever ps does" ok \
+  || check "#3547 with no pid file it stays quiet whatever ps does" "out=$out_unread_nopid"
+fresh
+out_unread_else="$(PATH="$BADPS:$PATH" run sunread4 "$FIX/elsewhere")"
+[ -z "$out_unread_else" ] && check "#3547 and outside any checkout it stays quiet" ok \
+  || check "#3547 and outside any checkout it stays quiet" "out=$out_unread_else"
+
+# ---------------------------------------------------------------------------
 # And the wiring, in the same suite, because a check nothing invokes is the defect this closes
 # (L3, L27). Same two places as the sibling: the shipped settings in the checkout, the installed
 # ones on a deployed Mac.

@@ -708,7 +708,22 @@ one place, `hooks/lib/hold-record.sh`, which `claude-sync` and those hooks both 
 `claude-sync` that cannot load it reads an existing record as held, says why, and clears nothing.
 When `hooks/lib/sync-clone.sh` itself cannot be loaded, the write gate refuses any call whose
 payload names `payload/`, naming the file and `claude-sync pull` as the fix, and the prompt hook
-says once a session that it could not check; both used to say nothing (#1900). Every other gate
+says once a session that it could not check; both used to say nothing (#1900). The same holds for a
+watcher that cannot be read (#3547). Whether a watch daemon is live, and which clone it runs from,
+is read from the process the pid file names, with `ps`, and that reading has three answers:
+live, none, or could not be read. None is a settled answer: no pid file, or one naming a process
+that is not running or is something else. When the pid file names a running process and `ps`
+fails, is missing or says nothing about it, or the pid file is there and cannot be read, the write
+gate refuses the payload write in its own words, naming the `ps` command that failed and how it
+ended, and the prompt hook says once that it could not check; both used to read the empty answer
+as no watcher and say nothing. A process the hook's shell may not signal counts as running for
+this: `kill -0` exits 1 for it exactly as for a dead pid, so only the shell's own words that there
+is no such process settle a pid as gone, and anything else is left to `ps`. The clone the
+watcher runs from cannot be told apart then, so it is refused with every other. What does not
+depend on the watcher still passes: a hold of the session's own, which is read from its own record
+and is the way on the refusal names, a linked worktree on its own branch, and a plain copy. The
+check after a Bash call reports a change the same way. Both hooks ask through `sc_watcher_possible`
+in `hooks/lib/sync-clone.sh`, which says no only when none is settled. Every other gate
 that refuses does the same for a library it needs, and `hooks/test-gates-fail-closed.sh` runs each
 one with each such library taken away. A library a gate loads with a stand in function
 (`. lib/x.sh || name() {`) is needed too, unless the suite names that stand in as examined:
@@ -3992,8 +4007,9 @@ repository's own merge tool, read by `lib/merge-target.sh`), it asks Claude for 
 how the product behaves now that the change shipped, and Claude skips it, in one line, for anything
 nobody using the product would notice. It also stands down for a repository with `.no-pr-quiz` at
 its root, a session snoozed with `pr-merge-quiz.sh --snooze-session <id>`, a pull request whose
-changelog label says it is not visible, sleep mode, and a headless run. What it decided is counted in
-`~/.claude-quiz-verdicts/counts`.
+changelog label says no manager would notice it (which labels those are is the answer of
+`hooks/lib/changelog-entry.js`, never a name in the quiz), sleep mode, and a headless run. What it
+decided is counted in `~/.claude-quiz-verdicts/counts`.
 
 A merge command still running in the background is not quizzed yet (#1768). A command that passes
 the Bash tool's 600 s limit is moved to the background, and the hook runs at that moment, before
@@ -10098,9 +10114,14 @@ link> --add-label` on a PR the session's own record says it opened (the `opened`
 keeps, written from the link each `gh pr create` printed; GitHub's author is the same account for
 every session, so it cannot tell them apart), each naming exactly one label. Which labels is the
 gate's answer, never a list in the mod: the mod runs `node ~/.claude/hooks/lib/changelog-entry.js
-required-labels <owner/name>`, which answers `required` with every label the gate takes and whether
-each needs a sentence in the description, `not-required` for a repository nobody gated, or `unknown`
-with why (a registry missing or unreadable, a repository listed with no start date or a bad one). A
+required-labels <owner/name> --needs-dan`, which answers `required` with every label the gate takes
+in that repository and whether each needs a sentence in the description, `not-required` for a
+repository nobody gated, or `unknown` with why (a registry missing or unreadable, a repository
+listed with no start date or a bad one, or with an announcements channel that is not a channel id).
+The flag says the mod understands a label whose wording is Dan's to approve (#3665): the gate lists
+`changelog/announce`, with `needsAnnouncement` and `needsDan`, only to a caller passing it and only
+for a repository whose registry entry names an `announceChannel`, so a session still running the
+mod as it was is never handed that label, and until an entry names a channel no session is. A
 label the gate says needs a sentence a manager reads (`changelog/visible`) may be set like the
 others (Dan, 2026-11-22, by picker: "Also allow changelog/visible"), so a session can merge
 overnight a PR whose changelog sentence he has not read. The gate still refuses that merge while
