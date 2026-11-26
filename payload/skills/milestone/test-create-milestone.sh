@@ -70,6 +70,13 @@ JSON
 
 export GH_CREATED="$TMP/created.json"
 
+# The helper asks this Mac's dev update registry whether the repository announces to agents
+# (claude-config#3669). Every case runs against a registry of the suite's own, never the one this Mac
+# keeps and never none at all, which the helper refuses: this one lists no repository, so every plan
+# above the announce section is one for a repository that does not announce.
+printf '{"repos": []}\n' >"$TMP/registry-none.json"
+export CHANGELOG_REGISTRY="$TMP/registry-none.json"
+
 cat >"$TMP/plan.json" <<'JSON'
 {
   "title": "Onboarding revamp",
@@ -741,6 +748,154 @@ check "#1290 which is the single issue milestone refusal" "SINGLE-ISSUE-MILESTON
 check_eq "#1290 filing nothing" "0" "$(issues_filed)"
 # The design map's own refusal has a code of its own, never one the milestone helper uses (L11).
 check_eq "#1290 the decision map refusal's code is not the single issue one" "1" "$([ "$rc" -ne 11 ] && echo 1 || echo 0)"
+
+# --- a repository that announces: the plan carries Dan's answer about announcing (claude-config#3669) ---
+# The plan's "announce" is "yes", "no" or "unasked". Yes and no are taken only when this Mac's record
+# of his answers holds that as his last answer about the feature, and the milestone's description
+# carries the decision as one line, which the merge gate reads when a pull request finishes it.
+ANN="$TMP/announce"; mkdir -p "$ANN/bin" "$ANN/yes" "$ANN/no"
+# A fake GitHub that keeps one milestone's description, so what was written can be read back.
+cat >"$ANN/bin/gh" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$GH_CALLS"
+if [ "${1:-}" = "issue" ] && [ "${2:-}" = "create" ]; then
+  echo "https://github.com/acme/widgets/issues/77"
+  exit 0
+fi
+desc=""; has_desc=0; one=0
+for a in "$@"; do
+  case "$a" in
+    description=*) desc="${a#description=}"; has_desc=1 ;;
+    repos/*/milestones/[0-9]*) one=1 ;;
+  esac
+done
+if [ "$has_desc" = 1 ] && [ -z "${GH_DROP_DESC:-}" ]; then printf '%s' "$desc" >"$GH_DESC"; fi
+if [ "$has_desc" = 1 ] || [ "$one" = 1 ]; then
+  if [ -n "${GH_ONE_FAILS:-}" ] && [ "$has_desc" = 0 ]; then echo "HTTP 500: server error" >&2; exit 1; fi
+  jq -n --rawfile d "$GH_DESC" '{number: 12, title: "Onboarding revamp", state: "open", html_url: "https://github.com/acme/widgets/milestone/12", description: $d}'
+  exit 0
+fi
+cat "$GH_FIXTURE"
+exit 0
+STUB
+chmod +x "$ANN/bin/gh"
+printf '{"repos": [{"name": "Widgets", "repo": "acme/widgets", "changelogFrom": "2026-01-01", "announceChannel": "C0000TEST02"}]}\n' >"$ANN/announces.json"
+printf '{"repos": [{"name": "Widgets", "repo": "acme/widgets", "changelogFrom": "2026-01-01", "announceChannel": "#announcements"}]}\n' >"$ANN/bad-channel.json"
+decided_line() { # decided_line <store> <feature> <yes|no> <said>
+  printf '{"kind": "decided", "source": "announce-discovery", "repo": "acme/widgets", "feature": "%s", "milestone": null, "answer": "%s", "said": "%s", "session": "s0", "picker": "p%s", "answered": "2026-11-26T15:00:00.000Z"}\n' "$2" "$3" "$4" "$RANDOM" >>"$1/record.jsonl"
+}
+decided_line "$ANN/yes" "Onboarding revamp" yes "Announce it"
+decided_line "$ANN/yes" "First run rework" yes "Announce it"
+decided_line "$ANN/no" "Onboarding revamp" no "Not announcing"
+YES_LINE='Announce to agents: yes (Dan answered "Announce it" on 2026-11-26)'
+NO_LINE='Announce to agents: no (Dan answered "Not announcing" on 2026-11-26)'
+UNASKED_LINE='Announce to agents: not asked yet'
+plan_with() { # plan_with <name> <jq filter over the three phase plan> ; prints the plan's path
+  jq "$2" "$TMP/plan.json" >"$ANN/$1.json"; printf '%s' "$ANN/$1.json"
+}
+# arun <milestones fixture> <plan>: the helper against the fake above. REG names the registry (default:
+# one where acme/widgets announces), STORE the record of his answers (default: an empty one), and WAS
+# what the milestone's description held before the run.
+arun() {
+  export GH_CALLS="$TMP/calls.log" GH_FIXTURE="$1" GH_DESC="$ANN/desc.txt"
+  : >"$GH_CALLS"; printf '%s' "${WAS:-}" >"$GH_DESC"
+  PATH="$ANN/bin:$PATH" CHANGELOG_REGISTRY="${REG:-$ANN/announces.json}" ANNOUNCE_APPROVALS_DIR="${STORE:-$ANN/empty}" bash "$SCRIPT" acme/widgets "$2" 2>&1
+}
+milestone_touched() { grep -c -- '-f title=\|-X PATCH' "$TMP/calls.log" 2>/dev/null; }
+
+out="$(arun "$TMP/none.json" "$TMP/plan.json")"; rc=$?
+check_eq "#3669 where the repository announces, a plan with no announce value is refused with a code of its own" "12" "$rc"
+check "#3669 naming the key and its three values" 'MISSING-ANNOUNCE' "$out"
+check "#3669 and where the value comes from" '"unasked"' "$out"
+check_eq "#3669 filing nothing" "0" "$(issues_filed)"
+check_eq "#3669 and leaving the milestone untouched" "0" "$(milestone_touched)"
+
+out="$(arun "$TMP/none.json" "$(plan_with unasked '.announce = "unasked"')")"; rc=$?
+check_eq "#3669 unasked needs nothing" "0" "$rc"
+check "#3669 and the helper says the line it wrote" "ANNOUNCE-LINE $UNASKED_LINE" "$out"
+check_eq "#3669 the milestone's description carries the plan's words and then the line" "Rework first-run experience.
+
+From /plan-council.
+
+$UNASKED_LINE" "$(cat "$ANN/desc.txt")"
+check_eq "#3669 every issue is filed" "3" "$(issues_filed)"
+
+out="$(arun "$TMP/none.json" "$(plan_with yes '.announce = "yes"')")"; rc=$?
+check_eq "#3669 R9 a yes the record does not hold is refused" "12" "$rc"
+check "#3669 R9 saying it is taken only as his own answer" "ANNOUNCE-NOT-HIS-ANSWER" "$out"
+check "#3669 R9 and how to ask him" "AskUserQuestion" "$out"
+check_eq "#3669 R9 filing nothing and leaving the milestone untouched" "0 0" "$(issues_filed) $(milestone_touched)"
+out="$(arun "$TMP/none.json" "$(plan_with no '.announce = "no"')")"; rc=$?
+check_eq "#3669 R9 and so is a no the record does not hold" "12 0" "$rc $(milestone_touched)"
+
+out="$(STORE="$ANN/yes" arun "$TMP/none.json" "$ANN/yes.json")"; rc=$?
+check_eq "#3669 a yes the record holds is taken" "0" "$rc"
+check_eq "#3669 and the description quotes his answer and its date" "Rework first-run experience.
+
+From /plan-council.
+
+$YES_LINE" "$(cat "$ANN/desc.txt")"
+check_eq "#3669 the line names no repository" "0" "$(grep -c 'acme' "$ANN/desc.txt")"
+out="$(STORE="$ANN/no" arun "$TMP/none.json" "$ANN/no.json")"; rc=$?
+check "#3669 a no the record holds is taken, quoting him" "ANNOUNCE-LINE $NO_LINE" "$out"
+out="$(STORE="$ANN/yes" arun "$TMP/none.json" "$ANN/no.json")"; rc=$?
+check_eq "#3669 R9 a no where his last answer was Announce it is refused" "12 0" "$rc $(milestone_touched)"
+check "#3669 R9 quoting what he answered" 'Announce it' "$out"
+out="$(STORE="$ANN/yes" arun "$TMP/none.json" "$ANN/unasked.json")"; rc=$?
+check_eq "#3669 R9 unasked is refused where the record holds his answer about that feature" "12 0" "$rc $(milestone_touched)"
+# The plan's title may differ from the name the picker asked him about.
+out="$(STORE="$ANN/yes" arun "$TMP/none.json" "$(plan_with renamed '.announce = "yes" | .title = "Onboarding redone" | .announce_feature = "First run rework"')")"; rc=$?
+check "#3669 the plan names the feature as the picker did when its title differs" "ANNOUNCE-LINE $YES_LINE" "$out"
+out="$(STORE="$ANN/yes" arun "$TMP/none.json" "$(plan_with renamed-bare '.announce = "yes" | .title = "Onboarding redone"')")"; rc=$?
+check_eq "#3669 R9 a title he was never asked about is refused" "12" "$rc"
+out="$(arun "$TMP/none.json" "$(plan_with maybe '.announce = "maybe"')")"; rc=$?
+check_eq "#3669 any other value is refused" "12 0" "$rc $(milestone_touched)"
+check "#3669 naming the three" '"yes", "no" or "unasked"' "$out"
+
+# A milestone that is already there has the line written into its description, which is kept.
+out="$(STORE="$ANN/yes" WAS="Old words." arun "$TMP/existing.json" "$ANN/yes.json")"; rc=$?
+check_eq "#3669 an existing milestone is reused" "0" "$rc"
+check "#3669 its description is written through GitHub's API" "-X PATCH repos/acme/widgets/milestones/3" "$(cat "$TMP/calls.log")"
+check_eq "#3669 keeping what it said and adding the line" "Old words.
+
+$YES_LINE" "$(cat "$ANN/desc.txt")"
+out="$(STORE="$ANN/yes" WAS="Old words.
+
+$YES_LINE" arun "$TMP/existing.json" "$ANN/yes.json")"; rc=$?
+check_eq "#3669 a description already carrying the line is not written again" "0 0" "$rc $(grep -c -- '-X PATCH' "$TMP/calls.log")"
+out="$(WAS="Old words.
+
+$NO_LINE" arun "$TMP/existing.json" "$ANN/unasked.json")"; rc=$?
+check_eq "#3669 unasked never replaces an answer the milestone already carries" "0 0" "$rc $(grep -c -- '-X PATCH' "$TMP/calls.log")"
+check "#3669 and says the line that stands" "ANNOUNCE-LINE $NO_LINE" "$out"
+# Written is not kept: the line is read back before any issue is filed.
+out="$(STORE="$ANN/yes" WAS="Old words." GH_DROP_DESC=1 arun "$TMP/existing.json" "$ANN/yes.json")"; rc=$?
+check_eq "#3669 a line GitHub did not keep stops the plan before any issue is filed" "12 0" "$rc $(issues_filed)"
+check "#3669 saying so" "ANNOUNCE-LINE-UNWRITTEN" "$out"
+out="$(STORE="$ANN/yes" GH_DROP_DESC=1 arun "$TMP/none.json" "$ANN/yes.json")"; rc=$?
+check_eq "#3669 and the same for a milestone just created" "12 0" "$rc $(issues_filed)"
+out="$(STORE="$ANN/yes" WAS="Old words." GH_ONE_FAILS=1 arun "$TMP/existing.json" "$ANN/yes.json")"; rc=$?
+check_eq "#3669 a description GitHub would not give stops the plan the same way" "12 0" "$rc $(issues_filed)"
+check "#3669 in its own words" "ANNOUNCE-LINE-UNREAD" "$out"
+# A dry run says what it would write and writes nothing.
+out="$(STORE="$ANN/yes" DRY_RUN=1 arun "$TMP/none.json" "$ANN/yes.json")"; rc=$?
+check "#3669 a dry run previews the line" "WOULD-WRITE-ANNOUNCE-LINE $YES_LINE" "$out"
+check_eq "#3669 and writes nothing" "0 0" "$(issues_filed) $(milestone_touched)"
+
+# A repository that does not announce is untouched: no value is asked for and no line is written.
+out="$(REG="$TMP/registry-none.json" arun "$TMP/none.json" "$TMP/plan.json")"; rc=$?
+check_eq "#3669 a repository that does not announce needs no announce value" "0 3" "$rc $(issues_filed)"
+check_eq "#3669 and its milestone carries no line" "0" "$(grep -c 'Announce to agents' "$ANN/desc.txt")"
+out="$(REG="$TMP/registry-none.json" STORE="$ANN/yes" arun "$TMP/none.json" "$ANN/yes.json")"; rc=$?
+check_eq "#3669 a value given there is not used" "0 0" "$rc $(grep -c 'Announce to agents' "$ANN/desc.txt")"
+check "#3669 and the helper says it was not" "ANNOUNCE-NOT-IN-USE" "$out"
+# Cannot tell is never "does not announce".
+out="$(REG="$ANN/absent.json" arun "$TMP/none.json" "$ANN/unasked.json")"; rc=$?
+check_eq "#3669 a registry that is missing files nothing" "12 0 0" "$rc $(issues_filed) $(milestone_touched)"
+check "#3669 saying whether the repository announces could not be told" "ANNOUNCE-UNREAD" "$out"
+out="$(REG="$ANN/bad-channel.json" arun "$TMP/none.json" "$ANN/unasked.json")"; rc=$?
+check_eq "#3669 and neither does a channel that is not a channel id" "12 0" "$rc $(milestone_touched)"
+check "#3669 named as what it is" "not a Slack channel id" "$out"
 
 echo
 echo "passed: $pass, failed: $fail"

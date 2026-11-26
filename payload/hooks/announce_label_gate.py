@@ -7,6 +7,11 @@ that an announcement merges only on wording he approved. This is the early refus
 ordinary command to put the label on a pull request is refused until he has, so the label is never
 sitting on wording nobody asked him about.
 
+One call is read and never refused for what it is (claude-config#3669): a Bash call naming the
+milestone helper, create-milestone.sh, and not the label. Before it runs, Dan's answers about whether
+a feature is announced to agents are read from the session's pickers into the record
+(approval.read_answers), where the helper's own question, which reads the record only, finds them.
+
 Judged here, each only when the command names the label:
   gh pr create --label, gh pr edit --add-label, gh issue edit --add-label (gh's issue edit answers
     for a pull request's number too)
