@@ -104,6 +104,7 @@ try:
 except ValueError:
     payload = {}
 pr = sys.argv[4] if len(sys.argv) > 4 else ""
+sys.stdout.reconfigure(errors="replace")
 json.dump(lib.check(sys.argv[2], sys.argv[3], payload, int(pr) if pr.isdigit() else None), sys.stdout)' "$@"
 }
 
