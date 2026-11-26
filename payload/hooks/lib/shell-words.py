@@ -1428,20 +1428,92 @@ def bare(s):
     return "".join(out)
 
 
+# Where a command written inside another starts or ends, for the crude cut (claude-config#3473): the
+# opener of a command or process substitution or of a subshell, a closing parenthesis, and a
+# backquote, which is both. Quotes and backslashes are not weighed: the cut is asked only where the
+# text could not be read, so which of them is live is exactly what is not known.
+CRUDE_EDGE = re.compile(r"\$\(|[<>=]\(|\(|\)|`")
+
+
+def after_a_name(text, at):
+    """Whether the `(` at text[at] is written straight after a name that is no reserved word.
+
+    Such a parenthesis starts no command in any shell. Measured 2026-11-26, each text run by bash,
+    zsh, dash and sh in an empty folder: `open(touch x)`, `f(touch x)`, `x=1(touch x)`,
+    `$x(touch x)` and `cat = open(touch x).read()` made no file in any of them. After a word that
+    only opens or continues a compound command it does: bash, dash and sh ran
+    `if(touch x); then :; fi`, and the same glued to then, else, elif, do, while and until, and bash
+    and sh after time. Those are RESERVED's words, the list the reader already looks past to reach a
+    command, so that one list answers here too. A name is letters, digits and underscores, the only
+    shapes measured: after a quote, a brace or a bracket the parenthesis is still taken to open.
+    """
+    i = at
+    while i > 0 and text[i - 1].isascii() and (text[i - 1].isalnum() or text[i - 1] == "_"):
+        i -= 1
+    return i < at and text[i:at] not in RESERVED
+
+
+def crude_inner(text):
+    """The stretches of one piece of the crude cut that may be commands of their own
+    (claude-config#3473): what follows each opener, closer or backquote, and what stands before a
+    closer or a backquote. The cut left a `$( )`, a pair of backquotes, a `<( )` and a subshell
+    whole, so `x=$(git push)` named no git command, and `(git push)` named the subcommand `push)`.
+
+    What follows a `)` is listed too, because the `)` of a case pattern has its arm's command after
+    it. The one stretch left out is the piece's start up to an opener: that is the head of the
+    command the piece itself is, which its own record already hands on, and listing it would give a
+    caller that counts commands the same one twice. Nothing blank is listed.
+
+    A backquote is not told as opening or closing: the cut splits `` `cd x; git push` `` in two, so
+    in a piece the first backquote may close what an earlier piece opened, and what stands before
+    it is then a command. So the start of a piece up to a backquote is listed even where that
+    backquote opens, `git push origin main `date``, and that command is given twice, once whole
+    and once without the words from the backquote on. Twice is the safe side of not at all.
+
+    A `(` written straight after a name is no edge (after_a_name): no shell starts a command there,
+    and listing what follows it handed a gate `"$1"` out of a heredoc's `open("$1")` as a command
+    the script runs, which it does not (L11). Only that `(` is passed over. Every `)` stays an
+    edge, the one that closes it too, because the parenthesis may be glued to a name inside a quoted
+    word, `x=$(git push origin "a(b")`, and the `)` after it then closes the substitution.
+    """
+    out, at, first = [], 0, True
+    for m in CRUDE_EDGE.finditer(text):
+        if m.group() == "(" and after_a_name(text, m.start()):
+            continue
+        part = text[at:m.start()]
+        if part.strip() and (not first or m.group() in (")", "`")):
+            out.append(part)
+        at, first = m.end(), False
+    if not first and text[at:].strip():
+        out.append(text[at:])
+    return out
+
+
 def crude_commands(s, cwd=""):
-    """The reading used when commands() cannot be trusted: a cut at every separator, quotes and all.
+    """The reading used when commands() cannot be trusted: a cut at every separator, quotes and all,
+    and after the pieces of that cut the commands that may be written inside one (crude_inner).
 
     It can only see MORE commands than are there, which is the direction a gate that must not miss a
     push needs (L42), and it keeps the cds in order, so the last one before a push still governs it.
+    The pieces are the ones it always gave, each with the text and the directory it always had, and
+    they come first, in the order they always had: a caller that reads the records in order and
+    stops at the first one that settles its question reaches every piece it reached before, and
+    reaches a command found inside one only where the pieces settled nothing. Put before the piece
+    that holds them, as commands() gives a substitution's, they would be the first command of a
+    text for a caller that asks how a text begins (lib/unknown-program.py's holds_command), and
+    could turn its answer either way. Each is given in its piece's directory, and a cd among them
+    moves nothing, so no caller is handed less, or anything in another place, than before
+    (claude-config#3473).
     """
-    out, old = [], None
+    out, found, old = [], [], None
     for text in re.split(r"&&|\|\||;|\||\n", s):
         if text.strip():
+            found.extend((cwd, inner) for inner in crude_inner(text))
             out.append((cwd, text))
             target = cd_target(text)
             if target is not None:
                 cwd, old = moved(cwd, old, target)
-    return out
+    return out + found
 
 
 def alone(text):
