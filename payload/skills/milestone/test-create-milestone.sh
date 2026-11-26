@@ -802,6 +802,10 @@ arun() {
   PATH="$ANN/bin:$PATH" CHANGELOG_REGISTRY="${REG:-$ANN/announces.json}" ANNOUNCE_APPROVALS_DIR="${STORE:-$ANN/empty}" bash "$SCRIPT" acme/widgets "$2" 2>&1
 }
 milestone_touched() { grep -c -- '-f title=\|-X PATCH' "$TMP/calls.log" 2>/dev/null; }
+# desc_line: the milestone's description on ONE line, each line break written as the two characters
+# \n, so a case that compares it prints a FAIL of one line (test-fail-margin.sh refuses a message
+# that goes on at the margin). Trailing line breaks are dropped first, as "$(cat ...)" drops them.
+desc_line() { printf '%s\n' "$(cat "$ANN/desc.txt")" | awk 'NR > 1 { printf "%s", "\\n" } { printf "%s", $0 }'; }
 
 out="$(arun "$TMP/none.json" "$TMP/plan.json")"; rc=$?
 check_eq "#3669 where the repository announces, a plan with no announce value is refused with a code of its own" "12" "$rc"
@@ -813,11 +817,7 @@ check_eq "#3669 and leaving the milestone untouched" "0" "$(milestone_touched)"
 out="$(arun "$TMP/none.json" "$(plan_with unasked '.announce = "unasked"')")"; rc=$?
 check_eq "#3669 unasked needs nothing" "0" "$rc"
 check "#3669 and the helper says the line it wrote" "ANNOUNCE-LINE $UNASKED_LINE" "$out"
-check_eq "#3669 the milestone's description carries the plan's words and then the line" "Rework first-run experience.
-
-From /plan-council.
-
-$UNASKED_LINE" "$(cat "$ANN/desc.txt")"
+check_eq "#3669 the milestone's description carries the plan's words and then the line" "Rework first-run experience.\n\nFrom /plan-council.\n\n$UNASKED_LINE" "$(desc_line)"
 check_eq "#3669 every issue is filed" "3" "$(issues_filed)"
 
 out="$(arun "$TMP/none.json" "$(plan_with yes '.announce = "yes"')")"; rc=$?
@@ -830,11 +830,7 @@ check_eq "#3669 R9 and so is a no the record does not hold" "12 0" "$rc $(milest
 
 out="$(STORE="$ANN/yes" arun "$TMP/none.json" "$ANN/yes.json")"; rc=$?
 check_eq "#3669 a yes the record holds is taken" "0" "$rc"
-check_eq "#3669 and the description quotes his answer and its date" "Rework first-run experience.
-
-From /plan-council.
-
-$YES_LINE" "$(cat "$ANN/desc.txt")"
+check_eq "#3669 and the description quotes his answer and its date" "Rework first-run experience.\n\nFrom /plan-council.\n\n$YES_LINE" "$(desc_line)"
 check_eq "#3669 the line names no repository" "0" "$(grep -c 'acme' "$ANN/desc.txt")"
 out="$(STORE="$ANN/no" arun "$TMP/none.json" "$ANN/no.json")"; rc=$?
 check "#3669 a no the record holds is taken, quoting him" "ANNOUNCE-LINE $NO_LINE" "$out"
@@ -856,9 +852,7 @@ check "#3669 naming the three" '"yes", "no" or "unasked"' "$out"
 out="$(STORE="$ANN/yes" WAS="Old words." arun "$TMP/existing.json" "$ANN/yes.json")"; rc=$?
 check_eq "#3669 an existing milestone is reused" "0" "$rc"
 check "#3669 its description is written through GitHub's API" "-X PATCH repos/acme/widgets/milestones/3" "$(cat "$TMP/calls.log")"
-check_eq "#3669 keeping what it said and adding the line" "Old words.
-
-$YES_LINE" "$(cat "$ANN/desc.txt")"
+check_eq "#3669 keeping what it said and adding the line" "Old words.\n\n$YES_LINE" "$(desc_line)"
 out="$(STORE="$ANN/yes" WAS="Old words.
 
 $YES_LINE" arun "$TMP/existing.json" "$ANN/yes.json")"; rc=$?
