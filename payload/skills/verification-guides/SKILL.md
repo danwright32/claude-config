@@ -130,7 +130,9 @@ there. Once the supervisor has removed that file, `stop` signals nothing, becaus
 by then be another program's: `stop_detail` names the groups it did not signal, and anything left
 of the run under them may still be running. Where one of those groups was serve's, `stop` exits 8
 with `serve-unconfirmed`, as it does for a run that was cut off with serve's group not signalled
-or not read: nothing has checked that the app is gone or its port free, so look before the next run.
+or not read, and for an ordinary stop whose `ps` failed or could not be started, which kills
+serve's group without listing it and records `egress` as `unmeasured` where the monitor would have
+said clean: nothing has checked that the app is gone or its port free, so look before the next run.
 
 The receipt's `egress` is the verdict of the egress monitor, [scripts/egress.py](scripts/egress.py),
 which the run's supervisor starts before serve and settles after serve's whole process group is
@@ -265,6 +267,8 @@ The runner's brief:
 >    For `guide`, write the new check and why. Judge every done when item too.
 > 5. Stop, always, also when something above failed:
 >    `python3 ~/.claude/skills/verification-guides/scripts/run_session.py stop <receipt id>`.
+>    When `stop` exits non zero, report its refusal word for word in your hand back and start no
+>    further run: the app may still be running and holding its port.
 > 6. Write the draft `{"receipt_id", "nonce", "areas": [{"area", "checks": [{"id", "result", "note", "blame"}], "done_when": [{"id", "result", "note"}], "screenshots", "guide_edits": [{"check_id", "new", "why"}]}]}`
 >    to `<scratchpad>/verify-<n>/draft.json`, render it with
 >    `python3 ~/.claude/skills/verification-guides/scripts/verification.py record render --pr-body <scratchpad>/verify-<n>/body.md < <scratchpad>/verify-<n>/draft.json > <scratchpad>/verify-<n>/comment.md`,

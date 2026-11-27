@@ -48,8 +48,8 @@ keeps a file beside the receipt, `recover-by-receipt`, from before it starts its
 removes it as its first act when it begins to end its children, in a stop and in a cut off alike:
 before the project's stop command, which is often what ends the app, and before any signal.
 Removing a file works on a disk with no room left, where nothing new can be written. While the
-file is there, the supervisor was killed outright and `stop` goes by the receipt's numbers. Once
-it is gone, the supervisor ended those groups itself or left, the numbers may be anybody's, and
+file is there, the supervisor was killed outright, or left having signalled nothing (the next
+paragraph), and `stop` goes by the receipt's numbers. Once it is gone, the supervisor ended those groups itself or left, the numbers may be anybody's, and
 `stop` signals nothing: it records the run as `recovered` and unmeasured, stop_detail names the
 groups it did not signal, and `stop` exits 8 as `serve-unconfirmed` where one of them was serve's,
 because the app may still be running. The price is a supervisor killed outright after it removed
@@ -58,12 +58,20 @@ its groups then is not ended by a later `stop`, and the receipt says so. A run s
 version of this file older than `recover-by-receipt` has no such file, and `stop` treats it the
 same way.
 
-A supervisor never signals or collects a child while, for all it can tell, that file is still
-whole (the fourth #3807 review). It waits DISK_WAIT_S for the removal, and when the system has
-not said in that time that the file is gone or emptied, a disk that hangs or refuses both, a
-supervisor that holds a child leaves at once with nothing signalled, nothing collected and no
-ending recorded, as if it had been killed outright. Its children keep their numbers, and a later
-`stop` ends them by the receipt. The cost is that the app runs on until that `stop`.
+A supervisor never signals or collects serve, or the report stream of a monitor that started,
+while, for all it can tell, that file is still whole (the fourth #3807 review). Those are the two
+numbers a receipt holds. (The monitor ends two children of its own with the file whole, a stream
+whose start failed and its beat program when a heartbeat fails; neither number is ever in a
+receipt, so no `stop` can signal one.) It waits DISK_WAIT_S for the removal, and when the system
+has not said in that time that the file is gone or emptied, a disk that hangs or refuses both, a
+supervisor that still holds a child leaves with nothing signalled, nothing collected and no ending
+recorded, as if it had been killed outright: after one log line and one flush, each given
+DISK_WAIT_S. Its children keep their numbers, and while the file is whole a later `stop` ends them
+by the receipt. The cost is that the app runs on until that `stop`, and one case is worse: a
+removal that lands after the wait is over leaves the file gone with nothing signalled, a later
+`stop` then signals nothing and exits 8, and the app is for a person to end. Once the system HAS
+said yes the supervisor remembers it and does not ask again (the fifth #3807 review), so a disk
+that begins to hang after a stop's first act does not stop a cut off from killing what it holds.
 
 The supervisor starts in a session of its own because the run must outlive `start`: `start`
 returns once serve is ready, and `drive` and `stop` come later from other processes, so in real use
@@ -195,7 +203,9 @@ ENDING = threading.Lock()
 # run it ("running" while it is), so that cutting the run off neither runs it twice nor skips it.
 STOP_COMMAND = {}
 # Held to signal the group a child of this process leads and to collect that child, so the two never
-# cross (see held). Never held across a wait.
+# cross (see held). Held across no wait that can hang: signal_own holds it while it waits at most
+# COLLECTING_WAIT_S for a Popen something else is collecting, and collect holds it across one
+# waitpid that does not wait. So nothing on a supervisor's way out waits on it for longer than that.
 PIN = threading.Lock()
 # The members of serve's group still alive when a stop in this process had dealt with it, by receipt
 # folder, read while serve was not yet collected, or None when ps could not list them. A cut off
@@ -456,17 +466,33 @@ def requested_reason(rdir, unrecorded="stop"):
 # number from the receipt only while that file is there and whole. Gone, empty or unreadable all
 # read as "no": every doubt falls on the side of signalling nothing.
 #
-# A SUPERVISOR NEVER SIGNALS OR COLLECTS A CHILD WHILE, FOR ALL IT CAN TELL, THE FILE IS STILL WHOLE
-# (the fourth #3807 review). Removing the file is a call to the disk, which can refuse and can also
-# hang, so the supervisor waits DISK_WAIT_S for it and goes on to its first signal only when the
-# system has said the file is gone or emptied. When that is not CONFIRMED, a supervisor that holds a
-# child LEAVES at once (leave_unended): it signals nothing, collects nothing, runs no stop command
-# and records no ending, exactly as if it had been killed outright. Its children then still hold
-# their own numbers, the file still says so, and a later `stop` ends them by the receipt. What that
-# costs: the app runs on until that `stop`. One case is no better than a supervisor killed
-# outright, which is main's own gap: a serve that had already exited is collected by the system the
-# moment the supervisor is gone, so unless something else in its group lives on, its number is free
-# with the file whole.
+# A SUPERVISOR NEVER SIGNALS OR COLLECTS SERVE, OR THE REPORT STREAM OF A MONITOR THAT STARTED, WHILE,
+# FOR ALL IT CAN TELL, THE FILE IS STILL WHOLE (the fourth #3807 review). Those are the two numbers
+# a receipt holds. The monitor has two children the rule does not cover, because their numbers are
+# in no receipt and no `stop` can signal them: a report stream whose start failed, and its beat
+# program, which egress.py ends whenever a heartbeat fails, at any time in a run. Removing the file
+# is a call to the disk, which can refuse and can also hang, so the supervisor waits DISK_WAIT_S for
+# it and goes on to its first signal only when the system has said the file is gone or emptied.
+# When that is not CONFIRMED, a supervisor that still holds a child LEAVES (leave_unended): it
+# signals nothing, collects nothing, runs no stop command and records no ending, exactly as if it
+# had been killed outright, after one log line and one flush of at most DISK_WAIT_S each. Leaving
+# kills the supervisor's own process group, which ends a ps or a git of its own still running. Its
+# children then still hold their own numbers, the file still says so, and a later `stop` ends them
+# by the receipt. What that costs: the app runs on until that `stop`. Two cases are no better
+# than that. One is main's own gap, a supervisor killed outright: a serve that had already exited
+# is collected by the system the moment the supervisor is gone, so unless something else in its
+# group lives on, its number is free with the file whole. The other is a removal that was asked
+# for, not answered in time, and lands late, in the supervisor's last waits or after it is gone:
+# the file is then gone with nothing signalled, a later `stop` signals nothing and exits 8, and
+# the app is for a person to end.
+#
+# A YES IS REMEMBERED (the fifth #3807 review). The removal is asked for once per process: when the
+# system has said the file is gone or emptied, forbid_recovery keeps the receipt folder in
+# FORBIDDEN and answers from there afterwards. The file cannot come back, since allow_recovery is
+# the one thing that makes it and it forgets the folder first. So a cut off that follows a stop in
+# the same supervisor does not go back to a disk that may by then be hanging: it kills the
+# children it holds, through signal_own, as the stop's own yes entitles it to. Before this, that
+# cut off left with the app running and the file gone, and nothing could ever end the app.
 
 
 def recover_path(rdir):
@@ -861,6 +887,11 @@ def do_stop(rdir, reason, proc=None, detail=None, monitor=None, egress_why=None,
     file is gone does none of the rest: it leaves (see leave_unended), and this returns None, which
     only a stand in for `leave` lets it do.
 
+    A stop that cannot read what is left of serve's group, because ps failed or could not be
+    started, kills the group while serve still pins it, records serve_survivors as None with the
+    reason in the detail, and never records a monitor's "clean": the egress verdict is then
+    unmeasured (see EGRESS_UNREAD), as it was on main, where that stop left no ending at all.
+
     `stop`, finding the supervisor gone with no ending, has no child to hold. While recovery_allowed
     it passes by_receipt, and it alone then signals the group numbers the receipt recorded, which
     nothing pins. Otherwise it passes neither, nothing is signalled, and serve_survivors is None
@@ -931,10 +962,13 @@ def do_stop(rdir, reason, proc=None, detail=None, monitor=None, egress_why=None,
 def end_held(rdir, proc, monitor):
     """SIGKILL the group of each child this supervisor still holds: its serve, and the report stream
     of its monitor. First, and here so that no caller can leave it out, forbid_recovery: once these
-    groups are killed their numbers come free, and no later `stop` may go by them. Never raises, and
-    waits on nothing but forbid_recovery's own short limit. Returns what signal_own said of each,
-    which is None for one that was not signalled because nothing pins its number any longer. Returns
-    None, with NOTHING signalled, when it holds a child and the file could not be confirmed gone:
+    groups are killed their numbers come free, and no later `stop` may go by them. Never raises.
+    Every wait in it has a limit: forbid_recovery's, which is the removal and one log line of
+    DISK_WAIT_S each, or nothing at all when this process already had the system's yes (see
+    FORBIDDEN); and for each of its two signals the wait for PIN and up to COLLECTING_WAIT_S for a
+    child something else is collecting. Returns what signal_own said of each, which is None for one
+    that was not signalled because nothing pins its number any longer. Returns None, with NOTHING
+    signalled, when it holds a child and the system has never told this process the file is gone:
     the caller then leaves (see leave_unended)."""
     if not forbid_recovery(rdir) and holds_a_child(proc, monitor):
         return None
@@ -956,12 +990,15 @@ def cut_off(rdir, reason, why, detail=None, proc=None, monitor=None, leave=None)
     uncollected (see held), and never by a number read from the receipt or by matching a command
     (L1011). A group whose child was already collected is NOT signalled: the receipt's detail says
     so, and that anything left of it may still be running, and says the same of a group the stop
-    had already dealt with and left survivors in. Serve is collected last, once its group has been
-    signalled and waited for. It runs the project's stop command if the stop had not, and removes
-    the worktree. Before its first signal it takes back the leave a later `stop` had to recover the
-    run by the receipt's numbers (see forbid_recovery), so a cut off that then cannot record its
-    ending leaves no number to be signalled. When it cannot confirm that, and holds a child, it does
-    none of the above: it leaves (see leave_unended) and this returns None.
+    had already dealt with and left survivors in, and of one the stop had killed without being able
+    to list it. Serve is collected last, once its group has been signalled and waited for. It runs
+    the project's stop command if the stop had not, and removes the worktree. Before its first
+    signal it takes back the leave a later `stop` had to recover the run by the receipt's numbers
+    (see forbid_recovery), so a cut off that then cannot record its ending leaves no number to be
+    signalled. A cut off that follows a stop in this process has that already, from the stop's own
+    first act, and the disk is not asked again (see FORBIDDEN). When the system has never told this
+    process the file is gone, and it holds a child, it does none of the above: it leaves (see
+    leave_unended) and this returns None. Nothing of the run has been signalled by it then.
 
     The receipt then says the run was cut off and why, and its egress is unmeasured. The monitor is
     never asked for a verdict here: a run that was cut off was not watched to its end, so no reading
@@ -1051,15 +1088,26 @@ def cut_off_and_leave(rdir, reason, why, proc=None, monitor=None, limit_s=None, 
     Whatever fails here, a log that cannot be written and a limit that cannot be set included, this
     ends in `leave`, and the children the supervisor still holds are killed before it does: once it
     has left, nothing else would ever end them (the second and third #3807 reviews). The one case
-    where they are NOT killed is a file that cannot be confirmed gone: the supervisor then leaves
-    with nothing signalled, and a later `stop` ends them by number (see leave_unended).
+    where they are NOT killed is a file the system has never told this process is gone: nothing of
+    the run has been signalled by it then, it leaves that way, and while the file is whole a later
+    `stop` ends them by number (see leave_unended). A removal the supervisor's own stop had
+    confirmed is remembered, so a disk that hangs afterwards does not turn this into that case (the
+    fifth #3807 review).
 
     NOTHING ON THE WAY OUT WAITS ON A FILE WITHOUT A LIMIT (the fourth #3807 review). The limit is
     set after one read given DISK_WAIT_S (stop_s, the default when the read has not answered), and
     `out` is the removal, at most two log lines and the flush in `leave`, each given DISK_WAIT_S,
-    and signals, which touch no file. So a disk that hangs delays the end by seconds and cannot
-    prevent it. What no code here can outwait is the system itself refusing to end a process that
-    is stuck inside it: that was not produced, and a stand in cannot show it."""
+    and signals, which touch no file. So at most four such waits follow the limit, and a disk that
+    hangs delays the end by seconds and cannot prevent it. Up to six more come BEFORE the limit is
+    set, on the lifeline's thread: three before the stop is even asked for (a log line, the write
+    of the reason, and a second line when that write failed), two before the cut off (the read of
+    the reason and a line when it cannot be read), and the read of stop_s here; one more line each
+    if waking the main thread or unblocking the stop signals fails. One thing in this
+    function is not bounded by a wait of its own: when the cut off raises, the text of the error is
+    worked out on this thread before the bounded log line, and that can read source lines from the
+    disk. The timer bounds it, unless starting the timer was what failed. What no code here can
+    outwait is the system itself refusing to end a process that is stuck inside it: that was not
+    produced, and a stand in cannot show it."""
 
     leave = leave or leave_now
 
@@ -1537,8 +1585,9 @@ def left_unsignalled(rec):
     detail = "the supervisor was gone and had recorded no ending"
     if groups:
         detail += ("; not signalled: %s. Nothing beside the receipt says a number in it is still this run's: the"
-                   " supervisor had begun to end its process groups itself, or had left by a cut off, before it"
-                   " was gone, or the run was started by a version of the harness that kept no such record. A"
+                   " supervisor had begun to end its process groups itself, in a stop or a cut off, before it was"
+                   " gone, or had asked for that record to be removed and left before the system answered, or the"
+                   " run was started by a version of the harness that kept no such record. A"
                    " number may by now be another program's, and anything left of the run under it may still be"
                    " running" % " and ".join(groups))
     return detail
@@ -1562,25 +1611,30 @@ def stop(rid):
                 if rec.get("stopped_at"):
                     pass  # another recovery got there first
                 elif recovery_allowed(rdir):
-                    # Killed outright before it began to end its children. By the numbers the
-                    # receipt recorded: this process has no child to hold, so nothing pins them
-                    # (see held). The one path that signals such a number.
+                    # Killed outright before it began to end its children, or left because the
+                    # system never told it the file was gone (see leave_unended), having signalled
+                    # nothing. By the numbers the receipt recorded: this process has no child to
+                    # hold, so nothing pins them (see held). The one path that signals such a number.
                     rec = do_stop(rdir, "recovered", detail="the supervisor was gone without stopping serve",
                                   by_receipt=True)
                 else:
                     # It had begun to end its children itself, in a stop or a cut off, and died or
-                    # left before it could record an ending; or the run was started by a version of
-                    # this file older than the supervisor's file. Either way nothing says the
+                    # left before it could record an ending; or a removal it had asked for and not
+                    # seen answered landed after it left; or the run was started by a version of
+                    # this file older than the supervisor's file. In each case nothing says the
                     # receipt's numbers are still this run's, so none is signalled.
                     rec = do_stop(rdir, "recovered", detail=left_unsignalled(rec), egress_why=EGRESS_LEFT)
     print(summary(rec))
     if rec.get("serve_survivors"):
         v.fail("serve-survived", "serve processes %s outlived the stop" % rec["serve_survivors"])
     if rec.get("serve_pgid") and rec.get("serve_survivors") is None:
-        # The run has an ending, and serve's group was neither signalled nor read when it was
-        # written: by a `stop` that could not go by the receipt's numbers, or by a cut off that no
-        # longer held serve or could not list its group. None is not "nothing left" (the fourth
-        # #3807 review). An ordinary stop records a list here, empty when all of serve went.
+        # The run has an ending, and serve's group was not signalled or could not be read when it
+        # was written: by a `stop` that could not go by the receipt's numbers, by a cut off that no
+        # longer held serve or could not list its group, or by an ordinary stop whose ps failed or
+        # could not be started, which killed the group unread. None is not "nothing left" (the
+        # fourth #3807 review). A healthy stop records a list here, empty when all of serve went.
+        # Each of those writes its reason into stop_detail, a cut off that follows a stop which had
+        # killed the group unread included (the fifth #3807 review).
         v.fail("serve-unconfirmed", "the run is recorded as ended (%s), and serve's process group (%s) was not"
                " signalled or could not be read when it ended, so the app may still be running and holding its"
                " port. stop_detail says why: %s" % (rec.get("stopped_by"), rec["serve_pgid"], rec.get("stop_detail")))

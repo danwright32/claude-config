@@ -1829,7 +1829,7 @@ class CutOffTests(RunFixture):
     # -- a `stop` that finds the supervisor gone signals the receipt's numbers only when the supervisor
     #    never began to end them itself (the third #3807 review) --
     #
-    # A supervisor that ended its own groups, or left by a cut off, leaves two numbers in the
+    # A supervisor that ended its own groups, or left by a cut off that ended them, leaves two numbers in the
     # receipt that are by then nobody's. No test below sends a signal to one: os.killpg and os.kill
     # are stand ins that record what was asked for.
 
