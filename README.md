@@ -11694,14 +11694,15 @@ with an action at a screen such as open, click, press or paste, #1811, a file ed
 tell me", "Tell me it's done", "Save the file" or "press Cmd+S", #1955, the two wordings of #3842
 that caught steps when counted, "One step left for you" and "the one only you can do", never one
 negated right before it or quoted) with no unfinished step on a card he can see is blocked once,
-telling Claude to check the step and pin it with the `steps` tool; never twice in one turn (the turn's own transcript
-shows the block), and never in a -p run. A transcript that cannot be read is said in the log, and
-the last message alone is judged, never twice in one chain of turn ends (`stop_hook_active`). A call
-the permission check refused in the turn (#3842) is judged whatever the reply says: it is read from
+telling Claude to check the step and pin it with the `steps` tool; never twice in one turn (the
+turn's own transcript shows the block), and never in a -p run. A transcript that cannot be read is
+said in the log, and the last message alone is judged, never twice in one chain of turn ends
+(`stop_hook_active`). A call the permission check refused in the turn (#3842) is judged
+whatever the reply says: it is read from
 the session record's own `toolDenialKind` (`automode-blocked` alone, never no verdict, a hook's or a
 rule's refusal, or a prompt Dan declined), and with no call of the `steps` tool after it the turn is
-blocked once, in about 40 words since Dan reads them too, telling Claude to put what the refusal left
-for Dan on the steps card or to say in one line that nothing from it is his ("Nothing from the
+blocked once, in about 40 words since Dan reads them too, telling Claude to put what the refusal
+left for Dan on the steps card or to say in one line that nothing from it is his ("Nothing from the
 refusal is yours to do."). Three things answer it: a step the main conversation pins after the
 refusal, that line, and the line that answers every ask of this check, "None of these steps are
 yours to do now." A subagent's refusal is in its own
