@@ -188,6 +188,101 @@ script 'run() {' '  kept=posts.sh' '  read -r kept' '  bash "$kept"' '}' 'run'
 judge_script
 allowed "a name the function reads in after setting it is not followed, as before"
 
+echo "slack drafts only: a script that runs itself in a function is not read a second time, and anything else is read as before (claude-config#3497)"
+
+# test-pipefail-shortcircuit.sh runs itself inside a function (`sc_run(){ ... bash
+# "${BASH_SOURCE[0]}" 2>&1; }`). Once a function's values were written out, the gate read that
+# suite a second time, as a file it runs, and that reading is made with the directory unknown (a
+# function runs wherever it is called from), so the path on the suite's own first source line,
+# built from `cd ... && pwd` on its BASH_SOURCE, could not be worked out there: refused as a check
+# the gate could not make, four times in the 61,284 commands this Mac had recorded, where main
+# passed all four (measured 2026-11-26 at 47094abfaa). The file is the one being read, handed
+# nothing, by the same shell, in the same folder: a second reading of it can find nothing the first
+# does not. So that one command is left out of the wider reading, and only that one. Each control
+# below is a neighbour that is still read, and was seen to fail with the leaving out made too wide
+# (red-3.txt in the builder's notes).
+IDIOM='. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/quiet.sh" || exit 1'
+ONCE='if [ -z "${NESTED:-}" ]; then'
+COULD_NOT="REFUSED: the gate could not check whether this command posts to Slack"
+mkdir -p "$FV/other"
+ln -s ../case.sh "$FV/other/alias.sh"
+printf '%s\n' 'echo hi' > "$FV/step.sh"
+cp "$FV/posts.sh" "$FV/lib/step.sh"
+cp "$FV/posts.py" "$FV/lib/json.py"
+
+script "$IDIOM" 'again() { NESTED=1 SEEN="$PWD" bash "${BASH_SOURCE[0]}" 2>&1; }' "$ONCE" '  again' 'fi' 'echo done'
+judge_script
+allowed "a script that runs itself in a function, by its own BASH_SOURCE, passes"
+script "$IDIOM" 'again() {' '  self=./case.sh' '  NESTED=1 bash "$self"' '}' "$ONCE" '  again' 'fi'
+judge_script
+allowed "a script that runs itself in a function, by another spelling of the same path, passes"
+
+# What main reads, it reads still: the script run again at its top level, where the directory is
+# known and the second reading works line 1 out, and the script named by a literal path in a
+# function, which main refuses and this change does not touch (it is the first reading's).
+script "$IDIOM" "$ONCE" '  NESTED=1 bash "${BASH_SOURCE[0]}"' 'fi'
+judge_script
+allowed "the control: a script that runs itself at its top level passes, as on main"
+script "$IDIOM" 'again() { NESTED=1 bash case.sh; }' "$ONCE" '  again' 'fi'
+judge_script
+refused "the control: a script that runs itself in a function by a literal path is refused, as on main"
+says "the control: as a check it could not make, as on main" "$COULD_NOT"
+
+# A different file is followed, beside the same first line.
+script "$IDIOM" 'run() {' '  kept=posts.sh' '  bash "$kept"' '}' 'run'
+judge_script
+refused "a script whose function runs a different file that posts is refused"
+says "a different file: as the post it is" "$POSTS"
+
+# Itself reached through another file: that file is followed, and what it runs.
+printf '%s\n' "$ONCE" '  NESTED=1 bash case.sh' 'fi' 'bash posts.sh' > "$FV/back.sh"
+script 'run() {' '  other=back.sh' '  bash "$other"' '}' 'run'
+judge_script
+refused "a script that reaches itself through another file, which also posts, is refused"
+says "through another file: that file is the one read" "the script back.sh runs a command that posts"
+says "through another file: as the post it is" "$POSTS"
+printf '%s\n' "$ONCE" '  NESTED=1 bash case.sh' 'fi' 'echo back' > "$FV/back.sh"
+script "$IDIOM" 'run() {' '  other=back.sh' '  bash "$other"' '}' 'run'
+judge_script
+refused "a script that reaches itself through another file is followed through that file, as before"
+says "through another file: the script is read again from there" "the script back.sh runs a command that posts: the script case.sh"
+rm -f "$FV/back.sh"
+
+# The same file by a name the gate cannot prove is the same: a symlink in another folder, beside
+# which `dirname` finds another lib. Read as before.
+script "$IDIOM" 'again() {' '  self=other/alias.sh' '  NESTED=1 bash "$self"' '}' "$ONCE" '  again' 'fi'
+judge_script
+refused "a script that runs itself in a function through a symlink in another folder is read as before"
+says "through a symlink: read by that name" "the script other/alias.sh"
+
+# Handed a word, it is not the reading already made: the word is a file it runs.
+script 'again() {' '  arg=posts.sh' '  bash "${BASH_SOURCE[0]}" "$arg"' '}' 'if [ -n "${1:-}" ]; then' '  bash "$1"' 'else' '  again' 'fi'
+judge_script
+refused "a script that hands itself a file that posts, in a function, is refused"
+
+# By another shell, or with its input given: as before.
+script "$IDIOM" 'again() { NESTED=1 zsh "${BASH_SOURCE[0]}"; }' "$ONCE" '  again' 'fi'
+judge_script
+refused "a script a function hands to another shell is read as before"
+script "$IDIOM" 'again() { NESTED=1 bash "${BASH_SOURCE[0]}" < lib/quiet.sh; }' "$ONCE" '  again' 'fi'
+judge_script
+refused "a script a function runs with its input given is read as before"
+
+# After the script wrote a file, changed folder or exported where Python looks, a second run of it
+# is not the reading already made: each of these posts only the second time round.
+script 'bash gen.sh' 'cp posts.sh gen.sh' 'again() { NESTED=1 bash "${BASH_SOURCE[0]}"; }' "$ONCE" '  again' 'fi'
+judge_script
+refused "a script that writes a file that posts, then runs itself in a function, is refused"
+says "after a write: the file written is the one named" "gen.sh"
+script 'bash step.sh' "set_it() { self=$FV/case.sh; }" "$ONCE" '  set_it' '  cd lib' '  NESTED=1 bash "$self"' 'fi'
+judge_script
+refused "a script that changes folder, then runs itself through a name a function sets, is refused"
+says "after a cd: the file found in the new folder is the one named" "step.sh"
+script "python3 -c 'import json'" 'export PYTHONPATH=lib' 'again() { NESTED=1 bash "${BASH_SOURCE[0]}"; }' "$ONCE" '  again' 'fi'
+judge_script
+refused "a script that exports where Python looks, then runs itself in a function, is refused"
+says "after an export: the module found there is the one named" "which imports json"
+
 echo "slack drafts only: the values a function's bodies set are worked out once for a script (claude-config#3497)"
 
 # The work, counted, which no load can move (L290). The first build of this change worked each

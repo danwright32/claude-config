@@ -25,11 +25,25 @@ Not read by it: a name several bodies set to different values, a name anything e
 binds (the walk gives no value in a body for one), and a function called after a cd, whose
 relative path is then read against the directory the reader follows, as one written out is.
 
+Nor is one command read by it: a shell handed the script being read, and nothing else
+(own_again). A suite that runs itself inside a function (`sc_run(){ ... bash "${BASH_SOURCE[0]}"
+2>&1; }` in test-pipefail-shortcircuit.sh) was read a second time as a file it runs, with the
+directory unknown, as it is for every command of a function, so the path on the suite's own first
+source line, built from `cd ... && pwd` on its BASH_SOURCE, could not be worked out there, and the
+command that runs the suite was refused: 4 of this Mac's 61,284 recorded commands, none refused on
+main (measured 2026-11-26 at 47094abfaa). That second reading is of the text being read, by the
+same shell, from the same folder, handed nothing, with nothing written or exported since the first
+began, so it holds no command the first does not judge. It is left out only here, in the reading
+this file adds: the same script named by a literal path in a function is the first reading's, and
+is refused as it is on main.
+
 Each function takes the gate's Judge as its first argument: these are its readings, kept out of
 slack_drafts_only_gate.py only so that file does not grow.
 """
 import bisect
+import os
 import re
+import shlex
 
 
 class Kept:
@@ -162,13 +176,76 @@ def wider_words(judge, taken):
     return in_body(judge), var
 
 
+# What a word holds where the shell works it out as it runs: a variable, a substitution of either
+# kind, or a process substitution.
+WORKED = re.compile(r"[$`()]")
+
+
+def chain(path):
+    """The names a path goes through, in order, with each "." and doubled slash left out, or None
+    where one of them is "..". Two paths with one chain are one file reached one way, so the folder
+    beside each is the same folder. Two paths with one real path need not be: a symlink to a script
+    from another folder runs that script with another folder's lib beside its BASH_SOURCE."""
+    names = [n for n in path.split("/") if n not in ("", ".")]
+    return None if ".." in names else names
+
+
+def own_again(judge, wider, d):
+    """Whether the command wider, a command as the wider reading wrote it out, does nothing but run
+    the script being read once more, as the reading under way reads it (module docstring). Every
+    part of that is asked, and the command is read as before where any is not so:
+
+      * the text being read is a script on disk that a command ran (not a sourced file, a string
+        or the command line), and the shell reading it is known;
+      * the command stands in the folder that script was started in, nothing has been exported
+        for Python since, and no earlier command of the call wrote, built or checked out a file
+        (the same list a script found clean is kept under, script()): after any of those the
+        script's own commands can name other files than they did the first time;
+      * its words are a shell and one file, each written out, with nothing but a redirection of
+        what it prints: a word handed to the script is a file it may run, and its input is code a
+        shell may read;
+      * that shell is the one reading the script, by the gate's own naming of it (reading_shell);
+      * the file is the script by the same chain of names (chain), not only the same real path."""
+    ctx = judge.shell
+    ran = ctx.get("ran")
+    if not ran or ran[1] is None or not ctx.get("on_disk") or not ctx.get("program"):
+        return False
+    if (d or "") != (ctx["cwd"] or "") or judge.exported is not None:
+        return False
+    if (judge.made or judge.made_dirs or judge.made_unknown or judge.made_maybe or judge.made_code
+            or judge.made_git or judge.made_built):
+        return False
+    words, toks, i = [], judge.sh_tokens(wider), 0
+    while i < len(toks):
+        kind, raw = toks[i]
+        if kind == "op":
+            # Only a redirection of its output, to a place no command works out as it runs.
+            if ">" not in raw or "<" in raw or i + 1 >= len(toks) or re.search(r"[`()]", toks[i + 1][1]):
+                return False
+            i += 2
+            continue
+        try:
+            word = [] if WORKED.search(raw) else shlex.split(raw)
+        except ValueError:
+            return False
+        if len(word) != 1:
+            return False
+        words.append(word[0])
+        i += 1
+    if len(words) != 2 or judge.reading_shell(os.path.basename(words[0]), False, "") != ctx["program"]:
+        return False
+    mine, theirs = judge.resolve(ran[1], ctx["cwd"]), judge.resolve(words[1], d)
+    return chain(mine) is not None and chain(mine) == chain(theirs) and os.path.realpath(theirs) == ran[0]
+
+
 def wider_reason(judge, text, d, placed, judge_again):
     """The reason the command text posts when read with a function's values written out, or None.
     placed is the second reading's text, which this one is not made again for; judge_again(text)
-    judges a command as written."""
+    judges a command as written. A command that only runs the script being read once more is not
+    judged again (own_again)."""
     taken = []
     wider = judge.sh_placed(text, d, taken)
-    if not wider or wider == placed:
+    if not wider or wider == placed or own_again(judge, wider, d):
         return None
     reason = judge_again(wider)
     if not reason or not taken:

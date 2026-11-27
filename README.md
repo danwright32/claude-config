@@ -5440,7 +5440,15 @@ after the call or in another function, is read with that one value, and a refusa
 says the check could not be made, since the function may not have run. Each is a further reading,
 made only where the ones before it found nothing, so it can only refuse more. Not read: a name
 several functions set to different values, a name anything else in the text binds, and a function
-called after a cd, whose relative path is read against the directory the reader follows.
+called after a cd, whose relative path is read against the directory the reader follows. One
+command is left out of that further reading: a shell handed the script being read and nothing else
+(`sc_run(){ bash "${BASH_SOURCE[0]}" 2>&1; }` in a suite that runs itself), where a second reading
+of the same text can find nothing the first does not, and refused the suite over a path it could
+not work out with the directory unknown. It is left out only where the gate can show the second
+run is the reading under way: the same file by the same chain of names, the same shell, the same
+folder, no word handed to it, no input given, and nothing written or exported since the script
+began. Anything else is read as before, and the same script named by a literal path in a function
+is refused as it is on main.
 
 The same change holds the gate's own reading of what a heredoc feeds a program (`Judge.fed`,
 `payload/hooks/lib/heredoc-fed.py`) to where bash 3.2 and zsh end the body: only at a line that is
