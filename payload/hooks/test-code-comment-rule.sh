@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Tests for the code comment standard (claude-config#3857).
 #
-# The standard has one home, the "Code comments" entry under "## Code Standards" in the global
-# CLAUDE.md, and one reader of every push, the item of lib/ai-review-prompt.txt about a description
-# that no longer matches the code. This suite holds both files to it:
+# The standard lives in the "Code comments" entry under "## Code Standards" in the global
+# CLAUDE.md, and the item of lib/ai-review-prompt.txt about a description that no longer matches
+# the code asks each push's review for it. This suite holds both files to it:
 #   1. the entry is in the file once, inside the Code Standards section, and states each rule;
 #   2. that item of the review prompt keeps its number and what it already asked, and also asks for
 #      a comment the change adds that tells the history of the change or states a count or a list
