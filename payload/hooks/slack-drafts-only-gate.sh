@@ -95,6 +95,12 @@ RUNS+='|[[:space:]]-(exec|execdir|ok|okdir)[[:space:]]'
 # NODE_OPTIONS set for any program, which loads the modules it names in every node that program
 # starts (claude-config#2912).
 RUNS+='|NODE_OPTIONS'
+# The other variables that have an interpreter load a file as it starts, set for any program
+# (claude-config#3675): `export BASH_ENV=posts; make` names no script, shell or interpreter, so with
+# a file of no extension the call never reached python3. ENV counts only as a name of its own.
+# HOME= is sent there already, further down.
+RUNS+='|PYTHONPATH|PYTHONUSERBASE|RUBYOPT|RUBYLIB|PERL5OPT|PERL5LIB|BASH_ENV|ZDOTDIR|BUN_OPTIONS|NODE_REPL_EXTERNAL_MODULE|NODE_PATH'
+RUNS+='|(^|[^A-Za-z0-9_]|\\[nrt])ENV\+?='
 # eval, which runs text it is handed: `eval "$(cat cmd.txt)"` names no script, shell or interpreter,
 # so it went unjudged whatever the file held (claude-config#3020).
 RUNS+='|(^|[^A-Za-z0-9_]|\\[nrt])eval([^A-Za-z0-9_.]|$)'

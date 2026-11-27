@@ -201,10 +201,10 @@ read than runs: -E and -I have python3 ignore both, and PYTHONSTARTUP runs only 
 else to run.
 
 WHAT THAT DOES NOT COVER. A value of either variable that the session's own environment holds and
-the command did not set. The other ways an interpreter loads code as it starts, each measured on
-2026-11-25 as run and as allowed where the file posts: sitecustomize.py and usercustomize.py in a
-folder PYTHONPATH names, RUBYOPT (-r), PERL5OPT (-M), BASH_ENV, ENV for a shell given -i, and
-.zshenv in the folder ZDOTDIR names.
+the command did not set. The other ways an interpreter loads code as it starts (sitecustomize.py
+and usercustomize.py in a folder PYTHONPATH names, RUBYOPT, PERL5OPT, BASH_ENV, ENV for a shell
+given -i, and .zshenv in the folder ZDOTDIR names) are read by startup_loads in
+lib/code-loaders.py since claude-config#3675.
 """
 import ast
 import os
