@@ -53,10 +53,13 @@
 #     a session (9,491 of them, before, between and after), and the variable in a command run
 #     after both compactions was that same id; one transcript written by two versions of Claude
 #     Code (2.1.327, then 2.1.332), which only a restart of the process can produce, carried one
-#     id on all 121,546 such lines. So a session is the same session after a compaction and after
-#     a restart (claude --resume or --continue of that session). The variable itself was not read
-#     in a restarted session, only the id its transcript went on under. Not the same session: a
-#     /clear, which starts a new conversation under a new id (measured on 2.1.292, see
+#     id on all 121,546 such lines. So a session is the same session after a compaction, and its
+#     transcript goes on under one id after a restart (claude --resume or --continue of that
+#     session). The variable itself was not read in a restarted session, so that this script sees
+#     the same session after a restart is taken from the transcript and not measured. If a
+#     restarted session were given a new id, its earlier claims would read HELD to it, as they do
+#     after a /clear: wrong for that session, and nobody else is let in by it. Not the same
+#     session: a /clear, which starts a new conversation under a new id (measured on 2.1.292, see
 #     mods/session-registry/hooks/register.ts, claude-config#751), and a fork of a session.
 #   - What is posted is a short name made from the id, the first 12 hex digits of its SHA-256, never
 #     the id itself: the issue is public, and the id is the name of the session's transcript file.

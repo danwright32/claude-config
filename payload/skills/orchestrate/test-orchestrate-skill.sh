@@ -218,11 +218,16 @@ check "#3317 a read only item needs no claim" "$(holds "$claiming" 'needs no cla
 check "#3788 the skill says which pull requests hold an issue" "$(holds "$claiming" 'the open pull requests built for it' 'no built for wording')"
 check "#3788 the skill says a mention is a note that holds nothing" "$(holds "$claiming" '`mentioned, not held`' 'no mentioned, not held wording')"
 # claude-config#3804: two sessions on one Mac are two claimants. The skill says what a session is
-# to the script and that it is the same one after a compaction or a restart, that ALREADY CLAIMED
+# to the script and that it is the same one after a compaction, that ALREADY CLAIMED
 # means this session's own claim, what makes a branch under the claimed name this session's, and
 # how a claim that names no session is taken over on purpose.
 check "#3804 the skill says what identifies the claiming session" "$(holds "$claiming" 'CLAUDE_CODE_SESSION_ID' 'no word of what identifies a session')"
-check "#3804 the skill says a session is the same after a compaction and a restart" "$(holds "$claiming" 'the same after a compaction and after a restart' 'no word of a compaction and a restart')"
+check "#3804 the skill says a session is the same after a compaction" "$(holds "$claiming" 'it is the same after a compaction, and a new one after a `/clear`' 'no word of a compaction')"
+# A restart is said as far as it was measured, and no further: the transcript went on under one
+# id, and the variable the script reads was not read in a restarted session (the lessons review of
+# the second round of review fixes).
+check "#3804 the skill says what was measured after a restart, and what was not" "$(holds "$claiming" 'the variable itself was not read in a restarted session' 'no word that the variable was not read after a restart')"
+check "#3804 the skill says what a restarted session meets if its id changed" "$(holds "$claiming" 'A restarted session that is told `HELD` by a claim it posted has been given a new id' 'no word of a restarted session held by its own claim')"
 check "#3804 the skill says ALREADY CLAIMED is this session's own claim" "$(holds "$claiming" "\`ALREADY CLAIMED\` is this session's own claim" 'no word that ALREADY CLAIMED is this session alone')"
 check "#3804 the skill says another session on the same Mac is held" "$(holds "$claiming" 'another session on the same Mac' 'no word of two sessions on one Mac')"
 check "#3804 the skill says what makes a branch under the claimed name this session's" "$(holds "$claiming" 'accounts for it' 'no word of what makes a branch this session own')"

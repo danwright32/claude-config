@@ -668,9 +668,9 @@ for mode in claim check; do
   is "#3804 $mode by the session that holds the claim: nothing posted" 0 "$(posted_count)"
 done
 
-# A session is the same session after a restart or a compaction: Claude Code gives it the same id
-# (measured, see the script's header), so a second run of the script, which is a new process each
-# time, finds the claim the first one posted.
+# A session is the same session after a compaction: Claude Code gives it the same id (measured, see
+# the script's header, which also says what was and was not measured after a restart), so a second
+# run of the script, which is a new process each time, finds the claim the first one posted.
 new_case
 run claim "$REPO" 3317 "$MINE"
 has "#3804 first run: claimed" "CLAIMED:" "$out"
