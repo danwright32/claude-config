@@ -5976,7 +5976,8 @@ personal MacBook, ten readings each taken in turn at a load of 37 to 103: 5.61 s
 before, 5.33 s and 53.7 after (the middle readings, a unit 0.100 s). No limit was changed with it.
 The limits were set again on 2026-11-23, to 67 units on macOS and 91 off it (Dan's choice, the
 highest reading on each platform plus 15 percent; the comment above them in the gate's suite
-holds the readings).
+holds the readings). Since 2026-11-26 the Linux limit is 83.2 units of the median yardstick sample
+rather than 91 of the least (#3406, below); macOS keeps 67 of the least.
 Suite: `test-slack-drafts-held-once.sh`, which holds each reading by a count and saw each count
 fail on the gate as it was.
 
@@ -6068,17 +6069,42 @@ through that run, and that run's `part-unmeasured-<n>` records, whose retention 
 parts, is skipped and never read as measured; fewer than 5 readable trees in main's newest 20 is a
 warning that the streak was not measured, never a pass. Suite: `tools/test-ci-cold-cost-streak.sh`.
 
+On Linux the cold check divides every reading by the MEDIAN of all the yardstick samples the case
+took, not the least, and its limit is 83.2 units (#3406, Dan's choices of 2026-11-26 from pickers,
+"3.65.1 Median, limit 83.2, Linux only (Recommended)" and "3.71.1 Whole run median
+(Recommended)"). After each judgement every reading so far is divided again by the median of every
+sample taken so far, and the check stops only when one of those figures is at or under the limit;
+no sample is taken after it stops, so the figures it stopped on are the ones the record prints and
+the verdict reads. Read from 139 pull request run attempts of
+2026-11-25 and 2026-11-26: by the least sample 16 read past 91 on the same gate work, each with a
+first judgement that ran out of the gate's seconds. A judgement takes 7 to 15 s and spans the
+runner's slow and fast spells alike, while the least of the 0.1 s yardstick samples catches only
+its fastest moment. 83.2 keeps the room 91 had above the median passing reading (1.178 times it,
+70.6 by the median). macOS keeps the least sample and 67, since nothing was read on a Mac, and every
+other cost check keeps the least sample. Where the unit is set is `cost_unit` in the gate's suite,
+beside `cost_limit`; `cost.py` takes it as `SLACK_GATE_COST_UNIT`, and the record says `median of N`
+for each reading in place of `from N`, N being every sample the case took. Judged this way, those
+139 run attempts give 137 green, none red, and 2 that cannot be told: runs 45752799634 and
+45825401342 read 85.1 and 84.0 on their one reading, and the check would now take readings CI never
+took. The suite replays CI's own records of that day through `cost.py`
+(`payload/hooks/slack-drafts-cost-fixtures/ci-cold-records.jsonl`): reds by the least sample now
+pass, greens stay green, and a made up record 20 percent dearer than the median passing reading
+fails. Each is replayed by the least sample and 91 too, and must give CI's own verdict. The
+unmeasured rule above and the streak are unchanged.
+
 Some CI runners still read a few cost cases over their limits with the gate unchanged (#3170: 4 of
 127 runs from 2026-11-20 to 2026-11-21), and the logs could not say why: they held each case's
 reading in units, but the yardstick and the seconds only for one case, and only the least yardstick
 sample. Dan's decision on 2026-11-21, from a picker, was "Measure more first": no limit, sample count
 or yardstick changes until a few days of runs can be read. So since then every cost case records,
 on every run, the gate's processor seconds for each reading, the yardstick each reading was divided
-by (the least of the samples taken by then, and how many), every yardstick sample the case took, and
+by (the least of the samples taken by then, or the median of all of them for the cold check on
+Linux since #3406, and how many), every yardstick sample the case took, and
 their least, median and greatest. They are on each `cost measured (#2918)` line, and a passing run
 shows them in the suite's two notes. Nothing is judged by them: a case is still judged by its least
 reading against its limit, and the suite checks, with `tools/gate-cost-rows.py check`, that each
-reading is its seconds over the least sample taken by then, so a verdict taken from any figure
+reading is its seconds over the sample its record names (the least of those taken by then, or the
+median of all the case took), and that each case names the sample `cost_unit` gives it, so a verdict taken from any figure
 printed beside it fails. No extra yardstick is timed for this; the figures are the ones each case
 already took. `python3 tools/gate-cost-rows.py rows <saved logs>` prints one row per case per run
 from any of the three shapes. And a suite that fails and then passes its recheck now has its first
@@ -6395,6 +6421,67 @@ names were measured on the personal MacBook only. Suites: `test-db-write-ask.sh`
 
 The auto mode settings themselves (`autoMode` in `settings.json`, with its `soft_deny` and
 `environment` lists) are per Mac: the sync carries neither, so each Mac's copy is corrected on that Mac.
+
+## Connector deletes and live changes ask Dan first
+
+Dan decided on 2026-11-25 that a connector tool that deletes something or changes a live setting in
+Regal, Better Stack or Cal waits for his yes ("Ask before live deletes and changes"), and that the
+other writes on those connectors stay with auto mode's check ("Keep it to deletes (Recommended)").
+`hooks/connector-change-ask.sh` (#3618) answers "ask" from a PreToolUse hook that runs on every MCP
+call, as `db-write-ask.sh` does for database writes. The rule is `hooks/lib/connector-changes.py`:
+
+- Which server: matched by a part of its name, since one connector is reached under more than
+  one server name: the name holds `regal`; or it holds `betterstack` once everything but letters and
+  digits is taken out; or one whole word of it is `cal` or `calcom`, so Google Calendar is not Cal.
+- Which tool: one whose own name holds `delet`, `remov`, `cancel`, `reset` or `paus`, anywhere
+  in it, and on Regal also `update-journey`, `update-campaign`, `save-agent-live` and
+  `update-routing-rule-set`, however their words are joined. A read whose name holds one of the five
+  (a list of presets, say) asks too, which is the harmless side to be wrong on. Every other tool of
+  those servers, and every other server, passes in silence: reads, creates and ordinary updates.
+- The question names the connector, the tool, what it does by its name, and what it was called
+  with (the first 300 characters).
+- While sleep mode is on the call is refused, with the reason, and nothing is asked. An ask
+  alone would not hold at night: sleep mode refuses a claude.ai connector's write tools itself, but
+  answers an enrolled session's own permission prompt yes for any other server, which is where a
+  plugin's server sits (read in `mods/scope-modes/hooks` on 2026-11-26).
+- What it cannot read it asks about, or refuses at night: a name on one of these servers with no
+  tool after it; a payload that is not a tool call whose text names a tool the rule asks about, or
+  names one of the three connectors anywhere but in a tool name it holds whole, since a whole name
+  that asks nothing does not vouch for one cut short after it; and, with the library that holds the
+  rule missing or failing, every call to a server whose name holds regal, better or cal, a read
+  included, saying what is missing. Its registration carries `onFailure` block.
+- When it cannot tell whether Dan is asleep (`lib/sleep.sh` is missing, or python3, which reads
+  both the rule and the sleep record), it refuses every such call and does not ask, saying which is
+  missing: a question is the one answer sleep mode can say yes to at night.
+
+It is a hook and not the `permissions.ask` rule the issue's text names, because the sync carries no
+ask rule to either Mac. The one permission setting it shares is `permissions.deny`, for a fixed
+list of rules (#3686), and an ask rule in `settings.shared.json` makes the pull refuse that whole
+file, saying such a rule stays each Mac's own (read in `claude-sync` on 2026-11-26). Measured on the
+personal MacBook on 2026-11-26, one run each, in a throwaway folder, before the deny rules were
+shared: an ask rule added to `settings.shared.json` made the pull refuse that whole file,
+so none of the other shared settings were applied either, and a `permissions` key in
+`settings.hooks.json` was dropped with nothing said. Carrying an ask rule means a new entry on the
+sync's list of shared settings, which is Dan's to sign off and has not been made. A hook already reaches
+both Macs, can match a server by a part of its name, and its matching can be run by handing it a
+call.
+
+What it costs, since it runs on every MCP call (personal MacBook, 2026-11-26, 30 samples a case, one
+process per call as Claude Code runs it, load averages 10, 20 and 29): a call on any other server
+takes 8.4 ms at the median (7.5 to 11.0), against 6.8 ms for a bash that only reads its input, and
+python3 never starts. A call whose tool name holds regal, better or cal in any case starts python3:
+38 ms at the median when it passes (36 to 41), which every Google Calendar tool pays too, and 63 ms
+when it asks (59 to 66). A call on another server with a 1 MB input takes 106 ms (103 to 121).
+
+Regal's 115 tool names and Cal's 92, as the personal MacBook's session records listed them up to
+2026-11-25, are in `hooks/connector-change-ask-fixtures/`, and `test-connector-change-ask.sh` runs
+every one through the hook: 14 of Regal's ask and 7 of Cal's, and no other. The suite reads a name
+more widely than the hook does (purge, destroy, archive and a dozen more words), so a delete under
+another word fails it. Nothing refreshes the fixtures: when a connector's list changes, replace the
+names and the date and run the suite. Not established: Better Stack's tool names and the second
+server name Regal is reached under, which are on the work MacBook only, so for them the hook rests
+on the name parts and the verbs; and no live question has been exercised, since no connector was
+called.
 
 ## A trusted path that has gone is said
 
@@ -10102,7 +10189,11 @@ reading clears 27),
 and since #3602 a word such a script hands a program, where mod-kit marks it `unexpanded`, read as
 the name it spells, its `$(` as text and no command's output, so a suite handing its helper a
 command as text (`run_here 'bash -c "echo \$(sort ok.sh | bash)"'`) runs; one whose text spells a
-screen file is still held, and the same word typed whole on a command line is judged as before,
+screen file is still held, and since #3620 the same word typed whole on a command line is read by
+that mark too, whichever run is handed it (a program the reader does not know, a script file, a
+tool: `mystery "x \$(a | b) y"` runs), unless it names a look changing file anywhere in its text,
+where it is judged as before and held, as is a word with no mark or with anything but the reader's
+own `true` for one,
 while what the script itself was handed, passed on to such a program (`mystery "$1"`), is still not
 caught), a patch git apply, git am or patch reads from a file judged
 since #3022 by the files it changes (mod-kit's patch reader, placed as the command places them), and
@@ -10932,7 +11023,10 @@ a toast, and so it does when that prompt starts no turn at all (dropped from the
 refused by a prompt hook) once no main turn has run for two minutes (#734). Unfinished steps are
 kept per project (the repository root, the main checkout's for a worktree) in the mod's store and
 held at the next session start there until Claude re-checks them, a step held under both the root
-and a pre-#708 worktree key listed once; a reload mid session keeps the live card. Another mod adds
+and a pre-#708 worktree key listed once; a reload mid session keeps the live card. Each step
+records the session that pinned it (`pinnedBy`, #3770), in the store too: pinned again by a later
+session after its check it keeps the session it had, and one kept before this was recorded is
+marked "an earlier session" by the session that carries it in. Another mod adds
 a step through `$.manualSteps.add`, takes it off as done with `finish` and as withdrawn with
 `withdraw` (#3770: drawn "taken off, not done", the card going when nothing is left); a step it adds
 with `sessionOnly` is never kept for the next session, and one with `noDone` is drawn with no Done
@@ -11515,14 +11609,24 @@ request and every kind in mod-kit's list reads clean: no agent running, waiting 
 started included), nothing in the stop's `background_tasks` or `session_crons` (recorded at the
 main `classic.Stop`, which runs only while the managed settings file is in place, #876), no job on
 the job watcher's list, no merge, deploy or open pull request the box would refuse for, no
-`/goal` set, no step on a steps card not done, no compact queued or its note owed, no prompt a
+`/goal` set, no step this session itself pinned left undone on its steps card (Dan, 2026-11-26:
+"Only that session's own steps"; a step records the session that pinned it, so one another session
+pinned, carried in from the store, holds nothing, and one that does not say withholds as unread),
+no compact queued or its note owed, no prompt a
 mod holds its reload for, and an answer that does not end on a question. Two readings of a
 process a command left behind can only withhold it: any process of this user carrying this
 session's id (`CLAUDE_CODE_SESSION_ID`, read through the kernel, five second limit; a failed look
-says nothing), and any main conversation Bash call, not run in the background, that mod-kit's
+says nothing) whose parents no longer lead to the session's own process, and any main conversation
+Bash call, not run in the background, that mod-kit's
 reader marks as putting something in the background, running nohup, setsid or disown, or cannot
-read in full, which withholds it for the rest of the session. A reading that cannot be taken
-withholds it. Each reason is written to `~/.claude/state/close-session/<session id>.json`, newest
+read in full, which withholds it for the rest of the session. The look follows each carrier's
+parents by pid and parent pid, never a command's text: one that meets the look's own line of
+parents, which the session's own process is on, is still attached (the session's connected servers
+are, for as long as it is open) and withholds nothing; one that reaches launchd was left behind;
+one whose parents cannot be followed withholds as unread
+(`tests/test-close-card-process-look.sh` runs the look on real processes). A reading that cannot be
+taken withholds it. Each reason is written to
+`~/.claude/state/close-session/<session id>.json`, newest
 replacing the one before. The next turn start takes the card down as withdrawn; it comes back
 only after the next box. Invisible to both readings: a program that detaches itself without the
 command saying so, and an Apple signed program (a shell, sleep) left behind, whose environment

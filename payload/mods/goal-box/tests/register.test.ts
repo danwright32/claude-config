@@ -256,6 +256,12 @@ type World = {
   withdrawn: string[]
   /** Each file written, by path: its last text. */
   written: Record<string, string>
+  /**
+   * Why asking for this session's id is refused, or '' when it answers. While set, every ask is
+   * refused but the one that comes straight after HOME is read, which is where the reasons file is
+   * written, so the reasons stay readable in a test.
+   */
+  idFails?: string
 }
 // manual steps' four reasons for not showing a step it was handed (addStep, word for word).
 const NOT_SHOWN = {
@@ -367,9 +373,17 @@ const world = (on: On, init: Partial<World> = {}) => {
     if (w.agentsFail) return { deny: w.agentsFail } as never
     return { value: w.agents.map(a => (a === null ? a : { description: 'a task', type: 'general-purpose', ...a })) } as never
   })
-  on('session.id', () => ({ value: 's1' }) as never)
+  let afterHome = false
+  on('session.id', () => {
+    const answers = !w.idFails || afterHome
+    afterHome = false
+    return (answers ? { value: 's1' } : { deny: w.idFails }) as never
+  })
   on('session.cwd', () => ({ value: w.here }) as never)
-  on('env.get', ($, e) => ({ value: (e as unknown as { name: string }).name === 'HOME' ? `${'/Users'}/dan` : undefined }) as never)
+  on('env.get', ($, e) => {
+    afterHome = (e as unknown as { name: string }).name === 'HOME'
+    return ({ value: afterHome ? `${'/Users'}/dan` : undefined }) as never
+  })
   on('fs.exists', ($, e) => {
     const at = w.disk[e.path]
     return (typeof at === 'string' ? { deny: at } : { value: at === true }) as never
@@ -1078,7 +1092,7 @@ test('each reading false in turn withholds the card and writes its reason; all c
     ['is still deploying', () => (w.verdicts = { 'danwright32/claude-config#1699': { state: 'deploying', at: 1 } }), () => (w.verdicts = {})],
     ['danwright32/claude-config#1701 is still open', () => (w.open = { 'danwright32/claude-config': { exitCode: 0, stdout: '[{"number":1701}]' } }), () => (w.open = {})],
     ['the /goal "ship it" is still set', () => (w.goal = { state: 'set', condition: 'ship it' }), () => (w.goal = { state: 'none' })],
-    ['the manual step "Add the key" is not done', () => (w.stepsCard = { heading: 'h', steps: [{ title: 'Add the key', url: 'https://a.example' }] }), () => (w.stepsCard = null)],
+    ['the manual step "Add the key" is not done', () => (w.stepsCard = { heading: 'h', steps: [{ title: 'Add the key', url: 'https://a.example', pinnedBy: 's1' }] }), () => (w.stepsCard = null)],
     ['a compact is queued', () => (w.compactQueued = true), () => (w.compactQueued = false)],
     ['handoff note', () => (w.compactFollowUp = { note: 'n', ranAt: 1, compacted: true }), () => (w.compactFollowUp = null)],
     ['is-it-live is waiting to send the prompt for a card', () => (w.holds = [{ mod: 'is-it-live', id: 'p', what: 'the prompt for a card', until: 1_900_000_000_000 }]), () => (w.holds = [])],
@@ -1098,6 +1112,67 @@ test('each reading false in turn withholds the card and writes its reason; all c
   await turnEnds($)
   await clock.advance(QUIET_MS)
   expect(w.pinned).toHaveLength(1)
+})
+
+// #3770, reopened 2026-11-26. Dan's first real test: no card after five minutes, and five of the
+// eleven reasons written were undone steps other sessions had pinned, carried into this session's
+// card from the store its folder shares with them. His answer: "Only that session's own steps". A
+// step says which session pinned it (manual steps' pinnedBy), and this session is 's1' here.
+test("another session's undone step on this session's card does not withhold the close card (#3770)", withAll, async ($, on) => {
+  const { w, clock } = world(on, { stepsCard: { heading: 'h', steps: [{ title: 'Post the note', url: 'https://a.example', pinnedBy: 's2' }] } })
+  await start($)
+  await says($, 'Add the goal box')
+  await workedAndQuiet($, clock)
+  expect(reasonsOf(w)).toMatchObject({ pinned: true, reasons: [] })
+  expect(w.pinned).toHaveLength(1)
+})
+
+// The shape Dan's test session held: it ran where no repository is, so one key of the store had
+// collected steps from sessions working in several other projects, all kept before a step recorded
+// its session (manual steps stamps those as an earlier session's when it carries them in).
+test("undone steps that sessions working in other projects left under this folder's key do not withhold the close card (#3770)", withAll, async ($, on) => {
+  const others = [
+    { title: 'Renew the certificate', url: 'https://certs.example', pinnedBy: 'an earlier session' },
+    { title: 'Approve the invoice run', location: 'The invoicing app, Runs', pinnedBy: 'an earlier session' },
+    { title: 'Rotate the signing key', location: 'The keys page', pinnedBy: 's3' },
+  ]
+  const { w, clock } = world(on, { stepsCard: { heading: 'Carried', steps: others } })
+  await start($)
+  await says($, 'Add the goal box')
+  await workedAndQuiet($, clock)
+  expect(reasonsOf(w)).toMatchObject({ pinned: true, reasons: [] })
+  expect(w.pinned).toHaveLength(1)
+})
+
+test("this session's own undone step still withholds the close card, and is the only step named, beside another session's (#3770)", withAll, async ($, on) => {
+  const { w, clock } = world(on, { stepsCard: { heading: 'h', steps: [{ title: 'Theirs', url: 'https://a.example', pinnedBy: 's2' }, { title: 'Mine', url: 'https://b.example', pinnedBy: 's1' }] } })
+  await start($)
+  await says($, 'Add the goal box')
+  await workedAndQuiet($, clock)
+  expect(w.pinned).toEqual([])
+  expect(reasonsOf(w)).toMatchObject({ pinned: false, reasons: ['the manual step "Mine" is not done'] })
+})
+
+test('an undone step that does not say which session pinned it withholds the close card as unread, saying so (#3770)', withAll, async ($, on) => {
+  const { w, clock } = world(on, { stepsCard: { heading: 'h', steps: [{ title: 'Pinned before', url: 'https://a.example' }] } })
+  await start($)
+  await says($, 'Add the goal box')
+  await workedAndQuiet($, clock)
+  expect(w.pinned).toEqual([])
+  expect(reasonsOf(w)?.reasons.join(' | ')).toMatch(/"Pinned before" is not done, and the card does not say which session pinned it/)
+})
+
+// The steps reading asks for this session's id to tell its own steps from other sessions'. When
+// that ask is refused the list is handed no id, never this session's guessed, and an undone step
+// on the card then holds it as unread.
+test("this session's id refused while its card holds an undone step withholds the close card, saying whose step it is could not be read (#3770)", withAll, async ($, on) => {
+  const { w, clock } = world(on, { stepsCard: { heading: 'h', steps: [{ title: 'Mine', url: 'https://b.example', pinnedBy: 's1' }] } })
+  await start($)
+  await says($, 'Add the goal box')
+  w.idFails = 'the session id could not be read'
+  await workedAndQuiet($, clock)
+  expect(w.pinned).toEqual([])
+  expect(reasonsOf(w)?.reasons.join(' | ')).toMatch(/"Mine" is not done, and this session's id was not handed over, so whose step it is could not be read/)
 })
 
 test('a reading that cannot be taken withholds the card as unread: no stop recorded, a list missing, a noun that throws, a goal unreadable (#3770)', withAll, async ($, on) => {
@@ -1324,6 +1399,28 @@ test('a process carrying this session\'s id withholds the card; a look that fail
     expect({ how, pinned: w.pinned.length }).toEqual({ how, pinned: 2 + i })
     expect(reasonsOf(w)?.reasons).toEqual([])
   }
+})
+
+// #3770, reopened: six of the eleven reasons in Dan's test were the session's own connected servers,
+// which carry its id for as long as it is open. The look now follows each carrier's parents by pid
+// (tests/test-close-card-process-look.sh runs it on real processes) and answers three ways: `found`
+// for one left behind, `unread` for one whose parents could not be followed, and a count of those
+// still attached to the session, which withhold nothing.
+test("processes carrying this session's id that are still attached to it withhold nothing; one whose parents could not be followed withholds the card, saying so (#3770)", withAll, async ($, on) => {
+  const { w, clock } = world(on, { procs: { exitCode: 0, stdout: JSON.stringify({ found: [], unread: [], attached: 6 }) } })
+  await start($)
+  await says($, 'Add the goal box')
+  await workedAndQuiet($, clock)
+  expect(reasonsOf(w)).toMatchObject({ pinned: true, reasons: [] })
+  expect(w.pinned).toHaveLength(1)
+  w.procs = { exitCode: 0, stdout: JSON.stringify({ found: [], unread: [{ pid: 777, name: 'node', why: 'process 700, a parent of it, is not in the process list' }], attached: 6 }) }
+  await says($, 'And one more thing')
+  await workedAndQuiet($, clock, { id: 'b2' })
+  expect(w.pinned).toHaveLength(1)
+  expect(reasonsOf(w)?.pinned).toBe(false)
+  expect(reasonsOf(w)?.reasons).toEqual([
+    "process 777 (node) carries this session's id, and whether it is still attached to this session could not be read (process 700, a parent of it, is not in the process list), so it counts as left running",
+  ])
 })
 
 test('a look that answers garbled output withholds nothing, so the other readings decide and the card is pinned (#3770)', withAll, async ($, on) => {

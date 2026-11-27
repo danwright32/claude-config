@@ -38,7 +38,7 @@ esac
 trap 'rm -rf "$TMPROOT"' EXIT
 
 STREAK="$(sed -n 's/^STREAK=\([0-9][0-9]*\)$/\1/p' "$TOOL")"
-LINE_COLD="#3406: bash tests/test-claude-sync.sh is judged within 91 units of the yardstick on Linux (#2918, #3167): every judgement of this case ran out of the gate's seconds on this machine"
+LINE_COLD="#3406: bash tests/test-claude-sync.sh is judged within 83.2 units of the yardstick's median sample on Linux (#2918, #3167): every judgement of this case ran out of the gate's seconds on this machine"
 LINE_WARM="#3170: judged a second time, bash tests/test-claude-sync.sh takes at most 6 units of the yardstick, from the cache (#2918): the cache this case was handed was never filled"
 TAB="$(printf '\t')"
 

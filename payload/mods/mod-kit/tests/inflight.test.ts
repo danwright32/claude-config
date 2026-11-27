@@ -35,7 +35,7 @@ test('each kind false in turn holds by its own kind and words', async () => {
     [{ merges: { value: ['#7 is still deploying'] } }, 'merge', /#7 is still deploying/],
     [{ prs: { value: ['o/r#9 is still open'] } }, 'pr', /o\/r#9 is still open/],
     [{ goal: { value: { state: 'set', condition: 'ship it' } } }, 'goal', /\/goal "ship it" is still set/],
-    [{ steps: { value: { card: { heading: 'h', steps: [{ title: 'Add the key' }] } } } }, 'steps', /"Add the key" is not done/],
+    [{ steps: { value: { card: { heading: 'h', steps: [{ title: 'Add the key', pinnedBy: 's1' }] }, session: 's1' } } }, 'steps', /"Add the key" is not done/],
     [{ compact: { value: { queued: true, followUp: null } } }, 'compact', /compact is queued/],
     [{ compact: { value: { queued: false, followUp: { note: 'n', ranAt: 1, compacted: true } } } }, 'compact', /handoff note/],
     [{ prompts: { value: { holds: [{ mod: 'goal-box', id: 'ask', what: 'the prompt asking for the box', until: 2_000 }], now: 1_000 } } }, 'prompt', /goal-box is waiting to send the prompt asking for the box/],
@@ -59,6 +59,33 @@ test('finished tasks, ended agents, a lapsed hold, an ignored step and a finishe
     answer: { value: 'Is it live? Yes.\n\nMerged.' },
   }
   expect(inflightHolds(facts, INFLIGHT_KINDS)).toEqual([])
+})
+
+// #3770, reopened: the card in a session's state also holds steps other sessions pinned, carried in
+// from the project's store at its start. Dan, 2026-11-26: "Only that session's own steps". A step
+// says which session pinned it (manual steps' pinnedBy), and only this session's own is in flight.
+test("another session's undone step holds nothing, whether it names that session or was carried in as an earlier session's (#3770)", async () => {
+  const card = { heading: 'h', steps: [{ title: 'Theirs', pinnedBy: 's2' }, { title: 'Kept before', pinnedBy: 'an earlier session' }] }
+  expect(inflightHolds({ ...CLEAN, steps: { value: { card, session: 's1' } } }, INFLIGHT_KINDS)).toEqual([])
+})
+
+test("this session's own undone step still holds, beside another session's that does not (#3770)", async () => {
+  const card = { heading: 'h', steps: [{ title: 'Theirs', pinnedBy: 's2' }, { title: 'Mine', pinnedBy: 's1' }] }
+  const holds = inflightHolds({ ...CLEAN, steps: { value: { card, session: 's1' } } }, INFLIGHT_KINDS)
+  expect(holds).toEqual([{ kind: 'steps', text: 'the manual step "Mine" is not done' }])
+})
+
+test('an undone step that does not say which session pinned it, or a session id not handed over, is an unread hold, never a clear reading (#3770)', async () => {
+  const unowned = inflightHolds({ ...CLEAN, steps: { value: { card: { heading: 'h', steps: [{ title: 'Old one' }, { title: 'Odd one', pinnedBy: 7 }] }, session: 's1' } } }, INFLIGHT_KINDS)
+  expect(unowned.map(h => ({ kind: h.kind, unread: h.unread }))).toEqual([{ kind: 'steps', unread: true }, { kind: 'steps', unread: true }])
+  expect(unowned[0]?.text).toMatch(/"Old one" is not done, and the card does not say which session pinned it/)
+  for (const session of [undefined, '', 7]) {
+    const holds = inflightHolds({ ...CLEAN, steps: { value: { card: { heading: 'h', steps: [{ title: 'Theirs', pinnedBy: 's2' }] }, session } } }, INFLIGHT_KINDS)
+    expect({ session, holds: holds.map(h => ({ kind: h.kind, unread: h.unread })) }).toEqual({ session, holds: [{ kind: 'steps', unread: true }] })
+    expect(holds[0]?.text).toMatch(/this session's id was not handed over/)
+  }
+  // With nothing undone there is nothing to tell apart, so nothing is unread.
+  expect(inflightHolds({ ...CLEAN, steps: { value: { card: { heading: 'h', steps: [{ title: 'Done', finished: 'checked' }] } } } }, INFLIGHT_KINDS)).toEqual([])
 })
 
 test('a fact not handed over, or that could not be read, is an unread hold of its kind', async () => {

@@ -47,6 +47,16 @@ export type StepsStep = {
   /** Drawn with no Done (#3770): the step is done by an act that ends the session, so a press could only start a turn. */
   isNoDone?: boolean
   /**
+   * The session that pinned it, by its id (#3770): set when the steps tool pins the step or another
+   * mod adds it, and kept in the store, so a later session that carries the step in can tell it is
+   * not its own. Pinned again by a later session after its check, a step keeps the session it had.
+   * A step kept before this was recorded is given 'an earlier session' (card.ts EARLIER_SESSION) by
+   * the session that carries it in at its own start, which knows only that it did not pin it. Absent
+   * only on a step pinned before this was recorded in a session still running, or by a session whose
+   * id could not be read: a reader treats that as not known, never as nobody's.
+   */
+  pinnedBy?: string
+  /**
    * Done was pressed and "step N done" sent; Claude has not yet said whether it took. Never kept
    * in the store: the turn that would answer it does not reach another session.
    */

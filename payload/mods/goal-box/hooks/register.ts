@@ -381,7 +381,10 @@ const writeReasons = async ($: EngineInterface, pinned: boolean, reasons: string
   }
 }
 
-/** Reading A: any process carrying this session's id; only ever a reason to withhold. */
+/**
+ * Reading A: any process carrying this session's id that is no longer attached to the session, or
+ * whose parents could not be followed (close.ts); only ever a reason to withhold.
+ */
 const processesNow = async ($: EngineInterface): Promise<string[]> => {
   try {
     const listed = await $.process.run(PROCESS_LIST, { timeoutMs: PROCESS_TIMEOUT_MS })
@@ -420,8 +423,10 @@ const closeReasons = async ($: EngineInterface, seq: number): Promise<string[] |
     merges: { value: await mergeHoldsNow($) },
     prs: { value: await openHolds($) },
     goal: { value: await goalNow($) },
-    // Another mod's state, read as unknown (L50: the shared list holds each to its shape).
-    steps: await readingOf(async () => ({ card: (await $.state.get(stepsCardRef as never)).value as unknown, ignore: CLOSE_TITLE })),
+    // Another mod's state, read as unknown (L50: the shared list holds each to its shape). Only a
+    // step this session pinned holds the card (#3770), so the list is handed this session's id; one
+    // that cannot be read is handed as missing, which the list counts as unread for any undone step.
+    steps: await readingOf(async () => ({ card: (await $.state.get(stepsCardRef as never)).value as unknown, ignore: CLOSE_TITLE, session: await $.session.id().catch(() => undefined) })),
     compact: await readingOf(async () => ({ queued: (await $.state.get(compactQueuedRef as never)).value as unknown, followUp: (await $.state.get(compactFollowUpRef as never)).value as unknown })),
     prompts: await readingOf(async () => ({ holds: (await $.state.get(modkitHoldsRef)).value, now: await $.clock.now() })),
     answer: answer?.seq === seq ? { value: answer.text } : { unread: "this turn's answer was not recorded" },
