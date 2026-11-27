@@ -838,7 +838,7 @@ is "#3804 a stale claim with no session recorded, the take over: exit 0" 0 "$cod
 run claim "$REPO" 3674 "$SEEN"
 is "#3804 a stale claim with no session recorded, taken over: exit 0" 0 "$code"
 
-# `takeover` ends a claim from this Mac with no session recorded and nothing else. Under a claim
+# `takeover` ends a claim from this Mac with no session recorded and no other session's. Under a claim
 # that names another session it posts nothing, and says only that session can release it.
 new_case
 theirs 600 claim >"$FAKE/markers"

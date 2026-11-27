@@ -30,7 +30,9 @@
 # branch has ended, with the reason, so the claim does not block the next session; it posts nothing
 # when there is no live claim of this session's to release, and never ends another session's or one
 # that records no session. takeover ends a claim from this Mac on that branch that records no
-# session, and nothing else (see "Which session a claim belongs to" below).
+# session, and never a claim that names another session or the other Mac's; this session's own
+# claim on that branch, if it has one, ends with it, because the comment names this session (see
+# "Which session a claim belongs to" below).
 #
 # A claim is held by a hidden marker line, never by the prose around it:
 #   <!-- orchestrate-claim branch=<branch> host=<host>,session=<session> -->
@@ -339,7 +341,9 @@ read_issue || fail_read "the issue's comments" "$tmp/issue.err"
 # release ends this session's claim on the branch and no other: never another session's, which
 # only that session can release, and never one from this Mac that names no session, which nothing
 # says is this session's. takeover ends a claim from this Mac on the branch that names no session,
-# and only such a claim (see "Which session a claim belongs to" in the header).
+# and posts nothing unless there is one. Its comment names this session, so a claim of this
+# session's own on that branch ends with it, which the answer says; no other session's claim does
+# (see "Which session a claim belongs to" in the header).
 if [ "$mode" = release ] || [ "$mode" = takeover ]; then
   ours=no
   unnamed=no
