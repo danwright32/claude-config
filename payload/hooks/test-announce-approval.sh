@@ -1896,10 +1896,11 @@ check "R9 #3669 H an announcement let through before his newest Announce it cove
 check "R9 #3669 H and the refusal names that pull request and says its announcement is older than his last yes, with the day of each" "$([[ "$r" == *"holds pull request 5 as let through with an announcement for that milestone on 2026-11-20, which is older than his last "'`Announce it`'" about announcing it, of $TODAY_ET"* && "$r" != *"holds no announcement let through"* && "$r" != *"GitHub says"* ]] && echo ok || echo "$r")"
 check "R9 #3669 H the question that reads the record only gives the same answer once his yes is on it" "$([[ "$(finishes "$STORE_USED" "$(closing "$SAYS_YES" "12" "12")")" == "owed|"*"which is older than his last"* ]] && echo ok || echo no)"
 check "R9 #3669 H and so it does with the milestone's line removed, the yes being the record's" "$([[ "$(finishes "$STORE_USED" "$(closing "Rework the hand back." "12" "12")")" == "owed|"*"whose description does not say"*"which is older than his last"* ]] && echo ok || echo no)"
-# The same yes, and then an announcement let through after it: that one covers the milestone. The
-# library stamps a line let through in whole seconds, so the case waits one out.
-sleep 1
-used --repo acme/widget --hash "$(printf '%064d' 1)" --pr 6 --closes '[{"issue": 10, "repo": "acme/widget", "milestone": "Hand back", "milestone_number": 28}]' >/dev/null
+# The same yes, and then an announcement let through after it: that one covers the milestone. Its
+# line's time is SET, a year no answer in this run can be after, never waited for: the library
+# stamps a line let through in whole seconds, so one written through it here would need a second
+# waited out to be later than the yes just above.
+printf '{"kind": "used", "repo": "acme/widget", "hash": "%064d", "pr": 6, "closes": [{"issue": 10, "repo": "acme/widget", "milestone": "Hand back", "milestone_number": 28}], "at": "2099-01-01T00:00:00Z"}\n' 1 >> "$STORE_USED/record.jsonl"
 check "still possible #3669 H: an announcement let through after his last Announce it covers the milestone" "$([[ "$(finishes "$STORE_USED" "$(closing "$SAYS_YES" "12" "12")")" == "clear|"* ]] && echo ok || echo no)"
 r="$(UNMERGED=6 finishes "$STORE_USED" "$(closing "$SAYS_YES" "12" "12")")"
 check "R9 #3669 H when GitHub says the newer one did not merge as an announcement, the older one still covers nothing, and the refusal says both" "$([[ "$r" == "owed|"*"holds pull request 5 as let through with an announcement for that milestone on 2026-11-20, which is older than his last"*"It also holds pull request 6 as let through with an announcement for that milestone, and GitHub says it did not merge as an announcement"* ]] && echo ok || echo "$r")"

@@ -292,9 +292,10 @@ his option's words and the date.
       the key above, so a feature that is not title by that key gets no line and is refused,
       saying to ask him again under the title.
   milestone_says(description)   "yes", "no", "unasked" or "": what a description's line says.
-  finishes(repo, pr, answer, payload=None)
-      {"state": "clear" | "owed" | "unread", "why", "how", "notes", "announced"}: whether a pull
-      request that does not carry the label finishes a feature he said yes to announcing (R9).
+  finishes(repo, pr, answer, payload=None, unmerged=(), spent=None)
+      {"state": "clear" | "owed" | "unread", "why", "how", "notes", "announced", "spent"}: whether
+      a pull request that does not carry the label finishes a feature he said yes to announcing
+      (R9). unmerged and spent are the gate's second question's (the function's own docstring).
   read_answers(payload)         his answers read into the record, and what stood in the way.
 
   check(repo, digest, payload, pr=None, claim=False)
