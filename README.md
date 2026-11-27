@@ -5678,10 +5678,19 @@ last to run (written after the value, or with the value set on one branch only),
 command stands before the declaration, and wherever another function declares the name, and the
 gate does not work out which the command gets. So a quiet command of that shape is refused too
 where the file after the name posts (found by the third review of that change on 2026-11-27: 24
-commands that post passed with the value read alone). A plain assignment, a `local kept=value`
+commands that post passed with the value read alone). So is a quiet command typed at the prompt
+where nothing stands after the unquoted name (`local script=""`, `script=quiet.sh`, `bash
+$script`): with the name empty it is a bare shell reading its input. The same function in a
+script file passes, and so does the name in double quotes. A command through several such
+names is read once for every combination of them empty, the others keeping their values: read
+only with all of them empty at once, `$runner $config posts.sh` with both declared empty passed,
+where the shells run posts.sh whenever the runner has its value (the fourth review, the same
+day: 19 commands that post). That is 3 readings for two names and 63 for six, and a command
+through more than six is refused without being read. A plain assignment, a `local kept=value`
 and a bare `local kept` are read one way. Not covered: a name set by one of those three and
-used on a line before it or in another function, and a function whose body is written in round
-brackets. A quiet
+used on a line before it, in another function, or where the assignment is not reached (under a
+condition that is false, in a subshell, a pipeline or a loop that does not run), and a function
+whose body is written in round brackets. A quiet
 script run through a variable in a function is refused wherever the same script named by a
 literal path there is: one that finds its own folder from `BASH_SOURCE` and sources a file beside
 it, since the folder a function runs in is not known to the gate. One

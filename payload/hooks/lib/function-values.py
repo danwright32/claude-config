@@ -36,12 +36,24 @@ that gives one of them a value (both_ways). Those are the spellings this file ha
 the empty one wherever an empty assignment is the last to run, wherever the command stands
 before the declaration, and wherever the declaring function is another one, whose name is local
 to it. Read with the value alone, `$runner $config posts.sh` was a quiet script handed a file,
-where the shells run posts.sh (third review of #3497, 2026-11-27). Which of the two the command
-gets is not worked out, so this refuses a quiet command too, where the file after the name
-posts and the name is never empty when the command runs. A plain assignment, a `local
-NAME=value` and a bare `local NAME` are read one way, as they were at 010c05a1b0: a name used
-on a line before the one that sets it, or in a function other than the one that sets it, is
-not covered for those three.
+where the shells run posts.sh (third review of #3497, 2026-11-27). A command read through
+several such names is read once for every combination of them empty, the others keeping their
+values, for up to MOST_BOTH names, and is refused unread past that. Read only with all of
+them empty at once, `$runner $config posts.sh` with both names declared empty was the one word
+posts.sh, which finds nothing, where the shells run it whenever the runner has its value and
+config has none (fourth review, same day). Which of the two a name has at the command is not
+worked out, so this refuses quiet commands too. One is a command where the file after the
+name posts and the name is never empty when the command runs. The other is a typed command
+where nothing stands after the unquoted name (`local script=""`, `script=quiet.sh`, `bash
+$script`): read with the name empty it is a bare shell reading its input, which the gate
+refuses in a typed function. That function in a script file passes, and so does the name in
+double quotes. A plain assignment, a `local NAME=value` and a bare `local NAME` are read one
+way, as they were at 010c05a1b0. Not covered for those three: a name used on a line before
+the one that sets it, or in a function other than the one that sets it, and a name whose
+assignment is not reached where the command runs (under a condition that is false, in a
+subshell, a pipeline, a background job, a loop that does not run, a case arm not taken or a
+substitution). Nor is `local kept=quiet.sh other=$kept`, where the shell leaves other empty
+and the reading gives it kept's value.
 
 What it reads is read with the directory unknown, as every command of a function is. So a quiet
 script that finds its own folder from BASH_SOURCE and sources a file beside it, run through a
@@ -65,6 +77,7 @@ Each function takes the gate's Judge as its first argument: these are its readin
 slack_drafts_only_gate.py only so that file does not grow.
 """
 import bisect
+import itertools
 import os
 import re
 import shlex
@@ -139,6 +152,16 @@ PLAIN = re.compile(r"\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))")
 # its input, and refuses it in a function (as main does, typed out). A path under /dev/null can
 # name no file either, and is read as one that names none.
 NO_FILE = "/dev/null/empty-word"
+# The most names read both ways that one command is read every way for (empty_reason). The
+# readings double with each name: 3 for two names, 15 for four, 63 for six. A command through
+# more of them is refused without being read, quiet or not, since a reading left out is one
+# that could post. Six is where the time stays small beside the gate's one allowance of 11
+# seconds: a typed function of 200 shell commands, each through six such names, was judged in
+# 2.2 seconds against 0.5 before this reading was made (three runs each, one minute load 43,
+# measured 2026-11-27), about 0.13 ms a reading, and each name more doubles that.
+MOST_BOTH = 6
+TOO_MANY = (f"is more names than the gate reads every way (it reads at most {MOST_BOTH}, each with its value "
+            "and empty), so this command was not read with any of them empty")
 
 
 def body_sets(judge, k):
@@ -356,10 +379,11 @@ def wider_reason(judge, text, d, placed, judge_again):
     """The reason the command text posts when read with a function's values written out, or None.
     placed is the second reading's text, which this one is not made again for; judge_again(text)
     judges a command as written. A command that only runs the script being read once more is not
-    judged again (own_again). Where that reading finds nothing and took a name read both ways
-    (both_ways), the command is read once more with that name empty (empty_reason). Which of the
-    two the command gets is not worked out, so a reason found that way is worded as a check the
-    gate could not make too (L11), in words of its own."""
+    judged again (own_again). Where that reading finds nothing and took names read both ways
+    (both_ways), the command is read again with those names empty, once for every combination
+    of them (empty_reason). Which of the two a name has at the command is not worked out, so a
+    reason found that way is worded as a check the gate could not make too (L11), in words of
+    its own, which name every such name of the command and then the ones read empty."""
     taken = []
     wider = judge.sh_placed(text, d, taken)
     if not wider or wider == placed:
@@ -367,9 +391,9 @@ def wider_reason(judge, text, d, placed, judge_again):
     reason = None if own_again(judge, wider, d) else judge_again(wider)
     if not taken:
         return reason
-    empty = ()
+    empty, emptied = (), ()
     if not reason:
-        empty, reason = empty_reason(judge, text, d, (placed, wider), taken, judge_again)
+        empty, emptied, reason = empty_reason(judge, text, d, (placed, wider), taken, judge_again)
         if not reason:
             return None
     ctx = judge.shell
@@ -380,9 +404,11 @@ def wider_reason(judge, text, d, placed, judge_again):
     # Through unfollow, so main() says the check could not be made rather than claiming a post.
     if empty:
         what = "a name" if len(empty) == 1 else "names"
-        return judge.unfollow(f"{where} runs a command through {named}, {what} a function of the same text also "
-                              "declares or leaves empty, so the gate cannot tell whether the command gets the "
-                              f"value set there: read with {named} empty, {reason}")
+        told = (f"{where} runs a command through {named}, {what} a function of the same text also declares or "
+                "leaves empty, so the gate cannot tell whether the command gets the value set there")
+        if reason is TOO_MANY:
+            return judge.unfollow(f"{told}: {len(empty)} {reason}")
+        return judge.unfollow(f"{told}: read with {' and '.join('$' + n for n in sorted(emptied))} empty, {reason}")
     return judge.unfollow(f"{where} runs a file through {named}, whose value the gate cannot follow to that "
                           "command: only a function of the same text sets it, and read with the value set "
                           f"there, {reason}")
@@ -440,19 +466,36 @@ def no_empty_words(judge, text):
 
 
 def empty_reason(judge, text, d, seen, taken, judge_again):
-    """(the names of taken that are read both ways (both_ways), the reason the command
-    text posts when read with each of them empty, or None). Made only where the reading with the
-    values found nothing, and judged as a command written out is: seen are the texts already
-    judged."""
+    """(the names of taken that are read both ways (both_ways), those of them the reading that
+    found a reason had empty, that reason or None). Made only where the reading with the values
+    found nothing, and judged as a command written out is: seen are the texts already judged.
+
+    Which of those names the command gets empty is not worked out, and it need not be all of
+    them or none: the shell hands `$how $kept posts.sh` to bash wherever how has its value and
+    kept is empty. So the command is read once for every combination of them empty, the others
+    keeping their values: all of them first, which was the only reading until the fourth review
+    of #3497 (2026-11-27), then one at a time, then every other combination. All of them at
+    once leaves the one word `posts.sh` of that command, which finds nothing, and one at a time
+    misses `$how $one $two posts.sh` where one and two are empty. The first reason found is the
+    answer. Past MOST_BOTH names nothing is read and the answer is TOO_MANY, a reason."""
     k = kept(judge)
     names = both_ways(judge, k, set(taken))
     if not names:
-        return names, None
-    bare = without(text, names)
-    k.empty = names
-    try:
-        second = no_empty_words(judge, judge.sh_placed(bare, d, []) or bare)
-    finally:
-        k.empty = ()
-    reason = None if second == text or second in seen else judge_again(second)
-    return names, reason and reason.replace(NO_FILE, "an empty word")
+        return names, names, None
+    if len(names) > MOST_BOTH:
+        return names, names, TOO_MANY
+    judged, order = {text, *seen}, sorted(names)
+    for some in [names] + [set(c) for size in range(1, len(order)) for c in itertools.combinations(order, size)]:
+        bare = without(text, some)
+        k.empty = some
+        try:
+            second = no_empty_words(judge, judge.sh_placed(bare, d, []) or bare)
+        finally:
+            k.empty = ()
+        if second in judged:
+            continue
+        judged.add(second)
+        reason = judge_again(second)
+        if reason:
+            return names, some, reason.replace(NO_FILE, "an empty word")
+    return names, names, None

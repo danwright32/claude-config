@@ -8310,7 +8310,9 @@ def both_readings(sw, cmd, cwd, judges):
     call that runs out there raises OutOfTime as the first would and is refused. It is handed
     nothing the first worked out that is kept on a Judge or on its classes: every dict, list and
     set of class_held that was empty before the first judgement is emptied again before the
-    second, and Judge.fed's answers are dropped. What it does share is kept in a module, never
+    second, and Judge.fed's answers are dropped. That holds for the first call of a process,
+    which for the hook is the only one (the finally says what a later call keeps). What it does
+    share is kept in a module, never
     on a Judge, and keyed on a text or a name alone: how a text parses (remember_readings, PARSES
     on disk, and the shared reader's own caches), how a Python text reads (_PY_READ), which
     module a name is (lib/py-aliases.py), and the functools caches above. It costs a whole
@@ -8329,10 +8331,17 @@ def both_readings(sw, cmd, cwd, judges):
             reason = judges[-1].judged(cmd, cwd)
         return reason
     finally:
-        # Put back, so a second call judged in one process (a suite that loads this file) starts
-        # as the first did: the two flags, and Judge.fed's answers, which after a second judgement
-        # are the short reading's, and handed to the next call they would have it judged once, by
-        # that reading alone (third review of #3497). The hook itself judges one call a process.
+        # Put back what this call set, so a second call judged in one process (a suite that loads
+        # this file) is not handed it: the two flags, and Judge.fed's answers, which after a second
+        # judgement are the short reading's, and handed to the next call they would have it judged
+        # once, by that reading alone (third review of #3497). In one respect that second call
+        # does not start as the first did: what the first left in the dicts, lists and sets on
+        # the Judge's classes is still there. They are not empty when it starts, so they are not
+        # among those emptied between its two judgements either, and nothing empties them after
+        # a call (fourth review of #3497, read from the code and not measured). Emptying them
+        # here would need a list telling what a judgement fills from what the classes hold from
+        # the start, which class_held exists to do without. The hook itself judges one call a
+        # process, so none of its verdicts rests on this.
         FED.update(short=False, grew=False)
         Judge.fed.cache_clear()
 

@@ -361,6 +361,66 @@ run_bash 'run() { local kept=""; how=bash; kept=quiet.sh; kept=""; $how $kept po
 refused "typed as a command, a script that posts run when the name is empty is refused"
 says "typed as a command: saying the name is read both ways" "$BOTH_WAYS"
 says "typed as a command: naming the name" "read with \$kept empty"
+# Two names read both ways in one command. Read with both empty at once, `$how $kept posts.sh` is
+# the one word `posts.sh`, which finds nothing, where the shells run `bash posts.sh` whenever the
+# runner has its value and the other name is empty. That one reading was all there was: 19 of the
+# fourth review's probes that post were allowed at d9c4b89185, at every head before it and on
+# main (2026-11-27; its m05, m08, x21 and x22 are the first four shapes below). So the command is
+# read once for every combination of those names empty, the others keeping their values, and
+# refused where any of those readings finds a reason. The fifth shape posts where two of its
+# three names are empty and the runner is not, which neither all three together nor any one by
+# itself reads. The sixth is the runner declared by a bare local, read one way, which was refused
+# before this (the review's x19) and is here so it stays so.
+while IFS= read -r body; do
+  [ -n "$body" ] || continue
+  body="${body//@NL@/$NL}"
+  for file in posts quiet; do
+    printf '%s\n' "${body//@F@/$file}" > "$FV/case.sh"
+    judge_script
+    if [ "$file" = posts ]; then
+      refused "a script that posts, run when one of two names read both ways is empty, is refused: $(shown "$body")"
+      says "as a check it could not make: $(shown "$body")" "REFUSED: the gate could not check whether this command posts to Slack"
+      says "saying the names are read both ways: $(shown "$body")" "$BOTH_WAYS"
+    else
+      allowed "the same function with a script that does not post after the names passes: $(shown "$body")"
+    fi
+  done
+done <<'SHAPES'
+run() {@NL@  local how=""@NL@  local kept=""@NL@  how=bash@NL@  $how $kept @F@.sh@NL@  kept=quiet.sh@NL@}@NL@run
+run() {@NL@  local runner=""@NL@  local cfg=""@NL@  runner=bash@NL@  if [ -n "${USE_CFG:-}" ]; then@NL@    cfg=quiet.sh@NL@  fi@NL@  $runner $cfg @F@.sh@NL@}@NL@run
+run() {@NL@  local how kept=""@NL@  how=bash@NL@  $how $kept @F@.sh@NL@  kept=quiet.sh@NL@}@NL@run
+run() {@NL@  declare how@NL@  declare kept@NL@  how=bash@NL@  $how $kept @F@.sh@NL@  kept=quiet.sh@NL@}@NL@run
+run() {@NL@  local how="" one="" two=""@NL@  how=bash@NL@  $how $one $two @F@.sh@NL@  one=quiet.sh@NL@  two=lib/quiet.sh@NL@}@NL@run
+run() {@NL@  local how@NL@  local kept=""@NL@  how=bash@NL@  $how $kept @F@.sh@NL@  kept=quiet.sh@NL@}@NL@run
+SHAPES
+# Typed as the command itself, and the refusal names the name whose being empty posts, not both.
+run_bash 'run() { local how=""; local kept=""; how=bash; $how $kept posts.sh; kept=quiet.sh; }; run' "$FV"
+refused "typed as a command, a script that posts run when one of two names is empty is refused"
+says "typed as a command: saying the names are read both ways" "$BOTH_WAYS"
+says "typed as a command: naming both names" "runs a command through \$how and \$kept"
+says "typed as a command: naming the one read empty" "read with \$kept empty"
+# The readings double with each name, so a command is read every way for at most six of them
+# (63 readings). Past six it is refused without being read, quiet or not, and says why: a
+# reading left out is one that could post. Six names in a quiet command pass, read every way.
+# The command is a shell's, since only a command the gate reads files for has its words written
+# out at all: an echo of seven such names is not read through them and passes as it did.
+MANY="more names than the gate reads every way"
+run_bash 'run() { local a="" b="" c="" d="" e="" f=""; a=quiet.sh; b=1; c=2; d=3; e=4; f=5; bash "$a" "$b" "$c" "$d" "$e" "$f"; }; run' "$FV"
+allowed "a quiet command through six names read both ways passes, read every way"
+run_bash 'run() { local a="" b="" c="" d="" e="" f="" g=""; a=quiet.sh; b=1; c=2; d=3; e=4; f=5; g=6; bash "$a" "$b" "$c" "$d" "$e" "$f" "$g"; }; run' "$FV"
+refused "a command through seven names read both ways is refused, since it is not read every way"
+says "seven names: as a check it could not make" "REFUSED: the gate could not check whether this command posts to Slack"
+says "seven names: saying the names are read both ways" "$BOTH_WAYS"
+says "seven names: saying there are more than the gate reads every way" "7 is $MANY"
+script 'run() {' '  local how="" a="" b="" c="" d="" e=""' '  how=bash' '  a=quiet.sh' '  b=one' '  c=two' '  d=three' '  e=four' '  $how "$a" "$b" "$c" "$d" "$e"' '}' 'run'
+judge_script
+allowed "in a script, a quiet command through six names read both ways passes, read every way"
+script 'run() {' '  local how="" a="" b="" c="" d="" e="" f=""' '  how=bash' '  a=quiet.sh' '  b=one' '  c=two' '  d=three' '  e=four' '  f=five' '  $how "$a" "$b" "$c" "$d" "$e" "$f"' '}' 'run'
+judge_script
+refused "in a script, a command through seven names read both ways is refused"
+says "in a script, seven names: saying there are more than the gate reads every way" "$MANY"
+run_bash 'run() { local a="" b="" c="" d="" e="" f="" g=""; a=1; b=2; c=3; d=4; e=5; f=6; g=7; echo $a $b $c $d $e $f $g; }; run' "$FV"
+allowed "an echo of seven names read both ways passes: its words are not written out, so it is not read through them"
 # What reading both ways must not refuse: the ordinary function, where the name stands alone in
 # double quotes. Empty, it hands the command an empty word, which names no file, so nothing is
 # run. The quiet twins above the last section (`local kept=""`, then `kept=quiet.sh`, then `bash
@@ -389,7 +449,14 @@ allowed "a quiet file run through a name declare gives its value passes, read bo
 # round brackets, which the walk reads no body for (the third review's s27 and d17), and a name
 # used on a line before the one that sets it, or in a function other than the one that sets it,
 # where a plain assignment, a `local NAME=value` or a bare `local` is what the body holds (w19,
-# w20, v03): those three are read one way, as they were at 010c05a1b0.
+# w20, v03): those three are read one way, as they were at 010c05a1b0. The same three where the
+# assignment is not reached when the command runs (under a condition that is false, in a
+# subshell, a pipeline, a background job, a loop that does not run, a case arm not taken or a
+# substitution: the fourth review's b12 to b14, b19 to b21, b24, b27 to b32, b59, b60), and
+# `local kept=quiet.sh other=$kept`, where the shell leaves other empty (c17, c18). And a quiet
+# command typed with nothing after the unquoted name (`local script=""`, `script=quiet.sh`,
+# `bash $script`), which is refused: read with the name empty it is a bare shell reading its
+# input (the fourth review's q02 and ten more). In a script file that function passes.
 
 echo "slack drafts only: a script that runs itself in a function is not read a second time, and anything else is read as before (claude-config#3497)"
 
