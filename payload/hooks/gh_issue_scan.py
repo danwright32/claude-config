@@ -1085,6 +1085,57 @@ def api_writes(args):
         for a in args)
 
 
+# ---- gh_writes: how many commands of one call write to GitHub ----
+#
+# ONE count, asked by two gates (claude-config#3742). The label hook (announce_label_gate.py) judges
+# a description left to GitHub by what GitHub holds now, which holds only when its command is the
+# call's one write. The merge gate (require-changelog-tag.sh) judges an announcement's wording
+# before the command runs, which holds only when the merge is the call's one write: `gh pr edit 7
+# --body-file new.md && gh pr merge 7` was judged on the description as it stood, then replaced it
+# and merged. A copy of the count in each gate would let the two read a call differently (L370), so
+# the merge gate asks it from bash through the `writes` verb at the foot of this file.
+#
+# What is counted: gh pr create, gh pr edit and gh issue edit, and every gh api call that writes
+# and is no DELETE. A merge through the GitHub API is one of those, which the merge gate allows
+# for. Not counted, so not seen by either gate: a write gh makes under any other subcommand (a
+# comment, a review, a label made or renamed), none of which changes a description, and a write
+# made by anything but gh.
+WRITE_KINDS = frozenset({("pr", "create"), ("pr", "edit"), ("issue", "edit")})
+
+
+def api_write(args):
+    """Whether one gh api call's arguments make it a write that is no DELETE."""
+    return "DELETE" not in {v.upper() for v in flag_values(args, "--method", "-X")} and api_writes(args)
+
+
+def api_calls(command):
+    """The arguments of each gh api call the command makes, as the session link gate finds them."""
+    out = []
+    pipelines, _bodies = _stages(command)
+    for stages in pipelines:
+        if not isinstance(stages, list):
+            continue
+        for words, _redirects, _heredocs in stages:
+            found = gh_command(words)
+            if found and found[0] == "api":
+                out.append(list(found[2]) + list(found[3]))
+    return out
+
+
+def gh_writes(command, cwd=None, environ=None, kinds=WRITE_KINDS):
+    """(found, apis, writes) for one call's command.
+
+    found is every gh command of `kinds`, as scan_gh_in_context gives them; apis the arguments of
+    each gh api call that writes; writes how many commands of the call write to GitHub, which is
+    the commands of WRITE_KINDS among found plus apis. `kinds` may ask for more than WRITE_KINDS
+    (the label hook also reads gh label edit); what is counted never changes with it.
+    Raises Unreadable when the command cannot be read, and that is never a count of none.
+    """
+    found = scan_gh_in_context(command, cwd, environ, frozenset(kinds) | WRITE_KINDS)
+    apis = [args for args in api_calls(command) if api_write(args)]
+    return found, apis, sum(1 for kind, _, _, _ in found if kind in WRITE_KINDS) + len(apis)
+
+
 def deny_payload(reason):
     """The PreToolUse response that blocks the tool call."""
     return {
@@ -1099,3 +1150,24 @@ def deny_payload(reason):
 def plural_issues(count):
     """"1 issue" / "3 issues", for a message that reads correctly either way."""
     return "1 issue" if count == 1 else "{n} issues".format(n=count)
+
+
+def _main(argv):
+    """`gh_issue_scan.py writes [<cwd>]`, the command on standard input: gh_writes for a gate
+    written in bash. Prints {"writes": <count>}, or {"unread": "<why>"} for a command that cannot
+    be read; exits 64 for anything else asked of it. A caller that gets neither has no count."""
+    import json
+    if argv[:1] != ["writes"] or len(argv) > 2:
+        sys.stderr.write("usage: gh_issue_scan.py writes [<cwd>] < the command\n")
+        return 64
+    command = sys.stdin.buffer.read().decode("utf-8", "replace")
+    try:
+        out = {"writes": gh_writes(command, argv[1] if len(argv) > 1 and argv[1] else None, dict(os.environ))[2]}
+    except Unreadable as e:
+        out = {"unread": str(e) or "the command could not be read"}
+    json.dump(out, sys.stdout)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(_main(sys.argv[1:]))

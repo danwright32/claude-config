@@ -76,10 +76,20 @@
 # octal value, with a note of how many there are, so the report is always valid
 # text and the path beside the byte can still be read. A file the search takes
 # for a binary is still skipped, and under C that takes a NUL (near the start of
-# the file, in the grep macOS ships: see the note above ALL_PAT). One thing
-# about such a line is left as it was found: whether the allow marker on it is
-# honoured depends on the locale and on where the byte sits (see the note above
-# the search, below).
+# the file, in the grep macOS ships: see the note above ALL_PAT).
+#
+# The allow marker does not count on such a line (claude-config#3586). A marked
+# line of valid text is excused whatever it holds. A marked line holding a byte
+# that is not valid UTF-8 is judged like an unmarked one, and what is found on it
+# is reported in a group of its own, which says the marker was seen, which byte
+# it is, and what was found. It used to turn on the locale and on where the byte
+# sat, and a line reported that way was followed by advice to add the marker.
+#
+# A control character in a reported line is shown as a backslash and its octal
+# value too, and counted, all but the tab (claude-config#3586). A carriage return
+# printed as it is draws the rest of the line over the file name and line number,
+# and an escape sequence can clear them: a file with CRLF line ends did the first
+# on every line reported from it.
 #
 # One thing this file must never do: write the sync's placeholder out in full. The
 # apply expands that placeholder in EVERY mirrored file, and it cannot tell a line
@@ -304,20 +314,37 @@ SKIP=(--exclude-dir=.git --exclude-dir=__pycache__ --exclude-dir=node_modules \
       --exclude=*.pyc --exclude=*.conflict-*)
 
 # -I so a binary that happens to hold the bytes is skipped rather than reported
-# as a line nobody can read. The allow marker is dropped line by line, so one
-# excused line never excuses the rest of its file.
-# The name must START with a letter or digit, which is what a real account is
-# shaped like. An elided example (a Users path written with dots for the name) is
-# how documentation refers to the idea rather than to a machine, and one of those
-# already lives in a vendored skill here, so a class that accepted it would open
-# with a false alarm nobody could act on (L104, L147).
-# A path under a home directory root, whose account name starts with a letter or digit, which is
-# what a real account looks like. Both roots by default: a /home path is as wrong in a synced file
-# as a /Users one, and the suite runs on both kinds of machine.
+# as a line nobody can read. The allow marker is honoured line by line, by the
+# judge below, so one excused line never excuses the rest of its file.
+# The name must START the way a real account's does, with a letter or a digit,
+# and never with a mark. An elided example (a Users path written with dots for
+# the name) is how documentation refers to the idea rather than to a machine, and
+# one of those already lives in a vendored skill here, so a class that accepted it
+# would open with a false alarm nobody could act on (L104, L147).
+# A path under a home directory root, whose account name starts as a real account's does. Both
+# roots by default: a /home path is as wrong in a synced file as a /Users one, and the suite runs
+# on both kinds of machine.
+#
+# A letter in any script, that is (claude-config#3586). The class used to be the ASCII letters and digits,
+# so a home whose name starts with an accented or a fullwidth letter passed, in every locale. The
+# search and the judge both run under C, where there is no asking whether a character is a letter,
+# so the name may now start with an ASCII letter or digit or with ANY byte from 128 up, which is
+# every character outside ASCII and every stray byte of a one byte encoding. That is told from an
+# elided example by what the repository's own elided examples are: measured on 2026-11-26, 91 of
+# its lines wrote a home root and then something that is not a name, 96 times, and what followed
+# the slash was an ASCII mark every time (a dot 70 times, an opening angle bracket 19, a closing
+# round bracket, a single quote, a bar, an opening square bracket, a double quote) and never a
+# byte from 128 up. So this reports more and excuses nothing it reported. What it cannot tell
+# apart is a mark outside ASCII standing where a name would (an ellipsis character, say): that is
+# reported as a name, and written with dots it is not.
+#
+# The class is spelled with ASCII only, as everything printable or a control character, negated,
+# so no byte from 128 up is written in this file or in the pattern. Measured on the grep and the
+# awk macOS ships, under C, over all 255 bytes a line can hold: it matched 128 to 255 and no other.
 HOME_ROOTS="${CLAUDE_HOME_PATH_ROOTS:-/Users /home}"
 _alt=""
 for _r in $HOME_ROOTS; do _alt="${_alt:+$_alt|}${_r}"; done
-MACHINE_PATH="(${_alt})/[A-Za-z0-9][A-Za-z0-9._-]*"
+MACHINE_PATH="(${_alt})/([A-Za-z0-9]|[^ -~[:cntrl:]])[A-Za-z0-9._-]*"
 # The hand substituted placeholder, the third rule (claude-config#106). It used to be listed as an
 # accepted portable form, because two Workflow scriptPath values could not be written as a tilde and
 # had to be filled in per Mac. Since claude-config#87 the sync rewrites this Mac's home directory in
@@ -345,8 +372,8 @@ ANGLE_TOKEN="<""HOME>"
 # run reports every cause it found, instead of exiting at the first and sending somebody back for
 # another run to discover the next one.
 #
-# The marker is dropped line by line, here, once: one excused line never excuses the rest of its
-# file, and no rule can forget to honour it. -I so a binary that happens to hold the bytes is
+# The marker is honoured line by line, in one place (the judge below, since claude-config#3586):
+# one excused line never excuses the rest of its file, and no rule can forget it. -I so a binary that happens to hold the bytes is
 # skipped rather than reported as a line nobody can read. The search runs under LC_ALL=C, where
 # the only thing that makes a file a binary is a NUL (claude-config#3538). The grep macOS ships
 # looks for one near the start of the file only: measured on 2026-11-24, a file whose NUL sat
@@ -366,6 +393,8 @@ allow_self=0
 hits=""      # rule 1: one machine's home directory
 tokbad=""    # rule 2: the sync's placeholder written where it is not fronting a path
 angbad=""    # rule 3: the hand substituted placeholder
+markbad=""   # any of the three, on a line whose marker does not count (claude-config#3586)
+ALLOW_MARKER="claude-sync-allow-home-path"
 
 # ---- every matching line judged outside the shell, and cut there (claude-config#3479) ----
 # The three rules used to be asked by this shell, of each matching line held whole in a variable.
@@ -376,8 +405,10 @@ angbad=""    # rule 3: the hand substituted placeholder
 #
 # So one awk program reads the lines the search matched, straight off the pipe, puts each to the
 # three rules, and hands the shell one short record per finding: the rule's number, a tab, and the
-# line as it is reported. A line of HP_CUT bytes or fewer is reported whole, and when it is valid
-# text, byte for byte as it always was. A longer one is reported as HP_CUT bytes of it, starting
+# line as it is reported. A line that carries the marker and is judged all the same is handed over
+# once instead, as a record of a fourth kind naming everything found on it (claude-config#3586).
+# A line of HP_CUT bytes or fewer is reported whole, and when it is valid text, byte for byte as
+# it always was. A longer one is reported as HP_CUT bytes of it, starting
 # HP_LEAD bytes before what the rule found, so the part shown is the part to act on, followed by a
 # note of which bytes are shown and how long the line is; an edge of that cut that falls inside a
 # character moves inward to the nearest whole one, so a cut shows up to three bytes fewer at each
@@ -385,22 +416,24 @@ angbad=""    # rule 3: the hand substituted placeholder
 # on the whole line: a line cut first would pass everything that sat below the cut. Last, each
 # byte of what is reported that belongs to no well formed UTF-8 character is written as a
 # backslash and its octal value and counted in a note, so the report is valid text whatever the
-# file held.
+# file held, and so is every byte of a control character but the tab, counted in a note of its
+# own, so the report draws nothing over where the line was found (claude-config#3586, as_text).
 #
 # What each rule refuses is what it refused in the shell. Each is asked the way the shell asked it,
 # with plain string comparison wherever the rule has no variable part, so the answer does not turn
 # on one regex engine agreeing with another. Three things are matched as patterns, each as simple
 # as a pattern gets: the home path itself, the placeholder followed by one character that is not a
-# slash, and this Mac's own config path where the allowance removes it. It runs with LC_ALL=C, so
-# a byte is a byte whatever the line holds and a cut is counted in bytes. The search in front of
-# it runs under C too, since claude-config#3538, and the marker filter between them keeps the
-# locale it always ran in: the note above the search says what each did with a byte that is not
-# valid text, and why.
+# slash, and this Mac's own config path where the allowance removes it. A fourth is asked only of a
+# line that carries the marker: whether it is valid text (claude-config#3586). It runs with
+# LC_ALL=C, so a byte is a byte whatever the line holds and a cut is counted in bytes. The search
+# in front of it runs under C too, since claude-config#3538, and nothing stands between them now:
+# the marker is looked for here, as a plain string (claude-config#3586).
 #
 # Measured on those 126 files on 2026-11-23, eight rounds at a load average near 175: 3.8 to 4.3
 # seconds before, 0.4 to 0.8 after, with the bare search at 0.05 to 0.12 and the same run over
-# 126 one line files at 0.09 to 0.17. What is left above the search is the marker filter (about
-# 0.15) and awk reading 12 MB (about 0.25 in the awk macOS ships).
+# 126 one line files at 0.09 to 0.17. What was left above the search that day was the marker
+# filter (about 0.15), which claude-config#3586 took off the pipe, and awk reading 12 MB (about
+# 0.25 in the awk macOS ships).
 #
 # There is still no `grep -q` at the end of a pipe (claude-config#162): awk reads every line it is
 # sent, so nothing upstream is killed by a reader that left early. And a judge that fails, or ends
@@ -456,17 +489,29 @@ function foreign_pos(s,    n, i, off, parts) {
 # The value of one byte, or -1 for anything that is not a single byte of the table built in BEGIN
 # (an awk that hands back whole characters gives a valid one here, which is shown as it is).
 function byte_of(c) { return (c in ORD) ? ORD[c] : -1 }
-# Bytes as they are shown when they are not valid text: a backslash and three octal digits each.
-function escaped(q,    j, r) {
+# Bytes written out as a backslash and three octal digits each.
+function octal(q,    j, r) {
   r = ""
-  for (j = 1; j <= length(q); j++) { r = r sprintf("\\%03o", byte_of(substr(q, j, 1))); NBAD++ }
+  for (j = 1; j <= length(q); j++) r = r sprintf("\\%03o", byte_of(substr(q, j, 1)))
   return r
 }
-# A reported line as valid text (claude-config#3538). Every well formed UTF-8 character and every
-# ASCII byte is kept exactly as it is, so a line of valid text is still reported byte for byte.
-# A byte that belongs to no well formed character is replaced by its octal value, and counted in
-# NBAD, so the report can be read, searched and passed on whatever the file held. Only ever asked
-# of the few hundred bytes a report carries, never of a whole line.
+# Bytes as they are shown when they are not valid text, and counted.
+function escaped(q) { NBAD += length(q); return octal(q) }
+# A reported line as valid text that draws nothing (claude-config#3538, #3586). Every well formed
+# UTF-8 character and every ASCII byte that is not a control character is kept exactly as it is,
+# so a line of ordinary valid text is still reported byte for byte. A byte that belongs to no well
+# formed character is replaced by its octal value, and counted in NBAD, so the report can be read,
+# searched and passed on whatever the file held.
+#
+# A control character is valid text, and is replaced the same way, counted in NCTL: a carriage
+# return printed as it is sends the rest of the line back over the file name and line number in
+# front of it, and an escape sequence can clear them, so a reported line could hide where it was
+# found (a file with CRLF line ends did, on every line reported from it). That is every byte below
+# 32 but the tab, the delete character at 127, and the 32 control characters above ASCII, which
+# are two bytes each (194, then 128 to 159) and which some terminals obey like the escape
+# character. The tab stays: it moves forward only, and it is in every indented file.
+#
+# Only ever asked of the few hundred bytes a report carries, never of a whole line.
 function as_text(s,    n, i, c, b, out, seq, need, lo, hi) {
   n = length(s); out = ""; seq = ""; need = 0; lo = 128; hi = 191
   for (i = 1; i <= n; i++) {
@@ -475,13 +520,21 @@ function as_text(s,    n, i, c, b, out, seq, need, lo, hi) {
     if (need > 0) {
       if (b >= lo && b <= hi) {
         seq = seq c; need--; lo = 128; hi = 191
-        if (need == 0) { out = out seq; seq = "" }
+        if (need == 0) {
+          if (length(seq) == 2 && b <= 159 && byte_of(substr(seq, 1, 1)) == 194) { out = out octal(seq); NCTL++ }
+          else out = out seq
+          seq = ""
+        }
         continue
       }
       # The character broke off here, so what was held of it is not text. This byte starts afresh.
       out = out escaped(seq); seq = ""; need = 0
     }
-    if (b < 128) { out = out c; continue }
+    if (b < 128) {
+      if (b >= 0 && ((b < 32 && b != 9) || b == 127)) { out = out octal(c); NCTL++ }
+      else out = out c
+      continue
+    }
     lo = 128; hi = 191
     if (b >= 194 && b <= 223) need = 1
     else if (b == 224) { need = 2; lo = 160 }
@@ -511,7 +564,29 @@ function whole_end(start, end,    j, b, need) {
   }
   return end
 }
-function report(rule, pos,    start, end, k, b, text, note) {
+# Where the first byte of s that belongs to no well formed UTF-8 character is, or 0 when s is
+# valid text (claude-config#3586). Asked of a whole line, which can run to megabytes, so it is two
+# matches and never a walk in awk: one for any byte from 128 up at all, and one for how far the
+# line goes on as well formed characters from its start. Measured on 2026-11-26 in the awk macOS
+# ships, on a line of 1.6 MB holding 40,000 three byte characters: 0.09 seconds, against 0.6 for a
+# tenth of that line walked a byte at a time.
+function first_bad(s) {
+  if (s !~ HIGH) return 0
+  if (!match(s, WELLFORMED)) return 1
+  if (RLENGTH >= length(s)) return 0
+  return RLENGTH + 1
+}
+# A finding. On a line that carries the marker and is judged all the same, the findings are
+# gathered and the line is reported once, after the last rule, with what was found on it.
+function report(rule, pos) {
+  if (marked) {
+    FOUND = FOUND (FOUND == "" ? "" : ", ") WHAT[rule]
+    if (FPOS == 0) FPOS = pos
+    return
+  }
+  emit(rule, pos, "")
+}
+function emit(rule, pos, extra,    start, end, k, b, text, note) {
   note = ""
   if (len <= CUT) text = line
   else {
@@ -534,17 +609,20 @@ function report(rule, pos,    start, end, k, b, text, note) {
     text = prefix substr(content, start, end - start + 1)
     note = " [line cut: bytes " start " to " end " of " len " shown]"
   }
-  NBAD = 0
+  NBAD = 0; NCTL = 0
   text = as_text(text)
   if (NBAD == 1) note = note " [1 byte that is not valid text, shown as a backslash and its octal value]"
   else if (NBAD > 1) note = note " [" NBAD " bytes that are not valid text, each shown as a backslash and its octal value]"
-  print rule "\t" text note
+  if (NCTL == 1) note = note " [1 control character, each byte of it shown as a backslash and its octal value]"
+  else if (NCTL > 1) note = note " [" NCTL " control characters, each byte of them shown as a backslash and its octal value]"
+  print rule "\t" text note extra
 }
+function chr(n) { return sprintf("%c", n) }
 BEGIN {
   TOK = ENVIRON["HP_TOKEN"]; ANG = ENVIRON["HP_ANGLE"]; MACH = ENVIRON["HP_MACHINE"]
-  SELF = ENVIRON["HP_SELF_HOME"]; ROOT = ENVIRON["HP_ROOT"]
+  SELF = ENVIRON["HP_SELF_HOME"]; ROOT = ENVIRON["HP_ROOT"]; MARK = ENVIRON["HP_MARK"]
   ALLOW = ENVIRON["HP_ALLOW_SELF"] + 0; CUT = ENVIRON["HP_CUT"] + 0; LEAD = ENVIRON["HP_LEAD"] + 0
-  if (TOK == "" || ANG == "" || MACH == "" || CUT < 1 || (ALLOW && SELF == "")) { unset = 1; exit 2 }
+  if (TOK == "" || ANG == "" || MACH == "" || MARK == "" || CUT < 1 || (ALLOW && SELF == "")) { unset = 1; exit 2 }
   nd = split(ENVIRON["HP_MIRRORED"], MIRR, "\n")
   # The placeholder followed by anything but a slash. It is letters and underscores, so it is its
   # own pattern; the end of the line, the other half of that rule, is compared as a string.
@@ -552,6 +630,22 @@ BEGIN {
   if (ALLOW) SELFRE = literal_re(SELF)
   # Each byte's value, looked up by the byte itself, for showing a reported line as valid text.
   for (i = 1; i < 256; i++) ORD[sprintf("%c", i)] = i
+  # A NUL too, in an awk that can hold one in a string (the one macOS ships cannot, and gives an
+  # empty string here, which is no byte of any line).
+  if (length(sprintf("%c", 0)) == 1) ORD[sprintf("%c", 0)] = 0
+  # Any byte from 128 up, spelled as the pattern for a home path spells it, and a line that is well
+  # formed UTF-8 from its start: the same characters as_text accepts, as one pattern. The bytes of
+  # its ranges are made here, so none is written in this file.
+  HIGH = "[^ -~[:cntrl:]]"
+  CONT = "[" chr(128) "-" chr(191) "]"
+  SEQ2 = "[" chr(194) "-" chr(223) "]" CONT
+  SEQ3 = "(" chr(224) "[" chr(160) "-" chr(191) "]|[" chr(225) "-" chr(236) chr(238) chr(239) "]" CONT "|" chr(237) "[" chr(128) "-" chr(159) "])" CONT
+  SEQ4 = "(" chr(240) "[" chr(144) "-" chr(191) "]|[" chr(241) "-" chr(243) "]" CONT "|" chr(244) "[" chr(128) "-" chr(143) "])" CONT CONT
+  WELLFORMED = "^([ -~[:cntrl:]]|" SEQ2 "|" SEQ3 "|" SEQ4 ")*"
+  # What each rule found, in the words a marked line's note uses.
+  WHAT["1"] = "a machine's home directory"
+  WHAT["2"] = "the sync's placeholder away from the front of a path"
+  WHAT["3"] = "the hand substituted placeholder"
 }
 $0 == "" { next }
 {
@@ -567,6 +661,27 @@ $0 == "" { next }
   c = index(content, ":"); if (c > 0) content = substr(content, c + 1)
   len = length(content)
   prefix = substr(line, 1, length(line) - len)
+
+  # The marker, looked for in the file's own content and under C, so it is seen or not seen the
+  # same way in every locale and by every grep (claude-config#3586). It used to be a grep between
+  # the search and this program, in the caller's locale, and on a line holding a byte that is not
+  # valid text the grep macOS ships saw it under C and, wherever the byte came before the marker
+  # or touched its end, not under a UTF-8 locale: measured on 2026-11-24, of five such lines it
+  # excused one there and all five under C, and a line it reported was followed by advice to add
+  # the marker it carried.
+  #
+  # A marked line of valid text is excused, whatever it holds, as it always was. A marked line
+  # holding a byte that is not valid text is NOT: it is put to the three rules like an unmarked
+  # one and, when one of them finds something, reported once, under a heading of its own that says
+  # the marker was seen and why it does not count. Of the two answers the issue left open (excuse
+  # a marked line whatever it holds, or report it because the marker may not be what it seems),
+  # this is the one that excuses less, built so that the other stays a choice.
+  marked = (index(content, MARK) > 0)
+  if (marked) {
+    badat = first_bad(content)
+    if (badat == 0) next
+    FOUND = ""; FPOS = 0
+  }
 
   # Each rule is asked independently, never as an else-if: a line can commit two of these at once
   # and reporting only the first found would hide the second behind the fix for it.
@@ -621,6 +736,8 @@ $0 == "" { next }
     }
     if (keep) report("1", pos)
   }
+
+  if (marked && FPOS > 0) emit("4", FPOS, " [the marker is on this line and does not count, because byte " badat " of the line is not valid text; found: " FOUND "]")
 }
 # The last line, and the proof the lines above were all read: the shell refuses a run without it.
 END { if (unset) exit 2; print "E\t" NR }
@@ -636,8 +753,8 @@ for d in ${MIRRORED_DIRS[@]+"${MIRRORED_DIRS[@]}"}; do _mirrored_nl="$_mirrored_
 # The listed form reads its files by name, a few hundred to a call so a long list never outgrows
 # what one command line may carry, and with -H so a call left holding one file still names it.
 #
-# The searches end in `true` and the marker filter in `|| true`, as they always did (a search that
-# matches nothing is not a failure), so under pipefail the status left is the judge's own.
+# The searches end in `true`, as they always did (a search that matches nothing is not a
+# failure), so under pipefail the status left is the judge's own.
 #
 # Every search runs with LC_ALL=C (claude-config#3538). In a UTF-8 locale the grep macOS ships
 # gives up on a line at the first byte that is not valid UTF-8: measured on 2026-11-24 under
@@ -653,16 +770,12 @@ for d in ${MIRRORED_DIRS[@]+"${MIRRORED_DIRS[@]}"}; do _mirrored_nl="$_mirrored_
 # reported anyway (14 kinds of valid line, accents in and around the path included, gave the
 # same report byte for byte before and after, in both locales).
 #
-# The marker filter gets -a and keeps the locale it always ran in. -a because it reads the
-# search's output from a pipe, and GNU grep, on meeting a byte it calls binary there, prints
-# "Binary file (standard input) matches" in place of every line from that one on (L329, and again
-# read from its manual rather than measured); the searches above can now send it such a line. In
-# the grep macOS ships -a changed nothing that was measured. Its locale is left alone on purpose. Under a UTF-8
-# locale the grep macOS ships cannot see the marker on a line whose odd byte comes before the
-# marker or touches its end, so that line is reported though it is marked (measured the same day),
-# while under C the marker is seen wherever the byte is. Running the filter under C would make
-# that uniform by EXCUSING lines that are reported today, and a change that makes this guard pass
-# more is not one to make in passing.
+# There is no marker filter between the search and the judge any more (claude-config#3586). It
+# was a grep in the caller's locale, and on a line holding a byte that is not valid text the grep
+# macOS ships saw the marker under C and often not under a UTF-8 locale, so whether such a line
+# was excused turned on the locale and on where the byte sat. The judge now looks for the marker
+# itself, under C like everything else it does, and says what it does with it where it does it.
+# One process fewer on the pipe, and one grep fewer whose reading of an odd byte has to be known.
 judged="$(
   { _i=0
     while [ "$_i" -lt "${#list_files[@]}" ]; do
@@ -673,17 +786,19 @@ judged="$(
     [ "${#skill_targets[@]}" -eq 0 ] || LC_ALL=C grep -rInE "${SKIP[@]}" ${skill_grep_skip[@]+"${skill_grep_skip[@]}"} \
       "$ALL_PAT" "${skill_targets[@]}" 2>/dev/null
     true
-  } | { grep -a -v 'claude-sync-allow-home-path' || true; } \
-    | LC_ALL=C HP_TOKEN="$CS_TOKEN" HP_ANGLE="$ANGLE_TOKEN" HP_MACHINE="$MACHINE_PATH" \
+  } | LC_ALL=C HP_TOKEN="$CS_TOKEN" HP_ANGLE="$ANGLE_TOKEN" HP_MACHINE="$MACHINE_PATH" HP_MARK="$ALLOW_MARKER" \
       HP_ALLOW_SELF="$allow_self" HP_ROOT="$ROOT" HP_SELF_HOME="$SELF_HOME" HP_MIRRORED="$_mirrored_nl" \
       HP_CUT="$HP_CUT" HP_LEAD="$HP_LEAD" awk "$_HP_JUDGE"
 )"
 judge_rc=$?
 
-# One short record per finding, sorted into the three rules. Nothing read here is longer than a
-# file's path, HP_CUT bytes of one of its lines as they are reported, and the notes after them. A
-# byte that is not valid text is reported as four characters, so at the very worst (HP_CUT such
-# bytes in a row) a record is four times HP_CUT and its path: still nothing like a whole line.
+# One short record per finding, sorted by its kind: one kind for each of the three rules, a fourth
+# for a marked line whose marker does not count (one record naming everything any rule found on
+# it, claude-config#3586), and the record that says the judge read every line. Nothing read here
+# is longer than a file's path, HP_CUT bytes of one of its lines as they are reported, and the
+# notes after them. A byte that is not valid text is reported as four characters, so at the very
+# worst (HP_CUT such bytes in a row) a record is four times HP_CUT and its path: still nothing
+# like a whole line.
 _tab=$'\t'
 judge_ended=0
 while IFS= read -r _rec; do
@@ -693,6 +808,8 @@ while IFS= read -r _rec; do
     "2$_tab"*) tokbad="$tokbad${_rec#??}
 " ;;
     "3$_tab"*) angbad="$angbad${_rec#??}
+" ;;
+    "4$_tab"*) markbad="$markbad${_rec#??}
 " ;;
     "E$_tab"*) judge_ended=1 ;;
   esac
@@ -755,6 +872,14 @@ case "$angbad" in *[![:space:]]*)
   echo "check-home-paths: these lines carry the hand substituted home placeholder, which nothing fills in any more, so the path they name resolves to nothing on every Mac:" >&2
   printf '%s' "$angbad" | sed 's/^/  /' >&2
   echo "Write the path relative to the home directory instead (a tilde, \$HOME, or expanduser), or put claude-sync-allow-home-path on the line if it genuinely has to name the placeholder." >&2
+  rc=1 ;;
+esac
+# Last, and apart, the lines that carry the marker and are reported all the same (claude-config#3586).
+# Apart because the three groups above each end by offering the marker, and these lines have it.
+case "$markbad" in *[![:space:]]*)
+  echo "check-home-paths: these lines carry $ALLOW_MARKER and are reported all the same, because each also holds a byte that is not valid text, and a marker on such a line may not be what it seems:" >&2
+  printf '%s' "$markbad" | sed 's/^/  /' >&2
+  echo "Each line says which byte it is and what was found. Take that byte out, or write it as valid text, and the marker excuses the line; or write the line so that it needs no marker." >&2
   rc=1 ;;
 esac
 [ "$rc" -eq 0 ] || exit 1
