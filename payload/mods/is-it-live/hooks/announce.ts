@@ -435,6 +435,10 @@ export const armedOf = (a: { repo: string; pr: number }): string =>
 export const notArmedOf = (a: { repo: string; pr: number }, why: string): string =>
   `Nothing is settled: the announcement for agents for ${nameOf(a)} is still owed. Its button could not be changed to ${confirmLabelOf(a)} (${why}), so it is not armed and the next press starts over.`
 
+/** A press of Not announcing where whether it was armed could not be read: it is no confirmation, and nothing was changed. */
+export const armedUnreadOf = (a: { repo: string; pr: number }, why: string): string =>
+  `Nothing is settled: the announcement for agents for ${nameOf(a)} is still owed. Whether Not announcing was armed could not be read (${why}), so this press was not counted.`
+
 /** A press on a row whose announcement was settled since it was pinned, by a draft or in another session. */
 export const alreadySettledOf = (stuck?: string): string => `That announcement for agents is already settled${stuck === undefined ? ', so its row was taken down.' : `. ${stuckOf(stuck)}`}`
 

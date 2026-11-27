@@ -134,6 +134,8 @@ type World = {
   bandFails?: string
   /** When set, the session's timers never run: the clock moves and nothing scheduled fires. */
   timersNeverRun?: true
+  /** With `timersNeverRun`: when set, every read of the clock fails with these words. */
+  clockFails?: string
   /** What Slack's draft tool answers, or the refusal of a gate beneath the mod. */
   slackDraft: { text: string; isError?: true; deny?: string }
 }
@@ -170,9 +172,12 @@ const judges = (i: Judged): Gh => {
 
 // A clock whose time a test moves and whose timers never run (#3847), as on a Mac too busy to have
 // run them: what the mod decides by the time alone is read here, with no timer having tidied up.
-const stillClock = (on: On) => {
+const stillClock = (on: On, w: { clockFails?: string }) => {
   let now = T0
-  on('clock.now', () => ({ value: now }) as never)
+  on('clock.now', () => {
+    if (w.clockFails) throw new Error(w.clockFails)
+    return { value: now } as never
+  })
   // The engine runs a timer's function once this hook answers, so it never answers.
   on('clock.after', () => new Promise<never>(() => {}))
   return {
@@ -194,7 +199,7 @@ const world = (on: On, init: Partial<World> = {}) => {
   const runs: string[][] = []
   // How long each command line was given to answer, as the mod asked for it.
   const limits: { argv: string[]; ms: number | undefined }[] = []
-  const clock = w.timersNeverRun ? stillClock(on) : mock.clock(on, { now: T0 })
+  const clock = w.timersNeverRun ? stillClock(on, w) : mock.clock(on, { now: T0 })
   // The store every session shares, held where a test can read it and write under the mod.
   const store = new Map<string, unknown>(Object.entries(w.stored ?? {}))
   on('store.get', ($, e) => {
@@ -853,15 +858,44 @@ test('left alone for the armed time the button goes back to Not announcing with 
   expect(store.get(DONE_KEY)).toBeUndefined()
   expect(toasts).toEqual([armedSaid(7)])
   expect(await buttons($)).toEqual(ARMED)
-  // The first arming's time running out does not cut the second one short: armed again 4 seconds
-  // before, the button is still armed 6 seconds later.
-  await clock.advance(ARMED_MS - 1)
+  // An earlier arming's time running out does not cut a later one short. Copy disarms it 4 seconds
+  // in and the next press arms it again: when the earlier arming's timer runs, 6 seconds on, the
+  // button is still armed, and it stays armed for the whole of its own 10 seconds.
+  await clock.advance(4_000)
+  await clock.settle()
+  await press($, `${BUTTON}copy-${ID}`)
+  expect(await buttons($)).toEqual(ALL_THREE)
+  await press($, `${BUTTON}none-${ID}`)
+  await clock.advance(6_000)
+  await clock.settle()
+  expect(await buttons($)).toEqual(ARMED)
+  await clock.advance(ARMED_MS - 6_000 - 1)
   await clock.settle()
   expect(await buttons($)).toEqual(ARMED)
   await clock.advance(1)
   await clock.settle()
   expect(await buttons($)).toEqual(ALL_THREE)
   expect(store.get(DONE_KEY)).toBeUndefined()
+})
+
+test('a press of Not announcing where whether it was armed cannot be read settles nothing, and says that rather than that the label could not change (#3847)', withKit, async ($, on) => {
+  // Armed is decided by the clock, so a clock that will not read leaves it unread.
+  const { store, toasts, w } = world(on, { stored: OWED_AND_OUT, timersNeverRun: true })
+  await start($)
+  await press($, `${BUTTON}none-${ID}`)
+  w.clockFails = 'the clock would not read'
+  toasts.length = 0
+  await press($, `${BUTTON}none-${ID}`)
+  expect(store.get(DONE_KEY)).toBeUndefined()
+  // The reason is the engine's own words for a clock that did not answer, so only the sentence is held.
+  expect(toasts.length).toBe(1)
+  expect(toasts[0]).toContain(`Nothing is settled: the announcement for agents for ${NAME} is still owed. Whether Not announcing was armed could not be read (`)
+  expect(toasts[0]).toContain('), so this press was not counted.')
+  // Read again, the press that was not counted has changed nothing: the button is still armed.
+  w.clockFails = undefined
+  expect(await buttons($)).toEqual(ARMED)
+  await press($, `${BUTTON}none-${ID}`)
+  expect(store.get(DONE_KEY)).toEqual({ how: 'not-announcing', at: T0 })
 })
 
 test('a second press that comes once the time is up settles nothing, even where the label has not gone back yet (#3847)', withKit, async ($, on) => {

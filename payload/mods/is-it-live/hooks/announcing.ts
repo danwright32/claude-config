@@ -15,6 +15,7 @@ import {
   announceLetGoOf,
   announceRow,
   armedOf,
+  armedUnreadOf,
   askedOf,
   cardUnapprovedOf,
   claimArgv,
@@ -588,7 +589,7 @@ export async function announcementPressed($: EngineInterface, p: { verb: Pressed
     try {
       confirming = await isArmed($, p.row)
     } catch (err) {
-      $.ui.toast(notArmedOf(a, msg(err)))
+      $.ui.toast(armedUnreadOf(a, msg(err)))
       return
     }
     if (!confirming) {
