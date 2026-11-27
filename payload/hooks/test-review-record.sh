@@ -267,6 +267,50 @@ code, out, err = record('handed', '--transcript', t5)
 check('a hand over is still written for a transcript naming no prompt', None if code == 0 and os.path.exists(HANDED(t5)) else 'exit %d, err %r' % (code, err))
 got = state(t5)
 check('and its state is "cannot be read", saying the turn cannot be told, never handed for ever', None if got.startswith('exit 3: ') and 'prompt' in got else got)
+# The review of pull request 3869: once a line naming a prompt was written, that hand over read as
+# none, with exit 0 and nothing said. Which turn it belongs to still cannot be told.
+add(t5, [user('p9', 'the next thing'), assistant()])
+got = state(t5)
+check('a hand over written with no turn stays "cannot be read" once the transcript names a prompt, never none in silence', None if got.startswith('exit 3: ') and 'names no turn' in got else got)
+code, out, err = record('answered', '--transcript', t5)
+check('and the last step for it is an error that says so, never "nothing to mark"', None if code == 2 and 'names no turn' in err and 'Nothing to mark' not in out else 'exit %d, out %r, err %r' % (code, out, err))
+add(t5, WORKED('p10'))
+record('handed', '--transcript', t5)
+said('until the next hand over, in a turn that can be told, replaces it', state(t5), 'handed')
+
+# The same for a hand over file that holds no usable turn however it came to: no turn, a null one,
+# a number, an empty one. Each read as none before.
+t5b = transcript('noturn', WORKED('p1'))
+for what, more in (('no turn at all', {}), ('a null turn', {'turn': None}), ('a number for its turn', {'turn': 7}), ('an empty turn', {'turn': ''})):
+    with open(HANDED(t5b), 'w') as f:
+        json.dump(dict({'v': 1, 'id': 'h1', 'at': 1800000000.0, 'label': ''}, **more), f)
+    got = state(t5b)
+    check('a hand over holding %s is "cannot be read", never none in silence' % what, None if got.startswith('exit 3: ') and 'names no turn' in got else got)
+
+# A hand over whose time is not a number, and an answer that names no hand over.
+t5c = transcript('oddtime', WORKED('p1'))
+with open(HANDED(t5c), 'w') as f:
+    json.dump({'v': 1, 'turn': 'p1', 'id': 'h1', 'at': True, 'label': ''}, f)
+got = state(t5c)
+check('a hand over whose time is true, not a number, is "cannot be read"', None if got.startswith('exit 3: ') and 'no time' in got else got)
+t5d = transcript('oddanswer', WORKED('p1'))
+record('handed', '--transcript', t5d)
+with open(ANSWERED(t5d), 'w') as f:
+    json.dump({'v': 1, 'turn': 'p1', 'at': 1800000000.0}, f)
+got = state(t5d)
+check('an answer that names no hand over is "cannot be read", never "not answered"', None if got.startswith('exit 3: ') and 'review-answered.json' in got and 'names no hand over' in got else got)
+
+# Which line is the turn's prompt.
+t5e = transcript('sidechain', WORKED('p1'))
+record('handed', '--transcript', t5e)
+side = json.loads(user('p2', 'a prompt handed to a subagent'))
+side['isSidechain'] = True
+add(t5e, [json.dumps(side)])
+said("a subagent's line in the transcript is not the turn's prompt: the hand over still reads handed", state(t5e), 'handed')
+t5f = transcript('fallback', WORKED('p1'))
+record('handed', '--transcript', t5f)
+add(t5f, [user(None, 'a line that names no prompt')])
+said('a last user line naming no prompt falls back to the line before it, so the hand over still reads handed', state(t5f), 'handed')
 
 # A hand over that cannot be written.
 t6 = transcript('readonly', WORKED('p1'))
@@ -285,6 +329,12 @@ os.mkdir(HANDED(t6b))
 code, out, err = record('handed', '--transcript', t6b)
 check('a hand over whose file cannot be moved into place is an error that names the file and why', None if code == 2 and 'review-handed.json' in err else 'exit %d, err %r' % (code, err))
 check('and it leaves no half written file beside the transcript', None if beside(t6b) == [os.path.basename(HANDED(t6b))] else 'beside it: %r' % beside(t6b))
+# An answer that cannot be written: the same folder in the way, where the answer's file goes.
+t6c = transcript('answerinplace', WORKED('p1'))
+record('handed', '--transcript', t6c)
+os.mkdir(ANSWERED(t6c))
+code, out, err = record('answered', '--transcript', t6c)
+check('an answer that could not be written is an error that names the file, never a quiet success', None if code == 2 and 'review-answered.json' in err and 'Recorded' not in out else 'exit %d, out %r, err %r' % (code, out, err))
 
 # ---- Assume it runs twice ----
 t7 = transcript('twice', WORKED('p1'))
@@ -315,18 +365,81 @@ said('and the record they leave is one whole hand over', state(t8), 'handed')
 check('with no temp file left behind', None if beside(t8) == [os.path.basename(HANDED(t8))] else 'beside it: %r' % beside(t8))
 
 # ---- Record files whose transcript has gone ----
+# The tidy up deletes files without asking, so each of its limits is held here (the review of pull
+# request 3869 found two it could lose with every suite still passing). It removes exactly two
+# things: a record this file wrote, for a transcript that is no longer there, and a temp file of this
+# file's own naming that is more than an hour old. Everything else in the folder stays.
 t9 = transcript('kept', WORKED('p1'))
 folder = os.path.dirname(t9)
-gone = os.path.join(folder, 'gone.jsonl')
-for path in (HANDED(gone), ANSWERED(gone), os.path.join(folder, 'notes.txt'), os.path.join(folder, 'other.jsonl.skip-stop-hooks')):
+HOUR = 3600
+
+
+def put(name, text='{}', age=0):
+    path = os.path.join(folder, name)
     with open(path, 'w') as f:
-        f.write('{}')
+        f.write(text)
+    if age:
+        then = os.path.getmtime(path) - age
+        os.utime(path, (then, then))
+    return path
+
+
+def real_records(name):
+    """Both record files of a transcript, written by the record itself, and the transcript then removed."""
+    gone = transcript(name, WORKED('p1'), folder=folder)
+    record('handed', '--transcript', gone)
+    record('answered', '--transcript', gone)
+    os.remove(gone)
+    return [os.path.basename(HANDED(gone)), os.path.basename(ANSWERED(gone))]
+
+
+A_RECORD = json.dumps({'v': 1, 'turn': 'p1', 'id': 'h1', 'at': 1800000000.0, 'label': ''})
+# Every hand over tidies the folder, so the two that set this up come before anything is planted.
 other = transcript('other', WORKED('p1'), folder=folder)
 record('handed', '--transcript', other)
-record('handed', '--transcript', t9)
+record('answered', '--transcript', other)
+removed = real_records('gone')
+removed += [os.path.basename(put('kept.jsonl.review-handed.json.tmp.4242.0a1b2c3d', A_RECORD, age=HOUR + 300))]
+removed += [os.path.basename(put('gone.jsonl.review-answered.json.tmp.7.ffffffff', '{"v": 1, "tur', age=2 * HOUR))]
+kept = ['kept.jsonl', 'other.jsonl', 'other.jsonl.review-handed.json', 'other.jsonl.review-answered.json']
+# Not this file's to remove, each by one limit.
+kept += [os.path.basename(put(n, t, age=a)) for n, t, a in (
+    ('notes.txt', '{}', 0),
+    ('other.jsonl.skip-stop-hooks', '', 0),
+    # A temp file still inside the hour: a second writer may be about to move it into place.
+    ('kept.jsonl.review-handed.json.tmp.4243.0a1b2c3e', A_RECORD, 0),
+    ('kept.jsonl.review-answered.json.tmp.4244.0a1b2c3f', A_RECORD, HOUR - 300),
+    # Old, and named like a temp file, but not as this file names one.
+    ('report.jsonl.review-handed.json.tmp.keep', A_RECORD, 2 * HOUR),
+    ('report.jsonl.review-handed.json.tmp.12.0a1b2c3d.bak', A_RECORD, 2 * HOUR),
+    # A record's ending on a file not named for a transcript, and a record's name with more after it.
+    ('x.review-handed.json', A_RECORD, 2 * HOUR),
+    ('lost.jsonl.review-handed.json.bak', A_RECORD, 2 * HOUR),
+    # Named exactly as a record of a transcript that is gone, and holding something else.
+    ('mine.jsonl.review-handed.json', 'my own notes, not a record', 2 * HOUR),
+    ('mine.jsonl.review-answered.json', '{"turn": "p1"}', 2 * HOUR),
+    ('list.jsonl.review-handed.json', '[1, 2]', 2 * HOUR),
+)]
+# A folder named as a record, a link named as a record, and a record inside a folder beneath.
+os.mkdir(os.path.join(folder, 'dir.jsonl.review-handed.json'))
+os.symlink(os.path.join(folder, 'notes.txt'), os.path.join(folder, 'link.jsonl.review-handed.json'))
+os.mkdir(os.path.join(folder, 'beneath'))
+with open(os.path.join(folder, 'beneath', 'deep.jsonl.review-handed.json'), 'w') as f:
+    f.write(A_RECORD)
+kept += ['dir.jsonl.review-handed.json', 'link.jsonl.review-handed.json', 'beneath']
+# A transcript that is a link pointing at nothing is still there by name: its record stays.
+os.symlink(os.path.join(folder, 'nowhere.jsonl'), os.path.join(folder, 'dangling.jsonl'))
+put('dangling.jsonl.review-handed.json', A_RECORD, age=2 * HOUR)
+kept += ['dangling.jsonl', 'dangling.jsonl.review-handed.json']
+before = sorted(os.listdir(folder))
+check('the tidy up test starts with every file it means to plant', None if before == sorted(kept + removed) else 'the folder holds %r' % before)
+code, out, err = record('handed', '--transcript', t9)
+kept += ['kept.jsonl.review-handed.json']
 left = sorted(os.listdir(folder))
-want = sorted(['kept.jsonl', 'kept.jsonl.review-handed.json', 'other.jsonl', 'other.jsonl.review-handed.json', 'notes.txt', 'other.jsonl.skip-stop-hooks'])
-check("a hand over removes the record files of transcripts that have gone, and nothing else", None if left == want else 'the folder holds %r, expected %r' % (left, want))
+check('a hand over removes the records of transcripts that have gone and its own temp files past an hour old', None if not [n for n in removed if n in left] else 'still there: %r' % [n for n in removed if n in left])
+check('and nothing else: a fresh temp file, a file not named as it names one, a file that holds no record of its, a folder, a link, a folder beneath, the record of a transcript that is a dangling link', None if left == sorted(kept) else 'gone that should have stayed: %r; there that should not be: %r' % (sorted(set(kept) - set(left)), sorted(set(left) - set(kept))))
+check('the record beneath is untouched', None if os.path.exists(os.path.join(folder, 'beneath', 'deep.jsonl.review-handed.json')) else 'it was removed')
+check('and it says nothing of what it left alone, the folder named as a record included', None if code == 0 and not err else 'exit %d, it said %r' % (code, err))
 
 # Two hand overs at once tidy one folder. A temp file listed a moment ago has since been moved into
 # place by its writer, and a leftover has since been removed by the other's tidy up: gone is what
@@ -360,6 +473,10 @@ def tidy_says(names, refuses=False):
 
 said('a temp file its writer has since moved into place is passed over, with nothing said', tidy_says(['w.jsonl.review-handed.json.tmp.4242.0a1b2c3d']), '')
 said('a leftover another hand over has since removed is passed over, with nothing said', tidy_says(['gone.jsonl.review-handed.json', 'gone.jsonl.review-answered.json']), '')
+# A leftover that is there (a record of this file's, its transcript gone) and whose removal is refused.
+os.makedirs(os.path.join(work, 'tidy-project'))
+with open(os.path.join(work, 'tidy-project', 'gone.jsonl.review-handed.json'), 'w') as f:
+    f.write(A_RECORD)
 got = tidy_says(['gone.jsonl.review-handed.json'], refuses=True)
 check('a leftover that is there and cannot be removed is still said', None if 'could not be removed' in got and 'Permission denied' in got else 'it said %r' % got)
 
@@ -414,6 +531,31 @@ code, text, err = reason(['--instruction', REFLECTION, '--label', 'SESSION REFLE
 check('a hand over whose file could not be moved into place still sends the review, and says the record was not written', None if code == 0 and text and 'SESSION REFLECTION. ' in text and 'REVIEW RECORD NOT WRITTEN' in text and 'review-handed.json' in text else 'exit %d, reason %r, err %r' % (code, text, err))
 code, text, err = reason(['--instruction', REFLECTION, '--label', 'SESSION REFLECTION'])
 check('a review built with no transcript says the hand over could not be recorded', None if code == 0 and text and 'REVIEW RECORD NOT WRITTEN' in text else 'exit %d, reason %r' % (code, text))
+
+# The hand over is recorded only once the reason is built: a reason that could not be built was never
+# handed to the session, and a record of it would hold the box for a review nobody was given. The
+# builder is made to fail inside a copy of the helper loaded here, since no input makes it fail.
+t14 = transcript('unbuilt', WORKED('p1'))
+spec = importlib.util.spec_from_file_location('review_reason_under_test', REASON)
+helper = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(helper)
+
+
+def unbuilt(*args, **kwargs):
+    raise RuntimeError('the reason could not be built')
+
+
+helper.build_reason = unbuilt
+argv, sys.argv = sys.argv, [REASON, '--instruction', REFLECTION, '--label', 'SESSION REFLECTION', '--transcript', t14]
+try:
+    helper.main()
+    raised = 'main returned without the failure'
+except RuntimeError as exc:
+    raised = str(exc)
+finally:
+    sys.argv = argv
+check('a reason that could not be built fails the helper', None if raised == 'the reason could not be built' else raised)
+check('and records no hand over: nothing is beside the transcript', None if beside(t14) == [] else 'beside it: %r' % beside(t14))
 
 # ---- Both review hooks, run for real ----
 def hook(name, t, active=False):

@@ -43,11 +43,14 @@ carried one, it changed at each of 177 prompts (Dan's own, a mod's, a subagent's
 Stop hook's feedback line and every tool result carried the id of the turn they belong to.
 
 FAILING. `state` exits 3 with one line on stderr when the record or the transcript cannot be read,
-or when a hand over is on file and the transcript names no prompt to tell its turn by: never "none"
-and never "answered" (L10, L50). `handed` and `answered` exit 2 with one line on stderr when they
-could not write or could not find what to write for.
+when a hand over is on file and the transcript names no prompt to tell its turn by, or when the
+hand over on file names no turn itself: never "none" and never "answered" (L10, L50). `handed` and
+`answered` exit 2 with one line on stderr when they could not write or could not find what to
+write for.
 
-Record files whose transcript has gone are removed at the next hand over in the same folder.
+TIDYING UP. Each hand over removes, from the transcript's folder and without asking, the records
+this file wrote for transcripts that are no longer there, and its own temp files more than an hour
+old. What it leaves alone, and why, is on `sweep` below.
 
 Seam: CLAUDE_REVIEW_RECORD_MIDWRITE names a command run between the write and the move, for the
 suite (test-review-record.sh).
@@ -64,6 +67,7 @@ import importlib.util
 import json
 import os
 import re
+import stat
 import subprocess
 import time
 import uuid
@@ -74,6 +78,13 @@ ANSWERED_SUFFIX = ".review-answered.json"
 SESSION_ID = re.compile(r"^[A-Za-z0-9-]+$")
 # A temp file a killed writer left is removed once it is this old.
 TEMP_MAX_AGE = 3600
+# What the tidy up may remove, by name: a record of a transcript (`<name>.jsonl` and one of the two
+# suffixes, nothing after), and a temp file exactly as write_record names one (the record's name,
+# `.tmp.`, the writer's process id, eight hex digits, nothing after).
+RECORD_NAME = re.compile(r"\.jsonl(?P<suffix>%s|%s)$" % (re.escape(HANDED_SUFFIX), re.escape(ANSWERED_SUFFIX)))
+TEMP_NAME = re.compile(r"\.jsonl(?:%s|%s)\.tmp\.[0-9]+\.[0-9a-f]{8}$" % (re.escape(HANDED_SUFFIX), re.escape(ANSWERED_SUFFIX)))
+# No record this file writes comes near this size; a larger file under a record's name is not one.
+RECORD_MAX_BYTES = 65536
 
 
 class Unreadable(Exception):
@@ -148,11 +159,36 @@ def write_record(path, obj):
         raise
 
 
+def _holds_a_record(path, size):
+    """Whether a file holds a record this file wrote: small, one JSON object, of the version written
+    here. A file that has gone raises FileNotFoundError, which the tidy up passes over."""
+    if size > RECORD_MAX_BYTES:
+        return False
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            obj = json.loads(f.read())
+    except FileNotFoundError:
+        raise
+    except Exception:
+        return False
+    return isinstance(obj, dict) and obj.get("v") == 1
+
+
 def sweep(folder):
-    """Removes record files whose transcript has gone, and temp files a killed writer left. A file
-    that has gone since the folder was listed is passed over in silence: with two hand overs at once
-    the other's writer has moved its temp file into place, or its sweep has removed the same
-    leftover, and gone is what was wanted. Only a file that is there and could not be removed is said."""
+    """The tidy up. It deletes without asking, so it removes two things only, each held by a case in
+    test-review-record.sh: a record this file wrote (by its name AND by what it holds) for a
+    transcript that is no longer there, and a temp file named exactly as write_record names one that
+    is more than TEMP_MAX_AGE old, which only a killed writer leaves. Everything else stays, with
+    nothing said: a younger temp file (a second writer may be about to move it into place), a file
+    named nearly so, a file named as a record that holds something else, a folder or a link under a
+    record's name, anything in a folder beneath, and the record of a transcript whose name is still
+    there as a link pointing at nothing. Where it is in doubt it leaves the file, since a leftover
+    costs a few bytes and a wrong removal cannot be undone (L648).
+
+    A file that has gone since the folder was listed is passed over in silence: with two hand overs
+    at once the other's writer has moved its temp file into place, or its tidy up has removed the
+    same leftover, and gone is what was wanted. Only a file that is there, is this file's to remove
+    and could not be removed is said."""
     try:
         names = os.listdir(folder)
     except OSError:
@@ -161,11 +197,19 @@ def sweep(folder):
     for name in names:
         path = os.path.join(folder, name)
         try:
-            for suffix in (HANDED_SUFFIX, ANSWERED_SUFFIX):
-                if name.endswith(".jsonl" + suffix) and not os.path.exists(path[: -len(suffix)]):
+            info = os.lstat(path)
+            if not stat.S_ISREG(info.st_mode):
+                continue
+            if TEMP_NAME.search(name):
+                if now - info.st_mtime > TEMP_MAX_AGE:
                     os.remove(path)
-                elif (".jsonl" + suffix + ".tmp.") in name and now - os.path.getmtime(path) > TEMP_MAX_AGE:
-                    os.remove(path)
+                continue
+            named = RECORD_NAME.search(name)
+            if not named:
+                continue
+            transcript = path[: len(path) - len(named.group("suffix"))]
+            if not os.path.lexists(transcript) and _holds_a_record(path, info.st_size):
+                os.remove(path)
         except FileNotFoundError:
             continue
         except OSError as exc:
@@ -186,7 +230,16 @@ def handed_now(transcript):
             "a review was handed over, but the transcript at %s names no prompt id on its user lines, "
             "so which turn the hand over belongs to cannot be told" % transcript
         )
-    if handed.get("turn") != turn:
+    # A hand over with no usable turn (written while the transcript named no prompt, or damaged) is
+    # never taken for one of an earlier turn: before the review of pull request 3869 it read as none,
+    # in silence. It stays unread until the next hand over replaces it.
+    recorded = handed.get("turn")
+    if not isinstance(recorded, str) or not recorded:
+        raise Unreadable(
+            "%s holds a hand over that names no turn, so whether it was handed over in this turn cannot "
+            "be told; the next hand over replaces it" % (transcript + HANDED_SUFFIX)
+        )
+    if recorded != turn:
         return turn, None
     return turn, handed
 
