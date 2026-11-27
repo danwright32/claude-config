@@ -374,19 +374,32 @@ const bumpPrompts = async ($: EngineInterface): Promise<void> => {
 // yes and no only, never a run that could not be read. The test reads nothing but the name, so one
 // run a name is enough, where a run for every call would put a process start on each of them.
 const workSaid = new Map<string, boolean>()
+// A run that could not be read, by tool name, under the turn's count it was made in (closeSeq, which
+// every turn start and message moves). It is not made again for that name until the count moves:
+// each run holds a call's result back for up to WORK_TEST_MS, and before the review of pull request
+// 3852 a test that could not be run was run again on every call while an answer waited. Kept as
+// unread, never as a yes or a no. Calls that land at once may each make the run.
+const workUnread = new Map<string, { seq: number; why: string }>()
 
 /** The end of turn review's own test of one tool name, run from its file (request.ts); never throws. */
 const changesSomething = async ($: EngineInterface, tool: string): Promise<WorkRead> => {
   const known = workSaid.get(tool)
   if (known !== undefined) return { changes: known }
+  let seq = 0
   try {
+    seq = (await $.state.get(closeSeqRef)).value ?? 0
+    const failed = workUnread.get(tool)
+    if (failed?.seq === seq) return { unread: failed.why }
     const home = await $.env.get('HOME')
     if (!home) return { unread: "HOME is not set, so the end of turn review's test cannot be found" }
     const read = workRead(await $.process.run(workTestArgv(home, tool), { timeoutMs: WORK_TEST_MS }))
     if ('changes' in read) workSaid.set(tool, read.changes)
+    else workUnread.set(tool, { seq, why: read.unread })
     return read
   } catch (err) {
-    return { unread: errorText(err, MOD) }
+    const why = errorText(err, MOD)
+    workUnread.set(tool, { seq, why })
+    return { unread: why }
   }
 }
 
@@ -396,6 +409,25 @@ const pickedWorkBegan = async ($: EngineInterface): Promise<void> => {
     const held = await $.state.get(pickerRef)
     if (!held.value) return
     if ((await $.state.set(pickerRef, null, { ifVersion: held.version })).isSet) return bumpPrompts($)
+  }
+}
+
+/**
+ * The main conversation's turn has ended, however it ended: an answer of Dan's that nothing is known
+ * to have followed stops waiting (the review of pull request 3852). His rule is that the session goes
+ * on to change something after his answer, and the turn after can be one he did not start (a prompt
+ * a mod sends, a wake up, a job's notice), whose work he never picked. One whose following work
+ * could not be read stops waiting too, said in the debug log. Never throws: the rest of the turn's
+ * end does not depend on it.
+ */
+const pickerTurnEnded = async ($: EngineInterface): Promise<void> => {
+  try {
+    const held = (await $.state.get(pickerRef)).value
+    if (!held) return
+    await $.state.set(pickerRef, null)
+    debug($, held.unread === undefined ? 'the turn Dan answered a picker in has ended with nothing changed after his answer, so his answer no longer waits for work' : `the turn Dan answered a picker in has ended, and whether anything was changed after his answer could not be read (${held.unread}), so his answer no longer waits and no box is owed for it`)
+  } catch (err) {
+    debug($, `an answer of Dan's still waiting at the turn's end could not be dropped (${errorText(err, MOD)}), so work in a later turn may be counted as work he picked`)
   }
 }
 
@@ -613,6 +645,7 @@ export const register: Register = on => {
     if (typeof e.cwd === 'string' && e.cwd) startCwd = e.cwd
     // #3843: the review's test is asked afresh in each session, since its file can change between them.
     workSaid.clear()
+    workUnread.clear()
     // Only where somebody is at the prompt to see it; offered in full, not behind a search, so the
     // session knows when to call it.
     if (e.isInteractive) await $.tool.register({ name: NAME, description: DESCRIPTION, inputSchema: SCHEMA, isDeferred: false })
@@ -715,20 +748,26 @@ export const register: Register = on => {
   }).catch(watchesOnly)
 
   // #3843: every tool call of the main conversation, once it has come back. An answer Dan gives in a
-  // picker is kept until work follows it; the call that carried his answer is never that work, nor
-  // is the box's own tool (which the review's test would count, by its name). Nor is a call that was
+  // picker is kept until work follows it; the call that carried his answer is never that work. The
+  // box's own tool is not named here because its call never reaches this hook: its own hook is
+  // registered above, so it stands outside this one, answers the call and passes nothing down (the
+  // tests hold that a box shown while an answer waits earns no other). Nor is a call that was
   // refused or came back as an error: a settings hook's refusal reaches a mod as an errored result,
   // the same as a command that failed, so neither is counted and the next call that runs clean is.
   // Every other call is read for being that work (noteCall).
   on('tool.call', async ($, e, next) => {
     const r = await next(e)
-    if (e.agentId !== undefined || e.tool === TOOL) return r
+    if (e.agentId !== undefined) return r
     if (e.tool === 'AskUserQuestion') {
       if (answered(r)) await $.state.set(pickerRef, {})
       return r
     }
-    const came = r as { deny?: unknown; isError?: unknown }
-    if (came.deny === undefined && came.isError !== true) await noteCall($, e.tool)
+    // Nor is a call Claude Code marked read only: `isReadOnly` is on the result "only when the tool
+    // held the input it executed read-only by its own check" (`git status`; a connected tool its
+    // server declares read only). A result without the mark is judged by the review's test, as
+    // every call was before the mark was read, and is never taken as read only.
+    const came = r as { deny?: unknown; isError?: unknown; isReadOnly?: unknown }
+    if (came.deny === undefined && came.isError !== true && came.isReadOnly !== true) await noteCall($, e.tool)
     return r
   }).catch(watchesOnly)
 
@@ -736,6 +775,8 @@ export const register: Register = on => {
   // prompt of its own to show the box. The main loop's own end only, never an interrupt.
   on('turn.complete', async ($, e, next) => {
     const r = await next(e)
+    // #3843: an answer of Dan's that nothing followed waits only until the turn it was given in ends.
+    if (e.agentId === undefined) await pickerTurnEnded($)
     if (e.agentId !== undefined || e.reason !== 'answer') return r
     if ((await $.state.get(interactiveRef)).value !== true) return r
     // #3770: the quiet period before the close card, armed under this turn's count.

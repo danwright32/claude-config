@@ -18,6 +18,16 @@ import type { GoalBoxPicker } from '../types/index.d.ts'
 // tests/test-goal-box-work-test.sh holds the two together: the command against the real file, and
 // the review hooks still naming that file. Beyond the test, the call must be the main conversation's
 // and must have run: one a guard refused changed nothing. The box's own tool never counts.
+//
+// The review of pull request 3852 (2026-11-27) added three things. A call Claude Code itself marks
+// read only is not work whatever its tool's name: the result a tool.call hook gets carries
+// `isReadOnly: true` "only when the tool held the input it executed read-only by its own check", so
+// `git status` after an answer that only confirmed a step opens no second box; a result without the
+// mark is judged by the test above, never taken as read only. An answer waits only until the turn it
+// was given in ends, so a turn Dan did not start (a prompt a mod sends, a wake up, a job's notice)
+// cannot do work that counts as picked by an answer from before it. And a run of the test that could
+// not be read is not made again for the same tool's name in that turn, since each run holds the
+// call's result back for up to WORK_TEST_MS.
 
 /** The Python that asks the review's own test about one tool name: the file by path, then the name. */
 export const WORK_TEST = `
@@ -52,15 +62,20 @@ export const workRead = (r: { exitCode: number; stdout: string; stderr: string }
 
 /**
  * Whether an AskUserQuestion call came back with an answer of Dan's, as Claude Code's dialog hands
- * it to a tool.call hook: a result holding `answers` with at least one that is not empty. A picker he
- * dismissed (a refusal), one that failed, one that closed by itself while he was away
- * (`afkTimeoutMs`), and any result not in that shape are no answer.
+ * it to a tool.call hook: a result holding `answers` with at least one that is not empty, or a
+ * `response` that is not empty, which is what he typed in place of choosing (Claude Code's typings
+ * of the tool's result: "Freeform text the user typed instead of selecting a structured option").
+ * Those are his own words, so they are an answer like a choice; which path of the dialog fills
+ * `response` was read from the typings and not measured in a session. A picker he dismissed (a
+ * refusal), one that failed, one that closed by itself while he was away (`afkTimeoutMs`), and any
+ * result not in that shape are no answer.
  */
 export const answered = (r: unknown): boolean => {
   const o = r as { deny?: unknown; isError?: unknown; result?: unknown } | null | undefined
   if (!o || typeof o !== 'object' || o.deny !== undefined || o.isError === true) return false
-  const out = o.result as { answers?: unknown; afkTimeoutMs?: unknown } | null | undefined
+  const out = o.result as { answers?: unknown; response?: unknown; afkTimeoutMs?: unknown } | null | undefined
   if (!out || typeof out !== 'object' || out.afkTimeoutMs !== undefined) return false
+  if (typeof out.response === 'string' && out.response.trim() !== '') return true
   const answers = out.answers
   if (!answers || typeof answers !== 'object' || Array.isArray(answers)) return false
   return Object.values(answers).some(a => (typeof a === 'string' ? a.trim() !== '' : Array.isArray(a) && a.some(x => typeof x === 'string' && x.trim() !== '')))
@@ -68,12 +83,15 @@ export const answered = (r: unknown): boolean => {
 
 /**
  * Why a second box for one request is refused, by what is known of a picker answer since (L11: each
- * cause its own words). Every form says when a later call is right.
+ * cause its own words). Every form says when a later call is right: while an answer waits, that it
+ * waits only for the turn it was given in, and where the test could not be read, that the same tool
+ * is not asked about again in that turn, so only a call of another tool can settle it.
  */
 export const alreadyShownText = (picker: GoalBoxPicker | null | undefined): string => {
   const again = 'it shows again once Dan has asked for something new: a message he types, or work you do after an answer he gives in a picker'
+  const waits = 'his answer waits only until the turn it was given in ends'
   if (!picker) return `No box yet: the box was already shown for this request; ${again}.`
   if (picker.unread !== undefined)
-    return `No box yet: the box was already shown for this request. Dan has answered a picker since, and whether anything has been changed since his answer could not be read (${picker.unread}), so it is not known whether there is new work to show a box for. Call again after the next tool call that changes something.`
-  return `No box yet: the box was already shown for this request. Dan has answered a picker since, and nothing has been changed since his answer; an answer alone is not a new request. If his answer asked for work, do it, then call this tool again.`
+    return `No box yet: the box was already shown for this request. Dan has answered a picker since, and whether anything has been changed since his answer could not be read (${picker.unread}), so it is not known whether there is new work to show a box for. That is not asked again for the same tool in this turn, so call again after a call of a different tool that changes something, in this turn: ${waits}.`
+  return `No box yet: the box was already shown for this request. Dan has answered a picker since, and nothing has been changed since his answer; an answer alone is not a new request. If his answer asked for work, do it in this turn, then call this tool again: ${waits}.`
 }
