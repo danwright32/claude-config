@@ -4,7 +4,7 @@ import { pipeline } from './mod-kit/hooks/commands.ts'
 import * as request from '../hooks/request.ts'
 import type { On, Register } from 'claude-code'
 import DESIGN_FIXTURE from './1563-goal-box.fixture.ts'
-import { CLOSE_HEADING, CLOSE_TITLE, PROCESS_TIMEOUT_MS, QUIET_MS } from '../hooks/close.ts'
+import { CHECK_CARRIED, CLOSE_HEADING, CLOSE_TITLE, PROCESS_TIMEOUT_MS, QUIET_MS, carriedReason } from '../hooks/close.ts'
 
 // The Goal accomplished box (claude-config#1563) in a session: shown once when a /goal is met (the
 // session is sent a prompt of its own asking for it once the turn has ended, since the met record
@@ -254,6 +254,8 @@ type World = {
   pinAnswer: PinAnswer
   pinCalls: number
   releasePin: () => void
+  /** #3817: what a pin with no answer yet answers once released, in place of shown. */
+  lateAnswer?: keyof typeof NOT_SHOWN
   /** Scope modes' sleep predicate: true while Dan is asleep (sleep mode). */
   asleep?: boolean
   /** Why manual steps' noun throws on a withdraw, or '' when it withdraws. */
@@ -344,7 +346,7 @@ const world = (on: On, init: Partial<World> = {}) => {
         if (a === 'threw') return ok('', 1, "the manual steps mod's own hook did not answer")
         if (a === 'says nothing') return ok('{}')
         if (a === 'null') return ok('null')
-        if (a === 'no answer yet') return new Promise(res => (w.releasePin = () => res(ok(JSON.stringify({ isShown: true }))))) as never
+        if (a === 'no answer yet') return new Promise(res => (w.releasePin = () => res(ok(JSON.stringify(w.lateAnswer ? { isShown: false, reason: NOT_SHOWN[w.lateAnswer] } : { isShown: true }))))) as never
         if (a !== 'shown') return ok(JSON.stringify({ isShown: false, reason: NOT_SHOWN[a] }))
         w.pinned.push({ heading: input.heading, step: input.step })
         return ok(JSON.stringify({ isShown: true }))
@@ -1186,6 +1188,196 @@ test("undone steps that sessions working in other projects left under this folde
   expect(reasonsOf(w)).toMatchObject({ pinned: true, reasons: [] })
   expect(w.pinned).toHaveLength(1)
 })
+
+// #3817. Dan's first real test of the card ran in a folder with five undone steps kept from earlier
+// sessions, none checked by the test session. Manual steps holds such a card, and any step added to
+// it, until the session has checked the steps and pinned them again, so the close card could never
+// show there. His answer on 2026-11-27: "Ask the session to check first". The session is sent one
+// prompt of its own per request of his, the close step just added to the held card is taken back,
+// and the card follows at a quiet turn end once the steps are pinned. `OTHERS` is the shape his
+// session held: steps other sessions pinned, which hold nothing by themselves.
+const OTHERS = { heading: 'Carried', steps: [{ title: 'Renew the certificate', url: 'https://certs.example', pinnedBy: 'an earlier session' }, { title: 'Rotate the signing key', location: 'The keys page', pinnedBy: 's3' }] }
+const CARRIED = 'not shown: carried steps held' as const
+const asksToCheck = (submitted: { text: string }[]) => submitted.filter(s => s.text.startsWith('CARRIED STEPS.'))
+const quietEnd = async ($: Engine$, clock: { advance: (ms: number) => Promise<void> }) => {
+  await stopped($)
+  await turnEnds($)
+  await clock.advance(QUIET_MS)
+}
+
+test('a steps card carried from an earlier session and not yet checked: the session is sent one prompt asking it to check and pin those steps, and the reasons file names the carried card as the one reason (#3817)', withAll, async ($, on) => {
+  const { w, clock, submitted } = world(on, { stepsCard: OTHERS, pinAnswer: CARRIED })
+  await start($)
+  await says($, 'Add the goal box')
+  await workedAndQuiet($, clock)
+  expect(w.pinned).toEqual([])
+  expect(asksToCheck(submitted).map(s => s.text)).toEqual([CHECK_CARRIED])
+  expect(submitted[submitted.length - 1]?.origin).toMatchObject({ kind: 'plugin' })
+  expect(reasonsOf(w)).toMatchObject({ pinned: false, reasons: [carriedReason('asked')] })
+  expect(reasonsOf(w)?.reasons[0]).toMatch(/^the card could not be shown \(the steps carried from an earlier session are held until Claude checks them again\); the session was asked to check them and pin them again/)
+})
+
+test('the prompt asking for carried steps to be checked says what to do in words the session can act on, and stays short (#3817)', async () => {
+  expect(CHECK_CARRIED).toMatch(/^CARRIED STEPS\. /)
+  expect(CHECK_CARRIED).toContain('carried over from an earlier session')
+  expect(CHECK_CARRIED).toContain('manual-steps steps tool')
+  expect(CHECK_CARRIED).toContain('already-done')
+  // Dan reads it too, each time it is sent: a ceiling, so it cannot grow unnoticed.
+  expect(CHECK_CARRIED.length).toBeLessThanOrEqual(480)
+  // His writing rules: none of the three marks used as a break between words, each named by its code.
+  for (const mark of [String.fromCharCode(0x2014), String.fromCharCode(0x2013), ` ${String.fromCharCode(0x2d)} `]) expect(CHECK_CARRIED.includes(mark)).toBe(false)
+})
+
+test('the close step just added to the held card is taken back, so it never comes along onto the card when the session pins its carried steps (#3817)', withAll, async ($, on) => {
+  const { w, clock } = world(on, { stepsCard: OTHERS, pinAnswer: CARRIED })
+  await start($)
+  await says($, 'Add the goal box')
+  await workedAndQuiet($, clock)
+  expect(w.pinCalls).toBe(1)
+  expect(w.withdrawn).toEqual([CLOSE_TITLE])
+})
+
+test('asked once per request: a second quiet turn end with the steps still held sends no other prompt, takes the step back again, and the reason says the session was already asked (#3817)', withAll, async ($, on) => {
+  const { w, clock, submitted } = world(on, { stepsCard: OTHERS, pinAnswer: CARRIED })
+  await start($)
+  await says($, 'Add the goal box')
+  await workedAndQuiet($, clock)
+  expect(asksToCheck(submitted)).toHaveLength(1)
+  // The session answered the prompt without pinning: its turn starts and ends, and it is quiet again.
+  await turnStarts($)
+  await quietEnd($, clock)
+  await quietEnd($, clock)
+  expect(asksToCheck(submitted)).toHaveLength(1)
+  expect(w.pinCalls).toBe(3)
+  expect(w.withdrawn).toEqual([CLOSE_TITLE, CLOSE_TITLE, CLOSE_TITLE])
+  expect(w.pinned).toEqual([])
+  expect(reasonsOf(w)).toMatchObject({ pinned: false, reasons: [carriedReason('asked before')] })
+  expect(reasonsOf(w)?.reasons[0]).toMatch(/already asked once for this request .* and they are still held$/)
+})
+
+test('once the session has pinned its carried steps, the next quiet turn end shows the close card (#3817)', withAll, async ($, on) => {
+  const { w, clock, submitted } = world(on, { stepsCard: OTHERS, pinAnswer: CARRIED })
+  await start($)
+  await says($, 'Add the goal box')
+  await workedAndQuiet($, clock)
+  expect(w.pinned).toEqual([])
+  // The prompt's own turn: the session checks the steps and pins them again, so the card is no
+  // longer held, and they stay the earlier sessions' steps, which hold nothing.
+  await turnStarts($)
+  w.pinAnswer = 'shown'
+  await quietEnd($, clock)
+  expect(w.pinned).toHaveLength(1)
+  expect(w.pinned[0]?.heading).toBe(CLOSE_HEADING)
+  expect(reasonsOf(w)).toMatchObject({ pinned: true, reasons: [] })
+  expect(asksToCheck(submitted)).toHaveLength(1)
+  // Nothing was left to take down but the step taken back while the card was held.
+  expect(w.withdrawn).toEqual([CLOSE_TITLE])
+})
+
+test("a new request of Dan's, with its own box and the steps still held, asks once more (#3817)", withAll, async ($, on) => {
+  const { clock, submitted } = world(on, { stepsCard: OTHERS, pinAnswer: CARRIED })
+  await start($)
+  await says($, 'Add the goal box')
+  await workedAndQuiet($, clock)
+  expect(asksToCheck(submitted)).toHaveLength(1)
+  await says($, 'Now make the status bar quieter')
+  await workedAndQuiet($, clock, { box: false })
+  // No box for the new request yet, so the card is not due and nothing is asked.
+  expect(asksToCheck(submitted)).toHaveLength(1)
+  await workedAndQuiet($, clock, { id: 'b2' })
+  expect(asksToCheck(submitted)).toHaveLength(2)
+  await quietEnd($, clock)
+  expect(asksToCheck(submitted)).toHaveLength(2)
+})
+
+test('a prompt asking for carried steps to be checked that could not be sent is said in the reason and sent again at the next quiet turn end (#3817)', withAll, async ($, on) => {
+  const { w, clock, submitted } = world(on, { stepsCard: OTHERS, pinAnswer: CARRIED, submitFails: ['throw', 'drop'] })
+  await start($)
+  await says($, 'Add the goal box')
+  await workedAndQuiet($, clock)
+  expect(asksToCheck(submitted)).toEqual([])
+  // A hook that throws beneath is skipped by the engine, which answers in words of its own.
+  expect(reasonsOf(w)?.pinned).toBe(false)
+  expect(reasonsOf(w)?.reasons).toHaveLength(1)
+  expect(reasonsOf(w)?.reasons[0]).toMatch(/^the card could not be shown \(the steps carried from an earlier session are held until Claude checks them again\); the session could not be asked to check them \(.+\), so it is asked again at the next quiet turn end$/)
+  await quietEnd($, clock)
+  expect(asksToCheck(submitted)).toEqual([])
+  expect(reasonsOf(w)).toMatchObject({ pinned: false, reasons: [carriedReason({ failed: 'held by a guard beneath' })] })
+  await quietEnd($, clock)
+  expect(asksToCheck(submitted)).toHaveLength(1)
+  expect(reasonsOf(w)).toMatchObject({ pinned: false, reasons: [carriedReason('asked')] })
+})
+
+test('the prompt asking for carried steps to be checked holds back a reload of goal-box while it waits (#3817, #2132)', withAll, async ($, on) => {
+  const { w, clock } = world(on, { stepsCard: OTHERS, pinAnswer: CARRIED })
+  await start($)
+  await says($, 'Add the goal box')
+  await workedAndQuiet($, clock)
+  expect(w.held).toEqual([
+    `hold ${JSON.stringify({ mod: 'goal-box', id: 'check-carried', what: 'the prompt asking for the carried steps to be checked', ms: 60 * 60_000 })}`,
+    'submit',
+    `release ${JSON.stringify({ mod: 'goal-box', id: 'check-carried' })}`,
+  ])
+})
+
+test('a close step that could not be taken back from the held card is taken back at the next turn start, before the session can pin it onto the card (#3817)', withAll, async ($, on) => {
+  const { w, clock, logs } = world(on, { stepsCard: OTHERS, pinAnswer: CARRIED, withdrawFails: "the manual steps mod's own hook did not answer" })
+  await start($)
+  await says($, 'Add the goal box')
+  await workedAndQuiet($, clock)
+  expect(w.withdrawn).toEqual([])
+  expect(logs.join('\n')).toMatch(/goal-box: the close step added to the held steps card could not be taken back \(.*did not answer.*\); it is tried again at the next turn/)
+  w.withdrawFails = ''
+  await turnStarts($)
+  expect(w.withdrawn).toEqual([CLOSE_TITLE])
+  // Taken back, so the turn after has nothing to take back.
+  await turnStarts($, 't3')
+  expect(w.withdrawn).toEqual([CLOSE_TITLE])
+})
+
+test('a pin still out when a new turn starts that comes back held: the step is taken back, and a session working again is not asked to check anything (#3817)', withAll, async ($, on) => {
+  const { w, clock, submitted } = world(on, { stepsCard: OTHERS, pinAnswer: 'no answer yet', lateAnswer: CARRIED })
+  await start($)
+  await says($, 'Add the goal box')
+  await workedAndQuiet($, clock)
+  await turnStarts($)
+  w.releasePin()
+  await clock.settle()
+  expect(w.withdrawn).toEqual([CLOSE_TITLE])
+  expect(asksToCheck(submitted)).toEqual([])
+  expect(reasonsOf(w)).toBeNull()
+  // Not claimed, so the next quiet turn end with the steps still held asks.
+  w.pinAnswer = CARRIED
+  await quietEnd($, clock)
+  expect(asksToCheck(submitted)).toHaveLength(1)
+})
+
+// What must not change. A step this session pinned for Dan still keeps the close card back, as it
+// did: nothing is pinned, nothing is asked and nothing is taken back. And manual steps' other
+// reasons for not showing a step are not the carried card, so none of them asks the session.
+test('a card with a step Dan still has to do keeps the close card back as before: no pin is tried and the session is not asked to check anything (#3817)', withAll, async ($, on) => {
+  const { w, clock, submitted } = world(on, { stepsCard: { heading: 'h', steps: [...OTHERS.steps, { title: 'Add the key', url: 'https://a.example', pinnedBy: 's1' }] }, pinAnswer: CARRIED })
+  await start($)
+  await says($, 'Add the goal box')
+  await workedAndQuiet($, clock)
+  expect(w.pinCalls).toBe(0)
+  expect(asksToCheck(submitted)).toEqual([])
+  expect(w.withdrawn).toEqual([])
+  expect(reasonsOf(w)).toMatchObject({ pinned: false, reasons: ['the manual step "Add the key" is not done'] })
+})
+
+for (const answer of ['not shown: nobody at the prompt', 'not shown: taken away', 'not shown: not drawn', 'says nothing', 'refused', 'threw'] as const) {
+  test(`a pin that comes back ${answer} is not a carried card: the session is not asked to check steps, and nothing is taken back (#3817)`, withAll, async ($, on) => {
+    const { w, clock, submitted } = world(on, { pinAnswer: answer })
+    await start($)
+    await says($, 'Add the goal box')
+    await workedAndQuiet($, clock)
+    expect(w.pinCalls).toBe(1)
+    expect(asksToCheck(submitted)).toEqual([])
+    expect(w.withdrawn).toEqual([])
+    expect(reasonsOf(w)?.reasons.join(' ')).not.toMatch(/the session was asked/)
+  })
+}
 
 test("this session's own undone step still withholds the close card, and is the only step named, beside another session's (#3770)", withAll, async ($, on) => {
   const { w, clock } = world(on, { stepsCard: { heading: 'h', steps: [{ title: 'Theirs', url: 'https://a.example', pinnedBy: 's2' }, { title: 'Mine', url: 'https://b.example', pinnedBy: 's1' }] } })

@@ -260,6 +260,40 @@ export const processHolds = (r: { exitCode: number; stdout: string }): ProcessRe
   }
 }
 
+// ---- A steps card carried from an earlier session and not yet checked (#3817) ----
+// Manual steps holds such a card, and any step added to it, until the session has checked the steps
+// and pinned them again, so the close card could never show in a folder with kept undone steps
+// (Dan's first real test of #3770 ran in one). Dan, 2026-11-27: "Ask the session to check first".
+
+/**
+ * Manual steps' reason for not showing a step added to a held card, word for word (`CARRIED_HELD`
+ * in payload/mods/manual-steps/hooks/register.tsx). A mod cannot read another mod's files, so it
+ * is said again here, and tests/test-close-card-carried-reason.sh fails when the two drift: reworded
+ * there alone, the answer would no longer be known for a held card and the session never asked.
+ */
+export const CARRIED_HELD = 'the steps carried from an earlier session are held until Claude checks them again'
+
+/**
+ * What the session is told, once per request of Dan's, when the close card is due and the steps
+ * card is still held. Dan reads it too, so it is short; it ends by asking for a reply that is not a
+ * question, since an answer ending on one keeps the close card back.
+ */
+export const CHECK_CARRIED =
+  'CARRIED STEPS. This session is finished and quiet, but the card telling Dan he can close it is held back, because manual steps carried over from an earlier session have not been checked. Check each one against the current state now, then pin them again with the manual-steps steps tool, already-done for one you find done, as the manual steps note about them says. Then say in one line what you found, with no question. The close card follows by itself.'
+
+/**
+ * The one reason written when the steps card is held: it names the carried card in manual steps'
+ * own words, then says what was done about it. `asked`: the prompt above entered now. `asked
+ * before`: it entered earlier under this request and the answer is still held. `failed`: it could
+ * not be sent, and why.
+ */
+export const carriedReason = (how: 'asked' | 'asked before' | { failed: string }): string => {
+  const held = `the card could not be shown (${CARRIED_HELD})`
+  if (how === 'asked') return `${held}; the session was asked to check them and pin them again, and the card follows at a quiet turn end once it has`
+  if (how === 'asked before') return `${held}; the session was already asked once for this request to check them and pin them again, and they are still held`
+  return `${held}; the session could not be asked to check them (${how.failed}), so it is asked again at the next quiet turn end`
+}
+
 /** The step as the manual steps noun takes it: this session alone, with no Done. */
 export const closeStep = (folder: string) => ({
   title: CLOSE_TITLE,

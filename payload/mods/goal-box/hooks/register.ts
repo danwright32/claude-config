@@ -12,7 +12,7 @@ import { HOLD_MAX_MS, whileHeld } from './mod-kit/held.ts'
 import { transcriptPlaces } from './mod-kit/projects.ts'
 import { toolArgs } from './mod-kit/toolargs.ts'
 import { BOX_KINDS, INFLIGHT_KINDS, inflightHolds, type InflightFacts, type Reading } from './mod-kit/inflight.ts'
-import { CLOSE_HEADING, CLOSE_TITLE, LIST_CUT, NO_BOX, PROCESS_LIST, PROCESS_LOOK, PROCESS_TIMEOUT_MS, QUIET_MS, checkUnfinished, closeStep, leftBehindBy, leftBehindReason, processHolds, type ProcessReading } from './close.ts'
+import { CARRIED_HELD, CHECK_CARRIED, CLOSE_HEADING, CLOSE_TITLE, LIST_CUT, NO_BOX, PROCESS_LIST, PROCESS_LOOK, PROCESS_TIMEOUT_MS, QUIET_MS, carriedReason, checkUnfinished, closeStep, leftBehindBy, leftBehindReason, processHolds, type ProcessReading } from './close.ts'
 
 // The Goal accomplished box (claude-config#1563). Two ways a session's work ends, one box for both:
 //
@@ -55,6 +55,9 @@ const closeSeqRef = { plugin: 'goal-box', key: 'closeSeq' } as const
 const closeStopRef = { plugin: 'goal-box', key: 'closeStop' } as const
 const closeAnswerRef = { plugin: 'goal-box', key: 'closeAnswer' } as const
 const closedRef = { plugin: 'goal-box', key: 'closed' } as const
+// #3817, a steps card carried from an earlier session and still held.
+const askedCarriedRef = { plugin: 'goal-box', key: 'askedCarried' } as const
+const closeStrayRef = { plugin: 'goal-box', key: 'closeStray' } as const
 const leftBehindRef = { plugin: 'goal-box', key: 'leftBehind' } as const
 // What the card reads of the mods beside it; each may not be loaded.
 const stepsCardRef = { plugin: 'manual-steps', key: 'card' } as const
@@ -595,6 +598,7 @@ const closeCheck = async ($: EngineInterface, seq: number): Promise<void> => {
   const prompts = (await $.state.get(promptsRef)).value ?? 0
   const folder = (startCwd ?? (await $.session.cwd().catch(() => ''))).split('/').filter(Boolean).pop() ?? ''
   let why: string
+  let isHeld = false
   try {
     const r = (await ($ as unknown as WithSteps).manualSteps.add({ heading: CLOSE_HEADING, step: closeStep(folder) })) as { isShown?: unknown; reason?: unknown } | null | undefined
     if (r?.isShown === true) {
@@ -603,11 +607,55 @@ const closeCheck = async ($: EngineInterface, seq: number): Promise<void> => {
       if ((await $.state.get(closeSeqRef)).value !== seq) await withdrawClose($)
       return
     }
+    // #3817: the steps card is one carried from an earlier session that the session has not checked.
+    isHeld = r?.isShown === false && r.reason === CARRIED_HELD
     why = `the card could not be shown (${typeof r?.reason === 'string' && r.reason ? r.reason : 'its answer did not say it was shown'})`
   } catch (err) {
     why = `the card could not be pinned (${errorText(err, MOD)})`
   }
-  await writeReasons($, false, [why], seen)
+  if (!isHeld) return writeReasons($, false, [why], seen)
+  // Manual steps kept the step on the held card, so it is taken back whatever follows.
+  await takeBackClose($)
+  // A turn that began while the pin was out: the session is working again, so it is not asked.
+  if ((await $.state.get(closeSeqRef)).value !== seq) return
+  await writeReasons($, false, [await askToCheckCarried($, prompts)], seen)
+}
+
+/**
+ * #3817: takes back the close step manual steps added to a held card. Left there it is listed to
+ * the session as a step carried from an earlier session, and comes along onto the card Dan sees
+ * when the session pins those steps, while it is still working. One that could not be taken back
+ * is marked, and the next turn start tries again (withdrawClose), before the session can pin.
+ */
+const takeBackClose = async ($: EngineInterface): Promise<void> => {
+  try {
+    await ($ as unknown as WithSteps).manualSteps.withdraw({ title: CLOSE_TITLE })
+  } catch (err) {
+    debug($, `the close step added to the held steps card could not be taken back (${errorText(err, MOD)}); it is tried again at the next turn`)
+    await $.state.set(closeStrayRef, true)
+  }
+}
+
+/**
+ * #3817 (Dan, 2026-11-27: "Ask the session to check first"): sends the session one prompt of its
+ * own, once per request of Dan's, asking it to check the steps carried from an earlier session and
+ * pin them again, and answers with the one reason to write. The close card follows at a quiet turn
+ * end once the steps are pinned; a session that does not pin them gets no card for that request.
+ * Claimed before it is sent, so two checks at once ask once, and released when it did not enter, so
+ * a passing failure is asked again at the next quiet turn end (L368).
+ */
+const askToCheckCarried = async ($: EngineInterface, prompts: number): Promise<string> => {
+  const asked = await $.state.get(askedCarriedRef)
+  if (asked.value !== undefined && asked.value >= prompts) return carriedReason('asked before')
+  if (!(await $.state.set(askedCarriedRef, prompts, { ifVersion: asked.version })).isSet) return carriedReason('asked before')
+  const failed = await sendHeld($, 'check-carried', 'the prompt asking for the carried steps to be checked', CHECK_CARRIED)
+  if (failed === undefined) return carriedReason('asked')
+  for (let i = 0; i < 10; i++) {
+    const held = await $.state.get(askedCarriedRef)
+    if (held.value !== prompts) break
+    if ((await $.state.set(askedCarriedRef, asked.value ?? -1, { ifVersion: held.version })).isSet) break
+  }
+  return carriedReason({ failed })
 }
 
 /**
@@ -630,17 +678,20 @@ const cardShown = async ($: EngineInterface, prompts: number, seen: Seen): Promi
 /**
  * Takes the card down at a new turn, as withdrawn: a session working again is not one to close. Marked
  * down only once the withdraw has answered, so a withdraw that failed is tried again at the next turn.
+ * The same for a close step that could not be taken back from a held steps card (#3817).
  */
 const withdrawClose = async ($: EngineInterface): Promise<void> => {
   const held = await $.state.get(closedRef)
-  if (!held.value?.pinned) return
+  const isStray = (await $.state.get(closeStrayRef)).value === true
+  if (!held.value?.pinned && !isStray) return
   try {
     await ($ as unknown as WithSteps).manualSteps.withdraw({ title: CLOSE_TITLE })
   } catch (err) {
     debug($, `the close this session card could not be taken down (${errorText(err, MOD)}); it is tried again at the next turn`)
     return
   }
-  await $.state.set(closedRef, { ...held.value, pinned: false }, { ifVersion: held.version })
+  if (isStray) await $.state.set(closeStrayRef, false)
+  if (held.value?.pinned) await $.state.set(closedRef, { ...held.value, pinned: false }, { ifVersion: held.version })
 }
 
 /** Reading B: a main conversation Bash call, not run in the background, that may leave a process behind. */
