@@ -456,8 +456,10 @@ password, so it is made by hand once per Mac. Both Macs have had it since 2026-1
 Why it is needed: on a Team or Enterprise account (Dan's is one), or on any Mac with managed
 settings, Claude Code's built-in security default seats itself ahead of every plugin and sends
 every `classic.*`, `prompt.section` and `prompt.context` hook (and, since 2.1.299, every
-`session.compact` and `prompt.attachment` hook, and since 2.1.331 every `session.info` and
-`session.redact` hook) past the user tier our mods load in,
+`session.compact` and `prompt.attachment` hook, since 2.1.331 every `session.info` and
+`session.redact` hook, and on every build read since #3697 the `session.append` rows of the
+attachment, hook-context and compaction doors, `telemetry.log` and `session.identity`) past the
+user tier our mods load in,
 so those hooks never run and only a debug log line says so (#875). A managed `prependPlugins` list
 that leaves it out moves it to last, where it still loads. Without the file, the mod hooks listed
 in `tools/sec-default-bypassed-hooks.tsv` (scope-modes and manual-steps refusing a turn end, the
@@ -11968,7 +11970,16 @@ It also fails a mod whose hook is on an event Claude Code's built-in security de
 the user tier every mod loads in (#875): every `classic.*` event, `prompt.section`, `prompt.context`,
 `prompt.compose`, `skill.prompt`, `attribution.text` and `settings.read`, and since Claude Code
 2.1.299 `prompt.attachment` and `session.compact` too (#1185), and since 2.1.331 `session.info`
-and `session.redact` (#3508). Seated outermost for a
+and `session.redact` (#3508). Some routes carry a matcher, written as Claude Code writes it
+(#3697): `session.append{door=attachment}`, `{door=hook-context}` and `{door=compaction}`, and
+`telemetry.log{to=collector}`; and `session.identity` is refused to a mod's caller and routed for
+every other, so no call of it reaches a mod either. A hook with a matcher is keyed by the part a
+route reads (`session.append{door=hook-context}`), and a hook hears a route unless the two name one
+field with different values, so a `session.append` hook with no door is reported for the doors it
+is passed over on. A second list holds the routes passed over for some calls only (the Skill tool's
+`session.append{door=tool-message}` rows, `{door=note}` and a few engine reads made by the guard
+or the prepend and append tiers); a hook on one is reported too, saying "for some of its calls".
+Seated outermost for a
 Team or Enterprise organization, it routes each of those straight past our mods, so such a hook
 never runs and only a debug log line says so (`bypassed by cc-plugin-sec-default`). Both Macs keep
 it out of first place with the managed settings file in "Setting up a new Mac" above, so these
@@ -11982,7 +11993,13 @@ on a Mac still running an older one. Where a `claude` binary is found, its route
 the ones listed for that build (each route is listed with the first build known to route it, read
 from `claude --version`, every route when the version cannot be read), and a difference fails, so
 the next build that adds or drops a route fails on the first Mac to install it while the other Mac
-and CI stay as they were.
+and CI stay as they were. The reading finds each registration in three shapes, with or without a
+matcher: a handler that routes every call, one that refuses or routes (every call), and one that
+routes or passes on (some calls); a handler with a body in braces is not read. Each list is
+compared on its own. A route the documentation names (the admin page's table of hooks that do not
+run, read on 2026-11-25, and the guard's readme) that the reading does not find in any shape fails
+on a line of its own, since it means either a shape the reading does not know or a build that no
+longer routes it.
 It also type checks each mod strictly (#758), as the mod's own `tsconfig.json` says, with the
 TypeScript compiler pinned in `tools/typescript` (#803; TypeScript 7.0.2, installed on CI before the
 suites; `TSC_BIN` overrides it, and `tsc` on the path is the last resort). A checkout without it, as
