@@ -2913,8 +2913,10 @@ describe('writes: the shapes of #3442 as the mods are given them', () => {
 // `&`, and the reserved words. A setting behind `&&` after a command that fails, or inside an `if`
 // whose test is false, never runs: the shell leaves the variable as it was, and the write lands
 // wherever that points, a folder no guard was shown. A setting is followed only where it is sure to
-// have run, by the one reading the command reader has of that (openingRun, which fixedWords is
-// built on): in the run of settings its line opens with. Any other leaves the variable not known.
+// have run, by the one reading the command reader has of that (sureSettings, Command.certain): a
+// statement of the line itself, first in it or right after a `;` or a new line, inside nothing
+// that may not run. The run of settings a line opens with (openingRun, which fixedWords is built
+// on) is the start of it. Any other leaves the variable not known.
 describe('writes: a variable is followed only where its setting is sure to have run (#3468)', () => {
   const values = (command: string) => read(command).files.map(f => f.values)
   const folders = (command: string) => pipelineIn(command, CWD, HOME).map(c => [c.words[0], c.folder])

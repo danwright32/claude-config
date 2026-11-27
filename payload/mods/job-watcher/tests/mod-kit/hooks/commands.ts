@@ -2151,10 +2151,11 @@ const FILLED = /\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*)|([?$!
 // The most readings a word made of loop values is given before it is taken for one not known.
 const MAX_READINGS = 64
 
-// The run of settings a line opens with: the one reading of whether a setting is sure to have run
-// (#3398, and #3468, which gave the write reader this reading in place of following every setting
-// it met). The statements the line starts with that are only settings, each ended by a `;` or a
-// new line and by nothing else. So each is set before anything runs, in the line's own shell,
+// The run of settings a line opens with: what fixedWords (#3398) follows a variable from, and the
+// start of the one reading of whether a setting is sure to have run, which sureSettings (#3468,
+// below) carries past the first command for the write reader, in place of that reader following
+// every setting it met. It is the statements the line starts with that are only settings, each
+// ended by a `;` or a new line and by nothing else. So each is set before anything runs, in the line's own shell,
 // whatever the commands after it do: never in a subshell, a function, a loop, a branch or a group,
 // never after an `&&` or `||` that may skip it, never before a `|` or a `&` that runs it in a shell
 // of its own, and never as a setting in front of a command, which reaches the program and not the
