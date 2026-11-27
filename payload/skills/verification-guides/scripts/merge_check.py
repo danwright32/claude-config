@@ -28,7 +28,8 @@ The bundle is a folder the hook writes:
                                base commit with an older record's commit and with the head, then the
                                two merge bases those answers name. Asked only when a file of the
                                record's area, which the pull request touches, changed since the
-                               record and a merge commit came between
+                               record and a merge commit came between, or may have: GitHub's list
+                               of the commits between was cut short
   repo.json | repo.err         gh api repos/<slug>, read only when a screenshots block links images,
                                for whether the repository is public (#2516)
   shots/<commit>.json | .err   the folder of pictures a screenshots block links, listed at that commit
@@ -506,7 +507,9 @@ class _Verdict:
         could not be read (said), which is never a record that still describes the head.
 
         With no merge commit since the record every such change is the pull request's own, and
-        nothing more is asked. After a merge, three more answers say whose change each file was:
+        nothing more is asked. After a merge, or when GitHub's list of the commits since was cut
+        short so that one may be among those not listed, three more answers say whose change each
+        file was:
         GitHub's compare of the base commit with the record's commit and with the head (the pull
         request's patch at each, and where the branch last took in the base branch), and its compare
         of those two merge bases (the base branch's own change). _why_own holds the rule.
