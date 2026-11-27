@@ -2471,7 +2471,8 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   and the turn's end is held unless an unfinished step on the card shown names the command. The
   prose check keeps its own rule, any unfinished step, since arbitrary prose cannot be matched to
   a step. One step gets one ask: where the only phrase the prose check finds is in the words that
-  hand the command over, the command's ask is the only one given, and a phrase anywhere else in
+  hand the command over, or in the sentence right after them asking to be told it is done ("Tell
+  me when it is done"), the command's ask is the only one given, and a phrase anywhere else in
   the turn keeps its own. Not counted: a command in an offer or a condition (if, could, want me,
   later, a question), judged on the command's own clause, so an aside in brackets and what follows
   "then" do not count against it; a standing rule ("on anything other people will read",
@@ -2480,9 +2481,10 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   line or in a block quote; file text inside a code block; a list the line above it calls the
   session's own plan or examples; a command called an example or named as a skill; a sentence
   that speaks of a web address (endpoint, route, URL, redirect, domain); a block introduced as
-  already typed; and a path. "use" and "enter" are not among the verbs: the independent review of
-  pull request 3677 found them holding a skill ("use the `/db-apply` skill"), a folder and a web
-  address, and no turn held in the count of 2026-11-27 below depended on them. A one word route with nothing said of it
+  already typed; and a path. "use" and "enter" are not among the verbs, after "your next move is
+  to" ("Your next step is to use `/tmp`") as anywhere else; "begin" is read there: the independent
+  review of pull request 3677 found them holding a skill ("use the `/db-apply` skill"), a folder and
+  a web address, and no turn held in the count of 2026-11-27 below depended on them. A one word route with nothing said of it
   ("Start `/login`.") cannot be told from a command and is still held, once, and the ask lets the
   session answer in one line. The review's two lists, seventeen hand overs that passed and eleven
   replies held that handed nothing over, are cases in `tests/typed.test.ts`, held together so a

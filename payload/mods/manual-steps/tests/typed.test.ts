@@ -1,6 +1,7 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { apartFromTyped, onCard, typedCommands } from '../hooks/typed.ts'
+import { waitingPhrase } from '../hooks/waiting.ts'
 import type { StepsCard } from '../types/index.d.ts'
 
 // #3652: a slash command Dan has to type himself, handed over in a reply, is a manual step like any
@@ -149,6 +150,15 @@ describe('typedCommands, the review of pull request 3677', () => {
     expect(typedCommands("I'll tell you when you need to run `/reload-plugins`.")).toEqual([])
     expect(typedCommands("I'll remember to run `/sync-config` after the merge.")).toEqual([])
   })
+
+  // The second review: "use" is no verb after "your next move is to" either, as it is none leading a
+  // sentence, so a folder named there passes. "begin" stays: it is said of a command, never of a
+  // folder or an address, and M16 is a hand over said with it.
+  test('"use" after "your next step is to" names a folder, not a command to type', () => {
+    expect(typedCommands('Your next step is to use `/tmp`')).toEqual([])
+    expect(typedCommands('Your next step is to use `/tmp` for the copy.')).toEqual([])
+    expect(typedCommands('Your next move is to begin `/plan-council`.')).toEqual(['/plan-council'])
+  })
 })
 
 describe('apartFromTyped', () => {
@@ -161,6 +171,23 @@ describe('apartFromTyped', () => {
     const said = 'Type `/compact` now. Then run `/reload-plugins`.'
     expect(apartFromTyped(said, ['/compact'])).toMatch(/reload-plugins/)
     expect(apartFromTyped('Merged #12 and the deploy is live.', ['/compact'])).toBe('Merged #12 and the deploy is live.')
+  })
+  // What the turn's end asks the prose check of a reply once its held commands are out
+  // (hooks/register.tsx): a phrase left over is another step, and gets an ask of its own.
+  const leftOver = (said: string, commands: readonly string[]) => waitingPhrase(apartFromTyped(said, commands))
+  test('asking to be told the command is done, in the next sentence, is the same step: one ask', () => {
+    expect(leftOver('Type `/reload-plugins`. Tell me when it is done.', ['/reload-plugins'])).toBeNull()
+    expect(leftOver("Type `/reload-plugins`.\n\nTell me once it's loaded.", ['/reload-plugins'])).toBeNull()
+    expect(leftOver("Run `/compact`. Tell me it's done.", ['/compact'])).toBeNull()
+    expect(leftOver('Type `/reload-plugins`. Tell me when you have run it.', ['/reload-plugins'])).toBeNull()
+  })
+  test('another step after the command keeps its own ask, a report back on something else included', () => {
+    expect(leftOver('Type `/reload-plugins`. Tell me when you have clicked **Approve** on the deploy page.', ['/reload-plugins'])).not.toBeNull()
+    expect(leftOver('Run `/reload-plugins`.\nThe deploy is still waiting on you: click **Approve** on the page.', ['/reload-plugins'])).not.toBeNull()
+    // Only the sentence right after it: with another between, "it" need not be the command.
+    expect(leftOver('Type `/reload-plugins`. The tests pass. Tell me when it is done.', ['/reload-plugins'])).not.toBeNull()
+    // Not held, nothing is taken out: the report back is the whole reply's step.
+    expect(leftOver('Tell me when it is done.', ['/reload-plugins'])).not.toBeNull()
   })
 })
 
