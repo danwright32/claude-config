@@ -64,20 +64,21 @@ may "the same command with a commit at its end is a yes" yes "$big"$'\ngit commi
 
 # cs_cut takes the command from a parsed payload, everything before the first unit separator, as
 # ${parsed%%$'\x1f'*} did (review of #3690). That expression is quadratic on bash 3.2 (15 s of
-# processor time for a 306 KB command in require-issue-fields.sh, past the hook's limit), so the cut
+# processor time for a 306 KB command in require-issue-fields.sh on 2026-11-27, past the hook's
+# limit), so the cut
 # is made from the end, or by read when the folder holds the byte too. Either way it must give the
 # old expression's text byte for byte: a byte lost or added is a command the screen reads
 # differently from the gate.
-# cut_same <description> <parsed>
+# cut_same <description> <parsed> [<the command, where the row built it: the old expression is itself quadratic>]
 cut_same() {
-  local want="${2%%$'\x1f'*}" rc=0
+  local want="${3-${2%%$'\x1f'*}}" rc=0
   CS_COMMAND="left over from an earlier call"
   cs_cut "$2" || rc=$?
   if [ "$rc" -eq 0 ] && [ "$CS_COMMAND" = "$want" ] && [ "${#CS_COMMAND}" -eq "${#want}" ]; then
     pass=$((pass + 1)); else
     fail=$((fail + 1)); echo "FAIL: $1 (cut status $rc, ${#CS_COMMAND} characters against ${#want})"; fi
 }
-cut_same "the cut of a plain command" $'uptime; date\x1f/Users/x/app'
+cut_same "the cut of a plain command" $'uptime; date\x1f/w/app'
 cut_same "the cut keeps single and double quotes" $'echo \'a b\' "c d" p\'\'r\x1f/w'
 cut_same "the cut keeps backslashes, a backslash at its end included" $'printf \'%s\\n\' a\\\\b \\\x1f/w'
 cut_same "the cut keeps line breaks, one ending the command included" $'ls\nwc -l x\n\n\x1f/w'
@@ -89,22 +90,26 @@ cut_same "the cut of an empty command" $'\x1f/w'
 cut_same "the cut with an empty folder" $'echo x\x1f'
 cut_same "the cut with no separator at all" 'echo x'
 cut_same "the cut of nothing" ''
-cut_same "the cut of a 300 KB command" "$big"$'\x1f/w'
-cut_same "the cut of a 300 KB command whose folder holds the separator" "$big"$'\x1f/w\x1fz'
+cut_same "the cut of a 300 KB command" "$big"$'\x1f/w' "$big"
+cut_same "the cut of a 300 KB command whose folder holds the separator" "$big"$'\x1f/w\x1fz' "$big"
 # The same, for the text ps_parse_payload hands a gate from real payloads holding each of those.
 if . "$DIR/lib/push-scope.sh" 2>/dev/null && command -v python3 >/dev/null 2>&1; then
   n=0
+  # Written to a file and read back, never through a process substitution, whose child nothing waits for.
+  PAYLOADS="$(mktemp)"
+  python3 -c '
+import json
+for c in ["echo '"'"'a'"'"' \"b\" \\\\ p'"''"'r\n\tx\r", "tail\x1fhead", "ends with a break\n\n",
+          "caf" + chr(233) + " \u0000 x \ud800 y", "\\\\\n\\\\"]:
+    for cwd in ("/w", "/w\x1fz"):
+        print(json.dumps({"tool_input": {"command": c}, "cwd": cwd}))
+' > "$PAYLOADS"
   while IFS= read -r p; do
     n=$((n + 1))
     parsed="$(ps_parse_payload "$p" raw)"
     cut_same "the cut of parsed payload $n" "$parsed"
-  done < <(python3 -c '
-import json
-for c in ["echo '"'"'a'"'"' \"b\" \\\\ p'"''"'r\n\tx\r", "tail\x1fhead", "ends with a break\n\n",
-          "café \u0000 x \ud800 y", "\\\\\n\\\\"]:
-    for cwd in ("/w", "/w\x1fz"):
-        print(json.dumps({"tool_input": {"command": c}, "cwd": cwd}))
-')
+  done < "$PAYLOADS"
+  rm -f "$PAYLOADS"
   [ "$n" -eq 10 ] || { fail=$((fail + 1)); echo "FAIL: $n parsed payloads were cut, not 10"; }
 else
   fail=$((fail + 1)); echo "FAIL: lib/push-scope.sh or python3 is missing, so no parsed payload was cut"

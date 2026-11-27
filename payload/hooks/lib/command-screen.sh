@@ -30,7 +30,8 @@
 #     ps_parse_payload printed, the same text ${parsed%%$'\x1f'*} gives; returns 1 when the cut
 #     could not be made, and the caller then reads the command properly
 #
-# Never ${x%%y*} (review of #3690): on bash 3.2 that longest match removal is quadratic too, 15 s of
+# Never ${x%%y*} (review of #3690, measured 2026-11-27): on bash 3.2 that longest match removal is
+# quadratic too, 15 s of
 # processor time for a 306 KB command in require-issue-fields.sh, past that hook's 15 s limit. Nor
 # read with -d, which bash 3.2 reads one byte per system call: 0.4 s on 431 KB, more than the gate
 # it saves. The shortest match from the end, ${x%y*}, stops at the last separator after a few bytes

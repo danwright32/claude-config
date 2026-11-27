@@ -315,7 +315,7 @@ rm -rf "$NOPY_ROOT"
 
 # --- claude-config#3690: a command naming neither pr nor commit leaves before python3 starts -----
 # This gate runs before every Bash call, and on 2026-11-25 every call started the shared reader's
-# python3 here (0.09 s of processor time each) to learn that `uptime; date` writes no pull request
+# python3 here (0.07 s of processor time each) to learn that `uptime; date` writes no pull request
 # body and no commit message. While the Mac was busy, that start was part of what took the gates on
 # a read only call past their time limits. A command can only run gh pr or git commit as the reader
 # reads it when its letters spell pr or commit once quotes, backslashes and line breaks are taken

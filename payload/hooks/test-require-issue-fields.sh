@@ -902,7 +902,7 @@ allows "#3252 control: a complete create with a redirection glued to gh" "gh>/de
 
 # ---------------------------------------------------------------------------
 # claude-config#3690: a command naming neither issue nor pr leaves before python3 starts. This gate
-# runs before every Bash call, and on 2026-11-25 every call started issue_field_gate.py (0.11 s of
+# runs before every Bash call, and on 2026-11-25 every call started issue_field_gate.py (0.09 s of
 # processor time each, most of it python3 starting and compiling the shared reader) to learn that
 # `uptime; date` files no issue. While the Mac was busy, that start was part of what took the gates
 # on a read only call past their time limits. Every command this gate judges runs gh issue or gh pr,
@@ -969,7 +969,7 @@ missing_gate() {
     # jq stays, so the payload is parsed and the screen is reached: without jq and python3 the
     # payload goes unparsed and never gets that far.
     if ! command -v jq >/dev/null 2>&1; then
-      echo "UNMEASURED: $1 (no jq here, so a missing python3 never reaches the screen)"; return
+      echo "SUITE-PART-UNMEASURED $1 (no jq here, so a missing python3 never reaches the screen)"; return
     fi
     mkdir -p "$copy/bin"
     for b in bash mktemp cat tr printf jq; do ln -sf "$(command -v "$b")" "$copy/bin/$b"; done
@@ -1001,7 +1001,7 @@ if [ -s "$SHIM3690/log" ] && [[ "$sw_out" != *'"deny"'* ]]; then pass=$((pass + 
   fail=$((fail + 1)); echo "FAIL: #3690 with lib/shell-words.py missing, uptime; date still goes to the python3 half (python3 started: $([ -s "$SHIM3690/log" ] && echo yes || echo no), output: ${sw_out:-<silence>})"; fi
 
 # The hook's own cost on a large command (review of #3690). The command was cut from the parsed
-# payload with ${parsed%%$'\x1f'*}, which is quadratic on bash 3.2 (macOS /bin/bash): 15 s of
+# payload with ${parsed%%$'\x1f'*}, which is quadratic on bash 3.2 (macOS /bin/bash): on 2026-11-27, 15 s of
 # processor time for a 306 KB command, past this hook's 15 s limit, where main's copy, which made no
 # such cut, took 0.5 s. So the hook, under /bin/bash, on a 300 KB command naming neither issue nor pr,
 # must cost no more than three times what main's copy spends on it, its python3 half reading the
@@ -1015,7 +1015,7 @@ import json, sys
 line = "the quick brown fox jumps over the lazy dog, '"'"'quoted'"'"' and \"double\" words here\n"
 body = (line * (300 * 1024 // len(line) + 1))[:300 * 1024]
 json.dump({"tool_name": "Bash", "tool_input": {"command": "cat > notes.txt <<'"'"'EOF'"'"'\n" + body + "EOF"},
-           "cwd": "/Users/someone/work/app"}, open(sys.argv[1], "w"))
+           "cwd": "/w/app"}, open(sys.argv[1], "w"))
 ' "$BIG3690"
 BASH3690=/bin/bash
 [ -x "$BASH3690" ] || BASH3690="$(command -v bash)"
@@ -1040,9 +1040,9 @@ def cost(argv, limit):
 
 ref = [cost(["python3", gate], 60) for _ in range(3)]
 if None in ref or min(ref) <= 0:
-    print("UNMEASURED the python3 half alone could not be timed (%s)" % ref); sys.exit()
+    print("UNSURE the python3 half alone could not be timed (%s)" % ref); sys.exit()
 if max(ref) > 3 * min(ref):
-    print("UNMEASURED the python3 half alone spread from %.2f to %.2f s, too busy to tell" % (min(ref), max(ref)))
+    print("UNSURE the python3 half alone spread from %.2f to %.2f s, too busy to tell" % (min(ref), max(ref)))
     sys.exit()
 bound = 3 * min(ref)
 limit = max(10 * bound, 5)
@@ -1058,7 +1058,7 @@ print("%s the hook cost %.2f s against %.2f s for main (bound %.2f s)" % (verdic
 ' "$BASH3690" "$HOOK" "$DIR/issue_field_gate.py" "$BIG3690" 2>&1)"
 case "$cost3690" in
   PASS*) pass=$((pass + 1)) ;;
-  UNMEASURED*) echo "UNMEASURED: #3690 a 300 KB command under $BASH3690: ${cost3690#UNMEASURED }" ;;
+  UNSURE*) echo "SUITE-PART-UNMEASURED #3690 a 300 KB command under $BASH3690: ${cost3690#UNSURE }" ;;
   *) fail=$((fail + 1)); echo "FAIL: #3690 a 300 KB command under $BASH3690 costs no more than main (${cost3690#FAIL })" ;;
 esac
 
