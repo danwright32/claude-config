@@ -8,8 +8,8 @@
 #   2. that item of the review prompt keeps its number and what it already asked, and also asks for
 #      a comment the change adds that tells the history of the change or states a count or a list
 #      of other code as fact;
-#   3. neither text holds an em or en dash;
-#   4. the two readers below report a copy that breaks each of those, so their silence on the real
+#   3. the entry and that item hold no em or en dash (the rest of each file is not scanned here);
+#   4. the readers below report a copy that breaks each of those, so their silence on the real
 #      files is a measurement.
 #
 # CODE_COMMENT_RULE_CLAUDE_MD and CODE_COMMENT_RULE_PROMPT point the suite at other copies.
