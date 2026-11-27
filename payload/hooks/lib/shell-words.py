@@ -1655,18 +1655,149 @@ def crude_inner(text):
     the script runs, which it does not (L11). Only that `(` is passed over. Every `)` stays an
     edge, the one that closes it too, because the parenthesis may be glued to a name inside a quoted
     word, `x=$(git push origin "a(b")`, and the `)` after it then closes the substitution.
+
+    After those stretches, in the order they always had, come the ones a finer cut finds
+    (claude-config#3786, crude_listed): a command after a single ampersand, after coproc and inside
+    a `${ cmd; }`, and a command before an ampersand with its own words.
     """
-    out, at, first = [], 0, True
+    return [part for _, part in crude_listed(text, crude_cut(text))]
+
+
+# The edges of the finer cut (claude-config#3786): CRUDE_EDGE's, and three more places a command
+# starts that the cut read straight past.
+#   A single ampersand. `sleep 1 & git push` named no git command. Every & is an edge but the one
+#   written straight after an angle bracket, the & of `>&`, `<&`, `2>&1` and `>&-`: bash 3.2, zsh,
+#   sh, dash and ksh each run nothing after those (measured 2026-11-27, the words after each run
+#   as a marker in an empty folder). The & of `&>` and `&>>` IS an edge: bash, zsh and sh read a
+#   redirect there, and dash and ksh send the command to the background and run what follows the
+#   file name. What is listed there starts with the redirect, `> out.log`, and a redirect alone
+#   names no program, so the usual spelling, with nothing after the file name, adds no command.
+#   The `${` of `${ cmd; }`, which ksh 93 runs and bash 5.3 documents: a `${` with a space or a tab
+#   after it. With a line break or a `|` after it the cut already ends the piece there.
+#   The word coproc, which zsh runs a command after and bash 4 and later documents.
+CRUDE_MORE_EDGE = re.compile(CRUDE_EDGE.pattern + r"|\$\{(?=[ \t])|(?<![<>&])&+|(?<![\w$./-])coproc(?=[ \t(])")
+# The edges that start a nest: a shell of its own, whose cd moves nothing outside it.
+CRUDE_OPENERS = ("$(", "<(", ">(", "=(", "(", "`")
+
+
+def crude_cut(text):
+    """One piece cut at every edge of the finer cut: (start, end, left, right) for each stretch,
+    blank ones too, left and right the edges either side of it and "" at the piece's two ends.
+
+    The `(` written straight after a name is passed over as crude_inner passes over it, but for the
+    one glued to coproc, which is a word that takes a command after it as the reserved words do.
+    No shell on the Mac this was written on reads `coproc(cmd)` (bash 3.2 has no coproc and zsh 5.9
+    takes the parenthesis another way), so that one is listed unmeasured, on the side of more.
+    """
+    out, at, left = [], 0, ""
+    for m in CRUDE_MORE_EDGE.finditer(text):
+        edge = m.group()
+        if edge == "(" and after_a_name(text, m.start()) and not (left == "coproc" and at == m.start()):
+            continue
+        out.append((at, m.start(), left, edge))
+        at, left = m.end(), edge
+    out.append((at, len(text), left, ""))
+    return out
+
+
+def crude_more(part, left):
+    """A second reading of the stretch `part`, which follows the edge `left`, where the first names
+    another command than the shell runs.
+
+    After coproc and a name, bash runs the compound command that follows the name
+    (`coproc NAME { cmd; }`), so where a reserved word follows a name the stretch is given again
+    from that word. After an ampersand, zsh reads a `!` glued to it as its disown mark and runs
+    what follows (`true &!git push`, measured 2026-11-27), where bash runs a program named `!git`.
+    """
+    if left == "coproc":
+        m = re.match(r"\s*[A-Za-z_]\w*\s+(?=(\S+))", part)
+        if m and m.group(1) in RESERVED:
+            return [part[m.end():]]
+    elif left[:1] == "&" and re.match(r"!\S", part):
+        return [part[1:]]
+    return []
+
+
+def crude_listed(text, cut):
+    """(where its stretch starts, the stretch) for each stretch of a piece that may be a command of
+    its own. `cut` is crude_cut's reading of the piece.
+
+    Two passes, so that nothing the cut gave can be lost to the finer one (claude-config#3786).
+    The first is claude-config#3473's, word for word: its edges, its rule, its order. The second
+    reads the finer cut by the same rule and adds each stretch the first did not give: what follows
+    an ampersand, a `${ ` or coproc, and what stands before an ampersand, which is a whole command
+    with its own words (`git push origin main & wait` gave the push the words `& wait`). A stretch
+    the first pass gave whole is still given whole, so `(git push --force & x)` is still read as
+    one push with every word it had, and once more as the push the shell runs.
+    """
+    out, spans, at, first = [], set(), 0, True
     for m in CRUDE_EDGE.finditer(text):
         if m.group() == "(" and after_a_name(text, m.start()):
             continue
         part = text[at:m.start()]
         if part.strip() and (not first or m.group() in (")", "`")):
-            out.append(part)
+            out.append((at, part))
+            spans.add((at, m.start()))
         at, first = m.end(), False
     if not first and text[at:].strip():
-        out.append(text[at:])
+        out.append((at, text[at:]))
+        spans.add((at, len(text)))
+    for start, end, left, right in cut:
+        part = text[start:end]
+        if not part.strip() or not (left or right in (")", "`") or right[:1] == "&"):
+            continue
+        if (start, end) not in spans:
+            out.append((start, part))
+        out.extend((start, more) for more in crude_more(part, left))
     return out
+
+
+def crude_nests(text, cut, nests, piped):
+    """Where each stretch of a piece runs by the crude cut's second reading of directories, as
+    {start of the stretch: directory}, moving `nests` past the piece (claude-config#3786).
+
+    The first reading is the one crude_commands always had: every cd it can see as a piece moves
+    every command after it, and a cd it cannot see as a piece moves nothing. It read the push of
+    `(cd /tmp/x && git push)` in the session's folder, and the push after `x=$(a; cd /tmp/b; c)`
+    in /tmp/b. This one keeps a directory for each nest open: an opener copies the directory it is
+    written in, a `)` or the backquote that closes drops the copy, and a cd moves the innermost one
+    only, whether the cd is a piece or a stretch of one. `nests` holds them, outermost first, each
+    [directory, OLDPWD, the edge that opened it, the directory and OLDPWD its list started with].
+
+    Three cds move nothing: one sent to the background by the ampersand after it, one handed to
+    coproc, and, at an ampersand, every cd of the list it ends, since bash, sh, dash and ksh run
+    `cd d && true & cmd` with cmd in the folder the list started in. zsh runs that cmd in d, which
+    is what the first reading says, so both are listed. A cd inside `${ cd d; }` moves the shell
+    (ksh, measured 2026-11-27), so `${` opens no nest. A cd with a nest among its words has its
+    directory read from the whole rest of the piece, as the first reading reads it, and moves when
+    the piece ends; a stretch that is no cd itself is never read on into the nest after it.
+
+    The nests are counted from the edges alone, so a parenthesis inside a quoted word or the `)` of
+    a case pattern inside a subshell miscounts them. That can only add a wrong directory to the
+    ones a command is listed in: the first reading's is always among them.
+    """
+    there, late = {}, []
+    for start, end, left, right in cut:
+        if (left == "`" and nests[-1][2] == "`") or (left == ")" and len(nests) > 1):
+            nests.pop()
+        elif left in CRUDE_OPENERS:
+            nests.append([nests[-1][0], nests[-1][1], left, nests[-1][0], nests[-1][1]])
+        nest, part = nests[-1], text[start:end]
+        there[start] = nest[0]
+        whole = not right or right == ")" or (right == "`" and nest[2] == "`")
+        if part.strip() and right[:1] != "&" and left != "coproc":
+            target = cd_target(part)
+            if target is not None and whole:
+                nest[0], nest[1] = moved(nest[0], nest[1], target)
+            elif target is not None and cd_target(text[start:]) is not None:
+                late.append((nest, cd_target(text[start:])))
+        # The & of `|&` is a pipe's, and the cut left it at the start of its piece.
+        if right[:1] == "&" and not (piped and end == 0):
+            nest[0], nest[1] = nest[3], nest[4]
+            late = [(n, t) for n, t in late if n is not nest]
+    for nest, target in late:
+        nest[0], nest[1] = moved(nest[0], nest[1], target)
+    return there
 
 
 def crude_commands(s, cwd=""):
@@ -1684,15 +1815,38 @@ def crude_commands(s, cwd=""):
     could turn its answer either way. Each is given in its piece's directory, and a cd among them
     moves nothing, so no caller is handed less, or anything in another place, than before
     (claude-config#3473).
+
+    A second reading of the directories runs beside that one (crude_nests, claude-config#3786), in
+    which a cd inside a subshell or a substitution governs what follows it there and nothing after
+    the nest closes. Where it puts a command somewhere else, the command is given once more, there,
+    after the record it always had: the push of `(cd /tmp/x && git push)` is read in the session's
+    folder as before and in /tmp/x. A text is cut on the separators it always was, so the pieces
+    are the same; the separators are kept only to tell where a list starts.
     """
     out, found, old = [], [], None
-    for text in re.split(r"&&|\|\||;|\||\n", s):
-        if text.strip():
-            found.extend((cwd, inner) for inner in crude_inner(text))
-            out.append((cwd, text))
-            target = cd_target(text)
-            if target is not None:
-                cwd, old = moved(cwd, old, target)
+    nests, joined = [[cwd, None, "", cwd, None]], False
+    parts = re.split(r"(&&|\|\||;|\||\n)", s)
+    for n in range(0, len(parts), 2):
+        text, sep = parts[n], parts[n - 1] if n else ""
+        # A line break after && or a pipe starts no list: the shell reads on for the command.
+        joined = joined or sep in ("&&", "||", "|")
+        if not text.strip():
+            continue
+        if not joined:
+            nests[-1][3:] = nests[-1][:2]
+        joined = False
+        cut = crude_cut(text)
+        there = crude_nests(text, cut, nests, sep == "|")
+        if there[0] != cwd:
+            found.append((there[0], text))
+        for start, inner in crude_listed(text, cut):
+            found.append((cwd, inner))
+            if there.get(start, cwd) != cwd:
+                found.append((there[start], inner))
+        out.append((cwd, text))
+        target = cd_target(text)
+        if target is not None:
+            cwd, old = moved(cwd, old, target)
     return out + found
 
 
