@@ -87,7 +87,7 @@
 # project's write carries. Before, the failed save was swallowed, and the next session asked him
 # to approve the same line again with no reason given.
 #
-# A COMMAND HOLDING A #, since #3472. The shared reader took a # for a comment by a rule the shell
+# A COMMAND READ TWICE, since #3472. The shared reader took a # for a comment by a rule the shell
 # does not follow, so a command on the rest of that line was left out of what this hook judged: a
 # write there was not asked about, a push Dan applied was let through with that line riding along,
 # and a commit there of an unapproved list line was not asked about (all three reproduced,
