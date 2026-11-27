@@ -75,12 +75,15 @@
 #       is given. For a hook that lets a call through and has something to say beside it
 #       (db-write-ask.sh, claude-config#3058).
 #   hook_deny_json <reason> [<notice>]
-#       print a PreToolUse refusal: hookSpecificOutput with permissionDecision "deny", <reason> as
-#       its permissionDecisionReason unless it is empty, plus <notice> as a systemMessage when one
-#       is given. Built by the same builder as the ask and the allow, so its words are escaped and
-#       cut as theirs are. A hook refuses through this name and never through the private builder
-#       behind it, whose name can change (db-write-ask.sh, claude-config#3793; test-hook-notice.sh
-#       fails on a hook that names any _hn_ function).
+#       print a PreToolUse deny: hookSpecificOutput with permissionDecision "deny" and <reason> as
+#       its permissionDecisionReason unless it is empty, which refuses the call and hands Claude the
+#       reason, plus <notice> as a systemMessage when one is given. Built by the same builder as the
+#       ask and the allow, so its words are escaped and cut as theirs are. For a hook that asks while
+#       Dan is awake and refuses while he is asleep, and leaves with status 0 either way
+#       (connector-change-ask.sh, claude-config#3618), and for a refusal of a command a hook could
+#       not check (db-write-ask.sh, claude-config#3793). A hook refuses through this name and never
+#       through the private builder behind it, whose name can change (test-hook-notice.sh fails on
+#       a hook that names any of the library's private names).
 #   hook_notice_verdict <stdout> <ERE>
 #       for the suites: print why <stdout> is not exactly one JSON object whose systemMessage
 #       matches <ERE> (Python's re), or nothing when it is.
@@ -174,7 +177,7 @@ print(json.dumps(out))' 2>/dev/null && return 0
 }
 
 # _hn_decision_json <ask|allow|deny> <reason> [<notice>]: a PreToolUse decision with its reason,
-# plus <notice> as a systemMessage when one is given. An allow or a refusal with no reason carries
+# plus <notice> as a systemMessage when one is given. An allow or a deny with no reason carries
 # none; an ask always carries its reason, empty or not. Private: hooks call the three names below.
 _hn_decision_json() {
   local decision="$1" reason="$2" notice="${3:-}" inside=""

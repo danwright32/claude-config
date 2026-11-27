@@ -161,7 +161,8 @@ for n, what, reason, notice in ((0, "with a reason and a notice", want, "notice:
   [ -z "$shape" ] && ok || bad "#3058 $name: hook_allow_json did not print one valid allow carrying its reason and notice: $shape"
   # hook_deny_json: a PreToolUse refusal carrying the tricky text as its reason and its notice, as
   # one valid object; with no notice, or an empty one, no systemMessage; and a reason too long for
-  # Claude Code cut short of its cap, saying so, as the ask and the allow are (claude-config#3793).
+  # Claude Code cut short of its cap, saying so, as the ask and the allow are (claude-config#3618,
+  # #3793).
   long="$(python3 -c 'print("x" * 20000, end="")')"
   out="$(env PATH="$arm" HN_A="$TRICKY" HN_B="notice: $TRICKY" HN_L="$long" "$BASH" -c '. "$0" && hook_deny_json "$HN_A" "$HN_B"; echo "@@"; hook_deny_json "$HN_A"; echo "@@"; hook_deny_json "$HN_A" ""; echo "@@"; hook_deny_json "$HN_L"' "$LIB" 2>/dev/null)"
   shape="$(printf '%s' "$out" | HN_WANT="$TRICKY" python3 -c '
@@ -187,7 +188,7 @@ for n, what, notice in ((0, "with a notice", "notice: " + want), (1, "with no no
         print("%s: the systemMessage was %r" % (what, d.get("systemMessage")))
     elif set(d) - {"hookSpecificOutput", "systemMessage"}:
         print("%s: it carried more: %r" % (what, sorted(d)))')"
-  [ -z "$shape" ] && ok || bad "#3793 $name: hook_deny_json did not print one valid refusal carrying its reason and notice: $shape"
+  [ -z "$shape" ] && ok || bad "#3618 #3793 $name: hook_deny_json did not print one valid refusal carrying its reason and notice: $shape"
 done
 
 # --- the event and context arguments, each seen to fail against a library that mishandles it -------

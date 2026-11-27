@@ -488,6 +488,12 @@ export type ModKitCommand = {
   followed?: (string | null)[]
   /** The folder it runs in, given only when `pipeline` was given `cwd`; null where a cd before it cannot be followed. */
   folder?: string | null
+  /**
+   * On a command a lone `&` ends, so the shell runs it in the background (#3770), and on everything
+   * it runs, its substitutions included; a subshell's group is marked on the `)` closing it. Never
+   * `&&`, a redirect's `&`, `|&` or a case clause's `;&`.
+   */
+  background?: true
 }
 
 /** What a word holding a command substitution becomes, as `ModKitCommand.derived` gives it (#2141). */

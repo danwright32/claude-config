@@ -141,7 +141,7 @@ check "and says it could not measure, rather than reporting a number it does not
 # room" on a disk with 1 GB left: silently landing on the permissive side is exactly the failure
 # L50 describes, and nothing anywhere would have said so.
 for bad_setting in FREE_SPACE_FLOOR_GB FREE_SPACE_HORIZON_HOURS FREE_SPACE_MIN_SPAN_MIN FREE_SPACE_WINDOW_HOURS FREE_SPACE_RECOVERY_GB \
-                   FREE_SPACE_PERSIST_MIN FREE_SPACE_STOPPED_MIN FREE_SPACE_SWAP_SHARE_PCT FREE_SPACE_TOP_SECONDS; do
+                   FREE_SPACE_PERSIST_MIN FREE_SPACE_STOPPED_MIN FREE_SPACE_GIVEBACK_MIN FREE_SPACE_SWAP_SHARE_PCT FREE_SPACE_TOP_SECONDS; do
   S_BAD="$TMPROOT/state-bad-$bad_setting"; mkdir -p "$S_BAD"
   bad_msg="$(env "$bad_setting=abc" FREE_SPACE_BYTES="$((1 * GB))" FREE_SPACE_NOW="$T0" \
     FREE_SPACE_STATE_DIR="$S_BAD" FREE_SPACE_PATH=/fixture bash "$CHECK" 2>&1)"; bad_rc=$?
@@ -397,13 +397,18 @@ check "the real readings of 2026-11-25: at 10:45 AM ET, 65.8 GB after 33 minutes
 # slower fall that followed, 6.7 GB in the 32 minutes since 10:25, which reaches zero in under five
 # hours. Every other reading of the day, the 22 minutes before 10:19 and the flat stretch included,
 # exits 0, and after 10:58 the recovery rule (#436) already said 0 before this change.
+# These two lists were measured before #3636, which makes the fall after 10:58 warn (its own cases
+# below). So both are replayed with that rule off (FREE_SPACE_GIVEBACK_MIN=0), which is the rule they
+# were measured against, and the lists stay exactly as measured; the cases below show that with it
+# on, nothing before 10:58 changes.
+drop_rcs_436="$(replay_rcs "$DROP_DAY" "$TMPROOT/state-drop-3608-436" FREE_SPACE_GIVEBACK_MIN=0)"
 DROP_FOURS_NEW="1795619980 1795619981 1795620079 1795620145 1795620252 1795620340 1795621139 1795621171 1795621285 1795621318 1795622268"
 check "and the readings of that day that still exit 4 are the drop not yet 30 minutes over, and the slower fall at 10:57" \
-  "$([ "$(fours "$drop_rcs")" = "$DROP_FOURS_NEW" ] && echo ok || echo "exit 4 at: $(fours "$drop_rcs")")"
+  "$([ "$(fours "$drop_rcs_436")" = "$DROP_FOURS_NEW" ] && echo ok || echo "exit 4 at: $(fours "$drop_rcs_436")")"
 # THE CONTROL (L1001): the stand down set to 0 is the rule as it was, and replays that day to the
 # exact readings it warned at before this change, measured by running it then (10:19 to 10:57).
 DROP_FOURS_OLD="1795619980 1795619981 1795620079 1795620145 1795620252 1795620340 1795621139 1795621171 1795621285 1795621318 1795621495 1795621525 1795621567 1795621693 1795621694 1795621710 1795621906 1795621942 1795621989 1795622007 1795622076 1795622168 1795622253 1795622268"
-drop_rcs0="$(replay_rcs "$DROP_DAY" "$TMPROOT/state-drop-3608-off" FREE_SPACE_STOPPED_MIN=0)"
+drop_rcs0="$(replay_rcs "$DROP_DAY" "$TMPROOT/state-drop-3608-off" FREE_SPACE_STOPPED_MIN=0 FREE_SPACE_GIVEBACK_MIN=0)"
 check "with FREE_SPACE_STOPPED_MIN=0 the same day warns at every reading it warned at before, so the stand down is what quiets it" \
   "$([ "$(fours "$drop_rcs0")" = "$DROP_FOURS_OLD" ] && echo ok || echo "exit 4 at: $(fours "$drop_rcs0")")"
 # What --report says at 10:45: that the fall stopped, how much went and between which times (ET).
@@ -420,6 +425,54 @@ check "and says how little it has moved since and over how long, rather than a r
   "$(grep -qF 'and in the 33 minute(s) since free space has moved by no more than 1.6 GB. At its pace over the last 32 minute(s) it would not reach zero within 6 hour(s).' <<< "$PROBE_MSG" && ! grep -qi 'per hour' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
 check "and the stand down line carries no dash used as punctuation" \
   "$(grep -q ' - \|'$'\xe2\x80\x94' <<< "$PROBE_MSG" && echo "said: $PROBE_MSG" || echo ok)"
+
+# ---- A FALL BROKEN BY SMALL GIVE BACKS IS STILL A FALL (claude-config#3636) ----
+# The same real day. After the drop stood down, free space fell again, from 67.1 GB at 10:25 AM ET
+# to 55.7 GB at 11:10, about 15 GB an hour, which reaches zero in under four hours. Three times on
+# the way it went back up by 1 to 3 GB and fell again within minutes: 60.4 to 63.2 GB at 10:58,
+# 58.3 to 59.5 GB at 11:05, and 55.7 to 58.0 GB at 11:15, after which it held at 57 to 61 GB until
+# the fixture ends at 12:06. Every rise of more than FREE_SPACE_RECOVERY_GB was read as a recovery
+# (#436) and restarted the trend, so no stretch lasted long enough to be judged and the check exited
+# 0 at every reading from 10:58 on. Times are the real ones, in ET.
+SLOW_FROM=1795622291   # 10:58:11 AM ET, 63.2 GB, the first give back
+SLOW_TO=1795623035     # 11:10:35 AM ET, 55.7 GB, the bottom of the fall
+SLOW_HELD=1795623612   # 11:20:12 AM ET, 59.5 GB, the level after 11:15 has held for its first minutes
+slow_fours=""; held_loud=""; before_fours=""
+for _p in $drop_rcs; do
+  _e="${_p%%:*}"; _x="${_p#*:}"
+  [ "$_e" -ge "$SLOW_FROM" ] && [ "$_e" -le "$SLOW_TO" ] && [ "$_x" = 4 ] && slow_fours="$slow_fours $_e"
+  [ "$_e" -ge "$SLOW_HELD" ] && [ "$_x" != 0 ] && held_loud="$held_loud $_p"
+  [ "$_e" -lt "$SLOW_FROM" ] && [ "$_x" = 4 ] && before_fours="$before_fours $_e"
+done
+check "the real readings of 2026-11-25: the fall from 10:58 to 11:10 AM ET, 15 GB an hour with give backs of 1 to 3 GB, warns" \
+  "$([ -n "$slow_fours" ] && echo ok || echo "no exit 4 from 10:58 to 11:10; replayed: $drop_rcs")"
+check "and at 11:10 AM ET, 55.7 GB, the bottom of that fall, it exits 4" \
+  "$(grep -q " $SLOW_TO:4" <<< " $drop_rcs" && echo ok || echo "replayed: $drop_rcs")"
+# Silent where nothing was wrong: from 11:20 the level held at 57 to 61 GB and rose, so the warning
+# says nothing there, as before.
+check "and from 11:20 AM ET, once the level after the last give back has held, it says nothing" \
+  "$([ -z "$held_loud" ] && echo ok || echo "not 0 at:$held_loud")"
+# Before 10:58 this changes nothing: the readings that exit 4 are exactly those #3608 left.
+check "and before 10:58 the readings that exit 4 are exactly the ones they were" \
+  "$([ "${before_fours# }" = "$DROP_FOURS_NEW" ] && echo ok || echo "exit 4 at:$before_fours")"
+# Which readings of the fall warn, and why, measured 2026-11-26 by replaying the fixture of 2026-11-25.
+# A rise counts as a recovery until free space falls back to the level it rose from, so the 10:58
+# give back (from 60.4 GB) is taken back at 11:01:51, 60.2 GB, and from there the last 30 minutes
+# reach zero in about five hours. The 11:05 give back (from 58.3 GB) holds as a recovery for four
+# readings, until 57.9 GB at 11:06:52. The 11:15 one (from 55.7 GB) is never taken back, so the
+# warning stops there.
+SLOW_FOURS="1795622511 1795622690 1795622812 1795623012 1795623035"
+check "and the readings of that fall that exit 4 are 11:01, 11:04, 11:06 and both at 11:10, once each give back was taken back" \
+  "$([ "${slow_fours# }" = "$SLOW_FOURS" ] && echo ok || echo "exit 4 at:$slow_fours")"
+# THE CONTROL (L1001): with the rule off, every give back restarts the trend as before, and the fall
+# is silent again, so the rule is what makes it warn.
+drop_rcs_gb0="$(replay_rcs "$DROP_DAY" "$TMPROOT/state-drop-3636-off" FREE_SPACE_GIVEBACK_MIN=0)"
+gb0_loud=""
+for _p in $drop_rcs_gb0; do
+  [ "${_p%%:*}" -ge "$SLOW_FROM" ] && [ "${_p#*:}" != 0 ] && gb0_loud="$gb0_loud $_p"
+done
+check "with FREE_SPACE_GIVEBACK_MIN=0 the fall after 10:58 is silent again, so the new rule is what warns" \
+  "$([ -z "$gb0_loud" ] && echo ok || echo "not 0 at:$gb0_loud")"
 
 # A STEADY FALL IS REPORTED AT THE SAME READING AS BEFORE (L93). The stand down only turns an exit 4
 # into 0, and only where the last 30 minutes, judged on their own with every dip counted as lost,
@@ -645,6 +698,8 @@ check "the copy's readings replayed through the check give the same exit 4" \
 # included (#3608), or a copy made with it set otherwise replays to a different verdict.
 check "the copy's settings line names the stand down window it was judged by" \
   "$(grep -q '^# settings: .*FREE_SPACE_PERSIST_MIN=30 FREE_SPACE_STOPPED_MIN=30$' "$rep_file" && echo ok || echo "settings: $(grep '^# settings' "$rep_file" 2>&1)")"
+check "and the give back window it was judged by (#3636)" \
+  "$(grep -q '^# settings: .* FREE_SPACE_GIVEBACK_MIN=30 ' "$rep_file" && echo ok || echo "settings: $(grep '^# settings' "$rep_file" 2>&1)")"
 rep_size="$(wc -c < "$rep_file" 2>/dev/null | tr -d ' ')"
 check "a copy of a busy night's readings stays small (under 8 KB)" \
   "$([ -n "$rep_size" ] && [ "$rep_size" -lt 8192 ] && echo ok || echo "size: ${rep_size:-unread} bytes")"
