@@ -85,6 +85,8 @@ make_repo() {  # $1 = owner/name ; $2 = pr view json ; $3 = registry json, or MI
   printf '%s' "$2" > "$dir/pr.json"
   cat > "$dir/bin/gh" <<'SH'
 #!/usr/bin/env bash
+# FAKE_GH_LOG, for a case that needs to know what GitHub was asked: every call, one to a line.
+if [ -n "${FAKE_GH_LOG:-}" ]; then printf '%s\n' "$*" >> "$FAKE_GH_LOG"; fi
 case "$*" in
   *"auth status"*) printf 'Logged in to github.com account danwright32 (keyring)\n' ;;
   *"auth token -u "*) printf 'tok\n' ;;
@@ -92,6 +94,14 @@ case "$*" in
   # record holds as let through with an announcement. No answer unless a case gives one.
   *"pr view 5 "*|*"pr view 5")
     if [ -n "${FAKE_PR5_JSON:-}" ]; then printf '%s\n' "$FAKE_PR5_JSON"; else printf 'HTTP 502: bad gateway\n' >&2; exit 1; fi ;;
+  # Two more of them, for a case that says so (FAKE_PR6_JSON, FAKE_PR4_JSON: an answer, or empty
+  # for none). A case that sets neither gets the answer every other pull request gets, as before.
+  *"pr view 6 "*|*"pr view 6")
+    if [ -z "${FAKE_PR6_JSON+set}" ]; then cat "$FAKE_PR_JSON"
+    elif [ -n "$FAKE_PR6_JSON" ]; then printf '%s\n' "$FAKE_PR6_JSON"; else printf 'HTTP 502: bad gateway\n' >&2; exit 1; fi ;;
+  *"pr view 4 "*|*"pr view 4")
+    if [ -z "${FAKE_PR4_JSON+set}" ]; then cat "$FAKE_PR_JSON"
+    elif [ -n "$FAKE_PR4_JSON" ]; then printf '%s\n' "$FAKE_PR4_JSON"; else printf 'HTTP 502: bad gateway\n' >&2; exit 1; fi ;;
   *"pr view"*) cat "$FAKE_PR_JSON" ;;
   # The issues a pull request closes, each with its milestone (claude-config#3666, #3669). GitHub's
   # ordinary answer is that it closes none, so that is what a case that says nothing gets:
@@ -1923,6 +1933,62 @@ out=$(SPY_LOG="$dir/asks.log" HOOK="$SPY/require-changelog-tag.sh" FAKE_PR5_JSON
 second="$(sed -n 2p "$dir/asks.log" 2>/dev/null)"
 if denied "$out" && says "$second" "--unmerged 5" && says "$second" "--spent unknown"; then pass
 else fail "#3669 R9 G: a first answer that does not say what it spent was followed by a second question with time of its own: [$second] $out"; fi
+rm -rf "$dir" "$SPY"
+
+# A pull request that first comes up in the SECOND answer is asked of GitHub too (second review of
+# #3669, medium 4). The second question can lean on another line than the first did: one pull
+# request finishes two milestones, the first answer clears one of them by his decline and names the
+# other's pull requests, and the second, with a session left unread by then, sends the first
+# milestone on to its own line let through, a pull request the first answer never named. The gate
+# took the second verdict as it came, so that pull request covered the milestone without GitHub
+# being asked whether it merged, or merged under the label. Driven through the real gate with a
+# library that gives those two answers and writes down what it was asked: first `announced` 5 and
+# 4, then, asked again with 5 not merged, SPY_SECOND (6 and 4 unless a case says otherwise).
+SPY="$(mktemp -d)"
+cp "$HOOK" "$SPY/"
+cp -R "$HOOK_DIR/lib" "$SPY/lib"
+cp "$HOOK_DIR/gh_issue_scan.py" "$SPY/"
+cat > "$SPY/lib/announce-approval.py" <<'PY'
+import os, sys
+with open(os.environ["SPY_LOG"], "a", encoding="utf-8", errors="replace") as f:
+    f.write(" ".join(sys.argv[1:]) + "\n")
+if "--unmerged" in sys.argv:
+    print('{"state": "clear", "why": "", "how": "", "notes": [], "announced": ' + os.environ.get("SPY_SECOND", "[6, 4]") + ', "spent": 12}')
+else:
+    print('{"state": "clear", "why": "", "how": "", "notes": [], "announced": [5, 4], "spent": 12}')
+PY
+# pr_n <number> <state> [labels, as JSON]: GitHub's answer about that pull request, which carries the
+# announce label unless a case says otherwise.
+pr_n() { printf '{"number":%s,"url":"https://github.com/acme/widget/pull/%s","state":"%s","labels":%s}' "$1" "$1" "$2" "${3:-$PR5_ANNOUNCE}"; }
+# second_pass <fixture dir> <what GitHub says of pull request 6, or empty for no answer> [the second
+# answer's announced]: one merge of pull request 7, with 5 not merged and 4 merged as an announcement.
+# Sets out, and asks_n, how many questions the library was asked, and gh_asked, GitHub's calls.
+second_pass() {
+  rm -f "$1/asks.log" "$1/gh.log"
+  out=$(SPY_LOG="$1/asks.log" SPY_SECOND="${3:-[6, 4]}" FAKE_GH_LOG="$1/gh.log" HOOK="$SPY/require-changelog-tag.sh" FAKE_PR5_JSON="$(pr_n 5 OPEN)" FAKE_PR4_JSON="$(pr_n 4 MERGED)" FAKE_PR6_JSON="$2" FAKE_CLOSING_JSON="$FINISHES_YES" run_hook "$1" "$MERGE 7 --squash" 2>&1)
+  asks_n="$(grep -c "" "$1/asks.log" 2>/dev/null)"
+  gh_asked="$(cat "$1/gh.log" 2>/dev/null)"
+}
+dir=$(make_repo acme/widget "$VISIBLE_OK" "$REGISTRY_ANNOUNCES")
+second_pass "$dir" "$(pr_n 6 MERGED)"
+if [ -z "$out" ] && [ "$asks_n" = 2 ] && says "$gh_asked" "pr view 6 "; then pass
+else fail "#3669 R9 J still possible: a pull request first named in the second answer, which GitHub says merged as an announcement, did not let the merge through, was not asked of GitHub, or the library was not asked exactly twice: [$asks_n] $out"; fi
+second_pass "$dir" ""
+if denied "$out" && says "$out" "Cannot tell" && says "$out" "pull request 6" && says "$out" "Deliberate override" && [ "$asks_n" = 2 ]; then pass
+else fail "#3669 R9 J: a pull request first named in the second answer, which GitHub gave no answer about, covered the milestone, or was not refused as what could not be told: [$asks_n] $out"; fi
+for other in "$(pr_n 6 OPEN)" "$(pr_n 6 MERGED '[{"name":"changelog/technical"}]')"; do
+  second_pass "$dir" "$other"
+  if denied "$out" && says "$out" "Cannot tell" && says "$out" "pull request 6" && says "$out" "did not merge as an announcement" && says "$out" "never a third" && [ "$asks_n" = 2 ]; then pass
+  else fail "#3669 R9 J: a pull request first named in the second answer, which GitHub says did not merge as an announcement, covered the milestone, was not refused as what could not be told, or the library was asked a third time: [$asks_n] [${other:60:60}] $out"; fi
+done
+second_pass "$dir" "$(pr_n 6 MERGED 'null')"
+if denied "$out" && says "$out" "Cannot tell" && says "$out" "pull request 6" && ! says "$out" "never a third"; then pass
+else fail "#3669 R9 J: a pull request first named in the second answer, whose labels GitHub's answer does not hold as a list, was not refused as one GitHub gave no answer about: $out"; fi
+# The control: a second answer naming only a pull request the first loop already asked about asks
+# GitHub nothing more, and the merge goes through as it did.
+second_pass "$dir" "" "[4]"
+if [ -z "$out" ] && [ "$asks_n" = 2 ] && ! says "$gh_asked" "pr view 6 "; then pass
+else fail "#3669 R9 J still possible: a second answer naming only a pull request already asked about was refused, or GitHub was asked about a pull request no answer named: [$asks_n] $out"; fi
 rm -rf "$dir" "$SPY"
 
 # An announcement that finishes the feature merges as an announcement does: its one line, and the

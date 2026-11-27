@@ -3399,7 +3399,11 @@ for the review by picker, 2026-11-25: "Yes, attack it first"). The choices are t
   request and asks the library again naming the ones that did not merge as an announcement. That
   is one that has not merged and also one that merged without the announce label: the line is
   written before the merge runs, so a pull request let through, not merged, then stripped of its
-  label and merged under another would otherwise cover the milestone with nothing announced. A pull request that
+  label and merged under another would otherwise cover the milestone with nothing announced. The
+  second answer can name a pull request the first did not (two milestones finished by one pull
+  request, and a session left unread only by the second question), so the gate asks GitHub about
+  each of those too, and where that would change the list again the answer is what could not be
+  told: a third question was ruled out, since each one reads sessions back. A pull request that
   closes no issue is settled by GitHub's answer alone, before the library is needed, so a broken
   library cannot refuse every merge in a repository that announces. A description or answer file
   handed to the library is read whole or refused, never cut: the helper writes what comes back into

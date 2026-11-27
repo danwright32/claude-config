@@ -2338,7 +2338,11 @@ only where this Mac's dev update registry names an announcements channel for the
   not merge as an announcement: one that has not merged, and one that merged without
   `changelog/announce`, because the line is written before the merge runs and the label can be
   taken off after it. An answer that does not hold both is refused as what could not be told.
-  The two questions share the 12 seconds one call has for reading sessions back: the first answer
+  A pull request that first comes up in the second answer (a milestone the first answer cleared
+  by his decline, sent on to its own line once a session is left unread) is asked of GitHub the
+  same way; no answer about it, or an answer that it did not merge as an announcement, is refused
+  as what could not be told, because the library is asked twice for one merge and never a third
+  time. The two questions share the 12 seconds one call has for reading sessions back: the first answer
   says what it spent (`spent`), the gate hands that to the second (`--spent`), and the second
   reads back only in what is left, saying what it left unread. The gate sets no time limit on its
   GitHub reads (`mt_pr_view` and `mt_api_read` run gh as it is), so the 30 seconds the gate is

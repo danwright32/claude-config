@@ -552,7 +552,10 @@ read_closing() {
 # through with an announcement for the milestone. That line says this gate let one through, never
 # that GitHub merged it, so GitHub is asked about each, and only one that merged and still carries
 # changelog/announce covers the milestone: one that has not merged, or that merged with the label
-# taken off, announced nothing.
+# taken off, announced nothing. The library is then asked a second time naming those, and a pull
+# request that first comes up in that second answer is asked of GitHub the same way: no answer
+# about it, or an answer that it did not merge as an announcement, is unread, since the library is
+# asked twice for one merge and never a third time.
 #
 # A deny, never `ask`, like every refusal about an announcement: only his picker clears it. So the
 # override does not clear it either. What GitHub or the record does not answer is refused in its
@@ -563,7 +566,7 @@ read_closing() {
 # about, and any pull request in a repository that does not announce, which is not read at all.
 finishes_announced_feature() {
   [ "$announces" = true ] || return 0
-  local was_overridden="$overridden" verdict9="" state9="" n other other_state unmerged="" spent9=""
+  local was_overridden="$overridden" verdict9="" state9="" n other other_state unmerged="" spent9="" asked9=""
   r9_unread() {  # $1 = what could not be read
     [ -n "$closing_file" ] && rm -f "$closing_file"
     if [ "$was_overridden" = true ]; then
@@ -592,37 +595,62 @@ finishes_announced_feature() {
   fi
   command -v python3 >/dev/null 2>&1 \
     || r9_unread "python3 is not installed, and lib/announce-approval.py, which reads the milestone's line and Dan's answers, runs under it"
+  # r9_merged <pull request>: asks GitHub about one the record holds as let through with an
+  # announcement, its state and its labels in one read, and sets other_state. The record's line is
+  # written before the merge runs, so the pull request may have merged later with the announce
+  # label taken off: merged, and nothing announced. It covers the milestone only when it merged AND
+  # still carries the label, which lib/changelog-entry.js reads here as it does for the pull
+  # request being merged. other_state is "<state> yes|no", or nothing when either was not in
+  # GitHub's answer. asked9 keeps every pull request asked about, each between two spaces.
+  r9_merged() {
+    asked9="$asked9 $1 "
+    other=$(mt_pr_view "$1" "number,url,state,labels" "$slug" "$repo_flag")
+    other_state=$(printf '%s' "$other" | HOOK_DIR="$HOOK_DIR" OTHER_PR="$1" node -e '
+      const entry = require(process.env.HOOK_DIR + "/lib/changelog-entry.js");
+      let raw = "";
+      process.stdin.on("data", function (d) { raw += d; });
+      process.stdin.on("end", function () {
+        try {
+          const got = JSON.parse(raw), view = got.view;
+          if (got.found !== true || view.number !== Number(process.env.OTHER_PR)) return;
+          if (typeof view.state !== "string" || !/^[A-Z]+$/.test(view.state) || !Array.isArray(view.labels)) return;
+          process.stdout.write(view.state + " " + (entry.carriesAnnounce(view.labels) === true ? "yes" : "no"));
+        } catch (e) { /* nothing printed: not read */ }
+      });
+    ' 2>/dev/null)
+  }
+  r9_no_answer() {  # $1 = the pull request GitHub gave no answer about
+    r9_unread "GitHub gave no answer that holds both the state and the labels of pull request $1, which this Mac's record holds as let through with an announcement for a milestone this pull request finishes, so whether that announcement merged, and merged under changelog/announce, could not be told"
+  }
   r9_ask ""
   if [ "$state9" = clear ]; then
     for n in $(printf '%s' "$verdict9" | jq -r '.announced[]?' 2>/dev/null); do
-      # Its state and its labels in one read. The record's line is written before the merge runs,
-      # so the pull request may have merged later with the announce label taken off: merged, and
-      # nothing announced. It covers the milestone only when it merged AND still carries the
-      # label, which lib/changelog-entry.js reads here as it does for the pull request being
-      # merged. The answer is "<state> yes|no", or nothing when either was not in GitHub's answer.
-      other=$(mt_pr_view "$n" "number,url,state,labels" "$slug" "$repo_flag")
-      other_state=$(printf '%s' "$other" | HOOK_DIR="$HOOK_DIR" OTHER_PR="$n" node -e '
-        const entry = require(process.env.HOOK_DIR + "/lib/changelog-entry.js");
-        let raw = "";
-        process.stdin.on("data", function (d) { raw += d; });
-        process.stdin.on("end", function () {
-          try {
-            const got = JSON.parse(raw), view = got.view;
-            if (got.found !== true || view.number !== Number(process.env.OTHER_PR)) return;
-            if (typeof view.state !== "string" || !/^[A-Z]+$/.test(view.state) || !Array.isArray(view.labels)) return;
-            process.stdout.write(view.state + " " + (entry.carriesAnnounce(view.labels) === true ? "yes" : "no"));
-          } catch (e) { /* nothing printed: not read */ }
-        });
-      ' 2>/dev/null)
+      r9_merged "$n"
       case "$other_state" in
         "MERGED yes") ;;
-        '') r9_unread "GitHub gave no answer that holds both the state and the labels of pull request $n, which this Mac's record holds as let through with an announcement for a milestone this pull request finishes, so whether that announcement merged, and merged under changelog/announce, could not be told" ;;
+        '') r9_no_answer "$n" ;;
         *) unmerged="${unmerged:+$unmerged,}$n" ;;
       esac
     done
     if [ -n "$unmerged" ]; then
       spent9=$(printf '%s' "$verdict9" | jq -r 'if (.spent | type) == "number" then .spent else "unknown" end' 2>/dev/null)
       r9_ask "$unmerged" "${spent9:-unknown}"
+      # The second answer can name a pull request the first did not: with a session left unread by
+      # then, a milestone the first answer cleared by his decline is sent on to its own line let
+      # through. Each such pull request is asked of GitHub the same way, and one GitHub gives no
+      # answer about is unread. One that did not merge as an announcement changes the list again,
+      # and the record is asked twice, never a third time: that is unread too, never clear (L98).
+      if [ "$state9" = clear ]; then
+        for n in $(printf '%s' "$verdict9" | jq -r '.announced[]?' 2>/dev/null); do
+          case "$asked9" in *" $n "*) continue ;; esac
+          r9_merged "$n"
+          case "$other_state" in
+            "MERGED yes") ;;
+            '') r9_no_answer "$n" ;;
+            *) r9_unread "pull request $n, which this Mac's record holds as let through with an announcement for a milestone this pull request finishes, first came up when the record was asked a second time, and GitHub says it did not merge as an announcement (it has not merged, or it merged without the changelog/announce label). That changes what the record was asked about again, and it is asked twice for one merge, never a third time, so whether anything else covers that milestone could not be told" ;;
+          esac
+        done
+      fi
     fi
   fi
   rm -f "$closing_file"; closing_file=""
