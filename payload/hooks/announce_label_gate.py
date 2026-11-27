@@ -7,6 +7,11 @@ that an announcement merges only on wording he approved. This is the early refus
 ordinary command to put the label on a pull request is refused until he has, so the label is never
 sitting on wording nobody asked him about.
 
+One call is read and never refused for what it is (claude-config#3669): a Bash call naming the
+milestone helper, create-milestone.sh, and not the label. Before it runs, Dan's answers about whether
+a feature is announced to agents are read from the session's pickers into the record
+(approval.read_answers), where the helper's own question, which reads the record only, finds them.
+
 Judged here, each only when the command names the label:
   gh pr create --label, gh pr edit --add-label, gh issue edit --add-label (gh's issue edit answers
     for a pull request's number too)
@@ -362,24 +367,6 @@ def _judge_rename(args):
                      "carrying that one with no wording read for any of them. " + USE_PR_EDIT)
 
 
-def _api_write(args):
-    return "DELETE" not in {v.upper() for v in scan.flag_values(args, "--method", "-X")} and scan.api_writes(args)
-
-
-def _api_calls(command):
-    """The arguments of each gh api call the command makes, as the session link gate finds them."""
-    out = []
-    pipelines, _bodies = scan._stages(command)
-    for stages in pipelines:
-        if not isinstance(stages, list):
-            continue
-        for words, _redirects, _heredocs in stages:
-            found = scan.gh_command(words)
-            if found and found[0] == "api":
-                out.append(list(found[2]) + list(found[3]))
-    return out
-
-
 def _judge_api(args, cwd, payload, notes):
     """One gh api write, in a command that names the label somewhere."""
     names = LABEL in " ".join(args).lower()
@@ -415,11 +402,10 @@ def judge_label(command, cwd, payload, notes):
     if LABEL not in command.lower() or not re.search(r"\bgh\b", command):
         return None
     try:
-        found = scan.scan_gh_in_context(command, cwd, dict(os.environ), KINDS)
-        apis = [args for args in _api_calls(command) if _api_write(args)]
         # How many commands of this call write to GitHub: an edit that leaves the description to
-        # GitHub is judged by what GitHub holds now, which holds only when it is the one write.
-        writes = sum(1 for kind, _, _, _ in found if kind in PUTS) + len(apis)
+        # GitHub is judged by what GitHub holds now, which holds only when it is the one write. The
+        # count is the shared reader's, which the merge gate asks too (claude-config#3742).
+        found, apis, writes = scan.gh_writes(command, cwd, dict(os.environ), KINDS)
         for kind, args, envs, place in found:
             if kind in PUTS:
                 _judge_put(kind, args, envs, place, command, cwd, payload, notes, writes)
@@ -462,6 +448,9 @@ def judge_record(command, cwd):
 
 
 LIBRARY_FILE = "announce-approval.py"
+# The script that files a milestone and its issues, by its file name: the call that runs it is
+# where Dan's answer about announcing the feature is read into the record (main, below).
+MILESTONE_HELPER = "create-milestone.sh"
 PYTHON = re.compile(r"(?:python|pypy)[0-9.]*")
 # python's one letter options that take a value: the rest of their word, or else the next word.
 PYTHON_VALUE_LETTERS = "cmXW"
@@ -624,6 +613,21 @@ def main():
         return deny("this command runs lib/" + LIBRARY_FILE + ", or may, in a form that can write " + RECORD_IS + ": "
                     + held + ". " + LIBRARY_RULE)
     notes = []
+    if MILESTONE_HELPER in command.lower() and LABEL not in command.lower():
+        # The milestone helper is about to run (claude-config#3669). It takes a plan's "announce":
+        # "yes" or "no" only from the record, which only a hook writes his answer to, so his pickers
+        # about announcing a feature are read in here, from the session making the call and from
+        # the sessions the record notes. Nothing about the call is judged: what could not be read
+        # in is said beside it, and the helper then refuses in its own words.
+        #
+        # The helper is found by its file name anywhere in the call, so a call that only names it
+        # (a search, a commit message) reads his answers in too. That is the same reading a merge
+        # does, of the session's own pickers, and it writes nothing he did not answer.
+        #
+        # ONE JOB PER CALL: a call that also names the label is judged for the label alone, whose
+        # reads already fill the time this hook is registered with (GITHUB_SECONDS, above). His
+        # answers are then not read in, and the helper says so in its own refusal: run it apart.
+        notes += approval.read_answers(data)
     why = judge_label(command, cwd, data, notes)
     if why:
         # True of every refusal below it: wording he never approved, an approval another pull

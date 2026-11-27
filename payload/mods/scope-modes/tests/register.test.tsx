@@ -5275,6 +5275,21 @@ test('asleep, what Dan bans is refused at the call in every session, worker or n
   expect(await call($ as never, bash('git push --force origin x'))).toBe('ran')
 })
 
+// #3740: the list named two families of server, so a worker's prompt for a tool that deletes on any
+// other server (a plugin's own) was answered yes, and the call ran. Now it is refused at both.
+test("asleep, a tool that deletes on a plugin's own server is refused at the prompt and at the call (#3740)", withDeps, async ($, on) => {
+  const { clock } = world(on, worker)
+  await start($ as never, clock)
+  const DELETES = 'mcp__plugin_uptime_monitors__delete_monitor'
+  const READS = 'mcp__plugin_uptime_monitors__get_monitor'
+  const asked = await permission($ as never, DELETES, { id: 'm1' })
+  expect(asked.decision).toEqual({ behavior: 'deny', message: expect.stringMatching(/^Refused: sleep mode is on and Dan bans this while he sleeps, so this did not use mcp__plugin_uptime_monitors__delete_monitor\./) })
+  expect(await call($ as never, { tool: DELETES, id: 'm1', tool_use_id: 'd1' } as never)).toMatch(/^Refused: sleep mode is on and Dan bans this while he sleeps, so this did not use mcp__plugin_uptime_monitors__delete_monitor\./)
+  // A read on the same server is approved and runs, as before.
+  expect((await permission($ as never, READS, { id: 'm1' })).decision).toEqual({ behavior: 'allow' })
+  expect(await call($ as never, { tool: READS, id: 'm1', tool_use_id: 'd2' } as never)).toBe('ran')
+})
+
 test('in a linked worktree a branch checkout goes ahead overnight', withDeps, async ($, on) => {
   const { clock } = world(on, { ...worker, linkedWorktree: true })
   await start($ as never, clock)

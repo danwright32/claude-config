@@ -96,6 +96,20 @@ case "$1 $2" in
       [ -f "$FAKE_LIST" ] || { echo "HTTP 404: Not Found" >&2; exit 1; }
       cat "$FAKE_LIST"; exit 0 ;;
     esac ;;
+  "api graphql")
+    # What a repository's default branch holds at .github/expected-visibility, as GitHub's GraphQL
+    # API hands it over (claude-config#3582): a file saying public for a repository FAKE_DECLARED
+    # lists, one saying nothing this can understand for one FAKE_GARBLED lists, no such file for
+    # any other.
+    o=""; n=""
+    for a in "$@"; do case "$a" in owner=*) o="${a#owner=}" ;; name=*) n="${a#name=}" ;; esac; done
+    object=null
+    if grep -qix "$o/$n" "${FAKE_DECLARED:-/dev/null}" 2>/dev/null; then
+      object='{"__typename":"Blob","text":"public\n","isBinary":false,"isTruncated":false}'
+    elif grep -qix "$o/$n" "${FAKE_GARBLED:-/dev/null}" 2>/dev/null; then
+      object='{"__typename":"Blob","text":"sometimes\n","isBinary":false,"isTruncated":false}'
+    fi
+    printf '{"data":{"repository":{"nameWithOwner":"%s/%s","object":%s}}}\n' "$o" "$n" "$object"; exit 0 ;;
 esac
 for a in "$@"; do
   case "$a" in -|*=@-) cat > "$FAKE_STDIN_SAVE" ;; esac
@@ -125,7 +139,8 @@ fixture_env(){   # the environment every run shares, then the command
   # judges the same names.
   env HOOK_TESTS_RUNNING=1 HOME="$HOMEDIR" FAKE_CALLS="$CALLS" FAKE_LIST="$LIST" FAKE_VIS="$VIS" FAKE_STDIN_SAVE="$STDIN_SAVE" \
     WORK_NAMES_EXTRA_HASHES="$FAKE_HASH" WORK_NAMES_PROJECT_LIST="$PROJECTS" WN_SESSION_ENV_DIR="$ENVDIR" \
-    WN_SCRIPTS_NOTICE_DIR="$NOTICED" FAKE_ALIASES="$ALIAS_SRC" "$@"
+    WN_SCRIPTS_NOTICE_DIR="$NOTICED" FAKE_ALIASES="$ALIAS_SRC" FAKE_DECLARED="$WORK/declared" \
+    FAKE_GARBLED="$WORK/garbled" "$@"
 }
 
 # The aliases, in the form gh alias list prints them (measured on gh 2.89.0 with invented aliases).
@@ -210,6 +225,31 @@ guard 'import subprocess, sys
 r = subprocess.run(["gh", "issue", "comment", "5", "--repo", "danwright-test/private-notes", "--body", "acme-widgets"])
 sys.exit(r.returncode)'
 check "a private repository passes: rc=$rc $out" [ "$rc" -eq 0 ]
+check "#3582 after its declaration was looked for on GitHub" grep -q 'api graphql' "$CALLS"
+
+# A private repository that declares itself public is judged by the guard as by the command hook
+# (claude-config#3582): the write a script makes is refused before it runs.
+printf 'danwright-test/meant-public PRIVATE\ndanwright-test/garbled PRIVATE\n' >> "$VIS"
+printf 'danwright-test/meant-public\n' > "$WORK/declared"
+printf 'danwright-test/garbled\n' > "$WORK/garbled"
+guard 'import subprocess, sys
+r = subprocess.run(["gh", "issue", "comment", "5", "--repo", "danwright-test/meant-public", "--body", "seen in acme-widgets"])
+sys.exit(r.returncode)'
+check "#3582 a script's comment naming a work repository, to a private repository that declares itself public, is refused: rc=$rc $out" [ "$rc" -ne 0 ]
+check "#3582 and never posted" not_posted
+check "#3582 it says the repository's own declaration is why: $out" has "$out" "expected-visibility"
+check "#3582 and withholds the name, as the guard does: $out" lacks "$out" "acme-widgets"
+guard 'import subprocess, sys
+r = subprocess.run(["gh", "issue", "comment", "5", "--repo", "danwright-test/meant-public", "--body", "nothing to see"])
+sys.exit(r.returncode)'
+check "#3582 (control) clean text to it is posted: rc=$rc $out" [ "$rc" -eq 0 ]
+check "#3582 (control) by the real gh" grep -q '^POST|' "$CALLS"
+guard 'import subprocess, sys
+r = subprocess.run(["gh", "issue", "comment", "5", "--repo", "danwright-test/garbled", "--body", "nothing to see"])
+sys.exit(r.returncode)'
+check "#3582 a declaration that cannot be understood refuses a script's write, whatever its text: rc=$rc $out" [ "$rc" -ne 0 ]
+check "#3582 and never posted" not_posted
+check "#3582 saying it could not tell: $out" has "$out" "could not tell"
 
 guard 'import subprocess, sys
 r = subprocess.run(["gh", "issue", "comment", "5", "--repo", "danwright-test/nowhere", "--body", "clean"])

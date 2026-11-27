@@ -158,6 +158,27 @@ for n, what, reason, notice in ((0, "with a reason and a notice", want, "notice:
     elif set(d) - {"hookSpecificOutput", "systemMessage"}:
         print("%s: it carried more: %r" % (what, sorted(d)))')"
   [ -z "$shape" ] && ok || bad "#3058 $name: hook_allow_json did not print one valid allow carrying its reason and notice: $shape"
+  # hook_deny_json: a PreToolUse deny carrying the tricky text as its reason, as one valid object,
+  # with a notice only when one is given (claude-config#3618).
+  out="$(env PATH="$arm" HN_A="$TRICKY" HN_B="notice: $TRICKY" "$BASH" -c '. "$0" && hook_deny_json "$HN_A" "$HN_B"; echo "@@"; hook_deny_json "$HN_A"' "$LIB" 2>/dev/null)"
+  shape="$(printf '%s' "$out" | HN_WANT="$TRICKY" python3 -c '
+import json, os, sys
+want = os.environ["HN_WANT"]
+parts = sys.stdin.read().split("@@\n")
+if len(parts) != 2:
+    print("printed %d parts, not 2: %r" % (len(parts), parts[:2])); sys.exit()
+for n, what, notice in ((0, "with a notice", "notice: " + want), (1, "with no notice", None)):
+    try:
+        d = json.loads(parts[n])
+    except Exception as e:
+        print("%s: not one JSON object (%s): %r" % (what, e, parts[n][:200])); continue
+    if d.get("hookSpecificOutput") != {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": want}:
+        print("%s: hookSpecificOutput was %r" % (what, d.get("hookSpecificOutput")))
+    elif d.get("systemMessage") != notice:
+        print("%s: the systemMessage was %r" % (what, d.get("systemMessage")))
+    elif set(d) - {"hookSpecificOutput", "systemMessage"}:
+        print("%s: it carried more: %r" % (what, sorted(d)))')"
+  [ -z "$shape" ] && ok || bad "#3618 $name: hook_deny_json did not print one valid deny carrying its reason and notice: $shape"
 done
 
 # --- the event and context arguments, each seen to fail against a library that mishandles it -------

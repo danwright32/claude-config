@@ -104,6 +104,16 @@ notice_of "#2891 with lib/push-scope.sh missing it does not block, and names the
 out="$(payload "ls -la" | bash "$LONE/check-gh-view-comments.sh" 2>&1)"; rc=$?
 check_eq "#2891 control: a command with no comments flag passes in silence even with the reader missing" "0|" "$rc|$out"
 
+# The same view written across a line a backslash joins to the next is the same view
+# (claude-config#3470): the shell removes the backslash and its line break before it reads words,
+# and the form this gate reads wrote the line break as a separator the backslash then escaped, so
+# each of these exited 0. PAIR is that pair, a backslash and then a line break.
+PAIR=$'\\\n'
+refused "#3470 gh pr, the pair, view --comments" "gh pr ${PAIR}view 12 --comments"
+refused "#3470 gh, the pair, pr view --comments" "gh ${PAIR}pr view 12 --comments"
+refused "#3470 after && and the pair, gh issue view --comments" "echo ok && ${PAIR}gh issue view 12 --comments"
+allowed "#3470 control: gh pr, the pair, view --json title" "gh pr ${PAIR}view 12 --json title"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

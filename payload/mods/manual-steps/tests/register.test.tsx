@@ -192,9 +192,9 @@ const ROOT = '/repo'
 // at any width once asked for (#1752); `$.ui.panes()` lists them so, unless `panesFail`.
 // `files` is the disk the mod reads a published page from (#1811); a path not in it is missing. The
 // Artifact tool beneath publishes any page, and refuses one whose path holds REFUSED.
-type World = { opened: { exitCode: number; stderr: string } | Error; wide: boolean; columns?: number; copied: boolean; submitFails: boolean; storeFails: boolean; root: string; repoRoot: string | null; repoFails: boolean; isAsking: boolean; placesNoPanes: boolean; panesFail: boolean; turn: string | { fails: string } | 'truncated'; files: Record<string, string>; held: string[]; holdFails: string }
+type World = { opened: { exitCode: number; stderr: string } | Error; wide: boolean; columns?: number; copied: boolean; submitFails: boolean; storeFails: boolean; root: string; repoRoot: string | null; repoFails: boolean; isAsking: boolean; placesNoPanes: boolean; panesFail: boolean; turn: string | { fails: string } | 'truncated'; files: Record<string, string>; held: string[]; holdFails: string; sessionFails: boolean }
 const world = (on: On, init: Partial<World> = {}, store: Record<string, unknown> = {}, env: Record<string, string> = {}) => {
-  const w: World = { opened: { exitCode: 0, stderr: '' }, wide: false, copied: true, submitFails: false, storeFails: false, root: ROOT, repoRoot: ROOT, repoFails: false, isAsking: false, placesNoPanes: false, panesFail: false, turn: '', files: {}, held: [], holdFails: '', ...init }
+  const w: World = { opened: { exitCode: 0, stderr: '' }, wide: false, copied: true, submitFails: false, storeFails: false, root: ROOT, repoRoot: ROOT, repoFails: false, isAsking: false, placesNoPanes: false, panesFail: false, turn: '', files: {}, held: [], holdFails: '', sessionFails: false, ...init }
   const mem: Record<string, unknown> = { ...store }
   const asked = new Set<string>()
   // Each open pane, and whether it was opened asked, which Claude Code places at any width.
@@ -223,6 +223,10 @@ const world = (on: On, init: Partial<World> = {}, store: Record<string, unknown>
   on('store.delete', ($, e) => {
     delete mem[e.key]
     return { value: undefined } as never
+  })
+  on('session.id', () => {
+    if (w.sessionFails) throw new Error('the session has no id yet')
+    return { value: 's1' } as never
   })
   on('session.root', () => ({ value: w.root }) as never)
   on('session.cwd', () => ({ value: w.root }) as never)
@@ -1619,10 +1623,10 @@ const caller: { name: string; register: Register } = {
   register: on => {
     on('tool.call', async ($, e, next) => {
       const tool = String(e.tool)
-      if (tool !== 'AddStep' && tool !== 'FinishStep') return next(e)
+      if (tool !== 'AddStep' && tool !== 'FinishStep' && tool !== 'WithdrawStep') return next(e)
       const input = (e as unknown as { input: object }).input
       try {
-        const r = tool === 'AddStep' ? await $.manualSteps.add(input as never) : await $.manualSteps.finish(input as never)
+        const r = tool === 'AddStep' ? await $.manualSteps.add(input as never) : tool === 'FinishStep' ? await $.manualSteps.finish(input as never) : await $.manualSteps.withdraw(input as never)
         return { result: r, text: JSON.stringify(r) } as never
       } catch (err) {
         return { deny: `threw: ${String((err as Error)?.message ?? err)}` }
@@ -1647,7 +1651,7 @@ test('another mod adds a step: a card of its own when none is pinned, shown as a
   const text = await bandText($)
   expect(text[0]).toMatch(/^The morning after sleep mode/)
   expect(text[1]).toBe(`1. ${MORNING.title}  [done-1]`)
-  expect(stored(w.mem)?.steps).toEqual([{ title: MORNING.title, location: MORNING.location, clicks: MORNING.clicks, isAdded: true }])
+  expect(stored(w.mem)?.steps).toEqual([{ title: MORNING.title, location: MORNING.location, clicks: MORNING.clicks, isAdded: true, pinnedBy: 's1' }])
 })
 
 test('a step added to a card already pinned goes at its end, under its heading, and never twice (#1107)', withCaller, async ($, on) => {
@@ -1710,6 +1714,108 @@ test('the only step taken off takes the card away (#1107)', withCaller, async ($
   expect(await finishStep($)).toEqual({ isFinished: true })
   expect(await band($)).toBeUndefined()
   expect(stored(w.mem)).toBeUndefined()
+})
+
+// #3770: the close this session card, pinned by the goal box through the noun. Its one step is for
+// this session alone (never kept for the next, where the session it names is gone), has no Done
+// (closing the session is the step, and a press would start a turn), and is taken off as withdrawn,
+// never as done, the moment the session works again.
+const CLOSE = { title: 'Close this session if you have nothing more for it', location: 'The Terminal tab showing this session', clicks: ['Type /exit and press Return', 'Or close the tab'], sessionOnly: true, noDone: true }
+const addClose = ($: Engine, s: object = CLOSE) => askNoun($, 'AddStep', { heading: 'Nothing is running or waiting in this session', step: s })
+const withdrawStep = ($: Engine, title = CLOSE.title) => askNoun($, 'WithdrawStep', { title })
+
+test('a session only step is shown with no Done and no "waiting on you", and is never kept for the next session (#3770)', withCaller, async ($, on) => {
+  const w = world(on)
+  await start($)
+  expect(await addClose($)).toEqual({ isShown: true })
+  const text = await bandText($)
+  expect(text[0]).toBe('Nothing is running or waiting in this session')
+  expect(text[1]).toBe(`1. ${CLOSE.title}`)
+  expect(text.join('\n')).not.toMatch(/done-1|waiting on you/)
+  expect(text.join('\n')).toMatch(/Type \/exit and press Return/)
+  // Nothing written for the next session in this project.
+  expect(stored(w.mem)).toBeUndefined()
+  // Beside a step that is kept, only that one is kept.
+  await addStep($)
+  expect(stored(w.mem)?.steps.map(s => s.title)).toEqual([MORNING.title])
+})
+
+test('withdraw takes a step off as withdrawn, never as done; the only one takes the card away; one not there withdraws nothing (#3770)', withCaller, async ($, on) => {
+  const w = world(on)
+  await start($)
+  await addClose($)
+  expect(await withdrawStep($)).toEqual({ isWithdrawn: true })
+  expect(await band($)).toBeUndefined()
+  expect(await withdrawStep($)).toEqual({ isWithdrawn: false })
+  // On a card with another step, it stays drawn as taken off, not done.
+  await hand($, [step()])
+  await addClose($)
+  expect(await withdrawStep($)).toEqual({ isWithdrawn: true })
+  const text = await bandText($)
+  expect(text.find(t => t.startsWith(`2. ${CLOSE.title}`))).toMatch(/taken off\b.*, not done$/)
+  expect(stored(w.mem)?.steps.map(s => s.title)).toEqual(['Turn on the WAF rule'])
+})
+
+// #3770, reopened: the close this session card waits only for steps this session itself pinned
+// (Dan, 2026-11-26: "Only that session's own steps"), so each step records the session that pinned
+// it, and the store keeps that for the sessions that carry the step in later.
+const owners = (mem: Record<string, unknown>) => stored(mem)?.steps.map(s => [s.title, s.pinnedBy])
+
+test('a step pinned through the steps tool, and one another mod adds, each record this session as the one that pinned it, in the store too (#3770)', withCaller, async ($, on) => {
+  const w = world(on)
+  await start($)
+  await hand($, [step()])
+  await addStep($)
+  expect(owners(w.mem)).toEqual([
+    ['Turn on the WAF rule', 's1'],
+    [MORNING.title, 's1'],
+  ])
+  // Pinned again by the same session, with a new step beside it: each is still this session's.
+  await hand($, [step(), step({ title: 'Purge the cache', url: 'https://b.example' })])
+  expect(owners(w.mem)).toEqual([
+    ['Turn on the WAF rule', 's1'],
+    ['Purge the cache', 's1'],
+    [MORNING.title, 's1'],
+  ])
+})
+
+test("steps carried in from an earlier session keep the session that pinned them, and one kept before a step recorded it is marked as an earlier session's; pinned again here after the check each keeps its first session, and only a new step is this session's (#3770)", withCaller, async ($, on) => {
+  const card: StepsCard = {
+    heading: 'Kept',
+    steps: [
+      { title: 'Rotate the key', url: 'https://a.example', pinnedBy: 's0' },
+      { title: 'Renew the certificate', url: 'https://b.example' },
+    ],
+  }
+  const w = world(on, {}, { [`card:${ROOT}`]: card })
+  await start($)
+  // Held, with a step another mod adds here beside them: the store shows whose each is.
+  expect(await addStep($)).toMatchObject({ isShown: false })
+  expect(owners(w.mem)).toEqual([
+    ['Rotate the key', 's0'],
+    ['Renew the certificate', 'an earlier session'],
+    [MORNING.title, 's1'],
+  ])
+  // Checked and pinned again by this session, as the carried note asks, with one new step.
+  await hand($, [step({ title: 'Rotate the key', url: 'https://a.example' }), step({ title: 'Renew the certificate', url: 'https://b.example' }), step({ title: 'Purge the cache', url: 'https://c.example' })], 'Kept')
+  expect(owners(w.mem)).toEqual([
+    ['Rotate the key', 's0'],
+    ['Renew the certificate', 'an earlier session'],
+    ['Purge the cache', 's1'],
+    [MORNING.title, 's1'],
+  ])
+})
+
+test('a session whose id cannot be read records no session on the steps it pins, never a made up one (#3770)', withCaller, async ($, on) => {
+  const w = world(on, { sessionFails: true })
+  await start($)
+  await hand($, [step()])
+  await addStep($)
+  expect(owners(w.mem)).toEqual([
+    ['Turn on the WAF rule', undefined],
+    [MORNING.title, undefined],
+  ])
+  expect(w.logs.join('\n')).toMatch(/could not read this session's id/)
 })
 
 test('a card carried from an earlier session takes the step but stays held, and says so (#1107)', withCaller, async ($, on) => {

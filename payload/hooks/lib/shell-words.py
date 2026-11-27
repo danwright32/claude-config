@@ -26,6 +26,11 @@ hook that slow is killed and the command goes unscreened.
       sourced, which hands no string (claude-config#1623); else empty>" 0x1e, the commands a wrapper runs being records of their own right
       after it (claude-config#1478). Exit 3 as commands; see read(), command_rest(), gh_path(),
       git_path(), rtk_field() and wrapped().
+  shell-words.py flatten    stdin: a hook payload, the JSON Claude Code sends
+      its command as lib/push-scope.sh's segmented mode hands it to a hook: each backslash and line
+      break the shell removes taken out, then each line break left written as "; ", then 0x1f and
+      the payload's cwd. Exit 4, printing nothing, when the command holds no backslash and line
+      break or the payload is not one this reads (claude-config#3470); see flattened().
   shell-words.py tool       stdin: one command
       the gh or git subcommand it runs, as gh and git themselves find it past the options written in
       front (tool_field), else rtk's own subcommand (rtk_field, claude-config#1468), or nothing when
@@ -62,6 +67,7 @@ import os
 import re
 import shlex
 import io
+import json
 import sys
 
 
@@ -361,7 +367,7 @@ def _ansi_escape(m):
     return chr(value) if 2 <= value <= 126 else m.group()
 
 
-def heredoc_opener(s, i, marker_start=False, joins=None, doubts=None):
+def heredoc_opener(s, i, marker_start=False, joins=None, doubts=None, one_line=False):
     """The heredoc opened at s[i] ("<<"), as (marker, strip_tabs, quoted, end), or None.
 
     The marker is the word after the opener with its quotes removed, as the shell compares it with
@@ -402,21 +408,52 @@ def heredoc_opener(s, i, marker_start=False, joins=None, doubts=None):
     agree but for a `-` on the line after `<<` and a backslash: bash, sh and dash read <<-
     there, zsh and ksh a marker that starts with the dash, as this does. Without joins the
     reading is the one it always was, for every caller that did not ask.
+
+    With joins and one_line, s is one line of a longer file, and a backslash that is its LAST
+    character, between the << and the end of the word, is a join too, to a line the caller was
+    not handed (claude-config#3504): a reader given one line of a file at a time is given
+    `cat <<E` and a backslash, and every shell joins that line to the next, so the marker is not
+    the word this line shows. It is given to joins like any other, also where None is returned
+    because no word was read before it (`cat <<` and a backslash). Read as a character of the
+    marker, E and a backslash, unquoted, it made a marker no line of a body can be, so a reader
+    waiting for that line took the rest of the file for the body. line_opener is this reading
+    for such a caller. With joins, marker_start is asked of the word itself, past the joins
+    before it.
+
+    Without one_line the last character of s is the end of the text, and a backslash there joins
+    nothing, with joins or without: it is a character of the marker, as it always was, and bash
+    and zsh run the commands in front of it. commands() reads a whole text, so it does not say
+    one_line. When it did take that backslash for a join, a text that ended in `<<E` and a
+    backslash was a heredoc named in `unsure`, flattened() gave its plain form for it, and the
+    push in front of the heredoc was no push to the push hooks (review of pull request 3797,
+    where both shells were run). Double quotes that never close in s are None either way, as
+    they always were, whatever s ends in.
     """
     m = HEREDOC_START.match(s, i)
     if not m or s.startswith("<<<", i):
         return None
-    if marker_start and not MARKER_START.match(s, m.end()):
+    if marker_start and joins is None and not MARKER_START.match(s, m.end()):
         return None
     j, n = m.end(), len(s)
     found, dollars = [], []
     if joins is not None:
         # The joins and blanks between the << and its word.
-        while j < n and (s.startswith("\\\n", j) or s[j] in " \t"):
-            if s[j] == "\\":
+        while j < n:
+            if s.startswith("\\\n", j):
+                found.append(j)
+                j += 2
+            elif s[j] in " \t":
+                j += 1
+            elif s[j] == "\\" and j == n - 1 and one_line:
                 found.append(j)
                 j += 1
-            j += 1
+            else:
+                break
+        if j == n and found and found[-1] == n - 1:
+            joins.extend(found)
+            return None
+        if marker_start and not MARKER_START.match(s, j):
+            return None
     start = j
     word, quoted = [], False
     while j < n and s[j] not in HEREDOC_WORD_END:
@@ -424,6 +461,9 @@ def heredoc_opener(s, i, marker_start=False, joins=None, doubts=None):
         if c == "\\" and joins is not None and s.startswith("\n", j + 1):
             found.append(j)
             j += 2
+        elif c == "\\" and joins is not None and one_line and j == n - 1:
+            found.append(j)
+            j += 1
         elif c == "\\" and j + 1 < n:
             word.append(s[j + 1])
             quoted = True
@@ -479,9 +519,46 @@ def heredoc_opener(s, i, marker_start=False, joins=None, doubts=None):
     return "".join(word), m.group(1) == "-", quoted, j
 
 
-def heredoc_openers(line, marker_start=True):
+def line_opener(line, i, marker_start=False, cut=None):
+    """heredoc_opener(line, i) for a reader handed a file one line at a time, or None where the
+    opener's line ends in a backslash before the end of its marker word (claude-config#3504).
+
+    Every shell joins such a line to the next (bash 3.2, sh, dash, zsh and ksh, measured
+    2026-11-23 and again 2026-11-26), so the marker is the joined word, most of which is on a line
+    this caller was not handed: after `cat <<E`, a backslash, and a next line `x`, the body ends
+    at the line Ex. Read from the one line the marker was E and a backslash, which no line is, so
+    a reader waiting for it took everything after for the body and read no code there. No
+    heredoc is given for it, so the lines after are read as code, as lib/shell_code_lines.py
+    reads them (its unsure_heredocs names the heredoc): a scan that looks at a line no shell runs
+    costs a second look, and one that skips a line a shell runs has missed what it was written
+    to find. cut, a list, is given (i, len(line)) for it. A << with nothing but a backslash
+    after it on its line is cut as well, whether the next line holds a marker or the rest of an
+    arithmetic shift, since the line cannot say which.
+
+    Handed a text that holds the next line, the opener is read as the shells read it, the two
+    lines joined (heredoc_opener's joins), and nothing is cut unless the text itself ends at such
+    a backslash.
+    """
+    joins = []
+    op = heredoc_opener(line, i, marker_start=marker_start, joins=joins, one_line=True)
+    if joins and joins[-1] == len(line) - 1:
+        if cut is not None:
+            cut.append((i, len(line)))
+        return None
+    return op
+
+
+def heredoc_openers(line, marker_start=True, cut=None):
     """Each heredoc a line opens, read on its own without following its quotes, as (start, marker,
     strip_tabs, quoted, end), start at its << and the rest as heredoc_opener gives them.
+
+    An opener whose line ends in a backslash before the end of its marker word is not given: its
+    marker is not the word the line shows (line_opener, claude-config#3504). cut, a list, is
+    given its (start, end of the line), for a caller that says so. Its word runs to the end of
+    the line, so nothing follows it there. A << before double quotes that never close on the line
+    is no opener and no cut, as it never was, whatever the line ends in, and the scan goes on
+    past it: the scan follows no quotes, so that << is as often inside a string, and the opener
+    after it is real (review of pull request 3797).
 
     For the whole tree scans that read a file a line at a time and need only where a heredoc's body
     begins and what ends it (claude-config#2080). Such a scan cannot tell a << in a string or in
@@ -492,22 +569,89 @@ def heredoc_openers(line, marker_start=True):
 
     With marker_start False every << with a word after it is taken, a here string still apart, for
     a reader that must not miss a heredoc and can afford to count one that is not there: a gate
-    refusing a text it cannot follow (claude-config#2641). The text can then be a whole script.
+    refusing a text it cannot follow (claude-config#2641). The text can then be a whole script,
+    and is read as one: an opener is given as the shells read it, a backslash and line break in
+    it joined (heredoc_opener's joins), the last character of the text is its end, where a
+    backslash joins nothing, and nothing is cut. Beside those, every opener the reading without
+    joins takes at a << the joined reading did not, which is what this gave before it joined
+    anything: after `<<`, a backslash and a line break, the quoted words `'a <<E b'` are one
+    marker read joined, and read unjoined the << inside them opens an unquoted heredoc. So a
+    caller asking whether any heredoc of the text is unquoted is never told less than it was
+    (review of pull request 3797).
     """
-    out, i = [], 0
-    while True:
-        i = line.find("<<", i)
-        if i < 0:
-            return out
-        if line.startswith("<<<", i):
-            i += 3
-            continue
-        op = heredoc_opener(line, i, marker_start=marker_start)
-        if op is None:
-            i += 2
-            continue
-        out.append((i,) + op)
-        i = op[3]
+    def scan(read):
+        out, i = [], 0
+        while True:
+            i = line.find("<<", i)
+            if i < 0:
+                return out
+            if line.startswith("<<<", i):
+                i += 3
+                continue
+            cuts = []
+            op = read(i, cuts)
+            if cuts:
+                if cut is not None:
+                    cut.extend(cuts)
+                return out
+            if op is None:
+                i += 2
+                continue
+            out.append((i,) + op)
+            i = op[3]
+
+    if marker_start:
+        return scan(lambda i, cuts: line_opener(line, i, marker_start=True, cut=cuts))
+    joined = scan(lambda i, cuts: heredoc_opener(line, i, joins=[]))
+    taken = {op[0] for op in joined}
+    return sorted(joined + [op for op in scan(lambda i, cuts: heredoc_opener(line, i)) if op[0] not in taken])
+
+
+# The second characters that make one operator with a first when a backslash and a line break
+# stand between the two (split_operator, claude-config#3504): $( ${ and $', the )) that closes
+# arithmetic, and what commands() reads as an operator between commands, which are the
+# separators (&& || ;; ;& |&), the redirections (<< <& <> >> >& >| &>), a process substitution's
+# <( >( and =(, and the (( of an arithmetic command or a $(( )).
+SPLIT_SECOND_CHARS = {"$": "({'", ")": ")", "&": "&>", "|": "|&", ";": ";&", "<": "<(&>", ">": ">(&|",
+                      "=": "(", "(": "("}
+
+
+def _split(s, at):
+    """(the two characters, where the second is) of the operator split at s[at], or None."""
+    k = at + 1
+    while s.startswith("\\", k):
+        k += 1
+    if k == at + 1 or not s.startswith("\n", k):
+        return None
+    k += 1
+    while s.startswith("\\\n", k):
+        k += 2
+    first, second = s[at:at + 1], s[k:k + 1]
+    if not first or not second or second not in SPLIT_SECOND_CHARS.get(first, ""):
+        return None
+    return first + second, k
+
+
+def split_operator(s, at):
+    """The operator that a backslash and a line break split at s[at], as its two characters, or
+    "" where s[at] starts none (claude-config#3504).
+
+    The shell takes a backslash and the line break after it out of a text before it reads words,
+    so `$`, the pair and `(` is the `$(` of a command substitution: bash 3.2, sh and dash run its
+    command wherever it stands, and zsh and ksh in some places and not in others (zsh outside
+    double quotes, both in backquotes). A `<`, the pair and `<E` opens a heredoc in bash, sh and dash, where
+    zsh and ksh give a syntax error; a `;`, the pair and `;` ends a case branch in those three.
+    Measured 2026-11-26 with texts that only touch a file in a throwaway folder;
+    test-shell-words-split-operators.sh runs each against the shells of the machine it is on. The
+    shells do not agree, so no one reading of such a text is every shell's, and commands() names
+    the operator in `unsure` for a caller that asks, where it stands live: this says only that
+    the TEXT at s[at] has the shape, which is what tells such a name from a comment's or a
+    heredoc's. More than one pair may stand between the two characters, and so may a line break
+    after several backslashes, the form the pair takes inside backquotes, which read a
+    backslash first themselves.
+    """
+    found = _split(s, at)
+    return found[0] if found else ""
 
 
 def cd_target(text):
@@ -653,8 +797,15 @@ def uncommented(s, spaced=False):
     return "".join(out)
 
 
-def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, unsure=None):
+def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, unsure=None, joined=None):
     """Every simple command in s, in the order the shell finishes reading them, as (dir, text).
+
+    joined, when a list, is given the index of each backslash this reading goes past with a line
+    break right after it where the shell takes the two for a join and removes them before it reads
+    words (claude-config#3470): outside single quotes and $'...', outside comments, outside the
+    text of a heredoc's body, its marker word and its closing line, and outside backquotes. One
+    the reading cannot vouch for is left out, so it is a list of joins that are safe to make in
+    the text and never the list of every join the shell makes.
 
     heredocs, when a list, is given one (quoted, before, body) for each heredoc body the reading
     skipped as text (claude-config#2050): quoted says the shell expands nothing in it (its end marker
@@ -700,6 +851,22 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, un
     $ as a character of the marker, and bash and zsh differ on some of what the quotes hold, so no
     such heredoc ends at one line in every shell. Its marker is read as bash and zsh read it where
     those two agree, for a caller that asks and one that does not alike.
+
+    unsure is given as well one (start, end) for each operator that a backslash and a line break
+    split (claude-config#3504, split_operator): s[start] its first character and s[end - 1] its
+    second, with the pair, or several, between them. Named where the first character is live, no
+    backslash before it, and the two make an operator where they stand: `$(` and `${` anywhere
+    outside single quotes, `$'` where a quote can open, the `))` that closes arithmetic, and
+    between commands the separators, the redirections, `<(`, `>(`, `=(` and `((`. bash, sh and
+    dash join the two and read the operator, zsh and ksh only in places, so the substitution
+    runs, or the heredoc opens, in some shells and not in others, and this reading, which goes
+    past the pair and reads the two characters apart, is no shell's for certain. The reading is
+    not changed, for a caller that asks or one that does not: a caller that must not miss a
+    command asks, and refuses a text that names one. Inside backquotes the name is given too
+    where several backslashes end the line, since the backquotes read a backslash first. For the
+    same reason a dollar sign after one backslash is live there in bash and zsh, split or whole
+    (measured in the review of pull request 3797), and is read here as an escaped one and not
+    named: a fault older than this naming, which does not mend it.
 
     The text is the command as written, quotes and all, and a command substitution's text stays
     inside the command that holds it as well as being read as commands of its own, which come first.
@@ -756,6 +923,11 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, un
     # that asks for unsure (comment_end). A reading that then cannot be read to its end gives them
     # to unsure before it raises (unreadable).
     read_on = []
+    # For naming an operator a backslash and a line break split (claude-config#3504): where the
+    # character the last backslash escaped is, since that one starts no operator, and where the
+    # single ) that closed a $(( )) or an arithmetic command ended, since a ) joined to it there
+    # is the second of its )).
+    escaped = arith_end = -1
 
     def unreadable(at=None):
         """The Unreadable to raise. A reading that went on past a # it used to take for a comment and
@@ -1031,6 +1203,33 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, un
             i += 2 if c == "\\" else 1
             continue
         if c == "\\":
+            if joined is not None and nx == "\n":
+                # A join the shell makes too, for flattened(): not one in the text of a heredoc's
+                # body, which is nobody's command, nor inside backquotes, which read a backslash
+                # first themselves.
+                held = next(g["k"] for g in reversed(frames) if g["k"] == "hd" or g["k"] in COMMAND_FRAMES)
+                if held != "hd" and not any(g["k"] == "tick" for g in frames):
+                    joined.append(i)
+            if unsure is not None and i and escaped != i - 1 and nx in ("\n", "\\"):
+                # An operator this backslash and the line break after it split: the shells do not
+                # agree on whether the two characters either side are joined, so it is named
+                # (split_operator, claude-config#3504). Backquotes read a backslash first, so
+                # there the pair may be written with two backslashes, or more.
+                split = _split(s, i - 1)
+                if split and (nx == "\n" or any(g["k"] == "tick" for g in frames)):
+                    first, second = split[0]
+                    if first == "$":
+                        live = second != "'" or k not in ('"', "hd")
+                    elif first == ")":
+                        live = arith_end == i
+                    elif k in COMMAND_FRAMES:
+                        live = True
+                    else:
+                        live = k in ("param", "paren") and first in "<>=" and second == "("
+                    if live:
+                        unsure.append((i - 1, split[1] + 1))
+            if nx != "\n":
+                escaped = i + 1
             i += 2
             continue
         if k == '"':
@@ -1050,6 +1249,7 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, un
                 else:
                     frames.pop()
                     i += 2 if nx == ")" else 1
+                    arith_end = -1 if nx == ")" else i
                     # $(( )) is inside its word; an arithmetic command's )) ends it.
                     closed[:] = i, bool(f.get("command"))
                 continue
@@ -1408,20 +1608,92 @@ def bare(s):
     return "".join(out)
 
 
+# Where a command written inside another starts or ends, for the crude cut (claude-config#3473): the
+# opener of a command or process substitution or of a subshell, a closing parenthesis, and a
+# backquote, which is both. Quotes and backslashes are not weighed: the cut is asked only where the
+# text could not be read, so which of them is live is exactly what is not known.
+CRUDE_EDGE = re.compile(r"\$\(|[<>=]\(|\(|\)|`")
+
+
+def after_a_name(text, at):
+    """Whether the `(` at text[at] is written straight after a name that is no reserved word.
+
+    Such a parenthesis starts no command in any shell. Measured 2026-11-26, each text run by bash,
+    zsh, dash and sh in an empty folder: `open(touch x)`, `f(touch x)`, `x=1(touch x)`,
+    `$x(touch x)` and `cat = open(touch x).read()` made no file in any of them. After a word that
+    only opens or continues a compound command it does: bash, dash and sh ran
+    `if(touch x); then :; fi`, and the same glued to then, else, elif, do, while and until, and bash
+    and sh after time. Those are RESERVED's words, the list the reader already looks past to reach a
+    command, so that one list answers here too. A name is letters, digits and underscores, the only
+    shapes measured: after a quote, a brace or a bracket the parenthesis is still taken to open.
+    """
+    i = at
+    while i > 0 and text[i - 1].isascii() and (text[i - 1].isalnum() or text[i - 1] == "_"):
+        i -= 1
+    return i < at and text[i:at] not in RESERVED
+
+
+def crude_inner(text):
+    """The stretches of one piece of the crude cut that may be commands of their own
+    (claude-config#3473): what follows each opener, closer or backquote, and what stands before a
+    closer or a backquote. The cut left a `$( )`, a pair of backquotes, a `<( )` and a subshell
+    whole, so `x=$(git push)` named no git command, and `(git push)` named the subcommand `push)`.
+
+    What follows a `)` is listed too, because the `)` of a case pattern has its arm's command after
+    it. The one stretch left out is the piece's start up to an opener: that is the head of the
+    command the piece itself is, which its own record already hands on, and listing it would give a
+    caller that counts commands the same one twice. Nothing blank is listed.
+
+    A backquote is not told as opening or closing: the cut splits `` `cd x; git push` `` in two, so
+    in a piece the first backquote may close what an earlier piece opened, and what stands before
+    it is then a command. So the start of a piece up to a backquote is listed even where that
+    backquote opens, `git push origin main `date``, and that command is given twice, once whole
+    and once without the words from the backquote on. Twice is the safe side of not at all.
+
+    A `(` written straight after a name is no edge (after_a_name): no shell starts a command there,
+    and listing what follows it handed a gate `"$1"` out of a heredoc's `open("$1")` as a command
+    the script runs, which it does not (L11). Only that `(` is passed over. Every `)` stays an
+    edge, the one that closes it too, because the parenthesis may be glued to a name inside a quoted
+    word, `x=$(git push origin "a(b")`, and the `)` after it then closes the substitution.
+    """
+    out, at, first = [], 0, True
+    for m in CRUDE_EDGE.finditer(text):
+        if m.group() == "(" and after_a_name(text, m.start()):
+            continue
+        part = text[at:m.start()]
+        if part.strip() and (not first or m.group() in (")", "`")):
+            out.append(part)
+        at, first = m.end(), False
+    if not first and text[at:].strip():
+        out.append(text[at:])
+    return out
+
+
 def crude_commands(s, cwd=""):
-    """The reading used when commands() cannot be trusted: a cut at every separator, quotes and all.
+    """The reading used when commands() cannot be trusted: a cut at every separator, quotes and all,
+    and after the pieces of that cut the commands that may be written inside one (crude_inner).
 
     It can only see MORE commands than are there, which is the direction a gate that must not miss a
     push needs (L42), and it keeps the cds in order, so the last one before a push still governs it.
+    The pieces are the ones it always gave, each with the text and the directory it always had, and
+    they come first, in the order they always had: a caller that reads the records in order and
+    stops at the first one that settles its question reaches every piece it reached before, and
+    reaches a command found inside one only where the pieces settled nothing. Put before the piece
+    that holds them, as commands() gives a substitution's, they would be the first command of a
+    text for a caller that asks how a text begins (lib/unknown-program.py's holds_command), and
+    could turn its answer either way. Each is given in its piece's directory, and a cd among them
+    moves nothing, so no caller is handed less, or anything in another place, than before
+    (claude-config#3473).
     """
-    out, old = [], None
+    out, found, old = [], [], None
     for text in re.split(r"&&|\|\||;|\||\n", s):
         if text.strip():
+            found.extend((cwd, inner) for inner in crude_inner(text))
             out.append((cwd, text))
             target = cd_target(text)
             if target is not None:
                 cwd, old = moved(cwd, old, target)
-    return out
+    return out + found
 
 
 def alone(text):
@@ -2817,6 +3089,119 @@ def read(s):
     return "".join(out), 3 if crude else 0
 
 
+# ---- the flattened form the push hooks read (claude-config#3470) --------------------------------
+# lib/push-scope.sh's segmented mode hands a hook the command with each line break written as "; ".
+# It did that to a line break a backslash joins to the next line as well, so the backslash escaped
+# the ; and the two lines were read as one command with a ; among its words: `echo ok &&`, a
+# backslash, a line break and `git push` ran the push in bash and zsh and was no push to any hook
+# reading that form, and neither was `git`, the same two characters and `push`. Measured
+# 2026-11-25 against bash 3.2.57 through check-style-guide.sh and check-add-scope.sh.
+FLAT_BREAK = "; "
+
+
+def _named(text):
+    """What a reading of a flattened text names, for flattened(): a count of (directory, program)
+    for each command and of (directory, tool, subcommand) and (directory, tool, subcommand, action)
+    for each git, gh or rtk command, or None where the text can only be read by the crude cut. A
+    word that ends in a ; is what an unjoined backslash left behind, never a program's or a
+    subcommand's name, so it names nothing."""
+    records, crude = _records(text, "", 0)
+    if crude:
+        return None
+    named = {}
+    for d, _, _, rest, _, field, _ in records:
+        word = first_word(rest)[0]
+        keys = [(d, word)] if word and not word.endswith(";") else []
+        tool, sub, act = (field.split("\x1d") + ["", ""])[:3] if field else ("", "", "")
+        if sub and not sub.endswith(";"):
+            keys.append((d, tool, sub))
+            if act and not act.endswith(";"):
+                keys.append((d, tool, sub, act))
+        for key in keys:
+            named[key] = named.get(key, 0) + 1
+    return named
+
+
+def _named_more(a, b):
+    """The names counted more times in a than in b (_named), each with how many more. A plain
+    dict and not collections.Counter: this file is loaded by the gate whose judgements
+    lib/judgement-cache.py keeps, which lists every module the gate's libraries import, and a
+    count of names is no reason to add one to that list."""
+    return {k: n - b.get(k, 0) for k, n in a.items() if n > b.get(k, 0)}
+
+
+def flattened(s):
+    """s as the push hooks read it: each backslash and line break the shell removes taken out
+    first, as the shell does before it reads words, then each line break left written as "; ".
+
+    Which pairs the shell removes is commands()'s reading of the text as typed (its `joined`): one
+    inside single quotes, in a comment or in the text of a heredoc's body stays, written as it
+    always was. Where that reading cannot be vouched for (it cannot read the text to its end, or
+    names a line it is unsure of) nothing is joined and the text is flattened as it always was.
+    An operator a backslash and a line break split is named in `unsure` too and is no such doubt:
+    the joined text holds it whole, so the text is joined as it was before those were named
+    (split_operator, claude-config#3504).
+
+    No hook may be handed fewer commands than before, so the joined text is given only where it
+    names every command the plain flattening names, in the same directory (_named). The plain
+    flattening names some the shell never runs: `sudo -u`, the two characters and `git push` gives
+    the push to sudo as the user's name, and read unjoined it was a push. Where the joined text
+    would lose one of those and name nothing new, the plain flattening is given, and where it
+    would lose one and name another, both are given, the joined text first, so a hook reads every
+    command either holds.
+    """
+    plain = s.replace("\n", FLAT_BREAK)
+    if "\\\n" not in s:
+        return plain
+    joined, unsure = [], []
+    try:
+        commands(s, unsure=unsure, joined=joined)
+    except Unreadable:
+        return plain
+    # An operator a backslash and a line break split is named in unsure, and is no doubt here: the
+    # joined text holds it whole, as bash reads it, and the checks below keep every command the
+    # plain flattening names beside it. Flattened plain, a `$`, the pair and `(git push)` is a `$`,
+    # an escaped `;` and a parenthesis, which names no push (claude-config#3504).
+    if [m for m in unsure if not split_operator(s, m[0])] or not joined:
+        return plain
+    kept, at = [], 0
+    for i in sorted(set(joined)):
+        kept.append(s[at:i])
+        at = i + 2
+    kept.append(s[at:])
+    joint = "".join(kept).replace("\n", FLAT_BREAK)
+    was, now = _named(plain), _named(joint)
+    if was is None or now is None:
+        return plain
+    if not _named_more(was, now):
+        return joint
+    if not _named_more(now, was):
+        return plain
+    both = joint + FLAT_BREAK + plain
+    held = _named(both)
+    either = {k: max(was.get(k, 0), now.get(k, 0)) for k in set(was) | set(now)}
+    return both if held is not None and not _named_more(either, held) else plain
+
+
+def flattened_payload(text):
+    """The command of a hook payload (the JSON Claude Code sends) as flattened() gives it, then
+    0x1f and the payload's cwd, the shape lib/push-scope.sh's ps_parse_payload prints; or None
+    where the command holds no backslash and line break, or the payload is not one this reads, so
+    the caller flattens it as it always has. A 0x1f in the command is written as U+FFFD, as there
+    (claude-config#2055)."""
+    try:
+        d = json.loads(text)
+    except ValueError:
+        return None
+    if not isinstance(d, dict):
+        return None
+    ti, cwd = d.get("tool_input"), d.get("cwd")
+    cmd = ti.get("command") if isinstance(ti, dict) else None
+    if not isinstance(cmd, str) or "\\\n" not in cmd or not (cwd is None or cwd is False or isinstance(cwd, str)):
+        return None
+    return flattened(cmd).replace("\x1f", "\ufffd") + "\x1f" + (cwd or "")
+
+
 # A script whose arguments are data (claude-config#1574). `bash ./x.sh` cannot be read, since its
 # commands are in the file, so check-wrapped-commands.sh refuses it beside any word git, gh or rtk,
 # quoted argument text included. A few scripts, or subcommands of them, are known to run none of
@@ -3039,6 +3424,19 @@ def main(argv):
         text, rc = read(data)
         sys.stdout.write(text)
         return rc
+    elif mode == "flatten":
+        # Exit 4, printing nothing, where there is no join to make, so ps_parse_payload goes on to
+        # the readers it always had. Written once, whole, as UTF-8 whatever the locale, as they write.
+        flat = flattened_payload(data)
+        if flat is None:
+            return 4
+        # This is the one mode that decodes JSON, and an escape in a payload can make a character
+        # no encoding writes. Its bytes are made with "replace" just below, and stdout is told the
+        # same, so nothing a later edit prints here by its text can raise on one
+        # (test-python-bad-bytes.sh). No other mode's stdout is touched: this runs only here.
+        sys.stdout.reconfigure(errors="replace")
+        sys.stdout.flush()
+        sys.stdout.buffer.write(flat.encode("utf-8", "replace"))
     elif mode == "commands":
         # Exit 3 says only the crude reading was possible; its records are printed all the same.
         try:
@@ -3054,6 +3452,9 @@ def main(argv):
         # tab (`$'E\tF'`) is whole. One that holds a line break (`$'E\nF'`) is given no row: no
         # line of a body can be it, a row for it would be cut in two, and with no row such a scan
         # reads the lines after it as code, never as a body with no end (claude-config#3566).
+        # Nor is one whose line ends in a backslash before the end of its marker, which
+        # heredoc_openers leaves out: the marker is the word the two lines make, and the row was
+        # the word on the first with a backslash after it, a line no body holds (#3504).
         for n, line in enumerate(data.split("\n"), 1):
             for op in heredoc_openers(line):
                 if "\n" not in op[1]:
@@ -3064,7 +3465,7 @@ def main(argv):
         assigns, rest = split(data)
         sys.stdout.write("".join(a + "\n" for a in assigns) + "\x1f\n" + rest)
     else:
-        sys.stderr.write("usage: shell-words.py read|commands|split|words|gitdir|bare|tool|heredoc-markers < text, or data-set-aside '<path>[ <subcommand>]'... < text\n")
+        sys.stderr.write("usage: shell-words.py read|commands|split|words|gitdir|bare|tool|heredoc-markers < text, flatten < payload, or data-set-aside '<path>[ <subcommand>]'... < text\n")
         return 64
     return 0
 

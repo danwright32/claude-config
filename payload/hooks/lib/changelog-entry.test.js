@@ -609,6 +609,10 @@ c = cliIn(['announcement', 'acme/board', annRegistry], prJson(['changelog/announ
 check(c.status === 0 && c.json && c.json.state === 'owed' && c.json.channel === 'C0000TEST01' && c.json.text === POST && c.json.why === '',
   'a merged announce change did not read as owing its post, to the channel, word for word: ' + JSON.stringify(c));
 check(c.json && c.json.normalized === normalizeAnnouncement(POST), 'the answer does not carry the one normalised form of the text: ' + JSON.stringify(c.json));
+// #3667: and the one hash of it, so the reader that keeps what is owed never hashes for itself.
+check(c.json && /^[0-9a-f]{64}$/.test(c.json.hash || '') && c.json.hash === entry.announcementHash(POST), 'the answer does not carry the one hash of the text: ' + JSON.stringify(c.json));
+c = cliIn(['announcement', 'acme/board', annRegistry], prJson(['changelog/announce'], SENTENCE));
+check(c.json && c.json.hash === '', 'an announce change with no post was given a hash: ' + JSON.stringify(c.json));
 c = cliIn(['announcement', 'acme/board', annRegistry], prJson(['changelog/visible'], SENTENCE));
 check(c.status === 0 && c.json && c.json.state === 'none' && c.json.channel === '' && c.json.text === '', 'a visible change did not read as owing nothing: ' + JSON.stringify(c));
 c = cliIn(['announcement', 'acme/board', annRegistry], prJson([], 'x'));
