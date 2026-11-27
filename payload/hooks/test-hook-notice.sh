@@ -15,6 +15,7 @@
 #     SessionStart: PreToolUse, PostToolUse, Stop and the rest) prints words plain to stdout and then
 #     exits 0, outside a branch only a person running it by hand takes (#1924);
 #   * no shell script under the hooks builds a systemMessage anywhere but the library;
+#   * no shell script under the hooks calls one of the library's private _hn_ functions (#3793);
 #   * every registered hook using the library sources it with the fallback.
 #
 # What the two scans see, and what they do not, is written above scan.py below.
@@ -158,6 +159,35 @@ for n, what, reason, notice in ((0, "with a reason and a notice", want, "notice:
     elif set(d) - {"hookSpecificOutput", "systemMessage"}:
         print("%s: it carried more: %r" % (what, sorted(d)))')"
   [ -z "$shape" ] && ok || bad "#3058 $name: hook_allow_json did not print one valid allow carrying its reason and notice: $shape"
+  # hook_deny_json: a PreToolUse refusal carrying the tricky text as its reason and its notice, as
+  # one valid object; with no notice, or an empty one, no systemMessage; and a reason too long for
+  # Claude Code cut short of its cap, saying so, as the ask and the allow are (claude-config#3793).
+  long="$(python3 -c 'print("x" * 20000, end="")')"
+  out="$(env PATH="$arm" HN_A="$TRICKY" HN_B="notice: $TRICKY" HN_L="$long" "$BASH" -c '. "$0" && hook_deny_json "$HN_A" "$HN_B"; echo "@@"; hook_deny_json "$HN_A"; echo "@@"; hook_deny_json "$HN_A" ""; echo "@@"; hook_deny_json "$HN_L"' "$LIB" 2>/dev/null)"
+  shape="$(printf '%s' "$out" | HN_WANT="$TRICKY" python3 -c '
+import json, os, sys
+want = os.environ["HN_WANT"]
+parts = sys.stdin.read().split("@@\n")
+if len(parts) != 4:
+    print("printed %d parts, not 4: %r" % (len(parts), parts[:2])); sys.exit()
+for n, what, notice in ((0, "with a notice", "notice: " + want), (1, "with no notice", None), (2, "with an empty notice", None), (3, "with a 20,000 character reason", None)):
+    try:
+        d = json.loads(parts[n])
+    except Exception as e:
+        print("%s: not one JSON object (%s): %r" % (what, e, parts[n][:200])); continue
+    h = d.get("hookSpecificOutput") or {}
+    if n == 3:
+        r = h.get("permissionDecisionReason") or ""
+        if h.get("permissionDecision") != "deny" or not 0 < len(r) <= 10000 or "cut short" not in r:
+            print("%s: it was not one refusal whose reason is cut short of 10,000 characters and says so: %r" % (what, {k: str(v)[:80] for k, v in h.items()}))
+        continue
+    if h != {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": want}:
+        print("%s: hookSpecificOutput was %r" % (what, h))
+    elif d.get("systemMessage") != notice:
+        print("%s: the systemMessage was %r" % (what, d.get("systemMessage")))
+    elif set(d) - {"hookSpecificOutput", "systemMessage"}:
+        print("%s: it carried more: %r" % (what, sorted(d)))')"
+  [ -z "$shape" ] && ok || bad "#3793 $name: hook_deny_json did not print one valid refusal carrying its reason and notice: $shape"
 done
 
 # --- the event and context arguments, each seen to fail against a library that mishandles it -------
@@ -761,6 +791,39 @@ found="$(scan_handbuilt "${shell_files[@]}")"
 if [ -z "$found" ]; then ok
 else
   bad "#1906 these scripts build a systemMessage by hand, which breaks on a newline, tab or quote in its text. Build it with hook_notice_json or hook_allow_notice from lib/hook-notice.sh:"
+  printf '%s\n' "$found" | sed "s|$DIR/|  |"
+fi
+
+# scan_private <file>...: a line of code outside lib/hook-notice.sh naming one of its private
+# functions, whose names start _hn_. A private name can change with no notice to a caller outside
+# the library, and a refusal a hook then fails to build is a command that runs (db-write-ask.sh
+# called _hn_decision_json to refuse, claude-config#3793). The library's public names are what a
+# hook calls: hook_ask_json, hook_allow_json and hook_deny_json for a decision. A comment line is
+# not code, so a history that names the old builder is left alone.
+scan_private(){
+  python3 - "$@" <<'PY'
+import re, sys
+private = re.compile(r"(?<![A-Za-z0-9_])_hn_[A-Za-z0-9_]+")
+for path in sys.argv[1:]:
+    for n, line in enumerate(open(path, encoding="utf-8", errors="replace"), 1):
+        s = line.strip()
+        if s.startswith("#"):
+            continue
+        m = private.search(s)
+        if m:
+            print("%s:%d: %s: %s" % (path, n, m.group(0), s[:160]))
+PY
+}
+printf 'built="$(_hn_decision_json deny "$r" "$n")"\n' > "$WORK/private-call.sh"
+printf 'if ! declare -F _hn_string >/dev/null; then exit 0; fi\n' > "$WORK/private-declare.sh"
+printf '# a refusal used to be built with _hn_decision_json\nbuilt="$(hook_deny_json "$r" "$n")"\nx="$MY_hn_x"\n' > "$WORK/private-clean.sh"
+[ -n "$(scan_private "$WORK/private-call.sh")" ] && ok || bad "#3793 canary: the private name scan did not find a call to _hn_decision_json"
+[ -n "$(scan_private "$WORK/private-declare.sh")" ] && ok || bad "#3793 canary: the private name scan did not find a declare -F of a private name"
+[ -z "$(scan_private "$WORK/private-clean.sh")" ] && ok || bad "#3793 control: the private name scan flagged a comment, a public name or a longer word: $(scan_private "$WORK/private-clean.sh")"
+found="$(scan_private "${shell_files[@]}")"
+if [ -z "$found" ]; then ok
+else
+  bad "#3793 these scripts call a private function of lib/hook-notice.sh, whose name can change with no notice to them. Call its public names instead (hook_deny_json for a refusal):"
   printf '%s\n' "$found" | sed "s|$DIR/|  |"
 fi
 

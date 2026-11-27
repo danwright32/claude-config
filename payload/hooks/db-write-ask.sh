@@ -165,18 +165,19 @@ load_notice() {
 # as [[:space:]], so a match is only ever added, never lost.
 payload_match() { [[ $1 =~ $2 ]] && return 0; local LC_ALL=C; [[ $1 =~ $2 ]]; }
 
-# A refusal (claude-config#3472). The library names an ask and an allow and has no name for a
-# refusal; both are its one decision builder, _hn_decision_json, given the decision as its first
-# word, so a refusal is built by that same builder and its words are escaped and cut as theirs are.
+# A refusal (claude-config#3472). The library's hook_deny_json builds it (claude-config#3793), by
+# the same builder as its ask and its allow, so its words are escaped and cut as theirs are. The
+# hook calls that public name and never the private builder behind it (test-hook-notice.sh fails on
+# a hook that names one).
 #
-# That builder is private to the library, and a refusal that is not printed is a command that runs:
-# the hook leaves with 0 either way, and Claude Code reads no decision as none. Beside a library
-# that loaded and had no such function (a copy from before 2026-11-16 that the sync held back, or
-# one in which the name changed), this printed nothing, so a command the hook meant to refuse ran
-# with no question at all. So what the builder printed is judged before it is passed on: it must be
-# one object, from { to }, naming deny as its decision. Anything else, nothing included, is replaced
-# by refuse_plain's object, which needs no library. Judged by its shape and in bash, since python3
-# is the first thing the builder itself may have lost. Whatever happens, a refusal is printed.
+# A refusal that is not printed is a command that runs: the hook leaves with 0 either way, and
+# Claude Code reads no decision as none. Beside a library that loaded and had no such function (a
+# copy from before #3793 that the sync held back), a call to it would print nothing, so a command
+# the hook meant to refuse would run with no question at all. So the function is looked for first,
+# and what it printed is judged before it is passed on: it must be one object, from { to }, naming
+# deny as its decision. Anything else, nothing included, is replaced by refuse_plain's object, which
+# needs no library. Judged by its shape and in bash, since python3 is the first thing the library
+# itself may have lost. Whatever happens, a refusal is printed.
 REFUSAL_SHAPE='^\{.*"permissionDecision"[[:space:]]*:[[:space:]]*"deny".*\}$'
 refuse_json() {
   local built=""
@@ -184,16 +185,16 @@ refuse_json() {
     refuse_plain "$1" "${2:-}" "lib/hook-notice.sh is missing beside this hook"
     return 0
   fi
-  if ! declare -F _hn_decision_json >/dev/null; then
-    refuse_plain "$1" "${2:-}" "lib/hook-notice.sh beside this hook has no _hn_decision_json, which builds a refusal, so this one is written without the characters that need escaping"
+  if ! declare -F hook_deny_json >/dev/null; then
+    refuse_plain "$1" "${2:-}" "lib/hook-notice.sh beside this hook has no hook_deny_json, which builds a refusal, so this one is written without the characters that need escaping"
     return 0
   fi
-  built="$(_hn_decision_json deny "$1" "${2:-}" 2>/dev/null)"
+  built="$(hook_deny_json "$1" "${2:-}" 2>/dev/null)"
   if payload_match "$built" "$REFUSAL_SHAPE"; then
     printf '%s\n' "$built"
     return 0
   fi
-  refuse_plain "$1" "${2:-}" "_hn_decision_json in lib/hook-notice.sh beside this hook printed no refusal, so this one is written without the characters that need escaping"
+  refuse_plain "$1" "${2:-}" "hook_deny_json in lib/hook-notice.sh beside this hook printed no refusal, so this one is written without the characters that need escaping"
 }
 
 # refuse_plain <reason> <notice> <why>: a refusal built with no library, keeping only characters

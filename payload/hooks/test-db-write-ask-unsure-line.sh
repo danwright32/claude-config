@@ -484,33 +484,33 @@ print("%s\t%s" % ("ok" if got == "deny rc=0" and SAYS["close"] in reason and "li
                   "a hook with no lib/hook-notice.sh beside it still refuses a heredoc the reader cannot find the end of"))
 
 # ---- 7. a refusal the notice library cannot build is still a refusal ------------------------------
-# The hook builds a refusal with the notice library's private decision builder, _hn_decision_json.
-# Beside a library that loads and has no such function (a copy from before 2026-11-16 that the sync
-# held back, or one in which that private name changed), the hook printed nothing and left with 0,
-# so the command ran with no decision at all, where the hook before #3472 asked about it. Each
+# The hook builds a refusal with the notice library's hook_deny_json (#3793). Beside a library that
+# loads and has no such function (a copy from before #3793 that the sync held back), a hook that
+# called it would print nothing and leave with 0, so the command would run with no decision at all,
+# where the hook before #3472 asked about it. Each
 # stand in here is a copy of the real library, changed in this suite's own folder and put beside a
 # copy of the hook; the real library is never touched.
 LIB = os.path.join(os.path.dirname(hook), "lib")
 with open(os.path.join(LIB, "hook-notice.sh")) as f:
     NOTICE = f.read()
 GONE = object()
-# The library as it would be with the private builder under another name: it loads, and its ask
-# and its allow are built as before.
-RENAMED = NOTICE.replace("_hn_decision_json", "_hn_decision_built")
-# The builder is there and prints nothing.
-SILENT = NOTICE + "\n_hn_decision_json() { return 0; }\n"
-# The builder is there and prints a refusal cut short, which no JSON reader takes.
-CUT = (NOTICE + "\n_hn_decision_json() { printf '%s' '{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", "
+# The library as it was before #3793, with no hook_deny_json: it loads, and its ask and its allow
+# are built as before.
+RENAMED = NOTICE.replace("hook_deny_json", "hook_deny_built")
+# The function is there and prints nothing.
+SILENT = NOTICE + "\nhook_deny_json() { return 0; }\n"
+# The function is there and prints a refusal cut short, which no JSON reader takes.
+CUT = (NOTICE + "\nhook_deny_json() { printf '%s' '{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", "
        "\"permissionDecision\": \"deny\", \"permissionDecisionReason\": \"cut sh'; }\n")
-# The builder is there and prints a whole object that is no refusal.
-ASKS = (NOTICE + "\n_hn_decision_json() { printf '%s\\n' '{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", "
+# The function is there and prints a whole object that is no refusal.
+ASKS = (NOTICE + "\nhook_deny_json() { printf '%s\\n' '{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", "
         "\"permissionDecision\": \"ask\", \"permissionDecisionReason\": \"r\"}}'; }\n")
 # A copy of lib/db-write-calls.py whose advice on rewriting holds what JSON must escape: both
 # quotes, a backslash, a tab and a line break.
 ODD = 'Write "it" as \'a\\b\' \tso,\non two lines'
 ODD_TAIL = "\n\ndef unsure_fix(told):\n    return %r if isinstance(told, (Unsure, UnsureFinding)) else None\n" % ODD
-NO_BUILDER = "lib/hook-notice.sh beside this hook has no _hn_decision_json"
-NO_REFUSAL = "_hn_decision_json in lib/hook-notice.sh beside this hook printed no refusal"
+NO_BUILDER = "lib/hook-notice.sh beside this hook has no hook_deny_json"
+NO_REFUSAL = "hook_deny_json in lib/hook-notice.sh beside this hook printed no refusal"
 
 
 def beside(name, notice=None, calls_tail=None, broken=()):
@@ -599,25 +599,25 @@ def asked(label, by, command, cwd, t, holds, sent=None):
 CLOSE = behind(WRITES[0][1])[1][2]
 SAID = (SAYS["close"], HOW["close"], "could not check", "claude-config#3472")
 renamed, silent = beside("renamed", RENAMED), beside("silent", SILENT)
-got = (loaded(renamed, "hook_ask_json"), loaded(renamed, "_hn_decision_json"))
+got = (loaded(renamed, "hook_ask_json"), loaded(renamed, "hook_deny_json"))
 stood.append(("ok" if got == (0, 1) else "got %s" % (got,),
-              "(control) the stand in library with its builder renamed loads, names an ask and has no _hn_decision_json"))
-got = (loaded(silent, "hook_ask_json"), loaded(silent, "_hn_decision_json"))
+              "(control) the stand in library as it was before #3793 loads, names an ask and has no hook_deny_json"))
+got = (loaded(silent, "hook_ask_json"), loaded(silent, "hook_deny_json"))
 stood.append(("ok" if got == (0, 0) else "got %s" % (got,),
-              "(control) the stand in library whose builder prints nothing loads and has a _hn_decision_json"))
-asked("(control) beside a notice library with no _hn_decision_json, a delete in plain sight is asked about as it always was",
+              "(control) the stand in library whose hook_deny_json prints nothing loads and has one"))
+asked("(control) beside a notice library with no hook_deny_json, a delete in plain sight is asked about as it always was",
       renamed, WRITES[0][1], work, None, (WRITES[0][2],))
-refused("beside a notice library with no _hn_decision_json, a delete behind a heredoc the reader cannot find the end of is "
+refused("beside a notice library with no hook_deny_json, a delete behind a heredoc the reader cannot find the end of is "
         "refused, never passed in silence", renamed, CLOSE, work, None, SAID + (NO_BUILDER,),
         ("lib/hook-notice.sh is missing", NO_REFUSAL))
-refused("beside a notice library with no _hn_decision_json, a commit of an unapproved list line behind a # that cannot be "
+refused("beside a notice library with no hook_deny_json, a commit of an unapproved list line behind a # that cannot be "
         "told is refused, never passed in silence", renamed, "printf a(b)# c; " + COMMIT + "\n", listed, NONE_T,
         (UNSURE, "could not check", NO_BUILDER))
-refused("beside a notice library whose _hn_decision_json prints nothing, the same delete is refused, never passed in silence",
+refused("beside a notice library whose hook_deny_json prints nothing, the same delete is refused, never passed in silence",
         silent, CLOSE, work, None, SAID + (NO_REFUSAL,), ("lib/hook-notice.sh is missing", NO_BUILDER))
-refused("beside a notice library whose _hn_decision_json prints a refusal cut short, the same delete is refused in an "
+refused("beside a notice library whose hook_deny_json prints a refusal cut short, the same delete is refused in an "
         "object that can be read", beside("cut", CUT), CLOSE, work, None, SAID + (NO_REFUSAL,))
-refused("beside a notice library whose _hn_decision_json prints an ask where a refusal was meant, the same delete is "
+refused("beside a notice library whose hook_deny_json prints an ask where a refusal was meant, the same delete is "
         "refused", beside("asks", ASKS), CLOSE, work, None, SAID + (NO_REFUSAL,))
 # A refusal whose words hold what JSON must escape. Beside the real library every character of
 # them arrives (which is also what shows the stand in advice reaches the refusal); in the form
@@ -627,7 +627,7 @@ refused("(control) beside the real notice library, a refusal whose advice holds 
 for name, text, why in (("odd-renamed", RENAMED, NO_BUILDER), ("odd-gone", GONE, "lib/hook-notice.sh is missing")):
     refused("with the notice library %s, a refusal whose advice holds quotes, a backslash, a tab and a line break is "
             "still one JSON object, with those characters taken out"
-            % ("left out" if text is GONE else "holding no _hn_decision_json"),
+            % ("left out" if text is GONE else "holding no hook_deny_json"),
             beside(name, text, ODD_TAIL), CLOSE, work, None,
             (SAYS["close"], "Write it as ab so,on two lines", why), ('"', "'", "\\", "\t", "\n"))
 # The notice a question carries beside it is carried by a refusal too. Beside the real library it
@@ -641,7 +641,7 @@ write(os.path.join(sf_home, ".claude", "settings.local.json"),
 SF_SAID = ("SALESFORCE WRITES SKIP AUTO MODE", "mcp__claude_ai_SFDC_USE__createSobjectRecord")
 refused("(control) beside the real notice library, a refusal carries the notice about pre-allowed Salesforce writes "
         "beside it", hook, CLOSE, work, None, SAID, home_dir=sf_home, notice=SF_SAID)
-for by, state, why in ((renamed, "with no _hn_decision_json", NO_BUILDER),
+for by, state, why in ((renamed, "with no hook_deny_json", NO_BUILDER),
                        (beside("gone", GONE), "left out", "lib/hook-notice.sh is missing")):
     refused("beside a notice library %s, a refusal says the notice about pre-allowed Salesforce writes inside its "
             "reason, and builds no notice beside it by hand" % state, by, CLOSE, work, None,
