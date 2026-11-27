@@ -653,7 +653,12 @@ const takeBackClose = async ($: EngineInterface): Promise<void> => {
   } catch (err) {
     debug($, `the close step added to the held steps card could not be taken back (${errorText(err, MOD)}); it is tried again at the next turn`)
     await $.state.set(closeStrayRef, true)
+    return
   }
+  // Taken back. A try that failed earlier in the same idle stretch (the check runs again with no
+  // turn between when its prompt could not be sent) left its mark and the one close step on the
+  // held card; that step is off now, so the mark goes and the next turn start takes nothing back.
+  if ((await $.state.get(closeStrayRef)).value === true) await $.state.set(closeStrayRef, false)
 }
 
 /**

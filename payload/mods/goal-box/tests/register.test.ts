@@ -1406,6 +1406,23 @@ test('a close step that could not be taken back from the held card is taken back
   expect(w.withdrawn).toEqual([CLOSE_TITLE])
 })
 
+test('a close step that could not be taken back, then is at a later try in the same idle stretch, leaves nothing for the next turn start to take back (#3817)', withAll, async ($, on) => {
+  const { w, clock, submitted } = world(on, { stepsCard: OTHERS, pinAnswer: CARRIED, submitFails: ['drop'], withdrawFails: "the manual steps mod's own hook did not answer" })
+  await start($)
+  await says($, 'Add the goal box')
+  await workedAndQuiet($, clock)
+  expect(w.withdrawn).toEqual([])
+  expect(asksToCheck(submitted)).toEqual([])
+  // The prompt could not be sent, so the check runs again with no turn between, and this time
+  // manual steps answers the take back: the one close step on the held card is off it.
+  w.withdrawFails = ''
+  await clock.advance(QUIET_MS)
+  expect(w.withdrawn).toEqual([CLOSE_TITLE])
+  expect(asksToCheck(submitted)).toHaveLength(1)
+  await turnStarts($)
+  expect(w.withdrawn).toEqual([CLOSE_TITLE])
+})
+
 test('a pin still out when a new turn starts that comes back held: the step is taken back, and a session working again is not asked to check anything (#3817)', withAll, async ($, on) => {
   const { w, clock, submitted } = world(on, { stepsCard: OTHERS, pinAnswer: 'no answer yet', lateAnswer: CARRIED })
   await start($)
