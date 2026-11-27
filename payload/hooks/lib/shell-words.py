@@ -1726,12 +1726,30 @@ def crude_listed(text, cut):
 #   redirect there, and dash and ksh send the command to the background and run what follows the
 #   file name. What is listed there starts with the redirect, `> out.log`, and a redirect alone
 #   names no program, so the usual spelling, with nothing after the file name, adds no command.
+#   The angle bracket has to be a live one. After one a backslash escapes, `echo a\>&cmd`, the
+#   bracket is a character of the word and the & sends the command to the background: all five
+#   shells ran cmd, and none did after `echo a\\>&cmd`, where the backslash is the escaped one
+#   (measured 2026-11-27). half_a_redirect counts the backslashes.
 #   The `${` of `${ cmd; }`, which ksh 93 runs and bash 5.3 documents: a `${` with a space or a tab
 #   after it. With a line break or a `|` after it the cut already ends the piece there.
-#   The word coproc, which zsh runs a command after and bash 4 and later documents.
-CRUDE_MORE_EDGE = re.compile(CRUDE_EDGE.pattern + r"|\$\{(?=[ \t])|(?<![<>&])&+|(?<![\w$./-])coproc(?=[ \t(])")
+#   The word coproc, which zsh runs a command after and bash 4 and later documents. A redirect may
+#   be glued to it: zsh ran the command of `coproc>/dev/null cmd` (measured 2026-11-27). The
+#   stretch then starts with the redirect, which every caller reads past to the program.
+CRUDE_MORE_EDGE = re.compile(CRUDE_EDGE.pattern + r"|\$\{(?=[ \t])|(?<!&)&+|(?<![\w$./-])coproc(?=[ \t(<>])")
 # The edges that start a nest: a shell of its own, whose cd moves nothing outside it.
 CRUDE_OPENERS = ("$(", "<(", ">(", "=(", "(", "`")
+
+
+def half_a_redirect(text, at):
+    """Whether the & at text[at] is the second half of a `>&` or a `<&`: it is written straight
+    after an angle bracket that no backslash escapes. An even count of backslashes before the
+    bracket leaves it live, since each pair is one escaped backslash."""
+    if at == 0 or text[at - 1] not in "<>":
+        return False
+    i = at - 1
+    while i > 0 and text[i - 1] == "\\":
+        i -= 1
+    return (at - 1 - i) % 2 == 0
 
 
 def crude_cut(text):
@@ -1742,15 +1760,36 @@ def crude_cut(text):
     one glued to coproc, which is a word that takes a command after it as the reserved words do.
     No shell on the Mac this was written on reads `coproc(cmd)` (bash 3.2 has no coproc and zsh 5.9
     takes the parenthesis another way), so that one is listed unmeasured, on the side of more.
+    The & of a `>&` or a `<&` is passed over too (half_a_redirect).
     """
     out, at, left = [], 0, ""
     for m in CRUDE_MORE_EDGE.finditer(text):
         edge = m.group()
         if edge == "(" and after_a_name(text, m.start()) and not (left == "coproc" and at == m.start()):
             continue
+        if edge[:1] == "&" and half_a_redirect(text, m.start()):
+            continue
         out.append((at, m.start(), left, edge))
         at, left = m.end(), edge
     out.append((at, len(text), left, ""))
+    return out
+
+
+def crude_redirected(text, cut):
+    """The finer cut of a piece as bash, zsh and sh read a `&>` in it: a redirect, which ends no
+    command, so the stretch before the & and the one that starts with the > are one stretch.
+
+    dash and ksh send the command before the & to the background, which is the reading crude_cut
+    gives, and for a cd the two differ in where every command after it runs:
+    `(cd d &>/dev/null; cmd)` ran cmd in d in bash, zsh and sh and in the starting folder in dash
+    and ksh (measured 2026-11-27). So crude_commands reads the directories once by each.
+    """
+    out = []
+    for start, end, left, right in cut:
+        if out and out[-1][3][:1] == "&" and start < end and text[start] == ">":
+            out[-1] = (out[-1][0], end, out[-1][2], right)
+        else:
+            out.append((start, end, left, right))
     return out
 
 
@@ -1851,9 +1890,26 @@ def crude_commands(s, cwd=""):
     runs_script took `bash other.sh`, listed after a single ampersand, ahead of the merge helper in
     a later `$( )`, and a Monitor that was refused was allowed. A new record can now only be
     reached where every old one settled nothing.
+
+    A text holding a `&>` has its directories read twice by the second reading, once as dash and
+    ksh take it (the command before it goes to the background) and once as bash, zsh and sh do
+    (a redirect, crude_redirected), each with nests of its own, and a command is given in every
+    folder either names.
     """
     out, found, more, old = [], [], [], None
-    nests, joined = [[cwd, None, "", cwd, None]], False
+    # One set of nests for each way of reading a `&>`, the second only where the text holds one.
+    readings = [[[cwd, None, "", cwd, None]] for _ in range(2 if "&>" in s else 1)]
+    joined = False
+
+    def elsewhere(theres, start, cwd):
+        """The folders the second reading runs the stretch at `start` in that are not cwd."""
+        dirs = []
+        for there in theres:
+            d = there.get(start, cwd)
+            if d != cwd and d not in dirs:
+                dirs.append(d)
+        return dirs
+
     parts = re.split(r"(&&|\|\||;|\||\n)", s)
     for n in range(0, len(parts), 2):
         text, sep = parts[n], parts[n - 1] if n else ""
@@ -1862,21 +1918,21 @@ def crude_commands(s, cwd=""):
         if not text.strip():
             continue
         if not joined:
-            nests[-1][3:] = nests[-1][:2]
+            for nests in readings:
+                nests[-1][3:] = nests[-1][:2]
         joined = False
         cut = crude_cut(text)
-        there = crude_nests(text, cut, nests, sep == "|")
-        if there[0] != cwd:
-            more.append((there[0], text))
+        theres = [crude_nests(text, cut, readings[0], sep == "|")]
+        if len(readings) > 1:
+            theres.append(crude_nests(text, crude_redirected(text, cut), readings[1], sep == "|"))
+        more.extend((d, text) for d in elsewhere(theres, 0, cwd))
         before, after = crude_listed(text, cut)
         for start, inner in before:
             found.append((cwd, inner))
-            if there.get(start, cwd) != cwd:
-                more.append((there[start], inner))
+            more.extend((d, inner) for d in elsewhere(theres, start, cwd))
         for start, inner in after:
             more.append((cwd, inner))
-            if there.get(start, cwd) != cwd:
-                more.append((there[start], inner))
+            more.extend((d, inner) for d in elsewhere(theres, start, cwd))
         out.append((cwd, text))
         target = cd_target(text)
         if target is not None:

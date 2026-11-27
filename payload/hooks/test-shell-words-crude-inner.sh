@@ -57,6 +57,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 sw_path, scratch = sys.argv[1], sys.argv[2]
 spec = importlib.util.spec_from_file_location("shell_words", sw_path)
@@ -284,13 +285,20 @@ def cut_before(s, cwd=""):
     return out
 
 
-def ran(shell, text):
-    """Whether the shell, given the text in an empty folder, left a file named ran at its top."""
+def ran(shell, text, linger=0):
+    """Whether the shell, given the text in an empty folder, left a file named ran at its top.
+
+    `linger` is for a command the shell starts and does not wait for (a coproc with no wait after
+    it): the file is looked for until it is there, for at most that many seconds.
+    """
     d = tempfile.mkdtemp(prefix="run-", dir=scratch)
     try:
         subprocess.run(SHELLS[shell] + [text], cwd=d, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                        stderr=subprocess.DEVNULL, timeout=20,
                        env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": d})
+        end = time.monotonic() + linger
+        while not os.path.exists(os.path.join(d, "ran")) and time.monotonic() < end:
+            time.sleep(0.05)
         return os.path.exists(os.path.join(d, "ran"))
     finally:
         shutil.rmtree(d, ignore_errors=True)
@@ -322,6 +330,11 @@ MORE = [
     ("after |&", "true |& %s", ("zsh", "ksh"), ""),
     ("after the file of a &>, which dash and ksh read as a & and a >", "echo a &> out %s", ("dash", "ksh"), ""),
     ("after the file of a &>>, read the same way", "echo a &>> out %s", ("dash", "ksh"), ""),
+    # An angle bracket a backslash escapes is a character of the word, and the & after it sends the
+    # command to the background as any other does (the review of #3786's pull request).
+    ("after a & that follows a > a backslash escapes", "echo a\\>&%s", EVERY, ""),
+    ("after a & that follows a < a backslash escapes", "echo a\\<&%s", EVERY, ""),
+    ("after a & that follows a > three backslashes stand before", "echo a\\\\\\>&%s", EVERY, ""),
     # b: a cd inside a subshell or a substitution governs what follows it there, and nothing outside
     ("after a cd in a subshell", "mkdir d; (cd d && %s)", EVERY, "d"),
     ("after a cd in a subshell, more after it", "mkdir d; (cd d && %s && true)", EVERY, "d"),
@@ -335,10 +348,22 @@ MORE = [
     ("after a cd in a list sent to the background, as bash, sh, dash and ksh run it", "mkdir d; cd d && true & %s",
      ("bash", "sh", "dash", "ksh"), ""),
     ("after a cd before a &>, as dash and ksh run it", "mkdir d; cd d &> /dev/null; %s", ("dash", "ksh"), ""),
+    # Inside a nest the first reading of folders does not see the cd, so both readings of the &>
+    # are the second reading's to give: bash, zsh and sh take a redirect and the cd moves the nest,
+    # dash and ksh send the cd to the background and it moves nothing.
+    ("after a cd before a &> in a subshell, as bash, zsh and sh run it", "mkdir d; (cd d &>/dev/null; %s)",
+     ("bash", "zsh", "sh"), "d"),
+    ("after a cd before a &> in a subshell, as dash and ksh run it", "mkdir d; (cd d &>/dev/null; %s)",
+     ("dash", "ksh"), ""),
+    ("after a cd before a &> in a $( ), as bash, zsh and sh run it", "mkdir d; x=$(cd d &> /dev/null; %s)",
+     ("bash", "zsh", "sh"), "d"),
     # c: a command after coproc
     ("after coproc", "coproc %s; wait", ("zsh",), ""),
     ("in braces after coproc", "coproc { %s; }; wait", ("zsh",), ""),
     ("in a subshell after coproc", "coproc (%s); wait", ("zsh",), ""),
+    # No wait in this one: a shell told to wait after a coproc glued to a redirect may never come
+    # back, so the file is looked for from here until it is there (ran's linger).
+    ("after coproc glued to a redirect", "coproc>/dev/null %s", ("zsh",), ""),
     ("in braces after coproc and a name", "coproc X { %s; }; wait", NEWER, ""),
     ("in a subshell after coproc and a name", "coproc X (%s); wait", NEWER, ""),
     ("in a parenthesis glued to coproc", "coproc(%s); wait", NEWER, ""),
@@ -370,7 +395,7 @@ for what, shape, readers, where in MORE:
               % (marker.replace("\t", "\\t").replace("\n", "\\n"), what,
                  "it takes a bash newer than 3.2" if readers is NEWER else "it takes " + " or ".join(readers)))
         continue
-    lazy = [s for s in asked_of if not ran(s, marker)]
+    lazy = [s for s in asked_of if not ran(s, marker, 10 if "coproc" in marker and "wait" not in marker else 0)]
     measured += 1
     row("#3786 %s: %s ran the command there" % (what, " and ".join(asked_of)),
         "" if not lazy else "%s did not: [%s]" % (" and ".join(lazy), marker))
@@ -391,6 +416,7 @@ for what, shape in (
     ("2>&-", "echo a 2>&- %s"),
     (">&- on a cd", "cd . >&- 2>&1 %s"),
     ("2>&1 glued to the words around it", "echo a2>&1b %s"),
+    (">&2 after a backslash that is itself escaped, so the > is live", "echo a\\\\>&2 %s"),
 ):
     marker = shape % "touch ran"
     wrong = [s for s in HAVE if ran(s, marker)]
@@ -503,7 +529,8 @@ def cut_3473(s, cwd=""):
 rng = random.Random(3473)
 BITS = ["git push origin main", "echo a", "cd /tmp/a", "cd b", "x=", "(", ")", "$(", "`", "<(", ">(", " ",
         " && ", " || ", "; ", " | ", "\n", '"', "'", "\\", "case x in a)", ";;", "{ ", "}", "#", "$((", "))",
-        " & ", "&", "coproc ", "coproc(", "${ ", "${", " &> out", " 2>&1", " >&2", "|& ", "&!", "!"]
+        " & ", "&", "coproc ", "coproc(", "${ ", "${", " &> out", " 2>&1", " >&2", "|& ", "&!", "!",
+        "\\>&", "coproc>", " &>/dev/null"]
 def in_order(before, after):
     """Whether the records of before all come in after in the order they have in before, whatever
     stands between them."""
@@ -677,7 +704,7 @@ for shell in zsh sh dash ksh; do
 done
 # A run in which the shells ran next to nothing compared the reader with nothing.
 [ "$RAN_MORE" -ge 20 ] && check "the shells here ran the commands of the #3786 texts" ok \
-  || check "the shells here ran the commands of the #3786 texts" "a shell ran the command in only $RAN_MORE of the 33 texts, where 20 or more were wanted"
+  || check "the shells here ran the commands of the #3786 texts" "a shell ran the command in only $RAN_MORE of the 40 texts, where 20 or more were wanted"
 
 # A run that compared nothing must not read as a pass.
 [ "$pass" -ge 150 ] || check "the comparison checked its rows" "only $pass checks passed, of the 190 or so the table makes"
