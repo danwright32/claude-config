@@ -38,8 +38,9 @@
 # With "announce", in a repository whose entry in this Mac's dev update registry names an
 # announcements channel, the milestone's description carries Dan's decision about announcing the
 # feature to agents as one line, read back from GitHub before any issue is filed. A plan there with
-# no "announce", a "yes" or "no" this Mac's record does not hold as his own answer, or a line GitHub
-# did not keep, files nothing (exit 12). The section below says why (claude-config#3669).
+# no "announce", a "yes" or "no" this Mac's record does not hold as his own answer, a title that
+# lands in an existing milestone titled differently, or a line GitHub did not keep, files nothing
+# (exit 12). The section below says why (claude-config#3669).
 #
 # Every issue needs a priority AND at least one category label, either its own or the
 # plan-level default. Priority accepts "p2" or "priority-p2". Categories are not
