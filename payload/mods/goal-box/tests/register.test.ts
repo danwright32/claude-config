@@ -1030,8 +1030,9 @@ test("mod-kit unable to draw the card still shows the box as text, the goal firs
 // ---- The close this session card (#3770) ----
 // Dan, 2026-11-26: pinned only once the Goal accomplished box was shown for his latest request,
 // every reading is clean and the session has stayed quiet for QUIET_MS; down at any new turn; back
-// only after the next box. A reading that cannot be taken withholds it. The two readings of a
-// process a command left behind (3.76.1) can only withhold it.
+// only after the next box. A reading that cannot be taken withholds it, except a process whose
+// parents cannot be followed, which is noted and never withholds or pins the card. The two
+// readings of a process a command left behind (3.76.1) can only withhold it.
 const REASONS = `${'/Users'}/dan/.claude/state/close-session/s1.json`
 type Engine$ = Parameters<Parameters<typeof test>[2]>[0]
 const stopped = ($: Engine$, more: Record<string, unknown> = {}) =>
