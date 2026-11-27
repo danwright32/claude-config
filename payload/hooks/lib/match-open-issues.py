@@ -145,11 +145,15 @@ def checkout_dir(project):
     return project, ""
 
 
-def gh_list(args, cwd, timeout):
+def gh_list(argv, cwd, timeout):
     """(rows, gh's exit code, gh's first error line, what went wrong). The one place a list is asked
-    of gh, for the review and the intake alike. `what went wrong` is "" when rows is a JSON list."""
+    of gh, for the review and the intake alike. `what went wrong` is "" when rows is a JSON list.
+
+    `argv` is the whole command, "gh" first, the way every other hook writes the gh command it
+    BUILDS: a list that starts at the subcommand is the shape word-position-scan.py refuses as a
+    hand written READING of one (claude-config#1188)."""
     try:
-        out = subprocess.run(["gh"] + args, cwd=cwd, capture_output=True, text=True,
+        out = subprocess.run(argv, cwd=cwd, capture_output=True, text=True,
                              timeout=timeout, errors="replace")
     except Exception as exc:
         return None, None, "", "could not be run (%s)" % type(exc).__name__
@@ -171,7 +175,7 @@ def open_issues(project):
     where, unresolved = checkout_dir(project)
     if unresolved:
         return [], unresolved
-    rows, _, err, wrong = gh_list(["issue", "list", "--state", "open", "--limit", "300",
+    rows, _, err, wrong = gh_list(["gh", "issue", "list", "--state", "open", "--limit", "300",
                                    "--json", "number,title,body"], where, TIMEOUT)
     if wrong.startswith("could not be run"):
         return [], "gh " + wrong
@@ -310,7 +314,7 @@ def item_where(target):
 def item_read(kind, fields, extra, where, name):
     """(rows, why it could not be read)."""
     noun = "open issues" if kind == "issue" else "open pull requests"
-    rows, _, err, wrong = gh_list([kind, "list"] + extra +
+    rows, _, err, wrong = gh_list(["gh", kind, "list"] + extra +
                                   ["--state", "open", "--limit", str(ITEM_LIMIT), "--json", fields],
                                   where, ITEM_TIMEOUT)
     first = (err[0] if err else "").strip()
