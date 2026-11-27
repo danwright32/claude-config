@@ -243,6 +243,7 @@ import importlib.util
 import os
 import sys
 
+sys.dont_write_bytecode = True  # the gate is loaded by its path: leave no cache beside it
 GATE = sys.argv[1]
 os.environ["GATE_DIR"] = os.path.dirname(GATE)
 spec = importlib.util.spec_from_file_location("drafts_gate", GATE)
