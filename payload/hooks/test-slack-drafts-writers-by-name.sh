@@ -184,6 +184,37 @@ run "./python3 reads.py run.sh; bash run.sh";       unsure "a script named pytho
 run "./node -e \"require('fs').writeFileSync('run.sh','echo ok')\"; bash run.sh"; unsure "a script named node, given code that names the file,"
 run "./perl -pi -e 's/ok/fine/' run.sh; bash run.sh"; unsure "a script named perl, editing the file in place,"
 
+echo "slack drafts only: a curl config written by code a doubted program is given is still searched (claude-config#3440)"
+# The one route the first version of this change newly ALLOWED (an independent read of pull request
+# 3782, 2026-11-27, then seen on a run: refused on main, allowed at 7928694089). A file named only
+# in the code a program is given (sed's w, awk's print >, an open() in python3 -c) is read as that
+# code and the files it reads. Where the program was not certain to be the system's own, that
+# reading was REPLACED by a piece the gate could not read, and the check of a curl config a
+# command leaves (curlrc_written, #2893) refuses only an endpoint it finds, so the endpoint went
+# unseen. The reading is now kept beside the unreadable piece, as it is for dd, tar and git.
+# HOME is a throwaway folder: no real ~/.curlrc is read or named. The endpoint is the method's
+# name alone, or behind a made up host.
+CH="$T/curl"
+mkdir -p "$CH"
+RC="$CH/.curlrc"
+printf '%s\n' 'silent' > "$RC"
+printf '%s\n' 'url = "https://hooks.example.invalid/api/chat.postMessage"' > "$M/rc.txt"
+curl_run() { CURL_HOME="$CH" HOME="$CH" run "$1"; }
+rc_found() { refused "#3440 $1 is still refused"; says "#3440 $1: for the config it leaves" "a config file curl reads by default"; }
+SED_RC="sed -n 's/^.*\$/url = chat.postMessage/w $RC' calm.sh"
+AWK_RC="awk 'BEGIN { print \"url = chat.postMessage\" > \"$RC\" }'"
+COPY_RC="sed -n 'w $RC' rc.txt"
+QUIET_RC="sed -n 's/^.*\$/silent/w $RC' calm.sh"
+curl_run "$QUIET_RC";                               still "sed by its bare name, writing a curl config that names no endpoint,"
+curl_run "$PM $QUIET_RC";                           still "sed after PATH is exported, writing a curl config that names no endpoint,"
+curl_run "$SED_RC";                                 rc_found "sed by its bare name, writing a curl config that names an endpoint,"
+curl_run "$PM $SED_RC";                             rc_found "sed after PATH is exported, writing a curl config that names an endpoint,"
+curl_run "$AWK_RC";                                 rc_found "awk by its bare name, printing an endpoint into a curl config,"
+curl_run "$PM $AWK_RC";                             rc_found "awk after PATH is exported, printing an endpoint into a curl config,"
+curl_run "$COPY_RC";                                rc_found "sed by its bare name, copying a file that names an endpoint into a curl config,"
+curl_run "$PM $COPY_RC";                            rc_found "sed after PATH is exported, copying a file that names an endpoint into a curl config,"
+curl_run "./$SED_RC";                               kept "a script named sed, writing a curl config that names an endpoint,"
+
 echo "slack drafts only: what git checks out is believed only of the system's own git (claude-config#3440)"
 R="$T/repo"
 mkdir -p "$R"
@@ -229,14 +260,39 @@ run "$PM grep -c ok run.sh; bash run.sh";           unsure "grep after PATH is e
 run "chmod() { ./frob; }; chmod +x run.sh; bash run.sh"; refused "#3440 NEW a function named chmod, handed the script that is then run, is refused"
 run "$PM bash -c 'chmod +x run.sh; bash run.sh'";   unsure "chmod in a command string, after PATH is exported around it,"
 run_path ".:$PATH" "chmod +x run.sh; bash run.sh";  unsure "chmod where the session's PATH holds the folder itself"
-# The shell's own words and builtins are not looked for on PATH, so these pass as they did.
-run "$PM [ -f run.sh ] && bash run.sh";             still "the shell's own [ after PATH is exported"
+
+echo "slack drafts only: the refusal says why the program is doubted and what is believed instead (claude-config#3440)"
+# One sentence served every cause ("chmod, which is not certain to be the system's own chmod"), so a
+# session could not tell a path from the word PATH from a function of the name, nor that the full
+# path in a system folder passes. Each cause now has its own words, and the form that is believed.
+why() { says "#3440 the refusal of $1 says why" "$2"; }
+run "./chmod +x run.sh; bash run.sh"
+why "a script named chmod" "because it is run by the path ./chmod, which is outside the folders this gate takes for the system's"
+says "#3440 the refusal of a script named chmod names the full path that is believed" "or by its full path, /bin/chmod, it is taken for the system's own"
+run "$PM chmod +x run.sh; bash run.sh"
+why "chmod after PATH is exported" "because the word PATH appears in this command, and PATH decides where the shell finds a bare name"
+says "#3440 the refusal of chmod after PATH is exported names the full path that is believed" "written by its full path, /bin/chmod, it is taken for the system's own"
+# What that refusal says to write instead does pass.
+run "$PM /bin/chmod +x run.sh; bash run.sh";        still "chmod by the full path the refusal names, after PATH is exported,"
+run "chmod() { ./frob; }; chmod +x run.sh; bash run.sh"
+why "a function named chmod" "because this command defines a function or an alias named chmod"
+run_path ".:$PATH" "chmod +x run.sh; bash run.sh"
+why "chmod where the session's PATH holds the folder itself" "because the session's PATH holds a folder that is not written as a whole path"
+run "env cat calm.sh > run.sh; bash run.sh";        refused "#3440 cat behind env, whose output is then run, is refused"
+why "cat behind env" "because a word in front of it runs it for the shell"
+
+echo "slack drafts only: the shell's own words are not doubted because PATH is named (claude-config#3440)"
+# The shell's own words and builtins are not looked for on PATH, so these pass as they did. Each
+# case hands the word the script that is then run, with PATH named in the command: with the word
+# taken out of BUILTINS (lib/exact-output.py) it is a program looked for on PATH, the script is
+# one it may have written, and the case fails. Each was seen to fail that way (2026-11-27).
 run "$PM test -f run.sh && bash run.sh";            still "the shell's own test after PATH is exported"
 run "$PM export SCRIPT=run.sh; bash run.sh";        still "the shell's own export after PATH is exported"
-run "$PM [[ -f run.sh ]] && bash run.sh";           still "the shell's own [[ after PATH is exported"
-run "$PM if [ -f run.sh ]; then bash run.sh; fi";   still "the shell's own if after PATH is exported"
-run "$PM echo run.sh; bash run.sh";                 still "the shell's own echo after PATH is exported"
-run "$PM cd into; bash ../run.sh";                  still "the shell's own cd after PATH is exported"
+run "$PM echo 'echo ok' > run.sh; bash run.sh";     still "the shell's own echo, writing the script, after PATH is exported"
+run "$PM printf 'echo ok\n' > run.sh; bash run.sh"; still "the shell's own printf, writing the script, after PATH is exported"
+for own in type hash true false : unset set declare typeset readonly local kill wait read alias umask ulimit let shift getopts; do
+  run "$PM $own run.sh; bash run.sh";               still "the shell's own $own, handed the script, after PATH is exported"
+done
 
 echo
 

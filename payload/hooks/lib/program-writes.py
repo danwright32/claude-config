@@ -378,8 +378,8 @@ def make(interpreter, shells, awks, senders):
             Everything read here from the program's NAME is believed only where the program the shell
             would run is for certain the system's own of that name (named_certain, claude-config#3440).
             Where it is not, the program is read as one the gate does not know, on top of what its name
-            says it may write: every file it names may have been written, the code it is given is not
-            followed, and each file its name says it unpacks, checks out, edits or copies into holds
+            says it may write: every file it names may have been written, and each file its name says
+            it unpacks, checks out, edits, copies into or writes from the code it is given holds
             something the gate could not read beside what the system's program would have left, so a
             post in that is still found. With a script named tar in the folder, `./tar -xf a.tar; bash
             a.sh` was read as the archive's a.sh and allowed, and so were a script named dd, sed (with
@@ -393,10 +393,20 @@ def make(interpreter, shells, awks, senders):
                 text = " ".join(args)
             if self.named_certain(vals[0], name, text):
                 return self.note_by_name(name, args, vals, d, stdin, True)
-            label = self.not_the_systems(name)
+            label = self.not_the_systems(name, self.named_doubt(vals[0], name, text), vals[0])
             code_at, git_at, built_at = len(self.made_code), len(self.made_git), len(self.made_built)
-            self.note_by_name(name, args, vals, d, stdin, False)
-            self.made_code[code_at:] = [(c[0], label, c[2], False) + c[4:] for c in self.made_code[code_at:]]
+            self.note_by_name(name, args, vals, d, stdin, False, label)
+            # The code it was given: what the name's reading follows stays followed, so an endpoint
+            # in the code, or in a file the code reads, is still found in a file the code names, and
+            # beside each entry goes one that is not followed, which leaves that file unreadable
+            # (program_guesses). The followed entry was REPLACED by the other at first, and a curl
+            # config is refused only for an endpoint found in it (the gate's curlrc_written), never
+            # for a piece that could not be read: `export PATH=...; sed -n 's/^.*$/url = <an
+            # endpoint>/w ~/.curlrc' x` was refused on main and allowed (seen 2026-11-27 on
+            # 7928694089, and the same for awk's print > and for sed's w of a file that names one).
+            given = self.made_code[code_at:]
+            self.made_code[code_at:] = [e for c in given
+                                        for e in ([c] if c[3] else []) + [(c[0], label, c[2], False) + c[4:]]]
             for e in self.made_git[git_at:] + self.made_built[built_at:]:
                 e["unsure"] = label
             if len(self.made_built) > built_at:
@@ -420,15 +430,22 @@ def make(interpreter, shells, awks, senders):
             even a builtin's name is a program looked for on PATH (`env PATH=. true run.sh`), which
             system_program does not ask of a builtin, so it is asked here first. It is seen only in
             the command as written, which note_program is not handed yet (its docstring)."""
+            return self.named_doubt(word, name, text) is None
+
+        def named_doubt(self, word, name, text):
+            """named_certain's judgement with its reason: None where the reading may be believed,
+            else why not, in system_doubt's words, for the refusal to name (not_the_systems).
+            note_program asks it only after named_certain has said no, to word the refusal."""
             head = text.lstrip()
             begins = head.startswith(word) and head[len(word):len(word) + 1] in ("", " ", "\t", "\n")
             if not begins and self.exact_run_for_it(text):
-                return False
-            return self.system_program(word, name, text, scripts=False)
+                return "runner"
+            return self.system_doubt(word, name, text, scripts=False)
 
-        def note_by_name(self, name, args, vals, d, stdin, believe):
+        def note_by_name(self, name, args, vals, d, stdin, believe, unsure=None):
             """note_program's reading of a program by its name. believe is whether the program is for
-            certain the system's own (named_certain). Where it is not, nothing the name says the
+            certain the system's own (named_certain), and unsure, where it is not, what a refusal
+            says wrote a file (not_the_systems). Where it is not, nothing the name says the
             program leaves alone is taken from it: a program named for one that writes nothing, a
             git subcommand that leaves the working tree as it is and a build whose outputs are all
             known are read on, and an archive's members are not read as what is unpacked."""
@@ -458,7 +475,7 @@ def make(interpreter, shells, awks, senders):
             if self.note_build(name, vals, d) and believe:
                 return None
             if name in TARS or name == "unzip":
-                self.note_unpack(name, args, vals, d, believe)
+                self.note_unpack(name, args, vals, d, unsure)
             elif name in UNPACKERS:
                 self.note_tree(".", ".", d, name)
             elif name in DIR_COPIERS:
@@ -1158,12 +1175,12 @@ def make(interpreter, shells, awks, senders):
                 for k in files:
                     self.note_edited(args[k], vals[k], d, "awk", [] if given else self.made_code[start:])
 
-        def note_unpack(self, name, args, vals, d, believe=True):
+        def note_unpack(self, name, args, vals, d, unsure=None):
             """tar or unzip unpacking an archive: each member by what it holds where the archive can be
             read, else every file under the folder it unpacks into. Where the program is not for
-            certain the system's own (believe False), each member's file also holds something the
-            gate could not read: what the system's program would unpack is kept, so a post in the
-            archive is still found."""
+            certain the system's own (unsure, what a refusal then says wrote the file), each
+            member's file also holds something the gate could not read: what the system's program
+            would unpack is kept, so a post in the archive is still found."""
             if name == "unzip":
                 found = self.unzip_words(args, vals)
             else:
@@ -1186,8 +1203,8 @@ def make(interpreter, shells, awks, senders):
                     self.note_file(target, d, [("maybe", None, f"{name}, which unpacks it")], append=True)
                 else:
                     self.note_file(target, d, [("text", data, f"{member} in {archive}")], append=True)
-                    if not believe:
-                        self.note_file(target, d, [("maybe", None, self.not_the_systems(name))], append=True)
+                    if unsure:
+                        self.note_file(target, d, [("maybe", None, unsure)], append=True)
 
         @staticmethod
         def read_members(path, name):

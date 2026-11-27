@@ -76,9 +76,9 @@ the text of a script on disk is not counted (system_program says why). What dd, 
 write nothing (NON_WRITERS), ask it too, in lib/program-writes.py (note_program, named_certain).
 Still believed by its name alone: any of those behind a word that runs it for the shell (env,
 command), which note_program cannot see until the gate's note_writes hands it the command as
-written, and with them a program named for a builtin behind env; a program the gate's own walk takes to do
-nothing or to be a shell or an interpreter (its SH_INERT and GIT_INERT, `./bash -c ...`);
-PIPE_SAFE in lib/data-names.py and DATA_FILTERS in lib/shell-words.py; and $(dirname X).
+written, and with them a program named for a builtin behind env; a program the gate's own walk
+takes to do nothing or to be a shell or an interpreter (its SH_INERT and GIT_INERT, `./bash -c
+...`); PIPE_SAFE in lib/data-names.py and DATA_FILTERS in lib/shell-words.py; and $(dirname X).
 
 slack_drafts_only_gate.py loads this file and gives its Judge the class make() returns as a base, so
 the methods use the Judge's own state (shell) and readers (made_from, resolve, sh_cwd, sh_funcs,
@@ -577,20 +577,27 @@ def make(unknown_dir, system_bin):
             scripts False leaves out one thing: PATH named in the text of a script on DISK. It
             is passed for the readings of printf, echo, cat, tee and the copiers, and for the
             programs lib/program-writes.py reads by name (named_certain), which marks no file
-            in a script on disk, and only for them. 160 of this repository's 315 suites name PATH somewhere, most of them make a
-            file with cat or cp and then run it, and with that text counted the gate refused the
-            run of its own suite, of tests/test-mods.sh and of test-scanners-before-push.sh (8
-            cases of test-slack-drafts-only-gate.sh, 2026-11-22). A script on disk is read by the
-            gate before it runs, and a post built inside one is outside what the gate answers
-            (the gate's note_unreadable says the same of a path it cannot work out there). PATH
-            named in the command line that was typed still counts, for the line and for every
-            script it runs."""
+            in a script on disk, and only for them. 160 of this repository's 315 suites name
+            PATH somewhere, most of them make a file with cat or cp and then run it, and with
+            that text counted the gate refused the run of its own suite, of tests/test-mods.sh
+            and of test-scanners-before-push.sh (8 cases of test-slack-drafts-only-gate.sh,
+            2026-11-22). A script on disk is read by the gate before it runs, and a post built
+            inside one is outside what the gate answers (the gate's note_unreadable says the
+            same of a path it cannot work out there). PATH named in the command line that was
+            typed still counts, for the line and for every script it runs."""
+            return self.system_doubt(word, name, text, scripts) is None
+
+        def system_doubt(self, word, name, text, scripts=True):
+            """system_program's judgement with its reason: None where the program is for certain
+            the system's own, else which of the five things said it may not be, for the refusal
+            to name (not_the_systems): "path", "session", "runner", "shadowed" or "PATH". A
+            caller that words a refusal asks it after system_program has said no."""
             bare = "/" not in word
             builtin = bare and name in BUILTINS
             if not bare and os.path.dirname(word) not in system_bin:
-                return False
+                return "path"
             if bare and not builtin and not self.exact_session_path():
-                return False
+                return "session"
             # A text that begins with the program's own word has no word in front of it, so the
             # shared reader is asked only of the others: asked of every cat and cp of a long
             # script, it took judging `bash tests/test-claude-sync.sh` past its cost limit
@@ -598,16 +605,16 @@ def make(unknown_dir, system_bin):
             head = text.lstrip()
             begins = head.startswith(word) and head[len(word):len(word) + 1] in ("", " ", "\t", "\n")
             if not builtin and not begins and self.exact_run_for_it(text):
-                return False
+                return "runner"
             ctx = self.shell
             while ctx is not None:
                 if self.exact_shadowed(ctx["text"], name):
-                    return False  # a function or an alias of that name is not the program
+                    return "shadowed"  # a function or an alias of that name is not the program
                 if bare and not builtin and (scripts or not ctx.get("on_disk")) \
                         and self.exact_names_path(ctx["text"]):
-                    return False
+                    return "PATH"
                 ctx = ctx.get("parent")
-            return True
+            return None
 
         def believed(self, pieces, word, name, text):
             """pieces, what the program named name is read as printing or writing (the gate's
@@ -621,7 +628,8 @@ def make(unknown_dir, system_bin):
             and is answered first, so a program the gate reads nothing of costs nothing here."""
             if pieces is None or self.system_program(word, name, text, scripts=False):
                 return pieces
-            return list(pieces) + [("unknown", None, self.not_the_systems(name))]
+            doubt = self.system_doubt(word, name, text, scripts=False)
+            return list(pieces) + [("unknown", None, self.not_the_systems(name, doubt, word))]
 
         def copy_believed(self, name, args, vals, d, text):
             """After the gate's note_writes has read a cp, mv, ln, install or link by its sources:
@@ -633,7 +641,7 @@ def make(unknown_dir, system_bin):
             any program the gate does not know may (note_named in lib/program-writes.py)."""
             if self.system_program(vals[0], name, text, scripts=False):
                 return
-            label = self.not_the_systems(name)
+            label = self.not_the_systems(name, self.system_doubt(vals[0], name, text, scripts=False), vals[0])
             on_disk = self.shell.get("on_disk")
             for i, (a, v) in enumerate(zip(args[1:], vals[1:]), 1):
                 if v is not None and v.startswith("-"):
@@ -646,10 +654,50 @@ def make(unknown_dir, system_bin):
                 elif not on_disk:
                     self.note_named(a, v, d, label)
 
-        @staticmethod
-        def not_the_systems(name):
-            """What a refusal says wrote a file, for a program not certain to be the system's."""
-            return f"{name}, which is not certain to be the system's own {name}"
+        def not_the_systems(self, name, doubt, word):
+            """What a refusal says wrote a file, for a program not certain to be the system's:
+            its name, what in the command said so (doubt, system_doubt's answer for word) and
+            the way of writing it that is believed. One sentence used to serve every cause, so
+            a session that tripped on the word PATH inside a grep pattern could not tell that
+            from a path or a function of the name, nor that the program's full path in a system
+            folder passes (`export PATH=...; /bin/chmod +x run.sh; ./run.sh` does, where the
+            bare chmod is refused): each such refusal cost a dispatched agent a round trip
+            (review of pull request 3782, 2026-11-27)."""
+            own = self.systems_path(name)
+            full = f"by its full path, {own}," if own else "by a full path in one of the system's folders,"
+            if doubt == "path":
+                shown = f"the path {word}, which is" if len(word) <= 120 and word.isprintable() else "a path"
+                why = f"it is run by {shown} outside the folders this gate takes for the system's"
+                fix = f"written as the bare name {name}, or {full} it is taken for the system's own"
+            elif doubt == "session":
+                why = ("the session's PATH holds a folder that is not written as a whole path, where a "
+                       "bare name may find any file")
+                fix = f"written {full} it is taken for the system's own"
+            elif doubt == "runner":
+                why = ("a word in front of it runs it for the shell (env, sudo, xargs and the like), "
+                       "which can change where it is looked for")
+                fix = f"with no such word in front, {name} is taken for the system's own"
+            elif doubt == "shadowed":
+                why = f"this command defines a function or an alias named {name}"
+                fix = f"with that function or alias under another name, {name} is taken for the system's own"
+            else:
+                why = ("the word PATH appears in this command, and PATH decides where the shell finds "
+                       "a bare name")
+                fix = f"written {full} it is taken for the system's own"
+            return f"{name}, which is not certain to be the system's own {name} because {why} ({fix})"
+
+        def systems_path(self, name):
+            """The whole path of a file called name in one of the folders the gate takes for the
+            system's, /bin and /usr/bin asked first, or None where none of them holds one: the
+            way of writing the program that not_the_systems can say is believed. Worked out once
+            for each name."""
+            def work():
+                for folder in sorted(system_bin, key=lambda f: (f not in ("/bin", "/usr/bin"), f)):
+                    path = os.path.join(folder, name)
+                    if os.path.isfile(path):
+                        return path
+                return None
+            return self.exact_once(("systems path", name), work)
 
         def exact_shadowed(self, text, name):
             """Whether text defines a function or an alias called name, so that the word in a command
