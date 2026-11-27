@@ -896,10 +896,31 @@ LINK_CALLS = (r"\.(?:sym|hard)?link(?:Sync|_to)?\(",
               r"(?:^|[\s;&|(])(?:perl|ruby|php)\b[^\n]*?(?<![A-Za-z0-9_.])(?:sym)?link\s+[\"\x27$@]",
               r"[\[(,]\s*[\"\x27]ln[\"\x27]\s*[,\])]")
 WRITE_CALLS += LINK_CALLS
-# A script that runs a copy, move or remove command from a list of words, as subprocess is given
-# one (claude-config#3689): the first word of the list is the command, so a script holding one and
+# A script that runs a command that writes from a list of words, as subprocess is given one
+# (claude-config#3689): the first word of the list is the command, so a script holding one and
 # naming a payload path is one that may write there, as a script running ln from a list is above.
-WRITE_CALLS += (r"[\[(]\s*[\"\x27](?:[^\"\x27\s]*/)?(?:cp|mv|rm|tee|touch|mkdir|install|rsync|truncate|ditto|unlink|rmdir|link)[\"\x27]\s*,",)
+#
+# WHICH COMMANDS WRITE IS ASKED OF THE NAMES A COMMAND TYPED DIRECTLY IS JUDGED BY, never of a
+# second list kept here (claude-config#3775). This line named its own commands and left out patch,
+# and it had no form at all for the three that write only with a flag or a word: sed, perl and ruby
+# editing in place, and dd with an of= word. On 2026-11-26, on stand in files, each of those five
+# run from a list beside a quoted payload path was let through with exit 0, where the same words
+# typed are refused. So the names are WRITERS, and the flag and the word are the ones the reading
+# of a typed sed, perl, ruby and dd asks for further down.
+LIST_HEAD = r"[\[(]\s*[\"\x27](?:[^\"\x27\s]*/)?(?:%s)[\"\x27]\s*,"
+# The words of the list after its first, each a quoted word or a name, up to the opening quote of
+# the word asked about. Stepped over a word at a time, so a bracket inside a quoted sed expression
+# does not end the list early.
+LIST_WORDS = r"(?:\s*(?:[A-Za-z]{0,2}\"[^\"]*\"|[A-Za-z]{0,2}\x27[^\x27]*\x27|[^,\"\x27\[\]()\s]+)\s*,)*?\s*[\"\x27]"
+DD_LIST = LIST_HEAD % "dd" + LIST_WORDS + r"of="
+WRITE_CALLS += (LIST_HEAD % "|".join(re.escape(w) for w in WRITERS),
+                LIST_HEAD % "sed" + LIST_WORDS + r"-i",
+                LIST_HEAD % "perl|ruby" + LIST_WORDS + r"-[A-Za-z]*i",
+                DD_LIST)
+# Where a dd run from a list writes: the rest of its of= word, as for a dd typed directly. A quoted
+# of=payload/x names no payload folder to SCRIPT_PATH, which reads the whole word as the path.
+DD_LIST_OF = r"[\"\x27]of=([^\"\x27\s]+)[\"\x27]"
+RUNS_DD_LIST = re.search(DD_LIST, shell_text) is not None
 # A script that runs ln as one string (os.system, subprocess, perl and ruby system, with or
 # without brackets): the words of that string are what ln is given, so each is judged as a
 # destination below, as the arguments of ln itself are. Only after a call that runs a command,
@@ -1089,6 +1110,7 @@ except Exception:
     untold("a command string an inline script hands to a shell", UNTOLD_STRING, cwd)
 
 placed = set()
+placed_of = set()
 # The list grows as it is read: a command string found in a segment is added to its end, with the
 # directory it runs in before it, and read in its turn (claude-config#3689, STRINGS_MAX).
 for seg in segments:
@@ -1106,6 +1128,9 @@ for seg in segments:
     for m in (re.finditer(MAYBE_PATH, seg) if WRITE_SCRIPT else ()):
         if m.group(1) not in placed:
             add_maybe(m.group(1), base)
+    for m in (re.finditer(DD_LIST_OF, seg) if RUNS_DD_LIST else ()):
+        add(m.group(1), base)
+        placed_of.add(m.group(1))
     for m in re.finditer(LN_STRING, seg):
         for w in m.group(1).split()[1:]:
             if not w.startswith("-"):
@@ -1199,6 +1224,9 @@ for m in (re.finditer(SCRIPT_PATH, shell_text) if WRITE_SCRIPT else ()):
         add(m.group(1), cwd)
 for m in re.finditer(OPENED_PATH, shell_text):
     if m.group(1) not in placed:
+        add(m.group(1), cwd)
+for m in (re.finditer(DD_LIST_OF, shell_text) if RUNS_DD_LIST else ()):
+    if m.group(1) not in placed_of:
         add(m.group(1), cwd)
 
 # A LINK MADE BY A SCRIPT FILE THE COMMAND RUNS (claude-config#3689).
