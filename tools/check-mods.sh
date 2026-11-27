@@ -349,54 +349,89 @@ routes_for_build(){   # $1 = build, or empty when it could not be read  $2 = a l
     if [ -z "$1" ] || build_at_least "$1" "$since"; then printf '%s\n' "$r"; fi
   done <<< "${2-$BYPASSED_ROUTES_SINCE}"
 }
-# The event of a route or hook key, and its matcher pairs (k=v joined by commas, empty for none).
-key_event(){ printf '%s' "${1%%\{*}"; }
-key_pairs(){ case "$1" in *\{*\}) local p="${1#*\{}"; printf '%s\n' "${p%\}}" ;; esac; }
-# The routes of list $2 a hook keyed $1 hears: its event matches the route's (classic.* is a
-# pattern), and no field both match on has two different values.
-routes_heard(){   # $1 = hook key  $2 = a list above
-  local r since rev rp hp p k
-  hp=",$(key_pairs "$1"),"
-  # Read line by line, never word split, where classic.* would be expanded as a file pattern.
-  while IFS=$'\t' read -r r since; do
-    [ -n "$r" ] || continue
-    rev="$(key_event "$r")"
-    # Unquoted on purpose: classic.* is a pattern, and a dot in the others is a dot.
-    # shellcheck disable=SC2254
-    case "$(key_event "$1")" in $rev) ;; *) continue ;; esac
-    rp="$(key_pairs "$r")"
-    while IFS= read -r p; do
-      [ -n "$p" ] || continue
-      k="${p%%=*}"
-      case "$hp" in *",$k="*) case "$hp" in *",$p,"*) ;; *) continue 2 ;; esac ;; esac
-    done <<< "$(printf '%s\n' "$rp" | tr ',' '\n')"
-    printf '%s\n' "$r"
-  done <<< "$2"
-}
-# The fields any route of a hook's event matches on, the only ones of a hook's matcher its key keeps,
-# so a hook's key changes only where a route reads its matcher.
-route_fields(){   # $1 = event
-  local r since rev
-  while IFS=$'\t' read -r r since; do
-    [ -n "$r" ] || continue
-    rev="$(key_event "$r")"
-    # shellcheck disable=SC2254
-    case "$1" in $rev) key_pairs "$r" | tr ',' '\n' | sed -n 's/=.*//p' ;; esac
-  done <<< "$BYPASSED_ROUTES_SINCE
-$BYPASSED_SOME_SINCE"
-}
-# Called inside a command substitution, so it reads nothing through a process substitution, which
-# bash 3.2 can lose there (lessons review of #3697): the fields are matched as text.
-hook_key(){   # $1 = event  $2 = the hook's matcher pairs, k=v joined by commas
-  local fields kept="" p
-  fields=",$(route_fields "$1" | LC_ALL=C sort -u | paste -sd, -),"
-  while IFS= read -r p; do
-    [ -n "$p" ] || continue
-    case "$fields" in *",${p%%=*},"*) kept="$kept$p
-" ;; esac
-  done <<< "$(printf '%s\n' "$2" | tr ',' '\n')"
-  kept="$(printf '%s' "$kept" | LC_ALL=C sort -u | paste -sd, -)"
-  if [ -n "$kept" ]; then printf '%s{%s}\n' "$1" "$kept"; else printf '%s\n' "$1"; fi
+# Every hook of one mod by its key, with the routes it hears, in one pass: the two lists are read
+# into a table once, however many hooks the mod has. Three rounds of the lessons review of #3697
+# landed on the same shape, five small helpers that each ran their own text tools once per hook for
+# every route, so the cost grew with hooks times routes and each fix moved it to the next helper.
+# It reads events_of's lines and prints one line per key, in byte order: the key, the every call
+# routes it hears, then the some call routes it hears, each list joined by spaces. A key that hears
+# nothing is printed too, since the check for a listed hook that is gone needs every key. The three
+# are parted by the unit separator (0x1f), which read does not treat as white space, so an empty
+# list stays an empty field; a tab would close up around it.
+# A hook's key is its event with the part of its matcher a route reads: only a field some route of
+# its event matches on is kept, so the key changes only where a route reads the matcher. A hook
+# hears a route when its event matches the route's (classic.* is a pattern, and a dot in the others
+# is a dot) and no field both match on has two different values.
+hooks_heard(){   # stdin = events_of's lines  $1 = the every call list  $2 = the some call list
+  perl -e '
+    # The event of a route or hook key, and its matcher pairs (k=v joined by commas, empty for none).
+    sub parts {
+      my ($k) = @_;
+      my $i = index($k, "{");
+      return ($k, "") if $i < 0;
+      return (substr($k, 0, $i), $k =~ /\}\z/ ? substr($k, $i + 1, length($k) - $i - 2) : "");
+    }
+    my @lists;
+    for my $text (@ARGV[0, 1]) {
+      my @routes;
+      for my $line (split /\n/, $text) {
+        my ($r) = split /\t/, $line;
+        next unless defined $r && length $r;
+        my ($ev, $p) = parts($r);
+        my $re = join(".*", map { quotemeta } split(/\*/, $ev, -1));
+        push @routes, { name => $r, re => qr/\A$re\z/s, pairs => [ grep { length } split(/,/, $p) ] };
+      }
+      push @lists, \@routes;
+    }
+    # The fields any route of an event matches on, as ",a,b,", worked out once per event.
+    my %fields;
+    sub fields_of {
+      my ($ev) = @_;
+      return $fields{$ev} //= do {
+        my %f;
+        for my $l (@lists) {
+          for my $r (@$l) {
+            next unless $ev =~ $r->{re};
+            for my $p (@{ $r->{pairs} }) { $f{$1} = 1 if $p =~ /\A([^=]*)=/; }
+          }
+        }
+        "," . join(",", sort keys %f) . ",";
+      };
+    }
+    # The routes of one list a hook key hears, joined by spaces, in the order of the list.
+    sub heard {
+      my ($key, $routes) = @_;
+      my ($kev, $kp) = parts($key);
+      my $hp = ",$kp,";
+      my @out;
+      ROUTE: for my $r (@$routes) {
+        next unless $kev =~ $r->{re};
+        for my $p (@{ $r->{pairs} }) {
+          my ($k) = $p =~ /\A([^=]*)/;
+          next ROUTE if index($hp, ",$k=") >= 0 && index($hp, ",$p,") < 0;
+        }
+        push @out, $r->{name};
+      }
+      return join(" ", @out);
+    }
+    my %keys;
+    while (my $line = <STDIN>) {
+      chomp $line;
+      my ($ev, $pairs) = split /\t/, $line, 2;
+      next unless defined $ev && length $ev;
+      my $f = fields_of($ev);
+      my %kept;
+      for my $p (split /,/, defined $pairs ? $pairs : "") {
+        next unless length $p;
+        my ($k) = $p =~ /\A([^=]*)/;
+        $kept{$p} = 1 if index($f, ",$k,") >= 0;
+      }
+      my $kept = join(",", sort keys %kept);
+      $keys{ length $kept ? $ev . "{" . $kept . "}" : $ev } = 1;
+    }
+    for my $key (sort keys %keys) {
+      print join("\x1f", $key, heard($key, $lists[0]), heard($key, $lists[1])), "\n";
+    }' "$1" "$2"
 }
 # Every event a mod's own hook files register, one per line: on('<event>' in command position, in
 # hooks/ outside its tests, with whole comment lines taken out first so a comment naming one is not
@@ -443,29 +478,30 @@ for d in "${mods[@]}"; do
     failed=1
     continue
   fi
-  # Each hook by its key: the event, with the part of its matcher a route reads (#3697).
+  # Each hook by its key (the event, with the part of its matcher a route reads) and the routes it
+  # hears, worked out for the whole mod in one process (#3697).
+  if ! heard_lines="$(hooks_heard "$BYPASSED_ROUTES_SINCE" "$BYPASSED_SOME_SINCE" <<< "$evs")"; then
+    echo "check-mods: $name: could not work out which routes its hooks hear (the reason is above), so it was stopped"
+    failed=1
+    continue
+  fi
   keys=""
-  while IFS=$'\t' read -r ev pairs; do
+  # Read line by line, never word split: classic.* would be expanded as a file pattern. The fields
+  # are parted by the unit separator, so a hook that hears no every call route keeps that field empty.
+  while IFS=$'\x1f' read -r ev every some; do
     [ -n "$ev" ] || continue
-    keys="$keys$(hook_key "$ev" "$pairs")
+    keys="$keys$ev
 "
-  done <<< "$evs"
-  keys="$(printf '%s' "$keys" | LC_ALL=C sort -u)"
-  # Read line by line, never word split: classic.* would be expanded as a file pattern.
-  while IFS= read -r ev; do
-    [ -n "$ev" ] || continue
-    every="$(routes_heard "$ev" "$BYPASSED_ROUTES_SINCE")"
-    some="$(routes_heard "$ev" "$BYPASSED_SOME_SINCE")"
     [ -n "$every$some" ] || continue
     if printf '%s\n' "$known_bypass" | grep -qxF "$name	$ev"; then continue; fi
     how="sends past the user tier mods load in"
     [ -n "$every" ] || how="sends past the user tier mods load in for some of its calls"
-    heard="$(printf '%s\n%s\n' "$every" "$some" | grep -v '^$' | paste -sd' ' -)"
+    heard="$every${every:+${some:+ }}$some"
     as=""
     case "$heard" in *\{*) as=" (as it routes $heard)" ;; esac
     echo "check-mods: $name hooks $ev, which Claude Code's built-in security default $how$as wherever it sits first (#875), so it runs only while /Library/Application Support/ClaudeCode/managed-settings.json keeps it out of first place (#876). Move it to an event that reaches a mod (tool.check for a PreToolUse check, turn.complete, command.run, session.end), or list it in $BYPASS_KNOWN with the issue deciding it."
     failed=1
-  done <<< "$keys"
+  done <<< "$heard_lines"
   # A listed hook this mod no longer registers: the line comes down, or it would excuse the next one.
   while IFS= read -r ev; do
     [ -n "$ev" ] || continue
