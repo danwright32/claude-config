@@ -226,6 +226,24 @@ for text, want in [('echo "$' + J + '(git push)"', 'echo "$(git push)"'),
     got = sw.flattened(text)
     say(got == want, "#3504 flattened() still writes a split $( whole: [%s]" % shown(text), "gave %r, wanted %r" % (got, want))
 
+# A backslash that is the LAST character of a text joins nothing: there is no line after it, and
+# bash and zsh run such a text as they run it without the backslash. Read as a join, a text that
+# ends in a heredoc opener and a backslash was a heredoc named in `unsure`, so flattened() gave its
+# plain form, in which the push is no push (review of pull request 3797).
+for text, want in [("git" + J + " push origin main; cat " + LT + LT + "E\\", "git push origin main; cat " + LT + LT + "E\\"),
+                   ("git" + J + " push --force origin main " + LT + LT + "E\\", "git push --force origin main " + LT + LT + "E\\"),
+                   ("echo ok &&" + J + "git push origin main; cat " + LT + LT + "E\\",
+                    "echo ok &&git push origin main; cat " + LT + LT + "E\\"),
+                   ("git" + J + " push origin main; cat " + LT + LT + '"E"\\', "git push origin main; cat " + LT + LT + '"E"\\')]:
+    got = sw.flattened(text)
+    named = sw._named(got) or {}
+    say(got == want and ("", "git", "push") in named,
+        "#3504 flattened() names the push in a text that ends in a heredoc opener and a backslash: [%s]" % shown(text),
+        "gave %r, which names %r; wanted %r" % (got, sorted(named), want))
+    say(reading(text) == ("not listed", []),
+        "#3504 a backslash that ends the text joins nothing, so no heredoc is named: [%s]" % shown(text),
+        "the reader named %r" % (reading(text)[1],))
+
 
 # A heredoc's marker, read one line at a time (heredoc_openers).
 def line_scan(text):
@@ -274,8 +292,16 @@ def openers(line, **more):
 for line, want, want_cut in [
         (OPEN + "E\\", [], [(4, 8)]),
         (OPEN + "\\", [], [(4, 7)]),
-        (OPEN + '"E\\', [], [(4, 9)]),
         ("a " + LT + LT + "A && cat " + LT + LT + "B\\", [(2, "A", False, False, 5)], [(13, 17)]),
+        # Double quotes that never close on the line are no opener, as they never were, and the
+        # scan goes on: that pair of brackets is as often inside a string, and the opener after
+        # it is real (review of pull request 3797; bash and zsh open the heredoc on this line).
+        (OPEN + '"E\\', [], []),
+        ('echo "a ' + LT + LT + ' b" | cat ' + LT + LT + "EOF | tr a b \\", [(20, "EOF", False, False, 25)], []),
+        ("a " + LT + LT + '"A ' + LT + LT + "B c\\", [(7, "B", False, False, 10)], []),
+        # A cut opener's word runs to the end of the line, so nothing follows it: brackets inside
+        # its quotes open nothing.
+        (OPEN + "'A " + LT + LT + "B 'C\\", [], [(4, 16)]),
         (OPEN + "E\\\\", [(4, "E\\", False, True, 9)], []),
         (OPEN + "\\E", [(4, "E", False, True, 8)], []),
         (OPEN + "E", [(4, "E", False, False, 7)], []),
@@ -287,10 +313,146 @@ for line, want, want_cut in [
 # Handed the whole text, the opener is read as every shell reads it: the two lines joined.
 for text, want in [(OPEN + "E" + J + "x\nbody\nEx\n", [(4, "Ex", False, False, 10)]),
                    (OPEN + J + "E\nbody\nE\n", [(4, "E", False, False, 9)]),
-                   (OPEN + "E\\\\\nbody\nE\\\n", [(4, "E\\", False, True, 9)])]:
+                   (OPEN + "E\\\\\nbody\nE\\\n", [(4, "E\\", False, True, 9)]),
+                   # A whole text that ends in a backslash: it joins nothing, so the opener is the
+                   # one it always was, and one behind double quotes that never close is still given.
+                   (OPEN + "E\\", [(4, "E\\", False, False, 8)]),
+                   ("echo '" + LT + LT + "\"' ; cat " + LT + LT + "E\n$1\nE\necho done \\", [(17, "E", False, False, 20)]),
+                   # Read joined, the marker is the quoted words on the next line and the brackets
+                   # inside them open nothing. Read as it was before, they open an unquoted heredoc.
+                   # A gate that asks whether any heredoc expands its body is given both.
+                   (OPEN + J + " 'a " + LT + LT + "E b'\n$1\nE\n",
+                    [(4, "a " + LT + LT + "E b", False, True, 18), (12, "E", False, False, 15)])]:
     got, cut = openers(text, marker_start=False)
     say(got == want and cut == [], "#3504 heredoc_openers on the whole text [%s] gives %r" % (shown(text), want),
         "gave %r and cut %r" % (got, cut))
+
+# ---- the family: a text that ends in a backslash (review of pull request 3797) -------------------
+# Every text this suite reads above and every text of the review, each followed by a heredoc
+# opener, a quote that never closes, an operator or nothing, and each of those ended four ways: as
+# written, with a backslash, with two, and with a backslash and line break and then a backslash.
+# THE PROPERTY: a backslash that is the last character of a text is read as any other last
+# character of a word is. Each text that ends in one is read beside its twin, the same text with a
+# Q in the backslash's place, and the two readings must be one, the Q written back: the commands,
+# for a caller that asks and one that does not, the lines named, and the heredocs a whole text
+# opens. So must flattened() be where the text ends in a heredoc opener and the backslash, the
+# shape that hid a push; after other tails flattened() weighs what the last word names, a Q is a
+# program's name where a backslash is none, and the twin says nothing. That is the reading the
+# reader gave before it named split operators: on its copy at f0c2aba6fd no text of the family
+# differs from its twin in any of these (measured 2026-11-27).
+# Read one line at a time the last backslash does join, to a line the reader was not handed, so
+# there the last line's openers are its twin's without the one whose word runs to that backslash.
+REVIEW_TEXTS = [
+    "git" + J + " push origin main",
+    "git" + J + " push --force origin main",
+    "echo ok &&" + J + "git push origin main",
+    'echo "a ' + LT + LT + ' b" | cat ' + LT + LT + "EOF | tr a b ",
+    "echo '" + LT + LT + "\"' ; cat " + LT + LT + "E\n$1\nE\necho done ",
+    "sh -c 'echo quiet'",
+    OPEN + J + "-E\nbody\nE\n",
+    OPEN + J + LT + " f\n",
+    OPEN + "E &" + J + "& x\nbody\nE\n",
+    OPEN + "E$" + J + "(\n",
+    'echo "\\\\$' + J + '(touch ran)"\n',
+    "echo a\\\r\n(touch ran)\n",
+    'psql -c "select 1" &' + J + "& echo done",
+    OPEN + J + " 'a " + LT + LT + "E b'\n$1\nE\n",
+]
+BASES = ([text for _, text, _ in rows + NAMED_AS + CONTROLS] + [text for _, text in LINE_ROWS]
+         + ['echo "$' + J + '(git push)"', "echo $" + J + "(git push)", "a " + LT + LT + "A && cat " + LT + LT + "B",
+            OPEN + "\\E", "echo $((1" + LT + LT + "2)) "] + REVIEW_TEXTS)
+OPENER_TAILS = ["; cat " + LT + LT + "E", " " + LT + LT + "E", "; cat " + LT + LT + '"E"', "; cat " + LT + LT + "'E'",
+                "; cat " + LT + LT + "-E", "; cat " + LT + LT + " E", "; cat " + LT + LT, "; cat " + LT + LT + " ",
+                "; cat " + LT + LT + '"E', "; cat " + LT + LT + "'E", "; cat " + LT + LT + "$'E",
+                "; cat " + LT + LT + "E | tr a b ", '; echo "a ' + LT + LT + ' b" | cat ' + LT + LT + "EOF | tr a b "]
+TAILS = [""] + OPENER_TAILS + [' "a', " 'a", ' "', " $(echo ", " `echo ", " &&", " ||", " |", " ;", " &", " " + LT, " >",
+                               " $", " $(", " ((", " ;;", " #", " a"]
+ENDS = ["", "\\", "\\\\", J + "\\", "\\\n"]
+FAMILY, seen, after_opener = [], set(), set()
+for base in BASES:
+    for stem in sorted({base, base.rstrip("\n")}, key=len, reverse=True):
+        for tail in TAILS:
+            for end in ENDS:
+                if stem + tail + end not in seen:
+                    seen.add(stem + tail + end)
+                    FAMILY.append(stem + tail + end)
+                if tail in OPENER_TAILS:
+                    after_opener.add(stem + tail + end)
+# For reading the same family with another copy of the reader (the one on main, say): the texts
+# are written to the file SPLIT_FAMILY_OUT names, as JSON, when it is set.
+if os.environ.get("SPLIT_FAMILY_OUT"):
+    import json
+    with open(os.environ["SPLIT_FAMILY_OUT"], "w") as f:
+        json.dump(FAMILY, f)
+
+
+def back(x):
+    """x with each Q written back as the backslash it stood for."""
+    if isinstance(x, str):
+        return x.replace("Q", "\\")
+    return type(x)(back(y) for y in x) if isinstance(x, (list, tuple)) else x
+
+
+def read_both(text):
+    """(the commands for a caller that does not ask, for one that asks, the lines named)."""
+    marks = []
+    try:
+        asked = sw.commands(text, unsure=marks)
+    except sw.Unreadable:
+        asked = "unreadable"
+    try:
+        return sw.commands(text), asked, marks
+    except sw.Unreadable:
+        return "unreadable", asked, marks
+
+
+def whole(text):
+    return sw.heredoc_openers(text, marker_start=False)
+
+
+def last_line(text):
+    """(the last line's openers read alone, what was cut), and the same as its twin's say they
+    should be: without the opener whose word runs to the last backslash. Where another backslash
+    escapes the last one it joins nothing, and all that is asked is that nothing is cut."""
+    line = text.rsplit("\n", 1)[-1]
+    got = openers(line)
+    if (len(line) - len(line.rstrip("\\"))) % 2 == 0:
+        return got, (got[0], [])
+    twin = [(op[0], back(op[1])) + op[2:] for op in sw.heredoc_openers(line[:-1] + "Q")]
+    return got, ([op for op in twin if op[4] < len(line)], [(op[0], len(line)) for op in twin if op[4] == len(line)])
+
+
+ended = [text for text in FAMILY if text.endswith("\\") and "Q" not in text]
+FLAT = "flattened(), where the text ends in a heredoc opener and the backslash"
+wrong = {"the commands": [], "the lines named": [], FLAT: [], "the heredocs of the whole text": [],
+         "the heredocs of the last line": []}
+opener_ended = 0
+for text in ended:
+    twin = text[:-1] + "Q"
+    plain, asked, marks = read_both(text)
+    plain_q, asked_q, marks_q = read_both(twin)
+    if (plain, asked) != (back(plain_q), back(asked_q)):
+        wrong["the commands"].append((text, "%r and %r, its twin's %r and %r" % (plain, asked, back(plain_q), back(asked_q))))
+    if marks != marks_q:
+        wrong["the lines named"].append((text, "%r, its twin's %r" % (marks, marks_q)))
+    if text in after_opener:
+        opener_ended += 1
+        flat, flat_q = sw.flattened(text), back(sw.flattened(twin))
+        if flat != flat_q:
+            wrong[FLAT].append((text, "%r, its twin's %r" % (flat, flat_q)))
+    if whole(text) != back(whole(twin)):
+        wrong["the heredocs of the whole text"].append((text, "%r, its twin's %r" % (whole(text), back(whole(twin)))))
+    got, want = last_line(text)
+    if got != want:
+        wrong["the heredocs of the last line"].append((text, "%r and cut %r, wanted %r and cut %r" % (got + want)))
+for what in sorted(wrong):
+    say(not wrong[what], "#3504 a backslash that ends a text is read as any other last character: %s, "
+        "in each of the family's %d texts that end in one" % (what, len(ended)),
+        "%d texts differ from their twin, the first [%s]: %s"
+        % (len(wrong[what]), shown(wrong[what][0][0]) if wrong[what] else "", wrong[what][0][1] if wrong[what] else ""))
+# A family that was never made compared nothing: the texts made, the ones read beside a twin, and
+# of those the ones that end in a heredoc opener, whose flattened form was read too.
+print("family\t%d %d %d" % (len(FAMILY), len(ended), opener_ended))
 
 # The heredoc-markers mode prints no row for an opener it cut, as for a marker holding a line
 # break: a scan written in awk then reads the lines after as code, never as a body with no end.
@@ -320,12 +482,14 @@ rc=$?
 
 SHELLS_READ=""
 RAN_NAMED=0
+FAMILY_READ="0 0 0"
 while IFS=$'\t' read -r verdict what why; do
   case "$verdict" in
     ok) check "$what" ok ;;
     FAIL) check "$what" "$why" ;;
     shells) SHELLS_READ="$what" ;;
     ran) RAN_NAMED="$what" ;;
+    family) FAMILY_READ="$what" ;;
     *) check "a row of the comparison is one this suite reads" "got: $verdict" ;;
   esac
 done < "$T/rows.tsv"
@@ -343,8 +507,17 @@ done
 # A run in which the shells ran no marker compared the reader with nothing.
 [ "$RAN_NAMED" -ge 15 ] && check "a shell here ran the marker of the split texts" ok \
   || check "a shell here ran the marker of the split texts" "a shell ran the marker in only $RAN_NAMED of the 36 texts that split an operator, where 15 or more were wanted"
+# A family that was never made, or of which no text ended in a backslash, was read beside nothing.
+FAMILY_MADE="${FAMILY_READ%% *}"
+FAMILY_OPENER="${FAMILY_READ##* }"
+FAMILY_ENDED="${FAMILY_READ#* }"
+FAMILY_ENDED="${FAMILY_ENDED%% *}"
+echo "the family: ${FAMILY_MADE:-0} texts, ${FAMILY_ENDED:-0} that end in a backslash read beside a twin, ${FAMILY_OPENER:-0} of those after a heredoc opener"
+[ "${FAMILY_MADE:-0}" -ge 24000 ] && [ "${FAMILY_ENDED:-0}" -ge 14000 ] && [ "${FAMILY_OPENER:-0}" -ge 5900 ] \
+  && check "the family of texts that end in a backslash was read" ok \
+  || check "the family of texts that end in a backslash was read" "it held ${FAMILY_MADE:-0} texts, ${FAMILY_ENDED:-0} of them read beside a twin and ${FAMILY_OPENER:-0} of those ending in a heredoc opener, where 24,320, 14,592 and 5,928 were wanted"
 # A run that compared nothing must not read as a pass.
-[ "$pass" -ge 170 ] || check "the comparison checked its rows" "only $pass checks passed, of the 190 or so the tables make"
+[ "$pass" -ge 190 ] || check "the comparison checked its rows" "only $pass checks passed, of the 210 or so the tables make"
 
 echo
 

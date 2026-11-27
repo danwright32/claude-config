@@ -367,7 +367,7 @@ def _ansi_escape(m):
     return chr(value) if 2 <= value <= 126 else m.group()
 
 
-def heredoc_opener(s, i, marker_start=False, joins=None, doubts=None):
+def heredoc_opener(s, i, marker_start=False, joins=None, doubts=None, one_line=False):
     """The heredoc opened at s[i] ("<<"), as (marker, strip_tabs, quoted, end), or None.
 
     The marker is the word after the opener with its quotes removed, as the shell compares it with
@@ -409,16 +409,25 @@ def heredoc_opener(s, i, marker_start=False, joins=None, doubts=None):
     there, zsh and ksh a marker that starts with the dash, as this does. Without joins the
     reading is the one it always was, for every caller that did not ask.
 
-    With joins, a backslash that is the LAST character of s, between the << and the end of the
-    word, is a join too, to a line the caller was not handed (claude-config#3504): a reader given
-    one line of a file at a time is given `cat <<E` and a backslash, and every shell joins that
-    line to the next, so the marker is not the word this line shows. It is given to joins like
-    any other, also where None is returned because no word was read before it (`cat <<` and a
-    backslash) or its double quotes never close on the line. Without joins such a backslash was
-    read as a character of the marker, E and a backslash, unquoted, which no line of a body can
-    be, so a reader waiting for that line took the rest of the file for the body. line_opener
-    is this reading for such a caller. With joins, marker_start is asked of the word itself,
-    past the joins before it.
+    With joins and one_line, s is one line of a longer file, and a backslash that is its LAST
+    character, between the << and the end of the word, is a join too, to a line the caller was
+    not handed (claude-config#3504): a reader given one line of a file at a time is given
+    `cat <<E` and a backslash, and every shell joins that line to the next, so the marker is not
+    the word this line shows. It is given to joins like any other, also where None is returned
+    because no word was read before it (`cat <<` and a backslash). Read as a character of the
+    marker, E and a backslash, unquoted, it made a marker no line of a body can be, so a reader
+    waiting for that line took the rest of the file for the body. line_opener is this reading
+    for such a caller. With joins, marker_start is asked of the word itself, past the joins
+    before it.
+
+    Without one_line the last character of s is the end of the text, and a backslash there joins
+    nothing, with joins or without: it is a character of the marker, as it always was, and bash
+    and zsh run the commands in front of it. commands() reads a whole text, so it does not say
+    one_line. When it did take that backslash for a join, a text that ended in `<<E` and a
+    backslash was a heredoc named in `unsure`, flattened() gave its plain form for it, and the
+    push in front of the heredoc was no push to the push hooks (review of pull request 3797,
+    where both shells were run). Double quotes that never close in s are None either way, as
+    they always were, whatever s ends in.
     """
     m = HEREDOC_START.match(s, i)
     if not m or s.startswith("<<<", i):
@@ -435,7 +444,7 @@ def heredoc_opener(s, i, marker_start=False, joins=None, doubts=None):
                 j += 2
             elif s[j] in " \t":
                 j += 1
-            elif s[j] == "\\" and j == n - 1:
+            elif s[j] == "\\" and j == n - 1 and one_line:
                 found.append(j)
                 j += 1
             else:
@@ -452,7 +461,7 @@ def heredoc_opener(s, i, marker_start=False, joins=None, doubts=None):
         if c == "\\" and joins is not None and s.startswith("\n", j + 1):
             found.append(j)
             j += 2
-        elif c == "\\" and joins is not None and j == n - 1:
+        elif c == "\\" and joins is not None and one_line and j == n - 1:
             found.append(j)
             j += 1
         elif c == "\\" and j + 1 < n:
@@ -486,8 +495,6 @@ def heredoc_opener(s, i, marker_start=False, joins=None, doubts=None):
             while k < n and s[k] != '"':
                 k += 2 if s[k] == "\\" else 1
             if k >= n:
-                if joins is not None and k > n:
-                    joins.extend(found + [n - 1])  # the text ends at a backslash inside the quotes
                 return None
             if joins is None:
                 word.append(re.sub(r'\\([\\"$`])', r"\1", s[j:k]))
@@ -533,7 +540,7 @@ def line_opener(line, i, marker_start=False, cut=None):
     a backslash.
     """
     joins = []
-    op = heredoc_opener(line, i, marker_start=marker_start, joins=joins)
+    op = heredoc_opener(line, i, marker_start=marker_start, joins=joins, one_line=True)
     if joins and joins[-1] == len(line) - 1:
         if cut is not None:
             cut.append((i, len(line)))
@@ -547,7 +554,11 @@ def heredoc_openers(line, marker_start=True, cut=None):
 
     An opener whose line ends in a backslash before the end of its marker word is not given: its
     marker is not the word the line shows (line_opener, claude-config#3504). cut, a list, is
-    given its (start, end of the line), for a caller that says so. Nothing follows it on the line.
+    given its (start, end of the line), for a caller that says so. Its word runs to the end of
+    the line, so nothing follows it there. A << before double quotes that never close on the line
+    is no opener and no cut, as it never was, whatever the line ends in, and the scan goes on
+    past it: the scan follows no quotes, so that << is as often inside a string, and the opener
+    after it is real (review of pull request 3797).
 
     For the whole tree scans that read a file a line at a time and need only where a heredoc's body
     begins and what ends it (claude-config#2080). Such a scan cannot tell a << in a string or in
@@ -558,27 +569,42 @@ def heredoc_openers(line, marker_start=True, cut=None):
 
     With marker_start False every << with a word after it is taken, a here string still apart, for
     a reader that must not miss a heredoc and can afford to count one that is not there: a gate
-    refusing a text it cannot follow (claude-config#2641). The text can then be a whole script.
+    refusing a text it cannot follow (claude-config#2641). The text can then be a whole script,
+    and is read as one: an opener is given as the shells read it, a backslash and line break in
+    it joined (heredoc_opener's joins), the last character of the text is its end, where a
+    backslash joins nothing, and nothing is cut. Beside those, every opener the reading without
+    joins takes at a << the joined reading did not, which is what this gave before it joined
+    anything: after `<<`, a backslash and a line break, the quoted words `'a <<E b'` are one
+    marker read joined, and read unjoined the << inside them opens an unquoted heredoc. So a
+    caller asking whether any heredoc of the text is unquoted is never told less than it was
+    (review of pull request 3797).
     """
-    out, i = [], 0
-    while True:
-        i = line.find("<<", i)
-        if i < 0:
-            return out
-        if line.startswith("<<<", i):
-            i += 3
-            continue
-        cuts = []
-        op = line_opener(line, i, marker_start=marker_start, cut=cuts)
-        if cuts:
-            if cut is not None:
-                cut.extend(cuts)
-            return out
-        if op is None:
-            i += 2
-            continue
-        out.append((i,) + op)
-        i = op[3]
+    def scan(read):
+        out, i = [], 0
+        while True:
+            i = line.find("<<", i)
+            if i < 0:
+                return out
+            if line.startswith("<<<", i):
+                i += 3
+                continue
+            cuts = []
+            op = read(i, cuts)
+            if cuts:
+                if cut is not None:
+                    cut.extend(cuts)
+                return out
+            if op is None:
+                i += 2
+                continue
+            out.append((i,) + op)
+            i = op[3]
+
+    if marker_start:
+        return scan(lambda i, cuts: line_opener(line, i, marker_start=True, cut=cuts))
+    joined = scan(lambda i, cuts: heredoc_opener(line, i, joins=[]))
+    taken = {op[0] for op in joined}
+    return sorted(joined + [op for op in scan(lambda i, cuts: heredoc_opener(line, i)) if op[0] not in taken])
 
 
 # The second characters that make one operator with a first when a backslash and a line break
@@ -586,8 +612,8 @@ def heredoc_openers(line, marker_start=True, cut=None):
 # arithmetic, and what commands() reads as an operator between commands, which are the
 # separators (&& || ;; ;& |&), the redirections (<< <& <> >> >& >| &>), a process substitution's
 # <( >( and =(, and the (( of an arithmetic command or a $(( )).
-SPLIT_SECONDS = {"$": "({'", ")": ")", "&": "&>", "|": "|&", ";": ";&", "<": "<(&>", ">": ">(&|",
-                 "=": "(", "(": "("}
+SPLIT_SECOND_CHARS = {"$": "({'", ")": ")", "&": "&>", "|": "|&", ";": ";&", "<": "<(&>", ">": ">(&|",
+                      "=": "(", "(": "("}
 
 
 def _split(s, at):
@@ -601,7 +627,7 @@ def _split(s, at):
     while s.startswith("\\\n", k):
         k += 2
     first, second = s[at:at + 1], s[k:k + 1]
-    if not first or not second or second not in SPLIT_SECONDS.get(first, ""):
+    if not first or not second or second not in SPLIT_SECOND_CHARS.get(first, ""):
         return None
     return first + second, k
 
@@ -837,7 +863,10 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, un
     past the pair and reads the two characters apart, is no shell's for certain. The reading is
     not changed, for a caller that asks or one that does not: a caller that must not miss a
     command asks, and refuses a text that names one. Inside backquotes the name is given too
-    where several backslashes end the line, since the backquotes read a backslash first.
+    where several backslashes end the line, since the backquotes read a backslash first. For the
+    same reason a dollar sign after one backslash is live there in bash and zsh, split or whole
+    (measured in the review of pull request 3797), and is read here as an escaped one and not
+    named: a fault older than this naming, which does not mend it.
 
     The text is the command as written, quotes and all, and a command substitution's text stays
     inside the command that holds it as well as being read as commands of its own, which come first.
