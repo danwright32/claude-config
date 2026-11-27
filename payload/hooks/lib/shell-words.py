@@ -1879,9 +1879,15 @@ def crude_nests(text, cut, nests, piped):
     return there
 
 
-def crude_commands(s, cwd=""):
-    """The reading used when commands() cannot be trusted: a cut at every separator, quotes and all,
-    and after the pieces of that cut the commands that may be written inside one (crude_listed).
+def crude_split(s, cwd=""):
+    """The reading used when commands() cannot be trusted, in its two parts: (the list as
+    claude-config#3473 left it, the records claude-config#3786 adds). crude_commands is the two
+    joined. They are handed back apart for _records, which reaches this reading below the top as
+    well, for a string a wrapper hands a shell or a script file, and gives every record of the
+    second part after all the records of the WHOLE command line, not only after this text's.
+
+    The reading is a cut at every separator, quotes and all, and after the pieces of that cut the
+    commands that may be written inside one (crude_listed).
 
     It can only see MORE commands than are there, which is the direction a gate that must not miss a
     push needs (L42), and it keeps the cds in order, so the last one before a push still governs it.
@@ -1957,7 +1963,15 @@ def crude_commands(s, cwd=""):
         target = cd_target(text)
         if target is not None:
             cwd, old = moved(cwd, old, target)
-    return out + found + more
+    return out + found, more
+
+
+def crude_commands(s, cwd=""):
+    """The reading used when commands() cannot be trusted, as one list: the list as
+    claude-config#3473 left it, then every record claude-config#3786 adds (crude_split, which says
+    what each part holds and why the second comes after the first)."""
+    old, new = crude_split(s, cwd)
+    return old + new
 
 
 def alone(text):
@@ -3247,7 +3261,7 @@ def headed_string(text):
     return found[0], found[1]
 
 
-def _records(s, cwd, depth, scripts=None, fields=True):
+def _records(s, cwd, depth, scripts=None, fields=True, later=None, cut=None):
     """(records, crude) for a command line: each record (dir, text, wrap, rest, assigns, field, depth), a
     wrapper's commands right after it (claude-config#1478). wrap is "" for a command that is no
     wrapper, the wrapper's name (`bash -c`, `eval`, ...) for one whose string was read, and that name
@@ -3256,11 +3270,35 @@ def _records(s, cwd, depth, scripts=None, fields=True):
     script file a command runs as well, right after its record, and is given (path, text) for each
     one read (claude-config#2301). fields=False leaves each field "" for a caller that reads none: it
     is a reading of each command's words, and every_command, which drops it, asked for all 14,000 of
-    claude-sync's on every claude-sync line the Slack drafts gate judged (claude-config#2918)."""
-    try:
-        cut, crude = commands(s, cwd), False
-    except Unreadable:
-        cut, crude = crude_commands(s, cwd), True
+    claude-sync's on every claude-sync line the Slack drafts gate judged (claude-config#2918).
+
+    The records claude-config#3786 taught the crude cut to list (crude_split's second part) are the
+    one exception to "right after": wherever the cut is reached, at the top or for a string or a
+    script file below it, they are held back, each with its directory and its depth, and given
+    after every other record of the WHOLE command line, each with the commands it runs right after
+    it in turn. So the list this gave before #3786 is the start of the list it gives now, record
+    for record, for every text, and a caller that answers at the first record that settles its
+    question, or that keeps state from one record to the next, reaches every record it reached
+    before, in the order and the state it had, ahead of any new one. Given right after their own
+    string's records they stood ahead of the outer text's later commands: after
+    `eval 'true & bash other.sh; echo "never closed' ; bash merge-when-ready.sh 7`, whose outer
+    text the reader reads and whose string it cannot, agent-overrides.py's runs_script was answered
+    by `bash other.sh` and a Monitor running the merge helper was allowed. What that costs: a late
+    record stands away from its wrapper, so a caller that tells which shell or script a record is
+    inside by the records around it tells that of a late one from what stands at the end of the
+    list. Its directory and its depth are its own. later and cut are this function's alone: later
+    is the queue of held back records the outermost call drains, and cut is one of them, read in
+    place of s."""
+    outermost = later is None
+    if outermost:
+        later = []
+    crude = False
+    if cut is None:
+        try:
+            cut = commands(s, cwd)
+        except Unreadable:
+            (cut, new), crude = crude_split(s, cwd), True
+            later.extend((d, t, depth) for d, t in new)
     out = []
     for d, t in cut:
         if fields:
@@ -3275,7 +3313,7 @@ def _records(s, cwd, depth, scripts=None, fields=True):
                 # (glued_script), with the commands of a string it hands a shell read after it.
                 inner = []
                 if found is not None and depth < MAX_DEPTH:
-                    inner = _records(found[1], d, depth + 1, scripts, fields)[0]
+                    inner = _records(found[1], d, depth + 1, scripts, fields, later)[0]
                 out.append((d, t, "direct\x1d" + kept, rest, assigns, field, depth))
                 out.extend(inner)
                 continue
@@ -3292,14 +3330,14 @@ def _records(s, cwd, depth, scripts=None, fields=True):
                 scripts.append(found_script)
                 at = len(scripts) - 1
                 # Its commands, never its reason: the script's record keeps WHY_FILE below.
-                inner, _ = _records(found_script[1], d, depth + 1, scripts, fields)
+                inner, _ = _records(found_script[1], d, depth + 1, scripts, fields, later)
                 if not inner:
                     del scripts[at]
         if string is not None:
             if depth >= MAX_DEPTH:
                 why = why or WHY_DEEP
             else:
-                inner, inner_crude = _records(string, d, depth + 1, scripts, fields)
+                inner, inner_crude = _records(string, d, depth + 1, scripts, fields, later)
                 if inner_crude:
                     why = why or WHY_QUOTE
                 for _, t2, _, rest2, _, _, _ in inner:
@@ -3312,6 +3350,15 @@ def _records(s, cwd, depth, scripts=None, fields=True):
                         why = WHY_EVAL_CD
         out.append((d, t, wrapper + ("\x1d" + why if why else ""), rest, assigns, field, depth))
         out.extend(inner)
+    if outermost:
+        # The held back records, in the order they were met, each walked as a command of its own
+        # at the depth it was found at. One may hold back more (a string of its own that only
+        # the crude cut reads), which join the end of the same queue.
+        n = 0
+        while n < len(later):
+            d, t, at = later[n]
+            n += 1
+            out.extend(_records("", "", at, scripts, fields, later, [(d, t)])[0])
     return out, crude
 
 

@@ -581,6 +581,12 @@ refused "the merge helper run from a Monitor is refused"
 mon $'(true & bash other.sh) ; x=$(bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash)\necho \'never closed'
 refused "#3786 the merge helper in a Monitor the reader cannot read, behind another script after a single ampersand, is refused"
 says "#3786 as the merge helper" "runs the merge helper"
+# The same one wrapper down: the text is one the reader reads, and the string it hands eval is not.
+# The records of that string the cut has since learned to list must come after the helper's too,
+# which stands later in the outer text: after every record the whole text gave before.
+mon $'eval \'true & bash other.sh; echo "never closed\' ; bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash'
+refused "#3786 the merge helper in a Monitor after an eval whose string the reader cannot read, which holds another script after a single ampersand, is refused"
+says "#3786 as the merge helper, after the eval" "runs the merge helper"
 mon 'tail -n +1 -f /tmp/x/merge.log | grep --line-buffered -E "merged|Stopped"'
 allowed "watching the merge helper's log is allowed"
 mon 'until ! pgrep -f "merge-when-ready.sh 923" >/dev/null; do sleep 15; done; tail -3 /tmp/x/merge.log'
@@ -972,6 +978,8 @@ rs_says "runs-script finds the helper run by path" 'bash ~/.claude/hooks/lib/mer
 rs_says "runs-script answers 10 when nothing runs it" 'tail -f /tmp/x/merge-when-ready.log' 10
 rs_says "#3786 runs-script finds the helper in a text the reader cannot read, behind another script after a single ampersand" \
   $'(true & bash other.sh) ; x=$(bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash)\necho \'never closed' 0
+rs_says "#3786 runs-script finds the helper after an eval whose string the reader cannot read and which holds another script after a single ampersand" \
+  $'eval \'true & bash other.sh; echo "never closed\' ; bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash' 0
 run_crashpy "$MON_GATE" "$(bash_payload 'until PR_REVIEW_READ=$k bash ~/.claude/hooks/lib/merge-when-ready.sh 2679 --squash; do sleep 60; done' '' Monitor)"
 refused "a reader that crashes still refuses the merge helper run from a Monitor"
 says "saying it could not read it" "could not read it"

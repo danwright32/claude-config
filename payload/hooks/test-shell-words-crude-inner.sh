@@ -457,7 +457,7 @@ for line in ("echo mycoproc git push origin main", "echo coproc=1 x", "echo ${x}
 
 # ---- R3: a text the reader can read never reaches the crude reader -------------------------------
 asked = []
-real = sw.crude_commands
+real = sw.crude_split
 
 
 def spy(s, cwd=""):
@@ -465,13 +465,19 @@ def spy(s, cwd=""):
     return real(s, cwd)
 
 
-sw.crude_commands = spy
+# crude_split is the name the reader's walk reaches the cut by (crude_commands is its two parts
+# joined). The spy is seen to hear a text the reader cannot read, or a rename would leave it deaf
+# and every row below would pass unasked.
+sw.crude_split = spy
+sw._records("echo a" + OPEN, "", 0)
+row("the spy on the crude reader hears a text the reader cannot read",
+    "" if asked == ["echo a" + OPEN] else "it heard %r" % (asked,))
 for what, text in INSIDE:
     del asked[:]
     records, crude = sw._records(text, "", 0)
     row("%s, in a text the reader can read: the crude reader is never asked" % what,
         "" if not crude and not asked else "crude=%r, asked %d times" % (crude, len(asked)))
-sw.crude_commands = real
+sw.crude_split = real
 
 
 # ---- R2: every record the cut gave before, it still gives ----------------------------------------
@@ -613,6 +619,150 @@ row("over the same texts, every record's text is written in the text it was cut 
 # Without this the five rows above would pass on a reader that lists nothing new.
 row("the made up texts reach the new listing (some text is given more records than before)",
     "" if more >= TEXTS // 10 else "only %d of %d texts were given more records" % (more, TEXTS))
+
+
+# ---- the whole reading: what a caller is handed, at any depth -------------------------------------
+# The cut is reached below the top as well: a text the reader reads may hand eval or a shell a string
+# it cannot read, and that string's records stand right after the wrapper's, ahead of the commands
+# that follow the wrapper in the outer text. With the cut's new records among them, the Monitor gate
+# allowed the merge helper written after such an eval (the second fixer of claude-config#3786's pull
+# request reproduced it). So the rule is held for what a caller is handed, not for the cut alone:
+# for every text, the list _records gave before this change is the START of the list it gives now,
+# record for record with its folder, its wrapper and reason and its depth, and so are every_command's
+# and read's. Every record that exists only because of #3786 comes after all of them.
+def as_it_was(ask):
+    """(what ask() gives with the cut as claude-config#3473 left it, how many times that cut was
+    asked). The reader's walk over the old cut is the whole reading every caller had before
+    claude-config#3786. Both names the walk may reach the cut by are swapped, so this is the old
+    reading whichever of them _records calls."""
+    count = [0]
+
+    def old(s, cwd=""):
+        count[0] += 1
+        return cut_3473(s, cwd)
+
+    names = [n for n in ("crude_commands", "crude_split") if hasattr(sw, n)]
+    saved = [getattr(sw, n) for n in names]
+    sw.crude_commands = old
+    if "crude_split" in names:
+        sw.crude_split = lambda s, cwd="": (old(s, cwd), [])
+    try:
+        return ask(), count[0]
+    finally:
+        for n, fn in zip(names, saved):
+            setattr(sw, n, fn)
+
+
+def quoted(s):
+    """s as one single quoted word of a shell."""
+    return "'" + s.replace("'", "'\\''") + "'"
+
+
+HELPER = "bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash"
+# The text the Monitor gate allowed: readable at the top, eval's string read by the cut.
+text = "eval 'true & bash other.sh; echo \"never closed' ; " + HELPER
+(was, _), asked_old = as_it_was(lambda: sw._records(text, "", 0))
+now = sw._records(text, "", 0)[0]
+shells = [r[1].strip() for r in now if sw.program_field(r[1])[0].split()[:1] == ["bash"]]
+row("#3786 a script after a single ampersand inside eval's unreadable string comes after the merge helper written after the eval",
+    "" if not unreadable(text) and asked_old == 1 and shells == [HELPER, "bash other.sh"]
+    else "the commands that run bash, in order: %r" % (shells,))
+row("#3786 the same text: every record the whole reading gave before is the start of it, and more follows",
+    "" if kept_first(was, now) and len(now) > len(was) else "it gave %r, it gives %r" % (
+        [r[1] for r in was], [r[1] for r in now]))
+# A record put at the end keeps the folder and the depth it was found with.
+text = "cd /tmp/y ; bash -c 'cd /tmp/z ; true & git push origin main; echo \"never closed' ; echo done"
+now = sw._records(text, "/s", 0)[0]
+done = [n for n, r in enumerate(now) if r[1].strip() == "echo done"]
+late = [(r[0], r[6]) for r in now[done[0] + 1:] if r[5].startswith("git\x1dpush")] if done else None
+row("#3786 a push after a single ampersand inside a bash -c string the reader cannot read is listed after the outer text's last command, in the string's own folder and at its own depth",
+    "" if not unreadable(text) and late == [("/tmp/z", 1)] else "pushes after `echo done`, each (folder, depth): %r" % (late,))
+# The script files read are given in the order of the records, the rule a caller pairs them by
+# (lib/push-scope.sh): the one a late record runs is read after the one an old record runs.
+spot = tempfile.mkdtemp(prefix="scripts-", dir=scratch)
+for name in ("a.sh", "b.sh"):
+    with open(os.path.join(spot, name), "w") as f:
+        f.write("echo in %s\n" % name)
+text = "eval 'true & bash b.sh; echo \"never closed' ; bash a.sh"
+read_now = []
+now = sw.every_command(text, spot, read_now)
+read_was = []
+was, _ = as_it_was(lambda: sw.every_command(text, spot, read_was))
+after = {}
+for n, r in enumerate(now[:-1]):
+    if r[1].strip() in ("bash a.sh", "bash b.sh") and now[n + 1][4] == r[4] + 1:
+        after[r[1].strip()] = now[n + 1][1].strip()
+row("#3786 the script a late record runs is read after the script an old record runs, each script's commands right after its own record",
+    "" if [os.path.basename(p) for p, _ in read_now] == ["a.sh", "b.sh"] and read_was == read_now[:1]
+    and after == {"bash a.sh": "echo in a.sh", "bash b.sh": "echo in b.sh"} and kept_first(was, now)
+    else "scripts read: %r, before: %r, what follows each: %r" % (
+        [p for p, _ in read_now], [p for p, _ in read_was], after))
+# Made up texts: a string of the same bits as above, half of them with a quote left open so the
+# reader cannot read it, handed to each wrapper, with commands of the outer text before and after.
+WRAPS = (
+    ("eval", lambda s: "eval " + quoted(s)),
+    ("bash -c", lambda s: "bash -c " + quoted(s)),
+    ("sh -c", lambda s: "sh -c " + quoted(s)),
+    ("zsh -c", lambda s: "zsh -c " + quoted(s)),
+    ("an eval inside a $( )", lambda s: "x=$(eval " + quoted(s) + ")"),
+    ("a $( ) written bare", lambda s: "x=$(" + s + ")"),
+    ("a shell's string in a function body", lambda s: "f() { bash -c " + quoted(s) + "; }; f"),
+    ("a function body written bare", lambda s: "f() { " + s + "; }; f"),
+    ("an eval inside a bash -c", lambda s: "bash -c " + quoted("eval " + quoted(s) + " ; echo mid")),
+)
+HEADS = ("", "cd /tmp/h ; ", "true && ")
+TAILS = (HELPER, "git push origin main", "cd /tmp/y ; gh pr merge 5 --squash", "echo done")
+wrapped_rng = random.Random(3786)
+PER_WRAP = 150
+behind_whole = below = late_texts = 0
+first_behind_whole = ""
+reached = collections.Counter()
+for kind, wrap in WRAPS:
+    for _ in range(PER_WRAP):
+        inner = "".join(wrapped_rng.choice(BITS) for _ in range(wrapped_rng.randint(1, 10)))
+        if wrapped_rng.random() < 0.5:
+            inner += "; echo \"never closed"
+        text = wrapped_rng.choice(HEADS) + wrap(inner) + " ; " + wrapped_rng.choice(TAILS)
+        top = unreadable(text)
+        bad = ""
+        for folder in FOLDERS:
+            (was, was_crude), asked_old = as_it_was(lambda: sw._records(text, folder, 0))
+            now, now_crude = sw._records(text, folder, 0)
+            if not kept_first(was, now) or was_crude != now_crude:
+                bad = bad or "_records of %r read in %r: it gave %r, it gives %r" % (
+                    text, folder, [(r[0], r[1], r[2], r[6]) for r in was], [(r[0], r[1], r[2], r[6]) for r in now])
+            was_every, _ = as_it_was(lambda: sw.every_command(text, folder))
+            if not kept_first(was_every, sw.every_command(text, folder)):
+                bad = bad or "every_command of %r read in %r" % (text, folder)
+            if not top and asked_old:
+                below += folder == ""
+                if len(now) > len(was):
+                    late_texts += folder == ""
+                    reached[kind] += folder == ""
+        (was_read, was_rc), _ = as_it_was(lambda: sw.read(text))
+        now_read, now_rc = sw.read(text)
+        if was_rc != now_rc or not kept_first(was_read.split("\x1e")[:-1], now_read.split("\x1e")[:-1]):
+            bad = bad or "read of %r" % (text,)
+        if bad:
+            behind_whole += 1
+            first_behind_whole = first_behind_whole or bad
+row("#3786 over %d made up texts that hand a string to eval, a shell, a $( ) or a function body, each read in two folders, the whole reading as it was before this change is the start of _records', every_command's and read's, record for record"
+    % (len(WRAPS) * PER_WRAP),
+    "" if not behind_whole else "%d texts gave a new record ahead of an old one, or an old one changed, the first: %s"
+    % (behind_whole, first_behind_whole))
+# Without these the row above would pass on texts that never reach the cut below the top, or on a
+# reader that lists nothing new there. Measured 2026-11-27 with this seed: the cut was asked
+# below the top for 826 of the 1,350 texts, 513 of them were given records it did not give before
+# (the same 513 the row above failed on before _records held them back), and each of the seven
+# kinds named below gave between 59 and 81 of those.
+row("the made up wrapped texts reach the cut below the top, in a text the reader itself reads",
+    "" if below >= 300 else "only %d of %d texts did" % (below, len(WRAPS) * PER_WRAP))
+row("#3786 and the cut lists more there than it did (some wrapped text is given late records)",
+    "" if late_texts >= 150 else "only %d of %d texts were given more records" % (late_texts, len(WRAPS) * PER_WRAP))
+for kind in ("eval", "bash -c", "sh -c", "zsh -c", "an eval inside a $( )", "a shell's string in a function body",
+             "an eval inside a bash -c"):
+    row("#3786 late records are reached through %s" % kind,
+        "" if reached[kind] >= 10 else "only %d texts of that kind were given more records" % reached[kind])
 
 
 # ---- the cost of one long piece (the review of claude-config#3786's pull request) ----------------
