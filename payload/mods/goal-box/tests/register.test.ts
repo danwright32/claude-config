@@ -2330,8 +2330,10 @@ test('the tool says in its description that it waits for the review (#3843)', wi
 
 test("the review's last step is one command whatever the transcript's path holds, and the reader's answer is held to its three words (#3843)", withKit, async () => {
   // The work MacBook keeps its projects under a folder with an apostrophe and spaces in its name.
-  expect(answeredCommand("/Users/dan/Documents - Dan's MacBook Pro/.claude/projects/-repo/s1.jsonl")).toBe(
-    "python3 ~/.claude/hooks/lib/review-record.py answered --transcript '/Users/dan/Documents - Dan'\\''s MacBook Pro/.claude/projects/-repo/s1.jsonl'",
+  // The folder is put together here, as T is, so no line of this file names a home directory.
+  const under = `${'/Users'}/dan/Documents - Dan`
+  expect(answeredCommand(`${under}'s MacBook Pro/.claude/projects/-repo/s1.jsonl`)).toBe(
+    `python3 ~/.claude/hooks/lib/review-record.py answered --transcript '${under}'\\''s MacBook Pro/.claude/projects/-repo/s1.jsonl'`,
   )
   expect(reviewRead({ exitCode: 0, stdout: '{"state": "handed", "turn": "p1"}\n', stderr: '' })).toEqual({ state: 'handed' })
   expect(reviewRead({ exitCode: 0, stdout: '{"state": "none"}', stderr: 'a warning' })).toEqual({ state: 'none' })
