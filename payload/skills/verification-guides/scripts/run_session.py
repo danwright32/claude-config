@@ -23,20 +23,37 @@ supervisor is a detached process that started serve in a process group of its ow
 for exactly as long as it lives, and stops serve, runs the project's stop command and removes the
 worktree when any of these happens first: `stop` asks it to, the ready command never succeeds,
 serve exits by itself, the run's deadline (timeouts.max_run_s) passes, the caller's lifeline ends
-(for a run started with one, below), or the supervisor itself fails. If the supervisor is killed outright, `stop` sees its lock free with no stop recorded and
-does the same work itself, by the process group it recorded (L1011). Waiting for the end of a run
-is waiting for that lock, never a poll of a fixed length (L290).
+(for a run started with one, below), or the supervisor itself fails. If the supervisor is killed
+outright before it began any of that, `stop` sees its lock free with no stop recorded and does the
+same work itself, by the process groups it recorded (L1011). Waiting for the end of a run is
+waiting for that lock, never a poll of a fixed length (L290).
 
 A supervisor never signals a process or group number unless something it holds pins that number to
 its own child (the second claude-config#3807 review). A group's number is its leader's pid, and it
 stays the group's only while the leader is a child of the supervisor that has not been collected.
 After that the system hands the number to a new process within minutes, and a signal sent to it
 lands on a stranger. So serve is collected LAST: the supervisor watches for it to go without
-collecting it, ends what is left of its group, and only then collects it. Every signal a
-supervisor sends goes through signal_own, which sends nothing for a child already collected, and
-no supervisor signals a number read from the receipt. What cannot be signalled is said in the
-receipt's stop_detail and left. `stop`, doing a killed supervisor's work, is the exception: it has
-no child to hold, so the numbers it signals from the receipt are pinned by nothing.
+collecting it, signals what is left of its group and waits for that, and only then collects it,
+whether or not the group was empty by then. Every signal this file sends to a child's group goes
+through signal_own, which sends nothing for a child already collected, and no supervisor signals a
+number read from the receipt. The egress monitor, which runs inside the supervisor, sends three
+signals of its own that do not go through signal_own (egress.py: two in stop_stream, one in
+_end_beat_program); the notes above signal_own say what holds each. What cannot be signalled is
+said in the receipt's stop_detail and left.
+
+`stop`, finding the supervisor gone with no ending recorded, is the exception: it has no child to
+hold, so a number it signals from the receipt is pinned by nothing. It signals one only for a
+supervisor that never began to end its children itself (the third #3807 review). The supervisor
+keeps a file beside the receipt, `recover-by-receipt`, from before it starts its first child, and
+removes it as its first act when it begins to end its children, in a stop and in a cut off alike;
+removing a file works on a disk with no room left, where nothing new can be written. While the
+file is there, the supervisor was killed outright and `stop` goes by the receipt's numbers. Once
+it is gone, the supervisor ended those groups itself or left, the numbers may be anybody's, and
+`stop` signals nothing: it records the run as `recovered` and unmeasured, and stop_detail names
+the groups it did not signal. The price is a supervisor killed outright after it removed the file
+and before it recorded its ending: what was left of its groups then is not ended by a later
+`stop`, and the receipt says so. A run started by a version of this file older than
+`recover-by-receipt` has no such file, and `stop` treats it the same way.
 
 The supervisor starts in a session of its own because the run must outlive `start`: `start`
 returns once serve is ready, and `drive` and `stop` come later from other processes, so in real use
@@ -66,10 +83,12 @@ stands, then ends the run itself from the lifeline's thread, under a limit of it
 kills serve's group and the report stream's group, each only while the supervisor still holds that
 child uncollected, collects serve last, runs the
 project's stop command if the stop had not, removes the worktree, and writes the receipt with the
-reason, a `stop_detail` saying the stop did not finish, and egress `unmeasured`: the monitor is never
-asked for a verdict on a run that was cut off. A cut off that fails or reaches its own limit writes
-nothing, and the receipt then has no ending, which never passes for clean either. A run with no
-lifeline whose stop hangs anywhere else
+reason, a `stop_detail` saying the stop did not finish and naming any group it did not signal, and
+egress `unmeasured`: the monitor is never
+asked for a verdict on a run that was cut off. A cut off that fails or reaches its own limit kills
+those two groups, writes nothing and leaves. The receipt then has no ending, which never passes for
+clean either, and a later `stop` records the run as recovered without signalling anything (above).
+A run with no lifeline whose stop hangs anywhere else
 is still not ended by anything; `stop` reports it as supervisor-hung.
 
 One run per project at a time: the supervisor also holds a lock keyed by the checkout's path, so a
@@ -130,8 +149,14 @@ import verification as v  # noqa: E402
 EGRESS_WHY = "the run has not stopped yet, and its egress verdict is written when it does"
 EGRESS_RECOVERED = ("the supervisor was gone without stopping serve, and the egress monitor it ran went with"
                     " it, so this run's connections were not all seen")
+EGRESS_LEFT = ("the supervisor was gone before it recorded how the run ended, and the egress monitor it ran went"
+               " with it, so this run's connections were not all seen")
 EGRESS_CUT_OFF = ("the run was cut off before its stop had finished (%s), and the egress monitor is never asked"
                   " for a verdict on a run that was cut off, so this run's connections were not all seen")
+# The file a supervisor keeps beside its receipt for as long as a later `stop` may recover the run
+# by the process group numbers in the receipt, and what it holds (see forbid_recovery). The `stop`
+# that reads it can be a later version of this file than the supervisor that wrote it.
+RECOVER_BY_RECEIPT, RECOVER_BY_RECEIPT_SAYS = "recover-by-receipt", "held\n"
 STOP_REASONS = ("stop", "ready_failed", "caller_gone")
 READY_ATTEMPT_MAX_S = 30
 GONE_POLL_S = 0.05
@@ -331,6 +356,68 @@ def requested_reason(rdir, unrecorded="stop"):
 
 
 # ---------------------------------------------------------------------------------------------
+# whether a later `stop` may recover a run by the numbers in its receipt (the third #3807 review)
+#
+# `stop`, finding the supervisor gone with no ending recorded, can only go by the two process group
+# numbers the receipt holds, and nothing pins those. That is sound for one case alone: a supervisor
+# killed outright before it began to end its children, whose serve is as a rule still running and
+# still has its number. A supervisor that began to end its groups itself, in a stop or a cut off,
+# and then died or left before it could record an ending (a full disk is enough) leaves the same two
+# numbers in the receipt with nothing behind them, and a signal to one lands on whatever has it now.
+#
+# So the supervisor says which case it is, in a file beside the receipt. It makes the file before
+# it starts its first child, while a write can still be refused loudly, and REMOVES it as its first
+# act when it begins to end its children. Removing a file is the one thing here that works on a
+# disk with no room left (measured on a full APFS volume, 2026-11-27: a new one byte file and a
+# rewritten receipt were refused; unlink, and emptying the file, both worked). `stop` signals a
+# number from the receipt only while that file is there and whole. Gone, empty or unreadable all
+# read as "no": every doubt falls on the side of signalling nothing.
+
+
+def recover_path(rdir):
+    return os.path.join(rdir, RECOVER_BY_RECEIPT)
+
+
+def allow_recovery(rdir):
+    """Say, beside the receipt, that the run's process groups are still the run's: a `stop` that
+    finds this supervisor gone with no ending may end them by the numbers in the receipt. Raises
+    when it cannot be written, and the run then does not start."""
+    with open(recover_path(rdir), "w", errors="replace") as f:
+        f.write(RECOVER_BY_RECEIPT_SAYS)
+
+
+def forbid_recovery(rdir):
+    """Take that back: from here on this supervisor ends its children's groups itself, and their
+    numbers can come free at any moment. Its first act in a stop and in a cut off, before any signal.
+    The file is removed, or emptied where the system will not remove it; neither needs room on the
+    disk. Never raises. False when the file is still there and whole, which is said in the log: a
+    later `stop` would then still go by the receipt's numbers if this supervisor records no ending."""
+    path = recover_path(rdir)
+    for way in (os.unlink, lambda p: os.truncate(p, 0)):
+        try:
+            way(path)
+            return True
+        except FileNotFoundError:
+            return True
+        except OSError as e:
+            refused = "%s: %s" % (type(e).__name__, e)
+    say("verification: %s could not be removed or emptied (%s); if this supervisor records no ending,"
+        " a later stop will signal the process group numbers in the receipt" % (path, refused))
+    return False
+
+
+def recovery_allowed(rdir):
+    """Whether `stop` may end this run's process groups by the numbers in its receipt: only while
+    the supervisor's file is there and whole. A run started by a version of this file older than
+    that file has none, and reads as no."""
+    try:
+        with open(recover_path(rdir), errors="replace") as f:
+            return f.read() == RECOVER_BY_RECEIPT_SAYS
+    except OSError:
+        return False
+
+
+# ---------------------------------------------------------------------------------------------
 # stopping
 
 
@@ -366,11 +453,19 @@ def signal_group(pgid, sig):
 # been collected, whether it is running or has exited. Once it is collected and the group is empty
 # the number is free, and the system gives it to a new process within minutes: on this Mac every
 # number came round about every 90 seconds. A signal sent to it then lands on whatever has it now.
-# So a supervisor signals only through signal_own, which sends while the child is uncollected and
-# not otherwise, and serve is collected in one place, collect, which a stop calls LAST, after it has
-# dealt with serve's group. A number read from the receipt pins nothing, and no supervisor signals
-# one. `stop`, doing the work of a supervisor that was killed, is the one caller that still does:
-# it has no child to hold, and that gap is the recovered path's, older than this rule.
+# So every signal this file sends to a child's group goes through signal_own, which sends while the
+# child is uncollected and not otherwise, and serve is collected in one place, collect, which a stop
+# calls LAST, after it has signalled serve's group and waited for it. A number read from the receipt
+# pins nothing, and no supervisor signals one. Three signals a supervisor sends do NOT go through
+# signal_own: the egress monitor's own, in egress.py (stop_stream, twice, to the report stream's
+# group, and _end_beat_program, to the beat program's). Each follows a poll or a timed out wait on
+# the same child; the stream's are sound because only the main thread collects the stream, and the
+# beat program's has a gap of a few instructions against the heartbeat thread.
+#
+# `stop`, finding the supervisor gone with no ending, is the one caller that signals a number read
+# from the receipt: it has no child to hold. It does so only while the supervisor's file says the
+# groups were never ended by the supervisor itself (see forbid_recovery), which is the case of a
+# supervisor killed outright. Nothing pins the numbers even then, a gap older than this rule.
 
 
 def held(child):
@@ -480,19 +575,23 @@ EXIT_WATCHES = (exit_seen_kqueue if hasattr(select, "kqueue") else None,
 
 
 def exited(child, limit_s):
-    """True once `child` has exited, waiting up to limit_s. The child is NOT collected by this, so
-    its number stays its own and its group can still be signalled by it (see held). A child already
-    collected has exited. A way of watching that fails gives way to the next."""
+    """True once `child` has exited, waiting up to limit_s, and False when it had not by then. The
+    child is NOT collected by this, so its number stays its own and its group can still be signalled
+    by it (see held). A child already collected has exited. A way of watching that fails gives way
+    to the next, and when the last has failed too the answer is None, at once: it CANNOT BE TOLD
+    whether the child has gone. None is never True, so a child nothing can watch is never taken
+    for gone, and nothing is raised into the stop that asked."""
     if not held(child):
         return True
     ways = [w for w in EXIT_WATCHES if w is not None]
-    for way in ways[:-1]:
+    for n, way in enumerate(ways, 1):
         try:
             return way(child.pid, limit_s)
-        except OSError as e:
-            say("verification: %s could not watch process %s (%s: %s); trying another way"
-                % (way.__name__, child.pid, type(e).__name__, e))
-    return ways[-1](child.pid, limit_s)
+        except (OSError, subprocess.SubprocessError) as e:
+            say("verification: %s could not watch process %s (%s: %s); %s"
+                % (getattr(way, "__name__", "a watch"), child.pid, type(e).__name__, e,
+                   "trying another way" if n < len(ways) else "no way of watching it is left"))
+    return None
 
 
 def wait_gone(pgid, timeout_s):
@@ -531,9 +630,10 @@ def finish_egress(rdir, rec, monitor, egress_why, by_receipt=False):
 
     With a monitor (the supervisor's own path) its end canary is fired now, after serve's whole
     group is gone. Without one, nothing measured the run: the reason is recorded as unmeasured.
-    For `stop` doing a killed supervisor's work (by_receipt), a stream that supervisor left running
-    is stopped by the process group it recorded (L1011): nothing pins that number, and no
-    supervisor takes this path (see held). The monitor's beat program ended by itself when the
+    For `stop` doing the work of a supervisor killed outright (by_receipt, passed only while
+    recovery_allowed), a stream that supervisor left running is stopped by the process group it
+    recorded (L1011): nothing pins that number, and no supervisor takes this path (see held).
+    Without by_receipt and without a monitor nothing is signalled. The monitor's beat program ended by itself when the
     supervisor's death closed its input; the copy of it left in the receipt folder is removed here
     (claude-config#3576).
     """
@@ -598,22 +698,34 @@ def do_stop(rdir, reason, proc=None, detail=None, monitor=None, egress_why=None,
     state a supervisor was found in on 2026-11-26 (claude-config#3820).
 
     A supervisor passes `proc`, the serve it started, and serve is COLLECTED LAST: it is watched
-    until it has gone without being collected, what is left of its group is ended while it still
-    pins the group's number, and only then is it collected (see held). `by_itself` says serve had
-    gone before any stop, and the detail then says what it exited with. `stop`, doing the work of a
-    supervisor that was killed, has no child to hold and passes by_receipt: it alone signals the
-    group numbers the receipt recorded, which nothing pins."""
+    until it has gone without being collected, what is left of its group is signalled and waited
+    for while it still pins the group's number, and only then is it collected (see held), whether
+    or not the group was empty by then. `by_itself` says serve had gone before any stop, and the
+    detail then says what it exited with. A supervisor's first act here, before any signal of its
+    own or of its monitor, is forbid_recovery: from then on a later `stop` signals no number of
+    this run.
+
+    `stop`, finding the supervisor gone with no ending, has no child to hold. While recovery_allowed
+    it passes by_receipt, and it alone then signals the group numbers the receipt recorded, which
+    nothing pins. Otherwise it passes neither, nothing is signalled, and serve_survivors is None
+    where the receipt has a serve group: what ps shows under that number may be a stranger's."""
     rec = read_receipt(rdir)
     stop_exit, detail, stop_s = project_stop(rdir, rec, detail)
     wt = rec.get("worktree") or os.path.join(rdir, "worktree")
     serve_exit, survivors = None, []
+    if not by_receipt:
+        forbid_recovery(rdir)
     if proc is not None:
         signal_own(proc, signal.SIGTERM)
         if not exited(proc, stop_s):
             signal_own(proc, signal.SIGKILL)
-            if not exited(proc, KILLED_WAIT_S):
-                return cut_off(rdir, reason, "serve (process %s) was killed and still could not be collected"
-                               " %ss later" % (proc.pid, KILLED_WAIT_S), detail=detail, proc=proc, monitor=monitor)
+            seen = exited(proc, KILLED_WAIT_S)
+            if not seen:
+                why = ("serve (process %s) was killed and still could not be collected %ss later"
+                       % (proc.pid, KILLED_WAIT_S) if seen is False else
+                       "serve (process %s) was killed, and whether it had gone could not be read: no way of"
+                       " watching it worked" % proc.pid)
+                return cut_off(rdir, reason, why, detail=detail, proc=proc, monitor=monitor)
         if signal_own(proc, signal.SIGTERM) is not None:
             if not wait_gone(proc.pid, stop_s):
                 signal_own(proc, signal.SIGKILL)
@@ -632,6 +744,8 @@ def do_stop(rdir, reason, proc=None, detail=None, monitor=None, egress_why=None,
                 signal_group(pgid, signal.SIGKILL)
                 wait_gone(pgid, stop_s)
         survivors = live_members(pgid)
+    elif rec.get("serve_pgid"):
+        survivors = None  # not signalled and not read: nothing here holds that number
     egress_field = finish_egress(rdir, rec, monitor, egress_why or EGRESS_RECOVERED, by_receipt=by_receipt)
     removed = remove_worktree(rec["repo"], wt)
     return record_ending(rdir, stopped_by=reason, stop_detail=detail,
@@ -639,10 +753,13 @@ def do_stop(rdir, reason, proc=None, detail=None, monitor=None, egress_why=None,
                          serve_survivors=survivors, egress=egress_field)
 
 
-def end_held(proc, monitor):
+def end_held(rdir, proc, monitor):
     """SIGKILL the group of each child this supervisor still holds: its serve, and the report stream
-    of its monitor. Never raises and never waits. Returns what signal_own said of each, which is
-    None for one that was not signalled because nothing pins its number any longer."""
+    of its monitor. First, and here so that no caller can leave it out, forbid_recovery: once these
+    groups are killed their numbers come free, and no later `stop` may go by them. Never raises and
+    never waits. Returns what signal_own said of each, which is None for one that was not signalled
+    because nothing pins its number any longer."""
+    forbid_recovery(rdir)
     said = []
     for child in (proc, getattr(monitor, "proc", None)):
         try:
@@ -660,8 +777,12 @@ def cut_off(rdir, reason, why, detail=None, proc=None, monitor=None):
     group and the report stream's group, each only while the supervisor still holds that child
     uncollected (see held), and never by a number read from the receipt or by matching a command
     (L1011). A group whose child was already collected is NOT signalled: the receipt's detail says
-    so, and that anything left of it may still be running. Serve is collected last, once its group
-    is dealt with. It runs the project's stop command if the stop had not, and removes the worktree.
+    so, and that anything left of it may still be running, and says the same of a group the stop
+    had already dealt with and left survivors in. Serve is collected last, once its group has been
+    signalled and waited for. It runs the project's stop command if the stop had not, and removes
+    the worktree. Before its first signal it takes back the leave a later `stop` had to recover the
+    run by the receipt's numbers (see forbid_recovery), so a cut off that then cannot record its
+    ending leaves no number to be signalled.
 
     The receipt then says the run was cut off and why, and its egress is unmeasured. The monitor is
     never asked for a verdict here: a run that was cut off was not watched to its end, so no reading
@@ -673,8 +794,9 @@ def cut_off(rdir, reason, why, detail=None, proc=None, monitor=None):
             return rec
         say("verification: cutting the run off: %s" % why)
         stream = getattr(monitor, "proc", None)
-        serve_sent, stream_sent = end_held(proc, monitor)
-        gone = serve_sent is not None and exited(proc, KILLED_WAIT_S)
+        serve_sent, stream_sent = end_held(rdir, proc, monitor)
+        # True, False, or None when no way of watching serve works: then it cannot be told.
+        gone = exited(proc, KILLED_WAIT_S) if serve_sent is not None else False
         detail = (detail + "; " if detail else "") + "the stop did not finish and the run was cut off: %s" % why
         stop_exit, detail, _ = project_stop(rdir, rec, detail)
         serve_exit, survivors, unsent = None, [], []
@@ -686,9 +808,13 @@ def cut_off(rdir, reason, why, detail=None, proc=None, monitor=None):
                 survivors = live_members(proc.pid)
             except v.VerificationError as e:  # ps failed: said, and the ending still recorded
                 survivors, detail = None, detail + "; whether serve's group is empty could not be read: %s" % e
-            serve_exit = collect(proc, COLLECT_S if gone else 0)
+            # Seen to go, or killed with no way to see: collecting waits on the exit itself. Seen NOT
+            # to go in KILLED_WAIT_S: one look, and no further wait.
+            serve_exit = collect(proc, 0 if gone is False else COLLECT_S)
         elif proc is not None and rdir in LEFT:
             serve_exit, survivors = proc.returncode, LEFT[rdir]  # the stop had dealt with serve's group
+            if survivors:  # they outlived the stop's own SIGKILL, and this cut off sends them nothing more
+                unsent.append("serve's process group (%s)" % proc.pid)
         elif proc is not None or rec.get("serve_pgid"):
             serve_exit, survivors = getattr(proc, "returncode", None), None
             unsent.append("serve's process group (%s)" % (proc.pid if proc is not None else rec["serve_pgid"]))
@@ -729,14 +855,15 @@ def cut_off_and_leave(rdir, reason, why, proc=None, monitor=None, limit_s=None, 
     The cut off has a limit of its own, limit_s (the project's stop_s and CUT_OFF_ROOM_S when not
     given), because it writes the receipt and runs ps and git, any of which can block. At the limit
     the process leaves anyway with no ending recorded, and a later `stop` finds the supervisor gone
-    and records the run as recovered, which is unmeasured too.
+    and records the run as recovered, which is unmeasured too. That `stop` signals nothing: the
+    kill below has freed both numbers in the receipt, and end_held says so first (forbid_recovery).
 
     Whatever fails here, a log that cannot be written and a limit that cannot be set included, this
     ends in `leave`, and the children the supervisor still holds are killed before it does: once it
-    has left, nothing else would ever end them (the second #3807 review)."""
+    has left, nothing else would ever end them (the second and third #3807 reviews)."""
 
     def out():
-        end_held(proc, monitor)
+        end_held(rdir, proc, monitor)
         leave()
 
     timer = None
@@ -875,6 +1002,10 @@ def supervise(rdir, repo_lock_fd, pipe_w, lifeline_fd=None):
             # The egress monitor starts BEFORE serve, so it covers serve's whole life, and is proved live
             # by its canary first. One that cannot start leaves serve running unwrapped and the verdict
             # unmeasured with its reason: a run is never refused for it, and never called clean.
+            #
+            # Before the first child there is: from here until this supervisor begins to end its
+            # children itself, a `stop` that finds it gone may end them by the receipt's numbers.
+            allow_recovery(rdir)
             monitor = egress.Monitor(rdir, rec["receipt_id"], doc["egress"]["allow"], doc["timeouts"]["egress_s"])
             unavailable = monitor.start()
             wrap = None if unavailable else [monitor.sandbox, "-f", monitor.profile]
@@ -902,7 +1033,11 @@ def supervise(rdir, repo_lock_fd, pipe_w, lifeline_fd=None):
                 # Serve is watched for and NOT collected here: it is collected last, by the stop, once
                 # its group is dealt with, so that its pid still pins the group's number (see held).
                 # A stop signal raises StopRequested out of the watch.
-                outcome = ("serve_exited" if exited(proc, deadline_s(doc)) else "deadline", None)
+                seen = exited(proc, deadline_s(doc))
+                if seen is None:  # neither "serve exited" nor "the deadline passed": it cannot be told
+                    raise OSError(errno.EIO, "serve (process %s) could not be watched by any way this machine"
+                                  " has, so the run was stopped" % proc.pid)
+                outcome = ("serve_exited" if seen else "deadline", None)
         except StopRequested:
             if outcome is None:  # else the run had already ended another way, and that stands
                 outcome = (requested_reason(rdir, "caller_gone" if gone.is_set() else "stop"), None)
@@ -1180,6 +1315,22 @@ def summary(rec):
     return json.dumps({k: rec.get(k) for k in keys})
 
 
+def left_unsignalled(rec):
+    """The stop_detail of a run whose supervisor is gone with no ending and whose process groups
+    `stop` may not end by number (see recovery_allowed): which groups it did not signal, and why."""
+    groups = [what % rec[key] for what, key in (("serve's process group (%s)", "serve_pgid"),
+                                                ("the report stream's process group (%s)", "egress_monitor_pgid"))
+              if rec.get(key)]
+    detail = "the supervisor was gone and had recorded no ending"
+    if groups:
+        detail += ("; not signalled: %s. Nothing beside the receipt says a number in it is still this run's: the"
+                   " supervisor had begun to end its process groups itself, or had left by a cut off, before it"
+                   " was gone, or the run was started by a version of the harness that kept no such record. A"
+                   " number may by now be another program's, and anything left of the run under it may still be"
+                   " running" % " and ".join(groups))
+    return detail
+
+
 def stop(rid):
     rdir = v.receipt_dir(rid)
     rec = v.load_receipt(rid)
@@ -1190,16 +1341,25 @@ def stop(rid):
         wait_for_supervisor(rdir, timeout_s=stop_wait_s(timeouts))
         rec = read_receipt(rdir)
         if not rec.get("stopped_at"):
-            # The supervisor is gone and stopped nothing: killed outright. Do its work here, holding
-            # its lock so two recoveries cannot overlap.
+            # The supervisor is gone and recorded no ending. Do what is left of its work here,
+            # holding its lock so two recoveries cannot overlap.
             with open(os.path.join(rdir, "supervisor.lock"), "a", errors="replace") as lock:
                 fcntl.flock(lock, fcntl.LOCK_EX)
                 rec = read_receipt(rdir)
-                if not rec.get("stopped_at"):
-                    # By the numbers the receipt recorded: this process has no child to hold, so
-                    # nothing pins them (see held). The one path that still signals such a number.
+                if rec.get("stopped_at"):
+                    pass  # another recovery got there first
+                elif recovery_allowed(rdir):
+                    # Killed outright before it began to end its children. By the numbers the
+                    # receipt recorded: this process has no child to hold, so nothing pins them
+                    # (see held). The one path that signals such a number.
                     rec = do_stop(rdir, "recovered", detail="the supervisor was gone without stopping serve",
                                   by_receipt=True)
+                else:
+                    # It had begun to end its children itself, in a stop or a cut off, and died or
+                    # left before it could record an ending; or the run was started by a version of
+                    # this file older than the supervisor's file. Either way nothing says the
+                    # receipt's numbers are still this run's, so none is signalled.
+                    rec = do_stop(rdir, "recovered", detail=left_unsignalled(rec), egress_why=EGRESS_LEFT)
     print(summary(rec))
     if rec.get("serve_survivors"):
         v.fail("serve-survived", "serve processes %s outlived the stop" % rec["serve_survivors"])
@@ -1212,9 +1372,14 @@ def status(rid):
 
 
 def main(argv):
-    # A caller that ignores SIGCHLD hands that on, and the system then collects every child of this
-    # process the moment it exits: no child would pin its number (see held), and every exit would
-    # read as 0. Only the main thread may set a signal's action, and this is always run on it.
+    # SIGCHLD is set back to its default. Where the system acts on an ignored SIGCHLD it collects
+    # every child of the process the moment the child exits, and then no child would pin its number
+    # (see held) and every exit would read as 0. Linux acts on a setting inherited from the caller.
+    # This Mac does not (measured 2026-11-27, the third #3807 review: the exited child of a program
+    # that had inherited the ignore stayed uncollected until it was waited for) and acts only on a
+    # program that set the ignore itself. So for a supervisor that `start` launches on macOS this
+    # line changes nothing, and nothing in this file rests on it there. Only the main thread may set
+    # a signal's action, and this is always run on it.
     if threading.current_thread() is threading.main_thread():
         signal.signal(signal.SIGCHLD, signal.SIG_DFL)
     if argv[:1] == ["_supervise"] and len(argv) in (4, 5):

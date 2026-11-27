@@ -122,7 +122,13 @@ failed copy), `start_interrupted` an interrupt. `stop_detail` carries the error 
 cleanup step that also failed, which `start` reports too, as `start-cleanup-failed`. A stop that
 could not finish is cut off (a killed serve that could not be collected, or a run whose caller was
 gone and whose stop was still going after the longest a working stop can take): `stop_detail` then
-says the run was cut off and why, and `egress` reads `unmeasured`, never a verdict.
+says the run was cut off and why, and `egress` reads `unmeasured`, never a verdict. `recovered`
+means `stop` found the supervisor gone with no ending recorded. `stop` then ends the run's process
+groups by the numbers in the receipt only if the supervisor was killed outright before it began to
+end them itself, which the file `recover-by-receipt` beside the receipt says for as long as it is
+there. Once the supervisor has removed that file, `stop` signals nothing, because those numbers may
+by then be another program's: `stop_detail` names the groups it did not signal, and anything left
+of the run under them may still be running.
 
 The receipt's `egress` is the verdict of the egress monitor, [scripts/egress.py](scripts/egress.py),
 which the run's supervisor starts before serve and settles after serve's whole process group is
