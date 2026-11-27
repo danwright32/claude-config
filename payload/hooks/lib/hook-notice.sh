@@ -74,6 +74,12 @@
 #       its permissionDecisionReason unless it is empty, plus <notice> as a systemMessage when one
 #       is given. For a hook that lets a call through and has something to say beside it
 #       (db-write-ask.sh, claude-config#3058).
+#   hook_deny_json <reason> [<notice>]
+#       print a PreToolUse deny: hookSpecificOutput with permissionDecision "deny" and <reason> as
+#       its permissionDecisionReason, which refuses the call and hands Claude the reason, plus
+#       <notice> as a systemMessage when one is given. For a hook that asks while Dan is awake and
+#       refuses while he is asleep, and leaves with status 0 either way
+#       (connector-change-ask.sh, claude-config#3618).
 #   hook_notice_verdict <stdout> <ERE>
 #       for the suites: print why <stdout> is not exactly one JSON object whose systemMessage
 #       matches <ERE> (Python's re), or nothing when it is.
@@ -166,9 +172,9 @@ print(json.dumps(out))' 2>/dev/null && return 0
   printf '{"hookSpecificOutput": {"hookEventName": "%s", "additionalContext": "%s"}}\n' "$event" "$inside"
 }
 
-# _hn_decision_json <ask|allow> <reason> [<notice>]: a PreToolUse decision with its reason, plus
-# <notice> as a systemMessage when one is given. An allow with no reason carries none; an ask
-# always carries its reason, empty or not.
+# _hn_decision_json <ask|allow|deny> <reason> [<notice>]: a PreToolUse decision with its reason,
+# plus <notice> as a systemMessage when one is given. An allow or a deny with no reason carries
+# none; an ask always carries its reason, empty or not.
 _hn_decision_json() {
   local decision="$1" reason="$2" notice="${3:-}" inside=""
   if command -v python3 >/dev/null 2>&1; then
@@ -196,6 +202,8 @@ print(json.dumps(out))' 2>/dev/null && return 0
 hook_ask_json() { _hn_decision_json ask "$1" "${2:-}"; }
 
 hook_allow_json() { _hn_decision_json allow "$1" "${2:-}"; }
+
+hook_deny_json() { _hn_decision_json deny "$1" "${2:-}"; }
 
 hook_allow_notice() {
   printf '%s\n' "$1" >&2
