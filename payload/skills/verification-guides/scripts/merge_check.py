@@ -206,6 +206,20 @@ def _merge_base(cmp):
     return sha if v.SHA_RE.match(sha) else None
 
 
+def _merge_since(cmp):
+    """Whether a merge commit came between a compare's two commits, in the words the refusal uses:
+    that one did when GitHub lists one, that one may have when it lists none but its list stops
+    short of all the commits, and None when its whole list holds none."""
+    commits = cmp.get("commits") if isinstance(cmp.get("commits"), list) else []
+    if any(isinstance(c, dict) and isinstance(c.get("parents"), list) and len(c["parents"]) > 1 for c in commits):
+        return "a merge into the branch came since"
+    total = cmp.get("total_commits")
+    if isinstance(total, int) and not isinstance(total, bool) and total > len(commits):
+        return "GitHub lists only the first %d of the %d commits since, so a merge into the branch may be among the" \
+               " rest" % (len(commits), total)
+    return None
+
+
 def _cut(cmp):
     """Whether a compare's list of files is at GitHub's cap, so a file may be among those left out."""
     return isinstance(cmp.get("files"), list) and len(cmp["files"]) >= COMPARE_FILES_CAP
@@ -612,9 +626,9 @@ class _Verdict:
             self.add("stale-record", name, "its newest record is at %s, and %s, so it says nothing about %s. Run it"
                      " again there%s" % (
                          sha[:7], what, self.head[:7],
-                         " (a merge into the branch came since, and a record outlives one only where each such"
-                         " file's change is the base branch's alone. %s%s)" % (
-                             "; ".join(whys[:LIST_MAX]),
+                         " (%s, and a record outlives one only where each such file's change is the base branch's"
+                         " alone. %s%s)" % (
+                             _merge_since(cmp), "; ".join(whys[:LIST_MAX]),
                              "; and %d more" % (len(whys) - LIST_MAX) if len(whys) > LIST_MAX else "") if whys else ""))
             return False
         return True
@@ -642,11 +656,7 @@ class _Verdict:
         shows no change of mode, so when those three leave every file as the base's change alone,
         one more read gives each file's mode at the four commits, and _why_mode holds that rule.
         """
-        commits = cmp.get("commits") if isinstance(cmp.get("commits"), list) else []
-        total = cmp.get("total_commits")
-        merged = any(isinstance(c, dict) and isinstance(c.get("parents"), list) and len(c["parents"]) > 1 for c in commits)
-        cut = isinstance(total, int) and not isinstance(total, bool) and total > len(commits)
-        if not merged and not cut:
+        if not _merge_since(cmp):
             return [(p, True, None) for p in paths]
         base = str(self.view.get("baseRefOid") or "").lower()
         if not v.SHA_RE.match(base):

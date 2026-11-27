@@ -1010,6 +1010,19 @@ class MainMerged(unittest.TestCase):
         self.assertEqual(out["need"]["diffs"], [{"from": BASE, "to": OLD}, {"from": BASE, "to": HEAD}])
 
 
+    def test_a_cut_commit_list_is_not_said_to_hold_a_merge(self):
+        # The same three compares are read when GitHub's list of the commits since stops short of
+        # them all, and no merge was seen in it. The refusal says that, not that a merge came.
+        own_now = ((20, 1, ["const row20 = 2001;"]), OWN[1])
+        self.merged(rows(), edit(rows(), *OWN), edit(rows(), *MAINS), edit(rows(), *own_now, *MAINS))
+        self.stale(self.f.judge(final=True), "a merge into the branch came since")
+        self.f.compares[OLD].update(commits=[{"sha": "a" * 40, "parents": [{"sha": OLD}]}], total_commits=300)
+        out = self.f.judge(final=True)
+        self.stale(out, "patch to it differs", "GitHub lists only the first 1 of the 300 commits since, so a merge into"
+                   " the branch may be among the rest")
+        self.assertNotIn("a merge into the branch came since", out["text"])
+
+
 class Patches(unittest.TestCase):
     """The patch reader under the #3574 rule: anything it cannot read exactly is not a patch."""
 
