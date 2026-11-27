@@ -5686,7 +5686,8 @@ names is read once for every combination of them empty, the others keeping their
 only with all of them empty at once, `$runner $config posts.sh` with both declared empty passed,
 where the shells run posts.sh whenever the runner has its value (the fourth review, the same
 day: 19 commands that post). That is 3 readings for two names and 63 for six, and a command
-through more than six is refused without being read. A plain assignment, a `local kept=value`
+through more than six is refused: it is read with all of them empty and no other way, and
+refused whatever that reading finds. A plain assignment, a `local kept=value`
 and a bare `local kept` are read one way. Not covered: a name set by one of those three and
 used on a line before it, in another function, or where the assignment is not reached (under a
 condition that is false, in a subshell, a pipeline or a loop that does not run), and a function

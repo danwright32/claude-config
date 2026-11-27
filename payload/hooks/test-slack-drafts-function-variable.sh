@@ -400,8 +400,8 @@ says "typed as a command: saying the names are read both ways" "$BOTH_WAYS"
 says "typed as a command: naming both names" "runs a command through \$how and \$kept"
 says "typed as a command: naming the one read empty" "read with \$kept empty"
 # The readings double with each name, so a command is read every way for at most six of them
-# (63 readings). Past six it is refused without being read, quiet or not, and says why: a
-# reading left out is one that could post. Six names in a quiet command pass, read every way.
+# (63 readings). Past six it is refused, quiet or not, and says why: a reading left out is one
+# that could post. Six names in a quiet command pass, read every way.
 # The command is a shell's, since only a command the gate reads files for has its words written
 # out at all: an echo of seven such names is not read through them and passes as it did.
 MANY="more names than the gate reads every way"
@@ -421,6 +421,29 @@ refused "in a script, a command through seven names read both ways is refused"
 says "in a script, seven names: saying there are more than the gate reads every way" "$MANY"
 run_bash 'run() { local a="" b="" c="" d="" e="" f="" g=""; a=1; b=2; c=3; d=4; e=5; f=6; g=7; echo $a $b $c $d $e $f $g; }; run' "$FV"
 allowed "an echo of seven names read both ways passes: its words are not written out, so it is not read through them"
+# Past six names the reading with every name empty is still made, and made first, as it was at
+# d9c4b89185 before there was a bound. A reason it finds is the answer, in its own words, which
+# name the file that posts. Only the further readings (one name at a time, then every other
+# combination) are left unmade past the bound. At a1d8b23c36 the bound stood before that reading
+# too, so these two were refused with the bound's words alone, which name no file (the fifth
+# review's k01 and k02, 2026-11-27).
+unsaid() { case "$ERR" in *"$2"*) check "$1" "stderr said '$2': ${ERR:0:400}" ;; *) check "$1" ok ;; esac; }
+run_bash 'run() { local a="" b="" c="" d="" e="" f="" g=""; how=bash; $how $a $b $c $d $e $f $g posts.sh; a=quiet.sh; b=2; c=3; d=4; e=5; f=6; g=7; }; run' "$FV"
+refused "a script that posts after seven names read both ways, behind a runner read one way, is refused"
+says "seven names and a file that posts: the reading with every name empty names the file" 'read with $a and $b and $c and $d and $e and $f and $g empty, the script posts.sh runs a command that posts'
+unsaid "seven names and a file that posts: a reason found is given without the words of the bound" "$MANY"
+script 'run() {' '  local a="" b="" c="" d="" e="" f="" g="" h=""' '  how=bash' '  $how $a $b $c $d $e $f $g $h posts.sh' '  a=quiet.sh' '  b=2' '  c=3' '  d=4' '  e=5' '  f=6' '  g=7' '  h=8' '}' 'run'
+judge_script
+refused "in a script, a script that posts after eight names read both ways is refused"
+says "in a script, eight names and a file that posts: the reading with every name empty names the file" 'read with $a and $b and $c and $d and $e and $f and $g and $h empty, the script posts.sh runs a command that posts'
+unsaid "in a script, eight names and a file that posts: a reason found is given without the words of the bound" "$MANY"
+# The runner one of the seven: with every name empty the command is the one word posts.sh, which
+# finds nothing, and the shells run posts.sh wherever the runner has its value and the six names
+# after it are empty. No further reading is made past the bound, so this is refused by the bound.
+run_bash 'run() { local how="" a="" b="" c="" d="" e="" f=""; how=bash; $how $a $b $c $d $e $f posts.sh; a=quiet.sh; b=2; c=3; d=4; e=5; f=6; }; run' "$FV"
+refused "a script that posts past the bound, which the reading with every name empty does not find, is refused by the bound"
+says "past the bound with nothing found: as a check it could not make" "REFUSED: the gate could not check whether this command posts to Slack"
+says "past the bound with nothing found: saying there are more than the gate reads every way" "7 is $MANY"
 # What reading both ways must not refuse: the ordinary function, where the name stands alone in
 # double quotes. Empty, it hands the command an empty word, which names no file, so nothing is
 # run. The quiet twins above the last section (`local kept=""`, then `kept=quiet.sh`, then `bash

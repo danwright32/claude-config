@@ -38,7 +38,9 @@ before the declaration, and wherever the declaring function is another one, whos
 to it. Read with the value alone, `$runner $config posts.sh` was a quiet script handed a file,
 where the shells run posts.sh (third review of #3497, 2026-11-27). A command read through
 several such names is read once for every combination of them empty, the others keeping their
-values, for up to MOST_BOTH names, and is refused unread past that. Read only with all of
+values, for up to MOST_BOTH names. Past that it is read with all of them empty and no other
+way, and refused whatever that reading finds, in that reading's words where it found a reason
+(fifth review, same day: a1d8b23c36 refused it before that reading too). Read only with all of
 them empty at once, `$runner $config posts.sh` with both names declared empty was the one word
 posts.sh, which finds nothing, where the shells run it whenever the runner has its value and
 config has none (fourth review, same day). Which of the two a name has at the command is not
@@ -154,14 +156,16 @@ PLAIN = re.compile(r"\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))")
 NO_FILE = "/dev/null/empty-word"
 # The most names read both ways that one command is read every way for (empty_reason). The
 # readings double with each name: 3 for two names, 15 for four, 63 for six. A command through
-# more of them is refused without being read, quiet or not, since a reading left out is one
-# that could post. Six is where the time stays small beside the gate's one allowance of 11
-# seconds: a typed function of 200 shell commands, each through six such names, was judged in
-# 2.2 seconds against 0.5 before this reading was made (three runs each, one minute load 43,
-# measured 2026-11-27), about 0.13 ms a reading, and each name more doubles that.
+# more of them is refused, quiet or not, since a reading left out is one that could post: it
+# is read with all of them empty, the one reading made before there was a bound, and where
+# that finds nothing the refusal is TOO_MANY. Six is where the time stays small beside the
+# gate's one allowance of 11 seconds: a typed function of 200 shell commands, each through six
+# such names, was judged in 2.2 seconds against 0.5 before this reading was made (three runs
+# each, one minute load 43, measured 2026-11-27), about 0.13 ms a reading, and each name more
+# doubles that.
 MOST_BOTH = 6
 TOO_MANY = (f"is more names than the gate reads every way (it reads at most {MOST_BOTH}, each with its value "
-            "and empty), so this command was not read with any of them empty")
+            "and empty), so this command was not read with only some of them empty")
 
 
 def body_sets(judge, k):
@@ -477,15 +481,18 @@ def empty_reason(judge, text, d, seen, taken, judge_again):
     of #3497 (2026-11-27), then one at a time, then every other combination. All of them at
     once leaves the one word `posts.sh` of that command, which finds nothing, and one at a time
     misses `$how $one $two posts.sh` where one and two are empty. The first reason found is the
-    answer. Past MOST_BOTH names nothing is read and the answer is TOO_MANY, a reason."""
+    answer. Past MOST_BOTH names only the first reading is made, all of them empty, so a reason
+    it finds keeps its words, which name the file that posts. Where it finds none the answer
+    is TOO_MANY, a reason, never None: the readings left unmade are ones that could post. From
+    a1d8b23c36 until the fifth review of #3497 (the same day) the bound stood before that first
+    reading as well."""
     k = kept(judge)
     names = both_ways(judge, k, set(taken))
     if not names:
         return names, names, None
-    if len(names) > MOST_BOTH:
-        return names, names, TOO_MANY
-    judged, order = {text, *seen}, sorted(names)
-    for some in [names] + [set(c) for size in range(1, len(order)) for c in itertools.combinations(order, size)]:
+    judged, order, over = {text, *seen}, sorted(names), len(names) > MOST_BOTH
+    further = [] if over else [set(c) for size in range(1, len(order)) for c in itertools.combinations(order, size)]
+    for some in [names] + further:
         bare = without(text, some)
         k.empty = some
         try:
@@ -498,4 +505,4 @@ def empty_reason(judge, text, d, seen, taken, judge_again):
         reason = judge_again(second)
         if reason:
             return names, some, reason.replace(NO_FILE, "an empty word")
-    return names, names, None
+    return names, names, TOO_MANY if over else None
