@@ -2471,7 +2471,8 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   and the turn's end is held unless an unfinished step on the card shown names the command. The
   prose check keeps its own rule, any unfinished step, since arbitrary prose cannot be matched to
   a step. One step gets one ask: where the only phrase the prose check finds is in the words that
-  hand the command over, the command's ask is the only one given, and a phrase anywhere else in
+  hand the command over, or in the sentence right after them asking to be told it is done ("Tell
+  me when it is done"), the command's ask is the only one given, and a phrase anywhere else in
   the turn keeps its own. Not counted: a command in an offer or a condition (if, could, want me,
   later, a question), judged on the command's own clause, so an aside in brackets and what follows
   "then" do not count against it; a standing rule ("on anything other people will read",
@@ -2480,9 +2481,10 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   line or in a block quote; file text inside a code block; a list the line above it calls the
   session's own plan or examples; a command called an example or named as a skill; a sentence
   that speaks of a web address (endpoint, route, URL, redirect, domain); a block introduced as
-  already typed; and a path. "use" and "enter" are not among the verbs: the independent review of
-  pull request 3677 found them holding a skill ("use the `/db-apply` skill"), a folder and a web
-  address, and no turn held in the count of 2026-11-27 below depended on them. A one word route with nothing said of it
+  already typed; and a path. "use" and "enter" are not among the verbs, after "your next move is
+  to" ("Your next step is to use `/tmp`") as anywhere else; "begin" is read there: the independent
+  review of pull request 3677 found them holding a skill ("use the `/db-apply` skill"), a folder and
+  a web address, and no turn held in the count of 2026-11-27 below depended on them. A one word route with nothing said of it
   ("Start `/login`.") cannot be told from a command and is still held, once, and the ask lets the
   session answer in one line. The review's two lists, seventeen hand overs that passed and eleven
   replies held that handed nothing over, are cases in `tests/typed.test.ts`, held together so a
@@ -2500,13 +2502,18 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   interactive sessions of the 30 days before (3,015 turns, each counted once though a resumed
   session's file repeats them; 7,483 headless and SDK sessions passed over): 44 turns handed Dan
   a command and 37 would be held, 34 with no card shown and 3 beside a card of other unfinished
-  steps, which is the case of the issue. Read one by one, all 37 hand him a command only he can
-  type (27 `/reload-plugins`, 6 `/compact`, 2 `/goal`, 1 `/plan-lite`, 1 `/winddown`), and none
-  is a rule quoted, a route, a path, an example or the session's own plan. The prose check as it
-  stands holds 2 of the 37, so 35 are turns sent back that were not before, a little over one a
-  day. The recogniser as
-  first built holds the same 37 turns, so on this Mac the review's fixes move nothing: none of
-  its wordings, missed or wrongly held, was said in those 30 days. The 37 is higher than the 23
+  steps, which is the case of the issue (27 `/reload-plugins`, 6 `/compact`, 2 `/goal`, 1
+  `/plan-lite`, 1 `/winddown`). The 37 were read in a window around each command's first mention,
+  which need not be the words that held the turn, and judged by the builder: 30 hand Dan a command
+  only he can type now, and 7 are open to question (5 for the morning or for when he is back, 2
+  offered beside another way). The prose check as it stands holds 2 of the 37, so 35 are turns
+  sent back that were not before, a little over one a day. The recogniser as first built holds
+  the same 37 turns, so on this Mac the review's fixes moved no turn between held and not held; a
+  wording said in a turn held for another reason would not show. The count tool was then fixed to
+  read a record's text blocks joined, as the mod does, and to mark the words that held each turn,
+  and was run again the same day after the second review's fixes (3,025 turns in 128 interactive
+  sessions, counts only, no window kept): the same 37 held, the same names, none moved against the
+  recogniser as first built. The 37 is higher than the 23
   of the first count because that count took a command as on the card whenever the session's
   last steps call named it, finished or not; this one follows each card through its steps calls
   and verdicts and asks for an unfinished step. By the first count's rule the same 30 days give

@@ -49,8 +49,11 @@ const TO_DO = new RegExp(String.raw`${LEAD}to [^,:.!?\n*]{1,60}[,:](?:\*\*)?\s+(
 // now run", "remember to type". Never "you can" or "you could", which offer it.
 const YOURS = new RegExp(String.raw`\b(?:until you|till you|you(?:'ll| will)? need to|you have to|you (?:should|must)|needs? you to|remember to)\s+(?:(?:now|next|then|still|just|first|also)\s+)?${VERBS}${OBJECT}`, 'gi')
 // Naming the next move as Dan's: "Your next move is to start `/plan-council`", "Your next step is
-// `/plan-council`", "Your next move: `/plan-council`".
-const NEXT_MOVE = new RegExp(String.raw`\byour (?:next|only|last) (?:move|step|thing to do)\b[^.!?\n]{0,40}?(?:\bis|:(?:\*\*)?)\s+(?:to\s+(?:${VERBS}|begin|use)\s+)?(?:the\s+)?(?:command\s+)?${MARK}(${NAME})${ENDS}`, 'gi')
+// `/plan-council`", "Your next move: `/plan-council`". After "to", the verbs above and "begin", which
+// is said of a command and never of a folder or an address. Not "use", here as anywhere: "Your next
+// step is to use `/tmp`" names a folder (second review of pull request 3677), so "Your next step is
+// to use `/plan-council`" is missed, a hand over said in a wording no turn of the count used.
+const NEXT_MOVE = new RegExp(String.raw`\byour (?:next|only|last) (?:move|step|thing to do)\b[^.!?\n]{0,40}?(?:\bis|:(?:\*\*)?)\s+(?:to\s+(?:${VERBS}|begin)\s+)?(?:the\s+)?(?:command\s+)?${MARK}(${NAME})${ENDS}`, 'gi')
 // A label saying the move is Dan's, then what to do with a command marked as one: "Next is yours:
 // paste the brief below into `/plan-council`", "The next move is yours: start planning with
 // `/plan-council`".
@@ -226,9 +229,17 @@ const straight = (text: string): string => text.replace(/’/g, "'")
 /** The slash commands `text` hands Dan to type, each once, in the order first handed over. */
 export const typedCommands = (text: string): string[] => [...new Set(handed(straight(text)).map(f => f.command))]
 
+// The sentence right after a hand over asking to be told that same command is done: "Tell me when
+// it is done", "Tell me once it's loaded", "Tell me when you have run it". Its "it" can only be the
+// command just handed over, so it is that step, not another (second review of pull request 3677). A
+// report back on anything else ("when you have clicked **Approve**") is another step.
+const REPORTS_BACK = /^\s+(?:please\s+)?tell me\s+(?:(?:when|once)\s+(?:it|that|this)\b|(?:when|once)\s+you(?:'ve| have)\s+(?:done|run|typed|finished)\s+(?:it|that|this)\b|(?:that\s+)?(?:it's|it is|that's|that it's|that it is)\s+(?:done|finished|loaded|in place)\b)[^.!?\n]*(?:[.!?](?=\s|$))?/i
+
 /**
  * `text` without the words that hand over any of `commands`, so what is left can be asked whether
- * it hands Dan another step: one step gets one ask (review of pull request 3677).
+ * it hands Dan another step: one step gets one ask (review of pull request 3677). The words that hand
+ * a command over are its sentence, or its code block and the line that introduces it, with the
+ * sentence after them when that only asks to be told the command is done.
  */
 export const apartFromTyped = (text: string, commands: readonly string[]): string => {
   const plain = straight(text)
@@ -237,7 +248,7 @@ export const apartFromTyped = (text: string, commands: readonly string[]): strin
   // In order, each span taken once: a sentence and the code block it introduces overlap.
   for (const f of handed(plain).filter(f => commands.includes(f.command)).sort((a, b) => a.from - b.from)) {
     if (f.from > kept) left += plain.slice(kept, f.from)
-    kept = Math.max(kept, f.to)
+    kept = Math.max(kept, f.to + (REPORTS_BACK.exec(plain.slice(f.to))?.[0].length ?? 0))
   }
   return left + plain.slice(kept)
 }
