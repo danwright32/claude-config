@@ -318,7 +318,7 @@ check "#3789 and so is an ordinary picker's, since the hook cannot leave a note 
 # root, so a run as root cannot make this state, and says so in place of a result (L411).
 STORE="$WORK/store-readonly"; mkdir -p "$STORE"; printf '' > "$STORE/record.jsonl"; chmod a-w "$STORE/record.jsonl" "$STORE"
 if [ "$(id -u)" = 0 ]; then
-  echo "  UNMEASURED: this run is root's, which a read only record still takes a line from, so the case of a record that cannot be appended to was not run"
+  echo "SUITE-PART-UNMEASURED #3789 the notice for a record that cannot be appended to, because this run is root's, which a read only record still takes a line from"
 else
   run "$PAYLOAD"
   m="$(told "$HOUT")"
