@@ -780,6 +780,11 @@ class MainMerged(unittest.TestCase):
         self.clean_merge()
         self.f.compares[OLD].update(commits=[], total_commits=300)
         self.assertTrue(self.f.judge(final=True)["passed"])
+        # And with those answers not in yet, they are asked for, the same two first.
+        os.remove(os.path.join(self.f.dir, "compare", "%s...%s.json" % (BASE, OLD)))
+        os.remove(os.path.join(self.f.dir, "compare", "%s...%s.json" % (BASE, HEAD)))
+        out = mc.verdict(self.f.dir, home=self.f.home)
+        self.assertEqual(out["need"]["diffs"], [{"from": BASE, "to": OLD}, {"from": BASE, "to": HEAD}])
 
 
 class Patches(unittest.TestCase):
