@@ -2300,9 +2300,15 @@ settled:
   in violet, one line saying where the draft stands, then Copy, Mark sent and Not announcing; the
   row never draws the wording, and Copy copies nothing for wording that failed the claimed check,
   saying why. Mark sent and Not announcing settle it for every session, and only a press of the
-  row's own button does. `/live` lists it. Every session started in that project says it in one
-  line, to Dan and with the session's first prompt. And the turn end of the session whose card found
-  it live is refused once per chain of turn ends.
+  row's own button does. Mark sent settles on one press, since it records that he posted it.
+  Not announcing settles only on a second press (#3847): on 2026-11-27 one press, made by a slip,
+  ended an announcement Dan had approved, for good. The first press records nothing, changes the
+  button's label to `Confirm: not announcing #<number>` and says so; a press within 10 seconds
+  settles it, and left alone the label goes back. A press of Copy or Mark sent disarms it. Armed
+  is that session's own state, never the store, decided by the clock and not by a timer, and a
+  session start forgets it. A settled announcement stays final. `/live` lists it. Every session
+  started in that project says it in one line, to Dan and with the session's first prompt. And the
+  turn end of the session whose card found it live is refused once per chain of turn ends.
 - The merge gate's allow for an announce merge (`require-changelog-tag.sh`) always carries one line
   of context: the merge owes agents a draft, and a session whose card says nothing about it is
   running an old copy of the mod and should run `/reload-plugins`. Nothing the gate decides changes.
@@ -10390,12 +10396,13 @@ cleared, as before.
 A merge labelled `changelog/announce` also owes agents a Slack draft of the wording Dan approved
 (#3667). The mod keeps it in its store outside the cards, the live card asks for the draft, and a
 band row with Copy, Mark sent and Not announcing, `/live`, each session start in that project and
-one refused turn end say it until it is drafted on the claimed wording or Dan settles it. The rules
+one refused turn end say it until it is drafted on the claimed wording or Dan settles it. Not
+announcing settles only on a second press within 10 seconds of the first (#3847). The rules
 are in "An approved announcement is owed as a Slack draft until it is settled (#3667)" above.
 
 </td><td>
 
-#617, #663, #707, #771, #1244, #1271, #2435, #2436, #2515, #2578, #2630, #2653, #2849, #3667
+#617, #663, #707, #771, #1244, #1271, #2435, #2436, #2515, #2578, #2630, #2653, #2849, #3667, #3847
 
 </td></tr>
 <tr><td>
