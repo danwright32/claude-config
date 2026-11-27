@@ -12083,13 +12083,24 @@ pinned them again, so the pin comes back not shown with manual steps' reason for
 added (left there it would come along onto the card when the session pins, while it is still
 working; one that could not be taken back is taken back at the next turn start), sends the
 session one prompt of its own, once per request of Dan's, asking it to check the carried steps
-and pin them again (`CHECK_CARRIED`, holding back a reload of the mod while it waits, #2132), and
-writes one reason naming the carried card and saying the session was asked, was already asked
-for this request, or could not be asked and why (then it is asked again at the next quiet turn
-end). Dan sees the old steps come back with their notification, then the close card below them
-at the next quiet turn end. A session that does not pin them gets no card for that request, and
-a turn that began while the pin was out is not asked. How manual steps holds a carried card is
-unchanged, and a step this session pinned that is still undone keeps the card back as before.
+and pin them again under the titles and links or places they had (`CHECK_CARRIED`, holding back
+a reload of the mod while it waits, #2132), and writes one reason naming the carried card and
+saying the session was asked, was already asked for this request, or could not be asked and why.
+A prompt that could not be sent is tried again while the session stays idle, up to three more
+times one quiet period apart, and after that only at a quiet turn end after the session's next
+turn. What is expected then, and has not yet been seen in a real session: the session pins the
+steps, the old steps card comes back with its notification, and the close card is added below it
+at the next quiet turn end. By the code that needs three things. Each step is pinned under the
+title and link or place it had, which is how manual steps knows it as the earlier session's (the
+same suite holds the prompt to that rule); a step pinned under other words becomes this
+session's own and keeps the close card back until Dan has done it. Dan is at home: manual steps
+holds every card pinned while he is away, and answers the goal box in the same words, so a
+session is asked then too, once for each request that gets a box, and the close card waits until
+he is home and the steps are pinned once more. And the session's reply does not end on a
+question. When every carried step is found done the close card stands alone. A session that does
+not pin them gets no card for that request, and a turn that began while the pin was out is not
+asked. How manual steps holds a carried card is unchanged, and a step this session pinned that
+is still undone keeps the card back as before.
 Invisible to both readings: a
 program that detaches itself without the
 command saying so, and an Apple signed program (a shell, sleep) left behind, whose environment
