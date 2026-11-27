@@ -5,6 +5,7 @@ clause saying what the failure looks like. Read the whole entry before a rule de
 anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.claude/LESSONS.md,
 which is NOT loaded into the session.
 
+- L869. Price a per run CI upload as size times runs a day times retention against the storage quota: a full store refuses the upload a deploy needs.
 - L834. When a PR must contain main's tip to merge, every merge reruns each waiting PR: shorten the test job before adding parallel builders.
 - L833. Price a paid model check as cost per run times merges a day; run it on the cheapest model, and a several model comparison on a schedule.
 - L784. A gate choosing work from a branch's changed files diffs from the merge base, never the upstream tip, or main's changes are blamed on the branch.

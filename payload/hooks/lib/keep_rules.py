@@ -49,7 +49,8 @@ THE TRANSCRIPTS RULE, under ~/.claude/projects/<project>/:
     - a subagent transcript, <project>/<session>/subagents/**/agent-*.jsonl, and its agent-*.meta.json,
       in every project;
     - in a project folder Claude Code keyed to a worktree (its name holds -claude-worktrees-) or to a
-      headless run under /private/tmp (its name is -private-tmp or starts -private-tmp-): the session
+      headless run under /private/tmp or the user temp folder (its name is -private-tmp or
+      -private-var-folders, or starts with either and a dash; run_folder): the session
       transcript <session>.jsonl and every file in the session's own folder <session>/.
   A memory folder is never touched, and nothing else in Dan's own project folders is.
 
@@ -179,8 +180,18 @@ def mb(b):
     return "%.1f MB" % (b / 1048576.0)
 
 
+# Where a headless run starts, by the project folder Claude Code names after its working folder's
+# physical path: /private/tmp, and the user temp folder ($TMPDIR, /private/var/folders/<a>/<b>/T),
+# where the test suites start most of theirs (#3235: 4,827 such project folders, 1,048 MB, on the
+# personal MacBook on 2026-11-26, all kept 30 days as if they were Dan's own until this). Matched
+# from the start of the name only, so a project of Dan's holding the same words partway is his.
+RUN_ROOTS = ("-private-tmp", "-private-var-folders")
+
+
 def run_folder(project):
-    return "-claude-worktrees-" in project or project == "-private-tmp" or project.startswith("-private-tmp-")
+    if "-claude-worktrees-" in project:
+        return True
+    return any(project == r or project.startswith(r + "-") for r in RUN_ROOTS)
 
 
 class Plan:
@@ -378,12 +389,12 @@ def plan_transcripts(home, now, plan):
 OWN_SESSION = "transcripts: own session"
 SUBAGENT_KIND = "transcripts: subagent"
 WORKTREE_KIND = "transcripts: worktree run"
-TMP_KIND = "transcripts: /private/tmp run"
+TMP_KIND = "transcripts: temp folder run"
 
 
 def transcript_files(root, unread=None):
     """(path, lstat, kind) for every session record file under root (~/.claude/projects) the
-    transcripts rule sorts, never following a link: in a worktree or /private/tmp run's project
+    transcripts rule sorts, never following a link: in a worktree or temp folder run's project
     folder, the session transcript and every file in the session's folder (WORKTREE_KIND, TMP_KIND);
     in any other project folder, the session transcript (OWN_SESSION) and each subagent transcript
     and its meta file (SUBAGENT_KIND). A memory folder, and anything else, is never yielded.

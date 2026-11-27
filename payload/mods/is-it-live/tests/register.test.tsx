@@ -252,6 +252,11 @@ const world = (on: On, init: Partial<World> = {}) => {
       const input = JSON.parse(e.argv[2] as string) as { root?: string | null; remote: string | null }
       return { value: { exitCode: 0, stdout: JSON.stringify({ github: githubRepo(input.remote), name: repoName(input) }), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
     }
+    // #3667: when a merge lands, and when its card is made, GitHub is asked for the pull request's
+    // labels and description, to keep any announcement for agents it owes. No pull request here
+    // carries a label, so none owes one (tests/announce.test.tsx holds those that do). Answered
+    // apart, as mod-kit's readers are above, so the reads each test counts are the ones it is about.
+    if (e.argv.slice(0, 3).join(' ') === 'gh pr view' && e.argv.includes('labels,body')) return { value: { exitCode: 0, stdout: '{"labels":[],"body":""}', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
     runs.push([...e.argv])
     const a = e.argv.join(' ')
     const init = (e as { init?: { cwd?: string; env?: Record<string, string> } }).init

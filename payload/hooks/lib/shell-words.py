@@ -26,6 +26,11 @@ hook that slow is killed and the command goes unscreened.
       sourced, which hands no string (claude-config#1623); else empty>" 0x1e, the commands a wrapper runs being records of their own right
       after it (claude-config#1478). Exit 3 as commands; see read(), command_rest(), gh_path(),
       git_path(), rtk_field() and wrapped().
+  shell-words.py flatten    stdin: a hook payload, the JSON Claude Code sends
+      its command as lib/push-scope.sh's segmented mode hands it to a hook: each backslash and line
+      break the shell removes taken out, then each line break left written as "; ", then 0x1f and
+      the payload's cwd. Exit 4, printing nothing, when the command holds no backslash and line
+      break or the payload is not one this reads (claude-config#3470); see flattened().
   shell-words.py tool       stdin: one command
       the gh or git subcommand it runs, as gh and git themselves find it past the options written in
       front (tool_field), else rtk's own subcommand (rtk_field, claude-config#1468), or nothing when
@@ -62,6 +67,7 @@ import os
 import re
 import shlex
 import io
+import json
 import sys
 
 
@@ -653,8 +659,15 @@ def uncommented(s, spaced=False):
     return "".join(out)
 
 
-def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, unsure=None):
+def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, unsure=None, joined=None):
     """Every simple command in s, in the order the shell finishes reading them, as (dir, text).
+
+    joined, when a list, is given the index of each backslash this reading goes past with a line
+    break right after it where the shell takes the two for a join and removes them before it reads
+    words (claude-config#3470): outside single quotes and $'...', outside comments, outside the
+    text of a heredoc's body, its marker word and its closing line, and outside backquotes. One
+    the reading cannot vouch for is left out, so it is a list of joins that are safe to make in
+    the text and never the list of every join the shell makes.
 
     heredocs, when a list, is given one (quoted, before, body) for each heredoc body the reading
     skipped as text (claude-config#2050): quoted says the shell expands nothing in it (its end marker
@@ -1031,6 +1044,13 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None, un
             i += 2 if c == "\\" else 1
             continue
         if c == "\\":
+            if joined is not None and nx == "\n":
+                # A join the shell makes too, for flattened(): not one in the text of a heredoc's
+                # body, which is nobody's command, nor inside backquotes, which read a backslash
+                # first themselves.
+                held = next(g["k"] for g in reversed(frames) if g["k"] == "hd" or g["k"] in COMMAND_FRAMES)
+                if held != "hd" and not any(g["k"] == "tick" for g in frames):
+                    joined.append(i)
             i += 2
             continue
         if k == '"':
@@ -1408,20 +1428,92 @@ def bare(s):
     return "".join(out)
 
 
+# Where a command written inside another starts or ends, for the crude cut (claude-config#3473): the
+# opener of a command or process substitution or of a subshell, a closing parenthesis, and a
+# backquote, which is both. Quotes and backslashes are not weighed: the cut is asked only where the
+# text could not be read, so which of them is live is exactly what is not known.
+CRUDE_EDGE = re.compile(r"\$\(|[<>=]\(|\(|\)|`")
+
+
+def after_a_name(text, at):
+    """Whether the `(` at text[at] is written straight after a name that is no reserved word.
+
+    Such a parenthesis starts no command in any shell. Measured 2026-11-26, each text run by bash,
+    zsh, dash and sh in an empty folder: `open(touch x)`, `f(touch x)`, `x=1(touch x)`,
+    `$x(touch x)` and `cat = open(touch x).read()` made no file in any of them. After a word that
+    only opens or continues a compound command it does: bash, dash and sh ran
+    `if(touch x); then :; fi`, and the same glued to then, else, elif, do, while and until, and bash
+    and sh after time. Those are RESERVED's words, the list the reader already looks past to reach a
+    command, so that one list answers here too. A name is letters, digits and underscores, the only
+    shapes measured: after a quote, a brace or a bracket the parenthesis is still taken to open.
+    """
+    i = at
+    while i > 0 and text[i - 1].isascii() and (text[i - 1].isalnum() or text[i - 1] == "_"):
+        i -= 1
+    return i < at and text[i:at] not in RESERVED
+
+
+def crude_inner(text):
+    """The stretches of one piece of the crude cut that may be commands of their own
+    (claude-config#3473): what follows each opener, closer or backquote, and what stands before a
+    closer or a backquote. The cut left a `$( )`, a pair of backquotes, a `<( )` and a subshell
+    whole, so `x=$(git push)` named no git command, and `(git push)` named the subcommand `push)`.
+
+    What follows a `)` is listed too, because the `)` of a case pattern has its arm's command after
+    it. The one stretch left out is the piece's start up to an opener: that is the head of the
+    command the piece itself is, which its own record already hands on, and listing it would give a
+    caller that counts commands the same one twice. Nothing blank is listed.
+
+    A backquote is not told as opening or closing: the cut splits `` `cd x; git push` `` in two, so
+    in a piece the first backquote may close what an earlier piece opened, and what stands before
+    it is then a command. So the start of a piece up to a backquote is listed even where that
+    backquote opens, `git push origin main `date``, and that command is given twice, once whole
+    and once without the words from the backquote on. Twice is the safe side of not at all.
+
+    A `(` written straight after a name is no edge (after_a_name): no shell starts a command there,
+    and listing what follows it handed a gate `"$1"` out of a heredoc's `open("$1")` as a command
+    the script runs, which it does not (L11). Only that `(` is passed over. Every `)` stays an
+    edge, the one that closes it too, because the parenthesis may be glued to a name inside a quoted
+    word, `x=$(git push origin "a(b")`, and the `)` after it then closes the substitution.
+    """
+    out, at, first = [], 0, True
+    for m in CRUDE_EDGE.finditer(text):
+        if m.group() == "(" and after_a_name(text, m.start()):
+            continue
+        part = text[at:m.start()]
+        if part.strip() and (not first or m.group() in (")", "`")):
+            out.append(part)
+        at, first = m.end(), False
+    if not first and text[at:].strip():
+        out.append(text[at:])
+    return out
+
+
 def crude_commands(s, cwd=""):
-    """The reading used when commands() cannot be trusted: a cut at every separator, quotes and all.
+    """The reading used when commands() cannot be trusted: a cut at every separator, quotes and all,
+    and after the pieces of that cut the commands that may be written inside one (crude_inner).
 
     It can only see MORE commands than are there, which is the direction a gate that must not miss a
     push needs (L42), and it keeps the cds in order, so the last one before a push still governs it.
+    The pieces are the ones it always gave, each with the text and the directory it always had, and
+    they come first, in the order they always had: a caller that reads the records in order and
+    stops at the first one that settles its question reaches every piece it reached before, and
+    reaches a command found inside one only where the pieces settled nothing. Put before the piece
+    that holds them, as commands() gives a substitution's, they would be the first command of a
+    text for a caller that asks how a text begins (lib/unknown-program.py's holds_command), and
+    could turn its answer either way. Each is given in its piece's directory, and a cd among them
+    moves nothing, so no caller is handed less, or anything in another place, than before
+    (claude-config#3473).
     """
-    out, old = [], None
+    out, found, old = [], [], None
     for text in re.split(r"&&|\|\||;|\||\n", s):
         if text.strip():
+            found.extend((cwd, inner) for inner in crude_inner(text))
             out.append((cwd, text))
             target = cd_target(text)
             if target is not None:
                 cwd, old = moved(cwd, old, target)
-    return out
+    return out + found
 
 
 def alone(text):
@@ -2817,6 +2909,112 @@ def read(s):
     return "".join(out), 3 if crude else 0
 
 
+# ---- the flattened form the push hooks read (claude-config#3470) --------------------------------
+# lib/push-scope.sh's segmented mode hands a hook the command with each line break written as "; ".
+# It did that to a line break a backslash joins to the next line as well, so the backslash escaped
+# the ; and the two lines were read as one command with a ; among its words: `echo ok &&`, a
+# backslash, a line break and `git push` ran the push in bash and zsh and was no push to any hook
+# reading that form, and neither was `git`, the same two characters and `push`. Measured
+# 2026-11-25 against bash 3.2.57 through check-style-guide.sh and check-add-scope.sh.
+FLAT_BREAK = "; "
+
+
+def _named(text):
+    """What a reading of a flattened text names, for flattened(): a count of (directory, program)
+    for each command and of (directory, tool, subcommand) and (directory, tool, subcommand, action)
+    for each git, gh or rtk command, or None where the text can only be read by the crude cut. A
+    word that ends in a ; is what an unjoined backslash left behind, never a program's or a
+    subcommand's name, so it names nothing."""
+    records, crude = _records(text, "", 0)
+    if crude:
+        return None
+    named = {}
+    for d, _, _, rest, _, field, _ in records:
+        word = first_word(rest)[0]
+        keys = [(d, word)] if word and not word.endswith(";") else []
+        tool, sub, act = (field.split("\x1d") + ["", ""])[:3] if field else ("", "", "")
+        if sub and not sub.endswith(";"):
+            keys.append((d, tool, sub))
+            if act and not act.endswith(";"):
+                keys.append((d, tool, sub, act))
+        for key in keys:
+            named[key] = named.get(key, 0) + 1
+    return named
+
+
+def _named_more(a, b):
+    """The names counted more times in a than in b (_named), each with how many more. A plain
+    dict and not collections.Counter: this file is loaded by the gate whose judgements
+    lib/judgement-cache.py keeps, which lists every module the gate's libraries import, and a
+    count of names is no reason to add one to that list."""
+    return {k: n - b.get(k, 0) for k, n in a.items() if n > b.get(k, 0)}
+
+
+def flattened(s):
+    """s as the push hooks read it: each backslash and line break the shell removes taken out
+    first, as the shell does before it reads words, then each line break left written as "; ".
+
+    Which pairs the shell removes is commands()'s reading of the text as typed (its `joined`): one
+    inside single quotes, in a comment or in the text of a heredoc's body stays, written as it
+    always was. Where that reading cannot be vouched for (it cannot read the text to its end, or
+    names a line it is unsure of) nothing is joined and the text is flattened as it always was.
+
+    No hook may be handed fewer commands than before, so the joined text is given only where it
+    names every command the plain flattening names, in the same directory (_named). The plain
+    flattening names some the shell never runs: `sudo -u`, the two characters and `git push` gives
+    the push to sudo as the user's name, and read unjoined it was a push. Where the joined text
+    would lose one of those and name nothing new, the plain flattening is given, and where it
+    would lose one and name another, both are given, the joined text first, so a hook reads every
+    command either holds.
+    """
+    plain = s.replace("\n", FLAT_BREAK)
+    if "\\\n" not in s:
+        return plain
+    joined, unsure = [], []
+    try:
+        commands(s, unsure=unsure, joined=joined)
+    except Unreadable:
+        return plain
+    if unsure or not joined:
+        return plain
+    kept, at = [], 0
+    for i in sorted(set(joined)):
+        kept.append(s[at:i])
+        at = i + 2
+    kept.append(s[at:])
+    joint = "".join(kept).replace("\n", FLAT_BREAK)
+    was, now = _named(plain), _named(joint)
+    if was is None or now is None:
+        return plain
+    if not _named_more(was, now):
+        return joint
+    if not _named_more(now, was):
+        return plain
+    both = joint + FLAT_BREAK + plain
+    held = _named(both)
+    either = {k: max(was.get(k, 0), now.get(k, 0)) for k in set(was) | set(now)}
+    return both if held is not None and not _named_more(either, held) else plain
+
+
+def flattened_payload(text):
+    """The command of a hook payload (the JSON Claude Code sends) as flattened() gives it, then
+    0x1f and the payload's cwd, the shape lib/push-scope.sh's ps_parse_payload prints; or None
+    where the command holds no backslash and line break, or the payload is not one this reads, so
+    the caller flattens it as it always has. A 0x1f in the command is written as U+FFFD, as there
+    (claude-config#2055)."""
+    try:
+        d = json.loads(text)
+    except ValueError:
+        return None
+    if not isinstance(d, dict):
+        return None
+    ti, cwd = d.get("tool_input"), d.get("cwd")
+    cmd = ti.get("command") if isinstance(ti, dict) else None
+    if not isinstance(cmd, str) or "\\\n" not in cmd or not (cwd is None or cwd is False or isinstance(cwd, str)):
+        return None
+    return flattened(cmd).replace("\x1f", "\ufffd") + "\x1f" + (cwd or "")
+
+
 # A script whose arguments are data (claude-config#1574). `bash ./x.sh` cannot be read, since its
 # commands are in the file, so check-wrapped-commands.sh refuses it beside any word git, gh or rtk,
 # quoted argument text included. A few scripts, or subcommands of them, are known to run none of
@@ -3039,6 +3237,19 @@ def main(argv):
         text, rc = read(data)
         sys.stdout.write(text)
         return rc
+    elif mode == "flatten":
+        # Exit 4, printing nothing, where there is no join to make, so ps_parse_payload goes on to
+        # the readers it always had. Written once, whole, as UTF-8 whatever the locale, as they write.
+        flat = flattened_payload(data)
+        if flat is None:
+            return 4
+        # This is the one mode that decodes JSON, and an escape in a payload can make a character
+        # no encoding writes. Its bytes are made with "replace" just below, and stdout is told the
+        # same, so nothing a later edit prints here by its text can raise on one
+        # (test-python-bad-bytes.sh). No other mode's stdout is touched: this runs only here.
+        sys.stdout.reconfigure(errors="replace")
+        sys.stdout.flush()
+        sys.stdout.buffer.write(flat.encode("utf-8", "replace"))
     elif mode == "commands":
         # Exit 3 says only the crude reading was possible; its records are printed all the same.
         try:
@@ -3064,7 +3275,7 @@ def main(argv):
         assigns, rest = split(data)
         sys.stdout.write("".join(a + "\n" for a in assigns) + "\x1f\n" + rest)
     else:
-        sys.stderr.write("usage: shell-words.py read|commands|split|words|gitdir|bare|tool|heredoc-markers < text, or data-set-aside '<path>[ <subcommand>]'... < text\n")
+        sys.stderr.write("usage: shell-words.py read|commands|split|words|gitdir|bare|tool|heredoc-markers < text, flatten < payload, or data-set-aside '<path>[ <subcommand>]'... < text\n")
         return 64
     return 0
 

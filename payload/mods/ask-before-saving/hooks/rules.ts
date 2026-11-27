@@ -1830,6 +1830,8 @@ export type RemovalCandidate = {
   onto?: true
   /** The mv was told to replace nothing (-n) and given neither -f nor -i, so a file already where this one goes is kept. */
   keeps?: true
+  /** A deletion only: where the command would put the file, as Dan reads it, when another source of the same mv or cp may land on the same name there (#3505). */
+  sharedAt?: string
   tree?: true
   names?: string[]
   pattern?: true
@@ -1975,7 +1977,12 @@ export const removalCandidates = async (w: Writes, home: string, inCheckout: InC
     // is the deletion main asks about, the worse of the two readings, and never a move that "can
     // be moved back". A mv -n loses neither file and is said the same, the harmless side to be
     // wrong on.
-    const dest = emptied ? undefined : w.files.find(f => !f.shared && f.sources?.some(s => (c.path ? s === c.path : lastPart(s) === lastPart(c.word))))
+    const lands = (f: Writes['files'][number]): boolean => !!f.sources?.some(s => (c.path ? s === c.path : lastPart(s) === lastPart(c.word)))
+    const dest = emptied ? undefined : w.files.find(f => !f.shared && lands(f))
+    // The shared place itself is kept for the question to name (#3505, the loss named): a deletion's
+    // words alone gave no reason why a command that says mv deletes. It is said only where no other
+    // place stands for the file to be had back from.
+    const shared = emptied || dest !== undefined ? undefined : w.files.find(f => f.shared === true && lands(f))
     // A write that names it as a source says where it lands; failing that, its own mv does. Never
     // for a brace pattern of more names than are multiplied out (MAX_BRACE_NAMES): what it would
     // replace where it lands cannot be worked out inside a hook's time, so it is the deletion it
@@ -1997,6 +2004,8 @@ export const removalCandidates = async (w: Writes, home: string, inCheckout: InC
       ...(!emptied && c.to !== undefined && !c.to.into ? { onto: true as const } : {}),
       // A mv told to replace nothing (-n, with neither -f nor -i): a file already where this one goes is kept, never replaced.
       ...(!emptied && at !== undefined && c.to?.keeps ? { keeps: true as const } : {}),
+      // Only for a file a path names: a pattern and a guess have no one place they are sent to.
+      ...(at === undefined && shared !== undefined && c.path !== undefined ? { sharedAt: shared.path ? display(shared.path, home) : shared.word } : {}),
     }
     // A pattern, in the folder it lands in: every file it matches in a folder of lasting memory, or
     // the lasting memory files by name that it may match anywhere else.
@@ -2069,6 +2078,8 @@ export const removalsUnseen = (candidates: readonly RemovalCandidate[], home: st
       ...(c.names ? { names: c.names } : {}),
       ...(holds.length ? { holds } : {}),
       ...(c.guessed ? { guessed: true as const } : {}),
+      // Read from the words alone, as the rest of this is: where the command sends it, and that another of its files may land there (#3505).
+      ...(c.how === 'delete' && c.sharedAt !== undefined ? { sharedAt: c.sharedAt } : {}),
       back: 'unknown' as const,
       why: NO_ANSWER.message,
     }
@@ -2114,6 +2125,24 @@ const movedSaid = (r: Removal, link: string): string => {
 const withWhere = (r: Removal): string => (r.how === 'move' && r.to !== undefined ? movedSaid(r, ', ') : r.holds?.length ? `${r.file}, which holds ${heldSaid(r)}` : r.file)
 
 /**
+ * Whether a removal is a deletion of a file the command sends onto a name another of its sources
+ * may also land on (#3505). The one test of it, for what Dan reads and what Claude is told.
+ */
+const sentOntoAShared = (r: Removal): r is Removal & { sharedAt: string } => r.how === 'delete' && r.sharedAt !== undefined
+
+/**
+ * Why a command that moves or copies a file is asked about as a deletion (#3505), as the question
+ * says it. Measured on macOS on 2026-11-25, each command run once in a scratch folder: of two
+ * sources of one mv or cp whose names are the same, or differ only by letter case, the one named
+ * last is the one kept at that name, and `mv -n` keeps the first there and leaves the second where
+ * it was. On a disk that tells such names apart both are kept, and a pattern may match no such
+ * name. So the sentence claims what holds in all of them: only one of the two is kept at the name,
+ * and this file may be the one lost. It never says the file can be moved back.
+ */
+const sentWhere = (r: Removal & { sharedAt: string }, one: boolean): string =>
+  `The command sends ${one ? 'it' : r.file} to ${r.sharedAt}, and another file the same command names may land on that name too. Only one of the two would be kept there, so ${one ? 'this file' : r.file} may be lost.`
+
+/**
  * What a refused removal does, as every refusal says it: the files, where a move puts each, and for
  * one taken from what the command mentions, that this is so. It claims only what was measured (L11).
  */
@@ -2138,12 +2167,18 @@ export const removalInstruction = (id: string, removes: readonly Removal[]): str
   const w = removalWords(removes)
   const names = removes.map(r => r.file)
   const guessed = removes.filter(r => r.guessed).map(r => r.file)
+  // A command that moves or copies, asked about as a deletion (#3505): Claude is told why, or the
+  // refusal reads as a mistake about a command that says mv.
+  const sent = removes.filter(sentOntoAShared)
   return (
     `${w.not} yet: ${removesWhat(removes)}, so Dan decides first. ` +
+    sent.map(r => `The command sends ${r.file} to ${r.sharedAt}, and another file it names may land on that name too, so only one of the two would be kept there. `).join('') +
     (guessed.length ? `If it only quotes ${guessed.join(', ')} as text and removes another file, spell that file's path out in the command, with no variable in it. ` : '') +
     `Ask him now with AskUserQuestion: one question, with metadata {"source": "${sourceOf(id)}"}, that names ${names.join(', ')} and says in one plain sentence why ${names.length > 1 ? 'they' : 'it'} ${w.why}, never the command, ` +
     `such as "${w.lead} ${names[0]}: <why>?", with the options ${KEEP_IT} and ${w.label}. ` +
-    `${allMoves(removes) ? 'Where it goes' : 'Whether git can bring it back'} is added to your question as it is read then, so leave that out. ` +
+    (sent.length
+      ? 'Why it may be lost, and whether git can bring it back, are added to your question as they are read then, so leave them out. '
+      : `${allMoves(removes) ? 'Where it goes' : 'Whether git can bring it back'} is added to your question as it is read then, so leave that out. `) +
     `If he answers ${w.label}, send this same call again unchanged and it runs. Until he answers, do not ${w.other} it any other way.`
   )
 }
@@ -2208,6 +2243,7 @@ export const removalSaid = (removes: readonly Removal[]): string => {
       if (r.names?.length) parts.push(`Only what is named ${r.names.join(' and ')} under ${it} goes.`)
       // Emptied in place: the file is still there afterwards, which a deletion's words would not say.
       if (r.how === 'empty') parts.push(`${one ? 'The file' : r.file} stays, and what is in it is cut short or wiped.`)
+      if (sentOntoAShared(r)) parts.push(sentWhere(r, one))
       if (r.how === 'move') parts.push(movedWhere(r, one))
       else if (r.back === 'git') parts.push(`Git holds ${it} unchanged, so it can be restored from git.`)
       else if (r.back === 'changed') parts.push(`Git holds an older version of ${it}, so the changes since its last commit cannot be got back.`)
@@ -2233,6 +2269,7 @@ const sameRemoval = (y: Removal, r: Removal): boolean =>
   y.pattern === r.pattern &&
   y.guessed === r.guessed &&
   y.more === r.more &&
+  y.sharedAt === r.sharedAt &&
   sameList(y.holds, r.holds) &&
   sameList(y.names, r.names)
 

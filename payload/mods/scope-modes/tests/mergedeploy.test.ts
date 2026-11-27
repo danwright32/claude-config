@@ -468,7 +468,7 @@ describe('claude-sync pull, the config repository deploy step (#1106)', () => {
   const place: Place = { ...ON_BRANCH, own: CONFIG }
   const judge = (night: unknown, command: string, cwd = `${'/Users'}/x/repo`) => {
     const commands = cmds(command)
-    return judgeNight(night, commands, dirsOf(commands, cwd, HOME).map(d => (d === CLONE ? place : d === null ? null : { ...ON_BRANCH, own: 'o/r' })))
+    return judgeNight(night, commands, dirsOf(commands, cwd, HOME, command).map(d => (d === CLONE ? place : d === null ? null : { ...ON_BRANCH, own: 'o/r' })))
   }
   const lists = (j: object) => nightRepos(readRepoLists(JSON.stringify({ v: 1, mergeOnly: [], mayDeploy: [], ...j })), [])
   test('a pull is a deploy, by any path to the script, and only a pull among the reads', () => {
@@ -478,14 +478,15 @@ describe('claude-sync pull, the config repository deploy step (#1106)', () => {
       expect({ c, k: kinds(c) }).toEqual({ c, k: [] })
   })
   test('the folder a claude-sync command reaches is the clone its script lives in, never the session folder; a bare name is one that cannot be told', () => {
-    expect(dirsOf(cmds('~/claude-config-sync/claude-sync pull'), `${'/Users'}/x/repo`, HOME)).toEqual([CLONE])
-    expect(dirsOf(cmds('cd ~/claude-config-sync && ./claude-sync pull'), `${'/Users'}/x/repo`, HOME)).toEqual([CLONE, CLONE])
-    expect(dirsOf(cmds(`bash ${'/Users'}/x/Apps/claude-config/claude-sync pull`), `${'/Users'}/x/repo`, HOME)).toEqual([`${'/Users'}/x/Apps/claude-config`])
-    expect(dirsOf(cmds('claude-sync pull'), `${'/Users'}/x/repo`, HOME)).toEqual([null])
+    const dirs = (command: string) => dirsOf(cmds(command), `${'/Users'}/x/repo`, HOME, command)
+    expect(dirs('~/claude-config-sync/claude-sync pull')).toEqual([CLONE])
+    expect(dirs('cd ~/claude-config-sync && ./claude-sync pull')).toEqual([CLONE, CLONE])
+    expect(dirs(`bash ${'/Users'}/x/Apps/claude-config/claude-sync pull`)).toEqual([`${'/Users'}/x/Apps/claude-config`])
+    expect(dirs('claude-sync pull')).toEqual([null])
     // A shell's own options before the script, a value taking one included, are read past.
-    expect(dirsOf(cmds('bash -e -o pipefail ~/claude-config-sync/claude-sync pull'), `${'/Users'}/x/repo`, HOME)).toEqual([CLONE])
-    expect(dirsOf(cmds('bash --rcfile /tmp/rc ~/claude-config-sync/claude-sync pull'), `${'/Users'}/x/repo`, HOME)).toEqual([CLONE])
-    expect(dirsOf(cmds('bash ./other.sh ~/claude-config-sync/claude-sync pull'), `${'/Users'}/x/repo`, HOME)).toEqual([null])
+    expect(dirs('bash -e -o pipefail ~/claude-config-sync/claude-sync pull')).toEqual([CLONE])
+    expect(dirs('bash --rcfile /tmp/rc ~/claude-config-sync/claude-sync pull')).toEqual([CLONE])
+    expect(dirs('bash ./other.sh ~/claude-config-sync/claude-sync pull')).toEqual([null])
   })
   test('allowed exactly when the night says the config repository may deploy, from any session folder', () => {
     const night = lists({ mayDeploy: [CONFIG] })
@@ -503,5 +504,110 @@ describe('claude-sync pull, the config repository deploy step (#1106)', () => {
     expect(why(undefined)).toBe('the sleep record carries no merge and deploy lists, so tonight it neither merges nor deploys')
     // A clone whose repository cannot be told (a bare name, found on PATH) is closed, whatever the lists.
     expect(why(lists({ mayDeploy: [CONFIG] }), 'claude-sync pull')).toBe('which repository this reaches could not be told, so tonight it neither merges nor deploys')
+  })
+})
+
+// #3398: a git command is placed by the repository it names, from mod-kit's one reading of it
+// (gitplace.ts). Until then this rule read --git-dir and --work-tree from the command's words and
+// GIT_DIR and GIT_WORK_TREE not at all, so a push named by a setting was judged by the branch of
+// the folder it was typed in.
+describe('the folder a git command is placed in, by the repository it names (#3398)', () => {
+  const HOME = `${'/Users'}/x`
+  const CWD = `${'/Users'}/x/repo`
+  const dirs = (command: string, cwd = CWD) => dirsOf(cmds(command), cwd, HOME, command)
+  // The type check is the judge of this one (tools/check-mods.sh checks a mod's tests too): a caller
+  // hands over the call's text every time. While it had a default, a caller leaving it out compiled
+  // and read `export GIT_DIR=...` earlier in the call as no naming at all, so the command was placed
+  // in the folder it ran in. The call below must not compile (#3398 lessons review).
+  // @ts-expect-error the fourth argument, the call's text, is required
+  void (() => dirsOf([], CWD, HOME))
+  const gitDir =(command: string, cwd = CWD) => {
+    const all = cmds(command)
+    const at = all.findIndex(c => c.git)
+    return dirsOf(all, cwd, HOME, command)[at]
+  }
+  test('a repository named by GIT_DIR or GIT_WORK_TREE is one that cannot be told, as one named by --git-dir always was', () => {
+    for (const c of [
+      'GIT_DIR=/elsewhere/.git git push',
+      'GIT_WORK_TREE=/elsewhere git push',
+      'GIT_DIR=/elsewhere/.git GIT_WORK_TREE=/elsewhere git push origin HEAD',
+      'env GIT_DIR=/elsewhere/.git git push',
+      'export GIT_DIR=/elsewhere/.git; git push',
+      'export GIT_DIR=/elsewhere/.git && git -C /other push',
+      'GIT_DIR=/elsewhere/.git; export GIT_DIR; git push',
+      'read GIT_DIR; export GIT_DIR; git push',
+    ])
+      expect({ c, at: gitDir(c) }).toEqual({ c, at: null })
+    // The same asked with an empty text still reads the setting in front of the command, which the reader hands on.
+    expect(dirsOf(cmds('GIT_DIR=/elsewhere/.git git push'), CWD, HOME, '')).toEqual([null])
+  })
+  test('so a push named that way is judged at its strictest, never by the branch of the folder it was typed in', () => {
+    const night = nightRepos(readRepoLists(JSON.stringify({ v: 1, mergeOnly: [], mayDeploy: ['o/r'] })), [])
+    const judge = (command: string) => judgeNight(night, cmds(command), dirs(command).map(d => (d === null ? null : { ...ON_BRANCH, own: 'o/r' })))
+    // The control: typed on a feature branch, a push naming no branch goes ahead.
+    expect(judge('git push')).toBeUndefined()
+    expect(judge('GIT_DIR=/elsewhere/.git git push')?.what).toBe('push from a branch that could not be read')
+    expect(judge('export GIT_DIR=/elsewhere/.git; git push')?.what).toBe('push from a branch that could not be read')
+    expect(judge('GIT_WORK_TREE=/elsewhere git push origin HEAD')?.what).toBe('push from a branch that could not be read')
+    // The review of #3532: a commit message quoting a setting sets none, so the push behind it is
+    // judged by the branch of its folder, as it was before #3398. A setting that is a word of the
+    // git command itself, or of any command that is no plain data, still closes the rule.
+    expect(judge('git commit -m "read GIT_DIR=/elsewhere/.git as git does" && git push')).toBeUndefined()
+    expect(dirs('echo "GIT_DIR=/elsewhere/.git" && git push')).toEqual([CWD, CWD])
+    expect(judge('git -c GIT_DIR=/elsewhere/.git push')?.what).toBe('push from a branch that could not be read')
+    expect(gitDir('echo "GIT_DIR=/elsewhere/.git" > /tmp/e; . /tmp/e; git push')).toBeNull()
+  })
+  test('the controls: no -C, one -C and a cd are placed as before, and what was untold stays untold', () => {
+    expect(dirs('git push')).toEqual([CWD])
+    expect(dirs('git -C /other push')).toEqual(['/other'])
+    expect(dirs('git -C sub push')).toEqual([`${CWD}/sub`])
+    expect(dirs('cd /other && git push')).toEqual(['/other', '/other'])
+    expect(dirs('cd /other && git -C sub push')).toEqual(['/other', '/other/sub'])
+    expect(dirs('git -C "$W" push')).toEqual([null])
+    expect(dirs('cd "$W" && git push')).toEqual([null, null])
+    // Behind a cd that cannot be followed even a -C written in full was untold, and still is.
+    expect(dirs('cd "$W" && git -C /other push')).toEqual([null, null])
+    expect(dirs('git --git-dir=/elsewhere/.git push')).toEqual([null])
+    expect(dirs('git -c x=y --work-tree /w push')).toEqual([null])
+    // Prose naming a variable, and a read of one, name no repository.
+    expect(dirs('git commit -m "read GIT_DIR as git does" && git push')).toEqual([CWD, CWD])
+    expect(gitDir('echo "$GIT_DIR"; git push')).toBe(CWD)
+  })
+  // The review of #3532. A word before the subcommand that only SPELLS --git-dir or --work-tree is,
+  // to mod-kit's reader as to git, the value of the option in front of it (--namespace, -c, -C), or
+  // names nothing where no value follows it. Until #3398 this rule read those words itself and
+  // closed on every one of them; read through the reader alone, each was placed in a folder, and a
+  // push spelled that way went ahead from a feature branch. Every form is built here, never listed:
+  // each option of git's that takes the next word, holding each spelling.
+  test('a word before the subcommand that only spells --git-dir or --work-tree still closes the rule, as the value of another option or with no value of its own (#3532 review)', () => {
+    const night = nightRepos(readRepoLists(JSON.stringify({ v: 1, mergeOnly: [], mayDeploy: ['o/r'] })), [])
+    const judge = (command: string) => judgeNight(night, cmds(command), dirs(command).map(d => (d === null ? null : { ...ON_BRANCH, own: 'o/r' })))
+    const spelled = ['--git-dir=/elsewhere/.git', '--git-dir', '--work-tree=/elsewhere', '--work-tree']
+    const forms: string[] = []
+    for (const option of ['--namespace', '-c', '-C'])
+      for (const word of spelled)
+        for (const first of ['', '-C . ', '-c x=y ']) forms.push(`git ${first}${option} ${word}`)
+    for (const f of forms) {
+      expect({ f, at: gitDir(`${f} push`) }).toEqual({ f, at: null })
+      expect({ f, at: gitDir(`${f} checkout main`) }).toEqual({ f, at: null })
+      expect({ f, what: judge(`${f} push`)?.what }).toEqual({ f, what: 'push from a branch that could not be read' })
+    }
+    // One with no value and no subcommand after it names nothing the reader hands on, and closed too.
+    for (const f of ['git --git-dir', 'git --work-tree', 'git -C . --git-dir', 'git -C /other --work-tree']) expect({ f, at: gitDir(f) }).toEqual({ f, at: null })
+    // The controls: the same options holding any other value are placed as they always were, and
+    // the spelling after the subcommand is an argument of it, which this rule never read.
+    expect(dirs('git --namespace ns push')).toEqual([CWD])
+    expect(dirs('git -c x=y push')).toEqual([CWD])
+    expect(dirs('git -C /other -c x=y push')).toEqual(['/other'])
+    expect(judge('git --namespace ns push')).toBeUndefined()
+    expect(dirs('git push origin --git-dir')).toEqual([CWD])
+  })
+  test('more than one -C is still not followed here, wherever it leads (#3398, Dan to decide)', () => {
+    // mod-kit now says where a chain leads (/a/b), and this rule read every chain as a repository
+    // that cannot be told. Placing it where git runs is the right reading and a loosening (a push
+    // refused tonight could go ahead), so the old reading stands until Dan chooses.
+    expect(dirs('git -C /a -C b push')).toEqual([null])
+    expect(dirs('git -C a -C /c push')).toEqual([null])
+    expect(dirs('git -C "$A" -C b push')).toEqual([null])
   })
 })
