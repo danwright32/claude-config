@@ -370,6 +370,107 @@ check "a hash answer that does not count the blank lines approves nothing, and s
 r="$(asked "$T" acme/widget "$H")"
 check "and the same file is approved once the answer counts them, so it was the missing count that refused it" "$([[ "$r" == "yes||" ]] && echo ok || echo "$r")"
 
+echo "wording the merge would refuse is never approved (#3846)"
+# On 2026-11-27 Dan approved, by picker, wording whose first line was the mention followed by a
+# sentence. Nothing but the merge gate read the rules for what a post may hold, so that approval
+# counted, the label went on, the merge was refused and he was asked a second time. An Approve of
+# such wording now approves nothing, and the refusal carries the merge gate's own code and words,
+# asked of the one judge: lib/changelog-entry.js's announcement-refusal.
+# shown_as <name> <wording>: a file holding that wording, opened in front of him. Prints its path.
+shown_as() { aaf_shown "$WORK/$1" "$WORK/$1.jsonl" "$2"; }
+# gate_says <file> <field>: the merge gate's judge on that wording file, asked directly.
+gate_says() { node "$ENTRY" announcement-refusal "$1" | python3 -c 'import json, sys; print(json.load(sys.stdin)[sys.argv[1]], end="")' "$2"; }
+SHARED_LINE='@here Calls can now be handed back to the queue.
+
+- Press Hand back
+- Pick a reason'
+STORE_USED="$WORK/store-sharedline"
+F="$(shown_as sharedline "$SHARED_LINE")"; T="$WORK/sharedline.jsonl"
+talk "$T" ask acme/widget "$F"
+H="$(hash_file "$F")"
+WORDS="$(gate_says "$F" reason)"
+check "the merge gate's judge refuses that day's wording for its opener, which the cases below depend on" "$([ "$(gate_says "$F" code)" = ANNOUNCEMENT_NO_OPENER ] && [[ "$WORDS" == *"on a line of its own"*'"@here Calls can now be handed back to the queue."'* ]] && echo ok || echo "$(gate_says "$F" code): $WORDS")"
+r="$(asked "$T" acme/widget "$H")"
+check "R2 #3846 an Approve of wording whose first line is the mention followed by a sentence approves nothing" "$([[ "$r" == "no|"* ]] && echo ok || echo "$r")"
+check "#3846 the refusal says his Approve of that file does not count, with the merge gate's code" "$([[ "$r" == *"his Approve for $F does not count"*"ANNOUNCEMENT_NO_OPENER"* ]] && echo ok || echo "$r")"
+check "#3846 and holds the merge gate's own words about the opener, whole" "$([ -n "$WORDS" ] && [[ "$r" == *"$WORDS"* ]] && echo ok || echo "$r")"
+check "#3846 and says what to do: judge the file with the command, then open it and ask him again" "$([[ "$r" == *"changelog-entry.js announcement-refusal"*"open the file for him and ask him again"* ]] && echo ok || echo "$r")"
+check "R2 #3846 nothing was written to the record as an approval of it" "$([ "$(recorded)" = 0 ] && echo ok || echo "$(recorded) lines")"
+# The rule of the markdown that was never measured to arrive, and the rule of his own voice.
+for each in 'code|ANNOUNCEMENT_MARKDOWN|code (a backtick)|@here
+Run `the thing` now.' 'dash|ANNOUNCEMENT_DASHES|dash as punctuation|@here
+Hand back - then pick a reason.'; do
+  name="${each%%|*}"; rest="${each#*|}"; code="${rest%%|*}"; rest="${rest#*|}"; needle="${rest%%|*}"; wording="${rest#*|}"
+  STORE_USED="$WORK/store-rule-$name"
+  F="$(shown_as "rule-$name" "$wording")"; T="$WORK/rule-$name.jsonl"
+  talk "$T" ask acme/widget "$F"
+  WORDS="$(gate_says "$F" reason)"
+  r="$(asked "$T" acme/widget "$(hash_file "$F")")"
+  check "R2 #3846 an Approve of wording the merge refuses as $code approves nothing, in the gate's own words" "$([ -n "$WORDS" ] && [[ "$r" == "no|"*"his Approve for $F does not count"*"$code"*"$WORDS"* && "$WORDS" == *"$needle"* ]] && echo ok || echo "$r")"
+  check "R2 #3846 and writes no approval to the record ($code)" "$([ "$(recorded)" = 0 ] && echo ok || echo "$(recorded) lines")"
+done
+# Still possible: the same post with the mention alone on its first line.
+STORE_USED="$WORK/store-ownline"
+F="$(shown_as ownline "@here
+Calls can now be handed back to the queue.
+
+- Press Hand back
+- Pick a reason")"; T="$WORK/ownline.jsonl"
+talk "$T" ask acme/widget "$F"
+r="$(asked "$T" acme/widget "$(hash_file "$F")")"
+check "R2 #3846 still possible: the same post with the mention alone on its first line is approved" "$([[ "$r" == "yes||" ]] && [ "$(recorded)" = 1 ] && echo ok || echo "$r $(recorded) lines")"
+# Still possible: an approval this Mac's record already holds, as a line was written before this
+# rule, still counts where its wording passes. Nothing about a line of the record changed.
+STORE_USED="$WORK/store-heldbefore"; mkdir -p "$STORE_USED"
+printf '{"kind": "approved", "repo": "acme/widget", "hash": "%s", "file": "%s", "picker": "toolu_before3846", "session": "s0", "answered": "2026-11-20T15:00:00.000Z", "at": "2026-11-20T15:00:05Z"}\n' "$(hash_text "$POST")" "$WORK/heldbefore/announcement.md" > "$STORE_USED/record.jsonl"
+T2="$WORK/heldbefore.jsonl"; new_talk "$T2"
+r="$(asked "$T2" acme/widget "$(hash_text "$POST")" s2)"
+check "R2 #3846 still possible: an approval the record already held, of wording that passes, still counts" "$([[ "$r" == "yes||" ]] && echo ok || echo "$r")"
+
+# The answer of the judge that cannot be read approves nothing (L98), as a missing count of blank
+# lines does. Driven with a node in front of the real one that answers that one command as a
+# lib/changelog-entry.js older than this library, or a broken one, would, and passes every other
+# call through.
+NOVERDICT="$WORK/node-without-the-verdict"; mkdir -p "$NOVERDICT"
+cat > "$NOVERDICT/node" <<'SH'
+#!/usr/bin/env bash
+case " $* " in
+  *" announcement-refusal "*)
+    cat >/dev/null
+    case "${FAKE_VERDICT:-}" in
+      usage) echo "Usage: changelog-entry.js required-labels <owner/name>" >&2; exit 2 ;;
+      nothing) exit 0 ;;
+      empty) printf '{}\n'; exit 0 ;;
+      takes-and-exits-1) printf '{"refused": false, "code": null, "reason": null}\n'; exit 1 ;;
+      refuses-and-exits-0) printf '{"refused": true, "code": "ANNOUNCEMENT_NO_OPENER", "reason": "words"}\n'; exit 0 ;;
+      refuses-without-words) printf '{"refused": true, "code": "", "reason": ""}\n'; exit 1 ;;
+      takes-with-a-code) printf '{"refused": false, "code": "ANNOUNCEMENT_NO_OPENER", "reason": null}\n'; exit 0 ;;
+      *) echo "the fake node was given no FAKE_VERDICT" >&2; exit 9 ;;
+    esac ;;
+  *) exec "$REAL_NODE" "$@" ;;
+esac
+SH
+chmod +x "$NOVERDICT/node"
+STORE_USED="$WORK/store-noverdict"
+F="$(shown noverdict)"; T="$WORK/noverdict.jsonl"
+talk "$T" ask acme/widget "$F"
+H="$(hash_file "$F")"
+for verdict in usage nothing empty takes-and-exits-1 refuses-and-exits-0 refuses-without-words takes-with-a-code; do
+  r="$(FAKE_VERDICT="$verdict" REAL_NODE="$REAL_NODE" PATH="$NOVERDICT:$PATH" asked "$T" acme/widget "$H")"
+  check "R2 #3846 an answer of the judge that cannot be read ($verdict) approves nothing, and says so" "$([[ "$r" == "no|"*"his Approve for $F does not count"*"did not say whether the merge would refuse"* ]] && echo ok || echo "$r")"
+  check "R2 #3846 and writes no approval to the record ($verdict)" "$([ "$(recorded)" = 0 ] && echo ok || echo "$(recorded) lines")"
+done
+r="$(asked "$T" acme/widget "$H")"
+check "#3846 and the same file is approved once the judge answers, so it was the unread answer that refused it" "$([[ "$r" == "yes||" ]] && echo ok || echo "$r")"
+
+# How to ask him names the judge as the step before the file is opened, so a session that follows
+# it never puts wording the merge would refuse in front of him.
+T="$WORK/howto.jsonl"; new_talk "$T"
+how="$(printf '{"session_id": "s1", "transcript_path": "%s"}' "$T" | ANNOUNCE_APPROVALS_DIR="$WORK/store-howto" python3 -B "$LIB" check --repo acme/widget --hash "$(hash_text "$POST")" \
+  | python3 -c 'import json, sys; print(json.load(sys.stdin)["how"], end="")')"
+check "#3846 how to ask him names the command that judges the wording file" "$([[ "$how" == *"node ~/.claude/hooks/lib/changelog-entry.js announcement-refusal <file>"* ]] && echo ok || echo "$how")"
+check "#3846 as the step after /no-ai-tells and before the file is opened in front of him" "$([[ "$how" == *"/no-ai-tells"*"announcement-refusal"*"--front-window"*"AskUserQuestion"* ]] && echo ok || echo "$how")"
+
 echo "the command line a session can run reads the record and writes no approval (#3703)"
 # The review's first finding, as it was run: a file shaped like a transcript, holding a picker
 # nobody was shown, and the library's check command handed a payload naming it. The library read
@@ -807,6 +908,35 @@ note "$T" payload "$P" acme/widget "$F" >/dev/null
 talk "$T" answer "$P" acme/widget "$F"
 r="$(helper_asks acme/widget "$(hash_file "$F")" 65)"
 check "R2 a noted Approve of a file never opened in front of him approves nothing, and says so" "$([[ "$r" == "no|unapproved|"*"was not opened in front of him"* ]] && echo ok || echo "$r")"
+
+# Wording the merge would refuse, noted when he answered (#3846): this is the way his answer really
+# arrives, and the wording is judged then, so his Approve of it approves nothing even after the file
+# is put right. The note still holds the hash of what he answered about: nothing about the record's
+# lines changed, and `why` says what stands in the way.
+STORE_USED="$WORK/store-noted-refused"
+F="$(shown_as noted-refused "$SHARED_LINE")"; T="$WORK/noted-refused.jsonl"
+HR="$(hash_file "$F")"
+WORDS="$(gate_says "$F" reason)"
+P="$(talk "$T" put acme/widget "$F")"
+r="$(note "$T" payload "$P" acme/widget "$F")"
+check "#3846 a picker about wording the merge would refuse is still noted" "$([[ "$r" == "yes|" ]] && echo ok || echo "$r")"
+check "#3846 its note holds the hash of the file as before, and the merge gate's code as why it approves nothing" "$(grep '"kind": "answered"' "$STORE_USED/record.jsonl" 2>/dev/null | grep "\"picker\": \"$P\"" | grep "\"hash\": \"$HR\"" | grep -q 'ANNOUNCEMENT_NO_OPENER' && echo ok || cat "$STORE_USED/record.jsonl" 2>&1)"
+talk "$T" answer "$P" acme/widget "$F"
+printf '@here\nCalls can now be handed back to the queue.\n' > "$F"
+r="$(helper_asks acme/widget "$HR" 66)"
+check "R2 #3846 a noted Approve of wording the merge would refuse approves nothing, in the gate's own words" "$([ -n "$WORDS" ] && [[ "$r" == "no|unapproved|"*"his Approve for $F does not count"*"$WORDS"* ]] && echo ok || echo "$r")"
+check "R2 #3846 and no approval of it is on the record" "$([ "$(kinds approved)" = 0 ] && echo ok || cat "$STORE_USED/record.jsonl")"
+r="$(helper_asks acme/widget "$(hash_file "$F")" 66)"
+check "R2 #3846 nor does it approve the wording the file was put right to afterwards, which he was never asked about" "$([[ "$r" == "no|unapproved|"* ]] && echo ok || echo "$r")"
+# His Not yet about such wording is recorded exactly as it was: taken back by the hash of the wording.
+STORE_USED="$WORK/store-noted-refused-notyet"
+F="$(shown_as noted-refused-notyet "$SHARED_LINE")"; T="$WORK/noted-refused-notyet.jsonl"
+HR="$(hash_file "$F")"
+P="$(talk "$T" put acme/widget "$F")"
+note "$T" payload "$P" acme/widget "$F" >/dev/null
+talk "$T" answer "$P" acme/widget "$F" "Not yet"
+helper_asks acme/widget "$HR" 67 >/dev/null
+check "#3846 his Not yet about wording the merge would refuse is still recorded by the hash of that wording" "$(grep '"kind": "withdrawn"' "$STORE_USED/record.jsonl" 2>/dev/null | grep "\"picker\": \"$P\"" | grep -q "\"hash\": \"$HR\"" && echo ok || cat "$STORE_USED/record.jsonl" 2>&1)"
 
 # EVERY main session picker is noted, by its ids alone (#3789): the session, its transcript and the
 # picker, and whether the transcript held the picker's line when the hook ran. What it asked is told

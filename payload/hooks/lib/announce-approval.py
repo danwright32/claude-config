@@ -7,7 +7,9 @@ was opened in front of him, and this file says whether a given wording is one he
 gate (require-changelog-tag.sh) asks it for every announce pull request, and announce-label-ask.sh
 asks it before the label goes on one.
 
-HOW DAN IS ASKED. The session writes the post to a file, runs /no-ai-tells on it, opens it in BBEdit
+HOW DAN IS ASKED. The session writes the post to a file, runs /no-ai-tells on it, runs
+`node ~/.claude/hooks/lib/changelog-entry.js announcement-refusal <file>` and changes the wording
+until that refuses nothing (THE MERGE WOULD NOT REFUSE IT, below), opens it in BBEdit
 with the front window flag, and asks ONE AskUserQuestion picker of one question, naming the pull
 request or feature and the channel and ending `Save the file before you answer.`, with the options
 `Approve the wording` and `Not yet`, and this metadata:
@@ -62,6 +64,22 @@ _read_by_dan). Then, all of these, each failure said in its own words:
     and then more text hashes the same as those lines written together, while the window it was
     opened in showed him the post and then white space. The refusal says how long the run is, the
     line it starts at, and what to change. Blank lines after the last line hide nothing and pass.
+  - THE MERGE WOULD NOT REFUSE IT (claude-config#3846): the wording passes the merge gate's own
+    rules for what a post may hold (the mention alone on its first line, only the markdown that
+    was measured to arrive, no dash as punctuation, no HTML comment). On 2026-11-27 he approved,
+    by picker, wording whose first line was the mention followed by a sentence. Nothing here read
+    those rules, so the approval counted and the label went on, the merge gate then refused that
+    wording, and he was asked a second time. So an Approve of wording the merge would refuse
+    approves nothing, and the refusal carries the gate's code and its own words. No rule is kept
+    here: the file's bytes, the same ones that were hashed, are handed to lib/changelog-entry.js's
+    announcement-refusal command line (refusal_of), which is the function the merge gate judges
+    the pull request with. An answer from it that cannot be read approves nothing either. The
+    wording still has its hash: his answer about it is recorded by that hash whatever he answered,
+    so his `Not yet` takes back what it always took back. What is written to the record did not
+    change: a note of wording the merge would refuse holds its hash as before, and its `why`,
+    which a reader of the note already took as "no approval from this one", says what stands in
+    the way. An approval the record already held still counts wherever its wording passes; one of
+    wording that does not could never merge, and the label hook refuses the label for it.
 
 WHAT IS HASHED. The FILE as it stands, never a hash the session supplies: a hash in the metadata
 is not read at all. The hash is lib/changelog-entry.js's announcementHash, the sha256 of its one
@@ -128,7 +146,8 @@ picker in hundredths of a second (hooks/test-announce-answer-note.sh).
 When the hook can already tell the picker is of this source (the transcript holds it, or failing
 that its own copy carries the metadata) and names a repository and a file, the note also carries
      "repo": "<owner/name>", "file": "<the wording file>", "hash": "<sha256, or null>", "why": "<why
-     there is no hash, or null>", "changed": <the file's status change time then, in ns>
+     there is no hash, or why an Approve of wording that has one approves nothing (THE MERGE WOULD
+     NOT REFUSE IT, above), or null>", "changed": <the file's status change time then, in ns>
 
 A NOTE IS NOT AN APPROVAL, and it is not his answer. It names no answer at all. The payload the
 hook is handed does carry his answer, and it is not read: a payload is what the caller hands over,
@@ -311,6 +330,9 @@ his option's words and the date.
   note_answer(payload)                          (noted, why): the note of a picker just answered.
   mark_used(repo, digest, pr, closes, unread)   None, or why the line could not be written.
   hash_of(data, body=False)                     (announcement-hash's answer, None) or (None, why).
+  refusal_of(data, body=False)                  ({refused, code, reason}, None) or (None, why): whether the
+                                                merge gate would refuse that wording, asked of its own judge.
+  refused_why(verdict)                          that answer as a refusal's words, the gate's own included.
   is_record_path(path)                          whether a path is the record or under it.
   transcripts_dir()                             the folder a transcript must be under, or None.
 
@@ -401,8 +423,16 @@ SAVE_FIRST = "Save the file before you answer."
 TYPED_UNREAD = "(something came back beside his answer in a form that could not be read)"
 TYPED_SHOWN = 600
 
+# The command a session runs on the wording file before it is opened in front of him
+# (claude-config#3846): lib/changelog-entry.js's announcement-refusal, which judges the file by the
+# merge gate's own rules for what a post may hold and changes nothing. One constant, so how to ask
+# him and the refusal of wording it refuses name the same command.
+JUDGE_COMMAND = "node ~/.claude/hooks/lib/changelog-entry.js announcement-refusal <file>"
+
 HOW_TO_ASK = (
-    "To ask him: write the post to a file, run /no-ai-tells on it, open it in a command of its own with "
+    "To ask him: write the post to a file, run /no-ai-tells on it, run `" + JUDGE_COMMAND + "` and change the "
+    "wording until it refuses nothing (it judges the file by the merge gate's own rules, and his approval of "
+    "wording the merge would refuse approves nothing), open the file in a command of its own with "
     "`/Applications/BBEdit.app/Contents/Helpers/bbedit_tool --front-window <file>`, then, as the very next tool call "
     "(with any other call between the two his answer does not count), ask ONE AskUserQuestion "
     "picker of one question naming the pull request or feature and the channel, and ending with the sentence `"
@@ -682,34 +712,77 @@ def _now():
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def hash_of(data, body=False, deadline=None):
-    """lib/changelog-entry.js's announcement-hash of data, bytes: ({found, hash, lines}, None), or
-    (None, why it could not be asked). body says data is a pull request description, hashed by its
-    Announcement block; without it data is the wording itself."""
+def _asked_of_entry(command, data, deadline, does, doing):
+    """One question about wording put to lib/changelog-entry.js, with data, bytes, on its standard
+    input: (its exit status, its answer as JSON or None, None), or (None, None, why it could not be
+    asked). does and doing word that reason: what the command does to the wording ("hash", "hashes")."""
     import shutil
     limit = HASH_SECONDS
     if deadline is not None:
         limit = min(limit, deadline - time.monotonic())
         if limit <= 0:
-            return None, "no time was left in the hook to hash the wording"
+            return None, None, "no time was left in the hook to " + does + " the wording"
     node = shutil.which("node")
     if node is None:
-        return None, "node is not on PATH, and lib/changelog-entry.js, which hashes the wording, runs under it"
-    args = [node, os.path.join(HERE, "changelog-entry.js"), "announcement-hash"] + (["--body"] if body else [])
+        return None, None, "node is not on PATH, and lib/changelog-entry.js, which " + doing + " the wording, runs under it"
     try:
-        r = subprocess.run(args, input=data, capture_output=True, timeout=limit)
+        r = subprocess.run([node, os.path.join(HERE, "changelog-entry.js")] + command, input=data, capture_output=True,
+                           timeout=limit)
     except subprocess.TimeoutExpired:
-        return None, "lib/changelog-entry.js did not hash the wording in " + ("%.1f" % limit) + " seconds"
+        return None, None, "lib/changelog-entry.js did not " + does + " the wording in " + ("%.1f" % limit) + " seconds"
     except OSError as e:
-        return None, "lib/changelog-entry.js could not be started (" + type(e).__name__ + ")"
+        return None, None, "lib/changelog-entry.js could not be started (" + type(e).__name__ + ")"
     try:
         answer = json.loads(r.stdout.decode("utf-8", "replace"))
     except ValueError:
         answer = None
-    if (r.returncode != 0 or not isinstance(answer, dict) or not isinstance(answer.get("hash"), str)
+    return r.returncode, answer, None
+
+
+def hash_of(data, body=False, deadline=None):
+    """lib/changelog-entry.js's announcement-hash of data, bytes: ({found, hash, lines}, None), or
+    (None, why it could not be asked). body says data is a pull request description, hashed by its
+    Announcement block; without it data is the wording itself."""
+    status, answer, why = _asked_of_entry(["announcement-hash"] + (["--body"] if body else []), data, deadline,
+                                          "hash", "hashes")
+    if why is not None:
+        return None, why
+    if (status != 0 or not isinstance(answer, dict) or not isinstance(answer.get("hash"), str)
             or not isinstance(answer.get("found"), bool) or (answer["hash"] and not SHA.fullmatch(answer["hash"]))):
-        return None, "lib/changelog-entry.js gave no hash that could be read (exit " + str(r.returncode) + ")"
+        return None, "lib/changelog-entry.js gave no hash that could be read (exit " + str(status) + ")"
     return answer, None
+
+
+def refusal_of(data, body=False, deadline=None):
+    """Whether the merge gate would refuse data, bytes, as an announcement's wording
+    (claude-config#3846): ({refused, code, reason}, None), or (None, why it could not be told). It
+    is lib/changelog-entry.js's announcement-refusal, the one judge of what a post may hold, which
+    the merge gate asks of the pull request about to merge: no rule is kept here. body says data
+    is a pull request description, judged by its Announcement block; without it data is the wording
+    file's text.
+
+    An answer that cannot be read is why, never "not refused" (L98): the answer must be an object
+    saying refused as true or false, with the gate's code and words when true and neither when
+    false, and the command's exit status must say the same (1 for refused, 0 for not)."""
+    status, answer, why = _asked_of_entry(["announcement-refusal"] + (["--body"] if body else []) + ["-"], data, deadline,
+                                          "judge", "judges")
+    if why is not None:
+        return None, why
+    refused = answer.get("refused") if isinstance(answer, dict) else None
+    code, reason = (answer.get("code"), answer.get("reason")) if isinstance(answer, dict) else (None, None)
+    takes = refused is False and status == 0 and code is None and reason is None
+    refuses = (refused is True and status == 1 and isinstance(code, str) and bool(code.strip())
+               and isinstance(reason, str) and bool(reason.strip()))
+    if not takes and not refuses:
+        return None, ("lib/changelog-entry.js did not say whether the merge would refuse the wording (exit " + str(status)
+                      + "), so whether it is wording that can merge could not be told (claude-sync pull reinstalls it)")
+    return {"refused": refused, "code": code, "reason": reason}, None
+
+
+def refused_why(verdict):
+    """One sentence group for a refusal: that the merge would refuse the wording, with the merge
+    gate's code and its own words, whole. verdict is refusal_of's answer for refused wording."""
+    return ("the merge would refuse this wording itself (" + verdict["code"].strip() + "): " + verdict["reason"].strip())
 
 
 def _bbedit_open(command, cwd, target, sw):
@@ -1025,21 +1098,24 @@ def _wording_noted(ask, sent, deadline):
     file = os.path.realpath(file)
     # The file's change time is read either side of the hash, so the hash noted is of the file as
     # it stood at the change time noted beside it.
-    digest, why, changed = None, None, None
+    digest, why, unfit, changed = None, None, None, None
     try:
         changed = os.stat(file).st_ctime_ns
     except OSError as e:
         why = "the file could not be read (" + type(e).__name__ + "), so the wording he answered about cannot be hashed"
     if why is None:
-        digest, why = _file_hash(file, deadline)
+        digest, why, unfit = _file_hash(file, deadline)
     if why is None:
         try:
             after = os.stat(file).st_ctime_ns
         except OSError:
             after = None
         if after != changed:
-            digest, why = None, "the file changed while it was being hashed, so the wording he answered about could not be told"
-    return {"repo": repo, "file": file, "hash": digest, "why": why, "changed": changed}
+            digest, why, unfit = None, "the file changed while it was being hashed, so the wording he answered about could not be told", None
+    # Wording the merge would refuse (claude-config#3846) keeps its hash, since that is the wording
+    # he answered about and his `Not yet` is recorded by it, and `why` says what an Approve of it
+    # is stopped by: whoever reads the note takes no approval from one that carries a why.
+    return {"repo": repo, "file": file, "hash": digest, "why": why or unfit, "changed": changed}
 
 
 def _ask_of(transcript_path, session_id, picker):
@@ -1312,7 +1388,8 @@ def approvals(session_id, transcript_path, deadline=None, noted=None, settled=()
             if why is None and not (isinstance(digest, str) and SHA.fullmatch(digest)):
                 why = "the note taken when he answered holds no hash of the file"
         elif why is None:
-            digest, why = _file_hash(p["file"], deadline)
+            digest, why, unfit = _file_hash(p["file"], deadline)
+            why = why or unfit
         if why is not None:
             untaken.append({"repo": p["repo"], "file": p["file"], "why": why})
         else:
@@ -1384,18 +1461,24 @@ def _not_shown(p, events, ap, note=None, calls_on=None):
 
 
 def _file_hash(path, deadline):
+    """The wording file at path as (its hash, None, unfit), or (None, why it has no hash an
+    approval could be of, None). unfit is None for wording an approval can be of, and else why an
+    approval of it approves nothing though it hashes (THE MERGE WOULD NOT REFUSE IT, module
+    docstring): the merge gate would refuse the wording itself, or whether it would could not be
+    told. The hash is still given then, because his answer about that wording is recorded by it
+    whatever he answered. The file is read once, and the bytes hashed are the bytes judged."""
     try:
         with open(path, "rb") as f:
             data = f.read(WORDING_BYTES + 1)
     except OSError as e:
-        return None, "the file could not be read (" + type(e).__name__ + "), so the wording he approved cannot be hashed"
+        return None, "the file could not be read (" + type(e).__name__ + "), so the wording he approved cannot be hashed", None
     if len(data) > WORDING_BYTES:
-        return None, "the file is larger than " + str(WORDING_BYTES // 1024) + " KB, which is no announcement"
+        return None, "the file is larger than " + str(WORDING_BYTES // 1024) + " KB, which is no announcement", None
     answer, why = hash_of(data, False, deadline)
     if why is not None:
-        return None, why
+        return None, why, None
     if not answer["hash"]:
-        return None, "the file holds no wording"
+        return None, "the file holds no wording", None
     # Every blank line is dropped before the hash, so the hash cannot tell a padded file from its
     # lines written together (claude-config#3703). lib/changelog-entry.js counts the longest run
     # that has wording after it, by its own reading of a blank line, and an answer that does not
@@ -1403,14 +1486,25 @@ def _file_hash(path, deadline):
     run, at = answer.get("blankRun"), answer.get("blankRunAt")
     if not isinstance(run, int) or isinstance(run, bool) or not isinstance(at, int) or isinstance(at, bool):
         return None, ("lib/changelog-entry.js did not say how many blank lines in a row the file holds, so whether "
-                      "wording sat below the screen he was shown could not be told (claude-sync pull reinstalls it)")
+                      "wording sat below the screen he was shown could not be told (claude-sync pull reinstalls it)"), None
     if run > BLANK_RUN:
         return None, ("the file holds " + str(run) + " blank lines in a row, from line " + str(at) + ", with more "
                       "wording below them, so the window it was opened in showed him the lines above and then white "
                       "space, and he may never have seen the rest. Take the blank lines out, leaving no more than "
                       + str(BLANK_RUN) + " blank lines in a row anywhere above the last line of wording, then open the "
-                      "file for him and ask him again")
-    return answer["hash"], None
+                      "file for him and ask him again"), None
+    # What the wording holds, judged by the merge gate's own judge (claude-config#3846): an approval
+    # of wording the merge would refuse could never be used, and he would be asked a second time.
+    # An answer that cannot be read is no clearance either (L98).
+    verdict, untold = refusal_of(data, False, deadline)
+    if untold is not None:
+        return answer["hash"], None, untold + ", and an approval of wording nobody could judge approves nothing"
+    if verdict["refused"]:
+        return answer["hash"], None, (
+            refused_why(verdict) + " An approval of wording the merge would refuse approves nothing. Change the "
+            "wording in the file until `" + JUDGE_COMMAND.replace("<file>", path) + "` refuses nothing, then open the "
+            "file for him and ask him again")
+    return answer["hash"], None, None
 
 
 def _read_back(entries, noted, looked, unjudged, deadline, unlooked, shared=False):

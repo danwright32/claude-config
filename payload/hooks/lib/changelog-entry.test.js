@@ -724,6 +724,104 @@ check(c.status === 2 && c.json === null, 'a flag nobody defined did not exit 2 f
   check(c.status === 2 && c.json === null && /Usage/.test(c.stderr || ''), 'a command named ' + name + ' with a flag did not print the usage and exit 2: ' + JSON.stringify(c).slice(0, 300));
 });
 
+// ---- wordingRefusal and its command line (claude-config#3846): the one judge of what a post may hold.
+// On 2026-11-27 Dan approved, by picker, wording whose first line was the mention followed by a
+// sentence. Only the merge gate read the rules, so the label went on and the merge was refused, and
+// he was asked a second time. The judge is now asked BEFORE he is: of a wording file, by the command
+// line, and it must be the gate's own judge, so every case here feeds the gate and the command the
+// same wording and holds them to one code and one sentence.
+check(typeof entry.wordingRefusal === 'function', '#3846 the library exports no wordingRefusal, so nothing judges a wording file by the merge gate\'s rules');
+const wordingRefusal = typeof entry.wordingRefusal === 'function' ? entry.wordingRefusal : function () { return { code: 'ABSENT', reason: '' }; };
+const ruleDir = fs.mkdtempSync(path.join(os.tmpdir(), 'changelog-wording-'));
+let ruleFiles = 0;
+function wordingFile(text) {
+  ruleFiles += 1;
+  const file = path.join(ruleDir, 'wording-' + ruleFiles + '.md');
+  fs.writeFileSync(file, text);
+  return file;
+}
+// What the merge gate says of a pull request whose Announcement block is this wording.
+function gateOf(wording) { return gate(['changelog/announce'], SENTENCE + '\n## Announcement\n' + wording + '\n\n## Testing\nran it', HERE); }
+// One answer of the command line as [code, reason], null for wording it would not refuse.
+function saidOf(c) { return c.json && c.json.refused === true ? [c.json.code, c.json.reason] : c.json && c.json.refused === false ? null : 'no answer'; }
+// The wording Dan was asked about that day, in shape: the mention and a sentence on one line.
+const SHARED_LINE = '@here Calls can now be handed back to the queue.\n\n- Press Hand back\n- Pick a reason';
+const RULE_CASES = [
+  ['wording that passes', POST, null, ''],
+  ['the mention sharing its line with a sentence', SHARED_LINE, 'ANNOUNCEMENT_NO_OPENER', 'on a line of its own'],
+  ['no mention at all', 'Hi team\nYou can now hand a call back.', 'ANNOUNCEMENT_NO_OPENER', 'on a line of its own'],
+  ['an HTML comment', '@here\n<!-- say what agents do differently -->\nYou can now hand a call back.', 'ANNOUNCEMENT_HTML_COMMENT', 'HTML comment'],
+  ['a dash as punctuation', '@here\nHand back - then pick a reason.', 'ANNOUNCEMENT_DASHES', 'Hand back - then pick a reason.'],
+  ['nothing at all', '', 'EMPTY_ANNOUNCEMENT', 'no post under it'],
+  ['only blank lines', ' \n\n\t\n', 'EMPTY_ANNOUNCEMENT', 'no post under it'],
+  ['a code span', '@here\nRun `the thing` now.', 'ANNOUNCEMENT_MARKDOWN', 'code (a backtick)'],
+  ['a block quote', '@here\n> quoted', 'ANNOUNCEMENT_MARKDOWN', 'a block quote (a line starting with >)'],
+  ['a table', '@here\n| a | b |\n| 1 | 2 |', 'ANNOUNCEMENT_MARKDOWN', 'a table (a line starting with |)'],
+  ['a picture', '@here\n![shot](https://example.com/a.png)', 'ANNOUNCEMENT_MARKDOWN', 'a picture (![...])'],
+  ['struck through text', '@here\nThis is ~~gone~~ now.', 'ANNOUNCEMENT_MARKDOWN', 'struck through text (~~)'],
+  ['a task box', '@here\n- [ ] do it', 'ANNOUNCEMENT_MARKDOWN', 'a task box ([ ] or [x] after a bullet)'],
+  ['a nested list', '@here\n- one\n  - inside', 'ANNOUNCEMENT_MARKDOWN', 'a nested list (an indented bullet or number)'],
+  ['a rule line', '@here\nAbove\n\n***\n\nBelow', 'ANNOUNCEMENT_MARKDOWN', 'a rule line (three hyphens, stars or underscores)'],
+];
+RULE_CASES.forEach(function (rc) {
+  const name = rc[0], wording = rc[1], code = rc[2], needle = rc[3];
+  const g = gateOf(wording);
+  const fromGate = g === null ? null : [g.code, g.reason];
+  check(code === null ? fromGate === null : fromGate !== null && fromGate[0] === code && fromGate[1].indexOf(needle) !== -1,
+    '#3846 ' + name + ': the merge gate did not answer ' + code + ' as this case expects, so the case compares nothing: ' + JSON.stringify(g));
+  const w = wordingRefusal(wording);
+  check(JSON.stringify(w === null ? null : [w.code, w.reason]) === JSON.stringify(fromGate),
+    '#3846 ' + name + ': wordingRefusal and the merge gate disagree about the same wording: ' + JSON.stringify(w) + ' against ' + JSON.stringify(g));
+  const file = wordingFile(wording);
+  const before = fs.readFileSync(file);
+  const byFile = cliIn(['announcement-refusal', file]);
+  check(JSON.stringify(saidOf(byFile)) === JSON.stringify(fromGate),
+    '#3846 ' + name + ': the command line, asked of a wording file, and the merge gate disagree about the same wording: ' + JSON.stringify(byFile).slice(0, 600) + ' against ' + JSON.stringify(g));
+  // The exit status says it too, so a caller that reads only the status is never told refused wording passed (L184).
+  check(byFile.status === (fromGate === null ? 0 : 1), '#3846 ' + name + ': the command line exited ' + byFile.status + ' for wording the merge ' + (fromGate === null ? 'takes' : 'refuses'));
+  check(byFile.json && (fromGate === null ? byFile.json.code === null && byFile.json.reason === null : true),
+    '#3846 ' + name + ': an answer that refuses nothing carries a code or a reason: ' + JSON.stringify(byFile.json));
+  const byInput = cliIn(['announcement-refusal', '-'], wording);
+  check(JSON.stringify(saidOf(byInput)) === JSON.stringify(fromGate) && byInput.status === byFile.status,
+    '#3846 ' + name + ': the command line asked on standard input (-) did not answer as it does of the file: ' + JSON.stringify(byInput).slice(0, 600));
+  const inBody = cliIn(['announcement-refusal', '--body', '-'], 'Why.\n\n' + SENTENCE + '\n## Announcement\n' + wording + '\n\n## Testing\nran it');
+  check(JSON.stringify(saidOf(inBody)) === JSON.stringify(fromGate),
+    '#3846 ' + name + ': the command line asked of a description (--body) did not judge its block as the merge gate does: ' + JSON.stringify(inBody).slice(0, 600));
+  check(Buffer.compare(before, fs.readFileSync(file)) === 0, '#3846 ' + name + ': the command line changed the wording file it was asked to read');
+});
+// Every rule about markdown has a case above, by the rules' own names: a rule added to the gate with
+// no case here fails this, where a table written by hand would go on passing without it (L96).
+check(Array.isArray(entry.UNMEASURED_MARKDOWN_NAMES) && entry.UNMEASURED_MARKDOWN_NAMES.length >= 8, '#3846 the library does not export the names of its markdown rules, so nothing can tell that each has a case: ' + JSON.stringify(entry.UNMEASURED_MARKDOWN_NAMES));
+(entry.UNMEASURED_MARKDOWN_NAMES || []).forEach(function (ruleName) {
+  check(RULE_CASES.some(function (rc) { return rc[2] === 'ANNOUNCEMENT_MARKDOWN' && rc[3] === ruleName; }),
+    '#3846 the markdown rule "' + ruleName + '" has no case feeding the merge gate and the command line the same wording');
+});
+// The refusal of that day's wording quotes the line, so the session can see what to split.
+c = cliIn(['announcement-refusal', wordingFile(SHARED_LINE)]);
+check(c.json && c.json.refused === true && c.json.reason.indexOf('"@here Calls can now be handed back to the queue."') !== -1,
+  '#3846 the refusal of a mention sharing its line does not quote that line: ' + JSON.stringify(c.json));
+// The file is read as the block it becomes: the line endings GitHub gives, spaces at the ends of
+// lines and blank lines around the wording are no part of it, so they refuse nothing.
+c = cliIn(['announcement-refusal', wordingFile('\r\n\r\n@here  \r\n**Handing a call back**\t\r\n\r\nYou can now hand a call back.\r\n\r\n\r\n')]);
+check(c.status === 0 && c.json && c.json.refused === false, '#3846 wording with the line endings GitHub gives, spaces at the ends of lines and blank lines around it was refused: ' + JSON.stringify(c));
+// A description with no Announcement heading holds no post, in the gate's own words for that.
+c = cliIn(['announcement-refusal', '--body', '-'], SENTENCE);
+r = parse(['changelog/announce'], SENTENCE);
+check(c.status === 1 && c.json && c.json.refused === true && c.json.code === 'NO_ANNOUNCEMENT' && r.code === 'NO_ANNOUNCEMENT' && c.json.reason === r.reason,
+  '#3846 a description with no Announcement heading was not refused in the words the record\'s reader gives a pull request: ' + JSON.stringify(c) + ' against ' + JSON.stringify(r));
+// A file that cannot be read is no answer: nothing on standard output, why on standard error, and a
+// status that is neither "takes" nor "refuses", so no reader takes it for wording that passes (L98).
+c = cliIn(['announcement-refusal', path.join(ruleDir, 'not-there.md')]);
+check(c.status === 3 && c.stdout === '' && /not-there\.md/.test(c.stderr || ''), '#3846 a wording file that is not there was answered, or exited as an answer does: ' + JSON.stringify(c));
+c = cliIn(['announcement-refusal', ruleDir]);
+check(c.status === 3 && c.stdout === '', '#3846 a folder named as the wording file was answered: ' + JSON.stringify(c));
+// The usage, for a call naming no file, two files, or a flag nobody defined.
+[['announcement-refusal'], ['announcement-refusal', wordingFile(POST), wordingFile(POST)], ['announcement-refusal', '--something-else', wordingFile(POST)]].forEach(function (args) {
+  c = cliIn(args, POST);
+  check(c.status === 2 && c.json === null && /announcement-refusal/.test(c.stderr || ''), '#3846 ' + JSON.stringify(args.slice(0, 2)) + ' did not print the usage and exit 2: ' + JSON.stringify(c).slice(0, 300));
+});
+fs.rmSync(ruleDir, { recursive: true, force: true });
+
 console.log('  ' + passed + ' passed, ' + failed + ' failed');
 console.log('SUITE-RESULT passed=' + passed + ' failed=' + failed);
 process.exit(failed === 0 ? 0 : 1);

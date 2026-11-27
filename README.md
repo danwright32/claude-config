@@ -2007,7 +2007,9 @@ commit either, and this refusal only arrives at the push.
 
 A pull request labelled `changelog/announce` carries the post for agents under `## Announcement`,
 and Dan's words for the label were "it should ask me before applying the label". So the session
-writes the post to a file, runs `/no-ai-tells` on it, opens it in BBEdit with the front window flag,
+writes the post to a file, runs `/no-ai-tells` on it, runs
+`node ~/.claude/hooks/lib/changelog-entry.js announcement-refusal <file>` and changes the wording
+until that refuses nothing (#3846, below), opens it in BBEdit with the front window flag,
 and asks ONE picker of one question (`Approve the wording` or `Not yet`) naming the pull request or
 feature and the channel and ending `Save the file before you answer.`, with this metadata:
 
@@ -2051,7 +2053,31 @@ when all of these hold, each failure said in its own words:
   leave no more than two in a row, then open the file and ask him again. Blank lines after the last
   line of wording hide nothing and pass. The run is counted by `hooks/lib/changelog-entry.js`
   (`blankRunBeforeWording`, in the answer of its `announcement-hash` command), by the same reading
-  of a blank line the hash drops them by, and an answer without the count approves nothing.
+  of a blank line the hash drops them by, and an answer without the count approves nothing;
+- the merge would not refuse the wording for what it holds (#3846). On 2026-11-27 he approved, by
+  picker, wording whose first line was the mention followed by a sentence. Only the merge gate read
+  the rules for what a post may hold (the mention alone on its first line, only the markdown that
+  was measured to arrive in Slack, no dash as punctuation, no HTML comment), so the approval
+  counted, the label went on, the merge was refused for the opener, and he was asked a second
+  time. An Approve of wording the merge would refuse now approves nothing, and the refusal carries
+  the gate's code and its own words. There is one judge and no copy of the rules:
+  `hooks/lib/changelog-entry.js`'s `blockRefusal` is what the merge gate judges a pull request's
+  block with, and its command line `announcement-refusal [--body] <file | ->` puts the same
+  function to a wording file (read as the block it becomes), printing `{refused, code, reason}`
+  and exiting 0 for wording the gate takes, 1 for wording it refuses and 3 for a file it cannot
+  read. It changes nothing. The library hands that command the same bytes it hashed, and an answer
+  from it that cannot be read approves nothing. How to ask him, which the label hook and the merge
+  gate print, names the command as the step before the file is opened, so a session that follows
+  it never puts wording the merge would refuse in front of him.
+
+What is written to the record did not change with that rule. A note of wording the merge would
+refuse still holds the wording's hash, so his `Not yet` about it takes back what it always did, and
+its `why` says what an Approve of it is stopped by. An approval the record already held still
+counts wherever its wording passes. One of wording that does not pass could never merge, and
+`announce-label-ask.sh` refuses the label for it: before it looks for any approval, it puts the
+Announcement block the command would leave to the same judge and refuses wording the merge would
+refuse, with the gate's code and words. The hash and that judging share the library's one five
+second bound, so the hook's longest wait is what it was.
 
 What is hashed is the FILE as it stands, never a hash the session supplies, by
 `hooks/lib/changelog-entry.js`'s `announcementHash`: the sha256 of the one normalised form (line
@@ -2209,7 +2235,8 @@ the wording, and sleep mode can answer one with Dan asleep.
   `gh pr create --label`, `gh pr edit --add-label`, `gh issue edit --add-label` and a `gh api`
   write to a pull request's labels are refused unless the wording the command would leave is
   approved, read from its `--body`, from the file its `--body-file` names, or from GitHub for an
-  edit that gives neither. It asks for the pull request the command names by number or link (or
+  edit that gives neither. Wording the merge would refuse for what it holds is refused first,
+  approved or not, by the merge gate's own judge and in its words (#3846, above). It asks for the pull request the command names by number or link (or
   GitHub's answer names) and records nothing: the pull request that used an approval keeps it, and
   any other, or a command naming none (a create), goes through only while an approval of that
   wording is unused. A form the wording cannot be read from (`--fill`, a template, a body on

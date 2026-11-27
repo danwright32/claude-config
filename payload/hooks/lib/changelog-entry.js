@@ -336,21 +336,30 @@ function parseEntry(input) {
   // the post is where it is told. What the post may contain is the merge gate's (gateRefusal), not
   // this reader's.
   const announcement = extractAnnouncement(input && input.body);
+  const missing = missingAnnouncement(announcement);
+  if (missing) return refuse(missing.code, missing.reason, kind);
+  return { ok: true, kind: ANNOUNCE, line: block, announcement: announcement };
+}
+
+// Why an announce label has no post under it, as { code, reason }, or null when it has one:
+// `announcement` is extractAnnouncement's answer. Written once, for parseEntry, which refuses the
+// pull request with it, and for blockRefusal below, which judges wording before it is in one.
+function missingAnnouncement(announcement) {
   if (announcement === null) {
-    return refuse('NO_ANNOUNCEMENT',
-      'This pull request is labelled ' + LABEL_PREFIX + ANNOUNCE + ', which says agents must or can act '
+    return { code: 'NO_ANNOUNCEMENT',
+      reason: 'This pull request is labelled ' + LABEL_PREFIX + ANNOUNCE + ', which says agents must or can act '
       + 'differently, but its body has no "## Announcement" heading, so there is no post for agents to '
       + 'draft once the change is live. Add the heading with the whole post under it, opening with '
-      + ANNOUNCEMENT_OPENER + ' on a line of its own, beside the Changelog sentence for managers.', kind);
+      + ANNOUNCEMENT_OPENER + ' on a line of its own, beside the Changelog sentence for managers.' };
   }
   if (announcement === '') {
-    return refuse('EMPTY_ANNOUNCEMENT',
-      'The "## Announcement" heading in this pull request has no post under it, while the label ('
+    return { code: 'EMPTY_ANNOUNCEMENT',
+      reason: 'The "## Announcement" heading in this pull request has no post under it, while the label ('
       + LABEL_PREFIX + ANNOUNCE + ') says there is something to tell agents. Write the post, opening with '
       + ANNOUNCEMENT_OPENER + ' on a line of its own, or relabel this ' + LABEL_PREFIX + VISIBLE
-      + ' if agents have nothing to do differently.', kind);
+      + ' if agents have nothing to do differently.' };
   }
-  return { ok: true, kind: ANNOUNCE, line: block, announcement: announcement };
+  return null;
 }
 
 // ------------------------------------------------------------------ the merge gate's own rules
@@ -449,6 +458,29 @@ function announcementRefusal(text) {
   return null;
 }
 
+// THE ONE JUDGE OF AN ANNOUNCEMENT'S WORDING (claude-config#3846): why the merge is refused for what
+// stands under the Announcement heading, as { code, reason }, or null when it is not. `block` is
+// extractAnnouncement's answer. The merge gate comes here for the pull request about to merge, and
+// so does everything that asks BEFORE the merge: the announcement-refusal command line, which a
+// session runs on the wording file before it is opened in front of Dan, and through it
+// lib/announce-approval.py, which counts no approval of wording refused here. On 2026-11-27 only the
+// gate read these rules, so Dan approved wording whose first line was the mention followed by a
+// sentence, the label went on, the merge was refused and he was asked a second time. A new rule
+// about what a post may hold goes in announcementRefusal, above, and is then asked everywhere.
+function blockRefusal(block) {
+  return missingAnnouncement(block) || announcementRefusal(block);
+}
+
+// A wording FILE's text judged as the block it becomes once it is under the heading of a pull
+// request: read by extractAnnouncement, the reader of that block, so the line endings, the spaces
+// at the ends of lines and the blank lines around the wording count for exactly what they count for
+// there, and judged by blockRefusal. A file holding a heading line is judged by the lines above it,
+// as the block would be: that the block could then never hold the file whole is not asked here.
+const WORDING_HEADING = '## Announcement';
+function wordingRefusal(text) {
+  return blockRefusal(extractAnnouncement(WORDING_HEADING + '\n' + (typeof text === 'string' ? text : '')));
+}
+
 // What the MERGE GATE refuses, beyond what parseEntry refuses on every Mac (the head of this file).
 // Called by hooks/require-changelog-tag.sh and by nothing else: `entry` is parseEntry's answer for
 // the pull request, `body` its description, `scope` what repoScope said about its repository.
@@ -476,7 +508,7 @@ function gateRefusal(entry, body, scope) {
     return gateRefuse(entry.code, entry.reason);
   }
 
-  if (entry.kind === ANNOUNCE) return announcementRefusal(entry.announcement);
+  if (entry.kind === ANNOUNCE) return blockRefusal(entry.announcement);
 
   // Any other label over an Announcement block: a post somebody wrote that nothing will ever draft.
   const stray = extractAnnouncement(body);
@@ -692,6 +724,10 @@ module.exports = {
   normalizeAnnouncement: normalizeAnnouncement,
   blankRunBeforeWording: blankRunBeforeWording,
   announcementHash: announcementHash,
+  wordingRefusal: wordingRefusal,
+  // The names of the markdown rules, for the suite: it holds every one of them to a case that feeds
+  // the merge gate and the command line the same wording.
+  UNMEASURED_MARKDOWN_NAMES: UNMEASURED_MARKDOWN.map(function (rule) { return rule.name; }),
   changelogLabels: changelogLabels,
   carriesAnnounce: carriesAnnounce,
   repoScope: repoScope,
@@ -726,9 +762,19 @@ module.exports = {
 //       blankRunBeforeWording's answer about the wording as given. Without the flag the input IS the wording (the
 //       file Dan was shown). With --body it is a pull request description, hashed by the block under
 //       its Announcement heading, and `found` is false, with no hash, when it has no such heading.
-// Every answer either can give exits 0, "unknown" included, so the reader tells a gate that cannot
-// tell from a command that failed. A call naming no repository where one is needed, a flag nobody
-// defined, or any other command, prints the usage and exits 2.
+//   announcement-refusal [--body] <file | ->
+//       reads a wording file, or standard input when the file is named `-`, changes nothing, and
+//       prints {refused, code, reason}: whether the merge gate would refuse a pull request whose
+//       Announcement block is that wording, with the gate's own code and words, or with both null
+//       when it would not (wordingRefusal, claude-config#3846). Run on the wording file BEFORE it
+//       is opened in front of Dan, so he is never asked about wording that cannot merge. With --body
+//       the input is a pull request description, judged by the block under its Announcement heading.
+//       It exits 0 for wording the gate takes and 1 for wording it refuses, so a caller that reads
+//       only the status is never told refused wording passed (L184); the answer is printed either
+//       way. A file that cannot be read is no answer: why on standard error, and exit 3.
+// Every answer the first three can give exits 0, "unknown" included, so the reader tells a gate that
+// cannot tell from a command that failed. A call naming no repository or file where one is needed, a
+// flag nobody defined, or any other command, prints the usage and exits 2.
 if (require.main === module) {
   const cmd = process.argv[2];
   const rest = process.argv.slice(3);
@@ -738,7 +784,7 @@ if (require.main === module) {
   const named = typeof slug === 'string' && slug.trim();
   // Asked of the table's own names only: a command named `constructor` would otherwise find what
   // every object inherits, and the line below would throw where the usage is owed.
-  const flagTable = { 'required-labels': ['--needs-dan'], 'announcement-hash': ['--body'] };
+  const flagTable = { 'required-labels': ['--needs-dan'], 'announcement-hash': ['--body'], 'announcement-refusal': ['--body'] };
   const known = Object.prototype.hasOwnProperty.call(flagTable, cmd) ? flagTable[cmd] : [];
   const flagsKnown = flags.every(function (f) { return known.indexOf(f) !== -1; });
   const readNow = function () { return registryReader.readRegistry(plain[1] || registryReader.registryPath()); };
@@ -764,11 +810,31 @@ if (require.main === module) {
       const run = blankRunBeforeWording(text);
       process.stdout.write(JSON.stringify({ found: text !== null, hash: announcementHash(text), lines: normal ? normal.split('\n').length : 0, blankRun: run.count, blankRunAt: run.at }) + '\n');
     });
+  } else if (cmd === 'announcement-refusal' && flagsKnown && plain.length === 1) {
+    const judge = function (raw) {
+      const refused = flags.indexOf('--body') !== -1 ? blockRefusal(extractAnnouncement(raw)) : wordingRefusal(raw);
+      process.stdout.write(JSON.stringify({ refused: refused !== null, code: refused ? refused.code : null, reason: refused ? refused.reason : null }) + '\n');
+      // Set, never process.exit: the answer above is still being written when this line runs.
+      process.exitCode = refused !== null ? 1 : 0;
+    };
+    if (plain[0] === '-') {
+      withInput(judge);
+    } else {
+      let raw = null;
+      try {
+        raw = require('fs').readFileSync(plain[0], 'utf8');
+      } catch (e) {
+        process.stderr.write('changelog-entry.js announcement-refusal: ' + plain[0] + ' could not be read (' + ((e && e.code) || 'an error') + '), so whether the merge would refuse its wording was not judged\n');
+        process.exitCode = 3;
+      }
+      if (raw !== null) judge(raw);
+    }
   } else {
     // One line, since a reader of a failed run quotes the last line it printed.
     process.stderr.write('Usage: changelog-entry.js required-labels <owner/name> [registry file] [--needs-dan] | '
       + 'announcement <owner/name> [registry file], with the pull request as JSON on standard input | '
-      + 'announcement-hash [--body], with the wording, or with --body a description, on standard input\n');
+      + 'announcement-hash [--body], with the wording, or with --body a description, on standard input | '
+      + 'announcement-refusal [--body] <file>, the wording file to judge, or - for standard input\n');
     process.exit(2);
   }
 }

@@ -3507,8 +3507,47 @@ for the review by picker, 2026-11-25: "Yes, attack it first"). The choices are t
   the second of the record alone, which would forget the sessions the first left unread and let
   a decline clear where the first would not have.
 
+- **Wording the merge would refuse is never approved, and the rules have one reader (#3846).** On
+  2026-11-27 Dan approved, by picker, wording whose first line was the mention followed by a
+  sentence. The label hook let the label on, the merge gate refused that wording for its opener,
+  and he was asked a second time: the rules for what a post may hold were read by the merge gate
+  and by nothing that runs before it. They now have one judge, `blockRefusal` in
+  `changelog-entry.js`, which the gate calls for the pull request and which a command line,
+  `announcement-refusal`, puts to a wording file or a description. Three things ask that command:
+  a session, as the step of "how to ask him" before the file is opened; the approval library,
+  which counts no Approve of wording it refuses; and the label hook, which refuses the label on
+  such wording before it looks for an approval. The choices are the builder's, each on the
+  stricter side.
+  - The library asks the command and keeps no rule. Ruled out: the rules restated in python,
+    which is a second reader that drifts from the first on the next rule added (L370).
+  - A wording file is judged as the block it becomes, read by the block's own reader
+    (`extractAnnouncement`), so line endings, spaces at the ends of lines and blank lines round
+    the wording count for what they count for at the merge. Every rule reads one line at a time
+    and no blank line breaks one, so for lines ended as a file or GitHub ends them the verdict
+    depends only on the normalised wording the hash is of. A bare carriage return is the
+    exception: the hash reads it as a line's end and the block's reader does not, so such a file
+    is judged as the gate would judge that block, which is the stricter reading.
+  - The command exits 1 for wording it refuses and prints its answer either way, where the file's
+    other commands exit 0 for every answer. A session that reads only the status must not be told
+    refused wording passed (L184), and the library holds the status and the answer to each other,
+    so a mismatch is an answer that cannot be read. An answer that cannot be read approves
+    nothing and lets no label on (L98).
+  - The record's lines did not change, so approvals it already held still count where their
+    wording passes. A note of refused wording keeps the wording's hash and says in `why` what
+    stops an Approve of it. Ruled out: a note with no hash, as a padded file gets, because his
+    `Not yet` about that wording would then take back by file name where it took back by hash.
+  - An approval of refused wording that the record held before the rule is a hash and no wording,
+    so the library cannot judge it. The label hook can, since it holds the block, and it judges
+    the block before any approval is looked for. Ruled out: judging after the approval is found,
+    which needs a second time bound on a hook whose bounds already add up to most of the time
+    it is registered with (above); judged first, the hash and the judging share one bound. The cost is that a call refused for
+    its wording reads no picker into the record, which the merge gate has always done the same way.
+  - Not built: refusing a wording file that holds a heading line. A pull request's block ends at
+    the next heading, so such a file can never be the block whole, and the merge would refuse the
+    cut block as unapproved. That is a rule the gate does not have, and this change adds none.
+
 `hooks/test-announce-approval.sh`, `hooks/test-announce-label-ask.sh`,
-`hooks/test-announce-answer-note.sh`, the #3666 and #3669 sections of `hooks/test-changelog-tag.sh`
+`hooks/test-announce-answer-note.sh`, the #3666, #3669 and #3846 sections of `hooks/test-changelog-tag.sh`
 and `skills/milestone/test-create-milestone.sh` hold it.
 
 ## Things known to be wrong and left that way
