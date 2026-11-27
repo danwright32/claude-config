@@ -83,6 +83,18 @@ test('a pull request is named only in words that say it is one, or by its link',
   const link = 'https://github.com/o/r/pull/716'
   expect(namedAsPr(`See ${link}`, new Map([[link, 'o/r']]))).toEqual([{ repo: 'o/r', number: 716 }])
   expect(namedAsPr(`See ${link}`)).toEqual([])
+  // Named in words and by its link it is one pull request, where its number named alone is known
+  // to be in the link's repository (#3779). In another repository, or in none known, it is two.
+  const both = 'pull request 7 (https://github.com/owner/name/pull/7)'
+  const there = new Map([['https://github.com/owner/name/pull/7', 'owner/name']])
+  expect(namedAsPr(both, there, new Map([[7, 'Owner/Name']]))).toEqual([{ repo: 'Owner/Name', number: 7 }])
+  expect(namedAsPr(both, there, new Map([[7, 'o/r']]))).toEqual([{ repo: 'o/r', number: 7 }, { repo: 'owner/name', number: 7 }])
+  expect(namedAsPr(both, there)).toEqual([{ number: 7 }, { repo: 'owner/name', number: 7 }])
+  // The link first, and its repository said in words as well, is still the one pull request.
+  expect(namedAsPr('https://github.com/owner/name/pull/7 is PR 7, PR owner/name#7', there, new Map([[7, 'owner/name']]))).toEqual([{ repo: 'owner/name', number: 7 }])
+  // Two different pull requests stay two, wherever the number named alone is.
+  const nine = new Map([['https://github.com/owner/name/pull/9', 'owner/name']])
+  expect(namedAsPr('pull request 7 replaces https://github.com/owner/name/pull/9', nine, new Map([[9, 'owner/name']]))).toEqual([{ number: 7 }, { repo: 'owner/name', number: 9 }])
   // A bare number, an issue, a picker's own numbering and a count name no pull request.
   expect(namedAsPr('3.79 Sign off for #3692, issue 12, the 3 PRs and PR 3.79')).toEqual([])
 })
@@ -507,6 +519,37 @@ test('a pull request in another repository is recorded there, and one this sessi
   const why = 'Dan\'s answer "Close it unmerged" about PR #31 could not be recorded: this session opened a pull request numbered 31 in o/other and in O/R, and his picker named no repository, so which one he chose to close is not on record. Winding down asks about that PR as if he had not answered'
   expect(two.seen).toMatchObject({ left: [], writes: 0, logs: [why] })
   expect(noted).toEqual({ recorded: [], withdrawn: [], failed: [why] })
+})
+
+test('a pull request his picker names in words and by its link is one pull request, where the link is to the repository its number alone is placed in (#3779)', async () => {
+  const both = 'Pull request 31 (https://github.com/o/r/pull/31) is not needed. What now?'
+  const pick = (over: Parameters<typeof io>[0] = {}, question: string = both) => {
+    const made = io(over)
+    return notePicked(made.made, picker(question, closeOrMerge), answered(question, 'Close it unmerged')).then(noted => ({ noted, seen: made.seen }))
+  }
+  // The link is to the session's own repository, where a number named alone is placed: recorded, once.
+  const own = await pick()
+  expect(own.seen).toMatchObject({ left: [PICKED_31], writes: 1, logs: [] })
+  expect(own.noted).toEqual({ recorded: [PICKED_31], withdrawn: [], failed: [] })
+  // However the link spells that repository.
+  expect((await pick({ linkRepo: async () => 'O/R' })).seen).toMatchObject({ left: [PICKED_31], writes: 1, logs: [] })
+  // This session opened it under that number in another repository, and the link is to that one: recorded there.
+  const opened = [{ repo: 'o/other', number: 31 }]
+  expect((await pick({ opened: async () => opened, linkRepo: async () => 'o/other' })).seen).toMatchObject({ left: [{ ...PICKED_31, repo: 'o/other' }], writes: 1, logs: [] })
+  // A link to another repository's pull request of the same number is a second pull request, so
+  // which one he chose is not on record: from the session's own repository, and from the one it opened it in.
+  expect((await pick({ linkRepo: async () => 'o/other' })).seen).toMatchObject({ left: [], writes: 0, logs: [] })
+  expect((await pick({ opened: async () => opened })).seen).toMatchObject({ left: [], writes: 0, logs: [] })
+  // A number this session opened in two repositories, or whose repository cannot be read, is placed
+  // nowhere, so no link can be said to be it.
+  expect((await pick({ opened: async () => [...opened, { repo: 'o/r', number: 31 }] })).seen).toMatchObject({ left: [], writes: 0, logs: [] })
+  expect((await pick({ slug: async () => undefined })).seen).toMatchObject({ left: [], writes: 0, logs: [] })
+  // Two different pull requests, one in words and one by its link, still record nothing.
+  expect((await pick({}, 'Pull request 31 (https://github.com/o/r/pull/30) is not needed. What now?')).seen).toMatchObject({ left: [], writes: 0, logs: [] })
+  // The repository a number alone is in is read only for a picker that holds a link.
+  const never = async () => { throw new Error('never asked') }
+  const plain = 'PR o/r#31 is not needed. What now?'
+  expect((await pick({ opened: never, slug: never, linkRepo: never }, plain)).seen).toMatchObject({ left: [PICKED_31], writes: 1, logs: [] })
 })
 
 test('a pick that cannot be recorded, and one not kept, are said where the session reads them, never only in the debug log (#3779)', async () => {

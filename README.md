@@ -10411,7 +10411,10 @@ number with a #, his answer counts once GitHub has said that number is no pull r
 the PR is neither settled nor sent back to be reopened, and where it is a pull request his answer
 is not kept as his choice, since which one he meant is not on record, and the turn end that sends
 the PR back says so each time. A pull request named by number alone is placed by the pull requests
-the session opened: one under that number says which repository, two record nothing. His pick is
+the session opened: one under that number says which repository, two record nothing. Named in
+words and by its link as well ("pull request 7 (its link)"), it is one pull request where the link
+is to the repository its number alone is placed in; a link to another repository's pull request of
+the same number is a second pull request, so nothing is recorded and he is asked. His pick is
 said to the session and in the transcript the moment it is recorded, withdrawn or cannot be
 recorded, and every turn end of a session holding one names the pull request and quotes his
 answer, winding down or not: in the transcript, unless that turn end's own refusal already lists

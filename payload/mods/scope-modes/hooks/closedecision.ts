@@ -69,13 +69,18 @@ const NAMED_AS_PR = new RegExp(String.raw`\b(?:pull request|PR)(?:\s+(?:([\w.-]+
 
 /**
  * The pull requests a text names as pull requests, in order, each once. A link names its own once
- * `linked` holds mod-kit's answer for it, the repository it is in (#1777).
+ * `linked` holds mod-kit's answer for it, the repository it is in (#1777). A number named with no
+ * repository is in the one `alone` holds for it, so "pull request 7 (its link)" is one pull request
+ * where 7 alone is placed in the link's repository; before `alone` it was always two, and his
+ * answer under such a question recorded nothing (the script review of #3779). A number `alone`
+ * does not hold stays without a repository, and is then another pull request than any named with one.
  */
-export const namedAsPr = (text: string, linked: ReadonlyMap<string, string | null> = new Map()): PrRef[] => {
+export const namedAsPr = (text: string, linked: ReadonlyMap<string, string | null> = new Map(), alone: ReadonlyMap<number, string> = new Map()): PrRef[] => {
   const found: { at: number; repo?: string; number: number }[] = []
   for (const m of text.matchAll(NAMED_AS_PR)) {
-    const repo = m[1] ?? m[3]
-    found.push({ at: m.index ?? 0, ...(repo ? { repo } : {}), number: Number(m[2]) })
+    const number = Number(m[2])
+    const repo = m[1] ?? m[3] ?? alone.get(number)
+    found.push({ at: m.index ?? 0, ...(repo ? { repo } : {}), number })
   }
   let from = 0
   for (const { link, number } of prLinks(text)) {
@@ -120,9 +125,14 @@ const hisAnswers = (input: Record<string, unknown>, r: Result): { q: Asked; give
 /**
  * His decisions to close a PR unmerged in one picker, from the call as it was made and what the
  * dialog handed back; empty for everything else. `linked` is mod-kit's answer for each pull request
- * link the picker holds.
+ * link the picker holds, and `alone` the repository a number named with none is in, where known.
  */
-export const closeDecisions = (input: Record<string, unknown>, r: Result, linked: ReadonlyMap<string, string | null> = new Map()): CloseDecision[] => {
+export const closeDecisions = (
+  input: Record<string, unknown>,
+  r: Result,
+  linked: ReadonlyMap<string, string | null> = new Map(),
+  alone: ReadonlyMap<number, string> = new Map(),
+): CloseDecision[] => {
   const mine = hisAnswers(input, r)
   // His answer covers the picker because he read it (#3321).
   if (!mine.length || askFault(input) !== undefined) return []
@@ -132,8 +142,8 @@ export const closeDecisions = (input: Record<string, unknown>, r: Result, linked
     // One answer, and one the picker offered: words he typed are for Claude to read, never a pick.
     if (typeof given !== 'string' || !q.options.some(o => !!o && typeof o === 'object' && (o as { label?: unknown }).label === given)) continue
     if (!closesUnmerged(given)) continue
-    const inAnswer = namedAsPr(given, linked)
-    const named = inAnswer.length ? inAnswer : namedAsPr(q.question, linked)
+    const inAnswer = namedAsPr(given, linked, alone)
+    const named = inAnswer.length ? inAnswer : namedAsPr(q.question, linked, alone)
     const pr = named[0]
     if (named.length !== 1 || !pr) continue
     out.push({ pr, answer: given, unless: inAnswer.length ? [] : prRefs(`${q.question}\n${given}`, pr, linked) })
@@ -212,6 +222,16 @@ export const changeLeft = async (
 const isPicked = (x: ScopeModesLeftAsIs): x is ScopeModesLeftClosed => isLeftClosed(x) && x.picked === true
 
 /**
+ * Where a pull request named by its number alone is: `mine` is each repository this session opened
+ * one under that number in, and `repo` the one it is placed in, which is the only one of those,
+ * the session's own with none of them, and none with two.
+ */
+const placedAlone = async (io: Pick<PickedIo, 'opened' | 'slug'>, number: number): Promise<{ mine: string[]; repo: string | undefined }> => {
+  const mine = [...new Map((await io.opened()).filter(o => o.number === number).map(o => [o.repo.toLowerCase(), o.repo])).values()]
+  return { mine, repo: mine.length > 1 ? undefined : (mine[0] ?? (await io.slug())) }
+}
+
+/**
  * What one answered picker changed on the record of his picks: those recorded, those an answer of
  * his withdrew (with that answer), and why one could not be recorded.
  */
@@ -243,7 +263,17 @@ export const notePicked = async (io: PickedIo, input: Record<string, unknown>, r
     if (!mayDecide && !(hisAnswers(input, r).length && ((await io.left()).value ?? []).some(isPicked))) return noted
     const linked = new Map<string, string | null>()
     for (const text of texts) for (const { link } of prLinks(text)) if (!linked.has(link)) linked.set(link, await io.linkRepo(link))
-    const found = mayDecide ? closeDecisions(input, r, linked) : []
+    // A number is placed here only where a link holds it too: only there does the repository it is
+    // in alone say whether the picker names one pull request or two.
+    const alone = new Map<number, string>()
+    if (mayDecide)
+      for (const text of texts)
+        for (const { link, number } of prLinks(text)) {
+          if (!linked.get(link) || alone.has(number)) continue
+          const { repo } = await placedAlone(io, number)
+          if (repo) alone.set(number, repo)
+        }
+    const found = mayDecide ? closeDecisions(input, r, linked, alone) : []
     const about = answeredAbout(input, r, linked)
     // Each record is made before the list is touched, so nothing is waited on between reading it and writing it.
     const records: ScopeModesLeftClosed[] = []
@@ -251,12 +281,12 @@ export const notePicked = async (io: PickedIo, input: Record<string, unknown>, r
       const could = `Dan's answer "${quoteOf(d.answer)}" about PR ${refSaid(d.pr)} could not be recorded`
       let repo = d.pr.repo
       if (!repo) {
-        const mine = [...new Map((await io.opened()).filter(o => o.number === d.pr.number).map(o => [o.repo.toLowerCase(), o.repo])).values()]
-        if (mine.length > 1) {
-          fail(`${could}: this session opened a pull request numbered ${d.pr.number} in ${mine.join(' and in ')}, and his picker named no repository, so which one he chose to close is not on record. Winding down asks about that PR as if he had not answered`)
+        const placed = await placedAlone(io, d.pr.number)
+        if (placed.mine.length > 1) {
+          fail(`${could}: this session opened a pull request numbered ${d.pr.number} in ${placed.mine.join(' and in ')}, and his picker named no repository, so which one he chose to close is not on record. Winding down asks about that PR as if he had not answered`)
           continue
         }
-        repo = mine[0] ?? (await io.slug())
+        repo = placed.repo
       }
       if (!repo) {
         fail(`${could}: this session's repository could not be read, so which repository it is in is not known. Winding down asks about that PR as if he had not answered`)
