@@ -1720,6 +1720,40 @@ T="$WORK/f-hook.jsonl"; new_talk "$T"
 talk "$T" decide acme/widget "Hand back" "Not announcing" "" "" 28
 check "the record-only question does not read his picker" "$([[ "$(finishes "$STORE_USED" "$(closing "$SAYS_YES" "12" "12")")" == "owed|"* ]] && echo ok || echo no)"
 check "still possible: asked as a hook asks, his Not announcing in this session clears it" "$([[ "$(finishes "$STORE_USED" "$(closing "$SAYS_YES" "12" "12")" "$T")" == "clear|"* ]] && echo ok || echo no)"
+# His decline naming the milestone clears it only while it is also his LAST answer about that feature
+# in any picker (review of #3669, high 1). A picker at feature discovery names no milestone, so a
+# newer Announce it there never took the decline back, and the decline cleared every later merge
+# finishing that milestone.
+STORE_USED="$WORK/store-f-newer"
+T="$WORK/f-newer.jsonl"; new_talk "$T"
+talk "$T" decide acme/widget "Hand back" "Not announcing" "" "" 28
+talk "$T" decide acme/widget "Hand back" "Announce it"
+r="$(finishes "$STORE_USED" "$(closing "$SAYS_YES" "12" "12")" "$T")"
+check "R9 #3669 A his newer Announce it in a picker naming no milestone takes the decline back: owed" "$([[ "$r" == "owed|"* ]] && echo ok || echo "$r")"
+check "R9 #3669 A and the refusal says his decline is not his last answer about it, and what he answered after it" "$([[ "$r" == *'his `Not announcing` in a picker naming that milestone is not his last answer about announcing it: after it he answered `Announce it`'* && "$r" != *"no answer of his declining it"* ]] && echo ok || echo "$r")"
+check "R9 #3669 A the question that reads the record only gives the same answer once both are on the record" "$([[ "$(finishes "$STORE_USED" "$(closing "$SAYS_YES" "12" "12")")" == "owed|"*"is not his last answer about announcing it"* ]] && echo ok || echo no)"
+STORE_USED="$WORK/store-f-newer-words"
+T="$WORK/f-newer-words.jsonl"; new_talk "$T"
+talk "$T" decide acme/widget "Hand back" "Not announcing" "" "" 28
+talk "$T" decide acme/widget "Hand back" "Announce it" "typed:only for the new agents"
+r="$(finishes "$STORE_USED" "$(closing "$SAYS_YES" "12" "12")" "$T")"
+check "R9 #3669 A a newer answer about it that decides nothing takes the decline back too: owed, saying it decides nothing" "$([[ "$r" == "owed|"*"is not his last answer about announcing it: his last answer about it decides nothing"* ]] && echo ok || echo "$r")"
+STORE_USED="$WORK/store-f-newer-no"
+T="$WORK/f-newer-no.jsonl"; new_talk "$T"
+talk "$T" decide acme/widget "Hand back" "Not announcing" "" "" 28
+talk "$T" decide acme/widget "Hand back" "Not announcing"
+r="$(finishes "$STORE_USED" "$(closing "$SAYS_YES" "12" "12")" "$T")"
+check "R9 #3669 A a newer Not announcing naming no milestone is his last answer and clears no merge: owed, saying so" "$([[ "$r" == "owed|"*'after it he answered `Not announcing`'*"in a picker that does not name this milestone"* ]] && echo ok || echo "$r")"
+STORE_USED="$WORK/store-f-older"
+T="$WORK/f-older.jsonl"; new_talk "$T"
+talk "$T" decide acme/widget "Hand back" "Announce it"
+talk "$T" decide acme/widget "Hand back" "Not announcing" "" "" 28
+check "still possible #3669 A: his Announce it at discovery and then his Not announcing naming the milestone clears it" "$([[ "$(finishes "$STORE_USED" "$(closing "$SAYS_YES" "12" "12")" "$T")" == "clear|"* ]] && echo ok || echo no)"
+STORE_USED="$WORK/store-f-newer-other"
+T="$WORK/f-newer-other.jsonl"; new_talk "$T"
+talk "$T" decide acme/widget "Hand back" "Not announcing" "" "" 28
+talk "$T" decide acme/widget "Hand over" "Announce it"
+check "still possible #3669 A: a newer Announce it about another feature leaves his decline standing" "$([[ "$(finishes "$STORE_USED" "$(closing "$SAYS_YES" "12" "12")" "$T")" == "clear|"* ]] && echo ok || echo no)"
 # A decline clears the merge only when the call that leans on it read every noted session (decided by
 # the main session on the stricter side, 2026-11-26). A newer Announce it of his, in a session the
 # call left unread, would be his last answer, so a decline with sessions left unread is unread,

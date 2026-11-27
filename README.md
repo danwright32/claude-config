@@ -2300,7 +2300,10 @@ only where this Mac's dev update registry names an announcements channel for the
   being announced, and giving that picker's metadata (the same as above, with `"milestone":
   <number>` and the milestone's title as the feature). It is let through when the record holds an
   announcement let through for that milestone that GitHub says merged, or his `Not announcing` in
-  a picker naming that milestone. `ALLOW_UNTAGGED_MERGE=1` does not clear the refusal, and a pull
+  a picker naming that milestone, while that is also his last answer about the feature (the
+  milestone's title) in any picker: a newer answer of his in a picker naming no milestone, as the
+  one at feature discovery does, takes the decline back, and the refusal says what he answered
+  after it. `ALLOW_UNTAGGED_MERGE=1` does not clear the refusal, and a pull
   request the dependency bot opened is held to it like any other. Only where whether the pull
   request finishes such a feature could not be read does the override let the merge through, and
   it says so. His decline is one such case when the call that leans on it left noted sessions

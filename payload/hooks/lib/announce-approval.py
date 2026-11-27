@@ -2093,7 +2093,10 @@ def finishes(repo, pr, answer, payload=None, unmerged=()):
     description says yes (milestone_says), unless the record holds an announcement let through
     for it (a `used` line naming the milestone: the pull requests are given back in `announced`,
     because that line says the gate let one through and never that GitHub merged it, so the gate
-    asks GitHub), or Dan's last answer in a picker naming that milestone is NOT_ANNOUNCING. His
+    asks GitHub), or Dan's last answer in a picker naming that milestone is NOT_ANNOUNCING and is
+    also his last answer about that feature (the milestone's title) in any picker: a newer answer
+    of his in a picker naming no milestone, as the one at feature discovery does, takes the
+    decline back, and the milestone is owed again. His
     decline clears it only when this call read every noted session: when it left any unread (past
     NOTED_SESSIONS, or out of time) and his decline is all that would clear the milestone, the
     answer is "unread", saying what was left unread, because a newer ANNOUNCE_IT of his there
@@ -2157,7 +2160,14 @@ def finishes(repo, pr, answer, payload=None, unmerged=()):
     why, how, behind = [], [], []
     for s in sorted(owed, key=lambda s: s["number"]):
         last = _last_decided(entries, found, key, _feature_key(s["title"]), s["number"])
-        declined = last is not None and last.get("answer") == "no"
+        # His decline naming the milestone counts only while it is also his last answer about the
+        # feature (the milestone's title) in ANY picker. A picker at feature discovery names no
+        # milestone, so a newer answer of his there, his ANNOUNCE_IT or one that decides nothing,
+        # is found only by asking without the milestone: with one, the decline is taken back.
+        newest = _last_decided(entries, found, key, _feature_key(s["title"]))
+        taken_back = (last is not None and last.get("answer") == "no" and newest is not last
+                      and not (_text(newest.get("picker")) and newest.get("picker") == last.get("picker")))
+        declined = last is not None and last.get("answer") == "no" and not taken_back
         # His decline clears the milestone only when this call read every noted session. With
         # sessions left unread (short), a newer ANNOUNCE_IT of his may be in one of them and would
         # be his last answer, so the decline is leaned on only if nothing else clears it: an
@@ -2173,15 +2183,30 @@ def finishes(repo, pr, answer, payload=None, unmerged=()):
             behind.append("the milestone " + json.dumps(s["title"]) + " (number " + str(s["number"]) + ")")
             continue
         said = ("it closes the last open issue of the milestone " + json.dumps(s["title"]) + " (number " + str(s["number"])
-                + "), whose description says Dan said yes to announcing it to agents, and this Mac's record holds no "
-                "announcement let through for that milestone and no answer of his declining it")
+                + "), whose description says Dan said yes to announcing it to agents")
         if let_through:
-            said = ("it closes the last open issue of the milestone " + json.dumps(s["title"]) + " (number "
-                    + str(s["number"]) + "), whose description says Dan said yes to announcing it to agents. This Mac's "
-                    "record holds " + _pull_requests(let_through) + " as let through with an announcement for that "
-                    "milestone, and GitHub says " + ("it has not merged" if len(let_through) == 1 else "none of them has merged")
-                    + ", so nothing was announced, and the record holds no answer of his declining it")
-        if last is not None and last.get("answer") == "yes":
+            said += (". This Mac's record holds " + _pull_requests(let_through) + " as let through with an announcement "
+                     "for that milestone, and GitHub says " + ("it has not merged" if len(let_through) == 1 else "none of them has merged")
+                     + ", so nothing was announced, and ")
+        else:
+            said += ", and this Mac's record holds no announcement let through for that milestone and "
+        if taken_back:
+            said += ("his `" + NOT_ANNOUNCING + "` in a picker naming that milestone is not his last answer about "
+                     "announcing it")
+            if newest.get("answer") in ("yes", "no"):
+                said += (": after it he answered `" + (_text(newest.get("said")) or "one of the two options") + "`"
+                         + (" on " + _day(newest.get("answered")) if _day(newest.get("answered")) else "")
+                         + ("" if newest.get("answer") == "yes" else
+                            ", in a picker that does not name this milestone, which lets no merge through"))
+            else:
+                said += ": his last answer about it decides nothing (" + (_text(newest.get("why")) or "it was neither option alone") + ")"
+        elif let_through:
+            said += "the record holds no answer of his declining it"
+        else:
+            said += "no answer of his declining it"
+        if taken_back:
+            pass
+        elif last is not None and last.get("answer") == "yes":
             said += (": asked whether it is still being announced, he answered `" + (_text(last.get("said")) or ANNOUNCE_IT)
                      + "`" + (" on " + _day(last.get("answered")) if _day(last.get("answered")) else ""))
         elif last is not None:
