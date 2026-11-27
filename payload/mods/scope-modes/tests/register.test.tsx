@@ -11,6 +11,7 @@ import { GATE_LABEL_FIXTURES } from './gate-label-fixtures.ts'
 import { answerKey, GO_TO_SLEEP, goalQuestion, goalUnreadQuestion, NO_GOAL, SKIP_QUESTION } from '../hooks/bedtime.ts'
 import { GOAL_MARK, goalAt } from './mod-kit/hooks/goal.ts'
 import { overnightRules, REST_RESUME, SLEEP_START } from '../hooks/driver.ts'
+import { callHash } from '../hooks/ledger.ts'
 import { CLAIM_MS, proposalPath } from '../hooks/proposals.ts'
 import { settledKey } from '../hooks/settled.ts'
 import { ghArgs, mergeHelperArgs } from './mod-kit/hooks/gh.ts'
@@ -6523,8 +6524,9 @@ test('a refusal with no verdict is noted with the call and whether it only read,
   expect(await call($ as never, { tool: 'Bash', command: 'git commit -F m.txt', description: 'x', tool_use_id: 'u2' } as never)).toBe('ran')
   await toolResult($ as never, 'u2', false)
   expect(notes().filter(n => n.kind === 'redone')).toEqual([expect.objectContaining({ kind: 'redone', by: 's1', tool: 'Bash', redoes: ['t1', 't1b'], text: 'Bash ran after its refusal: git commit -F m.txt' })])
-  // A refusal by the check itself is never made good this way, and a different call matches nothing.
-  expect(await call($ as never, { tool: 'Bash', command: 'touch x.txt', description: 'x', tool_use_id: 'u3' } as never)).toBe('ran')
+  // A refusal by the check itself is never made good this way: since #3560 the same call is held
+  // before it runs. And a different call matches nothing.
+  expect(await call($ as never, { tool: 'Bash', command: 'touch x.txt', description: 'x', tool_use_id: 'u3' } as never)).toMatch(/^Held: this is the same Bash call that auto mode's safety check refused with a verdict/)
   await toolResult($ as never, 'u3', false)
   expect(await call($ as never, { tool: 'Bash', command: 'git commit -F other.txt', description: 'x', tool_use_id: 'u4' } as never)).toBe('ran')
   await toolResult($ as never, 'u4', false)
@@ -6539,6 +6541,181 @@ test('a refusal with no verdict is noted with the call and whether it only read,
   await deny('u6', 'mkdir -p out')
   await toolResult($ as never, 'u6', false)
   expect(notes().filter(n => n.kind === 'redone')).toHaveLength(1)
+})
+
+// ---- The ledger of refusals with a verdict (#3560, hooks/ledger.ts) ----
+// A call auto mode's check refused with a verdict is written, awake or asleep, to a ledger kept for
+// the session and every agent it dispatches; the same call sent again by any of them is held before
+// it runs, and the session is told once of a refusal of one of its agents. A refusal the check gave
+// no verdict on is never written, so its one unchanged resend is never held. The reasons are the
+// shapes measured on the personal MacBook on 2026-11-26: a verdict's begins with a bracket, and a
+// refusal with no verdict reaches the mod as "Classifier unavailable".
+const LEDGER = `${'/Users'}/x/.claude/state/safety-refusals/s1`
+const VERDICT = '[Irreversible Local Destruction] removes files outside version control'
+const denied = ($: $T, id: string, command: string, reason: string, agent?: string) =>
+  $.classic.PermissionDenied({ tool_name: 'Bash', tool_input: { command, description: 'x' }, tool_use_id: id, reason, ...(agent ? { agent_id: agent } : {}) } as never) as Promise<{ retry?: boolean }>
+const sent = async ($: $T, command: string, id: string, agent?: string) =>
+  (await $.tool.call({ tool: 'Bash', command, description: 'x', tool_use_id: id, ...(agent ? { agentId: agent } : {}) } as never)) as { deny?: string; text?: string; context?: string[] }
+const ledgerFiles = (w: { files: Record<string, string> }) => Object.keys(w.files).filter(f => f.startsWith(`${LEDGER}/`)).sort()
+
+test('a refusal with a verdict is written to the session ledger while awake, without the call, and one with no verdict is not (#3560)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { beneathRetries: true })
+  await start($ as never, clock)
+  const r = await denied($ as never, 't1', 'git clean -fd PRIVATE-NAME', VERDICT, 'agent-a')
+  // Awake, what a hook beneath asked is left as it was.
+  expect(r.retry).toBe(true)
+  expect(ledgerFiles(w)).toEqual([`${LEDGER}/t1.json`])
+  const kept = w.files[`${LEDGER}/t1.json`] as string
+  expect(JSON.parse(kept)).toMatchObject({ agent: 'agent-a', tool: 'Bash', reason: VERDICT, toolUseId: 't1', call: await callHash('Bash', { command: 'git clean -fd PRIVATE-NAME', description: 'x' }) })
+  expect(JSON.parse(kept).when).toMatch(/ ET on /)
+  for (const word of ['git clean', 'PRIVATE-NAME', 'description']) expect([word, kept.includes(word)]).toEqual([word, false])
+  // No verdict, in the words the mod is handed: nothing is written, by an agent or by the session.
+  await denied($ as never, 't2', 'git push origin x', 'Classifier unavailable', 'agent-a')
+  await denied($ as never, 't3', 'git push origin x', 'Classifier unavailable')
+  expect(ledgerFiles(w)).toEqual([`${LEDGER}/t1.json`])
+  // The session's own refusal with a verdict is written with no agent.
+  await denied($ as never, 't4', 'rm -rf out', '[Git Destructive]')
+  expect(JSON.parse(w.files[`${LEDGER}/t4.json`] as string)).toMatchObject({ agent: null, reason: '[Git Destructive]' })
+})
+
+test('asleep, a refusal with a verdict is written to the ledger beside its note for the morning, and one with no verdict only noted (#3560)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, worker)
+  await start($ as never, clock)
+  await denied($ as never, 't1', 'git clean -fd', VERDICT, 'agent-a')
+  await denied($ as never, 't2', 'git push origin x', 'Classifier unavailable', 'agent-a')
+  expect(ledgerFiles(w)).toEqual([`${LEDGER}/t1.json`])
+  const failed = w.appended.map(a => JSON.parse(a.line) as Record<string, unknown>).filter(n => n.kind === 'failed')
+  expect(failed.map(n => [n.toolUseId, n.noVerdict])).toEqual([['t1', undefined], ['t2', true]])
+})
+
+test('the same call as one refused with a verdict is held for that agent, a sibling and the session itself, and another call runs (#3560)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, {})
+  await start($ as never, clock)
+  // Before anything is refused, nothing is held.
+  expect((await sent($ as never, 'git clean -fd', 'c0', 'agent-a')).text).toBe('ran')
+  await denied($ as never, 'c0', 'git clean -fd', VERDICT, 'agent-a')
+  const before = w.reached.length
+  const again = await sent($ as never, 'git clean -fd', 'c1', 'agent-a')
+  expect(again.deny).toMatch(/^Held: this is the same Bash call that auto mode's safety check refused with a verdict at .* ET on .*, when you sent it \(its reason: \[Irreversible Local Destruction\]/)
+  expect(again.deny).toContain('hand back, quoting this refusal')
+  // A sibling, the rtk spelling the rewrite hook gives it, and the session that dispatched them both.
+  const sibling = await sent($ as never, 'rtk git clean -fd', 'c2', 'agent-b')
+  expect(sibling.deny).toContain('when agent agent-a sent it')
+  expect(sibling.deny).toContain('hand back')
+  const main = await sent($ as never, 'git clean -fd', 'c3')
+  expect(main.deny).toContain('when agent agent-a sent it')
+  expect(main.deny).toContain('Tell Dan what was refused and why, and leave the decision to him.')
+  expect(main.deny).toContain('Never send it again, in pieces, through another tool or by another agent')
+  // None of the three reached the engine, and the held call's own words are not in the refusal.
+  expect(w.reached.length).toBe(before)
+  expect(main.deny?.includes('git clean')).toBe(false)
+  // Another call, by anyone, runs.
+  expect((await sent($ as never, 'git clean -n', 'c4', 'agent-a')).text).toBe('ran')
+  expect((await sent($ as never, 'git status', 'c5')).text).toBe('ran')
+  // The session's own refusal holds the session, and an agent it then hands the call to.
+  await denied($ as never, 'c6', 'rm -rf out', '[Git Destructive]')
+  expect((await sent($ as never, 'rm -rf out', 'c7')).deny).toContain('when this session sent it')
+  expect((await sent($ as never, 'rm -rf out', 'c8', 'agent-b')).deny).toContain('when the session that dispatched you sent it')
+})
+
+test('asleep, a held call asks nothing of Dan (#3560)', withDeps, async ($, on) => {
+  const { clock } = world(on, worker)
+  await start($ as never, clock)
+  await denied($ as never, 't1', 'mkdir -p out', VERDICT)
+  const held = await sent($ as never, 'mkdir -p out', 'c1')
+  expect(held.deny).toContain('Dan is asleep, so ask nothing')
+  expect(held.deny?.includes('Tell Dan what was refused')).toBe(false)
+})
+
+test('a call the check gave no verdict on is never held, so its one unchanged resend runs, awake and asleep; refused with a verdict on that resend, it is held from then on (#3560)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, {})
+  await start($ as never, clock)
+  // Every wording of no verdict the mod knows, each refused twice over: the resend still runs.
+  const words = ['Classifier unavailable', 'The server-side auto mode classifier gave no verdict for this action', 'not reviewed', 'the transcript was too long', 'exceeded its context window']
+  for (const [i, reason] of words.entries()) {
+    const command = `git commit -F m${i}.txt`
+    await denied($ as never, `n${i}`, command, reason, 'agent-a')
+    await denied($ as never, `n${i}b`, command, reason, 'agent-a')
+    expect([reason, (await sent($ as never, command, `r${i}`, 'agent-a')).text]).toEqual([reason, 'ran'])
+    expect([reason, (await sent($ as never, command, `s${i}`)).text]).toEqual([reason, 'ran'])
+  }
+  expect(ledgerFiles(w)).toEqual([])
+  // The resend itself refused with a verdict: now it is one, and the third send is held.
+  await denied($ as never, 'r0', 'git commit -F m0.txt', VERDICT, 'agent-a')
+  expect((await sent($ as never, 'git commit -F m0.txt', 'x1', 'agent-a')).deny).toMatch(/^Held: this is the same Bash call/)
+  // A verdict on one call never holds the resend of another the check gave no verdict on.
+  expect((await sent($ as never, 'git commit -F m1.txt', 'x2', 'agent-a')).text).toBe('ran')
+  // Asleep, the same: the resend the standing rule allows runs.
+  w.files[CURRENT] = asleepRecord({ workers: ['s1'] })
+  await denied($ as never, 'z1', 'mkdir -p out', 'Classifier unavailable')
+  expect((await sent($ as never, 'mkdir -p out', 'z2')).text).toBe('ran')
+})
+
+test('the session is told once of a refusal of one of its agents, with the next thing it reads, and never of its own or of one with no verdict (#3560)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, {})
+  await start($ as never, clock)
+  await denied($ as never, 't1', 'git clean -fd', VERDICT, 'agent-a')
+  // An agent's own tool result is not the session's: nothing is told there.
+  expect((await sent($ as never, 'git status', 'c1', 'agent-b')).context).toBeUndefined()
+  // A call of the session's that is held carries none either; its next result that runs does, once.
+  expect((await sent($ as never, 'git clean -fd', 'c2')).context).toBeUndefined()
+  const told = (await sent($ as never, 'git status', 'c3')).context?.join('\n') ?? ''
+  for (const part of ["Auto mode's safety check refused a call by an agent of this session, with a verdict", 'agent agent-a, Bash, at ', VERDICT, 'never hand it to another agent']) expect([part, told.includes(part)]).toEqual([part, true])
+  expect(told.includes('git clean')).toBe(false)
+  expect((await sent($ as never, 'git status', 'c4')).context).toBeUndefined()
+  expect(typeof JSON.parse(w.files[`${LEDGER}/t1.json`] as string).told).toBe('number')
+  // With no tool result to carry it, the next prompt does, once.
+  await denied($ as never, 't2', 'git push --force origin x', '[Git Destructive]', 'agent-b')
+  expect((await say($ as never, 'hello')).context?.join('\n')).toContain('agent agent-b, Bash, at ')
+  expect((await say($ as never, 'hello again')).context?.join('\n') ?? '').not.toContain('agent agent-b')
+  // The session's own refusal it read itself, and no verdict is no refusal to tell.
+  await denied($ as never, 't3', 'rm -rf out', VERDICT)
+  await denied($ as never, 't4', 'git commit -F m.txt', 'Classifier unavailable', 'agent-a')
+  expect((await sent($ as never, 'git status', 'c5')).context).toBeUndefined()
+  // An event that names no agent is still the agent's when the call was seen coming from one.
+  expect((await sent($ as never, 'touch x.txt', 'c6', 'agent-c')).text).toBe('ran')
+  await denied($ as never, 'c6', 'touch x.txt', VERDICT)
+  expect(JSON.parse(w.files[`${LEDGER}/c6.json`] as string).agent).toBe('agent-c')
+  expect((await sent($ as never, 'git status', 'c7')).context?.join('\n')).toContain('agent agent-c, Bash, at ')
+})
+
+test('a ledger that is there and cannot be read holds every call the check could have refused, and a resumed session holds what its ledger files name (#3560)', withDeps, async ($, on) => {
+  const entry = { at: T0, when: '2:40 AM ET on Thu Nov 26', agent: 'agent-a', tool: 'Bash', reason: VERDICT, call: await callHash('Bash', { command: 'git clean -fd', description: 'x' }), toolUseId: 't0', told: T0 }
+  const { w, clock } = world(on, { files: { [`${LEDGER}/t0.json`]: JSON.stringify(entry), [`${LEDGER}/t9.json`]: '{"at":17950' } })
+  await start($ as never, clock)
+  const held = await sent($ as never, 'git status', 'c1')
+  expect(held.deny).toMatch(/^Held: this session's ledger of calls the safety check refused \(.*safety-refusals\/s1\) could not be read \(t9\.json is not a ledger entry \(it is not JSON\)\)/)
+  expect(held.deny).toContain('Tell Dan')
+  expect((await sent($ as never, 'git status', 'c2', 'agent-a')).deny).toContain('Hand back and quote this refusal')
+  // Reading is never the check's to refuse, so it goes on.
+  expect(((await $.tool.call({ tool: 'Read', file_path: '/repo/a.txt', tool_use_id: 'c3' } as never)) as { text?: string }).text).toBe('ran')
+  // Mended, it is read afresh: other calls run, and the call its files name is held, as on a resume.
+  delete w.files[`${LEDGER}/t9.json`]
+  expect((await sent($ as never, 'git status', 'c4')).text).toBe('ran')
+  expect((await sent($ as never, 'git clean -fd', 'c5', 'agent-b')).deny).toContain('when agent agent-a sent it')
+})
+
+test('a refusal the ledger could not be written for is said, and a ledger whose place cannot be worked out holds as one that cannot be read (#3560)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, {})
+  await start($ as never, clock)
+  w.homeGone = true
+  await denied($ as never, 't1', 'git clean -fd', VERDICT, 'agent-a')
+  expect(w.toasts.some(t => /A call the safety check refused could not be written to this session's ledger \(HOME is not set\)/.test(t))).toBe(true)
+  // A check that cannot run refuses the call as any failed check does, never lets it through.
+  let failed = ''
+  try {
+    failed = (await sent($ as never, 'git status', 'c1')).deny ?? 'ran'
+  } catch (err) {
+    failed = String(err)
+  }
+  expect(failed).toMatch(/HOME is not set|could not check this call/)
+  expect(w.reached.includes('git status')).toBe(false)
+  // Found again, it holds nothing it has no entry for, and the refusal it could not place then is kept now.
+  w.homeGone = false
+  expect((await sent($ as never, 'git status', 'c3')).text).toBe('ran')
+  expect(w.reached.includes('git status')).toBe(true)
+  expect((await sent($ as never, 'git clean -fd', 'c4')).deny).toContain('when agent agent-a sent it')
+  expect(ledgerFiles(w)).toEqual([`${LEDGER}/t1.json`])
 })
 
 test('a worker is told its prompts approve themselves and a refusal is final; a session that is not is not', withDeps, async ($, on) => {

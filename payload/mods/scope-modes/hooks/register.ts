@@ -3,6 +3,7 @@ import { cutCall } from './mod-kit/hold.ts'
 import type { ModKitGh, ModKitWrites } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import { ghApiOf, judgeAdminMerge } from './adminmerge.ts'
 import { gateOf, judgeRequiredLabel, openedFrom } from './requiredlabel.ts'
+import { callHash, holdText, isVerdict, ledgerDir, makeLedger, tellText, unreadableText, type LedgerIo, type Refused } from './ledger.ts'
 import { callKey, readsOnly, refusalNote, whatOf } from './refusals.ts'
 import { toolArgs } from './mod-kit/toolargs.ts'
 import { unreadMorningPicker } from './unread.ts'
@@ -1388,6 +1389,99 @@ const noteRedone = async ($: EngineInterface, toolUseId: string, isError: boolea
   } catch (err) {
     $.ui.log(`scope-modes: a refused call that later ran could not be noted (${msg(err)}), so the morning report lists it as not done`, { to: 'debug' })
   }
+}
+// The ledger of calls the check refused WITH a verdict (#3560, ledger.ts, where its rules are): kept
+// for the session and every agent it dispatches, awake or asleep, and read back from its files by a
+// session resumed. Started afresh at a session's start, as a reload's fresh module has it. `ledgerAt`
+// is where this session's is kept, once worked out; `callers` is which agent each recent call came
+// from, by tool_use_id, for a refusal whose event names no agent; `unplaced` is a refusal met while
+// the ledger's place could not be worked out, written once it can be.
+let refusedLedger = makeLedger()
+let ledgerAt: string | null = null
+const CALLERS_MAX = 500
+const callers = new Map<string, string>()
+let unplaced: Refused[] = []
+const resetLedger = () => {
+  refusedLedger = makeLedger()
+  ledgerAt = null
+  callers.clear()
+  unplaced = []
+}
+const ledgerIo = ($: EngineInterface): LedgerIo => ({
+  exists: path => $.fs.exists(path),
+  list: async dir => (await $.fs.list(dir)).map(entry => entry.name),
+  read: path => $.fs.read(path),
+  write: async (path, text) => {
+    await $.fs.write(path, text)
+  },
+  mkdir: async dir => {
+    const r = await $.process.run(['mkdir', '-p', dir], { timeoutMs: 5000 })
+    if (r.exitCode !== 0) throw new Error(r.stderr.trim() || `mkdir exited ${r.exitCode}`)
+  },
+})
+const ledgerPlace = async ($: EngineInterface): Promise<string> => {
+  if (ledgerAt) return ledgerAt
+  const home = await $.env.get('HOME')
+  if (!home) throw new Error('HOME is not set')
+  const dir = ledgerDir(home, await $.session.id())
+  if (!dir) throw new Error('this session has no id a ledger could be kept under')
+  ledgerAt = dir
+  return dir
+}
+// A refusal by the check, awake or asleep: written when it carries a verdict, never when the check
+// gave none, so the one resend "One unchanged resend after no verdict" allows is never held. Never
+// throws: a refusal that could not be written is said, and is still held by this process.
+const noteRefused = async ($: EngineInterface, e: { tool_name?: unknown; tool_use_id?: unknown; reason?: unknown; agent_id?: unknown }, args: Record<string, unknown>) => {
+  try {
+    const reason = String(e.reason ?? '')
+    if (!isVerdict(reason)) return
+    const toolUseId = String(e.tool_use_id ?? '')
+    const agent = typeof e.agent_id === 'string' && e.agent_id ? e.agent_id : (callers.get(toolUseId) ?? null)
+    const at = await $.clock.now()
+    const entry: Refused = { at, when: etWhen(at), agent, tool: String(e.tool_name), reason, call: await callHash(String(e.tool_name), args), toolUseId }
+    let dir: string
+    try {
+      dir = await ledgerPlace($)
+    } catch (err) {
+      unplaced.push(entry)
+      throw err
+    }
+    await refusedLedger.record(ledgerIo($), dir, entry)
+  } catch (err) {
+    $.ui.toast(`A call the safety check refused could not be written to this session's ledger (${msg(err)}), so a repeat of it is held only until this session restarts`)
+  }
+}
+// Whether the ledger holds a call about to run (#3560): the refusal to answer it with, or undefined.
+// A ledger that is there and cannot be read holds every call but those ledger.ts names (L345); one
+// that is not there holds nothing. Where the ledger's place cannot be worked out at all (no HOME, no
+// session id) this throws, and the call is refused as any call whose check failed is, by mod-kit's
+// own refusal, which lets a TaskStop through (#1495, #3655).
+const heldByLedger = async ($: EngineInterface, tool: string, input: Record<string, unknown>, toolUseId: string): Promise<string | undefined> => {
+  const caller = input.agentId === undefined ? undefined : String(input.agentId)
+  if (caller !== undefined && toolUseId) {
+    callers.set(toolUseId, caller)
+    if (callers.size > CALLERS_MAX) callers.delete(callers.keys().next().value as string)
+  }
+  const dir = await ledgerPlace($)
+  const io = ledgerIo($)
+  for (const entry of unplaced.splice(0)) await refusedLedger.record(io, dir, entry).catch(err => $.ui.log(`scope-modes: a refused call could not be written to the ledger (${msg(err)}); it is held until this session restarts`, { to: 'debug' }))
+  const held = await refusedLedger.check(io, dir, tool, () => callHash(tool, toolArgs(input)))
+  if (held.kind === 'clear') return undefined
+  if (held.kind === 'unreadable') return unreadableText(held.dir, held.why, caller)
+  return holdText(held.entries, tool, caller, await isAsleep($))
+}
+// The refusals of this session's agents it has not been told of, as one note, taken once (#3560).
+const takeRefusedTold = async ($: EngineInterface): Promise<string[]> => {
+  if (!ledgerAt) return []
+  const waiting = refusedLedger.untold(ledgerAt)
+  if (!waiting.length) return []
+  const said = tellText(waiting)
+  try {
+    await refusedLedger.markTold(ledgerIo($), ledgerAt, waiting, await $.clock.now().catch(() => 0))
+  } catch (err) {
+    $.ui.log(`scope-modes: that the session was told of a refused call could not be written to the ledger (${msg(err)}), so a session resumed from here is told again`, { to: 'debug' })
+  }
+  return [said]
 }
 // How long a Chrome call still waiting on its result counts as possibly moving its tab: calls sent
 // at once are judged within moments of each other, and a call refused elsewhere, whose result row
@@ -5605,6 +5699,7 @@ export const register: Register = on => {
     takenOffHere.clear()
     firstMetHere.clear()
     resetMidTurn(mid)
+    resetLedger()
     askedUpHere = undefined
     placeUnreadSaid = false
     // A switch made before this session started is not taken (#2099): it starts at home, as before.
@@ -5921,7 +6016,8 @@ export const register: Register = on => {
       await $.state.set(justHomeRef, false)
     }
     // Notes a command left mid turn that no tool result carried (#3136), with whatever prompt comes next.
-    const heldNotes = takeNotes(mid)
+    // A refusal of one of this session's agents it has not been told of (#3560) goes the same way.
+    const heldNotes = [...takeNotes(mid), ...(await takeRefusedTold($))]
     notes.push(...heldNotes)
     let entered: Awaited<ReturnType<typeof next>>
     try {
@@ -6017,6 +6113,10 @@ export const register: Register = on => {
     const tool = String(e.tool)
     const toolUseId = String(input.tool_use_id ?? '')
     if (tool.startsWith(CHROME) && toolUseId) chromeCalls.set(toolUseId, { tool, input, at: await $.clock.now() })
+    // The same call as one the check refused with a verdict, sent by anyone in this session (#3560):
+    // held here, first, so it reaches neither a mode's own route nor the check a second time.
+    const refusedBefore = await heldByLedger($, tool, input, toolUseId)
+    if (refusedBefore !== undefined) return { deny: refusedBefore } as Awaited<ReturnType<typeof next>>
 
     if (tool === 'mcp__scope-modes__switch_to_build') {
       // Answered here and never passed down, so the guards beneath (the secret guard) are asked
@@ -6127,7 +6227,8 @@ export const register: Register = on => {
       // What a judge said beside allowing this call (#3439) goes with its own result, to whichever of
       // the session or its agents made it; a refusal here or beneath carries none, as the call never ran.
       const own = r.deny ? [] : said
-      const held = input.agentId !== undefined || r.deny || !mid.notes.length ? [] : takeNotes(mid)
+      // And a refusal of one of this session's agents it has not been told of (#3560), the same way.
+      const held = input.agentId !== undefined || r.deny ? [] : [...(mid.notes.length ? takeNotes(mid) : []), ...(await takeRefusedTold($))]
       if (!own.length && !held.length) return r
       return { ...r, context: [...(r.context ?? []), ...own, ...held] } as typeof r
     }
@@ -6309,16 +6410,18 @@ export const register: Register = on => {
     return { ...beneath, decision: { behavior: 'allow' } }
   })
 
-  // A refusal by the auto mode classifier while asleep (#834) gets a `failed` note naming the reason,
-  // and this handler never runs it again, whatever beneath asked; the session's own resend: #3224.
+  // A refusal by the auto mode classifier with a verdict is written to the session's ledger, awake or
+  // asleep (#3560). While asleep (#834) it also gets a `failed` note naming the reason, and this
+  // handler never runs it again, whatever beneath asked; the session's own resend: #3224.
   on('classic.PermissionDenied', async ($, e, next) => {
     hear(e)
+    const args = (e.tool_input ?? {}) as Record<string, unknown>
+    await noteRefused($, e as { tool_name?: unknown; tool_use_id?: unknown; reason?: unknown; agent_id?: unknown }, args)
     const reading = await sleepNow($)
     if (reading.state !== 'asleep') return next(e)
     try {
       // Which call it was and whether it only read (#3158), so the morning report can fold the
       // refusals the check gave no verdict on. A call that cannot be read is not a read.
-      const args = (e.tool_input ?? {}) as Record<string, unknown>
       const raw = e.tool_name === 'Bash' ? String(args.command ?? '') : ''
       let read = false
       try {
