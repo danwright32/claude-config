@@ -2690,12 +2690,10 @@ test("the record cannot be read at the turn's end: the message is sent, and Dan 
   await says($, 'Run the monthly sync')
   await edits(w, $)
   expect((await box($, ASKED)).deny).toMatch(/still to come/)
-  w.review = { exitCode: 3, stdout: '', stderr: 'review-record: the transcript could not be read (timed out)' }
+  w.review = UNREAD_AT_END
   await turnEnds($)
   expect(submitted.filter(s => s.text.startsWith(ASKS_AGAIN))).toHaveLength(1)
-  const told = logs.filter(l => l.startsWith('The session was asked to call the Goal accomplished box again without knowing whether an end of turn review is waiting for Dan: '))
-  expect(told).toHaveLength(1)
-  expect(told[0]).toMatch(/the end of turn review's record could not be read \(review-record: the transcript could not be read \(timed out\)\)/)
+  expect(logs.filter(l => PROMPTED_UNREAD.test(l))).toHaveLength(1)
 })
 
 test("a record read cleanly at the turn's end says nothing of the kind (#3843)", withKit, async ($, on) => {
@@ -2720,6 +2718,79 @@ test("Dan asleep by the turn's end, after a box was held while he was awake: no 
   await turnEnds($)
   expect(submitted.filter(s => s.text.startsWith(ASKS_AGAIN))).toHaveLength(1)
   expect(reviewAsks).toHaveLength(1)
+})
+
+// The mod's two older prompts at a turn's end start a new turn just as the message above does, so
+// each would show the box behind an unanswered review the same way (the lessons review of the first
+// fix found this). None of the three is sent over a review that is handed over and not answered.
+const GOAL_PROMPT = 'GOAL ACCOMPLISHED. The /goal'
+
+test("an unanswered review at the turn's end stops the question about shipped work too, with or without an earlier refused call, and for the rest of the request (#3843, #2523)", withLive, async ($, on) => {
+  const { w, submitted, logs } = world(on, { verdicts: CARDED })
+  const prompts = () => submitted.filter(s => s.text.startsWith(ASKS_DONE) || s.text.startsWith(ASKS_AGAIN))
+  await start($)
+  // No call for the box was refused this request: only the shipped work would ask.
+  await says($, 'Merge PR 1700')
+  await edits(w, $)
+  w.review = reviewSays('handed')
+  await turnEnds($)
+  expect(prompts()).toEqual([])
+  expect(logs.filter(l => /handed over this turn and Dan has not answered it, so the session is not asked whether the work is finished for this request/.test(l))).toHaveLength(1)
+  // A turn somebody else starts ends with nothing handed over: the request's question stays spent.
+  w.review = reviewSays('none')
+  await turnStarts($, 't2')
+  await turnEnds($)
+  expect(prompts()).toEqual([])
+  // With a refused call as well, neither prompt goes.
+  await says($, 'And merge PR 1701')
+  await edits(w, $, 'e2')
+  expect((await box($, ASKED)).deny).toMatch(/still to come/)
+  w.review = reviewSays('handed')
+  await turnEnds($)
+  expect(prompts()).toEqual([])
+})
+
+test("an unanswered review at the turn's end holds back the prompt for a met /goal, which is sent at the next turn end without one (#3843)", withKit, async ($, on) => {
+  const { w, submitted, logs } = world(on, { goal: MET, review: reviewSays('handed') })
+  const prompts = () => submitted.filter(s => s.text.startsWith(GOAL_PROMPT))
+  await start($)
+  await turnEnds($)
+  expect(prompts()).toEqual([])
+  expect(logs.filter(l => /handed over this turn and Dan has not answered it, so the prompt for the met \/goal waits for a later turn end/.test(l))).toHaveLength(1)
+  w.review = reviewSays('none')
+  await turnEnds($)
+  expect(prompts()).toHaveLength(1)
+  await turnEnds($)
+  expect(prompts()).toHaveLength(1)
+})
+
+const UNREAD_AT_END = { exitCode: 3, stdout: '', stderr: 'review-record: the transcript could not be read (timed out)' }
+const PROMPTED_UNREAD = /^The session was sent a prompt about the Goal accomplished box without knowing whether an end of turn review is waiting for Dan: the end of turn review's record could not be read \(review-record: the transcript could not be read \(timed out\)\)\.$/
+
+test("the record cannot be read at the turn's end: the question about shipped work is still asked, and Dan is told it was sent without knowing (#3843, #2523)", withLive, async ($, on) => {
+  const { submitted, logs } = world(on, { verdicts: CARDED, review: UNREAD_AT_END })
+  await start($)
+  await says($, 'Merge PR 1700')
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_DONE))).toHaveLength(1)
+  expect(logs.filter(l => PROMPTED_UNREAD.test(l))).toHaveLength(1)
+})
+
+test("the record cannot be read at the turn's end: the prompt for a met /goal is still sent, and Dan is told it was sent without knowing (#3843)", withKit, async ($, on) => {
+  const { submitted, logs } = world(on, { goal: MET, review: UNREAD_AT_END })
+  await start($)
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(GOAL_PROMPT))).toHaveLength(1)
+  expect(logs.filter(l => PROMPTED_UNREAD.test(l))).toHaveLength(1)
+})
+
+test("a turn end that sends no prompt does not ask the record at all (#3843)", withLive, async ($, on) => {
+  const { w, reviewAsks } = world(on)
+  await start($)
+  await says($, 'Is the monthly sync done?')
+  await edits(w, $)
+  await turnEnds($)
+  expect(reviewAsks).toEqual([])
 })
 
 test('the tool says in its description that it waits for the review (#3843)', withKit, async ($, on) => {
