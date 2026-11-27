@@ -49,9 +49,11 @@ const projectKeys = async ($: EngineInterface) => {
 // Kept for the next session in this project: written whenever the card changes, removed once
 // nothing is left to do. Never with "sent", since the turn that would answer it does not reach the
 // next session. A failure here loses only the carry over, so it is said and the action stands
-// (fail loud, not silent).
+// (fail loud, not silent). A step for this session alone (#3770) is never kept: the session it is
+// about is gone by the next one.
 const persist = async ($: EngineInterface) => {
-  const card = (await $.state.get(cardRef)).value ?? null
+  const held = (await $.state.get(cardRef)).value ?? null
+  const card = held ? { ...held, steps: held.steps.filter(s => !s.isSessionOnly) } : null
   try {
     const { key } = await projectKeys($)
     if (card && nextStep(card) !== undefined) {
@@ -587,8 +589,14 @@ const addStep: Hook<'manualSteps.add'> = async ($, e) => {
   const made = cardFrom({ heading: e.heading, steps: [{ ...e.step, checked: 'not-done' }] })
   // Refused to the caller: a hook that throws is skipped, and the caller would hear only that it did not answer.
   if ('refusal' in made) return { deny: made.refusal }
-  // Marked as another mod's, so a later pin through the steps tool keeps it.
-  const added = { ...(made.card.steps[0] as StepsCard['steps'][number]), isAdded: true }
+  // Marked as another mod's, so a later pin through the steps tool keeps it. #3770: one for this
+  // session alone is never kept for the next, and one with no Done is done by the act itself.
+  const added = {
+    ...(made.card.steps[0] as StepsCard['steps'][number]),
+    isAdded: true,
+    ...(e.step.sessionOnly === true ? { isSessionOnly: true } : {}),
+    ...(e.step.noDone === true ? { isNoDone: true } : {}),
+  }
   const how = await change($, card => {
     if (!card || nextStep(card) === undefined) return { card: { ...made.card, steps: [added] }, out: 'shown' as const }
     if (card.steps.some(s => !s.finished && s.title === added.title)) return { card, out: card.isCarried ? ('held' as const) : ('shown' as const) }
@@ -615,6 +623,20 @@ const finishStep: Hook<'manualSteps.finish'> = async ($, e) => {
   return { value: { isFinished } }
 }
 
+// #3770: a step another mod takes back, because what it asked for no longer holds: off the card as
+// withdrawn (drawn "taken off, not done"), never as done, and the card goes when nothing is left.
+const withdrawStep: Hook<'manualSteps.withdraw'> = async ($, e) => {
+  const at = await now($)
+  const isWithdrawn = await change($, card => {
+    const i = card ? card.steps.findIndex(s => !s.finished && s.title === e.title) : -1
+    if (!card || i < 0) return { card, out: false }
+    const next = { ...card, steps: card.steps.map((s, k) => (k === i ? { ...s, isSent: false, finished: 'withdrawn' as const, finishedAt: at } : s)) }
+    return { card: nextStep(next) === undefined ? null : next, out: true }
+  })
+  if (isWithdrawn) await refresh($)
+  return { value: { isWithdrawn } }
+}
+
 export const register: Register = on => {
   on('engine.create', async ($, e, next) => {
     const built = await next(e)
@@ -625,11 +647,15 @@ export const register: Register = on => {
       finish: async () => {
         throw new Error(NOUN_UNANSWERED)
       },
+      withdraw: async () => {
+        throw new Error(NOUN_UNANSWERED)
+      },
     }
     return { ...built, manualSteps }
   })
   on('manualSteps.add', addStep)
   on('manualSteps.finish', finishStep)
+  on('manualSteps.withdraw', withdrawStep)
 
   on('session.start', async ($, e, next) => {
     interactive = e.isInteractive === true

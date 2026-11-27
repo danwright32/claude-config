@@ -274,6 +274,20 @@ and settles its own surfaces in rounds of its own before it is built.
 | A judgment that cannot be had | Stop, as specced (picker) |
 | The note cannot be delivered (2026-10-04, picker) | Tried once more; if that fails too, the card gets a dim line under the safe way, "The other session could not be told: <reason>.", which Claude also reads. The block stands either way. |
 
+A read left unanswered is asked once more (#3673, built 2026-11-26). Claude Code cuts a call to
+another mod's noun off at 10 seconds (standing rule 4), in the words "did not answer within
+10000ms". In the personal MacBook's session records, 2026-10-26 to 2026-11-26, that was all 12
+calls this guard refused as not checked (11 the session list, 1 mod-kit's git reader), none a
+fault in its reading of the call: each came while other agents kept the Mac busy, and each of the
+11 sent again unchanged went through. So the session list and mod-kit's five reads (commands, git,
+pipeline, writes and its walk for the checkout around a repository), which change nothing however
+often they are asked, are each asked a second time when the first ask got no answer, and the call
+is judged on the second answer by the same rules. Nothing is let through on a failure: a second silence refuses the call with the words "and
+again when asked a second time", which a later count can tell from a refusal after one ask, and a
+read failing in any other words refuses at once, as does the registry's own refusal inside its 8
+seconds, seen 0 times in those records. Not known: how often the second ask answers, which leaves
+no trace in a session record.
+
 A session silent for five minutes counts as closed; its latest request is read from its transcript,
 never copied into the registry. The transcript is found where it is read (2026-10-04, picker): in
 Claude Code's folder for the session's starting directory, else by its session id, and only if that
