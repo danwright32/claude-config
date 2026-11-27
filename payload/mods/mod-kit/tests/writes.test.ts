@@ -1120,12 +1120,20 @@ describe("writes: an unquoted variable's value is split into words as the shell 
     }
   })
   test('a script given to a shell is split as that shell splits, whatever runs the line', () => {
-    expect(handed(`bash -c 'F="a.ts b.ts"; python3 gen.py $F'`, '/bin/zsh')).toEqual([[`${CWD}/a.ts`, `${CWD}/b.ts`]])
-    expect(handed(`sh -c 'F="a.ts b.ts"; python3 gen.py $F'`)).toEqual([[`${CWD}/a.ts`, `${CWD}/b.ts`]])
-    expect(handed(`bash <<'EOF'\nF="--write src"; npx prettier --check $F\nEOF`, '/bin/zsh')).toEqual([[`${CWD}/src`]])
-    expect(handed(`zsh -c 'F="a.ts b.ts"; python3 gen.py $F'`, '/bin/bash')).toEqual([[`${CWD}/a.ts b.ts`]])
-    // A command substitution runs in the shell of the line it sits in.
+    // A command substitution runs in the shell of the line it sits in. Its text is a line of its
+    // own, so the setting it opens with is followed there (#3468).
     expect(handed(`bash -c 'echo $(F="a.ts b.ts"; python3 gen.py $F)'`, '/bin/zsh')).toEqual([[`${CWD}/a.ts`, `${CWD}/b.ts`]])
+    expect(handed(`sh -c 'echo $(F="a.ts b.ts"; python3 gen.py $F)'`)).toEqual([[`${CWD}/a.ts`, `${CWD}/b.ts`]])
+    expect(handed(`bash <<'EOF'\necho $(F="--write src"; npx prettier --check $F)\nEOF`, '/bin/zsh')).toEqual([[`${CWD}/src`]])
+    expect(handed(`zsh -c 'echo $(F="a.ts b.ts"; python3 gen.py $F)'`, '/bin/bash')).toEqual([[`${CWD}/a.ts b.ts`]])
+  })
+  // #3468: a setting in the script's own text ran in that shell, and only if the shell ran. The
+  // reader gives the script's commands among the line's own, so it is one that may not have run:
+  // the variable is not known, and prettier handed it may be handed --write.
+  test('a variable the script itself sets is not followed, so what it is handed is as written', () => {
+    expect(handed(`bash -c 'F="a.ts b.ts"; python3 gen.py $F'`, '/bin/zsh')).toEqual([['(as written) $F']])
+    expect(handed(`zsh -c 'F="a.ts b.ts"; python3 gen.py $F'`, '/bin/bash')).toEqual([['(as written) $F']])
+    expect(handed(`bash <<'EOF'\nF="--check src"; npx prettier $F\nEOF`, '/bin/zsh')).toEqual([['(as written) $F']])
   })
 })
 
@@ -1628,13 +1636,20 @@ describe('writes: a command xargs runs (#730)', () => {
 // reader gave the target as written ($F) with no path. A variable the same command set is read as
 // its value, as the shell reads it, and the word is still given as written.
 describe('writes: a path held in a variable', () => {
-  test('a variable set earlier in the command names its file, by an assignment or by export', () => {
+  test('a variable the command opens by setting names its file, exported after or not', () => {
     expect(read(`F=~/.claude/projects/p/memory/MEMORY.md; printf 'x\\n' >> "$F"`).files).toEqual([{ word: '$F', path: `${HOME}/.claude/projects/p/memory/MEMORY.md` }])
-    expect(paths(`export F=~/.claude/projects/p/memory/MEMORY.md; printf 'x\\n' >> "$F"`)).toEqual([`${HOME}/.claude/projects/p/memory/MEMORY.md`])
-    expect(paths('declare -x F=/opt/rules.md && cp a.md "$F"')).toEqual(['/opt/rules.md'])
+    expect(paths(`F=~/.claude/projects/p/memory/MEMORY.md; export F; printf 'x\\n' >> "$F"`)).toEqual([`${HOME}/.claude/projects/p/memory/MEMORY.md`])
+    expect(paths('F=/opt/rules.md; declare -x F=/opt/rules.md && cp a.md "$F"')).toEqual(['/opt/rules.md'])
+  })
+  // #3468: export and declare are commands, so they stand in no run of settings a line opens with,
+  // and a setting only they make is one the reading cannot call sure to have run. Until then each
+  // was followed: `false && export F=...; ... >> "$F"` was read as a write of that file.
+  test('a variable only an export or a declare sets is given as written', () => {
+    expect(paths(`export F=~/.claude/projects/p/memory/MEMORY.md; printf 'x\\n' >> "$F"`)).toEqual(['(as written) $F'])
+    expect(paths('declare -x F=/opt/rules.md && cp a.md "$F"')).toEqual(['(as written) $F'])
   })
   test('a value built from home or from another variable the command set is followed', () => {
-    expect(paths('P="$HOME/.claude/projects/p" && cat x > "${P}/memory/note.md"')).toEqual([`${HOME}/.claude/projects/p/memory/note.md`])
+    expect(paths('P="$HOME/.claude/projects/p"; cat x > "${P}/memory/note.md"')).toEqual([`${HOME}/.claude/projects/p/memory/note.md`])
     expect(paths('D=~/.claude; F=$D/CLAUDE.md; tee -a "$F" < rules.md')).toEqual([`${HOME}/.claude/CLAUDE.md`])
   })
   test('a relative value is resolved where it is used, after any cd, and a cd into a held folder is followed', () => {
@@ -1686,8 +1701,11 @@ describe('writes: a path held in a variable', () => {
   test('a write its words do not name carries the command as written', () => {
     expect(read('P=fix.patch; git apply "$P"').unnamed.map(u => u.words)).toEqual([['git', 'apply', '$P']])
   })
+  // Since #3468 a setting inside a subshell is not in the run the line opens with, so the variable
+  // is not known inside it; what it held outside stands again after it.
   test('a value set inside a subshell ends with it', () => {
-    expect(paths('F=a.md; (G=b.md; echo x > "$G"); echo y > "$F"; echo z > "$G"')).toEqual([`${CWD}/b.md`, `${CWD}/a.md`, '(as written) $G'])
+    expect(paths('F=a.md; (F=b.md; echo x > "$F"; echo y > "$G"); echo z > "$F"')).toEqual(['(as written) $F', '(as written) $G', `${CWD}/a.md`])
+    expect(paths('F=a.md; (G=b.md; echo x > "$G"); echo y > "$F"; echo z > "$G"')).toEqual(['(as written) $G', `${CWD}/a.md`])
   })
 })
 
@@ -1980,7 +1998,12 @@ describe('writes: the values a variable alone is given (#2171)', () => {
   test('a variable set only by plain assignments before the write is given every value, as written', () => {
     expect(values('T=$(mktemp); echo x > "$T"')).toEqual([['$(mktemp)']])
     expect(values('T="$(mktemp -d)"; git show HEAD:app/page.tsx > ${T}')).toEqual([['$(mktemp -d)']])
-    expect(values('export T=$(mktemp); wc -l app/page.tsx | tee "$T"')).toEqual([['$(mktemp)']])
+    expect(values('T=$(mktemp); export T; wc -l app/page.tsx | tee "$T"')).toEqual([['$(mktemp)']])
+    // #3468: one only an export sets, or only a setting that may be skipped, may not be set at all.
+    expect(values('export T=$(mktemp); wc -l app/page.tsx | tee "$T"')).toEqual([undefined])
+    expect(values('true && T=$(mktemp); echo x > "$T"')).toEqual([undefined])
+    // The one standing before an && ran, whatever the joiner then skips.
+    expect(values('T=$(mktemp) && echo x > "$T"')).toEqual([['$(mktemp)']])
     // Two values, a ; or an && between them unknown: both are given.
     expect(values('T=$(mktemp); T=$(head -1 list); echo x > "$T"')).toEqual([['$(mktemp)', '$(head -1 list)']])
     // A value given anywhere in the command counts, after the write too (a loop or a function may run it first).
@@ -2734,7 +2757,11 @@ describe('writes: an arithmetic test and a [[ ]] comparison redirect nothing (#3
   test('a name arithmetic gives a value is no longer read as its old one', () => {
     // Measured: out3, then out2, out2 and out5 where the reader gave out1 for the last three. The
     // two ( and the two ) open and close no subshell, so the value stands after them.
-    expect(paths('((F=3)); echo x > out$F')).toEqual([`${CWD}/out3`])
+    expect(paths('F=1; ((F=1)); echo x > out$F')).toEqual([`${CWD}/out1`])
+    expect(paths('F=1; ((F=3)); echo x > out$F')).toEqual(['(as written) out$F'])
+    // #3468: no (( )) stands in the run of settings a line opens with, so a name only it sets is
+    // not known, though the shell does set it (measured for #3415: out3).
+    expect(paths('((F=3)); echo x > out$F')).toEqual(['(as written) out$F'])
     expect(paths('F=1; ((F=F+1)); echo x > out$F')).toEqual(['(as written) out$F'])
     expect(paths('for ((i=0; i<3; i++)); do echo x > f$i; done')).toEqual(['(as written) f$i'])
     expect(paths('F=1; (( F = 2 )); echo x > out$F')).toEqual(['(as written) out$F'])
@@ -2878,5 +2905,98 @@ describe('writes: the shapes of #3442 as the mods are given them', () => {
     expect(runs('bash -n x.sh a b')).toEqual([])
     expect(runs('bash x.sh a b')).toEqual([['a bash script file', 'x.sh', ['a', 'b']]])
     expect(runs('bash -n +n x.sh a b')).toEqual([['a bash script file', 'x.sh', ['a', 'b']]])
+  })
+})
+
+// #3468: the reader followed a variable to the value any setting in the command gave it, since by
+// the time it read them its commands had lost the difference between a `;` and an `&&`, `||`, `|` or
+// `&`, and the reserved words. A setting behind `&&` after a command that fails, or inside an `if`
+// whose test is false, never runs: the shell leaves the variable as it was, and the write lands
+// wherever that points, a folder no guard was shown. A setting is followed only where it is sure to
+// have run, by the one reading the command reader has of that (sureSettings, Command.certain): a
+// statement of the line itself, first in it or right after a `;` or a new line, inside nothing
+// that may not run. The run of settings a line opens with (openingRun, which fixedWords is built
+// on) is the start of it. Any other leaves the variable not known.
+describe('writes: a variable is followed only where its setting is sure to have run (#3468)', () => {
+  const values = (command: string) => read(command).files.map(f => f.values)
+  const folders = (command: string) => pipelineIn(command, CWD, HOME).map(c => [c.words[0], c.folder])
+  test('a setting that may be skipped, or that runs in another shell, is not followed', () => {
+    for (const command of [
+      'false && F=/opt/a.md; echo x > "$F"',
+      'true || F=/opt/a.md; echo x > "$F"',
+      'if false; then F=/opt/a.md; fi; echo x > "$F"',
+      'while false; do F=/opt/a.md; done; echo x > "$F"',
+      'case x in y) F=/opt/a.md;; esac; echo x > "$F"',
+      'f() { F=/opt/a.md; }; echo x > "$F"',
+      'F=/opt/a.md | cat; echo x > "$F"',
+      'F=/opt/a.md & echo x > "$F"',
+      'false && export F=/opt/a.md; echo x > "$F"',
+      'false && declare -x F=/opt/a.md; echo x > "$F"',
+      // A shell of its own sets nothing in this one.
+      `bash -c 'F=/opt/a.md'; echo x > "$F"`,
+      `false && bash -c 'F=/opt/a.md'; echo x > "$F"`,
+    ])
+      expect([command, paths(command)]).toEqual([command, ['(as written) $F']])
+  })
+  test('nor is the folder a cd goes to through it, or the values a guard is given for it', () => {
+    expect(paths('false && D=/opt/sub; cd "$D" && echo x > note.md')).toEqual(['(as written) note.md'])
+    expect(folders('false && W=/w/other; cd "$W" && gh pr merge 12').at(-1)).toEqual(['gh', null])
+    expect(folders('if false; then W=/w/other; fi; cd "$W" && gh pr merge 12').at(-1)).toEqual(['gh', null])
+    // #2171: the values are every one a setting gives it, which says nothing where none may have run.
+    expect(values('false && T=$(mktemp); echo x > "$T"')).toEqual([undefined])
+    expect(values('if false; then T=$(mktemp); fi; echo x > "$T"')).toEqual([undefined])
+  })
+  test('a value it had for sure is no longer known once a setting that may be skipped follows', () => {
+    expect(paths('F=/opt/a.md; false && F=/opt/b.md; echo x > "$F"')).toEqual(['(as written) $F'])
+    expect(paths('F=/opt/a.md; if false; then F=$(mktemp); fi; echo x > "$F"')).toEqual(['(as written) $F'])
+    // It holds one of the two, so both are given, as for any two settings (#2171).
+    expect(values('F=/opt/a.md; if false; then F=$(mktemp); fi; echo x > "$F"')).toEqual([['/opt/a.md', '$(mktemp)']])
+    // The value it already has, given again, changes nothing whether that setting runs or not.
+    expect(paths('F=/opt/a.md; if false; then F=/opt/a.md; fi; echo x > "$F"')).toEqual(['/opt/a.md'])
+  })
+  test('a setting in the run of settings the line opens with is followed, whatever its value', () => {
+    expect(paths('F=/opt/a.md; echo x > "$F"')).toEqual(['/opt/a.md'])
+    expect(paths('F=/opt/a.md\necho x > "$F"')).toEqual(['/opt/a.md'])
+    expect(paths('A=1 F=/opt/a.md; echo x > "$F"')).toEqual(['/opt/a.md'])
+    expect(paths('F=~/a.md; G="$HOME/b c.md"; echo x > "$F"; echo y > "$G"')).toEqual([`${HOME}/a.md`, `${HOME}/b c.md`])
+    // A setting after one whose value a command gives is still in the run: nothing can skip it.
+    expect(paths('T=$(mktemp); F=/opt/a.md; echo x > "$F"')).toEqual(['/opt/a.md'])
+    expect(values('T=$(mktemp); echo x > "$T"')).toEqual([['$(mktemp)']])
+    // Used anywhere after it: a branch, a loop, a subshell and a pipe all start with the value.
+    expect(paths('F=/opt/a.md; if true; then echo x > "$F"; fi; (echo y >> "$F") | cat')).toEqual(['/opt/a.md'])
+    expect(folders('W=/w/other; cd "$W" && gh pr merge 12').at(-1)).toEqual(['gh', '/w/other'])
+    expect(paths("F=/opt/a.md; cat > \"$F\" <<'EOF'\nx\nEOF")).toEqual(['/opt/a.md'])
+    // A substitution's own text is a line of its own, read the same way.
+    expect(paths('echo "$(F=/opt/a.md; echo x > "$F")"')).toEqual(['/opt/a.md'])
+  })
+  // HOME given up on leaves home itself not known: read on as the session's home, a write through
+  // `$HOME` or `~` was given a path the shell may not use (the setting ran, for all the reader knows).
+  test('a word through $HOME or ~ names no file once a setting of HOME may or may not have run', () => {
+    expect(paths('make && HOME=/opt/h; echo x > "$HOME/a.md"; echo y > ~/b.md')).toEqual(['(as written) $HOME/a.md', '(as written) ~/b.md'])
+    expect(paths('make && HOME=/opt/h; cd && echo x > a.md')).toEqual(['(as written) a.md'])
+    // Inside a subshell it ends with it, and one the line opens with is followed as any variable is.
+    expect(paths('(make && HOME=/opt/h; echo x > ~/a.md); echo y > ~/b.md')).toEqual(['(as written) ~/a.md', `${HOME}/b.md`])
+    expect(paths('HOME=/opt/h; echo x > "$HOME/a.md"')).toEqual(['/opt/h/a.md'])
+    expect(paths('echo x > "$HOME/a.md"; echo y > ~/b.md')).toEqual([`${HOME}/a.md`, `${HOME}/b.md`])
+  })
+  // A statement of the line itself, after a `;` or a new line, ran whatever the commands before it
+  // did, and one standing before an `&&` or `||` ran before the joiner skipped anything.
+  test('a setting standing as a statement of its own later in the line is followed', () => {
+    expect(paths('make; F=/opt/a.md; echo x > "$F"')).toEqual(['/opt/a.md'])
+    expect(paths('make\nF=/opt/a.md\necho x > "$F"')).toEqual(['/opt/a.md'])
+    expect(paths('F=/opt/a.md && echo x > "$F"')).toEqual(['/opt/a.md'])
+    expect(paths("cat > /opt/t.md <<'EOF'\nx\nEOF\nP=/opt/a.md\necho x > \"$P\"").at(-1)).toBe('/opt/a.md')
+    expect(paths('if true; then make; fi; F=/opt/a.md; echo x > "$F"')).toEqual(['/opt/a.md'])
+    expect(values('make; T=$(mktemp); echo x > "$T"')).toEqual([['$(mktemp)']])
+    // Inside the branch, the loop or the group, it may not have run.
+    expect(paths('if false; then make; F=/opt/a.md; fi; echo x > "$F"')).toEqual(['(as written) $F'])
+    expect(paths('make && { lint; F=/opt/a.md; }; echo x > "$F"')).toEqual(['(as written) $F'])
+  })
+  // Each of these the shell does set, and the reading still gives up on it: export is a command, and
+  // a subshell or a group is read as something that may not run. Read as not known, never as a
+  // wrong path.
+  test('what the one reading gives up on though the shell sets it', () => {
+    for (const command of ['export F=/opt/a.md; echo x > "$F"', '(F=/opt/a.md; echo x > "$F")', '{ F=/opt/a.md; echo x > "$F"; }'])
+      expect([command, paths(command)]).toEqual([command, ['(as written) $F']])
   })
 })

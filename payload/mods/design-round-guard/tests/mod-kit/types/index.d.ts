@@ -197,8 +197,9 @@ export type ModKit = {
    *
    * Given `cwd`, the folder the call starts in, and `home`, each command also carries `folder`
    * (#2000): the absolute folder it runs in, where a cd or pushd before it leaves the shell, read as
-   * `writes` reads one (relative and home folders, a variable the command set, a subshell's cd ending
-   * with it), or null where that cannot be followed (a variable it did not set, cd -, a popd). A mod
+   * `writes` reads one (relative and home folders, a variable the command opens by setting, a
+   * subshell's cd ending with it), or null where that cannot be followed (a variable it did not set,
+   * or set only where the setting may not have run, #3468; cd -; a popd). A mod
    * asking about what a command acts on in its folder asks this, never the session's folder (L237).
    *
    * Given `assignments: true`, a command that only sets a value (`T=x;`, `A=1 B=2`) is given too
@@ -206,7 +207,8 @@ export type ModKit = {
    * otherwise left out, and a guard that must know every value a line sets before a script it runs
    * asks for it. A copy of mod-kit loaded before #3093 takes no such option and leaves them out
    * without saying so, as it gives no `env` and no `behind`, so a guard relying on any of the three
-   * first asks about a line it knows the answer for (`A=1; B=2 env true`).
+   * first asks about a line it knows the answer for (`A=1; B=2 env true`). Each such command says
+   * whether it is sure to have run, as `certain` (#3468).
    *
    * Given `follow: true`, each command carries `followed` (#3398): what a word that is one variable
    * alone holds, where the call's own text makes that certain. A copy of mod-kit loaded before
@@ -486,6 +488,16 @@ export type ModKitCommand = {
    * call is.
    */
   followed?: (string | null)[]
+  /**
+   * On a command that only sets variables (given with `assignments: true`): it is sure to have run
+   * before everything after it in its line, in that line's own shell (#3468). It is a statement of
+   * the line itself, first in it or right after a `;` or a new line, ended by a `;`, a new line, an
+   * `&&` or an `||`. Absent on every other one: a setting behind an `&&` or `||`, in a branch, a
+   * loop, a function, a group or a subshell, before or after a `|` or a `&`, after a function is
+   * defined, or in a script a shell is given or a trap's text. `writes`
+   * and `folder` follow a variable to its value only from a setting marked so.
+   */
+  certain?: true
   /** The folder it runs in, given only when `pipeline` was given `cwd`; null where a cd before it cannot be followed. */
   folder?: string | null
 }
@@ -670,7 +682,7 @@ export type ModKitWrites = {
    * `python -m` and a tool run through `npx` (`script` the module or tool, with no `path`; npx's `-c`
    * command line is not read). What it writes cannot be read
    * before it runs, so each word after it that may name a file is given in `args`: as written, with
-   * its absolute path where its words name one, a cd and a variable the command set followed, or the
+   * its absolute path where its words name one, a cd and a variable the command opens by setting followed, or the
    * `folder` a pattern lands in; an option's value written `--name=value` is that value, and an
    * option, `-`, an address and another machine's path are none. `script` is the script's own word
    * and `path` its file. Kept apart from `files`, `changes` and `unnamed`, as `byGit` is, so a guard

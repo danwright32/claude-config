@@ -8739,7 +8739,11 @@ operands are by convention the files it works on, where a script's arguments are
 its output options names (prettier without `--write` or `-w`, so `--check`, `-c`,
 `--list-different`, `-l` and printing; eslint without `--fix` or `--init`, so `--fix-dry-run`; read
 from each tool's documented flags and kept in writes.ts beside `TOOL_READS`, and never where a word
-may hide a flag it cannot see, such as a variable it cannot read), a variable the command set read
+may hide a flag it cannot see, such as a variable it cannot read), a variable the command opens by
+setting (since #3468 only a setting that is a statement of the line itself, first in the line or
+right after a `;` or a new line, is followed: one behind an `&&`, in a branch, a loop or a group,
+made by `export`, or in a script a shell is given may not have run, and leaves the variable not
+known) read
 as its value and, unquoted, split into words where the shell the call runs in splits it (#1834:
 bash, sh, dash and ksh do, zsh does not; the shell is CLAUDE_CODE_SHELL or SHELL where either names
 a bash or zsh, and for a script a shell is given, that shell, so on a Mac whose Bash calls run in

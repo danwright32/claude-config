@@ -749,8 +749,13 @@ const testEndFrom = (cmd: string, from: number, redirected = false): number => {
 // `tests` says the shell reading the text reads `[[ ]]` as a test of its own (worksTests). Only then
 // are the two forms of #3442 read as a test: one with `time` before it, and one with a redirect
 // written right after its `]]`. In sh and dash both run what follows a `||` inside as a command.
-const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, unexpanded?: Set<number>, subbed?: Map<number, InWord[]>, worked?: Map<number, string>, compares?: Set<number>, braces?: number[], doubts?: Doubt[], tests = false): Split[] => {
+// `ends`, where given, is filled with where each word ends in the text (#3468), by where it starts:
+// the place of the character that ended it, a quote that closes the word inside it. Only for a word
+// the text spells out, never one the reader makes of an operator or a parenthesis.
+const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, unexpanded?: Set<number>, subbed?: Map<number, InWord[]>, worked?: Map<number, string>, compares?: Set<number>, braces?: number[], doubts?: Doubt[], tests = false, ends?: Map<number, number>): Split[] => {
   const cmds: Split[] = []
+  // The place in the text being read, for `ends`.
+  let here = 0
   // For `doubts` (#3496): the word a parenthesis opened inside a word began in, and where in the
   // word it stands, so the group can be read whole at the ) that closes it (a pattern's qualifier).
   let groupWord = -1
@@ -828,6 +833,7 @@ const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, 
     if (inWord) {
       words.push(word)
       starts.push(start)
+      ends?.set(start, here)
       if (bare && wordBare.length) bare.set(start, wordBare)
       if (subbed && wordSubs.length) subbed.set(start, wordSubs)
       if (literal && globQuoted && !globBare && !expands) literal.add(start)
@@ -902,6 +908,7 @@ const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, 
   let testEnd = -1
   for (let i = 0; i < cmd.length; i++) {
     const c = cmd[i] as string
+    here = i
     if (quote) {
       // A `${` in double quotes holding a single quote bash and zsh do not read alike (braceDiffers):
       // `braces`, where given, is filled with where each one stands.
@@ -1166,6 +1173,7 @@ const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, 
       word += c
     }
   }
+  here = cmd.length
   if (inPattern() && inWord && word === 'esac' && words.length === 0) {
     const at = start
     word = ''
@@ -1644,6 +1652,14 @@ const printfText = (args: readonly string[]): string | undefined => {
  * other word; absent where no word is one. Given only to a reader that asks (ReadOptions.follow),
  * and only for a command of the call's own text. The word in `words` is still the variable as
  * written, so a reader that does not ask reads exactly what it read before.
+ * `certain` marks a command that only sets variables (given to a reader that asks for those,
+ * ReadOptions.assignments) and is sure to have run before everything after it in its line, in that
+ * line's own shell (#3468): a statement of the line itself, first in it or right after a `;` or a
+ * new line (sureSettings). Absent on every other one: a setting behind an `&&` or `||`, in a branch,
+ * a loop, a function, a group or a subshell, or before or after a `|` or a `&`, each of which the
+ * shell may skip or run elsewhere; and every setting in text the line runs among its own commands (a shell's script, a
+ * trap's text, what source reads), which runs in another shell or only if its command does. A
+ * reader that follows a variable to its value follows only a setting marked so.
  */
 export type Command = {
   words: string[]
@@ -1669,6 +1685,7 @@ export type Command = {
   derived?: (Derived | null)[]
   worked?: (string | null)[]
   followed?: (string | null)[]
+  certain?: true
 }
 
 /**
@@ -1782,7 +1799,10 @@ export type Line = (Command | { sub: Line })[]
 // where nothing else already says why what it runs cannot be read.
 // `within` says the text read is part of the line that feeds it, a substitution's or a heredoc's
 // lines, so that line's own reading of its quotes already covers it (readLine, quotedText).
-type Feed = { pipedFrom?: string[]; stdin?: Stdin; xargs?: boolean; found?: string[]; splits?: boolean; proxied?: boolean; unread?: string; stops?: string; arithmetic?: boolean; summed?: boolean; env?: string[]; behind?: string[]; within?: boolean }
+// `inline` says the text read is run among the commands of the line that holds it (#3468): a
+// shell's script, a trap's text, what source reads. A setting in it is never marked `certain`, since
+// its commands are given in that line, where the setting ran in another shell or may not have run.
+type Feed = { pipedFrom?: string[]; stdin?: Stdin; xargs?: boolean; found?: string[]; splits?: boolean; proxied?: boolean; unread?: string; stops?: string; arithmetic?: boolean; summed?: boolean; env?: string[]; behind?: string[]; within?: boolean; inline?: boolean }
 // The marks a feed gives each command it feeds.
 const carried = (f: Feed) => ({
   ...(f.xargs ? { xargs: true as const } : {}),
@@ -1848,7 +1868,7 @@ const emit = (words: string[], fed: Fed, feed: Feed, out: Line, opts: ReadOption
     const splitting = splitsWords(words[0]) || emulated ? { splits: true } : {}
     // A shell whose own command the reader stops in (#3491): each command of its script is unread.
     const stopped = feed.stops && !feed.unread ? { unread: feed.stops } : {}
-    out.push(...readLine(program.text, opts, { ...inner, ...carried(feed), ...stopped, ...splitting, behind: behindIt(feed, words[0]) }))
+    out.push(...readLine(program.text, opts, { ...inner, ...carried(feed), ...stopped, ...splitting, behind: behindIt(feed, words[0]), inline: true }))
     // The shell's own output redirects send everything its script prints to a file, which the
     // script's commands never name (#760: `bash -c 'make' > build.log` wrote a build.log no reader
     // saw). They are given as a command of their own, the shell and those redirects, so every
@@ -1886,7 +1906,7 @@ const emit = (words: string[], fed: Fed, feed: Feed, out: Line, opts: ReadOption
   })
   // What source runs from its standard input, after the source command itself, each command fed
   // the rest of that text as a shell's script's commands are.
-  if (sourcedText !== undefined) out.push(...readLine(sourcedText, opts, { stdin: { unreadable: 'fed the rest of the script source reads' }, ...carried(feed) }))
+  if (sourcedText !== undefined) out.push(...readLine(sourcedText, opts, { stdin: { unreadable: 'fed the rest of the script source reads' }, ...carried(feed), inline: true }))
   // Its {} stands for each thing find finds, which this reader writes as the folder find starts
   // from, so the command carries those folders as `found`: what it changes at one of them is that
   // folder and everything under it (#760: `find src -exec rm {} \;` was read as removing src alone),
@@ -2130,6 +2150,126 @@ const wholeName = (name: string): RegExp => new RegExp(`(?<![A-Za-z0-9_$])${name
 const FILLED = /\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*)|([?$!#@*0-9-]))?|`/g
 // The most readings a word made of loop values is given before it is taken for one not known.
 const MAX_READINGS = 64
+
+// The run of settings a line opens with: what fixedWords (#3398) follows a variable from, and the
+// start of the one reading of whether a setting is sure to have run, which sureSettings (#3468,
+// below) carries past the first command for the write reader, in place of that reader following
+// every setting it met. It is the statements the line starts with that are only settings, each
+// ended by a `;` or a new line and by nothing else. So each is set before anything runs, in the line's own shell,
+// whatever the commands after it do: never in a subshell, a function, a loop, a branch or a group,
+// never after an `&&` or `||` that may skip it, never before a `|` or a `&` that runs it in a shell
+// of its own, and never as a setting in front of a command, which reaches the program and not the
+// shell. `setting` says whether a word is a setting to the reader asking, with where the word ends
+// in the text: the words of a statement stand apart by blanks alone, and what stands between two
+// statements is read from the text, so a comment or two lines joined by a backslash ends the run.
+// `cut` is the statement the run was cut at where that one was itself only settings but did not end
+// as a statement: it stands before a `|` or a `&`, or an `&&` or `||`.
+type Setting = { name: string; value: string; at: number }
+const openingRun = (
+  text: string,
+  read: readonly Split[],
+  begun: readonly Begun[],
+  setting: (word: string, at: number) => { name: string; value: string; end: number } | undefined,
+): { run: Setting[][]; cut?: Setting[] } => {
+  const run: Setting[][] = []
+  let end = 0
+  let k = 0
+  for (; k < read.length; k++) {
+    const r = read[k] as Split
+    const only = onlySettings(text, r, begun[k] as Begun, setting)
+    if (only === undefined) break
+    const before = text.slice(k === 0 ? 0 : end, r.starts[0])
+    if (!(k === 0 ? /^\s*$/ : STATEMENT_END).test(before)) break
+    run.push(only.sets)
+    end = only.end
+  }
+  // The last of them must end as a statement too: before a `|` or a `&` it ran in a shell of its
+  // own, and after it nothing more of the line is read as the run.
+  if (k > 0 && k < read.length && !STATEMENT_END.test(text.slice(end, (read[k] as Split).starts[0]))) return { run, cut: run.pop() as Setting[] }
+  return { run }
+}
+// The settings a statement is made of and where the last one ends, where it is made of settings
+// and nothing else, its words standing apart by blanks alone: what openingRun and sureSettings both
+// take a statement that only sets variables to be.
+const onlySettings = (
+  text: string,
+  r: Split,
+  b: Begun,
+  setting: (word: string, at: number) => { name: string; value: string; end: number } | undefined,
+): { sets: Setting[]; end: number } | undefined => {
+  if (!r.words.length || b.words.length) return undefined
+  const sets: Setting[] = []
+  let cursor = -1
+  for (let n = 0; n < r.words.length; n++) {
+    const at = r.starts[n] ?? -1
+    const s = at >= 0 ? setting(r.words[n] as string, at) : undefined
+    if (s === undefined || (n > 0 && !/^[ \t]+$/.test(text.slice(cursor, at)))) return undefined
+    sets.push({ name: s.name, value: s.value, at })
+    cursor = s.end
+  }
+  return { sets, end: cursor }
+}
+// Each statement of a line that only sets variables and is sure to have run in the line's own shell
+// (#3468), by its place among the line's commands. It is the reading openingRun starts, carried past
+// the first command: a statement of settings and nothing else (onlySettings) that
+// - stands in the line itself, inside no subshell, group, branch, loop, case or function body, each
+//   of which may not run, or runs in a shell of its own;
+// - is the first thing in the line, or stands right after a `;` or a new line (STATEMENT_END), so
+//   whatever the commands before it did, the shell went on to it: never after an `&&` or `||` that
+//   may skip it, a `|` that runs it in a shell of its own, a `&` or a comment;
+// - is ended by a `;`, a new line, the end of the text, or an `&&` or `||`, which decide only what
+//   runs after it: never by a `|` or a `&`, before which it ran in a shell of its own.
+// Nothing after a function is defined is sure (zsh takes the command after `name()` as its body),
+// and nothing after a word that belongs inside a compound command standing where none is open
+// (`do`, `then`, `else`, a closing word with nothing to close): the reading has lost its place. A
+// compound command that never closes (zsh's short forms) leaves everything after it inside. So this
+// can only say no where the shell would say yes, never the other way.
+const JOINED_ON = /^[ \t]*(?:&&|\|\|)[ \t\n]*$/
+const COMPOUND = new Set(['case', 'for', 'select', 'repeat', 'foreach'])
+const INSIDE = new Set(['then', 'else', 'elif', 'do'])
+const sureSettings = (
+  text: string,
+  read: readonly Split[],
+  begun: readonly Begun[],
+  ends: ReadonlyMap<number, number>,
+  setting: (word: string, at: number) => { name: string; value: string; end: number } | undefined,
+): Set<number> => {
+  const sure = new Set<number>()
+  const one = (r: Split | undefined, p: string) => r?.words.length === 1 && r.words[0] === p
+  let depth = 0
+  // Where the statement before ends in the text: its last word's end.
+  let end = 0
+  for (let k = 0; k < read.length; k++) {
+    const r = read[k] as Split
+    const w = r.words
+    if (w.some(x => x === 'function' || x.endsWith('()')) || (one(r, '(') && one(read[k + 1], ')'))) break
+    const first = r.starts.find(at => at >= 0)
+    if (one(r, '(')) depth++
+    else if (one(r, ')') || CLOSES.has(w[0] as string) || w[0] === 'end') depth--
+    else {
+      let n = 0
+      for (; n < w.length && (LEADS.has(w[n] as string) || w[n] === 'time' || w[n] === 'coproc'); n++) {
+        if (OPENS.has(w[n] as string)) depth++
+        else if (INSIDE.has(w[n] as string) && depth === 0) return sure
+      }
+      if (n < w.length && COMPOUND.has(w[n] as string)) depth++
+      else if (n === 0 && depth === 0) {
+        const only = onlySettings(text, r, begun[k] as Begun, setting)
+        const next = (read[k + 1] as Split | undefined)?.starts.find(at => at >= 0)
+        const before = first === undefined ? undefined : text.slice(end, first)
+        const after = only === undefined ? undefined : k + 1 === read.length ? text.slice(only.end) : next === undefined ? undefined : text.slice(only.end, next)
+        if (before !== undefined && after !== undefined && (k === 0 ? /^\s*$/ : STATEMENT_END).test(before) && (/^\s*$/.test(after) || STATEMENT_END.test(after) || JOINED_ON.test(after))) sure.add(k)
+      }
+    }
+    if (depth < 0) break
+    // A word the splitter made, or one with no place in the text, leaves `end` where it was, so the
+    // text before the next statement holds more than a `;` and that statement is not sure.
+    r.starts.forEach((at, n) => {
+      if (at >= 0) end = Math.max(end, ends.get(at) ?? at + (w[n] as string).length)
+    })
+  }
+  return sure
+}
 const fixedWords = (
   text: string,
   read: readonly Split[],
@@ -2141,41 +2281,23 @@ const fixedWords = (
 ): Map<number, string> => {
   const none = new Map<number, string>()
   if (closed) return none
-  // The plain settings the line opens with: each name, its value and where its word stands.
+  // The plain settings the line opens with: each name, its value and where its word stands. A
+  // setting here is one typed as it reads, or with the value alone inside one pair of quotes, the
+  // value plain characters (LOOP_VALUE), since this reading hands the value on.
+  const { run, cut } = openingRun(text, read, begun, (word, at) => {
+    const [, name, value] = PLAIN_SETTING.exec(word) ?? []
+    const typed = name !== undefined && value !== undefined && LOOP_VALUE.test(value) ? [word, `${name}="${value}"`, `${name}='${value}'`].find(t => text.startsWith(t, at)) : undefined
+    return name === undefined || value === undefined || typed === undefined ? undefined : { name, value, end: at + typed.length }
+  })
   const lead = new Map<string, { value: string; at: number }>()
   const twice = new Set<string>()
-  let last: string[] = []
-  let end = 0
-  let k = 0
-  for (; k < read.length; k++) {
-    const r = read[k] as Split
-    if (!r.words.length || (begun[k] as Begun).words.length) break
-    const sets: { name: string; value: string; at: number }[] = []
-    let cursor = -1
-    for (let n = 0; n < r.words.length; n++) {
-      const word = r.words[n] as string
-      const at = r.starts[n] ?? -1
-      const m = PLAIN_SETTING.exec(word)
-      const [, name, value] = m ?? []
-      // Typed as it reads here, or with the value alone inside one pair of quotes.
-      const typed = name !== undefined && value !== undefined && at >= 0 && LOOP_VALUE.test(value) ? [word, `${name}="${value}"`, `${name}='${value}'`].find(t => text.startsWith(t, at)) : undefined
-      if (name === undefined || value === undefined || typed === undefined || (n > 0 && !/^[ \t]+$/.test(text.slice(cursor, at)))) break
-      sets.push({ name, value, at })
-      cursor = at + typed.length
-    }
-    if (sets.length !== r.words.length) break
-    const before = text.slice(k === 0 ? 0 : end, r.starts[0])
-    if (!(k === 0 ? /^\s*$/ : STATEMENT_END).test(before)) break
+  for (const sets of cut ? [...run, cut] : run)
     for (const s of sets) {
       if (lead.has(s.name) || twice.has(s.name)) twice.add(s.name)
       else lead.set(s.name, { value: s.value, at: s.at })
     }
-    last = sets.map(s => s.name)
-    end = cursor
-  }
-  // The last of them must end as a statement too: before a `|` or a `&` it ran in a shell of its
-  // own, and after it nothing more of the line is read as the run.
-  if (k > 0 && k < read.length && !STATEMENT_END.test(text.slice(end, (read[k] as Split).starts[0]))) for (const name of last) lead.delete(name)
+  // The one the run was cut at ran in a shell of its own, or may not have run.
+  for (const s of cut ?? []) lead.delete(s.name)
   for (const name of [...lead.keys()]) if (twice.has(name) || ownForm(name)) lead.delete(name)
   if (!lead.size) return none
 
@@ -2341,7 +2463,9 @@ export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
   // of its own (#3415): only then is a command marked `arithmetic` or a word of one `compares`, and
   // only then (#3442) does a value inside `(( ))` name no command.
   const tests = worksTests(outer.behind)
-  const read = split(text, bare, literal, unexpanded, subbed, worked, compares, braces, doubts, tests)
+  // Where each word ends in the text, by where it starts (#3468).
+  const ends = new Map<number, number>()
+  const read = split(text, bare, literal, unexpanded, subbed, worked, compares, braces, doubts, tests, ends)
   const begun = read.map(r => begins(r.words, r.starts, (w, at) => /[$`]/.test(w) && !unexpanded.has(at)))
   // A substitution runs in the shell running the line, so it splits words as that shell does, and
   // is run with that shell's settings, behind what that shell is (#3093).
@@ -2474,7 +2598,7 @@ export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
   // a trap's text themselves each read `trap -- text` their own way. It is read as it is written,
   // in the shell that set it; where the shell expands it first, the trap is unread too (unreadOf).
   const later: string[][] = [[]]
-  const laterFeed: Feed = { ...carried(outer), ...(outer.splits ? { splits: true } : {}) }
+  const laterFeed: Feed = { ...carried(outer), ...(outer.splits ? { splits: true } : {}), inline: true }
   const runLater = (texts: string[]) => {
     for (const t of texts) out.push(...readLine(t, nested, laterFeed))
   }
@@ -2543,6 +2667,21 @@ export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
     }).length
     if ((r.direct ? 1 : 0) + redirects > 1 && !stops.has(k)) stops.set(k, INPUTS_UNREAD)
   })
+  // Each statement that only sets variables and is sure to have run (#3468, Command.certain), by
+  // sureSettings, a setting here any `NAME=` word, its value read or not, since this says only that
+  // it ran. Only for a reader that asks for the settings, never in text run among another line's
+  // commands (Feed.inline), and none from the first statement the reader could not read the text
+  // past.
+  const certain = new Set<number>()
+  if (opts.assignments && !outer.inline) {
+    const unreadFrom = Math.min(read.length, ...stops.keys())
+    const sure = sureSettings(text, read, begun, ends, (word, at) => {
+      const name = ASSIGNMENT.exec(word)?.[0].slice(0, -1)
+      const end = ends.get(at)
+      return name === undefined || end === undefined ? undefined : { name, value: word.slice(name.length + 1), end }
+    })
+    for (const k of sure) if (k < unreadFrom) certain.add(k)
+  }
   read.forEach((r, k) => {
     runSubs(k)
     const b = begun[k] as Begun
@@ -2557,7 +2696,7 @@ export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
       // given whoever asks, as the words read, since what follows it was read into them.
       const sets = r.words.filter(w => ASSIGNMENT.test(w))
       if (stop !== undefined) out.push({ words: r.words, ...carried({ ...marksOf(b, outer), unread: b.unread ?? outer.unread ?? stop }) })
-      else if (opts.assignments && sets.length) out.push({ words: sets, ...(tests && arithmetic.has(k) ? { arithmetic: true as const } : {}) })
+      else if (opts.assignments && sets.length) out.push({ words: sets, ...(tests && arithmetic.has(k) ? { arithmetic: true as const } : {}), ...(certain.has(k) ? { certain: true as const } : {}) })
       return
     }
     let feed: Feed = {}
