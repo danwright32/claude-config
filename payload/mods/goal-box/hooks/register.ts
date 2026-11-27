@@ -1,6 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 import { cutOwn, watchesOnly } from './mod-kit/hold.ts'
-import { unreadAsk } from './request.ts'
+import { pickerCame } from './request.ts'
 import type { ModKitGoal } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import type { GoalBoxShown } from '../types/index.d.ts'
 import { DESCRIPTION, MOD, NAME, SCHEMA, TOOL, askDoneText, askText, boxText, cardOf, cardedSince, decide, linkedIn, mergeFactsOf, mergeHolds, readInput, waitKey, type Confirmed, type Holds, type Linked } from './box.ts'
@@ -433,13 +433,19 @@ const pickerTurnEnded = async ($: EngineInterface): Promise<void> => {
 }
 
 /**
- * #3321: a picker that came back uncounted because Dan could not have read it whole (request.ts,
- * unreadAsk) is said in the debug log, so a box that does not show again after it can be traced.
- * Any other picker that is no answer (dismissed, failed, closed while he was away) says nothing.
+ * A picker that came back uncounted says why in the debug log, so a box that does not show again
+ * after it can be traced, in two cases (request.ts, pickerCame). #3321: Dan could not have read it
+ * whole. #3843: it came back with no answer in a shape this mod reads, and not in one of the three
+ * ways this mod knows a picker ends unanswered. That second line names the keys the result held
+ * and nothing under them, never a word he was asked or answered. It is how a change in what Claude
+ * Code hands a hook would show at the first real picker, where the refusal's words alone read as an
+ * ordinary day. A picker he dismissed, one that failed and one that closed while he was away say
+ * nothing.
  */
-const sayUnreadAsk = ($: EngineInterface, call: unknown): void => {
-  const why = unreadAsk(call)
-  if (why !== undefined) debug($, `a picker was asked that Dan could not have read whole (${why}), so the answer that came back is not counted as an answer of his and no picked work begins from it`)
+const sayNoAnswer = ($: EngineInterface, r: unknown, call: unknown): void => {
+  const came = pickerCame(r, call)
+  if (came.how === 'unread') debug($, `a picker was asked that Dan could not have read whole (${came.why}), so the answer that came back is not counted as an answer of his and no picked work begins from it`)
+  if (came.how === 'shape') debug($, `a picker came back with no answer of Dan's in a shape this mod reads (${came.holds}), and not as one he dismissed, one that failed or one that closed while he was away, so it is not counted as an answer of his and no picked work begins from it; if he did answer it, what Claude Code hands this mod for a picker is no longer what it reads`)
 }
 
 /** Says on the waiting answer why work after it could not be told, for the refusal that reads it. */
@@ -773,7 +779,7 @@ export const register: Register = on => {
     if (e.agentId !== undefined || e.tool === TOOL) return r
     if (e.tool === 'AskUserQuestion') {
       if (answered(r, e)) await $.state.set(pickerRef, {})
-      else sayUnreadAsk($, e)
+      else sayNoAnswer($, r, e)
       return r
     }
     // Nor is a call Claude Code marked read only: `isReadOnly` is on the result "only when the tool

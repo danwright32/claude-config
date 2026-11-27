@@ -12022,7 +12022,10 @@ tool the end of turn review's own test counts as able to change something (`is_m
 be read is not made again for the same tool's name in that turn). The box's own tool,
 a call that was refused or came back as an error (how a settings hook's refusal reaches a mod)
 and a subagent's call are not work; a picker dismissed, failed or closed while he was away is no
-answer; a message he types drops an answer still waiting. A test that
+answer; one that came back any other way with no answer the mod reads is not counted either, and
+the debug log then names the keys its result held, never a word of his, so a change in what
+Claude Code hands the mod for a picker shows at the first one; a message he types drops an answer
+still waiting. A test that
 cannot be run is said in the refusal, never read as no work. The refusal of a second box says
 which of these it is and when a later call is right. Where the card is not drawn, the result is the
 same box as text, shaped like SESSION REFLECTION. What holds the box is read through mod-kit's one

@@ -71,36 +71,81 @@ export const workRead = (r: { exitCode: number; stdout: string; stderr: string }
  * uncounted: no picked work begins from it. A call that is no object is judged as one with nothing
  * in it, which has no fault, and its result then decides as before.
  */
-export const unreadAsk = (call: unknown): string | undefined => {
+const unreadAsk = (call: unknown): string | undefined => {
   const unread = askFault(typeof call === 'object' && call !== null ? (call as Record<string, unknown>) : {})
   return unread === undefined ? undefined : `${unread.what} would not reach Dan as written: ${unread.fault}`
 }
 
 /**
- * Whether an AskUserQuestion call came back with an answer of Dan's, as Claude Code's dialog hands
- * it to a tool.call hook: a result holding `answers` with at least one that is not empty, or a
- * `response` that is not empty, which is what he typed in place of choosing (Claude Code's typings
- * of the tool's result: "Freeform text the user typed instead of selecting a structured option").
- * Those are his own words, so they are an answer like a choice; which path of the dialog fills
- * `response` was read from the typings and not measured in a session. A picker he dismissed (a
- * refusal), one that failed, one that closed by itself while he was away (`afkTimeoutMs`), and any
- * result not in that shape are no answer.
+ * How a picker's call came back, in one of four ways. `answer`: with an answer of Dan's. `unread`:
+ * to a picker he could not have read whole, with why. `known`: one of the three ways this mod knows
+ * a picker ends without an answer (he dismissed it, it failed, it closed while he was away).
+ * `shape`: none of those, with what the call came back holding, which is how a result whose shape
+ * this mod does not read would look.
+ */
+export type PickerCame = { how: 'answer' } | { how: 'unread'; why: string } | { how: 'known' } | { how: 'shape'; holds: string }
+
+/** A field's name as Claude Code writes one: letters, digits and underscores, shorter than a sentence. */
+const FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,39}$/
+/** The most names said of one object. */
+const MOST_NAMES = 12
+
+/**
+ * The keys an object holds, for the debug log: its first twelve plain field names, and a count of
+ * the rest. A key that is not a plain field name is counted and never said, because a result keyed
+ * by a question or an answer would put Dan's text in the log. Nothing an object holds under a key
+ * is ever said. What this leaves: a key that is one plain word of his would be said as a name.
+ */
+const names = (o: object): string => {
+  const keys = Object.keys(o)
+  const said = keys.filter(k => FIELD_NAME.test(k)).slice(0, MOST_NAMES)
+  const rest = keys.length - said.length
+  if (keys.length === 0) return 'no keys'
+  if (said.length === 0) return `${rest} ${rest === 1 ? 'key' : 'keys'} not named here`
+  return rest === 0 ? said.join(', ') : `${said.join(', ')}, and ${rest} more not named here`
+}
+
+/** What kind of thing a value is, never the value. */
+const kind = (v: unknown): string => (v === null ? 'null' : v === undefined ? 'nothing' : Array.isArray(v) ? 'a list' : `a ${typeof v}`)
+
+/**
+ * How an AskUserQuestion call came back (PickerCame), as Claude Code's dialog hands it to a
+ * tool.call hook. An answer of Dan's is a result holding `answers` with at least one that is not
+ * empty, or a `response` that is not empty, which is what he typed in place of choosing (Claude
+ * Code's typings of the tool's result: "Freeform text the user typed instead of selecting a
+ * structured option"). Those are his own words, so they are an answer like a choice; which path of
+ * the dialog fills `response` was read from the typings and not measured in a session. A picker he
+ * dismissed (a refusal), one that failed, and one that closed by itself while he was away
+ * (`afkTimeoutMs`) are the known ways it ends with no answer.
  *
- * Nor is any answer to a picker he could not read whole (unreadAsk, #3321): the call is judged
+ * Anything else is no answer either, and is `shape`: a result with no answer in it, or one this mod
+ * cannot read. That shape too was read from the typings and not measured, so if Claude Code hands a
+ * hook something else, every picker Dan answers lands here and the mod would count none. `holds`
+ * says what was seen in its place, by key and kind only (names), for the debug log.
+ *
+ * No answer to a picker he could not read whole counts (unreadAsk, #3321): the call is judged
  * first, and what came back is read only for a call that passes. `call` is the picker's call as this
  * mod's hook was handed it, which is what it passed down to the dialog.
  */
-export const answered = (r: unknown, call: unknown): boolean => {
-  if (unreadAsk(call) !== undefined) return false
-  const o = r as { deny?: unknown; isError?: unknown; result?: unknown } | null | undefined
-  if (!o || typeof o !== 'object' || o.deny !== undefined || o.isError === true) return false
-  const out = o.result as { answers?: unknown; response?: unknown; afkTimeoutMs?: unknown } | null | undefined
-  if (!out || typeof out !== 'object' || out.afkTimeoutMs !== undefined) return false
-  if (typeof out.response === 'string' && out.response.trim() !== '') return true
+export const pickerCame = (r: unknown, call: unknown): PickerCame => {
+  const unread = unreadAsk(call)
+  if (unread !== undefined) return { how: 'unread', why: unread }
+  if (r === null || typeof r !== 'object' || Array.isArray(r)) return { how: 'shape', holds: `the call came back as ${kind(r)}` }
+  const o = r as { deny?: unknown; isError?: unknown; result?: unknown }
+  if (o.deny !== undefined || o.isError === true) return { how: 'known' }
+  if (o.result === undefined) return { how: 'shape', holds: `it has no result; the call came back holding: ${names(o)}` }
+  if (o.result === null || typeof o.result !== 'object' || Array.isArray(o.result)) return { how: 'shape', holds: `its result is ${kind(o.result)}, where this mod reads an object; the call came back holding: ${names(o)}` }
+  const out = o.result as { answers?: unknown; response?: unknown; afkTimeoutMs?: unknown }
+  if (out.afkTimeoutMs !== undefined) return { how: 'known' }
+  if (typeof out.response === 'string' && out.response.trim() !== '') return { how: 'answer' }
   const answers = out.answers
-  if (!answers || typeof answers !== 'object' || Array.isArray(answers)) return false
-  return Object.values(answers).some(a => (typeof a === 'string' ? a.trim() !== '' : Array.isArray(a) && a.some(x => typeof x === 'string' && x.trim() !== '')))
+  const chosen = answers !== null && typeof answers === 'object' && !Array.isArray(answers)
+    && Object.values(answers).some(a => (typeof a === 'string' ? a.trim() !== '' : Array.isArray(a) && a.some(x => typeof x === 'string' && x.trim() !== '')))
+  return chosen ? { how: 'answer' } : { how: 'shape', holds: `its result holds: ${names(out)}` }
 }
+
+/** Whether an AskUserQuestion call came back with an answer of Dan's: pickerCame's `answer`. */
+export const answered = (r: unknown, call: unknown): boolean => pickerCame(r, call).how === 'answer'
 
 /**
  * Why a second box for one request is refused, by what is known of a picker answer since (L11: each
