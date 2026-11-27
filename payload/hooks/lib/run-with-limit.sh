@@ -27,7 +27,8 @@
 #
 # 125 MEANS NOTHING WAS RUN: a limit that is not a whole number of seconds from 1 to 86400, no
 # command, a system the runner cannot keep its rule on, or one of the two things below missing.
-# The command is never run with no limit.
+# The one other 125 is a fault inside the runner after the command has started: its group is then
+# sent KILL. The command is never run with no limit.
 #
 # It takes no option and reads no setting of its own. python3 is the first on the PATH, as every
 # hook here finds it, started with -I so that no PYTHON variable and no file beside the program

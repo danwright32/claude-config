@@ -247,8 +247,10 @@ mkdir -p "$TMP/no-python"
 PATH="$TMP/no-python" "$BASH" "$RUNNER" 30 /bin/sh -c ': > "$1"' sh "$CASE/ran" > /dev/null 2> "$CASE/err"; rc=$?
 check "with no python3 on the PATH nothing runs, it comes back as 125 and says python3 is missing" \
   "$([ "$rc" -eq 125 ] && [ ! -e "$CASE/ran" ] && grep -q 'python3' "$CASE/err" && echo ok || echo "rc $rc, ran: $([ -e "$CASE/ran" ] && echo yes || echo no), said: $(cat "$CASE/err")")"
-mkdir -p "$TMP/lone"
-cp "$RUNNER" "$TMP/lone/run-with-limit.sh" 2> /dev/null
+# Installed as every suite installs a helper (#2147). The launcher starts its program by path, which
+# the installer follows only for a helper that is named, so this folder lacks the program on purpose.
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$TMP/lone" run-with-limit.sh > /dev/null \
+  || check "the launcher could be installed by itself, without the program behind it" "the install refused"
 bash "$TMP/lone/run-with-limit.sh" 30 sh -c ': > "$1"' sh "$CASE/ran" > /dev/null 2> "$CASE/err"; rc=$?
 check "with the program behind the launcher missing nothing runs, it comes back as 125 and names the file" \
   "$([ "$rc" -eq 125 ] && [ ! -e "$CASE/ran" ] && grep -q 'run-with-limit.py' "$CASE/err" && echo ok || echo "rc $rc, ran: $([ -e "$CASE/ran" ] && echo yes || echo no), said: $(cat "$CASE/err")")"
@@ -463,11 +465,13 @@ result("stand in: a fault inside the runner: one line says so", len(said) == 1 a
 
 # The other way of watching for the command's end without collecting it, which is the one Linux
 # has: waitid with WNOWAIT. Forced here wherever this python has it, so it is measured on a Mac too.
+# A part that could not be measured is printed in the shape run-all-tests.sh reads, and the loop
+# below passes that line on as it is (#1444).
 picked = own_pick()
 if isinstance(picked, str):
-    print("UNMEASURED\tthe waitid way of watching: the runner refuses this system (%s)" % picked)
+    print("SUITE-PART-UNMEASURED the waitid way of watching: the runner refuses this system (%s)" % picked)
 elif not hasattr(os, "waitid"):
-    print("UNMEASURED\tthe waitid way of watching for the command's end: this python3 (%s) has no os.waitid" % sys.version.split()[0])
+    print("SUITE-PART-UNMEASURED the waitid way of watching for the command's end: this python3 (%s) has no os.waitid" % sys.version.split()[0])
 else:
     m.pick = lambda: (m.WaitidWatch, picked[1])
     scenarios("stand in, watching by waitid: ")
@@ -498,7 +502,7 @@ while IFS=$'\t' read -r verdict name detail; do
   case "$verdict" in
     PASS) check "$name" ok ;;
     FAIL) check "$name" "got: ${detail:-no detail}" ;;
-    UNMEASURED) echo "SUITE-PART-UNMEASURED $name" ;;
+    SUITE-PART-UNMEASURED\ *) echo "$verdict${name:+ $name}${detail:+ $detail}" ;;
     DONE) drive_done="$name" ;;
   esac
 done < "$TMP/drive.out"

@@ -3485,9 +3485,9 @@ as they are. The limit is a whole number of seconds from 1 to 86400.
 | Comes back as | What happened |
 | --- | --- |
 | the command's own code | It ended in time and left nothing running. Nothing is said. |
-| 124 | It reached the limit. The whole group was sent TERM, then KILL 2 seconds later. |
+| 124 | It reached the limit. The whole group was sent TERM, then KILL 2 seconds later (a setting, not measured). |
 | 123 | It ended in time and left a process running in its group, which was stopped the same way. |
-| 125 | Nothing was run: a bad limit, no command, python3 missing, or a system it cannot work on. |
+| 125 | Nothing was run: a bad limit, no command, python3 missing, or a system it cannot work on. Also a fault inside the runner after the command started, when the group is sent KILL. |
 | 128 plus the signal | The runner was sent TERM, INT or HUP, and ended the group before it went. |
 
 A command a signal ended comes back as 128 plus that signal's number, and one that could not be
