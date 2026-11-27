@@ -2429,11 +2429,15 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         label = name or "a command"
         if odd or name is None:
             out = None
-            if not odd and vals and vals[0] is None and not self.shell.get("on_disk"):
-                # A program whose word cannot be worked out (`"$TOOL" +x run.sh`) may write any file
-                # it names, as a program the gate does not know may: with nothing marked, the less
-                # the gate knew of the program the more it believed (claude-config#3837). Not in a
-                # script on disk, where nothing a program names is marked (note_program).
+            if not odd and vals and vals[0] is None and re.search(r"[$`]", args[0]) \
+                    and not self.shell.get("on_disk"):
+                # A program whose word holds a value that cannot be worked out (`"$TOOL" +x run.sh`)
+                # may write any file it names, as a program the gate does not know may: with nothing
+                # marked, the less the gate knew of the program the more it believed
+                # (claude-config#3837). Only a word holding a $ or a backquote: `[` is a word with no
+                # value here too, and `[ -x tool ] || swiftc ... -o tool; ./tool` was refused with
+                # every such word counted (two cases of the tools suite, 2026-11-27). Not in a script
+                # on disk, where nothing a program names is marked (note_program).
                 for a, v in zip(args[1:], vals[1:]):
                     self.note_named(a, v, d, "a program whose name this gate cannot work out")
         elif name in COPIERS:

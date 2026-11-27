@@ -180,6 +180,10 @@ run_here '"$TOOL" +x run.sh'
 allowed "#3837 route 3: a program held in a variable, with nothing run after it, still passes"
 run_here '"$TOOL" +x run.sh; cat run.sh'
 allowed "#3837 route 3: the file only read afterwards still passes"
+run_here '[ -x run.sh ] || echo missing; bash run.sh'
+allowed "#3837 route 3: a test in square brackets that names the file run next still passes"
+run_here '[[ -f run.sh ]] && bash run.sh'
+allowed "#3837 route 3: and so does one in double square brackets"
 printf '%s\n' '"$TOOL" +x run.sh' 'bash run.sh' > "$P/inside3.sh"
 run_here 'bash inside3.sh'
 allowed "#3837 route 3: the same two commands in a script on disk pass, as for a program the gate does not know"
