@@ -431,9 +431,12 @@ export const settledOf = (a: { repo: string; pr: number }, how: 'sent' | 'not-an
 export const armedOf = (a: { repo: string; pr: number }): string =>
   `Nothing is settled: the announcement for agents for ${nameOf(a)} is still owed. A second press, on ${confirmLabelOf(a)} within ${ARMED_MS / 1000} seconds, ends it for every session and cannot be undone. Left alone, the button goes back to Not announcing.`
 
-/** A first press of Not announcing that could not arm it: the label a second press confirms is not on screen, so none counts. */
+/**
+ * A first press of Not announcing that could not arm it, whatever stopped it (the clock, this
+ * session's state, the band or the timer): the sentence claims only that, and `why` names the cause.
+ */
 export const notArmedOf = (a: { repo: string; pr: number }, why: string): string =>
-  `Nothing is settled: the announcement for agents for ${nameOf(a)} is still owed. Its button could not be changed to ${confirmLabelOf(a)} (${why}), so it is not armed and the next press starts over.`
+  `Nothing is settled: the announcement for agents for ${nameOf(a)} is still owed. Not announcing could not be armed (${why}), so its next press is a first press again.`
 
 /** A press of Not announcing where whether it was armed could not be read: it is no confirmation, and nothing was changed. */
 export const armedUnreadOf = (a: { repo: string; pr: number }, why: string): string =>

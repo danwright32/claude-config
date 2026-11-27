@@ -986,7 +986,7 @@ test('a band that will not draw the Confirm label leaves the button unarmed, say
   toasts.length = 0
   await press($, `${BUTTON}none-${ID}`)
   await press($, `${BUTTON}none-${ID}`)
-  const UNARMED = `Nothing is settled: the announcement for agents for ${NAME} is still owed. Its button could not be changed to ${confirmOf(7)} (the band is full), so it is not armed and the next press starts over.`
+  const UNARMED = `Nothing is settled: the announcement for agents for ${NAME} is still owed. Not announcing could not be armed (the band is full), so its next press is a first press again.`
   expect(toasts).toEqual([UNARMED, UNARMED])
   expect(store.get(DONE_KEY)).toBeUndefined()
   expect(await buttons($)).toEqual(ALL_THREE)
