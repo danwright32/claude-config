@@ -491,6 +491,25 @@ how="$(printf '{"session_id": "s1", "transcript_path": "%s"}' "$T" | ANNOUNCE_AP
   | python3 -c 'import json, sys; print(json.load(sys.stdin)["how"], end="")')"
 check "#3846 how to ask him names the command that judges the wording file" "$([[ "$how" == *"node ~/.claude/hooks/lib/changelog-entry.js announcement-refusal <file>"* ]] && echo ok || echo "$how")"
 check "#3846 as the step after /no-ai-tells and before the file is opened in front of him" "$([[ "$how" == *"/no-ai-tells"*"announcement-refusal"*"--front-window"*"AskUserQuestion"* ]] && echo ok || echo "$how")"
+# D (the review's L1): "refuses nothing" must mean his Approve will count for what the file HOLDS.
+# The approval refused a file with more than two blank lines in a row above wording and the command
+# did not, so a session that followed the instructions still had his Approve count for nothing. The
+# command now refuses that file too, by the count the approval reads and the same limit, and how to
+# ask says the command judges what the file holds (its name and its size are not content).
+check "#3846 D how to ask him says the command judges what the file holds" "$([[ "$how" == *"judges what the file holds"* ]] && echo ok || echo "$how")"
+js_run="$(node -e 'process.stdout.write(String(require(process.argv[1]).WORDING_BLANK_RUN))' "$ENTRY" 2>/dev/null)"
+py_run="$(python3 -B -c 'import importlib.util, sys
+spec = importlib.util.spec_from_file_location("approval_under_test", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+print(m.BLANK_RUN, end="")' "$LIB" 2>/dev/null)"
+check "#3846 D the command and the approval hold one limit on blank lines in a row, a number in two files" "$([ -n "$js_run" ] && [ "$js_run" = "$py_run" ] && echo ok || echo "the command: ${js_run:-none}, the approval: ${py_run:-none}")"
+STORE_USED="$WORK/store-padded-command"
+padded padded-command 3
+r="$(asked "$T" acme/widget "$(hash_text "$TOGETHER")")"
+check "#3846 D a file the approval refuses for three blank lines in a row is refused by the command too, as a file" "$([[ "$r" == "no|"*"3 blank lines in a row"* ]] && [ "$(gate_says "$F" code)" = WORDING_FILE_BLANK_RUN ] && [[ "$(gate_says "$F" reason)" == *"3 blank lines in a row, from line 8"* ]] && echo ok || echo "$r / $(gate_says "$F" code): $(gate_says "$F" reason)")"
+padded padded-command-two 2
+r="$(asked "$T" acme/widget "$(hash_text "$TOGETHER")")"
+check "#3846 D still possible: two blank lines in a row are taken by the command and approved" "$([[ "$r" == "yes||" ]] && [ "$(gate_says "$F" refused)" = False ] && echo ok || echo "$r / $(gate_says "$F" refused)")"
 
 echo "the command line a session can run reads the record and writes no approval (#3703)"
 # The review's first finding, as it was run: a file shaped like a transcript, holding a picker

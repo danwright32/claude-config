@@ -463,8 +463,9 @@ JUDGE_COMMAND = "node ~/.claude/hooks/lib/changelog-entry.js announcement-refusa
 
 HOW_TO_ASK = (
     "To ask him: write the post to a file, run /no-ai-tells on it, run `" + JUDGE_COMMAND + "` and change the "
-    "wording until it refuses nothing (it judges the file by the merge gate's own rules, and his approval of "
-    "wording the merge would refuse approves nothing), open the file in a command of its own with "
+    "wording until it refuses nothing (it judges what the file holds, by the merge gate's own rules and the "
+    "approval's rule on blank lines, and his approval of wording it refuses approves nothing), open the file in "
+    "a command of its own with "
     "`/Applications/BBEdit.app/Contents/Helpers/bbedit_tool --front-window <file>`, then, as the very next tool call "
     "(with any other call between the two his answer does not count), ask ONE AskUserQuestion "
     "picker of one question naming the pull request or feature and the channel, and ending with the sentence `"

@@ -817,6 +817,11 @@ const FILE_CASES = [
   ['B a heading with formatting the gate forbids below it', '@here\nSomething changed.\n### Steps\n> quoted -- twice\n', 'WORDING_FILE_HEADING', '"### Steps"'],
   ['B the file beginning with its own Announcement heading', '## Announcement\n@here\nSomething changed.\n', 'WORDING_FILE_HEADING', 'line 1'],
   ['B a heading ended as GitHub ends a line', '@here\r\nSomething changed.\r\n# Title\r\nMore.\r\n', 'WORDING_FILE_HEADING', 'line 3'],
+  // D (the review's L1): the approval refuses a file holding more than two blank lines in a row above
+  // wording, since the window it was opened in showed Dan the lines above and then white space. The
+  // command a session runs first said such a file "refuses nothing", so his Approve then did not count.
+  ['D three blank lines in a row above wording', '@here\nSomething changed.\n\n\n\nMore below.\n', 'WORDING_FILE_BLANK_RUN', '3 blank lines in a row, from line 3'],
+  ['D a long run of lines holding only white space, ended as GitHub ends them', '@here\r\nOne.\r\n \r\n\t\r\n\r\n \r\n\r\nTwo.\r\n', 'WORDING_FILE_BLANK_RUN', '5 blank lines in a row, from line 3'],
 ];
 FILE_CASES.forEach(function (fc) {
   const name = fc[0], text = fc[1], code = fc[2], needle = fc[3];
@@ -832,6 +837,15 @@ FILE_CASES.forEach(function (fc) {
   check(byInput.status === 1 && JSON.stringify(saidOf(byInput)) === JSON.stringify(saidOf(byFile)),
     '#3846 ' + name + ': the command line asked on standard input (-) did not answer as it does of the file: ' + JSON.stringify(byInput).slice(0, 600));
 });
+// D: the count is the one the approval reads (blankRunBeforeWording), and the most a file may hold is
+// exported, so the approval library's own number can be held to it (hooks/test-announce-approval.sh).
+check(entry.WORDING_BLANK_RUN === 2, '#3846 D the library does not export the most blank lines in a row a wording file may hold above wording as 2: ' + JSON.stringify(entry.WORDING_BLANK_RUN));
+// D, still possible: two blank lines in a row, and any number after the last line of wording.
+c = cliIn(['announcement-refusal', wordingFile('@here\nSomething changed.\n\n\nMore below.\n\n\n\n\n\n')]);
+check(c.status === 0 && c.json && c.json.refused === false, '#3846 D a file with two blank lines in a row above wording, and more after its last line, was refused: ' + JSON.stringify(c));
+// D: the --body form has no such rule. The merge gate has none, and a block is not a file he was shown.
+c = cliIn(['announcement-refusal', '--body', '-'], 'Why.\n\n' + SENTENCE + '\n## Announcement\n@here\nSomething changed.\n\n\n\nMore below.\n');
+check(c.status === 0 && c.json && c.json.refused === false, '#3846 D a description whose block holds three blank lines in a row was refused in the --body form, which the merge gate does not do: ' + JSON.stringify(c));
 // B: the --body form stays as it was. A description's block ends at the next heading, as it does at
 // the merge, so a heading after the post refuses nothing there.
 c = cliIn(['announcement-refusal', '--body', '-'], 'Why.\n\n' + SENTENCE + '\n## Announcement\n@here\nSomething changed.\n\n## What to do\n- Do this\n');

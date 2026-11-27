@@ -2065,7 +2065,12 @@ when all of these hold, each failure said in its own words:
   block with, and its command line `announcement-refusal [--body] <file | ->` puts the same
   function to a wording file (read as the block it becomes), printing `{refused, code, reason}`
   and exiting 0 for wording the gate takes, 1 for wording it refuses and 3 for a file it cannot
-  read. It changes nothing. The library hands that command the same bytes it hashed, and an answer
+  read. It changes nothing. Of a file it also refuses a run of more than two blank lines above
+  wording (`WORDING_FILE_BLANK_RUN`), which the approval refuses a file for (#3703, above): the
+  count is the same `blankRunBeforeWording`, and `hooks/test-announce-approval.sh` holds the two
+  limits equal. So the command judges everything the approval refuses about what the file holds;
+  the file's size and its name are not content, and only the approval refuses those. The library
+  hands that command the same bytes it hashed, and an answer
   from it that cannot be read approves nothing. How to ask him, which the label hook and the merge
   gate print, names the command as the step before the file is opened, so a session that follows
   it never puts wording the merge would refuse in front of him.

@@ -3557,6 +3557,15 @@ for the review by picker, 2026-11-25: "Yes, attack it first"). The choices are t
     field keeps its meaning, so an old note whose `why` was a judge out of time still refuses and
     he is asked once more. The library's bound on one question can be shortened for the suites
     through `ANNOUNCE_APPROVAL_HASH_SECONDS`, and never lengthened.
+  - The command refuses everything the approval refuses about what a FILE holds (the review's
+    L1). The approval refused a file with more than two blank lines in a row above wording
+    (#3703) and the command a session runs first did not, so "refuses nothing" was not yet "his
+    Approve will count". The file form now refuses it as `WORDING_FILE_BLANK_RUN`, by the count
+    the approval reads. The limit is a number in each file, held equal by a suite check. Ruled
+    out: the approval reading the limit from the command's answer, which makes an older
+    `changelog-entry.js` that does not send it a reason to refuse every file. A file's size and
+    its name are not content, so the command does not judge them and how to ask him says it
+    judges what the file holds.
   - Not built: refusing a wording file that holds a heading line. A pull request's block ends at
     the next heading, so such a file can never be the block whole, and the merge would refuse the
     cut block as unapproved. That is a rule the gate does not have, and this change adds none.

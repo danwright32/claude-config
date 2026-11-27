@@ -501,9 +501,23 @@ function blockRefusal(block) {
 //                          below were judged by nothing, and the block's hash could never be the
 //                          hash of the file Dan approved. The --body form is right as it is, since
 //                          there the heading really does end the block.
+//   WORDING_FILE_BLANK_RUN a run of more than WORDING_BLANK_RUN blank lines stands above wording
+//                          (the review's L1). Blank lines are dropped before the hash, and the
+//                          window the file is opened in shows Dan the lines above such a run and
+//                          then white space, so lib/announce-approval.py counts no approval of the
+//                          file (claude-config#3703). This command is what a session runs before
+//                          he is asked, and it said such a file "refuses nothing". The count is
+//                          blankRunBeforeWording's, the one the approval reads, and the limit is
+//                          the approval's own BLANK_RUN, held equal by hooks/test-announce-approval.sh.
+//                          A block has no such rule: the merge gate has none, and a block is not a
+//                          window he was shown.
 // A line of the file is a line as the hash reads one (normalizeAnnouncement's own line ends).
+// What this judges is what the file HOLDS. The approval also refuses a file larger than 256 KB and
+// a file name outside letters, digits, dot, dash and underscore, which are not content and are not
+// asked here.
 const WORDING_HEADING = '## Announcement';
 const FILE_LINE_END = /\r\n?|\n/;
+const WORDING_BLANK_RUN = 2;
 function wordingRefusal(text) {
   const raw = typeof text === 'string' ? text : '';
   const lines = raw.split(FILE_LINE_END);
@@ -517,6 +531,14 @@ function wordingRefusal(text) {
           ? 'The file is the post alone: leave the Announcement heading out of it.'
           : 'Write that line without the # signs in front, in bold for example.'));
     }
+  }
+  const run = blankRunBeforeWording(raw);
+  if (run.count > WORDING_BLANK_RUN) {
+    return gateRefuse('WORDING_FILE_BLANK_RUN',
+      'The wording file holds ' + run.count + ' blank lines in a row, from line ' + run.at + ', with more '
+      + 'wording below them. The window the file is opened in would show Dan the lines above and then '
+      + 'white space, so his approval of this file would approve nothing. Take the blank lines out, '
+      + 'leaving no more than ' + WORDING_BLANK_RUN + ' blank lines in a row anywhere above the last line of wording.');
   }
   return blockRefusal(extractAnnouncement(WORDING_HEADING + '\n' + raw));
 }
@@ -765,6 +787,9 @@ module.exports = {
   blankRunBeforeWording: blankRunBeforeWording,
   announcementHash: announcementHash,
   wordingRefusal: wordingRefusal,
+  // The most blank lines in a row a wording file may hold above wording, for the suite that holds
+  // lib/announce-approval.py's own number to it.
+  WORDING_BLANK_RUN: WORDING_BLANK_RUN,
   // The names of the markdown rules, for the suite: it holds every one of them to a case that feeds
   // the merge gate and the command line the same wording.
   UNMEASURED_MARKDOWN_NAMES: UNMEASURED_MARKDOWN.map(function (rule) { return rule.name; }),
@@ -807,7 +832,10 @@ module.exports = {
 //       prints {refused, code, reason}: whether the merge gate would refuse a pull request whose
 //       Announcement block is that wording, with the gate's own code and words, or with both null
 //       when it would not (wordingRefusal, claude-config#3846). Run on the wording file BEFORE it
-//       is opened in front of Dan, so he is never asked about wording that cannot merge. With --body
+//       is opened in front of Dan, so he is never asked about wording that cannot merge. Of a file
+//       it also refuses what only a file can hold, each with a code of its own (WORDING_FILE_*): a
+//       heading, and a run of more than two blank lines above wording, which his approval is
+//       refused for. With --body
 //       the input is a pull request description, judged by the block under its Announcement heading.
 //       It exits 0 for wording the gate takes and 1 for wording it refuses, so a caller that reads
 //       only the status is never told refused wording passed (L184); the answer is printed either
