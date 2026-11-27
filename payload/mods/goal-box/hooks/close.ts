@@ -88,10 +88,18 @@ export const leftBehindReason = (what: string) =>
  * gone between the two reads, none differing). That record is trusted only when it gives the
  * look's own parent as the system does. A carrier's parents are read from the list alone.
  *
- * It prints {"found": [{"pid", "name"}], "unread": [{"pid", "name", "why"}], "attached": n}: the
- * carriers left behind, those whose parents could not be followed to either end (a parent missing
- * from the list, a loop, or the look's own line cut short), and how many are still attached.
- * tests/test-close-card-process-look.sh runs it against real processes.
+ * It prints {"found": [{"pid", "name"}], "unread": [{"pid", "name", "why"}], "unplaced": [{"pid",
+ * "name"}], "own": why or null, "attached": n}. `found` are the carriers left behind. `unread` are
+ * those whose OWN parents could not be followed (a parent missing from the list, or a loop).
+ * `attached` is how many meet the look's line and so are still attached. `own` is why the look's
+ * own line could not be followed to launchd, or null when it was; while it is set, a carrier whose
+ * parents were followed to launchd without meeting the part of the look's line that was read
+ * cannot be told apart, left behind or attached above the break, and goes in `unplaced`, never in
+ * `found` and never in `unread`. The two are kept apart because they are decided differently
+ * (processHolds below): a review of the first build that made `unread` a note found both filed
+ * under it, so a process with launchd for a parent was only a note whenever the look could not
+ * find its own place. tests/test-close-card-process-look.sh runs it against real processes and on
+ * planted process lists.
  */
 export const PROCESS_LIST = ['ps', '-x', '-o', 'pid=,ppid=,comm=']
 export const PROCESS_LOOK = `
@@ -156,6 +164,7 @@ own, own_why = line_of(me)
 own = set(own)
 found = []
 unread = []
+unplaced = []
 attached = 0
 for pid in sorted(parent):
     if pid in own or want not in env_of(pid):
@@ -163,33 +172,70 @@ for pid in sorted(parent):
     line, why = line_of(pid)
     if own.intersection(line):
         attached += 1
-    elif why or own_why:
-        unread.append({'pid': pid, 'name': name.get(pid, ''), 'why': why or "the look's own parents could not be followed: " + own_why})
+    elif why:
+        unread.append({'pid': pid, 'name': name.get(pid, ''), 'why': why})
+    elif own_why:
+        unplaced.append({'pid': pid, 'name': name.get(pid, '')})
     else:
         found.append({'pid': pid, 'name': name.get(pid, '')})
-print(json.dumps({'found': found, 'unread': unread, 'attached': attached}))
+print(json.dumps({'found': found, 'unread': unread, 'unplaced': unplaced, 'own': own_why, 'attached': attached}))
 `
 
 /**
- * What reading A found, one sentence each. It may only withhold the card: a look that failed, ran
- * out of time or answered anything else says nothing either way, and is never why a card is pinned.
- * A carrier left behind withholds it (`holds`). One whose parents could not be followed does not
- * (#3770; Dan, 2026-11-26, by picker: "2.1 Unreadable counts as nothing"): it counts as nothing
- * either way, never a reason to withhold and never by itself a reason to pin, and is handed back as
- * a note (`notes`) for the reasons file, so that it was seen and not counted is not lost. The first
- * build of this withheld for it; that was changed on his answer. Carriers still attached are
- * counted by the look and are no reason at all.
+ * What reading A hands the close check: `holds` withhold the card, `notes` are written beside the
+ * reasons and decide nothing, and `attached` is the look's count of carriers still attached, null
+ * when it gave none. The count is written to the reasons file and nothing is decided from it: in a
+ * session with connected servers it is never 0, so a 0 there is a look that saw no environment at
+ * all, which would otherwise read exactly like a clean one.
  */
-export const processHolds = (r: { exitCode: number; stdout: string }): { holds: string[]; notes: string[] } => {
-  if (r.exitCode !== 0) return { holds: [], notes: [] }
+export type ProcessReading = { holds: string[]; notes: string[]; attached: number | null }
+
+/**
+ * The note a look that could not be finished leaves (it failed, ran out of time, or answered
+ * something that is not its answer). It still says nothing either way, so the other readings
+ * decide; that rule is older than the note and is Dan's to change. Before the note such a look left
+ * no trace in the reasons file, so a card pinned over a look that never ran read as a clean one.
+ */
+export const checkUnfinished = (what: string) =>
+  `the check for a process left behind ${what}, so it said nothing either way: the other readings decided, and a process left behind would not have been seen`
+
+/** The note for a process list the engine cut short: the look ran on the part before the cut. */
+export const LIST_CUT =
+  "the list of this user's processes was cut short before its end, so the check for a process left behind could not be finished: a process past the cut was not looked at"
+
+/**
+ * What reading A found, one sentence each. It may only withhold the card: a look that failed, ran
+ * out of time or answered anything else says nothing either way (`unfinished`, the note to leave
+ * for it), and is never why a card is pinned.
+ *
+ * A carrier left behind withholds it (`holds`).
+ *
+ * One whose OWN parents could not be followed does not (#3770; Dan, 2026-11-26, by picker: "2.1
+ * Unreadable counts as nothing"): it counts as nothing either way, never a reason to withhold and
+ * never by itself a reason to pin, and is handed back as a note (`notes`) for the reasons file. The
+ * first build of this withheld for it; that was changed on his answer.
+ *
+ * His answer does not cover the look failing to follow its own line (`own`). Then a carrier whose
+ * parents were followed all the way to launchd cannot be told apart (`unplaced`), and it may be the
+ * very process left behind, so the card is withheld for those, in one reason naming them, as it was
+ * before his answer. With nothing unplaced the same failing withholds nothing and is a note.
+ * Whether it should count as nothing too is a question left for him (pull request 3826).
+ *
+ * Carriers still attached are counted by the look and are no reason at all.
+ */
+export const processHolds = (r: { exitCode: number; stdout: string }): ProcessReading & { unfinished?: string } => {
+  const nothing = (what: string) => ({ holds: [], notes: [], attached: null, unfinished: checkUnfinished(what) })
+  if (r.exitCode !== 0) return nothing(`ended with exit code ${r.exitCode}`)
   let o: unknown
   try {
     o = JSON.parse(r.stdout)
   } catch {
-    return { holds: [], notes: [] }
+    return nothing('printed something that is not its answer')
   }
-  const listed = (key: 'found' | 'unread'): { who: string; why: string }[] => {
-    const list = (typeof o === 'object' && o !== null ? (o as Record<string, unknown>)[key] : undefined) as unknown
+  if (typeof o !== 'object' || o === null || Array.isArray(o)) return nothing('printed something that is not its answer')
+  const answer = o as Record<string, unknown>
+  const listed = (key: 'found' | 'unread' | 'unplaced'): { who: string; why: string }[] => {
+    const list = answer[key]
     if (!Array.isArray(list)) return []
     return list.flatMap(f => {
       const x = (typeof f === 'object' && f !== null ? f : {}) as { pid?: unknown; name?: unknown; why?: unknown }
@@ -197,9 +243,20 @@ export const processHolds = (r: { exitCode: number; stdout: string }): { holds: 
       return [{ who: `process ${x.pid} (${typeof x.name === 'string' && x.name ? x.name : 'unnamed'})`, why: typeof x.why === 'string' && x.why ? x.why : 'the look gave no reason' }]
     })
   }
+  const unplaced = listed('unplaced').map(p => p.who)
+  // Unplaced carriers with no reason given still withhold: they could not be told apart.
+  const own = typeof answer.own === 'string' && answer.own ? answer.own : unplaced.length ? 'it gave no reason' : undefined
+  const noPlace = `the check for a process left behind could not find its own place among the processes (${own})`
   return {
-    holds: listed('found').map(p => `${p.who} carries this session's id and its parents no longer lead to this session, so something this session started was left running`),
-    notes: listed('unread').map(p => `${p.who} carries this session's id, and whether it is still attached to this session could not be read (${p.why}), so it was seen and not counted`),
+    holds: [
+      ...listed('found').map(p => `${p.who} carries this session's id and its parents no longer lead to this session, so something this session started was left running`),
+      ...(own && unplaced.length ? [`${noPlace}, so it could not tell whether these are still attached to this session or were left running, and each carries this session's id: ${unplaced.join(', ')}`] : []),
+    ],
+    notes: [
+      ...(own && !unplaced.length ? [`${noPlace}; it saw no process carrying this session's id that needed that place to be told apart, so this withheld nothing`] : []),
+      ...listed('unread').map(p => `${p.who} carries this session's id, and whether it is still attached to this session could not be read (${p.why}), so it was seen and not counted`),
+    ],
+    attached: typeof answer.attached === 'number' && Number.isInteger(answer.attached) && answer.attached >= 0 ? answer.attached : null,
   }
 }
 

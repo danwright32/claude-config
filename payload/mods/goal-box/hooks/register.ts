@@ -10,7 +10,7 @@ import { HOLD_MAX_MS, whileHeld } from './mod-kit/held.ts'
 import { transcriptPlaces } from './mod-kit/projects.ts'
 import { toolArgs } from './mod-kit/toolargs.ts'
 import { BOX_KINDS, INFLIGHT_KINDS, inflightHolds, type InflightFacts, type Reading } from './mod-kit/inflight.ts'
-import { CLOSE_HEADING, CLOSE_TITLE, NO_BOX, PROCESS_LIST, PROCESS_LOOK, PROCESS_TIMEOUT_MS, QUIET_MS, closeStep, leftBehindBy, leftBehindReason, processHolds } from './close.ts'
+import { CLOSE_HEADING, CLOSE_TITLE, LIST_CUT, NO_BOX, PROCESS_LIST, PROCESS_LOOK, PROCESS_TIMEOUT_MS, QUIET_MS, checkUnfinished, closeStep, leftBehindBy, leftBehindReason, processHolds, type ProcessReading } from './close.ts'
 
 // The Goal accomplished box (claude-config#1563). Two ways a session's work ends, one box for both:
 //
@@ -370,16 +370,21 @@ type NounCall = (input: unknown) => Promise<unknown>
 type WithSteps = { manualSteps: { add: NounCall; withdraw: NounCall } }
 
 /**
- * The reasons, or none and pinned, written where a later session can read why; a failure is logged.
- * `notes` are what was seen and not counted either way (a process whose parents could not be
- * followed, #3770), written beside the reasons whether the card went up or not.
+ * What was seen and decided nothing, written beside the reasons whether the card went up or not:
+ * `notes` (a process whose parents could not be followed, a check for a process left behind that
+ * could not be finished, #3770) and `attached`, how many processes carrying this session's id that
+ * check counted as still attached, null when it gave no count or was not run.
  */
-const writeReasons = async ($: EngineInterface, pinned: boolean, reasons: string[], notes: string[]): Promise<void> => {
+type Seen = { notes: string[]; attached: number | null }
+const NOTHING_SEEN: Seen = { notes: [], attached: null }
+
+/** The reasons, or none and pinned, written where a later session can read why; a failure is logged. */
+const writeReasons = async ($: EngineInterface, pinned: boolean, reasons: string[], seen: Seen): Promise<void> => {
   try {
     const home = await $.env.get('HOME')
     const id = await $.session.id()
     if (!home || !SESSION_ID.test(id)) throw new Error('HOME or the session id could not be read')
-    await $.fs.write(`${home}/.claude/state/close-session/${id}.json`, `${JSON.stringify({ at: await $.clock.now(), pinned, reasons, notes }, null, 2)}\n`)
+    await $.fs.write(`${home}/.claude/state/close-session/${id}.json`, `${JSON.stringify({ at: await $.clock.now(), pinned, reasons, notes: seen.notes, attached: seen.attached }, null, 2)}\n`)
   } catch (err) {
     debug($, `why the close this session card is or is not up could not be written (${errorText(err, MOD)})`)
   }
@@ -388,17 +393,27 @@ const writeReasons = async ($: EngineInterface, pinned: boolean, reasons: string
 /**
  * Reading A: any process carrying this session's id that is no longer attached to the session
  * (close.ts); only ever a reason to withhold. One whose parents could not be followed is a note,
- * counted neither way (Dan, 2026-11-26: "2.1 Unreadable counts as nothing").
+ * counted neither way (Dan, 2026-11-26: "2.1 Unreadable counts as nothing"). A check that could
+ * not be finished (ps or the look failed, ran out of time or answered something else, or the
+ * process list came back cut short) still decides nothing by itself, and is said twice, in the
+ * debug log and as a note, so a card pinned over it does not read as pinned over a clean look.
  */
-const processesNow = async ($: EngineInterface): Promise<{ holds: string[]; notes: string[] }> => {
+const processesNow = async ($: EngineInterface): Promise<ProcessReading> => {
+  const unfinished = (note: string, read: ProcessReading = { holds: [], ...NOTHING_SEEN }): ProcessReading => {
+    debug($, note)
+    return { ...read, notes: [note, ...read.notes] }
+  }
   try {
     const listed = await $.process.run(PROCESS_LIST, { timeoutMs: PROCESS_TIMEOUT_MS })
-    if (listed.exitCode !== 0) return { holds: [], notes: [] }
+    if (listed.exitCode !== 0) return unfinished(checkUnfinished(`was not run, because the list of this user's processes could not be taken (ps ended with exit code ${listed.exitCode})`))
     const r = await $.process.run(['python3', '-I', '-c', PROCESS_LOOK, await $.session.id()], { timeoutMs: PROCESS_TIMEOUT_MS, stdin: listed.stdout })
-    return processHolds(r)
+    const { unfinished: why, ...answered } = processHolds(r)
+    const read = why ? unfinished(why, answered) : answered
+    // A list the engine cut short: the look ran on the part before the cut, and what it found there
+    // still counts, but a process past the cut was never looked at.
+    return listed.isStdoutTruncated ? unfinished(LIST_CUT, read) : read
   } catch (err) {
-    debug($, `the look for a process carrying this session's id could not run (${errorText(err, MOD)}), so it says nothing either way`)
-    return { holds: [], notes: [] }
+    return unfinished(checkUnfinished(`could not run (${errorText(err, MOD)})`))
   }
 }
 
@@ -414,12 +429,12 @@ const readingOf = async <T,>(read: () => Promise<T>): Promise<Reading<T>> => {
  * Every reason the card may not go up now, with what was seen and not counted either way, or
  * 'already' when it went up for this request once.
  */
-const closeReasons = async ($: EngineInterface, seq: number): Promise<{ reasons: string[]; notes: string[] } | 'already'> => {
+const closeReasons = async ($: EngineInterface, seq: number): Promise<{ reasons: string[]; seen: Seen } | 'already'> => {
   const prompts = (await $.state.get(promptsRef)).value ?? 0
   const closed = (await $.state.get(closedRef)).value
   if (closed !== undefined && closed.prompts >= prompts) return 'already'
   const shown = (await $.state.get(shownRef)).value ?? []
-  if (!shown.some(s => s.prompts >= prompts)) return { reasons: [NO_BOX], notes: [] }
+  if (!shown.some(s => s.prompts >= prompts)) return { reasons: [NO_BOX], seen: NOTHING_SEEN }
   const stop = (await $.state.get(closeStopRef)).value
   const answer = (await $.state.get(closeAnswerRef)).value
   const noStop = "this turn's stop was not recorded"
@@ -441,7 +456,7 @@ const closeReasons = async ($: EngineInterface, seq: number): Promise<{ reasons:
   }
   const left = (await $.state.get(leftBehindRef)).value
   const processes = await processesNow($)
-  return { reasons: [...inflightHolds(facts, INFLIGHT_KINDS).map(h => h.text), ...(left ? [leftBehindReason(left)] : []), ...processes.holds], notes: processes.notes }
+  return { reasons: [...inflightHolds(facts, INFLIGHT_KINDS).map(h => h.text), ...(left ? [leftBehindReason(left)] : []), ...processes.holds], seen: { notes: processes.notes, attached: processes.attached } }
 }
 
 /** At the end of a quiet period armed under `seq`: pins the card when nothing holds it, or says why not. */
@@ -449,17 +464,17 @@ const closeCheck = async ($: EngineInterface, seq: number): Promise<void> => {
   if ((await $.state.get(closeSeqRef)).value !== seq) return
   const read = await closeReasons($, seq)
   if (read === 'already') return
-  const { reasons, notes } = read
+  const { reasons, seen } = read
   // A turn that began while the readings were taken makes them stale.
   if ((await $.state.get(closeSeqRef)).value !== seq) return
-  if (reasons.length) return writeReasons($, false, reasons, notes)
+  if (reasons.length) return writeReasons($, false, reasons, seen)
   const prompts = (await $.state.get(promptsRef)).value ?? 0
   const folder = (startCwd ?? (await $.session.cwd().catch(() => ''))).split('/').filter(Boolean).pop() ?? ''
   let why: string
   try {
     const r = (await ($ as unknown as WithSteps).manualSteps.add({ heading: CLOSE_HEADING, step: closeStep(folder) })) as { isShown?: unknown; reason?: unknown } | null | undefined
     if (r?.isShown === true) {
-      await cardShown($, prompts, notes)
+      await cardShown($, prompts, seen)
       // A turn that began while the pin was out finds no card to take down, so this takes it down.
       if ((await $.state.get(closeSeqRef)).value !== seq) await withdrawClose($)
       return
@@ -468,7 +483,7 @@ const closeCheck = async ($: EngineInterface, seq: number): Promise<void> => {
   } catch (err) {
     why = `the card could not be pinned (${errorText(err, MOD)})`
   }
-  await writeReasons($, false, [why], notes)
+  await writeReasons($, false, [why], seen)
 }
 
 /**
@@ -478,14 +493,14 @@ const closeCheck = async ($: EngineInterface, seq: number): Promise<void> => {
  * before the outcome was known, each keeping it for one outcome without a card (#3770). Two checks
  * pinning at once is harmless: manual steps' add keeps one unfinished step per title.
  */
-const cardShown = async ($: EngineInterface, prompts: number, notes: string[]): Promise<void> => {
+const cardShown = async ($: EngineInterface, prompts: number, seen: Seen): Promise<void> => {
   for (let i = 0; i < 10; i++) {
     const held = await $.state.get(closedRef)
     // A later request's card already holds the claim: this one is not to take it back.
     if (held.value !== undefined && held.value.prompts > prompts) break
     if ((await $.state.set(closedRef, { prompts, pinned: true }, { ifVersion: held.version })).isSet) break
   }
-  await writeReasons($, true, [], notes)
+  await writeReasons($, true, [], seen)
 }
 
 /**
