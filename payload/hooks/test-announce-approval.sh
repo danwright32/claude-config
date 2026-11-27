@@ -449,10 +449,16 @@ check "R2 #3846 still possible: an approval the record already held, of wording 
 NOVERDICT="$WORK/node-without-the-verdict"; mkdir -p "$NOVERDICT"
 cat > "$NOVERDICT/node" <<'SH'
 #!/usr/bin/env bash
+if [ "${FAKE_HASH:-}" = slow ]; then
+  # The hash that never answers (the review of #3846, C): exec, so the library's stop of this
+  # process stops the sleep too and nothing is left holding its pipe.
+  case " $* " in *" announcement-hash "*) cat >/dev/null; exec sleep 30 ;; esac
+fi
 case " $* " in
   *" announcement-refusal "*)
     cat >/dev/null
     case "${FAKE_VERDICT:-}" in
+      slow) exec sleep 30 ;;
       usage) echo "Usage: changelog-entry.js required-labels <owner/name>" >&2; exit 2 ;;
       nothing) exit 0 ;;
       empty) printf '{}\n'; exit 0 ;;
@@ -952,6 +958,111 @@ note "$T" payload "$P" acme/widget "$F" >/dev/null
 talk "$T" answer "$P" acme/widget "$F" "Not yet"
 helper_asks acme/widget "$HR" 67 >/dev/null
 check "#3846 his Not yet about wording the merge would refuse is still recorded by the hash of that wording" "$(grep '"kind": "withdrawn"' "$STORE_USED/record.jsonl" 2>/dev/null | grep "\"picker\": \"$P\"" | grep -q "\"hash\": \"$HR\"" && echo ok || cat "$STORE_USED/record.jsonl" 2>&1)"
+
+# Wording that could not be JUDGED when his answer was noted is kept apart from wording the judge
+# refused (the review of #3846, C). The review ran it: with the judge slower than what was left of
+# the note hook's bound, the note of GOOD wording carried "did not judge the wording in 1.7
+# seconds" as its why, a note that carries a why approves nothing, a picker's first note is the one
+# kept and nothing judged the file again. So good wording was refused for good, and the only way out
+# was to ask him a second time. Such a note now says `"unjudged": true`, and the call that reads it
+# judges the file again while its change time is still the one noted.
+# The judge that runs out of time is the fake node above with FAKE_VERDICT=slow, and the bound is
+# shortened to two seconds through the library's own seam, which can only shorten it, so a case
+# waits two seconds and not five.
+# slowly <command> ...: that command with a judge that never answers inside the bound.
+slowly() { FAKE_VERDICT=slow REAL_NODE="$REAL_NODE" PATH="$NOVERDICT:$PATH" ANNOUNCE_APPROVAL_HASH_SECONDS=2 "$@"; }
+# hashless <command> ...: the same with a hash that never answers.
+hashless() { FAKE_HASH=slow REAL_NODE="$REAL_NODE" PATH="$NOVERDICT:$PATH" ANNOUNCE_APPROVAL_HASH_SECONDS=2 "$@"; }
+# note_of <picker>: the record's note of that picker, its one line.
+note_of() { grep '"kind": "answered"' "$STORE_USED/record.jsonl" 2>/dev/null | grep "\"picker\": \"$1\""; }
+STORE_USED="$WORK/store-noted-slow"
+F="$(shown noted-slow)"; T="$WORK/noted-slow.jsonl"
+HS="$(hash_file "$F")"
+P="$(talk "$T" put acme/widget "$F")"
+r="$(slowly note "$T" payload "$P" acme/widget "$F")"
+check "#3846 C a picker whose wording the judge had no time for is still noted" "$([[ "$r" == "yes|" ]] && echo ok || echo "$r")"
+check "#3846 C its note says the wording could not be judged, apart from refused: unjudged, with why" "$(note_of "$P" | grep '"unjudged": true' | grep -q 'did not judge the wording in' && echo ok || cat "$STORE_USED/record.jsonl" 2>&1)"
+check "#3846 C and still carries a why, so a reader that knows nothing of the new field refuses as it did" "$(note_of "$P" | grep "\"hash\": \"$HS\"" | grep -q '"why": "lib/changelog-entry.js did not judge' && echo ok || cat "$STORE_USED/record.jsonl" 2>&1)"
+talk "$T" answer "$P" acme/widget "$F"
+r="$(helper_asks acme/widget "$HS" 70)"
+check "R2 #3846 C still possible: good wording the judge had no time for when he answered is judged again and approved" "$([[ "$r" == "yes|approved|" ]] && echo ok || echo "$r")"
+check "#3846 C and his approval is on the record, as the picker it came from" "$(grep '"kind": "approved"' "$STORE_USED/record.jsonl" 2>/dev/null | grep "\"picker\": \"$P\"" | grep -q "\"hash\": \"$HS\"" && echo ok || cat "$STORE_USED/record.jsonl" 2>&1)"
+# The hash that ran out of time, not the judge: the note holds no hash, and is unjudged the same way.
+STORE_USED="$WORK/store-noted-hashless"
+F="$(shown noted-hashless)"; T="$WORK/noted-hashless.jsonl"
+HS="$(hash_file "$F")"
+P="$(talk "$T" put acme/widget "$F")"
+hashless note "$T" payload "$P" acme/widget "$F" >/dev/null
+check "#3846 C a note taken while the hash had no time holds no hash and says unjudged" "$(note_of "$P" | grep '"hash": null' | grep '"unjudged": true' | grep -q 'did not hash the wording in' && echo ok || cat "$STORE_USED/record.jsonl" 2>&1)"
+talk "$T" answer "$P" acme/widget "$F"
+r="$(helper_asks acme/widget "$HS" 71)"
+check "R2 #3846 C still possible: good wording the hash had no time for when he answered is judged again and approved" "$([[ "$r" == "yes|approved|" ]] && echo ok || echo "$r")"
+# Still out of time when the note is read: nothing is approved for that call, the sentence says the
+# wording still could not be judged, and the next call judges it again.
+STORE_USED="$WORK/store-noted-stillslow"
+F="$(shown noted-stillslow)"; T="$WORK/noted-stillslow.jsonl"
+HS="$(hash_file "$F")"
+P="$(talk "$T" put acme/widget "$F")"
+slowly note "$T" payload "$P" acme/widget "$F" >/dev/null
+talk "$T" answer "$P" acme/widget "$F"
+r="$(slowly helper_asks acme/widget "$HS" 72)"
+check "R2 #3846 C wording that still cannot be judged when its note is read approves nothing for that call, and says so" "$([[ "$r" == "no|unapproved|"*"his Approve for $F does not count"*"could not be judged when he answered"*"still could not be judged"* ]] && [ "$(kinds approved)" = 0 ] && echo ok || echo "$r")"
+r="$(helper_asks acme/widget "$HS" 72)"
+check "R2 #3846 C still possible: and the next call, with the judge answering, judges it again and approves it" "$([[ "$r" == "yes|approved|" ]] && echo ok || echo "$r")"
+# The file changed since the note: what he answered about cannot be judged any more, so his Approve
+# approves nothing, neither the wording as it was nor what the file holds now, and he is asked again.
+STORE_USED="$WORK/store-noted-slow-changed"
+F="$(shown noted-slow-changed)"; T="$WORK/noted-slow-changed.jsonl"
+HS="$(hash_file "$F")"
+P="$(talk "$T" put acme/widget "$F")"
+slowly note "$T" payload "$P" acme/widget "$F" >/dev/null
+talk "$T" answer "$P" acme/widget "$F"
+printf '@here\nWording he never saw.\n' > "$F"
+r="$(helper_asks acme/widget "$HS" 73)"
+check "R2 #3846 C unjudged wording whose file changed since approves nothing, and says the file has changed" "$([[ "$r" == "no|unapproved|"*"his Approve for $F does not count"*"could not be judged when he answered"*"the file has changed since"*"ask him again"* ]] && echo ok || echo "$r")"
+r="$(helper_asks acme/widget "$(hash_file "$F")" 73)"
+check "R2 #3846 C nor is what the file holds now approved, which he was never asked about" "$([[ "$r" == "no|unapproved|"* ]] && [ "$(kinds approved)" = 0 ] && echo ok || echo "$r")"
+# Unjudged is not good: wording the judge had no time for, which the merge would refuse, is refused
+# when it is judged again, in the gate's own words.
+STORE_USED="$WORK/store-noted-slow-refused"
+F="$(shown_as noted-slow-refused "$SHARED_LINE")"; T="$WORK/noted-slow-refused.jsonl"
+HS="$(hash_file "$F")"
+WORDS="$(gate_says "$F" reason)"
+P="$(talk "$T" put acme/widget "$F")"
+slowly note "$T" payload "$P" acme/widget "$F" >/dev/null
+talk "$T" answer "$P" acme/widget "$F"
+r="$(helper_asks acme/widget "$HS" 74)"
+check "R2 #3846 C wording the judge had no time for, judged again and refused by the merge's rules, approves nothing" "$([ -n "$WORDS" ] && [[ "$r" == "no|unapproved|"*"his Approve for $F does not count"*"ANNOUNCEMENT_NO_OPENER"*"$WORDS"* ]] && [ "$(kinds approved)" = 0 ] && echo ok || echo "$r")"
+# Wording the judge REFUSED stays refused for good: its note says nothing of unjudged.
+STORE_USED="$WORK/store-noted-refused"
+check "#3846 C the note of wording the judge refused does not say unjudged" "$([ "$(kinds answered)" = 1 ] && ! grep '"kind": "answered"' "$STORE_USED/record.jsonl" | grep -q unjudged && echo ok || cat "$STORE_USED/record.jsonl" 2>&1)"
+# A note already on a record, written before the new field, keeps the meaning it has: a why and no
+# `unjudged` approves nothing, whatever the why says and though the file has not changed. He is
+# asked again, once.
+STORE_USED="$WORK/store-noted-old"; mkdir -p "$STORE_USED"
+F="$(shown noted-old)"; T="$WORK/noted-old.jsonl"
+HS="$(hash_file "$F")"
+P="$(talk "$T" put acme/widget "$F")"
+python3 -c 'import json, os, sys
+store, transcript, picker, file, digest = sys.argv[1:6]
+note = {"kind": "answered", "session": "s1", "transcript": transcript, "picker": picker, "held": True,
+        "at": "2026-11-27T15:00:00Z", "repo": "acme/widget", "file": file, "hash": digest,
+        "why": "lib/changelog-entry.js did not judge the wording in 1.7 seconds, and an approval of wording nobody could judge approves nothing",
+        "changed": os.stat(file).st_ctime_ns}
+with open(os.path.join(store, "record.jsonl"), "a") as f:
+    f.write(json.dumps(note) + "\n")' "$STORE_USED" "$T" "$P" "$F" "$HS"
+talk "$T" answer "$P" acme/widget "$F"
+r="$(helper_asks acme/widget "$HS" 75)"
+check "R2 #3846 C a note written before the new field, with a why and no unjudged, still approves nothing" "$([[ "$r" == "no|unapproved|"*"his Approve for $F does not count"*"did not judge the wording in 1.7 seconds"* ]] && [ "$(kinds approved)" = 0 ] && echo ok || echo "$r")"
+# With no note at all, a judge out of time refuses that call only: the next call judges the file.
+STORE_USED="$WORK/store-slow-nonote"
+F="$(shown slow-nonote)"; T="$WORK/slow-nonote.jsonl"
+talk "$T" ask acme/widget "$F"
+HS="$(hash_file "$F")"
+r="$(slowly asked "$T" acme/widget "$HS")"
+check "R2 #3846 C with no note, a judge out of time approves nothing for that call, and says so" "$([[ "$r" == "no|"*"his Approve for $F does not count"*"did not judge the wording in"* ]] && [ "$(recorded)" = 0 ] && echo ok || echo "$r")"
+r="$(asked "$T" acme/widget "$HS")"
+check "R2 #3846 C still possible: and the next call, with the judge answering, approves it" "$([[ "$r" == "yes||" ]] && echo ok || echo "$r")"
 
 # EVERY main session picker is noted, by its ids alone (#3789): the session, its transcript and the
 # picker, and whether the transcript held the picker's line when the hook ran. What it asked is told

@@ -66,7 +66,10 @@ _read_by_dan). Then, all of these, each failure said in its own words:
     line it starts at, and what to change. Blank lines after the last line hide nothing and pass.
   - THE MERGE WOULD NOT REFUSE IT (claude-config#3846): the wording passes the merge gate's own
     rules for what a post may hold (the mention alone on its first line, only the markdown that
-    was measured to arrive, no dash as punctuation, no HTML comment). On 2026-11-27 he approved,
+    was measured to arrive, no dash as punctuation, no HTML comment, no carriage return inside a
+    line: ANNOUNCEMENT_CARRIAGE_RETURN), and holds nothing a file can hold and a pull request's
+    block cannot: no line of it is a heading (WORDING_FILE_HEADING), since the block ends at the
+    next heading. On 2026-11-27 he approved,
     by picker, wording whose first line was the mention followed by a sentence. Nothing here read
     those rules, so the approval counted and the label went on, the merge gate then refused that
     wording, and he was asked a second time. So an Approve of wording the merge would refuse
@@ -80,6 +83,24 @@ _read_by_dan). Then, all of these, each failure said in its own words:
     which a reader of the note already took as "no approval from this one", says what stands in
     the way. An approval the record already held still counts wherever its wording passes; one of
     wording that does not could never merge, and the label hook refuses the label for it.
+  - COULD NOT BE JUDGED IS NOT REFUSED (the review of claude-config#3846, M3). The hash and the
+    judging are each one bounded question to lib/changelog-entry.js, and on a loaded Mac either
+    can run out of time, or come back unreadable. With no note that refuses the one call that
+    met it, and the next call asks again. A note made it permanent: the note of GOOD wording
+    carried "did not judge the wording in 1.7 seconds" as its why, a note that carries a why
+    approves nothing, a picker's first note is the one kept, and nothing judged the file again,
+    so the only way out was to ask him a second time about wording that was fine. So a note
+    whose reason is that the wording could not be judged says so, `"unjudged": true`, beside the
+    why it always carried, and the call that reads it judges the file again (_judged_again),
+    only while the file's status change time still equals the one noted, which is before his
+    answer. Then, and only then, wording that is judged and taken is approved. Every other
+    outcome approves nothing for that call and says which it is: the file has changed since or
+    cannot be read (ask him again), it still could not be judged (the next call judges it
+    again), or it was judged and the merge would refuse it. Wording the judge REFUSED is not
+    unjudged: its note carries no such field and stays refused for good, as does a file that
+    could not be read, held no wording, was too large, held a long run of blank lines or changed
+    while it was hashed. A note written before this field, with a why and no `unjudged`, reads
+    as it always did and approves nothing, whatever its why says.
 
 WHAT IS HASHED. The FILE as it stands, never a hash the session supplies: a hash in the metadata
 is not read at all. The hash is lib/changelog-entry.js's announcementHash, the sha256 of its one
@@ -148,6 +169,8 @@ that its own copy carries the metadata) and names a repository and a file, the n
      "repo": "<owner/name>", "file": "<the wording file>", "hash": "<sha256, or null>", "why": "<why
      there is no hash, or why an Approve of wording that has one approves nothing (THE MERGE WOULD
      NOT REFUSE IT, above), or null>", "changed": <the file's status change time then, in ns>
+and, only when that why is that the wording could not be judged then (COULD NOT BE JUDGED IS NOT
+REFUSED, above), "unjudged": true.
 
 A NOTE IS NOT AN APPROVAL, and it is not his answer. It names no answer at all. The payload the
 hook is handed does carry his answer, and it is not read: a payload is what the caller hands over,
@@ -392,6 +415,11 @@ EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 # A tool that hands the file's name to something that may write it.
 SENDING_TOOLS = ("Agent", "Task")
 HASH_SECONDS = 5
+# A seam for the suites (L524), as the label hook has for its read of GitHub: the bound on one
+# question to lib/changelog-entry.js can be made shorter, never longer, so a case about a judge out
+# of time waits two seconds and not five. A shorter bound only ever refuses more.
+if (os.environ.get("ANNOUNCE_APPROVAL_HASH_SECONDS") or "").isdigit():
+    HASH_SECONDS = max(1, min(HASH_SECONDS, int(os.environ["ANNOUNCE_APPROVAL_HASH_SECONDS"])))
 CHECK_SECONDS = 12
 # How long a claim waits for the record's lock. Its holder reads the record and writes one line, so
 # a wait this long means something is wrong, and the merge is refused saying so. Chosen, not measured.
@@ -411,7 +439,8 @@ NOTED_SESSIONS = 50
 # can already tell is an announcement's, one stat either side of the two questions asked of
 # lib/changelog-entry.js about its wording file, the hash and then whether the merge would refuse
 # the wording (claude-config#3846). The two share what is left of this bound, so the hook takes no
-# longer than it did, and a judging that ran out of time is said in the note's `why`.
+# longer than it did, and a judging that ran out of time is said in the note's `why` and marked
+# `unjudged`, so the call that reads the note judges the file again (_judged_again).
 NOTE_SECONDS = 8
 # Seams: the wait between two tries for the lock, and the clock that bounds them (L524).
 _sleep = time.sleep
@@ -1081,7 +1110,8 @@ def note_answer(payload, deadline=None):
 
 def _wording_noted(ask, sent, deadline):
     """What a note carries beside its ids for a picker that can already be told to be an
-    announcement's when its hook runs: {repo, file, hash, why, changed}, or {} for any other. ask is
+    announcement's when its hook runs: {repo, file, hash, why, changed}, with "unjudged": true
+    when the why is that the wording could not be judged, or {} for any other. ask is
     the picker's input, from the transcript when it holds the picker (sent) and else the hook's own
     copy. A second source's picker is noted by adding what its own note carries here. The one
     there is, DISCOVERY (claude-config#3669), adds nothing: it has no file to hash, and the feature
@@ -1103,24 +1133,32 @@ def _wording_noted(ask, sent, deadline):
     # The file's change time is read either side of the hash and the judging of the wording
     # (_file_hash asks both of the bytes it read once), so the hash noted is of the file as it
     # stood at the change time noted beside it.
-    digest, why, unfit, changed = None, None, None, None
+    digest, why, unfit, unjudged, changed = None, None, None, False, None
     try:
         changed = os.stat(file).st_ctime_ns
     except OSError as e:
         why = "the file could not be read (" + type(e).__name__ + "), so the wording he answered about cannot be hashed"
     if why is None:
-        digest, why, unfit = _file_hash(file, deadline)
-    if why is None:
+        digest, why, unfit, unjudged = _file_hash(file, deadline)
         try:
             after = os.stat(file).st_ctime_ns
         except OSError:
             after = None
         if after != changed:
-            digest, why, unfit = None, "the file changed while it was being hashed, so the wording he answered about could not be told", None
+            # Not unjudged: a file that changed under the hook has no change time to judge it
+            # again by, so this stays what it was, a note that approves nothing.
+            digest, why, unfit, unjudged = None, "the file changed while it was being hashed, so the wording he answered about could not be told", None, False
     # Wording the merge would refuse (claude-config#3846) keeps its hash, since that is the wording
     # he answered about and his `Not yet` is recorded by it, and `why` says what an Approve of it
     # is stopped by: whoever reads the note takes no approval from one that carries a why.
-    return {"repo": repo, "file": file, "hash": digest, "why": why or unfit, "changed": changed}
+    noted = {"repo": repo, "file": file, "hash": digest, "why": why or unfit, "changed": changed}
+    if unjudged:
+        # COULD NOT BE JUDGED IS NOT REFUSED (module docstring): the note still carries its why,
+        # so a reader that knows nothing of this field refuses as it always did, and this field
+        # is what lets approvals() judge the file again while it has not changed. It is written
+        # only when true, so the note of any other wording is the note it was.
+        noted["unjudged"] = True
+    return noted
 
 
 def _ask_of(transcript_path, session_id, picker):
@@ -1272,7 +1310,8 @@ def approvals(session_id, transcript_path, deadline=None, noted=None, settled=()
     already holds one for. noted is {picker: the note taken when he answered it} (note_answer): a
     picker whose note holds a hash for the same repository and file is judged by the hash and the
     change time noted then, and any other, one noted by its ids alone included, by the file as it
-    stands. sought is the ids of this session's noted pickers nothing has judged yet: closed also
+    stands. A note that says its wording could not be judged then (`unjudged`) has the file judged
+    now, while its change time is still the one noted (_judged_again). sought is the ids of this session's noted pickers nothing has judged yet: closed also
     holds a `settled` line for each of those the transcript shows is no picker of a source this
     record reads (_asked), found in the same pass."""
     if not isinstance(transcript_path, str) or not transcript_path or not isinstance(session_id, str) or not session_id:
@@ -1387,13 +1426,18 @@ def approvals(session_id, transcript_path, deadline=None, noted=None, settled=()
         why = _not_shown(p, events[p["file"]], ap, note,
                          lambda first, last: _calls_on(transcript_path, session_id, first, last))
         digest = None
-        if why is None and note is not None:
+        if why is None and note is not None and note.get("unjudged") is True:
+            # Noted as wording nobody could judge then (the review of #3846, C): judged now, while
+            # the file is still the one noted. The one way a note that carries a why can end in an
+            # approval, and only by the file being judged, here, and taken.
+            digest, why = _judged_again(p["file"], note, deadline)
+        elif why is None and note is not None:
             # Hashed when he answered, so what the file holds now does not matter.
             digest, why = note.get("hash"), _text(note.get("why"))
             if why is None and not (isinstance(digest, str) and SHA.fullmatch(digest)):
                 why = "the note taken when he answered holds no hash of the file"
         elif why is None:
-            digest, why, unfit = _file_hash(p["file"], deadline)
+            digest, why, unfit, _ = _file_hash(p["file"], deadline)
             why = why or unfit
         if why is not None:
             untaken.append({"repo": p["repo"], "file": p["file"], "why": why})
@@ -1451,6 +1495,11 @@ def _not_shown(p, events, ap, note=None, calls_on=None):
         changed = note.get("changed")
         if not isinstance(changed, int) or isinstance(changed, bool):
             return _text(note.get("why")) or "the note taken when he answered does not say when the file last changed"
+        if changed >= answered and note.get("unjudged") is True:
+            # The same refusal in words true of a note that may hold no hash (_judged_again).
+            return ("the file had changed after he answered when his answer was noted, and the wording could not be "
+                    "judged then, so the wording he approved cannot be told from the file. Open the file for him "
+                    "again and ask him again")
         if changed >= answered:
             return ("the file had changed after he answered when the hash noted for his answer was taken, so that "
                     "hash is not of the wording he approved")
@@ -1466,24 +1515,31 @@ def _not_shown(p, events, ap, note=None, calls_on=None):
 
 
 def _file_hash(path, deadline):
-    """The wording file at path as (its hash, None, unfit), or (None, why it has no hash an
-    approval could be of, None). unfit is None for wording an approval can be of, and else why an
-    approval of it approves nothing though it hashes (THE MERGE WOULD NOT REFUSE IT, module
-    docstring): the merge gate would refuse the wording itself, or whether it would could not be
-    told. The hash is still given then, because his answer about that wording is recorded by it
-    whatever he answered. The file is read once, and the bytes hashed are the bytes judged."""
+    """The wording file at path as (its hash, None, unfit, unjudged), or (None, why it has no hash
+    an approval could be of, None, unjudged). unfit is None for wording an approval can be of, and
+    else why an approval of it approves nothing though it hashes (THE MERGE WOULD NOT REFUSE IT,
+    module docstring): the merge gate would refuse the wording itself, or whether it would could
+    not be told. The hash is still given then, because his answer about that wording is recorded
+    by it whatever he answered. The file is read once, and the bytes hashed are the bytes judged.
+
+    unjudged is True when the reason given, why or unfit, is that lib/changelog-entry.js could not
+    be asked or gave an answer that could not be read (out of time, not on PATH, no count of blank
+    lines, no verdict), and False when the reason is about the file itself or there is none. It
+    never makes an approval count here: every reason refuses for the call that got it. It is what
+    a note records, so that wording nobody judged is not kept as wording that was refused (COULD
+    NOT BE JUDGED IS NOT REFUSED, module docstring)."""
     try:
         with open(path, "rb") as f:
             data = f.read(WORDING_BYTES + 1)
     except OSError as e:
-        return None, "the file could not be read (" + type(e).__name__ + "), so the wording he approved cannot be hashed", None
+        return None, "the file could not be read (" + type(e).__name__ + "), so the wording he approved cannot be hashed", None, False
     if len(data) > WORDING_BYTES:
-        return None, "the file is larger than " + str(WORDING_BYTES // 1024) + " KB, which is no announcement", None
+        return None, "the file is larger than " + str(WORDING_BYTES // 1024) + " KB, which is no announcement", None, False
     answer, why = hash_of(data, False, deadline)
     if why is not None:
-        return None, why, None
+        return None, why, None, True
     if not answer["hash"]:
-        return None, "the file holds no wording", None
+        return None, "the file holds no wording", None, False
     # Every blank line is dropped before the hash, so the hash cannot tell a padded file from its
     # lines written together (claude-config#3703). lib/changelog-entry.js counts the longest run
     # that has wording after it, by its own reading of a blank line, and an answer that does not
@@ -1491,19 +1547,19 @@ def _file_hash(path, deadline):
     run, at = answer.get("blankRun"), answer.get("blankRunAt")
     if not isinstance(run, int) or isinstance(run, bool) or not isinstance(at, int) or isinstance(at, bool):
         return None, ("lib/changelog-entry.js did not say how many blank lines in a row the file holds, so whether "
-                      "wording sat below the screen he was shown could not be told (claude-sync pull reinstalls it)"), None
+                      "wording sat below the screen he was shown could not be told (claude-sync pull reinstalls it)"), None, True
     if run > BLANK_RUN:
         return None, ("the file holds " + str(run) + " blank lines in a row, from line " + str(at) + ", with more "
                       "wording below them, so the window it was opened in showed him the lines above and then white "
                       "space, and he may never have seen the rest. Take the blank lines out, leaving no more than "
                       + str(BLANK_RUN) + " blank lines in a row anywhere above the last line of wording, then open the "
-                      "file for him and ask him again"), None
+                      "file for him and ask him again"), None, False
     # What the wording holds, judged by the merge gate's own judge (claude-config#3846): an approval
     # of wording the merge would refuse could never be used, and he would be asked a second time.
     # An answer that cannot be read is no clearance either (L98).
     verdict, untold = refusal_of(data, False, deadline)
     if untold is not None:
-        return answer["hash"], None, untold + ", and an approval of wording nobody could judge approves nothing"
+        return answer["hash"], None, untold + ", and an approval of wording nobody could judge approves nothing", True
     if verdict["refused"]:
         import shlex
         # The path is quoted as a shell reads it, so the command can be run as written whatever
@@ -1511,8 +1567,52 @@ def _file_hash(path, deadline):
         return answer["hash"], None, (
             refused_why(verdict) + " An approval of wording the merge would refuse approves nothing. Change the "
             "wording in the file until `" + JUDGE_COMMAND.replace("<file>", shlex.quote(path)) + "` refuses nothing, then open the "
-            "file for him and ask him again")
-    return answer["hash"], None, None
+            "file for him and ask him again"), False
+    return answer["hash"], None, None, False
+
+
+def _judged_again(path, note, deadline):
+    """(the file's hash, None) or (None, why his Approve approves nothing for this call), for a
+    picker whose note says its wording could not be judged when he answered (COULD NOT BE JUDGED IS
+    NOT REFUSED, module docstring). The file is judged now, by _file_hash as any wording file is,
+    and only while its status change time is still the one noted, read either side of the judging:
+    then what is judged is what stood when the note was taken, which _not_shown has already held to
+    be before his answer. Every other outcome approves nothing and says which it is: the file
+    changed, it still could not be judged, or it was judged and is refused."""
+    opening = "the wording could not be judged when he answered"
+    changed = note.get("changed")
+
+    again = "Open the file for him again and ask him again"
+
+    def moved():
+        """None while the file's change time is the one noted, else what happened to it."""
+        try:
+            now = os.stat(path).st_ctime_ns
+        except OSError as e:
+            return "the file cannot be read now (" + type(e).__name__ + ")"
+        return None if now == changed else "the file has changed since"
+
+    gone = moved()
+    if gone is not None:
+        return None, (opening + " (" + (_text(note.get("why")) or "the note does not say why") + "), and " + gone
+                      + ", so the wording he answered about cannot be judged now. " + again)
+    digest, why, unfit, unjudged = _file_hash(path, deadline)
+    gone = moved()
+    if gone is not None:
+        return None, (opening + ", and " + gone + ", while it was being judged again, so the wording he answered "
+                      "about cannot be told from it. " + again)
+    if unjudged:
+        return None, (opening + ", and it still could not be judged in this call: " + (why or unfit) + ". His "
+                      "Approve is not lost: while the file has not changed, the next call judges it again")
+    if why is not None or unfit is not None:
+        # Judged now, and refused: for what the file holds, in the words any wording file gets.
+        return None, why or unfit
+    held = note.get("hash")
+    if held is not None and held != digest:
+        # The hash was taken then and only the judging was not: the same file hashes the same.
+        return None, (opening + ", and the file does not hash now to what was noted then, so the wording he "
+                      "answered about cannot be told from it. " + again)
+    return digest, None
 
 
 def _read_back(entries, noted, looked, unjudged, deadline, unlooked, shared=False):

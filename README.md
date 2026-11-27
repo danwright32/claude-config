@@ -2079,6 +2079,26 @@ Announcement block the command would leave to the same judge and refuses wording
 refuse, with the gate's code and words. The hash and that judging share the library's one five
 second bound, so the hook's longest wait is what it was.
 
+Wording nobody could judge is not wording that was refused (the review of #3846). The hash and the
+judging are each one bounded question to `changelog-entry.js`, and either can run out of time on a
+loaded Mac. With no note that refuses the one call that met it. In a note it used to be permanent:
+the note of good wording carried "did not judge the wording in 1.7 seconds" as its `why`, and a note
+that carries a `why` approves nothing for good. So a note whose reason is that the wording could not
+be judged now also says `"unjudged": true`, and the call that reads it judges the file again, only
+while the file's change time is still the one noted. What each state of a note reads as:
+
+| The note holds | An Approve read with it |
+|---|---|
+| its ids alone, or another repository or file than the picker names | is judged by the file as it stands, as with no note |
+| a hash, no `why` | counts, by the hash noted, when the change time noted is before his answer |
+| a `why`, no `unjudged` (refused wording, a file that could not be read or hashed, any note written before the field) | approves nothing, for good, in the words of the `why` |
+| a `why` and `"unjudged": true`, the file unchanged since the note | has the file judged now: taken, it counts; refused, it approves nothing in the gate's words; still not judged, it approves nothing for that call and the next call judges again |
+| a `why` and `"unjudged": true`, the file changed since or unreadable | approves nothing, and the refusal says to open the file and ask him again |
+| no change time, or one at or after his answer | approves nothing |
+
+The fourth row is the only way a note that carries a `why` ends in an approval, and it does so
+only by the file being judged and taken by the merge gate's own judge.
+
 What is hashed is the FILE as it stands, never a hash the session supplies, by
 `hooks/lib/changelog-entry.js`'s `announcementHash`: the sha256 of the one normalised form (line
 endings, spaces at the ends of lines, every blank line) every comparison uses, so the file on this

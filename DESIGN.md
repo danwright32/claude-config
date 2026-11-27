@@ -3542,6 +3542,21 @@ for the review by picker, 2026-11-25: "Yes, attack it first"). The choices are t
     which needs a second time bound on a hook whose bounds already add up to most of the time
     it is registered with (above); judged first, the hash and the judging share one bound. The cost is that a call refused for
     its wording reads no picker into the record, which the merge gate has always done the same way.
+  - Wording nobody could judge is kept apart from wording that was refused (the review of this
+    change, M3). The hash and the judging share the note hook's bound, so a judge out of time put
+    its reason in the note's `why`, a note with a `why` approves nothing, and nothing judged the
+    file again: good wording was refused for good. Such a note now also says `"unjudged": true`,
+    and the call that reads it judges the file again while the file's change time still equals
+    the one noted (`_judged_again`). The builder's choices, each the stricter of two: the note
+    keeps its `why` and its hash and gains one field, so the library as it was, reading a new
+    note, still refuses, and his `Not yet` is still recorded by the hash (ruled out: the review's
+    sketch of a null `why`, which an older reader takes as an approval wherever the note holds a
+    hash); the file must be unchanged since the note, read either side of the judging, and where
+    the note holds a hash the file must still hash to it; a file that changed while it was being
+    hashed, or could not be read, is not unjudged and stays refused; a note written before the
+    field keeps its meaning, so an old note whose `why` was a judge out of time still refuses and
+    he is asked once more. The library's bound on one question can be shortened for the suites
+    through `ANNOUNCE_APPROVAL_HASH_SECONDS`, and never lengthened.
   - Not built: refusing a wording file that holds a heading line. A pull request's block ends at
     the next heading, so such a file can never be the block whole, and the merge would refuse the
     cut block as unapproved. That is a rule the gate does not have, and this change adds none.
