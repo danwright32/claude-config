@@ -177,6 +177,7 @@ pull
 printf 'this is not a record\n' > "$RECORD"
 status > "$WORK/status.2"
 check "status says a record it cannot read could not be read" "grep -q 'mod-check-timeouts, could not be read' '$WORK/status.2'"
+check "and that the next sync sets it aside and starts a new one" "grep -q 'starts a new one' '$WORK/status.2'"
 pull LATE=alpha-mod
 check "a pull says the record could not be read" "grep -q 'mod-check-timeouts' '$OUT' && grep -q 'could not be read' '$OUT'"
 check "and a time out it meets then notifies, rather than counting from zero" "[ \"\$(notes)\" = 1 ] && grep -q 'alpha-mod' '$NL'"
@@ -186,7 +187,7 @@ check "and a new record counts from this sync" "grep -q '^alpha-mod	1	' '$RECORD
 grep -q 'could not be read' "$OUT" || show "the pull meeting an unreadable record" "$OUT"
 # A record whose count is not a number is unreadable too, never zero.
 : > "$NL"; rm -f "$RECORD.unreadable"
-printf 'alpha-mod\tmany\t1700000000\t0\n' > "$RECORD"
+printf 'alpha-mod\tmany\t1700000000\t0\tsome-sync\n' > "$RECORD"
 pull LATE=alpha-mod
 check "a record whose count is not a number is unreadable, not zero" "grep -q 'could not be read' '$OUT' && [ \"\$(notes)\" = 1 ]"
 pull

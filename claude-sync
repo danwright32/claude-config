@@ -17277,8 +17277,9 @@ watch_end_fswatch(){   # $1 = fswatch's pid, as its own first line said
 # asking for one, which is the only send a hold stops.
 watch_tick(){
   local now_digest
-  # Each tick is its own sync, though the watcher that runs it lives for days. The loop runs a tick in
-  # its own subshell, so this tag ends with the tick.
+  # Each tick is its own sync, though the watcher that runs it lives for days. Local, and bash scopes
+  # a local dynamically, so everything this tick calls reads this tag, and it ends with the tick.
+  local SYNC_RUN_TAG
   SYNC_RUN_TAG="${BASHPID:-$$}.$(date +%s).$RANDOM"
   # Refuses the SEND, and only on a difference it could actually READ. A hash that cannot be taken,
   # because the file is mid rename or has been moved, is not a divergence, and refusing on it would

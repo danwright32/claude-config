@@ -192,6 +192,12 @@ fetch "$RB"
 check "failure path: a send leaves a shared file that cannot be parsed byte for byte" "shared_file '$RB' | cmp -s - '$WORK/broken.json'"
 check "failure path: and the run says the file could not be read" "grep -q 'settings.hooks.json could not be read as JSON' '$WORK/b3'"
 check "failure path: and claims no key beside the hooks block" "! grep -q 'beside the hooks block' '$WORK/b3'"
+# A sync stages its send before it takes in the shared repo, so it is the next sync whose send meets
+# the broken file: it holds the block back, saying so, and leaves the file as it was.
+run sync "$HB" "$RB" "$WORK/b3b"
+fetch "$RB"
+check "failure path: the next send, which reads that file, says the hooks block was NOT published" "grep -q 'hooks block was NOT published' '$WORK/b3b'"
+check "failure path: and still leaves the file byte for byte" "shared_file '$RB' | cmp -s - '$WORK/broken.json'"
 
 # Failure path: a top level that is not an object holds no hooks block to keep anything beside, and
 # is held back the same way rather than replaced.
