@@ -3,7 +3,7 @@
 
     python3 decisions.py status
     python3 decisions.py author <Slack member id>
-    python3 decisions.py record "<kind>" accepted --where "<where the rule was written>"
+    python3 decisions.py record "<kind>" accepted --where no-ai-tells|global-claude-md|project [--project <folder name>]
     python3 decisions.py record "<kind>" not-now
     python3 decisions.py record "<kind>" never
     python3 decisions.py forget "<kind>"
@@ -11,7 +11,8 @@
 
 The draft-edit-review skill offers each recurring kind of edit to Dan as a writing rule. This keeps
 his answer, so a rule he accepted or said never to offer again is not put to him the next week:
-`status` prints the --skip arguments the next run of hooks/lib/draft-edit-diff.py takes. A kind he
+hooks/lib/draft-edit-diff.py reads decisions.json itself and leaves those kinds out, and `status`
+prints the same as --skip arguments for a run made by hand. A kind he
 answered "not now" is recorded and offered again. `forget` takes an answer back, so a wrong one is
 never permanent (L1008). `reviewed` records that a review finished, which is what the weekly notice
 (hooks/draft-edit-review-notice.sh) reads to know nothing new is waiting.
@@ -23,7 +24,8 @@ from one Mac's own session records. What that costs: "never" said on one Mac is 
 other, so the other can offer that kind once more.
 
 IT HOLDS NO MESSAGE TEXT, and takes none: a kind is one of KINDS, a decision one of three words,
-and where is a short label. It never reads a session record, and must not start to: it writes
+where is one of the three labels in PLACES, and a project is a folder's name checked for its
+length and characters. Nothing typed freely is kept or printed back. It never reads a session record, and must not start to: it writes
 files, and the Slack drafts gate refuses a program that can write and reads those. Reading them is
 draft-edit-diff.py's job, which only prints.
 
@@ -45,7 +47,15 @@ sys.stderr.reconfigure(errors="replace")
 # The kinds a rule can be offered for: OFFERED in hooks/lib/draft-edit-diff.py, and the skill's suite
 # fails when the two differ.
 KINDS = ("figures cut", "length cut", "the ask reworded", "the opening changed")
-SKIPPED = ("accepted", "never")  # decisions that keep a kind from being offered again
+# Decisions that keep a kind from being offered again. hooks/lib/draft-edit-diff.py reads
+# decisions.json itself and holds the same pair as DECIDED_FOR_GOOD; the suite fails when they differ.
+SKIPPED = ("accepted", "never")
+# Where an accepted rule was written: one of these labels and nothing typed, so no message text, name
+# or channel can be put here and printed back by status. The words are what status prints.
+PLACES = {"no-ai-tells": "the no-ai-tells skill",
+          "global-claude-md": "the Slack section of the global CLAUDE.md",
+          "project": "the project's own file"}
+PROJECT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,59}\Z")  # a folder's name, never a path or a sentence
 MEMBER_ID = re.compile(r"[A-Z0-9]{6,20}\Z")
 LATEST = 10 ** 11  # seconds since 1970 past any time a calendar here can show: a stored time at or over it is not one
 
@@ -102,9 +112,22 @@ def load():
     for kind, entry in found.items():
         if kind not in KINDS or not isinstance(entry, dict) or entry.get("decision") not in ("accepted", "not-now", "never") \
                 or not isinstance(entry.get("at"), int) or isinstance(entry.get("at"), bool) \
-                or not 0 <= entry["at"] < LATEST or not isinstance(entry.get("where", ""), str):
+                or not 0 <= entry["at"] < LATEST or not placed(entry):
             raise Unreadable("%s could not be read (its entry for %r is not one this wrote)" % (path, str(kind)[:40]))
     return found
+
+
+def placed(entry):
+    """Whether an entry's place is one this writes: a label of PLACES for an accepted rule, with a
+    project's folder name beside "project" at most, and no place at all for any other answer."""
+    where, project = entry.get("where"), entry.get("project")
+    if entry.get("decision") != "accepted":
+        return where is None and project is None
+    if where not in PLACES:
+        return False
+    if project is None:
+        return True
+    return where == "project" and isinstance(project, str) and bool(PROJECT_NAME.match(project))
 
 
 def write_text(name, text):
@@ -150,7 +173,8 @@ def status():
             continue
         when = day(entry["at"])
         if entry["decision"] == "accepted":
-            print("  %s: accepted on %s, written to %s" % (kind, when, entry.get("where") or "a place not recorded"))
+            named = " (%s)" % entry["project"] if entry.get("project") else ""
+            print("  %s: accepted on %s, written to %s%s" % (kind, when, PLACES[entry["where"]], named))
         elif entry["decision"] == "never":
             print("  %s: never offer again, decided %s" % (kind, when))
         else:
@@ -170,6 +194,7 @@ def main():
     p.add_argument("kind")
     p.add_argument("decision")
     p.add_argument("--where", default="")
+    p.add_argument("--project", default="")
     p = sub.add_parser("forget")
     p.add_argument("kind")
     args = parser.parse_args()
@@ -181,14 +206,20 @@ def main():
         if args.decision not in ("accepted", "not-now", "never"):
             print("decisions.py: the decision is accepted, not-now or never. Got: " + args.decision[:40], file=sys.stderr)
             return 2
-        where = " ".join(args.where.split())
-        if args.decision == "accepted" and not where:
+        if args.decision == "accepted" and not args.where:
             print("decisions.py: a rule is accepted only once it is written somewhere, so name the place with "
                   "--where. Nothing was recorded.", file=sys.stderr)
             return 2
-        if len(where) > 120:
-            print("decisions.py: --where is a short label for the place, at most 120 characters, never the rule "
-                  "or a message. Nothing was recorded.", file=sys.stderr)
+        if args.decision == "accepted" and args.where not in PLACES:
+            print("decisions.py: --where is no-ai-tells, global-claude-md or project, never the rule, a path or "
+                  "a message. Nothing was recorded.", file=sys.stderr)
+            return 2
+        if args.decision != "accepted" and (args.where or args.project):
+            print("decisions.py: --where and --project go with accepted only. Nothing was recorded.", file=sys.stderr)
+            return 2
+        if args.project and (args.where != "project" or not PROJECT_NAME.match(args.project)):
+            print("decisions.py: --project goes with --where project, and is the project's folder name: 1 to 60 "
+                  "letters, digits, dots, dashes or underscores. Nothing was recorded.", file=sys.stderr)
             return 2
     if args.command == "author" and not MEMBER_ID.match(args.member_id):
         print("decisions.py: a Slack member id is 6 to 20 capital letters and digits. Nothing was recorded.",
@@ -217,7 +248,9 @@ def main():
             return 0
         entry = {"decision": args.decision, "at": now()}
         if args.decision == "accepted":
-            entry["where"] = where
+            entry["where"] = args.where
+            if args.project:
+                entry["project"] = args.project
         decisions[args.kind] = entry
         save(decisions)
         print("recorded: %s, %s" % (args.kind, args.decision))

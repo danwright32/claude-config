@@ -6487,12 +6487,17 @@ pieces turn the edits he keeps making into written rules, each one his to accept
   read exits 4, and `--shapes` prints what the results are made of (counts and field names only).
 - **The offer**, the `draft-edit-review` skill. It runs the reader, tells Dan the counts, and asks
   one question for each recurring kind: the proposed rule in one sentence, the pairs it rests on,
-  one example pair, and Accept, Not now or Never offer this again. On Accept a second question asks
-  where the rule goes (the no-ai-tells skill, the Slack section of the global `CLAUDE.md`, or the
-  project's own file), the session makes that edit itself, and the ask before saving mod asks him
-  again at the save. `skills/draft-edit-review/decisions.py` keeps each answer, and a kind he
-  accepted or declined for good is passed to the next run with `--skip`. `decisions.py forget`
-  takes an answer back.
+  one example pair, and Accept, Not now or Never offer this again. The sentence is run through
+  `/no-ai-tells` before that question, so the sentence he accepts is the sentence written, word for
+  word. On Accept a second question asks where the rule goes (the no-ai-tells skill, the Slack
+  section of the global `CLAUDE.md`, or the project's own file), and the session makes that edit
+  itself. What checks the save depends on the place. The ask before saving mod asks him before a
+  save to a `CLAUDE.md`, an `AGENTS.md` or a memory file. It does not ask about a skill file, so
+  for the no-ai-tells skill the skill asks one more question of its own, showing the final sentence
+  and the file's name, before the edit. `skills/draft-edit-review/decisions.py` keeps each answer,
+  and the reader reads that file itself, so a kind he accepted or declined for good is left out
+  whether or not the session passes anything. Where a rule went is kept as one of three labels and
+  a project's folder name, never as text somebody typed. `decisions.py forget` takes an answer back.
 - **The weekly notice**, `hooks/draft-edit-review-notice.sh`, at session start. It says the review
   is due, in one line, when a week has passed since it last said so and a draft has been saved on
   this Mac since the last review finished. It reads no record, runs nothing and asks nothing. The
