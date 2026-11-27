@@ -55,7 +55,9 @@ if not re.search(r"isShown: false, reason: CARRIED_HELD\b", steps):
 told = re.findall(r"^export const CHECK_CARRIED =\n  '([^'\\\n]+)'$", close, re.M)
 if len(told) != 1:
     print(f"the goal box's CHECK_CARRIED is a plain literal {len(told)} times in close.ts, not once, so it cannot be read"); sys.exit()
-if not re.search(r"const keyOf = \(s: StepsStep\) => `\$\{s\.title\}\\n\$\{s\.url \?\? s\.location\}`$", card, re.M):
+# The line that opens pinnedBy and the key on the line after it: another function in that file
+# builds the same key for another purpose, and must not answer for this one.
+if not re.search(r"^export const pinnedBy = [^\n]*\{\n  const keyOf = \(s: StepsStep\) => `\$\{s\.title\}\\n\$\{s\.url \?\? s\.location\}`$", card, re.M):
     print('manual steps no longer knows a pinned step as the kept one by its title and its link or location, which is what the goal box tells the session to keep'); sys.exit()
 if 'Keep each title and link or place as it is' not in told[0]:
     print("the goal box's message no longer tells the session to keep each title and link or place, which is how manual steps knows a pinned step as the kept one"); sys.exit()
@@ -70,7 +72,10 @@ ANSWER="  if (how === 'held') return { value: { isShown: false, reason: CARRIED_
 TOLD="export const CHECK_CARRIED =
   'CARRIED STEPS. Check each, then pin them again. Keep each title and link or place as it is, or the close card stays back.'"
 # Single quoted: the backtick, the dollar signs and the backslash are the line's own characters.
-KEYOF='  const keyOf = (s: StepsStep) => `${s.title}\n${s.url ?? s.location}`'
+BY_BOTH='  const keyOf = (s: StepsStep) => `${s.title}\n${s.url ?? s.location}`'
+OPENS='export const pinnedBy = (card: StepsCard, prior: StepsCard | null | undefined, session: string | undefined): StepsCard => {'
+KEYOF="$OPENS
+$BY_BOTH"
 fixture() {   # $1 = name, $2 = the goal box's lines, $3 = manual steps' register lines, $4 = manual steps' card line
   printf '%s\n' "$2" > "$tmp/$1.close.ts"
   printf '%s\n' "$3" > "$tmp/$1.register.tsx"
@@ -93,7 +98,16 @@ $TOLD" "const CARRIED_HELD = '$REASON'
   if (how === 'held') return { value: { isShown: false, reason: 'held' } }" "$KEYOF"
 fixture rekeyed "export const CARRIED_HELD = '$REASON'
 $TOLD" "const CARRIED_HELD = '$REASON'
-$ANSWER" '  const keyOf = (s: StepsStep) => s.title'
+$ANSWER" "$OPENS
+  const keyOf = (s: StepsStep) => s.title"
+# The same key built in another function, as card.ts has it for a finished step, with pinnedBy's
+# own key changed: the other one must not answer for it.
+fixture elsewhere "export const CARRIED_HELD = '$REASON'
+$TOLD" "const CARRIED_HELD = '$REASON'
+$ANSWER" "export const keepFinished = (card: StepsCard, prior: StepsCard | null | undefined): StepsCard => {
+$BY_BOTH
+$OPENS
+  const keyOf = (s: StepsStep) => s.title"
 fixture untold "export const CARRIED_HELD = '$REASON'
 export const CHECK_CARRIED =
   'CARRIED STEPS. Check each, then pin them again.'" "const CARRIED_HELD = '$REASON'
@@ -115,6 +129,7 @@ check computed "the goal box's CARRIED_HELD is a plain literal 0 times" 'a goal 
 check renamed "manual steps' CARRIED_HELD is a plain literal 0 times" 'a manual steps constant under another name fails as unreadable'
 check unused 'no longer answers a step added to a held card' 'a held card answered with other words fails'
 check rekeyed 'no longer knows a pinned step as the kept one by its title and its link or location' 'manual steps matching a pinned step by its title alone fails'
+check elsewhere 'no longer knows a pinned step as the kept one by its title and its link or location' 'the same key in another function does not answer for the one that decides whose step it is'
 check untold 'no longer tells the session to keep each title and link or place' 'a message that does not say to keep the titles and links fails'
 check built "the goal box's CHECK_CARRIED is a plain literal 0 times" 'a message that is not a plain literal fails as unreadable'
 

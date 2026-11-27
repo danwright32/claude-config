@@ -1833,6 +1833,47 @@ test('a card carried from an earlier session takes the step but stays held, and 
   ])
 })
 
+// #3817: what the goal box does to a held card, driven through the noun as it drives it. At each
+// quiet turn end it adds its close step, is answered held, and takes the step back; then the
+// session pins the carried steps. The close card can follow only for steps that stay the earlier
+// session's, which they do when pinned under the title and the link or location they were kept
+// with. One pinned under another title, or with a link where it was kept with a location, becomes
+// this session's own step, which the goal box counts as one Dan still has to do. Its prompt tells
+// the session to keep them (tests/test-close-card-carried-reason.sh holds the two together).
+test("a held card the goal box adds its close step to and takes it back from, twice, and the session then pins: a step pinned as it was kept stays the earlier session's, one reworded or given a link for its location becomes this session's, and no taken back step comes along (#3817)", withCaller, async ($, on) => {
+  const card: StepsCard = {
+    heading: 'Kept',
+    steps: [
+      { title: 'Rotate the key', url: 'https://a.example', pinnedBy: 's0' },
+      { title: 'Renew the certificate', location: 'The certificates page', pinnedBy: 's0' },
+      { title: 'Purge the cache', url: 'https://c.example', pinnedBy: 's0' },
+    ],
+  }
+  const w = world(on, {}, { [`card:${ROOT}`]: card })
+  await start($)
+  for (let i = 0; i < 2; i++) {
+    expect(await addClose($)).toEqual({ isShown: false, reason: 'the steps carried from an earlier session are held until Claude checks them again' })
+    expect(await withdrawStep($)).toEqual({ isWithdrawn: true })
+  }
+  expect(await band($)).toBeUndefined()
+  // The close step is for this session alone, so the kept steps are still the three carried in.
+  const kept = [
+    ['Rotate the key', 's0'],
+    ['Renew the certificate', 's0'],
+    ['Purge the cache', 's0'],
+  ]
+  expect(owners(w.mem)).toEqual(kept)
+  await hand($, [step({ title: 'Rotate the key', url: 'https://a.example' }), step({ title: 'Renew the certificate', url: 'https://certs.example' }), step({ title: 'Purge the CDN cache', url: 'https://c.example' })], 'Kept')
+  expect(owners(w.mem)).toEqual([
+    ['Rotate the key', 's0'],
+    ['Renew the certificate', 's1'],
+    ['Purge the CDN cache', 's1'],
+  ])
+  // Shown now, with neither of the two close steps taken back while it was held.
+  expect((await bandText($)).join('\n')).not.toContain(CLOSE.title)
+  expect(await addClose($)).toEqual({ isShown: true })
+})
+
 test('nothing is added where nobody is at the prompt, and a step with no place is refused loudly (#1107)', withCaller, async ($, on) => {
   world(on)
   await $.session.start({ cwd: ROOT, surface: null, isInteractive: false } as never)
