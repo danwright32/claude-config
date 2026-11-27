@@ -50,11 +50,16 @@ call without signing in.
                                          the same for a caller whose read() is costly, run again
                                          only when the two readings of the command differ
   unsure_why(fault, untold)              one of asked_reading()'s faults as a sentence
+  unsure_fix(told)                       how to write a command so that the reader names no line in
+                                         it, for a fault or a finding about a line it named, else
+                                         None; db-write-ask.sh refuses on it
   asked_words()                          every word a call must hold for this file to ask about it
 
-A Bash command holding a # is judged by two readings of it since #3472, the reader's own and the one
-it gives a caller that asks (asking()). bash_findings(), dry_push_dir() and cli_read_approval() each
-say how they put the two together.
+A Bash command is judged by two readings of it since #3472, the reader's own and the one it gives a
+caller that asks (asking()), whatever the command holds: a # the reader cannot tell from a comment
+is one line it names, and a heredoc it cannot find the end of, which holds no #, is another.
+bash_findings(), dry_push_dir() and cli_read_approval() each say how they put the two together, and
+UNSURE holds what is said of each mark.
 
 Each finding is (why the call is asked about, the statement it is about or None).
 
@@ -1452,23 +1457,138 @@ def _scripted_findings(queries, judge):
 
 
 class UnsureLine(Exception):
-    """A reading named a # it took for a comment without knowing that the shell does."""
+    """A reading named a line it cannot vouch for: a # it took for a comment without knowing that
+    the shell does, or a heredoc it cannot find the end of."""
 
 
 class CannotAsk(Exception):
     """The reader's commands() has no `unsure` to ask for, so it cannot say which lines those are."""
 
 
+# What is said of a line the reader named, by the mark it named the line with, and how to write the
+# command so that the reader names nothing in it (claude-config#3472). The reader names a # it took
+# for a comment without knowing that the shell does (#3464, #3481) and a heredoc it cannot find the
+# end of (#3492, #3566), and one sentence for all of them, about a #, sent whoever read it looking
+# for a # in a command that held none. Each sentence is true of its own mark and claims nothing of
+# another, each fact in it is one lib/shell-words.py measured (commands(), heredoc_close() and
+# heredoc_opener() say where and when), and test-db-write-ask-unsure-line.sh holds a case per mark.
+# The %s is the line the mark stands in.
+UNSURE = {
+    # The reading reached its end, so the # is one the reader took for a comment where it cannot
+    # tell which the shell does: after a ) whose kind it does not know, or inside backquotes.
+    "comment": ("the command holds a # the shared reader cannot tell from a comment, in the line %s: a shell "
+                "reads a # inside a word where a closing parenthesis stands right before it, or inside "
+                "backquotes, and then runs the rest of that line, so what runs after it on that line could "
+                "not be read",
+                "Write that # inside quotes, or put the comment on a line of its own"),
+    # The reading gave up: the # may be one every shell reads inside a word, which the reader read
+    # on past as the shell does, and then could not read the text to its end.
+    "unread": ("the command holds a #, in the line %s, past which the shared reader could not read the text "
+               "to its end: a shell reads a # inside a word where a backslash or a closing parenthesis "
+               "stands right before it, and then runs the rest of that line, so what runs after it could "
+               "not be read",
+               "Write that # inside quotes, or put the comment on a line of its own"),
+    # An unquoted heredoc the shells end somewhere other than its first marker line, or nowhere.
+    "close": ("the command opens a heredoc the shared reader cannot find the end of, in the line %s: its end "
+              "marker is not quoted, and either a later line ends in a backslash, which a shell joins to "
+              "the next line, marker or not, or no line ends the heredoc while a $ or a backquote follows. "
+              "A shell that keeps the heredoc open runs every $( ) in the rest of the text, in single "
+              "quotes or not, so what runs after that line could not be read",
+              "End the heredoc with its marker alone on a line that follows no backslash, or quote the "
+              "marker (<<'EOF') where nothing in the body is to be expanded"),
+    "joined": ("the command opens a heredoc on a line that ends in a backslash before the heredoc's end marker "
+               "is whole, the line %s: a shell joins that line to the next, so the end marker is the word "
+               "the two lines make, and where the heredoc ends, and so what runs after it, could not be read",
+               "Write the << and its whole end marker on one line"),
+    "split": ("the command opens a heredoc whose end marker is quoted and holds a line break, in the line %s: "
+              "no line of the text can be that marker, so bash and zsh never end the heredoc and feed the "
+              "rest of the text to its command, where dash and ksh end it at the lines that spell the "
+              "marker, so what runs after it could not be read",
+              "Write the end marker as one word on the line that opens the heredoc"),
+    "dollar": ("the command opens a heredoc whose end marker holds a dollar quote, in the line %s: dash reads "
+               "the $ as a character of the marker, and bash and zsh differ on some of what such quotes "
+               "hold, so no such heredoc ends at the same line in every shell, and what runs after it could "
+               "not be read",
+               "Write the end marker as a plain word, or in single quotes (<<'EOF') where nothing in the "
+               "body is to be expanded"),
+    "one line": ("the command opens a heredoc in a text with no line break, %s: typed on one line no shell "
+                 "gives a heredoc a body, and every shell runs the commands after it on that line, which the "
+                 "shared reader took for its body, so what runs there could not be read",
+                 "Put the heredoc's body and its end marker on lines of their own after the line that "
+                 "opens it"),
+    # A heredoc named for a reason this file cannot tell (heredoc_opener() could not be asked).
+    "heredoc": ("the command opens a heredoc whose end the shared reader cannot vouch for, in the line %s, so "
+                "what runs after it could not be read",
+                "Write the heredoc with a plain word for its end marker, alone on its closing line"),
+    # A mark the reader may come to name that is neither: nothing is claimed of it but that.
+    "line": ("the command holds a line the shared reader is unsure of, %s, so what runs on it could not be read",
+             "Write that line more plainly"),
+}
+# How much of the line a sentence shows.
+LINE_SHOWN = 120
+
+
+class Unsure(str):
+    """One of asked_reading()'s faults: the sentence for a line the reader named, true of the mark
+    it named the line with (UNSURE). .kind is which mark, and .fix how to write the command so that
+    the reader names nothing there, for a caller that refuses the command (unsure_fix())."""
+
+    def __new__(cls, kind, line):
+        what, fix = UNSURE[kind]
+        self = str.__new__(cls, what % ("`" + line + "`"))
+        self.kind, self.fix = kind, fix
+        return self
+
+
+def _mark(sw, s, at, ended):
+    """Which of UNSURE's marks the reader named at s[at], in a reading of s that reached its end
+    (ended) or gave up. A heredoc is named by its <<, and which kind it is comes from the reader's
+    own heredoc_opener(), asked as commands() asks it."""
+    if s.startswith("#", at):
+        return "comment" if ended else "unread"
+    if not s.startswith("<<", at):
+        return "line"
+    joins, doubts = [], []
+    try:
+        opener = sw.heredoc_opener(s, at, joins=joins, doubts=doubts)
+    except Exception:
+        return "heredoc"
+    if joins:
+        return "joined"
+    if doubts:
+        return "dollar"
+    if "\n" not in s:
+        return "one line"
+    if not opener:
+        return "heredoc"
+    if "\n" in opener[0]:
+        return "split" if opener[2] else "heredoc"
+    return "heredoc" if opener[2] else "close"
+
+
+def _unsure(sw, s, at, ended):
+    """The Unsure for the mark the reader named at s[at]. Never raises: it runs as a reading ends,
+    where a failure of its own would stand in for the reading's."""
+    try:
+        start = s.rfind("\n", 0, at) + 1
+        end = s.find("\n", at)
+        return Unsure(_mark(sw, s, at, ended), s[start:len(s) if end < 0 else end].strip()[:LINE_SHOWN])
+    except Exception:
+        return Unsure("line", "")
+
+
 @contextlib.contextmanager
 def asking(sw):
-    """Inside the block, every reading sw's commands() makes asks the reader which # it took for a
-    comment without being sure the shell does (its `unsure`, claude-config#3464), and a reading
-    that names one raises UnsureLine, whether it reached its end or gave up, as the Slack drafts
-    gate's readings do. A caller that asks is also given the rest of the line read as commands
-    wherever every shell reads the # inside a word (claude-config#3481), so nothing on such a line
-    is left out. The block is given the list of every # named. A reader with no `unsure` to ask
-    for raises CannotAsk before the block starts, so a caller that cannot ask never passes for one
-    that asked and was told nothing. sw reads as it did once the block ends."""
+    """Inside the block, every reading sw's commands() makes asks the reader which lines it cannot
+    vouch for (its `unsure`): a # it took for a comment without being sure the shell does
+    (claude-config#3464), and a heredoc it cannot find the end of (#3492, #3566). A reading that
+    names one raises UnsureLine, whether it reached its end or gave up, as the Slack drafts gate's
+    readings do. A caller that asks is also given the rest of the line read as commands wherever
+    every shell reads the # inside a word (claude-config#3481), so nothing on such a line is left
+    out. The block is given the list of every line named, each as the Unsure that says which mark
+    it was named with. A reader with no `unsure` to ask for raises CannotAsk before the block
+    starts, so a caller that cannot ask never passes for one that asked and was told nothing. sw
+    reads as it did once the block ends."""
     plain, named = sw.commands, []
     # Whether commands() takes `unsure` is read from its own code object, which a function written
     # in Python has: importing the inspect module to ask cost every call that loads this file 8 ms
@@ -1481,12 +1601,15 @@ def asking(sw):
     def commands(*args, **asked):
         if asked.get("unsure") is not None:
             return plain(*args, **asked)
-        marks = []
+        marks, ended = [], False
         try:
-            return plain(*args, unsure=marks, **asked)
+            got = plain(*args, unsure=marks, **asked)
+            ended = True
+            return got
         finally:
             if marks:
-                named.extend(marks)
+                s = args[0] if args else asked.get("s", "")
+                named.extend(_unsure(sw, s if isinstance(s, str) else "", mark[0], ended) for mark in marks)
                 raise UnsureLine(marks[0][0])
 
     sw.commands = commands
@@ -1496,8 +1619,6 @@ def asking(sw):
         sw.commands = plain
 
 
-UNSURE_LINE = ("the command holds a # the shared reader cannot tell from a comment, so what runs after "
-               "it on that line could not be read")
 UNREAD_LINE = ("the command holds a # the shell reads inside a word, and read that way, with the rest "
                "of its line, the command is not one this hook approves")
 CANNOT_SAY = "lib/shell-words.py cannot say which lines it is unsure of (its commands() takes no `unsure`)"
@@ -1507,11 +1628,14 @@ CANNOT_ASK = CANNOT_SAY + ", so no command read through it is approved"
 def asked_reading(sw, read):
     """(what read() gives, None) when read() is run by the reading sw gives a caller that asks
     which lines it is unsure of (asking()), every one of its readings being of commands with no
-    line named. (None, UNSURE_LINE) when a reading named a #, whatever read() then made of the
-    part it was given, and (None, CANNOT_SAY) when the reader cannot be asked. Any other failure
-    of read() is raised. This is the one place a caller turns a reading into "sure, and this is
-    it" or "not sure, and why" (claude-config#3472): cli_read_approval() approves by it,
-    bash_findings() and dry_push_dir() decide by it, and db-write-ask.sh reads a commit by it."""
+    line named. (None, an Unsure) when a reading named a line, whatever read() then made of the
+    part it was given: the sentence for the first line named, true of the mark it was named with.
+    (None, CANNOT_SAY) when the reader cannot be asked. Any other failure of read() is raised.
+    This is the one place a caller turns a reading into "sure, and this is it" or "not sure, and
+    why" (claude-config#3472): cli_read_approval() approves by it, bash_findings() and
+    dry_push_dir() decide by it, and db-write-ask.sh reads a commit by it. The reader is asked
+    whatever the command holds: a heredoc it cannot find the end of needs no #, so a caller that
+    asked only about a command holding one never heard of those."""
     try:
         with asking(sw) as named:
             try:
@@ -1524,19 +1648,19 @@ def asked_reading(sw, read):
     except CannotAsk:
         return None, CANNOT_SAY
     if named:
-        return None, UNSURE_LINE
+        return None, named[0]
     return got, None
 
 
 def second_reading(command, sw, cwd, first, read):
     """asked_reading()'s answer for a caller whose read() is costly and that already holds first,
     what read() gave by the reader's own reading: (first, None) without running read() again when
-    the command holds no #, or when the reader gives a caller that asks the very commands it gives
-    one that does not (every_command(), every wrapped string and substitution among them), since
-    read() would then be told nothing new; else asked_reading(sw, read). db-write-ask.sh reads a
-    commit this way, whose read() has git look at the checkout (claude-config#3472)."""
-    if "#" not in command:
-        return first, None
+    the reader gives a caller that asks the very commands it gives one that does not
+    (every_command(), every wrapped string and substitution among them), since read() would then
+    be told nothing new; else asked_reading(sw, read). db-write-ask.sh reads a commit this way,
+    whose read() has git look at the checkout (claude-config#3472). The two readings are compared
+    whatever the command holds: it was skipped for one holding no #, and a heredoc the reader
+    cannot find the end of holds none."""
     plain = sw.every_command(command, cwd)
     same, fault = asked_reading(sw, lambda: sw.every_command(command, cwd) == plain)
     if fault is not None:
@@ -1559,9 +1683,10 @@ def cli_read_approval(command, cwd, judge, sw):
     gives a caller that asks which lines it is unsure of (asking()). The reader took a # for a
     comment by a rule the shell does not follow, so a command on the rest of that line was left out
     of the first reading, and a write there was approved along with the read in front of it. Read
-    the second way such a line is read as the shell runs it, and a # that cannot be told from a
-    comment is named, which approves nothing. Both must approve, so nothing is approved now that
-    was not before."""
+    the second way such a line is read as the shell runs it, and a line the reader cannot vouch
+    for is named, a # it cannot tell from a comment or a heredoc it cannot find the end of, which
+    approves nothing, and why says which in the words for that mark (UNSURE). Both must approve,
+    so nothing is approved now that was not before."""
     ok, why = _cli_read_approval(command, cwd, judge, sw)
     if not ok:
         return ok, why
@@ -1618,13 +1743,14 @@ def dry_push_dir(command, sw, cwd):
     one `supabase db push --dry-run` of the linked project (plain_supabase(), so nothing else in it
     could change the folder), else None (claude-config#2829).
 
-    Since #3472 a command holding a # must be that dry run, of that directory, by both readings: the
-    reader's own, and the one it gives a caller that asks (asked_reading()). One the shell reads on
-    past the # is no dry run of it (None), and one with a # that cannot be told from a comment
-    raises UnsureLine (CannotAsk when the reader cannot be asked), which the Apply check reports as
-    a command it could not read, so no push is let through on the strength of it."""
+    Since #3472 a command must be that dry run, of that directory, by both readings: the reader's
+    own, and the one it gives a caller that asks (asked_reading()). One the shell reads on past a #
+    is no dry run of it (None), and one holding a line the reader names, a # it cannot tell from a
+    comment or a heredoc it cannot find the end of, raises UnsureLine (CannotAsk when the reader
+    cannot be asked), which the Apply check reports as a command it could not read, so no push is
+    let through on the strength of it. The second reading is made whatever the command holds."""
     here = _dry_push_dir(command, sw, cwd)
-    if here is None or "#" not in command:
+    if here is None:
         return here
     sure, fault = asked_reading(sw, lambda: _dry_push_dir(command, sw, cwd))
     if fault is not None:
@@ -1649,7 +1775,7 @@ def _dry_push_dir(command, sw, cwd):
 class SecondReading(tuple):
     """A finding, (why, statement), that is what it is because the command was read a second time,
     as the reader gives it to a caller that asks (claude-config#3472): that it could not be read
-    that way (a # the reader cannot tell from a comment, or a reader that cannot be asked), or that
+    that way (a line the reader names, which is an UnsureFinding, or a reader that cannot be asked), or that
     a run the first reading took for the whole of its command is not that. It is a finding like any
     other to whoever unpacks it, and db-write-ask.sh names the issue by the type."""
     __slots__ = ()
@@ -1663,7 +1789,26 @@ def is_second_reading(finding):
 
 def unsure_why(fault, untold):
     """One of asked_reading()'s faults and what it leaves untold, as one sentence."""
-    return fault + (" and " if fault is UNSURE_LINE else ", so ") + untold
+    return fault + (" and " if isinstance(fault, Unsure) else ", so ") + untold
+
+
+class UnsureFinding(SecondReading):
+    """The SecondReading finding for a line the reader named (an Unsure): (why, None), with .fix,
+    how to write the command so that the reader names nothing there. db-write-ask.sh refuses a
+    command with such a finding as one it could not check, where it asks about every other."""
+
+    def __new__(cls, fault, untold):
+        self = tuple.__new__(cls, (unsure_why(fault, untold), None))
+        self.fix = fault.fix
+        return self
+
+
+def unsure_fix(told):
+    """How to write a command so that the reader names no line in it, when told, one of
+    asked_reading()'s faults or one of bash_findings()'s findings, is about a line the reader
+    named; else None. A caller refuses on it and says this, where a reader that cannot be asked
+    (CANNOT_SAY) has no such rewriting and is asked about (claude-config#3472)."""
+    return told.fix if isinstance(told, (Unsure, UnsureFinding)) else None
 
 
 READ_ON = (", in a command where the shell reads a # inside a word and runs the rest of that line, so it is "
@@ -1685,32 +1830,36 @@ def bash_findings(command, judge, sw, cwd=""):
     runs no database client, or only statements judge() shows to be read only. cwd is the session's
     directory, which a plain Supabase run is read against.
 
-    Since #3472 a command holding a # is read twice: by the reader's own reading, as it always was,
-    and by the one the reader gives a caller that asks which lines it is unsure of
-    (asked_reading()). The reader took a # for a comment by a rule the shell does not follow, so a
-    write on the rest of that line was in no finding, and a push with such a line was Applicable,
-    which let the line through with it. Now:
+    Since #3472 a command is read twice: by the reader's own reading, as it always was, and by the
+    one the reader gives a caller that asks which lines it is unsure of (asked_reading()). The
+    reader took a # for a comment by a rule the shell does not follow, so a write on the rest of
+    that line was in no finding, and a push with such a line was Applicable, which let the line
+    through with it. Now:
 
     - what the first reading finds is still found, in the same words and the same order, so nothing
       asked about before stops being asked about;
     - what only the second reading finds, a write on a line the shell reads on into, is added;
-    - a # the reader cannot tell from a comment (or a reader that cannot be asked) is a finding of
-      its own, the first, since nobody can say such a command holds no write, and no finding
-      beside it is Applicable;
+    - a line the reader names, a # it cannot tell from a comment or a heredoc it cannot find the
+      end of, is a finding of its own, the first (an UnsureFinding, in the words for that mark,
+      which db-write-ask.sh refuses the command on), as is a reader that cannot be asked, since
+      nobody can say such a command holds no write, and no finding beside it is Applicable;
     - a finding is Applicable only when both readings find that same run, the whole of its command,
       so an Apply or a test project list covers nothing the second reading shows beside it; one
       that only one reading finds so says why nothing covers it (is_second_reading()).
 
-    A command holding no # has no # to be unsure of: the reader's `unsure` is a list of them, so its
-    two readings are one, and it is read once."""
+    The second reading was made only of a command holding a #, on the ground that the reader's
+    `unsure` was a list of them. It has named heredocs too since #3492, which hold none, so a
+    write the shell runs out of one of those was in no finding (reproduced at the hook for each
+    kind, test-db-write-ask-unsure-line.sh). Every command naming a database client is now read
+    both ways."""
     if not CLIENT_WORD.search(command):
         return []
     found = _bash_findings(command, judge, sw, cwd)
-    if "#" not in command:
-        return found
     sure, fault = asked_reading(sw, lambda: _bash_findings(command, judge, sw, cwd))
     if fault is not None:
-        return ([SecondReading((unsure_why(fault, "the call could not be classified as read only"), None))]
+        untold = "the call could not be classified as read only"
+        return ([UnsureFinding(fault, untold) if isinstance(fault, Unsure)
+                 else SecondReading((unsure_why(fault, untold), None))]
                 + [tuple(f) if is_applicable(f) else f for f in found])
     whole = {_same_run(f) for f in sure if is_applicable(f)}
     out = [_not_whole(f) if is_applicable(f) and _same_run(f) not in whole else f for f in found]
