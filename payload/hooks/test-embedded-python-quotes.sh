@@ -443,7 +443,7 @@ ngate="$(printf '%s\n' "$tree" | grep -c '^JUDGED payload/hooks/payload-write-ga
 
 # The header says this file holds no python3 call with -c as text, so it is held to that: a scan of
 # inline programs that read its fixtures as programs would judge text written to be wrong.
-self_calls="$(grep -n -E "python""3?( -[A-Za-z]+)* -[A-Za-z]*c +[\"'\\\\]""${EMBEDDED_PY_SELF:-$DIR/test-embedded-python-quotes.sh}" | cut -d: -f1 | tr '\n' ' ')"
+self_calls="$(grep -n -E "python""3?( -[A-Za-z]+)* -[A-Za-z]*c +[\"'\\\\]" "${EMBEDDED_PY_SELF:-$DIR/test-embedded-python-quotes.sh}" | cut -d: -f1 | tr '\n' ' ')"
 [ -z "$self_calls" ] \
   && check "this suite's own file names no python3 call with -c, as its header says" ok \
   || check "this suite's own file names no python3 call with -c, as its header says" "lines [$self_calls] do; write the call as @PY@"
