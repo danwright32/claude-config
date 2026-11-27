@@ -44,7 +44,7 @@ if . "$HERE/lib/push-scope.sh" 2>/dev/null; then
   # One naming none of them goes on to the python3 half, exactly as before.
   # Its words are looked for in every text value the payload holds, as the refusal looks for them, so
   # a command sent as a list of its words is judged rather than handed to the python3 half (#2057).
-  if ! ps_parse_payload "$payload" raw >/dev/null; then
+  if ! parsed="$(ps_parse_payload "$payload" raw)"; then
     case "$(ps_payload_text "$payload")" in
       # gh issue new and gh pr new are gh's other names for the two creates (claude-config#2398).
       *"issue create"*|*"issue new"*|*"issue edit"*|*"issue comment"*|*"pr create"*|*"pr new"*|*"pr edit"*|*"pr comment"*)
@@ -52,6 +52,18 @@ if . "$HERE/lib/push-scope.sh" 2>/dev/null; then
           "a gh issue create missing its milestone, priority or category, or a gh command posting a body from a file that is not there" \
           '*issue create*' '*issue new*' '*issue edit*' '*issue comment*' '*pr create*' '*pr new*' '*pr edit*' '*pr comment*' ;;
     esac
+  # Every command this gate judges runs gh issue or gh pr, so one whose letters spell neither, as the
+  # reader reads them, leaves here before python3 starts (claude-config#3690). That start, on every
+  # Bash call, was most of this hook's 0.11 s of processor time and part of what took the gates on a
+  # read only call past their limits while the Mac was busy. The python3 half printed nothing for
+  # every such command (test-require-issue-fields.sh, #3690). It leaves only while python3 and the
+  # gate's files are there: without them the python3 half below says the gate did not run, on every
+  # call, as it did before, rather than only on the calls that name issue or pr.
+  elif command -v python3 >/dev/null 2>&1 && [ -f "$HERE/issue_field_gate.py" ] && [ -f "$HERE/gh_issue_scan.py" ] \
+      && [ -f "$HERE/lib/shell-words.py" ] \
+      && . "$HERE/lib/command-screen.sh" 2>/dev/null && declare -F cs_may_name >/dev/null \
+      && ! cs_may_name "${parsed%%$'\x1f'*}" '*[iI][sS][sS][uU][eE]*' '*[pP][rR]*'; then
+    exit 0
   fi
 fi
 

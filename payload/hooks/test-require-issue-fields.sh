@@ -900,6 +900,56 @@ denies "#3252 control: no category, a redirection glued to create" "gh issue cre
 denies "#3252 control: no milestone, the first command of a function's body" "f() { gh issue create --title \"T\" $P $C; }; f"
 allows "#3252 control: a complete create with a redirection glued to gh" "gh>/dev/null issue create --title \"T\" $ALL"
 
+# ---------------------------------------------------------------------------
+# claude-config#3690: a command naming neither issue nor pr leaves before python3 starts. This gate
+# runs before every Bash call, and on 2026-11-25 every call started issue_field_gate.py (0.11 s of
+# processor time each, most of it python3 starting and compiling the shared reader) to learn that
+# `uptime; date` files no issue. While the Mac was busy, that start was part of what took the gates
+# on a read only call past their time limits. Every command this gate judges runs gh issue or gh pr,
+# so its letters spell issue or pr once quotes, backslashes and line breaks are taken out, or it
+# holds a $ or a backtick, whose expansion could spell anything (lib/command-screen.sh). Every other
+# command now leaves before python3, with the answer the gate gave it. The rows below pin both
+# halves: spellings the gate reads as a create are still refused, and ordinary commands start nothing.
+# ---------------------------------------------------------------------------
+SHIM3690="$TMP_DIR/shim3690"
+mkdir -p "$SHIM3690"
+REAL_PY3690="$(command -v python3)"
+printf '#!/bin/sh\necho started >> "%s/log"\nexec "%s" "$@"\n' "$SHIM3690" "$REAL_PY3690" > "$SHIM3690/python3"
+chmod +x "$SHIM3690/python3"
+
+# starts_python <description> <yes|no> <command>: whether the hook started python3 for this command.
+starts_python() {
+  local payload got=no
+  payload="$(printf '%s' "$3" | python3 -c '
+import sys, json
+json.dump({"tool_name": "Bash", "tool_input": {"command": sys.stdin.read()}}, sys.stdout)
+')"
+  : > "$SHIM3690/log"
+  printf '%s' "$payload" | env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_BRIDGE_SESSION_ID PATH="$SHIM3690:$PATH" bash "$HOOK" >/dev/null 2>&1
+  [ -s "$SHIM3690/log" ] && got=yes
+  if [ "$got" = "$2" ]; then pass=$((pass + 1)); else
+    fail=$((fail + 1)); echo "FAIL: $1 (wanted python3 started: $2, got: $got)"; fi
+}
+
+# Still judged, and refused.
+denies "#3690 a quote inside the group word is still read as a create" "gh is''sue create --title \"T\" $P $C"
+denies "#3690 a quoted group word and the new alias are still read as a create" "gh \"issue\" new --title \"T\" $P $C"
+denies "#3690 a create inside bash -c is still read" "bash -c 'gh issue create --title T $P $C'"
+denies "#3690 a quote inside pr is still read as a pr create with an empty body file" "gh p''r create --title t --body-file $EMPTYF"
+denies "#3690 a create with a quote that never closes is still refused" "gh issue create --title 'T $ALL"
+# Left early, with the answer the gate gave them.
+allows "#3690 uptime; date passes" 'uptime; date'
+allows "#3690 a sed of a file passes" "sed -n '40,57p' /tmp/notes.txt"
+allows "#3690 a git log passes" 'git log --oneline -3'
+starts_python "#3690 uptime; date starts no python3" no 'uptime; date'
+starts_python "#3690 a sed of a file starts no python3" no "sed -n '40,57p' /tmp/notes.txt"
+starts_python "#3690 a grep with a quoted word starts no python3" no 'grep -n "timeout" /tmp/settings.json | head -20'
+# Controls: each command that may name issue or pr still reaches the gate, so the rows above measure
+# the early exit and not a shim that never records (L1).
+starts_python "#3690 control: gh issue create starts the gate" yes "gh issue create --title \"T\" $ALL"
+starts_python "#3690 control: a quote inside the group word starts the gate" yes "gh is''sue create --title \"T\" $P $C"
+starts_python "#3690 control: a command holding a \$ starts the gate" yes 'echo "$HOME"'
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
