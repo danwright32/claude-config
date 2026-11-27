@@ -9,7 +9,8 @@ import { ACTION } from './page.ts'
 
 // Where a sentence, or a numbered or bulleted line, begins, so an imperative is one said to Dan
 // ("Click **Deploy**", "2. Choose **Carnegie Hall**"), not the word inside a sentence about code.
-const LEAD = String.raw`(?<=^|[.!?]["')\]*_]*\s+|^\s*(?:\d+[.)]\s*|[-*]\s+)?(?:\*\*)?)`
+// Shared with typed.ts (#3652), which asks the same of a slash command.
+export const LEAD = String.raw`(?<=^|[.!?]["')\]*_]*\s+|^\s*(?:\d+[.)]\s*|[-*]\s+)?(?:\*\*)?)`
 
 // #1613: read over whole turns, "waiting on you" was said of a decision, a question, a card, a kind
 // of thing ("replies waiting on you") or this check itself as often as of a step: of the 43 turns of
@@ -39,7 +40,7 @@ const REACH = 500
 // Inside a quotation opened earlier on its line: quoted, not said to Dan ("a sentence like "it's
 // waiting on you" never fires"). The quote right before the phrase is QUOTED's, below. #1613 for
 // "waiting on you", #1680 for #863's other four.
-const quotedOnLine = (before: string): boolean => {
+export const quotedOnLine = (before: string): boolean => {
   const line = before.slice(before.lastIndexOf('\n') + 1)
   const count = (rx: RegExp) => (line.match(rx) ?? []).length
   return count(/"/g) % 2 === 1 || count(/“/g) > count(/”/g)
@@ -120,17 +121,17 @@ const SAVE_FILE = new RegExp(`${LEAD}save (?:the|this|that|your) (?:file|sheet|d
 const CMD_S = /(?:\b[Pp]ress(?:ing)?\s+|\b[Ww]ith\s+|\()(?:\*\*)?(?:(?:Cmd|Command|CMD)\s*[+-]\s*|⌘\s*)S\b/g
 // Said of what Claude, or something else, will do or did ("The watcher will wait, then tell me",
 // "I saved it with Cmd+S"), or of a later, conditional press ("when you press Cmd+S"): no step now.
-const NOT_DANS = /(?:\b(?:I|I've|I'd|I'm|We|we|We've|we've)\b|(?<!\byou )\b(?:will|would|should)\b|(?<!\byou)'ll\b)/
-const LATER = /\b(?:before|when|whenever|if|until|after|once|in case)\s+(?:you\s+)?$/i
+export const NOT_DANS = /(?:\b(?:I|I've|I'd|I'm|We|we|We've|we've)\b|(?<!\byou )\b(?:will|would|should)\b|(?<!\byou)'ll\b)/
+export const LATER = /\b(?:before|when|whenever|if|until|after|once|in case)\s+(?:you\s+)?$/i
 // A sentence ends at a full stop, question or exclamation mark followed by white space, or at a line
 // break: never at the dot inside "config.json" or "v2.1", which cut "I saved config.json with Cmd+S"
 // down to "json with Cmd+S" and lost the "I" (lessons review of #1965 at 60730eb).
-const sentenceStart = (before: string): number => {
+export const sentenceStart = (before: string): number => {
   let start = 0
   for (const m of before.matchAll(/[.!?](?=\s)|\n/g)) start = m.index + 1
   return start
 }
-const dansNow = (plain: string, at: number): boolean => {
+export const dansNow = (plain: string, at: number): boolean => {
   const before = plain.slice(0, at)
   const sentence = before.slice(sentenceStart(before))
   return !quotedOnLine(before) && !NOT_DANS.test(sentence) && !LATER.test(sentence)

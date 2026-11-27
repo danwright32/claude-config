@@ -7,6 +7,7 @@ import { ASKED_PANE, FOLLOW_MS, follow, PANES, UNASKED_PANE } from './place.ts'
 import { clearTurnPages, notePinned, pagesAtStop, registerPages } from './pages.ts'
 import { PROSE_MARK, TURN_TIMEOUT_MS, turnAt } from './turn.ts'
 import { saysNoneNow, waitingPhrase } from './waiting.ts'
+import { apartFromTyped, onCard, typedCommands } from './typed.ts'
 import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
 import { HOLD_MAX_MS, whileHeld } from './mod-kit/held.ts'
 import { turnNow } from './mod-kit/turnnow.ts'
@@ -591,6 +592,14 @@ let interactive = false
 const proseStep = (phrase: string) =>
   `${PROSE_MARK} ("${phrase}"), and no steps card holds it, so he may never see it once the reply scrolls away. Check it against the current state, then put it on the card with the ${TOOL} tool: its direct link or a location Dan can find, its actions one per item, and any value to paste. Then say in one line that it is on the card. Only a step he can do now goes on the card; one waiting on something else stays in the issue. If nothing is actually left for Dan to do now, say so in one line instead.`
 
+// #3652: a slash command handed to Dan to type is a step like any other, and only an unfinished step
+// naming it answers for it, since a card of other steps closes once those are done and reads as all
+// done. It begins with PROSE_MARK, so the turn holding it is never blocked again (turn.ts).
+const typedStep = (commands: readonly string[]) => {
+  const named = commands.map(c => `\`${c}\``).join(', ')
+  return `${PROSE_MARK}: a command to type himself (${named}), and no unfinished step on the steps card holds it, so once he finishes the card's other steps it is forgotten. If he is to type it now, put it on the card with the ${TOOL} tool as a step of its own: location "paste it where you type your messages to me", and the whole command he types as its value. Pinning replaces the card, so pin it again with its unfinished steps and this one. Then say in one line that it is on the card. If he is not to type it now (you only named it, or offered it as an option), say so in one line instead.`
+}
+
 // A step another mod hands the card (#1107), answered by the hooks on the noun's events below, which
 // have the whole engine; the noun's own methods answer only when those hooks failed, and say so.
 const NOUN_UNANSWERED = "the manual steps mod's own hook did not answer"
@@ -880,6 +889,7 @@ export const register: Register = on => {
   // can sit in an earlier one while the last is the session reflection. Once the turn is read, the
   // turn itself says whether this mod already blocked in it, so it blocks at most once per turn even
   // in a chain another Stop hook started; unread, it falls back to the last message and to that chain.
+  // #3652: a slash command handed to Dan to type is answered only by an unfinished step naming it.
   on('classic.Stop', async ($, e, next) => {
     const r = await pagesAtStop($, e, next, interactive)
     if (!interactive) return r
@@ -895,7 +905,9 @@ export const register: Register = on => {
     // answers the page check, one acknowledgement read by both rules that ask for it (L330).
     if (saysNoneNow(said)) return r
     const phrase = said.map(waitingPhrase).find(p => p !== null) ?? null
-    if (!phrase) return r
+    // #3652: a slash command handed to Dan to type, judged against the card's steps, not its presence.
+    const commands = [...new Set(said.flatMap(typedCommands))]
+    if (!phrase && commands.length === 0) return r
     let card: StepsCard | null
     try {
       card = (await $.state.get(cardRef)).value ?? null
@@ -905,8 +917,15 @@ export const register: Register = on => {
       $.ui.log(`Manual steps could not read the steps card, so a step left in prose was not checked: ${message(err)}`)
       return r
     }
-    if (card && !card.isCarried && nextStep(card) !== undefined) return r
-    const ours = proseStep(phrase)
+    const shown = card && !card.isCarried ? card : null
+    const missing = commands.filter(c => !onCard(shown, c))
+    // One step gets one ask (review of pull request 3677): a phrase found only in the words that hand
+    // a held command over is that command's step, which the command's ask already covers. A phrase
+    // anywhere else in the turn is another step, and keeps its own ask.
+    const other = missing.length ? (said.map(t => waitingPhrase(apartFromTyped(t, missing))).find(p => p !== null) ?? null) : phrase
+    const asks = [missing.length ? typedStep(missing) : null, other && !(shown && nextStep(shown) !== undefined) ? proseStep(other) : null].filter(a => a !== null)
+    if (!asks.length) return r
+    const ours = asks.join('\n\n')
     return { ...r, block: r.block ? `${r.block}\n\n${ours}` : ours }
   })
 
