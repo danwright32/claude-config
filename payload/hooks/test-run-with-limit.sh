@@ -438,7 +438,7 @@ def result(name, cond, detail=""):
 
 log, said = [], []
 real = dict(killpg=os.killpg, kill=os.kill, waitpid=os.waitpid, fork=os.fork, pipe=os.pipe,
-            waitid=getattr(os, "waitid", None), platform=sys.platform)
+            setpgid=os.setpgid, waitid=getattr(os, "waitid", None), platform=sys.platform)
 own = os.getpgrp()
 # Stand ins for a system that answers differently, each set by the one case that needs it.
 refuse, swallow = {}, set()
@@ -537,7 +537,7 @@ def restore():
     """Every stand in a case set is taken out again, whatever the case did."""
     refuse.clear()
     swallow.clear()
-    os.pipe, sys.platform = real["pipe"], real["platform"]
+    os.pipe, os.setpgid, sys.platform = real["pipe"], real["setpgid"], real["platform"]
     for name, value in kept.items():
         setattr(m, name, value)
 
@@ -868,6 +868,75 @@ def collected_under():
     result("stand in: a command the system collected from under the runner: one line says nothing was signalled",
            len(said) == 1 and "nothing was signalled" in said[0], said)
 attempt("stand in: a command the system collected from under the runner", collected_under)
+
+# TWO CALLS THAT MEET. The runner and the process that waits to become the command both ask the
+# system to make that process the leader of a new group, at the same moment, and macOS now and
+# then refuses one of the two (EPERM). Measured on 2026-11-27 on the personal MacBook (macOS
+# 26.6.2, python 3.14.4), 13000 children in two runs of a probe that makes only those two calls:
+# the child's own call was refused 10 times and the parent's 10 times, never both, and every child
+# led its own group by the time its parent let it go (one of the ten did not yet when its own
+# call came back). A runner that took the child's refusal as the end ran nothing and came back
+# 125: one stand in run of this suite on 2026-11-27, and 1 of 100 runs through the launcher.
+# The stand ins refuse what the system refused. The command writes down whether it leads its group.
+LEADS = "import os, sys; open(sys.argv[1], 'w').write('leads' if os.getpgrp() == os.getpid() else 'does not lead'); sys.exit(5)"
+def wrote(path):
+    try:
+        with open(path) as f:
+            return f.read()
+    except OSError:
+        return "nothing written"
+
+def calls_meet():
+    d = case_dir("calls-meet")
+    def child_refused(pid, pgid):
+        if os.getpid() != driver:
+            raise PermissionError(1, "Operation not permitted")
+        return real["setpgid"](pid, pgid)
+    os.setpgid = child_refused
+    rc = run(["30", sys.executable, "-c", LEADS, os.path.join(d, "group")])
+    result("stand in: the system refuses the waiting process's own call for a new group while the runner's goes through: the command runs, as the leader of its group, and keeps its code",
+           rc == 5 and wrote(os.path.join(d, "group")) == "leads" and not said and not faults(log), (rc, wrote(os.path.join(d, "group")), said, faults(log)))
+    let_go(d)
+attempt("stand in: the system refuses the waiting process's own call for a new group", calls_meet)
+
+# Both refused when they met. Once it is let go the waiting process asks again, alone (the runner's
+# call has come back by then), and that call goes through.
+def calls_meet_twice():
+    d = case_dir("calls-meet-twice")
+    asked_by_child = []
+    def refused_once(pid, pgid):
+        if os.getpid() == driver:
+            raise PermissionError(1, "Operation not permitted")
+        asked_by_child.append(1)
+        if len(asked_by_child) == 1:
+            raise PermissionError(1, "Operation not permitted")
+        return real["setpgid"](pid, pgid)
+    os.setpgid = refused_once
+    rc = run(["30", sys.executable, "-c", LEADS, os.path.join(d, "group")])
+    result("stand in: the system refuses both calls for a new group when they meet: the waiting process asks again once it is let go, and the command runs as the leader of its group",
+           rc == 5 and wrote(os.path.join(d, "group")) == "leads" and not said and not faults(log), (rc, wrote(os.path.join(d, "group")), said, faults(log)))
+    let_go(d)
+attempt("stand in: the system refuses both calls for a new group when they meet", calls_meet_twice)
+
+# THE OTHER SIDE OF IT: a system that refuses every such call. The command must never run outside
+# a group of its own, where nothing could end what it starts: 125, the command never ran, and the
+# waiting process says why (its words are on this run's standard error, the file beside the work
+# folder). This holds with or without the two cases above, so it is the limit on them: a refusal
+# is passed over only when the process leads its own group all the same.
+def calls_all_refused():
+    d = case_dir("calls-refused")
+    def refused(pid, pgid):
+        raise PermissionError(1, "Operation not permitted")
+    os.setpgid = refused
+    ran = os.path.join(d, "ran")
+    rc = run(["30"] + touches(ran))
+    started = [e[1] for e in log if e[0] == "fork"]
+    words = [line for line in wrote(work + ".err").split("\n") if started and line.startswith("the runner's child %d said: " % started[-1])]
+    result("stand in: a system that refuses every call for a new group: 125, the command never ran, nothing was signalled against the rule, and the one line is the waiting process saying nothing was run",
+           rc == 125 and not os.path.exists(ran) and not faults(log) and not said and len(words) == 1 and "nothing was run" in words[0],
+           (rc, os.path.exists(ran), faults(log), said, words))
+    let_go(d)
+attempt("stand in: a system that refuses every call for a new group", calls_all_refused)
 
 # A system the runner cannot see a group on is refused before anything starts (pick's refusal).
 def unseeing():

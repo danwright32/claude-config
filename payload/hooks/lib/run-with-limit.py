@@ -535,7 +535,17 @@ def become(command, gate_r, gate_w, chld_was):
     code = EXIT_REFUSED
     try:
         os.close(gate_w)
-        os.setpgid(0, 0)
+        # The runner makes this same call for this process at the same moment (run, below), and
+        # macOS now and then refuses one of two that meet: EPERM. Measured on 2026-11-27 on the
+        # personal MacBook (macOS 26.6.2, python 3.14.4), 13000 children in two runs of a probe
+        # that makes only these two calls: this side was refused 10 times, the parent's 10 times,
+        # never both, and every child led its own group once its parent's call had come back (one
+        # of the ten did not yet when its own came back). So a refusal here is not the end, and
+        # is not the answer either: where this process is gets asked once it is let go, below.
+        try:
+            os.setpgid(0, 0)
+        except OSError:
+            pass
         # Python ignores these two for itself, and an ignored signal stays ignored in the command.
         for name in ('SIGPIPE', 'SIGXFSZ'):
             if hasattr(signal, name):
@@ -545,6 +555,14 @@ def become(command, gate_r, gate_w, chld_was):
         if chld_was == signal.SIG_IGN:
             signal.signal(signal.SIGCHLD, signal.SIG_IGN)
         if os.read(gate_r, 1) == b'1':
+            # Let go, so the runner's own call has come back and nothing meets one made now. A
+            # process that does not lead a group of its own never becomes the command: the group
+            # is what the limit ends. A refusal here is raised, and this process ends with 125
+            # and says why.
+            if os.getpgrp() != os.getpid():
+                os.setpgid(0, 0)
+                if os.getpgrp() != os.getpid():
+                    raise RuntimeError('it does not lead a process group of its own')
             try:
                 os.execvp(command[0], command)
             except OSError as e:
@@ -724,7 +742,7 @@ def run(argv):
     try:
         os.close(gate_r)
         try:
-            os.setpgid(pid, pid)     # the child does the same; the second of the two changes nothing
+            os.setpgid(pid, pid)     # the child does the same, and one of two that meet may be refused (become)
         except OSError:
             pass
         stoppers = [sig for sig in carried() if catch(sig, asked.note, handled)]
