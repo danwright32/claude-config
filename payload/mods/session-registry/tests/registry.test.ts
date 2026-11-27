@@ -102,7 +102,10 @@ const world = (on: On, opts: WorldOpts = {}) => {
     if (!(e.path in files)) throw new Error(`no file ${e.path}`)
     return { value: files[e.path] as string }
   })
+  // Every path asked about, in the order asked (#3673).
+  const exists: string[] = []
   on('fs.exists', ($, e) => {
+    exists.push(e.path)
     const failed = opts.existsFails?.[e.path]
     // Refused, which is how a check the engine could not finish reaches the mod.
     if (failed !== undefined) return { deny: failed } as never
@@ -202,7 +205,7 @@ const world = (on: On, opts: WorldOpts = {}) => {
   const own = (id = 's1') => JSON.parse(files[`${DIR}/${id}.json`] ?? 'null')
   // A file written by someone other than the registry (its owner in another session, or the test).
   const touch = put
-  return { files, writes, reads, finds, lists, logs, removed, bounds, clock, own, touch, hang: (p: string) => void (hangs = p), vanish: (p: string) => void (vanishing = p), unhang: () => unhang(), hangReached, hold, release: () => gate.release() }
+  return { files, writes, reads, finds, lists, exists, logs, removed, bounds, clock, own, touch, hang: (p: string) => void (hangs = p), vanish: (p: string) => void (vanishing = p), unhang: () => unhang(), hangReached, hold, release: () => gate.release() }
 }
 
 const start = ($: { session: { start: (e: never) => Promise<unknown> } }) =>
@@ -1066,6 +1069,63 @@ test('a list that cannot read every record within its own time refuses, naming h
   const said = await pending
   w.unhang()
   expect(said).toMatch(/^list failed: session-registry read 2 of 3 session records within 8 seconds/)
+})
+
+// #3673: every step of a list is a question put to Claude Code's main thread, which every agent of a
+// session shares, and Claude Code ends the whole list at 10 seconds however little of that the
+// registry itself used. On the personal MacBook, 2026-11-20 to 2026-11-27, 26 calls the collision
+// guard refused had the list ended that way; around them 59 of 82 quick calls by any agent of the
+// same session took 5 seconds or more (ordinarily 0.9 seconds at the middle), and one process's
+// main thread was seen at 90% or more of a processor for 6 seconds on end. Each step taken one
+// after another waits its own turn on that thread, so the look for each open session's transcript,
+// where the last list found it, is begun with the read of that session's record, not once every
+// record has been read: three steps in turn where there were four.
+test("a list looks for an open session's transcript while its record is being read, not in a step after (#3673)", withConsumer, async ($, on) => {
+  const T = `${'/Users'}/x/.claude/projects/-Users-x-app/o1.jsonl`
+  const w = world(on, { files: { [`${DIR}/o1.json`]: other('o1', `${'/Users'}/x/app`), [`${DIR}/slow.json`]: other('slow', `${'/Users'}/x/slow`), [T]: '' } })
+  await start($)
+  // A first list finds where o1's transcript is, and the registry remembers it.
+  expect((await openOf($, 'o1'))?.transcriptPath).toBe(T)
+  const first = w.exists.length
+  w.hang(`${DIR}/slow.json`)
+  const pending = call($, 'list')
+  await w.hangReached
+  // One record's read is still out, and the transcript already known has been looked for.
+  const early = w.exists.slice(first).filter(p => p === T).length
+  w.unhang()
+  const l = JSON.parse(await pending) as { open: { sessionId: string; transcriptPath: string | null }[] }
+  expect(early).toBe(1)
+  expect(l.open.find(r => r.sessionId === 'o1')?.transcriptPath).toBe(T)
+  // Looked for once in this list, never a second time in a step of its own.
+  expect(w.exists.slice(first).filter(p => p === T).length).toBe(1)
+})
+
+test('a transcript gone since the last list is still looked for where its folder puts it, and never handed on from memory (#3673)', withConsumer, async ($, on) => {
+  const OLD = `${'/Users'}/x/.claude/projects/-Users-x-elsewhere/o1.jsonl`
+  const NEW = `${'/Users'}/x/.claude/projects/-Users-x-app/o1.jsonl`
+  const w = world(on, { files: { [`${DIR}/o1.json`]: other('o1', `${'/Users'}/x/app`), [OLD]: '' } })
+  await start($)
+  expect((await openOf($, 'o1'))?.transcriptPath).toBe(OLD)
+  // The file the registry remembers is gone and the session's transcript is now in its own folder.
+  delete w.files[OLD]
+  w.files[NEW] = ''
+  expect((await openOf($, 'o1'))?.transcriptPath).toBe(NEW)
+  // And one that is nowhere is said to be nowhere.
+  delete w.files[NEW]
+  expect((await openOf($, 'o1'))?.transcriptPath).toBeNull()
+})
+
+test('a look for a remembered transcript that fails is said on the record, as a failed look in its own step was (#3673, #1636)', withConsumer, async ($, on) => {
+  const T = `${'/Users'}/x/.claude/projects/-Users-x-app/o1.jsonl`
+  const fails: Record<string, string> = {}
+  const w = world(on, { files: { [`${DIR}/o1.json`]: other('o1', `${'/Users'}/x/app`), [T]: '' }, existsFails: fails })
+  await start($)
+  expect((await openOf($, 'o1'))?.transcriptPath).toBe(T)
+  fails[T] = 'EIO'
+  delete w.files[T]
+  const r = (JSON.parse(await call($, 'list')) as { open: { sessionId: string; transcriptPath: string | null; transcriptUnread?: string }[] }).open.find(o => o.sessionId === 'o1')
+  expect(r?.transcriptPath).toBeNull()
+  expect(r?.transcriptUnread).toContain(`whether ${T} is there could not be checked (session-registry: $.fs.exists: EIO)`)
 })
 
 test('a record moved away between the listing and its read is left out, never named unreadable (#911)', withConsumer, async ($, on) => {
