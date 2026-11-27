@@ -887,6 +887,30 @@ out="$(TMPDIR="$LEFT" STORE="$ANN/yes" WAS="Old words." GH_ONE_FAILS=1 arun "$TM
 check_eq "#3669 a description GitHub would not give stops the plan the same way" "12 0" "$rc $(issues_filed)"
 check "#3669 in its own words" "ANNOUNCE-LINE-UNREAD" "$out"
 check_eq "#3669 and none of the three refusals leaves a temporary file behind" "0" "$(ls -A "$LEFT" | wc -l | tr -d ' ')"
+# One name only is held to the milestone's OWN title (the review's third pass). ensure-milestone.sh
+# reuses a milestone whose title is the plan's once everything but letters and digits is dropped,
+# and the record of his answers keeps spaces and punctuation in a feature's name. So a plan titled
+# "On boarding revamp" lands in the milestone "Onboarding revamp", and the merge gate, which looks
+# his answers up under the milestone's title, would find none of the ones given under the plan's.
+# Such a plan is refused with nothing filed and the milestone's description as it was.
+mkdir -p "$ANN/apart"
+decided_line "$ANN/apart" "On boarding revamp" yes "Announce it"
+APART="$(plan_with apart '.announce = "yes" | .title = "On boarding revamp"')"
+out="$(TMPDIR="$LEFT" STORE="$ANN/apart" WAS="Old words." arun "$TMP/existing.json" "$APART")"; rc=$?
+check_eq "#3669 M R9 a plan whose title is not its milestone's own is refused, with his yes about the plan's title on the record" "12" "$rc"
+check "#3669 M R9 as an answer that is not about that milestone" "ANNOUNCE-NOT-HIS-ANSWER" "$out"
+check "#3669 M R9 naming both titles" 'The plan is titled "On boarding revamp" and its milestone on GitHub is "Onboarding revamp"' "$out"
+check_eq "#3669 M R9 filing nothing and leaving the milestone's description as it was" "0 0 Old words." "$(issues_filed) $(milestone_touched) $(desc_line)"
+check_eq "#3669 M and that refusal leaves no temporary file behind either" "0" "$(ls -A "$LEFT" | wc -l | tr -d ' ')"
+out="$(WAS="Old words." arun "$TMP/existing.json" "$(plan_with apart-unasked '.announce = "unasked" | .title = "On boarding revamp"')")"; rc=$?
+check_eq "#3669 M R9 and so is unasked under a title that is not the milestone's own" "12 0 Old words." "$rc $(milestone_touched) $(desc_line)"
+out="$(STORE="$ANN/apart" WAS="Old words." DRY_RUN=1 arun "$TMP/existing.json" "$APART")"; rc=$?
+check_eq "#3669 M R9 a dry run refuses it too" "12" "$rc"
+check_eq "#3669 M R9 and previews no line the real run would not write" "0" "$(printf '%s\n' "$out" | grep -c 'WOULD-WRITE-ANNOUNCE-LINE')"
+# The control: a title that differs from the milestone's in letter case alone is the same name to
+# the record, so that plan is still taken, and the line is written into the milestone it resolved to.
+out="$(STORE="$ANN/yes" WAS="Old words." arun "$TMP/existing.json" "$(plan_with lower '.announce = "yes" | .title = "onboarding revamp"')")"; rc=$?
+check_eq "#3669 M (the control) a title differing in letter case alone is still taken" "0 Old words.\n\n$YES_LINE" "$rc $(desc_line)"
 # A dry run says what it would write and writes nothing.
 out="$(STORE="$ANN/yes" DRY_RUN=1 arun "$TMP/none.json" "$ANN/yes.json")"; rc=$?
 check "#3669 a dry run previews the line" "WOULD-WRITE-ANNOUNCE-LINE $YES_LINE" "$out"
