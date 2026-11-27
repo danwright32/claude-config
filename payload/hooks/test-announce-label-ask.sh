@@ -40,7 +40,12 @@ fi
 WORK="$(cd "$(mktemp -d)" && pwd -P)"
 trap 'chmod -R u+rwx "$WORK" 2>/dev/null; rm -rf "$WORK"' EXIT
 REAL_STORE="${CLAUDE_HOME:-$HOME/.claude}/state/announce-approvals"
-real_before="$(ls -la "$REAL_STORE" 2>/dev/null | cksum)"
+# This Mac's real record as it stood before any case ran, and what a line of this suite's names: a
+# path under its temporary folder, or one of its two repositories. The last check holds the suite
+# to it: aaf_record_untouched, in lib/announce-approval-fixture.sh, which says what that check can
+# and cannot see, and whose own cases are in test-announce-approval.sh (#3669).
+OWN_MARKS=("path:$WORK" "repo:acme/" "repo:other/repo")
+real_before="$(aaf_record_mark "$REAL_STORE")"
 # Named as the real one is, so a shell command naming the record names it here too.
 STORE="$WORK/state/announce-approvals"
 REPO="$WORK/repo"
@@ -534,8 +539,64 @@ check "a command naming neither the label nor the record passes" "$(passed "$r" 
 r="$(call Write "$(python3 -c 'import json, sys; print(json.dumps({"file_path": sys.argv[1], "content": "x"}))' "$WORK/plain.md")")"
 check "a Write naming neither passes" "$(passed "$r" && echo ok || echo "$r")"
 
+echo "his answer about announcing a feature is read into the record before the milestone helper runs (#3669)"
+# The helper reads the record only, so the hook that sees the call running it reads his picker in.
+HELPER_CALL="bash ~/.claude/skills/milestone/create-milestone.sh acme/widget /tmp/plan.json"
+decided_lines() { local n; n="$(grep -c '"kind": "decided"' "$STORE/record.jsonl" 2>/dev/null)"; printf '%s' "${n:-0}"; }
+forget
+D="$WORK/deciding.jsonl"; aaf_new "$D"
+aaf_talk "$D" decide acme/widget "Hand back"
+r="$(TALK="$D" run "ls -la")"
+check "a call that does not run the helper reads nothing in" "$(passed "$r" && [ "$(decided_lines)" = 0 ] && echo ok || echo "$r $(decided_lines) lines")"
+r="$(TALK="$D" AGENT=1 run "$HELPER_CALL")"
+check "a subagent's call running the helper passes and writes nothing" "$(passed "$r" && [ "$(decided_lines)" = 0 ] && echo ok || echo "$r $(decided_lines) lines")"
+r="$(TALK="$D" run "$HELPER_CALL")"
+check "a call running the helper passes, with nothing said" "$(passed "$r" && echo ok || echo "$r")"
+check "and his answer in this session's picker is on the record before it runs" "$([ "$(decided_lines)" = 1 ] && grep -q '"answer": "yes"' "$STORE/record.jsonl" && echo ok || cat "$STORE/record.jsonl" 2>/dev/null)"
+r="$(TALK="$D" run "$HELPER_CALL")"
+check "run again, it writes no second line" "$(passed "$r" && [ "$(decided_lines)" = 1 ] && echo ok || echo "$r $(decided_lines) lines")"
+# What stands between his answer and the record is said beside the call, which still runs.
+aaf_talk "$D" decide acme/widget "Hand over" "Not announcing" prefilled
+r="$(TALK="$D" run "$HELPER_CALL")"
+check "a picker that was never put to him is said beside the call, to Dan and the session" "$([[ "$r" == "none rc=0||"*"Hand over"*"already filled in"* ]] && echo ok || echo "$r")"
+# His answer in ANOTHER session, in a picker the real hook noted by its ids alone (#3789: the
+# transcript did not hold its line yet and the hook's copy carried no metadata). The call running
+# the helper is session s2's, which holds no picker, so the note is all that leads to his answer.
+forget
+E="$WORK/deciding-elsewhere.jsonl"; aaf_new "$E"
+# Session s2's own transcript, which holds no picker at all.
+S2="$WORK/deciding-s2.jsonl"; aaf_new "$S2"
+said="$(AAF_PAYLOAD_FORM=nometadata aaf_talk "$E" decide-payload toolu_decelse1 acme/widget "Hand back" "Not announcing" | noted)"
+check "#3669 the hook that notes a picker says nothing after a discovery picker, and notes it" "$([ -z "$said" ] && on_record answered toolu_decelse1 && echo ok || echo "$said $(cat "$STORE/record.jsonl" 2>&1)")"
+r="$(TALK="$S2" SESSION=s2 run "$HELPER_CALL")"
+check "R9 #3669 a note of a discovery picker the transcript does not hold reads no answer in, and is not settled" "$(passed "$r" && [ "$(decided_lines)" = 0 ] && ! on_record settled toolu_decelse1 && echo ok || echo "$r $(cat "$STORE/record.jsonl" 2>&1)")"
+aaf_talk "$E" decide-late toolu_decelse1 acme/widget "Hand back"
+aaf_talk "$E" decide-answer toolu_decelse1 acme/widget "Hand back" "Not announcing"
+r="$(TALK="$S2" SESSION=s2 AGENT=1 run "$HELPER_CALL")"
+check "#3669 a subagent's call running the helper writes nothing of that picker" "$(passed "$r" && [ "$(decided_lines)" = 0 ] && echo ok || echo "$r $(decided_lines) lines")"
+r="$(TALK="$S2" SESSION=s2 run "$HELPER_CALL")"
+check "R9 still possible #3669: his Not announcing in another session, in a picker noted by its ids alone, is on the record before the helper runs" "$(passed "$r" && on_record decided toolu_decelse1 '"answer": "no"' && [ "$(decided_lines)" = 1 ] && echo ok || echo "$r $(cat "$STORE/record.jsonl" 2>&1)")"
+# An approval picker noted in that same session is none of this job's: the call that runs the helper
+# gives it no line, and the label command still finds his Approve afterwards.
+forget
+F2="$(aaf_shown "$WORK/both-kinds" "$WORK/both-kinds.jsonl" "$POST")"
+AAF_PAYLOAD_FORM=nometadata aaf_talk "$WORK/both-kinds.jsonl" payload toolu_bothapprove acme/widget "$F2" | noted >/dev/null
+aaf_talk "$WORK/both-kinds.jsonl" late toolu_bothapprove acme/widget "$F2"
+aaf_talk "$WORK/both-kinds.jsonl" answer toolu_bothapprove acme/widget "$F2"
+r="$(TALK="$S2" SESSION=s2 run "$HELPER_CALL")"
+check "#3669 a call running the helper gives a noted approval picker no line: it is neither settled nor approved there" "$(passed "$r" && ! on_record settled toolu_bothapprove && ! on_record approved toolu_bothapprove && echo ok || echo "$r $(cat "$STORE/record.jsonl" 2>&1)")"
+r="$(SESSION=s2 run "$EDIT")"
+check "R10 still possible #3669: and the label command then finds his Approve, in that picker noted by its ids alone" "$(passed "$r" && on_record approved toolu_bothapprove && echo ok || echo "$r $(cat "$STORE/record.jsonl" 2>&1)")"
+# One job per call: a call that also names the label is judged for the label alone, inside the time
+# the hook is registered with, and reads no answer in.
+forget
+r="$(TALK="$D" run "$HELPER_CALL; echo $LABEL")"
+check "a call running the helper that also names the label reads nothing in" "$([ "$(decided_lines)" = 0 ] && echo ok || echo "$r $(decided_lines) lines")"
+r="$(broken "$HELPER_CALL")"
+check "with its rule file gone, a call running the helper is refused, saying the hook did not run" "$([[ "$r" == *"announce-label-ask.sh failed"*" rc=2" ]] && echo ok || echo "$r")"
+
 echo "the record is this suite's own"
-check "no case wrote to this Mac's real record" "$([ "$(ls -la "$REAL_STORE" 2>/dev/null | cksum)" = "$real_before" ] && echo ok || echo "$REAL_STORE changed during the run")"
+check "no case wrote to this Mac's real record" "$(aaf_record_untouched "$REAL_STORE" "$real_before" "${OWN_MARKS[@]}")"
 
 echo "  $pass passed, $fail failed"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
