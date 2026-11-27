@@ -12,6 +12,13 @@ set -uo pipefail
   exit 1
 }
 suite_deadline_arm || exit $?
+# The one wait here (for the second to change, in the clock order case) gives up at the ceiling only
+# a hang reaches (lib/hang-wait.sh), never at one a loaded Mac reaches with nothing broken.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/hang-wait.sh" || {
+  echo "FAIL: $(basename "$0"): lib/hang-wait.sh is missing, so this suite's wait has no ceiling."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$DIR/draft-edit-review-notice.sh"
@@ -140,6 +147,100 @@ if [ "$(id -u)" != 0 ]; then
   check "state that has nowhere to be kept: said at session start" "could not make" "$out"
   check_not "and nothing is offered" "$DUE" "$out"
 fi
+
+# --- the review's should fix points -------------------------------------------------------------------
+# S8: the mark is of a draft Slack SAVED. answered <now> <the tool's answer, as JSON>.
+answered(){ printf '{"session_id":"s","cwd":"/tmp","hook_event_name":"PostToolUse","tool_name":"mcp__claude_ai_Slack__slack_send_message_draft","tool_input":{"channel_id":"C0FIXTURE01","message":"invented"},"tool_response":%s}' "$2" | DRAFT_EDIT_REVIEW_NOW="$1" bash "$HOOK" 2>&1; }
+fresh notsaved
+answered $T0 '[{"type":"text","text":"{\"ok\": false, \"error\": \"attached_draft_exists\"}"}]' >/dev/null
+check_eq "a draft Slack answered with one of its draft errors leaves no mark" "" "$(cat "$STATE/draft-saved" 2>/dev/null)"
+answered $T0 '"Error: channel_not_found"' >/dev/null
+check_eq "nor one answered with an error as plain text" "" "$(cat "$STATE/draft-saved" 2>/dev/null)"
+answered $T0 '{"is_error": true, "content": [{"type": "text", "text": "the draft could not be made"}]}' >/dev/null
+check_eq "nor one whose answer is marked as an error" "" "$(cat "$STATE/draft-saved" 2>/dev/null)"
+answered $T0 '{"ok": false}' >/dev/null
+check_eq "nor one whose answer says it did not work" "" "$(cat "$STATE/draft-saved" 2>/dev/null)"
+check_eq "so no review comes due on drafts that were never saved" "" "$(start $((T0 + 60)))"
+answered $((T0 + 5)) '[{"type":"text","text":"{\"result\": \"Draft saved\", \"channel_link\": \"https://example.invalid/c\"}"}]' >/dev/null
+check_eq "a draft Slack saved is marked" "$((T0 + 5))" "$(cat "$STATE/draft-saved" 2>/dev/null)"
+# The hook and the reader hold one list of the draft tool's errors.
+IFS= read -r -d '' same_errors <<'PY' || true
+import re, sys
+sys.stdout.reconfigure(errors="replace")
+def names(path, start, end):
+    try:
+        with open(path, "rb") as f:
+            text = f.read().decode("utf-8", "replace")
+    except OSError as e:
+        return "unreadable %s" % e
+    cut = text[text.find(start):]
+    return sorted(set(re.findall(r"[a-z]+(?:_[a-z]+)+", cut[:cut.find(end)])))
+a = names(sys.argv[1], 'DRAFT_ERRORS = "', '"\n')
+b = names(sys.argv[2], "DRAFT_ERROR = re.compile(", "\n\n")
+print("same" if a == b and isinstance(a, list) and len(a) == 6 else "hook: %r; reader: %r" % (a, b))
+PY
+errors="$(python3 -B -c "$same_errors" "$HOOK" "$DIR/lib/draft-edit-diff.py" </dev/null 2>&1)"
+check_eq "the errors that mean nothing was saved are the same six in the hook and the reader" "same" "$errors"
+
+# A stored time with leading zeros is a time in base ten, never an octal number bash stops on.
+fresh zeros
+saved $T0 >/dev/null
+echo 0900 > "$STATE/last-offered"
+out="$(start $((T0 + 60)))"
+check "a last offer written with a leading zero is read as that many seconds: due" "$DUE" "$out"
+check_not "and bash does not stop on it as an octal number" "value too great" "$out"
+check_eq "nothing else is printed beside the one line" "1" "$(printf '%s\n' "$out" | grep -c .)"
+
+# S4: the clock is read AFTER the state files. The mark is a FIFO here, so the hook waits at it; the
+# writer answers only once the hook has opened it and the second has then changed, with that later
+# second. A clock read before the files calls that "a time later than now". This case uses the real clock.
+if command -v mkfifo >/dev/null 2>&1; then
+  fresh clockorder
+  mkdir -p "$STATE"; mkfifo "$STATE/draft-saved"
+  { s="$(date +%s)"; hang_wait '[ "$(date +%s)" != "$s" ]' 0.05; date +%s; } > "$STATE/draft-saved" 2>/dev/null &
+  writer=$!
+  out="$(printf '{"hook_event_name":"SessionStart","source":"startup"}' | env -u DRAFT_EDIT_REVIEW_NOW bash "$HOOK" 2>&1)"
+  kill "$writer" 2>/dev/null; wait "$writer" 2>/dev/null
+  check "a draft marked while the session was starting is not a time later than now" "$DUE" "$out"
+  check_not "and is never said to be one" "later than now" "$out"
+else
+  fail=$((fail + 1)); echo "FAIL: there is no mkfifo here, so the order of the clock and the state files was not tested"
+fi
+
+# S5 (a): every path exits 0, so no session start and no tool call can fail on this hook.
+code(){ bash "$HOOK" >/dev/null 2>&1; echo $?; }
+fresh codes
+check_eq "exit 0 after the draft tool" "0" "$(printf '{"hook_event_name":"PostToolUse","tool_name":"mcp__claude_ai_Slack__slack_send_message_draft"}' | DRAFT_EDIT_REVIEW_NOW=$T0 code)"
+check_eq "exit 0 when the review is due" "0" "$(printf '{"hook_event_name":"SessionStart"}' | DRAFT_EDIT_REVIEW_NOW=$((T0 + 60)) code)"
+check_eq "exit 0 when nothing is due" "0" "$(printf '{"hook_event_name":"SessionStart"}' | DRAFT_EDIT_REVIEW_NOW=$((T0 + 120)) code)"
+echo "last tuesday" > "$STATE/last-offered"
+check_eq "exit 0 when the state cannot be read" "0" "$(printf '{"hook_event_name":"SessionStart"}' | DRAFT_EDIT_REVIEW_NOW=$((T0 + 180)) code)"
+check_eq "exit 0 on a payload that is not JSON" "0" "$(printf 'not json' | code)"
+check_eq "exit 0 on no payload at all" "0" "$(: | code)"
+check_eq "exit 0 on another event" "0" "$(printf '{"hook_event_name":"Stop"}' | code)"
+if [ "$(id -u)" != 0 ]; then
+  chmod 555 "$STATE"
+  check_eq "exit 0 when the folder cannot be written" "0" "$(printf '{"hook_event_name":"SessionStart"}' | DRAFT_EDIT_REVIEW_NOW=$((T0 + 240)) code)"
+  chmod 755 "$STATE"
+fi
+
+# S5 (b): the offer is due and the folder can be written, and the move that records it fails (a full
+# disk does this). A stand in for mv that fails is first on the path, so that branch itself is run.
+fresh cannotrecord
+saved $T0 >/dev/null
+mkdir -p "$WORK/bin"; printf '#!/bin/sh\nexit 1\n' > "$WORK/bin/mv"; chmod 755 "$WORK/bin/mv"
+out="$(printf '{"hook_event_name":"SessionStart"}' | PATH="$WORK/bin:$PATH" DRAFT_EDIT_REVIEW_NOW=$((T0 + 60)) bash "$HOOK" 2>&1)"
+check "an offer whose record cannot be written is said as that" "could not record, in" "$out"
+check "with why it is not offered" "it would be offered again at every session start" "$out"
+check_not "and the review is not offered" "$DUE" "$out"
+check_eq "no half written file is left behind" "draft-saved" "$(ls "$STATE" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
+
+# S5 (c): outside the suites neither the folder nor the clock is taken from the environment.
+mkdir -p "$WORK/outside"
+printf '{"hook_event_name":"PostToolUse","tool_name":"mcp__claude_ai_Slack__slack_send_message_draft"}' | HOOK_TESTS_RUNNING=0 CLAUDE_HOME="$WORK/outside" DRAFT_EDIT_REVIEW_STATE_DIR="$WORK/elsewhere" DRAFT_EDIT_REVIEW_NOW=5 bash "$HOOK" >/dev/null 2>&1
+check_eq "outside a suite the state folder is not taken from the environment" "" "$(ls "$WORK/elsewhere" 2>/dev/null)"
+mark="$(cat "$WORK/outside/state/draft-edit-review/draft-saved" 2>/dev/null)"
+check_eq "and the mark is kept under the config folder, at the real time, not the one in the environment" "1" "$([ -n "$mark" ] && [ "$mark" -gt 1700000000 ] && echo 1 || echo 0)"
 
 # --- wiring -----------------------------------------------------------------------------------------
 wired="$(python3 -B - "$SETTINGS" <<'PY'
