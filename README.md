@@ -6466,6 +6466,54 @@ refusal that day, at 2:32 PM ET, was not a helper grown past the gate. No load f
 for that minute, so the likely cause (a Mac too busy to give the gate a quarter of a core for 11
 seconds) is inferred, not measured.
 
+## Slack drafts are compared with what Dan sent
+
+Sessions save each Slack message as a draft and Dan edits it before he sends it. A measurement on
+the work MacBook on 2026-11-24 paired 106 drafts with what he sent: 22 went out as drafted and 29
+were heavily rewritten, and the commonest edit was cutting figures and shortening (#3554). Three
+pieces turn the edits he keeps making into written rules, each one his to accept.
+
+- **The reader**, `hooks/lib/draft-edit-diff.py`. It reads this Mac's session records, pairs each
+  draft Slack saved with the next post by `--author` in the same thread, as a later session read it
+  back, and prints counts by kind of edit: sent as drafted, heavily rewritten, figures cut, length
+  cut, the ask reworded, the opening changed. A draft is used once, a post with no draft before it
+  is left out, and both are compared with Slack's formatting set aside. It only prints. It imports
+  nothing that can send a request or write a file and opens files only to read, because the records
+  name Slack's posting address and the Slack drafts gate refuses a program that reads them and
+  could write. Message text is printed only with `--examples`: one pair for each recurring kind. A
+  kind is recurring at 10 pairs in 3 threads, a setting chosen on 2026-11-27 so that one long thread
+  cannot make an edit look like a habit; under it the kind is reported as too thin and no rule is
+  offered. A read result it finds no message in is counted and said, a run in which none could be
+  read exits 4, and `--shapes` prints what the results are made of (counts and field names only).
+- **The offer**, the `draft-edit-review` skill. It runs the reader, tells Dan the counts, and asks
+  one question for each recurring kind: the proposed rule in one sentence, the pairs it rests on,
+  one example pair, and Accept, Not now or Never offer this again. On Accept a second question asks
+  where the rule goes (the no-ai-tells skill, the Slack section of the global `CLAUDE.md`, or the
+  project's own file), the session makes that edit itself, and the ask before saving mod asks him
+  again at the save. `skills/draft-edit-review/decisions.py` keeps each answer, and a kind he
+  accepted or declined for good is passed to the next run with `--skip`. `decisions.py forget`
+  takes an answer back.
+- **The weekly notice**, `hooks/draft-edit-review-notice.sh`, at session start. It says the review
+  is due, in one line, when a week has passed since it last said so and a draft has been saved on
+  this Mac since the last review finished. It reads no record, runs nothing and asks nothing. The
+  same script runs after the Slack draft tool to record the second a draft was saved, and nothing
+  about the draft. State it cannot read is said by name and the review is not offered.
+
+What the pairing cannot see: a thread no later session read back, a draft Dan deleted (a post he
+then wrote in that thread reads as heavily rewritten), a message he wrote with no draft, and the
+other Mac's sessions.
+
+State is in `~/.claude/state/draft-edit-review/` on each Mac and is never synced: `draft-saved`,
+`last-offered` and `last-review` (one time each), `author` (Dan's Slack member id) and
+`decisions.json`. It is per Mac on purpose. This repository is public, the counts come from one
+Mac's own records, and where a rule went can name a private project. The cost is that a kind
+declined on one Mac can be offered once on the other.
+
+The layout inside a thread or channel read was not measured on the personal MacBook, which on
+2026-11-27 held no draft call and no read that succeeded in 8,628 record files. The fixtures write
+it as the connector was seen to answer earlier, with invented text, and the first run on the work
+MacBook is the check: `python3 ~/.claude/hooks/lib/draft-edit-diff.py --shapes`.
+
 ## Read only queries are approved without asking
 
 Auto mode's classifier refused a plain select against a production database on 2026-11-05 ("[Production
