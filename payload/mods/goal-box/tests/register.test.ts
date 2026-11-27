@@ -262,6 +262,13 @@ type World = {
    * written, so the reasons stay readable in a test.
    */
   idFails?: string
+  /**
+   * #3843: what a tool call answers at the bottom, by its tool_use_id; absent answers nothing of
+   * note. An AskUserQuestion answers as Claude Code's dialog does, `{ result: { questions, answers } }`.
+   */
+  toolAnswers?: Record<string, unknown>
+  /** #3843: what the run of the end of turn review's own test answers in place of yes or no. */
+  workTest?: Gh
 }
 // manual steps' four reasons for not showing a step it was handed (addStep, word for word).
 const NOT_SHOWN = {
@@ -273,6 +280,21 @@ const NOT_SHOWN = {
 type PinAnswer = 'shown' | keyof typeof NOT_SHOWN | 'refused' | 'threw' | 'says nothing' | 'null' | 'no answer yet'
 const link = (repo: string, pr: number, at = '2026-10-24T18:00:00.000Z') =>
   JSON.stringify({ type: 'pr-link', sessionId: 's1', prNumber: pr, prUrl: `https://github.com/${repo}/pull/${pr}`, prRepository: repo, timestamp: at })
+// #3843: where the end of turn review's test is installed, and what it says of each tool name these
+// tests use. Not a copy of its rule: tests/test-goal-box-work-test.sh runs the mod's own command
+// against the real payload/hooks/turn-worked.py and fails when one of these rows is not what it says.
+const WORK_TEST_FILE = `${'/Users'}/dan/.claude/hooks/turn-worked.py`
+const WORK_TEST_SAYS: Record<string, 'yes' | 'no'> = {
+  Edit: 'yes',
+  Write: 'yes',
+  Bash: 'yes',
+  Agent: 'yes',
+  'mcp__is-it-live__card': 'yes',
+  'mcp__goal-box__goal_accomplished': 'yes',
+  Read: 'no',
+  Grep: 'no',
+  AskUserQuestion: 'no',
+}
 
 const world = (on: On, init: Partial<World> = {}) => {
   const w: World = { goal: { state: 'none' }, cardFails: '', cards: [], transcript: T, registry: 'open', disk: {}, here: '/repo', owed: [], verdicts: {}, links: [], open: {}, agents: [], agentsFail: '', submitFails: [], held: [], holdFails: '', view: () => ({ exitCode: 1, stdout: '', stderr: 'unexpected' }), stepsCard: null, compactQueued: false, compactFollowUp: null, holds: [], jobs: [], jobsFail: '', procs: { exitCode: 0, stdout: '{"found":[]}' }, reader: () => [], pinned: [], pinAnswer: 'shown', pinCalls: 0, releasePin: () => undefined, withdrawFails: '', withdrawn: [], written: {}, ...init }
@@ -285,6 +307,12 @@ const world = (on: On, init: Partial<World> = {}) => {
   on('process.run', ($, e) => {
     runs.push([...e.argv])
     const ok = (stdout: string, exitCode = 0, stderr = '') => ({ value: { exitCode, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false } }) as never
+    // #3843: the end of turn review's own test of a tool's name, run from its file by path.
+    if (e.argv[0] === 'python3' && e.argv[e.argv.length - 2] === WORK_TEST_FILE) {
+      if (w.workTest) return ok(w.workTest.stdout, w.workTest.exitCode, w.workTest.stderr ?? '')
+      const said = WORK_TEST_SAYS[e.argv[e.argv.length - 1] as string]
+      return said === undefined ? ok('', 1, `the stand in for the review's test has no answer for ${e.argv[e.argv.length - 1]}`) : ok(`${said}\n`)
+    }
     if (e.argv[0] === '__modkit') {
       if (e.argv[1] === 'card') {
         if (w.cardFails) return ok('', 1, w.cardFails)
@@ -393,7 +421,7 @@ const world = (on: On, init: Partial<World> = {}) => {
   on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
   on('classic.Stop', () => ({}) as never)
   // Every other tool runs and answers nothing of note (#3770: the Bash calls the card reads).
-  on('tool.call', () => ({ result: '', text: '' }) as never)
+  on('tool.call', ($, e) => (w.toolAnswers?.[String((e as { tool_use_id?: unknown }).tool_use_id)] ?? { result: '', text: '' }) as never)
   on('fs.write', ($, e) => {
     w.written[e.path] = e.text
     return { value: undefined } as never
@@ -445,6 +473,9 @@ test('the tool is offered to an interactive session with its rules in the prompt
   expect(tools.map(t => t.name)).toEqual(['goal_accomplished'])
   expect(tools[0]?.isDeferred).toBe(false)
   expect(tools[0]?.description).toMatch(/once/)
+  // #3843: the description says when a later call is right, so "once" is not read as never again.
+  expect(tools[0]?.description).toMatch(/again once work he then picked in a picker is finished/)
+  expect(tools[0]?.description).not.toMatch(/at most once per request/)
   expect(tools[0]?.description).toMatch(/\/goal/)
 })
 
@@ -1505,4 +1536,200 @@ test('a command the reader throws on trips it too (#3770)', withAll, async ($, o
   await workedAndQuiet($, clock)
   expect(w.pinned).toEqual([])
   expect(reasonsOf(w)?.reasons.join(' ')).toMatch(/could not be read in full/)
+})
+
+// ---- #3843: work Dan picks in a picker ----
+// Dan's answer on the issue (2026-11-27): an answer he gives in a picker is a new request only when
+// the session then does work. Before it, a box was owed for work he picked and none could be shown
+// until he typed again. The events here stand in for a session: the picker's answer is what Claude
+// Code's dialog hands a tool.call hook, and the end of turn review's own test of a tool's name
+// answers from WORK_TEST_SAYS above.
+const QUESTION = 'Which follow up should be done now?'
+const PICKER = { questions: [{ question: QUESTION, header: 'Next', options: [{ label: 'Fix the count', description: '' }, { label: 'Leave it', description: '' }], multiSelect: false }] }
+const PICKED = { result: { questions: PICKER.questions, answers: { [QUESTION]: 'Fix the count' } }, text: '' }
+// The session asks Dan a picker, which comes back as `answer` says (PICKED: he chose).
+const picks = (w: World, $: Engine$, id: string, answer: unknown = PICKED, more: Record<string, unknown> = {}) => {
+  w.toolAnswers = { ...w.toolAnswers, [id]: answer }
+  return $.tool.call({ tool: 'AskUserQuestion', tool_use_id: id, ...PICKER, ...more } as never)
+}
+// The session calls a tool; `answer` is what the call comes back with where it is not a plain result.
+const does = (w: World, $: Engine$, tool: string, id: string, more: Record<string, unknown> = {}, answer?: unknown) => {
+  if (answer !== undefined) w.toolAnswers = { ...w.toolAnswers, [id]: answer }
+  return $.tool.call({ tool, tool_use_id: id, ...more } as never)
+}
+const MORE = { goal: 'Fix the count', shipped: ['#3850 closed: the count'] }
+// One request of Dan's, typed, and its box shown.
+const askedAndShown = async ($: Engine$, text: string, id: string) => {
+  await says($, text)
+  expect((await box($, ASKED, id)).deny).toBeUndefined()
+}
+
+test('work Dan picked in a picker, finished: the box is shown again with no new message from him (#3843)', withKit, async ($, on) => {
+  const { w, cards } = world(on)
+  await start($)
+  await askedAndShown($, 'Run the monthly sync', 'b1')
+  await picks(w, $, 'q1')
+  await does(w, $, 'Edit', 'e1', { file_path: '/repo/a.ts' })
+  expect((await box($, MORE, 'b2')).deny).toBeUndefined()
+  expect((await cards()).map(c => c.toolUseId)).toEqual(['b1', 'b2'])
+  // Once for that work too: a third call with nothing new picked is refused.
+  expect((await box($, MORE, 'b3')).deny).toMatch(/already shown for this request/)
+})
+
+test('a picker answer with nothing done after it earns no box, and the refusal says so (#3843)', withKit, async ($, on) => {
+  const { w, cards } = world(on)
+  await start($)
+  await askedAndShown($, 'Run the monthly sync', 'b1')
+  await picks(w, $, 'q1')
+  const none = await box($, MORE, 'b2')
+  expect(none.deny).toMatch(/Dan has answered a picker since, and nothing has been changed since his answer/)
+  expect(none.deny).toMatch(/an answer alone is not a new request/)
+  // Reading is not work, by the end of turn review's own test.
+  await does(w, $, 'Read', 'r1', { file_path: '/repo/a.ts' })
+  await does(w, $, 'Grep', 'g1', { pattern: 'count' })
+  expect((await box($, MORE, 'b3')).deny).toMatch(/nothing has been changed since his answer/)
+  await does(w, $, 'Bash', 'x9', { command: 'gh issue close 3850' })
+  expect((await box($, MORE, 'b4')).deny).toBeUndefined()
+  expect((await cards()).map(c => c.toolUseId)).toEqual(['b1', 'b4'])
+})
+
+// Every way a picker comes back that is not Dan answering it.
+const NO_ANSWER: [string, unknown][] = [
+  ['dismissed', { deny: 'The user does not want to answer right now' }],
+  ['failed', { isError: true, text: 'The dialog could not be shown', result: 'The dialog could not be shown' }],
+  ['closed by itself while he was away', { result: { questions: PICKER.questions, answers: { [QUESTION]: 'Fix the count' }, afkTimeoutMs: 60_000 }, text: '' }],
+  ['answered with nothing', { result: { questions: PICKER.questions, answers: {} }, text: '' }],
+  ['answered with an empty answer', { result: { questions: PICKER.questions, answers: { [QUESTION]: '  ' } }, text: '' }],
+  ['a result that is not a dialog\'s', { result: 'ok', text: 'ok' }],
+]
+for (const [how, answer] of NO_ANSWER)
+  test(`a picker ${how} is no answer: work after it opens no new box (#3843)`, withKit, async ($, on) => {
+    const { w, cards } = world(on)
+    await start($)
+    await askedAndShown($, 'Run the monthly sync', 'b1')
+    await picks(w, $, 'q1', answer)
+    await does(w, $, 'Edit', 'e1', { file_path: '/repo/a.ts' })
+    const again = await box($, MORE, 'b2')
+    expect(again.deny).toMatch(/already shown for this request/)
+    // The refusal says what would count, so a session knows when a later call is right.
+    expect(again.deny).toMatch(/a message he types, or work you do after an answer he gives in a picker/)
+    // The control: the same steps with his answer show the box.
+    await picks(w, $, 'q2')
+    await does(w, $, 'Edit', 'e2', { file_path: '/repo/a.ts' })
+    expect((await box($, MORE, 'b3')).deny).toBeUndefined()
+    expect((await cards()).map(c => c.toolUseId)).toEqual(['b1', 'b3'])
+  })
+
+// What counts as work after his answer: a call of the main conversation that ran, whose tool the end
+// of turn review's own test (payload/hooks/turn-worked.py) counts as able to change something.
+const WORK_ROWS: [string, string, Record<string, unknown>, unknown, boolean][] = [
+  ['an edit', 'Edit', { file_path: '/repo/a.ts' }, undefined, true],
+  ['a write', 'Write', { file_path: '/repo/b.ts' }, undefined, true],
+  ['a command', 'Bash', { command: 'gh pr merge 12' }, undefined, true],
+  ['an agent', 'Agent', { prompt: 'Fix the count' }, undefined, true],
+  ['a connected tool that acts', 'mcp__is-it-live__card', {}, undefined, true],
+  ['a read', 'Read', { file_path: '/repo/a.ts' }, undefined, false],
+  ['a search', 'Grep', { pattern: 'count' }, undefined, false],
+  ['an edit a guard refused, which changed nothing', 'Edit', { file_path: '/repo/a.ts' }, { deny: 'held by a guard' }, false],
+  // A settings hook's refusal reaches a mod as an errored result, as a command that failed does.
+  ['an edit that came back as an error, as one a hook refused does', 'Edit', { file_path: '/repo/a.ts' }, { isError: true, result: 'refused by a hook', text: 'refused by a hook' }, false],
+  ["a subagent's edit, which is not the main conversation's", 'Edit', { file_path: '/repo/a.ts', agentId: 'a1' }, undefined, false],
+  ['a second picker he answers', 'AskUserQuestion', PICKER, PICKED, false],
+]
+for (const [what, tool, input, answer, counts] of WORK_ROWS)
+  test(`after a picker answer, ${what} ${counts ? 'is work: the box is shown' : 'is not work: no box'} (#3843)`, withKit, async ($, on) => {
+    const { w } = world(on)
+    await start($)
+    await askedAndShown($, 'Run the monthly sync', 'b1')
+    await picks(w, $, 'q1')
+    await does(w, $, tool, 'w1', input, answer)
+    const r = await box($, MORE, 'b2')
+    if (counts) expect(r.deny).toBeUndefined()
+    else expect(r.deny).toMatch(/nothing has been changed since his answer/)
+  })
+
+test("the box's own tool is never work: a refused call after a picker answer does not earn the next one (#3843)", withKit, async ($, on) => {
+  const { w, cards } = world(on)
+  await start($)
+  await askedAndShown($, 'Run the monthly sync', 'b1')
+  await picks(w, $, 'q1')
+  expect((await box($, MORE, 'b2')).deny).toMatch(/nothing has been changed since his answer/)
+  expect((await box($, MORE, 'b3')).deny).toMatch(/nothing has been changed since his answer/)
+  expect((await cards()).map(c => c.toolUseId)).toEqual(['b1'])
+})
+
+test('two calls at once after one answer are one new request, not two (#3843)', withKit, async ($, on) => {
+  const { w } = world(on)
+  await start($)
+  await askedAndShown($, 'Run the monthly sync', 'b1')
+  await picks(w, $, 'q1')
+  await Promise.all([does(w, $, 'Edit', 'e1', { file_path: '/repo/a.ts' }), does(w, $, 'Edit', 'e2', { file_path: '/repo/b.ts' })])
+  expect((await box($, MORE, 'b2')).deny).toBeUndefined()
+  expect((await box($, MORE, 'b3')).deny).toMatch(/already shown for this request/)
+})
+
+test('a message Dan types after a picker answer is the request: the answer left waiting opens nothing more (#3843)', withKit, async ($, on) => {
+  const { w } = world(on)
+  await start($)
+  await askedAndShown($, 'Run the monthly sync', 'b1')
+  await picks(w, $, 'q1')
+  await askedAndShown($, 'Now make the status bar quieter', 'b2')
+  await does(w, $, 'Edit', 'e1', { file_path: '/repo/a.ts' })
+  const r = await box($, MORE, 'b3')
+  expect(r.deny).toMatch(/already shown for this request/)
+  expect(r.deny).not.toMatch(/since his answer/)
+})
+
+test("the review's test of a tool that cannot be run: the refusal says whether work followed his answer is not known, and it counts once it can be (#3843)", withKit, async ($, on) => {
+  const { w, logs } = world(on, { workTest: { exitCode: 1, stdout: '', stderr: "python3: can't open file" } })
+  await start($)
+  await askedAndShown($, 'Run the monthly sync', 'b1')
+  await picks(w, $, 'q1')
+  await does(w, $, 'Edit', 'e1', { file_path: '/repo/a.ts' })
+  const r = await box($, MORE, 'b2')
+  expect(r.deny).toMatch(/whether anything has been changed since his answer could not be read \(.*can't open file.*\)/)
+  expect(r.deny).not.toMatch(/nothing has been changed/)
+  // An answer that is neither yes nor no is unread too, never taken for no.
+  w.workTest = { exitCode: 0, stdout: 'maybe\n' }
+  await does(w, $, 'Edit', 'e2', { file_path: '/repo/a.ts' })
+  expect((await box($, MORE, 'b3')).deny).toMatch(/could not be read \(.*maybe.*\)/)
+  delete w.workTest
+  await does(w, $, 'Edit', 'e3', { file_path: '/repo/a.ts' })
+  expect((await box($, MORE, 'b4')).deny).toBeUndefined()
+  expect(logs.join('\n')).toMatch(/whether Edit can change something could not be read/)
+})
+
+test('picked work finished and shipped, and no box for it: the session is asked whether the work is finished (#3843, #2523)', withLive, async ($, on) => {
+  const { w, submitted } = world(on, { verdicts: CARDED })
+  await start($)
+  await askedAndShown($, 'Merge PR 1700', 'b1')
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_DONE))).toEqual([])
+  await picks(w, $, 'q1')
+  await does(w, $, 'Edit', 'e1', { file_path: '/repo/a.ts' })
+  await turnEnds($)
+  const asked = submitted.filter(s => s.text.startsWith(ASKS_DONE))
+  expect(asked).toHaveLength(1)
+  // What it says is what was measured: a box was shown since his message, none for what he picked.
+  expect(asked[0]?.text).toMatch(/no Goal accomplished box was shown for what he last asked for/)
+})
+
+// The close this session card reads the same count of requests (#3770), so work Dan picked is his
+// latest request there too: the card waits for that work's box, and can go up again after it.
+test("work Dan picked is his latest request for the close card too: no card until that work's box is shown (#3843, #3770)", withAll, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($)
+  await says($, 'Run the monthly sync')
+  await workedAndQuiet($, clock)
+  expect(w.pinned).toHaveLength(1)
+  await turnStarts($, 't2')
+  await picks(w, $, 'q1')
+  await does(w, $, 'Edit', 'e1', { file_path: '/repo/a.ts' })
+  await workedAndQuiet($, clock, { box: false })
+  expect(w.pinned).toHaveLength(1)
+  expect(reasonsOf(w)).toMatchObject({ pinned: false })
+  expect(reasonsOf(w)?.reasons.join(' ')).toMatch(/no Goal accomplished box was shown for Dan's latest request/)
+  await turnStarts($, 't3')
+  await workedAndQuiet($, clock, { id: 'b2' })
+  expect(w.pinned).toHaveLength(2)
 })

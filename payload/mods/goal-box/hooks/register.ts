@@ -3,6 +3,7 @@ import { cutOwn, watchesOnly } from './mod-kit/hold.ts'
 import type { ModKitGoal } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import type { GoalBoxShown } from '../types/index.d.ts'
 import { DESCRIPTION, MOD, NAME, SCHEMA, TOOL, askDoneText, askText, boxText, cardOf, cardedSince, decide, linkedIn, mergeFactsOf, mergeHolds, readInput, waitKey, type Confirmed, type Holds, type Linked } from './box.ts'
+import { WORK_TEST_MS, alreadyShownText, answered, workRead, workTestArgv, type WorkRead } from './request.ts'
 import { askAnyAccount, type GhRun } from './mod-kit/ghaccounts.ts'
 import { askPr } from './mod-kit/prmerged.ts'
 import { errorText, missingOf } from './mod-kit/skew.ts'
@@ -28,7 +29,9 @@ import { CLOSE_HEADING, CLOSE_TITLE, NO_BOX, PROCESS_LIST, PROCESS_LOOK, PROCESS
 //    merge or a deploy is not confirmed (is it live's own record, with a background merge it still
 //    calls waiting asked of GitHub again here, #1818), or a pull request the session
 //    touched is still open (GitHub, asked as each account), and at most one box per request (a
-//    second needs a new message from Dan, mod-kit's one reader of his own words). What reminds the
+//    second needs a new request from Dan: a message he types, mod-kit's one reader of his own words,
+//    or since #3843 an answer he gives in a picker that the session then does work after, as
+//    request.ts tells it). What reminds the
 //    session to call it is the last step of both end of turn reviews (hooks/review/
 //    session-reflection.md, #1749, and issue-review.md, #2523). A reflection folded into the issue
 //    review once dropped its line (#2523), so a prompt is not the whole reminder (L27): at a turn end
@@ -44,6 +47,8 @@ const shownRef = { plugin: 'goal-box', key: 'shown' } as const
 const askedRef = { plugin: 'goal-box', key: 'asked' } as const
 const requestAtRef = { plugin: 'goal-box', key: 'requestAt' } as const
 const askedDoneRef = { plugin: 'goal-box', key: 'askedDone' } as const
+// #3843, request.ts: an answer of Dan's in a picker that no work has followed yet.
+const pickerRef = { plugin: 'goal-box', key: 'picker' } as const
 // #3770, the close this session card's own record.
 const closeSeqRef = { plugin: 'goal-box', key: 'closeSeq' } as const
 const closeStopRef = { plugin: 'goal-box', key: 'closeStop' } as const
@@ -256,7 +261,7 @@ const mergeHoldsNow = async ($: EngineInterface): Promise<Holds> => {
 }
 
 /**
- * Records the box as shown unless a box with this key, or any box since Dan's last message, already
+ * Records the box as shown unless a box with this key, or any box since Dan's last request, already
  * was: read, judged and written with the version read, again on a miss, so two calls at once show one.
  */
 const claim = async ($: EngineInterface, entry: GoalBoxShown): Promise<boolean> => {
@@ -346,6 +351,70 @@ const askIfDone = async ($: EngineInterface): Promise<void> => {
     if ((await $.state.set(askedDoneRef, asked.value ?? -1, { ifVersion: held.version })).isSet) break
   }
   $.ui.log(`Work shipped since Dan's last message, but the session could not be asked whether the work is finished (${failed}); it is asked again at the next turn end.`)
+}
+
+// ---- A picker answer followed by work (#3843) ----
+// The rule and its words are request.ts; this is where the session's events are read.
+
+/** Counts one more request of Dan's. */
+const bumpPrompts = async ($: EngineInterface): Promise<void> => {
+  for (let i = 0; i < 10; i++) {
+    const held = await $.state.get(promptsRef)
+    if ((await $.state.set(promptsRef, (held.value ?? 0) + 1, { ifVersion: held.version })).isSet) return
+  }
+}
+
+// What the review's test said of each tool name since this session started or the mod was loaded:
+// yes and no only, never a run that could not be read. The test reads nothing but the name, so one
+// run a name is enough, where a run for every call would put a process start on each of them.
+const workSaid = new Map<string, boolean>()
+
+/** The end of turn review's own test of one tool name, run from its file (request.ts); never throws. */
+const changesSomething = async ($: EngineInterface, tool: string): Promise<WorkRead> => {
+  const known = workSaid.get(tool)
+  if (known !== undefined) return { changes: known }
+  try {
+    const home = await $.env.get('HOME')
+    if (!home) return { unread: "HOME is not set, so the end of turn review's test cannot be found" }
+    const read = workRead(await $.process.run(workTestArgv(home, tool), { timeoutMs: WORK_TEST_MS }))
+    if ('changes' in read) workSaid.set(tool, read.changes)
+    return read
+  } catch (err) {
+    return { unread: errorText(err, MOD) }
+  }
+}
+
+/** The answered picker counted as a request of Dan's, once: two calls at once count it once. */
+const pickedWorkBegan = async ($: EngineInterface): Promise<void> => {
+  for (let i = 0; i < 10; i++) {
+    const held = await $.state.get(pickerRef)
+    if (!held.value) return
+    if ((await $.state.set(pickerRef, null, { ifVersion: held.version })).isSet) return bumpPrompts($)
+  }
+}
+
+/** Says on the waiting answer why work after it could not be told, for the refusal that reads it. */
+const pickerUnread = async ($: EngineInterface, why: string): Promise<void> => {
+  for (let i = 0; i < 10; i++) {
+    const held = await $.state.get(pickerRef)
+    if (!held.value) return
+    if ((await $.state.set(pickerRef, { unread: why }, { ifVersion: held.version })).isSet) return
+  }
+}
+
+/**
+ * A tool call of the main conversation that ran, once it has come back, while Dan has answered a
+ * picker that no work has followed: a tool the review's test counts is that work, and his answer
+ * becomes a new request. Read only while an answer is waiting, so no other call pays for the test.
+ */
+const noteCall = async ($: EngineInterface, tool: string): Promise<void> => {
+  if (!(await $.state.get(pickerRef)).value) return
+  const read = await changesSomething($, tool)
+  if ('unread' in read) {
+    debug($, `whether ${tool} can change something could not be read (${read.unread}), so it is not counted as work after the picker Dan answered`)
+    return pickerUnread($, read.unread)
+  }
+  if (read.changes) await pickedWorkBegan($)
 }
 
 // ---- The close this session card (#3770) ----
@@ -511,6 +580,8 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.state.set(interactiveRef, e.isInteractive === true)
     if (typeof e.cwd === 'string' && e.cwd) startCwd = e.cwd
+    // #3843: the review's test is asked afresh in each session, since its file can change between them.
+    workSaid.clear()
     // Only where somebody is at the prompt to see it; offered in full, not behind a search, so the
     // session knows when to call it.
     if (e.isInteractive) await $.tool.register({ name: NAME, description: DESCRIPTION, inputSchema: SCHEMA, isDeferred: false })
@@ -531,10 +602,10 @@ export const register: Register = on => {
     }
     if (isDans) {
       await $.state.set(requestAtRef, await $.clock.now())
-      for (let i = 0; i < 10; i++) {
-        const held = await $.state.get(promptsRef)
-        if ((await $.state.set(promptsRef, (held.value ?? 0) + 1, { ifVersion: held.version })).isSet) break
-      }
+      await bumpPrompts($)
+      // #3843: his message is the request now, so an answer he gave in a picker that no work
+      // followed opens nothing more.
+      await $.state.set(pickerRef, null)
     }
     return r
   })
@@ -556,7 +627,8 @@ export const register: Register = on => {
     const d = decide({ goal, input, shown, prompts, holds })
     if ('refuse' in d) return { deny: `No box yet: ${d.refuse.join('; ')}.` }
     const entry: GoalBoxShown = { key: d.show.key, kind: d.show.kind, at: await $.clock.now(), prompts }
-    if (!(await claim($, entry))) return { deny: 'No box yet: the box was already shown for this request; it shows again only once Dan has asked for something new.' }
+    // #3843: said in the words of what is known of a picker Dan answered since (request.ts).
+    if (!(await claim($, entry))) return { deny: alreadyShownText((await $.state.get(pickerRef)).value) }
     const text = boxText(d.show.goal, input.shipped)
     try {
       await $.modkit.card(cardOf(String(toolUseId), d.show.goal, input.shipped))
@@ -608,6 +680,24 @@ export const register: Register = on => {
     const args = toolArgs(e as unknown as Record<string, unknown>)
     if (args.run_in_background === true || typeof args.command !== 'string') return r
     await noteLeftBehind($, args.command)
+    return r
+  }).catch(watchesOnly)
+
+  // #3843: every tool call of the main conversation, once it has come back. An answer Dan gives in a
+  // picker is kept until work follows it; the call that carried his answer is never that work, nor
+  // is the box's own tool (which the review's test would count, by its name). Nor is a call that was
+  // refused or came back as an error: a settings hook's refusal reaches a mod as an errored result,
+  // the same as a command that failed, so neither is counted and the next call that runs clean is.
+  // Every other call is read for being that work (noteCall).
+  on('tool.call', async ($, e, next) => {
+    const r = await next(e)
+    if (e.agentId !== undefined || e.tool === TOOL) return r
+    if (e.tool === 'AskUserQuestion') {
+      if (answered(r)) await $.state.set(pickerRef, {})
+      return r
+    }
+    const came = r as { deny?: unknown; isError?: unknown }
+    if (came.deny === undefined && came.isError !== true) await noteCall($, e.tool)
     return r
   }).catch(watchesOnly)
 
