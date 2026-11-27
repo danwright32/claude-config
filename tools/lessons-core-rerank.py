@@ -7,7 +7,12 @@
         --seats lesson-core-seats.txt --out-seats P
         [--now 2026-10-09T15:00:00Z] [--stale-days 14] [--max-moves 10] [--band 5] [--cap N]
         --out-tsv P --out-html P --out-list P
+        [--lessons payload/LESSONS.md [--sync claude-sync] [--uncovered 5]]
     ... --seed-seats 20 --out-seats lesson-core-seats.txt     (once: choose the seats, see below)
+
+With --lessons, a proposal also lists the --uncovered (5) lessons PR reviews cite most whose entry
+carries neither a CHECK: nor a NO CHECK: line (claude-config#3744), read through claude-sync's own
+reading of check lines; README "The most cited lessons no check holds" says how, and how it fails.
 
 It only PROPOSES. Nothing here runs `claude-sync core-set`: the page names the command, and Dan
 approves. The rules are his decisions of 2026-09-24 (#563) and 2026-10-09 (#566, "Keep your 355
@@ -59,6 +64,7 @@ import datetime
 import html
 import os
 import re
+import subprocess
 import sys
 
 # No cache left in tools/lib (#2854).
@@ -79,6 +85,122 @@ DEFAULT_STALE_DAYS = 14
 CORE_SET_DEFAULT_CAP = 20000
 EXIT_REFUSED, EXIT_UNMEASURED, EXIT_INACTIVE = 1, 2, 3
 TAG_VALUES = ("diff",) + UNREVIEWABLE
+
+# THE MOST CITED LESSONS NO CHECK HOLDS (claude-config#3744). Five, the smaller answer to the issue's
+# open question, so the month's picker stays short.
+DEFAULT_UNCOVERED = 5
+DEFAULT_SYNC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "claude-sync")
+# Whether an entry carries a check line is claude-sync's one reading of it (lesson_check_records,
+# which reads the entries through lesson_entries_render), never a second copy of the pattern here
+# (L370). claude-sync has no command printing that reading, so the two functions are taken from its
+# text and run as they are, each found by the exact line it is defined on. A line that differs may
+# mean the function is now called differently, so it is never run on a guess.
+RECOGNISER = (
+    ("lesson_entries_render", "lesson_entries_render(){   # $1 = the full lessons file  $2 = index | split | pairs | entries | checks"),
+    ("lesson_check_records", "lesson_check_records(){   # $1 = the full lessons file"),
+)
+CHECK_KINDS = ("full", "partial", "nocheck", "neither", "bad")
+NEXT_STEP = ("NEXT: for each lesson listed, ask whether a lint or a test can catch it (the question #3245 asks of a "
+             "new lesson), then ask Dan in the lesson picker for the entry with the answer as its check line: "
+             "CHECK: <path> (full) or (partial), with an issue filed in the project that needs the lint, or "
+             "NO CHECK: <why no check can hold it>. A lesson entry changes only through that picker.")
+
+
+def function_source(text, name, signature):
+    """(source, None) for one function of claude-sync's text, from the line defining it to the first
+    line that is exactly '}', or (None, why) when it is not there or its definition line changed."""
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        if not line.startswith(name + "(){"):
+            continue
+        if line.rstrip() != signature:
+            return None, f"defines {name} as '{line.rstrip()[:140]}', not '{signature}', so how it is called may have changed"
+        for j in range(i + 1, len(lines)):
+            if lines[j] == "}":
+                return "\n".join(lines[i:j + 1]), None
+        return None, f"never closes {name}"
+    return None, None
+
+
+def check_records(sync, lessons):
+    """({n: (kind, detail)}, None) from claude-sync's reading of every entry, or (None, why not)."""
+    try:
+        with open(lessons, encoding="utf-8") as f:
+            f.read(1)
+    except OSError as err:
+        return None, f"the lessons file {lessons} cannot be read ({err.strerror or err})"
+    try:
+        with open(sync, encoding="utf-8", errors="surrogateescape") as f:
+            text = f.read()
+    except OSError as err:
+        return None, f"claude-sync at {sync} cannot be read ({err.strerror or err}), and it holds the one reading of check lines"
+    sources, missing = [], []
+    for name, signature in RECOGNISER:
+        src, why = function_source(text, name, signature)
+        if why:
+            return None, f"{sync} {why}"
+        if src is None:
+            missing.append(name)
+        sources.append(src)
+    if missing:
+        return None, f"{sync} holds no {', '.join(missing)}, the reading of check lines this list is made from"
+    script = "\n".join(sources) + '\nlesson_check_records "$1"\n'
+    try:
+        p = subprocess.run(["bash", "-c", script, "lesson-check-records", lessons],
+                           capture_output=True, text=True, errors="replace", timeout=300)
+    except (OSError, subprocess.TimeoutExpired) as err:
+        return None, f"reading the check lines could not run ({err})"
+    if p.returncode != 0:
+        return None, f"reading the check lines failed (exit {p.returncode}: {' '.join(p.stderr.split())[:300]})"
+    records = {}
+    for line in p.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 2 or not re.fullmatch(r"L[0-9]+", parts[0]) or parts[1] not in CHECK_KINDS:
+            return None, f"the reading of check lines gave a line in no known shape: {line[:120]}"
+        records[int(parts[0][1:])] = (parts[1], parts[2] if len(parts) > 2 else "")
+    if not records:
+        return None, f"the reading of check lines found no lesson entry in {lessons}"
+    return records, None
+
+
+def uncovered_list(a, used, cites):
+    """The most cited lessons whose entry carries neither line, from the review column of the counts
+    the rank already read, with every entry whose line is malformed named on its own. Returns
+    {"rows": [(n, reviews)], "bad": [(n, reviews, detail)], "error": why it was not made or None}."""
+    out = {"rows": [], "bad": [], "error": None}
+    for g in used:
+        if g.get("ledger") != "read":
+            state = g.get("ledger") or "not recorded"
+            out["error"] = (f"{g['host']}'s review ledger was {state} when its counts were taken, so its review "
+                            "counts are unknown, not zero")
+            return out
+    records, why = check_records(a.sync, a.lessons)
+    if why:
+        out["error"] = why
+        return out
+    reviews = {n: c[1] for n, c in cites.items()}
+    out["bad"] = sorted(((n, reviews.get(n, 0), d) for n, (k, d) in records.items() if k == "bad"),
+                        key=lambda b: (-b[1], b[0]))
+    pool = sorted((n for n, (k, _d) in records.items() if k == "neither" and reviews.get(n, 0) > 0),
+                  key=lambda n: (-reviews[n], n))
+    out["rows"] = [(n, reviews[n]) for n in pool[:a.uncovered]]
+    return out
+
+
+def print_uncovered(u, window):
+    if u["error"]:
+        print(f"UNCOVERED NOT LISTED: {u['error']}. The moves above stand; only this list was not made.")
+        return
+    for n, r in u["rows"]:
+        print(f"UNCOVERED L{n}: cited by {r} review{'' if r == 1 else 's'} over {window} days, and its entry "
+              "carries neither a CHECK: nor a NO CHECK: line")
+    for n, r, d in u["bad"]:
+        print(f"CHECK LINE MALFORMED L{n}: cited by {r} review{'' if r == 1 else 's'}, and claude-sync says it {d}. "
+              "It is counted neither as held nor as unheld; claude-sync lesson-faults names it")
+    if u["rows"]:
+        print(NEXT_STEP)
+    else:
+        print("UNCOVERED NONE: every lesson PR reviews cited carries a CHECK: or NO CHECK: line")
 
 
 def core_ids(path):
@@ -125,9 +247,18 @@ def main(argv):
     # The Mac this runs on, so an untagged lesson in the OTHER Mac's band reads as waiting for that
     # Mac's daily job rather than as this Mac's tagging failing (#566).
     ap.add_argument("--host", default="")
+    # The most cited lessons no check holds (claude-config#3744): the full lessons file, the
+    # claude-sync whose reading of check lines decides it, and how many to list.
+    ap.add_argument("--lessons", default="")
+    ap.add_argument("--sync", default=DEFAULT_SYNC)
+    ap.add_argument("--uncovered", type=int, default=DEFAULT_UNCOVERED)
     a = ap.parse_args(argv)
     if a.seed_seats and not a.out_seats:
         print("--seed-seats needs --out-seats, the file to write the seats into")
+        return EXIT_REFUSED
+    if a.uncovered < 1:
+        # A list of none would read as no lesson needing a check (L98).
+        print(f"--uncovered {a.uncovered} asks for a list of no lessons; give 1 or more")
         return EXIT_REFUSED
 
     if a.now:
@@ -257,7 +388,12 @@ def main(argv):
         if not os.path.exists(path):
             unmeasured.append(f"UNMEASURED: {h}: no counts at {path}, so its citations are unknown, not zero.")
             continue
-        got = read_counts(path)
+        try:
+            got = read_counts(path)
+        except (OSError, UnicodeDecodeError) as err:
+            # A file there that cannot be opened is counts unknown, never a traceback (L11).
+            unmeasured.append(f"UNMEASURED: {h}: its counts file cannot be read ({getattr(err, 'strerror', None) or err}): {path}.")
+            continue
         if got["host"] != h:
             unmeasured.append(f"UNMEASURED: {h}: the counts filed under {h} were taken on {got['host'] or 'no Mac it names'}.")
         elif got["bad"]:
@@ -421,11 +557,16 @@ def main(argv):
     print(f"APPLY: {command}")
     if a.out_seats:
         print(f"SEATS: commit {os.path.abspath(a.out_seats)} as lesson-core-seats.txt in the same change")
-    write_page(a, rows, lines, sections, size, summary, over, after, cap, command, used, window, when, notes, len(ins) + len(outs))
+    uncovered = uncovered_list(a, used, cites) if a.lessons else None
+    if uncovered is not None:
+        print_uncovered(uncovered, window)
+    write_page(a, rows, lines, sections, size, summary, over, after, cap, command, used, window, when, notes, len(ins) + len(outs),
+               uncovered)
     return 0
 
 
-def write_page(a, rows, lines, sections, size, summary, over, after, cap, command, used, window, when, notes, n_moves):
+def write_page(a, rows, lines, sections, size, summary, over, after, cap, command, used, window, when, notes, n_moves,
+               uncovered=None):
     e = html.escape
     groups = [
         ("in", "Coming in"),
@@ -468,9 +609,41 @@ def write_page(a, rows, lines, sections, size, summary, over, after, cap, comman
             f"<pre>{e(command)}</pre>"
             + (f"<p>and the seats beside it, committed as lesson-core-seats.txt in the same change:</p>"
                f"<pre>{e(os.path.abspath(a.out_seats))}</pre>" if a.out_seats else "")
-            + f'<div class="wrap">{"".join(parts)}</div>')
+            + f'<div class="wrap">{"".join(parts)}</div>'
+            + (uncovered_section(uncovered, lines, sections, window) if uncovered is not None else ""))
     with open(a.out_html, "w", encoding="utf-8") as f:
         f.write(html_page("Lessons core re-rank", body))
+
+
+def uncovered_section(u, lines, sections, window):
+    """The page's list of the most cited lessons no check holds (claude-config#3744), in the shape of
+    the moves tables above it."""
+    e = html.escape
+    title = "Most cited lessons no check holds"
+    if u["error"]:
+        return (f"<section><h2>{e(title)}</h2>"
+                f'<p class="alert">This list was not made: {e(u["error"])}. The moves above stand.</p></section>')
+    out = [f"<section><h2>{e(title)}"]
+    if u["rows"]:
+        out.append(f' <span class="meta">the {len(u["rows"])} PR reviews cited most over {window} days, both Macs</span></h2>'
+                   "<p>Each entry carries neither a CHECK: nor a NO CHECK: line. To settle them, tell Claude: for each "
+                   "one it asks the question #3245 asks of a new lesson, can a lint or a test catch it, and brings you "
+                   "the answer in the lesson picker, as a CHECK: line naming the check (with an issue in the project "
+                   "that needs the lint) or a NO CHECK: line giving the reason.</p>"
+                   '<div class="wrap"><table><thead><tr><th>Lesson</th><th class="n">Reviews</th></tr></thead><tbody>')
+        for n, r in u["rows"]:
+            text = lines[n].split(". ", 1)[1] if n in lines and ". " in lines[n] else lines.get(n, "")
+            out.append(f'<tr><td><b>L{n}</b> {e(text)} <span class="sec">{e(sections.get(n, ""))}</span></td>'
+                       f'<td class="n">{r}</td></tr>')
+        out.append("</tbody></table></div>")
+    else:
+        out.append("</h2><p>Every lesson PR reviews cited carries a CHECK: or NO CHECK: line.</p>")
+    for n, r, d in u["bad"]:
+        out.append(f'<p class="alert"><b>L{n}</b> is cited by {r} review{"" if r == 1 else "s"} and its check line is '
+                   f"malformed: claude-sync says it {e(d)}. It counts neither as held nor as unheld until it is "
+                   "corrected; claude-sync lesson-faults names it.</p>")
+    out.append("</section>")
+    return "".join(out)
 
 
 if __name__ == "__main__":

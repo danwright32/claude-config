@@ -113,6 +113,10 @@ def read_counts(path):
             days = None
     if "AT" in head and head.index("AT") + 1 < len(head):
         at = parse_stamp(head[head.index("AT") + 1])
+    # Whether that Mac's PR review ledger was read (read, absent or unreadable, as
+    # tools/lesson-citations.py writes it), or None when the header does not say. Only "read" makes
+    # its review counts a measurement rather than zeros (L90, claude-config#3744).
+    ledger = head[head.index("LEDGER") + 1] if "LEDGER" in head and head.index("LEDGER") + 1 < len(head) else None
     rows, bad = {}, []
     for n, v in read_tsv(path, 4).items():
         try:
@@ -121,7 +125,7 @@ def read_counts(path):
             # A damaged or half written row is named for the caller to refuse on, never dropped (a
             # dropped row reads as a lesson nobody cited) and never a traceback (L11).
             bad.append(n)
-    return {"host": host, "days": days, "at": at, "rows": rows, "bad": bad}
+    return {"host": host, "days": days, "at": at, "ledger": ledger, "rows": rows, "bad": bad}
 
 
 def review_class(n, tags, tags2):
