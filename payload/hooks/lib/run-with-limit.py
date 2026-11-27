@@ -10,8 +10,10 @@ could not be done):
     the command's own code   it ended in time and left nothing running (128 plus the signal's
                              number when a signal ended it; 127 or 126 when it could not be started)
     124                      it reached the limit: its group was sent TERM, then KILL GRACE seconds
-                             later if anything was still there. The line says so when the command
-                             was suspended, not running, at that moment
+                             later if anything was still there, so what ignores TERM outlives the
+                             limit by GRACE seconds. The line says so when the command was
+                             suspended, not running, at that moment, and names the terminal as the
+                             likely cause only: the runner sees that it was suspended, never why
     123                      it ended in time and LEFT A PROCESS RUNNING in its group, which was
                              stopped the same way. Whatever the command's own code was, the run
                              fails: a suite that passes and leaves a process behind is the fault
@@ -25,9 +27,12 @@ could not be done):
                              the group is ended the same way first, the line says so, and the
                              runner then ends BY THAT SIGNAL, which a shell reports as 128 plus its
                              number and which stops a shell loop around the runner at Ctrl C.
+                             That holds once the handlers are in (THE SIGNALS, below).
 
 123, 124 and 125 are also codes a command can exit with by itself (another runner inside this one
-does). Only the runner's line on standard error tells its own from the command's.
+does). Only the runner's line on standard error tells its own from the command's. One 125 has no
+line there: the launcher's question (`--prove <word>`, at the foot of this file) is answered with
+its one line on standard OUTPUT, for the launcher to read.
 
 THE SIGNAL RULE. The runner signals a number only while something it holds pins that number to its
 own child. What pins it: a child that has not been collected keeps its process id, running or
@@ -48,12 +53,15 @@ ended, and the group it leads has that same number. So the order is fixed:
      here signals it again.
 
 The Group class is the one place that signals the command or its group and the one place that
-collects it. It refuses a signal after the collect, and after the system has once said the child
-is no longer this process's own. test-run-with-limit.sh replaces the calls with recorders and fails
-on a signal asked for outside the rule (which the recorder never sends). Two other children exist,
-both before the command. The one step 0 starts is never signalled and is collected through the
-same class. The reader that names the marker folder is started by python's subprocess module,
-which collects it and, on a time out, ends it by its own process id while it is still uncollected.
+collects it. It refuses a signal after the collect, and after either of its own looks (the one
+before a fault's KILL, the one for a suspended command) was told the child is no longer this
+process's own. The Linux watch's look is outside the class: told the same, it raises, which is a
+fault, and the fault's own look asks again before any signal. test-run-with-limit.sh replaces the
+calls with recorders and fails on a signal asked for outside the rule (which the recorder never
+sends). Two other children exist, both before the command. The one step 0 starts is never
+signalled and is collected through the same class. The reader that names the marker folder is
+started by python's subprocess module, which collects it and, on a time out, ends it by its own
+process id while it is still uncollected.
 
 SEEING WHAT IS LEFT WITHOUT ps. `ps` is a setuid program, which macOS refuses to start inside a
 sandbox, so a runner that read it could not run under no-network-run.sh.
@@ -94,17 +102,31 @@ command that reads or sets the terminal there is suspended by the system until t
 The runner hands the terminal to nobody. It is for commands that do not read a terminal (an agent
 and a gate have none), the usage says so, and the 124 line says when the command was suspended.
 
-THE SIGNALS. CARRIED names the ones that would end the runner and that it can catch; each ends
-the group first. One the caller had ignored stays ignored. TSTP (Ctrl Z) is caught and not acted
-on, since a stopped runner keeps no limit. What the runner cannot answer, and so leaves a command
-with no limit: KILL; STOP, for as long as the runner is stopped (the limit is applied late, when
-it goes on); and the signals a fault raises (ABRT, BUS, FPE, ILL, SEGV, SYS, TRAP and the like),
-which are left at their default because a python handler cannot return from a real fault.
+THE SIGNALS. CARRIED names the ones that would end the runner and that it carries over; each ends
+the group first. On Linux so do IO, PWR, STKFLT and the real time signals python can set, from its
+SIGRTMIN up (34 with glibc; 32 and 33 belong to the C library, and python cannot set them). One
+the caller had ignored stays ignored. Three more would STOP the runner, and a stopped runner keeps
+no limit: TSTP (Ctrl Z) is caught and not acted on, and TTIN and TTOU are ignored while a command
+runs, which the command does not inherit. What leaves a command with no limit:
+  - KILL, and STOP for as long as the runner is stopped (the limit is applied late, when it goes
+    on). Nothing can catch either;
+  - a real fault in the runner's own process, since a python handler cannot return from one. That
+    is why the signals a fault raises (ABRT, BUS, FPE, ILL, SEGV, SYS, TRAP, and EMT on macOS)
+    are left at their default;
+  - by choice, those same signals sent from OUTSIDE. ABRT, TRAP, SYS and EMT could be carried
+    over when something else sends them, and are not.
+The handlers go in a moment after the command's process exists, and before it is let go. Until
+then TERM and the others end the runner at once, and the command, not yet let go, never starts.
+An INT in that span is turned by python into an error instead: 125 with nothing run, where an end
+by INT was meant. A stop that lands in the few steps between the runner's last look for one and
+its letting the command go starts the command and stops it at once.
 
 GRACE, SETTLE and GONE are settings, not measurements. Not covered: a process the command starts
 outside the group (setsid, a job control shell); a process this user may not signal (a setuid
-program), which signal 0 cannot see; and a runner ended by one of the signals above that it cannot
-answer, after which the command runs on with no limit.
+program), which signal 0 cannot see; a command that left its own group, which runs up to GONE
+seconds past its limit before TERM goes to it by its process id (the comment at that wait says
+why); and a runner ended or stopped by one of the signals above that it does not answer, after
+which the command runs on with no limit.
 """
 import errno
 import os
@@ -244,6 +266,9 @@ class Group:
             return None
         try:
             got = os.waitid(os.P_PID, self.pid, os.WSTOPPED | os.WNOHANG | os.WNOWAIT)
+        except ChildProcessError:
+            self.lost = True         # as in pinned: nothing pins the number now, and _pin refuses
+            return None
         except OSError:
             return None
         return got is not None and got.si_code == SUSPENDED
@@ -398,8 +423,9 @@ def carried():
 
 
 def catch(sig, handler, handled):
-    """Catch one signal for the length of the run, remembering what was there. One the caller had
-    ignored stays ignored, and one that cannot be caught here is left as it is."""
+    """Catch one signal for the length of the run (or ignore it, with SIG_IGN as the handler),
+    remembering what was there. One the caller had ignored stays ignored, and one that cannot be
+    set here is left as it is."""
     try:
         if signal.getsignal(sig) == signal.SIG_IGN:
             return False
@@ -592,6 +618,15 @@ def supervise(group, watch, asked, left, seconds, deadline, command, marker):
     took = stop(group, left)
     # Collected only once the watch says it has ended, so the collect cannot wait on a command that
     # is still running (one this user may not signal reads as nothing left).
+    # THE WATCH GOES ON FOR UP TO GONE SECONDS BEFORE ANYTHING IS SENT BY PROCESS ID, and "the
+    # group reads empty and the command has not ended" is no reason to cut it short. On macOS a
+    # leader that is ending stops counting as a member of its group at the START of its exit, and
+    # its process event is queued near the END of it, after its files are closed (Apple's
+    # published kernel source, read on 2026-11-27, not measured here). All through that span a
+    # signal to its process id answers success. So an ordinary command that is ending reads there
+    # exactly as one that left its group, and a TERM by id sent then would have the line say the
+    # command had left a group it never left. The cost is said in README: a command that did
+    # leave its group runs up to GONE seconds past its limit before TERM goes to it by its id.
     watch.wait(GONE if took else 0, heed=False)
     by_id = None
     if took and not watch.ended:
@@ -624,8 +659,10 @@ def supervise(group, watch, asked, left, seconds, deadline, command, marker):
         return EXIT_LEFT
     when = ''
     if suspended:
-        when = (' while it was suspended, not running (a command in a background group is suspended when it reads or sets the terminal, '
-                'and this runner is for commands that do not)')
+        # The look says THAT it was suspended, never why: it may have stopped itself, or been sent
+        # STOP. So the terminal is named as the likely cause and no more.
+        when = (' while it was suspended, not running (the likely cause is the terminal: a command in a background group is suspended '
+                'when it reads or sets it, and this runner is for commands that do not)')
     say('the command reached its %d second limit%s and was stopped: %s: %s' % (seconds, when, how, shown(command)))
     return EXIT_LIMIT
 
@@ -693,6 +730,12 @@ def run(argv):
         stoppers = [sig for sig in carried() if catch(sig, asked.note, handled)]
         if hasattr(signal, 'SIGTSTP'):
             catch(signal.SIGTSTP, asked.stay, handled)
+        # TTIN and TTOU stop a process as TSTP does. IGNORED, never caught: a write that raised a
+        # caught TTOU fails and is tried again, for ever. Set here, after the fork, so the command
+        # does not inherit it: its process exists already, with both as the caller had them.
+        for name in ('SIGTTIN', 'SIGTTOU'):
+            if hasattr(signal, name):
+                catch(getattr(signal, name), signal.SIG_IGN, handled)
         watch = watch_class(pid, asked, stoppers)
         marker = record(folder, pid)
         deadline = now() + seconds

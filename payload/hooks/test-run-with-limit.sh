@@ -516,7 +516,21 @@ if real["waitid"]:
             raise ChildProcessError(10, "No child processes")
         return real["waitid"](idtype, ident, options)
     os.waitid = waitid
-m.say = said.append
+driver = os.getpid()
+def note(text):
+    """What the runner says. In this process it is kept for the case to read. In a child the
+    runner started (the process that waits to become the command) it goes to this run's standard
+    error, which the suite shows beside a failure: a child that failed before it became the
+    command would otherwise say so only into its own copy of the list, and nobody would read it."""
+    if os.getpid() == driver:
+        said.append(text)
+    else:
+        try:
+            real_write(2, ("the runner's child %d said: %s\n" % (os.getpid(), text)).encode("utf-8", "replace"))
+        except OSError:
+            pass
+real_write = os.write
+m.say = note
 kept = dict(record=m.record, pick=m.pick, now=m.now, GRACE=m.GRACE, SETTLE=m.SETTLE, GONE=m.GONE)
 
 def restore():
@@ -1045,17 +1059,12 @@ while os.path.exists(d + "/hold") and n < ticks:
     n += 1
 """
 def moved_run(name, words):
-    """One run of a command that leaves its group, with every wait the runner asks of its watch
-    written into the record beside the signals. Returns (the code, the signals asked for by the
-    command's own process id, the waits asked for between the group's TERM and the first of
-    those). No clock is read: the order and the lengths asked for are the measurement."""
+    """One run of a command that leaves its group. Returns (the code, the signals asked for by
+    the command's own process id). The runner watches for GONE seconds before it sends the first
+    of those: a leader that is ending reads, for a moment, exactly as one that left its group, so
+    the wait cannot be cut short on that reading (the comment at the wait in the program says
+    what was read). GONE is short here, and nothing is asserted about how long it took."""
     d = case_dir(name)
-    picked = own_pick()
-    class Noting(picked[0]):
-        def wait(self, seconds, heed=True):
-            log.append(("wait", seconds))
-            return picked[0].wait(self, seconds, heed)
-    m.pick = lambda: (Noting, picked[1])
     m.now = limit_when_ready(d)
     m.GRACE = 0.3
     m.GONE = 1.0
@@ -1063,31 +1072,20 @@ def moved_run(name, words):
         rc = run(["1", sys.executable, "-c", MOVES, d, ticks] + words)
     finally:
         let_go(d)
-    by_id = [e for e in log if e[0] == "kill"]
-    term = next((i for i, e in enumerate(log) if e[0] == "signal" and e[2] == 15), None)
-    first = next((i for i, e in enumerate(log) if e[0] == "kill"), None)
-    between = None
-    if term is not None and first is not None and term < first:
-        between = [e[1] for e in log[term:first] if e[0] == "wait"]
-    return rc, by_id, between
+    return rc, [e for e in log if e[0] == "kill"]
 
 def moved():
-    rc, by_id, between = moved_run("moved", [])
+    rc, by_id = moved_run("moved", [])
     result("stand in: a command that left its group: 124, and it was ended by its own process id while it was still uncollected",
            rc == 124 and by_id and by_id[0][2] == 15 and not faults(log), (rc, faults(log), log))
     result("stand in: a command that left its group: the one line says it had left its group", len(said) == 1 and "its own process id" in said[0], said)
-    # S3 of the second review of #3833: the runner used to watch for GONE seconds first, so such a
-    # command ran that long past its limit with nothing sent to it.
-    result("stand in: a command that left its group: once its group read empty it was sent TERM by its own process id at once, after one look and no wait",
-           between is not None and all(s <= 0 for s in between), (between, log))
 attempt("stand in: a command that left its group", moved)
 
+# The same command ignoring TERM: KILL follows by the same process id, as it follows for a group.
 def moved_stubborn():
-    rc, by_id, between = moved_run("moved-stubborn", ["stubborn"])
+    rc, by_id = moved_run("moved-stubborn", ["stubborn"])
     result("stand in: a command that left its group and ignores TERM: 124, TERM and then KILL by its own process id while it was still uncollected, and the line says KILL ended it",
            rc == 124 and [e[2] for e in by_id] == [15, 9] and not faults(log) and len(said) == 1 and "its own process id, at KILL" in said[0], (rc, faults(log), said, log))
-    result("stand in: a command that left its group and ignores TERM: no wait before the TERM by its own process id either",
-           between is not None and all(s <= 0 for s in between), (between, log))
 attempt("stand in: a command that left its group and ignores TERM", moved_stubborn)
 
 # The two endings where something is LEFT RUNNING, each said, with the system stood in for.
@@ -1180,15 +1178,20 @@ print("DONE\tall")
 EOF
 # take_results <its lines> <what it said on standard error> <what ran>: one check for each line.
 take_results() {
-  local verdict name detail done_word=""
+  local verdict name detail done_word="" failed_here=""
   while IFS=$'\t' read -r verdict name detail; do
     case "$verdict" in
       PASS) check "$name" ok ;;
-      FAIL) check "$name" "got: ${detail:-no detail}" ;;
+      FAIL) check "$name" "got: ${detail:-no detail}"; failed_here=yes ;;
       SUITE-PART-UNMEASURED\ *) echo "$verdict${name:+ $name}${detail:+ $detail}" ;;
       DONE) done_word="$name" ;;
     esac
   done < "$1"
+  # Beside a failure, the last of what the run said on standard error: a child of the runner's
+  # that failed before it became the command says so there and nowhere else.
+  if [ -n "$failed_here" ] && [ -s "$2" ]; then
+    echo "  the last of what $3 said on standard error: $(tail -n 8 "$2" | tr '\n' ' ')"
+  fi
   check "$3 reached its end" "$([ -n "$done_word" ] && echo ok || echo "it stopped early: $(tail -n 5 "$2" | tr '\n' ' ')")"
 }
 # end_cases <folder> <what they were>: every case under the folder that still has its hold is

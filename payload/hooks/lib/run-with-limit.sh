@@ -36,7 +36,9 @@
 # or one of the things below missing. The one other 125 of the runner's is a fault inside it once
 # the command's process exists: its group is then sent KILL. The command is never run with no
 # limit. A command can itself exit with 123, 124 or 125 (another runner inside this one does), and
-# only the runner's line on standard error tells the two apart.
+# only the runner's line on standard error tells the two apart. One 125 of the runner's has no
+# line there: the program's answer to the question below (`--prove <word>`) is one line on
+# standard OUTPUT, which is where the launcher reads it.
 #
 # It takes no option and reads no setting of its own. python3 is the first on the PATH, as every
 # hook here finds it, started with -I so that no PYTHON variable and no file beside the program
@@ -61,6 +63,10 @@ fi
 # (a version manager's shim with no python chosen) would hand back its own exit code as if it were
 # the command's, and its 0 would read as a pass with nothing run. So the program is asked to prove
 # itself first, and only its own answer lets the command through.
+# While bash waits here for that answer, an INT sent to this launcher's process ALONE can be lost:
+# bash drops an INT that arrives while it waits on a child which then ends normally (bash's rule,
+# read and not measured here). The command then starts and runs to its limit: the limit is kept
+# and the sender's stop is not. Ctrl C at a terminal goes to the whole group and is not affected.
 _rwl_token="$$.$RANDOM"
 _rwl_answer="$("$_rwl_py" -I "$_rwl_dir/run-with-limit.py" --prove "$_rwl_token" 2>/dev/null </dev/null)"
 if [ "$_rwl_answer" != "run-with-limit proves $_rwl_token" ]; then
