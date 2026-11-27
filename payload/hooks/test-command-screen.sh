@@ -65,8 +65,9 @@ may "the same command with a commit at its end is a yes" yes "$big"$'\ngit commi
 # cs_cut takes the command from a parsed payload, everything before the first unit separator, as
 # ${parsed%%$'\x1f'*} did (review of #3690). That expression is quadratic on bash 3.2 (15 s of
 # processor time for a 306 KB command in require-issue-fields.sh, past the hook's limit), so the cut
-# is made by read. It must give the old expression's text byte for byte: a byte lost or added is a
-# command the screen reads differently from the gate.
+# is made from the end, or by read when the folder holds the byte too. Either way it must give the
+# old expression's text byte for byte: a byte lost or added is a command the screen reads
+# differently from the gate.
 # cut_same <description> <parsed>
 cut_same() {
   local want="${2%%$'\x1f'*}" rc=0
@@ -89,6 +90,7 @@ cut_same "the cut with an empty folder" $'echo x\x1f'
 cut_same "the cut with no separator at all" 'echo x'
 cut_same "the cut of nothing" ''
 cut_same "the cut of a 300 KB command" "$big"$'\x1f/w'
+cut_same "the cut of a 300 KB command whose folder holds the separator" "$big"$'\x1f/w\x1fz'
 # The same, for the text ps_parse_payload hands a gate from real payloads holding each of those.
 if . "$DIR/lib/push-scope.sh" 2>/dev/null && command -v python3 >/dev/null 2>&1; then
   n=0
@@ -100,17 +102,57 @@ if . "$DIR/lib/push-scope.sh" 2>/dev/null && command -v python3 >/dev/null 2>&1;
 import json
 for c in ["echo '"'"'a'"'"' \"b\" \\\\ p'"''"'r\n\tx\r", "tail\x1fhead", "ends with a break\n\n",
           "café \u0000 x \ud800 y", "\\\\\n\\\\"]:
-    print(json.dumps({"tool_input": {"command": c}, "cwd": "/w\x1fz"}))
+    for cwd in ("/w", "/w\x1fz"):
+        print(json.dumps({"tool_input": {"command": c}, "cwd": cwd}))
 ')
-  [ "$n" -eq 5 ] || { fail=$((fail + 1)); echo "FAIL: $n parsed payloads were cut, not 5"; }
+  [ "$n" -eq 10 ] || { fail=$((fail + 1)); echo "FAIL: $n parsed payloads were cut, not 10"; }
 else
   fail=$((fail + 1)); echo "FAIL: lib/push-scope.sh or python3 is missing, so no parsed payload was cut"
 fi
 
+# Cheap on a large command that names the word, which every command a gate judges does (review of
+# #3690). The first cut by read cost 0.4 s of processor time on 431 KB under bash 3.2, which reads
+# with -d one byte per system call, and so did the scan for a $ and the tr the screen made before
+# looking for the word: together more than the gate's own work, so the hook was slower than main on
+# exactly the commands it reads. Timed by bash's own clock, best of three, against one scan of the
+# same text, which grows with the text and with the machine alike: the cut and the screen may cost
+# six such scans and 20 ms more. On 2026-11-27 one scan of this text was 18 ms, the cut and screen
+# 52 ms, and the cut by read with the screen as it was 279 ms.
+# ms_of <time output "U S">: processor milliseconds
+ms_of() { local u="${1% *}" s="${1#* }"; echo $(( 10#${u/./} + 10#${s/./} )); }
+# A function, since bash 3.2 cannot parse a case inside $( ).
+scan_once() { case "$1" in *'`'*) return 0 ;; esac; return 1; }
+TIMEFORMAT='%3U %3S'
+yes_parsed="gh issue comment 12 --body-file x.md && $big"$'\x1f/w'
+scan_ms=999999; work_ms=999999
+for _ in 1 2 3; do
+  t="$( { time scan_once "$yes_parsed"; } 2>&1 )"
+  [ "$(ms_of "$t")" -lt "$scan_ms" ] && scan_ms="$(ms_of "$t")"
+  t="$( { time { cs_cut "$yes_parsed" && cs_may_name "$CS_COMMAND" '*[iI][sS][sS][uU][eE]*' "$PR"; }; } 2>&1 )"
+  [ "$(ms_of "$t")" -lt "$work_ms" ] && work_ms="$(ms_of "$t")"
+done
+unset TIMEFORMAT
+if [ "$work_ms" -le $((6 * scan_ms + 20)) ]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); echo "FAIL: the cut and the screen of a 300 KB command naming issue cost $work_ms ms, over six scans of it ($scan_ms ms each) and 20 ms"; fi
+
+# A word already whole in the command is a yes before tr is started: a tr that records each start
+# is never started for it, and is for a command whose word only a removed quote joins.
+TR_LOG="$(mktemp -d)"
+printf '#!/bin/sh\necho started >> "%s/log"\nexec "%s" "$@"\n' "$TR_LOG" "$(command -v tr)" > "$TR_LOG/tr"
+chmod +x "$TR_LOG/tr"
+( PATH="$TR_LOG:$PATH"; cs_may_name "gh issue comment 1 --body 'a \"b\"'" '*[iI][sS][sS][uU][eE]*' "$PR" )
+if [ ! -s "$TR_LOG/log" ]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); echo "FAIL: a command naming issue whole, with quotes in it, started tr"; fi
+( PATH="$TR_LOG:$PATH"; cs_may_name "gh is''sue comment 1" '*[iI][sS][sS][uU][eE]*' "$PR" )
+if [ -s "$TR_LOG/log" ]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); echo "FAIL: control: a word only a removed quote joins must start tr, so the row above can fail"; fi
+rm -rf "$TR_LOG"
+
 # A read that fails leaves nothing to judge by, so the cut says so rather than handing the screen an
-# empty command, which it would answer no to and the gate would leave on.
+# empty command, which it would answer no to and the gate would leave on. The folder holds the byte,
+# so the cut is made by read.
 got=0
-( read() { return 1; }; cs_cut $'gh pr create\x1f/w' ) || got=$?
+( read() { return 1; }; cs_cut $'gh pr create\x1f/w\x1fz' ) || got=$?
 if [ "$got" -ne 0 ]; then pass=$((pass + 1)); else
   fail=$((fail + 1)); echo "FAIL: a cut whose read failed must fail, not leave an empty command"; fi
 

@@ -30,25 +30,27 @@
 #     ps_parse_payload printed, the same text ${parsed%%$'\x1f'*} gives; returns 1 when the cut
 #     could not be made, and the caller then reads the command properly
 #
-# The cut is made by read, as ps__read splits its records (lib/push-scope.sh), never by ${x%%y*},
-# for the same reason: on bash 3.2 that pattern removal is quadratic too, measured at 15 s of
-# processor time for a 306 KB command in require-issue-fields.sh, past that hook's 15 s limit, and at
-# 0.05 s by read on 431 KB (review of #3690).
+# Never ${x%%y*} (review of #3690): on bash 3.2 that longest match removal is quadratic too, 15 s of
+# processor time for a 306 KB command in require-issue-fields.sh, past that hook's 15 s limit. Nor
+# read with -d, which bash 3.2 reads one byte per system call: 0.4 s on 431 KB, more than the gate
+# it saves. The shortest match from the end, ${x%y*}, stops at the last separator after a few bytes
+# of folder, and the command holds no separator of its own (ps_parse_payload writes each as U+FFFD),
+# so what it leaves is the command unless the folder holds the byte too. Only then, which no real
+# folder does, is the cut made by read.
 
 cs_cut() {
   local rest=""
-  CS_COMMAND=""
-  case "$1" in
+  CS_COMMAND="${1%$'\x1f'*}"
+  case "$CS_COMMAND" in
     *$'\x1f'*) ;;
-    # Nothing to cut at: the whole text is the command, as the pattern removal gave it.
-    *) CS_COMMAND="$1"; return 0 ;;
+    *) return 0 ;;
   esac
   # The here string ends in a line break of its own, which the last field takes, and IFS holds no
   # space, tab or line break, so the first field is every byte before the separator, kept as it is.
   IFS=$'\x1f' read -r -d '' CS_COMMAND rest <<< "$1"
   # read returns 1 at the end of its input, which is every time here, so it is judged by what it
   # left: the two fields put back must be the text it was given. A read that could not run (no file
-  # for the here string) leaves both empty, and an empty command is one the screen would answer no to.
+  # for the here string) leaves the command empty, which the screen would answer no to.
   [ "$CS_COMMAND"$'\x1f'"$rest" = "$1"$'\n' ] && return 0
   CS_COMMAND=""
   return 1
@@ -56,6 +58,12 @@ cs_cut() {
 
 cs_may_name() {
   local text pat
+  # A word already whole in the text is a yes before anything is taken out, since taking characters
+  # out only joins letters: a command that names what the gate reads, which every command it judges
+  # does, pays for no scan for a $ and no tr (review of #3690).
+  for pat in "${@:2}"; do
+    case "$1" in $pat) return 0 ;; esac
+  done
   case "$1" in *'$'*|*'`'*) return 0 ;; esac
   case "$1" in
     *[\'\"\\]*|*$'\n'*|*$'\r'*)
