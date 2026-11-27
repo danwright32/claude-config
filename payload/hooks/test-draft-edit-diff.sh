@@ -193,7 +193,7 @@ check "some labelled: and the rest are read as they were sent" "sent as drafted:
 
 # --- the layout as it was measured on the work MacBook on 2026-11-27 (pull request 3848) ----------------
 # Counts, field names and the punctuation of headings were measured there. Every word below is invented.
-for f in concise concise_beside_detailed headings mentions second_post; do fixture "$f" || { echo "FAIL: fixture $f could not be built"; fail=$((fail + 1)); }; done
+for f in concise concise_beside_detailed headings mentions second_post second_post_late; do fixture "$f" || { echo "FAIL: fixture $f could not be built"; fail=$((fail + 1)); }; done
 # A Reactions line under a message's text is the connector's, and is no part of what he sent.
 out="$(run trailing)"; rc=$?
 check_eq "trailing: a Reactions line under every text is measured" "0" "$rc"
@@ -240,6 +240,10 @@ out="$(run second_post)"
 check "second post: the draft is paired with the first post after it" "heavily rewritten: 1 of 1 pair" "$out"
 check "second post: and the later post that is more like the draft is counted" "of those, more like that draft than the post it was paired with: 1" "$out"
 check "no such post in the basics" "of those, more like that draft than the post it was paired with: 0" "$(run basics)"
+# A post past the hour could never have taken that draft, so it is no sign the pair made was wrong.
+out="$(run second_post_late)"
+check "late second post: the draft is still paired with the first post after it" "heavily rewritten: 1 of 1 pair" "$out"
+check "late second post: one two hours after the draft is not counted as more like it" "of those, more like that draft than the post it was paired with: 0" "$out"
 # --differences: what one more thing set aside would make a changed pair the same. Seven guesses at
 # what a read result adds or writes another way, none of them measured, and one real edit.
 fixture differences || { echo "FAIL: fixture differences could not be built"; fail=$((fail + 1)); }

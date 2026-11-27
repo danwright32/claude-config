@@ -67,9 +67,10 @@ WHAT IT CANNOT SEE, so nobody reads more into a count than it measured.
   * An edit he made after sending. The text compared is the one in whichever record was read last.
   * A read result that was cut short: a long thread, a channel read's limit, or an answer too large
     for the session, which Claude Code keeps as a preview. How a record holds one was not measured.
-  * How the connector shows a mention, an emoji or a quotation mark against how the draft wrote it.
-    Only links, bold, italics, bullets, quote markers at the start of a line, spacing and case are
-    set aside, so a draft that opens with a mention can read as the opening changed.
+  * How the connector shows an emoji, a quotation mark, or a channel or group mention against how
+    the draft wrote it. Only links, bold, italics, bullets, quote markers at the start of a line,
+    the name a read adds inside a mention of a person, spacing and case are set aside, so a draft
+    that opens with a channel or a group can read as the opening changed.
   * A thread read that was handed a reply's own time, not its parent's: that reply is placed at the
     top of the channel unless another read shows it inside its thread.
 
@@ -539,8 +540,10 @@ def pair_up(drafts, saved, posts, author, concise):
                 # The first post after a draft takes it. When this later one is MORE like that draft,
                 # the pair made may be the wrong one, so it is counted. The rule is not changed here:
                 # whether the likeliest post should take the draft is for Dan (pull request 3848).
+                # Only a post inside the limit is counted: one past it could never have taken the draft.
                 took = paired_at.get(before[-1][1]) if before else None
-                if took is not None and not labelled and kinds_of(before[-1][2], body)[1] > took:
+                if (took is not None and not labelled and at - before[-1][0] <= PAIR_WITHIN_MINUTES * 60
+                        and kinds_of(before[-1][2], body)[1] > took):
                     closer += 1
                 continue
             if at - before[-1][0] > PAIR_WITHIN_MINUTES * 60:
