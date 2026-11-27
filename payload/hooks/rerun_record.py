@@ -75,7 +75,7 @@ def repo_of_remotes(cwd):
         return None
     try:
         p = subprocess.run(["git", "-C", cwd, "config", "--get-regexp", r"^remote\..*\.(url|gh-resolved)$"],
-                           capture_output=True, text=True, timeout=3)
+                           capture_output=True, text=True, errors="replace", timeout=3)
     except (OSError, subprocess.TimeoutExpired):
         return None
     urls, resolved, order = {}, None, []
@@ -148,7 +148,7 @@ def main():
     failures = []
     for repo, run, job, where in found:
         p = subprocess.run(["bash", lib, "rerun", where or cwd or ".", repo, run or "", job or "", transcript],
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, errors="replace")
         if p.returncode != 0:
             failures.append(p.stderr.strip() or "issue-spool.sh rerun exited %d" % p.returncode)
     if failures:

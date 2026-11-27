@@ -2,7 +2,7 @@
 # Hand reruns of a failed check are recorded and a repeat flake is offered (claude-config#3613).
 #
 # rerun-record.sh (with rerun_record.py) is a PostToolUse hook on Bash that records each `gh run
-# rerun` in the issue spool's reruns folder; issue-spool.sh resolve-reruns, run by the end of turn
+# rerun` in the issue spool's reruns folder; lib/rerun-resolve.sh, run by the end of turn
 # review (feature-issue-review.sh), reads each run's final result from GitHub and spools a finding for
 # a job that failed and then went green on a rerun for the second time, and for one that failed again.
 # Every payload here is built by hand and every gh answer is a recorded fixture served by a stub: no
@@ -23,6 +23,7 @@ suite_deadline_arm || exit $?
 DIR="${RERUN_HOOKS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 HOOK="$DIR/rerun-record.sh"
 LIB="$DIR/lib/issue-spool.sh"
+RESOLVE="$DIR/lib/rerun-resolve.sh"
 REVIEW="$DIR/feature-issue-review.sh"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/test-rerun-record.XXXXXX")" || exit 2
@@ -182,7 +183,7 @@ echo '{"id":900,"run_id":108}' > "$FIX/job-900.out"
 
 reset_spool() { rm -rf "$CLAUDE_ISSUE_SPOOL_DIR"; mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"; : > "$GH_LOG"; }
 record() { bash "$LIB" rerun "$PROJ" own/rep "$1" "${2:-}" "$TR"; }
-resolve() { RES_ERR="$(bash "$LIB" resolve-reruns "$PROJ" "$TR" 2>&1 >/dev/null)"; RES_RC=$?; }
+resolve() { RES_ERR="$(bash "$RESOLVE" "$PROJ" "$TR" 2>&1 >/dev/null)"; RES_RC=$?; }
 pending_text() { bash "$LIB" pending "$PROJ" "$TR" 2>/dev/null; }
 waiting_runs() { [ -f "$WAIT" ] && python3 -c 'import json,sys; print(" ".join(sorted(str(json.loads(l).get("run")) for l in open(sys.argv[1]) if l.strip())))' "$WAIT"; }
 
@@ -262,6 +263,7 @@ check "a resolver that cannot write says so" "$e"
 # 3. The end of turn review: asleep it reads nothing and the records wait; awake it resolves them.
 # ---------------------------------------------------------------------------
 BOOT="$( . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/sleep.sh" && sleep_boot_of "$(sysctl -n kern.boottime 2>/dev/null)" )"
+[ -n "$BOOT" ] || BOOT=1   # no sysctl (Linux CI): sleep.sh skips the boot check, so any boot will do
 NOW_MS="$(( $(date +%s) * 1000 ))"
 printf '{"v":1,"generation":"g-test","since":%s,"until":%s,"night":"2026-10-07","bootTime":%s,"report":"%s/r.md","startedBy":{"sessionId":"s0","cwd":"/"},"workers":[],"placeBefore":"home"}\n' \
   "$((NOW_MS - 60000))" "$((NOW_MS + 3600000))" "$BOOT" "$WORK" > "$WORK/sleep-asleep.json"
@@ -287,7 +289,7 @@ check "awake, the repeat flake is in the spool the picker is built from" "$e"
 DAY=86400
 T0=1790000000
 resolve_at() { # resolve_at <epoch> -> sets RES_OUT (what the review is told), RES_ERR, RES_RC
-  RES_OUT="$(CLAUDE_RERUN_NOW="$1" bash "$LIB" resolve-reruns "$PROJ" "$TR" 2>"$WORK/res-err")"; RES_RC=$?
+  RES_OUT="$(CLAUDE_RERUN_NOW="$1" bash "$RESOLVE" "$PROJ" "$TR" 2>"$WORK/res-err")"; RES_RC=$?
   RES_ERR="$(cat "$WORK/res-err")"
 }
 record_at() { CLAUDE_RERUN_NOW="$1" bash "$LIB" rerun "$PROJ" own/rep "$2" "" "$TR"; }
@@ -335,7 +337,7 @@ resolve_at "$((T0 + 400 * DAY))"
 
 # A rerun the review had no time to read this turn is not dropped unread.
 reset_spool; record_at "$T0" 106
-RES_OUT="$(CLAUDE_RERUN_RESOLVE_BUDGET=0.1 CLAUDE_RERUN_NOW="$((T0 + 30 * DAY))" bash "$LIB" resolve-reruns "$PROJ" "$TR" 2>/dev/null)"
+RES_OUT="$(CLAUDE_RERUN_RESOLVE_BUDGET=0.1 CLAUDE_RERUN_NOW="$((T0 + 30 * DAY))" bash "$RESOLVE" "$PROJ" "$TR" 2>/dev/null)"
 [ "$(waiting_runs)" = 106 ] && [ -z "$RES_OUT" ] && [ "$(lines "$GH_LOG")" = 0 ] \
   && check "a rerun not read this turn for lack of time is not dropped" ok \
   || check "a rerun not read this turn for lack of time is not dropped" "waiting=[$(waiting_runs)] out=[$RES_OUT] calls=$(lines "$GH_LOG")"
@@ -348,12 +350,12 @@ resolve_at "$((T0 + 30 * DAY))"
 
 # The setting, and a setting that is not a whole number above zero.
 reset_spool; record_at "$T0" 106
-RES_OUT="$(CLAUDE_RERUN_UNREAD_KEEP_DAYS=2 CLAUDE_RERUN_NOW="$((T0 + 2 * DAY))" bash "$LIB" resolve-reruns "$PROJ" "$TR" 2>/dev/null)"
+RES_OUT="$(CLAUDE_RERUN_UNREAD_KEEP_DAYS=2 CLAUDE_RERUN_NOW="$((T0 + 2 * DAY))" bash "$RESOLVE" "$PROJ" "$TR" 2>/dev/null)"
 case "$RES_OUT" in *"run 106"*"dropped unread after 2 days"*) e=ok ;; *) e="out=[$RES_OUT] waiting=[$(waiting_runs)]" ;; esac
 check "CLAUDE_RERUN_UNREAD_KEEP_DAYS sets the days" "$e"
 for bad in 0 -3 abc 1.5 000; do
   reset_spool; record_at "$T0" 106
-  RES_OUT="$(CLAUDE_RERUN_UNREAD_KEEP_DAYS="$bad" CLAUDE_RERUN_NOW="$((T0 + 1 * DAY))" bash "$LIB" resolve-reruns "$PROJ" "$TR" 2>"$WORK/res-err")"
+  RES_OUT="$(CLAUDE_RERUN_UNREAD_KEEP_DAYS="$bad" CLAUDE_RERUN_NOW="$((T0 + 1 * DAY))" bash "$RESOLVE" "$PROJ" "$TR" 2>"$WORK/res-err")"
   RES_ERR="$(cat "$WORK/res-err")"
   [ "$(waiting_runs)" = 106 ] && [ -z "$RES_OUT" ] && case "$RES_ERR" in *CLAUDE_RERUN_UNREAD_KEEP_DAYS*"default of 7 days"*) true ;; *) false ;; esac \
     && check "CLAUDE_RERUN_UNREAD_KEEP_DAYS=$bad falls back to 7 days and says so" ok \
@@ -429,14 +431,14 @@ grep -q '"sha": "old"' "$FLAKES" && check "a flake line with no date is kept" ok
 reset_spool; mkdir -p "$RDIR"
 flake_line "$((NOW1 - 11 * DAY))" 50 > "$FLAKES"
 record_at "$NOW1" 101
-RES_OUT="$(CLAUDE_RERUN_FLAKE_KEEP_DAYS=10 CLAUDE_RERUN_NOW="$NOW1" bash "$LIB" resolve-reruns "$PROJ" "$TR" 2>/dev/null)"
+RES_OUT="$(CLAUDE_RERUN_FLAKE_KEEP_DAYS=10 CLAUDE_RERUN_NOW="$NOW1" bash "$RESOLVE" "$PROJ" "$TR" 2>/dev/null)"
 grep -q '"run": "50"' "$FLAKES" && e="flakes=[$(cat "$FLAKES")]" || e=ok
 check "CLAUDE_RERUN_FLAKE_KEEP_DAYS sets the days" "$e"
 for bad in 0 -1 ninety; do
   reset_spool; mkdir -p "$RDIR"
   flake_line "$((NOW1 - 30 * DAY))" 50 > "$FLAKES"
   record_at "$NOW1" 106
-  CLAUDE_RERUN_FLAKE_KEEP_DAYS="$bad" CLAUDE_RERUN_NOW="$NOW1" bash "$LIB" resolve-reruns "$PROJ" "$TR" >/dev/null 2>"$WORK/res-err"
+  CLAUDE_RERUN_FLAKE_KEEP_DAYS="$bad" CLAUDE_RERUN_NOW="$NOW1" bash "$RESOLVE" "$PROJ" "$TR" >/dev/null 2>"$WORK/res-err"
   RES_ERR="$(cat "$WORK/res-err")"
   grep -q '"run": "50"' "$FLAKES" && case "$RES_ERR" in *CLAUDE_RERUN_FLAKE_KEEP_DAYS*"default of 90 days"*) true ;; *) false ;; esac \
     && check "CLAUDE_RERUN_FLAKE_KEEP_DAYS=$bad keeps 90 days and says so" ok \
@@ -461,7 +463,7 @@ while not os.path.exists(sys.argv[5]) and time.monotonic() < deadline:
 holder=$!
 hang_wait '[ -f "$WORK/held" ]' 0.05 || check "the lock holder took the lock" "it did not within $HANG_S seconds"
 record_at "$NOW1" 101
-CLAUDE_RERUN_LOCK_WAIT=0.3 CLAUDE_RERUN_NOW="$NOW1" bash "$LIB" resolve-reruns "$PROJ" "$TR" >/dev/null 2>"$WORK/res-err"
+CLAUDE_RERUN_LOCK_WAIT=0.3 CLAUDE_RERUN_NOW="$NOW1" bash "$RESOLVE" "$PROJ" "$TR" >/dev/null 2>"$WORK/res-err"
 RES_ERR="$(cat "$WORK/res-err")"
 : > "$WORK/release"; wait "$holder" 2>/dev/null
 grep -q '"run": "50"' "$FLAKES" && grep -q '"run": "77"' "$FLAKES" \
@@ -470,11 +472,28 @@ grep -q '"run": "50"' "$FLAKES" && grep -q '"run": "77"' "$FLAKES" \
 case "$RES_ERR" in *"flake history"*"could not"*) e=ok ;; *) e="err=[$RES_ERR]" ;; esac
 check "a history the trim could not lock is said" "$e"
 record_at "$NOW1" 106
-CLAUDE_RERUN_NOW="$NOW1" bash "$LIB" resolve-reruns "$PROJ" "$TR" >/dev/null 2>&1
+CLAUDE_RERUN_NOW="$NOW1" bash "$RESOLVE" "$PROJ" "$TR" >/dev/null 2>&1
 grep -q '"run": "77"' "$FLAKES" && ! grep -q '"run": "50"' "$FLAKES" \
   && check "once released, the trim keeps the other review's newer line and drops the old one" ok \
   || check "once released, the trim keeps the other review's newer line and drops the old one" "flakes=[$(cat "$FLAKES")]"
 rm -f "$WORK/held" "$WORK/release"
+
+# lib/rerun-resolve.py's commit mode, driven directly: the new lines are added after the kept ones,
+# the old line goes, an undated line and one that is not JSON stay.
+H2="$WORK/commit-history.jsonl"
+{ flake_line "$((NOW1 - 100 * DAY))" 40; flake_line "" 41; echo 'not json'; } > "$H2"
+flake_line "$NOW1" 42 > "$WORK/commit-new.jsonl"
+python3 "$DIR/lib/rerun-resolve.py" commit "$H2" "$WORK/commit-new.jsonl" "$NOW1" 90 >/dev/null 2>"$WORK/commit-err"; rc=$?
+got="$(python3 -c 'import json,sys
+out = []
+for l in open(sys.argv[1], encoding="utf-8", errors="replace"):
+    try:
+        out.append(str(json.loads(l).get("run")))
+    except ValueError:
+        out.append("text")
+print(" ".join(out))' "$H2")"
+[ "$rc" = 0 ] && [ "$got" = "41 text 42" ] && check "rerun-resolve.py commit trims the old line, keeps the rest in order, adds the new" ok \
+  || check "rerun-resolve.py commit trims the old line, keeps the rest in order, adds the new" "rc=$rc lines=[$got] err=[$(cat "$WORK/commit-err")]"
 
 printf 'SUITE-RESULT passed=%d failed=%d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

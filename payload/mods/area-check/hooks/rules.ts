@@ -413,6 +413,9 @@ const spoolNote = (r: ModKitRun, home: string | undefined): boolean => installed
 export const SPOOL_KEY_COMMANDS: readonly string[] = [
   'key', 'read-keys', 'path', 'archive-path', 'append', 'note', 'raw', 'pending', 'has-findings', 'archive',
   'clear', 'file-errors', 'file-muted', 'muted-summary', 'muted-stamp', 'muted-sent',
+  // A hand rerun's record (#3613): it writes only under the spool root's reruns folder, never the
+  // project folder.
+  'rerun',
 ]
 
 // Whether a run's first argument after the subcommand is only the project a spool key is read from.

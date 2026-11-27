@@ -197,13 +197,13 @@ if [ -f "$SPOOL_LIB" ]; then
   if [ -n "$_rr_key" ] && [ -n "$_rr_dir" ] && compgen -G "$_rr_dir/$_rr_key.jsonl*" >/dev/null; then
     _rr_err="$(mktemp "${TMPDIR:-/tmp}/claude-reruns-said.XXXXXX" 2>/dev/null)" || _rr_err=""
     if [ -n "$_rr_err" ]; then
-      reruns_dropped="$(bash "$SPOOL_LIB" resolve-reruns "$proj" "$transcript" 2>"$_rr_err")" || true
+      reruns_dropped="$(bash "$SELF_DIR/lib/rerun-resolve.sh" "$proj" "$transcript" 2>"$_rr_err")" || true
       reruns_said="$(cat "$_rr_err" 2>/dev/null)" || true
       rm -f "$_rr_err"
     else
       # No file to keep its messages apart in: the drops, which must make the review speak, still
       # come back on their own, and the lost messages are said.
-      reruns_dropped="$(bash "$SPOOL_LIB" resolve-reruns "$proj" "$transcript" 2>/dev/null)" || true
+      reruns_dropped="$(bash "$SELF_DIR/lib/rerun-resolve.sh" "$proj" "$transcript" 2>/dev/null)" || true
       reruns_said="the hand rerun reader ran, but no temporary file could be made for its messages, so anything it could not read or write this turn is not shown here."
     fi
   fi
