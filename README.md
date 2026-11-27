@@ -19,7 +19,13 @@ back.
   A pull never leaves a line naming a script that is not on disk, even for the seconds it takes: it
   takes out the lines the shared copy dropped before the scripts move, and puts the new ones in
   after. A line whose script is still missing is left out, said once, and logged; the shared config
-  keeps it, and the first pull that finds the script registers it (#1913)
+  keeps it, and the first pull that finds the script registers it (#1913). Any other top level key
+  somebody puts in this file is applied on neither Mac: the pull says so, naming it, in its output
+  and the log and once in a notification per set of keys, and the send writes the hooks block into
+  the file it read, so the key stays in the repository rather than being deleted (#3741). The send
+  writes the whole file afresh, so in such a key this Mac's home path becomes `__CLAUDE_HOME__`, as
+  in the hooks block, and its spacing follows jq's layout. A setting both Macs share goes in
+  `settings.shared.json` instead
 - `payload/settings.shared.json`: the few other `settings.json` settings both Macs share, today
   `ultracode` (off since 2026-10-06), the effort level per model, as
   `modelSettings.<full model name>.effortLevel` (`high` for `claude-opus-5-5`, and for
@@ -2463,6 +2469,35 @@ merges closed an issue their body meant to leave open, 4 relinked an issue alrea
 closes the body did intend, each cleared by editing the body. Override for a body that has to quote
 the phrasing: `SKIP_CLOSING_CHECK=1 <the same command>`.
 
+A lesson entry added to `~/.claude/LESSONS.md` goes to the lesson picker, where Dan reads its rule
+and its SHORT line. A pull request that edits a checkout's `payload/LESSONS.md` reached the same
+file on both Macs at the next pull with nothing shown to him, so `lessons-merge-gate.sh`
+(claude-config#3343; Dan, 2026-11-20: "Guard the merge") holds its merge until he has answered for
+exactly that change. It reads the file at the pull request's merge base and at its head (at the
+pinned commit when the merge names a whole one, since that is what GitHub would merge, read even
+when the head's file list leaves the file alone) and finds the entries added, changed (any line of one, a rule wrapped another way included), removed, or
+moved to another section. Text above the first section, blank lines and the order of entries or
+sections are no entry's change and are never asked about. The refusal names one picker (metadata
+`source` `lesson-merge`, the repository, the number and a sha256 of the change) and the lines its
+question must hold: a line saying how many entries are added, changed, removed and moved, with
+their numbers, then each added or changed entry's rule and SHORT line word for word. A change too
+large for those to fit in the dialog is a sweep: the question holds the count line and a line
+starting "The change: " in the session's words. His "Merge these lessons" is read from the
+session's transcript as his Apply is for a database push (`lib/db-apply-approval.py`), and kept in
+`~/.claude/state/lesson-merges/answers.jsonl` on that Mac with the question he read, because
+`merge-when-ready.sh` asks the gate with no transcript. An answer counts only while the change,
+read again from GitHub, gives the sha256 it named and the question held every line it had to, so
+an answer for another pull request, or one given before a push changed an entry, covers nothing.
+Asleep he is not asked: the refusal says the merge waits. An entry whose rule a picker would draw
+as less than its text names no picker until the entry is reworded. The sync's own send is a push,
+never a pull request, so it never meets the gate. A file list naming the file while GitHub returns
+it at neither commit, and a shortened pin that does not start the head, are refused rather than
+read as untouched. There is no override. What it cannot see: a
+merge made on GitHub's own page or app or in a terminal Dan types in, a push straight to main, a
+head pushed after `gh pr merge --auto` was typed, and a line written into the record by an Edit or
+a script (a shell command naming the record's folder is refused). The rule is
+`lib/lesson-merge.py`; the cases are `test-lessons-merge-gate.sh`.
+
 gh takes a subcommand's flags written in front of it, `gh -R owner/name pr merge 7` and `gh pr -R
 owner/name merge 7` (claude-config#1186; before, all three gates let these through unjudged). The
 gates find the subcommand as gh does, past those flags, and take the repository from the flag, the
@@ -2811,6 +2846,8 @@ exit and what it means. It updates the branch, starts the new head's lessons rev
 checks, waits for both, updates again if the base has moved meanwhile, and
 then hands the exact pinned merge command to `block-red-merge.sh`, `pr-review-gate.sh`,
 `require-changelog-tag.sh`, `check-closing-merge.sh`, `check-work-names-merge.sh` (#1995),
+`lessons-merge-gate.sh` (#3343, also asked at the first look, so a merge waiting for Dan's answer
+about lesson entries stops before any check run is spent on it),
 `design-score-gate.sh` and `require-verification-run.sh` and merges only
 when every one allows it, so it decides nothing any gate would refuse. What a gate allows with
 something to say, such as the verification gate's warn mode verdict, is written to its log. The changelog record gate is also asked at the first look, before any update, wait or
@@ -3646,7 +3683,7 @@ Reading an old checkout is the other half, and that one is said rather than refu
 
 ### What a push actually waits on
 
-Forty-three PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
+Forty-four PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
 which the settings SET and are not measurements of anything. `bash tools/time-push-gates.sh --list`
 names them from the installed settings, and `tools/test-time-push-gates.sh` reads the same list from
 `payload/settings.hooks.json` and fails until this sentence carries its count and its timeouts
@@ -4040,6 +4077,21 @@ beside `block-red-merge.sh`, which reads the same pull request
 timed from outside and so including a python start of about 0.02 seconds; it leaves before loading
 anything on a command naming no merge. On a merge, two GitHub reads: the pull request's title,
 description and commits, and the scanner at its base commit
+
+</td></tr>
+<tr><td>
+
+`lessons-merge-gate.sh` (#3343)
+
+</td><td>
+
+2026-11-24: 0.006 seconds on `git status`, five readings at load average 11 to 19, timed from
+outside; it leaves before loading anything on a command with no `merge` word. 0.075 to 0.082
+seconds on `git push -u origin fix/3343-guard-the-merge-lessons`, whose branch name holds the word
+and so loads the shared reader to find no merge. On a merge, through the real gh: about 1 second for
+claude-config #3367, which leaves the lessons file alone (one read, the pull request's file list);
+about 3 seconds for #1598, which changes 51 entries (four reads: the file list, the merge base and
+the file at both commits)
 
 </td></tr>
 <tr><td>
@@ -9341,6 +9393,23 @@ Each `claude` question is stopped after `SYNC_CLAUDE_CHECK_TIMEOUT` seconds (30 
 answered in under half a second when measured), because the check runs under the sync lock and a hung
 `claude` would otherwise hold every sync behind it.
 
+A validation stopped that way says nothing about the mod, only that `claude` was too slow, so it is
+said as "could not check mod <name>", never as a mod that is not loading (#3759). A mod Claude Code
+does not list, or that validation refuses, still notifies at once ("a mod is not loading on this
+Mac"). A run of time outs notifies once the same mod's check has timed out on
+`SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY` syncs in a row (5 by default; the longest real run measured in
+this Mac's sync log was 4, under load), and once per run of them, so a check that can never finish is
+still heard. The count goes up once per sync, however many times that sync checks the mods (a send
+that changes the mod names checks them, and the apply its reconcile runs checks them again). One sync
+posts at most one notification about time outs, naming every mod it covers. `claude-sync status`
+lists every mod the last syncs could not check, with how many in a row and since when. The count is
+kept in `.mod-check-timeouts` in the clone. A record that cannot be read is said so by the pull and
+by status, and never counted as none. Two more notifications come from that: when the pull can set
+the record aside, a time out it meets in that same sync notifies, since nothing can say it is the
+first; when it cannot (an earlier `.mod-check-timeouts.unreadable` is still there), it notifies once,
+and not again until a sync has read the record again. While it stays that way nothing is counted, so
+no later time out notifies; status says so on every run.
+
 Deleting a mod deletes it on the other Mac. Deleting the whole `~/.claude/mods` folder does not: a
 Mac with no mods folder cannot be told apart from one that never had mods yet, and reading that as a
 deletion would wipe the other Mac's mods the first time a fresh Mac sends. Delete the mods inside it.
@@ -10347,7 +10416,8 @@ command whose words show that it only reads the file runs unasked, as ever: `cat
 `sed -n`, `awk`, `diff`, a copy of it made elsewhere, output redirected to another file, an inline
 program that only reads it, and `claude-sync lesson`, `next-lesson`, `lesson-faults` and `pull`.
 Left as they were: a checkout's `payload/LESSONS.md`, which Dan decided on #3343 to guard at the
-merge and is not built yet; a `LESSONS.md` the reader can place nowhere (`$S/LESSONS.md`, through a
+merge (`hooks/lessons-merge-gate.sh` holds a pull request that changes an entry there until he has
+answered for it); a `LESSONS.md` the reader can place nowhere (`$S/LESSONS.md`, through a
 variable only a command's output sets), which is as likely a scratch copy and is asked about as
 before; a removal (`rm`), which the reader counts as no write; and a script that writes the file
 with no word of the command naming it, which no reader of the words can see.
@@ -12006,13 +12076,27 @@ reader marks as putting something in the background, running nohup, setsid or di
 read in full, which withholds it for the rest of the session. The look follows each carrier's
 parents by pid and parent pid, never a command's text: one that meets the look's own line of
 parents, which the session's own process is on, is still attached (the session's connected servers
-are, for as long as it is open) and withholds nothing; one that reaches launchd was left behind;
-one whose parents cannot be followed withholds as unread
-(`tests/test-close-card-process-look.sh` runs the look on real processes). A reading that cannot be
-taken withholds it. Each reason is written to
+are, for as long as it is open) and withholds nothing; one that reaches launchd was left behind,
+when the look's own line was followed to launchd too;
+one whose own parents cannot be followed counts as nothing either way (Dan, 2026-11-26: "2.1
+Unreadable counts as nothing"), never a reason to withhold or to pin, and is kept as a note
+(`notes`) in the reasons file, seen and not counted. When the look cannot follow its OWN line (a
+parent of it missing from the list and not read from the kernel), a carrier that reaches launchd
+cannot be told apart, left behind or attached above the break, so the card is withheld for those,
+in one reason naming them and saying the check could not find its own place among the processes:
+his answer does not cover that case, and the card was withheld for it before his answer too
+(`tests/test-close-card-process-look.sh` runs the look on real processes and on planted process
+lists). A reading that cannot be taken withholds it, with two exceptions, both in this look and
+both written as notes that never withhold or pin the card: a process whose own parents cannot be
+followed, and a look that could not be finished (ps or the look failed, ran past its limit or
+answered something else, or the process list came back cut short, where what the look saw before
+the cut still counts), which is also said in the debug log. Each reason is written to
 `~/.claude/state/close-session/<session id>.json`, newest
-replacing the one before. The next turn start takes the card down as withdrawn; it comes back
-only after the next box. Invisible to both readings: a program that detaches itself without the
+replacing the one before, with the notes and `attached`, the look's count of carriers still
+attached (null when it gave none): in a session with connected servers a 0 there is a look that
+saw no environment at all, and nothing is decided from it. The next turn start takes the card
+down as withdrawn; it comes back only after the next box. Invisible to both readings: a
+program that detaches itself without the
 command saying so, and an Apple signed program (a shell, sleep) left behind, whose environment
 the kernel does not show.
 
@@ -12756,6 +12840,53 @@ removed, so the refusal is never published as a deletion; and the apply, to say 
 absent means no line is being left out for want of its script, which is the normal state. Losing it
 while a line is refused costs one repeated message, and lets the next send read that line as removed
 here
+
+</td></tr>
+<tr><td>
+
+`.hooks-file-keys-told`
+
+</td><td>
+
+every apply that read `settings.hooks.json` and found a top level key other than `hooks` in it, once
+the notification naming those keys was posted; removed when the file holds no such key (#3741)
+
+</td><td>
+
+the apply, to post that notification once per set of keys rather than on every pull. Its output and
+the log say it on every pull regardless
+
+</td><td>
+
+absent or unreadable means the next pull that meets such a key notifies again, which is the loud
+side. Losing it costs one repeated notification
+
+</td></tr>
+<tr><td>
+
+`.mod-check-timeouts`
+
+</td><td>
+
+every mod check that gave every mod an outcome: one line per mod whose `claude plugin validate` did
+not answer in time, with how many syncs in a row, since when, whether that was notified, and which
+sync last counted it (so one sync that checks twice counts once); removed when every check finished
+(#3759)
+
+</td><td>
+
+the same check, to notify only at `SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY` time outs in a row and once per
+run of them; and `claude-sync status`, which lists each mod it names
+
+</td><td>
+
+absent means every mod's last check finished. Unreadable is never read as none: the pull and status
+say so, the pull keeps it as `.mod-check-timeouts.unreadable` and starts a new one from that sync,
+and a time out it meets notifies, since nothing can say it is the first. When an earlier
+`.unreadable` is already there, the pull cannot set it aside: it leaves both, counts nothing, says so
+on every sync, and notifies once (`.mod-check-timeouts.stuck-told` records that, and the first sync
+that reads the record again removes it). Lost, a run of time outs starts counting again, so a check
+that never finishes is heard that many syncs later
 
 </td></tr>
 <tr><td>
