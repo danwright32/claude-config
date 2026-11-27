@@ -129,6 +129,28 @@ BLANK = " \t\n"
 DEV_NET = re.compile(r"/dev/(?:tcp|udp)\b")
 # What a refusal reads like when a file's imports are what reach the code that posts.
 IMPORTS = ", which imports "
+# What one reads like when a shell script was judged by a name in it and not by its commands
+# (claude-config#3476). The gate reads a shell script's commands wherever it reads the script, and
+# then says it "runs a command that posts". It says a shell script "posts to Slack (it names ...)"
+# only of one it did not read: one behind three other scripts, the most it reads in a chain (its
+# MAX_DEPTH), or one whose binary part names the call, which a script binary from its first line
+# and run by bash is at any depth, alone or behind one script. SHELL_EXT is the gate's own list of
+# the endings it takes for a shell script, copied here because this file is handed only the gate's
+# folder; the route's suite holds the copy to the gate's.
+#
+# Equal lists do not make the two tests equal. The gate decides what is a shell script from the
+# file's real path, a hint from the program that runs it and its first line. This pattern reads
+# the refusal's text, which carries only the name the command wrote for the file. So (measured
+# 2026-11-27, each held by the route's suite unless it says otherwise):
+#   * a Python or JavaScript file run by a link whose name has a shell ending (python3 link.sh)
+#     is matched, and its refusal gains the sentence, though the file is never read as commands;
+#   * a shell script whose written name has another ending or none (.ksh, .SH, a link named .txt,
+#     one known only by its first line) is not matched, so its refusal behind three names no
+#     route, as before (held by the suite for a name with no ending only);
+#   * a refusal whose text holds these words for another reason, such as a script the gate read
+#     whose own file name holds them, is matched (not held by the suite).
+SHELL_EXT = (".sh", ".bash", ".zsh", ".command")
+NAMED_UNREAD = re.compile(r"(?:" + "|".join(re.escape(e) for e in SHELL_EXT) + r") posts to Slack \(it names ")
 # What a later file is said to have been written by, where one may have been.
 UNDER = "the command run under the no network wrapper"
 
@@ -200,10 +222,14 @@ def make(here):
             return True
 
         def route_note(self, reason):
-            """The sentence a refusal gains when a file's imports are what reach code that posts: the
-            route by which a test or a check can still be run. "" for any other refusal, and where
-            no wrapper is installed, since a route that is not there must not be named (L111)."""
-            if not self.no_network or IMPORTS not in reason:
+            """The sentence a refusal gains when what the gate found is not a command it read: a
+            file's imports are what reach code that posts, or a shell script was judged by a name
+            in it, unread (NAMED_UNREAD, claude-config#3476: a plain run of the gate's own priority
+            suite, which reaches the gate's script behind three others). It is the route by which a
+            test or a check can still be run. "" for any other refusal, and where no wrapper is
+            installed, since a route that is not there must not be named (L111). It is asked only
+            once a call is refused and adds words to that refusal, so it moves no verdict."""
+            if not self.no_network or not (IMPORTS in reason or NAMED_UNREAD.search(reason)):
                 return ""
             return (" If the command is a test or a check that is meant to post nothing, run it again under the "
                     "no network wrapper, which this gate lets through because what runs under it has no network "
