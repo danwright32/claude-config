@@ -484,8 +484,9 @@ print("%s\t%s" % ("ok" if got == "deny rc=0" and SAYS["close"] in reason and "li
                   "a hook with no lib/hook-notice.sh beside it still refuses a heredoc the reader cannot find the end of"))
 
 # ---- 7. a refusal the notice library cannot build is still a refusal ------------------------------
-# The hook builds a refusal with the notice library's hook_deny_json (#3793). Beside a library that
-# loads and has no such function (a copy from before #3793 that the sync held back), a hook that
+# The hook builds a refusal with the notice library's hook_deny_json (added for #3618, used here
+# since #3793). Beside a library that loads and has no such function (a copy from before #3618 that
+# the sync held back), a hook that
 # called it would print nothing and leave with 0, so the command would run with no decision at all,
 # where the hook before #3472 asked about it. Each
 # stand in here is a copy of the real library, changed in this suite's own folder and put beside a
@@ -494,7 +495,7 @@ LIB = os.path.join(os.path.dirname(hook), "lib")
 with open(os.path.join(LIB, "hook-notice.sh")) as f:
     NOTICE = f.read()
 GONE = object()
-# The library as it was before #3793, with no hook_deny_json: it loads, and its ask and its allow
+# The library as it was before #3618, with no hook_deny_json: it loads, and its ask and its allow
 # are built as before.
 RENAMED = NOTICE.replace("hook_deny_json", "hook_deny_built")
 # The function is there and prints nothing.
@@ -632,7 +633,7 @@ SAID = (SAYS["close"], HOW["close"], "could not check", "claude-config#3472")
 renamed, silent = beside("renamed", RENAMED), beside("silent", SILENT)
 got = (loaded(renamed, "hook_ask_json"), loaded(renamed, "hook_deny_json"))
 stood.append(("ok" if got == (0, 1) else "got %s" % (got,),
-              "(control) the stand in library as it was before #3793 loads, names an ask and has no hook_deny_json"))
+              "(control) the stand in library as it was before #3618 loads, names an ask and has no hook_deny_json"))
 got = (loaded(silent, "hook_ask_json"), loaded(silent, "hook_deny_json"))
 stood.append(("ok" if got == (0, 0) else "got %s" % (got,),
               "(control) the stand in library whose hook_deny_json prints nothing loads and has one"))

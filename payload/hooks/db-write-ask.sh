@@ -165,14 +165,14 @@ load_notice() {
 # as [[:space:]], so a match is only ever added, never lost.
 payload_match() { [[ $1 =~ $2 ]] && return 0; local LC_ALL=C; [[ $1 =~ $2 ]]; }
 
-# A refusal (claude-config#3472). The library's hook_deny_json builds it (claude-config#3793), by
-# the same builder as its ask and its allow, so its words are escaped and cut as theirs are. The
-# hook calls that public name and never the private builder behind it (test-hook-notice.sh fails on
-# a hook that names one).
+# A refusal (claude-config#3472). The library's hook_deny_json builds it (added for #3618; this
+# hook moved onto it in #3793), by the same builder as its ask and its allow, so its words are
+# escaped and cut as theirs are. The hook calls that public name and never the private builder
+# behind it (test-hook-notice.sh fails on a hook that names one).
 #
 # A refusal that is not printed is a command that runs: the hook leaves with 0 either way, and
 # Claude Code reads no decision as none. Beside a library that loaded and had no such function (a
-# copy from before #3793 that the sync held back), a call to it would print nothing, so a command
+# copy from before #3618 that the sync held back), a call to it would print nothing, so a command
 # the hook meant to refuse would run with no question at all. So the function is looked for first,
 # and what it printed is passed on only when Python's JSON reader takes it as exactly one object
 # whose hookSpecificOutput is a PreToolUse deny, holding nothing but its event, its decision and a
