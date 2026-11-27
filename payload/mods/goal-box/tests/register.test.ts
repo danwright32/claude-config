@@ -3,7 +3,7 @@ import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { pipeline } from './mod-kit/hooks/commands.ts'
 // #3817: the words for a held steps card, on a line of their own so the close card's line below
 // stays as other branches find it.
-import { CHECK_CARRIED, carriedReason } from '../hooks/close.ts'
+import { CARRIED_RETRIES, CHECK_CARRIED, carriedReason } from '../hooks/close.ts'
 import * as request from '../hooks/request.ts'
 import type { On, Register } from 'claude-code'
 import DESIGN_FIXTURE from './1563-goal-box.fixture.ts'
@@ -1194,11 +1194,15 @@ test("undone steps that sessions working in other projects left under this folde
 
 // #3817. Dan's first real test of the card ran in a folder with five undone steps kept from earlier
 // sessions, none checked by the test session. Manual steps holds such a card, and any step added to
-// it, until the session has checked the steps and pinned them again, so the close card could never
-// show there. His answer on 2026-11-27: "Ask the session to check first". The session is sent one
-// prompt of its own per request of his, the close step just added to the held card is taken back,
-// and the card follows at a quiet turn end once the steps are pinned. `OTHERS` is the shape his
-// session held: steps other sessions pinned, which hold nothing by themselves.
+// it, until the session has checked the steps and pinned them again, which only a standing note
+// asked for, so the close card could not show there until the session did that by itself. His
+// answer on 2026-11-27: "Ask the session to check first". The session is sent one prompt of its own
+// per request of his, the close step just added to the held card is taken back, and the card can
+// follow at a later quiet turn end once the steps are showing. `OTHERS` is the shape his session
+// held: steps other sessions pinned, which hold nothing by themselves. The stand in for manual
+// steps here only answers held or shown: that a step pinned under another title or link becomes
+// this session's own is manual steps' rule, held by its own tests and by
+// tests/test-close-card-carried-reason.sh.
 const OTHERS = { heading: 'Carried', steps: [{ title: 'Renew the certificate', url: 'https://certs.example', pinnedBy: 'an earlier session' }, { title: 'Rotate the signing key', location: 'The keys page', pinnedBy: 's3' }] }
 const CARRIED = 'not shown: carried steps held' as const
 const asksToCheck = (submitted: { text: string }[]) => submitted.filter(s => s.text.startsWith('CARRIED STEPS.'))
@@ -1218,15 +1222,30 @@ test('a steps card carried from an earlier session and not yet checked: the sess
   expect(submitted[submitted.length - 1]?.origin).toMatchObject({ kind: 'plugin' })
   expect(reasonsOf(w)).toMatchObject({ pinned: false, reasons: [carriedReason('asked')] })
   expect(reasonsOf(w)?.reasons[0]).toMatch(/^the card could not be shown \(the steps carried from an earlier session are held until Claude checks them again\); the session was asked to check them and pin them again/)
+  // The reason promises the card only under what the code needs for it: the steps showing, which
+  // needs each pinned as it was kept and Dan at home (manual steps holds every card while he is away).
+  expect(reasonsOf(w)?.reasons[0]).toMatch(/, and the card can follow at a later quiet turn end once they are showing: each pinned under the title and link or place it had, and Dan at home, since manual steps holds every card while he is away$/)
 })
 
 test('the prompt asking for carried steps to be checked says what to do in words the session can act on, and stays short (#3817)', async () => {
   expect(CHECK_CARRIED).toMatch(/^CARRIED STEPS\. /)
   expect(CHECK_CARRIED).toContain('carried over from an earlier session')
-  expect(CHECK_CARRIED).toContain('manual-steps steps tool')
-  expect(CHECK_CARRIED).toContain('already-done')
-  // Dan reads it too, each time it is sent: a ceiling, so it cannot grow unnoticed.
-  expect(CHECK_CARRIED.length).toBeLessThanOrEqual(480)
+  expect(CHECK_CARRIED).toContain('pin them again with the manual steps tool')
+  // What the card following rests on (review of pull request 3870): manual steps knows a pinned
+  // step as the kept one by its title and its link or place, and one it does not know becomes this
+  // session's own step, which holds the close card until Dan has done it.
+  expect(CHECK_CARRIED).toContain('Keep each title and link or place as it is, or the close card stays back.')
+  // Its last sentence asks for a reply that is not a question: an answer ending on one keeps the card back.
+  expect(CHECK_CARRIED).toMatch(/ Say in one line what you found, with no question\.$/)
+  // Dan reads it too: no name from inside the mods that he would have to read past.
+  for (const inside of ['manual-steps steps tool', 'already-done', 'manual steps note']) expect(CHECK_CARRIED).not.toContain(inside)
+  // It is sent while Dan is away too, when manual steps holds a card the session may already have
+  // checked: so it does not say the steps were not checked, and it promises no card.
+  for (const untrue of ['have not been checked', 'follows by itself']) expect(CHECK_CARRIED).not.toContain(untrue)
+  // Each time it is sent he reads it: ceilings under what it was before the review (81 words, 453
+  // characters), so it cannot grow unnoticed.
+  expect(CHECK_CARRIED.split(/\s+/).length).toBeLessThan(81)
+  expect(CHECK_CARRIED.length).toBeLessThan(453)
   // His writing rules: none of the three marks used as a break between words, each named by its code.
   for (const mark of [String.fromCharCode(0x2014), String.fromCharCode(0x2013), ` ${String.fromCharCode(0x2d)} `]) expect(CHECK_CARRIED.includes(mark)).toBe(false)
 })
@@ -1293,7 +1312,12 @@ test("a new request of Dan's, with its own box and the steps still held, asks on
   expect(asksToCheck(submitted)).toHaveLength(2)
 })
 
-test('a prompt asking for carried steps to be checked that could not be sent is said in the reason and sent again at the next quiet turn end (#3817)', withAll, async ($, on) => {
+// A send that failed leaves a session that may stay idle, and an idle session has no next turn end
+// (review of pull request 3870): so the quiet period is armed again by the check itself, a bounded
+// number of times, and only the clock moves in these tests.
+const sendTries = (w: World) => w.held.filter(h => h === 'submit').length
+
+test('a prompt asking for carried steps to be checked that could not be sent is said in the reason and sent again once the session has been quiet for as long again, with no turn between (#3817)', withAll, async ($, on) => {
   const { w, clock, submitted } = world(on, { stepsCard: OTHERS, pinAnswer: CARRIED, submitFails: ['throw', 'drop'] })
   await start($)
   await says($, 'Add the goal box')
@@ -1302,13 +1326,54 @@ test('a prompt asking for carried steps to be checked that could not be sent is 
   // A hook that throws beneath is skipped by the engine, which answers in words of its own.
   expect(reasonsOf(w)?.pinned).toBe(false)
   expect(reasonsOf(w)?.reasons).toHaveLength(1)
-  expect(reasonsOf(w)?.reasons[0]).toMatch(/^the card could not be shown \(the steps carried from an earlier session are held until Claude checks them again\); the session could not be asked to check them \(.+\), so it is asked again at the next quiet turn end$/)
-  await quietEnd($, clock)
+  expect(reasonsOf(w)?.reasons[0]).toMatch(/^the card could not be shown \(the steps carried from an earlier session are held until Claude checks them again\); the session could not be asked to check them \(.+\), so it is asked again once the session has been quiet for as long again$/)
+  await clock.advance(QUIET_MS)
+  expect(sendTries(w)).toBe(2)
   expect(asksToCheck(submitted)).toEqual([])
-  expect(reasonsOf(w)).toMatchObject({ pinned: false, reasons: [carriedReason({ failed: 'held by a guard beneath' })] })
-  await quietEnd($, clock)
+  expect(reasonsOf(w)).toMatchObject({ pinned: false, reasons: [carriedReason({ failed: 'held by a guard beneath', isTriedAgain: true })] })
+  await clock.advance(QUIET_MS)
   expect(asksToCheck(submitted)).toHaveLength(1)
   expect(reasonsOf(w)).toMatchObject({ pinned: false, reasons: [carriedReason('asked')] })
+  // Sent, so nothing is armed again: the close step was added and taken back once for each try.
+  await clock.advance(QUIET_MS * 3)
+  expect(sendTries(w)).toBe(3)
+  expect(w.pinCalls).toBe(3)
+  expect(w.withdrawn).toEqual([CLOSE_TITLE, CLOSE_TITLE, CLOSE_TITLE])
+})
+
+test('a prompt asking for carried steps to be checked that keeps failing is tried a bounded number of times in an idle session, says so, and is tried afresh after the next turn (#3817)', withAll, async ($, on) => {
+  const { w, clock, submitted } = world(on, { stepsCard: OTHERS, pinAnswer: CARRIED, submitFails: Array.from({ length: CARRIED_RETRIES + 2 }, () => 'drop' as const) })
+  await start($)
+  await says($, 'Add the goal box')
+  await workedAndQuiet($, clock)
+  expect(sendTries(w)).toBe(1)
+  for (let i = 0; i < CARRIED_RETRIES; i++) await clock.advance(QUIET_MS)
+  expect(sendTries(w)).toBe(CARRIED_RETRIES + 1)
+  expect(reasonsOf(w)).toMatchObject({ pinned: false, reasons: [carriedReason({ failed: 'held by a guard beneath', isTriedAgain: false })] })
+  expect(reasonsOf(w)?.reasons[0]).toMatch(/the session could not be asked to check them \(held by a guard beneath\) at 4 tries in a row, so it is asked again only at a quiet turn end after the session's next turn$/)
+  // The limit: however long the session stays idle, nothing more is tried.
+  await clock.advance(QUIET_MS * 5)
+  expect(sendTries(w)).toBe(CARRIED_RETRIES + 1)
+  // The next turn's quiet end starts afresh: one more failure, then it is sent.
+  await turnStarts($)
+  await quietEnd($, clock)
+  expect(sendTries(w)).toBe(CARRIED_RETRIES + 2)
+  expect(asksToCheck(submitted)).toEqual([])
+  await clock.advance(QUIET_MS)
+  expect(asksToCheck(submitted)).toHaveLength(1)
+})
+
+test('a prompt asking for carried steps to be checked that could not be sent is not tried again once the session is working again (#3817)', withAll, async ($, on) => {
+  const { w, clock, submitted } = world(on, { stepsCard: OTHERS, pinAnswer: CARRIED, submitFails: ['drop'] })
+  await start($)
+  await says($, 'Add the goal box')
+  await workedAndQuiet($, clock)
+  expect(sendTries(w)).toBe(1)
+  await turnStarts($)
+  await clock.advance(QUIET_MS * 2)
+  expect(sendTries(w)).toBe(1)
+  expect(asksToCheck(submitted)).toEqual([])
+  expect(w.pinCalls).toBe(1)
 })
 
 test('the prompt asking for carried steps to be checked holds back a reload of goal-box while it waits (#3817, #2132)', withAll, async ($, on) => {
@@ -1324,11 +1389,14 @@ test('the prompt asking for carried steps to be checked holds back a reload of g
 })
 
 test('a close step that could not be taken back from the held card is taken back at the next turn start, before the session can pin it onto the card (#3817)', withAll, async ($, on) => {
-  const { w, clock, logs } = world(on, { stepsCard: OTHERS, pinAnswer: CARRIED, withdrawFails: "the manual steps mod's own hook did not answer" })
+  const { w, clock, logs, submitted } = world(on, { stepsCard: OTHERS, pinAnswer: CARRIED, withdrawFails: "the manual steps mod's own hook did not answer" })
   await start($)
   await says($, 'Add the goal box')
   await workedAndQuiet($, clock)
   expect(w.withdrawn).toEqual([])
+  // The session is asked all the same: the steps are still held, and the turn the prompt starts
+  // is where the step is taken back.
+  expect(asksToCheck(submitted)).toHaveLength(1)
   expect(logs.join('\n')).toMatch(/goal-box: the close step added to the held steps card could not be taken back \(.*did not answer.*\); it is tried again at the next turn/)
   w.withdrawFails = ''
   await turnStarts($)

@@ -262,8 +262,9 @@ export const processHolds = (r: { exitCode: number; stdout: string }): ProcessRe
 
 // ---- A steps card carried from an earlier session and not yet checked (#3817) ----
 // Manual steps holds such a card, and any step added to it, until the session has checked the steps
-// and pinned them again, so the close card could never show in a folder with kept undone steps
-// (Dan's first real test of #3770 ran in one). Dan, 2026-11-27: "Ask the session to check first".
+// and pinned them again, which nothing but a standing note asked for. So in a folder with kept
+// undone steps the close card could not show until the session had done that by itself (Dan's first
+// real test of #3770 ran in one, where it had not). Dan, 2026-11-27: "Ask the session to check first".
 
 /**
  * Manual steps' reason for not showing a step added to a held card, word for word (`CARRIED_HELD`
@@ -275,23 +276,39 @@ export const CARRIED_HELD = 'the steps carried from an earlier session are held 
 
 /**
  * What the session is told, once per request of Dan's, when the close card is due and the steps
- * card is still held. Dan reads it too, so it is short; it ends by asking for a reply that is not a
- * question, since an answer ending on one keeps the close card back.
+ * card is still held. Dan reads it too, so it is short and names nothing from inside the mods. It
+ * says to keep each title and link or place because that is how manual steps knows a pinned step
+ * as the kept one (`pinnedBy`, held to this by tests/test-close-card-carried-reason.sh): one it
+ * does not know becomes this session's own step, which holds the close card until Dan has done it.
+ * It ends by asking for a reply that is not a question, since an answer ending on one keeps the
+ * close card back. It promises no card and does not say the steps were never checked: manual steps
+ * answers in the same words for a card it holds because Dan is away, which the session may have
+ * checked already, and that card stays held until he is home whatever the session does.
  */
 export const CHECK_CARRIED =
-  'CARRIED STEPS. This session is finished and quiet, but the card telling Dan he can close it is held back, because manual steps carried over from an earlier session have not been checked. Check each one against the current state now, then pin them again with the manual-steps steps tool, already-done for one you find done, as the manual steps note about them says. Then say in one line what you found, with no question. The close card follows by itself.'
+  'CARRIED STEPS. This session is finished, but the card telling Dan he can close it waits behind steps carried over from an earlier session, which he cannot see yet. Check each against the current state, then pin them again with the manual steps tool, marking any you find done. Keep each title and link or place as it is, or the close card stays back. Say in one line what you found, with no question.'
+
+/**
+ * How many more times a prompt that could not be sent is tried while the session stays idle, one
+ * quiet period apart. An idle session has no next turn end to try it at (review of pull request
+ * 3870), and a bound keeps a send that can never enter from being tried every few minutes for good.
+ */
+export const CARRIED_RETRIES = 3
 
 /**
  * The one reason written when the steps card is held: it names the carried card in manual steps'
  * own words, then says what was done about it. `asked`: the prompt above entered now. `asked
  * before`: it entered earlier under this request and the answer is still held. `failed`: it could
- * not be sent, and why.
+ * not be sent, and why, with whether it is tried again while the session stays idle
+ * (`isTriedAgain`) or the tries allowed there are used up. The asked reason promises the card only
+ * under what the code needs for it, the same two things the prompt's comment above names.
  */
-export const carriedReason = (how: 'asked' | 'asked before' | { failed: string }): string => {
+export const carriedReason = (how: 'asked' | 'asked before' | { failed: string; isTriedAgain: boolean }): string => {
   const held = `the card could not be shown (${CARRIED_HELD})`
-  if (how === 'asked') return `${held}; the session was asked to check them and pin them again, and the card follows at a quiet turn end once it has`
+  if (how === 'asked') return `${held}; the session was asked to check them and pin them again, and the card can follow at a later quiet turn end once they are showing: each pinned under the title and link or place it had, and Dan at home, since manual steps holds every card while he is away`
   if (how === 'asked before') return `${held}; the session was already asked once for this request to check them and pin them again, and they are still held`
-  return `${held}; the session could not be asked to check them (${how.failed}), so it is asked again at the next quiet turn end`
+  if (how.isTriedAgain) return `${held}; the session could not be asked to check them (${how.failed}), so it is asked again once the session has been quiet for as long again`
+  return `${held}; the session could not be asked to check them (${how.failed}) at ${CARRIED_RETRIES + 1} tries in a row, so it is asked again only at a quiet turn end after the session's next turn`
 }
 
 /** The step as the manual steps noun takes it: this session alone, with no Done. */

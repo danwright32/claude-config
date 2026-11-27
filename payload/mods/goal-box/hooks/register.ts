@@ -12,7 +12,7 @@ import { HOLD_MAX_MS, whileHeld } from './mod-kit/held.ts'
 import { transcriptPlaces } from './mod-kit/projects.ts'
 import { toolArgs } from './mod-kit/toolargs.ts'
 import { BOX_KINDS, INFLIGHT_KINDS, inflightHolds, type InflightFacts, type Reading } from './mod-kit/inflight.ts'
-import { CARRIED_HELD, CHECK_CARRIED, CLOSE_HEADING, CLOSE_TITLE, LIST_CUT, NO_BOX, PROCESS_LIST, PROCESS_LOOK, PROCESS_TIMEOUT_MS, QUIET_MS, carriedReason, checkUnfinished, closeStep, leftBehindBy, leftBehindReason, processHolds, type ProcessReading } from './close.ts'
+import { CARRIED_HELD, CARRIED_RETRIES, CHECK_CARRIED, CLOSE_HEADING, CLOSE_TITLE, LIST_CUT, NO_BOX, PROCESS_LIST, PROCESS_LOOK, PROCESS_TIMEOUT_MS, QUIET_MS, carriedReason, checkUnfinished, closeStep, leftBehindBy, leftBehindReason, processHolds, type ProcessReading } from './close.ts'
 
 // The Goal accomplished box (claude-config#1563). Two ways a session's work ends, one box for both:
 //
@@ -586,8 +586,12 @@ const closeReasons = async ($: EngineInterface, seq: number): Promise<{ reasons:
   return { reasons: [...inflightHolds(facts, INFLIGHT_KINDS).map(h => h.text), ...(left ? [leftBehindReason(left)] : []), ...processes.holds], seen: { notes: processes.notes, attached: processes.attached } }
 }
 
-/** At the end of a quiet period armed under `seq`: pins the card when nothing holds it, or says why not. */
-const closeCheck = async ($: EngineInterface, seq: number): Promise<void> => {
+/**
+ * At the end of a quiet period armed under `seq`: pins the card when nothing holds it, or says why
+ * not. `tries` is how many times in this idle stretch the prompt asking for carried steps to be
+ * checked could not be sent (#3817): only the check itself arms a quiet period with one.
+ */
+const closeCheck = async ($: EngineInterface, seq: number, tries = 0): Promise<void> => {
   if ((await $.state.get(closeSeqRef)).value !== seq) return
   const read = await closeReasons($, seq)
   if (read === 'already') return
@@ -618,7 +622,20 @@ const closeCheck = async ($: EngineInterface, seq: number): Promise<void> => {
   await takeBackClose($)
   // A turn that began while the pin was out: the session is working again, so it is not asked.
   if ((await $.state.get(closeSeqRef)).value !== seq) return
-  await writeReasons($, false, [await askToCheckCarried($, prompts)], seen)
+  const asked = await askToCheckCarried($, prompts)
+  if (typeof asked === 'string') return writeReasons($, false, [asked], seen)
+  // The prompt could not be sent. A session that stays idle has no next turn end to try it at, so
+  // the quiet period is armed again here under the same count, and any turn or message since ends
+  // it unread as it does the first. A bounded number of times: a send that can never enter is not
+  // tried every few minutes for good, and the reason says which of the two it is.
+  const isTriedAgain = tries < CARRIED_RETRIES
+  await writeReasons($, false, [carriedReason({ failed: asked.failed, isTriedAgain })], seen)
+  if (isTriedAgain) armCloseCheck($, seq, tries + 1)
+}
+
+/** Starts a quiet period under `seq`, at whose end the close card is judged; a failure there is logged. */
+const armCloseCheck = ($: EngineInterface, seq: number, tries = 0): void => {
+  $.clock.after(QUIET_MS, () => void closeCheck($, seq, tries).catch(err => debug($, `the close this session card could not be judged (${errorText(err, MOD)})`)))
 }
 
 /**
@@ -642,12 +659,14 @@ const takeBackClose = async ($: EngineInterface): Promise<void> => {
 /**
  * #3817 (Dan, 2026-11-27: "Ask the session to check first"): sends the session one prompt of its
  * own, once per request of Dan's, asking it to check the steps carried from an earlier session and
- * pin them again, and answers with the one reason to write. The close card follows at a quiet turn
- * end once the steps are pinned; a session that does not pin them gets no card for that request.
- * Claimed before it is sent, so two checks at once ask once, and released when it did not enter, so
- * a passing failure is asked again at the next quiet turn end (L368).
+ * pin them again, and answers with the one reason to write, or with why it could not be sent. The
+ * close card can follow at a later quiet turn end once the steps are showing (pinned as they were
+ * kept, and Dan at home); a session that does not pin them gets no card for that request. Claimed
+ * before it is sent, so two checks at once ask once, and released when it did not enter, so a
+ * passing failure is asked again: by the caller while the session stays idle, and at the next
+ * quiet turn end after a turn (L368).
  */
-const askToCheckCarried = async ($: EngineInterface, prompts: number): Promise<string> => {
+const askToCheckCarried = async ($: EngineInterface, prompts: number): Promise<string | { failed: string }> => {
   const asked = await $.state.get(askedCarriedRef)
   if (asked.value !== undefined && asked.value >= prompts) return carriedReason('asked before')
   if (!(await $.state.set(askedCarriedRef, prompts, { ifVersion: asked.version })).isSet) return carriedReason('asked before')
@@ -658,7 +677,7 @@ const askToCheckCarried = async ($: EngineInterface, prompts: number): Promise<s
     if (held.value !== prompts) break
     if ((await $.state.set(askedCarriedRef, asked.value ?? -1, { ifVersion: held.version })).isSet) break
   }
-  return carriedReason({ failed })
+  return { failed }
 }
 
 /**
@@ -856,7 +875,7 @@ export const register: Register = on => {
     // #3770: the quiet period before the close card, armed under this turn's count.
     const seq = (await $.state.get(closeSeqRef)).value ?? 0
     await $.state.set(closeAnswerRef, { seq, text: e.answer })
-    $.clock.after(QUIET_MS, () => void closeCheck($, seq).catch(err => debug($, `the close this session card could not be judged (${errorText(err, MOD)})`)))
+    armCloseCheck($, seq)
     const goal = await goalNow($)
     if (goal.state !== 'none') return r
     if (!goal.met) {
