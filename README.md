@@ -5442,8 +5442,23 @@ made only where the ones before it found nothing, so it can only refuse more. No
 several functions set to different values, a name anything else in the text binds (an assignment
 at the top level, a `read`, a `for`, a `local`, `declare` or `typeset` with an option; a bare
 `local kept`, `declare kept` or `typeset kept` in a function is no second value and is not
-counted, nor is a value that is none, as in `local kept=""`), and a function
-called after a cd, whose relative path is read against the directory the reader follows. A quiet
+counted, nor is a value that is none, as in `local kept=""`; a declaration of several names, as
+in `local other kept=`, is read name by name), and a function
+called after a cd, whose relative path is read against the directory the reader follows. Some
+names are read both ways, with the value and with the name empty, and the command is refused as
+a check the gate could not make where either reading finds a reason: a name a function gives an
+empty value (`config=`, `local config=""`), a name `declare` or `typeset` declares in a
+function, bare or with a value, and a name declared in a declaration of several names that
+gives one of them a value. The
+shell hands `$runner $config posts.sh` the file that posts wherever the empty assignment is the
+last to run (written after the value, or with the value set on one branch only), wherever the
+command stands before the declaration, and wherever another function declares the name, and the
+gate does not work out which the command gets. So a quiet command of that shape is refused too
+where the file after the name posts (found by the third review of that change on 2026-11-27: 24
+commands that post passed with the value read alone). A plain assignment, a `local kept=value`
+and a bare `local kept` are read one way. Not covered: a name set by one of those three and
+used on a line before it or in another function, and a function whose body is written in round
+brackets. A quiet
 script run through a variable in a function is refused wherever the same script named by a
 literal path there is: one that finds its own folder from `BASH_SOURCE` and sources a file beside
 it, since the folder a function runs in is not known to the gate. One

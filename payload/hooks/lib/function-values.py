@@ -28,6 +28,21 @@ NAME` in a body is not counted, nor is a value that is none, as in `local NAME="
 body_value_read), and a function called after a cd, whose relative path is then read against the
 directory the reader follows, as one written out is.
 
+Some names are read both ways: with the value, and with the name empty (empty_reason). They are
+a name a body gives an empty value (`config=`, `local config=""`), a name a declare or typeset
+declares in a body, bare or with a value, and a name declared in a declaration of several names
+that gives one of them a value (both_ways). Those are the spellings this file has taken since
+010c05a1b0, which read none of them. The value a body gives is not always the one the command gets: the shell hands it
+the empty one wherever an empty assignment is the last to run, wherever the command stands
+before the declaration, and wherever the declaring function is another one, whose name is local
+to it. Read with the value alone, `$runner $config posts.sh` was a quiet script handed a file,
+where the shells run posts.sh (third review of #3497, 2026-11-27). Which of the two the command
+gets is not worked out, so this refuses a quiet command too, where the file after the name
+posts and the name is never empty when the command runs. A plain assignment, a `local
+NAME=value` and a bare `local NAME` are read one way, as they were at 010c05a1b0: a name used
+on a line before the one that sets it, or in a function other than the one that sets it, is
+not covered for those three.
+
 What it reads is read with the directory unknown, as every command of a function is. So a quiet
 script that finds its own folder from BASH_SOURCE and sources a file beside it, run through a
 variable a function sets, is refused as a check the gate could not make, where main allows it:
@@ -72,6 +87,8 @@ class Kept:
             self.reach.append(most)
         self.sets = None  # {name: [(start, end, value as written)]}, False where the text is not read
         self.bare = {}  # {name: [(start, end)]} of each bare `local NAME` in a body, filled with sets
+        self.both = set()  # the names a declaration read both ways declares (declared), filled with sets
+        self.empty = ()  # the names read as empty in the reading under way (empty_reason)
         self.values = {}
 
     def inside(self, at):
@@ -101,10 +118,25 @@ UNKNOWN_DIR = None
 # A command that only declares names local to a function: `local kept`, `local a b`, and the same
 # with declare or typeset, which in a function declare a name as local does. One with an option
 # (`local -a kept`) or a value is not this.
-DECLARES = r"(?:local|declare|typeset)"
+DECLARES = r"(local|declare|typeset)"
 BARE_LOCAL = re.compile(DECLARES + r"((?:\s+[A-Za-z_]\w*)+)")
+# A declaration of more than one thing, some with values: `local other kept=`, `local a=1 b=2`.
+DECLARATION = re.compile(DECLARES + r"\s+(\S.*)", re.S)
+NAME = re.compile(r"[A-Za-z_]\w*")
 # A value that is none: `local kept=`, `local kept=""`, `kept=''`. It names no file.
 EMPTY = ("", '""', "''")
+# The declarations whose names are read both ways (empty_reason), bare or with a value. Not
+# local: a `local NAME=value` is the walk's to read and a bare local has been read one way since
+# b7abbef4d6, and what that leaves open is in the module docstring.
+BOTH = ("declare", "typeset")
+# A plain $NAME or ${NAME}, which is nothing at all where the name is empty.
+PLAIN = re.compile(r"\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))")
+# What an empty word is written as in the reading with a name empty. The shell hands the command
+# an empty word for `"$NAME"`, which names no file, so the command fails to open it and runs
+# nothing through it. Written as `""` the gate reads `bash ""` as a bash with no script, reading
+# its input, and refuses it in a function (as main does, typed out). A path under /dev/null can
+# name no file either, and is read as one that names none.
+NO_FILE = "/dev/null/empty-word"
 
 
 def body_sets(judge, k):
@@ -122,18 +154,54 @@ def body_sets(judge, k):
         for (_, t), p in zip(cmds, parts):
             if not k.inside(p["start"]):
                 continue
+            declares = "local" in t or "declare" in t or "typeset" in t
             if "=" not in t:
                 # A bare `local NAME` in a body declares the name there and gives it no value, and
                 # so does a bare declare or typeset.
-                declares = "local" in t or "declare" in t or "typeset" in t
                 bare = BARE_LOCAL.fullmatch(judge.sh_strip_openers(t).strip()) if declares else None
-                for name in bare.group(1).split() if bare else ():
-                    k.bare.setdefault(name, []).append((p["start"], p["end"]))
+                if bare:
+                    declared(k, p, bare.group(1), bare.group(2).split(), ())
                 continue
-            set_here = judge.sh_assignment(re.sub(r"^" + DECLARES + r"\s+", "", judge.sh_strip_openers(t).strip()))
+            head = judge.sh_strip_openers(t).strip()
+            how = re.match(DECLARES + r"\s+", head) if declares else None
+            set_here = judge.sh_assignment(head[how.end():] if how else head)
             if set_here:
-                k.sets.setdefault(set_here[0], []).append((p["start"], p["end"], set_here[1]))
+                declared(k, p, how and how.group(1), (), [set_here])
+                continue
+            # A declaration of more than one thing: each word a NAME or a NAME=value. Read as one
+            # command that sets one name it set none, so `local other kept=` counted as something
+            # else that binds kept (third review of #3497). One with an option, or with a word
+            # that is neither, is left as it was: not read.
+            several = DECLARATION.fullmatch(head) if how else None
+            names, sets = [], []
+            for kind, raw in judge.sh_tokens(several.group(2)) if several else ():
+                one = judge.sh_assignment(raw) if kind == "word" and "=" in raw else None
+                if kind == "word" and NAME.fullmatch(raw):
+                    names.append(raw)
+                elif one:
+                    sets.append(one)
+                else:
+                    several = None
+                    break
+            if several:
+                declared(k, p, several.group(1), names, sets)
     return k.sets
+
+
+def declared(k, p, word, names, sets):
+    """Record one command of a body on k: the command at p, a local, declare or typeset (word; None
+    for a plain assignment) that declares names with no value and gives each (name, value as
+    written) pair of sets its value. Every name of a declare or typeset, and every name of a
+    declaration of several names that gives one of them a value, is noted as read both ways
+    (both_ways): each is a command 010c05a1b0 did not read, so a name it declares was left as
+    written there, and a later file was read as what the command may run."""
+    for name in names:
+        k.bare.setdefault(name, []).append((p["start"], p["end"]))
+    for name, value in sets:
+        k.sets.setdefault(name, []).append((p["start"], p["end"], value))
+    if word in BOTH or (sets and len(names) + len(sets) > 1):
+        k.both.update(names)
+        k.both.update(name for name, _ in sets)
 
 
 def body_value(judge, name, depth=0):
@@ -168,7 +236,9 @@ def body_value_read(judge, k, name, depth):
         # file, so it is no second value beside the one set on a line after it, the other ordinary
         # way to write a function. Counted as one, `run() { local kept=""; kept=posts.sh; bash
         # "$kept"; }; run` ran a script nothing had read (second review of #3497, 2026-11-27).
-        # Where every value written is none, the answer is the one it was.
+        # Where every value written is none, the answer is the one it was. The value is not the
+        # whole of it: the empty one is what the command gets wherever it is the last to run, so
+        # a command read through such a name is read with the name empty as well (empty_reason).
         named = [(a, w) for a, _, w in found if w not in EMPTY]
         for start, written in named or [(a, w) for a, _, w in found]:
             values.add(judge.sh_word(written, UNKNOWN_DIR, lambda x, at=start: judge.sh_home(
@@ -203,12 +273,15 @@ def wider_words(judge, taken):
     if taken is None:
         return False, judge.sh_source_var
 
+    empty = kept(judge).empty
+
     def var(name):
         v = judge.sh_source_var(name)
         if v is None:
             v = body_value(judge, name)
             if v is not None:
                 taken.append(name)
+                v = "" if name in empty else v  # the reading with the name empty (empty_reason)
         return v
     return in_body(judge), var
 
@@ -279,20 +352,102 @@ def wider_reason(judge, text, d, placed, judge_again):
     """The reason the command text posts when read with a function's values written out, or None.
     placed is the second reading's text, which this one is not made again for; judge_again(text)
     judges a command as written. A command that only runs the script being read once more is not
-    judged again (own_again)."""
+    judged again (own_again). Where that reading finds nothing and took a name read both ways
+    (both_ways), the command is read once more with that name empty (empty_reason). Which of the
+    two the command gets is not worked out, so a reason found that way is worded as a check the
+    gate could not make too (L11), in words of its own."""
     taken = []
     wider = judge.sh_placed(text, d, taken)
-    if not wider or wider == placed or own_again(judge, wider, d):
+    if not wider or wider == placed:
         return None
-    reason = judge_again(wider)
-    if not reason or not taken:
+    reason = None if own_again(judge, wider, d) else judge_again(wider)
+    if not taken:
         return reason
+    empty = ()
+    if not reason:
+        empty, reason = empty_reason(judge, text, d, (placed, wider), taken, judge_again)
+        if not reason:
+            return None
     ctx = judge.shell
     where = f"the script {ctx['script']}" if ctx["script"] else "this command"
     if ctx["at"] is not None and ctx["script"]:
         where += f", {judge.line_place(ctx, ctx['at'])},"
-    named = " and ".join("$" + n for n in sorted(set(taken)))
+    named = " and ".join("$" + n for n in sorted(empty or set(taken)))
     # Through unfollow, so main() says the check could not be made rather than claiming a post.
+    if empty:
+        what = "a name" if len(empty) == 1 else "names"
+        return judge.unfollow(f"{where} runs a command through {named}, {what} a function of the same text also "
+                              "declares or leaves empty, so the gate cannot tell whether the command gets the "
+                              f"value set there: read with {named} empty, {reason}")
     return judge.unfollow(f"{where} runs a file through {named}, whose value the gate cannot follow to that "
                           "command: only a function of the same text sets it, and read with the value set "
                           f"there, {reason}")
+
+
+def both_ways(judge, k, names):
+    """Those of names read both ways (module docstring): one a function body of the text gives an
+    empty value (`kept=`, `local kept=""`), one a declare or typeset declares there, bare or with
+    a value, and one declared in a declaration of several names that gives one of them a value
+    (declared)."""
+    sets = body_sets(judge, k)
+    if sets is False:
+        return set()
+    return {n for n in names if n in k.both or any(w in EMPTY for _, _, w in sets.get(n, ()))}
+
+
+def without(text, names):
+    """text with each plain $NAME and ${NAME} of names taken out, which is how the shell reads the
+    command where those names are empty: `$how $kept posts.sh` is `$how posts.sh`, and
+    `${kept}posts.sh` is `posts.sh`. A $ inside single quotes or after a backslash is only text.
+    Every other form (${NAME:-word}) is left for the reading, which is given the empty value."""
+    out, i, n, dq = [], 0, len(text), False
+    while i < n:
+        c = text[i]
+        if c == "\\":
+            out.append(text[i:i + 2])
+            i += 2
+            continue
+        if c == "'" and not dq:
+            j = text.find("'", i + 1)
+            j = n if j < 0 else j + 1
+            out.append(text[i:j])
+            i = j
+            continue
+        if c == '"':
+            dq = not dq
+        elif c == "$":
+            m = PLAIN.match(text, i)
+            if m and (m.group(1) or m.group(2)) in names:
+                i = m.end()
+                continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def no_empty_words(judge, text):
+    """text, one command, with each word that is empty (two quotes and nothing in them) written
+    as NO_FILE."""
+    if '""' not in text and "''" not in text:
+        return text
+    return " ".join(NO_FILE if kind == "word" and not raw.replace('""', "").replace("''", "") else raw
+                    for kind, raw in judge.sh_tokens(text))
+
+
+def empty_reason(judge, text, d, seen, taken, judge_again):
+    """(the names of taken that are read both ways (both_ways), the reason the command
+    text posts when read with each of them empty, or None). Made only where the reading with the
+    values found nothing, and judged as a command written out is: seen are the texts already
+    judged."""
+    k = kept(judge)
+    names = both_ways(judge, k, set(taken))
+    if not names:
+        return names, None
+    bare = without(text, names)
+    k.empty = names
+    try:
+        second = no_empty_words(judge, judge.sh_placed(bare, d, []) or bare)
+    finally:
+        k.empty = ()
+    reason = None if second == text or second in seen else judge_again(second)
+    return names, reason and reason.replace(NO_FILE, "an empty word")

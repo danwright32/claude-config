@@ -221,7 +221,9 @@ SHAPES
 # from the one set on the next line, and declare and typeset as something else that binds the
 # name, so the name got no value and the script it ran was read by nobody: allowed on main and at
 # 010c05a1b0 (the second review's probes d4b, d4, d3 and d3b, 2026-11-27). An empty value names no
-# file, so it is no second one, and a bare declare or typeset is read as a bare local is.
+# file, so the name is read with the value the next line gives it, and a bare declare or typeset
+# is no second value either. The empty value can still be the one the command gets, so such a
+# name is read with it empty as well (the section after this one).
 while IFS= read -r body; do
   [ -n "$body" ] || continue
   body="${body//@NL@/$NL}"
@@ -254,9 +256,140 @@ allowed "a name declared with a bare declare, set, and then read in is not follo
 script 'run() {' '  local kept' '  kept=posts.sh' '  read -r kept' '  bash "$kept"' '}' 'run'
 judge_script
 allowed "a name declared with a bare local, set, and then read in is not followed, as before"
+# A value given in the declaration by declare or typeset is read too. The walk follows a `local
+# NAME=value` itself and not these two, so the value is the one a function body gives the name
+# and the answer is a check the gate could not make. The behaviour came with the bare spellings
+# above and no case held it: with `declare` and `typeset` taken out of the words that declare,
+# the suite passed (third review of #3497, 2026-11-27).
+while IFS= read -r body; do
+  [ -n "$body" ] || continue
+  body="${body//@NL@/$NL}"
+  for file in posts quiet; do
+    printf '%s\n' "${body//@F@/$file}" > "$FV/case.sh"
+    judge_script
+    if [ "$file" = posts ]; then
+      refused "a script that posts, run through a variable declare or typeset gives its value, is refused: $(shown "$body")"
+      says "as a check it could not make: $(shown "$body")" "REFUSED: the gate could not check whether this command posts to Slack"
+      says "naming the variable: $(shown "$body")" "runs a file through \$kept, whose value the gate cannot follow to that command"
+    else
+      allowed "the same function running a script that does not post passes: $(shown "$body")"
+    fi
+  done
+done <<'SHAPES'
+run() {@NL@  declare kept=@F@.sh@NL@  bash "$kept"@NL@}@NL@run
+run() {@NL@  typeset kept=@F@.sh@NL@  bash "$kept"@NL@}@NL@run
+SHAPES
+# A declaration that names more than one thing: `local other kept=` and `local kept= other=` give
+# kept an empty value as `local kept=` does, and `local other=1 kept=posts.sh` gives it its value.
+# Read as one command that sets one name, such a line set none, so it counted as something else
+# that binds the name and the script was read by nobody: allowed on main and at fadd7ce18b (the
+# third review's probes s17 and s18).
+while IFS= read -r body; do
+  [ -n "$body" ] || continue
+  body="${body//@NL@/$NL}"
+  for file in posts quiet; do
+    printf '%s\n' "${body//@F@/$file}" > "$FV/case.sh"
+    judge_script
+    if [ "$file" = posts ]; then
+      refused "a script that posts, run through a variable a declaration of two names declares, is refused: $(shown "$body")"
+    else
+      allowed "the same function running a script that does not post passes: $(shown "$body")"
+    fi
+  done
+done <<'SHAPES'
+run() {@NL@  local other kept=@NL@  kept=@F@.sh@NL@  bash "$kept"@NL@}@NL@run
+run() {@NL@  local kept= other=@NL@  kept=@F@.sh@NL@  bash "$kept"@NL@}@NL@run
+run() {@NL@  local other=1 kept=@F@.sh@NL@  bash "$kept"@NL@}@NL@run
+SHAPES
+
+echo "slack drafts only: a name a function also declares or leaves empty is read both ways (claude-config#3497)"
+
+# An empty value is no second value beside the one a body sets, so the name is read with that
+# value. But the shell hands the command the empty one wherever the empty assignment is the last
+# to run: written after the value (`config=quiet.sh`, then `config=`), where the value is set
+# only on one branch, or where the command stands before the line that sets it. Read with the
+# value alone, `$runner $config posts.sh` was `bash quiet.sh posts.sh`, a quiet script handed a
+# file, where the shells run posts.sh: 24 of the third review's probes that post were allowed at
+# fadd7ce18b and refused at 5019457df1 and 010c05a1b0 (2026-11-27; bash 3.2 and zsh hand the
+# command the posting file alone in each shape run). So a command read through such a name is
+# read both ways, with the value and with the name empty, and refused where either finds a
+# reason. The gate cannot tell which the command gets, so the refusal is a check it could not
+# make. Read both ways: a name a body gives an empty value, a name declare or typeset declares
+# there, bare or with a value, and a name declared in a declaration of several names that gives
+# one of them a value. Those are the spellings the reading has taken since 010c05a1b0, which
+# read none of them and so refused each command below. The last five shapes are not among the
+# 24: four are a declare or typeset that gives the value, where the command stands before it or
+# in another function, which fadd7ce18b allowed too, and the fifth is a name declared bare
+# beside another that is given a value, which passes if only the names given a value are read
+# both ways (both found while fixing the 24, same day).
+# @F@ is the file after the name: the one the command runs when the name is empty.
+BOTH_WAYS="a function of the same text also declares or leaves empty"
+while IFS= read -r body; do
+  [ -n "$body" ] || continue
+  body="${body//@NL@/$NL}"
+  for file in posts quiet; do
+    printf '%s\n' "${body//@F@/$file}" > "$FV/case.sh"
+    judge_script
+    if [ "$file" = posts ]; then
+      refused "a script that posts, run when a name a function leaves empty is empty, is refused: $(shown "$body")"
+      says "as a check it could not make: $(shown "$body")" "REFUSED: the gate could not check whether this command posts to Slack"
+      says "saying the name is read both ways: $(shown "$body")" "$BOTH_WAYS"
+    else
+      allowed "the same function with a script that does not post after the name passes: $(shown "$body")"
+    fi
+  done
+done <<'SHAPES'
+run() {@NL@  runner=bash@NL@  config=quiet.sh@NL@  config=@NL@  $runner $config @F@.sh@NL@}@NL@run
+run() {@NL@  local config=""@NL@  runner=bash@NL@  [ -n "$1" ] && config=quiet.sh@NL@  $runner $config @F@.sh@NL@}@NL@run
+run() {@NL@  local kept=""@NL@  how=bash@NL@  kept=quiet.sh@NL@  kept=""@NL@  $how $kept @F@.sh@NL@}@NL@run
+run() {@NL@  how=bash@NL@  kept=quiet.sh@NL@  local kept=@NL@  $how $kept @F@.sh@NL@}@NL@run
+run() {@NL@  local kept=""@NL@  how=bash@NL@  $how $kept @F@.sh@NL@  kept=quiet.sh@NL@}@NL@run
+run() {@NL@  local kept=""@NL@  kept=quiet.sh@NL@  inner() {@NL@    local kept=""@NL@    $how $kept @F@.sh@NL@  }@NL@  how=bash@NL@  inner@NL@}@NL@run
+run() {@NL@  typeset kept@NL@  how=bash@NL@  $how $kept @F@.sh@NL@  kept=quiet.sh@NL@}@NL@run
+run() {@NL@  local kept=""@NL@  how=python3@NL@  kept=quiet.py@NL@  kept=""@NL@  $how $kept @F@.py@NL@}@NL@run
+later() {@NL@  kept=quiet.sh@NL@}@NL@run() {@NL@  declare kept@NL@  how=bash@NL@  $how $kept @F@.sh@NL@}@NL@run
+run() {@NL@  local kept=''@NL@  how=bash@NL@  kept=none/@NL@  kept=''@NL@  $how ${kept}@F@.sh@NL@}@NL@run
+run() {@NL@  local kept=""@NL@  how=bash@NL@  kept=none/@NL@  kept=""@NL@  $how "${kept}@F@.sh"@NL@}@NL@run
+run() {@NL@  how=bash@NL@  $how $kept @F@.sh@NL@  declare kept=quiet.sh@NL@}@NL@run
+set_it() {@NL@  declare kept=quiet.sh@NL@}@NL@run() {@NL@  how=bash@NL@  $how $kept @F@.sh@NL@}@NL@set_it@NL@run
+run() {@NL@  how=bash@NL@  $how $kept @F@.sh@NL@  typeset kept=quiet.sh@NL@}@NL@run
+run() {@NL@  how=bash@NL@  $how $kept @F@.sh@NL@  declare other=1 kept=quiet.sh@NL@}@NL@run
+run() {@NL@  local kept other=1@NL@  how=bash@NL@  $how $kept @F@.sh@NL@  kept=quiet.sh@NL@}@NL@run
+SHAPES
+# Typed as the command itself.
+run_bash 'run() { local kept=""; how=bash; kept=quiet.sh; kept=""; $how $kept posts.sh; }; run' "$FV"
+refused "typed as a command, a script that posts run when the name is empty is refused"
+says "typed as a command: saying the name is read both ways" "$BOTH_WAYS"
+says "typed as a command: naming the name" "read with \$kept empty"
+# What reading both ways must not refuse: the ordinary function, where the name stands alone in
+# double quotes. Empty, it hands the command an empty word, which names no file, so nothing is
+# run. The quiet twins above the last section (`local kept=""`, then `kept=quiet.sh`, then `bash
+# "$kept"`) hold that for a shell; these two hold it for a file sourced through a second name,
+# which 5019457df1 and 010c05a1b0 refused and fadd7ce18b allowed (the fixer's e4 and e5), and
+# their twins that post, refused by the reading with the value.
+script 'run() {' '  local kept=""' '  how=.' '  kept=quiet.sh' '  $how "$kept"' '}' 'run'
+judge_script
+allowed "a quiet file sourced through a name declared empty and then set passes, read both ways"
+script 'run() {' '  declare kept' '  how=source' '  kept=quiet.sh' '  "$how" "$kept"' '}' 'run'
+judge_script
+allowed "a quiet file sourced through a name a bare declare declares and the next line sets passes, read both ways"
+script 'run() {' '  local kept=""' '  how=.' '  kept=posts.sh' '  $how "$kept"' '}' 'run'
+judge_script
+refused "the twin that posts, sourced through a name declared empty and then set, is refused"
+script 'run() {' '  declare kept' '  how=source' '  kept=posts.sh' '  "$how" "$kept"' '}' 'run'
+judge_script
+refused "the twin that posts, sourced through a name a bare declare declares, is refused"
+# A quiet file run through a name declare gives its value, standing alone in double quotes.
+script 'run() {' '  declare kept=quiet.sh' '  how=bash' '  $how "$kept"' '}' 'run'
+judge_script
+allowed "a quiet file run through a name declare gives its value passes, read both ways"
 # Not covered, and so not asserted either way: a name a function sets that the top level sets as
-# well (`kept=""` or `kept=quiet.sh` above the function; the review's probes b08 and b01), and a
-# name a local declares with an option (`local -a kept`).
+# well (`kept=""` or `kept=quiet.sh` above the function; the review's probes b08 and b01), a
+# name a local declares with an option (`local -a kept`), a function whose body is written in
+# round brackets, which the walk reads no body for (the third review's s27 and d17), and a name
+# used on a line before the one that sets it, or in a function other than the one that sets it,
+# where a plain assignment, a `local NAME=value` or a bare `local` is what the body holds (w19,
+# w20, v03): those three are read one way, as they were at 010c05a1b0.
 
 echo "slack drafts only: a script that runs itself in a function is not read a second time, and anything else is read as before (claude-config#3497)"
 
