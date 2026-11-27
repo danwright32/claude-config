@@ -2838,6 +2838,151 @@ disputed in September are agreed diff now. That is why the seats became a tracke
 paragraphs above): the 72 are the candidates the 20 seats were seeded from, and the other 52 are
 protected.
 
+## One time limit runner, and the one moment it may signal (#3578)
+
+`hooks/lib/run-with-limit.sh <seconds> <command>` is a program an agent or a script runs. It starts
+the command as the leader of a process group of its own and ends the whole group at the limit. This
+records why it is built the way it is; README "A time limit that ends the whole process group" says
+what it does.
+
+**It signals a number only while its own child pins that number.** The diagnosis on the issue
+(2026-11-27) names the hazard, by reading the code and with nothing reproduced: a supervisor that
+signals a group number after it has collected the group's leader. Once a process is collected its
+id is free, and the kernel can hand the id to any new process, so that signal can land on a
+stranger. `bounded_run` has that shape (an alarm that arrives between its `waitpid` and its
+`alarm 0` signals `-$pid`), as do two of its three private copies and two of the skill scripts that
+stop a group. What pins a number is a child that has not been collected: it keeps its process id, running
+or ended, and the group it leads has that id. So the order is fixed. Learn that the command ended
+without collecting it, end what its group still holds, collect it last, signal nothing after. One
+class holds the call that signals and the call that collects, and refuses the first after the
+second, and after either of its own looks at the command was told the command is no longer the
+runner's child (the look before a fault's KILL, and the look for a suspended command, which until
+the second review of claude-config#3833 threw that answer away). The suite runs the program with
+those calls replaced by recorders and fails on a signal asked for after the collect, which the
+recorder never sends.
+
+**The pin is only real if the runner keeps its own ended children, so it makes sure first.** An
+independent review of the pull request (claude-config#3833, 2026-11-27) found, by reading, that a
+caller which ignores SIGCHLD hands the setting down, and that on Linux a process with it has its
+children collected by the system the moment they end: the number would then be pinned by nothing,
+and the fault handler would send KILL to it. So the runner sets SIGCHLD to its default before it
+starts anything and then proves the result: it starts a child that ends at once and collects it,
+and where the system says there is no such child the run is refused with 125 before the command.
+The command is started with SIGCHLD as its caller had it. The fault handler asks the system
+whether the command is still the runner's child (`waitid` with `WNOWAIT`, where python has it)
+before any KILL. Considered: refusing whenever SIGCHLD is ignored (rejected: every command under
+such a caller would then fail for a setting the runner can put right for itself). A command that
+moved itself to another group is ended by its own process id, which the same pin covers.
+
+**A command that left its group is sent TERM by its id only after the watch, and the watch is not
+cut short.** At the limit such a command's group reads empty at once, and the runner watches for
+the command's end for up to ten seconds (a setting, not a measurement) before it signals the
+command's own id. The second review (2026-11-27) asked for that signal as soon as the group reads
+empty and the watch has not seen the end. That reading cannot tell a command that left its group
+from an ordinary one that is ending. In Apple's published kernel source (xnu, read on 2026-11-27,
+not measured on this Mac) a process is marked dead at the start of its exit, from which point a
+walk of its group no longer counts it and the group reads empty, while the process event the
+runner's watch waits for is posted near the end of the exit, after its files are closed. All
+through that span a signal to its process id answers success. A TERM by id sent then goes to the
+runner's own uncollected child, so it breaks no rule, and it would make the runner say the
+command had left a group it never left. Considered: sending on that reading anyway (rejected: an
+untrue sentence about an ordinary run, at a rate set by how slow an exit is under load). What
+would tell the two apart is a look at the command's own group id, which names another group only
+for a command that is alive and has moved. That look is a design step the review did not spell
+out, so it is put to Dan on the pull request (claude-config#3833), and README says the ten
+seconds.
+
+**Python, because the rule cannot be held in perl or bash.** Bash collects a child by itself the
+moment it ends, whether or not the script calls `wait`, so a script never holds the pin. Perl's core
+has no call that reports a child's end without collecting it. Python has one on each system: a
+kqueue process event on macOS and `waitid` with `WNOWAIT` on Linux (the python3 of Apple's developer
+tools, 3.9.6, has no `os.waitid`, read on 2026-11-27, which is why the two systems differ). A bash
+launcher stands in front so that a missing python3 is said in words and comes back as 125 with
+nothing run. Considered: one python file with a shebang (rejected: with python3 missing, `env`
+answers 127, which reads as the command's own code). The launcher also asks the program one
+question before it hands a command over, and goes on only at the program's own answer: a
+`python3` that starts and is not Python (a version manager's shim) would otherwise hand back its
+own exit code, and its 0 would read as a pass with nothing run. The answer comes with the code
+125, so the question typed as the words of a run is no pass either. Considered: the launcher
+staying as the parent and checking a proof afterwards (rejected: bash would then stand between
+the caller's signal and the runner, and bash cannot hold the pin to pass a signal on). The
+question costs one more start of python3 in every run.
+
+**What is left in the group is read with no `ps`.** `ps` is setuid, and macOS refuses to start a
+setuid program in a sandbox, so a runner reading it could not run under the no network wrapper,
+where a suite that names a Slack endpoint has to run. On macOS signal 0 to the group answers it.
+Measured on 2026-11-27 on the personal MacBook (macOS 26.6.2, python 3.14.4), each with the probe's
+own children, one run: a group holding only its ended, uncollected leader answered EPERM, the same
+group with one more member answered success, and 15 ms after that member ended it answered EPERM. On
+Linux signal 0 succeeds for a group whose only member is its ended leader (read from the kernel's
+documented behaviour, not measured here), so there the members come from `/proc`. Both readers are
+asked about the runner's own group before anything starts, where the answer is known, and a system
+where that fails runs nothing: a reader that cannot see would report every leftover as none (L1).
+
+**A command that leaves a process running fails, with 123.** The diagnosis on the issue asked
+whether to fail the run or to stop the process and keep the command's code, and recommended failing:
+a suite that passes and leaves a process behind is the fault of 2026-11-24. It is Dan's to reverse.
+What is left gets one second to end by itself first. Without that, `exec > >(tee log)` would fail
+by a race, since a shell does not wait for a process substitution, and `tee` would be ended before
+it had written what it was piped. The one second, the two from TERM to KILL and the ten the group is
+watched after KILL are settings, not measurements.
+
+**The command starts only once the runner is ready, and a fault inside the runner ends the group.**
+The child waits on a pipe before it becomes the command, and is let go after the runner is watching
+it and has recorded its group. A runner that dies first closes the pipe and the child ends. A fault
+after that sends the group KILL while the child still pins it. Every signal that would end the
+runner and that it carries is carried over to the group first (TERM, INT, HUP, QUIT, USR1, USR2,
+ALRM, VTALRM, PROF, XCPU, and on Linux IO, PWR, STKFLT and the real time signals python can set,
+from its SIGRTMIN up, which is 34 with glibc), and the runner then ends by that signal, so a shell
+loop around it stops at Ctrl C once the handlers are in (README names the spans before that, and
+the launcher's). TSTP is caught and not acted on, and TTIN and TTOU are ignored while a command
+runs, because a stopped runner keeps no limit. Ignored and not caught: a write that raised a caught
+TTOU fails and is tried again for ever. They are set after the command's process exists, so the
+command starts with both as its caller had them. So the paths that run the command with nobody
+keeping its limit are these. Nothing in the same process can answer the first three: the runner
+ended by KILL; the runner stopped by STOP, for as long as it is stopped; and a real fault in the
+runner's own process, since a python handler cannot return from one, which is why the signals a
+fault raises (ABRT, BUS, FPE, ILL, SEGV, SYS, TRAP, and EMT on macOS) stay at their default. The
+fourth is left by choice: the same signals sent from outside, of which ABRT, TRAP, SYS and EMT
+could be carried over and are not. On Linux signals 32 and 33 belong to the C library, and python
+cannot set them. Considered: a watchdog inside the group that signals its own
+group with `kill 0`, as `tools/load-window.sh` does, which would outlive the runner (rejected: it
+is a second process in every run, and it cannot tell a command that ended from one that was
+stopped). Considered for TSTP: stopping the group and then the runner, and letting both go on
+together (rejected: it makes the runner a job control shell, and it leaves open whether time spent
+stopped counts toward the limit, which is Dan's to say).
+
+**The terminal is handed to nobody.** A command in a group of its own is in a background group of
+the caller's terminal, and one that reads or sets the terminal is suspended by the system until the
+limit (reproduced by the review with `cat` on a terminal of the probe's own making, 2026-11-27).
+The runner is for agents and gates, which have no terminal, so it says so (the usage, the README)
+and what it says with 124 tells when the command was suspended and not running. It names the
+terminal as the likely cause only: the runner's look shows that the command was suspended, never
+why, and a command that stopped itself gets the same words. Considered: giving the
+terminal's foreground to the command's group and taking it back (rejected: taking it back safely
+means handling the signals a background writer gets, and Ctrl Z would then stop the command and
+leave the runner to notice, which is the job control shell again).
+
+**The runner takes its own group record away.** A record left for every run ties its number to
+the session for as long as the marker folder lives, and process ids came round again within minutes
+(one sample on 2026-11-27). The file is removed when the group is known to hold nothing and just
+before the collect: the uncollected command still pins the number the file is named for, so no
+shell and no other runner can have made a file of that name. It stays when the runner could not
+end the group, after a fault, and when the runner was ended outright, which are the cases the
+record is for. What is lost: a member this user may not signal reads as nothing, so its record
+goes too.
+
+**The limit stays out of the no network wrapper.** The issue asked whether the wrapper should carry
+the limit. The wrapper takes no option and reads no setting, so that nothing on a command line can
+weaken it, and a limit would be its first option. The two compose: the wrapper first, the runner
+after it, which the suite runs.
+
+**Not built here.** No gate reads through the runner to the command behind it. That lets commands run
+that the Slack drafts gate, the payload write gate and the area check refuse today, so it needs Dan's
+sign off, and it should recognise the runner by its installed path, as the no network wrapper is
+recognised, so that a home made copy stays refused. `bounded_run`'s eight callers and the three
+private copies are not moved onto the runner either.
+
 ## A fresh worktree's first edit waits for an up to date base (#2517)
 
 `hooks/fresh-worktree-base-gate.sh` refuses a file edit in a worktree that has no commits of its own
