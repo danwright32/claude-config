@@ -61,8 +61,9 @@ HOW A PAIR IS MADE.
   * Both are compared after Slack's formatting is set aside (links, bold, italics, bullets, quote
     markers at the start of a line, the name a read adds inside a mention of a person, a channel or
     a group, spacing and case), by words, with difflib.
-  * The FIRST post after a draft takes it. A later post that is more like that draft is left out
-    and counted, so the count says how often that rule may have made the wrong pair.
+  * The FIRST post after a draft takes it. A later post that is more like that draft is left out,
+    and is counted when it came within PAIR_WITHIN_MINUTES minutes of the draft, so the count says
+    how often that rule may have made the wrong pair.
 
 WHAT IT CANNOT SEE, so nobody reads more into a count than it measured.
   * A thread no later session read back. Its draft is counted as having no post read back after it.
@@ -499,7 +500,10 @@ def take_call(item, rec, drafts, reads):
 def take_result(item, drafts, saved, reads, posts, done, shape, concise):
     call = item.get("tool_use_id")
     if not isinstance(call, str):
-        return  # no call has such an id (take_call keeps strings only), and a list here stopped the run
+        # No call has such an id (take_call keeps strings only), and a list here stopped the run with
+        # a traceback. Passed over, and counted, so that it is in a count (L11).
+        shape["tool results whose call id is no string, passed over"] += 1
+        return
     if call in drafts:
         text, error = result_text(item)
         saved[call] = saved.get(call, False) or (not error and not DRAFT_ERROR.search(text))
@@ -892,7 +896,8 @@ def main():
     print("drafts with no post read back: of those, in a place a concise read read back afterwards: %d (a post "
           "may be there, and a concise read shows no time to pair it by)" % left["unread_concise"])
     print("posts whose draft was already paired: of those, more like that draft than the post it was paired "
-          "with: %d (the first post after a draft takes it)" % left["closer"])
+          "with: %d (the first post after a draft takes it; only a later post within %d minutes of the draft "
+          "is counted)" % (left["closer"], PAIR_WITHIN_MINUTES))
     print("also left out: pairs whose post begins or ends in a line shaped like a label that its draft does not "
           "hold there: %d (that line may be the connector's and not his; one he added by hand is left out with "
           "it)" % left["doubtful"])

@@ -266,6 +266,7 @@ out="$(run odd_id)"; rc=$?
 check_eq "odd id: a result whose call id is a list does not stop the run" "0" "$rc"
 check_not "odd id: with no traceback" "Traceback" "$out"
 check "odd id: and the pair beside it is read" "sent as drafted: 1 of 1 pair" "$out"
+check "odd id: what was passed over is counted, never dropped in silence" "tool results whose call id is no string, passed over: 1" "$(run odd_id --shapes)"
 # A channel, a group and a here mention with a name added are the same mention (second review, S5).
 out="$(run other_mentions)"
 check "other mentions: each draft posted word for word is sent as drafted" "sent as drafted: 3 of 3 pairs" "$out"
@@ -340,6 +341,7 @@ check "mentions: and its opening is not counted as changed" "the opening changed
 out="$(run second_post)"
 check "second post: the draft is paired with the first post after it" "heavily rewritten: 1 of 1 pair" "$out"
 check "second post: and the later post that is more like the draft is counted" "of those, more like that draft than the post it was paired with: 1" "$out"
+check "second post: the count names the limit it is taken within" "only a later post within 60 minutes of the draft is counted" "$out"
 check "no such post in the basics" "of those, more like that draft than the post it was paired with: 0" "$(run basics)"
 # A post past the hour could never have taken that draft, so it is no sign the pair made was wrong.
 out="$(run second_post_late)"

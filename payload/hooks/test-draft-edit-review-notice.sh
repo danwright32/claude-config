@@ -195,6 +195,29 @@ check "a last offer written with a leading zero is read as that many seconds: du
 check_not "and bash does not stop on it as an octal number" "value too great" "$out"
 check_eq "nothing else is printed beside the one line" "1" "$(printf '%s\n' "$out" | grep -c .)"
 
+# A stored number longer than 12 digits is no time this can read (second review, S7). Bash's
+# arithmetic wraps a number too long for it round to a small one, without a word: twenty digits here
+# read as the second after 1970 began, which is a last offer long ago, so the review came due on it.
+fresh toolong
+saved $T0 >/dev/null
+echo 18446744073709551617 > "$STATE/last-offered"
+out="$(start $((T0 + 60)))"
+check "a last offer of twenty digits is no time: said" "could not tell whether" "$out"
+check "with what is wrong with it" "last-offered does not hold a time this can read" "$out"
+check_not "and the review is not offered on a number that wrapped round" "$DUE" "$out"
+check_eq "nor is the file written over" "18446744073709551617" "$(cat "$STATE/last-offered")"
+# The limit is 12 digits to the digit: a time a week ago written in 12 is read, and in 13 is not.
+fresh twelve
+saved $T0 >/dev/null
+printf '%012d\n' $((T0 - WEEK)) > "$STATE/last-offered"
+check "a last offer written in 12 digits is read as that time: due" "$DUE" "$(start $((T0 + 60)))"
+fresh thirteen
+saved $T0 >/dev/null
+printf '%013d\n' $((T0 - WEEK)) > "$STATE/last-offered"
+out="$(start $((T0 + 60)))"
+check "the same time written in 13 digits is not read: said" "does not hold a time this can read" "$out"
+check_not "and not offered" "$DUE" "$out"
+
 # S4: the clock is read AFTER the state files. The mark is a FIFO here, so the hook waits at it; the
 # writer answers only once the hook has opened it and the second has then changed, with that later
 # second. A clock read before the files calls that "a time later than now". This case uses the real clock.
