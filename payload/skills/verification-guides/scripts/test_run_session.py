@@ -1560,6 +1560,22 @@ class CutOffTests(RunFixture):
         self.assertNotIn("not signalled", rec["stop_detail"])
         self.assertEqual((rec["egress"]["verdict"], monitor.asked), ("unmeasured", 0))
 
+    def test_a_cut_off_does_not_list_a_process_that_is_still_dying_as_a_survivor(self):
+        # Every member of serve's group gets the same SIGKILL, and one can take a moment longer to go
+        # than the leader. Read once, right then, it was written down as having outlived the cut off.
+        serve = self.child()
+        rdir = self.a_run_on_disk(serve_pid=serve.pid, serve_pgid=serve.pid)
+        really, reads = run_session.live_members, []
+
+        def still_dying_at_first(pgid):
+            reads.append(pgid)
+            return [4194303] if len(reads) == 1 else really(pgid)  # a pid no process can have
+
+        with mock.patch.object(run_session, "live_members", still_dying_at_first):
+            rec = run_session.cut_off(rdir, "caller_gone", "its caller was gone", proc=serve)
+        self.assertEqual(rec["serve_survivors"], [], "a process still dying was recorded as a survivor")
+        self.assertEqual(set(reads), {serve.pid})
+
     def test_a_stop_signals_serves_group_only_while_serve_is_still_uncollected(self):
         # Serve's leader ends when asked and a process in its group does not. The stop must end that
         # one too, and every signal it sends must go while the leader is still uncollected.

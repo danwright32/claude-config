@@ -270,8 +270,11 @@ def wait_for_supervisor(rdir, timeout_s):
 
 
 def stop_wait_s(timeouts):
-    """How long a supervisor's stop may take: the project's stop command and serve's group, each up
-    to stop_s, plus settling egress (the end canary and the report stream), with room besides."""
+    """How long `stop` and `start` wait for a supervisor's stop: the project's stop command and
+    serve's group, each up to stop_s, plus settling egress (the end canary and the report stream),
+    with room besides. It is not the longest a working stop can take: one that has to kill serve
+    and then its group takes longer (see stop_longest_s). `stop` then says supervisor-hung while
+    the supervisor goes on and finishes, a gap older than the cut off and not closed by it."""
     return (timeouts["stop_s"] * 2 + 30
             + egress.finish_budget_s(timeouts.get("egress_s", v.TIMEOUT_DEFAULTS["egress_s"])))
 
@@ -586,11 +589,10 @@ def record_ending(rdir, **fields):
         return update_receipt(rdir, stopped_at=v.utc_now(), **fields)
 
 
-def do_stop(rdir, reason, proc=None, detail=None, monitor=None, egress_why=None, killed_wait_s=None,
-            by_itself=False, by_receipt=False):
+def do_stop(rdir, reason, proc=None, detail=None, monitor=None, egress_why=None, by_itself=False, by_receipt=False):
     """Stop serve, run the project's stop command, settle egress, remove the worktree, record it all.
 
-    Serve gets stop_s to end once it is asked to, and killed_wait_s (KILLED_WAIT_S when not given)
+    Serve gets stop_s to end once it is asked to, and KILLED_WAIT_S
     to go once it is killed. A serve that still has not gone ends the stop there and the run is cut
     off (see cut_off): a wait with no limit at that point is a stop that never returns, which is the
     state a supervisor was found in on 2026-11-26 (claude-config#3820).
@@ -606,13 +608,12 @@ def do_stop(rdir, reason, proc=None, detail=None, monitor=None, egress_why=None,
     wt = rec.get("worktree") or os.path.join(rdir, "worktree")
     serve_exit, survivors = None, []
     if proc is not None:
-        limit = KILLED_WAIT_S if killed_wait_s is None else killed_wait_s
         signal_own(proc, signal.SIGTERM)
         if not exited(proc, stop_s):
             signal_own(proc, signal.SIGKILL)
-            if not exited(proc, limit):
+            if not exited(proc, KILLED_WAIT_S):
                 return cut_off(rdir, reason, "serve (process %s) was killed and still could not be collected"
-                               " %ss later" % (proc.pid, limit), detail=detail, proc=proc, monitor=monitor)
+                               " %ss later" % (proc.pid, KILLED_WAIT_S), detail=detail, proc=proc, monitor=monitor)
         if signal_own(proc, signal.SIGTERM) is not None:
             if not wait_gone(proc.pid, stop_s):
                 signal_own(proc, signal.SIGKILL)
@@ -651,7 +652,7 @@ def end_held(proc, monitor):
     return said
 
 
-def cut_off(rdir, reason, why, detail=None, proc=None, monitor=None, collect_s=None):
+def cut_off(rdir, reason, why, detail=None, proc=None, monitor=None):
     """End a run whose stop cannot finish, and record that it was cut off (claude-config#3682, #3807).
 
     Only a supervisor calls this: from the stop itself when a killed serve has not gone, or from
@@ -673,13 +674,16 @@ def cut_off(rdir, reason, why, detail=None, proc=None, monitor=None, collect_s=N
         say("verification: cutting the run off: %s" % why)
         stream = getattr(monitor, "proc", None)
         serve_sent, stream_sent = end_held(proc, monitor)
-        gone = serve_sent is not None and exited(proc, KILLED_WAIT_S if collect_s is None else collect_s)
+        gone = serve_sent is not None and exited(proc, KILLED_WAIT_S)
         detail = (detail + "; " if detail else "") + "the stop did not finish and the run was cut off: %s" % why
         stop_exit, detail, _ = project_stop(rdir, rec, detail)
         serve_exit, survivors, unsent = None, [], []
         if serve_sent is not None:
             try:
-                survivors = live_members(proc.pid)  # read while serve still pins the number
+                # Read while serve still pins the number. The rest of the group got the same SIGKILL
+                # and may take a moment longer to go: one still dying is not one that outlived it.
+                wait_gone(proc.pid, COLLECT_S)
+                survivors = live_members(proc.pid)
             except v.VerificationError as e:  # ps failed: said, and the ending still recorded
                 survivors, detail = None, detail + "; whether serve's group is empty could not be read: %s" % e
             serve_exit = collect(proc, COLLECT_S if gone else 0)
