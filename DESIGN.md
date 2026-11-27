@@ -645,6 +645,18 @@ Rejected along the way:
   borrowing them gave one tree a different verdict hour to hour (#953). The gate type checks against
   one build's types pinned in `tools/typescript/claude-code-types` instead, beside
   `claude plugin validate`, which reads the module the way the engine will.
+- **One notification for every outcome of the check (until #3759).** A mod not listed, a mod refused
+  and a validation the bound stopped all set one flag, so on 2026-11-26 a validation that was merely
+  slow at a load average of about 60 was shown to Dan as "a mod is not loading on this Mac". A time out
+  measures `claude`, not the mod, so it is said as could not check and notifies after
+  `SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY` syncs in a row for the same mod (the number and its measurement
+  are in the table of limits), counted in `.mod-check-timeouts` once per sync, by a tag naming the
+  sync, since one send can check twice. One sync posts at most one notification about time outs,
+  naming every mod due (six timed out in one sync on 2026-11-26). The only other notifications are for
+  a record that cannot be read: once when a time out meets it, and once, not on every sync, while it
+  cannot be set aside. The other two outcomes still notify at once. Waiting
+  longer under load, or skipping the check, was left alone: the 30 second bound is a limit, and
+  changing it is Dan's decision.
 - **Treating an absent `payload/mods` as an empty one.** git cannot record an empty folder, so a
   Mac whose last mod was deleted publishes a `.gitkeep`; without it the other Mac found no tree,
   skipped it, and kept every mod.
@@ -946,6 +958,7 @@ that is added both fail until this table is updated.
 | 0.1 seconds | `SYNC_POLL_INTERVAL=0.1` | How finely claude-sync notices that the hook suite runner it started has ended, and that a held sync lock has been released | Beside a hook suite measured between 220 and 441 seconds, the difference between this and the two seconds it replaces is invisible, and the granularity was never load bearing. It is the whole cost in the test suite, where real pulls run against a stub runner that returns in milliseconds: measured 2026-08-30, a pull noticed such a runner 306ms after it finished against 4,203ms at a four second poll. No deadline moves with it, both being measured against the clock, which had to be made true of the lock's own ceiling in the same change because that one was counting turns of its loop, proved by #205 | 2026-08-30 |
 | 1 nested run | `SUITE_MAX_DEPTH=1` | The suite's own depth allowance | Every place the suite spawns itself is one level down and nothing in it legitimately needs a run nested two deep, proved by #34 | 2026-08-17 |
 | 20 minutes | `SUITE_WALL_DEFAULT=1200` in hooks/lib/suite-deadline.sh, the limit every suite arms with, overridden for one run by `SUITE_WALL_TIMEOUT` | Any suite, started directly or by the runner, is stopped as hung, and everything it started is killed | One number for all of them, derived from the slowest suite that takes it. Measured 2026-09-18 on this Mac: test-run-all-tests.sh, the slowest of those, took 89 seconds alone at load 6 and 70 to 76 seconds with three copies at once at load 25. Re-read 2026-09-19 from the runner's own timings store (~/.cache/claude-config/suite-timings), where the slowest suite armed with this default is test-run-all-tests.sh at 90 seconds and the next is test-subagent-issue-harvest.sh at 62, so every other suite has more headroom still. The worst slowdown on record is 5.6x, the sync suite's 348 seconds idle against 1943 at load 160 to 188 on 2026-08-22, which would put the slowest of these near 500 seconds, so the limit is 13x its idle time and 2.4x that worst case. Before this only one suite had a bound at all, and 152 copies of that one were found at zero CPU the day it was measured, the oldest seven hours old. tests/test-claude-sync.sh is the one suite that does NOT take this default: it legitimately runs for 1943 seconds under load, so it arms at its own `SUITE_TIMEOUT` plus 60 seconds, which is 30 of its watchdog's 2 second polls, so the watchdog that can name the section it stopped in is always the one that speaks at the ceiling, proved by #444 | 2026-09-19 |
+| 5 syncs | `SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY=5` | A mod whose `claude plugin validate` was stopped at `SYNC_CLAUDE_CHECK_TIMEOUT` on this many syncs in a row notifies, once per run of them; fewer are said as could not check in the output and in status, and notify nobody | Read from this Mac's whole sync log on 2026-11-26 (2.7 MB, 2026-09-09 to 2026-11-26): 677 runs in which the mod check ran (an apply, or a logged time out), 41 of them with a time out, which formed 43 runs of time outs for one mod: 33 of one sync, 9 of two, and one of four (mod-kit, 6:40 PM to 8:14 PM ET on 2026-11-25, at a load average near 60). 5 is the smallest number none of them reached, so not one measured slow answer would have notified, while a check that never finishes is heard after five syncs that check: the run of four took an hour and a half on a busy evening, and the log averages about nine such syncs a day. The count only grows on syncs that check, so a quiet day stretches it, which is the price of not notifying on load, proved by #3759 | 2026-11-26 |
 | 30 seconds | `SYNC_CLAUDE_CHECK_TIMEOUT=30` | One `claude plugin list` or `claude plugin validate` asked about the mods is stopped, and the pull says the mods could not be checked | Measured 2026-10-03 on this Mac, three runs each: `plugin list --json` took 0.37 to 0.40 seconds and `plugin validate` 0.31 to 0.44, so this is about 70x the slowest. The check runs under the sync lock on the watcher's and the timer's path, so the cost of waiting too long is every sync behind a hung claude (a login prompt, a self update), while a slow first launch still fits inside it, proved by #606 | 2026-10-03 |
 | 30 seconds | `SYNC_SCRATCH_DU_TIMEOUT=30` | A `du` sizing abandoned scratch is stopped and the size is reported as not known | Measured 2026-09-18 on this Mac: one `du` over 792 flat scratch items holding 950 MB in 12,124 entries took 0.2 seconds, so this is 150x that, and the 1,139 items and 1.4 GB the pile left would be under a second at the same rate. A `du` still going at 30 seconds is reading a tree something is writing, and the four found that day had run 23 to 51 minutes, proved by #444 | 2026-09-18 |
 | 1 minute | `SYNC_WATCH_ASK_TIMEOUT=60` | The watcher's timer wake stops its one `git ls-remote` of the shared repo and records the repo as unreachable for that wake | A chosen number, not a measurement. One ask took 0.22 to 0.33 seconds over five samples on this Mac on 2026-11-22 at a load average of 7.5, so this is about 180x the slowest. The ask runs in the watcher's only loop, so the cost of waiting too long is every later send behind a stalled connection, while a stopped ask costs one wake, since the next wake asks again, proved by #3396 | 2026-11-22 |
@@ -2280,6 +2293,39 @@ is said once, logged and notified, and recorded in `.hooks-refused`. The send re
 takes the line out of the base, so the payload's copy reads as not yet seen here and is kept: a
 refusal on one Mac must never travel as a deletion that unregisters the gate on the Mac whose script
 is fine. The first pull that finds the script registers it and clears the record.
+
+### A key beside the hooks block is named, kept, and never applied (#3741)
+
+The file is the hooks block's home and nothing else's, but nothing stopped somebody putting another
+top level key in it. Measured on 2026-11-26 with a `permissions` block in a throwaway folder: the
+pull read `.hooks` alone and said nothing, so the key reached neither Mac, and the next send rewrote
+the file as `{hooks: ...}`, deleting the key from the repository with no word either.
+
+So the pull names every such key, in its output and the sync log on each pull and in a notification
+once per set of keys (`.hooks-file-keys-told`), and the send writes its merged block into the object
+it read, so every other key stays in the file. It is not byte for byte the same: the send reads the
+whole file with this Mac's home path put back, then writes it afresh through jq and puts the
+placeholder back, so in any key a value holding this Mac's literal home path becomes
+`__CLAUDE_HOME__`, as in the hooks block, and the spacing is jq's. A commit holding only that
+rewrite can be dropped as already published, since to this Mac it is the same content (seen in
+`tests/test-sync-hooks-file-other-keys.sh`), so it reaches the repository with a send that carries a
+change of its own. What a pull writes to a Mac's
+`settings.json` does not change: it still reads only `.hooks`. A file holding JSON `null` holds no
+key and no hooks, and both of the send's readings take it as empty, so the send writes its block over
+it, as it did before #3741.
+
+Rejected along the way:
+
+- **Refusing the whole file on the pull, as `settings.shared.json` refuses a key off its list.** That
+  file holds nothing but optional settings, so refusing it whole costs a setting or two. This one
+  holds every gate, and since #1899 a removed or renamed gate has to be taken out of `settings.json`
+  for the Mac to keep working, so holding the block back over a key the sync does not read would stall
+  every hook change on both Macs for as long as the key stood.
+- **Refusing the send while the key is there.** The send rewrites the file on every run, so it would
+  have held this Mac's hook changes back on every edit until somebody removed the key, while the key
+  itself does no harm sitting in the repository. Keeping it costs nothing and loses nothing.
+- **Applying the key.** That is carrying a setting between Macs, which is what `settings.shared.json`
+  and its list exist to decide, one setting at a time with Dan's sign off.
 
 ## A conflict in a file this tool GENERATES is not a conflict
 
