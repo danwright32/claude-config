@@ -250,6 +250,99 @@ if ! grep -q '^alpha-mod	1	' "$SA/.mod-check-timeouts" 2>/dev/null; then
   show "the send" "$WORK/send.4"
 fi
 
+# A sync that hands over to a newly pulled claude-sync is still one sync (the second review of
+# #3759). A run that receives a new claude-sync hands over to it with exec, and the new copy is a new
+# process. A send whose push is refused because the shared repo moved goes that way after it has
+# checked the mods for a new name, and the new copy's apply checks them again. So the new copy must
+# carry on with the tag of the sync that started it. Shown on a real hand over, by a pull that runs
+# the clone's own copy as a Mac does: each copy says its tag as do_pull starts, and the new copy
+# says it is the new one, which also proves the hand over happened.
+XB="$WORK/reexec-shared.git"; git init -q --bare -b main "$XB"
+XO="$WORK/reexec-repoO"; XR="$WORK/reexec-repo"; XH="$WORK/reexec-home"
+git clone -q "$XB" "$XO" 2>/dev/null
+sed 's/^do_pull(){$/do_pull(){ echo "RUN-TAG $SYNC_RUN_TAG" >\&2/' "$SCRIPT" > "$XO/claude-sync"
+mkdir -p "$XO/payload"; printf '# rules\n' > "$XO/payload/CLAUDE.md"
+git -C "$XO" checkout -q -b main 2>/dev/null || true
+git -C "$XO" add -A && git -C "$XO" commit -q -m seed && git -C "$XO" push -q -u origin main 2>/dev/null
+git clone -q "$XB" "$XR" 2>/dev/null
+mkdir -p "$XH"; echo '{"hooks":{}}' > "$XH/settings.json"
+xpull(){ env HOME="$H" SYNC_NO_NOTIFY=1 SYNC_NO_LAUNCHCTL=1 SYNC_CLAUDE_BIN="$FAKE" CLAUDE_HOME="$XH" SYNC_REPO="$XR" bash "$XR/claude-sync" pull > "$1" 2>&1 < /dev/null; }
+xpull "$WORK/reexec.1"
+sed 's/^do_pull(){$/do_pull(){ echo "NEW-COPY RUN-TAG $SYNC_RUN_TAG" >\&2/' "$SCRIPT" > "$XO/claude-sync"
+printf 'a change that comes with the new copy\n' >> "$XO/payload/CLAUDE.md"
+git -C "$XO" add -A && git -C "$XO" commit -q -m "a newer claude-sync" && git -C "$XO" push -q 2>/dev/null
+xpull "$WORK/reexec.2"
+x_old="$(awk 'sub(/^RUN-TAG /, "") { print; exit }' "$WORK/reexec.2")"
+x_new="$(awk 'sub(/^NEW-COPY RUN-TAG /, "") { print; exit }' "$WORK/reexec.2")"
+export x_old x_new
+check "fixture: the pull handed over to the newly pulled claude-sync, and both copies said a tag" "[ -n \"\$x_old\" ] && [ -n \"\$x_new\" ]"
+check "fixture: and what came with the new copy was applied" "grep -q 'a change that comes with the new copy' '$XH/CLAUDE.md'"
+check "a sync that hands over to a new claude-sync keeps its tag" "[ -n \"\$x_old\" ] && [ \"\$x_old\" = \"\$x_new\" ]"
+if [ -z "$x_old" ] || [ "$x_old" != "$x_new" ]; then
+  echo "    tag before the hand over: '$x_old', after it: '$x_new'"
+  show "the pull" "$WORK/reexec.2"
+fi
+
+# The reading half, on the count itself. The apply a hand over starts (SYNC_REEXECED=1), given the
+# tag of the sync that counted, adds nothing. A tag in the environment of any other run is never
+# read, so a tag left in somebody's shell cannot make two syncs one.
+pull; pull LATE=alpha-mod
+x_tag="$(awk -F '\t' '$1 == "alpha-mod" { print $5; exit }' "$RECORD" 2>/dev/null)"
+xapply(){ env "$@" HOME="$H" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 SYNC_CLAUDE_BIN="$FAKE" CLAUDE_HOME="$C" SYNC_REPO="$R" bash "$SCRIPT" apply-only > "$WORK/apply.out" 2>&1 < /dev/null; }
+xapply LATE=alpha-mod SYNC_REEXECED=1 SYNC_RUN_TAG="$x_tag"
+check "fixture: the apply a hand over starts checked the mods" "grep -q 'could not check mod alpha-mod' '$WORK/apply.out'"
+check "the apply a hand over starts, given the sync's tag, adds nothing to the count" "[ -n '$x_tag' ] && grep -q '^alpha-mod	1	' '$RECORD'"
+grep -q '^alpha-mod	1	' "$RECORD" || { echo "    the record after that apply:"; sed 's/^/      /' "$RECORD"; show "the apply" "$WORK/apply.out"; }
+xapply LATE=alpha-mod SYNC_RUN_TAG="$x_tag"
+check "a tag in the environment of a run that is no hand over is never read" "grep -q '^alpha-mod	2	' '$RECORD'"
+pull
+
+# Two syncs in one process are two syncs (the second review of #3759). The watcher is one process
+# that lives for days and runs a sync on every tick, so a check that never finishes must still reach
+# the count that notifies across its ticks. If the ticks ever shared one tag, every tick after the
+# first would be taken for the same sync, the count would stay at 1, and nobody would ever hear.
+# The real watcher runs, with a stand in fswatch that adds a mod (so each tick's send checks the
+# mods), reports one change, and waits for that tick's line in the watcher's output before the next.
+# The wait is on that line, never on a clock; 600 looks is a guard that only a broken watcher meets.
+WTB="$WORK/watch-shared.git"; git init -q --bare -b main "$WTB"
+WTR="$WORK/watch-repo"; git clone -q "$WTB" "$WTR" 2>/dev/null
+WTH="$WORK/watch-home"
+for m in alpha-mod beta-mod; do
+  mkdir -p "$WTH/mods/$m/.claude-plugin"; printf '{ "name": "%s" }\n' "$m" > "$WTH/mods/$m/.claude-plugin/plugin.json"
+done
+echo '{"hooks":{}}' > "$WTH/settings.json"; printf '# rules\n' > "$WTH/CLAUDE.md"
+gitrun send "$WTH" "$WTR" "$WORK/watch.seed"
+WTOUT="$WORK/watch.out"; WTFS="$WORK/fswatch-ticks"; : > "$WTOUT"
+cat > "$WTFS" <<FS
+#!/bin/bash
+base="\$(grep -c ' claude-sync watch: ' '$WTOUT' 2>/dev/null)" || base=0
+k=0
+while [ "\$k" -lt 3 ]; do
+  k=\$((k + 1))
+  mkdir -p "$WTH/mods/tick\$k-mod/.claude-plugin"
+  printf '{ "name": "tick%s-mod" }\n' "\$k" > "$WTH/mods/tick\$k-mod/.claude-plugin/plugin.json"
+  echo 1
+  n=0
+  until [ "\$(grep -c ' claude-sync watch: ' '$WTOUT' 2>/dev/null)" -ge "\$((base + k))" ]; do
+    n=\$((n + 1)); [ "\$n" -le 600 ] || exit 0
+    sleep 0.1
+  done
+done
+FS
+chmod +x "$WTFS"
+: > "$NL"
+env HOME="$H" SYNC_FSWATCH="$WTFS" SYNC_WATCH_POLL=0 SYNC_NO_NOTIFY=0 SYNC_NOTIFIER="$WORK/notifier" \
+  SYNC_CLAUDE_BIN="$FAKE" SYNC_NO_LAUNCHCTL=1 SYNC_MOD_CHECK_TIMEOUTS_TO_NOTIFY=3 LATE=alpha-mod \
+  LISTED="alpha-mod beta-mod tick1-mod tick2-mod tick3-mod" CLAUDE_HOME="$WTH" SYNC_REPO="$WTR" \
+  bash "$SCRIPT" watch > "$WTOUT" 2>&1 < /dev/null
+check "fixture: the watcher ran three ticks, and each could not check the mod" "[ \"\$(grep -c 'could not check mod alpha-mod' '$WTOUT')\" -ge 3 ]"
+check "three watcher ticks that each time out count three syncs" "grep -q '^alpha-mod	3	' '$WTR/.mod-check-timeouts'"
+check "so a check that never finishes notifies from the watcher too" "[ \"\$(notes)\" = 1 ] && grep -q 'alpha-mod' '$NL'"
+if ! grep -q '^alpha-mod	3	' "$WTR/.mod-check-timeouts" 2>/dev/null; then
+  echo "    the record after those ticks:"; sed 's/^/      /' "$WTR/.mod-check-timeouts" 2>/dev/null
+  show "the watcher" "$WTOUT"
+fi
+
 echo "passed: $pass, failed: $fail"
 echo "SUITE-RESULT passed=$pass failed=$fail"
 [ "$fail" -eq 0 ]

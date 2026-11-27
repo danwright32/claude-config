@@ -59,9 +59,20 @@ set -euo pipefail
 SYNC_RUN_ARGV="${*:-<no arguments>}"
 # WHICH SYNC THIS IS, so a count kept per sync is added to once however many times one sync asks the
 # same question (the review of #3759): a send that changes the mod names checks them, and the apply
-# its reconcile runs checks them again. Set here for a typed run, never read from the environment,
-# and set afresh by every watch_tick, since the watcher is one long process running many syncs.
+# its reconcile runs checks them again. Set here for a typed run, and set afresh by every watch_tick,
+# since the watcher is one long process running many syncs. Read from the environment in one case
+# only: the new copy a hand over starts (SYNC_REEXECED=1, see reexec_after_self_update) is a new
+# process finishing the same sync, so it carries on with the tag it was handed (the second review of
+# #3759). A tag found in any other run's environment, left in somebody's shell say, is never read,
+# so it can never make two syncs one. Taken out of the environment at once, as SYNC_SEND_REFUSED is,
+# so nothing this run starts inherits it.
+SYNC_RUN_TAG_HANDED="${SYNC_RUN_TAG:-}"
 SYNC_RUN_TAG="$$.$(date +%s).$RANDOM"
+if [ "${SYNC_REEXECED:-0}" = "1" ]; then
+  case "$SYNC_RUN_TAG_HANDED" in ''|*[!0-9.]*) ;; *) SYNC_RUN_TAG="$SYNC_RUN_TAG_HANDED" ;; esac
+fi
+unset SYNC_RUN_TAG_HANDED
+export -n SYNC_RUN_TAG 2>/dev/null || true
 
 CLAUDE_HOME="${CLAUDE_HOME:-$HOME/.claude}"
 SYNC_REPO="${SYNC_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
@@ -10371,6 +10382,9 @@ reexec_after_self_update(){   # $1 before  $2 after  $3 command for the child
   # SYNC_LOCK travels too: the resumed run must look at the same lock this one is holding,
   # not fall back to the default path and take a second one.
   export SYNC_REEXECED=1 SYNC_PULL_BASE="$1" CLAUDE_HOME SYNC_REPO SYNC_LOCK
+  # And the sync's tag, since the new copy finishes the same sync, and a count kept per sync must
+  # not count it twice (the second review of #3759). Inside a watch tick this is the tick's own local.
+  export SYNC_RUN_TAG
   # exec REPLACES this process, so its EXIT trap never runs and the send stamp taken there would
   # be lost. A sync whose push went up and which then handed off to the updated script would
   # report "never sent" for work that provably left this Mac, which is the defect this stamp
