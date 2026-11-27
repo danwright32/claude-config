@@ -408,7 +408,10 @@ CLAIM_LOCK_SECONDS = 3
 # it leaves unread, for either reason, is said in its answer and never read as nothing found.
 NOTED_SESSIONS = 50
 # How long the hook that notes a picker may take: one pass over the transcript and, for a picker it
-# can already tell is an announcement's, one stat either side of one hash.
+# can already tell is an announcement's, one stat either side of the two questions asked of
+# lib/changelog-entry.js about its wording file, the hash and then whether the merge would refuse
+# the wording (claude-config#3846). The two share what is left of this bound, so the hook takes no
+# longer than it did, and a judging that ran out of time is said in the note's `why`.
 NOTE_SECONDS = 8
 # Seams: the wait between two tries for the lock, and the clock that bounds them (L524).
 _sleep = time.sleep
@@ -1037,7 +1040,8 @@ def note_answer(payload, deadline=None):
 
     One thing more is noted when it can be: for a picker this run can already tell is an
     announcement's (_wording_noted), the hash of its wording file as it stands, which is what lets
-    his approval outlast a later write to the file."""
+    his approval outlast a later write to the file, and beside it, in `why`, what stops an Approve
+    of that wording when the merge would refuse it (claude-config#3846)."""
     lost = "The picker Dan just answered could not be noted on this Mac's record: "
     if not isinstance(payload, dict):
         return False, lost + "what Claude Code handed the hook was not a JSON object"
@@ -1096,8 +1100,9 @@ def _wording_noted(ask, sent, deadline):
     if repo is None or not isinstance(file, str) or not file.startswith("/"):
         return {}
     file = os.path.realpath(file)
-    # The file's change time is read either side of the hash, so the hash noted is of the file as
-    # it stood at the change time noted beside it.
+    # The file's change time is read either side of the hash and the judging of the wording
+    # (_file_hash asks both of the bytes it read once), so the hash noted is of the file as it
+    # stood at the change time noted beside it.
     digest, why, unfit, changed = None, None, None, None
     try:
         changed = os.stat(file).st_ctime_ns
