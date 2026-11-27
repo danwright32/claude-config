@@ -1,5 +1,5 @@
 import { expect, mock } from 'claude-code/testing'
-import { test } from './mod-kit/tests/hang-ceiling.ts'
+import { never, test } from './mod-kit/tests/hang-ceiling.ts'
 import type { On, Register } from 'claude-code'
 import type { ModKitBandRow } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import { type Command } from './mod-kit/hooks/commands.ts'
@@ -178,8 +178,9 @@ const stillClock = (on: On, w: { clockFails?: string }) => {
     if (w.clockFails) throw new Error(w.clockFails)
     return { value: now } as never
   })
-  // The engine runs a timer's function once this hook answers, so it never answers.
-  on('clock.after', () => new Promise<never>(() => {}))
+  // The engine runs a timer's function once this hook answers, so it never answers: held by never(),
+  // which ends it when its test ends, so it cannot finish inside a later test (claude-config#1778).
+  on('clock.after', () => never() as never)
   return {
     advance: async (ms: number) => {
       now += ms
