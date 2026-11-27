@@ -3369,7 +3369,10 @@ def every_command(s, cwd="", scripts=None):
     string cannot be read, and then says why; depth is how many wrappers the command is inside.
     scripts, a list, reads each script file a command runs too, its commands right after the script's
     record one wrapper deeper, and is given (path, text) for each file read (claude-config#2301); a
-    relative script name is resolved only against an absolute cwd, so pass the session's directory."""
+    relative script name is resolved only against an absolute cwd, so pass the session's directory.
+    One kind of record is not right after its wrapper: those claude-config#3786 taught the crude cut
+    to list come after every other record of the whole text, each with its own directory and depth
+    (_records says why, and what a caller that reads a record's neighbours should know)."""
     out = []
     for d, t, wrap, _, _, _, depth in _records(s, cwd, 0, scripts, fields=False)[0]:
         wrapper, _, why = wrap.partition("\x1d")
