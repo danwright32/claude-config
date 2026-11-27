@@ -37,9 +37,9 @@ On 2026-11-19 two sessions, one on each Mac, built the same fix, because a branc
 
     bash ~/.claude/skills/orchestrate/claim-issue.sh claim <owner/repo> <issue number> <branch>
 
-It reads the issue's claims, the open pull requests naming it and the remote branches carrying its number, and posts the claim (which Mac, the time in ET, the branch) only when none of them shows another session at work. Dispatch on exit 0 only:
+It reads the issue's claims, the open pull requests built for it and the remote branches carrying its number, and posts the claim (which Mac, the time in ET, the branch) only when none of them shows another session at work. A pull request is built for an issue when its branch or its title names the issue, or its body names it straight after a closing keyword, "Part of" or "Refs". One that only mentions the number is printed as a `mentioned, not held` line and holds nothing (claude-config#3788). Dispatch on exit 0 only:
 
-- Exit 0, `CLAIMED` or `ALREADY CLAIMED`: dispatch the builder.
+- Exit 0, `CLAIMED` or `ALREADY CLAIMED`: dispatch the builder. A `mentioned, not held` line under it names a pull request to glance at, never a reason to hold the item back.
 - Exit 1, `HELD` or `CLOSED`: the item is not started. Its board row shows `held by <who>`, taken from the lines the script prints, and Dan is told in one line.
 - Exit 2, `COULD NOT CHECK`: the item is not started, and nothing was claimed unless the message says a claim may have been posted, when it names the release command to run straight away. Show the reason it prints on the board and run it again later; never read a failed check as free.
 
@@ -49,7 +49,7 @@ A claimed item that ends any way other than a merged pull request that closes it
 
     bash ~/.claude/skills/orchestrate/claim-issue.sh release <owner/repo> <issue number> <branch> "<reason>"
 
-A claim with no release stops counting after 24 hours; an open pull request or remote branch naming the issue blocks whatever the claim's age.
+A claim with no release stops counting after 24 hours; an open pull request built for the issue, or a remote branch naming it, blocks whatever the claim's age.
 
 ### Which model a builder runs on
 
