@@ -200,8 +200,11 @@ def words(text):
 #     text, which is the answer to "every repo has its own generic vocabulary and no list here can
 #     know it": a word most issues use says nothing about which one this is.
 # A matcher that cries wolf is ignored, so the rule is strict and misses wording that differs:
-# nothing printed means no open item shares the item's words, never that none covers it. The rate
-# of false matches on a real repository's open issues has NOT been measured (claude-config#3555).
+# nothing printed means no open item shares the item's words, never that none covers it. Measured on
+# 2026-11-27 against claude-config's 200 open issues and 74 open pull requests, TITLES ONLY: 0 of 12
+# made up items nothing covers matched anything, 6 of 7 paraphrases of open items found theirs, and
+# 1 unrelated neighbour was offered beside them. Bodies were not read, so a match a body would add
+# or take away is unmeasured (claude-config#3555's pull request has the detail).
 RARE_DF = 3
 RARE_SHARED = 2
 TITLE_SHARED = 3
