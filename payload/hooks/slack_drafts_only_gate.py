@@ -8330,8 +8330,11 @@ def both_readings(sw, cmd, cwd, judges):
         return reason
     finally:
         # Put back, so a second call judged in one process (a suite that loads this file) starts
-        # as the first did. The hook itself judges one call a process.
+        # as the first did: the two flags, and Judge.fed's answers, which after a second judgement
+        # are the short reading's, and handed to the next call they would have it judged once, by
+        # that reading alone (third review of #3497). The hook itself judges one call a process.
         FED.update(short=False, grew=False)
+        Judge.fed.cache_clear()
 
 
 def main():

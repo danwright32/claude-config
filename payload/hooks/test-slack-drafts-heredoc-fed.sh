@@ -15,12 +15,21 @@
 # later one, and the gate then judged it by fed() alone. Measured 2026-11-23 at 4ba7b6ba78 (the
 # issue's comment) and 2026-11-26 on main at 6c4cee7247, through this wrapper: exit 0 for each.
 #
-# fed() now reads the body to where bash 3.2 and zsh end it, and where it cannot tell (a line
-# joined by a backslash before the marker, more than one << in the command, a marker it reads the
-# first letters of and not the rest) the gate refuses the command as one it could not check. An
-# opener it never took for one (a marker written with a backslash) is not refused: the body is
-# handed on after the command's line where its end is certain. The last section holds fed()
-# against the shells of the machine the suite runs on, with texts that only print.
+# fed() now reads the body to where bash 3.2 and zsh end it, and where it cannot tell, the gate
+# refuses the command as one it could not check. There are seven kinds of that refusal (fed and
+# Reader.body_at in lib/heredoc-fed.py):
+#   1. a line joined by a backslash before the marker;
+#   2. more than one << in the command;
+#   3. a marker it reads the first letters of and not the rest;
+#   4. an opener line that ends in a backslash, so the command goes on over the next line;
+#   5. an earlier heredoc on the opener's line that cannot be read or never ends;
+#   6. a body whose marker is not quoted, that never ends, and that holds a $ or a backquote;
+#   7. one command text at two places whose bodies run into one another (the second review of
+#      #3497, 2026-11-27).
+# An opener it never took for one (a marker written with a backslash) is not refused for the
+# opener, only for the seventh kind: the body is handed on after the command's line where its
+# end is certain. The last section holds fed() against the shells of the machine the suite runs
+# on, with texts that only print.
 #
 # Kept apart from test-slack-drafts-comment-start.sh, which covers the reader's side of a heredoc,
 # so that suite does not grow; the helpers below are copied from it as they are, so a case here is
@@ -701,15 +710,33 @@ else:
     print("emptied left_by_first=%d at_second_start=%d containers=%d" % (seen[1], seen[2], len(empty)))
 if flags["short"] or flags["grew"]:
     print("FAIL after both judgements the gate still says a body grew or asks for the short reading: %r" % (flags,))
+# And a second call judged in the same process starts as the first did. After a call judged
+# twice, Judge.fed still held the short reading for every text the second judgement asked about,
+# so the same call judged again was never told its body grew and was judged once, by the short
+# reading alone (third review of #3497, 2026-11-27). The hook judges one call a process, so this
+# is for whatever loads the gate and judges more than one. Nothing is cleared between the two
+# calls here: that is what both_readings itself has to leave right.
+del seen[:]
+gate.Judge.judged = watched
+try:
+    reason = both(gate.load_reader(), "bash memo.sh", sys.argv[2], [])
+finally:
+    gate.Judge.judged = plain
+if reason or len(seen) != 4:
+    print("FAIL the same call judged a second time in one process was judged %d times, not twice, "
+          "so the first call left the short reading behind in Judge.fed: reason %r" % (len(seen) // 2, reason))
+else:
+    print("again judged_twice=%d" % (len(seen) // 2))
 PY
 rows="$(python3 -B "$T/readings.py" "$DIR/slack_drafts_only_gate.py" "$FED" 2>&1)"
-counted=""; held=""; cheap=""; emptied=""
+counted=""; held=""; cheap=""; emptied=""; again=""
 while IFS= read -r row; do
   case "$row" in
     "counted "*) counted="$row" ;;
     "held "*) held="$row" ;;
     "cheap "*) cheap="$row" ;;
     "emptied "*) emptied="$row" ;;
+    "again "*) again="$row" ;;
     "") ;;
     *) check "the gate's two readings of a heredoc" "$row" ;;
   esac
@@ -731,10 +758,13 @@ else
 fi
 if [ -n "$emptied" ]; then check "the second judgement begins with nothing the first left on the Judge's classes ($emptied)" ok
 else check "the second judgement begins with nothing the first left on the Judge's classes" "no count was printed: ${rows:0:300}"; fi
+if [ -n "$again" ]; then check "the same call judged a second time in one process is judged twice again ($again)" ok
+else check "the same call judged a second time in one process is judged twice again" "no count was printed: ${rows:0:300}"; fi
 echo "  $counted"
 echo "  $cheap"
 echo "  $held"
 echo "  $emptied"
+echo "  $again"
 
 echo "slack drafts only: fed() ends a heredoc where the shells of this machine end it (claude-config#3497)"
 
