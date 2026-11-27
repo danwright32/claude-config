@@ -902,6 +902,10 @@ check "#3669 M R9 as an answer that is not about that milestone" "ANNOUNCE-NOT-H
 check "#3669 M R9 naming both titles" 'The plan is titled "On boarding revamp" and its milestone on GitHub is "Onboarding revamp"' "$out"
 check_eq "#3669 M R9 filing nothing and leaving the milestone's description as it was" "0 0 Old words." "$(issues_filed) $(milestone_touched) $(desc_line)"
 check_eq "#3669 M and that refusal leaves no temporary file behind either" "0" "$(ls -A "$LEFT" | wc -l | tr -d ' ')"
+# A refused plan leaves no label behind either, as with the milestone step's own refusals above: the
+# title is checked against the milestone the plan WOULD resolve to before any label is made. The
+# control below shows this plan's labels are missing here, so none made is not none left to make.
+check_eq "#3669 M R9 and makes no label for the plan it refused" "0" "$(grep -c '^label create' "$TMP/calls.log")"
 out="$(WAS="Old words." arun "$TMP/existing.json" "$(plan_with apart-unasked '.announce = "unasked" | .title = "On boarding revamp"')")"; rc=$?
 check_eq "#3669 M R9 and so is unasked under a title that is not the milestone's own" "12 0 Old words." "$rc $(milestone_touched) $(desc_line)"
 out="$(STORE="$ANN/apart" WAS="Old words." DRY_RUN=1 arun "$TMP/existing.json" "$APART")"; rc=$?
@@ -911,6 +915,7 @@ check_eq "#3669 M R9 and previews no line the real run would not write" "0" "$(p
 # the record, so that plan is still taken, and the line is written into the milestone it resolved to.
 out="$(STORE="$ANN/yes" WAS="Old words." arun "$TMP/existing.json" "$(plan_with lower '.announce = "yes" | .title = "onboarding revamp"')")"; rc=$?
 check_eq "#3669 M (the control) a title differing in letter case alone is still taken" "0 Old words.\n\n$YES_LINE" "$rc $(desc_line)"
+check_eq "#3669 M (the control) and a plan that is taken here does make its labels" "1" "$([ "$(grep -c '^label create' "$TMP/calls.log")" -gt 0 ] && echo 1 || echo 0)"
 # A dry run says what it would write and writes nothing.
 out="$(STORE="$ANN/yes" DRY_RUN=1 arun "$TMP/none.json" "$ANN/yes.json")"; rc=$?
 check "#3669 a dry run previews the line" "WOULD-WRITE-ANNOUNCE-LINE $YES_LINE" "$out"
