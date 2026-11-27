@@ -2104,8 +2104,10 @@ def finishes(repo, pr, answer, payload=None, unmerged=()):
     not held to that.
     Anything GitHub's answer or the record does not say is "unread", never "clear" (L98). payload
     is the hook payload, and None reads the record only. unmerged is the pull requests among
-    `announced` that GitHub then said have not merged: asked again with them, their lines cover
-    nothing, and the refusal says so."""
+    `announced` that GitHub then said did not merge as an announcement (not merged, or merged
+    without the changelog/announce label, since the line is written before the merge runs and the
+    label can be taken off after it): asked again with them, their lines cover nothing, and the
+    refusal says so."""
     out = {"state": "clear", "why": "", "how": "", "notes": [], "announced": []}
     key = repo_key(repo)
 
@@ -2186,7 +2188,11 @@ def finishes(repo, pr, answer, payload=None, unmerged=()):
                 + "), whose description says Dan said yes to announcing it to agents")
         if let_through:
             said += (". This Mac's record holds " + _pull_requests(let_through) + " as let through with an announcement "
-                     "for that milestone, and GitHub says " + ("it has not merged" if len(let_through) == 1 else "none of them has merged")
+                     "for that milestone, and GitHub says "
+                     + ("it did not merge as an announcement (it has not merged, or it merged without the "
+                        "changelog/announce label)" if len(let_through) == 1 else
+                        "none of them merged as an announcement (each has not merged, or merged without the "
+                        "changelog/announce label)")
                      + ", so nothing was announced, and ")
         else:
             said += ", and this Mac's record holds no announcement let through for that milestone and "

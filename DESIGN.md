@@ -3371,7 +3371,10 @@ for the review by picker, 2026-11-25: "Yes, attack it first"). The choices are t
   dropped; an exception for a pull request the dependency bot opened, which can close a last issue
   like any other; and counting a `used` line as an announcement, since that line says the gate let
   a merge go ahead and never that GitHub merged it, so the gate asks GitHub about each such pull
-  request and asks the library again naming the ones that have not merged. A pull request that
+  request and asks the library again naming the ones that did not merge as an announcement. That
+  is one that has not merged and also one that merged without the announce label: the line is
+  written before the merge runs, so a pull request let through, not merged, then stripped of its
+  label and merged under another would otherwise cover the milestone with nothing announced. A pull request that
   closes no issue is settled by GitHub's answer alone, before the library is needed, so a broken
   library cannot refuse every merge in a repository that announces. A description or answer file
   handed to the library is read whole or refused, never cut: the helper writes what comes back into

@@ -550,7 +550,9 @@ read_closing() {
 # says yes, which is finished, and what the record holds are all its to say, so this file reads
 # none of it a second way. It gives back `announced`, the pull requests the record holds as let
 # through with an announcement for the milestone. That line says this gate let one through, never
-# that GitHub merged it, so GitHub is asked about each, and one that has not merged covers nothing.
+# that GitHub merged it, so GitHub is asked about each, and only one that merged and still carries
+# changelog/announce covers the milestone: one that has not merged, or that merged with the label
+# taken off, announced nothing.
 #
 # A deny, never `ask`, like every refusal about an announcement: only his picker clears it. So the
 # override does not clear it either. What GitHub or the record does not answer is refused in its
@@ -570,7 +572,7 @@ finishes_announced_feature() {
     overridden=false
     deny "Cannot tell whether PR #$number finishes a feature Dan said yes to announcing to agents: $1. Where a repository announces, the pull request that finishes such a feature merges under changelog/announce unless he declined in a picker, and what could not be read is never taken as a pull request that finishes none. Try the merge again. Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>."
   }
-  r9_ask() {  # $1 = the pull requests GitHub says have not merged, comma separated, or nothing
+  r9_ask() {  # $1 = the pull requests GitHub says did not merge as an announcement, comma separated, or nothing
     verdict9=$(printf '%s' "$payload" | python3 -B "$HOOK_DIR/lib/announce-approval.py" finishes --repo "$slug" --pr "$number" --answer-file "$closing_file" ${1:+--unmerged "$1"} --hook 2>/dev/null)
     state9=$(printf '%s' "$verdict9" | jq -r '.state // ""' 2>/dev/null)
   }
@@ -589,11 +591,28 @@ finishes_announced_feature() {
   r9_ask ""
   if [ "$state9" = clear ]; then
     for n in $(printf '%s' "$verdict9" | jq -r '.announced[]?' 2>/dev/null); do
-      other=$(mt_pr_view "$n" "number,url,state" "$slug" "$repo_flag")
-      other_state=$(printf '%s' "$other" | jq -r --argjson n "$n" 'if .found == true and .view.number == $n then (.view.state // "") else "" end' 2>/dev/null)
+      # Its state and its labels in one read. The record's line is written before the merge runs,
+      # so the pull request may have merged later with the announce label taken off: merged, and
+      # nothing announced. It covers the milestone only when it merged AND still carries the
+      # label, which lib/changelog-entry.js reads here as it does for the pull request being
+      # merged. The answer is "<state> yes|no", or nothing when either was not in GitHub's answer.
+      other=$(mt_pr_view "$n" "number,url,state,labels" "$slug" "$repo_flag")
+      other_state=$(printf '%s' "$other" | HOOK_DIR="$HOOK_DIR" OTHER_PR="$n" node -e '
+        const entry = require(process.env.HOOK_DIR + "/lib/changelog-entry.js");
+        let raw = "";
+        process.stdin.on("data", function (d) { raw += d; });
+        process.stdin.on("end", function () {
+          try {
+            const got = JSON.parse(raw), view = got.view;
+            if (got.found !== true || view.number !== Number(process.env.OTHER_PR)) return;
+            if (typeof view.state !== "string" || !/^[A-Z]+$/.test(view.state) || !Array.isArray(view.labels)) return;
+            process.stdout.write(view.state + " " + (entry.carriesAnnounce(view.labels) === true ? "yes" : "no"));
+          } catch (e) { /* nothing printed: not read */ }
+        });
+      ' 2>/dev/null)
       case "$other_state" in
-        MERGED) ;;
-        '') r9_unread "GitHub gave no answer about pull request $n, which this Mac's record holds as let through with an announcement for a milestone this pull request finishes, so whether that announcement merged could not be told" ;;
+        "MERGED yes") ;;
+        '') r9_unread "GitHub gave no answer that holds both the state and the labels of pull request $n, which this Mac's record holds as let through with an announcement for a milestone this pull request finishes, so whether that announcement merged, and merged under changelog/announce, could not be told" ;;
         *) unmerged="${unmerged:+$unmerged,}$n" ;;
       esac
     done

@@ -2314,8 +2314,11 @@ only where this Mac's dev update registry names an announcements channel for the
   closes, a milestone with none left open included, and only milestones of the pull request's own
   repository are judged. A pull request that closes no issue is settled by GitHub's answer alone,
   before the library is asked. A `used` line in the record says the gate let a merge go ahead,
-  never that GitHub merged it, so the gate asks GitHub about each such pull request and asks the
-  library again with `--unmerged` naming the ones that have not merged.
+  never that GitHub merged it, so the gate asks GitHub about each such pull request, its state and
+  its labels in one read, and asks the library again with `--unmerged` naming the ones that did
+  not merge as an announcement: one that has not merged, and one that merged without
+  `changelog/announce`, because the line is written before the merge runs and the label can be
+  taken off after it. An answer that does not hold both is refused as what could not be told.
 
 How his answer reaches the record is the path an approval takes (#3789, above). The picker is
 noted when he answers it, by its ids alone like every picker, and a hook that asks later reads the

@@ -1769,14 +1769,34 @@ let_through() {  # $1 = fixture dir: pull request 5 let through with an announce
   mkdir -p "$1/approvals"
   printf '{"kind": "used", "repo": "acme/widget", "hash": "%064d", "pr": 5, "closes": [{"issue": 11, "repo": "acme/widget", "milestone": "Hand back", "milestone_number": 28}], "at": "2026-11-21T00:00:00Z"}\n' 0 >> "$1/approvals/record.jsonl"
 }
-pr5() { printf '{"number":5,"url":"https://github.com/acme/widget/pull/5","state":"%s"}' "$1"; }
+# pr5 <state> [labels, as JSON, or NONE for an answer holding no labels]: GitHub's answer about pull
+# request 5, which carries the announce label unless a case says otherwise.
+PR5_ANNOUNCE='[{"name":"changelog/announce"}]'
+pr5() {
+  if [ "${2:-}" = NONE ]; then printf '{"number":5,"url":"https://github.com/acme/widget/pull/5","state":"%s"}' "$1"
+  else printf '{"number":5,"url":"https://github.com/acme/widget/pull/5","state":"%s","labels":%s}' "$1" "${2:-$PR5_ANNOUNCE}"; fi
+}
 dir=$(make_repo acme/widget "$VISIBLE_OK" "$REGISTRY_ANNOUNCES")
 let_through "$dir"
 out=$(FAKE_PR5_JSON="$(pr5 MERGED)" FAKE_CLOSING_JSON="$FINISHES_YES" run_hook "$dir" "$MERGE 7 --squash" 2>&1)
 if [ -z "$out" ]; then pass; else fail "#3669 R9 still possible: with an announcement merged for the milestone, its last issue did not close under another label: $out"; fi
 out=$(FAKE_PR5_JSON="$(pr5 OPEN)" FAKE_CLOSING_JSON="$FINISHES_YES" run_hook "$dir" "$MERGE 7 --squash" 2>/dev/null)
-if yes_dropped "$out" && says "$out" "pull request 5" && says "$out" "has not merged"; then pass
+if yes_dropped "$out" && says "$out" "pull request 5" && says "$out" "did not merge as an announcement"; then pass
 else fail "#3669 R9: an announcement the gate let through and GitHub says never merged covered the milestone, or the refusal does not say so: $out"; fi
+# The record's line is written before the merge runs, so the pull request it names may have merged
+# later with the label and its Announcement block taken off: merged, and nothing announced (review
+# of #3669, high 2). It covers the milestone only when GitHub says it merged AND still carries the
+# announce label, both asked in the one read.
+for labels in '[{"name":"changelog/technical"}]' '[]'; do
+  out=$(FAKE_PR5_JSON="$(pr5 MERGED "$labels")" FAKE_CLOSING_JSON="$FINISHES_YES" run_hook "$dir" "$MERGE 7 --squash" 2>/dev/null)
+  if yes_dropped "$out" && says "$out" "pull request 5" && says "$out" "did not merge as an announcement" && says "$out" "merged without the changelog/announce label" && ! says "$out" "GitHub says it has not merged"; then pass
+  else fail "#3669 R9 B: a pull request let through with an announcement that merged WITHOUT the announce label covered the milestone, or the refusal's words are not true of it [$labels]: $out"; fi
+done
+for labels in NONE 'null' '"changelog/announce"'; do
+  out=$(FAKE_PR5_JSON="$(pr5 MERGED "$labels")" FAKE_CLOSING_JSON="$FINISHES_YES" run_hook "$dir" "$MERGE 7 --squash" 2>/dev/null)
+  if denied "$out" && says "$out" "Cannot tell" && says "$out" "pull request 5" && says "$out" "Deliberate override"; then pass
+  else fail "#3669 R9 B: a merged pull request whose labels GitHub's answer does not hold as a list covered the milestone, or was not refused as what could not be told [$labels]: $out"; fi
+done
 out=$(FAKE_CLOSING_JSON="$FINISHES_YES" run_hook "$dir" "$MERGE 7 --squash" 2>/dev/null)
 if denied "$out" && says "$out" "Cannot tell" && says "$out" "pull request 5" && says "$out" "Deliberate override"; then pass
 else fail "#3669 R9: with no answer from GitHub about the pull request the record holds as the announcement, the merge was not refused in its own words: $out"; fi
