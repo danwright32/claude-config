@@ -59,7 +59,8 @@ With a channel, ask Dan with ONE AskUserQuestion picker of one question, in the 
 - the options: `Announce it` and `Not announcing`
 - the metadata: `{"source": "announce-discovery", "repo": "<owner/name>", "feature": "<feature name>"}`
 
-The question must name the feature in the very words of the metadata's `feature`, and must hold the
+The question must name the feature in the very words of the metadata's `feature`, between quotation
+marks as above (the closing mark straight after the name), and must hold the
 words `agents must or can act differently`: without both, his answer does not count. Neither does
 an answer he typed words beside, which is a change he wants: read it and ask again. Name the feature
 in the picker exactly as its milestone will be titled (a few words, no punctuation; letter case and

@@ -1440,10 +1440,32 @@ T="$WORK/d-within.jsonl"; new_talk "$T"
 talk "$T" decide acme/widget "Hand" "Not announcing" within
 r="$(decided "$T" acme/widget "Hand")"
 check "R9 #3669 F a question that holds the feature's name only inside a longer name decides nothing about it" "$([[ "$r" == "none|"* && "$r" == *"did not name the feature"* ]] && [ "$(grep -c '"answer": "other"' "$STORE_USED/record.jsonl" 2>/dev/null)" = 1 ] && echo ok || echo "$r")"
+# The name must stand between quotation marks, the closing mark straight after it (second review of
+# #3669, low 5). A longer name that goes on after a space ("Hand back export for partners") holds
+# "Hand back" as words of its own, so a rule about the letters either side of the name took his
+# answer about the longer one as an answer about the shorter. With no marks at all nothing says
+# where the name ends, so a name with no quotation marks no longer counts either (decided on the
+# stricter side: the skill's own question quotes the name, and how to ask says so).
+STORE_USED="$WORK/store-d-longer"
+T="$WORK/d-longer.jsonl"; new_talk "$T"
+talk "$T" decide acme/widget "Hand back" "Not announcing" longer "" 28
+r="$(decided "$T" acme/widget "Hand back")"
+check "R9 #3669 K a question about a longer name that goes on after a space decides nothing about the shorter one" "$([[ "$r" == "none|"* && "$r" == *"did not name the feature"*"between quotation marks"* ]] && [ "$(grep -c '"answer": "other"' "$STORE_USED/record.jsonl" 2>/dev/null)" = 1 ] && echo ok || echo "$r")"
 STORE_USED="$WORK/store-d-unquoted"
 T="$WORK/d-unquoted.jsonl"; new_talk "$T"
 talk "$T" decide acme/widget "Hand back" "Not announcing" unquoted
-check "still possible #3669 F: the name with no quotation marks, standing as words of its own, is the feature named" "$([[ "$(decided "$T" acme/widget "Hand back")" == "no|Not announcing|"* ]] && echo ok || decided "$T" acme/widget "Hand back")"
+r="$(decided "$T" acme/widget "Hand back")"
+check "R9 #3669 K the name with no quotation marks decides nothing: nothing says where the name ends" "$([[ "$r" == "none|"* && "$r" == *"did not name the feature"*"between quotation marks"* ]] && echo ok || echo "$r")"
+check "#3669 K how to ask him says the name goes between quotation marks" "$([[ "$r" == *"AskUserQuestion"*"between quotation marks"* ]] && echo ok || echo "$r")"
+STORE_USED="$WORK/store-d-curly"
+T="$WORK/d-curly.jsonl"; new_talk "$T"
+talk "$T" decide acme/widget "Hand back" "Not announcing" curly
+check "still possible #3669 K: the name between curled quotation marks is the feature named" "$([[ "$(decided "$T" acme/widget "Hand back")" == "no|Not announcing|"* ]] && echo ok || decided "$T" acme/widget "Hand back")"
+STORE_USED="$WORK/store-d-spaced"
+T="$WORK/d-spaced.jsonl"; new_talk "$T"
+talk "$T" decide acme/widget "Hand back" "Not announcing" spaced
+r="$(decided "$T" acme/widget "Hand back")"
+check "R9 #3669 K a closing mark that does not follow the name directly is not the name between marks" "$([[ "$r" == "none|"* && "$r" == *"did not name the feature"* ]] && echo ok || echo "$r")"
 STORE_USED="$WORK/store-d-edges"
 T="$WORK/d-edges.jsonl"; new_talk "$T"
 talk "$T" decide acme/widget "Hand back (v2)" "Announce it"

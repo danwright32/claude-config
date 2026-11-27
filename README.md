@@ -2276,8 +2276,9 @@ only where this Mac's dev update registry names an announcements channel for the
   question that was not sent with its answer filled in, did not time out or come back in error,
   that he could read as written, whose question holds the words "agents must or can act
   differently" and names the feature in the metadata's very words, as a name of its own (between
-  quotation marks, or with no letter or digit against either end, never as part of a longer
-  name), and whose options include both `Announce it` and `Not announcing`. An answer that breaks one of
+  quotation marks, straight or curled, the closing mark directly after the name: the first words
+  of a longer name are another feature's name, and a name with no quotation marks does not count,
+  since nothing then says where it ends), and whose options include both `Announce it` and `Not announcing`. An answer that breaks one of
   these is recorded as deciding nothing and, being his last answer, stands in front of an earlier
   yes or no. His last answer about a feature decides, by repository and the feature's name in any
   letter case and spacing.

@@ -263,7 +263,8 @@ transcript under the folder Claude Code keeps them in, a picker he could read as
 option ALONE with nothing typed beside it, and a subagent's call writes nothing. Two rules are this
 picker's own: the question he was shown must hold the words `agents must or can act differently`
 (THE_TEST, the test he is deciding by), and must name the feature in the very words of the
-metadata's "feature", so an answer is never recorded about a feature the question did not name. An
+metadata's "feature" between quotation marks, the closing mark directly after the name
+(_names_feature), so an answer is never recorded about a feature the question did not name. An
 answer of his that breaks one of these, or is words of his own, is recorded as "other": it decides
 nothing, and, being his last answer, it stands in front of an earlier yes or no. HIS LAST ANSWER
 ABOUT A FEATURE DECIDES, by repository and the feature's name in any letter case and spacing.
@@ -438,7 +439,7 @@ def how_to_ask_feature(repo, feature, milestone=None):
     if milestone is not None:
         meta["milestone"] = milestone
     return ("To ask him: ONE AskUserQuestion picker of one question that names the feature in the very words of the "
-            "metadata's \"feature\" and holds the words `" + THE_TEST + "` (without both his answer does not count), "
+            "metadata's \"feature\", between quotation marks, and holds the words `" + THE_TEST + "` (without both his answer does not count), "
             "with the options `" + ANNOUNCE_IT + "` and `" + NOT_ANNOUNCING + "` and the metadata "
             + json.dumps(meta, sort_keys=True) + ". His answer counts only as the option alone, with nothing typed "
             "beside it.")
@@ -1750,10 +1751,15 @@ def _day(stamp):
 
 def _names_feature(shown, feature):
     """Whether the question he was shown names the feature as a name of its own: its metadata's very
-    words with no letter or digit against either end, which a name between quotation marks is too.
-    As a run of letters inside a longer name it is another feature's name, and an answer about that
-    one is not an answer about this one."""
-    return re.search(r"(?<!\w)" + re.escape(feature) + r"(?!\w)", shown) is not None
+    words between quotation marks, straight or curled, the opening mark directly before the name
+    and the closing mark directly after it. The marks are what say where the name ends: as the
+    first words of a longer name ("Hand back export for partners" for "Hand back"), or as a run of
+    letters inside one, it is another feature's name, and an answer about that one is not an
+    answer about this one. A name with no quotation marks does not count (decided on the stricter
+    side, claude-config#3669: with no marks nothing says where the name ends, and the question the
+    feature discovery skill gives quotes it)."""
+    name = re.escape(feature)
+    return re.search('"' + name + '"|“' + name + '”', shown) is not None
 
 
 def _offers_both(p):
@@ -1867,7 +1873,8 @@ def decisions(session_id, transcript_path, deadline=None, done=(), sought=()):
         elif not _names_feature(shown, feature):
             why = ("the picker's question did not name the feature its metadata names (" + json.dumps(feature) + "), so "
                    "his answer cannot be taken as being about it. Ask again with that name in the question, word for word"
-                   ", between quotation marks or as words of its own, not as part of a longer name")
+                   ", between quotation marks, the closing mark straight after the name, not as part of a longer "
+                   "name")
         elif not _offers_both(p):
             why = ("the picker did not offer both `" + ANNOUNCE_IT + "` and `" + NOT_ANNOUNCING + "` as options of its "
                    "question, so his choice was not between announcing it and not. Ask again with those two options, "

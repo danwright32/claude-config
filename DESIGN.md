@@ -3385,8 +3385,11 @@ for the review by picker, 2026-11-25: "Yes, attack it first"). The choices are t
   and the day in US Eastern time, so the helper never writes a work app's name into a description.
   What counts as his yes or no is every rule of an approval that has a meaning without a file, and
   three of this picker's own: the question must hold the words "agents must or can act differently",
-  must name the feature in the metadata's very words as a name of its own (a run of letters inside
-  a longer name is another feature's name), and must have offered both options, so an answer is
+  must name the feature in the metadata's very words as a name of its own, between quotation marks
+  with the closing mark directly after the name (a run of letters inside a longer name, or the
+  first words of one that goes on after a space, is another feature's name; a name with no
+  quotation marks was ruled out on the stricter side, since nothing then says where the name ends,
+  and the skill's own question quotes it), and must have offered both options, so an answer is
   never recorded about something the question did not say or as a choice he was not given. An answer that breaks a rule is recorded as `other`: it
   decides nothing and, being his last answer, stands in front of an earlier yes or no. Ruled out:
   a new hook to read his answer in before the helper runs (more registrations and tables; the

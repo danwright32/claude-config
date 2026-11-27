@@ -66,6 +66,9 @@
 #                                    nofeature (its question does not name the feature), within (its
 #                                    question holds the feature's name only as the start of a longer
 #                                    name), unquoted (the name with no quotation marks round it),
+#                                    longer (the name as the first words of a longer quoted name),
+#                                    curly (the name between curled quotation marks), spaced (a
+#                                    space between the name and its closing mark),
 #                                    twono (both of its options decline), otherlabel (its second
 #                                    option is not the declining one) and nometa (its metadata names
 #                                    no feature).
@@ -172,6 +175,14 @@ def deciding(repo, feature, answer, shape, milestone):
         q = 'Will "%sover notes export" be announced to agents when it ships?' % feature
     if shape == "unquoted":
         q = "Will %s be announced to agents when it ships?" % feature
+    if shape == "longer":
+        # The feature's name as the first words of a longer name that goes on after a space.
+        q = 'Will "%s export for partners" be announced to agents when it ships?' % feature
+    if shape == "curly":
+        q = "Will %s%s%s be announced to agents when it ships?" % (chr(0x201c), feature, chr(0x201d))
+    if shape == "spaced":
+        # A closing mark that does not follow the name directly.
+        q = 'Will "%s " be announced to agents when it ships?' % feature
     if shape != "notest":
         q += " The test: agents must or can act differently."
     if shape == "unread":
