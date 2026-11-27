@@ -7,7 +7,7 @@ records, pairs each saved draft with the post that followed it, and prints how o
 edit was made, with the number of pairs each count rests on.
 
     python3 draft-edit-diff.py --author <Slack member id or display name> [--records <folder>]
-                               [--examples] [--skip "<kind>"]... [--shapes]
+                               [--examples] [--skip "<kind>"]... [--shapes] [--differences]
 
 IT ONLY PRINTS. It opens files to read and has no call that writes, moves or removes one, starts no
 program and sends no request; it imports nothing that could. That is a rule and not a habit: the
@@ -21,6 +21,12 @@ runs it. Dan chose that on 2026-11-27 (issue #3554). The pair shown is the one o
 like its draft. --shapes prints, in place of the tallies, how the read results are laid out: counts,
 and a name only when it is in one of two fixed lists here (KNOWN_FIELDS, KNOWN_LABELS). A key or a
 label not in them is counted by its length and never printed, since it could be anybody's words.
+
+--differences adds, for the pairs that are changed but not heavily rewritten, how many would be the
+same with one more thing set aside (what is inside angle brackets, how a link is written,
+punctuation, emoji, a trailing "(edited)", the last or the first line read back). Counts only. It is
+there because the first real run read far fewer pairs as sent as drafted than the issue's
+measurement did, and counts alone could not say why.
 
 WHAT DAN DECIDED BEFORE. A kind he accepted or said never to offer again is not offered: this reads
 ~/.claude/state/draft-edit-review/decisions.json itself, the file the skill's decisions.py writes,
@@ -40,7 +46,7 @@ HOW A PAIR IS MADE.
   * Each post is compared with the latest draft saved in the same place before it. A draft is used
     once: a second post after the same draft was written without one and is left out, as is a post
     with no draft before it, and a draft a later draft replaced before anything was posted.
-  * A post more than PAIR_WITHIN_DAYS days after that draft is not paired with it. Both are left
+  * A post more than PAIR_WITHIN_MINUTES minutes after that draft is not paired with it. Both are left
     out and counted.
   * Both are compared after Slack's formatting is set aside (links, bold, italics, bullets, quote
     markers at the start of a line, the name a read adds inside a mention, spacing and case), by
@@ -50,7 +56,7 @@ HOW A PAIR IS MADE.
 
 WHAT IT CANNOT SEE, so nobody reads more into a count than it measured.
   * A thread no later session read back. Its draft is counted as having no post read back after it.
-  * A draft Dan deleted. If he wrote something else in that thread within PAIR_WITHIN_DAYS days, the
+  * A draft Dan deleted. If he wrote something else in that thread within PAIR_WITHIN_MINUTES minutes, the
     two are paired and read as heavily rewritten, which keeps the pair out of every kind a rule is
     offered for. If what he wrote happens to share most of the draft's words, it reads as an edit.
   * A draft he cut to under about half its length. By the likeness used here that is heavily
@@ -146,11 +152,14 @@ SHORTER = 0.90
 OPENING_WORDS = 6
 FLOOR_PAIRS = 10
 FLOOR_THREADS = 3
-# A post more than this many days after the latest draft before it is not paired with that draft.
-# A setting chosen on 2026-11-27, not a measurement: nobody has measured how long Dan takes to send a
-# draft. A week is long enough for a draft left over a weekend and short enough that a thread he
-# comes back to next month is not read as an edit of a draft he dropped.
-PAIR_WITHIN_DAYS = 7
+# A post more than this many minutes after the latest draft before it is not paired with that draft.
+# A setting, chosen on 2026-11-27 from one measurement: on the work MacBook that day, of the 184
+# pairs this reader made with no limit, 135 posts came within 10 minutes of their draft and 38 more
+# within the hour (173 of 184); 11 came later, 4 of them more than a day later, and 9 of those 11
+# read as heavily rewritten, which is what a post about something else paired with an old draft
+# looks like (pull request 3848). An hour keeps the 173 and leaves the 11 out, counted. What it
+# costs: a draft Dan sends, edited, more than an hour after it was saved is in no pair.
+PAIR_WITHIN_MINUTES = 60
 EXAMPLE_CHARS = 600
 
 REPORTED = ("sent as drafted", "heavily rewritten")
@@ -534,7 +543,7 @@ def pair_up(drafts, saved, posts, author, concise):
                 if took is not None and not labelled and kinds_of(before[-1][2], body)[1] > took:
                     closer += 1
                 continue
-            if at - before[-1][0] > PAIR_WITHIN_DAYS * 86400:
+            if at - before[-1][0] > PAIR_WITHIN_MINUTES * 60:
                 # Too long after that draft to be read as what became of it: neither is in a pair.
                 late_posts += 1
                 late.add(before[-1][1])
@@ -604,6 +613,61 @@ def decided_kinds():
     return kinds, None
 
 
+ANGLED = re.compile(r"<[^<>\n]*>")
+LINKISH = re.compile(r"<(?:https?|mailto):[^>\n]*>|\[[^\]\n]+\]\((?:https?|mailto):[^)\s]+\)|(?:https?://|mailto:)\S+")
+EDITED_MARK = re.compile(r"\s*\(edited\)\s*$")
+EMOJI_NAME = re.compile(r":[a-z0-9_+\-]+:")
+
+
+def joined(text):
+    return " ".join(sentences(text))
+
+
+def no_emoji(text):
+    """The text with emoji taken out, whether written as a :name: or as a character."""
+    text = EMOJI_NAME.sub("", text)
+    return "".join(c for c in text if not (0x2190 <= ord(c) <= 0x2BFF or 0xFE00 <= ord(c) <= 0xFE0F
+                                           or 0x1F000 <= ord(c) <= 0x1FAFF or ord(c) == 0x200D))
+
+
+def last_line_off(text):
+    lines = [x for x in text.split("\n") if x.strip()]
+    return "\n".join(lines[:-1]) if len(lines) > 1 else text
+
+
+def first_line_off(text):
+    lines = [x for x in text.split("\n") if x.strip()]
+    return "\n".join(lines[1:]) if len(lines) > 1 else text
+
+
+# --differences: one thing a read result may add or write another way, and what setting it aside
+# means. NONE of these was measured: on the work MacBook on 2026-11-27, 6 of 184 pairs read as sent
+# as drafted against 22 of 106 in the issue's measurement three days earlier, and counts could not
+# say whether the rest are Dan's edits or a difference in how a read writes a message. This prints
+# how many changed pairs each one would explain, so the next run can tell. Counts only.
+SET_ASIDE = (
+    ("what is inside angle brackets is set aside (a mention, a group or a link with a name added)",
+     lambda d, s: joined(ANGLED.sub("<>", d)) == joined(ANGLED.sub("<>", s))),
+    ("how a link is written is set aside",
+     lambda d, s: joined(LINKISH.sub("LINK", d)) == joined(LINKISH.sub("LINK", s))),
+    ("punctuation, symbols and spacing are set aside",
+     lambda d, s: re.sub(r"[^a-z0-9]+", "", joined(d)) == re.sub(r"[^a-z0-9]+", "", joined(s))),
+    ("emoji are set aside (a :name: or a character)",
+     lambda d, s: joined(no_emoji(d)) == joined(no_emoji(s))),
+    ("a trailing (edited) is set aside",
+     lambda d, s: EDITED_MARK.search(s) is not None and joined(d) == joined(EDITED_MARK.sub("", s))),
+    ("the last line of what was read back is set aside",
+     lambda d, s: last_line_off(s) != s and joined(d) == joined(last_line_off(s))),
+    ("the first line of what was read back is set aside",
+     lambda d, s: first_line_off(s) != s and joined(d) == joined(first_line_off(s))),
+)
+
+
+def differences(draft, sent):
+    """The names in SET_ASIDE under which this pair, which differs, would be the same."""
+    return [name for name, test in SET_ASIDE if test(draft, sent)]
+
+
 def cut(text):
     return text if len(text) <= EXAMPLE_CHARS else text[:EXAMPLE_CHARS] + " (cut at %d characters)" % EXAMPLE_CHARS
 
@@ -625,6 +689,7 @@ def main():
     parser.add_argument("--examples", action="store_true")
     parser.add_argument("--skip", action="append", default=[])
     parser.add_argument("--shapes", action="store_true")
+    parser.add_argument("--differences", action="store_true")
     args = parser.parse_args()
     for kind in args.skip:
         if kind not in OFFERED:
@@ -715,15 +780,15 @@ def main():
           "with: %d (the first post after a draft takes it)" % left["closer"])
     print("also left out: pairs whose post ends in a line shaped like a label: %d (that line may be the "
           "connector's and not his)" % left["doubtful"])
-    print("also left out: posts more than %d days after the draft before them: %d (drafts: %d). The %d days "
-          "is a setting chosen on 2026-11-27, not a measurement." % (
-              PAIR_WITHIN_DAYS, left["late_posts"], left["late_drafts"], PAIR_WITHIN_DAYS))
+    print("also left out: posts more than %d minutes after the draft before them: %d (drafts: %d). The %d "
+          "minutes is a setting, chosen on 2026-11-27 from one Mac's pairs that day." % (
+              PAIR_WITHIN_MINUTES, left["late_posts"], left["late_drafts"], PAIR_WITHIN_MINUTES))
     print("also left out: saved drafts with no time on their record: %d (nothing can be said to come after "
           "one)" % left["untimed"])
     tally = collections.defaultdict(list)
     for place, at, draft, sent in pairs:
         kinds, likeness = kinds_of(draft, sent)
-        for kind in kinds:
+        for kind in kinds or ["changed, in no kind"]:
             tally[kind].append((place, at, draft, sent, likeness))
     for kind in REPORTED:
         print("%s: %d of %s" % (kind, len(tally[kind]), plural(len(pairs), "pair")))
@@ -752,6 +817,23 @@ def main():
             print("Example for %s (Slack message text: show it to Dan, and copy it nowhere)" % kind)
             print("DRAFT: " + cut(draft))
             print("SENT: " + cut(sent))
+    if args.differences:
+        changed = {}  # a pair can be under several kinds, and is one pair: keyed by its place and time
+        for kind in OFFERED + ("changed, in no kind",):
+            for place, at, draft, sent, _likeness in tally[kind]:
+                changed[(place, at)] = (draft, sent)
+        counts = collections.Counter()
+        for draft, sent in changed.values():
+            found = differences(draft, sent)
+            for name in found or ["none of these"]:
+                counts[name] += 1
+        print("")
+        print("How the pairs changed but not heavily rewritten differ (counts only; a pair can be on more than "
+              "one line)")
+        print("pairs changed but not heavily rewritten: %d" % len(changed))
+        for name, _test in SET_ASIDE:
+            print("  the same once %s: %d" % (name, counts[name]))
+        print("  none of these: %d" % counts["none of these"])
     return 0
 
 

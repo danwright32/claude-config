@@ -86,12 +86,16 @@ out="$(run tail_stray --examples)"
 check "tail stray: twelve edits are recurring beside one stray" "figures cut: 12 of 13 pairs, in 3 threads: recurring" "$out"
 check "tail stray: an example is shown" "Example for figures cut" "$out"
 check_not "tail stray: and the stray, the latest pair of all, is never it" "ferry" "$out"
-# A post long after the draft before it is not paired with it at all. The limit is a setting.
+# A post more than an hour after the draft before it is not paired with it at all. The hour is a
+# setting, chosen from the work MacBook's pairs of 2026-11-27: 173 of 184 posts came within it.
 out="$(run late_strays)"
 check "late strays: a post thirty days after its draft makes no pair" "pairs: 0 in 0 threads" "$out"
-check "late strays: and is counted as left out, with the limit named and the drafts counted" "posts more than 7 days after the draft before them: 12 (drafts: 12)" "$out"
+check "late strays: and is counted as left out, with the limit named and the drafts counted" "posts more than 60 minutes after the draft before them: 12 (drafts: 12)" "$out"
 check "late strays: those drafts are not also counted as never read back" "drafts with no post read back after them: 0" "$out"
-check "strays within the hour are inside the limit" "posts more than 7 days after the draft before them: 0 (drafts: 0)" "$(run strays)"
+check "strays within the half hour are inside the limit" "posts more than 60 minutes after the draft before them: 0 (drafts: 0)" "$(run strays)"
+for f in hour_inside hour_outside; do fixture "$f" || { echo "FAIL: fixture $f could not be built"; fail=$((fail + 1)); }; done
+check "a second short of the hour: paired" "pairs: 12 in 3 threads" "$(run hour_inside)"
+check "a fraction of a second past the hour: not paired" "posts more than 60 minutes after the draft before them: 12 (drafts: 12)" "$(run hour_outside)"
 
 # --- one example pair per kind, only when asked ----------------------------------------------------
 out="$(run recurring --examples)"
@@ -236,6 +240,22 @@ out="$(run second_post)"
 check "second post: the draft is paired with the first post after it" "heavily rewritten: 1 of 1 pair" "$out"
 check "second post: and the later post that is more like the draft is counted" "of those, more like that draft than the post it was paired with: 1" "$out"
 check "no such post in the basics" "of those, more like that draft than the post it was paired with: 0" "$(run basics)"
+# --differences: what one more thing set aside would make a changed pair the same. Seven guesses at
+# what a read result adds or writes another way, none of them measured, and one real edit.
+fixture differences || { echo "FAIL: fixture differences could not be built"; fail=$((fail + 1)); }
+out="$(run differences --differences)"; rc=$?
+check_eq "differences: the run succeeds" "0" "$rc"
+check "differences: the pairs it is counted over" "pairs changed but not heavily rewritten: 8" "$out"
+check "differences: a name added inside angle brackets (a channel, a group)" "the same once what is inside angle brackets is set aside (a mention, a group or a link with a name added): 2" "$out"
+check "differences: a link written two ways" "the same once how a link is written is set aside: 1" "$out"
+check "differences: punctuation alone" "the same once punctuation, symbols and spacing are set aside: 1" "$out"
+check "differences: an emoji as a name against a character" "the same once emoji are set aside (a :name: or a character): 1" "$out"
+check "differences: a trailing edited mark" "the same once a trailing (edited) is set aside: 1" "$out"
+check "differences: a line under the text" "the same once the last line of what was read back is set aside: 1" "$out"
+check "differences: no line over the text here" "the same once the first line of what was read back is set aside: 0" "$out"
+check "differences: and the one real edit is none of these" "none of these: 1" "$out"
+check_not "differences: counts only, no message text" "harbour" "$out"
+check_not "differences: nothing of it without the flag" "How the pairs changed" "$(run differences)"
 out="$(run some_wordless)"; rc=$?
 check_eq "some wordless: a few posts with no words are measured" "0" "$rc"
 check "some wordless: they are counted" "no text under the Message TS line: 3" "$out"

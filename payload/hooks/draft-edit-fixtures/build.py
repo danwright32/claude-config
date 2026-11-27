@@ -319,6 +319,39 @@ def second_post(folder):
     r.write(folder, "session-second-post.jsonl")
 
 
+def differences(folder):
+    """Eight drafts in eight threads. Seven were posted word for word, and what was read back differs
+    in ONE thing a read result might add or write another way; the eighth was really edited. NONE of
+    the seven differences was measured: they are guesses at why so few real pairs read as sent as
+    drafted, and they are here so the reader's --differences count can be seen to tell them apart."""
+    r = Records()
+    party = chr(0x1F389)  # an emoji as a character, written by its number so this file holds none
+    cases = (
+        ("<#C0FIXTURE99> has the winter mooring list for the harbour office to read.",
+         "<#C0FIXTURE99|harbour-office> has the winter mooring list for the harbour office to read."),
+        ("<!subteam^S0FIXTURE1> please read the winter mooring list before the tide turns.",
+         "<!subteam^S0FIXTURE1|@harbour-crew> please read the winter mooring list before the tide turns."),
+        ("The tide table for the week is at https://example.invalid/tides and is ready.",
+         "The tide table for the week is at <https://example.invalid/tides|example.invalid/tides> and is ready."),
+        ("The slipway reopened this morning and the pilot boat is back :tada:",
+         "The slipway reopened this morning and the pilot boat is back " + party),
+        ("The buoy inspection is booked for the spring tide next week.",
+         "The buoy inspection is booked for the spring tide next week. (edited)"),
+        ("The ferry timetable for the winter is attached for the office.",
+         "The ferry timetable for the winter is attached for the office.\ntimetable.pdf (12 kB)"),
+        ("The ferry timetable is out, and the printer is paid.",
+         "The ferry timetable is out and the printer is paid"),
+        ("The lock gates close at nine tonight for the high water.",
+         "The lock gates close at ten tonight for the high water."),
+    )
+    for n, (draft, sent) in enumerate(cases):
+        start = 1000 * n
+        channel = "C0FIXTURE%02d" % (90 + n % 9)
+        r.draft(start + 100, channel, start, draft)
+        r.thread(start + 900, channel, start, [(start, OTHER, "Any news from the harbour?"), (start + 200, ME, sent)])
+    r.write(folder, "session-differences.jsonl")
+
+
 def broadcast(folder, channel_first):
     """One reply the author sent, which Slack also shows in the channel, read back both ways. An
     older draft for the top of that channel was never sent. The truth: one pair, in the thread."""
@@ -370,12 +403,18 @@ def main():
         many(folder, [3, 3, 3], strays=[1, 1, 1])
     elif which == "tail_stray":      # twelve edits, and the latest pair of all is a stray
         many(folder, [4, 4, 4], strays=[0, 0, 1])
-    elif which == "strays":          # no draft was sent: twelve strays, each within the hour
-        many(folder, [0, 0, 0], strays=[4, 4, 4], stray_after=3600)
+    elif which == "strays":          # no draft was sent: twelve strays, each half an hour on
+        many(folder, [0, 0, 0], strays=[4, 4, 4], stray_after=1800)
     elif which == "late_strays":     # the same, each thirty days after its draft
         many(folder, [0, 0, 0], strays=[4, 4, 4], stray_after=30 * DAY)
+    elif which == "hour_inside":     # each stray a second short of an hour after its draft
+        many(folder, [0, 0, 0], strays=[4, 4, 4], stray_after=3599)
+    elif which == "hour_outside":    # each stray an hour and a fraction of a second after its draft
+        many(folder, [0, 0, 0], strays=[4, 4, 4], stray_after=3600)
     elif which == "nearly":          # twelve edits; the sixth keeps more of its draft than any other
         many(folder, [4, 4, 4], nearly=5)
+    elif which == "differences":
+        differences(folder)
     elif which == "unknown":
         unknown(folder)
     elif which in ("wordforword", "body_first", "trailing", "labelled", "split", "some_labelled"):
