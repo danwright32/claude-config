@@ -9,8 +9,10 @@
 //   gather.js gather [--config P] [--state P] [--now ISO] [--only NAME] [--out P]
 //                    [--live owner/name=SHA@ISO]... [--since ISO [--confirm-skip]]
 //   gather.js commit-state --gathered P --draft P --repo owner/name
-//                    [--listed N,N,...] [--headings 'A|B'] [--outcomes N=OUTCOME,...] [--state P]
+//                    [--listed N,N,...] [--headings 'A|B'] [--outcomes N=OUTCOME,...] [--drafts DIR] [--state P]
 //   gather.js posted --gathered P --repo owner/name --number N --read FILE[,FILE...]
+//   gather.js draftable --gathered P --repo owner/name --number N --drafts DIR
+//   gather.js drafted --gathered P --repo owner/name --number N --drafts DIR [--tool-error yes]
 //   gather.js gh [--config P] -- <gh command naming its repo with --repo owner/name>
 //
 // gather prints one JSON document (and writes it to --out): per repo, its window, every merged
@@ -47,6 +49,9 @@ const ENTRY_PATH = path.join(__dirname, '..', '..', 'hooks', 'lib', 'changelog-e
 // The one reader of the registry, shared with the same gate (claude-config#1526): where this Mac
 // keeps it (never the shared config, because it names work repositories) and how it is read.
 const REGISTRY_PATH = path.join(__dirname, '..', '..', 'hooks', 'lib', 'dev-update-registry.js');
+// The one comparison of an announcement with what Slack holds, words only (claude-config#3668),
+// shared since #3667 with the is it live mod, which judges a draft of one through its command line.
+const COMPARE_PATH = path.join(__dirname, '..', '..', 'hooks', 'lib', 'announce-compare.js');
 
 const PER_PAGE = 100;
 const MAX_PAGES = 200;             // 20,000 PRs, far past any repo here; a guard against a loop
@@ -652,6 +657,9 @@ function gatherRepo(ctx, repoCfg) {
 // hooks/lib/changelog-entry.js), never worked out here a second time: `owed` with the channel and
 // the post, or `unknown` with why, the post still given wherever it could be read.
 const OUTCOMES = ['sent', 'drafted', 'not-announcing'];
+// What --outcomes carries for "Draft it now" (#3667): not an outcome the state keeps, but a claim
+// that this run's own draft call saved it, which commit-state judges again before recording drafted.
+const DRAFTED_NOW = 'drafted-now';
 // An outcome after which nothing more is asked about it. Drafted is not one: a draft can sit unsent.
 const SETTLED = ['sent', 'not-announcing'];
 // The two deploy verdicts under which a change cannot be listed as shipped, so nothing is owed yet.
@@ -776,7 +784,10 @@ function cmdGather(args) {
 // --outcomes 70=sent,71=drafted,72=not-announcing: what became of each announcement this run, as
 // Dan answered or as the channel read showed. Refused, naming each one, while an announcement that
 // is out has no outcome (R6), and for any value or number that is not one of this run's.
-function announcementOutcomes(repo, given) {
+// 73=drafted-now is "Draft it now": recorded as drafted only when the draft's own files, in the
+// folder --drafts names, are judged saved here, again, so it never rests on the session's word that
+// it was. A call `drafted` was told failed is judged as failed here too, from the file it left.
+function announcementOutcomes(repo, given, drafts) {
   const outcomes = new Map();
   const pairs = given ? given.split(',').map(function (s) { return s.trim(); }).filter(Boolean) : [];
   if (repo.status !== 'ok') {
@@ -792,16 +803,20 @@ function announcementOutcomes(repo, given) {
     const m = /^#?(\d+)=([a-z-]+)$/.exec(pair);
     if (!m) refuse('--outcomes holds ' + JSON.stringify(pair) + ', which is not <PR number>=<outcome>.');
     const n = Number(m[1]);
-    if (OUTCOMES.indexOf(m[2]) === -1) refuse('--outcomes gives #' + n + ' the outcome ' + JSON.stringify(m[2]) + ', which is not one of ' + OUTCOMES.join(', ') + '.');
+    if (OUTCOMES.indexOf(m[2]) === -1 && m[2] !== DRAFTED_NOW) refuse('--outcomes gives #' + n + ' the outcome ' + JSON.stringify(m[2]) + ', which is not one of ' + OUTCOMES.concat(DRAFTED_NOW).join(', ') + '.');
     if (!byNumber.has(n)) refuse('--outcomes names #' + n + ', which is not among the announcements gathered for ' + repo.repo + '.');
     if (outcomes.has(n)) refuse('--outcomes gives #' + n + ' two outcomes.');
-    outcomes.set(n, m[2]);
+    if (m[2] !== DRAFTED_NOW) { outcomes.set(n, m[2]); return; }
+    if (!drafts) refuse('--outcomes gives #' + n + ' ' + DRAFTED_NOW + ', which needs --drafts <the folder holding its draft\'s files>, so the draft can be judged. Nothing was written.');
+    const v = draftedVerdict(repo, byNumber.get(n), drafts);
+    if (v.state !== 'saved') refuse('#' + n + ' is not recorded as drafted: ' + v.said + ' Nothing was written.');
+    outcomes.set(n, 'drafted');
   });
   const missing = repo.announcements.filter(function (a) { return a.needsOutcome && !outcomes.has(a.number); });
   if (missing.length) {
     refuse('The run is not recorded while an announcement for agents that is out has no outcome: '
       + missing.map(function (a) { return '#' + a.number + ' (merged ' + a.mergedAt + ')'; }).join(', ')
-      + '. Settle each (SKILL.md section 11) and pass --outcomes <number>=sent|drafted|not-announcing. Nothing was written.');
+      + '. Settle each (SKILL.md section 11) and pass --outcomes <number>=sent|drafted|not-announcing, or <number>=' + DRAFTED_NOW + ' with --drafts for one this run drafted. Nothing was written.');
   }
   return outcomes;
 }
@@ -857,7 +872,7 @@ function cmdCommitState(args) {
   const listedNums = listed.map(Number);
   // R6: no run is recorded while an announce change that is out has no outcome. Checked before the
   // state is read, so a refusal leaves it exactly as it was.
-  const outcomes = announcementOutcomes(repo, args.outcomes);
+  const outcomes = announcementOutcomes(repo, args.outcomes, args.drafts);
 
   const state = readJson(statePath, 'The state file');
   if (state === undefined && gathered.stateExisted) {
@@ -916,15 +931,8 @@ function cmdCommitState(args) {
 
 // ---------------------------------------------------------------- posted
 
-// Is a gathered announcement already in the channel? `--read` is a file holding what
-// slack_read_channel returned, word for word, once per page read (SKILL.md section 11). The
-// announcement comes from the gathered file, never retyped, and the comparison is posted.js's, of
-// words only. Not found says only that: whether the read reached every message since the merge is
-// the session's to say, and a read that failed or was cut short is never handed here.
-function cmdPosted(args) {
-  if (!args.gathered || !args.repo || !args.number || !args.read) {
-    refuse('Usage: gather.js posted --gathered P --repo owner/name --number N --read FILE (one page of the channel read per file; repeat as --read FILE,FILE).');
-  }
+// One gathered announcement, by repo and number, for the commands that act on one.
+function gatheredAnnouncement(args) {
   const gathered = readJson(args.gathered, 'The gathered file');
   if (gathered === undefined) refuse('The gathered file is not at ' + args.gathered + '.');
   const repo = (gathered.repos || []).filter(function (r) { return r.repo.toLowerCase() === args.repo.toLowerCase(); })[0];
@@ -935,6 +943,23 @@ function cmdPosted(args) {
   }
   const ann = repo.announcements.filter(function (a) { return a.number === n; })[0];
   if (!ann) refuse('#' + args.number + ' is not among the announcements gathered for ' + repo.repo + '.');
+  return { repo: repo, ann: ann, n: n };
+}
+
+// Is a gathered announcement already in the channel? `--read` is a file holding what
+// slack_read_channel returned, word for word, once per page read (SKILL.md section 11). The
+// announcement comes from the gathered file, never retyped, and the comparison is
+// hooks/lib/announce-compare.js's, of words only. Not found says only that: whether the read
+// reached every message since the merge is the session's to say, and a read that failed or was
+// cut short is never handed here.
+function cmdPosted(args) {
+  if (!args.gathered || !args.repo || !args.number || !args.read) {
+    refuse('Usage: gather.js posted --gathered P --repo owner/name --number N --read FILE (one page of the channel read per file; repeat as --read FILE,FILE).');
+  }
+  const one = gatheredAnnouncement(args);
+  const repo = one.repo;
+  const ann = one.ann;
+  const n = one.n;
   if (!ann.text) refuse('#' + n + ' has no announcement text that could be read (' + (ann.why || 'no reason given') + '), so it cannot be looked for.');
   const text = args.read.split(',').map(function (file) {
     let t;
@@ -944,12 +969,149 @@ function cmdPosted(args) {
     return t;
   }).join('\n');
   let got;
-  try { got = require(path.join(__dirname, 'posted.js')).foundPosted(ann.text, text); }
+  try { got = require(COMPARE_PATH).foundPosted(ann.text, text); }
   catch (e) { refuse('#' + n + ' could not be compared: ' + e.message + '.'); }
   const said = got.found
     ? 'found posted: every word of #' + n + '\'s announcement is in the channel read, in order. The read just before it: ' + JSON.stringify(got.before)
     : 'not found in what was read. This says nothing about messages the read did not reach.';
   process.stdout.write(JSON.stringify({ repo: repo.repo, number: n, found: got.found, words: got.words, before: got.before, said: said }, null, 2) + '\n');
+  return 0;
+}
+
+// ---------------------------------------------------------------- Draft it now (claude-config#3667)
+//
+// Dan's fourth answer for an announcement that is live and was never drafted (2026-11-25, by picker:
+// "Draft it now"). The session makes the one call that drafts an announcement (Slack's draft tool,
+// the channel, no thread, the wording exactly), and this file decides the two things around it,
+// neither worked out here: whether the wording may be drafted at all, which is the hooks' one check
+// that it is the wording the pull request merged on (claimedNow in hooks/lib/announce-compare.js),
+// and whether the call left a draft, which is the hooks' one judgement of Slack's answer (judgeDraft
+// in the same file: a draft counts only when the answer holds a draft_id).
+//
+// The files of one announcement's draft, in the folder --drafts names: its wording as gathered,
+// written by `draftable` for the session to pass on unretyped; Slack's answer to the draft call,
+// written by the session exactly as the tool returned it; and, only when `drafted` was told the call
+// failed, a file saying so, so the state commit judges the answer with what `drafted` was told.
+function draftFiles(dir, n) {
+  return {
+    message: path.join(dir, 'announce-' + n + '-message.txt'),
+    answer: path.join(dir, 'announce-' + n + '-answer.txt'),
+    failed: path.join(dir, 'announce-' + n + '-call-failed.txt'),
+  };
+}
+
+// Removes one of a draft's files, where it is there. A file that is there and cannot be removed is
+// refused, since what it says would be judged as this attempt's.
+function removeDraftFile(file, n) {
+  try { fs.rmSync(file, { force: true }); }
+  catch (e) { refuse(file + ', left by an earlier attempt to draft #' + n + ', could not be removed (' + e.code + '), so it would be judged as this attempt\'s. Nothing was written.'); }
+}
+
+// Whether an announcement may be drafted from here now: `said` is why not, each cause in its own
+// words (L11). A record of approvals that could not be read is said as that, never as an approval.
+function draftableNow(repo, ann) {
+  const no = function (said) { return { draftable: false, said: said }; };
+  const tag = '#' + ann.number;
+  if (SETTLED.indexOf(ann.previousOutcome) !== -1) return no(tag + ' is already settled (' + ann.previousOutcome + '), so nothing is drafted for it.');
+  if (!ann.live) return no(tag + ' is not confirmed live (its deploy reads ' + ann.deploy + '), and an announcement is drafted only once its change is live.');
+  if (ann.state !== 'owed' || !ann.channel || !ann.text) {
+    return no(tag + ' cannot be drafted from this Mac: ' + (ann.why || 'its channel or its wording was not read') + '.');
+  }
+  let claim;
+  try { claim = require(COMPARE_PATH).claimedNow(repo.repo, ann.number, ann.text); }
+  catch (e) { return no('Whether ' + tag + '\'s announcement is the wording Dan approved could not be checked (' + e.message + '), so it is not drafted: he must be asked again.'); }
+  if (claim.state === 'changed') return no(tag + '\'s announcement was changed in its pull request after Dan approved it, so it is not drafted: he must be asked again.');
+  if (claim.state !== 'approved') return no('Dan\'s approval of ' + tag + '\'s announcement could not be read (' + claim.why + '), so it is not drafted: he must be asked again.');
+  return { draftable: true, said: '' };
+}
+
+// Before the picker: may "Draft it now" be offered for this announcement? Where it may, its wording
+// is written to its message file, exactly as gathered, and whatever an earlier attempt left of
+// Slack's answer is removed first, so the only answer judged is one written after this. Where it may
+// not, nothing is written, so no session holds a file of wording that must not be drafted.
+function cmdDraftable(args) {
+  if (!args.gathered || !args.repo || !args.number || !args.drafts) {
+    refuse('Usage: gather.js draftable --gathered P --repo owner/name --number N --drafts DIR (a folder in the scratchpad for the draft\'s files).');
+  }
+  const one = gatheredAnnouncement(args);
+  const files = draftFiles(args.drafts, one.n);
+  const verdict = draftableNow(one.repo, one.ann);
+  const out = { repo: one.repo.repo, number: one.n, draftable: verdict.draftable, channel: one.ann.channel || '', messageFile: null, answerFile: null, said: verdict.said };
+  if (verdict.draftable) {
+    // Outside the try below, so one that cannot be removed is refused in its own words (L11).
+    removeDraftFile(files.answer, one.n);
+    removeDraftFile(files.failed, one.n);
+    try {
+      fs.mkdirSync(args.drafts, { recursive: true });
+      fs.writeFileSync(files.message, one.ann.text);
+    } catch (e) { refuse('The wording of #' + one.n + ' could not be written to ' + files.message + ' (' + e.code + '), so there is nothing to draft from.'); }
+    out.messageFile = files.message;
+    out.answerFile = files.answer;
+    out.said = '"Draft it now" may be offered for #' + one.n + '. If Dan picks it, call slack_send_message_draft with channel_id "' + one.ann.channel
+      + '", no thread_ts, and message set to exactly the contents of ' + files.message + ', every line and blank line as written. Then write the tool\'s answer, '
+      + 'exactly as it returned it, to ' + files.answer + ' and run gather.js drafted.';
+  }
+  process.stdout.write(JSON.stringify(out, null, 2) + '\n');
+  return 0;
+}
+
+// After the draft call: did it leave a draft of the approved wording? `state` is `saved` (and only
+// then is `outcome` drafted), `differs`, `not-kept` or `error` as judgeDraft tells them apart, or
+// `not-draftable` when the wording may not be drafted at all. Used by `drafted`, which says it, and
+// by commit-state, which records drafted-now on nothing less than `saved`. The call is judged as one
+// that failed when the file `drafted` leaves for that is there, so both judge it alike.
+function draftedVerdict(repo, ann, dir) {
+  const tag = '#' + ann.number;
+  const again = ' It is not recorded as drafted: ask the picker again without "Draft it now".';
+  const may = draftableNow(repo, ann);
+  if (!may.draftable) return { state: 'not-draftable', outcome: null, draftId: '', said: may.said + again };
+  const files = draftFiles(dir, ann.number);
+  const read = function (file, what) {
+    try { return fs.readFileSync(file, 'utf8'); }
+    catch (e) { refuse(what + ' is not at ' + file + ' (' + e.code + '), so whether ' + tag + ' was drafted cannot be judged.'); }
+  };
+  const message = read(files.message, 'The wording passed to the draft call for ' + tag);
+  const answer = read(files.answer, 'The draft tool\'s answer for ' + tag);
+  if (!answer.trim()) refuse('The draft tool\'s answer at ' + files.answer + ' is empty. An empty answer is not a draft that was not kept: write down what the tool returned.');
+  let j;
+  try { j = require(COMPARE_PATH).judgeDraft({ text: ann.text, message: message, answer: { text: answer, isError: fs.existsSync(files.failed) } }); }
+  catch (e) { refuse(tag + '\'s draft could not be judged: ' + e.message + '.'); }
+  const where = 'channel ' + ann.channel;
+  if (j.state === 'saved') {
+    return { state: 'saved', outcome: 'drafted', draftId: j.draftId, said: tag + '\'s announcement is saved as a Slack draft in ' + where + ' (Slack\'s id for it is ' + j.draftId
+      + '). Its outcome is drafted: tell Dan it waits in his Drafts for him to send and that nothing was sent, and pass ' + ann.number + '=' + DRAFTED_NOW + ' to the state commit. The next run lists it again until it is sent.' };
+  }
+  if (j.state === 'differs') {
+    return { state: 'differs', outcome: null, draftId: j.draftId || '', said: 'The draft Slack kept for ' + tag + ' differs from the wording Dan approved: ' + j.why
+      + '. Tell Dan the draft now in ' + where + ' is not the approved wording.' + again };
+  }
+  if (j.state === 'not-kept') {
+    return { state: 'not-kept', outcome: null, draftId: '', said: 'No draft was saved for ' + tag + ': ' + j.why + '. Tell Dan a draft is already waiting in ' + where
+      + ', which Slack did not show, so whether it is this announcement is not known. Do not tell him to delete it.' + again };
+  }
+  return { state: 'error', outcome: null, draftId: '', said: 'No draft was saved for ' + tag + ': ' + j.why + '. Tell Dan that, with the reason.' + again };
+}
+
+function cmdDrafted(args) {
+  if (!args.gathered || !args.repo || !args.number || !args.drafts) {
+    refuse('Usage: gather.js drafted --gathered P --repo owner/name --number N --drafts DIR [--tool-error yes] (the folder gather.js draftable wrote the wording to, now also holding the tool\'s answer).');
+  }
+  const one = gatheredAnnouncement(args);
+  // What the session says of the call is kept beside its answer, written or removed on every run, so
+  // the state commit, which is told nothing of it, judges this answer as it is judged here.
+  const failed = draftFiles(args.drafts, one.n).failed;
+  const flag = args['tool-error'];
+  if (flag !== undefined && flag !== 'yes' && flag !== 'no') {
+    refuse('--tool-error takes yes or no, not ' + JSON.stringify(flag) + ': a failed call written any other way would be judged as one that did not fail. Nothing was judged.');
+  }
+  if (flag === 'yes') {
+    try { fs.writeFileSync(failed, 'gather.js drafted was told the draft call for #' + one.n + ' failed.\n'); }
+    catch (e) { refuse('That the draft call for #' + one.n + ' failed could not be written to ' + failed + ' (' + e.code + '), so the state commit would judge its answer as one that did not fail. Nothing was judged.'); }
+  } else {
+    removeDraftFile(failed, one.n);
+  }
+  const v = draftedVerdict(one.repo, one.ann, args.drafts);
+  process.stdout.write(JSON.stringify({ repo: one.repo.repo, number: one.n, state: v.state, outcome: v.outcome, draftId: v.draftId, said: v.said }, null, 2) + '\n');
   return 0;
 }
 
@@ -1010,8 +1172,12 @@ function main(argv) {
   if (cmd === 'commit-state') return cmdCommitState(args);
   if (cmd === 'gh') return cmdGh(args);
   if (cmd === 'posted') return cmdPosted(args);
-  refuse('Usage: gather.js gather [options] | gather.js commit-state --gathered P --draft P --repo owner/name [--listed N,N] [--headings \'A|B\'] [--outcomes N=sent|drafted|not-announcing,...]'
+  if (cmd === 'draftable') return cmdDraftable(args);
+  if (cmd === 'drafted') return cmdDrafted(args);
+  refuse('Usage: gather.js gather [options] | gather.js commit-state --gathered P --draft P --repo owner/name [--listed N,N] [--headings \'A|B\'] [--outcomes N=sent|drafted|not-announcing|drafted-now,...] [--drafts DIR]'
     + ' | gather.js posted --gathered P --repo owner/name --number N --read FILE'
+    + ' | gather.js draftable --gathered P --repo owner/name --number N --drafts DIR'
+    + ' | gather.js drafted --gathered P --repo owner/name --number N --drafts DIR [--tool-error yes]'
     + ' | gather.js gh [--config P] -- <gh command with --repo owner/name>');
 }
 

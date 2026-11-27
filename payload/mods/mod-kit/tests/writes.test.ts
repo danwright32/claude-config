@@ -1,7 +1,7 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './hang-ceiling.ts'
 import { pipeline } from '../hooks/commands.ts'
-import { callShell, commandWrites, pipelineIn, READ_ONLY } from '../hooks/writes.ts'
+import { callShell, commandWrites, comparisonsSoFar, pipelineIn, READ_ONLY } from '../hooks/writes.ts'
 
 // The one reader of which files a Bash call writes (#705, L613): ask before saving kept its own and
 // missed inline scripts, rsync, install, ln, dd, a patch, every file but the last of a sed -i, and a
@@ -2799,5 +2799,38 @@ describe("$'...' and a script not read to its end, as the mods are given them (#
     expect(runs(`mystery notes.txt <<EOF\nbody`)).toEqual(runs('mystery notes.txt'))
     expect(read(`mystery notes.txt 'abc`).unread?.map(u => u.why)).toEqual([QUOTE])
     expect(runs('eval mystery notes.txt')).toBeUndefined()
+  })
+})
+
+// #3626. One mv of 8,000 sources (200 KB) took 4 s to read on 2026-11-25 (median of 5 samples, load
+// 17 on 12 cores), against 0.06 s for a cp of the same sources: each removal was held against every
+// one before it as it was given (`changed`), and each moved source against every change and every
+// write once the command was read (settleMoves), so the time grew with the square of the sources.
+// Ask before saving gives its looks 3 s. The cost is held here by counting, never by the clock
+// (L290): how many times the reader holds one write or change against another, which grew with the
+// square and must grow in step with the sources, at no more than ten for each.
+describe('writes: a command with many sources is read in steps that grow in step with them (#3626)', () => {
+  const sources = (n: number, name: (i: number) => string) => Array.from({ length: n }, (_, i) => name(i)).join(' ')
+  const SHAPES: [string, (n: number) => string][] = [
+    ['a mv of distinct names into a folder', n => `mv ${sources(n, i => `notes/n${i}.md`)} archive/`],
+    ['a mv of one name from many folders', n => `mv ${sources(n, i => `d${i}/same.md`)} archive/`],
+    ['a mv of names alike but for case', n => `mv ${sources(n, i => (i % 2 ? `a/N${i >> 1}.md` : `b/n${i >> 1}.md`))} archive/`],
+    ['a mv onto one name', n => `mv ${sources(n, i => `notes/n${i}.md`)} archive/last.md`],
+    ['a mv then a removal of where it lands', n => `mv ${sources(n, i => `notes/n${i}.md`)} archive/ && rm -rf archive/n1.md`],
+    ['a mv then a write where it lands', n => `mv ${sources(n, i => `notes/n${i}.md`)} archive/ && echo x > archive/n2.md`],
+    ['many one source moves', n => sources(n, i => `mv notes/n${i}.md archive/n${i}.md;`)],
+    ['an rm', n => `rm -rf ${sources(n, i => `notes/n${i}.md`)}`],
+    ['a cp into a folder', n => `cp ${sources(n, i => `notes/n${i}.md`)} archive/`],
+  ]
+  test('one write or change is held against another at most ten times for each source', () => {
+    const over: string[] = []
+    for (const [what, command] of SHAPES)
+      for (const n of [1000, 2000]) {
+        const before = comparisonsSoFar()
+        read(command(n))
+        const steps = comparisonsSoFar() - before
+        if (steps > 10 * n) over.push(`${what}: ${steps} for ${n} sources`)
+      }
+    expect(over).toEqual([])
   })
 })

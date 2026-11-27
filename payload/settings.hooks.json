@@ -257,6 +257,13 @@
           },
           {
             "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/lessons-merge-gate.sh",
+            "timeout": 45,
+            "onFailure": "block",
+            "statusMessage": "Checking Dan has answered for the lesson entries the PR changes"
+          },
+          {
+            "type": "command",
             "command": "__CLAUDE_HOME__/hooks/check-work-names-publish.sh",
             "timeout": 45,
             "onFailure": "block",
@@ -328,6 +335,12 @@
             "command": "__CLAUDE_HOME__/hooks/handback-claims-gate.sh",
             "timeout": 90,
             "onFailure": "block"
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/agent-leftovers-gate.sh",
+            "timeout": 30,
+            "onFailure": "block"
           }
         ]
       },
@@ -337,6 +350,17 @@
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/builder-model-gate.sh",
+            "timeout": 10,
+            "onFailure": "block"
+          }
+        ]
+      },
+      {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/server-skill-ask.sh",
             "timeout": 10,
             "onFailure": "block"
           }
@@ -391,6 +415,17 @@
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/db-write-ask.sh",
+            "timeout": 10,
+            "onFailure": "block"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/connector-change-ask.sh",
             "timeout": 10,
             "onFailure": "block"
           }
@@ -497,6 +532,17 @@
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/verification-tally-notice.sh",
             "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/announce-answer-note.sh",
+            "timeout": 15,
+            "statusMessage": "Noting the picker Dan answered"
           }
         ]
       },
@@ -654,6 +700,11 @@
           },
           {
             "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/bash-shell-mark.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
             "command": "__CLAUDE_HOME__/hooks/session-notes-folder.sh",
             "timeout": 10
           },
@@ -661,6 +712,11 @@
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/checkout-behind-notice.sh",
             "timeout": 15
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/repo-visibility-notice.sh",
+            "timeout": 10
           }
         ]
       }
@@ -741,6 +797,11 @@
             "command": "__CLAUDE_HOME__/hooks/subagent-issue-harvest.sh",
             "timeout": 180,
             "async": true
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/agent-leftovers-gate.sh",
+            "timeout": 30
           },
           {
             "type": "command",

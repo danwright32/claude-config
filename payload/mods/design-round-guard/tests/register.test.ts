@@ -178,6 +178,9 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
     sealed?: string[]
     sealFails?: boolean
     sealSilent?: boolean
+    // #3620: what mod-kit's write reader answers, changed before the guard is given it (a mark
+    // taken off a word, or put there as something other than the reader's own `true`).
+    reading?: (reading: ReturnType<typeof commandWrites>) => unknown
   } = { storeGetFails: false, storeSetFails: false, settingsRefuse: false }
   // Each time the guard asked design_file.py whether a text is sealed: how it ran it, and the text.
   const sealChecks: { argv: string[]; stdin: string }[] = []
@@ -254,7 +257,8 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
     }
     if (cmd === '__modkit' && args[0] === 'writes') {
       const input = JSON.parse(String(args[1])) as { command: string; cwd: string; home: string }
-      return ok(JSON.stringify(commandWrites(input.command, input.cwd, input.home)))
+      const reading = commandWrites(input.command, input.cwd, input.home)
+      return ok(JSON.stringify(ctl.reading ? ctl.reading(reading) : reading))
     }
     // Given the folder the call starts in, each command with the folder it runs in (#2000), as mod-kit's own pipeline gives it.
     if (cmd === '__modkit' && args[0] === 'pipeline') {
@@ -5531,6 +5535,164 @@ test('#3416: a function of the script that hands on what it was handed, or that 
   w.ctl.shell = { [KEYS]: DRAWN_KEYS }
   expect(refusalOf(await sh(`bash ${NOTES}/hook.sh`))).toContain('was undone')
   expect(w.files[KEYS]).toBe(KEYS_TEXT)
+})
+
+// #3602: on 2026-11-24 and 2026-11-25 the guard refused nine plain runs of four of this
+// repository's suites, each for a command the suite hands one of its own helpers as text, to be
+// judged by the gate under test and never run. Every one holds a `$(` the shell hands on as written
+// (after a backslash, or in single quotes) with a pipe inside it. mod-kit's reader gives such a
+// word as the one name it spells and marks it `unexpanded`; the guard dropped that mark at a
+// script's edge, read the `$(` as a command substitution, and held the word as a name a command's
+// output fills in, which may be any screen file. The lines below are cut from those suites as
+// written on 2026-11-25: the helper each line calls, and the lines the refusals named.
+const PUBLISH_3602 = [
+  "run(){   # $1 = the command; output in out, exit code in rc, the decision in decision",
+  "  # RUN_DIR, when set, is the directory the session runs the command from (the checkout otherwise).",
+  "  local payload dir=\"${RUN_DIR:-$CO}\"",
+  "  payload=\"$(jq -nc --arg c \"$1\" --arg d \"$dir\" '{hook_event_name:\"PreToolUse\",tool_name:\"Bash\",tool_input:{command:$c},cwd:$d}')\"",
+  "  : > \"$CALLS\"",
+  "  out=\"$(cd \"$dir\" && printf '%s' \"$payload\" | PATH=\"$BIN:$PATH\" HOME=\"$HOMEDIR\" FAKE_CALLS=\"$CALLS\" FAKE_LIST=\"$LIST\" \\",
+  "    FAKE_VIS=\"$VIS\" WORK_NAMES_EXTRA_HASHES=\"$FAKE_HASH,$WORD_HASH\" WORK_NAMES_PROJECT_LIST=\"$PROJECTS\" \\",
+  "    HOOK_TESTS_RUNNING=1 WORK_NAMES_PROJECT_HASHES=\"$PROJ_HASHES\" WN_SHELL_SNAPSHOTS=\"$SNAPS\" bash \"$GATE\" 2>&1)\"; rc=$?",
+  "  decision=\"$(printf '%s' \"$out\" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)\"",
+  "}",
+  "run \"gh issue create --repo danwright-test/public-notes --title \\\"\\$(pwd | tr a-z A-Z)\\\" --body x\"",
+].join('\n')
+const SHAPES_3602 = [
+  "RUN_IN=\"$T\"",
+  "run_here() { run_raw \"$(payload Bash \"$(bash_input \"$1\")\" \"$RUN_IN\")\"; }",
+  "run_here 'bash -c \"echo \\$(sort ok.sh | bash)\"'",
+].join('\n')
+const LOADERS_3602 = [
+  "run_pg() { run_raw \"$(payload Bash \"$(bash_input \"$1\")\" \"${2:-$PG}\")\"; }",
+  "run_pg \"perl -ne print \\\"\\$(printf 'bash post.sh|')\\\"\"",
+  "run_pg \"perl -ne print \\\"\\$NOPE_2912\\\" \\\"\\$(printf 'bash post.sh|')\\\"\"",
+  "run_pg \"perl -ne print \\\"\\$NOPE_2912/\\$(printf 'bash post.sh|')\\\"\"",
+  "run_pg \"perl -ae print \\\"\\$(printf 'bash post.sh|')\\\"\"",
+  "run_pg \"perl -F, -e print \\\"\\$(printf 'bash post.sh|')\\\"\"",
+  "run_pg \"perl -0777ne print \\\"\\$(printf 'bash post.sh|')\\\"\"",
+  "run_pg \"perl -00pe print \\\"\\$(printf 'bash post.sh|')\\\"\"",
+  "run_pg \"perl -0x1Fne print \\\"\\$(printf 'bash post.sh|')\\\"\"",
+].join('\n')
+const DBWRITE_3602 = [
+  "expect_bash() { expect \"Bash [$3]: $1\" \"$2\" \"$(bash_payload \"$3\")\"; }  # <label> <want> <command>",
+  "expect_bash \"eval of what a read only client command prints\" none 'eval \"$(supabase status -o env | grep API_URL)\"'",
+].join('\n')
+const HOOKS_3602 = '/w/slate/payload/hooks'
+test('#3602: a suite handing its own helper a command as text, whose $( ) the shell hands on as written, runs unasked', withKit, async ($, on) => {
+  const suites: Record<string, string> = {
+    'test-work-names-publish.sh': `${PUBLISH_3602}\n`,
+    'test-slack-drafts-unread-shapes.sh': `${SHAPES_3602}\n`,
+    'test-slack-drafts-code-loaders.sh': `${LOADERS_3602}\n`,
+    'test-db-write-ask.sh': `${DBWRITE_3602}\n`,
+  }
+  const w = world($, on, { files: { ...WITH_SCRATCH, ...Object.fromEntries(Object.entries(suites).map(([name, text]) => [`${HOOKS_3602}/${name}`, text])) } })
+  const sh = (command: string) => call($, { tool: 'Bash', command })
+  const commands = [
+    ...Object.keys(suites).map(name => `bash payload/hooks/${name}`),
+    `bash ${HOOKS_3602}/test-slack-drafts-unread-shapes.sh > ${SCRATCH}/suite.txt 2>&1; echo "exit $?"`,
+    // The four in one command, in the form the first refused call ran them.
+    `cd /w/slate && ${Object.keys(suites).map(name => `bash payload/hooks/${name} 2>&1 | cut -c1-300 | grep -E "^FAIL|SUITE-RESULT"`).join('; ')}`,
+  ]
+  for (const command of commands) expect({ command, why: refusalOf(await sh(command)) }).toEqual({ command, why: '' })
+  expect(w.ran.length).toBe(commands.length)
+})
+
+// The controls beside it: the same reading still holds every word that spells a screen file and a
+// suite that writes one. The same words typed whole on a command line were left held by that
+// change and are read by the mark since #3620, in the tests below.
+test('#3602: a word a script hands on as written is still held where it spells a screen file, beside one, and in a script that writes one', withKit, async ($, on) => {
+  const scripts: Record<string, string> = {
+    // The text the helper is handed ends in a screen file's name.
+    'spells.sh': "run_here 'cat \\$(a | b) > app/page.tsx'\n",
+    // A group, read as each name it can spell, with a `$` the shell hands on as written.
+    'group.sh': "mystery '/w/slate/app/(page|site)$.css'\n",
+    'escaped.sh': 'mystery "/w/slate/app/\\$(a|b).css"\n',
+    // The text is no file, and the screen file handed over beside it is still one.
+    'beside.sh': "mystery 'say $(a | b)' /w/slate/app/page.tsx\n",
+    // The suite's own lines, in a script that also writes a stylesheet.
+    'writes.sh': `${PUBLISH_3602}\nprintf 'a{}' > /w/slate/app/globals.css\n`,
+  }
+  const w = world($, on, { files: { ...WITH_SCRATCH, ...Object.fromEntries(Object.entries(scripts).map(([name, text]) => [`${HOOKS_3602}/${name}`, text])) } })
+  const sh = (command: string) => call($, { tool: 'Bash', command })
+  for (const name of Object.keys(scripts)) {
+    const command = `bash payload/hooks/${name}`
+    expect({ command, held: refusalOf(await sh(command)).includes(SKIP_QUESTION) }).toEqual({ command, held: true })
+  }
+  const beside = refusalOf(await sh('bash payload/hooks/beside.sh'))
+  expect(beside).toContain('app/page.tsx')
+  expect(beside).not.toContain('say $(a | b)')
+  expect(refusalOf(await sh('bash payload/hooks/writes.sh'))).not.toContain('gh issue create')
+  expect(w.ran).toEqual([])
+})
+
+// #3620: the same word typed whole on a command line was still held. A program is handed an
+// argument whose every `$` and backtick the shell hands on as written (after a backslash, or in
+// single quotes), holding a parenthesis with a bar inside it. mod-kit's reader gives the word as
+// the one name it spells and marks it `unexpanded`; the guard read that mark only for a script's
+// own text (#3602), so here it took the parenthesis for a group pattern and the `$(` for a
+// command's output, and held the word as a name that may be any screen file. The mark is now read
+// on a command line too, whichever kind of run is handed the word: a program the reader does not
+// know, a script file, or a tool.
+const TYPED_3620 = [
+  'mystery "x \\$(a | b) y"',
+  'run "gh issue create --repo danwright-test/public-notes --title \\"\\$(pwd | tr a-z A-Z)\\" --body x"',
+  "mystery 'x $(a | b) y'",
+  'mystery "x \\`a | b\\` (c|d)"',
+  'mystery x\\$\\(a\\|b\\)y',
+  'timeout 5 mystery "x \\$(a | b) y"',
+  'python3 tools/gen.py "x \\$(a | b) y"',
+  'npx sometool "x \\$(a | b) y"',
+]
+const FILES_3620 = { ...WITH_SCRATCH, '/w/slate/tools/gen.py': 'print(1)\n', [`${HOOKS_3602}/shapes.sh`]: `${SHAPES_3602}\n` }
+test('#3620: a word typed whole on a command line that the shell hands on as written is read as the name it spells, and runs unasked', withKit, async ($, on) => {
+  const w = world($, on, { files: FILES_3620 })
+  const sh = (command: string) => call($, { tool: 'Bash', command })
+  // The last is the script text #3602 fixed, which must pass as it did.
+  const commands = [...TYPED_3620, 'bash payload/hooks/shapes.sh']
+  for (const command of commands) expect({ command, why: refusalOf(await sh(command)) }).toEqual({ command, why: '' })
+  expect(w.ran.length).toBe(commands.length)
+})
+
+// The controls: everything below was held before the mark was read here and is held after.
+test('#3620: such a word typed whole is still held where it spells or names a screen file, beside one, where its substitution really runs, and where the mark cannot be read', withKit, async ($, on) => {
+  const w = world($, on, { files: FILES_3620 })
+  const sh = (command: string) => call($, { tool: 'Bash', command })
+  const held = async (command: string, note = '') => expect({ command, note, held: refusalOf(await sh(command)) !== '' }).toEqual({ command, note, held: true })
+  // It spells a screen file: its last part, read as each name its group can spell, is one.
+  for (const command of ['mystery "/w/slate/app/\\$(a|b).css"', 'mystery "x \\$(a | b).css"', 'mystery "echo \\$(cat a.txt | tee page.css)"']) await held(command)
+  // It names a screen file anywhere in its text. A program that runs what it is handed as a
+  // command (a remote shell, a helper that evaluates its argument) would write that file, so on a
+  // command line such a word is judged as it was before the mark was read.
+  for (const command of ['mystery "cp x app/page.css; echo y/\\$(a|b)"', 'mystery "tee app/page.css < x; echo \\$(a|b)"', 'mystery "fix page.tsx \\$(a|b)"']) await held(command)
+  // A screen file beside it is still one, and is the only file the refusal names.
+  for (const command of ["mystery 'say $(a | b)' /w/slate/app/page.tsx", 'mystery "x \\$(a | b) y" > app/page.css', 'mystery "x \\$(a | b) y" --out=app/page.css']) await held(command)
+  const beside = refusalOf(await sh("mystery 'say $(a | b)' /w/slate/app/page.tsx"))
+  expect(beside).toContain('app/page.tsx')
+  expect(beside).not.toContain('say $(a | b)')
+  // A substitution with no backslash before it really runs, so the reader puts no mark on the
+  // word, and a script file or a tool handed it is held as handed a command's output.
+  for (const command of ['python3 tools/gen.py "$(a | b)"', 'python3 tools/gen.py "x $(a | b) y"', 'npx sometool "x $(a | b) y"']) {
+    await held(command)
+    expect(refusalOf(await sh(command))).toContain("its name is a command's output")
+  }
+  // The mark taken off the word, or anything but the reader's own `true` in its place: the guard
+  // cannot tell that the shell hands the word on as written, so it holds every one of the words
+  // the test above lets run.
+  for (const mark of [undefined, 'yes', 'true', 1, {}, null, false]) {
+    w.ctl.reading = r => ({
+      ...r,
+      runs: r.runs?.map(run => ({
+        ...run,
+        args: run.args.map(a => {
+          const { unexpanded: _, ...rest } = a
+          return mark === undefined ? rest : { ...rest, unexpanded: mark }
+        }),
+      })),
+    })
+    for (const command of TYPED_3620) await held(command, `mark ${JSON.stringify(mark)}`)
+  }
+  expect(w.ran).toEqual([])
 })
 
 test('#2855: a script named through a variable the command sets is read; one a loop names is not', withKit, async ($, on) => {

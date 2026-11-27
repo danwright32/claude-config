@@ -1,0 +1,9 @@
+# What this repository's visibility on GitHub is meant to be: public, private or internal.
+#
+# The one home of that expectation (claude-config#3582). .github/workflows/tests.yml is sized for a
+# public repository's runners, which are 4 cores and free. payload/hooks/repo-visibility-notice.sh
+# reads the first line below that is not a comment at every session start and says when GitHub
+# disagrees, and the work names publish gate judges text posted to a repository whose file says
+# public even while GitHub says the repository is private (Dan, 2026-11-25, on #3582). Both read it
+# through payload/hooks/lib/expected-visibility.py.
+public
