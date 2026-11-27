@@ -507,10 +507,15 @@ export const register: Register = on => {
         // seconds: 26 calls the collision guard refused on the personal MacBook, 2026-11-20 to
         // 2026-11-27, while 59 of 82 quick calls around them took 5 seconds or more. So the looks for
         // the open sessions' transcripts no longer wait for every record to be read. Begun here, by
-        // path, before the reads: for each record about to be read whose session the last list found
-        // a transcript for, whether that file is still there. Only the look is early. Whether the
-        // session is open, and where else its transcript may be, are still judged from the record
-        // once it is read, and a look nobody needs is dropped.
+        // path, before the reads: for each record about to be read whose session an earlier list in
+        // this process found a transcript for, whether that file is still there. Only the look is
+        // early. Whether the session is open, and where else its transcript may be, are still judged
+        // from the record once it is read. A look nobody needs (the record turned out closed, say) is
+        // still asked; only its answer is ignored. So a remembered transcript's presence is judged as
+        // of the start of the list: one deleted while the records are read is handed on as there, where
+        // a look after the reads said none, and the next list says none. This saves a step only when
+        // every open session's transcript is remembered: one that is not, and the first list after a
+        // start, still look after the reads.
         const early = new Map<string, Promise<boolean>>()
         let untimed = false
         for (const ent of files) {

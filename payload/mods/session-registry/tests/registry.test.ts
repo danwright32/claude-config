@@ -1078,8 +1078,9 @@ test('a list that cannot read every record within its own time refuses, naming h
 // same session took 5 seconds or more (ordinarily 0.9 seconds at the middle), and one process's
 // main thread was seen at 90% or more of a processor for 6 seconds on end. Each step taken one
 // after another waits its own turn on that thread, so the look for each open session's transcript,
-// where the last list found it, is begun with the read of that session's record, not once every
-// record has been read: three steps in turn where there were four.
+// where an earlier list found it, is begun with the read of that session's record, not once every
+// record has been read: three steps in turn where there were four, whenever every open session's
+// transcript is remembered. One that is not, and the first list after a start, still take four.
 test("a list looks for an open session's transcript while its record is being read, not in a step after (#3673)", withConsumer, async ($, on) => {
   const T = `${'/Users'}/x/.claude/projects/-Users-x-app/o1.jsonl`
   const w = world(on, { files: { [`${DIR}/o1.json`]: other('o1', `${'/Users'}/x/app`), [`${DIR}/slow.json`]: other('slow', `${'/Users'}/x/slow`), [T]: '' } })
@@ -1126,6 +1127,46 @@ test('a look for a remembered transcript that fails is said on the record, as a 
   const r = (JSON.parse(await call($, 'list')) as { open: { sessionId: string; transcriptPath: string | null; transcriptUnread?: string }[] }).open.find(o => o.sessionId === 'o1')
   expect(r?.transcriptPath).toBeNull()
   expect(r?.transcriptUnread).toContain(`whether ${T} is there could not be checked (session-registry: $.fs.exists: EIO)`)
+})
+
+// The test above cannot see an early look's failure being swallowed: its remembered path is also the
+// one the session's folder spells, so a fresh look at that same path fails the same way and says the
+// same words. Here the remembered path is in another folder, so only the early look can say it.
+test('a failed look begun before the reads, at a remembered path in another folder, is said on the record, never read as no file (#3673, #1636)', withConsumer, async ($, on) => {
+  const OLD = `${'/Users'}/x/.claude/projects/-Users-x-elsewhere/o1.jsonl`
+  const fails: Record<string, string> = {}
+  const w = world(on, { files: { [`${DIR}/o1.json`]: other('o1', `${'/Users'}/x/app`), [OLD]: '' }, existsFails: fails })
+  await start($)
+  expect((await openOf($, 'o1'))?.transcriptPath).toBe(OLD)
+  fails[OLD] = 'EIO'
+  delete w.files[OLD]
+  const first = w.exists.length
+  const r = (JSON.parse(await call($, 'list')) as { open: { sessionId: string; transcriptPath: string | null; transcriptUnread?: string }[] }).open.find(o => o.sessionId === 'o1')
+  // Looked at once in this list, by the look begun before the reads.
+  expect(w.exists.slice(first).filter(p => p === OLD).length).toBe(1)
+  expect(r?.transcriptPath).toBeNull()
+  expect(r?.transcriptUnread).toContain(`whether ${OLD} is there could not be checked (session-registry: $.fs.exists: EIO)`)
+})
+
+// A known difference from the list before #3673, kept on purpose. A remembered transcript's presence
+// is judged by the look begun before the records are read, so one deleted while they are still being
+// read is handed on as there. The list before looked only once every record was read and said none.
+// Matching that means a second look at every remembered transcript on every list, which is the step
+// #3673 takes away; the window is the time the reads take, at most the registry's 8 second limit.
+test('a transcript deleted while the records are still being read is handed on as there, judged as of the start of the list (#3673, a known difference)', withConsumer, async ($, on) => {
+  const T = `${'/Users'}/x/.claude/projects/-Users-x-app/o1.jsonl`
+  const w = world(on, { files: { [`${DIR}/o1.json`]: other('o1', `${'/Users'}/x/app`), [`${DIR}/slow.json`]: other('slow', `${'/Users'}/x/slow`), [T]: '' } })
+  await start($)
+  expect((await openOf($, 'o1'))?.transcriptPath).toBe(T)
+  w.hang(`${DIR}/slow.json`)
+  const pending = call($, 'list')
+  await w.hangReached
+  delete w.files[T]
+  w.unhang()
+  const l = JSON.parse(await pending) as { open: { sessionId: string; transcriptPath: string | null }[] }
+  expect(l.open.find(r => r.sessionId === 'o1')?.transcriptPath).toBe(T)
+  // The next list looks again and says it is gone.
+  expect((await openOf($, 'o1'))?.transcriptPath).toBeNull()
 })
 
 test('a record moved away between the listing and its read is left out, never named unreadable (#911)', withConsumer, async ($, on) => {
