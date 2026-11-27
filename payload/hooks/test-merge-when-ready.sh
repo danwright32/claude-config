@@ -1329,6 +1329,30 @@ out="$(run 7 --repo acme/widget --squash)"; rc=$?
 check_eq "#1995 a title edited during the wait stops the merge" "1" "$rc"
 check "#1995 in the gate's words" "title now names a work organisation" "$out"
 check_eq "#1995 and nothing is merged" "0" "$(count gh-calls 'pr merge')"
+
+# The lessons gate (#3343) is asked at the same two moments. Whether Dan has answered for the lesson
+# entries a pull request changes is known at once, so a merge waiting for him stops before a check
+# run and a lessons review are spent on it (L667); and a push while this waits can change an entry,
+# so it is asked again at the pinned merge. Its refusal is a decision: one ask, a stop, no retry.
+fresh "$OLD" 0 "$PENDING"
+printf 'Refusing to merge PR #7: it changes lesson entries in payload/LESSONS.md, and Dan has not answered the lesson picker for them.' > "$ST/lessons-gate-deny"
+out="$(run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#3343 a pull request the lessons gate refuses stops the helper" "1" "$rc"
+check "#3343 in the gate's words, naming it" "lessons-merge-gate.sh refused the merge of #7 before any wait: Refusing to merge PR #7: it changes lesson entries" "$out"
+check_eq "#3343 before any wait" "0" "$(count sleeps '.')"
+check_eq "#3343 asked once, not again and again" "1" "$(grep -c 'tool_input' "$ST/lessons-gate-payloads" 2>/dev/null || true)"
+check_eq "#3343 and nothing is merged" "0" "$(count gh-calls 'pr merge')"
+fresh "$OLD" 0 "$GREEN"
+out="$(run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#3343 with the lessons gate allowing it, the merge goes through" "0" "$rc"
+check "#3343 the lessons gate judges the exact pinned merge command" "gh pr merge 7 --repo acme/widget --squash --match-head-commit $OLD" "$(cat "$ST/lessons-gate-payloads" 2>/dev/null)"
+check_eq "#3343 asked before the wait and again at the merge" "2" "$(grep -c 'tool_input' "$ST/lessons-gate-payloads" 2>/dev/null || true)"
+fresh "$OLD" 0 "$PENDING"
+printf '%s\n' "printf '%s' '$GREEN' > \"\$ST/rollup\"; printf 'an entry changed after Dan answered' > \"\$ST/lessons-gate-deny\"" > "$ST/on-sleep"
+out="$(run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#3343 an entry changed during the wait stops the merge" "1" "$rc"
+check "#3343 in the gate's words" "lessons-merge-gate.sh refused the merge of #7 at ${OLD:0:7}: an entry changed after Dan answered" "$out"
+check_eq "#3343 and nothing is merged" "0" "$(count gh-calls 'pr merge')"
 # Every script this helper runs is named from the environment only under the test marker
 # (claude-config#2231 for the work names gate, #2317 for the rest): a script named there would stand
 # in for a merge gate, the lessons review or the worktree check on every merge this helper makes.
@@ -1345,7 +1369,8 @@ for marker in "" 0; do
   check_eq "#2317 outside a test run (marker '$marker') no script named in the environment is run" "" "$(cat "$ST/decoys-asked" 2>/dev/null)"
   check_eq "#2317 and the merge goes through the installed gates (marker '$marker')" "0" "$rc"
   for g in block-red-merge.sh pr-review-gate.sh require-changelog-tag.sh design-score-gate.sh \
-           require-verification-run.sh check-closing-merge.sh check-work-names-merge.sh lib/pr-review.sh; do
+           require-verification-run.sh check-closing-merge.sh check-work-names-merge.sh lessons-merge-gate.sh \
+           lib/pr-review.sh; do
     check "#2317 outside a test run the installed $g is run (marker '$marker')" "$g" "$(cat "$ST/installed-asked" 2>/dev/null)"
   done
 done
@@ -1373,7 +1398,7 @@ printf '%s\n' "printf '%s' '$GREEN' > \"\$ST/rollup\"" > "$ST/on-sleep"
 out="$(fake_in "$REPO" HOOK_TESTS_RUNNING=1 MWR_RED_GATE="$STUBS/red-gate.sh" MWR_REVIEW_GATE="$STUBS/review-gate.sh" \
   MWR_CHANGELOG_GATE="$STUBS/changelog-gate.sh" MWR_DESIGN_GATE="$STUBS/design-gate.sh" MWR_VERIFY_GATE="$STUBS/verify-gate.sh" \
   MWR_CLOSING_GATE="$STUBS/closing-gate.sh" MWR_WORK_NAMES_GATE="$STUBS/work-names-gate.sh" MWR_REVIEW_LIB="$STUBS/pr-review.sh" \
-  MWR_WORKTREE_CHECK= bash "$FAKE_HELPER" 7 --repo acme/widget --squash)"; rc=$?
+  MWR_LESSONS_GATE="$STUBS/lessons-gate.sh" MWR_WORKTREE_CHECK= bash "$FAKE_HELPER" 7 --repo acme/widget --squash)"; rc=$?
 check_eq "#2399 control: under the test marker the merge goes through after its wait" "0" "$rc"
 check "#2399 control: under the test marker the sleep named in MWR_SLEEP does the wait" "30" "$(cat "$ST/decoy-sleeps" 2>/dev/null)"
 check "#2399 control: under the test marker the clock named in MWR_NOW is read" "read" "$(cat "$ST/decoy-nows" 2>/dev/null)"
