@@ -2153,8 +2153,12 @@ def milestone_line(repo, feature, answer, description):
 def _announced(entries, key, number, title):
     """The pull requests the record holds as let through with an announcement for a milestone: a
     `used` line whose closes names an issue of it, by the milestone's number where the line carries
-    one and else by its title."""
-    out = []
+    one and else by its title. Given as {pull request: (when its newest such line was written, in
+    nanoseconds, that line's own stamp)}, or (0, None) for one whose lines do not say when, in the
+    record's order, because a line covers a milestone only when it was written after his last yes
+    about it (finishes)."""
+    stamp_ns = _part("db_apply_approval_shared", "db-apply-approval.py")._stamp_ns
+    out = {}
     for e in entries or []:
         closes, pr = e.get("closes"), e.get("pr")
         if e.get("kind") != "used" or e.get("repo") != key or not isinstance(closes, list) or not isinstance(pr, int):
@@ -2164,8 +2168,9 @@ def _announced(entries, key, number, title):
                 continue
             named = c.get("milestone_number")
             if (named == number and not isinstance(named, bool)) or (named is None and c.get("milestone") == title):
-                if pr not in out:
-                    out.append(pr)
+                at = stamp_ns(e.get("at")) or 0
+                if pr not in out or at > out[pr][0]:
+                    out[pr] = (at, e.get("at") if at else None)
     return out
 
 
@@ -2182,7 +2187,11 @@ def finishes(repo, pr, answer, payload=None, unmerged=(), spent=None):
     about the milestone's title, whatever the description says (the line is what the helper
     writes, and a command or a hand can drop or alter it; the record is the guarded store, so a
     line cannot hide a yes the record holds), unless the record holds an announcement let through
-    for it (a `used` line naming the milestone: the pull requests are given back in `announced`,
+    for it (a `used` line naming the milestone, written AFTER his last yes about the milestone's
+    title where the record holds one: an announcement older than his newest ANNOUNCE_IT covers
+    nothing, that yes being owed an announcement of its own, and the refusal says the record's
+    announcement is older than his last yes; with no yes of his on the record every such line
+    counts. The pull requests are given back in `announced`,
     because that line says the gate let one through and never that GitHub merged it, so the gate
     asks GitHub), or Dan's last answer in a picker naming that milestone is NOT_ANNOUNCING and is
     also his last answer about that feature (the milestone's title) in any picker: a newer answer
@@ -2288,7 +2297,18 @@ def finishes(repo, pr, answer, payload=None, unmerged=(), spent=None):
                    and _feature_key(u["feature"]) == _feature_key(s["title"])]
         if declined and not short and not waiting:
             continue
-        let_through = _announced(entries, key, s["number"], s["title"])
+        # An announcement covers the milestone only when it was let through AFTER his last yes
+        # about its title. A milestone is reused for a feature's next phase and he is asked again:
+        # his newer ANNOUNCE_IT is owed an announcement of its own, and the one let through for
+        # the phase before it is older than that yes and covers nothing. A line that does not say
+        # when is not known to be after it. With no yes of his on the record at all (a milestone
+        # whose line says yes from before the record held his answer) every line covers, as it
+        # did. A line let through is stamped in whole seconds and his answer finer, so one let
+        # through in the very second he answered reads as older: the side that asks him again.
+        yes = _last_decided(entries, found, key, _feature_key(s["title"]), answers=("yes",))
+        every = _announced(entries, key, s["number"], s["title"])
+        let_through = [n for n, (at, _) in every.items() if yes is None or at > _when(yes)]
+        older = [n for n in every if n not in let_through]
         announced = [n for n in let_through if n not in unmerged]
         if announced:
             out["announced"] += [n for n in announced if n not in out["announced"]]
@@ -2305,14 +2325,35 @@ def finishes(repo, pr, answer, payload=None, unmerged=(), spent=None):
                     "while this Mac's record holds his `" + (_text(held.get("said")) or ANNOUNCE_IT) + "`"
                     + (" of " + _day(held.get("answered")) if _day(held.get("answered")) else "")
                     + " as his last yes or no about announcing it, and the record is what counts")
+        holds = []
+        if older:
+            his = ("his last `" + (_text(yes.get("said")) or ANNOUNCE_IT) + "` about announcing it"
+                   + (", of " + _day(yes.get("answered")) if _day(yes.get("answered")) else ""))
+            dated, undated = [n for n in older if every[n][0]], [n for n in older if not every[n][0]]
+            if len(dated) == 1:
+                holds.append(_pull_requests(dated) + " as let through with an announcement for that milestone"
+                             + (" on " + _day(every[dated[0]][1]) if _day(every[dated[0]][1]) else "")
+                             + ", which is older than " + his)
+            elif dated:
+                holds.append(_pull_requests(dated) + " as let through with an announcement for that milestone, each "
+                             "of which is older than " + his)
+            if len(undated) == 1:
+                holds.append(_pull_requests(undated) + " as let through with an announcement for that milestone, "
+                             "which does not say when, so it is not known to be newer than " + his)
+            elif undated:
+                holds.append(_pull_requests(undated) + " as let through with an announcement for that milestone, none "
+                             "of which says when, so none is known to be newer than " + his)
         if let_through:
-            said += (". This Mac's record holds " + _pull_requests(let_through) + " as let through with an announcement "
-                     "for that milestone, and GitHub says "
-                     + ("it did not merge as an announcement (it has not merged, or it merged without the "
-                        "changelog/announce label)" if len(let_through) == 1 else
-                        "none of them merged as an announcement (each has not merged, or merged without the "
-                        "changelog/announce label)")
-                     + ", so nothing was announced, and ")
+            holds.append(_pull_requests(let_through) + " as let through with an announcement "
+                         "for that milestone, and GitHub says "
+                         + ("it did not merge as an announcement (it has not merged, or it merged without the "
+                            "changelog/announce label)" if len(let_through) == 1 else
+                            "none of them merged as an announcement (each has not merged, or merged without the "
+                            "changelog/announce label)"))
+        if holds:
+            said += (". This Mac's record holds " + ". It also holds ".join(holds)
+                     + (", so nothing was announced, and " if let_through else
+                        ", so that yes of his has had no announcement, and "))
         else:
             said += ", and this Mac's record holds no announcement let through for that milestone and "
         if taken_back:
@@ -2325,7 +2366,7 @@ def finishes(repo, pr, answer, payload=None, unmerged=(), spent=None):
                             ", in a picker that does not name this milestone, which lets no merge through"))
             else:
                 said += ": his last answer about it decides nothing (" + (_text(newest.get("why")) or "it was neither option alone") + ")"
-        elif let_through:
+        elif holds:
             said += "the record holds no answer of his declining it"
         else:
             said += "no answer of his declining it"

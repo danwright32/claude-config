@@ -3350,7 +3350,12 @@ for the review by picker, 2026-11-25: "Yes, attack it first"). The choices are t
   his on the record, and writes one line into the milestone's description; and the merge gate
   refuses the pull request that closes the milestone's last open issue under another label while
   the line says yes, unless the record holds an announcement let through for that milestone that
-  GitHub says merged, or his `Not announcing` in a picker naming that milestone (R9). That decline
+  GitHub says merged, or his `Not announcing` in a picker naming that milestone (R9). An
+  announcement covers the milestone only when its line was written after his last yes about the
+  milestone's title: a milestone is reused for a feature's next phase and discovery asks again, so
+  counting every such line let the first phase's announcement clear every merge finishing a later
+  phase he had said yes to. With no yes of his on the record every line counts, as before, and a
+  line that does not say when is not known to be newer than a yes. That decline
   counts only while it is also his last answer about the feature in any picker: a discovery picker
   names no milestone, so asking only among pickers naming the milestone let an old decline outlive
   a newer `Announce it` and clear every later merge finishing that milestone. His decline

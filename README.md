@@ -2307,7 +2307,10 @@ only where this Mac's dev update registry names an announcements channel for the
   either to label it with wording he approved or to ask him with a picker whether it is still
   being announced, and giving that picker's metadata (the same as above, with `"milestone":
   <number>` and the milestone's title as the feature). It is let through when the record holds an
-  announcement let through for that milestone that GitHub says merged, or his `Not announcing` in
+  announcement let through for that milestone that GitHub says merged, written after his last yes
+  about the milestone's title where the record holds one (an announcement older than his newest
+  `Announce it` covers nothing: a milestone is reused for a feature's next phase, he is asked
+  again, and that yes is owed an announcement of its own, which the refusal says), or his `Not announcing` in
   a picker naming that milestone, while that is also his last answer about the feature (the
   milestone's title) in any picker: a newer answer of his in a picker naming no milestone, as the
   one at feature discovery does, takes the decline back, and the refusal says what he answered
