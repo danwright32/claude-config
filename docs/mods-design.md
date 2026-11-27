@@ -6038,6 +6038,24 @@ file is `docs/design/1563-goal-box.html`, drawn from `docs/design/1563-goal-box.
 - **Once.** A box is recorded in the session's state by a read and a versioned write, so two calls
   at once show one; a goal's box by its met record's id, a request's by how many messages Dan had
   typed (mod-kit's one reader of his own words), and a second box needs a new one.
+- **The close card over a held steps card (#3817), decided 2026-11-27.** The close this session
+  card (#3770, README "goal-box") is added to the steps card through manual steps' noun, and manual
+  steps holds a card carried from an earlier session, with any step added to it, until the session
+  has checked the steps and pinned them again (#1107). So in a folder with kept undone steps the
+  card could never show; Dan's first real test of it ran in one, with five such steps. Two ways
+  out were put to him on the issue: draw the close step alone over the held card, or tell the
+  session first. His answer by picker on 2026-11-27, as the issue records it: "Ask the session to
+  check first", with no design round and the way manual steps holds a carried card left as it is.
+  So when the pin comes back held, the goal box takes back the close step it just added, sends the
+  session one prompt of its own per request of Dan's (`CHECK_CARRIED` in `hooks/close.ts`) asking
+  it to check the carried steps and pin them again, and writes one reason naming the carried card.
+  Dan sees the old steps come back with their notification, then the close card below them at the
+  next quiet turn end. A session that does not pin them gets no card for that request, which he
+  accepted with the option. The goal box knows a held card by manual steps' own reason, said again
+  in `hooks/close.ts` because a mod cannot read another mod's files, and
+  `tests/test-close-card-carried-reason.sh` fails when the two differ. Not pulled: reading manual
+  steps' card from its state before the pin and never adding the step, which would save the add
+  and the take back but rest on a second fact about another mod's state.
 
 ## Not design decisions
 

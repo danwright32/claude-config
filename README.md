@@ -12074,14 +12074,30 @@ the cut still counts), which is also said in the debug log. Each reason is writt
 replacing the one before, with the notes and `attached`, the look's count of carriers still
 attached (null when it gave none): in a session with connected servers a 0 there is a look that
 saw no environment at all, and nothing is decided from it. The next turn start takes the card
-down as withdrawn; it comes back only after the next box. Invisible to both readings: a
+down as withdrawn; it comes back only after the next box. A steps card carried from an earlier
+session and not yet checked (#3817; Dan, 2026-11-27: "Ask the session to check first"): manual
+steps holds such a card, and any step added to it, until the session has checked the steps and
+pinned them again, so the pin comes back not shown with manual steps' reason for a held card
+(`CARRIED_HELD` in `hooks/close.ts`, held to manual steps' own words by
+`tests/test-close-card-carried-reason.sh`). The goal box then takes back the close step it just
+added (left there it would come along onto the card when the session pins, while it is still
+working; one that could not be taken back is taken back at the next turn start), sends the
+session one prompt of its own, once per request of Dan's, asking it to check the carried steps
+and pin them again (`CHECK_CARRIED`, holding back a reload of the mod while it waits, #2132), and
+writes one reason naming the carried card and saying the session was asked, was already asked
+for this request, or could not be asked and why (then it is asked again at the next quiet turn
+end). Dan sees the old steps come back with their notification, then the close card below them
+at the next quiet turn end. A session that does not pin them gets no card for that request, and
+a turn that began while the pin was out is not asked. How manual steps holds a carried card is
+unchanged, and a step this session pinned that is still undone keeps the card back as before.
+Invisible to both readings: a
 program that detaches itself without the
 command saying so, and an Apple signed program (a shell, sleep) left behind, whose environment
 the kernel does not show.
 
 </td><td>
 
-#1563, #1749, #1818, #3770, #3843
+#1563, #1749, #1818, #3770, #3817, #3843
 
 </td></tr>
 </tbody>
