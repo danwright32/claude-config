@@ -625,7 +625,10 @@ const closeCheck = async ($: EngineInterface, seq: number): Promise<void> => {
  * #3817: takes back the close step manual steps added to a held card. Left there it is listed to
  * the session as a step carried from an earlier session, and comes along onto the card Dan sees
  * when the session pins those steps, while it is still working. One that could not be taken back
- * is marked, and the next turn start tries again (withdrawClose), before the session can pin.
+ * is marked, and the next turn start tries again (withdrawClose): before the session can pin when
+ * it was quiet, as it is whenever it is asked. Only when a turn had already begun while the pin was
+ * out is the try a turn late, and a step the session pinned onto the card in that turn comes off
+ * at the start of the next.
  */
 const takeBackClose = async ($: EngineInterface): Promise<void> => {
   try {

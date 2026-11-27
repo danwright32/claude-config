@@ -1355,6 +1355,21 @@ test('a pin still out when a new turn starts that comes back held: the step is t
   expect(asksToCheck(submitted)).toHaveLength(1)
 })
 
+test('a pin that comes back held after a turn began, whose step could not be taken back: the turn after takes it back (#3817)', withAll, async ($, on) => {
+  const { w, clock, submitted } = world(on, { stepsCard: OTHERS, pinAnswer: 'no answer yet', lateAnswer: CARRIED, withdrawFails: "the manual steps mod's own hook did not answer" })
+  await start($)
+  await says($, 'Add the goal box')
+  await workedAndQuiet($, clock)
+  await turnStarts($)
+  w.releasePin()
+  await clock.settle()
+  expect(w.withdrawn).toEqual([])
+  expect(asksToCheck(submitted)).toEqual([])
+  w.withdrawFails = ''
+  await turnStarts($, 't3')
+  expect(w.withdrawn).toEqual([CLOSE_TITLE])
+})
+
 // What must not change. A step this session pinned for Dan still keeps the close card back, as it
 // did: nothing is pinned, nothing is asked and nothing is taken back. And manual steps' other
 // reasons for not showing a step are not the carried card, so none of them asks the session.
