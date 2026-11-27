@@ -2096,6 +2096,7 @@ second bound, so the hook's longest wait is what it was.
 Wording nobody could judge is not wording that was refused (the review of #3846). The hash and the
 judging are each one bounded question to `changelog-entry.js`, and either can run out of time on a
 loaded Mac. With no note that refuses the one call that met it. In a note it used to be permanent:
+when the review ran it on 2026-11-27,
 the note of good wording carried "did not judge the wording in 1.7 seconds" as its `why`, and a note
 that carries a `why` approves nothing for good. So a note whose reason is that the wording could not
 be judged now also says `"unjudged": true`, and the call that reads it judges the file again, only

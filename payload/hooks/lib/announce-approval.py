@@ -100,7 +100,9 @@ _read_by_dan). Then, all of these, each failure said in its own words:
     unjudged: its note carries no such field and stays refused for good, as does a file that
     could not be read, held no wording, was too large, held a long run of blank lines or changed
     while it was hashed. A note written before this field, with a why and no `unjudged`, reads
-    as it always did and approves nothing, whatever its why says.
+    as it always did and approves nothing, whatever its why says. The field is about the
+    WORDING. It is not the "unjudged note" of EVERY PICKER IS NOTED, below, which is a noted
+    picker the record holds no outcome for yet.
 
 WHAT IS HASHED. The FILE as it stands, never a hash the session supplies: a hash in the metadata
 is not read at all. The hash is lib/changelog-entry.js's announcementHash, the sha256 of its one

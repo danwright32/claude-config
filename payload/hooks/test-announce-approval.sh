@@ -984,7 +984,7 @@ helper_asks acme/widget "$HR" 67 >/dev/null
 check "#3846 his Not yet about wording the merge would refuse is still recorded by the hash of that wording" "$(grep '"kind": "withdrawn"' "$STORE_USED/record.jsonl" 2>/dev/null | grep "\"picker\": \"$P\"" | grep -q "\"hash\": \"$HR\"" && echo ok || cat "$STORE_USED/record.jsonl" 2>&1)"
 
 # Wording that could not be JUDGED when his answer was noted is kept apart from wording the judge
-# refused (the review of #3846, C). The review ran it: with the judge slower than what was left of
+# refused (the review of #3846, C). The review ran it on 2026-11-27: with the judge slower than what was left of
 # the note hook's bound, the note of GOOD wording carried "did not judge the wording in 1.7
 # seconds" as its why, a note that carries a why approves nothing, a picker's first note is the one
 # kept and nothing judged the file again. So good wording was refused for good, and the only way out
