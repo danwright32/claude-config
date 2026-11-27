@@ -476,12 +476,15 @@ export const outstanding = (r: Reading): string[] => {
       return [
         `PR #${r.pr.number} was closed without merging, and ${r.choice.why}, which settles it once GitHub says ${also.join(' and ')}, which that picker also named, ${also.length === 1 ? 'is' : 'are'} no pull request. That could not be read${r.choiceUnread ? ` (${r.choiceUnread})` : ''}, so leave it closed until GitHub answers`,
       ]
+    // His pick to close it that is not kept as his choice (#3779: its picker named a second pull
+    // request) settles nothing, and why is said with the PR at every turn end, never only in a log.
+    const notKept = r.choice && isLeftClosed(r.choice) && r.choice.notKept ? `. ${r.choice.why}, but that answer is not kept as his choice to close it: ${r.choice.notKept}` : ''
     // His answer to leave it open was about an open PR, so it settles nothing once closed. Dan would
     // rather merge it (#1767), so he is asked only on a recorded reason it will never merge.
     const n = r.pr.neverMerge
-    if (n) return [`PR #${r.pr.number} was closed without merging, and ${neverMergeSaid(n)}: ask Dan whether to leave it closed (mcp__scope-modes__leave_pr_open)`]
+    if (n) return [`PR #${r.pr.number} was closed without merging, and ${neverMergeSaid(n)}: ask Dan whether to leave it closed (mcp__scope-modes__leave_pr_open)${notKept}`]
     return [
-      `PR #${r.pr.number} was closed without merging: reopen it (gh pr reopen ${r.pr.number}) and finish it, as Dan would rather merge it. Ask him whether to leave it closed (mcp__scope-modes__leave_pr_open) only when he said earlier that another PR superseded it, passing his words as dan_said`,
+      `PR #${r.pr.number} was closed without merging: reopen it (gh pr reopen ${r.pr.number}) and finish it, as Dan would rather merge it. Ask him whether to leave it closed (mcp__scope-modes__leave_pr_open) only when he said earlier that another PR superseded it, passing his words as dan_said${notKept}`,
     ]
   }
   const d = r.deploy
@@ -529,8 +532,8 @@ export function settledByDan(r: Reading): boolean {
 export const leftByChoice = (pr: { state: string; head?: string }, d: LeftAsIs | undefined): boolean => {
   if (!d) return false
   // Left closed on a pick of his whose picker named another number (#3779) only once GitHub has
-  // said that number is no PR, which takes it off the record.
-  if (isLeftClosed(d)) return pr.state === 'CLOSED' && !d.unless?.length
+  // said that number is no PR, which takes it off the record, and never on one not kept as his choice.
+  if (isLeftClosed(d)) return pr.state === 'CLOSED' && !d.unless?.length && !d.notKept
   return pr.state === 'OPEN' && !!pr.head && pr.head === d.head
 }
 

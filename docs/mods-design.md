@@ -1200,13 +1200,31 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
   keeps what #917 was guarding, that nothing is inferred. It is read only from the dialog's result
   as the mod's hook on AskUserQuestion receives it, which no session can write (a closing comment,
   `dan_said` and an answer the call carries itself never count); it must be an answer the picker
-  offered and he picked alone, in words he could read whole, that begins "Close" and says unmerged;
+  offered and he picked alone, in words he could read whole, whose whole wording closes the pull
+  request and says it is not merged ("Close it unmerged", "Close PR 31 without merging");
   and the words he read must name exactly one pull request as a pull request, the answer if it
   names one and otherwise the question. Another number the question names with a # may be a pull
   request too, so his answer counts once GitHub has said it is none, waits (never sent back to be
-  reopened) while GitHub cannot say, and is dropped where it is one. It is kept as the same
+  reopened) while GitHub cannot say, and where it is one stays on the record marked `notKept`,
+  settling nothing. It is kept as the same
   `leftOpen` record a "Leave it closed" answer makes, marked `picked`, so one rule decides what is
   left as it is. "Leave it open" and "Leave it closed" in a session's picker are still never read.
+  An independent read of the first build, before it merged, changed four things. Begins "Close" and
+  says unmerged had been two separate tests, so an answer that closes an issue and says only that
+  the pull request stays unmerged was read as closing the pull request it leaves open: now any
+  other word in the answer (another thing closed, "later", "once") makes it no decision, and he is
+  asked. The record was
+  said nowhere until winding down refused a turn end, and not at all when its pull request was the
+  last thing outstanding: now it is said to the session and in the transcript the moment it is
+  made, withdrawn or cannot be made, and every turn end of a session holding one names the pull
+  request and quotes his answer, winding down or not, in the transcript unless that turn end's own
+  refusal already lists it as left closed. A later answer of his in a picker naming that pull
+  request while it is still open, other than to close it unmerged, withdraws it, where before
+  nothing did (GitHub is asked whether it is open only then; closed, his pick has been carried out,
+  so a picker that merely mentions it never has him asked twice). And a pull
+  request named by number alone is placed by the pull requests the session opened (one under that
+  number says which repository, two record nothing), with "PR 31 in owner/name" read as naming
+  that repository, where before another repository's pull request was recorded as this one's.
   That record now has three writers (his pick, `leave_pr_open`, and the finish check placing a
   pick's other number), and the finish check waits on GitHub between reading it and writing it. So
   every one of them changes the record as it stands at the moment of writing (`changeLeft`: a

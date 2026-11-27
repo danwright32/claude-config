@@ -1,14 +1,15 @@
 import { expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
-import { closeDecisions, closesUnmerged, namedAsPr, notePicked, pickedClosed, placePicked, type PickedIo, type PlaceIo } from '../hooks/closedecision.ts'
+import { closeDecisions, closesUnmerged, namedAsPr, notedSaid, notePicked, pickedClosed, picksSaid, placePicked, type PickedIo, type PlaceIo } from '../hooks/closedecision.ts'
 import { leftByChoice, outstanding, type Reading } from '../hooks/winddown.ts'
 import { CLOSE_IT, SIGN_OFF, SIGN_OFF_OPTIONS, signOff } from './close-decision-fixtures.ts'
 
 // #3779: on 2026-11-26 Dan chose, in a picker, to close claude-config's pull request 3749 unmerged.
 // An hour later winding down sent it back to be reopened and finished, and he was asked again. His
 // own pick in the dialog is a decision no session can write for itself, so it is read here: one
-// offered answer that begins "Close" and says unmerged, about the one pull request the words he read
-// name as a pull request. The picker he answered is kept word for word in close-decision-fixtures.ts.
+// offered answer whose whole wording closes the pull request unmerged, about the one pull request
+// the words he read name as a pull request. The picker he answered is kept word for word in
+// close-decision-fixtures.ts.
 
 const picker = (question: string = SIGN_OFF, options: { label: string; description?: string }[] = SIGN_OFF_OPTIONS): Record<string, unknown> => signOff(question, options)
 // What the dialog hands back: the questions it showed and his answer to each, by the question's words.
@@ -31,13 +32,46 @@ test('the picker Dan answered on 2026-11-26 is read as his decision to close pul
   expect(pickedClosed('o/r', { pr: { number: 31 }, answer: 'Close it unmerged', unless: [] })).toEqual({ repo: 'o/r', number: 31, closed: true, why: 'Dan answered "Close it unmerged" in a picker naming it', picked: true })
 })
 
-test('only an offered answer that begins Close and says unmerged is a decision to close it', () => {
+test('only an answer whose whole wording closes the pull request unmerged is a decision to close it', () => {
   for (const yes of ['Close it unmerged', '3.79.1 Close it unmerged (Recommended)', '1. Close PR 31 without merging', 'Close it, do not merge', 'close it and never merge it', "Close it, don't merge", 'Closed unmerged'])
     expect({ label: yes, closes: closesUnmerged(yes) }).toEqual({ label: yes, closes: true })
   // Any other answer, the tool's own keep answers included (#917, #1033), a close that does not say
   // unmerged, and a sentence that only mentions closing.
   for (const no of ['Merge it', 'Keep it open', 'Leave it closed', 'Leave it open', 'Reopen it', 'Close it', 'Close the issue', "Don't close it unmerged", 'Never close it unmerged', 'Reopen it, never close it unmerged', 'Merge it, or close it unmerged later', ''])
     expect({ label: no, closes: closesUnmerged(no) }).toEqual({ label: no, closes: false })
+})
+
+// The independent read of #3779: "begins Close" and "says unmerged" were two separate tests, so an
+// answer that closes something else and leaves the pull request open was read as closing it. Only
+// an answer whose whole wording closes the pull request unmerged counts; one that could be read
+// either way records nothing, so the pull request stays outstanding and he is asked.
+test('an answer that leaves the pull request open, closes something else, or closes it only later is never his decision to close it unmerged (#3779)', () => {
+  const about = 'Pull request 3749 still needs a count from the work MacBook. What should happen to the issue?'
+  const one = (answer: string, question = about) => closeDecisions(picker(question, labels(answer, 'Merge it')), answered(question, answer))
+  const leavesItOpen = [
+    // The two the review found.
+    'Close the issue and leave the PR unmerged for now',
+    'Close #3692 as not planned, do not merge PR 3749 yet',
+    // An issue closed while the pull request stays open.
+    'Close the issue, keep the pull request open and unmerged',
+    // Not merging yet says nothing of closing it.
+    'Close the review thread, do not merge yet',
+    'Close the review thread, not merging is fine',
+    // Another pull request closed, in words this reader takes for none, beside this one kept.
+    'Close #3750 unmerged, keep PR 3749',
+    'Close the duplicate unmerged',
+    // Closed already and to be undone, or to be closed only later or on a condition.
+    'Closed unmerged by mistake: reopen it',
+    'Close it unmerged later',
+    'Close it unmerged once PR 3760 merges',
+  ]
+  expect(leavesItOpen.map(answer => ({ answer, closes: closesUnmerged(answer), decisions: one(answer).length }))).toEqual(leavesItOpen.map(answer => ({ answer, closes: false, decisions: 0 })))
+  // An answer that closes another pull request by name is a decision about that one, never this one.
+  expect(one('Close PR 3750 unmerged')).toEqual([{ pr: { number: 3750 }, answer: 'Close PR 3750 unmerged', unless: [] }])
+  // And an answer that really does close this pull request unmerged still counts.
+  const itself = 'Pull request 3749 is not needed. What should happen to it?'
+  const closesIt = ['Close it unmerged', 'Close the pull request unmerged', 'Close this PR without merging it', 'Close pull request 3749 unmerged.', 'Close it and do not merge it', 'Closed unmerged']
+  expect(closesIt.map(answer => ({ answer, read: one(answer, itself).map(d => d.pr) }))).toEqual(closesIt.map(answer => ({ answer, read: [{ number: 3749 }] })))
 })
 
 test('a pull request is named only in words that say it is one, or by its link', () => {
@@ -151,6 +185,8 @@ const io = (over: Partial<PickedIo & PlaceIo> = {}, start: Left = []) => {
   const seen = { left: start, version: 1, writes: 0, missed: 0, between: [] as (() => void)[], logs: [] as string[], asked: [] as string[] }
   const made: PickedIo & PlaceIo = {
     slug: async () => 'o/r',
+    opened: async () => [],
+    state: async () => 'OPEN',
     linkRepo: async () => 'o/r',
     left: async () => ({ value: seen.left, version: seen.version }),
     // A write lands only on the version it read, as the engine's state does with ifVersion.
@@ -180,6 +216,8 @@ const io = (over: Partial<PickedIo & PlaceIo> = {}, start: Left = []) => {
   return { made, seen, lands }
 }
 const PICKED_3749 ={ repo: 'o/r', number: 3749, closed: true as const, why: 'Dan answered "3.79.1 Close it unmerged (Recommended)" in a picker naming it', picked: true as const }
+// The same answer once GitHub has said #3692, which its picker also named, is a pull request too.
+const NOT_KEPT_3749 = { ...PICKED_3749, notKept: 'its picker also named #3692, which is a PR too, so which one he chose to close is not on record' }
 
 test('his pick is recorded against the PR in the repository it is in, one answer per PR, the newest kept', async () => {
   const earlier: Left = [
@@ -245,12 +283,19 @@ test('a pick whose picker named another number stands once GitHub says it is no 
   expect(waiting.choices).toEqual([open, waits])
   expect(waiting.unread.get(waiting.choices[1] as Left[number])).toBe('whether #3692, named in the picker Dan answered about PR #3749, is a PR: no pull requests found')
   expect(unreadable.seen.writes).toBe(0)
-  // It is a pull request: which one he meant is not on record, so his answer is not kept, and that is logged.
-  const isPr = io({ named: async (_repo, refs) => refs[0] }, [open, waits])
+  // It is a pull request: which one he meant is not on record, so his answer is not kept as his
+  // choice. It stays on the record marked so, with why, for the turn end to say (the review's S4).
+  let askedOfGitHub = 0
+  const isPr = io({ named: async (_repo, refs) => (askedOfGitHub++, refs[0]) }, [open, waits])
   const dropped = await placePicked(isPr.made)
-  expect(dropped.choices).toEqual([open])
-  expect(isPr.seen).toMatchObject({ left: [open], writes: 1 })
+  expect(dropped.choices).toEqual([open, NOT_KEPT_3749])
+  expect(dropped.unread.size).toBe(0)
+  expect(isPr.seen).toMatchObject({ left: [open, NOT_KEPT_3749], writes: 1 })
   expect(isPr.seen.logs).toEqual(["Dan's answer about PR #3749 in o/r is not kept: its picker also named #3692, which is a PR too, so which one he chose to close is not on record"])
+  // Marked, it is never asked about again, and never written again.
+  await placePicked(isPr.made)
+  expect(isPr.seen).toMatchObject({ left: [open, NOT_KEPT_3749], writes: 1 })
+  expect(askedOfGitHub).toBe(1)
   // Only the ones asked for are placed.
   const narrow = io({}, [waits, { ...waits, number: 3751 }])
   const one = await placePicked(narrow.made, d => d.number === 3751)
@@ -285,8 +330,8 @@ test('an answer of his recorded while GitHub is being asked about an earlier one
     await notePicked(dropped.made, picker(second, labels('Close it unmerged', 'Merge it')), answered(second, 'Close it unmerged'))
     return refs[0]
   }
-  expect((await placePicked(dropped.made)).choices).toEqual([OPEN_31, PICKED_3751])
-  expect(dropped.seen.left).toEqual([OPEN_31, PICKED_3751])
+  expect((await placePicked(dropped.made)).choices).toEqual([OPEN_31, NOT_KEPT_3749, PICKED_3751])
+  expect(dropped.seen.left).toEqual([OPEN_31, NOT_KEPT_3749, PICKED_3751])
 })
 
 test('what GitHub said is applied only to the answer it was asked about, never to one that replaced it or to one withdrawn meanwhile (#3779)', async () => {
@@ -318,8 +363,8 @@ test('a write the record changed under is made again on the newer record, said o
   const raced = io({ named: async (_repo, refs) => refs[0] }, [OPEN_31, WAITS])
   raced.seen.between.push(() => raced.lands([OPEN_31, WAITS, other]))
   const placed = await placePicked(raced.made)
-  expect(placed.choices).toEqual([OPEN_31, other])
-  expect(raced.seen).toMatchObject({ left: [OPEN_31, other], writes: 1, missed: 1 })
+  expect(placed.choices).toEqual([OPEN_31, NOT_KEPT_3749, other])
+  expect(raced.seen).toMatchObject({ left: [OPEN_31, NOT_KEPT_3749, other], writes: 1, missed: 1 })
   expect(raced.seen.logs).toEqual(["Dan's answer about PR #3749 in o/r is not kept: its picker also named #3692, which is a PR too, so which one he chose to close is not on record"])
   // His pick is recorded on the newer record the same way.
   const noted = io({}, [OPEN_31])
@@ -333,4 +378,151 @@ test('a write the record changed under is made again on the newer record, said o
   await notePicked(never.made, picker(), answered(SIGN_OFF, CLOSE_IT))
   expect(never.seen.left).toEqual([OPEN_31, WAITS])
   expect(never.seen.logs).toEqual(["Dan's answer to close a PR unmerged could not be recorded (the record of his answers changed under every one of 10 attempts to write it), so winding down asks about that PR as if he had not answered"])
+})
+
+// ---- The independent read of #3779: what is said, a later answer, and another repository ----
+const PICKED_31 = { repo: 'o/r', number: 31, closed: true as const, why: 'Dan answered "Close it unmerged" in a picker naming it', picked: true as const }
+const closeOrMerge = labels('Close it unmerged', 'Merge it')
+const RECORDED_TAIL = 'Winding down leaves it closed while it stays closed without merging, every turn end names it, and a later answer of his in a picker naming that pull request while it is still open, other than to close it unmerged, withdraws it.'
+
+test('his pick is said the moment it is recorded, with the pull request named and his answer quoted (#3779)', async () => {
+  // The picker of the day: recorded, and waiting on GitHub for the other number it named.
+  const day = io()
+  const noted = await notePicked(day.made, picker(), answered(SIGN_OFF, CLOSE_IT))
+  expect(noted).toEqual({ recorded: [{ ...PICKED_3749, unless: [{ number: 3692 }] }], withdrawn: [], failed: [] })
+  expect(notedSaid(noted)).toEqual([
+    `Recorded as Dan's choice to close it unmerged: PR #3749 in o/r (Dan answered "3.79.1 Close it unmerged (Recommended)" in a picker naming it; not counted until GitHub says #3692, which that picker also named, is no pull request). ${RECORDED_TAIL}`,
+  ])
+  // With no other number named, nothing waits on GitHub.
+  const plain = 'PR 31 is stale. What now?'
+  const alone = await notePicked(io().made, picker(plain, closeOrMerge), answered(plain, 'Close it unmerged'))
+  expect(notedSaid(alone)).toEqual([`Recorded as Dan's choice to close it unmerged: PR #31 in o/r (Dan answered "Close it unmerged" in a picker naming it). ${RECORDED_TAIL}`])
+  // A picker with no decision in it, and one he answered another way with no pick on record, says nothing.
+  const none = await notePicked(io().made, picker(plain, closeOrMerge), answered(plain, 'Merge it'))
+  expect(none).toEqual({ recorded: [], withdrawn: [], failed: [] })
+  expect(notedSaid(none)).toEqual([])
+})
+
+test('every turn end names each pull request he chose to close unmerged and quotes his answer, but for one the refusal already quotes (#3779)', () => {
+  const tool: Left[number] = { repo: 'o/r', number: 716, closed: true, why: 'PR #720 superseded it' }
+  // Only his own picks: an answer of his to leave_pr_open, open or closed, is the tool's to say.
+  expect(picksSaid([OPEN_31, tool])).toBe('')
+  expect(picksSaid([])).toBe('')
+  expect(picksSaid([OPEN_31, PICKED_3749, tool])).toBe(
+    'On record as Dan\'s choice to close unmerged: PR #3749 in o/r (Dan answered "3.79.1 Close it unmerged (Recommended)" in a picker naming it). Winding down leaves it closed while it stays closed without merging.',
+  )
+  // One still waiting on GitHub says so, and several are each named.
+  expect(picksSaid([{ ...PICKED_3749, unless: [{ number: 3692 }, { repo: 'o/other', number: 7 }] }, PICKED_31])).toBe(
+    'On record as Dan\'s choice to close unmerged: PR #3749 in o/r (Dan answered "3.79.1 Close it unmerged (Recommended)" in a picker naming it; not counted until GitHub says #3692 and o/other#7, which that picker also named, are no pull requests); PR #31 in o/r (Dan answered "Close it unmerged" in a picker naming it). Winding down leaves each closed while it stays closed without merging.',
+  )
+  // One the turn end's refusal already quotes is not said twice, and one not kept is no choice of his to name.
+  expect(picksSaid([PICKED_3749, PICKED_31], d => d.number === 3749)).toBe('On record as Dan\'s choice to close unmerged: PR #31 in o/r (Dan answered "Close it unmerged" in a picker naming it). Winding down leaves it closed while it stays closed without merging.')
+  expect(picksSaid([PICKED_3749], () => true)).toBe('')
+  expect(picksSaid([NOT_KEPT_3749])).toBe('')
+})
+
+test('a later answer of his in a picker naming that pull request while it is still open, other than to close it unmerged, withdraws his pick (#3779)', async () => {
+  const tool: Left[number] = { repo: 'o/r', number: 716, closed: true, why: 'PR #720 superseded it' }
+  const again = 'Pull request 3749 turned out to be needed after all. What should happen to it?'
+  const start = (): Left => [OPEN_31, PICKED_3749, PICKED_31, tool]
+  // He picks to merge it: his earlier pick about it no longer stands, and every other answer is kept.
+  const asked: string[] = []
+  const merge = io({ state: async (repo, number) => (asked.push(`${repo}#${number}`), 'OPEN') }, start())
+  const noted = await notePicked(merge.made, picker(again, closeOrMerge), answered(again, 'Merge it'))
+  expect(merge.seen.left).toEqual([OPEN_31, PICKED_31, tool])
+  expect(noted).toEqual({ recorded: [], withdrawn: [{ was: PICKED_3749, answer: 'Merge it' }], failed: [] })
+  // GitHub was asked about that one pull request, once.
+  expect(asked).toEqual(['o/r#3749'])
+  // Closed already, his pick has been carried out: a later answer naming it withdraws nothing, so
+  // a picker that only mentions the closed pull request never has him asked a second time.
+  const closed = io({ state: async () => 'CLOSED' }, start())
+  expect(await notePicked(closed.made, picker(again, closeOrMerge), answered(again, 'Merge it'))).toEqual({ recorded: [], withdrawn: [], failed: [] })
+  expect(closed.seen).toMatchObject({ left: start(), writes: 0 })
+  // GitHub cannot say whether it is still open: withdrawn, since asking him again is the harmless side.
+  const unread = io({ state: async () => ({ unreadable: 'no network' }) }, start())
+  expect((await notePicked(unread.made, picker(again, closeOrMerge), answered(again, 'Merge it'))).withdrawn).toEqual([{ was: PICKED_3749, answer: 'Merge it' }])
+  expect(notedSaid(noted)).toEqual([
+    'Withdrawn: Dan\'s choice to close PR #3749 in o/r unmerged (Dan answered "3.79.1 Close it unmerged (Recommended)" in a picker naming it) no longer stands, as he then answered "Merge it" in a picker naming that pull request. Winding down waits on it until it is merged, or until he is asked about it again.',
+  ])
+  // Words he typed there count too, and so does the pull request named by its # alone.
+  const typed = io({}, start())
+  await notePicked(typed.made, picker('What about #3749 now?', closeOrMerge), answered('What about #3749 now?', 'hold on, keep it open for Denys'))
+  expect(typed.seen.left).toEqual([OPEN_31, PICKED_31, tool])
+  // One waiting on GitHub, and one not kept, are withdrawn the same way.
+  for (const was of [{ ...PICKED_3749, unless: [{ number: 3692 }] }, NOT_KEPT_3749]) {
+    const waiting = io({}, [was])
+    expect((await notePicked(waiting.made, picker(again, closeOrMerge), answered(again, 'Merge it'))).withdrawn).toEqual([{ was, answer: 'Merge it' }])
+    expect(waiting.seen.left).toEqual([])
+  }
+  // The same pull request in another repository is another pull request.
+  const elsewhere = io({}, start())
+  await notePicked(elsewhere.made, picker('PR o/other#3749 is ready. What now?', closeOrMerge), answered('PR o/other#3749 is ready. What now?', 'Merge it'))
+  expect(elsewhere.seen).toMatchObject({ left: start(), writes: 0 })
+  // A picker naming another pull request withdraws nothing, writes nothing, and asks GitHub nothing.
+  const other = io({ state: async () => { throw new Error('GitHub was asked') } }, start())
+  expect(await notePicked(other.made, picker('PR 40 is ready. What now?', closeOrMerge), answered('PR 40 is ready. What now?', 'Merge it'))).toEqual({ recorded: [], withdrawn: [], failed: [] })
+  expect(other.seen).toMatchObject({ left: start(), writes: 0 })
+  // The same choice picked again replaces his earlier pick: recorded, never said as withdrawn.
+  const same = io({}, start())
+  const repicked = await notePicked(same.made, picker(again, closeOrMerge), answered(again, 'Close it unmerged'))
+  const newer = { ...PICKED_3749, why: 'Dan answered "Close it unmerged" in a picker naming it' }
+  expect(repicked).toEqual({ recorded: [newer], withdrawn: [], failed: [] })
+  expect(same.seen.left).toEqual([OPEN_31, PICKED_31, tool, newer])
+  // Nothing he did not answer withdraws it: a subagent's picker, a call carrying its own answers, a picker left unanswered.
+  for (const [call, result] of [
+    [{ ...picker(again, closeOrMerge), agentId: 'a1' }, answered(again, 'Merge it')],
+    [{ ...picker(again, closeOrMerge), answers: { [again]: 'Merge it' } }, answered(again, 'Merge it')],
+    [picker(again, closeOrMerge), { result: { answers: {} } }],
+    [picker(again, closeOrMerge), answered(again, 'Merge it', { afkTimeoutMs: 60_000 })],
+  ] as const) {
+    const not = io({}, start())
+    expect(await notePicked(not.made, call, result)).toEqual({ recorded: [], withdrawn: [], failed: [] })
+    expect(not.seen).toMatchObject({ left: start(), writes: 0 })
+  }
+  // An answer of his to leave_pr_open is the tool's own, and no picker of a session's withdraws it.
+  const tools = io({}, start())
+  await notePicked(tools.made, picker('PR 716 again. What now?', closeOrMerge), answered('PR 716 again. What now?', 'Merge it'))
+  expect(tools.seen).toMatchObject({ left: start(), writes: 0 })
+})
+
+test('a pull request in another repository is recorded there, and one this session opened under that number in two is not recorded (#3779)', async () => {
+  // Named in plain words, "PR 31 in owner/name", as the review's picker did.
+  expect(namedAsPr('PR 31 in danwright32/Ovation is not needed. Pull request #32 in o/r.')).toEqual([{ repo: 'danwright32/Ovation', number: 31 }, { repo: 'o/r', number: 32 }])
+  const inWords = 'PR 31 in danwright32/Ovation is not needed. What now?'
+  const plain = io()
+  await notePicked(plain.made, picker(inWords, closeOrMerge), answered(inWords, 'Close it unmerged'))
+  expect(plain.seen.left).toEqual([{ ...PICKED_31, repo: 'danwright32/Ovation' }])
+  // Named by its number alone: the one pull request this session opened under it says which repository.
+  const bare = 'PR 31 is not needed. What now?'
+  const opened = io({ opened: async () => [{ repo: 'o/other', number: 31 }, { repo: 'o/r', number: 12 }] })
+  await notePicked(opened.made, picker(bare, closeOrMerge), answered(bare, 'Close it unmerged'))
+  expect(opened.seen.left).toEqual([{ ...PICKED_31, repo: 'o/other' }])
+  // None opened under it: the session's own repository, where its branch's pull request is.
+  const own = io({ opened: async () => [{ repo: 'o/other', number: 12 }] })
+  await notePicked(own.made, picker(bare, closeOrMerge), answered(bare, 'Close it unmerged'))
+  expect(own.seen.left).toEqual([PICKED_31])
+  // Opened under that number in two repositories: which one he chose is not on record, and that is said.
+  const two = io({ opened: async () => [{ repo: 'o/other', number: 31 }, { repo: 'O/R', number: 31 }] })
+  const noted = await notePicked(two.made, picker(bare, closeOrMerge), answered(bare, 'Close it unmerged'))
+  const why = 'Dan\'s answer "Close it unmerged" about PR #31 could not be recorded: this session opened a pull request numbered 31 in o/other and in O/R, and his picker named no repository, so which one he chose to close is not on record. Winding down asks about that PR as if he had not answered'
+  expect(two.seen).toMatchObject({ left: [], writes: 0, logs: [why] })
+  expect(noted).toEqual({ recorded: [], withdrawn: [], failed: [why] })
+})
+
+test('a pick that cannot be recorded, and one not kept, are said where the session reads them, never only in the debug log (#3779)', async () => {
+  // Not recorded: the reason comes back with the picker's own result, for the session and for Dan.
+  const noRepo = await notePicked(io({ slug: async () => undefined }).made, picker(), answered(SIGN_OFF, CLOSE_IT))
+  const unknown = 'Dan\'s answer "3.79.1 Close it unmerged (Recommended)" about PR #3749 could not be recorded: this session\'s repository could not be read, so which repository it is in is not known. Winding down asks about that PR as if he had not answered'
+  expect(noRepo).toEqual({ recorded: [], withdrawn: [], failed: [unknown] })
+  expect(notedSaid(noRepo)).toEqual([`${unknown}.`])
+  const noWrite = await notePicked(io({ setLeft: async () => { throw new Error('the state is read only') } }).made, picker(), answered(SIGN_OFF, CLOSE_IT))
+  expect(notedSaid(noWrite)).toEqual(["Dan's answer to close a PR unmerged could not be recorded (the state is read only), so winding down asks about that PR as if he had not answered."])
+  // Not kept: it settles nothing, and the turn end says why with the pull request, every time.
+  expect(leftByChoice({ state: 'CLOSED' }, NOT_KEPT_3749)).toBe(false)
+  const said = outstanding(reading('CLOSED', NOT_KEPT_3749))
+  expect(said).toEqual([
+    'PR #3749 was closed without merging: reopen it (gh pr reopen 3749) and finish it, as Dan would rather merge it. Ask him whether to leave it closed (mcp__scope-modes__leave_pr_open) only when he said earlier that another PR superseded it, passing his words as dan_said. Dan answered "3.79.1 Close it unmerged (Recommended)" in a picker naming it, but that answer is not kept as his choice to close it: its picker also named #3692, which is a PR too, so which one he chose to close is not on record',
+  ])
+  // With no answer of his at all, the same pull request is sent back in the plain words, as before.
+  expect(outstanding(reading('CLOSED', undefined))).toEqual([said[0]?.split(' Dan answered')[0]?.replace(/\.$/, '')])
 })

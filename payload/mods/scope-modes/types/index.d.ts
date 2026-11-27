@@ -27,9 +27,12 @@ export type ScopeModesLeftOpen = { repo: string; number: number; head: string; w
  * `picked` marks his own pick, in a session's picker naming this PR, of an answer to close it
  * unmerged (#3779), read from the dialog's result. `unless` are the other numbers that picker's
  * question named with a #: his answer counts once GitHub has said each is no pull request, and the
- * field is then gone.
+ * field is then gone. `notKept` is why a pick is not counted as his choice (GitHub said one of those
+ * numbers is a pull request too): it settles nothing, and stays on the record so every turn end that
+ * sends its PR back says why. A later answer of his in a picker naming the PR, other than to close
+ * it unmerged, takes a pick off the record.
  */
-export type ScopeModesLeftClosed = { repo: string; number: number; closed: true; why: string; picked?: true; unless?: { repo?: string; number: number }[] }
+export type ScopeModesLeftClosed = { repo: string; number: number; closed: true; why: string; picked?: true; unless?: { repo?: string; number: number }[]; notKept?: string }
 /** Dan's own answer about one PR, open or closed, found by its repository and number; one per PR. */
 export type ScopeModesLeftAsIs = ScopeModesLeftOpen | ScopeModesLeftClosed
 /**

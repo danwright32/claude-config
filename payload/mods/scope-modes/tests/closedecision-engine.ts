@@ -240,4 +240,153 @@ export const closeDecisionEngine = (h: CloseDecisionHarness): void => {
     expect(w.toasts[0]).toContain(`PR #3749 in o/r (${PICKED_WHY})`)
     expect(w.toasts[0]).toContain('PR #3751 in o/r (Dan answered "Close it unmerged" in a picker naming it)')
   })
+
+  // ---- The independent read of #3779: what is said, and where ----
+  // His pick is named with his answer quoted the moment it is recorded and at every turn end after,
+  // winding down or not, so a wrong record is in front of him long before it can settle anything.
+  // What Dan reads is the transcript, kept here apart from the debug log.
+  type Heard = ($: unknown, e: { text?: unknown; to?: unknown }, ...rest: unknown[]) => unknown
+  const hearing = (on: unknown) => {
+    const transcript: string[] = []
+    const wrapped = (...args: unknown[]) => {
+      const answer = args[args.length - 1] as Heard
+      const heard: Heard = ($, e, ...rest) => {
+        if (args[0] === 'ui.log' && e.to !== 'debug') transcript.push(String(e.text))
+        return answer($, e, ...rest)
+      }
+      return (on as (...a: unknown[]) => unknown)(...args.slice(0, -1), heard)
+    }
+    // Only what is said of his choice: the world's own lines (its cards and bands) are not his.
+    return { on: wrapped, said: () => transcript.filter(l => /Dan's (choice|answer)/.test(l)) }
+  }
+  // One tool call with everything it answers, the notes that go to the session with it included.
+  const whole = async ($: unknown, e: unknown) => (await ($ as { tool: { call: (e: never) => Promise<{ text?: string; context?: string[] }> } }).tool.call(e as never)) ?? {}
+  const TAIL = 'Winding down leaves it closed while it stays closed without merging, every turn end names it, and a later answer of his in a picker naming that pull request while it is still open, other than to close it unmerged, withdraws it.'
+  const WAITS = '; not counted until GitHub says #3692, which that picker also named, is no pull request'
+  const ON_RECORD = (waits = '') => `On record as Dan's choice to close unmerged: PR #3749 in o/r (${PICKED_WHY}${waits}). Winding down leaves it closed while it stays closed without merging.`
+
+  test('the moment his pick is recorded the session and Dan are told which pull request and which answer, and every turn end after names it, winding down or not (#3779)', h.withDeps, async ($, on) => {
+    const heard = hearing(on)
+    const { w, clock } = h.world(heard.on as never, { ...live, created: 'https://github.com/o/r/pull/3749\n', ask: CLOSE_IT } as never)
+    w.o.gh = { ...h.merged(), others: [h.openPr(3749 as never, 'aaa1111' as never)], notPrs: [3692] }
+    await h.start($ as never, clock as never)
+    await create($, 'settings', 'g1')
+    // With nothing of his on record, a turn end says nothing of it.
+    expect((await h.stop($ as never)).block).toBeUndefined()
+    expect(heard.said()).toEqual([])
+    // He picks: said with the picker's own result, to the session, and in the transcript, to him.
+    const recorded = `Recorded as Dan's choice to close it unmerged: PR #3749 in o/r (${PICKED_WHY}${WAITS}). ${TAIL}`
+    expect((await whole($, signOff())).context).toEqual([recorded])
+    expect(heard.said()).toEqual([recorded])
+    // Every turn end after names it and quotes his answer, though winding down is not on.
+    for (let turn = 1; turn <= 3; turn++) {
+      expect((await h.stop($ as never)).block).toBeUndefined()
+      expect(heard.said()).toEqual([recorded, ...Array.from({ length: turn }, () => ON_RECORD(WAITS))])
+      await clock.advance(h.MIN)
+    }
+    expect(w.toasts).toEqual([])
+  })
+
+  test('while winding down a turn end names his pick in its transcript unless its refusal already quotes it, and so does the turn end that finishes with that pull request the last thing outstanding (#3779)', h.withDeps, async ($, on) => {
+    const heard = hearing(on)
+    const { w, clock } = h.world(heard.on as never, { ...live, created: 'https://github.com/o/r/pull/3749\n', ask: CLOSE_IT } as never)
+    w.o.gh = { ...h.merged(), others: [h.openPr(3749 as never, 'aaa1111' as never)], notPrs: [3692] }
+    await h.start($ as never, clock as never)
+    await create($, 'settings', 'g1')
+    await h.call($ as never, signOff() as never)
+    await h.command($ as never, 'winddown' as never)
+    const before = heard.said().length
+    // Still open, it is outstanding: the refusal says so, and the transcript names his pick beside it.
+    const open = (await h.stop($ as never)).block ?? ''
+    expect(open).toContain('PR #3749 is not merged yet')
+    expect(open).not.toMatch(/Left closed by Dan's choice/)
+    expect(heard.said().slice(before)).toEqual([ON_RECORD()])
+    // Closed, it is the last thing outstanding: the turn end is not refused, and what stays on screen
+    // once the toast has gone is the transcript's line, naming it and quoting his answer.
+    w.o.gh = { ...h.merged(), others: [h.closedPr(3749 as never, 'aaa1111' as never, note as never)], notPrs: [3692] }
+    await clock.advance(h.MIN)
+    expect((await h.stop($ as never)).block).toBeUndefined()
+    expect(w.toasts).toEqual([`Wind down finished: safe to close this session. Left closed by your choice: PR #3749 in o/r (${PICKED_WHY}).`])
+    expect(heard.said().slice(before)).toEqual([ON_RECORD(), ON_RECORD()])
+  })
+
+  test('a refusal that already lists his pick as left closed is not said a second time in the transcript (#3779)', h.withDeps, async ($, on) => {
+    const heard = hearing(on)
+    const { w, clock } = h.world(heard.on as never, { ...live, created: 'https://github.com/o/r/pull/3749\n', ask: CLOSE_IT } as never)
+    w.o.gh = { ...h.merged(), others: [h.closedPr(3749 as never, 'aaa1111' as never, note as never), holder()], notPrs: [3692] }
+    await h.start($ as never, clock as never)
+    await create($, 'settings', 'g1')
+    w.o.created = 'https://github.com/o/r/pull/3750\n'
+    await create($, 'holder', 'g2')
+    await h.call($ as never, signOff() as never)
+    await h.command($ as never, 'winddown' as never)
+    const before = heard.said().length
+    for (let turn = 0; turn < 2; turn++) {
+      expect(await held($)).toContain(LEFT_CLOSED_3749)
+      await clock.advance(h.MIN)
+    }
+    expect(heard.said().slice(before)).toEqual([])
+    // Closed, his pick has been carried out: a later picker that names it, answered another way,
+    // withdraws nothing, so he is not asked about it a second time.
+    w.o.ask = '3.79.3 Keep it open'
+    expect((await whole($, signOff(SIGN_OFF, SIGN_OFF_OPTIONS, {}, 'q2'))).context).toBeUndefined()
+    expect(await held($)).toContain(LEFT_CLOSED_3749)
+    expect(heard.said().slice(before)).toEqual([])
+  })
+
+  test('a later answer of his to merge it withdraws his pick: it is said, no turn end names it after, and closed it is sent back to be reopened (#3779)', h.withDeps, async ($, on) => {
+    const heard = hearing(on)
+    const { w, clock } = h.world(heard.on as never, { ...live, created: 'https://github.com/o/r/pull/3749\n', ask: CLOSE_IT } as never)
+    w.o.gh = { ...h.merged(), others: [h.openPr(3749 as never, 'aaa1111' as never)], notPrs: [3692] }
+    await h.start($ as never, clock as never)
+    await create($, 'settings', 'g1')
+    await h.call($ as never, signOff() as never)
+    // He changes his mind before it is closed, in a picker naming it.
+    w.o.ask = '3.79.2 Merge it'
+    const withdrawn = `Withdrawn: Dan's choice to close PR #3749 in o/r unmerged (${PICKED_WHY}) no longer stands, as he then answered "3.79.2 Merge it" in a picker naming that pull request. Winding down waits on it until it is merged, or until he is asked about it again.`
+    expect((await whole($, signOff(SIGN_OFF, SIGN_OFF_OPTIONS, {}, 'q2'))).context).toEqual([withdrawn])
+    const after = heard.said().length
+    expect(heard.said()[after - 1]).toBe(withdrawn)
+    expect((await h.stop($ as never)).block).toBeUndefined()
+    expect(heard.said().slice(after)).toEqual([])
+    // The session closes it all the same: with no pick of his standing, it is reopened and finished.
+    w.o.gh = { ...h.merged(), others: [h.closedPr(3749 as never, 'aaa1111' as never, note as never)], notPrs: [3692] }
+    await h.command($ as never, 'winddown' as never)
+    const block = (await h.stop($ as never)).block ?? ''
+    expect(block).toContain(h.REOPEN(3749))
+    expect(block).not.toMatch(/Left closed by Dan's choice/)
+    expect(heard.said().slice(after)).toEqual([])
+  })
+
+  test('a pick that is not kept, or cannot be recorded, is said where the session reads it: at each turn end, by the tool, and with the picker\'s own result (#3779)', h.withDeps, async ($, on) => {
+    const answers = [{ label: 'Close it unmerged' }, { label: 'Merge it' }]
+    const heard = hearing(on)
+    const { w, clock } = h.world(heard.on as never, { ...live, created: 'https://github.com/o/r/pull/3752\n', ask: 'Close it unmerged' } as never)
+    // PR 3752's picker names #716 beside it, which is a pull request too.
+    w.o.gh = { ...h.merged(), others: [h.closedPr(3752 as never, 'bbb2222' as never, [] as never), h.pr716] }
+    await h.start($ as never, clock as never)
+    await create($, 'b', 'g1')
+    await h.call($ as never, signOff('PR 3752 lost its base (#716 carries the work). What should happen to it?', answers, {}, 'q1') as never)
+    await h.command($ as never, 'winddown' as never)
+    const notKept = 'Dan answered "Close it unmerged" in a picker naming it, but that answer is not kept as his choice to close it: its picker also named #716, which is a PR too, so which one he chose to close is not on record'
+    // Every turn end says why he is asked again, never only the first.
+    for (let turn = 0; turn < 2; turn++) {
+      const block = (await h.stop($ as never)).block ?? ''
+      expect(block).toContain(`${h.REOPEN(3752)}. ${notKept}`)
+      expect(block).not.toMatch(/Left closed by Dan's choice/)
+      await clock.advance(h.MIN)
+    }
+    // The tool says the same, and asks him nothing on that answer.
+    expect(await h.call($ as never, h.leave(3752 as never, { repo: 'o/r' } as never) as never)).toBe(`${h.NO_REASON(3752, "no words of Dan's naming one were given as dan_said")} ${notKept}.`)
+    expect(w.asked.length).toBe(1)
+    // A pull request this session opened under one number in two repositories: his pick cannot be
+    // placed, and that comes back with the picker's own result and in the transcript.
+    w.o.created = 'https://github.com/o/r/pull/31\n'
+    await create($, 'one', 'g2')
+    w.o.created = 'https://github.com/o/other/pull/31\n'
+    await create($, 'two', 'g3')
+    const failed = 'Dan\'s answer "Close it unmerged" about PR #31 could not be recorded: this session opened a pull request numbered 31 in o/r and in o/other, and his picker named no repository, so which one he chose to close is not on record. Winding down asks about that PR as if he had not answered.'
+    expect((await whole($, signOff('PR 31 is not needed. What should happen to it?', answers, {}, 'q2'))).context).toEqual([failed])
+    expect(heard.said()).toContain(failed)
+  })
 }
