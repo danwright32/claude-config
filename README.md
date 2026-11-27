@@ -6476,15 +6476,27 @@ pieces turn the edits he keeps making into written rules, each one his to accept
 - **The reader**, `hooks/lib/draft-edit-diff.py`. It reads this Mac's session records, pairs each
   draft Slack saved with the next post by `--author` in the same thread, as a later session read it
   back, and prints counts by kind of edit: sent as drafted, heavily rewritten, figures cut, length
-  cut, the ask reworded, the opening changed. A draft is used once, a post with no draft before it
-  is left out, and both are compared with Slack's formatting set aside. It only prints. It imports
+  cut, the ask reworded, the opening changed. A draft is used once, by the first post after it; a
+  post with no draft before it is left out, and so is one more than an hour after its draft (a
+  setting, chosen from the work MacBook's pairs of 2026-11-27, where 173 of 184 posts came within
+  the hour). Both are compared with Slack's formatting set aside. A heavily rewritten pair is in
+  none of the four kinds a rule is offered for, since a post that far from its draft may not be an
+  edit of it; what that costs is that a draft cut to under about half its length is in no kind. A
+  read made in the concise layout shows no time for a post, so it is counted as its own kind and
+  nothing is paired from it. It only prints. It imports
   nothing that can send a request or write a file and opens files only to read, because the records
   name Slack's posting address and the Slack drafts gate refuses a program that reads them and
   could write. Message text is printed only with `--examples`: one pair for each recurring kind. A
   kind is recurring at 10 pairs in 3 threads, a setting chosen on 2026-11-27 so that one long thread
   cannot make an edit look like a habit; under it the kind is reported as too thin and no rule is
-  offered. A read result it finds no message in is counted and said, a run in which none could be
-  read exits 4, and `--shapes` prints what the results are made of (counts and field names only).
+  offered. A read result it finds no message in is counted and said. A run exits 4 when none could
+  be read, or when most messages have their text somewhere it does not look (none under the
+  Message TS line, an unknown line above it, or a last line shaped like one of the connector's
+  own). `--shapes` prints what the results are made of: counts, and a field or label name only
+  when it is in a fixed list in the script, never a key or a line it does not know.
+  `--differences` counts, for the pairs changed but not heavily, how many would be the same with
+  one more thing set aside (a name inside angle brackets, how a link is written, punctuation,
+  emoji, a trailing edited mark, a last or first line).
 - **The offer**, the `draft-edit-review` skill. It runs the reader, tells Dan the counts, and asks
   one question for each recurring kind: the proposed rule in one sentence, the pairs it rests on,
   one example pair, and Accept, Not now or Never offer this again. The sentence is run through
@@ -6500,13 +6512,18 @@ pieces turn the edits he keeps making into written rules, each one his to accept
   a project's folder name, never as text somebody typed. `decisions.py forget` takes an answer back.
 - **The weekly notice**, `hooks/draft-edit-review-notice.sh`, at session start. It says the review
   is due, in one line, when a week has passed since it last said so and a draft has been saved on
-  this Mac since the last review finished. It reads no record, runs nothing and asks nothing. The
-  same script runs after the Slack draft tool to record the second a draft was saved, and nothing
-  about the draft. State it cannot read is said by name and the review is not offered.
+  this Mac since the last review finished. The line goes into the session, which is asked to tell
+  Dan; nothing checks that it did, and the week is recorded when the line is printed. It reads no
+  record, runs nothing and asks nothing. The same script runs after the Slack draft tool and
+  records the second, and nothing about the draft, unless the tool's answer says Slack saved
+  nothing. State it cannot read is said by name, at every session start until it is put right, and
+  the review is not offered.
 
-What the pairing cannot see: a thread no later session read back, a draft Dan deleted (a post he
-then wrote in that thread reads as heavily rewritten), a message he wrote with no draft, and the
-other Mac's sessions.
+What the pairing cannot see: a thread no later session read back, or read back only in the concise
+layout; a draft Dan deleted (a post he then wrote in that thread within the hour reads as heavily
+rewritten); a draft he sent more than an hour after it was saved; a message he wrote with no
+draft; a post a session sent as him; an edit he made after sending; a read result that was cut
+short; and the other Mac's sessions.
 
 State is in `~/.claude/state/draft-edit-review/` on each Mac and is never synced: `draft-saved`,
 `last-offered` and `last-review` (one time each), `author` (Dan's Slack member id) and
@@ -6514,10 +6531,15 @@ State is in `~/.claude/state/draft-edit-review/` on each Mac and is never synced
 Mac's own records, and where a rule went can name a private project. The cost is that a kind
 declined on one Mac can be offered once on the other.
 
-The layout inside a thread or channel read was not measured on the personal MacBook, which on
-2026-11-27 held no draft call and no read that succeeded in 8,628 record files. The fixtures write
-it as the connector was seen to answer earlier, with invented text, and the first run on the work
-MacBook is the check: `python3 ~/.claude/hooks/lib/draft-edit-diff.py --shapes`.
+The layout inside a thread or channel read could not be measured on the personal MacBook, which on
+2026-11-27 held no draft call and no read that succeeded in 8,628 record files. It was measured on
+the work MacBook the same day, over 1,765 read results, by counts, field names and the punctuation
+of headings only (pull request 3848), and the reader was fitted to it: the concise layout, a channel
+heading with no name, the section heading over a thread's replies, a `Reactions:` line under a
+message, and the name a read adds inside a mention. The fixtures hold invented text in that layout.
+One thing that run left unexplained: 6 of its 184 pairs read as sent as drafted, against 22 of 106
+in the issue's measurement of 2026-11-24. Until `--differences` has been run there, read a first
+review's counts with that doubt.
 
 ## Read only queries are approved without asking
 

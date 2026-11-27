@@ -219,6 +219,15 @@ check "a refusal by the Slack drafts gate is final" "is final" "$body"
 check "each decision is recorded" "decisions.py record" "$body"
 check "the review is marked finished" "decisions.py reviewed" "$body"
 check "a decision can be taken back" "decisions.py forget" "$body"
+# What the skill tells Dan was left out has to be what the reader leaves out. The limit between a
+# draft and its post is a setting in the reader, and the skill once named an older one.
+limit="$(sed -n 's/^PAIR_WITHIN_MINUTES = \([0-9][0-9]*\)$/\1/p' "$DIFF" 2>/dev/null)"
+check_eq "the reader pairs a post within sixty minutes of its draft" "60" "$limit"
+check "and the skill names that limit as the hour" "posts more than an hour after their draft" "$body"
+check_not "and no longer the seven days it replaced" "seven days" "$body"
+check "the skill tells Dan how many reads were concise, and that nothing is paired from them" "concise reads (which show no time, so nothing is paired from them)" "$body"
+check "the only name in a rule is Dan's own, in the bracket" "Dan's own name there is the only name in it" "$body"
+check "the reader is given ten minutes, since it reads every record" "Give the command a timeout of ten minutes" "$body"
 # The two long dashes are written as their bytes, so this file holds neither character.
 EM="$(printf '\342\200\224')"; EN="$(printf '\342\200\223')"
 check_eq "no dash is used as punctuation in the skill" "0" "$(grep -c -e ' - ' -e "$EM" -e "$EN" "$SKILL" 2>/dev/null || true)"

@@ -65,11 +65,13 @@ exit code first:
 
 Tell Dan the counts in plain words: how many pairs, how many were sent as drafted, how many heavily
 rewritten, and each kind of edit with the pairs and threads it rests on. Say what was left out, with
-its count: drafts with no post read back, posts more than seven days after their draft, and pairs
-whose post ends in a line that may be the connector's own. Say what the count cannot see, in one
-line: it only pairs a draft with a post in a thread some later session read back, a heavily
-rewritten pair is in no kind because it may not be an edit of that draft at all, and each Mac
-counts only its own sessions.
+its count: read results it could not read, concise reads (which show no time, so nothing is paired
+from them), drafts with no post read back and how many of those sit where a concise read came
+afterwards, posts more than an hour after their draft, and pairs whose post ends in a line that may
+be the connector's own. Say what the count cannot see, in one line: it only pairs a draft with a
+post in a thread some later session read back in the detailed layout, a heavily rewritten pair is
+in no kind because it may not be an edit of that draft at all, and each Mac counts only its own
+sessions.
 
 A kind marked `too thin` is reported with its count and no rule is offered for it. The floor is 10
 pairs in 3 threads, set in the script: below it one long thread is enough to make an edit look like
@@ -88,9 +90,10 @@ in step 5 and nowhere else.
 For each recurring kind, in the order the script printed them, settle the sentence first:
 
 1. Start from the sentence below for that kind, and reword it only so that it says what the example
-   shows. It never quotes the example, and it names no person, channel, customer or project.
+   shows. It never quotes the example, and it names nobody and nothing from it: no person, channel,
+   customer or project. The file it goes into can sync to a public repository.
 2. Add the day and what it rests on in brackets at its end, for example
-   "(Dan, 2026-11-27, from 46 of 106 drafts he edited)".
+   "(Dan, 2026-11-27, from 46 of 106 drafts he edited)". Dan's own name there is the only name in it.
 3. Run `/no-ai-tells` on that whole sentence now, and take what it hands back as the sentence.
 
 The check comes before the question on purpose. Run after it, the check could change words Dan had
