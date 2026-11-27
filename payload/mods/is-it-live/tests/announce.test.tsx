@@ -35,7 +35,11 @@ const modKit: { name: string; register: Register } = {
           // Why the band refuses a row, when a test's world makes it (asked of the world, which this module cannot read).
           const fault = (await kit('bandFault', {})) as string
           if (fault) throw new Error(fault)
-          await built.state.set(ref, [...(await rows()).filter(r => !(r.mod === row.mod && r.id === row.id)), row] as never)
+          // A row published again keeps its place, as mod-kit's own `put` keeps it (hooks/band.ts):
+          // the button a second press lands on is where the first one was (#3847).
+          const held = await rows()
+          const at = held.findIndex(r => r.mod === row.mod && r.id === row.id)
+          await built.state.set(ref, (at < 0 ? [...held, row] : held.map((r, i) => (i === at ? row : r))) as never)
         },
         clearBandRow: async ({ mod, id }: { mod: string; id: string }) => {
           await built.state.set(ref, (await rows()).filter(r => !(r.mod === mod && r.id === id)) as never)
@@ -128,6 +132,8 @@ type World = {
   storeWriteFails?: string
   /** When set, the band refuses every row with these words. */
   bandFails?: string
+  /** When set, the session's timers never run: the clock moves and nothing scheduled fires. */
+  timersNeverRun?: true
   /** What Slack's draft tool answers, or the refusal of a gate beneath the mod. */
   slackDraft: { text: string; isError?: true; deny?: string }
 }
@@ -162,6 +168,24 @@ const judges = (i: Judged): Gh => {
   return { exitCode: 0, stdout: JSON.stringify(out) + '\n' }
 }
 
+// A clock whose time a test moves and whose timers never run (#3847), as on a Mac too busy to have
+// run them: what the mod decides by the time alone is read here, with no timer having tidied up.
+const stillClock = (on: On) => {
+  let now = T0
+  on('clock.now', () => ({ value: now }) as never)
+  // The engine runs a timer's function once this hook answers, so it never answers.
+  on('clock.after', () => new Promise<never>(() => {}))
+  return {
+    advance: async (ms: number) => {
+      now += ms
+    },
+    set: async (at: number) => {
+      now = at
+    },
+    settle: async () => {},
+  }
+}
+
 const world = (on: On, init: Partial<World> = {}) => {
   const w: World = { prs: {}, reader: reads, judge: judges, claim: () => ({ exitCode: 0, stdout: '{"state":"approved"}\n' }), remote: `git@github.com:${REPO}.git`, slackDraft: { text: '{"result":"Draft created","draft_id":"Dr0123ABC"}' }, ...init }
   const toasts: string[] = []
@@ -170,7 +194,7 @@ const world = (on: On, init: Partial<World> = {}) => {
   const runs: string[][] = []
   // How long each command line was given to answer, as the mod asked for it.
   const limits: { argv: string[]; ms: number | undefined }[] = []
-  const clock = mock.clock(on, { now: T0 })
+  const clock = w.timersNeverRun ? stillClock(on) : mock.clock(on, { now: T0 })
   // The store every session shares, held where a test can read it and write under the mod.
   const store = new Map<string, unknown>(Object.entries(w.stored ?? {}))
   on('store.get', ($, e) => {
@@ -696,21 +720,33 @@ test('the live card pins an Announcement for agents row with Copy, Mark sent and
   expect(await shown($)).toEqual(['engine band'])
 })
 
-test('Mark sent and Not announcing each settle it for every session, take the row down, and say what was recorded (R4)', withKit, async ($, on) => {
+// #3847: Not announcing takes two presses. The first changes its label to this and settles nothing,
+// and for this long a second press settles it. The time is written out here, not read from the mod,
+// so a change to it is a change somebody made on purpose.
+const ARMED_MS = 10_000
+const confirmOf = (pr: number) => `Confirm: not announcing #${pr}`
+const ARMED = [...ALL_THREE.slice(0, 2), confirmOf(7)]
+const armedSaid = (pr: number) =>
+  `Nothing is settled: the announcement for agents for ${REPO} pull request ${pr} is still owed. A second press, on ${confirmOf(pr)} within 10 seconds, ends it for every session and cannot be undone. Left alone, the button goes back to Not announcing.`
+const NOT_ANNOUNCED = `Not announcing: the announcement for agents for ${NAME} is no longer asked for.`
+
+test('Mark sent in one press, and Not announcing in two, each settle it for every session, take the row down, and say what was recorded (R4)', withKit, async ($, on) => {
   const { store, toasts, clock } = world(on, { prs: { [`${REPO}#7`]: ANNOUNCED, [`${REPO}#8`]: ANNOUNCED } })
   await start($)
   await card($)
   await card($, { pr: 8 })
   toasts.length = 0
   await clock.advance(1_000)
+  // Mark sent keeps its one press: it records that he posted it, which loses nothing.
   await press($, `${BUTTON}sent-${ID}`)
   expect(store.get(DONE_KEY)).toEqual({ how: 'sent', at: T0 + 1_000 })
   expect(toasts).toEqual([`Marked sent: the announcement for agents for ${NAME}. It is no longer asked for.`])
   expect(await shown($)).toEqual(['Announcement for agents', `${REPO} pull request 8: not yet a Slack draft in channel ${CH}.`])
   toasts.length = 0
   await press($, `${BUTTON}none-acme-widget-8`)
+  await press($, `${BUTTON}none-acme-widget-8`)
   expect(store.get(`announce-done:${REPO}#8`)).toEqual({ how: 'not-announcing', at: T0 + 1_000 })
-  expect(toasts).toEqual([`Not announcing: the announcement for agents for ${REPO} pull request 8 is no longer asked for.`])
+  expect(toasts).toEqual([armedSaid(8), `Not announcing: the announcement for agents for ${REPO} pull request 8 is no longer asked for.`])
   expect(await shown($)).toEqual(['engine band'])
   // Settled is settled in every session: no card, turn end, /live or session start asks again.
   expect(said(await card($))).not.toContain('nnouncement')
@@ -747,9 +783,217 @@ test('only a press of the row\'s own button marks one sent or not being announce
   expect(store.get(DONE_KEY)).toBeUndefined()
   expect([...store.keys()].filter(k => k.startsWith('announce-done:'))).toEqual([])
   expect(await shown($)).toEqual(ROW)
-  // His press of the row's own button is what settles it.
+  // Nor did any of it arm the button (#3847): it still reads Not announcing, and his one press now
+  // is a first press, which settles nothing.
+  expect(await buttons($)).toEqual(ALL_THREE)
+  await press($, `${BUTTON}none-${ID}`)
+  expect(store.get(DONE_KEY)).toBeUndefined()
+  expect(await buttons($)).toEqual(ARMED)
+  // While it is armed, nothing a session can call is the second press: each leaves it owed, and
+  // armed for no longer than his own press made it.
+  await card($)
+  await draft($, { message: POST.replace('Pick a reason', 'Choose a reason') })
+  await bash($, 'gh pr merge 7 --squash')
+  await turnEnd($)
+  await turnEnd($, true)
+  await live($)
+  await says($, 'Confirm: not announcing #7')
+  expect(store.get(DONE_KEY)).toBeUndefined()
+  expect([...store.keys()].filter(k => k.startsWith('announce-done:'))).toEqual([])
+  expect(await buttons($)).toEqual(ARMED)
+  // His second press of the row's own button is what settles it.
   await press($, `${BUTTON}none-${ID}`)
   expect(store.get(DONE_KEY)).toEqual({ how: 'not-announcing', at: T0 })
+})
+
+// ---- #3847: Not announcing settles only on a second press ----
+
+test('one press of Not announcing settles nothing: its label reads Confirm: not announcing #7 and Dan is told so, and a second press settles it and takes the row down (#3847)', withKit, async ($, on) => {
+  const { store, toasts, keys, clock } = world(on, { stored: OWED_AND_OUT })
+  await start($)
+  const before = keys()
+  toasts.length = 0
+  await press($, `${BUTTON}none-${ID}`)
+  expect(store.get(DONE_KEY)).toBeUndefined()
+  expect(toasts).toEqual([armedSaid(7)])
+  expect(await shown($)).toEqual(ROW)
+  expect(await buttons($)).toEqual(ARMED)
+  // Armed is this session's own: nothing is written to the store every session shares, so no other
+  // session's row is armed by it.
+  expect(keys()).toEqual(before)
+  // The second press, a moment before the time is up, settles it as one press used to.
+  await clock.advance(ARMED_MS - 1)
+  toasts.length = 0
+  await press($, `${BUTTON}none-${ID}`)
+  expect(store.get(DONE_KEY)).toEqual({ how: 'not-announcing', at: T0 + ARMED_MS - 1 })
+  expect(toasts).toEqual([NOT_ANNOUNCED])
+  expect(await shown($)).toEqual(['engine band'])
+  // The time it was armed for passing afterwards brings nothing back.
+  await clock.advance(ARMED_MS)
+  await clock.settle()
+  expect(await shown($)).toEqual(['engine band'])
+  expect(store.get(DONE_KEY)).toEqual({ how: 'not-announcing', at: T0 + ARMED_MS - 1 })
+})
+
+test('left alone for the armed time the button goes back to Not announcing with nothing settled, and the next press only arms it again (#3847)', withKit, async ($, on) => {
+  const { store, toasts, clock } = world(on, { stored: OWED_AND_OUT })
+  await start($)
+  await press($, `${BUTTON}none-${ID}`)
+  expect(await buttons($)).toEqual(ARMED)
+  toasts.length = 0
+  await clock.advance(ARMED_MS)
+  await clock.settle()
+  expect(await buttons($)).toEqual(ALL_THREE)
+  expect(await shown($)).toEqual(ROW)
+  expect(store.get(DONE_KEY)).toBeUndefined()
+  // Going back is said by the label alone.
+  expect(toasts).toEqual([])
+  // A press now is a first press again, however many came before it.
+  await press($, `${BUTTON}none-${ID}`)
+  expect(store.get(DONE_KEY)).toBeUndefined()
+  expect(toasts).toEqual([armedSaid(7)])
+  expect(await buttons($)).toEqual(ARMED)
+  // The first arming's time running out does not cut the second one short: armed again 4 seconds
+  // before, the button is still armed 6 seconds later.
+  await clock.advance(ARMED_MS - 1)
+  await clock.settle()
+  expect(await buttons($)).toEqual(ARMED)
+  await clock.advance(1)
+  await clock.settle()
+  expect(await buttons($)).toEqual(ALL_THREE)
+  expect(store.get(DONE_KEY)).toBeUndefined()
+})
+
+test('a second press that comes once the time is up settles nothing, even where the label has not gone back yet (#3847)', withKit, async ($, on) => {
+  // The timer that puts the label back never runs here: the clock alone moves.
+  const { store, toasts, clock } = world(on, { stored: OWED_AND_OUT, timersNeverRun: true })
+  await start($)
+  await press($, `${BUTTON}none-${ID}`)
+  await clock.set(T0 + ARMED_MS)
+  expect(await buttons($)).toEqual(ARMED)
+  toasts.length = 0
+  await press($, `${BUTTON}none-${ID}`)
+  expect(store.get(DONE_KEY)).toBeUndefined()
+  expect(toasts).toEqual([armedSaid(7)])
+  expect(await buttons($)).toEqual(ARMED)
+})
+
+test('Copy pressed while Not announcing is armed disarms it and still copies, and Mark sent pressed while it is armed records sent (#3847)', withKit, async ($, on) => {
+  const { store, toasts, copies, clock } = world(on, { stored: { ...OWED_AND_OUT, [`announce:${REPO}#8`]: { ...ENTRY, pr: 8 }, [`announce-out:${REPO}#8`]: { at: T0 } } })
+  await start($)
+  await press($, `${BUTTON}none-${ID}`)
+  expect(await buttons($)).toEqual([...ARMED, ...ALL_THREE])
+  toasts.length = 0
+  await press($, `${BUTTON}copy-${ID}`)
+  expect(copies).toEqual([POST])
+  expect(toasts).toEqual([])
+  expect(await buttons($)).toEqual([...ALL_THREE, ...ALL_THREE])
+  // Disarmed: the press after Copy is a first press, inside the time the earlier one armed it for.
+  await clock.advance(1_000)
+  await press($, `${BUTTON}none-${ID}`)
+  expect(store.get(DONE_KEY)).toBeUndefined()
+  expect(toasts).toEqual([armedSaid(7)])
+  // Armed is one row's: the other row's button is not armed by it, and its one press settles nothing.
+  expect(await buttons($)).toEqual([...ARMED, ...ALL_THREE])
+  toasts.length = 0
+  await press($, `${BUTTON}none-acme-widget-8`)
+  expect(store.get(`announce-done:${REPO}#8`)).toBeUndefined()
+  expect(toasts).toEqual([armedSaid(8)])
+  // Mark sent while armed records that he posted it, never that it is not being announced.
+  toasts.length = 0
+  await press($, `${BUTTON}sent-${ID}`)
+  expect(store.get(DONE_KEY)).toEqual({ how: 'sent', at: T0 + 1_000 })
+  expect(toasts).toEqual([`Marked sent: the announcement for agents for ${NAME}. It is no longer asked for.`])
+  expect(await buttons($)).toEqual([...ALL_THREE.slice(0, 2), confirmOf(8)])
+})
+
+test('Mark sent whose record cannot be written while Not announcing is armed leaves the row up and disarmed (#3847)', withKit, async ($, on) => {
+  const { store, toasts, w } = world(on, { stored: OWED_AND_OUT })
+  await start($)
+  await press($, `${BUTTON}none-${ID}`)
+  w.storeWriteFails = 'the store is read only'
+  toasts.length = 0
+  await press($, `${BUTTON}sent-${ID}`)
+  expect(store.get(DONE_KEY)).toBeUndefined()
+  expect(toasts.length).toBe(1)
+  expect(toasts[0]).toContain('It is still listed in /live, and its row stays in the band.')
+  expect(await buttons($)).toEqual(ALL_THREE)
+  w.storeWriteFails = undefined
+  await press($, `${BUTTON}none-${ID}`)
+  expect(store.get(DONE_KEY)).toBeUndefined()
+  expect(await buttons($)).toEqual(ARMED)
+})
+
+test('a confirming press whose record cannot be written is said, and the button goes back to Not announcing, so settling it takes two presses again (#3847)', withKit, async ($, on) => {
+  const { store, toasts, w } = world(on, { stored: OWED_AND_OUT })
+  await start($)
+  await press($, `${BUTTON}none-${ID}`)
+  w.storeWriteFails = 'the store is read only'
+  toasts.length = 0
+  await press($, `${BUTTON}none-${ID}`)
+  expect(store.get(DONE_KEY)).toBeUndefined()
+  expect(toasts.length).toBe(1)
+  expect(toasts[0]).toContain(`Is it live could not record that for the announcement for agents for ${NAME} (`)
+  expect(await shown($)).toEqual(ROW)
+  expect(await buttons($)).toEqual(ALL_THREE)
+  w.storeWriteFails = undefined
+  toasts.length = 0
+  await press($, `${BUTTON}none-${ID}`)
+  expect(store.get(DONE_KEY)).toBeUndefined()
+  expect(toasts).toEqual([armedSaid(7)])
+  await press($, `${BUTTON}none-${ID}`)
+  expect(store.get(DONE_KEY)).toEqual({ how: 'not-announcing', at: T0 })
+})
+
+test('a band that will not draw the Confirm label leaves the button unarmed, says so, and a second press settles nothing (#3847)', withKit, async ($, on) => {
+  const { store, toasts, w } = world(on, { stored: OWED_AND_OUT })
+  await start($)
+  w.bandFails = 'the band is full'
+  toasts.length = 0
+  await press($, `${BUTTON}none-${ID}`)
+  await press($, `${BUTTON}none-${ID}`)
+  const UNARMED = `Nothing is settled: the announcement for agents for ${NAME} is still owed. Its button could not be changed to ${confirmOf(7)} (the band is full), so it is not armed and the next press starts over.`
+  expect(toasts).toEqual([UNARMED, UNARMED])
+  expect(store.get(DONE_KEY)).toBeUndefined()
+  expect(await buttons($)).toEqual(ALL_THREE)
+  w.bandFails = undefined
+  toasts.length = 0
+  await press($, `${BUTTON}none-${ID}`)
+  expect(toasts).toEqual([armedSaid(7)])
+  expect(store.get(DONE_KEY)).toBeUndefined()
+  expect(await buttons($)).toEqual(ARMED)
+})
+
+test('a row pinned again while Not announcing is armed keeps the Confirm label, and a session start forgets the arming (#3847)', withKit, async ($, on) => {
+  const { store, toasts } = world(on, { stored: OWED_AND_OUT, prs: { [`${REPO}#7`]: ANNOUNCED } })
+  await start($)
+  await press($, `${BUTTON}none-${ID}`)
+  // /live pins every owed row again: the label it draws is the armed one, never a Not announcing
+  // that one press would settle.
+  await live($)
+  expect(await buttons($)).toEqual(ARMED)
+  // A session starting again has no button armed: its one press settles nothing.
+  await start($)
+  expect(await buttons($)).toEqual(ALL_THREE)
+  toasts.length = 0
+  await press($, `${BUTTON}none-${ID}`)
+  expect(store.get(DONE_KEY)).toBeUndefined()
+  expect(toasts).toEqual([armedSaid(7)])
+})
+
+test('an announcement another session settles while this one is armed is not written over by the second press, and its row comes down (#3847)', withKit, async ($, on) => {
+  const { store, toasts, clock } = world(on, { stored: OWED_AND_OUT })
+  await start($)
+  await press($, `${BUTTON}none-${ID}`)
+  store.set(DONE_KEY, { how: 'sent', at: T0 })
+  toasts.length = 0
+  await press($, `${BUTTON}none-${ID}`)
+  expect(store.get(DONE_KEY)).toEqual({ how: 'sent', at: T0 })
+  expect(toasts).toEqual(['That announcement for agents is already settled, so its row was taken down.'])
+  expect(await shown($)).toEqual(['engine band'])
+  await clock.advance(ARMED_MS)
+  await clock.settle()
+  expect(await shown($)).toEqual(['engine band'])
 })
 
 test('a row whose announcement another session settled says so when pressed, and comes down at the next turn end or /live', withKit, async ($, on) => {
@@ -919,7 +1163,10 @@ test('a draft of wording that was changed after Dan approved it is not counted, 
   await press($, `${BUTTON}copy-${ID}`)
   expect(copies).toEqual([])
   expect(toasts).toEqual([`Not copied: the wording kept for ${NAME} is not known to be the wording you approved (${WAS_CHANGED}).`])
-  // Mark sent and Not announcing still settle it: they hand no wording to anyone.
+  // Mark sent and Not announcing still settle it: they hand no wording to anyone. Not announcing
+  // takes its two presses here as anywhere (#3847).
+  await press($, `${BUTTON}none-${ID}`)
+  expect(store.get(DONE_KEY)).toBeUndefined()
   await press($, `${BUTTON}none-${ID}`)
   expect(store.get(DONE_KEY)).toEqual({ how: 'not-announcing', at: T0 })
 })
