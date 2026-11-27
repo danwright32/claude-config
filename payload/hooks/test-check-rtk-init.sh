@@ -192,6 +192,15 @@ redirected "behind input and an assignment" "</dev/null A=1 rtk init -g"
 redirected "after true && and a redirection" "true && 2>&1 rtk init"
 allowed "#2235 control: rtk gain behind a redirection" "2>/dev/null rtk gain"
 
+# The same command written across a line a backslash joins to the next is the same command
+# (claude-config#3470): the shell removes the backslash and its line break before it reads words,
+# and the form this gate reads wrote the line break as a separator the backslash then escaped, so
+# each of these exited 0. PAIR is that pair, a backslash and then a line break.
+PAIR=$'\\\n'
+refused "#3470 rtk, the pair, init -g" "rtk ${PAIR}init -g"
+refused "#3470 after && and the pair, rtk init -g" "echo ok && ${PAIR}rtk init -g"
+allowed "#3470 control: rtk, the pair, gain" "rtk ${PAIR}gain"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

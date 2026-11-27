@@ -50,6 +50,22 @@ back.
   cost) and names it when this file has no effort for it, with the entry to add, so a newer model
   behind the alias is noticed rather than quietly running at its own default (#828). When the
   claude command cannot answer, status says it could not check, never that the model is fine.
+  And `permissions.deny` (#3563, added to the sync's list on Dan's sign off, recorded on that
+  issue's pull request): three Read deny rules, one per folder of stored logins,
+  `Read(~/.ssh/**)` (SSH keys), `Read(~/.sfdx/**)` (the Salesforce CLI's logins) and
+  `Read(~/Library/Preferences/.wrangler/config/**)` (the Cloudflare CLI's login). `~/` is the home
+  folder of whoever runs Claude Code, so the same text holds on both Macs. With them Claude Code
+  refuses its file tools (Read, Edit, Write) on anything inside those folders, and a shell command
+  it recognises as reading them (`cat`, or `grep` naming the folder). Measured 2026-11-25 on Claude
+  Code 2.1.332 with stand in files: refused in 3 of 3 runs per rule, read in 3 of 3 without. They
+  do not stop a program that opens the file itself (`git`, `ssh`, the CLIs, a script), nor a
+  recursive search started from the home folder: both read the stand in with the rules in force.
+  Unlike every other shared setting this one is ADDED, never written whole: a pull adds each rule
+  a Mac's `permissions.deny` lacks and leaves that Mac's own allow, ask and deny rules, its mode
+  and the rest of `permissions` exactly as they were. A rule is never removed, so taking one out
+  of this file leaves it on each Mac. Only `deny` may sit under `permissions` here, and only these
+  three rules: anything else is refused whole, since a wider rule would stop sessions on both Macs
+  reading their own files. `claude-sync status` names a rule a Mac's `settings.json` lacks.
 - `payload/rtk-exclude-commands.txt`: the commands rtk leaves alone on every Mac, one per line
   (claude-config#1427). rtk keeps that list in its own config outside `~/.claude`
   (`~/Library/Application Support/rtk/config.toml`, the path `rtk config` prints), so every pull
@@ -216,7 +232,9 @@ the per prompt notice say it as "sending is refused: the home path check has ref
 with how many sends in a row and since when. To clear it, take the files out of this Mac's config
 if they do not belong there, or write each path from the home folder (a `~` or `$HOME`); a line
 that must name a real home, such as a fixture, carries the check's own
-`claude-sync-allow-home-path` marker. The next send then carries everything that was held. There is
+`claude-sync-allow-home-path` marker (which does not count on a line that also holds a byte that
+is not valid text: the check reports such a line and says why). The next send then carries
+everything that was held. There is
 no override variable, and a check that is missing or could not run refuses the send too, said as
 that rather than as a finding. In the change watcher a standing hold is said in full once, then in
 one short line pointing at status with no desktop notice, until its files change, it clears or a
@@ -325,8 +343,9 @@ description, and the description and homepage `gh repo create` or `gh repo edit`
 `gh gist edit` on a public gist is judged on its description and the files it adds or takes new
 text from (an editor's text and standard input refused), `gh repo edit --visibility public` is
 refused for a repository not yet public that no work owner owns, since every file and issue in it
-becomes public unread, and a body or notes file named inside clustered short flags (`-dF body.md`)
-is read. Since #2423 the repository named inside clustered short flags (`-dR o/x`) is read too, as
+becomes public unread (since #3582 the refusal names the command to run first, see "Text posted
+while a repository was private" below), and a body or notes file named inside clustered short
+flags (`-dF body.md`) is read. Since #2423 the repository named inside clustered short flags (`-dR o/x`) is read too, as
 gh reads the cluster, and every repository named is judged. Since #2430 release notes read from
 standard input (`--notes-file -`) are judged only when one heredoc, here-string or `<` file sits
 on gh itself with nothing piped in, and refused otherwise (#2442); since #2443 a pull request's,
@@ -336,6 +355,49 @@ redirects standard input more than once (`cat <<'EOF' < other.md > notes.md`) is
 shell feeds that stage only the last; the issue field gate still reads such a file from the
 command, as before. Still not covered: gh run by
 its absolute path, a script that rewrites PATH, and curl or an API library.
+
+**Text posted while a repository was private (#3582).** The publish gate judges text posted to a
+public repository and lets a private one through without reading its lists, so nothing judges text
+posted while a repository is private, and it is still unjudged when the repository turns public.
+On 2026-11-24 this repository was private for some hours and 8 lines naming a work organisation or
+repository were posted to it meanwhile. One command rechecks such a window, and the gate's refusal
+of `gh repo edit --visibility public` names it:
+
+```bash
+python3 ~/.claude/hooks/lib/posted-text-scan.py owner/name --since 2026-11-24T13:30:00-05:00
+```
+
+- **What it reads**, through `gh api` reads only (it posts nothing, edits nothing and writes no
+  file): the title and body of every issue and pull request updated since that time; issue, review
+  and commit comments; the review bodies and commit messages of each of those pull requests, which
+  reaches a commit whose branch was deleted after its merge; commit messages on every branch, and
+  each branch's name; every release's title, tag and notes; the repository's description, homepage
+  and topics; and the earlier revisions and titles GitHub still holds of each body, which is where
+  a name rewritten out of an issue is still readable.
+- **How it judges**: with `lib/work-names.py`'s own `work_repo_names` and `scan_text`, the lists and
+  the line scan the publish gate uses. A name taken from the lists at run time is planted in a made
+  up text first, beside a text with no name; unless the first is reported at its line and the second
+  is not, the run stops and says the scan cannot be trusted, before anything is read.
+- **What it prints**: each line found as `label:line: kind of name` (`issue #12 body:3: ...`), never
+  the name, and a branch by its tip commit, never by its name. Then how many are in text as it
+  stands, which is rewritten, and how many are in an earlier revision, which is deleted by hand on
+  GitHub from the edited menu above the text, since no API deletes a revision.
+- **What it does not read**, printed at the end of every run: a revision deleted from an edit
+  history (counted, its text is gone), earlier wording of a release or of the description, a commit
+  no branch or pull request reaches, a commit dated before the window and pushed inside it (GitHub
+  does not say when a commit was pushed, so give an earlier `--since`), and files, discussions, the
+  wiki, labels, milestones, projects, tags and gists.
+- **A failure is never a short clean result**: a failed call, a page that is not the list asked for,
+  an entry missing the field its text is in, a history GitHub cut short and a spent `--budget`
+  (100 seconds by default, a setting, not measured) each exit 2. Exit 0 is none found in what was read, 1 is names found.
+- `--since` needs its time zone (`Z`, or an offset such as `-05:00`): a time read as UTC by
+  mistake moves the window by hours. Measured on this repository on 2026-11-24: a nine hour window
+  was 330 texts in 95 calls and 18 seconds, and a week was 3,106 texts in 531 calls and 204 seconds,
+  so a window of more than a day or two needs a larger `--budget` and a command time limit to match.
+- A session can run it: it is handed no file, so the Slack drafts gate has nothing gathered to read
+  (the scan written by hand that night handed a file of gathered text to a script that can run
+  programs, and was refused over a Slack endpoint one text named). `hooks/test-posted-text-scan.sh`
+  holds all of this, the two gates' verdicts on the command included, against a stand in `gh`.
 
 Plugin-managed skills are excluded so plugin updates don't cause churn, and so is
 `skills/synced/`, where the Claude app downloads each account's built in skills, and any `.trash`
@@ -748,6 +810,23 @@ The suite's tables of the gates it runs are held both ways against its scans of 
 gate the scans find and a table lacks fails, and so does a gate a table names that the scans no
 longer find, its registration removed or its refusal moved where they cannot see it, until the
 same change takes its row out (#3414). `--list-found` prints what the scans find in the tree.
+
+The write gate judges each destination twice (#3537): by its text, and by where it really is. The
+real path is asked of the kernel (the destination opened for its path alone, then `fcntl`
+`F_GETPATH`), which sees through a path by disk and file number (`/.vol/<disk>/<file>`), a
+symbolic link that lives outside `payload/`, and the folder name in another letter case; the
+usual way of resolving a path leaves the first and the last as written. The refusal names the
+real file. Two answers are refused in their own words while a watcher may be live and no hold
+covers the session: a destination whose real path could not be read (the message gives the
+system's reason), and a file with more than one name (a hard link), since the system names only
+one of them. A hold of the session's own is the way on for both, as the messages say. Making a
+link counts as a write: `ln` and `link`, and a hard link or symbolic link made by an inline script
+(python, perl, ruby, node), are refused when they name a payload path. The real path step runs
+only for a call that writes somewhere other than a device (`/dev/null` and the like) while a
+watcher may be live, and costs one more `python3` process then, about 30 to 60 ms measured on a
+busy Mac on 2026-11-25. `hooks/test-payload-write-gate-real-path.sh` holds the cases, on stand in
+files; its numbered path and letter case cases report themselves unmeasured on a system that has
+neither.
 
 Before a Bash call the write gate also notes what an at risk `payload/` holds, in
 `~/.claude-payload-write-gate`, so that after the call it can name anything written there that the
@@ -1831,7 +1910,18 @@ repository its registry gates, and since claude-config#3666 `ALLOW_UNTAGGED_MERG
 that refusal (Dan, 2026-11-25, by picker: "Refuse it"). The gate reads one pull request per command,
 so the override typed over several merges let one of them through unread, an announcement
 included, and one merge per command is always open. A pull request that cannot be read at all is
-still let through under the override, saying so.
+still let through under the override, saying so. A merge command written so that its pull request
+cannot be told (one mutation merging several, a GraphQL document kept in a file, an id passed
+nowhere, an endpoint or a repository flag that names no repository) is not such a case, and since
+claude-config#3742 it is refused with the override typed too (Dan, 2026-11-26, by picker: "Refuse
+them too"): naming the pull request plainly is always open, and the refusal says so in place of
+offering the override. Of these only a pull request GitHub gives no answer about still goes through
+under the override. With node missing the changelog gate refuses a merge by name, as it does with
+jq missing, where it used to let every merge through with nothing said (claude-config#3742); under
+the override that merge goes through with the same sentence. And the three exits the override can
+take before the command is even read (the library that reads it cannot be loaded, neither jq nor
+python3 is installed, the payload is not a call any reader takes) say it too, where they said
+nothing: of a command, since not even whether it merges a pull request was read.
 
 #### An announcement merges only on wording Dan approved (#3666)
 
@@ -1839,7 +1929,7 @@ A pull request labelled `changelog/announce` carries the post for agents under `
 and Dan's words for the label were "it should ask me before applying the label". So the session
 writes the post to a file, runs `/no-ai-tells` on it, opens it in BBEdit with the front window flag,
 and asks ONE picker of one question (`Approve the wording` or `Not yet`) naming the pull request or
-feature and the channel, with this metadata:
+feature and the channel and ending `Save the file before you answer.`, with this metadata:
 
 ```json
 {"source": "changelog-announce", "repo": "<owner/name>", "file": "<absolute path>"}
@@ -1856,21 +1946,135 @@ when all of these hold, each failure said in its own words:
   `--front-window`, or `open -a BBEdit`), finished without error before he answered;
 - between that open and his answer the session did not write the file, run a command naming it, or
   send an agent a prompt naming it, so what he had in front of him is what he answered about;
+- that open is the session's last tool call before the picker (#3742): no call of any tool stands
+  between the two. The picker shows him no file name, so with two wording files open his answer
+  about the first was given with the second in front. The refusal names the call that came
+  between and says to open the file again and ask in the very next call;
+- the question he was shown holds the sentence `Save the file before you answer.`, word for word
+  (#3742). An edit he makes in the window and does not save is not in the file, so it is not in the
+  wording that is hashed, and nothing here can ask BBEdit whether a window holds unsaved changes. A
+  picker whose question does not say it approves nothing, and the refusal gives the sentence to add;
+- he typed nothing beside the option he chose (#3742). The picker lets him type words beside his
+  choice and hands them back beside his answer, and "approve, but fix line 2" used to count as his
+  approval of the wording as it stood. An Approve that comes with words of his approves nothing
+  (Dan, by picker, 2026-11-26: "Refuse and ask again"): it is an answer of his that is no approval,
+  as `Not yet` is, and the refusal gives his words and says to fix the wording and ask him again.
+  White space is no words, and neither is the chosen option's own preview. Anything that comes
+  back there in a form the library does not read is taken as words of his, which includes anything
+  under a key other than his notes and that preview;
 - the file has not changed since he answered (its status change time is before his answer);
-- no later picker about the same file ended any other way.
+- no later picker about the same file ended any other way;
+- the file holds no run of more than two blank lines with wording below it (#3703). Blank lines are
+  dropped before the hash, so a file holding the post, a long run of blank lines and then more text
+  hashes the same as those lines written together, while the window it was opened in showed him the
+  post and then white space. The refusal says how long the run is, the line it starts at, and to
+  leave no more than two in a row, then open the file and ask him again. Blank lines after the last
+  line of wording hide nothing and pass. The run is counted by `hooks/lib/changelog-entry.js`
+  (`blankRunBeforeWording`, in the answer of its `announcement-hash` command), by the same reading
+  of a blank line the hash drops them by, and an answer without the count approves nothing.
 
 What is hashed is the FILE as it stands, never a hash the session supplies, by
 `hooks/lib/changelog-entry.js`'s `announcementHash`: the sha256 of the one normalised form (line
-endings, spaces at the ends of lines, outer blank lines) every comparison uses, so the file on this
+endings, spaces at the ends of lines, every blank line) every comparison uses, so the file on this
 Mac and the block GitHub returns are hashed by one function. A hook run that reads his Approve
-writes `{"kind": "approved", "repo", "hash", "at", "session", "picker"}` to
+writes `{"kind": "approved", "repo", "hash", "at", "session", "picker", "file", "answered"}` to
 `~/.claude/state/announce-approvals/record.jsonl`, on this Mac only and never synced, so wording he
 approved merges unchanged in a later session or overnight. A subagent's call counts his picker for
 that call and writes nothing.
 
+Every picker is noted when he answers it (#3742, #3789). A hook run reads a session's pickers only from the
+transcript its payload names, and `hooks/lib/merge-when-ready.sh` hands the gates a payload naming
+none, so an approval reached the record only when a label command or a typed merge followed his
+answer. On any other flow (the wording revised after the label went on, the label put on in
+GitHub's page) the merge through the helper was refused, told to ask him, and asking him again
+changed nothing. `hooks/announce-answer-note.sh` runs after every picker (PostToolUse on
+AskUserQuestion) and has the library write an `answered` line for every picker a main session put,
+whatever it asked: the session, its transcript, the picker's id, and `held`, whether the transcript
+held the picker's line when the hook ran. The hook says nothing.
+
+It notes them all because it cannot tell what a picker asked. As first built (#3780) it noted only
+a picker it could tell was an announcement's and said a notice for one it could not tell. Measured
+on the installed hook on 2026-11-26, for two pickers, one sent with metadata naming a source: no
+line of the session's transcript held the picker's id when the hook ran, and the hook's own copy of
+the picker carried no metadata, while the transcript read afterwards held both. So it told nothing,
+said its notice after every picker in every session, and noted none, an approval picker included
+(#3789). An earlier reading of another session (#3742) had found the transcript ending at the
+call's `tool_use` when its PostToolUse hook ran, so the line may be there or not, and `held` on
+each note says which; it decides nothing. The transcript's size is not the cause: the suite builds
+one of the measured size (20 MB, 10,000 lines) and the hook finds a picker in it in 0.11 seconds,
+one pass of the reader alone taking 0.009.
+
+When the hook can already tell the picker is an announcement's, with a repository and a file (the
+transcript holds it, or failing that the hook's own copy carries the metadata), the note also
+carries the repository, the file, and the file's hash and status change time as they stood then.
+
+A note is not an approval and is not his answer: it names no answer. His answer is in the payload
+the hook is handed, and it is deliberately not read from there, since a payload is whatever the
+caller hands over. Whichever hook next asks the library (the label hook, the merge gate typed or
+through the helper) reads each noted session's transcript back, in one pass for all of the
+session's noted pickers the record has no outcome for (no `approved`, `withdrawn` or `settled`
+line), and judges each from the transcript. An announcement's picker is judged by every rule above,
+unchanged. A picker that names no source the record reads gets a `settled` line naming no
+repository, so it is read once and never again: it approves nothing and takes nothing back,
+whatever he answered it. So does an announcement's picker that can never count (its metadata names
+no repository and file, or the session sent it with its answer filled in), once it has been read.
+One the transcript does not hold yet is left and looked for again, and one
+noted by its ids alone whose transcript is gone is settled, since what it asked can never be read.
+One call reads back five sessions, the ones whose newest unjudged note is newest.
+
+The wording he answered about comes from the note only when the note holds a hash for the same
+repository and file as the transcript's picker: then a write to the file afterwards neither loses
+his approval nor rides on it, and a note taken later than his answer, over a file changed since,
+approves nothing. A note that holds no hash gives no wording: the picker is judged exactly as one
+with no note is, by the file as it stands, unchanged since his answer. Where the file has changed,
+his Approve does not count and the refusal says to open the file and ask him again. So a note by
+ids alone lets nothing through that the same picker, read from its own session's transcript, would
+not.
+
+A subagent's picker writes nothing and says nothing. The hook speaks only when the note itself
+could not be written (the record cannot be read or appended to, the hook was not handed the
+session, its transcript and the picker's id, or the library could not be asked): the one case where
+an approval would be lost. It says so to Dan and to the session in the same words (one notice
+through `hooks/lib/hook-notice.sh`, on exit 0, the picker being already answered), with the command
+that reads his answer into the record if the picker was an announcement's, and that nothing is lost
+if it was not.
+
+What bounds it: one call reads back at most five sessions' transcripts, one pass each. Nothing
+shortens the record itself, which is only ever added to: a picker costs it one `answered` line
+(about 280 bytes) and, once judged, one line more (about 350). Measured on invented lines of those
+shapes on 2026-11-26, a record of 10,000 judged pickers is 6.3 MB and reads in 0.04 to 0.25
+seconds, and one of 100,000 is 63 MB and reads in 1.3 to 3.8.
+
+`hooks/test-announce-answer-note.sh` holds the hook, and `hooks/test-merge-when-ready.sh`
+merges an announcement through the helper, with the real gate and the real hook, on an approval
+that was only ever in the session.
+
+His last answer on a wording decides, on the record as in the session (#3742). An approval on the
+record used never to be taken back: he approved, it was recorded, the session asked again about
+the same unchanged file, he answered `Not yet`, and the merge went through on the recorded
+approval. A hook run that reads a picker of this source he answered with anything but Approve
+alone (`Not yet`, words of his own, or an Approve with words typed beside it) now writes a `withdrawn` line with when he answered and the hash
+of the wording he answered about (the hash noted when he answered, else the file's while it has
+not changed since). An approval of that repository and wording given before that answer no longer
+counts, whichever session or file it came from, one given after it does, and the refusal says he
+approved it and then answered otherwise. When the wording can no longer be hashed the line names
+the file and takes back his earlier approvals naming that file. A picker that came back in error
+or closed on its own timeout is no answer of his and takes nothing back from the record; it gets
+a `settled` line, so a noted session whose pickers all have an outcome is not read back again.
+
+A refusal says what was found, where it used to say only that he has not approved the wording
+(#3742). An Approve in the session's transcript that is not an answer of his (the picker timed out,
+came back in error, asked more than one question, or was sent with its answer filled in) is named
+with that reason. Wording he approved for a repository the record holds under another name is said
+to be approved there, with the metadata to ask again with. And a pull request the record holds as
+let through on the wording, with no approval behind that use (a subagent's call writes the use and
+no approval), is told so. None of the three lets anything through.
+
 One approval covers one pull request (Dan, 2026-11-25, by picker: "One approval, one pull request").
-An approval is one answer of his in one picker, counted once by the session and the picker it came
-from. An approval nobody has used covers whichever pull request reaches the merge gate first, so he
+An approval is one answer of his in one picker, counted once by the picker it came from, whichever
+session id its lines are found under (#3742: a resumed or forked session may carry an earlier
+session's lines under its own id, and counted by session and picker the one answer was two
+approvals). An approval nobody has used covers whichever pull request reaches the merge gate first, so he
 can approve the wording before the pull request exists. The pull request that used it may try a
 failed merge again without asking him. A different pull request carrying the same wording is
 refused, named the pull request that used the approval, and told to ask him again; his second
@@ -1892,7 +2096,19 @@ the wording, and sleep mode can answer one with Dan asleep.
   he is not asked again. After the claim it adds a `used` line naming, for each issue the pull
   request closes, its milestone (read in one GraphQL call; issues that cannot be read are recorded
   as unread with why, and block nothing). These lines say the gate let the merge go ahead, never
-  that GitHub merged it, and a `used` line approves nothing by itself.
+  that GitHub merged it, and a `used` line approves nothing by itself. A pull request the
+  dependency bot opened is let through unjudged only once its labels have been read and it does not
+  carry `changelog/announce` (#3703): one that carries the label is judged like any other, and one
+  whose labels could not be read is refused like any other the judge could not read. The merge must
+  be its call's one GitHub write (#3742). The gate reads the description before the command runs,
+  so `gh pr edit 7 --body-file new.md && gh pr merge 7` was judged on the wording as it stood, then
+  replaced the block and merged. For an announce pull request a call holding `gh pr create`, `gh pr
+  edit`, `gh issue edit` or a `gh api` write beside the one merge is refused before anything is
+  claimed and told to run them apart, with or without the override; a merge through the API counts
+  as the one. The count is `gh_writes` in `hooks/gh_issue_scan.py`, the one the label hook asks,
+  reached from bash as `gh_issue_scan.py writes`, and a count that cannot be made is refused in its
+  own words. Every other pull request is untouched by it. It does not see a write gh makes under
+  another subcommand, which cannot change a description, or one made by anything but gh.
 - `announce-label-ask.sh`, before the label goes on. It reads every Bash call naming the label:
   `gh pr create --label`, `gh pr edit --add-label`, `gh issue edit --add-label` and a `gh api`
   write to a pull request's labels are refused unless the wording the command would leave is
@@ -1913,15 +2129,89 @@ the wording, and sleep mode can answer one with Dan asleep.
 
 The same hook guards the record, which is why it is registered for the edit tools as well as Bash:
 an Edit, Write, MultiEdit or NotebookEdit under `state/announce-approvals` is refused, and so is a
-Bash command naming that folder that is not one only reading it. Read the record with `python3
-~/.claude/hooks/lib/announce-approval.py list`.
+Bash command naming that folder that is not one only reading it.
+
+Reading whether a wording is approved and writing an approval are separate (#3703). A review found
+that the library's `check` command read a session's pickers from whatever transcript its standard
+input named and wrote what it found, so a made up transcript left a line saying Dan approved
+wording he never saw. Three things now hold that:
+
+- **The command line a session can run only reads the record.** `python3
+  ~/.claude/hooks/lib/announce-approval.py list` prints it, and `... check --repo <owner/name>
+  --hash <sha256> [--pr <number>]` says whether that wording is approved on it. Neither reads
+  standard input, a transcript or a picker, and neither writes.
+- **An approval is written only when a hook asks.** The merge gate asks through `check ... --claim`
+  with the payload Claude Code handed it, and the label hook asks in process. Whoever asks, a
+  picker counts only from a session transcript (`.jsonl`) under the projects folder beside the
+  record's own state folder (`~/.claude/projects`), which is where Claude Code keeps them: a
+  transcript anywhere else is not read, and the refusal names it and that folder.
+  `ANNOUNCE_APPROVALS_DIR`, the tests' seam, names another record and lets its transcripts be
+  anywhere, unless the folder it names is this user's own record, however that is spelled or
+  linked, and the user's own folder is read from the account database, not from `HOME` or
+  `CLAUDE_HOME`.
+- **A session's Bash command that runs the library in any other form is refused** by
+  `announce-label-ask.sh`, whose first test knows the library's file name: `check --claim`,
+  `used`, `answered` (the form the hook that notes his answer uses, #3742), a verb it cannot read, a program handed to python that names the file, and a heredoc
+  body naming it. Commands that name the file without running it (git, grep, a test suite) pass.
+  It judges python wherever a command names it and keeps no list of other programs that could
+  run the file, which has no interpreter line and so cannot be run by its own path.
 
 What none of this sees: a merge made in GitHub's own page; a write to the wording file, between the
 open and his answer, by something the transcript does not name it in (a script building the name at
 run time, a subagent's own tools); whether the picker's question named the right channel; a record
-line written by a script that builds the path at run time; a label put on by a route the hook cannot
-read (a variable, a file, a script, an alias, a wrapped `gh api`), which still cannot merge; and an
-approval given on one Mac, which the other does not know and asks for again.
+line written by a script that builds the path at run time; a transcript forged in the folder Claude
+Code keeps them in, or the library reached without naming it (a script file, a path built at run
+time, a hook run by hand) or run by a program that is not python by name (`uv run`), since the
+record and the transcripts are files on a Mac the session can write; a label put on by a route the
+hook cannot read (a variable, a file, a script, an alias, a wrapped `gh api`), which still cannot
+merge; and an approval given on one Mac, which the other does not know and asks for again.
+
+#### An approved announcement is owed as a Slack draft until it is settled (#3667)
+
+Once an announce pull request merges, its approved wording is owed to agents as a Slack draft Dan
+sends himself. The is it live mod keeps that owed, asks for the draft, and says it until it is
+settled:
+
+- When a merge lands, the mod asks GitHub for the pull request's labels and description and runs
+  the merge gate's own reader on them (`hooks/lib/changelog-entry.js announcement`). What the
+  change owes is kept in the mod's store, which every session shares, one key per pull request and
+  per fact (`announce:`, `announce-out:` and `announce-done:`, each followed by `<owner/name>#<pr>`
+  and written whole), outside the list of cards that keeps only the newest 50. A reader answer of
+  `unknown` is kept as owed with its why. GitHub or the reader failing outright is said to Dan and
+  asked again at the next card, never kept on a guess.
+- A card saying the change is live tells the session to save the announcement as a Slack draft in
+  its channel, with no thread, word for word and without rewording it. A deploying card, or one
+  that could not confirm live, asks for nothing and settles nothing.
+- A draft counts only when Slack's answer holds a `draft_id` and the draft's words are the approved
+  wording's, judged by the one comparison in `hooks/lib/announce-compare.js` (the dev update skill
+  loads the same copy). A draft that differs, an answer with no `draft_id`, each error Slack names,
+  and a judgement that could not be made each have a sentence of their own and leave it owed. Once
+  drafted it is never asked for again.
+- Only the wording the pull request merged on is drafted, counted or copied, since a description
+  can be edited after the merge by a command no hook judges. The same library's `claimed` check
+  holds the wording's hash to the hash of that pull request's latest claim line in the record of
+  approvals, read through `announce-approval.py list`, which writes nothing. The mod asks it before
+  a card asks for a draft, before a draft is counted and before Copy hands the wording over. Wording
+  that fails it is kept as an entry that cannot be drafted, with the reason. A pull request that
+  went back to wording it claimed earlier reads as changed, which refuses a draft: the harmless side.
+- While one is owed it is said in four places. A row pinned in the band, "Announcement for agents"
+  in violet, one line saying where the draft stands, then Copy, Mark sent and Not announcing; the
+  row never draws the wording, and Copy copies nothing for wording that failed the claimed check,
+  saying why. Mark sent and Not announcing settle it for every session, and only a press of the
+  row's own button does. `/live` lists it. Every session started in that project says it in one
+  line, to Dan and with the session's first prompt. And the turn end of the session whose card found
+  it live is refused once per chain of turn ends.
+- The merge gate's allow for an announce merge (`require-changelog-tag.sh`) always carries one line
+  of context: the merge owes agents a draft, and a session whose card says nothing about it is
+  running an old copy of the mod and should run `/reload-plugins`. Nothing the gate decides changes.
+- The dev update skill's picker for an unsettled announcement gains a fourth answer, "Draft it now"
+  (Dan, 2026-11-25, by picker), offered only where `gather.js draftable` says the announcement may
+  be drafted, which asks the same claimed check. `gather.js drafted` reads Slack's answer, and the
+  state commit judges the draft again before it records the announcement drafted.
+
+What none of this sees: whether and when Dan sends a draft; a merge made in GitHub's own page, which
+no session cards and which has no claim line, so it is never drafted from here; and an announcement
+settled or approved on one Mac, which the other does not know.
 
 `push-scope-notice.sh` also refuses a push from a repository whose `core.hooksPath` names a folder
 that does not exist (claude-config#2070), because git then runs none of the repository's own hooks
@@ -3146,6 +3436,24 @@ Reading an old checkout is the other half, and that one is said rather than refu
   only fetches, bounded at 5 seconds and cached for 10 minutes per repository, and a fetch that fails
   says the checkout could not be checked, never that it is level. The person is told once per
   session for each answer; a compaction, a `/clear` and each subagent get it again as context.
+- `repo-visibility-notice.sh` (SessionStart) tells a session when the repository it is in is not as
+  visible on GitHub as the repository says it is meant to be (claude-config#3582). On 2026-11-24
+  this repository was private for some hours and nobody was told: its workflow is sized for a
+  public repository's free 4 core runners, so suites ran past their limits on billed 2 core runners
+  and the account's minutes ran out, and the publish gate judged none of the text posted meanwhile.
+  The expectation has one home, the first line of `.github/expected-visibility` that is not a
+  comment (`public`, `private` or `internal`), which this repository carries and
+  `.github/workflows/tests.yml` points at. A checkout that does not hold the file yet, being behind
+  its origin, is judged by the copy on origin's default branch as last fetched, and a repository
+  with no such file in either place is never asked about.
+  When GitHub agrees the hook says nothing; when it does not, one notice names the repository, what
+  it is, what that costs and the command to run before it turns public again; when it cannot tell
+  (gh failed, answered something else or outlasted its 4 second bound, the file or the origin could
+  not be read) it says it could not tell, never that all is well. It costs one `gh repo view` per
+  session start in a repository that carries the file, measured on 2026-11-25 at 0.51 to 0.80
+  seconds over five runs, against 0.10 in a repository with no file and 0.05 to 0.06 outside one.
+  It is wired to SessionStart only, never to a prompt.
+  Tests: `hooks/test-repo-visibility-notice.sh`.
 
 ### What a push actually waits on
 
@@ -3676,7 +3984,8 @@ names supabase leaves after reading its input, before loading anything
 2026-11-25: 0.004 to 0.005 seconds, five readings of the hook alone on a plain `git push` at load
 average 5 to 7; it reads every Bash call and every file edit, and one naming neither the
 `changelog/announce` label nor the record of approved wording leaves after reading its input, before
-loading anything
+loading anything. Since #3703 that first test also looks for the file name of the library that
+writes the record, one more pattern in the same test, and the hook was not timed again
 
 </td></tr>
 </tbody>
@@ -3804,6 +4113,26 @@ run, refuses in its own words, says what the run was doing and how many seconds 
 after its process did, and exits 2. The budget is 140 seconds (150 until #3357), so the 20 seconds
 left of Claude Code's 180 cover the time before the gate's clock starts, which Claude Code's limit
 counts and the gate cannot, and the stop itself, which is builtins only.
+
+Pushes on one Mac take turns at the scan (#3536). Every push started every scanner at once and
+nothing spaced two pushes apart, so on the night of 2026-11-23 to 24, at load averages past 190,
+seven pushes from five agents were stopped at the hard stop, and two more on 2026-11-25; their
+refusals named every phase of the run, listing the suites, deciding about the runs, waiting on the
+scanners and reading their verdicts, which is a starved run rather than one slow step. So the run
+now takes this Mac's one turn at the scan before any of that work and gives it back as it ends; the
+two checks before it (the commit messages, and each new suite's deadline) run no suite and do not
+wait, and a listing of the scanners (`SCANNERS_LIST=1`) takes no turn. The
+queue is `hooks/lib/merge-turn.sh`, the one the full suite runs, the merge helper and the load
+window already use, kept in the gate's own state folder (`~/.claude/state/scanners-passed/turn/`),
+so a push never waits behind a full run or a merge. The wait is spent out of the same 140 second
+budget, never added to it: a push whose budget runs out while it waits starts no scanner and is
+refused, saying it waited behind another push's scan, whose checkout it names, and that the same
+push can be sent again. A holder whose run has gone (the hard stop kills it, so nothing gives the
+turn back) is passed over at once by the next push, and so is a live one that has held the turn for
+160 seconds or more, longer than any run of the gate lives; a push that waited or passed a holder
+over says so when it goes through. A queue that cannot be joined is said and the push is scanned
+without a turn, as before. What it does not space: a scanner left running past the budget goes on
+after its push gives the turn back, and nothing else on the Mac takes this turn.
 
 The stop does not rest on one signal finding the supervisor at the right moment (#3333). A signal
 bash handles before its `wait` has begun does not end that wait, and a kill of the run's process
@@ -5645,7 +5974,8 @@ personal MacBook, ten readings each taken in turn at a load of 37 to 103: 5.61 s
 before, 5.33 s and 53.7 after (the middle readings, a unit 0.100 s). No limit was changed with it.
 The limits were set again on 2026-11-23, to 67 units on macOS and 91 off it (Dan's choice, the
 highest reading on each platform plus 15 percent; the comment above them in the gate's suite
-holds the readings).
+holds the readings). Since 2026-11-26 the Linux limit is 83.2 units of the median yardstick sample
+rather than 91 of the least (#3406, below); macOS keeps 67 of the least.
 Suite: `test-slack-drafts-held-once.sh`, which holds each reading by a count and saw each count
 fail on the gate as it was.
 
@@ -5714,17 +6044,65 @@ the case can be counted from saved logs. The suite sees each of those verdicts o
 replayed through the check's own code (`SLACK_GATE_COST_REPLAY`, which runs no gate), and once per
 run on a real folder, where a copy of the gate with a budget of 0.2 s ran out.
 
+The cold check of `bash tests/test-claude-sync.sh` is unmeasured, not failed, where EVERY sample it
+took ran out of the gate's 11 seconds and was read on the step clock past its limit (#3406, Dan's
+decision of 2026-11-26 from a picker, "3.60.1 Read it as unmeasured"). On the pull request runs of
+that day every red on this check began with a first judgement that ran out; first judgements that
+finished inside the seconds read 66.8 to 88.5. Of the 8 reds whose logs were read, every sample ran
+out in 2 (runs 45817817409 and 45838830923); in the other 6 the later samples finished inside the
+seconds and read past 91 as well, and those still fail. The rule: one sample that finished inside
+the seconds and is past the limit fails the check as before, any sample at or under the limit
+passes as before, and the limits of 67 and 91 did not move. The cold check asks for this with
+`SLACK_GATE_COST_RAN_OUT_UNMEASURED=1`; no other cost check does, and each still fails on step clock
+readings. Its line is `SUITE-PART-UNMEASURED #3406: bash tests/test-claude-sync.sh is judged
+within ...`, printed by the same `cost_case` as the cached checks' `#3170` lines, with the processor
+seconds and unit of each sample that ran out and the step clock readings.
+
+So that a real slowdown cannot hide there, `tools/ci-cold-cost-streak.sh` runs in the deal job on
+every push to main and turns the run's `suite` check red when that line was printed on each of
+main's last 5 readable trees (its `STREAK` setting). It reads each tree's proving run through the
+`green-tree-<tree>` record a reuse stands on, so a main push that reused a pull request run is read
+through that run, and that run's `part-unmeasured-<n>` records, whose retention went from 1 day to
+7 for this. A tree with no live green record, or whose run handed back fewer records than it had
+parts, is skipped and never read as measured; fewer than 5 readable trees in main's newest 20 is a
+warning that the streak was not measured, never a pass. Suite: `tools/test-ci-cold-cost-streak.sh`.
+
+On Linux the cold check divides every reading by the MEDIAN of all the yardstick samples the case
+took, not the least, and its limit is 83.2 units (#3406, Dan's choices of 2026-11-26 from pickers,
+"3.65.1 Median, limit 83.2, Linux only (Recommended)" and "3.71.1 Whole run median
+(Recommended)"). After each judgement every reading so far is divided again by the median of every
+sample taken so far, and the check stops only when one of those figures is at or under the limit;
+no sample is taken after it stops, so the figures it stopped on are the ones the record prints and
+the verdict reads. Read from 139 pull request run attempts of
+2026-11-25 and 2026-11-26: by the least sample 16 read past 91 on the same gate work, each with a
+first judgement that ran out of the gate's seconds. A judgement takes 7 to 15 s and spans the
+runner's slow and fast spells alike, while the least of the 0.1 s yardstick samples catches only
+its fastest moment. 83.2 keeps the room 91 had above the median passing reading (1.178 times it,
+70.6 by the median). macOS keeps the least sample and 67, since nothing was read on a Mac, and every
+other cost check keeps the least sample. Where the unit is set is `cost_unit` in the gate's suite,
+beside `cost_limit`; `cost.py` takes it as `SLACK_GATE_COST_UNIT`, and the record says `median of N`
+for each reading in place of `from N`, N being every sample the case took. Judged this way, those
+139 run attempts give 137 green, none red, and 2 that cannot be told: runs 45752799634 and
+45825401342 read 85.1 and 84.0 on their one reading, and the check would now take readings CI never
+took. The suite replays CI's own records of that day through `cost.py`
+(`payload/hooks/slack-drafts-cost-fixtures/ci-cold-records.jsonl`): reds by the least sample now
+pass, greens stay green, and a made up record 20 percent dearer than the median passing reading
+fails. Each is replayed by the least sample and 91 too, and must give CI's own verdict. The
+unmeasured rule above and the streak are unchanged.
+
 Some CI runners still read a few cost cases over their limits with the gate unchanged (#3170: 4 of
 127 runs from 2026-11-20 to 2026-11-21), and the logs could not say why: they held each case's
 reading in units, but the yardstick and the seconds only for one case, and only the least yardstick
 sample. Dan's decision on 2026-11-21, from a picker, was "Measure more first": no limit, sample count
 or yardstick changes until a few days of runs can be read. So since then every cost case records,
 on every run, the gate's processor seconds for each reading, the yardstick each reading was divided
-by (the least of the samples taken by then, and how many), every yardstick sample the case took, and
+by (the least of the samples taken by then, or the median of all of them for the cold check on
+Linux since #3406, and how many), every yardstick sample the case took, and
 their least, median and greatest. They are on each `cost measured (#2918)` line, and a passing run
 shows them in the suite's two notes. Nothing is judged by them: a case is still judged by its least
 reading against its limit, and the suite checks, with `tools/gate-cost-rows.py check`, that each
-reading is its seconds over the least sample taken by then, so a verdict taken from any figure
+reading is its seconds over the sample its record names (the least of those taken by then, or the
+median of all the case took), and that each case names the sample `cost_unit` gives it, so a verdict taken from any figure
 printed beside it fails. No extra yardstick is timed for this; the figures are the ones each case
 already took. `python3 tools/gate-cost-rows.py rows <saved logs>` prints one row per case per run
 from any of the three shapes. And a suite that fails and then passes its recheck now has its first
@@ -6226,7 +6604,22 @@ through `hooks/lib/skill-python-tests.py`, found from disk. To run one skill's a
 `python3 payload/hooks/lib/skill-python-tests.py payload/skills/<skill>`. Beside it,
 `test-skill-integrity.sh` fails on a relative link in a skill's markdown that reaches no file and on
 a file shaped like a test that nothing runs, and `test-skill-helper-exits.sh` on a skill helper that
-can report success when it failed (claude-config#676, #677).
+can report success when it failed (claude-config#676, #677). That includes a long running process
+whose status is checked only as it starts: one held on an attribute is followed through the methods
+of its class, and a method that ends it must read how it ended. A local process whose status was
+read while it ran and which is then handed to something the check cannot follow is printed as a
+`U1` line and counted as `unjudged=` in the summary, without failing the check. One held on an
+attribute whose ending no method reads is refused even when it is handed to something the check
+cannot follow, and the finding names that hand off (#3650). A local process's uses are compared in
+the order the code runs them, never by line: two on one line keep their order, a helper of the same
+file it is handed to has its uses judged at the hand off in its own order, and a read on the other
+arm of an if from a use never follows it. A read after a use that runs only on some of its paths
+(inside a branch, a handler or a loop the use is not in), or a hand off round a cycle, is a `U1`.
+A `poll()` only compared with None (`while p.poll() is None`) asks whether the process still runs
+and is no read of how it ended. A method that ends a held process must read how it ended after the
+end on every path out of it, and the method that starts one settles it alone only when every path
+out of it waits; a helper it is handed to is run along those paths from the state at the hand off
+(#3663).
 
 The pull request checks install Claude Code for the mods' own tests (#3297), at the one version
 written in `.github/claude-code-version` and read by `tools/install-claude-code.sh` alone, so every
@@ -7339,7 +7732,14 @@ The rate is a claim about a trend, so it is refused more often than given. Each 
 to a six hour history under `$TMPDIR/claude-free-space`. No rate is stated over a span under
 `FREE_SPACE_MIN_SPAN_MIN` (10), and after free space went back up by more than
 `FREE_SPACE_RECOVERY_GB` (1) only the readings since then count, three of them at least
-(claude-config#436). And only a fall that has lasted is projected (claude-config#1754): the newer
+(claude-config#436). A rise is that kind of recovery only while it is not taken back
+(claude-config#3636): if free space falls to the level it rose from, or lower, within
+`FREE_SPACE_GIVEBACK_MIN` minutes (default the persistence window, 30), the trend runs on across it.
+On 2026-11-25 free space fell from 67.1 GB at 10:25 AM ET to 55.7 GB at 11:10, about 15 GB an hour,
+with give backs of 1 to 3 GB at 10:58 and 11:05 that were each taken back within minutes; each
+restarted the trend and the check said nothing from 10:58 on. It now warns at 11:01, 11:04, 11:06
+and 11:10, and stops at the 11:15 give back, which held. A rise not yet taken back still counts as a
+recovery, so the warning can miss a reading while one is pending. 0 turns it off. And only a fall that has lasted is projected (claude-config#1754): the newer
 end of the rate is the most free space seen in the last `FREE_SPACE_PERSIST_MIN` minutes (30), so a
 pre push check or build that takes a few GB and gives it back within minutes never projects zero.
 Measured on 2026-10-26 on the work MacBook, two such bursts of 1.4 to 4.4 GB came and went inside 27
@@ -7350,6 +7750,17 @@ least free space seen in the 30 minutes from the rise, never the rise's own read
 free space jumped to 196 GB for about three minutes and settled at 105 to 106 GB, and the old rule
 projected that settling as 204.5 GB an hour for half an hour while nothing moved. The cost is that a
 fall beginning just as a recovery ends is projected up to 30 minutes later again.
+A fall that has stopped stands down on recent readings (claude-config#3608). A fall the rule above
+calls fast is judged again on the last `FREE_SPACE_STOPPED_MIN` minutes on their own (default the
+persistence window, 30): the most free space seen there minus the least, every dip counted as lost.
+When that pace does not reach zero within the horizon the check exits 0, and `--report` says when
+the fall stopped, how much went and between which times (in ET), and how little it has moved since.
+On 2026-11-25 free space fell from 155.1 GB to 67.2 GB between 9:41 and 10:12 AM ET and then held
+within 1.7 GB until 10:48, and the rate from the reading before the drop said "zero in under an hour" from 10:19
+until 10:57; it now stands down at 10:44. It only ever turns a 4 into 0, and never touches the floor.
+A steady fall is reported at the same reading as before; the cost is a fall that pauses for 30
+minutes or more and then starts again, reported up to 30 minutes after it restarts (about 9.5 GB at
+19 GB an hour). 0 turns it off.
 
 A warning's readings outlive that six hour window (claude-config#3157). On an exit 3 or 4 the check
 keeps a copy of the readings in the window, headed by the verdict line, its exit code and the
@@ -8151,6 +8562,63 @@ fallback for a session where no line arrived.
   `skills/production-ready/test-production-audit.sh` for the workflow's ceiling, and
   `tools/test-agent-cap-report.sh` for the measurement.
 
+## The builder agent type is rendered from the rules it carries
+
+A builder dispatched as a general purpose agent loads everything a session does before it reads its
+brief (#3389: about 82,760 tokens a start on the personal MacBook, 2026-11-25, three runs). The
+`builder` agent type starts with less. It lists no connected servers, and it does not load the rule
+files: its own prompt carries the lessons core and the builder's share of the global `CLAUDE.md`
+(Dan, 2026-11-25: "Servers and rule files (Recommended)").
+
+- **The prompt is rendered, never kept by hand.** `skills/orchestrate/render-builder-type.py` writes
+  the agent definition from `CLAUDE.md`, every file it imports (the lessons core arrives that way),
+  `builder-type-head.md` (the frontmatter and opening words) and `builder-type-rules.tsv`:
+
+      python3 -I payload/skills/orchestrate/render-builder-type.py --out <folder>/builder.md
+      python3 -I payload/skills/orchestrate/render-builder-type.py --check <folder>/builder.md
+      python3 -I payload/skills/orchestrate/render-builder-type.py --decisions
+
+  `--check` exits 1 and names the first line that differs when a written copy is stale. `--decisions`
+  prints, for each section of `CLAUDE.md`, whether a builder carries it, how much, and why.
+  `--rules <folder>` reads another copy of the rules, `~/.claude` for the ones a Mac has installed.
+- **No rendered copy is in the repository, and the sync does not install one yet.** The sources
+  changed in 103 commits in the 30 days to 2026-11-25, 76 of them made by the sync with no pull
+  request, so a committed copy would be stale within hours and two Macs would collide over it
+  (L554). The type exists on a Mac only where it has been rendered into an agents folder. Dan
+  chose on 2026-11-25 that the sync writes it on each Mac from that Mac's rules and never carries
+  it ("Each Mac writes its own (Recommended)"); that step is not built yet (#3389).
+- **What a builder carries is one table.** `builder-type-rules.tsv` has a row for every section of
+  `CLAUDE.md`: `carry`, `leave`, and `drop` or `keep` for one item named by its opening words. A
+  section with no row is carried, a `drop` row that matches nothing drops nothing, and a `keep`
+  row that matches nothing carries its whole section, so a doubt always sends the rule to the
+  builder. The suite renders the payload with `--strict`, which turns each of those into a failure
+  that names it, so a new section gets its row in a pull request.
+- **What the type does not load, beyond the rule files.** The project's own `CLAUDE.md` or
+  `AGENTS.md` and its memory index go with the rule files, because Claude Code leaves them out
+  together. The head tells a builder to read the project's file first, and the orchestrate skill
+  tells the session to name any memory file in the brief. Nothing enforces either yet: Dan chose
+  on 2026-11-25 a check that holds a builder's first edit until it has read the project's file
+  ("Add a guard (Recommended)"), to be built with the install step.
+- **The two UI sections are left out and named instead.** "Progress & Feedback (UI)" and "Building
+  UI" are rules only screen work needs, about 5,900 characters every builder read again on each
+  request (Dan, 2026-11-25: "Cut the UI sections first"). The head tells a builder whose item
+  builds or changes anything a person sees on a screen to read those two sections of
+  `~/.claude/CLAUDE.md` before writing it, and the orchestrate skill tells the session that the
+  brief for such an item says so.
+- **The tool list is an allow list.** It names Claude Code's own tools, the Skill tool included,
+  and three servers: the area check mod, the job watcher mod and Claude in Chrome. A tool Claude
+  Code adds later reaches builders only once it is added to `builder-type-head.md`.
+- **The model rule holds for it.** The type sets no model. `hooks/builder-model-gate.sh` counts a
+  dispatch of the type as a builder by its type alone, so it refuses one that names no model in an
+  orchestrating session, with or without a worktree or a session line.
+- **Sessions use it when they can see it.** "Which agent type a builder runs as" in the orchestrate
+  skill says to dispatch a `build` item as `builder` when the Agent tool lists that type, and as
+  before where it does not.
+- Tests: `skills/orchestrate/test-builder-type.sh` (the renderer on a fixture, its failures, the
+  stale copy check, the payload's table, tool list and size budget of 92,000 bytes, against 88,281
+  rendered on 2026-11-25 once the UI sections were left out) and
+  `hooks/test-builder-model-gate.sh`.
+
 ## The context line and the long session nudge
 
 Every request rereads the whole conversation, so the cost of a session is set by how much each
@@ -8805,7 +9273,11 @@ next session start to `~/.claude/state/sessions-archive/<the UTC day it ended>`,
 the way, unless it still names background jobs, which the job watcher reads for its full 7 days; a
 day's folder goes once that whole day is 7 days past (#633). The list reads again only the open
 records and files the folder listing shows changed, and answers inside a limit of its own, short of
-the engine's, or refuses, which the collision guard turns into a refusal of the call (#911). After
+the engine's, or refuses, which the collision guard turns into a refusal of the call (#911). A
+list Claude Code itself cuts off, at the limit it gives any call to another mod (10 seconds,
+measured 2026-10-05, docs/mods-design.md standing rule 4), the collision guard asks once more, and
+judges the call on the second answer as it would have on the first; a second silence refuses the
+call, saying the list was asked twice (#3673). After
 a /clear or a resume, which go on under a new session id with no session start, the new
 conversation's record is made once the /clear's (or the /resume's) own command has run, or at the
 first write or read of the list, never left to the next beat (#735). Never from the classic
@@ -9233,10 +9705,15 @@ tool, that its merges have nothing to do with the threads (#2653); since #2849 t
 merges already landed as well as later ones. It never clears a reply owed to a thread pasted mid
 session that a PR links, nor a card's message; a PR's link to a thread the session started from is
 cleared, as before.
+A merge labelled `changelog/announce` also owes agents a Slack draft of the wording Dan approved
+(#3667). The mod keeps it in its store outside the cards, the live card asks for the draft, and a
+band row with Copy, Mark sent and Not announcing, `/live`, each session start in that project and
+one refused turn end say it until it is drafted on the claimed wording or Dan settles it. The rules
+are in "An approved announcement is owed as a Slack draft until it is settled (#3667)" above.
 
 </td><td>
 
-#617, #663, #707, #771, #1244, #1271, #2435, #2436, #2515, #2578, #2630, #2653, #2849
+#617, #663, #707, #771, #1244, #1271, #2435, #2436, #2515, #2578, #2630, #2653, #2849, #3667
 
 </td></tr>
 <tr><td>
@@ -9327,7 +9804,10 @@ fails or takes more than 2 seconds, and a brace pattern of more than 256 names. 
 to a name another source of the same mv or cp may also land on (one from another folder of the
 same name, a name alike but for letter case or the form of an accent, a pattern, or a word no
 path names) is asked about as the deletion it may be, never as a move that can be moved back
-(#3505): the source named last is the one kept. The answers
+(#3505): the source named last is the one kept. Where the command's words name the file and
+the place, the question says why a command that moves is asked about as a deletion: "The command
+sends it to <the place>, and another file the same command names may land on that name too. Only
+one of the two would be kept there, so this file may be lost." The answers
 are Keep as is, first, and Delete, Move or Empty; a save's
 For good approves no removal and a removal's answer approves no save, a removal whose consequence
 changes after he answers (what git holds of the file, where a move lands, what a folder holds) is
@@ -10294,8 +10774,13 @@ alone; since #3132 so is a created tab that left the group any other way, closed
 to a restart of Chrome, at the first result listing the group without it, and its number listed
 again later does not bring it back), and every Chrome tool reaching past those
 tabs (recordings to disk, local file uploads, saved workflows, another browser), judged in
-`hooks/browser.ts` (#2064), Supabase and psql writes, a branch switch in a primary checkout, force
-pushes, branch deletes, and `claude-sync` send, sync,
+`hooks/browser.ts` (#2064), Supabase and psql writes, a branch switch in a primary checkout (since
+#3398 the checkout every `-C` leads to, each read from the one before it, and refused as one that
+cannot be told where the command names its repository or working folder apart by `--git-dir`,
+`--work-tree`, `GIT_DIR` or `GIT_WORK_TREE`; the merge and deploy rules, the notes winding down
+keeps and its agreed cleanup branch place a git command from the same reading,
+`hooks/gitplace.ts`, set out in docs/mods-design.md under "What #3398 changed"), force pushes,
+branch deletes, and `claude-sync` send, sync,
 apply-only and install, and a pull from anywhere but the live sync clone `~/claude-config-sync` or
 with its environment changed; since #1106 that clone's pull is claude-config's deploy step, so it
 runs overnight exactly when the night lets claude-config deploy (`mayDeploy`) and waits for the
@@ -10475,7 +10960,12 @@ a toast, and so it does when that prompt starts no turn at all (dropped from the
 refused by a prompt hook) once no main turn has run for two minutes (#734). Unfinished steps are
 kept per project (the repository root, the main checkout's for a worktree) in the mod's store and
 held at the next session start there until Claude re-checks them, a step held under both the root
-and a pre-#708 worktree key listed once; a reload mid session keeps the live card. While Dan is
+and a pre-#708 worktree key listed once; a reload mid session keeps the live card. Another mod adds
+a step through `$.manualSteps.add`, takes it off as done with `finish` and as withdrawn with
+`withdraw` (#3770: drawn "taken off, not done", the card going when nothing is left); a step it adds
+with `sessionOnly` is never kept for the next session, and one with `noDone` is drawn with no Done
+and leaves the heading without "waiting on you" (the goal box's close this session card). While
+Dan is
 away, a new card goes to the scope modes mod's held card (`$.scopeModes.hold`) instead of the Mac. A
 card pinned with a step Dan can do now also sends him a macOS notification through the goal
 tracker's `$.goalTracker.waitingOnYou` ("<project> is waiting on you", naming the heading and the
@@ -10627,7 +11117,9 @@ a secret never reaches the status bar. A
 dispatched agent's stop (`classic.SubagentStop`) is refused while it still holds background work it
 started (a Bash job, a Monitor, an agent it ran in the background), telling it to wait in the
 foreground, finish, or stop the work with TaskStop, then hand back. What is in flight is Claude
-Code's own list sent with the stop, which carries the whole session's work (measured on 2.1.302), so
+Code's own list sent with the stop, which carries the whole session's work (measured on 2.1.302),
+read, with the statuses that end a task, through mod-kit's one list of what is in flight
+(`hooks/mod-kit/inflight.ts`, #3770), which the goal box's close this session card reads too; so
 whose work is whose comes from the calls the watcher saw each agent make. A stop is refused at most
 twice in a row; the third goes ahead and this conversation is told what the agent left. A list that
 is missing or not a list falls back to the watcher's own record of the agent's Bash jobs and is said
@@ -11019,8 +11511,8 @@ thing that shipped. Shown by the mod's `goal_accomplished` tool, offered in full
 interactive session. A `/goal` met by Claude Code's own check (read through `$.modkit.goal`'s `met`)
 is shown under its condition: since that record lands after the Stop hooks (measured on 2.1.310),
 the session is sent one prompt of the mod's own once the turn has ended, asking it to call the tool;
-once per met goal. The mod hooks no classic event (#875), and reads the transcript from the
-session's own session registry record. With no `/goal` set, the session calls the tool when it
+once per met goal. It reads the transcript from the session's own session registry record. With
+no `/goal` set, the session calls the tool when it
 judges the work Dan asked for finished, reminded by the SESSION REFLECTION's last line after every
 turn that changed something (#1749). Refused, naming what, while a `/goal` is still set or cannot be
 read, an agent the session started is still running, is it live's record shows a merge owed its card
@@ -11037,11 +11529,36 @@ holds nothing, as is it live lets it go. A merge GitHub confirmed holds the box 
 since it merged is in is it live's verdicts, which the box reads too, since is it live crosses a
 carded merge off its record only at a turn end. At most one box per request: a second needs a new
 message typed by Dan, and two calls at once show one. Where the card is not drawn, the result is the
-same box as text, shaped like SESSION REFLECTION.
+same box as text, shaped like SESSION REFLECTION. What holds the box is read through mod-kit's one
+list of what is in flight (`hooks/mod-kit/inflight.ts`, #3770), asked for the box's three kinds.
+The close this session card (#3770, Dan's answers of 2026-11-26): a manual steps card headed
+"Nothing this session can see is running or waiting", whose one step, "Close this session if you
+have nothing more for it", is for this session alone and has no Done. At the main conversation's
+turn end in an interactive session a quiet period of 3 minutes 30 seconds starts (`QUIET_MS` in
+`hooks/close.ts`, on the engine's clock: the subagent harvest's 180 second `timeout` in
+`settings.hooks.json` plus a 30 second margin, held together by
+`tests/test-close-card-quiet-period.sh`); any turn start or message of any origin ends it. At its
+end the card is pinned, once per request of Dan's, only when the box was shown for his latest
+request and every kind in mod-kit's list reads clean: no agent running, waiting or idle (one a mod
+started included), nothing in the stop's `background_tasks` or `session_crons` (recorded at the
+main `classic.Stop`, which runs only while the managed settings file is in place, #876), no job on
+the job watcher's list, no merge, deploy or open pull request the box would refuse for, no
+`/goal` set, no step on a steps card not done, no compact queued or its note owed, no prompt a
+mod holds its reload for, and an answer that does not end on a question. Two readings of a
+process a command left behind can only withhold it: any process of this user carrying this
+session's id (`CLAUDE_CODE_SESSION_ID`, read through the kernel, five second limit; a failed look
+says nothing), and any main conversation Bash call, not run in the background, that mod-kit's
+reader marks as putting something in the background, running nohup, setsid or disown, or cannot
+read in full, which withholds it for the rest of the session. A reading that cannot be taken
+withholds it. Each reason is written to `~/.claude/state/close-session/<session id>.json`, newest
+replacing the one before. The next turn start takes the card down as withdrawn; it comes back
+only after the next box. Invisible to both readings: a program that detaches itself without the
+command saying so, and an Apple signed program (a shell, sleep) left behind, whose environment
+the kernel does not show.
 
 </td><td>
 
-#1563, #1749, #1818
+#1563, #1749, #1818, #3770
 
 </td></tr>
 </tbody>

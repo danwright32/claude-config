@@ -65,6 +65,13 @@ export type AskBeforeSavingRemoval = {
    */
   back?: 'git' | 'changed' | 'none' | 'unknown'
   why?: string
+  /**
+   * Where the command would put it, as Dan reads it, when another source of the same mv or cp may
+   * land on the same name there (#3505): only one of the two is kept at that name, so it is asked
+   * about as a deletion, and the question says where it was sent and that it may be lost. Only on
+   * a deletion, and only where the command's words name the file and the place.
+   */
+  sharedAt?: string
 }
 
 /**

@@ -205,10 +205,15 @@ type Heredoc = { at: number; body: string; quoted: boolean; torn?: true; inText?
 // it: its last character, itself after no backslash, outside single quotes and outside a comment.
 // `quotes`, each quote on it (#3491): where it opens, where it closes (undefined for the one the
 // line ends inside), and its kind.
+// `was`, where its comment started by the rule before #3496 (commentAt), which took a # after any
+// character JavaScript calls a space, or after an escaped blank, for one: at or before `comment`.
+// A << between the two opens a heredoc now and opened none then, so its lines were read as
+// commands, and dropHeredocs says which those are (`late`).
 type LineQuote = { from: number; to?: number; kind: '"' | "'" | 'ansi' }
-const readsLine = (line: string, from = 0): { comment: number; joins: boolean; quotes: LineQuote[] } => {
+const readsLine = (line: string, from = 0): { comment: number; was: number; joins: boolean; quotes: LineQuote[] } => {
   const quotes: LineQuote[] = []
   let quote: LineQuote | undefined
+  let was: number | undefined
   for (let i = from; i < line.length; i++) {
     const c = line[i] as string
     const last = i === line.length - 1
@@ -217,18 +222,21 @@ const readsLine = (line: string, from = 0): { comment: number; joins: boolean; q
         quote.to = i
         quote = undefined
       } else if (c === '\\' && quote.kind !== "'") {
-        if (last) return { comment: line.length, joins: quote.kind === '"', quotes }
+        if (last) return { comment: line.length, was: was ?? line.length, joins: quote.kind === '"', quotes }
         i++
       }
     } else if (c === '\\') {
-      if (last) return { comment: line.length, joins: true, quotes }
+      if (last) return { comment: line.length, was: was ?? line.length, joins: true, quotes }
       i++
     } else if (c === '"' || c === "'") {
       quote = { from: i, kind: c === "'" && opensAnsi(line, i) ? 'ansi' : c }
       quotes.push(quote)
-    } else if (c === '#' && commentAt(line, i)) return { comment: i, joins: false, quotes }
+    } else if (c === '#') {
+      if (commentAt(line, i)) return { comment: i, was: was ?? i, joins: false, quotes }
+      if (was === undefined && /[\s;&|()]/.test(line[i - 1] ?? ' ')) was = i
+    }
   }
-  return { comment: line.length, joins: false, quotes }
+  return { comment: line.length, was: was ?? line.length, joins: false, quotes }
 }
 // Whether the << at `at` on a line stands where the shell opens no heredoc (#3491), as far as the
 // line alone says: inside single quotes or a `$'...'` string, inside double quotes with no command
@@ -398,7 +406,12 @@ const plainCommand = (text: string): boolean => {
 // opener is joined to the next line before the end of its marker word, so the marker is not the
 // word on that line. Each is a row of hooks/lib/heredoc-closes.json, measured 2026-11-25 in bash
 // 3.2, bash --posix, sh, dash, zsh, zsh emulating sh and ksh.
-export const dropHeredocs = (cmd: string, quotes = true): { text: string; heredocs: Heredoc[]; unended?: Heredoc; removed: { at: number; lines: string[] }[]; unsure: number[] } => {
+// `late` is where each << stands, in the text left, that opens a heredoc only since #3496: one
+// after a # the older comment rule took for a comment (readsLine, `was`). Its lines are its body
+// in bash and zsh, and were commands to this reader until then, so readLine reads them as commands
+// as well: what the reader gave for such a text it still gives, with the heredoc beside it.
+export const dropHeredocs = (cmd: string, quotes = true): { text: string; heredocs: Heredoc[]; unended?: Heredoc; removed: { at: number; lines: string[] }[]; unsure: number[]; late: number[] } => {
+  const late: number[] = []
   const out: string[] = []
   const heredocs: Heredoc[] = []
   const removed: { at: number; lines: string[] }[] = []
@@ -511,6 +524,7 @@ export const dropHeredocs = (cmd: string, quotes = true): { text: string; heredo
       }
     }
     for (const f of found) {
+      if (f.at >= facts.was) late.push(offset + f.at)
       const torn = (read: { quotes: LineQuote[] }) => read.quotes.some(q => q.to === undefined && q.from > f.at)
       open.push({ end: f.end, tabs: f.tabs, at: offset + f.at, quoted: f.quoted, torn: torn(facts), alone: torn(alone), inText: standsInText(line, facts.quotes, f.at), whole: quotes && !removed.length ? offset + f.at : -1, carry: '', carrying: false, last: '', gone: false, unsure: false })
     }
@@ -543,7 +557,7 @@ export const dropHeredocs = (cmd: string, quotes = true): { text: string; heredo
   // cannot say. Asked only of a << with every line before it still in place.
   const inText = h !== undefined && (h.inText || (h.whole >= 0 && inQuotedText(quotedText(cmd), h.whole)))
   if (h?.unsure) unsure.push(h.at)
-  return { text: [...out, ...unended].join('\n'), heredocs, removed, unsure, ...(h ? { unended: { at: h.at, body: body.join('\n'), quoted: h.quoted, ...(inText ? { inText: true as const } : {}) } } : {}) }
+  return { text: [...out, ...unended].join('\n'), heredocs, removed, unsure, late, ...(h ? { unended: { at: h.at, body: body.join('\n'), quoted: h.quoted, ...(inText ? { inText: true as const } : {}) } } : {}) }
 }
 
 // Whether the substitution from `from` to `to` in what dropHeredocs left holds a run of heredoc lines
@@ -606,7 +620,14 @@ const restored = (text: string, removed: readonly { at: number; lines: string[] 
 // sums this reader works out (#3070, #3088, sumOf), by its place in the text: the word with each sum
 // in its place.
 // `unclosed` marks the command the text ends in when it ends inside a quote that never closes (#3491).
-type Split = { words: string[]; starts: number[]; from?: number; unclosed?: true }
+// `direct` (#3496): the command stands right after the | that feeds it, so the pipe is an input of
+// its own, where `from` alone may be the pipe into the group or loop it stands in.
+// `background` (#3770): a lone & ends the command, so the shell runs it in the background; a group a
+// subshell's ) closes is marked on that ).
+type Split = { words: string[]; starts: number[]; from?: number; unclosed?: true; direct?: true; background?: true }
+// A place in the text where the word reader read on past something it cannot be sure of (#3496),
+// with why: the command standing there is marked unread (readLine, `stops`), its words kept.
+type Doubt = { at: number; why: string }
 type InWord = { at: number; pos: number; len: number; quoted: boolean }
 // The characters that make a word a pattern the shell may expand: a glob's, a brace's, and zsh's
 // groups and extended glob characters, read wider than any one shell's so a word is never taken for
@@ -722,8 +743,12 @@ const testEndFrom = (cmd: string, from: number): number => {
   }
   return -1
 }
-const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, unexpanded?: Set<number>, subbed?: Map<number, InWord[]>, worked?: Map<number, string>, compares?: Set<number>, braces?: number[]): Split[] => {
+const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, unexpanded?: Set<number>, subbed?: Map<number, InWord[]>, worked?: Map<number, string>, compares?: Set<number>, braces?: number[], doubts?: Doubt[]): Split[] => {
   const cmds: Split[] = []
+  // For `doubts` (#3496): the word a parenthesis opened inside a word began in, and where in the
+  // word it stands, so the group can be read whole at the ) that closes it (a pattern's qualifier).
+  let groupWord = -1
+  let groupAt = 0
   let words: string[] = []
   let starts: number[] = []
   let word = ''
@@ -774,7 +799,12 @@ const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, 
   // Each case open around the text being read: in a clause's pattern, or its commands.
   const cases: ('pattern' | 'body')[] = []
   const inPattern = () => cases[cases.length - 1] === 'pattern'
-  const push = (w: string[], s: number[]) => cmds.push(from === undefined ? { words: w, starts: s } : { words: w, starts: s, from })
+  // Whether the command being read stands right after the | that feeds it (Split, `direct`).
+  let direct = false
+  const push = (w: string[], s: number[]) => {
+    cmds.push(from === undefined ? { words: w, starts: s } : { words: w, starts: s, from, ...(direct ? { direct: true as const } : {}) })
+    direct = false
+  }
   const begin = (i: number) => {
     if (inWord) return
     inWord = true
@@ -819,6 +849,7 @@ const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, 
   // After a list separator a command reads what its subshell reads.
   const listed = () => {
     from = subshells[subshells.length - 1]
+    direct = false
   }
   const endCmd = (): boolean => {
     endWord()
@@ -826,9 +857,12 @@ const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, 
     const first = words[0] as string
     if (ended && CLOSES.has(first)) {
       if (first === 'esac') cases.pop()
-      subshells.pop()
+      // What feeds the group this word closes is an input of the redirects written after it too
+      // (#3496: `echo a | { p2; } <<EOF` gives p2 the line a and then the body in zsh, and the
+      // body alone in bash), so the closing word carries it as `direct`.
+      const fedBy = subshells.pop()
       listed()
-      cmds.push({ words, starts })
+      cmds.push({ words, starts, ...(fedBy !== undefined ? { direct: true as const } : {}) })
     } else if (ended) {
       push(words, starts)
       // Each opener among the reserved words it starts with opens a group (`do if`, `then {`), so
@@ -877,7 +911,9 @@ const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, 
       } else if (c === quote) quote = undefined
       else if (c === '\\' && quote === '"' && cmd[i + 1] === '\n') {
         // A backslash before a new line joins the two lines (#3022): neither is in the word. In
-        // single quotes both are kept, as the shell keeps them.
+        // single quotes both are kept, as the shell keeps them. Right after a $ the shells part
+        // (#3496, JOINED_UNREAD).
+        if (cmd[i - 1] === '$') doubts?.push({ at: i, why: JOINED_UNREAD })
         i++
       } else if (c === '\\' && quote === '"' && i + 1 < cmd.length) {
         quotedChar(cmd[i + 1] as string)
@@ -974,6 +1010,10 @@ const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, 
     } else if (c === '"' || c === "'") {
       quote = c
       ansi = c === "'" && opensAnsi(cmd, i)
+      // `$"..."` (#3496): bash 3.2 hands on the text between the quotes and zsh 5.9 that text after
+      // a $ (measured 2026-11-25: `p3 $"x"` runs p3 with x in bash and with $x in zsh). The word is
+      // given as zsh hands it on, as it was, and the command says the shells part there.
+      if (c === '"' && opensAnsi(cmd, i)) doubts?.push({ at: i, why: WORD_UNREAD })
       begin(i)
     } else if ((c === '<' || c === '>') && i < testEnd && wordParens === 0 && !/[<>|&]/.test(cmd[i + 1] ?? '') && !/[<>&]/.test(cmd[i - 1] ?? '') && !(inWord && /^\d+$/.test(word))) {
       // Inside a test a `<` or a `>` standing alone compares two strings (#3415): a word of its own,
@@ -1009,6 +1049,8 @@ const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, 
       // A backslash before a new line joins the two lines (#3022), as the shell reads them: it is no
       // character of a word, ends no word and no command, and begins none. Read as a word of its
       // own, it gave the command before it a word holding a new line (`rm -rf x \` named two files).
+      // Right after a $, or between two <, the shells part (#3496, JOINED_UNREAD).
+      if (cmd[i - 1] === '$' || (cmd[i - 1] === '<' && cmd[i + 2] === '<')) doubts?.push({ at: i, why: JOINED_UNREAD })
       i++
     } else if (c === '\\' && i + 1 < cmd.length) {
       begin(i)
@@ -1022,11 +1064,26 @@ const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, 
       i++
       endCmd()
     } else if (c === '(' && inWord) {
-      wordParens++
+      if (wordParens++ === 0) {
+        groupWord = start
+        groupAt = word.length
+      }
       bareChar(c)
       word += c
     } else if (c === ')' && wordParens > 0) {
       wordParens--
+      // A group that ends a word, opened in that same word, is a pattern's qualifiers to zsh where
+      // it holds no | ( or ~ (#3496). Two of them run code for each file the pattern matches: `e`
+      // with a string (`*(e:'p2':)`) and `+` with a command's name (`*(+p2)`). Measured 2026-11-25
+      // on zsh 5.9: `p1 /usr/bin/tru*(e:'p2 q':)` runs p2 once for each of three files, then p1,
+      // and bash 3.2 refuses the line. The reader gave p1 alone. What follows an e or a + is not
+      // read here, so any such group holding either marks the command: a qualifier that only
+      // sorts or counts (`*(om[1])`, `*(.N)`) holds neither and marks nothing. A group right after
+      // a name and its = sets an array and is none.
+      if (doubts && wordParens === 0 && inWord && groupWord === start && i >= testEnd && /^(?:[ \t\n;&|<>)]|$)/.test(cmd.slice(i + 1, i + 2))) {
+        const group = word.slice(groupAt + 1)
+        if (/[e+]/.test(group) && !/[|~]/.test(group) && !SETS_ARRAY.test(word.slice(0, groupAt))) doubts.push({ at: start, why: ZSH_UNREAD })
+      }
       begin(i)
       bareChar(c)
       word += c
@@ -1051,9 +1108,22 @@ const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, 
         // |& pipes standard error too.
         if (cmd[i + 1] === '&') i++
         from = cmds.length ? cmds.length - 1 : undefined
+        direct = from !== undefined
+        // A ; right after a pipe, blanks and new lines between them or not (#3496): zsh 5.9 reads
+        // on to the command after it and pipes into that (measured 2026-11-25: `p1 x |; p2`,
+        // `p1 x | ; p2`, `p1 x |& ; p2` and the ; on the next line each feed p2 what p1 prints),
+        // and bash 3.2 refuses the line and runs nothing. Read as a separator, the ; gave the
+        // command after it as fed by nothing, so a shell there was read as running no script.
+        let j = i + 1
+        while (cmd[j] === ' ' || cmd[j] === '\t' || cmd[j] === '\n') j++
+        if (cmd[j] === ';' && cmd[j + 1] !== ';') i = j
       }
     } else if (c === ';' || c === '&') {
-      endCmd()
+      const ended = endCmd()
+      // #3770: a lone & (never && or a case clause's ;& and ;;&; a redirect's & is read above)
+      // puts the command it ends in the background.
+      const last = cmds[cmds.length - 1]
+      if (c === '&' && cmd[i + 1] !== '&' && !/[&;<]/.test(cmd[i - 1] ?? '') && last && (ended || last.words[0] === ')')) last.background = true
       listed()
       // ;; ;& and ;;& end a case clause: what follows is the next pattern.
       if (c === ';' && cases[cases.length - 1] === 'body' && (cmd[i + 1] === ';' || cmd[i + 1] === '&')) {
@@ -1246,12 +1316,42 @@ const ENDS_UNREAD = 'fed a heredoc the shells do not end where it is read to end
 // A quote bash and zsh do not read alike (shellsDiffer): the command it stands in, and every one
 // read after it, since the reader took one shell's reading and the other shell runs the call too.
 const SHELLS_UNREAD = 'read past a quote bash and zsh do not read alike, so what the shell runs from that quote on cannot be read'
+// #3496: shapes the reader read on past with nothing said, each measured 2026-11-25 on bash 3.2.57
+// and zsh 5.9 with programs that only print. The command each stands in keeps the words it had and
+// says why they are not the whole of what the shell does there.
+// A pattern whose qualifier zsh runs as code for each file it matches (split, `doubts`).
+const ZSH_UNREAD = 'holding a pattern whose qualifier zsh may run as code, so what the shell runs there cannot be read'
+// `$"..."`, which bash hands on as the text between the quotes and zsh as that text after a $.
+const WORD_UNREAD = 'holding a word bash and zsh do not hand on alike, so what it names cannot be read'
+// A backslash and a new line right after a $, or between two <. bash joins the lines first, so
+// `$`, the join and `(p3 a)` is a substitution that runs p3, and `<`, the join and `<EOF` opens a
+// heredoc; zsh hands the first on as text and refuses the second. Both read `$`, the join and a
+// quote as a `$'...'` string, where the reader reads a plain quote.
+const JOINED_UNREAD = 'holding a backslash and a new line inside what bash joins into one mark and zsh does not, so what the shell runs there cannot be read'
+// More than one input on one command: a pipe and a heredoc, two heredocs, a heredoc beside a file
+// or a here string. zsh feeds the command every one, one after another, and bash only the last
+// (`echo a | p2 <<EOF` gives p2 the line a and then the body in zsh, and the body alone in bash).
+// The reader gives the earlier one as replaced, which is bash's reading alone.
+const INPUTS_UNREAD = 'given more than one input, which zsh feeds it one after another and bash only the last of, so what it reads cannot be read'
+// A heredoc dropHeredocs opened that no word of any command opens as read: `cat '<'<<'EOF'`, whose
+// quoted < the word reader joins to the << into the here string word `<<<EOF`, so the body was
+// dropped from every command (for `bash -s '<'<<'EOF'` both shells run the body's commands).
+const UNPLACED_UNREAD = 'beside a heredoc that no word of a command opens as read, so what is fed its body cannot be read'
+// `source` or `.` reading its script from standard input (`source /dev/stdin <<'EOF'`): both shells
+// run the body as commands of the shell itself. Where the body can be read it is read as those
+// commands (emit); where it cannot, the command says so.
+const SOURCE_UNREAD = 'run as text by source from its standard input, which cannot be read, so what it runs cannot be read'
 /**
  * The reasons a command is `unread` because the reader stopped in it (#3491), not because of what
- * it is. Its words are read as they always were, so a reader of what a command does still reads
- * them: the mark is added to that reading and never stands in its place.
+ * it is, and since #3496 because it stands at a shape the reader is not sure of. Its words are read
+ * as they always were, so a reader of what a command does still reads them: the mark is added to
+ * that reading and never stands in its place.
  */
-export const READ_STOPPED: ReadonlySet<string> = new Set([QUOTE_UNREAD, HEREDOC_UNREAD, TORN_UNREAD, ENDS_UNREAD, SHELLS_UNREAD])
+export const READ_STOPPED: ReadonlySet<string> = new Set([QUOTE_UNREAD, HEREDOC_UNREAD, TORN_UNREAD, ENDS_UNREAD, SHELLS_UNREAD, ZSH_UNREAD, WORD_UNREAD, JOINED_UNREAD, INPUTS_UNREAD, UNPLACED_UNREAD, SOURCE_UNREAD])
+// A name and its = with nothing after, where a ( opens an array's values and no pattern's group.
+const SETS_ARRAY = /^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=$/
+// The names `source` and `.` read their own standard input by.
+const STDIN_FILES: ReadonlySet<string> = new Set(['/dev/stdin', '/dev/fd/0', '/proc/self/fd/0'])
 const SETS_PART = /^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=/
 const PLAIN_NAME = /^[A-Za-z0-9._+@%,:-]+$/
 type Places = { unexpanded?: boolean[]; bare?: number[][]; arithmetic?: boolean }
@@ -1560,6 +1660,7 @@ export type Command = {
   derived?: (Derived | null)[]
   worked?: (string | null)[]
   followed?: (string | null)[]
+  background?: true
 }
 
 /**
@@ -1750,7 +1851,11 @@ const emit = (words: string[], fed: Fed, feed: Feed, out: Line, opts: ReadOption
   const language = program || script ? languageOf(kind) : undefined
   const verdict = language && program && 'text' in program ? codeVerdict(language, program.text) : undefined
   // Why what it runs cannot be read (#3021, unreadOf), where nothing before it already said so.
-  const unread = feed.unread ?? unreadOf(words, { unexpanded, bare: splits, arithmetic: feed.arithmetic }) ?? feed.stops
+  // `source` or `.` handed its own standard input as the script (#3496, SOURCE_UNREAD): the text
+  // there, where it can be read, is run by the shell itself.
+  const sourced = (words[0] === 'source' || words[0] === '.') && STDIN_FILES.has(words[1] ?? '')
+  const sourcedText = sourced && stdin && 'text' in stdin ? stdin.text : undefined
+  const unread = feed.unread ?? unreadOf(words, { unexpanded, bare: splits, arithmetic: feed.arithmetic }) ?? feed.stops ?? (sourced && sourcedText === undefined ? SOURCE_UNREAD : undefined)
   out.push({
     words,
     ...(feed.summed ? { arithmetic: true as const } : {}),
@@ -1769,6 +1874,9 @@ const emit = (words: string[], fed: Fed, feed: Feed, out: Line, opts: ReadOption
     ...(worked && worked.some(w => w !== null) ? { worked } : {}),
     ...(followed && followed.some(f => f !== null) ? { followed } : {}),
   })
+  // What source runs from its standard input, after the source command itself, each command fed
+  // the rest of that text as a shell's script's commands are.
+  if (sourcedText !== undefined) out.push(...readLine(sourcedText, opts, { stdin: { unreadable: 'fed the rest of the script source reads' }, ...carried(feed) }))
   // Its {} stands for each thing find finds, which this reader writes as the folder find starts
   // from, so the command carries those folders as `found`: what it changes at one of them is that
   // folder and everything under it (#760: `find src -exec rm {} \;` was read as removing src alone),
@@ -2198,7 +2306,7 @@ export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
   // What is asked of the text this line holds within it (a substitution, a shell's script, a trap's
   // text): everything asked of the line but `follow`, which is for the call's own text alone.
   const nested: ReadOptions = opts.follow ? { ...opts, follow: false } : opts
-  const { text, heredocs, unended, removed, unsure } = dropHeredocs(cmd, !outer.within)
+  const { text, heredocs, unended, removed, unsure, late } = dropHeredocs(cmd, !outer.within)
   const heredocAt = new Map(heredocs.map(h => [h.at, h]))
   // Each word's expansions outside quotes, by its place in the text (#1834).
   const bare = new Map<number, number[]>()
@@ -2217,7 +2325,9 @@ export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
   const compares = new Set<number>()
   // Each `${` in double quotes holding a quote bash and zsh do not read alike (braceDiffers), by its place.
   const braces: number[] = []
-  const read = split(text, bare, literal, unexpanded, subbed, worked, compares, braces)
+  // Each place the word reader read on past a shape it is not sure of (#3496), with why.
+  const doubts: Doubt[] = []
+  const read = split(text, bare, literal, unexpanded, subbed, worked, compares, braces, doubts)
   const begun = read.map(r => begins(r.words, r.starts, (w, at) => /[$`]/.test(w) && !unexpanded.has(at)))
   // A substitution runs in the shell running the line, so it splits words as that shell does, and
   // is run with that shell's settings, behind what that shell is (#3093).
@@ -2385,7 +2495,44 @@ export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
     })
     for (let k = first; k < read.length; k++) if (!stops.has(k)) stops.set(k, SHELLS_UNREAD)
   }
+  // A heredoc opened only since #3496 (dropHeredocs, `late`): its lines are read as commands too,
+  // as they were before it opened, each run of lines once.
+  for (const h of heredocs) {
+    const r = late.includes(h.at) && !inSub(h.at) ? runOf(h.at) : undefined
+    if (!r || unheld.has(r)) continue
+    place(h.at, readLine(r.lines.join('\n'), nested, feedAt(h.at)))
+    unheld.add(r)
+  }
+  // #3496, each after every older reason, so a command that had one keeps it.
+  // A heredoc of the line's own that no word of a command opens as read (UNPLACED_UNREAD), where
+  // its << stands right after a quoted or escaped < in the same word (`'<'<<`, `"<"<<`, `\<<<`),
+  // which the word reader joins to it: the command standing there. A << the line reader opened
+  // inside quoted text or a comment is not this shape and is left as it was.
+  for (const h of heredocs) {
+    if (inSub(h.at)) continue
+    const joined = read.some(r => r.starts.some(at => at >= 0 && at < h.at && /^(?:'<'|"<"|\\<)+$/.test(text.slice(at, h.at))))
+    if (!joined) continue
+    stopsAt(h.at, UNPLACED_UNREAD)
+    // Its lines were dropped as a body no command is shown fed, so they are read as commands too,
+    // never as neither, each run of lines once (`bash -s '<'<<'EOF'` runs them in both shells).
+    const r = runOf(h.at)
+    if (!r || unheld.has(r)) continue
+    place(h.at, readLine(r.lines.join('\n'), nested, feedAt(h.at)))
+    unheld.add(r)
+  }
+  // Each shape the word reader was not sure of, on the command standing there.
+  for (const d of doubts) stopsAt(d.at, d.why)
+  // A command given more than one input (INPUTS_UNREAD): a pipe counts as one, and so does each
+  // redirect onto standard input written as one, never a word that only starts with a quoted <
+  // or a < that compares two strings in a test.
   read.forEach((r, k) => {
+    const redirects = r.words.filter((w, n) => {
+      const at = r.starts[n] ?? -1
+      return at >= 0 && onStdin(w) && /^\d*</.test(text.slice(at, at + 4)) && !compares.has(at)
+    }).length
+    if ((r.direct ? 1 : 0) + redirects > 1 && !stops.has(k)) stops.set(k, INPUTS_UNREAD)
+  })
+  const readOne = (r: Split, k: number) => {
     runSubs(k)
     const b = begun[k] as Begun
     if (paren(k, '(')) later.push([])
@@ -2417,6 +2564,14 @@ export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
     const readAs: Begun[] = names ? names.map(v => ({ ...b, words: [v, ...b.words.slice(1)], starts: [-1, ...b.starts.slice(1)] })) : [b]
     for (const c of readAs)
       emit(c.words, fedOf(c), feed, out, nested, outer.splits ? c.starts.map(s => bare.get(s) ?? []) : undefined, c.starts.map(s => literal.has(s)), c.starts.map(s => unexpanded.has(s)), derivedOf(c), c.starts.map(s => worked.get(s) ?? null), tests ? c.starts.map(s => compares.has(s)) : undefined, fixed?.size ? c.starts.map(s => fixed.get(s) ?? null) : undefined)
+  }
+  // #3770: everything a command a lone & ends runs, its substitutions included, runs in the
+  // background with it, so each is marked.
+  const inBackground = (e: Line[number]): Line[number] => ('sub' in e ? { sub: e.sub.map(inBackground) } : { ...e, background: true as const })
+  read.forEach((r, k) => {
+    const from = out.length
+    readOne(r, k)
+    if (r.background) for (let j = from; j < out.length; j++) out[j] = inBackground(out[j] as Line[number])
   })
   for (const texts of later.reverse()) runLater(texts)
   if (doubt !== undefined) DOUBTED.add(out)
@@ -2475,10 +2630,38 @@ const subEnd = (text: string, i: number): number | undefined => {
   const end = c === '`' ? tickEnd(text, i + 1) : (c === '$' || c === '<' || c === '>') && text[i + 1] === '(' ? closing(text, i + 2) : undefined
   return end === undefined ? undefined : end < 0 ? text.length - 1 : end
 }
+// zsh's `=(...)` (#3496): where a word begins, zsh runs the commands inside, writes what they print
+// to a file and hands the command that file's name. Measured 2026-11-25 on zsh 5.9 with programs
+// that only print: `p1 a =(p2 b) c` runs p2 with b, then p1 with a, the file and c. The reader gave
+// p1 the words `=(p2` and `b)` and no p2 at all. bash 3.2 refuses the line and runs nothing. The
+// commands inside are read as commands the line runs (ranged), and the command it stands in keeps
+// the words it was given before, `=(p2` and `b)`: a guard that read a file's name from one of them
+// still does, so the reading only grows. Where the `=(` at `i` ends, as subEnd says it for `<(`,
+// or undefined where none starts: only where a word begins, so `x=(a b)` still sets an array.
+const equalsEnd = (text: string, i: number): number | undefined => {
+  if (text[i] !== '=' || text[i + 1] !== '(' || !(i === 0 || /[ \t\n;&|(]/.test(text[i - 1] as string))) return undefined
+  const end = closing(text, i + 2)
+  return end < 0 ? text.length - 1 : end
+}
 // Inside backticks a backslash before $, a backtick or a backslash stands for that character.
 const unticked = (s: string) => s.replace(/\\([$`\\])/g, '$1')
-// A # begins a comment only where a word would begin.
-const commentAt = (text: string, i: number, start = 0) => i === start || /[\s;&|()]/.test(text[i - 1] as string)
+// A # begins a comment only where a word would begin: at the start, or after a space, a tab, a new
+// line or one of ; & | ( ) that no backslash escapes. Until #3496 this asked JavaScript's \s, which
+// also holds a vertical tab, a carriage return and the Unicode spaces, and never looked for a
+// backslash. After one of those characters, or an escaped blank, a # is part of the word in bash
+// 3.2 and zsh 5.9 (measured 2026-11-25 with programs that only print: `p3 a`, a vertical tab and
+// `#x $(p2)` runs p2 in both, and `p2 a\ #b ; cat <<EOF` opens the heredoc in both), so the
+// substitution or heredoc after it was never read. A backslash before a new line joins the two
+// lines, so the # is judged by what stands before the backslash.
+const commentAt = (text: string, i: number, start = 0): boolean => {
+  if (i <= start) return true
+  const before = text[i - 1] as string
+  if (!/[ \t\n;&|()]/.test(before)) return false
+  let slashes = 0
+  for (let k = i - 2; k >= start && text[k] === '\\'; k--) slashes++
+  if (slashes % 2 === 0) return true
+  return before === '\n' ? commentAt(text, i - 2, start) : false
+}
 
 // The text of a substitution, or of `(( ))`, whose end every reader puts at one place, so a scan
 // can step over it (quotedText): no backslash, backtick, < or # in it, no quote but a pair holding
@@ -2671,7 +2854,13 @@ const shellsDiffer = (text: string, until = Infinity): number | undefined => {
   let quoted: [number, number][] | undefined
   for (let i = text.indexOf('(('); i >= 0; i = text.indexOf('((', i + 1)) {
     if (i < until && inQuotedText((quoted ??= quotedText(text)), i)) continue
-    if (closing(text, i + 2) === bareClosing(text, i + 2)) continue
+    const end = closing(text, i + 2)
+    // A # where a word would begin, with a quote after it on its line (#3496): `closing` reads it
+    // as a comment, as zsh does, and bash 3.2 reads the quote, since inside `(( ))` a # starts no
+    // comment to it. Measured 2026-11-25: after `(( 1 +`, `2 # it's` and `))`, zsh runs the two
+    // lines below and bash nothing; with `$((` it is bash that runs them and zsh nothing.
+    const inner = text.slice(i + 2, end < 0 ? text.length : end)
+    if (end === bareClosing(text, i + 2) && !/(?:^|[ \t\n;&|()])#[^\n]*['"`]/.test(inner)) continue
     found.push(i)
     break
   }
@@ -2688,11 +2877,29 @@ const shellsDiffer = (text: string, until = Infinity): number | undefined => {
 // `"${u:-'a b'}"`, `"${u:-${v:-'a'}}"`, `"${R%$'\n'*}"`, `"${u:-$'a\tb'x}"` and `"${u:-'a\b'}"`
 // run the same commands in both. Anything else holding a quote is taken as one they differ on: the
 // shapes measured, and those not measured.
+//
+// A `${` holding another (#3496): the text was read to the first }, which closes the inner one, so
+// a quote after it was never looked at. `p1 "${u:-${v}'"'}" ; p2 # it's` runs p1 and p2 in bash 3.2
+// and nothing in zsh 5.9 (measured 2026-11-25). So the text is read a second time to the } that
+// closes this `${`, each `${` inside it counted, and the same rule asked of that. Either reading
+// finding such a quote is enough, so nothing marked before loses its mark.
 const braceDiffers = (text: string, i: number): boolean => {
+  const differs = (inner: string): boolean => {
+    const quotes = inner.split("'").length - 1
+    return quotes > 0 && (quotes % 2 === 1 || /"|\\'/.test(inner))
+  }
   const end = text.indexOf('}', i + 2)
-  const inner = text.slice(i + 2, end < 0 ? text.length : end)
-  const quotes = inner.split("'").length - 1
-  return quotes > 0 && (quotes % 2 === 1 || /"|\\'/.test(inner))
+  if (differs(text.slice(i + 2, end < 0 ? text.length : end))) return true
+  let depth = 1
+  let close = text.length
+  for (let k = i + 2; k < text.length; k++) {
+    if (text[k] === '$' && text[k + 1] === '{') depth++
+    else if (text[k] === '}' && --depth === 0) {
+      close = k
+      break
+    }
+  }
+  return close !== end && differs(text.slice(i + 2, close))
 }
 // Each line read past a quote bash and zsh do not read alike, so the line a substitution stands in
 // can tell that the substitution's own text was (readLine): where such a substitution ends cannot
@@ -2754,9 +2961,10 @@ const ranged = (text: string, body: boolean): Ranged[] => {
       const to = end < 0 ? text.length : end
       out.push({ text: text.slice(i + 2, to), at: i, from: i + 2, to })
       i = to
-    } else if ((c === '<' || c === '>') && text[i + 1] === '(' && !body && !quoted) {
+    } else if (((c === '<' || c === '>') && text[i + 1] === '(' && !body && !quoted) || (!body && !quoted && equalsEnd(text, i) !== undefined)) {
       // A process substitution (#975) runs its commands as the command it sits in starts; in double
-      // quotes or a heredoc's body it is text.
+      // quotes or a heredoc's body it is text. zsh's `=(...)` where a word begins runs them the
+      // same way (#3496, equalsEnd).
       const end = closing(text, i + 2)
       const to = end < 0 ? text.length : end
       out.push({ text: text.slice(i + 2, to), at: i, from: i + 2, to, process: true })
