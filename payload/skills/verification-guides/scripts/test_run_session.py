@@ -2567,6 +2567,47 @@ class CutOffTests(RunFixture):
         self.assertEqual((left, asked), ([], []), "a supervisor with no child left to hold left without an ending")
         self.assertEqual((rec["stopped_by"], monitor.asked), ("stop", 1), rec)
 
+    # -- what the sixth #3807 review found --
+    #
+    # Every signal below is sent through signal_own to a child this process holds uncollected, or
+    # is recorded by a stand in and not sent.
+
+    def git_cannot_be_started(self):
+        """git on a system that is refusing new processes: the call itself raises, as ps does there."""
+        def refused(repo, *args, check=True):
+            raise BlockingIOError(errno.EAGAIN, "a stand in for a fork that was refused at git")
+
+        return mock.patch.object(run_session, "git", refused)
+
+    def assert_ended_with_the_worktree_left(self, rec, rdir, reason, serve):
+        self.assertEqual(rec, self.on_disk(rdir))
+        self.assertEqual((rec["stopped_by"], rec["serve_exit"], rec["worktree_removed"]),
+                         (reason, -signal.SIGKILL, False), rec)
+        self.assertIn("the worktree (%s) could not be removed" % rec["worktree"], rec["stop_detail"])
+        self.assertIn("a stand in for a fork that was refused at git", rec["stop_detail"])
+        self.assertIsNone(rec["serve_survivors"])
+        self.assertEqual(rec["egress"]["verdict"], "unmeasured", rec["egress"])
+        self.assertEqual(wait_group_empty(serve.pid), [], "serve's group outlived a stop that could not list it")
+
+    def test_a_stop_on_a_system_refusing_new_processes_still_records_its_ending(self):
+        # A system that refuses ps refuses the git that removes the worktree a moment later. Raised
+        # out of the stop from there, that left no ending with the file gone and serve collected.
+        serve = self.child()
+        rdir = self.a_run_on_disk(recoverable=True, serve_pid=serve.pid, serve_pgid=serve.pid)
+        with mock.patch.object(run_session, "live_members", dict(self.unread_ways())["ps could not be started"]), \
+                self.git_cannot_be_started():
+            rec = run_session.do_stop(rdir, "stop", proc=serve, monitor=MonitorThatSaysClean())
+        self.assert_ended_with_the_worktree_left(rec, rdir, "stop", serve)
+
+    def test_a_cut_off_on_a_system_refusing_new_processes_still_records_its_ending(self):
+        serve = self.child()
+        rdir = self.a_run_on_disk(recoverable=True, serve_pid=serve.pid, serve_pgid=serve.pid)
+        with mock.patch.object(run_session, "live_members", dict(self.unread_ways())["ps could not be started"]), \
+                self.git_cannot_be_started():
+            rec = run_session.cut_off(rdir, "caller_gone", "its caller was gone and the stop had not finished",
+                                      proc=serve)
+        self.assert_ended_with_the_worktree_left(rec, rdir, "caller_gone", serve)
+
     # -- the rest of what the second #3807 review found --
 
     def gone_caller(self):

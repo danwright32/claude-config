@@ -801,6 +801,23 @@ def remove_worktree(repo, wt):
     return not os.path.exists(wt) and ("worktree " + wt + "\n") not in listed + "\n"
 
 
+def worktree_gone(repo, wt, detail):
+    """remove_worktree for a stop and for a cut off, which must go on to record an ending whatever
+    becomes of it (the sixth #3807 review). Returns whether the worktree is gone, and the detail.
+
+    git is a new process, and a system that is refusing new processes, which is what keeps a ps
+    from being started, refuses the git that follows a moment later: the call itself raises. That
+    is caught here, the answer is False, and the detail says the worktree could not be removed and
+    why. Raised out of the stop it left no ending with the supervisor's file already gone and serve
+    collected, so a later `stop` signalled nothing. A git that RAN and failed raises nothing and is
+    judged by what is left on disk, and one that hangs has no limit of its own: both as before."""
+    try:
+        return remove_worktree(repo, wt), detail
+    except (OSError, subprocess.SubprocessError) as e:
+        return False, ((detail + "; " if detail else "") + "the worktree (%s) could not be removed: git could not"
+                       " be run (%s: %s)" % (wt, type(e).__name__, e))
+
+
 def finish_egress(rdir, rec, monitor, egress_why, by_receipt=False):
     """The receipt's egress field, and the report stream stopped, whatever state the monitor is in.
 
@@ -953,7 +970,7 @@ def do_stop(rdir, reason, proc=None, detail=None, monitor=None, egress_why=None,
         # The monitor is still asked, which is what ends its stream, and what it SAW is kept: a
         # verdict that is not clean, or one already unmeasured, stands with its own words.
         egress_field = dict(egress_field, verdict="unmeasured", why=EGRESS_UNREAD % unread, measured_to=None)
-    removed = remove_worktree(rec["repo"], wt)
+    removed, detail = worktree_gone(rec["repo"], wt, detail)
     return record_ending(rdir, stopped_by=reason, stop_detail=detail,
                          serve_exit=serve_exit, stop_command_exit=stop_exit, worktree_removed=removed,
                          serve_survivors=survivors, egress=egress_field)
@@ -1057,7 +1074,7 @@ def cut_off(rdir, reason, why, detail=None, proc=None, monitor=None, leave=None)
         left = egress.remove_beat_program(rdir)
         if left:
             egress_why += "; " + left
-        removed = remove_worktree(rec["repo"], rec.get("worktree") or os.path.join(rdir, "worktree"))
+        removed, detail = worktree_gone(rec["repo"], rec.get("worktree") or os.path.join(rdir, "worktree"), detail)
         return update_receipt(rdir, stopped_at=v.utc_now(), stopped_by=reason, stop_detail=detail,
                               serve_exit=serve_exit, stop_command_exit=stop_exit, worktree_removed=removed,
                               serve_survivors=survivors,
