@@ -6612,8 +6612,27 @@ SHARED_SETTINGS_FILE="settings.shared.json"
 # **/payload/CLAUDE.md would stop every project's payload/CLAUDE.md loading (lessons review of
 # #3635), so the shared file cannot be used to stop any other rules file. The list is written
 # whole, as every shared value is.
-SHARED_SETTINGS_ALLOWED="ultracode modelSettings skillListingMaxDescChars outputStyle env claudeMdExcludes"
-SHARED_SETTINGS_DESC="ultracode, modelSettings.<model>.effortLevel, skillListingMaxDescChars, outputStyle, env.CLAUDE_CODE_SUBAGENT_MODEL, claudeMdExcludes"
+#
+# THE READ DENY RULES ARE SHARED (#3563, on Dan's sign off, recorded on that issue's pull request).
+# Measured on both Macs (2026-11-24 and 2026-11-25), neither settings.json held one deny rule, so a
+# session's file tools could open an SSH private key or a stored Cloudflare or Salesforce CLI
+# login. permissions is the one name on SHARED_SETTINGS_ALLOWED whose setting is not written as
+# the shared file holds it.
+#
+# How it lands. permissions is otherwise each Mac's own, so nothing under
+# it is ever written whole: the pull ADDS each shared rule a Mac's permissions.deny lacks, after
+# the rules already there, and leaves its allow and ask rules, its mode, its extra folders and its
+# own deny rules exactly as they were. A rule a Mac already holds is not added twice, so a second
+# pull changes nothing. A rule is never removed: taking one out of the shared file leaves it on
+# each Mac, so this file can make a Mac refuse more and never less. Only permissions.deny may be
+# in the shared file, and only the rules on SHARED_DENY_RULES. Each of those names one folder of
+# stored logins under ~/, which Claude Code reads as the home folder of whoever runs it, so the
+# text is the same on both Macs. Any other key under permissions (an allow or ask rule, a mode) and
+# any other rule is refused whole: Read(~/**) would stop every session on both Macs reading its
+# own project, and would stay until removed by hand on each.
+SHARED_DENY_RULES="Read(~/.ssh/**) Read(~/.sfdx/**) Read(~/Library/Preferences/.wrangler/config/**)"
+SHARED_SETTINGS_ALLOWED="ultracode modelSettings skillListingMaxDescChars outputStyle env claudeMdExcludes permissions"
+SHARED_SETTINGS_DESC="ultracode, modelSettings.<model>.effortLevel, skillListingMaxDescChars, outputStyle, env.CLAUDE_CODE_SUBAGENT_MODEL, claudeMdExcludes, permissions.deny"
 SHARED_OUTPUT_STYLES="default Explanatory Learning"
 SHARED_ENV_ALLOWED="CLAUDE_CODE_SUBAGENT_MODEL"
 SHARED_MODEL_ALIASES="opus sonnet haiku fable"
@@ -6624,6 +6643,11 @@ SHARED_SETTINGS_APPLY_JQ='def apply_shared($s): reduce ($s | to_entries[]) as $e
     reduce ($e.value | to_entries[]) as $m (.; reduce ($m.value | to_entries[]) as $f (.; .modelSettings[$m.key][$f.key] = $f.value))
   elif $e.key == "env" then
     reduce ($e.value | to_entries[]) as $v (.; if $v.value == null then del(.env[$v.key]) else .env[$v.key] = $v.value end)
+  elif $e.key == "permissions" then
+    reduce (($e.value.deny // [])[]) as $r (.;
+      (.permissions.deny // []) as $have
+      | if ($have | type) != "array" then error("permissions.deny in settings.json is not a list")
+        elif ($have | any(.[]; . == $r)) then . else .permissions.deny = $have + [$r] end)
   else .[$e.key] = $e.value end);'
 STATUS_LINE_SCRIPT_REL="mods/status-bar/statusline.sh"
 status_line_command(){ printf 'bash %s/%s' "$CLAUDE_HOME" "$STATUS_LINE_SCRIPT_REL"; }
@@ -6687,8 +6711,19 @@ shared_settings_wanted(){
           (.[] | select(type != "string" or (test("^\\*\\*/(claude-config/|claude-config/\\.claude/worktrees/\\*/|claude-config-sync/)payload/CLAUDE\\.md$") | not)) |
             "claudeMdExcludes holds \(tojson), not one of the forms **/claude-config/payload/CLAUDE.md, **/claude-config/.claude/worktrees/*/payload/CLAUDE.md or **/claude-config-sync/payload/CLAUDE.md (it may exclude only a copy of this repository'"'"'s rules file, and names no home folder)")
         end)
+      else empty end),
+      (if has("permissions") then
+        (.permissions | if type != "object" then "permissions is \(tojson), not an object holding a deny list" else
+          ((keys - ["deny"])[] | "permissions.\(.) is not a setting the sync shares (only permissions.deny, which can make a Mac refuse more and never less; an allow or ask rule, a mode and every other permission setting stay each Mac'"'"'s own)"),
+          (if has("deny") | not then "permissions holds no deny list, the one thing under it the sync shares" else
+            (.deny | if type != "array" or length == 0 then "permissions.deny is \(tojson), not a list of rules" else
+              (.[] | select(. as $r | ($r | type) != "string" or ($denyok | split(" ") | any(.[]; . == $r) | not)) |
+                "permissions.deny holds \(tojson), not one of the rules the sync shares (\($denyok | split(" ") | join(", "))); each names one folder of stored logins under ~/, and a wider rule would stop sessions on both Macs reading their own files")
+            end)
+          end)
+        end)
       else empty end)
-    ] | join("; ")' --arg styles "$SHARED_OUTPUT_STYLES" --arg envok "$SHARED_ENV_ALLOWED" --arg aliases "$SHARED_MODEL_ALIASES" <<< "$obj" 2>/dev/null)" || bad="the file could not be checked (jq failed on it)"
+    ] | join("; ")' --arg styles "$SHARED_OUTPUT_STYLES" --arg envok "$SHARED_ENV_ALLOWED" --arg aliases "$SHARED_MODEL_ALIASES" --arg denyok "$SHARED_DENY_RULES" <<< "$obj" 2>/dev/null)" || bad="the file could not be checked (jq failed on it)"
   if [ -n "$bad" ]; then
     echo "claude-sync: refused $SHARED_SETTINGS_FILE because $bad, so nothing from it was written into settings.json. Fix the value in the repo." >&2
     printf '{}'; return 0
@@ -6716,7 +6751,17 @@ write_settings_extras(){
        "$cur" > "$tmp" 2>/dev/null; then
     [ -n "$had" ] || rm -f "$cur"
     rm -f "$tmp"
-    echo "claude-sync: could not write the status line or the shared settings (${names:-$SHARED_SETTINGS_DESC}) into settings.json, so it was left exactly as it was. That usually means it is not valid JSON: check it with 'jq . $settings', fix it, then pull again." >&2
+    # Two causes of their own, each said as itself (L11): the file parses, and either permissions
+    # is not an object at all, or the list the shared deny rules are added to is not a list (#3563).
+    local why="That usually means it is not valid JSON: check it with 'jq . $settings', fix it, then pull again."
+    if [ -n "$had" ] && jq -e 'has("permissions")' <<< "$shared" >/dev/null 2>&1; then
+      if jq -e 'has("permissions") and (.permissions | type | . != "object" and . != "null")' "$settings" >/dev/null 2>&1; then
+        why="Its permissions is not an object, so there is no deny list to add the shared deny rules to: make it an object in $settings (or remove it), then pull again."
+      elif jq -e '(.permissions.deny // []) | type != "array"' "$settings" >/dev/null 2>&1; then
+        why="Its permissions.deny is not a list of rules, so the shared deny rules could not be added to it: make it a list in $settings (or remove it), then pull again."
+      fi
+    fi
+    echo "claude-sync: could not write the status line or the shared settings (${names:-$SHARED_SETTINGS_DESC}) into settings.json, so it was left exactly as it was. $why" >&2
     # Said, not notified: an unreadable settings.json already raises the hooks block's notification on
     # the same apply, and a second one per run for the same fault is the alert people learn to
     # dismiss (review of #775, L36).
@@ -6738,6 +6783,33 @@ write_settings_extras(){
   [ -n "$want_sl" ] && record_applied updated "settings.json (status line: $STATUS_LINE_SCRIPT_REL)"
   return 0
 }
+# THE SHARED DENY RULES THIS MAC LACKS (#3563). A deny rule taken out of settings.json by hand, or
+# by anything that rewrites the file, leaves nothing behind to notice: the files it covered simply
+# open again. So status names each rule the shared file lists and this Mac's permissions.deny does
+# not hold, with the pull that puts it back. Read through the apply's own reading of the shared
+# file, so a file the apply refuses has nothing to report here (the apply says why), and quiet
+# while every rule is there or the shared file lists none.
+report_shared_deny_rules(){
+  local settings="$CLAUDE_HOME/settings.json" want missing rc=0
+  command -v jq >/dev/null 2>&1 || return 0
+  want="$(shared_settings_wanted 2>/dev/null)"
+  jq -e 'has("permissions")' <<< "$want" >/dev/null 2>&1 || return 0
+  if [ -f "$settings" ]; then
+    missing="$(jq -r --argjson s "$want" '(.permissions.deny // []) as $have
+      | if ($have | type) != "array" then error("not a list") else $s.permissions.deny[] | select(. as $r | $have | any(.[]; . == $r) | not) end' "$settings" 2>/dev/null)" || rc=$?
+  else
+    missing="$(jq -r '.permissions.deny[]' <<< "$want" 2>/dev/null)" || rc=$?
+  fi
+  if [ "$rc" -ne 0 ]; then
+    echo "--- the deny rules both Macs share ---"
+    echo "  claude-sync could not check whether $settings holds the deny rules $SHARED_SETTINGS_FILE lists: it is not valid JSON, or its permissions is not an object holding a list of deny rules (jq exit $rc). Until it is fixed no pull can add them, so Claude Code's file tools may open the stored logins they cover."
+    return 0
+  fi
+  [ -n "$missing" ] || return 0
+  echo "--- the deny rules both Macs share ---"
+  echo "  permissions.deny in $settings lacks: $(printf '%s\n' "$missing" | paste -sd',' - | sed 's/,/, /g'). $SHARED_SETTINGS_FILE lists each as a deny rule for both Macs, so on this Mac Claude Code's file tools can open the stored logins it covers. Run 'claude-sync pull' to put back what is missing."
+  return 0
+}
 report_settings_extras(){
   local st
   st="$(status_line_state)"
@@ -6746,6 +6818,7 @@ report_settings_extras(){
       echo "--- settings this sync writes ---"
       echo "  statusLine in $CLAUDE_HOME/settings.json runs ${st#*$'\t'}, not this Mac's status bar ($(status_line_command)), so the status bar mod's line does not show here. The sync never overwrites it: delete the statusLine entry and the next pull writes the status bar's." ;;
   esac
+  report_shared_deny_rules
   report_shared_effort_model
   report_review_option
   report_pinned_compiler

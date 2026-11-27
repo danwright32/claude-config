@@ -3,7 +3,7 @@ import { appNameOf, classify, judge, refusalText, type Refusal } from './keys.ts
 import { publishInstead } from './mod-kit/deliver.ts'
 import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
 import { HOLD_MAX_MS, whileHeld } from './mod-kit/held.ts'
-import { neverThrows } from './mod-kit/hold.ts'
+import { cutCheck } from './mod-kit/hold.ts'
 import { type AskedIo, recordedAsk } from './mod-kit/asked.ts'
 import type {} from '../types/index.d.ts'
 
@@ -224,12 +224,12 @@ export const register: Register = on => {
     const declined = await headsUp($, app, typing, c.app !== undefined)
     if (declined) return refuse(declined)
     return decided
-  }).catch(($, e, next) => neverThrows(
+  }).catch(($, e, next) => cutCheck('the keystroke guard', next, {
     // A hook that fails is skipped and the verdict beneath stands, which would let the keystroke
     // through unchecked, so a failure here refuses (L42). Nothing has run yet at tool.check. Should
     // naming the failure fail too, the refusal says unknown failure, so the catch never throws (#2039).
-    () => cannotCheck(next.error ? errorText(next.error, 'keystroke-guard') : 'unknown failure'),
-    () => HELD,
-    HELD,
-  ))
+    work: () => cannotCheck(next.error ? errorText(next.error, 'keystroke-guard') : 'unknown failure'),
+    held: () => HELD,
+    last: HELD,
+  }))
 }

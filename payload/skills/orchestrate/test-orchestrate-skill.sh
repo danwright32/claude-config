@@ -170,6 +170,24 @@ check "#3095 agent rules say to close every tab the agent did not mean to open" 
 check "#3095 agent rules say to finish by closing every tab the agent opened" "$(has "$RULES" 'close every tab you opened')"
 check "#3095 the tabs_context_mcp prohibition carries the one exception" "$(has "$RULES" 'except to close a tab your own click opened')"
 
+# claude-config#3542: on the night of 2026-11-23 the orchestrator restated these rules by hand in every
+# brief, one brief left one out, and that agent pushed past a lessons review finding with the review's
+# read key. Each now lives once in the agent rules, and a brief names only what is particular to its
+# item. Each check matches a phrase only that rule writes, so a later trim cannot drop one in silence.
+check "#3542 agent rules forbid the lessons review's read key" "$(has "$RULES" "Never use the lessons review's read key")"
+check "#3542 agent rules say a finding judged not real is handed back and the push waits" "$(has "$RULES" 'hand it back, and the push waits')"
+check "#3542 agent rules read the load before a push against the brief's limit" "$(has "$RULES" 'run `uptime` before each push')"
+check "#3542 agent rules run only the brief's suites, one at a time, on a quiet Mac" "$(has "$RULES" 'unless your brief says the Mac must stay quiet')"
+check "#3542 agent rules leave an hour long count to the main session" "$(has "$RULES" 'An hour long count')"
+check "#3542 agent rules let an agent decide an area check hold, never by restructure" "$(has "$RULES" 'never `restructure`')"
+check "#3542 agent rules stop for Dan before any allowlist or exemption entry" "$(has "$RULES" 'add an allowlist or exemption entry')"
+check "#3542 agent rules forbid an amend or a force push" "$(has "$RULES" 'Never amend a commit or force push')"
+check "#3542 agent rules point a no verdict refusal at its one home" "$(has "$RULES" 'One unchanged resend after no verdict')"
+check "#3542 agent rules never count refusals their own way" "$(grep -i -F -q -- 'refused twice' "$RULES" && echo 'says refused twice, which the no verdict rule does not' || echo ok)"
+briefs="$(section "## 3. Briefs")"
+check "#3542 a brief names only what is particular to its item" "$(text_has "$briefs" 'a brief names only what is particular to its item' 'section 3 does not limit a brief to its item')"
+check "#3542 a brief never restates a shared rule" "$(text_has "$briefs" 'never restates a shared rule' 'section 3 does not forbid restating a shared rule')"
+
 # claude-config#2563: the merge command written in the skill and in the global rules must carry
 # every argument the helper's usage marks required, say it runs from inside a checkout, and say how
 # the merge method is chosen. Required is read from the helper's own usage line: a token outside [].
@@ -213,6 +231,44 @@ check "#3317 a held item is not started and the board says who holds it" "$(hold
 check "#3317 a failed check is not read as free" "$(holds "$claiming" 'nothing was claimed' 'no could not check rule')"
 check "#3317 the release command is written out" "$(holds "$claiming" 'bash ~/.claude/skills/orchestrate/claim-issue.sh release <owner/repo> <issue number> <branch>' 'no release command')"
 check "#3317 a read only item needs no claim" "$(holds "$claiming" 'needs no claim' 'no read only exemption')"
+# claude-config#3788: a pull request holds an issue only when it is built for it. The skill says
+# which pull requests those are, and that a `mentioned, not held` line is no reason to hold back.
+check "#3788 the skill says which pull requests hold an issue" "$(holds "$claiming" 'the open pull requests built for it' 'no built for wording')"
+check "#3788 the skill says a mention is a note that holds nothing" "$(holds "$claiming" '`mentioned, not held`' 'no mentioned, not held wording')"
+# claude-config#3804: two sessions on one Mac are two claimants. The skill says what a session is
+# to the script and that it is the same one after a compaction, that ALREADY CLAIMED
+# means this session's own claim, what makes a branch under the claimed name this session's, and
+# how a claim that names no session is taken over on purpose.
+check "#3804 the skill says what identifies the claiming session" "$(holds "$claiming" 'CLAUDE_CODE_SESSION_ID' 'no word of what identifies a session')"
+check "#3804 the skill says a session is the same after a compaction" "$(holds "$claiming" 'it is the same after a compaction, and a new one after a `/clear`' 'no word of a compaction')"
+# A restart is said as far as it was measured, and no further: the transcript went on under one
+# id, and the variable the script reads was not read in a restarted session (the lessons review of
+# the second round of review fixes).
+check "#3804 the skill says what was measured after a restart, and what was not" "$(holds "$claiming" 'the variable itself was not read in a restarted session' 'no word that the variable was not read after a restart')"
+check "#3804 the skill says what a restarted session meets if its id changed" "$(holds "$claiming" 'A restarted session that is told `HELD` by a claim it posted has been given a new id' 'no word of a restarted session held by its own claim')"
+check "#3804 the skill says ALREADY CLAIMED is this session's own claim" "$(holds "$claiming" "\`ALREADY CLAIMED\` is this session's own claim" 'no word that ALREADY CLAIMED is this session alone')"
+check "#3804 the skill says another session on the same Mac is held" "$(holds "$claiming" 'another session on the same Mac' 'no word of two sessions on one Mac')"
+check "#3804 the skill says what makes a branch under the claimed name this session's" "$(holds "$claiming" 'accounts for it' 'no word of what makes a branch this session own')"
+check "#3804 the skill says how a claim with no session recorded is taken over" "$(holds "$claiming" 'no session recorded' 'no word of a claim with no session recorded')"
+check "#3804 the skill says a session id that cannot be read stops the claim" "$(holds "$claiming" 'cannot read its session' 'no word of an unreadable session id')"
+# The review of that change: taking over a claim with no session recorded is a word of its own,
+# never what a plain release does (Finish runs release for every claim, so a release that took
+# claims over would do it by accident), and a session that is not the claimant is held by the
+# claimant's pushed branch or open pull request for as long as either is up, not only until the
+# claim goes stale.
+check "#3804 the take over command is written out" "$(holds "$claiming" 'bash ~/.claude/skills/orchestrate/claim-issue.sh takeover <owner/repo> <issue number> <branch> "<reason>"' 'no take over command')"
+check "#3804 the skill says a plain release never ends a claim with no session recorded" "$(holds "$claiming" '`release` never ends a claim with no session recorded' 'no word that release leaves such a claim alone')"
+check "#3804 the skill says a release that ended nothing for that reason exits 1" "$(holds "$claiming" 'answers `NOT RELEASED`, exit 1' 'no word that NOT RELEASED is exit 1')"
+# The second review of that change: that answer is the one a session with no claim of its own on
+# the branch gets. With one, the release ends that claim alone and says the other still stands.
+check "#3804 the skill says which session gets NOT RELEASED" "$(holds "$claiming" 'Under one from this Mac, where this session has no claim of its own on that branch, it posts nothing' 'no word of which session is answered NOT RELEASED, under which claim')"
+check "#3804 the skill says the other Mac's claim changes nothing in what a release answers" "$(holds "$claiming" 'A claim from the other Mac changes nothing in what `release` answers' 'no word of a release under the other Mac claim')"
+check "#3804 the skill says a release beside this session's own claim ends that claim alone" "$(holds "$claiming" 'Where it has one, it releases that claim alone, answers `RELEASED`, exit 0, and says the claim with no session recorded still stands' 'no word of a release beside the session own claim')"
+check "#3804 the skill says a branch or pull request holds a session that is not the claimant for as long as it is up" "$(holds "$claiming" 'for as long as it is up' 'no word of how long a pushed branch holds')"
+check "#3804 the skill says no command lets a session that is not the claimant through" "$(holds "$claiming" 'no command of this script lets it through' 'no word that nothing lets another session through')"
+check "#3804 Finish says what a NOT RELEASED answer means" "$(holds "$finish" '`NOT RELEASED`' 'Finish does not say what a NOT RELEASED answer means')"
+check "#3804 Finish never takes a claim over to clear it" "$(holds "$finish" '`takeover` is never part of finishing' 'Finish does not say takeover is never part of finishing')"
+check "#3804 the skill says a take over ends this session's own claim on that branch with it" "$(holds "$claiming" "this session's own claim on that branch, if it has one, ends with it" 'no word that a take over ends the caller own claim on the branch too')"
 check "#3317 the board states include held by" "$(holds "$(section "## 4. While agents run")" '`held by <who>`' 'no held by state')"
 check "#3317 Finish releases claims left standing" "$(holds "$finish" 'claim-issue.sh release' 'Finish does not release claims')"
 check "#3317 the script the skill names is there and executable" "$([ -x "$DIR/claim-issue.sh" ] && echo ok || echo "$DIR/claim-issue.sh missing or not executable")"

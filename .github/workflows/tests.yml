@@ -64,8 +64,12 @@ jobs:
   #          merges what each part measured into the one store the next run deals from.
   #
   # The number of parts is the one setting below (HOOK_TESTS_DEAL) and the matrix is read from what
-  # the deal job made of it, never written twice. This repository is public, so its runners cost
-  # nothing; the price of a part is a runner slot held for its length (L307).
+  # the deal job made of it, never written twice. This repository is meant to be public
+  # (.github/expected-visibility), and while it is its runners cost nothing; the price of a part is
+  # a runner slot held for its length (L307). Private, it gets 2 core runners in place of 4 and is
+  # billed for their minutes, which these limits are not sized for: on 2026-11-24 it was private for
+  # some hours, suites ran past their limits and the minutes ran out (#3582).
+  # hooks/repo-visibility-notice.sh says so at session start.
   deal:
     runs-on: ubuntu-26.04
     # Every job here exceeds the suite's own thirty minute ceiling, which test-claude-sync.sh holds
@@ -88,6 +92,10 @@ jobs:
       reused-url: ${{ steps.reuse.outputs.reused-url }}
       tree: ${{ steps.reuse.outputs.tree }}
       tested-sha: ${{ steps.reuse.outputs.tested-sha }}
+      # Main's cold cost case, from tools/ci-cold-cost-streak.sh on a push to main (#3406); empty
+      # elsewhere. The fan in's verdict reads them.
+      cold-streak: ${{ steps.cold-streak.outputs.cold-streak }}
+      cold-streak-why: ${{ steps.cold-streak.outputs.cold-streak-why }}
     steps:
       # First, as in the parts job, where the runner reads it (claude-config#1901).
       - name: Record when the job started
@@ -133,6 +141,31 @@ jobs:
             : > "$RUNNER_TEMP/reuse.out"
           fi
           cat "$RUNNER_TEMP/reuse.out" >> "$GITHUB_OUTPUT"
+
+      # MAIN'S COLD COST CASE, UNMEASURED TOO LONG (claude-config#3406). Where every sample of the
+      # drafts gate's cold cost case runs out of the gate's 11 seconds, the case reports unmeasured
+      # and passes (Dan's decision of 2026-11-26), so a real slowdown could hide there. This reads
+      # the runs that proved main's newest trees and answers red when the case was unmeasured on
+      # each of the last few (the STREAK setting in the tool), green when one measured it, and
+      # unmeasured when the history cannot be read. On pushes to main only, here because this job
+      # alone may read the Actions API; it never fails this job, and the fan in's verdict turns red
+      # on its answer. A tool that exits non zero or runs past its time is an unmeasured answer.
+      - name: Was main's cold cost case measured lately
+        id: cold-streak
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STREAK_REPO: ${{ github.repository }}
+        run: |
+          set +e
+          timeout 150 bash tools/ci-cold-cost-streak.sh > "$RUNNER_TEMP/cold-streak.out"
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            printf 'cold-streak=unmeasured\ncold-streak-why=the check of main'"'"'s recent runs itself exited %s, so they were not read.\n' "$rc" > "$RUNNER_TEMP/cold-streak.out"
+          fi
+          cat "$RUNNER_TEMP/cold-streak.out"
+          cat "$RUNNER_TEMP/cold-streak.out" >> "$GITHUB_OUTPUT"
 
       # What the last runs MEASURED, carried between them (claude-config#203, #144). Two stores
       # live here: what each suite cost, which decides the order the runner launches them in, and
@@ -520,7 +553,9 @@ jobs:
         with:
           name: part-unmeasured-${{ matrix.part }}
           path: ${{ runner.temp }}/unmeasured.tsv
-          retention-days: 1
+          # Seven days, as the green-tree record beside it: tools/ci-cold-cost-streak.sh reads it
+          # back from the runs that proved main's last trees, which on a quiet week span days (#3406).
+          retention-days: 7
           if-no-files-found: warn
 
       - name: The measured timings were actually used
@@ -572,9 +607,10 @@ jobs:
           slots="$(sed -n 's/.* \([0-9][0-9]*\) slot(s) each.*/\1/p' "$log" | awk 'NR<=1')"
           case "${slots:-}" in ''|*[!0-9]*) slots=0 ;; esac
           if [ -z "$div" ]; then
-            # Only the sync suite divides its own work, and it runs in one part (#2463).
-            if ! awk -F'\t' -v p="$HOOK_TESTS_PART" '$1 == p && $2 == "tests/test-claude-sync.sh" { f = 1 } END { exit !f }' "$RUNNER_TEMP/deal.tsv"; then
-              echo "The sync suite, the one suite that divides its own work, was dealt to another part, so there was nothing here to divide."
+            # Only the sync suite divides its own work (#2463), and it is several suite files, its
+            # parts, each of which may be dealt to any of this job's parts (#3594, #3680).
+            if ! awk -F'\t' -v p="$HOOK_TESTS_PART" '$1 == p && $2 ~ /^tests\/test-claude-sync(-part[0-9]+)?\.sh$/ { f = 1 } END { exit !f }' "$RUNNER_TEMP/deal.tsv"; then
+              echo "No part of the sync suite, the one suite that divides its own work, was dealt here, so there was nothing here to divide."
               exit 0
             fi
             if [ "$slots" -le 1 ]; then
@@ -677,12 +713,20 @@ jobs:
         env:
           DEAL: ${{ needs.deal.result }}
           PARTS: ${{ needs.parts.result }}
+          COLD_STREAK: ${{ needs.deal.outputs.cold-streak }}
+          COLD_STREAK_WHY: ${{ needs.deal.outputs.cold-streak-why }}
         run: |
           echo "deal: $DEAL; parts: $PARTS"
           if [ "$DEAL" != success ] || [ "$PARTS" != success ]; then
             echo "Not every job that runs the suites passed (the deal $DEAL, the parts $PARTS), so neither do the suites. The failing part's own log names the suite." >&2
             exit 1
           fi
+          # Main's cold cost case (#3406), answered by the deal job on a push to main only.
+          case "$COLD_STREAK" in
+            red) echo "::error title=Cold cost case unmeasured on main::$COLD_STREAK_WHY"; exit 1 ;;
+            unmeasured) echo "::warning title=Cold cost case streak not measured::$COLD_STREAK_WHY" ;;
+            green) echo "Cold cost case on main: $COLD_STREAK_WHY" ;;
+          esac
 
       # On a reuse (claude-config#2690) the verdict above still runs, and this says, in the log and
       # on the run's summary page, which run and commit the green stands on. Nothing below runs.

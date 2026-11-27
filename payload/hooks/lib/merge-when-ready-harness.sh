@@ -108,12 +108,26 @@ case "$*" in
     exit 0 ;;
   # The token read made after a refused sign in (claude-config#1615): token-empty makes the keyring
   # read come back empty. A stand in, never a token shape. With accounts listed, each account's
-  # token names it, so a call scoped to it is answered as that account (claude-config#2629).
+  # token names it, so a call scoped to it is answered as that account (claude-config#2629), and
+  # the token asked for with no account named is the active account's, the first one listed
+  # (claude-config#3571).
   "auth token"*)
     [ -e "$ST/token-empty" ] && exit 0
-    if [ -s "$ST/accounts" ]; then printf 'token-for-%s\n' "$(printf '%s\n' "$*" | sed -nE 's/.*-u ([^ ]+).*/\1/p')"
+    if [ -s "$ST/accounts" ]; then
+      u="$(printf '%s\n' "$*" | sed -nE 's/.*-u ([^ ]+).*/\1/p')"
+      printf 'token-for-%s\n' "${u:-$(head -1 "$ST/accounts")}"
     else echo stand-in; fi
     exit 0 ;;
+  # GitHub's own record of the account asking (claude-config#3571), which is the account whose token
+  # the call carries. Its login is the name gh holds for the account, as it is until an account is
+  # renamed, unless login-<account> holds another; user-answer holds a whole answer in its place,
+  # user-fails and user-down make the read fail, and user-asked records which account asked.
+  "api user")
+    w="$(who)"; printf '%s\n' "$w" >> "$ST/user-asked"
+    fail_read user
+    if [ -s "$ST/user-answer" ]; then cat "$ST/user-answer"
+    else l="$(rd "login-$w")"; jq -nc --arg l "${l:-$w}" '{login: $l, id: 1001, type: "User"}'; fi
+    ;;
   # The permission the account asking has on the repository (claude-config#2629): perm-<account>
   # holds it, WRITE when unset, and perm-<account>-fails or -down make that account's read fail.
   "repo view acme/widget --json viewerPermission"*)
@@ -147,8 +161,20 @@ case "$*" in
     br="$(rd base-ref)"
     # review-decision holds what GitHub reads the pull request's reviews as (claude-config#3534):
     # empty when unset, as GitHub answers where no rule asks for a review.
+    # author holds who opened the pull request, as gh prints it (claude-config#3571): a person as
+    # {id, is_bot: false, login, name} and a bot as {is_bot: true, login: "app/<name>"}, measured
+    # with gh 2.89 on 2026-11-25 on two pull requests a person opened and one a bot opened. Unset,
+    # it is the one account of a world with no accounts file, named active. gh prints a field only when it is asked for, so the author is left out
+    # of an answer whose --json list does not name it.
+    au="$(rd author)"; asked=false
+    [ -n "$au" ] || au='{"id":"U_kgDOinvented","is_bot":false,"login":"active","name":""}'
+    case "$*" in *"--json "*author*) asked=true ;; esac
+    # body holds the pull request's description, empty when unset: an announcement's post is read
+    # from it by the changelog record gate (claude-config#3742).
     jq -nc --arg h "$(rd head)" --arg s "$state" --arg ms "$ms" --argjson r "$(rd rollup)" --argjson l "${lb:-[]}" --argjson x "${cx:-false}" --arg fo "${fo:-acme}" --arg br "${br:-main}" --arg rv "$(rd review-decision)" \
-      '{number:7,state:$s,headRefOid:$h,headRefName:"feat/x",baseRefName:$br,isCrossRepository:$x,headRepositoryOwner:{login:$fo},headRepository:{name:"widget"},statusCheckRollup:$r,mergeStateStatus:$ms,mergeable:"MERGEABLE",reviewDecision:$rv,url:"https://github.com/acme/widget/pull/7",author:{login:"dwright-pennie"},labels:$l,body:""}'
+      --argjson au "$au" --argjson asked "$asked" --arg body "$(rd body)" \
+      '{number:7,state:$s,headRefOid:$h,headRefName:"feat/x",baseRefName:$br,isCrossRepository:$x,headRepositoryOwner:{login:$fo},headRepository:{name:"widget"},statusCheckRollup:$r,mergeStateStatus:$ms,mergeable:"MERGEABLE",reviewDecision:$rv,url:"https://github.com/acme/widget/pull/7",labels:$l,body:$body}
+       + (if $asked then {author:$au} else {} end)'
     ;;
   # A fork's branch, read from the fork (claude-config#1458): fork-tip, or the head when unset.
   "api repos/someone/widget/git/ref/heads/feat/x"*)
@@ -495,6 +521,7 @@ export AI_REVIEW_STATE_DIR="$WORKDIR/ai-review"
 STUBS="$WORKDIR/stubs"; mkdir -p "$STUBS"
 cp "$DIR/merge-when-ready-fixtures/stub-gates/"*.sh "$STUBS/"
 chmod +x "$STUBS"/*.sh
+export MWR_LESSONS_GATE="$STUBS/lessons-gate.sh"
 export MWR_RED_GATE="$STUBS/red-gate.sh" MWR_REVIEW_GATE="$STUBS/review-gate.sh" MWR_REVIEW_LIB="$STUBS/pr-review.sh"
 export MWR_CHANGELOG_GATE="$STUBS/changelog-gate.sh" MWR_DESIGN_GATE="$STUBS/design-gate.sh"
 export MWR_VERIFY_GATE="$STUBS/verify-gate.sh" MWR_CLOSING_GATE="$STUBS/closing-gate.sh"
@@ -600,6 +627,7 @@ installed design-score-gate.sh "$STUBS/design-gate.sh"
 installed require-verification-run.sh "$STUBS/verify-gate.sh"
 installed check-closing-merge.sh "$STUBS/closing-gate.sh"
 installed check-work-names-merge.sh "$STUBS/work-names-gate.sh"
+installed lessons-merge-gate.sh "$STUBS/lessons-gate.sh"
 installed lib/pr-review.sh "$STUBS/pr-review.sh"
 # The worktree check hands to the real one, so a removal it allows really happens.
 installed check-stale-worktrees.sh "$DIR/check-stale-worktrees.sh"
@@ -625,6 +653,6 @@ fake_in(){
   (cd "$d" && env HOOK_TESTS_RUNNING= MWR_RED_GATE="$DECOY" MWR_REVIEW_GATE="$DECOY" MWR_CHANGELOG_GATE="$DECOY" \
     MWR_DESIGN_GATE="$DECOY" MWR_VERIFY_GATE="$DECOY" MWR_CLOSING_GATE="$DECOY" MWR_WORK_NAMES_GATE="$DECOY" \
     MWR_REVIEW_LIB="$DECOY" MWR_WORKTREE_CHECK="$DECOY" MWR_SLEEP="$DECOY_SLEEP" MWR_NOW="$DECOY_NOW" \
-    PATH="$CLOCKBIN:$PATH" "$@" 2>&1)
+    MWR_LESSONS_GATE="$DECOY" PATH="$CLOCKBIN:$PATH" "$@" 2>&1)
 }
 }

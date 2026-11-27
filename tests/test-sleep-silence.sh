@@ -88,8 +88,10 @@ settings:Stop:check-later-nudge.sh
 settings:Stop:feature-issue-review.sh
 settings:Stop:session-reflection.sh
 settings:Stop:pr-merge-quiz.sh
+settings:SubagentStop:agent-leftovers-gate.sh
 settings:SubagentStop:limit-messages.py
 settings:StopFailure:limit-messages.py
+mod:goal-box/hooks/register.ts:classic.Stop
 mod:goal-tracker/hooks/register.tsx:notify:notifier
 mod:scope-modes/hooks/register.ts:leavePrOpen:ask
 mod:scope-modes/hooks/register.ts:leaveBranch:ask
@@ -393,6 +395,11 @@ seed_route() {   # seed_route <script> <arguments>
       mkdir -p "$H/.claude/state"; printf 'a file where the folder goes\n' > "$H/.claude/state/limit-messages"
       RUN_EXTRA=',"error":"rate_limit","last_assistant_message":"You have hit your 5-hour limit"'
       RUN_STDERR=1
+      ;;
+    "agent-leftovers-gate.sh ")
+      # It speaks only at an agent's stop, a payload carrying an agent_id (#3561). No shell of this
+      # world's session is recorded, which it says once a session: the thing it speaks about here.
+      RUN_EXTRA=',"agent_id":"sleep-silence-agent-1"'
       ;;
     "check-later-nudge.sh ")
       # A turn that promises to look again on a later day (#2079), the thing it speaks about.
