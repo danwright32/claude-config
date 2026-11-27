@@ -1873,19 +1873,38 @@ test("the review's test of a tool that cannot be run: the refusal says whether w
   expect(logs.join('\n')).toMatch(/whether Edit can change something could not be read/)
 })
 
-test('picked work finished and shipped, and no box for it: the session is asked whether the work is finished (#3843, #2523)', withLive, async ($, on) => {
-  const { w, submitted } = world(on, { verdicts: CARDED })
+test('picked work finished and shipped, and no box for it: the session is asked whether the work is finished, once something shipped since the last box (#3843, #2523)', withLive, async ($, on) => {
+  const { w, clock, submitted } = world(on, { verdicts: CARDED })
+  const asked = () => submitted.filter(s => s.text.startsWith(ASKS_DONE))
   await start($)
   await askedAndShown($, 'Merge PR 1700', 'b1')
   await turnEnds($)
-  expect(submitted.filter(s => s.text.startsWith(ASKS_DONE))).toEqual([])
+  expect(asked()).toEqual([])
   await picks(w, $, 'q1')
   await does(w, $, 'Edit', 'e1', { file_path: '/repo/a.ts' })
   await turnEnds($)
-  const asked = submitted.filter(s => s.text.startsWith(ASKS_DONE))
-  expect(asked).toHaveLength(1)
+  // The card for PR 1700 was made before the box shown for his message, and that box covered it.
+  // Nothing has shipped for the work he picked, so "work shipped" was not measured for it: no question.
+  expect(asked()).toEqual([])
+  await clock.advance(60_000)
+  w.verdicts = { ...CARDED, 'danwright32/claude-config#1702': { state: 'live', at: NOW + 60_000 } }
+  await turnEnds($)
+  expect(asked()).toHaveLength(1)
   // What it says is what was measured: a box was shown since his message, none for what he picked.
-  expect(asked[0]?.text).toMatch(/no Goal accomplished box was shown for what he last asked for/)
+  expect(asked()[0]?.text).toMatch(/no Goal accomplished box was shown for what he last asked for/)
+})
+
+test('a picker answered mid turn, with no box yet, does not lose the question for work that shipped before it (#3843, #2523)', withLive, async ($, on) => {
+  const { w, clock, submitted } = world(on, { verdicts: CARDED })
+  await start($)
+  await says($, 'Merge PR 1700')
+  // The card for PR 1700 is made at his message's time; the picker comes a minute later. Were the
+  // request's time moved to the picked work, that card would fall before it and nothing be asked.
+  await clock.advance(60_000)
+  await picks(w, $, 'q1')
+  await does(w, $, 'Edit', 'e1', { file_path: '/repo/a.ts' })
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_DONE))).toHaveLength(1)
 })
 
 // The close this session card reads the same count of requests (#3770), so work Dan picked is his

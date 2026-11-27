@@ -46,7 +46,7 @@ declare module 'claude-code' {
       closeStop: { seq: number; tasks: unknown; crons: unknown }
       /** #3770: the answer the last main turn ended with, under its closeSeq. */
       closeAnswer: { seq: number; text: unknown }
-      /** #3770: the request (Dan's message count) the close card was last pinned for, and whether it still shows. */
+      /** #3770: the request (Dan's request count, `prompts` above) the close card was last pinned for, and whether it still shows. */
       closed: { prompts: number; pinned: boolean }
       /** #3770: what a command this session ran did that may leave a process behind; once set, for the session. */
       leftBehind: string

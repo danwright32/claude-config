@@ -36,7 +36,7 @@ import { CLOSE_HEADING, CLOSE_TITLE, LIST_CUT, NO_BOX, PROCESS_LIST, PROCESS_LOO
 //    session-reflection.md, #1749, and issue-review.md, #2523). A reflection folded into the issue
 //    review once dropped its line (#2523), so a prompt is not the whole reminder (L27): at a turn end
 //    where work measurably shipped (an is it live card made since Dan's last message), nothing is in
-//    flight and no box was shown, this mod asks the session itself, once per message of Dan's.
+//    flight and no box was shown, this mod asks the session itself, once per request of Dan's.
 //
 // The box is the tool's result: drawn as mod-kit's card, its heading in the success colour, and as
 // text led by the goal wherever the card is not drawn (#2512).
@@ -322,8 +322,13 @@ const sendHeld = async ($: EngineInterface, id: string, what: string, text: stri
 }
 
 /**
- * #2523: with no /goal, asks the session once per message of Dan's whether the work is finished, when
- * an is it live card was made since that message, no box was shown for it, and nothing holds the box.
+ * #2523: with no /goal, asks the session once per request of Dan's (a message he typed, or since
+ * #3843 work he picked in a picker) whether the work is finished, when an is it live card was made
+ * since his last message, no box was shown for the request, and nothing holds the box. The card must
+ * also be later than the last box shown: `requestAt` is his last typed message and does not move
+ * when picked work begins, so without that a card the first box already covered would ask again for
+ * picked work that shipped nothing (#3843; moving `requestAt` instead would lose the question for
+ * work that shipped before a picker answered mid turn).
  * Claimed before it is sent, so two turn ends at once ask once, and released when it did not enter,
  * so a passing failure is asked again at the next turn end (L368).
  */
@@ -338,8 +343,9 @@ const askIfDone = async ($: EngineInterface): Promise<void> => {
     debug($, `is it live's record could not be read (${facts.why}), so whether work shipped since Dan's last message is not known and the session was not asked about the box`)
     return
   }
-  if (!cardedSince(facts.verdicts, since)) return
-  if (((await $.state.get(shownRef)).value ?? []).some(s => s.prompts >= prompts)) return
+  const shown = (await $.state.get(shownRef)).value ?? []
+  if (shown.some(s => s.prompts >= prompts)) return
+  if (!cardedSince(facts.verdicts, since, Math.max(-Infinity, ...shown.map(s => s.at)))) return
   const holds = await boxHolds($)
   if (holds.length) return
   if (!(await $.state.set(askedDoneRef, prompts, { ifVersion: asked.version })).isSet) return

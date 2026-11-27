@@ -221,9 +221,13 @@ export const decide = (q: { goal: ModKitGoal; input: BoxInput; shown: GoalBoxSho
 /**
  * Whether is it live made a card since `since` (Dan's last message, ms): the one measured sign that
  * work shipped in this request (#2523). The verdicts are already held to their contract's shape by
- * mergeFactsOf; whether the deploy is settled is the holds' question, not this one.
+ * mergeFactsOf; whether the deploy is settled is the holds' question, not this one. `boxedAt` is when
+ * the last box was shown, where one was (#3843): a box covers every card made before it, so a card
+ * no later than it says nothing of work Dan picked in a picker afterwards. His message's time stays
+ * the floor, so a picker answered mid turn, before any box, loses none of what shipped before it.
  */
-export const cardedSince = (verdicts: MergeFacts['verdicts'], since: number): boolean => Object.values(verdicts).some(v => v.at >= since)
+export const cardedSince = (verdicts: MergeFacts['verdicts'], since: number, boxedAt = -Infinity): boolean =>
+  Object.values(verdicts).some(v => v.at >= since && v.at > boxedAt)
 
 /**
  * What the session is told, with no /goal, when work shipped since Dan's last message, nothing is in
