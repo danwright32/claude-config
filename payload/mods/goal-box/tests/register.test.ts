@@ -1884,7 +1884,10 @@ test('two calls at once after one answer count his answer once: the count of his
 // The box's own call never reaches the count of work. Its own hook is registered above the hook that
 // watches every call, so it stands outside it ("a plugin's registrations nest in order, first
 // outermost"), answers its tool and passes nothing down. So a box that is shown while an answer
-// waits is no more work after that answer than one that is refused.
+// waits is no more work after that answer than one that is refused. The watching hook also leaves
+// the tool out by name, which is reached only if that order changes: this case passes with either
+// guard in place and fails with both gone (seen with the box's hook made to pass its call down and
+// the name taken out).
 test("the box's own tool is not work when it is shown either: a box shown while an answer waits does not earn another (#3843)", withKit, async ($, on) => {
   const { w, cards } = world(on)
   await start($)

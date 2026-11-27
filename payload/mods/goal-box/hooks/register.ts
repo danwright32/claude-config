@@ -748,16 +748,18 @@ export const register: Register = on => {
   }).catch(watchesOnly)
 
   // #3843: every tool call of the main conversation, once it has come back. An answer Dan gives in a
-  // picker is kept until work follows it; the call that carried his answer is never that work. The
-  // box's own tool is not named here because its call never reaches this hook: its own hook is
-  // registered above, so it stands outside this one, answers the call and passes nothing down (the
-  // tests hold that a box shown while an answer waits earns no other). Nor is a call that was
+  // picker is kept until work follows it; the call that carried his answer is never that work. Nor
+  // is the box's own tool, by two guards. The first is the order of the hooks: the box's own hook is
+  // registered above, so it stands outside this one, answers the call and passes nothing down, and
+  // this hook never sees it. The second is its name below (the review's test would count it), which
+  // is reached only if that order changes. A test holds that a box shown while an answer waits
+  // earns no other; it fails only with both guards gone. Nor is a call that was
   // refused or came back as an error: a settings hook's refusal reaches a mod as an errored result,
   // the same as a command that failed, so neither is counted and the next call that runs clean is.
   // Every other call is read for being that work (noteCall).
   on('tool.call', async ($, e, next) => {
     const r = await next(e)
-    if (e.agentId !== undefined) return r
+    if (e.agentId !== undefined || e.tool === TOOL) return r
     if (e.tool === 'AskUserQuestion') {
       if (answered(r)) await $.state.set(pickerRef, {})
       return r
