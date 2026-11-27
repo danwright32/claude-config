@@ -288,6 +288,129 @@ for bad_out in '' 'plain words' '{"systemMessage": "a"}{"systemMessage": "b"}' '
   [ -n "$v" ] && ok || bad "#1906 hook_notice_verdict passed [$bad_out] as a notice saying DID NOT RUN"
 done
 
+# hook_decision_verdict, which db-write-ask.sh asks before it passes on a refusal that carries a
+# notice, and which a suite can ask too (claude-config#3793, the second review of its pull
+# request). It says nothing and returns 0 only for exactly one object holding a PreToolUse decision
+# of the kind asked for (its event, its decision and at most a reason, all texts) with at most a
+# systemMessage, a text, beside it. For everything else it says why and returns 1. Claude Code lets
+# a call go ahead when a hook's object fails its validation, and continue, suppressOutput and a top
+# level decision are not texts there, so a refusal beside one of them written as a text is no
+# refusal. The function reads the text with python3. With no python3, or one that says nothing, it
+# says so and returns 1: no answer is never read as "fine".
+#
+# decision_verdict <PATH> <text> <kind> [<library>]: what the function says under that PATH, then
+# rc=<its status>. A good decision is exactly "rc=0".
+decision_verdict(){
+  env PATH="$1" HN_OUT="$2" HN_KIND="$3" "$BASH" -c '
+. "$0" || { echo "the library did not load"; exit 9; }
+declare -F hook_decision_verdict >/dev/null || { echo "the library has no hook_decision_verdict"; exit 8; }
+hook_decision_verdict "$HN_OUT" "$HN_KIND"; printf "rc=%s" "$?"' "${4:-$LIB}" 2>&1
+}
+# said_no <verdict>: the function said why and returned 1.
+said_no(){ case "$1" in ?*$'\n'rc=1) return 0 ;; *) return 1 ;; esac; }
+DV_D='{"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "r"}'
+DV_GOOD="{\"hookSpecificOutput\": $DV_D, \"systemMessage\": \"n\"}"
+# Every decision the library builds, in each of its arms, with a notice and without, is taken.
+for arm in "$PATH" "$WORK/empty"; do
+  name="built with python3"; [ "$arm" = "$WORK/empty" ] && name="built with nothing on PATH"
+  for kind in deny ask allow; do
+    for notice in "" "notice: $TRICKY"; do
+      built="$(env PATH="$arm" HN_A="$TRICKY" HN_B="$notice" "$BASH" -c '. "$0" && "hook_${1}_json" "$HN_A" "$HN_B"' "$LIB" "$kind" 2>/dev/null)"
+      v="$(decision_verdict "$PATH" "$built" "$kind")"
+      [ "$v" = "rc=0" ] && ok || bad "#3793 $name: hook_decision_verdict did not take the library's own $kind${notice:+ with a notice beside it}: ${v//$'\n'/ / }"
+    done
+  done
+  built="$(env PATH="$arm" "$BASH" -c '. "$0" && hook_deny_json ""' "$LIB" 2>/dev/null)"
+  v="$(decision_verdict "$PATH" "$built" deny)"
+  [ "$v" = "rc=0" ] && ok || bad "#3793 $name: hook_decision_verdict did not take the library's own deny with no reason: ${v//$'\n'/ / }"
+done
+# The function's own second arm: with nothing on PATH it can read nothing. A python3 that leaves
+# with 0 and says nothing, or leaves with 1, has read nothing either.
+v="$(decision_verdict "$WORK/empty" "$DV_GOOD" deny)"
+said_no "$v" && [[ "$v" == *"python3 is not on PATH"* ]] && ok || bad "#3793 with nothing on PATH, hook_decision_verdict did not say that python3 is missing and return 1 for a good refusal, so no answer could be read as fine: ${v//$'\n'/ / }"
+mkdir -p "$WORK/mutepy" "$WORK/failpy"
+printf '#!/bin/sh\nexit 0\n' > "$WORK/mutepy/python3"
+printf '#!/bin/sh\nexit 1\n' > "$WORK/failpy/python3"
+chmod +x "$WORK/mutepy/python3" "$WORK/failpy/python3"
+v="$(decision_verdict "$WORK/mutepy" "$DV_GOOD" deny)"
+said_no "$v" && ok || bad "#3793 with a python3 that leaves with 0 and says nothing, hook_decision_verdict did not say so and return 1 for a good refusal: ${v//$'\n'/ / }"
+v="$(decision_verdict "$WORK/failpy" "$DV_GOOD" deny)"
+said_no "$v" && ok || bad "#3793 with a python3 that leaves with 1, hook_decision_verdict did not say so and return 1 for a good refusal: ${v//$'\n'/ / }"
+# Every text that is not one decision of the kind asked for. One line each: <kind> TAB <what it
+# is> TAB <the text>, with @D standing for a whole PreToolUse deny.
+cat > "$WORK/not-decisions.tsv" <<'TSV'
+deny	a refusal beside a continue written as a text	{"hookSpecificOutput": @D, "continue": "false"}
+deny	a refusal beside a suppressOutput written as a text	{"hookSpecificOutput": @D, "suppressOutput": "yes"}
+deny	a refusal after a top level decision that is no decision	{"decision": "zzz", "hookSpecificOutput": @D}
+deny	a refusal after a top level decision of approve	{"decision": "approve", "hookSpecificOutput": @D}
+deny	a refusal beside a key nobody knows	{"hookSpecificOutput": @D, "other": "text"}
+deny	a refusal with a notice and one more key beside it	{"hookSpecificOutput": @D, "systemMessage": "n", "stopReason": "s"}
+deny	a refusal whose notice is a number	{"hookSpecificOutput": @D, "systemMessage": 1}
+deny	a refusal whose notice is null	{"hookSpecificOutput": @D, "systemMessage": null}
+deny	a refusal whose notice is a list	{"hookSpecificOutput": @D, "systemMessage": ["n"]}
+deny	a refusal whose notice is written twice	{"hookSpecificOutput": @D, "systemMessage": "a", "systemMessage": "b"}
+deny	an ask and a refusal under the one key	{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask"}, "hookSpecificOutput": @D}
+deny	an ask	{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask", "permissionDecisionReason": "r"}}
+ask	a refusal where an ask was wanted	{"hookSpecificOutput": @D}
+allow	a refusal where an allow was wanted	{"hookSpecificOutput": @D}
+deny	a refusal for another event	{"hookSpecificOutput": {"hookEventName": "PostToolUse", "permissionDecision": "deny"}}
+deny	a refusal with no event	{"hookSpecificOutput": {"permissionDecision": "deny"}}
+deny	a refusal holding an updatedInput	{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "updatedInput": "x"}}
+deny	a refusal whose reason is a number	{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": 5}}
+deny	a refusal whose decision is written Deny	{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "Deny"}}
+deny	a notice with no decision	{"systemMessage": "n"}
+deny	two refusals on one line	{"hookSpecificOutput": @D}{"hookSpecificOutput": @D}
+deny	a refusal with words after it	{"hookSpecificOutput": @D} and more
+deny	a refusal with words before it	words {"hookSpecificOutput": @D}
+deny	a refusal after a blank	 {"hookSpecificOutput": @D}
+deny	a refusal cut short	{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "cut sh
+deny	a refusal inside a list	[{"hookSpecificOutput": @D}]
+deny	plain words	plain words
+refuse	a good refusal asked about as a kind that does not exist	{"hookSpecificOutput": @D}
+TSV
+not_decisions=0
+while IFS=$'\t' read -r kind what text; do
+  [ -n "$kind" ] || continue
+  not_decisions=$((not_decisions + 1))
+  v="$(decision_verdict "$PATH" "${text//@D/$DV_D}" "$kind")"
+  said_no "$v" && ok || bad "#3793 hook_decision_verdict did not say why and return 1 for $what: ${v//$'\n'/ / }"
+done < "$WORK/not-decisions.tsv"
+[ "$not_decisions" -eq 28 ] && ok || bad "#3793 only $not_decisions texts that are no decision were read, not 28"
+for text in '' "$(printf '{"hookSpecificOutput": %s}\n{"hookSpecificOutput": %s}' "$DV_D" "$DV_D")" "$(printf '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "a\nb"}}')"; do
+  v="$(decision_verdict "$PATH" "$text" deny)"
+  said_no "$v" && ok || bad "#3793 hook_decision_verdict did not say why and return 1 for an empty text, two refusals on two lines or a raw line break in the reason: ${v//$'\n'/ / }"
+done
+# Each rule seen to fail (L1): a copy of the library with that one rule taken out must take a text
+# the real one refuses. <name> TAB <text in the library> TAB <what it becomes> TAB <the PATH: real
+# or mute> TAB <the text it then takes>.
+cat > "$WORK/verdict-mutants.tsv" <<'TSV'
+any one key beside the decision is taken	if other not in ([], ["systemMessage"]):	if len(other) > 1:	real	{"hookSpecificOutput": @D, "continue": "false"}
+a notice that is not a text is taken	if other and not isinstance(d[other[0]], str):	if False:	real	{"hookSpecificOutput": @D, "systemMessage": 1}
+the kind of decision is not compared	if h.get("permissionDecision") != want:	if False:	real	{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask"}}
+more inside the decision is taken	if more:	if False:	real	{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "updatedInput": "x"}}
+a key written twice is taken	if len(d) != len(pairs):	if False:	real	{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask"}, "hookSpecificOutput": @D}
+silence from python3 is read as fine	if [ "$said" = "one $2 decision" ]; then	if [ -z "$said" ] || [ "$said" = "one $2 decision" ]; then	mute	{"hookSpecificOutput": @D, "continue": "false"}
+TSV
+verdict_mutants=0
+while IFS=$'\t' read -r mname mold mnew mpath mtext; do
+  [ -n "$mname" ] || continue
+  verdict_mutants=$((verdict_mutants + 1))
+  if ! HN_OLD="$mold" HN_NEW="$mnew" python3 -c '
+import os, sys
+s = open(sys.argv[1]).read(); old = os.environ["HN_OLD"]
+if s.count(old) != 1: sys.exit(1)
+open(sys.argv[2], "w").write(s.replace(old, os.environ["HN_NEW"]))' "$LIB" "$WORK/verdict-mutant.sh"; then
+    bad "#3793 mutant \"$mname\": its text is not in lib/hook-notice.sh exactly once, so the check it proves is unproven. Update verdict-mutants.tsv in this suite to the library's new wording."
+    continue
+  fi
+  arm="$PATH"; [ "$mpath" = mute ] && arm="$WORK/mutepy"
+  v="$(decision_verdict "$arm" "${mtext//@D/$DV_D}" deny)"
+  said_no "$v" && ok || bad "#3793 control for the mutant \"$mname\": the real library did not refuse its text: ${v//$'\n'/ / }"
+  v="$(decision_verdict "$arm" "${mtext//@D/$DV_D}" deny "$WORK/verdict-mutant.sh")"
+  [ "$v" = "rc=0" ] && ok || bad "#3793 canary: a library in which $mname still refused the text that rule alone refuses, so nothing shows the check on it can fail: ${v//$'\n'/ / }"
+done < "$WORK/verdict-mutants.tsv"
+[ "$verdict_mutants" -eq 6 ] && ok || bad "#3793 only $verdict_mutants mutants of hook_decision_verdict were read, not 6"
+
 # --- the prompt hooks' notices reach the person ------------------------------------------------------
 # A UserPromptSubmit or SessionStart hook's plain stdout becomes context for Claude ("Neither channel
 # produces a visible transcript entry", hooks documentation) and its stderr on exit 0 is discarded,

@@ -87,6 +87,18 @@
 #   hook_notice_verdict <stdout> <ERE>
 #       for the suites: print why <stdout> is not exactly one JSON object whose systemMessage
 #       matches <ERE> (Python's re), or nothing when it is.
+#   hook_decision_verdict <stdout> <deny|ask|allow>
+#       for a hook about to pass on a decision this library built, and for the suites: print why
+#       <stdout> is not exactly one JSON object, with nothing before or after it, holding a
+#       PreToolUse decision of that kind (hookSpecificOutput with its event, its decision and at
+#       most a reason, all texts) and at most a systemMessage, a text, beside it, and return 1.
+#       Print nothing and return 0 when it is. Claude Code lets a call go ahead when a hook's
+#       object fails its validation, and its other top level fields are not all texts, so a
+#       decision beside any other key is not passed on. This is the one place that says which key
+#       may stand beside a decision, since a hook may not write that key's name (#1906):
+#       db-write-ask.sh asks here before it passes on a refusal that carries a notice
+#       (claude-config#3793). It reads <stdout> with python3. With no python3 on PATH, or one that
+#       says nothing, it says so and returns 1, so no answer is never read as "fine".
 #   hook_defer_notice <text> <file>...
 #       for a hook on an event with no channel seen to reach the person (SessionEnd): append <text>
 #       to the first <file> it can write, trying each in turn, for a prompt hook to say later.
@@ -258,4 +270,61 @@ if not isinstance(m, str):
     print("stdout carries no systemMessage: %r" % raw[:300]); sys.exit()
 if not re.search(os.environ["HN_WANT"], m):
     print("the systemMessage does not say /%s/: %r" % (os.environ["HN_WANT"], m[:300]))' 2>&1
+}
+
+# The text travels on stdin, as bytes, so its length meets no limit on an environment and a byte
+# that is not UTF-8 is refused as it is. python3 says one fixed line for a decision it took, and
+# only that line is read as "fine": a python3 that printed nothing judged nothing. A key written
+# twice is refused, since which copy a reader keeps is the reader's choice.
+hook_decision_verdict() {
+  local said=""
+  case "${2:-}" in
+    deny|ask|allow) ;;
+    *) printf 'hook_decision_verdict was asked about a decision of the kind "%s", which is not deny, ask or allow\n' "${2:-}"
+       return 1 ;;
+  esac
+  if ! command -v python3 >/dev/null 2>&1; then
+    printf 'python3 is not on PATH, so nothing read this text and it is not taken as a decision\n'
+    return 1
+  fi
+  said="$(printf '%s' "$1" | python3 -I -c '
+import json, sys
+want = sys.argv[1]
+raw = sys.stdin.buffer.read()
+def no(why):
+    print(why); sys.exit(1)
+def once(pairs):
+    d = dict(pairs)
+    if len(d) != len(pairs):
+        raise ValueError("a key is written twice")
+    return d
+if not (raw.startswith(b"{") and raw.endswith(b"}")):
+    no("the text does not start with { and end with }: %r" % raw[:300])
+try:
+    d = json.loads(raw, object_pairs_hook=once)
+except Exception as e:
+    no("the text is not exactly one JSON object (%s): %r" % (e, raw[:300]))
+h = d.get("hookSpecificOutput")
+if not isinstance(h, dict):
+    no("the object holds no hookSpecificOutput that is an object: %r" % raw[:300])
+more = sorted(set(h) - {"hookEventName", "permissionDecision", "permissionDecisionReason"})
+if more:
+    no("hookSpecificOutput holds more than its event, its decision and a reason: %r" % more)
+if not all(isinstance(v, str) for v in h.values()):
+    no("hookSpecificOutput holds a value that is not a text: %r" % raw[:300])
+if h.get("hookEventName") != "PreToolUse":
+    no("the event is %r, not PreToolUse" % h.get("hookEventName"))
+if h.get("permissionDecision") != want:
+    no("the decision is %r, not %s" % (h.get("permissionDecision"), want))
+other = sorted(k for k in d if k != "hookSpecificOutput")
+if other not in ([], ["systemMessage"]):
+    no("beside hookSpecificOutput stands %r, where only a systemMessage may" % other)
+if other and not isinstance(d[other[0]], str):
+    no("the systemMessage beside the decision is not a text: %r" % raw[:300])
+print("one %s decision" % want)' "$2" 2>&1)"
+  if [ "$said" = "one $2 decision" ]; then
+    return 0
+  fi
+  printf '%s\n' "${said:-python3 said nothing about this text, so nothing read it and it is not taken as a decision}"
+  return 1
 }
