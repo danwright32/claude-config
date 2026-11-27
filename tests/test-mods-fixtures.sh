@@ -909,9 +909,33 @@ runbp
 # fails naming it, and one holding none is said as unmeasured rather than passed.
 printf 'stops\tclassic.Stop\t#1: x\nsections\tprompt.section\t#1: x\nurls\tclassic.Notification\t#1: x\n' > "$KNOWN7B"
 routes_of(){ local ev; for ev in "$@"; do printf '# e("%s",(n,o,t)=>t.to(o,"append"))\n' "$ev"; done; }
+# The routes the security default writes in its other shapes (#3697), as 2.1.332 writes them: a
+# matcher before the handler, a handler that refuses or routes (every call reaches the tier beneath
+# never), and one that routes or passes on (some calls). The builds installed on the personal
+# MacBook on 2026-11-25, 2.1.330 to 2.1.332, each route all of them, so the list holds them from its
+# earliest build and every stub below carries them.
+other_shapes(){
+  cat <<'EOF'
+# e("session.append",{door:"attachment"},(n,o,t)=>t.to(o,"append")),e("session.append",{door:"hook-context"},(n,o,t)=>t.to(o,"append"))
+# e("session.append",{door:"compaction"},(n,o,t)=>t.to(o,"append"))
+# e("session.append",{door:"tool-message"},(n,o,t)=>Be(o)?t.to(o,"append"):t(o))
+# e("session.append",{door:"note"},(n,o,t)=>t.origin.tier==="prepend"||t.origin.tier==="append"?t.to(o,"append"):t(o))
+# e("telemetry.log",{to:"collector"},(n,o,t)=>t.to(o,"append"))
+# e("session.identity",(n,o,t)=>t.origin.tier==="user"?se(t.origin.plugin):t.to(o,"append")).catch((n,o,t)=>t.origin.tier==="user"?se(t.origin.plugin):t.to(o,"append"))
+# e("fs.stat",{resolve:!0},(n,o,t)=>t.origin.tier==="prepend"&&t.origin.plugin===n.plugin.name?t.to(o,"append"):t(o))
+# e("fs.list",(n,o,t)=>t.origin.tier==="prepend"&&t.origin.plugin===n.plugin.name?t.to(o,"append"):t(o))
+# e("ui.log",(n,o,t)=>t.origin.tier==="prepend"||t.origin.tier==="append"?t.to(o,"append"):t(o))
+# e("env.get",(n,o,t)=>t.origin.tier==="prepend"||t.origin.tier==="append"?t.to(o,"append"):t(o))
+# e("wasm.compile",(n,o,t)=>t.origin.tier==="prepend"||t.origin.tier==="append"?t.to(o,"append"):t(o))
+# e("tool.describe",(n,o,t)=>N(o,t)),e("agent.offer",(n,o,t)=>N(o,t))
+EOF
+}
+# The same before 2.1.330, the first build read that routes fs.list (2.1.328, read from CI's output on
+# 2026-11-26, does not), so a stub for an older build leaves it out.
+other_shapes_before_330(){ other_shapes | grep -v '"fs.list"'; }
 SEVEN7B=(attribution.text 'classic.*' prompt.compose prompt.context prompt.section settings.read skill.prompt)
-{ cat "$FAKE"; routes_of "${SEVEN7B[@]}"; } > "$TMPROOT/claude-same"; chmod +x "$TMPROOT/claude-same"
-{ cat "$FAKE"; routes_of "${SEVEN7B[@]}" prompt.attachment; } > "$TMPROOT/claude-more"; chmod +x "$TMPROOT/claude-more"
+{ cat "$FAKE"; routes_of "${SEVEN7B[@]}"; other_shapes_before_330; } > "$TMPROOT/claude-same"; chmod +x "$TMPROOT/claude-same"
+{ cat "$FAKE"; routes_of "${SEVEN7B[@]}" prompt.attachment; other_shapes_before_330; } > "$TMPROOT/claude-more"; chmod +x "$TMPROOT/claude-more"
 runbp "$TMPROOT/claude-same" 2.1.296
 [ "$code" -eq 0 ] && ! printf '%s\n' "$out" | grep -q 'routes past the user tier' && check "a build routing the listed events passes" ok \
   || check "a build routing the listed events passes" "exit=$code out=$out"
@@ -924,8 +948,9 @@ printf '%s\n' "$out" | grep -q 'UNMEASURED: no security default route was found'
 # 2.1.299 also routes prompt.attachment and session.compact past the user tier (#1185), and builds
 # before it do not, so the routes a build is held to depend on the build: each Mac and CI runs its
 # own, and neither goes red for the other's. 2.1.296 is the last build measured without them.
-{ cat "$FAKE"; routes_of "${SEVEN7B[@]}" prompt.attachment session.compact; } > "$TMPROOT/claude-nine"; chmod +x "$TMPROOT/claude-nine"
-runbp "$TMPROOT/claude-nine" 2.1.299
+{ cat "$FAKE"; routes_of "${SEVEN7B[@]}" prompt.attachment session.compact; other_shapes; } > "$TMPROOT/claude-nine"; chmod +x "$TMPROOT/claude-nine"
+{ cat "$FAKE"; routes_of "${SEVEN7B[@]}" prompt.attachment session.compact; other_shapes_before_330; } > "$TMPROOT/claude-nine-old"; chmod +x "$TMPROOT/claude-nine-old"
+runbp "$TMPROOT/claude-nine-old" 2.1.299
 [ "$code" -eq 0 ] && ! printf '%s\n' "$out" | grep -q 'routes past the user tier' && check "2.1.299 routing prompt.attachment and session.compact as well passes" ok \
   || check "2.1.299 routing prompt.attachment and session.compact as well passes" "exit=$code out=$out"
 runbp "$TMPROOT/claude-same" 2.1.299
@@ -938,7 +963,7 @@ runbp "$TMPROOT/claude-nine" 2.1.296
   || check "a build older than the list says routing them fails, naming the build" "exit=$code out=$out"
 # 2.1.331 also routes session.info and session.redact (#3508), measured on the builds installed on the
 # personal MacBook on 2026-11-23: 2.1.327 to 2.1.330 route the nine above and 2.1.331 these eleven.
-{ cat "$FAKE"; routes_of "${SEVEN7B[@]}" prompt.attachment session.compact session.info session.redact; } > "$TMPROOT/claude-eleven"; chmod +x "$TMPROOT/claude-eleven"
+{ cat "$FAKE"; routes_of "${SEVEN7B[@]}" prompt.attachment session.compact session.info session.redact; other_shapes; } > "$TMPROOT/claude-eleven"; chmod +x "$TMPROOT/claude-eleven"
 runbp "$TMPROOT/claude-eleven" 2.1.331
 [ "$code" -eq 0 ] && ! printf '%s\n' "$out" | grep -q 'routes past the user tier' && check "2.1.331 routing session.info and session.redact as well passes" ok \
   || check "2.1.331 routing session.info and session.redact as well passes" "exit=$code out=$out"
@@ -1000,6 +1025,99 @@ out="$(STUB_LOG="$LOG" FAKE_CC_VERSION=2.1.330 CLAUDE_BIN="$TMPROOT/claude-nine"
   && printf '%s\n' "$out" | grep -q 'redacts hooks session.redact, which' \
   && ! printf '%s\n' "$out" | grep -q 'routes past the user tier' \
   && check "and on a Mac still running 2.1.330" ok || check "and on a Mac still running 2.1.330" "exit=$code out=$out"
+
+# 7e. The routes written in the other shapes (#3697). The security default also sends past the user
+#     tier session.append rows from three doors and telemetry.log rows for the collector, each with a
+#     matcher before its handler, and session.identity, whose handler refuses a user tier caller and
+#     routes every other; and, for some calls only, session.append's tool-message and note doors and
+#     a few engine reads. A hook on any of them is a hook that does not run (for every call, or for
+#     some), and a build that adds or drops one is said like any other route.
+M7E="$TMPROOT/m7e"; KNOWN7E="$TMPROOT/known7e.tsv"; : > "$KNOWN7E"
+mkmod "$M7E" doors
+printf "export const register = on => {\n  on('session.append', { door: 'hook-context' }, async (\$, e, next) => next(e))\n  on('session.append', { door: 'tool-result' }, async (\$, e, next) => next(e))\n  on('telemetry.log', async (\$, e, next) => next(e))\n  on('session.identity', async (\$, e, next) => next(e))\n}\n" > "$M7E/doors/hooks/register.ts"
+mkmod "$M7E" alldoors
+printf "export const register = on => {\n  on('session.append', async (\$, e, next) => next(e))\n}\n" > "$M7E/alldoors/hooks/register.ts"
+mkmod "$M7E" notes
+printf "export const register = on => {\n  on('session.append', { door: \"note\" }, async (\$, e, next) => next(e))\n  on('telemetry.log', { to: 'anthropic' }, async (\$, e, next) => next(e))\n}\n" > "$M7E/notes/hooks/register.ts"
+run7e(){   # $1 = claude command  $2 = the build it says it is
+  : > "$LOG"
+  out="$(STUB_LOG="$LOG" FAKE_CC_VERSION="${2:-}" CLAUDE_BIN="$1" CHECK_MODS_BYPASS_KNOWN="$KNOWN7E" TSC_BIN="$TSC_PASS" bash "$CHECK" "$M7E" 2>&1)"; code=$?
+}
+run7e "$TMPROOT/no-such-claude"
+[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep -q 'doors hooks session.append{door=hook-context}, which' \
+  && check "a hook on the hook-context door fails, naming the door" ok || check "a hook on the hook-context door fails, naming the door" "exit=$code out=$out"
+! printf '%s\n' "$out" | grep -q 'door=tool-result' && check "while the tool-result door, which reaches a mod, is not named" ok \
+  || check "while the tool-result door, which reaches a mod, is not named" "$out"
+printf '%s\n' "$out" | grep -q 'doors hooks telemetry.log, which' && check "a hook on telemetry.log with no matcher fails, since it hears the collector's rows too" ok \
+  || check "a hook on telemetry.log with no matcher fails, since it hears the collector's rows too" "$out"
+printf '%s\n' "$out" | grep -q 'doors hooks session.identity, which' && check "a hook on session.identity fails" ok \
+  || check "a hook on session.identity fails" "$out"
+printf '%s\n' "$out" | grep 'alldoors hooks session.append, which' | grep -q 'session.append{door=compaction}' \
+  && check "a hook on every door fails, naming the doors it is passed over on" ok \
+  || check "a hook on every door fails, naming the doors it is passed over on" "$out"
+printf '%s\n' "$out" | grep 'notes hooks session.append{door=note}, which' | grep -q 'some of its calls' \
+  && check "a hook on the note door fails as passed over for some of its calls" ok \
+  || check "a hook on the note door fails as passed over for some of its calls" "$out"
+! printf '%s\n' "$out" | grep -q 'notes hooks telemetry.log' && check "while telemetry.log rows for another sink are not named" ok \
+  || check "while telemetry.log rows for another sink are not named" "$out"
+# Listed with the issue deciding it, keyed by the door: the run passes.
+printf 'doors\tsession.append{door=hook-context}\t#1: x\ndoors\ttelemetry.log\t#1: x\ndoors\tsession.identity\t#1: x\nalldoors\tsession.append\t#1: x\nnotes\tsession.append{door=note}\t#1: x\n' > "$KNOWN7E"
+run7e "$TMPROOT/no-such-claude"
+! printf '%s\n' "$out" | grep -q ' hooks .*, which' && ! printf '%s\n' "$out" | grep -q 'no longer hooks' \
+  && check "hooks on those routes listed by door pass the hook check" ok || check "hooks on those routes listed by door pass the hook check" "exit=$code out=$out"
+# The build's own routes, read in every shape: a stub writing them all passes on 2.1.332 and 2.1.330.
+run7e "$TMPROOT/claude-eleven" 2.1.332
+[ "$code" -eq 0 ] && ! printf '%s\n' "$out" | grep -q 'routes past the user tier' && ! printf '%s\n' "$out" | grep -q 'documentation names' \
+  && check "a 2.1.332 writing every route in every shape passes" ok || check "a 2.1.332 writing every route in every shape passes" "exit=$code out=$out"
+run7e "$TMPROOT/claude-nine" 2.1.330
+[ "$code" -eq 0 ] && ! printf '%s\n' "$out" | grep -q 'routes past the user tier' \
+  && check "a 2.1.330 writing the nine and the other shapes passes" ok || check "a 2.1.330 writing the nine and the other shapes passes" "exit=$code out=$out"
+# 2.1.328, as CI's runner printed it on 2026-11-26 (pull request 3784): every route above but fs.list,
+# which the builds installed here route from 2.1.330. A build older than a route's first build is not
+# held to it, and one at or past that build is.
+{ cat "$FAKE"; routes_of "${SEVEN7B[@]}" prompt.attachment session.compact; other_shapes_before_330; } > "$TMPROOT/claude-328"; chmod +x "$TMPROOT/claude-328"
+run7e "$TMPROOT/claude-328" 2.1.328
+[ "$code" -eq 0 ] && ! printf '%s\n' "$out" | grep -q 'routes past the user tier' \
+  && check "2.1.328, which does not route fs.list, passes" ok || check "2.1.328, which does not route fs.list, passes" "exit=$code out=$out"
+run7e "$TMPROOT/claude-328" 2.1.330
+[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep 'for some of their calls' | grep -q 'listed, no longer routed: fs.list' \
+  && check "a 2.1.330 that does not route fs.list fails, naming it" ok || check "a 2.1.330 that does not route fs.list fails, naming it" "exit=$code out=$out"
+# A new route in the matcher shape, which the plain reading leaves out, is said as not listed.
+{ cat "$TMPROOT/claude-eleven"; printf '# e("session.append",{door:"queue"},(n,o,t)=>t.to(o,"append"))\n'; } > "$TMPROOT/claude-queue"; chmod +x "$TMPROOT/claude-queue"
+run7e "$TMPROOT/claude-queue" 2.1.332
+[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep -q 'not listed: session.append{door=queue}' \
+  && check "a build routing another door fails, naming it" ok || check "a build routing another door fails, naming it" "exit=$code out=$out"
+# A listed route in the matcher shape the build no longer writes is said, and the documentation's
+# naming it is said on a line of its own.
+{ cat "$FAKE"; routes_of "${SEVEN7B[@]}" prompt.attachment session.compact session.info session.redact; other_shapes | grep -v 'telemetry.log'; } > "$TMPROOT/claude-notel"; chmod +x "$TMPROOT/claude-notel"
+run7e "$TMPROOT/claude-notel" 2.1.332
+[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep -q 'listed, no longer routed: telemetry.log{to=collector}' \
+  && check "a build no longer routing telemetry.log for the collector fails, naming it" ok \
+  || check "a build no longer routing telemetry.log for the collector fails, naming it" "exit=$code out=$out"
+printf '%s\n' "$out" | grep -q '^check-mods: the documentation names telemetry.log as a route' \
+  && check "and the documentation's naming it is said on a line of its own" ok \
+  || check "and the documentation's naming it is said on a line of its own" "$out"
+# session.identity written with other names, a handler refusing or routing, is still every call.
+{ cat "$FAKE"; routes_of "${SEVEN7B[@]}" prompt.attachment session.compact session.info session.redact; other_shapes | grep -v 'session.identity'
+  printf '# x("session.identity",(a,b,c)=>c.origin.tier==="user"?Q(c.origin.plugin):c.to(b,"append"))\n'; } > "$TMPROOT/claude-names"; chmod +x "$TMPROOT/claude-names"
+run7e "$TMPROOT/claude-names" 2.1.332
+[ "$code" -eq 0 ] && ! printf '%s\n' "$out" | grep -q 'routes past the user tier' \
+  && check "session.identity written with other names is still read as every call" ok \
+  || check "session.identity written with other names is still read as every call" "exit=$code out=$out"
+# A door that stops passing its calls on, routed for every call, moves list: both lists say so.
+{ cat "$FAKE"; routes_of "${SEVEN7B[@]}" prompt.attachment session.compact session.info session.redact; other_shapes | grep -v 'tool-message'
+  printf '# e("session.append",{door:"tool-message"},(n,o,t)=>t.to(o,"append"))\n'; } > "$TMPROOT/claude-moved"; chmod +x "$TMPROOT/claude-moved"
+run7e "$TMPROOT/claude-moved" 2.1.332
+[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep 'routes past the user tier:' | grep -q 'not listed: session.append{door=tool-message}' \
+  && printf '%s\n' "$out" | grep 'for some of their calls' | grep -q 'listed, no longer routed: session.append{door=tool-message}' \
+  && check "a door moving from some calls to every call is said by both lists" ok \
+  || check "a door moving from some calls to every call is said by both lists" "exit=$code out=$out"
+# A handler that routes or hands the tier beneath to another function routes only some calls.
+{ cat "$TMPROOT/claude-eleven"; printf '# e("agent.spawn",(n,o,t)=>o.x?t.to(o,"append"):N(o,t))\n'; } > "$TMPROOT/claude-passes"; chmod +x "$TMPROOT/claude-passes"
+run7e "$TMPROOT/claude-passes" 2.1.332
+[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep 'for some of their calls' | grep -q 'not listed: agent.spawn' \
+  && check "a handler handing the tier beneath on is read as some calls" ok \
+  || check "a handler handing the tier beneath on is read as some calls" "exit=$code out=$out"
 
 # 10. The goal tracker sends the permission, question and "What's next?" notifications itself (Dan,
 #     2026-10-04, #612), so no settings hook may send one too: Dan would get every one twice. Read
