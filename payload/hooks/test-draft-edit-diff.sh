@@ -17,7 +17,8 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TOOL="$DIR/lib/draft-edit-diff.py"
 BUILD="$DIR/draft-edit-fixtures/build.py"
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+# Folders are shut on purpose below, so they are opened again before the throwaway tree is removed.
+trap 'chmod -R u+rwx "$WORK" 2>/dev/null; rm -rf "$WORK"' EXIT
 pass=0; fail=0
 check(){ if [[ "$3" == *"$2"* ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1"; echo "  expected to contain: $2"; echo "  actual: ${3:0:900}"; fi; }
 check_not(){ if [[ "$3" != *"$2"* ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1"; echo "  expected NOT to contain: $2"; echo "  actual: ${3:0:900}"; fi; }

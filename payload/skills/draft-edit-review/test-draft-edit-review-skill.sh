@@ -24,7 +24,8 @@ check_eq(){ if [[ "$3" == "$2" ]]; then pass=$((pass + 1)); else fail=$((fail + 
 
 T0=1793631600   # 10:00 AM ET on 2026-11-02
 export TZ=America/New_York
-unset CLAUDE_HOME
+export HOOK_TESTS_RUNNING=1
+export CLAUDE_HOME="$WORK/home"   # so a seam that stopped being read lands here, never in the real state
 fresh(){ export DRAFT_EDIT_REVIEW_STATE_DIR="$WORK/$1/state/draft-edit-review"; }
 dec(){ DRAFT_EDIT_REVIEW_NOW="${NOW:-$T0}" python3 -B "$TOOL" "$@" 2>&1; }
 
@@ -141,7 +142,14 @@ check "a refusal by the Slack drafts gate is final" "is final" "$body"
 check "each decision is recorded" "decisions.py record" "$body"
 check "the review is marked finished" "decisions.py reviewed" "$body"
 check "a decision can be taken back" "decisions.py forget" "$body"
-check_eq "no dash is used as punctuation in the skill" "0" "$(grep -c -E ' - |\xe2\x80\x94|\xe2\x80\x93' "$SKILL" 2>/dev/null || true)"
+# The two long dashes are written as their bytes, so this file holds neither character.
+EM="$(printf '\342\200\224')"; EN="$(printf '\342\200\223')"
+check_eq "no dash is used as punctuation in the skill" "0" "$(grep -c -e ' - ' -e "$EM" -e "$EN" "$SKILL" 2>/dev/null || true)"
+check_eq "and that check sees a long dash when one is there" "1" "$(printf 'a rule %s with a dash\n' "$EM" | grep -c -e ' - ' -e "$EM" -e "$EN" || true)"
+
+# Outside the suites the folder and the clock cannot be moved by the environment.
+out="$(HOOK_TESTS_RUNNING=0 DRAFT_EDIT_REVIEW_STATE_DIR="$WORK/elsewhere" python3 -B "$TOOL" status 2>&1)"
+check "outside a suite the state folder is not taken from the environment" "state folder: $WORK/home/state/draft-edit-review" "$out"
 
 echo
 echo "passed: $pass, failed: $fail"

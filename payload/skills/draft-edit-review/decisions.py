@@ -53,14 +53,20 @@ class Unreadable(Exception):
     pass
 
 
+def seam(name):
+    """A setting the suites move (the folder, the clock), read only under HOOK_TESTS_RUNNING=1, as the
+    notice hook reads the same two: nothing in a real session's environment moves either."""
+    return os.environ.get(name, "") if os.environ.get("HOOK_TESTS_RUNNING") == "1" else ""
+
+
 def state_dir():
     home = os.environ.get("CLAUDE_HOME") or os.path.join(os.path.expanduser("~"), ".claude")
-    return os.environ.get("DRAFT_EDIT_REVIEW_STATE_DIR") or os.path.join(home, "state", "draft-edit-review")
+    return seam("DRAFT_EDIT_REVIEW_STATE_DIR") or os.path.join(home, "state", "draft-edit-review")
 
 
 def now():
-    seam = os.environ.get("DRAFT_EDIT_REVIEW_NOW", "")
-    return int(seam) if seam.isdigit() else int(datetime.datetime.now().timestamp())
+    at = seam("DRAFT_EDIT_REVIEW_NOW")
+    return int(at) if at.isdigit() else int(datetime.datetime.now().timestamp())
 
 
 def day(seconds):
