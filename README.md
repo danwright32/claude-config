@@ -11528,7 +11528,8 @@ parents, which the session's own process is on, is still attached (the session's
 are, for as long as it is open) and withholds nothing; one that reaches launchd was left behind;
 one whose parents cannot be followed withholds as unread
 (`tests/test-close-card-process-look.sh` runs the look on real processes). A reading that cannot be
-taken withholds it. Each reason is written to `~/.claude/state/close-session/<session id>.json`, newest
+taken withholds it. Each reason is written to
+`~/.claude/state/close-session/<session id>.json`, newest
 replacing the one before. The next turn start takes the card down as withdrawn; it comes back
 only after the next box. Invisible to both readings: a program that detaches itself without the
 command saying so, and an Apple signed program (a shell, sleep) left behind, whose environment
