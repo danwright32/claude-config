@@ -1633,9 +1633,10 @@ def after_a_name(text, at):
     return i < at and text[i:at] not in RESERVED
 
 
-def crude_inner(text):
+def crude_listed(text, cut):
     """The stretches of one piece of the crude cut that may be commands of their own
-    (claude-config#3473): what follows each opener, closer or backquote, and what stands before a
+    (claude-config#3473), each as (where it starts, the stretch), `cut` being crude_cut's reading
+    of the piece: what follows each opener, closer or backquote, and what stands before a
     closer or a backquote. The cut left a `$( )`, a pair of backquotes, a `<( )` and a subshell
     whole, so `x=$(git push)` named no git command, and `(git push)` named the subcommand `push)`.
 
@@ -1656,11 +1657,34 @@ def crude_inner(text):
     edge, the one that closes it too, because the parenthesis may be glued to a name inside a quoted
     word, `x=$(git push origin "a(b")`, and the `)` after it then closes the substitution.
 
-    After those stretches, in the order they always had, come the ones a finer cut finds
-    (claude-config#3786, crude_listed): a command after a single ampersand, after coproc and inside
-    a `${ cmd; }`, and a command before an ampersand with its own words.
+    Two passes, so that nothing the cut gave can be lost to a finer one (claude-config#3786). The
+    first is the rule above, word for word: its edges, its order. The second reads the finer cut
+    (crude_cut) by the same rule and adds each stretch the first did not give: what follows an
+    ampersand, a `${ ` or coproc, and what stands before an ampersand, which is a whole command
+    with its own words (`git push origin main & wait` gave the push the words `& wait`). A stretch
+    the first pass gave whole is still given whole, so `(git push --force & x)` is still read as
+    one push with every word it had, and once more as the push the shell runs.
     """
-    return [part for _, part in crude_listed(text, crude_cut(text))]
+    out, spans, at, first = [], set(), 0, True
+    for m in CRUDE_EDGE.finditer(text):
+        if m.group() == "(" and after_a_name(text, m.start()):
+            continue
+        part = text[at:m.start()]
+        if part.strip() and (not first or m.group() in (")", "`")):
+            out.append((at, part))
+            spans.add((at, m.start()))
+        at, first = m.end(), False
+    if not first and text[at:].strip():
+        out.append((at, text[at:]))
+        spans.add((at, len(text)))
+    for start, end, left, right in cut:
+        part = text[start:end]
+        if not part.strip() or not (left or right in (")", "`") or right[:1] == "&"):
+            continue
+        if (start, end) not in spans:
+            out.append((start, part))
+        out.extend((start, more) for more in crude_more(part, left))
+    return out
 
 
 # The edges of the finer cut (claude-config#3786): CRUDE_EDGE's, and three more places a command
@@ -1684,7 +1708,7 @@ def crude_cut(text):
     """One piece cut at every edge of the finer cut: (start, end, left, right) for each stretch,
     blank ones too, left and right the edges either side of it and "" at the piece's two ends.
 
-    The `(` written straight after a name is passed over as crude_inner passes over it, but for the
+    The `(` written straight after a name is passed over as crude_listed passes over it, but for the
     one glued to coproc, which is a word that takes a command after it as the reserved words do.
     No shell on the Mac this was written on reads `coproc(cmd)` (bash 3.2 has no coproc and zsh 5.9
     takes the parenthesis another way), so that one is listed unmeasured, on the side of more.
@@ -1716,40 +1740,6 @@ def crude_more(part, left):
     elif left[:1] == "&" and re.match(r"!\S", part):
         return [part[1:]]
     return []
-
-
-def crude_listed(text, cut):
-    """(where its stretch starts, the stretch) for each stretch of a piece that may be a command of
-    its own. `cut` is crude_cut's reading of the piece.
-
-    Two passes, so that nothing the cut gave can be lost to the finer one (claude-config#3786).
-    The first is claude-config#3473's, word for word: its edges, its rule, its order. The second
-    reads the finer cut by the same rule and adds each stretch the first did not give: what follows
-    an ampersand, a `${ ` or coproc, and what stands before an ampersand, which is a whole command
-    with its own words (`git push origin main & wait` gave the push the words `& wait`). A stretch
-    the first pass gave whole is still given whole, so `(git push --force & x)` is still read as
-    one push with every word it had, and once more as the push the shell runs.
-    """
-    out, spans, at, first = [], set(), 0, True
-    for m in CRUDE_EDGE.finditer(text):
-        if m.group() == "(" and after_a_name(text, m.start()):
-            continue
-        part = text[at:m.start()]
-        if part.strip() and (not first or m.group() in (")", "`")):
-            out.append((at, part))
-            spans.add((at, m.start()))
-        at, first = m.end(), False
-    if not first and text[at:].strip():
-        out.append((at, text[at:]))
-        spans.add((at, len(text)))
-    for start, end, left, right in cut:
-        part = text[start:end]
-        if not part.strip() or not (left or right in (")", "`") or right[:1] == "&"):
-            continue
-        if (start, end) not in spans:
-            out.append((start, part))
-        out.extend((start, more) for more in crude_more(part, left))
-    return out
 
 
 def crude_nests(text, cut, nests, piped):
@@ -1802,7 +1792,7 @@ def crude_nests(text, cut, nests, piped):
 
 def crude_commands(s, cwd=""):
     """The reading used when commands() cannot be trusted: a cut at every separator, quotes and all,
-    and after the pieces of that cut the commands that may be written inside one (crude_inner).
+    and after the pieces of that cut the commands that may be written inside one (crude_listed).
 
     It can only see MORE commands than are there, which is the direction a gate that must not miss a
     push needs (L42), and it keeps the cds in order, so the last one before a push still governs it.

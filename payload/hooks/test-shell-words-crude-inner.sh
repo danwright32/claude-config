@@ -504,8 +504,17 @@ rng = random.Random(3473)
 BITS = ["git push origin main", "echo a", "cd /tmp/a", "cd b", "x=", "(", ")", "$(", "`", "<(", ">(", " ",
         " && ", " || ", "; ", " | ", "\n", '"', "'", "\\", "case x in a)", ";;", "{ ", "}", "#", "$((", "))",
         " & ", "&", "coproc ", "coproc(", "${ ", "${", " &> out", " 2>&1", " >&2", "|& ", "&!", "!"]
-lost = strangers = more = fewer = 0
-first_lost = first_stranger = first_fewer = ""
+def in_order(before, after):
+    """Whether the records of before all come in after in the order they have in before, whatever
+    stands between them."""
+    rest = iter(after)
+    return all(any(record == other for other in rest) for record in before)
+
+
+row("#3786 the order check itself: two records the wrong way round are told from the right way round",
+    "" if in_order([1, 2], [0, 1, 9, 2]) and not in_order([1, 2], [2, 1]) else "it cannot tell them apart")
+lost = strangers = more = fewer = shuffled = 0
+first_lost = first_stranger = first_fewer = first_shuffled = ""
 TEXTS = 3000
 for _ in range(TEXTS):
     text = "".join(rng.choice(BITS) for _ in range(rng.randint(1, 14)))
@@ -514,6 +523,9 @@ for _ in range(TEXTS):
     if gone:
         fewer += 1
         first_fewer = first_fewer or "%r is no longer given for %r" % (sorted(gone)[0], text)
+    elif not in_order(cut_3473(text), after):
+        shuffled += 1
+        first_shuffled = first_shuffled or repr(text)
     if not kept_first(before, after):
         lost += 1
         first_lost = first_lost or repr(text)
@@ -526,6 +538,8 @@ row("over %d made up texts, the old cut is given first and whole, each record in
     "" if not lost else "%d texts lost a record or gave a new one ahead of an old one, the first: %s" % (lost, first_lost))
 row("#3786 over the same texts, every record the cut gave before this change it still gives, in the same directory, as many times",
     "" if not fewer else "%d texts lost a record, the first: %s" % (fewer, first_fewer))
+row("#3786 over the same texts, the records the cut gave before this change come in the order they had",
+    "" if not shuffled else "%d texts gave them in another order, the first: %s" % (shuffled, first_shuffled))
 row("over the same texts, every record's text is written in the text it was cut from",
     "" if not strangers else "%d texts gave a text not written in them, the first: %s" % (strangers, first_stranger))
 # Without this the two rows above would pass on a reader that lists nothing new.
