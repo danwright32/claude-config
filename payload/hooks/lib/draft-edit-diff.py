@@ -36,11 +36,14 @@ posted word for word then read as twelve changed openings with 0 of 12 explained
 of pull request 3848, M1). A heavily rewritten pair is not looked at.
 
 --likeness adds how many pairs sit in each band of likeness (the same; 0.98 and over; 0.95; 0.90;
-0.80; 0.70; under 0.70, which is heavily rewritten), and how many posts were the last message of
-the read their text was taken from. Counts only. It is the one count that can be set beside the
-issue's four bands of 2026-11-24 (22 sent as drafted, 25 lightly edited, 30 edited and 29 heavily
-rewritten, of 106): this reader calls a pair sent as drafted only when the two are the SAME once
-formatting is set aside, and where the issue drew its lines is not on record.
+0.80; 0.70; under 0.70), counted TWICE, by words and by characters, and how many posts were the
+last message of the read their text was taken from. Counts only. The issue's count of 2026-11-24
+reported four bands (22 sent as drafted, 25 lightly edited, 30 edited and 29 heavily rewritten, of
+106). This reader calls a pair sent as drafted only when the two are the SAME once formatting is
+set aside, and where the issue drew its lines, and whether it compared words or characters, is not
+on record. So neither count here is that count run again, and neither can confirm why the two
+differ or rule a cause out: about a fifth of the pairs at 0.90 and over fits the two counts having
+meant different things, and fits small edits of his equally. The run prints that with the counts.
 
 WHAT DAN DECIDED BEFORE. A kind he accepted or said never to offer again is not offered: this reads
 ~/.claude/state/draft-edit-review/decisions.json itself, the file the skill's decisions.py writes,
@@ -103,7 +106,8 @@ WHAT IT CANNOT SEE, so nobody reads more into a count than it measured.
 
 THE KINDS. A pair is one of the first two and nothing else, or any number of the other four.
   sent as drafted     the two are the same once formatting is set aside
-  heavily rewritten   their likeness is under HEAVY (0.70, the line issue #3554's measurement used).
+  heavily rewritten   their likeness BY WORDS is under HEAVY (0.70, the number issue #3554's
+                      measurement used; whether that was of words or of characters is not on record).
                       Such a pair is counted here and in no kind below, so it cannot reach the floor
                       and is never the example: it may not be an edit of that draft at all.
   figures cut         what was sent holds fewer numbers than the draft
@@ -164,7 +168,8 @@ were written. They make a layout that differs fail aloud.
 
 Exit codes: 0 measured; 2 a wrong argument; 3 the records folder or the decisions file could not be
 read; 4 read results were there and none could be read, or the text of most messages is not where
-this looks for it.
+this looks for it, or most posts paired with a draft begin or end in a line shaped like a label that
+the draft does not hold (a line of the connector's, or one he adds by hand: it cannot tell which).
 """
 import argparse
 import collections
@@ -618,6 +623,24 @@ def kinds_of(draft, sent):
     return kinds, likeness
 
 
+def likeness_by_characters(draft, sent):
+    """The share of the CHARACTERS the two have in common, after the same formatting is set aside as
+    kinds_of sets aside (1 is the same text). It is here because kinds_of measures by words, and the
+    issue's count of 2026-11-24 says only that it "compared the two with difflib": handed two strings
+    whole, difflib compares characters. The two measures differ widely on a small change. One changed
+    letter in a message of ten words is 0.90 by words and about 0.99 by characters, and in a message
+    of three words it is under HEAVY by words (the third review of pull request 3848, S1).
+
+    It decides nothing: no kind and no floor reads it. It is counted in bands by --likeness, beside
+    the bands by words. It is NOT the issue's count run again either: that script is not in the
+    repository, and whether it left difflib's own shortcut for long texts on (it is off here, as in
+    kinds_of, so the figure is the same whatever the length) is not on record."""
+    dt, st = " ".join(sentences(draft)), " ".join(sentences(sent))
+    if dt == st:
+        return 1.0
+    return difflib.SequenceMatcher(None, dt, st, autojunk=False).ratio()
+
+
 def may_be_connectors(draft, sent):
     """Whether the first or the last line of what was read back is shaped like a label that the draft
     does not hold at that same end. Such a line may be the connector's and not his: the connector's
@@ -1005,12 +1028,14 @@ def main():
         # issue's count of 2026-11-24 read 22 of 106 pairs as sent as drafted and the first run of this
         # reader read 6 of 184, and the likeliest cause is that the two meant different things by it:
         # this wants the two texts the same once formatting is set aside, and the issue reported four
-        # bands of likeness. If that is the cause, about a fifth of the pairs sit in the top lines here.
+        # bands of likeness. The bands are printed twice, by words and by characters, because the issue
+        # never recorded which it compared, and a small change sits in very different bands under the two.
+        # Neither can settle the cause, and the fixed words printed under them say so.
         same = sum(1 for _likeness, as_drafted, _final in banded if as_drafted)
         rest = sorted(likeness for likeness, as_drafted, _final in banded if not as_drafted)
         print("")
-        print("How like its draft each post is (counts only; likeness is the share of the words the two have in "
-              "common, after formatting is set aside)")
+        print("How like its draft each post is, by words (counts only; likeness is the share of the words the two "
+              "have in common, after formatting is set aside)")
         print("pairs by how like their draft they are: %d" % len(banded))
         print("  the same once formatting is set aside: %d" % same)
         upper = None
@@ -1022,6 +1047,34 @@ def main():
                 print("  %.2f to under %.2f: %d" % (edge, upper, n))
             upper = edge
         print("  under %.2f, heavily rewritten: %d" % (HEAVY, sum(1 for likeness in rest if likeness < HEAVY)))
+        # The same pairs and the same bands, by characters. A pair is "the same" under both or neither,
+        # since both set the same formatting aside first. Every line begins "by characters," so that
+        # no line of this block can be read, or matched by a check, as a line of the block above.
+        chars = sorted(likeness_by_characters(pair[2], pair[3]) for pair, (_likeness, as_drafted, _final)
+                       in zip(pairs, banded) if not as_drafted)
+        print("")
+        print("How like its draft each post is, by characters (counts only; the share of the characters the two "
+              "have in common, after the same formatting is set aside; one changed letter in a message of ten "
+              "words is 0.90 by words and about 0.99 by characters)")
+        print("pairs by how like their draft they are, by characters: %d" % len(banded))
+        print("  by characters, the same once formatting is set aside: %d" % same)
+        upper = None
+        for edge in LIKENESS_BANDS + (HEAVY,):
+            n = sum(1 for likeness in chars if likeness >= edge and (upper is None or likeness < upper))
+            if upper is None:
+                print("  by characters, not the same, %.2f and over: %d" % (edge, n))
+            else:
+                print("  by characters, %.2f to under %.2f: %d" % (edge, upper, n))
+            upper = edge
+        print("  by characters, under %.2f: %d" % (HEAVY, sum(1 for likeness in chars if likeness < HEAVY)))
+        print("What these two counts can and cannot show (fixed words, the same on every run). The issue's count "
+              "of 2026-11-24 read 22 of 106 pairs, about a fifth, as sent as drafted. Whether it compared words or "
+              "characters, and where it drew that line, is not on record, so neither count above is that count "
+              "run again. If the pairs that are the same and the pairs at 0.90 and over together come to about a "
+              "fifth in either count, that fits the two counts having meant different things by sent as drafted, "
+              "and it fits small edits of his of a word or two equally: it does not tell the two apart. If they "
+              "stay far under a fifth in both, that makes that cause less likely and does not rule it out. "
+              "Neither count says whether any pair is his edit.")
         # Whatever the connector writes after the messages of a read lands under the last one, so a
         # share sent as drafted that is lower among those posts than among the others points there.
         last = [as_drafted for _likeness, as_drafted, final in banded if final]

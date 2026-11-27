@@ -322,6 +322,46 @@ check_not "likeness: counts only, no message text" "tide" "$out"
 check_not "likeness: nor a swapped word" "ebb" "$out"
 check_not "likeness: nothing of it without the flag" "pairs by how like their draft" "$(run bands)"
 check "the default run says how many pairs changed in none of the four kinds, at zero too" "changed, in none of the four kinds: 0 of 12 pairs" "$(run recurring)"
+# The same bands by CHARACTERS, beside the bands by words (third review, S1). The issue's count never
+# recorded which it used, and the two differ widely: one changed letter in a ten word message is 0.90
+# by words and about 0.99 by characters. Twelve drafts of exactly 100 characters in 16 words, each
+# posted with 0, 1, 2, 3, 5, 6, 10, 11, 20, 21, 30 and 31 characters changed, one to a word. By
+# characters that is the same, 0.99, 0.98, 0.97, 0.95, 0.94, 0.90, 0.89, 0.80, 0.79, 0.70 and 0.69. By
+# words it is the same, 0.9375, 0.875, 0.8125, and under 0.70 for the other eight.
+fixture char_bands || { echo "FAIL: fixture char_bands could not be built"; fail=$((fail + 1)); }
+out="$(run char_bands --likeness)"; rc=$?
+check_eq "char bands: the run succeeds" "0" "$rc"
+check "char bands, by words: the pairs it is counted over" "pairs by how like their draft they are: 12" "$out"
+check "char bands, by words: the same" "  the same once formatting is set aside: 1" "$out"
+check "char bands, by words: nothing in the top band, though two posts changed one and two letters" "  not the same, 0.98 and over: 0" "$out"
+check "char bands, by words: nor in the next" "  0.95 to under 0.98: 0" "$out"
+check "char bands, by words: one changed letter in 16 words is 0.9375" "  0.90 to under 0.95: 1" "$out"
+check "char bands, by words: two and three are 0.875 and 0.8125" "  0.80 to under 0.90: 2" "$out"
+check "char bands, by words: none between 0.70 and 0.80" "  0.70 to under 0.80: 0" "$out"
+check "char bands, by words: five changed letters or more is heavily rewritten, eight of the twelve" "  under 0.70, heavily rewritten: 8" "$out"
+check "char bands, by characters: the pairs it is counted over" "pairs by how like their draft they are, by characters: 12" "$out"
+check "char bands, by characters: the same" "  by characters, the same once formatting is set aside: 1" "$out"
+check "char bands, by characters: 0.99, and 0.98 itself" "  by characters, not the same, 0.98 and over: 2" "$out"
+check "char bands, by characters: 0.97, and 0.95 itself" "  by characters, 0.95 to under 0.98: 2" "$out"
+check "char bands, by characters: 0.94, and 0.90 itself" "  by characters, 0.90 to under 0.95: 2" "$out"
+check "char bands, by characters: 0.89, and 0.80 itself" "  by characters, 0.80 to under 0.90: 2" "$out"
+check "char bands, by characters: 0.79, and 0.70 itself" "  by characters, 0.70 to under 0.80: 2" "$out"
+check "char bands, by characters: 0.69 alone is under 0.70, where by words eight were" "  by characters, under 0.70: 1" "$out"
+char_sum(){ printf '%s\n' "$1" | sed -n 's/^  by characters, .*: \([0-9][0-9]*\)$/\1/p' | awk '{ n += $1 } END { print n + 0 }'; }
+check_eq "char bands: the lines by characters add up to the pairs" "12" "$(char_sum "$out")"
+check_eq "bands: and so they do on the fixture whose words were swapped" "10" "$(char_sum "$(run bands --likeness)")"
+# What the two counts can and cannot show is printed with them, in fixed words, so nobody reads a
+# verdict into a number: the first write up called one result a confirmation and the other a ruling out.
+check "likeness: it says the issue's unit is not on record" "Whether it compared words or characters, and where it drew that line, is not on record" "$out"
+check "likeness: about a fifth fits the cause, and fits small edits of his equally" "it fits small edits of his of a word or two equally: it does not tell the two apart" "$out"
+check "likeness: far under a fifth makes the cause less likely and no more" "that makes that cause less likely and does not rule it out" "$out"
+check "likeness: and neither count says whether a pair is his edit" "Neither count says whether any pair is his edit." "$out"
+check_not "likeness: no result is called a confirmation" "confirm" "$out"
+check_not "likeness: nor a ruling out" "ruled out" "$out"
+check_not "char bands: counts only, no word of a draft" "tide" "$out"
+check_not "char bands: nor of a post" "buoy" "$out"
+check_not "char bands: nothing by characters without the flag" "by characters" "$(run char_bands)"
+check_eq "the reader's own account no longer calls the count by likeness the one that can be set beside the issue's bands" "0" "$(grep -c 'the one count that can be set beside' "$TOOL")"
 
 # --- the layout as it was measured on the work MacBook on 2026-11-27 (pull request 3848) ----------------
 # Counts, field names and the punctuation of headings were measured there. Every word below is invented.

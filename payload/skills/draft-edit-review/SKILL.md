@@ -51,7 +51,7 @@ python3 ~/.claude/hooks/lib/draft-edit-diff.py --author <member id> --difference
 ```
 
 It prints counts only: the tallies, then how the changed pairs differ, then the pairs by how like
-their draft they are. It reads the decisions from step 1 itself, so a kind Dan accepted or said
+their draft they are, counted by words and again by characters. It reads the decisions from step 1 itself, so a kind Dan accepted or said
 never to offer is marked `decided before` without anything being passed. Read the result by its
 exit code first:
 
@@ -82,8 +82,10 @@ sessions.
 Before any rule is put to him, tell Dan the doubt over these counts, in plain words, with this
 run's numbers:
 
-- How many pairs read as sent as drafted, and how many sit at 0.98 and over in the count by
-  likeness.
+- How many pairs read as sent as drafted, and how many sit at 0.90 and over in each of the two
+  counts by likeness, by words and by characters. Then what the reader itself prints under "What
+  these two counts can and cannot show", in its words. Never tell him a result confirms that cause
+  or rules it out: neither count can.
 - Of the pairs changed but not heavily rewritten, how many one difference in how a read writes a
   message would make the same, and how many are none of these. Say what that number is and is not.
   It counts the pairs that one of seven known differences would explain. It is not a limit in either

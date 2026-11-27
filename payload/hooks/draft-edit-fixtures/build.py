@@ -28,6 +28,7 @@ text was not), "no_messages_field", "odd_id", "other_mentions" (a channel, a gro
 mention with a name added), "own_drafted", "own_added" and "own_every" (his own lines shaped like
 a label) and "alerts" (most messages, by somebody else, beginning and ending in such a line).
 "bands" is ten pairs whose likeness is known by construction, for the count by likeness.
+"char_bands" is twelve pairs whose likeness is known by construction both by words and by characters.
 
 NOT seen either (the third review of pull request 3848): "phone" and "link_as_words" (a phone number
 read back as a link, and a link read back as its words and its address) and "two_lines" (two lines
@@ -421,6 +422,41 @@ def bands(folder):
     r.write(folder, "session-bands.jsonl")
 
 
+# How many CHARACTERS of a draft of exactly 100 each post changes. By characters the likeness is
+# (100 - changed) / 100: the same, then 0.99, 0.98, 0.97, 0.95, 0.94, 0.90, 0.89, 0.80, 0.79, 0.70 and
+# 0.69, five of them exactly on a band's edge. The draft is 16 words, and each changed character is
+# in a different word until all 16 hold one, so by WORDS the same posts read (16 - changed) / 16 for
+# up to 16 changed: 0.9375, 0.875, 0.8125, 0.6875, and under that for the rest.
+CHAR_SWAPS = (0, 1, 2, 3, 5, 6, 10, 11, 20, 21, 30, 31)
+
+
+def char_words(changed):
+    """Sixteen invented words, 100 characters with the spaces between them: five of six letters and
+    eleven of five. The first `changed` characters, counted one to a word and then round again, are
+    replaced by a letter no word holds, so no changed character can match anything."""
+    letters = "abcdefghijk"
+    words = ["tidea" + letters[i] for i in range(5)] + ["buoy" + letters[i] for i in range(11)]
+    for j in range(changed):
+        word, at = j % len(words), j // len(words)
+        words[word] = words[word][:at] + "x" + words[word][at + 1:]
+    return " ".join(words)
+
+
+def char_bands(folder):
+    """Twelve drafts of 100 characters in twelve threads, each posted with a known number of
+    characters changed, so the count of pairs in each band has a known answer BOTH ways: by
+    characters and by words. It is the third review's point made as a fixture: the same twelve pairs
+    read as eight heavily rewritten by words and as one under 0.70 by characters."""
+    r = Records()
+    for n, changed in enumerate(CHAR_SWAPS):
+        start = 1000 * n
+        channel = "C0FIXTURE%02d" % (70 + n)
+        r.draft(start + 100, channel, start, char_words(0))
+        r.thread(start + 900, channel, start, [(start, OTHER, "Any news from the tide gauge?"),
+                                               (start + 200, ME, char_words(changed))])
+    r.write(folder, "session-char-bands.jsonl")
+
+
 def unknown(folder):
     r = Records()
     r.draft(100, "C0FIXTURE30", 0, "The lock gates close at nine.")
@@ -621,6 +657,8 @@ def main():
         other_mentions(folder)
     elif which == "bands":
         bands(folder)
+    elif which == "char_bands":
+        char_bands(folder)
     elif which == "concise":
         concise(folder, detailed_too=False)
     elif which == "concise_beside_detailed":

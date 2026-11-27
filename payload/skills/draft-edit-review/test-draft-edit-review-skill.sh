@@ -246,7 +246,13 @@ check "and the second" "--likeness" "$flags"
 check "Dan is told the doubt over the counts before any rule" "Before any rule is put to him, tell Dan the doubt over these counts" "$body"
 check "in so many words: nobody yet knows why so few read as sent as drafted" "nobody yet knows why" "$body"
 check "with how many changed pairs a difference in how a read is written could explain" "how many one difference in how a read writes a message would make the same" "$body"
-check "and how many pairs sit in the top band of likeness" "how many sit at 0.98 and over in the count by likeness" "$body"
+# The third review's S1: the count by likeness is by words, the issue's count never recorded its unit,
+# and one changed letter in a ten word message is 0.90 by words. So he is told the pairs at 0.90 and
+# over, both ways, and what the reader itself says those counts can and cannot show.
+check "and how many pairs sit at 0.90 and over, by words and by characters" "how many sit at 0.90 and over in each of the two counts by likeness, by words and by characters" "$body"
+check_not "the top band alone is no longer what he is told" "how many sit at 0.98 and over in the count by likeness" "$body"
+check "he is told what those counts can and cannot show, in the reader's own words" 'under "What these two counts can and cannot show"' "$body"
+check "no result is put to him as settling the cause" "Never tell him a result confirms that cause or rules it out" "$body"
 check_eq "he is told before the first question" "1" "$(follows 'Before any rule is put to him, tell Dan the doubt over these counts' 'Ask one AskUserQuestion for each recurring kind')"
 check "each question says how many of its kind's pairs a listed read difference would explain" "how many of those N pairs one difference in how a read is written would make the same" "$body"
 # The third review's M1. That number was put to Dan as "up to K of those N may be no edit of yours",
@@ -260,6 +266,7 @@ out="$(env -u CLAUDE_HOME -u DRAFT_EDIT_REVIEW_STATE_DIR HOME="$WORK/m1" python3
 check "twelve word for word posts, a phone number read back as a link: the reader offers a kind" "the opening changed: 12 of 12 pairs, in 3 threads: recurring" "$out"
 check "and prints 0 of 12 beside it, so no sentence may read that number as a limit" "  the opening changed: 0 of 12 pairs" "$out"
 check_eq "the differences the reader lists are the seven the skill names" "7" "$(printf '%s\n' "$out" | grep '^  the same once ' | grep -c -v 'once formatting is set aside')"
+check "the reader prints, with the two counts by likeness, the words the skill sends him to" "What these two counts can and cannot show" "$out"
 check "the question's sentence says what K counts" '"K of those N would be the same with one of seven known differences in how Slack reads a message back set aside.' "$body"
 check "and that the rest can be a read difference nobody has listed" 'The other N minus K differ some other way: an edit of yours, or a read difference nobody has listed."' "$body"
 check "and the skill says K is no limit, with the case that shows it" "Never call K a limit on how many may be no edit of his: with K at 0, all N can still be no edit of his." "$body"

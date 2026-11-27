@@ -6511,8 +6511,11 @@ pieces turn the edits he keeps making into written rules, each one his to accept
   and cuts lines, and a pair it does not explain can still be no edit of his, when a read writes a
   message another way that is not listed (twelve drafts posted word for word, with a phone number
   read back as a link, read as twelve changed openings with 0 of 12 explained). `--likeness` counts the pairs in each band of likeness (the
-  same, 0.98 and over, 0.95, 0.90, 0.80, 0.70, under 0.70) and how many posts were the last
-  message of the read their text came from.
+  same, 0.98 and over, 0.95, 0.90, 0.80, 0.70, under 0.70), once by words and once by characters,
+  and how many posts were the last message of the read their text came from. The two differ
+  widely on a small change: one changed letter in a message of ten words is 0.90 by words and
+  about 0.99 by characters. The run prints, in fixed words, what the two counts can and cannot
+  show.
 - **The offer**, the `draft-edit-review` skill. It runs the reader with `--differences` and
   `--likeness`, tells Dan the counts and, before any rule, the doubt set out in the last paragraph
   of this section, and asks one question for each recurring kind: the proposed rule in one
@@ -6564,11 +6567,15 @@ heading with no name, the section heading over a thread's replies, a `Reactions:
 message, and the name a read adds inside a mention. The fixtures hold invented text in that layout.
 A channel, a group and a here mention with a name added are set aside the same way, and were not
 measured. One thing that run left unexplained: 6 of its 184 pairs read as sent as drafted, against
-22 of 106 in the issue's measurement of 2026-11-24. The likeliest cause is that the two counts
-meant different things by it: the issue reported four bands, and this reader wants the two texts
-the same. `--likeness` is the count that can be set beside those bands, and it had not been run on
-the work MacBook when this was written on 2026-11-27. Until it has, the skill tells Dan that doubt
-at every review, with the run's own numbers, before it puts any rule to him.
+22 of 106 in the issue's measurement of 2026-11-24. One likely cause is that the two counts meant
+different things by it: the issue reported four bands, and this reader wants the two texts the
+same. `--likeness` prints bands of its own, by words and by characters, and cannot settle that:
+the issue did not record whether it compared words or characters, or where it drew its lines, so
+about a fifth of the pairs at 0.90 and over would fit that cause and fit small edits of his
+equally, and far fewer would make it less likely without ruling it out. Neither count had been
+run on the work MacBook when this was written on 2026-11-27. For as long as the reader's own
+account lists that share as not explained, the skill tells Dan the doubt at every review, with the
+run's own numbers, before it puts any rule to him.
 
 ## Read only queries are approved without asking
 
