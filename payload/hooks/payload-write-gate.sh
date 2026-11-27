@@ -1597,11 +1597,21 @@ try:
             if p:
                 rest_of_it = re.sub(r"(?:^|(?<=[\s\"\x27`;&|()<>]))" + re.escape(p) + r"(?=[\s\"\x27`;&|()<>]|$)",
                                     " ", rest_of_it, count=1)
+        # THE SEARCH AS IT WAS, KEPT BESIDE THE NEW ONE. Taking every occurrence out could also
+        # MAKE the word payload/ appear, where a script name sat against it inside a longer word:
+        # a script named x beside xpayload/hooks, or one named s beside /payloads. Those refusals
+        # are for a path that is no payload path. Dropping a refusal is a choice left to Dan in the
+        # pull request of #3775, so until he answers, a command either search refuses is refused.
+        as_it_was = cmd
+        for p in own_scripts:
+            if p:
+                as_it_was = as_it_was.replace(p, " ")
         written = heredoc_written()
         for path, full, why_not, b in unread:
             if full in written:
                 continue
-            if re.search(NAMES_PAYLOAD, rest_of_it) or re.search(IN_PAYLOAD, b.lstrip(UNKNOWN)):
+            if re.search(NAMES_PAYLOAD, rest_of_it) or re.search(NAMES_PAYLOAD, as_it_was) \
+                    or re.search(IN_PAYLOAD, b.lstrip(UNKNOWN)):
                 t = UNTOLD + re.sub(r"\s+", " ", "a command that runs the script file %s, which this gate could not read" % full) \
                     + "\t" + re.sub(r"\s+", " ", "payload-write-gate.sh could not read the script file %s (%s), so a link or "
                     "a write it makes cannot be read from it, and the command names a payload/ path besides it or "

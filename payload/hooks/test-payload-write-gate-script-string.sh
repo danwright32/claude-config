@@ -592,6 +592,16 @@ runbash "bash $FIX/dev/payload/hooks/gone.sh; bash $FIX/dev/payload/hooks/gone.s
 allowed "#3775 control: the same script that is not there run twice, no payload path besides, is let through"
 runbash "(bash $FIX/dev/payload/hooks/gone.sh)>$FIX/elsewhere/a.txt" "$FIX/elsewhere"
 allowed "#3775 control: and run inside brackets with its output sent elsewhere"
+# What the old search refused by accident is still refused. Taking every occurrence of a script
+# name out could make the word payload/ appear where the name sat against it inside a longer word.
+# Neither path below is a payload path, but dropping a refusal is left to Dan (the pull request of
+# #3775), so the gate asks the old search as well as the new one until he answers.
+# shellcheck disable=SC2016
+runbash 'bash x; bash $Y xpayload/hooks/x.sh' "$FIX/elsewhere"
+refused "#3775 kept until decided: a script named x beside xpayload/ and a script named by a value"
+# shellcheck disable=SC2016
+runbash 'bash s; bash $Y /api/payloads' "$FIX/elsewhere"
+refused "#3775 kept until decided: a script named s beside /payloads and a script named by a value"
 
 echo "a path in a command string takes nothing from the read of the whole command"
 
