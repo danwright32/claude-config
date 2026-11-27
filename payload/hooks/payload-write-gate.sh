@@ -620,7 +620,7 @@ def add_maybe(tok, base):
 # Every line is read as shell, a heredoc body line included (Dan, 2026-11-02, "Also read heredoc
 # text", claude-config#2080). A body is data the shell never runs, so the text a > b in one can be refused
 # as a redirect; that was chosen over a reading of where a body ends that could ever hide a command
-# after it, as the pattern this gate kept did with <<'E'OF, <<END-OF and a << inside a quoted string.
+# after it, as the pattern this gate kept did with <<E"OF", <<END-OF and a << inside a quoted string.
 # Where a body really ends is read by lib/shell-words.py, below, for the commands the shell runs.
 #
 # Two narrowings. The single quoted arguments of a plain printf or echo (claude-config#3152,

@@ -178,6 +178,9 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
     sealed?: string[]
     sealFails?: boolean
     sealSilent?: boolean
+    // #3620: what mod-kit's write reader answers, changed before the guard is given it (a mark
+    // taken off a word, or put there as something other than the reader's own `true`).
+    reading?: (reading: ReturnType<typeof commandWrites>) => unknown
   } = { storeGetFails: false, storeSetFails: false, settingsRefuse: false }
   // Each time the guard asked design_file.py whether a text is sealed: how it ran it, and the text.
   const sealChecks: { argv: string[]; stdin: string }[] = []
@@ -254,7 +257,8 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
     }
     if (cmd === '__modkit' && args[0] === 'writes') {
       const input = JSON.parse(String(args[1])) as { command: string; cwd: string; home: string }
-      return ok(JSON.stringify(commandWrites(input.command, input.cwd, input.home)))
+      const reading = commandWrites(input.command, input.cwd, input.home)
+      return ok(JSON.stringify(ctl.reading ? ctl.reading(reading) : reading))
     }
     // Given the folder the call starts in, each command with the folder it runs in (#2000), as mod-kit's own pipeline gives it.
     if (cmd === '__modkit' && args[0] === 'pipeline') {
@@ -5594,10 +5598,10 @@ test('#3602: a suite handing its own helper a command as text, whose $( ) the sh
   expect(w.ran.length).toBe(commands.length)
 })
 
-// The controls beside it: the same reading still holds every word that spells a screen file, a
-// suite that writes one, and the same words typed whole on a command line, which this change does
-// not reach (pull request for #3602, "What is not established").
-test('#3602: a word a script hands on as written is still held where it spells a screen file, beside one, in a script that writes one, and typed whole', withKit, async ($, on) => {
+// The controls beside it: the same reading still holds every word that spells a screen file and a
+// suite that writes one. The same words typed whole on a command line were left held by that
+// change and are read by the mark since #3620, in the tests below.
+test('#3602: a word a script hands on as written is still held where it spells a screen file, beside one, and in a script that writes one', withKit, async ($, on) => {
   const scripts: Record<string, string> = {
     // The text the helper is handed ends in a screen file's name.
     'spells.sh': "run_here 'cat \\$(a | b) > app/page.tsx'\n",
@@ -5619,9 +5623,75 @@ test('#3602: a word a script hands on as written is still held where it spells a
   expect(beside).toContain('app/page.tsx')
   expect(beside).not.toContain('say $(a | b)')
   expect(refusalOf(await sh('bash payload/hooks/writes.sh'))).not.toContain('gh issue create')
-  // Typed whole, the words are judged as they were before: the mark is read only for a script's text.
-  for (const command of ['mystery "x \\$(a | b) y"', 'run "gh issue create --repo danwright-test/public-notes --title \\"\\$(pwd | tr a-z A-Z)\\" --body x"'])
-    expect({ command, held: refusalOf(await sh(command)).includes(SKIP_QUESTION) }).toEqual({ command, held: true })
+  expect(w.ran).toEqual([])
+})
+
+// #3620: the same word typed whole on a command line was still held. A program is handed an
+// argument whose every `$` and backtick the shell hands on as written (after a backslash, or in
+// single quotes), holding a parenthesis with a bar inside it. mod-kit's reader gives the word as
+// the one name it spells and marks it `unexpanded`; the guard read that mark only for a script's
+// own text (#3602), so here it took the parenthesis for a group pattern and the `$(` for a
+// command's output, and held the word as a name that may be any screen file. The mark is now read
+// on a command line too, whichever kind of run is handed the word: a program the reader does not
+// know, a script file, or a tool.
+const TYPED_3620 = [
+  'mystery "x \\$(a | b) y"',
+  'run "gh issue create --repo danwright-test/public-notes --title \\"\\$(pwd | tr a-z A-Z)\\" --body x"',
+  "mystery 'x $(a | b) y'",
+  'mystery "x \\`a | b\\` (c|d)"',
+  'mystery x\\$\\(a\\|b\\)y',
+  'timeout 5 mystery "x \\$(a | b) y"',
+  'python3 tools/gen.py "x \\$(a | b) y"',
+  'npx sometool "x \\$(a | b) y"',
+]
+const FILES_3620 = { ...WITH_SCRATCH, '/w/slate/tools/gen.py': 'print(1)\n', [`${HOOKS_3602}/shapes.sh`]: `${SHAPES_3602}\n` }
+test('#3620: a word typed whole on a command line that the shell hands on as written is read as the name it spells, and runs unasked', withKit, async ($, on) => {
+  const w = world($, on, { files: FILES_3620 })
+  const sh = (command: string) => call($, { tool: 'Bash', command })
+  // The last is the script text #3602 fixed, which must pass as it did.
+  const commands = [...TYPED_3620, 'bash payload/hooks/shapes.sh']
+  for (const command of commands) expect({ command, why: refusalOf(await sh(command)) }).toEqual({ command, why: '' })
+  expect(w.ran.length).toBe(commands.length)
+})
+
+// The controls: everything below was held before the mark was read here and is held after.
+test('#3620: such a word typed whole is still held where it spells or names a screen file, beside one, where its substitution really runs, and where the mark cannot be read', withKit, async ($, on) => {
+  const w = world($, on, { files: FILES_3620 })
+  const sh = (command: string) => call($, { tool: 'Bash', command })
+  const held = async (command: string, note = '') => expect({ command, note, held: refusalOf(await sh(command)) !== '' }).toEqual({ command, note, held: true })
+  // It spells a screen file: its last part, read as each name its group can spell, is one.
+  for (const command of ['mystery "/w/slate/app/\\$(a|b).css"', 'mystery "x \\$(a | b).css"', 'mystery "echo \\$(cat a.txt | tee page.css)"']) await held(command)
+  // It names a screen file anywhere in its text. A program that runs what it is handed as a
+  // command (a remote shell, a helper that evaluates its argument) would write that file, so on a
+  // command line such a word is judged as it was before the mark was read.
+  for (const command of ['mystery "cp x app/page.css; echo y/\\$(a|b)"', 'mystery "tee app/page.css < x; echo \\$(a|b)"', 'mystery "fix page.tsx \\$(a|b)"']) await held(command)
+  // A screen file beside it is still one, and is the only file the refusal names.
+  for (const command of ["mystery 'say $(a | b)' /w/slate/app/page.tsx", 'mystery "x \\$(a | b) y" > app/page.css', 'mystery "x \\$(a | b) y" --out=app/page.css']) await held(command)
+  const beside = refusalOf(await sh("mystery 'say $(a | b)' /w/slate/app/page.tsx"))
+  expect(beside).toContain('app/page.tsx')
+  expect(beside).not.toContain('say $(a | b)')
+  // A substitution with no backslash before it really runs, so the reader puts no mark on the
+  // word, and a script file or a tool handed it is held as handed a command's output.
+  for (const command of ['python3 tools/gen.py "$(a | b)"', 'python3 tools/gen.py "x $(a | b) y"', 'npx sometool "x $(a | b) y"']) {
+    await held(command)
+    expect(refusalOf(await sh(command))).toContain("its name is a command's output")
+  }
+  // The mark taken off the word, or anything but the reader's own `true` in its place: the guard
+  // cannot tell that the shell hands the word on as written, so it holds every one of the words
+  // the test above lets run.
+  for (const mark of [undefined, 'yes', 'true', 1, {}, null, false]) {
+    w.ctl.reading = r => ({
+      ...r,
+      runs: r.runs?.map(run => ({
+        ...run,
+        args: run.args.map(a => {
+          const { unexpanded: _, ...rest } = a
+          return mark === undefined ? rest : { ...rest, unexpanded: mark }
+        }),
+      })),
+    })
+    for (const command of TYPED_3620) await held(command, `mark ${JSON.stringify(mark)}`)
+  }
   expect(w.ran).toEqual([])
 })
 

@@ -4,8 +4,9 @@
 #
 # On 2026-11-19 two sessions, one on each Mac, built the same fix for #3285: a branch that exists
 # only in a local worktree is invisible to the other Mac, and nothing on the issue said it was taken.
-# The script does the three reads (claims on the issue, open pull requests naming it, remote branches
-# naming its number) and posts the claim in one step, so the skill's rule is "dispatch only on exit 0".
+# The script does the three reads (claims on the issue, open pull requests built for it, remote
+# branches naming its number) and posts the claim in one step, so the skill's rule is "dispatch only
+# on exit 0". A pull request that only mentions the issue is a note, never a hold (section 3b).
 #
 # A stand in gh on PATH answers from fixtures this suite writes, so no test reaches GitHub or posts a
 # comment on a real issue. The stand in returns what the real gh prints AFTER the script's --jq
@@ -191,6 +192,133 @@ printf '4102\tfix/33170-other\tTouches #33170\tRefs #33171\n%s\t%s\t%s\t%s\n' 41
 run claim "$REPO" 3317 "$MINE"
 is "a longer number and our own branch's PR do not block: exit 0" 0 "$code"
 
+# ---- 3b. a pull request that only mentions the issue does not hold it (claude-config#3788) ----
+# On 2026-11-26 three priority p1 issues could not be started: #3576 was held by pull request 3570
+# (built for #3319), #3578 by 3734 and 3693 (built for #3561 and #3600) and #3602 by 3713 (built
+# for #3620). Each only mentioned the issue. The head, the title, the built for line and the
+# mentioning sentence of each row are those pull requests' own, read from GitHub on 2026-11-26.
+pr_row() { printf '%s\t%s\t%s\t%s\n' "$@"; } # pr_row <number> <head> <title> <body>
+seen_prs() {
+  pr_row 3570 fix/3319-browser-ipv6-check \
+    "Network check: refuse the helper browser's reachability probe so a browser run can end clean (#3319)" \
+    "Main now holds pull request 3593, which reads a run as \`unmeasured\` when the Mac did not write every sandbox report the check asked for (#3576). Closes #3319"
+  pr_row 3734 feat/3561-warning-names-orphan-process \
+    "Low space warning: name a long running process with no parent (#3561)" \
+    "Part of #3561. Left: the time limit runner for an agent's generated commands (#3578), and the agent rules' sentence requiring it, which waits on that runner."
+  pr_row 3693 fix/3600-python-i-warnings-dash \
+    "Read input run after -i, a PYTHONWARNINGS module and a dash named script in the Slack drafts gate (#3600)" \
+    "The time limit wrapper for a suite run was refused the same way (claude-config#3578), so the suites ran plainly. Closes #3600"
+  pr_row 3713 fix/3620-typed-escaped-substitution \
+    "Stop the design round guard holding an escaped substitution typed whole on a command line" \
+    "The script text case 3611 fixed still passes (in the first \`#3620\` test, and the #3602 tests are unchanged but for the lines that pinned the typed whole case as held). Closes #3620"
+}
+
+new_case
+seen_prs >"$FAKE/prs"
+run claim "$REPO" 3578 fix/3578-time-limit-runner
+is "#3788 a pull request that mentions the issue in passing: exit 0" 0 "$code"
+has "#3788 mentioned in passing: the issue is claimed" "CLAIMED" "$out"
+lacks "#3788 mentioned in passing: never says held" "HELD" "$out"
+is "#3788 mentioned in passing: the claim is posted" 1 "$(posted_count)"
+has "#3788 mentioned in passing: a note names the first pull request" "mentioned, not held: pull request #3734" "$out"
+has "#3788 mentioned in passing: a note names the second, which wrote the repository's name before the number" "mentioned, not held: pull request #3693" "$out"
+lacks "#3788 mentioned in passing: a pull request that never names the issue is not printed" "#3570" "$out"
+
+for seen in 3576:3570 3602:3713; do
+  new_case
+  seen_prs >"$FAKE/prs"
+  run check "$REPO" "${seen%%:*}" "fix/${seen%%:*}-mine"
+  is "#3788 #${seen%%:*} mentioned by ${seen##*:}: check exits 0" 0 "$code"
+  has "#3788 #${seen%%:*} mentioned by ${seen##*:}: check says free" "FREE" "$out"
+  has "#3788 #${seen%%:*} mentioned by ${seen##*:}: the note names it" "mentioned, not held: pull request #${seen##*:}" "$out"
+done
+
+# The same four pull requests still hold the issues they are built for, by each route alone: the
+# branch's number is taken out of each row here, so only the title or the body is left to hold.
+unnumbered() { seen_prs | awk -F '\t' -v OFS='\t' '{ $2 = "feat/no-number-" NR; print }'; }
+for built in 3319:3570 3561:3734 3600:3693 3620:3713; do
+  new_case
+  unnumbered >"$FAKE/prs"
+  run claim "$REPO" "${built%%:*}" "fix/${built%%:*}-mine"
+  is "#3788 #${built%%:*} is what ${built##*:} is built for: exit 1" 1 "$code"
+  has "#3788 #${built%%:*} is what ${built##*:} is built for: says held" "HELD" "$out"
+  has "#3788 #${built%%:*} is what ${built##*:} is built for: names it as the holder" "pull request: #${built##*:}" "$out"
+  lacks "#3788 #${built%%:*} is what ${built##*:} is built for: the holder is not also a note" "mentioned, not held" "$out"
+  is "#3788 #${built%%:*} is what ${built##*:} is built for: nothing posted" 0 "$(posted_count)"
+done
+
+# A held issue still prints the pull requests that only mention it, under the one that holds it.
+new_case
+{ pr_row 4120 fix/steps-pane "Fix the pane" "Closes #3317"; pr_row 4121 fix/other "Another" "See #3317 for the measurement."; } >"$FAKE/prs"
+run claim "$REPO" 3317 "$MINE"
+is "#3788 one holds and one mentions: exit 1" 1 "$code"
+has "#3788 one holds and one mentions: the holder is named" "pull request: #4120" "$out"
+has "#3788 one holds and one mentions: the mention is a note" "mentioned, not held: pull request #4121" "$out"
+
+# Each word that means built for, alone in a body with no number in the title or the branch. "Refs"
+# is the repository's own word for a pull request built for an issue it will not close: 9 lines in
+# the 300 pull requests merged before 2026-11-26, each naming the issue its branch names (#3500's
+# sentences are the two used here). A colon, capitals and the repository written out all count.
+holds_body() { # holds_body <description> <body>
+  new_case
+  pr_row 4130 feat/no-number "A title" "$2" >"$FAKE/prs"
+  run check "$REPO" 3317 "$MINE"
+  is "#3788 built for, by its body: $1: exit 1" 1 "$code"
+  has "#3788 built for, by its body: $1: names the pull request" "pull request: #4130" "$out"
+}
+for word in close closes closed fix fixes fixed resolve resolves resolved Closes CLOSES "Part of" "part of" Refs; do
+  holds_body "$word" "Some lines first. $word #3317"
+done
+holds_body "a keyword and a colon" "Closes: #3317"
+holds_body "the keyword mid sentence" "This closes #3317, and the suite is unchanged."
+holds_body "the repository written out in full" "Closes danwright32/claude-config#3317."
+holds_body "the repository's name alone" "Part of claude-config#3317."
+holds_body "It refs" "Because that point is open, this does not close issue #3475. It refs #3317."
+holds_body "a mention first and the built for line after it" "Follows #3317's design. Part of #3317."
+
+new_case
+pr_row 4131 feat/no-number "Fix the pane (#3317)" "no reference" >"$FAKE/prs"
+run check "$REPO" 3317 "$MINE"
+is "#3788 built for, by its title: exit 1" 1 "$code"
+has "#3788 built for, by its title: names the pull request" "pull request: #4131" "$out"
+
+# What does not mean built for: each is a note, never a hold. The sentences are shapes read from
+# the repository's own pull requests (the first three from #3489, #3776 and #3209).
+notes_body() { # notes_body <description> <body>
+  new_case
+  pr_row 4140 feat/no-number "A title" "$2" >"$FAKE/prs"
+  run check "$REPO" 3317 "$MINE"
+  is "#3788 only a mention: $1: exit 0" 0 "$code"
+  has "#3788 only a mention: $1: says free" "FREE" "$out"
+  has "#3788 only a mention: $1: the note names the pull request" "mentioned, not held: pull request #4140 (feat/no-number)" "$out"
+}
+notes_body "a fix for" "A small fix for #3317 inside the existing helper reading."
+notes_body "the keyword after the number" "The cost: the hole #3317 closed is open again."
+notes_body "follow up to" "Follow up to #3317 (pull request #3199)."
+notes_body "stacked on" "This branch is stacked on #3317, which changes the same part."
+notes_body "a keyword inside a longer word" "It prefixes #3317 with the name."
+notes_body "a keyword before another issue only" "Closes #4000. See #3317."
+notes_body "another repository's issue of the same number" "Closes other/tool#3317."
+notes_body "a fork's issue of the same number" "Closes someone/claude-config#3317."
+
+# A longer number is neither a hold nor a note.
+new_case
+pr_row 4150 feat/no-number "Touches #33170" "Closes #33171 and part of #33172." >"$FAKE/prs"
+run check "$REPO" 3317 "$MINE"
+is "#3788 a longer number after a keyword: exit 0" 0 "$code"
+lacks "#3788 a longer number after a keyword: no note either" "#4150" "$out"
+
+# The pull request read failing beside a pull request that only mentions the issue is still a
+# failed read: the note must never stand in for the answer.
+new_case
+seen_prs >"$FAKE/prs"
+: >"$FAKE/fail_pr"
+run claim "$REPO" 3578 fix/3578-time-limit-runner
+is "#3788 the pull request read fails: exit 2" 2 "$code"
+has "#3788 the pull request read fails: says it could not check" "COULD NOT CHECK" "$out"
+lacks "#3788 the pull request read fails: never says claimed" "CLAIMED" "$out"
+is "#3788 the pull request read fails: nothing posted" 0 "$(posted_count)"
+
 # ---- 4. a remote branch naming its number ----
 new_case
 printf 'main\nfix/3317-someone-else\n' >"$FAKE/branches"
@@ -226,6 +354,110 @@ code=$?
 is "branch reader fails: exit 2" 2 "$code"
 has "branch reader fails: says it could not check" "COULD NOT CHECK" "$out"
 is "branch reader fails: nothing posted" 0 "$(posted_count)"
+
+# ---- 5b. a tool that reads what gh returned failing is a failed read too (claude-config#3788) ----
+# gh answering is half of a read: awk picks the live claims out of the issue's marker lines, sed its
+# state, cut and cat the branch names, grep which of them name the issue. Each of these failing left
+# its answer empty, and an empty answer read as nobody holding the issue.
+# break_tool <tool> <case pattern> [<case pattern left working>]: a stand in for one tool, first on
+# PATH for run_broken, that fails when its arguments match and is the real tool otherwise. With the
+# file break_after_post in the case's folder it also works until the claim has been posted.
+break_tool() {
+  local real
+  real="$(command -v "$1")"
+  rm -rf "$TMP/broken"
+  mkdir -p "$TMP/broken"
+  cat >"$TMP/broken/$1" <<STUB
+#!/bin/bash
+if [ -e "\$FAKE/break_after_post" ] && [ ! -e "\$FAKE/posted.1" ]; then exec "$real" "\$@"; fi
+case "\$*" in
+  ${3:-__no_exception__}) ;;
+  $2) echo "$1: simulated failure" >&2; exit 2 ;;
+esac
+exec "$real" "\$@"
+STUB
+  chmod +x "$TMP/broken/$1"
+}
+run_broken() { # run_broken <args...>   as run, with the broken tool first on PATH
+  out="$(PATH="$TMP/broken:$TMP/bin:$PATH" FAKE="$FAKE" CLAIM_NOW="$NOW" CLAIM_READBACK_WAIT=0 CLAIM_HOST=Daniels-MacBook-Pro-2 bash "$SCRIPT" "$@" 2>&1)"
+  code=$?
+}
+could_not_check() { # could_not_check <description>   after a claim or a check
+  is "#3788 $1: exit 2" 2 "$code"
+  has "#3788 $1: says it could not check" "COULD NOT CHECK" "$out"
+  has "#3788 $1: prints the tool's own error" "simulated failure" "$out"
+  lacks "#3788 $1: never says free" "FREE" "$out"
+  lacks "#3788 $1: never says claimed" "CLAIMED" "$out"
+  lacks "#3788 $1: never says closed" "CLOSED" "$out"
+  is "#3788 $1: nothing posted" 0 "$(posted_count)"
+}
+other_claim() { echo "$((NOW - 3600)) <!-- orchestrate-claim branch=fix/3317-other-try host=Dans-MacBook-Pro -->" >"$FAKE/markers"; }
+
+# awk failing while another session holds a live claim: the claim cannot be seen, so nothing is known.
+break_tool awk '*'
+for mode in check claim; do
+  new_case
+  other_claim
+  run_broken "$mode" "$REPO" 3317 "$MINE"
+  could_not_check "the claims reader fails on a $mode of an issue another session holds"
+done
+
+# awk failing only on the read back: our claim is up and cannot be seen, so the release is named.
+new_case
+: >"$FAKE/break_after_post"
+run_broken claim "$REPO" 3317 "$MINE"
+is "#3788 the claims reader fails on the read back: exit 2" 2 "$code"
+has "#3788 the claims reader fails on the read back: says it could not check" "COULD NOT CHECK" "$out"
+has "#3788 the claims reader fails on the read back: names the release command" "claim-issue.sh release $REPO 3317 $MINE" "$out"
+has "#3788 the claims reader fails on the read back: prints the tool's own error" "simulated failure" "$out"
+lacks "#3788 the claims reader fails on the read back: never says claimed" "CLAIMED:" "$out"
+
+# awk failing on a release: our claim cannot be seen, which is not the same as there being none.
+new_case
+echo "$((NOW - 600)) <!-- orchestrate-claim branch=$MINE host=Daniels-MacBook-Pro-2 -->" >"$FAKE/markers"
+run_broken release "$REPO" 3317 "$MINE" "handed back unfinished"
+is "#3788 the claims reader fails on a release: exit 2" 2 "$code"
+has "#3788 the claims reader fails on a release: says it could not release" "COULD NOT RELEASE" "$out"
+lacks "#3788 the claims reader fails on a release: never says there was nothing to release" "NOTHING TO RELEASE" "$out"
+is "#3788 the claims reader fails on a release: nothing posted" 0 "$(posted_count)"
+
+# sed failing on the issue's state: an unread state is not a closed issue.
+break_tool sed '*STATE*'
+new_case
+run_broken claim "$REPO" 3317 "$MINE"
+could_not_check "the state reader fails"
+
+# cut failing on the pull requests' branches: a pull request that holds by its branch alone.
+break_tool cut '*'
+new_case
+pr_row 4101 fix/3317-elsewhere "A title" "no reference" >"$FAKE/prs"
+run_broken check "$REPO" 3317 "$MINE"
+could_not_check "the pull request branch reader fails"
+
+# cat failing on the remote branches the script saved (the stand in gh's own cat is left working).
+break_tool cat '*/branches' '*/case[0-9]*/branches'
+new_case
+printf 'main\nfix/3317-someone-else\n' >"$FAKE/branches"
+run_broken check "$REPO" 3317 "$MINE"
+could_not_check "the remote branch reader fails"
+
+# grep failing on which branches name the issue: an error is not the same as no match.
+break_tool grep '*"-x -F"*'
+new_case
+printf 'main\nfix/3317-someone-else\n' >"$FAKE/branches"
+run_broken check "$REPO" 3317 "$MINE"
+could_not_check "the naming lookup fails"
+
+# Each of those tools working, on the same fixtures, still gives the ordinary answers.
+rm -rf "$TMP/broken"
+new_case
+printf 'main\nfix/3317-someone-else\n' >"$FAKE/branches"
+run_broken check "$REPO" 3317 "$MINE"
+is "#3788 no tool broken, a remote branch names it: exit 1" 1 "$code"
+new_case
+run_broken check "$REPO" 3317 "$MINE"
+is "#3788 no tool broken, nothing holds it: exit 0" 0 "$code"
+has "#3788 no tool broken, nothing holds it: says free" "FREE" "$out"
 
 # The post itself failing: the claim's state is unknown, so the release command is named.
 new_case
@@ -267,6 +499,14 @@ is "lost race: exit 1" 1 "$code"
 has "lost race: names the winner" "fix/3317-racer" "$out"
 is "lost race: our claim and its release posted" 2 "$(posted_count)"
 has "lost race: second post is a release" "<!-- orchestrate-release branch=$MINE host=Daniels-MacBook-Pro-2 -->" "$(cat "$FAKE/posted.2" 2>/dev/null)"
+
+# A lost race prints the pull requests that only mention the issue too (claude-config#3788).
+new_case
+echo "$((NOW - 1)) <!-- orchestrate-claim branch=fix/3317-racer host=Dans-MacBook-Pro -->" >"$FAKE/race"
+pr_row 4160 fix/other "Another" "See #3317 for the measurement." >"$FAKE/prs"
+run claim "$REPO" 3317 "$MINE"
+is "#3788 lost race beside a mention: exit 1" 1 "$code"
+has "#3788 lost race beside a mention: the note is printed" "mentioned, not held: pull request #4160" "$out"
 
 # ---- 7. a closed issue is not started ----
 new_case

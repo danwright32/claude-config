@@ -403,6 +403,17 @@
         ]
       },
       {
+        "matcher": "mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/connector-change-ask.sh",
+            "timeout": 10,
+            "onFailure": "block"
+          }
+        ]
+      },
+      {
         "matcher": "Bash|mcp__.*__slack_(send_message|send_message_draft|schedule_message|create_canvas|update_canvas|add_list_record|update_list_record)",
         "hooks": [
           {
@@ -513,7 +524,7 @@
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/announce-answer-note.sh",
             "timeout": 15,
-            "statusMessage": "Noting Dan's answer about the announcement wording"
+            "statusMessage": "Noting the picker Dan answered"
           }
         ]
       },
