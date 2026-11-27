@@ -165,8 +165,10 @@ runbash "python3 -c \"import subprocess; subprocess.run(['cp', '/etc/hosts', 'pa
 refused "#3689 a copy given to subprocess as a list of words"
 runbash "python3 -c \"import subprocess; subprocess.run(['rm', '$FIX/links/sym.sh'])\"" "$FIX/elsewhere"
 refused "#3689 a list of words removing a link that leads into payload"
-# A list of words is judged as the same words typed are (claude-config#3775): the list route named
-# its own commands, so patch, an in place sed, perl or ruby, and a dd writing to of= went through.
+# A list of words that starts with a writing command counts as a write (claude-config#3775): the
+# list route named its own commands, so patch, an in place sed, perl or ruby, and a dd writing to
+# of= went through. Not held here, because the gate does not do it: a list that runs git to write,
+# or whose command follows a launcher word, which the gate reads only when typed.
 runbash "python3 -c \"import subprocess; subprocess.run(['patch', 'payload/hooks/x.sh', '$FIX/elsewhere/a.txt'])\"" "$FIX/dev"
 refused "#3775 a patch given as a list of words"
 runbash "python3 -c \"import subprocess; subprocess.run(['/usr/bin/patch', 'payload/hooks/x.sh', '$FIX/elsewhere/a.txt'])\"" "$FIX/dev"

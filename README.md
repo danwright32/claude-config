@@ -830,10 +830,12 @@ Three more routes are read (#3689), each only ever adding a refusal. A command s
 script hands to a shell (`os.system`, `subprocess` given one string or a list of words, perl, ruby,
 php and awk `system`, node `execSync`, a command in backquotes) is read the way that command typed
 directly is: cut into commands by `lib/shell-words.py` and judged by the same loop, in the
-directory the script runs in. A list of words counts as a write for the commands a typed one
-does, taken from the gate's one list of them, with an in place `sed`, `perl` or `ruby` and a `dd`
-with an `of=` word beside it (#3775: the list route named its own and had left out `patch` and
-those four). A destination written as a pattern (`rm pay*/hooks/x.sh`, a list in
+directory the script runs in. A list of words is read more narrowly than a string: it counts as
+a write when it starts with a command from the gate's one list of writing commands, with an in
+place `sed`, `perl` or `ruby`, or with a `dd` holding an `of=` word (#3775: the list route named
+its own commands and had left out `patch` and those four). A list that runs `git` to write, or
+whose command follows a launcher word such as `sudo` or `env`, is not counted, where the same
+words typed are. A destination written as a pattern (`rm pay*/hooks/x.sh`, a list in
 braces) is judged as each file it matches at that moment. And each script file the command runs
 is read from disk for the links it makes, a shell script by `lib/shell-words.py` and a python,
 perl, ruby, node or php script by the calls that make a link. What the gate cannot tell is refused

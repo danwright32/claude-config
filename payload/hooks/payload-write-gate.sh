@@ -907,6 +907,14 @@ WRITE_CALLS += LINK_CALLS
 # run from a list beside a quoted payload path was let through with exit 0, where the same words
 # typed are refused. So the names are WRITERS, and the flag and the word are the ones the reading
 # of a typed sed, perl, ruby and dd asks for further down.
+#
+# THIS IS STILL NARROWER THAN THE READING OF THE SAME WORDS TYPED, and claims no more than the
+# above. It is a search of the script text for a list that STARTS with one of those commands. A
+# list that runs git to write (checkout, restore, rm, mv, which GIT_WRITERS names for a typed
+# command), and a list whose command comes after a launcher word (sudo, env, nohup, timeout), are
+# not counted here, and go through as they did before this route existed. Handing a list to the
+# typed reading itself, in place of patterns kept beside it, is the question put in the pull
+# request of claude-config#3775.
 LIST_HEAD = r"[\[(]\s*[\"\x27](?:[^\"\x27\s]*/)?(?:%s)[\"\x27]\s*,"
 # The words of the list after its first, each a quoted word or a name, up to the opening quote of
 # the word asked about. Stepped over a word at a time, so a bracket inside a quoted sed expression
