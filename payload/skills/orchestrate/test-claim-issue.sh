@@ -355,6 +355,110 @@ is "branch reader fails: exit 2" 2 "$code"
 has "branch reader fails: says it could not check" "COULD NOT CHECK" "$out"
 is "branch reader fails: nothing posted" 0 "$(posted_count)"
 
+# ---- 5b. a tool that reads what gh returned failing is a failed read too (claude-config#3788) ----
+# gh answering is half of a read: awk picks the live claims out of the issue's marker lines, sed its
+# state, cut and cat the branch names, grep which of them name the issue. Each of these failing left
+# its answer empty, and an empty answer read as nobody holding the issue.
+# break_tool <tool> <case pattern> [<case pattern left working>]: a stand in for one tool, first on
+# PATH for run_broken, that fails when its arguments match and is the real tool otherwise. With the
+# file break_after_post in the case's folder it also works until the claim has been posted.
+break_tool() {
+  local real
+  real="$(command -v "$1")"
+  rm -rf "$TMP/broken"
+  mkdir -p "$TMP/broken"
+  cat >"$TMP/broken/$1" <<STUB
+#!/bin/bash
+if [ -e "\$FAKE/break_after_post" ] && [ ! -e "\$FAKE/posted.1" ]; then exec "$real" "\$@"; fi
+case "\$*" in
+  ${3:-__no_exception__}) ;;
+  $2) echo "$1: simulated failure" >&2; exit 2 ;;
+esac
+exec "$real" "\$@"
+STUB
+  chmod +x "$TMP/broken/$1"
+}
+run_broken() { # run_broken <args...>   as run, with the broken tool first on PATH
+  out="$(PATH="$TMP/broken:$TMP/bin:$PATH" FAKE="$FAKE" CLAIM_NOW="$NOW" CLAIM_READBACK_WAIT=0 CLAIM_HOST=Daniels-MacBook-Pro-2 bash "$SCRIPT" "$@" 2>&1)"
+  code=$?
+}
+could_not_check() { # could_not_check <description>   after a claim or a check
+  is "#3788 $1: exit 2" 2 "$code"
+  has "#3788 $1: says it could not check" "COULD NOT CHECK" "$out"
+  has "#3788 $1: prints the tool's own error" "simulated failure" "$out"
+  lacks "#3788 $1: never says free" "FREE" "$out"
+  lacks "#3788 $1: never says claimed" "CLAIMED" "$out"
+  lacks "#3788 $1: never says closed" "CLOSED" "$out"
+  is "#3788 $1: nothing posted" 0 "$(posted_count)"
+}
+other_claim() { echo "$((NOW - 3600)) <!-- orchestrate-claim branch=fix/3317-other-try host=Dans-MacBook-Pro -->" >"$FAKE/markers"; }
+
+# awk failing while another session holds a live claim: the claim cannot be seen, so nothing is known.
+break_tool awk '*'
+for mode in check claim; do
+  new_case
+  other_claim
+  run_broken "$mode" "$REPO" 3317 "$MINE"
+  could_not_check "the claims reader fails on a $mode of an issue another session holds"
+done
+
+# awk failing only on the read back: our claim is up and cannot be seen, so the release is named.
+new_case
+: >"$FAKE/break_after_post"
+run_broken claim "$REPO" 3317 "$MINE"
+is "#3788 the claims reader fails on the read back: exit 2" 2 "$code"
+has "#3788 the claims reader fails on the read back: says it could not check" "COULD NOT CHECK" "$out"
+has "#3788 the claims reader fails on the read back: names the release command" "claim-issue.sh release $REPO 3317 $MINE" "$out"
+has "#3788 the claims reader fails on the read back: prints the tool's own error" "simulated failure" "$out"
+lacks "#3788 the claims reader fails on the read back: never says claimed" "CLAIMED:" "$out"
+
+# awk failing on a release: our claim cannot be seen, which is not the same as there being none.
+new_case
+echo "$((NOW - 600)) <!-- orchestrate-claim branch=$MINE host=Daniels-MacBook-Pro-2 -->" >"$FAKE/markers"
+run_broken release "$REPO" 3317 "$MINE" "handed back unfinished"
+is "#3788 the claims reader fails on a release: exit 2" 2 "$code"
+has "#3788 the claims reader fails on a release: says it could not release" "COULD NOT RELEASE" "$out"
+lacks "#3788 the claims reader fails on a release: never says there was nothing to release" "NOTHING TO RELEASE" "$out"
+is "#3788 the claims reader fails on a release: nothing posted" 0 "$(posted_count)"
+
+# sed failing on the issue's state: an unread state is not a closed issue.
+break_tool sed '*STATE*'
+new_case
+run_broken claim "$REPO" 3317 "$MINE"
+could_not_check "the state reader fails"
+
+# cut failing on the pull requests' branches: a pull request that holds by its branch alone.
+break_tool cut '*'
+new_case
+pr_row 4101 fix/3317-elsewhere "A title" "no reference" >"$FAKE/prs"
+run_broken check "$REPO" 3317 "$MINE"
+could_not_check "the pull request branch reader fails"
+
+# cat failing on the remote branches the script saved (the stand in gh's own cat is left working).
+break_tool cat '*/branches' '*/case[0-9]*/branches'
+new_case
+printf 'main\nfix/3317-someone-else\n' >"$FAKE/branches"
+run_broken check "$REPO" 3317 "$MINE"
+could_not_check "the remote branch reader fails"
+
+# grep failing on which branches name the issue: an error is not the same as no match.
+break_tool grep '*"-x -F"*'
+new_case
+printf 'main\nfix/3317-someone-else\n' >"$FAKE/branches"
+run_broken check "$REPO" 3317 "$MINE"
+could_not_check "the naming lookup fails"
+
+# Each of those tools working, on the same fixtures, still gives the ordinary answers.
+rm -rf "$TMP/broken"
+new_case
+printf 'main\nfix/3317-someone-else\n' >"$FAKE/branches"
+run_broken check "$REPO" 3317 "$MINE"
+is "#3788 no tool broken, a remote branch names it: exit 1" 1 "$code"
+new_case
+run_broken check "$REPO" 3317 "$MINE"
+is "#3788 no tool broken, nothing holds it: exit 0" 0 "$code"
+has "#3788 no tool broken, nothing holds it: says free" "FREE" "$out"
+
 # The post itself failing: the claim's state is unknown, so the release command is named.
 new_case
 : >"$FAKE/fail_post"

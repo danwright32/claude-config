@@ -36,7 +36,8 @@
 # do not start it; 2 could not check, or bad arguments: do not start it. After exit 2 nothing was
 # claimed unless the message says a claim may have been posted (the post errored, or the claim could
 # not be read back); then it names the release command to run.
-# A failed read is never taken as "nobody holds it".
+# A failed read is never taken as "nobody holds it", whether gh failed or a tool that reads what gh
+# returned did (claude-config#3788).
 #
 # Test seams: CLAIM_NOW (epoch seconds) and CLAIM_HOST stand in for the clock and the hostname, and
 # CLAIM_READBACK_WAIT (seconds, default 2) and CLAIM_READBACK_TRIES (default 3) for the read back.
@@ -125,10 +126,12 @@ live_claims() {
 blocking=()
 stale=()
 first_holder=""
+# Returns non zero, with the reason in $tmp/live.err, when the claims could not be read out of the
+# issue: no claim seen is then not the same as no claim there (claude-config#3788).
 judge_claims() {
   local t b h
   blocking=(); stale=(); first_holder=""
-  live_claims >"$tmp/live"
+  live_claims >"$tmp/live" 2>"$tmp/live.err" || return 1
   while read -r t b h; do
     [ -n "$t" ] || continue
     local who="$(mac_name "$h") claimed it at $(et_time "$t"), branch $b"
@@ -143,6 +146,7 @@ judge_claims() {
       blocking+=("claim: $who")
     fi
   done <"$tmp/live"
+  return 0
 }
 
 fail_read() { # fail_read <what> <error file>
@@ -172,7 +176,7 @@ read_issue || fail_read "the issue's comments" "$tmp/issue.err"
 # ---- release ----
 if [ "$mode" = release ]; then
   ours=no
-  live_claims >"$tmp/live"
+  live_claims >"$tmp/live" 2>"$tmp/live.err" || fail_read "the claims on the issue" "$tmp/live.err"
   while read -r t b h; do
     [ "$b" = "$branch" ] && [ "$h" = "$host" ] && ours=yes
   done <"$tmp/live"
@@ -197,24 +201,33 @@ gh pr list --repo "$repo" --state open --limit 1000 --json number,headRefName,ti
 gh api --paginate "repos/$repo/branches?per_page=100" --jq '.[].name' \
   >"$tmp/branches" 2>"$tmp/branches.err" || fail_read "the remote branches" "$tmp/branches.err"
 
-state="$(sed -n 's/^STATE //p' "$tmp/issue")"
+# gh answering is half of a read. Each tool that then reads what gh returned (sed, awk, cut, cat,
+# grep below) has its own exit status checked, because a tool that fails leaves its answer empty and
+# an empty answer reads as nobody holding the issue (claude-config#3788).
+state="$(sed -n 's/^STATE //p' "$tmp/issue" 2>"$tmp/state.err")" || fail_read "the issue's state" "$tmp/state.err"
 if [ "$state" != OPEN ]; then
   echo "CLOSED: $repo#$issue is $state. Do not start it."
   exit 1
 fi
 
-judge_claims
+judge_claims || fail_read "the claims on the issue" "$tmp/live.err"
 
 # Which issues a branch's name names is read by the one shared reader, mod-kit's issuesOfBranch
 # through hooks/lib/branch-issues.mjs, never a pattern kept here (claude-config#1475): an agent
 # worktree's random id and a branch on two issues are where hand written readings drifted.
-{ cut -f 2 "$tmp/prs"; cat "$tmp/branches"; } >"$tmp/names"
+{ cut -f 2 "$tmp/prs" && cat "$tmp/branches"; } >"$tmp/names" 2>"$tmp/names.err" ||
+  fail_read "the branch names of the pull requests and the remote" "$tmp/names.err"
 if ! node --experimental-strip-types --no-warnings "$BRANCH_READER" <"$tmp/names" >"$tmp/named.json" 2>"$tmp/named.err" ||
   ! jq -r --argjson n "$issue" 'to_entries[] | select(any(.value[]; . == $n)) | .key' \
     "$tmp/named.json" >"$tmp/naming" 2>>"$tmp/named.err"; then
   fail_read "which issues the remote branches name" "$tmp/named.err"
 fi
-names_it() { grep -q -x -F -- "$1" "$tmp/naming"; }
+names_it() { # names_it <branch>: grep's 1 is no match, and anything above it is a read that failed
+  local found=0
+  grep -q -x -F -- "$1" "$tmp/naming" 2>"$tmp/naming.err" || found=$?
+  [ "$found" -le 1 ] || fail_read "which branches name the issue" "$tmp/naming.err"
+  return "$found"
+}
 
 # A pull request holds the issue only when it is built for it (claude-config#3788): its branch or
 # its title names the issue, or its body names it straight after one of the words in built_re. Any
@@ -294,9 +307,8 @@ first_holder=""
 while [ "$attempt" -lt "$READBACK_TRIES" ]; do
   attempt=$((attempt + 1))
   sleep "$READBACK_WAIT"
-  if read_issue; then
-    judge_claims
-  else
+  : >"$tmp/live.err"
+  if ! read_issue || ! judge_claims; then
     first_holder=""
   fi
   [ -n "$first_holder" ] && break
@@ -321,6 +333,7 @@ case "$first_holder" in
     else
       echo "COULD NOT CHECK: the claim was posted on $repo#$issue but could not be seen on reading it back $READBACK_TRIES times. Do not start it, and run $release_cmd so it does not block the next session."
       [ -s "$tmp/issue.err" ] && sed 's/^/  /' "$tmp/issue.err"
+      [ -s "$tmp/live.err" ] && sed 's/^/  /' "$tmp/live.err"
     fi
     exit 2 ;;
 esac
