@@ -249,6 +249,10 @@ announce_title_holds() {
   announce_line_for "$description" "$ms_title" && return 0
   if [[ -z "$line_json" ]]; then
     echo "ANNOUNCE-UNREAD hooks/lib/announce-approval.py, which python3 runs and which holds Dan's answers about announcing a feature, gave no answer, so the plan's \"announce\": \"$announce\" could not be checked against the milestone \"$ms_title\". Reinstall the hooks with claude-sync pull." >&2
+  elif [[ "$announce" == unasked && "$ms_title" != "$title" ]]; then
+    # Nobody put the question to him about an unasked plan, and the plan says so. The library's
+    # words are about an answer of his, so this refusal says the one remedy, the title, instead.
+    echo "ANNOUNCE-TITLE-APART the plan is titled \"$title\" and its milestone on GitHub is \"$ms_title\". The milestone's line about announcing is kept under the milestone's own title, so title the plan exactly as the milestone is titled, letter case and spacing aside, and run this again. The plan says nobody put the question to Dan, and nothing here changes that." >&2
   else
     echo "ANNOUNCE-NOT-HIS-ANSWER $(printf '%s' "$line_json" | jq -r '.why // ""')" >&2
     if [[ "$ms_title" != "$title" ]]; then
