@@ -48,15 +48,34 @@ review of #1228). A listing, a count, an existence test, a diff or an edit only
 names the file. Judged from the record rather than from a marker this helper
 would have to keep in step with compactions.
 
+THE HAND OVER IS RECORDED HERE (claude-config#3843). The Goal accomplished box waits
+until the end of turn review has been handed to the session and Dan has answered it,
+and it knows by the review's own record (lib/review-record.py). Both review hooks
+build their payload here, so this is the one place the hand over is written, and
+neither hook has a line of its own to forget (L621). It is written only when the
+instruction pointed at is an end of turn review's, which is one in the hooks' own
+review/ folder: check-later-nudge.sh builds its reason here too, pointing at a skill,
+and that is no review. A review whose instruction is missing was not handed over and
+records nothing. A hand over that could not be written is said in the reason, the
+text Dan sees, and the review still goes out. The static payload each hook prints
+when this helper fails records nothing; the box then falls back on its own message at
+the turn's end.
+
 Seam: CLAUDE_REVIEW_REASON_FORCE_FAIL makes this fail on purpose, so that caller
 fallback is tested rather than assumed.
 """
+import sys
+
+# First, before review-record.py is loaded by path below: Python would otherwise leave a compiled
+# copy of it in lib/ (test-lib-bytecode-importers.sh).
+sys.dont_write_bytecode = True
+
 import argparse
+import importlib.util
 import json
 import os
 import re
 import shlex
-import sys
 from datetime import datetime
 
 
@@ -283,6 +302,32 @@ def build_reason(instruction, label, findings_path, extras, transcript=""):
     return reason
 
 
+def is_review(instruction):
+    """Whether the instruction is an end of turn review's: a file in the hooks' own review/ folder."""
+    review_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "review")
+    return os.path.isfile(instruction) and os.path.realpath(os.path.dirname(os.path.abspath(instruction))) == os.path.realpath(review_dir)
+
+
+def record_hand_over(instruction, label, transcript):
+    """Records that this review was handed to the session (lib/review-record.py, #3843). Returns
+    what to add to the reason: nothing when it was written or this is no review, else a line saying
+    it could not be written and why. Never raises: the review goes out either way."""
+    if not is_review(instruction):
+        return ""
+    try:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "review-record.py")
+        spec = importlib.util.spec_from_file_location("review_record", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        module.record_handed(transcript, label)
+        return ""
+    except Exception as exc:
+        return (
+            "REVIEW RECORD NOT WRITTEN: %s. The Goal accomplished box waits on that record, "
+            "so tell Dan in one line that it could not be written." % exc
+        )
+
+
 def main():
     ap = argparse.ArgumentParser(add_help=False)
     ap.add_argument("--instruction", required=True)
@@ -296,10 +341,12 @@ def main():
         print("review-reason: failing on purpose (test seam)", file=sys.stderr)
         return 1
 
-    payload = {
-        "decision": "block",
-        "reason": build_reason(args.instruction, args.label, args.findings, args.extra, args.transcript),
-    }
+    reason = build_reason(args.instruction, args.label, args.findings, args.extra, args.transcript)
+    # Recorded once the reason is built, so a reason that could not be built records no hand over.
+    unrecorded = record_hand_over(args.instruction, args.label, args.transcript)
+    if unrecorded:
+        reason += "\n\n" + unrecorded
+    payload = {"decision": "block", "reason": reason}
     print(json.dumps(payload))
     return 0
 
