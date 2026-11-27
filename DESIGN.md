@@ -3368,7 +3368,17 @@ for the review by picker, 2026-11-25: "Yes, attack it first"). The choices are t
   refused once a decline is on the record. The line alone does not
   decide whether a milestone says yes: the gate also counts a milestone whose title the record
   holds his yes about as his last yes or no, so a line that was dropped, altered, or written from
-  his answer about another feature cannot hide a yes the record holds. What it costs: every merge
+  his answer about another feature cannot hide a yes the record holds. One name only (Dan, by
+  picker, 2026-11-26, "One name only (Recommended)"): his answer counts for a milestone only when
+  the picker named the feature exactly as the milestone is titled, letter case and spacing aside.
+  The plan used to carry a second name (`announce_feature`) for a picker that used other words,
+  and the helper wrote his answer about that name onto the milestone while the gate looked his
+  answers up by the title: a yes under the picker's name was lost with the line, and an old
+  decline naming the milestone outlived a newer yes under the picker's name. Now the helper asks
+  the library about the title, the library writes no line for a feature that is not the title, a
+  plan carrying the old field is refused, and a title changed after he answered means he is asked
+  again. Ruled out: writing the picker's name into the line and having the gate ask about both
+  names, which closes the second fault and not the first. What it costs: every merge
   that finishes a milestone in a repository that announces reads the record, and a record that
   cannot be read refuses that merge as what could not be told. The line has
   one writer and one reader, both in the library, and holds no name: the answer, his option's words

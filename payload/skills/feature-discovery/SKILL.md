@@ -62,8 +62,10 @@ With a channel, ask Dan with ONE AskUserQuestion picker of one question, in the 
 The question must name the feature in the very words of the metadata's `feature`, and must hold the
 words `agents must or can act differently`: without both, his answer does not count. Neither does
 an answer he typed words beside, which is a change he wants: read it and ask again. Name the feature
-as its milestone will be titled (a few words, no punctuation), because his answer is found again by
-that name.
+in the picker exactly as its milestone will be titled (a few words, no punctuation; letter case and
+spacing aside): his answer counts for a milestone only under that one name, and the plan has no
+second place to give another. If the title changes after he answered, he is asked again under the
+new title.
 
 His answer goes into the plan the milestone is made from, as `"announce": "yes"` or
 `"announce": "no"` (`~/.claude/skills/milestone/SKILL.md`, step 2). The milestone helper takes

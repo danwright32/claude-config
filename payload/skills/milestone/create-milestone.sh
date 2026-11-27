@@ -19,7 +19,6 @@
 #     "design": "/abs/path/settled.html", # REQUIRED when the feature has a settled design file
 #     "announce": "unasked",              # REQUIRED where the repository announces to agents:
 #                                         # "yes", "no" (Dan's own recorded answer) or "unasked"
-#     "announce_feature": "Feature name", # optional: the name his picker used, when not the title
 #     "issues": [                         # optional, one GitHub issue each
 #       { "title": "Phase 1: ...", "body": "...", "priority": "p1",
 #         "labels": ["tech-debt", "accessibility"] }
@@ -209,8 +208,11 @@ dry="${DRY_RUN:-}"
 HOOKS_LIB="$HERE/../../hooks/lib"
 announce_given="$(jq -r 'has("announce")' "$plan")"
 announce="$(jq -r 'if has("announce") then (.announce | if type == "string" then . else tojson end) else "" end' "$plan")"
-announce_feature="$(jq -r '(.announce_feature // "") | if type == "string" then . else "" end' "$plan")"
-[[ -n "$announce_feature" ]] || announce_feature="$title"
+# One name only (Dan, by picker, 2026-11-26): his answer about a feature counts for a milestone only
+# when the picker named the feature exactly as the milestone is titled, letter case and spacing
+# aside, because the merge gate looks his answers up by the title. So the plan's title is the one
+# name the library is asked about, and a plan that still names the feature a second way is refused.
+announce_feature_given="$(jq -r 'has("announce_feature")' "$plan")"
 announces=0
 announce_line=""
 abort_announce() {
@@ -223,7 +225,7 @@ announce_line_for() {
   local held
   held="$(mktemp)"
   printf '%s' "$1" >"$held"
-  line_json="$(python3 -B "$HOOKS_LIB/announce-approval.py" milestone-line --repo "$repo" --feature "$announce_feature" --answer "$announce" --description-file "$held" </dev/null 2>/dev/null)"
+  line_json="$(python3 -B "$HOOKS_LIB/announce-approval.py" milestone-line --repo "$repo" --feature "$title" --title "$title" --answer "$announce" --description-file "$held" </dev/null 2>/dev/null)"
   rm -f "$held"
   [[ "$(printf '%s' "$line_json" | jq -r '.ok // false' 2>/dev/null)" == true ]]
 }
@@ -241,6 +243,11 @@ if [[ "$(printf '%s' "$reg_json" | jq -r '.state // ""' 2>/dev/null)" != ok || "
 fi
 if [[ -n "$(printf '%s' "$reg_json" | jq -r '.channel // ""' 2>/dev/null)" ]]; then
   announces=1
+  if [[ "$announce_feature_given" == true ]]; then
+    echo "ANNOUNCE-FEATURE-GONE the plan carries \"announce_feature\", which is no longer read: Dan's answer about a feature counts for a milestone only when the picker named the feature exactly as the milestone is titled, letter case and spacing aside (claude-config#3669)." >&2
+    echo "Take \"announce_feature\" out of the plan. If his picker named the feature in other words than the plan's \"title\", either title the milestone as the picker named it, or ask him again with a picker that names the feature as the title." >&2
+    abort_announce
+  fi
   if [[ "$announce_given" != true ]]; then
     echo "MISSING-ANNOUNCE $repo announces to agents, so the plan must carry \"announce\": \"yes\", \"no\" or \"unasked\"." >&2
     echo "\"yes\" and \"no\" are Dan's own answer to the picker feature discovery asks (metadata source announce-discovery), and are taken only when this Mac's record holds that answer. \"unasked\" is for a milestone nobody asked him about (alert fixes, an audit): it needs nothing, and the milestone then says he was not asked yet." >&2
@@ -259,7 +266,7 @@ if [[ -n "$(printf '%s' "$reg_json" | jq -r '.channel // ""' 2>/dev/null)" ]]; t
       echo "ANNOUNCE-NOT-HIS-ANSWER $(printf '%s' "$line_json" | jq -r '.why // ""')" >&2
       line_how="$(printf '%s' "$line_json" | jq -r '.how // ""')"
       [[ -n "$line_how" ]] && echo "$line_how" >&2
-      echo "His answer is read into this Mac's record when a Bash call runs create-milestone.sh by name in the session that asked him, so run this as a command of its own there. If he was asked about the feature under another name than the plan's title, put that name in the plan's \"announce_feature\"." >&2
+      echo "His answer is read into this Mac's record when a Bash call runs create-milestone.sh by name in the session that asked him, so run this as a command of its own there. His answer counts for this milestone only when the picker named the feature exactly as the plan's \"title\", letter case and spacing aside: asked under another name, he is asked again under the title." >&2
     fi
     abort_announce
   fi

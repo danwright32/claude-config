@@ -839,9 +839,18 @@ check_eq "#3669 R9 a no where his last answer was Announce it is refused" "12 0"
 check "#3669 R9 quoting what he answered" 'Announce it' "$out"
 out="$(STORE="$ANN/yes" arun "$TMP/none.json" "$ANN/unasked.json")"; rc=$?
 check_eq "#3669 R9 unasked is refused where the record holds his answer about that feature" "12 0" "$rc $(milestone_touched)"
-# The plan's title may differ from the name the picker asked him about.
+# One name only (Dan, by picker, 2026-11-26): his answer about a feature counts for a milestone only
+# when the picker named the feature exactly as the milestone is titled, so the plan no longer names
+# the feature a second way. A plan that still carries "announce_feature" is refused before anything
+# is filed, whatever the record holds about either name.
 out="$(STORE="$ANN/yes" arun "$TMP/none.json" "$(plan_with renamed '.announce = "yes" | .title = "Onboarding redone" | .announce_feature = "First run rework"')")"; rc=$?
-check "#3669 the plan names the feature as the picker did when its title differs" "ANNOUNCE-LINE $YES_LINE" "$out"
+check_eq "#3669 I R9 a plan that names the feature a second way is refused with the announce code" "12" "$rc"
+check "#3669 I R9 saying the field is gone" "ANNOUNCE-FEATURE-GONE" "$out"
+check "#3669 I R9 and what to do: the feature is named in the picker as the milestone is titled" "exactly as the milestone is titled" "$out"
+check_eq "#3669 I R9 filing nothing and leaving the milestone untouched" "0 0" "$(issues_filed) $(milestone_touched)"
+out="$(STORE="$ANN/yes" arun "$TMP/none.json" "$(plan_with second-name '.announce = "yes" | .announce_feature = "Onboarding revamp"')")"; rc=$?
+check_eq "#3669 I R9 a plan carrying the field is refused even when it names the title itself and the record holds his yes" "12 0 0" "$rc $(issues_filed) $(milestone_touched)"
+check "#3669 I R9 in the same words" "ANNOUNCE-FEATURE-GONE" "$out"
 out="$(STORE="$ANN/yes" arun "$TMP/none.json" "$(plan_with renamed-bare '.announce = "yes" | .title = "Onboarding redone"')")"; rc=$?
 check_eq "#3669 R9 a title he was never asked about is refused" "12" "$rc"
 out="$(arun "$TMP/none.json" "$(plan_with maybe '.announce = "maybe"')")"; rc=$?

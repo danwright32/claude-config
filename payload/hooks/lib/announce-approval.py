@@ -280,9 +280,13 @@ his option's words and the date.
   decision(repo, feature, milestone=None, payload=None)
       {"answer": "yes" | "no" | "none", "said", "answered", "day", "why", "how", "notes"}: what he
       last answered about announcing feature. With milestone, only a picker naming that number.
-  milestone_line(repo, feature, answer, description)
+  milestone_line(repo, feature, answer, description, title)
       {"ok", "line", "description", "why", "how"}: the line for a plan's "announce" value, taken
       for yes and no only when the record holds it as his last answer. Reads the record only.
+      ONE NAME ONLY (Dan, by picker, 2026-11-26): his answer about a feature counts for a
+      milestone only when the picker named the feature exactly as the milestone is titled, by
+      the key above, so a feature that is not title by that key gets no line and is refused,
+      saying to ask him again under the title.
   milestone_says(description)   "yes", "no", "unasked" or "": what a description's line says.
   finishes(repo, pr, answer, payload=None)
       {"state": "clear" | "owed" | "unread", "why", "how", "notes", "announced"}: whether a pull
@@ -322,8 +326,9 @@ session's own Bash command running one of these is refused like any other verb. 
 is the merge gate's and which `decision` and `finishes` take (`milestone-line` takes none), the hook
 payload is on standard input, his pickers are read, and what they hold is written:
   announce-approval.py decision --repo <owner/name> --feature <name> [--milestone <number>]
-  announce-approval.py milestone-line --repo <owner/name> --feature <name> --answer <yes|no|unasked>
-                                      [--description-file <file>]    create-milestone.sh's question
+  announce-approval.py milestone-line --repo <owner/name> --feature <name> --title <the milestone's title>
+                                      --answer <yes|no|unasked> [--description-file <file>]
+                                      create-milestone.sh's question
   announce-approval.py finishes --repo <owner/name> --pr <number> --answer-file <GitHub's answer>
                                 [--unmerged <number>,<number>]    the merge gate's second question,
                                 naming the pull requests of `announced` GitHub says did not merge as
@@ -2089,10 +2094,17 @@ def _with_line(description, line):
     return LINE.sub(swap, description)
 
 
-def milestone_line(repo, feature, answer, description):
+def milestone_line(repo, feature, answer, description, title=None):
     """What create-milestone.sh asks for a repository that announces: the line a milestone's
     description carries for the plan's "announce" value, and the description carrying it.
         {"ok": bool, "line", "description", "why", "how"}
+    ONE NAME ONLY (Dan, by picker, 2026-11-26): title is the milestone's title, and his answer
+    about a feature counts for a milestone only when the picker named the feature exactly as the
+    milestone is titled (_feature_key: letter case and spacing aside). So a feature that is not
+    the title by that key, or a question that gives no title, is refused for every value with no
+    line, saying to ask him again under the milestone's title: the merge gate looks his answers
+    up by the title (finishes), and a line written from his answer under another name was a yes
+    the gate could lose with the line, or one an older decline naming the milestone outlived.
     "yes" and "no" are taken only when the record holds that as Dan's last answer about the
     feature, and the line quotes the option he chose and the day. "unasked" needs nothing, writes
     that he was not asked yet, never replaces a yes or a no the description already carries, and is
@@ -2112,6 +2124,18 @@ def milestone_line(repo, feature, answer, description):
         out["why"] = got["why"]
         return out
     about = json.dumps(" ".join(feature.split())) + " in " + key
+    # One name only: no line is written from an answer about anything but the milestone's title.
+    if _feature_key(title) is None:
+        out["why"] = ("this question names no milestone title, and a milestone's line is written only from Dan's answer "
+                      "about the feature named exactly as the milestone is titled, which is what his answer is looked "
+                      "up by when a pull request finishes it")
+        return out
+    if _feature_key(feature) != _feature_key(title):
+        named = " ".join(title.split())
+        out["why"] = ("his answer about " + json.dumps(" ".join(feature.split())) + " is not an answer about the milestone "
+                      + json.dumps(named) + "; ask him again, naming the feature as the milestone is titled")
+        out["how"] = how_to_ask_feature(key, named)
+        return out
     # What could not be read is never an answer (L98): not his yes or his no, and not "he was not
     # asked" either, which the record may contradict. So every value is refused in the record's own
     # unread words, with no line and no description, and the helper files nothing. decision() says
@@ -2490,8 +2514,8 @@ def main(argv):
                        "why": "the milestone's description could not be read from the file it was handed in ("
                               + unhad + "), so no line was written into it"}, sys.stdout)
             return 0
-        json.dump(milestone_line(_flag(args, "--repo"), _flag(args, "--feature"), _flag(args, "--answer"), held),
-                  sys.stdout)
+        json.dump(milestone_line(_flag(args, "--repo"), _flag(args, "--feature"), _flag(args, "--answer"), held,
+                                 _flag(args, "--title")), sys.stdout)
         return 0
     if command == "finishes":
         pr = _flag(args, "--pr")
@@ -2529,7 +2553,8 @@ def main(argv):
                      "on standard input | used --repo <owner/name> --hash <sha256> --pr <number> [--closes <json>] "
                      "[--unread <why>] | answered, with the PostToolUse payload on standard input | decision --repo "
                      "<owner/name> --feature <name> [--milestone <number>] [--hook] | milestone-line --repo <owner/name> "
-                     "--feature <name> --answer <yes|no|unasked> [--description-file <file>] | finishes --repo "
+                     "--feature <name> --title <the milestone's title> --answer <yes|no|unasked> "
+                     "[--description-file <file>] | finishes --repo "
                      "<owner/name> --pr <number> --answer-file <file> [--unmerged <number>,<number>] [--spent <seconds>] "
                      "[--hook]. "
                      "milestone-line reads the record only and takes no --hook. decision and finishes read the record "

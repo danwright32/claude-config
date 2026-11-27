@@ -2289,8 +2289,12 @@ only where this Mac's dev update registry names an announcements channel for the
   2026-11-26)`, the same with `no` and `Not announcing`, or `Announce to agents: not asked yet` for
   `unasked`, which needs nothing. So a milestone made for alert fixes or an audit never carries a
   decision he did not make. `unasked` is refused where the record holds his answer about that
-  feature, and `announce_feature` names the feature when the picker used other words than the
-  milestone's title. The line holds no name, only the answer, his option's words and the day in US
+  feature. One name only (Dan, by picker, 2026-11-26): his answer counts for a milestone only when
+  the picker named the feature exactly as the milestone is titled, letter case and spacing aside,
+  so name the feature in the picker as the milestone will be titled, and if the title changes he
+  is asked again. The helper asks the library about the title, the library writes no line for a
+  feature that is not the title, and a plan carrying the old second name, `announce_feature`, is
+  refused (exit 12). The line holds no name, only the answer, his option's words and the day in US
   Eastern time, and the library is its one writer and one reader. The helper writes it into an
   existing milestone too, reads it back from GitHub before it files any issue, and files nothing
   (exit 12) when the plan's value is missing or not one of the three, when the record does not hold
@@ -2302,8 +2306,9 @@ only where this Mac's dev update registry names an announcements channel for the
   read the announce path already made. When the pull request does not carry `changelog/announce`
   and closes the last open issue of a milestone whose line says yes, or whose title this Mac's
   record holds his yes about as his last yes or no whatever the line says (the line is text on
-  GitHub that a command or a hand can drop or alter, and the helper writes it from his answer
-  about whatever feature the plan names; the record is the guarded store), the merge is denied, saying
+  GitHub that a command or a hand can drop or alter; the record is the guarded store, and since
+  the helper writes the line only from his answer about the title, the title is the one name
+  both are looked up by), the merge is denied, saying
   either to label it with wording he approved or to ask him with a picker whether it is still
   being announced, and giving that picker's metadata (the same as above, with `"milestone":
   <number>` and the milestone's title as the feature). It is let through when the record holds an

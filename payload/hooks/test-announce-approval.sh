@@ -1640,12 +1640,14 @@ talk "$T" decide acme/widget "Hand back" "Not announcing" "" "" 28
 check "still possible: one naming that milestone does" "$([[ "$(decided "$T" acme/widget "Hand back" 28)" == "no|"* ]] && echo ok || decided "$T" acme/widget "Hand back" 28)"
 
 echo "the line a milestone's description carries, written and read by one function (#3669)"
-# milestone_line <store> <answer> <feature> [description]: the helper's question, as "<ok>|<line>|<description>|<why>",
+# milestone_line <store> <answer> <feature> [description] [title]: the helper's question, as "<ok>|<line>|<description>|<why>",
 # on one line: each line break in it is written as the two characters \n, so a case that fails prints
-# nothing at the margin (test-fail-margin.sh).
+# nothing at the margin (test-fail-margin.sh). The milestone's title is the feature's name unless a
+# fifth argument gives another, and a fifth argument of one hyphen asks with no title at all.
 milestone_line() {
-  local d="$WORK/description.txt"; printf '%s' "${4:-}" > "$d"
-  ANNOUNCE_APPROVALS_DIR="$1" python3 -B "$LIB" milestone-line --repo acme/widget --feature "$3" --answer "$2" --description-file "$d" </dev/null \
+  local d="$WORK/description.txt" title=(--title "${5-$3}"); printf '%s' "${4:-}" > "$d"
+  [ "${5-}" != "-" ] || title=()
+  ANNOUNCE_APPROVALS_DIR="$1" python3 -B "$LIB" milestone-line --repo acme/widget --feature "$3" ${title[@]+"${title[@]}"} --answer "$2" --description-file "$d" </dev/null \
     | python3 -c 'import json, sys
 d = json.load(sys.stdin)
 out = ("yes" if d["ok"] is True else "no") + "|" + d["line"] + "|" + d["description"] + "|" + d["why"] + (" " + d["how"] if d["how"] else "")
@@ -1688,13 +1690,50 @@ for value in yes no; do
 done
 r="$(milestone_line "$WORK/store-d-junk" maybe "Hand back" "")"
 check "#3669 unread: a value that is none of the three is still refused as that, with no record read" "$([[ "$r" == "no|||"*'"yes", "no" or "unasked"'* && "$r" != *"could not be read"* ]] && echo ok || echo "$r")"
+# One name only (Dan, by picker, 2026-11-26: "One name only (Recommended)"; second review of #3669,
+# high 2 and medium 3). His answer about a feature counts for a milestone only when the picker named
+# the feature exactly as the milestone is titled, letter case and spacing aside. The helper used to
+# take a second name from the plan (announce_feature) and write his answer about THAT name onto the
+# milestone, while the merge gate looks his answers up by the title: so his yes under the picker's
+# name was lost with the line (N1a), and an old decline naming the milestone outlived a newer yes
+# under the picker's name (N1b). The library now takes the milestone's title and writes no line for
+# a feature that is not the title, so neither can be set up through it.
+ONE_NAME='is not an answer about the milestone "Hand back"; ask him again, naming the feature as the milestone is titled'
+STORE_USED="$WORK/store-i-rework"
+T="$WORK/i-rework.jsonl"; new_talk "$T"
+talk "$T" decide acme/widget "Hand back rework" "Announce it"
+check "#3669 I (the fixture) his Announce it about the picker's own name is on the record" "$([[ "$(decided "$T" acme/widget "Hand back rework")" == "yes|Announce it|"* ]] && echo ok || echo no)"
+r="$(milestone_line "$STORE_USED" yes "Hand back rework" "The plan." "Hand back")"
+check "R9 #3669 I N1a: his yes about another name than the milestone's title writes no line onto that milestone" "$([[ "$r" == "no|||"*'his answer about "Hand back rework" '"$ONE_NAME"* ]] && echo ok || echo "$r")"
+check "R9 #3669 I and the refusal says how to ask him, naming the feature as the milestone is titled" "$([[ "$r" == *"AskUserQuestion"*'"feature": "Hand back"'* && "$r" != *'"feature": "Hand back rework"'* ]] && echo ok || echo "$r")"
+STORE_USED="$WORK/store-i-phase"
+T="$WORK/i-phase.jsonl"; new_talk "$T"
+talk "$T" decide acme/widget "Hand back" "Not announcing" "" "" 28
+talk "$T" decide acme/widget "Hand back phase two" "Announce it"
+check "#3669 I (the fixture) his newer Announce it about the picker's own name is on the record" "$([[ "$(decided "$T" acme/widget "Hand back phase two")" == "yes|Announce it|"* ]] && echo ok || echo no)"
+r="$(milestone_line "$STORE_USED" yes "Hand back phase two" "The plan." "Hand back")"
+check "R9 #3669 I N1b: a newer yes about another name writes no yes onto a milestone his decline names" "$([[ "$r" == "no|||"*'his answer about "Hand back phase two" '"$ONE_NAME"* ]] && echo ok || echo "$r")"
+r="$(milestone_line "$STORE_USED" unasked "Hand back phase two" "The plan." "Hand back")"
+check "R9 #3669 I unasked is refused the same way for a feature that is not the title" "$([[ "$r" == "no|||"*"$ONE_NAME"* && "$r" != *"not asked yet"* ]] && echo ok || echo "$r")"
+r="$(milestone_line "$STORE_USED" no "Hand back phase two" "The plan." "Hand back")"
+check "R9 #3669 I and so is a no" "$([[ "$r" == "no|||"*"$ONE_NAME"* ]] && echo ok || echo "$r")"
+r="$(milestone_line "$WORK/store-d-yes" yes "Hand back" "The plan." "-")"
+check "R9 #3669 I a question that gives no title is refused, saying the title is what his answer is looked up by" "$([[ "$r" == "no|||"*"names no milestone title"* ]] && echo ok || echo "$r")"
+r="$(milestone_line "$WORK/store-d-yes" yes "Hand back" "The plan." "   ")"
+check "R9 #3669 I and so is a title of nothing but spaces" "$([[ "$r" == "no|||"*"names no milestone title"* ]] && echo ok || echo "$r")"
+r="$(milestone_line "$WORK/store-d-yes" yes "hand   BACK" "The plan." "Hand back")"
+check "still possible #3669 I: the title in another letter case and spacing is the same name, and his yes is written" "$([[ "$r" == "yes|$YES_LINE|The plan."'\n\n'"$YES_LINE|" ]] && echo ok || echo "$r")"
+r="$(milestone_line "$WORK/store-d-yes" yes "Hand back" "The plan." "Hand back")"
+check "still possible #3669 I: his yes about the milestone's own title is written, as before" "$([[ "$r" == "yes|$YES_LINE|The plan."'\n\n'"$YES_LINE|" ]] && echo ok || echo "$r")"
+r="$(milestone_line "$WORK/store-d-yes" maybe "Hand back phase two" "" "Hand back")"
+check "#3669 I a value that is none of the three is still refused as that, whatever the two names are" "$([[ "$r" == "no|||"*'"yes", "no" or "unasked"'* && "$r" != *"is not an answer about"* ]] && echo ok || echo "$r")"
 # The helper writes the description it is handed back into the milestone, so one read short or not
 # at all is refused in its own words, never cut or taken as empty. The library reads 2097152 bytes
 # (WORDING_BYTES * 8) of a file at most.
 # line_for_file <file>: the helper's question about the description in that file, as
 # "<ok>|<how long the description handed back is>|<why>".
 line_for_file() {
-  ANNOUNCE_APPROVALS_DIR="$WORK/store-d-none" python3 -B "$LIB" milestone-line --repo acme/widget --feature "Hand back" --answer unasked --description-file "$1" </dev/null \
+  ANNOUNCE_APPROVALS_DIR="$WORK/store-d-none" python3 -B "$LIB" milestone-line --repo acme/widget --feature "Hand back" --title "Hand back" --answer unasked --description-file "$1" </dev/null \
     | python3 -c 'import json, sys
 d = json.load(sys.stdin)
 print(("yes" if d["ok"] is True else "no") + "|" + str(len(d["description"])) + "|" + d["why"], end="")'
@@ -1816,6 +1855,10 @@ T="$WORK/f-newer-other.jsonl"; new_talk "$T"
 talk "$T" decide acme/widget "Hand back" "Not announcing" "" "" 28
 talk "$T" decide acme/widget "Hand over" "Announce it"
 check "still possible #3669 A: a newer Announce it about another feature leaves his decline standing" "$([[ "$(finishes "$STORE_USED" "$(closing "$SAYS_YES" "12" "12")" "$T")" == "clear|"* ]] && echo ok || echo no)"
+# One name only (#3669 I, above): his yes about another name than the milestone's title was never
+# written onto the milestone, so the gate, which looks his answers up by the title, has nothing to
+# lose: the milestone is exactly as his decline naming it left it.
+check "still possible #3669 I: a milestone his decline names stays cleared beside his newer yes about another name, no line saying yes" "$([[ "$(finishes "$WORK/store-i-phase" "$(closing "The plan." "12" "12")")" == "clear|"* ]] && echo ok || echo no)"
 # An announcement let through covers a milestone only when it was let through AFTER his last yes
 # about the milestone's title (second review of #3669, high 1). A milestone is reused for a
 # feature's next phase, discovery asks again, and his newer Announce it is owed an announcement of

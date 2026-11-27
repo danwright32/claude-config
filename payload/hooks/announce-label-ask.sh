@@ -6,8 +6,10 @@
 # the library that writes that record in any form but the two that only read (claude-config#3703).
 #
 # The rule, the commands it reads and its messages live in announce_label_gate.py. This is only the
-# wrapper: leave at once on a call naming neither the label nor the record, run the gate, and refuse
-# when the gate itself fails, since a gate that did not run is not one that found nothing (L98).
+# wrapper: leave at once on a call naming none of the label, the record's folder, the library that
+# writes the record or the milestone helper (the comment above judged_call, below, says each in
+# full), run the gate, and refuse when the gate itself fails, since a gate that did not run is not
+# one that found nothing (L98).
 #
 # One more call is read, and never refused for what it is (claude-config#3669): a Bash call that runs
 # the milestone helper, create-milestone.sh. Before it runs, Dan's answers about whether a feature is
