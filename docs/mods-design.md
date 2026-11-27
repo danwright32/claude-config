@@ -1225,6 +1225,12 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
   request named by number alone is placed by the pull requests the session opened (one under that
   number says which repository, two record nothing), with "PR 31 in owner/name" read as naming
   that repository, where before another repository's pull request was recorded as this one's.
+  The review of the script that counts this reading then found one pull request named twice, in
+  words and by its link, read as two, so his answer recorded nothing. It is one now where the link
+  is to the repository its number alone is placed in, and that placing is made before the picker
+  is read, only for a number a link holds. A link to another repository's pull request of the same
+  number is still a second one (taking the link's word wherever the numbers match was the looser
+  reading, not taken: asking him is the harmless side).
   That record now has three writers (his pick, `leave_pr_open`, and the finish check placing a
   pick's other number), and the finish check waits on GitHub between reading it and writing it. So
   every one of them changes the record as it stands at the moment of writing (`changeLeft`: a
