@@ -97,7 +97,7 @@ Every brief has exactly these parts, in this order, and nothing else:
 6. What done means for this item, and what must come back to Dan instead of being done. Wording does not come back to him by default, never "any new sentence a person reads" (claude-config#2570): a Slack alert's wording follows the `slack-alerts` skill and passes its checker, and a repo wide rewrite of alerts merges when its checks and the lessons review pass, with nothing brought back to him (Dan, 2026-11-17: "it should literally just go through in every repo (separate issues for each repo) and update all alerts without me"). For a `build` item whose issue carries a `Must always be true` list, done includes what keeps each of its rules true, built and seen to fail, and a pull request body that passes the built check, both as `~/.claude/skills/milestone/MUST-ALWAYS-BE-TRUE.md` says. When the issue has no such list, say so in the brief and have the builder write one into `pr-body.md` before it builds.
 7. For a `build` item only: the `Claude-Session:` line for commits and the session link line for the PR body, copied from this session's attribution note.
 
-The rules every agent shares live in `agent-rules.md`, so a brief never restates them. Send a whole wave in one message, one `Agent` call per agent, all in the background, each carrying the `model` its board row shows.
+The rules every agent shares live in `agent-rules.md`, so a brief names only what is particular to its item (the load limit, the suites to run, the files off limits) and never restates a shared rule (claude-config#3542). Send a whole wave in one message, one `Agent` call per agent, all in the background, each carrying the `model` its board row shows.
 
 ## 4. While agents run
 
