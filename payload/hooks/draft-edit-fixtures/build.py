@@ -8,9 +8,11 @@ said in ../lib/draft-edit-diff.py, under WHAT THE SHAPE RESTS ON.
 
 It writes its records under the folder it is handed and nowhere else, and reads nothing.
 
-The layouts other than the first ("body_first", "trailing", "split") are not ones the connector was
-seen to write. They move only the TEXT of a message, to places it could sit, so the suite can show
-the reader fails aloud there instead of counting edits nobody made.
+Only the first layout is written as the connector was seen to answer. "body_first", "trailing",
+"split" and "some_trailing" move only the TEXT of a message, or put a line under it, to places the
+connector could put them; "unknown" has no heading at all. None of those five was seen. They are
+here so the suite can show the reader fails aloud, or sets a pair aside, instead of counting edits
+nobody made.
 """
 import datetime
 import json
@@ -37,14 +39,15 @@ class Records:
         self.lines = []
         self.n = 0
 
-    def use(self, at, tool, tool_input, blob=False):
+    def use(self, at, tool, tool_input, blob=False, timed=True):
         self.n += 1
         call = "toolu_fixture_%04d" % self.n
         message = {"role": "assistant", "content": [
             {"type": "tool_use", "id": call, "name": SERVER + tool, "input": tool_input}]}
-        self.lines.append({"type": "assistant", "timestamp": iso(at), "sessionId": "fixture",
-                           "isSidechain": False, "message": message})
-        if blob:  # the copy Claude Code keeps of the request, which carries no time
+        if timed:
+            self.lines.append({"type": "assistant", "timestamp": iso(at), "sessionId": "fixture",
+                               "isSidechain": False, "message": message})
+        if blob or not timed:  # the copy Claude Code keeps of the request, which carries no time
             self.lines.append({"type": "api-request-blob", "hash": "fixture", "sessionId": "fixture",
                                "message": message})
         return call
@@ -57,11 +60,11 @@ class Records:
         self.lines.append({"type": "user", "timestamp": iso(at), "sessionId": "fixture",
                            "message": {"role": "user", "content": [item]}})
 
-    def draft(self, at, channel, thread, text, saved=True, answer=None, blob=False):
+    def draft(self, at, channel, thread, text, saved=True, answer=None, blob=False, timed=True):
         tool_input = {"channel_id": channel, "message": text}
         if thread is not None:
             tool_input["thread_ts"] = ts(thread)
-        call = self.use(at, "slack_send_message_draft", tool_input, blob)
+        call = self.use(at, "slack_send_message_draft", tool_input, blob, timed)
         if answer is not None:
             self.result(at + 1, call, answer)
         elif saved:
@@ -117,12 +120,15 @@ def thread_text(posts, layout):
 LONG = ("The harbour survey covered 14 berths, 3 cranes and 220 metres of quay. "
         "Of the 14 berths, 9 need new fenders and 5 need dredging. "
         "Can you confirm which berths the dredger should start on?")
-SHORT = "9 berths need new fenders. Can you confirm where the dredger starts?"
+# An edit and not a rewrite: one figure gone, the ask put another way, and most of the words kept.
+SHORT = ("The harbour survey covered 14 berths, 3 cranes and the quay. "
+         "Of the 14 berths, 9 need new fenders and 5 need dredging. "
+         "Which berths does the dredger start on?")
 
 
 def basics(folder):
     r = Records()
-    # One: figures cut, shortened, the ask reworded. Somebody else posts in between.
+    # One: a figure cut, shortened, the ask reworded, the opening kept. Somebody else posts in between.
     r.draft(100, "C0FIXTURE01", 0, LONG, blob=True)
     r.thread(900, "C0FIXTURE01", 0, [
         (0, OTHER, "How did the harbour survey go?"),
@@ -152,30 +158,54 @@ def basics(folder):
         (5000, OTHER, "Pilot boat news?"),
         (5100, ME, "The pilot boat is back in the water and running."),
         (5200, ME, "It will need a second look in a month.")])
-    # Six: a draft at the top of a channel, read back through the channel.
+    # Six: a draft at the top of a channel, read back through the channel. What was posted shares
+    # nothing with it, so it is heavily rewritten and in no kind a rule is offered for.
     r.draft(6000, "C0FIXTURE07", None, "The winter mooring list is ready for the harbour office to read through and comment on.")
     r.channel(6900, "C0FIXTURE07", [
         (6100, ME, "Nothing here matches the draft at all, it was written again from the start."),
         (6050, OTHER, "Morning all.")])
+    # Seven: the line leading up to the point is cut, and every other word kept.
+    r.draft(7000, "C0FIXTURE08", 7000, "Hi all, a quick note on the buoys: the buoy inspection is booked for the spring tide and the diver is confirmed for the day.")
+    r.thread(7900, "C0FIXTURE08", 7000, [
+        (7000, OTHER, "Is the buoy inspection booked?"),
+        (7100, ME, "The buoy inspection is booked for the spring tide and the diver is confirmed for the day.")])
     # A line that is not UTF-8 and a line that is not JSON, which a record file can hold.
     r.write(folder, "session-one.jsonl", extra=b'{"type":"user","message":"\xff\xfe"}\n{not json\n')
     # The same records again in a second file, as a resumed session keeps them.
     r.write(folder, "session-one-resumed.jsonl")
 
 
-def many(folder, per_thread):
-    """Pairs that each cut figures and length, spread over threads as per_thread says."""
+KEEPER = " The keeper has logged every reading and will send the sheet on Friday."
+GAUGE_DRAFT = "Gauge %d read 41 at dawn, 57 at noon and 63 at dusk, against 38, 52 and 60 last week." + KEEPER
+GAUGE_SENT = "Gauge %d read 57 at noon and 63 at dusk." + KEEPER          # four figures and a third of it cut
+GAUGE_NEARLY = "Gauge %d read 41 at dawn, 57 at noon and 63 at dusk, against 38 and 60 last week." + KEEPER
+STRAY = "Is the ferry still on for Friday?"                              # shares nothing with a draft
+DAY = 86400
+
+
+def many(folder, per_thread, strays=(), nearly=None, stray_after=100):
+    """Pairs that each cut figures and length and keep most of the draft's words, spread over
+    threads as per_thread says. strays[t] adds that many drafts to thread t that were never sent,
+    each followed stray_after seconds later by a post about something else. nearly is the number of
+    the one pair, counted from 0 across the threads, whose post drops a single figure and no more."""
     r = Records()
     at = 10000
+    n = 0
     for t, count in enumerate(per_thread):
         parent = at
         channel = "C0FIXTURE%02d" % (20 + t)
         posts = [(parent, OTHER, "Thread %d about the tide gauge." % t)]
         for k in range(count):
             at += 100
-            r.draft(at, channel, parent, "Gauge %d read 41 at dawn, 57 at noon and 63 at dusk, against 38, 52 and 60 last week." % k)
+            r.draft(at, channel, parent, GAUGE_DRAFT % k)
             at += 100
-            posts.append((at, ME, "Gauge %d read 57 at noon." % k))
+            posts.append((at, ME, (GAUGE_NEARLY if n == nearly else GAUGE_SENT) % k))
+            n += 1
+        for _ in range(strays[t] if t < len(strays) else 0):
+            at += 100
+            r.draft(at, channel, parent, GAUGE_DRAFT % 99)
+            at += stray_after
+            posts.append((at, ME, STRAY))
         at += 100
         r.thread(at, channel, parent, posts)
         at += 1000
@@ -217,6 +247,43 @@ def unknown(folder):
     r.write(folder, "session-unknown.jsonl")
 
 
+def broadcast(folder, channel_first):
+    """One reply the author sent, which Slack also shows in the channel, read back both ways. An
+    older draft for the top of that channel was never sent. The truth: one pair, in the thread."""
+    r = Records()
+    r.draft(50, "C0FIXTURE50", None, "The winter mooring list is ready for the harbour office to read.")
+    r.draft(100, "C0FIXTURE50", 0, "The slipway reopens on Friday at nine.")
+    posts = [(0, OTHER, "When does the slipway reopen?"), (200, ME, "The slipway reopens on Friday at nine.")]
+    if channel_first:
+        r.channel(900, "C0FIXTURE50", posts)
+        r.thread(950, "C0FIXTURE50", 0, posts)
+    else:
+        r.thread(900, "C0FIXTURE50", 0, posts)
+        r.channel(950, "C0FIXTURE50", posts)
+    r.write(folder, "session-broadcast.jsonl")
+
+
+def untimed(folder):
+    """A saved draft whose call is kept only in the copy of the request, which carries no time."""
+    r = Records()
+    r.draft(100, "C0FIXTURE60", 0, "The lock gates close at nine.", timed=False)
+    r.thread(900, "C0FIXTURE60", 0, [
+        (0, OTHER, "When do the lock gates close?"),
+        (200, ME, "The lock gates close at nine.")])
+    r.write(folder, "session-untimed.jsonl")
+
+
+def keys(folder):
+    """A read result whose JSON object holds a key that is a sentence, beside two plain field names."""
+    r = Records()
+    call = r.use(900, "slack_read_thread", {"channel_id": "C0FIXTURE70", "message_ts": ts(0)})
+    r.result(901, call, json.dumps({
+        "The lock gates close at nine and this whole sentence is a key " + "x" * 300: "nothing",
+        "messages": thread_text([(0, OTHER, "When do the lock gates close?")], "thread"),
+        "pagination": ""}))
+    r.write(folder, "session-keys.jsonl")
+
+
 def main():
     folder, which = sys.argv[1], sys.argv[2]
     if which == "basics":
@@ -227,12 +294,28 @@ def main():
         many(folder, [8, 4])
     elif which == "few":
         many(folder, [3, 3, 3])
+    elif which == "few_strays":      # nine edits and three posts that were never edits of a draft
+        many(folder, [3, 3, 3], strays=[1, 1, 1])
+    elif which == "tail_stray":      # twelve edits, and the latest pair of all is a stray
+        many(folder, [4, 4, 4], strays=[0, 0, 1])
+    elif which == "strays":          # no draft was sent: twelve strays, each within the hour
+        many(folder, [0, 0, 0], strays=[4, 4, 4], stray_after=3600)
+    elif which == "late_strays":     # the same, each thirty days after its draft
+        many(folder, [0, 0, 0], strays=[4, 4, 4], stray_after=30 * DAY)
+    elif which == "nearly":          # twelve edits; the sixth keeps more of its draft than any other
+        many(folder, [4, 4, 4], nearly=5)
     elif which == "unknown":
         unknown(folder)
     elif which in ("wordforword", "body_first", "trailing", "split", "some_trailing"):
         word_for_word(folder, "thread" if which == "wordforword" else which)
     elif which == "some_wordless":
         word_for_word(folder, "thread", wordless=1)
+    elif which in ("broadcast", "broadcast_channel_first"):
+        broadcast(folder, which == "broadcast_channel_first")
+    elif which == "untimed":
+        untimed(folder)
+    elif which == "keys":
+        keys(folder)
     else:
         sys.exit("build.py: no fixture called " + which)
 

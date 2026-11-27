@@ -30,19 +30,26 @@ HOW A PAIR IS MADE.
   * Each post is compared with the latest draft saved in the same place before it. A draft is used
     once: a second post after the same draft was written without one and is left out, as is a post
     with no draft before it, and a draft a later draft replaced before anything was posted.
+  * A post more than PAIR_WITHIN_DAYS days after that draft is not paired with it. Both are left
+    out and counted.
   * Both are compared after Slack's formatting is set aside (links, bold, italics, bullets, quote
     marks, spacing and case), by words, with difflib.
 
 WHAT IT CANNOT SEE, so nobody reads more into a count than it measured.
   * A thread no later session read back. Its draft is counted as having no post read back after it.
-  * A draft Dan deleted. If he later wrote something else in that thread, the two are paired and
-    read as heavily rewritten.
+  * A draft Dan deleted. If he wrote something else in that thread within PAIR_WITHIN_DAYS days, the
+    two are paired and read as heavily rewritten, which keeps the pair out of every kind a rule is
+    offered for. If what he wrote happens to share most of the draft's words, it reads as an edit.
+  * A draft he cut to under about half its length. By the likeness used here that is heavily
+    rewritten too, so the strongest cuts are in no kind.
   * A message he wrote from the start with no draft: it is left out, never counted as an edit.
   * Anything on the other Mac: each Mac holds only its own records, for as long as it keeps them.
 
-THE KINDS. A pair can be several at once, bar the first.
+THE KINDS. A pair is one of the first two and nothing else, or any number of the other four.
   sent as drafted     the two are the same once formatting is set aside
-  heavily rewritten   their likeness is under HEAVY (0.70, the line issue #3554's measurement used)
+  heavily rewritten   their likeness is under HEAVY (0.70, the line issue #3554's measurement used).
+                      Such a pair is counted here and in no kind below, so it cannot reach the floor
+                      and is never the example: it may not be an edit of that draft at all.
   figures cut         what was sent holds fewer numbers than the draft
   length cut          what was sent is more than a tenth shorter than the draft
   the ask reworded    both hold a question or a request, and the wording of it differs
@@ -104,6 +111,11 @@ SHORTER = 0.90
 OPENING_WORDS = 6
 FLOOR_PAIRS = 10
 FLOOR_THREADS = 3
+# A post more than this many days after the latest draft before it is not paired with that draft.
+# A setting chosen on 2026-11-27, not a measurement: nobody has measured how long Dan takes to send a
+# draft. A week is long enough for a draft left over a weekend and short enough that a thread he
+# comes back to next month is not read as an edit of a draft he dropped.
+PAIR_WITHIN_DAYS = 7
 EXAMPLE_CHARS = 600
 
 REPORTED = ("sent as drafted", "heavily rewritten")
@@ -375,14 +387,22 @@ def sentences(text):
 
 
 def kinds_of(draft, sent):
-    """The kinds of edit between a draft and what was sent."""
+    """The kinds of edit between a draft and what was sent, and their likeness (1 is the same words).
+
+    A heavily rewritten pair is that and nothing else. A post that far from the draft before it may
+    not be an edit of it at all (a draft he never sent, then a post about something else), and such a
+    pair reads as figures cut, length cut and the opening changed all at once. Counted there, twelve
+    drafts nobody sent offered four rules (the review of pull request 3848, M2). What that costs: a
+    draft cut to under about half its length is heavily rewritten by this measure, and so is in no
+    kind either."""
     d, s = sentences(draft), sentences(sent)
     dt, st = " ".join(d), " ".join(s)
     if dt == st:
-        return ["sent as drafted"]
+        return ["sent as drafted"], 1.0
+    likeness = difflib.SequenceMatcher(None, dt.split(), st.split(), autojunk=False).ratio()
+    if likeness < HEAVY:
+        return ["heavily rewritten"], likeness
     kinds = []
-    if difflib.SequenceMatcher(None, dt.split(), st.split(), autojunk=False).ratio() < HEAVY:
-        kinds.append("heavily rewritten")
     if len(FIGURE.findall(st)) < len(FIGURE.findall(dt)):
         kinds.append("figures cut")
     if len(st) < SHORTER * len(dt):
@@ -392,7 +412,7 @@ def kinds_of(draft, sent):
         kinds.append("the ask reworded")
     if dt.split()[:OPENING_WORDS] != st.split()[:OPENING_WORDS]:
         kinds.append("the opening changed")
-    return kinds
+    return kinds, likeness
 
 
 def pair_up(drafts, saved, posts, author):
@@ -407,12 +427,18 @@ def pair_up(drafts, saved, posts, author):
         if uid.lower() == want or name.strip().lower() == want:
             mine[place].append((float(ts), body, labelled))
     pairs, used, no_draft, doubtful = [], set(), 0, 0
+    late, late_posts = set(), 0
     for place, sent in mine.items():
         ds = sorted(by_place.get(place, []))
         for at, body, labelled in sorted(sent):
             before = [d for d in ds if d[0] < at]
             if not before or before[-1][1] in used:
                 no_draft += 1
+                continue
+            if at - before[-1][0] > PAIR_WITHIN_DAYS * 86400:
+                # Too long after that draft to be read as what became of it: neither is in a pair.
+                late_posts += 1
+                late.add(before[-1][1])
                 continue
             used.add(before[-1][1])
             if labelled:
@@ -425,7 +451,7 @@ def pair_up(drafts, saved, posts, author):
     for place, ds in by_place.items():
         ds.sort()
         for i, (at, call, _text) in enumerate(ds):
-            if call in used:
+            if call in used or call in late:
                 continue
             # Replaced when a later draft in the same place was the one a post was compared with.
             if any(later[1] in used for later in ds[i + 1:]):
@@ -433,7 +459,8 @@ def pair_up(drafts, saved, posts, author):
             else:
                 unread += 1
     return sorted(pairs, key=lambda p: p[1]), {"unread": unread, "replaced": replaced, "no_draft": no_draft,
-                                               "doubtful": doubtful}
+                                               "doubtful": doubtful, "late_posts": late_posts,
+                                               "late_drafts": len(late)}
 
 
 def cut(text):
@@ -530,12 +557,18 @@ def main():
           "posts with no draft before them: %d" % (left["unread"], left["replaced"], left["no_draft"]))
     print("also left out: pairs whose post ends in a line shaped like a label: %d (that line may be the "
           "connector's and not his)" % left["doubtful"])
+    print("also left out: posts more than %d days after the draft before them: %d (drafts: %d). The %d days "
+          "is a setting chosen on 2026-11-27, not a measurement." % (
+              PAIR_WITHIN_DAYS, left["late_posts"], left["late_drafts"], PAIR_WITHIN_DAYS))
     tally = collections.defaultdict(list)
-    for pair in pairs:
-        for kind in kinds_of(pair[2], pair[3]):
-            tally[kind].append(pair)
+    for place, at, draft, sent in pairs:
+        kinds, likeness = kinds_of(draft, sent)
+        for kind in kinds:
+            tally[kind].append((place, at, draft, sent, likeness))
     for kind in REPORTED:
         print("%s: %d of %s" % (kind, len(tally[kind]), plural(len(pairs), "pair")))
+    print("kept out of the four kinds below and of the floor, as heavily rewritten: %d (a post that far from "
+          "the draft before it may not be an edit of it)" % len(tally["heavily rewritten"]))
     examples = []
     for kind in OFFERED:
         found = tally[kind]
@@ -552,7 +585,7 @@ def main():
                                           plural(in_threads, "thread"), standing))
     if args.examples:
         for kind in examples:
-            _place, _at, draft, sent = tally[kind][-1]  # the latest pair of that kind
+            _place, _at, draft, sent, _likeness = tally[kind][-1]  # the latest pair of that kind
             print("")
             print("Example for %s (Slack message text: show it to Dan, and copy it nowhere)" % kind)
             print("DRAFT: " + cut(draft))

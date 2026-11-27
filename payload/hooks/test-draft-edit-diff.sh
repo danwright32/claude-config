@@ -33,16 +33,18 @@ for f in basics recurring lopsided few unknown; do fixture "$f" || { echo "FAIL:
 # --- pairing -------------------------------------------------------------------------------------
 out="$(run basics)"; rc=$?
 check_eq "basics: the run succeeds" "0" "$rc"
-check "basics: draft calls are counted once, though a resumed session and a request copy repeat them" "draft calls: 8 (saved: 6)" "$out"
-check "basics: four pairs, one per thread" "pairs: 4 in 4 threads" "$out"
+check "basics: draft calls are counted once, though a resumed session and a request copy repeat them" "draft calls: 9 (saved: 7)" "$out"
+check "basics: five pairs, one per thread" "pairs: 5 in 5 threads" "$out"
 check "basics: a draft nothing read back after is left out and counted" "drafts with no post read back after them: 1" "$out"
 check "basics: a draft replaced by a later one before any post is left out and counted" "drafts replaced by a later draft: 1" "$out"
 check "basics: a post with no saved draft before it is left out and counted (a draft never saved is no draft)" "posts with no draft before them: 3" "$out"
-check "basics: formatting, bullets, links, spacing and case are set aside" "sent as drafted: 2 of 4 pairs" "$out"
-check "basics: heavily rewritten" "heavily rewritten: 2 of 4 pairs" "$out"
-check "basics: figures cut rests on one pair and is too thin" "figures cut: 1 of 4 pairs, in 1 thread: too thin to offer a rule" "$out"
-check "basics: the ask reworded" "the ask reworded: 1 of 4 pairs" "$out"
-check "basics: the opening changed" "the opening changed: 2 of 4 pairs" "$out"
+check "basics: formatting, bullets, links, spacing and case are set aside" "sent as drafted: 2 of 5 pairs" "$out"
+check "basics: heavily rewritten is the one post that shares nothing with its draft" "heavily rewritten: 1 of 5 pairs" "$out"
+check "basics: figures cut rests on one pair and is too thin" "figures cut: 1 of 5 pairs, in 1 thread: too thin to offer a rule" "$out"
+check "basics: the ask reworded" "the ask reworded: 1 of 5 pairs" "$out"
+check "basics: the opening changed, and the heavily rewritten pair is not counted under it" "the opening changed: 1 of 5 pairs" "$out"
+check "basics: length cut, and the heavily rewritten pair is not counted under it" "length cut: 2 of 5 pairs" "$out"
+check "basics: how many pairs were kept out of the four kinds is printed" "kept out of the four kinds below and of the floor, as heavily rewritten: 1" "$out"
 check "basics: the floor is stated beside a thin kind" "at least 10 pairs in at least 3 threads" "$out"
 check_not "basics: no message text without the flag (draft)" "harbour" "$out"
 check_not "basics: no message text without the flag (sent)" "fenders" "$out"
@@ -51,7 +53,7 @@ check_not "basics: no channel id" "C0FIXTURE" "$out"
 
 # The author by display name, whatever its case.
 out="$(python3 -B "$TOOL" --records "$WORK/basics" --author "ada example" 2>&1)"
-check "the author can be named as Slack shows them" "pairs: 4 in 4 threads" "$out"
+check "the author can be named as Slack shows them" "pairs: 5 in 5 threads" "$out"
 # Somebody else's posts are never paired with a draft.
 out="$(python3 -B "$TOOL" --records "$WORK/basics" --author "U0FIXTUREZ" 2>&1)"
 check "an author with no posts pairs nothing" "pairs: 0" "$out"
@@ -66,11 +68,36 @@ check "lopsided: twelve pairs in two threads is too thin" "figures cut: 12 of 12
 out="$(run few)"
 check "few: nine pairs in three threads is too thin" "figures cut: 9 of 9 pairs, in 3 threads: too thin to offer a rule" "$out"
 
+# --- a post that is not an edit of its draft (review M2) --------------------------------------------
+# A draft Dan never sent, and a post of his about something else afterwards. Such a pair is heavily
+# rewritten, and it is in none of the four kinds, so it can neither reach the floor nor be the example.
+for f in strays late_strays few_strays tail_stray; do fixture "$f" || { echo "FAIL: fixture $f could not be built"; fail=$((fail + 1)); }; done
+out="$(run strays)"
+check "strays: every pair is heavily rewritten" "heavily rewritten: 12 of 12 pairs" "$out"
+check "strays: how many were kept out of the four kinds is printed" "kept out of the four kinds below and of the floor, as heavily rewritten: 12" "$out"
+for kind in "figures cut" "length cut" "the ask reworded" "the opening changed"; do
+  check "strays: none is counted as $kind" "$kind: 0 of 12 pairs, in 0 threads: too thin to offer a rule" "$out"
+done
+check_not "strays: so no kind is recurring" "recurring" "$out"
+check_not "strays: and no example is shown" "Example for" "$(run strays --examples)"
+out="$(run few_strays)"
+check "few strays: three strays do not lift nine edits over the floor" "figures cut: 9 of 12 pairs, in 3 threads: too thin to offer a rule" "$out"
+out="$(run tail_stray --examples)"
+check "tail stray: twelve edits are recurring beside one stray" "figures cut: 12 of 13 pairs, in 3 threads: recurring" "$out"
+check "tail stray: an example is shown" "Example for figures cut" "$out"
+check_not "tail stray: and the stray, the latest pair of all, is never it" "ferry" "$out"
+# A post long after the draft before it is not paired with it at all. The limit is a setting.
+out="$(run late_strays)"
+check "late strays: a post thirty days after its draft makes no pair" "pairs: 0 in 0 threads" "$out"
+check "late strays: and is counted as left out, with the limit named and the drafts counted" "posts more than 7 days after the draft before them: 12 (drafts: 12)" "$out"
+check "late strays: those drafts are not also counted as never read back" "drafts with no post read back after them: 0" "$out"
+check "strays within the hour are inside the limit" "posts more than 7 days after the draft before them: 0 (drafts: 0)" "$(run strays)"
+
 # --- one example pair per kind, only when asked ----------------------------------------------------
 out="$(run recurring --examples)"
 check "examples: the kind is named over its pair" "Example for figures cut" "$out"
 check "examples: the draft is shown" "against 38, 52 and 60 last week" "$out"
-check "examples: what was sent is shown" "read 57 at noon." "$out"
+check "examples: what was sent is shown" "read 57 at noon and 63 at dusk." "$out"
 check_eq "examples: one pair per kind, never more" "1" "$(printf '%s\n' "$out" | grep -c '^Example for figures cut')"
 out="$(run lopsided --examples)"
 check_not "examples: a kind under the floor shows no message text" "Gauge" "$out"
@@ -118,7 +145,7 @@ check "shapes: says how many results it could not read" "in a layout this cannot
 check "shapes: names the result's own fields" "result field messages: 1" "$out"
 check_not "shapes: prints no message text" "lock gates" "$out"
 out="$(run basics --shapes)"
-check "shapes: counts each heading it knows" "thread parent headings: 5" "$out"
+check "shapes: counts each heading it knows" "thread parent headings: 6" "$out"
 check_not "shapes: prints no message text for a layout it can read" "harbour" "$out"
 
 # --- where the TEXT of a message sits (review M1) ------------------------------------------------------
