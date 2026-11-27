@@ -5,6 +5,7 @@
 #   claim-issue.sh claim   <owner/repo> <issue> <branch>
 #   claim-issue.sh check   <owner/repo> <issue> <branch>
 #   claim-issue.sh release <owner/repo> <issue> <branch> <reason>
+#   claim-issue.sh takeover <owner/repo> <issue> <branch> <reason>
 #
 # Why it exists. On 2026-11-19 two sessions, one on each Mac, built the same fix for #3285. A branch
 # that exists only in a local worktree is invisible to the other Mac, and nothing on the issue said
@@ -27,7 +28,9 @@
 #
 # check does the same reads and posts nothing. release posts that this session's claim on that
 # branch has ended, with the reason, so the claim does not block the next session; it posts nothing
-# when there is no live claim of this session's to release, and never ends another session's.
+# when there is no live claim of this session's to release, and never ends another session's or one
+# that records no session. takeover ends a claim from this Mac on that branch that records no
+# session, and nothing else (see "Which session a claim belongs to" below).
 #
 # A claim is held by a hidden marker line, never by the prose around it:
 #   <!-- orchestrate-claim branch=<branch> host=<host>,session=<session> -->
@@ -62,9 +65,13 @@
 #     on an earlier version therefore reads the claim as another Mac's and holds; a seventh word
 #     would have hidden the claim from it altogether.
 #   - A claim whose host word names no session was posted before this change. Nothing says whose it
-#     is, so it is never taken for the caller's: it holds, like any other session's. The session
-#     that knows such a claim is its own takes it over on purpose with a release, then a claim: the
-#     release ends it in the words it was posted in and names the session that did so.
+#     is, so it is never taken for the caller's: it holds, like any other session's, and a release
+#     never ends it. The session that knows such a claim is its own takes it over on purpose with
+#     takeover, then a claim: the take over ends it in the words it was posted in and names the
+#     session that did so. It is a word of its own because the skill's Finish step runs release
+#     for every claim a session believes it posted: while release did this too (the first two
+#     commits of #3804), a session that had wrongly been told ALREADY CLAIMED under another
+#     session's claim would have ended that live claim with its routine release.
 #   - A session id that cannot be read (the variable missing or not an id, or the short name not
 #     made) stops the script with exit 2 before it reads or posts anything.
 #
@@ -79,8 +86,11 @@
 # no claim (#3546, 2026-11-26, answered CLAIMED), is not this session's, or cannot be told to be,
 # and holds.
 #
-# Exit codes: 0 claimed by us (or free, for check, or released); 1 held by someone else or closed,
-# do not start it; 2 could not check, or bad arguments: do not start it. After exit 2 nothing was
+# Exit codes: 0 claimed by us (or free, for check, or released, or taken over, or nothing of this
+# session's to release); 1 held by someone else or closed, do not start it, and for release and
+# takeover, nothing was ended: the claim there records no session (release), or there is no claim
+# from this Mac that records no session (takeover); 2 could not check, or bad arguments: do not
+# start it. After exit 2 nothing was
 # claimed unless the message says a claim may have been posted (the post errored, or the claim could
 # not be read back); then it names the release command to run.
 # A failed read is never taken as "nobody holds it", whether gh failed or a tool that reads what gh
@@ -98,7 +108,7 @@ BRANCH_READER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../hooks/lib/bra
 
 usage() {
   echo "usage: claim-issue.sh claim|check <owner/repo> <issue> <branch>" >&2
-  echo "       claim-issue.sh release <owner/repo> <issue> <branch> <reason>" >&2
+  echo "       claim-issue.sh release|takeover <owner/repo> <issue> <branch> <reason>" >&2
   exit 2
 }
 
@@ -107,12 +117,16 @@ repo="${2:-}"
 issue="${3:-}"
 branch="${4:-}"
 reason="${5:-}"
-case "$mode" in claim|check|release) ;; *) usage ;; esac
+case "$mode" in claim|check|release|takeover) ;; *) usage ;; esac
 [[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "COULD NOT CHECK: '$repo' is not owner/repo." >&2; usage; }
 [[ "$issue" =~ ^[0-9]+$ ]] || { echo "COULD NOT CHECK: '$issue' is not an issue number." >&2; usage; }
 [[ "$branch" =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "COULD NOT CHECK: '$branch' is not a branch name this script can record." >&2; usage; }
 if [ "$mode" = release ] && [ -z "$reason" ]; then
   echo "COULD NOT CHECK: a release needs a reason, such as 'handed back unfinished'." >&2
+  usage
+fi
+if [ "$mode" = takeover ] && [ -z "$reason" ]; then
+  echo "COULD NOT CHECK: a take over needs a reason, such as 'this session posted it before claims named their session'." >&2
   usage
 fi
 
@@ -141,6 +155,8 @@ trap 'rm -rf "$tmp"' EXIT
 no_session() { # no_session <why>
   if [ "$mode" = release ]; then
     echo "COULD NOT RELEASE: this session's id could not be read ($1), so which claim on $repo#$issue is its own is unknown. Nothing was posted, and any claim of this session's still stands."
+  elif [ "$mode" = takeover ]; then
+    echo "COULD NOT TAKE OVER: this session's id could not be read ($1), so the take over on $repo#$issue could not name the session doing it. Nothing was posted, and every claim there still stands."
   else
     echo "COULD NOT CHECK: this session's id could not be read ($1), so a claim of its own on $repo#$issue could not be told from another session's. Do not start it, and nothing was claimed."
   fi
@@ -178,7 +194,8 @@ read_issue() { # fills $tmp/issue; returns non zero, with the reason in $tmp/iss
 
 # The claims on the issue, read out of its marker lines in the order GitHub shows them. Two kinds of
 # line come out:
-#   LIVE <epoch> <branch> <host> <session>   a claim no release has ended, stale or not
+#   LIVE <epoch> <branch> <host> <session>   a claim no release has ended, stale or not, in the
+#                                            order of each claim's latest post
 #   NAME <branch> <host> <session>           whose that branch name is (see "Whose a branch is")
 # <session> is "-" for a claim posted before claims named their session. A claim is one branch, host
 # and session; a release ends the claim with the same three. A host word that is not a Mac's name
@@ -202,7 +219,14 @@ live_claims() {
         held = 1
         for (k in when) if (k != key && $1 - when[k] <= window) held = 0
         if (held) { if (!(b in name)) { m++; names[m] = b }; name[b] = h " " s }
-        if (!(key in when)) { n++; order[n] = key; pos[key] = n }
+        # A claim posted again takes the place of this, its latest post, never the place of the
+        # earlier one: a session posts again only once it has judged its earlier claim over, and
+        # another session that judged the same may have claimed in between. Keeping the earlier
+        # place let the claim posted again read as first, so both sessions were told CLAIMED.
+        # Whatever the two times are: with the clock at GitHub behind the one on the Mac, a claim
+        # the Mac calls stale is posted again inside the window by the times GitHub stamps
+        # (section 12 of the suite). No apostrophe in this program: it sits in single quotes.
+        n++; order[n] = key; pos[key] = n
         when[key] = $1
         ended = ""
       } else if ($3 == "orchestrate-release") {
@@ -275,6 +299,8 @@ judge_claims() {
 fail_read() { # fail_read <what> <error file>
   if [ "$mode" = release ]; then
     echo "COULD NOT RELEASE: could not read $1 for $repo#$issue, so nothing was posted and any claim of this session's still stands. Run the release again."
+  elif [ "$mode" = takeover ]; then
+    echo "COULD NOT TAKE OVER: could not read $1 for $repo#$issue, so nothing was posted and every claim there still stands. Run the take over again."
   else
     echo "COULD NOT CHECK: could not read $1 for $repo#$issue, so whether another session holds it is unknown. Do not start it, and nothing was claimed."
   fi
@@ -288,29 +314,46 @@ post() { # post <body file>
 
 claim_marker="<!-- orchestrate-claim branch=$branch host=$host,session=$session -->"
 release_marker="<!-- orchestrate-release branch=$branch host=$host,session=$session -->"
-# release_body <reason> <file> [unnamed]: with "unnamed", the release also ends a claim from this
-# Mac that names no session, in the words that claim was posted in. That line comes first and the
-# line naming this session straight after it, which is how a later read knows who took it over.
-release_body() {
+release_body() { # release_body <reason> <file>
   {
     echo "Released by the session on $(mac_name "$host") at $(et_time "$now"): work on branch \`$branch\` stopped ($1). Another session may take this issue."
     echo ""
-    [ "${3:-}" = unnamed ] && echo "<!-- orchestrate-release branch=$branch host=$host -->"
+    echo "$release_marker"
+  } >"$2"
+}
+# takeover_body <reason> <file>: ends a claim from this Mac that names no session, in the words
+# that claim was posted in. That line comes first and the line naming this session straight after
+# it, which is how a later read knows who took it over.
+takeover_body() {
+  {
+    echo "Taken over by a session on $(mac_name "$host") at $(et_time "$now"): the claim on branch \`$branch\` that recorded no session is ended by the session that says it is its own ($1). That session claims again, in its own name, if it carries on."
+    echo ""
+    echo "<!-- orchestrate-release branch=$branch host=$host -->"
     echo "$release_marker"
   } >"$2"
 }
 
 read_issue || fail_read "the issue's comments" "$tmp/issue.err"
 
-# ---- release ----
-# Ends this session's claim on the branch, and a claim from this Mac on it that names no session
-# (the take over, see the header). Never another session's: only that session can release its own.
-if [ "$mode" = release ]; then
+# ---- release and takeover ----
+# release ends this session's claim on the branch and no other: never another session's, which
+# only that session can release, and never one from this Mac that names no session, which nothing
+# says is this session's. takeover ends a claim from this Mac on the branch that names no session,
+# and only such a claim (see "Which session a claim belongs to" in the header).
+if [ "$mode" = release ] || [ "$mode" = takeover ]; then
   ours=no
   unnamed=no
   others=no
+  name_held_by="" # whose the branch name is: "unnamed" (a claim from this Mac with no session), "ours", or neither
   live_claims >"$tmp/live" 2>"$tmp/live.err" || fail_read "the claims on the issue" "$tmp/live.err"
   while read -r kind t b h s; do
+    if [ "$kind" = NAME ]; then # NAME <branch> <host> <session>, read here as t, b and h
+      if [ "$t" = "$branch" ] && [ "$b" = "$host" ]; then
+        [ "$h" = - ] && name_held_by=unnamed
+        [ "$h" = "$session" ] && name_held_by=ours
+      fi
+      continue
+    fi
     [ "$kind" = LIVE ] && [ "$b" = "$branch" ] && [ "$h" = "$host" ] || continue
     case "$s" in
       "$session") ours=yes ;;
@@ -318,26 +361,51 @@ if [ "$mode" = release ]; then
       *) others=yes ;;
     esac
   done <"$tmp/live"
-  if [ "$ours" = no ] && [ "$unnamed" = no ]; then
-    echo "NOTHING TO RELEASE: $repo#$issue has no live claim of this session's from $(mac_name "$host") on branch $branch. Nothing posted."
-    [ "$others" = yes ] && echo "  another session on $(mac_name "$host") holds a claim on that branch, and only that session can release it"
+  others_line="  another session on $(mac_name "$host") holds a claim on that branch, and only that session can release it"
+  takeover_cmd="claim-issue.sh takeover $repo $issue $branch \"<reason>\""
+
+  if [ "$mode" = takeover ]; then
+    if [ "$unnamed" = no ]; then
+      echo "NOTHING TO TAKE OVER: $repo#$issue has no live claim from $(mac_name "$host") on branch $branch that records no session. Nothing posted."
+      [ "$others" = yes ] && echo "$others_line"
+      [ "$ours" = yes ] && echo "  this session's own claim on that branch names it and still stands: release ends it"
+      exit 1
+    fi
+    takeover_body "$reason" "$tmp/release"
+    if ! post "$tmp/release"; then
+      echo "COULD NOT TAKE OVER: the take over was not posted on $repo#$issue, so the claim still stands."
+      sed 's/^/  /' "$tmp/post.err"
+      exit 2
+    fi
+    echo "TAKEN OVER: $repo#$issue, branch $branch. The claim had no session recorded; it is ended, and the comment names this session as the one that took it over."
+    case "$name_held_by" in
+      unnamed) echo "  The branch name was that claim's, so a claim this session posts on that branch next counts the branch and its pull request as its own. Claim again." ;;
+      ours) echo "  The branch name was this session's already, by a claim of its own, and still is." ;;
+      *) echo "  The branch name was not that claim's to pass on (it was posted under another live claim, or a later claim took the name), so a pull request or a branch already up under that name still holds." ;;
+    esac
+    [ "$ours" = yes ] && echo "  this session's own claim on that branch ended with it: the comment that names this session ends both"
     exit 0
   fi
-  if [ "$unnamed" = yes ]; then
-    release_body "$reason" "$tmp/release" unnamed
-  else
-    release_body "$reason" "$tmp/release"
+
+  if [ "$ours" = no ] && [ "$unnamed" = yes ]; then
+    echo "NOT RELEASED: the claim on $repo#$issue from $(mac_name "$host") on branch $branch records no session, so nothing says it is this session's own. Nothing posted, and that claim still stands."
+    echo "  only if that claim is this session's own, posted before claims named their session, run: $takeover_cmd"
+    [ "$others" = yes ] && echo "$others_line"
+    exit 1
   fi
+  if [ "$ours" = no ]; then
+    echo "NOTHING TO RELEASE: $repo#$issue has no live claim of this session's from $(mac_name "$host") on branch $branch. Nothing posted."
+    [ "$others" = yes ] && echo "$others_line"
+    exit 0
+  fi
+  release_body "$reason" "$tmp/release"
   if ! post "$tmp/release"; then
     echo "COULD NOT RELEASE: the release was not posted on $repo#$issue, so the claim still stands."
     sed 's/^/  /' "$tmp/post.err"
     exit 2
   fi
-  if [ "$unnamed" = yes ]; then
-    echo "RELEASED: $repo#$issue, branch $branch. The claim had no session recorded, and the release names this session as the one that took it over, so a claim it posts on that branch next counts the branch and its pull request as its own."
-  else
-    echo "RELEASED: $repo#$issue, branch $branch."
-  fi
+  echo "RELEASED: $repo#$issue, branch $branch."
+  [ "$unnamed" = yes ] && echo "  a claim on that branch that records no session still stands, and this release did not end it; only if it is this session's own, run: $takeover_cmd"
   exit 0
 fi
 
@@ -445,7 +513,7 @@ print_unheld() {
 print_takeover() {
   local b
   for b in "${takeover[@]+"${takeover[@]}"}"; do
-    echo "  only if the claim on branch $b with no session recorded is this session's own, posted before claims named their session, take it over on purpose: claim-issue.sh release $repo $issue $b \"<reason>\", then claim again"
+    echo "  only if the claim on branch $b with no session recorded is this session's own, posted before claims named their session, take it over on purpose: claim-issue.sh takeover $repo $issue $b \"<reason>\", then claim again (a plain release leaves it standing)"
   done
 }
 

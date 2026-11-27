@@ -228,6 +228,16 @@ check "#3804 the skill says another session on the same Mac is held" "$(holds "$
 check "#3804 the skill says what makes a branch under the claimed name this session's" "$(holds "$claiming" 'accounts for it' 'no word of what makes a branch this session own')"
 check "#3804 the skill says how a claim with no session recorded is taken over" "$(holds "$claiming" 'no session recorded' 'no word of a claim with no session recorded')"
 check "#3804 the skill says a session id that cannot be read stops the claim" "$(holds "$claiming" 'cannot read its session' 'no word of an unreadable session id')"
+# The review of that change: taking over a claim with no session recorded is a word of its own,
+# never what a plain release does (Finish runs release for every claim, so a release that took
+# claims over would do it by accident), and a session that is not the claimant is held by the
+# claimant's pushed branch or open pull request for as long as either is up, not for 24 hours.
+check "#3804 the take over command is written out" "$(holds "$claiming" 'bash ~/.claude/skills/orchestrate/claim-issue.sh takeover <owner/repo> <issue number> <branch> "<reason>"' 'no take over command')"
+check "#3804 the skill says a plain release never ends a claim with no session recorded" "$(holds "$claiming" '`release` never ends a claim with no session recorded' 'no word that release leaves such a claim alone')"
+check "#3804 the skill says a release that ended nothing for that reason exits 1" "$(holds "$claiming" '`NOT RELEASED`' 'no NOT RELEASED wording')"
+check "#3804 the skill says a branch or pull request holds a session that is not the claimant for as long as it is up" "$(holds "$claiming" 'for as long as it is up' 'no word of how long a pushed branch holds')"
+check "#3804 the skill says no command lets a session that is not the claimant through" "$(holds "$claiming" 'no command of this script lets it through' 'no word that nothing lets another session through')"
+check "#3804 Finish never takes a claim over to clear it" "$(holds "$finish" '`NOT RELEASED`' 'Finish does not say what a NOT RELEASED answer means')"
 check "#3317 the board states include held by" "$(holds "$(section "## 4. While agents run")" '`held by <who>`' 'no held by state')"
 check "#3317 Finish releases claims left standing" "$(holds "$finish" 'claim-issue.sh release' 'Finish does not release claims')"
 check "#3317 the script the skill names is there and executable" "$([ -x "$DIR/claim-issue.sh" ] && echo ok || echo "$DIR/claim-issue.sh missing or not executable")"

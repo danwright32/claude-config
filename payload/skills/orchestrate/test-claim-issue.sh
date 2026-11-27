@@ -79,9 +79,14 @@ case "$1 $2" in
     cp "$body" "$FAKE/posted.$k"
     # Another session's claim that reached GitHub a moment before this one.
     [ -e "$FAKE/race" ] && { cat "$FAKE/race" >>"$FAKE/markers"; rm -f "$FAKE/race"; }
+    # GitHub stamps a comment with its own clock, which is not always this Mac's.
+    stamp="$CLAIM_NOW"
+    [ -e "$FAKE/stamp" ] && stamp="$(cat "$FAKE/stamp")"
     while IFS= read -r line; do
-      case "$line" in "<!-- orchestrate-"*) echo "$CLAIM_NOW $line" >>"$dest" ;; esac
+      case "$line" in "<!-- orchestrate-"*) echo "$stamp $line" >>"$dest" ;; esac
     done <"$body"
+    # Another session's claim that reached GitHub a moment after this one.
+    [ -e "$FAKE/late" ] && { cat "$FAKE/late" >>"$FAKE/markers"; rm -f "$FAKE/late"; }
     # A write that landed but answered with an error, as a timeout or a 5xx can.
     [ -e "$FAKE/landed_but_failed" ] && { echo "gh: HTTP 504 simulated" >&2; exit 1; }
     exit 0 ;;
@@ -616,7 +621,8 @@ for mode in claim check; do
   has "#3804 $mode under a branch another session claimed with no session recorded: says the claim names no session" "with no session recorded" "$out"
   has "#3804 $mode under a branch another session claimed with no session recorded: names its open pull request" "pull request: #3701" "$out"
   has "#3804 $mode under a branch another session claimed with no session recorded: says the pull request is not this session's" "which no claim of this session's accounts for" "$out"
-  has "#3804 $mode under a branch another session claimed with no session recorded: says how to take it over on purpose" "claim-issue.sh release $REPO 3674 $SEEN \"<reason>\", then claim again" "$out"
+  has "#3804 $mode under a branch another session claimed with no session recorded: says how to take it over on purpose" "claim-issue.sh takeover $REPO 3674 $SEEN \"<reason>\", then claim again" "$out"
+  lacks "#3804 $mode under a branch another session claimed with no session recorded: never offers a plain release as the way" "claim-issue.sh release $REPO 3674" "$out"
   is "#3804 $mode under a branch another session claimed with no session recorded: nothing posted" 0 "$(posted_count)"
 done
 
@@ -771,36 +777,163 @@ has "#3804 lost race to a session on this Mac with the same branch name: the rel
 SESSION_OVERRIDE="$OTHER_SESSION" run check "$REPO" 3317 "$MINE"
 has "#3804 lost race to a session on this Mac with the same branch name: the winner still holds its claim" "ALREADY CLAIMED" "$out"
 
-# 11e. Taking over a claim with no session recorded, on purpose: a release, then a claim. The
-# session that posted it before this change is the one that knows it is its own.
+# 11e. A claim with no session recorded, and the two words that meet it. Nothing says whose such a
+# claim is, and the skill's Finish step runs `release` for every claim a session believes it posted,
+# so a plain `release` never ends one: until the review of this change it did, and a session that
+# had wrongly been told ALREADY CLAIMED (the #3674 case) would have ended the other session's live
+# claim with its routine release and been recorded as the one that took it over. Taking one over is
+# a separate word, `takeover`, run on purpose by the session that knows the claim is its own.
 staged_3674 "$(unnamed 3600 claim "$SEEN")"
-run release "$REPO" 3674 "$SEEN" "taking over this session's own claim, posted before claims named their session"
-is "#3804 take over, the release: exit 0" 0 "$code"
-has "#3804 take over, the release: says released" "RELEASED:" "$out"
-has "#3804 take over, the release: says the claim had no session recorded" "no session recorded" "$out"
-is "#3804 take over, the release: one comment posted" 1 "$(posted_count)"
+run release "$REPO" 3674 "$SEEN" "the item ended without closing its issue"
+is "#3804 a plain release under a claim with no session recorded: exit 1" 1 "$code"
+has "#3804 a plain release under a claim with no session recorded: says not released" "NOT RELEASED:" "$out"
+has "#3804 a plain release under a claim with no session recorded: says the claim records no session" "records no session" "$out"
+has "#3804 a plain release under a claim with no session recorded: says that claim still stands" "that claim still stands" "$out"
+has "#3804 a plain release under a claim with no session recorded: names the command, only if the claim is its own" "only if that claim is this session's own, posted before claims named their session, run: claim-issue.sh takeover $REPO 3674 $SEEN \"<reason>\"" "$out"
+is "#3804 a plain release under a claim with no session recorded: nothing posted" 0 "$(posted_count)"
+# The claim it did not end still holds, for the caller and for any other session.
+run claim "$REPO" 3674 "$SEEN"
+is "#3804 a plain release under a claim with no session recorded, the claim after it: exit 1" 1 "$code"
+has "#3804 a plain release under a claim with no session recorded, the claim after it: the claim still holds" "with no session recorded" "$out"
+is "#3804 a plain release under a claim with no session recorded, the claim after it: nothing posted" 0 "$(posted_count)"
+SESSION_OVERRIDE="$OTHER_SESSION" run check "$REPO" 3674 "$SEEN"
+is "#3804 a plain release under a claim with no session recorded, another session after it: exit 1" 1 "$code"
+
+# The take over, on purpose: `takeover`, then a claim.
+staged_3674 "$(unnamed 3600 claim "$SEEN")"
+run takeover "$REPO" 3674 "$SEEN" "taking over this session's own claim, posted before claims named their session"
+is "#3804 take over: exit 0" 0 "$code"
+has "#3804 take over: says taken over" "TAKEN OVER:" "$out"
+has "#3804 take over: says the claim had no session recorded" "no session recorded" "$out"
+has "#3804 take over: says the branch name passes to this session" "counts the branch and its pull request as its own" "$out"
+is "#3804 take over: one comment posted" 1 "$(posted_count)"
 rel="$(cat "$FAKE/posted.1" 2>/dev/null)"
-has "#3804 take over, the release: ends the claim in the words it was posted in" "<!-- orchestrate-release branch=$SEEN host=$THIS_MAC -->" "$rel"
-has "#3804 take over, the release: names the session that took it over" "<!-- orchestrate-release branch=$SEEN host=$THIS_MAC,session=$SID -->" "$rel"
+has "#3804 take over: ends the claim in the words it was posted in" "<!-- orchestrate-release branch=$SEEN host=$THIS_MAC -->" "$rel"
+has "#3804 take over: names the session that took it over" "<!-- orchestrate-release branch=$SEEN host=$THIS_MAC,session=$SID -->" "$rel"
+has "#3804 take over: the comment gives the reason" "taking over this session's own claim" "$rel"
 run claim "$REPO" 3674 "$SEEN"
 is "#3804 take over, the claim after it: exit 0" 0 "$code"
 has "#3804 take over, the claim after it: claimed" "CLAIMED:" "$out"
 has "#3804 take over, the claim after it: the pull request is now this session's" "this session's own, by its claim on the issue: pull request #3701" "$out"
-is "#3804 take over, the claim after it: the release and the claim posted" 2 "$(posted_count)"
+is "#3804 take over, the claim after it: the take over and the claim posted" 2 "$(posted_count)"
 # Another session that did not take it over is still held, by the claim and by the pull request.
 SESSION_OVERRIDE="$OTHER_SESSION" run claim "$REPO" 3674 "$SEEN"
 is "#3804 take over, a third session afterwards: exit 1" 1 "$code"
 
-# The same claim gone stale: it no longer holds, the pull request under its name still does, and
-# the way to take it over is still said, and still works.
+# The same claim gone stale: it no longer holds, the pull request under its name still does, the
+# way to take it over is still said, a plain release still leaves it alone, and the take over
+# still works.
 staged_3674 "$(unnamed $((25 * 3600)) claim "$SEEN")"
 run claim "$REPO" 3674 "$SEEN"
 is "#3804 a stale claim with no session recorded, its pull request open: exit 1" 1 "$code"
 has "#3804 a stale claim with no session recorded, its pull request open: the pull request holds" "pull request: #3701" "$out"
-has "#3804 a stale claim with no session recorded, its pull request open: says how to take it over" "claim-issue.sh release $REPO 3674 $SEEN \"<reason>\", then claim again" "$out"
-run release "$REPO" 3674 "$SEEN" "taking over this session's own claim"
+has "#3804 a stale claim with no session recorded, its pull request open: says how to take it over" "claim-issue.sh takeover $REPO 3674 $SEEN \"<reason>\", then claim again" "$out"
+run release "$REPO" 3674 "$SEEN" "the item ended without closing its issue"
+is "#3804 a plain release under a stale claim with no session recorded: exit 1" 1 "$code"
+is "#3804 a plain release under a stale claim with no session recorded: nothing posted" 0 "$(posted_count)"
+run claim "$REPO" 3674 "$SEEN"
+is "#3804 a plain release under a stale claim with no session recorded, the claim after it: still exit 1" 1 "$code"
+run takeover "$REPO" 3674 "$SEEN" "taking over this session's own claim"
+is "#3804 a stale claim with no session recorded, the take over: exit 0" 0 "$code"
 run claim "$REPO" 3674 "$SEEN"
 is "#3804 a stale claim with no session recorded, taken over: exit 0" 0 "$code"
+
+# `takeover` ends a claim from this Mac with no session recorded and nothing else. Under a claim
+# that names another session it posts nothing, and says only that session can release it.
+new_case
+theirs 600 claim >"$FAKE/markers"
+run takeover "$REPO" 3317 "$MINE" "taking over"
+is "#3804 take over under a claim that names another session: exit 1" 1 "$code"
+has "#3804 take over under a claim that names another session: nothing to take over" "NOTHING TO TAKE OVER:" "$out"
+has "#3804 take over under a claim that names another session: says only that session can release it" "another session on the personal MacBook holds a claim on that branch, and only that session can release it" "$out"
+lacks "#3804 take over under a claim that names another session: never says taken over" "TAKEN OVER:" "$out"
+is "#3804 take over under a claim that names another session: nothing posted" 0 "$(posted_count)"
+SESSION_OVERRIDE="$OTHER_SESSION" run check "$REPO" 3317 "$MINE"
+has "#3804 take over under a claim that names another session: that session still holds its claim" "ALREADY CLAIMED" "$out"
+
+# Under the other Mac's claim with no session recorded: nothing, since it is the other Mac's.
+new_case
+unnamed 600 claim "$MINE" Dans-MacBook-Pro >"$FAKE/markers"
+run takeover "$REPO" 3317 "$MINE" "taking over"
+is "#3804 take over under the other Mac's claim with no session recorded: exit 1" 1 "$code"
+is "#3804 take over under the other Mac's claim with no session recorded: nothing posted" 0 "$(posted_count)"
+run release "$REPO" 3317 "$MINE" "dropped"
+is "#3804 a plain release under the other Mac's claim with no session recorded: nothing posted" 0 "$(posted_count)"
+
+# Under this session's own claim, which names it: nothing to take over, and the claim stands.
+new_case
+mine 600 claim >"$FAKE/markers"
+run takeover "$REPO" 3317 "$MINE" "taking over"
+is "#3804 take over under this session's own named claim: exit 1" 1 "$code"
+has "#3804 take over under this session's own named claim: says release is the word for it" "this session's own claim on that branch names it and still stands: release ends it" "$out"
+is "#3804 take over under this session's own named claim: nothing posted" 0 "$(posted_count)"
+run claim "$REPO" 3317 "$MINE"
+has "#3804 take over under this session's own named claim: the claim still stands" "ALREADY CLAIMED" "$out"
+
+# With no claim at all, and with a claim under another branch name: nothing.
+new_case
+run takeover "$REPO" 3317 "$MINE" "taking over"
+is "#3804 take over with no claim on the issue: exit 1" 1 "$code"
+is "#3804 take over with no claim on the issue: nothing posted" 0 "$(posted_count)"
+new_case
+unnamed 600 claim fix/3317-another-name >"$FAKE/markers"
+run takeover "$REPO" 3317 "$MINE" "taking over"
+is "#3804 take over names one branch, and a claim under another is left alone: exit 1" 1 "$code"
+is "#3804 take over names one branch, and a claim under another is left alone: nothing posted" 0 "$(posted_count)"
+
+# A take over needs a reason, a readable session and a read that worked, like a release.
+new_case
+unnamed 600 claim >"$FAKE/markers"
+run takeover "$REPO" 3317 "$MINE"
+is "#3804 take over with no reason: exit 2" 2 "$code"
+is "#3804 take over with no reason: gh never called" "" "$(cat "$FAKE/calls")"
+new_case
+unnamed 600 claim >"$FAKE/markers"
+: >"$FAKE/fail_issue"
+run takeover "$REPO" 3317 "$MINE" "taking over"
+is "#3804 take over when the read fails: exit 2" 2 "$code"
+has "#3804 take over when the read fails: says it could not take over" "COULD NOT TAKE OVER" "$out"
+is "#3804 take over when the read fails: nothing posted" 0 "$(posted_count)"
+new_case
+unnamed 600 claim >"$FAKE/markers"
+: >"$FAKE/fail_post"
+run takeover "$REPO" 3317 "$MINE" "taking over"
+is "#3804 take over when the post fails: exit 2" 2 "$code"
+has "#3804 take over when the post fails: says the claim still stands" "COULD NOT TAKE OVER: the take over was not posted" "$out"
+lacks "#3804 take over when the post fails: never says taken over" "TAKEN OVER:" "$out"
+
+# This session's own claim beside a stale claim with no session recorded, both on one branch name
+# (it claimed once that one stopped counting). A plain release ends its own and leaves the other
+# standing, and says so; until the review of this change it ended both.
+new_case
+{ unnamed $((25 * 3600)) claim; mine 600 claim; } >"$FAKE/markers"
+run release "$REPO" 3317 "$MINE" "dropped"
+is "#3804 a plain release of our claim beside one with no session recorded: exit 0" 0 "$code"
+has "#3804 a plain release of our claim beside one with no session recorded: says released" "RELEASED:" "$out"
+has "#3804 a plain release of our claim beside one with no session recorded: says the other still stands" "a claim on that branch that records no session still stands" "$out"
+rel="$(cat "$FAKE/posted.1" 2>/dev/null)"
+has "#3804 a plain release of our claim beside one with no session recorded: ends our claim" "<!-- orchestrate-release branch=$MINE host=$THIS_MAC,session=$SID -->" "$rel"
+lacks "#3804 a plain release of our claim beside one with no session recorded: never ends the other" "<!-- orchestrate-release branch=$MINE host=$THIS_MAC -->" "$rel"
+# A take over there ends both, since the line that names this session is this session's release
+# as well, and it says so. The branch name was this session's already.
+new_case
+{ unnamed $((25 * 3600)) claim; mine 600 claim; } >"$FAKE/markers"
+run takeover "$REPO" 3317 "$MINE" "taking over"
+is "#3804 take over beside our own claim on the same branch: exit 0" 0 "$code"
+has "#3804 take over beside our own claim on the same branch: says our own claim ended with it" "this session's own claim on that branch ended with it" "$out"
+has "#3804 take over beside our own claim on the same branch: says the name was ours already" "The branch name was this session's already" "$out"
+run check "$REPO" 3317 "$MINE"
+has "#3804 take over beside our own claim on the same branch: nothing is left standing" "FREE" "$out"
+
+# Taking over a claim that never held the issue passes no branch name, and the answer says so
+# rather than promising the branch.
+new_case
+{ theirs 9000 claim fix/3317-other-name; unnamed 8000 claim; theirs 7000 release fix/3317-other-name; } >"$FAKE/markers"
+run takeover "$REPO" 3317 "$MINE" "taking over"
+is "#3804 take over of a claim that never held the issue: exit 0" 0 "$code"
+has "#3804 take over of a claim that never held the issue: says taken over" "TAKEN OVER:" "$out"
+has "#3804 take over of a claim that never held the issue: says the branch name was not that claim's" "The branch name was not that claim's to pass on" "$out"
+lacks "#3804 take over of a claim that never held the issue: never promises the branch" "counts the branch and its pull request as its own" "$out"
 
 # A claim with no session recorded that an earlier version of the script released is not taken
 # over by a later release: there is nothing left to release, and the branch stays not ours.
@@ -880,6 +1013,11 @@ mine 600 claim >"$FAKE/markers"
 run_without release "$REPO" 3317 "$MINE" "dropped"
 no_session "no session id, release"
 has "#3804 no session id, release: says it could not release" "COULD NOT RELEASE" "$out"
+new_case
+unnamed 600 claim >"$FAKE/markers"
+run_without takeover "$REPO" 3317 "$MINE" "taking over"
+no_session "no session id, take over"
+has "#3804 no session id, take over: says it could not take over" "COULD NOT TAKE OVER" "$out"
 
 for odd in "x" "not an id" "; rm -rf /"; do
   new_case
@@ -896,6 +1034,140 @@ run_broken claim "$REPO" 3317 "$MINE"
 no_session "the short name cannot be made"
 has "#3804 the short name cannot be made: prints the tool's own error" "simulated failure" "$out"
 rm -rf "$TMP/broken"
+
+# ---- 12. a claim posted again takes the place of its latest post (review of #3804, F1) ----
+# A session whose claim went stale with no release posts it again. Until the review of this change
+# the new claim kept the place in the list of the stale one, so it read as posted first when another
+# session's claim had landed a moment before it, and both sessions were told CLAIMED, exit 0.
+
+# 12a. Seen from the session posting again: the other session's claim landed first, so ours loses,
+# is released, and the winner keeps the issue.
+new_case
+mine $((25 * 3600)) claim >"$FAKE/markers"
+theirs 1 claim >"$FAKE/race"
+run claim "$REPO" 3317 "$MINE"
+is "F1 a claim posted again over its own stale one, another session's landing first: exit 1" 1 "$code"
+has "F1 a claim posted again over its own stale one, another session's landing first: says held" "HELD: another session claimed" "$out"
+lacks "F1 a claim posted again over its own stale one, another session's landing first: never claimed" "CLAIMED:" "$out"
+is "F1 a claim posted again over its own stale one, another session's landing first: our claim and its release posted" 2 "$(posted_count)"
+has "F1 a claim posted again over its own stale one, another session's landing first: the second post is our release" "<!-- orchestrate-release branch=$MINE host=$THIS_MAC,session=$SID -->" "$(cat "$FAKE/posted.2" 2>/dev/null)"
+SESSION_OVERRIDE="$OTHER_SESSION" run check "$REPO" 3317 "$MINE"
+is "F1 a claim posted again over its own stale one, another session's landing first: the winner, exit 0" 0 "$code"
+has "F1 a claim posted again over its own stale one, another session's landing first: the winner still holds its claim" "ALREADY CLAIMED" "$out"
+# The second half: the winner's builder pushes the branch and opens its pull request. Both are the
+# winner's own, so it is not held by them, and the session that lost is.
+printf 'main\n%s\n' "$MINE" >"$FAKE/branches"
+pr_row 4173 "$MINE" "The winner's" "Closes #3317" >"$FAKE/prs"
+SESSION_OVERRIDE="$OTHER_SESSION" run claim "$REPO" 3317 "$MINE"
+is "F1 the winner, its branch and pull request up: exit 0" 0 "$code"
+has "F1 the winner, its branch and pull request up: already claimed" "ALREADY CLAIMED" "$out"
+has "F1 the winner, its branch and pull request up: the branch is its own" "this session's own, by its claim on the issue: remote branch $MINE" "$out"
+has "F1 the winner, its branch and pull request up: the pull request is its own" "this session's own, by its claim on the issue: pull request #4173" "$out"
+run claim "$REPO" 3317 "$MINE"
+is "F1 the session that lost, the winner's branch up: exit 1" 1 "$code"
+has "F1 the session that lost, the winner's branch up: the branch is not its own" "remote branch: $MINE (the branch name being claimed" "$out"
+
+# 12b. Seen from the other session: its claim landed first, and the claim posted again over a stale
+# one a moment after it. The earlier post wins. Until the fix this session released and the one
+# posting again won, when this read came after its post, and both won when it came before.
+new_case
+theirs $((25 * 3600)) claim >"$FAKE/markers"
+theirs 0 claim >"$FAKE/late"
+run claim "$REPO" 3317 "$MINE"
+is "F1 our claim landing before another session's posted again over its stale one: exit 0" 0 "$code"
+has "F1 our claim landing before another session's posted again over its stale one: claimed" "CLAIMED:" "$out"
+is "F1 our claim landing before another session's posted again over its stale one: only the claim posted" 1 "$(posted_count)"
+
+# 12c. The same race with GitHub's clock 20 seconds behind this Mac's. By this Mac's clock the
+# earlier claim is stale, so it is posted again; by the times GitHub stamps, the new post is within
+# 24 hours of the old one. The place must not depend on that: a session posts again only once it
+# has judged its earlier claim over, and the other session's claim still landed first.
+new_case
+mine $((24 * 3600 + 10)) claim >"$FAKE/markers"
+theirs 21 claim >"$FAKE/race"
+echo "$((NOW - 20))" >"$FAKE/stamp"
+run claim "$REPO" 3317 "$MINE"
+is "F1 posted again with GitHub's clock behind, another session's landing first: exit 1" 1 "$code"
+lacks "F1 posted again with GitHub's clock behind, another session's landing first: never claimed" "CLAIMED:" "$out"
+is "F1 posted again with GitHub's clock behind, another session's landing first: our claim and its release posted" 2 "$(posted_count)"
+
+# 12d. Nobody racing: a claim posted again over its own stale one is still claimed (section 11d has
+# the same with its branch and pull request up).
+new_case
+mine $((25 * 3600)) claim >"$FAKE/markers"
+run claim "$REPO" 3317 "$MINE"
+is "F1 a claim posted again over its own stale one, nobody racing: exit 0" 0 "$code"
+has "F1 a claim posted again over its own stale one, nobody racing: claimed" "CLAIMED:" "$out"
+
+# ---- 13. a session part that is not 12 hex digits names no session (review of #3804, F6) ----
+# A host word is a Mac's name alone, or a Mac's name, ",session=" and exactly 12 lower case hex
+# digits. Anything else is read whole as a Mac nobody is. Each word below is a near miss built from
+# this session's own short name, so a reader that took the first 12 digits, or matched without
+# anchoring or without minding case, would read the claim as this session's own or as one of this
+# Mac's, and the release as ending this session's claim.
+SID_CAPS="$(printf '%s' "$SID" | tr 'a-f' 'A-F')"
+odd_words=(
+  "$THIS_MAC,session=${SID}0"
+  "$THIS_MAC,session=${SID:0:11}"
+  "$THIS_MAC,session=$SID,session=$OSID"
+  "$THIS_MAC,session=$OSID,session=$SID"
+  ",session=$SID"
+  "$THIS_MAC,session=$SID_CAPS"
+  "$THIS_MAC,session="
+  "$THIS_MAC,x,session=$SID"
+)
+odd_names=(
+  "13 hex digits"
+  "11 hex digits"
+  "two session parts, ours first"
+  "two session parts, ours last"
+  "an empty Mac name"
+  "capital hex"
+  "an empty session"
+  "a comma in the Mac name"
+)
+[ "$SID_CAPS" != "$SID" ] && ok || bad "F6 the capital form of the short name differs from it" "$SID_CAPS"
+i=0
+while [ "$i" -lt "${#odd_words[@]}" ]; do
+  word="${odd_words[$i]}"
+  what="F6 a session part that is ${odd_names[$i]}"
+  i=$((i + 1))
+
+  # As a claim: it holds, as a Mac nobody here is, and is never this session's own.
+  new_case
+  marker 600 claim "$MINE" "$word" >"$FAKE/markers"
+  run claim "$REPO" 3317 "$MINE"
+  is "$what, claim under it: exit 1" 1 "$code"
+  has "$what, claim under it: says held" "HELD" "$out"
+  lacks "$what, claim under it: never already claimed" "ALREADY CLAIMED" "$out"
+  has "$what, claim under it: read whole, as a Mac nobody is" "claim: the Mac named $word claimed it at" "$out"
+  lacks "$what, claim under it: offers no take over" "then claim again" "$out"
+  is "$what, claim under it: nothing posted" 0 "$(posted_count)"
+
+  # As a claim: neither a release nor a take over from this session ends it.
+  run release "$REPO" 3317 "$MINE" "dropped"
+  is "$what, release under it: exit 0" 0 "$code"
+  has "$what, release under it: nothing to release" "NOTHING TO RELEASE" "$out"
+  lacks "$what, release under it: not read as a session on this Mac" "another session on" "$out"
+  is "$what, release under it: nothing posted" 0 "$(posted_count)"
+  run takeover "$REPO" 3317 "$MINE" "taking over"
+  is "$what, take over under it: exit 1" 1 "$code"
+  is "$what, take over under it: nothing posted" 0 "$(posted_count)"
+
+  # As a release: it does not end this session's claim, which still stands.
+  new_case
+  { mine 600 claim; marker 300 release "$MINE" "$word"; } >"$FAKE/markers"
+  run claim "$REPO" 3317 "$MINE"
+  is "$what, as a release beside our claim: exit 0" 0 "$code"
+  has "$what, as a release beside our claim: our claim still stands" "ALREADY CLAIMED" "$out"
+  is "$what, as a release beside our claim: nothing posted" 0 "$(posted_count)"
+  # Nor a claim from this Mac with no session recorded, which still holds.
+  new_case
+  { unnamed 600 claim; marker 300 release "$MINE" "$word"; } >"$FAKE/markers"
+  run check "$REPO" 3317 "$MINE"
+  is "$what, as a release beside a claim with no session recorded: exit 1" 1 "$code"
+  has "$what, as a release beside a claim with no session recorded: that claim still holds" "with no session recorded" "$out"
+done
 
 echo ""
 echo "passed: $pass, failed: $fail"
