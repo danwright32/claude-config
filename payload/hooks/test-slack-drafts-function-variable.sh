@@ -444,6 +444,26 @@ run_bash 'run() { local how="" a="" b="" c="" d="" e="" f=""; how=bash; $how $a 
 refused "a script that posts past the bound, which the reading with every name empty does not find, is refused by the bound"
 says "past the bound with nothing found: as a check it could not make" "REFUSED: the gate could not check whether this command posts to Slack"
 says "past the bound with nothing found: saying there are more than the gate reads every way" "7 is $MANY"
+# The bound's refusal says what clears it, which "change the command so the gate can see
+# everything it runs" does not (the fifth review's should fix 3): at most six such names through
+# each command. A name declared by a local line that gives no value, and given no empty value
+# anywhere, is read one way and so is not one of them, and the work can be split into commands
+# of six such names or fewer. Each is held as a quiet command that passes: seven names with one
+# on a local line of its own, all seven on one local line that gives no value (the review's
+# j03), the seven over two commands of four and three (its j04), and eight names with two on a
+# local line that gives no value, since one name moved does not clear eight.
+CLEARS="what clears this is at most 6 such names through each command: a name declared by a local line that gives no value, and given no empty value anywhere, is read one way and not counted, and the work can be split into commands of at most 6 such names each"
+says "past the bound with nothing found: saying what clears it" "$CLEARS"
+run_bash 'run() { local a="" b="" c="" d="" e="" f="" g=""; a=quiet.sh; b=1; c=2; d=3; e=4; f=5; g=6; bash "$a" "$b" "$c" "$d" "$e" "$f" "$g"; }; run' "$FV"
+says "seven names in a quiet command: saying what clears it" "$CLEARS"
+run_bash 'run() { local a="" b="" c="" d="" e="" f=""; local g; a=quiet.sh; b=1; c=2; d=3; e=4; f=5; g=6; bash "$a" "$b" "$c" "$d" "$e" "$f" "$g"; }; run' "$FV"
+allowed "the quiet command of seven names passes with one of them declared by a local line that gives no value"
+run_bash 'run() { local a b c d e f g; a=-s; b=-o; c=out.txt; d=-H; e=X:1; f=-L; g=https://example.com/x; curl $a $b $c $d $e $f $g; }; run' "$FV"
+allowed "a quiet command through seven names that one local line declares with no value passes"
+run_bash 'run() { local a="" b="" c="" d="" e="" f="" g=""; a=quiet.sh; b=1; c=2; d=3; e=quiet.sh; f=5; g=6; bash "$a" "$b" "$c" "$d"; bash "$e" "$f" "$g"; }; run' "$FV"
+allowed "the seven names over two quiet commands of four and three pass"
+run_bash 'run() { local a="" b="" c="" d="" e="" f=""; local g h; a=quiet.sh; b=1; c=2; d=3; e=4; f=5; g=6; h=7; bash "$a" "$b" "$c" "$d" "$e" "$f" "$g" "$h"; }; run' "$FV"
+allowed "a quiet command of eight names passes with two of them declared by a local line that gives no value"
 # What reading both ways must not refuse: the ordinary function, where the name stands alone in
 # double quotes. Empty, it hands the command an empty word, which names no file, so nothing is
 # run. The quiet twins above the last section (`local kept=""`, then `kept=quiet.sh`, then `bash

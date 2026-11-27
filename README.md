@@ -5687,7 +5687,10 @@ only with all of them empty at once, `$runner $config posts.sh` with both declar
 where the shells run posts.sh whenever the runner has its value (the fourth review, the same
 day: 19 commands that post). That is 3 readings for two names and 63 for six, and a command
 through more than six is refused: it is read with all of them empty and no other way, and
-refused whatever that reading finds. A plain assignment, a `local kept=value`
+refused whatever that reading finds. Where it finds nothing, the refusal says what clears it:
+at most six such names through each command. A name declared by a `local` line that gives no
+value, and given no empty value anywhere, is read one way and is not counted, and the work can
+be split into commands of six such names or fewer. A plain assignment, a `local kept=value`
 and a bare `local kept` are read one way. Not covered: a name set by one of those three and
 used on a line before it, in another function, or where the assignment is not reached (under a
 condition that is false, in a subshell, a pipeline or a loop that does not run), and a function

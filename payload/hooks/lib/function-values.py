@@ -165,7 +165,10 @@ NO_FILE = "/dev/null/empty-word"
 # doubles that.
 MOST_BOTH = 6
 TOO_MANY = (f"is more names than the gate reads every way (it reads at most {MOST_BOTH}, each with its value "
-            "and empty), so this command was not read with only some of them empty")
+            "and empty), so this command was not read with only some of them empty (what clears this is at "
+            f"most {MOST_BOTH} such names through each command: a name declared by a local line that gives no "
+            "value, and given no empty value anywhere, is read one way and not counted, and the work can be "
+            f"split into commands of at most {MOST_BOTH} such names each)")
 
 
 def body_sets(judge, k):
