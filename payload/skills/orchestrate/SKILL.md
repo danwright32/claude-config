@@ -13,6 +13,17 @@ Number every item and say it back in one line, in Dan's words. Settle what you c
 
 Record where each item came from, so it can be answered there (see "Answering each item at its source" below): for a Slack alert, post or thread, the channel id and message ts of the message it started from; for a Slack list row, the list id and record id; for a GitHub issue, the repo and issue number. An item Dan typed into the chat has no source, and the board says so.
 
+For every item whose source is not a GitHub issue and that has a repository, look for an open issue or pull request that already covers it (claude-config#3555): someone may have filed the alert already, or another session may have its fix open. Run, with the item's text in the message's words, inside a quoted heredoc so nothing in it is run by the shell:
+
+    bash ~/.claude/skills/orchestrate/find-existing.sh <owner/repo or a folder in its checkout> <<'ITEM'
+    <the item's text>
+    ITEM
+
+- Exit 0, nothing printed: no open issue or pull request shares the item's wording. It matches on words, so this is not proof that nothing covers it.
+- Exit 0, `MAY ALREADY BE COVERED`: read each one it names (at most three, issues and pull requests both) and decide; the script never rules an item a duplicate. When an issue covers it, its number goes on the board beside the Slack source, a `build` item is claimed on that issue as in "Claiming an issue before its builder starts", and the reply at the source links the issue. When an open pull request covers it, the item is already in hand: its row shows `covered by #<n>` and no builder is dispatched for it.
+- A `READ ONLY THE NEWEST` line: a list filled the read limit, and older items were not compared. Say so on the board.
+- Exit 2, `COULD NOT LOOK`: show the reason it prints on the board. Never read it as nothing covering the item.
+
 ## 2. Dispatch board
 
 Build the board, one row per item:
@@ -94,7 +105,7 @@ Every brief has exactly these parts, in this order, and nothing else:
 6. What done means for this item, and what must come back to Dan instead of being done. Wording does not come back to him by default, never "any new sentence a person reads" (claude-config#2570): a Slack alert's wording follows the `slack-alerts` skill and passes its checker, and a repo wide rewrite of alerts merges when its checks and the lessons review pass, with nothing brought back to him (Dan, 2026-11-17: "it should literally just go through in every repo (separate issues for each repo) and update all alerts without me"). For a `build` item whose issue carries a `Must always be true` list, done includes what keeps each of its rules true, built and seen to fail, and a pull request body that passes the built check, both as `~/.claude/skills/milestone/MUST-ALWAYS-BE-TRUE.md` says. When the issue has no such list, say so in the brief and have the builder write one into `pr-body.md` before it builds.
 7. For a `build` item only: the `Claude-Session:` line for commits and the session link line for the PR body, copied from this session's attribution note.
 
-The rules every agent shares live in `agent-rules.md`, so a brief never restates them. Send a whole wave in one message, one `Agent` call per agent, all in the background, each carrying the `model` its board row shows.
+The rules every agent shares live in `agent-rules.md`, so a brief names only what is particular to its item (the load limit, the suites to run, the files off limits) and never restates a shared rule (claude-config#3542). Send a whole wave in one message, one `Agent` call per agent, all in the background, each carrying the `model` its board row shows.
 
 ## 4. While agents run
 

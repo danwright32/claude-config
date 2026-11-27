@@ -275,6 +275,39 @@ export const keepFinished = (card: StepsCard, prior: StepsCard | null | undefine
 }
 
 /**
+ * What a carried step's `pinnedBy` holds when the store kept it before a step recorded its session
+ * (#3770): the session carrying it in knows only that it did not pin it. Never a session's id.
+ */
+export const EARLIER_SESSION = 'an earlier session'
+
+/**
+ * `card`, just pinned through the steps tool by `session`, with each step saying which session
+ * pinned it (#3770): the session `prior` records for the same step still unfinished there (its
+ * title and link or location), so a step carried from an earlier session and pinned again after
+ * Claude's check stays that session's; else this one. With no session id to give, a step not on
+ * `prior` records none, and a reader counts it as not known.
+ */
+export const pinnedBy = (card: StepsCard, prior: StepsCard | null | undefined, session: string | undefined): StepsCard => {
+  const keyOf = (s: StepsStep) => `${s.title}\n${s.url ?? s.location}`
+  const was = new Map((prior && Array.isArray(prior.steps) ? prior.steps : []).filter(s => s && !s.finished && typeof s.pinnedBy === 'string' && s.pinnedBy).map(s => [keyOf(s), s.pinnedBy as string]))
+  const steps = card.steps.map(s => {
+    const by = was.get(keyOf(s)) ?? session
+    return by ? { ...s, pinnedBy: by } : s
+  })
+  return { ...card, steps }
+}
+
+/**
+ * A card read from the store at a session's own start (#3770): a step that records no session was
+ * kept before steps recorded one, and is marked as an earlier session's. Only then, never at a
+ * reload: a step with no session on a card already in a running session may be that session's own.
+ */
+export const carriedIn = (card: StepsCard): StepsCard => ({
+  ...card,
+  steps: card.steps.map(s => (s && typeof s === 'object' && !(typeof s.pinnedBy === 'string' && s.pinnedBy) ? { ...s, pinnedBy: EARLIER_SESSION } : s)),
+})
+
+/**
  * `card`, just pinned through the steps tool, with every unfinished step another mod added to `prior`
  * (#1107) kept at its end: pinning replaces the card, and those steps are not Claude's to drop. One
  * the new card already holds, by its title, is not listed twice.

@@ -91,6 +91,12 @@ case "$1 $2" in
     case "$*" in *contents/repos.json*)
       cat "$FAKE_LIST"; exit 0 ;;
     esac ;;
+  "api graphql")
+    # What a repository's default branch holds at .github/expected-visibility, as GitHub's GraphQL
+    # API hands it over (claude-config#3582): no repository here has such a file.
+    o=""; n=""
+    for a in "$@"; do case "$a" in owner=*) o="${a#owner=}" ;; name=*) n="${a#name=}" ;; esac; done
+    printf '{"data":{"repository":{"nameWithOwner":"%s/%s","object":null}}}\n' "$o" "$n"; exit 0 ;;
   "api gists/"*)
     # A gist's own record, from the gist table: its id and whether it is public (#2412).
     id="${2#gists/}"

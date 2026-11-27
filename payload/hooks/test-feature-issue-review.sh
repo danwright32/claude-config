@@ -428,6 +428,26 @@ case "$mo" in
   *"already #412"*) check "#256 the matcher on its own attaches the issue that names the same file" ok ;;
   *) check "#256 the matcher on its own attaches the issue that names the same file" "out=$mo" ;;
 esac
+# The WHOLE annotated line, byte for byte. Orchestrate's intake reads open pull requests through the
+# same matcher (claude-config#3555); this review must go on getting exactly the line it always got,
+# issues only, never a pull request and never the intake's wording.
+[ "$mo" = 'FINDING (a, b): widget/cache.py keeps a stale entry after a rename  [already #412: The widget cache is never invalidated in widget/cache.py]' ] \
+  && check "#3555 the review's annotated line keeps its exact shape" ok \
+  || check "#3555 the review's annotated line keeps its exact shape" "out=$mo"
+# And the review asks gh for issues only: a stand in that fails every pull request read leaves it
+# unchanged, which a review that had started reading pull requests could not survive.
+mkdir -p "$WORK/bin-nopr"
+cat > "$WORK/bin-nopr/gh" <<'STUB'
+#!/usr/bin/env bash
+[ "$1" = pr ] && { echo "pull requests must not be read here" >&2; exit 1; }
+cat "$GH_ISSUES"
+STUB
+chmod +x "$WORK/bin-nopr/gh"
+mo_nopr="$(printf '%s\n' 'FINDING (a, b): widget/cache.py keeps a stale entry after a rename' \
+  | PATH="$WORK/bin-nopr:$PATH" python3 "$MATCHER" "$WORK" 2>/dev/null)"
+[ "$mo_nopr" = "$mo" ] \
+  && check "#3555 the review reads issues only, never pull requests" ok \
+  || check "#3555 the review reads issues only, never pull requests" "out=$mo_nopr"
 # A finding naming NO file is left alone whatever words it shares. Title words alone produced false
 # siblings twice in the milestone helper, always claiming a cluster that was not there (#265).
 mo_nofile="$(matcher_out 'FINDING (a, b): the widget cache is never invalidated on rename')"
