@@ -2060,7 +2060,12 @@ when all of these hold, each failure said in its own words:
   was measured to arrive in Slack, no dash as punctuation, no HTML comment), so the approval
   counted, the label went on, the merge was refused for the opener, and he was asked a second
   time. An Approve of wording the merge would refuse now approves nothing, and the refusal carries
-  the gate's code and its own words. There is one judge and no copy of the rules:
+  the gate's code and its own words. Two rules came with the review of that change. Wording that
+  holds a carriage return inside a line is refused by the gate and so by the approval
+  (`ANNOUNCEMENT_CARRIAGE_RETURN`): the hash reads that character as a line's end and the rules
+  did not, so a block quote or a table behind it was judged by nothing. And a wording file in
+  which any line is a heading is refused (`WORDING_FILE_HEADING`): a pull request's block ends at
+  the next heading, so the block could never be that file whole. There is one judge and no copy of the rules:
   `hooks/lib/changelog-entry.js`'s `blockRefusal` is what the merge gate judges a pull request's
   block with, and its command line `announcement-refusal [--body] <file | ->` puts the same
   function to a wording file (read as the block it becomes), printing `{refused, code, reason}`

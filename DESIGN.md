@@ -3524,9 +3524,15 @@ for the review by picker, 2026-11-25: "Yes, attack it first"). The choices are t
     (`extractAnnouncement`), so line endings, spaces at the ends of lines and blank lines round
     the wording count for what they count for at the merge. Every rule reads one line at a time
     and no blank line breaks one, so for lines ended as a file or GitHub ends them the verdict
-    depends only on the normalised wording the hash is of. A bare carriage return is the
-    exception: the hash reads it as a line's end and the block's reader does not, so such a file
-    is judged as the gate would judge that block, which is the stricter reading.
+    depends only on the normalised wording the hash is of. A bare carriage return was the
+    exception (the review of this change, M1): the hash reads it as a line's end and the block's
+    reader does not, so a line start it hid (a block quote, a table, a nested list) was judged by
+    nothing, while the record held one hash for that wording and for the same lines ended
+    properly, which are refused. Wording that holds a carriage return inside a line is now
+    refused by a rule of its own, `ANNOUNCEMENT_CARRIAGE_RETURN`, first in `announcementRefusal`,
+    so the gate and the command both give it. Ruled out: making the block's reader split lines
+    as the hash does, because that reader is also how merged history is read (`parseEntry`), and
+    refusing is the stricter of the two.
   - The command exits 1 for wording it refuses and prints its answer either way, where the file's
     other commands exit 0 for every answer. A session that reads only the status must not be told
     refused wording passed (L184), and the library holds the status and the answer to each other,
@@ -3575,9 +3581,22 @@ for the review by picker, 2026-11-25: "Yes, attack it first"). The choices are t
     gate agree on the code for every rule and on the words for every rule but these two, which
     the suites hold to the code and to a sentence that names no pull request. A file that begins
     with its own Announcement heading is told to leave it out by the heading rule.
-  - Not built: refusing a wording file that holds a heading line. A pull request's block ends at
-    the next heading, so such a file can never be the block whole, and the merge would refuse the
-    cut block as unapproved. That is a rule the gate does not have, and this change adds none.
+  - A wording file in which any line is a heading is refused, as `WORDING_FILE_HEADING` (the
+    review of this change, M2; round 1 left it unbuilt). A pull request's block ends at the next
+    heading, so such a file can never be the block whole: the lines below the heading were
+    judged by nothing, his Approve counted, and the label hook then asked for a block equal to
+    the file, which cannot be made. It is a rule about a file and not about a block, so it sits
+    in `wordingRefusal` and the gate has no such rule: in a description the heading really does
+    end the block, and the `--body` form is unchanged.
+  - Not covered, and left for a later change (the review's L3, L4, L6 and L7). A note written by
+    the hook as it was before this change holds a hash and no `why`, was never judged, and is
+    still approved by its hash; the label hook and the merge gate judge the block, so the cost
+    is one more "ask again". A line separator (U+2028) or a vertical tab inside a line hides a
+    line start from the rules; the hash and the judge agree there, so it is the gate's own
+    reading. At the label hook the hash and the judging share the five seconds the hash had
+    alone, so a loaded Mac is told to run the command again more often. And the docstring's
+    "a note that holds no hash is judged as one with no note" is not what `_note_for` does: it
+    returns any note naming the same repository and file, and that note's `why` then refuses.
 
 `hooks/test-announce-approval.sh`, `hooks/test-announce-label-ask.sh`,
 `hooks/test-announce-answer-note.sh`, the #3666, #3669 and #3846 sections of `hooks/test-changelog-tag.sh`
