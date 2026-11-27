@@ -144,8 +144,10 @@ line, less any Reactions line. The connector's own account of a read says its de
     From and Time are written) that its draft does not hold at that end is set aside and counted,
     since that line may be the connector's and not his;
   * the run exits 4 and says nothing was measured when most messages have no text there, or hold a
-    line above the Message TS line that is neither From nor Time, or begin or end in such a label
-    line;
+    line above the Message TS line that is neither From nor Time, or when most of the posts paired
+    with a draft were set aside for such a label line. That last one is judged over the pairs and
+    not the messages: most messages beginning "Alert: ..." in a channel a program posts to, or his
+    own habit of opening with "Update: ...", is no fault in the layout;
   * --shapes counts the lines of text under and above the Message TS lines, and names a label line
     only when its name is in KNOWN_LABELS, a fixed list. Any other is counted by its length alone.
     It says where each label line sits: alone, first, last or inside the text.
@@ -867,21 +869,27 @@ def main():
                   "a count of pairs here would be a count of this program's blind spot.")
         return 4
     # The headings can all match while the TEXT sits where this does not look (review M1). Each of the
-    # four is a failure when it is true of most messages, never a count: a post read with no text, or
-    # with a line of the connector's own in it, is compared as an edit Dan never made. The label line
-    # is looked for at BOTH ends of the text: right under the Message TS line it made every opening
-    # read as changed, and a rule was offered from twelve posts sent word for word (second review, M2).
+    # three is a failure when it is true of most, never a count: a post read with no text, or with a
+    # line of the connector's own in it, is compared as an edit Dan never made. The label line is
+    # looked for at BOTH ends of the text: right under the Message TS line it made every opening read
+    # as changed, and a rule was offered from twelve posts sent word for word (second review, M2).
+    #
+    # The label line is judged over the PAIRS, by how many were set aside for one the draft does not
+    # hold, and not over the messages. Over the messages it also fired on a habit of his (every post
+    # one "Update: ..." line, as drafted) and on a channel where a program posts alerts that begin
+    # "Alert: ...", neither of which is a fault in the layout, and either would have stopped every run
+    # on that Mac. A line the connector adds is in his posts as in everybody's and in no draft, so
+    # the pairs see it. How many messages begin or end so is still printed, and --shapes names them.
     misplaced = ""
+    with_draft = len(pairs) + left["doubtful"]
     if 2 * wordless > found:
         misplaced = "most of the messages found have no text under their Message TS line"
     elif 2 * shape[ABOVE] > found:
         misplaced = "most of the messages found hold a line above their Message TS line that is neither From nor Time"
-    elif 2 * shape[LABELLED] > found - wordless:
-        misplaced = ("most of the messages found end in a line shaped like a label (a word or three and a colon), "
-                     "which is how the connector writes its own lines")
-    elif 2 * shape[LABELLED_FIRST] > found - wordless:
-        misplaced = ("most of the messages found begin with a line shaped like a label (a word or three and a "
-                     "colon), which is how the connector writes its own lines")
+    elif 2 * left["doubtful"] > with_draft:
+        misplaced = ("most of the posts paired with a draft (%d of %d) begin or end in a line shaped like a label "
+                     "(a word or three and a colon) that the draft does not hold there, which is how the "
+                     "connector writes its own lines" % (left["doubtful"], with_draft))
     if misplaced:
         print("Nothing was measured: %s, so the text of a message is not where this looks for it. Run this with "
               "--shapes to see how the lines are laid out." % misplaced)

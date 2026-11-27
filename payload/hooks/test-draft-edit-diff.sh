@@ -198,7 +198,7 @@ check "some labelled: and the rest are read as they were sent" "sent as drafted:
 for f in first_label some_first_label above most_wordless unlisted own_drafted own_added; do fixture "$f" || { echo "FAIL: fixture $f could not be built"; fail=$((fail + 1)); }; done
 out="$(run first_label)"; rc=$?
 check_eq "first label: a label line right under every Message TS line is a failure, never twelve changed openings" "4" "$rc"
-check "first label: said as nothing measured, with the reason" "Nothing was measured: most of the messages found begin with a line shaped like a label" "$out"
+check "first label: said as nothing measured, with the reason" "Nothing was measured: most of the posts paired with a draft (12 of 12) begin or end in a line shaped like a label" "$out"
 check "first label: with how many messages begin that way" "first line shaped like a label: 15" "$out"
 check_not "first label: no kind is called recurring" "recurring" "$out"
 check_not "first label: and no pair is counted" "pairs:" "$out"
@@ -222,6 +222,18 @@ check "own lines the draft holds: all twelve are read as sent" "sent as drafted:
 out="$(run own_added)"
 check "own lines he added by hand: set aside, since nothing can tell them from the connector's" "$SET_ASIDE_FOR_LABEL: 6" "$out"
 check "own lines he added by hand: the other six are read as sent" "sent as drafted: 6 of 6 pairs" "$out"
+# Whether the layout differs is judged by the PAIRS set aside, never by how many messages begin or end
+# in such a line: a habit of his, or a channel of alerts a program posts, is no fault in the layout.
+for f in own_every alerts; do fixture "$f" || { echo "FAIL: fixture $f could not be built"; fail=$((fail + 1)); }; done
+out="$(run own_every)"; rc=$?
+check_eq "own lines in every post, each held by its draft: measured, never called a layout it cannot read" "0" "$rc"
+check "own lines in every post: all twelve are read as sent" "sent as drafted: 12 of 12 pairs" "$out"
+check "own lines in every post: and the messages that begin so are still counted" "first line shaped like a label: 12)" "$out"
+out="$(run alerts)"; rc=$?
+check_eq "alerts: most messages beginning and ending in a label line, none of them his, is measured" "0" "$rc"
+check "alerts: his twelve are read as sent" "sent as drafted: 12 of 12 pairs" "$out"
+check "alerts: the messages that end so are counted" "last line shaped like a label: 21;" "$out"
+check "alerts: and no pair is set aside" "$SET_ASIDE_FOR_LABEL: 0" "$out"
 # The two exits for text that is somewhere else, each reached with text in SOME messages (second review, S1).
 out="$(run most_wordless)"; rc=$?
 check_eq "most wordless: most messages with no text is a failure, though some have it" "4" "$rc"

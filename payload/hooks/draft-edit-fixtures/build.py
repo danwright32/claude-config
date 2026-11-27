@@ -245,7 +245,10 @@ OWN_FIRST = "Update: gauge %d read 41 at dawn and 57 at noon."
 OWN_LAST = "\nNext step: check the dusk reading on gauge %d."
 
 
-def word_for_word(folder, layout, wordless=0, fields=None, own=""):
+ALERT = "Alert: gauge %d is over the high water mark.\nSource: the tide gauge at the quay"
+
+
+def word_for_word(folder, layout, wordless=0, fields=None, own="", alerts=0):
     """Twelve drafts in three threads, each posted WORD FOR WORD as drafted: the truth is twelve sent
     as drafted, whatever the layout. wordless adds that many posts with no words to each thread.
     fields are further fields of each read result, beside "messages".
@@ -253,16 +256,25 @@ def word_for_word(folder, layout, wordless=0, fields=None, own=""):
     own puts lines of HIS that are shaped like a label into two posts of each thread: one post that
     is a single "Update: ..." line, and one that ends in a "Next step: ..." line. With own "drafted"
     the draft holds those lines too, so the truth is still twelve sent as drafted. With own "added"
-    the draft is without them: he put them in by hand, and nothing can tell them from the connector's."""
+    the draft is without them: he put them in by hand, and nothing can tell them from the connector's.
+
+    alerts adds that many posts by SOMEBODY ELSE to each thread, each beginning and ending in a line
+    shaped like a label, as an alert a program posts does. They are most of the messages, and none
+    is his: the truth is still twelve sent as drafted."""
     r = Records()
     at = 10000
     for t in range(3):
         parent = at
         channel = "C0FIXTURE%02d" % (40 + t)
         posts = [(parent, OTHER, "Thread %d about the tide gauge." % t)]
+        for a in range(alerts):
+            at += 100
+            posts.append((at, OTHER, ALERT % a))
         for k in range(4):
             draft = sent = WORD_FOR_WORD % k
-            if own and k == 1:
+            if own == "every":               # every post of his is one "Update: ..." line, as drafted
+                draft = sent = OWN_FIRST % k
+            elif own and k == 1:
                 sent = OWN_FIRST % k
                 draft = sent if own == "drafted" else sent[len("Update: "):]
             elif own and k == 2:
@@ -541,6 +553,10 @@ def main():
         word_for_word(folder, "thread", own="drafted")
     elif which == "own_added":       # the same lines, put in by hand after the draft was saved
         word_for_word(folder, "thread", own="added")
+    elif which == "own_every":       # every post of his is one such line, and the draft held it
+        word_for_word(folder, "thread", own="every")
+    elif which == "alerts":          # seven posts by somebody else in each thread that begin and end in a label line
+        word_for_word(folder, "thread", alerts=7)
     elif which == "no_messages_field":
         no_messages_field(folder)
     elif which == "odd_id":

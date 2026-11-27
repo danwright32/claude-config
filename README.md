@@ -6493,9 +6493,11 @@ pieces turn the edits he keeps making into written rules, each one his to accept
   a read result is read for messages: text in any other field, `pagination_info` included, is no
   part of a message, and a result with no such field is counted as one it cannot read. A run exits
   4 when none could be read, or when most messages have their text somewhere it does not look
-  (none under the Message TS line, an unknown line above it, or a first or last line shaped like
-  one of the connector's own). A pair whose post begins or ends in such a line is set aside and
-  counted, unless the draft holds a line with the same label at that end, which makes it his.
+  (none under the Message TS line, or an unknown line above it). A pair whose post begins or ends
+  in a line shaped like one of the connector's own (a word or three and a colon) is set aside and
+  counted, unless the draft holds a line with the same label at that end, which makes it his; a
+  run in which most pairs were set aside that way exits 4 too. That is judged over the pairs and
+  not the messages, so a channel of alerts that all begin "Alert:" does not stop a run.
   `--shapes` prints what the results are made of: counts, and a field or label name only when it
   is in a fixed list in the script, never a key or a line it does not know. `--differences`
   counts, for the pairs changed but not heavily, how many would be the same with one more thing
