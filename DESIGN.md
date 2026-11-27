@@ -3566,6 +3566,15 @@ for the review by picker, 2026-11-25: "Yes, attack it first"). The choices are t
     `changelog-entry.js` that does not send it a reason to refuse every file. A file's size and
     its name are not content, so the command does not judge them and how to ask him says it
     judges what the file holds.
+  - A refusal of a file is worded for a file (the review's L2). An empty wording file was told
+    "The heading in this pull request has no post under it ... or relabel this", and a file that
+    begins with a byte order mark was refused for its opener in a sentence quoting a first line
+    that reads exactly as the mention alone. Both refusals stay, under the gate's codes
+    (`EMPTY_ANNOUNCEMENT`, `ANNOUNCEMENT_NO_OPENER`), since the merge would refuse the block such
+    a file becomes under those codes; only the file form's words changed. So the command and the
+    gate agree on the code for every rule and on the words for every rule but these two, which
+    the suites hold to the code and to a sentence that names no pull request. A file that begins
+    with its own Announcement heading is told to leave it out by the heading rule.
   - Not built: refusing a wording file that holds a heading line. A pull request's block ends at
     the next heading, so such a file can never be the block whole, and the merge would refuse the
     cut block as unapproved. That is a rule the gate does not have, and this change adds none.

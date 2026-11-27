@@ -511,6 +511,9 @@ function blockRefusal(block) {
 //                          the approval's own BLANK_RUN, held equal by hooks/test-announce-approval.sh.
 //                          A block has no such rule: the merge gate has none, and a block is not a
 //                          window he was shown.
+// And two of the block's own refusals are given in words true of a file, under the block's codes
+// (the review's L2): EMPTY_ANNOUNCEMENT for a file that holds no post, and ANNOUNCEMENT_NO_OPENER
+// for a file that begins with a byte order mark.
 // A line of the file is a line as the hash reads one (normalizeAnnouncement's own line ends).
 // What this judges is what the file HOLDS. The approval also refuses a file larger than 256 KB and
 // a file name outside letters, digits, dot, dash and underscore, which are not content and are not
@@ -518,8 +521,27 @@ function blockRefusal(block) {
 const WORDING_HEADING = '## Announcement';
 const FILE_LINE_END = /\r\n?|\n/;
 const WORDING_BLANK_RUN = 2;
+const BYTE_ORDER_MARK = String.fromCharCode(0xFEFF);
 function wordingRefusal(text) {
   const raw = typeof text === 'string' ? text : '';
+  // Two refusals a block gets too, in words true of a FILE (the review's L2). The codes are the
+  // block's own, since the merge would refuse the block these files become under those codes; the
+  // sentences are not the block's, which speak of a heading in a pull request and of its label,
+  // neither of which the reader of a wording file has yet.
+  if (normalizeAnnouncement(raw) === '') {
+    return gateRefuse('EMPTY_ANNOUNCEMENT',
+      'The wording file holds no post: it is empty, or holds only blank lines. Write the whole post in '
+      + 'it, opening with ' + ANNOUNCEMENT_OPENER + ' on a line of its own.');
+  }
+  // A byte order mark is invisible, so the block's sentence quoted a first line that reads exactly
+  // as the mention alone. Said here by name, with nothing quoted.
+  if (raw.charAt(0) === BYTE_ORDER_MARK) {
+    return gateRefuse('ANNOUNCEMENT_NO_OPENER',
+      'The wording file begins with a byte order mark, an invisible character that some editors put '
+      + 'at the start of a file. It would be the first character of the post, so the first line would '
+      + 'not be ' + ANNOUNCEMENT_OPENER + ' alone, however it looks, and agents would not be notified. Save the file '
+      + 'as UTF-8 with no byte order mark, then run this again.');
+  }
   const lines = raw.split(FILE_LINE_END);
   for (let i = 0; i < lines.length; i += 1) {
     if (ANY_HEADING.test(lines[i]) || ANNOUNCEMENT_HEADING.test(lines[i])) {

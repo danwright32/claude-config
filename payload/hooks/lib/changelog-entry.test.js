@@ -752,8 +752,12 @@ const RULE_CASES = [
   ['no mention at all', 'Hi team\nYou can now hand a call back.', 'ANNOUNCEMENT_NO_OPENER', 'on a line of its own'],
   ['an HTML comment', '@here\n<!-- say what agents do differently -->\nYou can now hand a call back.', 'ANNOUNCEMENT_HTML_COMMENT', 'HTML comment'],
   ['a dash as punctuation', '@here\nHand back - then pick a reason.', 'ANNOUNCEMENT_DASHES', 'Hand back - then pick a reason.'],
-  ['nothing at all', '', 'EMPTY_ANNOUNCEMENT', 'no post under it'],
-  ['only blank lines', ' \n\n\t\n', 'EMPTY_ANNOUNCEMENT', 'no post under it'],
+  // E (the review's L2): the gate's sentence for these two is about a pull request ("The heading in
+  // this pull request has no post under it ... or relabel this"), which is not true of a file. The
+  // fifth entry says so: the file form is held to the gate's CODE and to words of its own (FILE_CASES
+  // holds what they say), and the --body form to the gate's code and words as every other case is.
+  ['nothing at all', '', 'EMPTY_ANNOUNCEMENT', 'no post under it', true],
+  ['only blank lines', ' \n\n\t\n', 'EMPTY_ANNOUNCEMENT', 'no post under it', true],
   ['a code span', '@here\nRun `the thing` now.', 'ANNOUNCEMENT_MARKDOWN', 'code (a backtick)'],
   ['a block quote', '@here\n> quoted', 'ANNOUNCEMENT_MARKDOWN', 'a block quote (a line starting with >)'],
   ['a table', '@here\n| a | b |\n| 1 | 2 |', 'ANNOUNCEMENT_MARKDOWN', 'a table (a line starting with |)'],
@@ -779,20 +783,28 @@ RULE_CASES.forEach(function (rc) {
   const fromGate = g === null ? null : [g.code, g.reason];
   check(code === null ? fromGate === null : fromGate !== null && fromGate[0] === code && fromGate[1].indexOf(needle) !== -1,
     '#3846 ' + name + ': the merge gate did not answer ' + code + ' as this case expects, so the case compares nothing: ' + JSON.stringify(g));
+  // Whether an answer about the FILE is the gate's: its code and its words, or, where the gate's
+  // words are about a pull request (E), its code with words that are not the gate's and say nothing
+  // of a pull request or its label.
+  const asGate = function (said) {
+    if (rc[4] !== true) return JSON.stringify(said) === JSON.stringify(fromGate);
+    return Array.isArray(said) && fromGate !== null && said[0] === fromGate[0] && typeof said[1] === 'string'
+      && said[1] !== fromGate[1] && !/in this pull request|relabel/.test(said[1]);
+  };
   const w = wordingRefusal(wording);
-  check(JSON.stringify(w === null ? null : [w.code, w.reason]) === JSON.stringify(fromGate),
+  check(asGate(w === null ? null : [w.code, w.reason]),
     '#3846 ' + name + ': wordingRefusal and the merge gate disagree about the same wording: ' + JSON.stringify(w) + ' against ' + JSON.stringify(g));
   const file = wordingFile(wording);
   const before = fs.readFileSync(file);
   const byFile = cliIn(['announcement-refusal', file]);
-  check(JSON.stringify(saidOf(byFile)) === JSON.stringify(fromGate),
+  check(asGate(saidOf(byFile)),
     '#3846 ' + name + ': the command line, asked of a wording file, and the merge gate disagree about the same wording: ' + JSON.stringify(byFile).slice(0, 600) + ' against ' + JSON.stringify(g));
   // The exit status says it too, so a caller that reads only the status is never told refused wording passed (L184).
   check(byFile.status === (fromGate === null ? 0 : 1), '#3846 ' + name + ': the command line exited ' + byFile.status + ' for wording the merge ' + (fromGate === null ? 'takes' : 'refuses'));
   check(byFile.json && (fromGate === null ? byFile.json.code === null && byFile.json.reason === null : true),
     '#3846 ' + name + ': an answer that refuses nothing carries a code or a reason: ' + JSON.stringify(byFile.json));
   const byInput = cliIn(['announcement-refusal', '-'], wording);
-  check(JSON.stringify(saidOf(byInput)) === JSON.stringify(fromGate) && byInput.status === byFile.status,
+  check(asGate(saidOf(byInput)) && JSON.stringify(saidOf(byInput)) === JSON.stringify(saidOf(byFile)) && byInput.status === byFile.status,
     '#3846 ' + name + ': the command line asked on standard input (-) did not answer as it does of the file: ' + JSON.stringify(byInput).slice(0, 600));
   const inBody = cliIn(['announcement-refusal', '--body', '-'], 'Why.\n\n' + SENTENCE + '\n## Announcement\n' + wording + '\n\n## Testing\nran it');
   check(JSON.stringify(saidOf(inBody)) === JSON.stringify(fromGate),
@@ -822,6 +834,17 @@ const FILE_CASES = [
   // command a session runs first said such a file "refuses nothing", so his Approve then did not count.
   ['D three blank lines in a row above wording', '@here\nSomething changed.\n\n\n\nMore below.\n', 'WORDING_FILE_BLANK_RUN', '3 blank lines in a row, from line 3'],
   ['D a long run of lines holding only white space, ended as GitHub ends them', '@here\r\nOne.\r\n \r\n\t\r\n\r\n \r\n\r\nTwo.\r\n', 'WORDING_FILE_BLANK_RUN', '5 blank lines in a row, from line 3'],
+  // E (the review's L2): three sentences that were not true of a file. The refusals stay, each
+  // under the code it had; the words are a file's. An empty file was told "The heading in this pull
+  // request has no post under it ... or relabel this". A file beginning with a byte order mark was
+  // refused for its opener in a sentence quoting a first line that looks exactly like the mention
+  // alone, since the mark is invisible. A file beginning with its own Announcement heading is told
+  // to leave the heading out (B's rule, and B's code).
+  ['E an empty file', '', 'EMPTY_ANNOUNCEMENT', 'The wording file holds no post'],
+  ['E a file holding only blank lines', ' \n\n\t\n', 'EMPTY_ANNOUNCEMENT', 'The wording file holds no post'],
+  ['E a file beginning with a byte order mark', '﻿@here\nSomething changed.\n', 'ANNOUNCEMENT_NO_OPENER', 'begins with a byte order mark'],
+  ['E a file that is a byte order mark and a sentence, with no mention', '﻿Something changed.\n', 'ANNOUNCEMENT_NO_OPENER', 'begins with a byte order mark'],
+  ['E a file beginning with its own Announcement heading above a whole post', '## Announcement\n@here\nSomething changed.\n', 'WORDING_FILE_HEADING', 'leave the Announcement heading out of it'],
 ];
 FILE_CASES.forEach(function (fc) {
   const name = fc[0], text = fc[1], code = fc[2], needle = fc[3];
@@ -830,6 +853,8 @@ FILE_CASES.forEach(function (fc) {
     '#3846 ' + name + ': wordingRefusal did not refuse the file as ' + code + ' saying ' + JSON.stringify(needle) + ': ' + JSON.stringify(w));
   // A sentence about a file says nothing of a pull request or its label, which the reader has not got yet.
   check(w !== null && !/in this pull request|relabel/.test(w.reason || ''), '#3846 ' + name + ': the sentence for a file speaks of a pull request or its label: ' + JSON.stringify(w));
+  // Nor does it quote a byte order mark, which nobody can see: a line quoted with one reads as the line without it (E).
+  check(w !== null && (w.reason || '').indexOf('﻿') === -1, '#3846 ' + name + ': the sentence for a file holds a byte order mark, which shows as nothing: ' + JSON.stringify(w));
   const byFile = cliIn(['announcement-refusal', wordingFile(text)]);
   check(byFile.status === 1 && JSON.stringify(saidOf(byFile)) === JSON.stringify(w === null ? null : [w.code, w.reason]),
     '#3846 ' + name + ': the command line, asked of the file, did not refuse it as wordingRefusal does and exit 1: ' + JSON.stringify(byFile).slice(0, 600));

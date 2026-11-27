@@ -2069,7 +2069,11 @@ when all of these hold, each failure said in its own words:
   wording (`WORDING_FILE_BLANK_RUN`), which the approval refuses a file for (#3703, above): the
   count is the same `blankRunBeforeWording`, and `hooks/test-announce-approval.sh` holds the two
   limits equal. So the command judges everything the approval refuses about what the file holds;
-  the file's size and its name are not content, and only the approval refuses those. The library
+  the file's size and its name are not content, and only the approval refuses those. Two of the
+  gate's sentences are about a pull request and are not true of a file, so the file form gives
+  words of its own under the gate's code: a file that holds no post (`EMPTY_ANNOUNCEMENT`), and
+  a file that begins with a byte order mark (`ANNOUNCEMENT_NO_OPENER`, naming the mark, since a
+  first line quoted with it reads as the mention alone). The library
   hands that command the same bytes it hashed, and an answer
   from it that cannot be read approves nothing. How to ask him, which the label hook and the merge
   gate print, names the command as the step before the file is opened, so a session that follows

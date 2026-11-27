@@ -1072,6 +1072,10 @@ wording_pr() {
 }
 rule_n=0
 both_judge() {  # $1 = what the wording is, $2 = the code expected, or TAKEN, $3 = the wording
+  # $4, when given: words of the gate's own sentence, for wording whose gate sentence is about a
+  # pull request and so is not true of a file (the review of #3846, E). The command then gives the
+  # file words of its own under the same code, and the two are held to the code, the gate to $4,
+  # and the command to a sentence that says nothing of a pull request or its label.
   local file answer said_refused said_code said_reason dir out gate_reason
   rule_n=$((rule_n + 1))
   file="$GATE_WORK/wording-$rule_n.md"
@@ -1088,6 +1092,10 @@ both_judge() {  # $1 = what the wording is, $2 = the code expected, or TAKEN, $3
   if [ "$2" = TAKEN ]; then
     if ! denied "$out" && [ "$said_refused" = no ] && [ -z "$said_code$said_reason" ]; then pass
     else fail "#3846 $1: the merge gate and the command line do not both take it. The command said: $answer. The gate said: $out"; fi
+  elif [ -n "${4:-}" ]; then
+    if denied "$out" && [ "$said_refused" = yes ] && [ "$said_code" = "$2" ] && [ -n "$said_reason" ] && [[ "$gate_reason" == *"$4"* ]] \
+      && [[ "$gate_reason" != *"$said_reason"* && "$said_reason" != *"in this pull request"* && "$said_reason" != *"relabel"* ]]; then pass
+    else fail "#3846 $1: the merge gate and the command line do not refuse it alike as $2, the gate saying \"$4\" and the command in words true of a file. The command said: $answer. The gate said: $out"; fi
   else
     if denied "$out" && [ "$said_refused" = yes ] && [ "$said_code" = "$2" ] && [ -n "$said_reason" ] && [[ "$gate_reason" == *"$said_reason"* ]]; then pass
     else fail "#3846 $1: the merge gate and the command line do not refuse it alike, as $2 and in the same words. The command said: $answer. The gate said: $out"; fi
@@ -1098,7 +1106,7 @@ both_judge "wording that passes" TAKEN $'@here\n**Handing a call back**\n\nYou c
 both_judge "the mention sharing its line with a sentence" ANNOUNCEMENT_NO_OPENER $'@here Calls can now be handed back to the queue.\n\n- Press Hand back\n- Pick a reason'
 both_judge "an HTML comment" ANNOUNCEMENT_HTML_COMMENT $'@here\n<!-- say what agents do differently -->\nYou can now hand a call back.'
 both_judge "a dash as punctuation" ANNOUNCEMENT_DASHES $'@here\nHand back - then pick a reason.'
-both_judge "no post at all" EMPTY_ANNOUNCEMENT $' \n'
+both_judge "no post at all" EMPTY_ANNOUNCEMENT $' \n' "has no post under it"
 both_judge "a code span" ANNOUNCEMENT_MARKDOWN $'@here\nRun `the thing` now.'
 both_judge "a block quote" ANNOUNCEMENT_MARKDOWN $'@here\n> quoted'
 both_judge "a table" ANNOUNCEMENT_MARKDOWN $'@here\n| a | b |\n| 1 | 2 |'
