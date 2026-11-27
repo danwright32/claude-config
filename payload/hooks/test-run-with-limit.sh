@@ -136,8 +136,29 @@ end_case() {
   rm -f "$CASE/hold"
   check "$1: nothing the case started is still running" "$([ -z "$left" ] && echo ok || echo "still running:$left")"
 }
-one_line() { [ "$(wc -l < "$1" | tr -d ' ')" -eq 1 ]; }
+# runner_lines <file>: how many lines of the file are the runner's own. The command's standard
+# error is the runner's too, so the file can also hold what the command or its shell said: bash
+# reports "Terminated: 15" for a `sleep` that TERM reached a moment before the shell itself. With
+# every line counted, the HUP case failed on that line in one run on 2026-11-27 (load 91, the
+# second review of claude-config#3833). Only a line that starts with the runner's name is its own.
+runner_lines() { grep -c '^run-with-limit: ' "$1" 2> /dev/null || true; }
+one_line() { [ "$(runner_lines "$1")" = 1 ]; }
 started() { [ -s "$CASE/leader.pid" ] && [ -s "$CASE/child.pid" ]; }
+
+# The count itself, seen to fail before it is trusted to pass (L1), on recorded lines: what that
+# run's file held (the shell's line, then the runner's), two lines of the runner's, and none.
+mkdir -p "$TMP/count"
+printf '%s\n' "$TMP/tree.sh: line 21: 63194 Terminated: 15          sleep 0.1" \
+  "run-with-limit: was sent SIGHUP, so its command was stopped: its whole process group (id 63094) ended at TERM: sh $TMP/tree.sh $TMP/told/told-SIGHUP 9000 plain hold" > "$TMP/count/one-beside-a-shell"
+printf '%s\n' "run-with-limit: was sent SIGHUP, so its command was stopped: its whole process group (id 63094) ended at TERM: sh $TMP/tree.sh" \
+  "run-with-limit: failed inside itself as it finished (RuntimeError: recorded): 300 sh $TMP/tree.sh" > "$TMP/count/two"
+printf '%s\n' "$TMP/tree.sh: line 21: 63194 Terminated: 15          sleep 0.1" \
+  "sh: a line that only names run-with-limit: further in is not the runner's" > "$TMP/count/none"
+check "the count of the runner's lines reads one line of the runner's beside a line of the command's shell as one line" \
+  "$(one_line "$TMP/count/one-beside-a-shell" && echo ok || echo "it counted $(runner_lines "$TMP/count/one-beside-a-shell")")"
+check "and it fails two lines of the runner's, a file with no line of the runner's, and a file that is not there" \
+  "$(! one_line "$TMP/count/two" && ! one_line "$TMP/count/none" && ! one_line "$TMP/count/not-there" && echo ok \
+     || echo "two: $(runner_lines "$TMP/count/two"), none: $(runner_lines "$TMP/count/none"), not there: [$(runner_lines "$TMP/count/not-there")]")"
 
 # ---------------------------------------------------------------------------
 # Inside the limit: the exit code and both streams as they were, and not a word from the runner.
@@ -627,6 +648,10 @@ def scenarios(tag):
     result(tag + "past the limit: 124", rc == 124, rc)
     result(tag + "past the limit: TERM went to the group before its collect, and no signal after it", sent(15) and not faults(log), (faults(log), log))
     result(tag + "past the limit: one line names the limit", len(said) == 1 and "1 second limit" in said[0], said)
+    # A command still in its own group is ended with that group. Nothing goes to it by its own
+    # process id, which is kept for a command that has left the group (the case further down).
+    result(tag + "past the limit: nothing was sent to the command by its own process id, and the line says its whole group ended",
+           not [e for e in log if e[0] == "kill"] and len(said) == 1 and "its whole process group" in said[0], (log, said))
 
 own_pick = m.pick
 scenarios("stand in: ")
@@ -727,6 +752,59 @@ def guard():
            refused == [True, True, True] and not signalled(), (refused, log))
     result("and says the child is no longer pinned", g.pinned() is False, g.pinned())
 attempt("the runner's class refuses a signal after the collect", guard)
+
+# THE GUARD AGAIN (S4 of the second review of #3833). The look that words the line for a suspended
+# command is told "no such child" as any other look is. From that answer on nothing pins the
+# number, so the class must refuse a signal: the look may not throw the answer away. Only signal
+# 0 is asked for here, so a class that did not refuse sends nothing that ends anything.
+def lost_at_a_look():
+    if not real["waitid"] or not hasattr(os, "WSTOPPED"):
+        print("SUITE-PART-UNMEASURED the class refusing a signal after its look for a suspended command was told there is no such child: this python3 (%s) has no os.waitid, so the runner makes no such look" % sys.version.split()[0])
+        return
+    del log[:]
+    pid = os.fork()
+    if pid == 0:
+        os._exit(0)
+    g = m.Group(pid)
+    refuse["waitid"] = True
+    look = g.suspended()
+    refused = []
+    for ask in (lambda: g.send(0), lambda: g.send_command(0)):
+        try:
+            ask()
+            refused.append(False)
+        except RuntimeError:
+            refused.append(True)
+    result("the runner's class refuses a signal once its look for a suspended command was told the command is no longer its child, and asks the system for none",
+           look is None and refused == [True, True] and not signalled() and g.pinned() is False, (look, refused, log))
+attempt("the runner's class refuses a signal after a look that was told there is no such child", lost_at_a_look)
+
+# The same answer met in a run, at the limit: from the moment the limit arrives every look at the
+# command is told there is no such child, and the first look the runner makes then is the one for
+# a suspended command. Nothing may be signalled after it: 125, and the line says so. The fixture
+# is left running on purpose and let go here.
+def lost_at_the_limit():
+    if not real["waitid"] or not hasattr(os, "WSTOPPED"):
+        print("SUITE-PART-UNMEASURED a command the system collected from under the runner as its limit arrived: this python3 (%s) has no os.waitid, so the runner makes no such look" % sys.version.split()[0])
+        return
+    d = case_dir("lost-at-limit")
+    ready, base = os.path.join(d, "leader.pid"), time.monotonic()
+    def clock():
+        if not os.path.exists(ready):
+            return base
+        refuse["waitid"] = True
+        return time.monotonic() + 1e6
+    m.now = clock
+    m.GRACE = 0.3
+    m.GONE = 0.5
+    try:
+        rc = run(["1", "sh", fx, d, ticks, "plain", "hold"])
+        result("stand in: a command the system collected from under the runner as its limit arrived: 125, no signal of any kind asked for, and one line says nothing was signalled",
+               rc == 125 and not signalled() and len(said) == 1 and "nothing was signalled" in said[0] and not faults(log, 1), (rc, said, faults(log, 1), log))
+    finally:
+        refuse.clear()
+        let_go(d)
+attempt("stand in: a command the system collected from under the runner as its limit arrived", lost_at_the_limit)
 
 # A CALLER THAT IGNORES SIGCHLD (M1). This process ignores it, as the runner would inherit it. The
 # stand ins send nothing while it is ignored, so a runner that left it so is caught with no signal
@@ -832,6 +910,46 @@ def carried():
     result("stand in: every one of them is put back as it was when the run ends", after == before, [n for n in names if after.get(n) != before[n]])
 attempt("stand in: the signals the runner carries over", carried)
 
+# TTIN AND TTOU (S2 of the second review of #3833). Either one STOPS a process that has it at its
+# default, and a stopped runner keeps no limit, which is what TSTP was closed for. The runner has
+# both ignored while a command runs. Ignored, never caught: a caught TTOU makes the write that
+# raised it fail and be tried again for ever. They are set once the command's process exists, so
+# the command does not inherit them: it starts with both as its caller had them, which it reports
+# here as its exit code (10, plus 1 for an ignored TTIN, plus 2 for an ignored TTOU).
+TELLS = ("import signal, sys; "
+         "sys.exit(10 + sum(n for n, name in ((1, 'SIGTTIN'), (2, 'SIGTTOU')) if signal.getsignal(getattr(signal, name)) == signal.SIG_IGN))")
+def terminal_stops():
+    names = ("SIGTTIN", "SIGTTOU")
+    def now_set():
+        return dict((n, signal.getsignal(getattr(signal, n))) for n in names)
+    def under(caller):
+        """One run with the caller's two settings as given: (the run's code, the two as the
+        runner had them at the record step, the two after the run)."""
+        for n in names:
+            signal.signal(getattr(signal, n), caller[n])
+        seen = {}
+        def looks(folder, pgid):
+            seen.update(now_set())
+        m.record = looks
+        rc = run(["30", sys.executable, "-c", TELLS])
+        return rc, seen, now_set()
+    came = now_set()
+    both = dict((n, signal.SIG_IGN) for n in names)
+    try:
+        plain = dict((n, signal.SIG_DFL) for n in names)
+        rc, seen, after = under(plain)
+        result("stand in: TTIN and TTOU are ignored in the runner while a command runs, so neither stops it", seen == both and not said, (seen, said))
+        result("stand in: the command starts with TTIN and TTOU at their default, as its caller had them, and the runner puts both back when the run ends",
+               rc == 10 and after == plain, (rc, after))
+        mixed = {"SIGTTIN": signal.SIG_IGN, "SIGTTOU": signal.SIG_DFL}
+        rc, seen, after = under(mixed)
+        result("stand in: a TTIN the caller had ignored is still ignored for the command and its TTOU is still at its default, and the runner leaves both as they were",
+               rc == 11 and seen == both and after == mixed, (rc, seen, after))
+    finally:
+        for n in names:
+            signal.signal(getattr(signal, n), came[n] if came[n] is not None else signal.SIG_DFL)
+attempt("stand in: TTIN and TTOU while a command runs", terminal_stops)
+
 # A stop asked for after the handlers are in and before the command is let go (S9): the command is
 # never started. The stand in for the record step asks, with a signal to this process itself.
 def asked_early():
@@ -901,6 +1019,10 @@ def suspended():
     rc = run(["1", "sh", "-c", SUSPENDS, "sh", d])
     result("stand in: a command suspended when its limit arrives: 124, and the one line says it was suspended and not running",
            rc == 124 and len(said) == 1 and "suspended, not running" in said[0], (rc, said))
+    # This command suspended itself and read no terminal. The runner sees only THAT it was
+    # suspended, never why, so the line may name the terminal as the likely cause and no more.
+    result("stand in: a command suspended when its limit arrives: the line names the terminal as the likely cause only, since the runner did not see why",
+           len(said) == 1 and "likely" in said[0] and "terminal" in said[0], said)
     result("stand in: a command suspended when its limit arrives: its group is ended all the same, every child collected once, and no signal after its collect",
            sent(15) and not faults(log), (faults(log), log))
 attempt("stand in: a command suspended when its limit arrives", suspended)
@@ -909,9 +1031,11 @@ attempt("stand in: a command suspended when its limit arrives", suspended)
 # command is still the runner's own uncollected child, so its own process id is still pinned. It is
 # ended by that id, through the same class.
 MOVES = """
-import os, sys, time
+import os, signal, sys, time
 d, ticks = sys.argv[1], int(sys.argv[2])
 os.setpgid(0, os.getpgid(os.getppid()))
+if sys.argv[3:] == ["stubborn"]:
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
 with open(d + "/leader.tmp", "w") as f:
     f.write("%d\\n" % os.getpid())
 os.rename(d + "/leader.tmp", d + "/leader.pid")
@@ -920,20 +1044,51 @@ while os.path.exists(d + "/hold") and n < ticks:
     time.sleep(0.1)
     n += 1
 """
-def moved():
-    d = case_dir("moved")
+def moved_run(name, words):
+    """One run of a command that leaves its group, with every wait the runner asks of its watch
+    written into the record beside the signals. Returns (the code, the signals asked for by the
+    command's own process id, the waits asked for between the group's TERM and the first of
+    those). No clock is read: the order and the lengths asked for are the measurement."""
+    d = case_dir(name)
+    picked = own_pick()
+    class Noting(picked[0]):
+        def wait(self, seconds, heed=True):
+            log.append(("wait", seconds))
+            return picked[0].wait(self, seconds, heed)
+    m.pick = lambda: (Noting, picked[1])
     m.now = limit_when_ready(d)
     m.GRACE = 0.3
     m.GONE = 1.0
     try:
-        rc = run(["1", sys.executable, "-c", MOVES, d, ticks])
-        asked = [e for e in log if e[0] == "kill"]
-        result("stand in: a command that left its group: 124, and it was ended by its own process id while it was still uncollected",
-               rc == 124 and asked and asked[0][2] == 15 and not faults(log), (rc, faults(log), log))
-        result("stand in: a command that left its group: the one line says it had left its group", len(said) == 1 and "its own process id" in said[0], said)
+        rc = run(["1", sys.executable, "-c", MOVES, d, ticks] + words)
     finally:
         let_go(d)
+    by_id = [e for e in log if e[0] == "kill"]
+    term = next((i for i, e in enumerate(log) if e[0] == "signal" and e[2] == 15), None)
+    first = next((i for i, e in enumerate(log) if e[0] == "kill"), None)
+    between = None
+    if term is not None and first is not None and term < first:
+        between = [e[1] for e in log[term:first] if e[0] == "wait"]
+    return rc, by_id, between
+
+def moved():
+    rc, by_id, between = moved_run("moved", [])
+    result("stand in: a command that left its group: 124, and it was ended by its own process id while it was still uncollected",
+           rc == 124 and by_id and by_id[0][2] == 15 and not faults(log), (rc, faults(log), log))
+    result("stand in: a command that left its group: the one line says it had left its group", len(said) == 1 and "its own process id" in said[0], said)
+    # S3 of the second review of #3833: the runner used to watch for GONE seconds first, so such a
+    # command ran that long past its limit with nothing sent to it.
+    result("stand in: a command that left its group: once its group read empty it was sent TERM by its own process id at once, after one look and no wait",
+           between is not None and all(s <= 0 for s in between), (between, log))
 attempt("stand in: a command that left its group", moved)
+
+def moved_stubborn():
+    rc, by_id, between = moved_run("moved-stubborn", ["stubborn"])
+    result("stand in: a command that left its group and ignores TERM: 124, TERM and then KILL by its own process id while it was still uncollected, and the line says KILL ended it",
+           rc == 124 and [e[2] for e in by_id] == [15, 9] and not faults(log) and len(said) == 1 and "its own process id, at KILL" in said[0], (rc, faults(log), said, log))
+    result("stand in: a command that left its group and ignores TERM: no wait before the TERM by its own process id either",
+           between is not None and all(s <= 0 for s in between), (between, log))
+attempt("stand in: a command that left its group and ignores TERM", moved_stubborn)
 
 # The two endings where something is LEFT RUNNING, each said, with the system stood in for.
 # First: the group will not be signalled by this user and neither will the command (a setuid
@@ -1094,6 +1249,19 @@ def said(d):
     with open(os.path.join(d, "err"), errors="replace") as f:
         return f.read()
 
+def runner_lines(text):
+    """The runner's own lines in what a run said. The fixture's standard error is the same file,
+    so its shell's lines can be there too: bash reports "Terminated: 15" for a `sleep` that TERM
+    reached a moment before the shell itself (as the suite's own runner_lines says, above)."""
+    return [line for line in text.splitlines() if line.startswith("run-with-limit: ")]
+
+# That count, seen to find a wrong number of lines before it is trusted (L1), on recorded lines.
+SHELLS = fx + ": line 21: 63194 Terminated: 15          sleep 0.1\n"
+RUNNERS = "run-with-limit: was sent SIGHUP, so its command was stopped: its whole process group (id 63094) ended at TERM: sh " + fx + "\n"
+result("the count of the runner's lines in a told run reads one line of the runner's beside a line of the fixture's shell as one, and finds two and none",
+       len(runner_lines(SHELLS + RUNNERS)) == 1 and len(runner_lines(RUNNERS + SHELLS + RUNNERS)) == 2 and not runner_lines(SHELLS + "sh: " + RUNNERS),
+       (runner_lines(SHELLS + RUNNERS), runner_lines(RUNNERS + SHELLS + RUNNERS), runner_lines(SHELLS + "sh: " + RUNNERS)))
+
 for name in ("SIGINT", "SIGHUP", "SIGQUIT", "SIGUSR1"):
     sig = getattr(signal, name)
     d, p = start("told-" + name, [sig])
@@ -1104,7 +1272,8 @@ for name in ("SIGINT", "SIGHUP", "SIGQUIT", "SIGUSR1"):
     p.send_signal(sig)          # to this process's own child, which Popen still holds uncollected
     rc = ended(p, ceiling)
     text = said(d)
-    result(what, rc == -sig and text.count("\n") == 1 and name in text, (rc, text))
+    lines = runner_lines(text)
+    result(what, rc == -sig and len(lines) == 1 and name in lines[0], (rc, text))
     if rc is None:
         p.kill()
         p.wait()
