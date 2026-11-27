@@ -762,7 +762,17 @@ const RULE_CASES = [
   ['a task box', '@here\n- [ ] do it', 'ANNOUNCEMENT_MARKDOWN', 'a task box ([ ] or [x] after a bullet)'],
   ['a nested list', '@here\n- one\n  - inside', 'ANNOUNCEMENT_MARKDOWN', 'a nested list (an indented bullet or number)'],
   ['a rule line', '@here\nAbove\n\n***\n\nBelow', 'ANNOUNCEMENT_MARKDOWN', 'a rule line (three hyphens, stars or underscores)'],
+  // A (the review of this change, M1): a bare carriage return is a line's end to the hash and was
+  // none to the rules, so a line start it hid (a block quote here) was judged by nothing while the
+  // hash was that of the same lines ended properly, which the gate refuses.
+  ['a block quote hidden behind a bare carriage return', '@here\nSomething changed.\r> a quoted line', 'ANNOUNCEMENT_CARRIAGE_RETURN', 'Something changed.'],
+  ['a table hidden behind a bare carriage return', '@here\nSomething changed.\r| a | b |\nMore.', 'ANNOUNCEMENT_CARRIAGE_RETURN', 'carriage return'],
+  ['a bare carriage return with nothing behind it', '@here\nOne\rTwo', 'ANNOUNCEMENT_CARRIAGE_RETURN', 'carriage return'],
 ];
+// A: the hash of wording holding a bare carriage return is the hash of the same lines ended
+// properly, which is why the rules must not read it as one line: one hash, two verdicts.
+check(announcementHash('@here\nSomething changed.\r> a quoted line') === announcementHash('@here\nSomething changed.\n> a quoted line'),
+  '#3846 A a bare carriage return no longer hashes as a line end, which the cases about it depend on');
 RULE_CASES.forEach(function (rc) {
   const name = rc[0], wording = rc[1], code = rc[2], needle = rc[3];
   const g = gateOf(wording);

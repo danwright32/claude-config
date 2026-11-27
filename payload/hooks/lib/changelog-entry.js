@@ -421,6 +421,24 @@ const HTML_COMMENT_OPEN = '<!' + '-'.repeat(2);
 
 // Why the post under an announce label cannot be drafted as it stands, or null when it can.
 function announcementRefusal(text) {
+  // A carriage return inside a line (the review of #3846, M1). The hash reads a bare carriage return
+  // as a line's end (normalizeAnnouncement) and the reader of the block does not (linesUnder), so
+  // the rules below, which each read one line, never saw a line start it hid: a block quote, a
+  // table, a nested list. The record then held one hash for wording that passed and for the same
+  // lines ended properly, which are refused. Refused by a rule of its own, and first, so nothing
+  // below judges a line whose starts are hidden. Refused, where the block's reader could have
+  // been made to split as the hash does, because that reader is also how merged history is read
+  // (parseEntry), and because a post drafted "exactly as written" has no carriage return to keep.
+  // A carriage return ending a line is not here: extractAnnouncement has already dropped it.
+  const cr = text.indexOf('\r');
+  if (cr !== -1) {
+    const before = text.slice(0, cr).split('\n').pop();
+    return gateRefuse('ANNOUNCEMENT_CARRIAGE_RETURN',
+      'The Announcement holds a carriage return in the middle of a line, after "' + before + '". The '
+      + 'wording is hashed with that character read as the end of a line, and judged and drafted with it '
+      + 'read as part of one, so what follows it would be checked by none of the rules for what a post '
+      + 'may hold. Replace it with an ordinary line break, or delete it.');
+  }
   if (text.indexOf(HTML_COMMENT_OPEN) !== -1) {
     return gateRefuse('ANNOUNCEMENT_HTML_COMMENT',
       'The Announcement block holds an HTML comment. GitHub hides a comment on the pull request '

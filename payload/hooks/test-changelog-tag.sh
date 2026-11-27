@@ -1107,7 +1107,10 @@ both_judge "struck through text" ANNOUNCEMENT_MARKDOWN $'@here\nThis is ~~gone~~
 both_judge "a task box" ANNOUNCEMENT_MARKDOWN $'@here\n- [ ] do it'
 both_judge "a nested list" ANNOUNCEMENT_MARKDOWN $'@here\n- one\n  - inside'
 both_judge "a rule line" ANNOUNCEMENT_MARKDOWN $'@here\nAbove\n\n***\n\nBelow'
-# The cases above are every markdown rule the gate holds, counted from the library's own list, so a
+# A bare carriage return is a line's end to the hash and was none to the rules, so a block quote
+# behind one merged and was approved (the review of this change, A).
+both_judge "a block quote hidden behind a bare carriage return" ANNOUNCEMENT_CARRIAGE_RETURN $'@here\nSomething changed.\r> a quoted line'
+# The cases above the last are every markdown rule the gate holds, counted from the library's own list, so a
 # rule added there with no case here fails this line and is not passed over (L96).
 markdown_rules=$(node -e 'process.stdout.write(String((require(process.argv[1]).UNMEASURED_MARKDOWN_NAMES || []).length))' "$HOOK_DIR/lib/changelog-entry.js" 2>/dev/null)
 if [ "$markdown_rules" = 8 ]; then pass
