@@ -622,7 +622,9 @@ const restored = (text: string, removed: readonly { at: number; lines: string[] 
 // `unclosed` marks the command the text ends in when it ends inside a quote that never closes (#3491).
 // `direct` (#3496): the command stands right after the | that feeds it, so the pipe is an input of
 // its own, where `from` alone may be the pipe into the group or loop it stands in.
-type Split = { words: string[]; starts: number[]; from?: number; unclosed?: true; direct?: true }
+// `background` (#3770): a lone & ends the command, so the shell runs it in the background; a group a
+// subshell's ) closes is marked on that ).
+type Split = { words: string[]; starts: number[]; from?: number; unclosed?: true; direct?: true; background?: true }
 // A place in the text where the word reader read on past something it cannot be sure of (#3496),
 // with why: the command standing there is marked unread (readLine, `stops`), its words kept.
 type Doubt = { at: number; why: string }
@@ -1117,7 +1119,11 @@ const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, 
         if (cmd[j] === ';' && cmd[j + 1] !== ';') i = j
       }
     } else if (c === ';' || c === '&') {
-      endCmd()
+      const ended = endCmd()
+      // #3770: a lone & (never && or a case clause's ;& and ;;&; a redirect's & is read above)
+      // puts the command it ends in the background.
+      const last = cmds[cmds.length - 1]
+      if (c === '&' && cmd[i + 1] !== '&' && !/[&;<]/.test(cmd[i - 1] ?? '') && last && (ended || last.words[0] === ')')) last.background = true
       listed()
       // ;; ;& and ;;& end a case clause: what follows is the next pattern.
       if (c === ';' && cases[cases.length - 1] === 'body' && (cmd[i + 1] === ';' || cmd[i + 1] === '&')) {
@@ -1654,6 +1660,7 @@ export type Command = {
   derived?: (Derived | null)[]
   worked?: (string | null)[]
   followed?: (string | null)[]
+  background?: true
 }
 
 /**
@@ -2525,7 +2532,7 @@ export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
     }).length
     if ((r.direct ? 1 : 0) + redirects > 1 && !stops.has(k)) stops.set(k, INPUTS_UNREAD)
   })
-  read.forEach((r, k) => {
+  const readOne = (r: Split, k: number) => {
     runSubs(k)
     const b = begun[k] as Begun
     if (paren(k, '(')) later.push([])
@@ -2557,6 +2564,14 @@ export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
     const readAs: Begun[] = names ? names.map(v => ({ ...b, words: [v, ...b.words.slice(1)], starts: [-1, ...b.starts.slice(1)] })) : [b]
     for (const c of readAs)
       emit(c.words, fedOf(c), feed, out, nested, outer.splits ? c.starts.map(s => bare.get(s) ?? []) : undefined, c.starts.map(s => literal.has(s)), c.starts.map(s => unexpanded.has(s)), derivedOf(c), c.starts.map(s => worked.get(s) ?? null), tests ? c.starts.map(s => compares.has(s)) : undefined, fixed?.size ? c.starts.map(s => fixed.get(s) ?? null) : undefined)
+  }
+  // #3770: everything a command a lone & ends runs, its substitutions included, runs in the
+  // background with it, so each is marked.
+  const inBackground = (e: Line[number]): Line[number] => ('sub' in e ? { sub: e.sub.map(inBackground) } : { ...e, background: true as const })
+  read.forEach((r, k) => {
+    const from = out.length
+    readOne(r, k)
+    if (r.background) for (let j = from; j < out.length; j++) out[j] = inBackground(out[j] as Line[number])
   })
   for (const texts of later.reverse()) runLater(texts)
   if (doubt !== undefined) DOUBTED.add(out)

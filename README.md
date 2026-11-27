@@ -1982,36 +1982,70 @@ writes `{"kind": "approved", "repo", "hash", "at", "session", "picker", "file", 
 approved merges unchanged in a later session or overnight. A subagent's call counts his picker for
 that call and writes nothing.
 
-His answer is noted when he gives it (#3742). A hook run reads a session's pickers only from the
+Every picker is noted when he answers it (#3742, #3789). A hook run reads a session's pickers only from the
 transcript its payload names, and `hooks/lib/merge-when-ready.sh` hands the gates a payload naming
 none, so an approval reached the record only when a label command or a typed merge followed his
 answer. On any other flow (the wording revised after the label went on, the label put on in
 GitHub's page) the merge through the helper was refused, told to ask him, and asking him again
-changed nothing. `hooks/announce-answer-note.sh` now runs after every picker (PostToolUse on
-AskUserQuestion) and, for one of this source, has the library write an `answered` line: the
-session, its transcript, the picker's id, the repository, the file, and the file's hash and status
-change time as they stood then. Which picker it is, is read from the session's transcript by the
-id the hook was handed, where the picker stands as the session sent it, and not from the hook's
-own copy of it: what Claude Code hands that hook has never been printed, and the question tool's
-schema has the dialog write his answers into the call's input. So the library is asked about every
-picker, an ordinary one says nothing, and one that neither copy says the source of (the transcript
-does not hold it and the hook's copy carries no metadata) is never left in silence: the hook says
-that what it asked could not be told. A note is not an approval and is not his answer. When that hook
-runs, the transcript holds the picker and not yet what he answered: Claude Code writes a call's
-result to the transcript after the call's PostToolUse hooks have run (measured 2026-11-26: a
-session's transcript, read at the moment a PostToolUse hook of its own call ran, ended at that
-call's `tool_use`). His answer is in the payload the hook is handed, and it is deliberately not
-read from there, since a payload is whatever the caller hands over. Whichever hook next asks the
-library reads the noted sessions' transcripts back, for the repository asked about (the newest
-five sessions holding a noted picker the record has no outcome for yet: no `approved`, `withdrawn`
-or `settled` line), and judges the
-noted picker by every rule above, read from that transcript. The hash and the change time come
-from the note, so the wording approved is what the file held when he answered: a write to the file
-afterwards neither loses his approval nor rides on it, and a note taken later than his answer, over
-a file changed since, approves nothing. When the note cannot be taken the hook says so, to Dan and
-to the session in the same words (one notice through `hooks/lib/hook-notice.sh`, on exit 0, the
-picker being already answered), with the command that reads his answer into
-the record. `hooks/test-announce-answer-note.sh` holds it, and `hooks/test-merge-when-ready.sh`
+changed nothing. `hooks/announce-answer-note.sh` runs after every picker (PostToolUse on
+AskUserQuestion) and has the library write an `answered` line for every picker a main session put,
+whatever it asked: the session, its transcript, the picker's id, and `held`, whether the transcript
+held the picker's line when the hook ran. The hook says nothing.
+
+It notes them all because it cannot tell what a picker asked. As first built (#3780) it noted only
+a picker it could tell was an announcement's and said a notice for one it could not tell. Measured
+on the installed hook on 2026-11-26, for two pickers, one sent with metadata naming a source: no
+line of the session's transcript held the picker's id when the hook ran, and the hook's own copy of
+the picker carried no metadata, while the transcript read afterwards held both. So it told nothing,
+said its notice after every picker in every session, and noted none, an approval picker included
+(#3789). An earlier reading of another session (#3742) had found the transcript ending at the
+call's `tool_use` when its PostToolUse hook ran, so the line may be there or not, and `held` on
+each note says which; it decides nothing. The transcript's size is not the cause: the suite builds
+one of the measured size (20 MB, 10,000 lines) and the hook finds a picker in it in 0.11 seconds,
+one pass of the reader alone taking 0.009.
+
+When the hook can already tell the picker is an announcement's, with a repository and a file (the
+transcript holds it, or failing that the hook's own copy carries the metadata), the note also
+carries the repository, the file, and the file's hash and status change time as they stood then.
+
+A note is not an approval and is not his answer: it names no answer. His answer is in the payload
+the hook is handed, and it is deliberately not read from there, since a payload is whatever the
+caller hands over. Whichever hook next asks the library (the label hook, the merge gate typed or
+through the helper) reads each noted session's transcript back, in one pass for all of the
+session's noted pickers the record has no outcome for (no `approved`, `withdrawn` or `settled`
+line), and judges each from the transcript. An announcement's picker is judged by every rule above,
+unchanged. A picker that names no source the record reads gets a `settled` line naming no
+repository, so it is read once and never again: it approves nothing and takes nothing back,
+whatever he answered it. So does an announcement's picker that can never count (its metadata names
+no repository and file, or the session sent it with its answer filled in), once it has been read.
+One the transcript does not hold yet is left and looked for again, and one
+noted by its ids alone whose transcript is gone is settled, since what it asked can never be read.
+One call reads back five sessions, the ones whose newest unjudged note is newest.
+
+The wording he answered about comes from the note only when the note holds a hash for the same
+repository and file as the transcript's picker: then a write to the file afterwards neither loses
+his approval nor rides on it, and a note taken later than his answer, over a file changed since,
+approves nothing. A note that holds no hash gives no wording: the picker is judged exactly as one
+with no note is, by the file as it stands, unchanged since his answer. Where the file has changed,
+his Approve does not count and the refusal says to open the file and ask him again. So a note by
+ids alone lets nothing through that the same picker, read from its own session's transcript, would
+not.
+
+A subagent's picker writes nothing and says nothing. The hook speaks only when the note itself
+could not be written (the record cannot be read or appended to, the hook was not handed the
+session, its transcript and the picker's id, or the library could not be asked): the one case where
+an approval would be lost. It says so to Dan and to the session in the same words (one notice
+through `hooks/lib/hook-notice.sh`, on exit 0, the picker being already answered), with the command
+that reads his answer into the record if the picker was an announcement's, and that nothing is lost
+if it was not.
+
+What bounds it: one call reads back at most five sessions' transcripts, one pass each. Nothing
+shortens the record itself, which is only ever added to: a picker costs it one `answered` line
+(about 280 bytes) and, once judged, one line more (about 350). Measured on invented lines of those
+shapes on 2026-11-26, a record of 10,000 judged pickers is 6.3 MB and reads in 0.04 to 0.25
+seconds, and one of 100,000 is 63 MB and reads in 1.3 to 3.8.
+
+`hooks/test-announce-answer-note.sh` holds the hook, and `hooks/test-merge-when-ready.sh`
 merges an announcement through the helper, with the real gate and the real hook, on an approval
 that was only ever in the session.
 
@@ -5940,7 +5974,8 @@ personal MacBook, ten readings each taken in turn at a load of 37 to 103: 5.61 s
 before, 5.33 s and 53.7 after (the middle readings, a unit 0.100 s). No limit was changed with it.
 The limits were set again on 2026-11-23, to 67 units on macOS and 91 off it (Dan's choice, the
 highest reading on each platform plus 15 percent; the comment above them in the gate's suite
-holds the readings).
+holds the readings). Since 2026-11-26 the Linux limit is 83.2 units of the median yardstick sample
+rather than 91 of the least (#3406, below); macOS keeps 67 of the least.
 Suite: `test-slack-drafts-held-once.sh`, which holds each reading by a count and saw each count
 fail on the gate as it was.
 
@@ -6032,17 +6067,42 @@ through that run, and that run's `part-unmeasured-<n>` records, whose retention 
 parts, is skipped and never read as measured; fewer than 5 readable trees in main's newest 20 is a
 warning that the streak was not measured, never a pass. Suite: `tools/test-ci-cold-cost-streak.sh`.
 
+On Linux the cold check divides every reading by the MEDIAN of all the yardstick samples the case
+took, not the least, and its limit is 83.2 units (#3406, Dan's choices of 2026-11-26 from pickers,
+"3.65.1 Median, limit 83.2, Linux only (Recommended)" and "3.71.1 Whole run median
+(Recommended)"). After each judgement every reading so far is divided again by the median of every
+sample taken so far, and the check stops only when one of those figures is at or under the limit;
+no sample is taken after it stops, so the figures it stopped on are the ones the record prints and
+the verdict reads. Read from 139 pull request run attempts of
+2026-11-25 and 2026-11-26: by the least sample 16 read past 91 on the same gate work, each with a
+first judgement that ran out of the gate's seconds. A judgement takes 7 to 15 s and spans the
+runner's slow and fast spells alike, while the least of the 0.1 s yardstick samples catches only
+its fastest moment. 83.2 keeps the room 91 had above the median passing reading (1.178 times it,
+70.6 by the median). macOS keeps the least sample and 67, since nothing was read on a Mac, and every
+other cost check keeps the least sample. Where the unit is set is `cost_unit` in the gate's suite,
+beside `cost_limit`; `cost.py` takes it as `SLACK_GATE_COST_UNIT`, and the record says `median of N`
+for each reading in place of `from N`, N being every sample the case took. Judged this way, those
+139 run attempts give 137 green, none red, and 2 that cannot be told: runs 45752799634 and
+45825401342 read 85.1 and 84.0 on their one reading, and the check would now take readings CI never
+took. The suite replays CI's own records of that day through `cost.py`
+(`payload/hooks/slack-drafts-cost-fixtures/ci-cold-records.jsonl`): reds by the least sample now
+pass, greens stay green, and a made up record 20 percent dearer than the median passing reading
+fails. Each is replayed by the least sample and 91 too, and must give CI's own verdict. The
+unmeasured rule above and the streak are unchanged.
+
 Some CI runners still read a few cost cases over their limits with the gate unchanged (#3170: 4 of
 127 runs from 2026-11-20 to 2026-11-21), and the logs could not say why: they held each case's
 reading in units, but the yardstick and the seconds only for one case, and only the least yardstick
 sample. Dan's decision on 2026-11-21, from a picker, was "Measure more first": no limit, sample count
 or yardstick changes until a few days of runs can be read. So since then every cost case records,
 on every run, the gate's processor seconds for each reading, the yardstick each reading was divided
-by (the least of the samples taken by then, and how many), every yardstick sample the case took, and
+by (the least of the samples taken by then, or the median of all of them for the cold check on
+Linux since #3406, and how many), every yardstick sample the case took, and
 their least, median and greatest. They are on each `cost measured (#2918)` line, and a passing run
 shows them in the suite's two notes. Nothing is judged by them: a case is still judged by its least
 reading against its limit, and the suite checks, with `tools/gate-cost-rows.py check`, that each
-reading is its seconds over the least sample taken by then, so a verdict taken from any figure
+reading is its seconds over the sample its record names (the least of those taken by then, or the
+median of all the case took), and that each case names the sample `cost_unit` gives it, so a verdict taken from any figure
 printed beside it fails. No extra yardstick is timed for this; the figures are the ones each case
 already took. `python3 tools/gate-cost-rows.py rows <saved logs>` prints one row per case per run
 from any of the three shapes. And a suite that fails and then passes its recheck now has its first
@@ -6359,6 +6419,67 @@ names were measured on the personal MacBook only. Suites: `test-db-write-ask.sh`
 
 The auto mode settings themselves (`autoMode` in `settings.json`, with its `soft_deny` and
 `environment` lists) are per Mac: the sync carries neither, so each Mac's copy is corrected on that Mac.
+
+## Connector deletes and live changes ask Dan first
+
+Dan decided on 2026-11-25 that a connector tool that deletes something or changes a live setting in
+Regal, Better Stack or Cal waits for his yes ("Ask before live deletes and changes"), and that the
+other writes on those connectors stay with auto mode's check ("Keep it to deletes (Recommended)").
+`hooks/connector-change-ask.sh` (#3618) answers "ask" from a PreToolUse hook that runs on every MCP
+call, as `db-write-ask.sh` does for database writes. The rule is `hooks/lib/connector-changes.py`:
+
+- Which server: matched by a part of its name, since one connector is reached under more than
+  one server name: the name holds `regal`; or it holds `betterstack` once everything but letters and
+  digits is taken out; or one whole word of it is `cal` or `calcom`, so Google Calendar is not Cal.
+- Which tool: one whose own name holds `delet`, `remov`, `cancel`, `reset` or `paus`, anywhere
+  in it, and on Regal also `update-journey`, `update-campaign`, `save-agent-live` and
+  `update-routing-rule-set`, however their words are joined. A read whose name holds one of the five
+  (a list of presets, say) asks too, which is the harmless side to be wrong on. Every other tool of
+  those servers, and every other server, passes in silence: reads, creates and ordinary updates.
+- The question names the connector, the tool, what it does by its name, and what it was called
+  with (the first 300 characters).
+- While sleep mode is on the call is refused, with the reason, and nothing is asked. An ask
+  alone would not hold at night: sleep mode refuses a claude.ai connector's write tools itself, but
+  answers an enrolled session's own permission prompt yes for any other server, which is where a
+  plugin's server sits (read in `mods/scope-modes/hooks` on 2026-11-26).
+- What it cannot read it asks about, or refuses at night: a name on one of these servers with no
+  tool after it; a payload that is not a tool call whose text names a tool the rule asks about, or
+  names one of the three connectors anywhere but in a tool name it holds whole, since a whole name
+  that asks nothing does not vouch for one cut short after it; and, with the library that holds the
+  rule missing or failing, every call to a server whose name holds regal, better or cal, a read
+  included, saying what is missing. Its registration carries `onFailure` block.
+- When it cannot tell whether Dan is asleep (`lib/sleep.sh` is missing, or python3, which reads
+  both the rule and the sleep record), it refuses every such call and does not ask, saying which is
+  missing: a question is the one answer sleep mode can say yes to at night.
+
+It is a hook and not the `permissions.ask` rule the issue's text names, because the sync carries no
+ask rule to either Mac. The one permission setting it shares is `permissions.deny`, for a fixed
+list of rules (#3686), and an ask rule in `settings.shared.json` makes the pull refuse that whole
+file, saying such a rule stays each Mac's own (read in `claude-sync` on 2026-11-26). Measured on the
+personal MacBook on 2026-11-26, one run each, in a throwaway folder, before the deny rules were
+shared: an ask rule added to `settings.shared.json` made the pull refuse that whole file,
+so none of the other shared settings were applied either, and a `permissions` key in
+`settings.hooks.json` was dropped with nothing said. Carrying an ask rule means a new entry on the
+sync's list of shared settings, which is Dan's to sign off and has not been made. A hook already reaches
+both Macs, can match a server by a part of its name, and its matching can be run by handing it a
+call.
+
+What it costs, since it runs on every MCP call (personal MacBook, 2026-11-26, 30 samples a case, one
+process per call as Claude Code runs it, load averages 10, 20 and 29): a call on any other server
+takes 8.4 ms at the median (7.5 to 11.0), against 6.8 ms for a bash that only reads its input, and
+python3 never starts. A call whose tool name holds regal, better or cal in any case starts python3:
+38 ms at the median when it passes (36 to 41), which every Google Calendar tool pays too, and 63 ms
+when it asks (59 to 66). A call on another server with a 1 MB input takes 106 ms (103 to 121).
+
+Regal's 115 tool names and Cal's 92, as the personal MacBook's session records listed them up to
+2026-11-25, are in `hooks/connector-change-ask-fixtures/`, and `test-connector-change-ask.sh` runs
+every one through the hook: 14 of Regal's ask and 7 of Cal's, and no other. The suite reads a name
+more widely than the hook does (purge, destroy, archive and a dozen more words), so a delete under
+another word fails it. Nothing refreshes the fixtures: when a connector's list changes, replace the
+names and the date and run the suite. Not established: Better Stack's tool names and the second
+server name Regal is reached under, which are on the work MacBook only, so for them the hook rests
+on the name parts and the verbs; and no live question has been exercised, since no connector was
+called.
 
 ## A trusted path that has gone is said
 
@@ -7672,7 +7793,14 @@ The rate is a claim about a trend, so it is refused more often than given. Each 
 to a six hour history under `$TMPDIR/claude-free-space`. No rate is stated over a span under
 `FREE_SPACE_MIN_SPAN_MIN` (10), and after free space went back up by more than
 `FREE_SPACE_RECOVERY_GB` (1) only the readings since then count, three of them at least
-(claude-config#436). And only a fall that has lasted is projected (claude-config#1754): the newer
+(claude-config#436). A rise is that kind of recovery only while it is not taken back
+(claude-config#3636): if free space falls to the level it rose from, or lower, within
+`FREE_SPACE_GIVEBACK_MIN` minutes (default the persistence window, 30), the trend runs on across it.
+On 2026-11-25 free space fell from 67.1 GB at 10:25 AM ET to 55.7 GB at 11:10, about 15 GB an hour,
+with give backs of 1 to 3 GB at 10:58 and 11:05 that were each taken back within minutes; each
+restarted the trend and the check said nothing from 10:58 on. It now warns at 11:01, 11:04, 11:06
+and 11:10, and stops at the 11:15 give back, which held. A rise not yet taken back still counts as a
+recovery, so the warning can miss a reading while one is pending. 0 turns it off. And only a fall that has lasted is projected (claude-config#1754): the newer
 end of the rate is the most free space seen in the last `FREE_SPACE_PERSIST_MIN` minutes (30), so a
 pre push check or build that takes a few GB and gives it back within minutes never projects zero.
 Measured on 2026-10-26 on the work MacBook, two such bursts of 1.4 to 4.4 GB came and went inside 27
@@ -9206,7 +9334,11 @@ next session start to `~/.claude/state/sessions-archive/<the UTC day it ended>`,
 the way, unless it still names background jobs, which the job watcher reads for its full 7 days; a
 day's folder goes once that whole day is 7 days past (#633). The list reads again only the open
 records and files the folder listing shows changed, and answers inside a limit of its own, short of
-the engine's, or refuses, which the collision guard turns into a refusal of the call (#911). After
+the engine's, or refuses, which the collision guard turns into a refusal of the call (#911). A
+list Claude Code itself cuts off, at the limit it gives any call to another mod (10 seconds,
+measured 2026-10-05, docs/mods-design.md standing rule 4), the collision guard asks once more, and
+judges the call on the second answer as it would have on the first; a second silence refuses the
+call, saying the list was asked twice (#3673). After
 a /clear or a resume, which go on under a new session id with no session start, the new
 conversation's record is made once the /clear's (or the /resume's) own command has run, or at the
 first write or read of the list, never left to the next beat (#735). Never from the classic
@@ -10055,7 +10187,11 @@ reading clears 27),
 and since #3602 a word such a script hands a program, where mod-kit marks it `unexpanded`, read as
 the name it spells, its `$(` as text and no command's output, so a suite handing its helper a
 command as text (`run_here 'bash -c "echo \$(sort ok.sh | bash)"'`) runs; one whose text spells a
-screen file is still held, and the same word typed whole on a command line is judged as before,
+screen file is still held, and since #3620 the same word typed whole on a command line is read by
+that mark too, whichever run is handed it (a program the reader does not know, a script file, a
+tool: `mystery "x \$(a | b) y"` runs), unless it names a look changing file anywhere in its text,
+where it is judged as before and held, as is a word with no mark or with anything but the reader's
+own `true` for one,
 while what the script itself was handed, passed on to such a program (`mystery "$1"`), is still not
 caught), a patch git apply, git am or patch reads from a file judged
 since #3022 by the files it changes (mod-kit's patch reader, placed as the command places them), and
@@ -10885,7 +11021,15 @@ a toast, and so it does when that prompt starts no turn at all (dropped from the
 refused by a prompt hook) once no main turn has run for two minutes (#734). Unfinished steps are
 kept per project (the repository root, the main checkout's for a worktree) in the mod's store and
 held at the next session start there until Claude re-checks them, a step held under both the root
-and a pre-#708 worktree key listed once; a reload mid session keeps the live card. While Dan is
+and a pre-#708 worktree key listed once; a reload mid session keeps the live card. Each step
+records the session that pinned it (`pinnedBy`, #3770), in the store too: pinned again by a later
+session after its check it keeps the session it had, and one kept before this was recorded is
+marked "an earlier session" by the session that carries it in. Another mod adds
+a step through `$.manualSteps.add`, takes it off as done with `finish` and as withdrawn with
+`withdraw` (#3770: drawn "taken off, not done", the card going when nothing is left); a step it adds
+with `sessionOnly` is never kept for the next session, and one with `noDone` is drawn with no Done
+and leaves the heading without "waiting on you" (the goal box's close this session card). While
+Dan is
 away, a new card goes to the scope modes mod's held card (`$.scopeModes.hold`) instead of the Mac. A
 card pinned with a step Dan can do now also sends him a macOS notification through the goal
 tracker's `$.goalTracker.waitingOnYou` ("<project> is waiting on you", naming the heading and the
@@ -11037,7 +11181,9 @@ a secret never reaches the status bar. A
 dispatched agent's stop (`classic.SubagentStop`) is refused while it still holds background work it
 started (a Bash job, a Monitor, an agent it ran in the background), telling it to wait in the
 foreground, finish, or stop the work with TaskStop, then hand back. What is in flight is Claude
-Code's own list sent with the stop, which carries the whole session's work (measured on 2.1.302), so
+Code's own list sent with the stop, which carries the whole session's work (measured on 2.1.302),
+read, with the statuses that end a task, through mod-kit's one list of what is in flight
+(`hooks/mod-kit/inflight.ts`, #3770), which the goal box's close this session card reads too; so
 whose work is whose comes from the calls the watcher saw each agent make. A stop is refused at most
 twice in a row; the third goes ahead and this conversation is told what the agent left. A list that
 is missing or not a list falls back to the watcher's own record of the agent's Bash jobs and is said
@@ -11429,8 +11575,8 @@ thing that shipped. Shown by the mod's `goal_accomplished` tool, offered in full
 interactive session. A `/goal` met by Claude Code's own check (read through `$.modkit.goal`'s `met`)
 is shown under its condition: since that record lands after the Stop hooks (measured on 2.1.310),
 the session is sent one prompt of the mod's own once the turn has ended, asking it to call the tool;
-once per met goal. The mod hooks no classic event (#875), and reads the transcript from the
-session's own session registry record. With no `/goal` set, the session calls the tool when it
+once per met goal. It reads the transcript from the session's own session registry record. With
+no `/goal` set, the session calls the tool when it
 judges the work Dan asked for finished, reminded by the SESSION REFLECTION's last line after every
 turn that changed something (#1749). Refused, naming what, while a `/goal` is still set or cannot be
 read, an agent the session started is still running, is it live's record shows a merge owed its card
@@ -11447,11 +11593,46 @@ holds nothing, as is it live lets it go. A merge GitHub confirmed holds the box 
 since it merged is in is it live's verdicts, which the box reads too, since is it live crosses a
 carded merge off its record only at a turn end. At most one box per request: a second needs a new
 message typed by Dan, and two calls at once show one. Where the card is not drawn, the result is the
-same box as text, shaped like SESSION REFLECTION.
+same box as text, shaped like SESSION REFLECTION. What holds the box is read through mod-kit's one
+list of what is in flight (`hooks/mod-kit/inflight.ts`, #3770), asked for the box's three kinds.
+The close this session card (#3770, Dan's answers of 2026-11-26): a manual steps card headed
+"Nothing this session can see is running or waiting", whose one step, "Close this session if you
+have nothing more for it", is for this session alone and has no Done. At the main conversation's
+turn end in an interactive session a quiet period of 3 minutes 30 seconds starts (`QUIET_MS` in
+`hooks/close.ts`, on the engine's clock: the subagent harvest's 180 second `timeout` in
+`settings.hooks.json` plus a 30 second margin, held together by
+`tests/test-close-card-quiet-period.sh`); any turn start or message of any origin ends it. At its
+end the card is pinned, once per request of Dan's, only when the box was shown for his latest
+request and every kind in mod-kit's list reads clean: no agent running, waiting or idle (one a mod
+started included), nothing in the stop's `background_tasks` or `session_crons` (recorded at the
+main `classic.Stop`, which runs only while the managed settings file is in place, #876), no job on
+the job watcher's list, no merge, deploy or open pull request the box would refuse for, no
+`/goal` set, no step this session itself pinned left undone on its steps card (Dan, 2026-11-26:
+"Only that session's own steps"; a step records the session that pinned it, so one another session
+pinned, carried in from the store, holds nothing, and one that does not say withholds as unread),
+no compact queued or its note owed, no prompt a
+mod holds its reload for, and an answer that does not end on a question. Two readings of a
+process a command left behind can only withhold it: any process of this user carrying this
+session's id (`CLAUDE_CODE_SESSION_ID`, read through the kernel, five second limit; a failed look
+says nothing) whose parents no longer lead to the session's own process, and any main conversation
+Bash call, not run in the background, that mod-kit's
+reader marks as putting something in the background, running nohup, setsid or disown, or cannot
+read in full, which withholds it for the rest of the session. The look follows each carrier's
+parents by pid and parent pid, never a command's text: one that meets the look's own line of
+parents, which the session's own process is on, is still attached (the session's connected servers
+are, for as long as it is open) and withholds nothing; one that reaches launchd was left behind;
+one whose parents cannot be followed withholds as unread
+(`tests/test-close-card-process-look.sh` runs the look on real processes). A reading that cannot be
+taken withholds it. Each reason is written to
+`~/.claude/state/close-session/<session id>.json`, newest
+replacing the one before. The next turn start takes the card down as withdrawn; it comes back
+only after the next box. Invisible to both readings: a program that detaches itself without the
+command saying so, and an Apple signed program (a shell, sleep) left behind, whose environment
+the kernel does not show.
 
 </td><td>
 
-#1563, #1749, #1818
+#1563, #1749, #1818, #3770
 
 </td></tr>
 </tbody>

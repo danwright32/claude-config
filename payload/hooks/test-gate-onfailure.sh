@@ -90,6 +90,9 @@ REFUSING=(
   # It asks rather than refuses, but it fails closed (#2521): a crash or a timeout must stop a
   # database write, never let it through unasked.
   db-write-ask.sh
+  # It asks before a connector tool deletes or changes something live, and refuses that call while
+  # Dan is asleep (#3618): a crash or a timeout must stop the call, never let it through unasked.
+  connector-change-ask.sh
   require-tests-before-push.sh
   simplify-before-push.sh
   check-public-assets.sh
@@ -311,7 +314,8 @@ builder-model-gate.sh Agent
 no-session-link-in-comments.sh Bash,mcp__plugin_slack_slack__slack_send_message
 announce-label-ask.sh Bash,Edit,Write,MultiEdit,NotebookEdit
 slack-drafts-only-gate.sh Bash,mcp__claude_ai_Slack__slack_read_channel
-db-write-ask.sh Bash,Edit,Write,MultiEdit,mcp__claude_ai_Supabase__execute_sql,mcp__claude_ai_SFDC_USE__createSobjectRecord,mcp__playwright__browser_snapshot"
+db-write-ask.sh Bash,Edit,Write,MultiEdit,mcp__claude_ai_Supabase__execute_sql,mcp__claude_ai_SFDC_USE__createSobjectRecord,mcp__playwright__browser_snapshot
+connector-change-ask.sh mcp__playwright__browser_snapshot"
 if [ -s "$WORK/received.tsv" ]; then
   received_gates="$(cut -f1 "$WORK/received.tsv" | awk '!seen[$0]++')"
   while IFS= read -r script; do
