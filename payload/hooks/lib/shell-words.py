@@ -3138,6 +3138,9 @@ def flattened(s):
     inside single quotes, in a comment or in the text of a heredoc's body stays, written as it
     always was. Where that reading cannot be vouched for (it cannot read the text to its end, or
     names a line it is unsure of) nothing is joined and the text is flattened as it always was.
+    An operator a backslash and a line break split is named in `unsure` too and is no such doubt:
+    the joined text holds it whole, so the text is joined as it was before those were named
+    (split_operator, claude-config#3504).
 
     No hook may be handed fewer commands than before, so the joined text is given only where it
     names every command the plain flattening names, in the same directory (_named). The plain
